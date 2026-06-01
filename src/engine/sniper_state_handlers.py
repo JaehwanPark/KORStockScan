@@ -217,6 +217,7 @@ _SWING_PROBE_STATE_LAST_SEEN_MTIME_NS: int | None = None
 _SCALP_SIM_CANDIDATE_WINDOW_DAILY_CREATED: dict[str, int] = {}
 _SCALP_SIM_CANDIDATE_WINDOW_DAILY_BUCKET_CREATED: dict[tuple[str, str], int] = {}
 _SCALP_SIM_CANDIDATE_WINDOW_DAILY_SOURCE_CREATED: dict[tuple[str, str], int] = {}
+_SCALP_SIM_CANDIDATE_WINDOW_DAILY_ACTIVE_SEED_CREATED: dict[tuple[str, str], int] = {}
 _SCALP_SIM_SCALE_IN_WINDOW_DAILY_CREATED: dict[str, int] = {}
 _SCALP_SIM_AI_CALL_TIMES: list[float] = []
 _SCALP_SIM_PANIC_DEDUP_LOG_TS: dict[tuple[str, str, int, str], float] = {}
@@ -228,6 +229,8 @@ _SCALP_SIM_AUTO_POLICY_CACHE: dict[str, object] = {
     "approved_rows": [],
     "rows_by_source_bucket_id": {},
     "rows_by_bucket_id": {},
+    "active_seeds": [],
+    "active_seeds_by_prefix": {},
     "approved_row_count": 0,
 }
 _SWING_PROBE_DAILY_CREATED: dict[str, int] = {}
@@ -284,6 +287,110 @@ def _rule_str(name, default=""):
     return str(value)
 
 
+def _scalp_active_seed_prefix_key(prefix: dict | None) -> str:
+    prefix = prefix if isinstance(prefix, dict) else {}
+    entry_score = str(prefix.get("entry_score_parent") or "").strip()
+    entry_source = str(prefix.get("entry_source_parent") or "").strip()
+    submit_quality = str(prefix.get("submit_quality_parent") or "").strip()
+    if not entry_score or not entry_source:
+        return ""
+    parts = [f"entry_score_parent={entry_score}", f"entry_source_parent={entry_source}"]
+    if submit_quality:
+        parts.append(f"submit_quality_parent={submit_quality}")
+    return "|".join(parts)
+
+
+def _scalp_score_parent_from_value(score_value) -> str:
+    try:
+        score = float(score_value)
+    except Exception:
+        return "score_unobserved"
+    if score < 55:
+        return "score_low_observation"
+    if score < 65:
+        return "score_watch_recovery"
+    if score < 75:
+        return "score_mid_recovery"
+    if score < 85:
+        return "score_high_confirmation"
+    return "score_extreme_confirmation"
+
+
+def _scalp_entry_source_parent_from_stage(source_stage: str | None) -> str:
+    text = str(source_stage or "").lower()
+    if not text or text in {"-", "missing", "none", "null"}:
+        return "entry_missing"
+    if "blocked_ai_score" in text:
+        return "entry_source_blocked_ai_score"
+    if "wait6579" in text:
+        return "entry_source_wait6579"
+    if "scalp_entry_action_decision" in text or "action_decision" in text:
+        return "entry_source_action_decision"
+    if "scalp_sim" in text:
+        return "entry_source_scalp_sim"
+    if "panic" in text:
+        return "entry_source_panic"
+    return "entry_source_observed_other"
+
+
+def _scalp_submit_quality_parent_from_fields(fields: dict | None = None) -> str:
+    fields = fields if isinstance(fields, dict) else {}
+    text = str(fields.get("stale_bucket") or fields.get("submit_quality_parent") or "").lower()
+    if fields.get("entry_submit_revalidation_block") or "stale" in text:
+        return "submit_stale_context_or_quote"
+    if any(str(fields.get(key) or "").strip() for key in ("price_guard_reason", "liquidity_guard_reason", "overbought_guard_reason")):
+        return "submit_price_or_liquidity_guard_block"
+    if "revalidation_ok" in text or "ok_or_unflagged" in text or "assumed_filled" in text:
+        return "submit_revalidation_ok"
+    return "submit_missing"
+
+
+def _scalp_active_seed_match_fields(
+    *,
+    score_value,
+    source_stage: str | None,
+    fields: dict | None = None,
+) -> dict:
+    cache = _load_scalp_sim_auto_policy_cache()
+    seeds_by_prefix = (
+        cache.get("active_seeds_by_prefix")
+        if isinstance(cache.get("active_seeds_by_prefix"), dict)
+        else {}
+    )
+    candidate_prefix = {
+        "entry_score_parent": _scalp_score_parent_from_value(score_value),
+        "entry_source_parent": _scalp_entry_source_parent_from_stage(source_stage),
+    }
+    submit_quality = _scalp_submit_quality_parent_from_fields(fields)
+    if submit_quality != "submit_missing":
+        candidate_prefix["submit_quality_parent"] = submit_quality
+    probes = [_scalp_active_seed_prefix_key(candidate_prefix)]
+    if "submit_quality_parent" in candidate_prefix:
+        relaxed = dict(candidate_prefix)
+        relaxed.pop("submit_quality_parent", None)
+        probes.append(_scalp_active_seed_prefix_key(relaxed))
+    seed = None
+    for key in probes:
+        if key and key in seeds_by_prefix:
+            seed = seeds_by_prefix[key]
+            break
+    if not isinstance(seed, dict):
+        return {
+            "scalp_sim_active_priority_seed_matched": False,
+            "active_seed_candidate_observable_prefix": json.dumps(candidate_prefix, ensure_ascii=True, sort_keys=True),
+        }
+    return {
+        "scalp_sim_active_priority_seed_matched": True,
+        "active_seed_id": seed.get("active_seed_id"),
+        "source_parent_bucket_id": seed.get("source_parent_bucket_id"),
+        "active_seed_status": seed.get("status"),
+        "active_seed_observable_prefix": json.dumps(seed.get("observable_prefix") or {}, ensure_ascii=True, sort_keys=True),
+        "active_seed_candidate_observable_prefix": json.dumps(candidate_prefix, ensure_ascii=True, sort_keys=True),
+        "active_seed_priority_tier": seed.get("priority_tier"),
+        "quota_policy": "active_parent_seed_v1",
+    }
+
+
 def _load_scalp_sim_auto_policy_cache() -> dict:
     enabled = _rule_bool("SCALP_SIM_AUTO_POLICY_ENABLED", False)
     policy_file = _rule_str("SCALP_SIM_AUTO_POLICY_FILE", "").strip()
@@ -298,6 +405,8 @@ def _load_scalp_sim_auto_policy_cache() -> dict:
                 "approved_rows": [],
                 "rows_by_source_bucket_id": {},
                 "rows_by_bucket_id": {},
+                "active_seeds": [],
+                "active_seeds_by_prefix": {},
                 "approved_row_count": 0,
             }
         )
@@ -312,6 +421,8 @@ def _load_scalp_sim_auto_policy_cache() -> dict:
                 "approved_rows": [],
                 "rows_by_source_bucket_id": {},
                 "rows_by_bucket_id": {},
+                "active_seeds": [],
+                "active_seeds_by_prefix": {},
                 "approved_row_count": 0,
             }
         )
@@ -329,6 +440,8 @@ def _load_scalp_sim_auto_policy_cache() -> dict:
                 "approved_rows": [],
                 "rows_by_source_bucket_id": {},
                 "rows_by_bucket_id": {},
+                "active_seeds": [],
+                "active_seeds_by_prefix": {},
                 "approved_row_count": 0,
             }
         )
@@ -352,6 +465,8 @@ def _load_scalp_sim_auto_policy_cache() -> dict:
                 "approved_rows": [],
                 "rows_by_source_bucket_id": {},
                 "rows_by_bucket_id": {},
+                "active_seeds": [],
+                "active_seeds_by_prefix": {},
                 "approved_row_count": 0,
             }
         )
@@ -365,6 +480,8 @@ def _load_scalp_sim_auto_policy_cache() -> dict:
     rows_by_source_bucket_id: dict[str, dict] = {}
     rows_by_bucket_id: dict[str, dict] = {}
     approved_rows: list[dict] = []
+    active_seeds: list[dict] = []
+    active_seeds_by_prefix: dict[str, dict] = {}
     for policy in policies:
         if not isinstance(policy, dict) or policy.get("source_id") != "lifecycle_bucket_discovery":
             continue
@@ -378,7 +495,24 @@ def _load_scalp_sim_auto_policy_cache() -> dict:
                 rows_by_source_bucket_id[source_bucket_id] = row
             if bucket_id:
                 rows_by_bucket_id[bucket_id] = row
-    if status == "loaded" and not (rows_by_source_bucket_id or rows_by_bucket_id):
+    for seed in payload.get("active_sim_priority_seeds") or []:
+        if not isinstance(seed, dict) or str(seed.get("status") or "") != "active":
+            continue
+        prefix = seed.get("observable_prefix") if isinstance(seed.get("observable_prefix"), dict) else {}
+        if not str(seed.get("active_seed_id") or "").strip():
+            continue
+        prefix_key = _scalp_active_seed_prefix_key(prefix)
+        if not prefix_key:
+            continue
+        active_seeds.append(seed)
+        active_seeds_by_prefix[prefix_key] = seed
+        if "submit_quality_parent" in prefix:
+            relaxed_prefix = dict(prefix)
+            relaxed_prefix.pop("submit_quality_parent", None)
+            relaxed_key = _scalp_active_seed_prefix_key(relaxed_prefix)
+            if relaxed_key and relaxed_key not in active_seeds_by_prefix:
+                active_seeds_by_prefix[relaxed_key] = seed
+    if status == "loaded" and not (rows_by_source_bucket_id or rows_by_bucket_id or active_seeds_by_prefix):
         status = "policy_invalid"
     _SCALP_SIM_AUTO_POLICY_CACHE.update(
         {
@@ -389,7 +523,10 @@ def _load_scalp_sim_auto_policy_cache() -> dict:
             "approved_rows": approved_rows,
             "rows_by_source_bucket_id": rows_by_source_bucket_id,
             "rows_by_bucket_id": rows_by_bucket_id,
+            "active_seeds": active_seeds,
+            "active_seeds_by_prefix": active_seeds_by_prefix,
             "approved_row_count": len(rows_by_source_bucket_id) or len(rows_by_bucket_id),
+            "active_seed_count": len(active_seeds),
         }
     )
     return _SCALP_SIM_AUTO_POLICY_CACHE
@@ -412,6 +549,7 @@ def _scalp_sim_bucket_policy_fields(source: dict | None) -> dict:
         "scalp_sim_auto_policy_file": cache.get("path") or _rule_str("SCALP_SIM_AUTO_POLICY_FILE", ""),
         "scalp_sim_auto_policy_version": cache.get("version") or _rule_str("SCALP_SIM_AUTO_POLICY_VERSION", ""),
         "scalp_sim_auto_policy_approved_row_count": cache.get("approved_row_count") or 0,
+        "scalp_sim_auto_policy_active_seed_count": cache.get("active_seed_count") or 0,
         "bucket_directed_sim_probe": False,
         "lifecycle_bucket_match_status": status,
     }
@@ -2760,6 +2898,14 @@ def _scalp_sim_candidate_window_context_fields(source: dict | None) -> dict:
         "scalp_sim_candidate_window_date",
         "scalp_sim_candidate_window_time_bucket",
         "scalp_sim_candidate_window_quota_policy",
+        "scalp_sim_active_priority_seed_matched",
+        "active_seed_id",
+        "source_parent_bucket_id",
+        "active_seed_status",
+        "active_seed_observable_prefix",
+        "active_seed_candidate_observable_prefix",
+        "active_seed_priority_tier",
+        "quota_policy",
     )
     fields = {key: source.get(key) for key in keys if source.get(key) not in (None, "")}
     fields.update(
@@ -3612,7 +3758,27 @@ def _maybe_arm_scalp_sim_candidate_window(
         )
         return False
     source_stage_key = str(source_stage or "-").strip() or "-"
-    reserve_source = _is_scalp_sim_candidate_window_reserve_source(source_stage_key)
+    active_seed_fields = _scalp_active_seed_match_fields(
+        score_value=score_value,
+        source_stage=source_stage_key,
+    )
+    active_seed_id = str(active_seed_fields.get("active_seed_id") or "").strip()
+    active_seed_matched = bool(active_seed_fields.get("scalp_sim_active_priority_seed_matched")) and active_seed_id
+    active_seed_total_limit = int(max_daily * 20 / 100) if max_daily > 0 else 0
+    active_seed_total_created = sum(
+        int(value or 0)
+        for (created_day, _seed_id), value in _SCALP_SIM_CANDIDATE_WINDOW_DAILY_ACTIVE_SEED_CREATED.items()
+        if created_day == day_key
+    )
+    active_seed_created = int(
+        _SCALP_SIM_CANDIDATE_WINDOW_DAILY_ACTIVE_SEED_CREATED.get((day_key, active_seed_id), 0) or 0
+    )
+    active_seed_reserve_allowed = (
+        active_seed_matched
+        and (active_seed_total_limit <= 0 or active_seed_total_created < active_seed_total_limit)
+        and active_seed_created < 12
+    )
+    reserve_source = _is_scalp_sim_candidate_window_reserve_source(source_stage_key) or active_seed_reserve_allowed
     time_bucket_policy = str(
         _rule(
             "SCALP_SIM_CANDIDATE_WINDOW_TIME_BUCKET_POLICY",
@@ -3728,7 +3894,10 @@ def _maybe_arm_scalp_sim_candidate_window(
             "scalp_sim_candidate_window_original_reason": reason,
             "scalp_sim_candidate_window_date": day_key,
             "scalp_sim_candidate_window_time_bucket": time_bucket[0] if time_bucket else "-",
-            "scalp_sim_candidate_window_quota_policy": "ldm_sample_v1",
+            "scalp_sim_candidate_window_quota_policy": (
+                "active_parent_seed_v1" if active_seed_reserve_allowed else "ldm_sample_v1"
+            ),
+            **active_seed_fields,
         },
     )
     _attach_scalp_sim_bucket_identity(
@@ -3766,6 +3935,11 @@ def _maybe_arm_scalp_sim_candidate_window(
         _SCALP_SIM_CANDIDATE_WINDOW_DAILY_SOURCE_CREATED[source_key] = (
             int(_SCALP_SIM_CANDIDATE_WINDOW_DAILY_SOURCE_CREATED.get(source_key, 0) or 0) + 1
         )
+        if active_seed_reserve_allowed and active_seed_id:
+            seed_key = (day_key, active_seed_id)
+            _SCALP_SIM_CANDIDATE_WINDOW_DAILY_ACTIVE_SEED_CREATED[seed_key] = (
+                int(_SCALP_SIM_CANDIDATE_WINDOW_DAILY_ACTIVE_SEED_CREATED.get(seed_key, 0) or 0) + 1
+            )
     return bool(armed)
 
 

@@ -1,18 +1,18 @@
 # Threshold Cycle Postclose Verification - 2026-06-01
 
-- status: `warning`
-- latest_start_marker: `[START] threshold-cycle postclose target_date=2026-06-01 max_iterations=80 started_at=2026-06-01T17:03:35+0900`
-- latest_done_marker: `[DONE] threshold-cycle postclose target_date=2026-06-01 ai_correction_provider=openai panic_sell_defense=true panic_buying=true market_panic_breadth=true openai_ws_stability=true pipeline_event_verbosity=true observation_source_quality_audit=true codebase_performance_workorder=true pattern_lab_currentness_audit=true pattern_lab_ai_review=true time_window_regime_counterfactual=true producer_gap_discovery=true stage_hook_workorder_discovery=true stage_hook_runtime_scaffold=true pattern_lab_propagation_audit=true scalp_sim_overnight=true scalp_entry_adm=true institutional_flow_context=true microstructure_reaction_context=true lifecycle_decision_matrix=true lifecycle_ai_context=true lifecycle_bucket_discovery=true lifecycle_bucket_windows=true lifecycle_bucket_window_list=rolling5d,rolling10d,mtd lifecycle_bucket_promotion_window=mtd runtime_apply_bridge=true scalp_sim_auto_approval_control_tower=true latency_classifier_recommendation=true tuning_performance_control_tower=true swing_lifecycle=true swing_strategy_discovery=true swing_lifecycle_matrix=true swing_lifecycle_bucket_discovery=true swing_ai_review_provider=openai swing_lifecycle_bucket_discovery_ai_provider=openai pattern_lab_ai_review_provider=openai producer_gap_discovery_ai_provider=openai stage_hook_workorder_discovery_ai_provider=openai pattern_labs=true deepseek_swing_lab=true code_improvement_workorder=true daily_ev=true runtime_approval_summary=true runtime_apply_gap_audit=true next_stage2_checklist=true finished_at=2026-06-01T17:35:28+0900`
-- predecessor_status: `pass`
+- status: `fail`
+- latest_start_marker: `[START] threshold-cycle postclose target_date=2026-06-01 max_iterations=80 started_at=2026-06-01T22:18:36+0900`
+- latest_done_marker: `-`
+- predecessor_status: `fail`
 - predecessor_wait_count: `0`
 - predecessor_timeout_count: `0`
-- log_issues: `[]`
+- log_issues: `['postclose_fail_marker_present']`
 
 ## Execution Profile
-- profile_status: `full_profile`
+- profile_status: `pending_done_marker`
 - disabled_stage_flags: `[]`
 - missing_required_flags: `[]`
-- interpretation: `latest DONE marker used full/default stage profile`
+- interpretation: `wrapper-internal verification passed required artifacts; final DONE marker is checked by a later health check`
 - missing_required_artifacts: `[]`
 - missing_downstream_links: `[]`
 - stale_downstream_links: `[]`
@@ -22,7 +22,7 @@
 - status: `pass`
 - retry_queue_count: `0`
 - codex_directive_count: `4`
-- summary: `{'actionable_unknown_gap_count': 5, 'ai_review_retry_pending': False, 'ai_review_status': 'parsed', 'candidate_count': 593, 'codex_directive_count': 4, 'critical_failure_count': 0, 'derived_review_category_counts': {'code_patch_required': 16, 'runtime_blocked_contract_gap': 27, 'sim_auto_approved': 63, 'source_only_keep_collecting': 13, 'source_quality_blocker': 471, 'tier2_fail_closed_source_only': 3}, 'positive_edge_source_quality_pass_count': 26, 'quiet_gap_codex_directive_count': 1, 'quiet_gap_count': 287, 'quiet_gap_rollup_count': 287, 'retry_queue_count': 0, 'runtime_uptake_rate_pct': 0.0, 'source_dimension_gap_count': 150, 'status': 'pass'}`
+- summary: `{'actionable_unknown_gap_count': 5, 'ai_review_retry_pending': False, 'ai_review_status': 'parsed', 'candidate_count': 672, 'codex_directive_count': 4, 'critical_failure_count': 0, 'derived_review_category_counts': {'code_patch_required': 16, 'runtime_blocked_contract_gap': 27, 'sim_auto_approved': 63, 'source_only_keep_collecting': 48, 'source_quality_blocker': 503, 'tier2_fail_closed_source_only': 15}, 'positive_edge_source_quality_pass_count': 38, 'quiet_gap_codex_directive_count': 1, 'quiet_gap_count': 287, 'quiet_gap_rollup_count': 287, 'retry_queue_count': 0, 'runtime_uptake_rate_pct': 0.0, 'source_dimension_gap_count': 150, 'status': 'pass'}`
 
 ## BUY Funnel Submit Drought Handoff
 - status: `pass`
@@ -67,7 +67,7 @@
 ## AI Correction
 - status: `pass`
 - ai_status: `parsed`
-- provider_status: `{'provider': 'openai', 'status': 'success', 'new_provider_call': True, 'key_name': 'OPENAI_API_KEY', 'attempt_index': 1, 'model_index': 1, 'configured_key_count': 2, 'attempted_key_count': 1, 'attempted_keys': 1, 'attempted_key_names': ['OPENAI_API_KEY'], 'configured_model_count': 3, 'attempted_model_count': 1, 'attempted_models': ['gpt-5.5'], 'configured_models': ['gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini'], 'model': 'gpt-5.5', 'schema_name': 'threshold_ai_correction_v1', 'reasoning_effort': 'high', 'prompt_chars': 114161, 'input_context_chars': 112841, 'input_context_hash': '0dc85288c754fefc14310970bef857288b9a9417780868600c0fe9ec5bc1e76f', 'elapsed_ms': 114691, 'output_chars': 10690, 'input_tokens': 32137, 'output_tokens': 7504, 'total_tokens': 39641, 'estimated_cost': None, 'estimated_cost_usd': None, 'cost_estimate_status': 'missing_price_contract'}`
+- provider_status: `{'provider': 'openai', 'status': 'success', 'new_provider_call': True, 'key_name': 'OPENAI_API_KEY', 'attempt_index': 1, 'model_index': 1, 'configured_key_count': 2, 'attempted_key_count': 1, 'attempted_keys': 1, 'attempted_key_names': ['OPENAI_API_KEY'], 'configured_model_count': 3, 'attempted_model_count': 1, 'attempted_models': ['gpt-5.5'], 'configured_models': ['gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini'], 'model': 'gpt-5.5', 'schema_name': 'threshold_ai_correction_v1', 'reasoning_effort': 'high', 'prompt_chars': 114161, 'input_context_chars': 112841, 'input_context_hash': 'fa5dc1b772d7440da7dbf99a3e3decae512d8e3611e8784acbb1c4cc62cbfaad', 'elapsed_ms': 132489, 'output_chars': 12308, 'input_tokens': 32152, 'output_tokens': 9113, 'total_tokens': 41265, 'estimated_cost': None, 'estimated_cost_usd': None, 'cost_estimate_status': 'missing_price_contract'}`
 - blocking_runtime_candidate_families: `['bad_entry_refined_canary', 'holding_exit_decision_matrix_advisory', 'holding_flow_ofi_smoothing', 'lifecycle_decision_matrix_runtime', 'protect_trailing_smoothing', 'score65_74_recovery_probe']`
 - parse_warnings: `[]`
 - interpretation: `AI correction parsed successfully`
@@ -131,13 +131,13 @@
 
 ## Swing Lifecycle Handoff
 - status: `warning`
-- expected_candidate_ids: `[]`
+- expected_candidate_ids: `['swing_ldm_lifecycle_flow_combo_swing_lifecycle_flow_entry_swing_entry_entry_bucket_attribution_swing_strategy_discovery_s_3b6dc92885', 'swing_ldm_lifecycle_flow_combo_swing_lifecycle_flow_entry_swing_entry_entry_bucket_attribution_swing_strategy_discovery_s_60c4c4c8cf', 'swing_ldm_lifecycle_flow_combo_swing_lifecycle_flow_entry_swing_entry_entry_bucket_attribution_swing_strategy_discovery_s_68b22c9a03', 'swing_ldm_lifecycle_flow_combo_swing_lifecycle_flow_entry_swing_entry_entry_bucket_attribution_swing_strategy_discovery_s_7480cc41ef', 'swing_ldm_lifecycle_flow_combo_swing_lifecycle_flow_entry_swing_entry_entry_bucket_attribution_swing_strategy_discovery_s_7764eb9bbd', 'swing_ldm_lifecycle_flow_combo_swing_lifecycle_flow_entry_swing_entry_entry_bucket_attribution_swing_strategy_discovery_s_7d92990310', 'swing_ldm_lifecycle_flow_combo_swing_lifecycle_flow_entry_swing_entry_entry_bucket_attribution_swing_strategy_discovery_s_a72594ac3c']`
 - missing_ev_candidate_ids: `[]`
 - missing_runtime_summary_candidate_ids: `[]`
 - missing_workorder_order_ids: `[]`
 - daily_simulation_consumed: `False`
 - ai_two_pass_review_status: `missing`
-- warnings: `['swing_lifecycle_bucket_discovery:ai_two_pass_review_missing_source_only', 'swing_lifecycle_bucket_discovery:ai_two_pass_review_missing_fail_closed']`
+- warnings: `['swing_lifecycle_bucket_discovery:ai_two_pass_review_missing_fail_closed', 'swing_lifecycle_bucket_discovery:ai_two_pass_review_fail_closed_sim_auto_blocked']`
 - interpretation: `Swing LDM AI two-pass review is fail-closed; sim-auto promotion is blocked and must be surfaced.`
 
 ## Producer Gap Discovery Handoff
@@ -160,22 +160,22 @@
 - interpretation: `stage hook implementation-ready orders propagated to code improvement workorder`
 
 ## Bottom Rebound Sim Handoff
-- status: `not_applicable`
-- included: `False`
-- source_rows: `0`
-- selected_candidate_count: `0`
-- arm_count: `0`
-- persisted_candidate_count: `0`
-- persisted_arm_count: `0`
+- status: `pass`
+- included: `True`
+- source_rows: `40`
+- selected_candidate_count: `33`
+- arm_count: `99`
+- persisted_candidate_count: `33`
+- persisted_arm_count: `99`
 - missing: `[]`
-- interpretation: `bottom_rebound source was absent or blocked; safe-pool-only swing sim path applies`
+- interpretation: `bottom_rebound source candidates were selected, armed, and persisted for label/EV handoff`
 
 ## Workorder Snapshot
-- generation_id: `2026-06-01-c8ced7e9bcf4`
-- source_hash: `c8ced7e9bcf4d7658484ea2e30801f82276acd2718aa584b640d0d2d5877dcf7`
+- generation_id: `2026-06-01-e18229593ba7`
+- source_hash: `e18229593ba73c10f1eabfe53bd440f1a6b70d2aea93022762b8c2bb7fbc3b23`
 - snapshot_status: `source_changed_with_lineage`
-- previous_generation_id: `2026-06-01-c46954f1b442`
-- previous_source_hash: `c46954f1b4423b47ad430769b1431eb4b1fe6dcc1adbc50308d13031d82f5e82`
-- new_order_ids: `[]`
-- removed_order_ids: `[]`
+- previous_generation_id: `2026-06-01-c8ced7e9bcf4`
+- previous_source_hash: `c8ced7e9bcf4d7658484ea2e30801f82276acd2718aa584b640d0d2d5877dcf7`
+- new_order_ids: `['order_pattern_lab_ai_review_ai_review_followup_2026_06_01', 'order_pattern_lab_ai_review_ai_two_pass_review_missing_source_only', 'order_pattern_lab_ai_review_lifecycle_bucket_discovery_source_contract_drift', 'order_pattern_lab_ai_review_scalping_pattern_lab_ldm_feedback_missing', 'order_pattern_lab_ai_review_swing_strategy_discovery_pending_future_quotes', 'order_pattern_lab_ai_review_threshold_cycle_ev_source_contract_drift', 'order_swing_ldm_selection_discovery_arm_attribution_bottom_rebound_atr_pullback_limit_entry_volatility_adjusted_mae_stop_time_stop_m', 'order_swing_ldm_selection_discovery_arm_attribution_breakout_confirm_entry_confidence_weighted_trailing_after_mfe_diagnostic', 'order_swing_ldm_selection_discovery_arm_attribution_breakout_confirm_entry_confidence_weighted_trailing_after_mfe_insurance_보험_생명보험_', 'order_swing_ldm_selection_discovery_arm_attribution_breakout_confirm_entry_confidence_weighted_trailing_after_mfe_manufacture_of_ele', 'order_swing_ldm_selection_discovery_arm_attribution_breakout_confirm_entry_confidence_weighted_trailing_after_mfe_manufacture_of_tel', 'order_swing_ldm_selection_discovery_arm_attribution_breakout_confirm_entry_confidence_weighted_trailing_after_mfe_other_financial_in', 'order_swing_ldm_selection_discovery_arm_attribution_breakout_confirm_entry_confidence_weighted_trailing_after_mfe_telecommunications', 'order_swing_ldm_selection_discovery_arm_attribution_breakout_confirm_entry_risk_capped_mae_stop_time_stop_manufacture_of_electric_mo', 'order_swing_ldm_selection_discovery_arm_attribution_breakout_confirm_entry_risk_capped_mae_stop_time_stop_manufacture_of_electronic_', 'order_swing_ldm_selection_discovery_arm_attribution_breakout_confirm_entry_risk_capped_mae_stop_time_stop_manufacture_of_other_chemi', 'order_swing_ldm_selection_discovery_arm_attribution_breakout_confirm_entry_risk_capped_mae_stop_time_stop_manufacture_of_semiconduct', 'order_swing_ldm_selection_discovery_arm_attribution_breakout_confirm_entry_risk_capped_mae_stop_time_stop_other_financial_intermedia', 'order_swing_ldm_selection_discovery_arm_attribution_breakout_confirm_entry_risk_capped_mae_stop_time_stop_telecommunications_클라우드_컴퓨', 'order_swing_ldm_selection_discovery_arm_attribution_pullback_limit_entry_risk_capped_mae_stop_time_stop_building_of_ships_and_boats_', 'order_swing_ldm_selection_discovery_arm_attribution_pullback_limit_entry_risk_capped_mae_stop_time_stop_manufacture_of_basic_chemica', 'order_swing_ldm_selection_discovery_arm_attribution_pullback_limit_entry_risk_capped_mae_stop_time_stop_manufacture_of_electronic_co', 'order_swing_ldm_selection_discovery_arm_attribution_pullback_limit_entry_risk_capped_mae_stop_time_stop_manufacture_of_medicaments_d', 'order_swing_ldm_selection_discovery_arm_attribution_pullback_limit_entry_risk_capped_mae_stop_time_stop_manufacture_of_other_chemica', 'order_swing_ldm_selection_discovery_arm_attribution_pullback_limit_entry_risk_capped_mae_stop_time_stop_manufacture_of_plastic_produ', 'order_swing_ldm_selection_discovery_arm_attribution_pullback_limit_entry_risk_capped_mae_stop_time_stop_manufacture_of_semiconductor', 'order_swing_ldm_selection_discovery_arm_attribution_pullback_limit_entry_risk_capped_mae_stop_time_stop_other_financial_intermediati', 'order_swing_ldm_selection_discovery_arm_attribution_pullback_limit_entry_risk_capped_mae_stop_time_stop_real_estate_activities_with_', 'order_swing_lifecycle_bucket_discovery_ai_review_rollup']`
+- removed_order_ids: `['order_ai_threshold_dominance', 'order_ai_threshold_miss_ev_recovery', 'order_latency_guard_miss_ev_recovery', 'order_perf_buy_funnel_json_scan', 'order_perf_daily_report_bulk_history', 'order_perf_daily_report_engine_singleton', 'order_perf_recommend_update_vectorization', 'order_swing_gatekeeper_reject_threshold_review', 'order_swing_holding_exit_contract_gap_review', 'order_swing_ldm_selection_discovery_arm_attribution_breakout_confirm_entry_risk_capped_mae_stop_time_stop_computer_programming_syste', 'order_swing_ldm_selection_discovery_arm_attribution_breakout_confirm_entry_risk_capped_mae_stop_time_stop_manufacture_of_telecommuni', 'order_swing_market_regime_sensitivity_review', 'order_swing_ofi_qi_stale_or_missing_context', 'order_swing_pattern_lab_deepseek_scale_in_events_observed', 'order_swing_scale_in_contract_gap_review']`
 - decision_changed_order_ids: `[]`

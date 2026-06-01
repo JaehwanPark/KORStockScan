@@ -1285,8 +1285,33 @@ def _load_scalp_sim_auto_approval(source_date: str | None) -> dict[str, Any]:
         blocked.append("scalp_sim_policy_catalog_invalid")
     elif catalog_payload.get("schema_version") != "scalp_sim_policy_catalog_v1":
         blocked.append("scalp_sim_policy_catalog_schema_invalid")
+    else:
+        for seed in catalog_payload.get("active_sim_priority_seeds") or []:
+            if not isinstance(seed, dict):
+                blocked.append("active_sim_priority_seed_invalid")
+                break
+            prefix = seed.get("observable_prefix") if isinstance(seed.get("observable_prefix"), dict) else {}
+            if not str(seed.get("active_seed_id") or "").strip() or not str(seed.get("source_parent_bucket_id") or "").strip():
+                blocked.append("active_sim_priority_seed_key_missing")
+                break
+            if str(seed.get("status") or "").strip() not in {"active", "cooldown", "retired"}:
+                blocked.append("active_sim_priority_seed_status_invalid")
+                break
+            if str(seed.get("status") or "") == "active" and (
+                not str(prefix.get("entry_score_parent") or "").strip()
+                or not str(prefix.get("entry_source_parent") or "").strip()
+            ):
+                blocked.append("active_sim_priority_seed_observable_prefix_missing")
+                break
     approved_request = None
     if not blocked:
+        active_seed_ids = [
+            str(seed.get("active_seed_id") or "").strip()
+            for seed in (catalog_payload.get("active_sim_priority_seeds") or [])
+            if isinstance(seed, dict)
+            and str(seed.get("status") or "") == "active"
+            and str(seed.get("active_seed_id") or "").strip()
+        ]
         recommended_values = {
             "enabled": True,
             "policy_file": str(catalog_path),
@@ -1337,6 +1362,7 @@ def _load_scalp_sim_auto_approval(source_date: str | None) -> dict[str, Any]:
             "current_values": current_values,
             "approved_source_ids": approved_source_ids,
             "approved_policy_count": approved_policy_count,
+            "active_sim_priority_seed_ids": active_seed_ids,
             "actual_order_submitted": False,
             "broker_order_forbidden": True,
             "decision_authority": "scalp_sim_auto_approval_control_tower",
@@ -1418,9 +1444,39 @@ def _load_swing_sim_auto_approval(source_date: str | None) -> dict[str, Any]:
         blocked.append("broker_order_forbidden_contract_missing")
     if not catalog_path.exists():
         blocked.append("swing_sim_policy_catalog_missing")
+    else:
+        catalog_payload = _load_json(catalog_path)
+        if not catalog_payload:
+            blocked.append("swing_sim_policy_catalog_invalid")
+        elif catalog_payload.get("schema_version") != "swing_sim_policy_catalog_v1":
+            blocked.append("swing_sim_policy_catalog_schema_invalid")
+        else:
+            for policy in catalog_payload.get("active_arm_priority_policies") or []:
+                if not isinstance(policy, dict):
+                    blocked.append("swing_active_arm_priority_policy_invalid")
+                    break
+                if str(policy.get("status") or "") not in {"active", "cooldown", "retired"}:
+                    blocked.append("swing_active_arm_priority_status_invalid")
+                    break
+                if not str(policy.get("priority_policy_id") or "").strip():
+                    blocked.append("swing_active_arm_priority_policy_id_missing")
+                    break
+                if str(policy.get("status") or "") == "active" and not str(policy.get("priority_arm_id") or policy.get("priority_bucket_id") or "").strip():
+                    blocked.append("swing_active_arm_priority_key_missing")
+                    break
+                if str(policy.get("status") or "") == "active" and not str(policy.get("source_report_date") or "").strip():
+                    blocked.append("swing_active_arm_priority_source_date_missing")
+                    break
     approved_request = None
     if not blocked:
         approved_source_ids = [str(item) for item in (payload.get("approved_source_ids") or [])]
+        active_policy_ids = [
+            str(policy.get("priority_policy_id") or "").strip()
+            for policy in (catalog_payload.get("active_arm_priority_policies") or [])
+            if isinstance(policy, dict)
+            and str(policy.get("status") or "") == "active"
+            and str(policy.get("priority_policy_id") or "").strip()
+        ]
         approved_request = {
             "family": "swing_sim_auto_approval",
             "policy_id": "swing_sim_auto_approval",
@@ -1451,6 +1507,7 @@ def _load_swing_sim_auto_approval(source_date: str | None) -> dict[str, Any]:
             },
             "approved_source_ids": approved_source_ids,
             "approved_policy_count": int(payload.get("approved_policy_count") or 0),
+            "active_arm_priority_policy_ids": active_policy_ids,
             "actual_order_submitted": False,
             "decision_authority": "swing_sim_auto_approval_control_tower",
         }

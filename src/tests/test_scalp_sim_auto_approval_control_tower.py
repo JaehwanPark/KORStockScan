@@ -115,6 +115,45 @@ def test_scalp_control_tower_merges_lifecycle_and_scale_in_sources(tmp_path, mon
     assert all(item["allowed_runtime_apply"] is False for item in approval["approved_policies"])
 
 
+def test_scalp_control_tower_allows_active_seed_without_bucket_rows(tmp_path):
+    catalog = tmp_path / "lifecycle_bucket_catalog_2026-06-01.json"
+    catalog.write_text(json.dumps({"buckets": []}), encoding="utf-8")
+    lifecycle = _lifecycle_approval()
+    lifecycle["approved_bucket_ids"] = []
+    lifecycle["approved_bucket_rows"] = []
+    lifecycle["approved_bucket_count"] = 0
+    lifecycle["active_sim_priority_seeds"] = [
+        {
+            "active_seed_id": "active_seed_test",
+            "source_parent_bucket_id": "parent_positive",
+            "status": "active",
+            "observable_prefix": {
+                "entry_score_parent": "score_watch_recovery",
+                "entry_source_parent": "entry_source_blocked_ai_score",
+            },
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+        }
+    ]
+
+    approval = mod.build_scalp_sim_auto_approval(
+        "2026-06-01",
+        lifecycle_sim_approval=lifecycle,
+        lifecycle_bucket_catalog_path=catalog,
+        scale_in_approval={},
+        runtime_apply_bridge={},
+    )
+    catalog_payload = mod.build_policy_catalog(approval)
+
+    assert approval["approved"] is True
+    assert approval["approved_policy_count"] == 1
+    assert catalog_payload["active_sim_priority_seeds"][0]["active_seed_id"] == "active_seed_test"
+    assert catalog_payload["runtime_effect"] is False
+    assert catalog_payload["broker_order_forbidden"] is True
+
+
 def test_scalp_control_tower_blocks_when_source_contract_invalid(tmp_path):
     bad_lifecycle = _lifecycle_approval()
     bad_lifecycle["runtime_effect"] = True

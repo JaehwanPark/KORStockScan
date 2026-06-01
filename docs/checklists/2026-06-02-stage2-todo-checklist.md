@@ -38,23 +38,28 @@
 
 ## 장전 체크리스트 (08:45~09:00)
 
-- [ ] `[ThresholdEnvAutoApplyPreopen0602] threshold env 자동 apply 산출물 및 사용자 개입 여부 확인` (`Due: 2026-06-02`, `Slot: PREOPEN`, `TimeWindow: 08:50~08:55`, `Track: RuntimeStability`)
+- 운영 확인 기록: `[PreopenAutomationHealthCheck20260602] 장전 자동화체인 상태 확인` 판정 `pass`. 근거와 다음 액션은 [time-based-operations-runbook.md](/home/ubuntu/KORStockScan/docs/time-based-operations-runbook.md)의 Runbook 운영 확인 완료 기록에 남겼다.
+
+- [x] `[ThresholdEnvAutoApplyPreopen0602] threshold env 자동 apply 산출물 및 사용자 개입 여부 확인` (`Due: 2026-06-02`, `Slot: PREOPEN`, `TimeWindow: 08:50~08:55`, `Track: RuntimeStability`)
   - Source: [threshold_cycle_ev_2026-06-01.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-06-01.json), [threshold_cycle_preopen_apply.py](/home/ubuntu/KORStockScan/src/engine/threshold_cycle_preopen_apply.py), [run_bot.sh](/home/ubuntu/KORStockScan/src/run_bot.sh)
   - 판정 기준: 전일 postclose EV와 당일 apply plan/runtime env를 확인하고 `auto_bounded_live` guard 통과분만 runtime env로 인정한다.
   - 금지: blocked family, approval artifact missing, same-stage owner conflict를 수동 env override로 우회하지 않는다.
   - 다음 액션: `applied_guard_passed_env`, `blocked_no_env`, `partial_apply_with_blocked_families`, `failed_preopen_wrapper`, `not_yet_due` 중 하나로 닫는다.
+  - 처리 결과: 판정 `applied_guard_passed_env`. `logs/threshold_cycle_preopen_cron.log`는 2026-06-02 07:35 KST `[DONE]` marker를 남겼고 [threshold_cycle_preopen_2026-06-02.status.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_preopen_status/threshold_cycle_preopen_2026-06-02.status.json)은 `status=succeeded`, `exit_code=0`, `runtime_effect=preopen_runtime_env_apply_only`다. [threshold_apply_2026-06-02.json](/home/ubuntu/KORStockScan/data/threshold_cycle/apply_plans/threshold_apply_2026-06-02.json)은 `status=auto_bounded_live_ready`, `apply_mode=auto_bounded_live`, `runtime_change=true`, `warnings=[]`이고 bridge 후보 `entry_wait6579_score66_69_recovery_gate_v1`, `scale_in_bucket_runtime_policy_v1`은 `blocked_source_quality/bootstrap_pending` 및 `runtime_apply_bridge_auto_live_contract_missing`으로 수동 우회 없이 차단됐다. [threshold_runtime_env_2026-06-02.env](/home/ubuntu/KORStockScan/data/threshold_cycle/runtime_env/threshold_runtime_env_2026-06-02.env)은 `KORSTOCKSCAN_THRESHOLD_RUNTIME_AUTO_APPLY_ENABLED=true`, selected family env, `KORSTOCKSCAN_SWING_LIVE_ORDER_DRY_RUN_ENABLED=true`를 남긴다. 다음 액션은 장중 provenance/rollback guard 관찰이며 runtime/order/provider/threshold 변경은 하지 않는다.
 
-- [ ] `[OpenAIWSPreopenConfirm0602] OpenAI WS 유지 설정 및 entry_price/analyze_target provenance 확인` (`Due: 2026-06-02`, `Slot: PREOPEN`, `TimeWindow: 08:55~09:00`, `Track: RuntimeStability`)
+- [x] `[OpenAIWSPreopenConfirm0602] OpenAI WS 유지 설정 및 entry_price/analyze_target provenance 확인` (`Due: 2026-06-02`, `Slot: PREOPEN`, `TimeWindow: 08:55~09:00`, `Track: RuntimeStability`)
   - Source: [openai_ws_stability_2026-06-01.md](/home/ubuntu/KORStockScan/data/report/openai_ws/openai_ws_stability_2026-06-01.md), [run_bot.sh](/home/ubuntu/KORStockScan/src/run_bot.sh), [ai_engine_openai.py](/home/ubuntu/KORStockScan/src/engine/ai_engine_openai.py)
   - 판정 기준: startup env의 OpenAI route/Responses WS 설정과 `analyze_target`, `entry_price` transport provenance를 분리 확인한다.
   - 금지: provider transport 확인을 threshold 값, 주문가/수량 guard, 스윙 dry-run guard 변경으로 해석하지 않는다.
   - 다음 액션: entry_price transport 표본이 부족하면 장중 표본 재확인 항목과 연결한다.
+  - 처리 결과: 판정 `keep_ws_with_entry_price_sample_followup`. [openai_ws_stability_2026-06-01.md](/home/ubuntu/KORStockScan/data/report/openai_ws/openai_ws_stability_2026-06-01.md)은 `decision=keep_ws`, `unique WS calls=6203`, `endpoint_counts={'analyze_target': 6203}`, `WS fallback=0`, `WS success rate=1.0`, warning-only `TimeoutError=1`을 기록했다. `entry_price`는 `entry_price_ws_sample_count=0`이지만 canary event `517`, applied `290`, transport observable `514`, instrumentation_gap `false`로 OpenAI WS 실패와 분리한다. [run_bot.sh](/home/ubuntu/KORStockScan/src/run_bot.sh)은 당일 `threshold_runtime_env_YYYY-MM-DD.env`를 기다린 뒤 source한다. 다음 액션은 `[OpenAIWSIntradaySample0602]`에서 entry_price transport 표본을 재확인하는 것이며 provider route, threshold, 주문가/수량 guard, 스윙 dry-run guard는 변경하지 않는다.
 
-- [ ] `[SwingPreFinalAutoAndFinalApprovalPreopen0602] 스윙 pre-final auto state 및 final approval artifact 확인` (`Due: 2026-06-02`, `Slot: PREOPEN`, `TimeWindow: 08:45~08:50`, `Track: RuntimeStability`)
+- [x] `[SwingPreFinalAutoAndFinalApprovalPreopen0602] 스윙 pre-final auto state 및 final approval artifact 확인` (`Due: 2026-06-02`, `Slot: PREOPEN`, `TimeWindow: 08:45~08:50`, `Track: RuntimeStability`)
   - Source: [swing_runtime_approval_2026-06-01.json](/home/ubuntu/KORStockScan/data/report/swing_runtime_approval/swing_runtime_approval_2026-06-01.json), [threshold_cycle_ev_2026-06-01.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-06-01.json)
   - 판정 기준: pre-final은 parsed AI Tier2 auto state가 있어야 하고, final-stage는 사용자 승인 artifact가 있어야 한다.
   - 금지: 스윙 full-live 전환, cap release, provider/bot 변경, hard-safety 완화를 pre-final auto state로 처리하지 않는다.
   - 다음 액션: `pre_final_auto_selected`, `final_approval_artifact_present`, `blocked_by_policy` 중 하나로 닫는다.
+  - 처리 결과: 판정 `pre_final_auto_selected`. [swing_runtime_approval_2026-06-01.json](/home/ubuntu/KORStockScan/data/report/swing_runtime_approval/swing_runtime_approval_2026-06-01.json)은 `approval_requests` 3건을 남기며 `swing_model_floor`, `swing_market_regime_sensitivity`는 `dry_run_auto_apply_ready`/`ai_tier2_auto_approved`, `swing_one_share_real_canary_phase0`는 `auto_approved_real_canary`/`real_canary_phase0_auto_approved`이고 모두 `approval_artifact_required=false`, `approval_contract_status=ready`다. [threshold_apply_2026-06-02.json](/home/ubuntu/KORStockScan/data/threshold_cycle/apply_plans/threshold_apply_2026-06-02.json)은 `swing_one_share_real_canary_phase0`와 `swing_market_regime_sensitivity`를 selected로 소비하고 `swing_model_floor`는 `no_runtime_env_override`로 미선택했다. `data/threshold_cycle/approvals/`에는 2026-06-01 swing final/full-live approval artifact가 없으며, 이는 final full-live 미승인 상태다. 다음 액션은 dry-run 유지 및 phase0 cap/provenance 관찰이며 full-live, cap release, provider/bot, hard-safety 변경은 하지 않는다.
 
 ## 장중 체크리스트 (09:05~15:20)
 
@@ -86,7 +91,7 @@
 
 - [ ] `[CodeImprovementWorkorderReview0602] code improvement workorder 구현 필요 여부 및 Codex 지시 대상 확인` (`Due: 2026-06-02`, `Slot: POSTCLOSE`, `TimeWindow: 16:45~17:00`, `Track: ScalpingLogic`)
   - Source: [code_improvement_workorder_2026-06-01.md](/home/ubuntu/KORStockScan/docs/code-improvement-workorders/code_improvement_workorder_2026-06-01.md), [code_improvement_workorder_2026-06-01.json](/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-06-01.json)
-  - 판정 기준: selected_order_count=106와 `implement_now`, `attach_existing_family`, `design_family_candidate`, `reject` 분류를 확인한다.
+  - 판정 기준: selected_order_count=120와 `implement_now`, `attach_existing_family`, `design_family_candidate`, `reject` 분류를 확인한다.
   - 금지: code-improvement workorder를 자동 repo 수정으로 취급하지 않는다. 사용자가 Codex 구현을 지시한 경우에만 실행한다.
   - 다음 액션: 구현 필요, 설계 보류, reject, already_implemented 중 하나로 닫는다.
 
@@ -102,7 +107,14 @@
   - 금지: 작업지시를 approval artifact나 즉시 runtime env 수정으로 해석하지 않는다. broker/order/provider/cap guard 우회와 장중 threshold mutation은 금지한다.
   - 다음 액션: `implement_now`, `already_implemented`, `defer_design`, `reject`, `needs_new_workorder` 중 하나로 닫고, 구현 시 테스트와 postclose verifier handoff를 같이 확인한다.
 
+- [ ] `[RarePositiveBucketArmWatch0602] rare-positive 스캘핑 parent bucket 및 스윙 top arm 재등장 여부 확인` (`Due: 2026-06-02`, `Slot: POSTCLOSE`, `TimeWindow: 18:10~18:25`, `Track: ScalpingLogic`)
+  - Source: [lifecycle_bucket_discovery_2026-06-01.json](/home/ubuntu/KORStockScan/data/report/lifecycle_bucket_discovery/lifecycle_bucket_discovery_2026-06-01.json), [lifecycle_decision_matrix_2026-06-01.json](/home/ubuntu/KORStockScan/data/report/lifecycle_decision_matrix/lifecycle_decision_matrix_2026-06-01.json), [swing_strategy_discovery_ev_2026-06-01.json](/home/ubuntu/KORStockScan/data/report/swing_strategy_discovery_ev/swing_strategy_discovery_ev_2026-06-01.json), [swing_lifecycle_decision_matrix_2026-06-01.json](/home/ubuntu/KORStockScan/data/report/swing_lifecycle_decision_matrix/swing_lifecycle_decision_matrix_2026-06-01.json)
+  - 판정 기준: 스캘핑 `entry_score_parent=score_watch_recovery|entry_source_parent=entry_source_action_decision|submit_quality_parent=submit_stale_context_or_quote|exit_outcome_parent=exit_missed_upside` parent와 스윙 `arm05_breakout_conf_trailing`이 2026-06-02 postclose 산출물에서 재등장하는지, 표본 증가/EV 유지/downside/pending quote 해소 여부를 기존 리포트 필드로만 확인한다.
+  - 금지: 이 항목은 watchlist 해석 항목이다. 코드 수정, 신규 family 생성, runtime env 수정, threshold/order/provider/bot 변경, live-auto/real-canary 승격으로 해석하지 않는다.
+  - 다음 액션: `reappeared_positive_keep_watch`, `reappeared_but_ev_reverted`, `not_reappeared`, `source_quality_blocked`, `pending_maturity` 중 하나로 닫고, 새 구현은 사용자가 별도 Codex 지시를 줄 때만 검토한다.
+
 <!-- AUTO_NEXT_STAGE2_CHECKLIST_END -->
+
 
 
 ## Project/Calendar 동기화

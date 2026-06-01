@@ -85,6 +85,150 @@ def test_build_candidate_and_arm_rows_keep_sim_only_contract():
     assert all(row["theme_tags"] for row in candidates)
 
 
+def test_active_arm_priority_tags_matching_arm_without_duplication():
+    candidates = mod.build_candidate_rows(
+        _source_rows(3),
+        target_date="2026-06-01",
+        max_candidates=3,
+        block_reasons={},
+        quote_features=_quote_features(3),
+    )
+    arms = mod.build_arm_rows(
+        candidates,
+        virtual_budget_krw=10_000_000,
+        active_arm_priority_policies={
+            "arm05_breakout_conf_trailing": {
+                "priority_policy_id": "priority_arm05",
+                "priority_arm_id": "arm05_breakout_conf_trailing",
+                "status": "active",
+                "priority_source": "surviving_arms",
+                "source_report_date": "2026-06-01",
+            }
+        },
+    )
+
+    assert len(arms) == len(candidates) * len(mod.ARM_SET)
+    priority_rows = [row for row in arms if row.get("swing_active_arm_priority")]
+    assert len(priority_rows) == len(candidates)
+    assert {row["arm_id"] for row in priority_rows} == {"arm05_breakout_conf_trailing"}
+    assert {row["priority_policy_id"] for row in priority_rows} == {"priority_arm05"}
+    assert all(row["arm_features"]["swing_active_arm_priority"] is True for row in priority_rows)
+    assert all(row["actual_order_submitted"] is False for row in priority_rows)
+    assert all(row["broker_order_forbidden"] is True for row in priority_rows)
+    assert all(row["runtime_effect"] is False for row in priority_rows)
+
+
+def test_active_arm_priority_raises_default_cap_but_explicit_cap_wins(tmp_path, monkeypatch):
+    policy_file = tmp_path / "swing_sim_policy_catalog_2026-06-01.json"
+    policy_file.write_text(
+        json.dumps(
+            {
+                "schema_version": "swing_sim_policy_catalog_v1",
+                "active_arm_priority_policies": [
+                    {
+                        "priority_policy_id": "priority_arm05",
+                        "priority_arm_id": "arm05_breakout_conf_trailing",
+                        "status": "active",
+                        "source_report_date": "2026-06-01",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(mod, "load_safe_pool_rows", lambda target_date: _source_rows(70))
+    monkeypatch.setattr(mod, "load_block_reason_map", lambda target_date: {})
+    monkeypatch.setattr(mod, "fetch_quote_features", lambda codes, db_url=mod.POSTGRES_URL: _quote_features(70))
+    monkeypatch.setattr(
+        mod,
+        "build_sector_theme_map",
+        lambda codes, target_date, allow_external=True: {
+            "mapped_code_count": len(list(codes)),
+            "rows_by_code": {
+                f"{idx:06d}": {
+                    "sector": f"sector-{idx % 3}",
+                    "industry": f"industry-{idx % 2}",
+                    "theme_tags": [f"theme-{idx % 4}"],
+                    "theme_source": "test",
+                    "theme_source_quality": "ok",
+                }
+                for idx in range(1, 71)
+            },
+            "warnings": [],
+        },
+    )
+
+    report = mod.build_swing_strategy_discovery_report(
+        "2026-06-01",
+        persist=False,
+        swing_sim_policy_file=policy_file,
+    )
+    explicit = mod.build_swing_strategy_discovery_report(
+        "2026-06-01",
+        max_candidates=5,
+        persist=False,
+        swing_sim_policy_file=policy_file,
+    )
+
+    assert report["summary"]["effective_max_daily_candidates"] == 80
+    assert report["summary"]["candidate_count"] == 70
+    assert report["summary"]["active_arm_priority_policy_count"] == 1
+    assert explicit["summary"]["effective_max_daily_candidates"] == 5
+    assert explicit["summary"]["candidate_count"] == 5
+
+
+def test_active_bucket_priority_raises_default_cap_without_arm_duplication(tmp_path, monkeypatch):
+    policy_file = tmp_path / "swing_sim_policy_catalog_2026-06-01.json"
+    policy_file.write_text(
+        json.dumps(
+            {
+                "schema_version": "swing_sim_policy_catalog_v1",
+                "active_arm_priority_policies": [
+                    {
+                        "priority_policy_id": "priority_bucket_entry",
+                        "priority_bucket_id": "swing_bucket_entry_combo_probe",
+                        "status": "active",
+                        "source_report_date": "2026-06-01",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(mod, "load_safe_pool_rows", lambda target_date: _source_rows(70))
+    monkeypatch.setattr(mod, "load_block_reason_map", lambda target_date: {})
+    monkeypatch.setattr(mod, "fetch_quote_features", lambda codes, db_url=mod.POSTGRES_URL: _quote_features(70))
+    monkeypatch.setattr(
+        mod,
+        "build_sector_theme_map",
+        lambda codes, target_date, allow_external=True: {
+            "mapped_code_count": len(list(codes)),
+            "rows_by_code": {
+                f"{idx:06d}": {
+                    "sector": f"sector-{idx % 3}",
+                    "industry": f"industry-{idx % 2}",
+                    "theme_tags": [f"theme-{idx % 4}"],
+                    "theme_source": "test",
+                    "theme_source_quality": "ok",
+                }
+                for idx in range(1, 71)
+            },
+            "warnings": [],
+        },
+    )
+
+    report = mod.build_swing_strategy_discovery_report(
+        "2026-06-01",
+        persist=False,
+        swing_sim_policy_file=policy_file,
+    )
+
+    assert report["summary"]["effective_max_daily_candidates"] == 80
+    assert report["summary"]["candidate_count"] == 70
+    assert report["summary"]["active_arm_priority_policy_count"] == 1
+    assert report["summary"]["active_arm_priority_arm_count"] == 0
+
+
 def test_schema_report_and_persistence_are_idempotent(tmp_path, monkeypatch):
     db_url = f"sqlite:///{tmp_path / 'swing_strategy_discovery.db'}"
     output_dir = tmp_path / "report"

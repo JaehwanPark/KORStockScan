@@ -89,6 +89,7 @@ def test_control_tower_merges_swing_ldm_and_bottom_rebound_sources() -> None:
         swing_lifecycle_bucket_report=_swing_discovery(),
         bottom_rebound_policy_report=_bottom_policy(),
         swing_runtime_approval_report=_runtime_policy(),
+        swing_strategy_discovery_ev_report={},
     )
 
     assert approval["approved"] is True
@@ -104,6 +105,15 @@ def test_control_tower_merges_swing_ldm_and_bottom_rebound_sources() -> None:
     assert approval["broker_order_forbidden"] is True
     assert approval["allowed_runtime_apply"] is False
     assert mod.bottom_rebound_is_approved_by_control_tower(approval) is True
+    bucket_priority = next(
+        item
+        for item in approval["active_arm_priority_policies"]
+        if item.get("priority_bucket_id") == "swing_bucket_entry_combo_probe"
+    )
+    assert bucket_priority["priority_source"] == "sim_auto_approved_candidates"
+    assert bucket_priority["status"] == "active"
+    assert bucket_priority["actual_order_submitted"] is False
+    assert bucket_priority["broker_order_forbidden"] is True
     assert {item["policy_kind"] for item in approval["approved_policies"]} >= {
         "swing_runtime_dry_run_pre_final_policy",
         "swing_bounded_real_canary_pre_final_policy",
@@ -113,6 +123,67 @@ def test_control_tower_merges_swing_ldm_and_bottom_rebound_sources() -> None:
         for item in approval["approved_policies"]
         if item.get("source_id") == "swing_runtime_approval"
     )
+
+
+def test_active_arm_priority_missing_uses_two_day_cooldown_and_five_day_retire(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(mod, "SWING_SIM_POLICY_DIR", tmp_path)
+    previous = {
+        "priority_policy_id": "priority_arm05",
+        "priority_arm_id": "arm05_breakout_conf_trailing",
+        "source_report_date": "2026-05-31",
+        "status": "active",
+        "consecutive_missing_count": 0,
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+    }
+    tmp_path.joinpath("swing_sim_policy_catalog_2026-05-31.json").write_text(
+        json.dumps({"active_arm_priority_policies": [previous]}),
+        encoding="utf-8",
+    )
+
+    first_missing = mod._active_arm_priority_policies({}, "2026-06-01")
+    assert first_missing[0]["status"] == "active"
+    assert first_missing[0]["consecutive_missing_count"] == 1
+
+    previous["consecutive_missing_count"] = 1
+    tmp_path.joinpath("swing_sim_policy_catalog_2026-05-31.json").write_text(
+        json.dumps({"active_arm_priority_policies": [previous]}),
+        encoding="utf-8",
+    )
+    second_missing = mod._active_arm_priority_policies({}, "2026-06-01")
+    assert second_missing[0]["status"] == "cooldown"
+
+    previous["consecutive_missing_count"] = 4
+    tmp_path.joinpath("swing_sim_policy_catalog_2026-05-31.json").write_text(
+        json.dumps({"active_arm_priority_policies": [previous]}),
+        encoding="utf-8",
+    )
+    retired = mod._active_arm_priority_policies({}, "2026-06-01")
+    assert retired[0]["status"] == "retired"
+    assert retired[0]["retired_reason"] == "consecutive_missing"
+
+    previous["status"] = "cooldown"
+    previous["consecutive_missing_count"] = 0
+    tmp_path.joinpath("swing_sim_policy_catalog_2026-05-31.json").write_text(
+        json.dumps({"active_arm_priority_policies": [previous]}),
+        encoding="utf-8",
+    )
+    cooldown_missing = mod._active_arm_priority_policies({}, "2026-06-01")
+    assert cooldown_missing[0]["status"] == "cooldown"
+    assert cooldown_missing[0]["consecutive_missing_count"] == 1
+
+    recovered = mod._active_arm_priority_policies(
+        {
+            "report_type": "swing_strategy_discovery_ev",
+            "date": "2026-06-01",
+            "surviving_arms": [{"arm_id": "arm05_breakout_conf_trailing"}],
+        },
+        "2026-06-01",
+    )
+    assert recovered[0]["status"] == "active"
+    assert recovered[0].get("consecutive_missing_count") is None
 
 
 def test_control_tower_blocks_runtime_pre_final_when_tier2_missing() -> None:
@@ -125,6 +196,7 @@ def test_control_tower_blocks_runtime_pre_final_when_tier2_missing() -> None:
         swing_lifecycle_bucket_report=_swing_discovery(),
         bottom_rebound_policy_report=_bottom_policy(),
         swing_runtime_approval_report=runtime_policy,
+        swing_strategy_discovery_ev_report={},
     )
 
     assert approval["approved"] is True
@@ -149,6 +221,8 @@ def test_control_tower_writes_approval_and_catalog(tmp_path, monkeypatch) -> Non
         "2026-05-22",
         swing_lifecycle_bucket_report=_swing_discovery(),
         bottom_rebound_policy_report=_bottom_policy(),
+        swing_runtime_approval_report={},
+        swing_strategy_discovery_ev_report={},
     )
     paths = mod.write_swing_sim_auto_approval(approval)
 

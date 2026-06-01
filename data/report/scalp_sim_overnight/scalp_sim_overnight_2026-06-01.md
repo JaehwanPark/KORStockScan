@@ -1,6 +1,6 @@
 # Scalp Sim Overnight 2026-06-01
 
-- generated_at: `2026-06-01T17:04:13`
+- generated_at: `2026-06-01T22:19:09`
 - artifact_role: `postclose_source_packet_for_scalp_sim_overnight_ai_carry`
 - runtime_effect: `false`
 - decision_authority: `sim_observation_only`

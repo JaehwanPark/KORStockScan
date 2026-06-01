@@ -11,13 +11,13 @@
 - lifecycle_matrix_status: `pass`
 - lifecycle_bucket_windows_promotion: `pass` / `target_pass`
 - lifecycle_ai_context prompt/applied: `3` / `3175`
-- swing_strategy_discovery_labeled/pending: `41` / `3458`
-- swing_lifecycle_matrix_auto: `0`
+- swing_strategy_discovery_labeled/pending: `315` / `3212`
+- swing_lifecycle_matrix_auto: `7`
 - swing_lifecycle_bucket_auto: `0`
 - institutional_flow_available/join_rate: `True` / `100.0`
 - microstructure_reaction_available/ok: `True` / `9838`
 - pattern_lab_currentness_status: `pass`
-- pattern_lab_ai_review_status: `pass`
+- pattern_lab_ai_review_status: `warning`
 - producer_gap_discovery_status: `warning`
 - pattern_lab_propagation_status: `pass`
 - env_generated_at: `2026-06-01T07:35:01`
@@ -76,7 +76,7 @@
 - rows ok/partial/missing/token_error: `120` / `0` / `0` / `0`
 - join_rate_pct: `100.0`
 - source_mix: `{'ka10059+ka10061': 120}`
-- top_net_buy: `[{'stock_code': '005930', 'smart_money_net': 3683906, 'foreign_net_roll5': 0, 'inst_net_roll5': 11515775, 'regime': 'INSTITUTION_ACCUMULATION'}, {'stock_code': '090710', 'smart_money_net': 780773, 'foreign_net_roll5': 496297, 'inst_net_roll5': 0, 'regime': 'FOREIGN_ACCUMULATION'}, {'stock_code': '454910', 'smart_money_net': 762544, 'foreign_net_roll5': 378026, 'inst_net_roll5': 31721, 'regime': 'DUAL_ACCUMULATION'}, {'stock_code': '022100', 'smart_money_net': 750401, 'foreign_net_roll5': 564111, 'inst_net_roll5': 201175, 'regime': 'DUAL_ACCUMULATION'}, {'stock_code': '032820', 'smart_money_net': 677377, 'foreign_net_roll5': 2467442, 'inst_net_roll5': 129973, 'regime': 'DUAL_ACCUMULATION'}, {'stock_code': '332570', 'smart_money_net': 472397, 'foreign_net_roll5': 0, 'inst_net_roll5': 0, 'regime': 'UNKNOWN'}, {'stock_code': '010120', 'smart_money_net': 470598, 'foreign_net_roll5': 775415, 'inst_net_roll5': 0, 'regime': 'FOREIGN_ACCUMULATION'}, {'stock_code': '011200', 'smart_money_net': 427863, 'foreign_net_roll5': 0, 'inst_net_roll5': 0, 'regime': 'UNKNOWN'}, {'stock_code': '007660', 'smart_money_net': 387578, 'foreign_net_roll5': 0, 'inst_net_roll5': 849594, 'regime': 'INSTITUTION_ACCUMULATION'}, {'stock_code': '064350', 'smart_money_net': 256833, 'foreign_net_roll5': 905738, 'inst_net_roll5': 0, 'regime': 'FOREIGN_ACCUMULATION'}]`
+- top_net_buy: `[{'stock_code': '005930', 'smart_money_net': 5252887, 'foreign_net_roll5': 0, 'inst_net_roll5': 11930163, 'regime': 'INSTITUTION_ACCUMULATION'}, {'stock_code': '454910', 'smart_money_net': 1077632, 'foreign_net_roll5': 684475, 'inst_net_roll5': 40360, 'regime': 'DUAL_ACCUMULATION'}, {'stock_code': '022100', 'smart_money_net': 853872, 'foreign_net_roll5': 697422, 'inst_net_roll5': 171335, 'regime': 'DUAL_ACCUMULATION'}, {'stock_code': '090710', 'smart_money_net': 780773, 'foreign_net_roll5': 496297, 'inst_net_roll5': 0, 'regime': 'FOREIGN_ACCUMULATION'}, {'stock_code': '010120', 'smart_money_net': 696609, 'foreign_net_roll5': 1000329, 'inst_net_roll5': 0, 'regime': 'FOREIGN_ACCUMULATION'}, {'stock_code': '032820', 'smart_money_net': 677442, 'foreign_net_roll5': 2467507, 'inst_net_roll5': 129973, 'regime': 'DUAL_ACCUMULATION'}, {'stock_code': '007660', 'smart_money_net': 659129, 'foreign_net_roll5': 0, 'inst_net_roll5': 850537, 'regime': 'INSTITUTION_ACCUMULATION'}, {'stock_code': '011200', 'smart_money_net': 587305, 'foreign_net_roll5': 0, 'inst_net_roll5': 0, 'regime': 'UNKNOWN'}, {'stock_code': '332570', 'smart_money_net': 472484, 'foreign_net_roll5': 0, 'inst_net_roll5': 0, 'regime': 'UNKNOWN'}, {'stock_code': '108490', 'smart_money_net': 320423, 'foreign_net_roll5': 214394, 'inst_net_roll5': 143744, 'regime': 'DUAL_ACCUMULATION'}]`
 - warnings: `[]`
 
 ## Lifecycle Decision Matrix
@@ -130,10 +130,10 @@
 ## Swing Strategy Discovery Sim
 - artifact: `/home/ubuntu/KORStockScan/data/report/swing_strategy_discovery_ev/swing_strategy_discovery_ev_2026-06-01.json`
 - available: `True`
-- candidate/arm/labeled: `594` / `4354` / `41`
-- pending_future_quote_count: `3458`
+- candidate/arm/labeled: `634` / `4525` / `315`
+- pending_future_quote_count: `3212`
 - top_surviving_arm: `arm05_breakout_conf_trailing`
-- avoid_bucket_count: `1`
+- avoid_bucket_count: `11`
 - runtime_effect: `False`
 - interpretation: source-only exploration. Surviving arms can create future source-quality/workorder inputs but cannot apply runtime env.
 - warnings: `['pending_future_quotes']`
@@ -141,9 +141,9 @@
 ## Swing Lifecycle Matrix
 - artifact: `/home/ubuntu/KORStockScan/data/report/swing_lifecycle_decision_matrix/swing_lifecycle_decision_matrix_2026-06-01.json`
 - available: `True`
-- total/probe/discovery: `95919` / `91483` / `4436`
-- sim_auto_candidate_count: `0`
-- workorder_count: `8`
+- total/probe/discovery: `96638` / `91483` / `5155`
+- sim_auto_candidate_count: `7`
+- workorder_count: `30`
 - daily_simulation_consumed: `False`
 - runtime_effect: `False`
 - warnings: `[]`
@@ -152,9 +152,9 @@
 - artifact: `/home/ubuntu/KORStockScan/data/report/swing_lifecycle_bucket_discovery/swing_lifecycle_bucket_discovery_2026-06-01.json`
 - available: `True`
 - source_contract_status: `pass`
-- surfaced/sim_auto/code_patch: `477` / `0` / `0`
+- surfaced/sim_auto/code_patch: `556` / `0` / `0`
 - runtime_effect: `False`
-- warnings: `['ai_two_pass_review_missing_fail_closed', 'ai_two_pass_review_missing_source_only']`
+- warnings: `['ai_two_pass_review_missing_fail_closed', 'ai_two_pass_review_fail_closed_sim_auto_blocked']`
 
 ## Panic
 | 항목 | 설명 | 현재 적용 | 상태 | Gate 분류 | 튜닝 경로 | 판정 해석 | 점수 | 계약 | 차단/판정 사유 |
@@ -164,10 +164,10 @@
 
 ## Pattern Lab Audits
 - currentness: status=`pass` fail=`0` artifact=`/home/ubuntu/KORStockScan/data/report/pattern_lab_currentness_audit/pattern_lab_currentness_audit_2026-06-01.json`
-- ai_review: status=`pass` artifact=`/home/ubuntu/KORStockScan/data/report/pattern_lab_ai_review/pattern_lab_ai_review_2026-06-01.json`
+- ai_review: status=`warning` artifact=`/home/ubuntu/KORStockScan/data/report/pattern_lab_ai_review/pattern_lab_ai_review_2026-06-01.json`
 - producer_gap_discovery: status=`warning` artifact=`/home/ubuntu/KORStockScan/data/report/producer_gap_discovery/producer_gap_discovery_2026-06-01.json`
 - propagation: status=`pass` fail=`0` warnings=`0` artifact=`/home/ubuntu/KORStockScan/data/report/pattern_lab_propagation_audit/pattern_lab_propagation_audit_2026-06-01.json`
 
 ## Warnings
 - `swing_lifecycle_bucket_discovery:ai_two_pass_review_missing_fail_closed`
-- `swing_lifecycle_bucket_discovery:ai_two_pass_review_missing_source_only`
+- `swing_lifecycle_bucket_discovery:ai_two_pass_review_fail_closed_sim_auto_blocked`

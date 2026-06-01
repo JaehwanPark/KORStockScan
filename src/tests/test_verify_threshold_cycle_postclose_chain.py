@@ -961,6 +961,160 @@ def test_bottom_rebound_sim_handoff_not_applicable_when_source_absent():
     assert report["included"] is False
 
 
+def test_active_sim_priority_handoff_passes_with_matching_preopen_and_runtime(monkeypatch):
+    monkeypatch.setattr(
+        mod,
+        "_iter_pipeline_event_fields",
+        lambda target_date: [
+            {
+                "active_seed_id": "active_seed_test",
+                "actual_order_submitted": False,
+                "broker_order_forbidden": True,
+            }
+        ],
+    )
+
+    status = mod._active_sim_priority_handoff_status(
+        target_date="2026-06-01",
+        discovery={
+            "active_sim_priority_seeds": [
+                {
+                    "active_seed_id": "active_seed_test",
+                    "source_parent_bucket_id": "parent_positive",
+                    "status": "active",
+                }
+            ]
+        },
+        scalp_catalog={
+            "schema_version": "scalp_sim_policy_catalog_v1",
+            "active_sim_priority_seeds": [
+                {
+                    "active_seed_id": "active_seed_test",
+                    "source_parent_bucket_id": "parent_positive",
+                    "status": "active",
+                    "observable_prefix": {
+                        "entry_score_parent": "score_watch_recovery",
+                        "entry_source_parent": "entry_source_blocked_ai_score",
+                    },
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                    "runtime_effect": False,
+                }
+            ]
+        },
+        swing_catalog={
+            "schema_version": "swing_sim_policy_catalog_v1",
+            "active_arm_priority_policies": [
+                {
+                    "priority_policy_id": "priority_arm05",
+                    "priority_arm_id": "arm05_breakout_conf_trailing",
+                    "source_report_date": "2026-06-01",
+                    "status": "active",
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                    "runtime_effect": False,
+                }
+            ]
+        },
+        preopen_apply={
+            "selected": [
+                {
+                    "family": "scalp_sim_auto_approval",
+                    "selected": True,
+                    "active_sim_priority_seed_ids": ["active_seed_test"],
+                },
+                {
+                    "family": "swing_sim_auto_approval",
+                    "selected": True,
+                    "active_arm_priority_policy_ids": ["priority_arm05"],
+                },
+            ]
+        },
+        swing_sim_report={"summary": {"active_arm_priority_arm_count": 1}},
+    )
+
+    assert status["status"] == "pass"
+    assert status["active_seed_ids"] == ["active_seed_test"]
+    assert status["active_swing_priority_policy_ids"] == ["priority_arm05"]
+
+
+def test_active_sim_priority_handoff_fails_unknown_runtime_key(monkeypatch):
+    monkeypatch.setattr(
+        mod,
+        "_iter_pipeline_event_fields",
+        lambda target_date: [
+            {
+                "active_seed_id": "active_seed_unknown",
+                "actual_order_submitted": False,
+                "broker_order_forbidden": True,
+            }
+        ],
+    )
+
+    status = mod._active_sim_priority_handoff_status(
+        target_date="2026-06-01",
+        discovery={},
+        scalp_catalog={
+            "schema_version": "scalp_sim_policy_catalog_v1",
+            "active_sim_priority_seeds": [
+                {
+                    "active_seed_id": "active_seed_test",
+                    "source_parent_bucket_id": "parent_positive",
+                    "status": "active",
+                    "observable_prefix": {
+                        "entry_score_parent": "score_watch_recovery",
+                        "entry_source_parent": "entry_source_blocked_ai_score",
+                    },
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                    "runtime_effect": False,
+                }
+            ]
+        },
+        swing_catalog={},
+        preopen_apply={
+            "selected": [
+                {
+                    "family": "scalp_sim_auto_approval",
+                    "selected": True,
+                    "active_sim_priority_seed_ids": ["active_seed_test"],
+                }
+            ]
+        },
+        swing_sim_report={},
+    )
+
+    assert status["status"] == "fail"
+    assert "active_sim_priority_unknown_key_observed" in status["missing"]
+
+
+def test_active_sim_priority_handoff_fails_unknown_runtime_key_when_catalog_empty(monkeypatch):
+    monkeypatch.setattr(
+        mod,
+        "_iter_pipeline_event_fields",
+        lambda target_date: [
+            {
+                "active_seed_id": "active_seed_unknown",
+                "actual_order_submitted": False,
+                "broker_order_forbidden": True,
+            },
+            {"priority_policy_id": "priority_unknown"},
+        ],
+    )
+
+    status = mod._active_sim_priority_handoff_status(
+        target_date="2026-06-01",
+        discovery={},
+        scalp_catalog={"schema_version": "scalp_sim_policy_catalog_v1", "active_sim_priority_seeds": []},
+        swing_catalog={"schema_version": "swing_sim_policy_catalog_v1", "active_arm_priority_policies": []},
+        preopen_apply={},
+        swing_sim_report={},
+    )
+
+    assert status["status"] == "fail"
+    assert "active_sim_priority_unknown_key_observed" in status["missing"]
+
+
 def test_swing_entry_bottleneck_handoff_fails_when_downstream_missing():
     matrix = {
         "input_contract": {"swing_daily_simulation_consumed": False},

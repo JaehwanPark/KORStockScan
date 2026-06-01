@@ -16,9 +16,9 @@
 ## Counterfactual Coverage
 
 - non_no_clear_edge_count: `0`
-- no_clear_edge_count: `11`
+- no_clear_edge_count: `10`
 - candidate_weight_source_non_clear_edge_count: `0`
-- ready_count: `0` / `11`
+- ready_count: `0` / `10`
 - ready_rate: `0`
 - per_action_edge_buckets: `{'prefer_exit': 0, 'prefer_avg_down_wait': 0, 'prefer_pyramid_wait': 0}`
 - per_action_samples: `{'exit_only': 99, 'avg_down_wait': 0, 'pyramid_wait': 0}`
@@ -35,10 +35,9 @@
 | --- | --- | --- | ---: | ---: | ---: | ---: | --- | --- | --- |
 | price_bucket | price_10k_30k | no_clear_edge | -0.7936 | - | 14 | 0.2857 | False | avg_down_wait,pyramid_wait | candidate_weight_source |
 | price_bucket | price_gte_70k | no_clear_edge | -1.0464 | - | 19 | 0.5789 | False | avg_down_wait,pyramid_wait | candidate_weight_source |
-| volume_bucket | volume_2m_10m | no_clear_edge | -1.4106 | - | 9 | 0.5556 | False | avg_down_wait,pyramid_wait | candidate_weight_source |
-| volume_bucket | volume_500k_2m | no_clear_edge | -0.7525 | - | 10 | 0.4 | False | avg_down_wait,pyramid_wait | candidate_weight_source |
-| volume_bucket | volume_gte_10m | no_clear_edge | -1.1163 | - | 6 | 0.3333 | False | avg_down_wait,pyramid_wait | candidate_weight_source |
-| volume_bucket | volume_lt_500k | no_clear_edge | - | - | - | - | False | avg_down_wait,pyramid_wait | insufficient_sample |
+| volume_bucket | volume_2m_10m | no_clear_edge | -1.2935 | - | 10 | 0.5 | False | avg_down_wait,pyramid_wait | candidate_weight_source |
+| volume_bucket | volume_500k_2m | no_clear_edge | -0.8296 | - | 9 | 0.4444 | False | avg_down_wait,pyramid_wait | candidate_weight_source |
+| volume_bucket | volume_gte_10m | no_clear_edge | -1.2968 | - | 8 | 0.5 | False | avg_down_wait,pyramid_wait | candidate_weight_source |
 | volume_bucket | volume_unknown | no_clear_edge | -0.9979 | - | 6 | 0.3333 | False | avg_down_wait,pyramid_wait | candidate_weight_source |
 | time_bucket | time_0900_0930 | no_clear_edge | - | - | - | - | False | avg_down_wait,pyramid_wait | insufficient_sample |
 | time_bucket | time_0930_1030 | no_clear_edge | -1.279 | - | 7 | 0.5714 | False | avg_down_wait,pyramid_wait | candidate_weight_source |
@@ -52,7 +51,6 @@
 - `volume_bucket=volume_2m_10m` / `no_clear_edge`: volume_bucket=volume_2m_10m 과거 표본은 행동 우위가 불명확하다. 기존 보유/청산 원칙을 우선한다.
 - `volume_bucket=volume_500k_2m` / `no_clear_edge`: volume_bucket=volume_500k_2m 과거 표본은 행동 우위가 불명확하다. 기존 보유/청산 원칙을 우선한다.
 - `volume_bucket=volume_gte_10m` / `no_clear_edge`: volume_bucket=volume_gte_10m 과거 표본은 행동 우위가 불명확하다. 기존 보유/청산 원칙을 우선한다.
-- `volume_bucket=volume_lt_500k` / `no_clear_edge`: volume_bucket=volume_lt_500k 과거 표본은 행동 우위가 불명확하다. 기존 보유/청산 원칙을 우선한다.
 - `volume_bucket=volume_unknown` / `no_clear_edge`: volume_bucket=volume_unknown 과거 표본은 행동 우위가 불명확하다. 기존 보유/청산 원칙을 우선한다.
 - `time_bucket=time_0900_0930` / `no_clear_edge`: time_bucket=time_0900_0930 과거 표본은 행동 우위가 불명확하다. 기존 보유/청산 원칙을 우선한다.
 - `time_bucket=time_0930_1030` / `no_clear_edge`: time_bucket=time_0930_1030 과거 표본은 행동 우위가 불명확하다. 기존 보유/청산 원칙을 우선한다.

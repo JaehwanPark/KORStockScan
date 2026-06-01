@@ -358,7 +358,10 @@ def test_preopen_apply_consumes_lifecycle_bucket_auto_apply_without_human_artifa
         ),
         encoding="utf-8",
     )
-    (swing_sim_policy_dir / "swing_sim_policy_catalog_2026-05-22.json").write_text("{}", encoding="utf-8")
+    (swing_sim_policy_dir / "swing_sim_policy_catalog_2026-05-22.json").write_text(
+        json.dumps({"schema_version": "swing_sim_policy_catalog_v1", "active_arm_priority_policies": []}),
+        encoding="utf-8",
+    )
     (swing_sim_approval_dir / "swing_sim_auto_approval_2026-05-22.json").write_text(
         json.dumps(
             {

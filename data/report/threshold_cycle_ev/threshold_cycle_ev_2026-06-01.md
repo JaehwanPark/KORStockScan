@@ -108,7 +108,7 @@
 - rows ok/partial/missing/token_error: `120` / `0` / `0` / `0`
 - join_rate_pct: `100.0`
 - source_mix: `{'ka10059+ka10061': 120}`
-- top_net_buy: `[{'stock_code': '005930', 'smart_money_net': 3683906, 'foreign_net_roll5': 0, 'inst_net_roll5': 11515775, 'regime': 'INSTITUTION_ACCUMULATION'}, {'stock_code': '090710', 'smart_money_net': 780773, 'foreign_net_roll5': 496297, 'inst_net_roll5': 0, 'regime': 'FOREIGN_ACCUMULATION'}, {'stock_code': '454910', 'smart_money_net': 762544, 'foreign_net_roll5': 378026, 'inst_net_roll5': 31721, 'regime': 'DUAL_ACCUMULATION'}, {'stock_code': '022100', 'smart_money_net': 750401, 'foreign_net_roll5': 564111, 'inst_net_roll5': 201175, 'regime': 'DUAL_ACCUMULATION'}, {'stock_code': '032820', 'smart_money_net': 677377, 'foreign_net_roll5': 2467442, 'inst_net_roll5': 129973, 'regime': 'DUAL_ACCUMULATION'}, {'stock_code': '332570', 'smart_money_net': 472397, 'foreign_net_roll5': 0, 'inst_net_roll5': 0, 'regime': 'UNKNOWN'}, {'stock_code': '010120', 'smart_money_net': 470598, 'foreign_net_roll5': 775415, 'inst_net_roll5': 0, 'regime': 'FOREIGN_ACCUMULATION'}, {'stock_code': '011200', 'smart_money_net': 427863, 'foreign_net_roll5': 0, 'inst_net_roll5': 0, 'regime': 'UNKNOWN'}, {'stock_code': '007660', 'smart_money_net': 387578, 'foreign_net_roll5': 0, 'inst_net_roll5': 849594, 'regime': 'INSTITUTION_ACCUMULATION'}, {'stock_code': '064350', 'smart_money_net': 256833, 'foreign_net_roll5': 905738, 'inst_net_roll5': 0, 'regime': 'FOREIGN_ACCUMULATION'}]`
+- top_net_buy: `[{'stock_code': '005930', 'smart_money_net': 5252887, 'foreign_net_roll5': 0, 'inst_net_roll5': 11930163, 'regime': 'INSTITUTION_ACCUMULATION'}, {'stock_code': '454910', 'smart_money_net': 1077632, 'foreign_net_roll5': 684475, 'inst_net_roll5': 40360, 'regime': 'DUAL_ACCUMULATION'}, {'stock_code': '022100', 'smart_money_net': 853872, 'foreign_net_roll5': 697422, 'inst_net_roll5': 171335, 'regime': 'DUAL_ACCUMULATION'}, {'stock_code': '090710', 'smart_money_net': 780773, 'foreign_net_roll5': 496297, 'inst_net_roll5': 0, 'regime': 'FOREIGN_ACCUMULATION'}, {'stock_code': '010120', 'smart_money_net': 696609, 'foreign_net_roll5': 1000329, 'inst_net_roll5': 0, 'regime': 'FOREIGN_ACCUMULATION'}, {'stock_code': '032820', 'smart_money_net': 677442, 'foreign_net_roll5': 2467507, 'inst_net_roll5': 129973, 'regime': 'DUAL_ACCUMULATION'}, {'stock_code': '007660', 'smart_money_net': 659129, 'foreign_net_roll5': 0, 'inst_net_roll5': 850537, 'regime': 'INSTITUTION_ACCUMULATION'}, {'stock_code': '011200', 'smart_money_net': 587305, 'foreign_net_roll5': 0, 'inst_net_roll5': 0, 'regime': 'UNKNOWN'}, {'stock_code': '332570', 'smart_money_net': 472484, 'foreign_net_roll5': 0, 'inst_net_roll5': 0, 'regime': 'UNKNOWN'}, {'stock_code': '108490', 'smart_money_net': 320423, 'foreign_net_roll5': 214394, 'inst_net_roll5': 143744, 'regime': 'DUAL_ACCUMULATION'}]`
 
 ## Pattern Lab Automation
 - artifact: `/home/ubuntu/KORStockScan/data/report/scalping_pattern_lab_automation/scalping_pattern_lab_automation_2026-06-01.json`
@@ -118,9 +118,9 @@
 ## Swing Pattern Lab Automation
 - artifact: `/home/ubuntu/KORStockScan/data/report/swing_pattern_lab_automation/swing_pattern_lab_automation_2026-06-01.json`
 - deepseek_lab_available: `True`
-- findings/orders: `5` / `3`
+- findings/orders: `7` / `3`
 - data_quality_warnings: `0`
-- top_level_data_quality_warnings: `0`
+- top_level_data_quality_warnings: `1`
 - resolved_data_quality_warnings: `0`
 - ofi_qi_stale_missing_unique_records: `5`
 - ofi_qi_stale_missing_reasons: `{'micro_missing': 215, 'micro_stale': 0, 'observer_unhealthy': 0, 'micro_not_ready': 226, 'state_insufficient': 226}`
@@ -128,17 +128,17 @@
 - ofi_qi_stale_missing_reason_combination_unique_records: `{'micro_missing+micro_not_ready+state_insufficient': 5}`
 - ofi_qi_observer_unhealthy_overlap: `{'observer_unhealthy_total': 0, 'observer_unhealthy_with_other_reason': 0, 'observer_unhealthy_only': 0}`
 - source_quality_blocked_families: `[{'family': 'swing_entry_ofi_qi_execution_quality', 'stage': 'entry', 'metric_role': 'source_quality_gate', 'decision_authority': 'swing_pattern_lab_analysis_workorder_source_only', 'window_policy': 'same_day_pattern_lab_source_quality', 'sample_floor': 1, 'primary_decision_metric': 'source_quality_gate', 'source_quality_gate': 'swing_orderbook_micro_context_ready_or_blocker_provenance_recorded', 'source_contract_version': 'swing_micro_context_source_quality_v1', 'source_contract_status': 'implemented', 'source_quality_blockers': ['entry_ofi_qi_invalid_micro_context'], 'invalid_micro_context_unique_record_count': 5, 'invalid_reason_combination_unique_record_counts': {'micro_missing+micro_not_ready+state_insufficient': 5}, 'reason_counts': {'micro_missing': 215, 'micro_stale': 0, 'observer_unhealthy': 0, 'micro_not_ready': 226, 'state_insufficient': 226}, 'reason_combination_counts': {'micro_not_ready+state_insufficient': 11, 'micro_missing+micro_not_ready+state_insufficient': 215}, 'observer_unhealthy_overlap': {'observer_unhealthy_total': 0, 'observer_unhealthy_with_other_reason': 0, 'observer_unhealthy_only': 0}, 'automation_input': True, 'runtime_effect': False, 'allowed_runtime_apply': False, 'forbidden_uses': ['swing_real_order_enable', 'one_share_real_canary', 'scale_in_real_canary', 'runtime_threshold_mutation', 'provider_route_change', 'bot_restart', 'recommendation_history_replace']}]`
-- carryover_warnings: `0`
+- carryover_warnings: `2`
 - population_split_available: `True`
 
 ## Swing Strategy Discovery Sim
 - artifact: `/home/ubuntu/KORStockScan/data/report/swing_strategy_discovery_ev/swing_strategy_discovery_ev_2026-06-01.json`
 - authority: `swing_sim_exploration_only` / source_only: `True`
-- candidate/arm/policy_exit_rows: `594` / `4354` / `4354`
-- labeled/pending_future_quotes: `41` / `3458`
+- candidate/arm/policy_exit_rows: `634` / `4525` / `4525`
+- labeled/pending_future_quotes: `315` / `3212`
 - implementation_status: `implemented`
 - top_surviving_arm: `arm05_breakout_conf_trailing`
-- surviving/avoid_bucket_count: `1` / `1`
+- surviving/avoid_bucket_count: `1` / `11`
 - runtime_effect: `False`
 
 ## Pipeline Event Verbosity
@@ -161,7 +161,7 @@
 
 ## Pattern Lab Audits
 - currentness: status=`pass` fail=`0` orders=`0` artifact=`/home/ubuntu/KORStockScan/data/report/pattern_lab_currentness_audit/pattern_lab_currentness_audit_2026-06-01.json`
-- ai_review: status=`pass` orders=`0` artifact=`/home/ubuntu/KORStockScan/data/report/pattern_lab_ai_review/pattern_lab_ai_review_2026-06-01.json`
+- ai_review: status=`warning` orders=`6` artifact=`/home/ubuntu/KORStockScan/data/report/pattern_lab_ai_review/pattern_lab_ai_review_2026-06-01.json`
 - time_window_regime_counterfactual: status=`pass` artifact=`/home/ubuntu/KORStockScan/data/report/time_window_regime_counterfactual/time_window_regime_counterfactual_2026-06-01.json`
 - producer_gap_discovery: status=`warning` orders=`10` artifact=`/home/ubuntu/KORStockScan/data/report/producer_gap_discovery/producer_gap_discovery_2026-06-01.json`
 - stage_hook_workorder_discovery: status=`warning` orders=`2` artifact=`/home/ubuntu/KORStockScan/data/report/stage_hook_workorder_discovery/stage_hook_workorder_discovery_2026-06-01.json`
@@ -185,8 +185,8 @@
 ## Code Improvement Workorder
 - artifact: `/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-06-01.json`
 - markdown: `/home/ubuntu/KORStockScan/docs/code-improvement-workorders/code_improvement_workorder_2026-06-01.md`
-- selected_order_count: `106`
-- decision_counts: `{'implement_now': 6, 'attach_existing_family': 107, 'design_family_candidate': 6, 'defer_evidence': 9, 'reject': 3}`
+- selected_order_count: `120`
+- decision_counts: `{'implement_now': 11, 'attach_existing_family': 129, 'design_family_candidate': 6, 'defer_evidence': 9, 'reject': 3}`
 
 ## Approval Requests
 - `position_sizing_cap_release` sample=`33/30` reason=`window_policy primary=rolling_10d 기준 재평가: 1주 cap 해제 efficient trade-off 기준 충족(score=0.16/0.70): 자동 적용하지 않고 사용자 승인 요청 artifact로만 승격한다.` contract=`final_user_approval_required` live_ready=`False`
@@ -223,9 +223,12 @@
 - `position_sizing_dynamic_formula`: `hold_sample` sample=`33/30`
 
 ## Warnings
+- `swing_lab_carryover:2`
 - `lifecycle_bucket_discovery:source_contract_drift_warning`
 - `lifecycle_bucket_discovery:source_contract_drift_warning`
 - `swing_strategy_discovery:pending_future_quotes`
 - `swing_lifecycle_decision_matrix:pending_future_quotes`
-- `swing_lifecycle_bucket_discovery:ai_two_pass_review_missing_source_only`
 - `swing_lifecycle_bucket_discovery:ai_two_pass_review_missing_fail_closed`
+- `swing_lifecycle_bucket_discovery:ai_two_pass_review_fail_closed_sim_auto_blocked`
+- `pattern_lab_ai_review_warning`
+- `pattern_lab_ai_review_ai_review_followup_required`

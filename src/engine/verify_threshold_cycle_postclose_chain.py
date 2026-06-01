@@ -41,6 +41,8 @@ _OPTIONAL_ARTIFACT_LABELS = {
     "lifecycle_decision_matrix_mtd",
     "lifecycle_bucket_discovery_mtd",
     "threshold_preopen_apply_next",
+    "scalp_sim_policy_catalog",
+    "swing_sim_policy_catalog",
 }
 _AI_EXEMPT_RUNTIME_FAMILIES = {
     "latency_classifier_runtime_profile",
@@ -219,6 +221,16 @@ def _artifact_paths(target_date: str) -> dict[str, Path]:
         / "threshold_cycle"
         / "apply_plans"
         / f"threshold_apply_{next_day}.json",
+        "scalp_sim_policy_catalog": PROJECT_ROOT
+        / "data"
+        / "threshold_cycle"
+        / "scalp_sim_policies"
+        / f"scalp_sim_policy_catalog_{target_date}.json",
+        "swing_sim_policy_catalog": PROJECT_ROOT
+        / "data"
+        / "threshold_cycle"
+        / "swing_sim_policies"
+        / f"swing_sim_policy_catalog_{target_date}.json",
         "pattern_lab_currentness_audit": REPORT_DIR
         / "pattern_lab_currentness_audit"
         / f"pattern_lab_currentness_audit_{target_date}.json",
@@ -1507,6 +1519,188 @@ def _bottom_rebound_sim_handoff_status(sim_report: dict[str, Any]) -> dict[str, 
     }
 
 
+def _iter_pipeline_event_fields(target_date: str):
+    path = PROJECT_ROOT / "data" / "pipeline_events" / f"pipeline_events_{target_date}.jsonl"
+    try:
+        with path.open("r", encoding="utf-8") as fh:
+            for line in fh:
+                if not line.strip():
+                    continue
+                try:
+                    item = json.loads(line)
+                except Exception:
+                    continue
+                if not isinstance(item, dict):
+                    continue
+                fields = item.get("fields") if isinstance(item.get("fields"), dict) else item
+                yield fields
+    except Exception:
+        return
+
+
+def _active_sim_priority_handoff_status(
+    *,
+    target_date: str,
+    discovery: dict[str, Any],
+    scalp_catalog: dict[str, Any],
+    swing_catalog: dict[str, Any],
+    preopen_apply: dict[str, Any],
+    swing_sim_report: dict[str, Any],
+) -> dict[str, Any]:
+    missing: list[str] = []
+    warnings: list[str] = []
+    producer_seeds = [
+        item
+        for item in (discovery.get("active_sim_priority_seeds") or [])
+        if isinstance(item, dict) and str(item.get("active_seed_id") or "").strip()
+    ]
+    catalog_seeds = [
+        item
+        for item in (scalp_catalog.get("active_sim_priority_seeds") or [])
+        if isinstance(item, dict) and str(item.get("active_seed_id") or "").strip()
+    ]
+    if scalp_catalog and scalp_catalog.get("schema_version") != "scalp_sim_policy_catalog_v1":
+        missing.append("active_sim_priority_catalog_schema_invalid")
+    producer_seed_ids = {str(item.get("active_seed_id")) for item in producer_seeds}
+    catalog_seed_ids = {str(item.get("active_seed_id")) for item in catalog_seeds}
+    active_seed_ids = {str(item.get("active_seed_id")) for item in catalog_seeds if str(item.get("status") or "") == "active"}
+    inactive_seed_ids = catalog_seed_ids - active_seed_ids
+    if producer_seed_ids and not catalog_seed_ids:
+        missing.append("active_sim_priority_catalog_seed_missing")
+    if producer_seed_ids and producer_seed_ids - catalog_seed_ids:
+        missing.append("active_sim_priority_producer_catalog_key_mismatch")
+    for seed in catalog_seeds:
+        prefix = seed.get("observable_prefix") if isinstance(seed.get("observable_prefix"), dict) else {}
+        if not str(seed.get("source_parent_bucket_id") or "").strip() or str(seed.get("status") or "") not in {"active", "cooldown", "retired"}:
+            missing.append("active_sim_priority_seed_required_key_missing")
+            break
+        if str(seed.get("status") or "") == "active" and (
+            not str(prefix.get("entry_score_parent") or "").strip()
+            or not str(prefix.get("entry_source_parent") or "").strip()
+        ):
+            missing.append("active_sim_priority_seed_observable_prefix_missing")
+            break
+        if seed.get("actual_order_submitted") is True or seed.get("broker_order_forbidden") is not True or seed.get("runtime_effect") is not False:
+            missing.append("active_sim_priority_forbidden_contract_violation")
+            break
+
+    swing_policies = [
+        item
+        for item in (swing_catalog.get("active_arm_priority_policies") or [])
+        if isinstance(item, dict) and str(item.get("priority_policy_id") or "").strip()
+    ]
+    if swing_catalog and swing_catalog.get("schema_version") != "swing_sim_policy_catalog_v1":
+        missing.append("swing_active_arm_priority_catalog_schema_invalid")
+    swing_policy_ids = {str(item.get("priority_policy_id")) for item in swing_policies}
+    active_swing_policy_ids = {str(item.get("priority_policy_id")) for item in swing_policies if str(item.get("status") or "") == "active"}
+    inactive_swing_policy_ids = swing_policy_ids - active_swing_policy_ids
+    for policy in swing_policies:
+        if str(policy.get("status") or "") not in {"active", "cooldown", "retired"} or not str(policy.get("source_report_date") or "").strip():
+            missing.append("swing_active_arm_priority_required_key_missing")
+            break
+        if str(policy.get("status") or "") == "active" and not str(policy.get("priority_arm_id") or policy.get("priority_bucket_id") or "").strip():
+            missing.append("swing_active_arm_priority_match_key_missing")
+            break
+        if policy.get("actual_order_submitted") is True or policy.get("broker_order_forbidden") is not True or policy.get("runtime_effect") is not False:
+            missing.append("swing_active_arm_priority_forbidden_contract_violation")
+            break
+
+    def collect_selected_families(payload: Any) -> set[str]:
+        found: set[str] = set()
+        if isinstance(payload, dict):
+            if payload.get("selected") is True and payload.get("family"):
+                found.add(str(payload.get("family")))
+            for key, value in payload.items():
+                if key == "family" and payload.get("decision_reason") and payload.get("selected") is not False:
+                    found.add(str(value))
+                else:
+                    found.update(collect_selected_families(value))
+        elif isinstance(payload, list):
+            for item in payload:
+                found.update(collect_selected_families(item))
+        return found
+
+    selected_families = collect_selected_families(preopen_apply)
+    def collect_values(payload: Any, key_name: str) -> set[str]:
+        found: set[str] = set()
+        if isinstance(payload, dict):
+            value = payload.get(key_name)
+            if isinstance(value, list):
+                found.update(str(item).strip() for item in value if str(item).strip())
+            elif value is not None and str(value).strip():
+                found.add(str(value).strip())
+            for child in payload.values():
+                found.update(collect_values(child, key_name))
+        elif isinstance(payload, list):
+            for item in payload:
+                found.update(collect_values(item, key_name))
+        return found
+
+    preopen_seed_ids = collect_values(preopen_apply, "active_sim_priority_seed_ids")
+    preopen_swing_policy_ids = collect_values(preopen_apply, "active_arm_priority_policy_ids")
+    if (active_seed_ids or active_swing_policy_ids) and preopen_apply:
+        if active_seed_ids and "scalp_sim_auto_approval" not in selected_families:
+            missing.append("active_sim_priority_preopen_handoff_missing")
+        elif active_seed_ids and not active_seed_ids.issubset(preopen_seed_ids):
+            missing.append("active_sim_priority_preopen_handoff_missing")
+        if active_swing_policy_ids and "swing_sim_auto_approval" not in selected_families:
+            missing.append("swing_active_arm_priority_preopen_handoff_missing")
+        elif active_swing_policy_ids and not active_swing_policy_ids.issubset(preopen_swing_policy_ids):
+            missing.append("swing_active_arm_priority_preopen_handoff_missing")
+    elif active_seed_ids or active_swing_policy_ids:
+        warnings.append("active_sim_priority_preopen_handoff_pending")
+
+    observed_seed_ids: set[str] = set()
+    observed_swing_policy_ids: set[str] = set()
+    inactive_consumed: set[str] = set()
+    unknown_consumed: set[str] = set()
+    for fields in _iter_pipeline_event_fields(target_date):
+        seed_id = str(fields.get("active_seed_id") or "").strip()
+        if seed_id:
+            observed_seed_ids.add(seed_id)
+            if seed_id in inactive_seed_ids:
+                inactive_consumed.add(seed_id)
+            elif seed_id not in catalog_seed_ids:
+                unknown_consumed.add(seed_id)
+            if fields.get("actual_order_submitted") is True or fields.get("broker_order_forbidden") is not True:
+                missing.append("active_sim_priority_runtime_forbidden_contract_violation")
+        policy_id = str(fields.get("priority_policy_id") or "").strip()
+        if policy_id:
+            observed_swing_policy_ids.add(policy_id)
+            if policy_id in inactive_swing_policy_ids:
+                inactive_consumed.add(policy_id)
+            elif policy_id not in swing_policy_ids:
+                unknown_consumed.add(policy_id)
+    swing_summary = swing_sim_report.get("summary") if isinstance(swing_sim_report.get("summary"), dict) else {}
+    if _safe_int(swing_summary.get("active_arm_priority_arm_count")) > 0:
+        observed_swing_policy_ids.update(active_swing_policy_ids)
+    if unknown_consumed:
+        missing.append("active_sim_priority_unknown_key_observed")
+    if inactive_consumed:
+        missing.append("active_sim_priority_inactive_key_consumed")
+    if active_seed_ids and not (observed_seed_ids & active_seed_ids):
+        warnings.append("active_sim_priority_runtime_observation_missing")
+    if active_swing_policy_ids and not (observed_swing_policy_ids & active_swing_policy_ids):
+        warnings.append("swing_active_arm_priority_runtime_observation_missing")
+    return {
+        "status": "fail" if missing else ("warning" if warnings else "pass" if (active_seed_ids or active_swing_policy_ids) else "not_applicable"),
+        "producer_seed_ids": sorted(producer_seed_ids),
+        "catalog_seed_ids": sorted(catalog_seed_ids),
+        "active_seed_ids": sorted(active_seed_ids),
+        "preopen_seed_ids": sorted(preopen_seed_ids),
+        "observed_seed_ids": sorted(observed_seed_ids),
+        "swing_priority_policy_ids": sorted(swing_policy_ids),
+        "active_swing_priority_policy_ids": sorted(active_swing_policy_ids),
+        "preopen_swing_priority_policy_ids": sorted(preopen_swing_policy_ids),
+        "observed_swing_priority_policy_ids": sorted(observed_swing_policy_ids),
+        "missing": list(dict.fromkeys(missing)),
+        "warnings": list(dict.fromkeys(warnings)),
+        "runtime_effect": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+    }
+
+
 def _scale_in_bucket_handoff_status(
     ldm_report: dict[str, Any],
     ev_report: dict[str, Any],
@@ -2010,6 +2204,8 @@ def build_threshold_cycle_postclose_verification(
     runtime_apply_gap_audit = _load_json(paths["runtime_apply_gap_audit"])
     bridge_report = _load_json(paths["runtime_apply_bridge"])
     preopen_apply_next = _load_json(paths["threshold_preopen_apply_next"])
+    scalp_sim_policy_catalog = _load_json(paths["scalp_sim_policy_catalog"])
+    swing_sim_policy_catalog = _load_json(paths["swing_sim_policy_catalog"])
     buy_funnel_report = _load_json(paths["buy_funnel_sentinel"])
     currentness_audit = _load_json(paths["pattern_lab_currentness_audit"])
     pattern_lab_ai_review = _load_json(paths["pattern_lab_ai_review"])
@@ -2185,6 +2381,18 @@ def build_threshold_cycle_postclose_verification(
     bottom_rebound_sim_handoff = _bottom_rebound_sim_handoff_status(swing_strategy_discovery_sim)
     if bottom_rebound_sim_handoff.get("status") == "fail":
         log_issues.append("bottom_rebound_sim_handoff_missing")
+    active_sim_priority_handoff = _active_sim_priority_handoff_status(
+        target_date=target_date,
+        discovery=discovery_report,
+        scalp_catalog=scalp_sim_policy_catalog,
+        swing_catalog=swing_sim_policy_catalog,
+        preopen_apply=preopen_apply_next,
+        swing_sim_report=swing_strategy_discovery_sim,
+    )
+    if active_sim_priority_handoff.get("status") == "fail":
+        log_issues.append("active_sim_priority_handoff_missing")
+    elif active_sim_priority_handoff.get("status") == "warning":
+        handoff_warnings.extend(str(item) for item in (active_sim_priority_handoff.get("warnings") or []) if str(item))
 
     lineage = workorder.get("lineage") if isinstance(workorder.get("lineage"), dict) else {}
     workorder_snapshot = {
@@ -2698,6 +2906,7 @@ def build_threshold_cycle_postclose_verification(
         "producer_gap_discovery_handoff": producer_gap_handoff,
         "stage_hook_workorder_handoff": stage_hook_handoff,
         "bottom_rebound_sim_handoff": bottom_rebound_sim_handoff,
+        "active_sim_priority_handoff": active_sim_priority_handoff,
     }
 
 

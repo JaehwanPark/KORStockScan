@@ -1,6 +1,6 @@
 # 스캘핑 패턴 분석 최종 리뷰 보고서 (for Lead AI)
 
-생성일: 2026-06-01 17:28:29
+생성일: 2026-06-01 22:44:14
 분석 기간: 2026-04-21 ~ 2026-06-01
 
 ---
@@ -88,7 +88,7 @@
 
 - rebase_integrity_flag: 51건
 - partial_then_expand_flag: 31건
-- same_symbol_repeat_flag: 305건
+- same_symbol_repeat_flag: 475건
 - same_ts_multi_rebase_flag: 29건
 
 ### 2-2. 전역 손절 강화 비권고 이유

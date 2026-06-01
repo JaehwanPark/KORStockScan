@@ -26,15 +26,15 @@
 - ai_tier2_proposal_count: `2`
 - comparative_review_count: `2`
 - audit_status: `pass`
-- audit_issues: `['Input bucket_relation=new_bucket_candidate conflicts with canonical parent absorption evidence.', 'Review schema lacks explicit lifecycle_flow_sim_probe_candidate enum, so interpreted/final state is mapped to source_only_keep_collecting for reporting only.']`
+- audit_issues: `[]`
 - audit_reason: `sharded review aggregate`
 
 ### AI Review Shards
-- `live_contract_review` status=`skipped_empty` candidates=`0` omitted=`0` context_chars=`27681`
-- `lifecycle_flow_review` status=`parsed` candidates=`1` omitted=`199` context_chars=`34212`
-- `sim_policy_review` status=`parsed` candidates=`1` omitted=`27` context_chars=`34211`
-- `gap_workorder_review` status=`skipped_empty` candidates=`0` omitted=`0` context_chars=`27657`
-- `taxonomy_discovery_review` status=`skipped_empty` candidates=`0` omitted=`0` context_chars=`27653`
+- `live_contract_review` status=`skipped_empty` candidates=`0` omitted=`0` context_chars=`27836`
+- `lifecycle_flow_review` status=`parsed` candidates=`1` omitted=`199` context_chars=`34367`
+- `sim_policy_review` status=`parsed` candidates=`1` omitted=`27` context_chars=`34366`
+- `gap_workorder_review` status=`skipped_empty` candidates=`0` omitted=`0` context_chars=`27812`
+- `taxonomy_discovery_review` status=`skipped_empty` candidates=`0` omitted=`0` context_chars=`27808`
 
 - `lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_blocked_ai_score_stale_fresh_liquidity_liq` stage=`lifecycle_flow` state=`source_only_keep_collecting` action=`relax_or_recover` relation=`new_bucket_candidate` canonical=`lifecycle_flow:combo_lifecycle_flow:entry=score_watch_recovery|submit=submit_observed|holding=holding_observed|scale_in=scale_in_observed|exit=exit_observed` joined=`5` ev=`2.3307` ai_final=`-` taxonomy=`absorb_as_dimension`
 - `lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_scalp_entry_action_decision_snapshot_stale` stage=`lifecycle_flow` state=`source_only_keep_collecting` action=`relax_or_recover` relation=`new_bucket_candidate` canonical=`lifecycle_flow:combo_lifecycle_flow:entry=score_watch_recovery|submit=submit_observed|holding=holding_observed|scale_in=scale_in_observed|exit=exit_observed` joined=`3` ev=`2.483` ai_final=`-` taxonomy=`absorb_as_dimension`

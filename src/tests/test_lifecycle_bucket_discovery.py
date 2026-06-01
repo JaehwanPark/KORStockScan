@@ -119,6 +119,201 @@ def _legacy_ai_response_without_dual_taxonomy_fields():
     }
 
 
+def test_active_sim_priority_seed_uses_observable_prefix_only(tmp_path, monkeypatch):
+    monkeypatch.setattr(mod, "REPORT_DIR", tmp_path)
+    report = {
+        "date": "2026-06-01",
+        "parent_bucket_summaries": [
+            {
+                "source_parent_bucket_id": "parent_positive",
+                "parent_source_quality_adjusted_ev_pct": 2.5685,
+                "complete_flow_count": 1,
+                "parent_joined_sample": 1,
+                "parent_granularity_floor_passed": True,
+                "dimension_filters": {
+                    "entry_score_parent": "score_watch_recovery",
+                    "entry_source_parent": "entry_source_blocked_ai_score",
+                    "submit_quality_parent": "submit_revalidation_ok",
+                    "exit_outcome_parent": "exit_missed_upside",
+                    "major_holding_parent": "holding_whipsaw_recovery",
+                    "scale_in_parent": "scale_in_absent",
+                },
+            },
+            {
+                "source_parent_bucket_id": "parent_nonpositive",
+                "parent_source_quality_adjusted_ev_pct": 0.0,
+                "complete_flow_count": 3,
+                "parent_joined_sample": 3,
+                "parent_granularity_floor_passed": True,
+                "dimension_filters": {
+                    "entry_score_parent": "score_mid_recovery",
+                    "entry_source_parent": "entry_source_action_decision",
+                },
+            },
+        ],
+    }
+
+    seeds = mod._build_active_sim_priority_seeds(report)
+
+    active = next(seed for seed in seeds if seed["source_parent_bucket_id"] == "parent_positive")
+    assert active["status"] == "active"
+    assert active["active_seed_id"].startswith("active_seed_")
+    assert active["observable_prefix"] == {
+        "entry_score_parent": "score_watch_recovery",
+        "entry_source_parent": "entry_source_blocked_ai_score",
+        "submit_quality_parent": "submit_revalidation_ok",
+    }
+    assert active["target_validation_parent_dimensions"] == {
+        "exit_outcome_parent": "exit_missed_upside",
+        "major_holding_parent": "holding_whipsaw_recovery",
+        "scale_in_parent": "scale_in_absent",
+    }
+    assert active["actual_order_submitted"] is False
+    assert active["broker_order_forbidden"] is True
+    cooldown = next(seed for seed in seeds if seed["source_parent_bucket_id"] == "parent_nonpositive")
+    assert cooldown["status"] == "cooldown"
+
+
+def test_active_sim_priority_seed_status_uses_two_day_cooldown_and_five_day_retire(tmp_path, monkeypatch):
+    previous_seed = {
+        "active_seed_id": "active_seed_previous",
+        "source_parent_bucket_id": "parent_was_positive",
+        "status": "active",
+        "observable_prefix": {
+            "entry_score_parent": "score_watch_recovery",
+            "entry_source_parent": "entry_source_blocked_ai_score",
+        },
+        "consecutive_fail_count": 0,
+        "consecutive_missing_count": 0,
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+    }
+    tmp_path.joinpath("lifecycle_bucket_discovery_2026-05-31.json").write_text(
+        json.dumps({"active_sim_priority_seeds": [previous_seed]}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(mod, "REPORT_DIR", tmp_path)
+
+    first_fail = mod._build_active_sim_priority_seeds(
+        {
+            "date": "2026-06-01",
+            "parent_bucket_summaries": [
+                {
+                    "source_parent_bucket_id": "parent_was_positive",
+                    "parent_source_quality_adjusted_ev_pct": -0.1,
+                    "complete_flow_count": 1,
+                    "parent_granularity_floor_passed": True,
+                    "dimension_filters": {
+                        "entry_score_parent": "score_watch_recovery",
+                        "entry_source_parent": "entry_source_blocked_ai_score",
+                    },
+                }
+            ],
+        }
+    )[0]
+
+    assert first_fail["status"] == "active"
+    assert first_fail["source_quality_status"] == "first_fail_grace"
+    assert first_fail["consecutive_fail_count"] == 1
+
+    previous_seed["consecutive_fail_count"] = 1
+    tmp_path.joinpath("lifecycle_bucket_discovery_2026-05-31.json").write_text(
+        json.dumps({"active_sim_priority_seeds": [previous_seed]}),
+        encoding="utf-8",
+    )
+    second_fail = mod._build_active_sim_priority_seeds(
+        {
+            "date": "2026-06-01",
+            "parent_bucket_summaries": [
+                {
+                    "source_parent_bucket_id": "parent_was_positive",
+                    "parent_source_quality_adjusted_ev_pct": -0.1,
+                    "complete_flow_count": 1,
+                    "parent_granularity_floor_passed": True,
+                    "dimension_filters": {
+                        "entry_score_parent": "score_watch_recovery",
+                        "entry_source_parent": "entry_source_blocked_ai_score",
+                    },
+                }
+            ],
+        }
+    )[0]
+    assert second_fail["status"] == "cooldown"
+
+    previous_seed["consecutive_missing_count"] = 4
+    previous_seed["consecutive_fail_count"] = 0
+    tmp_path.joinpath("lifecycle_bucket_discovery_2026-05-31.json").write_text(
+        json.dumps({"active_sim_priority_seeds": [previous_seed]}),
+        encoding="utf-8",
+    )
+    missing = mod._build_active_sim_priority_seeds({"date": "2026-06-01", "parent_bucket_summaries": []})[0]
+    assert missing["status"] == "retired"
+    assert missing["retired_reason"] == "consecutive_missing"
+
+    previous_seed["status"] = "active"
+    previous_seed["consecutive_fail_count"] = 4
+    previous_seed["consecutive_missing_count"] = 0
+    tmp_path.joinpath("lifecycle_bucket_discovery_2026-05-31.json").write_text(
+        json.dumps({"active_sim_priority_seeds": [previous_seed]}),
+        encoding="utf-8",
+    )
+    recovered = mod._build_active_sim_priority_seeds(
+        {
+            "date": "2026-06-01",
+            "parent_bucket_summaries": [
+                {
+                    "source_parent_bucket_id": "parent_was_positive",
+                    "parent_source_quality_adjusted_ev_pct": 1.1,
+                    "complete_flow_count": 1,
+                    "parent_granularity_floor_passed": True,
+                    "dimension_filters": {
+                        "entry_score_parent": "score_watch_recovery",
+                        "entry_source_parent": "entry_source_blocked_ai_score",
+                    },
+                }
+            ],
+        }
+    )[0]
+    assert recovered["status"] == "active"
+    assert recovered["consecutive_fail_count"] == 0
+
+    tmp_path.joinpath("lifecycle_bucket_discovery_2026-05-31.json").write_text(
+        json.dumps({"active_sim_priority_seeds": [recovered]}),
+        encoding="utf-8",
+    )
+    fail_after_recovery = mod._build_active_sim_priority_seeds(
+        {
+            "date": "2026-06-01",
+            "parent_bucket_summaries": [
+                {
+                    "source_parent_bucket_id": "parent_was_positive",
+                    "parent_source_quality_adjusted_ev_pct": -0.1,
+                    "complete_flow_count": 1,
+                    "parent_granularity_floor_passed": True,
+                    "dimension_filters": {
+                        "entry_score_parent": "score_watch_recovery",
+                        "entry_source_parent": "entry_source_blocked_ai_score",
+                    },
+                }
+            ],
+        }
+    )[0]
+    assert fail_after_recovery["status"] == "active"
+    assert fail_after_recovery["consecutive_fail_count"] == 1
+
+    recovered["status"] = "cooldown"
+    recovered["consecutive_missing_count"] = 0
+    tmp_path.joinpath("lifecycle_bucket_discovery_2026-05-31.json").write_text(
+        json.dumps({"active_sim_priority_seeds": [recovered]}),
+        encoding="utf-8",
+    )
+    cooldown_missing = mod._build_active_sim_priority_seeds({"date": "2026-06-01", "parent_bucket_summaries": []})[0]
+    assert cooldown_missing["status"] == "cooldown"
+    assert cooldown_missing["consecutive_missing_count"] == 1
+
+
 def test_lifecycle_bucket_discovery_summarizes_quiet_gaps():
     report = {
         "ai_two_pass_review": {

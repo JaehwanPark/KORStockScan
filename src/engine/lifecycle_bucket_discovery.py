@@ -75,6 +75,7 @@ LIFECYCLE_FLOW_PARENT_CONFLICT_EV_DELTA_PCT = 2.0
 LIFECYCLE_FLOW_PARENT_TARGET_MIN = 30
 LIFECYCLE_FLOW_PARENT_TARGET_MAX = 60
 LIFECYCLE_FLOW_PARENT_TARGET_MID = 45
+ACTIVE_SIM_PRIORITY_POLICY_VERSION = "active_parent_seed_v1"
 LIFECYCLE_FLOW_PARENT_LEVEL_FIELDS = {
     "L1_broad": ("entry_score_parent", "submit_quality_parent", "exit_outcome_parent"),
     "L2_default": (
@@ -1277,6 +1278,162 @@ def _lifecycle_flow_parent_key(item: dict[str, Any], level: str) -> str:
     return "lifecycle_flow:combo_lifecycle_flow:" + "|".join(parts)
 
 
+def _load_previous_active_sim_priority_seeds(target_date: str) -> dict[str, dict[str, Any]]:
+    previous: dict[str, dict[str, Any]] = {}
+    for path in sorted(REPORT_DIR.glob("lifecycle_bucket_discovery_*.json"), reverse=True):
+        if target_date and target_date in path.name:
+            continue
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        seeds = payload.get("active_sim_priority_seeds") if isinstance(payload, dict) else []
+        if not isinstance(seeds, list):
+            continue
+        for seed in seeds:
+            if not isinstance(seed, dict):
+                continue
+            parent_id = str(seed.get("source_parent_bucket_id") or "").strip()
+            if parent_id and parent_id not in previous:
+                previous[parent_id] = seed
+        if previous:
+            break
+    return previous
+
+
+def _active_seed_id(parent_bucket_id: str, observable_prefix: dict[str, Any]) -> str:
+    raw = json.dumps(
+        {
+            "source_parent_bucket_id": parent_bucket_id,
+            "observable_prefix": observable_prefix,
+            "policy_version": ACTIVE_SIM_PRIORITY_POLICY_VERSION,
+        },
+        ensure_ascii=True,
+        sort_keys=True,
+    )
+    return "active_seed_" + hashlib.sha1(raw.encode("utf-8")).hexdigest()[:16]
+
+
+def _observable_prefix_for_parent(dimensions: dict[str, Any]) -> dict[str, str]:
+    entry_score = str(dimensions.get("entry_score_parent") or "").strip()
+    entry_source = str(dimensions.get("entry_source_parent") or "").strip()
+    submit_quality = str(dimensions.get("submit_quality_parent") or "").strip()
+    if not entry_score or entry_score == "score_unobserved":
+        return {}
+    if not entry_source or entry_source == "entry_missing":
+        return {}
+    prefix = {
+        "entry_score_parent": entry_score,
+        "entry_source_parent": entry_source,
+    }
+    if submit_quality and submit_quality != "submit_missing":
+        prefix["submit_quality_parent"] = submit_quality
+    return prefix
+
+
+def _target_validation_dimensions(dimensions: dict[str, Any]) -> dict[str, str]:
+    keys = ("exit_outcome_parent", "major_holding_parent", "scale_in_parent")
+    return {key: str(dimensions.get(key) or "") for key in keys if str(dimensions.get(key) or "").strip()}
+
+
+def _build_active_sim_priority_seeds(report: dict[str, Any]) -> list[dict[str, Any]]:
+    target_date = str(report.get("date") or report.get("target_date") or "")
+    previous_by_parent = _load_previous_active_sim_priority_seeds(target_date)
+    seen_parent_ids: set[str] = set()
+    seeds: list[dict[str, Any]] = []
+    for parent in report.get("parent_bucket_summaries") or []:
+        if not isinstance(parent, dict):
+            continue
+        parent_id = str(parent.get("source_parent_bucket_id") or parent.get("parent_bucket_id") or "").strip()
+        if not parent_id:
+            continue
+        seen_parent_ids.add(parent_id)
+        dimensions = parent.get("dimension_filters") if isinstance(parent.get("dimension_filters"), dict) else {}
+        observable_prefix = _observable_prefix_for_parent(dimensions)
+        ev = _safe_float(parent.get("parent_source_quality_adjusted_ev_pct"), None)
+        complete_flow_count = _safe_int(parent.get("complete_flow_count"))
+        floor_pass = bool(parent.get("parent_granularity_floor_passed"))
+        eligible = bool(observable_prefix) and ev is not None and ev > 0 and complete_flow_count > 0 and floor_pass
+        previous = previous_by_parent.get(parent_id, {})
+        previous_prefix = previous.get("observable_prefix") if isinstance(previous.get("observable_prefix"), dict) else {}
+        effective_prefix = observable_prefix or previous_prefix
+        has_previous = bool(previous)
+        previous_status = str(previous.get("status") or "").strip()
+        failed_count = 0 if eligible else _safe_int(previous.get("consecutive_fail_count")) + 1
+        missing_count = 0
+        status = (
+            "active"
+            if eligible or (has_previous and previous_status == "active" and failed_count < 2)
+            else "retired"
+            if previous_status == "retired" or failed_count >= 5
+            else "cooldown"
+        )
+        seed = {
+            "active_seed_id": (
+                _active_seed_id(parent_id, observable_prefix)
+                if observable_prefix
+                else str(previous.get("active_seed_id") or "")
+            ),
+            "source_parent_bucket_id": parent_id,
+            "policy_version": ACTIVE_SIM_PRIORITY_POLICY_VERSION,
+            "status": status,
+            "priority_tier": "rare_positive_parent_seed",
+            "observable_prefix": effective_prefix,
+            "target_validation_parent_dimensions": _target_validation_dimensions(dimensions),
+            "parent_ev_pct": ev,
+            "parent_joined_sample": parent.get("parent_joined_sample"),
+            "complete_flow_count": complete_flow_count,
+            "source_quality_status": (
+                "pass"
+                if eligible
+                else "first_fail_grace"
+                if has_previous and status == "active"
+                else "source_quality_or_granularity_blocked"
+            ),
+            "consecutive_fail_count": failed_count,
+            "consecutive_missing_count": missing_count,
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+            "retired_reason": "consecutive_fail_or_nonpositive_ev" if status == "retired" else "",
+        }
+        if seed["active_seed_id"] and effective_prefix:
+            seeds.append(seed)
+    for parent_id, previous in previous_by_parent.items():
+        if parent_id in seen_parent_ids:
+            continue
+        missing_count = _safe_int(previous.get("consecutive_missing_count")) + 1
+        previous_status = str(previous.get("status") or "").strip()
+        status = (
+            "retired"
+            if previous_status == "retired" or missing_count >= 5
+            else "cooldown"
+            if previous_status == "cooldown" or missing_count >= 2
+            else "active"
+        )
+        seed = {
+            **previous,
+            "status": status,
+            "consecutive_missing_count": missing_count,
+            "consecutive_fail_count": _safe_int(previous.get("consecutive_fail_count")),
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+            "retired_reason": "consecutive_missing" if status == "retired" else str(previous.get("retired_reason") or ""),
+        }
+        seeds.append(seed)
+    return sorted(
+        seeds,
+        key=lambda item: (
+            {"active": 0, "cooldown": 1, "retired": 2}.get(str(item.get("status") or ""), 9),
+            -(_safe_float(item.get("parent_ev_pct"), None) or -999.0),
+            str(item.get("active_seed_id") or ""),
+        ),
+    )
+
+
 def _parent_granularity_status(parent_count: int) -> str:
     if parent_count < LIFECYCLE_FLOW_PARENT_TARGET_MIN:
         return "too_broad"
@@ -1596,6 +1753,13 @@ def _apply_lifecycle_flow_parent_absorption(report: dict[str, Any], candidates: 
             str(item.get("policy_bucket_id") or ""),
         )
     )
+    active_seeds = _build_active_sim_priority_seeds(report)
+    report["active_sim_priority_seeds"] = active_seeds
+    active_seed_counts = Counter(str(item.get("status") or "unknown") for item in active_seeds)
+    summary["active_sim_priority_seed_count"] = len(active_seeds)
+    summary["active_sim_priority_seed_status_counts"] = dict(sorted(active_seed_counts.items()))
+    summary["active_sim_priority_active_seed_count"] = active_seed_counts.get("active", 0)
+    report["summary"] = summary
 
 
 def _source_contract_snapshot(ldm: dict[str, Any]) -> dict[str, Any]:
@@ -3587,6 +3751,11 @@ def _write_sim_auto_approval(report: dict[str, Any]) -> None:
         }
         for item in approved_candidates
     ]
+    active_sim_priority_seeds = [
+        item
+        for item in (report.get("active_sim_priority_seeds") or [])
+        if isinstance(item, dict) and str(item.get("active_seed_id") or "").strip()
+    ]
     approved_source_bucket_ids = [
         str(row.get("source_bucket_id") or row.get("bucket_id") or "")
         for row in approved_bucket_rows
@@ -3599,7 +3768,7 @@ def _write_sim_auto_approval(report: dict[str, Any]) -> None:
         "date": target_date,
         "generated_at": report.get("generated_at"),
         "policy_id": "lifecycle_bucket_discovery_sim_auto_approval",
-        "approved": bool(approved_bucket_ids),
+        "approved": bool(approved_bucket_ids or active_sim_priority_seeds),
         "human_approval_required": False,
         "runtime_effect": False,
         "allowed_runtime_apply": False,
@@ -3609,13 +3778,18 @@ def _write_sim_auto_approval(report: dict[str, Any]) -> None:
         "policy_file": str(bucket_catalog_path(target_date)),
         "approved_bucket_ids": approved_bucket_ids,
         "approved_bucket_rows": approved_bucket_rows,
+        "active_sim_priority_seeds": active_sim_priority_seeds,
         "approved_bucket_count": len(approved_bucket_ids),
         "approved_unique_source_bucket_count": len(set(approved_source_bucket_ids)),
         "approved_state_counts": dict(sorted(state_counts.items())),
+        "active_sim_priority_seed_count": len(active_sim_priority_seeds),
+        "active_sim_priority_seed_status_counts": dict(
+            sorted(Counter(str(item.get("status") or "unknown") for item in active_sim_priority_seeds).items())
+        ),
         "approved_lifecycle_flow_sim_probe_count": state_counts.get(LIFECYCLE_FLOW_SIM_PROBE_STATE, 0),
         "approved_evidence_grade_counts": dict(sorted(grade_counts.items())),
-        "source_quality_status": "pass" if approved_bucket_ids else "empty",
-        "blocked_reasons": [] if approved_bucket_ids else ["sim_auto_approved_bucket_missing"],
+        "source_quality_status": "pass" if (approved_bucket_ids or active_sim_priority_seeds) else "empty",
+        "blocked_reasons": [] if (approved_bucket_ids or active_sim_priority_seeds) else ["sim_auto_approved_bucket_missing"],
         "forbidden_uses": list(BASE_FORBIDDEN_USES),
         "evidence_authority_contract": evidence_authority_contract(),
     }

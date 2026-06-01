@@ -52,12 +52,15 @@ def _reset_state(monkeypatch, tmp_path):
             "approved_rows": [],
             "rows_by_source_bucket_id": {},
             "rows_by_bucket_id": {},
+            "active_seeds": [],
+            "active_seeds_by_prefix": {},
             "approved_row_count": 0,
         }
     )
     state_handlers._SCALP_SIM_CANDIDATE_WINDOW_DAILY_CREATED.clear()
     state_handlers._SCALP_SIM_CANDIDATE_WINDOW_DAILY_BUCKET_CREATED.clear()
     state_handlers._SCALP_SIM_CANDIDATE_WINDOW_DAILY_SOURCE_CREATED.clear()
+    state_handlers._SCALP_SIM_CANDIDATE_WINDOW_DAILY_ACTIVE_SEED_CREATED.clear()
     state_handlers._SCALP_SIM_AI_CALL_TIMES.clear()
     captured_pipeline_events = []
     monkeypatch.setattr(
@@ -1110,6 +1113,94 @@ def test_scalp_sim_candidate_window_expansion_arms_blocked_wait_candidate(monkey
     assert armed["scalp_sim_candidate_window_expansion"] is True
     assert armed["decision_authority"] == "sim_observation_only"
     assert armed["would_real_submit"] is False
+
+
+def test_scalp_sim_candidate_window_active_seed_uses_reserved_sim_quota(monkeypatch, tmp_path):
+    logs = []
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_entry_pipeline",
+        lambda stock, code, stage, **fields: logs.append((stage, fields)),
+    )
+    monkeypatch.setattr(
+        state_handlers.kiwoom_orders,
+        "send_buy_order",
+        lambda *args, **kwargs: pytest.fail("real buy order must not be called"),
+    )
+    catalog_path = tmp_path / "scalp_sim_policy_catalog_2026-06-01.json"
+    catalog_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "scalp_sim_policy_catalog_v1",
+                "policies": [],
+                "active_sim_priority_seeds": [
+                    {
+                        "active_seed_id": "active_seed_test",
+                        "source_parent_bucket_id": "parent_positive",
+                        "status": "active",
+                        "priority_tier": "rare_positive_parent_seed",
+                        "observable_prefix": {
+                            "entry_score_parent": "score_watch_recovery",
+                            "entry_source_parent": "entry_source_blocked_ai_score",
+                            "submit_quality_parent": "submit_revalidation_ok",
+                        },
+                        "runtime_effect": False,
+                        "allowed_runtime_apply": False,
+                        "actual_order_submitted": False,
+                        "broker_order_forbidden": True,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    rules = replace(
+        CONFIG,
+        SCALP_SIM_AUTO_POLICY_ENABLED=True,
+        SCALP_SIM_AUTO_POLICY_FILE=str(catalog_path),
+        SCALP_SIM_AUTO_POLICY_VERSION="scalp_sim_auto_approval:2026-06-01",
+        SCALP_SIM_CANDIDATE_WINDOW_EXPANSION_ENABLED=True,
+        SCALP_SIM_CANDIDATE_WINDOW_MIN_SCORE=55,
+        SCALP_SIM_CANDIDATE_WINDOW_MAX_OPEN=10,
+        SCALP_SIM_CANDIDATE_WINDOW_MAX_DAILY=10,
+        SCALP_SIM_CANDIDATE_WINDOW_BLOCKED_AI_SCORE_MAX_SHARE_PCT=60,
+    )
+    monkeypatch.setattr(state_handlers, "TRADING_RULES", rules)
+    state_handlers._SCALP_SIM_CANDIDATE_WINDOW_DAILY_CREATED["1970-01-01"] = 6
+    state_handlers._SCALP_SIM_CANDIDATE_WINDOW_DAILY_SOURCE_CREATED[("1970-01-01", "blocked_ai_score")] = 6
+
+    assert state_handlers._maybe_arm_scalp_sim_candidate_window(
+        stock={
+            "id": 101,
+            "name": "ACTIVE_SEED",
+            "code": "123456",
+            "strategy": "SCALPING",
+            "position_tag": "SCALP_BASE",
+            "target_buy_price": 10_000,
+            "last_watching_ai_action": "WAIT",
+        },
+        code="123456",
+        ws_data={"curr": 9_990, "orderbook": {"asks": [{"price": 9_990}], "bids": [{"price": 9_980}]}},
+        runtime={"strategy": "SCALPING", "is_trigger": False, "now_ts": 1_000.0, "current_ai_score": 61.0},
+        ai_decision={"action": "WAIT", "score": 61, "reason": "below entry threshold"},
+        ai_score=61,
+        source_stage="blocked_ai_score",
+        blocked_reason="below_buy_score_threshold",
+    )
+
+    sim_target = state_handlers.ACTIVE_TARGETS[0]
+    assert sim_target["scalp_sim_active_priority_seed_matched"] is True
+    assert sim_target["active_seed_id"] == "active_seed_test"
+    assert sim_target["source_parent_bucket_id"] == "parent_positive"
+    assert sim_target["scalp_sim_candidate_window_quota_policy"] == "active_parent_seed_v1"
+    assert sim_target["actual_order_submitted"] is False
+    assert sim_target["broker_order_forbidden"] is True
+    armed = next(fields for stage, fields in logs if stage == "scalp_sim_entry_armed")
+    assert armed["scalp_sim_active_priority_seed_matched"] is True
+    assert armed["active_seed_id"] == "active_seed_test"
+    assert armed["quota_policy"] == "active_parent_seed_v1"
+    assert armed["actual_order_submitted"] is False
+    assert armed["broker_order_forbidden"] is True
 
 
 def test_scalp_sim_candidate_window_enforces_ldm_sample_quota_sim_only(monkeypatch):

@@ -8,7 +8,7 @@
 - risk_regime_threshold_mode: `dynamic_quantile`
 - report_only: `true`
 - runtime_effect: `report_only_no_mutation`
-- as_of: `2026-06-01T17:12:04`
+- as_of: `2026-06-01T22:26:13`
 - latest_event_at: `2026-06-01T15:53:25`
 - reasons: `no panic buying threshold breached`
 
