@@ -19,6 +19,8 @@
 - 이 블록은 postclose 자동화 산출물에서 생성된다.
 - `codex_daily_workorder_*.md`는 downstream 전달물이라 입력 source로 사용하지 않는다.
 - RunbookOps 반복 확인은 `build_codex_daily_workorder`와 Project/Calendar 동기화 경로가 별도로 소유한다.
+- RunbookOps 처리 메모 (`2026-06-01 19:58 KST`, Project `PVTI_lAHOAXZuE84BUTcPzguLnZQ`): 시간이 지난 반복 PREOPEN 항목도 재확인 원칙에 따라 다시 실행했다. 판정은 `pass`이며, 근거와 다음 액션은 [time-based-operations-runbook.md](/home/ubuntu/KORStockScan/docs/time-based-operations-runbook.md)의 `[PreopenAutomationHealthCheck20260601]` 완료 기록을 따른다.
+- RunbookOps 처리 메모 (`2026-06-01 20:01 KST`, Project `PVTI_lAHOAXZuE84BUTcPzguLnaE`): 시간이 지난 반복 INTRADAY 항목도 재확인 원칙에 따라 다시 실행했다. 판정은 `warning`이며, 근거와 다음 액션은 [time-based-operations-runbook.md](/home/ubuntu/KORStockScan/docs/time-based-operations-runbook.md)의 `[IntradayAutomationHealthCheck20260601]` 완료 기록과 추가 재확인 메모를 따른다.
 
 ## 장전 체크리스트 (08:45~09:00)
 
