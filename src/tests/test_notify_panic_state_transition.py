@@ -150,6 +150,46 @@ def test_panic_sell_release_is_suppressed_for_stale_previous_day_active_state(tm
     assert saved["panic_sell"]["session_key"] == "2026-05-21"
 
 
+def test_panic_sell_new_day_active_state_sends_start_after_stale_previous_day_active(tmp_path, monkeypatch):
+    report = tmp_path / "panic_sell_defense_2026-05-21.json"
+    state = tmp_path / "state.json"
+    sent = []
+
+    monkeypatch.setattr(mod, "_load_telegram_config", lambda: ("token", "admin"))
+    monkeypatch.setattr(mod, "_load_all_chat_ids", lambda: ["admin"])
+    monkeypatch.setattr(mod, "_send_telegram", lambda token, chat_id, message: sent.append((chat_id, message)))
+
+    state.write_text(
+        json.dumps(
+            {
+                "panic_sell": {
+                    "phase": "active",
+                    "state": "PANIC_SELL",
+                    "updated_at_ts": 900.0,
+                    "report_file": str(tmp_path / "panic_sell_defense_2026-05-20.json"),
+                    "last_notification": {
+                        "transition": "start",
+                        "state": "PANIC_SELL",
+                    },
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    report.write_text(json.dumps({"target_date": "2026-05-21", "panic_state": "PANIC_SELL"}), encoding="utf-8")
+
+    status = mod.notify_from_report(report, kind="panic_sell", state_file=state, now_ts=1000.0)
+
+    assert status == "sent"
+    assert len(sent) == 1
+    assert "패닉셀" in sent[0][1]
+    saved = json.loads(state.read_text(encoding="utf-8"))
+    assert saved["panic_sell"]["phase"] == "active"
+    assert saved["panic_sell"]["state"] == "PANIC_SELL"
+    assert saved["panic_sell"]["session_key"] == "2026-05-21"
+    assert saved["panic_sell"]["last_notification"]["transition"] == "start"
+
+
 def test_panic_sell_release_keeps_same_day_active_debounce_after_no_transition(tmp_path, monkeypatch):
     report = tmp_path / "panic_sell_defense_2026-05-21.json"
     state = tmp_path / "state.json"
@@ -468,6 +508,46 @@ def test_panic_buying_test_notice_goes_admin_only(tmp_path, monkeypatch):
     assert "🟠 ▰▰▰▰▰▰▰▰▱▱▱▱ 66% · 주의" in sent[0][1]
     assert "체감 강도\n  ░░░░░░░░░░░░ 확인중" not in sent[0][1]
     assert "PANIC_BUY" not in sent[0][1]
+
+
+def test_panic_buying_new_day_active_state_sends_start_after_stale_previous_day_active(tmp_path, monkeypatch):
+    report = tmp_path / "panic_buying_2026-05-21.json"
+    state = tmp_path / "state.json"
+    sent = []
+
+    monkeypatch.setattr(mod, "_load_telegram_config", lambda: ("token", "admin"))
+    monkeypatch.setattr(mod, "_load_all_chat_ids", lambda: ["admin"])
+    monkeypatch.setattr(mod, "_send_telegram", lambda token, chat_id, message: sent.append((chat_id, message)))
+
+    state.write_text(
+        json.dumps(
+            {
+                "panic_buying": {
+                    "phase": "active",
+                    "state": "PANIC_BUY",
+                    "updated_at_ts": 900.0,
+                    "report_file": str(tmp_path / "panic_buying_2026-05-20.json"),
+                    "last_notification": {
+                        "transition": "start",
+                        "state": "PANIC_BUY",
+                    },
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    report.write_text(json.dumps({"target_date": "2026-05-21", "panic_buy_state": "PANIC_BUY"}), encoding="utf-8")
+
+    status = mod.notify_from_report(report, kind="panic_buying", state_file=state, now_ts=1000.0)
+
+    assert status == "sent"
+    assert len(sent) == 1
+    assert "패닉바잉" in sent[0][1]
+    saved = json.loads(state.read_text(encoding="utf-8"))
+    assert saved["panic_buying"]["phase"] == "active"
+    assert saved["panic_buying"]["state"] == "PANIC_BUY"
+    assert saved["panic_buying"]["session_key"] == "2026-05-21"
+    assert saved["panic_buying"]["last_notification"]["transition"] == "start"
 
 
 def test_missing_config_does_not_send(tmp_path, monkeypatch):

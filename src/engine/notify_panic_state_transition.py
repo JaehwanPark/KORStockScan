@@ -362,14 +362,13 @@ def notify_from_report(
     previous_phase = str(previous.get("phase") or "") or None
     current_session_key = _report_session_key(report_file, report)
     previous_session_key = _previous_session_key(previous) if isinstance(previous, dict) else ""
-    stale_previous_active = (
+    stale_previous_session = (
         not force
-        and current_phase == "released"
         and previous_phase in {"active", "release_pending"}
         and bool(current_session_key)
         and previous_session_key != current_session_key
     )
-    if stale_previous_active:
+    if stale_previous_session:
         previous_phase = None
     previous_value = str(previous.get("state") or "") if isinstance(previous, dict) else ""
     transition = _transition(previous_phase, current_phase, force=force, current_value=current_value)
@@ -402,7 +401,7 @@ def notify_from_report(
     if transition in {"none", "release_pending"}:
         state[kind] = next_state
         _write_state(state_file, state)
-        if stale_previous_active:
+        if stale_previous_session and current_phase == "released":
             return "stale_previous_active_reset"
         return "release_pending" if transition == "release_pending" else "no_transition"
 
