@@ -407,6 +407,14 @@ POSTCLOSE 최상위 감리는 `Tuning Chain Control State`(튜닝 체인 관제 
 
 ### Runbook 운영 확인 완료 기록
 
+- `[IntradayAutomationHealthCheck20260601] 장중 자동화체인 상태 확인` (`Due: 2026-06-01`, `Slot: INTRADAY`, `TimeWindow: 09:05~15:30`)
+  - 판정: `warning`
+  - Tuning Chain Control State: `GREEN`
+  - blocked_stage: `-`
+  - impact: 2026-06-01 장중 반복 확인은 시간창 경과 후에도 재확인 원칙에 따라 실행했다. error detector, sentinel/panic cron completion, artifact freshness, resource, stale lock은 pass다. 다만 selected runtime family 중 `scalp_sim_ai_budget_manager`는 family명 direct provenance가 오늘 장중 event에 직접 찍히지 않아 partial provenance warning으로 남긴다. 이 확인은 threshold/order/provider/bot/env 변경 권한을 열지 않는다.
+  - 근거: [error_detection_2026-06-01.json](/home/ubuntu/KORStockScan/data/report/error_detection/error_detection_2026-06-01.json)은 `summary_severity=pass`이며 `process_health`, `cron_completion`, `log_scanner`, `kiwoom_auth_8005_restart`, `artifact_freshness`, `resource_usage`, `stale_lock`가 모두 pass다. `logs/run_buy_funnel_sentinel_cron.log`, `logs/run_holding_exit_sentinel_cron.log`, `logs/run_panic_sell_defense_cron.log`, `logs/run_panic_buying_cron.log`는 09:35 전후 `[DONE]` marker를 남기고, [buy_funnel_sentinel_2026-06-01.json](/home/ubuntu/KORStockScan/data/report/buy_funnel_sentinel/buy_funnel_sentinel_2026-06-01.json), [holding_exit_sentinel_2026-06-01.json](/home/ubuntu/KORStockScan/data/report/holding_exit_sentinel/holding_exit_sentinel_2026-06-01.json), [panic_sell_defense_2026-06-01.json](/home/ubuntu/KORStockScan/data/report/panic_sell_defense/panic_sell_defense_2026-06-01.json), [panic_buying_2026-06-01.json](/home/ubuntu/KORStockScan/data/report/panic_buying/panic_buying_2026-06-01.json)는 fresh 상태다. [pipeline_events_2026-06-01.jsonl](/home/ubuntu/KORStockScan/data/pipeline_events/pipeline_events_2026-06-01.jsonl) 재집계에서 selected runtime family provenance는 `soft_stop_whipsaw_confirmation=6`, `score65_74_recovery_probe=2`, `scalp_sim_candidate_window_expansion` field hit `1599`, `lifecycle_decision_matrix_runtime` context hit `2420`, `ai_budget*` hit `384`로 확인됐고 `rollback|revert|breach` mention은 `0`건이다. `scalp_sim_ai_budget_manager`는 same-source `ai_budget` field와 `scalp_sim_ai_holding_deferred` stage로 간접 provenance는 있지만 family명 direct hit는 `0`건이다. sim/probe-like stage는 total `7830`, `actual_order_submitted=false` `7765`, `broker_order_forbidden=true` `6250`, `actual_order_submitted=true` `0`으로 real submit 혼입은 없었다.
+  - 다음 액션: `scalp_sim_ai_budget_manager` direct family provenance 부재와 sim/probe state metadata 부족은 postclose source-quality/attribution follow-up으로 넘긴다. 장중에는 `SUBMIT_DROUGHT_CRITICAL`, `HOLD_DEFER_DANGER`, panic report 결과를 runtime mutation 근거로 쓰지 않고, threshold/order/provider/bot/env는 현 PREOPEN selected state를 유지한다. Project/Calendar 반영은 문서 parser 검증 후 사용자 표준 sync 명령으로만 수행한다.
+
 - `[PreopenAutomationHealthCheck20260601] 장전 자동화체인 상태 확인` (`Due: 2026-06-01`, `Slot: PREOPEN`, `TimeWindow: 08:00~09:00`)
   - 판정: `pass`
   - Tuning Chain Control State: `GREEN`

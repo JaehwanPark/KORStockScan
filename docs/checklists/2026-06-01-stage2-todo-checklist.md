@@ -44,17 +44,23 @@
 
 ## 장중 체크리스트 (09:05~15:20)
 
-- [ ] `[RuntimeEnvIntradayObserve0601] 전일 selected runtime family 장중 provenance 및 rollback guard 확인` (`Due: 2026-06-01`, `Slot: INTRADAY`, `TimeWindow: 09:05~09:20`, `Track: RuntimeStability`)
+- [x] `[RuntimeEnvIntradayObserve0601] 전일 selected runtime family 장중 provenance 및 rollback guard 확인` (`Due: 2026-06-01`, `Slot: INTRADAY`, `TimeWindow: 09:05~09:20`, `Track: RuntimeStability`)
   - Source: [threshold_cycle_ev_2026-05-29.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-05-29.json)
   - 판정 기준: selected_families=soft_stop_whipsaw_confirmation, score65_74_recovery_probe, scalp_sim_candidate_window_expansion, scalp_sim_ai_budget_manager, lifecycle_decision_matrix_runtime가 runtime event provenance에 찍히는지 확인한다.
   - 금지: 장중 관찰 결과로 runtime threshold mutation을 수행하지 않는다.
   - 다음 액션: provenance present/missing, rollback guard breach 여부를 분리 기록한다.
+  - 처리 결과(2026-06-01 KST 재확인): `partial_provenance_present_without_rollback_breach`.
+  - 근거: [threshold_runtime_env_2026-06-01.json](/home/ubuntu/KORStockScan/data/threshold_cycle/runtime_env/threshold_runtime_env_2026-06-01.json)의 selected family는 `soft_stop_whipsaw_confirmation`, `score65_74_recovery_probe`, `scalp_sim_candidate_window_expansion`, `scalp_sim_ai_budget_manager`, `lifecycle_decision_matrix_runtime`, `scalp_sim_auto_approval`, `swing_sim_auto_approval`다. 당일 [pipeline_events_2026-06-01.jsonl](/home/ubuntu/KORStockScan/data/pipeline_events/pipeline_events_2026-06-01.jsonl) 재집계에서는 `soft_stop_whipsaw_confirmation=6`, `score65_74_recovery_probe=2`, `scalp_sim_candidate_window_expansion` field hit `1599`, `lifecycle_decision_matrix_runtime` context hit `2420`으로 provenance가 확인됐다. `scalp_sim_ai_budget_manager`는 family명 direct hit는 없지만 같은 source에서 `ai_budget*` field hit `384`와 `scalp_sim_ai_holding_deferred` stage가 남아 sim holding budget 경로 증적은 존재한다. 반면 direct family label로는 `0`건이라 family-name provenance는 incomplete로 분리한다. 같은 event 재집계에서 `rollback|revert|breach` mention은 `0`건이었다.
+  - 다음 액션: `scalp_sim_ai_budget_manager`는 direct family label 미노출을 postclose attribution/source-quality follow-up으로 넘기고, 장중에는 현재 PREOPEN selected family를 유지한 채 threshold/env/provider/order 변경 없이 provenance 관찰만 계속한다.
 
-- [ ] `[SimProbeIntradayCoverage0601] sim/probe 관찰축 actual_order_submitted=false 및 source-quality 확인` (`Due: 2026-06-01`, `Slot: INTRADAY`, `TimeWindow: 09:35~09:50`, `Track: ScalpingLogic`)
+- [x] `[SimProbeIntradayCoverage0601] sim/probe 관찰축 actual_order_submitted=false 및 source-quality 확인` (`Due: 2026-06-01`, `Slot: INTRADAY`, `TimeWindow: 09:35~09:50`, `Track: ScalpingLogic`)
   - Source: [threshold_cycle_ev_2026-05-29.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-05-29.json)
   - 판정 기준: sim/probe 표본이 real execution과 분리되고 `actual_order_submitted=false` provenance가 유지되는지 확인한다.
   - 금지: sim/probe EV를 broker execution 품질이나 실주문 전환 근거로 단독 사용하지 않는다.
   - 다음 액션: source-quality split, active state 복원, open/closed count를 같이 기록한다.
+  - 처리 결과(2026-06-01 KST 재확인): `source_split_pass_with_minor_state_metadata_gap`.
+  - 근거: 당일 [pipeline_events_2026-06-01.jsonl](/home/ubuntu/KORStockScan/data/pipeline_events/pipeline_events_2026-06-01.jsonl)에서 sim/probe-like stage 재집계 결과는 total `7830`, `actual_order_submitted=false` `7765`, `broker_order_forbidden=true` `6250`, probe-like `538`, `actual_order_submitted=true` `0`이다. `actual_order_submitted=false` 누락 사례 65건은 `swing_probe_state_restored`, `swing_probe_state_persisted`, `score65_74_recovery_probe_entry_unlocked`처럼 상태 복원/메타데이터 성격의 event이며 real submit provenance는 없었다. [scalp_live_simulator_state.json](/home/ubuntu/KORStockScan/data/runtime/scalp_live_simulator_state.json)와 [swing_intraday_probe_state.json](/home/ubuntu/KORStockScan/data/runtime/swing_intraday_probe_state.json) active state는 존재하지만, event 자체의 `status/state` 메타데이터는 open/closed count 집계에 충분히 일관적이지 않아 `open_like=0`, `closed_like=0`으로 남았다.
+  - 다음 액션: sim/probe source split 자체는 pass로 유지하고, open/closed state 메타데이터 부족분은 source-quality follow-up으로만 넘긴다. 장중에는 sim/probe EV를 실주문 품질·전환 근거로 사용하지 않는다.
 
 ## 장후 체크리스트 (16:30~18:55)
 
@@ -118,6 +124,42 @@
   - 구현 승격 조건: `반복 병목 + positive missed-upside + 현재 artifact로 원인 분리가 불가능` 세 조건이 동시에 확인될 때만 `needs_new_workorder` 또는 `implement_now_candidate`로 닫는다.
   - 금지: 데이터 수집량 확대 자체를 목적으로 새 detector/report를 만들지 않는다. sim/probe/counterfactual EV를 broker execution 품질이나 실주문 전환 근거로 단독 사용하지 않는다. threshold/order/provider/bot/env 변경, broker guard 우회, Telegram BUY alert 확대는 금지한다.
   - 다음 액션: `observe_existing_artifacts`, `hold_no_new_instrumentation`, `needs_new_workorder`, `implement_now_candidate`, `reject_more_granularity` 중 하나로 닫고, 구현 후보가 생기면 code-improvement workorder와 postclose verifier handoff로 넘긴다.
+
+- [x] `[LifecycleSourceDimensionFix0601] holding combo bucket의 not_applicable/start 차원 보존 여부 확인 및 보정` (`Due: 2026-06-01`, `Slot: POSTCLOSE`, `TimeWindow: 18:15~18:30`, `Track: ScalpingLogic`)
+  - Source: [lifecycle_decision_matrix.py](/home/ubuntu/KORStockScan/src/engine/lifecycle_decision_matrix.py), [test_lifecycle_decision_matrix.py](/home/ubuntu/KORStockScan/src/tests/test_lifecycle_decision_matrix.py), [lifecycle_bucket_discovery_2026-05-29.json](/home/ubuntu/KORStockScan/data/report/lifecycle_bucket_discovery/lifecycle_bucket_discovery_2026-05-29.json)
+  - 판정 기준: `holding_started`와 같은 초기 lifecycle row에서 `profit/held/action` 차원이 helper와 동일한 `not_applicable_at_start` semantics를 유지하고, combo bucket이 helper를 우회해 `profit_unknown`으로 축약되지 않아야 한다.
+  - 금지: 이 확인 결과를 threshold/provider/order/bot/env 변경 근거로 사용하지 않는다. source-quality와 lifecycle bucket attribution 범위로만 닫는다.
+  - 처리 결과(2026-06-01 KST): `helper_aligned_bucket_key_fixed`.
+  - 근거: `sim probe` 조사 중 `holding` 차원은 helper `_holding_profit_bucket`, `_holding_held_bucket`, `_holding_action_bucket`가 `profit_not_applicable_at_start`, `held_not_applicable_at_start`, `holding_action_not_applicable_at_start`를 정의하지만, `combo_holding_flow` bucket key는 profit만 direct `_numeric_band(..., unknown='profit_unknown')`를 사용해 helper semantics를 우회하고 있었다. 이를 helper 기반 `buckets['profit_band']`, `buckets['held_bucket']`, `buckets['holding_action']`로 정렬해 lifecycle bucket key가 source semantics를 그대로 보존하도록 수정했다.
+  - 다음 액션: 다음 postclose `lifecycle_bucket_discovery`에서 `holding` 축의 `unknown_source_dimensions`가 감소하는지 관찰하고, 남는 건은 `entry` upstream `liquidity/overbought/stale` source 부재로 분리 추적한다.
+
+- [x] `[LifecycleEntryDimensionFallback0601] entry combo bucket의 pre-submit guard 차원 fallback 정렬` (`Due: 2026-06-01`, `Slot: POSTCLOSE`, `TimeWindow: 18:30~18:45`, `Track: ScalpingLogic`)
+  - Source: [lifecycle_decision_matrix.py](/home/ubuntu/KORStockScan/src/engine/lifecycle_decision_matrix.py), [test_lifecycle_decision_matrix.py](/home/ubuntu/KORStockScan/src/tests/test_lifecycle_decision_matrix.py), [lifecycle_bucket_discovery_2026-05-29.json](/home/ubuntu/KORStockScan/data/report/lifecycle_bucket_discovery/lifecycle_bucket_discovery_2026-05-29.json)
+  - 판정 기준: entry `combo_entry_spot`이 `liquidity_bucket` 또는 `overbought_bucket` 명시값이 비었거나 unknown인 경우에도 이미 수집된 `sim_pre_submit_*` guard action/reason/source 값을 사용해 canonical bucket을 만들 수 있어야 한다.
+  - 금지: guard fallback은 source-quality attribution 보정이며 broker submit, threshold/env, provider, bot 상태를 변경하지 않는다.
+  - 처리 결과(2026-06-01 KST): `entry_guard_fallback_aligned`.
+  - 근거: `scalp_entry_action_decision_matrix`와 sim pre-submit 경로는 `sim_pre_submit_liquidity_guard_action/reason`, `sim_pre_submit_overbought_guard_action/reason`을 남기지만, `entry` bucket feature는 기존 `liquidity_bucket`/`overbought_bucket` 명시값만 읽어 unknown으로 남길 수 있었다. entry helper를 보강해 explicit non-unknown 값을 우선 사용하고, explicit 값이 없거나 unknown이면 기존 submit guard bucket 해석을 재사용하도록 정렬했다. lifecycle flow 조합에서도 entry row가 unknown이고 submit row에 guard 차원이 있는 경우 submit runtime feature를 fallback source로 전달해 `entry_bucket_id`가 실제 수집된 guard 차원을 반영하도록 보정했다.
+  - 다음 액션: 다음 postclose 산출물에서 `entry` 축 `unknown_source_dimensions` 감소 여부를 확인한다. 그래도 남는 건은 실제 source 부재(`liquidity_value`, `overbought_risk_state`, quote freshness 없음)로 분리해 producer 보강 후보로 넘긴다.
+
+- [x] `[LifecycleSourceDimensionGapAutomation0601] unknown source dimension gap 자동 표면화 체인 보강` (`Due: 2026-06-01`, `Slot: POSTCLOSE`, `TimeWindow: 18:45~19:00`, `Track: ScalpingLogic`)
+  - Source: [lifecycle_bucket_discovery.py](/home/ubuntu/KORStockScan/src/engine/lifecycle_bucket_discovery.py), [build_code_improvement_workorder.py](/home/ubuntu/KORStockScan/src/engine/build_code_improvement_workorder.py), [runtime_apply_gap_audit.py](/home/ubuntu/KORStockScan/src/engine/runtime_apply_gap_audit.py), [verify_threshold_cycle_postclose_chain.py](/home/ubuntu/KORStockScan/src/engine/verify_threshold_cycle_postclose_chain.py), [build_next_stage2_checklist.py](/home/ubuntu/KORStockScan/src/engine/build_next_stage2_checklist.py)
+  - 판정 기준: `unknown_source_dimensions`와 `lifecycle_flow_incomplete_stage_contract`가 discovery metadata에만 머물지 않고 summary, workorder, runtime gap directive, verifier, next checklist 중 하나로 자동 표면화되어야 한다.
+  - 금지: source-dimension gap 표면화를 threshold/env/provider/order/bot 변경 근거로 사용하지 않는다. 장후 보고서 재생성은 표준 postclose 체인에서만 수행한다.
+  - 처리 결과(2026-06-01 KST): `source_dimension_gap_surface_chain_implemented`.
+  - 근거: `lifecycle_bucket_discovery`에 `source_dimension_gap_summary`를 추가해 gap/stage/bucket/state/resolution/missing key를 집계하고, `resolve_unknown_source_dimensions`/`emit_or_backfill_source_field`는 actionable gap으로 분리했다. `build_code_improvement_workorder`는 actionable gap을 `source_dimension_gap_resolution` workorder로 만들고 rollup gap은 `attach_existing_family` evidence로 남긴다. `runtime_apply_gap_audit`는 `RESOLVE_SOURCE_DIMENSION_GAP` directive를 생성하며, verifier는 actionable gap이 workorder로 표면화되지 않으면 warning 또는 sim/live 후보의 경우 fail로 닫는다. next checklist builder는 runtime gap directive가 0이어도 actionable summary가 있으면 parser-friendly POSTCLOSE 확인 항목을 생성한다.
+  - 자체 코드리뷰/보완: `source_dimension_gap_summary.actionable_unknown_gap_count`가 있어도 `surfaced_candidates` 축약 범위 밖에 있으면 workorder/directive/verifier가 놓칠 수 있는 결함을 확인해 summary 자체를 소비하도록 보강했다. 같은 후보가 ledger와 summary 양쪽에서 들어올 때 `RESOLVE_SOURCE_DIMENSION_GAP` directive가 중복될 수 있어 최종 directive dedupe를 추가했다.
+  - 테스트/검증: `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_lifecycle_bucket_discovery.py src/tests/test_build_code_improvement_workorder.py src/tests/test_runtime_apply_gap_audit.py src/tests/test_verify_threshold_cycle_postclose_chain.py src/tests/test_build_next_stage2_checklist.py` 통과(141 passed). `PYTHONPATH=. .venv/bin/python -m py_compile src/engine/lifecycle_bucket_discovery.py src/engine/build_code_improvement_workorder.py src/engine/runtime_apply_gap_audit.py src/engine/verify_threshold_cycle_postclose_chain.py src/engine/build_next_stage2_checklist.py` 통과. `git diff --check` 통과.
+  - 다음 액션: 2026-06-01 장후 표준 postclose 보고서 재생성 후 `source_dimension_gap_summary.actionable_unknown_gap_count`, `RESOLVE_SOURCE_DIMENSION_GAP`, `lifecycle_source_dimension_gap_handoff_missing` 여부를 확인한다.
+
+- [x] `[LifecycleQuietGapAutomation0601] 조용한 source-only/warning gap 자동 표면화 체인 보강` (`Due: 2026-06-01`, `Slot: POSTCLOSE`, `TimeWindow: 19:00~19:15`, `Track: ScalpingLogic`)
+  - Source: [lifecycle_bucket_discovery.py](/home/ubuntu/KORStockScan/src/engine/lifecycle_bucket_discovery.py), [build_code_improvement_workorder.py](/home/ubuntu/KORStockScan/src/engine/build_code_improvement_workorder.py), [runtime_apply_gap_audit.py](/home/ubuntu/KORStockScan/src/engine/runtime_apply_gap_audit.py), [verify_threshold_cycle_postclose_chain.py](/home/ubuntu/KORStockScan/src/engine/verify_threshold_cycle_postclose_chain.py), [build_next_stage2_checklist.py](/home/ubuntu/KORStockScan/src/engine/build_next_stage2_checklist.py)
+  - 판정 기준: `parent conflict/exclusion child`, positive `source_only_keep_collecting`, `observation_source_quality_audit` warning, parsed-but-low-coverage AI review가 discovery/workorder/runtime audit/verifier/checklist 중 하나로 자동 표면화되어야 한다.
+  - 금지: quiet gap 표면화를 threshold/env/provider/order/bot 변경 근거로 사용하지 않는다. 2026-05-29 산출물은 재생성하지 않고 2026-06-01 장후 표준 postclose 체인에서 새 로직을 확인한다.
+  - 처리 결과(2026-06-01 KST): `quiet_gap_surface_chain_implemented`.
+  - 근거: `lifecycle_bucket_discovery`에 `quiet_gap_summary`를 추가해 conflict/exclusion child, positive source-only, absorbed parent-policy evidence, AI shard coverage gap을 `runtime_effect=false`, `allowed_runtime_apply=false`, `decision_authority=source_quality_gap_discovery`로 집계한다. `build_code_improvement_workorder`는 quiet gap을 `lifecycle_bucket_discovery_quiet_gap_rollup` order로 만들고 `attach_existing_family`로 분류한다. allowlist 밖 `observation_source_quality_audit` warning도 `order_observation_source_quality_warning_rollup`으로 최소 표면화한다. `runtime_apply_gap_audit`는 quiet gap count/rollup/directive count를 summary에 남기고 missing rollup이면 review directive를 생성한다. verifier는 quiet gap handoff 누락을 warning으로, sim/live 연결 quiet gap 누락을 fail로 닫는다. next checklist builder는 runtime directive가 없어도 `LifecycleQuietGapReview{MMDD}` POSTCLOSE checkbox를 만든다.
+  - 자체 코드리뷰/보완: quiet gap rollup order의 `title` 누락을 확인해 보완했다. verifier status는 기존 AI follow-up warning 전체를 warning status로 승격하지 않고, handoff 누락 warning에 한해 status warning으로 올리도록 범위를 제한했다. 중복 directive는 기존 dedupe 경로로 닫는다.
+  - 테스트/검증: `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_lifecycle_bucket_discovery.py src/tests/test_build_code_improvement_workorder.py src/tests/test_runtime_apply_gap_audit.py src/tests/test_verify_threshold_cycle_postclose_chain.py src/tests/test_build_next_stage2_checklist.py` 통과(151 passed).
+  - 다음 액션: 2026-06-01 장후 표준 postclose 보고서 재생성 후 `quiet_gap_summary.quiet_gap_count`, `quiet_gap_codex_directive_count`, `lifecycle_quiet_gap_handoff_missing`, `LifecycleQuietGapReview0602` 생성 여부를 확인한다.
 
 <!-- AUTO_NEXT_STAGE2_CHECKLIST_END -->
 
