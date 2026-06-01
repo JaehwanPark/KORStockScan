@@ -792,6 +792,57 @@ def _classify_order(
             ),
         )
 
+    if order.get("source_report_type") == "lifecycle_bucket_discovery_source_dimension_rollup":
+        return ClassifiedOrder(
+            order=order,
+            decision="attach_existing_family",
+            reason=(
+                "source-dimension gap rollup is visibility evidence; actionable emit/backfill gaps are tracked "
+                "by dedicated lifecycle_bucket_discovery implement_now orders"
+            ),
+            mapped_family=mapped_family or "lifecycle_bucket_discovery",
+            route=route or "source_dimension_rollup",
+            confidence=confidence,
+            automation_reentry=(
+                "Next postclose checklist/workorder should keep source_dimension_gap_summary visible until "
+                "actionable gaps are resolved or explicitly marked not applicable."
+            ),
+        )
+
+    if order.get("source_report_type") == "lifecycle_bucket_discovery_quiet_gap_rollup":
+        return ClassifiedOrder(
+            order=order,
+            decision="attach_existing_family",
+            reason=(
+                "quiet gap rollup is visibility evidence for parent conflict/source-only/AI coverage review; "
+                "it does not authorize a runtime patch by itself"
+            ),
+            mapped_family=mapped_family or "lifecycle_bucket_discovery",
+            route=route or "quiet_gap_rollup",
+            confidence=confidence,
+            automation_reentry=(
+                "Next postclose checklist/workorder should keep quiet_gap_summary visible until the gap is "
+                "implemented, covered by parent policy, deferred for more sample, or explicitly rejected."
+            ),
+        )
+
+    if order.get("improvement_type") == "observation_source_quality_warning_rollup":
+        return ClassifiedOrder(
+            order=order,
+            decision="attach_existing_family",
+            reason=(
+                "observation source-quality warning rollup is evidence-only visibility for warnings outside "
+                "the immediate implementation allowlist"
+            ),
+            mapped_family=mapped_family or "observation_source_quality_audit",
+            route=route or "source_quality_warning_rollup",
+            confidence=confidence,
+            automation_reentry=(
+                "Next postclose observation source-quality audit and workorder should preserve this warning "
+                "until it is covered by a dedicated source-quality order or explicitly deferred."
+            ),
+        )
+
 
     if order.get("source_report_type") == "lifecycle_bucket_discovery":
         return ClassifiedOrder(
@@ -1666,6 +1717,27 @@ def _lifecycle_bucket_discovery_order_id(item: dict[str, Any]) -> str:
     return f"order_lifecycle_bucket_discovery_{stage}_{bucket_id}"
 
 
+def _lifecycle_source_dimension_gap_order_id(item: dict[str, Any]) -> str:
+    stage = _slug(str(item.get("stage") or "stage"))
+    bucket_type = _slug(str(item.get("bucket_type") or "bucket"))
+    source_bucket = _slug_with_hash(str(item.get("source_bucket_id") or item.get("bucket_id") or "unknown"))
+    return f"order_lifecycle_source_dimension_gap_{stage}_{bucket_type}_{source_bucket}"
+
+
+def _source_dimension_summary_items(report: dict[str, Any]) -> list[dict[str, Any]]:
+    summary = (
+        report.get("source_dimension_gap_summary")
+        if isinstance(report.get("source_dimension_gap_summary"), dict)
+        else {}
+    )
+    items = summary.get("actionable_candidates") if isinstance(summary.get("actionable_candidates"), list) else []
+    return [item for item in items if isinstance(item, dict)]
+
+
+def _quiet_gap_summary(report: dict[str, Any]) -> dict[str, Any]:
+    return report.get("quiet_gap_summary") if isinstance(report.get("quiet_gap_summary"), dict) else {}
+
+
 def _is_explicit_source_only_lifecycle_flow_exclusion(report: dict[str, Any], item: dict[str, Any]) -> bool:
     if item.get("explicit_runtime_exclusion") is True or item.get("source_only_explicit_exclusion") is True:
         return True
@@ -1692,11 +1764,21 @@ def _lifecycle_bucket_discovery_followup_orders(report: dict[str, Any]) -> list[
     candidates = report.get("surfaced_candidates") if isinstance(report.get("surfaced_candidates"), list) else []
     orders: list[dict[str, Any]] = []
     seen_bucket_keys: set[tuple[str, str]] = set()
-    for item in candidates:
+    actionable_resolutions = {"emit_or_backfill_source_field", "resolve_unknown_source_dimensions"}
+    for item in [*candidates, *_source_dimension_summary_items(report)]:
         if not isinstance(item, dict):
             continue
         state = str(item.get("classification_state") or "")
-        if state not in {"new_bucket_candidate", "runtime_blocked_contract_gap", "code_patch_required", "code_review_failed"}:
+        source_dimension_gap = str(item.get("source_dimension_gap") or "")
+        recommended_resolution = str(item.get("recommended_resolution") or "")
+        source_dimension_gap_required = (
+            source_dimension_gap == "unknown_source_dimensions"
+            and recommended_resolution in actionable_resolutions
+        )
+        if (
+            state not in {"new_bucket_candidate", "runtime_blocked_contract_gap", "code_patch_required", "code_review_failed"}
+            and not source_dimension_gap_required
+        ):
             continue
         if _is_explicit_source_only_lifecycle_flow_exclusion(report, item):
             continue
@@ -1707,9 +1789,19 @@ def _lifecycle_bucket_discovery_followup_orders(report: dict[str, Any]) -> list[
         if bucket_key in seen_bucket_keys:
             continue
         seen_bucket_keys.add(bucket_key)
+        order_id = (
+            _lifecycle_source_dimension_gap_order_id(item)
+            if source_dimension_gap_required
+            else _lifecycle_bucket_discovery_order_id(item)
+        )
+        improvement_type = (
+            "source_dimension_gap_resolution"
+            if source_dimension_gap_required
+            else "bucket_classifier_hook_or_taxonomy_gap"
+        )
         orders.append(
             {
-                "order_id": _lifecycle_bucket_discovery_order_id(item),
+                "order_id": order_id,
                 "source_bucket_id": source_bucket_id,
                 "canonical_bucket": item.get("canonical_bucket"),
                 "legacy_raw_bucket_key": item.get("legacy_raw_bucket_key"),
@@ -1725,9 +1817,9 @@ def _lifecycle_bucket_discovery_followup_orders(report: dict[str, Any]) -> list[
                 "route": "auto_patch_required",
                 "mapped_family": item.get("live_auto_apply_family") or "lifecycle_bucket_discovery",
                 "threshold_family": item.get("live_auto_apply_family") or "lifecycle_bucket_discovery",
-                "improvement_type": "bucket_classifier_hook_or_taxonomy_gap",
+                "improvement_type": improvement_type,
                 "confidence": "postclose_discovery_source",
-                "priority": 1 if state in {"code_patch_required", "runtime_blocked_contract_gap"} else 3,
+                "priority": 1 if state in {"code_patch_required", "runtime_blocked_contract_gap"} or source_dimension_gap_required else 3,
                 "runtime_effect": False,
                 "allowed_runtime_apply": False,
                 "expected_ev_effect": (
@@ -1750,6 +1842,9 @@ def _lifecycle_bucket_discovery_followup_orders(report: dict[str, Any]) -> list[
                     f"bucket_relation={item.get('bucket_relation')}",
                     f"recommended_action={item.get('recommended_action')}",
                     f"recommended_resolution={item.get('recommended_resolution')}",
+                    f"source_dimension_gap={item.get('source_dimension_gap') or ''}",
+                    f"missing_dimension_keys={item.get('missing_dimension_keys') or []}",
+                    f"missing_lifecycle_flow_stage_keys={item.get('missing_lifecycle_flow_stage_keys') or []}",
                     f"unknown_reason_counts={item.get('unknown_reason_counts') or {}}",
                     f"source_quality_adjusted_ev_pct={item.get('source_quality_adjusted_ev_pct')}",
                     "runtime_effect=false_until_patch_review_passes",
@@ -1781,6 +1876,117 @@ def _lifecycle_bucket_discovery_followup_orders(report: dict[str, Any]) -> list[
                     "source_quality_gate": report.get("source_quality_gate"),
                     "forbidden_uses": report.get("forbidden_uses") or [],
                 },
+            }
+        )
+    source_dimension_summary = (
+        report.get("source_dimension_gap_summary")
+        if isinstance(report.get("source_dimension_gap_summary"), dict)
+        else {}
+    )
+    rollup_count = _safe_int(source_dimension_summary.get("rollup_only_gap_count"))
+    unknown_gap_count = _safe_int(
+        (source_dimension_summary.get("source_dimension_gap_counts") or {}).get("unknown_source_dimensions")
+        if isinstance(source_dimension_summary.get("source_dimension_gap_counts"), dict)
+        else 0
+    )
+    if rollup_count > 0 and unknown_gap_count > 1:
+        orders.append(
+            {
+                "order_id": "order_lifecycle_source_dimension_gap_rollup",
+                "source_report_type": "lifecycle_bucket_discovery_source_dimension_rollup",
+                "lifecycle_stage": "multi_stage",
+                "target_subsystem": "lifecycle_bucket_discovery_taxonomy_provenance",
+                "route": "source_dimension_rollup",
+                "mapped_family": "lifecycle_bucket_discovery",
+                "threshold_family": "lifecycle_bucket_discovery",
+                "improvement_type": "source_dimension_gap_rollup_evidence",
+                "confidence": "postclose_discovery_source",
+                "priority": 3,
+                "runtime_effect": False,
+                "allowed_runtime_apply": False,
+                "expected_ev_effect": (
+                    "Keep repeated source-dimension gaps visible without treating not-applicable or absorbed "
+                    "dimensions as immediate code defects."
+                ),
+                "evidence": [
+                    f"rollup_only_gap_count={rollup_count}",
+                    f"unknown_source_dimensions={unknown_gap_count}",
+                    f"recommended_resolution_counts={source_dimension_summary.get('recommended_resolution_counts') or {}}",
+                    f"missing_dimension_key_counts={source_dimension_summary.get('missing_dimension_key_counts') or {}}",
+                    "runtime_effect=false",
+                    "allowed_runtime_apply=false",
+                ],
+                "intent": (
+                    "Surface repeated source-dimension gaps in the postclose workorder chain so the operator "
+                    "does not have to manually inspect raw bucket candidates."
+                ),
+                "next_postclose_metric": "source_dimension_gap_summary rollup/actionable counts remain visible.",
+            }
+        )
+    quiet_summary = _quiet_gap_summary(report)
+    quiet_type_counts = (
+        quiet_summary.get("quiet_gap_type_counts")
+        if isinstance(quiet_summary.get("quiet_gap_type_counts"), dict)
+        else {}
+    )
+    quiet_orders: list[tuple[str, str, str, int]] = [
+        (
+            "order_lifecycle_quiet_gap_parent_conflict_rollup",
+            "Lifecycle quiet gap parent conflict/exclusion review",
+            "parent_conflict_exclusion_review",
+            _safe_int(quiet_type_counts.get("parent_conflict_child"))
+            + _safe_int(quiet_type_counts.get("exclusion_dimension_candidate")),
+        ),
+        (
+            "order_lifecycle_quiet_gap_positive_source_only_rollup",
+            "Lifecycle quiet gap positive source-only review",
+            "positive_source_only_review",
+            _safe_int(quiet_type_counts.get("positive_source_only_keep_collecting"))
+            + _safe_int(quiet_type_counts.get("absorbed_into_parent_policy")),
+        ),
+        (
+            "order_lifecycle_quiet_gap_ai_review_coverage_rollup",
+            "Lifecycle quiet gap AI review coverage review",
+            "ai_review_coverage_review",
+            _safe_int(quiet_type_counts.get("ai_review_parsed_low_coverage")),
+        ),
+    ]
+    for order_id, title, route, count in quiet_orders:
+        if count <= 0:
+            continue
+        orders.append(
+            {
+                "order_id": order_id,
+                "title": title,
+                "source_report_type": "lifecycle_bucket_discovery_quiet_gap_rollup",
+                "lifecycle_stage": "multi_stage",
+                "target_subsystem": "lifecycle_bucket_discovery_taxonomy_provenance",
+                "route": route,
+                "mapped_family": "lifecycle_bucket_discovery",
+                "threshold_family": "lifecycle_bucket_discovery",
+                "improvement_type": "quiet_gap_rollup_evidence",
+                "confidence": "postclose_discovery_source",
+                "priority": 3,
+                "runtime_effect": False,
+                "allowed_runtime_apply": False,
+                "expected_ev_effect": (
+                    "Keep quiet source-quality gaps visible without treating every rollup as an immediate "
+                    "code patch requirement."
+                ),
+                "evidence": [
+                    f"quiet_gap_count={quiet_summary.get('quiet_gap_count')}",
+                    f"rollup_required_count={quiet_summary.get('rollup_required_count')}",
+                    f"sim_live_connected_quiet_gap_count={quiet_summary.get('sim_live_connected_quiet_gap_count')}",
+                    f"quiet_gap_type_counts={quiet_type_counts}",
+                    f"ai_review_coverage={quiet_summary.get('ai_review_coverage') or {}}",
+                    "runtime_effect=false",
+                    "allowed_runtime_apply=false",
+                ],
+                "intent": (
+                    "Surface parent conflict/exclusion children, positive source-only keep-collecting rows, "
+                    "absorbed parent-policy evidence, and low AI coverage in the postclose workorder chain."
+                ),
+                "next_postclose_metric": "quiet_gap_summary rollup counts remain visible until explicitly resolved.",
             }
         )
     return orders
@@ -2088,6 +2294,31 @@ def _observation_source_quality_followup_orders(report: dict[str, Any]) -> list[
                     "pytest src/tests/test_observation_source_quality_audit.py "
                     "src/tests/test_swing_model_selection_funnel_repair.py "
                     "src/tests/test_build_code_improvement_workorder.py",
+                ],
+            }
+        )
+    if warning_stages and not orders:
+        orders.append(
+            {
+                **base,
+                "order_id": "order_observation_source_quality_warning_rollup",
+                "title": "Observation source-quality warning rollup",
+                "priority": 3,
+                "route": "source_quality_warning_rollup",
+                "mapped_family": "observation_source_quality_audit",
+                "threshold_family": "observation_source_quality_audit",
+                "improvement_type": "observation_source_quality_warning_rollup",
+                "intent": (
+                    "Keep source-quality warning stages visible even when they are outside the immediate "
+                    "implementation allowlist; follow-up Codex review decides whether a patch is needed."
+                ),
+                "evidence": evidence,
+                "files_likely_touched": [
+                    "src/engine/observation_source_quality_audit.py",
+                    "src/engine/build_code_improvement_workorder.py",
+                ],
+                "acceptance_tests": [
+                    "PYTHONPATH=. .venv/bin/pytest -q src/tests/test_observation_source_quality_audit.py src/tests/test_build_code_improvement_workorder.py",
                 ],
             }
         )

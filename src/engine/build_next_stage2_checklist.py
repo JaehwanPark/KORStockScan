@@ -229,6 +229,42 @@ def _runtime_gap_codex_directive_summary(runtime_gap_report: dict[str, Any]) -> 
     return ", ".join(rendered) + suffix
 
 
+def _source_dimension_gap_summary(runtime_gap_report: dict[str, Any]) -> str:
+    summary = (
+        runtime_gap_report.get("source_dimension_gap_summary")
+        if isinstance(runtime_gap_report.get("source_dimension_gap_summary"), dict)
+        else {}
+    )
+    actionable = int(summary.get("actionable_unknown_gap_count") or 0)
+    if actionable <= 0:
+        return ""
+    gap_count = int(summary.get("gap_count") or actionable)
+    resolutions = summary.get("recommended_resolution_counts") if isinstance(summary.get("recommended_resolution_counts"), dict) else {}
+    missing_keys = summary.get("missing_dimension_key_counts") if isinstance(summary.get("missing_dimension_key_counts"), dict) else {}
+    return (
+        f"actionable_unknown_gap_count=`{actionable}`, source_dimension_gap_count=`{gap_count}`, "
+        f"recommended_resolution_counts=`{resolutions}`, missing_dimension_key_counts=`{missing_keys}`"
+    )
+
+
+def _quiet_gap_summary(runtime_gap_report: dict[str, Any]) -> str:
+    summary = (
+        runtime_gap_report.get("quiet_gap_summary")
+        if isinstance(runtime_gap_report.get("quiet_gap_summary"), dict)
+        else {}
+    )
+    quiet_count = int(summary.get("quiet_gap_count") or 0)
+    if quiet_count <= 0:
+        return ""
+    type_counts = summary.get("quiet_gap_type_counts") if isinstance(summary.get("quiet_gap_type_counts"), dict) else {}
+    return (
+        f"quiet_gap_count=`{quiet_count}`, rollup_required_count=`{summary.get('rollup_required_count') or 0}`, "
+        f"sim_live_connected_quiet_gap_count=`{summary.get('sim_live_connected_quiet_gap_count') or 0}`, "
+        f"observation_source_quality_warning_count=`{summary.get('observation_source_quality_warning_count') or 0}`, "
+        f"quiet_gap_type_counts=`{type_counts}`"
+    )
+
+
 def _task_line(task: GeneratedTask, target_date: str) -> str:
     return (
         f"- [ ] `[{task.task_id}] {task.title}` "
@@ -261,6 +297,8 @@ def _build_tasks(
     runtime_gap_path = RUNTIME_APPLY_GAP_REPORT_DIR / f"runtime_apply_gap_audit_{source_date}.json"
     runtime_gap_pending = _runtime_gap_preopen_pending_summary(runtime_gap_report)
     runtime_gap_directives = _runtime_gap_codex_directive_summary(runtime_gap_report)
+    source_dimension_gap_summary = _source_dimension_gap_summary(runtime_gap_report)
+    quiet_gap_summary = _quiet_gap_summary(runtime_gap_report)
     threshold_source = (
         f"[threshold_cycle_ev_{source_date}.json](/home/ubuntu/KORStockScan/{_rel(ev_path)}), "
         "[threshold_cycle_preopen_apply.py](/home/ubuntu/KORStockScan/src/engine/threshold_cycle_preopen_apply.py), "
@@ -451,6 +489,50 @@ def _build_tasks(
                     )
                 ]
                 if runtime_gap_directives
+                else []
+            ),
+            *(
+                [
+                    GeneratedTask(
+                        task_id=f"LifecycleSourceDimensionGapReview{mmdd}",
+                        title="lifecycle source dimension gap 자동 표면화 및 처리 확인",
+                        slot="POSTCLOSE",
+                        time_window="17:15~17:30",
+                        track="ScalpingLogic",
+                        source=(
+                            f"[runtime_apply_gap_audit_{source_date}.json](/home/ubuntu/KORStockScan/{_rel(runtime_gap_path)}), "
+                            f"[runtime_apply_gap_audit_{source_date}.md](/home/ubuntu/KORStockScan/data/report/runtime_apply_gap_audit/runtime_apply_gap_audit_{source_date}.md)"
+                        ),
+                        lines=(
+                            f"판정 기준: source dimension gap summary의 {source_dimension_gap_summary}를 확인하고 workorder/checklist 표면화 누락 여부를 닫는다.",
+                            "금지: source-dimension gap을 threshold/env/provider/order/bot 변경 근거로 사용하지 않는다.",
+                            "다음 액션: `implement_now`, `already_covered_by_fallback`, `rollup_only`, `defer_until_postclose_report`, `reject_not_applicable` 중 하나로 닫는다.",
+                        ),
+                    )
+                ]
+                if source_dimension_gap_summary and not runtime_gap_directives
+                else []
+            ),
+            *(
+                [
+                    GeneratedTask(
+                        task_id=f"LifecycleQuietGapReview{mmdd}",
+                        title="lifecycle quiet gap rollup 자동 표면화 및 처리 확인",
+                        slot="POSTCLOSE",
+                        time_window="17:30~17:45",
+                        track="ScalpingLogic",
+                        source=(
+                            f"[runtime_apply_gap_audit_{source_date}.json](/home/ubuntu/KORStockScan/{_rel(runtime_gap_path)}), "
+                            f"[runtime_apply_gap_audit_{source_date}.md](/home/ubuntu/KORStockScan/data/report/runtime_apply_gap_audit/runtime_apply_gap_audit_{source_date}.md)"
+                        ),
+                        lines=(
+                            f"판정 기준: quiet gap summary의 {quiet_gap_summary}를 확인하고 parent conflict/exclusion, positive source-only, source-quality warning, AI coverage 누락을 닫는다.",
+                            "금지: quiet gap을 threshold/env/provider/order/bot 변경 근거로 사용하지 않는다.",
+                            "다음 액션: `rollup_only`, `implement_now`, `already_covered_by_parent_policy`, `defer_until_more_sample`, `reject_not_applicable` 중 하나로 닫는다.",
+                        ),
+                    )
+                ]
+                if quiet_gap_summary and not runtime_gap_directives
                 else []
             ),
         ]

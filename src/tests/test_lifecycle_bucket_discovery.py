@@ -118,6 +118,58 @@ def _legacy_ai_response_without_dual_taxonomy_fields():
     }
 
 
+def test_lifecycle_bucket_discovery_summarizes_quiet_gaps():
+    report = {
+        "ai_two_pass_review": {
+            "status": "parsed",
+            "shard_count": 5,
+            "parsed_shard_count": 2,
+            "reviewed_candidate_count": 2,
+        }
+    }
+    candidates = [
+        {
+            "bucket_id": "lifecycle_flow:conflict-child",
+            "source_bucket_id": "lifecycle_flow:conflict-child",
+            "stage": "lifecycle_flow",
+            "bucket_type": "combo_lifecycle_flow",
+            "classification_state": "source_only_keep_collecting",
+            "child_conflict_warning": True,
+            "exclusion_dimension_candidate": True,
+            "source_quality_adjusted_ev_pct": -0.5,
+        },
+        {
+            "bucket_id": "entry:positive-source-only",
+            "source_bucket_id": "entry:positive-source-only",
+            "stage": "entry",
+            "bucket_type": "combo_entry_spot",
+            "classification_state": "source_only_keep_collecting",
+            "source_quality_gate": "pass",
+            "source_quality_adjusted_ev_pct": 1.2,
+        },
+        {
+            "bucket_id": "lifecycle_flow:absorbed",
+            "source_bucket_id": "lifecycle_flow:absorbed",
+            "stage": "lifecycle_flow",
+            "bucket_type": "combo_lifecycle_flow",
+            "classification_state": "source_only_keep_collecting",
+            "recommended_resolution": "absorbed_into_parent_policy",
+        },
+    ]
+
+    summary = mod._quiet_gap_summary(report, candidates)
+
+    assert summary["runtime_effect"] is False
+    assert summary["allowed_runtime_apply"] is False
+    assert summary["decision_authority"] == "source_quality_gap_discovery"
+    assert summary["quiet_gap_count"] == 4
+    assert summary["parent_conflict_child_count"] == 1
+    assert summary["exclusion_dimension_candidate_count"] == 1
+    assert summary["positive_source_only_keep_collecting_count"] == 1
+    assert summary["absorbed_into_parent_policy_count"] == 1
+    assert summary["ai_review_parsed_low_coverage_count"] == 1
+
+
 def _write_ldm(path):
     path.write_text(
         json.dumps(
@@ -320,6 +372,52 @@ def _write_ldm(path):
         ),
         encoding="utf-8",
     )
+
+
+def test_lifecycle_bucket_discovery_summarizes_source_dimension_gaps():
+    candidates = [
+        {
+            "bucket_id": "entry:combo:unknown",
+            "source_bucket_id": "entry:combo:unknown",
+            "stage": "entry",
+            "bucket_type": "combo_entry_spot",
+            "classification_state": "source_only_keep_collecting",
+            "source_dimension_gap": "unknown_source_dimensions",
+            "recommended_resolution": "resolve_unknown_source_dimensions",
+            "missing_dimension_keys": ["liquidity_bucket"],
+            "unknown_reason_counts": {"missing_source_field": 1},
+        },
+        {
+            "bucket_id": "entry:combo:not-applicable",
+            "stage": "entry",
+            "bucket_type": "exit_rule",
+            "classification_state": "source_only_keep_collecting",
+            "source_dimension_gap": "unknown_source_dimensions",
+            "recommended_resolution": "entry_label_not_applicable",
+            "unknown_reason_counts": {"entry_label_not_applicable": 1},
+        },
+        {
+            "bucket_id": "lifecycle_flow:combo:missing",
+            "stage": "lifecycle_flow",
+            "bucket_type": "combo_lifecycle_flow",
+            "classification_state": "source_only_keep_collecting",
+            "source_dimension_gap": "lifecycle_flow_incomplete_stage_contract",
+            "recommended_resolution": "explicit_lifecycle_flow_source_only_blocker",
+            "missing_lifecycle_flow_stage_keys": ["holding"],
+        },
+    ]
+
+    summary = mod._source_dimension_gap_summary(candidates)
+
+    assert summary["decision_authority"] == "source_quality_gap_discovery"
+    assert summary["runtime_effect"] is False
+    assert summary["allowed_runtime_apply"] is False
+    assert summary["gap_count"] == 3
+    assert summary["actionable_unknown_gap_count"] == 1
+    assert summary["rollup_only_gap_count"] == 2
+    assert summary["lifecycle_flow_incomplete_stage_contract_count"] == 1
+    assert summary["missing_dimension_key_counts"]["liquidity_bucket"] == 1
+    assert summary["missing_dimension_key_counts"]["holding"] == 1
 
 
 def test_lifecycle_bucket_discovery_classifies_live_sim_and_new_buckets(tmp_path, monkeypatch):

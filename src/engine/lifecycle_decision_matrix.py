@@ -1643,17 +1643,58 @@ def _stale_bucket(features: dict[str, Any]) -> str:
     return "fresh_or_unflagged"
 
 
-def _entry_bucket_features(row: dict[str, Any]) -> dict[str, str]:
+def _entry_liquidity_bucket(features: dict[str, Any]) -> str:
+    explicit = _bucket_value(features.get("liquidity_bucket"), "")
+    if explicit and "unknown" not in explicit.lower():
+        return explicit
+    guard_bucket = _submit_liquidity_bucket(features)
+    if guard_bucket and "unknown" not in guard_bucket.lower():
+        return guard_bucket
+    return explicit or guard_bucket or "liquidity_unknown"
+
+
+def _entry_overbought_bucket(features: dict[str, Any]) -> str:
+    explicit = _bucket_value(features.get("overbought_bucket"), "")
+    if explicit and "unknown" not in explicit.lower():
+        return explicit
+    guard_bucket = _submit_overbought_bucket(features)
+    if guard_bucket and "unknown" not in guard_bucket.lower():
+        return guard_bucket
+    return explicit or guard_bucket or "overbought_unknown"
+
+
+def _merge_entry_dimension_fallbacks(
+    features: dict[str, Any],
+    fallback_features: dict[str, Any] | None,
+) -> dict[str, Any]:
+    if not isinstance(fallback_features, dict) or not fallback_features:
+        return features
+    merged = dict(fallback_features)
+    for key, value in features.items():
+        if key in {"liquidity_bucket", "overbought_bucket"}:
+            current = _bucket_value(value, "")
+            fallback = _bucket_value(merged.get(key), "")
+            if (not current or "unknown" in current.lower()) and fallback and "unknown" not in fallback.lower():
+                continue
+        merged[key] = value
+    return merged
+
+
+def _entry_bucket_features(
+    row: dict[str, Any],
+    fallback_features: dict[str, Any] | None = None,
+) -> dict[str, str]:
     features = row.get("runtime_features") if isinstance(row.get("runtime_features"), dict) else {}
+    dimension_features = _merge_entry_dimension_fallbacks(features, fallback_features)
     labels = row.get("labels") if isinstance(row.get("labels"), dict) else {}
     return {
         "score_band": _entry_score_band(features.get("ai_score")),
         "source_stage": _bucket_value(row.get("source_stage"), "source_unknown"),
         "chosen_action": _bucket_value(features.get("chosen_action"), "action_unknown"),
         "stale_bucket": _stale_bucket(features),
-        "liquidity_bucket": _bucket_value(features.get("liquidity_bucket"), "liquidity_unknown"),
+        "liquidity_bucket": _entry_liquidity_bucket(dimension_features),
         "strength_bucket": _bucket_value(features.get("risk_context_bucket"), "strength_unknown"),
-        "overbought_bucket": _bucket_value(features.get("overbought_bucket"), "overbought_unknown"),
+        "overbought_bucket": _entry_overbought_bucket(dimension_features),
         "time_bucket": _bucket_value(features.get("time_bucket"), "time_unknown"),
         "exit_rule": _bucket_value(labels.get("exit_rule"), "exit_unknown"),
     }
@@ -1662,20 +1703,20 @@ def _entry_bucket_features(row: dict[str, Any]) -> dict[str, str]:
 ENTRY_BUCKET_FIELD_MAP = {
     "score": "runtime_features.ai_score",
     "source": "source_stage",
-    "liquidity": "runtime_features.liquidity_bucket",
-    "overbought": "runtime_features.overbought_bucket",
+    "liquidity": "runtime_features.liquidity_bucket|runtime_features.liquidity_guard_action|runtime_features.liquidity_guard_reason|runtime_features.sim_pre_submit_liquidity_guard_action|runtime_features.sim_pre_submit_liquidity_reason|runtime_features.sim_liquidity_value|runtime_features.sim_min_liquidity",
+    "overbought": "runtime_features.overbought_bucket|runtime_features.overbought_guard_action|runtime_features.overbought_guard_reason|runtime_features.sim_pre_submit_overbought_guard_action|runtime_features.sim_pre_submit_overbought_reason|runtime_features.sim_overbought_risk_state|runtime_features.sim_overbought_risk_bucket",
     "time": "runtime_features.time_bucket",
     "stale": "runtime_features.entry_submit_revalidation_warning|runtime_features.entry_submit_revalidation_block|runtime_features.stale_bucket",
     "score_band": "runtime_features.ai_score",
     "source_stage": "source_stage",
     "chosen_action": "runtime_features.chosen_action",
     "stale_bucket": "runtime_features.entry_submit_revalidation_warning|runtime_features.entry_submit_revalidation_block|runtime_features.stale_bucket",
-    "liquidity_bucket": "runtime_features.liquidity_bucket",
+    "liquidity_bucket": "runtime_features.liquidity_bucket|runtime_features.liquidity_guard_action|runtime_features.liquidity_guard_reason|runtime_features.sim_pre_submit_liquidity_guard_action|runtime_features.sim_pre_submit_liquidity_reason|runtime_features.sim_liquidity_value|runtime_features.sim_min_liquidity",
     "strength_bucket": "runtime_features.risk_context_bucket",
-    "overbought_bucket": "runtime_features.overbought_bucket",
+    "overbought_bucket": "runtime_features.overbought_bucket|runtime_features.overbought_guard_action|runtime_features.overbought_guard_reason|runtime_features.sim_pre_submit_overbought_guard_action|runtime_features.sim_pre_submit_overbought_reason|runtime_features.sim_overbought_risk_state|runtime_features.sim_overbought_risk_bucket",
     "time_bucket": "runtime_features.time_bucket",
     "exit_rule": "labels.exit_rule",
-    "combo_entry_spot": "runtime_features.ai_score|source_stage|runtime_features.stale_bucket|runtime_features.liquidity_bucket|runtime_features.overbought_bucket|runtime_features.time_bucket",
+    "combo_entry_spot": "runtime_features.ai_score|source_stage|runtime_features.stale_bucket|runtime_features.liquidity_bucket|runtime_features.liquidity_guard_action|runtime_features.liquidity_guard_reason|runtime_features.sim_pre_submit_liquidity_guard_action|runtime_features.sim_pre_submit_liquidity_reason|runtime_features.sim_liquidity_value|runtime_features.sim_min_liquidity|runtime_features.overbought_bucket|runtime_features.overbought_guard_action|runtime_features.overbought_guard_reason|runtime_features.sim_pre_submit_overbought_guard_action|runtime_features.sim_pre_submit_overbought_reason|runtime_features.sim_overbought_risk_state|runtime_features.sim_overbought_risk_bucket|runtime_features.time_bucket",
 }
 
 
@@ -3344,8 +3385,8 @@ def _bucket_id(stage: str, bucket_type: str, bucket_key: str) -> str:
     return f"{stage}:{bucket_type}:{_slug(bucket_key)}"
 
 
-def _entry_combo_bucket_id(row: dict[str, Any]) -> str:
-    buckets = _entry_bucket_features(row)
+def _entry_combo_bucket_id(row: dict[str, Any], fallback_features: dict[str, Any] | None = None) -> str:
+    buckets = _entry_bucket_features(row, fallback_features=fallback_features)
     bucket_key = "|".join(
         [
             f"score={buckets['score_band']}",
@@ -3378,13 +3419,13 @@ def _submit_combo_bucket_id(row: dict[str, Any]) -> str:
 
 
 def _holding_combo_bucket_id(row: dict[str, Any]) -> str:
-    features = row.get("runtime_features") if isinstance(row.get("runtime_features"), dict) else {}
+    buckets = _holding_bucket_features(row)
     bucket_key = "|".join(
         [
-            f"source={_bucket_value(row.get('source_stage'), 'holding_source_unknown')}",
-            f"action={_holding_action_bucket(row)}",
-            f"profit={_numeric_band(features.get('profit_rate_live'), prefix='profit', cuts=[(-0.7, 'lt_neg070'), (-0.1, 'neg070_neg010'), (0.8, 'neg010_pos080'), (1.5, 'pos080_pos150'), (3.0, 'pos150_pos300')], unknown='profit_unknown')}",
-            f"held={_holding_held_bucket(row)}",
+            f"source={buckets['holding_source_stage']}",
+            f"action={buckets['holding_action']}",
+            f"profit={buckets['profit_band']}",
+            f"held={buckets['held_bucket']}",
         ]
     )
     return _bucket_id("holding", "combo_holding_flow", bucket_key)
@@ -3445,8 +3486,13 @@ def _flow_record(attribution_key: str, identity_quality: str, rows: list[dict[st
     holding_row = _first_stage_row(by_stage, "holding")
     exit_row = _first_stage_row(by_stage, "exit")
     scale_in_rows = by_stage.get("scale_in") or []
+    submit_features = (
+        submit_row.get("runtime_features")
+        if submit_row is not None and isinstance(submit_row.get("runtime_features"), dict)
+        else None
+    )
     child_bucket_ids = {
-        "entry": _entry_combo_bucket_id(entry_row) if entry_row else None,
+        "entry": _entry_combo_bucket_id(entry_row, fallback_features=submit_features) if entry_row else None,
         "submit": _submit_combo_bucket_id(submit_row) if submit_row else None,
         "holding": _holding_combo_bucket_id(holding_row) if holding_row else None,
         "scale_in": _scale_in_child_bucket_ids(scale_in_rows),
