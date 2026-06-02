@@ -72,14 +72,24 @@ def is_deposit_transport_error(error) -> bool:
     msg = str(error.get('return_msg') or error.get('err_msg') or '')
     code = str(error.get('return_code') or error.get('rt_cd') or '')
     lowered = msg.lower()
+    code_or_msg_marks_transport = code == '2000' or '[2000]' in msg or '(2000' in msg
     return (
-        code == '2000'
+        code_or_msg_marks_transport
         and (
             'sendreceive' in lowered
             or 'wingsj' in lowered
             or '-994' in msg
         )
     )
+
+
+def _parse_kiwoom_amount(value, *, field_name):
+    """Parse Kiwoom numeric string fields and reject schema drift clearly."""
+    raw = "" if value is None else str(value).strip()
+    normalized = raw.replace(",", "")
+    if not re.fullmatch(r"[+-]?\d+(?:\.\d+)?", normalized):
+        raise ValueError(f"{field_name} schema invalid: {raw!r}")
+    return int(float(normalized))
 
 
 def _post_kiwoom_with_auth_retry(url, headers, payload, api_id, *, timeout=5):
@@ -284,7 +294,21 @@ def get_deposit(token):
             res, data = _post_kiwoom_with_auth_retry(url, headers, payload, 'kt00001', timeout=5)
             is_success = str(data.get('rt_cd', data.get('return_code', ''))) == '0'
             if res.status_code == 200 and is_success:
-                amount = int(float(data.get('ord_alow_amt', 0) or 0))
+                try:
+                    amount = _parse_kiwoom_amount(data.get('ord_alow_amt', 0), field_name='ord_alow_amt')
+                except ValueError as exc:
+                    _LAST_DEPOSIT_ERRORS.append(
+                        {
+                            'http_status': res.status_code,
+                            'return_code': data.get('return_code', data.get('rt_cd', '')),
+                            'return_msg': str(exc),
+                            'attempt': attempt,
+                            'classification': 'deposit_response_schema_invalid',
+                            'field_name': 'ord_alow_amt',
+                        }
+                    )
+                    log_error(f"❌ [예수금조회 응답스키마] attempt={attempt}/{retries} 사유: {exc}")
+                    break
                 if amount > 0:
                     _remember_successful_deposit(amount)
                 return amount
