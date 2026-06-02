@@ -56,6 +56,7 @@ RUN_OPENAI_WS_STABILITY_REPORT="${THRESHOLD_CYCLE_RUN_OPENAI_WS_STABILITY_REPORT
 RUN_PIPELINE_EVENT_VERBOSITY_REPORT="${THRESHOLD_CYCLE_RUN_PIPELINE_EVENT_VERBOSITY_REPORT:-true}"
 RUN_OBSERVATION_SOURCE_QUALITY_AUDIT="${THRESHOLD_CYCLE_RUN_OBSERVATION_SOURCE_QUALITY_AUDIT:-true}"
 RUN_CODEBASE_PERFORMANCE_WORKORDER_REPORT="${THRESHOLD_CYCLE_RUN_CODEBASE_PERFORMANCE_WORKORDER_REPORT:-true}"
+RUN_SCALP_SIM_AI_DEFERRED_REVIEW="${THRESHOLD_CYCLE_RUN_SCALP_SIM_AI_DEFERRED_REVIEW:-true}"
 RUN_PATTERN_LAB_CURRENTNESS_AUDIT="${THRESHOLD_CYCLE_RUN_PATTERN_LAB_CURRENTNESS_AUDIT:-true}"
 RUN_PATTERN_LAB_AI_REVIEW="${THRESHOLD_CYCLE_RUN_PATTERN_LAB_AI_REVIEW:-true}"
 PATTERN_LAB_AI_REVIEW_PROVIDER="${KORSTOCKSCAN_PATTERN_LAB_AI_REVIEW_PROVIDER:-openai}"
@@ -83,6 +84,9 @@ RUN_SCALP_SIM_AUTO_APPROVAL_CONTROL_TOWER="${THRESHOLD_CYCLE_RUN_SCALP_SIM_AUTO_
 RUN_LATENCY_CLASSIFIER_RECOMMENDATION="${THRESHOLD_CYCLE_RUN_LATENCY_CLASSIFIER_RECOMMENDATION:-true}"
 RUN_TUNING_PERFORMANCE_CONTROL_TOWER="${THRESHOLD_CYCLE_RUN_TUNING_PERFORMANCE_CONTROL_TOWER:-true}"
 FORCE_DUPLICATE_REFRESH="${THRESHOLD_CYCLE_FORCE_DUPLICATE_REFRESH:-false}"
+FORCE_LIFECYCLE_BUCKET_WINDOWS="${THRESHOLD_CYCLE_FORCE_LIFECYCLE_BUCKET_WINDOWS:-false}"
+FORCE_DEEP_AUDITS="${THRESHOLD_CYCLE_FORCE_DEEP_AUDITS:-false}"
+FORCE_WORKORDER_BRANCH="${THRESHOLD_CYCLE_FORCE_WORKORDER_BRANCH:-false}"
 SNAPSHOT_RETENTION_DAYS="${THRESHOLD_CYCLE_SNAPSHOT_RETENTION_DAYS:-7}"
 ARTIFACT_WAIT_SEC="${THRESHOLD_CYCLE_ARTIFACT_WAIT_SEC:-600}"
 ARTIFACT_WAIT_INTERVAL_SEC="${THRESHOLD_CYCLE_ARTIFACT_WAIT_INTERVAL_SEC:-5}"
@@ -584,6 +588,31 @@ threshold_cycle_ev_refresh_decision() {
   printf 'skip\n'
 }
 
+automation_trigger_decision() {
+  local step_id="$1"
+  local decision="run"
+  if decision="$(THRESHOLD_CYCLE_FORCE_LIFECYCLE_BUCKET_WINDOWS="$FORCE_LIFECYCLE_BUCKET_WINDOWS" \
+    THRESHOLD_CYCLE_FORCE_DEEP_AUDITS="$FORCE_DEEP_AUDITS" \
+    THRESHOLD_CYCLE_FORCE_WORKORDER_BRANCH="$FORCE_WORKORDER_BRANCH" \
+    PYTHONPATH=. "$VENV_PY" -m src.engine.automation.automation_chain_trigger_decision \
+      --date "$TARGET_DATE" \
+      --scope all \
+      --step "$step_id" \
+      --write 2>/dev/null)"; then
+    if [ "$decision" = "skip" ]; then
+      printf 'skip\n'
+      return 0
+    fi
+  fi
+  printf 'run\n'
+}
+
+skip_triggered_step() {
+  local step_id="$1"
+  local reason="$2"
+  emit_postclose_marker "[SKIP] threshold-cycle postclose target_date=$TARGET_DATE step=$step_id reason=$reason trigger_decision=skip"
+}
+
 run_threshold_cycle_ev_and_wait() {
   local pass_label="$1"
   shift || true
@@ -768,6 +797,10 @@ if [ "$RUN_LIFECYCLE_BUCKET_DISCOVERY" = "true" ] || [ "$RUN_LIFECYCLE_BUCKET_DI
     for lifecycle_bucket_window in "${lifecycle_bucket_window_items[@]}"; do
       lifecycle_bucket_window="$(printf '%s' "$lifecycle_bucket_window" | tr -d '[:space:]')"
       [ -n "$lifecycle_bucket_window" ] || continue
+      if [ "$(automation_trigger_decision "lifecycle_window_${lifecycle_bucket_window}")" = "skip" ]; then
+        skip_triggered_step "lifecycle_bucket_windows_${lifecycle_bucket_window}" "fresh_outputs_no_trigger"
+        continue
+      fi
       lifecycle_bucket_start_date="$("$VENV_PY" - "$TARGET_DATE" "$lifecycle_bucket_window" <<'PY'
 import sys
 from datetime import date, timedelta
@@ -882,12 +915,22 @@ if [ "$RUN_OPENAI_WS_STABILITY_REPORT" = "true" ] || [ "$RUN_OPENAI_WS_STABILITY
     "openai_ws_stability_postclose"
 fi
 
-run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.scalp_sim_ai_deferred_review \
-  --date "$TARGET_DATE"
-wait_for_report_artifact \
-  "$PROJECT_DIR/data/report/scalp_sim_ai_deferred_review/scalp_sim_ai_deferred_review_${TARGET_DATE}.json" \
-  "$PROJECT_DIR/data/report/scalp_sim_ai_deferred_review/scalp_sim_ai_deferred_review_${TARGET_DATE}.md" \
-  "scalp_sim_ai_deferred_review"
+if [ "$RUN_SCALP_SIM_AI_DEFERRED_REVIEW" = "true" ] || [ "$RUN_SCALP_SIM_AI_DEFERRED_REVIEW" = "1" ]; then
+  if [ "$(automation_trigger_decision "scalp_sim_ai_deferred_review")" = "skip" ]; then
+    skip_triggered_step "scalp_sim_ai_deferred_review" "fresh_outputs_no_trigger"
+    wait_for_report_artifact \
+      "$PROJECT_DIR/data/report/scalp_sim_ai_deferred_review/scalp_sim_ai_deferred_review_${TARGET_DATE}.json" \
+      "$PROJECT_DIR/data/report/scalp_sim_ai_deferred_review/scalp_sim_ai_deferred_review_${TARGET_DATE}.md" \
+      "scalp_sim_ai_deferred_review"
+  else
+    run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.scalp_sim_ai_deferred_review \
+      --date "$TARGET_DATE"
+    wait_for_report_artifact \
+      "$PROJECT_DIR/data/report/scalp_sim_ai_deferred_review/scalp_sim_ai_deferred_review_${TARGET_DATE}.json" \
+      "$PROJECT_DIR/data/report/scalp_sim_ai_deferred_review/scalp_sim_ai_deferred_review_${TARGET_DATE}.md" \
+      "scalp_sim_ai_deferred_review"
+  fi
+fi
 
 report_args=(--date "$TARGET_DATE")
 if [ "$SKIP_DB" = "true" ]; then
@@ -1054,22 +1097,38 @@ wait_for_report_artifact \
   "$PROJECT_DIR/data/report/swing_pattern_lab_automation/swing_pattern_lab_automation_${TARGET_DATE}.md" \
   "swing_pattern_lab_automation"
 if [ "$RUN_PATTERN_LAB_CURRENTNESS_AUDIT" = "true" ] || [ "$RUN_PATTERN_LAB_CURRENTNESS_AUDIT" = "1" ]; then
-  wait_for_postclose_resources "pattern_lab_currentness_audit"
-  run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.pattern_lab_currentness_audit --date "$TARGET_DATE"
-  wait_for_report_artifact \
-    "$PROJECT_DIR/data/report/pattern_lab_currentness_audit/pattern_lab_currentness_audit_${TARGET_DATE}.json" \
-    "$PROJECT_DIR/data/report/pattern_lab_currentness_audit/pattern_lab_currentness_audit_${TARGET_DATE}.md" \
-    "pattern_lab_currentness_audit"
+  if [ "$(automation_trigger_decision "pattern_lab_currentness_audit")" = "skip" ]; then
+    skip_triggered_step "pattern_lab_currentness_audit" "fresh_outputs_no_trigger"
+    wait_for_report_artifact \
+      "$PROJECT_DIR/data/report/pattern_lab_currentness_audit/pattern_lab_currentness_audit_${TARGET_DATE}.json" \
+      "$PROJECT_DIR/data/report/pattern_lab_currentness_audit/pattern_lab_currentness_audit_${TARGET_DATE}.md" \
+      "pattern_lab_currentness_audit"
+  else
+    wait_for_postclose_resources "pattern_lab_currentness_audit"
+    run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.pattern_lab_currentness_audit --date "$TARGET_DATE"
+    wait_for_report_artifact \
+      "$PROJECT_DIR/data/report/pattern_lab_currentness_audit/pattern_lab_currentness_audit_${TARGET_DATE}.json" \
+      "$PROJECT_DIR/data/report/pattern_lab_currentness_audit/pattern_lab_currentness_audit_${TARGET_DATE}.md" \
+      "pattern_lab_currentness_audit"
+  fi
 fi
 if [ "$RUN_PATTERN_LAB_AI_REVIEW" = "true" ] || [ "$RUN_PATTERN_LAB_AI_REVIEW" = "1" ]; then
-  wait_for_postclose_resources "pattern_lab_ai_review"
-  run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.pattern_lab_ai_review \
-    --date "$TARGET_DATE" \
-    --provider "$PATTERN_LAB_AI_REVIEW_PROVIDER"
-  wait_for_report_artifact \
-    "$PROJECT_DIR/data/report/pattern_lab_ai_review/pattern_lab_ai_review_${TARGET_DATE}.json" \
-    "$PROJECT_DIR/data/report/pattern_lab_ai_review/pattern_lab_ai_review_${TARGET_DATE}.md" \
-    "pattern_lab_ai_review"
+  if [ "$(automation_trigger_decision "pattern_lab_ai_review")" = "skip" ]; then
+    skip_triggered_step "pattern_lab_ai_review" "fresh_outputs_no_trigger"
+    wait_for_report_artifact \
+      "$PROJECT_DIR/data/report/pattern_lab_ai_review/pattern_lab_ai_review_${TARGET_DATE}.json" \
+      "$PROJECT_DIR/data/report/pattern_lab_ai_review/pattern_lab_ai_review_${TARGET_DATE}.md" \
+      "pattern_lab_ai_review"
+  else
+    wait_for_postclose_resources "pattern_lab_ai_review"
+    run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.pattern_lab_ai_review \
+      --date "$TARGET_DATE" \
+      --provider "$PATTERN_LAB_AI_REVIEW_PROVIDER"
+    wait_for_report_artifact \
+      "$PROJECT_DIR/data/report/pattern_lab_ai_review/pattern_lab_ai_review_${TARGET_DATE}.json" \
+      "$PROJECT_DIR/data/report/pattern_lab_ai_review/pattern_lab_ai_review_${TARGET_DATE}.md" \
+      "pattern_lab_ai_review"
+  fi
 fi
 if [ "$RUN_PIPELINE_EVENT_VERBOSITY_REPORT" = "true" ] || [ "$RUN_PIPELINE_EVENT_VERBOSITY_REPORT" = "1" ]; then
   wait_for_postclose_resources "pipeline_event_verbosity"
@@ -1080,20 +1139,36 @@ if [ "$RUN_PIPELINE_EVENT_VERBOSITY_REPORT" = "true" ] || [ "$RUN_PIPELINE_EVENT
     "pipeline_event_verbosity"
 fi
 if [ "$RUN_OBSERVATION_SOURCE_QUALITY_AUDIT" = "true" ] || [ "$RUN_OBSERVATION_SOURCE_QUALITY_AUDIT" = "1" ]; then
-  wait_for_postclose_resources "observation_source_quality_audit"
-  run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.observation_source_quality_audit --target-date "$TARGET_DATE" --write
-  wait_for_report_artifact \
-    "$PROJECT_DIR/data/report/observation_source_quality_audit/observation_source_quality_audit_${TARGET_DATE}.json" \
-    "$PROJECT_DIR/data/report/observation_source_quality_audit/observation_source_quality_audit_${TARGET_DATE}.md" \
-    "observation_source_quality_audit"
+  if [ "$(automation_trigger_decision "observation_source_quality_audit")" = "skip" ]; then
+    skip_triggered_step "observation_source_quality_audit" "fresh_outputs_no_trigger"
+    wait_for_report_artifact \
+      "$PROJECT_DIR/data/report/observation_source_quality_audit/observation_source_quality_audit_${TARGET_DATE}.json" \
+      "$PROJECT_DIR/data/report/observation_source_quality_audit/observation_source_quality_audit_${TARGET_DATE}.md" \
+      "observation_source_quality_audit"
+  else
+    wait_for_postclose_resources "observation_source_quality_audit"
+    run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.observation_source_quality_audit --target-date "$TARGET_DATE" --write
+    wait_for_report_artifact \
+      "$PROJECT_DIR/data/report/observation_source_quality_audit/observation_source_quality_audit_${TARGET_DATE}.json" \
+      "$PROJECT_DIR/data/report/observation_source_quality_audit/observation_source_quality_audit_${TARGET_DATE}.md" \
+      "observation_source_quality_audit"
+  fi
 fi
 if [ "$RUN_CODEBASE_PERFORMANCE_WORKORDER_REPORT" = "true" ] || [ "$RUN_CODEBASE_PERFORMANCE_WORKORDER_REPORT" = "1" ]; then
-  wait_for_postclose_resources "codebase_performance_workorder"
-  run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.codebase_performance_workorder_report --date "$TARGET_DATE"
-  wait_for_report_artifact \
-    "$PROJECT_DIR/data/report/codebase_performance_workorder/codebase_performance_workorder_${TARGET_DATE}.json" \
-    "$PROJECT_DIR/data/report/codebase_performance_workorder/codebase_performance_workorder_${TARGET_DATE}.md" \
-    "codebase_performance_workorder"
+  if [ "$(automation_trigger_decision "codebase_performance_workorder")" = "skip" ]; then
+    skip_triggered_step "codebase_performance_workorder" "fresh_outputs_no_trigger"
+    wait_for_report_artifact \
+      "$PROJECT_DIR/data/report/codebase_performance_workorder/codebase_performance_workorder_${TARGET_DATE}.json" \
+      "$PROJECT_DIR/data/report/codebase_performance_workorder/codebase_performance_workorder_${TARGET_DATE}.md" \
+      "codebase_performance_workorder"
+  else
+    wait_for_postclose_resources "codebase_performance_workorder"
+    run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.codebase_performance_workorder_report --date "$TARGET_DATE"
+    wait_for_report_artifact \
+      "$PROJECT_DIR/data/report/codebase_performance_workorder/codebase_performance_workorder_${TARGET_DATE}.json" \
+      "$PROJECT_DIR/data/report/codebase_performance_workorder/codebase_performance_workorder_${TARGET_DATE}.md" \
+      "codebase_performance_workorder"
+  fi
 fi
 if [ "$RUN_TIME_WINDOW_REGIME_COUNTERFACTUAL" = "true" ] || [ "$RUN_TIME_WINDOW_REGIME_COUNTERFACTUAL" = "1" ]; then
   wait_for_postclose_resources "time_window_regime_counterfactual"
@@ -1134,63 +1209,101 @@ if [ "$RUN_PRODUCER_GAP_DISCOVERY" = "true" ] || [ "$RUN_PRODUCER_GAP_DISCOVERY"
     "$PROJECT_DIR/data/report/producer_gap_source_bundle/producer_gap_source_bundle_${TARGET_DATE}.json" \
     "$PROJECT_DIR/data/report/producer_gap_source_bundle/producer_gap_source_bundle_${TARGET_DATE}.md" \
     "producer_gap_source_bundle"
-  wait_for_postclose_resources "producer_gap_discovery"
-  run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.automation.producer_gap_discovery \
-    --date "$TARGET_DATE" \
-    --provider "$PRODUCER_GAP_DISCOVERY_AI_PROVIDER" \
-    --rolling-sim-scan || \
-    echo "[threshold-cycle] producer gap discovery returned fail-closed report (non-fatal); downstream verification will consume artifact" >&2
-  wait_for_report_artifact \
-    "$PROJECT_DIR/data/report/producer_gap_discovery/producer_gap_discovery_${TARGET_DATE}.json" \
-    "$PROJECT_DIR/data/report/producer_gap_discovery/producer_gap_discovery_${TARGET_DATE}.md" \
-    "producer_gap_discovery"
+  if [ "$(automation_trigger_decision "producer_gap_discovery")" != "skip" ]; then
+    wait_for_postclose_resources "producer_gap_discovery"
+    run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.automation.producer_gap_discovery \
+      --date "$TARGET_DATE" \
+      --provider "$PRODUCER_GAP_DISCOVERY_AI_PROVIDER" \
+      --rolling-sim-scan || \
+      echo "[threshold-cycle] producer gap discovery returned fail-closed report (non-fatal); downstream verification will consume artifact" >&2
+    wait_for_report_artifact \
+      "$PROJECT_DIR/data/report/producer_gap_discovery/producer_gap_discovery_${TARGET_DATE}.json" \
+      "$PROJECT_DIR/data/report/producer_gap_discovery/producer_gap_discovery_${TARGET_DATE}.md" \
+      "producer_gap_discovery"
+  else
+    skip_triggered_step "producer_gap_discovery" "fresh_outputs_no_trigger"
+    wait_for_report_artifact \
+      "$PROJECT_DIR/data/report/producer_gap_discovery/producer_gap_discovery_${TARGET_DATE}.json" \
+      "$PROJECT_DIR/data/report/producer_gap_discovery/producer_gap_discovery_${TARGET_DATE}.md" \
+      "producer_gap_discovery"
+  fi
 fi
 if [ "$RUN_STAGE_HOOK_WORKORDER_DISCOVERY" = "true" ] || [ "$RUN_STAGE_HOOK_WORKORDER_DISCOVERY" = "1" ]; then
-  wait_for_postclose_resources "stage_hook_workorder_discovery"
-  run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.automation.stage_hook_workorder_discovery \
-    --date "$TARGET_DATE" \
-    --provider "$STAGE_HOOK_WORKORDER_DISCOVERY_AI_PROVIDER" || \
-    echo "[threshold-cycle] stage hook workorder discovery returned fail-closed report (non-fatal); downstream verification will consume artifact" >&2
-  wait_for_report_artifact \
-    "$PROJECT_DIR/data/report/stage_hook_workorder_discovery/stage_hook_workorder_discovery_${TARGET_DATE}.json" \
-    "$PROJECT_DIR/data/report/stage_hook_workorder_discovery/stage_hook_workorder_discovery_${TARGET_DATE}.md" \
-    "stage_hook_workorder_discovery"
+  if [ "$(automation_trigger_decision "stage_hook_workorder_discovery")" != "skip" ]; then
+    wait_for_postclose_resources "stage_hook_workorder_discovery"
+    run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.automation.stage_hook_workorder_discovery \
+      --date "$TARGET_DATE" \
+      --provider "$STAGE_HOOK_WORKORDER_DISCOVERY_AI_PROVIDER" || \
+      echo "[threshold-cycle] stage hook workorder discovery returned fail-closed report (non-fatal); downstream verification will consume artifact" >&2
+    wait_for_report_artifact \
+      "$PROJECT_DIR/data/report/stage_hook_workorder_discovery/stage_hook_workorder_discovery_${TARGET_DATE}.json" \
+      "$PROJECT_DIR/data/report/stage_hook_workorder_discovery/stage_hook_workorder_discovery_${TARGET_DATE}.md" \
+      "stage_hook_workorder_discovery"
+  else
+    skip_triggered_step "stage_hook_workorder_discovery" "fresh_outputs_no_trigger"
+    wait_for_report_artifact \
+      "$PROJECT_DIR/data/report/stage_hook_workorder_discovery/stage_hook_workorder_discovery_${TARGET_DATE}.json" \
+      "$PROJECT_DIR/data/report/stage_hook_workorder_discovery/stage_hook_workorder_discovery_${TARGET_DATE}.md" \
+      "stage_hook_workorder_discovery"
+  fi
 fi
 if [ "$RUN_STAGE_HOOK_RUNTIME_SCAFFOLD" = "true" ] || [ "$RUN_STAGE_HOOK_RUNTIME_SCAFFOLD" = "1" ]; then
-  wait_for_postclose_resources "stage_hook_runtime_scaffold"
-  run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.automation.stage_hook_runtime_scaffold --date "$TARGET_DATE" || \
-    echo "[threshold-cycle] stage hook runtime scaffold returned fail-closed report (non-fatal); downstream verification will consume artifact" >&2
-  wait_for_report_artifact \
-    "$PROJECT_DIR/data/report/stage_hook_runtime_scaffold/stage_hook_runtime_scaffold_${TARGET_DATE}.json" \
-    "$PROJECT_DIR/data/report/stage_hook_runtime_scaffold/stage_hook_runtime_scaffold_${TARGET_DATE}.md" \
-    "stage_hook_runtime_scaffold"
+  if [ "$(automation_trigger_decision "stage_hook_runtime_scaffold")" != "skip" ]; then
+    wait_for_postclose_resources "stage_hook_runtime_scaffold"
+    run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.automation.stage_hook_runtime_scaffold --date "$TARGET_DATE" || \
+      echo "[threshold-cycle] stage hook runtime scaffold returned fail-closed report (non-fatal); downstream verification will consume artifact" >&2
+    wait_for_report_artifact \
+      "$PROJECT_DIR/data/report/stage_hook_runtime_scaffold/stage_hook_runtime_scaffold_${TARGET_DATE}.json" \
+      "$PROJECT_DIR/data/report/stage_hook_runtime_scaffold/stage_hook_runtime_scaffold_${TARGET_DATE}.md" \
+      "stage_hook_runtime_scaffold"
+  else
+    skip_triggered_step "stage_hook_runtime_scaffold" "fresh_outputs_no_trigger"
+    wait_for_report_artifact \
+      "$PROJECT_DIR/data/report/stage_hook_runtime_scaffold/stage_hook_runtime_scaffold_${TARGET_DATE}.json" \
+      "$PROJECT_DIR/data/report/stage_hook_runtime_scaffold/stage_hook_runtime_scaffold_${TARGET_DATE}.md" \
+      "stage_hook_runtime_scaffold"
+  fi
 fi
 run_threshold_cycle_ev_and_wait "pre_workorder"
 if [ "$BUILD_CODE_IMPROVEMENT_WORKORDER" = "true" ] || [ "$BUILD_CODE_IMPROVEMENT_WORKORDER" = "1" ]; then
-  wait_for_postclose_resources "code_improvement_workorder"
-  run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.build_code_improvement_workorder \
-    --date "$TARGET_DATE" \
-    --max-orders "$CODE_IMPROVEMENT_WORKORDER_MAX_ORDERS"
-  wait_for_report_artifact \
-    "$PROJECT_DIR/data/report/code_improvement_workorder/code_improvement_workorder_${TARGET_DATE}.json" \
-    "$PROJECT_DIR/docs/code-improvement-workorders/code_improvement_workorder_${TARGET_DATE}.md" \
-    "code_improvement_workorder"
+  if [ "$(automation_trigger_decision "workorder_branch")" = "skip" ]; then
+    skip_triggered_step "code_improvement_workorder_branch" "fresh_outputs_no_trigger"
+    wait_for_report_artifact \
+      "$PROJECT_DIR/data/report/code_improvement_workorder/code_improvement_workorder_${TARGET_DATE}.json" \
+      "$PROJECT_DIR/docs/code-improvement-workorders/code_improvement_workorder_${TARGET_DATE}.md" \
+      "code_improvement_workorder"
+  else
+    wait_for_postclose_resources "code_improvement_workorder"
+    run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.build_code_improvement_workorder \
+      --date "$TARGET_DATE" \
+      --max-orders "$CODE_IMPROVEMENT_WORKORDER_MAX_ORDERS"
+    wait_for_report_artifact \
+      "$PROJECT_DIR/data/report/code_improvement_workorder/code_improvement_workorder_${TARGET_DATE}.json" \
+      "$PROJECT_DIR/docs/code-improvement-workorders/code_improvement_workorder_${TARGET_DATE}.md" \
+      "code_improvement_workorder"
+  fi
 fi
-run_threshold_cycle_ev_and_wait \
-  "post_workorder_refresh" \
+run_threshold_cycle_ev_and_wait "post_workorder_refresh" \
   "$PROJECT_DIR/data/report/code_improvement_workorder/code_improvement_workorder_${TARGET_DATE}.json" \
   "$PROJECT_DIR/docs/code-improvement-workorders/code_improvement_workorder_${TARGET_DATE}.md"
 if [ "$RUN_PATTERN_LAB_PROPAGATION_AUDIT" = "true" ] || [ "$RUN_PATTERN_LAB_PROPAGATION_AUDIT" = "1" ]; then
-  wait_for_postclose_resources "pattern_lab_propagation_audit"
-  run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.pattern_lab_propagation_audit --date "$TARGET_DATE"
-  wait_for_report_artifact \
-    "$PROJECT_DIR/data/report/pattern_lab_propagation_audit/pattern_lab_propagation_audit_${TARGET_DATE}.json" \
-    "$PROJECT_DIR/data/report/pattern_lab_propagation_audit/pattern_lab_propagation_audit_${TARGET_DATE}.md" \
-    "pattern_lab_propagation_audit"
-  run_threshold_cycle_ev_and_wait \
-    "post_propagation_audit_refresh" \
-    "$PROJECT_DIR/data/report/pattern_lab_propagation_audit/pattern_lab_propagation_audit_${TARGET_DATE}.json" \
-    "$PROJECT_DIR/data/report/pattern_lab_propagation_audit/pattern_lab_propagation_audit_${TARGET_DATE}.md"
+  if [ "$(automation_trigger_decision "pattern_lab_propagation_audit")" = "skip" ]; then
+    skip_triggered_step "pattern_lab_propagation_audit" "fresh_outputs_no_trigger"
+    wait_for_report_artifact \
+      "$PROJECT_DIR/data/report/pattern_lab_propagation_audit/pattern_lab_propagation_audit_${TARGET_DATE}.json" \
+      "$PROJECT_DIR/data/report/pattern_lab_propagation_audit/pattern_lab_propagation_audit_${TARGET_DATE}.md" \
+      "pattern_lab_propagation_audit"
+  else
+    wait_for_postclose_resources "pattern_lab_propagation_audit"
+    run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.pattern_lab_propagation_audit --date "$TARGET_DATE"
+    wait_for_report_artifact \
+      "$PROJECT_DIR/data/report/pattern_lab_propagation_audit/pattern_lab_propagation_audit_${TARGET_DATE}.json" \
+      "$PROJECT_DIR/data/report/pattern_lab_propagation_audit/pattern_lab_propagation_audit_${TARGET_DATE}.md" \
+      "pattern_lab_propagation_audit"
+    run_threshold_cycle_ev_and_wait "post_propagation_audit_refresh" \
+      "$PROJECT_DIR/data/report/pattern_lab_propagation_audit/pattern_lab_propagation_audit_${TARGET_DATE}.json" \
+      "$PROJECT_DIR/data/report/pattern_lab_propagation_audit/pattern_lab_propagation_audit_${TARGET_DATE}.md"
+  fi
 fi
 wait_for_postclose_resources "runtime_approval_summary"
 run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.runtime_approval_summary --date "$TARGET_DATE"
@@ -1198,12 +1311,20 @@ wait_for_report_artifact \
   "$PROJECT_DIR/data/report/runtime_approval_summary/runtime_approval_summary_${TARGET_DATE}.json" \
   "$PROJECT_DIR/data/report/runtime_approval_summary/runtime_approval_summary_${TARGET_DATE}.md" \
   "runtime_approval_summary"
-wait_for_postclose_resources "runtime_apply_gap_audit"
-run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.runtime_apply_gap_audit --date "$TARGET_DATE"
-wait_for_report_artifact \
-  "$PROJECT_DIR/data/report/runtime_apply_gap_audit/runtime_apply_gap_audit_${TARGET_DATE}.json" \
-  "$PROJECT_DIR/data/report/runtime_apply_gap_audit/runtime_apply_gap_audit_${TARGET_DATE}.md" \
-  "runtime_apply_gap_audit"
+if [ "$(automation_trigger_decision "runtime_apply_gap_audit")" = "skip" ]; then
+  skip_triggered_step "runtime_apply_gap_audit" "fresh_outputs_no_trigger"
+  wait_for_report_artifact \
+    "$PROJECT_DIR/data/report/runtime_apply_gap_audit/runtime_apply_gap_audit_${TARGET_DATE}.json" \
+    "$PROJECT_DIR/data/report/runtime_apply_gap_audit/runtime_apply_gap_audit_${TARGET_DATE}.md" \
+    "runtime_apply_gap_audit"
+else
+  wait_for_postclose_resources "runtime_apply_gap_audit"
+  run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.runtime_apply_gap_audit --date "$TARGET_DATE"
+  wait_for_report_artifact \
+    "$PROJECT_DIR/data/report/runtime_apply_gap_audit/runtime_apply_gap_audit_${TARGET_DATE}.json" \
+    "$PROJECT_DIR/data/report/runtime_apply_gap_audit/runtime_apply_gap_audit_${TARGET_DATE}.md" \
+    "runtime_apply_gap_audit"
+fi
 wait_for_postclose_resources "build_next_stage2_checklist"
 run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.build_next_stage2_checklist --source-date "$TARGET_DATE"
 wait_for_file_artifact "$(next_stage2_checklist_path)" "next_stage2_checklist"
@@ -1216,7 +1337,7 @@ wait_for_report_artifact \
 PYTHONPATH=. "$VENV_PY" -m src.engine.sync_docs_backlog_to_project --print-backlog-only --limit 500 >/dev/null
 finished_at="$(TZ=Asia/Seoul date +%FT%T%z)"
 write_postclose_status succeeded completed 0 1
-emit_postclose_marker "[DONE] threshold-cycle postclose target_date=$TARGET_DATE ai_correction_provider=$AI_CORRECTION_PROVIDER panic_sell_defense=$RUN_PANIC_SELL_DEFENSE_REPORT panic_buying=$RUN_PANIC_BUYING_REPORT market_panic_breadth=$RUN_MARKET_PANIC_BREADTH_REPORT openai_ws_stability=$RUN_OPENAI_WS_STABILITY_REPORT pipeline_event_verbosity=$RUN_PIPELINE_EVENT_VERBOSITY_REPORT observation_source_quality_audit=$RUN_OBSERVATION_SOURCE_QUALITY_AUDIT codebase_performance_workorder=$RUN_CODEBASE_PERFORMANCE_WORKORDER_REPORT pattern_lab_currentness_audit=$RUN_PATTERN_LAB_CURRENTNESS_AUDIT pattern_lab_ai_review=$RUN_PATTERN_LAB_AI_REVIEW time_window_regime_counterfactual=$RUN_TIME_WINDOW_REGIME_COUNTERFACTUAL producer_gap_discovery=$RUN_PRODUCER_GAP_DISCOVERY stage_hook_workorder_discovery=$RUN_STAGE_HOOK_WORKORDER_DISCOVERY stage_hook_runtime_scaffold=$RUN_STAGE_HOOK_RUNTIME_SCAFFOLD pattern_lab_propagation_audit=$RUN_PATTERN_LAB_PROPAGATION_AUDIT scalp_sim_overnight=$RUN_SCALP_SIM_OVERNIGHT_REPORT scalp_entry_adm=$RUN_SCALP_ENTRY_ADM institutional_flow_context=$RUN_INSTITUTIONAL_FLOW_CONTEXT microstructure_reaction_context=$RUN_MICROSTRUCTURE_REACTION_CONTEXT lifecycle_decision_matrix=$RUN_LIFECYCLE_DECISION_MATRIX lifecycle_ai_context=$RUN_LIFECYCLE_AI_CONTEXT lifecycle_bucket_discovery=$RUN_LIFECYCLE_BUCKET_DISCOVERY lifecycle_bucket_windows=$RUN_LIFECYCLE_BUCKET_WINDOWS lifecycle_bucket_window_list=$LIFECYCLE_BUCKET_WINDOWS lifecycle_bucket_promotion_window=$LIFECYCLE_BUCKET_PROMOTION_WINDOW runtime_apply_bridge=$RUN_RUNTIME_APPLY_BRIDGE scalp_sim_auto_approval_control_tower=$RUN_SCALP_SIM_AUTO_APPROVAL_CONTROL_TOWER latency_classifier_recommendation=$RUN_LATENCY_CLASSIFIER_RECOMMENDATION tuning_performance_control_tower=$RUN_TUNING_PERFORMANCE_CONTROL_TOWER swing_lifecycle=$RUN_SWING_LIFECYCLE_AUDIT swing_strategy_discovery=$RUN_SWING_STRATEGY_DISCOVERY swing_lifecycle_matrix=$RUN_SWING_LIFECYCLE_MATRIX swing_lifecycle_bucket_discovery=$RUN_SWING_LIFECYCLE_BUCKET_DISCOVERY swing_ai_review_provider=$SWING_THRESHOLD_AI_REVIEW_PROVIDER swing_lifecycle_bucket_discovery_ai_provider=$SWING_LIFECYCLE_BUCKET_DISCOVERY_AI_PROVIDER pattern_lab_ai_review_provider=$PATTERN_LAB_AI_REVIEW_PROVIDER producer_gap_discovery_ai_provider=$PRODUCER_GAP_DISCOVERY_AI_PROVIDER stage_hook_workorder_discovery_ai_provider=$STAGE_HOOK_WORKORDER_DISCOVERY_AI_PROVIDER pattern_labs=$RUN_PATTERN_LABS deepseek_swing_lab=$RUN_DEEPSEEK_SWING_LAB code_improvement_workorder=$BUILD_CODE_IMPROVEMENT_WORKORDER daily_ev=true runtime_approval_summary=true runtime_apply_gap_audit=true next_stage2_checklist=true finished_at=$finished_at"
+emit_postclose_marker "[DONE] threshold-cycle postclose target_date=$TARGET_DATE ai_correction_provider=$AI_CORRECTION_PROVIDER panic_sell_defense=$RUN_PANIC_SELL_DEFENSE_REPORT panic_buying=$RUN_PANIC_BUYING_REPORT market_panic_breadth=$RUN_MARKET_PANIC_BREADTH_REPORT openai_ws_stability=$RUN_OPENAI_WS_STABILITY_REPORT scalp_sim_ai_deferred_review=$RUN_SCALP_SIM_AI_DEFERRED_REVIEW pipeline_event_verbosity=$RUN_PIPELINE_EVENT_VERBOSITY_REPORT observation_source_quality_audit=$RUN_OBSERVATION_SOURCE_QUALITY_AUDIT codebase_performance_workorder=$RUN_CODEBASE_PERFORMANCE_WORKORDER_REPORT pattern_lab_currentness_audit=$RUN_PATTERN_LAB_CURRENTNESS_AUDIT pattern_lab_ai_review=$RUN_PATTERN_LAB_AI_REVIEW time_window_regime_counterfactual=$RUN_TIME_WINDOW_REGIME_COUNTERFACTUAL producer_gap_discovery=$RUN_PRODUCER_GAP_DISCOVERY stage_hook_workorder_discovery=$RUN_STAGE_HOOK_WORKORDER_DISCOVERY stage_hook_runtime_scaffold=$RUN_STAGE_HOOK_RUNTIME_SCAFFOLD pattern_lab_propagation_audit=$RUN_PATTERN_LAB_PROPAGATION_AUDIT scalp_sim_overnight=$RUN_SCALP_SIM_OVERNIGHT_REPORT scalp_entry_adm=$RUN_SCALP_ENTRY_ADM institutional_flow_context=$RUN_INSTITUTIONAL_FLOW_CONTEXT microstructure_reaction_context=$RUN_MICROSTRUCTURE_REACTION_CONTEXT lifecycle_decision_matrix=$RUN_LIFECYCLE_DECISION_MATRIX lifecycle_ai_context=$RUN_LIFECYCLE_AI_CONTEXT lifecycle_bucket_discovery=$RUN_LIFECYCLE_BUCKET_DISCOVERY lifecycle_bucket_windows=$RUN_LIFECYCLE_BUCKET_WINDOWS lifecycle_bucket_window_list=$LIFECYCLE_BUCKET_WINDOWS lifecycle_bucket_promotion_window=$LIFECYCLE_BUCKET_PROMOTION_WINDOW force_lifecycle_bucket_windows=$FORCE_LIFECYCLE_BUCKET_WINDOWS force_deep_audits=$FORCE_DEEP_AUDITS force_workorder_branch=$FORCE_WORKORDER_BRANCH runtime_apply_bridge=$RUN_RUNTIME_APPLY_BRIDGE scalp_sim_auto_approval_control_tower=$RUN_SCALP_SIM_AUTO_APPROVAL_CONTROL_TOWER latency_classifier_recommendation=$RUN_LATENCY_CLASSIFIER_RECOMMENDATION tuning_performance_control_tower=$RUN_TUNING_PERFORMANCE_CONTROL_TOWER swing_lifecycle=$RUN_SWING_LIFECYCLE_AUDIT swing_strategy_discovery=$RUN_SWING_STRATEGY_DISCOVERY swing_lifecycle_matrix=$RUN_SWING_LIFECYCLE_MATRIX swing_lifecycle_bucket_discovery=$RUN_SWING_LIFECYCLE_BUCKET_DISCOVERY swing_ai_review_provider=$SWING_THRESHOLD_AI_REVIEW_PROVIDER swing_lifecycle_bucket_discovery_ai_provider=$SWING_LIFECYCLE_BUCKET_DISCOVERY_AI_PROVIDER pattern_lab_ai_review_provider=$PATTERN_LAB_AI_REVIEW_PROVIDER producer_gap_discovery_ai_provider=$PRODUCER_GAP_DISCOVERY_AI_PROVIDER stage_hook_workorder_discovery_ai_provider=$STAGE_HOOK_WORKORDER_DISCOVERY_AI_PROVIDER pattern_labs=$RUN_PATTERN_LABS deepseek_swing_lab=$RUN_DEEPSEEK_SWING_LAB code_improvement_workorder=$BUILD_CODE_IMPROVEMENT_WORKORDER daily_ev=true runtime_approval_summary=true runtime_apply_gap_audit=true next_stage2_checklist=true finished_at=$finished_at"
 wait_for_postclose_resources "verify_threshold_cycle_postclose_chain_final"
 run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.verify_threshold_cycle_postclose_chain --date "$TARGET_DATE"
 wait_for_report_artifact \

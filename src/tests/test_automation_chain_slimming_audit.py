@@ -256,8 +256,15 @@ def test_postclose_wrapper_duplicate_refresh_skip_contract_is_static():
     script = Path("deploy/run_threshold_cycle_postclose.sh").read_text(encoding="utf-8")
 
     assert 'FORCE_DUPLICATE_REFRESH="${THRESHOLD_CYCLE_FORCE_DUPLICATE_REFRESH:-false}"' in script
+    assert 'FORCE_LIFECYCLE_BUCKET_WINDOWS="${THRESHOLD_CYCLE_FORCE_LIFECYCLE_BUCKET_WINDOWS:-false}"' in script
+    assert 'FORCE_DEEP_AUDITS="${THRESHOLD_CYCLE_FORCE_DEEP_AUDITS:-false}"' in script
+    assert 'FORCE_WORKORDER_BRANCH="${THRESHOLD_CYCLE_FORCE_WORKORDER_BRANCH:-false}"' in script
     assert "threshold_cycle_ev_refresh_decision()" in script
+    assert "automation_trigger_decision()" in script
+    assert "src.engine.automation.automation_chain_trigger_decision" in script
     assert "duplicate_refresh_fresh" in script
+    assert "lifecycle_window_${lifecycle_bucket_window}" in script
+    assert "fresh_outputs_no_trigger" in script
     assert 'run_threshold_cycle_ev_and_wait "pre_workorder"' in script
     assert "code_improvement_workorder_${TARGET_DATE}.json" in script
     assert "pattern_lab_propagation_audit_${TARGET_DATE}.json" in script
