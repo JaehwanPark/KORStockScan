@@ -87,6 +87,12 @@
   - 금지: Active Sim Priority를 실주문, live-auto 승격, threshold/provider/bot/cap/order 변경, 수동 env override 근거로 사용하지 않는다.
   - 다음 액션: `runtime_env_loaded_active_policy_ready`, `active_key_observed`, `natural_match_zero_warning`, `policy_file_missing_or_unreadable`, `active_key_mismatch`, `forbidden_contract_violation` 중 하나로 닫는다.
 
+- [ ] `[AutomationChainSlimmingAudit0602] 자동화체인 경량화 audit 산출물 및 report-only 계약 확인` (`Due: 2026-06-02`, `Slot: INTRADAY`, `TimeWindow: 10:05~10:25`, `Track: RuntimeStability`)
+  - Source: [automation_chain_slimming_audit_2026-06-01.json](/home/ubuntu/KORStockScan/data/report/automation_chain_slimming_audit/automation_chain_slimming_audit_2026-06-01.json), [automation_chain_slimming_audit_2026-06-01.md](/home/ubuntu/KORStockScan/data/report/automation_chain_slimming_audit/automation_chain_slimming_audit_2026-06-01.md), [automation_chain_slimming_audit.py](/home/ubuntu/KORStockScan/src/engine/automation/automation_chain_slimming_audit.py), [report-based-automation-traceability.md](/home/ubuntu/KORStockScan/docs/report-based-automation-traceability.md)
+  - 판정 기준: `automation_chain_slimming_audit_2026-06-01.{json,md}`가 2026-06-01 postclose/preopen 상태와 현재 wrapper/document static parse를 기준으로 실행 단계를 `core_daily`, `change_triggered`, `manual_or_weekly`, `deprecated_candidate`와 축소 후보로 분류하고 모든 slimming candidate/workorder가 `runtime_effect=false`, `allowed_runtime_apply=false`를 유지하는지 확인한다.
+  - 금지: audit 결과를 즉시 wrapper 기본값 변경, runtime threshold apply, provider/bot/cap/order 변경으로 사용하지 않는다.
+  - 다음 액션: 중복 refresh, rolling/MTD full recompute, deep audit trigger 전환 후보가 있으면 별도 code-improvement workorder로 분리한다. 장중 허용 범위는 report-only parser/test/doc 개선까지이며 실제 wrapper 경량화는 별도 workorder와 검토 후 진행한다.
+
 ## 장후 체크리스트 (16:30~18:55)
 
 - [ ] `[ThresholdDailyEVReport0602] daily EV real/sim/combined split 및 자동 반영 결과 확인` (`Due: 2026-06-02`, `Slot: POSTCLOSE`, `TimeWindow: 16:30~16:45`, `Track: RuntimeStability`)
@@ -112,12 +118,6 @@
   - 판정 기준: runtime apply gap audit의 Codex 작업지시 `RESOLVE_SOURCE_DIMENSION_GAP`:lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_lt60_source_blocked_ai_score_stale_stale_unknown_liquid(block=source_dimension_gap_contract), `RESOLVE_SOURCE_DIMENSION_GAP`:lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_63_65_source_scalp_entry_action_decision_snapshot_stale(block=source_dimension_gap_contract), `RESOLVE_SOURCE_DIMENSION_GAP`:exit:exit_outcome:outcome_unknown(block=source_dimension_gap_contract), `REVIEW_OBSERVATION_SOURCE_QUALITY_WARNING`:observation_source_quality_audit:warning_summary(block=quiet_gap_visibility_contract)를 구현 필요, 이미 해결, 설계 보류, reject로 분류한다.
   - 금지: 작업지시를 approval artifact나 즉시 runtime env 수정으로 해석하지 않는다. broker/order/provider/cap guard 우회와 장중 threshold mutation은 금지한다.
   - 다음 액션: `implement_now`, `already_implemented`, `defer_design`, `reject`, `needs_new_workorder` 중 하나로 닫고, 구현 시 테스트와 postclose verifier handoff를 같이 확인한다.
-
-- [ ] `[AutomationChainSlimmingAudit0602] 자동화체인 경량화 audit 산출물 및 report-only 계약 확인` (`Due: 2026-06-02`, `Slot: POSTCLOSE`, `TimeWindow: 18:25~18:40`, `Track: RuntimeStability`)
-  - Source: [automation_chain_slimming_audit.py](/home/ubuntu/KORStockScan/src/engine/automation/automation_chain_slimming_audit.py), [report-based-automation-traceability.md](/home/ubuntu/KORStockScan/docs/report-based-automation-traceability.md)
-  - 판정 기준: `automation_chain_slimming_audit_2026-06-02.{json,md}`가 wrapper 실행 단계를 `core_daily`, `change_triggered`, `manual_or_weekly`, `deprecated_candidate`와 축소 후보로 분류하고 모든 slimming candidate/workorder가 `runtime_effect=false`, `allowed_runtime_apply=false`를 유지하는지 확인한다.
-  - 금지: audit 결과를 즉시 wrapper 기본값 변경, runtime threshold apply, provider/bot/cap 변경으로 사용하지 않는다.
-  - 다음 액션: 중복 refresh, rolling/MTD full recompute, deep audit trigger 전환 후보가 있으면 별도 code-improvement workorder로 분리한다.
 
 - [ ] `[RarePositiveBucketArmWatch0602] rare-positive 스캘핑 parent bucket 및 스윙 top arm 재등장 여부 확인` (`Due: 2026-06-02`, `Slot: POSTCLOSE`, `TimeWindow: 18:10~18:25`, `Track: ScalpingLogic`)
   - Source: [lifecycle_bucket_discovery_2026-06-01.json](/home/ubuntu/KORStockScan/data/report/lifecycle_bucket_discovery/lifecycle_bucket_discovery_2026-06-01.json), [lifecycle_decision_matrix_2026-06-01.json](/home/ubuntu/KORStockScan/data/report/lifecycle_decision_matrix/lifecycle_decision_matrix_2026-06-01.json), [swing_strategy_discovery_ev_2026-06-01.json](/home/ubuntu/KORStockScan/data/report/swing_strategy_discovery_ev/swing_strategy_discovery_ev_2026-06-01.json), [swing_lifecycle_decision_matrix_2026-06-01.json](/home/ubuntu/KORStockScan/data/report/swing_lifecycle_decision_matrix/swing_lifecycle_decision_matrix_2026-06-01.json)
