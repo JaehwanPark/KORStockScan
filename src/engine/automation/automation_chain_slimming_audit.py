@@ -19,6 +19,11 @@ PREOPEN_SCRIPT = PROJECT_ROOT / "deploy" / "run_threshold_cycle_preopen.sh"
 TRACEABILITY_DOC = PROJECT_ROOT / "docs" / "report-based-automation-traceability.md"
 
 VALID_PROFILES = {"standard", "aggressive"}
+NO_CHANGE_CLASSIFICATIONS = {
+    "core_daily",
+    "dependent_refresh",
+    "mutually_exclusive_static_duplicate",
+}
 FALSE_DEFAULTS = {"false", "0", "off", "none", "no"}
 TRUE_DEFAULTS = {"true", "1", "on", "yes"}
 FORBIDDEN_USES = [
@@ -262,6 +267,7 @@ def _extract_module_calls(script_text: str, wrapper: str, target_date: str) -> l
                 "line_no": index + 1,
                 "producer": module,
                 "module": module,
+                "command_line": line.strip(),
                 "occurrence": occurrence,
                 "default_flag": default_flags[0] if default_flags else None,
                 "default_flags": sorted(dict.fromkeys(default_flags)),
@@ -282,7 +288,12 @@ def _extract_module_calls(script_text: str, wrapper: str, target_date: str) -> l
             }
         )
     for index, line in enumerate(lines):
-        match = re.search(r'^\s*run_threshold_cycle_ev_and_wait\s+"([^"]+)"', line)
+        if not re.search(r"^\s*run_threshold_cycle_ev_and_wait\b", line):
+            continue
+        if re.search(r"^\s*run_threshold_cycle_ev_and_wait\(\)", line):
+            continue
+        invocation = "\n".join(lines[index : min(len(lines), index + 8)])
+        match = re.search(r'"([^"]+)"', invocation)
         if not match:
             continue
         module = "src.engine.threshold_cycle_ev_report"
@@ -296,6 +307,7 @@ def _extract_module_calls(script_text: str, wrapper: str, target_date: str) -> l
                 "line_no": index + 1,
                 "producer": module,
                 "module": module,
+                "command_line": line.strip(),
                 "occurrence": occurrence,
                 "default_flag": None,
                 "required_artifacts": [
@@ -330,6 +342,10 @@ def _classify_call(
             return "duplicate_refresh_candidate", "change_triggered", "interim_verifier_duplicates_final_verifier"
         return "core_daily", "core_daily", "final_fail_closed_postclose_verifier"
     if module_total_counts[module] > 1 and occurrence > 1:
+        if _is_mutually_exclusive_static_duplicate(call):
+            return "mutually_exclusive_static_duplicate", "no_change", "if_else_branch_static_duplicate_not_runtime_duplicate"
+        if _is_dependent_refresh(call):
+            return "dependent_refresh", "no_change", "upstream_dependent_refresh_keep_daily"
         return "duplicate_refresh_candidate", "change_triggered", "same_module_reexecuted_in_wrapper"
     if base == "build_code_improvement_workorder":
         return "side_branch_candidate", "change_triggered", "workorder_generation_can_run_outside_strategy_ev_refresh"
@@ -345,8 +361,24 @@ def _is_triggered_deep_review(base: str) -> bool:
     return any(token in base for token in DEEP_AUDIT_MODULE_TOKENS) or base.endswith("_ai_review") or "ai_deferred_review" in base
 
 
+def _is_mutually_exclusive_static_duplicate(call: dict[str, Any]) -> bool:
+    module = str(call.get("module") or "")
+    return module == "src.engine.swing_strategy_discovery_sim"
+
+
+def _is_dependent_refresh(call: dict[str, Any]) -> bool:
+    module = str(call.get("module") or "")
+    if module == "src.engine.lifecycle_decision_matrix" and call.get("window_policy") != "rolling_or_mtd":
+        return True
+    if module == "src.engine.lifecycle_ai_context":
+        return True
+    return False
+
+
 def _classification_group(classification: str, recommended_mode: str) -> str:
     if classification == "core_daily":
+        return "core_daily"
+    if classification in {"dependent_refresh", "mutually_exclusive_static_duplicate"}:
         return "core_daily"
     if classification == "deprecated_candidate" or recommended_mode == "deprecated_candidate":
         return "deprecated_candidate"
@@ -420,7 +452,7 @@ def _build_inventory(
             "allowed_runtime_apply": call["runtime_authority"] == "preopen_runtime_env_apply_only",
         }
         inventory.append(step)
-        if classification != "core_daily":
+        if classification not in NO_CHANGE_CLASSIFICATIONS:
             candidates.append(
                 {
                     "candidate_id": f"slim_{len(candidates) + 1:03d}",
@@ -497,6 +529,23 @@ def _must_keep_daily(inventory: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 }
             )
     return keep
+
+
+def _protected_refreshes(inventory: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    protected: list[dict[str, Any]] = []
+    for step in inventory:
+        if step.get("classification") in {"dependent_refresh", "mutually_exclusive_static_duplicate"}:
+            protected.append(
+                {
+                    "step_id": step["step_id"],
+                    "producer": step["producer"],
+                    "classification": step["classification"],
+                    "reason": step["classification_reason"],
+                    "runtime_effect": False,
+                    "allowed_runtime_apply": False,
+                }
+            )
+    return protected
 
 
 def _blocked_reductions() -> list[dict[str, Any]]:
@@ -648,6 +697,9 @@ def build_report(target_date: str, profile: str = "standard") -> dict[str, Any]:
                 if key in {"change_triggered_candidate", "triggered_deep_review_candidate"}
             ),
             "duplicate_refresh_candidates": candidate_counts.get("duplicate_refresh_candidate", 0),
+            "true_duplicate_refresh_candidates": candidate_counts.get("duplicate_refresh_candidate", 0),
+            "dependent_refresh_steps": class_counts.get("dependent_refresh", 0),
+            "mutually_exclusive_static_duplicates": class_counts.get("mutually_exclusive_static_duplicate", 0),
             "deprecated_candidates": candidate_group_counts.get("deprecated_candidate", 0),
             "side_branch_candidates": candidate_counts.get("side_branch_candidate", 0),
             "manual_or_weekly_candidates": candidate_counts.get("manual_or_weekly_candidate", 0),
@@ -662,6 +714,7 @@ def build_report(target_date: str, profile: str = "standard") -> dict[str, Any]:
         "step_inventory": inventory,
         "slimming_candidates": candidates,
         "must_keep_daily": _must_keep_daily(inventory),
+        "protected_refreshes": _protected_refreshes(inventory),
         "blocked_reductions": _blocked_reductions(),
         "implementation_workorders": _implementation_workorders(candidates),
     }
@@ -682,6 +735,9 @@ def render_markdown(report: dict[str, Any]) -> str:
         f"- core_count: `{summary.get('core_count')}`",
         f"- change_triggered_candidates: `{summary.get('change_triggered_candidates')}`",
         f"- duplicate_refresh_candidates: `{summary.get('duplicate_refresh_candidates')}`",
+        f"- true_duplicate_refresh_candidates: `{summary.get('true_duplicate_refresh_candidates')}`",
+        f"- dependent_refresh_steps: `{summary.get('dependent_refresh_steps')}`",
+        f"- mutually_exclusive_static_duplicates: `{summary.get('mutually_exclusive_static_duplicates')}`",
         f"- manual_or_weekly_candidates: `{summary.get('manual_or_weekly_candidates')}`",
         f"- deprecated_candidates: `{summary.get('deprecated_candidates')}`",
         f"- estimated_risk: `{summary.get('estimated_risk')}`",
@@ -706,6 +762,11 @@ def render_markdown(report: dict[str, Any]) -> str:
     lines.extend(["", "## Must Keep Daily", "", "| step_id | producer | reason |", "| --- | --- | --- |"])
     for item in report.get("must_keep_daily") or []:
         lines.append(f"| `{item.get('step_id')}` | `{item.get('producer')}` | {item.get('reason')} |")
+    lines.extend(["", "## Protected Refreshes", "", "| step_id | producer | classification | reason |", "| --- | --- | --- | --- |"])
+    for item in report.get("protected_refreshes") or []:
+        lines.append(
+            f"| `{item.get('step_id')}` | `{item.get('producer')}` | `{item.get('classification')}` | {item.get('reason')} |"
+        )
     lines.extend(["", "## Implementation Workorders", "", "| workorder_id | reason | runtime_effect |", "| --- | --- | --- |"])
     for item in report.get("implementation_workorders") or []:
         lines.append(f"| `{item.get('workorder_id')}` | {item.get('reason')} | `{item.get('runtime_effect')}` |")

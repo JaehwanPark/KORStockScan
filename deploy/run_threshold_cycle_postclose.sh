@@ -82,6 +82,7 @@ RUN_RUNTIME_APPLY_BRIDGE="${THRESHOLD_CYCLE_RUN_RUNTIME_APPLY_BRIDGE:-$RUN_LIFEC
 RUN_SCALP_SIM_AUTO_APPROVAL_CONTROL_TOWER="${THRESHOLD_CYCLE_RUN_SCALP_SIM_AUTO_APPROVAL_CONTROL_TOWER:-$RUN_LIFECYCLE_BUCKET_DISCOVERY}"
 RUN_LATENCY_CLASSIFIER_RECOMMENDATION="${THRESHOLD_CYCLE_RUN_LATENCY_CLASSIFIER_RECOMMENDATION:-true}"
 RUN_TUNING_PERFORMANCE_CONTROL_TOWER="${THRESHOLD_CYCLE_RUN_TUNING_PERFORMANCE_CONTROL_TOWER:-true}"
+FORCE_DUPLICATE_REFRESH="${THRESHOLD_CYCLE_FORCE_DUPLICATE_REFRESH:-false}"
 SNAPSHOT_RETENTION_DAYS="${THRESHOLD_CYCLE_SNAPSHOT_RETENTION_DAYS:-7}"
 ARTIFACT_WAIT_SEC="${THRESHOLD_CYCLE_ARTIFACT_WAIT_SEC:-600}"
 ARTIFACT_WAIT_INTERVAL_SEC="${THRESHOLD_CYCLE_ARTIFACT_WAIT_INTERVAL_SEC:-5}"
@@ -556,13 +557,33 @@ PY
 
 run_threshold_cycle_ev_and_wait() {
   local pass_label="$1"
+  shift || true
+  local json_path="$PROJECT_DIR/data/report/threshold_cycle_ev/threshold_cycle_ev_${TARGET_DATE}.json"
+  local md_path="$PROJECT_DIR/data/report/threshold_cycle_ev/threshold_cycle_ev_${TARGET_DATE}.md"
 
   wait_for_postclose_resources "threshold_cycle_ev_${pass_label}"
+  if [ "$FORCE_DUPLICATE_REFRESH" != "true" ] && [ "$FORCE_DUPLICATE_REFRESH" != "1" ] && [ "$#" -gt 0 ] && [ -s "$json_path" ] && [ -s "$md_path" ]; then
+    local source_path=""
+    local source_newer="false"
+    local source_missing="false"
+    for source_path in "$@"; do
+      if [ ! -e "$source_path" ]; then
+        source_missing="true"
+        break
+      fi
+      if [ "$source_path" -nt "$json_path" ] || [ "$source_path" -nt "$md_path" ]; then
+        source_newer="true"
+        break
+      fi
+    done
+    if [ "$source_missing" = "false" ] && [ "$source_newer" = "false" ]; then
+      emit_postclose_marker "[SKIP] threshold-cycle postclose target_date=$TARGET_DATE step=threshold_cycle_ev_${pass_label} reason=duplicate_refresh_fresh force_duplicate_refresh=$FORCE_DUPLICATE_REFRESH"
+      wait_for_report_artifact "$json_path" "$md_path" "threshold_cycle_ev_${pass_label}"
+      return 0
+    fi
+  fi
   run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.threshold_cycle_ev_report --date "$TARGET_DATE"
-  wait_for_report_artifact \
-    "$PROJECT_DIR/data/report/threshold_cycle_ev/threshold_cycle_ev_${TARGET_DATE}.json" \
-    "$PROJECT_DIR/data/report/threshold_cycle_ev/threshold_cycle_ev_${TARGET_DATE}.md" \
-    "threshold_cycle_ev_${pass_label}"
+  wait_for_report_artifact "$json_path" "$md_path" "threshold_cycle_ev_${pass_label}"
 }
 
 next_stage2_checklist_path() {
@@ -1141,7 +1162,10 @@ if [ "$BUILD_CODE_IMPROVEMENT_WORKORDER" = "true" ] || [ "$BUILD_CODE_IMPROVEMEN
     "$PROJECT_DIR/docs/code-improvement-workorders/code_improvement_workorder_${TARGET_DATE}.md" \
     "code_improvement_workorder"
 fi
-run_threshold_cycle_ev_and_wait "post_workorder_refresh"
+run_threshold_cycle_ev_and_wait \
+  "post_workorder_refresh" \
+  "$PROJECT_DIR/data/report/code_improvement_workorder/code_improvement_workorder_${TARGET_DATE}.json" \
+  "$PROJECT_DIR/docs/code-improvement-workorders/code_improvement_workorder_${TARGET_DATE}.md"
 if [ "$RUN_PATTERN_LAB_PROPAGATION_AUDIT" = "true" ] || [ "$RUN_PATTERN_LAB_PROPAGATION_AUDIT" = "1" ]; then
   wait_for_postclose_resources "pattern_lab_propagation_audit"
   run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.pattern_lab_propagation_audit --date "$TARGET_DATE"
@@ -1149,7 +1173,10 @@ if [ "$RUN_PATTERN_LAB_PROPAGATION_AUDIT" = "true" ] || [ "$RUN_PATTERN_LAB_PROP
     "$PROJECT_DIR/data/report/pattern_lab_propagation_audit/pattern_lab_propagation_audit_${TARGET_DATE}.json" \
     "$PROJECT_DIR/data/report/pattern_lab_propagation_audit/pattern_lab_propagation_audit_${TARGET_DATE}.md" \
     "pattern_lab_propagation_audit"
-  run_threshold_cycle_ev_and_wait "post_propagation_audit_refresh"
+  run_threshold_cycle_ev_and_wait \
+    "post_propagation_audit_refresh" \
+    "$PROJECT_DIR/data/report/pattern_lab_propagation_audit/pattern_lab_propagation_audit_${TARGET_DATE}.json" \
+    "$PROJECT_DIR/data/report/pattern_lab_propagation_audit/pattern_lab_propagation_audit_${TARGET_DATE}.md"
 fi
 wait_for_postclose_resources "runtime_approval_summary"
 run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.runtime_approval_summary --date "$TARGET_DATE"

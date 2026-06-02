@@ -8,11 +8,14 @@
 - total_steps: `55`
 - core_count: `9`
 - change_triggered_candidates: `13`
-- duplicate_refresh_candidates: `6`
+- duplicate_refresh_candidates: `3`
+- true_duplicate_refresh_candidates: `3`
+- dependent_refresh_steps: `2`
+- mutually_exclusive_static_duplicates: `1`
 - manual_or_weekly_candidates: `26`
 - deprecated_candidates: `0`
 - estimated_risk: `low`
-- classification_group_counts: `{'core_daily': 9, 'change_triggered': 20, 'manual_or_weekly': 26, 'deprecated_candidate': 0}`
+- classification_group_counts: `{'core_daily': 12, 'change_triggered': 17, 'manual_or_weekly': 26, 'deprecated_candidate': 0}`
 
 ## Slimming Candidates
 
@@ -25,45 +28,42 @@
 | `slim_005` | `src.engine.scalping.microstructure_reaction_context` | `manual_or_weekly_candidate`/manual_or_weekly | `manual_or_weekly` | support_report_not_direct_apply_boundary |
 | `slim_006` | `src.engine.scalp_sim_scale_in_window_approval` | `manual_or_weekly_candidate`/manual_or_weekly | `manual_or_weekly` | support_report_not_direct_apply_boundary |
 | `slim_007` | `src.engine.lifecycle_ai_context` | `manual_or_weekly_candidate`/manual_or_weekly | `manual_or_weekly` | support_report_not_direct_apply_boundary |
-| `slim_008` | `src.engine.lifecycle_decision_matrix` | `duplicate_refresh_candidate`/change_triggered | `change_triggered` | same_module_reexecuted_in_wrapper |
-| `slim_009` | `src.engine.lifecycle_ai_context` | `duplicate_refresh_candidate`/change_triggered | `change_triggered` | same_module_reexecuted_in_wrapper |
+| `slim_008` | `src.engine.lifecycle_bucket_discovery` | `change_triggered_candidate`/change_triggered | `change_triggered` | rolling_or_mtd_full_recompute |
+| `slim_009` | `src.engine.lifecycle_decision_matrix` | `change_triggered_candidate`/change_triggered | `change_triggered` | rolling_or_mtd_full_recompute |
 | `slim_010` | `src.engine.lifecycle_bucket_discovery` | `change_triggered_candidate`/change_triggered | `change_triggered` | rolling_or_mtd_full_recompute |
-| `slim_011` | `src.engine.lifecycle_decision_matrix` | `change_triggered_candidate`/change_triggered | `change_triggered` | rolling_or_mtd_full_recompute |
-| `slim_012` | `src.engine.lifecycle_bucket_discovery` | `change_triggered_candidate`/change_triggered | `change_triggered` | rolling_or_mtd_full_recompute |
-| `slim_013` | `src.engine.latency_classifier_recommendation` | `manual_or_weekly_candidate`/manual_or_weekly | `manual_or_weekly` | support_report_not_direct_apply_boundary |
-| `slim_014` | `src.engine.market_panic_breadth_collector` | `manual_or_weekly_candidate`/manual_or_weekly | `manual_or_weekly` | support_report_not_direct_apply_boundary |
-| `slim_015` | `src.engine.panic_sell_defense_report` | `manual_or_weekly_candidate`/manual_or_weekly | `manual_or_weekly` | support_report_not_direct_apply_boundary |
-| `slim_016` | `src.engine.panic_buying_report` | `manual_or_weekly_candidate`/manual_or_weekly | `manual_or_weekly` | support_report_not_direct_apply_boundary |
-| `slim_017` | `src.engine.openai_ws_stability_report` | `manual_or_weekly_candidate`/manual_or_weekly | `manual_or_weekly` | support_report_not_direct_apply_boundary |
-| `slim_018` | `src.engine.scalp_sim_ai_deferred_review` | `triggered_deep_review_candidate`/change_triggered | `change_triggered` | deep_audit_or_ai_review_should_trigger_on_drift_or_handoff_gap |
-| `slim_019` | `src.engine.swing_strategy_discovery_sim` | `manual_or_weekly_candidate`/manual_or_weekly | `manual_or_weekly` | support_report_not_direct_apply_boundary |
-| `slim_020` | `src.engine.swing_strategy_discovery_sim` | `duplicate_refresh_candidate`/change_triggered | `change_triggered` | same_module_reexecuted_in_wrapper |
-| `slim_021` | `src.engine.swing_strategy_discovery_label_builder` | `manual_or_weekly_candidate`/manual_or_weekly | `manual_or_weekly` | support_report_not_direct_apply_boundary |
-| `slim_022` | `src.engine.swing_strategy_discovery_ev_report` | `manual_or_weekly_candidate`/manual_or_weekly | `manual_or_weekly` | support_report_not_direct_apply_boundary |
-| `slim_023` | `src.engine.swing_lifecycle_decision_matrix` | `manual_or_weekly_candidate`/manual_or_weekly | `manual_or_weekly` | support_report_not_direct_apply_boundary |
-| `slim_024` | `src.engine.swing_lifecycle_bucket_discovery` | `manual_or_weekly_candidate`/manual_or_weekly | `manual_or_weekly` | support_report_not_direct_apply_boundary |
-| `slim_025` | `src.engine.swing_lifecycle_audit` | `manual_or_weekly_candidate`/manual_or_weekly | `manual_or_weekly` | support_report_not_direct_apply_boundary |
-| `slim_026` | `src.engine.scalping_pattern_lab_automation` | `manual_or_weekly_candidate`/manual_or_weekly | `manual_or_weekly` | support_report_not_direct_apply_boundary |
-| `slim_027` | `src.engine.swing_pattern_lab_automation` | `manual_or_weekly_candidate`/manual_or_weekly | `manual_or_weekly` | support_report_not_direct_apply_boundary |
-| `slim_028` | `src.engine.pattern_lab_currentness_audit` | `triggered_deep_review_candidate`/change_triggered | `change_triggered` | deep_audit_or_ai_review_should_trigger_on_drift_or_handoff_gap |
-| `slim_029` | `src.engine.pattern_lab_ai_review` | `triggered_deep_review_candidate`/change_triggered | `change_triggered` | deep_audit_or_ai_review_should_trigger_on_drift_or_handoff_gap |
-| `slim_030` | `src.engine.pipeline_event_verbosity_report` | `manual_or_weekly_candidate`/manual_or_weekly | `manual_or_weekly` | support_report_not_direct_apply_boundary |
-| `slim_031` | `src.engine.observation_source_quality_audit` | `triggered_deep_review_candidate`/change_triggered | `change_triggered` | deep_audit_or_ai_review_should_trigger_on_drift_or_handoff_gap |
-| `slim_032` | `src.engine.codebase_performance_workorder_report` | `triggered_deep_review_candidate`/change_triggered | `change_triggered` | deep_audit_or_ai_review_should_trigger_on_drift_or_handoff_gap |
-| `slim_033` | `src.engine.automation.time_window_regime_counterfactual` | `manual_or_weekly_candidate`/manual_or_weekly | `manual_or_weekly` | support_report_not_direct_apply_boundary |
-| `slim_034` | `src.engine.automation.producer_gap_source_bundle` | `manual_or_weekly_candidate`/manual_or_weekly | `manual_or_weekly` | support_report_not_direct_apply_boundary |
-| `slim_035` | `src.engine.automation.producer_gap_discovery` | `triggered_deep_review_candidate`/change_triggered | `change_triggered` | deep_audit_or_ai_review_should_trigger_on_drift_or_handoff_gap |
-| `slim_036` | `src.engine.automation.stage_hook_workorder_discovery` | `triggered_deep_review_candidate`/change_triggered | `change_triggered` | deep_audit_or_ai_review_should_trigger_on_drift_or_handoff_gap |
-| `slim_037` | `src.engine.automation.stage_hook_runtime_scaffold` | `triggered_deep_review_candidate`/change_triggered | `change_triggered` | deep_audit_or_ai_review_should_trigger_on_drift_or_handoff_gap |
-| `slim_038` | `src.engine.build_code_improvement_workorder` | `side_branch_candidate`/change_triggered | `change_triggered` | workorder_generation_can_run_outside_strategy_ev_refresh |
-| `slim_039` | `src.engine.pattern_lab_propagation_audit` | `triggered_deep_review_candidate`/change_triggered | `change_triggered` | deep_audit_or_ai_review_should_trigger_on_drift_or_handoff_gap |
-| `slim_040` | `src.engine.runtime_apply_gap_audit` | `triggered_deep_review_candidate`/change_triggered | `change_triggered` | deep_audit_or_ai_review_should_trigger_on_drift_or_handoff_gap |
-| `slim_041` | `src.engine.build_next_stage2_checklist` | `manual_or_weekly_candidate`/manual_or_weekly | `manual_or_weekly` | support_report_not_direct_apply_boundary |
-| `slim_042` | `src.engine.verify_threshold_cycle_postclose_chain` | `duplicate_refresh_candidate`/change_triggered | `change_triggered` | interim_verifier_duplicates_final_verifier |
-| `slim_043` | `src.engine.sync_docs_backlog_to_project` | `manual_or_weekly_candidate`/manual_or_weekly | `manual_or_weekly` | support_report_not_direct_apply_boundary |
-| `slim_044` | `src.engine.automation.tuning_performance_control_tower` | `manual_or_weekly_candidate`/manual_or_weekly | `manual_or_weekly` | support_report_not_direct_apply_boundary |
-| `slim_045` | `src.engine.threshold_cycle_ev_report` | `duplicate_refresh_candidate`/change_triggered | `change_triggered` | same_module_reexecuted_in_wrapper |
-| `slim_046` | `src.engine.threshold_cycle_ev_report` | `duplicate_refresh_candidate`/change_triggered | `change_triggered` | same_module_reexecuted_in_wrapper |
+| `slim_011` | `src.engine.latency_classifier_recommendation` | `manual_or_weekly_candidate`/manual_or_weekly | `manual_or_weekly` | support_report_not_direct_apply_boundary |
+| `slim_012` | `src.engine.market_panic_breadth_collector` | `manual_or_weekly_candidate`/manual_or_weekly | `manual_or_weekly` | support_report_not_direct_apply_boundary |
+| `slim_013` | `src.engine.panic_sell_defense_report` | `manual_or_weekly_candidate`/manual_or_weekly | `manual_or_weekly` | support_report_not_direct_apply_boundary |
+| `slim_014` | `src.engine.panic_buying_report` | `manual_or_weekly_candidate`/manual_or_weekly | `manual_or_weekly` | support_report_not_direct_apply_boundary |
+| `slim_015` | `src.engine.openai_ws_stability_report` | `manual_or_weekly_candidate`/manual_or_weekly | `manual_or_weekly` | support_report_not_direct_apply_boundary |
+| `slim_016` | `src.engine.scalp_sim_ai_deferred_review` | `triggered_deep_review_candidate`/change_triggered | `change_triggered` | deep_audit_or_ai_review_should_trigger_on_drift_or_handoff_gap |
+| `slim_017` | `src.engine.swing_strategy_discovery_sim` | `manual_or_weekly_candidate`/manual_or_weekly | `manual_or_weekly` | support_report_not_direct_apply_boundary |
+| `slim_018` | `src.engine.swing_strategy_discovery_label_builder` | `manual_or_weekly_candidate`/manual_or_weekly | `manual_or_weekly` | support_report_not_direct_apply_boundary |
+| `slim_019` | `src.engine.swing_strategy_discovery_ev_report` | `manual_or_weekly_candidate`/manual_or_weekly | `manual_or_weekly` | support_report_not_direct_apply_boundary |
+| `slim_020` | `src.engine.swing_lifecycle_decision_matrix` | `manual_or_weekly_candidate`/manual_or_weekly | `manual_or_weekly` | support_report_not_direct_apply_boundary |
+| `slim_021` | `src.engine.swing_lifecycle_bucket_discovery` | `manual_or_weekly_candidate`/manual_or_weekly | `manual_or_weekly` | support_report_not_direct_apply_boundary |
+| `slim_022` | `src.engine.swing_lifecycle_audit` | `manual_or_weekly_candidate`/manual_or_weekly | `manual_or_weekly` | support_report_not_direct_apply_boundary |
+| `slim_023` | `src.engine.scalping_pattern_lab_automation` | `manual_or_weekly_candidate`/manual_or_weekly | `manual_or_weekly` | support_report_not_direct_apply_boundary |
+| `slim_024` | `src.engine.swing_pattern_lab_automation` | `manual_or_weekly_candidate`/manual_or_weekly | `manual_or_weekly` | support_report_not_direct_apply_boundary |
+| `slim_025` | `src.engine.pattern_lab_currentness_audit` | `triggered_deep_review_candidate`/change_triggered | `change_triggered` | deep_audit_or_ai_review_should_trigger_on_drift_or_handoff_gap |
+| `slim_026` | `src.engine.pattern_lab_ai_review` | `triggered_deep_review_candidate`/change_triggered | `change_triggered` | deep_audit_or_ai_review_should_trigger_on_drift_or_handoff_gap |
+| `slim_027` | `src.engine.pipeline_event_verbosity_report` | `manual_or_weekly_candidate`/manual_or_weekly | `manual_or_weekly` | support_report_not_direct_apply_boundary |
+| `slim_028` | `src.engine.observation_source_quality_audit` | `triggered_deep_review_candidate`/change_triggered | `change_triggered` | deep_audit_or_ai_review_should_trigger_on_drift_or_handoff_gap |
+| `slim_029` | `src.engine.codebase_performance_workorder_report` | `triggered_deep_review_candidate`/change_triggered | `change_triggered` | deep_audit_or_ai_review_should_trigger_on_drift_or_handoff_gap |
+| `slim_030` | `src.engine.automation.time_window_regime_counterfactual` | `manual_or_weekly_candidate`/manual_or_weekly | `manual_or_weekly` | support_report_not_direct_apply_boundary |
+| `slim_031` | `src.engine.automation.producer_gap_source_bundle` | `manual_or_weekly_candidate`/manual_or_weekly | `manual_or_weekly` | support_report_not_direct_apply_boundary |
+| `slim_032` | `src.engine.automation.producer_gap_discovery` | `triggered_deep_review_candidate`/change_triggered | `change_triggered` | deep_audit_or_ai_review_should_trigger_on_drift_or_handoff_gap |
+| `slim_033` | `src.engine.automation.stage_hook_workorder_discovery` | `triggered_deep_review_candidate`/change_triggered | `change_triggered` | deep_audit_or_ai_review_should_trigger_on_drift_or_handoff_gap |
+| `slim_034` | `src.engine.automation.stage_hook_runtime_scaffold` | `triggered_deep_review_candidate`/change_triggered | `change_triggered` | deep_audit_or_ai_review_should_trigger_on_drift_or_handoff_gap |
+| `slim_035` | `src.engine.build_code_improvement_workorder` | `side_branch_candidate`/change_triggered | `change_triggered` | workorder_generation_can_run_outside_strategy_ev_refresh |
+| `slim_036` | `src.engine.pattern_lab_propagation_audit` | `triggered_deep_review_candidate`/change_triggered | `change_triggered` | deep_audit_or_ai_review_should_trigger_on_drift_or_handoff_gap |
+| `slim_037` | `src.engine.runtime_apply_gap_audit` | `triggered_deep_review_candidate`/change_triggered | `change_triggered` | deep_audit_or_ai_review_should_trigger_on_drift_or_handoff_gap |
+| `slim_038` | `src.engine.build_next_stage2_checklist` | `manual_or_weekly_candidate`/manual_or_weekly | `manual_or_weekly` | support_report_not_direct_apply_boundary |
+| `slim_039` | `src.engine.verify_threshold_cycle_postclose_chain` | `duplicate_refresh_candidate`/change_triggered | `change_triggered` | interim_verifier_duplicates_final_verifier |
+| `slim_040` | `src.engine.sync_docs_backlog_to_project` | `manual_or_weekly_candidate`/manual_or_weekly | `manual_or_weekly` | support_report_not_direct_apply_boundary |
+| `slim_041` | `src.engine.automation.tuning_performance_control_tower` | `manual_or_weekly_candidate`/manual_or_weekly | `manual_or_weekly` | support_report_not_direct_apply_boundary |
+| `slim_042` | `src.engine.threshold_cycle_ev_report` | `duplicate_refresh_candidate`/change_triggered | `change_triggered` | same_module_reexecuted_in_wrapper |
+| `slim_043` | `src.engine.threshold_cycle_ev_report` | `duplicate_refresh_candidate`/change_triggered | `change_triggered` | same_module_reexecuted_in_wrapper |
 
 ## Must Keep Daily
 
@@ -75,6 +75,14 @@
 | `postclose:verify_threshold_cycle_postclose_chain:2` | `src.engine.verify_threshold_cycle_postclose_chain` | final_fail_closed_postclose_verifier |
 | `postclose:threshold_cycle_ev_report:1` | `src.engine.threshold_cycle_ev_report` | direct_apply_or_core_handoff_boundary |
 | `preopen:threshold_cycle_preopen_apply:1` | `src.engine.threshold_cycle_preopen_apply` | direct_apply_or_core_handoff_boundary |
+
+## Protected Refreshes
+
+| step_id | producer | classification | reason |
+| --- | --- | --- | --- |
+| `postclose:lifecycle_decision_matrix:2` | `src.engine.lifecycle_decision_matrix` | `dependent_refresh` | upstream_dependent_refresh_keep_daily |
+| `postclose:lifecycle_ai_context:2` | `src.engine.lifecycle_ai_context` | `dependent_refresh` | upstream_dependent_refresh_keep_daily |
+| `postclose:swing_strategy_discovery_sim:2` | `src.engine.swing_strategy_discovery_sim` | `mutually_exclusive_static_duplicate` | if_else_branch_static_duplicate_not_runtime_duplicate |
 
 ## Implementation Workorders
 

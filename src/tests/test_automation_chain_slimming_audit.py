@@ -1,4 +1,5 @@
 from collections import Counter
+from pathlib import Path
 
 from src.engine.automation import automation_chain_slimming_audit as mod
 
@@ -20,6 +21,27 @@ def test_static_parser_detects_repeated_ev_verifier_and_lifecycle_windows():
         item["producer"] == "src.engine.threshold_cycle_ev_report"
         and item["classification"] == "duplicate_refresh_candidate"
         and item["classification_group"] == "change_triggered"
+        for item in candidates
+    )
+    assert any(
+        item["producer"] == "src.engine.lifecycle_decision_matrix"
+        and item["classification"] == "dependent_refresh"
+        and item["classification_reason"] == "upstream_dependent_refresh_keep_daily"
+        for item in report["step_inventory"]
+    )
+    assert any(
+        item["producer"] == "src.engine.lifecycle_ai_context"
+        and item["classification"] == "dependent_refresh"
+        for item in report["step_inventory"]
+    )
+    assert any(
+        item["producer"] == "src.engine.swing_strategy_discovery_sim"
+        and item["classification"] == "mutually_exclusive_static_duplicate"
+        for item in report["step_inventory"]
+    )
+    assert not any(
+        item["producer"] == "src.engine.swing_strategy_discovery_sim"
+        and item["classification"] == "duplicate_refresh_candidate"
         for item in candidates
     )
     assert any(
@@ -53,7 +75,11 @@ def test_slimming_candidates_and_workorders_are_report_only():
     assert report["allowed_runtime_apply"] is False
     assert "runtime_threshold_apply" in report["forbidden_uses"]
     assert report["summary"]["duplicate_refresh_candidates"] >= 3
+    assert report["summary"]["true_duplicate_refresh_candidates"] == report["summary"]["duplicate_refresh_candidates"]
+    assert report["summary"]["dependent_refresh_steps"] >= 2
+    assert report["summary"]["mutually_exclusive_static_duplicates"] >= 1
     assert "deprecated_candidate" in report["summary"]["classification_group_counts"]
+    assert report["protected_refreshes"]
 
     assert report["slimming_candidates"]
     for item in report["slimming_candidates"]:
@@ -182,3 +208,15 @@ def test_estimated_risk_is_medium_when_status_input_is_missing():
     }
 
     assert mod._estimate_risk(Counter({"core_daily": 9}), True, status_inputs) == "medium"
+
+
+def test_postclose_wrapper_duplicate_refresh_skip_contract_is_static():
+    script = Path("deploy/run_threshold_cycle_postclose.sh").read_text(encoding="utf-8")
+
+    assert 'FORCE_DUPLICATE_REFRESH="${THRESHOLD_CYCLE_FORCE_DUPLICATE_REFRESH:-false}"' in script
+    assert "duplicate_refresh_fresh" in script
+    assert 'run_threshold_cycle_ev_and_wait "pre_workorder"' in script
+    assert "code_improvement_workorder_${TARGET_DATE}.json" in script
+    assert "pattern_lab_propagation_audit_${TARGET_DATE}.json" in script
+    assert "verify_threshold_cycle_postclose_chain --date \"$TARGET_DATE\" --allow-pending-done-marker" in script
+    assert "verify_threshold_cycle_postclose_chain --date \"$TARGET_DATE\"" in script

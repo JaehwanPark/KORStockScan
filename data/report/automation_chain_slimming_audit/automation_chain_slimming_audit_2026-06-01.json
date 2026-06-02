@@ -58,11 +58,11 @@
     "position_cap_release",
     "hard_safety_bypass"
   ],
-  "generated_at": "2026-06-02T09:11:23+09:00",
+  "generated_at": "2026-06-02T09:22:28+09:00",
   "implementation_workorders": [
     {
       "allowed_runtime_apply": false,
-      "candidate_count": 6,
+      "candidate_count": 3,
       "forbidden_uses": [
         "broker_submit",
         "runtime_threshold_apply",
@@ -204,6 +204,32 @@
     }
   ],
   "profile": "standard",
+  "protected_refreshes": [
+    {
+      "allowed_runtime_apply": false,
+      "classification": "dependent_refresh",
+      "producer": "src.engine.lifecycle_decision_matrix",
+      "reason": "upstream_dependent_refresh_keep_daily",
+      "runtime_effect": false,
+      "step_id": "postclose:lifecycle_decision_matrix:2"
+    },
+    {
+      "allowed_runtime_apply": false,
+      "classification": "dependent_refresh",
+      "producer": "src.engine.lifecycle_ai_context",
+      "reason": "upstream_dependent_refresh_keep_daily",
+      "runtime_effect": false,
+      "step_id": "postclose:lifecycle_ai_context:2"
+    },
+    {
+      "allowed_runtime_apply": false,
+      "classification": "mutually_exclusive_static_duplicate",
+      "producer": "src.engine.swing_strategy_discovery_sim",
+      "reason": "if_else_branch_static_duplicate_not_runtime_duplicate",
+      "runtime_effect": false,
+      "step_id": "postclose:swing_strategy_discovery_sim:2"
+    }
+  ],
   "report_type": "automation_chain_slimming_audit",
   "run_defaults": [
     {
@@ -652,44 +678,6 @@
     {
       "allowed_runtime_apply": false,
       "candidate_id": "slim_008",
-      "classification": "duplicate_refresh_candidate",
-      "classification_group": "change_triggered",
-      "forbidden_uses": [
-        "broker_submit",
-        "runtime_threshold_apply",
-        "provider_route_change",
-        "bot_restart_trigger",
-        "position_cap_release",
-        "hard_safety_bypass"
-      ],
-      "producer": "src.engine.lifecycle_decision_matrix",
-      "reason": "same_module_reexecuted_in_wrapper",
-      "recommended_mode": "change_triggered",
-      "runtime_effect": false,
-      "source_step_id": "postclose:lifecycle_decision_matrix:2"
-    },
-    {
-      "allowed_runtime_apply": false,
-      "candidate_id": "slim_009",
-      "classification": "duplicate_refresh_candidate",
-      "classification_group": "change_triggered",
-      "forbidden_uses": [
-        "broker_submit",
-        "runtime_threshold_apply",
-        "provider_route_change",
-        "bot_restart_trigger",
-        "position_cap_release",
-        "hard_safety_bypass"
-      ],
-      "producer": "src.engine.lifecycle_ai_context",
-      "reason": "same_module_reexecuted_in_wrapper",
-      "recommended_mode": "change_triggered",
-      "runtime_effect": false,
-      "source_step_id": "postclose:lifecycle_ai_context:2"
-    },
-    {
-      "allowed_runtime_apply": false,
-      "candidate_id": "slim_010",
       "classification": "change_triggered_candidate",
       "classification_group": "change_triggered",
       "forbidden_uses": [
@@ -708,7 +696,7 @@
     },
     {
       "allowed_runtime_apply": false,
-      "candidate_id": "slim_011",
+      "candidate_id": "slim_009",
       "classification": "change_triggered_candidate",
       "classification_group": "change_triggered",
       "forbidden_uses": [
@@ -727,7 +715,7 @@
     },
     {
       "allowed_runtime_apply": false,
-      "candidate_id": "slim_012",
+      "candidate_id": "slim_010",
       "classification": "change_triggered_candidate",
       "classification_group": "change_triggered",
       "forbidden_uses": [
@@ -746,7 +734,7 @@
     },
     {
       "allowed_runtime_apply": false,
-      "candidate_id": "slim_013",
+      "candidate_id": "slim_011",
       "classification": "manual_or_weekly_candidate",
       "classification_group": "manual_or_weekly",
       "forbidden_uses": [
@@ -765,7 +753,7 @@
     },
     {
       "allowed_runtime_apply": false,
-      "candidate_id": "slim_014",
+      "candidate_id": "slim_012",
       "classification": "manual_or_weekly_candidate",
       "classification_group": "manual_or_weekly",
       "forbidden_uses": [
@@ -784,7 +772,7 @@
     },
     {
       "allowed_runtime_apply": false,
-      "candidate_id": "slim_015",
+      "candidate_id": "slim_013",
       "classification": "manual_or_weekly_candidate",
       "classification_group": "manual_or_weekly",
       "forbidden_uses": [
@@ -803,7 +791,7 @@
     },
     {
       "allowed_runtime_apply": false,
-      "candidate_id": "slim_016",
+      "candidate_id": "slim_014",
       "classification": "manual_or_weekly_candidate",
       "classification_group": "manual_or_weekly",
       "forbidden_uses": [
@@ -822,7 +810,7 @@
     },
     {
       "allowed_runtime_apply": false,
-      "candidate_id": "slim_017",
+      "candidate_id": "slim_015",
       "classification": "manual_or_weekly_candidate",
       "classification_group": "manual_or_weekly",
       "forbidden_uses": [
@@ -841,7 +829,7 @@
     },
     {
       "allowed_runtime_apply": false,
-      "candidate_id": "slim_018",
+      "candidate_id": "slim_016",
       "classification": "triggered_deep_review_candidate",
       "classification_group": "change_triggered",
       "forbidden_uses": [
@@ -860,7 +848,7 @@
     },
     {
       "allowed_runtime_apply": false,
-      "candidate_id": "slim_019",
+      "candidate_id": "slim_017",
       "classification": "manual_or_weekly_candidate",
       "classification_group": "manual_or_weekly",
       "forbidden_uses": [
@@ -879,26 +867,7 @@
     },
     {
       "allowed_runtime_apply": false,
-      "candidate_id": "slim_020",
-      "classification": "duplicate_refresh_candidate",
-      "classification_group": "change_triggered",
-      "forbidden_uses": [
-        "broker_submit",
-        "runtime_threshold_apply",
-        "provider_route_change",
-        "bot_restart_trigger",
-        "position_cap_release",
-        "hard_safety_bypass"
-      ],
-      "producer": "src.engine.swing_strategy_discovery_sim",
-      "reason": "same_module_reexecuted_in_wrapper",
-      "recommended_mode": "change_triggered",
-      "runtime_effect": false,
-      "source_step_id": "postclose:swing_strategy_discovery_sim:2"
-    },
-    {
-      "allowed_runtime_apply": false,
-      "candidate_id": "slim_021",
+      "candidate_id": "slim_018",
       "classification": "manual_or_weekly_candidate",
       "classification_group": "manual_or_weekly",
       "forbidden_uses": [
@@ -917,7 +886,7 @@
     },
     {
       "allowed_runtime_apply": false,
-      "candidate_id": "slim_022",
+      "candidate_id": "slim_019",
       "classification": "manual_or_weekly_candidate",
       "classification_group": "manual_or_weekly",
       "forbidden_uses": [
@@ -936,7 +905,7 @@
     },
     {
       "allowed_runtime_apply": false,
-      "candidate_id": "slim_023",
+      "candidate_id": "slim_020",
       "classification": "manual_or_weekly_candidate",
       "classification_group": "manual_or_weekly",
       "forbidden_uses": [
@@ -955,7 +924,7 @@
     },
     {
       "allowed_runtime_apply": false,
-      "candidate_id": "slim_024",
+      "candidate_id": "slim_021",
       "classification": "manual_or_weekly_candidate",
       "classification_group": "manual_or_weekly",
       "forbidden_uses": [
@@ -974,7 +943,7 @@
     },
     {
       "allowed_runtime_apply": false,
-      "candidate_id": "slim_025",
+      "candidate_id": "slim_022",
       "classification": "manual_or_weekly_candidate",
       "classification_group": "manual_or_weekly",
       "forbidden_uses": [
@@ -993,7 +962,7 @@
     },
     {
       "allowed_runtime_apply": false,
-      "candidate_id": "slim_026",
+      "candidate_id": "slim_023",
       "classification": "manual_or_weekly_candidate",
       "classification_group": "manual_or_weekly",
       "forbidden_uses": [
@@ -1012,7 +981,7 @@
     },
     {
       "allowed_runtime_apply": false,
-      "candidate_id": "slim_027",
+      "candidate_id": "slim_024",
       "classification": "manual_or_weekly_candidate",
       "classification_group": "manual_or_weekly",
       "forbidden_uses": [
@@ -1031,7 +1000,7 @@
     },
     {
       "allowed_runtime_apply": false,
-      "candidate_id": "slim_028",
+      "candidate_id": "slim_025",
       "classification": "triggered_deep_review_candidate",
       "classification_group": "change_triggered",
       "forbidden_uses": [
@@ -1050,7 +1019,7 @@
     },
     {
       "allowed_runtime_apply": false,
-      "candidate_id": "slim_029",
+      "candidate_id": "slim_026",
       "classification": "triggered_deep_review_candidate",
       "classification_group": "change_triggered",
       "forbidden_uses": [
@@ -1069,7 +1038,7 @@
     },
     {
       "allowed_runtime_apply": false,
-      "candidate_id": "slim_030",
+      "candidate_id": "slim_027",
       "classification": "manual_or_weekly_candidate",
       "classification_group": "manual_or_weekly",
       "forbidden_uses": [
@@ -1088,7 +1057,7 @@
     },
     {
       "allowed_runtime_apply": false,
-      "candidate_id": "slim_031",
+      "candidate_id": "slim_028",
       "classification": "triggered_deep_review_candidate",
       "classification_group": "change_triggered",
       "forbidden_uses": [
@@ -1107,7 +1076,7 @@
     },
     {
       "allowed_runtime_apply": false,
-      "candidate_id": "slim_032",
+      "candidate_id": "slim_029",
       "classification": "triggered_deep_review_candidate",
       "classification_group": "change_triggered",
       "forbidden_uses": [
@@ -1126,7 +1095,7 @@
     },
     {
       "allowed_runtime_apply": false,
-      "candidate_id": "slim_033",
+      "candidate_id": "slim_030",
       "classification": "manual_or_weekly_candidate",
       "classification_group": "manual_or_weekly",
       "forbidden_uses": [
@@ -1145,7 +1114,7 @@
     },
     {
       "allowed_runtime_apply": false,
-      "candidate_id": "slim_034",
+      "candidate_id": "slim_031",
       "classification": "manual_or_weekly_candidate",
       "classification_group": "manual_or_weekly",
       "forbidden_uses": [
@@ -1164,7 +1133,7 @@
     },
     {
       "allowed_runtime_apply": false,
-      "candidate_id": "slim_035",
+      "candidate_id": "slim_032",
       "classification": "triggered_deep_review_candidate",
       "classification_group": "change_triggered",
       "forbidden_uses": [
@@ -1183,7 +1152,7 @@
     },
     {
       "allowed_runtime_apply": false,
-      "candidate_id": "slim_036",
+      "candidate_id": "slim_033",
       "classification": "triggered_deep_review_candidate",
       "classification_group": "change_triggered",
       "forbidden_uses": [
@@ -1202,7 +1171,7 @@
     },
     {
       "allowed_runtime_apply": false,
-      "candidate_id": "slim_037",
+      "candidate_id": "slim_034",
       "classification": "triggered_deep_review_candidate",
       "classification_group": "change_triggered",
       "forbidden_uses": [
@@ -1221,7 +1190,7 @@
     },
     {
       "allowed_runtime_apply": false,
-      "candidate_id": "slim_038",
+      "candidate_id": "slim_035",
       "classification": "side_branch_candidate",
       "classification_group": "change_triggered",
       "forbidden_uses": [
@@ -1240,7 +1209,7 @@
     },
     {
       "allowed_runtime_apply": false,
-      "candidate_id": "slim_039",
+      "candidate_id": "slim_036",
       "classification": "triggered_deep_review_candidate",
       "classification_group": "change_triggered",
       "forbidden_uses": [
@@ -1259,7 +1228,7 @@
     },
     {
       "allowed_runtime_apply": false,
-      "candidate_id": "slim_040",
+      "candidate_id": "slim_037",
       "classification": "triggered_deep_review_candidate",
       "classification_group": "change_triggered",
       "forbidden_uses": [
@@ -1278,7 +1247,7 @@
     },
     {
       "allowed_runtime_apply": false,
-      "candidate_id": "slim_041",
+      "candidate_id": "slim_038",
       "classification": "manual_or_weekly_candidate",
       "classification_group": "manual_or_weekly",
       "forbidden_uses": [
@@ -1297,7 +1266,7 @@
     },
     {
       "allowed_runtime_apply": false,
-      "candidate_id": "slim_042",
+      "candidate_id": "slim_039",
       "classification": "duplicate_refresh_candidate",
       "classification_group": "change_triggered",
       "forbidden_uses": [
@@ -1316,7 +1285,7 @@
     },
     {
       "allowed_runtime_apply": false,
-      "candidate_id": "slim_043",
+      "candidate_id": "slim_040",
       "classification": "manual_or_weekly_candidate",
       "classification_group": "manual_or_weekly",
       "forbidden_uses": [
@@ -1335,7 +1304,7 @@
     },
     {
       "allowed_runtime_apply": false,
-      "candidate_id": "slim_044",
+      "candidate_id": "slim_041",
       "classification": "manual_or_weekly_candidate",
       "classification_group": "manual_or_weekly",
       "forbidden_uses": [
@@ -1354,7 +1323,7 @@
     },
     {
       "allowed_runtime_apply": false,
-      "candidate_id": "slim_045",
+      "candidate_id": "slim_042",
       "classification": "duplicate_refresh_candidate",
       "classification_group": "change_triggered",
       "forbidden_uses": [
@@ -1373,7 +1342,7 @@
     },
     {
       "allowed_runtime_apply": false,
-      "candidate_id": "slim_046",
+      "candidate_id": "slim_043",
       "classification": "duplicate_refresh_candidate",
       "classification_group": "change_triggered",
       "forbidden_uses": [
@@ -1404,7 +1373,7 @@
       "default_flag": null,
       "default_flags": [],
       "default_guard_conditions": [],
-      "line_no": 613,
+      "line_no": 634,
       "producer": "src.engine.backfill_threshold_cycle_events",
       "recommended_mode": "core_daily",
       "required_artifact": [],
@@ -1434,7 +1403,7 @@
           ]
         }
       ],
-      "line_no": 654,
+      "line_no": 675,
       "producer": "src.engine.sniper_post_sell_feedback",
       "recommended_mode": "manual_or_weekly",
       "required_artifact": [],
@@ -1464,7 +1433,7 @@
           ]
         }
       ],
-      "line_no": 661,
+      "line_no": 682,
       "producer": "src.engine.scalp_entry_action_decision_matrix",
       "recommended_mode": "manual_or_weekly",
       "required_artifact": [
@@ -1497,7 +1466,7 @@
           ]
         }
       ],
-      "line_no": 669,
+      "line_no": 690,
       "producer": "src.engine.scalp_sim_overnight",
       "recommended_mode": "manual_or_weekly",
       "required_artifact": [
@@ -1530,7 +1499,7 @@
           ]
         }
       ],
-      "line_no": 677,
+      "line_no": 698,
       "producer": "src.engine.institutional_flow_context",
       "recommended_mode": "manual_or_weekly",
       "required_artifact": [
@@ -1563,7 +1532,7 @@
           ]
         }
       ],
-      "line_no": 685,
+      "line_no": 706,
       "producer": "src.engine.scalping.microstructure_reaction_context",
       "recommended_mode": "manual_or_weekly",
       "required_artifact": [
@@ -1596,7 +1565,7 @@
           ]
         }
       ],
-      "line_no": 696,
+      "line_no": 717,
       "producer": "src.engine.lifecycle_decision_matrix",
       "recommended_mode": "core_daily",
       "required_artifact": [
@@ -1629,7 +1598,7 @@
           ]
         }
       ],
-      "line_no": 701,
+      "line_no": 722,
       "producer": "src.engine.scalp_sim_scale_in_window_approval",
       "recommended_mode": "manual_or_weekly",
       "required_artifact": [
@@ -1668,7 +1637,7 @@
           ]
         }
       ],
-      "line_no": 707,
+      "line_no": 728,
       "producer": "src.engine.lifecycle_ai_context",
       "recommended_mode": "manual_or_weekly",
       "required_artifact": [
@@ -1683,9 +1652,9 @@
     {
       "ai_dependency": false,
       "allowed_runtime_apply": false,
-      "classification": "duplicate_refresh_candidate",
-      "classification_group": "change_triggered",
-      "classification_reason": "same_module_reexecuted_in_wrapper",
+      "classification": "dependent_refresh",
+      "classification_group": "core_daily",
+      "classification_reason": "upstream_dependent_refresh_keep_daily",
       "consumer": "threshold_cycle_ev/runtime_approval_summary/preopen_apply",
       "default_enabled": true,
       "default_enabled_resolution": "resolved_guard_nested_all",
@@ -1708,9 +1677,9 @@
           ]
         }
       ],
-      "line_no": 712,
+      "line_no": 733,
       "producer": "src.engine.lifecycle_decision_matrix",
-      "recommended_mode": "change_triggered",
+      "recommended_mode": "no_change",
       "required_artifact": [
         "data/report/lifecycle_decision_matrix/lifecycle_decision_matrix_{date}.json",
         "data/report/lifecycle_decision_matrix/lifecycle_decision_matrix_{date}.md"
@@ -1723,9 +1692,9 @@
     {
       "ai_dependency": false,
       "allowed_runtime_apply": false,
-      "classification": "duplicate_refresh_candidate",
-      "classification_group": "change_triggered",
-      "classification_reason": "same_module_reexecuted_in_wrapper",
+      "classification": "dependent_refresh",
+      "classification_group": "core_daily",
+      "classification_reason": "upstream_dependent_refresh_keep_daily",
       "consumer": "threshold_cycle_ev/runtime_approval_summary/preopen_apply",
       "default_enabled": true,
       "default_enabled_resolution": "resolved_guard_nested_all",
@@ -1748,9 +1717,9 @@
           ]
         }
       ],
-      "line_no": 717,
+      "line_no": 738,
       "producer": "src.engine.lifecycle_ai_context",
-      "recommended_mode": "change_triggered",
+      "recommended_mode": "no_change",
       "required_artifact": [
         "data/report/lifecycle_ai_context/lifecycle_ai_context_{date}.json",
         "data/report/lifecycle_ai_context/lifecycle_ai_context_{date}.md"
@@ -1781,7 +1750,7 @@
           ]
         }
       ],
-      "line_no": 726,
+      "line_no": 747,
       "producer": "src.engine.lifecycle_bucket_discovery",
       "recommended_mode": "change_triggered",
       "required_artifact": [
@@ -1821,7 +1790,7 @@
           ]
         }
       ],
-      "line_no": 754,
+      "line_no": 775,
       "producer": "src.engine.lifecycle_decision_matrix",
       "recommended_mode": "change_triggered",
       "required_artifact": [
@@ -1861,7 +1830,7 @@
           ]
         }
       ],
-      "line_no": 771,
+      "line_no": 792,
       "producer": "src.engine.lifecycle_bucket_discovery",
       "recommended_mode": "change_triggered",
       "required_artifact": [
@@ -1894,7 +1863,7 @@
           ]
         }
       ],
-      "line_no": 790,
+      "line_no": 811,
       "producer": "src.engine.runtime_apply_bridge",
       "recommended_mode": "core_daily",
       "required_artifact": [
@@ -1927,7 +1896,7 @@
           ]
         }
       ],
-      "line_no": 798,
+      "line_no": 819,
       "producer": "src.engine.scalping.scalp_sim_auto_approval_control_tower",
       "recommended_mode": "core_daily",
       "required_artifact": [
@@ -1960,7 +1929,7 @@
           ]
         }
       ],
-      "line_no": 810,
+      "line_no": 831,
       "producer": "src.engine.latency_classifier_recommendation",
       "recommended_mode": "manual_or_weekly",
       "required_artifact": [
@@ -1997,7 +1966,7 @@
           ]
         }
       ],
-      "line_no": 818,
+      "line_no": 839,
       "producer": "src.engine.market_panic_breadth_collector",
       "recommended_mode": "manual_or_weekly",
       "required_artifact": [
@@ -2029,7 +1998,7 @@
           ]
         }
       ],
-      "line_no": 825,
+      "line_no": 846,
       "producer": "src.engine.panic_sell_defense_report",
       "recommended_mode": "manual_or_weekly",
       "required_artifact": [
@@ -2062,7 +2031,7 @@
           ]
         }
       ],
-      "line_no": 833,
+      "line_no": 854,
       "producer": "src.engine.panic_buying_report",
       "recommended_mode": "manual_or_weekly",
       "required_artifact": [
@@ -2095,7 +2064,7 @@
           ]
         }
       ],
-      "line_no": 842,
+      "line_no": 863,
       "producer": "src.engine.openai_ws_stability_report",
       "recommended_mode": "manual_or_weekly",
       "required_artifact": [
@@ -2119,7 +2088,7 @@
       "default_flag": null,
       "default_flags": [],
       "default_guard_conditions": [],
-      "line_no": 850,
+      "line_no": 871,
       "producer": "src.engine.scalp_sim_ai_deferred_review",
       "recommended_mode": "change_triggered",
       "required_artifact": [
@@ -2143,7 +2112,7 @@
       "default_flag": null,
       "default_flags": [],
       "default_guard_conditions": [],
-      "line_no": 876,
+      "line_no": 897,
       "producer": "src.engine.daily_threshold_cycle_report",
       "recommended_mode": "core_daily",
       "required_artifact": [
@@ -2183,7 +2152,7 @@
           ]
         }
       ],
-      "line_no": 926,
+      "line_no": 947,
       "producer": "src.engine.swing_strategy_discovery_sim",
       "recommended_mode": "manual_or_weekly",
       "required_artifact": [],
@@ -2195,9 +2164,9 @@
     {
       "ai_dependency": false,
       "allowed_runtime_apply": false,
-      "classification": "duplicate_refresh_candidate",
-      "classification_group": "change_triggered",
-      "classification_reason": "same_module_reexecuted_in_wrapper",
+      "classification": "mutually_exclusive_static_duplicate",
+      "classification_group": "core_daily",
+      "classification_reason": "if_else_branch_static_duplicate_not_runtime_duplicate",
       "consumer": "postclose summary consumers",
       "default_enabled": true,
       "default_enabled_resolution": "resolved_guard_nested_all",
@@ -2220,9 +2189,9 @@
           ]
         }
       ],
-      "line_no": 931,
+      "line_no": 952,
       "producer": "src.engine.swing_strategy_discovery_sim",
-      "recommended_mode": "change_triggered",
+      "recommended_mode": "no_change",
       "required_artifact": [
         "data/report/swing_strategy_discovery_sim/swing_strategy_discovery_sim_{date}.json",
         "data/report/swing_strategy_discovery_sim/swing_strategy_discovery_sim_{date}.md"
@@ -2260,7 +2229,7 @@
           ]
         }
       ],
-      "line_no": 938,
+      "line_no": 959,
       "producer": "src.engine.swing_strategy_discovery_label_builder",
       "recommended_mode": "manual_or_weekly",
       "required_artifact": [
@@ -2300,7 +2269,7 @@
           ]
         }
       ],
-      "line_no": 946,
+      "line_no": 967,
       "producer": "src.engine.swing_strategy_discovery_ev_report",
       "recommended_mode": "manual_or_weekly",
       "required_artifact": [
@@ -2340,7 +2309,7 @@
           ]
         }
       ],
-      "line_no": 954,
+      "line_no": 975,
       "producer": "src.engine.swing_lifecycle_decision_matrix",
       "recommended_mode": "manual_or_weekly",
       "required_artifact": [
@@ -2380,7 +2349,7 @@
           ]
         }
       ],
-      "line_no": 962,
+      "line_no": 983,
       "producer": "src.engine.swing_lifecycle_bucket_discovery",
       "recommended_mode": "manual_or_weekly",
       "required_artifact": [
@@ -2413,7 +2382,7 @@
           ]
         }
       ],
-      "line_no": 971,
+      "line_no": 992,
       "producer": "src.engine.swing_lifecycle_audit",
       "recommended_mode": "manual_or_weekly",
       "required_artifact": [
@@ -2441,7 +2410,7 @@
       "default_flag": null,
       "default_flags": [],
       "default_guard_conditions": [],
-      "line_no": 1009,
+      "line_no": 1030,
       "producer": "src.engine.scalping_pattern_lab_automation",
       "recommended_mode": "manual_or_weekly",
       "required_artifact": [
@@ -2465,7 +2434,7 @@
       "default_flag": null,
       "default_flags": [],
       "default_guard_conditions": [],
-      "line_no": 1015,
+      "line_no": 1036,
       "producer": "src.engine.swing_pattern_lab_automation",
       "recommended_mode": "manual_or_weekly",
       "required_artifact": [
@@ -2498,7 +2467,7 @@
           ]
         }
       ],
-      "line_no": 1023,
+      "line_no": 1044,
       "producer": "src.engine.pattern_lab_currentness_audit",
       "recommended_mode": "change_triggered",
       "required_artifact": [
@@ -2531,7 +2500,7 @@
           ]
         }
       ],
-      "line_no": 1031,
+      "line_no": 1052,
       "producer": "src.engine.pattern_lab_ai_review",
       "recommended_mode": "change_triggered",
       "required_artifact": [
@@ -2564,7 +2533,7 @@
           ]
         }
       ],
-      "line_no": 1041,
+      "line_no": 1062,
       "producer": "src.engine.pipeline_event_verbosity_report",
       "recommended_mode": "manual_or_weekly",
       "required_artifact": [
@@ -2597,7 +2566,7 @@
           ]
         }
       ],
-      "line_no": 1049,
+      "line_no": 1070,
       "producer": "src.engine.observation_source_quality_audit",
       "recommended_mode": "change_triggered",
       "required_artifact": [
@@ -2630,7 +2599,7 @@
           ]
         }
       ],
-      "line_no": 1057,
+      "line_no": 1078,
       "producer": "src.engine.codebase_performance_workorder_report",
       "recommended_mode": "change_triggered",
       "required_artifact": [
@@ -2663,7 +2632,7 @@
           ]
         }
       ],
-      "line_no": 1068,
+      "line_no": 1089,
       "producer": "src.engine.automation.time_window_regime_counterfactual",
       "recommended_mode": "manual_or_weekly",
       "required_artifact": [
@@ -2695,7 +2664,7 @@
           ]
         }
       ],
-      "line_no": 1096,
+      "line_no": 1117,
       "producer": "src.engine.automation.producer_gap_source_bundle",
       "recommended_mode": "manual_or_weekly",
       "required_artifact": [
@@ -2728,7 +2697,7 @@
           ]
         }
       ],
-      "line_no": 1103,
+      "line_no": 1124,
       "producer": "src.engine.automation.producer_gap_discovery",
       "recommended_mode": "change_triggered",
       "required_artifact": [
@@ -2761,7 +2730,7 @@
           ]
         }
       ],
-      "line_no": 1115,
+      "line_no": 1136,
       "producer": "src.engine.automation.stage_hook_workorder_discovery",
       "recommended_mode": "change_triggered",
       "required_artifact": [
@@ -2794,7 +2763,7 @@
           ]
         }
       ],
-      "line_no": 1126,
+      "line_no": 1147,
       "producer": "src.engine.automation.stage_hook_runtime_scaffold",
       "recommended_mode": "change_triggered",
       "required_artifact": [
@@ -2827,7 +2796,7 @@
           ]
         }
       ],
-      "line_no": 1136,
+      "line_no": 1157,
       "producer": "src.engine.build_code_improvement_workorder",
       "recommended_mode": "change_triggered",
       "required_artifact": [
@@ -2860,7 +2829,7 @@
           ]
         }
       ],
-      "line_no": 1147,
+      "line_no": 1171,
       "producer": "src.engine.pattern_lab_propagation_audit",
       "recommended_mode": "change_triggered",
       "required_artifact": [
@@ -2884,7 +2853,7 @@
       "default_flag": null,
       "default_flags": [],
       "default_guard_conditions": [],
-      "line_no": 1155,
+      "line_no": 1182,
       "producer": "src.engine.runtime_approval_summary",
       "recommended_mode": "core_daily",
       "required_artifact": [
@@ -2908,7 +2877,7 @@
       "default_flag": null,
       "default_flags": [],
       "default_guard_conditions": [],
-      "line_no": 1161,
+      "line_no": 1188,
       "producer": "src.engine.runtime_apply_gap_audit",
       "recommended_mode": "change_triggered",
       "required_artifact": [
@@ -2932,7 +2901,7 @@
       "default_flag": null,
       "default_flags": [],
       "default_guard_conditions": [],
-      "line_no": 1167,
+      "line_no": 1194,
       "producer": "src.engine.build_next_stage2_checklist",
       "recommended_mode": "manual_or_weekly",
       "required_artifact": [],
@@ -2953,7 +2922,7 @@
       "default_flag": null,
       "default_flags": [],
       "default_guard_conditions": [],
-      "line_no": 1170,
+      "line_no": 1197,
       "producer": "src.engine.verify_threshold_cycle_postclose_chain",
       "recommended_mode": "change_triggered",
       "required_artifact": [
@@ -2977,7 +2946,7 @@
       "default_flag": null,
       "default_flags": [],
       "default_guard_conditions": [],
-      "line_no": 1175,
+      "line_no": 1202,
       "producer": "src.engine.sync_docs_backlog_to_project",
       "recommended_mode": "manual_or_weekly",
       "required_artifact": [],
@@ -2998,7 +2967,7 @@
       "default_flag": null,
       "default_flags": [],
       "default_guard_conditions": [],
-      "line_no": 1180,
+      "line_no": 1207,
       "producer": "src.engine.verify_threshold_cycle_postclose_chain",
       "recommended_mode": "core_daily",
       "required_artifact": [
@@ -3031,7 +3000,7 @@
           ]
         }
       ],
-      "line_no": 1187,
+      "line_no": 1214,
       "producer": "src.engine.automation.tuning_performance_control_tower",
       "recommended_mode": "manual_or_weekly",
       "required_artifact": [
@@ -3055,7 +3024,7 @@
       "default_flag": null,
       "default_flags": [],
       "default_guard_conditions": [],
-      "line_no": 1133,
+      "line_no": 1154,
       "producer": "src.engine.threshold_cycle_ev_report",
       "recommended_mode": "core_daily",
       "required_artifact": [
@@ -3079,7 +3048,7 @@
       "default_flag": null,
       "default_flags": [],
       "default_guard_conditions": [],
-      "line_no": 1144,
+      "line_no": 1165,
       "producer": "src.engine.threshold_cycle_ev_report",
       "recommended_mode": "change_triggered",
       "required_artifact": [
@@ -3103,7 +3072,7 @@
       "default_flag": null,
       "default_flags": [],
       "default_guard_conditions": [],
-      "line_no": 1152,
+      "line_no": 1176,
       "producer": "src.engine.threshold_cycle_ev_report",
       "recommended_mode": "change_triggered",
       "required_artifact": [
@@ -3143,25 +3112,30 @@
     "classification_counts": {
       "change_triggered_candidate": 3,
       "core_daily": 9,
-      "duplicate_refresh_candidate": 6,
+      "dependent_refresh": 2,
+      "duplicate_refresh_candidate": 3,
       "manual_or_weekly_candidate": 26,
+      "mutually_exclusive_static_duplicate": 1,
       "side_branch_candidate": 1,
       "triggered_deep_review_candidate": 10
     },
     "classification_group_counts": {
-      "change_triggered": 20,
-      "core_daily": 9,
+      "change_triggered": 17,
+      "core_daily": 12,
       "deprecated_candidate": 0,
       "manual_or_weekly": 26
     },
     "core_count": 9,
+    "dependent_refresh_steps": 2,
     "deprecated_candidates": 0,
-    "duplicate_refresh_candidates": 6,
+    "duplicate_refresh_candidates": 3,
     "estimated_risk": "low",
     "manual_or_weekly_candidates": 26,
+    "mutually_exclusive_static_duplicates": 1,
     "run_default_count": 34,
     "side_branch_candidates": 1,
-    "total_steps": 55
+    "total_steps": 55,
+    "true_duplicate_refresh_candidates": 3
   },
   "target_date": "2026-06-01"
 }
