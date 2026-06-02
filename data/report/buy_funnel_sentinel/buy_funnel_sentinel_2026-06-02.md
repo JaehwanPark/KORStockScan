@@ -15,20 +15,20 @@
 
 ## 근거
 
-- as_of: `2026-06-02T10:50:04`
+- as_of: `2026-06-02T11:00:03`
 - baseline_date: `2026-06-01`
-- ai_confirmed unique: `98`
-- budget_pass unique: `48`
+- ai_confirmed unique: `102`
+- budget_pass unique: `50`
 - latency_pass unique: `15`
 - submitted unique: `4`
 - holding_started unique: `4`
-- budget/ai unique: `49.0%` (baseline `46.1`)
-- submitted/ai unique: `4.1%` (baseline `5.9`)
+- budget/ai unique: `49.0%` (baseline `46.2`)
+- submitted/ai unique: `3.9%` (baseline `5.8`)
 - critical submit thresholds: `submitted/ai < 20.0%` or `submitted/budget <= 10.0%` (floors: ai>=20, budget>=3)
-- top blockers: `latency_block:latency_state_danger=4695, blocked_swing_score_vpw:-=2892, blocked_strength_momentum:below_strength_base=2021, blocked_overbought:-=1886, blocked_strength_momentum:insufficient_history=1458`
-- upstream blockers: `blocked_ai_score:score_62.0=340, blocked_ai_score:ai_score_50_buy_hold_override=109, first_ai_wait:-=97, blocked_ai_score:score_60.0=59, blocked_ai_score:score_58.0=56`
-- latency blockers: `latency_block:latency_state_danger=4695`
-- price guards: `entry_ai_price_canary_fallback:invalid_price=106, entry_ai_price_canary_fallback:pre_submit_price_guard=26, scale_in_price_guard_block:micro_vwap_bp>60.0=14, entry_ai_price_canary_fallback:above_best_ask=8, entry_ai_price_canary_skip_order:orderbook_micro is bearish with negative OFI and high top_depth_ratio, indicating unfavorable entry conditions=1`
+- top blockers: `latency_block:latency_state_danger=5238, blocked_swing_score_vpw:-=3201, blocked_strength_momentum:below_strength_base=2222, blocked_overbought:-=2124, blocked_strength_momentum:insufficient_history=1582`
+- upstream blockers: `blocked_ai_score:score_62.0=368, blocked_ai_score:ai_score_50_buy_hold_override=127, first_ai_wait:-=100, blocked_ai_score:score_60.0=64, blocked_ai_score:score_58.0=63`
+- latency blockers: `latency_block:latency_state_danger=5238`
+- price guards: `entry_ai_price_canary_fallback:invalid_price=108, entry_ai_price_canary_fallback:pre_submit_price_guard=29, scale_in_price_guard_block:micro_vwap_bp>60.0=14, entry_ai_price_canary_fallback:above_best_ask=8, entry_ai_price_canary_skip_order:orderbook_micro is bearish with negative OFI and high top_depth_ratio, indicating unfavorable entry conditions=1`
 
 ## 금지된 자동변경
 
@@ -46,6 +46,6 @@
 
 ## Window Summary
 
-- `5m`: ai=25, budget=12, latency=3, submitted=1, top=`latency_block:latency_state_danger=294, blocked_swing_score_vpw:-=159, blocked_overbought:-=90`, upstream=`blocked_ai_score:score_62.0=15, blocked_ai_score:score_58.0=6, blocked_ai_score:ai_score_50_buy_hold_override=6`
-- `10m`: ai=32, budget=15, latency=3, submitted=1, top=`latency_block:latency_state_danger=630, blocked_swing_score_vpw:-=363, blocked_overbought:-=222`, upstream=`blocked_ai_score:score_62.0=28, blocked_ai_score:score_58.0=11, blocked_ai_score:ai_score_50_buy_hold_override=9`
-- `30m`: ai=44, budget=20, latency=5, submitted=2, top=`latency_block:latency_state_danger=1957, blocked_swing_score_vpw:-=1209, blocked_overbought:-=842`, upstream=`blocked_ai_score:score_62.0=75, blocked_ai_score:ai_score_50_buy_hold_override=28, blocked_ai_score:score_58.0=21`
+- `5m`: ai=19, budget=7, latency=1, submitted=0, top=`latency_block:latency_state_danger=225, blocked_swing_score_vpw:-=124, blocked_overbought:-=122`, upstream=`blocked_ai_score:score_62.0=12, blocked_ai_score:ai_score_50_buy_hold_override=10, blocked_ai_score:score_60.0=3`
+- `10m`: ai=27, budget=10, latency=2, submitted=0, top=`latency_block:latency_state_danger=543, blocked_swing_score_vpw:-=309, blocked_overbought:-=237`, upstream=`blocked_ai_score:score_62.0=28, blocked_ai_score:ai_score_50_buy_hold_override=18, blocked_ai_score:score_58.0=7`
+- `30m`: ai=45, budget=19, latency=5, submitted=2, top=`latency_block:latency_state_danger=1912, blocked_swing_score_vpw:-=1158, blocked_overbought:-=810`, upstream=`blocked_ai_score:score_62.0=80, blocked_ai_score:ai_score_50_buy_hold_override=34, blocked_ai_score:score_58.0=25`
