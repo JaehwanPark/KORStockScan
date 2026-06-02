@@ -1,0 +1,1590 @@
+{
+  "schema_version": "swing_sim_policy_catalog_v1",
+  "date": "2026-06-01",
+  "generated_at": "2026-06-01T22:40:20+09:00",
+  "decision_authority": "swing_sim_auto_approval_control_tower",
+  "runtime_effect": false,
+  "actual_order_submitted": false,
+  "broker_order_forbidden": true,
+  "allowed_runtime_apply": false,
+  "approved_source_ids": [
+    "bottom_rebound_policy_auto_loop",
+    "swing_runtime_approval",
+    "swing_strategy_discovery_ev"
+  ],
+  "policies": [
+    {
+      "source_id": "bottom_rebound_policy_auto_loop",
+      "policy_kind": "bottom_rebound_candidate_source_policy",
+      "policy_version": "bottom_rebound_swing_source_v2",
+      "max_candidates": 40,
+      "min_backtest_rank_score": 2.5,
+      "min_primary_adjusted_ev_pct": 0.0,
+      "include_bottom_rebound_source": true,
+      "classification_state": "sim_auto_approved",
+      "runtime_effect": false,
+      "allowed_runtime_apply": false,
+      "actual_order_submitted": false,
+      "broker_order_forbidden": true,
+      "forbidden_uses": [
+        "broker_order_submit",
+        "real_order_enable",
+        "one_share_real_canary",
+        "scale_in_real_canary",
+        "provider_route_change",
+        "bot_restart",
+        "runtime_threshold_mutation",
+        "recommendation_history_replacement",
+        "position_cap_release"
+      ]
+    },
+    {
+      "source_id": "swing_runtime_approval",
+      "policy_kind": "swing_runtime_dry_run_pre_final_policy",
+      "approval_id": "swing_runtime_approval:2026-06-01:swing_model_floor",
+      "family": "swing_model_floor",
+      "stage": "selection",
+      "classification_state": "dry_run_auto_apply_ready",
+      "auto_approval_state": "ai_tier2_auto_approved",
+      "tradeoff_score": 0.8554,
+      "sample_count": 3,
+      "sample_floor": 3,
+      "auto_promotion_contract": {
+        "state": "dry_run_auto_apply_ready",
+        "tier2_status": "parsed",
+        "tier2_policy": "fail_closed",
+        "tier2_fail_closed": false,
+        "primary_ev_uplift_threshold_pct": 1.0,
+        "final_user_approval_boundary": "full_live_only"
+      },
+      "runtime_effect": false,
+      "allowed_runtime_apply": false,
+      "actual_order_submitted": false,
+      "broker_order_forbidden": true,
+      "forbidden_uses": [
+        "broker_order_submit",
+        "real_order_enable",
+        "one_share_real_canary",
+        "scale_in_real_canary",
+        "provider_route_change",
+        "bot_restart",
+        "runtime_threshold_mutation",
+        "recommendation_history_replacement",
+        "position_cap_release"
+      ]
+    },
+    {
+      "source_id": "swing_runtime_approval",
+      "policy_kind": "swing_runtime_dry_run_pre_final_policy",
+      "approval_id": "swing_runtime_approval:2026-06-01:swing_market_regime_sensitivity",
+      "family": "swing_market_regime_sensitivity",
+      "stage": "entry",
+      "classification_state": "dry_run_auto_apply_ready",
+      "auto_approval_state": "ai_tier2_auto_approved",
+      "tradeoff_score": 0.8554,
+      "sample_count": 14,
+      "sample_floor": 3,
+      "auto_promotion_contract": {
+        "state": "dry_run_auto_apply_ready",
+        "tier2_status": "parsed",
+        "tier2_policy": "fail_closed",
+        "tier2_fail_closed": false,
+        "primary_ev_uplift_threshold_pct": 1.0,
+        "final_user_approval_boundary": "full_live_only"
+      },
+      "runtime_effect": false,
+      "allowed_runtime_apply": false,
+      "actual_order_submitted": false,
+      "broker_order_forbidden": true,
+      "forbidden_uses": [
+        "broker_order_submit",
+        "real_order_enable",
+        "one_share_real_canary",
+        "scale_in_real_canary",
+        "provider_route_change",
+        "bot_restart",
+        "runtime_threshold_mutation",
+        "recommendation_history_replacement",
+        "position_cap_release"
+      ]
+    },
+    {
+      "source_id": "swing_runtime_approval",
+      "policy_kind": "swing_bounded_real_canary_pre_final_policy",
+      "approval_id": "swing_one_share_real_canary:2026-06-01:phase0",
+      "family": "swing_one_share_real_canary_phase0",
+      "stage": "real_canary_entry",
+      "classification_state": "auto_approved_real_canary",
+      "auto_approval_state": "real_canary_phase0_auto_approved",
+      "tradeoff_score": 0.8554,
+      "sample_count": 17,
+      "sample_floor": 3,
+      "auto_promotion_contract": {
+        "state": "bounded_real_canary_auto_approved",
+        "tier2_status": "parsed",
+        "tier2_policy": "fail_closed",
+        "tier2_fail_closed": false,
+        "primary_ev_uplift_threshold_pct": 1.0,
+        "final_user_approval_boundary": "full_live_only"
+      },
+      "runtime_effect": false,
+      "allowed_runtime_apply": false,
+      "actual_order_submitted": false,
+      "broker_order_forbidden": true,
+      "forbidden_uses": [
+        "broker_order_submit",
+        "real_order_enable",
+        "one_share_real_canary",
+        "scale_in_real_canary",
+        "provider_route_change",
+        "bot_restart",
+        "runtime_threshold_mutation",
+        "recommendation_history_replacement",
+        "position_cap_release"
+      ]
+    }
+  ],
+  "active_arm_priority_policies": [
+    {
+      "priority_policy_id": "active_arm_7f0545b6489cf24c",
+      "priority_arm_id": "arm05_breakout_conf_trailing",
+      "policy_version": "active_swing_arm_priority_v1",
+      "source_id": "swing_strategy_discovery_ev",
+      "source_report_date": "2026-06-01",
+      "priority_source": "surviving_arms",
+      "status": "active",
+      "source_quality_adjusted_ev_pct": 17.090802,
+      "sample_count": 86,
+      "runtime_effect": false,
+      "allowed_runtime_apply": false,
+      "actual_order_submitted": false,
+      "broker_order_forbidden": true,
+      "forbidden_uses": [
+        "broker_order_submit",
+        "real_order_enable",
+        "one_share_real_canary",
+        "scale_in_real_canary",
+        "provider_route_change",
+        "bot_restart",
+        "runtime_threshold_mutation",
+        "recommendation_history_replacement",
+        "position_cap_release"
+      ]
+    }
+  ],
+  "forbidden_uses": [
+    "broker_order_submit",
+    "real_order_enable",
+    "one_share_real_canary",
+    "scale_in_real_canary",
+    "provider_route_change",
+    "bot_restart",
+    "runtime_threshold_mutation",
+    "recommendation_history_replacement",
+    "position_cap_release"
+  ],
+  "hypothesis_observation_plan": {
+    "schema_version": "ldm_hypothesis_observation_plan_v1",
+    "source_report_type": "ldm_hypothesis_discovery",
+    "source_report_date": "2026-06-01",
+    "apply_date": "2026-06-02",
+    "generated_at": "2026-06-02T11:33:31",
+    "decision_authority": "sim_observation_planning",
+    "runtime_effect": false,
+    "live_runtime_effect": false,
+    "allowed_runtime_apply": false,
+    "actual_order_submitted": false,
+    "broker_order_forbidden": true,
+    "allowed_downstream_effects": [
+      "sim_budget_allocation",
+      "contrastive_sample_collection",
+      "source_quality_gap_surfacing",
+      "runtime_effect_false_workorder_candidate"
+    ],
+    "forbidden_uses": [
+      "buy_sell_hold_live_rule",
+      "threshold_apply",
+      "provider_route_change",
+      "bot_restart",
+      "position_cap_release",
+      "broker_order",
+      "hard_safety_bypass"
+    ],
+    "hypotheses": [
+      {
+        "soft_hypothesis_id": "ldm_hypothesis_711caa66c89b3f51",
+        "feature_signature_hash": "711caa66c89b3f51",
+        "rank": 1,
+        "observable_requirements": [
+          {
+            "field": "entry_score_parent",
+            "op": "eq",
+            "value": "score_mid_recovery"
+          },
+          {
+            "field": "entry_source_parent",
+            "op": "eq",
+            "value": "entry_source_wait6579"
+          }
+        ],
+        "evidence_summary": {
+          "sample_weight": 228,
+          "source_quality_adjusted_ev_pct": 2.1509,
+          "repeated_date_count": 2,
+          "downside_rate": 0.0
+        },
+        "contrast_summary": {
+          "group_counts": {
+            "source_quality_blocked": 228
+          },
+          "contrast_coverage_status": "needs_opposite_sample",
+          "contrast_ev_delta_pct": 2.1509
+        },
+        "drift_summary": {
+          "drift_score": 0.5
+        },
+        "observation_budget_hint": {
+          "policy": "sim_observation_budget_hint_v1",
+          "priority": "collect_contrary_sample",
+          "max_daily_share_pct": 15
+        },
+        "live_runtime_effect": false,
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": false,
+        "broker_order_forbidden": true,
+        "forbidden_uses": [
+          "buy_sell_hold_live_rule",
+          "threshold_apply",
+          "provider_route_change",
+          "bot_restart",
+          "position_cap_release",
+          "broker_order",
+          "hard_safety_bypass"
+        ],
+        "allowed_downstream_effects": [
+          "sim_budget_allocation",
+          "contrastive_sample_collection",
+          "source_quality_gap_surfacing",
+          "runtime_effect_false_workorder_candidate"
+        ]
+      },
+      {
+        "soft_hypothesis_id": "ldm_hypothesis_e04e4d815fd8d0f9",
+        "feature_signature_hash": "e04e4d815fd8d0f9",
+        "rank": 2,
+        "observable_requirements": [
+          {
+            "field": "entry_source_parent",
+            "op": "eq",
+            "value": "entry_source_wait6579"
+          }
+        ],
+        "evidence_summary": {
+          "sample_weight": 247,
+          "source_quality_adjusted_ev_pct": 2.0897,
+          "repeated_date_count": 2,
+          "downside_rate": 0.0
+        },
+        "contrast_summary": {
+          "group_counts": {
+            "source_quality_blocked": 247
+          },
+          "contrast_coverage_status": "needs_opposite_sample",
+          "contrast_ev_delta_pct": 2.0897
+        },
+        "drift_summary": {
+          "drift_score": 0.5
+        },
+        "observation_budget_hint": {
+          "policy": "sim_observation_budget_hint_v1",
+          "priority": "collect_contrary_sample",
+          "max_daily_share_pct": 15
+        },
+        "live_runtime_effect": false,
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": false,
+        "broker_order_forbidden": true,
+        "forbidden_uses": [
+          "buy_sell_hold_live_rule",
+          "threshold_apply",
+          "provider_route_change",
+          "bot_restart",
+          "position_cap_release",
+          "broker_order",
+          "hard_safety_bypass"
+        ],
+        "allowed_downstream_effects": [
+          "sim_budget_allocation",
+          "contrastive_sample_collection",
+          "source_quality_gap_surfacing",
+          "runtime_effect_false_workorder_candidate"
+        ]
+      },
+      {
+        "soft_hypothesis_id": "ldm_hypothesis_92dfecb5a05caa64",
+        "feature_signature_hash": "92dfecb5a05caa64",
+        "rank": 3,
+        "observable_requirements": [
+          {
+            "field": "entry_score_parent",
+            "op": "eq",
+            "value": "score_mid_recovery"
+          }
+        ],
+        "evidence_summary": {
+          "sample_weight": 258,
+          "source_quality_adjusted_ev_pct": 1.8561,
+          "repeated_date_count": 2,
+          "downside_rate": 0.0736
+        },
+        "contrast_summary": {
+          "group_counts": {
+            "source_quality_blocked": 258
+          },
+          "contrast_coverage_status": "needs_opposite_sample",
+          "contrast_ev_delta_pct": 1.8561
+        },
+        "drift_summary": {
+          "drift_score": 0.5
+        },
+        "observation_budget_hint": {
+          "policy": "sim_observation_budget_hint_v1",
+          "priority": "collect_contrary_sample",
+          "max_daily_share_pct": 15
+        },
+        "live_runtime_effect": false,
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": false,
+        "broker_order_forbidden": true,
+        "forbidden_uses": [
+          "buy_sell_hold_live_rule",
+          "threshold_apply",
+          "provider_route_change",
+          "bot_restart",
+          "position_cap_release",
+          "broker_order",
+          "hard_safety_bypass"
+        ],
+        "allowed_downstream_effects": [
+          "sim_budget_allocation",
+          "contrastive_sample_collection",
+          "source_quality_gap_surfacing",
+          "runtime_effect_false_workorder_candidate"
+        ]
+      },
+      {
+        "soft_hypothesis_id": "ldm_hypothesis_0f038214d5ac5a30",
+        "feature_signature_hash": "0f038214d5ac5a30",
+        "rank": 4,
+        "observable_requirements": [
+          {
+            "field": "entry_score_parent",
+            "op": "eq",
+            "value": "score_watch_recovery"
+          },
+          {
+            "field": "entry_source_parent",
+            "op": "eq",
+            "value": "entry_source_wait6579"
+          }
+        ],
+        "evidence_summary": {
+          "sample_weight": 19,
+          "source_quality_adjusted_ev_pct": 1.3548,
+          "repeated_date_count": 2,
+          "downside_rate": 0.0
+        },
+        "contrast_summary": {
+          "group_counts": {
+            "source_quality_blocked": 19
+          },
+          "contrast_coverage_status": "needs_opposite_sample",
+          "contrast_ev_delta_pct": 1.3548
+        },
+        "drift_summary": {
+          "drift_score": 0.5
+        },
+        "observation_budget_hint": {
+          "policy": "sim_observation_budget_hint_v1",
+          "priority": "collect_contrary_sample",
+          "max_daily_share_pct": 15
+        },
+        "live_runtime_effect": false,
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": false,
+        "broker_order_forbidden": true,
+        "forbidden_uses": [
+          "buy_sell_hold_live_rule",
+          "threshold_apply",
+          "provider_route_change",
+          "bot_restart",
+          "position_cap_release",
+          "broker_order",
+          "hard_safety_bypass"
+        ],
+        "allowed_downstream_effects": [
+          "sim_budget_allocation",
+          "contrastive_sample_collection",
+          "source_quality_gap_surfacing",
+          "runtime_effect_false_workorder_candidate"
+        ]
+      },
+      {
+        "soft_hypothesis_id": "ldm_hypothesis_e9af2ba90970f01d",
+        "feature_signature_hash": "e9af2ba90970f01d",
+        "rank": 5,
+        "observable_requirements": [
+          {
+            "field": "entry_score_parent",
+            "op": "eq",
+            "value": "score_mid_recovery"
+          },
+          {
+            "field": "entry_source_parent",
+            "op": "eq",
+            "value": "entry_source_blocked_ai_score"
+          },
+          {
+            "field": "submit_quality_parent",
+            "op": "eq",
+            "value": "submit_stale_context_or_quote"
+          }
+        ],
+        "evidence_summary": {
+          "sample_weight": 10,
+          "source_quality_adjusted_ev_pct": -1.6535,
+          "repeated_date_count": 2,
+          "downside_rate": 1.0
+        },
+        "contrast_summary": {
+          "group_counts": {
+            "source_quality_blocked": 10
+          },
+          "contrast_coverage_status": "needs_opposite_sample",
+          "contrast_ev_delta_pct": -1.6535
+        },
+        "drift_summary": {
+          "drift_score": 0.5
+        },
+        "observation_budget_hint": {
+          "policy": "sim_observation_budget_hint_v1",
+          "priority": "collect_contrary_sample",
+          "max_daily_share_pct": 15
+        },
+        "live_runtime_effect": false,
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": false,
+        "broker_order_forbidden": true,
+        "forbidden_uses": [
+          "buy_sell_hold_live_rule",
+          "threshold_apply",
+          "provider_route_change",
+          "bot_restart",
+          "position_cap_release",
+          "broker_order",
+          "hard_safety_bypass"
+        ],
+        "allowed_downstream_effects": [
+          "sim_budget_allocation",
+          "contrastive_sample_collection",
+          "source_quality_gap_surfacing",
+          "runtime_effect_false_workorder_candidate"
+        ]
+      },
+      {
+        "soft_hypothesis_id": "ldm_hypothesis_00d0b765311ad7aa",
+        "feature_signature_hash": "00d0b765311ad7aa",
+        "rank": 6,
+        "observable_requirements": [
+          {
+            "field": "entry_source_parent",
+            "op": "eq",
+            "value": "entry_source_blocked_ai_score"
+          }
+        ],
+        "evidence_summary": {
+          "sample_weight": 141,
+          "source_quality_adjusted_ev_pct": -0.7987,
+          "repeated_date_count": 2,
+          "downside_rate": 0.8511
+        },
+        "contrast_summary": {
+          "group_counts": {
+            "source_quality_blocked": 141
+          },
+          "contrast_coverage_status": "needs_opposite_sample",
+          "contrast_ev_delta_pct": -0.7987
+        },
+        "drift_summary": {
+          "drift_score": 0.5
+        },
+        "observation_budget_hint": {
+          "policy": "sim_observation_budget_hint_v1",
+          "priority": "collect_contrary_sample",
+          "max_daily_share_pct": 15
+        },
+        "live_runtime_effect": false,
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": false,
+        "broker_order_forbidden": true,
+        "forbidden_uses": [
+          "buy_sell_hold_live_rule",
+          "threshold_apply",
+          "provider_route_change",
+          "bot_restart",
+          "position_cap_release",
+          "broker_order",
+          "hard_safety_bypass"
+        ],
+        "allowed_downstream_effects": [
+          "sim_budget_allocation",
+          "contrastive_sample_collection",
+          "source_quality_gap_surfacing",
+          "runtime_effect_false_workorder_candidate"
+        ]
+      },
+      {
+        "soft_hypothesis_id": "ldm_hypothesis_50d2d35987eb3543",
+        "feature_signature_hash": "50d2d35987eb3543",
+        "rank": 7,
+        "observable_requirements": [
+          {
+            "field": "entry_source_parent",
+            "op": "eq",
+            "value": "entry_source_blocked_ai_score"
+          },
+          {
+            "field": "submit_quality_parent",
+            "op": "eq",
+            "value": "submit_stale_context_or_quote"
+          }
+        ],
+        "evidence_summary": {
+          "sample_weight": 121,
+          "source_quality_adjusted_ev_pct": -0.804,
+          "repeated_date_count": 2,
+          "downside_rate": 0.876
+        },
+        "contrast_summary": {
+          "group_counts": {
+            "source_quality_blocked": 121
+          },
+          "contrast_coverage_status": "needs_opposite_sample",
+          "contrast_ev_delta_pct": -0.804
+        },
+        "drift_summary": {
+          "drift_score": 0.5
+        },
+        "observation_budget_hint": {
+          "policy": "sim_observation_budget_hint_v1",
+          "priority": "collect_contrary_sample",
+          "max_daily_share_pct": 15
+        },
+        "live_runtime_effect": false,
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": false,
+        "broker_order_forbidden": true,
+        "forbidden_uses": [
+          "buy_sell_hold_live_rule",
+          "threshold_apply",
+          "provider_route_change",
+          "bot_restart",
+          "position_cap_release",
+          "broker_order",
+          "hard_safety_bypass"
+        ],
+        "allowed_downstream_effects": [
+          "sim_budget_allocation",
+          "contrastive_sample_collection",
+          "source_quality_gap_surfacing",
+          "runtime_effect_false_workorder_candidate"
+        ]
+      },
+      {
+        "soft_hypothesis_id": "ldm_hypothesis_85018f5d185ec23b",
+        "feature_signature_hash": "85018f5d185ec23b",
+        "rank": 8,
+        "observable_requirements": [
+          {
+            "field": "entry_score_parent",
+            "op": "eq",
+            "value": "score_watch_recovery"
+          },
+          {
+            "field": "entry_source_parent",
+            "op": "eq",
+            "value": "entry_source_blocked_ai_score"
+          }
+        ],
+        "evidence_summary": {
+          "sample_weight": 92,
+          "source_quality_adjusted_ev_pct": -0.7679,
+          "repeated_date_count": 2,
+          "downside_rate": 0.8696
+        },
+        "contrast_summary": {
+          "group_counts": {
+            "source_quality_blocked": 92
+          },
+          "contrast_coverage_status": "needs_opposite_sample",
+          "contrast_ev_delta_pct": -0.7679
+        },
+        "drift_summary": {
+          "drift_score": 0.5
+        },
+        "observation_budget_hint": {
+          "policy": "sim_observation_budget_hint_v1",
+          "priority": "collect_contrary_sample",
+          "max_daily_share_pct": 15
+        },
+        "live_runtime_effect": false,
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": false,
+        "broker_order_forbidden": true,
+        "forbidden_uses": [
+          "buy_sell_hold_live_rule",
+          "threshold_apply",
+          "provider_route_change",
+          "bot_restart",
+          "position_cap_release",
+          "broker_order",
+          "hard_safety_bypass"
+        ],
+        "allowed_downstream_effects": [
+          "sim_budget_allocation",
+          "contrastive_sample_collection",
+          "source_quality_gap_surfacing",
+          "runtime_effect_false_workorder_candidate"
+        ]
+      },
+      {
+        "soft_hypothesis_id": "ldm_hypothesis_20d81fcbb624e5df",
+        "feature_signature_hash": "20d81fcbb624e5df",
+        "rank": 9,
+        "observable_requirements": [
+          {
+            "field": "entry_score_parent",
+            "op": "eq",
+            "value": "score_mid_recovery"
+          },
+          {
+            "field": "entry_source_parent",
+            "op": "eq",
+            "value": "entry_source_blocked_ai_score"
+          }
+        ],
+        "evidence_summary": {
+          "sample_weight": 13,
+          "source_quality_adjusted_ev_pct": -1.2978,
+          "repeated_date_count": 2,
+          "downside_rate": 0.7692
+        },
+        "contrast_summary": {
+          "group_counts": {
+            "source_quality_blocked": 13
+          },
+          "contrast_coverage_status": "needs_opposite_sample",
+          "contrast_ev_delta_pct": -1.2978
+        },
+        "drift_summary": {
+          "drift_score": 0.5
+        },
+        "observation_budget_hint": {
+          "policy": "sim_observation_budget_hint_v1",
+          "priority": "collect_contrary_sample",
+          "max_daily_share_pct": 15
+        },
+        "live_runtime_effect": false,
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": false,
+        "broker_order_forbidden": true,
+        "forbidden_uses": [
+          "buy_sell_hold_live_rule",
+          "threshold_apply",
+          "provider_route_change",
+          "bot_restart",
+          "position_cap_release",
+          "broker_order",
+          "hard_safety_bypass"
+        ],
+        "allowed_downstream_effects": [
+          "sim_budget_allocation",
+          "contrastive_sample_collection",
+          "source_quality_gap_surfacing",
+          "runtime_effect_false_workorder_candidate"
+        ]
+      },
+      {
+        "soft_hypothesis_id": "ldm_hypothesis_478e76909248b107",
+        "feature_signature_hash": "478e76909248b107",
+        "rank": 10,
+        "observable_requirements": [
+          {
+            "field": "submit_quality_parent",
+            "op": "eq",
+            "value": "submit_stale_context_or_quote"
+          }
+        ],
+        "evidence_summary": {
+          "sample_weight": 181,
+          "source_quality_adjusted_ev_pct": -0.6472,
+          "repeated_date_count": 2,
+          "downside_rate": 0.7956
+        },
+        "contrast_summary": {
+          "group_counts": {
+            "source_quality_blocked": 181
+          },
+          "contrast_coverage_status": "needs_opposite_sample",
+          "contrast_ev_delta_pct": -0.6472
+        },
+        "drift_summary": {
+          "drift_score": 0.5
+        },
+        "observation_budget_hint": {
+          "policy": "sim_observation_budget_hint_v1",
+          "priority": "collect_contrary_sample",
+          "max_daily_share_pct": 15
+        },
+        "live_runtime_effect": false,
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": false,
+        "broker_order_forbidden": true,
+        "forbidden_uses": [
+          "buy_sell_hold_live_rule",
+          "threshold_apply",
+          "provider_route_change",
+          "bot_restart",
+          "position_cap_release",
+          "broker_order",
+          "hard_safety_bypass"
+        ],
+        "allowed_downstream_effects": [
+          "sim_budget_allocation",
+          "contrastive_sample_collection",
+          "source_quality_gap_surfacing",
+          "runtime_effect_false_workorder_candidate"
+        ]
+      },
+      {
+        "soft_hypothesis_id": "ldm_hypothesis_dead5c62e79220e3",
+        "feature_signature_hash": "dead5c62e79220e3",
+        "rank": 11,
+        "observable_requirements": [
+          {
+            "field": "entry_score_parent",
+            "op": "eq",
+            "value": "score_watch_recovery"
+          },
+          {
+            "field": "submit_quality_parent",
+            "op": "eq",
+            "value": "submit_stale_context_or_quote"
+          }
+        ],
+        "evidence_summary": {
+          "sample_weight": 119,
+          "source_quality_adjusted_ev_pct": -0.6395,
+          "repeated_date_count": 2,
+          "downside_rate": 0.8067
+        },
+        "contrast_summary": {
+          "group_counts": {
+            "source_quality_blocked": 119
+          },
+          "contrast_coverage_status": "needs_opposite_sample",
+          "contrast_ev_delta_pct": -0.6395
+        },
+        "drift_summary": {
+          "drift_score": 0.5
+        },
+        "observation_budget_hint": {
+          "policy": "sim_observation_budget_hint_v1",
+          "priority": "collect_contrary_sample",
+          "max_daily_share_pct": 15
+        },
+        "live_runtime_effect": false,
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": false,
+        "broker_order_forbidden": true,
+        "forbidden_uses": [
+          "buy_sell_hold_live_rule",
+          "threshold_apply",
+          "provider_route_change",
+          "bot_restart",
+          "position_cap_release",
+          "broker_order",
+          "hard_safety_bypass"
+        ],
+        "allowed_downstream_effects": [
+          "sim_budget_allocation",
+          "contrastive_sample_collection",
+          "source_quality_gap_surfacing",
+          "runtime_effect_false_workorder_candidate"
+        ]
+      },
+      {
+        "soft_hypothesis_id": "ldm_hypothesis_4c01cbcf7500b64e",
+        "feature_signature_hash": "4c01cbcf7500b64e",
+        "rank": 12,
+        "observable_requirements": [
+          {
+            "field": "entry_score_parent",
+            "op": "eq",
+            "value": "score_mid_recovery"
+          },
+          {
+            "field": "submit_quality_parent",
+            "op": "eq",
+            "value": "submit_stale_context_or_quote"
+          }
+        ],
+        "evidence_summary": {
+          "sample_weight": 21,
+          "source_quality_adjusted_ev_pct": -0.9799,
+          "repeated_date_count": 2,
+          "downside_rate": 0.8571
+        },
+        "contrast_summary": {
+          "group_counts": {
+            "source_quality_blocked": 21
+          },
+          "contrast_coverage_status": "needs_opposite_sample",
+          "contrast_ev_delta_pct": -0.9799
+        },
+        "drift_summary": {
+          "drift_score": 0.5
+        },
+        "observation_budget_hint": {
+          "policy": "sim_observation_budget_hint_v1",
+          "priority": "collect_contrary_sample",
+          "max_daily_share_pct": 15
+        },
+        "live_runtime_effect": false,
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": false,
+        "broker_order_forbidden": true,
+        "forbidden_uses": [
+          "buy_sell_hold_live_rule",
+          "threshold_apply",
+          "provider_route_change",
+          "bot_restart",
+          "position_cap_release",
+          "broker_order",
+          "hard_safety_bypass"
+        ],
+        "allowed_downstream_effects": [
+          "sim_budget_allocation",
+          "contrastive_sample_collection",
+          "source_quality_gap_surfacing",
+          "runtime_effect_false_workorder_candidate"
+        ]
+      },
+      {
+        "soft_hypothesis_id": "ldm_hypothesis_92c955dc7ba13ae2",
+        "feature_signature_hash": "92c955dc7ba13ae2",
+        "rank": 13,
+        "observable_requirements": [
+          {
+            "field": "entry_source_parent",
+            "op": "eq",
+            "value": "entry_source_blocked_ai_score"
+          },
+          {
+            "field": "submit_quality_parent",
+            "op": "eq",
+            "value": "submit_price_or_liquidity_guard_block"
+          }
+        ],
+        "evidence_summary": {
+          "sample_weight": 16,
+          "source_quality_adjusted_ev_pct": -0.7593,
+          "repeated_date_count": 2,
+          "downside_rate": 0.875
+        },
+        "contrast_summary": {
+          "group_counts": {
+            "source_quality_blocked": 16
+          },
+          "contrast_coverage_status": "needs_opposite_sample",
+          "contrast_ev_delta_pct": -0.7593
+        },
+        "drift_summary": {
+          "drift_score": 0.5
+        },
+        "observation_budget_hint": {
+          "policy": "sim_observation_budget_hint_v1",
+          "priority": "collect_contrary_sample",
+          "max_daily_share_pct": 15
+        },
+        "live_runtime_effect": false,
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": false,
+        "broker_order_forbidden": true,
+        "forbidden_uses": [
+          "buy_sell_hold_live_rule",
+          "threshold_apply",
+          "provider_route_change",
+          "bot_restart",
+          "position_cap_release",
+          "broker_order",
+          "hard_safety_bypass"
+        ],
+        "allowed_downstream_effects": [
+          "sim_budget_allocation",
+          "contrastive_sample_collection",
+          "source_quality_gap_surfacing",
+          "runtime_effect_false_workorder_candidate"
+        ]
+      },
+      {
+        "soft_hypothesis_id": "ldm_hypothesis_2e62f914ecc3a758",
+        "feature_signature_hash": "2e62f914ecc3a758",
+        "rank": 14,
+        "observable_requirements": [
+          {
+            "field": "entry_score_parent",
+            "op": "eq",
+            "value": "score_watch_recovery"
+          }
+        ],
+        "evidence_summary": {
+          "sample_weight": 155,
+          "source_quality_adjusted_ev_pct": -0.3783,
+          "repeated_date_count": 2,
+          "downside_rate": 0.6839
+        },
+        "contrast_summary": {
+          "group_counts": {
+            "source_quality_blocked": 155
+          },
+          "contrast_coverage_status": "needs_opposite_sample",
+          "contrast_ev_delta_pct": -0.3783
+        },
+        "drift_summary": {
+          "drift_score": 0.5
+        },
+        "observation_budget_hint": {
+          "policy": "sim_observation_budget_hint_v1",
+          "priority": "collect_contrary_sample",
+          "max_daily_share_pct": 15
+        },
+        "live_runtime_effect": false,
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": false,
+        "broker_order_forbidden": true,
+        "forbidden_uses": [
+          "buy_sell_hold_live_rule",
+          "threshold_apply",
+          "provider_route_change",
+          "bot_restart",
+          "position_cap_release",
+          "broker_order",
+          "hard_safety_bypass"
+        ],
+        "allowed_downstream_effects": [
+          "sim_budget_allocation",
+          "contrastive_sample_collection",
+          "source_quality_gap_surfacing",
+          "runtime_effect_false_workorder_candidate"
+        ]
+      },
+      {
+        "soft_hypothesis_id": "ldm_hypothesis_9173f180adb6918d",
+        "feature_signature_hash": "9173f180adb6918d",
+        "rank": 15,
+        "observable_requirements": [
+          {
+            "field": "submit_quality_parent",
+            "op": "eq",
+            "value": "submit_price_or_liquidity_guard_block"
+          }
+        ],
+        "evidence_summary": {
+          "sample_weight": 21,
+          "source_quality_adjusted_ev_pct": -0.5562,
+          "repeated_date_count": 2,
+          "downside_rate": 0.8095
+        },
+        "contrast_summary": {
+          "group_counts": {
+            "source_quality_blocked": 21
+          },
+          "contrast_coverage_status": "needs_opposite_sample",
+          "contrast_ev_delta_pct": -0.5562
+        },
+        "drift_summary": {
+          "drift_score": 0.5
+        },
+        "observation_budget_hint": {
+          "policy": "sim_observation_budget_hint_v1",
+          "priority": "collect_contrary_sample",
+          "max_daily_share_pct": 15
+        },
+        "live_runtime_effect": false,
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": false,
+        "broker_order_forbidden": true,
+        "forbidden_uses": [
+          "buy_sell_hold_live_rule",
+          "threshold_apply",
+          "provider_route_change",
+          "bot_restart",
+          "position_cap_release",
+          "broker_order",
+          "hard_safety_bypass"
+        ],
+        "allowed_downstream_effects": [
+          "sim_budget_allocation",
+          "contrastive_sample_collection",
+          "source_quality_gap_surfacing",
+          "runtime_effect_false_workorder_candidate"
+        ]
+      },
+      {
+        "soft_hypothesis_id": "ldm_hypothesis_3ecce8b536e6e6a0",
+        "feature_signature_hash": "3ecce8b536e6e6a0",
+        "rank": 16,
+        "observable_requirements": [
+          {
+            "field": "entry_score_parent",
+            "op": "eq",
+            "value": "score_watch_recovery"
+          },
+          {
+            "field": "submit_quality_parent",
+            "op": "eq",
+            "value": "submit_price_or_liquidity_guard_block"
+          }
+        ],
+        "evidence_summary": {
+          "sample_weight": 10,
+          "source_quality_adjusted_ev_pct": -0.6563,
+          "repeated_date_count": 2,
+          "downside_rate": 0.9
+        },
+        "contrast_summary": {
+          "group_counts": {
+            "source_quality_blocked": 10
+          },
+          "contrast_coverage_status": "needs_opposite_sample",
+          "contrast_ev_delta_pct": -0.6563
+        },
+        "drift_summary": {
+          "drift_score": 0.5
+        },
+        "observation_budget_hint": {
+          "policy": "sim_observation_budget_hint_v1",
+          "priority": "collect_contrary_sample",
+          "max_daily_share_pct": 15
+        },
+        "live_runtime_effect": false,
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": false,
+        "broker_order_forbidden": true,
+        "forbidden_uses": [
+          "buy_sell_hold_live_rule",
+          "threshold_apply",
+          "provider_route_change",
+          "bot_restart",
+          "position_cap_release",
+          "broker_order",
+          "hard_safety_bypass"
+        ],
+        "allowed_downstream_effects": [
+          "sim_budget_allocation",
+          "contrastive_sample_collection",
+          "source_quality_gap_surfacing",
+          "runtime_effect_false_workorder_candidate"
+        ]
+      },
+      {
+        "soft_hypothesis_id": "ldm_hypothesis_4782cc3ea9609ffc",
+        "feature_signature_hash": "4782cc3ea9609ffc",
+        "rank": 17,
+        "observable_requirements": [
+          {
+            "field": "entry_score_parent",
+            "op": "eq",
+            "value": "score_watch_recovery"
+          },
+          {
+            "field": "entry_source_parent",
+            "op": "eq",
+            "value": "entry_source_action_decision"
+          },
+          {
+            "field": "submit_quality_parent",
+            "op": "eq",
+            "value": "submit_stale_context_or_quote"
+          }
+        ],
+        "evidence_summary": {
+          "sample_weight": 36,
+          "source_quality_adjusted_ev_pct": -0.3538,
+          "repeated_date_count": 2,
+          "downside_rate": 0.6667
+        },
+        "contrast_summary": {
+          "group_counts": {
+            "source_quality_blocked": 36
+          },
+          "contrast_coverage_status": "needs_opposite_sample",
+          "contrast_ev_delta_pct": -0.3538
+        },
+        "drift_summary": {
+          "drift_score": 0.5
+        },
+        "observation_budget_hint": {
+          "policy": "sim_observation_budget_hint_v1",
+          "priority": "collect_contrary_sample",
+          "max_daily_share_pct": 15
+        },
+        "live_runtime_effect": false,
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": false,
+        "broker_order_forbidden": true,
+        "forbidden_uses": [
+          "buy_sell_hold_live_rule",
+          "threshold_apply",
+          "provider_route_change",
+          "bot_restart",
+          "position_cap_release",
+          "broker_order",
+          "hard_safety_bypass"
+        ],
+        "allowed_downstream_effects": [
+          "sim_budget_allocation",
+          "contrastive_sample_collection",
+          "source_quality_gap_surfacing",
+          "runtime_effect_false_workorder_candidate"
+        ]
+      },
+      {
+        "soft_hypothesis_id": "ldm_hypothesis_97a7db966406e597",
+        "feature_signature_hash": "97a7db966406e597",
+        "rank": 18,
+        "observable_requirements": [
+          {
+            "field": "submit_quality_parent",
+            "op": "eq",
+            "value": "submit_observed_other"
+          }
+        ],
+        "evidence_summary": {
+          "sample_weight": 3,
+          "source_quality_adjusted_ev_pct": -0.8676,
+          "repeated_date_count": 2,
+          "downside_rate": 0.3333
+        },
+        "contrast_summary": {
+          "group_counts": {
+            "source_quality_blocked": 3
+          },
+          "contrast_coverage_status": "needs_opposite_sample",
+          "contrast_ev_delta_pct": -0.8676
+        },
+        "drift_summary": {
+          "drift_score": 0.5
+        },
+        "observation_budget_hint": {
+          "policy": "sim_observation_budget_hint_v1",
+          "priority": "collect_contrary_sample",
+          "max_daily_share_pct": 15
+        },
+        "live_runtime_effect": false,
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": false,
+        "broker_order_forbidden": true,
+        "forbidden_uses": [
+          "buy_sell_hold_live_rule",
+          "threshold_apply",
+          "provider_route_change",
+          "bot_restart",
+          "position_cap_release",
+          "broker_order",
+          "hard_safety_bypass"
+        ],
+        "allowed_downstream_effects": [
+          "sim_budget_allocation",
+          "contrastive_sample_collection",
+          "source_quality_gap_surfacing",
+          "runtime_effect_false_workorder_candidate"
+        ]
+      },
+      {
+        "soft_hypothesis_id": "ldm_hypothesis_6039289bbc789fbf",
+        "feature_signature_hash": "6039289bbc789fbf",
+        "rank": 19,
+        "observable_requirements": [
+          {
+            "field": "entry_score_parent",
+            "op": "eq",
+            "value": "score_mid_recovery"
+          },
+          {
+            "field": "entry_source_parent",
+            "op": "eq",
+            "value": "entry_source_action_decision"
+          }
+        ],
+        "evidence_summary": {
+          "sample_weight": 15,
+          "source_quality_adjusted_ev_pct": -0.403,
+          "repeated_date_count": 2,
+          "downside_rate": 0.6
+        },
+        "contrast_summary": {
+          "group_counts": {
+            "source_quality_blocked": 15
+          },
+          "contrast_coverage_status": "needs_opposite_sample",
+          "contrast_ev_delta_pct": -0.403
+        },
+        "drift_summary": {
+          "drift_score": 0.5
+        },
+        "observation_budget_hint": {
+          "policy": "sim_observation_budget_hint_v1",
+          "priority": "collect_contrary_sample",
+          "max_daily_share_pct": 15
+        },
+        "live_runtime_effect": false,
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": false,
+        "broker_order_forbidden": true,
+        "forbidden_uses": [
+          "buy_sell_hold_live_rule",
+          "threshold_apply",
+          "provider_route_change",
+          "bot_restart",
+          "position_cap_release",
+          "broker_order",
+          "hard_safety_bypass"
+        ],
+        "allowed_downstream_effects": [
+          "sim_budget_allocation",
+          "contrastive_sample_collection",
+          "source_quality_gap_surfacing",
+          "runtime_effect_false_workorder_candidate"
+        ]
+      },
+      {
+        "soft_hypothesis_id": "ldm_hypothesis_e4d1274a5e488d50",
+        "feature_signature_hash": "e4d1274a5e488d50",
+        "rank": 20,
+        "observable_requirements": [
+          {
+            "field": "entry_score_parent",
+            "op": "eq",
+            "value": "score_watch_recovery"
+          },
+          {
+            "field": "entry_source_parent",
+            "op": "eq",
+            "value": "entry_source_action_decision"
+          }
+        ],
+        "evidence_summary": {
+          "sample_weight": 41,
+          "source_quality_adjusted_ev_pct": -0.2835,
+          "repeated_date_count": 2,
+          "downside_rate": 0.6098
+        },
+        "contrast_summary": {
+          "group_counts": {
+            "source_quality_blocked": 41
+          },
+          "contrast_coverage_status": "needs_opposite_sample",
+          "contrast_ev_delta_pct": -0.2835
+        },
+        "drift_summary": {
+          "drift_score": 0.5
+        },
+        "observation_budget_hint": {
+          "policy": "sim_observation_budget_hint_v1",
+          "priority": "collect_contrary_sample",
+          "max_daily_share_pct": 15
+        },
+        "live_runtime_effect": false,
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": false,
+        "broker_order_forbidden": true,
+        "forbidden_uses": [
+          "buy_sell_hold_live_rule",
+          "threshold_apply",
+          "provider_route_change",
+          "bot_restart",
+          "position_cap_release",
+          "broker_order",
+          "hard_safety_bypass"
+        ],
+        "allowed_downstream_effects": [
+          "sim_budget_allocation",
+          "contrastive_sample_collection",
+          "source_quality_gap_surfacing",
+          "runtime_effect_false_workorder_candidate"
+        ]
+      },
+      {
+        "soft_hypothesis_id": "ldm_hypothesis_bd95657855656936",
+        "feature_signature_hash": "bd95657855656936",
+        "rank": 21,
+        "observable_requirements": [
+          {
+            "field": "entry_source_parent",
+            "op": "eq",
+            "value": "entry_source_action_decision"
+          },
+          {
+            "field": "submit_quality_parent",
+            "op": "eq",
+            "value": "submit_stale_context_or_quote"
+          }
+        ],
+        "evidence_summary": {
+          "sample_weight": 52,
+          "source_quality_adjusted_ev_pct": -0.2567,
+          "repeated_date_count": 2,
+          "downside_rate": 0.6154
+        },
+        "contrast_summary": {
+          "group_counts": {
+            "source_quality_blocked": 52
+          },
+          "contrast_coverage_status": "needs_opposite_sample",
+          "contrast_ev_delta_pct": -0.2567
+        },
+        "drift_summary": {
+          "drift_score": 0.5
+        },
+        "observation_budget_hint": {
+          "policy": "sim_observation_budget_hint_v1",
+          "priority": "collect_contrary_sample",
+          "max_daily_share_pct": 15
+        },
+        "live_runtime_effect": false,
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": false,
+        "broker_order_forbidden": true,
+        "forbidden_uses": [
+          "buy_sell_hold_live_rule",
+          "threshold_apply",
+          "provider_route_change",
+          "bot_restart",
+          "position_cap_release",
+          "broker_order",
+          "hard_safety_bypass"
+        ],
+        "allowed_downstream_effects": [
+          "sim_budget_allocation",
+          "contrastive_sample_collection",
+          "source_quality_gap_surfacing",
+          "runtime_effect_false_workorder_candidate"
+        ]
+      },
+      {
+        "soft_hypothesis_id": "ldm_hypothesis_709662b25b3687fb",
+        "feature_signature_hash": "709662b25b3687fb",
+        "rank": 22,
+        "observable_requirements": [
+          {
+            "field": "entry_source_parent",
+            "op": "eq",
+            "value": "entry_source_action_decision"
+          }
+        ],
+        "evidence_summary": {
+          "sample_weight": 63,
+          "source_quality_adjusted_ev_pct": -0.2256,
+          "repeated_date_count": 2,
+          "downside_rate": 0.5397
+        },
+        "contrast_summary": {
+          "group_counts": {
+            "source_quality_blocked": 63
+          },
+          "contrast_coverage_status": "needs_opposite_sample",
+          "contrast_ev_delta_pct": -0.2256
+        },
+        "drift_summary": {
+          "drift_score": 0.5
+        },
+        "observation_budget_hint": {
+          "policy": "sim_observation_budget_hint_v1",
+          "priority": "collect_contrary_sample",
+          "max_daily_share_pct": 15
+        },
+        "live_runtime_effect": false,
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": false,
+        "broker_order_forbidden": true,
+        "forbidden_uses": [
+          "buy_sell_hold_live_rule",
+          "threshold_apply",
+          "provider_route_change",
+          "bot_restart",
+          "position_cap_release",
+          "broker_order",
+          "hard_safety_bypass"
+        ],
+        "allowed_downstream_effects": [
+          "sim_budget_allocation",
+          "contrastive_sample_collection",
+          "source_quality_gap_surfacing",
+          "runtime_effect_false_workorder_candidate"
+        ]
+      },
+      {
+        "soft_hypothesis_id": "ldm_hypothesis_a3f5f9c61b50fd25",
+        "feature_signature_hash": "a3f5f9c61b50fd25",
+        "rank": 23,
+        "observable_requirements": [
+          {
+            "field": "entry_score_parent",
+            "op": "eq",
+            "value": "score_mid_recovery"
+          },
+          {
+            "field": "entry_source_parent",
+            "op": "eq",
+            "value": "entry_source_action_decision"
+          },
+          {
+            "field": "submit_quality_parent",
+            "op": "eq",
+            "value": "submit_stale_context_or_quote"
+          }
+        ],
+        "evidence_summary": {
+          "sample_weight": 11,
+          "source_quality_adjusted_ev_pct": -0.3675,
+          "repeated_date_count": 2,
+          "downside_rate": 0.7273
+        },
+        "contrast_summary": {
+          "group_counts": {
+            "source_quality_blocked": 11
+          },
+          "contrast_coverage_status": "needs_opposite_sample",
+          "contrast_ev_delta_pct": -0.3675
+        },
+        "drift_summary": {
+          "drift_score": 0.5
+        },
+        "observation_budget_hint": {
+          "policy": "sim_observation_budget_hint_v1",
+          "priority": "collect_contrary_sample",
+          "max_daily_share_pct": 15
+        },
+        "live_runtime_effect": false,
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": false,
+        "broker_order_forbidden": true,
+        "forbidden_uses": [
+          "buy_sell_hold_live_rule",
+          "threshold_apply",
+          "provider_route_change",
+          "bot_restart",
+          "position_cap_release",
+          "broker_order",
+          "hard_safety_bypass"
+        ],
+        "allowed_downstream_effects": [
+          "sim_budget_allocation",
+          "contrastive_sample_collection",
+          "source_quality_gap_surfacing",
+          "runtime_effect_false_workorder_candidate"
+        ]
+      },
+      {
+        "soft_hypothesis_id": "ldm_hypothesis_bad086f30cd2ebc0",
+        "feature_signature_hash": "bad086f30cd2ebc0",
+        "rank": 24,
+        "observable_requirements": [
+          {
+            "field": "entry_score_parent",
+            "op": "eq",
+            "value": "score_mid_recovery"
+          },
+          {
+            "field": "submit_quality_parent",
+            "op": "eq",
+            "value": "submit_price_or_liquidity_guard_block"
+          }
+        ],
+        "evidence_summary": {
+          "sample_weight": 3,
+          "source_quality_adjusted_ev_pct": 0.3617,
+          "repeated_date_count": 2,
+          "downside_rate": 0.0
+        },
+        "contrast_summary": {
+          "group_counts": {
+            "source_quality_blocked": 3
+          },
+          "contrast_coverage_status": "needs_opposite_sample",
+          "contrast_ev_delta_pct": 0.3617
+        },
+        "drift_summary": {
+          "drift_score": 0.5
+        },
+        "observation_budget_hint": {
+          "policy": "sim_observation_budget_hint_v1",
+          "priority": "collect_contrary_sample",
+          "max_daily_share_pct": 15
+        },
+        "live_runtime_effect": false,
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": false,
+        "broker_order_forbidden": true,
+        "forbidden_uses": [
+          "buy_sell_hold_live_rule",
+          "threshold_apply",
+          "provider_route_change",
+          "bot_restart",
+          "position_cap_release",
+          "broker_order",
+          "hard_safety_bypass"
+        ],
+        "allowed_downstream_effects": [
+          "sim_budget_allocation",
+          "contrastive_sample_collection",
+          "source_quality_gap_surfacing",
+          "runtime_effect_false_workorder_candidate"
+        ]
+      }
+    ],
+    "hypothesis_count": 24,
+    "catalog_merge": {
+      "merged_at": "2026-06-02T11:33:31",
+      "catalog_path": "/home/ubuntu/KORStockScan/data/threshold_cycle/swing_sim_policies/swing_sim_policy_catalog_2026-06-01.json",
+      "domain": "swing",
+      "catalog_applied_runtime_pending": true
+    }
+  }
+}

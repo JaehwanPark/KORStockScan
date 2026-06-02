@@ -218,6 +218,7 @@ _SCALP_SIM_CANDIDATE_WINDOW_DAILY_CREATED: dict[str, int] = {}
 _SCALP_SIM_CANDIDATE_WINDOW_DAILY_BUCKET_CREATED: dict[tuple[str, str], int] = {}
 _SCALP_SIM_CANDIDATE_WINDOW_DAILY_SOURCE_CREATED: dict[tuple[str, str], int] = {}
 _SCALP_SIM_CANDIDATE_WINDOW_DAILY_ACTIVE_SEED_CREATED: dict[tuple[str, str], int] = {}
+_SCALP_SIM_CANDIDATE_WINDOW_DAILY_HYPOTHESIS_CREATED: dict[tuple[str, str], int] = {}
 _SCALP_SIM_SCALE_IN_WINDOW_DAILY_CREATED: dict[str, int] = {}
 _SCALP_SIM_AI_CALL_TIMES: list[float] = []
 _SCALP_SIM_PANIC_DEDUP_LOG_TS: dict[tuple[str, str, int, str], float] = {}
@@ -231,6 +232,7 @@ _SCALP_SIM_AUTO_POLICY_CACHE: dict[str, object] = {
     "rows_by_bucket_id": {},
     "active_seeds": [],
     "active_seeds_by_prefix": {},
+    "hypotheses": [],
     "approved_row_count": 0,
 }
 _SWING_PROBE_DAILY_CREATED: dict[str, int] = {}
@@ -391,6 +393,68 @@ def _scalp_active_seed_match_fields(
     }
 
 
+def _scalp_hypothesis_candidate_features(*, score_value, source_stage: str | None, fields: dict | None = None) -> dict[str, str]:
+    fields = fields if isinstance(fields, dict) else {}
+    features = {
+        "entry_score_parent": _scalp_score_parent_from_value(score_value),
+        "entry_source_parent": _scalp_entry_source_parent_from_stage(source_stage),
+        "submit_quality_parent": _scalp_submit_quality_parent_from_fields(fields),
+        "source_section": "pipeline_events",
+        "event_stage": str(source_stage or "").strip() or "-",
+    }
+    return {key: value for key, value in features.items() if str(value or "").strip()}
+
+
+def _scalp_hypothesis_matches_requirements(candidate: dict[str, str], requirements: list | tuple) -> bool:
+    if not requirements:
+        return False
+    for requirement in requirements:
+        if not isinstance(requirement, dict):
+            return False
+        field = str(requirement.get("field") or "").strip()
+        op = str(requirement.get("op") or "eq").strip()
+        value = str(requirement.get("value") or "").strip()
+        candidate_value = str(candidate.get(field) or "").strip()
+        if not field or not value:
+            return False
+        if op in {"eq", "bin_eq"}:
+            if candidate_value != value:
+                return False
+        else:
+            return False
+    return True
+
+
+def _scalp_hypothesis_match_fields(*, score_value, source_stage: str | None, fields: dict | None = None) -> dict:
+    cache = _load_scalp_sim_auto_policy_cache()
+    hypotheses = cache.get("hypotheses") if isinstance(cache.get("hypotheses"), list) else []
+    candidate = _scalp_hypothesis_candidate_features(score_value=score_value, source_stage=source_stage, fields=fields)
+    for hypothesis in hypotheses:
+        if not isinstance(hypothesis, dict):
+            continue
+        if _scalp_hypothesis_matches_requirements(candidate, hypothesis.get("observable_requirements") or []):
+            evidence = hypothesis.get("evidence_summary") if isinstance(hypothesis.get("evidence_summary"), dict) else {}
+            budget = (
+                hypothesis.get("observation_budget_hint")
+                if isinstance(hypothesis.get("observation_budget_hint"), dict)
+                else {}
+            )
+            return {
+                "ldm_hypothesis_matched": True,
+                "ldm_hypothesis_id": hypothesis.get("soft_hypothesis_id"),
+                "ldm_hypothesis_rank": hypothesis.get("rank"),
+                "ldm_hypothesis_ev_pct": evidence.get("source_quality_adjusted_ev_pct"),
+                "ldm_hypothesis_sample_weight": evidence.get("sample_weight"),
+                "ldm_hypothesis_budget_policy": budget.get("policy") or "sim_observation_budget_hint_v1",
+                "ldm_hypothesis_candidate_features": json.dumps(candidate, ensure_ascii=True, sort_keys=True),
+                "quota_policy": "ldm_hypothesis_observation_plan_v1",
+            }
+    return {
+        "ldm_hypothesis_matched": False,
+        "ldm_hypothesis_candidate_features": json.dumps(candidate, ensure_ascii=True, sort_keys=True),
+    }
+
+
 def _load_scalp_sim_auto_policy_cache() -> dict:
     enabled = _rule_bool("SCALP_SIM_AUTO_POLICY_ENABLED", False)
     policy_file = _rule_str("SCALP_SIM_AUTO_POLICY_FILE", "").strip()
@@ -407,6 +471,7 @@ def _load_scalp_sim_auto_policy_cache() -> dict:
                 "rows_by_bucket_id": {},
                 "active_seeds": [],
                 "active_seeds_by_prefix": {},
+                "hypotheses": [],
                 "approved_row_count": 0,
             }
         )
@@ -423,6 +488,7 @@ def _load_scalp_sim_auto_policy_cache() -> dict:
                 "rows_by_bucket_id": {},
                 "active_seeds": [],
                 "active_seeds_by_prefix": {},
+                "hypotheses": [],
                 "approved_row_count": 0,
             }
         )
@@ -442,6 +508,7 @@ def _load_scalp_sim_auto_policy_cache() -> dict:
                 "rows_by_bucket_id": {},
                 "active_seeds": [],
                 "active_seeds_by_prefix": {},
+                "hypotheses": [],
                 "approved_row_count": 0,
             }
         )
@@ -467,6 +534,7 @@ def _load_scalp_sim_auto_policy_cache() -> dict:
                 "rows_by_bucket_id": {},
                 "active_seeds": [],
                 "active_seeds_by_prefix": {},
+                "hypotheses": [],
                 "approved_row_count": 0,
             }
         )
@@ -482,6 +550,7 @@ def _load_scalp_sim_auto_policy_cache() -> dict:
     approved_rows: list[dict] = []
     active_seeds: list[dict] = []
     active_seeds_by_prefix: dict[str, dict] = {}
+    hypotheses: list[dict] = []
     for policy in policies:
         if not isinstance(policy, dict) or policy.get("source_id") != "lifecycle_bucket_discovery":
             continue
@@ -512,7 +581,20 @@ def _load_scalp_sim_auto_policy_cache() -> dict:
             relaxed_key = _scalp_active_seed_prefix_key(relaxed_prefix)
             if relaxed_key and relaxed_key not in active_seeds_by_prefix:
                 active_seeds_by_prefix[relaxed_key] = seed
-    if status == "loaded" and not (rows_by_source_bucket_id or rows_by_bucket_id or active_seeds_by_prefix):
+    plan = payload.get("hypothesis_observation_plan") if isinstance(payload.get("hypothesis_observation_plan"), dict) else {}
+    if str(plan.get("schema_version") or "") == "ldm_hypothesis_observation_plan_v1":
+        for hypothesis in plan.get("hypotheses") or []:
+            if not isinstance(hypothesis, dict):
+                continue
+            if (
+                hypothesis.get("runtime_effect") is False
+                and hypothesis.get("allowed_runtime_apply") is False
+                and hypothesis.get("actual_order_submitted") is False
+                and hypothesis.get("broker_order_forbidden") is True
+                and hypothesis.get("observable_requirements")
+            ):
+                hypotheses.append(hypothesis)
+    if status == "loaded" and not (rows_by_source_bucket_id or rows_by_bucket_id or active_seeds_by_prefix or hypotheses):
         status = "policy_invalid"
     _SCALP_SIM_AUTO_POLICY_CACHE.update(
         {
@@ -525,8 +607,10 @@ def _load_scalp_sim_auto_policy_cache() -> dict:
             "rows_by_bucket_id": rows_by_bucket_id,
             "active_seeds": active_seeds,
             "active_seeds_by_prefix": active_seeds_by_prefix,
+            "hypotheses": hypotheses,
             "approved_row_count": len(rows_by_source_bucket_id) or len(rows_by_bucket_id),
             "active_seed_count": len(active_seeds),
+            "hypothesis_count": len(hypotheses),
         }
     )
     return _SCALP_SIM_AUTO_POLICY_CACHE
@@ -550,6 +634,7 @@ def _scalp_sim_bucket_policy_fields(source: dict | None) -> dict:
         "scalp_sim_auto_policy_version": cache.get("version") or _rule_str("SCALP_SIM_AUTO_POLICY_VERSION", ""),
         "scalp_sim_auto_policy_approved_row_count": cache.get("approved_row_count") or 0,
         "scalp_sim_auto_policy_active_seed_count": cache.get("active_seed_count") or 0,
+        "scalp_sim_auto_policy_hypothesis_count": cache.get("hypothesis_count") or 0,
         "bucket_directed_sim_probe": False,
         "lifecycle_bucket_match_status": status,
     }
@@ -2905,6 +2990,13 @@ def _scalp_sim_candidate_window_context_fields(source: dict | None) -> dict:
         "active_seed_observable_prefix",
         "active_seed_candidate_observable_prefix",
         "active_seed_priority_tier",
+        "ldm_hypothesis_matched",
+        "ldm_hypothesis_id",
+        "ldm_hypothesis_rank",
+        "ldm_hypothesis_ev_pct",
+        "ldm_hypothesis_sample_weight",
+        "ldm_hypothesis_budget_policy",
+        "ldm_hypothesis_candidate_features",
         "quota_policy",
     )
     fields = {key: source.get(key) for key in keys if source.get(key) not in (None, "")}
@@ -3778,7 +3870,32 @@ def _maybe_arm_scalp_sim_candidate_window(
         and (active_seed_total_limit <= 0 or active_seed_total_created < active_seed_total_limit)
         and active_seed_created < 12
     )
-    reserve_source = _is_scalp_sim_candidate_window_reserve_source(source_stage_key) or active_seed_reserve_allowed
+    hypothesis_fields = _scalp_hypothesis_match_fields(
+        score_value=score_value,
+        source_stage=source_stage_key,
+    )
+    hypothesis_id = str(hypothesis_fields.get("ldm_hypothesis_id") or "").strip()
+    hypothesis_matched = bool(hypothesis_fields.get("ldm_hypothesis_matched")) and hypothesis_id
+    hypothesis_total_limit = int(max_daily * 15 / 100) if max_daily > 0 else 0
+    hypothesis_total_created = sum(
+        int(value or 0)
+        for (created_day, _hypothesis_id), value in _SCALP_SIM_CANDIDATE_WINDOW_DAILY_HYPOTHESIS_CREATED.items()
+        if created_day == day_key
+    )
+    hypothesis_created = int(
+        _SCALP_SIM_CANDIDATE_WINDOW_DAILY_HYPOTHESIS_CREATED.get((day_key, hypothesis_id), 0) or 0
+    )
+    hypothesis_reserve_allowed = (
+        hypothesis_matched
+        and not active_seed_reserve_allowed
+        and (hypothesis_total_limit <= 0 or hypothesis_total_created < hypothesis_total_limit)
+        and hypothesis_created < 8
+    )
+    reserve_source = (
+        _is_scalp_sim_candidate_window_reserve_source(source_stage_key)
+        or active_seed_reserve_allowed
+        or hypothesis_reserve_allowed
+    )
     time_bucket_policy = str(
         _rule(
             "SCALP_SIM_CANDIDATE_WINDOW_TIME_BUCKET_POLICY",
@@ -3895,8 +4012,13 @@ def _maybe_arm_scalp_sim_candidate_window(
             "scalp_sim_candidate_window_date": day_key,
             "scalp_sim_candidate_window_time_bucket": time_bucket[0] if time_bucket else "-",
             "scalp_sim_candidate_window_quota_policy": (
-                "active_parent_seed_v1" if active_seed_reserve_allowed else "ldm_sample_v1"
+                "active_parent_seed_v1"
+                if active_seed_reserve_allowed
+                else "ldm_hypothesis_observation_plan_v1"
+                if hypothesis_reserve_allowed
+                else "ldm_sample_v1"
             ),
+            **hypothesis_fields,
             **active_seed_fields,
         },
     )
@@ -3939,6 +4061,11 @@ def _maybe_arm_scalp_sim_candidate_window(
             seed_key = (day_key, active_seed_id)
             _SCALP_SIM_CANDIDATE_WINDOW_DAILY_ACTIVE_SEED_CREATED[seed_key] = (
                 int(_SCALP_SIM_CANDIDATE_WINDOW_DAILY_ACTIVE_SEED_CREATED.get(seed_key, 0) or 0) + 1
+            )
+        if hypothesis_reserve_allowed and hypothesis_id:
+            hypothesis_key = (day_key, hypothesis_id)
+            _SCALP_SIM_CANDIDATE_WINDOW_DAILY_HYPOTHESIS_CREATED[hypothesis_key] = (
+                int(_SCALP_SIM_CANDIDATE_WINDOW_DAILY_HYPOTHESIS_CREATED.get(hypothesis_key, 0) or 0) + 1
             )
     return bool(armed)
 
