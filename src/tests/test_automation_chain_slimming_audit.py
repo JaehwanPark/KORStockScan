@@ -1,5 +1,7 @@
 from collections import Counter
+import os
 from pathlib import Path
+import subprocess
 
 from src.engine.automation import automation_chain_slimming_audit as mod
 
@@ -210,13 +212,85 @@ def test_estimated_risk_is_medium_when_status_input_is_missing():
     assert mod._estimate_risk(Counter({"core_daily": 9}), True, status_inputs) == "medium"
 
 
+def _extract_shell_function(script: str, name: str) -> str:
+    lines = script.splitlines()
+    start = next(index for index, line in enumerate(lines) if line == f"{name}() {{")
+    for index in range(start + 1, len(lines)):
+        if lines[index] == "}":
+            return "\n".join(lines[start : index + 1])
+    raise AssertionError(f"missing shell function end: {name}")
+
+
+def _run_refresh_decision(tmp_path: Path, force: str, source_mode: str) -> str:
+    script = Path("deploy/run_threshold_cycle_postclose.sh").read_text(encoding="utf-8")
+    function_text = _extract_shell_function(script, "threshold_cycle_ev_refresh_decision")
+    json_path = tmp_path / "threshold_cycle_ev.json"
+    md_path = tmp_path / "threshold_cycle_ev.md"
+    source_path = tmp_path / "source.json"
+    json_path.write_text("{}", encoding="utf-8")
+    md_path.write_text("# report\n", encoding="utf-8")
+    os.utime(json_path, (200, 200))
+    os.utime(md_path, (200, 200))
+    args = [str(json_path), str(md_path), force]
+    if source_mode == "older":
+        source_path.write_text("{}", encoding="utf-8")
+        os.utime(source_path, (100, 100))
+        args.append(str(source_path))
+    elif source_mode == "newer":
+        source_path.write_text("{}", encoding="utf-8")
+        os.utime(source_path, (300, 300))
+        args.append(str(source_path))
+    elif source_mode == "missing":
+        args.append(str(source_path))
+
+    proc = subprocess.run(
+        ["bash", "-c", f"{function_text}\nthreshold_cycle_ev_refresh_decision \"$@\"", "bash", *args],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return proc.stdout.strip()
+
+
 def test_postclose_wrapper_duplicate_refresh_skip_contract_is_static():
     script = Path("deploy/run_threshold_cycle_postclose.sh").read_text(encoding="utf-8")
 
     assert 'FORCE_DUPLICATE_REFRESH="${THRESHOLD_CYCLE_FORCE_DUPLICATE_REFRESH:-false}"' in script
+    assert "threshold_cycle_ev_refresh_decision()" in script
     assert "duplicate_refresh_fresh" in script
     assert 'run_threshold_cycle_ev_and_wait "pre_workorder"' in script
     assert "code_improvement_workorder_${TARGET_DATE}.json" in script
     assert "pattern_lab_propagation_audit_${TARGET_DATE}.json" in script
     assert "verify_threshold_cycle_postclose_chain --date \"$TARGET_DATE\" --allow-pending-done-marker" in script
     assert "verify_threshold_cycle_postclose_chain --date \"$TARGET_DATE\"" in script
+
+
+def test_postclose_wrapper_duplicate_refresh_decision_executes_timestamp_cases(tmp_path):
+    assert _run_refresh_decision(tmp_path, "false", "older") == "skip"
+    assert _run_refresh_decision(tmp_path, "false", "newer") == "run"
+    assert _run_refresh_decision(tmp_path, "false", "missing") == "run"
+    assert _run_refresh_decision(tmp_path, "true", "older") == "run"
+    assert _run_refresh_decision(tmp_path, "false", "none") == "run"
+
+
+def test_dependent_refresh_requires_context_not_only_module_name():
+    script = '''
+run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.lifecycle_ai_context --date "$TARGET_DATE" --mode attribution
+run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.lifecycle_ai_context --date "$TARGET_DATE" --mode attribution
+run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.lifecycle_decision_matrix --date "$TARGET_DATE"
+run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.lifecycle_decision_matrix --date "$TARGET_DATE"
+'''
+    calls = mod._extract_module_calls(script, "postclose", "2026-06-02")
+    inventory, candidates = mod._build_inventory(calls, [], "standard")
+
+    assert not any(item["classification"] == "dependent_refresh" for item in inventory)
+    assert any(
+        item["producer"] == "src.engine.lifecycle_ai_context"
+        and item["classification"] == "duplicate_refresh_candidate"
+        for item in candidates
+    )
+    assert any(
+        item["producer"] == "src.engine.lifecycle_decision_matrix"
+        and item["classification"] == "duplicate_refresh_candidate"
+        for item in candidates
+    )

@@ -58,7 +58,7 @@
     "position_cap_release",
     "hard_safety_bypass"
   ],
-  "generated_at": "2026-06-02T09:22:28+09:00",
+  "generated_at": "2026-06-02T09:28:50+09:00",
   "implementation_workorders": [
     {
       "allowed_runtime_apply": false,
@@ -1373,7 +1373,7 @@
       "default_flag": null,
       "default_flags": [],
       "default_guard_conditions": [],
-      "line_no": 634,
+      "line_no": 648,
       "producer": "src.engine.backfill_threshold_cycle_events",
       "recommended_mode": "core_daily",
       "required_artifact": [],
@@ -1403,7 +1403,7 @@
           ]
         }
       ],
-      "line_no": 675,
+      "line_no": 689,
       "producer": "src.engine.sniper_post_sell_feedback",
       "recommended_mode": "manual_or_weekly",
       "required_artifact": [],
@@ -1433,7 +1433,7 @@
           ]
         }
       ],
-      "line_no": 682,
+      "line_no": 696,
       "producer": "src.engine.scalp_entry_action_decision_matrix",
       "recommended_mode": "manual_or_weekly",
       "required_artifact": [
@@ -1466,7 +1466,7 @@
           ]
         }
       ],
-      "line_no": 690,
+      "line_no": 704,
       "producer": "src.engine.scalp_sim_overnight",
       "recommended_mode": "manual_or_weekly",
       "required_artifact": [
@@ -1499,7 +1499,7 @@
           ]
         }
       ],
-      "line_no": 698,
+      "line_no": 712,
       "producer": "src.engine.institutional_flow_context",
       "recommended_mode": "manual_or_weekly",
       "required_artifact": [
@@ -1532,7 +1532,7 @@
           ]
         }
       ],
-      "line_no": 706,
+      "line_no": 720,
       "producer": "src.engine.scalping.microstructure_reaction_context",
       "recommended_mode": "manual_or_weekly",
       "required_artifact": [
@@ -1565,7 +1565,7 @@
           ]
         }
       ],
-      "line_no": 717,
+      "line_no": 731,
       "producer": "src.engine.lifecycle_decision_matrix",
       "recommended_mode": "core_daily",
       "required_artifact": [
@@ -1598,7 +1598,7 @@
           ]
         }
       ],
-      "line_no": 722,
+      "line_no": 736,
       "producer": "src.engine.scalp_sim_scale_in_window_approval",
       "recommended_mode": "manual_or_weekly",
       "required_artifact": [
@@ -1637,7 +1637,7 @@
           ]
         }
       ],
-      "line_no": 728,
+      "line_no": 742,
       "producer": "src.engine.lifecycle_ai_context",
       "recommended_mode": "manual_or_weekly",
       "required_artifact": [
@@ -1677,7 +1677,7 @@
           ]
         }
       ],
-      "line_no": 733,
+      "line_no": 747,
       "producer": "src.engine.lifecycle_decision_matrix",
       "recommended_mode": "no_change",
       "required_artifact": [
@@ -1717,7 +1717,7 @@
           ]
         }
       ],
-      "line_no": 738,
+      "line_no": 752,
       "producer": "src.engine.lifecycle_ai_context",
       "recommended_mode": "no_change",
       "required_artifact": [
@@ -1750,7 +1750,7 @@
           ]
         }
       ],
-      "line_no": 747,
+      "line_no": 761,
       "producer": "src.engine.lifecycle_bucket_discovery",
       "recommended_mode": "change_triggered",
       "required_artifact": [
@@ -1790,7 +1790,7 @@
           ]
         }
       ],
-      "line_no": 775,
+      "line_no": 789,
       "producer": "src.engine.lifecycle_decision_matrix",
       "recommended_mode": "change_triggered",
       "required_artifact": [
@@ -1830,7 +1830,7 @@
           ]
         }
       ],
-      "line_no": 792,
+      "line_no": 806,
       "producer": "src.engine.lifecycle_bucket_discovery",
       "recommended_mode": "change_triggered",
       "required_artifact": [
@@ -1863,7 +1863,7 @@
           ]
         }
       ],
-      "line_no": 811,
+      "line_no": 825,
       "producer": "src.engine.runtime_apply_bridge",
       "recommended_mode": "core_daily",
       "required_artifact": [
@@ -1896,7 +1896,7 @@
           ]
         }
       ],
-      "line_no": 819,
+      "line_no": 833,
       "producer": "src.engine.scalping.scalp_sim_auto_approval_control_tower",
       "recommended_mode": "core_daily",
       "required_artifact": [
@@ -1929,7 +1929,7 @@
           ]
         }
       ],
-      "line_no": 831,
+      "line_no": 845,
       "producer": "src.engine.latency_classifier_recommendation",
       "recommended_mode": "manual_or_weekly",
       "required_artifact": [
@@ -1966,7 +1966,7 @@
           ]
         }
       ],
-      "line_no": 839,
+      "line_no": 853,
       "producer": "src.engine.market_panic_breadth_collector",
       "recommended_mode": "manual_or_weekly",
       "required_artifact": [
@@ -1998,7 +1998,7 @@
           ]
         }
       ],
-      "line_no": 846,
+      "line_no": 860,
       "producer": "src.engine.panic_sell_defense_report",
       "recommended_mode": "manual_or_weekly",
       "required_artifact": [
@@ -2031,7 +2031,7 @@
           ]
         }
       ],
-      "line_no": 854,
+      "line_no": 868,
       "producer": "src.engine.panic_buying_report",
       "recommended_mode": "manual_or_weekly",
       "required_artifact": [
@@ -2064,7 +2064,7 @@
           ]
         }
       ],
-      "line_no": 863,
+      "line_no": 877,
       "producer": "src.engine.openai_ws_stability_report",
       "recommended_mode": "manual_or_weekly",
       "required_artifact": [
@@ -2088,7 +2088,7 @@
       "default_flag": null,
       "default_flags": [],
       "default_guard_conditions": [],
-      "line_no": 871,
+      "line_no": 885,
       "producer": "src.engine.scalp_sim_ai_deferred_review",
       "recommended_mode": "change_triggered",
       "required_artifact": [
@@ -2112,7 +2112,7 @@
       "default_flag": null,
       "default_flags": [],
       "default_guard_conditions": [],
-      "line_no": 897,
+      "line_no": 911,
       "producer": "src.engine.daily_threshold_cycle_report",
       "recommended_mode": "core_daily",
       "required_artifact": [
@@ -2152,7 +2152,7 @@
           ]
         }
       ],
-      "line_no": 947,
+      "line_no": 961,
       "producer": "src.engine.swing_strategy_discovery_sim",
       "recommended_mode": "manual_or_weekly",
       "required_artifact": [],
@@ -2189,7 +2189,7 @@
           ]
         }
       ],
-      "line_no": 952,
+      "line_no": 966,
       "producer": "src.engine.swing_strategy_discovery_sim",
       "recommended_mode": "no_change",
       "required_artifact": [
@@ -2229,7 +2229,7 @@
           ]
         }
       ],
-      "line_no": 959,
+      "line_no": 973,
       "producer": "src.engine.swing_strategy_discovery_label_builder",
       "recommended_mode": "manual_or_weekly",
       "required_artifact": [
@@ -2269,7 +2269,7 @@
           ]
         }
       ],
-      "line_no": 967,
+      "line_no": 981,
       "producer": "src.engine.swing_strategy_discovery_ev_report",
       "recommended_mode": "manual_or_weekly",
       "required_artifact": [
@@ -2309,7 +2309,7 @@
           ]
         }
       ],
-      "line_no": 975,
+      "line_no": 989,
       "producer": "src.engine.swing_lifecycle_decision_matrix",
       "recommended_mode": "manual_or_weekly",
       "required_artifact": [
@@ -2349,7 +2349,7 @@
           ]
         }
       ],
-      "line_no": 983,
+      "line_no": 997,
       "producer": "src.engine.swing_lifecycle_bucket_discovery",
       "recommended_mode": "manual_or_weekly",
       "required_artifact": [
@@ -2382,7 +2382,7 @@
           ]
         }
       ],
-      "line_no": 992,
+      "line_no": 1006,
       "producer": "src.engine.swing_lifecycle_audit",
       "recommended_mode": "manual_or_weekly",
       "required_artifact": [
@@ -2410,7 +2410,7 @@
       "default_flag": null,
       "default_flags": [],
       "default_guard_conditions": [],
-      "line_no": 1030,
+      "line_no": 1044,
       "producer": "src.engine.scalping_pattern_lab_automation",
       "recommended_mode": "manual_or_weekly",
       "required_artifact": [
@@ -2434,7 +2434,7 @@
       "default_flag": null,
       "default_flags": [],
       "default_guard_conditions": [],
-      "line_no": 1036,
+      "line_no": 1050,
       "producer": "src.engine.swing_pattern_lab_automation",
       "recommended_mode": "manual_or_weekly",
       "required_artifact": [
@@ -2467,7 +2467,7 @@
           ]
         }
       ],
-      "line_no": 1044,
+      "line_no": 1058,
       "producer": "src.engine.pattern_lab_currentness_audit",
       "recommended_mode": "change_triggered",
       "required_artifact": [
@@ -2500,7 +2500,7 @@
           ]
         }
       ],
-      "line_no": 1052,
+      "line_no": 1066,
       "producer": "src.engine.pattern_lab_ai_review",
       "recommended_mode": "change_triggered",
       "required_artifact": [
@@ -2533,7 +2533,7 @@
           ]
         }
       ],
-      "line_no": 1062,
+      "line_no": 1076,
       "producer": "src.engine.pipeline_event_verbosity_report",
       "recommended_mode": "manual_or_weekly",
       "required_artifact": [
@@ -2566,7 +2566,7 @@
           ]
         }
       ],
-      "line_no": 1070,
+      "line_no": 1084,
       "producer": "src.engine.observation_source_quality_audit",
       "recommended_mode": "change_triggered",
       "required_artifact": [
@@ -2599,7 +2599,7 @@
           ]
         }
       ],
-      "line_no": 1078,
+      "line_no": 1092,
       "producer": "src.engine.codebase_performance_workorder_report",
       "recommended_mode": "change_triggered",
       "required_artifact": [
@@ -2632,7 +2632,7 @@
           ]
         }
       ],
-      "line_no": 1089,
+      "line_no": 1103,
       "producer": "src.engine.automation.time_window_regime_counterfactual",
       "recommended_mode": "manual_or_weekly",
       "required_artifact": [
@@ -2664,7 +2664,7 @@
           ]
         }
       ],
-      "line_no": 1117,
+      "line_no": 1131,
       "producer": "src.engine.automation.producer_gap_source_bundle",
       "recommended_mode": "manual_or_weekly",
       "required_artifact": [
@@ -2697,7 +2697,7 @@
           ]
         }
       ],
-      "line_no": 1124,
+      "line_no": 1138,
       "producer": "src.engine.automation.producer_gap_discovery",
       "recommended_mode": "change_triggered",
       "required_artifact": [
@@ -2730,7 +2730,7 @@
           ]
         }
       ],
-      "line_no": 1136,
+      "line_no": 1150,
       "producer": "src.engine.automation.stage_hook_workorder_discovery",
       "recommended_mode": "change_triggered",
       "required_artifact": [
@@ -2763,7 +2763,7 @@
           ]
         }
       ],
-      "line_no": 1147,
+      "line_no": 1161,
       "producer": "src.engine.automation.stage_hook_runtime_scaffold",
       "recommended_mode": "change_triggered",
       "required_artifact": [
@@ -2796,7 +2796,7 @@
           ]
         }
       ],
-      "line_no": 1157,
+      "line_no": 1171,
       "producer": "src.engine.build_code_improvement_workorder",
       "recommended_mode": "change_triggered",
       "required_artifact": [
@@ -2829,7 +2829,7 @@
           ]
         }
       ],
-      "line_no": 1171,
+      "line_no": 1185,
       "producer": "src.engine.pattern_lab_propagation_audit",
       "recommended_mode": "change_triggered",
       "required_artifact": [
@@ -2853,7 +2853,7 @@
       "default_flag": null,
       "default_flags": [],
       "default_guard_conditions": [],
-      "line_no": 1182,
+      "line_no": 1196,
       "producer": "src.engine.runtime_approval_summary",
       "recommended_mode": "core_daily",
       "required_artifact": [
@@ -2877,7 +2877,7 @@
       "default_flag": null,
       "default_flags": [],
       "default_guard_conditions": [],
-      "line_no": 1188,
+      "line_no": 1202,
       "producer": "src.engine.runtime_apply_gap_audit",
       "recommended_mode": "change_triggered",
       "required_artifact": [
@@ -2901,7 +2901,7 @@
       "default_flag": null,
       "default_flags": [],
       "default_guard_conditions": [],
-      "line_no": 1194,
+      "line_no": 1208,
       "producer": "src.engine.build_next_stage2_checklist",
       "recommended_mode": "manual_or_weekly",
       "required_artifact": [],
@@ -2922,7 +2922,7 @@
       "default_flag": null,
       "default_flags": [],
       "default_guard_conditions": [],
-      "line_no": 1197,
+      "line_no": 1211,
       "producer": "src.engine.verify_threshold_cycle_postclose_chain",
       "recommended_mode": "change_triggered",
       "required_artifact": [
@@ -2946,7 +2946,7 @@
       "default_flag": null,
       "default_flags": [],
       "default_guard_conditions": [],
-      "line_no": 1202,
+      "line_no": 1216,
       "producer": "src.engine.sync_docs_backlog_to_project",
       "recommended_mode": "manual_or_weekly",
       "required_artifact": [],
@@ -2967,7 +2967,7 @@
       "default_flag": null,
       "default_flags": [],
       "default_guard_conditions": [],
-      "line_no": 1207,
+      "line_no": 1221,
       "producer": "src.engine.verify_threshold_cycle_postclose_chain",
       "recommended_mode": "core_daily",
       "required_artifact": [
@@ -3000,7 +3000,7 @@
           ]
         }
       ],
-      "line_no": 1214,
+      "line_no": 1228,
       "producer": "src.engine.automation.tuning_performance_control_tower",
       "recommended_mode": "manual_or_weekly",
       "required_artifact": [
@@ -3024,7 +3024,7 @@
       "default_flag": null,
       "default_flags": [],
       "default_guard_conditions": [],
-      "line_no": 1154,
+      "line_no": 1168,
       "producer": "src.engine.threshold_cycle_ev_report",
       "recommended_mode": "core_daily",
       "required_artifact": [
@@ -3048,7 +3048,7 @@
       "default_flag": null,
       "default_flags": [],
       "default_guard_conditions": [],
-      "line_no": 1165,
+      "line_no": 1179,
       "producer": "src.engine.threshold_cycle_ev_report",
       "recommended_mode": "change_triggered",
       "required_artifact": [
@@ -3072,7 +3072,7 @@
       "default_flag": null,
       "default_flags": [],
       "default_guard_conditions": [],
-      "line_no": 1176,
+      "line_no": 1190,
       "producer": "src.engine.threshold_cycle_ev_report",
       "recommended_mode": "change_triggered",
       "required_artifact": [

@@ -555,6 +555,35 @@ print(str(payload.get("ai_status") or "missing"))
 PY
 }
 
+threshold_cycle_ev_refresh_decision() {
+  local json_path="$1"
+  local md_path="$2"
+  local force_duplicate_refresh="$3"
+  shift 3 || true
+
+  if [ "$force_duplicate_refresh" = "true" ] || [ "$force_duplicate_refresh" = "1" ]; then
+    printf 'run\n'
+    return 0
+  fi
+  if [ "$#" -eq 0 ] || [ ! -s "$json_path" ] || [ ! -s "$md_path" ]; then
+    printf 'run\n'
+    return 0
+  fi
+
+  local source_path=""
+  for source_path in "$@"; do
+    if [ ! -e "$source_path" ]; then
+      printf 'run\n'
+      return 0
+    fi
+    if [ "$source_path" -nt "$json_path" ] || [ "$source_path" -nt "$md_path" ]; then
+      printf 'run\n'
+      return 0
+    fi
+  done
+  printf 'skip\n'
+}
+
 run_threshold_cycle_ev_and_wait() {
   local pass_label="$1"
   shift || true
@@ -562,25 +591,10 @@ run_threshold_cycle_ev_and_wait() {
   local md_path="$PROJECT_DIR/data/report/threshold_cycle_ev/threshold_cycle_ev_${TARGET_DATE}.md"
 
   wait_for_postclose_resources "threshold_cycle_ev_${pass_label}"
-  if [ "$FORCE_DUPLICATE_REFRESH" != "true" ] && [ "$FORCE_DUPLICATE_REFRESH" != "1" ] && [ "$#" -gt 0 ] && [ -s "$json_path" ] && [ -s "$md_path" ]; then
-    local source_path=""
-    local source_newer="false"
-    local source_missing="false"
-    for source_path in "$@"; do
-      if [ ! -e "$source_path" ]; then
-        source_missing="true"
-        break
-      fi
-      if [ "$source_path" -nt "$json_path" ] || [ "$source_path" -nt "$md_path" ]; then
-        source_newer="true"
-        break
-      fi
-    done
-    if [ "$source_missing" = "false" ] && [ "$source_newer" = "false" ]; then
-      emit_postclose_marker "[SKIP] threshold-cycle postclose target_date=$TARGET_DATE step=threshold_cycle_ev_${pass_label} reason=duplicate_refresh_fresh force_duplicate_refresh=$FORCE_DUPLICATE_REFRESH"
-      wait_for_report_artifact "$json_path" "$md_path" "threshold_cycle_ev_${pass_label}"
-      return 0
-    fi
+  if [ "$(threshold_cycle_ev_refresh_decision "$json_path" "$md_path" "$FORCE_DUPLICATE_REFRESH" "$@")" = "skip" ]; then
+    emit_postclose_marker "[SKIP] threshold-cycle postclose target_date=$TARGET_DATE step=threshold_cycle_ev_${pass_label} reason=duplicate_refresh_fresh force_duplicate_refresh=$FORCE_DUPLICATE_REFRESH"
+    wait_for_report_artifact "$json_path" "$md_path" "threshold_cycle_ev_${pass_label}"
+    return 0
   fi
   run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.threshold_cycle_ev_report --date "$TARGET_DATE"
   wait_for_report_artifact "$json_path" "$md_path" "threshold_cycle_ev_${pass_label}"

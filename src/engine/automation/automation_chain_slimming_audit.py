@@ -268,6 +268,7 @@ def _extract_module_calls(script_text: str, wrapper: str, target_date: str) -> l
                 "producer": module,
                 "module": module,
                 "command_line": line.strip(),
+                "nearby_text": nearby,
                 "occurrence": occurrence,
                 "default_flag": default_flags[0] if default_flags else None,
                 "default_flags": sorted(dict.fromkeys(default_flags)),
@@ -363,14 +364,22 @@ def _is_triggered_deep_review(base: str) -> bool:
 
 def _is_mutually_exclusive_static_duplicate(call: dict[str, Any]) -> bool:
     module = str(call.get("module") or "")
-    return module == "src.engine.swing_strategy_discovery_sim"
+    return module == "src.engine.swing_strategy_discovery_sim" and int(call.get("occurrence") or 0) == 2
 
 
 def _is_dependent_refresh(call: dict[str, Any]) -> bool:
     module = str(call.get("module") or "")
-    if module == "src.engine.lifecycle_decision_matrix" and call.get("window_policy") != "rolling_or_mtd":
+    occurrence = int(call.get("occurrence") or 0)
+    command_line = str(call.get("command_line") or "")
+    nearby_text = str(call.get("nearby_text") or "")
+    if (
+        module == "src.engine.lifecycle_decision_matrix"
+        and occurrence == 2
+        and call.get("window_policy") != "rolling_or_mtd"
+        and "lifecycle_ai_context_attribution" in nearby_text
+    ):
         return True
-    if module == "src.engine.lifecycle_ai_context":
+    if module == "src.engine.lifecycle_ai_context" and occurrence == 2 and "--mode context" in command_line:
         return True
     return False
 
