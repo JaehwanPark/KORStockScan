@@ -13,7 +13,8 @@ def _patch_dirs(monkeypatch, tmp_path):
     code = tmp_path / "data" / "report" / "code_improvement_workorder"
     runtime_gap = tmp_path / "data" / "report" / "runtime_apply_gap_audit"
     tuning_performance = tmp_path / "data" / "report" / "tuning_performance_control_tower"
-    for path in (docs, ev, openai, swing, code, runtime_gap, tuning_performance):
+    trigger_decision = tmp_path / "data" / "report" / "automation_chain_trigger_decision"
+    for path in (docs, ev, openai, swing, code, runtime_gap, tuning_performance, trigger_decision):
         path.mkdir(parents=True, exist_ok=True)
     monkeypatch.setattr(mod, "DOCS_DIR", docs)
     monkeypatch.setattr(mod, "CHECKLIST_DIR", docs / "checklists")
@@ -23,6 +24,7 @@ def _patch_dirs(monkeypatch, tmp_path):
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_REPORT_DIR", code)
     monkeypatch.setattr(mod, "RUNTIME_APPLY_GAP_REPORT_DIR", runtime_gap)
     monkeypatch.setattr(mod, "TUNING_PERFORMANCE_REPORT_DIR", tuning_performance)
+    monkeypatch.setattr(mod, "AUTOMATION_TRIGGER_DECISION_REPORT_DIR", trigger_decision)
     return docs, ev, openai, swing, code
 
 
@@ -69,6 +71,7 @@ def test_build_next_stage2_checklist_generates_next_trading_day_and_tasks(monkey
     assert "[OpenAIWSIntradaySample0511]" in text
     assert "[SimProbeIntradayCoverage0511]" in text
     assert "[CodeImprovementWorkorderReview0511]" in text
+    assert "[AutomationTriggerDecisionSummary0511]" in text
     assert "tuning_performance_control_tower_2026-05-08.json" in text
     assert "codex_daily_workorder_*.md" in text
 
@@ -148,7 +151,66 @@ def test_generated_checklist_is_parser_friendly(monkeypatch, tmp_path):
 
     assert any("ThresholdEnvAutoApplyPreopen0512" in title for title in titles)
     assert any("RuntimeEnvIntradayObserve0512" in title for title in titles)
+    assert any("AutomationTriggerDecisionSummary0512" in title for title in titles)
     assert all(task.due_date == "2026-05-12" for task in tasks)
+
+
+def test_automation_trigger_decision_summary_is_surfaced_as_postclose_task(monkeypatch, tmp_path):
+    docs, ev_dir, openai_dir, swing_dir, code_dir = _patch_dirs(monkeypatch, tmp_path)
+    trigger_dir = mod.AUTOMATION_TRIGGER_DECISION_REPORT_DIR
+    _write_json(ev_dir / "threshold_cycle_ev_2026-05-22.json", {"runtime_apply": {"runtime_change": False}})
+    _write_json(
+        openai_dir / "openai_ws_stability_2026-05-22.json",
+        {"decision": "keep_ws", "entry_price_canary_summary": {"canary_event_count": 0}},
+    )
+    _write_json(swing_dir / "swing_runtime_approval_2026-05-22.json", {"approval_requests": []})
+    _write_json(code_dir / "code_improvement_workorder_2026-05-22.json", {"summary": {"selected_order_count": 0}})
+    _write_json(
+        trigger_dir / "automation_chain_trigger_decision_2026-05-22.json",
+        {
+            "summary": {
+                "total_steps": 3,
+                "run_count": 1,
+                "skip_count": 2,
+                "source_missing_count": 1,
+                "force_override_count": 0,
+            },
+            "decisions": [
+                {
+                    "step_id": "lifecycle_window_mtd",
+                    "decision": "run",
+                    "source_missing": True,
+                    "trigger_reasons": ["source_missing_or_unreadable"],
+                },
+                {
+                    "step_id": "pattern_lab_ai_review",
+                    "decision": "skip",
+                    "source_missing": False,
+                    "trigger_reasons": ["source_and_output_fresh"],
+                },
+                {
+                    "step_id": "workorder_branch",
+                    "decision": "skip",
+                    "source_missing": False,
+                    "trigger_reasons": ["source_and_output_fresh"],
+                },
+            ],
+        },
+    )
+
+    mod.build_next_stage2_checklist("2026-05-22")
+
+    text = (docs / "checklists" / "2026-05-26-stage2-todo-checklist.md").read_text(encoding="utf-8")
+    assert "[AutomationTriggerDecisionSummary0526]" in text
+    assert "automation_chain_trigger_decision_2026-05-22.json" in text
+    assert "run_count=`1`" in text
+    assert "skip_count=`2`" in text
+    assert "source_missing_count=`1`" in text
+    assert "run_steps_sample=`lifecycle_window_mtd`" in text
+    assert "skip_steps_sample=`pattern_lab_ai_review, workorder_branch`" in text
+    assert "source_and_output_fresh:2" in text
+    assert "`[SKIP] threshold-cycle postclose ... trigger_decision=skip`" in text
+    assert "`skip_marker_missing`" in text
 
 
 def test_runtime_apply_gap_pending_is_surfaced_in_preopen_task(monkeypatch, tmp_path):

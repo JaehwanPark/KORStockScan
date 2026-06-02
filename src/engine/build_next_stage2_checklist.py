@@ -24,6 +24,7 @@ SWING_RUNTIME_APPROVAL_DIR = PROJECT_ROOT / "data" / "report" / "swing_runtime_a
 CODE_IMPROVEMENT_REPORT_DIR = PROJECT_ROOT / "data" / "report" / "code_improvement_workorder"
 RUNTIME_APPLY_GAP_REPORT_DIR = PROJECT_ROOT / "data" / "report" / "runtime_apply_gap_audit"
 TUNING_PERFORMANCE_REPORT_DIR = PROJECT_ROOT / "data" / "report" / "tuning_performance_control_tower"
+AUTOMATION_TRIGGER_DECISION_REPORT_DIR = PROJECT_ROOT / "data" / "report" / "automation_chain_trigger_decision"
 
 AUTO_START = "<!-- AUTO_NEXT_STAGE2_CHECKLIST_START -->"
 AUTO_END = "<!-- AUTO_NEXT_STAGE2_CHECKLIST_END -->"
@@ -265,6 +266,49 @@ def _quiet_gap_summary(runtime_gap_report: dict[str, Any]) -> str:
     )
 
 
+def _automation_trigger_decision_summary(trigger_report: dict[str, Any]) -> str:
+    if not trigger_report:
+        return "trigger_report_missing=`true`, required_action=`run_required_or_report_generation_check`"
+
+    summary = trigger_report.get("summary") if isinstance(trigger_report.get("summary"), dict) else {}
+    decisions = trigger_report.get("decisions") if isinstance(trigger_report.get("decisions"), list) else []
+    reason_counts: dict[str, int] = {}
+    run_steps: list[str] = []
+    skip_steps: list[str] = []
+    source_missing_steps: list[str] = []
+    for raw_decision in decisions:
+        if not isinstance(raw_decision, dict):
+            continue
+        step_id = str(raw_decision.get("step_id") or "").strip()
+        decision = str(raw_decision.get("decision") or "").strip()
+        if step_id and decision == "run":
+            run_steps.append(step_id)
+        elif step_id and decision == "skip":
+            skip_steps.append(step_id)
+        if step_id and raw_decision.get("source_missing") is True:
+            source_missing_steps.append(step_id)
+        reasons = raw_decision.get("trigger_reasons")
+        if isinstance(reasons, list):
+            for reason in reasons:
+                key = str(reason).strip()
+                if key:
+                    reason_counts[key] = reason_counts.get(key, 0) + 1
+
+    top_reasons = ", ".join(
+        f"{reason}:{count}" for reason, count in sorted(reason_counts.items(), key=lambda item: (-item[1], item[0]))[:5]
+    )
+    return (
+        f"total_steps=`{summary.get('total_steps') or len(decisions)}`, "
+        f"run_count=`{summary.get('run_count') or len(run_steps)}`, "
+        f"skip_count=`{summary.get('skip_count') or len(skip_steps)}`, "
+        f"source_missing_count=`{summary.get('source_missing_count') or len(source_missing_steps)}`, "
+        f"force_override_count=`{summary.get('force_override_count') or 0}`, "
+        f"run_steps_sample=`{', '.join(run_steps[:5]) or '-'}`, "
+        f"skip_steps_sample=`{', '.join(skip_steps[:5]) or '-'}`, "
+        f"top_reasons=`{top_reasons or '-'}`"
+    )
+
+
 def _task_line(task: GeneratedTask, target_date: str) -> str:
     return (
         f"- [ ] `[{task.task_id}] {task.title}` "
@@ -288,6 +332,7 @@ def _build_tasks(
     swing_report: dict[str, Any],
     code_report: dict[str, Any],
     runtime_gap_report: dict[str, Any],
+    trigger_report: dict[str, Any],
 ) -> list[GeneratedTask]:
     mmdd = _compact_mmdd(target_date)
     ev_path = EV_REPORT_DIR / f"threshold_cycle_ev_{source_date}.json"
@@ -299,6 +344,10 @@ def _build_tasks(
     runtime_gap_directives = _runtime_gap_codex_directive_summary(runtime_gap_report)
     source_dimension_gap_summary = _source_dimension_gap_summary(runtime_gap_report)
     quiet_gap_summary = _quiet_gap_summary(runtime_gap_report)
+    trigger_decision_path = (
+        AUTOMATION_TRIGGER_DECISION_REPORT_DIR / f"automation_chain_trigger_decision_{source_date}.json"
+    )
+    trigger_decision_summary = _automation_trigger_decision_summary(trigger_report)
     threshold_source = (
         f"[threshold_cycle_ev_{source_date}.json](/home/ubuntu/KORStockScan/{_rel(ev_path)}), "
         "[threshold_cycle_preopen_apply.py](/home/ubuntu/KORStockScan/src/engine/threshold_cycle_preopen_apply.py), "
@@ -468,6 +517,22 @@ def _build_tasks(
                     "다음 액션: approval request가 있으면 `approval_id`, 후보/대상, artifact path, 승인 여부, 다음 PREOPEN 적용 확인 항목을 남긴다. 누락된 항목이 있으면 다음 영업일 checklist에 parser-friendly checkbox로 추가한다.",
                 ),
             ),
+            GeneratedTask(
+                task_id=f"AutomationTriggerDecisionSummary{mmdd}",
+                title="자동화체인 trigger decision run/skip 요약 및 wrapper marker 대조 확인",
+                slot="POSTCLOSE",
+                time_window="18:10~18:25",
+                track="RuntimeStability",
+                source=(
+                    f"[automation_chain_trigger_decision_{source_date}.json](/home/ubuntu/KORStockScan/{_rel(trigger_decision_path)}), "
+                    "[run_threshold_cycle_postclose.sh](/home/ubuntu/KORStockScan/deploy/run_threshold_cycle_postclose.sh)"
+                ),
+                lines=(
+                    f"판정 기준: trigger decision summary의 {trigger_decision_summary}를 확인하고 wrapper 로그의 `[SKIP] threshold-cycle postclose ... trigger_decision=skip` marker와 대조한다.",
+                    "금지: trigger decision을 PREOPEN apply, final verifier, broker/order/provider/cap/bot/threshold, hard-safety/source-quality fail-closed 경계 변경 근거로 사용하지 않는다.",
+                    "다음 액션: `trigger_contract_pass`, `unexpected_all_run`, `skip_marker_missing`, `source_missing_run_required`, `force_override_detected`, `needs_followup_patch` 중 하나로 닫는다.",
+                ),
+            ),
             *(
                 [
                     GeneratedTask(
@@ -549,6 +614,7 @@ def _render_auto_block(
     swing_report: dict[str, Any],
     code_report: dict[str, Any],
     runtime_gap_report: dict[str, Any],
+    trigger_report: dict[str, Any],
     exclude_task_ids: set[str] | None = None,
 ) -> str:
     tasks = _build_tasks(
@@ -559,6 +625,7 @@ def _render_auto_block(
         swing_report=swing_report,
         code_report=code_report,
         runtime_gap_report=runtime_gap_report,
+        trigger_report=trigger_report,
     )
     exclude_task_ids = exclude_task_ids or set()
     tasks = [task for task in tasks if task.task_id not in exclude_task_ids]
@@ -781,6 +848,9 @@ def build_next_stage2_checklist(source_date: str) -> dict[str, Any]:
     swing_report = _load_json(SWING_RUNTIME_APPROVAL_DIR / f"swing_runtime_approval_{source_date}.json")
     code_report = _load_json(CODE_IMPROVEMENT_REPORT_DIR / f"code_improvement_workorder_{source_date}.json")
     runtime_gap_report = _load_json(RUNTIME_APPLY_GAP_REPORT_DIR / f"runtime_apply_gap_audit_{source_date}.json")
+    trigger_report = _load_json(
+        AUTOMATION_TRIGGER_DECISION_REPORT_DIR / f"automation_chain_trigger_decision_{source_date}.json"
+    )
     existing = target_path.read_text(encoding="utf-8") if target_path.exists() else ""
     exclude_task_ids = _existing_manual_task_ids(existing) if existing else set()
     auto_block = _render_auto_block(
@@ -791,6 +861,7 @@ def build_next_stage2_checklist(source_date: str) -> dict[str, Any]:
         swing_report=swing_report,
         code_report=code_report,
         runtime_gap_report=runtime_gap_report,
+        trigger_report=trigger_report,
         exclude_task_ids=exclude_task_ids,
     )
     if existing:
@@ -813,6 +884,7 @@ def build_next_stage2_checklist(source_date: str) -> dict[str, Any]:
         swing_report=swing_report,
         code_report=code_report,
         runtime_gap_report=runtime_gap_report,
+        trigger_report=trigger_report,
     )
     tasks = [task for task in tasks if task.task_id not in exclude_task_ids]
     return {
