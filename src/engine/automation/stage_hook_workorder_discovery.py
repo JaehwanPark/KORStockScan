@@ -157,6 +157,10 @@ def producer_gap_report_path(target_date: str) -> Path:
     return REPORT_DIR / "producer_gap_discovery" / f"producer_gap_discovery_{target_date}.json"
 
 
+def stage_hook_runtime_scaffold_report_path(target_date: str) -> Path:
+    return REPORT_DIR / "stage_hook_runtime_scaffold" / f"stage_hook_runtime_scaffold_{target_date}.json"
+
+
 def _load_json(path: Path) -> dict[str, Any]:
     if not path.exists():
         return {}
@@ -586,6 +590,45 @@ def _comparative_map(ai_payload: dict[str, Any]) -> dict[str, dict[str, Any]]:
     }
 
 
+def _scaffold_by_hook(scaffold_report: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    hooks = scaffold_report.get("implemented_hooks") if isinstance(scaffold_report.get("implemented_hooks"), list) else []
+    return {
+        str(item.get("hook_name")): item
+        for item in hooks
+        if isinstance(item, dict)
+        and item.get("hook_name")
+        and item.get("implementation_status") == "implemented"
+    }
+
+
+def _apply_scaffold_implementation(candidate: dict[str, Any], scaffold_by_hook: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    contract = candidate.get("stage_hook_candidate_contract") if isinstance(candidate.get("stage_hook_candidate_contract"), dict) else {}
+    hook_name = str(contract.get("hook_name") or candidate.get("hook_name") or "").strip()
+    scaffold = scaffold_by_hook.get(hook_name)
+    if not scaffold:
+        return candidate
+    return {
+        **candidate,
+        "implementation_status": "implemented",
+        "implementation_checks": [
+            "stage_hook_runtime_scaffold implemented_hooks contains hook_name",
+            "initial_runtime_state=disabled",
+            "runtime_effect=false",
+            "allowed_runtime_apply=false",
+        ],
+        "implementation_provenance": {
+            "implementation_type": "stage_hook_disabled_source_only_scaffold",
+            "source_report_type": "stage_hook_runtime_scaffold",
+            "hook_name": hook_name,
+            "implementation_files": scaffold.get("implementation_files") or [],
+            "source_candidate_ids": scaffold.get("source_candidate_ids") or [],
+            "runtime_effect": scaffold.get("runtime_effect"),
+            "allowed_runtime_apply": scaffold.get("allowed_runtime_apply"),
+            "decision_authority": scaffold.get("decision_authority"),
+        },
+    }
+
+
 def _order_from_candidate(
     candidate: dict[str, Any],
     review: dict[str, Any],
@@ -701,6 +744,9 @@ def build_stage_hook_workorder_discovery_report(
     target_date = str(target_date).strip()
     resolved_provider = str(provider if provider is not None else os.getenv("KORSTOCKSCAN_STAGE_HOOK_WORKORDER_DISCOVERY_AI_PROVIDER", AI_REVIEW_DEFAULT_PROVIDER)).strip().lower() or "none"
     candidates, context = _deterministic_candidates(target_date)
+    scaffold_report = _load_json(stage_hook_runtime_scaffold_report_path(target_date))
+    scaffold_by_hook = _scaffold_by_hook(scaffold_report)
+    candidates = [_apply_scaffold_implementation(candidate, scaffold_by_hook) for candidate in candidates]
     primary_config = _ai_review_config()
     provider_status: dict[str, Any] = {
         "provider": resolved_provider,
@@ -772,6 +818,7 @@ def build_stage_hook_workorder_discovery_report(
     )
     reviewed = []
     orders = []
+    implemented_candidate_count = 0
     for candidate in candidates:
         candidate_id = str(candidate.get("candidate_id") or "")
         review = reviews.get(candidate_id) or {}
@@ -800,6 +847,8 @@ def build_stage_hook_workorder_discovery_report(
             or candidate.get("stage_hook_candidate_contract", {}).get("readiness_tier"),
         }
         reviewed.append(merged)
+        if merged.get("implementation_status") == "implemented":
+            implemented_candidate_count += 1
         contract = candidate["stage_hook_candidate_contract"]
         priority = str(merged.get("ai_priority") or "medium")
         if (
@@ -807,6 +856,7 @@ def build_stage_hook_workorder_discovery_report(
             and not forbidden
             and contract.get("readiness_tier") == "implementation_workorder_ready"
             and comparative_review.get("selected_decision") not in {"reject", "source_quality_gap"}
+            and merged.get("implementation_status") != "implemented"
             and priority in {"critical", "high", "medium"}
         ):
             orders.append(_order_from_candidate(candidate, review, ai_tier2_proposal=ai_tier2_proposal, comparative_review=comparative_review))
@@ -834,11 +884,17 @@ def build_stage_hook_workorder_discovery_report(
         "forbidden_uses": FORBIDDEN_USES,
         "evidence_authority_contract": evidence_authority_contract(),
         "status": status,
-        "sources": {"producer_gap_discovery": str(producer_gap_report_path(target_date)) if producer_gap_report_path(target_date).exists() else None},
+        "sources": {
+            "producer_gap_discovery": str(producer_gap_report_path(target_date)) if producer_gap_report_path(target_date).exists() else None,
+            "stage_hook_runtime_scaffold": str(stage_hook_runtime_scaffold_report_path(target_date))
+            if stage_hook_runtime_scaffold_report_path(target_date).exists()
+            else None,
+        },
         "summary": {
             "status": status,
             "candidate_count": len(candidates),
             "workorder_count": len(orders),
+            "implemented_candidate_count": implemented_candidate_count,
             "deterministic_proposal_count": len(candidates),
             "ai_tier2_proposal_count": sum(
                 1 for item in reviewed if item.get("ai_tier2_proposal", {}).get("proposal_status") == "provided"

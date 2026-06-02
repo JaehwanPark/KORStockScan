@@ -1115,26 +1115,6 @@ def _handle_add_buy_execution(
         reversal_add_state=target_stock.get('reversal_add_state', '-'),
         reversal_add_executed_at=target_stock.get('reversal_add_executed_at', '-'),
     )
-    if target_stock.get('swing_scale_in_real_canary'):
-        _log_holding_pipeline(
-            target_stock.get('name'),
-            code,
-            target_id,
-            'swing_scale_in_real_canary_receipt_confirmed',
-            policy_id='swing_scale_in_real_canary_phase0',
-            cohort='swing_scale_in_real_canary_phase0',
-            add_type=add_type,
-            actual_order_submitted=True,
-            ord_no=history_order_no,
-            fill_price=int(exec_price or 0),
-            fill_qty=int(exec_qty or 0),
-            request_qty=request_qty or pending_qty or exec_qty,
-            real_canary_actual_qty=int(exec_qty or 0),
-            real_canary_qty_cap=1,
-            new_avg_price=f"{float(new_avg or 0):.2f}",
-            new_buy_qty=int(new_qty or 0),
-        )
-
 
 def _handle_entry_buy_execution(
     *,

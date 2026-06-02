@@ -131,6 +131,13 @@ def _stage_parent_from_child(stage: str, value: Any) -> str:
     return f"{stage}_observed"
 
 
+def _is_missing_unknown_dimension_value(value: Any) -> bool:
+    text = str(value or "").strip().lower()
+    if text in {"", "unknown", "missing", "none", "null"}:
+        return True
+    return text.endswith(":unknown") or text.endswith(":missing")
+
+
 def _coarsen_dimensions_for_parent(
     *,
     stage: str,
@@ -228,12 +235,12 @@ def normalize_lifecycle_bucket(
         candidate_type = "parent_bucket_absorption"
         reason = parent_reason
 
-    if "unknown" in legacy_raw.lower() or any(str(value).lower() == "unknown" for value in dimensions.values()):
+    if "unknown" in legacy_raw.lower() or any(_is_missing_unknown_dimension_value(value) for value in dimensions.values()):
         missing_dimensions = sorted(
             {
                 str(key)
                 for key, value in dimensions.items()
-                if "unknown" in str(value).lower()
+                if _is_missing_unknown_dimension_value(value)
             }
         )
         if decision == "keep_bucket":

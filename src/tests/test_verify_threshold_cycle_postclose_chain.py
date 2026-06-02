@@ -1115,6 +1115,123 @@ def test_active_sim_priority_handoff_fails_unknown_runtime_key_when_catalog_empt
     assert "active_sim_priority_unknown_key_observed" in status["missing"]
 
 
+def test_active_sim_priority_zero_match_gets_absence_diagnosis(monkeypatch):
+    monkeypatch.setattr(
+        mod,
+        "_iter_pipeline_event_fields",
+        lambda target_date: [
+            {
+                "scalp_sim_active_priority_seed_matched": "False",
+                "active_seed_candidate_observable_prefix": json.dumps(
+                    {
+                        "entry_score_parent": "score_watch_recovery",
+                        "entry_source_parent": "entry_source_observed_other",
+                    }
+                ),
+                "actual_order_submitted": "False",
+                "broker_order_forbidden": "True",
+            }
+        ],
+    )
+
+    status = mod._active_sim_priority_handoff_status(
+        target_date="2026-06-01",
+        discovery={},
+        scalp_catalog={
+            "schema_version": "scalp_sim_policy_catalog_v1",
+            "active_sim_priority_seeds": [
+                {
+                    "active_seed_id": "active_seed_test",
+                    "source_parent_bucket_id": "parent_positive",
+                    "status": "active",
+                    "observable_prefix": {
+                        "entry_score_parent": "score_watch_recovery",
+                        "entry_source_parent": "entry_source_action_decision",
+                    },
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                    "runtime_effect": False,
+                }
+            ],
+        },
+        swing_catalog={},
+        preopen_apply={
+            "selected": [
+                {
+                    "family": "scalp_sim_auto_approval",
+                    "selected": True,
+                    "active_sim_priority_seed_ids": ["active_seed_test"],
+                }
+            ]
+        },
+        swing_sim_report={},
+    )
+
+    assert status["status"] == "warning"
+    assert "active_sim_priority_runtime_observation_missing" in status["warnings"]
+    assert status["active_priority_match_absence_diagnosis"]["diagnosis"] == "active_prefix_too_narrow"
+    assert status["active_priority_match_absence_diagnosis"]["status"] == "warning"
+
+
+def test_active_sim_priority_zero_match_prioritizes_posterior_dimension_diagnosis(monkeypatch):
+    monkeypatch.setattr(
+        mod,
+        "_iter_pipeline_event_fields",
+        lambda target_date: [
+            {
+                "scalp_sim_active_priority_seed_matched": "False",
+                "active_seed_candidate_observable_prefix": json.dumps(
+                    {
+                        "entry_score_parent": "score_watch_recovery",
+                        "entry_source_parent": "entry_source_observed_other",
+                    }
+                ),
+                "actual_order_submitted": "False",
+                "broker_order_forbidden": "True",
+            }
+        ],
+    )
+
+    status = mod._active_sim_priority_handoff_status(
+        target_date="2026-06-01",
+        discovery={},
+        scalp_catalog={
+            "schema_version": "scalp_sim_policy_catalog_v1",
+            "active_sim_priority_seeds": [
+                {
+                    "active_seed_id": "active_seed_test",
+                    "source_parent_bucket_id": "parent_positive",
+                    "status": "active",
+                    "observable_prefix": {
+                        "entry_score_parent": "score_watch_recovery",
+                        "entry_source_parent": "entry_source_action_decision",
+                        "exit_outcome_parent": "posterior_positive",
+                    },
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                    "runtime_effect": False,
+                }
+            ],
+        },
+        swing_catalog={},
+        preopen_apply={
+            "selected": [
+                {
+                    "family": "scalp_sim_auto_approval",
+                    "selected": True,
+                    "active_sim_priority_seed_ids": ["active_seed_test"],
+                }
+            ]
+        },
+        swing_sim_report={},
+    )
+
+    assert status["status"] == "fail"
+    assert "active_sim_priority_seed_observable_prefix_forbidden_dimension" in status["missing"]
+    assert status["active_priority_match_absence_diagnosis"]["diagnosis"] == "posterior_dimension_leaked_into_priority"
+    assert status["active_priority_match_absence_diagnosis"]["status"] == "fail"
+
+
 def test_ldm_refinement_consumption_fails_when_lifecycle_ledger_missing():
     status = mod._ldm_refinement_consumption_status(
         {
@@ -1236,6 +1353,152 @@ def test_ldm_refinement_consumption_warns_repeated_taxonomy_gap_unresolved():
 
     assert status["status"] == "warning"
     assert "ldm_refinement_repeated_taxonomy_gap_unresolved" in status["warnings"]
+
+
+def test_ldm_refinement_consumption_fails_repeated_status_without_diagnosis():
+    status = mod._ldm_refinement_consumption_status(
+        {
+            "refinement_inputs": [
+                {
+                    "refinement_input_id": "ref_input_1",
+                    "soft_hypothesis_id": "ldm_hypothesis_test",
+                    "classification": "parent_support",
+                    "retry_count": 3,
+                }
+            ]
+        },
+        {
+            "ldm_refinement_pressure_consumption": {
+                "input_count": 1,
+                "entries": [
+                    {
+                        "refinement_input_id": "ref_input_1",
+                        "closure_status": "needs_more_contrastive_sample",
+                        "closure_reason": "still_collecting_opposite_sample",
+                    }
+                ],
+            }
+        },
+    )
+
+    assert status["status"] == "fail"
+    assert "ldm_refinement_repeated_status_diagnosis_missing_fail" in status["missing"]
+
+
+def test_ldm_refinement_consumption_accepts_repeated_status_with_forced_closure():
+    status = mod._ldm_refinement_consumption_status(
+        {
+            "refinement_inputs": [
+                {
+                    "refinement_input_id": "ref_input_1",
+                    "soft_hypothesis_id": "ldm_hypothesis_test",
+                    "classification": "taxonomy_gap_candidate",
+                    "repeated_gap_count": 2,
+                    "retry_count": 2,
+                    "diagnosed_status": "taxonomy_gap_candidate",
+                    "repeated_status_diagnosis": {
+                        "diagnosed_status": "taxonomy_gap_candidate",
+                        "retry_count": 2,
+                        "recommended_closure_bias": "new_parent_candidate_created",
+                    },
+                }
+            ]
+        },
+        {
+            "ldm_refinement_pressure_consumption": {
+                "input_count": 1,
+                "closure_counts": {"new_parent_candidate_created": 1},
+                "entries": [
+                    {
+                        "refinement_input_id": "ref_input_1",
+                        "closure_status": "new_parent_candidate_created",
+                        "closure_reason": "parent_not_found",
+                    }
+                ],
+            }
+        },
+    )
+
+    assert status["status"] == "pass"
+    assert status["diagnosed_repeated_input_ids"] == ["ref_input_1"]
+
+
+def test_ldm_refinement_consumption_fails_runtime_authority_violation_even_with_closure():
+    status = mod._ldm_refinement_consumption_status(
+        {
+            "refinement_inputs": [
+                {
+                    "refinement_input_id": "ref_input_authority",
+                    "soft_hypothesis_id": "ldm_hypothesis_authority",
+                    "classification": "source_quality_gap",
+                    "forbidden_contract_violation_count": 1,
+                    "diagnosed_status": "contract_or_handoff_gap",
+                    "diagnosis_reason": "matched_hypothesis_or_runtime_authority_contract_gap",
+                    "recommended_closure_bias": "contract_handoff_gap_created",
+                    "repeated_status_diagnosis": {
+                        "diagnosed_status": "contract_or_handoff_gap",
+                        "diagnosis_reason": "matched_hypothesis_or_runtime_authority_contract_gap",
+                        "recommended_closure_bias": "contract_handoff_gap_created",
+                    },
+                }
+            ]
+        },
+        {
+            "ldm_refinement_pressure_consumption": {
+                "input_count": 1,
+                "closure_counts": {"contract_handoff_gap_created": 1},
+                "entries": [
+                    {
+                        "refinement_input_id": "ref_input_authority",
+                        "closure_status": "contract_handoff_gap_created",
+                        "closure_reason": "matched_hypothesis_or_runtime_authority_contract_gap",
+                    }
+                ],
+            }
+        },
+    )
+
+    assert status["status"] == "fail"
+    assert "ldm_refinement_runtime_authority_violation_fail" in status["missing"]
+    assert status["runtime_authority_violation_input_ids"] == ["ref_input_authority"]
+
+
+def test_postclose_markdown_surfaces_ldm_and_active_priority_diagnosis():
+    markdown = mod._render_markdown(
+        {
+            "date": "2026-06-01",
+            "status": "warning",
+            "ldm_hypothesis_parent_refinement_consumption": {
+                "status": "fail",
+                "input_count": 1,
+                "consumed_count": 1,
+                "closure_counts": {"contract_handoff_gap_created": 1},
+                "missing": ["ldm_refinement_runtime_authority_violation_fail"],
+                "warnings": [],
+                "diagnosis_missing_warning_input_ids": ["ref_warn"],
+                "diagnosis_missing_fail_input_ids": ["ref_fail"],
+                "diagnosed_repeated_input_ids": ["ref_diag"],
+                "runtime_authority_violation_input_ids": ["ref_auth"],
+            },
+            "active_sim_priority_handoff": {
+                "status": "fail",
+                "active_seed_ids": ["active_seed_bad"],
+                "observed_seed_ids": [],
+                "missing": ["active_sim_priority_seed_observable_prefix_forbidden_dimension"],
+                "warnings": [],
+                "active_priority_match_absence_diagnosis": {
+                    "diagnosis": "posterior_dimension_leaked_into_priority",
+                    "reason": "active_prefix_contains_non_runtime_observable_dimension",
+                    "candidate_prefix_count": 3,
+                    "top_candidate_prefixes": [["{}", 3]],
+                },
+            },
+        }
+    )
+
+    assert "runtime_authority_violation_input_ids: `['ref_auth']`" in markdown
+    assert "## Active Sim Priority Handoff" in markdown
+    assert "match_absence_diagnosis: `posterior_dimension_leaked_into_priority`" in markdown
 
 
 def test_swing_entry_bottleneck_handoff_fails_when_downstream_missing():

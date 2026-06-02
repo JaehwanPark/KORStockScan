@@ -16,6 +16,11 @@ from src.engine.daily_threshold_cycle_report import REPORT_DIR
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 LOG_PATH = PROJECT_ROOT / "logs" / "threshold_cycle_postclose_cron.log"
 VERIFY_DIR = REPORT_DIR / "threshold_cycle_postclose_verification"
+ACTIVE_SIM_PRIORITY_OBSERVABLE_PREFIX_KEYS = {
+    "entry_score_parent",
+    "entry_source_parent",
+    "submit_quality_parent",
+}
 
 _START_MARKER = "[START] threshold-cycle postclose"
 _DONE_MARKER = "[DONE] threshold-cycle postclose"
@@ -1542,6 +1547,18 @@ def _iter_pipeline_event_fields(target_date: str):
         return
 
 
+def _load_json_string_mapping(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    if not isinstance(value, str) or not value.strip():
+        return {}
+    try:
+        payload = json.loads(value)
+    except Exception:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
 def _active_sim_priority_handoff_status(
     *,
     target_date: str,
@@ -1583,6 +1600,9 @@ def _active_sim_priority_handoff_status(
             or not str(prefix.get("entry_source_parent") or "").strip()
         ):
             missing.append("active_sim_priority_seed_observable_prefix_missing")
+            break
+        if any(str(key) not in ACTIVE_SIM_PRIORITY_OBSERVABLE_PREFIX_KEYS for key in prefix):
+            missing.append("active_sim_priority_seed_observable_prefix_forbidden_dimension")
             break
         if seed.get("actual_order_submitted") is True or seed.get("broker_order_forbidden") is not True or seed.get("runtime_effect") is not False:
             missing.append("active_sim_priority_forbidden_contract_violation")
@@ -1654,11 +1674,24 @@ def _active_sim_priority_handoff_status(
     elif active_seed_ids or active_swing_policy_ids:
         warnings.append("active_sim_priority_preopen_handoff_pending")
 
+    def truthy(value: Any) -> bool:
+        return value is True or str(value).strip().lower() in {"true", "1", "yes"}
+
+    candidate_prefix_counts: dict[str, int] = {}
     observed_seed_ids: set[str] = set()
     observed_swing_policy_ids: set[str] = set()
     inactive_consumed: set[str] = set()
     unknown_consumed: set[str] = set()
     for fields in _iter_pipeline_event_fields(target_date):
+        prefix_raw = str(fields.get("active_seed_candidate_observable_prefix") or "").strip()
+        if prefix_raw:
+            prefix_mapping = _load_json_string_mapping(prefix_raw)
+            prefix_key = (
+                json.dumps(prefix_mapping, ensure_ascii=True, sort_keys=True)
+                if prefix_mapping
+                else prefix_raw
+            )
+            candidate_prefix_counts[prefix_key] = candidate_prefix_counts.get(prefix_key, 0) + 1
         seed_id = str(fields.get("active_seed_id") or "").strip()
         if seed_id:
             observed_seed_ids.add(seed_id)
@@ -1666,7 +1699,7 @@ def _active_sim_priority_handoff_status(
                 inactive_consumed.add(seed_id)
             elif seed_id not in catalog_seed_ids:
                 unknown_consumed.add(seed_id)
-            if fields.get("actual_order_submitted") is True or fields.get("broker_order_forbidden") is not True:
+            if truthy(fields.get("actual_order_submitted")) or not truthy(fields.get("broker_order_forbidden")):
                 missing.append("active_sim_priority_runtime_forbidden_contract_violation")
         policy_id = str(fields.get("priority_policy_id") or "").strip()
         if policy_id:
@@ -1686,6 +1719,61 @@ def _active_sim_priority_handoff_status(
         warnings.append("active_sim_priority_runtime_observation_missing")
     if active_swing_policy_ids and not (observed_swing_policy_ids & active_swing_policy_ids):
         warnings.append("swing_active_arm_priority_runtime_observation_missing")
+    active_prefixes = {
+        json.dumps(seed.get("observable_prefix"), ensure_ascii=True, sort_keys=True)
+        for seed in catalog_seeds
+        if str(seed.get("status") or "") == "active" and isinstance(seed.get("observable_prefix"), dict)
+    }
+    observed_prefixes = set(candidate_prefix_counts)
+    prefix_field_names = {
+        key
+        for prefix in active_prefixes
+        for key in (_load_json_string_mapping(prefix).keys() if isinstance(_load_json_string_mapping(prefix), dict) else [])
+    }
+    active_priority_match_absence_diagnosis = {
+        "status": "not_applicable",
+        "diagnosis": "not_applicable",
+        "reason": "active_priority_observed_or_no_active_priority",
+        "candidate_prefix_count": sum(candidate_prefix_counts.values()),
+        "top_candidate_prefixes": sorted(candidate_prefix_counts.items(), key=lambda item: item[1], reverse=True)[:5],
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+    }
+    if missing:
+        active_priority_match_absence_diagnosis.update(
+            {
+                "status": "fail",
+                "diagnosis": "posterior_dimension_leaked_into_priority"
+                if any("observable_prefix_forbidden_dimension" in item for item in missing)
+                else "catalog_or_preopen_handoff_gap"
+                if any("handoff" in item or "catalog" in item for item in missing)
+                else "inactive_or_unknown_key_consumed"
+                if any("unknown_key" in item or "inactive_key" in item for item in missing)
+                else "contract_or_handoff_gap",
+                "reason": ",".join(sorted(set(missing))),
+            }
+        )
+    elif active_seed_ids and not (observed_seed_ids & active_seed_ids):
+        if not preopen_seed_ids or not active_seed_ids.issubset(preopen_seed_ids):
+            diagnosis = "catalog_or_preopen_handoff_gap"
+            reason = "active_seed_not_preserved_in_preopen_apply"
+        elif not candidate_prefix_counts:
+            diagnosis = "runtime_observable_prefix_not_emitted"
+            reason = "runtime_events_missing_active_seed_candidate_observable_prefix"
+        elif any(key not in ACTIVE_SIM_PRIORITY_OBSERVABLE_PREFIX_KEYS for key in prefix_field_names):
+            diagnosis = "posterior_dimension_leaked_into_priority"
+            reason = "active_prefix_contains_non_runtime_observable_dimension"
+        elif active_prefixes and not (active_prefixes & observed_prefixes):
+            diagnosis = "active_prefix_too_narrow"
+            reason = "runtime_candidate_prefixes_never_equal_active_prefix"
+        else:
+            diagnosis = "catalog_handoff_ok_natural_absence"
+            reason = "catalog_and_preopen_handoff_intact_but_no_natural_match"
+        active_priority_match_absence_diagnosis.update(
+            {"status": "warning", "diagnosis": diagnosis, "reason": reason}
+        )
     return {
         "status": "fail" if missing else ("warning" if warnings else "pass" if (active_seed_ids or active_swing_policy_ids) else "not_applicable"),
         "producer_seed_ids": sorted(producer_seed_ids),
@@ -1699,7 +1787,9 @@ def _active_sim_priority_handoff_status(
         "observed_swing_priority_policy_ids": sorted(observed_swing_policy_ids),
         "missing": list(dict.fromkeys(missing)),
         "warnings": list(dict.fromkeys(warnings)),
+        "active_priority_match_absence_diagnosis": active_priority_match_absence_diagnosis,
         "runtime_effect": False,
+        "allowed_runtime_apply": False,
         "actual_order_submitted": False,
         "broker_order_forbidden": True,
     }
@@ -1722,6 +1812,10 @@ def _ldm_refinement_consumption_status(
             "warnings": [],
             "unconsumed_refinement_input_ids": [],
             "repeated_unresolved_input_ids": [],
+            "diagnosis_missing_warning_input_ids": [],
+            "diagnosis_missing_fail_input_ids": [],
+            "diagnosed_repeated_input_ids": [],
+            "runtime_authority_violation_input_ids": [],
             "disabled_reason": "ldm_hypothesis_parent_refinement_stage_disabled",
             "runtime_effect": False,
             "allowed_runtime_apply": False,
@@ -1733,8 +1827,19 @@ def _ldm_refinement_consumption_status(
             "status": "not_applicable",
             "input_count": 0,
             "consumed_count": 0,
+            "closure_counts": {},
             "missing": [],
             "warnings": [],
+            "unconsumed_refinement_input_ids": [],
+            "repeated_unresolved_input_ids": [],
+            "diagnosis_missing_warning_input_ids": [],
+            "diagnosis_missing_fail_input_ids": [],
+            "diagnosed_repeated_input_ids": [],
+            "runtime_authority_violation_input_ids": [],
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
         }
     ledger = (
         discovery.get("ldm_refinement_pressure_consumption")
@@ -1764,6 +1869,45 @@ def _ldm_refinement_consumption_status(
             warnings.append("ldm_refinement_all_needs_more_sample_without_reason")
         else:
             warnings.append("ldm_refinement_all_needs_more_contrastive_sample")
+    entry_by_id = {str(item.get("refinement_input_id") or ""): item for item in entries}
+    forced_closure_statuses = {
+        "parent_refinement_candidate_created",
+        "new_parent_candidate_created",
+        "source_quality_gap_created",
+        "rare_observation_only_budget_capped",
+        "rejected_as_structurally_uncontrastable",
+        "rejected_as_fragile",
+        "contract_handoff_gap_created",
+    }
+    diagnosis_missing_warning = []
+    diagnosis_missing_fail = []
+    diagnosed_repeated = []
+    runtime_authority_violation_ids = []
+    for item in inputs:
+        retry_count = _safe_int(item.get("retry_count"))
+        diagnosis = item.get("repeated_status_diagnosis") if isinstance(item.get("repeated_status_diagnosis"), dict) else {}
+        diagnosed_status = str(item.get("diagnosed_status") or diagnosis.get("diagnosed_status") or "").strip()
+        diagnosis_reason = str(item.get("diagnosis_reason") or diagnosis.get("diagnosis_reason") or "").strip()
+        closure_status = str(entry_by_id.get(str(item.get("refinement_input_id") or ""), {}).get("closure_status") or "")
+        has_forced_closure = closure_status in forced_closure_statuses
+        has_diagnosis = bool(diagnosed_status and diagnosed_status != "not_applicable")
+        item_id = str(item.get("refinement_input_id") or item.get("soft_hypothesis_id") or "")
+        if _safe_int(item.get("forbidden_contract_violation_count")) > 0 or (
+            diagnosed_status == "contract_or_handoff_gap" and "authority" in diagnosis_reason
+        ):
+            runtime_authority_violation_ids.append(item_id)
+        if retry_count >= 2 and (has_diagnosis or has_forced_closure):
+            diagnosed_repeated.append(item_id)
+        elif retry_count >= 3:
+            diagnosis_missing_fail.append(item_id)
+        elif retry_count >= 2:
+            diagnosis_missing_warning.append(item_id)
+    if diagnosis_missing_warning:
+        warnings.append("ldm_refinement_repeated_status_diagnosis_missing_warning")
+    if diagnosis_missing_fail:
+        missing.append("ldm_refinement_repeated_status_diagnosis_missing_fail")
+    if runtime_authority_violation_ids:
+        missing.append("ldm_refinement_runtime_authority_violation_fail")
     repeated_unresolved = [
         str(item.get("refinement_input_id") or item.get("soft_hypothesis_id") or "")
         for item in inputs
@@ -1772,7 +1916,7 @@ def _ldm_refinement_consumption_status(
         and not any(
             str(entry.get("refinement_input_id") or "") == str(item.get("refinement_input_id") or "")
             and str(entry.get("closure_status") or "")
-            in {"parent_refinement_candidate_created", "new_parent_candidate_created", "source_quality_gap_created"}
+            in forced_closure_statuses
             for entry in entries
         )
     ]
@@ -1788,6 +1932,10 @@ def _ldm_refinement_consumption_status(
         "warnings": list(dict.fromkeys(warnings)),
         "unconsumed_refinement_input_ids": unconsumed_ids,
         "repeated_unresolved_input_ids": [item for item in repeated_unresolved if item],
+        "diagnosis_missing_warning_input_ids": [item for item in diagnosis_missing_warning if item],
+        "diagnosis_missing_fail_input_ids": [item for item in diagnosis_missing_fail if item],
+        "diagnosed_repeated_input_ids": [item for item in diagnosed_repeated if item],
+        "runtime_authority_violation_input_ids": [item for item in runtime_authority_violation_ids if item],
         "runtime_effect": False,
         "allowed_runtime_apply": False,
         "actual_order_submitted": False,
@@ -3094,6 +3242,16 @@ def _render_markdown(report: dict[str, Any]) -> str:
         if isinstance(report.get("bottom_rebound_sim_handoff"), dict)
         else {}
     )
+    active_priority = (
+        report.get("active_sim_priority_handoff")
+        if isinstance(report.get("active_sim_priority_handoff"), dict)
+        else {}
+    )
+    active_priority_diagnosis = (
+        active_priority.get("active_priority_match_absence_diagnosis")
+        if isinstance(active_priority.get("active_priority_match_absence_diagnosis"), dict)
+        else {}
+    )
     lines = [
         f"# Threshold Cycle Postclose Verification - {report.get('date')}",
         "",
@@ -3225,6 +3383,21 @@ def _render_markdown(report: dict[str, Any]) -> str:
         f"- closure_counts: `{ldm_refinement.get('closure_counts') or {}}`",
         f"- missing: `{ldm_refinement.get('missing') or []}`",
         f"- warnings: `{ldm_refinement.get('warnings') or []}`",
+        f"- diagnosis_missing_warning_input_ids: `{ldm_refinement.get('diagnosis_missing_warning_input_ids') or []}`",
+        f"- diagnosis_missing_fail_input_ids: `{ldm_refinement.get('diagnosis_missing_fail_input_ids') or []}`",
+        f"- diagnosed_repeated_input_ids: `{ldm_refinement.get('diagnosed_repeated_input_ids') or []}`",
+        f"- runtime_authority_violation_input_ids: `{ldm_refinement.get('runtime_authority_violation_input_ids') or []}`",
+        "",
+        "## Active Sim Priority Handoff",
+        f"- status: `{active_priority.get('status') or '-'}`",
+        f"- active_seed_ids: `{active_priority.get('active_seed_ids') or []}`",
+        f"- observed_seed_ids: `{active_priority.get('observed_seed_ids') or []}`",
+        f"- missing: `{active_priority.get('missing') or []}`",
+        f"- warnings: `{active_priority.get('warnings') or []}`",
+        f"- match_absence_diagnosis: `{active_priority_diagnosis.get('diagnosis') or '-'}`",
+        f"- match_absence_reason: `{active_priority_diagnosis.get('reason') or '-'}`",
+        f"- candidate_prefix_count: `{active_priority_diagnosis.get('candidate_prefix_count') or 0}`",
+        f"- top_candidate_prefixes: `{active_priority_diagnosis.get('top_candidate_prefixes') or []}`",
         "",
         "## Lifecycle Bucket Windows",
         f"- status: `{lifecycle_bucket_windows.get('status') or '-'}`",

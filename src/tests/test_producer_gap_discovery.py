@@ -529,6 +529,33 @@ def test_ai_forbidden_use_violation_surfaces_followup_workorder_without_retry(tm
     assert "forbidden_use_violation" in report["code_improvement_orders"][0]["ai_review_followup_reasons"]
 
 
+def test_ai_forbidden_use_violation_handled_by_source_quality_blocker_does_not_surface_followup(tmp_path, monkeypatch):
+    report_dir = tmp_path / "data" / "report"
+    post_sell_dir = tmp_path / "data" / "post_sell"
+    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "POST_SELL_DIR", post_sell_dir)
+    _minimal_runner_fixture(post_sell_dir)
+    response = _ai_response(["producer_gap_sim_holding_runner_gap_missing"])
+    response["audit"]["forbidden_use_violations"] = [
+        "producer_gap_sim_holding_runner_gap_missing violates real_one_share_as_preapply_primary_ev"
+    ]
+    response["comparative_reviews"][0]["selected_decision"] = "source_quality_blocker"
+    response["comparative_reviews"][0]["selected_source"] = "ai_tier2"
+
+    report = mod.build_producer_gap_discovery_report(
+        "2026-05-26",
+        provider="openai",
+        ai_raw_response=response,
+        rolling_sim_scan=True,
+    )
+
+    assert report["summary"]["ai_review_followup_required"] is False
+    assert report["summary"]["ai_review_followup_reasons"] == []
+    assert report["ai_two_pass_review"]["unresolved_forbidden_use_violations"] == []
+    assert report["ai_two_pass_review"]["handled_forbidden_use_violations"]
+    assert not any(order["improvement_type"] == "ai_review_followup" for order in report["code_improvement_orders"])
+
+
 def test_source_bundle_marks_entry_selection_and_missed_fill_candidates_implemented(tmp_path, monkeypatch):
     monkeypatch.setattr(mod, "REPORT_DIR", tmp_path / "report")
     bundle_path = tmp_path / "report" / "producer_gap_source_bundle" / "producer_gap_source_bundle_2026-05-26.json"
@@ -605,10 +632,10 @@ def test_source_bundle_marks_entry_selection_and_missed_fill_candidates_implemen
         "producer_gap_missed_fill_recovery_counterfactual_missing": "implemented",
         "producer_gap_sim_entry_selection_gap_missing": "implemented",
     }
-    assert all(
-        order["implementation_provenance"]["source_report_type"] == "producer_gap_source_bundle"
-        for order in report["code_improvement_orders"]
-    )
+    assert report["summary"]["status"] == "pass"
+    assert report["summary"]["workorder_count"] == 0
+    assert report["summary"]["implemented_candidate_count"] == 2
+    assert report["code_improvement_orders"] == []
 
 
 def test_openai_review_retries_with_low_reasoning_after_parse_reject(tmp_path, monkeypatch):

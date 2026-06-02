@@ -63,6 +63,11 @@ def test_pattern_lab_automation_builds_consensus_orders_and_family_candidates(tm
     assert report["lab_freshness"]["claude"]["fresh"] is True
     assert any(item["mapped_family"] == "score65_74_recovery_probe" for item in report["consensus_findings"])
     assert any(item["target_subsystem"] == "runtime_instrumentation" for item in report["code_improvement_orders"])
+    orders_by_id = {item["order_id"]: item for item in report["code_improvement_orders"]}
+    threshold_order = orders_by_id["order_ai_threshold_miss_ev_회수_조건_점검"]
+    assert threshold_order["route"] == "existing_family"
+    assert threshold_order["mapped_family"] == "score65_74_recovery_probe"
+    assert threshold_order["improvement_type"] == "threshold_family_input"
     assert all(item["allowed_runtime_apply"] is False for item in report["code_improvement_orders"])
     assert report["auto_family_candidates"]
     assert report["auto_family_candidates"][0]["runtime_effect"] is False

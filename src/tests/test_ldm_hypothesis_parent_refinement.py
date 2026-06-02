@@ -464,3 +464,135 @@ def test_previous_gap_count_ignores_future_refinement_reports(tmp_path, monkeypa
         )
 
     assert mod._previous_gap_count("h_gap", "2026-06-02") == 1
+
+
+def test_repeated_needs_opposite_sample_gets_opposite_absence_diagnosis(tmp_path, monkeypatch):
+    report_dir = tmp_path / "report"
+    pipeline_dir = tmp_path / "pipeline"
+    plan_dir = tmp_path / "plans"
+    lifecycle_dir = tmp_path / "lifecycle"
+    for path in (report_dir, pipeline_dir, plan_dir, lifecycle_dir):
+        path.mkdir(parents=True)
+    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "PIPELINE_EVENTS_DIR", pipeline_dir)
+    monkeypatch.setattr(mod, "LDM_PLAN_DIR", plan_dir)
+    monkeypatch.setattr(mod, "LIFECYCLE_BUCKET_DIR", lifecycle_dir)
+    for report_date in ("2026-05-29", "2026-06-01"):
+        report_dir.joinpath(f"ldm_hypothesis_parent_refinement_{report_date}.json").write_text(
+            json.dumps(
+                {
+                    "date": report_date,
+                    "refinement_inputs": [
+                        {
+                            "soft_hypothesis_id": "h_opposite",
+                            "classification": "parent_support",
+                            "contrary_sample_need": True,
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+    plan_dir.joinpath("ldm_hypothesis_observation_plan_2026-06-02.json").write_text(
+        json.dumps(
+            {
+                "schema_version": mod.OBSERVATION_PLAN_SCHEMA_VERSION,
+                "hypotheses": [
+                    {
+                        **_plan("h_opposite", "S1", "SRC1", 1.2),
+                        "contrast_summary": {
+                            "contrast_ev_delta_pct": 1.2,
+                            "contrast_coverage_status": "needs_opposite_sample",
+                        },
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    lifecycle_dir.joinpath("lifecycle_bucket_discovery_2026-06-01.json").write_text(
+        json.dumps(
+            {
+                "date": "2026-06-01",
+                "parent_bucket_summaries": [
+                    {
+                        "source_parent_bucket_id": "parent_support",
+                        "parent_source_quality_adjusted_ev_pct": 1.0,
+                        "dimension_filters": {"entry_score_parent": "S1", "entry_source_parent": "SRC1"},
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    pipeline_dir.joinpath("pipeline_events_2026-06-02.jsonl").write_text(
+        "\n".join(json.dumps(_event("h_opposite", "S1", "SRC1", profit=0.2)) for _ in range(3)) + "\n",
+        encoding="utf-8",
+    )
+
+    item = mod.build_refinement_report("2026-06-02")["refinement_inputs"][0]
+
+    assert item["diagnosed_status"] == "parent_support_but_no_contrast"
+    assert item["retry_count"] == 2
+    assert item["opposite_sample_absence_diagnosis"]["diagnosed_status"] == "parent_support_but_no_contrast"
+    assert item["recommended_closure_bias"] == "absorbed_into_existing_parent"
+
+
+def test_repeated_taxonomy_source_quality_parent_conflict_and_fragile_diagnoses():
+    source_quality = mod.HypothesisAggregate(
+        hypothesis_id="h_sq",
+        match_count=5,
+        source_quality_blocked_count=5,
+    )
+    taxonomy = mod.HypothesisAggregate(hypothesis_id="h_tax", match_count=5, candidate_features={"x": "y"})
+    conflict = mod.HypothesisAggregate(hypothesis_id="h_conflict", match_count=5)
+    fragile = mod.HypothesisAggregate(hypothesis_id="h_fragile", match_count=1)
+
+    sq_diag = mod._diagnose_repeated_status(
+        classification="source_quality_gap",
+        gap_reason="source_quality_blocked",
+        contrary_needed=False,
+        aggregate=source_quality,
+        parent_ids=[],
+        previous_counts=mod.Counter({"source_quality_gap": 2}),
+    )
+    tax_diag = mod._diagnose_repeated_status(
+        classification="taxonomy_gap_candidate",
+        gap_reason="parent_not_found",
+        contrary_needed=False,
+        aggregate=taxonomy,
+        parent_ids=[],
+        previous_counts=mod.Counter({"taxonomy_gap_candidate": 2}),
+    )
+    conflict_diag = mod._diagnose_repeated_status(
+        classification="parent_conflict",
+        gap_reason="",
+        contrary_needed=False,
+        aggregate=conflict,
+        parent_ids=["parent"],
+        previous_counts=mod.Counter({"parent_conflict": 2}),
+    )
+    fragile_diag = mod._diagnose_repeated_status(
+        classification="parent_support",
+        gap_reason="",
+        contrary_needed=True,
+        aggregate=fragile,
+        parent_ids=[],
+        previous_counts=mod.Counter({"needs_opposite_sample": 2}),
+    )
+    repeated_fragile_diag = mod._diagnose_repeated_status(
+        classification="parent_support",
+        gap_reason="",
+        contrary_needed=False,
+        aggregate=fragile,
+        parent_ids=[],
+        previous_counts=mod.Counter({"rejected_as_fragile": 2}),
+    )
+
+    assert sq_diag["recommended_closure_bias"] == "source_quality_gap_created"
+    assert tax_diag["diagnosed_status"] == "taxonomy_gap_candidate"
+    assert tax_diag["recommended_closure_bias"] == "new_parent_candidate_created"
+    assert conflict_diag["recommended_closure_bias"] == "parent_refinement_candidate_created"
+    assert fragile_diag["recommended_closure_bias"] == "rejected_as_fragile"
+    assert repeated_fragile_diag["diagnosed_status"] == "rejected_as_fragile"
+    assert repeated_fragile_diag["retry_count"] == 2

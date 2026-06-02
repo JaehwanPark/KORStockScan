@@ -24,6 +24,10 @@ PRODUCER_GAP_DISCOVERY_DIR = REPORT_DIR / "producer_gap_discovery"
 PATTERN_LAB_PROPAGATION_AUDIT_DIR = REPORT_DIR / "pattern_lab_propagation_audit"
 SWING_RUNTIME_APPROVAL_ARTIFACT_DIR = Path(__file__).resolve().parents[2] / "data" / "threshold_cycle" / "approvals"
 BOT_HISTORY_LOG = Path(__file__).resolve().parents[2] / "logs" / "bot_history.log"
+LEGACY_PHASE0_REAL_CANARY_FAMILIES = {
+    "swing_one_share_real_canary_phase0",
+    "swing_scale_in_real_canary_phase0",
+}
 
 
 def _safe_int(value: Any, default: int = 0) -> int:
@@ -62,8 +66,7 @@ _REASON_LABELS = {
     "approval_artifact_missing": "approval artifact 없음",
     "approval_request_not_approved": "approval request 미승인",
     "approval_contract_missing": "approval 계약 미준비",
-    "one_share_real_canary_approval_artifact_missing": "1주 real canary approval artifact 없음",
-    "scale_in_real_canary_approval_artifact_missing": "scale-in approval artifact 없음",
+    "legacy_phase0_real_canary_ignored": "phase0 real canary legacy ignored",
     "selected_auto_bounded_live": "auto_bounded_live 선택",
     "latency_recovery_hold_by_counterfactual_ev": "latency recovery 보류",
     "hold": "유지",
@@ -99,8 +102,6 @@ _FAMILY_DESCRIPTIONS = {
     "swing_entry_ofi_qi_execution_quality": "스윙 진입 시 OFI/QI와 주문품질이 실제 성과에 도움이 되는지 보는 축",
     "swing_scale_in_ofi_qi_confirmation": "스윙 추가매수 직전 OFI/QI 확인 신호가 유효한지 보는 축",
     "swing_exit_ofi_qi_smoothing": "스윙 청산 직전 OFI/QI로 EXIT 확정/보류를 다듬을 수 있는지 보는 축",
-    "swing_scale_in_real_canary_phase0": "승인된 실제 스윙 보유분에 한해 PYRAMID/AVG_DOWN 1주 추가매수 canary를 열 수 있는지 보는 정책 축",
-    "swing_one_share_real_canary_phase0": "승인된 스윙 후보에 한해 초기 BUY/SELL 1주 real canary execution 품질을 수집하는 정책 축",
     "panic_sell_defense": "패닉셀 구간의 stop/rebound simulation 결과로 방어 guard와 rollback 조건을 설계하는 축",
     "panic_entry_freeze_guard": "패닉셀 구간에서 scalping 신규 BUY pre-submit freeze canary를 열 수 있는지 보는 축",
     "panic_buy_runner_tp_canary": "패닉바잉 구간에서 fixed TP 전량청산 대비 runner 유지가 missed upside를 줄이는지 보는 축",
@@ -110,6 +111,8 @@ _FAMILY_DESCRIPTIONS = {
     "swing_lifecycle_bucket_discovery": "Swing LDM bucket을 sim-only 자동승인 후보와 source-quality workorder 후보로 분류하는 postclose handoff 축",
     "institutional_flow_context": "외인/기관 수급 REST/WS 원천을 lifecycle matrix 공통 feature로 붙이는 source-only provenance 축",
     "microstructure_reaction_context": "초단기 호가/체결 반응을 scalping entry confidence provenance로 붙이는 source-only feature 축",
+    "swing_one_share_real_canary_phase0": "제거된 스윙 1주 real canary phase0 legacy stage",
+    "swing_scale_in_real_canary_phase0": "제거된 스윙 scale-in real canary phase0 legacy stage",
 }
 
 _BASELINE_APPLICATION = {
@@ -126,8 +129,6 @@ _BASELINE_APPLICATION = {
     "liquidity_gate_refined_candidate": "관찰/리포트 only: gate 기준 변경 없음",
     "overbought_gate_refined_candidate": "관찰/리포트 only: gate 기준 변경 없음",
     "position_sizing_cap_release": "미적용: 1주 cap 유지",
-    "swing_one_share_real_canary_phase0": "미적용: PREOPEN phase0 auto approval이 없으면 초기 BUY 실주문 금지",
-    "swing_scale_in_real_canary_phase0": "미적용: PREOPEN phase0 auto approval이 없으면 실주문 추가매수 금지",
     "panic_sell_defense": "report-only: 주문/청산/threshold/runtime env 변경 없음",
     "panic_entry_freeze_guard": "계약 미준비: approval artifact를 만들어도 pre-submit freeze runtime 반영 불가",
     "panic_buy_runner_tp_canary": "report-only: TP/trailing/live exit 변경 없음",
@@ -137,6 +138,8 @@ _BASELINE_APPLICATION = {
     "swing_lifecycle_bucket_discovery": "source-only: 다음 PREOPEN swing sim policy 입력으로만 surfaced candidate를 전달",
     "institutional_flow_context": "source-only: lifecycle matrix feature/provenance 입력만 수행, 단독 BUY/scale-in/runtime apply 권한 없음",
     "microstructure_reaction_context": "source-only: AI entry input/provenance 보강만 수행, 단독 BUY/runtime apply 권한 없음",
+    "swing_one_share_real_canary_phase0": "legacy archive: PREOPEN env와 broker submit 권한 없음",
+    "swing_scale_in_real_canary_phase0": "legacy archive: PREOPEN env와 broker submit 권한 없음",
 }
 
 _STATE_INTERPRETATIONS = {
@@ -148,6 +151,7 @@ _STATE_INTERPRETATIONS = {
     "freeze": "계측/DB/safety 문제로 runtime 변경을 금지한다",
     "approval_required": "approval artifact가 있어야 다음 PREOPEN env 반영 후보가 된다",
     "approval_contract_missing": "approval artifact를 만들어도 소비할 코드 계약이 없어 live 반영할 수 없다",
+    "legacy_archive": "제거된 legacy stage라 current approval/live candidate가 아니다",
 }
 
 _SCALPING_GATE_REVIEW = {
@@ -333,7 +337,7 @@ _SWING_GATE_REVIEW = {
         "gate_review_class": "runtime_contract_gap_scale_in_axis",
         "legacy_hard_gate_risk": "contract_gap",
         "hard_gate_review": "AVG_DOWN은 의도적으로 실주문 차단 중이며 runtime family guard가 없다",
-        "tuning_route": "policy/workorder first, real canary approval later",
+        "tuning_route": "policy/workorder first; final full-live approval path only after complete LDM parent evidence",
         "analysis_coverage": "scale_in observation and simulated add outcomes",
     },
     "swing_trailing_stop_time_stop": {
@@ -371,19 +375,19 @@ _SWING_GATE_REVIEW = {
         "tuning_route": "exit smoothing sample floor + guard contract",
         "analysis_coverage": "holding_flow_ofi_smoothing_applied",
     },
-    "swing_scale_in_real_canary_phase0": {
-        "gate_review_class": "policy_source_quality_block",
-        "legacy_hard_gate_risk": "source_quality_or_approval_required",
-        "hard_gate_review": "실제 추가매수 canary 정책축이며 OFI/QI source-quality와 phase0 auto approval이 필요하다",
-        "tuning_route": "phase0 auto approval after source-quality pass; optional artifact may narrow caps/arms",
-        "analysis_coverage": "scale-in arm decisions + real-only execution quality",
-    },
     "swing_one_share_real_canary_phase0": {
-        "gate_review_class": "approval_route_available_policy_axis",
-        "legacy_hard_gate_risk": "no_unreviewed_hard_gate",
-        "hard_gate_review": "1주 real canary 정책축이며 phase0 auto approval과 allowlist로만 열린다",
-        "tuning_route": "phase0 auto approval, optional allowlist artifact, global dry-run guard retained",
-        "analysis_coverage": "approved target code provenance + real-only receipt",
+        "gate_review_class": "removed_legacy_phase0_real_canary",
+        "legacy_hard_gate_risk": "legacy_archive",
+        "hard_gate_review": "제거된 phase0 stage라 current PREOPEN env나 broker submit 권한으로 쓰지 않는다",
+        "tuning_route": "final full-live conversion approval only after complete LDM parent bucket evidence",
+        "analysis_coverage": "legacy approval request ignored warning only",
+    },
+    "swing_scale_in_real_canary_phase0": {
+        "gate_review_class": "removed_legacy_phase0_real_canary",
+        "legacy_hard_gate_risk": "legacy_archive",
+        "hard_gate_review": "제거된 phase0 stage라 current PREOPEN env나 broker submit 권한으로 쓰지 않는다",
+        "tuning_route": "final full-live conversion approval only after complete LDM parent bucket evidence",
+        "analysis_coverage": "legacy approval request ignored warning only",
     },
 }
 
@@ -777,15 +781,6 @@ def _approved_swing_request_ids(target_date: str) -> set[str]:
     for item in artifact.get("approved_requests") or []:
         if isinstance(item, dict) and bool(item.get("approved", True)) and item.get("approval_id"):
             approved_ids.add(str(item.get("approval_id")))
-
-    one_share = _load_json(SWING_RUNTIME_APPROVAL_ARTIFACT_DIR / f"swing_one_share_real_canary_{target_date}.json")
-    if bool(one_share.get("approved")) and str(one_share.get("policy_id") or "") == "swing_one_share_real_canary_phase0":
-        approved_ids.update(str(value) for value in one_share.get("approved_request_ids") or [] if value)
-
-    scale_in = _load_json(SWING_RUNTIME_APPROVAL_ARTIFACT_DIR / f"swing_scale_in_real_canary_{target_date}.json")
-    if bool(scale_in.get("approved")) and str(scale_in.get("policy_id") or "") == "swing_scale_in_real_canary_phase0":
-        approved_ids.update(str(value) for value in scale_in.get("approved_request_ids") or [] if value)
-
     return approved_ids
 
 
@@ -794,11 +789,17 @@ def _swing_rows(swing_report: dict[str, Any]) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     blocked = swing_report.get("blocked_requests") if isinstance(swing_report.get("blocked_requests"), list) else []
     target_date = str(swing_report.get("date") or "").strip()
+    legacy_phase0_seen: set[str] = set()
     for item in blocked:
         if not isinstance(item, dict):
             continue
         family = str(item.get("family") or "").strip()
         if not family:
+            continue
+        if family in LEGACY_PHASE0_REAL_CANARY_FAMILIES:
+            legacy_key = str(item.get("approval_id") or family)
+            legacy_phase0_seen.add(legacy_key)
+            rows.append(_legacy_phase0_real_canary_row(item, family))
             continue
         candidate = candidates.get(family, {})
         reasons = list(item.get("block_reasons") or [])
@@ -835,21 +836,20 @@ def _swing_rows(swing_report: dict[str, Any]) -> list[dict[str, Any]]:
         if not isinstance(item, dict):
             continue
         family = str(item.get("family") or item.get("policy_id") or "").strip()
+        if family in LEGACY_PHASE0_REAL_CANARY_FAMILIES:
+            legacy_key = str(item.get("approval_id") or family)
+            if legacy_key not in legacy_phase0_seen:
+                legacy_phase0_seen.add(legacy_key)
+                rows.append(_legacy_phase0_real_canary_row(item, family))
+            continue
         if not family or family in blocked_families:
             continue
         contract = approval_contract_for(family, target_date)
         approval_id = str(item.get("approval_id") or "")
         artifact_missing_reason = _swing_approval_artifact_reason(family, target_date)
-        auto_real_canary = family in {
-            "swing_one_share_real_canary_phase0",
-            "swing_scale_in_real_canary_phase0",
-        } and str(item.get("calibration_state") or "") in {
-            "auto_approved_real_canary",
-            "auto_approved_real_canary_phase0",
-        }
         approval_reason = (
             ""
-            if auto_real_canary or (approval_id and approval_id in approved_ids)
+            if approval_id and approval_id in approved_ids
             else artifact_missing_reason or "approval_request_not_approved"
         )
         reasons = [approval_reason] if approval_reason else []
@@ -870,7 +870,7 @@ def _swing_rows(swing_report: dict[str, Any]) -> list[dict[str, Any]]:
             "reason_label": _reason_text(reasons),
             "approval_id": item.get("approval_id"),
             "approval_artifact_approved": bool(approval_id and approval_id in approved_ids),
-            "auto_approval_approved": bool(auto_real_canary),
+            "auto_approval_approved": False,
             "approval_contract_status": item.get("approval_contract_status") or contract.get("approval_contract_status"),
             "approval_live_ready": bool(item.get("approval_live_ready") or contract.get("approval_live_ready")),
             "approval_artifact_path": item.get("approval_artifact_path") or contract.get("approval_artifact_path"),
@@ -884,13 +884,43 @@ def _swing_rows(swing_report: dict[str, Any]) -> list[dict[str, Any]]:
     return rows
 
 
+def _legacy_phase0_real_canary_row(item: dict[str, Any], family: str) -> dict[str, Any]:
+    reasons = ["legacy_phase0_real_canary_ignored"]
+    row = {
+        "domain": "swing",
+        "family": family,
+        "description": _description(family),
+        "state": "legacy_archive",
+        "current_application": _current_application(family, "legacy_archive", False),
+        "state_interpretation": _state_interpretation("legacy_archive", False),
+        "score": item.get("tradeoff_score"),
+        "score_label": _format_score(item.get("tradeoff_score")),
+        "sample": {
+            "count": item.get("sample_count"),
+            "floor": item.get("sample_floor"),
+        },
+        "reasons": reasons,
+        "reason_label": _reason_text(reasons),
+        "approval_id": item.get("approval_id"),
+        "approval_artifact_approved": False,
+        "auto_approval_approved": False,
+        "approval_contract_status": "legacy_archive",
+        "approval_live_ready": False,
+        "approval_artifact_path": None,
+        "approval_contract_missing_components": [],
+        "selected_auto_bounded_live": False,
+        "allowed_runtime_apply": False,
+        "runtime_effect": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+    }
+    row.update(_gate_review("swing", family, reasons))
+    return row
+
+
 def _swing_approval_artifact_reason(family: str, target_date: str) -> str:
     if not target_date:
         return "approval_artifact_missing"
-    if family == "swing_one_share_real_canary_phase0":
-        return ""
-    if family == "swing_scale_in_real_canary_phase0":
-        return ""
     artifact = SWING_RUNTIME_APPROVAL_ARTIFACT_DIR / f"swing_runtime_approvals_{target_date}.json"
     return "" if artifact.exists() else "approval_artifact_missing"
 
@@ -1886,6 +1916,8 @@ def build_runtime_approval_summary(target_date: str) -> dict[str, Any]:
         f"source_load_{item.get('status')}:{Path(str(item.get('path') or '')).name}"
         for item in _JSON_LOAD_DIAGNOSTICS
     ]
+    active_swing_rows = [row for row in swing_rows if row.get("state") != "legacy_archive"]
+    legacy_swing_rows = [row for row in swing_rows if row.get("state") == "legacy_archive"]
     report = {
         "date": target_date,
         "generated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
@@ -1916,8 +1948,14 @@ def build_runtime_approval_summary(target_date: str) -> dict[str, Any]:
             "scalping_items": len(scalping_rows),
             "scalping_selected_auto_bounded_live": sum(1 for row in scalping_rows if row["selected_auto_bounded_live"]),
             "scalping_legacy_hard_gate_risk_counts": _count_field(scalping_rows, "legacy_hard_gate_risk"),
-            "swing_blocked": len(swing_rows),
-            "swing_legacy_hard_gate_risk_counts": _count_field(swing_rows, "legacy_hard_gate_risk"),
+            "swing_blocked": len(active_swing_rows),
+            "swing_legacy_archive": len(legacy_swing_rows),
+            "swing_legacy_phase0_ignored": sum(
+                1
+                for row in legacy_swing_rows
+                if "legacy_phase0_real_canary_ignored" in (row.get("reasons") or [])
+            ),
+            "swing_legacy_hard_gate_risk_counts": _count_field(active_swing_rows, "legacy_hard_gate_risk"),
             "panic_approval_requested": sum(1 for row in panic_rows if row.get("state") == "approval_required"),
             "swing_requested": int((swing_report.get("summary") or {}).get("requested") or 0)
             if isinstance(swing_report.get("summary"), dict)
@@ -2152,6 +2190,7 @@ def render_runtime_approval_summary_markdown(report: dict[str, Any]) -> str:
         f"- scalping_items/selected: `{summary.get('scalping_items')}` / `{summary.get('scalping_selected_auto_bounded_live')}`",
         f"- scalping_legacy_hard_gate_risk_counts: `{summary.get('scalping_legacy_hard_gate_risk_counts')}`",
         f"- swing_blocked/requested/approved: `{summary.get('swing_blocked')}` / `{summary.get('swing_requested')}` / `{summary.get('swing_approved')}`",
+        f"- swing_legacy_archive/phase0_ignored: `{summary.get('swing_legacy_archive')}` / `{summary.get('swing_legacy_phase0_ignored')}`",
         f"- swing_legacy_hard_gate_risk_counts: `{summary.get('swing_legacy_hard_gate_risk_counts')}`",
         f"- panic_approval_requested: `{summary.get('panic_approval_requested')}`",
         f"- scalp_entry_adm_status: `{summary.get('scalp_entry_adm_status')}`",

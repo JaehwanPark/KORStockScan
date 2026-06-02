@@ -192,7 +192,8 @@ def build_cases_payload(
     trade_df: pd.DataFrame,
     seq_df: pd.DataFrame,
 ) -> dict:
-    cases: dict[str, list[dict]] = {
+    cases: dict = {
+        "feedback_sources": _load_feedback_sources(),
         "loss_split_entry":  [],
         "loss_full_fill":    [],
         "profit_split_entry": [],

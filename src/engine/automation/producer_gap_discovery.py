@@ -86,6 +86,12 @@ PRODUCER_DUAL_DECISIONS = {
     "source_quality_blocker",
     "reject",
 }
+SOURCE_BUNDLE_IMPLEMENTED_STATUSES = {
+    "implemented",
+    "implemented_but_hold_sample",
+    "implemented_but_waiting_sample",
+    "implemented_source_quality_contract_waiting_sample",
+}
 
 
 @dataclass(frozen=True)
@@ -1734,6 +1740,31 @@ def _source_bundle_by_pattern(bundle: dict[str, Any]) -> dict[str, dict[str, Any
     return out
 
 
+def _handled_forbidden_use_violations(
+    violations: list[str],
+    comparative_map: dict[str, dict[str, Any]],
+) -> tuple[list[str], list[str]]:
+    unresolved: list[str] = []
+    handled: list[str] = []
+    for violation in violations:
+        text = str(violation or "")
+        matched_review = None
+        for candidate_id, review in comparative_map.items():
+            if candidate_id and candidate_id in text:
+                matched_review = review
+                break
+        selected_decision = str((matched_review or {}).get("selected_decision") or "")
+        if selected_decision in {"reject", "source_quality_blocker"}:
+            handled.append(text)
+        else:
+            unresolved.append(text)
+    return unresolved, handled
+
+
+def _has_source_bundle_implementation(candidate: dict[str, Any]) -> bool:
+    return str(candidate.get("implementation_status") or "").strip() in SOURCE_BUNDLE_IMPLEMENTED_STATUSES
+
+
 def _apply_source_bundle_implementation(
     candidate: dict[str, Any],
     source_bundle_sections: dict[str, dict[str, Any]],
@@ -1837,6 +1868,10 @@ def build_producer_gap_discovery_report(
     review_map = _review_by_candidate(ai_payload) if ai_status == "parsed" else {}
     ai_proposal_map = _proposal_by_candidate(ai_payload) if ai_status == "parsed" else {}
     comparative_map = _comparative_by_candidate(ai_payload) if ai_status == "parsed" else {}
+    audit_forbidden_use_violations, handled_forbidden_use_violations = _handled_forbidden_use_violations(
+        audit_forbidden_use_violations,
+        comparative_map,
+    )
     candidate_ids = {str(item.get("candidate_id") or "") for item in candidates}
     missing_ai_proposal_count = len([candidate_id for candidate_id in candidate_ids if candidate_id not in ai_proposal_map])
     missing_comparative_review_count = len([candidate_id for candidate_id in candidate_ids if candidate_id not in comparative_map])
@@ -1860,6 +1895,10 @@ def build_producer_gap_discovery_report(
         review_map = _review_by_candidate(ai_payload) if ai_status == "parsed" else {}
         ai_proposal_map = _proposal_by_candidate(ai_payload) if ai_status == "parsed" else {}
         comparative_map = _comparative_by_candidate(ai_payload) if ai_status == "parsed" else {}
+        audit_forbidden_use_violations, handled_forbidden_use_violations = _handled_forbidden_use_violations(
+            audit_forbidden_use_violations,
+            comparative_map,
+        )
         missing_ai_proposal_count = len([candidate_id for candidate_id in candidate_ids if candidate_id not in ai_proposal_map])
         missing_comparative_review_count = len([candidate_id for candidate_id in candidate_ids if candidate_id not in comparative_map])
         fail_closed = ai_status != "parsed"
@@ -1877,6 +1916,7 @@ def build_producer_gap_discovery_report(
     )
     reviewed_candidates = []
     orders = []
+    implemented_candidate_count = 0
     for candidate in candidates:
         candidate_id = str(candidate.get("candidate_id") or "")
         review = review_map.get(candidate_id) or {}
@@ -1904,12 +1944,15 @@ def build_producer_gap_discovery_report(
             "ai_recommended_route": review.get("recommended_route") or "implement_now",
         }
         reviewed_candidates.append(merged)
+        if _has_source_bundle_implementation(merged):
+            implemented_candidate_count += 1
         priority = str(merged.get("ai_priority") or "high")
         selected_decision = str(comparative_review.get("selected_decision") or "")
         if (
             not fail_closed
             and not audit_forbidden_use_violations
             and selected_decision not in {"reject", "source_quality_blocker"}
+            and not _has_source_bundle_implementation(merged)
             and PRIORITY_RANK.get(priority, 99) <= PRIORITY_RANK["high"]
         ):
             orders.append(_order_from_candidate(candidate, review, ai_tier2_proposal=ai_tier2_proposal, comparative_review=comparative_review))
@@ -1951,6 +1994,7 @@ def build_producer_gap_discovery_report(
                 1 for item in reviewed_candidates if PRIORITY_RANK.get(str(item.get("ai_priority")), 99) <= 1
             ),
             "workorder_count": len(orders),
+            "implemented_candidate_count": implemented_candidate_count,
             "deterministic_proposal_count": len(candidates),
             "ai_tier2_proposal_count": sum(
                 1 for item in reviewed_candidates if item.get("ai_tier2_proposal", {}).get("proposal_status") == "provided"
@@ -2000,6 +2044,8 @@ def build_producer_gap_discovery_report(
             "provider_status": provider_status,
             "input_context_hash": _text_hash(context),
             "audit": audit,
+            "handled_forbidden_use_violations": handled_forbidden_use_violations,
+            "unresolved_forbidden_use_violations": audit_forbidden_use_violations,
             "candidate_reviews": ai_payload.get("candidate_reviews") if isinstance(ai_payload.get("candidate_reviews"), list) else [],
             "deterministic_proposals": [
                 item.get("deterministic_proposal") for item in reviewed_candidates if item.get("deterministic_proposal")

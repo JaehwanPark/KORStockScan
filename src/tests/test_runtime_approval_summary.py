@@ -802,7 +802,7 @@ def test_runtime_approval_summary_classifies_legacy_gate_and_contract_gaps(tmp_p
     assert report["summary"]["swing_legacy_hard_gate_risk_counts"]["contract_gap"] == 1
 
 
-def test_runtime_approval_summary_surfaces_swing_one_share_approval_request(tmp_path, monkeypatch):
+def test_runtime_approval_summary_surfaces_swing_one_share_legacy_archive_request(tmp_path, monkeypatch):
     ev_dir = tmp_path / "threshold_cycle_ev"
     swing_dir = tmp_path / "swing_runtime_approval"
     approval_dir = tmp_path / "approvals"
@@ -849,10 +849,19 @@ def test_runtime_approval_summary_surfaces_swing_one_share_approval_request(tmp_
     report = mod.build_runtime_approval_summary("2026-05-15")
 
     assert report["summary"]["swing_requested"] == 1
-    assert report["swing"][0]["family"] == "swing_one_share_real_canary_phase0"
-    assert report["swing"][0]["state"] == "approval_required"
-    assert report["swing"][0]["reason_label"] == "approval request 미승인"
-    assert report["swing"][0]["approval_id"] == "swing_one_share_real_canary:2026-05-15:phase0"
+    assert report["summary"]["swing_blocked"] == 0
+    assert report["summary"]["swing_legacy_archive"] == 1
+    assert report["summary"]["swing_legacy_phase0_ignored"] == 1
+    assert report["summary"]["swing_legacy_hard_gate_risk_counts"] == {}
+    assert len(report["swing"]) == 1
+    row = report["swing"][0]
+    assert row["family"] == "swing_one_share_real_canary_phase0"
+    assert row["state"] == "legacy_archive"
+    assert row["reasons"] == ["legacy_phase0_real_canary_ignored"]
+    assert row["selected_auto_bounded_live"] is False
+    assert row["approval_live_ready"] is False
+    assert row["actual_order_submitted"] is False
+    assert row["broker_order_forbidden"] is True
 
 
 def test_runtime_approval_summary_surfaces_panic_approval_requests(tmp_path, monkeypatch):

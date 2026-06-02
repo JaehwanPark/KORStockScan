@@ -283,6 +283,7 @@ def build_payload_cases(
         "schema_version": SCHEMA_VERSION,
         "payload_type": "deepseek_swing_pattern_lab_cases",
         "generated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
+        "feedback_sources": _load_feedback_sources(),
         "selected_trades": [],
         "findings_brief": [],
         "ofi_qi_samples": [],

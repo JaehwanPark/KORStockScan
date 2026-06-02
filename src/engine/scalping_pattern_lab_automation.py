@@ -369,6 +369,28 @@ def _code_improvement_orders(findings: list[dict[str, Any]], solo_findings: list
             continue
         seen.add(order_id)
         subsystem = str(finding.get("target_subsystem") or "scalping_logic")
+        route = str(finding.get("route") or "evidence_review")
+        instrumentation_status = (
+            {
+                "implementation_status": "implemented_but_waiting_sample",
+                "implementation_checks": [
+                    "pattern lab instrumentation order preserves runtime_effect=false",
+                    "latency_canary or runtime_instrumentation metrics are surfaced as report-only evidence",
+                    "daily EV report consumes the order as provenance only",
+                ],
+                "implementation_provenance": {
+                    "implementation_type": "pattern_lab_report_only_instrumentation",
+                    "source_report_type": "scalping_pattern_lab_automation",
+                    "finding_id": finding.get("finding_id"),
+                    "target_subsystem": subsystem,
+                    "runtime_effect": False,
+                    "allowed_runtime_apply": False,
+                    "decision_authority": DECISION_AUTHORITY,
+                },
+            }
+            if route == "instrumentation_order"
+            else {}
+        )
         files = {
             "entry_funnel": ["src/engine/daily_threshold_cycle_report.py", "src/engine/sniper_missed_entry_counterfactual.py"],
             "holding_exit": ["src/engine/daily_threshold_cycle_report.py", "src/engine/sniper_state_handlers.py"],
@@ -380,6 +402,13 @@ def _code_improvement_orders(findings: list[dict[str, Any]], solo_findings: list
                 "order_id": order_id,
                 "title": str(finding.get("title") or ""),
                 "target_subsystem": subsystem,
+                "lifecycle_stage": finding.get("lifecycle_stage"),
+                "route": route,
+                "mapped_family": finding.get("mapped_family"),
+                "improvement_type": (
+                    finding.get("improvement_type")
+                    or ("threshold_family_input" if finding.get("mapped_family") else finding.get("finding_id"))
+                ),
                 "intent": "Generate implementation work from pattern-lab EV evidence without direct runtime mutation.",
                 "evidence": finding.get("evidence") or [],
                 "expected_ev_effect": "Improve EV attribution and prepare bounded calibration input.",
@@ -395,6 +424,7 @@ def _code_improvement_orders(findings: list[dict[str, Any]], solo_findings: list
                 "allowed_runtime_apply": False,
                 "forbidden_uses": FORBIDDEN_USES,
                 "priority": priority,
+                **instrumentation_status,
             }
         )
     return orders

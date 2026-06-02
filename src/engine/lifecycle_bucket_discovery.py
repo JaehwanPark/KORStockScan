@@ -86,6 +86,9 @@ LDM_REFINEMENT_CLOSURE_STATUSES = {
     "source_quality_gap_created",
     "needs_more_contrastive_sample",
     "rejected_as_fragile",
+    "rare_observation_only_budget_capped",
+    "rejected_as_structurally_uncontrastable",
+    "contract_handoff_gap_created",
 }
 LIFECYCLE_FLOW_PARENT_LEVEL_FIELDS = {
     "L1_broad": ("entry_score_parent", "submit_quality_parent", "exit_outcome_parent"),
@@ -706,10 +709,26 @@ def _explicit_lifecycle_flow_dimensions(bucket: dict[str, Any]) -> dict[str, str
     return dimensions
 
 
+def _implicit_lifecycle_flow_dimensions_from_key(bucket_key: str) -> dict[str, str]:
+    text = str(bucket_key or "").strip()
+    if not text:
+        return {}
+    dimensions: dict[str, str] = {}
+    for stage_key in ("entry", "submit", "holding", "scale_in", "exit"):
+        marker = f"{stage_key}_"
+        if text.startswith(marker) or f"_{marker}" in text:
+            dimensions[stage_key] = f"{stage_key}_source_token:{text}"
+    return dimensions
+
+
 def _candidate_source_dimensions(stage: str, bucket_type: str, bucket_key: str, bucket: dict[str, Any]) -> dict[str, str]:
     dimensions = _source_dimensions(bucket_type, bucket_key)
     if stage == "lifecycle_flow" or bucket_type == "combo_lifecycle_flow":
-        dimensions = {**dimensions, **_explicit_lifecycle_flow_dimensions(bucket)}
+        dimensions = {
+            **dimensions,
+            **_implicit_lifecycle_flow_dimensions_from_key(bucket_key),
+            **_explicit_lifecycle_flow_dimensions(bucket),
+        }
     return dimensions
 
 
@@ -791,6 +810,30 @@ def _recommended_resolution(candidate_state: str, bucket: dict[str, Any]) -> str
     if str(bucket.get("source_quality_gate") or "") != "pass":
         return "keep_collecting_until_sample_floor"
     return "keep_collecting"
+
+
+def _actionable_unknown_source_dimension_gap(
+    *,
+    stage: str,
+    bucket_type: str,
+    bucket_key: str,
+    taxonomy: dict[str, Any],
+    bucket: dict[str, Any],
+) -> bool:
+    if not ("unknown" in bucket_key or bucket.get("unknown_dimension_counts")):
+        return False
+    if taxonomy.get("missing_dimension_keys"):
+        return True
+    text = str(bucket_key or "").strip().lower()
+    if stage == "exit" and bucket_type == "exit_outcome" and text == "outcome_unknown":
+        return False
+    if bucket.get("unknown_dimension_counts"):
+        return True
+    if text in {"unknown", "missing", "none", "null"}:
+        return True
+    if stage == "lifecycle_flow" or bucket_type == "combo_lifecycle_flow":
+        return False
+    return "_unknown" in text or "unknown_" in text
 
 
 def _decision_authority_for_state(state: str) -> str:
@@ -901,6 +944,8 @@ def _normalize_candidate_runtime_metadata(item: dict[str, Any]) -> None:
 
 
 def _has_source_dimension_gap(item: dict[str, Any]) -> bool:
+    if str(item.get("source_dimension_gap") or "") == "":
+        return bool(item.get("missing_lifecycle_flow_stage_keys"))
     return bool(
         item.get("source_dimension_gap")
         or item.get("unknown_dimension_counts")
@@ -1431,10 +1476,28 @@ def _closure_for_ldm_refinement(item: dict[str, Any], matched_parent_ids: list[s
     classification = str(item.get("classification") or "").strip()
     gap_reason = str(item.get("gap_reason") or "").strip()
     match_count = _safe_int(item.get("match_count"))
+    diagnosis = item.get("repeated_status_diagnosis") if isinstance(item.get("repeated_status_diagnosis"), dict) else {}
+    retry_count = _safe_int(item.get("retry_count") or diagnosis.get("retry_count"))
+    closure_bias = str(item.get("recommended_closure_bias") or diagnosis.get("recommended_closure_bias") or "").strip()
+    diagnosis_reason = str(item.get("diagnosis_reason") or diagnosis.get("diagnosis_reason") or "").strip()
+    if closure_bias in {
+        "source_quality_gap_created",
+        "parent_refinement_candidate_created",
+        "new_parent_candidate_created",
+        "rare_observation_only_budget_capped",
+        "rejected_as_structurally_uncontrastable",
+        "rejected_as_fragile",
+        "contract_handoff_gap_created",
+    }:
+        if closure_bias == "parent_refinement_candidate_created" and not matched_parent_ids and gap_reason != "parent_ambiguous":
+            return "new_parent_candidate_created", diagnosis_reason or gap_reason or "diagnosed_taxonomy_gap_without_parent_match"
+        return closure_bias, diagnosis_reason or "diagnosed_repeated_status_closure_bias"
     if classification == "source_quality_gap" or gap_reason in {"join_key_missing", "source_quality_blocked"}:
         return "source_quality_gap_created", gap_reason or "source_quality_gap_classification"
     if match_count <= 1:
         return "rejected_as_fragile", "single_match_pressure_is_too_fragile_for_parent_refinement"
+    if retry_count >= 2 and item.get("contrary_sample_need") is True:
+        return "rare_observation_only_budget_capped", "repeated_contrast_gap_without_forced_diagnosis_budget_capped"
     if item.get("contrary_sample_need") is True and match_count < 3:
         return "needs_more_contrastive_sample", "contrary_sample_needed_before_parent_structure_change"
     if classification == "parent_support" and matched_parent_ids:
@@ -1451,7 +1514,7 @@ def _closure_for_ldm_refinement(item: dict[str, Any], matched_parent_ids: list[s
 
 
 def _apply_ldm_refinement_pressure(report: dict[str, Any], summary: dict[str, Any]) -> None:
-    target_date = str(report.get("date") or report.get("target_date") or "")
+    target_date = str(report.get("target_date") or report.get("date") or "")
     refinement = _load_ldm_refinement_report(target_date)
     inputs = [item for item in (refinement.get("refinement_inputs") or []) if isinstance(item, dict)]
     contract_issues = _ldm_refinement_contract_issues(refinement, target_date)
@@ -1490,6 +1553,10 @@ def _apply_ldm_refinement_pressure(report: dict[str, Any], summary: dict[str, An
             "matched_parent_ids": matched_parent_ids,
             "closure_status": closure_status,
             "closure_reason": closure_reason,
+            "diagnosed_status": item.get("diagnosed_status"),
+            "diagnosis_reason": item.get("diagnosis_reason"),
+            "retry_count": item.get("retry_count"),
+            "recommended_closure_bias": item.get("recommended_closure_bias"),
             "refinement_pressure_score": item.get("refinement_pressure_score"),
             "match_count": item.get("match_count"),
             "runtime_effect": False,
@@ -1510,6 +1577,8 @@ def _apply_ldm_refinement_pressure(report: dict[str, Any], summary: dict[str, An
                         "soft_hypothesis_id": item.get("soft_hypothesis_id"),
                         "classification": item.get("classification"),
                         "closure_status": closure_status,
+                        "diagnosed_status": item.get("diagnosed_status"),
+                        "diagnosis_reason": item.get("diagnosis_reason"),
                         "refinement_pressure_score": item.get("refinement_pressure_score"),
                         "pressure_reasons": item.get("pressure_reasons") or [],
                         "runtime_effect": False,
@@ -2352,13 +2421,12 @@ def _candidate_from_bucket(stage: str, bucket: dict[str, Any]) -> dict[str, Any]
         and "unknown" in bucket_key
     ):
         source_dimension_gap = "legacy_contract_known_unknown"
-    elif (
-        "unknown" in bucket_key
-        and (
-            stage != "lifecycle_flow"
-            and bucket_type != "combo_lifecycle_flow"
-            or bool(taxonomy.get("missing_dimension_keys"))
-        )
+    elif _actionable_unknown_source_dimension_gap(
+        stage=stage,
+        bucket_type=bucket_type,
+        bucket_key=bucket_key,
+        taxonomy=taxonomy,
+        bucket=bucket,
     ):
         source_dimension_gap = "unknown_source_dimensions"
     runtime_apply_allowed = state == "live_auto_apply_ready" and not lifecycle_flow_source_only_blocker

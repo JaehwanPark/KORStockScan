@@ -389,15 +389,7 @@ def test_build_threshold_cycle_ev_report_uses_existing_reports(tmp_path, monkeyp
     assert report["microstructure_reaction_context"]["available"] is False
     assert "microstructure_reaction_context_missing" not in report["warnings"]
     assert report["swing_runtime_approval"]["requested"] == 1
-    assert (
-        report["swing_runtime_approval"]["real_canary_policy"]["policy_id"]
-        == "swing_one_share_real_canary_phase0"
-    )
-    assert report["swing_runtime_approval"]["real_canary_policy"]["sim_only_actions"] == [
-        "AVG_DOWN",
-        "PYRAMID",
-        "SCALE_IN",
-    ]
+    assert "real_canary_policy" not in report["swing_runtime_approval"]
     assert report["swing_runtime_approval"]["requests"][0]["tradeoff_score"] == 0.72
     assert report["pattern_lab_automation"]["top_consensus_findings"][0]["mapped_family"] == "score65_74_recovery_probe"
     assert report["code_improvement_workorder"]["selected_order_count"] == 1
@@ -409,8 +401,7 @@ def test_build_threshold_cycle_ev_report_uses_existing_reports(tmp_path, monkeyp
     assert "Swing Runtime Approval" in markdown
     assert "Scalp Entry ADM" in markdown
     assert "Lifecycle Decision Matrix" in markdown
-    assert "swing_one_share_real_canary_phase0" in markdown
-    assert "AVG_DOWN, PYRAMID, SCALE_IN" in markdown
+    assert "real_canary_policy" not in markdown
     assert "swing_runtime_approval:2026-05-08:swing_model_floor" in markdown
 
 

@@ -218,50 +218,19 @@ def _swing_runtime_approval_summary(apply_manifest: dict[str, Any]) -> dict[str,
     approved = swing.get("approved_requests") if isinstance(swing.get("approved_requests"), list) else []
     selected = swing.get("selected") if isinstance(swing.get("selected"), list) else []
     decisions = swing.get("decisions") if isinstance(swing.get("decisions"), list) else []
-    real_canary_policy = (
-        swing.get("real_canary_policy") if isinstance(swing.get("real_canary_policy"), dict) else {}
-    )
-    scale_in_real_canary_policy = (
-        swing.get("scale_in_real_canary_policy")
-        if isinstance(swing.get("scale_in_real_canary_policy"), dict)
-        else {}
-    )
-    scale_in_selected = [
-        item
-        for item in selected
-        if isinstance(item, dict)
-        and str(item.get("policy_id") or item.get("family") or "") == "swing_scale_in_real_canary_phase0"
-    ]
-    one_share_selected = [
-        item
-        for item in selected
-        if isinstance(item, dict)
-        and str(item.get("policy_id") or item.get("family") or "") == "swing_one_share_real_canary_phase0"
-    ]
     return {
         "request_report": swing.get("request_report"),
         "approval_artifact": swing.get("approval_artifact"),
-        "one_share_real_canary_approval_artifact": swing.get("one_share_real_canary_approval_artifact"),
-        "scale_in_real_canary_approval_artifact": swing.get("scale_in_real_canary_approval_artifact"),
+        "legacy_phase0_real_canary_ignored": bool(swing.get("legacy_phase0_real_canary_ignored")),
         "requested": _safe_int(swing.get("requested"), len(requests)),
         "approved": _safe_int(swing.get("approved"), len(approved)),
         "selected_live_dry_run": len(selected),
-        "selected_one_share_real_canary": len(one_share_selected),
-        "selected_scale_in_real_canary": len(scale_in_selected),
         "dry_run_forced": bool(swing.get("dry_run_forced")),
-        "real_canary_policy": real_canary_policy,
-        "scale_in_real_canary_policy": scale_in_real_canary_policy,
         "source_quality_blocked_families": (
             swing.get("source_quality_blocked_families")
             if isinstance(swing.get("source_quality_blocked_families"), list)
             else []
         ),
-        "real_execution_quality": {
-            "one_share_canary_selected": len(one_share_selected),
-            "scale_in_canary_selected": len(scale_in_selected),
-            "execution_quality_source": "real_only",
-            "sim_probe_ev_source": "separate_from_broker_execution_quality",
-        },
         "blocked": list(swing.get("blocked") or []),
         "requests": [
             {
@@ -2196,14 +2165,7 @@ def render_threshold_cycle_ev_markdown(report: dict[str, Any]) -> str:
         f"- approval_artifact: `{swing_runtime.get('approval_artifact') or '-'}`",
         f"- requested/approved/live_dry_run: `{swing_runtime.get('requested')}` / `{swing_runtime.get('approved')}` / `{swing_runtime.get('selected_live_dry_run')}`",
         f"- dry_run_forced: `{swing_runtime.get('dry_run_forced')}`",
-        f"- real_canary_policy: `{((swing_runtime.get('real_canary_policy') or {}).get('policy_id')) or '-'}`",
-        f"- one_share_real_canary_artifact: `{swing_runtime.get('one_share_real_canary_approval_artifact') or '-'}`",
-        f"- selected_one_share_real_canary: `{swing_runtime.get('selected_one_share_real_canary')}`",
-        f"- real_order_allowed_actions: `{', '.join((swing_runtime.get('real_canary_policy') or {}).get('real_order_allowed_actions') or [])}`",
-        f"- sim_only_actions: `{', '.join((swing_runtime.get('real_canary_policy') or {}).get('sim_only_actions') or [])}`",
-        f"- scale_in_real_canary_policy: `{((swing_runtime.get('scale_in_real_canary_policy') or {}).get('policy_id')) or '-'}`",
-        f"- selected_scale_in_real_canary: `{swing_runtime.get('selected_scale_in_real_canary')}`",
-        f"- scale_in_real_execution_quality: `{swing_runtime.get('real_execution_quality') or {}}`",
+        f"- legacy_phase0_real_canary_ignored: `{swing_runtime.get('legacy_phase0_real_canary_ignored')}`",
         f"- blocked: `{swing_runtime.get('blocked') or []}`",
         "",
         "## Code Improvement Workorder",

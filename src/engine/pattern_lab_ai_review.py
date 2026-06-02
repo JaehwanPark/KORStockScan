@@ -488,6 +488,48 @@ def _feedback_handoff_closed(context: dict[str, Any]) -> bool:
     )
 
 
+def _source_label_status_closed(context: dict[str, Any], label: str) -> bool:
+    sources = context.get("sources") if isinstance(context.get("sources"), dict) else {}
+    source = sources.get(label) if isinstance(sources.get(label), dict) else {}
+    if not source:
+        return False
+    summary = source.get("summary") if isinstance(source.get("summary"), dict) else {}
+    status = str(source.get("status") or summary.get("status") or "pass").lower()
+    if status in {"fail", "failed"}:
+        return False
+    return source.get("runtime_effect") is not True and source.get("allowed_runtime_apply") is not True
+
+
+_FEEDBACK_SOURCE_REVIEW_IDS = {
+    "scalping_pattern_lab_automation",
+    "swing_pattern_lab_automation",
+    "pattern_lab_currentness_audit",
+    "threshold_cycle_ev",
+    "code_improvement_workorder",
+}
+
+
+def _is_resolved_feedback_source_missing_gap(item: dict[str, Any], context: dict[str, Any]) -> bool:
+    if str(item.get("final_state") or "") not in {"automation_handoff_gap", "ai_review_gap"}:
+        return False
+    if str(item.get("final_decision") or "") == "keep":
+        return False
+    if not _feedback_handoff_closed(context):
+        return False
+    review_id = str(item.get("review_id") or "").strip().lower()
+    reason = str(item.get("reason") or "").lower()
+    matched_labels = [
+        label
+        for label in _FEEDBACK_SOURCE_REVIEW_IDS
+        if review_id == label or label in reason
+    ]
+    if not matched_labels:
+        return False
+    if not any(token in reason for token in ("missing", "absence", "incomplete", "handoff", "feedback")):
+        return False
+    return all(_source_label_status_closed(context, label) for label in matched_labels)
+
+
 def _apply_feedback_handoff_resolutions(payload: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     if not _feedback_handoff_closed(context):
         return payload
@@ -504,7 +546,8 @@ def _apply_feedback_handoff_resolutions(payload: dict[str, Any], context: dict[s
         final_state = str(item.get("final_state") or "")
         review_id = str(item.get("review_id") or "unknown")
         generic_review = review_id.startswith("interpretation_") or review_id in GENERIC_FEEDBACK_HANDOFF_REVIEW_IDS
-        if final_state in {"automation_handoff_gap", "ai_review_gap"} and generic_review:
+        source_missing_gap = _is_resolved_feedback_source_missing_gap(item, context)
+        if final_state in {"automation_handoff_gap", "ai_review_gap"} and (generic_review or source_missing_gap):
             resolved_ids.append(review_id)
             resolved_conclusions.append(
                 {
@@ -514,7 +557,11 @@ def _apply_feedback_handoff_resolutions(payload: dict[str, Any], context: dict[s
                     "explicit_gap_type": None,
                     "auditor_pass": True,
                     "feedback_handoff_resolution": {
-                        "status": "resolved_by_currentness_feedback_handoff_pass",
+                        "status": (
+                            "resolved_by_currentness_feedback_handoff_pass"
+                            if generic_review
+                            else "resolved_by_existing_feedback_source_context"
+                        ),
                         "runtime_effect": False,
                         "allowed_runtime_apply": False,
                         "decision_authority": "pattern_lab_feedback_handoff_source_only",

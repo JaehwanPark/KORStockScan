@@ -528,6 +528,7 @@ class TestBuildDeepSeekPayload:
             "micro_missing+observer_unhealthy+micro_not_ready+state_insufficient": 1
         }
         assert summary["ofi_qi_summary"]["observer_unhealthy_overlap"]["observer_unhealthy_only"] == 0
+        assert summary["feedback_sources"]["runtime_effect"] is False
 
     def test_build_payload_cases(self):
         trade = _sample_trade_fact()
@@ -539,6 +540,7 @@ class TestBuildDeepSeekPayload:
         assert len(cases["selected_trades"]) == 2
         assert len(cases["ofi_qi_samples"]) == 2
         assert cases["ofi_qi_samples"][1]["reason_flags"]["micro_not_ready"] is True
+        assert cases["feedback_sources"]["runtime_effect"] is False
 
     def test_generate_final_review_markdown(self):
         analysis = {

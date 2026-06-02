@@ -847,12 +847,7 @@ def test_execute_swing_sim_scale_in_logs_automation_fields(monkeypatch):
 def test_execute_swing_real_canary_pyramid_submits_one_share_limit(monkeypatch):
     rules = replace(
         CONFIG,
-        SWING_SCALE_IN_REAL_CANARY_ENABLED=True,
-        SWING_SCALE_IN_REAL_CANARY_ALLOWED_ARMS="PYRAMID,AVG_DOWN",
-        SWING_SCALE_IN_REAL_CANARY_MAX_QTY=1,
-        SWING_SCALE_IN_REAL_CANARY_MAX_ORDERS_PER_DAY=1,
-        SWING_SCALE_IN_REAL_CANARY_MAX_ORDERS_PER_POSITION=1,
-        SWING_SCALE_IN_REAL_CANARY_MAX_DAILY_NOTIONAL_KRW=100_000,
+        SWING_LIVE_ORDER_DRY_RUN_ENABLED=True,
         SWING_SCALE_IN_DYNAMIC_QTY_ENABLED=True,
         MAX_POSITION_PCT=0.20,
     )
@@ -911,24 +906,18 @@ def test_execute_swing_real_canary_pyramid_submits_one_share_limit(monkeypatch):
         admin_id=1,
     )
 
-    assert sent_orders == [("123456", 1, 9_990, "00")]
-    assert result["ord_no"] == "REALADD1"
-    assert stock["pending_add_qty"] == 1
-    assert stock["swing_scale_in_real_canary"] is True
-    submitted = [fields for stage, fields in logs if stage == "swing_scale_in_real_canary_order_submitted"][0]
-    assert submitted["actual_order_submitted"] is True
-    assert submitted["would_qty"] == 3
-    assert submitted["effective_qty"] == 3
-    assert submitted["real_canary_actual_qty"] == 1
-    assert submitted["real_canary_qty_cap"] == 1
-    assert submitted["qty_cap_reason"] == "swing_scale_in_real_canary_phase0"
+    assert result is None
+    assert sent_orders == []
+    blocked = [fields for stage, fields in logs if stage == "swing_live_order_dry_run_scale_in_block"][0]
+    assert blocked["actual_order_submitted"] is False
+    assert blocked["broker_order_forbidden"] is True
+    assert blocked["qty"] == 3
 
 
 def test_execute_swing_real_canary_blocks_bearish_micro(monkeypatch):
     rules = replace(
         CONFIG,
-        SWING_SCALE_IN_REAL_CANARY_ENABLED=True,
-        SWING_SCALE_IN_REAL_CANARY_ALLOWED_ARMS="PYRAMID,AVG_DOWN",
+        SWING_LIVE_ORDER_DRY_RUN_ENABLED=True,
         MAX_POSITION_PCT=0.20,
     )
     monkeypatch.setattr(state_handlers, "TRADING_RULES", rules)
@@ -985,67 +974,9 @@ def test_execute_swing_real_canary_blocks_bearish_micro(monkeypatch):
 
     assert result is None
     assert sent_orders == []
-    blocked = [fields for stage, fields in logs if stage == "swing_scale_in_real_canary_blocked"][0]
-    assert blocked["block_reason"] == "ofi_qi_risk_bearish"
+    blocked = [fields for stage, fields in logs if stage == "swing_live_order_dry_run_scale_in_block"][0]
     assert blocked["actual_order_submitted"] is False
-
-
-def test_evaluate_swing_one_share_real_canary_caps_initial_qty(monkeypatch):
-    rules = replace(
-        CONFIG,
-        SWING_LIVE_ORDER_DRY_RUN_ENABLED=True,
-        SWING_ONE_SHARE_REAL_CANARY_ENABLED=True,
-        SWING_ONE_SHARE_REAL_CANARY_ALLOWED_CODES="123456",
-        SWING_ONE_SHARE_REAL_CANARY_MAX_QTY=5,
-        SWING_ONE_SHARE_REAL_CANARY_MAX_NEW_ENTRIES_PER_DAY=1,
-        SWING_ONE_SHARE_REAL_CANARY_MAX_OPEN_POSITIONS=3,
-        SWING_ONE_SHARE_REAL_CANARY_MAX_TOTAL_NOTIONAL_KRW=300_000,
-        SWING_ONE_SHARE_REAL_CANARY_REQUIRE_APPROVAL_ARTIFACT=True,
-    )
-    monkeypatch.setattr(state_handlers, "TRADING_RULES", rules)
-    monkeypatch.setattr(state_handlers, "ACTIVE_TARGETS", [])
-
-    result = state_handlers._evaluate_swing_one_share_real_canary(
-        {"strategy": "KOSPI_ML", "status": "WATCHING"},
-        "123456",
-        request_qty=5,
-        request_price=10_000,
-        ws_data={"curr": 10_000},
-        submit_revalidation_fields={},
-        swing_entry_micro_fields={"swing_micro_advice": "SUPPORT_ENTRY"},
-    )
-
-    assert result["allowed"] is True
-    assert result["qty"] == 1
-    assert result["reason"] == "swing_one_share_real_canary_allowed"
-    assert result["fields"]["actual_order_submitted"] is True
-    assert result["fields"]["real_canary_actual_qty"] == 1
-    assert result["fields"]["qty_cap_reason"] == "swing_one_share_real_canary_phase0"
-
-
-def test_evaluate_swing_one_share_real_canary_blocks_unapproved_code(monkeypatch):
-    rules = replace(
-        CONFIG,
-        SWING_ONE_SHARE_REAL_CANARY_ENABLED=True,
-        SWING_ONE_SHARE_REAL_CANARY_ALLOWED_CODES="123456",
-        SWING_ONE_SHARE_REAL_CANARY_REQUIRE_APPROVAL_ARTIFACT=True,
-    )
-    monkeypatch.setattr(state_handlers, "TRADING_RULES", rules)
-    monkeypatch.setattr(state_handlers, "ACTIVE_TARGETS", [])
-
-    result = state_handlers._evaluate_swing_one_share_real_canary(
-        {"strategy": "KOSPI_ML", "status": "WATCHING"},
-        "654321",
-        request_qty=1,
-        request_price=10_000,
-        ws_data={"curr": 10_000},
-        submit_revalidation_fields={},
-        swing_entry_micro_fields={},
-    )
-
-    assert result["allowed"] is False
-    assert result["reason"] == "code_not_approved"
-    assert result["fields"]["allowed_codes"] == "123456"
+    assert blocked["broker_order_forbidden"] is True
 
 
 def test_execute_scalping_reversal_add_uses_resolved_price_not_curr(monkeypatch):

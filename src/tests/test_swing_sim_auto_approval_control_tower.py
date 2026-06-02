@@ -93,11 +93,12 @@ def test_control_tower_merges_swing_ldm_and_bottom_rebound_sources() -> None:
     )
 
     assert approval["approved"] is True
-    assert approval["approved_policy_count"] == 4
+    assert approval["approved_policy_count"] == 3
     assert approval["approved_source_ids"] == [
         "bottom_rebound_policy_auto_loop",
         "swing_lifecycle_bucket_discovery",
         "swing_runtime_approval",
+        "swing_strategy_discovery_ev",
     ]
     assert approval["final_user_approval_boundary"] == "full_live_only"
     assert approval["runtime_effect"] is False
@@ -116,7 +117,9 @@ def test_control_tower_merges_swing_ldm_and_bottom_rebound_sources() -> None:
     assert bucket_priority["broker_order_forbidden"] is True
     assert {item["policy_kind"] for item in approval["approved_policies"]} >= {
         "swing_runtime_dry_run_pre_final_policy",
-        "swing_bounded_real_canary_pre_final_policy",
+    }
+    assert "swing_bounded_real_canary_pre_final_policy" not in {
+        item["policy_kind"] for item in approval["approved_policies"]
     }
     assert all(
         (item.get("auto_promotion_contract") or {}).get("tier2_status") == "parsed"
@@ -204,6 +207,7 @@ def test_control_tower_blocks_runtime_pre_final_when_tier2_missing() -> None:
     assert approval["approved_source_ids"] == [
         "bottom_rebound_policy_auto_loop",
         "swing_lifecycle_bucket_discovery",
+        "swing_strategy_discovery_ev",
     ]
     assert "swing_runtime_approval" not in approval["approved_source_ids"]
     assert not [

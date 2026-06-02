@@ -170,6 +170,52 @@ def test_lifecycle_summary_counts_market_regime_prior_reasons():
     }
 
 
+def test_lifecycle_summary_ignores_legacy_phase0_real_canary_receipts():
+    summary = mod.summarize_lifecycle_events(
+        [
+            {
+                "stage": "swing_one_share_real_canary_blocked",
+                "record_id": "r1",
+                "stock_code": "000001",
+                "fields": {
+                    "strategy": "KOSPI_ML",
+                    "actual_order_submitted": True,
+                },
+            },
+            {
+                "stage": "swing_scale_in_real_canary_order_submitted",
+                "record_id": "r2",
+                "stock_code": "000002",
+                "fields": {
+                    "strategy": "KOSPI_ML",
+                    "add_type": "PYRAMID",
+                    "actual_order_submitted": True,
+                },
+            },
+            {
+                "stage": "swing_scale_in_micro_context_observed",
+                "record_id": "r3",
+                "stock_code": "000003",
+                "fields": {
+                    "strategy": "KOSPI_ML",
+                    "add_type": "PYRAMID",
+                    "actual_order_submitted": False,
+                },
+            },
+        ]
+    )
+
+    assert summary["raw_counts"]["swing_scale_in_micro_context_observed"] == 1
+    assert "swing_one_share_real_canary_blocked" not in summary["raw_counts"]
+    assert "swing_scale_in_real_canary_order_submitted" not in summary["raw_counts"]
+    assert summary["actual_order_submitted_flags"] == {"false": 1}
+    assert summary["scale_in_observation"]["action_groups"] == {"PYRAMID": 1}
+    assert summary["scale_in_observation"]["legacy_phase0_real_canary_receipts_ignored"] == {
+        "swing_one_share_real_canary_blocked": 1,
+        "swing_scale_in_real_canary_order_submitted": 1,
+    }
+
+
 def test_swing_improvement_automation_adds_entry_bottleneck_order():
     audit = {
         "date": "2026-05-22",

@@ -107,3 +107,36 @@ def test_producer_gap_source_bundle_reads_jsonl_gzip_sibling(monkeypatch, tmp_pa
     assert stop_section["source_quality_status"] == "implemented"
     assert stop_section["source_paths"] == [str(gz_path)]
     assert report["sources"]["sim_post_sell_evaluations"] == str(gz_path)
+
+
+def test_producer_gap_source_bundle_covers_volatile_runner_exit_counterfactual(monkeypatch, tmp_path):
+    monkeypatch.setattr(bundle, "REPORT_DIR", tmp_path / "report")
+    monkeypatch.setattr(bundle, "OUT_DIR", tmp_path / "report" / "producer_gap_source_bundle")
+    monkeypatch.setattr(bundle, "POST_SELL_DIR", tmp_path / "post_sell")
+    (tmp_path / "post_sell").mkdir(parents=True)
+    (tmp_path / "post_sell" / "sim_post_sell_candidates_2026-05-27.jsonl").write_text(
+        json.dumps(
+            {
+                "recommendation_id": "rec-1",
+                "sim_parent_record_id": "real-1",
+                "record_id": "sim-1",
+                "code": "005930",
+                "runner": True,
+                "post_exit_mfe": 4.2,
+                "peak_drawdown": -0.4,
+                "holding_flow_override_state": "runner",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    report = bundle.build_producer_gap_source_bundle("2026-05-27")
+
+    sections = {item["section_id"]: item for item in report["sections"]}
+    volatile = sections["volatile_runner_exit_counterfactual"]
+    assert volatile["pattern_type"] == "volatile_runner_exit_counterfactual_missing"
+    assert volatile["source_quality_status"] == "implemented"
+    assert volatile["runtime_effect"] is False
+    assert volatile["allowed_runtime_apply"] is False
+    assert volatile["broker_order_forbidden"] is True

@@ -36,8 +36,7 @@ FORBIDDEN_USES = sorted(
         + [
             "recommendation_history_replacement",
             "swing_real_order_conversion",
-            "swing_one_share_canary_approval",
-            "swing_scale_in_real_canary_approval",
+            "phase0_real_canary_reopen",
             "telegram_buy_alert",
             "direct_swing_runtime_hook",
         ]
@@ -353,7 +352,7 @@ def build_candidate_source_report(
                 "same-day live threshold change",
                 "broker order enablement",
                 "recommendation_history replacement",
-                "real canary approval without artifact",
+                "phase0 real canary approval or broker order enablement",
                 "bot restart",
             ],
         },

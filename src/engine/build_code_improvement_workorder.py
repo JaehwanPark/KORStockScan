@@ -132,6 +132,276 @@ def _previous_workorder_lineage(previous_report: dict[str, Any], current_orders:
     }
 
 
+def _recent_workorder_reports(target_date: str, *, lookback_days: int = 10) -> list[dict[str, Any]]:
+    try:
+        end_date = date.fromisoformat(target_date)
+    except ValueError:
+        return []
+    reports: list[dict[str, Any]] = []
+    for offset in range(1, lookback_days + 1):
+        candidate_date = (end_date - timedelta(days=offset)).isoformat()
+        path, _ = code_improvement_workorder_paths(candidate_date)
+        payload = _load_json(path)
+        if payload:
+            reports.append(payload)
+    return reports
+
+
+def _repeat_unresolved_signature(order: dict[str, Any]) -> str | None:
+    source_report_type = str(order.get("source_report_type") or "").strip()
+    target_subsystem = str(order.get("target_subsystem") or "").strip()
+    lifecycle_stage = str(order.get("lifecycle_stage") or "").strip()
+    improvement_type = str(order.get("improvement_type") or "").strip()
+    threshold_family = str(order.get("threshold_family") or "").strip()
+    title_slug = _slug(str(order.get("title") or ""))
+    identity_fields = [
+        source_report_type,
+        target_subsystem,
+        lifecycle_stage,
+        improvement_type,
+        threshold_family,
+        title_slug,
+    ]
+    if sum(1 for value in identity_fields if value) < 3:
+        return None
+    parts = [
+        source_report_type,
+        target_subsystem,
+        lifecycle_stage,
+        improvement_type,
+        threshold_family,
+        title_slug,
+    ]
+    return "sig:" + "|".join(parts)
+
+
+def _unresolved_repeat_counts(reports: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    counts: dict[str, dict[str, Any]] = {}
+    unresolved_decisions = {"attach_existing_family", "design_family_candidate", "defer_evidence"}
+    for report in reports:
+        seen_in_report: set[str] = set()
+        for section in ("orders", "non_selected_orders"):
+            orders = report.get(section) if isinstance(report.get(section), list) else []
+            for order in orders:
+                if not isinstance(order, dict):
+                    continue
+                order_id = str(order.get("order_id") or "").strip()
+                if not order_id or order_id in seen_in_report:
+                    continue
+                decision = str(order.get("decision") or "").strip()
+                status = str(order.get("implementation_status") or "").strip()
+                if decision not in unresolved_decisions:
+                    continue
+                if _is_implemented_status(status):
+                    continue
+                if order.get("runtime_effect") is True:
+                    continue
+                signature = _repeat_unresolved_signature(order)
+                repeat_keys = {order_id}
+                if signature:
+                    repeat_keys.add(signature)
+                for repeat_key in repeat_keys:
+                    if repeat_key in seen_in_report:
+                        continue
+                    seen_in_report.add(repeat_key)
+                    repeat_info = counts.setdefault(repeat_key, {"count": 0, "implementation_status_counts": {}})
+                    repeat_info["count"] = int(repeat_info.get("count") or 0) + 1
+                    if status:
+                        status_counts = repeat_info.setdefault("implementation_status_counts", {})
+                        status_counts[status] = int(status_counts.get(status) or 0) + 1
+    return counts
+
+
+def _repeat_info_count(repeat_info: Any) -> int:
+    if isinstance(repeat_info, dict):
+        return _safe_int(repeat_info.get("count"))
+    return _safe_int(repeat_info)
+
+
+def _repeat_info_primary_status(repeat_info: Any) -> str | None:
+    if not isinstance(repeat_info, dict):
+        return None
+    status_counts = repeat_info.get("implementation_status_counts")
+    if not isinstance(status_counts, dict) or not status_counts:
+        return None
+    status, _ = max(
+        ((str(key), _safe_int(value)) for key, value in status_counts.items() if str(key).strip()),
+        key=lambda pair: pair[1],
+        default=("", 0),
+    )
+    return status or None
+
+
+def _escalate_repeated_unresolved_orders(
+    classified: list[ClassifiedOrder],
+    *,
+    repeat_counts: dict[str, dict[str, Any]],
+    repeat_floor: int = 2,
+) -> tuple[list[ClassifiedOrder], list[str]]:
+    escalated: list[ClassifiedOrder] = []
+    escalated_ids: list[str] = []
+    unresolved_decisions = {"attach_existing_family", "design_family_candidate", "defer_evidence"}
+    for item in classified:
+        order_id = str(item.order.get("order_id") or "").strip()
+        signature = _repeat_unresolved_signature(item.order)
+        repeat_keys = [order_id]
+        if signature:
+            repeat_keys.append(signature)
+        repeat_key_counts = {
+            key: _repeat_info_count(repeat_counts.get(key))
+            for key in repeat_keys
+            if key
+        }
+        repeat_key, repeat_count = max(
+            repeat_key_counts.items(),
+            key=lambda pair: pair[1],
+            default=("", 0),
+        )
+        status = str(item.order.get("implementation_status") or "").strip()
+        primary_history_status = _repeat_info_primary_status(repeat_counts.get(repeat_key))
+        implemented_status_present = _is_implemented_status(status)
+        existing_family_only = (
+            item.decision == "attach_existing_family"
+            and bool(item.mapped_family)
+            and not status
+            and str(item.order.get("improvement_type") or "") != "source_quality_gap"
+        )
+        pattern_lab_design_only = (
+            item.decision == "design_family_candidate"
+            and item.order.get("source_report_type")
+            in {"scalping_pattern_lab_automation", "swing_pattern_lab_automation", "swing_improvement_automation"}
+            and not item.mapped_family
+            and not status
+            and not primary_history_status
+        )
+        pattern_lab_existing_family_evidence_only = (
+            item.decision == "defer_evidence"
+            and item.order.get("source_report_type")
+            in {"scalping_pattern_lab_automation", "swing_pattern_lab_automation"}
+            and bool(item.mapped_family)
+            and str(item.order.get("route") or "") in {"existing_family", "attach_existing_family"}
+            and str(item.order.get("improvement_type") or "")
+            in {"threshold_family_input", "pattern_lab_observation"}
+            and not status
+        )
+        manual_review_only = (
+            item.order.get("source_report_type") == "codebase_performance_workorder"
+            and str(
+                item.order.get("performance_candidate_state")
+                or item.order.get("candidate_state")
+                or ""
+            ).strip()
+            in {"deferred", "rejected"}
+        )
+        if (
+            order_id
+            and repeat_count >= repeat_floor
+            and item.decision in unresolved_decisions
+            and not implemented_status_present
+            and item.order.get("runtime_effect") is not True
+            and not existing_family_only
+            and not pattern_lab_design_only
+            and not pattern_lab_existing_family_evidence_only
+            and not manual_review_only
+        ):
+            escalated_order = dict(item.order)
+            original_status = status or primary_history_status or None
+            provenance = escalated_order.get("implementation_provenance")
+            if not isinstance(provenance, dict):
+                provenance = {}
+            escalated_order["original_implementation_status"] = original_status
+            escalated_order["implementation_status"] = "repeat_unresolved_escalated"
+            escalated_order["repeat_unresolved_escalation"] = {
+                "repeat_count": repeat_count,
+                "repeat_floor": repeat_floor,
+                "repeat_key": repeat_key,
+                "repeat_signature": signature,
+                "previous_decision": item.decision,
+                "previous_route": item.route,
+                "implementation_status": original_status,
+                "implementation_status_counts": (
+                    (repeat_counts.get(repeat_key) or {}).get("implementation_status_counts")
+                    if isinstance(repeat_counts.get(repeat_key), dict)
+                    else {}
+                ),
+                "runtime_effect": escalated_order.get("runtime_effect"),
+                "allowed_runtime_apply": escalated_order.get("allowed_runtime_apply"),
+            }
+            escalated_order["implementation_provenance"] = {
+                **provenance,
+                "repeat_unresolved_escalation": escalated_order["repeat_unresolved_escalation"],
+            }
+            escalated.append(
+                ClassifiedOrder(
+                    order=escalated_order,
+                    decision="implement_now",
+                    reason=(
+                        f"repeat unresolved automation finding appeared in {repeat_count} recent workorders; "
+                        "promote to source-only implementation review instead of leaving it as passive evidence"
+                    ),
+                    mapped_family=item.mapped_family,
+                    route="repeat_unresolved_escalation",
+                    confidence=item.confidence or "repeat_unresolved",
+                    automation_reentry=(
+                        "After implementation, regenerate the source report, code improvement workorder, "
+                        "threshold EV/runtime summary, and postclose verifier; runtime/order/provider/bot state "
+                        "must remain unchanged."
+                    ),
+                )
+            )
+            escalated_ids.append(order_id)
+        else:
+            escalated.append(item)
+    return escalated, sorted(escalated_ids)
+
+
+def _repeat_unresolved_original_status(order: dict[str, Any]) -> str:
+    repeat_escalation = order.get("repeat_unresolved_escalation")
+    if not isinstance(repeat_escalation, dict):
+        repeat_escalation = {}
+    return str(
+        order.get("original_implementation_status")
+        or repeat_escalation.get("implementation_status")
+        or order.get("implementation_status")
+        or ""
+    ).strip()
+
+
+def _selected_implement_now_resolution_summary(selected: list[ClassifiedOrder]) -> dict[str, Any]:
+    existing_ids: list[str] = []
+    new_ids: list[str] = []
+    existing_status_counts: dict[str, int] = {}
+    new_route_counts: dict[str, int] = {}
+    runtime_effect_true_ids: list[str] = []
+    for item in selected:
+        order = item.order
+        order_id = str(order.get("order_id") or "").strip()
+        if item.decision != "implement_now" or not order_id:
+            continue
+        if order.get("runtime_effect") is True:
+            runtime_effect_true_ids.append(order_id)
+            continue
+        original_status = _repeat_unresolved_original_status(order)
+        if _is_implemented_status(original_status):
+            existing_ids.append(order_id)
+            status_key = original_status or "implemented"
+            existing_status_counts[status_key] = existing_status_counts.get(status_key, 0) + 1
+            continue
+        new_ids.append(order_id)
+        route = str(item.route or order.get("route") or "implement_now")
+        new_route_counts[route] = new_route_counts.get(route, 0) + 1
+    return {
+        "existing_implementation_order_ids": sorted(existing_ids),
+        "existing_implementation_count": len(existing_ids),
+        "existing_implementation_status_counts": existing_status_counts,
+        "new_runtime_effect_false_order_ids": sorted(new_ids),
+        "new_runtime_effect_false_count": len(new_ids),
+        "new_runtime_effect_false_route_counts": new_route_counts,
+        "runtime_effect_true_order_ids": sorted(runtime_effect_true_ids),
+        "runtime_effect_true_count": len(runtime_effect_true_ids),
+    }
+
+
 def _safe_int(value: Any, default: int = 0) -> int:
     try:
         if value is None:
@@ -524,8 +794,10 @@ def _serialize_classified_order(item: ClassifiedOrder) -> dict[str, Any]:
         "data_quality_effect": bool(item.order.get("data_quality_effect")),
         "tuning_axis_effect": bool(item.order.get("tuning_axis_effect")),
         "implementation_status": item.order.get("implementation_status"),
+        "original_implementation_status": item.order.get("original_implementation_status"),
         "implementation_checks": item.order.get("implementation_checks") or [],
         "implementation_provenance": item.order.get("implementation_provenance"),
+        "repeat_unresolved_escalation": item.order.get("repeat_unresolved_escalation"),
         "parity_contract": item.order.get("parity_contract"),
         "source_bucket_id": item.order.get("source_bucket_id"),
         "runtime_hook_candidate_contract": item.order.get("runtime_hook_candidate_contract"),
@@ -704,6 +976,25 @@ def _classify_order(
         )
 
     if order.get("source_report_type") in {"pattern_lab_currentness_audit", "pattern_lab_ai_review", "tuning_observability_summary"}:
+        if (
+            order.get("source_report_type") == "pattern_lab_ai_review"
+            and str(order.get("improvement_type") or "") == "automation_handoff_gap"
+        ):
+            return ClassifiedOrder(
+                order=order,
+                decision="attach_existing_family",
+                reason=(
+                    "Pattern Lab AI review automation_handoff_gap is coverage evidence for the currentness "
+                    "handoff workorders; do not create duplicate implement_now items from the reviewer layer"
+                ),
+                mapped_family=mapped_family or "pattern_lab_feedback_handoff",
+                route="pattern_lab_ai_review_handoff_evidence",
+                confidence=confidence or "ai_two_pass_review",
+                automation_reentry=(
+                    "Keep as source-quality blocker evidence until pattern_lab_currentness_audit handoff "
+                    "orders close and the regenerated AI review parses sufficient context."
+                ),
+            )
         return ClassifiedOrder(
             order=order,
             decision="implement_now",
@@ -1796,7 +2087,11 @@ def _lifecycle_bucket_discovery_followup_orders(report: dict[str, Any]) -> list[
         stage = str(item.get("stage") or "unknown")
         bucket_id = str(item.get("bucket_id") or "")
         source_bucket_id = str(item.get("source_bucket_id") or bucket_id)
-        bucket_key = (stage, source_bucket_id)
+        if source_dimension_gap_required:
+            missing_dimension_keys = tuple(str(key) for key in (item.get("missing_dimension_keys") or []))
+            bucket_key = (stage, bucket_id, recommended_resolution, ",".join(missing_dimension_keys))
+        else:
+            bucket_key = (stage, source_bucket_id)
         if bucket_key in seen_bucket_keys:
             continue
         seen_bucket_keys.add(bucket_key)
@@ -2626,6 +2921,11 @@ def _panic_lifecycle_followup_orders(calibration_report: dict[str, Any]) -> list
     panic_sell_triggered = panic_sell_triggered or bool(panic_sell.get("market_breadth_followup_candidate"))
     panic_sell_triggered = panic_sell_triggered or bool(panic_sell_source_quality_blockers)
     if panic_sell_triggered:
+        panic_sell_implementation_status = (
+            "implemented_but_waiting_sample"
+            if not panic_sell_source_quality_blockers
+            else "implemented_source_quality_contract_waiting_sample"
+        )
         orders.append(
             {
                 "order_id": "order_panic_sell_defense_lifecycle_transition_pack",
@@ -2640,6 +2940,24 @@ def _panic_lifecycle_followup_orders(calibration_report: dict[str, Any]) -> list
                 "confidence": "consensus",
                 "priority": 6,
                 "runtime_effect": False,
+                "implementation_status": panic_sell_implementation_status,
+                "implementation_checks": [
+                    "panic_sell_defense source metrics are present in calibration_source_bundle",
+                    "panic_regime_mode and candidate_status are exposed as report-only provenance",
+                    "runtime_effect=false",
+                    "allowed_runtime_apply=false",
+                ],
+                "implementation_provenance": {
+                    "implementation_type": "panic_lifecycle_report_only_source_bundle",
+                    "source_report_type": "threshold_cycle_calibration_source_bundle",
+                    "source_metric_key": "panic_sell_defense",
+                    "panic_state": panic_sell.get("panic_state"),
+                    "panic_regime_mode": panic_sell.get("panic_regime_mode"),
+                    "source_quality_blockers": panic_sell_source_quality_blockers,
+                    "runtime_effect": False,
+                    "allowed_runtime_apply": False,
+                    "decision_authority": "report_only_source_bundle",
+                },
                 "expected_ev_effect": (
                     "Use panic-sell simulation and post-sell rebound evidence to propose threshold/guard changes, "
                     "then request explicit live-runtime approval without mutating exits automatically."
@@ -2696,6 +3014,11 @@ def _panic_lifecycle_followup_orders(calibration_report: dict[str, Any]) -> list
     panic_buy_triggered = panic_buy_triggered or bool(panic_buy_source_quality_blockers)
     if panic_buy_triggered:
         source_quality_only = bool(panic_buy_source_quality_blockers) or panic_buy_gate_state == "source_quality_blocked"
+        panic_buy_implementation_status = (
+            "implemented_source_quality_contract_waiting_sample"
+            if source_quality_only
+            else "implemented_but_waiting_sample"
+        )
         orders.append(
             {
                 "order_id": (
@@ -2718,6 +3041,24 @@ def _panic_lifecycle_followup_orders(calibration_report: dict[str, Any]) -> list
                 "confidence": "consensus",
                 "priority": 7,
                 "runtime_effect": False,
+                "implementation_status": panic_buy_implementation_status,
+                "implementation_checks": [
+                    "panic_buying source metrics are present in calibration_source_bundle",
+                    "panic_buy_regime_mode and source_quality_blockers are exposed as report-only provenance",
+                    "runtime_effect=false",
+                    "allowed_runtime_apply=false",
+                ],
+                "implementation_provenance": {
+                    "implementation_type": "panic_lifecycle_report_only_source_bundle",
+                    "source_report_type": "threshold_cycle_calibration_source_bundle",
+                    "source_metric_key": "panic_buying",
+                    "panic_buy_state": panic_buy.get("panic_buy_state"),
+                    "panic_buy_regime_mode": panic_buy.get("panic_buy_regime_mode"),
+                    "source_quality_blockers": panic_buy_source_quality_blockers,
+                    "runtime_effect": False,
+                    "allowed_runtime_apply": False,
+                    "decision_authority": "report_only_source_bundle",
+                },
                 "expected_ev_effect": (
                     "Route market breadth and micro coverage gaps as source-quality blockers before any panic-buying runtime candidate."
                     if source_quality_only
@@ -3031,6 +3372,12 @@ def _swing_lifecycle_bucket_discovery_followup_orders(report: dict[str, Any]) ->
     unreviewed_count = _safe_int(summary.get("sim_auto_unreviewed_candidate_count"), 0)
     downgraded_count = _safe_int(summary.get("sim_auto_downgraded_by_review_count"), 0)
     if unreviewed_count > 0 or downgraded_count > 0:
+        ai_review_followup_reasons = summary.get("ai_review_followup_reasons") or []
+        provider_unavailable_hold = (
+            str(summary.get("ai_review_blocker_state") or "") == "provider_unavailable"
+            and not bool(summary.get("ai_review_followup_required"))
+            and not ai_review_followup_reasons
+        )
         orders.append(
             {
                 "order_id": "order_swing_lifecycle_bucket_discovery_ai_review_rollup",
@@ -3038,8 +3385,8 @@ def _swing_lifecycle_bucket_discovery_followup_orders(report: dict[str, Any]) ->
                 "source_report_type": "swing_lifecycle_bucket_discovery",
                 "lifecycle_stage": "source_quality",
                 "target_subsystem": "swing_lifecycle_bucket_discovery",
-                "route": "instrumentation_order",
-                "mapped_family": None,
+                "route": "ai_review_provider_unavailable_hold" if provider_unavailable_hold else "instrumentation_order",
+                "mapped_family": "swing_lifecycle_bucket_discovery" if provider_unavailable_hold else None,
                 "threshold_family": None,
                 "improvement_type": "swing_bucket_ai_review_shard_gap",
                 "confidence": "postclose_bucket_discovery_source",
@@ -3052,10 +3399,13 @@ def _swing_lifecycle_bucket_discovery_followup_orders(report: dict[str, Any]) ->
                     f"sim_auto_reviewed_candidate_count={_safe_int(summary.get('sim_auto_reviewed_candidate_count'), 0)}",
                     f"sim_auto_unreviewed_candidate_count={unreviewed_count}",
                     f"sim_auto_downgraded_by_review_count={downgraded_count}",
-                    f"ai_review_followup_reasons={summary.get('ai_review_followup_reasons') or []}",
+                    f"ai_review_blocker_state={summary.get('ai_review_blocker_state') or ''}",
+                    f"ai_review_followup_required={bool(summary.get('ai_review_followup_required'))}",
+                    f"ai_review_followup_reasons={ai_review_followup_reasons}",
                     "decision_authority=swing_ldm_bucket_discovery_sim_auto",
                     "allowed_runtime_apply=false",
                 ],
+                "implementation_status": "implemented_but_waiting_sample" if provider_unavailable_hold else None,
                 "next_postclose_metric": "Partial AI review failures should create source-only downgrade evidence without hiding parsed shard candidates.",
                 "files_likely_touched": [
                     "src/engine/swing_lifecycle_bucket_discovery.py",
@@ -3365,6 +3715,8 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
         seen_keys.add(key)
         deduped_orders.append(order)
     orders = deduped_orders
+    recent_reports = _recent_workorder_reports(target_date)
+    repeat_counts = _unresolved_repeat_counts(recent_reports)
     classified = _sort_classified(
         [
             _classify_order(
@@ -3377,6 +3729,11 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
             for order in orders
         ]
     )
+    classified, repeat_escalated_order_ids = _escalate_repeated_unresolved_orders(
+        classified,
+        repeat_counts=repeat_counts,
+    )
+    classified = _sort_classified(classified)
     selected = classified[: max(1, int(max_orders))]
     required_handoff_order_ids = {
         str(order.get("order_id"))
@@ -3462,7 +3819,9 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
         selected_route_counts[route] = selected_route_counts.get(route, 0) + 1
         if item.order.get("runtime_effect") is False:
             selected_runtime_effect_false_count += 1
-            if item.decision != "attach_existing_family" and not _is_implemented_status(item.order.get("implementation_status")):
+            if item.decision != "attach_existing_family" and not _is_implemented_status(
+                _repeat_unresolved_original_status(item.order)
+            ):
                 selected_unimplemented_runtime_effect_false_count += 1
                 selected_unimplemented_route_counts[route] = selected_unimplemented_route_counts.get(route, 0) + 1
     non_selected_counts: dict[str, int] = {}
@@ -3474,6 +3833,7 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
         if item.decision == "attach_existing_family"
         and str(item.order.get("target_subsystem") or "") == "lifecycle_decision_matrix"
     )
+    implement_now_resolution_summary = _selected_implement_now_resolution_summary(selected)
     deferred_or_rejected_count = sum(
         non_selected_counts.get(decision, 0)
         for decision in ("design_family_candidate", "defer_evidence", "reject")
@@ -3584,6 +3944,22 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
             "selected_runtime_effect_false_count": selected_runtime_effect_false_count,
             "selected_unimplemented_runtime_effect_false_count": selected_unimplemented_runtime_effect_false_count,
             "selected_unimplemented_route_counts": selected_unimplemented_route_counts,
+            "selected_implement_now_resolution_summary": implement_now_resolution_summary,
+            "selected_implement_now_existing_implementation_count": implement_now_resolution_summary[
+                "existing_implementation_count"
+            ],
+            "selected_implement_now_existing_implementation_order_ids": implement_now_resolution_summary[
+                "existing_implementation_order_ids"
+            ],
+            "selected_implement_now_new_runtime_effect_false_count": implement_now_resolution_summary[
+                "new_runtime_effect_false_count"
+            ],
+            "selected_implement_now_new_runtime_effect_false_order_ids": implement_now_resolution_summary[
+                "new_runtime_effect_false_order_ids"
+            ],
+            "repeat_unresolved_escalation_count": len(repeat_escalated_order_ids),
+            "repeat_unresolved_escalated_order_ids": repeat_escalated_order_ids,
+            "repeat_unresolved_history_window_days": 10,
             "non_selected_decision_counts": non_selected_counts,
             "gemini_fresh": ((automation.get("ev_report_summary") or {}).get("gemini_fresh")),
             "claude_fresh": ((automation.get("ev_report_summary") or {}).get("claude_fresh")),
@@ -3748,6 +4124,12 @@ def render_code_improvement_workorder_markdown(report: dict[str, Any]) -> str:
         f"- selected_runtime_effect_false_count: `{summary.get('selected_runtime_effect_false_count')}`",
         f"- selected_unimplemented_runtime_effect_false_count: `{summary.get('selected_unimplemented_runtime_effect_false_count')}`",
         f"- selected_unimplemented_route_counts: `{summary.get('selected_unimplemented_route_counts')}`",
+        f"- selected_implement_now_existing_implementation_count: `{summary.get('selected_implement_now_existing_implementation_count')}`",
+        f"- selected_implement_now_existing_implementation_order_ids: `{summary.get('selected_implement_now_existing_implementation_order_ids')}`",
+        f"- selected_implement_now_new_runtime_effect_false_count: `{summary.get('selected_implement_now_new_runtime_effect_false_count')}`",
+        f"- selected_implement_now_new_runtime_effect_false_order_ids: `{summary.get('selected_implement_now_new_runtime_effect_false_order_ids')}`",
+        f"- repeat_unresolved_escalation_count: `{summary.get('repeat_unresolved_escalation_count')}`",
+        f"- repeat_unresolved_escalated_order_ids: `{summary.get('repeat_unresolved_escalated_order_ids')}`",
         f"- non_selected_decision_counts: `{summary.get('non_selected_decision_counts')}`",
         f"- gemini_fresh: `{summary.get('gemini_fresh')}`",
         f"- claude_fresh: `{summary.get('claude_fresh')}`",

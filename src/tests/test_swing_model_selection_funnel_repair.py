@@ -1137,7 +1137,6 @@ def test_swing_dry_run_submit_path_assumes_fill_after_legacy_prior(monkeypatch):
     rules = replace(
         CONFIG,
         SWING_LIVE_ORDER_DRY_RUN_ENABLED=True,
-        SWING_ONE_SHARE_REAL_CANARY_ENABLED=False,
         SWING_ORDERBOOK_MICRO_CONTEXT_ENABLED=False,
         SWING_SAME_SYMBOL_LOSS_REENTRY_GUARD_ENABLED=False,
     )
@@ -1196,13 +1195,6 @@ def test_swing_one_share_real_canary_submits_only_when_allowlisted(monkeypatch):
     rules = replace(
         CONFIG,
         SWING_LIVE_ORDER_DRY_RUN_ENABLED=True,
-        SWING_ONE_SHARE_REAL_CANARY_ENABLED=True,
-        SWING_ONE_SHARE_REAL_CANARY_REQUIRE_APPROVAL_ARTIFACT=True,
-        SWING_ONE_SHARE_REAL_CANARY_ALLOWED_CODES="000001",
-        SWING_ONE_SHARE_REAL_CANARY_MAX_QTY=1,
-        SWING_ONE_SHARE_REAL_CANARY_MAX_NEW_ENTRIES_PER_DAY=1,
-        SWING_ONE_SHARE_REAL_CANARY_MAX_OPEN_POSITIONS=3,
-        SWING_ONE_SHARE_REAL_CANARY_MAX_TOTAL_NOTIONAL_KRW=300_000,
         SWING_ORDERBOOK_MICRO_CONTEXT_ENABLED=False,
         SWING_SAME_SYMBOL_LOSS_REENTRY_GUARD_ENABLED=False,
     )
@@ -1241,25 +1233,19 @@ def test_swing_one_share_real_canary_submits_only_when_allowlisted(monkeypatch):
     )
 
     assert result is False
-    assert orders == [("000001", 1, 0)]
-    assert stock["actual_order_submitted"] is True
-    assert stock["broker_order_forbidden"] is False
-    canary = next(fields for stage, fields in logs if stage == "swing_one_share_real_canary_order_submitted")
-    assert canary["actual_order_submitted"] is True
-    assert canary["broker_order_forbidden"] is False
-    assert canary["real_canary_actual_qty"] == 1
+    assert orders == []
+    assert stock["actual_order_submitted"] is False
+    assert stock.get("broker_order_forbidden", True) is True
+    assert not [stage for stage, _ in logs if "real_canary" in stage]
     request = next(fields for stage, fields in logs if stage == "order_leg_request")
     assert request["actual_order_submitted"] is False
-    assert request["broker_order_forbidden"] is False
+    assert request["broker_order_forbidden"] is True
 
 
 def test_swing_one_share_real_canary_blocked_code_does_not_submit(monkeypatch):
     rules = replace(
         CONFIG,
         SWING_LIVE_ORDER_DRY_RUN_ENABLED=True,
-        SWING_ONE_SHARE_REAL_CANARY_ENABLED=True,
-        SWING_ONE_SHARE_REAL_CANARY_REQUIRE_APPROVAL_ARTIFACT=True,
-        SWING_ONE_SHARE_REAL_CANARY_ALLOWED_CODES="000002",
         SWING_ORDERBOOK_MICRO_CONTEXT_ENABLED=False,
         SWING_SAME_SYMBOL_LOSS_REENTRY_GUARD_ENABLED=False,
     )
@@ -1300,7 +1286,7 @@ def test_swing_one_share_real_canary_blocked_code_does_not_submit(monkeypatch):
 
     assert result is False
     stages = [stage for stage, _ in logs]
-    assert "swing_one_share_real_canary_blocked" in stages
+    assert "swing_one_share_real_canary_blocked" not in stages
     assert "swing_sim_order_bundle_assumed_filled" in stages
 
 
@@ -1308,7 +1294,6 @@ def test_swing_watching_legacy_priors_flow_to_same_submit_policy(monkeypatch):
     rules = replace(
         CONFIG,
         SWING_LIVE_ORDER_DRY_RUN_ENABLED=True,
-        SWING_ONE_SHARE_REAL_CANARY_ENABLED=False,
         SWING_ORDERBOOK_MICRO_CONTEXT_ENABLED=False,
         SWING_INTRADAY_PROBE_COUNTERFACTUAL_GATEKEEPER_ENABLED=False,
     )
@@ -1392,7 +1377,6 @@ def test_swing_watching_unconfirmed_market_regime_block_is_prior_observation(mon
     rules = replace(
         CONFIG,
         SWING_LIVE_ORDER_DRY_RUN_ENABLED=True,
-        SWING_ONE_SHARE_REAL_CANARY_ENABLED=False,
         SWING_ORDERBOOK_MICRO_CONTEXT_ENABLED=False,
         SWING_INTRADAY_PROBE_COUNTERFACTUAL_GATEKEEPER_ENABLED=False,
     )
@@ -1457,7 +1441,6 @@ def test_swing_watching_confirmed_market_regime_block_keeps_block_observation(mo
     rules = replace(
         CONFIG,
         SWING_LIVE_ORDER_DRY_RUN_ENABLED=True,
-        SWING_ONE_SHARE_REAL_CANARY_ENABLED=False,
         SWING_ORDERBOOK_MICRO_CONTEXT_ENABLED=False,
         SWING_INTRADAY_PROBE_COUNTERFACTUAL_GATEKEEPER_ENABLED=False,
     )
@@ -1534,7 +1517,6 @@ def test_swing_watching_market_regime_prior_observed_flows_to_probe_and_submit_p
     rules = replace(
         CONFIG,
         SWING_LIVE_ORDER_DRY_RUN_ENABLED=True,
-        SWING_ONE_SHARE_REAL_CANARY_ENABLED=False,
         SWING_ORDERBOOK_MICRO_CONTEXT_ENABLED=False,
         SWING_INTRADAY_PROBE_COUNTERFACTUAL_GATEKEEPER_ENABLED=True,
         SWING_INTRADAY_LIVE_EQUIV_PROBE_ENABLED=True,
@@ -2472,13 +2454,8 @@ def test_swing_runtime_approval_report_emits_machine_readable_requests():
     assert report["policy"]["perfect_spot_required"] is False
     assert report["policy"]["ev_calibration_source"] == "combined_real_plus_sim"
     assert report["policy"]["sim_authority"] == "equal_for_ev_calibration_when_sim_lifecycle_closed"
-    assert report["policy"]["execution_quality_source"] == "real_only"
     assert report["policy"]["runtime_apply_requires_user_approval_artifact"] is False
     assert report["policy"]["final_full_live_requires_user_approval"] is True
-    assert report["real_canary_policy"]["policy_id"] == "swing_one_share_real_canary_phase0"
-    assert report["real_canary_policy"]["real_order_allowed_actions"] == ["BUY_INITIAL", "SELL_CLOSE"]
-    assert report["real_canary_policy"]["sim_only_actions"] == ["AVG_DOWN", "PYRAMID", "SCALE_IN"]
-    assert "phase0_scale_in_real_order_attempted" in report["real_canary_policy"]["rollback_triggers"]
     assert report["approval_requests"]
     request = report["approval_requests"][0]
     assert request["approval_id"].startswith("swing_runtime_approval:2026-05-08:")
@@ -2487,9 +2464,6 @@ def test_swing_runtime_approval_report_emits_machine_readable_requests():
     assert request["human_approval_required"] is False
     assert request["actual_order_submitted"] is False
     assert request["combined_ev_authority"] is True
-    assert request["execution_quality_authority"] == "real_only"
-    assert request["real_canary_policy_ref"] == "swing_one_share_real_canary_phase0"
-    assert request["sim_only_actions"] == ["AVG_DOWN", "PYRAMID", "SCALE_IN"]
     assert report["rolling_source_bundle"]["combined"]["avg_profit_rate"] == 1.1
     assert (
         report["rolling_source_bundle"]["source_authority"]["combined"]
@@ -2552,20 +2526,12 @@ def test_swing_runtime_approval_emits_scale_in_real_canary_request_when_arm_read
     )
 
     report = build_swing_runtime_approval_report(audit, {"ai_status": "parsed"})
-    request = next(
+    assert not [
         item
         for item in report["approval_requests"]
         if item.get("policy_id") == "swing_scale_in_real_canary_phase0"
-    )
-
-    assert request["family"] == "swing_scale_in_real_canary_phase0"
-    assert request["allowed_actions"] == ["PYRAMID", "AVG_DOWN"]
-    assert request["recommended_values"]["max_order_qty"] == 1
-    assert request["recommended_values"]["enabled"] is True
-    assert request["dry_run_required"] is False
-    assert request["auto_promotion_contract"]["state"] == "bounded_real_canary_auto_approved"
-    assert request["auto_promotion_contract"]["tier2_status"] == "parsed"
-    assert report["scale_in_real_canary_policy"]["policy_id"] == "swing_scale_in_real_canary_phase0"
+    ]
+    assert "scale_in_real_canary_policy" not in report
 
 
 def test_swing_runtime_approval_blocks_scale_in_real_canary_on_invalid_ofi_qi_source_quality():
@@ -2618,12 +2584,11 @@ def test_swing_runtime_approval_blocks_scale_in_real_canary_on_invalid_ofi_qi_so
     blocked_families = {item["family"]: item for item in report["source_quality_blocked_families"]}
 
     assert scale_in_requests == []
-    assert "swing_scale_in_real_canary_phase0" in blocked_families
-    assert "scale_in_ofi_qi_invalid_micro_context" in blocked_families["swing_scale_in_real_canary_phase0"][
+    assert "swing_scale_in_ofi_qi_confirmation" in blocked_families
+    assert "scale_in_ofi_qi_invalid_micro_context" in blocked_families["swing_scale_in_ofi_qi_confirmation"][
         "block_reasons"
     ]
-    pyramid = next(item for item in report["scale_in_real_canary_policy"]["arm_decisions"] if item["arm"] == "PYRAMID")
-    assert pyramid["source_quality"]["valid_micro_context_count"] == 5
+    assert "scale_in_real_canary_policy" not in report
 
 
 def test_swing_improvement_automation_emits_workorder_ready_orders():

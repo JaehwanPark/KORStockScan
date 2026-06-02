@@ -67,6 +67,18 @@ SWING_RUNTIME_APPROVAL_LIVE_FAMILIES = {
     "swing_gatekeeper_reject_cooldown",
     "swing_market_regime_sensitivity",
 }
+LEGACY_PHASE0_REAL_CANARY_FAMILIES = {
+    "swing_one_share_real_canary_phase0",
+    "swing_scale_in_real_canary_phase0",
+}
+LEGACY_PHASE0_REAL_CANARY_STAGE_PREFIXES = (
+    "swing_one_share_real_canary_",
+    "swing_scale_in_real_canary_",
+)
+LEGACY_PHASE0_REAL_CANARY_FIELD_TOKENS = (
+    "swing_one_share_real_canary",
+    "swing_scale_in_real_canary",
+)
 SWING_ENTRY_BOTTLENECK_PRIMARY = "SWING_ENTRY_DROUGHT_CRITICAL"
 SWING_ENTRY_BOTTLENECK_ENTRY_FLOOR = 10
 SWING_ENTRY_BOTTLENECK_BLOCKER_FLOOR = 5
@@ -82,80 +94,6 @@ SWING_THRESHOLD_FORBIDDEN_USES = with_evidence_authority_forbidden_uses(
     ]
 )
 
-
-def swing_one_share_real_canary_phase0_policy() -> dict[str, Any]:
-    return {
-        "policy_id": "swing_one_share_real_canary_phase0",
-        "policy_state": "auto_approved_real_canary_phase0",
-        "runtime_apply_allowed": True,
-        "separate_user_approval_artifact_required": False,
-        "global_swing_dry_run_must_remain_enabled": True,
-        "broker_order_submission_scope": "approved_one_share_buy_and_closing_sell_only",
-        "max_order_qty": 1,
-        "max_new_entries_per_day": 1,
-        "max_open_positions": 3,
-        "max_total_notional_krw": 300000,
-        "same_symbol_active_limit": 1,
-        "real_order_allowed_actions": ["BUY_INITIAL", "SELL_CLOSE"],
-        "sim_only_actions": ["AVG_DOWN", "PYRAMID", "SCALE_IN"],
-        "blocked_real_order_actions": ["AVG_DOWN", "PYRAMID", "SCALE_IN"],
-        "execution_quality_source": "real_only",
-        "ev_calibration_source": "combined_real_plus_sim",
-        "required_provenance": {
-            "cohort": "swing_one_share_real_canary",
-            "actual_order_submitted": True,
-            "canary_qty_cap": 1,
-            "approval_id_required": False,
-            "auto_approval_id_required": True,
-            "simulation_book": None,
-        },
-        "rollback_triggers": [
-            "real_order_without_auto_approval_provenance",
-            "order_qty_gt_1",
-            "global_swing_dry_run_disabled",
-            "receipt_order_number_mismatch",
-            "sell_failure",
-            "price_guard_breach",
-            "daily_new_entry_cap_exceeded",
-            "open_position_cap_exceeded",
-            "total_notional_cap_exceeded",
-            "actual_order_submitted_provenance_missing",
-            "phase0_scale_in_real_order_attempted",
-        ],
-    }
-
-
-def swing_scale_in_real_canary_phase0_policy() -> dict[str, Any]:
-    return {
-        "policy_id": "swing_scale_in_real_canary_phase0",
-        "policy_state": "auto_approved_real_canary_phase0",
-        "runtime_apply_allowed": True,
-        "separate_user_approval_artifact_required": False,
-        "broker_order_submission_scope": "approved_real_holding_scale_in_only",
-        "allowed_actions": ["PYRAMID", "AVG_DOWN"],
-        "max_order_qty": 1,
-        "max_orders_per_day": 1,
-        "max_orders_per_position": 1,
-        "max_daily_notional_krw": 100000,
-        "order_type_policy": "limit_only_best_bid_or_defensive",
-        "blocked_contexts": ["sim", "probe", "dry_run", "stale_quote", "ofi_qi_risk_bearish"],
-        "required_provenance": {
-            "cohort": "swing_scale_in_real_canary_phase0",
-            "actual_order_submitted": True,
-            "real_canary_actual_qty": 1,
-            "real_canary_qty_cap": 1,
-            "auto_approval_id_required": True,
-            "simulation_book": None,
-        },
-        "rollback_triggers": [
-            "unauthorized_arm_submitted",
-            "qty_cap_breach",
-            "sim_or_probe_real_order_attempted",
-            "receipt_order_lifecycle_mismatch",
-            "price_stale_submit",
-            "ofi_qi_risk_bearish_submitted",
-        ],
-    }
 
 ENTRY_STAGES = {
     "blocked_swing_gap",
@@ -694,6 +632,20 @@ def _is_swing_event(event: dict[str, Any]) -> bool:
     return "gatekeeper" in lowered or "market_regime" in lowered
 
 
+def _is_legacy_phase0_real_canary_event(stage: str, fields: dict[str, Any]) -> bool:
+    lowered_stage = stage.lower()
+    if any(lowered_stage.startswith(prefix) for prefix in LEGACY_PHASE0_REAL_CANARY_STAGE_PREFIXES):
+        return True
+    family = str(fields.get("family") or fields.get("policy_id") or fields.get("approval_family") or "").strip().lower()
+    if family in LEGACY_PHASE0_REAL_CANARY_FAMILIES:
+        return True
+    for key in ("cohort", "source_family", "approval_id", "policy_id", "family"):
+        value = str(fields.get(key) or "").strip().lower()
+        if any(token in value for token in LEGACY_PHASE0_REAL_CANARY_FIELD_TOKENS):
+            return True
+    return False
+
+
 def _stage_group(stage: str) -> str:
     lowered = stage.lower()
     if stage in ENTRY_STAGES or "gatekeeper" in lowered or "market_regime" in lowered:
@@ -902,7 +854,7 @@ def summarize_lifecycle_events(events: Iterable[dict[str, Any]]) -> dict[str, An
     scale_in_arm_delta_vs_exit_only: dict[str, list[float]] = defaultdict(list)
     scale_in_arm_mae: dict[str, list[float]] = defaultdict(list)
     scale_in_arm_loser_extension = Counter()
-    scale_in_real_canary_receipts = Counter()
+    legacy_phase0_real_canary_receipts = Counter()
     ai_schema_valid = 0
     ai_schema_invalid = 0
     ai_parse_fail = 0
@@ -920,8 +872,11 @@ def summarize_lifecycle_events(events: Iterable[dict[str, Any]]) -> dict[str, An
         stage = _event_stage(event)
         if not stage:
             continue
-        swing_event_count += 1
         fields = _event_fields(event)
+        if _is_legacy_phase0_real_canary_event(stage, {**event, **fields}):
+            legacy_phase0_real_canary_receipts[stage] += 1
+            continue
+        swing_event_count += 1
         identity = _event_identity(event)
         group = _stage_group(stage)
         raw_by_stage[stage] += 1
@@ -1028,8 +983,6 @@ def summarize_lifecycle_events(events: Iterable[dict[str, Any]]) -> dict[str, An
             loser_extension = _first_present(fields, ("loser_extension", "loss_extension", "post_add_loser_extension"))
             if loser_extension not in (None, "") and _safe_bool(loser_extension):
                 scale_in_arm_loser_extension[scale_action] += 1
-            if stage.startswith("swing_scale_in_real_canary_"):
-                scale_in_real_canary_receipts[stage] += 1
         exit_source = _first_present(fields, ("exit_source", "sell_reason", "reason", "decision_source"))
         if exit_source not in (None, "") and group == "exit":
             exit_sources[str(exit_source)] += 1
@@ -1128,7 +1081,7 @@ def summarize_lifecycle_events(events: Iterable[dict[str, Any]]) -> dict[str, An
                 }
                 for arm in sorted(set(scale_in_actions) | {"PYRAMID", "AVG_DOWN"})
             },
-            "real_canary_receipt_quality": _counter_dict(scale_in_real_canary_receipts),
+            "legacy_phase0_real_canary_receipts_ignored": _counter_dict(legacy_phase0_real_canary_receipts),
             "zero_sample_reason": _scale_in_zero_sample_reason(
                 scale_in_raw_count, scale_in_guard_blockers, swing_event_count
             ),
@@ -1384,25 +1337,6 @@ def build_swing_lifecycle_contract_gaps(audit_report: dict[str, Any], entry_bott
                 },
             }
         )
-
-    real_canary_policy = swing_one_share_real_canary_phase0_policy()
-    gaps.append(
-        {
-            "gap_id": "SWING_REAL_CANARY_EXECUTION_CONTRACT",
-            "lifecycle_stage": "real_canary_execution",
-            "next_route": (
-                "real_canary_phase0_auto_approval"
-                if real_canary_policy.get("policy_state") == "auto_approved_real_canary_phase0"
-                else "code_improvement_workorder"
-            ),
-            "reason": "real broker receipt/fill/slippage/cancel/sell binding is valid only after phase0 auto approval and allowlist/cap guards",
-            "evidence": {
-                "policy_state": real_canary_policy.get("policy_state"),
-                "runtime_apply_allowed": real_canary_policy.get("runtime_apply_allowed"),
-                "required_provenance": real_canary_policy.get("required_provenance"),
-            },
-        }
-    )
 
     pending_count = _safe_int(discovery.get("pending_future_quote_count"), 0)
     if pending_count > 0 or discovery.get("sample_state") in {"hold_sample", "pending_future_quotes"}:
@@ -2105,168 +2039,6 @@ def _target_env_plan_for_family(
     return {"target_env_keys": [], "current_values": {}, "recommended_values": {}}
 
 
-def _scale_in_real_canary_arm_blockers(
-    audit_report: dict[str, Any],
-    arm: str,
-    *,
-    sample_floor: int,
-) -> list[str]:
-    arm = str(arm or "").upper()
-    events = audit_report.get("lifecycle_events") if isinstance(audit_report.get("lifecycle_events"), dict) else {}
-    scale_obs = events.get("scale_in_observation") if isinstance(events.get("scale_in_observation"), dict) else {}
-    axis_summary = (
-        audit_report.get("observation_axis_summary")
-        if isinstance(audit_report.get("observation_axis_summary"), dict)
-        else {}
-    )
-    db_load = (
-        audit_report.get("recommendation_db_load")
-        if isinstance(audit_report.get("recommendation_db_load"), dict)
-        else {}
-    )
-    model = audit_report.get("model_selection") if isinstance(audit_report.get("model_selection"), dict) else {}
-    ofi_qi = events.get("ofi_qi_summary") if isinstance(events.get("ofi_qi_summary"), dict) else {}
-    ev_summary = _completed_ev_summary(audit_report)
-    p10 = _safe_float(ev_summary.get("p10_profit_rate"), default=None)
-    action_groups = scale_obs.get("action_groups") if isinstance(scale_obs.get("action_groups"), dict) else {}
-    arm_outcomes = scale_obs.get("arm_outcomes") if isinstance(scale_obs.get("arm_outcomes"), dict) else {}
-    arm_metrics = arm_outcomes.get(arm) if isinstance(arm_outcomes.get(arm), dict) else {}
-    return_summary = (
-        arm_metrics.get("final_exit_return_summary")
-        if isinstance(arm_metrics.get("final_exit_return_summary"), dict)
-        else {}
-    )
-    delta_summary = (
-        arm_metrics.get("post_add_delta_vs_exit_only_summary")
-        if isinstance(arm_metrics.get("post_add_delta_vs_exit_only_summary"), dict)
-        else {}
-    )
-    mae_summary = (
-        arm_metrics.get("post_add_mae_summary")
-        if isinstance(arm_metrics.get("post_add_mae_summary"), dict)
-        else {}
-    )
-    blockers: list[str] = []
-    sample_count = int(action_groups.get(arm, 0) or 0)
-    source_quality = _ofi_qi_source_quality_for_group(ofi_qi, "scale_in")
-    valid_micro_context_count = _safe_int(source_quality.get("valid_micro_context_count"), 0)
-    if sample_count < sample_floor:
-        blockers.append(f"{arm.lower()}_sample_floor_not_met")
-    if valid_micro_context_count < 5:
-        blockers.append("scale_in_ofi_qi_sample_floor_not_met")
-    blockers.extend(str(reason) for reason in (source_quality.get("source_quality_blockers") or []))
-    if _safe_int(axis_summary.get("instrumentation_gap_count"), 0) > 0:
-        blockers.append("critical_instrumentation_gap")
-    if bool(db_load.get("db_load_gap")):
-        blockers.append("db_load_gap")
-    selection_modes = db_load.get("selection_modes") if isinstance(db_load.get("selection_modes"), dict) else {}
-    if bool(model.get("fallback_written_to_recommendations")) or "FALLBACK_DIAGNOSTIC" in selection_modes:
-        blockers.append("fallback_diagnostic_contamination")
-    if p10 is not None and p10 < -4.0:
-        blockers.append("severe_downside_guard")
-    if not (scale_obs.get("post_add_outcomes") or {}):
-        blockers.append("post_add_outcome_field_missing")
-    if _safe_int(return_summary.get("count"), 0) <= 0:
-        blockers.append("final_exit_return_missing")
-    elif _safe_float(return_summary.get("avg"), 0.0) <= 0:
-        blockers.append("final_exit_return_non_positive")
-    if _safe_int(delta_summary.get("count"), 0) <= 0:
-        blockers.append("exit_only_delta_missing")
-    elif _safe_float(delta_summary.get("avg"), 0.0) < 0:
-        blockers.append("exit_only_delta_negative")
-    if _safe_int(mae_summary.get("count"), 0) <= 0:
-        blockers.append("post_add_mae_missing")
-    else:
-        if _safe_float(mae_summary.get("p50"), 0.0) < -2.0:
-            blockers.append("post_add_mae_p50_breach")
-        mae_p90 = _safe_float(arm_metrics.get("post_add_mae_p90"), 0.0)
-        if mae_p90 < -4.0:
-            blockers.append("post_add_mae_p90_breach")
-    if _safe_float(arm_metrics.get("loser_extension_rate"), 0.0) > 0.35:
-        blockers.append("loser_extension_rate_breach")
-    return blockers
-
-
-def _build_swing_scale_in_real_canary_request(audit_report: dict[str, Any]) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
-    date_key = str(audit_report.get("date") or "")
-    policy = swing_scale_in_real_canary_phase0_policy()
-    arm_floors = {"PYRAMID": 5, "AVG_DOWN": 8}
-    arm_decisions: list[dict[str, Any]] = []
-    allowed_actions: list[str] = []
-    events = audit_report.get("lifecycle_events") if isinstance(audit_report.get("lifecycle_events"), dict) else {}
-    ofi_qi = events.get("ofi_qi_summary") if isinstance(events.get("ofi_qi_summary"), dict) else {}
-    source_quality = _ofi_qi_source_quality_for_group(ofi_qi, "scale_in")
-    for arm, floor in arm_floors.items():
-        blockers = _scale_in_real_canary_arm_blockers(audit_report, arm, sample_floor=floor)
-        arm_decisions.append(
-            {
-                "arm": arm,
-                "sample_floor": floor,
-                "approved_for_request": not blockers,
-                "block_reasons": blockers,
-                "source_quality": source_quality,
-            }
-        )
-        if not blockers:
-            allowed_actions.append(arm)
-    if not allowed_actions:
-        return None, arm_decisions
-    approval_id = f"swing_scale_in_real_canary:{date_key}:phase0"
-    request = {
-        "approval_id": approval_id,
-        "policy_id": policy["policy_id"],
-        "family": policy["policy_id"],
-        "stage": "scale_in",
-        "calibration_state": "auto_approved_real_canary",
-        "approval_reason": "scale-in arm hard floor passed; phase0 real canary auto-approved with 1-share caps",
-        "human_approval_required": False,
-        "auto_approval_required": True,
-        "auto_approval_state": "real_canary_phase0_auto_approved",
-        "tradeoff_score": None,
-        "sample_count": sum(
-            int((audit_report.get("lifecycle_events") or {}).get("group_unique_counts", {}).get("scale_in", 0) or 0)
-            for _ in [0]
-        ),
-        "sample_floor": min(arm_floors.values()),
-        "allowed_actions": allowed_actions,
-        "target_env_keys": [
-            "SWING_SCALE_IN_REAL_CANARY_ENABLED",
-            "SWING_SCALE_IN_REAL_CANARY_ALLOWED_ARMS",
-            "SWING_SCALE_IN_REAL_CANARY_MAX_QTY",
-            "SWING_SCALE_IN_REAL_CANARY_MAX_ORDERS_PER_DAY",
-            "SWING_SCALE_IN_REAL_CANARY_MAX_ORDERS_PER_POSITION",
-            "SWING_SCALE_IN_REAL_CANARY_MAX_DAILY_NOTIONAL_KRW",
-            "SWING_SCALE_IN_REAL_CANARY_REQUIRE_APPROVAL_ARTIFACT",
-        ],
-        "current_values": {
-            "enabled": False,
-            "allowed_arms": "",
-            "max_order_qty": 1,
-            "max_orders_per_day": 1,
-            "max_orders_per_position": 1,
-            "max_daily_notional_krw": 100000,
-            "require_approval_artifact": False,
-        },
-        "recommended_values": {
-            "enabled": True,
-            "allowed_arms": ",".join(allowed_actions),
-            "max_order_qty": 1,
-            "max_orders_per_day": 1,
-            "max_orders_per_position": 1,
-            "max_daily_notional_krw": 100000,
-            "require_approval_artifact": False,
-        },
-        "actual_order_submitted": False,
-        "dry_run_required": False,
-        "real_order_canary_required": True,
-        "auto_approved_real_canary": True,
-        "real_canary_policy_ref": policy["policy_id"],
-        "real_order_allowed_actions": allowed_actions,
-        "blocked_contexts": policy["blocked_contexts"],
-    }
-    return request, arm_decisions
-
-
 def _tradeoff_components(audit_report: dict[str, Any], sample_count: int, sample_floor: int) -> dict[str, Any]:
     ev_summary = _completed_ev_summary(audit_report)
     avg_ev = _safe_float(ev_summary.get("avg_profit_rate"), default=0.0) or 0.0
@@ -2495,198 +2267,16 @@ def _apply_swing_pre_final_auto_promotion(
     return updated
 
 
-def _bounded_real_canary_auto_promotion_contract(tier2_status: str) -> dict[str, Any]:
-    passed = tier2_validation_passed(tier2_status)
-    return {
-        "state": "bounded_real_canary_auto_approved" if passed else "source_only",
-        "tier2_status": tier2_status,
-        "tier2_policy": "fail_closed",
-        "tier2_fail_closed": not passed,
-        "primary_ev_uplift_threshold_pct": 1.0,
-        "final_user_approval_boundary": "full_live_only",
-    }
-
-
-def _swing_one_share_candidate_rows(audit_report: dict[str, Any]) -> list[dict[str, Any]]:
-    source_paths = audit_report.get("source_paths") if isinstance(audit_report.get("source_paths"), dict) else {}
-    csv_path = Path(str(source_paths.get("recommendations_csv") or RECO_PATH))
-    if not csv_path.exists():
-        return []
-    try:
-        frame = pd.read_csv(csv_path, dtype={"code": str})
-    except Exception:
-        return []
-    if frame.empty or "code" not in frame.columns:
-        return []
-    if "selection_mode" in frame.columns:
-        frame = frame[frame["selection_mode"].astype(str).str.upper() == "SELECTED"]
-    if "score_rank" in frame.columns:
-        frame = frame.sort_values("score_rank", ascending=True)
-    rows: list[dict[str, Any]] = []
-    for _, row in frame.head(10).iterrows():
-        code = str(row.get("code") or "").strip().zfill(6)
-        if not code:
-            continue
-        rows.append(
-            {
-                "code": code,
-                "name": str(row.get("name") or ""),
-                "score_rank": _safe_int(row.get("score_rank"), 0),
-                "selection_mode": str(row.get("selection_mode") or "SELECTED"),
-                "close": _safe_float(row.get("close"), None),
-                "hybrid_mean": _safe_float(row.get("hybrid_mean"), None),
-                "meta_score": _safe_float(row.get("meta_score"), None),
-            }
-        )
-    return rows
-
-
-def _build_swing_one_share_real_canary_request(
-    audit_report: dict[str, Any],
-    candidates: list[dict[str, Any]],
-) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
-    date_key = str(audit_report.get("date") or "")
-    policy = swing_one_share_real_canary_phase0_policy()
-    candidate_rows = _swing_one_share_candidate_rows(audit_report)
-    eligible_requests = [
-        item
-        for item in candidates
-        if str(item.get("calibration_state") or "") in {"approval_required", "dry_run_auto_apply_ready"}
-        and str(item.get("family") or "") in SWING_RUNTIME_APPROVAL_LIVE_FAMILIES
-    ]
-    db_load = audit_report.get("recommendation_db_load") if isinstance(audit_report.get("recommendation_db_load"), dict) else {}
-    axis_summary = (
-        audit_report.get("observation_axis_summary")
-        if isinstance(audit_report.get("observation_axis_summary"), dict)
-        else {}
-    )
-    blockers: list[str] = []
-    if not eligible_requests:
-        blockers.append("runtime_approval_hard_floor_or_tradeoff_missing")
-    if not candidate_rows:
-        blockers.append("one_share_candidate_rows_missing")
-    if bool(db_load.get("db_load_gap")):
-        blockers.append("db_load_gap")
-    if _safe_int(axis_summary.get("instrumentation_gap_count"), 0) > 0:
-        blockers.append("critical_instrumentation_gap")
-    if blockers:
-        return None, {
-            "family": policy["policy_id"],
-            "stage": "real_canary_entry",
-            "calibration_state": "freeze",
-            "tradeoff_score": None,
-            "block_reasons": blockers,
-            "candidate_rows": candidate_rows,
-        }
-
-    tradeoff_score = max(_safe_float(item.get("tradeoff_score"), 0.0) or 0.0 for item in eligible_requests)
-    sample_count = sum(_safe_int(item.get("sample_count"), 0) or 0 for item in eligible_requests)
-    sample_floor = max(_safe_int(item.get("sample_floor"), 0) or 0 for item in eligible_requests)
-    candidate_codes = [row["code"] for row in candidate_rows if row.get("code")]
-    approval_id = f"swing_one_share_real_canary:{date_key}:phase0"
-    request = {
-        "approval_id": approval_id,
-        "policy_id": policy["policy_id"],
-        "family": policy["policy_id"],
-        "stage": "real_canary_entry",
-        "calibration_state": "auto_approved_real_canary",
-        "approval_reason": "swing runtime hard floor/trade-off passed; phase0 one-share real canary auto-approved",
-        "human_approval_required": False,
-        "auto_approval_required": True,
-        "auto_approval_state": "real_canary_phase0_auto_approved",
-        "tradeoff_score": round(float(tradeoff_score), 4),
-        "sample_count": sample_count,
-        "sample_floor": sample_floor,
-        "candidate_rows": candidate_rows,
-        "candidate_codes": candidate_codes,
-        "target_env_keys": [
-            "SWING_ONE_SHARE_REAL_CANARY_ENABLED",
-            "SWING_ONE_SHARE_REAL_CANARY_ALLOWED_CODES",
-            "SWING_ONE_SHARE_REAL_CANARY_MAX_QTY",
-            "SWING_ONE_SHARE_REAL_CANARY_MAX_NEW_ENTRIES_PER_DAY",
-            "SWING_ONE_SHARE_REAL_CANARY_MAX_OPEN_POSITIONS",
-            "SWING_ONE_SHARE_REAL_CANARY_MAX_TOTAL_NOTIONAL_KRW",
-            "SWING_ONE_SHARE_REAL_CANARY_REQUIRE_APPROVAL_ARTIFACT",
-        ],
-        "current_values": {
-            "enabled": False,
-            "allowed_codes": "",
-            "max_order_qty": 1,
-            "max_new_entries_per_day": 1,
-            "max_open_positions": 3,
-            "max_total_notional_krw": 300000,
-            "require_approval_artifact": False,
-        },
-        "recommended_values": {
-            "enabled": True,
-            "allowed_codes": ",".join(candidate_codes),
-            "max_order_qty": 1,
-            "max_new_entries_per_day": 1,
-            "max_open_positions": 3,
-            "max_total_notional_krw": 300000,
-            "require_approval_artifact": False,
-        },
-        "actual_order_submitted": False,
-        "dry_run_required": True,
-        "auto_approved_real_canary": True,
-        "global_swing_dry_run_must_remain_enabled": True,
-        "broker_order_submission_scope": policy["broker_order_submission_scope"],
-        "real_order_allowed_actions": list(policy["real_order_allowed_actions"]),
-        "sim_only_actions": list(policy["sim_only_actions"]),
-        "blocked_real_order_actions": list(policy["blocked_real_order_actions"]),
-        "execution_quality_authority": "real_only",
-        "ev_calibration_source": policy["ev_calibration_source"],
-        "broker_execution_quality_source": policy["execution_quality_source"],
-    }
-    return request, None
-
-
 def build_swing_runtime_approval_report(
     audit_report: dict[str, Any],
     threshold_ai_review: dict[str, Any] | None = None,
     automation_report: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     date_key = str(audit_report.get("date") or "")
-    tier2_status = _tier2_status_from_threshold_review(threshold_ai_review)
-    tier2_passed = tier2_validation_passed(tier2_status)
     candidates = _apply_swing_pre_final_auto_promotion(
         build_swing_threshold_candidates(audit_report),
         threshold_ai_review,
     )
-    real_canary_policy = swing_one_share_real_canary_phase0_policy()
-    scale_in_real_canary_policy = swing_scale_in_real_canary_phase0_policy()
-    one_share_request, one_share_block = _build_swing_one_share_real_canary_request(audit_report, candidates)
-    scale_in_request, scale_in_arm_decisions = _build_swing_scale_in_real_canary_request(audit_report)
-    scale_in_tier2_block: dict[str, Any] | None = None
-    if scale_in_request is not None:
-        if tier2_passed:
-            scale_in_request = {
-                **scale_in_request,
-                "approval_reason": (
-                    "scale-in arm hard floor and AI Tier2 validation passed; "
-                    "phase0 real canary auto-approved with 1-share caps"
-                ),
-                "auto_promotion_contract": _bounded_real_canary_auto_promotion_contract(tier2_status),
-            }
-        else:
-            scale_in_tier2_block = {
-                "family": scale_in_real_canary_policy["policy_id"],
-                "stage": "scale_in",
-                "calibration_state": "freeze",
-                "tradeoff_score": None,
-                "block_reasons": [tier2_fail_closed_reason(tier2_status)],
-                "arm_decisions": scale_in_arm_decisions,
-            }
-            scale_in_request = None
-    if one_share_request is not None:
-        one_share_request = {
-            **one_share_request,
-            "approval_reason": (
-                "swing runtime hard floor/trade-off and AI Tier2 validation passed; "
-                "phase0 one-share real canary auto-approved"
-            ),
-            "auto_promotion_contract": _bounded_real_canary_auto_promotion_contract(tier2_status),
-        }
     source_quality_blocked_families = [
         {
             "family": item.get("family"),
@@ -2701,26 +2291,6 @@ def build_swing_runtime_approval_report(
         for item in candidates
         if any("ofi_qi_invalid_micro_context" in str(reason) for reason in (item.get("hard_floor_block_reasons") or []))
     ]
-    if any(
-        "ofi_qi_invalid_micro_context" in str(reason)
-        for arm in scale_in_arm_decisions
-        for reason in (arm.get("block_reasons") or [])
-    ):
-        source_quality_blocked_families.append(
-            {
-                "family": scale_in_real_canary_policy["policy_id"],
-                "stage": "scale_in",
-                "block_reasons": sorted(
-                    {
-                        str(reason)
-                        for arm in scale_in_arm_decisions
-                        for reason in (arm.get("block_reasons") or [])
-                        if "ofi_qi_invalid_micro_context" in str(reason)
-                    }
-                ),
-                "source_quality": (scale_in_arm_decisions[0].get("source_quality") if scale_in_arm_decisions else {}),
-            }
-        )
     requests = [
         {
             "approval_id": item.get("approval_id"),
@@ -2744,21 +2314,11 @@ def build_swing_runtime_approval_report(
             "ev_calibration_source": "combined_real_plus_sim",
             "combined_ev_authority": True,
             "sim_authority": "equal_for_ev_calibration_when_sim_lifecycle_closed",
-            "execution_quality_authority": "real_only",
-            "broker_execution_quality_source": "real_only",
             "hard_floor_sample_basis": "family_sample_floor_plus_combined_completed_or_sim_closed_ev",
-            "real_canary_policy_ref": real_canary_policy["policy_id"],
-            "real_order_allowed_actions": list(real_canary_policy["real_order_allowed_actions"]),
-            "sim_only_actions": list(real_canary_policy["sim_only_actions"]),
-            "blocked_real_order_actions": list(real_canary_policy["blocked_real_order_actions"]),
         }
         for item in candidates
         if str(item.get("calibration_state") or "") == "dry_run_auto_apply_ready"
     ]
-    if scale_in_request is not None:
-        requests.append(scale_in_request)
-    if one_share_request is not None:
-        requests.append(one_share_request)
     requests = [annotate_approval_request(item, date_key) for item in requests]
     blocked = [
         {
@@ -2771,24 +2331,6 @@ def build_swing_runtime_approval_report(
         for item in candidates
         if not bool(item.get("human_approval_required"))
     ]
-    if scale_in_request is None:
-        blocked.append(
-            scale_in_tier2_block
-            or {
-                "family": scale_in_real_canary_policy["policy_id"],
-                "stage": "scale_in",
-                "calibration_state": "freeze",
-                "tradeoff_score": None,
-                "block_reasons": [
-                    reason
-                    for arm in scale_in_arm_decisions
-                    for reason in (arm.get("block_reasons") or [])
-                ] or ["scale_in_real_canary_no_eligible_arm"],
-                "arm_decisions": scale_in_arm_decisions,
-            }
-        )
-    if one_share_block is not None:
-        blocked.append(one_share_block)
     db = audit_report.get("db_lifecycle") if isinstance(audit_report.get("db_lifecycle"), dict) else {}
     events = audit_report.get("lifecycle_events") if isinstance(audit_report.get("lifecycle_events"), dict) else {}
     return {
@@ -2799,7 +2341,7 @@ def build_swing_runtime_approval_report(
         "owner": SWING_RUNTIME_APPROVAL_OWNER,
         "runtime_change": False,
         "policy": {
-            "state_flow": "proposal -> ai_tier2_auto_approved -> dry_run_auto_apply_ready; real_canary_phase0 -> auto_approved_real_canary -> preopen_bounded_real_canary; final full live -> user approval",
+            "state_flow": "proposal -> ai_tier2_auto_approved -> dry_run_auto_apply_ready; final full live -> user approval",
             "live_meaning": "next_preopen_runtime_env_apply_inside_swing_dry_run",
             "broker_order_submission": False,
             "swing_live_order_dry_run_required": True,
@@ -2810,20 +2352,11 @@ def build_swing_runtime_approval_report(
             "ev_calibration_source": "combined_real_plus_sim",
             "sim_authority": "equal_for_ev_calibration_when_sim_lifecycle_closed",
             "combined_ev_authority": True,
-            "execution_quality_source": "real_only",
-            "broker_execution_quality_source": "real_only",
             "runtime_apply_requires_user_approval_artifact": False,
             "final_full_live_requires_user_approval": True,
             "tier2_policy": "fail_closed",
-            "real_canary_phase0_auto_approval": True,
-            "real_canary_phase0_user_approval_artifact_required": False,
         },
         "pre_final_auto_promotion_contract": pre_final_promotion_contract(),
-        "real_canary_policy": real_canary_policy,
-        "scale_in_real_canary_policy": {
-            **scale_in_real_canary_policy,
-            "arm_decisions": scale_in_arm_decisions,
-        },
         "source_quality_blocked_families": source_quality_blocked_families,
         "rolling_source_bundle": {
             "source_authority": {
@@ -4017,7 +3550,7 @@ def build_swing_improvement_automation_report(
             "runtime_patch_automation": False,
             "user_intervention_point": "generated code improvement workorder is pasted into Codex manually",
             "threshold_ai_review_authority": "proposal_only",
-            "runtime_approval_authority": "general_approval_required_requests_need_user_artifact; phase0_real_canaries_use_auto_approval",
+            "runtime_approval_authority": "dry_run_pre_final_auto_allowed; final_full_live_requires_user_artifact; phase0_real_canaries_removed",
             "broker_order_submission": False,
         },
         "source_reports": {
@@ -4291,17 +3824,11 @@ def render_swing_runtime_approval_markdown(report: dict[str, Any]) -> str:
         f"# Swing Runtime Approval - {report.get('date')}",
         "",
         "- Runtime change: `false`",
-        "- Approval state: `proposal -> approval_required -> approved_live_dry_run`; phase0 real canary: `auto_approved_real_canary -> preopen_bounded_real_canary`",
+        "- Approval state: `proposal -> ai_tier2_auto_approved -> dry_run_auto_apply_ready`; final full live requires user approval",
         "- Broker order submission: `false`",
         f"- tradeoff_score_threshold: `{(report.get('policy') or {}).get('tradeoff_score_threshold')}`",
         f"- EV calibration source: `{(report.get('policy') or {}).get('ev_calibration_source')}`",
         f"- sim authority: `{(report.get('policy') or {}).get('sim_authority')}`",
-        f"- execution quality source: `{(report.get('policy') or {}).get('execution_quality_source')}`",
-        f"- real canary policy: `{(report.get('real_canary_policy') or {}).get('policy_id')}`",
-        f"- real canary allowed actions: `{', '.join((report.get('real_canary_policy') or {}).get('real_order_allowed_actions') or [])}`",
-        f"- sim-only actions: `{', '.join((report.get('real_canary_policy') or {}).get('sim_only_actions') or [])}`",
-        f"- scale-in real canary policy: `{(report.get('scale_in_real_canary_policy') or {}).get('policy_id')}`",
-        f"- scale-in allowed actions: `{', '.join((report.get('scale_in_real_canary_policy') or {}).get('allowed_actions') or [])}`",
         f"- requested/blocked/approved: `{summary.get('requested')}` / `{summary.get('blocked')}` / `{summary.get('approved')}`",
         "",
         "## Approval Requests",

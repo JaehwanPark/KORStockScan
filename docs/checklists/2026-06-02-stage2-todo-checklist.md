@@ -11,6 +11,7 @@
 - 장중 runtime threshold mutation은 금지한다. 적용은 PREOPEN `threshold_cycle_preopen_apply`가 생성한 runtime env만 source로 본다.
 - provider transport/provenance 확인은 threshold 값, 주문가/수량 guard, 스윙 dry-run guard 변경과 분리한다.
 - `actual_order_submitted=false`인 sim/probe 표본은 EV/source-quality 입력이며 실주문 전환 근거가 아니다.
+- 스윙 `swing_one_share_real_canary_phase0`와 `swing_scale_in_real_canary_phase0`는 removed legacy stage로만 보며, current PREOPEN env나 broker submit 권한으로 쓰지 않는다.
 - Project/Calendar 동기화는 사용자가 표준 동기화 명령으로 수행한다.
 
 ## 수동 롤아웃 체크리스트: 진입/보유/청산 AI input v2
@@ -59,7 +60,7 @@
   - 판정 기준: pre-final은 parsed AI Tier2 auto state가 있어야 하고, final-stage는 사용자 승인 artifact가 있어야 한다.
   - 금지: 스윙 full-live 전환, cap release, provider/bot 변경, hard-safety 완화를 pre-final auto state로 처리하지 않는다.
   - 다음 액션: `pre_final_auto_selected`, `final_approval_artifact_present`, `blocked_by_policy` 중 하나로 닫는다.
-  - 처리 결과: 판정 `pre_final_auto_selected`. [swing_runtime_approval_2026-06-01.json](/home/ubuntu/KORStockScan/data/report/swing_runtime_approval/swing_runtime_approval_2026-06-01.json)은 `approval_requests` 3건을 남기며 `swing_model_floor`, `swing_market_regime_sensitivity`는 `dry_run_auto_apply_ready`/`ai_tier2_auto_approved`, `swing_one_share_real_canary_phase0`는 `auto_approved_real_canary`/`real_canary_phase0_auto_approved`이고 모두 `approval_artifact_required=false`, `approval_contract_status=ready`다. [threshold_apply_2026-06-02.json](/home/ubuntu/KORStockScan/data/threshold_cycle/apply_plans/threshold_apply_2026-06-02.json)은 `swing_one_share_real_canary_phase0`와 `swing_market_regime_sensitivity`를 selected로 소비하고 `swing_model_floor`는 `no_runtime_env_override`로 미선택했다. `data/threshold_cycle/approvals/`에는 2026-06-01 swing final/full-live approval artifact가 없으며, 이는 final full-live 미승인 상태다. 다음 액션은 dry-run 유지 및 phase0 cap/provenance 관찰이며 full-live, cap release, provider/bot, hard-safety 변경은 하지 않는다.
+  - 처리 결과: 판정 `pre_final_auto_selected_with_legacy_phase0_removed`. [swing_runtime_approval_2026-06-01.json](/home/ubuntu/KORStockScan/data/report/swing_runtime_approval/swing_runtime_approval_2026-06-01.json)의 `swing_model_floor`, `swing_market_regime_sensitivity`는 dry-run pre-final 후보로만 해석한다. 기존 `swing_one_share_real_canary_phase0` request와 [threshold_apply_2026-06-02.json](/home/ubuntu/KORStockScan/data/threshold_cycle/apply_plans/threshold_apply_2026-06-02.json)의 selected 기록은 phase0 제거 전 historical evidence이며, current apply/runtime 기준에서는 `legacy_phase0_real_canary_ignored` 또는 `blocked_legacy_real_canary_removed`로만 닫는다. `data/threshold_cycle/approvals/`에는 2026-06-01 swing final/full-live approval artifact가 없으며, 이는 final full-live 미승인 상태다. 다음 액션은 dry-run 유지와 Swing LDM parent bucket evidence 축적이며 full-live, cap release, provider/bot, hard-safety 변경은 하지 않는다.
 
 ## 장중 체크리스트 (09:05~15:20)
 
@@ -140,9 +141,9 @@
 
 - [ ] `[LDMHypothesisParentRefinement0602] LDM hypothesis parent refinement pressure 생성 및 lifecycle 소비 확인` (`Due: 2026-06-02`, `Slot: POSTCLOSE`, `TimeWindow: 17:45~18:00`, `Track: ScalpingLogic`)
   - Source: [ldm_hypothesis_parent_refinement.py](/home/ubuntu/KORStockScan/src/engine/automation/ldm_hypothesis_parent_refinement.py), [lifecycle_bucket_discovery.py](/home/ubuntu/KORStockScan/src/engine/lifecycle_bucket_discovery.py), [verify_threshold_cycle_postclose_chain.py](/home/ubuntu/KORStockScan/src/engine/verify_threshold_cycle_postclose_chain.py), [report-based-automation-traceability.md](/home/ubuntu/KORStockScan/docs/report-based-automation-traceability.md)
-  - 판정 기준: `ldm_hypothesis_parent_refinement_YYYY-MM-DD.{json,md}`가 `consumption_required=true` refinement input을 만들고, `lifecycle_bucket_discovery`가 `ldm_refinement_pressure_consumption` ledger로 각 input을 closure status 중 하나로 닫는지 확인한다.
+  - 판정 기준: `ldm_hypothesis_parent_refinement_YYYY-MM-DD.{json,md}`가 `consumption_required=true` refinement input과 repeated status diagnosis를 만들고, `lifecycle_bucket_discovery`가 `ldm_refinement_pressure_consumption` ledger로 각 input을 closure status 중 하나로 닫는지 확인한다. Active Priority 0-match는 handoff fail과 분리해 `active_priority_match_absence_diagnosis`로 원인을 남기는지 확인한다. Active Priority `observable_prefix`에 posterior dimension이 있으면 PREOPEN/postclose fail로 닫고, Markdown verifier report에도 diagnosis ids가 표면화되는지 확인한다.
   - 금지: `soft_hypothesis_id`를 직접 `active_seed_id`로 변환하거나 BUY/SELL/HOLD live rule, threshold apply, provider route, bot restart, cap release, broker order, hard-safety bypass 근거로 쓰지 않는다.
-  - 다음 액션: `refinement_consumed_pass`, `needs_more_contrastive_sample_warning`, `taxonomy_gap_repeated_warning`, `consumption_missing_fail`, `forbidden_scope_violation` 중 하나로 닫는다.
+  - 다음 액션: `refinement_consumed_pass`, `repeated_status_diagnosis_pass`, `diagnosis_missing_warning`, `diagnosis_missing_fail`, `active_priority_match_absence_diagnosed`, `active_priority_prefix_contract_fail`, `runtime_authority_violation_fail`, `consumption_missing_fail`, `forbidden_scope_violation` 중 하나로 닫는다.
 
 - [ ] `[RarePositiveBucketArmWatch0602] rare-positive 스캘핑 parent bucket 및 스윙 top arm 재등장 여부 확인` (`Due: 2026-06-02`, `Slot: POSTCLOSE`, `TimeWindow: 18:10~18:25`, `Track: ScalpingLogic`)
   - Source: [lifecycle_bucket_discovery_2026-06-01.json](/home/ubuntu/KORStockScan/data/report/lifecycle_bucket_discovery/lifecycle_bucket_discovery_2026-06-01.json), [lifecycle_decision_matrix_2026-06-01.json](/home/ubuntu/KORStockScan/data/report/lifecycle_decision_matrix/lifecycle_decision_matrix_2026-06-01.json), [swing_strategy_discovery_ev_2026-06-01.json](/home/ubuntu/KORStockScan/data/report/swing_strategy_discovery_ev/swing_strategy_discovery_ev_2026-06-01.json), [swing_lifecycle_decision_matrix_2026-06-01.json](/home/ubuntu/KORStockScan/data/report/swing_lifecycle_decision_matrix/swing_lifecycle_decision_matrix_2026-06-01.json)
@@ -161,3 +162,18 @@
 ```bash
 PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTHONPATH=. .venv/bin/python -m src.engine.sync_github_project_calendar
 ```
+
+<!-- AUTO_SERVER_COMPARISON_START -->
+### 본서버 vs songstockscan 자동 비교 (`2026-06-02 15:47:33`)
+
+- 기준: `profit-derived metrics are excluded by default because fallback-normalized values such as NULL -> 0 can distort comparison`
+- 상세 리포트: `data/report/server_comparison/server_comparison_2026-06-02.md`
+- `Trade Review`: status=`remote_error`, differing_safe_metrics=`0`
+  - safe 기준 차이 없음
+- `Performance Tuning`: status=`remote_error`, differing_safe_metrics=`0`
+  - safe 기준 차이 없음
+- `Post Sell Feedback`: status=`remote_error`, differing_safe_metrics=`0`
+  - safe 기준 차이 없음
+- `Entry Pipeline Flow`: status=`remote_error`, differing_safe_metrics=`0`
+  - safe 기준 차이 없음
+<!-- AUTO_SERVER_COMPARISON_END -->

@@ -58,6 +58,11 @@ NON_LIVE_SELECTABLE_FAMILIES = {
     "panic_entry_freeze_guard",
     "panic_buy_runner_tp_canary",
 }
+ACTIVE_SIM_PRIORITY_OBSERVABLE_PREFIX_KEYS = {
+    "entry_score_parent",
+    "entry_source_parent",
+    "submit_quality_parent",
+}
 LOCK_ALLOWED_CLOSE_KEYWORDS = {
     "safety_revert",
     "severe_loss",
@@ -108,20 +113,6 @@ TARGET_ENV_VALUE_KEYS = {
     "SWING_SELECTION_TOP_K": "top_k",
     "ML_GATEKEEPER_REJECT_COOLDOWN": "reject_cooldown_sec",
     "SWING_MARKET_REGIME_SENSITIVITY": "regime_sensitivity",
-    "SWING_SCALE_IN_REAL_CANARY_ENABLED": "enabled",
-    "SWING_SCALE_IN_REAL_CANARY_ALLOWED_ARMS": "allowed_arms",
-    "SWING_SCALE_IN_REAL_CANARY_MAX_QTY": "max_order_qty",
-    "SWING_SCALE_IN_REAL_CANARY_MAX_ORDERS_PER_DAY": "max_orders_per_day",
-    "SWING_SCALE_IN_REAL_CANARY_MAX_ORDERS_PER_POSITION": "max_orders_per_position",
-    "SWING_SCALE_IN_REAL_CANARY_MAX_DAILY_NOTIONAL_KRW": "max_daily_notional_krw",
-    "SWING_SCALE_IN_REAL_CANARY_REQUIRE_APPROVAL_ARTIFACT": "require_approval_artifact",
-    "SWING_ONE_SHARE_REAL_CANARY_ENABLED": "enabled",
-    "SWING_ONE_SHARE_REAL_CANARY_ALLOWED_CODES": "allowed_codes",
-    "SWING_ONE_SHARE_REAL_CANARY_MAX_QTY": "max_order_qty",
-    "SWING_ONE_SHARE_REAL_CANARY_MAX_NEW_ENTRIES_PER_DAY": "max_new_entries_per_day",
-    "SWING_ONE_SHARE_REAL_CANARY_MAX_OPEN_POSITIONS": "max_open_positions",
-    "SWING_ONE_SHARE_REAL_CANARY_MAX_TOTAL_NOTIONAL_KRW": "max_total_notional_krw",
-    "SWING_ONE_SHARE_REAL_CANARY_REQUIRE_APPROVAL_ARTIFACT": "require_approval_artifact",
     "SCALP_ENTRY_LATENCY_MAX_WS_AGE_MS_FOR_CAUTION": "max_ws_age_ms_for_caution",
     "SCALP_ENTRY_LATENCY_MAX_WS_JITTER_MS_FOR_CAUTION": "max_ws_jitter_ms_for_caution",
     "SCALP_ENTRY_LATENCY_MAX_SPREAD_RATIO_FOR_CAUTION": "max_spread_ratio_for_caution",
@@ -191,21 +182,6 @@ def _int_or_default(value: Any, default: int) -> int | None:
         return None
 
 
-def _is_phase0_real_canary_auto_approved(request: dict[str, Any]) -> bool:
-    state = str(request.get("calibration_state") or "").strip()
-    contract = request.get("auto_promotion_contract") if isinstance(request.get("auto_promotion_contract"), dict) else {}
-    return (
-        state in {"auto_approved_real_canary", "auto_approved_real_canary_phase0"}
-        and (
-            bool(request.get("auto_approved_real_canary"))
-            or bool(request.get("auto_approval_required"))
-            or str(request.get("auto_approval_state") or "").strip() == "real_canary_phase0_auto_approved"
-        )
-        and tier2_validation_passed(contract.get("tier2_status"))
-        and contract.get("final_user_approval_boundary") == "full_live_only"
-    )
-
-
 def _is_swing_pre_final_auto_approved(request: dict[str, Any]) -> bool:
     state = str(request.get("calibration_state") or "").strip()
     contract = request.get("auto_promotion_contract") if isinstance(request.get("auto_promotion_contract"), dict) else {}
@@ -251,14 +227,6 @@ def swing_runtime_approval_report_path(source_date: str) -> Path:
 
 def swing_runtime_approval_artifact_path(source_date: str) -> Path:
     return SWING_RUNTIME_APPROVAL_ARTIFACT_DIR / f"swing_runtime_approvals_{source_date}.json"
-
-
-def swing_scale_in_real_canary_artifact_path(source_date: str) -> Path:
-    return SWING_RUNTIME_APPROVAL_ARTIFACT_DIR / f"swing_scale_in_real_canary_{source_date}.json"
-
-
-def swing_one_share_real_canary_artifact_path(source_date: str) -> Path:
-    return SWING_RUNTIME_APPROVAL_ARTIFACT_DIR / f"swing_one_share_real_canary_{source_date}.json"
 
 
 def scalp_sim_scale_in_window_artifact_path(source_date: str) -> Path:
@@ -512,8 +480,6 @@ def _env_overrides_for_candidate(candidate: dict[str, Any]) -> dict[str, str]:
     policy_or_family = str(candidate.get("policy_id") or candidate.get("family") or "")
     force_emit = policy_or_family in {
         "latency_classifier_runtime_profile",
-        "swing_scale_in_real_canary_phase0",
-        "swing_one_share_real_canary_phase0",
         "lifecycle_decision_matrix_runtime",
         ENTRY_BRIDGE_FAMILY,
         SCALE_IN_BRIDGE_FAMILY,
@@ -585,53 +551,28 @@ def _load_swing_runtime_approval_bundle(source_date: str | None) -> dict[str, An
         }
     request_path = swing_runtime_approval_report_path(source_date)
     artifact_path = swing_runtime_approval_artifact_path(source_date)
-    one_share_artifact_path = swing_one_share_real_canary_artifact_path(source_date)
-    scale_artifact_path = swing_scale_in_real_canary_artifact_path(source_date)
     request_report = _load_json(request_path)
     artifact = _load_json(artifact_path)
-    one_share_artifact = _load_json(one_share_artifact_path)
-    scale_artifact = _load_json(scale_artifact_path)
     requests = request_report.get("approval_requests") if isinstance(request_report.get("approval_requests"), list) else []
-    real_canary_policy = (
-        request_report.get("real_canary_policy") if isinstance(request_report.get("real_canary_policy"), dict) else {}
-    )
-    scale_in_real_canary_policy = (
-        request_report.get("scale_in_real_canary_policy")
-        if isinstance(request_report.get("scale_in_real_canary_policy"), dict)
-        else {}
-    )
     approved_items = artifact.get("approved_requests") if isinstance(artifact.get("approved_requests"), list) else []
     approved_ids = {
         str(item.get("approval_id") or "")
         for item in approved_items
         if isinstance(item, dict) and bool(item.get("approved", True))
     }
-    if bool(one_share_artifact.get("approved")) and str(one_share_artifact.get("policy_id") or "") == "swing_one_share_real_canary_phase0":
-        for approval_id in one_share_artifact.get("approved_request_ids") or []:
-            if approval_id:
-                approved_ids.add(str(approval_id))
-    if bool(scale_artifact.get("approved")) and str(scale_artifact.get("policy_id") or "") == "swing_scale_in_real_canary_phase0":
-        for approval_id in scale_artifact.get("approved_request_ids") or []:
-            if approval_id:
-                approved_ids.add(str(approval_id))
     requests_by_id = {
         str(item.get("approval_id") or ""): item
         for item in requests
         if isinstance(item, dict) and item.get("approval_id")
     }
-    scale_requests = [
-        item
+    legacy_real_canary_ids = {
+        str(item.get("approval_id") or "")
         for item in requests
         if isinstance(item, dict)
-        and str(item.get("policy_id") or item.get("family") or "") == "swing_scale_in_real_canary_phase0"
-    ]
-    one_share_requests = [
-        item
-        for item in requests
-        if isinstance(item, dict)
-        and str(item.get("policy_id") or item.get("family") or "") == "swing_one_share_real_canary_phase0"
-    ]
-    non_scale_requests = [
+        and str(item.get("policy_id") or item.get("family") or "")
+        in {"swing_scale_in_real_canary_phase0", "swing_one_share_real_canary_phase0"}
+    }
+    runtime_requests = [
         item
         for item in requests
         if isinstance(item, dict)
@@ -639,152 +580,32 @@ def _load_swing_runtime_approval_bundle(source_date: str | None) -> dict[str, An
         and str(item.get("policy_id") or item.get("family") or "") != "swing_one_share_real_canary_phase0"
     ]
     approved_requests = []
-    blocked: list[str] = []
+    blocked: list[str] = [
+        f"blocked_legacy_real_canary_removed:{approval_id}"
+        for approval_id in sorted(legacy_real_canary_ids)
+        if approval_id
+    ]
     manual_non_scale_requests = [
-        item for item in non_scale_requests if not _is_swing_pre_final_auto_approved(item)
+        item for item in runtime_requests if not _is_swing_pre_final_auto_approved(item)
     ]
     if manual_non_scale_requests and not artifact:
         blocked.append("approval_artifact_missing")
-    for item in non_scale_requests:
+    for item in runtime_requests:
         approval_id = str(item.get("approval_id") or "")
         if approval_id and _is_swing_pre_final_auto_approved(item):
             approved_ids.add(approval_id)
-    # Phase0 real canaries are auto-approved only when the source request report
-    # carries parsed Tier2 validation. Optional artifacts may still narrow
-    # allowlists/caps, but missing artifacts no longer block.
-    for item in one_share_requests:
-        approval_id = str(item.get("approval_id") or "")
-        if approval_id and _is_phase0_real_canary_auto_approved(item):
-            approved_ids.add(approval_id)
-        elif approval_id and approval_id not in approved_ids:
-            blocked.append(f"one_share_real_canary_auto_approval_missing:{approval_id}")
-    for item in scale_requests:
-        approval_id = str(item.get("approval_id") or "")
-        if approval_id and _is_phase0_real_canary_auto_approved(item):
-            approved_ids.add(approval_id)
-        elif approval_id and approval_id not in approved_ids:
-            blocked.append(f"scale_in_real_canary_auto_approval_missing:{approval_id}")
+    approved_ids.difference_update(legacy_real_canary_ids)
     for approval_id in sorted(approved_ids):
         request = requests_by_id.get(approval_id)
         if not request:
             blocked.append(f"approval_request_not_found:{approval_id}")
             continue
         request_policy = str(request.get("policy_id") or request.get("family") or "")
-        if request_policy == "swing_one_share_real_canary_phase0":
-            request_codes = {
-                str(value).zfill(6)
-                for value in (
-                    request.get("candidate_codes")
-                    or [item.get("code") for item in (request.get("candidate_rows") or []) if isinstance(item, dict)]
-                    or []
-                )
-                if str(value or "").strip()
-            }
-            artifact_codes = {
-                str(value).zfill(6)
-                for value in (one_share_artifact.get("allowed_codes") or [])
-                if str(value or "").strip()
-            }
-            if not artifact_codes:
-                artifact_codes = set(request_codes)
-            if not artifact_codes:
-                blocked.append(f"one_share_real_canary_allowed_codes_missing:{approval_id}")
-                continue
-            if request_codes and not artifact_codes.issubset(request_codes):
-                blocked.append(f"one_share_real_canary_allowed_codes_mismatch:{approval_id}")
-                continue
-            request_values = request.get("recommended_values") if isinstance(request.get("recommended_values"), dict) else {}
-            max_order_qty = _int_or_default(one_share_artifact.get("max_order_qty") or request_values.get("max_order_qty"), 1)
-            max_new_entries = _int_or_default(
-                one_share_artifact.get("max_new_entries_per_day")
-                or request_values.get("max_new_entries_per_day"),
-                1,
-            )
-            max_open_positions = _int_or_default(
-                one_share_artifact.get("max_open_positions") or request_values.get("max_open_positions"),
-                3,
-            )
-            max_total_notional = _int_or_default(
-                one_share_artifact.get("max_total_notional_krw")
-                or request_values.get("max_total_notional_krw"),
-                300000,
-            )
-            if max_order_qty != 1:
-                blocked.append(f"one_share_real_canary_qty_cap_mismatch:{approval_id}")
-                continue
-            if max_new_entries != 1:
-                blocked.append(f"one_share_real_canary_daily_entry_cap_mismatch:{approval_id}")
-                continue
-            if not isinstance(max_open_positions, int) or max_open_positions < 1 or max_open_positions > 3:
-                blocked.append(f"one_share_real_canary_open_position_cap_mismatch:{approval_id}")
-                continue
-            if not isinstance(max_total_notional, int) or max_total_notional < 1 or max_total_notional > 300000:
-                blocked.append(f"one_share_real_canary_notional_cap_mismatch:{approval_id}")
-                continue
-            request = {
-                **request,
-                "recommended_values": {
-                    **(request.get("recommended_values") or {}),
-                    "allowed_codes": ",".join(sorted(artifact_codes)),
-                    "max_order_qty": max_order_qty,
-                    "max_new_entries_per_day": max_new_entries,
-                    "max_open_positions": max_open_positions,
-                    "max_total_notional_krw": max_total_notional,
-                    "require_approval_artifact": False,
-                },
-                "auto_approval_state": "real_canary_phase0_auto_approved",
-            }
-        if request_policy == "swing_scale_in_real_canary_phase0":
-            allowed = set(str(value).upper() for value in (request.get("allowed_actions") or []))
-            artifact_allowed = set(str(value).upper() for value in (scale_artifact.get("allowed_actions") or []))
-            if not artifact_allowed:
-                artifact_allowed = set(allowed)
-            if not artifact_allowed or not artifact_allowed.issubset(allowed):
-                blocked.append(f"scale_in_real_canary_allowed_actions_mismatch:{approval_id}")
-                continue
-            request_values = request.get("recommended_values") if isinstance(request.get("recommended_values"), dict) else {}
-            max_order_qty = _int_or_default(scale_artifact.get("max_order_qty") or request_values.get("max_order_qty"), 1)
-            max_orders_per_day = _int_or_default(
-                scale_artifact.get("max_orders_per_day") or request_values.get("max_orders_per_day"),
-                1,
-            )
-            max_orders_per_position = _int_or_default(
-                scale_artifact.get("max_orders_per_position") or request_values.get("max_orders_per_position"),
-                1,
-            )
-            max_daily_notional = _int_or_default(
-                scale_artifact.get("max_daily_notional_krw") or request_values.get("max_daily_notional_krw"),
-                100000,
-            )
-            if max_order_qty != 1:
-                blocked.append(f"scale_in_real_canary_qty_cap_mismatch:{approval_id}")
-                continue
-            if max_orders_per_day != 1:
-                blocked.append(f"scale_in_real_canary_daily_order_cap_mismatch:{approval_id}")
-                continue
-            if max_orders_per_position != 1:
-                blocked.append(f"scale_in_real_canary_position_order_cap_mismatch:{approval_id}")
-                continue
-            if not isinstance(max_daily_notional, int) or max_daily_notional < 1 or max_daily_notional > 100000:
-                blocked.append(f"scale_in_real_canary_daily_notional_cap_mismatch:{approval_id}")
-                continue
-            request = {
-                **request,
-                "recommended_values": {
-                    **(request.get("recommended_values") or {}),
-                    "allowed_arms": ",".join(sorted(artifact_allowed)),
-                    "max_order_qty": max_order_qty,
-                    "max_orders_per_day": max_orders_per_day,
-                    "max_orders_per_position": max_orders_per_position,
-                    "max_daily_notional_krw": max_daily_notional,
-                    "require_approval_artifact": False,
-                },
-                "auto_approval_state": "real_canary_phase0_auto_approved",
-            }
+        if request_policy in {"swing_one_share_real_canary_phase0", "swing_scale_in_real_canary_phase0"}:
+            blocked.append(f"blocked_legacy_real_canary_removed:{approval_id}")
+            continue
         approval_state = (
-            "auto_approved_real_canary_phase0"
-            if request_policy in {"swing_one_share_real_canary_phase0", "swing_scale_in_real_canary_phase0"}
-            else "ai_tier2_pre_final_auto_approved"
+            "ai_tier2_pre_final_auto_approved"
             if _is_swing_pre_final_auto_approved(request)
             else "approved_live"
         )
@@ -792,20 +613,11 @@ def _load_swing_runtime_approval_bundle(source_date: str | None) -> dict[str, An
     return {
         "request_report": str(request_path) if request_path.exists() else None,
         "approval_artifact": str(artifact_path) if artifact_path.exists() else None,
-        "one_share_real_canary_approval_artifact": (
-            str(one_share_artifact_path) if one_share_artifact_path.exists() else None
-        ),
-        "scale_in_real_canary_approval_artifact": (
-            str(scale_artifact_path) if scale_artifact_path.exists() else None
-        ),
+        "legacy_phase0_real_canary_ignored": bool(legacy_real_canary_ids),
         "requests": requests,
         "approved_requests": approved_requests,
         "blocked": blocked,
         "artifact_payload": artifact,
-        "one_share_real_canary_artifact_payload": one_share_artifact,
-        "scale_in_real_canary_artifact_payload": scale_artifact,
-        "real_canary_policy": real_canary_policy,
-        "scale_in_real_canary_policy": scale_in_real_canary_policy,
     }
 
 
@@ -818,9 +630,6 @@ def _select_swing_approved_candidates(bundle: dict[str, Any]) -> tuple[list[dict
         if not isinstance(item, dict):
             continue
         family = str(item.get("family") or "")
-        policy_id = str(item.get("policy_id") or "")
-        is_scale_in_real_canary = policy_id == "swing_scale_in_real_canary_phase0" or family == "swing_scale_in_real_canary_phase0"
-        is_one_share_real_canary = policy_id == "swing_one_share_real_canary_phase0" or family == "swing_one_share_real_canary_phase0"
         is_pre_final_auto = _is_swing_pre_final_auto_approved(item)
         stage = str(item.get("stage") or "unknown")
         candidate = {
@@ -828,14 +637,12 @@ def _select_swing_approved_candidates(bundle: dict[str, Any]) -> tuple[list[dict
             "calibration_state": "approved_live",
             "allowed_runtime_apply": True,
             "safety_revert_required": False,
-            "one_share_real_canary": bool(is_one_share_real_canary),
-            "scale_in_real_canary": bool(is_scale_in_real_canary),
         }
         overrides = _env_overrides_for_candidate(candidate)
         reject_reason = ""
         if bool(item.get("actual_order_submitted")):
             reject_reason = "actual_order_submission_not_allowed"
-        elif (not is_scale_in_real_canary) and (not is_one_share_real_canary) and not bool(item.get("dry_run_required", True)):
+        elif not bool(item.get("dry_run_required", True)):
             reject_reason = "dry_run_required_missing"
         elif stage in selected_by_stage:
             reject_reason = f"same_stage_owner_conflict:{selected_by_stage[stage]}"
@@ -848,16 +655,12 @@ def _select_swing_approved_candidates(bundle: dict[str, Any]) -> tuple[list[dict
             "selected": not bool(reject_reason),
             "decision_reason": reject_reason
             or (
-                "real_canary_phase0_auto_approval_accepted"
-                if is_scale_in_real_canary or is_one_share_real_canary
-                else "ai_tier2_pre_final_auto_approval_accepted"
+                "ai_tier2_pre_final_auto_approval_accepted"
                 if is_pre_final_auto
                 else "user_approval_artifact_accepted"
             ),
             "env_overrides": overrides if not reject_reason else {},
-            "dry_run_required": not is_scale_in_real_canary,
-            "one_share_real_canary": bool(is_one_share_real_canary),
-            "scale_in_real_canary": bool(is_scale_in_real_canary),
+            "dry_run_required": True,
         }
         decisions.append(decision)
         if reject_reason:
@@ -1302,6 +1105,9 @@ def _load_scalp_sim_auto_approval(source_date: str | None) -> dict[str, Any]:
                 or not str(prefix.get("entry_source_parent") or "").strip()
             ):
                 blocked.append("active_sim_priority_seed_observable_prefix_missing")
+                break
+            if any(str(key) not in ACTIVE_SIM_PRIORITY_OBSERVABLE_PREFIX_KEYS for key in prefix):
+                blocked.append("active_sim_priority_seed_observable_prefix_forbidden_dimension")
                 break
     approved_request = None
     if not blocked:
@@ -1996,15 +1802,14 @@ def build_preopen_apply_manifest(
             "swing_runtime_approval": {
                 "request_report": swing_bundle.get("request_report"),
                 "approval_artifact": swing_bundle.get("approval_artifact"),
-                "one_share_real_canary_approval_artifact": swing_bundle.get("one_share_real_canary_approval_artifact"),
-                "scale_in_real_canary_approval_artifact": swing_bundle.get("scale_in_real_canary_approval_artifact"),
+                "legacy_phase0_real_canary_ignored": bool(
+                    swing_bundle.get("legacy_phase0_real_canary_ignored")
+                ),
                 "requested": len(swing_bundle.get("requests") or []),
                 "approved": len(swing_bundle.get("approved_requests") or []),
                 "blocked": swing_bundle.get("blocked") or [],
                 "requests": swing_bundle.get("requests") or [],
                 "approved_requests": swing_bundle.get("approved_requests") or [],
-                "real_canary_policy": swing_bundle.get("real_canary_policy") or {},
-                "scale_in_real_canary_policy": swing_bundle.get("scale_in_real_canary_policy") or {},
                 "selected": swing_selected,
                 "decisions": swing_decisions,
                 "dry_run_forced": bool(swing_env_overrides),

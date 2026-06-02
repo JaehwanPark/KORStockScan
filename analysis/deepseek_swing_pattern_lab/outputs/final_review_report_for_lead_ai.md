@@ -2,12 +2,12 @@
 
 ## 판정
 
-- 분석 기간: `2026-06-01` ~ `2026-06-01`
+- 분석 기간: `2026-06-02` ~ `2026-06-02`
 - trade_rows: `0`
-- lifecycle_event_rows: `120`
+- lifecycle_event_rows: `139`
 - completed_valid_profit_rows: `0`
-- ofi_qi_rows: `46863`
-- total_findings: `7`
+- ofi_qi_rows: `52692`
+- total_findings: `5`
 - code_improvement_orders: `3`
 - runtime_change: `False`
 
@@ -16,39 +16,19 @@
 - implement_now: `0`
 - attach_existing_family: `2`
 - design_family_candidate: `1`
-- defer_evidence: `4`
+- defer_evidence: `2`
 - reject: `0`
 
 ## Stage별 분석
 
-- `entry`: 3 findings
+- `entry`: 1 findings
 - `holding_exit`: 1 findings
 - `ofi_qi`: 2 findings
 - `scale_in`: 1 findings
 
 ## Stage Findings
 
-### 1. `swing_pattern_lab_deepseek_entry_gatekeeper_reject`
-
-- title: Gatekeeper rejects swing entry candidates
-- lifecycle_stage: `entry`
-- route: `defer_evidence`
-- mapped_family: `-`
-- confidence: `solo`
-- runtime_effect: `False`
-- expected_ev_effect: Carryover-only blocker; observe before attaching to threshold family.
-
-### 2. `swing_pattern_lab_deepseek_entry_gap_block`
-
-- title: Swing gap/protection blocking entry
-- lifecycle_stage: `entry`
-- route: `defer_evidence`
-- mapped_family: `-`
-- confidence: `solo`
-- runtime_effect: `False`
-- expected_ev_effect: Carryover-only blocker; observe before designing new family.
-
-### 3. `swing_pattern_lab_deepseek_entry_no_submissions`
+### 1. `swing_pattern_lab_deepseek_entry_no_submissions`
 
 - title: All selected candidates failed to reach order submission
 - lifecycle_stage: `entry`
@@ -58,7 +38,7 @@
 - runtime_effect: `False`
 - expected_ev_effect: Investigate the entry funnel for swing-specific bottlenecks.
 
-### 4. `swing_pattern_lab_deepseek_holding_exit_no_trades`
+### 2. `swing_pattern_lab_deepseek_holding_exit_no_trades`
 
 - title: No completed swing trades in analysis window
 - lifecycle_stage: `holding_exit`
@@ -68,7 +48,7 @@
 - runtime_effect: `False`
 - expected_ev_effect: Insufficient evidence; defer until more trades complete.
 
-### 5. `swing_pattern_lab_deepseek_scale_in_events_observed`
+### 3. `swing_pattern_lab_deepseek_scale_in_events_observed`
 
 - title: Scale-in events observed for swing positions
 - lifecycle_stage: `scale_in`
@@ -78,7 +58,7 @@
 - runtime_effect: `False`
 - expected_ev_effect: Evaluate PYRAMID/AVG_DOWN outcome quality with OFI/QI confirmation.
 
-### 6. `swing_pattern_lab_deepseek_ofi_qi_stale_missing`
+### 4. `swing_pattern_lab_deepseek_ofi_qi_stale_missing`
 
 - title: OFI/QI stale/missing quality review
 - lifecycle_stage: `ofi_qi`
@@ -88,7 +68,7 @@
 - runtime_effect: `False`
 - expected_ev_effect: If stale ratio > 0.3, consider instrumentation/observer enhancement.
 
-### 7. `swing_pattern_lab_deepseek_ofi_qi_smoothing_review`
+### 5. `swing_pattern_lab_deepseek_ofi_qi_smoothing_review`
 
 - title: OFI/QI exit smoothing action distribution
 - lifecycle_stage: `ofi_qi`

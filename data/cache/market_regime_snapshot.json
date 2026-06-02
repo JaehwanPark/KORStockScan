@@ -1,20 +1,20 @@
 {
-  "timestamp": "2026-06-02T11:29:22.530990",
+  "timestamp": "2026-06-02T15:13:56.924585",
   "vix_close": 16.049999237060547,
   "vix_ma3": 15.703332901000977,
   "vix_peak_passed": false,
   "vix_two_day_down": false,
   "vix_extreme": false,
-  "wti_close": 91.69000244140625,
-  "wti_rsi": 44.64239972970725,
-  "wti_macd": -1.891285099065101,
-  "wti_macd_signal": -0.25490606540645017,
+  "wti_close": 91.31999969482422,
+  "wti_rsi": 44.319978093649254,
+  "wti_macd": -1.9750269838742014,
+  "wti_macd_signal": -0.5929313731206564,
   "wti_dead_cross": false,
-  "wti_from_recent_high_pct": -15.617523144461941,
+  "wti_from_recent_high_pct": -15.958037348503929,
   "oil_reversal": true,
   "oil_pullback_relief": true,
-  "fng_value": 59.0857142857143,
-  "fng_prev": 59.0857142857143,
+  "fng_value": 59.0285714285714,
+  "fng_prev": 59.0285714285714,
   "fng_description": "greed",
   "fng_extreme_fear": false,
   "fng_recovery": false,
@@ -25,11 +25,11 @@
   "swing_recovery_gate_label": "INSUFFICIENT",
   "recovery_gate_reason": "oil_only_recovery_signal_insufficient",
   "oil_only_recovery_prior": true,
-  "market_regime_continuous_score": 69.7429,
+  "market_regime_continuous_score": 69.7143,
   "market_regime_continuous_label": "RISK_ON",
   "market_regime_component_scores": {
     "vix_level": 23.95,
-    "fear_greed_level": 14.5429,
+    "fear_greed_level": 14.5143,
     "domestic_breadth": 18.3,
     "oil_relief": 10.0,
     "local_model": 2.95
@@ -43,8 +43,8 @@
   ],
   "debug": {
     "oil_rsi_turned": false,
-    "fng_curr": 59.0857142857143,
-    "fng_prev": 59.0857142857143,
+    "fng_curr": 59.0285714285714,
+    "fng_prev": 59.0285714285714,
     "score_threshold": 70,
     "component_scores": {
       "vix": 0,
@@ -69,7 +69,7 @@
       },
       "component_scores": {
         "vix_level": 23.95,
-        "fear_greed_level": 14.5429,
+        "fear_greed_level": 14.5143,
         "domestic_breadth": 18.3,
         "oil_relief": 10.0,
         "local_model": 2.95
@@ -96,5 +96,5 @@
     "local_breadth_signal": "none"
   },
   "cached_session_date": "2026-06-02",
-  "cached_at": "2026-06-02T11:29:22.537049+09:00"
+  "cached_at": "2026-06-02T15:13:56.936750+09:00"
 }

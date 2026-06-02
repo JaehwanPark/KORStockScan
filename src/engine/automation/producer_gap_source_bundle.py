@@ -56,6 +56,12 @@ SECTION_SPECS: dict[str, dict[str, Any]] = {
         "required_fields": ("source_paths", "join_keys"),
         "join_keys": ("sim_record_id", "code", "held_sec"),
     },
+    "volatile_runner_exit_counterfactual": {
+        "pattern_type": "volatile_runner_exit_counterfactual_missing",
+        "tokens": ("runner", "post_exit_mfe", "peak_drawdown", "holding_flow_override_state"),
+        "required_fields": ("source_paths", "join_keys"),
+        "join_keys": ("recommendation_id", "sim_parent_record_id", "record_id", "code"),
+    },
     "sim_exit_plateau_breakdown_counterfactual": {
         "pattern_type": "sim_exit_plateau_breakdown_counterfactual",
         "tokens": ("plateau", "breakdown", "sim"),

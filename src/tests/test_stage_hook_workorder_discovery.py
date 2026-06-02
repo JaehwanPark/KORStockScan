@@ -172,6 +172,60 @@ def test_stage_hook_discovery_scores_are_not_hard_gates(tmp_path, monkeypatch):
     assert report["status"] == "pass"
 
 
+def test_stage_hook_discovery_suppresses_orders_for_runtime_scaffold_implemented_hooks(tmp_path, monkeypatch):
+    report_dir = tmp_path / "report"
+    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+    _write_json(
+        report_dir / "producer_gap_discovery" / "producer_gap_discovery_2026-05-26.json",
+        {
+            "producer_gap_candidates": [
+                {
+                    "candidate_id": "producer_gap_sim_holding_runner_gap_missing",
+                    "pattern_type": "sim_holding_runner_gap_missing",
+                    "sample_count": 40,
+                    "evidence": [
+                        "strict_match_count=20",
+                        "required_producer=runner_regime_counterfactual_producer",
+                        "estimated_uplift_pct_sum=5.0",
+                    ],
+                }
+            ]
+        },
+    )
+    _write_json(
+        report_dir / "stage_hook_runtime_scaffold" / "stage_hook_runtime_scaffold_2026-05-26.json",
+        {
+            "status": "pass",
+            "implemented_hooks": [
+                {
+                    "hook_name": "holding_flow_runner_debounce_guard",
+                    "implementation_status": "implemented",
+                    "initial_runtime_state": "disabled",
+                    "runtime_effect": False,
+                    "allowed_runtime_apply": False,
+                    "decision_authority": "stage_hook_disabled_source_only_scaffold",
+                    "implementation_files": ["src/engine/automation/stage_hook_runtime_scaffold.py"],
+                    "source_candidate_ids": ["producer_gap_sim_holding_runner_gap_missing"],
+                }
+            ],
+        },
+    )
+    candidate_ids = _deterministic_candidate_ids()
+
+    report = mod.build_stage_hook_workorder_discovery_report(
+        "2026-05-26",
+        provider="openai",
+        ai_raw_response=_ai_response(candidate_ids),
+    )
+
+    assert report["status"] == "pass"
+    assert report["summary"]["workorder_count"] == 0
+    assert report["summary"]["implemented_candidate_count"] == 1
+    assert report["code_improvement_orders"] == []
+    assert report["stage_hook_candidates"][0]["implementation_status"] == "implemented"
+    assert report["stage_hook_candidates"][0]["implementation_provenance"]["source_report_type"] == "stage_hook_runtime_scaffold"
+
+
 def test_stage_hook_discovery_merges_duplicate_hook_names(tmp_path, monkeypatch):
     report_dir = tmp_path / "report"
     monkeypatch.setattr(mod, "REPORT_DIR", report_dir)

@@ -303,11 +303,6 @@ def _swing_runtime_pre_final_items(report: dict[str, Any]) -> list[dict[str, Any
         family = str(request.get("family") or request.get("policy_id") or "")
         if state == "dry_run_auto_apply_ready" and auto_state == "ai_tier2_auto_approved":
             policy_kind = "swing_runtime_dry_run_pre_final_policy"
-        elif state in {"auto_approved_real_canary", "auto_approved_real_canary_phase0"} and family in {
-            "swing_one_share_real_canary_phase0",
-            "swing_scale_in_real_canary_phase0",
-        }:
-            policy_kind = "swing_bounded_real_canary_pre_final_policy"
         else:
             continue
         items.append(
