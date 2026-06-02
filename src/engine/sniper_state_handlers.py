@@ -235,6 +235,16 @@ _SCALP_SIM_AUTO_POLICY_CACHE: dict[str, object] = {
     "hypotheses": [],
     "approved_row_count": 0,
 }
+_LDM_HYPOTHESIS_RUNTIME_REQUIREMENT_FIELDS = {"entry_score_parent", "entry_source_parent"}
+_LDM_HYPOTHESIS_FORBIDDEN_USES = {
+    "buy_sell_hold_live_rule",
+    "threshold_apply",
+    "provider_route_change",
+    "bot_restart",
+    "position_cap_release",
+    "broker_order",
+    "hard_safety_bypass",
+}
 _SWING_PROBE_DAILY_CREATED: dict[str, int] = {}
 _SWING_PROBE_DISCARD_LOG_TS: dict[tuple[str, str, str, str], float] = {}
 _SWING_SAME_SYMBOL_LOSS_REENTRY_COOLDOWNS: dict[str, dict] = {}
@@ -425,6 +435,34 @@ def _scalp_hypothesis_matches_requirements(candidate: dict[str, str], requiremen
     return True
 
 
+def _scalp_hypothesis_contract_valid(hypothesis: dict) -> bool:
+    if not isinstance(hypothesis, dict):
+        return False
+    if hypothesis.get("runtime_effect") is not False:
+        return False
+    if hypothesis.get("allowed_runtime_apply") is not False:
+        return False
+    if hypothesis.get("actual_order_submitted") is not False:
+        return False
+    if hypothesis.get("broker_order_forbidden") is not True:
+        return False
+    forbidden = set(hypothesis.get("forbidden_uses") or [])
+    if not _LDM_HYPOTHESIS_FORBIDDEN_USES.issubset(forbidden):
+        return False
+    requirements = hypothesis.get("observable_requirements")
+    if not isinstance(requirements, list) or not requirements:
+        return False
+    for requirement in requirements:
+        if not isinstance(requirement, dict):
+            return False
+        field = str(requirement.get("field") or "").strip()
+        op = str(requirement.get("op") or "eq").strip()
+        value = str(requirement.get("value") or "").strip()
+        if field not in _LDM_HYPOTHESIS_RUNTIME_REQUIREMENT_FIELDS or op not in {"eq", "bin_eq"} or not value:
+            return False
+    return True
+
+
 def _scalp_hypothesis_match_fields(*, score_value, source_stage: str | None, fields: dict | None = None) -> dict:
     cache = _load_scalp_sim_auto_policy_cache()
     hypotheses = cache.get("hypotheses") if isinstance(cache.get("hypotheses"), list) else []
@@ -584,15 +622,7 @@ def _load_scalp_sim_auto_policy_cache() -> dict:
     plan = payload.get("hypothesis_observation_plan") if isinstance(payload.get("hypothesis_observation_plan"), dict) else {}
     if str(plan.get("schema_version") or "") == "ldm_hypothesis_observation_plan_v1":
         for hypothesis in plan.get("hypotheses") or []:
-            if not isinstance(hypothesis, dict):
-                continue
-            if (
-                hypothesis.get("runtime_effect") is False
-                and hypothesis.get("allowed_runtime_apply") is False
-                and hypothesis.get("actual_order_submitted") is False
-                and hypothesis.get("broker_order_forbidden") is True
-                and hypothesis.get("observable_requirements")
-            ):
+            if _scalp_hypothesis_contract_valid(hypothesis):
                 hypotheses.append(hypothesis)
     if status == "loaded" and not (rows_by_source_bucket_id or rows_by_bucket_id or active_seeds_by_prefix or hypotheses):
         status = "policy_invalid"

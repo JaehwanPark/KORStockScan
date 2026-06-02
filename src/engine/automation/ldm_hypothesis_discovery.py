@@ -645,6 +645,30 @@ def _validate_hypothesis_contract(hypothesis: dict[str, Any]) -> bool:
     return set(FORBIDDEN_USES).issubset(forbidden)
 
 
+def _validate_observation_plan_contract(plan: dict[str, Any]) -> bool:
+    if plan.get("schema_version") != OBSERVATION_PLAN_SCHEMA_VERSION:
+        return False
+    if plan.get("runtime_effect") is not False:
+        return False
+    if plan.get("live_runtime_effect") is not False:
+        return False
+    if plan.get("allowed_runtime_apply") is not False:
+        return False
+    if plan.get("actual_order_submitted") is not False:
+        return False
+    if plan.get("broker_order_forbidden") is not True:
+        return False
+    forbidden = set(plan.get("forbidden_uses") or [])
+    if not set(FORBIDDEN_USES).issubset(forbidden):
+        return False
+    hypotheses = plan.get("hypotheses")
+    if not isinstance(hypotheses, list):
+        return False
+    if plan.get("hypothesis_count") is not None and _safe_int(plan.get("hypothesis_count"), -1) != len(hypotheses):
+        return False
+    return all(isinstance(item, dict) and _validate_hypothesis_contract(item) for item in hypotheses)
+
+
 def build_observation_plan(report: dict[str, Any], apply_date: str) -> dict[str, Any]:
     hypotheses = [item for item in report.get("hypotheses") or [] if isinstance(item, dict) and _validate_hypothesis_contract(item)]
     return {
@@ -671,9 +695,7 @@ def _merge_catalog(path: Path, plan: dict[str, Any], *, domain: str) -> bool:
     expected_schema = f"{domain}_sim_policy_catalog_v1"
     if payload.get("schema_version") != expected_schema:
         return False
-    if plan.get("schema_version") != OBSERVATION_PLAN_SCHEMA_VERSION:
-        return False
-    if any(not _validate_hypothesis_contract(item) for item in plan.get("hypotheses") or [] if isinstance(item, dict)):
+    if not _validate_observation_plan_contract(plan):
         return False
     payload["hypothesis_observation_plan"] = {
         **plan,

@@ -1171,6 +1171,15 @@ def test_scalp_sim_candidate_window_active_seed_uses_reserved_sim_quota(monkeypa
                             "allowed_runtime_apply": False,
                             "actual_order_submitted": False,
                             "broker_order_forbidden": True,
+                            "forbidden_uses": [
+                                "buy_sell_hold_live_rule",
+                                "threshold_apply",
+                                "provider_route_change",
+                                "bot_restart",
+                                "position_cap_release",
+                                "broker_order",
+                                "hard_safety_bypass",
+                            ],
                         }
                     ],
                 },
@@ -1268,6 +1277,15 @@ def test_scalp_sim_candidate_window_hypothesis_uses_sim_only_reserved_quota(monk
                             "allowed_runtime_apply": False,
                             "actual_order_submitted": False,
                             "broker_order_forbidden": True,
+                            "forbidden_uses": [
+                                "buy_sell_hold_live_rule",
+                                "threshold_apply",
+                                "provider_route_change",
+                                "bot_restart",
+                                "position_cap_release",
+                                "broker_order",
+                                "hard_safety_bypass",
+                            ],
                         }
                     ],
                 },
@@ -1319,6 +1337,67 @@ def test_scalp_sim_candidate_window_hypothesis_uses_sim_only_reserved_quota(monk
     assert armed["ldm_hypothesis_matched"] is True
     assert armed["ldm_hypothesis_id"] == "ldm_hypothesis_test"
     assert armed["quota_policy"] == "ldm_hypothesis_observation_plan_v1"
+
+
+def test_scalp_sim_policy_loader_rejects_invalid_hypothesis_contract(monkeypatch, tmp_path):
+    catalog_path = tmp_path / "scalp_sim_policy_catalog_2026-06-01.json"
+    catalog_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "scalp_sim_policy_catalog_v1",
+                "policies": [],
+                "active_sim_priority_seeds": [],
+                "hypothesis_observation_plan": {
+                    "schema_version": "ldm_hypothesis_observation_plan_v1",
+                    "hypotheses": [
+                        {
+                            "soft_hypothesis_id": "invalid_missing_forbidden_uses",
+                            "observable_requirements": [
+                                {"field": "entry_score_parent", "op": "eq", "value": "score_watch_recovery"}
+                            ],
+                            "runtime_effect": False,
+                            "allowed_runtime_apply": False,
+                            "actual_order_submitted": False,
+                            "broker_order_forbidden": True,
+                        },
+                        {
+                            "soft_hypothesis_id": "invalid_post_arm_requirement",
+                            "observable_requirements": [
+                                {"field": "submit_quality_parent", "op": "eq", "value": "submit_stale_context_or_quote"}
+                            ],
+                            "runtime_effect": False,
+                            "allowed_runtime_apply": False,
+                            "actual_order_submitted": False,
+                            "broker_order_forbidden": True,
+                            "forbidden_uses": [
+                                "buy_sell_hold_live_rule",
+                                "threshold_apply",
+                                "provider_route_change",
+                                "bot_restart",
+                                "position_cap_release",
+                                "broker_order",
+                                "hard_safety_bypass",
+                            ],
+                        },
+                    ],
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    rules = replace(
+        CONFIG,
+        SCALP_SIM_AUTO_POLICY_ENABLED=True,
+        SCALP_SIM_AUTO_POLICY_FILE=str(catalog_path),
+        SCALP_SIM_AUTO_POLICY_VERSION="scalp_sim_auto_approval:2026-06-01",
+    )
+    monkeypatch.setattr(state_handlers, "TRADING_RULES", rules)
+
+    cache = state_handlers._load_scalp_sim_auto_policy_cache()
+
+    assert cache["hypotheses"] == []
+    assert cache["hypothesis_count"] == 0
+    assert cache["status"] == "policy_invalid"
 
 
 def test_scalp_sim_candidate_window_enforces_ldm_sample_quota_sim_only(monkeypatch):
