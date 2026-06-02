@@ -58,11 +58,12 @@ def _load_json(path: Path) -> dict[str, Any]:
 def _missing_required_postclose_artifacts(source_date: str) -> list[Path]:
     required = [
         EV_REPORT_DIR / f"threshold_cycle_ev_{source_date}.json",
-        OPENAI_WS_REPORT_DIR / f"openai_ws_stability_{source_date}.json",
-        SWING_RUNTIME_APPROVAL_DIR / f"swing_runtime_approval_{source_date}.json",
-        CODE_IMPROVEMENT_REPORT_DIR / f"code_improvement_workorder_{source_date}.json",
     ]
     return [path for path in required if not path.exists()]
+
+
+def _has_payload(payload: dict[str, Any]) -> bool:
+    return bool(payload)
 
 
 def _next_krx_trading_day(source_date: str) -> str:
@@ -333,6 +334,11 @@ def _render_task(task: GeneratedTask, target_date: str) -> list[str]:
     return out
 
 
+def _task_sort_key(task: GeneratedTask) -> tuple[int, str, str]:
+    slot_order = {"PREOPEN": 0, "INTRADAY": 1, "POSTCLOSE": 2}
+    return (slot_order.get(task.slot, 99), task.time_window, task.task_id)
+
+
 def _build_tasks(
     *,
     source_date: str,
@@ -358,6 +364,20 @@ def _build_tasks(
         AUTOMATION_TRIGGER_DECISION_REPORT_DIR / f"automation_chain_trigger_decision_{source_date}.json"
     )
     trigger_decision_summary = _automation_trigger_decision_summary(trigger_report)
+    tuning_sources = (
+        f"[threshold_cycle_ev_{source_date}.json](/home/ubuntu/KORStockScan/{_rel(ev_path)})"
+    )
+    tuning_decision_line = (
+        "판정 기준: threshold cycle EV를 보고 `live_auto_apply_ready`, `sim_auto_approved`, post-apply attribution, EV authority를 분리해 확인한다."
+    )
+    if tuning_performance_path.exists():
+        tuning_sources = (
+            f"[tuning_performance_control_tower_{source_date}.json](/home/ubuntu/KORStockScan/{_rel(tuning_performance_path)}), "
+            f"{tuning_sources}"
+        )
+        tuning_decision_line = (
+            "판정 기준: tuning performance control tower를 먼저 보고 `live_auto_apply_ready`, `sim_auto_approved`, post-apply attribution, EV authority를 분리해 확인한다."
+        )
     threshold_source = (
         f"[threshold_cycle_ev_{source_date}.json](/home/ubuntu/KORStockScan/{_rel(ev_path)}), "
         "[threshold_cycle_preopen_apply.py](/home/ubuntu/KORStockScan/src/engine/threshold_cycle_preopen_apply.py), "
@@ -391,24 +411,27 @@ def _build_tasks(
             source=threshold_source,
             lines=tuple(threshold_lines),
         ),
-        GeneratedTask(
-            task_id=f"AITransportPreopenConfirm{mmdd}",
-            title="AI transport 유지 설정 및 entry_price/analyze_target provenance 확인",
-            slot="PREOPEN",
-            time_window="08:55~09:00",
-            track="RuntimeStability",
-            source=(
-                f"[openai_ws_stability_{source_date}.md](/home/ubuntu/KORStockScan/{_rel(openai_path)}), "
-                "[run_bot.sh](/home/ubuntu/KORStockScan/src/run_bot.sh), "
-                "[ai_engine_openai.py](/home/ubuntu/KORStockScan/src/engine/ai_engine_openai.py)"
-            ),
-            lines=(
-                "판정 기준: startup env의 endpoint별 transport를 확인한다. `analyze_target`은 OpenAI Responses WS, `entry_price`는 Bedrock Qwen3 32B primary -> Nova Lite v2 failback provenance를 분리 확인한다.",
-                "금지: provider transport 확인을 threshold 값, 주문가/수량 guard, 스윙 dry-run guard 변경으로 해석하지 않는다.",
-                "다음 액션: entry_price Bedrock provenance 또는 analyze_target WS 표본이 부족하면 장중 표본 재확인 항목과 연결한다.",
-            ),
-        ),
     ]
+    if _has_payload(openai_report):
+        tasks.append(
+            GeneratedTask(
+                task_id=f"AITransportPreopenConfirm{mmdd}",
+                title="AI transport 유지 설정 및 entry_price/analyze_target provenance 확인",
+                slot="PREOPEN",
+                time_window="08:55~09:00",
+                track="RuntimeStability",
+                source=(
+                    f"[openai_ws_stability_{source_date}.md](/home/ubuntu/KORStockScan/{_rel(openai_path)}), "
+                    "[run_bot.sh](/home/ubuntu/KORStockScan/src/run_bot.sh), "
+                    "[ai_engine_openai.py](/home/ubuntu/KORStockScan/src/engine/ai_engine_openai.py)"
+                ),
+                lines=(
+                    "판정 기준: startup env의 endpoint별 transport를 확인한다. `analyze_target`은 OpenAI Responses WS, `entry_price`는 Bedrock Qwen3 32B primary -> Nova Lite v2 failback provenance를 분리 확인한다.",
+                    "금지: provider transport 확인을 threshold 값, 주문가/수량 guard, 스윙 dry-run guard 변경으로 해석하지 않는다.",
+                    "다음 액션: entry_price Bedrock provenance 또는 analyze_target WS 표본이 부족하면 장중 표본 재확인 항목과 연결한다.",
+                ),
+            )
+        )
     if _has_approval_request(ev_report, swing_report):
         tasks.append(
             GeneratedTask(
@@ -445,7 +468,7 @@ def _build_tasks(
                 ),
             )
         )
-    if _openai_needs_intraday_sample(openai_report):
+    if _has_payload(openai_report) and _openai_needs_intraday_sample(openai_report):
         tasks.append(
             GeneratedTask(
                 task_id=f"AITransportIntradaySample{mmdd}",
@@ -485,30 +508,11 @@ def _build_tasks(
                 slot="POSTCLOSE",
                 time_window="16:30~16:45",
                 track="RuntimeStability",
-                source=(
-                    f"[tuning_performance_control_tower_{source_date}.json](/home/ubuntu/KORStockScan/{_rel(tuning_performance_path)}), "
-                    f"[threshold_cycle_ev_{source_date}.json](/home/ubuntu/KORStockScan/{_rel(ev_path)})"
-                ),
+                source=tuning_sources,
                 lines=(
-                    "판정 기준: tuning performance control tower를 먼저 보고 `live_auto_apply_ready`, `sim_auto_approved`, post-apply attribution, EV authority를 분리해 확인한다.",
+                    tuning_decision_line,
                     "금지: sim/combined EV만으로 broker execution 품질이나 live 전환을 확정하지 않는다.",
                     "다음 액션: 다음 장전 apply 입력으로 쓸 수 있는 항목과 hold_sample/freeze 항목을 분리한다.",
-                ),
-            ),
-            GeneratedTask(
-                task_id=f"CodeImprovementWorkorderReview{mmdd}",
-                title="code improvement workorder 구현 필요 여부 및 Codex 지시 대상 확인",
-                slot="POSTCLOSE",
-                time_window="16:45~17:00",
-                track="ScalpingLogic",
-                source=(
-                    f"[code_improvement_workorder_{source_date}.md](/home/ubuntu/KORStockScan/{_rel(code_md_path)}), "
-                    f"[code_improvement_workorder_{source_date}.json](/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_{source_date}.json)"
-                ),
-                lines=(
-                    f"판정 기준: selected_order_count={_code_workorder_count(ev_report, code_report)}와 `implement_now`, `attach_existing_family`, `design_family_candidate`, `reject` 분류를 확인한다.",
-                    "금지: code-improvement workorder를 자동 repo 수정으로 취급하지 않는다. 사용자가 Codex 구현을 지시한 경우에만 실행한다.",
-                    "다음 액션: 구현 필요, 설계 보류, reject, already_implemented 중 하나로 닫는다.",
                 ),
             ),
             GeneratedTask(
@@ -527,6 +531,29 @@ def _build_tasks(
                     "다음 액션: approval request가 있으면 `approval_id`, 후보/대상, artifact path, 승인 여부, 다음 PREOPEN 적용 확인 항목을 남긴다. 누락된 항목이 있으면 다음 영업일 checklist에 parser-friendly checkbox로 추가한다.",
                 ),
             ),
+        ]
+    )
+    if _has_payload(code_report) and code_md_path.exists():
+        tasks.append(
+            GeneratedTask(
+                task_id=f"CodeImprovementWorkorderReview{mmdd}",
+                title="code improvement workorder 구현 필요 여부 및 Codex 지시 대상 확인",
+                slot="POSTCLOSE",
+                time_window="16:45~17:00",
+                track="ScalpingLogic",
+                source=(
+                    f"[code_improvement_workorder_{source_date}.md](/home/ubuntu/KORStockScan/{_rel(code_md_path)}), "
+                    f"[code_improvement_workorder_{source_date}.json](/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_{source_date}.json)"
+                ),
+                lines=(
+                    f"판정 기준: selected_order_count={_code_workorder_count(ev_report, code_report)}와 `implement_now`, `attach_existing_family`, `design_family_candidate`, `reject` 분류를 확인한다.",
+                    "금지: code-improvement workorder를 자동 repo 수정으로 취급하지 않는다. 사용자가 Codex 구현을 지시한 경우에만 실행한다.",
+                    "다음 액션: 구현 필요, 설계 보류, reject, already_implemented 중 하나로 닫는다.",
+                ),
+            )
+        )
+    if _has_payload(trigger_report):
+        tasks.append(
             GeneratedTask(
                 task_id=f"AutomationTriggerDecisionSummary{mmdd}",
                 title="자동화체인 trigger decision run/skip 요약 및 wrapper marker 대조 확인",
@@ -543,6 +570,9 @@ def _build_tasks(
                     "다음 액션: `trigger_contract_pass`, `unexpected_all_run`, `skip_marker_missing`, `source_missing_run_required`, `force_override_detected`, `needs_followup_patch` 중 하나로 닫는다.",
                 ),
             ),
+        )
+    tasks.extend(
+        [
             *(
                 [
                     GeneratedTask(
@@ -639,6 +669,7 @@ def _render_auto_block(
     )
     exclude_task_ids = exclude_task_ids or set()
     tasks = [task for task in tasks if task.task_id not in exclude_task_ids]
+    tasks.sort(key=_task_sort_key)
     by_slot = {"PREOPEN": [], "INTRADAY": [], "POSTCLOSE": []}
     for task in tasks:
         by_slot.setdefault(task.slot, []).append(task)
@@ -901,6 +932,7 @@ def build_next_stage2_checklist(source_date: str) -> dict[str, Any]:
         trigger_report=trigger_report,
     )
     tasks = [task for task in tasks if task.task_id not in exclude_task_ids]
+    tasks.sort(key=_task_sort_key)
     return {
         "source_date": source_date,
         "target_date": target_date,

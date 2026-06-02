@@ -37,6 +37,8 @@ def _write_json(path: Path, payload: dict):
 
 def test_build_next_stage2_checklist_generates_next_trading_day_and_tasks(monkeypatch, tmp_path):
     docs, ev_dir, openai_dir, swing_dir, code_dir = _patch_dirs(monkeypatch, tmp_path)
+    trigger_dir = mod.AUTOMATION_TRIGGER_DECISION_REPORT_DIR
+    tuning_dir = mod.TUNING_PERFORMANCE_REPORT_DIR
     _write_json(
         ev_dir / "threshold_cycle_ev_2026-05-08.json",
         {
@@ -61,6 +63,16 @@ def test_build_next_stage2_checklist_generates_next_trading_day_and_tasks(monkey
     )
     _write_json(swing_dir / "swing_runtime_approval_2026-05-08.json", {"approval_requests": [{"id": "req"}]})
     _write_json(code_dir / "code_improvement_workorder_2026-05-08.json", {"summary": {"selected_order_count": 2}})
+    _write_json(tuning_dir / "tuning_performance_control_tower_2026-05-08.json", {"summary": {}})
+    (docs / "code-improvement-workorders").mkdir(parents=True, exist_ok=True)
+    (docs / "code-improvement-workorders" / "code_improvement_workorder_2026-05-08.md").write_text(
+        "# workorder",
+        encoding="utf-8",
+    )
+    _write_json(
+        trigger_dir / "automation_chain_trigger_decision_2026-05-08.json",
+        {"summary": {"total_steps": 1, "run_count": 1, "skip_count": 0}, "decisions": []},
+    )
 
     summary = mod.build_next_stage2_checklist("2026-05-08")
 
@@ -138,10 +150,15 @@ def test_build_next_stage2_checklist_excludes_codex_daily_workorder_snapshots(mo
 
 def test_generated_checklist_is_parser_friendly(monkeypatch, tmp_path):
     docs, ev_dir, openai_dir, swing_dir, code_dir = _patch_dirs(monkeypatch, tmp_path)
+    trigger_dir = mod.AUTOMATION_TRIGGER_DECISION_REPORT_DIR
     _write_json(ev_dir / "threshold_cycle_ev_2026-05-11.json", {"runtime_apply": {"runtime_change": True}})
     _write_json(openai_dir / "openai_ws_stability_2026-05-11.json", {"decision": "rollback_http"})
     _write_json(swing_dir / "swing_runtime_approval_2026-05-11.json", {"approval_requests": []})
     _write_json(code_dir / "code_improvement_workorder_2026-05-11.json", {"summary": {"selected_order_count": 1}})
+    _write_json(
+        trigger_dir / "automation_chain_trigger_decision_2026-05-11.json",
+        {"summary": {"total_steps": 1, "run_count": 1, "skip_count": 0}, "decisions": []},
+    )
 
     mod.build_next_stage2_checklist("2026-05-11")
     checklist = docs / "checklists" / "2026-05-12-stage2-todo-checklist.md"
@@ -170,6 +187,25 @@ def test_build_next_stage2_checklist_refuses_to_write_when_core_postclose_artifa
         mod.build_next_stage2_checklist("2026-06-02")
 
     assert not (docs / "checklists" / "2026-06-04-stage2-todo-checklist.md").exists()
+
+
+def test_build_next_stage2_checklist_skips_optional_tasks_when_optional_artifacts_are_missing(monkeypatch, tmp_path):
+    docs, ev_dir, _, _, _ = _patch_dirs(monkeypatch, tmp_path)
+    _write_json(ev_dir / "threshold_cycle_ev_2026-05-22.json", {"runtime_apply": {"runtime_change": False}})
+
+    summary = mod.build_next_stage2_checklist("2026-05-22")
+
+    text = (docs / "checklists" / "2026-05-26-stage2-todo-checklist.md").read_text(encoding="utf-8")
+    assert summary["tasks"] == [
+        "ThresholdEnvAutoApplyPreopen0526",
+        "ThresholdDailyEVReport0526",
+        "HumanInterventionSummary0526",
+    ]
+    assert "AITransportPreopenConfirm0526" not in text
+    assert "AITransportIntradaySample0526" not in text
+    assert "CodeImprovementWorkorderReview0526" not in text
+    assert "AutomationTriggerDecisionSummary0526" not in text
+    assert "tuning_performance_control_tower_2026-05-22.json" not in text
 
 
 def test_automation_trigger_decision_summary_is_surfaced_as_postclose_task(monkeypatch, tmp_path):
