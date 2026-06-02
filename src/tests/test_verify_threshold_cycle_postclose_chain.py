@@ -1115,6 +1115,129 @@ def test_active_sim_priority_handoff_fails_unknown_runtime_key_when_catalog_empt
     assert "active_sim_priority_unknown_key_observed" in status["missing"]
 
 
+def test_ldm_refinement_consumption_fails_when_lifecycle_ledger_missing():
+    status = mod._ldm_refinement_consumption_status(
+        {
+            "refinement_inputs": [
+                {
+                    "refinement_input_id": "ref_input_1",
+                    "soft_hypothesis_id": "ldm_hypothesis_test",
+                    "classification": "taxonomy_gap_candidate",
+                }
+            ]
+        },
+        {},
+    )
+
+    assert status["status"] == "fail"
+    assert "ldm_refinement_consumption_ledger_missing" in status["missing"]
+
+
+def test_ldm_refinement_consumption_fails_when_lifecycle_ledger_failed():
+    status = mod._ldm_refinement_consumption_status(
+        {
+            "refinement_inputs": [
+                {
+                    "refinement_input_id": "ref_input_1",
+                    "soft_hypothesis_id": "ldm_hypothesis_test",
+                    "classification": "taxonomy_gap_candidate",
+                }
+            ]
+        },
+        {
+            "ldm_refinement_pressure_consumption": {
+                "status": "fail",
+                "input_count": 1,
+                "consumed_count": 0,
+                "contract_issues": ["ldm_refinement_date_mismatch"],
+                "entries": [],
+            }
+        },
+    )
+
+    assert status["status"] == "fail"
+    assert "ldm_refinement_consumption_ledger_failed" in status["missing"]
+
+
+def test_ldm_refinement_consumption_ignores_stale_artifact_when_stage_disabled():
+    status = mod._ldm_refinement_consumption_status(
+        {
+            "refinement_inputs": [
+                {
+                    "refinement_input_id": "ref_input_stale",
+                    "soft_hypothesis_id": "ldm_hypothesis_stale",
+                    "classification": "taxonomy_gap_candidate",
+                }
+            ]
+        },
+        {},
+        disabled=True,
+    )
+
+    assert status["status"] == "disabled"
+    assert status["missing"] == []
+    assert status["disabled_reason"] == "ldm_hypothesis_parent_refinement_stage_disabled"
+
+
+def test_ldm_refinement_consumption_warns_for_all_needs_more_sample_with_reason():
+    status = mod._ldm_refinement_consumption_status(
+        {
+            "refinement_inputs": [
+                {
+                    "refinement_input_id": "ref_input_1",
+                    "soft_hypothesis_id": "ldm_hypothesis_test",
+                    "classification": "taxonomy_gap_candidate",
+                }
+            ]
+        },
+        {
+            "ldm_refinement_pressure_consumption": {
+                "input_count": 1,
+                "entries": [
+                    {
+                        "refinement_input_id": "ref_input_1",
+                        "closure_status": "needs_more_contrastive_sample",
+                        "closure_reason": "contrary_sample_needed_before_parent_structure_change",
+                    }
+                ],
+            }
+        },
+    )
+
+    assert status["status"] == "warning"
+    assert "ldm_refinement_all_needs_more_contrastive_sample" in status["warnings"]
+
+
+def test_ldm_refinement_consumption_warns_repeated_taxonomy_gap_unresolved():
+    status = mod._ldm_refinement_consumption_status(
+        {
+            "refinement_inputs": [
+                {
+                    "refinement_input_id": "ref_input_1",
+                    "soft_hypothesis_id": "ldm_hypothesis_test",
+                    "classification": "taxonomy_gap_candidate",
+                    "repeated_gap_count": 2,
+                }
+            ]
+        },
+        {
+            "ldm_refinement_pressure_consumption": {
+                "input_count": 1,
+                "entries": [
+                    {
+                        "refinement_input_id": "ref_input_1",
+                        "closure_status": "needs_more_contrastive_sample",
+                        "closure_reason": "still_collecting_opposite_sample",
+                    }
+                ],
+            }
+        },
+    )
+
+    assert status["status"] == "warning"
+    assert "ldm_refinement_repeated_taxonomy_gap_unresolved" in status["warnings"]
+
+
 def test_swing_entry_bottleneck_handoff_fails_when_downstream_missing():
     matrix = {
         "input_contract": {"swing_daily_simulation_consumed": False},

@@ -43,6 +43,7 @@ _OPTIONAL_ARTIFACT_LABELS = {
     "threshold_preopen_apply_next",
     "scalp_sim_policy_catalog",
     "swing_sim_policy_catalog",
+    "ldm_hypothesis_parent_refinement",
 }
 _AI_EXEMPT_RUNTIME_FAMILIES = {
     "latency_classifier_runtime_profile",
@@ -190,6 +191,9 @@ def _artifact_paths(target_date: str) -> dict[str, Path]:
         "lifecycle_bucket_discovery": REPORT_DIR
         / "lifecycle_bucket_discovery"
         / f"lifecycle_bucket_discovery_{target_date}.json",
+        "ldm_hypothesis_parent_refinement": REPORT_DIR
+        / "ldm_hypothesis_parent_refinement"
+        / f"ldm_hypothesis_parent_refinement_{target_date}.json",
         "lifecycle_decision_matrix_rolling5d": REPORT_DIR
         / "lifecycle_decision_matrix"
         / f"lifecycle_decision_matrix_{target_date}_rolling5d.json",
@@ -1701,6 +1705,96 @@ def _active_sim_priority_handoff_status(
     }
 
 
+def _ldm_refinement_consumption_status(
+    refinement: dict[str, Any],
+    discovery: dict[str, Any],
+    *,
+    disabled: bool = False,
+) -> dict[str, Any]:
+    inputs = [item for item in (refinement.get("refinement_inputs") or []) if isinstance(item, dict)]
+    if disabled:
+        return {
+            "status": "disabled",
+            "input_count": len(inputs),
+            "consumed_count": 0,
+            "closure_counts": {},
+            "missing": [],
+            "warnings": [],
+            "unconsumed_refinement_input_ids": [],
+            "repeated_unresolved_input_ids": [],
+            "disabled_reason": "ldm_hypothesis_parent_refinement_stage_disabled",
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+        }
+    if not refinement and not inputs:
+        return {
+            "status": "not_applicable",
+            "input_count": 0,
+            "consumed_count": 0,
+            "missing": [],
+            "warnings": [],
+        }
+    ledger = (
+        discovery.get("ldm_refinement_pressure_consumption")
+        if isinstance(discovery.get("ldm_refinement_pressure_consumption"), dict)
+        else {}
+    )
+    entries = [item for item in (ledger.get("entries") or []) if isinstance(item, dict)]
+    missing: list[str] = []
+    warnings: list[str] = []
+    if inputs and not ledger:
+        missing.append("ldm_refinement_consumption_ledger_missing")
+    if ledger and str(ledger.get("status") or "") == "fail":
+        missing.append("ldm_refinement_consumption_ledger_failed")
+    if inputs and _safe_int(ledger.get("input_count")) < len(inputs):
+        missing.append("ldm_refinement_input_count_mismatch")
+    consumed_ids = {str(item.get("refinement_input_id") or "") for item in entries if str(item.get("refinement_input_id") or "")}
+    expected_ids = {
+        str(item.get("refinement_input_id") or "")
+        for item in inputs
+        if str(item.get("refinement_input_id") or "")
+    }
+    unconsumed_ids = sorted(expected_ids - consumed_ids)
+    if unconsumed_ids:
+        missing.append("ldm_refinement_inputs_unconsumed")
+    if entries and all(str(item.get("closure_status") or "") == "needs_more_contrastive_sample" for item in entries):
+        if any(not str(item.get("closure_reason") or "").strip() for item in entries):
+            warnings.append("ldm_refinement_all_needs_more_sample_without_reason")
+        else:
+            warnings.append("ldm_refinement_all_needs_more_contrastive_sample")
+    repeated_unresolved = [
+        str(item.get("refinement_input_id") or item.get("soft_hypothesis_id") or "")
+        for item in inputs
+        if str(item.get("classification") or "") == "taxonomy_gap_candidate"
+        and _safe_int(item.get("repeated_gap_count")) >= 2
+        and not any(
+            str(entry.get("refinement_input_id") or "") == str(item.get("refinement_input_id") or "")
+            and str(entry.get("closure_status") or "")
+            in {"parent_refinement_candidate_created", "new_parent_candidate_created", "source_quality_gap_created"}
+            for entry in entries
+        )
+    ]
+    if repeated_unresolved:
+        warnings.append("ldm_refinement_repeated_taxonomy_gap_unresolved")
+    status = "fail" if missing else "warning" if warnings else "pass"
+    return {
+        "status": status,
+        "input_count": len(inputs),
+        "consumed_count": len(entries),
+        "closure_counts": ledger.get("closure_counts") or {},
+        "missing": list(dict.fromkeys(missing)),
+        "warnings": list(dict.fromkeys(warnings)),
+        "unconsumed_refinement_input_ids": unconsumed_ids,
+        "repeated_unresolved_input_ids": [item for item in repeated_unresolved if item],
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+    }
+
+
 def _scale_in_bucket_handoff_status(
     ldm_report: dict[str, Any],
     ev_report: dict[str, Any],
@@ -2215,6 +2309,7 @@ def build_threshold_cycle_postclose_verification(
     swing_strategy_discovery_sim = _load_json(paths["swing_strategy_discovery_sim"])
     ldm_report = _load_json(paths["lifecycle_decision_matrix"])
     discovery_report = _load_json(paths["lifecycle_bucket_discovery"])
+    ldm_refinement_report = _load_json(paths["ldm_hypothesis_parent_refinement"])
     swing_ldm_report = _load_json(paths["swing_lifecycle_decision_matrix"])
     swing_bucket_discovery_report = _load_json(paths["swing_lifecycle_bucket_discovery"])
     scalp_sim_overnight_path = _scalp_sim_overnight_path(target_date)
@@ -2393,6 +2488,17 @@ def build_threshold_cycle_postclose_verification(
         log_issues.append("active_sim_priority_handoff_missing")
     elif active_sim_priority_handoff.get("status") == "warning":
         handoff_warnings.extend(str(item) for item in (active_sim_priority_handoff.get("warnings") or []) if str(item))
+    ldm_refinement_consumption = _ldm_refinement_consumption_status(
+        ldm_refinement_report,
+        discovery_report,
+        disabled=preliminary_execution_flags.get("ldm_hypothesis_parent_refinement") is False,
+    )
+    if ldm_refinement_consumption.get("status") == "fail":
+        log_issues.append("ldm_hypothesis_parent_refinement_unconsumed")
+    elif ldm_refinement_consumption.get("status") == "warning":
+        handoff_warnings.extend(
+            str(item) for item in (ldm_refinement_consumption.get("warnings") or []) if str(item)
+        )
 
     lineage = workorder.get("lineage") if isinstance(workorder.get("lineage"), dict) else {}
     workorder_snapshot = {
@@ -2520,6 +2626,12 @@ def build_threshold_cycle_postclose_verification(
         required_execution_flags = (*required_execution_flags, "time_window_regime_counterfactual")
     if done_line and "runtime_apply_gap_audit" in execution_flags and "runtime_apply_gap_audit" not in missing_execution_flags:
         required_execution_flags = (*required_execution_flags, "runtime_apply_gap_audit")
+    if (
+        done_line
+        and "ldm_hypothesis_parent_refinement" in execution_flags
+        and "ldm_hypothesis_parent_refinement" not in missing_execution_flags
+    ):
+        required_execution_flags = (*required_execution_flags, "ldm_hypothesis_parent_refinement")
     disabled_stage_flags = [
         key
         for key in (
@@ -2542,6 +2654,7 @@ def build_threshold_cycle_postclose_verification(
             "daily_ev",
             "runtime_approval_summary",
             "runtime_apply_gap_audit",
+            "ldm_hypothesis_parent_refinement",
             "next_stage2_checklist",
         )
         if key in execution_flags and not execution_flags[key]
@@ -2564,12 +2677,15 @@ def build_threshold_cycle_postclose_verification(
         "runtime_approval_summary" if "runtime_approval_summary" in disabled_stage_flags else "",
         "runtime_apply_bridge" if "runtime_apply_bridge" in disabled_stage_flags else "",
         "runtime_apply_gap_audit" if "runtime_apply_gap_audit" in disabled_stage_flags else "",
+        "ldm_hypothesis_parent_refinement" if "ldm_hypothesis_parent_refinement" in disabled_stage_flags else "",
         "next_stage2_checklist" if "next_stage2_checklist" in disabled_stage_flags else "",
     }
     if "runtime_apply_bridge" not in execution_flags:
         disabled_artifact_labels.add("runtime_apply_bridge")
     if "runtime_apply_gap_audit" not in execution_flags:
         disabled_artifact_labels.add("runtime_apply_gap_audit")
+    if "ldm_hypothesis_parent_refinement" not in execution_flags:
+        disabled_artifact_labels.add("ldm_hypothesis_parent_refinement")
     if "swing_strategy_discovery" not in execution_flags:
         disabled_artifact_labels.add("swing_strategy_discovery_sim")
     if "swing_lifecycle_matrix" not in execution_flags:
@@ -2600,6 +2716,12 @@ def build_threshold_cycle_postclose_verification(
             or (item.get("json_valid") is False)
         )
     ]
+    if (
+        execution_flags.get("ldm_hypothesis_parent_refinement") is True
+        and "ldm_hypothesis_parent_refinement" not in disabled_stage_flags
+        and not paths["ldm_hypothesis_parent_refinement"].exists()
+    ):
+        missing_required_artifacts.append("ldm_hypothesis_parent_refinement")
     missing_downstream_links = [
         key for key, value in downstream_links.items() if value in (None, "", "-")
     ]
@@ -2901,6 +3023,7 @@ def build_threshold_cycle_postclose_verification(
         "lifecycle_flow_bucket_handoff": lifecycle_flow_bucket_handoff,
         "lifecycle_flow_bucket_attribution_present": isinstance(lifecycle_flow_attribution, dict),
         "lifecycle_bucket_discovery_handoff": lifecycle_bucket_discovery_handoff,
+        "ldm_hypothesis_parent_refinement_consumption": ldm_refinement_consumption,
         "lifecycle_bucket_windows": lifecycle_bucket_windows,
         "swing_lifecycle_handoff": swing_lifecycle_handoff,
         "producer_gap_discovery_handoff": producer_gap_handoff,
@@ -2939,6 +3062,11 @@ def _render_markdown(report: dict[str, Any]) -> str:
     lifecycle_bucket = (
         report.get("lifecycle_bucket_discovery_handoff")
         if isinstance(report.get("lifecycle_bucket_discovery_handoff"), dict)
+        else {}
+    )
+    ldm_refinement = (
+        report.get("ldm_hypothesis_parent_refinement_consumption")
+        if isinstance(report.get("ldm_hypothesis_parent_refinement_consumption"), dict)
         else {}
     )
     lifecycle_bucket_windows = (
@@ -3090,6 +3218,13 @@ def _render_markdown(report: dict[str, Any]) -> str:
         f"- ai_post_apply_followup_bucket_ids: `{lifecycle_bucket.get('ai_post_apply_followup_bucket_ids') or []}`",
         f"- warnings: `{lifecycle_bucket.get('warnings') or []}`",
         f"- interpretation: `{lifecycle_bucket.get('interpretation') or '-'}`",
+        "",
+        "## LDM Hypothesis Parent Refinement",
+        f"- status: `{ldm_refinement.get('status') or '-'}`",
+        f"- input/consumed: `{ldm_refinement.get('input_count') or 0}` / `{ldm_refinement.get('consumed_count') or 0}`",
+        f"- closure_counts: `{ldm_refinement.get('closure_counts') or {}}`",
+        f"- missing: `{ldm_refinement.get('missing') or []}`",
+        f"- warnings: `{ldm_refinement.get('warnings') or []}`",
         "",
         "## Lifecycle Bucket Windows",
         f"- status: `{lifecycle_bucket_windows.get('status') or '-'}`",

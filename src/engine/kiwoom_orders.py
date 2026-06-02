@@ -65,6 +65,23 @@ def is_request_limit_error(error) -> bool:
     )
 
 
+def is_deposit_transport_error(error) -> bool:
+    """키움 계좌 API transport/sendReceive 계열 실패인지 판정합니다."""
+    if not isinstance(error, dict):
+        return False
+    msg = str(error.get('return_msg') or error.get('err_msg') or '')
+    code = str(error.get('return_code') or error.get('rt_cd') or '')
+    lowered = msg.lower()
+    return (
+        code == '2000'
+        and (
+            'sendreceive' in lowered
+            or 'wingsj' in lowered
+            or '-994' in msg
+        )
+    )
+
+
 def _post_kiwoom_with_auth_retry(url, headers, payload, api_id, *, timeout=5):
     """POST once, then refresh token and retry once only for Kiwoom auth/token failures."""
     active_headers = dict(headers or {})
@@ -221,13 +238,19 @@ def get_deposit(token):
     if _DEPOSIT_API_COOLDOWN_UNTIL > now_ts:
         cooldown_remaining = _DEPOSIT_API_COOLDOWN_UNTIL - now_ts
         cached_amount = get_cached_deposit()
+        cooldown_classification = (
+            'deposit_transport_cooldown'
+            if str(_DEPOSIT_API_COOLDOWN_REASON or '').startswith('kt00001 transport')
+            else 'request_count_exceeded_cooldown'
+        )
+        cooldown_code = '2000' if cooldown_classification == 'deposit_transport_cooldown' else '1700'
         _LAST_DEPOSIT_ERRORS.append(
             {
                 'http_status': None,
-                'return_code': '1700',
+                'return_code': cooldown_code,
                 'return_msg': _DEPOSIT_API_COOLDOWN_REASON or 'kt00001 request-limit cooldown active',
                 'attempt': 0,
-                'classification': 'request_count_exceeded_cooldown',
+                'classification': cooldown_classification,
                 'cooldown_remaining_sec': round(cooldown_remaining, 1),
                 'cache_fallback_used': bool(cached_amount > 0),
             }
@@ -239,7 +262,7 @@ def get_deposit(token):
             )
             return cached_amount
         log_error(
-            f"❌ [예수금조회 cooldown] kt00001 요청 제한 쿨다운 중 "
+            f"❌ [예수금조회 cooldown] {_DEPOSIT_API_COOLDOWN_REASON or 'kt00001 cooldown active'} "
             f"(remaining={cooldown_remaining:.1f}s) - 주문가능금액 0 fail-closed"
         )
         return 0
@@ -286,6 +309,18 @@ def get_deposit(token):
                 _LAST_DEPOSIT_ERRORS[-1]['classification'] = 'request_count_exceeded'
                 _LAST_DEPOSIT_ERRORS[-1]['cooldown_sec'] = cooldown_sec
                 log_error(f"❌ [예수금조회 요청제한] attempt={attempt}/{retries} 사유: {err_msg}")
+                break
+            if is_deposit_transport_error(_LAST_DEPOSIT_ERRORS[-1]):
+                cooldown_sec = max(
+                    float(getattr(TRADING_RULES, "DEPOSIT_API_TRANSPORT_COOLDOWN_SEC", 5.0) or 5.0),
+                    0.0,
+                )
+                if cooldown_sec > 0:
+                    _DEPOSIT_API_COOLDOWN_UNTIL = max(_DEPOSIT_API_COOLDOWN_UNTIL, time.time() + cooldown_sec)
+                    _DEPOSIT_API_COOLDOWN_REASON = "kt00001 transport sendReceive failure"
+                _LAST_DEPOSIT_ERRORS[-1]['classification'] = 'deposit_transport_failure'
+                _LAST_DEPOSIT_ERRORS[-1]['cooldown_sec'] = cooldown_sec
+                log_error(f"❌ [예수금조회 transport] attempt={attempt}/{retries} 사유: {err_msg}")
                 break
             log_error(f"❌ [예수금조회 실패] attempt={attempt}/{retries} 사유: {err_msg}")
         except Exception as exc:

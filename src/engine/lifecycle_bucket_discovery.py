@@ -39,6 +39,7 @@ from src.utils.constants import DATA_DIR
 
 REPORT_DIR = DATA_DIR / "report" / "lifecycle_bucket_discovery"
 LDM_REPORT_DIR = DATA_DIR / "report" / "lifecycle_decision_matrix"
+LDM_REFINEMENT_REPORT_DIR = DATA_DIR / "report" / "ldm_hypothesis_parent_refinement"
 CATALOG_DIR = DATA_DIR / "threshold_cycle" / "lifecycle_bucket_catalog"
 SIM_AUTO_APPROVAL_DIR = DATA_DIR / "threshold_cycle" / "sim_auto_approvals"
 CONTAMINATION_WINDOW_DIR = DATA_DIR / "threshold_cycle" / "contamination_windows"
@@ -76,6 +77,16 @@ LIFECYCLE_FLOW_PARENT_TARGET_MIN = 30
 LIFECYCLE_FLOW_PARENT_TARGET_MAX = 60
 LIFECYCLE_FLOW_PARENT_TARGET_MID = 45
 ACTIVE_SIM_PRIORITY_POLICY_VERSION = "active_parent_seed_v1"
+LDM_REFINEMENT_CONSUMER = "lifecycle_bucket_discovery"
+LDM_REFINEMENT_SCHEMA_VERSION = "ldm_hypothesis_parent_refinement_v1"
+LDM_REFINEMENT_CLOSURE_STATUSES = {
+    "absorbed_into_existing_parent",
+    "parent_refinement_candidate_created",
+    "new_parent_candidate_created",
+    "source_quality_gap_created",
+    "needs_more_contrastive_sample",
+    "rejected_as_fragile",
+}
 LIFECYCLE_FLOW_PARENT_LEVEL_FIELDS = {
     "L1_broad": ("entry_score_parent", "submit_quality_parent", "exit_outcome_parent"),
     "L2_default": (
@@ -1336,6 +1347,202 @@ def _target_validation_dimensions(dimensions: dict[str, Any]) -> dict[str, str]:
     return {key: str(dimensions.get(key) or "") for key in keys if str(dimensions.get(key) or "").strip()}
 
 
+def _ldm_refinement_report_path(target_date: str) -> Path:
+    return LDM_REFINEMENT_REPORT_DIR / f"ldm_hypothesis_parent_refinement_{target_date}.json"
+
+
+def _load_ldm_refinement_report(target_date: str) -> dict[str, Any]:
+    path = _ldm_refinement_report_path(target_date)
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _parent_dimension_matches_refinement(parent: dict[str, Any], item: dict[str, Any]) -> bool:
+    dimensions = parent.get("dimension_filters") if isinstance(parent.get("dimension_filters"), dict) else {}
+    features = item.get("runtime_observable_features") if isinstance(item.get("runtime_observable_features"), dict) else {}
+    comparable = [
+        key
+        for key in ("entry_score_parent", "entry_source_parent", "submit_quality_parent")
+        if str(features.get(key) or "").strip()
+    ]
+    if len(comparable) >= 2 and all(
+        str(dimensions.get(key) or "").strip() == str(features.get(key) or "").strip() for key in comparable
+    ):
+        return True
+    signature = str(item.get("runtime_observable_signature") or "").strip()
+    if not signature:
+        return False
+    parent_signature_fields = {
+        key: str(dimensions.get(key) or "")
+        for key in ("entry_score_parent", "entry_source_parent", "submit_quality_parent")
+        if str(dimensions.get(key) or "").strip()
+    }
+    if len(parent_signature_fields) < 2:
+        return False
+    parent_signature = hashlib.sha1(
+        json.dumps(
+            parent_signature_fields,
+            ensure_ascii=True,
+            sort_keys=True,
+        ).encode("utf-8")
+    ).hexdigest()[:12]
+    return signature == f"observable_{parent_signature}"
+
+
+def _ldm_refinement_contract_issues(refinement: dict[str, Any], target_date: str) -> list[str]:
+    issues: list[str] = []
+    if not refinement:
+        return issues
+    if str(refinement.get("schema_version") or "") != LDM_REFINEMENT_SCHEMA_VERSION:
+        issues.append("ldm_refinement_schema_version_invalid")
+    if str(refinement.get("date") or "") != str(target_date):
+        issues.append("ldm_refinement_date_mismatch")
+    if str(refinement.get("consumer") or "") != LDM_REFINEMENT_CONSUMER:
+        issues.append("ldm_refinement_consumer_mismatch")
+    if refinement.get("runtime_effect") is not False:
+        issues.append("ldm_refinement_runtime_effect_contract_invalid")
+    if refinement.get("allowed_runtime_apply") is not False:
+        issues.append("ldm_refinement_allowed_runtime_apply_contract_invalid")
+    if refinement.get("actual_order_submitted") is not False:
+        issues.append("ldm_refinement_actual_order_submitted_contract_invalid")
+    if refinement.get("broker_order_forbidden") is not True:
+        issues.append("ldm_refinement_broker_order_forbidden_contract_invalid")
+    for item in refinement.get("refinement_inputs") or []:
+        if not isinstance(item, dict):
+            issues.append("ldm_refinement_input_schema_invalid")
+            continue
+        if item.get("consumption_required") is not True:
+            issues.append("ldm_refinement_input_consumption_required_missing")
+        if item.get("runtime_effect") is not False:
+            issues.append("ldm_refinement_input_runtime_effect_contract_invalid")
+        if item.get("allowed_runtime_apply") is not False:
+            issues.append("ldm_refinement_input_allowed_runtime_apply_contract_invalid")
+        if item.get("actual_order_submitted") is not False:
+            issues.append("ldm_refinement_input_actual_order_submitted_contract_invalid")
+        if item.get("broker_order_forbidden") is not True:
+            issues.append("ldm_refinement_input_broker_order_forbidden_contract_invalid")
+    return list(dict.fromkeys(issues))
+
+
+def _closure_for_ldm_refinement(item: dict[str, Any], matched_parent_ids: list[str]) -> tuple[str, str]:
+    classification = str(item.get("classification") or "").strip()
+    gap_reason = str(item.get("gap_reason") or "").strip()
+    match_count = _safe_int(item.get("match_count"))
+    if classification == "source_quality_gap" or gap_reason in {"join_key_missing", "source_quality_blocked"}:
+        return "source_quality_gap_created", gap_reason or "source_quality_gap_classification"
+    if match_count <= 1:
+        return "rejected_as_fragile", "single_match_pressure_is_too_fragile_for_parent_refinement"
+    if item.get("contrary_sample_need") is True and match_count < 3:
+        return "needs_more_contrastive_sample", "contrary_sample_needed_before_parent_structure_change"
+    if classification == "parent_support" and matched_parent_ids:
+        return "absorbed_into_existing_parent", "hypothesis_pressure_matches_existing_parent"
+    if classification == "parent_conflict" and matched_parent_ids:
+        return "parent_refinement_candidate_created", "hypothesis_pressure_conflicts_with_parent_average"
+    if classification == "taxonomy_gap_candidate":
+        if matched_parent_ids:
+            return "parent_refinement_candidate_created", "taxonomy_gap_now_maps_to_existing_parent_for_review"
+        if gap_reason == "parent_ambiguous":
+            return "parent_refinement_candidate_created", "multiple_parent_fit_requires_refinement_review"
+        return "new_parent_candidate_created", gap_reason or "taxonomy_gap_not_absorbed_by_existing_parent"
+    return "needs_more_contrastive_sample", "unclassified_pressure_kept_for_contrastive_observation"
+
+
+def _apply_ldm_refinement_pressure(report: dict[str, Any], summary: dict[str, Any]) -> None:
+    target_date = str(report.get("date") or report.get("target_date") or "")
+    refinement = _load_ldm_refinement_report(target_date)
+    inputs = [item for item in (refinement.get("refinement_inputs") or []) if isinstance(item, dict)]
+    contract_issues = _ldm_refinement_contract_issues(refinement, target_date)
+    parent_by_id: dict[str, dict[str, Any]] = {}
+    for parent in report.get("parent_bucket_summaries") or []:
+        if not isinstance(parent, dict):
+            continue
+        parent_id = str(parent.get("source_parent_bucket_id") or parent.get("parent_bucket_id") or "").strip()
+        if parent_id:
+            parent_by_id[parent_id] = parent
+
+    entries: list[dict[str, Any]] = []
+    closure_counts: Counter[str] = Counter()
+    consumable_inputs = [] if contract_issues else inputs
+    for item in consumable_inputs:
+        explicit_parent_ids = [
+            str(parent_id).strip()
+            for parent_id in (item.get("source_parent_bucket_ids") or [])
+            if str(parent_id).strip()
+        ]
+        matched_parent_ids = [parent_id for parent_id in explicit_parent_ids if parent_id in parent_by_id]
+        if not matched_parent_ids:
+            matched_parent_ids = [
+                parent_id for parent_id, parent in parent_by_id.items() if _parent_dimension_matches_refinement(parent, item)
+            ]
+        closure_status, closure_reason = _closure_for_ldm_refinement(item, matched_parent_ids)
+        if closure_status not in LDM_REFINEMENT_CLOSURE_STATUSES:
+            closure_status = "needs_more_contrastive_sample"
+            closure_reason = "unknown_closure_status_normalized"
+        closure_counts[closure_status] += 1
+        entry = {
+            "refinement_input_id": item.get("refinement_input_id"),
+            "soft_hypothesis_id": item.get("soft_hypothesis_id"),
+            "classification": item.get("classification"),
+            "gap_reason": item.get("gap_reason"),
+            "matched_parent_ids": matched_parent_ids,
+            "closure_status": closure_status,
+            "closure_reason": closure_reason,
+            "refinement_pressure_score": item.get("refinement_pressure_score"),
+            "match_count": item.get("match_count"),
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+        }
+        entries.append(entry)
+        for parent_id in matched_parent_ids:
+            parent = parent_by_id.get(parent_id)
+            if parent is None:
+                continue
+            pressure_items = parent.setdefault("ldm_refinement_pressure", [])
+            if isinstance(pressure_items, list):
+                pressure_items.append(
+                    {
+                        "refinement_input_id": item.get("refinement_input_id"),
+                        "soft_hypothesis_id": item.get("soft_hypothesis_id"),
+                        "classification": item.get("classification"),
+                        "closure_status": closure_status,
+                        "refinement_pressure_score": item.get("refinement_pressure_score"),
+                        "pressure_reasons": item.get("pressure_reasons") or [],
+                        "runtime_effect": False,
+                        "allowed_runtime_apply": False,
+                    }
+                )
+
+    ledger_status = "not_applicable"
+    if refinement:
+        ledger_status = "pass"
+        if contract_issues:
+            ledger_status = "fail"
+        if inputs and len(entries) != len(inputs):
+            ledger_status = "fail"
+    report["ldm_refinement_pressure_consumption"] = {
+        "schema_version": "ldm_refinement_pressure_consumption_v1",
+        "status": ledger_status,
+        "source_artifact": str(_ldm_refinement_report_path(target_date)),
+        "input_count": len(inputs),
+        "consumed_count": len(entries),
+        "closure_counts": dict(sorted(closure_counts.items())),
+        "contract_issues": contract_issues,
+        "entries": entries,
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+    }
+    summary["ldm_refinement_pressure_input_count"] = len(inputs)
+    summary["ldm_refinement_pressure_consumed_count"] = len(entries)
+    summary["ldm_refinement_pressure_closure_counts"] = dict(sorted(closure_counts.items()))
+
+
 def _build_active_sim_priority_seeds(report: dict[str, Any]) -> list[dict[str, Any]]:
     target_date = str(report.get("date") or report.get("target_date") or "")
     previous_by_parent = _load_previous_active_sim_priority_seeds(target_date)
@@ -1357,6 +1564,10 @@ def _build_active_sim_priority_seeds(report: dict[str, Any]) -> list[dict[str, A
         previous = previous_by_parent.get(parent_id, {})
         previous_prefix = previous.get("observable_prefix") if isinstance(previous.get("observable_prefix"), dict) else {}
         effective_prefix = observable_prefix or previous_prefix
+        ldm_pressure_items = parent.get("ldm_refinement_pressure") if isinstance(parent.get("ldm_refinement_pressure"), list) else []
+        ldm_pressure_counts = Counter(
+            str(item.get("closure_status") or "unknown") for item in ldm_pressure_items if isinstance(item, dict)
+        )
         has_previous = bool(previous)
         previous_status = str(previous.get("status") or "").strip()
         failed_count = 0 if eligible else _safe_int(previous.get("consecutive_fail_count")) + 1
@@ -1383,6 +1594,18 @@ def _build_active_sim_priority_seeds(report: dict[str, Any]) -> list[dict[str, A
             "parent_ev_pct": ev,
             "parent_joined_sample": parent.get("parent_joined_sample"),
             "complete_flow_count": complete_flow_count,
+            "ldm_refinement_pressure_summary": {
+                "input_count": len(ldm_pressure_items),
+                "closure_counts": dict(sorted(ldm_pressure_counts.items())),
+                "max_pressure_score": max(
+                    [
+                        _safe_float(item.get("refinement_pressure_score"), 0.0) or 0.0
+                        for item in ldm_pressure_items
+                        if isinstance(item, dict)
+                    ]
+                    or [0.0]
+                ),
+            },
             "source_quality_status": (
                 "pass"
                 if eligible
@@ -1753,6 +1976,7 @@ def _apply_lifecycle_flow_parent_absorption(report: dict[str, Any], candidates: 
             str(item.get("policy_bucket_id") or ""),
         )
     )
+    _apply_ldm_refinement_pressure(report, summary)
     active_seeds = _build_active_sim_priority_seeds(report)
     report["active_sim_priority_seeds"] = active_seeds
     active_seed_counts = Counter(str(item.get("status") or "unknown") for item in active_seeds)
@@ -3647,6 +3871,7 @@ def _render_markdown(report: dict[str, Any]) -> str:
         f"- absorbed/source_quality_blocker: `{summary.get('absorbed_bucket_count')}` / `{summary.get('source_quality_blocker_count')}`",
         f"- lifecycle_flow_parent_granularity: `{summary.get('parent_granularity_status')}` level=`{summary.get('selected_parent_level')}` parents=`{summary.get('parent_bucket_count')}` target=`{summary.get('target_parent_min')}-{summary.get('target_parent_max')}`",
         f"- lifecycle_flow_absorbed_children: child=`{summary.get('absorbed_child_count')}` sample=`{summary.get('absorbed_sample_count')}` conflict_parents=`{summary.get('child_conflict_warning_count')}`",
+        f"- ldm_refinement_pressure: input=`{summary.get('ldm_refinement_pressure_input_count')}` consumed=`{summary.get('ldm_refinement_pressure_consumed_count')}` closures=`{summary.get('ldm_refinement_pressure_closure_counts') or {}}`",
         f"- sim_auto_approved_count: `{summary.get('sim_auto_approved_count')}`",
         f"- lifecycle_flow_sim_probe_candidate_count: `{summary.get('lifecycle_flow_sim_probe_candidate_count')}`",
         f"- source_dimension_gap_count: `{summary.get('source_dimension_gap_count')}` / actionable_unknown_gap_count: `{summary.get('actionable_unknown_gap_count')}`",

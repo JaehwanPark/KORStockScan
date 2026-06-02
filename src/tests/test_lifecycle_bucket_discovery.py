@@ -174,6 +174,172 @@ def test_active_sim_priority_seed_uses_observable_prefix_only(tmp_path, monkeypa
     assert cooldown["status"] == "cooldown"
 
 
+def test_ldm_refinement_pressure_is_consumed_without_hypothesis_seed_fragmentation(tmp_path, monkeypatch):
+    refinement_dir = tmp_path / "ldm_refinement"
+    refinement_dir.mkdir()
+    monkeypatch.setattr(mod, "LDM_REFINEMENT_REPORT_DIR", refinement_dir)
+    refinement_dir.joinpath("ldm_hypothesis_parent_refinement_2026-06-01.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "ldm_hypothesis_parent_refinement_v1",
+                "consumer": "lifecycle_bucket_discovery",
+                "date": "2026-06-01",
+                "runtime_effect": False,
+                "allowed_runtime_apply": False,
+                "actual_order_submitted": False,
+                "broker_order_forbidden": True,
+                "refinement_inputs": [
+                    {
+                        "refinement_input_id": "ref_input_1",
+                        "soft_hypothesis_id": "ldm_hypothesis_direct_seed_forbidden",
+                        "classification": "parent_conflict",
+                        "source_parent_bucket_ids": ["parent_positive"],
+                        "match_count": 5,
+                        "refinement_pressure_score": 3.2,
+                        "runtime_effect": False,
+                        "allowed_runtime_apply": False,
+                        "actual_order_submitted": False,
+                        "broker_order_forbidden": True,
+                        "consumption_required": True,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    report = {
+        "date": "2026-06-01",
+        "parent_bucket_summaries": [
+            {
+                "source_parent_bucket_id": "parent_positive",
+                "parent_source_quality_adjusted_ev_pct": 2.5,
+                "complete_flow_count": 2,
+                "parent_joined_sample": 2,
+                "parent_granularity_floor_passed": True,
+                "dimension_filters": {
+                    "entry_score_parent": "score_watch_recovery",
+                    "entry_source_parent": "entry_source_blocked_ai_score",
+                },
+            }
+        ],
+    }
+    summary = {}
+
+    mod._apply_ldm_refinement_pressure(report, summary)
+    seeds = mod._build_active_sim_priority_seeds(report)
+
+    ledger = report["ldm_refinement_pressure_consumption"]
+    assert ledger["status"] == "pass"
+    assert ledger["input_count"] == 1
+    assert ledger["consumed_count"] == 1
+    assert ledger["entries"][0]["closure_status"] == "parent_refinement_candidate_created"
+    assert report["parent_bucket_summaries"][0]["ldm_refinement_pressure"][0]["soft_hypothesis_id"] == (
+        "ldm_hypothesis_direct_seed_forbidden"
+    )
+    assert seeds[0]["active_seed_id"].startswith("active_seed_")
+    assert seeds[0]["active_seed_id"] != "ldm_hypothesis_direct_seed_forbidden"
+    assert seeds[0]["source_parent_bucket_id"] == "parent_positive"
+    assert seeds[0]["ldm_refinement_pressure_summary"]["input_count"] == 1
+
+
+def test_ldm_refinement_pressure_rejects_invalid_artifact_contract(tmp_path, monkeypatch):
+    refinement_dir = tmp_path / "ldm_refinement"
+    refinement_dir.mkdir()
+    monkeypatch.setattr(mod, "LDM_REFINEMENT_REPORT_DIR", refinement_dir)
+    refinement_dir.joinpath("ldm_hypothesis_parent_refinement_2026-06-01.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "wrong_schema",
+                "date": "2026-05-31",
+                "consumer": "wrong_consumer",
+                "runtime_effect": True,
+                "refinement_inputs": [
+                    {
+                        "refinement_input_id": "ref_input_1",
+                        "soft_hypothesis_id": "ldm_hypothesis_invalid",
+                        "classification": "parent_support",
+                        "source_parent_bucket_ids": ["parent_positive"],
+                        "match_count": 5,
+                        "runtime_effect": False,
+                        "allowed_runtime_apply": False,
+                        "actual_order_submitted": False,
+                        "broker_order_forbidden": True,
+                        "consumption_required": True,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    report = {"date": "2026-06-01", "parent_bucket_summaries": [{"source_parent_bucket_id": "parent_positive"}]}
+    summary = {}
+
+    mod._apply_ldm_refinement_pressure(report, summary)
+
+    ledger = report["ldm_refinement_pressure_consumption"]
+    assert ledger["status"] == "fail"
+    assert ledger["input_count"] == 1
+    assert ledger["consumed_count"] == 0
+    assert "ldm_refinement_schema_version_invalid" in ledger["contract_issues"]
+    assert "ldm_refinement_date_mismatch" in ledger["contract_issues"]
+    assert "ldm_refinement_consumer_mismatch" in ledger["contract_issues"]
+    assert "ldm_refinement_runtime_effect_contract_invalid" in ledger["contract_issues"]
+
+
+def test_ldm_refinement_parent_match_requires_more_than_single_feature(tmp_path, monkeypatch):
+    refinement_dir = tmp_path / "ldm_refinement"
+    refinement_dir.mkdir()
+    monkeypatch.setattr(mod, "LDM_REFINEMENT_REPORT_DIR", refinement_dir)
+    refinement_dir.joinpath("ldm_hypothesis_parent_refinement_2026-06-01.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "ldm_hypothesis_parent_refinement_v1",
+                "consumer": "lifecycle_bucket_discovery",
+                "date": "2026-06-01",
+                "runtime_effect": False,
+                "allowed_runtime_apply": False,
+                "actual_order_submitted": False,
+                "broker_order_forbidden": True,
+                "refinement_inputs": [
+                    {
+                        "refinement_input_id": "ref_input_1",
+                        "soft_hypothesis_id": "ldm_hypothesis_single_feature",
+                        "classification": "taxonomy_gap_candidate",
+                        "gap_reason": "parent_not_found",
+                        "runtime_observable_features": {"entry_score_parent": "score_watch_recovery"},
+                        "match_count": 5,
+                        "runtime_effect": False,
+                        "allowed_runtime_apply": False,
+                        "actual_order_submitted": False,
+                        "broker_order_forbidden": True,
+                        "consumption_required": True,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    report = {
+        "date": "2026-06-01",
+        "parent_bucket_summaries": [
+            {
+                "source_parent_bucket_id": "parent_positive",
+                "dimension_filters": {
+                    "entry_score_parent": "score_watch_recovery",
+                    "entry_source_parent": "entry_source_blocked_ai_score",
+                },
+            }
+        ],
+    }
+    summary = {}
+
+    mod._apply_ldm_refinement_pressure(report, summary)
+
+    entry = report["ldm_refinement_pressure_consumption"]["entries"][0]
+    assert entry["matched_parent_ids"] == []
+    assert entry["closure_status"] == "new_parent_candidate_created"
+
+
 def test_active_sim_priority_seed_status_uses_two_day_cooldown_and_five_day_retire(tmp_path, monkeypatch):
     previous_seed = {
         "active_seed_id": "active_seed_previous",
