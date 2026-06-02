@@ -229,6 +229,7 @@
       "source_missing": true,
       "sources": [
         {
+          "entry_count": 5,
           "mtime": 1780323118.7574267,
           "path": "data/threshold_cycle/snapshots",
           "status": "available_dir"
@@ -372,7 +373,8 @@
       "source_missing": true,
       "sources": [
         {
-          "mtime": 1780353614.0174477,
+          "entry_count": 46,
+          "mtime": 1780362127.6725912,
           "path": "data/pipeline_events",
           "status": "available_dir"
         },
@@ -423,12 +425,14 @@
       "source_missing": false,
       "sources": [
         {
-          "mtime": 1780227838.1163669,
+          "entry_count": 698,
+          "mtime": 1780362118.8088028,
           "path": "src",
           "status": "available_dir"
         },
         {
-          "mtime": 1780296953.4209847,
+          "entry_count": 46,
+          "mtime": 1780361670.0872152,
           "path": "deploy",
           "status": "available_dir"
         }
@@ -803,7 +807,7 @@
     "position_cap_release",
     "hard_safety_bypass"
   ],
-  "generated_at": "2026-06-02T09:55:44.870124+09:00",
+  "generated_at": "2026-06-02T10:02:07.696315+09:00",
   "report_type": "automation_chain_trigger_decision",
   "runtime_effect": false,
   "schema_version": 1,

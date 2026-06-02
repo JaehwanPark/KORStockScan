@@ -37,6 +37,26 @@ DRIFT_TOKENS = (
     "runtime_apply_gap",
     "code_improvement",
 )
+NON_REUSABLE_STATUS_TOKENS = (
+    "fail",
+    "failed",
+    "error",
+    "retry",
+    "retry_required",
+    "retryable",
+    "parse_rejected",
+    "unavailable",
+    "source_quality_blocked",
+    "source_quality_fail",
+)
+STATUS_KEYS = {
+    "status",
+    "report_status",
+    "ai_status",
+    "final_status",
+    "audit_status",
+    "source_quality_status",
+}
 
 
 @dataclass(frozen=True)
@@ -207,12 +227,49 @@ def _read_json(path: Path) -> tuple[bool, Any]:
         return False, str(exc)
 
 
+def _directory_max_mtime(path: Path) -> tuple[float | None, int]:
+    try:
+        max_mtime = path.stat().st_mtime
+    except OSError:
+        return None, 0
+    entry_count = 0
+    for child in path.rglob("*"):
+        if not child.is_file():
+            continue
+        try:
+            child_mtime = child.stat().st_mtime
+        except OSError:
+            continue
+        entry_count += 1
+        if child_mtime > max_mtime:
+            max_mtime = child_mtime
+    return max_mtime, entry_count
+
+
+def _non_reusable_payload_reason(payload: Any) -> str | None:
+    if not isinstance(payload, dict):
+        return None
+    for key, value in payload.items():
+        key_text = str(key)
+        if key_text in STATUS_KEYS and isinstance(value, str):
+            value_text = value.strip().lower()
+            if value_text and any(token in value_text for token in NON_REUSABLE_STATUS_TOKENS):
+                return f"non_reusable_status:{key_text}={value}"
+    summary = payload.get("summary")
+    if isinstance(summary, dict):
+        for key in ("retry_required", "retryable_fail", "retry_queue_required"):
+            if summary.get(key):
+                return f"non_reusable_summary:{key}"
+    return None
+
+
 def _path_status(path_text: str, require_json_parse: bool = True) -> dict[str, Any]:
     path = _resolve(path_text)
     if not path.exists():
         return {"path": path_text, "status": "missing", "mtime": None}
     if path.is_dir():
-        return {"path": path_text, "status": "available_dir", "mtime": path.stat().st_mtime}
+        max_mtime, entry_count = _directory_max_mtime(path)
+        return {"path": path_text, "status": "available_dir", "mtime": max_mtime, "entry_count": entry_count}
     if path.stat().st_size <= 0:
         return {"path": path_text, "status": "empty", "mtime": path.stat().st_mtime}
     if path.suffix == ".json" and require_json_parse:
@@ -223,6 +280,14 @@ def _path_status(path_text: str, require_json_parse: bool = True) -> dict[str, A
                 "status": "unreadable_json",
                 "mtime": path.stat().st_mtime,
                 "error": detail,
+            }
+        non_reusable_reason = _non_reusable_payload_reason(detail)
+        if non_reusable_reason:
+            return {
+                "path": path_text,
+                "status": "non_reusable_json",
+                "mtime": path.stat().st_mtime,
+                "reason": non_reusable_reason,
             }
     return {"path": path_text, "status": "available", "mtime": path.stat().st_mtime}
 
@@ -272,6 +337,7 @@ def evaluate_step(spec: StepSpec, env: dict[str, str] | None = None) -> dict[str
     source_statuses = [_path_status(path) for path in spec.source_paths]
     output_missing = any(item["status"] not in {"available", "available_dir"} for item in output_statuses)
     source_missing = any(item["status"] not in {"available", "available_dir"} for item in source_statuses)
+    output_non_reusable = any(item["status"] == "non_reusable_json" for item in output_statuses)
     source_mtime = _max_mtime(source_statuses)
     output_mtime = _min_mtime(output_statuses)
     upstream_newer = source_mtime is not None and output_mtime is not None and source_mtime > output_mtime
@@ -282,6 +348,8 @@ def evaluate_step(spec: StepSpec, env: dict[str, str] | None = None) -> dict[str
         reasons.append("force_override")
     if output_missing:
         reasons.append("output_missing_or_unreadable")
+    if output_non_reusable:
+        reasons.append("output_non_reusable_status")
     if source_missing:
         reasons.append("source_missing_or_unreadable")
     if upstream_newer:
