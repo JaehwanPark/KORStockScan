@@ -79,6 +79,58 @@ def test_runtime_observable_single_contrast_group_collects_opposite_sample():
     )
 
 
+def test_post_arm_dimensions_are_not_catalog_match_requirements():
+    rows = [
+        _row(
+            "2026-05-18",
+            {
+                "entry_score_parent": "S1",
+                "entry_source_parent": "SRC1",
+                "submit_quality_parent": "SQ1",
+            },
+            1.0,
+            "pass",
+            3,
+        ),
+        _row(
+            "2026-05-19",
+            {
+                "entry_score_parent": "S1",
+                "entry_source_parent": "SRC1",
+                "submit_quality_parent": "SQ1",
+            },
+            -1.0,
+            "pass",
+            3,
+        ),
+        _row(
+            "2026-05-20",
+            {
+                "entry_score_parent": "S2",
+                "entry_source_parent": "SRC2",
+                "submit_quality_parent": "SQ2",
+            },
+            0.0,
+            "pass",
+            3,
+        ),
+    ]
+
+    hypotheses, _ = mod.build_hypotheses(rows)
+
+    assert hypotheses
+    assert all(
+        requirement["field"] in mod.ARMING_OBSERVABLE_REQUIREMENT_FIELDS
+        for hypothesis in hypotheses
+        for requirement in hypothesis["observable_requirements"]
+    )
+    assert any(
+        dimension["field"] == "submit_quality_parent"
+        for hypothesis in hypotheses
+        for dimension in hypothesis["observation_dimensions"]
+    )
+
+
 def test_missing_rate_cap_excludes_sparse_feature():
     rows = []
     for idx in range(16):
@@ -128,7 +180,7 @@ def test_catalog_merge_preserves_existing_policy_sections(tmp_path, monkeypatch)
         "hypotheses": [
             {
                 "soft_hypothesis_id": "h1",
-                "observable_requirements": [{"field": "alpha", "op": "eq", "value": "A"}],
+                "observable_requirements": [{"field": "entry_score_parent", "op": "eq", "value": "S1"}],
                 "runtime_effect": False,
                 "allowed_runtime_apply": False,
                 "actual_order_submitted": False,

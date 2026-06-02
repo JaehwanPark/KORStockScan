@@ -13,7 +13,7 @@
 - source_start: `2026-05-18`
 - source_end: `2026-06-01`
 - input_row_count: `14849`
-- hypothesis_count: `24`
+- hypothesis_count: `12`
 - candidate_count: `33`
 
 ## Top Hypotheses
@@ -24,10 +24,10 @@
 - `ldm_hypothesis_0f038214d5ac5a30` sample=`19` ev=`1.3548` contrast_delta=`1.3548`
 - `ldm_hypothesis_e9af2ba90970f01d` sample=`10` ev=`-1.6535` contrast_delta=`-1.6535`
 - `ldm_hypothesis_00d0b765311ad7aa` sample=`141` ev=`-0.7987` contrast_delta=`-0.7987`
-- `ldm_hypothesis_50d2d35987eb3543` sample=`121` ev=`-0.804` contrast_delta=`-0.804`
 - `ldm_hypothesis_85018f5d185ec23b` sample=`92` ev=`-0.7679` contrast_delta=`-0.7679`
-- `ldm_hypothesis_20d81fcbb624e5df` sample=`13` ev=`-1.2978` contrast_delta=`-1.2978`
-- `ldm_hypothesis_478e76909248b107` sample=`181` ev=`-0.6472` contrast_delta=`-0.6472`
+- `ldm_hypothesis_dead5c62e79220e3` sample=`119` ev=`-0.6395` contrast_delta=`-0.6395`
+- `ldm_hypothesis_4782cc3ea9609ffc` sample=`36` ev=`-0.3538` contrast_delta=`-0.3538`
+- `ldm_hypothesis_6039289bbc789fbf` sample=`15` ev=`-0.403` contrast_delta=`-0.403`
 
 ## Forbidden Uses
 

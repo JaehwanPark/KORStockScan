@@ -10,7 +10,6 @@ import re
 from collections import Counter, defaultdict
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
-from itertools import combinations
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -90,6 +89,10 @@ RUNTIME_OBSERVABLE_REQUIREMENT_FIELDS = {
     "submit_quality_parent",
     "event_stage",
 }
+ARMING_OBSERVABLE_REQUIREMENT_FIELDS = {
+    "entry_score_parent",
+    "entry_source_parent",
+}
 
 
 @dataclass(frozen=True)
@@ -149,6 +152,13 @@ def _safe_int(value: Any, default: int = 0) -> int:
         return int(float(value))
     except Exception:
         return default
+
+
+def _first_present(*values: Any) -> Any:
+    for value in values:
+        if value not in (None, ""):
+            return value
+    return None
 
 
 def _quality_from_mapping(payload: dict[str, Any]) -> str:
@@ -380,7 +390,10 @@ def _load_jsonl_rows(path: Path, source: str, source_date: str) -> list[SourceRo
         if not isinstance(payload, dict):
             continue
         fields = payload.get("fields") if isinstance(payload.get("fields"), dict) else payload
-        profit = _safe_float(fields.get("profit_rate") or fields.get("trigger_profit_rate") or payload.get("profit_rate"), None)
+        profit = _safe_float(
+            _first_present(fields.get("profit_rate"), fields.get("trigger_profit_rate"), payload.get("profit_rate")),
+            None,
+        )
         features = _flatten_features(fields)
         features["source_section"] = source
         if payload.get("stage") is not None:
@@ -421,16 +434,28 @@ def _signature_for_items(items: tuple[str, ...]) -> str:
     return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:16]
 
 
-def _requirements_from_items(items: Iterable[str]) -> list[dict[str, str]]:
+def _requirements_from_items(items: Iterable[str], *, allowed_fields: set[str] | None = None) -> list[dict[str, str]]:
     requirements: list[dict[str, str]] = []
     for item in sorted(items):
         if "#bin=" in item:
             field, value = item.split("#bin=", 1)
+            if allowed_fields is not None and field not in allowed_fields:
+                continue
             requirements.append({"field": field, "op": "bin_eq", "value": value})
         elif "=" in item:
             field, value = item.split("=", 1)
+            if allowed_fields is not None and field not in allowed_fields:
+                continue
             requirements.append({"field": field, "op": "eq", "value": value})
     return requirements
+
+
+def _requirement_signature(requirements: list[dict[str, str]]) -> str:
+    raw = "|".join(
+        f"{item.get('field')}:{item.get('op')}:{item.get('value')}"
+        for item in sorted(requirements, key=lambda item: (item.get("field") or "", item.get("op") or "", item.get("value") or ""))
+    )
+    return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:16]
 
 
 def _has_runtime_observable_requirement(items: Iterable[str]) -> bool:
@@ -523,47 +548,72 @@ def build_hypotheses(rows: list[SourceRow]) -> tuple[list[dict[str, Any]], dict[
     evaluated.sort(key=lambda item: (item.get("score", 0), item.get("sample_weight", 0)), reverse=True)
     hypotheses: list[dict[str, Any]] = []
     runtime_observable = [item for item in evaluated if _has_runtime_observable_requirement(item["items"])]
-    output_items = runtime_observable[:MAX_OUTPUT_HYPOTHESES]
-    for rank, item in enumerate(output_items, 1):
+    hypotheses_by_match_signature: dict[str, dict[str, Any]] = {}
+    for item in runtime_observable:
         signature = _signature_for_items(tuple(item["items"]))
-        hypotheses.append(
-            {
-                "soft_hypothesis_id": f"ldm_hypothesis_{signature}",
-                "feature_signature_hash": signature,
-                "rank": rank,
-                "observable_requirements": _requirements_from_items(item["items"]),
-                "evidence_summary": {
-                    "sample_weight": item["sample_weight"],
-                    "source_quality_adjusted_ev_pct": item["source_quality_adjusted_ev_pct"],
-                    "repeated_date_count": item["repeated_date_count"],
-                    "downside_rate": item["downside_rate"],
-                },
-                "contrast_summary": {
-                    "group_counts": item["contrast_group_counts"],
-                    "contrast_coverage_status": item["contrast_coverage_status"],
-                    "contrast_ev_delta_pct": item["contrast_ev_delta_pct"],
-                },
-                "drift_summary": {"drift_score": item["drift_score"]},
-                "observation_budget_hint": {
-                    "policy": "sim_observation_budget_hint_v1",
-                    "priority": (
-                        "collect_contrary_sample"
-                        if item["contrast_coverage_status"] != "pass"
-                        else "increase_contrastive_sim_collection"
-                        if item["contrast_ev_delta_pct"] > 0
-                        else "collect_contrary_sample"
-                    ),
-                    "max_daily_share_pct": 15,
-                },
-                "live_runtime_effect": False,
-                "runtime_effect": False,
-                "allowed_runtime_apply": False,
-                "actual_order_submitted": False,
-                "broker_order_forbidden": True,
-                "forbidden_uses": FORBIDDEN_USES,
-                "allowed_downstream_effects": ALLOWED_DOWNSTREAM_EFFECTS,
-            }
+        all_requirements = _requirements_from_items(item["items"])
+        observable_requirements = _requirements_from_items(
+            item["items"],
+            allowed_fields=ARMING_OBSERVABLE_REQUIREMENT_FIELDS,
         )
+        if not observable_requirements:
+            continue
+        match_signature = _requirement_signature(observable_requirements)
+        if match_signature in hypotheses_by_match_signature:
+            existing = hypotheses_by_match_signature[match_signature]
+            existing_dimensions = {
+                _requirement_signature([dimension])
+                for dimension in existing.get("observation_dimensions") or []
+                if isinstance(dimension, dict)
+            }
+            for dimension in all_requirements:
+                dimension_signature = _requirement_signature([dimension])
+                if dimension_signature not in existing_dimensions:
+                    existing.setdefault("observation_dimensions", []).append(dimension)
+                    existing_dimensions.add(dimension_signature)
+            continue
+        if len(hypotheses) >= MAX_OUTPUT_HYPOTHESES:
+            continue
+        hypothesis = {
+            "soft_hypothesis_id": f"ldm_hypothesis_{signature}",
+            "feature_signature_hash": signature,
+            "runtime_match_signature_hash": match_signature,
+            "rank": len(hypotheses) + 1,
+            "observable_requirements": observable_requirements,
+            "observation_dimensions": all_requirements,
+            "evidence_summary": {
+                "sample_weight": item["sample_weight"],
+                "source_quality_adjusted_ev_pct": item["source_quality_adjusted_ev_pct"],
+                "repeated_date_count": item["repeated_date_count"],
+                "downside_rate": item["downside_rate"],
+            },
+            "contrast_summary": {
+                "group_counts": item["contrast_group_counts"],
+                "contrast_coverage_status": item["contrast_coverage_status"],
+                "contrast_ev_delta_pct": item["contrast_ev_delta_pct"],
+            },
+            "drift_summary": {"drift_score": item["drift_score"]},
+            "observation_budget_hint": {
+                "policy": "sim_observation_budget_hint_v1",
+                "priority": (
+                    "collect_contrary_sample"
+                    if item["contrast_coverage_status"] != "pass"
+                    else "increase_contrastive_sim_collection"
+                    if item["contrast_ev_delta_pct"] > 0
+                    else "collect_contrary_sample"
+                ),
+                "max_daily_share_pct": 15,
+            },
+            "live_runtime_effect": False,
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+            "forbidden_uses": FORBIDDEN_USES,
+            "allowed_downstream_effects": ALLOWED_DOWNSTREAM_EFFECTS,
+        }
+        hypotheses.append(hypothesis)
+        hypotheses_by_match_signature[match_signature] = hypothesis
     diagnostics = {
         "input_row_count": len(rows),
         "feature_count": len(feature_diagnostics),
@@ -582,7 +632,14 @@ def _validate_hypothesis_contract(hypothesis: dict[str, Any]) -> bool:
         return False
     if hypothesis.get("broker_order_forbidden") is not True:
         return False
-    if not hypothesis.get("observable_requirements"):
+    requirements = hypothesis.get("observable_requirements")
+    if not requirements:
+        return False
+    if any(
+        not isinstance(item, dict)
+        or str(item.get("field") or "").strip() not in ARMING_OBSERVABLE_REQUIREMENT_FIELDS
+        for item in requirements
+    ):
         return False
     forbidden = set(hypothesis.get("forbidden_uses") or [])
     return set(FORBIDDEN_USES).issubset(forbidden)

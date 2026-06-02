@@ -3415,7 +3415,7 @@
     "source_report_type": "ldm_hypothesis_discovery",
     "source_report_date": "2026-06-01",
     "apply_date": "2026-06-02",
-    "generated_at": "2026-06-02T11:33:31",
+    "generated_at": "2026-06-02T11:39:05",
     "decision_authority": "sim_observation_planning",
     "runtime_effect": false,
     "live_runtime_effect": false,
@@ -3441,8 +3441,21 @@
       {
         "soft_hypothesis_id": "ldm_hypothesis_711caa66c89b3f51",
         "feature_signature_hash": "711caa66c89b3f51",
+        "runtime_match_signature_hash": "f254c77742baf878",
         "rank": 1,
         "observable_requirements": [
+          {
+            "field": "entry_score_parent",
+            "op": "eq",
+            "value": "score_mid_recovery"
+          },
+          {
+            "field": "entry_source_parent",
+            "op": "eq",
+            "value": "entry_source_wait6579"
+          }
+        ],
+        "observation_dimensions": [
           {
             "field": "entry_score_parent",
             "op": "eq",
@@ -3499,8 +3512,16 @@
       {
         "soft_hypothesis_id": "ldm_hypothesis_e04e4d815fd8d0f9",
         "feature_signature_hash": "e04e4d815fd8d0f9",
+        "runtime_match_signature_hash": "b3830eeb1131dd66",
         "rank": 2,
         "observable_requirements": [
+          {
+            "field": "entry_source_parent",
+            "op": "eq",
+            "value": "entry_source_wait6579"
+          }
+        ],
+        "observation_dimensions": [
           {
             "field": "entry_source_parent",
             "op": "eq",
@@ -3552,12 +3573,30 @@
       {
         "soft_hypothesis_id": "ldm_hypothesis_92dfecb5a05caa64",
         "feature_signature_hash": "92dfecb5a05caa64",
+        "runtime_match_signature_hash": "543375217b9f59bf",
         "rank": 3,
         "observable_requirements": [
           {
             "field": "entry_score_parent",
             "op": "eq",
             "value": "score_mid_recovery"
+          }
+        ],
+        "observation_dimensions": [
+          {
+            "field": "entry_score_parent",
+            "op": "eq",
+            "value": "score_mid_recovery"
+          },
+          {
+            "field": "submit_quality_parent",
+            "op": "eq",
+            "value": "submit_stale_context_or_quote"
+          },
+          {
+            "field": "submit_quality_parent",
+            "op": "eq",
+            "value": "submit_price_or_liquidity_guard_block"
           }
         ],
         "evidence_summary": {
@@ -3605,8 +3644,21 @@
       {
         "soft_hypothesis_id": "ldm_hypothesis_0f038214d5ac5a30",
         "feature_signature_hash": "0f038214d5ac5a30",
+        "runtime_match_signature_hash": "2a78ee064ca08ff8",
         "rank": 4,
         "observable_requirements": [
+          {
+            "field": "entry_score_parent",
+            "op": "eq",
+            "value": "score_watch_recovery"
+          },
+          {
+            "field": "entry_source_parent",
+            "op": "eq",
+            "value": "entry_source_wait6579"
+          }
+        ],
+        "observation_dimensions": [
           {
             "field": "entry_score_parent",
             "op": "eq",
@@ -3663,8 +3715,21 @@
       {
         "soft_hypothesis_id": "ldm_hypothesis_e9af2ba90970f01d",
         "feature_signature_hash": "e9af2ba90970f01d",
+        "runtime_match_signature_hash": "9bf28607dac6a459",
         "rank": 5,
         "observable_requirements": [
+          {
+            "field": "entry_score_parent",
+            "op": "eq",
+            "value": "score_mid_recovery"
+          },
+          {
+            "field": "entry_source_parent",
+            "op": "eq",
+            "value": "entry_source_blocked_ai_score"
+          }
+        ],
+        "observation_dimensions": [
           {
             "field": "entry_score_parent",
             "op": "eq",
@@ -3726,12 +3791,30 @@
       {
         "soft_hypothesis_id": "ldm_hypothesis_00d0b765311ad7aa",
         "feature_signature_hash": "00d0b765311ad7aa",
+        "runtime_match_signature_hash": "ec7ee1383df62149",
         "rank": 6,
         "observable_requirements": [
           {
             "field": "entry_source_parent",
             "op": "eq",
             "value": "entry_source_blocked_ai_score"
+          }
+        ],
+        "observation_dimensions": [
+          {
+            "field": "entry_source_parent",
+            "op": "eq",
+            "value": "entry_source_blocked_ai_score"
+          },
+          {
+            "field": "submit_quality_parent",
+            "op": "eq",
+            "value": "submit_stale_context_or_quote"
+          },
+          {
+            "field": "submit_quality_parent",
+            "op": "eq",
+            "value": "submit_price_or_liquidity_guard_block"
           }
         ],
         "evidence_summary": {
@@ -3777,68 +3860,23 @@
         ]
       },
       {
-        "soft_hypothesis_id": "ldm_hypothesis_50d2d35987eb3543",
-        "feature_signature_hash": "50d2d35987eb3543",
+        "soft_hypothesis_id": "ldm_hypothesis_85018f5d185ec23b",
+        "feature_signature_hash": "85018f5d185ec23b",
+        "runtime_match_signature_hash": "991b1e1928318393",
         "rank": 7,
         "observable_requirements": [
+          {
+            "field": "entry_score_parent",
+            "op": "eq",
+            "value": "score_watch_recovery"
+          },
           {
             "field": "entry_source_parent",
             "op": "eq",
             "value": "entry_source_blocked_ai_score"
-          },
-          {
-            "field": "submit_quality_parent",
-            "op": "eq",
-            "value": "submit_stale_context_or_quote"
           }
         ],
-        "evidence_summary": {
-          "sample_weight": 121,
-          "source_quality_adjusted_ev_pct": -0.804,
-          "repeated_date_count": 2,
-          "downside_rate": 0.876
-        },
-        "contrast_summary": {
-          "group_counts": {
-            "source_quality_blocked": 121
-          },
-          "contrast_coverage_status": "needs_opposite_sample",
-          "contrast_ev_delta_pct": -0.804
-        },
-        "drift_summary": {
-          "drift_score": 0.5
-        },
-        "observation_budget_hint": {
-          "policy": "sim_observation_budget_hint_v1",
-          "priority": "collect_contrary_sample",
-          "max_daily_share_pct": 15
-        },
-        "live_runtime_effect": false,
-        "runtime_effect": false,
-        "allowed_runtime_apply": false,
-        "actual_order_submitted": false,
-        "broker_order_forbidden": true,
-        "forbidden_uses": [
-          "buy_sell_hold_live_rule",
-          "threshold_apply",
-          "provider_route_change",
-          "bot_restart",
-          "position_cap_release",
-          "broker_order",
-          "hard_safety_bypass"
-        ],
-        "allowed_downstream_effects": [
-          "sim_budget_allocation",
-          "contrastive_sample_collection",
-          "source_quality_gap_surfacing",
-          "runtime_effect_false_workorder_candidate"
-        ]
-      },
-      {
-        "soft_hypothesis_id": "ldm_hypothesis_85018f5d185ec23b",
-        "feature_signature_hash": "85018f5d185ec23b",
-        "rank": 8,
-        "observable_requirements": [
+        "observation_dimensions": [
           {
             "field": "entry_score_parent",
             "op": "eq",
@@ -3893,121 +3931,18 @@
         ]
       },
       {
-        "soft_hypothesis_id": "ldm_hypothesis_20d81fcbb624e5df",
-        "feature_signature_hash": "20d81fcbb624e5df",
-        "rank": 9,
+        "soft_hypothesis_id": "ldm_hypothesis_dead5c62e79220e3",
+        "feature_signature_hash": "dead5c62e79220e3",
+        "runtime_match_signature_hash": "c90253852e4a4a94",
+        "rank": 8,
         "observable_requirements": [
           {
             "field": "entry_score_parent",
             "op": "eq",
-            "value": "score_mid_recovery"
-          },
-          {
-            "field": "entry_source_parent",
-            "op": "eq",
-            "value": "entry_source_blocked_ai_score"
+            "value": "score_watch_recovery"
           }
         ],
-        "evidence_summary": {
-          "sample_weight": 13,
-          "source_quality_adjusted_ev_pct": -1.2978,
-          "repeated_date_count": 2,
-          "downside_rate": 0.7692
-        },
-        "contrast_summary": {
-          "group_counts": {
-            "source_quality_blocked": 13
-          },
-          "contrast_coverage_status": "needs_opposite_sample",
-          "contrast_ev_delta_pct": -1.2978
-        },
-        "drift_summary": {
-          "drift_score": 0.5
-        },
-        "observation_budget_hint": {
-          "policy": "sim_observation_budget_hint_v1",
-          "priority": "collect_contrary_sample",
-          "max_daily_share_pct": 15
-        },
-        "live_runtime_effect": false,
-        "runtime_effect": false,
-        "allowed_runtime_apply": false,
-        "actual_order_submitted": false,
-        "broker_order_forbidden": true,
-        "forbidden_uses": [
-          "buy_sell_hold_live_rule",
-          "threshold_apply",
-          "provider_route_change",
-          "bot_restart",
-          "position_cap_release",
-          "broker_order",
-          "hard_safety_bypass"
-        ],
-        "allowed_downstream_effects": [
-          "sim_budget_allocation",
-          "contrastive_sample_collection",
-          "source_quality_gap_surfacing",
-          "runtime_effect_false_workorder_candidate"
-        ]
-      },
-      {
-        "soft_hypothesis_id": "ldm_hypothesis_478e76909248b107",
-        "feature_signature_hash": "478e76909248b107",
-        "rank": 10,
-        "observable_requirements": [
-          {
-            "field": "submit_quality_parent",
-            "op": "eq",
-            "value": "submit_stale_context_or_quote"
-          }
-        ],
-        "evidence_summary": {
-          "sample_weight": 181,
-          "source_quality_adjusted_ev_pct": -0.6472,
-          "repeated_date_count": 2,
-          "downside_rate": 0.7956
-        },
-        "contrast_summary": {
-          "group_counts": {
-            "source_quality_blocked": 181
-          },
-          "contrast_coverage_status": "needs_opposite_sample",
-          "contrast_ev_delta_pct": -0.6472
-        },
-        "drift_summary": {
-          "drift_score": 0.5
-        },
-        "observation_budget_hint": {
-          "policy": "sim_observation_budget_hint_v1",
-          "priority": "collect_contrary_sample",
-          "max_daily_share_pct": 15
-        },
-        "live_runtime_effect": false,
-        "runtime_effect": false,
-        "allowed_runtime_apply": false,
-        "actual_order_submitted": false,
-        "broker_order_forbidden": true,
-        "forbidden_uses": [
-          "buy_sell_hold_live_rule",
-          "threshold_apply",
-          "provider_route_change",
-          "bot_restart",
-          "position_cap_release",
-          "broker_order",
-          "hard_safety_bypass"
-        ],
-        "allowed_downstream_effects": [
-          "sim_budget_allocation",
-          "contrastive_sample_collection",
-          "source_quality_gap_surfacing",
-          "runtime_effect_false_workorder_candidate"
-        ]
-      },
-      {
-        "soft_hypothesis_id": "ldm_hypothesis_dead5c62e79220e3",
-        "feature_signature_hash": "dead5c62e79220e3",
-        "rank": 11,
-        "observable_requirements": [
+        "observation_dimensions": [
           {
             "field": "entry_score_parent",
             "op": "eq",
@@ -4017,6 +3952,11 @@
             "field": "submit_quality_parent",
             "op": "eq",
             "value": "submit_stale_context_or_quote"
+          },
+          {
+            "field": "submit_quality_parent",
+            "op": "eq",
+            "value": "submit_price_or_liquidity_guard_block"
           }
         ],
         "evidence_summary": {
@@ -4062,290 +4002,23 @@
         ]
       },
       {
-        "soft_hypothesis_id": "ldm_hypothesis_4c01cbcf7500b64e",
-        "feature_signature_hash": "4c01cbcf7500b64e",
-        "rank": 12,
+        "soft_hypothesis_id": "ldm_hypothesis_4782cc3ea9609ffc",
+        "feature_signature_hash": "4782cc3ea9609ffc",
+        "runtime_match_signature_hash": "3eacdc02ed1de5a5",
+        "rank": 9,
         "observable_requirements": [
           {
             "field": "entry_score_parent",
             "op": "eq",
-            "value": "score_mid_recovery"
+            "value": "score_watch_recovery"
           },
-          {
-            "field": "submit_quality_parent",
-            "op": "eq",
-            "value": "submit_stale_context_or_quote"
-          }
-        ],
-        "evidence_summary": {
-          "sample_weight": 21,
-          "source_quality_adjusted_ev_pct": -0.9799,
-          "repeated_date_count": 2,
-          "downside_rate": 0.8571
-        },
-        "contrast_summary": {
-          "group_counts": {
-            "source_quality_blocked": 21
-          },
-          "contrast_coverage_status": "needs_opposite_sample",
-          "contrast_ev_delta_pct": -0.9799
-        },
-        "drift_summary": {
-          "drift_score": 0.5
-        },
-        "observation_budget_hint": {
-          "policy": "sim_observation_budget_hint_v1",
-          "priority": "collect_contrary_sample",
-          "max_daily_share_pct": 15
-        },
-        "live_runtime_effect": false,
-        "runtime_effect": false,
-        "allowed_runtime_apply": false,
-        "actual_order_submitted": false,
-        "broker_order_forbidden": true,
-        "forbidden_uses": [
-          "buy_sell_hold_live_rule",
-          "threshold_apply",
-          "provider_route_change",
-          "bot_restart",
-          "position_cap_release",
-          "broker_order",
-          "hard_safety_bypass"
-        ],
-        "allowed_downstream_effects": [
-          "sim_budget_allocation",
-          "contrastive_sample_collection",
-          "source_quality_gap_surfacing",
-          "runtime_effect_false_workorder_candidate"
-        ]
-      },
-      {
-        "soft_hypothesis_id": "ldm_hypothesis_92c955dc7ba13ae2",
-        "feature_signature_hash": "92c955dc7ba13ae2",
-        "rank": 13,
-        "observable_requirements": [
           {
             "field": "entry_source_parent",
             "op": "eq",
-            "value": "entry_source_blocked_ai_score"
-          },
-          {
-            "field": "submit_quality_parent",
-            "op": "eq",
-            "value": "submit_price_or_liquidity_guard_block"
+            "value": "entry_source_action_decision"
           }
         ],
-        "evidence_summary": {
-          "sample_weight": 16,
-          "source_quality_adjusted_ev_pct": -0.7593,
-          "repeated_date_count": 2,
-          "downside_rate": 0.875
-        },
-        "contrast_summary": {
-          "group_counts": {
-            "source_quality_blocked": 16
-          },
-          "contrast_coverage_status": "needs_opposite_sample",
-          "contrast_ev_delta_pct": -0.7593
-        },
-        "drift_summary": {
-          "drift_score": 0.5
-        },
-        "observation_budget_hint": {
-          "policy": "sim_observation_budget_hint_v1",
-          "priority": "collect_contrary_sample",
-          "max_daily_share_pct": 15
-        },
-        "live_runtime_effect": false,
-        "runtime_effect": false,
-        "allowed_runtime_apply": false,
-        "actual_order_submitted": false,
-        "broker_order_forbidden": true,
-        "forbidden_uses": [
-          "buy_sell_hold_live_rule",
-          "threshold_apply",
-          "provider_route_change",
-          "bot_restart",
-          "position_cap_release",
-          "broker_order",
-          "hard_safety_bypass"
-        ],
-        "allowed_downstream_effects": [
-          "sim_budget_allocation",
-          "contrastive_sample_collection",
-          "source_quality_gap_surfacing",
-          "runtime_effect_false_workorder_candidate"
-        ]
-      },
-      {
-        "soft_hypothesis_id": "ldm_hypothesis_2e62f914ecc3a758",
-        "feature_signature_hash": "2e62f914ecc3a758",
-        "rank": 14,
-        "observable_requirements": [
-          {
-            "field": "entry_score_parent",
-            "op": "eq",
-            "value": "score_watch_recovery"
-          }
-        ],
-        "evidence_summary": {
-          "sample_weight": 155,
-          "source_quality_adjusted_ev_pct": -0.3783,
-          "repeated_date_count": 2,
-          "downside_rate": 0.6839
-        },
-        "contrast_summary": {
-          "group_counts": {
-            "source_quality_blocked": 155
-          },
-          "contrast_coverage_status": "needs_opposite_sample",
-          "contrast_ev_delta_pct": -0.3783
-        },
-        "drift_summary": {
-          "drift_score": 0.5
-        },
-        "observation_budget_hint": {
-          "policy": "sim_observation_budget_hint_v1",
-          "priority": "collect_contrary_sample",
-          "max_daily_share_pct": 15
-        },
-        "live_runtime_effect": false,
-        "runtime_effect": false,
-        "allowed_runtime_apply": false,
-        "actual_order_submitted": false,
-        "broker_order_forbidden": true,
-        "forbidden_uses": [
-          "buy_sell_hold_live_rule",
-          "threshold_apply",
-          "provider_route_change",
-          "bot_restart",
-          "position_cap_release",
-          "broker_order",
-          "hard_safety_bypass"
-        ],
-        "allowed_downstream_effects": [
-          "sim_budget_allocation",
-          "contrastive_sample_collection",
-          "source_quality_gap_surfacing",
-          "runtime_effect_false_workorder_candidate"
-        ]
-      },
-      {
-        "soft_hypothesis_id": "ldm_hypothesis_9173f180adb6918d",
-        "feature_signature_hash": "9173f180adb6918d",
-        "rank": 15,
-        "observable_requirements": [
-          {
-            "field": "submit_quality_parent",
-            "op": "eq",
-            "value": "submit_price_or_liquidity_guard_block"
-          }
-        ],
-        "evidence_summary": {
-          "sample_weight": 21,
-          "source_quality_adjusted_ev_pct": -0.5562,
-          "repeated_date_count": 2,
-          "downside_rate": 0.8095
-        },
-        "contrast_summary": {
-          "group_counts": {
-            "source_quality_blocked": 21
-          },
-          "contrast_coverage_status": "needs_opposite_sample",
-          "contrast_ev_delta_pct": -0.5562
-        },
-        "drift_summary": {
-          "drift_score": 0.5
-        },
-        "observation_budget_hint": {
-          "policy": "sim_observation_budget_hint_v1",
-          "priority": "collect_contrary_sample",
-          "max_daily_share_pct": 15
-        },
-        "live_runtime_effect": false,
-        "runtime_effect": false,
-        "allowed_runtime_apply": false,
-        "actual_order_submitted": false,
-        "broker_order_forbidden": true,
-        "forbidden_uses": [
-          "buy_sell_hold_live_rule",
-          "threshold_apply",
-          "provider_route_change",
-          "bot_restart",
-          "position_cap_release",
-          "broker_order",
-          "hard_safety_bypass"
-        ],
-        "allowed_downstream_effects": [
-          "sim_budget_allocation",
-          "contrastive_sample_collection",
-          "source_quality_gap_surfacing",
-          "runtime_effect_false_workorder_candidate"
-        ]
-      },
-      {
-        "soft_hypothesis_id": "ldm_hypothesis_3ecce8b536e6e6a0",
-        "feature_signature_hash": "3ecce8b536e6e6a0",
-        "rank": 16,
-        "observable_requirements": [
-          {
-            "field": "entry_score_parent",
-            "op": "eq",
-            "value": "score_watch_recovery"
-          },
-          {
-            "field": "submit_quality_parent",
-            "op": "eq",
-            "value": "submit_price_or_liquidity_guard_block"
-          }
-        ],
-        "evidence_summary": {
-          "sample_weight": 10,
-          "source_quality_adjusted_ev_pct": -0.6563,
-          "repeated_date_count": 2,
-          "downside_rate": 0.9
-        },
-        "contrast_summary": {
-          "group_counts": {
-            "source_quality_blocked": 10
-          },
-          "contrast_coverage_status": "needs_opposite_sample",
-          "contrast_ev_delta_pct": -0.6563
-        },
-        "drift_summary": {
-          "drift_score": 0.5
-        },
-        "observation_budget_hint": {
-          "policy": "sim_observation_budget_hint_v1",
-          "priority": "collect_contrary_sample",
-          "max_daily_share_pct": 15
-        },
-        "live_runtime_effect": false,
-        "runtime_effect": false,
-        "allowed_runtime_apply": false,
-        "actual_order_submitted": false,
-        "broker_order_forbidden": true,
-        "forbidden_uses": [
-          "buy_sell_hold_live_rule",
-          "threshold_apply",
-          "provider_route_change",
-          "bot_restart",
-          "position_cap_release",
-          "broker_order",
-          "hard_safety_bypass"
-        ],
-        "allowed_downstream_effects": [
-          "sim_budget_allocation",
-          "contrastive_sample_collection",
-          "source_quality_gap_surfacing",
-          "runtime_effect_false_workorder_candidate"
-        ]
-      },
-      {
-        "soft_hypothesis_id": "ldm_hypothesis_4782cc3ea9609ffc",
-        "feature_signature_hash": "4782cc3ea9609ffc",
-        "rank": 17,
-        "observable_requirements": [
+        "observation_dimensions": [
           {
             "field": "entry_score_parent",
             "op": "eq",
@@ -4405,62 +4078,10 @@
         ]
       },
       {
-        "soft_hypothesis_id": "ldm_hypothesis_97a7db966406e597",
-        "feature_signature_hash": "97a7db966406e597",
-        "rank": 18,
-        "observable_requirements": [
-          {
-            "field": "submit_quality_parent",
-            "op": "eq",
-            "value": "submit_observed_other"
-          }
-        ],
-        "evidence_summary": {
-          "sample_weight": 3,
-          "source_quality_adjusted_ev_pct": -0.8676,
-          "repeated_date_count": 2,
-          "downside_rate": 0.3333
-        },
-        "contrast_summary": {
-          "group_counts": {
-            "source_quality_blocked": 3
-          },
-          "contrast_coverage_status": "needs_opposite_sample",
-          "contrast_ev_delta_pct": -0.8676
-        },
-        "drift_summary": {
-          "drift_score": 0.5
-        },
-        "observation_budget_hint": {
-          "policy": "sim_observation_budget_hint_v1",
-          "priority": "collect_contrary_sample",
-          "max_daily_share_pct": 15
-        },
-        "live_runtime_effect": false,
-        "runtime_effect": false,
-        "allowed_runtime_apply": false,
-        "actual_order_submitted": false,
-        "broker_order_forbidden": true,
-        "forbidden_uses": [
-          "buy_sell_hold_live_rule",
-          "threshold_apply",
-          "provider_route_change",
-          "bot_restart",
-          "position_cap_release",
-          "broker_order",
-          "hard_safety_bypass"
-        ],
-        "allowed_downstream_effects": [
-          "sim_budget_allocation",
-          "contrastive_sample_collection",
-          "source_quality_gap_surfacing",
-          "runtime_effect_false_workorder_candidate"
-        ]
-      },
-      {
         "soft_hypothesis_id": "ldm_hypothesis_6039289bbc789fbf",
         "feature_signature_hash": "6039289bbc789fbf",
-        "rank": 19,
+        "runtime_match_signature_hash": "48eeac334a529094",
+        "rank": 10,
         "observable_requirements": [
           {
             "field": "entry_score_parent",
@@ -4471,6 +4092,23 @@
             "field": "entry_source_parent",
             "op": "eq",
             "value": "entry_source_action_decision"
+          }
+        ],
+        "observation_dimensions": [
+          {
+            "field": "entry_score_parent",
+            "op": "eq",
+            "value": "score_mid_recovery"
+          },
+          {
+            "field": "entry_source_parent",
+            "op": "eq",
+            "value": "entry_source_action_decision"
+          },
+          {
+            "field": "submit_quality_parent",
+            "op": "eq",
+            "value": "submit_stale_context_or_quote"
           }
         ],
         "evidence_summary": {
@@ -4516,68 +4154,18 @@
         ]
       },
       {
-        "soft_hypothesis_id": "ldm_hypothesis_e4d1274a5e488d50",
-        "feature_signature_hash": "e4d1274a5e488d50",
-        "rank": 20,
+        "soft_hypothesis_id": "ldm_hypothesis_bd95657855656936",
+        "feature_signature_hash": "bd95657855656936",
+        "runtime_match_signature_hash": "c3b25d4fb37f7fa3",
+        "rank": 11,
         "observable_requirements": [
-          {
-            "field": "entry_score_parent",
-            "op": "eq",
-            "value": "score_watch_recovery"
-          },
           {
             "field": "entry_source_parent",
             "op": "eq",
             "value": "entry_source_action_decision"
           }
         ],
-        "evidence_summary": {
-          "sample_weight": 41,
-          "source_quality_adjusted_ev_pct": -0.2835,
-          "repeated_date_count": 2,
-          "downside_rate": 0.6098
-        },
-        "contrast_summary": {
-          "group_counts": {
-            "source_quality_blocked": 41
-          },
-          "contrast_coverage_status": "needs_opposite_sample",
-          "contrast_ev_delta_pct": -0.2835
-        },
-        "drift_summary": {
-          "drift_score": 0.5
-        },
-        "observation_budget_hint": {
-          "policy": "sim_observation_budget_hint_v1",
-          "priority": "collect_contrary_sample",
-          "max_daily_share_pct": 15
-        },
-        "live_runtime_effect": false,
-        "runtime_effect": false,
-        "allowed_runtime_apply": false,
-        "actual_order_submitted": false,
-        "broker_order_forbidden": true,
-        "forbidden_uses": [
-          "buy_sell_hold_live_rule",
-          "threshold_apply",
-          "provider_route_change",
-          "bot_restart",
-          "position_cap_release",
-          "broker_order",
-          "hard_safety_bypass"
-        ],
-        "allowed_downstream_effects": [
-          "sim_budget_allocation",
-          "contrastive_sample_collection",
-          "source_quality_gap_surfacing",
-          "runtime_effect_false_workorder_candidate"
-        ]
-      },
-      {
-        "soft_hypothesis_id": "ldm_hypothesis_bd95657855656936",
-        "feature_signature_hash": "bd95657855656936",
-        "rank": 21,
-        "observable_requirements": [
+        "observation_dimensions": [
           {
             "field": "entry_source_parent",
             "op": "eq",
@@ -4632,149 +4220,36 @@
         ]
       },
       {
-        "soft_hypothesis_id": "ldm_hypothesis_709662b25b3687fb",
-        "feature_signature_hash": "709662b25b3687fb",
-        "rank": 22,
+        "soft_hypothesis_id": "ldm_hypothesis_76e02836d5c6bea3",
+        "feature_signature_hash": "76e02836d5c6bea3",
+        "runtime_match_signature_hash": "d7793ea840fe7e15",
+        "rank": 12,
         "observable_requirements": [
           {
             "field": "entry_source_parent",
             "op": "eq",
-            "value": "entry_source_action_decision"
+            "value": "entry_source_scalp_sim"
           }
         ],
-        "evidence_summary": {
-          "sample_weight": 63,
-          "source_quality_adjusted_ev_pct": -0.2256,
-          "repeated_date_count": 2,
-          "downside_rate": 0.5397
-        },
-        "contrast_summary": {
-          "group_counts": {
-            "source_quality_blocked": 63
-          },
-          "contrast_coverage_status": "needs_opposite_sample",
-          "contrast_ev_delta_pct": -0.2256
-        },
-        "drift_summary": {
-          "drift_score": 0.5
-        },
-        "observation_budget_hint": {
-          "policy": "sim_observation_budget_hint_v1",
-          "priority": "collect_contrary_sample",
-          "max_daily_share_pct": 15
-        },
-        "live_runtime_effect": false,
-        "runtime_effect": false,
-        "allowed_runtime_apply": false,
-        "actual_order_submitted": false,
-        "broker_order_forbidden": true,
-        "forbidden_uses": [
-          "buy_sell_hold_live_rule",
-          "threshold_apply",
-          "provider_route_change",
-          "bot_restart",
-          "position_cap_release",
-          "broker_order",
-          "hard_safety_bypass"
-        ],
-        "allowed_downstream_effects": [
-          "sim_budget_allocation",
-          "contrastive_sample_collection",
-          "source_quality_gap_surfacing",
-          "runtime_effect_false_workorder_candidate"
-        ]
-      },
-      {
-        "soft_hypothesis_id": "ldm_hypothesis_a3f5f9c61b50fd25",
-        "feature_signature_hash": "a3f5f9c61b50fd25",
-        "rank": 23,
-        "observable_requirements": [
-          {
-            "field": "entry_score_parent",
-            "op": "eq",
-            "value": "score_mid_recovery"
-          },
+        "observation_dimensions": [
           {
             "field": "entry_source_parent",
             "op": "eq",
-            "value": "entry_source_action_decision"
-          },
-          {
-            "field": "submit_quality_parent",
-            "op": "eq",
-            "value": "submit_stale_context_or_quote"
+            "value": "entry_source_scalp_sim"
           }
         ],
         "evidence_summary": {
-          "sample_weight": 11,
-          "source_quality_adjusted_ev_pct": -0.3675,
-          "repeated_date_count": 2,
-          "downside_rate": 0.7273
-        },
-        "contrast_summary": {
-          "group_counts": {
-            "source_quality_blocked": 11
-          },
-          "contrast_coverage_status": "needs_opposite_sample",
-          "contrast_ev_delta_pct": -0.3675
-        },
-        "drift_summary": {
-          "drift_score": 0.5
-        },
-        "observation_budget_hint": {
-          "policy": "sim_observation_budget_hint_v1",
-          "priority": "collect_contrary_sample",
-          "max_daily_share_pct": 15
-        },
-        "live_runtime_effect": false,
-        "runtime_effect": false,
-        "allowed_runtime_apply": false,
-        "actual_order_submitted": false,
-        "broker_order_forbidden": true,
-        "forbidden_uses": [
-          "buy_sell_hold_live_rule",
-          "threshold_apply",
-          "provider_route_change",
-          "bot_restart",
-          "position_cap_release",
-          "broker_order",
-          "hard_safety_bypass"
-        ],
-        "allowed_downstream_effects": [
-          "sim_budget_allocation",
-          "contrastive_sample_collection",
-          "source_quality_gap_surfacing",
-          "runtime_effect_false_workorder_candidate"
-        ]
-      },
-      {
-        "soft_hypothesis_id": "ldm_hypothesis_bad086f30cd2ebc0",
-        "feature_signature_hash": "bad086f30cd2ebc0",
-        "rank": 24,
-        "observable_requirements": [
-          {
-            "field": "entry_score_parent",
-            "op": "eq",
-            "value": "score_mid_recovery"
-          },
-          {
-            "field": "submit_quality_parent",
-            "op": "eq",
-            "value": "submit_price_or_liquidity_guard_block"
-          }
-        ],
-        "evidence_summary": {
-          "sample_weight": 3,
-          "source_quality_adjusted_ev_pct": 0.3617,
+          "sample_weight": 6,
+          "source_quality_adjusted_ev_pct": 0.0,
           "repeated_date_count": 2,
           "downside_rate": 0.0
         },
         "contrast_summary": {
           "group_counts": {
-            "source_quality_blocked": 3
+            "source_quality_blocked": 6
           },
           "contrast_coverage_status": "needs_opposite_sample",
-          "contrast_ev_delta_pct": 0.3617
+          "contrast_ev_delta_pct": 0.0
         },
         "drift_summary": {
           "drift_score": 0.5
@@ -4806,9 +4281,9 @@
         ]
       }
     ],
-    "hypothesis_count": 24,
+    "hypothesis_count": 12,
     "catalog_merge": {
-      "merged_at": "2026-06-02T11:33:31",
+      "merged_at": "2026-06-02T11:39:05",
       "catalog_path": "/home/ubuntu/KORStockScan/data/threshold_cycle/scalp_sim_policies/scalp_sim_policy_catalog_2026-06-01.json",
       "domain": "scalp",
       "catalog_applied_runtime_pending": false
