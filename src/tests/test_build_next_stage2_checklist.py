@@ -1,6 +1,8 @@
 import json
 from pathlib import Path
 
+import pytest
+
 from src.engine import build_next_stage2_checklist as mod
 from src.engine.sync_docs_backlog_to_project import parse_checklist_tasks
 
@@ -68,7 +70,7 @@ def test_build_next_stage2_checklist_generates_next_trading_day_and_tasks(monkey
     assert "[ThresholdEnvAutoApplyPreopen0511]" in text
     assert "[SwingPreFinalAutoAndFinalApprovalPreopen0511]" in text
     assert "[RuntimeEnvIntradayObserve0511]" in text
-    assert "[OpenAIWSIntradaySample0511]" in text
+    assert "[AITransportIntradaySample0511]" in text
     assert "[SimProbeIntradayCoverage0511]" in text
     assert "[CodeImprovementWorkorderReview0511]" in text
     assert "[AutomationTriggerDecisionSummary0511]" in text
@@ -151,8 +153,23 @@ def test_generated_checklist_is_parser_friendly(monkeypatch, tmp_path):
 
     assert any("ThresholdEnvAutoApplyPreopen0512" in title for title in titles)
     assert any("RuntimeEnvIntradayObserve0512" in title for title in titles)
+    assert any("AITransportPreopenConfirm0512" in title for title in titles)
     assert any("AutomationTriggerDecisionSummary0512" in title for title in titles)
     assert all(task.due_date == "2026-05-12" for task in tasks)
+
+
+def test_build_next_stage2_checklist_refuses_to_write_when_core_postclose_artifacts_are_missing(monkeypatch, tmp_path):
+    docs, _, _, _, _ = _patch_dirs(monkeypatch, tmp_path)
+    trigger_dir = mod.AUTOMATION_TRIGGER_DECISION_REPORT_DIR
+    _write_json(
+        trigger_dir / "automation_chain_trigger_decision_2026-06-02.json",
+        {"summary": {"total_steps": 1, "run_count": 1}, "decisions": []},
+    )
+
+    with pytest.raises(RuntimeError, match="required postclose artifacts are missing"):
+        mod.build_next_stage2_checklist("2026-06-02")
+
+    assert not (docs / "checklists" / "2026-06-04-stage2-todo-checklist.md").exists()
 
 
 def test_automation_trigger_decision_summary_is_surfaced_as_postclose_task(monkeypatch, tmp_path):

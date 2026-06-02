@@ -55,6 +55,16 @@ def _load_json(path: Path) -> dict[str, Any]:
     return payload if isinstance(payload, dict) else {}
 
 
+def _missing_required_postclose_artifacts(source_date: str) -> list[Path]:
+    required = [
+        EV_REPORT_DIR / f"threshold_cycle_ev_{source_date}.json",
+        OPENAI_WS_REPORT_DIR / f"openai_ws_stability_{source_date}.json",
+        SWING_RUNTIME_APPROVAL_DIR / f"swing_runtime_approval_{source_date}.json",
+        CODE_IMPROVEMENT_REPORT_DIR / f"code_improvement_workorder_{source_date}.json",
+    ]
+    return [path for path in required if not path.exists()]
+
+
 def _next_krx_trading_day(source_date: str) -> str:
     current = date.fromisoformat(source_date)
     for _ in range(14):
@@ -382,8 +392,8 @@ def _build_tasks(
             lines=tuple(threshold_lines),
         ),
         GeneratedTask(
-            task_id=f"OpenAIWSPreopenConfirm{mmdd}",
-            title="OpenAI WS 유지 설정 및 entry_price/analyze_target provenance 확인",
+            task_id=f"AITransportPreopenConfirm{mmdd}",
+            title="AI transport 유지 설정 및 entry_price/analyze_target provenance 확인",
             slot="PREOPEN",
             time_window="08:55~09:00",
             track="RuntimeStability",
@@ -393,9 +403,9 @@ def _build_tasks(
                 "[ai_engine_openai.py](/home/ubuntu/KORStockScan/src/engine/ai_engine_openai.py)"
             ),
             lines=(
-                "판정 기준: startup env의 OpenAI route/Responses WS 설정과 `analyze_target`, `entry_price` transport provenance를 분리 확인한다.",
+                "판정 기준: startup env의 endpoint별 transport를 확인한다. `analyze_target`은 OpenAI Responses WS, `entry_price`는 Bedrock Qwen3 32B primary -> Nova Lite v2 failback provenance를 분리 확인한다.",
                 "금지: provider transport 확인을 threshold 값, 주문가/수량 guard, 스윙 dry-run guard 변경으로 해석하지 않는다.",
-                "다음 액션: entry_price transport 표본이 부족하면 장중 표본 재확인 항목과 연결한다.",
+                "다음 액션: entry_price Bedrock provenance 또는 analyze_target WS 표본이 부족하면 장중 표본 재확인 항목과 연결한다.",
             ),
         ),
     ]
@@ -438,15 +448,15 @@ def _build_tasks(
     if _openai_needs_intraday_sample(openai_report):
         tasks.append(
             GeneratedTask(
-                task_id=f"OpenAIWSIntradaySample{mmdd}",
-                title="OpenAI WS/entry_price 장중 표본 및 fallback/fail-closed 재확인",
+                task_id=f"AITransportIntradaySample{mmdd}",
+                title="AI transport 장중 표본 및 fallback/fail-closed 재확인",
                 slot="INTRADAY",
                 time_window="09:20~09:35",
                 track="RuntimeStability",
                 source=f"[openai_ws_stability_{source_date}.md](/home/ubuntu/KORStockScan/{_rel(openai_path)})",
                 lines=(
-                    "판정 기준: `analyze_target` WS latency/fallback과 `entry_price` transport metadata 누락 여부를 별도 표본으로 확인한다.",
-                    "금지: entry_price 표본 0건 또는 instrumentation gap을 OpenAI WS runtime 효과 0으로 해석하지 않는다.",
+                    "판정 기준: `analyze_target` OpenAI WS latency/fallback과 `entry_price` Bedrock transport metadata 누락 여부를 별도 표본으로 확인한다.",
+                    "금지: entry_price 표본 0건 또는 instrumentation gap을 OpenAI WS runtime 효과 0으로 해석하지 않고, Bedrock provenance 확인을 provider route 변경 근거로 쓰지 않는다.",
                     "다음 액션: 표본 부족이면 postclose provenance 보강 workorder로 분리한다.",
                 ),
             )
@@ -843,6 +853,10 @@ def build_next_stage2_checklist(source_date: str) -> dict[str, Any]:
     date.fromisoformat(source_date)
     target_date = _next_krx_trading_day(source_date)
     target_path = stage2_checklist_path(target_date)
+    missing_required = _missing_required_postclose_artifacts(source_date)
+    if missing_required:
+        missing = ", ".join(_rel(path) for path in missing_required)
+        raise RuntimeError(f"required postclose artifacts are missing for {source_date}: {missing}")
     ev_report = _load_json(EV_REPORT_DIR / f"threshold_cycle_ev_{source_date}.json")
     openai_report = _load_json(OPENAI_WS_REPORT_DIR / f"openai_ws_stability_{source_date}.json")
     swing_report = _load_json(SWING_RUNTIME_APPROVAL_DIR / f"swing_runtime_approval_{source_date}.json")
