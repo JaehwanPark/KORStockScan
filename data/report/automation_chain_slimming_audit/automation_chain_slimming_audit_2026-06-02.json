@@ -58,7 +58,7 @@
     "position_cap_release",
     "hard_safety_bypass"
   ],
-  "generated_at": "2026-06-02T08:53:38+09:00",
+  "generated_at": "2026-06-02T08:59:26+09:00",
   "implementation_workorders": [
     {
       "allowed_runtime_apply": false,
@@ -1827,10 +1827,26 @@
       "classification_reason": "rolling_or_mtd_full_recompute",
       "consumer": "threshold_cycle_ev/runtime_approval_summary/preopen_apply",
       "default_enabled": true,
-      "default_enabled_resolution": "unconditional",
-      "default_flag": null,
-      "default_flags": [],
-      "default_guard_conditions": [],
+      "default_enabled_resolution": "resolved_guard_nested_all",
+      "default_flag": "RUN_LIFECYCLE_BUCKET_DISCOVERY",
+      "default_flags": [
+        "RUN_LIFECYCLE_BUCKET_DISCOVERY",
+        "RUN_LIFECYCLE_BUCKET_WINDOWS"
+      ],
+      "default_guard_conditions": [
+        {
+          "condition_type": "any",
+          "flags": [
+            "RUN_LIFECYCLE_BUCKET_DISCOVERY"
+          ]
+        },
+        {
+          "condition_type": "any",
+          "flags": [
+            "RUN_LIFECYCLE_BUCKET_WINDOWS"
+          ]
+        }
+      ],
       "line_no": 771,
       "producer": "src.engine.lifecycle_bucket_discovery",
       "recommended_mode": "change_triggered",
@@ -3127,7 +3143,7 @@
     "core_count": 9,
     "deprecated_candidates": 0,
     "duplicate_refresh_candidates": 6,
-    "estimated_risk": "low",
+    "estimated_risk": "medium",
     "manual_or_weekly_candidates": 26,
     "run_default_count": 34,
     "side_branch_candidates": 1,

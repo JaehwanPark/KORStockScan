@@ -144,3 +144,41 @@ fi
     assert lifecycle_context_step["default_enabled"] is False
     assert lifecycle_context_step["default_enabled_resolution"] == "resolved_guard_nested_all"
     assert lifecycle_context_step["classification"] == "deprecated_candidate"
+
+
+def test_multiline_command_if_does_not_pop_parent_run_guards():
+    script = '''
+RUN_PARENT="${THRESHOLD_CYCLE_RUN_PARENT:-true}"
+RUN_CHILD="${THRESHOLD_CYCLE_RUN_CHILD:-true}"
+if [ "$RUN_PARENT" = "true" ] || [ "$RUN_PARENT" = "1" ]; then
+  if [ "$RUN_CHILD" = "true" ] || [ "$RUN_CHILD" = "1" ]; then
+    if ! run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.lifecycle_decision_matrix \\
+      --date "$TARGET_DATE"; then
+      echo failed
+    fi
+    if ! run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.lifecycle_bucket_discovery \\
+      --date "$TARGET_DATE"; then
+      echo failed
+    fi
+  fi
+fi
+'''
+    defaults = mod._resolve_run_defaults(mod._extract_run_defaults(script))
+    calls = mod._extract_module_calls(script, "postclose", "2026-06-02")
+    inventory, _ = mod._build_inventory(calls, defaults, "standard")
+
+    matrix_step = next(item for item in inventory if item["producer"] == "src.engine.lifecycle_decision_matrix")
+    discovery_step = next(item for item in inventory if item["producer"] == "src.engine.lifecycle_bucket_discovery")
+    assert matrix_step["default_flags"] == ["RUN_CHILD", "RUN_PARENT"]
+    assert discovery_step["default_flags"] == ["RUN_CHILD", "RUN_PARENT"]
+    assert matrix_step["default_enabled"] is True
+    assert discovery_step["default_enabled"] is True
+
+
+def test_estimated_risk_is_medium_when_status_input_is_missing():
+    status_inputs = {
+        "postclose_status": {"status": "missing_or_unreadable"},
+        "preopen_status": {"status": "available"},
+    }
+
+    assert mod._estimate_risk(Counter({"core_daily": 9}), True, status_inputs) == "medium"

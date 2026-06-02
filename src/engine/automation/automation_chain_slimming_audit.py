@@ -179,6 +179,10 @@ def _guard_condition_type(line: str, flags: list[str]) -> str:
     return "all"
 
 
+def _is_shell_if_start(stripped: str) -> bool:
+    return bool(re.match(r"^if\b", stripped)) and not stripped.endswith(":")
+
+
 def _guard_context_by_line(lines: list[str]) -> dict[int, dict[str, Any]]:
     contexts: dict[int, dict[str, Any]] = {}
     stack: list[dict[str, Any]] = []
@@ -195,7 +199,7 @@ def _guard_context_by_line(lines: list[str]) -> dict[int, dict[str, Any]]:
         }
 
         stripped = line.strip()
-        if re.match(r"^if\b", stripped) and "then" in stripped:
+        if _is_shell_if_start(stripped):
             guard_flags = _extract_guard_flags(line)
             stack.append(
                 {
@@ -574,6 +578,19 @@ def _implementation_workorders(candidates: list[dict[str, Any]]) -> list[dict[st
     return workorders
 
 
+def _estimate_risk(
+    class_counts: Counter[str],
+    traceability_available: bool,
+    status_inputs: dict[str, dict[str, Any]],
+) -> str:
+    if not traceability_available or class_counts.get("core_daily", 0) < 5:
+        return "medium"
+    for item in status_inputs.values():
+        if item.get("status") != "available":
+            return "medium"
+    return "low"
+
+
 def build_report(target_date: str, profile: str = "standard") -> dict[str, Any]:
     if profile not in VALID_PROFILES:
         raise ValueError(f"unsupported_profile:{profile}")
@@ -605,7 +622,7 @@ def build_report(target_date: str, profile: str = "standard") -> dict[str, Any]:
         ),
     }
     traceability_available = bool(_read_text(TRACEABILITY_DOC))
-    estimated_risk = "low" if class_counts.get("core_daily", 0) >= 5 and traceability_available else "medium"
+    estimated_risk = _estimate_risk(class_counts, traceability_available, status_inputs)
     report = {
         "schema_version": "automation_chain_slimming_audit_v1",
         "report_type": REPORT_TYPE,

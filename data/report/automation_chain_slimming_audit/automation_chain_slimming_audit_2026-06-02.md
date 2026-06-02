@@ -11,7 +11,7 @@
 - duplicate_refresh_candidates: `6`
 - manual_or_weekly_candidates: `26`
 - deprecated_candidates: `0`
-- estimated_risk: `low`
+- estimated_risk: `medium`
 - classification_group_counts: `{'core_daily': 9, 'change_triggered': 20, 'manual_or_weekly': 26, 'deprecated_candidate': 0}`
 
 ## Slimming Candidates
