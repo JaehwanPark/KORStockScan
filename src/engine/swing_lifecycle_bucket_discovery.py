@@ -474,6 +474,7 @@ def _ai_review_candidate_shards(candidates: list[dict[str, Any]]) -> list[dict[s
             "review_scope": "sim_auto_candidate_review",
             "candidate_selection_policy": "all deterministic sim_auto_approved candidates",
             "review_authority": "fail-closed source-only sim policy reviewer",
+            "critical_for_sim_policy": True,
             "candidates": sim_auto[index * AI_REVIEW_SIM_SHARD_SIZE : (index + 1) * AI_REVIEW_SIM_SHARD_SIZE],
             "omitted_candidate_count": 0,
         }
@@ -486,6 +487,7 @@ def _ai_review_candidate_shards(candidates: list[dict[str, Any]]) -> list[dict[s
             "review_scope": "contract_gap_and_workorder_review",
             "candidate_selection_policy": "runtime-blocked, automation handoff, and code-patch candidates",
             "review_authority": "source-quality and workorder reviewer",
+            "critical_for_sim_policy": False,
             "candidates": gap[:40],
             "omitted_candidate_count": max(len(gap) - 40, 0),
         },
@@ -494,6 +496,7 @@ def _ai_review_candidate_shards(candidates: list[dict[str, Any]]) -> list[dict[s
             "review_scope": "taxonomy_discovery_sample_review",
             "candidate_selection_policy": "top source-only keep-collecting candidates after actionable shards",
             "review_authority": "taxonomy reviewer for source-only tail sample",
+            "critical_for_sim_policy": False,
             "candidates": taxonomy,
             "omitted_candidate_count": max(len(candidates) - len(sim_auto) - len(gap[:40]) - len(taxonomy), 0),
         },
@@ -597,24 +600,20 @@ def _call_openai_ai_review(
             for item in context.get("candidates", [])
             if isinstance(item, dict) and (item.get("candidate_id") or item.get("bucket_id"))
         }
-        review_rows = payload.get("candidate_reviews")
         proposal_rows = payload.get("ai_tier2_proposals")
         comparative_rows = payload.get("comparative_reviews")
-        if not isinstance(review_rows, list):
-            return False, "missing_candidate_reviews"
         if not isinstance(proposal_rows, list):
             return False, "missing_ai_tier2_proposals"
         if not isinstance(comparative_rows, list):
             return False, "missing_comparative_reviews"
         if expected_ids:
-            review_ids = {str(item.get("candidate_id") or item.get("bucket_id") or "") for item in review_rows if isinstance(item, dict)}
             proposal_ids = {str(item.get("candidate_id") or item.get("bucket_id") or "") for item in proposal_rows if isinstance(item, dict)}
             comparative_ids = {str(item.get("candidate_id") or item.get("bucket_id") or "") for item in comparative_rows if isinstance(item, dict)}
-            if review_ids != expected_ids:
-                return False, "candidate_reviews_id_mismatch"
-            if proposal_ids != expected_ids:
+            repairable_proposal_ids = len(proposal_rows) == len(expected_ids) and all(isinstance(item, dict) for item in proposal_rows)
+            repairable_comparative_ids = len(comparative_rows) == len(expected_ids) and all(isinstance(item, dict) for item in comparative_rows)
+            if proposal_ids != expected_ids and not repairable_proposal_ids:
                 return False, "ai_tier2_proposals_id_mismatch"
-            if comparative_ids != expected_ids:
+            if comparative_ids != expected_ids and not repairable_comparative_ids:
                 return False, "comparative_reviews_id_mismatch"
         if audit.get("status") not in {"pass", "correction_required", "insufficient_context"}:
             return False, "missing_audit_status"
@@ -633,6 +632,37 @@ def _call_openai_ai_review(
         contract_validator=_contract_validator,
         ensure_ascii=True,
     )
+
+
+def _normalize_ai_review_payload_candidate_ids(
+    payload: dict[str, Any],
+    candidate_ids: list[str],
+) -> int:
+    if not candidate_ids:
+        return 0
+    repair_count = 0
+    expected = set(candidate_ids)
+    for key in ("ai_tier2_proposals", "comparative_reviews"):
+        rows = payload.get(key)
+        if not isinstance(rows, list) or len(rows) != len(candidate_ids):
+            continue
+        row_ids = {
+            str(item.get("candidate_id") or item.get("bucket_id") or "")
+            for item in rows
+            if isinstance(item, dict)
+        }
+        if row_ids == expected:
+            continue
+        for index, item in enumerate(rows):
+            if not isinstance(item, dict):
+                continue
+            expected_id = candidate_ids[index]
+            current_id = str(item.get("candidate_id") or item.get("bucket_id") or "")
+            if current_id != expected_id:
+                item["candidate_id"] = expected_id
+                item["bucket_id"] = expected_id
+                repair_count += 1
+    return repair_count
 
 
 def _parse_ai_review_response(raw_response: Any | None) -> tuple[str, dict[str, Any], list[str]]:
@@ -689,6 +719,13 @@ def _run_ai_review_shards(
     ai_raw_response: Any | None,
 ) -> dict[str, Any]:
     shards = _ai_review_candidate_shards(candidates)
+    critical_shards = [item for item in shards if item.get("critical_for_sim_policy")]
+    optional_shards = [item for item in shards if not item.get("critical_for_sim_policy")]
+    run_optional_after_critical = os.getenv(
+        "KORSTOCKSCAN_SWING_LIFECYCLE_BUCKET_DISCOVERY_AI_RUN_OPTIONAL_SHARDS",
+        "false",
+    ).strip().lower() in {"1", "true", "yes", "on"}
+    ordered_shards = [*critical_shards, *optional_shards] if (not critical_shards or run_optional_after_critical) else critical_shards
     combined_payload: dict[str, Any] = {
         "ai_tier2_proposals": [],
         "comparative_reviews": [],
@@ -699,7 +736,7 @@ def _run_ai_review_shards(
     statuses: list[str] = []
     warnings: list[str] = []
     disabled = provider in {"none", "off", "false", "0"}
-    for index, shard in enumerate(shards):
+    for index, shard in enumerate(ordered_shards):
         shard_candidates = shard.get("candidates") if isinstance(shard.get("candidates"), list) else []
         if not shard_candidates:
             continue
@@ -729,6 +766,9 @@ def _run_ai_review_shards(
             }
             provider_status["shard_id"] = shard.get("shard_id")
         status, payload, shard_warnings = _parse_ai_review_response(raw_response)
+        id_repair_count = 0
+        if status == "parsed":
+            id_repair_count = _normalize_ai_review_payload_candidate_ids(payload, candidate_ids)
         statuses.append(status)
         warnings.extend(f"{shard.get('shard_id')}:{item}" for item in shard_warnings)
         if status == "parsed":
@@ -745,6 +785,7 @@ def _run_ai_review_shards(
         records.append(
             {
                 "shard_id": shard.get("shard_id"),
+                "critical_for_sim_policy": bool(shard.get("critical_for_sim_policy")),
                 "status": status,
                 "audit_status": (payload.get("audit") or {}).get("status") if isinstance(payload, dict) and isinstance(payload.get("audit"), dict) else None,
                 "forbidden_use_violation_count": len(
@@ -754,11 +795,46 @@ def _run_ai_review_shards(
                 else 0,
                 "candidate_ids": candidate_ids,
                 "candidate_count": len(candidate_ids),
+                "id_repair_count": id_repair_count,
                 "omitted_candidate_count": shard.get("omitted_candidate_count", 0),
                 "provider_status": provider_status,
                 "warnings": shard_warnings,
             }
         )
+    critical_records = [item for item in records if item.get("critical_for_sim_policy")]
+    critical_statuses = [str(item.get("status") or "") for item in critical_records]
+    critical_complete = bool(critical_records) and all(status == "parsed" for status in critical_statuses)
+    if critical_complete and not run_optional_after_critical:
+        for shard in optional_shards:
+            shard_candidates = shard.get("candidates") if isinstance(shard.get("candidates"), list) else []
+            if not shard_candidates:
+                continue
+            context = _build_ai_review_context(target_date, shard)
+            candidate_ids = [str(item) for item in (context.get("candidate_ids") or []) if str(item)]
+            records.append(
+                {
+                    "shard_id": shard.get("shard_id"),
+                    "critical_for_sim_policy": False,
+                    "status": "deferred",
+                    "audit_status": None,
+                    "forbidden_use_violation_count": 0,
+                    "candidate_ids": candidate_ids,
+                    "candidate_count": len(candidate_ids),
+                    "id_repair_count": 0,
+                    "omitted_candidate_count": shard.get("omitted_candidate_count", 0),
+                    "provider_status": {
+                        "provider": provider,
+                        "requested_provider": provider,
+                        "status": "deferred_after_critical_sim_policy",
+                        "schema_name": AI_REVIEW_SCHEMA_NAME,
+                        "shard_id": shard.get("shard_id"),
+                        "input_context_chars": len(json.dumps(context, ensure_ascii=True, default=str)),
+                    },
+                    "warnings": ["optional_source_only_review_deferred_after_critical_sim_policy"],
+                }
+            )
+    optional_deferred_records = [item for item in records if item.get("status") == "deferred"]
+    optional_deferred_candidate_count = sum(int(item.get("candidate_count") or 0) for item in optional_deferred_records)
     if not records:
         return {
             "status": "missing",
@@ -768,16 +844,17 @@ def _run_ai_review_shards(
             "reviewed_candidate_ids": [],
             "warnings": ["ai_review_response_missing"],
         }
-    if all(status == "parsed" for status in statuses):
+    decision_statuses = critical_statuses if critical_records and not run_optional_after_critical else statuses
+    if all(status == "parsed" for status in decision_statuses):
         status = "parsed"
-    elif any(status == "parsed" for status in statuses):
+    elif any(status == "parsed" for status in decision_statuses):
         status = "partial"
     elif disabled:
         status = "missing"
-    elif any(status == "parse_rejected" for status in statuses):
+    elif any(status == "parse_rejected" for status in decision_statuses):
         status = "parse_rejected"
     else:
-        status = statuses[-1] if statuses else "missing"
+        status = decision_statuses[-1] if decision_statuses else "missing"
     first_provider_status = (
         records[0].get("provider_status")
         if records and isinstance(records[0].get("provider_status"), dict)
@@ -791,6 +868,9 @@ def _run_ai_review_shards(
             "requested_provider": provider,
             "status": status,
             "shard_count": len(records),
+            "critical_shard_count": len(critical_records),
+            "optional_deferred_shard_count": len(optional_deferred_records),
+            "optional_deferred_candidate_count": optional_deferred_candidate_count,
         },
         "shards": records,
         "reviewed_candidate_ids": sorted(set(reviewed_candidate_ids)),
@@ -984,6 +1064,12 @@ def build_swing_lifecycle_bucket_discovery(
         str(item) for item in (ai_review.get("reviewed_candidate_ids") or []) if str(item)
     }
     provider_status = ai_review.get("provider_status") if isinstance(ai_review.get("provider_status"), dict) else {}
+    ai_review_shards = ai_review.get("shards") if isinstance(ai_review.get("shards"), list) else []
+    optional_deferred_shard_count = sum(1 for item in ai_review_shards if item.get("status") == "deferred")
+    optional_deferred_candidate_count = sum(
+        int(item.get("candidate_count") or 0) for item in ai_review_shards if item.get("status") == "deferred"
+    )
+    ai_review_id_repair_count = sum(int(item.get("id_repair_count") or 0) for item in ai_review_shards)
     ai_proposals = _map_by_id(
         [
             {**item, "proposal_source": "ai_tier2", "proposal_status": "provided"}
@@ -1084,7 +1170,7 @@ def build_swing_lifecycle_bucket_discovery(
     )
     sim_shards = [
         item
-        for item in (ai_review.get("shards") if isinstance(ai_review.get("shards"), list) else [])
+        for item in ai_review_shards
         if str(item.get("shard_id") or "").startswith("sim_policy_review")
     ]
     primary_sim_shard = sim_shards[0] if sim_shards else {}
@@ -1354,6 +1440,10 @@ def build_swing_lifecycle_bucket_discovery(
             "ai_review_followup_reasons": followup_reasons,
             "sim_auto_blocked_by_ai_review_followup": sim_auto_blocked_by_review_followup,
             "ai_review_blocker_state": ai_review_blocker_state,
+            "ai_review_orchestration_policy": "critical_sim_policy_first",
+            "ai_review_optional_deferred_shard_count": optional_deferred_shard_count,
+            "ai_review_optional_deferred_candidate_count": optional_deferred_candidate_count,
+            "ai_review_id_repair_count": ai_review_id_repair_count,
             "pre_review_sim_auto_candidate_count": pre_review_sim_auto_candidate_count,
             "sim_auto_reviewed_candidate_count": len(sim_reviewed_candidate_ids),
             "sim_auto_unreviewed_candidate_count": unreviewed_sim_auto_candidate_count,
@@ -1402,9 +1492,13 @@ def build_swing_lifecycle_bucket_discovery(
             "provider_status": provider_status,
             "review_scope": "sharded_priority_limited_source_only_review",
             "candidate_selection_policy": "sim-auto shard, gap/workorder shard, taxonomy source-only sample shard",
+            "orchestration_policy": "critical_sim_policy_first",
+            "optional_deferred_shard_count": optional_deferred_shard_count,
+            "optional_deferred_candidate_count": optional_deferred_candidate_count,
+            "id_repair_count": ai_review_id_repair_count,
             "reviewed_candidate_ids": sorted(ai_reviewed_candidate_ids),
             "omitted_candidate_count": max(len(candidates) - len(ai_reviewed_candidate_ids), 0),
-            "shards": ai_review.get("shards") if isinstance(ai_review.get("shards"), list) else [],
+            "shards": ai_review_shards,
             "audit": ai_payload_audit,
             "deterministic_proposals": [
                 item.get("deterministic_proposal") for item in candidates if item.get("deterministic_proposal")
@@ -1519,6 +1613,10 @@ def render_markdown(report: dict[str, Any]) -> str:
         f"- implemented_source_quality_waiting_sample_total_count: `{summary.get('implemented_source_quality_waiting_sample_total_count')}`",
         f"- raw_implemented_source_quality_waiting_sample_count: `{summary.get('raw_implemented_source_quality_waiting_sample_count')}`",
         f"- ai_review_augmentation_point_count: `{summary.get('ai_review_augmentation_point_count')}`",
+        f"- ai_review_orchestration_policy: `{summary.get('ai_review_orchestration_policy')}`",
+        f"- ai_review_optional_deferred_shard_count: `{summary.get('ai_review_optional_deferred_shard_count')}`",
+        f"- ai_review_optional_deferred_candidate_count: `{summary.get('ai_review_optional_deferred_candidate_count')}`",
+        f"- ai_review_id_repair_count: `{summary.get('ai_review_id_repair_count')}`",
         f"- human_intervention_required: `{summary.get('human_intervention_required')}`",
         f"- warnings: `{report.get('warnings') or []}`",
         "",

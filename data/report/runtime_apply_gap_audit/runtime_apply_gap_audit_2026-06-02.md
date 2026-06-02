@@ -5,8 +5,8 @@
 - 양수 EV + source-quality pass 후보: `38`
 - 실패 표면화: `0`
 - 재시도 큐: `0`
-- Codex 작업지시: `3`
-- source dimension gap: `164` / actionable=`12`
+- Codex 작업지시: `1`
+- source dimension gap: `150` / actionable=`0`
 - quiet gap: `308` / rollup=`308` / directive=`1`
 
 ## 공격적 런타임 추진 대상
@@ -35,8 +35,6 @@
 - 재시도 대상 없음
 
 ## Codex 작업지시
-- `RESOLVE_SOURCE_DIMENSION_GAP`: RESOLVE_SOURCE_DIMENSION_GAP: lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_lt60_source_blocked_ai_score_stale_stale_unknown_liquid 후보가 resolve_unknown_source_dimensions 상태입니다. 생산 artifact에서 소비 artifact까지 source link 또는 명시적 제외 사유를 남기고, runtime/order/provider/cap guard는 우회하지 마십시오.
-- `RESOLVE_SOURCE_DIMENSION_GAP`: RESOLVE_SOURCE_DIMENSION_GAP: exit:exit_outcome:outcome_unknown 후보가 emit_or_backfill_source_field 상태입니다. 생산 artifact에서 소비 artifact까지 source link 또는 명시적 제외 사유를 남기고, runtime/order/provider/cap guard는 우회하지 마십시오.
 - `REVIEW_OBSERVATION_SOURCE_QUALITY_WARNING`: REVIEW_OBSERVATION_SOURCE_QUALITY_WARNING: observation_source_quality_audit:warning_summary 후보가 observation_warning_not_handed_off 상태입니다. 생산 artifact에서 소비 artifact까지 source link 또는 명시적 제외 사유를 남기고, runtime/order/provider/cap guard는 우회하지 마십시오.
 
 ## 계약

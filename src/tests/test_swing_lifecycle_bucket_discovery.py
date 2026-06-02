@@ -185,6 +185,31 @@ def test_ai_review_rejects_candidate_bucket_id_mismatch():
     assert "ai_review_ai_tier2_proposals_candidate_bucket_id_mismatch:different_id" in warnings
 
 
+def test_ai_review_contract_validator_accepts_current_schema_without_candidate_reviews(monkeypatch):
+    payload = _ai_response(["bucket_a"])
+    captured = {}
+
+    def fake_call_postclose_structured_review(context, **kwargs):
+        captured["schema_name"] = kwargs["schema_name"]
+        ok, reason = kwargs["contract_validator"](json.dumps(payload))
+        assert ok, reason
+        return payload, {"provider": "openai", "status": "success", "model": "test-model"}
+
+    monkeypatch.setattr(
+        "src.engine.ai.postclose_structured_review_provider.call_postclose_structured_review",
+        fake_call_postclose_structured_review,
+    )
+
+    raw_payload, provider_status = mod._call_openai_ai_review(
+        {"candidates": [{"bucket_id": "bucket_a"}]},
+        config=mod._ai_review_config(),
+    )
+
+    assert captured["schema_name"] == mod.AI_REVIEW_SCHEMA_NAME
+    assert raw_payload == payload
+    assert provider_status["status"] == "success"
+
+
 def test_bucket_discovery_keeps_stage_only_buckets_source_only(tmp_path, monkeypatch):
     target = "2026-05-22"
     matrix_dir = tmp_path / "matrix"
@@ -280,15 +305,19 @@ def test_bucket_discovery_reviews_sim_auto_candidates_before_large_source_only_t
 
     assert report["summary"]["ai_two_pass_review_status"] == "parsed"
     assert report["summary"]["ai_fail_closed"] is False
-    assert [call["shard_id"] for call in calls] == ["sim_policy_review", "taxonomy_discovery_review"]
+    assert [call["shard_id"] for call in calls] == ["sim_policy_review"]
     assert calls[0]["candidate_ids"] == [sim_bucket_id]
     assert report["ai_two_pass_review"]["shards"][0]["provider_status"]["model"] == "gpt-5.4-mini"
     assert report["ai_two_pass_review"]["shards"][0]["provider_status"]["reasoning_effort"] == "medium"
+    assert [item["status"] for item in report["ai_two_pass_review"]["shards"]] == ["parsed", "deferred"]
+    assert report["summary"]["ai_review_orchestration_policy"] == "critical_sim_policy_first"
+    assert report["summary"]["ai_review_optional_deferred_shard_count"] == 1
+    assert report["summary"]["ai_review_optional_deferred_candidate_count"] == 10
     assert report["ai_two_pass_review"]["requested_provider"] == "openai"
     assert report["ai_two_pass_review"]["primary_provider"] == "bedrock_qwen3"
     assert report["ai_two_pass_review"]["failback_provider"] == "openai"
-    assert report["summary"]["ai_reviewed_candidate_count"] == 11
-    assert report["summary"]["ai_unreviewed_candidate_count"] == 110
+    assert report["summary"]["ai_reviewed_candidate_count"] == 1
+    assert report["summary"]["ai_unreviewed_candidate_count"] == 120
     assert report["summary"]["unreviewed_sim_auto_candidate_count"] == 0
     assert report["summary"]["sim_auto_approved_count"] == 1
     assert report["sim_auto_approved_candidates"][0]["bucket_id"] == sim_bucket_id
@@ -343,6 +372,42 @@ def test_bucket_discovery_enabled_non_openai_provider_still_calls_configured_rev
     assert report["summary"]["ai_two_pass_review_status"] == "parsed"
     assert report["ai_two_pass_review"]["requested_provider"] == "bedrock_qwen3"
     assert report["ai_two_pass_review"]["primary_provider"] == "bedrock_qwen3"
+
+
+def test_bucket_discovery_repairs_ai_review_ids_by_candidate_order(tmp_path, monkeypatch):
+    target = "2026-05-22"
+    matrix_dir = tmp_path / "matrix"
+    matrix_dir.mkdir()
+    monkeypatch.setattr(mod, "REPORT_DIR", tmp_path / "discovery")
+
+    matrix_path = matrix_dir / f"swing_lifecycle_decision_matrix_{target}.json"
+    matrix_path.write_text(
+        json.dumps(
+            {
+                "input_contract": {"swing_daily_simulation_consumed": False},
+                "swing_lifecycle_flow_bucket_attribution": {"buckets": [_flow_bucket()]},
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(mod, "matrix_report_paths", lambda target_date: (matrix_path, matrix_path.with_suffix(".md")))
+
+    def fake_call(context, **_kwargs):
+        payload = _ai_response(["model_rephrased_bucket_id"])
+        return payload, {"provider": "openai", "status": "success", "model": mod.AI_REVIEW_MODEL}
+
+    monkeypatch.setattr(mod, "_call_openai_ai_review", fake_call)
+
+    expected_id = "swing_ldm_lifecycle_flow_combo_swing_lifecycle_flow_entry_entry_good_holding_hold_good_scale_in_scale_in_none_exit_exit_good"
+    report = mod.build_swing_lifecycle_bucket_discovery(target, provider="openai")
+
+    assert report["summary"]["ai_two_pass_review_status"] == "parsed"
+    assert report["summary"]["ai_fail_closed"] is False
+    assert report["summary"]["ai_review_id_repair_count"] == 2
+    assert report["summary"]["sim_auto_approved_count"] == 1
+    assert report["sim_auto_approved_candidates"][0]["bucket_id"] == expected_id
+    assert report["sim_auto_approved_candidates"][0]["ai_tier2_proposal"]["bucket_id"] == expected_id
+    assert report["sim_auto_approved_candidates"][0]["comparative_review"]["bucket_id"] == expected_id
 
 
 def test_bucket_discovery_reviews_all_sim_auto_candidates_in_20_candidate_shards(tmp_path, monkeypatch):
@@ -444,6 +509,7 @@ def test_bucket_discovery_taxonomy_correction_does_not_block_parsed_sim_policy(t
     matrix_dir = tmp_path / "matrix"
     matrix_dir.mkdir()
     monkeypatch.setattr(mod, "REPORT_DIR", tmp_path / "discovery")
+    monkeypatch.setenv("KORSTOCKSCAN_SWING_LIFECYCLE_BUCKET_DISCOVERY_AI_RUN_OPTIONAL_SHARDS", "true")
 
     matrix_path = matrix_dir / f"swing_lifecycle_decision_matrix_{target}.json"
     matrix_path.write_text(
@@ -532,6 +598,7 @@ def test_bucket_discovery_non_sim_shard_missing_does_not_block_parsed_sim_policy
     matrix_dir = tmp_path / "matrix"
     matrix_dir.mkdir()
     monkeypatch.setattr(mod, "REPORT_DIR", tmp_path / "discovery")
+    monkeypatch.setenv("KORSTOCKSCAN_SWING_LIFECYCLE_BUCKET_DISCOVERY_AI_RUN_OPTIONAL_SHARDS", "true")
 
     matrix_path = matrix_dir / f"swing_lifecycle_decision_matrix_{target}.json"
     matrix_path.write_text(

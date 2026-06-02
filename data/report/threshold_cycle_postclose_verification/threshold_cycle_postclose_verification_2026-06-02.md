@@ -21,8 +21,8 @@
 ## Runtime Apply Gap Audit
 - status: `pass`
 - retry_queue_count: `0`
-- codex_directive_count: `3`
-- summary: `{'actionable_unknown_gap_count': 12, 'ai_review_retry_pending': False, 'ai_review_status': 'parsed', 'candidate_count': 669, 'codex_directive_count': 3, 'critical_failure_count': 0, 'derived_review_category_counts': {'code_patch_required': 14, 'runtime_blocked_contract_gap': 30, 'sim_auto_approved': 55, 'source_only_keep_collecting': 38, 'source_quality_blocker': 517, 'tier2_fail_closed_source_only': 15}, 'positive_edge_source_quality_pass_count': 38, 'quiet_gap_codex_directive_count': 1, 'quiet_gap_count': 308, 'quiet_gap_rollup_count': 308, 'retry_queue_count': 0, 'runtime_uptake_rate_pct': 0.0, 'source_dimension_gap_count': 164, 'status': 'pass'}`
+- codex_directive_count: `1`
+- summary: `{'actionable_unknown_gap_count': 0, 'ai_review_retry_pending': False, 'ai_review_status': 'parsed', 'candidate_count': 669, 'codex_directive_count': 1, 'critical_failure_count': 0, 'derived_review_category_counts': {'code_patch_required': 14, 'runtime_blocked_contract_gap': 30, 'sim_auto_approved': 62, 'source_only_keep_collecting': 38, 'source_quality_blocker': 517, 'tier2_fail_closed_source_only': 8}, 'positive_edge_source_quality_pass_count': 38, 'quiet_gap_codex_directive_count': 1, 'quiet_gap_count': 308, 'quiet_gap_rollup_count': 308, 'retry_queue_count': 0, 'runtime_uptake_rate_pct': 0.0, 'source_dimension_gap_count': 150, 'status': 'pass'}`
 
 ## BUY Funnel Submit Drought Handoff
 - status: `pass`
@@ -67,7 +67,7 @@
 ## AI Correction
 - status: `pass`
 - ai_status: `parsed`
-- provider_status: `{'provider': 'openai', 'status': 'success', 'new_provider_call': True, 'key_name': 'OPENAI_API_KEY', 'attempt_index': 1, 'model_index': 1, 'configured_key_count': 2, 'attempted_key_count': 1, 'attempted_keys': 1, 'attempted_key_names': ['OPENAI_API_KEY'], 'configured_model_count': 3, 'attempted_model_count': 1, 'attempted_models': ['gpt-5.5'], 'configured_models': ['gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini'], 'model': 'gpt-5.5', 'schema_name': 'threshold_ai_correction_v1', 'reasoning_effort': 'high', 'prompt_chars': 114171, 'input_context_chars': 112851, 'input_context_hash': '7d72745e07f47acc5a42f0c6f56ac8ce24d67818c972bb697a45f88751eabc1c', 'elapsed_ms': 143331, 'output_chars': 11677, 'input_tokens': 32276, 'output_tokens': 9281, 'total_tokens': 41557, 'estimated_cost': None, 'estimated_cost_usd': None, 'cost_estimate_status': 'missing_price_contract'}`
+- provider_status: `{'provider': 'openai', 'status': 'success', 'new_provider_call': True, 'key_name': 'OPENAI_API_KEY', 'attempt_index': 1, 'model_index': 1, 'configured_key_count': 2, 'attempted_key_count': 1, 'attempted_keys': 1, 'attempted_key_names': ['OPENAI_API_KEY'], 'configured_model_count': 3, 'attempted_model_count': 1, 'attempted_models': ['gpt-5.5'], 'configured_models': ['gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini'], 'model': 'gpt-5.5', 'schema_name': 'threshold_ai_correction_v1', 'reasoning_effort': 'high', 'prompt_chars': 114745, 'input_context_chars': 113425, 'input_context_hash': 'dd643befd03c2a875cba4bd10f6b8b01f550f3f72bacff0fb5292705c524a1e7', 'elapsed_ms': 139954, 'output_chars': 13028, 'input_tokens': 32372, 'output_tokens': 9067, 'total_tokens': 41439, 'estimated_cost': None, 'estimated_cost_usd': None, 'cost_estimate_status': 'missing_price_contract'}`
 - blocking_runtime_candidate_families: `['bad_entry_refined_canary', 'holding_exit_decision_matrix_advisory', 'holding_flow_ofi_smoothing', 'lifecycle_decision_matrix_runtime', 'protect_trailing_smoothing', 'score65_74_recovery_probe']`
 - parse_warnings: `[]`
 - interpretation: `AI correction parsed successfully`
@@ -138,9 +138,9 @@
 - active_seed_ids: `['active_seed_5de7caf844ddc438', 'active_seed_5fbf3e3baf24631e', 'active_seed_99ca1276e1c366bd', 'active_seed_a1f7c81dce4c82d5', 'active_seed_b7ce7bba2e093cc8', 'active_seed_c460913b42254d9a']`
 - observed_seed_ids: `[]`
 - missing: `[]`
-- warnings: `['active_sim_priority_preopen_handoff_pending', 'active_sim_priority_runtime_observation_missing', 'swing_active_arm_priority_runtime_observation_missing']`
-- match_absence_diagnosis: `catalog_or_preopen_handoff_gap`
-- match_absence_reason: `active_seed_not_preserved_in_preopen_apply`
+- warnings: `['active_sim_priority_preopen_handoff_pending']`
+- match_absence_diagnosis: `not_applicable`
+- match_absence_reason: `active_priority_observed_or_no_active_priority`
 - candidate_prefix_count: `13331`
 - top_candidate_prefixes: `[('{"entry_score_parent": "score_watch_recovery", "entry_source_parent": "entry_source_blocked_ai_score"}', 9168), ('{"entry_score_parent": "score_watch_recovery", "entry_source_parent": "entry_source_observed_other"}', 3017), ('{"entry_score_parent": "score_mid_recovery", "entry_source_parent": "entry_source_observed_other"}', 587), ('{"entry_score_parent": "score_mid_recovery", "entry_source_parent": "entry_source_blocked_ai_score"}', 505), ('{"entry_score_parent": "score_high_confirmation", "entry_source_parent": "entry_source_observed_other"}', 44)]`
 
@@ -152,21 +152,21 @@
 - warnings: `[]`
 
 ## Swing Lifecycle Handoff
-- status: `warning`
+- status: `pass`
 - expected_candidate_ids: `['swing_ldm_lifecycle_flow_combo_swing_lifecycle_flow_entry_swing_entry_entry_bucket_attribution_swing_strategy_discovery_s_342dbf5212', 'swing_ldm_lifecycle_flow_combo_swing_lifecycle_flow_entry_swing_entry_entry_bucket_attribution_swing_strategy_discovery_s_3b6dc92885', 'swing_ldm_lifecycle_flow_combo_swing_lifecycle_flow_entry_swing_entry_entry_bucket_attribution_swing_strategy_discovery_s_60c4c4c8cf', 'swing_ldm_lifecycle_flow_combo_swing_lifecycle_flow_entry_swing_entry_entry_bucket_attribution_swing_strategy_discovery_s_7764eb9bbd', 'swing_ldm_lifecycle_flow_combo_swing_lifecycle_flow_entry_swing_entry_entry_bucket_attribution_swing_strategy_discovery_s_7d92990310', 'swing_ldm_lifecycle_flow_combo_swing_lifecycle_flow_entry_swing_entry_entry_bucket_attribution_swing_strategy_discovery_s_a72594ac3c', 'swing_ldm_lifecycle_flow_combo_swing_lifecycle_flow_entry_swing_entry_entry_bucket_attribution_swing_strategy_discovery_s_c515f99b98']`
 - missing_ev_candidate_ids: `[]`
 - missing_runtime_summary_candidate_ids: `[]`
 - missing_workorder_order_ids: `[]`
 - daily_simulation_consumed: `False`
-- ai_two_pass_review_status: `missing`
-- warnings: `['swing_lifecycle_bucket_discovery:ai_two_pass_review_missing_fail_closed', 'swing_lifecycle_bucket_discovery:ai_two_pass_review_fail_closed_sim_auto_blocked']`
-- interpretation: `Swing LDM AI two-pass review is fail-closed; sim-auto promotion is blocked and must be surfaced.`
+- ai_two_pass_review_status: `parsed`
+- warnings: `[]`
+- interpretation: `Swing LDM candidates/workorders propagated through EV, runtime summary, workorder, and verifier.`
 
 ## Producer Gap Discovery Handoff
 - status: `pass`
 - ai_two_pass_review_status: `parsed`
 - audit_status: `pass`
-- expected_workorder_order_ids: `['order_producer_gap_discovery_producer_gap_missed_fill_recovery_counterfactual_missing', 'order_producer_gap_discovery_producer_gap_scale_in_counterfactual_gap_missing', 'order_producer_gap_discovery_producer_gap_sim_entry_selection_gap_missing', 'order_producer_gap_discovery_producer_gap_sim_exit_plateau_breakdown_gap_missing', 'order_producer_gap_discovery_producer_gap_sim_holding_runner_gap_missing', 'order_producer_gap_discovery_producer_gap_sim_scale_in_counterfactual_gap_missing', 'order_producer_gap_discovery_producer_gap_sim_stop_recovery_gap_missing', 'order_producer_gap_discovery_producer_gap_stop_recovery_counterfactual_missing', 'order_producer_gap_discovery_producer_gap_swing_sim_probe_label_gap_missing', 'order_producer_gap_discovery_producer_gap_volatile_runner_exit_counterfactual_missing']`
+- expected_workorder_order_ids: `[]`
 - missing_workorder_order_ids: `[]`
 - missing: `[]`
 - interpretation: `producer gap high-priority orders propagated to code improvement workorder with parsed AI review`
@@ -175,7 +175,7 @@
 - status: `pass`
 - ai_two_pass_review_status: `parsed`
 - audit_status: `pass`
-- expected_workorder_order_ids: `['order_stage_hook_workorder_discovery_stage_hook_holding_flow_runner_debounce_guard', 'order_stage_hook_workorder_discovery_stage_hook_plateau_breakdown_exit_arbitration_probe']`
+- expected_workorder_order_ids: `[]`
 - missing_workorder_order_ids: `[]`
 - unconsumed_hook_candidate_ids: `[]`
 - missing: `[]`
@@ -193,11 +193,11 @@
 - interpretation: `bottom_rebound source was absent or blocked; safe-pool-only swing sim path applies`
 
 ## Workorder Snapshot
-- generation_id: `2026-06-02-76ee675f98a6`
-- source_hash: `76ee675f98a6487813a8ce0950207769e1550736a75263a5240cc152a52b99f8`
-- snapshot_status: `same_snapshot_replay`
-- previous_generation_id: `2026-06-02-76ee675f98a6`
-- previous_source_hash: `76ee675f98a6487813a8ce0950207769e1550736a75263a5240cc152a52b99f8`
+- generation_id: `2026-06-02-459190fbee4c`
+- source_hash: `459190fbee4c4dcfab3dd4c2c4653737df1a322d206f6f8cd14edd51ef75e494`
+- snapshot_status: `source_changed_with_lineage`
+- previous_generation_id: `2026-06-02-f3d07a3d5e38`
+- previous_source_hash: `f3d07a3d5e38ac21dfaee1b31db9d9e218de8dab1dac80980fd9f29d6e83fdbc`
 - new_order_ids: `[]`
 - removed_order_ids: `[]`
 - decision_changed_order_ids: `[]`

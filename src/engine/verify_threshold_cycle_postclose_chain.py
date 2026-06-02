@@ -1715,9 +1715,13 @@ def _active_sim_priority_handoff_status(
         missing.append("active_sim_priority_unknown_key_observed")
     if inactive_consumed:
         missing.append("active_sim_priority_inactive_key_consumed")
-    if active_seed_ids and not (observed_seed_ids & active_seed_ids):
+    active_seed_runtime_expected = bool(active_seed_ids and active_seed_ids.issubset(preopen_seed_ids))
+    active_swing_runtime_expected = bool(
+        active_swing_policy_ids and active_swing_policy_ids.issubset(preopen_swing_policy_ids)
+    )
+    if active_seed_runtime_expected and not (observed_seed_ids & active_seed_ids):
         warnings.append("active_sim_priority_runtime_observation_missing")
-    if active_swing_policy_ids and not (observed_swing_policy_ids & active_swing_policy_ids):
+    if active_swing_runtime_expected and not (observed_swing_policy_ids & active_swing_policy_ids):
         warnings.append("swing_active_arm_priority_runtime_observation_missing")
     active_prefixes = {
         json.dumps(seed.get("observable_prefix"), ensure_ascii=True, sort_keys=True)
@@ -1755,7 +1759,7 @@ def _active_sim_priority_handoff_status(
                 "reason": ",".join(sorted(set(missing))),
             }
         )
-    elif active_seed_ids and not (observed_seed_ids & active_seed_ids):
+    elif active_seed_runtime_expected and not (observed_seed_ids & active_seed_ids):
         if not preopen_seed_ids or not active_seed_ids.issubset(preopen_seed_ids):
             diagnosis = "catalog_or_preopen_handoff_gap"
             reason = "active_seed_not_preserved_in_preopen_apply"

@@ -178,8 +178,8 @@
 ## Code Improvement Workorder
 - artifact: `/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-06-02.json`
 - markdown: `/home/ubuntu/KORStockScan/docs/code-improvement-workorders/code_improvement_workorder_2026-06-02.md`
-- selected_order_count: `109`
-- decision_counts: `{'implement_now': 6, 'attach_existing_family': 125, 'design_family_candidate': 5, 'defer_evidence': 3, 'reject': 3}`
+- selected_order_count: `102`
+- decision_counts: `{'attach_existing_family': 125, 'design_family_candidate': 5, 'defer_evidence': 7, 'reject': 3}`
 
 ## Approval Requests
 - `position_sizing_cap_release` sample=`50/30` reason=`window_policy primary=rolling_10d 기준 재평가: 1주 cap 해제 efficient trade-off 기준 충족(score=0.21/0.70): 자동 적용하지 않고 사용자 승인 요청 artifact로만 승격한다.` contract=`final_user_approval_required` live_ready=`False`
@@ -191,9 +191,9 @@
 
 ## Calibration Decisions
 ## Code Improvement Top Orders
-- `order_holding_exit_decision_matrix_edge_counterfactual` decision=`implement_now` subsystem=`runtime_instrumentation`
-- `order_swing_pattern_lab_deepseek_ofi_qi_smoothing_review` decision=`implement_now` subsystem=`swing_micro_context`
-- `order_latency_canary_tag_완화_1축_canary_승인` decision=`implement_now` subsystem=`runtime_instrumentation`
+- `order_entry_submit_drought_auto_resolution` decision=`attach_existing_family` subsystem=`runtime_instrumentation`
+- `order_ai_threshold_dominance` decision=`attach_existing_family` subsystem=`entry_funnel`
+- `order_entry_broker_receipt_contract_gap_review` decision=`attach_existing_family` subsystem=`runtime_instrumentation`
 
 ## Pattern Lab Top Findings
 - `AI threshold dominance` route=`existing_family` family=`score65_74_recovery_probe`
@@ -222,6 +222,4 @@
 - `lifecycle_bucket_discovery:source_contract_drift_warning`
 - `swing_strategy_discovery:pending_future_quotes`
 - `swing_lifecycle_decision_matrix:pending_future_quotes`
-- `swing_lifecycle_bucket_discovery:ai_two_pass_review_missing_fail_closed`
-- `swing_lifecycle_bucket_discovery:ai_two_pass_review_fail_closed_sim_auto_blocked`
 - `pattern_lab_propagation_audit_warning`

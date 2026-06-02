@@ -1173,6 +1173,53 @@ def test_active_sim_priority_zero_match_gets_absence_diagnosis(monkeypatch):
     assert status["active_priority_match_absence_diagnosis"]["status"] == "warning"
 
 
+def test_active_sim_priority_pending_preopen_does_not_require_runtime_observation(monkeypatch):
+    monkeypatch.setattr(mod, "_iter_pipeline_event_fields", lambda target_date: [])
+
+    status = mod._active_sim_priority_handoff_status(
+        target_date="2026-06-02",
+        discovery={},
+        scalp_catalog={
+            "schema_version": "scalp_sim_policy_catalog_v1",
+            "active_sim_priority_seeds": [
+                {
+                    "active_seed_id": "active_seed_next",
+                    "source_parent_bucket_id": "parent_positive_next",
+                    "status": "active",
+                    "observable_prefix": {
+                        "entry_score_parent": "score_watch_recovery",
+                        "entry_source_parent": "entry_source_action_decision",
+                    },
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                    "runtime_effect": False,
+                }
+            ],
+        },
+        swing_catalog={
+            "schema_version": "swing_sim_policy_catalog_v1",
+            "active_arm_priority_policies": [
+                {
+                    "priority_policy_id": "active_arm_next",
+                    "priority_arm_id": "arm05_breakout_conf_trailing",
+                    "source_report_date": "2026-06-02",
+                    "status": "active",
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                    "runtime_effect": False,
+                }
+            ],
+        },
+        preopen_apply={},
+        swing_sim_report={},
+    )
+
+    assert status["status"] == "warning"
+    assert "active_sim_priority_preopen_handoff_pending" in status["warnings"]
+    assert "active_sim_priority_runtime_observation_missing" not in status["warnings"]
+    assert "swing_active_arm_priority_runtime_observation_missing" not in status["warnings"]
+
+
 def test_active_sim_priority_zero_match_prioritizes_posterior_dimension_diagnosis(monkeypatch):
     monkeypatch.setattr(
         mod,
