@@ -230,7 +230,7 @@
       "sources": [
         {
           "entry_count": 5,
-          "mtime": 1780323118.7574267,
+          "mtime": 1780323118.757372,
           "path": "data/threshold_cycle/snapshots",
           "status": "available_dir"
         },
@@ -374,7 +374,7 @@
       "sources": [
         {
           "entry_count": 46,
-          "mtime": 1780362127.6725912,
+          "mtime": 1780364101.3188097,
           "path": "data/pipeline_events",
           "status": "available_dir"
         },
@@ -425,8 +425,8 @@
       "source_missing": false,
       "sources": [
         {
-          "entry_count": 698,
-          "mtime": 1780362118.8088028,
+          "entry_count": 451,
+          "mtime": 1780364092.381043,
           "path": "src",
           "status": "available_dir"
         },
@@ -807,7 +807,7 @@
     "position_cap_release",
     "hard_safety_bypass"
   ],
-  "generated_at": "2026-06-02T10:02:07.696315+09:00",
+  "generated_at": "2026-06-02T10:35:01.328647+09:00",
   "report_type": "automation_chain_trigger_decision",
   "runtime_effect": false,
   "schema_version": 1,

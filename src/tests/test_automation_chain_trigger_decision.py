@@ -121,6 +121,28 @@ def test_directory_source_uses_recursive_file_mtime(tmp_path, monkeypatch):
     assert decision["sources"][0]["entry_count"] == 1
 
 
+def test_directory_source_ignores_python_cache_byproducts(tmp_path, monkeypatch):
+    _patch_roots(tmp_path, monkeypatch)
+    spec = mod.StepSpec(
+        step_id="codebase_performance_workorder",
+        scope="deep_audits",
+        output_paths=("out.json", "out.md"),
+        source_paths=("src",),
+        force_env="THRESHOLD_CYCLE_FORCE_DEEP_AUDITS",
+        description="test",
+    )
+    _write_json(tmp_path / "out.json", {"status": "pass"}, 200)
+    _write_text(tmp_path / "out.md", "# out\n", 200)
+    _write_text(tmp_path / "src/engine/module.py", "VALUE = 1\n", 100)
+    _write_text(tmp_path / "src/engine/__pycache__/module.cpython-313.pyc", "cache\n", 300)
+
+    decision = mod.evaluate_step(spec, env={})
+
+    assert decision["decision"] == "skip"
+    assert decision["trigger_reasons"] == ["fresh_outputs_no_trigger"]
+    assert decision["sources"][0]["entry_count"] == 1
+
+
 def test_non_reusable_output_status_forces_run(tmp_path, monkeypatch):
     _patch_roots(tmp_path, monkeypatch)
     spec = mod.StepSpec(

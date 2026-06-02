@@ -57,6 +57,20 @@ STATUS_KEYS = {
     "audit_status",
     "source_quality_status",
 }
+IGNORED_DIRECTORY_PARTS = {
+    "__pycache__",
+    ".pytest_cache",
+    ".mypy_cache",
+    ".ruff_cache",
+    ".cache",
+    ".git",
+}
+IGNORED_DIRECTORY_SUFFIXES = {
+    ".pyc",
+    ".pyo",
+    ".tmp",
+    ".swp",
+}
 
 
 @dataclass(frozen=True)
@@ -229,21 +243,30 @@ def _read_json(path: Path) -> tuple[bool, Any]:
 
 def _directory_max_mtime(path: Path) -> tuple[float | None, int]:
     try:
-        max_mtime = path.stat().st_mtime
+        directory_mtime = path.stat().st_mtime
     except OSError:
         return None, 0
+    max_mtime: float | None = None
     entry_count = 0
     for child in path.rglob("*"):
         if not child.is_file():
+            continue
+        if _ignored_directory_child(child):
             continue
         try:
             child_mtime = child.stat().st_mtime
         except OSError:
             continue
         entry_count += 1
-        if child_mtime > max_mtime:
+        if max_mtime is None or child_mtime > max_mtime:
             max_mtime = child_mtime
-    return max_mtime, entry_count
+    return (max_mtime if max_mtime is not None else directory_mtime), entry_count
+
+
+def _ignored_directory_child(path: Path) -> bool:
+    if any(part in IGNORED_DIRECTORY_PARTS for part in path.parts):
+        return True
+    return path.suffix in IGNORED_DIRECTORY_SUFFIXES
 
 
 def _non_reusable_payload_reason(payload: Any) -> str | None:
