@@ -81,6 +81,8 @@ ALLOWED_ACCEPTANCE_COMMAND_PREFIXES = (
 class CodexTurnSummary:
     phase: str
     final_response: str
+    model: str | None = None
+    effort: str | None = None
 
 
 def _now() -> str:
@@ -216,6 +218,7 @@ def _render_markdown(report: dict[str, Any]) -> str:
         f"- blocked_order_count: `{len(report.get('blocked_orders') or [])}`",
         f"- dry_run: `{report.get('dry_run')}`",
         f"- worktree: `{report.get('worktree') or '-'}`",
+        f"- codex_model_policy: `{report.get('codex_model_policy')}`",
         "",
         "## Implemented Orders",
     ]
@@ -230,6 +233,60 @@ def _render_markdown(report: dict[str, Any]) -> str:
         lines.append("- none")
     lines.append("")
     return "\n".join(lines)
+
+
+def _order_complexity(orders: list[dict[str, Any]]) -> str:
+    blob = " ".join(_text_blob(order) for order in orders)
+    path_count = 0
+    acceptance_count = 0
+    for order in orders:
+        files = order.get("files_likely_touched")
+        if isinstance(files, list):
+            path_count += len(files)
+        tests = order.get("acceptance_tests")
+        if isinstance(tests, list):
+            acceptance_count += len(tests)
+    broad_terms = (
+        "schema",
+        "producer",
+        "consumer",
+        "contract",
+        "cross",
+        "report producer",
+        "traceability",
+    )
+    if len(orders) >= 3 or path_count >= 4 or acceptance_count >= 3 or any(term in blob for term in broad_terms):
+        return "broad_contract"
+    if path_count >= 2 or acceptance_count >= 1:
+        return "medium_source"
+    return "small_source"
+
+
+def _select_turn_model_effort(
+    phase: str,
+    orders: list[dict[str, Any]],
+    *,
+    model_policy: str,
+    model: str | None,
+    effort: str | None,
+) -> tuple[str | None, str | None]:
+    if model_policy != "auto":
+        return model, effort
+    if model and effort:
+        return model, effort
+    complexity = _order_complexity(orders)
+    selected: tuple[str, str]
+    if phase == "implement":
+        selected = ("gpt-5.4", "medium") if complexity == "broad_contract" else ("gpt-5.3-codex-spark", "medium")
+    elif phase == "review":
+        selected = ("gpt-5.4", "high")
+    elif phase == "supplemental_fix":
+        selected = ("gpt-5.4", "medium" if complexity != "broad_contract" else "high")
+    elif phase == "final_review":
+        selected = ("gpt-5.4", "high")
+    else:
+        selected = ("gpt-5.4", "medium")
+    return model or selected[0], effort or selected[1]
 
 
 def _make_worktree(
@@ -264,7 +321,15 @@ def _make_worktree(
     return worktree, branch, rc, "created" if rc == 0 else "worktree_add_failed"
 
 
-def _codex_turns(worktree: Path, orders: list[dict[str, Any]], dry_run: bool) -> tuple[list[CodexTurnSummary], str | None]:
+def _codex_turns(
+    worktree: Path,
+    orders: list[dict[str, Any]],
+    dry_run: bool,
+    *,
+    model: str | None = None,
+    effort: str | None = None,
+    model_policy: str = "auto",
+) -> tuple[list[CodexTurnSummary], str | None]:
     if dry_run or not orders:
         return [], None
     try:
@@ -296,15 +361,39 @@ def _codex_turns(worktree: Path, orders: list[dict[str, Any]], dry_run: bool) ->
             )
             if login_error:
                 return turns, login_error
-        thread = codex.thread_start(cwd=str(worktree), sandbox=Sandbox.workspace_write)
-        result = thread.run(prompt)
-        turns.append(CodexTurnSummary("implement", str(getattr(result, "final_response", ""))))
-        review = thread.run("Review the diff only. List blocking issues first.", sandbox=Sandbox.read_only)
-        turns.append(CodexTurnSummary("review", str(getattr(review, "final_response", ""))))
-        fix = thread.run("Fix any blocking issues found in the review, then summarize.", sandbox=Sandbox.workspace_write)
-        turns.append(CodexTurnSummary("supplemental_fix", str(getattr(fix, "final_response", ""))))
-        final_review = thread.run("Final read-only review of the resulting diff.", sandbox=Sandbox.read_only)
-        turns.append(CodexTurnSummary("final_review", str(getattr(final_review, "final_response", ""))))
+        implement_model, implement_effort = _select_turn_model_effort(
+            "implement", orders, model_policy=model_policy, model=model, effort=effort
+        )
+        thread = codex.thread_start(cwd=str(worktree), sandbox=Sandbox.workspace_write, model=implement_model)
+        result = thread.run(prompt, **{k: v for k, v in {"model": implement_model, "effort": implement_effort}.items() if v})
+        turns.append(CodexTurnSummary("implement", str(getattr(result, "final_response", "")), implement_model, implement_effort))
+        review_model, review_effort = _select_turn_model_effort(
+            "review", orders, model_policy=model_policy, model=model, effort=effort
+        )
+        review = thread.run(
+            "Review the diff only. List blocking issues first.",
+            sandbox=Sandbox.read_only,
+            **{k: v for k, v in {"model": review_model, "effort": review_effort}.items() if v},
+        )
+        turns.append(CodexTurnSummary("review", str(getattr(review, "final_response", "")), review_model, review_effort))
+        fix_model, fix_effort = _select_turn_model_effort(
+            "supplemental_fix", orders, model_policy=model_policy, model=model, effort=effort
+        )
+        fix = thread.run(
+            "Fix any blocking issues found in the review, then summarize.",
+            sandbox=Sandbox.workspace_write,
+            **{k: v for k, v in {"model": fix_model, "effort": fix_effort}.items() if v},
+        )
+        turns.append(CodexTurnSummary("supplemental_fix", str(getattr(fix, "final_response", "")), fix_model, fix_effort))
+        final_model, final_effort = _select_turn_model_effort(
+            "final_review", orders, model_policy=model_policy, model=model, effort=effort
+        )
+        final_review = thread.run(
+            "Final read-only review of the resulting diff.",
+            sandbox=Sandbox.read_only,
+            **{k: v for k, v in {"model": final_model, "effort": final_effort}.items() if v},
+        )
+        turns.append(CodexTurnSummary("final_review", str(getattr(final_review, "final_response", "")), final_model, final_effort))
     return turns, None
 
 
@@ -439,6 +528,9 @@ def build_codex_workorder_runner(
     *,
     max_orders: int = 5,
     branch_prefix: str = "codex-workorder",
+    model: str | None = None,
+    effort: str | None = None,
+    model_policy: str = "auto",
     commit: bool = False,
     dry_run: bool = False,
     command_runner: CommandRunner | None = None,
@@ -477,7 +569,14 @@ def build_codex_workorder_runner(
     forbidden_scan = {"status": "not_run", "matches": []}
     commit_rc: int | None = None
     if worktree_rc == 0 and safe_orders:
-        codex_turns, codex_error = _codex_turns(worktree, safe_orders, dry_run)
+        codex_turns, codex_error = _codex_turns(
+            worktree,
+            safe_orders,
+            dry_run,
+            model=model,
+            effort=effort,
+            model_policy=model_policy,
+        )
         if not codex_error:
             validation_results = _run_validation(worktree, command_runner, dry_run)
             validations_pass = all(item["exit_code"] == 0 for item in validation_results)
@@ -537,6 +636,9 @@ def build_codex_workorder_runner(
         "branch": branch,
         "worktree": str(worktree),
         "worktree_status": worktree_status,
+        "codex_model": model,
+        "codex_effort": effort,
+        "codex_model_policy": model_policy,
         "source_generation_id": workorder.get("generation_id"),
         "implemented_orders": [
             {"order_id": item.get("order_id"), "status": "planned" if dry_run else "submitted_to_codex"}
@@ -566,6 +668,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--date", default=date.today().isoformat())
     parser.add_argument("--max-orders", type=int, default=5)
     parser.add_argument("--branch-prefix", default="codex-workorder")
+    parser.add_argument("--model", default=os.environ.get("CODEX_WORKORDER_MODEL") or None)
+    parser.add_argument("--effort", default=os.environ.get("CODEX_WORKORDER_EFFORT") or None)
+    parser.add_argument("--model-policy", default=os.environ.get("CODEX_WORKORDER_MODEL_POLICY") or "auto")
     parser.add_argument("--commit", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args(argv)
@@ -573,6 +678,9 @@ def main(argv: list[str] | None = None) -> int:
         args.date,
         max_orders=args.max_orders,
         branch_prefix=args.branch_prefix,
+        model=args.model,
+        effort=args.effort,
+        model_policy=args.model_policy,
         commit=args.commit,
         dry_run=args.dry_run,
     )

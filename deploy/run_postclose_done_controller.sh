@@ -23,6 +23,9 @@ PREDECESSOR_TIMEOUT_SEC="${POSTCLOSE_DONE_CONTROLLER_PREDECESSOR_TIMEOUT_SEC:-14
 ALLOW_WRAPPER_RERUN="${POSTCLOSE_DONE_CONTROLLER_ALLOW_WRAPPER_RERUN:-true}"
 RUN_CODEX="${POSTCLOSE_DONE_CONTROLLER_RUN_CODEX:-true}"
 CODEX_MAX_ORDERS="${POSTCLOSE_DONE_CONTROLLER_CODEX_MAX_ORDERS:-5}"
+CODEX_MODEL_POLICY="${POSTCLOSE_DONE_CONTROLLER_CODEX_MODEL_POLICY:-auto}"
+CODEX_MODEL="${POSTCLOSE_DONE_CONTROLLER_CODEX_MODEL:-}"
+CODEX_EFFORT="${POSTCLOSE_DONE_CONTROLLER_CODEX_EFFORT:-}"
 CODEX_COMMIT="${POSTCLOSE_DONE_CONTROLLER_CODEX_COMMIT:-true}"
 DRY_RUN="${POSTCLOSE_DONE_CONTROLLER_DRY_RUN:-false}"
 
@@ -67,7 +70,13 @@ PY
     echo "[SKIP] codex_workorder_runner target_date=${TARGET_DATE} controller_status=${controller_status}"
     exit 1
   fi
-  codex_args=(--date "$TARGET_DATE" --max-orders "$CODEX_MAX_ORDERS")
+  codex_args=(--date "$TARGET_DATE" --max-orders "$CODEX_MAX_ORDERS" --model-policy "$CODEX_MODEL_POLICY")
+  if [[ -n "$CODEX_MODEL" ]]; then
+    codex_args+=(--model "$CODEX_MODEL")
+  fi
+  if [[ -n "$CODEX_EFFORT" ]]; then
+    codex_args+=(--effort "$CODEX_EFFORT")
+  fi
   if [[ "$CODEX_COMMIT" == "1" || "$CODEX_COMMIT" == "true" ]]; then
     codex_args+=(--commit)
   fi

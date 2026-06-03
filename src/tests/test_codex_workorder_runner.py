@@ -161,7 +161,11 @@ def test_codex_workorder_runner_blocks_when_sdk_unavailable(monkeypatch, tmp_pat
             ],
         },
     )
-    monkeypatch.setattr(mod, "_codex_turns", lambda worktree, orders, dry_run: ([], "openai_codex_unavailable"))
+    monkeypatch.setattr(
+        mod,
+        "_codex_turns",
+        lambda worktree, orders, dry_run, **kwargs: ([], "openai_codex_unavailable"),
+    )
 
     report = mod.build_codex_workorder_runner(
         "2026-06-03",
@@ -193,7 +197,11 @@ def test_codex_workorder_runner_commit_path(monkeypatch, tmp_path):
             ],
         },
     )
-    monkeypatch.setattr(mod, "_codex_turns", lambda worktree, orders, dry_run: ([mod.CodexTurnSummary("x", "ok")], None))
+    monkeypatch.setattr(
+        mod,
+        "_codex_turns",
+        lambda worktree, orders, dry_run, **kwargs: ([mod.CodexTurnSummary("x", "ok")], None),
+    )
     monkeypatch.setattr(mod, "_forbidden_diff_scan", lambda worktree, runner, dry_run: {"status": "pass", "matches": []})
     calls = []
 
@@ -208,6 +216,84 @@ def test_codex_workorder_runner_commit_path(monkeypatch, tmp_path):
     assert any(cmd[:3] == ["git", "commit", "-m"] for cmd in calls)
     assert any(cmd[:3] == [mod._python_bin(), "-m", "pytest"] for cmd in calls)
     assert report["acceptance_results"][0]["command"][:4] == [mod._python_bin(), "-m", "pytest", "-q"]
+
+
+def test_codex_workorder_runner_records_requested_model_and_effort(monkeypatch, tmp_path):
+    report_dir = tmp_path / "report"
+    monkeypatch.setattr(mod, "WORKORDER_REPORT_DIR", report_dir / "code_improvement_workorder")
+    monkeypatch.setattr(mod, "OUTPUT_DIR", report_dir / "codex_workorder_runner")
+    monkeypatch.setattr(mod, "WORKTREE_ROOT", tmp_path / "worktrees")
+    _write_json(
+        report_dir / "code_improvement_workorder" / "code_improvement_workorder_2026-06-03.json",
+        {
+            "orders": [
+                {
+                    "order_id": "safe",
+                    "decision": "implement_now",
+                    "runtime_effect": False,
+                    "allowed_runtime_apply": False,
+                    "title": "report parser gap",
+                    "forbidden_uses": ["real_order_authority", "provider_route_change", "bot_restart"],
+                }
+            ],
+        },
+    )
+    observed = {}
+
+    def fake_codex_turns(worktree, orders, dry_run, *, model=None, effort=None, model_policy="auto"):
+        observed["model"] = model
+        observed["effort"] = effort
+        observed["model_policy"] = model_policy
+        return [mod.CodexTurnSummary("x", "ok")], None
+
+    monkeypatch.setattr(mod, "_codex_turns", fake_codex_turns)
+    monkeypatch.setattr(mod, "_forbidden_diff_scan", lambda worktree, runner, dry_run: {"status": "pass", "matches": []})
+
+    report = mod.build_codex_workorder_runner(
+        "2026-06-03",
+        model="gpt-5.5",
+        effort="medium",
+        command_runner=lambda cmd, cwd=None: 0,
+    )
+
+    assert report["status"] == "validated"
+    assert observed == {"model": "gpt-5.5", "effort": "medium", "model_policy": "auto"}
+    assert report["codex_model"] == "gpt-5.5"
+    assert report["codex_effort"] == "medium"
+    assert report["codex_model_policy"] == "auto"
+
+
+def test_codex_workorder_runner_auto_policy_selects_turn_models():
+    orders = [
+        {
+            "order_id": "small",
+            "title": "documentation parser cleanup",
+            "files_likely_touched": ["docs/example.md"],
+            "acceptance_tests": [],
+        }
+    ]
+
+    assert mod._select_turn_model_effort(
+        "implement", orders, model_policy="auto", model=None, effort=None
+    ) == ("gpt-5.3-codex-spark", "medium")
+    assert mod._select_turn_model_effort(
+        "review", orders, model_policy="auto", model=None, effort=None
+    ) == ("gpt-5.4", "high")
+    assert mod._select_turn_model_effort(
+        "final_review", orders, model_policy="auto", model=None, effort=None
+    ) == ("gpt-5.4", "high")
+
+
+def test_codex_workorder_runner_auto_policy_respects_explicit_overrides():
+    orders = [{"order_id": "small", "title": "report parser gap"}]
+
+    assert mod._select_turn_model_effort(
+        "implement",
+        orders,
+        model_policy="auto",
+        model="gpt-5.5",
+        effort="xhigh",
+    ) == ("gpt-5.5", "xhigh")
 
 
 def test_forbidden_diff_scan_blocks_real_runtime_terms(monkeypatch, tmp_path):
@@ -355,7 +441,11 @@ def test_codex_workorder_runner_blocks_unsupported_acceptance_tests(monkeypatch,
             ],
         },
     )
-    monkeypatch.setattr(mod, "_codex_turns", lambda worktree, orders, dry_run: ([mod.CodexTurnSummary("x", "ok")], None))
+    monkeypatch.setattr(
+        mod,
+        "_codex_turns",
+        lambda worktree, orders, dry_run, **kwargs: ([mod.CodexTurnSummary("x", "ok")], None),
+    )
 
     report = mod.build_codex_workorder_runner(
         "2026-06-03",

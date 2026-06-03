@@ -51,6 +51,12 @@ def test_postclose_done_controller_wrapper_runs_controller_then_codex_runner():
     assert "--predecessor-timeout-sec" in script
     assert "POSTCLOSE_DONE_CONTROLLER_PREDECESSOR_TIMEOUT_SEC" in script
     assert "$PROJECT_DIR/venv/Scripts/python.exe" in script
+    assert "POSTCLOSE_DONE_CONTROLLER_CODEX_MODEL_POLICY" in script
+    assert "POSTCLOSE_DONE_CONTROLLER_CODEX_MODEL" in script
+    assert "POSTCLOSE_DONE_CONTROLLER_CODEX_EFFORT" in script
+    assert "--model-policy" in script
+    assert "--model" in script
+    assert "--effort" in script
     assert 'VENV_PY="python"' in script
     assert "controller_report=" in script
     assert "controller_status" in script
