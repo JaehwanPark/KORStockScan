@@ -23,6 +23,7 @@ cryptography
 deep-translator
 google-genai
 openai
+openai-codex
 boto3
 SQLAlchemy>=2.0.0
 psycopg2-binary

@@ -149,6 +149,16 @@ CRON_JOB_REGISTRY: list[dict[str, Any]] = [
         "trading_day_only": True,
     },
     {
+        "id": "postclose_done_controller",
+        "log": "logs/postclose_done_controller_cron.log",
+        "status_artifact": "data/report/postclose_done_controller/postclose_done_controller_{date}.json",
+        "window_start": (16, 5),
+        "window_end": (20, 5),
+        "mode": "once",
+        "critical": True,
+        "trading_day_only": True,
+    },
+    {
         "id": "swing_model_retrain_postclose",
         "log": "logs/swing_model_retrain_cron.log",
         "window_start": (17, 30),

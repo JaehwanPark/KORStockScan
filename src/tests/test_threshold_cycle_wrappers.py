@@ -39,6 +39,33 @@ def test_threshold_cycle_cron_installs_scalp_sim_overnight_preclose_once():
     assert "!/SCALP_SIM_OVERNIGHT_PRECLOSE/" in script
 
 
+def test_postclose_done_controller_wrapper_runs_controller_then_codex_runner():
+    script = Path("deploy/run_postclose_done_controller.sh").read_text(encoding="utf-8")
+
+    controller_idx = script.index("src.engine.automation.postclose_done_controller")
+    codex_idx = script.index("src.engine.automation.codex_workorder_runner")
+
+    assert "[START] postclose_done_controller" in script
+    assert "[DONE] postclose_done_controller" in script
+    assert "--allow-wrapper-rerun" in script
+    assert "--predecessor-timeout-sec" in script
+    assert "POSTCLOSE_DONE_CONTROLLER_PREDECESSOR_TIMEOUT_SEC" in script
+    assert "$PROJECT_DIR/venv/Scripts/python.exe" in script
+    assert 'VENV_PY="python"' in script
+    assert "controller_report=" in script
+    assert "controller_status" in script
+    assert "[SKIP] codex_workorder_runner" in script
+    assert controller_idx < codex_idx
+
+
+def test_postclose_done_controller_cron_installs_1605_once():
+    script = Path("deploy/install_postclose_done_controller_cron.sh").read_text(encoding="utf-8")
+
+    assert "POSTCLOSE_DONE_CONTROLLER" in script
+    assert "5 16 * * 1-5" in script
+    assert "deploy/run_postclose_done_controller.sh" in script
+
+
 def test_postclose_wrapper_runs_swing_daily_simulation_before_lifecycle_audit():
     script = Path("deploy/run_threshold_cycle_postclose.sh").read_text(encoding="utf-8")
 
