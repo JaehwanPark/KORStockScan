@@ -84,6 +84,9 @@ def test_build_next_stage2_checklist_generates_next_trading_day_and_tasks(monkey
     assert "[RuntimeEnvIntradayObserve0511]" in text
     assert "[AITransportIntradaySample0511]" in text
     assert "[SimProbeIntradayCoverage0511]" in text
+    assert "[IntradaySourceQualityGateCheck0511]" in text
+    assert "[PostcloseSourceQualityGateReview0511]" in text
+    assert "unknown-token warning" in text
     assert "[CodeImprovementWorkorderReview0511]" in text
     assert "[AutomationTriggerDecisionSummary0511]" in text
     assert "tuning_performance_control_tower_2026-05-08.json" in text
@@ -198,6 +201,8 @@ def test_build_next_stage2_checklist_skips_optional_tasks_when_optional_artifact
     text = (docs / "checklists" / "2026-05-26-stage2-todo-checklist.md").read_text(encoding="utf-8")
     assert summary["tasks"] == [
         "ThresholdEnvAutoApplyPreopen0526",
+        "IntradaySourceQualityGateCheck0526",
+        "PostcloseSourceQualityGateReview0526",
         "ThresholdDailyEVReport0526",
         "HumanInterventionSummary0526",
     ]

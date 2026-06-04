@@ -35,6 +35,7 @@
 
 - 기준선은 `main-only`, `normal_only`, `post_fallback_deprecation`이며 상세 기준은 `Plan Rebase` §1~§6을 따른다.
 - 튜닝 데이터 기준은 `clean_tuning_baseline_date=2026-06-04`, `clean_tuning_baseline_ts_kst=2026-06-04T14:29:09+09:00`이다. 기준 이전 raw/report/analytics artifact는 archive/audit evidence로만 보고 EV/rolling/MTD/cumulative tuning, live-auto promotion, runtime approval, pattern lab promotion, real execution quality approval 입력으로 쓰지 않는다.
+- 장중과 장후에는 `observation_source_quality_audit --write` 또는 최신 artifact로 raw source-quality를 반복 확인한다. Hard contract gap은 결손 row/window 제외 또는 `source_quality_blocked` 없이는 튜닝 입력에 들어갈 수 없고, unknown-token warning은 hard block이 아니더라도 code-improvement workorder handoff 확인 대상이다.
 - live 변경은 동일 단계 내 `1축 canary`만 허용한다. 진입병목축과 보유/청산축은 별개 단계이므로 병렬 canary가 가능하지만, 같은 단계 안에서는 canary 중복을 금지한다.
 - 동일 단계 replacement는 `기존 축 OFF -> restart.flag -> 새 축 ON` 순서만 쓴다.
 - 관찰창이 끝나면 `즉시 판정 -> 다음 축 즉시 착수`를 기본으로 한다. 이미 수집된 데이터로 닫을 수 있는 판정은 장후/익일로 미루지 않는다.
@@ -55,5 +56,6 @@
 - same-day에 분해 가능한 축을 `다음 장전 검토`로 넘기면 템플릿 위반이다.
 - PREOPEN checklist가 carry-over 승인 슬롯이 아니라 설계 검토 슬롯으로 변질되면 템플릿 위반이다.
 - POSTCLOSE checklist는 별도 shadow/canary 문서 확인 항목을 만들지 않는다. LDM/ADM/lifecycle bucket 상태는 `ThresholdDailyEVReport`, `RuntimeApplyGapDirectiveReview`, `HumanInterventionSummary`, `CodeImprovementWorkorderReview` 같은 산출물 기반 항목에서 닫는다.
+- 날짜별 자동 생성 checklist에는 장중 `IntradaySourceQualityGateCheck`와 장후 `PostcloseSourceQualityGateReview`를 유지한다. 이 항목이 빠지면 raw 결손/unknown-token provenance warning이 답변에만 남고 튜닝 입력 또는 workorder handoff에서 누락될 수 있으므로 템플릿 위반이다.
 - 새 `shadow` 경로를 코드에 추가하면 템플릿 위반이다. 새 관찰/후보 축은 `runtime_effect`, `decision_authority`, `source_quality_gate`, `forbidden_uses`, `stage`, `rollback guard`를 산출물 계약에 포함해야 한다.
 - 새 cohort를 문서/코드/리포트에서 만들고 checklist 또는 report/source contract에 잠금 필드를 같은 change set에서 갱신하지 않으면 템플릿 위반이다.
