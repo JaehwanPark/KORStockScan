@@ -1,6 +1,7 @@
 import requests
 import json
 import re
+import threading
 import time
 from datetime import datetime, time as datetime_time
 from zoneinfo import ZoneInfo
@@ -21,8 +22,13 @@ _LAST_DEPOSIT_OVERRIDE = None
 _LAST_SUCCESSFUL_DEPOSIT = 0
 _LAST_SUCCESSFUL_DEPOSIT_AT = 0.0
 _LAST_DEPOSIT_ERRORS = []
+_LAST_DEPOSIT_META = {}
 _DEPOSIT_API_COOLDOWN_UNTIL = 0.0
 _DEPOSIT_API_COOLDOWN_REASON = ""
+_ORDERABLE_AMOUNT_CACHE_LOCK = threading.RLock()
+_DEPOSIT_API_FETCH_LOCKS = {}
+_LAST_SUCCESSFUL_DEPOSIT_BY_KEY = {}
+_ORDERABLE_AMOUNT_CACHE = {}
 KST = ZoneInfo("Asia/Seoul")
 
 def get_last_inventory_errors():
@@ -33,6 +39,41 @@ def get_last_inventory_errors():
 def get_last_deposit_errors():
     """최근 주문가능금액 조회 실패 원인을 반환합니다."""
     return list(_LAST_DEPOSIT_ERRORS)
+
+
+def get_last_deposit_meta():
+    """최근 주문가능금액 조회 출처와 cache 상태를 반환합니다."""
+    return dict(_LAST_DEPOSIT_META)
+
+
+def reset_orderable_amount_cache():
+    """테스트/운영 진단용 주문가능금액 loop cache 초기화."""
+    global _LAST_DEPOSIT_META
+    with _ORDERABLE_AMOUNT_CACHE_LOCK:
+        _ORDERABLE_AMOUNT_CACHE.clear()
+        _DEPOSIT_API_FETCH_LOCKS.clear()
+    _LAST_DEPOSIT_META = {}
+
+
+def reset_deposit_diagnostics():
+    """테스트/운영 진단용 최근 주문가능금액 에러/메타 초기화."""
+    global _LAST_DEPOSIT_META
+    _LAST_DEPOSIT_META = {}
+    _LAST_DEPOSIT_ERRORS.clear()
+
+
+def _set_last_deposit_meta(source, *, amount=0, age_sec=None, cache_hit=False, fallback_used=False):
+    global _LAST_DEPOSIT_META
+    meta = {
+        "source": str(source or ""),
+        "amount": int(amount or 0),
+        "cache_hit": bool(cache_hit),
+        "fallback_used": bool(fallback_used),
+    }
+    if age_sec is not None:
+        meta["age_sec"] = round(float(age_sec), 3)
+    _LAST_DEPOSIT_META = meta
+    return meta
 
 
 def is_auth_failure_error(error) -> bool:
@@ -205,7 +246,73 @@ def _log_virtual_orderable_amount_once(amount, key):
     _LAST_DEPOSIT_OVERRIDE = marker
 
 
-def _remember_successful_deposit(amount):
+def _loop_cache_enabled():
+    raw_value = getattr(TRADING_RULES, "DEPOSIT_LOOP_CACHE_ENABLED", True)
+    if isinstance(raw_value, str):
+        return raw_value.strip().lower() not in {"0", "false", "no", "off", ""}
+    return bool(raw_value)
+
+
+def _loop_cache_ttl_sec():
+    return max(float(getattr(TRADING_RULES, "DEPOSIT_LOOP_CACHE_TTL_SEC", 1.0) or 0.0), 0.0)
+
+
+def _deposit_cache_key(token):
+    raw_token = str(token or "").strip()
+    if raw_token:
+        return f"token:{raw_token}"
+    return "orderable_amount"
+
+
+def _get_deposit_fetch_lock(cache_key):
+    with _ORDERABLE_AMOUNT_CACHE_LOCK:
+        lock = _DEPOSIT_API_FETCH_LOCKS.get(cache_key)
+        if lock is None:
+            lock = threading.RLock()
+            _DEPOSIT_API_FETCH_LOCKS[cache_key] = lock
+        return lock
+
+
+def _get_loop_cached_deposit(cache_key, now_ts=None):
+    if not _loop_cache_enabled():
+        return 0, 0.0
+    ttl_sec = _loop_cache_ttl_sec()
+    if ttl_sec <= 0:
+        return 0, 0.0
+    if now_ts is None:
+        now_ts = time.time()
+    with _ORDERABLE_AMOUNT_CACHE_LOCK:
+        record = dict(_ORDERABLE_AMOUNT_CACHE.get(cache_key) or {})
+        amount = int(record.get("amount") or 0)
+        updated_at = float(record.get("updated_at") or 0.0)
+    if amount <= 0 or updated_at <= 0:
+        return 0, 0.0
+    age = float(now_ts) - updated_at
+    if age < 0 or age > ttl_sec:
+        return 0, age
+    return amount, age
+
+
+def _store_loop_cached_deposit(amount, *, cache_key, source="api_fresh", now_ts=None):
+    if not _loop_cache_enabled():
+        return
+    try:
+        normalized = int(float(amount or 0))
+    except (TypeError, ValueError):
+        normalized = 0
+    if normalized <= 0:
+        return
+    if now_ts is None:
+        now_ts = time.time()
+    with _ORDERABLE_AMOUNT_CACHE_LOCK:
+        _ORDERABLE_AMOUNT_CACHE[cache_key] = {
+            "amount": normalized,
+            "updated_at": float(now_ts),
+            "source": str(source or "api_fresh"),
+        }
+
+
+def _remember_successful_deposit(amount, *, cache_key=None, loop_cache_source=None):
     global _LAST_SUCCESSFUL_DEPOSIT, _LAST_SUCCESSFUL_DEPOSIT_AT
     global _DEPOSIT_API_COOLDOWN_UNTIL, _DEPOSIT_API_COOLDOWN_REASON
     try:
@@ -216,14 +323,36 @@ def _remember_successful_deposit(amount):
         return
     _LAST_SUCCESSFUL_DEPOSIT = normalized
     _LAST_SUCCESSFUL_DEPOSIT_AT = time.time()
+    if cache_key:
+        _LAST_SUCCESSFUL_DEPOSIT_BY_KEY[cache_key] = {
+            "amount": normalized,
+            "updated_at": _LAST_SUCCESSFUL_DEPOSIT_AT,
+        }
     _DEPOSIT_API_COOLDOWN_UNTIL = 0.0
     _DEPOSIT_API_COOLDOWN_REASON = ""
+    if loop_cache_source:
+        _store_loop_cached_deposit(
+            normalized,
+            cache_key=cache_key or "orderable_amount",
+            source=loop_cache_source,
+            now_ts=_LAST_SUCCESSFUL_DEPOSIT_AT,
+        )
 
 
-def get_cached_deposit(max_age_sec=None):
+def get_cached_deposit(max_age_sec=None, cache_key=None):
     """최근 정상 주문가능금액이 충분히 최신이면 fallback 값으로 반환합니다."""
     if max_age_sec is None:
         max_age_sec = int(getattr(TRADING_RULES, "DEPOSIT_CACHE_FALLBACK_TTL_SEC", 30) or 30)
+    if cache_key:
+        record = dict(_LAST_SUCCESSFUL_DEPOSIT_BY_KEY.get(cache_key) or {})
+        amount = int(record.get("amount") or 0)
+        updated_at = float(record.get("updated_at") or 0.0)
+        if amount <= 0 or max_age_sec <= 0:
+            return 0
+        age = time.time() - updated_at
+        if age > float(max_age_sec):
+            return 0
+        return amount
     if _LAST_SUCCESSFUL_DEPOSIT <= 0 or max_age_sec <= 0:
         return 0
     age = time.time() - float(_LAST_SUCCESSFUL_DEPOSIT_AT or 0.0)
@@ -232,22 +361,50 @@ def get_cached_deposit(max_age_sec=None):
     return int(_LAST_SUCCESSFUL_DEPOSIT)
 
 
+def _cached_deposit_age_sec(cache_key=None):
+    if cache_key:
+        record = dict(_LAST_SUCCESSFUL_DEPOSIT_BY_KEY.get(cache_key) or {})
+        updated_at = float(record.get("updated_at") or 0.0)
+        if updated_at > 0:
+            return time.time() - updated_at
+    return time.time() - float(_LAST_SUCCESSFUL_DEPOSIT_AT or 0.0)
+
+
 def get_deposit(token):
     """
     [kt00001] 예수금 조회 - return_code 대응 수정
     """
-    global _DEPOSIT_API_COOLDOWN_UNTIL, _DEPOSIT_API_COOLDOWN_REASON
     _LAST_DEPOSIT_ERRORS.clear()
     virtual_amount, config_key = _get_virtual_orderable_amount()
     if virtual_amount > 0:
         _log_virtual_orderable_amount_once(virtual_amount, config_key)
         _remember_successful_deposit(virtual_amount)
+        _set_last_deposit_meta("virtual_override", amount=virtual_amount)
         return virtual_amount
 
+    cache_key = _deposit_cache_key(token)
+    with _get_deposit_fetch_lock(cache_key):
+        return _get_deposit_real(token, cache_key)
+
+
+def _get_deposit_real(token, cache_key):
+    global _DEPOSIT_API_COOLDOWN_UNTIL, _DEPOSIT_API_COOLDOWN_REASON
+    _LAST_DEPOSIT_ERRORS.clear()
+
     now_ts = time.time()
+    loop_cached_amount, loop_cached_age = _get_loop_cached_deposit(cache_key, now_ts=now_ts)
+    if loop_cached_amount > 0:
+        _set_last_deposit_meta(
+            "loop_cache",
+            amount=loop_cached_amount,
+            age_sec=loop_cached_age,
+            cache_hit=True,
+        )
+        return loop_cached_amount
+
     if _DEPOSIT_API_COOLDOWN_UNTIL > now_ts:
         cooldown_remaining = _DEPOSIT_API_COOLDOWN_UNTIL - now_ts
-        cached_amount = get_cached_deposit()
+        cached_amount = get_cached_deposit(cache_key=cache_key)
         cooldown_classification = (
             'deposit_transport_cooldown'
             if str(_DEPOSIT_API_COOLDOWN_REASON or '').startswith('kt00001 transport')
@@ -266,11 +423,20 @@ def get_deposit(token):
             }
         )
         if cached_amount > 0:
+            cached_age = _cached_deposit_age_sec(cache_key)
+            _set_last_deposit_meta(
+                "cooldown_fallback",
+                amount=cached_amount,
+                age_sec=cached_age,
+                cache_hit=False,
+                fallback_used=True,
+            )
             log_info(
                 f"⚠️ [예수금조회 cooldown fallback] 최근 정상 주문가능금액 사용 "
                 f"({cached_amount:,}원, cooldown_remaining={cooldown_remaining:.1f}s)"
             )
             return cached_amount
+        _set_last_deposit_meta("fail_closed_zero", amount=0)
         log_error(
             f"❌ [예수금조회 cooldown] {_DEPOSIT_API_COOLDOWN_REASON or 'kt00001 cooldown active'} "
             f"(remaining={cooldown_remaining:.1f}s) - 주문가능금액 0 fail-closed"
@@ -310,7 +476,8 @@ def get_deposit(token):
                     log_error(f"❌ [예수금조회 응답스키마] attempt={attempt}/{retries} 사유: {exc}")
                     break
                 if amount > 0:
-                    _remember_successful_deposit(amount)
+                    _remember_successful_deposit(amount, cache_key=cache_key, loop_cache_source="api_fresh")
+                _set_last_deposit_meta("api_fresh", amount=amount)
                 return amount
 
             err_msg = data.get('return_msg') or data.get('err_msg') or '상세 사유 없음'
@@ -361,14 +528,22 @@ def get_deposit(token):
         if attempt < retries and retry_delay > 0:
             time.sleep(retry_delay)
 
-    cached_amount = get_cached_deposit()
+    cached_amount = get_cached_deposit(cache_key=cache_key)
     if cached_amount > 0:
-        cached_age = time.time() - float(_LAST_SUCCESSFUL_DEPOSIT_AT or 0.0)
+        cached_age = _cached_deposit_age_sec(cache_key)
+        _set_last_deposit_meta(
+            "stale_cache_fallback",
+            amount=cached_amount,
+            age_sec=cached_age,
+            cache_hit=False,
+            fallback_used=True,
+        )
         log_info(
             f"⚠️ [예수금조회 fallback] 최근 정상 주문가능금액 사용 "
             f"({cached_amount:,}원, age={cached_age:.1f}s)"
         )
         return cached_amount
+    _set_last_deposit_meta("fail_closed_zero", amount=0)
     return 0
 
 def get_my_inventory(token):

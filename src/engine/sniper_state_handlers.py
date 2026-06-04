@@ -11778,6 +11778,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         return False
 
     deposit = kiwoom_orders.get_deposit(KIWOOM_TOKEN)
+    deposit_meta = kiwoom_orders.get_last_deposit_meta()
     uncapped_target_budget = int(max(float(deposit) * float(ratio), 0.0))
     budget_cap = 0
     if strategy == 'SCALPING':
@@ -11845,6 +11846,9 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         stock, code, "budget_pass", deposit=deposit, ratio=f"{ratio:.4f}", target_budget=target_budget,
         safe_budget=safe_budget, safety_ratio=f"{used_safety_ratio:.4f}",
         budget_cap=budget_cap if budget_cap_applied else "-", qty=real_buy_qty,
+        deposit_source=deposit_meta.get("source", "-"),
+        deposit_age_sec=deposit_meta.get("age_sec", "-"),
+        deposit_cache_hit=deposit_meta.get("cache_hit", False),
         **_scalp_pre_ai_gate_context_log_fields(runtime.get("scalp_pre_ai_gate_context")),
         **_build_observation_contract_fields("funnel_count"),
     )

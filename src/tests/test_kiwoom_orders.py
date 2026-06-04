@@ -1,10 +1,33 @@
 import sys
 import types
 
+import pytest
+
 sys.modules.setdefault("holidays", types.SimpleNamespace())
 
 import src.engine.kiwoom_orders as kiwoom_orders
 import src.engine.sniper_config as sniper_config
+
+
+@pytest.fixture(autouse=True)
+def reset_deposit_cache(monkeypatch):
+    monkeypatch.setattr(kiwoom_orders, "_LAST_SUCCESSFUL_DEPOSIT", 0)
+    monkeypatch.setattr(kiwoom_orders, "_LAST_SUCCESSFUL_DEPOSIT_AT", 0.0)
+    monkeypatch.setattr(kiwoom_orders, "_LAST_SUCCESSFUL_DEPOSIT_BY_KEY", {})
+    monkeypatch.setattr(kiwoom_orders, "_DEPOSIT_API_COOLDOWN_UNTIL", 0.0)
+    monkeypatch.setattr(kiwoom_orders, "_DEPOSIT_API_COOLDOWN_REASON", "")
+    kiwoom_orders.reset_orderable_amount_cache()
+    kiwoom_orders.reset_deposit_diagnostics()
+
+
+def _seed_successful_deposit_for_token(token, amount, updated_at):
+    cache_key = kiwoom_orders._deposit_cache_key(token)
+    kiwoom_orders._LAST_SUCCESSFUL_DEPOSIT = int(amount)
+    kiwoom_orders._LAST_SUCCESSFUL_DEPOSIT_AT = float(updated_at)
+    kiwoom_orders._LAST_SUCCESSFUL_DEPOSIT_BY_KEY[cache_key] = {
+        "amount": int(amount),
+        "updated_at": float(updated_at),
+    }
 
 
 def test_get_deposit_uses_virtual_orderable_amount(monkeypatch):
@@ -21,6 +44,7 @@ def test_get_deposit_uses_virtual_orderable_amount(monkeypatch):
     monkeypatch.setattr(kiwoom_orders.requests, "post", _should_not_call_api)
 
     assert kiwoom_orders.get_deposit("TOKEN") == 10_000_000
+    assert kiwoom_orders.get_last_deposit_meta()["source"] == "virtual_override"
 
 
 def test_get_deposit_falls_back_to_api_when_virtual_amount_disabled(monkeypatch):
@@ -116,11 +140,171 @@ def test_get_deposit_retries_then_succeeds(monkeypatch):
     assert state["count"] == 2
 
 
+def test_get_deposit_reuses_loop_cache_within_ttl(monkeypatch):
+    class DummyResponse:
+        status_code = 200
+
+        def json(self):
+            return {"rt_cd": "0", "ord_alow_amt": "12345678"}
+
+    post_count = {"value": 0}
+    current_time = {"value": 1_000.0}
+
+    def _post(*args, **kwargs):
+        post_count["value"] += 1
+        return DummyResponse()
+
+    monkeypatch.setattr(sniper_config, "CONF", {"VIRTUAL_ORDERABLE_AMOUNT": 0})
+    monkeypatch.setattr(kiwoom_orders.kiwoom_utils, "get_api_url", lambda path: f"https://example.test{path}")
+    monkeypatch.setattr(kiwoom_orders.requests, "post", _post)
+    monkeypatch.setattr(kiwoom_orders.time, "time", lambda: current_time["value"])
+    monkeypatch.setattr(
+        kiwoom_orders,
+        "TRADING_RULES",
+        types.SimpleNamespace(
+            DEPOSIT_API_RETRY_COUNT=1,
+            DEPOSIT_API_RETRY_DELAY_SEC=0.0,
+            DEPOSIT_LOOP_CACHE_ENABLED=True,
+            DEPOSIT_LOOP_CACHE_TTL_SEC=1.0,
+            DEPOSIT_CACHE_FALLBACK_TTL_SEC=30,
+        ),
+    )
+
+    assert kiwoom_orders.get_deposit("TOKEN") == 12_345_678
+    assert kiwoom_orders.get_last_deposit_meta()["source"] == "api_fresh"
+    current_time["value"] = 1_000.5
+    assert kiwoom_orders.get_deposit("TOKEN") == 12_345_678
+    assert post_count["value"] == 1
+    meta = kiwoom_orders.get_last_deposit_meta()
+    assert meta["source"] == "loop_cache"
+    assert meta["cache_hit"] is True
+
+
+def test_get_deposit_refreshes_after_loop_cache_ttl(monkeypatch):
+    class DummyResponse:
+        status_code = 200
+
+        def __init__(self, amount):
+            self.amount = amount
+
+        def json(self):
+            return {"rt_cd": "0", "ord_alow_amt": str(self.amount)}
+
+    responses = [DummyResponse(1_000_000), DummyResponse(2_000_000)]
+    current_time = {"value": 1_000.0}
+
+    def _post(*args, **kwargs):
+        return responses.pop(0)
+
+    monkeypatch.setattr(sniper_config, "CONF", {"VIRTUAL_ORDERABLE_AMOUNT": 0})
+    monkeypatch.setattr(kiwoom_orders.kiwoom_utils, "get_api_url", lambda path: f"https://example.test{path}")
+    monkeypatch.setattr(kiwoom_orders.requests, "post", _post)
+    monkeypatch.setattr(kiwoom_orders.time, "time", lambda: current_time["value"])
+    monkeypatch.setattr(
+        kiwoom_orders,
+        "TRADING_RULES",
+        types.SimpleNamespace(
+            DEPOSIT_API_RETRY_COUNT=1,
+            DEPOSIT_API_RETRY_DELAY_SEC=0.0,
+            DEPOSIT_LOOP_CACHE_ENABLED=True,
+            DEPOSIT_LOOP_CACHE_TTL_SEC=1.0,
+            DEPOSIT_CACHE_FALLBACK_TTL_SEC=30,
+        ),
+    )
+
+    assert kiwoom_orders.get_deposit("TOKEN") == 1_000_000
+    current_time["value"] = 1_002.0
+    assert kiwoom_orders.get_deposit("TOKEN") == 2_000_000
+    assert responses == []
+
+
+def test_get_deposit_loop_cache_can_be_disabled_by_string_config(monkeypatch):
+    class DummyResponse:
+        status_code = 200
+
+        def __init__(self, amount):
+            self.amount = amount
+
+        def json(self):
+            return {"rt_cd": "0", "ord_alow_amt": str(self.amount)}
+
+    responses = [DummyResponse(1_000_000), DummyResponse(2_000_000)]
+    current_time = {"value": 1_000.0}
+
+    def _post(*args, **kwargs):
+        return responses.pop(0)
+
+    monkeypatch.setattr(sniper_config, "CONF", {"VIRTUAL_ORDERABLE_AMOUNT": 0})
+    monkeypatch.setattr(kiwoom_orders.kiwoom_utils, "get_api_url", lambda path: f"https://example.test{path}")
+    monkeypatch.setattr(kiwoom_orders.requests, "post", _post)
+    monkeypatch.setattr(kiwoom_orders.time, "time", lambda: current_time["value"])
+    monkeypatch.setattr(
+        kiwoom_orders,
+        "TRADING_RULES",
+        types.SimpleNamespace(
+            DEPOSIT_API_RETRY_COUNT=1,
+            DEPOSIT_API_RETRY_DELAY_SEC=0.0,
+            DEPOSIT_LOOP_CACHE_ENABLED="false",
+            DEPOSIT_LOOP_CACHE_TTL_SEC=1.0,
+            DEPOSIT_CACHE_FALLBACK_TTL_SEC=30,
+        ),
+    )
+
+    assert kiwoom_orders.get_deposit("TOKEN") == 1_000_000
+    assert kiwoom_orders.get_deposit("TOKEN") == 2_000_000
+    assert responses == []
+
+
+def test_get_deposit_loop_cache_isolated_by_token(monkeypatch):
+    class DummyResponse:
+        status_code = 200
+
+        def __init__(self, amount):
+            self.amount = amount
+
+        def json(self):
+            return {"rt_cd": "0", "ord_alow_amt": str(self.amount)}
+
+    responses = [DummyResponse(1_000_000), DummyResponse(2_000_000)]
+    current_time = {"value": 1_000.0}
+
+    def _post(*args, **kwargs):
+        return responses.pop(0)
+
+    monkeypatch.setattr(sniper_config, "CONF", {"VIRTUAL_ORDERABLE_AMOUNT": 0})
+    monkeypatch.setattr(kiwoom_orders.kiwoom_utils, "get_api_url", lambda path: f"https://example.test{path}")
+    monkeypatch.setattr(kiwoom_orders.requests, "post", _post)
+    monkeypatch.setattr(kiwoom_orders.time, "time", lambda: current_time["value"])
+    monkeypatch.setattr(
+        kiwoom_orders,
+        "TRADING_RULES",
+        types.SimpleNamespace(
+            DEPOSIT_API_RETRY_COUNT=1,
+            DEPOSIT_API_RETRY_DELAY_SEC=0.0,
+            DEPOSIT_LOOP_CACHE_ENABLED=True,
+            DEPOSIT_LOOP_CACHE_TTL_SEC=1.0,
+            DEPOSIT_CACHE_FALLBACK_TTL_SEC=30,
+        ),
+    )
+
+    assert kiwoom_orders.get_deposit("TOKEN_A") == 1_000_000
+    current_time["value"] = 1_000.5
+    assert kiwoom_orders.get_deposit("TOKEN_B") == 2_000_000
+    assert responses == []
+
+
+def test_reset_orderable_amount_cache_keeps_last_errors():
+    kiwoom_orders._LAST_DEPOSIT_ERRORS.append({"classification": "deposit_transport_failure"})
+
+    kiwoom_orders.reset_orderable_amount_cache()
+
+    assert kiwoom_orders.get_last_deposit_errors() == [{"classification": "deposit_transport_failure"}]
+
+
 def test_get_deposit_uses_recent_cached_amount_after_api_failure(monkeypatch):
     monkeypatch.setattr(sniper_config, "CONF", {"VIRTUAL_ORDERABLE_AMOUNT": 0})
     monkeypatch.setattr(kiwoom_orders, "_LAST_DEPOSIT_OVERRIDE", None)
-    monkeypatch.setattr(kiwoom_orders, "_LAST_SUCCESSFUL_DEPOSIT", 9_876_543)
-    monkeypatch.setattr(kiwoom_orders, "_LAST_SUCCESSFUL_DEPOSIT_AT", 1_000.0)
+    _seed_successful_deposit_for_token("TOKEN", 9_876_543, 1_000.0)
     monkeypatch.setattr(
         kiwoom_orders.kiwoom_utils,
         "get_api_url",
@@ -156,8 +340,7 @@ def test_get_deposit_enters_short_cooldown_after_request_limit(monkeypatch):
 
     monkeypatch.setattr(sniper_config, "CONF", {"VIRTUAL_ORDERABLE_AMOUNT": 0})
     monkeypatch.setattr(kiwoom_orders, "_LAST_DEPOSIT_OVERRIDE", None)
-    monkeypatch.setattr(kiwoom_orders, "_LAST_SUCCESSFUL_DEPOSIT", 9_876_543)
-    monkeypatch.setattr(kiwoom_orders, "_LAST_SUCCESSFUL_DEPOSIT_AT", 995.0)
+    _seed_successful_deposit_for_token("TOKEN", 9_876_543, 995.0)
     monkeypatch.setattr(kiwoom_orders, "_DEPOSIT_API_COOLDOWN_UNTIL", 0.0)
     monkeypatch.setattr(kiwoom_orders, "_DEPOSIT_API_COOLDOWN_REASON", "")
     monkeypatch.setattr(
@@ -202,8 +385,7 @@ def test_get_deposit_request_limit_breaks_same_call_retry(monkeypatch):
 
     monkeypatch.setattr(sniper_config, "CONF", {"VIRTUAL_ORDERABLE_AMOUNT": 0})
     monkeypatch.setattr(kiwoom_orders, "_LAST_DEPOSIT_OVERRIDE", None)
-    monkeypatch.setattr(kiwoom_orders, "_LAST_SUCCESSFUL_DEPOSIT", 9_876_543)
-    monkeypatch.setattr(kiwoom_orders, "_LAST_SUCCESSFUL_DEPOSIT_AT", 995.0)
+    _seed_successful_deposit_for_token("TOKEN", 9_876_543, 995.0)
     monkeypatch.setattr(kiwoom_orders, "_DEPOSIT_API_COOLDOWN_UNTIL", 0.0)
     monkeypatch.setattr(kiwoom_orders, "_DEPOSIT_API_COOLDOWN_REASON", "")
     monkeypatch.setattr(
@@ -242,7 +424,7 @@ def test_get_deposit_transport_failure_enters_short_cooldown(monkeypatch):
                 "return_msg": "(-994:fail to sendReceive:WINGSj)",
             }
 
-    times = iter([1_000.0, 1_000.0, 1_000.0, 1_001.0, 1_001.0, 1_001.0])
+    times = iter([1_000.0, 1_000.0, 1_000.0, 1_000.0, 1_001.0, 1_001.0, 1_001.0, 1_001.0])
     post_count = {"value": 0}
 
     def _post(*args, **kwargs):
@@ -251,8 +433,7 @@ def test_get_deposit_transport_failure_enters_short_cooldown(monkeypatch):
 
     monkeypatch.setattr(sniper_config, "CONF", {"VIRTUAL_ORDERABLE_AMOUNT": 0})
     monkeypatch.setattr(kiwoom_orders, "_LAST_DEPOSIT_OVERRIDE", None)
-    monkeypatch.setattr(kiwoom_orders, "_LAST_SUCCESSFUL_DEPOSIT", 9_876_543)
-    monkeypatch.setattr(kiwoom_orders, "_LAST_SUCCESSFUL_DEPOSIT_AT", 995.0)
+    _seed_successful_deposit_for_token("TOKEN", 9_876_543, 995.0)
     monkeypatch.setattr(kiwoom_orders, "_DEPOSIT_API_COOLDOWN_UNTIL", 0.0)
     monkeypatch.setattr(kiwoom_orders, "_DEPOSIT_API_COOLDOWN_REASON", "")
     monkeypatch.setattr(
@@ -279,10 +460,12 @@ def test_get_deposit_transport_failure_enters_short_cooldown(monkeypatch):
     assert kiwoom_orders.get_deposit("TOKEN") == 9_876_543
     assert post_count["value"] == 1
     assert kiwoom_orders.get_last_deposit_errors()[0]["classification"] == "deposit_transport_failure"
+    assert kiwoom_orders.get_last_deposit_meta()["source"] == "stale_cache_fallback"
 
     assert kiwoom_orders.get_deposit("TOKEN") == 9_876_543
     assert post_count["value"] == 1
     assert kiwoom_orders.get_last_deposit_errors()[0]["classification"] == "deposit_transport_cooldown"
+    assert kiwoom_orders.get_last_deposit_meta()["source"] == "cooldown_fallback"
 
 
 def test_get_deposit_transport_cooldown_without_cache_fails_closed(monkeypatch):
@@ -324,6 +507,7 @@ def test_get_deposit_transport_cooldown_without_cache_fails_closed(monkeypatch):
 
     assert kiwoom_orders.get_deposit("TOKEN") == 0
     assert kiwoom_orders.get_last_deposit_errors()[0]["classification"] == "deposit_transport_failure"
+    assert kiwoom_orders.get_last_deposit_meta()["source"] == "fail_closed_zero"
 
 
 def test_get_deposit_transport_message_code_enters_cooldown(monkeypatch):
@@ -344,8 +528,7 @@ def test_get_deposit_transport_message_code_enters_cooldown(monkeypatch):
 
     monkeypatch.setattr(sniper_config, "CONF", {"VIRTUAL_ORDERABLE_AMOUNT": 0})
     monkeypatch.setattr(kiwoom_orders, "_LAST_DEPOSIT_OVERRIDE", None)
-    monkeypatch.setattr(kiwoom_orders, "_LAST_SUCCESSFUL_DEPOSIT", 9_876_543)
-    monkeypatch.setattr(kiwoom_orders, "_LAST_SUCCESSFUL_DEPOSIT_AT", 995.0)
+    _seed_successful_deposit_for_token("TOKEN", 9_876_543, 995.0)
     monkeypatch.setattr(kiwoom_orders, "_DEPOSIT_API_COOLDOWN_UNTIL", 0.0)
     monkeypatch.setattr(kiwoom_orders, "_DEPOSIT_API_COOLDOWN_REASON", "")
     monkeypatch.setattr(kiwoom_orders.kiwoom_utils, "get_api_url", lambda path: f"https://example.test{path}")
@@ -379,8 +562,7 @@ def test_get_deposit_success_with_invalid_orderable_amount_uses_cache(monkeypatc
 
     monkeypatch.setattr(sniper_config, "CONF", {"VIRTUAL_ORDERABLE_AMOUNT": 0})
     monkeypatch.setattr(kiwoom_orders, "_LAST_DEPOSIT_OVERRIDE", None)
-    monkeypatch.setattr(kiwoom_orders, "_LAST_SUCCESSFUL_DEPOSIT", 9_876_543)
-    monkeypatch.setattr(kiwoom_orders, "_LAST_SUCCESSFUL_DEPOSIT_AT", 995.0)
+    _seed_successful_deposit_for_token("TOKEN", 9_876_543, 995.0)
     monkeypatch.setattr(kiwoom_orders, "_DEPOSIT_API_COOLDOWN_UNTIL", 0.0)
     monkeypatch.setattr(kiwoom_orders, "_DEPOSIT_API_COOLDOWN_REASON", "")
     monkeypatch.setattr(kiwoom_orders.kiwoom_utils, "get_api_url", lambda path: f"https://example.test{path}")

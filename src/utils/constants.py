@@ -182,6 +182,8 @@ class TradingConfig:
     BUY_BUDGET_RELAXED_SAFETY_RATIO: float = 1.00  # 1주도 안 나올 때만 재시도하는 완화 안전계수
     DEPOSIT_API_RETRY_COUNT: int = 2  # 주문가능금액 조회 일시 실패 시 재시도 횟수
     DEPOSIT_API_RETRY_DELAY_SEC: float = 0.15  # 주문가능금액 재시도 간격(초)
+    DEPOSIT_LOOP_CACHE_ENABLED: bool = True  # 같은 루프/틱 내 주문가능금액 API 재호출 억제
+    DEPOSIT_LOOP_CACHE_TTL_SEC: float = 1.0  # 주문가능금액 fresh loop cache TTL(초)
     DEPOSIT_API_REQUEST_LIMIT_COOLDOWN_SEC: float = 10.0  # kt00001 요청 제한 감지 후 API 재호출 억제 시간(초)
     DEPOSIT_API_TRANSPORT_COOLDOWN_SEC: float = 5.0  # kt00001 sendReceive/WINGSj transport 실패 후 API 재호출 억제 시간(초)
     DEPOSIT_CACHE_FALLBACK_TTL_SEC: int = 30  # 최근 정상 주문가능금액 fallback 허용 시간(초)
