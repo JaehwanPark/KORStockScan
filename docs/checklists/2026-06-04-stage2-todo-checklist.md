@@ -147,6 +147,14 @@
   - 금지: trigger decision을 PREOPEN apply, final verifier, broker/order/provider/cap/bot/threshold, hard-safety/source-quality fail-closed 경계 변경 근거로 사용하지 않는다.
   - 다음 액션: `trigger_contract_pass`, `unexpected_all_run`, `skip_marker_missing`, `source_missing_run_required`, `force_override_detected`, `needs_followup_patch` 중 하나로 닫는다.
 
+- [ ] `[PostcloseAutomationHealthCheck20260604] Runbook 운영 확인 큐: 장후 자동화체인 및 DONE controller/Codex runner 감시 결과 확인` (`Due: 2026-06-04`, `Slot: POSTCLOSE`, `TimeWindow: 18:40~18:55`, `Track: RunbookOps`)
+  - Source: [time-based-operations-runbook.md](/home/ubuntu/KORStockScan/docs/time-based-operations-runbook.md), [run_threshold_cycle_postclose.sh](/home/ubuntu/KORStockScan/deploy/run_threshold_cycle_postclose.sh), [run_postclose_done_controller.sh](/home/ubuntu/KORStockScan/deploy/run_postclose_done_controller.sh), [install_postclose_done_controller_cron.sh](/home/ubuntu/KORStockScan/deploy/install_postclose_done_controller_cron.sh)
+  - 판정 기준: postclose wrapper `[START]/[DONE]/[FAIL]`, `threshold_cycle_postclose_verification`, `runtime_apply_gap_audit`, `code_improvement_workorder`, `postclose_done_controller`, `codex_workorder_runner`, `tuning_performance_control_tower`, cron logs를 같은 날짜 최신 generation으로 대조한다. `postclose_done_controller`가 recoverable warning/fail을 source refresh, retry queue/workorder regeneration, verifier rerun, guarded same-date wrapper rerun으로 해소했는지 확인하고, Codex workorder runner가 safe-scope `implement_now` 항목만 별도 worktree에서 구현/검증/커밋했는지 확인한다.
+  - IN scope: `data/report/postclose_done_controller/postclose_done_controller_2026-06-04.{json,md}`, `data/report/codex_workorder_runner/codex_workorder_runner_2026-06-04.{json,md}`, `logs/postclose_done_controller_cron.log`, `tmp/codex_worktrees/codex-workorder-2026-06-04`, `codex/workorder-2026-06-04-*` branch/commit audit, Codex SDK package/auth/timeout/blocker status.
+  - OUT scope: real order authority, PREOPEN live env 직접 수정, provider route 변경, bot restart, cap release, broker/order guard 변경, hard/protect/emergency safety 완화, 장후 wrapper/controller 결과를 근거로 한 수동 threshold mutation.
+  - Acceptance: controller status가 `done` 또는 documented blocked state로 닫히고 predecessor wait/timeout/fail, final verifier, required audit/workorder/control-tower freshness가 설명된다. Codex runner는 `completed`, `no_safe_orders`, 또는 `blocked_*`를 명확히 남기며, blocked이면 `codex_package_unavailable|codex_login_required|codex_login_timeout|forbidden_diff|worktree_dirty|worktree_stale_head|unsupported_acceptance_tests` 중 원인을 분리한다.
+  - 다음 액션: `postclose_chain_done`, `controller_recovered_and_done`, `controller_blocked_non_recoverable`, `codex_runner_completed`, `codex_runner_blocked_user_action_required`, `postclose_artifact_wait`, `followup_workorder_required` 중 하나로 닫고, 사용자 조치가 필요한 경우 Project/Calendar sync와 분리해 기록한다.
+
 <!-- AUTO_NEXT_STAGE2_CHECKLIST_END -->
 
 ## Project/Calendar 동기화
