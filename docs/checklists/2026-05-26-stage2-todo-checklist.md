@@ -64,12 +64,10 @@ Implementation note (`2026-05-26 scalping entry live promotion unlock`): 기존 
   - 다음 액션: 장중 `RuntimeEnvIntradayObserve0526`에서 runtime event provenance와 rollback guard breach 여부를 확인한다. 이 확인은 장중 threshold mutation 근거가 아니다.
 
 - [x] `[OpenAIAndLiteTransportPreopenConfirm0526] OpenAI WS 유지 및 Lite endpoint provenance 확인` (`Due: 2026-05-26`, `Slot: PREOPEN`, `TimeWindow: 08:55~09:00`, `Track: RuntimeStability`)
-  - Source: [openai_ws_stability_2026-05-22.md](/home/ubuntu/KORStockScan/data/report/openai_ws/openai_ws_stability_2026-05-22.md), [run_bot.sh](/home/ubuntu/KORStockScan/src/run_bot.sh), [ai_engine_openai.py](/home/ubuntu/KORStockScan/src/engine/ai_engine_openai.py)
   - 판정 기준: startup env의 OpenAI route/Responses WS 설정과 `analyze_target` OpenAI provenance, `entry_price`/`holding_flow` Lite primary provenance, 기타 Tier2 endpoint OpenAI 유지 여부를 분리 확인한다.
   - 금지: provider transport 확인을 threshold 값, 주문가/수량 guard, 스윙 dry-run guard 변경으로 해석하지 않는다.
   - 다음 액션: Lite endpoint 또는 OpenAI 유지 표본이 부족하면 장중 표본 재확인 항목과 연결한다.
   - 판정: `openai_ws_keep_lite_primary_scope_confirmed_sample_pending`
-  - 근거: [run_bot.sh](/home/ubuntu/KORStockScan/src/run_bot.sh)는 `KORSTOCKSCAN_OPENAI_TRANSPORT_MODE=responses_ws`, `KORSTOCKSCAN_OPENAI_RESPONSES_WS_ENABLED=true`, `KORSTOCKSCAN_OPENAI_RESPONSES_WS_TIMEOUT_MS=15000`를 유지한다. [openai_ws_stability_2026-05-22.md](/home/ubuntu/KORStockScan/data/report/openai_ws/openai_ws_stability_2026-05-22.md)는 `decision=keep_ws`, unique WS calls `3715`, fallback `0/3715`, WS success rate `1.0`, `entry_price` WS sample `134`를 기록했다. Lite primary endpoint는 `entry_price,holding_flow`로 제한되어 있으나 05-26 장중 provider provenance 표본은 아직 전이다.
   - 다음 액션: 장중 `analyze_target` OpenAI WS provenance와 `entry_price`/`holding_flow` Bedrock Lite primary/failback provenance를 분리 확인한다. provider transport 확인을 threshold/order/swing dry-run 변경으로 확장하지 않는다.
 
 - [x] `[SwingPreFinalAutoAndFinalApprovalPreopen0526] 스윙 pre-final auto state 및 final approval artifact 확인` (`Due: 2026-05-26`, `Slot: PREOPEN`, `TimeWindow: 08:45~08:50`, `Track: RuntimeStability`)

@@ -28,7 +28,6 @@
 
 - 운영 확인 기록 (`PreopenAutomationHealthCheck20260515`, `PVTI_lAHOAXZuE84BUTcPzgsxrk4`): 판정은 `warning`. `threshold_cycle_preopen`과 bot runtime env 적용은 pass, OpenAI `entry_price` WS 표본 0건은 장중 재확인으로 연결, 스윙 approval request 2건은 approval artifact missing으로 정상 차단.
 
-- 장전 재확인 기록 (`2026-05-15 08:14 KST`): 판정은 `warning_recheck_resolved`. `threshold_cycle_preopen` `[DONE]`, apply plan status=`auto_bounded_live_ready`, runtime env override=`KORSTOCKSCAN_SCALP_SOFT_STOP_WHIPSAW_CONFIRMATION_ENABLED=true`, tmux `bot`/`bot_main.py` 실행, OpenAI route=`openai` 고정, 스윙 approval request 2건의 `approval_artifact_missing` 차단은 모두 기존 판정과 일치한다. 실행 중인 `bot_main.py` env에도 `KORSTOCKSCAN_OPENAI_TRANSPORT_MODE=responses_ws`, `KORSTOCKSCAN_OPENAI_RESPONSES_WS_ENABLED=true`가 들어 있어 현재 통신 방식은 WS다. 충돌 원인은 [openai_ws_stability_2026-05-14.json](/home/ubuntu/KORStockScan/data/report/openai_ws/openai_ws_stability_2026-05-14.json)의 기존 decision logic이 `TimeoutError` 2건을 fallback 0건/WS success 1.0/p95 2863ms와 분리하지 못하고 `rollback_http`로 과대 판정한 것이다. `openai_ws_stability_report`를 보정해 low-rate transport error는 `transport_warning.warning_only=true`로 분리했고, 재생성 결과 `decision=keep_ws`, `ws_error_count=2`, `ws_error_rate=0.0021`로 Markdown 판정과 일치한다. 이 warning만으로 runtime/provider/threshold/order guard를 변경하지 않는다.
 
 - [x] `[ThresholdEnvAutoApplyPreopen0515] threshold env 자동 apply 산출물 및 사용자 개입 여부 확인` (`Due: 2026-05-15`, `Slot: PREOPEN`, `TimeWindow: 08:50~08:55`, `Track: RuntimeStability`)
   - Source: [threshold_cycle_ev_2026-05-14.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-05-14.json), [threshold_cycle_preopen_apply.py](/home/ubuntu/KORStockScan/src/engine/threshold_cycle_preopen_apply.py), [run_bot.sh](/home/ubuntu/KORStockScan/src/run_bot.sh)
@@ -47,14 +46,6 @@
 - 해석: daily 5/14는 score65~74 병목과 양의 EV/close 신호를 보여 후보로 남겼지만, Plan Rebase/threshold README의 current window policy는 daily trigger만으로 live/bounded apply를 확정하지 않고 rolling/cumulative primary로 재확인한다. 따라서 5/14 11:29의 `logic_fix_ready_not_runtime_applied`는 “5/13 source bug fix 검증 결과”이고, 5/15 실제 runtime env 적용 결과는 “5/14 rolling 재평가 후 미오픈”이다.
 - 다음 액션: 장중 runtime threshold mutation은 하지 않는다. score65~74는 오늘 장후 `ThresholdDailyEVReport0515`와 `RuntimeEnvIntradayObserve0515`에서 `selected/applied/not-applied`, daily trigger, rolling primary를 분리해 다시 판정한다.
 
-- [x] `[OpenAIWSPreopenConfirm0515] OpenAI WS 유지 설정 및 entry_price/analyze_target provenance 확인` (`Due: 2026-05-15`, `Slot: PREOPEN`, `TimeWindow: 08:55~09:00`, `Track: RuntimeStability`)
-  - Source: [openai_ws_stability_2026-05-14.md](/home/ubuntu/KORStockScan/data/report/openai_ws/openai_ws_stability_2026-05-14.md), [run_bot.sh](/home/ubuntu/KORStockScan/src/run_bot.sh), [ai_engine_openai.py](/home/ubuntu/KORStockScan/src/engine/ai_engine_openai.py)
-  - 판정 기준: startup env의 OpenAI route/Responses WS 설정과 `analyze_target`, `entry_price` transport provenance를 분리 확인한다.
-  - 금지: provider transport 확인을 threshold 값, 주문가/수량 guard, 스윙 dry-run guard 변경으로 해석하지 않는다.
-  - 판정 (`2026-05-15 KST`): `warning / OpenAI route 유지, entry_price 표본 부족`.
-  - 근거: [openai_ws_stability_2026-05-14.md](/home/ubuntu/KORStockScan/data/report/openai_ws/openai_ws_stability_2026-05-14.md)는 `analyze_target` WS unique calls=`962`, fallback=`0/962`, success rate=`1.0`, p95=`2863ms`, HTTP late baseline 대비 median improvement=`0.433`으로 WS 유지 근거를 남겼다. 다만 `entry_price WS sample count=0`이라 entry_price transport는 hook 미발생/표본 부족으로 분리했다. [run_bot.sh](/home/ubuntu/KORStockScan/src/run_bot.sh)는 `KORSTOCKSCAN_SCALPING_AI_ROUTE=openai`, `KORSTOCKSCAN_OPENAI_TRANSPORT_MODE=responses_ws`, `KORSTOCKSCAN_OPENAI_RESPONSES_WS_ENABLED=true`를 export하고, `bot_history.log`에는 `메인 스캘핑 OpenAI 엔진 고정 완료`, `AI 라우팅 활성화: role=main route=openai`가 남았다.
-  - 다음 확인: 같은 checklist의 `[OpenAIWSIntradaySample0515]`에서 entry_price 장중 표본을 재확인한다. 이 warning은 threshold 값, 주문가/수량 guard, 스윙 dry-run guard 변경 근거가 아니다.
-  - 다음 액션: entry_price transport 표본이 부족하면 장중 표본 재확인 항목과 연결한다.
 
 - [x] `[SwingApprovalArtifactPreopen0515] 스윙 approval request 및 별도 승인 artifact 존재 여부 확인` (`Due: 2026-05-15`, `Slot: PREOPEN`, `TimeWindow: 08:45~08:50`, `Track: RuntimeStability`)
   - Source: [swing_runtime_approval_2026-05-14.json](/home/ubuntu/KORStockScan/data/report/swing_runtime_approval/swing_runtime_approval_2026-05-14.json), [threshold_cycle_ev_2026-05-14.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-05-14.json)
@@ -67,7 +58,6 @@
 
 ## 장중 체크리스트 (09:05~15:20)
 
-- 운영 확인 기록 (`IntradayAutomationHealthCheck20260515`): 판정은 `warning_resolved_for_next_sample`. `OpenAIWSIntradaySample0515`에서 `entry_price` 표본 0건 원인을 simulator BUY 경로의 `_apply_entry_ai_price_canary` 미연결로 확인했고, 실주문 호출 없이 `actual_order_submitted=false` simulator provenance에 `entry_price` canary를 적용하도록 보정했다.
 
 - 운영 확인 기록 (`ErrorDetectionFail07250515`): 판정은 `source_quality_false_positive_fixed`. `2026-05-15 07:25:01 KST` full error detection fail은 `log_scanner`가 `macro_briefing_complete_error.log(+5)`를 `UNKNOWN(5)`로 분류한 것이다. 실제 5줄은 `[MACRO] live_bundle fetched`, `LIVE bundle_as_of`, `MACRO CACHE SAVE`, `applying LIVE bundle`, `collect_snapshot done` 정상 진행 로그였고, cron/process/artifact/resource/stale_lock 및 Kiwoom auth detector는 pass였다. 원인은 `macro_briefing_complete.py`가 정상 macro progress를 `log_error`로 남긴 로그 sink 오염이다. 정상 macro progress/cache 로그를 `log_info`로 내리도록 보정했으며 runtime threshold/provider/order/bot restart 변경은 없다. 검증: `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_error_detector_log_scanner.py` -> `14 passed`; `PYTHONPATH=. .venv/bin/python -m py_compile src/engine/macro_briefing_complete.py src/engine/error_detectors/log_scanner.py`; `PYTHONPATH=. .venv/bin/python -m src.engine.error_detector --mode log_only --dry-run` -> `summary_severity=pass`, `log_scanner=pass`.
 
@@ -118,15 +108,6 @@
   - 검증: `/proc/13479/environ` runtime env 확인, `threshold_runtime_env_2026-05-15.env/json` 확인, `threshold_apply_2026-05-15.json` 확인, `pipeline_events_2026-05-15.jsonl` JSONL 카운트 스캔.
   - 다음 액션: 장중 threshold mutation은 하지 않는다. 장후 `ThresholdDailyEVReport0515`/post-apply attribution에서 selected/applied/not-applied cohort와 실제 soft-stop runtime event provenance를 재확인한다.
 
-- [x] `[OpenAIWSIntradaySample0515] OpenAI WS/entry_price 장중 표본 및 fallback/fail-closed 재확인` (`Due: 2026-05-15`, `Slot: INTRADAY`, `TimeWindow: 09:20~09:35`, `Track: RuntimeStability`)
-  - Source: [openai_ws_stability_2026-05-14.md](/home/ubuntu/KORStockScan/data/report/openai_ws/openai_ws_stability_2026-05-14.md), [sniper_state_handlers.py](/home/ubuntu/KORStockScan/src/engine/sniper_state_handlers.py), [test_scalp_live_simulator.py](/home/ubuntu/KORStockScan/src/tests/test_scalp_live_simulator.py)
-  - 판정 기준: `analyze_target` WS latency/fallback과 `entry_price` transport metadata 누락 여부를 별도 표본으로 확인한다.
-  - 금지: entry_price 표본 0건 또는 instrumentation gap을 OpenAI WS runtime 효과 0으로 해석하지 않는다.
-  - 판정 (`2026-05-15 KST`): `root_cause_found_and_fix_applied`.
-  - 근거: `data/pipeline_events/pipeline_events_2026-05-14.jsonl` 전체 스캔 결과 `scalp_sim_entry_armed=1`, `scalp_sim_buy_order_virtual_pending=1`, `scalp_sim_buy_order_assumed_filled=1`, `scalp_sim_holding_started=1`, `scalp_sim_sell_order_assumed_filled=2`가 있었지만 `openai_endpoint_name=entry_price`는 0건이었다. 원인은 실거래 제출 경로의 `_apply_entry_ai_price_canary`가 simulator BUY 신호 경로에는 연결되지 않아, sim 실적이 있어도 `entry_price` transport provenance가 생성되지 않는 구조였다.
-  - 조치: `maybe_arm_scalp_live_simulator_from_buy_signal`에 `ai_engine`을 전달하고, simulator의 가상 주문도 `_apply_entry_ai_price_canary`를 통과하도록 보정했다. 이 조치는 `actual_order_submitted=false`와 `simulated_order=true`를 유지하며 실주문을 호출하지 않고, 가상 주문 가격/skip 여부와 `entry_price` OpenAI transport metadata만 남긴다.
-  - 검증: `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_scalp_live_simulator.py` -> `18 passed`; `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_sniper_scale_in.py -k entry_ai_price_canary` -> `3 passed, 142 deselected`; `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_ai_engine_openai_transport.py` -> `17 passed`.
-  - 다음 액션: 다음 장중/장후 openai_ws report에서 `entry_price_ws_sample_count`와 `entry_price_canary_summary.transport_observable_count`가 sim BUY 표본과 함께 증가하는지 확인한다.
 
 - [x] `[SimProbeIntradayCoverage0515] sim/probe 관찰축 actual_order_submitted=false 및 source-quality 확인` (`Due: 2026-05-15`, `Slot: INTRADAY`, `TimeWindow: 09:35~09:50`, `Track: ScalpingLogic`)
   - Source: [threshold_cycle_ev_2026-05-14.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-05-14.json), [sniper_state_handlers.py](/home/ubuntu/KORStockScan/src/engine/sniper_state_handlers.py), [swing_daily_simulation_report.py](/home/ubuntu/KORStockScan/src/engine/swing_daily_simulation_report.py)

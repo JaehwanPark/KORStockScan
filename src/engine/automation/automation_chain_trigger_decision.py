@@ -138,7 +138,6 @@ def _step_specs(target_date: str) -> list[StepSpec]:
             _pair("scalp_sim_ai_deferred_review", "scalp_sim_ai_deferred_review", target_date),
             (
                 "data/threshold_cycle/snapshots",
-                *_pair("openai_ws", "openai_ws_stability", target_date),
             ),
         ),
         "pattern_lab_currentness_audit": (

@@ -85,14 +85,6 @@
   - 판정 결과: `applied_guard_passed_env`. runtime env selected family는 `soft_stop_whipsaw_confirmation`, `score65_74_recovery_probe`, `scalp_sim_candidate_window_expansion`, `scalp_sim_ai_budget_manager`, `lifecycle_decision_matrix_runtime`, `scalp_sim_scale_in_window_expansion`이다. `SCALP_SIM_CANDIDATE_WINDOW_MAX_DAILY=160` 및 time bucket policy가 반영됐고, `lifecycle_decision_matrix_runtime`의 action mutation은 `RUNTIME_EFFECT_ENABLED=false`로 유지된다. `latency_classifier_recommendation`은 loaded 상태지만 `recommended_action=hold`, `allowed_runtime_apply=false`라 latency env override는 없다.
   - 다음 액션: 장중 runtime mutation 금지를 유지하고, `RuntimeEnvIntradayObserve0521`에서 selected family provenance/rollback guard를, `SimProbeIntradayCoverage0521`에서 sim-only provenance를 확인한다.
 
-- [x] `[OpenAIWSPreopenConfirm0521] OpenAI WS 유지 설정 및 entry_price/analyze_target provenance 확인` (`Due: 2026-05-21`, `Slot: PREOPEN`, `TimeWindow: 08:55~09:00`, `Track: RuntimeStability`)
-  - Source: [openai_ws_stability_2026-05-20.md](/home/ubuntu/KORStockScan/data/report/openai_ws/openai_ws_stability_2026-05-20.md), [run_bot.sh](/home/ubuntu/KORStockScan/src/run_bot.sh), [ai_engine_openai.py](/home/ubuntu/KORStockScan/src/engine/ai_engine_openai.py)
-  - 판정 기준: startup env의 OpenAI route/Responses WS 설정과 `analyze_target`, `entry_price` transport provenance를 분리 확인한다.
-  - 금지: provider transport 확인을 threshold 값, 주문가/수량 guard, 스윙 dry-run guard 변경으로 해석하지 않는다.
-  - 다음 액션: entry_price transport 표본이 부족하면 장중 표본 재확인 항목과 연결한다.
-  - 실행 메모 (`2026-05-21 07:41 KST`): [run_bot.sh](/home/ubuntu/KORStockScan/src/run_bot.sh)는 `KORSTOCKSCAN_SCALPING_AI_ROUTE=openai`, `KORSTOCKSCAN_OPENAI_RESPONSES_WS_ENABLED=true`, WS pool size `2`, request timeout `15000ms`를 기본값으로 사용하고 당일 runtime env를 source한다. `bot_history.log` 07:40 startup에는 OpenAI 엔진 고정, `role=main route=openai`, `main_scalping_openai=ON`, `main_scalping_deepseek=OFF`가 기록됐다.
-  - 판정 결과: `pass`. [openai_ws_stability_2026-05-20.md](/home/ubuntu/KORStockScan/data/report/openai_ws/openai_ws_stability_2026-05-20.md)는 `decision=keep_ws`, unique WS calls `3074`, `analyze_target=2830`, `entry_price=244`, WS fallback `0`, success rate `1.0`, `entry_price` instrumentation gap `false`로 판정됐다.
-  - 다음 액션: provider transport 확인은 threshold/order guard/provider 변경으로 쓰지 않고, 장중/장후 fallback, fail-closed, latency guard split을 계속 관찰한다.
 
 ## Runbook 운영 확인 완료 기록
 

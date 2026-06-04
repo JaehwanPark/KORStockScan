@@ -16,7 +16,6 @@
 ## 수동 롤아웃 체크리스트: 진입/보유/청산 AI input v2
 
 - [ ] `[AIInputV2OfflineReplay0603] Stage 2 current vs v2 offline replay 실행 및 report-only 결과 확인` (`Due: 2026-06-03`, `Slot: POSTCLOSE`, `TimeWindow: 17:20~17:50`, `Track: AIPrompt`)
-  - Source: [pipeline_events_2026-06-03.jsonl](/home/ubuntu/KORStockScan/data/pipeline_events/pipeline_events_2026-06-03.jsonl), [threshold_cycle_ev_2026-06-03.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-06-03.json), [openai_ws_stability_2026-06-03.md](/home/ubuntu/KORStockScan/data/report/openai_ws/openai_ws_stability_2026-06-03.md)
   - IN scope: analyze_target, entry_price, holding_flow input comparison; model output parse status; latency p95; payload mean char/token estimate; decision delta by category.
   - OUT scope: runtime v2 enablement, provider route change, threshold/order/quantity guard change, bot restart.
   - Acceptance: parse success >=99%, duplicate AI call count is zero by candidate policy, p95 latency degradation <=20% or explicitly explained, payload average char increase <=20% unless decision-quality evidence justifies enrichment.

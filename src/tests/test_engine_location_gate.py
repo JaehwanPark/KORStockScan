@@ -57,7 +57,6 @@ LEGACY_ENGINE_ROOT_PY_FILES = {
     "notify_panic_state_transition.py",
     "observation_source_quality_audit.py",
     "ofi_ai_smoothing.py",
-    "openai_ws_stability_report.py",
     "panic_buying_report.py",
     "panic_buying_state_detector.py",
     "panic_sell_defense_report.py",

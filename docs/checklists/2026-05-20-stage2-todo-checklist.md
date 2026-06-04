@@ -31,14 +31,6 @@
   - 판정 결과: `applied_guard_passed_env`
   - 다음 액션: 장중에는 runtime threshold mutation 없이 `RuntimeEnvIntradayObserve0520`에서 selected family provenance와 rollback guard만 관찰한다.
 
-- [x] `[OpenAIWSPreopenConfirm0520] OpenAI WS 유지 설정 및 entry_price/analyze_target provenance 확인` (`Due: 2026-05-20`, `Slot: PREOPEN`, `TimeWindow: 08:55~09:00`, `Track: RuntimeStability`)
-  - Source: [openai_ws_stability_2026-05-19.md](/home/ubuntu/KORStockScan/data/report/openai_ws/openai_ws_stability_2026-05-19.md), [run_bot.sh](/home/ubuntu/KORStockScan/src/run_bot.sh), [ai_engine_openai.py](/home/ubuntu/KORStockScan/src/engine/ai_engine_openai.py)
-  - 판정 기준: startup env의 OpenAI route/Responses WS 설정과 `analyze_target`, `entry_price` transport provenance를 분리 확인한다.
-  - 금지: provider transport 확인을 threshold 값, 주문가/수량 guard, 스윙 dry-run guard 변경으로 해석하지 않는다.
-  - 다음 액션: entry_price transport 표본이 부족하면 장중 표본 재확인 항목과 연결한다.
-  - 실행 메모 (`2026-05-20 07:49 KST`): `run_bot.sh` 기본값은 `KORSTOCKSCAN_SCALPING_AI_ROUTE=openai`, `KORSTOCKSCAN_OPENAI_RESPONSES_WS_ENABLED=true`, pool size `2`, timeout `15000ms`다. `bot_history.log` 07:40 startup에서 OpenAI 엔진 초기화, `메인 스캘핑 OpenAI 엔진 고정 완료`, `AI 라우팅 활성화: role=main route=openai (main_scalping_openai=ON / main_scalping_deepseek=OFF)`를 확인했다. 전일 WS 리포트는 unique WS calls `3960`, endpoint counts `analyze_target=3854`, `entry_price=106`, WS fallback `0`, success rate `1.0`, entry_price transport observable `106`으로 provenance 표본이 충분했다.
-  - 판정 결과: `pass`
-  - 다음 액션: provider transport 확인은 threshold/주문가/수량 guard 변경 근거로 쓰지 않고, 장중 실제 표본은 `RuntimeEnvIntradayObserve0520`/관련 provenance 관찰에서만 분리 확인한다.
 
 ## Runbook 운영 확인 완료 기록
 

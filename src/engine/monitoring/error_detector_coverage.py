@@ -40,7 +40,6 @@ REQUIRED_ARTIFACT_IDS: set[str] = {
     "panic_sell_defense_report",
     "market_panic_breadth_report",
     "panic_buying_report",
-    "openai_ws_stability_report",
     "threshold_postclose_report",
     "postclose_done_controller_report",
     "codex_workorder_runner_report",

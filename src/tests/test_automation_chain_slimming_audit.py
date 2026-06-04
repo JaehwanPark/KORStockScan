@@ -116,15 +116,11 @@ def test_aggressive_profile_deep_audit_candidates_move_to_manual_or_weekly():
 def test_dependency_defaults_can_create_deprecated_candidate_and_ev_function_calls_are_expanded():
     script = '''
 RUN_PARENT="${THRESHOLD_CYCLE_RUN_PARENT:-false}"
-RUN_OPENAI_WS_STABILITY_REPORT="${THRESHOLD_CYCLE_RUN_OPENAI_WS_STABILITY_REPORT:-$RUN_PARENT}"
 RUN_LIFECYCLE_AI_CONTEXT="${THRESHOLD_CYCLE_RUN_LIFECYCLE_AI_CONTEXT:-$RUN_PARENT}"
 run_threshold_cycle_ev_and_wait() {
   run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.threshold_cycle_ev_report --date "$TARGET_DATE"
   wait_for_artifacts "$PROJECT_DIR/data/report/threshold_cycle_ev/threshold_cycle_ev_${TARGET_DATE}.json"
 }
-if [ "$RUN_OPENAI_WS_STABILITY_REPORT" = "true" ]; then
-  run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.openai_ws_stability_report --date "$TARGET_DATE"
-fi
 if [ "$RUN_LIFECYCLE_AI_CONTEXT" = "true" ]; then
   run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.lifecycle_ai_context --date "$TARGET_DATE" --mode context
 fi
@@ -138,19 +134,11 @@ run_threshold_cycle_ev_and_wait "post_workorder_refresh"
     producers = Counter(item["producer"] for item in inventory)
     assert producers["src.engine.threshold_cycle_ev_report"] == 2
 
-    openai_step = next(item for item in inventory if item["producer"] == "src.engine.openai_ws_stability_report")
-    assert openai_step["default_enabled"] is False
-    assert openai_step["classification"] == "deprecated_candidate"
-    assert openai_step["classification_group"] == "deprecated_candidate"
     lifecycle_context_step = next(item for item in inventory if item["producer"] == "src.engine.lifecycle_ai_context")
     assert lifecycle_context_step["default_flag"] == "RUN_LIFECYCLE_AI_CONTEXT"
     assert lifecycle_context_step["default_enabled"] is False
     assert lifecycle_context_step["classification"] == "deprecated_candidate"
 
-    openai_candidate = next(
-        item for item in candidates if item["producer"] == "src.engine.openai_ws_stability_report"
-    )
-    assert openai_candidate["recommended_mode"] == "deprecated_candidate"
 
 
 def test_nested_guard_defaults_are_not_flattened_as_or_conditions():

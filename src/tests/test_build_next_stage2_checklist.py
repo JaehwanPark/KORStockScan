@@ -21,7 +21,7 @@ def _patch_dirs(monkeypatch, tmp_path):
     monkeypatch.setattr(mod, "DOCS_DIR", docs)
     monkeypatch.setattr(mod, "CHECKLIST_DIR", docs / "checklists")
     monkeypatch.setattr(mod, "EV_REPORT_DIR", ev)
-    monkeypatch.setattr(mod, "OPENAI_WS_REPORT_DIR", openai)
+    monkeypatch.setattr(mod, "OPENAI_WS_REPORT_DIR", openai, raising=False)
     monkeypatch.setattr(mod, "SWING_RUNTIME_APPROVAL_DIR", swing)
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_REPORT_DIR", code)
     monkeypatch.setattr(mod, "RUNTIME_APPLY_GAP_REPORT_DIR", runtime_gap)
@@ -50,17 +50,6 @@ def test_build_next_stage2_checklist_generates_next_trading_day_and_tasks(monkey
             "code_improvement_workorder": {"selected_order_count": 2},
         },
     )
-    _write_json(
-        openai_dir / "openai_ws_stability_2026-05-08.json",
-        {
-            "decision": "keep_ws",
-            "entry_price_canary_summary": {
-                "canary_event_count": 2,
-                "transport_observable_count": 0,
-                "instrumentation_gap": True,
-            },
-        },
-    )
     _write_json(swing_dir / "swing_runtime_approval_2026-05-08.json", {"approval_requests": [{"id": "req"}]})
     _write_json(code_dir / "code_improvement_workorder_2026-05-08.json", {"summary": {"selected_order_count": 2}})
     _write_json(tuning_dir / "tuning_performance_control_tower_2026-05-08.json", {"summary": {}})
@@ -82,7 +71,6 @@ def test_build_next_stage2_checklist_generates_next_trading_day_and_tasks(monkey
     assert "[ThresholdEnvAutoApplyPreopen0511]" in text
     assert "[SwingPreFinalAutoAndFinalApprovalPreopen0511]" in text
     assert "[RuntimeEnvIntradayObserve0511]" in text
-    assert "[AITransportIntradaySample0511]" in text
     assert "[SimProbeIntradayCoverage0511]" in text
     assert "[IntradaySourceQualityGateCheck0511]" in text
     assert "[PostcloseSourceQualityGateReview0511]" in text
@@ -96,7 +84,6 @@ def test_build_next_stage2_checklist_generates_next_trading_day_and_tasks(monkey
 def test_build_next_stage2_checklist_preserves_manual_content_and_replaces_auto_block(monkeypatch, tmp_path):
     docs, ev_dir, openai_dir, swing_dir, code_dir = _patch_dirs(monkeypatch, tmp_path)
     _write_json(ev_dir / "threshold_cycle_ev_2026-05-11.json", {"runtime_apply": {"runtime_change": False}})
-    _write_json(openai_dir / "openai_ws_stability_2026-05-11.json", {"decision": "keep_ws"})
     _write_json(swing_dir / "swing_runtime_approval_2026-05-11.json", {"approval_requests": []})
     _write_json(code_dir / "code_improvement_workorder_2026-05-11.json", {"summary": {"selected_order_count": 0}})
     target = docs / "checklists" / "2026-05-12-stage2-todo-checklist.md"
@@ -137,10 +124,6 @@ def test_build_next_stage2_checklist_excludes_codex_daily_workorder_snapshots(mo
         encoding="utf-8",
     )
     _write_json(ev_dir / "threshold_cycle_ev_2026-05-11.json", {"runtime_apply": {"runtime_change": False}})
-    _write_json(
-        openai_dir / "openai_ws_stability_2026-05-11.json",
-        {"decision": "keep_ws", "entry_price_canary_summary": {"canary_event_count": 0}},
-    )
     _write_json(swing_dir / "swing_runtime_approval_2026-05-11.json", {"approval_requests": []})
     _write_json(code_dir / "code_improvement_workorder_2026-05-11.json", {"summary": {"selected_order_count": 0}})
 
@@ -155,7 +138,6 @@ def test_generated_checklist_is_parser_friendly(monkeypatch, tmp_path):
     docs, ev_dir, openai_dir, swing_dir, code_dir = _patch_dirs(monkeypatch, tmp_path)
     trigger_dir = mod.AUTOMATION_TRIGGER_DECISION_REPORT_DIR
     _write_json(ev_dir / "threshold_cycle_ev_2026-05-11.json", {"runtime_apply": {"runtime_change": True}})
-    _write_json(openai_dir / "openai_ws_stability_2026-05-11.json", {"decision": "rollback_http"})
     _write_json(swing_dir / "swing_runtime_approval_2026-05-11.json", {"approval_requests": []})
     _write_json(code_dir / "code_improvement_workorder_2026-05-11.json", {"summary": {"selected_order_count": 1}})
     _write_json(
@@ -173,7 +155,6 @@ def test_generated_checklist_is_parser_friendly(monkeypatch, tmp_path):
 
     assert any("ThresholdEnvAutoApplyPreopen0512" in title for title in titles)
     assert any("RuntimeEnvIntradayObserve0512" in title for title in titles)
-    assert any("AITransportPreopenConfirm0512" in title for title in titles)
     assert any("AutomationTriggerDecisionSummary0512" in title for title in titles)
     assert all(task.due_date == "2026-05-12" for task in tasks)
 
@@ -206,8 +187,6 @@ def test_build_next_stage2_checklist_skips_optional_tasks_when_optional_artifact
         "ThresholdDailyEVReport0526",
         "HumanInterventionSummary0526",
     ]
-    assert "AITransportPreopenConfirm0526" not in text
-    assert "AITransportIntradaySample0526" not in text
     assert "CodeImprovementWorkorderReview0526" not in text
     assert "AutomationTriggerDecisionSummary0526" not in text
     assert "tuning_performance_control_tower_2026-05-22.json" not in text
@@ -217,10 +196,6 @@ def test_automation_trigger_decision_summary_is_surfaced_as_postclose_task(monke
     docs, ev_dir, openai_dir, swing_dir, code_dir = _patch_dirs(monkeypatch, tmp_path)
     trigger_dir = mod.AUTOMATION_TRIGGER_DECISION_REPORT_DIR
     _write_json(ev_dir / "threshold_cycle_ev_2026-05-22.json", {"runtime_apply": {"runtime_change": False}})
-    _write_json(
-        openai_dir / "openai_ws_stability_2026-05-22.json",
-        {"decision": "keep_ws", "entry_price_canary_summary": {"canary_event_count": 0}},
-    )
     _write_json(swing_dir / "swing_runtime_approval_2026-05-22.json", {"approval_requests": []})
     _write_json(code_dir / "code_improvement_workorder_2026-05-22.json", {"summary": {"selected_order_count": 0}})
     _write_json(
@@ -275,10 +250,6 @@ def test_runtime_apply_gap_pending_is_surfaced_in_preopen_task(monkeypatch, tmp_
     docs, ev_dir, openai_dir, swing_dir, code_dir = _patch_dirs(monkeypatch, tmp_path)
     runtime_gap_dir = mod.RUNTIME_APPLY_GAP_REPORT_DIR
     _write_json(ev_dir / "threshold_cycle_ev_2026-05-22.json", {"runtime_apply": {"runtime_change": False}})
-    _write_json(
-        openai_dir / "openai_ws_stability_2026-05-22.json",
-        {"decision": "keep_ws", "entry_price_canary_summary": {"canary_event_count": 0}},
-    )
     _write_json(swing_dir / "swing_runtime_approval_2026-05-22.json", {"approval_requests": []})
     _write_json(code_dir / "code_improvement_workorder_2026-05-22.json", {"summary": {"selected_order_count": 0}})
     _write_json(
@@ -311,10 +282,6 @@ def test_runtime_apply_gap_codex_directives_are_surfaced_as_postclose_task(monke
     docs, ev_dir, openai_dir, swing_dir, code_dir = _patch_dirs(monkeypatch, tmp_path)
     runtime_gap_dir = mod.RUNTIME_APPLY_GAP_REPORT_DIR
     _write_json(ev_dir / "threshold_cycle_ev_2026-05-22.json", {"runtime_apply": {"runtime_change": False}})
-    _write_json(
-        openai_dir / "openai_ws_stability_2026-05-22.json",
-        {"decision": "keep_ws", "entry_price_canary_summary": {"canary_event_count": 0}},
-    )
     _write_json(swing_dir / "swing_runtime_approval_2026-05-22.json", {"approval_requests": []})
     _write_json(code_dir / "code_improvement_workorder_2026-05-22.json", {"summary": {"selected_order_count": 0}})
     _write_json(
@@ -347,10 +314,6 @@ def test_source_dimension_gap_summary_is_surfaced_even_without_directives(monkey
     docs, ev_dir, openai_dir, swing_dir, code_dir = _patch_dirs(monkeypatch, tmp_path)
     runtime_gap_dir = mod.RUNTIME_APPLY_GAP_REPORT_DIR
     _write_json(ev_dir / "threshold_cycle_ev_2026-05-22.json", {"runtime_apply": {"runtime_change": False}})
-    _write_json(
-        openai_dir / "openai_ws_stability_2026-05-22.json",
-        {"decision": "keep_ws", "entry_price_canary_summary": {"canary_event_count": 0}},
-    )
     _write_json(swing_dir / "swing_runtime_approval_2026-05-22.json", {"approval_requests": []})
     _write_json(code_dir / "code_improvement_workorder_2026-05-22.json", {"summary": {"selected_order_count": 0}})
     _write_json(
@@ -382,10 +345,6 @@ def test_quiet_gap_summary_is_surfaced_even_without_directives(monkeypatch, tmp_
     docs, ev_dir, openai_dir, swing_dir, code_dir = _patch_dirs(monkeypatch, tmp_path)
     runtime_gap_dir = mod.RUNTIME_APPLY_GAP_REPORT_DIR
     _write_json(ev_dir / "threshold_cycle_ev_2026-05-22.json", {"runtime_apply": {"runtime_change": False}})
-    _write_json(
-        openai_dir / "openai_ws_stability_2026-05-22.json",
-        {"decision": "keep_ws", "entry_price_canary_summary": {"canary_event_count": 0}},
-    )
     _write_json(swing_dir / "swing_runtime_approval_2026-05-22.json", {"approval_requests": []})
     _write_json(code_dir / "code_improvement_workorder_2026-05-22.json", {"summary": {"selected_order_count": 0}})
     _write_json(
@@ -417,10 +376,6 @@ def test_quiet_gap_summary_is_surfaced_even_without_directives(monkeypatch, tmp_
 def test_build_next_stage2_checklist_preserves_unknown_tasks_inside_auto_block(monkeypatch, tmp_path):
     docs, ev_dir, openai_dir, swing_dir, code_dir = _patch_dirs(monkeypatch, tmp_path)
     _write_json(ev_dir / "threshold_cycle_ev_2026-05-22.json", {"runtime_apply": {"runtime_change": False}})
-    _write_json(
-        openai_dir / "openai_ws_stability_2026-05-22.json",
-        {"decision": "keep_ws", "entry_price_canary_summary": {"canary_event_count": 0}},
-    )
     _write_json(swing_dir / "swing_runtime_approval_2026-05-22.json", {"approval_requests": []})
     _write_json(code_dir / "code_improvement_workorder_2026-05-22.json", {"summary": {"selected_order_count": 0}})
     target = docs / "checklists" / "2026-05-26-stage2-todo-checklist.md"

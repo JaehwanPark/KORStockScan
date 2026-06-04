@@ -166,20 +166,6 @@ ARTIFACT_REGISTRY: list[dict[str, Any]] = [
         "window_end": (15, 30),
     },
     {
-        "id": "openai_ws_stability_report",
-        "path_template": "data/report/openai_ws/openai_ws_stability_{date}.md",
-        "max_staleness_sec": 3600,
-        "critical": False,
-        "trading_day_only": True,
-        "window_start": (16, 10),
-        "window_end": (17, 10),
-        "suppress_missing_while_cron_in_progress": {
-            "id": "threshold_cycle_postclose",
-            "log": "logs/threshold_cycle_postclose_cron.log",
-        },
-        "allow_missing_after_window_while_cron_in_progress": True,
-    },
-    {
         "id": "threshold_postclose_report",
         "path_template": "data/report/threshold_cycle_ev/threshold_cycle_ev_{date}.json",
         "max_staleness_sec": 1800,

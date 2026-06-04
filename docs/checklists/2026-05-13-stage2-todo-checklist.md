@@ -18,7 +18,6 @@
 - checked_at: `2026-05-13 08:44 KST`
 - 판정: `pass`
 - 근거: `threshold_cycle_preopen_cron.log`에 `2026-05-13` preopen `[DONE]` marker가 있고, `threshold_apply_2026-05-13.json` status=`auto_bounded_live_ready`, runtime_change=`true`다. runtime env는 `soft_stop_whipsaw_confirmation`, `score65_74_recovery_probe`만 selected family로 반영했고 bot PID `9785`가 동일 env와 OpenAI Responses WS env를 로드 중이다. `final_ensemble_scanner`는 `2026-05-13T07:29:51` `[DONE]` marker를 남겼고, error detector full dry-run도 pass다.
-- warning: 최초 장전 확인 시 `openai_ws_stability_2026-05-12.md` artifact가 없어 `OpenAIWSIntradaySample0513` 장중 표본 재확인을 남겼다. `2026-05-13 08:47 KST`에 동일 모듈로 5/12 artifact를 재생성했고 `decision=keep_ws`, unique WS calls=`582`, fallback=`0`, entry_price WS sample=`0`을 확인했다.
 - 다음 액션: 장중 runtime threshold mutation 없이 selected family provenance, OpenAI transport 표본, sim/probe source-quality만 확인한다.
 
 ### IntradayAutomationHealthCheck20260513 운영 확인 기록
@@ -86,14 +85,6 @@
   - 근거: `threshold_apply_2026-05-13.json` status=`auto_bounded_live_ready`, runtime_change=`true`, generated_at=`2026-05-13T08:16:05+09:00`; runtime env는 `KORSTOCKSCAN_SCALP_SOFT_STOP_WHIPSAW_CONFIRMATION_ENABLED=true`, `KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_ENABLED=true`만 포함한다. bot PID `9785`의 `/proc` env에서도 동일 값과 `KORSTOCKSCAN_THRESHOLD_RUNTIME_APPLY_DATE=2026-05-13`을 확인했다.
   - 다음 액션: 장중에는 runtime threshold mutation 없이 selected family provenance와 rollback guard만 관찰한다.
 
-- [x] `[OpenAIWSPreopenConfirm0513] OpenAI WS 유지 설정 및 entry_price/analyze_target provenance 확인` (`Due: 2026-05-13`, `Slot: PREOPEN`, `TimeWindow: 08:55~09:00`, `Track: RuntimeStability`)
-  - Source: [openai_ws_stability_2026-05-12.md](/home/ubuntu/KORStockScan/data/report/openai_ws/openai_ws_stability_2026-05-12.md), [run_bot.sh](/home/ubuntu/KORStockScan/src/run_bot.sh), [ai_engine_openai.py](/home/ubuntu/KORStockScan/src/engine/ai_engine_openai.py)
-  - 판정 기준: startup env의 OpenAI route/Responses WS 설정과 `analyze_target`, `entry_price` transport provenance를 분리 확인한다.
-  - 금지: provider transport 확인을 threshold 값, 주문가/수량 guard, 스윙 dry-run guard 변경으로 해석하지 않는다.
-  - 다음 액션: entry_price transport 표본이 부족하면 장중 표본 재확인 항목과 연결한다.
-  - 판정 (`2026-05-13 08:44 KST`): `warning_source_report_missing_but_runtime_env_pass`.
-  - 근거: 최초 확인 시 checklist Source의 `openai_ws_stability_2026-05-12.md`는 실제로 존재하지 않았고 최신 openai_ws stability artifact는 `2026-05-11`까지만 있었다. 원인은 `build_next_stage2_checklist.py`가 source_date OpenAI WS report를 무조건 Source로 참조하지만, `run_threshold_cycle_postclose.sh`에는 해당 report 생성 단계가 없었기 때문이다. `2026-05-13 08:47 KST`에 `src.engine.openai_ws_stability_report --date 2026-05-12`로 재생성했고 `decision=keep_ws`, unique WS calls=`582`, fallback=`0/582`, p95 AI response=`2648.2ms`, entry_price WS sample=`0`을 확인했다. 현재 bot PID `9785` env는 `KORSTOCKSCAN_SCALPING_AI_ROUTE=openai`, `KORSTOCKSCAN_OPENAI_TRANSPORT_MODE=responses_ws`, `KORSTOCKSCAN_OPENAI_RESPONSES_WS_ENABLED=true`, pool_size=`2`, timeout_ms=`15000`, reasoning_effort=`auto`를 로드했고, tmux runtime 로그에 `메인 스캘핑 OpenAI 엔진 고정 완료`가 남았다.
-  - 다음 액션: `OpenAIWSIntradaySample0513`에서 `analyze_target`/`entry_price` 실제 transport provenance 표본을 장중 확인한다. 재발 방지를 위해 postclose wrapper가 `openai_ws_stability_report`를 생성하도록 보강했다.
 
 - [x] `[SwingApprovalArtifactPreopen0513] 스윙 approval request 및 별도 승인 artifact 존재 여부 확인` (`Due: 2026-05-13`, `Slot: PREOPEN`, `TimeWindow: 08:45~08:50`, `Track: RuntimeStability`)
   - Source: [swing_runtime_approval_2026-05-12.json](/home/ubuntu/KORStockScan/data/report/swing_runtime_approval/swing_runtime_approval_2026-05-12.json), [threshold_cycle_ev_2026-05-12.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-05-12.json)
@@ -115,14 +106,6 @@
   - 근거: `data/threshold_cycle/threshold_events_2026-05-13.jsonl`에 `score65_74_recovery_probe` 적용 이벤트 1건이 남았고 `threshold_applied_value=enabled=True|score=65-74|budget=50000|qty=1`, `qty_cap=1`, `budget_cap_krw=50000` provenance가 확인된다. 같은 시각 `soft_stop_whipsaw_confirmation` 적용/rollback 표본은 아직 없어 해당 family는 표본 부족으로 남긴다. panic report는 `PANIC_SELL`이지만 runtime mutation은 없었다.
   - 다음 액션: 장후 `ThresholdDailyEVReport0513`에서 selected family별 표본/rollback guard를 real/sim 분리로 재확인한다.
 
-- [x] `[OpenAIWSIntradaySample0513] OpenAI WS/entry_price 장중 표본 및 fallback/fail-closed 재확인` (`Due: 2026-05-13`, `Slot: INTRADAY`, `TimeWindow: 09:20~09:35`, `Track: RuntimeStability`)
-  - Source: [openai_ws_stability_2026-05-12.md](/home/ubuntu/KORStockScan/data/report/openai_ws/openai_ws_stability_2026-05-12.md)
-  - 판정 기준: `analyze_target` WS latency/fallback과 `entry_price` transport metadata 누락 여부를 별도 표본으로 확인한다.
-  - 금지: entry_price 표본 0건 또는 instrumentation gap을 OpenAI WS runtime 효과 0으로 해석하지 않는다.
-  - 다음 액션: 표본 부족이면 postclose provenance 보강 workorder로 분리한다.
-  - 판정 (`2026-05-13 09:37 KST`): `warning_entry_price_sample_missing_but_analyze_target_ws_pass`.
-  - 근거: `pipeline_events_2026-05-13.jsonl` 기준 OpenAI `analyze_target` 표본 101건은 `openai_transport_mode=responses_ws`, `openai_ws_used=True`, `openai_ws_http_fallback=False`로 확인됐다. 최근 표본의 `openai_ws_roundtrip_ms`는 대략 `873~3586ms` 범위다. `entry_ai_price`/`entry_price` transport 표본은 아직 0건이라 fail-closed/fallback 품질을 장중 표본으로 확정할 수 없다.
-  - 다음 액션: postclose `openai_ws_stability_report`에서 entry_price 표본 발생 여부를 다시 확인하고, 계속 0건이면 provenance 보강 workorder가 아니라 표본 부족으로 닫는다.
 
 - [x] `[SimProbeIntradayCoverage0513] sim/probe 관찰축 actual_order_submitted=false 및 source-quality 확인` (`Due: 2026-05-13`, `Slot: INTRADAY`, `TimeWindow: 09:35~09:50`, `Track: ScalpingLogic`)
   - Source: [threshold_cycle_ev_2026-05-12.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-05-12.json)

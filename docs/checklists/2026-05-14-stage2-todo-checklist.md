@@ -161,14 +161,6 @@
   - 완료 근거: `threshold_apply_2026-05-14.json`은 status=`auto_bounded_live_ready`, apply_mode=`auto_bounded_live`, runtime_change=`true`이며 `threshold_runtime_env_2026-05-14.{env,json}`을 생성했다. runtime env selected family는 `soft_stop_whipsaw_confirmation`, env override는 `KORSTOCKSCAN_SCALP_SOFT_STOP_WHIPSAW_CONFIRMATION_ENABLED=true`다. `score65_74_recovery_probe`는 전일 selected family였지만 당일 runtime env override에는 새 값으로 쓰이지 않았다.
   - 완료 다음 액션: 미반영/hold_sample family는 수동 env override하지 않고 장후 EV/attribution에서 다시 판정한다.
 
-- [x] `[OpenAIWSPreopenConfirm0514] OpenAI WS 유지 설정 및 entry_price/analyze_target provenance 확인` (`Due: 2026-05-14`, `Slot: PREOPEN`, `TimeWindow: 08:55~09:00`, `Track: RuntimeStability`)
-  - Source: [openai_ws_stability_2026-05-13.md](/home/ubuntu/KORStockScan/data/report/openai_ws/openai_ws_stability_2026-05-13.md), [run_bot.sh](/home/ubuntu/KORStockScan/src/run_bot.sh), [ai_engine_openai.py](/home/ubuntu/KORStockScan/src/engine/ai_engine_openai.py)
-  - 판정 기준: startup env의 OpenAI route/Responses WS 설정과 `analyze_target`, `entry_price` transport provenance를 분리 확인한다.
-  - 금지: provider transport 확인을 threshold 값, 주문가/수량 guard, 스윙 dry-run guard 변경으로 해석하지 않는다.
-  - 다음 액션: entry_price transport 표본이 부족하면 장중 표본 재확인 항목과 연결한다.
-  - 완료 판정: `pass_with_entry_price_followup`.
-  - 완료 근거: `run_bot.sh`는 `KORSTOCKSCAN_SCALPING_AI_ROUTE=openai`, `KORSTOCKSCAN_OPENAI_TRANSPORT_MODE=responses_ws`, `KORSTOCKSCAN_OPENAI_RESPONSES_WS_ENABLED=true`를 export하며, `bot_history.log`에는 `2026-05-14 07:40:14 KST` main route=`openai`가 남아 있다. `openai_ws_stability_2026-05-13.md`는 decision=`keep_ws`, unique WS calls=`752`, endpoint=`analyze_target`, WS fallback=`0/752`, success rate=`1.0`이다.
-  - 완료 다음 액션: `entry_price WS sample count=0`은 OpenAI WS 실패가 아니라 hook 미발생/표본 부족으로 분리한다. 장중/장후 attribution에서 `entry_price` transport provenance가 생기면 별도 확인하고, 이 확인만으로 threshold/order/provider/swing guard를 변경하지 않는다.
 
 - [x] `[SwingApprovalArtifactPreopen0514] 스윙 approval request 및 별도 승인 artifact 존재 여부 확인` (`Due: 2026-05-14`, `Slot: PREOPEN`, `TimeWindow: 08:45~08:50`, `Track: RuntimeStability`)
   - Source: [swing_runtime_approval_2026-05-13.json](/home/ubuntu/KORStockScan/data/report/swing_runtime_approval/swing_runtime_approval_2026-05-13.json), [threshold_cycle_ev_2026-05-13.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-05-13.json)

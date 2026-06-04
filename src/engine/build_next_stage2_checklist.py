@@ -19,7 +19,6 @@ from src.utils.market_day import get_krx_trading_day_status
 DOCS_DIR = PROJECT_ROOT / "docs"
 CHECKLIST_DIR = DOCS_DIR / "checklists"
 EV_REPORT_DIR = PROJECT_ROOT / "data" / "report" / "threshold_cycle_ev"
-OPENAI_WS_REPORT_DIR = PROJECT_ROOT / "data" / "report" / "openai_ws"
 SWING_RUNTIME_APPROVAL_DIR = PROJECT_ROOT / "data" / "report" / "swing_runtime_approval"
 CODE_IMPROVEMENT_REPORT_DIR = PROJECT_ROOT / "data" / "report" / "code_improvement_workorder"
 RUNTIME_APPLY_GAP_REPORT_DIR = PROJECT_ROOT / "data" / "report" / "runtime_apply_gap_audit"
@@ -121,23 +120,6 @@ def _has_approval_request(ev_report: dict[str, Any], swing_report: dict[str, Any
         except (TypeError, ValueError):
             continue
     return False
-
-
-def _openai_needs_intraday_sample(openai_report: dict[str, Any]) -> bool:
-    if not openai_report:
-        return True
-    if str(openai_report.get("decision") or "").strip() != "keep_ws":
-        return True
-    entry_summary = (
-        openai_report.get("entry_price_canary_summary")
-        if isinstance(openai_report.get("entry_price_canary_summary"), dict)
-        else {}
-    )
-    if bool(entry_summary.get("instrumentation_gap")):
-        return True
-    canary_events = int(entry_summary.get("canary_event_count") or 0)
-    observable = int(entry_summary.get("transport_observable_count") or 0)
-    return canary_events > 0 and observable < canary_events
 
 
 def _has_sim_probe_activity(ev_report: dict[str, Any]) -> bool:
@@ -344,7 +326,6 @@ def _build_tasks(
     source_date: str,
     target_date: str,
     ev_report: dict[str, Any],
-    openai_report: dict[str, Any],
     swing_report: dict[str, Any],
     code_report: dict[str, Any],
     runtime_gap_report: dict[str, Any],
@@ -353,7 +334,6 @@ def _build_tasks(
     mmdd = _compact_mmdd(target_date)
     ev_path = EV_REPORT_DIR / f"threshold_cycle_ev_{source_date}.json"
     tuning_performance_path = TUNING_PERFORMANCE_REPORT_DIR / f"tuning_performance_control_tower_{source_date}.json"
-    openai_path = OPENAI_WS_REPORT_DIR / f"openai_ws_stability_{source_date}.md"
     code_md_path = DOCS_DIR / "code-improvement-workorders" / f"code_improvement_workorder_{source_date}.md"
     runtime_gap_path = RUNTIME_APPLY_GAP_REPORT_DIR / f"runtime_apply_gap_audit_{source_date}.json"
     runtime_gap_pending = _runtime_gap_preopen_pending_summary(runtime_gap_report)
@@ -412,26 +392,6 @@ def _build_tasks(
             lines=tuple(threshold_lines),
         ),
     ]
-    if _has_payload(openai_report):
-        tasks.append(
-            GeneratedTask(
-                task_id=f"AITransportPreopenConfirm{mmdd}",
-                title="AI transport 유지 설정 및 entry_price/analyze_target provenance 확인",
-                slot="PREOPEN",
-                time_window="08:55~09:00",
-                track="RuntimeStability",
-                source=(
-                    f"[openai_ws_stability_{source_date}.md](/home/ubuntu/KORStockScan/{_rel(openai_path)}), "
-                    "[run_bot.sh](/home/ubuntu/KORStockScan/src/run_bot.sh), "
-                    "[ai_engine_openai.py](/home/ubuntu/KORStockScan/src/engine/ai_engine_openai.py)"
-                ),
-                lines=(
-                    "판정 기준: startup env의 endpoint별 transport를 확인한다. `analyze_target`은 OpenAI Responses WS, `entry_price`는 Bedrock Qwen3 32B primary -> Nova Lite v2 failback provenance를 분리 확인한다.",
-                    "금지: provider transport 확인을 threshold 값, 주문가/수량 guard, 스윙 dry-run guard 변경으로 해석하지 않는다.",
-                    "다음 액션: entry_price Bedrock provenance 또는 analyze_target WS 표본이 부족하면 장중 표본 재확인 항목과 연결한다.",
-                ),
-            )
-        )
     if _has_approval_request(ev_report, swing_report):
         tasks.append(
             GeneratedTask(
@@ -465,22 +425,6 @@ def _build_tasks(
                     f"판정 기준: selected_families={', '.join(selected) if selected else '-'}가 runtime event provenance에 찍히는지 확인한다.",
                     "금지: 장중 관찰 결과로 runtime threshold mutation을 수행하지 않는다.",
                     "다음 액션: provenance present/missing, rollback guard breach 여부를 분리 기록한다.",
-                ),
-            )
-        )
-    if _has_payload(openai_report) and _openai_needs_intraday_sample(openai_report):
-        tasks.append(
-            GeneratedTask(
-                task_id=f"AITransportIntradaySample{mmdd}",
-                title="AI transport 장중 표본 및 fallback/fail-closed 재확인",
-                slot="INTRADAY",
-                time_window="09:20~09:35",
-                track="RuntimeStability",
-                source=f"[openai_ws_stability_{source_date}.md](/home/ubuntu/KORStockScan/{_rel(openai_path)})",
-                lines=(
-                    "판정 기준: `analyze_target` OpenAI WS latency/fallback과 `entry_price` Bedrock transport metadata 누락 여부를 별도 표본으로 확인한다.",
-                    "금지: entry_price 표본 0건 또는 instrumentation gap을 OpenAI WS runtime 효과 0으로 해석하지 않고, Bedrock provenance 확인을 provider route 변경 근거로 쓰지 않는다.",
-                    "다음 액션: 표본 부족이면 postclose provenance 보강 workorder로 분리한다.",
                 ),
             )
         )
@@ -688,7 +632,6 @@ def _render_auto_block(
     source_date: str,
     target_date: str,
     ev_report: dict[str, Any],
-    openai_report: dict[str, Any],
     swing_report: dict[str, Any],
     code_report: dict[str, Any],
     runtime_gap_report: dict[str, Any],
@@ -699,7 +642,6 @@ def _render_auto_block(
         source_date=source_date,
         target_date=target_date,
         ev_report=ev_report,
-        openai_report=openai_report,
         swing_report=swing_report,
         code_report=code_report,
         runtime_gap_report=runtime_gap_report,
@@ -930,7 +872,6 @@ def build_next_stage2_checklist(source_date: str) -> dict[str, Any]:
         missing = ", ".join(_rel(path) for path in missing_required)
         raise RuntimeError(f"required postclose artifacts are missing for {source_date}: {missing}")
     ev_report = _load_json(EV_REPORT_DIR / f"threshold_cycle_ev_{source_date}.json")
-    openai_report = _load_json(OPENAI_WS_REPORT_DIR / f"openai_ws_stability_{source_date}.json")
     swing_report = _load_json(SWING_RUNTIME_APPROVAL_DIR / f"swing_runtime_approval_{source_date}.json")
     code_report = _load_json(CODE_IMPROVEMENT_REPORT_DIR / f"code_improvement_workorder_{source_date}.json")
     runtime_gap_report = _load_json(RUNTIME_APPLY_GAP_REPORT_DIR / f"runtime_apply_gap_audit_{source_date}.json")
@@ -943,7 +884,6 @@ def build_next_stage2_checklist(source_date: str) -> dict[str, Any]:
         source_date=source_date,
         target_date=target_date,
         ev_report=ev_report,
-        openai_report=openai_report,
         swing_report=swing_report,
         code_report=code_report,
         runtime_gap_report=runtime_gap_report,
@@ -966,7 +906,6 @@ def build_next_stage2_checklist(source_date: str) -> dict[str, Any]:
         source_date=source_date,
         target_date=target_date,
         ev_report=ev_report,
-        openai_report=openai_report,
         swing_report=swing_report,
         code_report=code_report,
         runtime_gap_report=runtime_gap_report,

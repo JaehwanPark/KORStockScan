@@ -65,21 +65,11 @@
   - 근거: [threshold_cycle_preopen_2026-06-05.status.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_preopen_status/threshold_cycle_preopen_2026-06-05.status.json)은 `status=succeeded`다. [threshold_apply_2026-06-05.json](/home/ubuntu/KORStockScan/data/threshold_cycle/apply_plans/threshold_apply_2026-06-05.json)은 `source_date=2026-06-04`, `status=auto_bounded_live_ready`, `runtime_change=true`, `warnings=[]`이고 selected auto apply는 `soft_stop_whipsaw_confirmation` 1건이다. [threshold_runtime_env_2026-06-05.json](/home/ubuntu/KORStockScan/data/threshold_cycle/runtime_env/threshold_runtime_env_2026-06-05.json)은 selected families `soft_stop_whipsaw_confirmation`, `scalp_sim_auto_approval`, `swing_sim_auto_approval`를 남겼다. bridge live-auto 후보 `entry_wait6579_score66_69_recovery_gate_v1`와 `scale_in_bucket_runtime_policy_v1`는 `blocked_source_quality`, `bootstrap_pending`, `runtime_apply_not_allowed`, `runtime_apply_bridge_auto_live_contract_missing`으로 정상 차단됐다.
   - 다음 액션: 장중 threshold mutation은 하지 않는다. bridge blocked family, position sizing approval request, sim-auto policy를 broker/order/provider/bot/cap 변경 근거로 쓰지 않고 장중 provenance와 postclose attribution으로만 확인한다.
 
-- [x] `[AITransportPreopenConfirm0605] AI transport 유지 설정 및 entry_price/analyze_target provenance 확인` (`Due: 2026-06-05`, `Slot: PREOPEN`, `TimeWindow: 08:55~09:00`, `Track: RuntimeStability`)
-  - Source: [openai_ws_stability_2026-06-04.md](/home/ubuntu/KORStockScan/data/report/openai_ws/openai_ws_stability_2026-06-04.md), [run_bot.sh](/home/ubuntu/KORStockScan/src/run_bot.sh), [ai_engine_openai.py](/home/ubuntu/KORStockScan/src/engine/ai_engine_openai.py)
-  - 판정 기준: startup env의 endpoint별 transport를 확인한다. `analyze_target`은 OpenAI Responses WS, `entry_price`는 Bedrock Qwen3 32B primary -> Nova Lite v2 failback provenance를 분리 확인한다.
-  - 금지: provider transport 확인을 threshold 값, 주문가/수량 guard, 스윙 dry-run guard 변경으로 해석하지 않는다.
-  - 다음 액션: entry_price Bedrock provenance 또는 analyze_target WS 표본이 부족하면 장중 표본 재확인 항목과 연결한다.
-  - 처리 결과: `transport_kept_with_entry_price_provenance_recheck`
-  - 판정: `analyze_target` OpenAI Responses WS는 유지 확인됐다. `entry_price`는 OpenAI WS 표본이 아니라 Bedrock Qwen3 32B primary -> Nova Lite v2 failback route로 분리 확인해야 하며, 장중 표본 재확인 항목과 연결한다.
-  - 근거: [openai_ws_stability_2026-06-04.md](/home/ubuntu/KORStockScan/data/report/openai_ws/openai_ws_stability_2026-06-04.md)은 `decision=keep_analyze_target_only`, endpoint counts `{'analyze_target': 567}`, WS fallback `0/567`, WS success rate `1.0`, entry_price WS sample count `0`, entry_price canary `transport_observable_count=18`, `applied_count=10`, `instrumentation_gap=false`를 기록했다. [run_bot.sh](/home/ubuntu/KORStockScan/src/run_bot.sh)은 `KORSTOCKSCAN_OPENAI_TRANSPORT_MODE=responses_ws`, `KORSTOCKSCAN_BEDROCK_ENTRY_PRICE_ROUTE_MODE=primary`, `KORSTOCKSCAN_BEDROCK_ENTRY_PRICE_PRIMARY_FAMILY=qwen3_32b`, `KORSTOCKSCAN_BEDROCK_ENTRY_PRICE_FAILBACK_FAMILY=lite_v2`, `KORSTOCKSCAN_BEDROCK_ENTRY_PRICE_FAILBACK_ENABLED=true`, Nova Lite v1 shadow disabled 설정을 export한다.
-  - 다음 액션: 이 PREOPEN 항목 자체는 추가 작업 없이 종료한다. `entry_price` Bedrock provenance와 fallback/fail-closed 표본은 별도 장중 항목 [AITransportIntradaySample0605]에서 확인하며, transport 확인은 threshold 값, 주문가/수량 guard, 스윙 dry-run guard, provider route 변경 근거로 사용하지 않는다.
-
 - [x] `[PreopenAutomationHealthCheck20260605] 장전 자동화체인 상태 확인` (`Due: 2026-06-05`, `Slot: PREOPEN`, `TimeWindow: 08:00~09:00`, `Track: RunbookOps`)
   - Source: [time-based-operations-runbook.md](/home/ubuntu/KORStockScan/docs/time-based-operations-runbook.md), [threshold_apply_2026-06-05.json](/home/ubuntu/KORStockScan/data/threshold_cycle/apply_plans/threshold_apply_2026-06-05.json), [threshold_runtime_env_2026-06-05.json](/home/ubuntu/KORStockScan/data/threshold_cycle/runtime_env/threshold_runtime_env_2026-06-05.json)
   - 판정: `pass`
   - 근거: `logs/threshold_cycle_preopen_cron.log`는 `[DONE] threshold-cycle preopen target_date=2026-06-05 finished_at=2026-06-05T07:35:02+0900` marker를 남겼고, [threshold_cycle_preopen_2026-06-05.status.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_preopen_status/threshold_cycle_preopen_2026-06-05.status.json)은 `status=succeeded`다. [threshold_apply_2026-06-05.json](/home/ubuntu/KORStockScan/data/threshold_cycle/apply_plans/threshold_apply_2026-06-05.json)은 `status=auto_bounded_live_ready`, `runtime_change=true`, `warnings=[]`이며 [threshold_runtime_env_2026-06-05.env](/home/ubuntu/KORStockScan/data/threshold_cycle/runtime_env/threshold_runtime_env_2026-06-05.env)을 생성했다. `logs/ensemble_scanner.log`는 `[DONE] final_ensemble_scanner target_date=2026-06-05 finished_at=2026-06-05T07:21:15` marker를 남겼다.
-  - 다음 액션: 장중에는 selected PREOPEN env 축의 provenance, AI transport 표본, sim/probe authority split, source-quality gate만 관찰한다. 이 RunbookOps 확인은 threshold/order/provider/bot/env/cap/hard-safety 변경 권한을 열지 않는다.
+  - 다음 액션: 장중에는 selected PREOPEN env 축의 provenance, sim/probe authority split, source-quality gate만 관찰한다. 이 RunbookOps 확인은 threshold/order/provider/bot/env/cap/hard-safety 변경 권한을 열지 않는다.
 
 ## 장중 체크리스트 (09:05~15:20)
 
@@ -88,12 +78,6 @@
   - 판정 기준: selected_families=bad_entry_refined_canary, scalp_sim_candidate_window_expansion, scalp_sim_ai_budget_manager, lifecycle_decision_matrix_runtime가 runtime event provenance에 찍히는지 확인한다.
   - 금지: 장중 관찰 결과로 runtime threshold mutation을 수행하지 않는다.
   - 다음 액션: provenance present/missing, rollback guard breach 여부를 분리 기록한다.
-
-- [ ] `[AITransportIntradaySample0605] AI transport 장중 표본 및 fallback/fail-closed 재확인` (`Due: 2026-06-05`, `Slot: INTRADAY`, `TimeWindow: 09:20~09:35`, `Track: RuntimeStability`)
-  - Source: [openai_ws_stability_2026-06-04.md](/home/ubuntu/KORStockScan/data/report/openai_ws/openai_ws_stability_2026-06-04.md)
-  - 판정 기준: `analyze_target` OpenAI WS latency/fallback과 `entry_price` Bedrock transport metadata 누락 여부를 별도 표본으로 확인한다.
-  - 금지: entry_price 표본 0건 또는 instrumentation gap을 OpenAI WS runtime 효과 0으로 해석하지 않고, Bedrock provenance 확인을 provider route 변경 근거로 쓰지 않는다.
-  - 다음 액션: 표본 부족이면 postclose provenance 보강 workorder로 분리한다.
 
 - [ ] `[SimProbeIntradayCoverage0605] sim/probe 관찰축 actual_order_submitted=false 및 source-quality 확인` (`Due: 2026-06-05`, `Slot: INTRADAY`, `TimeWindow: 09:35~09:50`, `Track: ScalpingLogic`)
   - Source: [threshold_cycle_ev_2026-06-04.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-06-04.json)
