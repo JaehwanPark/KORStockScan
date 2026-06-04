@@ -555,12 +555,13 @@ def test_swing_probe_discard_classifies_symbol_cap_before_global_open_cap(monkey
                 "actual_order_submitted": False,
                 "broker_order_forbidden": True,
                 "runtime_effect": "in_memory_probe_only",
+                "decision_authority": "swing_sim_exploration_only",
                 "probe_id": None,
                 "probe_origin_stage": "blocked_swing_score_vpw",
                 "probe_arm": None,
-                "evidence_quality": None,
+                "evidence_quality": "probe_capacity_observation",
                 "evidence_quality_weight": None,
-                "source_record_id": None,
+                "source_record_id": "501",
                 "discard_reason": "max_per_symbol_reached",
                 "blocker_authority": "probe_capacity_only",
                 "quota_observation_scope": "symbol_probe_quota",
@@ -865,7 +866,7 @@ def test_swing_same_symbol_loss_guard_blocks_probe_after_stop_loss(monkeypatch, 
     monkeypatch.setattr(state_handlers, "log_error", lambda msg: errors.append(msg))
 
     stock = {"id": 701, "name": "HS", "code": "000001", "strategy": "KOSPI_ML"}
-    state_handlers._record_swing_same_symbol_loss_reentry_cooldown(
+    cooldown_row = state_handlers._record_swing_same_symbol_loss_reentry_cooldown(
         stock,
         "000001",
         "KOSPI_ML",
@@ -875,6 +876,10 @@ def test_swing_same_symbol_loss_guard_blocks_probe_after_stop_loss(monkeypatch, 
         actual_order_submitted=False,
         source_stage="swing_probe_sell_order_assumed_filled",
     )
+    assert cooldown_row["source_probe_id"].startswith("701")
+    assert cooldown_row["source_record_id"] == "701"
+    assert cooldown_row["source_stage"] == "swing_probe_sell_order_assumed_filled"
+    assert cooldown_row["source_id_source"] == "stock_id"
     logs.clear()
 
     assert not state_handlers.maybe_start_swing_intraday_probe(
@@ -892,7 +897,13 @@ def test_swing_same_symbol_loss_guard_blocks_probe_after_stop_loss(monkeypatch, 
     counterfactual = logs[1][1]
     assert discard["discard_reason"] == "same_symbol_loss_reentry_cooldown"
     assert discard["actual_order_submitted"] is False
+    assert discard["source_probe_id"] == cooldown_row["source_probe_id"]
+    assert discard["source_record_id"] == cooldown_row["source_record_id"]
+    assert discard["source_stage"] == cooldown_row["source_stage"]
     assert counterfactual["runtime_effect"] == "counterfactual_only"
+    assert counterfactual["source_probe_id"] == cooldown_row["source_probe_id"]
+    assert counterfactual["source_record_id"] == cooldown_row["source_record_id"]
+    assert counterfactual["source_stage"] == cooldown_row["source_stage"]
     assert counterfactual["curr_price"] == 10_000
     assert counterfactual["event_field_conflict_keys"] == "curr_price"
     assert counterfactual["event_field_conflict_policy"] == "protected_field_preserved"
@@ -941,6 +952,80 @@ def test_swing_same_symbol_loss_guard_allows_probe_after_cooldown(monkeypatch, t
         runtime={"strategy": "KOSPI_ML", "now_ts": now_ts + 3601, "ratio": 0.10},
     )
     assert len(state_handlers.ACTIVE_TARGETS) == 1
+
+
+def test_swing_same_symbol_loss_cooldown_source_id_prefers_probe_id(monkeypatch):
+    rules = replace(
+        CONFIG,
+        SWING_SAME_SYMBOL_LOSS_REENTRY_GUARD_ENABLED=True,
+        SWING_SAME_SYMBOL_LOSS_REENTRY_COOLDOWN_SEC=3600,
+        SWING_SAME_SYMBOL_LOSS_REENTRY_LOSS_THRESHOLD_PCT=-2.5,
+    )
+    logs = []
+    now_ts = 1_768_090_000.0
+    monkeypatch.setattr(state_handlers, "TRADING_RULES", rules)
+    monkeypatch.setattr(state_handlers, "_SWING_SAME_SYMBOL_LOSS_REENTRY_COOLDOWNS", {})
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_entry_pipeline",
+        lambda stock, code, stage, **fields: logs.append((stage, fields)),
+    )
+
+    stock = {
+        "id": 702,
+        "name": "HS",
+        "code": "000001",
+        "strategy": "KOSPI_ML",
+        "probe_id": "PROBE-702",
+        "source_record_id": "SRC-702",
+    }
+    row = state_handlers._record_swing_same_symbol_loss_reentry_cooldown(
+        stock,
+        "000001",
+        "KOSPI_ML",
+        exit_rule="kospi_regime_stop_loss",
+        profit_rate=-3.0,
+        now_ts=now_ts,
+        actual_order_submitted=False,
+        source_stage="swing_probe_sell_order_assumed_filled",
+    )
+
+    assert row["source_probe_id"] == "PROBE-702"
+    assert row["source_record_id"] == "SRC-702"
+    assert row["source_id_source"] == "probe_id"
+    assert logs[-1][1]["source_probe_id"] == "PROBE-702"
+    assert logs[-1][1]["source_record_id"] == "SRC-702"
+    assert logs[-1][1]["source_stage"] == "swing_probe_sell_order_assumed_filled"
+
+
+def test_swing_same_symbol_loss_cooldown_source_id_uses_deterministic_fallback(monkeypatch):
+    rules = replace(
+        CONFIG,
+        SWING_SAME_SYMBOL_LOSS_REENTRY_GUARD_ENABLED=True,
+        SWING_SAME_SYMBOL_LOSS_REENTRY_COOLDOWN_SEC=3600,
+        SWING_SAME_SYMBOL_LOSS_REENTRY_LOSS_THRESHOLD_PCT=-2.5,
+    )
+    now_ts = 1_768_090_000.0
+    monkeypatch.setattr(state_handlers, "TRADING_RULES", rules)
+    monkeypatch.setattr(state_handlers, "_SWING_SAME_SYMBOL_LOSS_REENTRY_COOLDOWNS", {})
+    monkeypatch.setattr(state_handlers, "_log_entry_pipeline", lambda *args, **kwargs: None)
+
+    stock = {"name": "HS", "code": "000001", "strategy": "KOSPI_ML"}
+    row = state_handlers._record_swing_same_symbol_loss_reentry_cooldown(
+        stock,
+        "000001",
+        "KOSPI_ML",
+        exit_rule="kospi_regime_stop_loss",
+        profit_rate=-3.0,
+        now_ts=now_ts,
+        actual_order_submitted=False,
+        source_stage="exit",
+    )
+
+    assert row["source_probe_id"].startswith("swing_dry_run:2026-01-11:KOSPI_ML:000001:exit:")
+    assert row["source_probe_id"] == row["source_record_id"]
+    assert row["source_id_source"] == "deterministic_fallback"
+    assert row["source_probe_id"] not in {"", "-", "None", "none", "null"}
 
 
 def test_swing_same_symbol_loss_guard_ignores_take_profit_and_triggers_consecutive_losses(monkeypatch):
@@ -1034,7 +1119,12 @@ def test_swing_same_symbol_loss_guard_persists_across_probe_state_restore(monkey
         actual_order_submitted=False,
     )
     state_handlers.persist_swing_intraday_probe_state(allow_empty_overwrite=True, reason="unit")
-    assert "same_symbol_loss_reentry_cooldowns" in json.loads(state_path.read_text(encoding="utf-8"))
+    persisted = json.loads(state_path.read_text(encoding="utf-8"))
+    cooldowns = persisted["same_symbol_loss_reentry_cooldowns"]
+    persisted_row = next(iter(cooldowns.values()))
+    assert persisted_row["source_probe_id"] not in {"", "-", "None", "none", "null"}
+    assert persisted_row["source_record_id"] not in {"", "-", "None", "none", "null"}
+    assert persisted_row["source_stage"] == "exit"
 
     monkeypatch.setattr(state_handlers, "_SWING_SAME_SYMBOL_LOSS_REENTRY_COOLDOWNS", {})
     state_handlers.restore_swing_intraday_probe_targets([])
@@ -1043,6 +1133,9 @@ def test_swing_same_symbol_loss_guard_persists_across_probe_state_restore(monkey
     )
     assert decision["allowed"] is False
     assert decision["cooldown_remaining_sec"] > 0
+    assert decision["source_probe_id"] == persisted_row["source_probe_id"]
+    assert decision["source_record_id"] == persisted_row["source_record_id"]
+    assert decision["source_stage"] == persisted_row["source_stage"]
 
 
 def test_swing_same_symbol_loss_guard_blocks_dry_run_before_latency_submit(monkeypatch):
@@ -1110,6 +1203,68 @@ def test_swing_same_symbol_loss_guard_blocks_dry_run_before_latency_submit(monke
     assert counterfactual["runtime_effect"] == "counterfactual_only"
     assert cooldowns["000001"] > now_ts + 60
     assert "000001" not in alerted
+
+
+def test_swing_same_symbol_loss_zero_qty_counterfactual_does_not_conflict_curr_price(monkeypatch):
+    rules = replace(
+        CONFIG,
+        SWING_LIVE_ORDER_DRY_RUN_ENABLED=True,
+        SWING_INTRADAY_LIVE_EQUIV_PROBE_ENABLED=True,
+        SWING_SAME_SYMBOL_LOSS_REENTRY_GUARD_ENABLED=True,
+        SWING_SAME_SYMBOL_LOSS_REENTRY_COOLDOWN_SEC=3600,
+    )
+    logs = []
+    errors = []
+    now_ts = 1_768_090_000.0
+    monkeypatch.setattr(state_handlers, "TRADING_RULES", rules)
+    monkeypatch.setattr(state_handlers, "_SWING_SAME_SYMBOL_LOSS_REENTRY_COOLDOWNS", {})
+    monkeypatch.setattr(state_handlers, "_SWING_PROBE_DISCARD_LOG_TS", {})
+    monkeypatch.setattr(state_handlers, "ACTIVE_TARGETS", [])
+    monkeypatch.setattr(state_handlers.kiwoom_orders, "get_deposit", lambda *args, **kwargs: 1)
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_entry_pipeline",
+        lambda stock, code, stage, **fields: logs.append((stage, fields)),
+    )
+    monkeypatch.setattr(state_handlers, "log_error", lambda msg: errors.append(msg))
+
+    stock = {"id": 706, "name": "HS", "code": "000001", "strategy": "KOSPI_ML"}
+    state_handlers._record_swing_same_symbol_loss_reentry_cooldown(
+        stock,
+        "000001",
+        "KOSPI_ML",
+        exit_rule="kospi_regime_stop_loss",
+        profit_rate=-3.0,
+        now_ts=now_ts,
+        actual_order_submitted=False,
+    )
+    logs.clear()
+
+    result = state_handlers._submit_watching_triggered_entry(
+        stock,
+        "000001",
+        {"curr": 10_000},
+        admin_id=1,
+        runtime={
+            "strategy": "KOSPI_ML",
+            "ratio": 0.10,
+            "curr_price": 10_000,
+            "liquidity_value": 0,
+            "msg": "",
+            "now_ts": now_ts + 60,
+            "cooldowns": {},
+            "alerted_stocks": set(),
+        },
+    )
+
+    assert result is False
+    stages = [stage for stage, _ in logs]
+    assert stages == ["blocked_zero_qty", "swing_probe_discarded", "swing_reentry_counterfactual_after_loss"]
+    counterfactual = logs[2][1]
+    assert counterfactual["curr_price"] == 10_000
+    assert "event_field_conflict_keys" not in counterfactual
+    assert "event_field_conflict_policy" not in counterfactual
+    assert errors == []
 
 
 def _allowing_latency_gate(qty=2, price=10_000):
@@ -1189,6 +1344,61 @@ def test_swing_dry_run_submit_path_assumes_fill_after_legacy_prior(monkeypatch):
     bundle = next(fields for stage, fields in logs if stage == "swing_sim_order_bundle_assumed_filled")
     assert bundle["actual_order_submitted"] is False
     assert bundle["broker_order_forbidden"] is True
+
+
+def test_swing_submit_lifecycle_context_tolerates_missing_liquidity_value(monkeypatch):
+    rules = replace(
+        CONFIG,
+        SWING_LIVE_ORDER_DRY_RUN_ENABLED=True,
+        SWING_ORDERBOOK_MICRO_CONTEXT_ENABLED=False,
+        SWING_SAME_SYMBOL_LOSS_REENTRY_GUARD_ENABLED=False,
+    )
+    contexts = []
+    monkeypatch.setattr(state_handlers, "TRADING_RULES", rules)
+    monkeypatch.setattr(state_handlers, "ACTIVE_TARGETS", [])
+    monkeypatch.setattr(state_handlers.kiwoom_orders, "get_deposit", lambda *args, **kwargs: 1_000_000)
+    monkeypatch.setattr(
+        state_handlers.kiwoom_orders,
+        "describe_buy_capacity",
+        lambda *args, **kwargs: (100_000, 100_000, 2, 1.0),
+    )
+    monkeypatch.setattr(state_handlers, "evaluate_live_buy_entry", lambda *args, **kwargs: _allowing_latency_gate())
+    monkeypatch.setattr(
+        state_handlers,
+        "resolve_lifecycle_decision",
+        lambda *args, **kwargs: contexts.append(kwargs.get("context") or {}) or {},
+    )
+    monkeypatch.setattr(state_handlers, "_build_entry_submit_revalidation_fields", lambda *args, **kwargs: {})
+    monkeypatch.setattr(state_handlers, "_apply_entry_ai_price_canary", lambda **kwargs: (kwargs["planned_orders"], False))
+    monkeypatch.setattr(state_handlers, "is_buy_side_paused", lambda: False)
+    monkeypatch.setattr(
+        state_handlers.kiwoom_orders,
+        "send_buy_order",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("dry-run must not call real buy order")),
+    )
+    monkeypatch.setattr(state_handlers, "_log_entry_pipeline", lambda *args, **kwargs: None)
+
+    result = state_handlers._submit_watching_triggered_entry(
+        {"id": 706, "name": "DRY", "code": "000001", "strategy": "KOSPI_ML"},
+        "000001",
+        {"curr": 10_000, "orderbook": {"asks": [{"price": 10_010}], "bids": [{"price": 9_990}]}},
+        admin_id=1,
+        runtime={
+            "strategy": "KOSPI_ML",
+            "ratio": 0.10,
+            "curr_price": 10_000,
+            "liquidity_value": None,
+            "msg": "",
+            "now_ts": 1_768_090_000.0,
+            "cooldowns": {},
+            "alerted_stocks": set(),
+            "swing_entry_policy_source_stage": "blocked_swing_score_vpw",
+        },
+    )
+
+    assert result is False
+    assert contexts
+    assert contexts[0]["liquidity_value"] == 0
 
 
 def test_swing_one_share_real_canary_submits_only_when_allowlisted(monkeypatch):

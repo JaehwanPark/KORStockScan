@@ -35,6 +35,16 @@ def _safe_int(value: Any, default: int = 0) -> int:
         return default
 
 
+def _truthy(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    if isinstance(value, (int, float)):
+        return value != 0
+    return str(value).strip().lower() in {"1", "true", "yes", "y", "on", "stale"}
+
+
 def _time_bucket(value: datetime | None) -> str:
     if value is None:
         return "time_unknown"
@@ -54,6 +64,8 @@ def _score_bucket(value: Any) -> str:
     score = _safe_float(value, -1.0)
     if score < 0:
         return "score_unknown"
+    if 0 < score <= 1:
+        score *= 100.0
     if score < 50:
         return "score_lt50"
     if score < 65:
@@ -68,6 +80,17 @@ def _score_bucket(value: Any) -> str:
 def _risk_context_bucket(ws_data: dict[str, Any] | None) -> str:
     ws = ws_data or {}
     pre_ai = ws.get("scalp_pre_ai_gate_context") if isinstance(ws.get("scalp_pre_ai_gate_context"), dict) else {}
+    for gate in pre_ai.values():
+        if not isinstance(gate, dict):
+            continue
+        gate_action = str(gate.get("gate_action") or "").strip().lower()
+        risk_state = str(gate.get("risk_state") or gate.get("state") or "").strip().lower()
+        if gate_action == "source_quality_block":
+            return "source_quality_blocker"
+        if risk_state in {"weak_momentum_context", "below_static_vpw_context"}:
+            return "weak_strength_momentum"
+        if risk_state in {"strong_strength_momentum", "strong_momentum_context"}:
+            return "strong_strength_momentum"
     for key in ("source_quality_block_reason", "source_quality_status"):
         raw = str(pre_ai.get(key) or ws.get(key) or "").strip().lower()
         if raw and raw not in {"ok", "pass", "fresh", "-"}:
@@ -85,6 +108,8 @@ def _risk_context_bucket(ws_data: dict[str, Any] | None) -> str:
 
 def _stale_bucket(ws_data: dict[str, Any] | None) -> str:
     ws = ws_data or {}
+    if "quote_stale" in ws:
+        return "stale_high" if _truthy(ws.get("quote_stale")) else "fresh"
     quote_age = _safe_float(ws.get("quote_age_ms") or ws.get("tick_latest_age_ms"), -1.0)
     if quote_age < 0:
         return "stale_unknown"
@@ -111,8 +136,24 @@ def _liquidity_bucket(ws_data: dict[str, Any] | None) -> str:
 
 def _overbought_bucket(ws_data: dict[str, Any] | None) -> str:
     ws = ws_data or {}
+    pre_ai = ws.get("scalp_pre_ai_gate_context") if isinstance(ws.get("scalp_pre_ai_gate_context"), dict) else {}
+    overbought = pre_ai.get("overbought") if isinstance(pre_ai.get("overbought"), dict) else {}
+    state = str(overbought.get("risk_state") or overbought.get("state") or "").strip()
+    bucket = str(overbought.get("risk_bucket") or "").strip()
+    if state in {"pullback_observed", "rebreak_candidate"}:
+        return "overbought_ok"
+    if state == "pullback_required" or bucket == "chase_risk":
+        return "overbought_chase_risk"
     intraday_range = _safe_float(ws.get("intraday_range_pct"), -1.0)
     distance_high = _safe_float(ws.get("distance_from_day_high_pct"), -99.0)
+    if intraday_range < 0:
+        curr = _safe_float(ws.get("curr") or ws.get("curr_price"), 0.0)
+        high = _safe_float(ws.get("high") or ws.get("high_price") or ws.get("today_high"), 0.0)
+        low = _safe_float(ws.get("low") or ws.get("low_price") or ws.get("today_low"), 0.0)
+        if curr > 0 and high > 0:
+            distance_high = ((curr - high) / high) * 100.0
+        if high > 0 and low > 0 and high >= low:
+            intraday_range = ((high - low) / low) * 100.0
     if intraday_range < 0:
         return "overbought_unknown"
     if intraday_range >= 18 and distance_high > -1.0:
@@ -127,6 +168,11 @@ def _price_resolution_bucket(ws_data: dict[str, Any] | None) -> str:
     if ws.get("resolved_order_price") or ws.get("entry_price"):
         return "resolved_price"
     if ws.get("best_ask") or ws.get("best_bid"):
+        return "quote_based"
+    orderbook = ws.get("orderbook") if isinstance(ws.get("orderbook"), dict) else {}
+    asks = orderbook.get("asks") if isinstance(orderbook.get("asks"), list) else []
+    bids = orderbook.get("bids") if isinstance(orderbook.get("bids"), list) else []
+    if asks or bids:
         return "quote_based"
     return "price_unknown"
 
@@ -350,13 +396,23 @@ def build_scalp_entry_adm_runtime_context(
 ) -> dict[str, Any]:
     profile = str(prompt_profile or "shared").strip().lower()
     current_dt = now or datetime.now()
+    ws = ws_data if isinstance(ws_data, dict) else {}
+    score_source = (
+        ai_score
+        if ai_score is not None
+        else ws.get("ai_score")
+        if ws.get("ai_score") is not None
+        else ws.get("current_ai_score")
+        if ws.get("current_ai_score") is not None
+        else ws.get("rt_ai_prob")
+    )
     buckets = {
-        "score_bucket": _score_bucket(ai_score if ai_score is not None else (ws_data or {}).get("ai_score")),
-        "risk_context_bucket": _risk_context_bucket(ws_data),
-        "stale_bucket": _stale_bucket(ws_data),
-        "price_resolution_bucket": _price_resolution_bucket(ws_data),
-        "liquidity_bucket": _liquidity_bucket(ws_data),
-        "overbought_bucket": _overbought_bucket(ws_data),
+        "score_bucket": _score_bucket(score_source),
+        "risk_context_bucket": _risk_context_bucket(ws),
+        "stale_bucket": _stale_bucket(ws),
+        "price_resolution_bucket": _price_resolution_bucket(ws),
+        "liquidity_bucket": _liquidity_bucket(ws),
+        "overbought_bucket": _overbought_bucket(ws),
         "time_bucket": _time_bucket(current_dt),
     }
     token = _bucket_token(buckets)

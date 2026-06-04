@@ -36,6 +36,11 @@ dist/
 *.sqlite3
 *.json
 !data/config/ofi_bucket_threshold_manifest.json
+!data/source_quality/
+!data/source_quality/clean_baseline_policy.json
+data/source_quality/raw_quarantine/
+data/source_quality/report_quarantine/
+data/source_quality/analytics_quarantine/
 *.jsonl
 *.csv
 *.bak

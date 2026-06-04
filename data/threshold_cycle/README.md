@@ -1,8 +1,10 @@
 # Threshold Cycle Operations
 
-작성 기준: `2026-05-22 KST`
+작성 기준: `2026-06-04 KST`
 
 이 디렉토리는 threshold 후보 수집, 장후 calibration, 장전 bounded runtime env apply, daily EV 리포트를 저장한다. 현재 원칙은 완전 무인 `auto_bounded_live` apply이며, 장중 runtime threshold 자동 변경은 계속 금지한다.
+
+튜닝 데이터 기준은 `clean_tuning_baseline_date=2026-06-04`, `clean_tuning_baseline_ts_kst=2026-06-04T13:45:27+09:00`이다. 이 기준 이전 `threshold_events`, raw pipeline events, report, DuckDB/Parquet analytics 산출물은 archive/audit evidence로만 보존하며 threshold-cycle EV, rolling/MTD/cumulative tuning, live-auto promotion, runtime approval, pattern lab promotion, real execution quality approval 입력으로 쓰지 않는다. 기준 이후 target의 postclose verifier는 pre-baseline report/analytics residue를 fail-closed한다.
 
 report 기반 자동화의 전체 추적성은 [report-based-automation-traceability.md](/home/ubuntu/KORStockScan/docs/report-based-automation-traceability.md)를 기준으로 본다. 이 문서는 산출물별 producer/consumer와 현재 apply 단계만 설명하고, 미래 작업 owner는 날짜별 checklist가 소유한다.
 

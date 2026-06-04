@@ -1,85 +1,84 @@
 {
-  "bundle_as_of": "2026-06-01T22:20:15Z",
+  "bundle_as_of": "2026-06-03T22:20:29Z",
   "sp500": {
-    "name": "S&P 500",
-    "value": 7599.96,
-    "prev_value": 7580.06,
-    "change": 19.9,
-    "change_pct": 0.26,
-    "as_of": "2026-06-01T20:29:00Z",
-    "source": "Morningstar / Dow Jones Market Data"
+    "name": "S&P500",
+    "value": 7553.68,
+    "prev_value": 7609.78,
+    "change": -56.1,
+    "change_pct": -0.74,
+    "as_of": "2026-06-03T20:00:00Z",
+    "source": "Associated Press"
   },
   "nasdaq": {
-    "name": "NASDAQ Composite",
-    "value": 27086.81,
-    "prev_value": 26972.62,
-    "change": 114.19,
-    "change_pct": 0.42,
-    "as_of": "2026-06-01T20:29:00Z",
-    "source": "Morningstar / Dow Jones Market Data"
+    "name": "NASDAQ",
+    "value": 26853.98,
+    "prev_value": 27093.91,
+    "change": -239.93,
+    "change_pct": -0.89,
+    "as_of": "2026-06-03T20:00:00Z",
+    "source": "Associated Press"
   },
   "vix": {
     "name": "VIX",
-    "value": 15.99,
-    "prev_value": 15.32,
-    "change": 0.67,
-    "change_pct": 4.37,
-    "as_of": "2026-06-01T21:20:00Z",
+    "value": 16.05,
+    "prev_value": 15.77,
+    "change": 0.28,
+    "change_pct": 1.78,
+    "as_of": "2026-06-03T20:00:00Z",
     "source": "Cboe Global Markets"
   },
   "us10y": {
-    "name": "US 10-Year Treasury Yield",
-    "value": 4.45,
-    "prev_value": 4.44,
-    "change": 0.01,
-    "change_pct": null,
-    "as_of": "2026-06-01T21:00:00Z",
-    "source": "Seeking Alpha / J.P. Morgan"
+    "name": "US10Y",
+    "value": 4.49,
+    "prev_value": 4.46,
+    "change": 0.03,
+    "change_pct": 0.67,
+    "as_of": "2026-06-03T20:00:00Z",
+    "source": "LA Times"
   },
   "brent": {
-    "name": "Brent Crude",
-    "value": 94.98,
-    "prev_value": 91.15,
-    "change": 3.83,
-    "change_pct": 4.2,
-    "as_of": "2026-06-01T20:52:00Z",
-    "source": "LA Times"
+    "name": "BRENT",
+    "value": 97.81,
+    "prev_value": 96.0,
+    "change": 1.81,
+    "change_pct": 1.89,
+    "as_of": "2026-06-03T20:00:00Z",
+    "source": "ICE Futures Europe"
   },
   "headlines": [
     {
-      "title": "US stock market today: S&P 500 hovers near record as Nvidia gains offset oil price worries",
+      "title": "Trump to hit more than 60 countries including Canada with new tariffs over 'forced labour'",
+      "source": "CBC News",
+      "published_at": "2026-06-03T19:26:00Z",
+      "url": "https://www.cbc.ca/news"
+    },
+    {
+      "title": "Trump administration floats tariffs on 60 trading partners — including China, U.K., EU — after forced labor probes",
+      "source": "CBS News",
+      "published_at": "2026-06-03T06:46:00Z",
+      "url": "https://www.cbsnews.com/"
+    },
+    {
+      "title": "Oil prices climb back toward $100, and US stocks halt their record-breaking rally",
+      "source": "Associated Press",
+      "published_at": "2026-06-03T19:04:00Z",
+      "url": "https://apnews.com/"
+    },
+    {
+      "title": "US stock markets today: Oil nears $100 amid Iran tensions, Wall Street stays close to record highs",
       "source": "The Times of India",
-      "published_at": "2026-06-01T14:38:00Z",
+      "published_at": "2026-06-03T14:06:00Z",
       "url": "https://timesofindia.indiatimes.com/"
     },
     {
-      "title": "Oil prices rise, but not by enough to keep Wall Street from more records",
-      "source": "LA Times",
-      "published_at": "2026-06-01T20:52:00Z",
-      "url": "https://www.latimes.com/"
-    },
-    {
-      "title": "JPMorgan sees the bond yield surge fading in the second half of 2026",
-      "source": "Seeking Alpha",
-      "published_at": "2026-06-01T12:58:00Z",
-      "url": "https://seekingalpha.com/"
-    },
-    {
-      "title": "US stocks close higher, boosted by tech gains, US-Iran peace hopes",
-      "source": "The Straits Times",
-      "published_at": "2026-06-01T21:04:00Z",
-      "url": "https://www.straitstimes.com/"
-    },
-    {
-      "title": "Weekly Financial Markets Update: SpaceX Seeks IPO Liftoff",
-      "source": "Gallagher",
-      "published_at": "2026-06-01T12:00:00Z",
-      "url": "https://www.ajg.com/"
+      "title": "US proposes new tariffs over forced labor, irking Europe",
+      "source": "Courthouse News Service",
+      "published_at": "2026-06-03T16:00:00Z",
+      "url": "https://www.courthousenews.com/"
     }
   ],
   "notes": [
-    "US markets closed higher, maintaining record levels despite a 4.2% surge in Brent Crude related to the fragile US-Iran ceasefire.",
-    "The S&P 500 logged its 23rd record close of 2026, driven by tech sector strength and AI sentiment.",
-    "Treasury yields rose slightly but held near 4.45%, with expectations for yields to stabilize into H2 2026."
+    "Market closed lower amid renewed Iran-US tensions pushing Brent crude toward $100.",
+    "The US administration proposed new 10-12.5% tariffs on 60 trading partners, citing forced labor concerns."
   ]
 }

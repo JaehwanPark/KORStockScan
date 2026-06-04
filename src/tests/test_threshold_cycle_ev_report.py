@@ -62,6 +62,46 @@ def test_calibration_path_does_not_fallback_to_intraday_artifact(tmp_path, monke
     assert mod._calibration_path("2026-05-22") == postclose
 
 
+def test_scalp_entry_adm_summary_preserves_unknown_bucket_summary(tmp_path, monkeypatch):
+    adm_dir = tmp_path / "entry_adm"
+    adm_dir.mkdir(parents=True)
+    adm_path = adm_dir / "scalp_entry_action_decision_matrix_2026-05-22.json"
+    adm_path.write_text(
+        json.dumps(
+            {
+                "status": "warning",
+                "runtime_effect": False,
+                "decision_authority": "entry_advisory_prompt_context_only",
+                "primary_decision_metric": "source_quality_adjusted_ev_pct",
+                "summary": {
+                    "total_candidates": 10,
+                    "joined_sample": 2,
+                    "sample_floor": 20,
+                    "prompt_applied_count": 1,
+                    "unknown_bucket_summary": {
+                        "affected_rows": 4,
+                        "source_quality_gate": "source_quality_blocker",
+                    },
+                },
+                "warnings": ["unknown_bucket_source_quality_gap"],
+                "action_summary": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        mod,
+        "scalp_entry_adm_report_paths",
+        lambda target_date: (adm_path, adm_dir / f"scalp_entry_action_decision_matrix_{target_date}.md"),
+    )
+
+    summary, path, warnings = mod._scalp_entry_adm_summary("2026-05-22")
+
+    assert path == str(adm_path)
+    assert summary["unknown_bucket_summary"]["affected_rows"] == 4
+    assert "scalp_entry_adm:unknown_bucket_source_quality_gap" in warnings
+
+
 @pytest.fixture(autouse=True)
 def _isolate_pattern_lab_audit_dirs(tmp_path, monkeypatch):
     monkeypatch.setattr(mod, "PATTERN_LAB_CURRENTNESS_AUDIT_DIR", tmp_path / "missing_currentness_audit")

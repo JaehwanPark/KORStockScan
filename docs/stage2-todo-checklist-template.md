@@ -2,6 +2,7 @@
 
 목적: 날짜별 `docs/checklists/YYYY-MM-DD-stage2-todo-checklist.md`의 상단 운영 형식을 공통화한다.  
 기준: 상세 정책/용어/가드는 [plan-korStockScanPerformanceOptimization.rebase.md](./plan-korStockScanPerformanceOptimization.rebase.md) §1~§6을 따르고, 날짜별 checklist 상단에는 `오늘 목적`과 `오늘 강제 규칙`만 짧고 강하게 유지한다.
+튜닝 데이터 기준: `clean_tuning_baseline_date=2026-06-04`, `clean_tuning_baseline_ts_kst=2026-06-04T14:29:09+09:00` 이후 데이터만 현재 tuning decision input으로 허용한다.
 
 ---
 
@@ -33,6 +34,7 @@
 ## 오늘 강제 규칙
 
 - 기준선은 `main-only`, `normal_only`, `post_fallback_deprecation`이며 상세 기준은 `Plan Rebase` §1~§6을 따른다.
+- 튜닝 데이터 기준은 `clean_tuning_baseline_date=2026-06-04`, `clean_tuning_baseline_ts_kst=2026-06-04T14:29:09+09:00`이다. 기준 이전 raw/report/analytics artifact는 archive/audit evidence로만 보고 EV/rolling/MTD/cumulative tuning, live-auto promotion, runtime approval, pattern lab promotion, real execution quality approval 입력으로 쓰지 않는다.
 - live 변경은 동일 단계 내 `1축 canary`만 허용한다. 진입병목축과 보유/청산축은 별개 단계이므로 병렬 canary가 가능하지만, 같은 단계 안에서는 canary 중복을 금지한다.
 - 동일 단계 replacement는 `기존 축 OFF -> restart.flag -> 새 축 ON` 순서만 쓴다.
 - 관찰창이 끝나면 `즉시 판정 -> 다음 축 즉시 착수`를 기본으로 한다. 이미 수집된 데이터로 닫을 수 있는 판정은 장후/익일로 미루지 않는다.

@@ -103,7 +103,9 @@ def test_emitted_events_include_metric_contract_and_openai_provenance(tmp_path, 
     )
 
     decision_fields = dict(emitted[0][1])
-    sell_fields = dict(emitted[1][1])
+    sell_fields = dict(
+        next(fields for stage, fields in emitted if stage == "scalp_sim_sell_order_assumed_filled")
+    )
     assert emitted[0][0] == "scalp_sim_overnight_decision"
     assert decision_fields["metric_role"] == "sim_probe_ev"
     assert decision_fields["decision_authority"] == "sim_observation_only"
@@ -113,6 +115,10 @@ def test_emitted_events_include_metric_contract_and_openai_provenance(tmp_path, 
     assert decision_fields["openai_transport_mode"] == "responses_ws"
     assert decision_fields["openai_ws_used"] is True
     assert decision_fields["openai_response_ms"] == 123
+    assert sell_fields["simulated_order"] is True
+    assert sell_fields["actual_order_submitted"] is False
+    assert sell_fields["broker_order_forbidden"] is True
+    assert sell_fields["decision_authority"] == "sim_observation_only"
     assert sell_fields["runtime_effect"] == "simulated_completed_only"
 
 

@@ -9,6 +9,15 @@ from pathlib import Path
 from typing import Any
 
 from src.engine.daily_threshold_cycle_report import REPORT_DIR
+from src.engine.automation.source_quality_clean_baseline import (
+    clean_baseline_policy,
+    policy_warning_for_date,
+)
+from src.engine.automation.source_quality_hard_gate import (
+    apply_source_quality_preflight_block,
+    load_source_quality_preflight,
+    source_quality_preflight_blocked,
+)
 from src.engine.build_code_improvement_workorder import code_improvement_workorder_paths
 from src.engine.approval_contracts import annotate_approval_request
 from src.engine.institutional_flow_context import report_paths as institutional_flow_report_paths
@@ -617,6 +626,11 @@ def _scalp_entry_adm_summary(target_date: str) -> tuple[dict[str, Any], str | No
         )
     summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
     action_summary = payload.get("action_summary") if isinstance(payload.get("action_summary"), list) else []
+    unknown_bucket_summary = (
+        summary.get("unknown_bucket_summary")
+        if isinstance(summary.get("unknown_bucket_summary"), dict)
+        else {}
+    )
     warnings = [f"scalp_entry_adm:{item}" for item in (payload.get("warnings") or []) if str(item)]
     return (
         {
@@ -649,6 +663,7 @@ def _scalp_entry_adm_summary(target_date: str) -> tuple[dict[str, Any], str | No
             "action_normalization_counts": summary.get("action_normalization_counts")
             if isinstance(summary.get("action_normalization_counts"), dict)
             else {},
+            "unknown_bucket_summary": unknown_bucket_summary,
             "top_actions": [
                 {
                     "action": item.get("action"),
@@ -1758,11 +1773,16 @@ def build_threshold_cycle_ev_report(target_date: str) -> dict[str, Any]:
         isinstance(item, dict) and item.get("order_id") == "order_entry_submit_drought_auto_resolution"
         for item in workorder_orders
     )
+    clean_policy = clean_baseline_policy()
+    clean_policy_warning = policy_warning_for_date(target_date, clean_policy)
+    source_quality_preflight_gate = load_source_quality_preflight(target_date)
 
     report = {
         "date": target_date,
         "generated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
         "purpose": "daily_ev_performance_report_for_unattended_threshold_calibration",
+        "clean_tuning_baseline": clean_policy,
+        "source_quality_preflight_gate": source_quality_preflight_gate,
         "runtime_apply": {
             "apply_manifest": str(apply_path) if apply_path.exists() else None,
             "runtime_change": bool(apply_manifest.get("runtime_change")),
@@ -1903,6 +1923,7 @@ def build_threshold_cycle_ev_report(target_date: str) -> dict[str, Any]:
             "pattern_lab_propagation_audit": propagation_audit_path,
             "code_improvement_workorder": code_workorder_path,
             "missed_probe_counterfactual": wait6579_counterfactual_path,
+            "observation_source_quality_audit": source_quality_preflight_gate.get("artifact"),
         },
         "source_load_diagnostics": _JSON_LOAD_DIAGNOSTICS.copy(),
         "warnings": [
@@ -1937,10 +1958,15 @@ def build_threshold_cycle_ev_report(target_date: str) -> dict[str, Any]:
             *propagation_audit_warnings,
                 *code_workorder_warnings,
                 *source_load_warnings,
+                clean_policy_warning or "",
+                "source_quality_blocked_contract_gap"
+                if source_quality_preflight_blocked(source_quality_preflight_gate)
+                else "",
             ]
             if message
         ],
     }
+    report = apply_source_quality_preflight_block(report, source_quality_preflight_gate)
     EV_REPORT_DIR.mkdir(parents=True, exist_ok=True)
     json_path, md_path = ev_report_paths(target_date)
     json_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")

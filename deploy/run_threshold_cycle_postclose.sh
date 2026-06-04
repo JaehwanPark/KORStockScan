@@ -756,6 +756,14 @@ if [ "$RUN_MICROSTRUCTURE_REACTION_CONTEXT" = "true" ] || [ "$RUN_MICROSTRUCTURE
     echo "[WARN] optional microstructure_reaction_context failed target_date=$TARGET_DATE"
   fi
 fi
+if [ "$RUN_OBSERVATION_SOURCE_QUALITY_AUDIT" = "true" ] || [ "$RUN_OBSERVATION_SOURCE_QUALITY_AUDIT" = "1" ]; then
+  wait_for_postclose_resources "observation_source_quality_preflight"
+  run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.observation_source_quality_audit --target-date "$TARGET_DATE" --write
+  wait_for_report_artifact \
+    "$PROJECT_DIR/data/report/observation_source_quality_audit/observation_source_quality_audit_${TARGET_DATE}.json" \
+    "$PROJECT_DIR/data/report/observation_source_quality_audit/observation_source_quality_audit_${TARGET_DATE}.md" \
+    "observation_source_quality_preflight"
+fi
 if [ "$RUN_LIFECYCLE_DECISION_MATRIX" = "true" ] || [ "$RUN_LIFECYCLE_DECISION_MATRIX" = "1" ]; then
   wait_for_postclose_resources "lifecycle_decision_matrix"
   run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.lifecycle_decision_matrix --date "$TARGET_DATE"

@@ -18,6 +18,7 @@ from src.database.models import (
     SwingStrategyDiscoveryCandidate,
     SwingStrategyDiscoveryLabel,
 )
+from src.engine.automation.source_quality_clean_baseline import clean_baseline_policy, is_date_allowed
 from src.engine.swing_strategy_discovery_schema import ensure_swing_strategy_discovery_schema
 from src.utils.constants import DATA_DIR, POSTGRES_URL
 
@@ -148,6 +149,30 @@ def _bottom_rebound_sim_expected(target_date: str) -> bool:
     )
 
 
+def _clean_baseline_metadata(target_date: str, lookback_days: int) -> dict[str, Any]:
+    target = datetime.fromisoformat(_date_text(target_date)).date()
+    requested_start = target - timedelta(days=max(1, int(lookback_days)))
+    policy = clean_baseline_policy()
+    effective_start = requested_start
+    excluded_before: str | None = None
+    if is_date_allowed(target.isoformat(), policy):
+        try:
+            baseline = date.fromisoformat(str(policy.get("clean_tuning_baseline_date") or ""))
+        except ValueError:
+            baseline = requested_start
+        if requested_start < baseline:
+            effective_start = baseline
+            excluded_before = baseline.isoformat()
+    return {
+        "policy": policy,
+        "requested_start_date": requested_start.isoformat(),
+        "effective_start_date": effective_start.isoformat(),
+        "target_date": target.isoformat(),
+        "excluded_pre_start_date": excluded_before,
+        "filter_active": excluded_before is not None,
+    }
+
+
 def _row_from_models(
     candidate: SwingStrategyDiscoveryCandidate,
     arm: SwingStrategyDiscoveryArm,
@@ -207,7 +232,8 @@ def _row_from_models(
 def _load_rows(target_date: str, *, db_url: str = POSTGRES_URL, lookback_days: int = 90) -> tuple[list[dict[str, Any]], dict[str, int]]:
     ensure_swing_strategy_discovery_schema(db_url)
     target = datetime.fromisoformat(_date_text(target_date)).date()
-    start = target - timedelta(days=max(1, int(lookback_days)))
+    metadata = _clean_baseline_metadata(target.isoformat(), lookback_days)
+    start = date.fromisoformat(str(metadata["effective_start_date"]))
     engine = create_engine(db_url)
     Session = sessionmaker(bind=engine)
     with Session() as session:
@@ -423,6 +449,7 @@ def build_swing_strategy_discovery_ev_report(
     lookback_days: int = 90,
 ) -> dict[str, Any]:
     date_key = _date_text(target_date)
+    clean_metadata = _clean_baseline_metadata(date_key, lookback_days)
     rows, arm_status_counts = _load_rows(date_key, db_url=db_url, lookback_days=lookback_days)
     aggregates = _aggregate_all(rows)
     morning_turbulence = _morning_turbulence_analysis(rows)
@@ -467,6 +494,8 @@ def build_swing_strategy_discovery_ev_report(
         warnings.append("sample_floor_not_met")
     if _bottom_rebound_sim_expected(date_key) and not bottom_rows:
         warnings.append("bottom_rebound_ev_handoff_missing")
+    if clean_metadata.get("filter_active"):
+        warnings.append("clean_tuning_baseline_swing_discovery_lookback_filtered")
     report = {
         "schema_version": 1,
         "report_type": "swing_strategy_discovery_ev",
@@ -485,6 +514,7 @@ def build_swing_strategy_discovery_ev_report(
             "notional_weighted_ev_pct",
             "source_quality_adjusted_ev_pct",
         ],
+        "clean_tuning_baseline": clean_metadata,
         "summary": summary,
         "source_quality_summary": source_quality_summary,
         "aggregates": aggregates,

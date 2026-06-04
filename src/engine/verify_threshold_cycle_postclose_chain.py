@@ -11,10 +11,24 @@ from datetime import date, datetime, time as dtime
 from pathlib import Path
 from typing import Any
 
+from src.engine.automation.source_quality_clean_baseline import (
+    analytics_quarantine_reason,
+    clean_baseline_policy,
+    is_date_allowed,
+    report_generated_before_clean_baseline,
+    report_quarantine_reason,
+)
+from src.engine.automation.source_quality_hard_gate import (
+    RUNTIME_APPLY_BOOL_FIELDS,
+    RUNTIME_CANDIDATE_COUNT_FIELDS,
+    RUNTIME_CANDIDATE_LIST_FIELDS,
+    source_quality_preflight_blocked,
+)
 from src.engine.daily_threshold_cycle_report import REPORT_DIR
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 LOG_PATH = PROJECT_ROOT / "logs" / "threshold_cycle_postclose_cron.log"
+ANALYTICS_DIR = PROJECT_ROOT / "data" / "analytics"
 VERIFY_DIR = REPORT_DIR / "threshold_cycle_postclose_verification"
 ACTIVE_SIM_PRIORITY_OBSERVABLE_PREFIX_KEYS = {
     "entry_score_parent",
@@ -48,6 +62,7 @@ _OPTIONAL_ARTIFACT_LABELS = {
     "threshold_preopen_apply_next",
     "scalp_sim_policy_catalog",
     "swing_sim_policy_catalog",
+    "observation_source_quality_audit",
     "ldm_hypothesis_parent_refinement",
 }
 _AI_EXEMPT_RUNTIME_FAMILIES = {
@@ -74,6 +89,79 @@ def _load_json(path: Path) -> dict[str, Any]:
     except Exception:
         return {}
     return payload if isinstance(payload, dict) else {}
+
+
+def _has_runtime_applicable_candidate(value: Any) -> bool:
+    if isinstance(value, list):
+        return any(_has_runtime_applicable_candidate(item) for item in value)
+    if not isinstance(value, dict):
+        return False
+    for key, item in value.items():
+        if key in RUNTIME_CANDIDATE_LIST_FIELDS:
+            return bool(item)
+        if key in RUNTIME_CANDIDATE_COUNT_FIELDS:
+            try:
+                if int(float(item or 0)) > 0:
+                    return True
+            except Exception:
+                pass
+        if key in RUNTIME_APPLY_BOOL_FIELDS:
+            if item is True:
+                return True
+        if _has_runtime_applicable_candidate(item):
+            return True
+    return False
+
+
+def _source_quality_hard_block_status(
+    preflight: dict[str, Any],
+    *,
+    ev_report: dict[str, Any],
+    runtime_summary: dict[str, Any],
+    ldm_report: dict[str, Any],
+    bridge_report: dict[str, Any],
+    workorder: dict[str, Any],
+) -> dict[str, Any]:
+    if not source_quality_preflight_blocked(preflight):
+        return {
+            "status": "pass",
+            "tuning_input_allowed": True,
+            "candidate_violation_sources": [],
+            "workorder_handoff_present": True,
+        }
+    summary = preflight.get("summary") if isinstance(preflight.get("summary"), dict) else {}
+    candidate_sources = [
+        name
+        for name, payload in (
+            ("threshold_cycle_ev", ev_report),
+            ("runtime_approval_summary", runtime_summary),
+            ("lifecycle_decision_matrix", ldm_report),
+            ("runtime_apply_bridge", bridge_report),
+        )
+        if _has_runtime_applicable_candidate(payload)
+    ]
+    orders = workorder.get("orders") if isinstance(workorder.get("orders"), list) else []
+    non_selected = workorder.get("non_selected_orders") if isinstance(workorder.get("non_selected_orders"), list) else []
+    workorder_handoff_present = any(
+        isinstance(item, dict)
+        and (
+            item.get("order_id") == "order_observation_source_quality_hard_block_contract_gap"
+            or item.get("improvement_type") == "source_quality_hard_block_contract_gap"
+            or item.get("route") == "source_quality_gap"
+        )
+        for item in [*orders, *non_selected]
+    )
+    return {
+        "status": "fail" if candidate_sources or not workorder_handoff_present else "pass",
+        "tuning_input_allowed": False,
+        "candidate_violation_sources": candidate_sources,
+        "workorder_handoff_present": workorder_handoff_present,
+        "hard_blocking_contract_gap_count": summary.get("hard_blocking_contract_gap_count")
+        or preflight.get("hard_blocking_contract_gap_count"),
+        "hard_blocking_stages": summary.get("hard_blocking_stages") or preflight.get("hard_blocking_stages") or [],
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+    }
 
 
 def _parse_generated_at(payload: dict[str, Any]) -> datetime | None:
@@ -218,6 +306,9 @@ def _artifact_paths(target_date: str) -> dict[str, Path]:
         / "lifecycle_bucket_discovery"
         / f"lifecycle_bucket_discovery_{target_date}_mtd.json",
         "code_improvement_workorder": REPORT_DIR / "code_improvement_workorder" / f"code_improvement_workorder_{target_date}.json",
+        "observation_source_quality_audit": REPORT_DIR
+        / "observation_source_quality_audit"
+        / f"observation_source_quality_audit_{target_date}.json",
         "runtime_approval_summary": REPORT_DIR / "runtime_approval_summary" / f"runtime_approval_summary_{target_date}.json",
         "runtime_apply_gap_audit": REPORT_DIR
         / "runtime_apply_gap_audit"
@@ -271,6 +362,60 @@ def _artifact_paths(target_date: str) -> dict[str, Path]:
         / f"swing_lifecycle_bucket_discovery_{target_date}.json",
         "swing_lifecycle_audit": REPORT_DIR / "swing_lifecycle_audit" / f"swing_lifecycle_audit_{target_date}.json",
         "next_stage2_checklist": PROJECT_ROOT / "docs" / "checklists" / f"{next_day}-stage2-todo-checklist.md",
+    }
+
+
+def _clean_baseline_report_residue_status(report_dir: Path = REPORT_DIR) -> dict[str, Any]:
+    policy = clean_baseline_policy()
+    residue: list[dict[str, Any]] = []
+    for path in sorted(report_dir.rglob("*")):
+        if not path.is_file():
+            continue
+        reason = report_quarantine_reason(path, policy, include_baseline_date=False)
+        if not reason and report_generated_before_clean_baseline(path, policy):
+            reason = "same_day_pre_clean_baseline_report_archive_only"
+        if not reason:
+            continue
+        residue.append(
+            {
+                "path": str(path),
+                "reason": reason,
+                "decision_state": "archive_only_not_allowed_for_clean_tuning",
+            }
+        )
+    return {
+        "status": "fail" if residue else "pass",
+        "policy": policy,
+        "residue_count": len(residue),
+        "residue": residue[:200],
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+    }
+
+
+def _clean_baseline_analytics_residue_status(analytics_dir: Path = ANALYTICS_DIR) -> dict[str, Any]:
+    policy = clean_baseline_policy()
+    residue: list[dict[str, Any]] = []
+    for path in sorted(analytics_dir.rglob("*")):
+        if not path.is_file() or path.suffix.lower() not in {".duckdb", ".parquet"}:
+            continue
+        reason = analytics_quarantine_reason(path, policy)
+        if not reason:
+            continue
+        residue.append(
+            {
+                "path": str(path),
+                "reason": reason,
+                "decision_state": "archive_only_not_allowed_for_clean_tuning",
+            }
+        )
+    return {
+        "status": "fail" if residue else "pass",
+        "policy": policy,
+        "residue_count": len(residue),
+        "residue": residue[:200],
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
     }
 
 
@@ -2446,6 +2591,7 @@ def build_threshold_cycle_postclose_verification(
     paths = _artifact_paths(target_date)
     ev_report = _load_json(paths["threshold_cycle_ev"])
     workorder = _load_json(paths["code_improvement_workorder"])
+    observation_source_quality_audit = _load_json(paths["observation_source_quality_audit"])
     runtime_summary = _load_json(paths["runtime_approval_summary"])
     runtime_apply_gap_audit = _load_json(paths["runtime_apply_gap_audit"])
     bridge_report = _load_json(paths["runtime_apply_bridge"])
@@ -2475,6 +2621,49 @@ def build_threshold_cycle_postclose_verification(
     ai_correction = _ai_correction_status(target_date)
     if ai_correction.get("status") == "fail":
         log_issues.append("ai_correction_unavailable_blocks_runtime_candidates")
+    clean_policy = clean_baseline_policy()
+    clean_baseline_report_residue = (
+        _clean_baseline_report_residue_status(REPORT_DIR)
+        if is_date_allowed(target_date, clean_policy)
+        else {
+            "status": "not_applicable_pre_clean_baseline_target",
+            "policy": clean_policy,
+            "residue_count": 0,
+            "residue": [],
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+        }
+    )
+    clean_baseline_analytics_residue = (
+        _clean_baseline_analytics_residue_status(ANALYTICS_DIR)
+        if is_date_allowed(target_date, clean_policy)
+        else {
+            "status": "not_applicable_pre_clean_baseline_target",
+            "policy": clean_policy,
+            "residue_count": 0,
+            "residue": [],
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+        }
+    )
+    if clean_baseline_report_residue.get("status") == "fail":
+        log_issues.append("clean_baseline_report_residue_present")
+    if clean_baseline_analytics_residue.get("status") == "fail":
+        log_issues.append("clean_baseline_analytics_residue_present")
+    if is_date_allowed(target_date, clean_policy) and not paths["observation_source_quality_audit"].exists():
+        log_issues.append("source_quality_preflight_missing")
+    source_quality_hard_block = _source_quality_hard_block_status(
+        observation_source_quality_audit,
+        ev_report=ev_report,
+        runtime_summary=runtime_summary,
+        ldm_report=ldm_report,
+        bridge_report=bridge_report,
+        workorder=workorder,
+    )
+    if source_quality_hard_block.get("candidate_violation_sources"):
+        log_issues.append("source_quality_hard_block_candidate_generated")
+    if source_quality_hard_block.get("workorder_handoff_present") is False:
+        log_issues.append("source_quality_hard_block_handoff_missing")
     entry_bucket_handoff = _entry_bucket_handoff_status(ldm_report, ev_report, runtime_summary, workorder)
     if entry_bucket_handoff.get("status") == "fail":
         log_issues.append("ldm_entry_bucket_handoff_missing")
@@ -3154,6 +3343,9 @@ def build_threshold_cycle_postclose_verification(
             "threshold_preopen_apply_next_generated_at": preopen_apply_next.get("generated_at"),
         },
         "handoff_warnings": sorted(set(handoff_warnings)),
+        "clean_baseline_report_residue": clean_baseline_report_residue,
+        "clean_baseline_analytics_residue": clean_baseline_analytics_residue,
+        "source_quality_hard_block": source_quality_hard_block,
         "ai_correction": ai_correction,
         "scalp_sim_overnight_source_quality": scalp_sim_overnight_quality,
         "entry_bucket_handoff": entry_bucket_handoff,

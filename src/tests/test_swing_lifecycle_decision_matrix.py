@@ -602,3 +602,21 @@ def test_swing_ldm_workorders_remain_source_only(tmp_path, monkeypatch):
     assert all(item["actual_order_submitted"] is False for item in workorders)
     assert all(item["broker_order_forbidden"] is True for item in workorders)
     assert all("runtime_threshold_mutation" in item["forbidden_uses"] for item in workorders)
+
+
+def test_swing_ldm_reports_clean_baseline_discovery_filter(tmp_path, monkeypatch):
+    target = "2026-06-04"
+    event_dir = tmp_path / "pipeline_events"
+    event_dir.mkdir()
+    monkeypatch.setattr(mod, "PIPELINE_EVENTS_DIR", event_dir)
+    monkeypatch.setattr(mod, "REPORT_DIR", tmp_path / "report" / "swing_lifecycle_decision_matrix")
+    (event_dir / f"pipeline_events_{target}.jsonl").write_text("", encoding="utf-8")
+    monkeypatch.setattr(mod, "_load_discovery_lifecycle_rows", lambda target_date, db_url, lookback_days: ([], {}))
+
+    report = mod.build_swing_lifecycle_decision_matrix(target, db_url="sqlite://", lookback_days=90)
+
+    assert report["clean_tuning_baseline"]["filter_active"] is True
+    assert report["summary"]["clean_baseline_requested_start_date"] == "2026-03-06"
+    assert report["summary"]["clean_baseline_effective_start_date"] == "2026-06-04"
+    assert report["summary"]["clean_baseline_excluded_pre_start_date"] == "2026-06-04"
+    assert "clean_tuning_baseline_swing_discovery_lookback_filtered" in report["warnings"]

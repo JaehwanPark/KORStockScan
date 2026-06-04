@@ -1861,6 +1861,7 @@ def _swing_probe_event_fields(stock: dict | None = None, **extra) -> dict:
         "actual_order_submitted": False,
         "broker_order_forbidden": True,
         "runtime_effect": "in_memory_probe_only",
+        "decision_authority": "swing_sim_exploration_only",
         "probe_id": stock.get("probe_id"),
         "probe_origin_stage": stock.get("probe_origin_stage"),
         "probe_arm": stock.get("probe_arm"),
@@ -1915,6 +1916,50 @@ def _swing_same_symbol_loss_reentry_key(code: str, strategy: str | None, now_ts:
     norm_code = str(code or "").strip()[:6]
     strategy_norm = normalize_strategy(strategy or "")
     return f"{day_key}:{strategy_norm}:{norm_code}"
+
+
+def _non_placeholder_source_value(value) -> str:
+    text = str(value or "").strip()
+    if text in {"", "-", "None", "none", "null"}:
+        return ""
+    return text
+
+
+def _resolve_swing_loss_reentry_source_ids(
+    stock: dict | None,
+    *,
+    code: str,
+    strategy: str,
+    source_stage: str,
+    now_ts: float,
+) -> dict:
+    stock = stock or {}
+    date_key = _swing_probe_daily_key(now_ts)
+    norm_code = str(code or stock.get("code") or "").strip()[:6]
+    strategy_norm = normalize_strategy(strategy or stock.get("strategy"))
+    candidates = (
+        ("probe_id", stock.get("probe_id")),
+        ("source_probe_id", stock.get("source_probe_id")),
+        ("source_record_id", stock.get("source_record_id")),
+        ("stock_id", stock.get("id") or stock.get("record_id")),
+    )
+    for source_name, value in candidates:
+        resolved = _non_placeholder_source_value(value)
+        if resolved:
+            return {
+                "source_probe_id": resolved,
+                "source_record_id": _non_placeholder_source_value(stock.get("source_record_id")) or resolved,
+                "source_id_source": source_name,
+            }
+    fallback = (
+        f"swing_dry_run:{date_key}:{strategy_norm}:{norm_code}:"
+        f"{str(source_stage or 'exit').strip() or 'exit'}:{int(float(now_ts or 0))}"
+    )
+    return {
+        "source_probe_id": fallback,
+        "source_record_id": fallback,
+        "source_id_source": "deterministic_fallback",
+    }
 
 
 def _is_swing_loss_reentry_stop_rule(exit_rule: str | None) -> bool:
@@ -2016,6 +2061,9 @@ def evaluate_swing_same_symbol_loss_reentry_guard(
             "loss_count": _safe_int(row.get("loss_count"), 0),
             "source_book": row.get("source_book") or "-",
             "source_probe_id": row.get("source_probe_id") or "-",
+            "source_record_id": row.get("source_record_id") or row.get("source_probe_id") or "-",
+            "source_stage": row.get("source_stage") or "-",
+            "source_id_source": row.get("source_id_source") or "-",
         }
     )
     if remaining > 0:
@@ -2036,6 +2084,11 @@ def _swing_loss_reentry_guard_log_fields(decision: dict | None) -> dict:
         "last_loss_exit_rule": decision.get("last_loss_exit_rule") or "-",
         "last_loss_profit_rate": decision.get("last_loss_profit_rate", "-"),
         "loss_count": _safe_int(decision.get("loss_count"), 0),
+        "source_book": decision.get("source_book") or "-",
+        "source_probe_id": decision.get("source_probe_id") or "-",
+        "source_record_id": decision.get("source_record_id") or decision.get("source_probe_id") or "-",
+        "source_stage": decision.get("source_stage") or "-",
+        "source_id_source": decision.get("source_id_source") or "-",
     }
 
 
@@ -2121,6 +2174,13 @@ def _record_swing_same_symbol_loss_reentry_cooldown(
     consecutive_loss_trigger = loss_count >= consecutive_trigger
     should_block = stop_loss_trigger or consecutive_loss_trigger
     blocked_until = max(blocked_until_existing, now_value + cooldown_sec) if should_block and cooldown_sec > 0 else blocked_until_existing
+    source_ids = _resolve_swing_loss_reentry_source_ids(
+        stock,
+        code=norm_code,
+        strategy=strategy_norm,
+        source_stage=source_stage,
+        now_ts=now_value,
+    )
     row = {
         "date": _swing_probe_daily_key(now_value),
         "strategy": strategy_norm,
@@ -2132,7 +2192,7 @@ def _record_swing_same_symbol_loss_reentry_cooldown(
         "last_loss_profit_rate": profit,
         "source_stage": source_stage,
         "source_book": (stock or {}).get("simulation_book") or ("real_order" if actual_order_submitted else "swing_dry_run"),
-        "source_probe_id": (stock or {}).get("probe_id") or "-",
+        **source_ids,
         "actual_order_submitted": bool(actual_order_submitted),
         "trigger": "stop_loss" if stop_loss_trigger else ("consecutive_losses" if consecutive_loss_trigger else "loss_observed"),
     }
@@ -2152,6 +2212,9 @@ def _record_swing_same_symbol_loss_reentry_cooldown(
             trigger=row["trigger"],
             source_book=row["source_book"],
             source_probe_id=row["source_probe_id"],
+            source_record_id=row["source_record_id"],
+            source_stage=row["source_stage"],
+            source_id_source=row["source_id_source"],
             actual_order_submitted=bool(actual_order_submitted),
             broker_order_forbidden=not bool(actual_order_submitted),
         )
@@ -2200,6 +2263,11 @@ def _has_duplicate_swing_probe(code: str, strategy: str, origin_stage: str) -> b
 
 def _log_swing_probe_discard(stock, code, origin_stage: str, reason: str, **fields) -> bool:
     now_ts = _safe_float(fields.pop("_now_ts", None), time.time())
+    source_probe_id = _non_placeholder_source_value(fields.pop("source_probe_id", None))
+    source_record_id = _non_placeholder_source_value(fields.pop("source_record_id", None))
+    source_stage = _non_placeholder_source_value(fields.pop("source_stage", None))
+    source_book = _non_placeholder_source_value(fields.pop("source_book", None))
+    source_id_source = _non_placeholder_source_value(fields.pop("source_id_source", None))
     min_interval = max(0, _rule_int("SWING_INTRADAY_PROBE_DISCARD_LOG_MIN_INTERVAL_SEC", 60))
     normalized_reason = str(reason or "")
     global_quota_reasons = {"max_open_reached", "origin_quota_reached"}
@@ -2217,17 +2285,30 @@ def _log_swing_probe_discard(stock, code, origin_stage: str, reason: str, **fiel
         return False
     _SWING_PROBE_DISCARD_LOG_TS[key] = now_ts
     quota_scope = "global_probe_quota" if normalized_reason in global_quota_reasons else "symbol_probe_quota"
+    discard_source_record_id = source_record_id or record_id or (
+        f"swing_probe_discard:{dedup_code}:{str(origin_stage or '').strip()}:{normalized_reason}"
+    )
     base_fields = {
         "probe_origin_stage": origin_stage,
         "discard_reason": normalized_reason,
         "blocker_authority": "probe_capacity_only",
         "quota_observation_scope": quota_scope,
+        "evidence_quality": "probe_capacity_observation",
+        "source_record_id": discard_source_record_id,
         "hard_gate": False,
         "allowed_runtime_apply": False,
         "actual_order_submitted": False,
         "broker_order_forbidden": True,
         "runtime_effect": "in_memory_probe_only",
     }
+    if source_probe_id:
+        base_fields["source_probe_id"] = source_probe_id
+    if source_stage:
+        base_fields["source_stage"] = source_stage
+    if source_book:
+        base_fields["source_book"] = source_book
+    if source_id_source:
+        base_fields["source_id_source"] = source_id_source
     safe_fields = _sanitize_swing_probe_extra_fields(
         fields,
         base_fields.keys(),
@@ -2606,6 +2687,7 @@ def _scalp_sim_event_fields(**extra) -> dict:
         "broker_order_forbidden": True,
         "decision_authority": "sim_observation_only",
         "calibration_authority": "equal_weight",
+        "runtime_effect": False,
     }
     fields.update(extra)
     return fields
@@ -2623,6 +2705,8 @@ def _scalp_sim_submit_guard_context_fields(source: dict | None) -> dict:
         "sim_pre_submit_overbought_reason",
         "sim_overbought_risk_state",
         "sim_overbought_risk_bucket",
+        "sim_overbought_context_source",
+        "sim_overbought_source_quality",
         "sim_latency_state",
         "sim_latency_danger_reasons",
         "sim_order_price",
@@ -2778,6 +2862,20 @@ def _has_active_scalp_simulator_position(code: str) -> bool:
         and _active_runtime_status(target)
         for target in (ACTIVE_TARGETS or [])
     )
+
+
+def _active_scalp_simulator_position(code: str) -> dict | None:
+    norm = str(code or "").strip()[:6]
+    if not norm:
+        return None
+    for target in (ACTIVE_TARGETS or []):
+        if (
+            str((target or {}).get("code") or "").strip()[:6] == norm
+            and _is_scalp_simulator_target(target)
+            and _active_runtime_status(target)
+        ):
+            return target
+    return None
 
 
 def _scalp_sim_buy_quote_touch(ws_data: dict, limit_price: int) -> tuple[bool, int, int, int]:
@@ -4067,15 +4165,18 @@ def maybe_arm_scalp_live_simulator_from_buy_signal(
         current_ai_score=current_ai_score,
         now_ts=now_ts,
     )
-    if _has_active_scalp_simulator_position(code):
+    active_sim_position = _active_scalp_simulator_position(code)
+    if active_sim_position:
         _log_entry_pipeline(
             stock,
             code,
             "scalp_sim_duplicate_buy_signal",
             **_scalp_sim_event_fields(
                 threshold_family="entry_mechanical_momentum",
+                sim_record_id=active_sim_position.get("sim_record_id"),
                 sim_parent_record_id=stock.get("id"),
                 ai_score=f"{current_ai_score:.1f}",
+                runtime_effect="sim_observation_skipped",
             ),
         )
         return False
@@ -4320,6 +4421,7 @@ def maybe_arm_scalp_live_simulator_from_buy_signal(
                 entry_adm_candidate_id=entry_adm_candidate_id,
                 sim_record_id=sim_record_id,
                 sim_parent_record_id=stock.get("id"),
+                runtime_effect="sim_entry_pre_submit_warning_only",
                 **sim_pre_submit_guard_fields,
                 **sim_submit_revalidation_fields,
                 **sim_price_snapshot,
@@ -8569,7 +8671,12 @@ def _bucket_top_depth_ratio(value) -> str:
 
 
 def _quote_freshness_bucket(ws_data) -> str:
-    if bool((ws_data or {}).get("quote_stale")):
+    raw_quote_stale = (ws_data or {}).get("quote_stale")
+    if isinstance(raw_quote_stale, str):
+        quote_stale = raw_quote_stale.strip().lower() in {"1", "true", "yes", "y", "stale"}
+    else:
+        quote_stale = bool(raw_quote_stale)
+    if quote_stale:
         return "stale"
     age = _get_ws_snapshot_age_sec(ws_data)
     if age is None:
@@ -9186,7 +9293,10 @@ def _evaluate_scalp_pre_submit_guard_verdicts(
     elif not overbought_state:
         overbought_action = "PASS"
         overbought_reason = "overbought_unknown"
-    elif overbought_state in {"pullback_observed", "rebreak_candidate"}:
+    elif overbought_state == "not_evaluated":
+        overbought_action = "PASS"
+        overbought_reason = "overbought_not_evaluated"
+    elif overbought_state in {"pullback_observed", "rebreak_candidate", "not_overbought", "overbought_normal"}:
         overbought_action = "PASS"
         overbought_reason = "overbought_ok"
     else:
@@ -9267,9 +9377,11 @@ def _sim_submit_path_contract_fields(threshold_family: str) -> dict:
 
 def _sim_submit_liquidity_value(ws_data: dict | None, runtime: dict | None) -> int | None:
     runtime = runtime if isinstance(runtime, dict) else {}
-    for key in ("liquidity_value", "scalp_liquidity_value"):
-        if key in runtime and runtime.get(key) not in (None, "", "-", "None", "none", "null"):
-            return _safe_int(runtime.get(key), 0)
+    source_quality = str(runtime.get("scalp_liquidity_source_quality") or "").strip()
+    if source_quality != "missing_orderbook_totals":
+        for key in ("liquidity_value", "scalp_liquidity_value"):
+            if key in runtime and runtime.get(key) not in (None, "", "-", "None", "none", "null"):
+                return _safe_int(runtime.get(key), 0)
     ws_data = ws_data if isinstance(ws_data, dict) else {}
     if "ask_tot" not in ws_data and "bid_tot" not in ws_data:
         return None
@@ -9277,6 +9389,75 @@ def _sim_submit_liquidity_value(ws_data: dict | None, runtime: dict | None) -> i
     if curr_price <= 0:
         return None
     return (_safe_int(ws_data.get("ask_tot"), 0) + _safe_int(ws_data.get("bid_tot"), 0)) * curr_price
+
+
+def _derive_sim_overbought_context_fields(
+    *,
+    ws_data: dict | None,
+    runtime: dict | None,
+    pre_ai_context_fields: dict | None,
+) -> dict:
+    context_fields = dict(pre_ai_context_fields) if isinstance(pre_ai_context_fields, dict) else {}
+    if str(
+        context_fields.get("overbought_risk_state")
+        or context_fields.get("overbought_state")
+        or ""
+    ).strip():
+        context_fields.setdefault("overbought_context_source", "pre_ai_gate_context")
+        context_fields.setdefault("overbought_source_quality", "pre_ai_gate_context_present")
+        return context_fields
+
+    runtime = runtime if isinstance(runtime, dict) else {}
+    ws_data = ws_data if isinstance(ws_data, dict) else {}
+    nested = runtime.get("scalp_pre_ai_gate_context") if isinstance(runtime.get("scalp_pre_ai_gate_context"), dict) else {}
+    overbought = nested.get("overbought") if isinstance(nested.get("overbought"), dict) else {}
+    state = str(overbought.get("risk_state") or overbought.get("state") or "").strip()
+    if state:
+        context_fields["overbought_risk_state"] = state
+        context_fields["overbought_risk_bucket"] = overbought.get("risk_bucket") or "-"
+        context_fields["overbought_context_source"] = "runtime_pre_ai_gate_context"
+        context_fields["overbought_source_quality"] = "pre_ai_gate_context_present"
+        return context_fields
+
+    intraday_range = _safe_float(
+        ws_data.get("intraday_range_pct")
+        or runtime.get("intraday_range_pct")
+        or runtime.get("scalp_intraday_range_pct"),
+        None,
+    )
+    distance_high = _safe_float(
+        ws_data.get("distance_from_day_high_pct")
+        or runtime.get("distance_from_day_high_pct")
+        or runtime.get("scalp_distance_from_day_high_pct"),
+        None,
+    )
+    if intraday_range is None:
+        context_fields["overbought_risk_state"] = "not_evaluated"
+        context_fields["overbought_risk_bucket"] = "overbought_context_missing"
+        context_fields["overbought_context_source"] = "missing_overlap_context"
+        context_fields["overbought_source_quality"] = "missing_intraday_range"
+        return context_fields
+
+    max_intraday_surge = _safe_float(
+        runtime.get("scalp_max_intraday_surge")
+        or runtime.get("max_intraday_surge")
+        or _rule_float("MAX_INTRADAY_SURGE", 15.0),
+        15.0,
+    )
+    if intraday_range < max(0.0, max_intraday_surge):
+        context_fields["overbought_risk_state"] = "not_overbought"
+        context_fields["overbought_risk_bucket"] = "overbought_normal"
+    else:
+        pullback_min = _rule_float("SCALP_OVERBOUGHT_PULLBACK_MIN_DISTANCE_PCT", -0.35)
+        if distance_high is not None and distance_high <= pullback_min:
+            context_fields["overbought_risk_state"] = "pullback_observed"
+            context_fields["overbought_risk_bucket"] = "pullback_candidate"
+        else:
+            context_fields["overbought_risk_state"] = "pullback_required"
+            context_fields["overbought_risk_bucket"] = "chase_risk"
+    context_fields["overbought_context_source"] = "sim_intraday_range_fallback"
+    context_fields["overbought_source_quality"] = "derived_from_intraday_range"
+    return context_fields
 
 
 def _build_sim_pre_submit_guard_observation_fields(
@@ -9290,7 +9471,11 @@ def _build_sim_pre_submit_guard_observation_fields(
     runtime = runtime if isinstance(runtime, dict) else {}
     latency_gate = latency_gate if isinstance(latency_gate, dict) else {}
     price_snapshot = price_snapshot if isinstance(price_snapshot, dict) else {}
-    context_fields = pre_ai_context_fields if isinstance(pre_ai_context_fields, dict) else {}
+    context_fields = _derive_sim_overbought_context_fields(
+        ws_data=ws_data,
+        runtime=runtime,
+        pre_ai_context_fields=pre_ai_context_fields,
+    )
     min_liquidity = _safe_int(
         runtime.get("scalp_min_liquidity"),
         _rule_int("MIN_SCALP_LIQUIDITY", 500_000_000),
@@ -9319,6 +9504,8 @@ def _build_sim_pre_submit_guard_observation_fields(
         "sim_pre_submit_overbought_reason": overbought_reason,
         "sim_overbought_risk_state": verdicts.get("overbought_risk_state") or "-",
         "sim_overbought_risk_bucket": verdicts.get("overbought_risk_bucket") or "-",
+        "sim_overbought_context_source": context_fields.get("overbought_context_source") or "-",
+        "sim_overbought_source_quality": context_fields.get("overbought_source_quality") or "-",
         "sim_latency_state": str(latency_gate.get("latency_state") or "-"),
         "sim_latency_danger_reasons": str(
             latency_gate.get("latency_danger_reasons")
@@ -10255,6 +10442,7 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
 
         ask_tot = _safe_int(ws_data.get('ask_tot'), 0)
         bid_tot = _safe_int(ws_data.get('bid_tot'), 0)
+        liquidity_totals_present = "ask_tot" in ws_data or "bid_tot" in ws_data
         open_price = float(ws_data.get('open', curr_price) or curr_price)
         marcap = _resolve_stock_marcap(stock, code)
         turnover_hint = estimate_turnover_hint(curr_price, ws_data.get('volume', 0))
@@ -10267,6 +10455,12 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
             scalp_limits.get('max_intraday_surge', config["MAX_INTRADAY_SURGE"]) or config["MAX_INTRADAY_SURGE"]
         )
         min_liquidity = int(scalp_limits.get('min_liquidity', config["MIN_SCALP_LIQUIDITY"]) or config["MIN_SCALP_LIQUIDITY"])
+        runtime["liquidity_value"] = int(liquidity_value)
+        runtime["scalp_liquidity_value"] = int(liquidity_value)
+        runtime["scalp_min_liquidity"] = int(min_liquidity)
+        runtime["scalp_liquidity_source_quality"] = (
+            "valid_orderbook_totals" if liquidity_totals_present else "missing_orderbook_totals"
+        )
         big_bite_hit = False
         big_bite_armed = False
         big_bite_confirmed = False
@@ -10661,6 +10855,34 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                         recent_ticks = kiwoom_utils.get_tick_history_ka10003(KIWOOM_TOKEN, code, limit=10)
                         recent_candles = kiwoom_utils.get_minute_candles_ka10080(KIWOOM_TOKEN, code, limit=40)
                         if ws_data.get('orderbook') and recent_ticks:
+                            adm_overlap_snapshot = _extract_ai_overlap_snapshot(
+                                ws_data=ws_data,
+                                recent_ticks=recent_ticks,
+                                recent_candles=recent_candles,
+                                ai_engine=ai_engine,
+                            )
+                            quote_age_sec = _get_ws_snapshot_age_sec(ws_data)
+                            if quote_age_sec is not None:
+                                ws_data.setdefault("quote_age_ms", int(round(quote_age_sec * 1000.0)))
+                                ws_data.setdefault("quote_age_source", "last_ws_update_ts")
+                            elif ws_data.get("orderbook"):
+                                ws_data.setdefault("quote_age_source", "orderbook_without_timestamp")
+                            if "quote_stale" not in ws_data:
+                                quote_freshness = _quote_freshness_bucket(ws_data)
+                                if quote_freshness in {"fresh", "aging"}:
+                                    ws_data["quote_stale"] = False
+                                elif quote_freshness == "stale":
+                                    ws_data["quote_stale"] = True
+                                elif ws_data.get("orderbook"):
+                                    ws_data["quote_stale"] = False
+                                    ws_data.setdefault(
+                                        "quote_freshness_source_quality",
+                                        "orderbook_timestamp_missing",
+                                    )
+                            ws_data.setdefault("current_ai_score", current_ai_score)
+                            ws_data.setdefault("ai_score_baseline_source", "pre_analyze_target_runtime_score")
+                            for adm_key, adm_value in adm_overlap_snapshot.items():
+                                ws_data.setdefault(adm_key, adm_value)
                             ai_decision = ai_engine.analyze_target(
                                 stock['name'],
                                 ws_data,
@@ -11836,7 +12058,6 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                     "target_budget": target_budget,
                     "safe_budget": safe_budget,
                     "safety_ratio": f"{used_safety_ratio:.4f}",
-                    "curr_price": curr_price,
                     "budget_cap": budget_cap if budget_cap_applied else "-",
                 },
             )
@@ -12368,7 +12589,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             **latency_price_snapshot,
             **entry_orderbook_micro_fields,
             "ai_score": latency_signal_score,
-            "liquidity_value": int(liquidity_value),
+            "liquidity_value": _safe_int(liquidity_value, 0),
             **real_pre_submit_guard_fields,
             "stale_quote_submit_block": False,
             "broker_submit_blocked": False,
@@ -13706,7 +13927,7 @@ def handle_watching_state(stock, code, ws_data, admin_id, *, now_ts=None, now_dt
         "current_vpw": current_vpw,
         "fluctuation": fluctuation,
         "current_ai_score": current_ai_score,
-        "liquidity_value": 0,
+        "liquidity_value": None,
         "is_trigger": False,
         "msg": "",
         "ratio": 0.10,

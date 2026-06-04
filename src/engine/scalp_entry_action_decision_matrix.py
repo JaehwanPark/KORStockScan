@@ -642,6 +642,51 @@ def _bucket_summary(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return sorted(summaries, key=lambda item: (-_safe_int(item.get("sample_count")), item.get("bucket_token") or ""))[:50]
 
 
+def _unknown_bucket_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    dimensions = (
+        "score_bucket",
+        "risk_context_bucket",
+        "stale_bucket",
+        "price_resolution_bucket",
+        "liquidity_bucket",
+        "overbought_bucket",
+    )
+    total = len(rows)
+    dimension_counts: dict[str, int] = {}
+    stage_counts: Counter[str] = Counter()
+    examples: list[dict[str, Any]] = []
+    for row in rows:
+        unknown_dimensions = [
+            key for key in dimensions if "unknown" in str(row.get(key) or "").lower()
+        ]
+        if not unknown_dimensions:
+            continue
+        for key in unknown_dimensions:
+            dimension_counts[key] = dimension_counts.get(key, 0) + 1
+        stage_counts[str(row.get("stage") or "-")] += 1
+        if len(examples) < 10:
+            examples.append(
+                {
+                    "stage": row.get("stage"),
+                    "stock_code": row.get("stock_code"),
+                    "event_time": row.get("event_time"),
+                    "unknown_dimensions": unknown_dimensions,
+                    "bucket_token": "|".join(str(row.get(key) or "-") for key in dimensions),
+                }
+            )
+    affected = sum(stage_counts.values())
+    return {
+        "affected_rows": affected,
+        "total_rows": total,
+        "affected_rate": round(affected / total, 4) if total else 0.0,
+        "dimension_counts": dimension_counts,
+        "stage_counts": dict(stage_counts),
+        "examples": examples,
+        "source_quality_gate": "source_quality_blocker" if affected else "pass",
+        "recommended_route": "source_quality_workorder" if affected else "none",
+    }
+
+
 def build_scalp_entry_action_decision_matrix_report(target_date: str) -> dict[str, Any]:
     target_date = str(target_date).strip()
     evaluations, eval_summary = _load_sim_evaluations(target_date)
@@ -661,6 +706,7 @@ def build_scalp_entry_action_decision_matrix_report(target_date: str) -> dict[st
     runtime_bias_applied = sum(1 for row in rows if row.get("entry_adm_runtime_bias_applied"))
     runtime_effect_counts = Counter(str(row.get("entry_adm_runtime_effect") or "-") for row in rows)
     forced_action_counts = Counter(str(row.get("entry_adm_forced_action") or "-") for row in rows)
+    unknown_summary = _unknown_bucket_summary(rows)
     warnings = []
     if joined_sample < SAMPLE_FLOOR:
         warnings.append("joined_sample_below_sample_floor")
@@ -671,6 +717,8 @@ def build_scalp_entry_action_decision_matrix_report(target_date: str) -> dict[st
         warnings.append("missing_action_bucket_summary_row")
     if any(row.get("risk_context_bucket") == "source_quality_blocker" for row in rows):
         warnings.append("source_quality_gap")
+    if _safe_int(unknown_summary.get("affected_rows"), 0) > 0:
+        warnings.append("unknown_bucket_source_quality_gap")
     if rows and prompt_applied == 0:
         warnings.append("prompt_context_not_loaded")
     status = "pass" if not warnings else "warning"
@@ -721,6 +769,7 @@ def build_scalp_entry_action_decision_matrix_report(target_date: str) -> dict[st
             "missing_actions": missing_actions,
             "zero_sample_actions": zero_sample_actions,
             "missing_action_summary_rows": missing_action_summary_rows,
+            "unknown_bucket_summary": unknown_summary,
             "status": status,
             "warnings": warnings,
             "post_sell_evaluation": eval_summary,
@@ -744,6 +793,11 @@ def build_scalp_entry_action_decision_matrix_report(target_date: str) -> dict[st
 
 def render_scalp_entry_action_decision_matrix_markdown(report: dict[str, Any]) -> str:
     summary = report.get("summary") if isinstance(report.get("summary"), dict) else {}
+    unknown_summary = (
+        summary.get("unknown_bucket_summary")
+        if isinstance(summary.get("unknown_bucket_summary"), dict)
+        else {}
+    )
     lines = [
         f"# Scalp Entry Action Decision Matrix - {report.get('date')}",
         "",
@@ -764,6 +818,8 @@ def render_scalp_entry_action_decision_matrix_markdown(report: dict[str, Any]) -
         f"- action_counts: `{summary.get('action_counts')}`",
         f"- missing_actions: `{summary.get('missing_actions')}`",
         f"- zero_sample_actions: `{summary.get('zero_sample_actions')}`",
+        f"- unknown_bucket_affected_rows: `{unknown_summary.get('affected_rows', 0)}`",
+        f"- unknown_bucket_dimension_counts: `{unknown_summary.get('dimension_counts') or {}}`",
         "",
         "## Action Summary",
         "| action | sample | joined | sq_adjusted_ev_pct | equal_weight_avg_profit_pct | missed_winner | avoided_loser |",

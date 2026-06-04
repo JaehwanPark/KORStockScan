@@ -1,10 +1,12 @@
 # KORStockScan 기본계획 대비 실행 변경사항
 
-기준 시각: `2026-04-19 KST`
+기준 시각: `2026-06-04 KST`
 
 이 문서는 `2026-04-11` 원안 계획과 `2026-04-19` 현재 실행 기준 사이에서 실제로 변경된 사항만 추린다.  
 현재 중심 기준은 [plan-korStockScanPerformanceOptimization.rebase.md](./plan-korStockScanPerformanceOptimization.rebase.md)를 본다.  
 `fallback_scout/main`, `fallback_single`, `latency fallback split-entry` 등 영문 축 표현은 [Plan Rebase 용어 범례](./plan-korStockScanPerformanceOptimization.rebase.md#2-용어-범례)를 우선한다.
+
+튜닝 데이터 의사결정 기준은 `clean_tuning_baseline_date=2026-06-04`, `clean_tuning_baseline_ts_kst=2026-06-04T14:29:09+09:00`이다. 이 문서의 과거 변경 이력은 archive/audit evidence이며, 기준 이전 raw/report/analytics artifact 또는 그 기반 보고서를 현재 EV, rolling/MTD/cumulative tuning, live-auto promotion, runtime approval, pattern lab promotion, real execution quality approval 입력으로 재사용하지 않는다.
 
 ## 1. 판정
 

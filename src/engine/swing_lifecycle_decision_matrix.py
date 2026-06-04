@@ -12,7 +12,9 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Iterable
 
+from src.engine.automation.source_quality_clean_baseline import clean_baseline_policy, is_date_allowed
 from src.engine.swing_strategy_discovery_ev_report import _load_rows as _load_discovery_rows
+from src.engine.swing_strategy_discovery_ev_report import _clean_baseline_metadata
 from src.engine.swing_strategy_discovery_ev_report import report_paths as discovery_ev_paths
 from src.utils.constants import DATA_DIR, POSTGRES_URL
 from src.utils.jsonl_io import iter_jsonl
@@ -1114,6 +1116,8 @@ def build_swing_lifecycle_decision_matrix(
     lookback_days: int = 90,
 ) -> dict[str, Any]:
     date_key = _date_text(target_date)
+    clean_metadata = _clean_baseline_metadata(date_key, lookback_days)
+    clean_policy = clean_baseline_policy()
     probe_rows, probe_diagnostics = _load_probe_rows_with_diagnostics(date_key)
     discovery_rows, arm_status_counts = _load_discovery_lifecycle_rows(
         date_key,
@@ -1160,6 +1164,10 @@ def build_swing_lifecycle_decision_matrix(
     )
     if pending:
         warnings.append("pending_future_quotes")
+    if clean_metadata.get("filter_active"):
+        warnings.append("clean_tuning_baseline_swing_discovery_lookback_filtered")
+    if not is_date_allowed(date_key, clean_policy):
+        warnings.append(f"clean_tuning_baseline_excludes_date:{date_key}")
 
     json_path, md_path = report_paths(date_key)
     discovery_json, _ = discovery_ev_paths(date_key)
@@ -1176,6 +1184,7 @@ def build_swing_lifecycle_decision_matrix(
         "actual_order_submitted": False,
         "broker_order_forbidden": True,
         "primary_metrics": PRIMARY_METRICS,
+        "clean_tuning_baseline": clean_metadata,
         "input_contract": {
             "allowed_source_books": sorted(ALLOWED_SOURCE_BOOKS),
             "swing_daily_simulation_consumed": False,
@@ -1207,6 +1216,10 @@ def build_swing_lifecycle_decision_matrix(
             "swing_entry_bottleneck_primary": swing_entry_bottleneck.get("primary"),
             "swing_lifecycle_contract_gap_count": swing_lifecycle_contract_gaps.get("gap_count"),
             "arm_status_counts": arm_status_counts,
+            "clean_baseline_discovery_filter_active": clean_metadata.get("filter_active"),
+            "clean_baseline_effective_start_date": clean_metadata.get("effective_start_date"),
+            "clean_baseline_requested_start_date": clean_metadata.get("requested_start_date"),
+            "clean_baseline_excluded_pre_start_date": clean_metadata.get("excluded_pre_start_date"),
         },
         "swing_entry_bottleneck": swing_entry_bottleneck,
         "swing_lifecycle_contract_gaps": swing_lifecycle_contract_gaps,

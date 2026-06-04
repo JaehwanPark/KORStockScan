@@ -1,8 +1,10 @@
 # Report Directory Inventory
 
-작성 기준: `2026-05-20 KST`
+작성 기준: `2026-06-04 KST`
 
 이 디렉토리는 운영/감리용 산출물을 저장한다. 기본 원칙은 JSON/JSONL을 canonical data로 두고, 사람이 장후 판정에 바로 읽어야 하는 항목만 Markdown 리포트로 별도 생성한다.
+
+튜닝 데이터 기준은 `clean_tuning_baseline_date=2026-06-04`, `clean_tuning_baseline_ts_kst=2026-06-04T13:45:27+09:00`이다. 이 기준 이전 report와 같은 날짜 clean reset 이전 `generated_at`/mtime report는 archive-only/audit evidence이며, EV/rolling/MTD/cumulative tuning, live-auto promotion, runtime approval, pattern lab promotion, real execution quality approval 입력으로 쓰지 않는다. `threshold_cycle_preopen_status`와 `threshold_cycle_postclose_status`는 `artifact_freshness`가 소비하는 운영 status artifact라서 tuning decision report quarantine 대상이 아니다.
 
 report 산출물이 threshold calibration, 자동 threshold 적용, bot restart, post-apply attribution으로 이어지는 전체 추적성은 [report-based-automation-traceability.md](/home/ubuntu/KORStockScan/docs/report-based-automation-traceability.md)를 기준으로 확인한다. calibration은 새 관찰축을 만들지 않고 이 디렉토리의 기존 BUY, 보유/청산, decision-support 리포트를 source bundle로 읽는다.
 

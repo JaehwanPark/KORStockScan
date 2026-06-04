@@ -1,9 +1,11 @@
 # 계획: KORStockScan 성능 최적화 실행안 (Session Prompt)
 
-기준 시각: `2026-05-20 KST (자동화체인 Rebase 현행화)`
+기준 시각: `2026-06-04 KST (clean tuning data baseline 현행화)`
 역할: 다음 세션에서 중심 기준 문서로 진입하기 위한 경량 포인터다.
 
 이 문서는 세션 시작용 포인터만 남긴다. 현재 판단의 source of truth는 [Plan Rebase](./plan-korStockScanPerformanceOptimization.rebase.md), 실행 작업은 날짜별 `stage2 todo checklist`, 자동화 산출물/consumer 계약은 [report-based-automation-traceability](./report-based-automation-traceability.md)가 소유한다. 2026-05-13 이전 prompt 원문은 [pre-automation-renewal archive](./archive/plan-korStockScanPerformanceOptimization.prompt.pre-automation-renewal-2026-05-13.md)에 보존했다. 기준 문서 갱신은 사용자의 명시 작업지시가 있을 때만 수행하고 runtime/order/provider/bot/threshold 변경과 분리한다.
+
+튜닝 데이터 의사결정 기준은 `clean_tuning_baseline_date=2026-06-04`, `clean_tuning_baseline_ts_kst=2026-06-04T14:29:09+09:00`이다. 정책 source는 `data/source_quality/clean_baseline_policy.json`이며, pre-baseline raw/report/analytics artifact는 archive/audit evidence로만 남기고 EV, rolling/MTD/cumulative tuning, live-auto promotion, runtime approval, pattern lab promotion, real execution quality approval에 사용하지 않는다.
 
 ## 현재 Source of Truth
 
@@ -12,9 +14,10 @@
 3. 자동화체인/Metric Decision Contract: [report-based-automation-traceability.md](./report-based-automation-traceability.md)
 4. threshold collector/report/apply plan/runtime env: [data/threshold_cycle/README.md](../data/threshold_cycle/README.md)
 5. report inventory와 Markdown 누락 후보: [data/report/README.md](../data/report/README.md)
-6. 원안 대비 실행 변경과 종료 이력: [plan-korStockScanPerformanceOptimization.execution-delta.md](./plan-korStockScanPerformanceOptimization.execution-delta.md)
-7. 반복 판단 기준과 감리 Q&A: [plan-korStockScanPerformanceOptimization.qna.md](./plan-korStockScanPerformanceOptimization.qna.md)
-8. 종료/폐기 관찰축: [archive/closed-observation-axes-2026-05-01.md](./archive/closed-observation-axes-2026-05-01.md)
+6. clean tuning data baseline policy: [data/source_quality/clean_baseline_policy.json](../data/source_quality/clean_baseline_policy.json)
+7. 원안 대비 실행 변경과 종료 이력: [plan-korStockScanPerformanceOptimization.execution-delta.md](./plan-korStockScanPerformanceOptimization.execution-delta.md)
+8. 반복 판단 기준과 감리 Q&A: [plan-korStockScanPerformanceOptimization.qna.md](./plan-korStockScanPerformanceOptimization.qna.md)
+9. 종료/폐기 관찰축: [archive/closed-observation-axes-2026-05-01.md](./archive/closed-observation-axes-2026-05-01.md)
 
 ## 현재 운영 원칙
 
@@ -41,9 +44,10 @@
 1. Plan Rebase §1~§8을 읽는다.
 2. 당일 checklist 상단 `오늘 목적`, `오늘 강제 규칙`을 읽는다.
 3. AGENTS.md `현재 상태 기준` 날짜가 Plan Rebase와 맞는지 확인한다.
-4. dirty worktree가 있으면 사용자/runtime 변경을 되돌리지 않는다.
-5. README/런북(runbook)/Plan Rebase/prompt/AGENTS를 바꾸면 1차 수정 후 2차 감리에서 이력성 내용 archive 여부, 영어 약칭의 한글/영어 병기, runtime/order/provider/bot mutation 금지선을 확인한 뒤 최종 수정으로 닫는다.
-6. 문서/checklist를 바꾸면 parser 검증을 실행하고, Project/Calendar 동기화는 사용자 수동 명령으로만 남긴다.
+4. clean tuning data baseline이 `2026-06-04T14:29:09+09:00` 이후 데이터만 tuning decision input으로 허용하는지 확인한다.
+5. dirty worktree가 있으면 사용자/runtime 변경을 되돌리지 않는다.
+6. README/런북(runbook)/Plan Rebase/prompt/AGENTS를 바꾸면 1차 수정 후 2차 감리에서 이력성 내용 archive 여부, 영어 약칭의 한글/영어 병기, runtime/order/provider/bot mutation 금지선을 확인한 뒤 최종 수정으로 닫는다.
+7. 문서/checklist를 바꾸면 parser 검증을 실행하고, Project/Calendar 동기화는 사용자 수동 명령으로만 남긴다.
 
 ## 문서 운영 규칙
 

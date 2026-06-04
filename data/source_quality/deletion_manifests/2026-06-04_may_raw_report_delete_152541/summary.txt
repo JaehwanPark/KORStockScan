@@ -1,0 +1,6 @@
+deleted_at_kst=2026-06-04T15:25:41+0900
+scope=2026-05 raw/report/prebaseline analytics residue
+count=2304
+bytes=3107498022
+roots=data/pipeline_events data/threshold_cycle data/report data/source_quality/report_quarantine data/source_quality/analytics_quarantine
+policy=pre_clean_baseline_delete_not_allowed_for_tuning

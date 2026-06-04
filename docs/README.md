@@ -1,8 +1,10 @@
 # KORStockScan 문서 구조
 
-작성 기준: 2026-05-20 KST
+작성 기준: 2026-06-04 KST
 
 이 디렉터리는 Plan Rebase 이후의 운영 의사결정, 날짜별 실행 체크리스트, runbook, report traceability, 감리/리포트 증적을 관리한다. 현재 판단의 원본은 루트 기준 문서와 날짜별 checklist이고, 과거 전환 증적은 `archive/`에 보존한다.
+
+튜닝 데이터 의사결정 기준일은 `2026-06-04 KST`다. 세부 기준은 `clean_tuning_baseline_date=2026-06-04`, `clean_tuning_baseline_ts_kst=2026-06-04T14:29:09+09:00`이며, 정책 artifact는 `data/source_quality/clean_baseline_policy.json`이다. 이 기준 이전 raw/report/analytics 데이터와 보고서는 archive-only/audit evidence이고, 현재 EV/rolling/MTD/cumulative tuning, live-auto promotion, runtime approval, pattern lab promotion, real execution quality approval의 입력으로 쓰지 않는다.
 
 ## 먼저 볼 문서
 
@@ -12,6 +14,7 @@
 - `plan-korStockScanPerformanceOptimization.performance-report.md`: Plan Rebase 성과 판정과 반복 성과 기준.
 - `time-based-operations-runbook.md`: 장전, 장중, 장후, 21:00 EOD 데이터 갱신 cron 확인 절차.
 - `report-based-automation-traceability.md`: report 산출물, downstream consumer, runtime mutation 금지선, postclose chain contract.
+- `../data/source_quality/clean_baseline_policy.json`: 현재 튜닝 데이터 날짜 기준과 pre-baseline forbidden-use 정책.
 - `stage2-todo-checklist-template.md`: 날짜별 checklist 작성 형식.
 - `checklists/YYYY-MM-DD-stage2-todo-checklist.md`: 날짜별 checklist의 표준 위치. 실제 실행 작업항목의 소유 문서이며, legacy root checklist도 이 위치로 정리한다.
 

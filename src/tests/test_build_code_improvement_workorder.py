@@ -1,5 +1,6 @@
 import json
 
+from src.engine.automation import codex_workorder_runner
 from src.engine import build_code_improvement_workorder as mod
 
 
@@ -1023,6 +1024,154 @@ def test_observation_source_quality_unknown_warning_creates_rollup_order():
         closed_instrumentation_order_families={},
     )
     assert classified.decision == "attach_existing_family"
+
+
+def test_observation_source_quality_unknown_token_findings_create_implement_order():
+    report = {
+        "status": "warning",
+        "summary": {
+            "event_count": 100,
+            "warning_stage_count": 0,
+            "high_volume_no_source_field_stage_count": 0,
+            "unknown_token_stage_count": 1,
+            "review_warning_count": 1,
+            "tuning_input_allowed": True,
+        },
+        "stage_contracts": {},
+        "unknown_token_findings": [
+            {
+                "stage": "latency_block",
+                "event_count": 100,
+                "fields": [
+                    {
+                        "field": "swing_micro_ws_quote_stale",
+                        "count": 95,
+                        "rate": 0.95,
+                        "examples": ["unknown"],
+                    }
+                ],
+            }
+        ],
+    }
+
+    orders = mod._observation_source_quality_followup_orders(report)
+    order = next(
+        item
+        for item in orders
+        if item["order_id"] == "order_observation_source_quality_unknown_token_provenance_gap"
+    )
+
+    assert order["improvement_type"] == "source_quality_unknown_token_provenance_gap"
+    assert order["runtime_effect"] is False
+    assert any("unknown:stage=latency_block" in item for item in order["evidence"])
+    assert any("top_unknown_fields=swing_micro_ws_quote_stale" in item for item in order["evidence"])
+    classified = mod._classify_order(
+        order,
+        finding_by_order_id={},
+        finding_by_title_slug={},
+        auto_family_order_ids=set(),
+        closed_instrumentation_order_families={},
+    )
+    assert classified.decision == "implement_now"
+    assert classified.route == "source_quality_warning_producer_fix"
+    serialized = mod._serialize_classified_order(classified)
+    assert serialized["forbidden_uses"]
+    assert codex_workorder_runner.is_safe_implement_now(serialized)
+    _, unsupported = codex_workorder_runner._acceptance_commands([serialized])
+    assert unsupported == []
+
+
+def test_observation_source_quality_arbitrary_unknown_token_routes_to_workorder():
+    report = {
+        "status": "warning",
+        "summary": {
+            "event_count": 100,
+            "warning_stage_count": 0,
+            "high_volume_no_source_field_stage_count": 0,
+            "unknown_token_stage_count": 1,
+            "review_warning_count": 1,
+            "tuning_input_allowed": True,
+        },
+        "stage_contracts": {},
+        "unknown_token_findings": [
+            {
+                "stage": "arbitrary_source_stage",
+                "event_count": 100,
+                "fields": [
+                    {
+                        "field": "custom_context_state",
+                        "count": 1,
+                        "rate": 0.01,
+                        "examples": ["custom_unknown_placeholder"],
+                    }
+                ],
+            }
+        ],
+    }
+
+    orders = mod._observation_source_quality_followup_orders(report)
+    classified = [
+        mod._classify_order(
+            order,
+            finding_by_order_id={},
+            finding_by_title_slug={},
+            auto_family_order_ids=set(),
+            closed_instrumentation_order_families={},
+        )
+        for order in orders
+    ]
+    serialized = [mod._serialize_classified_order(item) for item in classified]
+    unknown_orders = [
+        item
+        for item in serialized
+        if item["order_id"] == "order_observation_source_quality_unknown_token_provenance_gap"
+    ]
+
+    assert len(unknown_orders) == 1
+    assert unknown_orders[0]["decision"] == "implement_now"
+    assert codex_workorder_runner.is_safe_implement_now(unknown_orders[0])
+    assert any("custom_context_state:1:0.01" in item for item in unknown_orders[0]["evidence"])
+
+
+def test_observation_source_quality_unknown_token_workorder_evidence_is_not_truncated():
+    fields = [
+        {
+            "field": f"custom_unknown_field_{idx}",
+            "count": 1,
+            "rate": 0.01,
+            "examples": ["unknown"],
+        }
+        for idx in range(25)
+    ]
+    report = {
+        "status": "warning",
+        "summary": {
+            "event_count": 100,
+            "warning_stage_count": 0,
+            "high_volume_no_source_field_stage_count": 0,
+            "unknown_token_stage_count": 1,
+            "review_warning_count": 1,
+            "tuning_input_allowed": True,
+        },
+        "stage_contracts": {},
+        "unknown_token_findings": [
+            {
+                "stage": "arbitrary_source_stage",
+                "event_count": 100,
+                "fields": fields,
+            }
+        ],
+    }
+
+    order = next(
+        item
+        for item in mod._observation_source_quality_followup_orders(report)
+        if item["order_id"] == "order_observation_source_quality_unknown_token_provenance_gap"
+    )
+
+    unknown_evidence = "\n".join(order["evidence"])
+    assert "custom_unknown_field_0:1:0.01" in unknown_evidence
+    assert "custom_unknown_field_24:1:0.01" in unknown_evidence
 
 
 def test_swing_lifecycle_matrix_low_event_coverage_creates_rollup_order():
@@ -2091,6 +2240,75 @@ def test_build_code_improvement_workorder_adds_observation_source_quality_orders
     assert report["source"]["observation_source_quality_audit"] == str(
         audit_dir / "observation_source_quality_audit_2026-05-15.json"
     )
+
+
+def test_build_code_improvement_workorder_adds_source_quality_hard_block_order(tmp_path, monkeypatch):
+    automation_dir = tmp_path / "automation"
+    ev_dir = tmp_path / "ev"
+    audit_dir = tmp_path / "observation-audit"
+    report_dir = tmp_path / "report"
+    doc_dir = tmp_path / "docs"
+    for directory in (automation_dir, ev_dir, audit_dir):
+        directory.mkdir()
+    (automation_dir / "scalping_pattern_lab_automation_2026-05-15.json").write_text(
+        json.dumps({"date": "2026-05-15", "code_improvement_orders": []}),
+        encoding="utf-8",
+    )
+    (ev_dir / "threshold_cycle_ev_2026-05-15.json").write_text("{}", encoding="utf-8")
+    (audit_dir / "observation_source_quality_audit_2026-05-15.json").write_text(
+        json.dumps(
+            {
+                "status": "warning",
+                "summary": {
+                    "event_count": 10,
+                    "warning_stage_count": 1,
+                    "tuning_input_allowed": False,
+                    "blocked_reason": "blocked_contract_gap",
+                    "hard_blocking_contract_gap_count": 1,
+                    "hard_blocking_stages": ["blocked_ai_score"],
+                },
+                "stage_contracts": {
+                    "blocked_ai_score": {
+                        "status": "warning",
+                        "sample_count": 10,
+                        "missing_violations": {"tick_accel_source": 1.0},
+                    }
+                },
+                "hard_blocking_contract_gaps": [
+                    {
+                        "stage": "blocked_ai_score",
+                        "reason": "stage_contract_status_warning_or_fail",
+                        "missing_fields": ["tick_accel_source"],
+                        "sample_count": 10,
+                        "first_timestamp": "2026-05-15T09:00:00+09:00",
+                        "last_timestamp": "2026-05-15T09:10:00+09:00",
+                    }
+                ],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", automation_dir)
+    monkeypatch.setattr(mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing")
+    monkeypatch.setattr(mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-swing-lab")
+    monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", ev_dir)
+    monkeypatch.setattr(mod, "PIPELINE_EVENT_VERBOSITY_DIR", tmp_path / "missing-verbosity")
+    monkeypatch.setattr(mod, "OBSERVATION_SOURCE_QUALITY_AUDIT_DIR", audit_dir)
+    monkeypatch.setattr(mod, "CODEBASE_PERFORMANCE_WORKORDER_DIR", tmp_path / "missing-performance")
+    monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_DIR", doc_dir)
+
+    report = mod.build_code_improvement_workorder("2026-05-15", max_orders=5)
+
+    order = next(
+        item for item in report["orders"] if item["order_id"] == "order_observation_source_quality_hard_block_contract_gap"
+    )
+    assert order["decision"] == "implement_now"
+    assert order["route"] == "source_quality_gap"
+    assert order["improvement_type"] == "source_quality_hard_block_contract_gap"
+    assert order["runtime_effect"] is False
+    assert any("first_timestamp=2026-05-15T09:00:00+09:00" in item for item in order["evidence"])
 
 
 def test_build_code_improvement_workorder_treats_implemented_report_order_as_existing_family(

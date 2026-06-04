@@ -593,6 +593,187 @@ def test_scalp_simulator_logs_liquidity_unknown_when_source_missing(monkeypatch)
     assert guard["sim_pre_submit_liquidity_reason"] == "liquidity_unknown"
 
 
+def test_scalp_simulator_derives_liquidity_from_ws_when_runtime_source_unset(monkeypatch):
+    logs = []
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_entry_pipeline",
+        lambda stock, code, stage, **fields: logs.append((stage, fields)),
+    )
+
+    stock = {
+        "id": 101,
+        "name": "TEST",
+        "code": "123456",
+        "strategy": "SCALPING",
+        "position_tag": "SCALP_BASE",
+        "target_buy_price": 10_000,
+    }
+    runtime = {
+        "strategy": "SCALPING",
+        "is_trigger": True,
+        "now_ts": 1_000.0,
+        "current_ai_score": 82.0,
+        "liquidity_value": None,
+        "scalp_min_liquidity": 500_000_000,
+    }
+    ws_data = {
+        "curr": 10_000,
+        "ask_tot": 30_000,
+        "bid_tot": 25_000,
+        "orderbook": {
+            "asks": [{"price": 10_010}],
+            "bids": [{"price": 9_990}],
+        },
+    }
+
+    assert state_handlers.maybe_arm_scalp_live_simulator_from_buy_signal(
+        stock,
+        "123456",
+        ws_data,
+        runtime,
+    )
+
+    stages = [stage for stage, _ in logs]
+    assert "scalp_sim_pre_submit_liquidity_guard_would_pass" in stages
+    guard = next(fields for stage, fields in logs if stage == "scalp_sim_pre_submit_liquidity_guard_would_pass")
+    assert guard["sim_pre_submit_liquidity_guard_action"] == "WOULD_PASS"
+    assert guard["sim_pre_submit_liquidity_reason"] == "liquidity_ok"
+    assert guard["sim_liquidity_value"] == 550_000_000
+
+
+def test_scalp_simulator_marks_liquidity_unknown_when_runtime_zero_is_missing_totals(monkeypatch):
+    logs = []
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_entry_pipeline",
+        lambda stock, code, stage, **fields: logs.append((stage, fields)),
+    )
+
+    stock = {
+        "id": 101,
+        "name": "TEST",
+        "code": "123456",
+        "strategy": "SCALPING",
+        "position_tag": "SCALP_BASE",
+        "target_buy_price": 10_000,
+    }
+    runtime = {
+        "strategy": "SCALPING",
+        "is_trigger": True,
+        "now_ts": 1_000.0,
+        "current_ai_score": 82.0,
+        "liquidity_value": 0,
+        "scalp_liquidity_value": 0,
+        "scalp_liquidity_source_quality": "missing_orderbook_totals",
+        "scalp_min_liquidity": 500_000_000,
+    }
+
+    assert state_handlers.maybe_arm_scalp_live_simulator_from_buy_signal(
+        stock,
+        "123456",
+        {"curr": 10_000, "orderbook": {"asks": [{"price": 10_010}], "bids": [{"price": 9_990}]}},
+        runtime,
+    )
+
+    stages = [stage for stage, _ in logs]
+    assert "scalp_sim_pre_submit_liquidity_guard_unknown" in stages
+    guard = next(fields for stage, fields in logs if stage == "scalp_sim_pre_submit_liquidity_guard_unknown")
+    assert guard["sim_pre_submit_liquidity_guard_action"] == "WOULD_UNKNOWN"
+    assert guard["sim_pre_submit_liquidity_reason"] == "liquidity_unknown"
+    assert guard["sim_liquidity_value"] == "UNKNOWN"
+
+
+def test_scalp_simulator_derives_overbought_context_from_intraday_range(monkeypatch):
+    logs = []
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_entry_pipeline",
+        lambda stock, code, stage, **fields: logs.append((stage, fields)),
+    )
+
+    stock = {
+        "id": 101,
+        "name": "TEST",
+        "code": "123456",
+        "strategy": "SCALPING",
+        "position_tag": "SCALP_BASE",
+        "target_buy_price": 10_000,
+    }
+    runtime = {
+        "strategy": "SCALPING",
+        "is_trigger": True,
+        "now_ts": 1_000.0,
+        "current_ai_score": 82.0,
+        "liquidity_value": 700_000_000,
+        "scalp_min_liquidity": 500_000_000,
+    }
+
+    assert state_handlers.maybe_arm_scalp_live_simulator_from_buy_signal(
+        stock,
+        "123456",
+        {
+            "curr": 10_000,
+            "intraday_range_pct": 4.0,
+            "distance_from_day_high_pct": -2.0,
+            "orderbook": {"asks": [{"price": 10_010}], "bids": [{"price": 9_990}]},
+        },
+        runtime,
+    )
+
+    guard = next(fields for stage, fields in logs if stage == "scalp_sim_pre_submit_overbought_guard_would_pass")
+    assert guard["sim_pre_submit_overbought_guard_action"] == "WOULD_PASS"
+    assert guard["sim_pre_submit_overbought_reason"] == "overbought_ok"
+    assert guard["sim_overbought_risk_state"] == "not_overbought"
+    assert guard["sim_overbought_risk_bucket"] == "overbought_normal"
+    assert guard["sim_overbought_context_source"] == "sim_intraday_range_fallback"
+    assert guard["sim_overbought_source_quality"] == "derived_from_intraday_range"
+
+
+def test_scalp_simulator_marks_overbought_not_evaluated_when_context_missing(monkeypatch):
+    logs = []
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_entry_pipeline",
+        lambda stock, code, stage, **fields: logs.append((stage, fields)),
+    )
+
+    stock = {
+        "id": 101,
+        "name": "TEST",
+        "code": "123456",
+        "strategy": "SCALPING",
+        "position_tag": "SCALP_BASE",
+        "target_buy_price": 10_000,
+    }
+    runtime = {
+        "strategy": "SCALPING",
+        "is_trigger": True,
+        "now_ts": 1_000.0,
+        "current_ai_score": 82.0,
+        "liquidity_value": 700_000_000,
+        "scalp_min_liquidity": 500_000_000,
+    }
+
+    assert state_handlers.maybe_arm_scalp_live_simulator_from_buy_signal(
+        stock,
+        "123456",
+        {"curr": 10_000, "orderbook": {"asks": [{"price": 10_010}], "bids": [{"price": 9_990}]}},
+        runtime,
+    )
+
+    guard = next(fields for stage, fields in logs if stage == "scalp_sim_pre_submit_overbought_guard_would_pass")
+    assert guard["sim_pre_submit_overbought_guard_action"] == "WOULD_PASS"
+    assert guard["sim_pre_submit_overbought_reason"] == "overbought_not_evaluated"
+    assert guard["sim_overbought_risk_state"] == "not_evaluated"
+    assert guard["sim_overbought_risk_bucket"] == "overbought_context_missing"
+    assert guard["sim_overbought_context_source"] == "missing_overlap_context"
+    assert guard["sim_overbought_source_quality"] == "missing_intraday_range"
+    filled = next(fields for stage, fields in logs if stage == "scalp_sim_buy_order_assumed_filled")
+    assert filled["sim_overbought_context_source"] == "missing_overlap_context"
+    assert filled["sim_overbought_source_quality"] == "missing_intraday_range"
+
+
 def test_scalp_simulator_applies_entry_ai_price_canary_without_real_order(monkeypatch):
     logs = []
     monkeypatch.setattr(
@@ -1024,6 +1205,11 @@ def test_scalp_simulator_duplicate_buy_signal_does_not_create_second_position(mo
     )
     assert len(state_handlers.ACTIVE_TARGETS) == 1
     assert logs[0][0] == "scalp_sim_duplicate_buy_signal"
+    assert logs[0][1]["actual_order_submitted"] is False
+    assert logs[0][1]["broker_order_forbidden"] is True
+    assert logs[0][1]["decision_authority"] == "sim_observation_only"
+    assert logs[0][1]["runtime_effect"] == "sim_observation_skipped"
+    assert logs[0][1]["sim_record_id"] == "SIM-1"
 
 
 def test_scalp_simulator_includes_low_score_triggered_buy_signal():

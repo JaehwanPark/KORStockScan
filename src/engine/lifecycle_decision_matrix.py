@@ -17,6 +17,16 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from src.engine.daily_threshold_cycle_report import REPORT_DIR
+from src.engine.automation.source_quality_clean_baseline import (
+    clean_baseline_policy,
+    filter_allowed_dates,
+    is_date_allowed,
+)
+from src.engine.automation.source_quality_hard_gate import (
+    apply_source_quality_preflight_block,
+    load_source_quality_preflight,
+    source_quality_preflight_blocked,
+)
 from src.engine.institutional_flow_context import RUNTIME_FEATURE_KEYS as INSTITUTIONAL_FLOW_FEATURE_KEYS
 from src.engine.institutional_flow_context import report_paths as institutional_flow_report_paths
 from src.engine.scalp_entry_action_decision_matrix import report_paths as entry_adm_report_paths
@@ -1700,6 +1710,23 @@ def _entry_bucket_features(
     }
 
 
+ENTRY_SOURCE_QUALITY_DIMENSIONS = (
+    "score_band",
+    "source_stage",
+    "chosen_action",
+    "stale_bucket",
+    "liquidity_bucket",
+    "strength_bucket",
+    "overbought_bucket",
+    "time_bucket",
+)
+
+
+def _entry_row_has_unknown_source_quality(row: dict[str, Any]) -> bool:
+    buckets = _entry_bucket_features(row)
+    return any("unknown" in str(buckets.get(key) or "").lower() for key in ENTRY_SOURCE_QUALITY_DIMENSIONS)
+
+
 ENTRY_BUCKET_FIELD_MAP = {
     "score": "runtime_features.ai_score",
     "source": "source_stage",
@@ -1889,12 +1916,21 @@ def _entry_bucket_row(bucket_type: str, bucket_key: str, rows: list[dict[str, An
     valid_profit = [float(value) for value in profit_values if value is not None]
     avg_ev = round(sum(ev_values) / len(ev_values), 4) if ev_values else None
     avg_profit = round(sum(valid_profit) / len(valid_profit), 4) if valid_profit else None
+    unknown_bucket = "unknown" in str(bucket_key).lower()
+    entry_exit_label_not_applicable = (
+        bucket_type == "exit_rule" and all(str(row.get("stage") or "") == "entry" for row in rows)
+    )
+    source_quality_contaminated = any(_entry_row_has_unknown_source_quality(row) for row in rows)
     source_quality = (
-        "pass"
+        "source_quality_blocker"
+        if (unknown_bucket and not entry_exit_label_not_applicable) or source_quality_contaminated
+        else "pass"
         if len(rows) >= ENTRY_BUCKET_SAMPLE_FLOOR and joined_sample >= ENTRY_BUCKET_SAMPLE_FLOOR
         else "hold_sample"
     )
-    if avg_ev is None:
+    if (unknown_bucket and not entry_exit_label_not_applicable) or source_quality_contaminated:
+        recommended_route = "source_quality_workorder"
+    elif avg_ev is None:
         recommended_route = "hold_sample"
     elif source_quality != "pass":
         recommended_route = "hold_sample"
@@ -1994,6 +2030,12 @@ def _entry_bucket_attribution(rows: list[dict[str, Any]]) -> dict[str, Any]:
         if item.get("source_quality_gate") == "pass"
         and item.get("recommended_route") in {"candidate_tighten_or_exclude", "candidate_recovery_or_relax"}
     ]
+    source_quality_workorder_buckets = [
+        item
+        for item in buckets
+        if item.get("source_quality_gate") == "source_quality_blocker"
+        or item.get("recommended_route") == "source_quality_workorder"
+    ]
     approval_bucket_types = {
         "score_band",
         "source_stage",
@@ -2029,7 +2071,7 @@ def _entry_bucket_attribution(rows: list[dict[str, Any]]) -> dict[str, Any]:
         for idx, item in enumerate(actionable)
         if approval_eligible(item)
     ][:10]
-    workorders = [
+    edge_workorders = [
         {
             "workorder_id": f"entry_bucket_source_quality_{idx+1}",
             "bucket_type": item.get("bucket_type"),
@@ -2047,6 +2089,26 @@ def _entry_bucket_attribution(rows: list[dict[str, Any]]) -> dict[str, Any]:
         }
         for idx, item in enumerate(actionable[:10])
     ]
+    source_quality_workorders = [
+        {
+            "workorder_id": f"entry_bucket_unknown_source_quality_{idx+1}",
+            "bucket_type": item.get("bucket_type"),
+            "bucket_key": item.get("bucket_key"),
+            "reason": "unknown_bucket_source_quality_blocker",
+            "recommended_route": "source_quality_workorder",
+            "metric_role": "source_quality_gate",
+            "implementation_status": "implemented",
+            "implementation_provenance": {
+                "source_field_coverage": item.get("source_field_coverage") or {},
+                "unknown_dimension_counts": item.get("unknown_dimension_counts") or {},
+                "unknown_reason_counts": item.get("unknown_reason_counts") or {},
+                "recommended_resolution": item.get("recommended_resolution"),
+            },
+            "runtime_effect": False,
+        }
+        for idx, item in enumerate(source_quality_workorder_buckets[:10])
+    ]
+    workorders = source_quality_workorders + edge_workorders
     return {
         "metric_role": "sim_probe_ev",
         "decision_authority": "adm_ldm_entry_bucket_attribution_source_only",
@@ -2066,6 +2128,7 @@ def _entry_bucket_attribution(rows: list[dict[str, Any]]) -> dict[str, Any]:
             "entry_rows": len(entry_rows),
             "bucket_count": len(buckets),
             "actionable_bucket_count": len(actionable),
+            "source_quality_blocked_bucket_count": len(source_quality_workorder_buckets),
             "runtime_candidate_count": len(runtime_candidates),
             "workorder_count": len(workorders),
         },
@@ -2243,7 +2306,14 @@ def _submit_bucket_row(bucket_type: str, bucket_key: str, rows: list[dict[str, A
         if ev_values
         else None
     )
-    source_quality = "pass" if len(rows) >= SUBMIT_BUCKET_SAMPLE_FLOOR else "hold_sample"
+    unknown_bucket = "unknown" in str(bucket_key).lower()
+    source_quality = (
+        "source_quality_blocker"
+        if unknown_bucket
+        else "pass"
+        if len(rows) >= SUBMIT_BUCKET_SAMPLE_FLOOR
+        else "hold_sample"
+    )
     unknown_context = _unknown_taxonomy_context(
         bucket_type=bucket_type,
         bucket_key=bucket_key,
@@ -2261,7 +2331,7 @@ def _submit_bucket_row(bucket_type: str, bucket_key: str, rows: list[dict[str, A
         "source_quality_adjusted_ev_pct": avg_ev,
         "equal_weight_avg_profit_pct": avg_ev,
         "diagnostic_win_rate": win_rate,
-        "recommended_route": "source_quality_workorder" if "unknown" in bucket_key else "keep_collecting",
+        "recommended_route": "source_quality_workorder" if unknown_bucket else "keep_collecting",
         **unknown_context,
         "decision_authority": "adm_ldm_submit_bucket_attribution_source_only",
         "runtime_effect": False,
@@ -4168,6 +4238,12 @@ def _aggregate_existing_daily_lifecycle_reports(
         "warnings": [],
         **merged_sections,
     }
+    source_quality_preflight_gate = load_source_quality_preflight(target_date)
+    report["source_quality_preflight_gate"] = source_quality_preflight_gate
+    report["sources"]["observation_source_quality_audit"] = source_quality_preflight_gate.get("artifact")
+    if source_quality_preflight_blocked(source_quality_preflight_gate):
+        report["warnings"] = ["source_quality_blocked_contract_gap"]
+    report = apply_source_quality_preflight_block(report, source_quality_preflight_gate)
     MATRIX_DIR.mkdir(parents=True, exist_ok=True)
     json_path, md_path = report_paths(target_date, output_suffix=output_suffix)
     json_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -4186,7 +4262,12 @@ def build_lifecycle_decision_matrix_report(
     target_date = str(target_date).strip()
     source_start_date = str(start_date or target_date).strip()
     source_end_date = str(end_date or target_date).strip()
-    source_dates = _date_range(source_start_date, source_end_date)
+    requested_source_dates = _date_range(source_start_date, source_end_date)
+    clean_policy = clean_baseline_policy()
+    if is_date_allowed(target_date, clean_policy):
+        source_dates, clean_baseline_excluded_dates = filter_allowed_dates(requested_source_dates, clean_policy)
+    else:
+        source_dates, clean_baseline_excluded_dates = requested_source_dates, []
     resolved_window_policy = str(window_policy or "same_day_source_bundle_plus_rolling_threshold_cycle_consumer")
     if len(source_dates) > 1:
         aggregated = _aggregate_existing_daily_lifecycle_reports(
@@ -4242,6 +4323,8 @@ def build_lifecycle_decision_matrix_report(
     attribution_by_stage, attribution_summary = _load_lifecycle_ai_context_attribution(target_date)
     policy_entries = _apply_lifecycle_ai_context_feedback(_policy_entries(rows), attribution_by_stage)
     warnings: list[str] = []
+    if clean_baseline_excluded_dates:
+        warnings.append("clean_tuning_baseline_excluded_source_dates")
     if not rows:
         warnings.append("lifecycle_rows_missing")
     if all(entry.get("source_quality_gate") != "pass" for entry in policy_entries):
@@ -4283,6 +4366,9 @@ def build_lifecycle_decision_matrix_report(
             "source_date_end": source_dates[-1] if source_dates else target_date,
             "source_date_count": len(source_dates),
             "source_dates": source_dates,
+            "requested_source_dates": requested_source_dates,
+            "clean_tuning_baseline": clean_policy,
+            "clean_baseline_excluded_source_dates": clean_baseline_excluded_dates,
             "window_policy": resolved_window_policy,
             **dedupe_summary,
             "source_rows_total": source_rows_total,
@@ -4449,6 +4535,12 @@ def build_lifecycle_decision_matrix_report(
         },
         "warnings": warnings,
     }
+    source_quality_preflight_gate = load_source_quality_preflight(target_date)
+    report["source_quality_preflight_gate"] = source_quality_preflight_gate
+    report["sources"]["observation_source_quality_audit"] = source_quality_preflight_gate.get("artifact")
+    if source_quality_preflight_blocked(source_quality_preflight_gate):
+        report["warnings"].append("source_quality_blocked_contract_gap")
+    report = apply_source_quality_preflight_block(report, source_quality_preflight_gate)
     MATRIX_DIR.mkdir(parents=True, exist_ok=True)
     json_path, md_path = report_paths(target_date, output_suffix=output_suffix)
     json_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")

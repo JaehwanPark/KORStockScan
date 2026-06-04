@@ -1,0 +1,16 @@
+{
+  "enabled": true,
+  "clean_tuning_baseline_date": "2026-06-04",
+  "clean_tuning_baseline_ts_kst": "2026-06-04T14:29:09+09:00",
+  "reason": "operator_requested_clean_tuning_restart_after_sim_probe_provenance_patch",
+  "runtime_effect": false,
+  "allowed_runtime_apply": false,
+  "forbidden_uses": [
+    "runtime_threshold_apply",
+    "order_submit",
+    "provider_route_change",
+    "bot_restart",
+    "real_execution_quality_approval",
+    "manual_threshold_promotion_from_pre_baseline_data"
+  ]
+}

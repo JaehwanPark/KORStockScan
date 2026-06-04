@@ -146,13 +146,14 @@ def test_postclose_wrapper_runs_threshold_ev_before_and_after_workorder():
     sim_post_sell_idx = script.index("src.engine.sniper_post_sell_feedback")
     entry_adm_idx = script.index("src.engine.scalp_entry_action_decision_matrix")
     microstructure_idx = script.index("src.engine.scalping.microstructure_reaction_context")
+    observation_preflight_idx = script.index("observation_source_quality_preflight")
     lifecycle_matrix_idx = script.index("src.engine.lifecycle_decision_matrix")
     context_attribution_idx = script.index("src.engine.lifecycle_ai_context --date \"$TARGET_DATE\" --mode attribution")
     context_idx = script.index("src.engine.lifecycle_ai_context --date \"$TARGET_DATE\" --mode context")
     discovery_idx = script.index("src.engine.lifecycle_bucket_discovery")
     bridge_idx = script.index("src.engine.runtime_apply_bridge")
     verbosity_idx = script.index("src.engine.pipeline_event_verbosity_report")
-    observation_audit_idx = script.index("src.engine.observation_source_quality_audit")
+    observation_audit_idx = script.index("src.engine.observation_source_quality_audit", verbosity_idx)
     perf_source_idx = script.index("src.engine.codebase_performance_workorder_report")
     time_window_idx = script.index("src.engine.automation.time_window_regime_counterfactual")
     producer_gap_source_idx = script.index("src.engine.automation.producer_gap_source_bundle")
@@ -175,6 +176,7 @@ def test_postclose_wrapper_runs_threshold_ev_before_and_after_workorder():
         sim_post_sell_idx
         < entry_adm_idx
         < microstructure_idx
+        < observation_preflight_idx
         < lifecycle_matrix_idx
         < context_attribution_idx
         < context_idx

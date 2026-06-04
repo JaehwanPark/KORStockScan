@@ -159,6 +159,18 @@ def _step_specs(target_date: str) -> list[StepSpec]:
                 *_pair("lifecycle_decision_matrix", "lifecycle_decision_matrix", target_date),
             ),
         ),
+        "observation_source_quality_backfill_audit": (
+            _pair(
+                "observation_source_quality_audit",
+                "observation_source_quality_backfill_audit",
+                target_date,
+            ),
+            (
+                "data/pipeline_events",
+                "data/threshold_cycle",
+                *_pair("observation_source_quality_audit", "observation_source_quality_audit", target_date),
+            ),
+        ),
         "codebase_performance_workorder": (
             _pair("codebase_performance_workorder", "codebase_performance_workorder", target_date),
             ("src", "deploy"),

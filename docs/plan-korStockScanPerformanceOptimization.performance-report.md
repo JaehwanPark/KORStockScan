@@ -1,8 +1,10 @@
 # KORStockScan 정기 성과측정 기준
 
-기준 시각: `2026-05-04 KST`  
-역할: Plan Rebase 기간의 장후/주간 반복 성과판정 기준과 리포트 소스 우선순위를 고정한다.  
+기준 시각: `2026-06-04 KST`
+역할: Plan Rebase 기간의 장후/주간 반복 성과판정 기준과 리포트 소스 우선순위를 고정한다.
 현재 active/open owner와 live 변경 원칙은 [plan-korStockScanPerformanceOptimization.rebase.md](./plan-korStockScanPerformanceOptimization.rebase.md)가 소유하고, 실행 작업항목은 날짜별 `stage2 todo checklist`가 소유한다.
+
+튜닝 데이터 기준은 `clean_tuning_baseline_date=2026-06-04`, `clean_tuning_baseline_ts_kst=2026-06-04T14:29:09+09:00`이다. 이 기준 이전 raw/report/analytics artifact와 그 기반 성과 리포트는 archive/audit evidence이며, 현재 EV, rolling/MTD/cumulative tuning, live-auto promotion, runtime approval, pattern lab promotion, real execution quality approval 입력으로 사용하지 않는다.
 
 ---
 

@@ -18,12 +18,13 @@ def _seed_labeled_arm(
     idx: int,
     *,
     ret: float,
+    source_date=date(2026, 5, 1),
     selection_arm="lifecycle_rank",
     stop_touch_outcome_bucket="no_touch",
     entry_position_opportunity_bucket="neutral_location_observation",
 ):
     candidate = SwingStrategyDiscoveryCandidate(
-        source_date=date(2026, 5, 1),
+        source_date=source_date,
         stock_code=f"{idx:06d}",
         stock_name=f"종목{idx}",
         policy_version="swing_strategy_discovery_sim_v1",
@@ -45,7 +46,7 @@ def _seed_labeled_arm(
     session.flush()
     arm = SwingStrategyDiscoveryArm(
         candidate_id=candidate.id,
-        source_date=date(2026, 5, 1),
+        source_date=source_date,
         stock_code=f"{idx:06d}",
         policy_version="swing_strategy_discovery_sim_v1",
         arm_id="arm01_next_open_equal_fixed5d",
@@ -63,7 +64,7 @@ def _seed_labeled_arm(
     session.add(
         SwingStrategyDiscoveryLabel(
             arm_row_id=arm.id,
-            source_date=date(2026, 5, 1),
+            source_date=source_date,
             stock_code=f"{idx:06d}",
             policy_version="swing_strategy_discovery_sim_v1",
             label_horizon="policy_exit",
@@ -181,3 +182,22 @@ def test_ev_report_adds_source_only_morning_turbulence_analysis(tmp_path):
     assert stop_rows["close_below_stop"]["sample_count"] == 1
     assert opportunity_rows["pullback_retest_observation"]["sample_count"] == 5
     assert opportunity_rows["invalidation_observation"]["sample_count"] == 1
+
+
+def test_ev_report_clean_baseline_filters_pre_baseline_discovery_rows(tmp_path):
+    db_url = f"sqlite:///{tmp_path / 'ev_clean_baseline.db'}"
+    ensure_swing_strategy_discovery_schema(db_url)
+    engine = create_engine(db_url)
+    Session = sessionmaker(bind=engine)
+    with Session.begin() as session:
+        _seed_labeled_arm(session, 1, ret=-10.0, source_date=date(2026, 5, 20))
+        _seed_labeled_arm(session, 2, ret=2.0, source_date=date(2026, 6, 4))
+
+    report = mod.build_swing_strategy_discovery_ev_report("2026-06-04", db_url=db_url, lookback_days=90)
+
+    assert report["summary"]["labeled_sample_count"] == 1
+    assert report["summary"]["candidate_count"] == 1
+    assert report["clean_tuning_baseline"]["filter_active"] is True
+    assert report["clean_tuning_baseline"]["requested_start_date"] == "2026-03-06"
+    assert report["clean_tuning_baseline"]["effective_start_date"] == "2026-06-04"
+    assert "clean_tuning_baseline_swing_discovery_lookback_filtered" in report["warnings"]

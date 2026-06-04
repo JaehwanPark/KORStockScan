@@ -3206,18 +3206,26 @@ class GPTSniperEngine:
                     or getattr(TRADING_RULES, "HOLDING_EXIT_MATRIX_RUNTIME_BIAS_ENABLED", False)
                 ),
             )
-            entry_adm_runtime = build_scalp_entry_adm_runtime_context(
-                prompt_profile=normalized_profile,
-                ws_data=ws_data if isinstance(ws_data, dict) else {},
-                advisory_enabled=bool(
-                    getattr(TRADING_RULES, "SCALP_ENTRY_ADM_ADVISORY_ENABLED", False)
-                    or getattr(TRADING_RULES, "SCALP_ENTRY_ADM_RUNTIME_BIAS_ENABLED", False)
-                ),
-            )
+            if normalized_profile == "holding":
+                entry_adm_runtime = None
+            else:
+                entry_adm_runtime = build_scalp_entry_adm_runtime_context(
+                    prompt_profile=normalized_profile,
+                    ws_data=ws_data if isinstance(ws_data, dict) else {},
+                    advisory_enabled=bool(
+                        getattr(TRADING_RULES, "SCALP_ENTRY_ADM_ADVISORY_ENABLED", False)
+                        or getattr(TRADING_RULES, "SCALP_ENTRY_ADM_RUNTIME_BIAS_ENABLED", False)
+                    ),
+                )
             lifecycle_ai_runtime = build_lifecycle_ai_runtime_context(prompt_profile=normalized_profile)
             cache_strategy = f"{strategy}:{normalized_profile}"
             cache_strategy = f"{cache_strategy}:adm:{matrix_runtime.get('cache_token', 'disabled')}"
-            cache_strategy = f"{cache_strategy}:{entry_adm_runtime.get('cache_token', 'disabled')}"
+            entry_adm_cache_token = (
+                entry_adm_runtime.get("cache_token", "disabled")
+                if isinstance(entry_adm_runtime, dict)
+                else "entry_adm:excluded_holding_profile"
+            )
+            cache_strategy = f"{cache_strategy}:{entry_adm_cache_token}"
             cache_strategy = f"{cache_strategy}:{lifecycle_ai_runtime.get('cache_token', 'disabled')}"
         if strategy in ["KOSPI_ML", "KOSDAQ_ML"]:
             input_contract_fields = {
@@ -3246,7 +3254,8 @@ class GPTSniperEngine:
             }
         def _merge_runtime_fields(payload: dict[str, Any] | None) -> dict[str, Any]:
             merged = merge_holding_exit_matrix_result_fields(payload, matrix_runtime)
-            merged = merge_scalp_entry_adm_result_fields(merged, entry_adm_runtime)
+            if isinstance(entry_adm_runtime, dict):
+                merged = merge_scalp_entry_adm_result_fields(merged, entry_adm_runtime)
             return merge_lifecycle_ai_context_fields(merged, lifecycle_ai_runtime)
 
         cache_key = self._build_analysis_cache_key_with_profile(

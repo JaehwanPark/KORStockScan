@@ -210,6 +210,7 @@ def _base_event_fields(row: dict[str, Any], target_date: str, price: dict[str, A
         "sim_parent_record_id": row.get("sim_parent_record_id"),
         "simulation_book": SIM_BOOK,
         "scalp_live_simulator": True,
+        "simulated_order": True,
         "metric_role": "sim_probe_ev",
         "threshold_family": "scalp_sim_overnight_ai_carry",
         "actual_order_submitted": False,

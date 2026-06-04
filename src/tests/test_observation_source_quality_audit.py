@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 
 from src.engine import observation_source_quality_audit as audit
 
@@ -19,7 +20,7 @@ def _event(stage: str, fields: dict, *, record_id: int = 1) -> dict:
 
 def _write_events(tmp_path, target_date: str, rows: list[dict]) -> None:
     event_dir = tmp_path / "pipeline_events"
-    event_dir.mkdir(parents=True)
+    event_dir.mkdir(parents=True, exist_ok=True)
     with (event_dir / f"pipeline_events_{target_date}.jsonl").open("w", encoding="utf-8") as handle:
         for row in rows:
             handle.write(json.dumps(row, ensure_ascii=False) + "\n")
@@ -64,6 +65,9 @@ def test_observation_source_quality_audit_flags_missing_ai_fields(monkeypatch, t
     assert blocked["status"] == "warning"
     assert "tick_accel_source" in blocked["missing_violations"]
     assert blocked["zero_violations"]["intraday_range_pct"] == 1.0
+    assert report["summary"]["tuning_input_allowed"] is False
+    assert "blocked_ai_score" in report["summary"]["hard_blocking_stages"]
+    assert report["summary"]["blocked_reason"] == "blocked_contract_gap"
 
 
 def test_observation_source_quality_audit_detects_high_volume_contract_gap(monkeypatch, tmp_path):
@@ -82,6 +86,103 @@ def test_observation_source_quality_audit_detects_high_volume_contract_gap(monke
     gaps = {item["stage"]: item for item in report["high_volume_no_source_fields"]}
     assert gaps["strength_momentum_observed"]["event_count"] == 60
     assert report["policy"]["decision_authority"] == "source_quality_only"
+    assert report["summary"]["tuning_input_allowed"] is False
+    assert report["summary"]["hard_blocking_contract_gap_count"] == 1
+
+
+def test_observation_source_quality_audit_warns_on_high_rate_unknown_tokens(monkeypatch, tmp_path):
+    monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
+    _write_events(
+        tmp_path,
+        "2026-05-15",
+        [
+            _event(
+                "scalp_entry_action_decision_snapshot",
+                {
+                    "entry_adm_score_bucket": "score_unknown",
+                    "entry_adm_stale_bucket": "stale_unknown",
+                    "entry_adm_overbought_bucket": "overbought_unknown",
+                    "entry_adm_liquidity_bucket": "liquidity_high",
+                    "metric_role": "action_decision_matrix",
+                    "decision_authority": "entry_advisory_prompt_context_only",
+                    "runtime_effect": False,
+                    "forbidden_uses": "runtime_threshold_apply/order_submit/provider_route_change/bot_restart",
+                },
+                record_id=idx,
+            )
+            for idx in range(60)
+        ],
+    )
+
+    report = audit.build_observation_source_quality_audit("2026-05-15")
+
+    assert report["status"] == "warning"
+    assert report["summary"]["unknown_token_stage_count"] == 1
+    finding = report["unknown_token_findings"][0]
+    assert finding["stage"] == "scalp_entry_action_decision_snapshot"
+    fields = {item["field"]: item for item in finding["fields"]}
+    assert fields["entry_adm_score_bucket"]["rate"] == 1.0
+    assert fields["entry_adm_stale_bucket"]["rate"] == 1.0
+    assert finding["decision_authority"] == "source_quality_only"
+    assert report["summary"]["tuning_input_allowed"] is True
+    assert report["summary"]["review_warning_count"] == 1
+    assert report["summary"]["hard_blocking_contract_gap_count"] == 0
+    assert finding["runtime_effect"] is False
+
+
+def test_observation_source_quality_audit_warns_on_any_unknown_token_field(monkeypatch, tmp_path):
+    monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
+    rows = [
+        _event(
+            "arbitrary_source_stage",
+            {
+                "source_id": f"SRC-{idx}",
+                "custom_context_state": "custom_unknown_placeholder" if idx == 7 else "observed",
+            },
+            record_id=idx,
+        )
+        for idx in range(100)
+    ]
+    _write_events(tmp_path, "2026-06-04", rows)
+
+    report = audit.build_observation_source_quality_audit("2026-06-04")
+
+    assert report["status"] == "warning"
+    assert report["summary"]["unknown_token_stage_count"] == 1
+    assert report["summary"]["review_warning_count"] == 1
+    assert report["summary"]["tuning_input_allowed"] is True
+    finding = report["unknown_token_findings"][0]
+    assert finding["stage"] == "arbitrary_source_stage"
+    fields = {item["field"]: item for item in finding["fields"]}
+    assert fields["custom_context_state"]["count"] == 1
+    assert fields["custom_context_state"]["rate"] == 0.01
+
+
+def test_observation_source_quality_audit_warns_on_top_level_and_all_unknown_fields(monkeypatch, tmp_path):
+    monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
+    fields = {f"custom_unknown_field_{idx}": "value_unknown" for idx in range(25)}
+    rows = [
+        {
+            "event_type": "pipeline_event",
+            "pipeline": "ENTRY_PIPELINE",
+            "stage": "unknown_custom_stage",
+            "stock_name": "TEST",
+            "stock_code": "123456",
+            "record_id": 1,
+            "fields": fields,
+            "emitted_at": "2026-06-04T10:00:00",
+            "emitted_date": "2026-06-04",
+        }
+    ]
+    _write_events(tmp_path, "2026-06-04", rows)
+
+    report = audit.build_observation_source_quality_audit("2026-06-04")
+
+    finding = report["unknown_token_findings"][0]
+    found_fields = {item["field"] for item in finding["fields"]}
+    assert "__stage" in found_fields
+    for idx in range(25):
+        assert f"custom_unknown_field_{idx}" in found_fields
 
 
 def test_observation_source_quality_audit_has_entry_micro_context_contract(monkeypatch, tmp_path):
@@ -159,6 +260,127 @@ def test_observation_source_quality_audit_accepts_order_failure_diagnostic_contr
     assert report["high_volume_no_source_fields"] == []
     assert report["field_presence_top"]["order_bundle_failed"]["metric_role"] == 60
     assert report["field_presence_top"]["order_leg_fail"]["metric_role"] == 60
+
+
+def test_observation_source_quality_audit_enforces_sim_authority_contracts(monkeypatch, tmp_path):
+    monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
+    _write_events(
+        tmp_path,
+        "2026-06-04",
+        [
+            _event(
+                "scalp_sim_duplicate_buy_signal",
+                {
+                    "simulation_book": "scalp_ai_buy_all",
+                    "simulated_order": True,
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                    "decision_authority": "sim_observation_only",
+                    "sim_record_id": "SIM-1",
+                    "threshold_family": "entry_mechanical_momentum",
+                    "sim_parent_record_id": 101,
+                },
+            ),
+            _event(
+                "swing_probe_discarded",
+                {
+                    "simulation_book": "swing_intraday_live_equiv_probe",
+                    "simulation_owner": "SwingIntradayLiveEquivalentProbe0511",
+                    "simulated_order": True,
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                    "runtime_effect": "in_memory_probe_only",
+                    "evidence_quality": "quota_observation",
+                    "source_record_id": "SRC-1",
+                    "probe_origin_stage": "blocked_swing_score_vpw",
+                    "discard_reason": "max_per_symbol_reached",
+                    "blocker_authority": "probe_capacity_only",
+                    "quota_observation_scope": "symbol_probe_quota",
+                    "allowed_runtime_apply": False,
+                },
+                record_id=2,
+            ),
+        ],
+    )
+
+    report = audit.build_observation_source_quality_audit("2026-06-04")
+
+    assert report["stage_contracts"]["scalp_sim_duplicate_buy_signal"]["status"] == "warning"
+    assert (
+        report["stage_contracts"]["scalp_sim_duplicate_buy_signal"]["missing_violations"]["runtime_effect"]
+        == 1.0
+    )
+    assert report["stage_contracts"]["swing_probe_discarded"]["status"] == "warning"
+    assert report["stage_contracts"]["swing_probe_discarded"]["missing_violations"]["decision_authority"] == 1.0
+
+
+def test_observation_source_quality_audit_accepts_complete_sim_authority_contracts(monkeypatch, tmp_path):
+    monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
+    _write_events(
+        tmp_path,
+        "2026-06-04",
+        [
+            _event(
+                "scalp_sim_duplicate_buy_signal",
+                {
+                    "simulation_book": "scalp_ai_buy_all",
+                    "simulated_order": True,
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                    "runtime_effect": "sim_observation_skipped",
+                    "decision_authority": "sim_observation_only",
+                    "sim_record_id": "SIM-1",
+                    "threshold_family": "entry_mechanical_momentum",
+                    "sim_parent_record_id": 101,
+                },
+            ),
+            _event(
+                "scalp_sim_entry_submit_revalidation_warning",
+                {
+                    "simulation_book": "scalp_ai_buy_all",
+                    "simulated_order": True,
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                    "runtime_effect": "sim_entry_pre_submit_warning_only",
+                    "decision_authority": "sim_observation_only",
+                    "sim_record_id": "SIM-2",
+                    "threshold_family": "pre_submit_price_guard",
+                    "sim_parent_record_id": 102,
+                    "entry_submit_revalidation_warning": "stale_context_or_quote",
+                    "quote_age_at_submit_ms": 1500,
+                    "submitted_order_price": 10000,
+                    "mark_price_at_submit": 9990,
+                },
+                record_id=2,
+            ),
+            _event(
+                "swing_probe_discarded",
+                {
+                    "simulation_book": "swing_intraday_live_equiv_probe",
+                    "simulation_owner": "SwingIntradayLiveEquivalentProbe0511",
+                    "simulated_order": True,
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                    "runtime_effect": "in_memory_probe_only",
+                    "decision_authority": "swing_sim_exploration_only",
+                    "evidence_quality": "quota_observation",
+                    "source_record_id": "SRC-1",
+                    "probe_origin_stage": "blocked_swing_score_vpw",
+                    "discard_reason": "max_per_symbol_reached",
+                    "blocker_authority": "probe_capacity_only",
+                    "quota_observation_scope": "symbol_probe_quota",
+                    "allowed_runtime_apply": False,
+                },
+                record_id=3,
+            ),
+        ],
+    )
+
+    report = audit.build_observation_source_quality_audit("2026-06-04")
+
+    assert report["stage_contracts"]["scalp_sim_duplicate_buy_signal"]["status"] == "pass"
+    assert report["stage_contracts"]["scalp_sim_entry_submit_revalidation_warning"]["status"] == "pass"
+    assert report["stage_contracts"]["swing_probe_discarded"]["status"] == "pass"
 
 
 def test_observation_source_quality_audit_normalizes_pre_contract_ai_and_latency(monkeypatch, tmp_path):
@@ -254,6 +476,142 @@ def test_observation_source_quality_audit_accepts_real_execution_diagnostic_cont
     assert report["stage_contracts"]["holding_started"]["status"] == "pass"
     assert report["stage_contracts"]["scale_in_executed"]["status"] == "pass"
     assert report["stage_contracts"]["same_symbol_loss_reentry_cooldown"]["status"] == "pass"
+
+
+def test_observation_source_quality_audit_blocks_swing_loss_reentry_placeholder_source(monkeypatch, tmp_path):
+    monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
+    _write_events(
+        tmp_path,
+        "2026-06-04",
+        [
+            _event(
+                "swing_same_symbol_loss_reentry_cooldown",
+                {
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                    "source_book": "swing_dry_run",
+                    "source_probe_id": "-",
+                    "source_record_id": "-",
+                    "source_stage": "exit",
+                },
+            ),
+        ],
+    )
+
+    report = audit.build_observation_source_quality_audit("2026-06-04")
+
+    contract = report["stage_contracts"]["swing_same_symbol_loss_reentry_cooldown"]
+    assert contract["status"] == "warning"
+    assert contract["missing_violations"]["source_probe_id"] == 1.0
+    assert contract["missing_violations"]["source_record_id"] == 1.0
+    assert report["summary"]["tuning_input_allowed"] is False
+    assert report["summary"]["hard_blocking_excluded_row_count"] == 1
+    assert report["hard_blocking_row_exclusions"][0]["stage"] == "swing_same_symbol_loss_reentry_cooldown"
+
+
+def test_observation_source_quality_write_excludes_bad_rows_instead_of_blocking_full_date(monkeypatch, tmp_path):
+    monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
+    valid_id = "swing_dry_run:2026-06-04:KOSPI_ML:004710:exit:1780556300"
+    _write_events(
+        tmp_path,
+        "2026-06-04",
+        [
+            _event(
+                "swing_same_symbol_loss_reentry_cooldown",
+                {
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                    "source_book": "swing_dry_run",
+                    "source_probe_id": "-",
+                    "source_record_id": "-",
+                    "source_stage": "exit",
+                },
+                record_id=1,
+            ),
+            _event(
+                "swing_same_symbol_loss_reentry_cooldown",
+                {
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                    "source_book": "swing_dry_run",
+                    "source_probe_id": valid_id,
+                    "source_record_id": valid_id,
+                    "source_stage": "exit",
+                },
+                record_id=2,
+            ),
+        ],
+    )
+
+    report = audit.write_report("2026-06-04")
+    raw_path = tmp_path / "pipeline_events" / "pipeline_events_2026-06-04.jsonl"
+    rows = [json.loads(line) for line in raw_path.read_text(encoding="utf-8").splitlines()]
+
+    assert report["summary"]["tuning_input_allowed"] is True
+    assert report["summary"]["hard_blocking_contract_gap_count"] == 0
+    assert report["summary"]["raw_row_exclusion_applied"] is True
+    assert report["raw_row_exclusion"]["excluded_row_count"] == 1
+    assert len(rows) == 1
+    assert rows[0]["record_id"] == 2
+    manifest = Path(report["raw_row_exclusion"]["manifest_path"])
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    assert payload["policy"] == "exclude_defective_rows_not_full_day_raw"
+    assert payload["excluded_row_count"] == 1
+    assert Path(payload["backup_path"]).exists()
+
+
+def test_observation_source_quality_does_not_exclude_rows_when_contract_passes_tolerance(monkeypatch, tmp_path):
+    monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
+    monkeypatch.setitem(
+        audit.STAGE_CONTRACTS,
+        "tolerated_contract_stage",
+        audit.StageContract(required_fields=("source_id",), max_missing_rate=0.5),
+    )
+    _write_events(
+        tmp_path,
+        "2026-06-04",
+        [
+            _event("tolerated_contract_stage", {"source_id": "SRC-1"}, record_id=1),
+            _event("tolerated_contract_stage", {}, record_id=2),
+        ],
+    )
+
+    report = audit.write_report("2026-06-04")
+    raw_path = tmp_path / "pipeline_events" / "pipeline_events_2026-06-04.jsonl"
+    rows = [json.loads(line) for line in raw_path.read_text(encoding="utf-8").splitlines()]
+
+    assert report["stage_contracts"]["tolerated_contract_stage"]["status"] == "pass"
+    assert report["summary"]["raw_row_exclusion_applied"] is False
+    assert report["summary"]["hard_blocking_excluded_row_count"] == 0
+    assert len(rows) == 2
+
+
+def test_observation_source_quality_audit_accepts_swing_loss_reentry_fallback_source(monkeypatch, tmp_path):
+    monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
+    fallback_id = "swing_dry_run:2026-06-04:KOSPI_ML:004710:exit:1780556300"
+    _write_events(
+        tmp_path,
+        "2026-06-04",
+        [
+            _event(
+                "swing_same_symbol_loss_reentry_cooldown",
+                {
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                    "source_book": "swing_dry_run",
+                    "source_probe_id": fallback_id,
+                    "source_record_id": fallback_id,
+                    "source_stage": "exit",
+                },
+            ),
+        ],
+    )
+
+    report = audit.build_observation_source_quality_audit("2026-06-04")
+
+    contract = report["stage_contracts"]["swing_same_symbol_loss_reentry_cooldown"]
+    assert contract["status"] == "pass"
+    assert report["summary"]["tuning_input_allowed"] is True
 
 
 def test_observation_source_quality_audit_routes_entry_arm_and_loss_diagnostics_by_contract(monkeypatch, tmp_path):
@@ -418,6 +776,8 @@ def test_observation_source_quality_audit_fails_unknown_flow_state_label(monkeyp
     assert contract["status"] == "fail"
     assert contract["invalid_label_violations"] == {"flow_state": 1.0}
     assert report["invalid_label_findings"][0]["field"] == "flow_state"
+    assert report["summary"]["tuning_input_allowed"] is False
+    assert "soft_stop_whipsaw_confirmation" in report["summary"]["hard_blocking_stages"]
 
 
 def test_observation_source_quality_audit_fails_unknown_gatekeeper_action_label(monkeypatch, tmp_path):
@@ -817,3 +1177,137 @@ def test_observation_source_quality_audit_writes_json_and_markdown(monkeypatch, 
     assert report["stage_contracts"]["swing_probe_entry_candidate"]["status"] == "pass"
     assert json_path.exists()
     assert md_path.exists()
+
+
+def _write_threshold_events(tmp_path, target_date: str, rows: list[dict]) -> None:
+    event_dir = tmp_path / "threshold_cycle"
+    event_dir.mkdir(parents=True)
+    with (event_dir / f"threshold_events_{target_date}.jsonl").open("w", encoding="utf-8") as handle:
+        for row in rows:
+            handle.write(json.dumps(row, ensure_ascii=False) + "\n")
+
+
+def test_observation_source_quality_backfill_quarantines_only_derived_bucket_interpretation(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
+    _write_events(
+        tmp_path,
+        "2026-05-18",
+        [
+            _event(
+                "scalp_sim_buy_order_assumed_filled",
+                {
+                    "simulation_book": "scalp_ai_buy_all",
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                    "decision_authority": "sim_observation_only",
+                    "profit_rate": "0.4",
+                },
+            )
+        ],
+    )
+    _write_events(
+        tmp_path,
+        "2026-05-19",
+        [
+            _event(
+                "scalp_entry_action_decision_snapshot",
+                {
+                    "simulation_book": "scalp_ai_buy_all",
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                    "entry_adm_score_bucket": "score_unknown",
+                    "entry_adm_stale_bucket": "stale_unknown",
+                    "lifecycle_matrix_entry_bucket": "entry_unknown",
+                },
+            ),
+            _event(
+                "scalp_sim_pre_submit_overbought_guard_would_pass",
+                {
+                    "simulation_book": "scalp_ai_buy_all",
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                    "sim_pre_submit_overbought_reason": "overbought_unknown",
+                    "sim_overbought_context_source": "unknown",
+                    "sim_overbought_source_quality": "unknown",
+                },
+                record_id=2,
+            ),
+        ],
+    )
+    _write_threshold_events(
+        tmp_path,
+        "2026-05-19",
+        [
+            _event(
+                "scalp_sim_buy_order_assumed_filled",
+                {
+                    "simulation_book": "scalp_ai_buy_all",
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                    "decision_authority": "sim_observation_only",
+                },
+                record_id=3,
+            )
+        ],
+    )
+    stale_report = (
+        tmp_path
+        / "report"
+        / "scalp_entry_action_decision_matrix"
+        / "scalp_entry_action_decision_matrix_2026-05-19.json"
+    )
+    stale_report.parent.mkdir(parents=True)
+    stale_report.write_text("{}", encoding="utf-8")
+
+    report = audit.build_observation_source_quality_backfill_audit(
+        "2026-05-19",
+        start_date="2026-05-18",
+    )
+
+    by_date = {item["date"]: item for item in report["date_impacts"]}
+    assert by_date["2026-05-18"]["raw_sim_preserved"] is True
+    assert by_date["2026-05-18"]["bucket_interpretation_quarantined"] is False
+    assert by_date["2026-05-19"]["raw_sim_preserved"] is True
+    assert by_date["2026-05-19"]["bucket_interpretation_quarantined"] is True
+    assert set(by_date["2026-05-19"]["quarantine_scope"]) == {
+        "entry_adm_bucket_dimensions",
+        "ldm_bucket_attribution",
+        "sim_overbought_context_provenance",
+    }
+    assert by_date["2026-05-19"]["recommended_action"] == "regenerate_derived_reports_with_source_quality_gate"
+    assert report["summary"]["first_entry_adm_unknown_date"] == "2026-05-19"
+    assert report["summary"]["first_ldm_unknown_date"] == "2026-05-19"
+    assert report["summary"]["first_sim_overbought_unknown_date"] == "2026-05-19"
+    assert report["summary"]["operator_action_required"] is False
+    assert report["policy"]["runtime_effect"] is False
+    assert by_date["2026-05-19"]["stale_derived_reports"][0]["report_type"] == "scalp_entry_action_decision_matrix"
+
+
+def test_observation_source_quality_backfill_writes_json_and_markdown(monkeypatch, tmp_path):
+    monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
+    _write_events(
+        tmp_path,
+        "2026-05-19",
+        [
+            _event(
+                "scalp_entry_action_decision_snapshot",
+                {
+                    "simulation_book": "scalp_ai_buy_all",
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                    "entry_adm_score_bucket": "score_unknown",
+                },
+            )
+        ],
+    )
+
+    report = audit.write_backfill_report("2026-05-19", start_date="2026-05-19")
+    json_path, md_path = audit.backfill_report_paths("2026-05-19")
+
+    assert report["status"] == "warning"
+    assert json_path.exists()
+    assert md_path.exists()
+    assert "Raw SIM rows and fill/outcome labels are preserved" in md_path.read_text(encoding="utf-8")

@@ -193,6 +193,16 @@ def test_lifecycle_window_specs_only_depend_on_pre_window_sources():
     assert all("runtime_apply_bridge" not in " ".join(item.source_paths) for item in specs)
 
 
+def test_deep_audit_specs_include_observation_source_quality_backfill():
+    specs = {item.step_id: item for item in mod._step_specs("2026-06-02") if item.scope == "deep_audits"}
+
+    spec = specs["observation_source_quality_backfill_audit"]
+    assert "data/report/observation_source_quality_audit/observation_source_quality_backfill_audit_2026-06-02.json" in spec.output_paths
+    assert "data/pipeline_events" in spec.source_paths
+    assert "data/threshold_cycle" in spec.source_paths
+    assert "data/report/observation_source_quality_audit/observation_source_quality_audit_2026-06-02.json" in spec.source_paths
+
+
 def test_cli_step_prints_decision_and_writes_contract(tmp_path, monkeypatch, capsys):
     _patch_roots(tmp_path, monkeypatch)
 

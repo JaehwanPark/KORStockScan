@@ -1,8 +1,10 @@
 # KORStockScan 성능 최적화 Q&A
 
-기준일: `2026-05-13 KST`
+기준일: `2026-06-04 KST`
 
 이 문서는 Plan Rebase 본문에 길게 두기에는 크지만 반복적으로 참조해야 하는 운영 판단 기준을 모아둔 문서다. 현재 역할은 과거 latency/composite 세부 판단 FAQ가 아니라, 자동화체인에서 `승률/EV`, `daily/rolling`, `real/sim/probe`, `proposal/apply`를 혼동해 오판하지 않도록 막는 반복 Q&A다.
+
+튜닝 데이터 기준은 `clean_tuning_baseline_date=2026-06-04`, `clean_tuning_baseline_ts_kst=2026-06-04T14:29:09+09:00`이다. 이 기준 이전 raw/report/analytics artifact는 archive/audit evidence로만 보존하며 현재 EV, rolling/MTD/cumulative tuning, live-auto promotion, runtime approval, pattern lab promotion, real execution quality approval 입력으로 사용하지 않는다.
 
 2026-05-13 자동화체인 리뉴얼 전 원문은 [qna pre-automation-renewal archive](./archive/plan-korStockScanPerformanceOptimization.qna.pre-automation-renewal-2026-05-13.md)에 보존했다.
 
@@ -13,7 +15,8 @@
 3. 자동화체인 산출물/consumer/apply 계약은 [report-based-automation-traceability](./report-based-automation-traceability.md)가 소유한다.
 4. 실행 작업항목은 날짜별 `stage2 todo checklist`가 소유한다. 완료된 `[x]` 항목은 현재 OPEN owner가 아니라 증적이다.
 5. 장중 runtime threshold mutation은 금지한다. 적용은 장후 report/calibration/AI review와 다음 장전 runtime env를 통해서만 한다.
-6. 새 관찰지표는 `Metric Decision Contract`를 가져야 한다. 계약이 없으면 `instrumentation_gap` 또는 `source_quality_blocker`로만 라우팅한다.
+6. clean tuning data baseline 이전 산출물은 현재 의사결정 입력이 아니라 archive-only 증적이다.
+7. 새 관찰지표는 `Metric Decision Contract`를 가져야 한다. 계약이 없으면 `instrumentation_gap` 또는 `source_quality_blocker`로만 라우팅한다.
 
 ## 운영/문서 Q&A
 

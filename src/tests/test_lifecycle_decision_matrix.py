@@ -31,6 +31,38 @@ def test_lifecycle_bucket_rows_explain_unknown_source_field_causes():
     assert scale["recommended_resolution"] == "emit_or_backfill_source_field"
 
 
+def test_lifecycle_entry_unknown_bucket_is_source_quality_blocker_not_edge_candidate():
+    rows = [
+        {
+            "stage": "entry",
+            "source_stage": "scalp_entry_action_decision_snapshot",
+            "runtime_features": {
+                "ai_score": None,
+                "chosen_action": "NO_BUY_AI",
+                "stale_bucket": "stale_unknown",
+                "liquidity_bucket": "liquidity_high",
+                "overbought_bucket": "overbought_unknown",
+            },
+            "labels": {"profit_rate": 1.2},
+            "stage_ev_composite_pct": 1.2,
+        }
+        for _ in range(mod.ENTRY_BUCKET_SAMPLE_FLOOR)
+    ]
+
+    row = mod._entry_bucket_row("stale_bucket", "stale_unknown", rows)
+    attribution = mod._entry_bucket_attribution(rows)
+
+    assert row["source_quality_gate"] == "source_quality_blocker"
+    assert row["recommended_route"] == "source_quality_workorder"
+    assert attribution["summary"]["actionable_bucket_count"] == 0
+    assert attribution["summary"]["runtime_candidate_count"] == 0
+    assert attribution["summary"]["source_quality_blocked_bucket_count"] > 0
+    assert any(
+        item["reason"] == "unknown_bucket_source_quality_blocker"
+        for item in attribution["code_improvement_workorders"]
+    )
+
+
 def test_lifecycle_entry_exit_rule_unknown_is_label_not_applicable():
     rows = [
         {
@@ -374,6 +406,28 @@ def test_lifecycle_submit_bucket_attribution_creates_contract_gap_workorders():
     }
 
 
+def test_lifecycle_submit_unknown_bucket_is_source_quality_blocker():
+    rows = [
+        {
+            "stage": "submit",
+            "source_stage": "scalp_sim_buy_order_virtual_pending",
+            "runtime_features": {
+                "sim_pre_submit_overbought_guard_action": "WOULD_PASS",
+                "sim_pre_submit_overbought_reason": "overbought_unknown",
+            },
+            "labels": {"profit_rate": 0.5},
+            "stage_ev_composite_pct": 0.5,
+        }
+        for _ in range(mod.SUBMIT_BUCKET_SAMPLE_FLOOR)
+    ]
+
+    bucket = mod._submit_bucket_row("overbought_bucket", "overbought_unknown", rows)
+
+    assert bucket["source_quality_gate"] == "source_quality_blocker"
+    assert bucket["recommended_route"] == "source_quality_workorder"
+    assert bucket["allowed_runtime_apply"] is False
+
+
 def test_lifecycle_submit_bucket_attribution_buckets_sim_pre_submit_guards():
     rows = [
         {
@@ -514,6 +568,40 @@ def test_lifecycle_matrix_builder_separates_runtime_features_and_labels(tmp_path
     assert any(item["stage"] == "entry" and item["source_quality_gate"] == "pass" for item in report["policy_entries"])
     assert (matrix_dir / "lifecycle_decision_matrix_2026-05-18.json").exists()
     assert (matrix_dir / "lifecycle_decision_matrix_2026-05-18.md").exists()
+
+
+def test_lifecycle_matrix_excludes_pre_clean_baseline_source_dates(tmp_path, monkeypatch):
+    matrix_dir = tmp_path / "matrix"
+    post_sell_dir = tmp_path / "post_sell"
+    monitor_dir = tmp_path / "monitor"
+    pipeline_dir = tmp_path / "pipeline_events"
+    for directory in (matrix_dir, post_sell_dir, monitor_dir, pipeline_dir):
+        directory.mkdir(parents=True)
+    monkeypatch.setattr(mod, "MATRIX_DIR", matrix_dir)
+    monkeypatch.setattr(mod, "POST_SELL_DIR", post_sell_dir)
+    monkeypatch.setattr(mod, "MONITOR_SNAPSHOT_DIR", monitor_dir)
+    monkeypatch.setattr(mod, "PIPELINE_EVENTS_DIR", pipeline_dir)
+    monkeypatch.setattr(
+        mod,
+        "clean_baseline_policy",
+        lambda: {
+            "enabled": True,
+            "clean_tuning_baseline_date": "2026-06-04",
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+        },
+    )
+
+    report = mod.build_lifecycle_decision_matrix_report(
+        "2026-06-04",
+        start_date="2026-06-02",
+        end_date="2026-06-04",
+    )
+
+    assert report["summary"]["source_dates"] == ["2026-06-04"]
+    assert report["summary"]["clean_baseline_excluded_source_dates"] == ["2026-06-02", "2026-06-03"]
+    assert "clean_tuning_baseline_excluded_source_dates" in report["warnings"]
+    assert report["runtime_effect"] is False
 
 
 def test_lifecycle_matrix_prefers_entry_adm_rows_and_has_no_policy_cap(tmp_path, monkeypatch):

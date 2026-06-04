@@ -785,6 +785,7 @@ def _serialize_classified_order(item: ClassifiedOrder) -> dict[str, Any]:
         "next_postclose_metric": item.order.get("next_postclose_metric"),
         "files_likely_touched": item.order.get("files_likely_touched") or [],
         "acceptance_tests": item.order.get("acceptance_tests") or [],
+        "forbidden_uses": item.order.get("forbidden_uses") or [],
         "automation_reentry": item.automation_reentry,
         "runtime_effect": bool(item.order.get("runtime_effect")),
         "allowed_runtime_apply": bool(item.order.get("allowed_runtime_apply")),
@@ -1142,6 +1143,40 @@ def _classify_order(
             automation_reentry=(
                 "Next postclose observation source-quality audit and workorder should preserve this warning "
                 "until it is covered by a dedicated source-quality order or explicitly deferred."
+            ),
+        )
+
+    if order.get("improvement_type") == "source_quality_hard_block_contract_gap":
+        return ClassifiedOrder(
+            order=order,
+            decision="implement_now",
+            reason=(
+                "observation source-quality hard block prevents tuning/live-auto/runtime approval inputs until "
+                "the producer contract gap is fixed and a new clean cutoff is recorded"
+            ),
+            mapped_family=mapped_family or "observation_source_quality_audit",
+            route=route or "source_quality_gap",
+            confidence=confidence or "audit",
+            automation_reentry=(
+                "After implementation, rerun observation_source_quality_audit, code improvement workorder, "
+                "threshold EV, runtime approval summary, and postclose verifier; only post-cutoff raw may feed tuning."
+            ),
+        )
+
+    if order.get("improvement_type") == "source_quality_unknown_token_provenance_gap":
+        return ClassifiedOrder(
+            order=order,
+            decision="implement_now",
+            reason=(
+                "unknown-token source-quality warnings are not tuning hard blocks, but they must be traced to "
+                "producer provenance or replaced with explicit not_available/insufficient_sample labels"
+            ),
+            mapped_family=mapped_family or "observation_source_quality_audit",
+            route=route or "source_quality_warning_producer_fix",
+            confidence=confidence or "audit",
+            automation_reentry=(
+                "After implementation, rerun observation_source_quality_audit and code improvement workorder; "
+                "unknown_token_stage_count should fall or remaining unknowns must carry explicit reviewed provenance."
             ),
         )
 
@@ -2473,10 +2508,20 @@ def _observation_source_quality_followup_orders(report: dict[str, Any]) -> list[
     if str(report.get("status") or "").strip() not in {"warning", "fail"}:
         return []
     summary = report.get("summary") if isinstance(report.get("summary"), dict) else {}
+    hard_gaps = (
+        report.get("hard_blocking_contract_gaps")
+        if isinstance(report.get("hard_blocking_contract_gaps"), list)
+        else []
+    )
     stage_contracts = report.get("stage_contracts") if isinstance(report.get("stage_contracts"), dict) else {}
     high_volume_gaps = (
         report.get("high_volume_no_source_fields")
         if isinstance(report.get("high_volume_no_source_fields"), list)
+        else []
+    )
+    unknown_token_findings = (
+        report.get("unknown_token_findings")
+        if isinstance(report.get("unknown_token_findings"), list)
         else []
     )
     warning_stages = [
@@ -2490,6 +2535,8 @@ def _observation_source_quality_followup_orders(report: dict[str, Any]) -> list[
         f"warning_stage_count={summary.get('warning_stage_count')}",
         f"warning_stages={','.join(warning_stages[:12])}",
         f"high_volume_no_source_field_stage_count={summary.get('high_volume_no_source_field_stage_count')}",
+        f"unknown_token_stage_count={summary.get('unknown_token_stage_count')}",
+        f"review_warning_count={summary.get('review_warning_count')}",
         "decision_authority=source_quality_only",
         "runtime_effect=false",
     ]
@@ -2502,8 +2549,122 @@ def _observation_source_quality_followup_orders(report: dict[str, Any]) -> list[
         "confidence": "audit",
         "expected_ev_effect": "none_direct_source_quality_attribution_only",
         "next_postclose_metric": "observation_source_quality_audit.warning_stage_count and high_volume_no_source_field_stage_count",
+        "forbidden_uses": [
+            "runtime_threshold_apply",
+            "order_submit",
+            "provider_route_change",
+            "bot_restart",
+            "cap_release",
+            "hard_safety_relaxation",
+        ],
     }
     orders: list[dict[str, Any]] = []
+    if summary.get("tuning_input_allowed") is False or hard_gaps:
+        hard_evidence = [
+            *evidence,
+            f"tuning_input_allowed={summary.get('tuning_input_allowed')}",
+            f"blocked_reason={summary.get('blocked_reason')}",
+            f"hard_blocking_contract_gap_count={summary.get('hard_blocking_contract_gap_count')}",
+            f"hard_blocking_stages={','.join(str(stage) for stage in (summary.get('hard_blocking_stages') or [])[:20])}",
+            "forbidden_uses=EV/rolling/MTD/cumulative tuning/live-auto promotion/runtime approval until fixed",
+            "required_acceptance_tests=source-quality audit pass, EV/runtime summary source_quality_gate pass_or_not_evaluated, postclose verifier pass",
+        ]
+        for gap in hard_gaps[:12]:
+            if not isinstance(gap, dict):
+                continue
+            hard_evidence.append(
+                "gap:"
+                f"stage={gap.get('stage')} "
+                f"reason={gap.get('reason')} "
+                f"missing_fields={','.join(str(field) for field in (gap.get('missing_fields') or [])[:12]) or '-'} "
+                f"sample_count={gap.get('sample_count')} "
+                f"first_timestamp={gap.get('first_timestamp') or '-'} "
+                f"last_timestamp={gap.get('last_timestamp') or '-'}"
+            )
+        orders.append(
+            {
+                **base,
+                "order_id": "order_observation_source_quality_hard_block_contract_gap",
+                "title": "Observation source-quality hard block contract gap",
+                "priority": 0,
+                "route": "source_quality_gap",
+                "mapped_family": "observation_source_quality_audit",
+                "threshold_family": "observation_source_quality_audit",
+                "improvement_type": "source_quality_hard_block_contract_gap",
+                "intent": (
+                    "Fix producer-side contract/provenance gaps before any affected raw row/window can feed EV, "
+                    "rolling/MTD/cumulative tuning, live-auto promotion, or runtime approval."
+                ),
+                "evidence": hard_evidence,
+                "files_likely_touched": [
+                    "src/engine/sniper_state_handlers.py",
+                    "src/engine/observation_source_quality_audit.py",
+                    "src/engine/build_code_improvement_workorder.py",
+                    "docs/report-based-automation-traceability.md",
+                ],
+                "acceptance_tests": [
+                    "PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_observation_source_quality_audit.py src/tests/test_build_code_improvement_workorder.py src/tests/test_threshold_cycle_ev_report.py src/tests/test_runtime_approval_summary.py src/tests/test_verify_threshold_cycle_postclose_chain.py",
+                ],
+            }
+        )
+    if unknown_token_findings:
+        unknown_evidence = [
+            *evidence,
+            "unknown_token_policy=warning_only_not_tuning_hard_block",
+            "required_action=producer_provenance_fix_or_explicit_reviewed_not_available_label",
+            "forbidden_uses=ignore_unknown_token_warning/silent_tuning_promotion_without_review",
+        ]
+        top_fields: list[str] = []
+        for finding in unknown_token_findings:
+            if not isinstance(finding, dict):
+                continue
+            fields = finding.get("fields") if isinstance(finding.get("fields"), list) else []
+            field_bits = []
+            for field in fields:
+                if not isinstance(field, dict):
+                    continue
+                field_bits.append(
+                    f"{field.get('field')}:{field.get('count')}:{field.get('rate')}"
+                )
+                top_fields.append(str(field.get("field") or ""))
+            unknown_evidence.append(
+                "unknown:"
+                f"stage={finding.get('stage')} "
+                f"event_count={finding.get('event_count')} "
+                f"fields={','.join(field_bits) or '-'}"
+            )
+        orders.append(
+            {
+                **base,
+                "order_id": "order_observation_source_quality_unknown_token_provenance_gap",
+                "title": "Observation source-quality unknown-token provenance gap",
+                "priority": 1,
+                "route": "source_quality_warning_producer_fix",
+                "mapped_family": "observation_source_quality_audit",
+                "threshold_family": "observation_source_quality_audit",
+                "improvement_type": "source_quality_unknown_token_provenance_gap",
+                "intent": (
+                    "Trace high-rate unknown-token warning fields back to their producers and replace silent "
+                    "unknown placeholders with real provenance or explicit reviewed not_available/insufficient_sample "
+                    "labels, without changing runtime thresholds, orders, provider route, bot state, or safety guards."
+                ),
+                "evidence": [
+                    *unknown_evidence,
+                    f"top_unknown_fields={','.join(item for item in top_fields if item)}",
+                ],
+                "files_likely_touched": [
+                    "src/engine/observation_source_quality_audit.py",
+                    "src/engine/build_code_improvement_workorder.py",
+                    "src/engine/sniper_state_handlers.py",
+                    "src/engine/lifecycle_decision_matrix.py",
+                    "src/engine/scalp_sim_overnight.py",
+                    "docs/report-based-automation-traceability.md",
+                ],
+                "acceptance_tests": [
+                    "PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_observation_source_quality_audit.py src/tests/test_build_code_improvement_workorder.py",
+                ],
+            }
+        )
     if any(stage in warning_stages for stage in ("ai_confirmed", "blocked_ai_score", "wait65_79_ev_candidate")):
         orders.append(
             {
@@ -2603,7 +2764,7 @@ def _observation_source_quality_followup_orders(report: dict[str, Any]) -> list[
                 ],
             }
         )
-    if warning_stages and not orders:
+    if (warning_stages or unknown_token_findings) and not orders:
         orders.append(
             {
                 **base,

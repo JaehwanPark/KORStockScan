@@ -9,6 +9,8 @@
 ## 오늘 강제 규칙
 
 - 장중 runtime threshold mutation은 금지한다. 적용은 PREOPEN `threshold_cycle_preopen_apply`가 생성한 runtime env만 source로 본다.
+- 튜닝 데이터 기준은 `clean_tuning_baseline_date=2026-06-04`, `clean_tuning_baseline_ts_kst=2026-06-04T14:29:09+09:00`이다. 기준 이전 raw/report/analytics artifact는 archive/audit evidence로만 보고 EV/rolling/MTD/cumulative tuning, live-auto promotion, runtime approval, pattern lab promotion, real execution quality approval 입력으로 쓰지 않는다.
+- Baseline 이후 raw source-quality contract 결손은 날짜 전체 차단이 아니라 결손 row/window를 `raw_row_exclusion`으로 제외하는 것이 기본이다. 전체 block은 preflight missing/invalid, row/window exclusion 실패, 또는 결손을 안정적으로 특정할 수 없는 high-volume no-contract 상황에만 사용한다.
 - provider transport/provenance 확인은 threshold 값, 주문가/수량 guard, 스윙 dry-run guard 변경과 분리한다.
 - `actual_order_submitted=false`인 sim/probe 표본은 EV/source-quality 입력이며 실주문 전환 근거가 아니다.
 - Project/Calendar 동기화는 사용자가 표준 동기화 명령으로 수행한다.
@@ -87,6 +89,17 @@
   - 다음 액션: source-quality split, active state 복원, open/closed count를 같이 기록한다.
   - 처리 결과 (`2026-06-04 09:37 KST`, Project `PVTI_lAHOAXZuE84BUTcPzguemzs`): 판정 `pass / sim_probe_authority_split_preserved`. [pipeline_events_2026-06-04.jsonl](/home/ubuntu/KORStockScan/data/pipeline_events/pipeline_events_2026-06-04.jsonl)은 09:37 기준 `actual_order_submitted=False` 6366건, `broker_order_forbidden=True` 5366건, `decision_authority=sim_observation_only` 3252건을 포함하고 `actual_order_submitted=True` 표본은 없었다. [threshold_events_2026-06-04.jsonl](/home/ubuntu/KORStockScan/data/threshold_cycle/threshold_events_2026-06-04.jsonl)도 `actual_order_submitted=False` 6325건, `broker_order_forbidden=True` 5335건, `decision_authority=sim_observation_only` 3252건을 남긴다. 주요 sim/probe stages는 `latency_block`, `scalp_sim_panic_scale_in_blocked`, `swing_probe_discarded`, `scalp_sim_ai_holding_live_call`, `scalp_sim_buy_order_assumed_filled` 등이며 real execution 품질이나 live 전환 근거로 사용하지 않는다.
 
+- [x] `[CleanBaselineReportQuarantine0604] clean tuning baseline 이전 report/analytics artifact 폐기 및 postclose residue fail guard 확인` (`Due: 2026-06-04`, `Slot: INTRADAY`, `TimeWindow: 13:45~14:05`, `Track: RuntimeStability`)
+  - Source: [clean_baseline_policy.json](/home/ubuntu/KORStockScan/data/source_quality/clean_baseline_policy.json), [report-based-automation-traceability.md](/home/ubuntu/KORStockScan/docs/report-based-automation-traceability.md), [verify_threshold_cycle_postclose_chain.py](/home/ubuntu/KORStockScan/src/engine/verify_threshold_cycle_postclose_chain.py)
+  - 판정 기준: baseline 이전 `data/report` 산출물, baseline 당일 pre-baseline `generated_at` report, baseline 이전 analytics DuckDB/Parquet store는 decision input으로 남기지 않고 archive-only quarantine으로 이동한다.
+  - 금지: quarantined report/analytics store를 rolling/MTD/EV/live-auto/runtime approval/pattern lab 입력으로 재사용하지 않는다. raw archive는 감사용으로만 유지한다.
+  - 처리 결과 (`2026-06-04 13:57~14:03 KST`): 판정 `pass / report_and_analytics_artifacts_quarantined_and_residue_guard_added`. `data/report`의 dated 기존 report 2,340개를 `data/source_quality/report_quarantine/2026-06-04_clean_report_quarantine_135737`로 이동했고 manifest를 남겼다. `data/analytics`의 DuckDB 1개와 Parquet 95개도 `data/source_quality/analytics_quarantine/2026-06-04_clean_analytics_quarantine_140337`로 이동했다. postclose verifier는 baseline 이후 target에서 pre-baseline report residue 또는 baseline 당일 pre-baseline `generated_at` report가 남으면 `clean_baseline_report_residue_present`, baseline 이전 parquet partition 또는 baseline 이전 생성 DuckDB가 남으면 `clean_baseline_analytics_residue_present`로 fail-closed한다. 현재 residue check는 `data/report pass / residue_count=0`, `data/analytics pass / residue_count=0`이다.
+
+- [x] `[PreopenStatusArtifactFreshnessRecovery0604] threshold_preopen_status 운영 artifact 복구 및 quarantine 예외 보강` (`Due: 2026-06-04`, `Slot: INTRADAY`, `TimeWindow: 14:05~14:15`, `Track: RunbookOps`)
+  - Source: [threshold_cycle_preopen_2026-06-04.status.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_preopen_status/threshold_cycle_preopen_2026-06-04.status.json), [source_quality_clean_baseline.py](/home/ubuntu/KORStockScan/src/engine/automation/source_quality_clean_baseline.py), [artifact_freshness.py](/home/ubuntu/KORStockScan/src/engine/error_detectors/artifact_freshness.py)
+  - 판정 기준: `artifact_freshness`가 소비하는 `threshold_cycle_preopen_status`는 tuning decision report가 아니라 wrapper status/source-quality artifact이므로 clean-baseline report quarantine 대상에서 제외한다.
+  - 처리 결과 (`2026-06-04 14:05~14:10 KST`): 판정 `pass / operational_status_artifact_restored`. `threshold_cycle_preopen_2026-06-04.status.json`을 report quarantine archive에서 운영 경로로 복구했고 `status=succeeded`, `runtime_effect=preopen_runtime_env_apply_only`를 확인했다. `source_quality_clean_baseline.py`는 `threshold_cycle_preopen_status`와 `threshold_cycle_postclose_status`를 quarantine/residue 대상에서 제외하도록 보강했다. `error_detector --mode artifact_only --dry-run`과 `error_detector --mode full --dry-run`은 `summary_severity=pass`, `artifact_freshness=pass`, `threshold_preopen_status_status=pass_after_window`로 닫혔다. bot restart, runtime threshold/order/provider/env/cap 변경은 수행하지 않았다.
+
 - [x] `[IntradayAutomationHealthCheck20260604] 장중 자동화체인 상태 확인` (`Due: 2026-06-04`, `Slot: INTRADAY`, `TimeWindow: 09:05~15:30`, `Track: RunbookOps`)
   - Source: [time-based-operations-runbook.md](/home/ubuntu/KORStockScan/docs/time-based-operations-runbook.md)
   - 판정: `not_yet_due / partial_intraday_pass`
@@ -98,7 +111,32 @@
   - 금지: sentinel/error detector/panic 결과로 runtime threshold, provider route, 주문, bot restart를 변경하지 않는다.
   - 다음 액션: `pass`, `warning`, `fail` 중 하나로 닫고 필요 시 postclose source-quality/workorder handoff로만 넘긴다.
 
-## 장후 체크리스트 (16:30~18:55)
+- [x] `[RawSourceQualityProvenanceReview0604] 원천 raw 수집 품질 및 sim/probe provenance contract 재점검` (`Due: 2026-06-04`, `Slot: INTRADAY`, `TimeWindow: 14:20~14:45`, `Track: RuntimeStability`)
+  - Source: [pipeline_events_2026-06-04.jsonl](/home/ubuntu/KORStockScan/data/pipeline_events/pipeline_events_2026-06-04.jsonl), [threshold_events_2026-06-04.jsonl](/home/ubuntu/KORStockScan/data/threshold_cycle/threshold_events_2026-06-04.jsonl), [observation_source_quality_audit.py](/home/ubuntu/KORStockScan/src/engine/observation_source_quality_audit.py), [sniper_state_handlers.py](/home/ubuntu/KORStockScan/src/engine/sniper_state_handlers.py)
+  - 판정: `warning / producer_and_audit_contract_patched`
+  - 처리 결과 (`2026-06-04 14:20~14:45 KST`): 당일 pipeline/threshold raw JSONL은 `bad_json=0`으로 구조 파손은 없고 append도 유지 중이다. 다만 pre-fix raw에서 `scalp_sim_duplicate_buy_signal`의 `runtime_effect/sim_record_id`, `scalp_sim_entry_submit_revalidation_warning`의 `runtime_effect`, `swing_probe_discarded`의 `evidence_quality/source_record_id/decision_authority` 결손이 확인됐다. `loss_fallback_probe`는 sim 주문/probe 전환 경로가 아니라 holding source-quality 관찰 contract로 분리해 결손 bug로 분류하지 않았다. producer는 scalp sim 공통 `runtime_effect`, duplicate active sim record id, sim submit revalidation warning runtime effect, swing probe discard decision authority/evidence/source id를 남기도록 보강했고 observation audit에 세 stage contract를 추가했다.
+  - 금지: pre-fix provenance 결손 raw를 정상 튜닝 근거로 자동 승격하지 않는다. 해당 row는 source-quality warning/quarantine 입력으로 취급하며 broker/order/provider/cap/threshold/hard-safety 변경 근거로 사용하지 않는다.
+  - 검증: `pytest` targeted `28 passed`, `py_compile` pass, `git diff --check` pass, parser validation `sync_docs_backlog_to_project --print-backlog-only` pass. Observation source audit는 pre-fix rows 때문에 `status=warning`이며 warning stage는 `scalp_sim_duplicate_buy_signal`, `scalp_sim_entry_submit_revalidation_warning`, `swing_probe_discarded`로 한정된다.
+  - 런타임 반영 (`2026-06-04 14:29~14:31 KST`): `restart.flag` 기반 우아한 재기동으로 bot main PID가 `87026 -> 133048`로 교체됐고 `error_detector --mode full --dry-run`은 `summary_severity=pass`, `process_health=pass`, `artifact_freshness=pass`, `log_scanner=pass`로 닫혔다. 재기동 이후 raw 확인에서 `swing_probe_discarded` 신규 41건은 `evidence_quality/source_record_id/decision_authority/runtime_effect/actual_order_submitted/broker_order_forbidden` 결손 0건이다. `scalp_sim_duplicate_buy_signal`과 `scalp_sim_entry_submit_revalidation_warning`은 재기동 이후 신규 표본이 아직 없어 다음 발생 시 audit contract로 재확인한다.
+  - 다음 액션: 장후 자동화체인에서 pre-fix warning이 `code_improvement_workorder` 또는 source-quality audit handoff로 표면화되는지 확인한다.
+
+- [x] `[CleanRawTuningInputReset0604] 정상 수집 시점 이후 raw만 튜닝 입력으로 보존하고 4월 대용량 raw 삭제` (`Due: 2026-06-04`, `Slot: INTRADAY`, `TimeWindow: 14:32~14:40`, `Track: RuntimeStability`)
+  - Source: [manifest.json](/home/ubuntu/KORStockScan/data/source_quality/raw_prune/2026-06-04_raw_prune_143335/manifest.json), [clean_baseline_policy.json](/home/ubuntu/KORStockScan/data/source_quality/clean_baseline_policy.json), [pipeline_events_2026-06-04.jsonl](/home/ubuntu/KORStockScan/data/pipeline_events/pipeline_events_2026-06-04.jsonl), [threshold_events_2026-06-04.jsonl](/home/ubuntu/KORStockScan/data/threshold_cycle/threshold_events_2026-06-04.jsonl)
+  - 판정: `done / clean_raw_cutover_applied`
+  - 처리 결과 (`2026-06-04 14:33~14:40 KST`): 튜닝 입력 허용 기준을 producer patch가 bot에 반영된 `clean_tuning_baseline_ts_kst=2026-06-04T14:29:09+09:00`로 좁혔다. 당일 `pipeline_events_2026-06-04.jsonl`과 `threshold_events_2026-06-04.jsonl`은 cutoff 이후 row만 남기도록 절단했고, pre-fix raw 총 `78,436` rows를 제거했으며 cutoff 이후 `6,557` rows를 보존했다. 4월 `data/pipeline_events/pipeline_events_2026-04*`와 clean-baseline analytics quarantine의 4월 `parquet/pipeline_events/date=2026-04-*` 파일 총 `33`개, 약 `1,365,230,286` bytes를 삭제했다.
+  - 검증: 삭제 후 4월 pipeline_events/parquet 대상 잔여 파일은 0개다. `observation_source_quality_audit --target-date 2026-06-04`는 `warning_stage_count=0`으로 missing provenance contract warning이 사라졌고, 남은 warning은 unknown-token source-quality finding이다.
+  - 금지: 제거된 pre-fix/4월 raw는 EV/rolling/MTD/cumulative tuning, live-auto promotion, runtime approval, pattern lab promotion, real execution quality approval 입력으로 재사용하지 않는다.
+
+- [x] `[ObservationSourceQualityHardGate0604] 장후 source-quality contract hard gate 구현` (`Due: 2026-06-04`, `Slot: INTRADAY`, `TimeWindow: 15:00~15:25`, `Track: RuntimeStability`)
+  - Source: [observation_source_quality_audit.py](/home/ubuntu/KORStockScan/src/engine/observation_source_quality_audit.py), [source_quality_hard_gate.py](/home/ubuntu/KORStockScan/src/engine/automation/source_quality_hard_gate.py), [run_threshold_cycle_postclose.sh](/home/ubuntu/KORStockScan/deploy/run_threshold_cycle_postclose.sh), [verify_threshold_cycle_postclose_chain.py](/home/ubuntu/KORStockScan/src/engine/verify_threshold_cycle_postclose_chain.py)
+  - 판정: `done / contract_gap_preflight_fail_closed`
+  - 처리 결과: `observation_source_quality_audit` summary에 `hard_blocking_contract_gap_count`, `hard_blocking_stages`, `tuning_input_allowed`, `blocked_reason`, `review_warning_count`를 추가했다. Contract warning/fail, required-field missing, invalid label, high-volume no-contract gap은 `tuning_input_allowed=false` hard block이며 unknown-token finding은 review warning으로만 남긴다. Postclose wrapper는 LDM/bridge/EV 전 `observation_source_quality_audit --target-date "$TARGET_DATE" --write` preflight를 실행한다.
+  - 소비자 guard: `threshold_cycle_ev_report`, `runtime_approval_summary`, `lifecycle_decision_matrix`는 preflight block 시 `status=source_quality_blocked`, `runtime_effect=false`, `allowed_runtime_apply=false`, `source_quality_gate=blocked_contract_gap`으로 닫고 runtime-applicable candidate를 제거한다. `build_code_improvement_workorder`는 `order_observation_source_quality_hard_block_contract_gap`를 `implement_now/source_quality_gap`으로 생성한다.
+  - Verifier: clean baseline 이후 preflight missing은 `source_quality_preflight_missing`, hard block 중 후보 생성은 `source_quality_hard_block_candidate_generated`, workorder 미전달은 `source_quality_hard_block_handoff_missing`으로 fail-closed한다.
+  - 검증: `pytest` targeted source-quality/workorder/verifier `162 passed`, EV/runtime/LDM consumer `74 passed`, `py_compile` pass, `git diff --check` pass.
+  - 다음 액션: 장후 실제 chain 산출에서 `observation_source_quality_audit`, `code_improvement_workorder`, `threshold_cycle_ev`, `runtime_approval_summary`, `threshold_cycle_postclose_verification`이 같은 contract로 닫혔는지 `PostcloseAutomationHealthCheck20260604`에서 확인한다.
+
+## 장후 체크리스트 (16:30~19:10)
 
 - [ ] `[ThresholdDailyEVReport0604] daily EV real/sim/combined split 및 자동 반영 결과 확인` (`Due: 2026-06-04`, `Slot: POSTCLOSE`, `TimeWindow: 16:30~16:45`, `Track: RuntimeStability`)
   - Source: [threshold_cycle_ev_2026-06-02.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-06-02.json)
@@ -155,6 +193,15 @@
   - Acceptance: controller status가 `done` 또는 documented blocked state로 닫히고 predecessor wait/timeout/fail, final verifier, required audit/workorder/control-tower freshness가 설명된다. Codex runner는 `completed`, `no_safe_orders`, 또는 `blocked_*`를 명확히 남기며, blocked이면 `codex_package_unavailable|codex_login_required|codex_login_timeout|forbidden_diff|worktree_dirty|worktree_stale_head|unsupported_acceptance_tests` 중 원인을 분리한다.
   - 다음 액션: `postclose_chain_done`, `controller_recovered_and_done`, `controller_blocked_non_recoverable`, `codex_runner_completed`, `codex_runner_blocked_user_action_required`, `postclose_artifact_wait`, `followup_workorder_required` 중 하나로 닫고, 사용자 조치가 필요한 경우 Project/Calendar sync와 분리해 기록한다.
 
+- [ ] `[PostcloseDoneControllerRunnerHardening0604] DONE controller/runner clean tuning 초기화 보강계획 확정` (`Due: 2026-06-04`, `Slot: POSTCLOSE`, `TimeWindow: 18:55~19:10`, `Track: RunbookOps`)
+  - Source: [run_postclose_done_controller.sh](/home/ubuntu/KORStockScan/deploy/run_postclose_done_controller.sh), [postclose_done_controller.py](/home/ubuntu/KORStockScan/src/engine/automation/postclose_done_controller.py), [codex_workorder_runner.py](/home/ubuntu/KORStockScan/src/engine/automation/codex_workorder_runner.py), [observation_source_quality_audit.py](/home/ubuntu/KORStockScan/src/engine/observation_source_quality_audit.py), [build_code_improvement_workorder.py](/home/ubuntu/KORStockScan/src/engine/build_code_improvement_workorder.py), [report-based-automation-traceability.md](/home/ubuntu/KORStockScan/docs/report-based-automation-traceability.md)
+  - 판정 기준: 장후 작업 종료 후 DONE controller가 `clean_baseline_policy`, `observation_source_quality_audit --write`, `raw_row_exclusion_applied`, `tuning_input_allowed`, `hard_blocking_contract_gap_count`, `unknown_token_stage_count`, `code_improvement_workorder` unknown-token order handoff를 자기 artifact에 직접 남기도록 보강할 구현 범위를 확정한다. Codex runner는 `source-quality/parser/schema/report/test/docs/instrumentation/sim-source-only` safe scope와 실제 allowlist/forbidden diff scan/acceptance parser가 일치하는지 확인한다.
+  - 우선순위: 오늘 postclose EV/report 생성과 verifier가 끝난 뒤 수행한다. 단, source-quality hard block 또는 unknown-token handoff 누락이 장후 산출에서 재발하면 이 항목을 `implement_now` workorder로 승격해 먼저 자동화체인을 보수한 뒤 개별 producer 문제를 처리한다.
+  - IN scope: controller preflight summary 필드 추가, source-quality audit/write 재확인 action, raw row exclusion manifest 기록, unknown-token workorder handoff 확인, runner safe-scope allowlist 정렬, unsupported acceptance 차단 방지, tests/parser/`git diff --check`.
+  - OUT scope: real order authority, PREOPEN live env 직접 수정, provider route 변경, bot restart, cap release, broker/order guard 변경, hard/protect/emergency safety 완화, 장중 runtime threshold mutation.
+  - Acceptance: 보강계획이 `implement_now`, `defer_after_postclose_done`, `already_covered`, `blocked_user_action_required` 중 하나로 닫히고, 구현 필요 시 다음 workorder가 `runtime_effect=false`, `allowed_runtime_apply=false`, `forbidden_uses` 및 acceptance tests를 포함한다. unknown-token warning은 hard block이 아니더라도 `order_observation_source_quality_unknown_token_provenance_gap` 또는 동등한 source-quality producer-fix order로 표면화돼야 한다.
+  - 다음 액션: `controller_runner_hardening_workorder_required`, `hardening_implemented_and_validated`, `already_covered_by_current_patch`, `defer_after_postclose_done`, `blocked_by_codex_sdk_or_auth` 중 하나로 닫는다.
+
 <!-- AUTO_NEXT_STAGE2_CHECKLIST_END -->
 
 ## Project/Calendar 동기화
@@ -164,3 +211,18 @@
 ```bash
 PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTHONPATH=. .venv/bin/python -m src.engine.sync_github_project_calendar
 ```
+
+<!-- AUTO_SERVER_COMPARISON_START -->
+### 본서버 vs songstockscan 자동 비교 (`2026-06-04 15:46:21`)
+
+- 기준: `profit-derived metrics are excluded by default because fallback-normalized values such as NULL -> 0 can distort comparison`
+- 상세 리포트: `data/report/server_comparison/server_comparison_2026-06-04.md`
+- `Trade Review`: status=`remote_error`, differing_safe_metrics=`0`
+  - safe 기준 차이 없음
+- `Performance Tuning`: status=`remote_error`, differing_safe_metrics=`0`
+  - safe 기준 차이 없음
+- `Post Sell Feedback`: status=`remote_error`, differing_safe_metrics=`0`
+  - safe 기준 차이 없음
+- `Entry Pipeline Flow`: status=`remote_error`, differing_safe_metrics=`0`
+  - safe 기준 차이 없음
+<!-- AUTO_SERVER_COMPARISON_END -->

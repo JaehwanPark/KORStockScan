@@ -214,6 +214,45 @@ def test_scalp_entry_adm_event_paths_include_gzip_threshold_events(tmp_path, mon
     assert mod._event_paths("2026-05-18") == [threshold_dir / "threshold_events_2026-05-18.jsonl.gz"]
 
 
+def test_scalp_entry_adm_report_warns_on_unknown_bucket_source_quality(tmp_path, monkeypatch):
+    pipeline_dir = tmp_path / "pipeline_events"
+    threshold_dir = tmp_path / "threshold_cycle"
+    report_dir = tmp_path / "report" / "scalp_entry_action_decision_matrix"
+    monkeypatch.setattr(mod, "PIPELINE_EVENT_DIR", pipeline_dir)
+    monkeypatch.setattr(mod, "THRESHOLD_EVENT_DIR", threshold_dir)
+    monkeypatch.setattr(mod, "THRESHOLD_SNAPSHOT_DIR", threshold_dir / "snapshots")
+    monkeypatch.setattr(mod, "POST_SELL_DIR", tmp_path / "post_sell")
+    monkeypatch.setattr(mod, "ADM_REPORT_DIR", report_dir)
+    _write_jsonl(
+        pipeline_dir / "pipeline_events_2026-05-18.jsonl",
+        [
+            {
+                "stage": "scalp_entry_action_decision_snapshot",
+                "stock_code": "111111",
+                "record_id": "R1",
+                "emitted_at": "2026-05-18T09:10:00",
+                "emitted_date": "2026-05-18",
+                "fields": {
+                    "chosen_action": "NO_BUY_AI",
+                    "entry_adm_bucket_token": "score_unknown|risk_unknown|stale_unknown",
+                },
+            }
+        ],
+    )
+
+    report = mod.build_scalp_entry_action_decision_matrix_report("2026-05-18")
+
+    unknown_summary = report["summary"]["unknown_bucket_summary"]
+    assert "unknown_bucket_source_quality_gap" in report["warnings"]
+    assert unknown_summary["source_quality_gate"] == "source_quality_blocker"
+    assert unknown_summary["recommended_route"] == "source_quality_workorder"
+    assert unknown_summary["affected_rows"] == 1
+    assert unknown_summary["dimension_counts"]["score_bucket"] == 1
+    assert "unknown_bucket_affected_rows" in (report_dir / "scalp_entry_action_decision_matrix_2026-05-18.md").read_text(
+        encoding="utf-8"
+    )
+
+
 def test_scalp_entry_adm_normalizes_submitted_snapshot_action():
     fields = {
         "source_stage": "order_bundle_submitted",
@@ -363,6 +402,50 @@ def test_scalp_entry_adm_runtime_bias_forces_wait_on_negative_buy_bucket(tmp_pat
     assert merged["entry_adm_runtime_bias_applied"] is True
     assert merged["entry_adm_runtime_effect"] == "force_wait"
     assert merged["entry_adm_runtime_reason"] == "bucket_negative_source_quality_adjusted_ev"
+
+
+def test_scalp_entry_adm_runtime_maps_runtime_context_without_unknown_buckets(tmp_path, monkeypatch):
+    report_dir = tmp_path / "report" / "scalp_entry_action_decision_matrix"
+    report_dir.mkdir(parents=True)
+    monkeypatch.setattr(runtime_mod, "ADM_DIR", report_dir)
+    (report_dir / "scalp_entry_action_decision_matrix_2026-05-18.json").write_text(
+        json.dumps({"date": "2026-05-18", "matrix_version": "scalp_entry_adm_v1_2026-05-18", "bucket_summary": []}),
+        encoding="utf-8",
+    )
+
+    context = runtime_mod.build_scalp_entry_adm_runtime_context(
+        prompt_profile="watching",
+        ws_data={
+            "current_ai_score": 62.0,
+            "latest_strength": 70,
+            "buy_pressure_10t": 35,
+            "quote_stale": "False",
+            "curr": 10_000,
+            "volume": 100_000,
+            "orderbook": {"asks": [{"price": 10_010}], "bids": [{"price": 9_990}]},
+            "scalp_pre_ai_gate_context": {
+                "strength_momentum": {
+                    "risk_state": "weak_momentum_context",
+                    "gate_action": "risk_context_only",
+                },
+                "overbought": {
+                    "risk_state": "pullback_observed",
+                    "risk_bucket": "pullback_candidate",
+                },
+            },
+        },
+        advisory_enabled=True,
+        now=datetime(2026, 5, 18, 16, 30),
+    )
+
+    fields = context["fields"]
+    assert fields["entry_adm_score_bucket"] == "score50_64"
+    assert fields["entry_adm_risk_context_bucket"] == "weak_strength_momentum"
+    assert fields["entry_adm_stale_bucket"] == "fresh"
+    assert fields["entry_adm_price_resolution_bucket"] == "quote_based"
+    assert fields["entry_adm_liquidity_bucket"] == "liquidity_high"
+    assert fields["entry_adm_overbought_bucket"] == "overbought_ok"
+    assert "unknown" not in fields["entry_adm_bucket_token"]
 
 
 def test_scalp_entry_adm_bucket_sample_floor_blocks_force_wait(tmp_path, monkeypatch):

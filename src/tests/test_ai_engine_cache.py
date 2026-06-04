@@ -740,6 +740,8 @@ def test_analyze_target_holding_exit_action_schema_compat(monkeypatch):
     assert result["action_v2"] == "EXIT"
     assert result["action"] == "DROP"
     assert result["action_schema"] == "holding_exit_v1"
+    assert "entry_adm_bucket_token" not in result
+    assert "entry_adm_status" not in result
 
 
 def test_scalping_reason_language_contract_replaces_non_ascii_reason():

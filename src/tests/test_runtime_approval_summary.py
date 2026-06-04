@@ -418,6 +418,10 @@ def test_runtime_approval_summary_surfaces_entry_adm_runtime_bias_summary(tmp_pa
                     "missing_actions": ["WAIT_REQUOTE", "BUY_DEFENSIVE"],
                     "primary_decision_metric": "source_quality_adjusted_ev_pct",
                     "source_quality_adjusted_ev_pct": -2.22,
+                    "unknown_bucket_summary": {
+                        "affected_rows": 3,
+                        "source_quality_gate": "source_quality_blocker",
+                    },
                     "top_actions": [
                         {
                             "action": "BUY_NOW",
@@ -445,6 +449,8 @@ def test_runtime_approval_summary_surfaces_entry_adm_runtime_bias_summary(tmp_pa
     assert "joined_sample_below_sample_floor" in adm_summary["warnings"]
     assert "missing_action_bucket" in adm_summary["warnings"]
     assert "prompt_context_not_loaded" in adm_summary["warnings"]
+    assert "unknown_bucket_source_quality_gap" in adm_summary["warnings"]
+    assert adm_summary["unknown_bucket_summary"]["affected_rows"] == 3
     assert report["summary"]["scalp_entry_adm_ready_for_daily_policy_tuning"] is False
     adm_row = next(
         row for row in report["scalping"] if row["family"] == "scalp_entry_action_decision_matrix_advisory"

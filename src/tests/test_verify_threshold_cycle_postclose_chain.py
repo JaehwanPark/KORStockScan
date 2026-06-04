@@ -1,8 +1,84 @@
 import json
+import os
 from datetime import datetime
 from pathlib import Path
 
 from src.engine import verify_threshold_cycle_postclose_chain as mod
+
+
+def test_source_quality_hard_block_status_fails_runtime_candidate_without_handoff():
+    preflight = {
+        "summary": {
+            "tuning_input_allowed": False,
+            "hard_blocking_contract_gap_count": 1,
+            "hard_blocking_stages": ["blocked_ai_score"],
+        }
+    }
+
+    status = mod._source_quality_hard_block_status(
+        preflight,
+        ev_report={"approval_requests": [{"family": "score65_74_recovery_probe"}]},
+        runtime_summary={},
+        ldm_report={},
+        bridge_report={},
+        workorder={"orders": []},
+    )
+
+    assert status["status"] == "fail"
+    assert status["candidate_violation_sources"] == ["threshold_cycle_ev"]
+    assert status["workorder_handoff_present"] is False
+
+
+def test_source_quality_hard_block_status_detects_bridge_selected_alias_without_handoff():
+    preflight = {
+        "status": "warning",
+        "tuning_input_allowed": False,
+        "blocked_reason": "blocked_contract_gap",
+        "hard_blocking_contract_gap_count": 1,
+        "hard_blocking_stages": ["scalp_sim_duplicate_buy_signal"],
+    }
+
+    status = mod._source_quality_hard_block_status(
+        preflight,
+        ev_report={},
+        runtime_summary={},
+        ldm_report={},
+        bridge_report={
+            "runtime_apply_bridge": {
+                "selected": [{"family": "entry_wait6579_score66_69_recovery_gate_v1"}],
+                "selected_count": 1,
+                "approved_requests": [{"family": "entry_wait6579_score66_69_recovery_gate_v1"}],
+            }
+        },
+        workorder={"orders": [{"order_id": "order_observation_source_quality_hard_block_contract_gap"}]},
+    )
+
+    assert status["status"] == "fail"
+    assert status["candidate_violation_sources"] == ["runtime_apply_bridge"]
+    assert status["workorder_handoff_present"] is True
+
+
+def test_source_quality_hard_block_status_passes_when_blocked_artifacts_handoff_only():
+    preflight = {
+        "summary": {
+            "tuning_input_allowed": False,
+            "hard_blocking_contract_gap_count": 1,
+            "hard_blocking_stages": ["blocked_ai_score"],
+        }
+    }
+
+    status = mod._source_quality_hard_block_status(
+        preflight,
+        ev_report={"status": "source_quality_blocked", "allowed_runtime_apply": False},
+        runtime_summary={"status": "source_quality_blocked", "summary": {"runtime_candidate_count": 0}},
+        ldm_report={"status": "source_quality_blocked", "runtime_approval_candidates": []},
+        bridge_report={},
+        workorder={"orders": [{"order_id": "order_observation_source_quality_hard_block_contract_gap"}]},
+    )
+
+    assert status["status"] == "pass"
+    assert status["candidate_violation_sources"] == []
+    assert status["workorder_handoff_present"] is True
 
 
 def test_read_lines_includes_rotated_numeric_log(tmp_path):
@@ -17,6 +93,49 @@ def test_read_lines_includes_rotated_numeric_log(tmp_path):
     lines = mod._read_lines(log_path)
 
     assert any("[DONE] threshold-cycle postclose target_date=2026-05-22" in line for line in lines)
+
+
+def test_clean_baseline_report_residue_status_fails_pre_baseline_reports(tmp_path, monkeypatch):
+    monkeypatch.setenv("KORSTOCKSCAN_CLEAN_TUNING_BASELINE_DATE", "2026-06-04")
+    monkeypatch.setenv("KORSTOCKSCAN_CLEAN_TUNING_BASELINE_TS_KST", "2026-06-04T14:29:09+09:00")
+    old_report = tmp_path / "threshold_cycle_ev" / "threshold_cycle_ev_2026-06-02.json"
+    same_day_old_report = tmp_path / "threshold_cycle_ev" / "threshold_cycle_ev_2026-06-04.json"
+    future_report = tmp_path / "threshold_cycle_ev" / "threshold_cycle_ev_2026-06-05.json"
+    for path, generated_at in (
+        (old_report, "2026-06-02T18:00:00+09:00"),
+        (same_day_old_report, "2026-06-04T13:00:00+09:00"),
+        (future_report, "2026-06-05T18:00:00+09:00"),
+    ):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"generated_at": generated_at}), encoding="utf-8")
+
+    status = mod._clean_baseline_report_residue_status(tmp_path)
+
+    assert status["status"] == "fail"
+    assert status["residue_count"] == 2
+    reasons = {item["reason"] for item in status["residue"]}
+    assert "pre_clean_baseline_report_archive_only" in reasons
+    assert "same_day_pre_clean_baseline_report_archive_only" in reasons
+
+
+def test_clean_baseline_analytics_residue_status_fails_old_parquet_and_duckdb(tmp_path, monkeypatch):
+    monkeypatch.setenv("KORSTOCKSCAN_CLEAN_TUNING_BASELINE_DATE", "2026-06-04")
+    monkeypatch.setenv("KORSTOCKSCAN_CLEAN_TUNING_BASELINE_TS_KST", "2026-06-04T14:29:09+09:00")
+    old_parquet = tmp_path / "parquet" / "pipeline_events" / "date=2026-06-02" / "pipeline_events.parquet"
+    new_parquet = tmp_path / "parquet" / "pipeline_events" / "date=2026-06-04" / "pipeline_events.parquet"
+    duckdb_path = tmp_path / "duckdb" / "korstockscan_analytics.duckdb"
+    for path in (old_parquet, new_parquet, duckdb_path):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("", encoding="utf-8")
+    os.utime(duckdb_path, (0, 0))
+
+    status = mod._clean_baseline_analytics_residue_status(tmp_path)
+
+    assert status["status"] == "fail"
+    assert status["residue_count"] == 2
+    reasons = {item["reason"] for item in status["residue"]}
+    assert "pre_clean_baseline_parquet_archive_only" in reasons
+    assert "pre_clean_baseline_duckdb_archive_only" in reasons
 
 
 def test_latest_run_lines_prefers_repaired_full_done_marker_after_partial_marker():

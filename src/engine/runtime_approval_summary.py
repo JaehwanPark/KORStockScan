@@ -11,6 +11,15 @@ from pathlib import Path
 from typing import Any
 
 from src.engine.approval_contracts import approval_contract_for
+from src.engine.automation.source_quality_clean_baseline import (
+    clean_baseline_policy,
+    policy_warning_for_date,
+)
+from src.engine.automation.source_quality_hard_gate import (
+    apply_source_quality_preflight_block,
+    load_source_quality_preflight,
+    source_quality_preflight_blocked,
+)
 from src.engine.daily_threshold_cycle_report import REPORT_DIR
 from src.engine.lifecycle_bucket_discovery import discovery_report_path
 from src.engine.threshold_cycle_ev_report import ev_report_paths
@@ -1176,6 +1185,11 @@ def _entry_adm_summary(ev_report: dict[str, Any], source_path: str | None) -> di
     missing_actions = adm.get("missing_actions") if isinstance(adm.get("missing_actions"), list) else []
     prompt_applied_count = _as_int(adm.get("prompt_applied_count"))
     top_actions = adm.get("top_actions") if isinstance(adm.get("top_actions"), list) else []
+    unknown_bucket_summary = (
+        adm.get("unknown_bucket_summary")
+        if isinstance(adm.get("unknown_bucket_summary"), dict)
+        else {}
+    )
     joined_action_ev_pct = None
     for action in top_actions:
         if not isinstance(action, dict):
@@ -1192,6 +1206,8 @@ def _entry_adm_summary(ev_report: dict[str, Any], source_path: str | None) -> di
         warnings.append("missing_action_bucket")
     if prompt_applied_count == 0:
         warnings.append("prompt_context_not_loaded")
+    if _as_int(unknown_bucket_summary.get("affected_rows")) > 0:
+        warnings.append("unknown_bucket_source_quality_gap")
 
     return {
         "available": bool(adm.get("available", True)),
@@ -1208,6 +1224,7 @@ def _entry_adm_summary(ev_report: dict[str, Any], source_path: str | None) -> di
         "joined_sample": joined,
         "sample_floor": floor,
         "prompt_applied_count": prompt_applied_count,
+        "unknown_bucket_summary": unknown_bucket_summary,
         "missing_actions": missing_actions,
         "expected_actions": expected_actions,
         "tuning_cycle": "scalp_entry_action_decision_matrix -> threshold_cycle_ev -> runtime_approval_summary -> code_improvement_workorder -> pattern_lab source bundle -> next runtime env",
@@ -1881,6 +1898,13 @@ def build_runtime_approval_summary(target_date: str) -> dict[str, Any]:
     ev_json, _ = ev_report_paths(target_date)
     swing_path = SWING_RUNTIME_APPROVAL_DIR / f"swing_runtime_approval_{target_date}.json"
     ev_report = _load_json(ev_json)
+    clean_policy = (
+        ev_report.get("clean_tuning_baseline")
+        if isinstance(ev_report.get("clean_tuning_baseline"), dict)
+        else clean_baseline_policy()
+    )
+    clean_policy_warning = policy_warning_for_date(target_date, clean_policy)
+    source_quality_preflight_gate = load_source_quality_preflight(target_date)
     swing_report = _load_json(swing_path)
     sources = ev_report.get("sources") if isinstance(ev_report.get("sources"), dict) else {}
     calibration_source = sources.get("calibration")
@@ -1924,8 +1948,11 @@ def build_runtime_approval_summary(target_date: str) -> dict[str, Any]:
         "report_type": "runtime_approval_summary",
         "purpose": "read_only_summary_only_no_runtime_mutation",
         "runtime_mutation_allowed": False,
+        "clean_tuning_baseline": clean_policy,
+        "source_quality_preflight_gate": source_quality_preflight_gate,
         "sources": {
             "threshold_cycle_ev": str(ev_json) if ev_json.exists() else None,
+            "observation_source_quality_audit": source_quality_preflight_gate.get("artifact"),
             "swing_runtime_approval": str(swing_path) if swing_path.exists() else None,
             "scalp_entry_action_decision_matrix": scalp_entry_adm_path,
             "buy_funnel_sentinel": buy_funnel_sentinel_path,
@@ -2084,6 +2111,10 @@ def build_runtime_approval_summary(target_date: str) -> dict[str, Any]:
                 "pattern_lab_ai_review_missing" if not pattern_lab_ai_review_path.exists() else "",
                 "producer_gap_discovery_missing" if not producer_gap_discovery_path.exists() else "",
                 "pattern_lab_propagation_audit_missing" if not propagation_path.exists() else "",
+                clean_policy_warning or "",
+                "source_quality_blocked_contract_gap"
+                if source_quality_preflight_blocked(source_quality_preflight_gate)
+                else "",
                 *[
                     f"swing_lifecycle_bucket_discovery:{item}"
                     for item in (swing_lifecycle_bucket_discovery_summary.get("warnings") or [])
@@ -2094,6 +2125,7 @@ def build_runtime_approval_summary(target_date: str) -> dict[str, Any]:
             if message
         ],
     }
+    report = apply_source_quality_preflight_block(report, source_quality_preflight_gate)
     SUMMARY_DIR.mkdir(parents=True, exist_ok=True)
     json_path, md_path = summary_paths(target_date)
     json_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
