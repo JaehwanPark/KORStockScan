@@ -398,7 +398,8 @@ class CronCompletionDetector(BaseDetector):
             payload = json.loads(artifact_path.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError):
             return None
-        if str(payload.get("target_date") or "") != today_str:
+        artifact_date = str(payload.get("target_date") or payload.get("date") or "")
+        if artifact_date != today_str:
             return None
         try:
             exit_code = int(payload.get("exit_code") or 0)
@@ -407,7 +408,7 @@ class CronCompletionDetector(BaseDetector):
         status = str(payload.get("status") or "").lower()
         manual_recovery = payload.get("manual_recovery") if isinstance(payload.get("manual_recovery"), dict) else {}
         verification_status = str(manual_recovery.get("verification_status") or "").lower()
-        if exit_code == 0 and status in {"succeeded", "success", "passed", "pass", "completed"}:
+        if exit_code == 0 and status in {"succeeded", "success", "passed", "pass", "completed", "done"}:
             return "done"
         if exit_code == 0 and verification_status == "pass_with_pending_done_marker":
             return "done"

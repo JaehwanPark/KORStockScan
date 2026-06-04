@@ -19,8 +19,14 @@ from src.engine.error_detectors.process_health import (
 
 
 @pytest.fixture(autouse=True)
-def _force_trading_day(monkeypatch):
+def _force_trading_day(monkeypatch, tmp_path):
     monkeypatch.setattr(process_health_module, "is_krx_trading_day", lambda target: True)
+    heartbeat_path = tmp_path / "error_detector_heartbeat.json"
+    isolation_path = tmp_path / "postclose_bot_isolation.json"
+    monkeypatch.setattr(process_health_module, "HEARTBEAT_PATH", heartbeat_path)
+    monkeypatch.setattr(process_health_module, "POSTCLOSE_BOT_ISOLATION_PATH", isolation_path)
+    monkeypatch.setitem(globals(), "HEARTBEAT_PATH", heartbeat_path)
+    monkeypatch.setitem(globals(), "POSTCLOSE_BOT_ISOLATION_PATH", isolation_path)
 
 
 class TestProcessHealthDetector:
@@ -150,7 +156,7 @@ class TestProcessHealthDetector:
         assert result.severity == "fail"
         assert "no longer alive" in result.summary
 
-    def test_detector_warns_when_pid_dead_during_postclose_bot_isolation(self, monkeypatch):
+    def test_detector_passes_when_pid_dead_during_postclose_bot_isolation(self, monkeypatch):
         monkeypatch.setattr(process_health_module, "_is_bot_expected_running", lambda: True)
         monkeypatch.setattr(process_health_module, "_seconds_since_expected_start", lambda: 600.0)
         data = {
@@ -177,7 +183,7 @@ class TestProcessHealthDetector:
 
         result = ProcessHealthDetector().check()
 
-        assert result.severity == "warning"
+        assert result.severity == "pass"
         assert result.details["main_loop_status"] == "postclose_isolation_pid_dead"
         assert result.details["postclose_bot_isolation"]["reason"] == (
             "threshold_cycle_postclose_resource_isolation"

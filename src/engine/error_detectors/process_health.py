@@ -342,7 +342,7 @@ class ProcessHealthDetector(BaseDetector):
         return DetectionResult(
             detector_id=self.id,
             category=self.category,
-            severity="warning",
+            severity="pass",
             summary=summary,
             details=details,
             recommended_action=(

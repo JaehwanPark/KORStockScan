@@ -286,6 +286,52 @@ class TestCronCompletionDetector:
         assert result.details["tuning_monitoring_postclose_status"] == "pass"
         assert result.details["tuning_monitoring_postclose_status_artifact_terminal"] == "done"
 
+    def test_once_job_date_status_done_artifact_completes_missing_wrapper_marker(self, monkeypatch, tmp_path):
+        import json
+        import src.engine.error_detectors.cron_completion as cc
+
+        logs_dir = tmp_path / "logs"
+        status_dir = tmp_path / "data" / "report" / "postclose_done_controller"
+        logs_dir.mkdir(parents=True)
+        status_dir.mkdir(parents=True)
+        (logs_dir / "postclose_done_controller_cron.log").write_text(
+            "\n".join(
+                [
+                    "[START] postclose_done_controller target_date=2026-06-04 started_at=2026-06-04T16:05:01+0900",
+                    '{"status": "blocked_recoverable_action_failed", "date": "2026-06-04"}',
+                ]
+            ),
+            encoding="utf-8",
+        )
+        (status_dir / "postclose_done_controller_2026-06-04.json").write_text(
+            json.dumps({"date": "2026-06-04", "status": "done"}),
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(cc, "PROJECT_ROOT", tmp_path)
+        monkeypatch.setattr(cc, "_today_kst", lambda: "2026-06-04")
+        monkeypatch.setattr(
+            cc,
+            "CRON_JOB_REGISTRY",
+            [
+                {
+                    "id": "postclose_done_controller",
+                    "log": "logs/postclose_done_controller_cron.log",
+                    "status_artifact": "data/report/postclose_done_controller/postclose_done_controller_{date}.json",
+                    "window_start": (16, 5),
+                    "window_end": (20, 5),
+                    "mode": "once",
+                    "critical": True,
+                }
+            ],
+        )
+
+        with _mock_time(21, 45):
+            result = CronCompletionDetector().check()
+
+        assert result.severity == "pass"
+        assert result.details["postclose_done_controller_status"] == "pass"
+        assert result.details["postclose_done_controller_status_artifact_terminal"] == "done"
+
     def test_once_job_failed_status_artifact_overrides_older_done_log(self, monkeypatch, tmp_path):
         import json
         import src.engine.error_detectors.cron_completion as cc
