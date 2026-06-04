@@ -779,7 +779,7 @@ def _scalp_sim_entry_liquidity_bucket(runtime: dict | None, fields: dict | None 
     ).strip()
     if explicit and explicit.lower() not in {"-", "none", "null"}:
         return explicit
-    return "liquidity_unknown"
+    return "liquidity_not_available"
 
 
 def _scalp_sim_entry_overbought_bucket(runtime: dict | None, fields: dict | None = None) -> str:
@@ -795,7 +795,7 @@ def _scalp_sim_entry_overbought_bucket(runtime: dict | None, fields: dict | None
     ).strip()
     if explicit and explicit.lower() not in {"-", "none", "null"}:
         return explicit
-    return "overbought_unknown"
+    return "overbought_not_available"
 
 
 def _scalp_sim_entry_time_bucket(runtime: dict | None, now_ts: float | None) -> str:
@@ -7777,7 +7777,7 @@ def _build_swing_ws_quote_quality_fields(ws_data: dict | None) -> dict:
         "swing_micro_ws_quote_present": bool(quote_present),
         "swing_micro_ws_quote_source": source,
         "swing_micro_ws_quote_age_ms": quote_age_ms,
-        "swing_micro_ws_quote_stale": bool(quote_stale) if quote_age_ms != "-" else "unknown",
+        "swing_micro_ws_quote_stale": bool(quote_stale) if quote_age_ms != "-" else "not_available_no_quote_age",
         "swing_micro_ws_best_bid": best_bid or "-",
         "swing_micro_ws_best_ask": best_ask or "-",
     }
@@ -9271,8 +9271,8 @@ def _evaluate_scalp_pre_submit_guard_verdicts(
         liquidity_action = "PASS"
         liquidity_reason = "liquidity_guard_disabled" if is_scalping else "non_scalping_strategy"
     elif resolved_liquidity is None:
-        liquidity_action = "UNKNOWN"
-        liquidity_reason = "liquidity_unknown"
+        liquidity_action = "NOT_AVAILABLE"
+        liquidity_reason = "liquidity_not_available"
     elif resolved_liquidity < min_liquidity:
         liquidity_action = "BLOCK"
         liquidity_reason = "below_min_liquidity"
@@ -9292,7 +9292,7 @@ def _evaluate_scalp_pre_submit_guard_verdicts(
         overbought_reason = "overbought_guard_disabled" if is_scalping else "non_scalping_strategy"
     elif not overbought_state:
         overbought_action = "PASS"
-        overbought_reason = "overbought_unknown"
+        overbought_reason = "overbought_not_available"
     elif overbought_state == "not_evaluated":
         overbought_action = "PASS"
         overbought_reason = "overbought_not_evaluated"
@@ -9321,7 +9321,7 @@ def _would_guard_action(action: str | None) -> str:
     normalized = str(action or "").strip().upper()
     if normalized == "BLOCK":
         return "WOULD_BLOCK"
-    if normalized == "UNKNOWN":
+    if normalized in {"UNKNOWN", "NOT_AVAILABLE"}:
         return "WOULD_UNKNOWN"
     return "WOULD_PASS"
 
@@ -9333,15 +9333,15 @@ def _pre_submit_guard_verdict_log_fields(verdicts: dict | None) -> dict:
     return {
         "liquidity_guard_action": liquidity_action,
         "liquidity_guard_reason": verdicts.get("liquidity_guard_reason") or "-",
-        "pre_submit_liquidity_guard_action": verdicts.get("liquidity_guard_action") or "UNKNOWN",
+        "pre_submit_liquidity_guard_action": verdicts.get("liquidity_guard_action") or "NOT_AVAILABLE",
         "pre_submit_liquidity_reason": verdicts.get("liquidity_guard_reason") or "-",
         "pre_submit_liquidity_value": (
-            "UNKNOWN" if verdicts.get("liquidity_value") is None else int(verdicts.get("liquidity_value") or 0)
+            "not_available" if verdicts.get("liquidity_value") is None else int(verdicts.get("liquidity_value") or 0)
         ),
         "pre_submit_min_liquidity": int(verdicts.get("min_liquidity") or 0),
         "overbought_guard_action": overbought_action,
         "overbought_guard_reason": verdicts.get("overbought_guard_reason") or "-",
-        "pre_submit_overbought_guard_action": verdicts.get("overbought_guard_action") or "UNKNOWN",
+        "pre_submit_overbought_guard_action": verdicts.get("overbought_guard_action") or "NOT_AVAILABLE",
         "pre_submit_overbought_reason": verdicts.get("overbought_guard_reason") or "-",
         "pre_submit_overbought_risk_state": verdicts.get("overbought_risk_state") or "-",
         "pre_submit_overbought_risk_bucket": verdicts.get("overbought_risk_bucket") or "-",
@@ -9490,7 +9490,7 @@ def _build_sim_pre_submit_guard_observation_fields(
     liquidity_action = _would_guard_action(verdicts.get("liquidity_guard_action"))
     liquidity_reason = verdicts.get("liquidity_guard_reason")
     liquidity_log_value: int | str = (
-        "UNKNOWN" if verdicts.get("liquidity_value") is None else int(verdicts.get("liquidity_value") or 0)
+        "not_available" if verdicts.get("liquidity_value") is None else int(verdicts.get("liquidity_value") or 0)
     )
     overbought_action = _would_guard_action(verdicts.get("overbought_guard_action"))
     overbought_reason = verdicts.get("overbought_guard_reason")

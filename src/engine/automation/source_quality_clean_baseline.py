@@ -159,6 +159,8 @@ def report_generated_before_clean_baseline(path: str | Path, policy: dict[str, A
     policy = policy or clean_baseline_policy()
     if not policy.get("enabled", True):
         return False
+    if is_operational_status_report(path):
+        return False
     baseline_date = str(policy.get("clean_tuning_baseline_date") or DEFAULT_START_DATE)
     if baseline_date not in report_date_tokens(path):
         return False

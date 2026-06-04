@@ -1660,7 +1660,7 @@ def _entry_liquidity_bucket(features: dict[str, Any]) -> str:
     guard_bucket = _submit_liquidity_bucket(features)
     if guard_bucket and "unknown" not in guard_bucket.lower():
         return guard_bucket
-    return explicit or guard_bucket or "liquidity_unknown"
+    return explicit or guard_bucket or "liquidity_not_available"
 
 
 def _entry_overbought_bucket(features: dict[str, Any]) -> str:
@@ -1670,7 +1670,7 @@ def _entry_overbought_bucket(features: dict[str, Any]) -> str:
     guard_bucket = _submit_overbought_bucket(features)
     if guard_bucket and "unknown" not in guard_bucket.lower():
         return guard_bucket
-    return explicit or guard_bucket or "overbought_unknown"
+    return explicit or guard_bucket or "overbought_not_available"
 
 
 def _merge_entry_dimension_fallbacks(
@@ -2193,17 +2193,17 @@ def _submit_liquidity_bucket(features: dict[str, Any]) -> str:
         return reason or "below_min_liquidity"
     if action == "would_pass" and reason == "liquidity_ok":
         return "liquidity_ok"
-    if action == "would_pass" and reason == "liquidity_unknown":
-        return "liquidity_unknown"
+    if action == "would_pass" and reason in {"liquidity_unknown", "liquidity_not_available"}:
+        return "liquidity_not_available"
     if action == "would_unknown":
-        return reason or "liquidity_unknown"
+        return "liquidity_not_available" if not reason or reason == "liquidity_unknown" else reason
     explicit = _bucket_value(features.get("liquidity_bucket"), "")
     if explicit:
         return explicit
     value = _safe_float(features.get("sim_liquidity_value") or features.get("liquidity_value"), None)
     min_liquidity = _safe_float(features.get("sim_min_liquidity") or features.get("min_liquidity"), None)
     if value is None:
-        return "liquidity_unknown"
+        return "liquidity_not_available"
     if min_liquidity is not None and value < min_liquidity:
         return "below_min_liquidity"
     return "liquidity_ok"
@@ -2233,8 +2233,8 @@ def _submit_overbought_bucket(features: dict[str, Any]) -> str:
         return reason or "pullback_or_rebreak_not_confirmed"
     if action == "would_pass" and reason == "overbought_ok":
         return "overbought_ok"
-    if action == "would_pass" and reason == "overbought_unknown":
-        return "overbought_unknown"
+    if action == "would_pass" and reason in {"overbought_unknown", "overbought_not_available"}:
+        return "overbought_not_available"
     explicit = _bucket_value(features.get("overbought_bucket") or features.get("sim_overbought_risk_bucket"), "")
     if explicit:
         return explicit
@@ -2243,7 +2243,7 @@ def _submit_overbought_bucket(features: dict[str, Any]) -> str:
         return "overbought_ok"
     if state:
         return state
-    return "overbought_unknown"
+    return "overbought_not_available"
 
 
 def _submit_latency_state(features: dict[str, Any]) -> str:

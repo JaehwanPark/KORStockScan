@@ -31,11 +31,11 @@
 - audit_reason: `sharded review aggregate`
 
 ### AI Review Shards
-- `live_contract_review` status=`skipped_empty` candidates=`0` omitted=`0` context_chars=`28050`
-- `lifecycle_flow_review` status=`parsed` candidates=`1` omitted=`61` context_chars=`33070`
-- `sim_policy_review` status=`parsed` candidates=`1` omitted=`85` context_chars=`31581`
-- `gap_workorder_review` status=`skipped_empty` candidates=`0` omitted=`0` context_chars=`28026`
-- `taxonomy_discovery_review` status=`skipped_empty` candidates=`0` omitted=`0` context_chars=`28022`
+- `live_contract_review` status=`skipped_empty` candidates=`0` omitted=`0` context_chars=`28049`
+- `lifecycle_flow_review` status=`parsed` candidates=`1` omitted=`61` context_chars=`33069`
+- `sim_policy_review` status=`parsed` candidates=`1` omitted=`85` context_chars=`31580`
+- `gap_workorder_review` status=`skipped_empty` candidates=`0` omitted=`0` context_chars=`28025`
+- `taxonomy_discovery_review` status=`skipped_empty` candidates=`0` omitted=`0` context_chars=`28021`
 
 - `lifecycle_flow:combo_lifecycle_flow:entry_entry_missing_submit_submit_missing_holding_holding_missing_scale_in_scale_in_arm_avg_down` stage=`lifecycle_flow` state=`source_only_keep_collecting` action=`keep_collecting` relation=`existing_bucket_refinement` canonical=`lifecycle_flow:combo_lifecycle_flow:entry=entry_observed|submit=submit_observed|holding=holding_observed|scale_in=scale_in_observed|exit=exit_observed` joined=`1871` ev=`-0.6765` ai_final=`-` taxonomy=`absorb_as_dimension`
 - `lifecycle_flow:combo_lifecycle_flow:entry_entry_missing_submit_submit_missing_holding_holding_missing_scale_in_scale_in_arm_pyramid_` stage=`lifecycle_flow` state=`source_only_keep_collecting` action=`keep_collecting` relation=`existing_bucket_refinement` canonical=`lifecycle_flow:combo_lifecycle_flow:entry=entry_observed|submit=submit_observed|holding=holding_observed|scale_in=scale_in_observed|exit=exit_observed` joined=`261` ev=`0.4071` ai_final=`-` taxonomy=`absorb_as_dimension`

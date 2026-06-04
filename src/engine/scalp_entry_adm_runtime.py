@@ -112,7 +112,7 @@ def _stale_bucket(ws_data: dict[str, Any] | None) -> str:
         return "stale_high" if _truthy(ws.get("quote_stale")) else "fresh"
     quote_age = _safe_float(ws.get("quote_age_ms") or ws.get("tick_latest_age_ms"), -1.0)
     if quote_age < 0:
-        return "stale_unknown"
+        return "stale_not_available"
     if quote_age > 3000:
         return "stale_high"
     if quote_age > 1000:
@@ -126,7 +126,7 @@ def _liquidity_bucket(ws_data: dict[str, Any] | None) -> str:
     volume = _safe_float(ws.get("volume") or ws.get("today_vol") or ws.get("acc_volume"), 0.0)
     notional = curr * volume
     if notional <= 0:
-        return "liquidity_unknown"
+        return "liquidity_not_available"
     if notional < 100_000_000:
         return "liquidity_low"
     if notional < 500_000_000:
@@ -155,7 +155,7 @@ def _overbought_bucket(ws_data: dict[str, Any] | None) -> str:
         if high > 0 and low > 0 and high >= low:
             intraday_range = ((high - low) / low) * 100.0
     if intraday_range < 0:
-        return "overbought_unknown"
+        return "overbought_not_available"
     if intraday_range >= 18 and distance_high > -1.0:
         return "overbought_chase_risk"
     if intraday_range >= 10:

@@ -621,6 +621,26 @@ def _unknown_token_present(value: Any) -> bool:
     return "unknown" in text.lower()
 
 
+def _reviewed_unknown_reason(value: Any) -> str | None:
+    if isinstance(value, (dict, list, tuple, set)):
+        try:
+            text = json.dumps(value, ensure_ascii=False, sort_keys=True)
+        except Exception:
+            text = str(value)
+    else:
+        text = str(value)
+    lowered = text.lower()
+    if "unknown" not in lowered:
+        return None
+    if "sample=insufficient" in lowered or "insufficient_sample" in lowered:
+        return "reviewed_insufficient_sample"
+    if "not_applicable" in lowered or "not_available" in lowered or "not_evaluated" in lowered:
+        return "reviewed_not_available"
+    if "unknown_pre_contract" in lowered:
+        return "reviewed_pre_contract_placeholder"
+    return None
+
+
 def _unknown_scan_values(row: dict[str, Any], normalized: dict[str, Any]) -> dict[str, Any]:
     values = dict(normalized)
     for key in ("stage", "pipeline", "stock_code", "stock_name", "event_type"):
@@ -694,7 +714,7 @@ def _normalized_fields_for_contract(stage: str, fields: dict[str, Any]) -> dict[
             normalized["broker_receipt_status"] = (
                 "submitted_receipt_observed"
                 if submitted_bool and normalized.get("broker_order_no") != "unknown_pre_contract"
-                else "submitted_receipt_unknown"
+                else "unknown_pre_contract"
                 if submitted_bool
                 else "not_submitted"
             )
@@ -705,7 +725,7 @@ def _normalized_fields_for_contract(stage: str, fields: dict[str, Any]) -> dict[
         normalized.setdefault("requested_qty", normalized.get("qty") or normalized.get("order_qty") or "unknown_pre_contract")
         normalized.setdefault("filled_qty", normalized.get("filled_qty") or "unknown_pre_contract")
         normalized.setdefault("remaining_qty", normalized.get("remaining_qty") or "unknown_pre_contract")
-        normalized.setdefault("fill_quality", normalized.get("fill_status") or "UNKNOWN")
+        normalized.setdefault("fill_quality", normalized.get("fill_status") or "unknown_pre_contract")
         normalized.setdefault("post_submit_state", normalized.get("order_state") or "submitted_or_pending")
         normalized.setdefault("cancel_requested", False)
         normalized.setdefault("cancel_result", "not_requested")
@@ -1046,7 +1066,9 @@ def _evaluate_contracts(rows: list[dict[str, Any]], stage_counts: Counter[str]) 
     invalid_label_findings: dict[str, dict[str, Any]] = {}
     field_presence: dict[str, Counter[str]] = defaultdict(Counter)
     unknown_counts: dict[str, Counter[str]] = defaultdict(Counter)
+    reviewed_unknown_counts: dict[str, Counter[str]] = defaultdict(Counter)
     unknown_examples: dict[tuple[str, str], list[str]] = defaultdict(list)
+    reviewed_unknown_examples: dict[tuple[str, str], list[str]] = defaultdict(list)
     example_keys: dict[str, list[str]] = {}
     for row in rows:
         stage = _stage_name(row)
@@ -1088,6 +1110,14 @@ def _evaluate_contracts(rows: list[dict[str, Any]], stage_counts: Counter[str]) 
                 field_presence[stage][key] += 1
         for key, value in _unknown_scan_values(row, normalized).items():
             if _unknown_token_present(value):
+                reviewed_reason = _reviewed_unknown_reason(value)
+                if reviewed_reason:
+                    reviewed_key = f"{key}:{reviewed_reason}"
+                    reviewed_unknown_counts[stage][reviewed_key] += 1
+                    examples = reviewed_unknown_examples[(stage, reviewed_key)]
+                    if len(examples) < 5:
+                        examples.append(str(value)[:240])
+                    continue
                 unknown_counts[stage][key] += 1
                 examples = unknown_examples[(stage, key)]
                 if len(examples) < 5:
@@ -1131,12 +1161,40 @@ def _evaluate_contracts(rows: list[dict[str, Any]], stage_counts: Counter[str]) 
                 "forbidden_uses": "runtime_threshold_apply/order_submit/provider_route_change/bot_restart",
             }
         )
+    reviewed_unknown_token_findings: list[dict[str, Any]] = []
+    for stage, counter in sorted(reviewed_unknown_counts.items(), key=lambda item: (-stage_counts[item[0]], item[0])):
+        total = max(1, stage_counts.get(stage, 0))
+        fields = []
+        for compound_key, count in counter.most_common():
+            field, _, reason = compound_key.partition(":")
+            fields.append(
+                {
+                    "field": field,
+                    "count": count,
+                    "rate": round(count / total, 4),
+                    "reviewed_reason": reason or "reviewed_unknown",
+                    "examples": reviewed_unknown_examples.get((stage, compound_key), []),
+                }
+            )
+        if fields:
+            reviewed_unknown_token_findings.append(
+                {
+                    "stage": stage,
+                    "event_count": stage_counts.get(stage, 0),
+                    "fields": fields,
+                    "routing": "reviewed_unknown_token_provenance",
+                    "decision_authority": "source_quality_only",
+                    "runtime_effect": False,
+                    "forbidden_uses": "runtime_threshold_apply/order_submit/provider_route_change/bot_restart",
+                }
+            )
     return {
         "stage_contracts": results,
         "warning_stages": warnings,
         "invalid_label_findings": list(invalid_label_findings.values()),
         "high_volume_no_source_fields": high_volume_no_source_fields,
         "unknown_token_findings": unknown_token_findings,
+        "reviewed_unknown_token_findings": reviewed_unknown_token_findings,
         "field_presence_top": {
             stage: dict(counter.most_common(20))
             for stage, counter in sorted(field_presence.items(), key=lambda item: (-stage_counts[item[0]], item[0]))
@@ -1218,6 +1276,7 @@ def _hard_gate_summary(contract_result: dict[str, Any]) -> dict[str, Any]:
         "tuning_input_allowed": not gaps,
         "blocked_reason": "blocked_contract_gap" if gaps else None,
         "review_warning_count": len(contract_result.get("unknown_token_findings") or []),
+        "reviewed_unknown_token_stage_count": len(contract_result.get("reviewed_unknown_token_findings") or []),
         "review_warning_stages": [
             item.get("stage")
             for item in contract_result.get("unknown_token_findings") or []
@@ -1273,6 +1332,7 @@ def build_observation_source_quality_audit(target_date: str) -> dict[str, Any]:
             "warning_stage_count": len(contract_result["warning_stages"]),
             "high_volume_no_source_field_stage_count": len(contract_result["high_volume_no_source_fields"]),
             "unknown_token_stage_count": len(contract_result["unknown_token_findings"]),
+            "reviewed_unknown_token_stage_count": len(contract_result.get("reviewed_unknown_token_findings") or []),
             "hard_blocking_excluded_row_count": len(row_exclusions),
             "tuning_input_policy": "exclude_defective_rows_not_full_day_raw",
             **{key: value for key, value in hard_gate.items() if key != "hard_blocking_contract_gaps"},
@@ -1621,6 +1681,19 @@ def _write_markdown(report: dict[str, Any], path: Path) -> None:
         for item in unknown_findings[:20]:
             field_bits = ", ".join(
                 f"{field.get('field')}={field.get('count')}({field.get('rate')})"
+                for field in (item.get("fields") or [])[:8]
+            )
+            lines.append(
+                f"- `{item.get('stage')}` count=`{item.get('event_count')}` routing=`{item.get('routing')}` fields=`{field_bits}`"
+            )
+    else:
+        lines.append("- none")
+    lines.extend(["", "## Reviewed Unknown Token Findings"])
+    reviewed_unknown = report.get("reviewed_unknown_token_findings") or []
+    if reviewed_unknown:
+        for item in reviewed_unknown[:20]:
+            field_bits = ", ".join(
+                f"{field.get('field')}={field.get('count')}({field.get('reviewed_reason')})"
                 for field in (item.get("fields") or [])[:8]
             )
             lines.append(

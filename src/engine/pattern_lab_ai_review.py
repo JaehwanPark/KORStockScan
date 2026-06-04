@@ -1077,6 +1077,38 @@ def _ai_review_followup_order(*, target_date: str, reasons: list[str], audit: di
     }
 
 
+def _followup_represented_by_concrete_orders(
+    *,
+    followup_reasons: list[str],
+    audit: dict[str, Any],
+    orders: list[dict[str, Any]],
+) -> bool:
+    if followup_reasons != ["audit_status_correction_required"]:
+        return False
+    if str(audit.get("status") or "") != "correction_required":
+        return False
+    forbidden = audit.get("forbidden_use_violations")
+    if isinstance(forbidden, list) and forbidden:
+        return False
+    issues = audit.get("issues")
+    if isinstance(issues, list) and issues:
+        state_prefixes = tuple(f"{state}:" for state in GAP_STATES)
+        if not all(str(issue).startswith(state_prefixes) for issue in issues):
+            return False
+    concrete = [
+        order
+        for order in orders
+        if isinstance(order, dict)
+        and str(order.get("improvement_type") or "") != "ai_review_followup"
+        and order.get("runtime_effect") is False
+        and order.get("allowed_runtime_apply") is False
+    ]
+    if not concrete:
+        return False
+    concrete_types = {str(order.get("improvement_type") or "") for order in concrete}
+    return bool(concrete_types & GAP_STATES)
+
+
 def build_pattern_lab_ai_review_report(
     target_date: str,
     *,
@@ -1171,6 +1203,13 @@ def build_pattern_lab_ai_review_report(
         forbidden_use_violations=forbidden,
         missing_final_conclusion_count=1 if ai_status == "parsed" and not conclusions else 0,
     )
+    generic_followup_resolved = _followup_represented_by_concrete_orders(
+        followup_reasons=followup_reasons,
+        audit=audit,
+        orders=orders,
+    )
+    if generic_followup_resolved:
+        followup_reasons = []
     if followup_reasons and not any(str(order.get("improvement_type") or "") == "ai_review_followup" for order in orders):
         orders.append(_ai_review_followup_order(target_date=target_date, reasons=followup_reasons, audit=audit))
     state_counts = Counter(str(item.get("final_state") or "unknown") for item in conclusions if isinstance(item, dict))
@@ -1208,6 +1247,7 @@ def build_pattern_lab_ai_review_report(
             "audit_status": audit.get("status"),
             "ai_review_followup_required": bool(followup_reasons),
             "ai_review_followup_reasons": followup_reasons,
+            "generic_ai_review_followup_resolved_by_concrete_orders": generic_followup_resolved,
             "final_conclusion_count": len(conclusions),
             "workorder_count": len(orders),
             "state_counts": dict(state_counts),

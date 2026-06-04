@@ -1,0 +1,61 @@
+# Swing Lifecycle Bucket Discovery 2026-06-04
+
+## Summary
+- runtime_effect: `False`
+- decision_authority: `swing_ldm_bucket_discovery_sim_auto`
+- source_contract_status: `pass`
+- surfaced_candidate_count: `288`
+- sim_auto_approved_count: `0`
+- sim_auto_reviewed_candidate_count: `0`
+- sim_auto_unreviewed_candidate_count: `0`
+- sim_auto_downgraded_by_review_count: `0`
+- sim_auto_review_shard_count: `0`
+- swing_lifecycle_flow_bucket_count: `15`
+- complete_flow_count: `2`
+- incomplete_flow_count: `412`
+- identity_join_rate: `1.0`
+- complete_flow_rate: `0.004831`
+- join_contract_blocked: `False`
+- flow_sim_auto_approved_count: `0`
+- stage_only_source_only_count: `273`
+- code_patch_required_count: `0`
+- implemented_source_quality_waiting_sample_count: `0`
+- implemented_source_quality_waiting_sample_candidate_count: `0`
+- implemented_source_quality_waiting_sample_workorder_count: `0`
+- implemented_source_quality_waiting_sample_total_count: `0`
+- raw_implemented_source_quality_waiting_sample_count: `10`
+- ai_review_augmentation_point_count: `4`
+- ai_review_orchestration_policy: `critical_sim_policy_first`
+- ai_review_optional_deferred_shard_count: `0`
+- ai_review_optional_deferred_candidate_count: `0`
+- ai_review_id_repair_count: `0`
+- human_intervention_required: `False`
+- warnings: `[]`
+
+## Surfaced Candidates
+- `swing_bucket_lifecycle_flow_combo_swing_lifecycle_flow_entry_swing_entry_entry_bucket_attribution_missing_lt55_missing_kos_94454abffac2` state=`source_only_keep_collecting` stage=`lifecycle_flow` route=`postclose_source_quality_or_sample_collection`
+- `swing_bucket_lifecycle_flow_combo_swing_lifecycle_flow_entry_swing_entry_entry_bucket_attribution_missing_missing_missing_e30a7d7ea153` state=`source_only_keep_collecting` stage=`lifecycle_flow` route=`postclose_source_quality_or_sample_collection`
+- `swing_bucket_lifecycle_flow_combo_swing_lifecycle_flow_entry_entry_missing_holding_swing_holding_holding_exit_bucket_attri_5182378aad08` state=`source_only_keep_collecting` stage=`lifecycle_flow` route=`postclose_source_quality_or_sample_collection`
+- `swing_bucket_lifecycle_flow_combo_swing_lifecycle_flow_entry_entry_missing_holding_swing_holding_holding_exit_bucket_attri_7d9af42e26d4` state=`source_only_keep_collecting` stage=`lifecycle_flow` route=`postclose_source_quality_or_sample_collection`
+- `swing_bucket_lifecycle_flow_combo_swing_lifecycle_flow_entry_entry_missing_holding_swing_holding_holding_exit_bucket_attri_eb0ab1164c6c` state=`source_only_keep_collecting` stage=`lifecycle_flow` route=`postclose_source_quality_or_sample_collection`
+- `swing_bucket_lifecycle_flow_combo_swing_lifecycle_flow_entry_entry_missing_holding_swing_holding_holding_exit_bucket_attri_94f07f2c64cb` state=`source_only_keep_collecting` stage=`lifecycle_flow` route=`postclose_source_quality_or_sample_collection`
+- `swing_bucket_lifecycle_flow_combo_swing_lifecycle_flow_entry_entry_missing_holding_swing_holding_holding_exit_bucket_attri_00eecf35f75f` state=`source_only_keep_collecting` stage=`lifecycle_flow` route=`postclose_source_quality_or_sample_collection`
+- `swing_bucket_lifecycle_flow_combo_swing_lifecycle_flow_entry_entry_missing_holding_swing_holding_holding_exit_bucket_attri_c397952f9370` state=`source_only_keep_collecting` stage=`lifecycle_flow` route=`postclose_source_quality_or_sample_collection`
+- `swing_bucket_lifecycle_flow_combo_swing_lifecycle_flow_entry_entry_missing_holding_swing_holding_holding_exit_bucket_attri_0c48f67ddc0a` state=`source_only_keep_collecting` stage=`lifecycle_flow` route=`postclose_source_quality_or_sample_collection`
+- `swing_bucket_lifecycle_flow_combo_swing_lifecycle_flow_entry_swing_entry_entry_bucket_attribution_missing_lt55_missing_kos_83089d4872d5` state=`source_only_keep_collecting` stage=`lifecycle_flow` route=`postclose_source_quality_or_sample_collection`
+- `swing_bucket_lifecycle_flow_combo_swing_lifecycle_flow_entry_swing_entry_entry_bucket_attribution_missing_lt55_missing_kos_accad40777cd` state=`source_only_keep_collecting` stage=`lifecycle_flow` route=`postclose_source_quality_or_sample_collection`
+- `swing_bucket_lifecycle_flow_combo_swing_lifecycle_flow_entry_swing_entry_entry_bucket_attribution_missing_lt55_missing_kos_346f454c37ca` state=`source_only_keep_collecting` stage=`lifecycle_flow` route=`postclose_source_quality_or_sample_collection`
+- `swing_bucket_lifecycle_flow_combo_swing_lifecycle_flow_entry_swing_entry_entry_bucket_attribution_missing_missing_missing_f17d66131fb7` state=`source_only_keep_collecting` stage=`lifecycle_flow` route=`postclose_source_quality_or_sample_collection`
+- `swing_bucket_lifecycle_flow_combo_swing_lifecycle_flow_entry_swing_entry_entry_bucket_attribution_missing_missing_missing_1799cdb92a88` state=`source_only_keep_collecting` stage=`lifecycle_flow` route=`postclose_source_quality_or_sample_collection`
+- `swing_bucket_lifecycle_flow_combo_swing_lifecycle_flow_entry_swing_entry_entry_bucket_attribution_missing_missing_missing_a583de93cd4f` state=`source_only_keep_collecting` stage=`lifecycle_flow` route=`postclose_source_quality_or_sample_collection`
+- `swing_bucket_entry_entry_bucket_attribution_missing_lt55_missing_kospi_ml` state=`source_only_keep_collecting` stage=`entry` route=`postclose_source_quality_or_sample_collection`
+- `swing_bucket_entry_entry_bucket_attribution_missing_missing_missing_kospi_ml` state=`source_only_keep_collecting` stage=`entry` route=`postclose_source_quality_or_sample_collection`
+- `swing_bucket_entry_entry_bucket_attribution_missing_missing_missing` state=`source_only_keep_collecting` stage=`entry` route=`postclose_source_quality_or_sample_collection`
+- `swing_bucket_entry_entry_bucket_attribution_normal_missing_missing_missing` state=`source_only_keep_collecting` stage=`entry` route=`postclose_source_quality_or_sample_collection`
+- `swing_bucket_entry_entry_bucket_attribution_missing_65_74_missing_kospi_ml` state=`source_only_keep_collecting` stage=`entry` route=`postclose_source_quality_or_sample_collection`
+
+## AI Review Augmentation Points
+- `swing_ldm_bucket_semantic_two_pass_review` stage=`bucket_discovery` route=`keep_source_only`
+- `swing_ldm_source_contract_ai_audit` stage=`source_contract` route=`keep_source_only`
+- `swing_ldm_sim_policy_handoff_ai_audit` stage=`sim_policy_handoff` route=`code_improvement_workorder`
+- `swing_ldm_source_quality_gap_ai_triage` stage=`source_quality` route=`keep_source_only`

@@ -238,7 +238,7 @@ ARTIFACT_REGISTRY: list[dict[str, Any]] = [
         "window_start": (16, 5),
         "window_end": (20, 5),
         "json_status_field": "status",
-        "json_ok_values": ["committed", "validated", "no_safe_orders", "dry_run_planned"],
+        "json_ok_values": ["completed", "dry_run_planned"],
         "suppress_missing_while_cron_in_progress": {
             "id": "postclose_done_controller",
             "log": "logs/postclose_done_controller_cron.log",

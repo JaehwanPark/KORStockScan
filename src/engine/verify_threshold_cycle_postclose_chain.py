@@ -1822,8 +1822,31 @@ def _active_sim_priority_handoff_status(
     def truthy(value: Any) -> bool:
         return value is True or str(value).strip().lower() in {"true", "1", "yes"}
 
+    referenced_scalp_catalog_cache: dict[str, tuple[set[str], set[str]]] = {}
+
+    def referenced_scalp_catalog_seed_sets(path_value: Any) -> tuple[set[str], set[str]]:
+        path_text = str(path_value or "").strip()
+        if not path_text:
+            return set(), set()
+        if path_text in referenced_scalp_catalog_cache:
+            return referenced_scalp_catalog_cache[path_text]
+        path = Path(path_text)
+        if not path.is_absolute():
+            path = PROJECT_ROOT / path
+        payload = _load_json(path)
+        seeds = [
+            item
+            for item in (payload.get("active_sim_priority_seeds") or [])
+            if isinstance(item, dict) and str(item.get("active_seed_id") or "").strip()
+        ]
+        all_ids = {str(item.get("active_seed_id")) for item in seeds}
+        active_ids = {str(item.get("active_seed_id")) for item in seeds if str(item.get("status") or "") == "active"}
+        referenced_scalp_catalog_cache[path_text] = (all_ids, all_ids - active_ids)
+        return referenced_scalp_catalog_cache[path_text]
+
     candidate_prefix_counts: dict[str, int] = {}
     observed_seed_ids: set[str] = set()
+    referenced_runtime_seed_ids: set[str] = set()
     observed_swing_policy_ids: set[str] = set()
     inactive_consumed: set[str] = set()
     unknown_consumed: set[str] = set()
@@ -1840,9 +1863,14 @@ def _active_sim_priority_handoff_status(
         seed_id = str(fields.get("active_seed_id") or "").strip()
         if seed_id:
             observed_seed_ids.add(seed_id)
-            if seed_id in inactive_seed_ids:
+            runtime_catalog_ids, runtime_inactive_ids = referenced_scalp_catalog_seed_sets(
+                fields.get("scalp_sim_auto_policy_file")
+            )
+            if seed_id in runtime_catalog_ids:
+                referenced_runtime_seed_ids.add(seed_id)
+            if seed_id in inactive_seed_ids or seed_id in runtime_inactive_ids:
                 inactive_consumed.add(seed_id)
-            elif seed_id not in catalog_seed_ids:
+            elif seed_id not in catalog_seed_ids and seed_id not in runtime_catalog_ids:
                 unknown_consumed.add(seed_id)
             if truthy(fields.get("actual_order_submitted")) or not truthy(fields.get("broker_order_forbidden")):
                 missing.append("active_sim_priority_runtime_forbidden_contract_violation")
@@ -1930,6 +1958,7 @@ def _active_sim_priority_handoff_status(
         "active_seed_ids": sorted(active_seed_ids),
         "preopen_seed_ids": sorted(preopen_seed_ids),
         "observed_seed_ids": sorted(observed_seed_ids),
+        "referenced_runtime_seed_ids": sorted(referenced_runtime_seed_ids),
         "swing_priority_policy_ids": sorted(swing_policy_ids),
         "active_swing_priority_policy_ids": sorted(active_swing_policy_ids),
         "preopen_swing_priority_policy_ids": sorted(preopen_swing_policy_ids),

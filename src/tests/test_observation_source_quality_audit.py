@@ -158,6 +158,39 @@ def test_observation_source_quality_audit_warns_on_any_unknown_token_field(monke
     assert fields["custom_context_state"]["rate"] == 0.01
 
 
+def test_observation_source_quality_audit_separates_reviewed_unknown_tokens(monkeypatch, tmp_path):
+    monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
+    rows = [
+        _event(
+            "orderbook_stability_observed",
+            {
+                "orderbook_micro_ofi_bucket_key": "spread=unknown|price=unknown|depth=unknown|sample=insufficient",
+                "custom_context_state": "observed",
+            },
+            record_id=1,
+        ),
+        _event(
+            "orderbook_stability_observed",
+            {
+                "orderbook_micro_ofi_bucket_key": "spread=known|price=known|depth=known|sample=ok",
+                "custom_context_state": "custom_unknown_placeholder",
+            },
+            record_id=2,
+        ),
+    ]
+    _write_events(tmp_path, "2026-06-04", rows)
+
+    report = audit.build_observation_source_quality_audit("2026-06-04")
+
+    assert report["summary"]["unknown_token_stage_count"] == 1
+    assert report["summary"]["reviewed_unknown_token_stage_count"] == 1
+    finding = report["unknown_token_findings"][0]
+    assert {field["field"] for field in finding["fields"]} == {"custom_context_state"}
+    reviewed = report["reviewed_unknown_token_findings"][0]
+    reviewed_fields = {field["field"]: field for field in reviewed["fields"]}
+    assert reviewed_fields["orderbook_micro_ofi_bucket_key"]["reviewed_reason"] == "reviewed_insufficient_sample"
+
+
 def test_observation_source_quality_audit_warns_on_top_level_and_all_unknown_fields(monkeypatch, tmp_path):
     monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
     fields = {f"custom_unknown_field_{idx}": "value_unknown" for idx in range(25)}

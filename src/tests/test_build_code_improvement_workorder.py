@@ -1044,7 +1044,7 @@ def test_observation_source_quality_unknown_token_findings_create_implement_orde
                 "event_count": 100,
                 "fields": [
                     {
-                        "field": "swing_micro_ws_quote_stale",
+                        "field": "custom_context_state",
                         "count": 95,
                         "rate": 0.95,
                         "examples": ["unknown"],
@@ -1064,7 +1064,7 @@ def test_observation_source_quality_unknown_token_findings_create_implement_orde
     assert order["improvement_type"] == "source_quality_unknown_token_provenance_gap"
     assert order["runtime_effect"] is False
     assert any("unknown:stage=latency_block" in item for item in order["evidence"])
-    assert any("top_unknown_fields=swing_micro_ws_quote_stale" in item for item in order["evidence"])
+    assert any("top_unknown_fields=custom_context_state" in item for item in order["evidence"])
     classified = mod._classify_order(
         order,
         finding_by_order_id={},
@@ -1131,6 +1131,51 @@ def test_observation_source_quality_arbitrary_unknown_token_routes_to_workorder(
     assert unknown_orders[0]["decision"] == "implement_now"
     assert codex_workorder_runner.is_safe_implement_now(unknown_orders[0])
     assert any("custom_context_state:1:0.01" in item for item in unknown_orders[0]["evidence"])
+
+
+def test_observation_source_quality_known_fixed_unknown_tokens_attach_existing_family():
+    report = {
+        "status": "warning",
+        "summary": {
+            "event_count": 100,
+            "warning_stage_count": 0,
+            "high_volume_no_source_field_stage_count": 0,
+            "unknown_token_stage_count": 1,
+            "review_warning_count": 1,
+            "tuning_input_allowed": True,
+        },
+        "stage_contracts": {},
+        "unknown_token_findings": [
+            {
+                "stage": "latency_block",
+                "event_count": 100,
+                "fields": [
+                    {
+                        "field": "swing_micro_ws_quote_stale",
+                        "count": 100,
+                        "rate": 1.0,
+                        "examples": ["unknown"],
+                    }
+                ],
+            }
+        ],
+    }
+
+    order = next(
+        item
+        for item in mod._observation_source_quality_followup_orders(report)
+        if item["order_id"] == "order_observation_source_quality_unknown_token_provenance_gap"
+    )
+    classified = mod._classify_order(
+        order,
+        finding_by_order_id={},
+        finding_by_title_slug={},
+        auto_family_order_ids=set(),
+        closed_instrumentation_order_families={},
+    )
+
+    assert order["implementation_status"] == "implemented_but_waiting_sample"
+    assert classified.decision == "attach_existing_family"
 
 
 def test_observation_source_quality_unknown_token_workorder_evidence_is_not_truncated():
@@ -1290,6 +1335,10 @@ def test_build_code_improvement_workorder_consumes_pattern_lab_currentness_audit
                         "route": "implement_now",
                         "runtime_effect": False,
                         "allowed_runtime_apply": False,
+                        "files_likely_touched": ["src/engine/pattern_lab_ai_review.py"],
+                        "acceptance_tests": [
+                            "PYTHONPATH=. .venv/bin/pytest -q src/tests/test_pattern_lab_ai_review.py"
+                        ],
                     }
                 ],
             }
@@ -1397,6 +1446,10 @@ def test_build_code_improvement_workorder_consumes_pattern_lab_ai_review(tmp_pat
                         "route": "implement_now",
                         "runtime_effect": False,
                         "allowed_runtime_apply": False,
+                        "files_likely_touched": ["src/engine/pattern_lab_ai_review.py"],
+                        "acceptance_tests": [
+                            "PYTHONPATH=. .venv/bin/pytest -q src/tests/test_pattern_lab_ai_review.py"
+                        ],
                     }
                 ],
             }
@@ -1425,6 +1478,53 @@ def test_build_code_improvement_workorder_consumes_pattern_lab_ai_review(tmp_pat
     assert report["source"]["pattern_lab_ai_review"] == str(
         ai_review_dir / "pattern_lab_ai_review_2026-05-15.json"
     )
+
+
+def test_pattern_lab_ai_review_without_code_contract_is_not_implement_now():
+    classified = mod._classify_order(
+        {
+            "order_id": "order_pattern_lab_ai_review_no_contract",
+            "title": "pattern lab ai review no code contract",
+            "source_report_type": "pattern_lab_ai_review",
+            "target_subsystem": "pattern_lab_ai_review",
+            "route": "implement_now",
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+        },
+        finding_by_order_id={},
+        finding_by_title_slug={},
+        auto_family_order_ids=set(),
+        closed_instrumentation_order_families={},
+    )
+
+    assert classified.decision == "defer_evidence"
+    assert "no files_likely_touched" in classified.reason
+
+
+def test_pattern_lab_ai_review_generic_followup_is_review_evidence_not_implementation():
+    classified = mod._classify_order(
+        {
+            "order_id": "order_pattern_lab_ai_review_ai_review_followup_2026_06_04",
+            "title": "Resolve Pattern Lab AI review follow-up",
+            "source_report_type": "pattern_lab_ai_review",
+            "target_subsystem": "pattern_lab_ai_review",
+            "improvement_type": "ai_review_followup",
+            "route": "review_ai_output",
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+            "files_likely_touched": ["src/engine/pattern_lab_ai_review.py"],
+            "acceptance_tests": [
+                "PYTHONPATH=. .venv/bin/pytest -q src/tests/test_pattern_lab_ai_review.py"
+            ],
+        },
+        finding_by_order_id={},
+        finding_by_title_slug={},
+        auto_family_order_ids=set(),
+        closed_instrumentation_order_families={},
+    )
+
+    assert classified.decision == "defer_evidence"
+    assert classified.route == "pattern_lab_ai_review_followup_evidence"
 
 
 def test_pattern_lab_ai_review_automation_handoff_gap_is_evidence_not_duplicate_implementation():
@@ -2063,6 +2163,34 @@ def test_build_code_improvement_workorder_consumes_ldm_submit_bucket_workorders(
     assert report["summary"]["lifecycle_holding_exit_bucket_source_order_count"] == 1
 
 
+def test_lifecycle_child_bucket_not_applicable_evidence_is_existing_family():
+    classified = mod._classify_order(
+        {
+            "order_id": "order_lifecycle_exit_bucket_outcome_unknown",
+            "title": "LDM exit bucket source-quality follow-up",
+            "source_report_type": "lifecycle_decision_matrix_exit_bucket_attribution",
+            "target_subsystem": "lifecycle_decision_matrix",
+            "route": "instrumentation_order",
+            "threshold_family": "lifecycle_decision_matrix_runtime",
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+            "implementation_status": "open",
+            "implementation_provenance": {
+                "source_field_coverage": {"outcome": {"present_count": 9, "sample_count": 9, "coverage_rate": 1.0}},
+                "recommended_resolution": "mark_not_applicable_explicitly",
+            },
+        },
+        finding_by_order_id={},
+        finding_by_title_slug={},
+        auto_family_order_ids=set(),
+        closed_instrumentation_order_families={},
+    )
+
+    assert classified.decision == "attach_existing_family"
+    assert classified.route == "existing_family"
+    assert "not_applicable" in classified.reason
+
+
 def test_build_code_improvement_workorder_adds_entry_adm_gap_order(tmp_path, monkeypatch):
     automation_dir = tmp_path / "automation"
     ev_dir = tmp_path / "ev"
@@ -2113,6 +2241,36 @@ def test_build_code_improvement_workorder_adds_entry_adm_gap_order(tmp_path, mon
     assert order["runtime_effect"] is False
     assert "joined_sample=2" in order["evidence"]
     assert report["source"]["scalp_entry_action_decision_matrix"] == str(adm_path)
+
+
+def test_entry_adm_sample_wait_only_is_rejudged_non_implement():
+    classified = mod._classify_order(
+        {
+            "order_id": "order_scalp_entry_adm_daily_tuning_coverage",
+            "title": "scalp entry ADM daily tuning coverage",
+            "source_report_type": "threshold_cycle_ev",
+            "target_subsystem": "entry_funnel",
+            "route": "instrumentation_order",
+            "threshold_family": "scalp_entry_action_decision_matrix_advisory",
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+            "adm_issue_types": ["joined_sample_below_sample_floor", "prompt_context_not_loaded"],
+            "files_likely_touched": [
+                "src/engine/scalp_entry_action_decision_matrix.py",
+                "src/engine/threshold_cycle_ev_report.py",
+            ],
+            "acceptance_tests": [
+                "PYTHONPATH=. .venv/bin/pytest src/tests/test_scalp_entry_action_decision_matrix.py"
+            ],
+        },
+        finding_by_order_id={},
+        finding_by_title_slug={},
+        auto_family_order_ids=set(),
+        closed_instrumentation_order_families={},
+    )
+
+    assert classified.decision == "defer_evidence"
+    assert "waiting on clean sample/runtime observation" in classified.reason
 
 
 def test_build_code_improvement_workorder_adds_pipeline_event_verbosity_order(tmp_path, monkeypatch):

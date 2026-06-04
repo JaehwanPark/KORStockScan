@@ -1,0 +1,14 @@
+artifact_uri: file:///home/ubuntu/KORStockScan/data/model_registry/swing_v2/mlruns/542730445547806220/a7187600914f451b9ab7d6aa53946cc9/artifacts
+end_time: 1780562282007
+entry_point_name: ''
+experiment_id: '542730445547806220'
+lifecycle_stage: active
+run_id: a7187600914f451b9ab7d6aa53946cc9
+run_name: benchmark:optuna_xgb_ranker_v1:2026-06-04
+source_name: ''
+source_type: 4
+source_version: ''
+start_time: 1780562281970
+status: 3
+tags: []
+user_id: ubuntu

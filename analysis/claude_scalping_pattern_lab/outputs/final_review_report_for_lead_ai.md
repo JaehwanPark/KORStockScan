@@ -1,7 +1,10 @@
 # 스캘핑 패턴 분석 최종 리뷰 보고서 (for Lead AI)
 
-생성일: 2026-06-02 16:27:59
-분석 기간: 2026-04-21 ~ 2026-06-02
+생성일: 2026-06-04 18:03:53
+분석 기간: 2026-04-21 ~ 2026-06-04
+
+> ⚠️ **표본 부족**: valid_profit_rate=8건 < 30. 결론 확정 금지, 후속 수집 제안만 작성.
+
 
 ---
 
@@ -11,74 +14,45 @@
 
 | 코호트 | 거래수 | 승률 | 손익 중앙값 | 기여손익 합 | 표본충분 |
 |---|---:|---:|---:|---:|---|
-| full_fill | 196 | 45.4% | -0.330% | -53.150% | ✓ |
-| partial_fill | 2 | 50.0% | +0.295% | +0.590% | ⚠️부족 |
-| split-entry | 3 | 0.0% | -1.740% | -5.060% | ⚠️부족 |
+| full_fill | 8 | 25.0% | -2.075% | -11.270% | ⚠️부족 |
 
 ### 1-4. 튜닝 관찰축 요약
 
-- `WAIT65~79 total_candidates=138`, `recovery_check=0`, `promoted=0`, `submitted=0`
-- `blocked_ai_score_share=80.4%`, `gatekeeper_eval_ms_p95=3514ms`, `budget_pass_to_submitted_rate=0.1%`
+- `WAIT65~79 total_candidates=2`, `recovery_check=0`, `promoted=0`, `submitted=0`
+- `blocked_ai_score_share=50.0%`, `gatekeeper_eval_ms_p95=3431ms`, `budget_pass_to_submitted_rate=0.0%`
 
-- `AI threshold dominance`: 경고 — `blocked_ai_score_share=80.4%`로 WAIT/BLOCK 비중이 높아 BUY drought 해석을 지지한다.
+- `No acute observability alert`: 중립 — 주요 관찰축에서 즉시 경고할 단일 병목이 두드러지지 않는다.
 
 ### 1-2. 손실 패턴 Top 5
 
 **#1** — 코호트: `full_fill` / 청산규칙: `scalp_soft_stop_pct`
-- 빈도: 62건 | 손익 중앙값: -1.775% | 기여손익: -116.610%
-- 보유시간 중앙값: 749.5초
+- 빈도: 4건 | 손익 중앙값: -2.075% | 기여손익: -8.100%
+- 보유시간 중앙값: 1428.5초
 - 선행 조건: 없음
 
 **#2** — 코호트: `full_fill` / 청산규칙: `scalp_hard_stop_pct`
-- 빈도: 10건 | 손익 중앙값: -2.700% | 기여손익: -26.850%
-- 보유시간 중앙값: 1540.5초
-- 선행 조건: 없음
-
-**#3** — 코호트: `full_fill` / 청산규칙: `scalp_ai_early_exit`
-- 빈도: 4건 | 손익 중앙값: -1.430% | 기여손익: -5.520%
-- 보유시간 중앙값: 1522.0초
-- 선행 조건: 없음
-
-**#4** — 코호트: `full_fill` / 청산규칙: `protect_trailing_stop`
-- 빈도: 5건 | 손익 중앙값: -1.170% | 기여손익: -4.800%
-- 보유시간 중앙값: 3251.0초
-- 선행 조건: 없음
-
-**#5** — 코호트: `full_fill` / 청산규칙: `scalp_preset_hard_stop_pct`
-- 빈도: 6건 | 손익 중앙값: -0.765% | 기여손익: -4.300%
-- 보유시간 중앙값: 113.0초
+- 빈도: 2건 | 손익 중앙값: -2.885% | 기여손익: -5.770%
+- 보유시간 중앙값: 915.0초
 - 선행 조건: 없음
 
 ### 1-3. 수익 패턴 Top 5
 
 **#1** — 코호트: `full_fill` / 청산규칙: `scalp_trailing_take_profit` / 진입모드: `normal`
-- 빈도: 73건 | 손익 중앙값: +0.810% | 기여손익: +78.940%
-
-**#2** — 코호트: `full_fill` / 청산규칙: `scalp_ai_momentum_decay` / 진입모드: `normal`
-- 빈도: 2건 | 손익 중앙값: +0.655% | 기여손익: +1.310%
-
-**#3** — 코호트: `full_fill` / 청산규칙: `scalp_preset_ai_review_exit` / 진입모드: `normal`
-- 빈도: 1건 | 손익 중앙값: +1.280% | 기여손익: +1.280%
-
-**#4** — 코호트: `partial_fill` / 청산규칙: `scalp_trailing_take_profit` / 진입모드: `fallback`
-- 빈도: 1건 | 손익 중앙값: +0.590% | 기여손익: +0.590%
-
-**#5** — 코호트: `full_fill` / 청산규칙: `scalp_preset_protect_profit` / 진입모드: `normal`
-- 빈도: 1건 | 손익 중앙값: +0.090% | 기여손익: +0.090%
+- 빈도: 2건 | 손익 중앙값: +1.300% | 기여손익: +2.600%
 
 ### 1-4. 기회비용 회수 후보 Top 5
 
 **#1** — `AI threshold miss`
-- 차단 건수 합계: 5942661건 | 차단 비율: 100.0% | 관찰 일수: 39일
+- 차단 건수 합계: 7299건 | 차단 비율: 100.0% | 관찰 일수: 1일
 
-**#2** — `overbought gate miss`
-- 차단 건수 합계: 1439832건 | 차단 비율: 100.0% | 관찰 일수: 39일
+**#2** — `latency guard miss`
+- 차단 건수 합계: 4418건 | 차단 비율: 100.0% | 관찰 일수: 1일
 
-**#3** — `latency guard miss`
-- 차단 건수 합계: 180596건 | 차단 비율: 99.8% | 관찰 일수: 39일
+**#3** — `overbought gate miss`
+- 차단 건수 합계: 824건 | 차단 비율: 99.9% | 관찰 일수: 1일
 
 **#4** — `liquidity gate miss`
-- 차단 건수 합계: 0건 | 차단 비율: 0.0% | 관찰 일수: 39일
+- 차단 건수 합계: 0건 | 차단 비율: 0.0% | 관찰 일수: 1일
 
 ---
 
@@ -86,10 +60,10 @@
 
 ### 2-1. split-entry 코호트 핵심 위험
 
-- rebase_integrity_flag: 53건
-- partial_then_expand_flag: 32건
-- same_symbol_repeat_flag: 483건
-- same_ts_multi_rebase_flag: 30건
+- rebase_integrity_flag: 2건
+- partial_then_expand_flag: 1건
+- same_symbol_repeat_flag: 13건
+- same_ts_multi_rebase_flag: 1건
 
 ### 2-2. 전역 손절 강화 비권고 이유
 

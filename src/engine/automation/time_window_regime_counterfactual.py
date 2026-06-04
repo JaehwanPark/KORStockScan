@@ -12,6 +12,10 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Iterable
 
+from src.engine.automation.source_quality_clean_baseline import (
+    clean_baseline_policy,
+    filter_allowed_dates,
+)
 from src.engine.daily_threshold_cycle_report import REPORT_DIR
 from src.utils.constants import DATA_DIR
 from src.utils.jsonl_io import existing_or_gzip_path, iter_jsonl
@@ -555,7 +559,11 @@ def build_time_window_regime_counterfactual_report(
 ) -> dict[str, Any]:
     safe_target = str(target_date).strip()
     safe_end = str(end_date or safe_target).strip()
+    clean_policy = clean_baseline_policy()
     available_dates = _available_sim_dates(safe_end, start_date=start_date)
+    baseline_excluded_dates: list[str] = []
+    if clean_policy.get("enabled", True):
+        available_dates, baseline_excluded_dates = filter_allowed_dates(available_dates, clean_policy)
     if rolling_days:
         available_dates = available_dates[-max(1, int(rolling_days)) :]
     guard = IoGuard(max_rows=max_rows, max_seconds=max_seconds)
@@ -618,10 +626,12 @@ def build_time_window_regime_counterfactual_report(
         "primary_decision_metric": "source_quality_adjusted_ev_pct",
         "source_quality_gate": "entry time join rate and separate completed/counterfactual metric scopes",
         "forbidden_uses": FORBIDDEN_USES,
+        "clean_tuning_baseline": clean_policy,
         "operator_seed_cutoffs": [{"cutoff": "09:30", "operator_seed_cutoff": True, "hard_gate": False}],
         "summary": {
             "status": status,
             "processed_dates": processed_dates,
+            "clean_baseline_excluded_dates": baseline_excluded_dates,
             "resume_mode_requested": bool(resume),
             "resume_cache_hits": resume_cache_hits,
             "resume_required": paused,

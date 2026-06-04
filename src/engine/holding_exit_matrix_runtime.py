@@ -189,7 +189,7 @@ def _alignment_for_action(action_label: str, matched_entries: list[dict[str, Any
     action = str(action_label or "").upper()
     biases = {str(entry.get("recommended_bias") or "no_clear_edge") for entry in matched_entries}
     if not action:
-        return "unknown_action"
+        return "action_not_available"
     if biases == {"no_clear_edge"}:
         return "neutral_no_clear_edge"
     if "prefer_exit" in biases and action in {"EXIT", "TRIM", "DROP", "SELL"}:
@@ -200,7 +200,7 @@ def _alignment_for_action(action_label: str, matched_entries: list[dict[str, Any
         return "hold_against_matrix_bias"
     if action in {"EXIT", "TRIM", "DROP", "SELL"}:
         return "exit_against_matrix_bias"
-    return "mixed_or_unknown"
+    return "alignment_not_available"
 
 
 def _truthy_flag(value: Any) -> bool:

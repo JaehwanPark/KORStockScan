@@ -16,15 +16,15 @@
 | stage | raw | unique_records |
 | --- | ---: | ---: |
 | `blocked_gatekeeper_reject` | 829 | 3 |
-| `blocked_swing_gap` | 838 | 5 |
-| `blocked_swing_score_vpw` | 3591 | 12 |
+| `blocked_swing_gap` | 923 | 5 |
+| `blocked_swing_score_vpw` | 3678 | 12 |
 | `gatekeeper_fast_reuse` | 12 | 1 |
 | `gatekeeper_fast_reuse_bypass` | 818 | 3 |
 | `gatekeeper_reject_cache_reuse` | 768 | 3 |
 | `holding_flow_ofi_smoothing_applied` | 52 | 18 |
-| `market_regime_prior_observed` | 4420 | 14 |
-| `swing_entry_micro_context_observed` | 4401 | 11 |
-| `swing_probe_discarded` | 806 | 14 |
+| `market_regime_prior_observed` | 4507 | 14 |
+| `swing_entry_micro_context_observed` | 4484 | 11 |
+| `swing_probe_discarded` | 818 | 14 |
 | `swing_reentry_counterfactual_after_loss` | 8 | 1 |
 | `swing_same_symbol_loss_reentry_blocked` | 2 | 1 |
 | `swing_same_symbol_loss_reentry_cooldown` | 1 | 1 |
@@ -50,15 +50,15 @@
 
 ## OFI/QI Micro Context
 
-- sample_count: `8924`
+- sample_count: `9094`
 - stale_missing_unique_record_count: `14`
-- stale_missing_ratio: `0.0196`
-- stale_missing_reason_counts: `{'micro_missing': 175, 'observer_unhealthy': 8, 'micro_not_ready': 124, 'state_insufficient': 124}`
-- stale_missing_reason_combination_counts: `{'micro_missing+observer_unhealthy+micro_not_ready+state_insufficient': 8, 'micro_missing+micro_not_ready+state_insufficient': 116, 'micro_missing': 51}`
+- stale_missing_ratio: `0.0379`
+- stale_missing_reason_counts: `{'micro_missing': 345, 'observer_unhealthy': 8, 'micro_not_ready': 294, 'state_insufficient': 294}`
+- stale_missing_reason_combination_counts: `{'micro_missing+observer_unhealthy+micro_not_ready+state_insufficient': 8, 'micro_missing+micro_not_ready+state_insufficient': 286, 'micro_missing': 51}`
 - stale_missing_reason_combination_unique_record_counts: `{'micro_missing+observer_unhealthy+micro_not_ready+state_insufficient': 2, 'micro_missing+micro_not_ready+state_insufficient': 13, 'micro_missing': 1}`
-- stale_missing_group_counts: `{'entry': 123, 'exit': 52}`
+- stale_missing_group_counts: `{'entry': 293, 'exit': 52}`
 - stale_missing_group_unique_record_counts: `{'entry': 13, 'exit': 1}`
 - observer_unhealthy_overlap: `{'observer_unhealthy_total': 8, 'observer_unhealthy_with_other_reason': 8, 'observer_unhealthy_only': 0}`
-- entry_micro_state_counts: `{'insufficient': 123, 'neutral': 8241, 'bearish': 287, 'bullish': 206}`
+- entry_micro_state_counts: `{'insufficient': 293, 'neutral': 8241, 'bearish': 287, 'bullish': 206}`
 - scale_in_micro_state_counts: `{'neutral': 12}`
 - exit_smoothing_action_counts: `{'NO_CHANGE': 52}`

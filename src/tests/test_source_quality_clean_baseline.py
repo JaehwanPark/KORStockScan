@@ -64,6 +64,8 @@ def test_operational_status_reports_are_not_clean_tuning_quarantined(monkeypatch
 
     assert baseline.report_quarantine_reason(preopen_status, policy, include_baseline_date=True) is None
     assert baseline.report_quarantine_reason(postclose_status, policy, include_baseline_date=True) is None
+    assert baseline.report_generated_before_clean_baseline(preopen_status, policy) is False
+    assert baseline.report_generated_before_clean_baseline(postclose_status, policy) is False
     assert baseline.report_is_decision_allowed(preopen_status, policy) is True
 
 

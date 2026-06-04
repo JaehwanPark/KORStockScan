@@ -232,7 +232,7 @@ def _stale_bucket(fields: dict[str, Any]) -> str:
         return "stale_block"
     quote_age = _safe_float(fields.get("quote_age_ms") or fields.get("context_age_ms"), None)
     if quote_age is None:
-        return "stale_unknown"
+        return "stale_not_available"
     if quote_age > 3000:
         return "stale_high"
     if quote_age > 1000:
@@ -247,10 +247,10 @@ def _liquidity_bucket(fields: dict[str, Any]) -> str:
         return sim_reason or "liquidity_blocked"
     if sim_action == "WOULD_PASS" and sim_reason == "liquidity_ok":
         return "liquidity_ok"
-    if sim_action == "WOULD_PASS" and sim_reason == "liquidity_unknown":
-        return "liquidity_unknown"
+    if sim_action == "WOULD_PASS" and sim_reason in {"liquidity_unknown", "liquidity_not_available"}:
+        return "liquidity_not_available"
     if sim_action == "WOULD_UNKNOWN":
-        return sim_reason or "liquidity_unknown"
+        return "liquidity_not_available" if not sim_reason or sim_reason == "liquidity_unknown" else sim_reason
     if _safe_bool(fields.get("liquidity_blocked")) or "liquidity" in str(fields.get("blocked_reason") or ""):
         return "liquidity_blocked"
     value = _safe_float(
@@ -262,7 +262,7 @@ def _liquidity_bucket(fields: dict[str, Any]) -> str:
     )
     min_liquidity = _safe_float(fields.get("sim_min_liquidity") or fields.get("min_liquidity"), None)
     if value is None:
-        return "liquidity_unknown"
+        return "liquidity_not_available"
     if min_liquidity is not None and value < min_liquidity:
         return "below_min_liquidity"
     if value < 100_000_000:
@@ -279,8 +279,8 @@ def _overbought_bucket(fields: dict[str, Any]) -> str:
         return sim_reason or "overbought_blocked"
     if sim_action == "WOULD_PASS" and sim_reason == "overbought_ok":
         return "overbought_ok"
-    if sim_action == "WOULD_PASS" and sim_reason == "overbought_unknown":
-        return "overbought_unknown"
+    if sim_action == "WOULD_PASS" and sim_reason in {"overbought_unknown", "overbought_not_available"}:
+        return "overbought_not_available"
     if _safe_bool(fields.get("overbought_blocked")) or "overbought" in str(fields.get("blocked_reason") or ""):
         return "overbought_blocked"
     risk_state = _nonempty(fields.get("sim_overbought_risk_state") or fields.get("overbought_risk_state"))
@@ -291,7 +291,7 @@ def _overbought_bucket(fields: dict[str, Any]) -> str:
     intraday_range = _safe_float(fields.get("intraday_range_pct"), None)
     distance_high = _safe_float(fields.get("distance_from_day_high_pct"), None)
     if intraday_range is None:
-        return "overbought_unknown"
+        return "overbought_not_available"
     if intraday_range >= 18 and (distance_high is None or distance_high > -1.0):
         return "overbought_chase_risk"
     if intraday_range >= 10:

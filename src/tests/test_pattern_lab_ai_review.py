@@ -209,10 +209,13 @@ def test_pattern_lab_ai_review_keeps_specific_handoff_gap_when_feedback_sources_
 
     assert report["status"] == "warning"
     assert report["summary"]["audit_status"] == "correction_required"
+    assert report["summary"]["ai_review_followup_required"] is False
+    assert report["summary"]["generic_ai_review_followup_resolved_by_concrete_orders"] is True
     assert any(
         order["order_id"] == "order_pattern_lab_ai_review_order_swing_lifecycle_candidate_handoff_missing"
         for order in report["code_improvement_orders"]
     )
+    assert not any(order["improvement_type"] == "ai_review_followup" for order in report["code_improvement_orders"])
     conclusion = report["ai_two_pass_review"]["final_conclusions"][0]
     assert conclusion["final_state"] == "automation_handoff_gap"
     assert "feedback_handoff_resolution" not in conclusion

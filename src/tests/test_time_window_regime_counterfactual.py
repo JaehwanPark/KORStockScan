@@ -2,7 +2,14 @@ import gzip
 import json
 from pathlib import Path
 
+import pytest
+
 from src.engine.automation import time_window_regime_counterfactual as mod
+
+
+@pytest.fixture(autouse=True)
+def _disable_clean_baseline_by_default(monkeypatch):
+    monkeypatch.setenv("KORSTOCKSCAN_CLEAN_TUNING_BASELINE_ENABLED", "false")
 
 
 def _write_jsonl(path: Path, rows: list[dict]) -> None:
@@ -193,3 +200,48 @@ def test_time_window_regime_reads_gzip_post_sell_and_threshold_legacy(tmp_path, 
 
     assert built["summary"]["completed_rows"] == 1
     assert built["summary"]["entry_time_join_rate"] == 1.0
+
+
+def test_time_window_regime_excludes_pre_clean_baseline_dates_and_does_not_cache_them(tmp_path, monkeypatch):
+    monkeypatch.setenv("KORSTOCKSCAN_CLEAN_TUNING_BASELINE_ENABLED", "true")
+    monkeypatch.setenv("KORSTOCKSCAN_CLEAN_TUNING_BASELINE_DATE", "2026-06-04")
+    post_sell = tmp_path / "post_sell"
+    report = tmp_path / "report"
+    monkeypatch.setattr(mod, "POST_SELL_DIR", post_sell)
+    monkeypatch.setattr(mod, "THRESHOLD_CYCLE_DIR", tmp_path / "threshold_cycle")
+    monkeypatch.setattr(mod, "MONITOR_SNAPSHOT_DIR", report / "monitor_snapshots")
+    monkeypatch.setattr(mod, "REPORT_BASE_DIR", report / "time_window_regime_counterfactual")
+    monkeypatch.setattr(mod, "SYSTEM_METRIC_SAMPLE_PATH", tmp_path / "missing-system-metrics.jsonl")
+    _write_jsonl(
+        post_sell / "sim_post_sell_candidates_2026-05-29.jsonl",
+        [
+            {
+                "post_sell_id": "OLD",
+                "stock_code": "000001",
+                "buy_price": 10000,
+                "sell_price": 9900,
+                "buy_qty": 1,
+                "profit_rate": -1.0,
+            }
+        ],
+    )
+    _write_jsonl(
+        post_sell / "sim_post_sell_candidates_2026-06-04.jsonl",
+        [
+            {
+                "post_sell_id": "NEW",
+                "stock_code": "000002",
+                "buy_price": 10000,
+                "sell_price": 10100,
+                "buy_qty": 1,
+                "profit_rate": 1.0,
+            }
+        ],
+    )
+
+    built = mod.build_time_window_regime_counterfactual_report("2026-06-04", max_rows=1000, max_seconds=100)
+
+    assert built["summary"]["processed_dates"] == ["2026-06-04"]
+    assert built["summary"]["clean_baseline_excluded_dates"] == ["2026-05-29"]
+    assert not (report / "time_window_regime_counterfactual" / "cache" / "date=2026-05-29").exists()
+    assert (report / "time_window_regime_counterfactual" / "cache" / "date=2026-06-04" / "part-000001.jsonl").exists()

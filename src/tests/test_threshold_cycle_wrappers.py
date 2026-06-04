@@ -12,6 +12,7 @@ def test_postclose_wrapper_runs_pattern_labs_before_automation_and_ev_report():
     ev_idx = script.index('run_threshold_cycle_ev_and_wait "pre_workorder"')
 
     assert "ANALYSIS_START_DATE=\"$PATTERN_LAB_START_DATE\" ANALYSIS_END_DATE=\"$TARGET_DATE\"" in script
+    assert 'PATTERN_LAB_START_DATE="${PATTERN_LAB_ANALYSIS_START_DATE:-${KORSTOCKSCAN_CLEAN_TUNING_BASELINE_DATE:-2026-06-04}}"' in script
     assert gemini_idx < automation_idx
     assert claude_idx < automation_idx
     assert automation_idx < currentness_idx < ai_review_idx < ev_idx
@@ -54,13 +55,22 @@ def test_postclose_done_controller_wrapper_runs_controller_then_codex_runner():
     assert "POSTCLOSE_DONE_CONTROLLER_CODEX_MODEL_POLICY" in script
     assert "POSTCLOSE_DONE_CONTROLLER_CODEX_MODEL" in script
     assert "POSTCLOSE_DONE_CONTROLLER_CODEX_EFFORT" in script
+    assert "POSTCLOSE_DONE_CONTROLLER_CODEX_BATCH_SIZE" in script
+    assert "POSTCLOSE_DONE_CONTROLLER_AUTO_PUSH_MAIN" in script
+    assert "POSTCLOSE_DONE_CONTROLLER_REQUIRE_CODEX_COMPLETED" in script
     assert "--model-policy" in script
     assert "--model" in script
     assert "--effort" in script
+    assert "--auto-push-main" in script
+    assert "--no-auto-push-main" in script
+    assert "--require-codex-completed" in script
+    assert "codex_workorder_runner disabled while strict completion is required" in script
     assert 'VENV_PY="python"' in script
     assert "controller_report=" in script
     assert "controller_status" in script
     assert "[SKIP] codex_workorder_runner" in script
+    assert "[WARN] codex_workorder_runner" not in script
+    assert 'codex_status" != "completed"' in script
     assert controller_idx < codex_idx
 
 

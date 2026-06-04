@@ -38,6 +38,9 @@ NON_RECOVERABLE_TERMS = {
     "auth_unavailable",
     "package_missing",
 }
+DONE_ACCEPTABLE_WARNING_ISSUES = {
+    "active_sim_priority_preopen_handoff_pending",
+}
 
 
 @dataclass(frozen=True)
@@ -104,6 +107,10 @@ def _workorder_path(target_date: str) -> Path:
     return REPORT_DIR / "code_improvement_workorder" / f"code_improvement_workorder_{target_date}.json"
 
 
+def _runner_path(target_date: str) -> Path:
+    return REPORT_DIR / "codex_workorder_runner" / f"codex_workorder_runner_{target_date}.json"
+
+
 def _control_paths(target_date: str) -> tuple[Path, Path]:
     base = OUTPUT_DIR / f"postclose_done_controller_{target_date}"
     return base.with_suffix(".json"), base.with_suffix(".md")
@@ -159,6 +166,26 @@ def _has_non_recoverable_issue(issues: list[str]) -> bool:
     return any(term in joined for term in NON_RECOVERABLE_TERMS)
 
 
+def _has_done_marker(verification: dict[str, Any]) -> bool:
+    marker = str(verification.get("latest_done_marker") or "").strip()
+    return bool(marker and marker != "-")
+
+
+def _postclose_status_succeeded(target_date: str) -> bool:
+    return str(_load_json(_status_path(target_date)).get("status") or "") == "succeeded"
+
+
+def _is_done_verifier_status(target_date: str, verification: dict[str, Any], issues: list[str]) -> bool:
+    verifier_status = str(verification.get("status") or "")
+    if verifier_status == "pass":
+        return True
+    if verifier_status != "warning":
+        return False
+    if not _has_done_marker(verification) or not _postclose_status_succeeded(target_date):
+        return False
+    return set(issues).issubset(DONE_ACCEPTABLE_WARNING_ISSUES)
+
+
 def _build_verify_action(target_date: str) -> RecoveryAction:
     return RecoveryAction(
         "verify_postclose_chain",
@@ -177,7 +204,7 @@ def _recovery_actions(target_date: str, verification: dict[str, Any], *, allow_w
         else []
     )
     if allow_wrapper_rerun and any(
-        item in {"postclose_start_marker_missing", "postclose_done_marker_missing"}
+        item in {"postclose_start_marker_missing", "postclose_done_marker_missing", "postclose_fail_marker_present"}
         for item in log_issues
     ):
         actions.append(
@@ -259,6 +286,7 @@ def build_postclose_done_controller(
     predecessor_wait_sec: float = 60.0,
     predecessor_timeout_sec: float = 14400.0,
     allow_wrapper_rerun: bool = False,
+    require_codex_completed: bool = False,
     dry_run: bool = False,
     command_runner: CommandRunner | None = None,
 ) -> dict[str, Any]:
@@ -308,7 +336,7 @@ def build_postclose_done_controller(
                 "issues": issues,
             }
         )
-        if verifier_status == "pass":
+        if _is_done_verifier_status(target_date, final_verifier, issues):
             break
         if _has_non_recoverable_issue(issues):
             blocked_reasons = issues or [f"verifier_status={verifier_status}"]
@@ -336,10 +364,21 @@ def build_postclose_done_controller(
             break
 
     final_status = str(final_verifier.get("status") or "missing")
-    if final_status == "pass":
+    final_issues = _flatten_issues(final_verifier)
+    runner_report = _load_json(_runner_path(target_date))
+    runner_status = str(runner_report.get("status") or "missing")
+    runner_completed = runner_status in {"completed", "dry_run_planned"}
+    if require_codex_completed and not dry_run and not runner_completed:
+        blocked_reasons = list(dict.fromkeys([*blocked_reasons, f"codex_workorder_runner_not_completed:{runner_status}"]))
+
+    if _is_done_verifier_status(target_date, final_verifier, final_issues) and not (
+        require_codex_completed and not dry_run and not runner_completed
+    ):
         status = "done"
     elif dry_run and (actions_done or blocked_reasons in (["predecessor_running"], ["predecessor_status_missing"])):
         status = "dry_run_planned"
+    elif require_codex_completed and not dry_run and not runner_completed:
+        status = "blocked_uncompleted_implementation"
     elif blocked_reasons and _has_non_recoverable_issue(blocked_reasons):
         status = "blocked_non_recoverable"
     elif any(str(reason).startswith("verifier_status=") for reason in blocked_reasons):
@@ -357,6 +396,7 @@ def build_postclose_done_controller(
         "status": status,
         "dry_run": dry_run,
         "allow_wrapper_rerun": allow_wrapper_rerun,
+        "require_codex_completed": require_codex_completed,
         "max_attempts": max_attempts,
         "predecessor_wait_sec": predecessor_wait_sec,
         "predecessor_timeout_sec": predecessor_timeout_sec,
@@ -364,6 +404,8 @@ def build_postclose_done_controller(
         "threshold_cycle_postclose_status": _load_json(_status_path(target_date)).get("status"),
         "runtime_apply_gap_status": _load_json(_runtime_gap_path(target_date)).get("status"),
         "workorder_generation_id": _load_json(_workorder_path(target_date)).get("generation_id"),
+        "codex_workorder_runner_status": runner_status,
+        "codex_workorder_runner_completed": runner_completed,
         "attempts": attempts,
         "actions": actions_done,
         "blocked_reasons": blocked_reasons,
@@ -398,6 +440,12 @@ def main(argv: list[str] | None = None) -> int:
         default=float(os.environ.get("POSTCLOSE_DONE_CONTROLLER_PREDECESSOR_TIMEOUT_SEC", "14400")),
     )
     parser.add_argument("--allow-wrapper-rerun", action="store_true")
+    parser.add_argument(
+        "--require-codex-completed",
+        action="store_true",
+        default=os.environ.get("POSTCLOSE_DONE_CONTROLLER_REQUIRE_CODEX_COMPLETED", "true").strip().lower()
+        in {"1", "true", "yes", "on"},
+    )
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args(argv)
     report = build_postclose_done_controller(
@@ -406,6 +454,7 @@ def main(argv: list[str] | None = None) -> int:
         predecessor_wait_sec=args.predecessor_wait_sec,
         predecessor_timeout_sec=args.predecessor_timeout_sec,
         allow_wrapper_rerun=args.allow_wrapper_rerun,
+        require_codex_completed=args.require_codex_completed,
         dry_run=args.dry_run,
     )
     print(json.dumps({"status": report["status"], "date": report["date"]}, ensure_ascii=False))

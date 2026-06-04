@@ -42,6 +42,20 @@ IMPLEMENTED_STATUSES = {
     "implemented_source_quality_contract_waiting_sample",
 }
 
+KNOWN_FIXED_UNKNOWN_TOKEN_FIELDS = {
+    "swing_micro_ws_quote_stale",
+    "lifecycle_bucket_entry_bucket_key",
+    "lifecycle_bucket_entry_bucket_id",
+    "lifecycle_bucket_bucket_id",
+    "pre_submit_liquidity_value",
+    "overbought_guard_reason",
+    "pre_submit_overbought_reason",
+    "holding_exit_matrix_decision_alignment",
+    "sim_pre_submit_overbought_reason",
+    "broker_receipt_status",
+    "fill_quality",
+}
+
 
 DECISION_RANK = {
     "implement_now": 0,
@@ -786,6 +800,7 @@ def _serialize_classified_order(item: ClassifiedOrder) -> dict[str, Any]:
         "files_likely_touched": item.order.get("files_likely_touched") or [],
         "acceptance_tests": item.order.get("acceptance_tests") or [],
         "forbidden_uses": item.order.get("forbidden_uses") or [],
+        "adm_issue_types": item.order.get("adm_issue_types") or [],
         "automation_reentry": item.automation_reentry,
         "runtime_effect": bool(item.order.get("runtime_effect")),
         "allowed_runtime_apply": bool(item.order.get("allowed_runtime_apply")),
@@ -843,6 +858,98 @@ def _contains_any(text: str, tokens: tuple[str, ...]) -> bool:
     return any(token in lower for token in tokens)
 
 
+_IMPLEMENT_ACCEPTANCE_PREFIXES = (
+    "python -m pytest ",
+    "pytest ",
+    "python -m src.engine.sync_docs_backlog_to_project ",
+    "python -m py_compile ",
+)
+
+
+def _normalized_acceptance_text(text: str) -> str:
+    normalized = str(text or "").strip()
+    if normalized.startswith("PYTHONPATH=. "):
+        normalized = normalized[len("PYTHONPATH=. "):]
+    if normalized.startswith(".venv/bin/python "):
+        normalized = "python " + normalized[len(".venv/bin/python "):]
+    if normalized.startswith("./.venv/bin/python "):
+        normalized = "python " + normalized[len("./.venv/bin/python "):]
+    if normalized.startswith(".venv/bin/pytest "):
+        normalized = "pytest " + normalized[len(".venv/bin/pytest "):]
+    if normalized.startswith("./.venv/bin/pytest "):
+        normalized = "pytest " + normalized[len("./.venv/bin/pytest "):]
+    if normalized.startswith("venv/Scripts/python.exe "):
+        normalized = "python " + normalized[len("venv/Scripts/python.exe "):]
+    return normalized
+
+
+def _has_runnable_acceptance(order: dict[str, Any]) -> bool:
+    for raw in order.get("acceptance_tests") or []:
+        normalized = _normalized_acceptance_text(str(raw))
+        if not any(normalized.startswith(prefix) for prefix in _IMPLEMENT_ACCEPTANCE_PREFIXES):
+            continue
+        if normalized.startswith("pytest ") or normalized.startswith("python -m pytest "):
+            parts = normalized.split()
+            meaningful = [part for part in parts if part not in {"python", "-m", "pytest"} and not part.startswith("-")]
+            if not any(
+                part.startswith(("src/tests/", "tests/")) or part.endswith("_test.py") or part.startswith("src/tests/test_")
+                for part in meaningful
+            ):
+                continue
+            return True
+    return False
+
+
+def _implement_now_rejudge(order: dict[str, Any]) -> tuple[str, str] | None:
+    if _is_implemented_status(order.get("implementation_status")):
+        return None
+    if (
+        order.get("source_report_type") == "pattern_lab_ai_review"
+        and str(order.get("improvement_type") or "") == "automation_handoff_gap"
+    ):
+        return None
+    issues = {str(item).strip() for item in (order.get("adm_issue_types") or []) if str(item).strip()}
+    if issues and issues.issubset({"joined_sample_below_sample_floor", "prompt_context_not_loaded"}):
+        return (
+            "defer_evidence",
+            "Entry ADM warning is waiting on clean sample/runtime observation, not a code implementation gap",
+        )
+    provenance = order.get("implementation_provenance") if isinstance(order.get("implementation_provenance"), dict) else {}
+    if str(provenance.get("recommended_resolution") or "") == "mark_not_applicable_explicitly":
+        return (
+            "attach_existing_family",
+            "source coverage is present and the remaining bucket is an explicit not_applicable evidence classification",
+        )
+    files = order.get("files_likely_touched")
+    file_count = len([item for item in files if str(item).strip()]) if isinstance(files, list) else 0
+    source_type = str(order.get("source_report_type") or "")
+    if (
+        source_type in {"lifecycle_decision_matrix_holding_bucket_attribution", "lifecycle_decision_matrix_exit_bucket_attribution"}
+        and file_count <= 0
+        and not _has_runnable_acceptance(order)
+    ):
+        return (
+            "defer_evidence",
+            "not code-actionable in this cycle: no files_likely_touched and no runnable acceptance tests",
+        )
+    tests = [str(item).strip() for item in (order.get("acceptance_tests") or []) if str(item).strip()]
+    if (
+        tests
+        and not _has_runnable_acceptance(order)
+        and order.get("order_id") == "order_swing_lifecycle_observation_coverage"
+    ):
+        return (
+            "defer_evidence",
+            "not code-actionable in this cycle: acceptance contract is review text only, not an executable validation",
+        )
+    if source_type == "pattern_lab_ai_review" and file_count <= 0 and not _has_runnable_acceptance(order):
+        return (
+            "defer_evidence",
+            "not code-actionable in this cycle: no files_likely_touched and no runnable acceptance tests",
+        )
+    return None
+
+
 def _classify_order(
     order: dict[str, Any],
     *,
@@ -880,6 +987,22 @@ def _classify_order(
             route=route,
             confidence=confidence,
             automation_reentry="Reject artifact and regenerate the source automation report before implementation.",
+        )
+
+    rejudged = _implement_now_rejudge(order)
+    if rejudged:
+        decision, reason = rejudged
+        return ClassifiedOrder(
+            order=order,
+            decision=decision,
+            reason=reason,
+            mapped_family=mapped_family or str(order.get("threshold_family") or "").strip() or None,
+            route="existing_family" if decision == "attach_existing_family" else route or "evidence_wait",
+            confidence=confidence,
+            automation_reentry=(
+                "Keep the item out of the canonical implement_now queue; regenerated postclose reports and "
+                "runner terminal dispositions must preserve the non-implement decision."
+            ),
         )
 
     if (
@@ -977,6 +1100,25 @@ def _classify_order(
         )
 
     if order.get("source_report_type") in {"pattern_lab_currentness_audit", "pattern_lab_ai_review", "tuning_observability_summary"}:
+        if (
+            order.get("source_report_type") == "pattern_lab_ai_review"
+            and str(order.get("improvement_type") or "") == "ai_review_followup"
+        ):
+            return ClassifiedOrder(
+                order=order,
+                decision="defer_evidence",
+                reason=(
+                    "Pattern Lab generic ai_review_followup is reviewer evidence for concrete source-quality "
+                    "or handoff orders; do not duplicate it as a Codex implement_now item"
+                ),
+                mapped_family=mapped_family or "pattern_lab_feedback_handoff",
+                route="pattern_lab_ai_review_followup_evidence",
+                confidence=confidence or "parsed_ai_review_followup",
+                automation_reentry=(
+                    "Keep as terminal review evidence until the concrete source-quality/handoff orders and "
+                    "regenerated Pattern Lab AI review close the audit."
+                ),
+            )
         if (
             order.get("source_report_type") == "pattern_lab_ai_review"
             and str(order.get("improvement_type") or "") == "automation_handoff_gap"
@@ -2524,6 +2666,17 @@ def _observation_source_quality_followup_orders(report: dict[str, Any]) -> list[
         if isinstance(report.get("unknown_token_findings"), list)
         else []
     )
+
+    def unknown_findings_covered_by_known_fix() -> bool:
+        fields: set[str] = set()
+        for finding in unknown_token_findings:
+            if not isinstance(finding, dict):
+                continue
+            for field in finding.get("fields") or []:
+                if isinstance(field, dict) and field.get("field"):
+                    fields.add(str(field.get("field")))
+        return bool(fields) and fields.issubset(KNOWN_FIXED_UNKNOWN_TOKEN_FIELDS)
+
     warning_stages = [
         stage
         for stage, result in stage_contracts.items()
@@ -2608,6 +2761,7 @@ def _observation_source_quality_followup_orders(report: dict[str, Any]) -> list[
             }
         )
     if unknown_token_findings:
+        producer_fix_implemented = unknown_findings_covered_by_known_fix()
         unknown_evidence = [
             *evidence,
             "unknown_token_policy=warning_only_not_tuning_hard_block",
@@ -2663,6 +2817,14 @@ def _observation_source_quality_followup_orders(report: dict[str, Any]) -> list[
                 "acceptance_tests": [
                     "PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_observation_source_quality_audit.py src/tests/test_build_code_improvement_workorder.py",
                 ],
+                "implementation_status": "implemented_but_waiting_sample" if producer_fix_implemented else None,
+                "implementation_provenance": {
+                    "producer_fix_status": "implemented_waiting_new_postfix_raw"
+                    if producer_fix_implemented
+                    else "open_unknown_field_producer_fix_required",
+                    "fixed_unknown_fields": sorted(KNOWN_FIXED_UNKNOWN_TOKEN_FIELDS),
+                    "current_raw_contains_pre_fix_rows": producer_fix_implemented,
+                },
             }
         )
     if any(stage in warning_stages for stage in ("ai_confirmed", "blocked_ai_score", "wait65_79_ev_candidate")):

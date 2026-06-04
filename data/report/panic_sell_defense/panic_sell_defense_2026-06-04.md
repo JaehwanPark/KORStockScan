@@ -9,8 +9,8 @@
 - panic_confirmation_policy: `portfolio stop-loss clusters are evidence; PANIC_DETECTED requires market or microstructure confirmation`
 - report_only: `true`
 - runtime_effect: `report_only_no_mutation`
-- as_of: `2026-06-04T15:28:05`
-- latest_event_at: `2026-06-04T15:26:39`
+- as_of: `2026-06-04T17:53:26`
+- latest_event_at: `2026-06-04T16:00:00`
 - reasons: `panic thresholds not breached`
 
 ## 패닉 지표
@@ -42,7 +42,7 @@
 - active_avg_unrealized_profit_rate_pct: `-0.196`
 - active_win_rate_pct: `42.9`
 - sim_probe_provenance_passed: `true`
-- post_sell_rebound_above_sell_10_20m_pct: `0`
+- post_sell_rebound_above_sell_10_20m_pct: `75`
 - post_sell_rebound_above_buy_10_20m_pct: `0`
 
 ## Microstructure Detector
@@ -53,10 +53,10 @@
 - panic_signal_count: `0`
 - recovery_candidate_count: `0`
 - recovery_confirmed_count: `0`
-- missing_orderbook_count: `33`
-- degraded_orderbook_count: `33`
+- missing_orderbook_count: `32`
+- degraded_orderbook_count: `32`
 - max_panic_score: `0.3525`
-- max_recovery_score: `0.5582`
+- max_recovery_score: `0.5746`
 - micro_cusum_triggered_symbol_count: `0`
 - micro_consensus_pass_symbol_count: `0`
 - micro_cusum_decision_authority: `source_quality_only`
@@ -64,7 +64,7 @@
 ## Microstructure Market Context
 
 - market_risk_state: `RISK_OFF`
-- market_panic_breadth_as_of: `2026-06-04T15:28:01`
+- market_panic_breadth_as_of: `2026-06-04T17:53:22`
 - market_panic_breadth_source_quality_status: `ok`
 - market_panic_breadth_risk_off_advisory: `false`
 - market_panic_breadth_single_market_risk_off_advisory: `true`
