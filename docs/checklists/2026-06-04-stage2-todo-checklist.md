@@ -112,6 +112,14 @@
   - 금지: code-improvement workorder를 자동 repo 수정으로 취급하지 않는다. 사용자가 Codex 구현을 지시한 경우에만 실행한다.
   - 다음 액션: 구현 필요, 설계 보류, reject, already_implemented 중 하나로 닫는다.
 
+- [ ] `[LegacyRealBuyCutoverGuard0604] SIM-derived live 전환 시 기존 스캘핑 real BUY fallback 차단 guard 설계 확인` (`Due: 2026-06-04`, `Slot: POSTCLOSE`, `TimeWindow: 17:15~17:30`, `Track: ScalpingLogic`)
+  - Source: [threshold_apply_2026-06-04.json](/home/ubuntu/KORStockScan/data/threshold_cycle/apply_plans/threshold_apply_2026-06-04.json), [threshold_runtime_env_2026-06-04.env](/home/ubuntu/KORStockScan/data/threshold_cycle/runtime_env/threshold_runtime_env_2026-06-04.env), [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md)
+  - 판정 기준: `runtime_apply_bridge` 또는 greenfield/policy-authorized real mode가 SIM-derived `live_auto_apply_ready` policy를 실브로커 주문으로 전환할 때, promoted bucket/policy allowlist 밖의 기존 스캘핑 real BUY 경로가 broker submit까지 도달하지 못하도록 fail-closed guard와 attribution split을 정의한다.
+  - IN scope: legacy/default real BUY fallback 차단 조건, promoted policy allowlist 확인, hard-safety/broker/stale/account/order/quantity/cooldown guard 유지, post-apply attribution에서 `legacy_fallback_blocked`와 `policy_authorized_real` 분리, 다음 PREOPEN 적용 전 verifier 조건.
+  - OUT scope: 장중 env 수정, bot restart, provider route 변경, broker/order guard 완화, cap release, hard/protect/emergency safety 완화, 오늘 real 주문 중단/재개.
+  - Acceptance: 기존 주문 plumbing은 공통 실행 인프라로 유지하되 real BUY decision authority는 승인된 policy로만 제한하는 설계가 문서화되고, policy 없음/allowlist miss/contract gap이면 `actual_order_submitted=false` 또는 submit block으로 닫는 다음 구현 workorder 필요 여부를 분리한다.
+  - Go/no-go: 구현 필요하면 `legacy_real_buy_cutover_guard_workorder_required`로 닫고 다음 영업일 checklist 또는 code-improvement workorder에 넘긴다. 구현 불필요하거나 이미 guard가 있으면 근거 파일/이벤트를 남기고 `already_guarded`로 닫는다.
+
 - [ ] `[HumanInterventionSummary0604] 자동화체인 사용자 개입 요구사항 분류 및 누락 확인` (`Due: 2026-06-04`, `Slot: POSTCLOSE`, `TimeWindow: 17:00~17:15`, `Track: RuntimeStability`)
   - Source: [threshold_cycle_ev_2026-06-02.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-06-02.json), [time-based-operations-runbook.md](/home/ubuntu/KORStockScan/docs/time-based-operations-runbook.md)
   - 판정 기준: 개입사항을 `approval_artifact_required|created|missing|blocked_by_policy|observe_only`, `Codex 구현 필요`, `수동 동기화 필요`, `관찰만`으로 분류한다.
