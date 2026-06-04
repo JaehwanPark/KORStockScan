@@ -11,7 +11,7 @@
 | step | decision | reasons |
 | --- | --- | --- |
 | `lifecycle_window_rolling5d` | `run` | upstream_drift_signal |
-| `lifecycle_window_rolling10d` | `run` | output_missing_or_unreadable, upstream_drift_signal |
+| `lifecycle_window_rolling10d` | `run` | upstream_drift_signal |
 | `lifecycle_window_mtd` | `run` | output_missing_or_unreadable, upstream_drift_signal |
 | `scalp_sim_ai_deferred_review` | `run` | output_missing_or_unreadable, source_missing_or_unreadable |
 | `pattern_lab_currentness_audit` | `run` | output_missing_or_unreadable, upstream_drift_signal |
