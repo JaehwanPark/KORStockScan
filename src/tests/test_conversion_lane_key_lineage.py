@@ -360,6 +360,31 @@ def test_conversion_lane_promotes_lineage_blocker_to_rank(monkeypatch, tmp_path)
     assert report["conversion_blocker_rank"][0]["blocker_class"] == "key_lineage"
 
 
+def test_conversion_lane_submit_drought_blockers_have_split_axes(monkeypatch, tmp_path):
+    _patch_dirs(monkeypatch, tmp_path)
+    target = "2026-06-04"
+    _write(
+        tmp_path / "report" / "key_lineage_ledger" / f"key_lineage_ledger_{target}.json",
+        {"summary": {"lineage_blocker_count": 0}, "lineage_rows": [], "lineage_blockers": []},
+    )
+    _write(tmp_path / "report" / "lifecycle_bucket_discovery" / f"lifecycle_bucket_discovery_{target}.json", {})
+    _write(
+        tmp_path / "report" / "buy_funnel_sentinel" / f"buy_funnel_sentinel_{target}.json",
+        {"classification": {"primary": "SUBMIT_DROUGHT_CRITICAL", "matches": ["SUBMIT_DROUGHT_CRITICAL"]}},
+    )
+
+    report = lane.build_conversion_lane(target)
+
+    assert report["summary"]["submit_drought_split_complete"] is True
+    assert report["summary"]["submit_drought_closure_axis_count"] == 6
+    submit_blockers = [
+        item for item in report["conversion_blocker_rank"] if item["blocker_class"] == "submit_drought"
+    ]
+    assert {item["blocker_axis"] for item in submit_blockers} == set(lane.SUBMIT_DROUGHT_CLOSURE_AXES)
+    assert all(item["blocker_runtime_effect"] is False for item in submit_blockers)
+    assert all(item["blocker_allowed_runtime_apply"] is False for item in submit_blockers)
+
+
 def test_conversion_blocker_class_ignores_source_key_field_names():
     row = {
         "source_key_type": "bucket",

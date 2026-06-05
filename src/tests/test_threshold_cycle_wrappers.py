@@ -40,7 +40,7 @@ def test_threshold_cycle_cron_installs_scalp_sim_overnight_preclose_once():
     assert "!/SCALP_SIM_OVERNIGHT_PRECLOSE/" in script
 
 
-def test_postclose_done_controller_wrapper_runs_controller_then_codex_runner():
+def test_postclose_done_controller_wrapper_runs_controller_and_skips_codex_runner_by_default():
     script = Path("deploy/run_postclose_done_controller.sh").read_text(encoding="utf-8")
 
     controller_idx = script.index("src.engine.automation.postclose_done_controller")
@@ -52,6 +52,7 @@ def test_postclose_done_controller_wrapper_runs_controller_then_codex_runner():
     assert "--predecessor-timeout-sec" in script
     assert "POSTCLOSE_DONE_CONTROLLER_PREDECESSOR_TIMEOUT_SEC" in script
     assert "$PROJECT_DIR/venv/Scripts/python.exe" in script
+    assert 'RUN_CODEX="${POSTCLOSE_DONE_CONTROLLER_RUN_CODEX:-false}"' in script
     assert "POSTCLOSE_DONE_CONTROLLER_CODEX_MODEL_POLICY" in script
     assert 'CODEX_MODEL_POLICY="${POSTCLOSE_DONE_CONTROLLER_CODEX_MODEL_POLICY:-credit_min}"' in script
     assert "POSTCLOSE_DONE_CONTROLLER_CODEX_MODEL" in script
@@ -59,17 +60,19 @@ def test_postclose_done_controller_wrapper_runs_controller_then_codex_runner():
     assert "POSTCLOSE_DONE_CONTROLLER_CODEX_BATCH_SIZE" in script
     assert "POSTCLOSE_DONE_CONTROLLER_AUTO_PUSH_MAIN" in script
     assert "POSTCLOSE_DONE_CONTROLLER_REQUIRE_CODEX_COMPLETED" in script
+    assert 'REQUIRE_CODEX_COMPLETED="${POSTCLOSE_DONE_CONTROLLER_REQUIRE_CODEX_COMPLETED:-false}"' in script
     assert "--model-policy" in script
     assert "--model" in script
     assert "--effort" in script
     assert "--auto-push-main" in script
     assert "--no-auto-push-main" in script
     assert "--require-codex-completed" in script
-    assert "codex_workorder_runner disabled while strict completion is required" in script
+    assert "codex_workorder_runner disabled while strict completion is required" not in script
     assert 'VENV_PY="python"' in script
     assert "controller_report=" in script
     assert "controller_status" in script
     assert "[SKIP] codex_workorder_runner" in script
+    assert "disabled_by_default" in script
     assert "[WARN] codex_workorder_runner" not in script
     assert 'codex_status" != "completed"' in script
     assert controller_idx < codex_idx

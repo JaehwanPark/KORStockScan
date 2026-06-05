@@ -1,7 +1,7 @@
 # Observation Source Quality Audit - 2026-06-05
 
-- status: `warning`
-- event_count: `122702`
+- status: `pass`
+- event_count: `309653`
 - tuning_input_policy: `exclude_defective_rows_not_full_day_raw`
 - hard_blocking_excluded_row_count: `0`
 - tuning_input_allowed: `True`
@@ -22,41 +22,41 @@
 - none
 
 ## Unknown Token Findings
-- `scalp_entry_action_decision_snapshot` count=`3917` routing=`source_quality_blocker_or_provenance_backfill` fields=`risk_regime_context=3(0.0008)`
-- `order_leg_request` count=`11` routing=`source_quality_blocker_or_provenance_backfill` fields=`risk_regime_context=4(0.3636)`
-- `swing_sim_buy_order_assumed_filled` count=`11` routing=`source_quality_blocker_or_provenance_backfill` fields=`risk_regime_context=4(0.3636)`
-- `swing_sim_order_bundle_assumed_filled` count=`11` routing=`source_quality_blocker_or_provenance_backfill` fields=`risk_regime_context=4(0.3636)`
+- none
 
 ## Reviewed Unknown Token Findings
-- `orderbook_stability_observed` count=`12748` routing=`reviewed_unknown_token_provenance` fields=`orderbook_micro_ofi_threshold_bucket_key=1(reviewed_insufficient_sample), orderbook_micro_ofi_calibration_bucket=1(reviewed_insufficient_sample), orderbook_micro_ofi_bucket_key=1(reviewed_insufficient_sample)`
-- `swing_entry_policy_evaluated` count=`11322` routing=`reviewed_unknown_token_provenance` fields=`feature_snapshot=2(reviewed_insufficient_sample)`
-- `swing_entry_micro_context_observed` count=`11233` routing=`reviewed_unknown_token_provenance` fields=`orderbook_micro_ofi_threshold_bucket_key=1(reviewed_insufficient_sample), orderbook_micro_ofi_calibration_bucket=1(reviewed_insufficient_sample), orderbook_micro_ofi_bucket_key=1(reviewed_insufficient_sample)`
-- `market_regime_block` count=`11216` routing=`reviewed_unknown_token_provenance` fields=`orderbook_micro_ofi_threshold_bucket_key=2(reviewed_insufficient_sample), orderbook_micro_ofi_calibration_bucket=2(reviewed_insufficient_sample), orderbook_micro_ofi_bucket_key=2(reviewed_insufficient_sample)`
-- `latency_pass` count=`312` routing=`reviewed_unknown_token_provenance` fields=`orderbook_micro_ofi_threshold_bucket_key=1(reviewed_insufficient_sample), orderbook_micro_ofi_calibration_bucket=1(reviewed_insufficient_sample), orderbook_micro_ofi_bucket_key=1(reviewed_insufficient_sample)`
-- `entry_ai_price_canary_applied` count=`297` routing=`reviewed_unknown_token_provenance` fields=`orderbook_micro_ofi_calibration_bucket=9(reviewed_insufficient_sample), orderbook_micro_ofi_bucket_key=9(reviewed_insufficient_sample)`
-- `entry_ai_price_canary_fallback` count=`28` routing=`reviewed_unknown_token_provenance` fields=`orderbook_micro_ofi_calibration_bucket=22(reviewed_insufficient_sample), orderbook_micro_ofi_bucket_key=22(reviewed_insufficient_sample)`
-- `order_leg_request` count=`11` routing=`reviewed_unknown_token_provenance` fields=`orderbook_micro_ofi_threshold_bucket_key=1(reviewed_insufficient_sample), orderbook_micro_ofi_calibration_bucket=1(reviewed_insufficient_sample), orderbook_micro_ofi_bucket_key=1(reviewed_insufficient_sample)`
-- `swing_sim_buy_order_assumed_filled` count=`11` routing=`reviewed_unknown_token_provenance` fields=`orderbook_micro_ofi_threshold_bucket_key=1(reviewed_insufficient_sample), orderbook_micro_ofi_calibration_bucket=1(reviewed_insufficient_sample), orderbook_micro_ofi_bucket_key=1(reviewed_insufficient_sample)`
-- `swing_sim_order_bundle_assumed_filled` count=`11` routing=`reviewed_unknown_token_provenance` fields=`orderbook_micro_ofi_threshold_bucket_key=1(reviewed_insufficient_sample), orderbook_micro_ofi_calibration_bucket=1(reviewed_insufficient_sample), orderbook_micro_ofi_bucket_key=1(reviewed_insufficient_sample)`
+- `orderbook_stability_observed` count=`25120` routing=`reviewed_unknown_token_provenance` fields=`orderbook_micro_ofi_threshold_bucket_key=1(reviewed_insufficient_sample), orderbook_micro_ofi_calibration_bucket=1(reviewed_insufficient_sample), orderbook_micro_ofi_bucket_key=1(reviewed_insufficient_sample)`
+- `swing_entry_policy_evaluated` count=`23695` routing=`reviewed_unknown_token_provenance` fields=`feature_snapshot=2(reviewed_insufficient_sample)`
+- `market_regime_block` count=`23589` routing=`reviewed_unknown_token_provenance` fields=`orderbook_micro_ofi_threshold_bucket_key=2(reviewed_insufficient_sample), orderbook_micro_ofi_calibration_bucket=2(reviewed_insufficient_sample), orderbook_micro_ofi_bucket_key=2(reviewed_insufficient_sample)`
+- `swing_entry_micro_context_observed` count=`23486` routing=`reviewed_unknown_token_provenance` fields=`orderbook_micro_ofi_threshold_bucket_key=1(reviewed_insufficient_sample), orderbook_micro_ofi_calibration_bucket=1(reviewed_insufficient_sample), orderbook_micro_ofi_bucket_key=1(reviewed_insufficient_sample)`
+- `scalp_entry_action_decision_snapshot` count=`6016` routing=`reviewed_unknown_token_provenance` fields=`risk_regime_context=3(reviewed_missing_risk_regime_context)`
+- `latency_pass` count=`330` routing=`reviewed_unknown_token_provenance` fields=`orderbook_micro_ofi_threshold_bucket_key=1(reviewed_insufficient_sample), orderbook_micro_ofi_calibration_bucket=1(reviewed_insufficient_sample), orderbook_micro_ofi_bucket_key=1(reviewed_insufficient_sample)`
+- `entry_ai_price_canary_applied` count=`314` routing=`reviewed_unknown_token_provenance` fields=`orderbook_micro_ofi_calibration_bucket=14(reviewed_insufficient_sample), orderbook_micro_ofi_bucket_key=14(reviewed_insufficient_sample)`
+- `entry_ai_price_canary_fallback` count=`143` routing=`reviewed_unknown_token_provenance` fields=`orderbook_micro_ofi_calibration_bucket=137(reviewed_insufficient_sample), orderbook_micro_ofi_bucket_key=137(reviewed_insufficient_sample)`
+- `order_leg_request` count=`16` routing=`reviewed_unknown_token_provenance` fields=`risk_regime_context=4(reviewed_missing_risk_regime_context), orderbook_micro_ofi_threshold_bucket_key=1(reviewed_insufficient_sample), orderbook_micro_ofi_calibration_bucket=1(reviewed_insufficient_sample), orderbook_micro_ofi_bucket_key=1(reviewed_insufficient_sample)`
+- `swing_sim_buy_order_assumed_filled` count=`15` routing=`reviewed_unknown_token_provenance` fields=`risk_regime_context=4(reviewed_missing_risk_regime_context), orderbook_micro_ofi_threshold_bucket_key=1(reviewed_insufficient_sample), orderbook_micro_ofi_calibration_bucket=1(reviewed_insufficient_sample), orderbook_micro_ofi_bucket_key=1(reviewed_insufficient_sample)`
+- `swing_sim_order_bundle_assumed_filled` count=`15` routing=`reviewed_unknown_token_provenance` fields=`risk_regime_context=4(reviewed_missing_risk_regime_context), orderbook_micro_ofi_threshold_bucket_key=1(reviewed_insufficient_sample), orderbook_micro_ofi_calibration_bucket=1(reviewed_insufficient_sample), orderbook_micro_ofi_bucket_key=1(reviewed_insufficient_sample)`
+- `order_bundle_submitted` count=`1` routing=`reviewed_unknown_token_provenance` fields=`broker_order_no=1(reviewed_pre_contract_placeholder), broker_receipt_status=1(reviewed_pre_contract_placeholder), filled_qty=1(reviewed_pre_contract_placeholder), remaining_qty=1(reviewed_pre_contract_placeholder), fill_quality=1(reviewed_pre_contract_placeholder)`
+- `scalp_sim_panic_context_warning` count=`1` routing=`reviewed_unknown_token_provenance` fields=`panic_epoch_id=1(reviewed_missing_risk_regime_context), market_risk_state=1(reviewed_missing_risk_regime_context), liquidity_state=1(reviewed_missing_risk_regime_context), risk_regime_epoch_id=1(reviewed_missing_risk_regime_context)`
 
 ## Top Stages
-- `budget_pass`: `12754`
-- `orderbook_stability_observed`: `12748`
-- `latency_block`: `12436`
-- `swing_entry_policy_evaluated`: `11322`
-- `swing_entry_micro_context_observed`: `11233`
-- `market_regime_block`: `11216`
-- `blocked_swing_score_vpw`: `10599`
-- `strength_momentum_observed`: `9263`
-- `blocked_strength_momentum`: `6079`
-- `scalp_entry_action_decision_snapshot`: `3917`
-- `blocked_swing_gap`: `1768`
-- `swing_probe_discarded`: `1664`
-- `scalp_sim_duplicate_buy_signal`: `1514`
-- `entry_armed_resume`: `1314`
-- `blocked_vpw`: `1210`
-- `blocked_ai_score`: `1182`
-- `ai_confirmed`: `908`
-- `blocked_liquidity`: `813`
-- `blocked_gatekeeper_reject`: `723`
-- `gatekeeper_fast_reuse_bypass`: `695`
+- `budget_pass`: `25126`
+- `orderbook_stability_observed`: `25120`
+- `latency_block`: `24790`
+- `swing_entry_policy_evaluated`: `23695`
+- `market_regime_block`: `23589`
+- `swing_entry_micro_context_observed`: `23486`
+- `blocked_swing_score_vpw`: `22972`
+- `strength_momentum_observed`: `18310`
+- `blocked_strength_momentum`: `13561`
+- `bad_entry_refined_candidate`: `10137`
+- `scalp_sim_panic_scale_in_blocked`: `9635`
+- `scalp_sim_panic_level1_partial_skipped_min_remaining`: `7951`
+- `stat_action_decision_snapshot`: `7791`
+- `scalp_entry_action_decision_snapshot`: `6016`
+- `blocked_swing_gap`: `4854`
+- `swing_probe_discarded`: `4408`
+- `reversal_add_blocked_reason`: `4075`
+- `scalp_sim_panic_action_deduped`: `3669`
+- `ai_holding_fast_reuse_band`: `3655`
+- `ai_holding_reuse_bypass`: `3635`

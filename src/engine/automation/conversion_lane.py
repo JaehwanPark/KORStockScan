@@ -30,6 +30,14 @@ BLOCKER_CLASSES = {
     "user_authority",
     "key_lineage",
 }
+SUBMIT_DROUGHT_CLOSURE_AXES = (
+    "LATENCY_PRE_SUBMIT",
+    "BROKER_RECEIPT",
+    "BUDGET_PASS_COLLAPSE",
+    "SIM_REAL_AUTHORITY",
+    "SOURCE_TAXONOMY_LEAKAGE",
+    "UPSTREAM_GATE",
+)
 
 
 def report_paths(target_date: str) -> tuple[Path, Path]:
@@ -275,10 +283,15 @@ def _conversion_blocker(
         "user_authority": 5,
     }.get(blocker, 3)
     impact = max(1, rank_seed - int(ev * 10) - min(sample, 20) + fix_difficulty * 5 + remaining_gap_count * 3)
+    blocker_axis = _blocker_axis(candidate_id=candidate_id, blocker_class=blocker, reason=reason)
     return {
         "blocker_id": _hash("conversion_blocker", [candidate_id, blocker, reason]),
         "conversion_candidate_id": candidate_id,
         "blocker_class": blocker,
+        "blocker_axis": blocker_axis,
+        "blocker_resolution_status": "open",
+        "blocker_runtime_effect": False,
+        "blocker_allowed_runtime_apply": False,
         "conversion_impact_rank": impact,
         "ev_potential_rank": 1 if ev > 0 else 5,
         "sample_readiness_rank": 1 if sample >= 10 else 2 if sample >= 3 else 4,
@@ -287,6 +300,20 @@ def _conversion_blocker(
         "next_repair_action": reason or f"close_{blocker}",
         "acceptance_test": _acceptance_test(blocker),
     }
+
+
+def _blocker_axis(*, candidate_id: str, blocker_class: str, reason: str) -> str:
+    text = f"{candidate_id} {reason}".upper()
+    if blocker_class == "submit_drought":
+        for axis in SUBMIT_DROUGHT_CLOSURE_AXES:
+            if axis in text:
+                return axis
+        return "SUBMIT_DROUGHT_UNCLASSIFIED"
+    if blocker_class in {"env_mapping", "source_quality"}:
+        parts = str(candidate_id or "").split(":")
+        if len(parts) >= 2:
+            return ":".join(parts[:2])
+    return blocker_class
 
 
 def _acceptance_test(blocker_class: str) -> str:
@@ -312,14 +339,6 @@ def _submit_drought_blockers(buy_funnel: dict[str, Any]) -> list[dict[str, Any]]
     critical = classification.get("primary") == "SUBMIT_DROUGHT_CRITICAL" or "SUBMIT_DROUGHT_CRITICAL" in matches
     if not critical:
         return []
-    closure_items = [
-        "LATENCY_PRE_SUBMIT",
-        "BROKER_RECEIPT",
-        "BUDGET_PASS_COLLAPSE",
-        "SIM_REAL_AUTHORITY",
-        "SOURCE_TAXONOMY_LEAKAGE",
-        "UPSTREAM_GATE",
-    ]
     return [
         _conversion_blocker(
             candidate_id=f"submit_drought:{item}",
@@ -327,7 +346,7 @@ def _submit_drought_blockers(buy_funnel: dict[str, Any]) -> list[dict[str, Any]]
             reason=f"close_submit_drought_{item.lower()}",
             rank_seed=30,
         )
-        for item in closure_items
+        for item in SUBMIT_DROUGHT_CLOSURE_AXES
     ]
 
 
@@ -495,6 +514,14 @@ def build_conversion_lane(target_date: str) -> dict[str, Any]:
         and str(row.get("conversion_state") or "") != "matched"
     ]
     blocker_counts = Counter(str(item.get("blocker_class") or "unknown") for item in blockers)
+    blocker_axis_counts = Counter(str(item.get("blocker_axis") or "unknown") for item in blockers)
+    submit_drought_axes = sorted(
+        {
+            str(item.get("blocker_axis"))
+            for item in blockers
+            if item.get("blocker_class") == "submit_drought" and item.get("blocker_axis")
+        }
+    )
     positive_ev_runtime_observed_count = sum(
         1 for item in candidates if item.get("positive_ev_candidate") and item.get("runtime_observed_same_key")
     )
@@ -517,6 +544,10 @@ def build_conversion_lane(target_date: str) -> dict[str, Any]:
         "positive_ev_real_conversion_queue_count": positive_ev_real_conversion_queue_count,
         "positive_ev_sample_floor_blocked_count": positive_ev_sample_floor_blocked_count,
         "blocker_class_counts": dict(blocker_counts),
+        "blocker_axis_counts": dict(blocker_axis_counts),
+        "submit_drought_closure_axis_count": len(submit_drought_axes),
+        "submit_drought_closure_axes": submit_drought_axes,
+        "submit_drought_split_complete": set(submit_drought_axes) == set(SUBMIT_DROUGHT_CLOSURE_AXES),
     }
     return {
         "schema_version": SCHEMA_VERSION,

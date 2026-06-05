@@ -530,6 +530,19 @@ def _is_resolved_feedback_source_missing_gap(item: dict[str, Any], context: dict
     return all(_source_label_status_closed(context, label) for label in matched_labels)
 
 
+def _is_resolved_code_improvement_workorder_self_review_gap(item: dict[str, Any], context: dict[str, Any]) -> bool:
+    if str(item.get("final_state") or "") != "ai_review_gap":
+        return False
+    if str(item.get("final_decision") or "") == "keep":
+        return False
+    review_id = str(item.get("review_id") or "").strip().lower()
+    if review_id != "code_improvement_workorder":
+        return False
+    if not _feedback_handoff_closed(context):
+        return False
+    return _source_label_status_closed(context, "code_improvement_workorder")
+
+
 def _apply_feedback_handoff_resolutions(payload: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     if not _feedback_handoff_closed(context):
         return payload
@@ -547,7 +560,10 @@ def _apply_feedback_handoff_resolutions(payload: dict[str, Any], context: dict[s
         review_id = str(item.get("review_id") or "unknown")
         generic_review = review_id.startswith("interpretation_") or review_id in GENERIC_FEEDBACK_HANDOFF_REVIEW_IDS
         source_missing_gap = _is_resolved_feedback_source_missing_gap(item, context)
-        if final_state in {"automation_handoff_gap", "ai_review_gap"} and (generic_review or source_missing_gap):
+        self_review_gap = _is_resolved_code_improvement_workorder_self_review_gap(item, context)
+        if final_state in {"automation_handoff_gap", "ai_review_gap"} and (
+            generic_review or source_missing_gap or self_review_gap
+        ):
             resolved_ids.append(review_id)
             resolved_conclusions.append(
                 {
@@ -560,6 +576,8 @@ def _apply_feedback_handoff_resolutions(payload: dict[str, Any], context: dict[s
                         "status": (
                             "resolved_by_currentness_feedback_handoff_pass"
                             if generic_review
+                            else "resolved_by_existing_code_improvement_workorder_context"
+                            if self_review_gap
                             else "resolved_by_existing_feedback_source_context"
                         ),
                         "runtime_effect": False,

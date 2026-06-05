@@ -191,6 +191,71 @@ def test_observation_source_quality_audit_separates_reviewed_unknown_tokens(monk
     assert reviewed_fields["orderbook_micro_ofi_bucket_key"]["reviewed_reason"] == "reviewed_insufficient_sample"
 
 
+def test_observation_source_quality_audit_reviews_missing_risk_regime_context(monkeypatch, tmp_path):
+    monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
+    _write_events(
+        tmp_path,
+        "2026-06-04",
+        [
+            _event(
+                "scalp_entry_action_decision_snapshot",
+                {
+                    "metric_role": "action_decision_matrix",
+                    "decision_authority": "entry_advisory_prompt_context_only",
+                    "runtime_effect": False,
+                    "forbidden_uses": "runtime_threshold_apply/order_submit/provider_route_change/bot_restart",
+                    "risk_regime_context": {
+                        "panic_context_status": "MISSING",
+                        "panic_level_reason": "context_not_ok",
+                        "panic_epoch_id": "2026-06-04|NORMAL|NORMAL|L0|unknown",
+                        "market_risk_state": "UNKNOWN",
+                    },
+                },
+                record_id=1,
+            )
+        ],
+    )
+
+    report = audit.build_observation_source_quality_audit("2026-06-04")
+
+    assert report["summary"]["unknown_token_stage_count"] == 0
+    assert report["summary"]["reviewed_unknown_token_stage_count"] == 1
+    reviewed = report["reviewed_unknown_token_findings"][0]
+    assert reviewed["stage"] == "scalp_entry_action_decision_snapshot"
+    assert reviewed["fields"][0]["reviewed_reason"] == "reviewed_missing_risk_regime_context"
+    assert reviewed["runtime_effect"] is False
+
+
+def test_observation_source_quality_audit_reviews_panic_context_warning_unknown_fields(monkeypatch, tmp_path):
+    monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
+    _write_events(
+        tmp_path,
+        "2026-06-04",
+        [
+            _event(
+                "scalp_sim_panic_context_warning",
+                {
+                    "panic_epoch_id": "2026-06-04|NORMAL|NORMAL|L0|unknown",
+                    "market_risk_state": "UNKNOWN",
+                    "liquidity_state": "UNKNOWN",
+                    "risk_regime_epoch_id": "2026-06-04|NORMAL|NORMAL|L0|unknown",
+                },
+                record_id=1,
+            )
+        ],
+    )
+
+    report = audit.build_observation_source_quality_audit("2026-06-04")
+
+    assert report["summary"]["unknown_token_stage_count"] == 0
+    assert report["summary"]["reviewed_unknown_token_stage_count"] == 1
+    reviewed_fields = {
+        item["field"]: item for item in report["reviewed_unknown_token_findings"][0]["fields"]
+    }
+    assert reviewed_fields["panic_epoch_id"]["reviewed_reason"] == "reviewed_missing_risk_regime_context"
+    assert reviewed_fields["market_risk_state"]["reviewed_reason"] == "reviewed_missing_risk_regime_context"
+
+
 def test_observation_source_quality_audit_warns_on_top_level_and_all_unknown_fields(monkeypatch, tmp_path):
     monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
     fields = {f"custom_unknown_field_{idx}": "value_unknown" for idx in range(25)}

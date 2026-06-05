@@ -1,7 +1,7 @@
 # 데이터 품질 보고서
 
-생성일: 2026-06-04 18:03:52
-분석 기간: 2026-04-21 ~ 2026-06-04
+생성일: 2026-06-05 18:05:24
+분석 기간: 2026-06-04 ~ 2026-06-05
 
 ---
 
@@ -9,29 +9,29 @@
 
 | 항목 | 값 |
 |---|---|
-| 총 거래수 | 8 |
-| COMPLETED | 8 |
-| valid_profit_rate | 8 |
+| 총 거래수 | 9 |
+| COMPLETED | 9 |
+| valid_profit_rate | 9 |
 | 제외 건수 | 0 |
 
 **서버별:**
 
-- `local`: 8건
+- `local`: 9건
 
 **코호트별:**
 
-- `full_fill`: 8건
+- `full_fill`: 9건
 
-> ⚠️ **표본 부족**: `local` 서버 valid_profit_rate=8건 < 30. 이 서버 기준 결론 확정 금지.
+> ⚠️ **표본 부족**: `local` 서버 valid_profit_rate=9건 < 30. 이 서버 기준 결론 확정 금지.
 
 ---
 
 ## 2. funnel_fact
 
-- 날짜 수: 1
+- 날짜 수: 2
 - 서버: ['local']
-- 기간 합계 latency_block_events: 4418
-- 기간 합계 submitted_events: 1
+- 기간 합계 latency_block_events: 29291
+- 기간 합계 submitted_events: 2
 
 ---
 
@@ -39,17 +39,17 @@
 
 | 플래그 | 건수 |
 |---|---|
-| 총 record 수 | 54 |
-| multi_rebase (split-entry) | 1 |
-| partial_then_expand | 1 |
-| rebase_integrity 이상 | 2 |
-| same_ts_multi_rebase | 1 |
-| same_symbol_repeat_soft_stop | 13 |
+| 총 record 수 | 32 |
+| multi_rebase (split-entry) | 0 |
+| partial_then_expand | 0 |
+| rebase_integrity 이상 | 0 |
+| same_ts_multi_rebase | 0 |
+| same_symbol_repeat_soft_stop | 0 |
 
 **정합성 플래그 분포:**
 
-- `rebase_integrity_flag`: 2건
-- `same_ts_multi_rebase_flag`: 1건
+- `rebase_integrity_flag`: 0건
+- `same_ts_multi_rebase_flag`: 0건
 
 ---
 

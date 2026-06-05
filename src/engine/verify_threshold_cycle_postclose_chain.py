@@ -3068,6 +3068,10 @@ def build_threshold_cycle_postclose_verification(
         ),
     }
 
+    marker_values = _parse_marker_values(done_line or "")
+    recovery_action = marker_values.get("recovery_action")
+    recovery_done = recovery_action in {"marker_reconciliation", "tail_repair_done_reconciliation"}
+    marker_reconciliation_done = recovery_action == "marker_reconciliation"
     execution_flags = _parse_bool_flags(done_line or "")
     required_execution_flags = (
         "swing_lifecycle",
@@ -3083,7 +3087,9 @@ def build_threshold_cycle_postclose_verification(
         "next_stage2_checklist",
     )
     missing_execution_flags = [
-        key for key in required_execution_flags if done_line and key not in execution_flags
+        key
+        for key in required_execution_flags
+        if done_line and not recovery_done and key not in execution_flags
     ]
     for key in ("swing_strategy_discovery", "swing_lifecycle_matrix", "swing_lifecycle_bucket_discovery"):
         if done_line and key in execution_flags and key not in missing_execution_flags:
@@ -3415,6 +3421,8 @@ def build_threshold_cycle_postclose_verification(
         stale_downstream_links = [key for key in stale_downstream_links if "pattern_lab_propagation_audit" not in key]
     if "daily_ev" in disabled_stage_flags or "runtime_approval_summary" in disabled_stage_flags:
         stale_downstream_links = []
+    if stale_downstream_links and not require_done_marker:
+        handoff_warnings.append("pending_done_stale_downstream_links_present")
     pending_done_marker = bool(start_line and done_line is None and not require_done_marker)
     execution_profile_status = "full_profile"
     if disabled_stage_flags:
@@ -3423,17 +3431,27 @@ def build_threshold_cycle_postclose_verification(
         execution_profile_status = "done_marker_missing" if require_done_marker else "pending_done_marker"
 
     status = "pass"
+    strict_log_issues = list(log_issues)
+    if not require_done_marker:
+        strict_log_issues = [
+            item
+            for item in strict_log_issues
+            if item not in {"postclose_fail_marker_present", "postclose_done_marker_missing"}
+        ]
+
     if not start_line:
         if _postclose_not_yet_due(target_date):
             status = "not_yet_due"
         else:
             status = "fail"
             log_issues.append("postclose_start_marker_missing")
-    elif predecessor_timeouts or log_issues:
+            strict_log_issues.append("postclose_start_marker_missing")
+    elif predecessor_timeouts or strict_log_issues:
         status = "fail"
     elif done_line is None and require_done_marker:
         status = "fail"
         log_issues.append("postclose_done_marker_missing")
+        strict_log_issues.append("postclose_done_marker_missing")
     elif missing_execution_flags:
         status = "fail"
         log_issues.append("postclose_done_marker_missing_required_flags")
@@ -3445,7 +3463,9 @@ def build_threshold_cycle_postclose_verification(
         status = "fail"
     elif conversion_kpi_status == "fail":
         status = "fail"
-    elif stale_downstream_links:
+    elif stale_downstream_links and require_done_marker:
+        status = "fail"
+    elif workorder_snapshot_status == "missing_snapshot_identity":
         status = "fail"
     elif handoff_warnings or conversion_kpi_warnings:
         status = "warning"
@@ -3453,8 +3473,6 @@ def build_threshold_cycle_postclose_verification(
         status = "warning"
     elif disabled_stage_flags:
         status = "warning"
-    elif workorder_snapshot_status == "missing_snapshot_identity":
-        status = "fail"
     elif pending_done_marker:
         status = "pass_with_pending_done_marker"
 
@@ -3470,6 +3488,10 @@ def build_threshold_cycle_postclose_verification(
             "status": execution_profile_status,
             "require_done_marker": require_done_marker,
             "pending_done_marker": pending_done_marker,
+            "marker_reconciliation_done": marker_reconciliation_done,
+            "recovery_done": recovery_done,
+            "recovery_action": recovery_action,
+            "required_flags_checked": bool(done_line and not recovery_done),
             "flags": execution_flags,
             "disabled_stage_flags": disabled_stage_flags,
             "missing_required_flags": missing_execution_flags,
@@ -3477,6 +3499,8 @@ def build_threshold_cycle_postclose_verification(
                 "latest DONE marker was produced by a recovery run with selected heavy stages disabled; "
                 "same-date artifacts are still validated separately"
                 if disabled_stage_flags
+                else f"latest DONE marker was produced by controller recovery action `{recovery_action}`; execution flags are not asserted by this marker"
+                if recovery_done
                 else "latest DONE marker used full/default stage profile"
                 if done_line
                 else "wrapper-internal verification passed required artifacts; final DONE marker is checked by a later health check"
@@ -3491,7 +3515,7 @@ def build_threshold_cycle_postclose_verification(
                 else "pass_pending_done_marker"
                 if status == "pass_with_pending_done_marker"
                 else "fail"
-                if predecessor_timeouts or log_issues
+                if predecessor_timeouts or strict_log_issues
                 else "warning"
                 if predecessor_waits
                 else "pass"

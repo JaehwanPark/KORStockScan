@@ -2506,10 +2506,54 @@ def test_build_threshold_cycle_postclose_verification_prefers_workorder_lineage(
     assert pending_report["predecessor_integrity"]["status"] == "pass_pending_done_marker"
     assert "postclose_done_marker_missing" not in pending_report["predecessor_integrity"]["log_issues"]
 
+    strict_missing_report = mod.build_threshold_cycle_postclose_verification("2026-05-12")
+
+    assert strict_missing_report["status"] == "fail"
+    assert "postclose_done_marker_missing" in strict_missing_report["predecessor_integrity"]["log_issues"]
+
+    log_path.write_text(
+        "\n".join(
+            [
+                "[START] threshold-cycle postclose target_date=2026-05-12 started_at=2026-05-12T21:00:00+0900",
+                "[DONE] threshold-cycle postclose target_date=2026-05-12 recovery_action=marker_reconciliation full_wrapper_rerun=false finished_at=2026-05-12T21:30:00+0900",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    reconciled_report = mod.build_threshold_cycle_postclose_verification("2026-05-12")
+
+    assert reconciled_report["status"] == "pass"
+    assert reconciled_report["execution_profile"]["marker_reconciliation_done"] is True
+    assert reconciled_report["execution_profile"]["recovery_done"] is True
+    assert reconciled_report["execution_profile"]["recovery_action"] == "marker_reconciliation"
+    assert reconciled_report["execution_profile"]["required_flags_checked"] is False
+    assert reconciled_report["execution_profile"]["missing_required_flags"] == []
+    assert "marker_reconciliation" in reconciled_report["execution_profile"]["interpretation"]
+
+    log_path.write_text(
+        "\n".join(
+            [
+                "[START] threshold-cycle postclose target_date=2026-05-12 started_at=2026-05-12T21:00:00+0900",
+                "[DONE] threshold-cycle postclose target_date=2026-05-12 recovery_action=tail_repair_done_reconciliation full_wrapper_rerun=false finished_at=2026-05-12T21:35:00+0900",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    tail_repair_report = mod.build_threshold_cycle_postclose_verification("2026-05-12")
+
+    assert tail_repair_report["status"] == "pass"
+    assert tail_repair_report["execution_profile"]["marker_reconciliation_done"] is False
+    assert tail_repair_report["execution_profile"]["recovery_done"] is True
+    assert tail_repair_report["execution_profile"]["recovery_action"] == "tail_repair_done_reconciliation"
+    assert tail_repair_report["execution_profile"]["required_flags_checked"] is False
+    assert tail_repair_report["execution_profile"]["missing_required_flags"] == []
+    assert "tail_repair_done_reconciliation" in tail_repair_report["execution_profile"]["interpretation"]
+
     strict_report = mod.build_threshold_cycle_postclose_verification("2026-05-12")
 
-    assert strict_report["status"] == "fail"
-    assert "postclose_done_marker_missing" in strict_report["predecessor_integrity"]["log_issues"]
+    assert strict_report["status"] == "pass"
 
 
 def test_build_threshold_cycle_postclose_verification_warns_on_predecessor_wait(tmp_path, monkeypatch):
@@ -2572,6 +2616,16 @@ def test_build_threshold_cycle_postclose_verification_warns_on_predecessor_wait(
         ),
         encoding="utf-8",
     )
+    (report_dir / "code_improvement_workorder" / "code_improvement_workorder_2026-05-12.json").write_text(
+        json.dumps(
+            {
+                "generation_id": "2026-05-12-source",
+                "source_hash": "source",
+                "lineage": {"previous_exists": False},
+            }
+        ),
+        encoding="utf-8",
+    )
     (report_dir / "runtime_approval_summary" / "runtime_approval_summary_2026-05-12.json").write_text(
         json.dumps(
             {
@@ -2601,6 +2655,16 @@ def test_build_threshold_cycle_postclose_verification_warns_on_predecessor_wait(
 
     assert report["status"] == "warning"
     assert report["predecessor_integrity"]["wait_count"] == 1
+
+    (report_dir / "code_improvement_workorder" / "code_improvement_workorder_2026-05-12.json").write_text(
+        "{}",
+        encoding="utf-8",
+    )
+
+    missing_snapshot_report = mod.build_threshold_cycle_postclose_verification("2026-05-12")
+
+    assert missing_snapshot_report["status"] == "fail"
+    assert missing_snapshot_report["workorder_snapshot"]["status"] == "missing_snapshot_identity"
 
 
 def test_build_threshold_cycle_postclose_verification_warns_on_recovery_profile(tmp_path, monkeypatch):

@@ -268,6 +268,56 @@ def test_conversion_lane_orders_are_required_handoff_beyond_max_orders(tmp_path,
     assert report["summary"]["selected_implement_now_route_count"] == 2
 
 
+def test_conversion_lane_axis_instrumentation_marks_order_as_existing_implementation(tmp_path, monkeypatch):
+    automation_dir = tmp_path / "automation"
+    conversion_dir = tmp_path / "conversion_lane"
+    report_dir = tmp_path / "report"
+    doc_dir = tmp_path / "docs"
+    automation_dir.mkdir()
+    conversion_dir.mkdir()
+    (automation_dir / "scalping_pattern_lab_automation_2026-05-08.json").write_text(
+        json.dumps({"date": "2026-05-08", "code_improvement_orders": []}),
+        encoding="utf-8",
+    )
+    (conversion_dir / "conversion_lane_2026-05-08.json").write_text(
+        json.dumps(
+            {
+                "conversion_blocker_rank": [
+                    {
+                        "conversion_candidate_id": "submit_drought:LATENCY_PRE_SUBMIT",
+                        "blocker_class": "submit_drought",
+                        "blocker_axis": "LATENCY_PRE_SUBMIT",
+                        "blocker_resolution_status": "open",
+                        "blocker_runtime_effect": False,
+                        "blocker_allowed_runtime_apply": False,
+                        "conversion_impact_rank": 1,
+                        "remaining_gap_count": 2,
+                        "next_repair_action": "close_submit_drought_latency_pre_submit",
+                        "acceptance_test": "submit drought ledger splits weak contracts",
+                    },
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", automation_dir)
+    monkeypatch.setattr(mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing")
+    monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", tmp_path / "missing-ev")
+    monkeypatch.setattr(mod, "CONVERSION_LANE_DIR", conversion_dir)
+    monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_DIR", doc_dir)
+
+    report = mod.build_code_improvement_workorder("2026-05-08", max_orders=1)
+
+    order = report["orders"][0]
+    assert order["implementation_status"] == "implemented"
+    assert order["implementation_provenance"]["implemented_scope"] == (
+        "conversion_lane_blocker_axis_report_provenance"
+    )
+    assert order["decision"] == "attach_existing_family"
+    assert report["summary"]["selected_implement_now_new_runtime_effect_false_count"] == 0
+
+
 def test_build_code_improvement_workorder_escalates_repeated_unresolved_attach(tmp_path, monkeypatch):
     automation_dir = tmp_path / "automation"
     report_dir = tmp_path / "report"

@@ -638,6 +638,10 @@ def _reviewed_unknown_reason(value: Any) -> str | None:
         return "reviewed_not_available"
     if "unknown_pre_contract" in lowered:
         return "reviewed_pre_contract_placeholder"
+    if "panic_context_status" in lowered and "missing" in lowered and "risk_regime" in lowered:
+        return "reviewed_missing_risk_regime_context"
+    if "panic_level_reason" in lowered and "context_not_ok" in lowered and "market_risk_state" in lowered:
+        return "reviewed_missing_risk_regime_context"
     return None
 
 
@@ -1254,6 +1258,13 @@ def _evaluate_contracts(rows: list[dict[str, Any]], stage_counts: Counter[str]) 
         for key, value in _unknown_scan_values(row, normalized).items():
             if _unknown_token_present(value):
                 reviewed_reason = _reviewed_unknown_reason(value)
+                if (
+                    not reviewed_reason
+                    and stage == "scalp_sim_panic_context_warning"
+                    and str(key)
+                    in {"panic_epoch_id", "market_risk_state", "liquidity_state", "risk_regime_epoch_id"}
+                ):
+                    reviewed_reason = "reviewed_missing_risk_regime_context"
                 if reviewed_reason:
                     reviewed_key = f"{key}:{reviewed_reason}"
                     reviewed_unknown_counts[stage][reviewed_key] += 1

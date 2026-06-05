@@ -1,12 +1,12 @@
 # Postclose DONE Controller - 2026-06-05
 
-- status: `dry_run_planned`
-- final_verifier_status: `missing`
+- status: `done`
+- final_verifier_status: `pass`
+- root_cause: `verifier_status=pass`
+- selected_recovery_action: `None`
+- full_wrapper_rerun_used: `False`
 - attempts: `1`
-- dry_run: `True`
+- dry_run: `False`
 
 ## Actions
 - none
-
-## Blocked Reasons
-- `predecessor_status_missing`

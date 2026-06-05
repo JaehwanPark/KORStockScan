@@ -220,6 +220,23 @@ def _conversion_lane_followup_orders(conversion_lane: dict[str, Any], *, limit: 
         if not candidate_id:
             continue
         safe_slug = _slug(f"{blocker_class}_{candidate_id}")[:80]
+        instrumentation_implemented = (
+            blocker.get("blocker_runtime_effect") is False
+            and blocker.get("blocker_allowed_runtime_apply") is False
+            and str(blocker.get("blocker_resolution_status") or "") == "open"
+            and bool(str(blocker.get("blocker_axis") or "").strip())
+        )
+        implementation_provenance = None
+        if instrumentation_implemented:
+            implementation_provenance = {
+                "implementation_status": "implemented",
+                "implemented_scope": "conversion_lane_blocker_axis_report_provenance",
+                "blocker_axis": blocker.get("blocker_axis"),
+                "blocker_resolution_status": blocker.get("blocker_resolution_status"),
+                "runtime_effect": False,
+                "allowed_runtime_apply": False,
+                "remaining_blocker_is_observation_or_policy_closure": True,
+            }
         orders.append(
             {
                 "order_id": f"order_conversion_lane_{safe_slug}",
@@ -235,11 +252,16 @@ def _conversion_lane_followup_orders(conversion_lane: dict[str, Any], *, limit: 
                 "runtime_effect": False,
                 "allowed_runtime_apply": False,
                 "conversion_candidate_id": candidate_id,
+                "blocker_axis": blocker.get("blocker_axis"),
+                "blocker_resolution_status": blocker.get("blocker_resolution_status"),
                 "conversion_impact_rank": blocker.get("conversion_impact_rank"),
                 "remaining_gap_count_before": blocker.get("remaining_gap_count"),
                 "remaining_gap_count_after_expected": max(0, _safe_int(blocker.get("remaining_gap_count"), 1) - 1),
                 "blocks_bounded_real_canary": True,
                 "acceptance_test": blocker.get("acceptance_test"),
+                "implementation_status": "implemented" if instrumentation_implemented else None,
+                "original_implementation_status": "implemented" if instrumentation_implemented else None,
+                "implementation_provenance": implementation_provenance,
                 "intent": (
                     "Close the conversion critical-path blocker as source-only instrumentation/report/test work. "
                     "This does not create real order, provider, bot, cap, or threshold authority."
