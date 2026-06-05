@@ -919,6 +919,10 @@ def _producer_consumer_contract_drift(
         if isinstance(item, dict)
     }
     greenfield_policy_emit_state = str(bridge_summary.get("greenfield_policy_emit_state") or "").strip()
+    greenfield_policy_emit_blocker = str(bridge_summary.get("greenfield_policy_emit_blocker") or "").strip()
+    greenfield_policy_emit_blocker_detail = str(
+        bridge_summary.get("greenfield_policy_emit_blocker_detail") or ""
+    ).strip()
     drift: list[dict[str, Any]] = []
     for row in ledger:
         family = str(row.get("family") or "")
@@ -934,6 +938,8 @@ def _producer_consumer_contract_drift(
             row["consumer_state"] = "explicit_bridge_exclusion"
             row["bridge_state"] = greenfield_policy_emit_state
             row["runtime_exclusion_reason"] = greenfield_policy_emit_state
+            row["greenfield_policy_emit_blocker"] = greenfield_policy_emit_blocker or None
+            row["greenfield_policy_emit_blocker_detail"] = greenfield_policy_emit_blocker_detail or None
             row["explicit_runtime_exclusion"] = True
             row["retryable"] = False
             row["retry_reason"] = ""

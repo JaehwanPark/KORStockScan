@@ -103,6 +103,21 @@ class CodexTurnSummary:
     final_response: str
     model: str | None = None
     effort: str | None = None
+    agent: str | None = None
+    reason: str | None = None
+    escalated_from: str | None = None
+    token_minimization_policy: str | None = None
+
+
+@dataclass(frozen=True)
+class AgentModelSelection:
+    phase: str
+    agent: str
+    model: str | None
+    effort: str | None
+    reason: str
+    escalated_from: str | None = None
+    token_minimization_policy: str = "standard"
 
 
 def _now() -> str:
@@ -336,9 +351,21 @@ def _render_markdown(report: dict[str, Any]) -> str:
         f"- dry_run: `{report.get('dry_run')}`",
         f"- worktree: `{report.get('worktree') or '-'}`",
         f"- codex_model_policy: `{report.get('codex_model_policy')}`",
+        f"- token_minimization_policy: `{report.get('token_minimization_policy')}`",
+        "",
+        "## Agent Model Policy",
+    ]
+    for item in report.get("agent_model_policy") or []:
+        lines.append(
+            f"- `{item.get('agent')}` phase=`{item.get('phase')}` model=`{item.get('model') or '-'}` "
+            f"effort=`{item.get('effort') or '-'}` reason=`{item.get('reason') or '-'}`"
+        )
+    if not report.get("agent_model_policy"):
+        lines.append("- none")
+    lines.extend([
         "",
         "## Implemented Orders",
-    ]
+    ])
     for item in report.get("implemented_orders") or []:
         lines.append(f"- `{item.get('order_id')}` status=`{item.get('status')}`")
     if not report.get("implemented_orders"):
@@ -414,6 +441,189 @@ def _select_turn_model_effort(
     return model or selected[0], effort or selected[1]
 
 
+def _env_text(name: str, default: str) -> str:
+    return os.environ.get(name, "").strip() or default
+
+
+def _agent_for_phase(phase: str) -> str:
+    if phase == "implement":
+        return "implementation_agent"
+    if phase in {"review", "final_review"}:
+        return "review_agent"
+    if phase == "supplemental_fix":
+        return "fix_agent"
+    if phase == "validation_summary":
+        return "validation_agent"
+    if phase == "integration_summary":
+        return "integration_agent"
+    return "triage_agent"
+
+
+def _credit_min_model_defaults() -> dict[str, str]:
+    return {
+        "spark_model": _env_text("CODEX_WORKORDER_SPARK_MODEL", "gpt-5.3-codex-spark"),
+        "spark_effort": _env_text("CODEX_WORKORDER_SPARK_EFFORT", "medium"),
+        "cheap_model": _env_text("CODEX_WORKORDER_CHEAP_MODEL", "gpt-5.5"),
+        "cheap_effort": _env_text("CODEX_WORKORDER_CHEAP_EFFORT", "low"),
+        "strong_model": _env_text("CODEX_WORKORDER_STRONG_MODEL", "gpt-5.4"),
+        "strong_effort": _env_text("CODEX_WORKORDER_STRONG_EFFORT", "medium"),
+    }
+
+
+def _agent_escalation_reasons(orders: list[dict[str, Any]], *, phase: str) -> list[str]:
+    reasons: list[str] = []
+    complexity = _order_complexity(orders)
+    if complexity == "broad_contract":
+        reasons.append("broad_contract")
+    blob = " ".join(_text_blob(order) for order in orders)
+    for term in ("schema", "producer", "consumer", "contract", "report producer", "cross"):
+        if term in blob:
+            reasons.append(f"order_term:{term.replace(' ', '_')}")
+    if phase in {"review", "final_review", "supplemental_fix"} and complexity == "broad_contract":
+        reasons.append("broad_change_requires_independent_strong_review")
+    return list(dict.fromkeys(reasons))
+
+
+def _select_agent_model(
+    phase: str,
+    orders: list[dict[str, Any]],
+    *,
+    model_policy: str,
+    model: str | None,
+    effort: str | None,
+) -> AgentModelSelection:
+    agent = _agent_for_phase(phase)
+    if model or effort:
+        return AgentModelSelection(
+            phase=phase,
+            agent=agent,
+            model=model,
+            effort=effort,
+            reason="explicit_model_or_effort_override",
+            token_minimization_policy=model_policy,
+        )
+    if model_policy != "credit_min":
+        selected_model, selected_effort = _select_turn_model_effort(
+            phase,
+            orders,
+            model_policy=model_policy,
+            model=model,
+            effort=effort,
+        )
+        return AgentModelSelection(
+            phase=phase,
+            agent=agent,
+            model=selected_model,
+            effort=selected_effort,
+            reason=f"{model_policy}_phase_default",
+            token_minimization_policy=model_policy,
+        )
+
+    defaults = _credit_min_model_defaults()
+    complexity = _order_complexity(orders)
+    escalation_reasons = _agent_escalation_reasons(orders, phase=phase)
+    if phase == "implement":
+        if complexity == "broad_contract":
+            return AgentModelSelection(
+                phase=phase,
+                agent=agent,
+                model=defaults["cheap_model"],
+                effort=defaults["cheap_effort"],
+                reason="broad_contract_implementation_cheap_first",
+                token_minimization_policy="credit_min",
+            )
+        return AgentModelSelection(
+            phase=phase,
+            agent=agent,
+            model=defaults["spark_model"],
+            effort=defaults["spark_effort"],
+            reason=f"{complexity}_implementation_spark_first",
+            token_minimization_policy="credit_min",
+        )
+    if phase in {"review", "final_review"}:
+        if escalation_reasons:
+            return AgentModelSelection(
+                phase=phase,
+                agent=agent,
+                model=defaults["strong_model"],
+                effort=defaults["strong_effort"],
+                reason=";".join(escalation_reasons),
+                escalated_from=f"{defaults['cheap_model']}:{defaults['cheap_effort']}",
+                token_minimization_policy="credit_min",
+            )
+        return AgentModelSelection(
+            phase=phase,
+            agent=agent,
+            model=defaults["cheap_model"],
+            effort=defaults["cheap_effort"],
+            reason="cheap_review_first",
+            token_minimization_policy="credit_min",
+        )
+    if phase == "supplemental_fix":
+        if escalation_reasons:
+            return AgentModelSelection(
+                phase=phase,
+                agent=agent,
+                model=defaults["strong_model"],
+                effort=defaults["strong_effort"],
+                reason="blocking_or_broad_fix_escalation",
+                escalated_from=f"{defaults['cheap_model']}:{defaults['cheap_effort']}",
+                token_minimization_policy="credit_min",
+            )
+        return AgentModelSelection(
+            phase=phase,
+            agent=agent,
+            model=defaults["spark_model"],
+            effort=defaults["spark_effort"],
+            reason="simple_fix_spark_first",
+            token_minimization_policy="credit_min",
+        )
+    return AgentModelSelection(
+        phase=phase,
+        agent=agent,
+        model=None,
+        effort=None,
+        reason="deterministic_no_llm_default",
+        token_minimization_policy="credit_min",
+    )
+
+
+def _planned_agent_model_policy(
+    orders: list[dict[str, Any]],
+    *,
+    model_policy: str,
+    model: str | None,
+    effort: str | None,
+) -> list[dict[str, Any]]:
+    phases = [
+        "triage",
+        "implement",
+        "review",
+        "supplemental_fix",
+        "final_review",
+        "validation_summary",
+        "integration_summary",
+    ]
+    planned: list[dict[str, Any]] = []
+    for phase in phases:
+        if phase == "triage":
+            planned.append(
+                {
+                    "phase": phase,
+                    "agent": "triage_agent",
+                    "model": None,
+                    "effort": None,
+                    "reason": "deterministic_prefilter_first",
+                    "escalated_from": None,
+                    "token_minimization_policy": model_policy,
+                }
+            )
+            continue
+        selection = _select_agent_model(phase, orders, model_policy=model_policy, model=model, effort=effort)
+        planned.append(selection.__dict__)
+    return planned
+
+
 def _make_worktree(
     target_date: str,
     branch_prefix: str,
@@ -483,8 +693,17 @@ def _preserve_and_cleanup_interrupted_worktree(
     return {"status": status, "diff_path": str(diff_path), "cleanup_exit_code": cleanup_rc}
 
 
-def _codex_recovery_model_plan(model: str | None, effort: str | None) -> list[tuple[str | None, str | None, str]]:
+def _codex_recovery_model_plan(
+    model: str | None,
+    effort: str | None,
+    *,
+    model_policy: str = "credit_min",
+) -> list[tuple[str | None, str | None, str]]:
     plan: list[tuple[str | None, str | None, str]] = [(model, effort, "requested_or_auto")]
+    if model_policy == "credit_min" and not model and not effort:
+        defaults = _credit_min_model_defaults()
+        plan[0] = (None, None, "credit_min_agent_policy")
+        plan.append((defaults["strong_model"], defaults["strong_effort"], "credit_min_strong_recovery"))
     raw_models = os.environ.get("CODEX_WORKORDER_RECOVERY_MODELS")
     if raw_models:
         for raw_item in raw_models.split(","):
@@ -497,6 +716,8 @@ def _codex_recovery_model_plan(model: str | None, effort: str | None) -> list[tu
                 fallback_model, fallback_effort = text, os.environ.get("CODEX_WORKORDER_RECOVERY_EFFORT", "medium")
             if (fallback_model, fallback_effort) not in [(item[0], item[1]) for item in plan]:
                 plan.append((fallback_model, fallback_effort, "fallback_model"))
+        return plan
+    if model_policy == "credit_min" and not model and not effort:
         return plan
     fallback_model = os.environ.get("CODEX_WORKORDER_RECOVERY_MODEL", "gpt-5.3-codex-spark").strip() or None
     fallback_effort = os.environ.get("CODEX_WORKORDER_RECOVERY_EFFORT", "medium").strip() or None
@@ -525,7 +746,7 @@ def _codex_turns(
     *,
     model: str | None = None,
     effort: str | None = None,
-    model_policy: str = "auto",
+    model_policy: str = "credit_min",
 ) -> tuple[list[CodexTurnSummary], str | None]:
     if dry_run or not orders:
         return [], None
@@ -558,66 +779,108 @@ def _codex_turns(
             )
             if login_error:
                 return turns, login_error
-        implement_model, implement_effort = _select_turn_model_effort(
+        implement_selection = _select_agent_model(
             "implement", orders, model_policy=model_policy, model=model, effort=effort
         )
-        thread = codex.thread_start(cwd=str(worktree), sandbox=Sandbox.workspace_write, model=implement_model)
+        thread = codex.thread_start(cwd=str(worktree), sandbox=Sandbox.workspace_write, model=implement_selection.model)
         try:
             result = _run_codex_call_with_timeout(
                 lambda: thread.run(
                     prompt,
-                    **{k: v for k, v in {"model": implement_model, "effort": implement_effort}.items() if v},
+                    **{
+                        k: v
+                        for k, v in {"model": implement_selection.model, "effort": implement_selection.effort}.items()
+                        if v
+                    },
                 ),
                 phase="implement",
             )
         except TimeoutError as exc:
             return turns, str(exc)
-        turns.append(CodexTurnSummary("implement", str(getattr(result, "final_response", "")), implement_model, implement_effort))
-        review_model, review_effort = _select_turn_model_effort(
-            "review", orders, model_policy=model_policy, model=model, effort=effort
+        turns.append(
+            CodexTurnSummary(
+                "implement",
+                str(getattr(result, "final_response", "")),
+                implement_selection.model,
+                implement_selection.effort,
+                implement_selection.agent,
+                implement_selection.reason,
+                implement_selection.escalated_from,
+                implement_selection.token_minimization_policy,
+            )
         )
+        review_selection = _select_agent_model("review", orders, model_policy=model_policy, model=model, effort=effort)
         try:
             review = _run_codex_call_with_timeout(
                 lambda: thread.run(
                     "Review the diff only. List blocking issues first.",
                     sandbox=Sandbox.read_only,
-                    **{k: v for k, v in {"model": review_model, "effort": review_effort}.items() if v},
+                    **{k: v for k, v in {"model": review_selection.model, "effort": review_selection.effort}.items() if v},
                 ),
                 phase="review",
             )
         except TimeoutError as exc:
             return turns, str(exc)
-        turns.append(CodexTurnSummary("review", str(getattr(review, "final_response", "")), review_model, review_effort))
-        fix_model, fix_effort = _select_turn_model_effort(
-            "supplemental_fix", orders, model_policy=model_policy, model=model, effort=effort
+        turns.append(
+            CodexTurnSummary(
+                "review",
+                str(getattr(review, "final_response", "")),
+                review_selection.model,
+                review_selection.effort,
+                review_selection.agent,
+                review_selection.reason,
+                review_selection.escalated_from,
+                review_selection.token_minimization_policy,
+            )
         )
+        fix_selection = _select_agent_model("supplemental_fix", orders, model_policy=model_policy, model=model, effort=effort)
         try:
             fix = _run_codex_call_with_timeout(
                 lambda: thread.run(
                     "Fix any blocking issues found in the review, then summarize.",
                     sandbox=Sandbox.workspace_write,
-                    **{k: v for k, v in {"model": fix_model, "effort": fix_effort}.items() if v},
+                    **{k: v for k, v in {"model": fix_selection.model, "effort": fix_selection.effort}.items() if v},
                 ),
                 phase="supplemental_fix",
             )
         except TimeoutError as exc:
             return turns, str(exc)
-        turns.append(CodexTurnSummary("supplemental_fix", str(getattr(fix, "final_response", "")), fix_model, fix_effort))
-        final_model, final_effort = _select_turn_model_effort(
-            "final_review", orders, model_policy=model_policy, model=model, effort=effort
+        turns.append(
+            CodexTurnSummary(
+                "supplemental_fix",
+                str(getattr(fix, "final_response", "")),
+                fix_selection.model,
+                fix_selection.effort,
+                fix_selection.agent,
+                fix_selection.reason,
+                fix_selection.escalated_from,
+                fix_selection.token_minimization_policy,
+            )
         )
+        final_selection = _select_agent_model("final_review", orders, model_policy=model_policy, model=model, effort=effort)
         try:
             final_review = _run_codex_call_with_timeout(
                 lambda: thread.run(
                     "Final read-only review of the resulting diff.",
                     sandbox=Sandbox.read_only,
-                    **{k: v for k, v in {"model": final_model, "effort": final_effort}.items() if v},
+                    **{k: v for k, v in {"model": final_selection.model, "effort": final_selection.effort}.items() if v},
                 ),
                 phase="final_review",
             )
         except TimeoutError as exc:
             return turns, str(exc)
-        turns.append(CodexTurnSummary("final_review", str(getattr(final_review, "final_response", "")), final_model, final_effort))
+        turns.append(
+            CodexTurnSummary(
+                "final_review",
+                str(getattr(final_review, "final_response", "")),
+                final_selection.model,
+                final_selection.effort,
+                final_selection.agent,
+                final_selection.reason,
+                final_selection.escalated_from,
+                final_selection.token_minimization_policy,
+            )
+        )
     return turns, None
 
 
@@ -938,6 +1201,12 @@ def _attempt_codex_batch(
         "order_ids": [item.get("order_id") for item in orders],
         "model": model,
         "effort": effort,
+        "agent_model_plan": _planned_agent_model_policy(
+            orders,
+            model_policy=model_policy,
+            model=model,
+            effort=effort,
+        ),
         "codex_error": None,
         "status": "started",
         "validation_results": [],
@@ -960,6 +1229,18 @@ def _attempt_codex_batch(
         model_policy=model_policy,
     )
     result["codex_turns"] = [turn.__dict__ for turn in codex_turns]
+    result["agent_model_trace"] = [
+        {
+            "phase": turn.phase,
+            "agent": turn.agent,
+            "model": turn.model,
+            "effort": turn.effort,
+            "reason": turn.reason,
+            "escalated_from": turn.escalated_from,
+            "token_minimization_policy": turn.token_minimization_policy,
+        }
+        for turn in codex_turns
+    ]
     result["codex_error"] = codex_error
     if codex_error:
         result["status"] = "codex_error"
@@ -1028,7 +1309,7 @@ def _process_order_batch(
     if not orders:
         return []
     order_ids = [item.get("order_id") for item in orders]
-    model_plan = _codex_recovery_model_plan(model, effort)
+    model_plan = _codex_recovery_model_plan(model, effort, model_policy=model_policy)
     timeout_values = _expanded_timeout_values()
     last_result: dict[str, Any] | None = None
     original_timeout = os.environ.get("CODEX_WORKORDER_TURN_TIMEOUT_SEC")
@@ -1440,7 +1721,7 @@ def build_codex_workorder_runner(
     branch_prefix: str = "codex-workorder",
     model: str | None = None,
     effort: str | None = None,
-    model_policy: str = "auto",
+    model_policy: str = "credit_min",
     commit: bool = True,
     auto_push: bool = True,
     dry_run: bool = False,
@@ -1483,6 +1764,12 @@ def build_codex_workorder_runner(
     pass1_order_ids = [item.get("order_id") for item in canonical_orders]
     pass2_order_ids: list[Any] = []
     two_pass_status = "not_required"
+    agent_model_policy = _planned_agent_model_policy(
+        canonical_orders,
+        model_policy=model_policy,
+        model=model,
+        effort=effort,
+    )
     if dry_run:
         order_execution_results = [
             {
@@ -1682,6 +1969,8 @@ def build_codex_workorder_runner(
         "codex_model": model,
         "codex_effort": effort,
         "codex_model_policy": model_policy,
+        "token_minimization_policy": model_policy,
+        "agent_model_policy": agent_model_policy,
         "source_generation_id": workorder.get("generation_id"),
         "canonical_implement_order_ids": [item.get("order_id") for item in all_canonical_orders],
         "pass1_order_ids": pass1_order_ids,
@@ -1734,7 +2023,10 @@ def build_codex_workorder_runner(
             None,
         ),
         "codex_attempts": recovery_attempts,
-        "codex_turns": [],
+        "codex_turns": [turn for attempt in recovery_attempts for turn in (attempt.get("codex_turns") or [])],
+        "agent_model_traces": [
+            trace for attempt in recovery_attempts for trace in (attempt.get("agent_model_trace") or [])
+        ],
         "interrupted_worktree": next(
             (
                 attempt.get("interrupted_worktree")
@@ -1782,7 +2074,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--branch-prefix", default="codex-workorder")
     parser.add_argument("--model", default=os.environ.get("CODEX_WORKORDER_MODEL") or None)
     parser.add_argument("--effort", default=os.environ.get("CODEX_WORKORDER_EFFORT") or None)
-    parser.add_argument("--model-policy", default=os.environ.get("CODEX_WORKORDER_MODEL_POLICY") or "auto")
+    parser.add_argument("--model-policy", default=os.environ.get("CODEX_WORKORDER_MODEL_POLICY") or "credit_min")
     parser.add_argument("--commit", dest="commit", action="store_true", default=_env_bool("CODEX_WORKORDER_COMMIT", True))
     parser.add_argument("--no-commit", dest="commit", action="store_false")
     parser.add_argument(

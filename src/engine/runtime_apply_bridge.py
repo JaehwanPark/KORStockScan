@@ -1216,6 +1216,52 @@ def build_runtime_apply_bridge_report(target_date: str) -> dict[str, Any]:
         if item.get("family") == GREENFIELD_REAL_ENV_FAMILY
         and item.get("bridge_candidate_state") == "live_auto_apply_ready"
     )
+    greenfield_live_ready_flow_count = greenfield_flow_counts["live_auto_apply_candidate_count"]
+    greenfield_contract_gap = next(
+        (
+            item
+            for item in candidates
+            if item.get("family") == GREENFIELD_REAL_ENV_FAMILY
+            and item.get("bridge_candidate_state") == "runtime_blocked_contract_gap"
+        ),
+        None,
+    )
+    cumulative_confirmation_blocked = any(
+        item.get("bridge_candidate_state") == "blocked_cumulative_confirmation_missing" for item in candidates
+    )
+    greenfield_policy_emit_state = (
+        "ready"
+        if greenfield_ready_count > 0
+        else "not_emitted_greenfield_policy_contract_gap"
+        if greenfield_contract_gap
+        else "not_emitted_cumulative_confirmation_missing"
+        if cumulative_confirmation_blocked
+        else "not_emitted_no_complete_lifecycle_flow"
+        if discovery
+        else "not_emitted_discovery_missing"
+    )
+    greenfield_policy_emit_blocker = (
+        None
+        if greenfield_ready_count > 0
+        else "greenfield_policy_contract_gap"
+        if greenfield_contract_gap
+        else "cumulative_confirmation_missing"
+        if cumulative_confirmation_blocked
+        else "no_live_auto_ready_lifecycle_flow"
+        if discovery
+        else "discovery_missing"
+    )
+    greenfield_policy_emit_blocker_detail = (
+        "greenfield policy ready"
+        if greenfield_ready_count > 0
+        else str(greenfield_contract_gap.get("greenfield_policy_contract_state") or "greenfield policy contract gap")
+        if greenfield_contract_gap
+        else "promotion window confirmation is missing for a live-auto lifecycle flow"
+        if cumulative_confirmation_blocked
+        else "complete flow may exist, but no lifecycle flow is live_auto_apply_ready for greenfield policy emission"
+        if discovery
+        else "lifecycle bucket discovery artifact is missing"
+    )
     live_followup_count = sum(
         1
         for item in candidates
@@ -1250,15 +1296,10 @@ def build_runtime_apply_bridge_report(target_date: str) -> dict[str, Any]:
             "greenfield_lifecycle_flow_live_auto_apply_candidate_count": greenfield_flow_counts[
                 "live_auto_apply_candidate_count"
             ],
-            "greenfield_policy_emit_state": (
-                "ready"
-                if greenfield_ready_count > 0
-                else "not_emitted_cumulative_confirmation_missing"
-                if any(item.get("bridge_candidate_state") == "blocked_cumulative_confirmation_missing" for item in candidates)
-                else "not_emitted_no_complete_lifecycle_flow"
-                if discovery
-                else "not_emitted_discovery_missing"
-            ),
+            "greenfield_live_auto_ready_lifecycle_flow_count": greenfield_live_ready_flow_count,
+            "greenfield_policy_emit_state": greenfield_policy_emit_state,
+            "greenfield_policy_emit_blocker": greenfield_policy_emit_blocker,
+            "greenfield_policy_emit_blocker_detail": greenfield_policy_emit_blocker_detail,
             "stage_local_live_auto_apply_ready_count": max(live_ready_count - greenfield_ready_count, 0),
             "lifecycle_bucket_discovery_status": "present" if discovery else "missing",
             "lifecycle_bucket_promotion_window": discovery_context["promotion_window"],
@@ -1286,6 +1327,8 @@ def _write_markdown(report: dict[str, Any]) -> None:
         f"- status: `{report.get('status')}`",
         f"- live_auto_apply_ready_count: `{report.get('summary', {}).get('live_auto_apply_ready_count')}`",
         f"- greenfield_policy_emit_state: `{report.get('summary', {}).get('greenfield_policy_emit_state')}`",
+        f"- greenfield_policy_emit_blocker: `{report.get('summary', {}).get('greenfield_policy_emit_blocker') or '-'}`",
+        f"- greenfield_policy_emit_blocker_detail: `{report.get('summary', {}).get('greenfield_policy_emit_blocker_detail') or '-'}`",
         f"- greenfield_lifecycle_flow live/surfaced/total: "
         f"`{report.get('summary', {}).get('greenfield_lifecycle_flow_live_auto_apply_candidate_count')}` / "
         f"`{report.get('summary', {}).get('greenfield_lifecycle_flow_surfaced_candidate_count')}` / "
@@ -1295,6 +1338,8 @@ def _write_markdown(report: dict[str, Any]) -> None:
         f"- lifecycle_bucket_promotion_window: `{report.get('summary', {}).get('lifecycle_bucket_promotion_window') or '-'}`",
         f"- lifecycle_bucket_promotion_contract_passed: `{report.get('summary', {}).get('lifecycle_bucket_promotion_contract_passed')}`",
         f"- lifecycle_bucket_discovery_live_followup_count: `{report.get('summary', {}).get('lifecycle_bucket_discovery_live_followup_count')}`",
+        "- note: `not_emitted_no_complete_lifecycle_flow` is a legacy compatibility state; "
+        "the blocker field states whether the actual reason is no live-auto-ready lifecycle flow.",
         f"- human_approval_required: `{report.get('summary', {}).get('human_approval_required')}`",
         "- runtime mutation: `none`",
         f"- warnings: `{report.get('warnings') or []}`",

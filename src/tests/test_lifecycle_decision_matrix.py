@@ -810,8 +810,16 @@ def test_lifecycle_matrix_ingests_scalp_sim_submit_and_holding_rows(tmp_path, mo
     flow_attr = report["lifecycle_flow_bucket_attribution"]
     assert flow_attr["metric_scope"] == "lifecycle_bundle_ev"
     assert flow_attr["summary"]["complete_flow_count"] == 1
+    assert flow_attr["summary"]["direct_sim_record_complete_flow_count"] == 1
+    assert flow_attr["summary"]["adm_bridge_complete_flow_count"] == 0
     flow = flow_attr["flows"][0]
     assert flow["identity_quality"] == "exact_sim_record_id"
+    assert flow["identity_closure_type"] == "direct_sim_record"
+    assert flow["direct_sim_record_closed"] is True
+    assert flow["reconstructed_flow_closed"] is False
+    assert flow["source_sim_record_ids"] == ["SIM-1"]
+    assert flow["source_candidate_ids"] == ["ADM-1"]
+    assert flow["source_entry_adm_candidate_ids"] == ["ADM-1"]
     assert flow["source_quality_gate"] == "pass"
     assert flow["ai_inference_proposal"]["model"] == "gpt-5.4-mini"
     assert flow["entry_bucket_id"].startswith("entry:combo_entry_spot:")
@@ -901,9 +909,15 @@ def test_lifecycle_flow_adm_bridge_joins_entry_candidate_to_downstream_sim_rows(
     attribution = mod._lifecycle_flow_bucket_attribution(rows)
 
     assert attribution["summary"]["complete_flow_count"] == 1
+    assert attribution["summary"]["direct_sim_record_complete_flow_count"] == 0
+    assert attribution["summary"]["adm_bridge_complete_flow_count"] == 1
     assert attribution["summary"]["join_contract_blocked"] is False
     assert attribution["summary"]["stage_identity"]["entry"]["identity_quality_counts"] == {"entry_adm_bridge_key": 1}
     assert attribution["flows"][0]["identity_quality"] == "entry_adm_bridge_key"
+    assert attribution["flows"][0]["identity_closure_type"] == "adm_bridge_reconstructed"
+    assert attribution["flows"][0]["reconstructed_flow_closed"] is True
+    assert attribution["flows"][0]["source_sim_record_ids"] == ["SCALPSIM-011500-1779926754335-f7e730"]
+    assert attribution["flows"][0]["source_entry_adm_candidate_ids"] == ["ADM-011500-8403-1779926754334-bea5a3"]
     assert attribution["flows"][0]["stage_completion_state"] == "complete"
 
 
@@ -1056,8 +1070,10 @@ def test_lifecycle_flow_bridge_key_can_complete_cross_namespace_flow():
     attribution = mod._lifecycle_flow_bucket_attribution(rows)
 
     assert attribution["summary"]["complete_flow_count"] == 1
+    assert attribution["summary"]["adm_bridge_complete_flow_count"] == 1
     assert attribution["summary"]["join_contract_blocked"] is False
     assert attribution["flows"][0]["identity_quality"] == "lifecycle_flow_bridge_key"
+    assert attribution["flows"][0]["identity_closure_type"] == "adm_bridge_reconstructed"
     assert attribution["flows"][0]["stage_completion_state"] == "complete"
 
 

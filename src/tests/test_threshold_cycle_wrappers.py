@@ -53,6 +53,7 @@ def test_postclose_done_controller_wrapper_runs_controller_then_codex_runner():
     assert "POSTCLOSE_DONE_CONTROLLER_PREDECESSOR_TIMEOUT_SEC" in script
     assert "$PROJECT_DIR/venv/Scripts/python.exe" in script
     assert "POSTCLOSE_DONE_CONTROLLER_CODEX_MODEL_POLICY" in script
+    assert 'CODEX_MODEL_POLICY="${POSTCLOSE_DONE_CONTROLLER_CODEX_MODEL_POLICY:-credit_min}"' in script
     assert "POSTCLOSE_DONE_CONTROLLER_CODEX_MODEL" in script
     assert "POSTCLOSE_DONE_CONTROLLER_CODEX_EFFORT" in script
     assert "POSTCLOSE_DONE_CONTROLLER_CODEX_BATCH_SIZE" in script

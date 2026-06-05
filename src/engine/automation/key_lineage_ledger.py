@@ -59,6 +59,16 @@ def _stable_id(prefix: str, payload: Any) -> str:
     return f"{prefix}_{hashlib.sha256(raw.encode('utf-8')).hexdigest()[:16]}"
 
 
+def _safe_float(value: Any, default: float | None = None) -> float | None:
+    try:
+        if value in (None, "", "-"):
+            return default
+        number = float(value)
+    except Exception:
+        return default
+    return number if number == number else default
+
+
 def _runtime_apply_path(target_date: str) -> Path:
     exact = APPLY_PLAN_DIR / f"threshold_apply_{target_date}.json"
     if exact.exists():
@@ -255,6 +265,13 @@ def _row(
         same_key_continuity = "pass"
     else:
         same_key_continuity = "not_observed"
+    evidence = evidence or {}
+    raw_primary_ev = evidence.get("primary_ev")
+    if raw_primary_ev in (None, ""):
+        raw_primary_ev = evidence.get("source_quality_adjusted_ev_pct")
+    primary_ev = _safe_float(raw_primary_ev)
+    runtime_observed_same_key = same_key_continuity == "pass"
+    positive_ev_candidate = bool(primary_ev is not None and primary_ev > 0)
     return {
         "source_key_id": source_key_id,
         "source_key_type": source_key_type,
@@ -266,7 +283,10 @@ def _row(
         "same_key_continuity": same_key_continuity,
         "conversion_state": state,
         "next_blocker": next_blocker,
-        "evidence": evidence or {},
+        "positive_ev_candidate": positive_ev_candidate,
+        "runtime_observed_same_key": runtime_observed_same_key,
+        "sample_floor_blocked": next_blocker == "sample_floor",
+        "evidence": evidence,
     }
 
 
@@ -529,7 +549,8 @@ def _bucket_rows(
                 next_blocker=blocker,
                 evidence={
                     "classification_state": state,
-                    "primary_ev": item.get("source_quality_adjusted_ev_pct"),
+                    "primary_ev": item.get("primary_ev"),
+                    "source_quality_adjusted_ev_pct": item.get("source_quality_adjusted_ev_pct"),
                     "sample": item.get("sample"),
                     "bucket_id": bucket_id or None,
                     "source_bucket_kind": item.get("source_bucket_kind"),
@@ -584,6 +605,12 @@ def build_key_lineage_ledger(target_date: str) -> dict[str, Any]:
     rows.extend(_bucket_rows(discovery, scalp_catalog=scalp_catalog, events=events))
     state_counts = Counter(str(row.get("conversion_state") or "unknown") for row in rows)
     continuity_pass_count = sum(1 for row in rows if row.get("same_key_continuity") == "pass")
+    positive_ev_runtime_observed_count = sum(
+        1 for row in rows if row.get("positive_ev_candidate") and row.get("runtime_observed_same_key")
+    )
+    positive_ev_sample_floor_blocked_count = sum(
+        1 for row in rows if row.get("positive_ev_candidate") and row.get("next_blocker") == "sample_floor"
+    )
     blockers = []
     for row in rows:
         state = str(row.get("conversion_state") or "")
@@ -631,6 +658,8 @@ def build_key_lineage_ledger(target_date: str) -> dict[str, Any]:
             "natural_match_0_count": state_counts.get("natural_match_0", 0),
             "cooldown_intentional_count": state_counts.get("cooldown_intentional", 0),
             "lineage_blocker_count": len(blockers),
+            "positive_ev_runtime_observed_count": positive_ev_runtime_observed_count,
+            "positive_ev_sample_floor_blocked_count": positive_ev_sample_floor_blocked_count,
             "state_counts": dict(state_counts),
         },
         "lineage_rows": rows,
@@ -646,6 +675,8 @@ def _render_markdown(report: dict[str, Any]) -> str:
         "## Decision",
         f"- source keys: `{summary.get('source_key_count', 0)}`",
         f"- same-key continuity pass: `{summary.get('same_key_continuity_pass_count', 0)}`",
+        f"- positive EV runtime observed: `{summary.get('positive_ev_runtime_observed_count', 0)}`",
+        f"- positive EV sample-floor blocked: `{summary.get('positive_ev_sample_floor_blocked_count', 0)}`",
         f"- blockers: mismatch=`{summary.get('key_mismatch_count', 0)}`, catalog_missing=`{summary.get('catalog_missing_count', 0)}`, preopen_missing=`{summary.get('preopen_missing_count', 0)}`, not_instrumented=`{summary.get('not_instrumented_count', 0)}`",
         "",
         "## Top Blockers",

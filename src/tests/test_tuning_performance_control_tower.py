@@ -126,6 +126,13 @@ def _write_control_tower_minimal_sources(
                 "live_auto_apply_ready_count": bridge_live,
                 "greenfield_real_env_ready_count": bridge_live,
                 "greenfield_policy_emit_state": bridge_emit_state,
+                "greenfield_policy_emit_blocker": None
+                if bridge_emit_state == "ready"
+                else "no_live_auto_ready_lifecycle_flow",
+                "greenfield_policy_emit_blocker_detail": "greenfield policy ready"
+                if bridge_emit_state == "ready"
+                else "complete flow may exist, but no lifecycle flow is live_auto_apply_ready",
+                "greenfield_live_auto_ready_lifecycle_flow_count": bridge_live,
                 "lifecycle_bucket_promotion_window": "mtd",
                 "lifecycle_bucket_promotion_contract_passed": bridge_promotion_passed,
             },
@@ -450,10 +457,12 @@ def test_control_tower_reports_bridge_ready_after_mtd_parent_confirmation(monkey
 
     assert report["summary"]["primary_verdict"] == "bridge_live_bucket_ready"
     assert report["bridge_summary"]["greenfield_policy_emit_state"] == "ready"
+    assert report["summary"]["bridge_policy_emit_blocker"] is None
     markdown = (output_dir / f"tuning_performance_control_tower_{target}.md").read_text(encoding="utf-8")
     assert "promotion_window" in markdown
     assert "parent_granularity_status" in markdown
     assert "greenfield_policy_emit_state" in markdown
+    assert "greenfield_policy_emit_blocker" in markdown
     assert "verifier_status" in markdown
 
 
@@ -496,6 +505,7 @@ def test_control_tower_promotion_confirmed_waits_for_bridge(monkeypatch, tmp_pat
     report = mod.build_tuning_performance_control_tower(target)
 
     assert report["summary"]["primary_verdict"] == "promotion_confirmed_waiting_bridge"
+    assert report["summary"]["bridge_policy_emit_blocker"] == "no_live_auto_ready_lifecycle_flow"
 
 
 def test_control_tower_keeps_sim_only_progress_verdict(monkeypatch, tmp_path):

@@ -419,9 +419,26 @@ def _conversion_first_summary(conversion_lane: dict[str, Any], key_lineage_ledge
             "preopen_missing_count": _safe_int(lineage_summary.get("preopen_missing_count")),
             "not_instrumented_count": _safe_int(lineage_summary.get("not_instrumented_count")),
             "natural_match_0_count": _safe_int(lineage_summary.get("natural_match_0_count")),
+            "positive_ev_runtime_observed_count": _safe_int(
+                lineage_summary.get("positive_ev_runtime_observed_count")
+            ),
+            "positive_ev_sample_floor_blocked_count": _safe_int(
+                lineage_summary.get("positive_ev_sample_floor_blocked_count")
+            ),
         },
         "sim_priority_only_count": _safe_int(conversion_summary.get("sim_priority_only_count") or len(sim_priority_only)),
         "real_conversion_queue_count": _safe_int(conversion_summary.get("real_conversion_queue_count") or len(queue)),
+        "positive_ev_runtime_observed_count": _safe_int(
+            conversion_summary.get("positive_ev_runtime_observed_count")
+            or lineage_summary.get("positive_ev_runtime_observed_count")
+        ),
+        "positive_ev_real_conversion_queue_count": _safe_int(
+            conversion_summary.get("positive_ev_real_conversion_queue_count")
+        ),
+        "positive_ev_sample_floor_blocked_count": _safe_int(
+            conversion_summary.get("positive_ev_sample_floor_blocked_count")
+            or lineage_summary.get("positive_ev_sample_floor_blocked_count")
+        ),
         "why_not_real_runtime": blockers[:20],
         "summary": conversion_summary,
     }
@@ -616,6 +633,11 @@ def _bridge_summary(bridge_report: dict[str, Any]) -> dict[str, Any]:
         "live_auto_apply_ready_count": _safe_int(summary.get("live_auto_apply_ready_count")),
         "greenfield_real_env_ready_count": _safe_int(summary.get("greenfield_real_env_ready_count")),
         "greenfield_policy_emit_state": summary.get("greenfield_policy_emit_state"),
+        "greenfield_policy_emit_blocker": summary.get("greenfield_policy_emit_blocker"),
+        "greenfield_policy_emit_blocker_detail": summary.get("greenfield_policy_emit_blocker_detail"),
+        "greenfield_live_auto_ready_lifecycle_flow_count": _safe_int(
+            summary.get("greenfield_live_auto_ready_lifecycle_flow_count")
+        ),
         "lifecycle_bucket_promotion_window": summary.get("lifecycle_bucket_promotion_window"),
         "lifecycle_bucket_promotion_contract_passed": (
             promotion_contract_passed
@@ -832,6 +854,9 @@ def _markdown(report: dict[str, Any]) -> str:
         "## Conversion First",
         "",
         f"- real_conversion_queue: `{conversion_first.get('real_conversion_queue_count', 0)}`",
+        f"- positive_ev_runtime_observed: `{conversion_first.get('positive_ev_runtime_observed_count', 0)}`",
+        f"- positive_ev_real_conversion_queue: `{conversion_first.get('positive_ev_real_conversion_queue_count', 0)}`",
+        f"- positive_ev_sample_floor_blocked: `{conversion_first.get('positive_ev_sample_floor_blocked_count', 0)}`",
         f"- sim_priority_only: `{conversion_first.get('sim_priority_only_count', 0)}`",
         f"- key_lineage: pass=`{lineage_status.get('same_key_continuity_pass_count', 0)}` "
         f"mismatch=`{lineage_status.get('key_mismatch_count', 0)}` "
@@ -870,6 +895,7 @@ def _markdown(report: dict[str, Any]) -> str:
         f"absorbed_sample `{promotion_summary.get('absorbed_sample_count') if isinstance(promotion_summary, dict) else None}`, "
         f"conflict_children `{promotion_summary.get('child_conflict_warning_count') if isinstance(promotion_summary, dict) else None}`.",
         f"- Bridge/verifier: greenfield_policy_emit_state `{bridge.get('greenfield_policy_emit_state') or '-'}`, "
+        f"greenfield_policy_emit_blocker `{bridge.get('greenfield_policy_emit_blocker') or '-'}`, "
         f"promotion_contract_passed `{bridge.get('lifecycle_bucket_promotion_contract_passed')}`, "
         f"verifier_status `{verifier.get('status') or '-'}`, "
         f"verifier_missing `{inline_json(verifier_windows.get('missing') or [])}`, "
@@ -1097,12 +1123,20 @@ def build_tuning_performance_control_tower(target_date: str) -> dict[str, Any]:
             ),
             "bridge_live_auto_apply_ready_count": _safe_int(bridge.get("live_auto_apply_ready_count")),
             "bridge_policy_emit_state": bridge.get("greenfield_policy_emit_state"),
+            "bridge_policy_emit_blocker": bridge.get("greenfield_policy_emit_blocker"),
+            "bridge_policy_emit_blocker_detail": bridge.get("greenfield_policy_emit_blocker_detail"),
+            "greenfield_live_auto_ready_lifecycle_flow_count": _safe_int(
+                bridge.get("greenfield_live_auto_ready_lifecycle_flow_count")
+            ),
             "promotion_window": promotion_window,
             "verifier_status": verifier.get("status"),
             "verifier_handoff_warning_count": len(verifier.get("handoff_warnings") or []),
             "verifier_missing_downstream_link_count": len(verifier.get("missing_downstream_links") or []),
             "runtime_apply_gap_audit_status": runtime_gap_audit.get("status"),
             "real_conversion_queue_count": conversion_first["real_conversion_queue_count"],
+            "positive_ev_runtime_observed_count": conversion_first["positive_ev_runtime_observed_count"],
+            "positive_ev_real_conversion_queue_count": conversion_first["positive_ev_real_conversion_queue_count"],
+            "positive_ev_sample_floor_blocked_count": conversion_first["positive_ev_sample_floor_blocked_count"],
             "top_conversion_blocker_class": (
                 conversion_first["top_conversion_blockers"][0].get("blocker_class")
                 if conversion_first["top_conversion_blockers"]

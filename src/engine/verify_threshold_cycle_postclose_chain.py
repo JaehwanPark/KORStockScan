@@ -2391,6 +2391,9 @@ def _lifecycle_flow_bucket_handoff_status(
     summary = attribution.get("summary") if isinstance(attribution.get("summary"), dict) else {}
     flow_count = _safe_int(summary.get("flow_count"), 0)
     complete_flow_count = _safe_int(summary.get("complete_flow_count"), 0)
+    direct_sim_record_complete_flow_count = _safe_int(summary.get("direct_sim_record_complete_flow_count"), 0)
+    adm_bridge_complete_flow_count = _safe_int(summary.get("adm_bridge_complete_flow_count"), 0)
+    fallback_complete_flow_count = _safe_int(summary.get("fallback_complete_flow_count"), 0)
     join_contract_blocked = bool(summary.get("join_contract_blocked"))
     ev_candidate_ids = _collect_lifecycle_flow_bucket_candidate_ids(ev_report)
     runtime_candidate_ids = _collect_lifecycle_flow_bucket_candidate_ids(runtime_summary)
@@ -2417,6 +2420,9 @@ def _lifecycle_flow_bucket_handoff_status(
         "status": "fail" if missing else "pass",
         "flow_count": flow_count,
         "complete_flow_count": complete_flow_count,
+        "direct_sim_record_complete_flow_count": direct_sim_record_complete_flow_count,
+        "adm_bridge_complete_flow_count": adm_bridge_complete_flow_count,
+        "fallback_complete_flow_count": fallback_complete_flow_count,
         "complete_flow_rate": summary.get("complete_flow_rate"),
         "incomplete_flow_count": _safe_int(summary.get("incomplete_flow_count"), 0),
         "join_contract_blocked": join_contract_blocked,
@@ -3690,6 +3696,9 @@ def _render_markdown(report: dict[str, Any]) -> str:
         f"- attribution_present: `{report.get('lifecycle_flow_bucket_attribution_present')}`",
         f"- flow_count: `{lifecycle_flow_bucket.get('flow_count')}`",
         f"- complete_flow_count: `{lifecycle_flow_bucket.get('complete_flow_count')}`",
+        f"- direct_sim_record_complete_flow_count: `{lifecycle_flow_bucket.get('direct_sim_record_complete_flow_count')}`",
+        f"- adm_bridge_complete_flow_count: `{lifecycle_flow_bucket.get('adm_bridge_complete_flow_count')}`",
+        f"- fallback_complete_flow_count: `{lifecycle_flow_bucket.get('fallback_complete_flow_count')}`",
         f"- incomplete_flow_count: `{lifecycle_flow_bucket.get('incomplete_flow_count')}`",
         f"- complete_flow_rate: `{lifecycle_flow_bucket.get('complete_flow_rate')}`",
         f"- join_contract_blocked: `{lifecycle_flow_bucket.get('join_contract_blocked')}`",

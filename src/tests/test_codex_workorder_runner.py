@@ -55,6 +55,113 @@ def _successful_attempt(**kwargs):
     }
 
 
+def test_credit_min_small_implementation_uses_spark_medium(monkeypatch):
+    monkeypatch.delenv("CODEX_WORKORDER_SPARK_MODEL", raising=False)
+    selection = mod._select_agent_model(
+        "implement",
+        [_safe_order("small", files_likely_touched=["src/engine/automation/example.py"])],
+        model_policy="credit_min",
+        model=None,
+        effort=None,
+    )
+
+    assert selection.agent == "implementation_agent"
+    assert selection.model == "gpt-5.3-codex-spark"
+    assert selection.effort == "medium"
+    assert selection.reason == "small_source_implementation_spark_first"
+
+
+def test_credit_min_broad_implementation_uses_gpt55_low():
+    selection = mod._select_agent_model(
+        "implement",
+        [
+            _safe_order(
+                "broad",
+                title="schema producer consumer contract repair",
+                files_likely_touched=[
+                    "src/engine/automation/a.py",
+                    "src/engine/automation/b.py",
+                    "src/tests/test_a.py",
+                    "docs/report-based-automation-traceability.md",
+                ],
+            )
+        ],
+        model_policy="credit_min",
+        model=None,
+        effort=None,
+    )
+
+    assert selection.agent == "implementation_agent"
+    assert selection.model == "gpt-5.5"
+    assert selection.effort == "low"
+    assert selection.reason == "broad_contract_implementation_cheap_first"
+
+
+def test_credit_min_broad_review_escalates_to_gpt54_medium():
+    selection = mod._select_agent_model(
+        "review",
+        [_safe_order("broad", title="schema producer consumer contract repair")],
+        model_policy="credit_min",
+        model=None,
+        effort=None,
+    )
+
+    assert selection.agent == "review_agent"
+    assert selection.model == "gpt-5.4"
+    assert selection.effort == "medium"
+    assert selection.escalated_from == "gpt-5.5:low"
+
+
+def test_explicit_model_effort_override_wins_over_credit_min():
+    selection = mod._select_agent_model(
+        "implement",
+        [_safe_order("small")],
+        model_policy="credit_min",
+        model="custom-model",
+        effort="xhigh",
+    )
+
+    assert selection.model == "custom-model"
+    assert selection.effort == "xhigh"
+    assert selection.reason == "explicit_model_or_effort_override"
+
+
+def test_credit_min_validation_and_integration_agents_are_deterministic():
+    planned = mod._planned_agent_model_policy(
+        [_safe_order("small")],
+        model_policy="credit_min",
+        model=None,
+        effort=None,
+    )
+    by_phase = {item["phase"]: item for item in planned}
+
+    assert by_phase["validation_summary"]["agent"] == "validation_agent"
+    assert by_phase["validation_summary"]["model"] is None
+    assert by_phase["integration_summary"]["agent"] == "integration_agent"
+    assert by_phase["integration_summary"]["model"] is None
+
+
+def test_credit_min_recovery_plan_escalates_to_gpt54_medium():
+    plan = mod._codex_recovery_model_plan(None, None, model_policy="credit_min")
+
+    assert plan == [
+        (None, None, "credit_min_agent_policy"),
+        ("gpt-5.4", "medium", "credit_min_strong_recovery"),
+    ]
+
+
+def test_credit_min_recovery_plan_keeps_operator_recovery_models(monkeypatch):
+    monkeypatch.setenv("CODEX_WORKORDER_RECOVERY_MODELS", "fallback-a:low,gpt-5.4:medium")
+
+    plan = mod._codex_recovery_model_plan(None, None, model_policy="credit_min")
+
+    assert plan == [
+        (None, None, "credit_min_agent_policy"),
+        ("gpt-5.4", "medium", "credit_min_strong_recovery"),
+        ("fallback-a", "low", "fallback_model"),
+    ]
+
+
 def test_safe_missing_forbidden_uses_is_repaired_into_canonical_queue(monkeypatch, tmp_path):
     report_dir = _patch_report_dirs(monkeypatch, tmp_path)
     _write_workorder(
@@ -73,6 +180,8 @@ def test_safe_missing_forbidden_uses_is_repaired_into_canonical_queue(monkeypatc
     report = mod.build_codex_workorder_runner("2026-06-03", dry_run=True)
 
     assert report["status"] == "dry_run_planned"
+    assert report["codex_model_policy"] == "credit_min"
+    assert report["agent_model_policy"][1]["agent"] == "implementation_agent"
     assert report["canonical_implement_order_ids"] == ["repairable"]
     assert report["contract_recoveries"][0]["order_id"] == "repairable"
     assert report["blocked_orders"] == []
@@ -386,7 +495,7 @@ def test_batch_timeout_splits_to_single_order_retries(monkeypatch, tmp_path):
     branch_commits = []
     attempt_counter = [0]
 
-    monkeypatch.setattr(mod, "_codex_recovery_model_plan", lambda model, effort: [(model, effort, "primary")])
+    monkeypatch.setattr(mod, "_codex_recovery_model_plan", lambda model, effort, **kwargs: [(model, effort, "primary")])
     monkeypatch.setattr(mod, "_expanded_timeout_values", lambda: ["1"])
 
     def fake_attempt(**kwargs):
@@ -432,7 +541,7 @@ def test_batch_timeout_splits_to_single_order_retries(monkeypatch, tmp_path):
 
 
 def test_single_order_timeout_exhausted_blocks_completion(monkeypatch):
-    monkeypatch.setattr(mod, "_codex_recovery_model_plan", lambda model, effort: [(model, effort, "primary")])
+    monkeypatch.setattr(mod, "_codex_recovery_model_plan", lambda model, effort, **kwargs: [(model, effort, "primary")])
     monkeypatch.setattr(mod, "_expanded_timeout_values", lambda: ["1"])
     monkeypatch.setattr(
         mod,
@@ -479,7 +588,7 @@ def test_single_order_timeout_exhausted_blocks_completion(monkeypatch):
 
 
 def test_validation_failure_after_retries_remains_incomplete(monkeypatch):
-    monkeypatch.setattr(mod, "_codex_recovery_model_plan", lambda model, effort: [(model, effort, "primary")])
+    monkeypatch.setattr(mod, "_codex_recovery_model_plan", lambda model, effort, **kwargs: [(model, effort, "primary")])
     monkeypatch.setattr(mod, "_expanded_timeout_values", lambda: ["1"])
     monkeypatch.setattr(
         mod,

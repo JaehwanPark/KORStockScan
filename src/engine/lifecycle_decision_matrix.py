@@ -3554,6 +3554,30 @@ def _flow_ev(by_stage: dict[str, list[dict[str, Any]]]) -> float | None:
     return round(sum(values) / len(values), 4) if values else None
 
 
+def _flow_identity_closure_type(identity_quality: str) -> str:
+    if identity_quality == "exact_sim_record_id":
+        return "direct_sim_record"
+    if identity_quality in {"entry_adm_bridge_key", "entry_adm_candidate_id", "lifecycle_flow_bridge_key"}:
+        return "adm_bridge_reconstructed"
+    if identity_quality == "candidate_id":
+        return "candidate_id"
+    return "fallback"
+
+
+def _unique_flow_values(rows: list[dict[str, Any]], *keys: str) -> list[str]:
+    values: list[str] = []
+    for row in rows:
+        features = row.get("runtime_features") if isinstance(row.get("runtime_features"), dict) else {}
+        for key in keys:
+            value = features.get(key)
+            if value in (None, ""):
+                value = row.get(key)
+            text = str(value or "").strip()
+            if text:
+                values.append(text)
+    return sorted(dict.fromkeys(values))
+
+
 def _flow_record(attribution_key: str, identity_quality: str, rows: list[dict[str, Any]]) -> dict[str, Any]:
     by_stage: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for row in rows:
@@ -3599,9 +3623,16 @@ def _flow_record(attribution_key: str, identity_quality: str, rows: list[dict[st
     )
     bucket_id = _stable_flow_bucket_id(bucket_key)
     labels = exit_row.get("labels") if exit_row and isinstance(exit_row.get("labels"), dict) else {}
+    identity_closure_type = _flow_identity_closure_type(identity_quality)
     return {
         "flow_instance_id": attribution_key,
         "identity_quality": identity_quality,
+        "identity_closure_type": identity_closure_type,
+        "source_sim_record_ids": _unique_flow_values(rows, "sim_record_id"),
+        "source_candidate_ids": _unique_flow_values(rows, "candidate_id"),
+        "source_entry_adm_candidate_ids": _unique_flow_values(rows, "entry_adm_candidate_id"),
+        "direct_sim_record_closed": bool(complete and identity_closure_type == "direct_sim_record"),
+        "reconstructed_flow_closed": bool(complete and identity_closure_type == "adm_bridge_reconstructed"),
         "lifecycle_flow_bucket_id": bucket_id,
         "bucket_type": "combo_lifecycle_flow",
         "bucket_key": bucket_key,
@@ -3812,6 +3843,17 @@ def _lifecycle_flow_bucket_attribution(rows: list[dict[str, Any]]) -> dict[str, 
     ]
     identity_summary = _flow_identity_stage_summary(rows, flows)
     complete_flow_count = sum(1 for item in flows if item.get("stage_completion_state") == "complete")
+    direct_sim_record_complete_flow_count = sum(
+        1 for item in flows if item.get("stage_completion_state") == "complete" and item.get("identity_closure_type") == "direct_sim_record"
+    )
+    adm_bridge_complete_flow_count = sum(
+        1
+        for item in flows
+        if item.get("stage_completion_state") == "complete" and item.get("identity_closure_type") == "adm_bridge_reconstructed"
+    )
+    fallback_complete_flow_count = sum(
+        1 for item in flows if item.get("stage_completion_state") == "complete" and item.get("identity_closure_type") == "fallback"
+    )
     flow_count = len(flows)
     join_contract_blocked = bool(identity_summary.get("join_contract_blocked"))
     incomplete_reason_counts = identity_summary["incomplete_flow_reason_counts"]
@@ -3842,6 +3884,9 @@ def _lifecycle_flow_bucket_attribution(rows: list[dict[str, Any]]) -> dict[str, 
         "summary": {
             "flow_count": flow_count,
             "complete_flow_count": complete_flow_count,
+            "direct_sim_record_complete_flow_count": direct_sim_record_complete_flow_count,
+            "adm_bridge_complete_flow_count": adm_bridge_complete_flow_count,
+            "fallback_complete_flow_count": fallback_complete_flow_count,
             "incomplete_flow_count": flow_count - complete_flow_count,
             "fallback_identity_count": sum(1 for item in flows if item.get("identity_quality") == "fallback_incomplete"),
             "identity_missing_count": identity_summary["identity_missing_count"],
@@ -4463,6 +4508,21 @@ def build_lifecycle_decision_matrix_report(
                 if isinstance(lifecycle_flow_bucket_attribution.get("summary"), dict)
                 else 0
             ),
+            "direct_sim_record_complete_flow_count": (
+                lifecycle_flow_bucket_attribution.get("summary", {}).get("direct_sim_record_complete_flow_count")
+                if isinstance(lifecycle_flow_bucket_attribution.get("summary"), dict)
+                else 0
+            ),
+            "adm_bridge_complete_flow_count": (
+                lifecycle_flow_bucket_attribution.get("summary", {}).get("adm_bridge_complete_flow_count")
+                if isinstance(lifecycle_flow_bucket_attribution.get("summary"), dict)
+                else 0
+            ),
+            "fallback_complete_flow_count": (
+                lifecycle_flow_bucket_attribution.get("summary", {}).get("fallback_complete_flow_count")
+                if isinstance(lifecycle_flow_bucket_attribution.get("summary"), dict)
+                else 0
+            ),
             "incomplete_flow_count": (
                 lifecycle_flow_bucket_attribution.get("summary", {}).get("incomplete_flow_count")
                 if isinstance(lifecycle_flow_bucket_attribution.get("summary"), dict)
@@ -4577,6 +4637,10 @@ def render_lifecycle_decision_matrix_markdown(report: dict[str, Any]) -> str:
         f"- overnight_bucket_runtime_candidate_count: `{summary.get('overnight_bucket_runtime_candidate_count')}`",
         f"- lifecycle_flow_bucket_count: `{summary.get('lifecycle_flow_bucket_count')}`",
         f"- lifecycle_flow_complete_count: `{summary.get('lifecycle_flow_complete_count')}`",
+        f"- lifecycle_flow_complete_breakdown direct/adm/fallback: "
+        f"`{summary.get('direct_sim_record_complete_flow_count')}` / "
+        f"`{summary.get('adm_bridge_complete_flow_count')}` / "
+        f"`{summary.get('fallback_complete_flow_count')}`",
         f"- lifecycle_flow_runtime_candidate_count: `{summary.get('lifecycle_flow_runtime_candidate_count')}`",
         f"- identity_missing_count/join_rate: `{summary.get('identity_missing_count')}` / `{summary.get('identity_join_rate')}`",
         f"- complete_flow_rate: `{summary.get('complete_flow_rate')}`",

@@ -869,6 +869,9 @@ def test_lifecycle_flow_handoff_fails_when_complete_flow_absent():
             "summary": {
                 "flow_count": 4,
                 "complete_flow_count": 0,
+                "direct_sim_record_complete_flow_count": 0,
+                "adm_bridge_complete_flow_count": 0,
+                "fallback_complete_flow_count": 0,
                 "incomplete_flow_count": 4,
                 "complete_flow_rate": 0.0,
                 "join_contract_blocked": True,
@@ -886,6 +889,8 @@ def test_lifecycle_flow_handoff_fails_when_complete_flow_absent():
     assert "lifecycle_complete_flow_absent" in report["missing"]
     assert "lifecycle_join_contract_blocked" in report["missing"]
     assert report["bundle_ev_tuning_state"] == "blocked_join_gap"
+    assert report["direct_sim_record_complete_flow_count"] == 0
+    assert report["adm_bridge_complete_flow_count"] == 0
 
 
 def test_buy_funnel_submit_drought_handoff_fails_when_downstream_missing():

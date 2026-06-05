@@ -828,6 +828,8 @@ def test_greenfield_discovery_live_candidate_uses_bridge_exclusion_not_handoff_f
         {
             "summary": {
                 "greenfield_policy_emit_state": "not_emitted_no_complete_lifecycle_flow",
+                "greenfield_policy_emit_blocker": "no_live_auto_ready_lifecycle_flow",
+                "greenfield_policy_emit_blocker_detail": "complete flow exists but no live-auto ready lifecycle flow",
                 "greenfield_lifecycle_flow_live_auto_apply_candidate_count": 1,
             },
             "candidates": [],
@@ -841,6 +843,8 @@ def test_greenfield_discovery_live_candidate_uses_bridge_exclusion_not_handoff_f
     assert row["final_disposition"] == "source_only_explicit_exclusion"
     assert row["consumer_state"] == "explicit_bridge_exclusion"
     assert row["runtime_exclusion_reason"] == "not_emitted_no_complete_lifecycle_flow"
+    assert row["greenfield_policy_emit_blocker"] == "no_live_auto_ready_lifecycle_flow"
+    assert row["greenfield_policy_emit_blocker_detail"] == "complete flow exists but no live-auto ready lifecycle flow"
     assert row["derived_review_category"] == "source_only_keep_collecting"
     assert row["derived_review_sub_state"] == "greenfield_policy_not_emitted"
     assert not any(item["failure_code"] == "producer_consumer_handoff_missing" for item in report["retry_queue"])

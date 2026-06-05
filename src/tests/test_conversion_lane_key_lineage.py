@@ -191,7 +191,63 @@ def test_runtime_matched_lifecycle_bucket_source_id_closes_bucket_continuity(mon
     assert bucket_rows[0]["source_key_id"] == source_bucket_id
     assert bucket_rows[0]["conversion_state"] == "matched"
     assert bucket_rows[0]["same_key_continuity"] == "pass"
+    assert bucket_rows[0]["positive_ev_candidate"] is True
+    assert bucket_rows[0]["runtime_observed_same_key"] is True
+    assert report["summary"]["positive_ev_runtime_observed_count"] == 1
     assert report["summary"]["bucket_same_key_continuity_pass_count"] == 1
+
+
+def test_key_lineage_keeps_explicit_zero_primary_ev_non_positive(monkeypatch, tmp_path):
+    _patch_dirs(monkeypatch, tmp_path)
+    target = "2026-06-04"
+    source_bucket_id = "lifecycle_flow:combo_entry:zero_ev"
+    _write(tmp_path / "report" / "lifecycle_bucket_discovery" / f"lifecycle_bucket_discovery_{target}.json", {})
+    _write(
+        tmp_path / "threshold_cycle" / "scalp_sim_policies" / f"scalp_sim_policy_catalog_{target}.json",
+        {
+            "policies": [
+                {
+                    "policy_id": "lifecycle_bucket_discovery_sim_auto_approval",
+                    "approved_bucket_rows": [
+                        {
+                            "bucket_id": "lifecycle_flow:combo_entry",
+                            "source_bucket_id": source_bucket_id,
+                            "classification_state": "lifecycle_flow_sim_probe_candidate",
+                            "source_bucket_kind": "lifecycle_flow_sim_probe_policy",
+                            "primary_ev": 0.0,
+                            "source_quality_adjusted_ev_pct": 0.75,
+                            "sample": 4,
+                        }
+                    ],
+                }
+            ]
+        },
+    )
+    _write(tmp_path / "threshold_cycle" / "swing_sim_policies" / f"swing_sim_policy_catalog_{target}.json", {})
+    _write(tmp_path / "threshold_cycle" / "apply_plans" / f"threshold_apply_{target}.json", {"source_date": target})
+    event_path = tmp_path / "pipeline_events" / f"pipeline_events_{target}.jsonl"
+    event_path.parent.mkdir(parents=True, exist_ok=True)
+    event_path.write_text(
+        json.dumps(
+            {
+                "fields": {
+                    "bucket_directed_sim_probe": "True",
+                    "lifecycle_bucket_match_status": "matched",
+                    "lifecycle_bucket_bucket_id": "lifecycle_flow:combo_entry",
+                    "lifecycle_bucket_source_bucket_id": source_bucket_id,
+                }
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    report = ledger.build_key_lineage_ledger(target)
+
+    bucket_rows = [row for row in report["lineage_rows"] if row["source_key_type"] == "bucket"]
+    assert bucket_rows[0]["same_key_continuity"] == "pass"
+    assert bucket_rows[0]["positive_ev_candidate"] is False
+    assert report["summary"]["positive_ev_runtime_observed_count"] == 0
 
 
 def test_conversion_lane_adds_runtime_observed_matched_bucket_to_real_queue(monkeypatch, tmp_path):
@@ -224,7 +280,46 @@ def test_conversion_lane_adds_runtime_observed_matched_bucket_to_real_queue(monk
     report = lane.build_conversion_lane(target)
 
     assert report["summary"]["real_conversion_queue_count"] == 1
+    assert report["summary"]["positive_ev_runtime_observed_count"] == 1
+    assert report["summary"]["positive_ev_real_conversion_queue_count"] == 1
+    assert report["summary"]["positive_ev_sample_floor_blocked_count"] == 1
     assert report["real_conversion_queue"][0]["conversion_state"] == "runtime_observed"
+    assert report["real_conversion_queue"][0]["positive_ev_candidate"] is True
+    assert report["real_conversion_queue"][0]["sample_floor_blocked"] is True
+
+
+def test_conversion_lane_does_not_count_non_positive_ev_as_positive(monkeypatch, tmp_path):
+    _patch_dirs(monkeypatch, tmp_path)
+    target = "2026-06-04"
+    _write(
+        tmp_path / "report" / "key_lineage_ledger" / f"key_lineage_ledger_{target}.json",
+        {
+            "summary": {"lineage_blocker_count": 0},
+            "lineage_rows": [
+                {
+                    "source_key_id": "lifecycle_flow:combo_entry:abc123",
+                    "source_key_type": "bucket",
+                    "source_artifact": "scalp_sim_policy_catalog",
+                    "same_key_continuity": "pass",
+                    "conversion_state": "matched",
+                    "evidence": {
+                        "classification_state": "lifecycle_flow_sim_probe_candidate",
+                        "primary_ev": -0.1,
+                        "sample": 4,
+                        "bucket_id": "lifecycle_flow:combo_entry",
+                    },
+                }
+            ],
+            "lineage_blockers": [],
+        },
+    )
+    _write(tmp_path / "report" / "lifecycle_bucket_discovery" / f"lifecycle_bucket_discovery_{target}.json", {})
+
+    report = lane.build_conversion_lane(target)
+
+    assert report["summary"]["real_conversion_queue_count"] == 0
+    assert report["summary"]["positive_ev_runtime_observed_count"] == 0
+    assert report["summary"]["positive_ev_real_conversion_queue_count"] == 0
 
 
 def test_conversion_lane_promotes_lineage_blocker_to_rank(monkeypatch, tmp_path):

@@ -192,6 +192,19 @@ def _candidate_from_matched_bucket_lineage(row: dict[str, Any]) -> dict[str, Any
     }
 
 
+def _annotate_conversion_candidate(candidate: dict[str, Any]) -> None:
+    ev = _safe_float(candidate.get("primary_ev"))
+    runtime_observed = str(candidate.get("runtime_observation_state") or "") in {
+        "matched",
+        "runtime_observed",
+        "joined",
+    } or candidate.get("conversion_state") == "runtime_observed"
+    sample_floor_blocked = str(candidate.get("next_blocker") or "") == "sample_floor"
+    candidate["positive_ev_candidate"] = bool(ev is not None and ev > 0)
+    candidate["sample_floor_blocked"] = sample_floor_blocked
+    candidate["runtime_observed_same_key"] = bool(runtime_observed)
+
+
 def _candidates_from_lifecycle(discovery: dict[str, Any], strategy_scope: str) -> list[dict[str, Any]]:
     candidates: list[dict[str, Any]] = []
     seen: set[str] = set()
@@ -331,6 +344,9 @@ def _lineage_handoff_rows(ledger: dict[str, Any]) -> list[dict[str, Any]]:
             "same_key_continuity": row.get("same_key_continuity"),
             "conversion_state": row.get("conversion_state"),
             "next_blocker": row.get("next_blocker"),
+            "positive_ev_candidate": row.get("positive_ev_candidate"),
+            "sample_floor_blocked": row.get("sample_floor_blocked"),
+            "runtime_observed_same_key": row.get("runtime_observed_same_key"),
         }
         for row in rows
     ]
@@ -408,6 +424,8 @@ def build_conversion_lane(target_date: str) -> dict[str, Any]:
             continue
         candidates.append(candidate)
         seen.add(candidate["candidate_id"])
+    for candidate in candidates:
+        _annotate_conversion_candidate(candidate)
 
     blockers: list[dict[str, Any]] = []
     for candidate in candidates:
@@ -477,6 +495,13 @@ def build_conversion_lane(target_date: str) -> dict[str, Any]:
         and str(row.get("conversion_state") or "") != "matched"
     ]
     blocker_counts = Counter(str(item.get("blocker_class") or "unknown") for item in blockers)
+    positive_ev_runtime_observed_count = sum(
+        1 for item in candidates if item.get("positive_ev_candidate") and item.get("runtime_observed_same_key")
+    )
+    positive_ev_real_conversion_queue_count = sum(1 for item in real_queue if item.get("positive_ev_candidate"))
+    positive_ev_sample_floor_blocked_count = sum(
+        1 for item in candidates if item.get("positive_ev_candidate") and item.get("sample_floor_blocked")
+    )
     summary = {
         "conversion_candidate_count": len(candidates),
         "bounded_real_canary_requestable_count": sum(
@@ -488,6 +513,9 @@ def build_conversion_lane(target_date: str) -> dict[str, Any]:
         "sim_priority_only_count": len(sim_priority_only),
         "key_lineage_blocker_count": _safe_int((key_ledger.get("summary") or {}).get("lineage_blocker_count")),
         "real_conversion_queue_count": len(real_queue),
+        "positive_ev_runtime_observed_count": positive_ev_runtime_observed_count,
+        "positive_ev_real_conversion_queue_count": positive_ev_real_conversion_queue_count,
+        "positive_ev_sample_floor_blocked_count": positive_ev_sample_floor_blocked_count,
         "blocker_class_counts": dict(blocker_counts),
     }
     return {
@@ -517,6 +545,9 @@ def _render_markdown(report: dict[str, Any]) -> str:
         "## Decision",
         f"- conversion candidates: `{summary.get('conversion_candidate_count', 0)}`",
         f"- real conversion queue: `{summary.get('real_conversion_queue_count', 0)}`",
+        f"- positive EV runtime observed: `{summary.get('positive_ev_runtime_observed_count', 0)}`",
+        f"- positive EV real conversion queue: `{summary.get('positive_ev_real_conversion_queue_count', 0)}`",
+        f"- positive EV sample-floor blocked: `{summary.get('positive_ev_sample_floor_blocked_count', 0)}`",
         f"- bounded real canary requestable: `{summary.get('bounded_real_canary_requestable_count', 0)}`",
         f"- top blocker: `{summary.get('top_blocker_class') or 'none'}`",
         "",

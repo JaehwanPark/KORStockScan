@@ -13,20 +13,20 @@
 
 ## 근거
 
-- as_of: `2026-06-05T12:50:04`
-- exit_signal unique: `45`
+- as_of: `2026-06-05T15:30:05`
+- exit_signal unique: `72`
 - sell_order_sent unique: `1`
 - sell_completed unique: `1`
 - real exit/sell_sent/sell_completed: `1` / `1` / `1`
-- non-real exit/sell_sent/sell_completed: `44` / `0` / `0`
-- sell_sent/exit_signal: `2.2%`
+- non-real exit/sell_sent/sell_completed: `71` / `0` / `0`
+- sell_sent/exit_signal: `1.4%`
 - real sell_sent/exit_signal: `100.0%`
 - non-real sell_sent/exit_signal: `0.0%`
-- flow defer events: `1133`
-- AI holding cache MISS: `99.9%`
+- flow defer events: `2816`
+- AI holding cache MISS: `100.0%`
 - soft_stop rebound above sell 10m: `72.7%`
 - trailing missed-upside: `38.9%`
-- top reasons: `AI보유감시:cache_miss=1123, flow유예:scalp_soft_stop_pct=697, soft_stop_grace=560, flow유예:scalp_trailing_take_profit=436, 청산신호:scalp_soft_stop_pct=23`
+- top reasons: `AI보유감시:cache_miss=2740, flow유예:scalp_soft_stop_pct=1780, soft_stop_grace=1420, flow유예:scalp_trailing_take_profit=1036, 청산신호:scalp_soft_stop_pct=77`
 
 ## 금지된 자동변경
 
