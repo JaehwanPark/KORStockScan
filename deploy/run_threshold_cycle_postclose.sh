@@ -1080,14 +1080,11 @@ if [ "$RUN_DEEPSEEK_SWING_LAB" = "true" ] || [ "$RUN_DEEPSEEK_SWING_LAB" = "1" ]
     echo "[threshold-cycle] deepseek swing pattern lab failed (non-fatal)" >&2
 fi
 if [ "$RUN_PATTERN_LABS" = "true" ] || [ "$RUN_PATTERN_LABS" = "1" ]; then
-  wait_for_postclose_resources "gemini_scalping_pattern_lab"
-  ANALYSIS_START_DATE="$PATTERN_LAB_START_DATE" ANALYSIS_END_DATE="$TARGET_DATE" \
-    run_postclose_cmd "$PROJECT_DIR/analysis/gemini_scalping_pattern_lab/run.sh" || \
-    echo "[threshold-cycle] gemini scalping pattern lab failed (non-fatal); downstream automation will mark freshness=false" >&2
   wait_for_postclose_resources "claude_scalping_pattern_lab"
   ANALYSIS_START_DATE="$PATTERN_LAB_START_DATE" ANALYSIS_END_DATE="$TARGET_DATE" \
     run_postclose_cmd "$PROJECT_DIR/analysis/claude_scalping_pattern_lab/run_all.sh" || \
     echo "[threshold-cycle] claude scalping pattern lab failed (non-fatal); downstream automation will mark freshness=false" >&2
+  echo "[threshold-cycle] gemini scalping pattern lab skipped: retired_from_automatic_execution" >&2
 fi
 wait_for_postclose_resources "scalping_pattern_lab_automation"
 run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.scalping_pattern_lab_automation --date "$TARGET_DATE"

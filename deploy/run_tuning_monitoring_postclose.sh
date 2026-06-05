@@ -265,8 +265,8 @@ main() {
     --end "$TARGET_DATE"
 
   if [[ "$RUN_PATTERN_LABS" == "1" || "$RUN_PATTERN_LABS" == "true" ]]; then
-    run_step "gemini_scalping_pattern_lab" env ANALYSIS_START_DATE="$PATTERN_LAB_START_DATE" ANALYSIS_END_DATE="$TARGET_DATE" "$PROJECT_DIR/analysis/gemini_scalping_pattern_lab/run.sh"
     run_step "claude_scalping_pattern_lab" env ANALYSIS_START_DATE="$PATTERN_LAB_START_DATE" ANALYSIS_END_DATE="$TARGET_DATE" "$PROJECT_DIR/analysis/claude_scalping_pattern_lab/run_all.sh"
+    record_step "gemini_scalping_pattern_lab" "skipped" 0 0 "retired_from_automatic_execution"
   else
     record_step "pattern_labs" "skipped" 1 0 "canonical_runner=THRESHOLD_CYCLE_POSTCLOSE"
   fi

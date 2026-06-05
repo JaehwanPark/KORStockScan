@@ -2,6 +2,10 @@
 
 ## Decision
 - source keys: `306`
+- runtime observation target date: `2026-06-05`
+- runtime policy source date: `2026-06-04`
+- postclose candidate source date: `2026-06-05`
+- new postclose candidate due state: `not_due_until_next_preopen`
 - same-key continuity pass: `3`
 - positive EV runtime observed: `0`
 - positive EV sample-floor blocked: `14`

@@ -197,6 +197,35 @@ def test_runtime_matched_lifecycle_bucket_source_id_closes_bucket_continuity(mon
     assert report["summary"]["bucket_same_key_continuity_pass_count"] == 1
 
 
+def test_key_lineage_marks_new_postclose_candidates_not_due_when_runtime_uses_prior_policy(
+    monkeypatch, tmp_path
+):
+    _patch_dirs(monkeypatch, tmp_path)
+    target = "2026-06-05"
+    _write(tmp_path / "report" / "lifecycle_bucket_discovery" / f"lifecycle_bucket_discovery_{target}.json", {})
+    _write(tmp_path / "threshold_cycle" / "scalp_sim_policies" / "scalp_sim_policy_catalog_2026-06-04.json", {})
+    _write(tmp_path / "threshold_cycle" / "swing_sim_policies" / "swing_sim_policy_catalog_2026-06-04.json", {})
+    _write(
+        tmp_path / "threshold_cycle" / "apply_plans" / f"threshold_apply_{target}.json",
+        {
+            "source_date": "2026-06-04",
+            "scalp_sim_auto_approval": {
+                "catalog": str(tmp_path / "threshold_cycle" / "scalp_sim_policies" / "scalp_sim_policy_catalog_2026-06-04.json")
+            },
+            "swing_sim_auto_approval": {
+                "catalog": str(tmp_path / "threshold_cycle" / "swing_sim_policies" / "swing_sim_policy_catalog_2026-06-04.json")
+            },
+        },
+    )
+
+    report = ledger.build_key_lineage_ledger(target)
+
+    assert report["summary"]["runtime_policy_source_date"] == "2026-06-04"
+    assert report["summary"]["postclose_candidate_source_date"] == target
+    assert report["summary"]["runtime_policy_matches_postclose_candidate_source"] is False
+    assert report["summary"]["new_postclose_candidates_due_state"] == "not_due_until_next_preopen"
+
+
 def test_key_lineage_keeps_explicit_zero_primary_ev_non_positive(monkeypatch, tmp_path):
     _patch_dirs(monkeypatch, tmp_path)
     target = "2026-06-04"
@@ -284,8 +313,56 @@ def test_conversion_lane_adds_runtime_observed_matched_bucket_to_real_queue(monk
     assert report["summary"]["positive_ev_real_conversion_queue_count"] == 1
     assert report["summary"]["positive_ev_sample_floor_blocked_count"] == 1
     assert report["real_conversion_queue"][0]["conversion_state"] == "runtime_observed"
+    assert report["real_conversion_queue"][0]["runtime_observation_scope"] == "previous_preopen_policy_runtime_observed"
     assert report["real_conversion_queue"][0]["positive_ev_candidate"] is True
     assert report["real_conversion_queue"][0]["sample_floor_blocked"] is True
+
+
+def test_conversion_lane_merges_lineage_match_into_existing_lifecycle_candidate(monkeypatch, tmp_path):
+    _patch_dirs(monkeypatch, tmp_path)
+    target = "2026-06-04"
+    source_bucket_id = "bucket:source:1"
+    _write(
+        tmp_path / "report" / "key_lineage_ledger" / f"key_lineage_ledger_{target}.json",
+        {
+            "summary": {"lineage_blocker_count": 0},
+            "lineage_rows": [
+                {
+                    "source_key_id": source_bucket_id,
+                    "source_key_type": "bucket",
+                    "same_key_continuity": "pass",
+                    "conversion_state": "matched",
+                    "runtime_match_key": source_bucket_id,
+                    "postclose_observed_key": source_bucket_id,
+                    "evidence": {"primary_ev": 1.2, "sample": 12, "sample_floor": 10},
+                }
+            ],
+            "lineage_blockers": [],
+        },
+    )
+    _write(
+        tmp_path / "report" / "lifecycle_bucket_discovery" / f"lifecycle_bucket_discovery_{target}.json",
+        {
+            "surfaced_candidates": [
+                {
+                    "bucket_id": "bucket:source",
+                    "source_bucket_id": source_bucket_id,
+                    "classification_state": "sim_auto_approved",
+                    "source_quality_adjusted_ev_pct": 1.2,
+                    "sample": 12,
+                    "sample_floor": 10,
+                }
+            ]
+        },
+    )
+
+    report = lane.build_conversion_lane(target)
+    candidate = next(item for item in report["conversion_candidates"] if item["source_key_id"] == source_bucket_id)
+
+    assert candidate["conversion_state"] == "runtime_observed"
+    assert candidate["runtime_observed_same_key"] is True
+    assert candidate["runtime_observation_scope"] == "previous_preopen_policy_runtime_observed"
+    assert report["summary"]["positive_ev_runtime_observed_count"] == 1
 
 
 def test_conversion_lane_does_not_count_non_positive_ev_as_positive(monkeypatch, tmp_path):
@@ -377,12 +454,60 @@ def test_conversion_lane_submit_drought_blockers_have_split_axes(monkeypatch, tm
 
     assert report["summary"]["submit_drought_split_complete"] is True
     assert report["summary"]["submit_drought_closure_axis_count"] == 6
+    assert report["summary"]["submit_funnel_blocker_count"] == 6
+    assert report["summary"]["submit_drought_is_ldm_bucket_blocker"] is False
+    assert report["summary"]["top_ldm_bucket_blocker_class"] is None
     submit_blockers = [
         item for item in report["conversion_blocker_rank"] if item["blocker_class"] == "submit_drought"
     ]
     assert {item["blocker_axis"] for item in submit_blockers} == set(lane.SUBMIT_DROUGHT_CLOSURE_AXES)
     assert all(item["blocker_runtime_effect"] is False for item in submit_blockers)
     assert all(item["blocker_allowed_runtime_apply"] is False for item in submit_blockers)
+
+
+def test_conversion_lane_marks_new_positive_postclose_candidate_not_due_until_next_preopen(
+    monkeypatch, tmp_path
+):
+    _patch_dirs(monkeypatch, tmp_path)
+    target = "2026-06-05"
+    _write(
+        tmp_path / "report" / "key_lineage_ledger" / f"key_lineage_ledger_{target}.json",
+        {
+            "summary": {
+                "lineage_blocker_count": 0,
+                "runtime_policy_source_date": "2026-06-04",
+                "postclose_candidate_source_date": target,
+                "new_postclose_candidates_due_state": "not_due_until_next_preopen",
+            },
+            "lineage_rows": [],
+            "lineage_blockers": [],
+        },
+    )
+    _write(
+        tmp_path / "report" / "lifecycle_bucket_discovery" / f"lifecycle_bucket_discovery_{target}.json",
+        {
+            "surfaced_candidates": [
+                {
+                    "bucket_id": "entry:source_stage:wait6579_ev_cohort",
+                    "source_bucket_id": "entry:source_stage:wait6579_ev_cohort:abc",
+                    "classification_state": "sim_auto_approved",
+                    "source_quality_adjusted_ev_pct": 2.0,
+                    "sample": 52,
+                    "sample_floor": 10,
+                }
+            ]
+        },
+    )
+
+    report = lane.build_conversion_lane(target)
+    candidate = report["conversion_candidates"][0]
+
+    assert candidate["positive_ev_candidate"] is True
+    assert candidate["runtime_observed_same_key"] is False
+    assert candidate["runtime_observation_scope"] == "new_postclose_candidate_not_due_until_next_preopen"
+    assert candidate["sample_floor_status"] == "pass"
+    assert report["summary"]["positive_ev_not_due_until_next_preopen_count"] == 1
+    assert report["summary"]["positive_ev_runtime_observed_count"] == 0
 
 
 def test_conversion_blocker_class_ignores_source_key_field_names():

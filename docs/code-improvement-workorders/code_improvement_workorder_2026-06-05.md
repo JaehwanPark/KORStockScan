@@ -27,7 +27,7 @@
 - stage_hook_workorder_discovery: `/home/ubuntu/KORStockScan/data/report/stage_hook_workorder_discovery/stage_hook_workorder_discovery_2026-06-05.json`
 - stage_hook_runtime_scaffold: `/home/ubuntu/KORStockScan/data/report/stage_hook_runtime_scaffold/stage_hook_runtime_scaffold_2026-06-05.json`
 - buy_funnel_sentinel: `/home/ubuntu/KORStockScan/data/report/buy_funnel_sentinel/buy_funnel_sentinel_2026-06-05.json`
-- generated_at: `2026-06-05T20:31:18+09:00`
+- generated_at: `2026-06-05T20:36:13+09:00`
 - generation_id: `2026-06-05-471b39278028`
 - source_hash: `471b392780287e331325c6c94971a18b3642097dbb903d63c94ad374cfb43cc4`
 
@@ -51,8 +51,8 @@
 ## Snapshot Lineage
 
 - previous_exists: `True`
-- previous_generation_id: `2026-06-05-6d3236964234`
-- previous_source_hash: `6d3236964234fc2294cde7ce726f6abfcb27a6e2dab9f6368ee146f028df7373`
+- previous_generation_id: `2026-06-05-471b39278028`
+- previous_source_hash: `471b392780287e331325c6c94971a18b3642097dbb903d63c94ad374cfb43cc4`
 - new_order_ids: `[]`
 - removed_order_ids: `[]`
 - decision_changed_order_ids: `[]`

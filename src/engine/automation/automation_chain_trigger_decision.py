@@ -143,7 +143,6 @@ def _step_specs(target_date: str) -> list[StepSpec]:
         "pattern_lab_currentness_audit": (
             _pair("pattern_lab_currentness_audit", "pattern_lab_currentness_audit", target_date),
             (
-                "analysis/gemini_scalping_pattern_lab/outputs/tuning_observability_summary.json",
                 "analysis/claude_scalping_pattern_lab/outputs/tuning_observability_summary.json",
             ),
         ),

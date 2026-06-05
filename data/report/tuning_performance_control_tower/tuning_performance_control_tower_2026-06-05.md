@@ -4,11 +4,15 @@
 
 - real_conversion_queue: `0`
 - positive_ev_runtime_observed: `0`
+- positive_ev_not_due_until_next_preopen: `26`
+- positive_ev_previous_policy_natural_match_0: `4`
 - positive_ev_real_conversion_queue: `0`
 - positive_ev_sample_floor_blocked: `15`
 - sim_priority_only: `31`
+- observation_scope: runtime_policy_source_date=`-` postclose_candidate_source_date=`-` new_postclose_candidates_due_state=`-`
 - key_lineage: pass=`3` mismatch=`0` catalog_missing=`0` preopen_missing=`0` not_instrumented=`0`
-- top_blocker: `submit_drought`
+- top_blocker_overall: `submit_drought`
+- top_ldm_bucket_blocker: `env_mapping`; submit_funnel_blocker_count=`6` submit_drought_is_ldm_bucket_blocker=`False`
 
 ## 판정
 
@@ -44,8 +48,8 @@
 
 ## Workorder
 
-- selected orders `108`, selected decisions `{"attach_existing_family": 86, "defer_evidence": 1, "implement_now": 21}`, routes `{"ai_review_coverage_review": 1, "existing_family": 82, "implement_now": 1, "instrumentation_order": 19, "parent_conflict_exclusion_review": 1, "pattern_lab_ai_review_followup_evidence": 1, "positive_source_only_review": 1, "source_dimension_rollup": 1, "source_quality_warning_producer_fix": 1}`.
-- pattern lab AI review source orders `2`, pattern lab currentness source orders `0`.
+- selected orders `106`, selected decisions `{"attach_existing_family": 106}`, routes `{"ai_review_coverage_review": 1, "existing_family": 102, "parent_conflict_exclusion_review": 1, "positive_source_only_review": 1, "source_dimension_rollup": 1}`.
+- pattern lab AI review source orders `0`, pattern lab currentness source orders `0`.
 - 해석: `implement_now`는 자동 repo 수정이 아니라 `runtime_effect=false` intake다. 사용자가 Codex 구현을 지시한 경우에만 코드 작업이다.
 
 ## Runtime Summary

@@ -7,7 +7,7 @@
 - `offline_live_canary_bundle`: retired/removed. EC2 서버 증설 후 로컬 offline export/analyze 경로를 운영 복구 수단으로 쓰지 않아 codebase와 CLI를 삭제했다.
 - `offline_gatekeeper_fast_reuse_bundle`: retired/removed. 과거 증적 링크만 남기고 codebase와 legacy wrapper를 삭제했다.
 - `april_follow_through_backfill.py`: retired/removed. 2026-04-28 월간 lightweight backfill 증적 이후 현재 자동화 consumer가 없어 삭제했다.
-- `claude_scalping_pattern_lab`, `gemini_scalping_pattern_lab`: postclose monitoring 분석랩이며, `scalping_pattern_lab_automation`이 두 lab의 EV backlog/observability를 machine-readable `code_improvement_order`와 `auto_family_candidate`로 집계한다. live routing, threshold mutation, 주문/청산 판단, repo code patch를 직접 수행하지 않는다.
+- `claude_scalping_pattern_lab`: postclose monitoring 분석랩이며, `scalping_pattern_lab_automation`이 EV backlog/observability를 machine-readable `code_improvement_order`와 `auto_family_candidate`로 집계한다. `gemini_scalping_pattern_lab`은 자동 실행에서 제거된 manual/archive-only 랩이다. live routing, threshold mutation, 주문/청산 판단, repo code patch를 직접 수행하지 않는다.
 
 ## 근거
 

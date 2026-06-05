@@ -4,10 +4,14 @@
 - conversion candidates: `574`
 - real conversion queue: `0`
 - positive EV runtime observed: `0`
+- positive EV not due until next PREOPEN: `26`
+- positive EV previous-policy natural match 0: `4`
 - positive EV real conversion queue: `0`
 - positive EV sample-floor blocked: `15`
 - bounded real canary requestable: `0`
-- top blocker: `submit_drought`
+- top blocker overall: `submit_drought`
+- top LDM bucket blocker: `env_mapping`
+- submit funnel blocker count: `6` (submit_drought_is_ldm_bucket_blocker=`False`)
 
 ## Top Conversion Blockers
 - #1 `submit_drought:BROKER_RECEIPT`: submit_drought -> close_submit_drought_broker_receipt

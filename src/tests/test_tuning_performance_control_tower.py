@@ -527,6 +527,63 @@ def test_control_tower_keeps_sim_only_progress_verdict(monkeypatch, tmp_path):
     assert report["summary"]["primary_verdict"] == "sim_progress_no_live_bucket"
 
 
+def test_control_tower_separates_not_due_positive_ev_and_submit_funnel_blockers(
+    monkeypatch, tmp_path
+):
+    report_root, apply_dir, output_dir = _patch_dirs(monkeypatch, tmp_path)
+    target = "2026-05-29"
+    _write_control_tower_minimal_sources(report_root, apply_dir, target, lifecycle_sim=3)
+    _write_json(
+        report_root / "key_lineage_ledger" / f"key_lineage_ledger_{target}.json",
+        {
+            "summary": {
+                "source_key_count": 2,
+                "same_key_continuity_pass_count": 0,
+                "key_mismatch_count": 0,
+                "catalog_missing_count": 0,
+                "preopen_missing_count": 0,
+                "not_instrumented_count": 0,
+                "natural_match_0_count": 1,
+                "positive_ev_runtime_observed_count": 0,
+                "positive_ev_sample_floor_blocked_count": 0,
+                "runtime_policy_source_date": "2026-05-28",
+                "postclose_candidate_source_date": target,
+                "new_postclose_candidates_due_state": "not_due_until_next_preopen",
+            }
+        },
+    )
+    _write_json(
+        report_root / "conversion_lane" / f"conversion_lane_{target}.json",
+        {
+            "summary": {
+                "real_conversion_queue_count": 0,
+                "positive_ev_runtime_observed_count": 0,
+                "positive_ev_real_conversion_queue_count": 0,
+                "positive_ev_sample_floor_blocked_count": 0,
+                "positive_ev_not_due_until_next_preopen_count": 1,
+                "positive_ev_previous_policy_natural_match_0_count": 1,
+                "sim_priority_only_count": 0,
+                "top_blocker_class": "submit_drought",
+                "top_ldm_bucket_blocker_class": "sample_floor",
+                "submit_funnel_blocker_count": 6,
+                "submit_drought_is_ldm_bucket_blocker": False,
+            },
+            "conversion_blocker_rank": [{"blocker_class": "submit_drought"}],
+            "real_conversion_queue": [],
+        },
+    )
+
+    report = mod.build_tuning_performance_control_tower(target)
+
+    assert report["summary"]["positive_ev_not_due_until_next_preopen_count"] == 1
+    assert report["summary"]["top_ldm_bucket_blocker_class"] == "sample_floor"
+    assert report["summary"]["submit_drought_is_ldm_bucket_blocker"] is False
+    markdown = (output_dir / f"tuning_performance_control_tower_{target}.md").read_text(encoding="utf-8")
+    assert "positive_ev_not_due_until_next_preopen" in markdown
+    assert "new_postclose_candidates_due_state=`not_due_until_next_preopen`" in markdown
+    assert "submit_drought_is_ldm_bucket_blocker=`False`" in markdown
+
+
 def test_control_tower_treats_missing_verifier_as_pending_not_source_gap(monkeypatch, tmp_path):
     report_root, apply_dir, _ = _patch_dirs(monkeypatch, tmp_path)
     target = "2026-05-29"

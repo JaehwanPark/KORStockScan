@@ -125,6 +125,8 @@ def _automation_fresh(report: dict[str, Any], target_date: str, summary_key: str
     if str(report.get("date") or "") != target_date:
         return "fail", f"date mismatch expected={target_date} actual={report.get('date')}"
     summary = report.get("ev_report_summary") if isinstance(report.get("ev_report_summary"), dict) else {}
+    if summary_key == "gemini_fresh" and summary.get("gemini_enabled") is False:
+        return "pass", str(summary.get("gemini_retired_reason") or "retired_from_automatic_execution")
     available = bool(summary.get(summary_key))
     if not available:
         stale_reason = summary.get("stale_reason") or "lab output unavailable; downstream must block it explicitly"
@@ -174,7 +176,7 @@ def build_pattern_lab_propagation_audit(target_date: str) -> dict[str, Any]:
     scalping_status, scalping_finding = _automation_fresh(scalping, target_date, "gemini_fresh")
     claude_status, claude_finding = _automation_fresh(scalping, target_date, "claude_fresh")
     swing_status, swing_finding = _automation_fresh(swing, target_date, "deepseek_lab_available")
-    checks.append(_check("scalping_gemini_automation_fresh", status=scalping_status, severity="source_quality_blocker" if scalping_status == "fail" else "warning" if scalping_status == "warning" else "info", finding=scalping_finding, source_paths=[scalping_path]))
+    checks.append(_check("scalping_gemini_automation_retired", status=scalping_status, severity="source_quality_blocker" if scalping_status == "fail" else "warning" if scalping_status == "warning" else "info", finding=scalping_finding, source_paths=[scalping_path]))
     checks.append(_check("scalping_claude_automation_fresh", status=claude_status, severity="source_quality_blocker" if claude_status == "fail" else "warning" if claude_status == "warning" else "info", finding=claude_finding, source_paths=[scalping_path]))
     checks.append(_check("deepseek_swing_automation_fresh", status=swing_status, severity="source_quality_blocker" if swing_status == "fail" else "warning" if swing_status == "warning" else "info", finding=swing_finding, source_paths=[swing_path]))
 

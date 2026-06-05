@@ -21,7 +21,7 @@
 - 기존 본문 상단 기준 시각은 `2026-04-20 KST`였고, `entry_filter canary 1차 판정 후 2026-04-24 POSTCLOSE A/B 재개` 같은 만료된 전환기 문구가 남아 있었다.
 - 현재 Plan Rebase 기준 entry owner는 `mechanical_momentum_latency_relief`, `dynamic_entry_price_resolver_p1`, `dynamic_entry_ai_price_canary_p2`이고, holding/exit owner는 `soft_stop_micro_grace`, `REVERSAL_ADD`, `holding_flow_override`다.
 - offline bundle 계열(`offline_gatekeeper_fast_reuse_bundle`, `offline_live_canary_bundle`)은 retired/removed 상태다. 과거 checklist 증적은 보존하되 현재 표준 경로로 쓰지 않는다.
-- Claude/Gemini pattern lab은 별도 금요일 cron이 아니라 `deploy/run_tuning_monitoring_postclose.sh`의 POSTCLOSE monitoring report-only 체인에서 다룬다.
+- Claude scalping pattern lab은 별도 금요일 cron이 아니라 POSTCLOSE report-only 체인에서 다룬다. Gemini scalping pattern lab은 자동 실행에서 제거됐고 manual/archive-only 분석으로 남긴다.
 
 ### 다음 액션
 
@@ -123,13 +123,13 @@
 
 1. `offline_live_canary_bundle`은 retired/removed 상태이며 standby 표준 경로로 쓰지 않는다.
 2. `offline_gatekeeper_fast_reuse_bundle` 전용 codebase와 legacy `gatekeeper_fast_reuse`/`entry_latency_offline` compatibility summary 생성 경로도 삭제했다.
-3. `claude_scalping_pattern_lab`, `gemini_scalping_pattern_lab`은 POSTCLOSE monitoring report-only 분석랩이다.
+3. `claude_scalping_pattern_lab`은 POSTCLOSE monitoring report-only 분석랩이다. `gemini_scalping_pattern_lab`은 자동 실행에서 제거된 manual/archive-only 랩이다.
 
 ### 근거
 
 - EC2 서버 증설 후 로컬 offline export/analyze 경로를 사용하지 않고, 최근 운영 실행 흔적도 `2026-04-28` 이후 확인되지 않았다.
 - `deploy/install_pattern_lab_cron.sh`는 dedicated Friday-only pattern lab cron 제거/폐기 스크립트다.
-- 현재 표준 체인은 `deploy/run_tuning_monitoring_postclose.sh`이며, parquet/DuckDB refresh와 shadow diff 이후 Claude/Gemini pattern lab을 실행한다.
+- 현재 표준 체인은 `deploy/run_tuning_monitoring_postclose.sh`이며, parquet/DuckDB refresh와 shadow diff 이후에도 Gemini pattern lab은 실행하지 않는다. Claude scalping lab만 opt-in 실행 대상이다.
 - pattern lab 출력의 `shadow-only` 또는 threshold 제안은 Plan Rebase의 신규 alpha shadow 금지선과 충돌할 수 있으므로, live 반영 전에는 별도 checklist/workorder가 필요하다.
 
 ### 다음 액션

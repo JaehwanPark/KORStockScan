@@ -35,6 +35,14 @@ REQUIRED_METRIC_CONTRACT_FIELDS = (
 )
 FORBIDDEN_TERMS = ("shadow-only", "canary-ready")
 ACTIVE_SOURCE_SUFFIXES = {".py", ".md", ".sh", ".txt", ".json"}
+RETIRED_PATTERN_LABS = {
+    "gemini_scalping": {
+        "reason": "retired_from_automatic_execution",
+        "manual_only": True,
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+    }
+}
 
 SCALPING_REENTRY_TERMS = (
     "threshold_cycle_ev",
@@ -92,12 +100,6 @@ def _source_rel(path: Path) -> str:
 
 def _lab_paths() -> dict[str, dict[str, Any]]:
     return {
-        "gemini_scalping": {
-            "lab_dir": PROJECT_ROOT / "analysis" / "gemini_scalping_pattern_lab",
-            "analysis_result": PROJECT_ROOT / "analysis" / "gemini_scalping_pattern_lab" / "outputs" / "ev_analysis_result.json",
-            "observability": PROJECT_ROOT / "analysis" / "gemini_scalping_pattern_lab" / "outputs" / "tuning_observability_summary.json",
-            "manifest": PROJECT_ROOT / "analysis" / "gemini_scalping_pattern_lab" / "outputs" / "run_manifest.json",
-        },
         "claude_scalping": {
             "lab_dir": PROJECT_ROOT / "analysis" / "claude_scalping_pattern_lab",
             "analysis_result": PROJECT_ROOT / "analysis" / "claude_scalping_pattern_lab" / "outputs" / "ev_analysis_result.json",
@@ -446,21 +448,6 @@ def build_pattern_lab_currentness_audit(target_date: str) -> dict[str, Any]:
         )
     )
 
-    gemini_config = paths["gemini_scalping"]["lab_dir"] / "config.py"
-    gemini_config_text = gemini_config.read_text(encoding="utf-8") if gemini_config.exists() else ""
-    checks.append(
-        _check(
-            check_id="gemini_remote_default_excluded",
-            ok="PATTERN_LAB_INCLUDE_REMOTE" in gemini_config_text and "\"false\"" in gemini_config_text.lower(),
-            finding="Gemini remote logs must be excluded by default and enabled only by PATTERN_LAB_INCLUDE_REMOTE=true.",
-            source_paths=[gemini_config],
-            severity="source_quality_blocker",
-            order_title="Guard Gemini remote log source mode",
-            files_likely_touched=["analysis/gemini_scalping_pattern_lab/config.py", "analysis/gemini_scalping_pattern_lab/build_dataset.py"],
-            acceptance_tests=["PYTHONPATH=. .venv/bin/pytest -q src/tests/test_pattern_lab_currentness_audit.py"],
-        )
-    )
-
     claude_prepare = paths["claude_scalping"]["lab_dir"] / "prepare_dataset.py"
     claude_prepare_text = claude_prepare.read_text(encoding="utf-8") if claude_prepare.exists() else ""
     checks.append(
@@ -492,10 +479,7 @@ def build_pattern_lab_currentness_audit(target_date: str) -> dict[str, Any]:
         )
     )
 
-    scalping_lab_dirs = [
-        paths["gemini_scalping"]["lab_dir"],
-        paths["claude_scalping"]["lab_dir"],
-    ]
+    scalping_lab_dirs = [paths["claude_scalping"]["lab_dir"]]
     feedback_sources = {
         "scalping": _feedback_source_status(
             target_date=target_date,
@@ -521,8 +505,6 @@ def build_pattern_lab_currentness_audit(target_date: str) -> dict[str, Any]:
             severity="automation_handoff_gap",
             order_title="Feed LDM/threshold feedback into scalping pattern labs",
             files_likely_touched=[
-                "analysis/gemini_scalping_pattern_lab/build_dataset.py",
-                "analysis/gemini_scalping_pattern_lab/build_llm_payload.py",
                 "analysis/claude_scalping_pattern_lab/prepare_dataset.py",
                 "analysis/claude_scalping_pattern_lab/build_claude_payload.py",
                 "src/engine/pattern_lab_currentness_audit.py",
@@ -570,7 +552,6 @@ def build_pattern_lab_currentness_audit(target_date: str) -> dict[str, Any]:
             ),
             source_paths=[
                 PROJECT_ROOT / "src" / "engine",
-                PROJECT_ROOT / "analysis" / "gemini_scalping_pattern_lab",
                 PROJECT_ROOT / "analysis" / "claude_scalping_pattern_lab",
                 PROJECT_ROOT / "analysis" / "deepseek_swing_pattern_lab",
             ],
@@ -627,6 +608,7 @@ def build_pattern_lab_currentness_audit(target_date: str) -> dict[str, Any]:
                 for item in feedback_sources.values()
             ),
         },
+        "retired_labs": RETIRED_PATTERN_LABS,
         "feedback_sources": feedback_sources,
         "checks": checks,
         "code_improvement_orders": orders,

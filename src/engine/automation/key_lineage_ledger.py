@@ -84,6 +84,10 @@ def _runtime_apply_path(target_date: str) -> Path:
     return exact
 
 
+def _apply_source_date(apply_plan: dict[str, Any], target_date: str) -> str:
+    return str(apply_plan.get("source_date") or target_date)
+
+
 def _catalog_path_from_apply(
     apply_plan: dict[str, Any],
     *,
@@ -566,6 +570,7 @@ def build_key_lineage_ledger(target_date: str) -> dict[str, Any]:
     refinement_path = DATA_DIR / "report" / "ldm_hypothesis_parent_refinement" / f"ldm_hypothesis_parent_refinement_{target_date}.json"
     apply_path = _runtime_apply_path(target_date)
     apply_plan = _load_json(apply_path)
+    apply_source_date = _apply_source_date(apply_plan, target_date)
     scalp_catalog_path = _catalog_path_from_apply(
         apply_plan,
         section_key="scalp_sim_auto_approval",
@@ -644,6 +649,15 @@ def build_key_lineage_ledger(target_date: str) -> dict[str, Any]:
             "ldm_hypothesis_parent_refinement": str(refinement_path),
         },
         "summary": {
+            "runtime_observation_target_date": target_date,
+            "runtime_policy_source_date": apply_source_date,
+            "postclose_candidate_source_date": target_date,
+            "runtime_policy_matches_postclose_candidate_source": apply_source_date == target_date,
+            "new_postclose_candidates_due_state": (
+                "due_same_day"
+                if apply_source_date == target_date
+                else "not_due_until_next_preopen"
+            ),
             "source_key_count": len(rows),
             "same_key_continuity_pass_count": continuity_pass_count,
             "bucket_same_key_continuity_pass_count": sum(
@@ -674,6 +688,10 @@ def _render_markdown(report: dict[str, Any]) -> str:
         "",
         "## Decision",
         f"- source keys: `{summary.get('source_key_count', 0)}`",
+        f"- runtime observation target date: `{summary.get('runtime_observation_target_date') or '-'}`",
+        f"- runtime policy source date: `{summary.get('runtime_policy_source_date') or '-'}`",
+        f"- postclose candidate source date: `{summary.get('postclose_candidate_source_date') or '-'}`",
+        f"- new postclose candidate due state: `{summary.get('new_postclose_candidates_due_state') or '-'}`",
         f"- same-key continuity pass: `{summary.get('same_key_continuity_pass_count', 0)}`",
         f"- positive EV runtime observed: `{summary.get('positive_ev_runtime_observed_count', 0)}`",
         f"- positive EV sample-floor blocked: `{summary.get('positive_ev_sample_floor_blocked_count', 0)}`",

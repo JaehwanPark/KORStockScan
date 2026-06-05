@@ -446,7 +446,8 @@ def _pattern_lab_automation_summary(target_date: str) -> tuple[dict[str, Any], s
         )
     summary = payload.get("ev_report_summary") if isinstance(payload.get("ev_report_summary"), dict) else {}
     warnings: list[str] = []
-    if not bool(summary.get("gemini_fresh")):
+    gemini_enabled = bool(summary.get("gemini_enabled", True))
+    if gemini_enabled and not bool(summary.get("gemini_fresh")):
         warnings.append("pattern_lab_gemini_stale")
     if not bool(summary.get("claude_fresh")):
         warnings.append("pattern_lab_claude_stale")
@@ -454,7 +455,9 @@ def _pattern_lab_automation_summary(target_date: str) -> tuple[dict[str, Any], s
         {
             "available": True,
             "artifact": str(json_path),
+            "gemini_enabled": gemini_enabled,
             "gemini_fresh": bool(summary.get("gemini_fresh")),
+            "gemini_retired_reason": summary.get("gemini_retired_reason"),
             "claude_fresh": bool(summary.get("claude_fresh")),
             "consensus_count": _safe_int(summary.get("consensus_count"), 0),
             "auto_family_candidate_count": _safe_int(summary.get("auto_family_candidate_count"), 0),

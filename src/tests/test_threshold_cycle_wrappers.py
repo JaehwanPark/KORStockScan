@@ -4,7 +4,6 @@ from pathlib import Path
 def test_postclose_wrapper_runs_pattern_labs_before_automation_and_ev_report():
     script = Path("deploy/run_threshold_cycle_postclose.sh").read_text(encoding="utf-8")
 
-    gemini_idx = script.index("analysis/gemini_scalping_pattern_lab/run.sh")
     claude_idx = script.index("analysis/claude_scalping_pattern_lab/run_all.sh")
     automation_idx = script.index("src.engine.scalping_pattern_lab_automation")
     currentness_idx = script.index("src.engine.pattern_lab_currentness_audit")
@@ -13,7 +12,8 @@ def test_postclose_wrapper_runs_pattern_labs_before_automation_and_ev_report():
 
     assert "ANALYSIS_START_DATE=\"$PATTERN_LAB_START_DATE\" ANALYSIS_END_DATE=\"$TARGET_DATE\"" in script
     assert 'PATTERN_LAB_START_DATE="${PATTERN_LAB_ANALYSIS_START_DATE:-${KORSTOCKSCAN_CLEAN_TUNING_BASELINE_DATE:-2026-06-04}}"' in script
-    assert gemini_idx < automation_idx
+    assert "analysis/gemini_scalping_pattern_lab/run.sh" not in script
+    assert "retired_from_automatic_execution" in script
     assert claude_idx < automation_idx
     assert automation_idx < currentness_idx < ai_review_idx < ev_idx
     assert 'RUN_PATTERN_LAB_CURRENTNESS_AUDIT="${THRESHOLD_CYCLE_RUN_PATTERN_LAB_CURRENTNESS_AUDIT:-true}"' in script
@@ -414,7 +414,7 @@ def test_postclose_wrapper_resource_guards_heavy_steps():
     assert "availability guard wait" in script
     assert 'wait_for_postclose_resources "daily_threshold_cycle_report"' in script
     assert 'wait_for_postclose_resources "swing_lifecycle_audit"' in script
-    assert 'wait_for_postclose_resources "gemini_scalping_pattern_lab"' in script
+    assert 'wait_for_postclose_resources "gemini_scalping_pattern_lab"' not in script
     assert 'wait_for_postclose_resources "threshold_cycle_ev_${pass_label}"' in script
     assert 'run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.backfill_threshold_cycle_events' in script
     assert 'run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.daily_threshold_cycle_report' in script
@@ -461,6 +461,8 @@ def test_tuning_monitoring_wrapper_skips_pattern_labs_by_default():
     assert 'RUN_PATTERN_LABS="${TUNING_MONITORING_RUN_PATTERN_LABS:-false}"' in script
     assert 'canonical_runner=THRESHOLD_CYCLE_POSTCLOSE' in script
     assert 'if [[ "$RUN_PATTERN_LABS" == "1" || "$RUN_PATTERN_LABS" == "true" ]]' in script
+    assert "analysis/gemini_scalping_pattern_lab/run.sh" not in script
+    assert 'record_step "gemini_scalping_pattern_lab" "skipped" 0 0 "retired_from_automatic_execution"' in script
 
 
 def test_calibration_wrapper_retries_and_fails_unavailable_ai_correction():

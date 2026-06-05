@@ -135,6 +135,7 @@ def _candidate_from_lifecycle(item: dict[str, Any], strategy_scope: str) -> dict
     bridge_state = "ready" if state == "live_auto_apply_ready" else "not_ready"
     source_quality_state = "blocked" if source_gap else "pass"
     sample = _safe_int(item.get("sample"))
+    required_sample = _safe_int(item.get("parent_sample_floor") or item.get("sample_floor"), 0)
     ev = _safe_float(item.get("source_quality_adjusted_ev_pct") or item.get("equal_weight_avg_profit_pct"))
     if state == "lifecycle_flow_sim_probe_candidate":
         conversion_state, blocker = "sim_applied", "sample_floor"
@@ -154,9 +155,14 @@ def _candidate_from_lifecycle(item: dict[str, Any], strategy_scope: str) -> dict
         "parent_bucket_id": item.get("parent_bucket_id") or f"{item.get('stage')}:{item.get('bucket_type')}",
         "primary_ev": ev,
         "sample": sample,
+        "required_sample": required_sample or None,
+        "sample_floor_status": "unknown_floor" if not required_sample else (
+            "pass" if sample >= required_sample else "below_floor"
+        ),
         "source_quality_state": source_quality_state,
         "sim_policy_state": state,
         "runtime_observation_state": "not_checked",
+        "runtime_observation_scope": "new_postclose_candidate_not_due_until_next_preopen",
         "bridge_state": bridge_state,
         "conversion_state": conversion_state,
         "next_blocker": blocker,
@@ -178,6 +184,7 @@ def _candidate_from_matched_bucket_lineage(row: dict[str, Any]) -> dict[str, Any
         return None
     ev = _safe_float(evidence.get("primary_ev"))
     sample = _safe_int(evidence.get("sample"))
+    required_sample = _safe_int(evidence.get("parent_sample_floor") or evidence.get("sample_floor"), 0)
     return {
         "candidate_id": source_key_id,
         "strategy_scope": "scalp",
@@ -186,9 +193,14 @@ def _candidate_from_matched_bucket_lineage(row: dict[str, Any]) -> dict[str, Any
         "parent_bucket_id": evidence.get("bucket_id") or source_key_id.rsplit(":", 1)[0],
         "primary_ev": ev,
         "sample": sample,
+        "required_sample": required_sample or None,
+        "sample_floor_status": "unknown_floor" if not required_sample else (
+            "pass" if sample >= required_sample else "below_floor"
+        ),
         "source_quality_state": "pass",
         "sim_policy_state": str(evidence.get("classification_state") or "runtime_applied_bucket_policy"),
         "runtime_observation_state": "matched",
+        "runtime_observation_scope": "previous_preopen_policy_runtime_observed",
         "bridge_state": "not_ready",
         "conversion_state": "runtime_observed",
         "next_blocker": "sample_floor",
@@ -211,6 +223,33 @@ def _annotate_conversion_candidate(candidate: dict[str, Any]) -> None:
     candidate["positive_ev_candidate"] = bool(ev is not None and ev > 0)
     candidate["sample_floor_blocked"] = sample_floor_blocked
     candidate["runtime_observed_same_key"] = bool(runtime_observed)
+    if candidate.get("runtime_observed_same_key"):
+        candidate.setdefault("runtime_observation_scope", "previous_preopen_policy_runtime_observed")
+    else:
+        candidate.setdefault("runtime_observation_scope", "not_observed_or_not_due")
+
+
+def _merge_lineage_candidate(candidate: dict[str, Any], lineage: dict[str, Any]) -> None:
+    evidence = lineage.get("evidence") if isinstance(lineage.get("evidence"), dict) else {}
+    if lineage.get("same_key_continuity") == "pass":
+        candidate["runtime_observation_state"] = "matched"
+        candidate["runtime_observation_scope"] = "previous_preopen_policy_runtime_observed"
+        candidate["runtime_observed_same_key"] = True
+        candidate["conversion_state"] = "runtime_observed"
+        candidate["runtime_match_key"] = lineage.get("runtime_match_key")
+        candidate["postclose_observed_key"] = lineage.get("postclose_observed_key")
+        candidate["next_blocker"] = "sample_floor"
+    elif lineage.get("conversion_state") == "natural_match_0":
+        candidate["runtime_observation_scope"] = "previous_preopen_policy_natural_match_0"
+    elif candidate.get("runtime_observation_scope") == "not_observed_or_not_due":
+        candidate["runtime_observation_scope"] = "new_postclose_candidate_not_due_until_next_preopen"
+    if candidate.get("primary_ev") is None:
+        candidate["primary_ev"] = _safe_float(evidence.get("primary_ev") or evidence.get("source_quality_adjusted_ev_pct"))
+    if not candidate.get("required_sample"):
+        floor = _safe_int(evidence.get("parent_sample_floor") or evidence.get("sample_floor"), 0)
+        if floor:
+            candidate["required_sample"] = floor
+            candidate["sample_floor_status"] = "pass" if _safe_int(candidate.get("sample")) >= floor else "below_floor"
 
 
 def _candidates_from_lifecycle(discovery: dict[str, Any], strategy_scope: str) -> list[dict[str, Any]]:
@@ -350,6 +389,17 @@ def _submit_drought_blockers(buy_funnel: dict[str, Any]) -> list[dict[str, Any]]
     ]
 
 
+def _lineage_by_source_key(ledger: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    out: dict[str, dict[str, Any]] = {}
+    for row in ledger.get("lineage_rows") or []:
+        if not isinstance(row, dict):
+            continue
+        source_key_id = str(row.get("source_key_id") or "").strip()
+        if source_key_id:
+            out[source_key_id] = row
+    return out
+
+
 def _lineage_handoff_rows(ledger: dict[str, Any]) -> list[dict[str, Any]]:
     rows = ledger.get("lineage_rows") if isinstance(ledger.get("lineage_rows"), list) else []
     return [
@@ -422,6 +472,12 @@ def build_conversion_lane(target_date: str) -> dict[str, Any]:
     candidates = _candidates_from_lifecycle(lifecycle, "scalp")
     candidates.extend(_candidates_from_lifecycle(swing_lifecycle, "swing"))
     seen = {item["candidate_id"] for item in candidates}
+    seen_source_keys = {str(item.get("source_key_id") or "") for item in candidates if item.get("source_key_id")}
+    lineage_by_key = _lineage_by_source_key(key_ledger)
+    for candidate in candidates:
+        lineage = lineage_by_key.get(str(candidate.get("source_key_id") or ""))
+        if lineage:
+            _merge_lineage_candidate(candidate, lineage)
     for row in runtime_gap.get("candidate_route_ledger") or []:
         if not isinstance(row, dict):
             continue
@@ -441,8 +497,11 @@ def build_conversion_lane(target_date: str) -> dict[str, Any]:
         candidate = _candidate_from_matched_bucket_lineage(row)
         if not candidate or candidate["candidate_id"] in seen:
             continue
+        if str(candidate.get("source_key_id") or "") in seen_source_keys:
+            continue
         candidates.append(candidate)
         seen.add(candidate["candidate_id"])
+        seen_source_keys.add(str(candidate.get("source_key_id") or ""))
     for candidate in candidates:
         _annotate_conversion_candidate(candidate)
 
@@ -469,7 +528,8 @@ def build_conversion_lane(target_date: str) -> dict[str, Any]:
                 rank_seed=20,
             )
         )
-    blockers.extend(_submit_drought_blockers(buy_funnel))
+    submit_drought_blockers = _submit_drought_blockers(buy_funnel)
+    blockers.extend(submit_drought_blockers)
     blockers.sort(
         key=lambda item: (
             _safe_int(item.get("conversion_impact_rank"), 999),
@@ -529,12 +589,28 @@ def build_conversion_lane(target_date: str) -> dict[str, Any]:
     positive_ev_sample_floor_blocked_count = sum(
         1 for item in candidates if item.get("positive_ev_candidate") and item.get("sample_floor_blocked")
     )
+    positive_ev_not_due_until_next_preopen_count = sum(
+        1
+        for item in candidates
+        if item.get("positive_ev_candidate")
+        and item.get("runtime_observation_scope") == "new_postclose_candidate_not_due_until_next_preopen"
+    )
+    positive_ev_previous_policy_natural_match_0_count = sum(
+        1
+        for item in candidates
+        if item.get("positive_ev_candidate")
+        and item.get("runtime_observation_scope") == "previous_preopen_policy_natural_match_0"
+    )
+    ldm_bucket_blockers = [item for item in blockers if item.get("blocker_class") != "submit_drought"]
     summary = {
         "conversion_candidate_count": len(candidates),
         "bounded_real_canary_requestable_count": sum(
             1 for item in candidates if item.get("conversion_state") == "bounded_real_canary_requestable"
         ),
         "top_blocker_class": blockers[0]["blocker_class"] if blockers else None,
+        "top_ldm_bucket_blocker_class": ldm_bucket_blockers[0]["blocker_class"] if ldm_bucket_blockers else None,
+        "submit_funnel_blocker_count": len(submit_drought_blockers),
+        "submit_drought_is_ldm_bucket_blocker": False,
         "scalp_conversion_candidate_count": sum(1 for item in candidates if item.get("strategy_scope") == "scalp"),
         "swing_conversion_candidate_count": sum(1 for item in candidates if item.get("strategy_scope") == "swing"),
         "sim_priority_only_count": len(sim_priority_only),
@@ -543,6 +619,8 @@ def build_conversion_lane(target_date: str) -> dict[str, Any]:
         "positive_ev_runtime_observed_count": positive_ev_runtime_observed_count,
         "positive_ev_real_conversion_queue_count": positive_ev_real_conversion_queue_count,
         "positive_ev_sample_floor_blocked_count": positive_ev_sample_floor_blocked_count,
+        "positive_ev_not_due_until_next_preopen_count": positive_ev_not_due_until_next_preopen_count,
+        "positive_ev_previous_policy_natural_match_0_count": positive_ev_previous_policy_natural_match_0_count,
         "blocker_class_counts": dict(blocker_counts),
         "blocker_axis_counts": dict(blocker_axis_counts),
         "submit_drought_closure_axis_count": len(submit_drought_axes),
@@ -577,10 +655,15 @@ def _render_markdown(report: dict[str, Any]) -> str:
         f"- conversion candidates: `{summary.get('conversion_candidate_count', 0)}`",
         f"- real conversion queue: `{summary.get('real_conversion_queue_count', 0)}`",
         f"- positive EV runtime observed: `{summary.get('positive_ev_runtime_observed_count', 0)}`",
+        f"- positive EV not due until next PREOPEN: `{summary.get('positive_ev_not_due_until_next_preopen_count', 0)}`",
+        f"- positive EV previous-policy natural match 0: `{summary.get('positive_ev_previous_policy_natural_match_0_count', 0)}`",
         f"- positive EV real conversion queue: `{summary.get('positive_ev_real_conversion_queue_count', 0)}`",
         f"- positive EV sample-floor blocked: `{summary.get('positive_ev_sample_floor_blocked_count', 0)}`",
         f"- bounded real canary requestable: `{summary.get('bounded_real_canary_requestable_count', 0)}`",
-        f"- top blocker: `{summary.get('top_blocker_class') or 'none'}`",
+        f"- top blocker overall: `{summary.get('top_blocker_class') or 'none'}`",
+        f"- top LDM bucket blocker: `{summary.get('top_ldm_bucket_blocker_class') or 'none'}`",
+        f"- submit funnel blocker count: `{summary.get('submit_funnel_blocker_count', 0)}` "
+        f"(submit_drought_is_ldm_bucket_blocker=`{summary.get('submit_drought_is_ldm_bucket_blocker')}`)",
         "",
         "## Top Conversion Blockers",
     ]

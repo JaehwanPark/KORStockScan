@@ -45,7 +45,7 @@ def _seed_labs(project_root: Path, target_date: str) -> None:
         ("swing_strategy_discovery_ev", "swing_strategy_discovery_ev"),
     ):
         _write_json(report_dir / report_name / f"{stem}_{target_date}.json", {"runtime_effect": False})
-    for lab in ("gemini_scalping_pattern_lab", "claude_scalping_pattern_lab"):
+    for lab in ("claude_scalping_pattern_lab",):
         lab_dir = project_root / "analysis" / lab
         outputs = lab_dir / "outputs"
         outputs.mkdir(parents=True, exist_ok=True)
@@ -57,7 +57,6 @@ def _seed_labs(project_root: Path, target_date: str) -> None:
             "lifecycle_bucket_discovery\nruntime_approval_summary\n",
             encoding="utf-8",
         )
-        (lab_dir / "config.py").write_text('INCLUDE_REMOTE = os.getenv("PATTERN_LAB_INCLUDE_REMOTE", "false")\n', encoding="utf-8")
         (lab_dir / "prepare_dataset.py").write_text(
             "TRADE_FACT_COLUMNS = []\npd.DataFrame(columns=TRADE_FACT_COLUMNS).to_csv(path)\n",
             encoding="utf-8",
@@ -122,10 +121,6 @@ def test_currentness_audit_emits_runtime_false_orders_for_gaps(tmp_path, monkeyp
         encoding="utf-8",
     )
     _write_json(
-        project_root / "analysis" / "gemini_scalping_pattern_lab" / "outputs" / "ev_analysis_result.json",
-        {"schema_version": 1},
-    )
-    _write_json(
         project_root / "analysis" / "deepseek_swing_pattern_lab" / "outputs" / "data_quality_report.json",
         {"schema_version": 2},
     )
@@ -137,7 +132,6 @@ def test_currentness_audit_emits_runtime_false_orders_for_gaps(tmp_path, monkeyp
 
     assert report["status"] == "warning"
     order_ids = {order["order_id"] for order in report["code_improvement_orders"]}
-    assert "order_pattern_lab_currentness_audit_gemini_scalping_metric_contract" in order_ids
     assert "order_pattern_lab_currentness_audit_active_source_forbidden_terms" in order_ids
     assert "order_pattern_lab_currentness_audit_deepseek_sim_probe_provenance" in order_ids
     assert all(order["runtime_effect"] is False for order in report["code_improvement_orders"])
@@ -150,10 +144,6 @@ def test_currentness_audit_surfaces_pattern_lab_feedback_and_ai_review_gaps(tmp_
     target_date = "2026-05-15"
     _seed_labs(project_root, target_date)
 
-    (project_root / "analysis" / "gemini_scalping_pattern_lab" / "README.md").write_text(
-        "report_only_observation\n",
-        encoding="utf-8",
-    )
     (project_root / "analysis" / "claude_scalping_pattern_lab" / "README.md").write_text(
         "report_only_observation\n",
         encoding="utf-8",
@@ -196,7 +186,7 @@ def test_currentness_audit_surfaces_observability_source_contract_orders(tmp_pat
         "data_quality_effect": False,
     }
     _write_json(
-        project_root / "analysis" / "gemini_scalping_pattern_lab" / "outputs" / "tuning_observability_summary.json",
+        project_root / "analysis" / "claude_scalping_pattern_lab" / "outputs" / "tuning_observability_summary.json",
         _observability_payload(source_contract_status="fail", orders=[embedded_order]),
     )
 
@@ -206,7 +196,7 @@ def test_currentness_audit_surfaces_observability_source_contract_orders(tmp_pat
     report = mod.build_pattern_lab_currentness_audit(target_date)
 
     order_ids = {order["order_id"] for order in report["code_improvement_orders"]}
-    assert "order_pattern_lab_currentness_audit_gemini_scalping_observability_source_contract" in order_ids
+    assert "order_pattern_lab_currentness_audit_claude_scalping_observability_source_contract" in order_ids
     assert "order_tuning_observability_performance_tuning_missing_contract_gap" in order_ids
     embedded = next(
         order

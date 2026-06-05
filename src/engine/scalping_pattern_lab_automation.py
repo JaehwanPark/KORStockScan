@@ -15,6 +15,14 @@ from src.engine.daily_threshold_cycle_report import CALIBRATION_SAFETY_GUARDS, R
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 GEMINI_LAB_DIR = PROJECT_ROOT / "analysis" / "gemini_scalping_pattern_lab"
 CLAUDE_LAB_DIR = PROJECT_ROOT / "analysis" / "claude_scalping_pattern_lab"
+RETIRED_LABS = {
+    "gemini": {
+        "reason": "retired_from_automatic_execution",
+        "manual_only": True,
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+    }
+}
 PATTERN_LAB_AUTOMATION_DIR = REPORT_DIR / "scalping_pattern_lab_automation"
 SCALP_ENTRY_ADM_DIR = REPORT_DIR / "scalp_entry_action_decision_matrix"
 AUTOMATION_SCHEMA_VERSION = 1
@@ -433,7 +441,6 @@ def _code_improvement_orders(findings: list[dict[str, Any]], solo_findings: list
 def build_scalping_pattern_lab_automation_report(target_date: str) -> dict[str, Any]:
     target_date = str(target_date).strip()
     lab_results = [
-        _load_lab("gemini", GEMINI_LAB_DIR, target_date),
         _load_lab("claude", CLAUDE_LAB_DIR, target_date),
     ]
     consensus, solo = _merge_findings(lab_results)
@@ -459,8 +466,10 @@ def build_scalping_pattern_lab_automation_report(target_date: str) -> dict[str, 
             "direct_family_design_authority": False,
             "downstream_route": "threshold_cycle_ev -> code_improvement_workorder -> implementation_review",
             "forbidden_uses": FORBIDDEN_USES,
+            "retired_labs": RETIRED_LABS,
         },
         "lab_freshness": {result["lab"]: result["freshness"] for result in lab_results},
+        "retired_labs": RETIRED_LABS,
         "consensus_findings": consensus,
         "solo_findings": solo,
         "existing_family_inputs": existing_inputs,
@@ -469,8 +478,11 @@ def build_scalping_pattern_lab_automation_report(target_date: str) -> dict[str, 
         "rejected_findings": rejected,
         "scalp_entry_adm_summary": entry_adm_summary,
         "ev_report_summary": {
-            "gemini_fresh": bool(lab_results[0]["freshness"]["fresh"]),
-            "claude_fresh": bool(lab_results[1]["freshness"]["fresh"]),
+            "gemini_enabled": False,
+            "gemini_fresh": False,
+            "gemini_retired_reason": RETIRED_LABS["gemini"]["reason"],
+            "claude_fresh": bool(lab_results[0]["freshness"]["fresh"]),
+            "active_labs": [result["lab"] for result in lab_results],
             "consensus_count": len(consensus),
             "auto_family_candidate_count": len(family_candidates),
             "code_improvement_order_count": len(orders),
@@ -507,7 +519,10 @@ def render_scalping_pattern_lab_automation_markdown(report: dict[str, Any]) -> s
         "",
         "## Summary",
         f"- gemini_fresh: `{summary.get('gemini_fresh')}`",
+        f"- gemini_enabled: `{summary.get('gemini_enabled')}`",
+        f"- gemini_retired_reason: `{summary.get('gemini_retired_reason')}`",
         f"- claude_fresh: `{summary.get('claude_fresh')}`",
+        f"- active_labs: `{summary.get('active_labs')}`",
         f"- consensus_count: `{summary.get('consensus_count')}`",
         f"- auto_family_candidate_count: `{summary.get('auto_family_candidate_count')}`",
         f"- code_improvement_order_count: `{summary.get('code_improvement_order_count')}`",

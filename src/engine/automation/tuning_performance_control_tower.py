@@ -413,6 +413,13 @@ def _conversion_first_summary(conversion_lane: dict[str, Any], key_lineage_ledge
         "top_conversion_blockers": blockers[:10],
         "key_lineage_status": {
             "source_key_count": _safe_int(lineage_summary.get("source_key_count")),
+            "runtime_observation_target_date": lineage_summary.get("runtime_observation_target_date"),
+            "runtime_policy_source_date": lineage_summary.get("runtime_policy_source_date"),
+            "postclose_candidate_source_date": lineage_summary.get("postclose_candidate_source_date"),
+            "runtime_policy_matches_postclose_candidate_source": lineage_summary.get(
+                "runtime_policy_matches_postclose_candidate_source"
+            ),
+            "new_postclose_candidates_due_state": lineage_summary.get("new_postclose_candidates_due_state"),
             "same_key_continuity_pass_count": _safe_int(lineage_summary.get("same_key_continuity_pass_count")),
             "key_mismatch_count": _safe_int(lineage_summary.get("key_mismatch_count")),
             "catalog_missing_count": _safe_int(lineage_summary.get("catalog_missing_count")),
@@ -439,6 +446,15 @@ def _conversion_first_summary(conversion_lane: dict[str, Any], key_lineage_ledge
             conversion_summary.get("positive_ev_sample_floor_blocked_count")
             or lineage_summary.get("positive_ev_sample_floor_blocked_count")
         ),
+        "positive_ev_not_due_until_next_preopen_count": _safe_int(
+            conversion_summary.get("positive_ev_not_due_until_next_preopen_count")
+        ),
+        "positive_ev_previous_policy_natural_match_0_count": _safe_int(
+            conversion_summary.get("positive_ev_previous_policy_natural_match_0_count")
+        ),
+        "top_ldm_bucket_blocker_class": conversion_summary.get("top_ldm_bucket_blocker_class"),
+        "submit_funnel_blocker_count": _safe_int(conversion_summary.get("submit_funnel_blocker_count")),
+        "submit_drought_is_ldm_bucket_blocker": conversion_summary.get("submit_drought_is_ldm_bucket_blocker"),
         "why_not_real_runtime": blockers[:20],
         "summary": conversion_summary,
     }
@@ -855,15 +871,23 @@ def _markdown(report: dict[str, Any]) -> str:
         "",
         f"- real_conversion_queue: `{conversion_first.get('real_conversion_queue_count', 0)}`",
         f"- positive_ev_runtime_observed: `{conversion_first.get('positive_ev_runtime_observed_count', 0)}`",
+        f"- positive_ev_not_due_until_next_preopen: `{conversion_first.get('positive_ev_not_due_until_next_preopen_count', 0)}`",
+        f"- positive_ev_previous_policy_natural_match_0: `{conversion_first.get('positive_ev_previous_policy_natural_match_0_count', 0)}`",
         f"- positive_ev_real_conversion_queue: `{conversion_first.get('positive_ev_real_conversion_queue_count', 0)}`",
         f"- positive_ev_sample_floor_blocked: `{conversion_first.get('positive_ev_sample_floor_blocked_count', 0)}`",
         f"- sim_priority_only: `{conversion_first.get('sim_priority_only_count', 0)}`",
+        f"- observation_scope: runtime_policy_source_date=`{lineage_status.get('runtime_policy_source_date') or '-'}` "
+        f"postclose_candidate_source_date=`{lineage_status.get('postclose_candidate_source_date') or '-'}` "
+        f"new_postclose_candidates_due_state=`{lineage_status.get('new_postclose_candidates_due_state') or '-'}`",
         f"- key_lineage: pass=`{lineage_status.get('same_key_continuity_pass_count', 0)}` "
         f"mismatch=`{lineage_status.get('key_mismatch_count', 0)}` "
         f"catalog_missing=`{lineage_status.get('catalog_missing_count', 0)}` "
         f"preopen_missing=`{lineage_status.get('preopen_missing_count', 0)}` "
         f"not_instrumented=`{lineage_status.get('not_instrumented_count', 0)}`",
-        f"- top_blocker: `{top_blockers[0].get('blocker_class') if top_blockers else 'none'}`",
+        f"- top_blocker_overall: `{top_blockers[0].get('blocker_class') if top_blockers else 'none'}`",
+        f"- top_ldm_bucket_blocker: `{conversion_first.get('top_ldm_bucket_blocker_class') or 'none'}`; "
+        f"submit_funnel_blocker_count=`{conversion_first.get('submit_funnel_blocker_count', 0)}` "
+        f"submit_drought_is_ldm_bucket_blocker=`{conversion_first.get('submit_drought_is_ldm_bucket_blocker')}`",
         "",
         "## 판정",
         "",
@@ -1137,11 +1161,20 @@ def build_tuning_performance_control_tower(target_date: str) -> dict[str, Any]:
             "positive_ev_runtime_observed_count": conversion_first["positive_ev_runtime_observed_count"],
             "positive_ev_real_conversion_queue_count": conversion_first["positive_ev_real_conversion_queue_count"],
             "positive_ev_sample_floor_blocked_count": conversion_first["positive_ev_sample_floor_blocked_count"],
+            "positive_ev_not_due_until_next_preopen_count": conversion_first[
+                "positive_ev_not_due_until_next_preopen_count"
+            ],
+            "positive_ev_previous_policy_natural_match_0_count": conversion_first[
+                "positive_ev_previous_policy_natural_match_0_count"
+            ],
             "top_conversion_blocker_class": (
                 conversion_first["top_conversion_blockers"][0].get("blocker_class")
                 if conversion_first["top_conversion_blockers"]
                 else None
             ),
+            "top_ldm_bucket_blocker_class": conversion_first["top_ldm_bucket_blocker_class"],
+            "submit_funnel_blocker_count": conversion_first["submit_funnel_blocker_count"],
+            "submit_drought_is_ldm_bucket_blocker": conversion_first["submit_drought_is_ldm_bucket_blocker"],
             "key_lineage_blocker_count": (
                 conversion_first["key_lineage_status"]["key_mismatch_count"]
                 + conversion_first["key_lineage_status"]["catalog_missing_count"]
