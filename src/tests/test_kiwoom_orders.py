@@ -468,6 +468,102 @@ def test_get_deposit_transport_failure_enters_short_cooldown(monkeypatch):
     assert kiwoom_orders.get_last_deposit_meta()["source"] == "cooldown_fallback"
 
 
+def test_get_deposit_transport_failure_with_cache_is_not_error_logged(monkeypatch):
+    class TransportResponse:
+        status_code = 200
+
+        def json(self):
+            return {
+                "return_code": "2000",
+                "return_msg": "[2000](-994:fail to sendReceive:WINGSj)",
+            }
+
+    info_logs = []
+    error_logs = []
+
+    monkeypatch.setattr(sniper_config, "CONF", {"VIRTUAL_ORDERABLE_AMOUNT": 0})
+    monkeypatch.setattr(kiwoom_orders, "_LAST_DEPOSIT_OVERRIDE", None)
+    _seed_successful_deposit_for_token("TOKEN", 9_876_543, 995.0)
+    monkeypatch.setattr(kiwoom_orders, "_DEPOSIT_API_COOLDOWN_UNTIL", 0.0)
+    monkeypatch.setattr(kiwoom_orders, "_DEPOSIT_API_COOLDOWN_REASON", "")
+    monkeypatch.setattr(kiwoom_orders.kiwoom_utils, "get_api_url", lambda path: f"https://example.test{path}")
+    monkeypatch.setattr(kiwoom_orders.requests, "post", lambda *args, **kwargs: TransportResponse())
+    monkeypatch.setattr(kiwoom_orders, "log_info", lambda msg: info_logs.append(msg))
+    monkeypatch.setattr(kiwoom_orders, "log_error", lambda msg: error_logs.append(msg))
+    monkeypatch.setattr(kiwoom_orders.time, "sleep", lambda _: None)
+    monkeypatch.setattr(kiwoom_orders.time, "time", lambda: 1_000.0)
+    monkeypatch.setattr(
+        kiwoom_orders,
+        "TRADING_RULES",
+        types.SimpleNamespace(
+            DEPOSIT_API_RETRY_COUNT=2,
+            DEPOSIT_API_RETRY_DELAY_SEC=0.0,
+            DEPOSIT_API_TRANSPORT_COOLDOWN_SEC=5.0,
+            DEPOSIT_LOOP_CACHE_ENABLED=True,
+            DEPOSIT_LOOP_CACHE_TTL_SEC=1.0,
+            DEPOSIT_CACHE_FALLBACK_TTL_SEC=30,
+        ),
+    )
+
+    assert kiwoom_orders.get_deposit("TOKEN") == 9_876_543
+    assert error_logs == []
+    assert any("[예수금조회 transport fallback]" in msg for msg in info_logs)
+    assert kiwoom_orders.get_last_deposit_errors()[0]["cache_fallback_available"] is True
+
+
+def test_get_deposit_cooldown_fallback_populates_loop_cache(monkeypatch):
+    class TransportResponse:
+        status_code = 200
+
+        def json(self):
+            return {
+                "return_code": "2000",
+                "return_msg": "[2000](-994:fail to sendReceive:WINGSj)",
+            }
+
+    current_time = {"value": 1_000.0}
+    post_count = {"value": 0}
+    info_logs = []
+
+    def _post(*args, **kwargs):
+        post_count["value"] += 1
+        return TransportResponse()
+
+    monkeypatch.setattr(sniper_config, "CONF", {"VIRTUAL_ORDERABLE_AMOUNT": 0})
+    monkeypatch.setattr(kiwoom_orders, "_LAST_DEPOSIT_OVERRIDE", None)
+    _seed_successful_deposit_for_token("TOKEN", 9_876_543, 995.0)
+    monkeypatch.setattr(kiwoom_orders, "_DEPOSIT_API_COOLDOWN_UNTIL", 0.0)
+    monkeypatch.setattr(kiwoom_orders, "_DEPOSIT_API_COOLDOWN_REASON", "")
+    monkeypatch.setattr(kiwoom_orders.kiwoom_utils, "get_api_url", lambda path: f"https://example.test{path}")
+    monkeypatch.setattr(kiwoom_orders.requests, "post", _post)
+    monkeypatch.setattr(kiwoom_orders, "log_info", lambda msg: info_logs.append(msg))
+    monkeypatch.setattr(kiwoom_orders, "log_error", lambda *args, **kwargs: None)
+    monkeypatch.setattr(kiwoom_orders.time, "sleep", lambda _: None)
+    monkeypatch.setattr(kiwoom_orders.time, "time", lambda: current_time["value"])
+    monkeypatch.setattr(
+        kiwoom_orders,
+        "TRADING_RULES",
+        types.SimpleNamespace(
+            DEPOSIT_API_RETRY_COUNT=2,
+            DEPOSIT_API_RETRY_DELAY_SEC=0.0,
+            DEPOSIT_API_TRANSPORT_COOLDOWN_SEC=5.0,
+            DEPOSIT_LOOP_CACHE_ENABLED=True,
+            DEPOSIT_LOOP_CACHE_TTL_SEC=1.0,
+            DEPOSIT_CACHE_FALLBACK_TTL_SEC=30,
+        ),
+    )
+
+    assert kiwoom_orders.get_deposit("TOKEN") == 9_876_543
+    current_time["value"] = 1_000.1
+    assert kiwoom_orders.get_deposit("TOKEN") == 9_876_543
+    current_time["value"] = 1_000.2
+    assert kiwoom_orders.get_deposit("TOKEN") == 9_876_543
+
+    assert post_count["value"] == 1
+    assert sum("[예수금조회 cooldown fallback]" in msg for msg in info_logs) == 1
+    assert kiwoom_orders.get_last_deposit_meta()["source"] == "loop_cache"
+
+
 def test_get_deposit_transport_cooldown_without_cache_fails_closed(monkeypatch):
     class TransportResponse:
         status_code = 200

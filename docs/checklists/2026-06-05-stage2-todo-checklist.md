@@ -88,17 +88,31 @@
   - 검증: 봇 `bot_main.py`를 PID `79947`로 재기동했고 `/proc/79947/environ`에서 `KORSTOCKSCAN_SCALP_SIM_CANDIDATE_WINDOW_EXPANSION_ENABLED=true`, `MAX_OPEN=20`, `MAX_DAILY=240`, `SCALP_SIM_AI_BUDGET_ENABLED=true`, `MAX_CALLS_PER_MIN=10`, holding cooldown `90/30/180s`, deferred review enabled 로드를 확인했다. 11:44:30 이후 pipeline event에서 `scalp_sim_buy_order_assumed_filled=14`, `scalp_sim_holding_started=14`, `scalp_sim_ai_holding_live_call=2`가 발생했고 `scalp_live_simulator_state.json` active position은 17건으로 회복됐다. active rows는 `actual_order_submitted=false`, `broker_order_forbidden=true`를 유지한다.
   - 다음 액션: 장후 `threshold_cycle_ev`, `lifecycle_decision_matrix`, `sim_post_sell_evaluations`에서 11:45 이후 sim cohort를 별도 provenance로 본다. 이 복구는 sim raw 수집용이며 broker/order/provider/cap/threshold 변경 권한을 열지 않는다.
 
-- [ ] `[SimProbeIntradayCoverage0605] sim/probe 관찰축 actual_order_submitted=false 및 source-quality 확인` (`Due: 2026-06-05`, `Slot: INTRADAY`, `TimeWindow: 09:35~09:50`, `Track: ScalpingLogic`)
+- [x] `[SimProbeIntradayCoverage0605] sim/probe 관찰축 actual_order_submitted=false 및 source-quality 확인` (`Due: 2026-06-05`, `Slot: INTRADAY`, `TimeWindow: 09:35~09:50`, `Track: ScalpingLogic`)
   - Source: [threshold_cycle_ev_2026-06-04.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-06-04.json)
   - 판정 기준: sim/probe 표본이 real execution과 분리되고 `actual_order_submitted=false` provenance가 유지되는지 확인한다.
   - 금지: sim/probe EV를 broker execution 품질이나 실주문 전환 근거로 단독 사용하지 않는다.
   - 다음 액션: source-quality split, active state 복원, open/closed count를 같이 기록한다.
+  - 처리 결과: `sim_probe_observe_only_confirmed`
+  - 판정: [pipeline_events_2026-06-05.jsonl](/home/ubuntu/KORStockScan/data/pipeline_events/pipeline_events_2026-06-05.jsonl)에서 `swing_probe_sell_order_assumed_filled`, `swing_sim_buy_order_assumed_filled`, `swing_sim_holding_started`, `swing_sim_order_bundle_assumed_filled`가 모두 `actual_order_submitted=False`와 `broker_order_forbidden=True`를 유지했다.
+  - 근거: [data/pipeline_events/pipeline_events_2026-06-05.jsonl](/home/ubuntu/KORStockScan/data/pipeline_events/pipeline_events_2026-06-05.jsonl) 4-7, 132-135행.
+  - 다음 액션: sim/probe는 계속 real/sim split provenance로만 본다.
 
-- [ ] `[IntradaySourceQualityGateCheck0605] 장중 raw source-quality 결손/unknown 조기 경보 및 튜닝 입력 차단 준비 확인` (`Due: 2026-06-05`, `Slot: INTRADAY`, `TimeWindow: 14:20~14:35`, `Track: RuntimeStability`)
+- [x] `[IntradaySourceQualityGateCheck0605] 장중 raw source-quality 결손/unknown 조기 경보 및 튜닝 입력 차단 준비 확인` (`Due: 2026-06-05`, `Slot: INTRADAY`, `TimeWindow: 14:20~14:35`, `Track: RuntimeStability`)
   - Source: [pipeline_events_2026-06-05.jsonl](/home/ubuntu/KORStockScan/data/pipeline_events/pipeline_events_2026-06-05.jsonl), [threshold_events_2026-06-05.jsonl](/home/ubuntu/KORStockScan/data/threshold_cycle/threshold_events_2026-06-05.jsonl), [observation_source_quality_audit_2026-06-05.json](/home/ubuntu/KORStockScan/data/report/observation_source_quality_audit/observation_source_quality_audit_2026-06-05.json), [observation_source_quality_audit.py](/home/ubuntu/KORStockScan/src/engine/observation_source_quality_audit.py)
   - 판정 기준: 장중 `PYTHONPATH=. .venv/bin/python -m src.engine.observation_source_quality_audit --target-date 2026-06-05 --write` 재감사를 실행하거나 최신 산출물을 확인해 `hard_blocking_contract_gap_count`, `hard_blocking_excluded_row_count`, `tuning_input_allowed`, `raw_row_exclusion_applied`, `unknown_token_stage_count`, `review_warning_count`를 기록한다.
   - 금지: hard contract gap 또는 unknown-token warning을 답변에만 남기지 않는다. 결손 row/window는 튜닝 입력 제외 또는 workorder handoff 대상으로 고정하고, broker/order/provider/cap/bot/threshold 변경 근거로 사용하지 않는다.
   - 다음 액션: `source_quality_clean_intraday`, `defective_rows_excluded`, `hard_block_requires_producer_fix`, `unknown_warning_workorder_required`, `audit_missing_or_stale` 중 하나로 닫는다. hard gap/unknown warning이 있으면 장후 `PostcloseSourceQualityGateReview`와 `CodeImprovementWorkorderReview`에서 누락 없이 재확인한다.
+  - 처리 결과: `defective_rows_excluded`
+  - 판정: `status=warning`이지만 `hard_blocking_contract_gap_count=0`, `hard_blocking_excluded_row_count=0`, `tuning_input_allowed=true`, `raw_row_exclusion_applied=true`다. unknown token stage는 `4`, review warning은 `4`다.
+  - 근거: [observation_source_quality_audit_2026-06-05.json](/home/ubuntu/KORStockScan/data/report/observation_source_quality_audit/observation_source_quality_audit_2026-06-05.json).
+  - 다음 액션: unknown warning source는 장후 `PostcloseSourceQualityGateReview`에서 재확인한다.
+
+- [x] `[RunbookIntradayAutomationHealthCheck20260605] 장중 자동화체인 상태 확인` (`Due: 2026-06-05`, `Slot: INTRADAY`, `TimeWindow: 09:05~15:30`, `Track: RunbookOps`)
+  - Source: [docs/time-based-operations-runbook.md](/home/ubuntu/KORStockScan/docs/time-based-operations-runbook.md), [logs/threshold_cycle_preopen_cron.log](/home/ubuntu/KORStockScan/logs/threshold_cycle_preopen_cron.log), [logs/run_error_detection.log](/home/ubuntu/KORStockScan/logs/run_error_detection.log)
+  - 판정: `pass`
+  - 근거: `logs/threshold_cycle_preopen_cron.log`는 `[DONE] threshold-cycle preopen target_date=2026-06-05` marker를 남겼고, `data/report/error_detection/error_detection_2026-06-05.json`은 `summary_severity=pass`다. `logs/run_error_detection.log`도 `[DONE] error detection mode=full finished_at=2026-06-05 12:50:03`로 종료했다.
+  - 다음 액션: 장중 운영 확인만 유지하고 threshold/order/provider/bot 권한 변경은 하지 않는다.
 
 ## 장후 체크리스트 (16:30~18:55)
 

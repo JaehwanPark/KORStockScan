@@ -431,6 +431,12 @@ def _get_deposit_real(token, cache_key):
                 cache_hit=False,
                 fallback_used=True,
             )
+            _store_loop_cached_deposit(
+                cached_amount,
+                cache_key=cache_key,
+                source="cooldown_fallback",
+                now_ts=now_ts,
+            )
             log_info(
                 f"⚠️ [예수금조회 cooldown fallback] 최근 정상 주문가능금액 사용 "
                 f"({cached_amount:,}원, cooldown_remaining={cooldown_remaining:.1f}s)"
@@ -506,12 +512,20 @@ def _get_deposit_real(token, cache_key):
                     float(getattr(TRADING_RULES, "DEPOSIT_API_TRANSPORT_COOLDOWN_SEC", 5.0) or 5.0),
                     0.0,
                 )
+                cached_amount = get_cached_deposit(cache_key=cache_key)
                 if cooldown_sec > 0:
                     _DEPOSIT_API_COOLDOWN_UNTIL = max(_DEPOSIT_API_COOLDOWN_UNTIL, time.time() + cooldown_sec)
                     _DEPOSIT_API_COOLDOWN_REASON = "kt00001 transport sendReceive failure"
                 _LAST_DEPOSIT_ERRORS[-1]['classification'] = 'deposit_transport_failure'
                 _LAST_DEPOSIT_ERRORS[-1]['cooldown_sec'] = cooldown_sec
-                log_error(f"❌ [예수금조회 transport] attempt={attempt}/{retries} 사유: {err_msg}")
+                _LAST_DEPOSIT_ERRORS[-1]['cache_fallback_available'] = bool(cached_amount > 0)
+                if cached_amount > 0:
+                    log_info(
+                        f"⚠️ [예수금조회 transport fallback] attempt={attempt}/{retries} "
+                        f"최근 정상 주문가능금액 사용 예정 ({cached_amount:,}원) 사유: {err_msg}"
+                    )
+                else:
+                    log_error(f"❌ [예수금조회 transport] attempt={attempt}/{retries} 사유: {err_msg}")
                 break
             log_error(f"❌ [예수금조회 실패] attempt={attempt}/{retries} 사유: {err_msg}")
         except Exception as exc:
