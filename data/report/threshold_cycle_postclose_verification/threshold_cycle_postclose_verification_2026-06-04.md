@@ -1,8 +1,8 @@
 # Threshold Cycle Postclose Verification - 2026-06-04
 
-- status: `warning`
+- status: `fail`
 - latest_start_marker: `[START] threshold-cycle postclose target_date=2026-06-04 max_iterations=80 started_at=2026-06-04T17:48:38+0900`
-- latest_done_marker: `[DONE] threshold-cycle postclose target_date=2026-06-04 ai_correction_provider=openai panic_sell_defense=true panic_buying=true market_panic_breadth=true scalp_sim_ai_deferred_review=true pipeline_event_verbosity=true observation_source_quality_audit=true codebase_performance_workorder=true pattern_lab_currentness_audit=true pattern_lab_ai_review=true time_window_regime_counterfactual=true producer_gap_discovery=true stage_hook_workorder_discovery=true stage_hook_runtime_scaffold=true pattern_lab_propagation_audit=true scalp_sim_overnight=true scalp_entry_adm=true institutional_flow_context=true microstructure_reaction_context=true lifecycle_decision_matrix=true lifecycle_ai_context=true ldm_hypothesis_parent_refinement=true lifecycle_bucket_discovery=true lifecycle_bucket_windows=true lifecycle_bucket_window_list=rolling5d,rolling10d,mtd lifecycle_bucket_promotion_window=mtd force_lifecycle_bucket_windows=false force_deep_audits=false force_workorder_branch=false runtime_apply_bridge=true scalp_sim_auto_approval_control_tower=true latency_classifier_recommendation=true tuning_performance_control_tower=true swing_lifecycle=true swing_strategy_discovery=true swing_lifecycle_matrix=true swing_lifecycle_bucket_discovery=true swing_ai_review_provider=openai swing_lifecycle_bucket_discovery_ai_provider=openai pattern_lab_ai_review_provider=openai producer_gap_discovery_ai_provider=openai stage_hook_workorder_discovery_ai_provider=openai pattern_labs=true deepseek_swing_lab=true code_improvement_workorder=true daily_ev=true runtime_approval_summary=true runtime_apply_gap_audit=true next_stage2_checklist=true finished_at=2026-06-04T18:10:30+0900`
+- latest_done_marker: `[DONE] threshold-cycle postclose target_date=2026-06-04 ai_correction_provider=openai panic_sell_defense=true panic_buying=true market_panic_breadth=true openai_ws_stability=true scalp_sim_ai_deferred_review=true pipeline_event_verbosity=true observation_source_quality_audit=true codebase_performance_workorder=true pattern_lab_currentness_audit=true pattern_lab_ai_review=true time_window_regime_counterfactual=true producer_gap_discovery=true stage_hook_workorder_discovery=true stage_hook_runtime_scaffold=true pattern_lab_propagation_audit=true scalp_sim_overnight=true scalp_entry_adm=true institutional_flow_context=true microstructure_reaction_context=true lifecycle_decision_matrix=true lifecycle_ai_context=true ldm_hypothesis_parent_refinement=true lifecycle_bucket_discovery=true lifecycle_bucket_windows=true lifecycle_bucket_window_list=rolling5d,rolling10d,mtd lifecycle_bucket_promotion_window=mtd force_lifecycle_bucket_windows=false force_deep_audits=false force_workorder_branch=false runtime_apply_bridge=true scalp_sim_auto_approval_control_tower=true latency_classifier_recommendation=true tuning_performance_control_tower=true swing_lifecycle=true swing_strategy_discovery=true swing_lifecycle_matrix=true swing_lifecycle_bucket_discovery=true swing_ai_review_provider=openai swing_lifecycle_bucket_discovery_ai_provider=openai pattern_lab_ai_review_provider=openai producer_gap_discovery_ai_provider=openai stage_hook_workorder_discovery_ai_provider=openai pattern_labs=true deepseek_swing_lab=true code_improvement_workorder=true daily_ev=true runtime_approval_summary=true runtime_apply_gap_audit=true next_stage2_checklist=true finished_at=2026-06-04T18:10:30+0900`
 - predecessor_status: `pass`
 - predecessor_wait_count: `0`
 - predecessor_timeout_count: `0`
@@ -15,14 +15,14 @@
 - interpretation: `latest DONE marker used full/default stage profile`
 - missing_required_artifacts: `[]`
 - missing_downstream_links: `[]`
-- stale_downstream_links: `[]`
+- stale_downstream_links: `['threshold_cycle_ev_stale_before_code_improvement_workorder']`
 - runtime_apply_gap_issues: `[]`
 
 ## Runtime Apply Gap Audit
 - status: `pass`
 - retry_queue_count: `0`
 - codex_directive_count: `0`
-- summary: `{'actionable_unknown_gap_count': 0, 'ai_review_retry_pending': False, 'ai_review_status': 'parsed', 'candidate_count': 394, 'codex_directive_count': 0, 'critical_failure_count': 0, 'derived_review_category_counts': {'runtime_blocked_contract_gap': 18, 'sim_auto_approved': 86, 'source_only_keep_collecting': 1, 'source_quality_blocker': 289}, 'positive_edge_source_quality_pass_count': 4, 'quiet_gap_codex_directive_count': 0, 'quiet_gap_count': 212, 'quiet_gap_rollup_count': 212, 'retry_queue_count': 0, 'runtime_uptake_rate_pct': 0.0, 'source_dimension_gap_count': 94, 'status': 'pass'}`
+- summary: `{'actionable_unknown_gap_count': 0, 'ai_review_retry_pending': False, 'ai_review_status': 'parsed', 'bridge_blocker_ledger_count': 200, 'candidate_count': 394, 'codex_directive_count': 0, 'conversion_blocker_rank_count': 200, 'critical_failure_count': 0, 'derived_review_category_counts': {'runtime_blocked_contract_gap': 18, 'sim_auto_approved': 86, 'source_only_keep_collecting': 1, 'source_quality_blocker': 289}, 'positive_edge_source_quality_pass_count': 4, 'quiet_gap_codex_directive_count': 0, 'quiet_gap_count': 212, 'quiet_gap_rollup_count': 212, 'retry_queue_count': 0, 'runtime_uptake_rate_pct': 0.0, 'source_dimension_gap_count': 94, 'status': 'pass'}`
 
 ## BUY Funnel Submit Drought Handoff
 - status: `pass`
@@ -138,7 +138,7 @@
 - active_seed_ids: `[]`
 - observed_seed_ids: `['active_seed_b7ce7bba2e093cc8']`
 - missing: `[]`
-- warnings: `['active_sim_priority_preopen_handoff_pending']`
+- warnings: `['swing_active_arm_priority_runtime_observation_missing']`
 - match_absence_diagnosis: `not_applicable`
 - match_absence_reason: `active_priority_observed_or_no_active_priority`
 - candidate_prefix_count: `1136`
@@ -182,22 +182,22 @@
 - interpretation: `stage hook implementation-ready orders propagated to code improvement workorder`
 
 ## Bottom Rebound Sim Handoff
-- status: `not_applicable`
-- included: `False`
-- source_rows: `0`
-- selected_candidate_count: `0`
-- arm_count: `0`
-- persisted_candidate_count: `0`
-- persisted_arm_count: `0`
+- status: `pass`
+- included: `True`
+- source_rows: `40`
+- selected_candidate_count: `34`
+- arm_count: `102`
+- persisted_candidate_count: `34`
+- persisted_arm_count: `102`
 - missing: `[]`
-- interpretation: `bottom_rebound source was absent or blocked; safe-pool-only swing sim path applies`
+- interpretation: `bottom_rebound source candidates were selected, armed, and persisted for label/EV handoff`
 
 ## Workorder Snapshot
-- generation_id: `2026-06-04-645939e709b1`
-- source_hash: `645939e709b1cdbcfe6c9c56df3cf2cde82165f43fb0d29e1d5dcef12a8b88e3`
+- generation_id: `2026-06-04-db0780ecadea`
+- source_hash: `db0780ecadea5a47a06082c1eba52633da699babc0c4301488606237d189351c`
 - snapshot_status: `source_changed_with_lineage`
-- previous_generation_id: `2026-06-04-13d212527e5a`
-- previous_source_hash: `13d212527e5a368c62c935383c0bf48757a9ac4f0b4dda92d12ec42e458f09ce`
-- new_order_ids: `['order_pattern_lab_ai_review_code_improvement_workorder', 'order_pattern_lab_ai_review_lifecycle_decision_matrix', 'order_pattern_lab_ai_review_swing_lifecycle_decision_matrix', 'order_pattern_lab_ai_review_swing_pattern_lab_automation', 'order_pattern_lab_ai_review_swing_strategy_discovery_ev']`
-- removed_order_ids: `['order_pattern_lab_ai_review_scalping_latency_guard_miss_ev_recovery']`
+- previous_generation_id: `2026-06-04-9bb41d347e25`
+- previous_source_hash: `9bb41d347e25676660805a3fb5e74e8225e3958e5551dde8469582e7dcd63488`
+- new_order_ids: `[]`
+- removed_order_ids: `[]`
 - decision_changed_order_ids: `[]`

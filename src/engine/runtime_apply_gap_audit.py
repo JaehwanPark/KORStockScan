@@ -1784,6 +1784,103 @@ def _aggressive_push_targets(ledger: list[dict[str, Any]]) -> list[dict[str, Any
     return targets
 
 
+def _conversion_blocker_class(row: dict[str, Any]) -> str:
+    text = " ".join(
+        str(row.get(key) or "")
+        for key in (
+            "failure_reason",
+            "final_disposition",
+            "derived_review_category",
+            "derived_review_sub_state",
+            "recommended_resolution",
+            "bridge_state",
+            "preopen_apply_state",
+            "post_apply_attribution_state",
+        )
+    ).lower()
+    if "key" in text or "catalog" in text or "lineage" in text:
+        return "key_lineage"
+    if "submit_drought" in text or "latency_pre_submit" in text or "budget_pass" in text:
+        return "submit_drought"
+    if "bridge" in text:
+        return "bridge_contract"
+    if "runtime_hook" in text:
+        return "runtime_hook"
+    if "preopen" in text or "env" in text:
+        return "env_mapping"
+    if "post_apply" in text or "attribution" in text:
+        return "post_apply_attribution"
+    if "ai" in text or "tier2" in text:
+        return "AI_review"
+    if "safety" in text or "broker" in text or "stale" in text or "quantity" in text or "cooldown" in text:
+        return "safety_or_broker_guard"
+    if "authority" in text or "approval" in text or "user" in text:
+        return "user_authority"
+    if (
+        "source_quality" in text
+        or "source_dimension" in text
+        or "source gap" in text
+        or ("contract" in text and "bridge" not in text)
+    ):
+        return "source_quality"
+    return "sample_floor"
+
+
+def _conversion_blocker_rank(ledger: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    blockers: list[dict[str, Any]] = []
+    bridge_ledger: list[dict[str, Any]] = []
+    for row in ledger:
+        candidate_id = str(row.get("candidate_id") or "").strip()
+        if not candidate_id:
+            continue
+        blocker_class = _conversion_blocker_class(row)
+        bridge_state = str(row.get("bridge_state") or "")
+        if bridge_state and bridge_state not in {"joined", "ready", "live_auto_apply_ready"}:
+            bridge_ledger.append(
+                {
+                    "candidate_id": candidate_id,
+                    "bridge_state": bridge_state,
+                    "bridge_blocker_class": blocker_class if blocker_class == "bridge_contract" else "bridge_contract",
+                    "next_repair_action": row.get("recommended_resolution") or row.get("failure_reason") or "close_bridge_contract",
+                    "acceptance_test": "runtime_apply_bridge emits explicit live-auto bridge contract or candidate remains source-only with blocker evidence",
+                }
+            )
+        if str(row.get("final_disposition") or "") in {"live_auto_apply_ready", "sim_auto_approved"}:
+            continue
+        blockers.append(
+            {
+                "conversion_candidate_id": candidate_id,
+                "blocker_class": blocker_class,
+                "conversion_impact_rank": 0,
+                "ev_potential_rank": 1 if _safe_float(row.get("primary_ev"), 0.0) and _safe_float(row.get("primary_ev"), 0.0) > 0 else 5,
+                "sample_readiness_rank": 2,
+                "fix_difficulty_rank": {
+                    "env_mapping": 1,
+                    "runtime_hook": 2,
+                    "bridge_contract": 2,
+                    "submit_drought": 2,
+                    "source_quality": 3,
+                    "sample_floor": 4,
+                    "safety_or_broker_guard": 5,
+                    "user_authority": 5,
+                }.get(blocker_class, 3),
+                "remaining_gap_count": 2 if blocker_class in {"source_quality", "bridge_contract", "submit_drought"} else 1,
+                "next_repair_action": row.get("recommended_resolution") or row.get("failure_reason") or f"close_{blocker_class}",
+                "acceptance_test": "candidate exits runtime gap ledger or is explicitly closed with source-only/non-runtime authority",
+            }
+        )
+    blockers.sort(
+        key=lambda item: (
+            _safe_int(item.get("fix_difficulty_rank"), 99),
+            _safe_int(item.get("ev_potential_rank"), 99),
+            str(item.get("conversion_candidate_id") or ""),
+        )
+    )
+    for idx, item in enumerate(blockers, start=1):
+        item["conversion_impact_rank"] = idx
+    return blockers[:200], bridge_ledger[:200]
+
+
 def build_runtime_apply_gap_audit(
     target_date: str,
     *,
@@ -1843,6 +1940,7 @@ def build_runtime_apply_gap_audit(
     codex_directives.extend(ai_directives)
     codex_directives = _dedupe_directives(codex_directives)
     kpi = _runtime_uptake_kpi(ledger)
+    conversion_blockers, bridge_blocker_ledger = _conversion_blocker_rank(ledger)
     critical_failures = [
         row for row in ledger if row.get("failure_state") == "fail"
     ] + [
@@ -1875,6 +1973,8 @@ def build_runtime_apply_gap_audit(
         "ai_reasoning_review": ai_review,
         "codex_workorder_directives": codex_directives,
         "retry_queue": retry_queue,
+        "bridge_blocker_ledger": bridge_blocker_ledger,
+        "conversion_blocker_rank": conversion_blockers,
         "summary": {
             "status": status,
             "candidate_count": kpi["candidate_count"],
@@ -1891,6 +1991,8 @@ def build_runtime_apply_gap_audit(
             "ai_review_status": ai_review.get("status"),
             "ai_review_retry_pending": ai_review.get("ai_review_retry_pending") is True,
             "derived_review_category_counts": derived_review_category_counts,
+            "bridge_blocker_ledger_count": len(bridge_blocker_ledger),
+            "conversion_blocker_rank_count": len(conversion_blockers),
         },
     }
 

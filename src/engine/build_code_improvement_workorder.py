@@ -32,6 +32,7 @@ BUY_FUNNEL_SENTINEL_DIR = REPORT_DIR / "buy_funnel_sentinel"
 PRODUCER_GAP_DISCOVERY_DIR = REPORT_DIR / "producer_gap_discovery"
 STAGE_HOOK_WORKORDER_DISCOVERY_DIR = REPORT_DIR / "stage_hook_workorder_discovery"
 STAGE_HOOK_RUNTIME_SCAFFOLD_DIR = REPORT_DIR / "stage_hook_runtime_scaffold"
+CONVERSION_LANE_DIR = REPORT_DIR / "conversion_lane"
 CODE_IMPROVEMENT_WORKORDER_DIR = PROJECT_ROOT / "docs" / "code-improvement-workorders"
 CODE_IMPROVEMENT_WORKORDER_REPORT_DIR = REPORT_DIR / "code_improvement_workorder"
 WORKORDER_SCHEMA_VERSION = 1
@@ -144,6 +145,137 @@ def _previous_workorder_lineage(previous_report: dict[str, Any], current_orders:
         "unchanged_order_ids": sorted(current_ids & previous_ids),
         "decision_changed_order_ids": decision_changed,
     }
+
+
+def conversion_lane_report_path(target_date: str) -> Path:
+    return CONVERSION_LANE_DIR / f"conversion_lane_{target_date}.json"
+
+
+def _conversion_rank_by_candidate(conversion_lane: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    ranked: dict[str, dict[str, Any]] = {}
+    for item in conversion_lane.get("conversion_blocker_rank") or []:
+        if not isinstance(item, dict):
+            continue
+        candidate_id = str(item.get("conversion_candidate_id") or "").strip()
+        if not candidate_id:
+            continue
+        existing = ranked.get(candidate_id)
+        if existing and _safe_int(existing.get("conversion_impact_rank"), 999) <= _safe_int(item.get("conversion_impact_rank"), 999):
+            continue
+        ranked[candidate_id] = item
+    return ranked
+
+
+def _annotate_order_conversion_fields(order: dict[str, Any], conversion_rank: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    candidate_keys = [
+        str(order.get(key) or "").strip()
+        for key in (
+            "conversion_candidate_id",
+            "candidate_id",
+            "bucket_id",
+            "threshold_family",
+            "family",
+            "source_bucket_id",
+        )
+    ]
+    candidate_keys.extend(str(item) for item in (order.get("candidate_ids") or []) if str(item or "").strip())
+    blocker: dict[str, Any] = {}
+    for key in candidate_keys:
+        if key in conversion_rank:
+            blocker = conversion_rank[key]
+            break
+    if not blocker:
+        return order
+    annotated = dict(order)
+    annotated.setdefault("conversion_candidate_id", blocker.get("conversion_candidate_id"))
+    annotated.setdefault("conversion_impact_rank", blocker.get("conversion_impact_rank"))
+    annotated.setdefault("remaining_gap_count_before", blocker.get("remaining_gap_count"))
+    annotated.setdefault("remaining_gap_count_after_expected", max(0, _safe_int(blocker.get("remaining_gap_count"), 1) - 1))
+    annotated.setdefault("blocks_bounded_real_canary", True)
+    annotated.setdefault("acceptance_test", blocker.get("acceptance_test"))
+    return annotated
+
+
+def _conversion_lane_followup_orders(conversion_lane: dict[str, Any], *, limit: int = 20) -> list[dict[str, Any]]:
+    blockers = conversion_lane.get("conversion_blocker_rank")
+    if not isinstance(blockers, list):
+        return []
+    orders: list[dict[str, Any]] = []
+    actionable_classes = {
+        "key_lineage",
+        "submit_drought",
+        "runtime_hook",
+        "env_mapping",
+        "post_apply_attribution",
+        "bridge_contract",
+        "source_quality",
+    }
+    for blocker in blockers:
+        if not isinstance(blocker, dict):
+            continue
+        blocker_class = str(blocker.get("blocker_class") or "").strip()
+        if blocker_class not in actionable_classes:
+            continue
+        candidate_id = str(blocker.get("conversion_candidate_id") or "").strip()
+        if not candidate_id:
+            continue
+        safe_slug = _slug(f"{blocker_class}_{candidate_id}")[:80]
+        orders.append(
+            {
+                "order_id": f"order_conversion_lane_{safe_slug}",
+                "title": f"Conversion lane blocker follow-up: {blocker_class} {candidate_id}",
+                "source_report_type": "conversion_lane",
+                "target_subsystem": "sim_to_real_conversion_lineage",
+                "lifecycle_stage": "conversion",
+                "threshold_family": "sim_to_real_conversion_lane",
+                "mapped_family": "sim_to_real_conversion_lane",
+                "route": "instrumentation_order",
+                "improvement_type": f"conversion_{blocker_class}_blocker",
+                "priority": _safe_int(blocker.get("conversion_impact_rank"), 999),
+                "runtime_effect": False,
+                "allowed_runtime_apply": False,
+                "conversion_candidate_id": candidate_id,
+                "conversion_impact_rank": blocker.get("conversion_impact_rank"),
+                "remaining_gap_count_before": blocker.get("remaining_gap_count"),
+                "remaining_gap_count_after_expected": max(0, _safe_int(blocker.get("remaining_gap_count"), 1) - 1),
+                "blocks_bounded_real_canary": True,
+                "acceptance_test": blocker.get("acceptance_test"),
+                "intent": (
+                    "Close the conversion critical-path blocker as source-only instrumentation/report/test work. "
+                    "This does not create real order, provider, bot, cap, or threshold authority."
+                ),
+                "expected_ev_effect": "reduce remaining blocker count before bounded real canary can be requested",
+                "evidence": [
+                    f"conversion_candidate_id={candidate_id}",
+                    f"blocker_class={blocker_class}",
+                    f"conversion_impact_rank={blocker.get('conversion_impact_rank')}",
+                    f"next_repair_action={blocker.get('next_repair_action')}",
+                    f"acceptance_test={blocker.get('acceptance_test')}",
+                    "runtime_effect=false",
+                    "allowed_runtime_apply=false",
+                ],
+                "files_likely_touched": [
+                    "src/engine/automation/key_lineage_ledger.py",
+                    "src/engine/automation/conversion_lane.py",
+                    "src/engine/verify_threshold_cycle_postclose_chain.py",
+                    "src/engine/build_code_improvement_workorder.py",
+                ],
+                "acceptance_tests": [
+                    "PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_conversion_lane_key_lineage.py src/tests/test_build_code_improvement_workorder.py src/tests/test_verify_threshold_cycle_postclose_chain.py",
+                ],
+                "forbidden_uses": [
+                    "real_order_authority",
+                    "provider_route_change",
+                    "bot_restart",
+                    "cap_release",
+                    "runtime_threshold_mutation",
+                    "broker_order_guard_change",
+                ],
+            }
+        )
+        if len(orders) >= limit:
+            break
+    return orders
 
 
 def _recent_workorder_reports(target_date: str, *, lookback_days: int = 10) -> list[dict[str, Any]]:
@@ -816,10 +948,19 @@ def _serialize_classified_order(item: ClassifiedOrder) -> dict[str, Any]:
         "repeat_unresolved_escalation": item.order.get("repeat_unresolved_escalation"),
         "parity_contract": item.order.get("parity_contract"),
         "source_bucket_id": item.order.get("source_bucket_id"),
+        "conversion_candidate_id": item.order.get("conversion_candidate_id"),
+        "conversion_impact_rank": item.order.get("conversion_impact_rank"),
+        "remaining_gap_count_before": item.order.get("remaining_gap_count_before"),
+        "remaining_gap_count_after_expected": item.order.get("remaining_gap_count_after_expected"),
+        "blocks_bounded_real_canary": item.order.get("blocks_bounded_real_canary"),
+        "acceptance_test": item.order.get("acceptance_test"),
         "runtime_hook_candidate_contract": item.order.get("runtime_hook_candidate_contract"),
         "stage_hook_candidate_contract": item.order.get("stage_hook_candidate_contract"),
         "initial_runtime_state": item.order.get("initial_runtime_state"),
         "requires_separate_runtime_apply_candidate": item.order.get("requires_separate_runtime_apply_candidate"),
+        "raw_row_exclusion_context_classification": item.order.get("raw_row_exclusion_context_classification"),
+        "raw_row_exclusion_context": item.order.get("raw_row_exclusion_context"),
+        "terminal_disposition": item.order.get("terminal_disposition"),
     }
 
 
@@ -1182,6 +1323,23 @@ def _classify_order(
             ),
         )
 
+    if order.get("source_report_type") == "conversion_lane":
+        return ClassifiedOrder(
+            order=order,
+            decision="implement_now",
+            reason=(
+                "conversion lane blocker is source-only lineage/report/instrumentation work needed before any "
+                "bounded real canary request can be considered"
+            ),
+            mapped_family=mapped_family or "sim_to_real_conversion_lane",
+            route=route or "instrumentation_order",
+            confidence=confidence or "conversion_kpi",
+            automation_reentry=(
+                "After implementation, rerun key_lineage_ledger, conversion_lane, code_improvement_workorder, "
+                "tuning performance control tower, and postclose verifier; runtime/live order guards remain unchanged."
+            ),
+        )
+
     if (
         order.get("source_report_type") in ("scalping_pattern_lab_automation", "swing_pattern_lab_automation")
         and (route in ("auto_family_candidate", "design_family_candidate") or order_id in auto_family_order_ids)
@@ -1302,6 +1460,41 @@ def _classify_order(
             automation_reentry=(
                 "After implementation, rerun observation_source_quality_audit, code improvement workorder, "
                 "threshold EV, runtime approval summary, and postclose verifier; only post-cutoff raw may feed tuning."
+            ),
+        )
+
+    if order.get("improvement_type") == "source_quality_raw_row_exclusion_producer_gap":
+        return ClassifiedOrder(
+            order=order,
+            decision="implement_now",
+            reason=(
+                "raw row exclusion protected tuning inputs, but the producer/source-quality cause must be fixed "
+                "or explicitly classified so future rows are not repeatedly excluded"
+            ),
+            mapped_family=mapped_family or "observation_source_quality_audit",
+            route=route or "source_quality_raw_row_exclusion_producer_fix",
+            confidence=confidence or "audit",
+            automation_reentry=(
+                "After implementation, rerun observation_source_quality_audit and code improvement workorder; "
+                "raw_row_exclusion.excluded_row_count should fall or remaining exclusions must carry reviewed "
+                "not_available/waiting_sample-only provenance."
+            ),
+        )
+
+    if order.get("improvement_type") == "source_quality_raw_row_exclusion_limit_up_locked_context":
+        return ClassifiedOrder(
+            order=order,
+            decision="attach_existing_family",
+            reason=(
+                "raw row exclusion is concentrated in a limit-up locked context; keep it as reviewed "
+                "source-quality evidence and do not create an automatic producer-fix implementation"
+            ),
+            mapped_family=mapped_family or "observation_source_quality_audit",
+            route=route or "review_required_limit_up_locked_context",
+            confidence=confidence or "audit",
+            automation_reentry=(
+                "Next postclose source-quality audit should reclassify only if the same intraday_range_pct=0 "
+                "gap repeats in non-limit-up rows or independent high/low/candle source loss is proven."
             ),
         )
 
@@ -2647,9 +2840,18 @@ def _pipeline_event_verbosity_followup_orders(report: dict[str, Any]) -> list[di
 def _observation_source_quality_followup_orders(report: dict[str, Any]) -> list[dict[str, Any]]:
     if not report:
         return []
-    if str(report.get("status") or "").strip() not in {"warning", "fail"}:
-        return []
     summary = report.get("summary") if isinstance(report.get("summary"), dict) else {}
+    raw_row_exclusion = (
+        report.get("raw_row_exclusion")
+        if isinstance(report.get("raw_row_exclusion"), dict)
+        else {}
+    )
+    raw_row_exclusion = _raw_row_exclusion_with_manifest_details(raw_row_exclusion)
+    if (
+        str(report.get("status") or "").strip() not in {"warning", "fail"}
+        and int(raw_row_exclusion.get("excluded_row_count") or 0) <= 0
+    ):
+        return []
     hard_gaps = (
         report.get("hard_blocking_contract_gaps")
         if isinstance(report.get("hard_blocking_contract_gaps"), list)
@@ -2758,6 +2960,125 @@ def _observation_source_quality_followup_orders(report: dict[str, Any]) -> list[
                 "acceptance_tests": [
                     "PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_observation_source_quality_audit.py src/tests/test_build_code_improvement_workorder.py src/tests/test_threshold_cycle_ev_report.py src/tests/test_runtime_approval_summary.py src/tests/test_verify_threshold_cycle_postclose_chain.py",
                 ],
+            }
+        )
+    excluded_row_count = int(raw_row_exclusion.get("excluded_row_count") or 0)
+    if excluded_row_count > 0:
+        context_review = _raw_row_exclusion_limit_up_locked_context(raw_row_exclusion)
+        stage_counts = (
+            raw_row_exclusion.get("stage_counts")
+            if isinstance(raw_row_exclusion.get("stage_counts"), dict)
+            else {}
+        )
+        field_gap_counts = (
+            raw_row_exclusion.get("field_gap_counts")
+            if isinstance(raw_row_exclusion.get("field_gap_counts"), dict)
+            else {}
+        )
+        exclusion_reasons = (
+            raw_row_exclusion.get("exclusion_reasons")
+            if isinstance(raw_row_exclusion.get("exclusion_reasons"), dict)
+            else {}
+        )
+        producer_hint = (
+            raw_row_exclusion.get("producer_hint")
+            if isinstance(raw_row_exclusion.get("producer_hint"), list)
+            else []
+        )
+        sample_rows = (
+            raw_row_exclusion.get("sample_rows")
+            if isinstance(raw_row_exclusion.get("sample_rows"), list)
+            else []
+        )
+        raw_exclusion_evidence = [
+            *evidence,
+            f"raw_row_exclusion_manifest={raw_row_exclusion.get('manifest_path') or '-'}",
+            f"excluded_row_count={excluded_row_count}",
+            f"stage_counts={json.dumps(stage_counts, ensure_ascii=False, sort_keys=True)}",
+            f"field_gap_counts={json.dumps(field_gap_counts, ensure_ascii=False, sort_keys=True)}",
+            f"exclusion_reasons={json.dumps(exclusion_reasons, ensure_ascii=False, sort_keys=True)}",
+            f"first_timestamp={raw_row_exclusion.get('first_timestamp') or '-'}",
+            f"last_timestamp={raw_row_exclusion.get('last_timestamp') or '-'}",
+            "forbidden_uses=EV/rolling/MTD/cumulative tuning/live-auto promotion/runtime approval for excluded rows",
+            "required_action=fix producer provenance/source-quality cause or mark reviewed_not_available/waiting_sample_only explicitly",
+        ]
+        for hint in producer_hint[:12]:
+            if isinstance(hint, dict):
+                raw_exclusion_evidence.append(
+                    "producer_hint:"
+                    f"stage={hint.get('stage')} "
+                    f"count={hint.get('count')} "
+                    f"pipeline={hint.get('pipeline') or '-'} "
+                    f"subsystem={hint.get('subsystem') or '-'} "
+                    f"top_reasons={','.join(str(item) for item in (hint.get('top_reasons') or [])[:8]) or '-'}"
+                )
+        for row in sample_rows[:8]:
+            if isinstance(row, dict):
+                raw_exclusion_evidence.append(
+                    "sample_row:"
+                    f"line_no={row.get('line_no')} "
+                    f"stage={row.get('stage')} "
+                    f"record_id={row.get('record_id')} "
+                    f"reasons={','.join(str(item) for item in (row.get('reasons') or [])[:8]) or '-'} "
+                    f"gap_fields={json.dumps(row.get('gap_fields') or {}, ensure_ascii=False, sort_keys=True)}"
+                )
+        if context_review:
+            raw_exclusion_evidence.extend(
+                [
+                    "context_classification=limit_up_locked_context",
+                    f"context_evidence={json.dumps(context_review, ensure_ascii=False, sort_keys=True)}",
+                    (
+                        "required_action=review postclose only; do not auto-implement unless non-limit-up rows "
+                        "repeat the same zero intraday range gap or independent high/low/candle source loss is proven"
+                    ),
+                ]
+            )
+        orders.append(
+            {
+                **base,
+                "order_id": "order_observation_source_quality_raw_row_exclusion_producer_gap",
+                "title": (
+                    "Observation source-quality raw row exclusion limit-up locked context"
+                    if context_review
+                    else "Observation source-quality raw row exclusion producer gap"
+                ),
+                "priority": 0,
+                "route": (
+                    "review_required_limit_up_locked_context"
+                    if context_review
+                    else "source_quality_raw_row_exclusion_producer_fix"
+                ),
+                "mapped_family": "observation_source_quality_audit",
+                "threshold_family": "observation_source_quality_audit",
+                "improvement_type": (
+                    "source_quality_raw_row_exclusion_limit_up_locked_context"
+                    if context_review
+                    else "source_quality_raw_row_exclusion_producer_gap"
+                ),
+                "intent": (
+                    "Keep the excluded rows out of tuning inputs, but treat the current cluster as a reviewed "
+                    "limit-up locked market context until non-limit-up evidence proves a producer gap."
+                    if context_review
+                    else (
+                        "Analyze all excluded raw rows by stage/field/reason and fix producer-side source-quality "
+                        "or provenance causes so the postclose chain does not repeatedly need to exclude the same "
+                        "class of rows from tuning inputs."
+                    )
+                ),
+                "evidence": raw_exclusion_evidence,
+                "files_likely_touched": [
+                    "src/engine/observation_source_quality_audit.py",
+                    "src/engine/build_code_improvement_workorder.py",
+                    "src/engine/sniper_state_handlers.py",
+                    "src/engine/lifecycle_decision_matrix.py",
+                    "docs/report-based-automation-traceability.md",
+                ],
+                "acceptance_tests": [
+                    "PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_observation_source_quality_audit.py src/tests/test_build_code_improvement_workorder.py src/tests/test_verify_threshold_cycle_postclose_chain.py",
+                ],
+                "raw_row_exclusion_context_classification": "limit_up_locked_context" if context_review else None,
+                "raw_row_exclusion_context": context_review,
+                "terminal_disposition": "no_code_required_pending_policy_classification" if context_review else None,
             }
         )
     if unknown_token_findings:
@@ -2952,6 +3273,216 @@ def _observation_source_quality_followup_orders(report: dict[str, Any]) -> list[
             }
         )
     return orders
+
+
+def _raw_row_exclusion_with_manifest_details(raw_row_exclusion: dict[str, Any]) -> dict[str, Any]:
+    if not raw_row_exclusion:
+        return {}
+    enriched = dict(raw_row_exclusion)
+    if enriched.get("stage_counts") and enriched.get("exclusion_reasons"):
+        return enriched
+    manifest_path = Path(str(enriched.get("manifest_path") or ""))
+    if not manifest_path.exists():
+        return enriched
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except Exception:
+        return enriched
+    if isinstance(manifest, dict):
+        for key in (
+            "stage_counts",
+            "field_gap_counts",
+            "exclusion_reasons",
+            "first_timestamp",
+            "last_timestamp",
+            "sample_rows",
+            "producer_hint",
+        ):
+            if not enriched.get(key) and manifest.get(key):
+                enriched[key] = manifest.get(key)
+        if not enriched.get("stage_counts") or not enriched.get("exclusion_reasons"):
+            fallback = _summarize_legacy_raw_row_exclusion_manifest(manifest)
+            for key, value in fallback.items():
+                if not enriched.get(key) and value:
+                    enriched[key] = value
+    return enriched
+
+
+def _float_or_none(value: Any) -> float | None:
+    try:
+        text = str(value).strip()
+        if not text:
+            return None
+        return float(text)
+    except (TypeError, ValueError):
+        return None
+
+
+def _manifest_excluded_rows(raw_row_exclusion: dict[str, Any]) -> list[dict[str, Any]]:
+    manifest_path = Path(str(raw_row_exclusion.get("manifest_path") or ""))
+    if not manifest_path.exists():
+        return []
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+    rows = manifest.get("excluded_rows") if isinstance(manifest, dict) else []
+    return [row for row in rows if isinstance(row, dict)]
+
+
+def _raw_row_exclusion_limit_up_locked_context(raw_row_exclusion: dict[str, Any]) -> dict[str, Any] | None:
+    excluded_row_count = int(raw_row_exclusion.get("excluded_row_count") or 0)
+    if excluded_row_count <= 0:
+        return None
+    stage_counts = (
+        raw_row_exclusion.get("stage_counts")
+        if isinstance(raw_row_exclusion.get("stage_counts"), dict)
+        else {}
+    )
+    relevant_stage_count = sum(
+        int(stage_counts.get(stage) or 0)
+        for stage in ("blocked_overbought", "blocked_strength_momentum")
+    )
+    if relevant_stage_count <= 0 or relevant_stage_count < max(1, int(excluded_row_count * 0.8)):
+        return None
+    field_gap_counts = (
+        raw_row_exclusion.get("field_gap_counts")
+        if isinstance(raw_row_exclusion.get("field_gap_counts"), dict)
+        else {}
+    )
+    zero_range_count = int(field_gap_counts.get("zero_fields:intraday_range_pct") or 0)
+    if zero_range_count < max(1, int(excluded_row_count * 0.8)):
+        return None
+    exclusion_reasons = (
+        raw_row_exclusion.get("exclusion_reasons")
+        if isinstance(raw_row_exclusion.get("exclusion_reasons"), dict)
+        else {}
+    )
+    if not exclusion_reasons.get("source_quality_blocker"):
+        return None
+    if not (exclusion_reasons.get("not_evaluated_context") or exclusion_reasons.get("insufficient_history")):
+        return None
+
+    rows = _manifest_excluded_rows(raw_row_exclusion)
+    if not rows:
+        return None
+    identity_counts: dict[str, int] = {}
+    limit_up_rows = 0
+    zero_range_rows = 0
+    stages_seen: set[str] = set()
+    stock_codes_seen: set[str] = set()
+    for item in rows:
+        payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
+        fields = payload.get("fields") if isinstance(payload.get("fields"), dict) else {}
+        stage = str(payload.get("stage") or "")
+        stages_seen.add(stage)
+        stock_code = str(payload.get("stock_code") or "")
+        if stock_code:
+            stock_codes_seen.add(stock_code)
+        identity = f"{stock_code}:{payload.get('record_id') or ''}"
+        identity_counts[identity] = identity_counts.get(identity, 0) + 1
+        fluctuation = _float_or_none(fields.get("fluctuation"))
+        if fluctuation is not None and fluctuation >= 29.0:
+            limit_up_rows += 1
+        intraday_range = _float_or_none(fields.get("intraday_range_pct"))
+        if intraday_range is not None and abs(intraday_range) < 1e-9:
+            zero_range_rows += 1
+
+    top_identity, top_identity_count = ("", 0)
+    if identity_counts:
+        top_identity, top_identity_count = max(identity_counts.items(), key=lambda item: item[1])
+    if limit_up_rows <= 0:
+        return None
+    if top_identity_count < max(1, int(len(rows) * 0.5)):
+        return None
+    if zero_range_rows < max(1, int(len(rows) * 0.5)):
+        return None
+    return {
+        "classification": "limit_up_locked_context",
+        "excluded_row_count": excluded_row_count,
+        "relevant_stage_count": relevant_stage_count,
+        "zero_intraday_range_count": zero_range_count,
+        "manifest_row_count": len(rows),
+        "manifest_limit_up_row_count": limit_up_rows,
+        "manifest_zero_range_row_count": zero_range_rows,
+        "top_identity": top_identity,
+        "top_identity_count": top_identity_count,
+        "stock_codes_sample": sorted(stock_codes_seen)[:8],
+        "stages_seen": sorted(stages_seen),
+        "required_followup": (
+            "review_only_until_non_limit_up_zero_range_repeats_or_high_low_candle_source_loss_is_proven"
+        ),
+    }
+
+
+def _summarize_legacy_raw_row_exclusion_manifest(manifest: dict[str, Any]) -> dict[str, Any]:
+    rows = manifest.get("excluded_rows") if isinstance(manifest.get("excluded_rows"), list) else []
+    stage_counts: dict[str, int] = {}
+    reason_counts: dict[str, int] = {}
+    producer_hint: dict[str, dict[str, Any]] = {}
+    timestamps: list[str] = []
+    sample_rows: list[dict[str, Any]] = []
+    for item in rows:
+        if not isinstance(item, dict):
+            continue
+        payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
+        fields = payload.get("fields") if isinstance(payload.get("fields"), dict) else {}
+        stage = str(payload.get("stage") or "-")
+        stage_counts[stage] = stage_counts.get(stage, 0) + 1
+        if payload.get("emitted_at"):
+            timestamps.append(str(payload.get("emitted_at")))
+        reasons: set[str] = set()
+        for key, value in fields.items():
+            text = json.dumps(value, ensure_ascii=False, sort_keys=True).lower() if isinstance(value, (dict, list)) else str(value).lower()
+            if "source_quality_block" in text or str(key).lower() == "source_quality_blocker":
+                reasons.add("source_quality_blocker")
+            if "not_evaluated" in text:
+                reasons.add("not_evaluated_context")
+            if "insufficient_history" in text or "insufficient_sample" in text:
+                reasons.add("insufficient_history")
+            if "unknown" in text:
+                reasons.add("unknown_token")
+        if not reasons:
+            reasons.add("row_contract_gap")
+        for reason in reasons:
+            reason_counts[reason] = reason_counts.get(reason, 0) + 1
+        hint = producer_hint.setdefault(
+            stage,
+            {
+                "stage": stage,
+                "pipeline": payload.get("pipeline"),
+                "subsystem": "runtime_instrumentation_producer",
+                "count": 0,
+                "top_reasons": [],
+            },
+        )
+        hint["count"] += 1
+        if len(sample_rows) < 10:
+            sample_rows.append(
+                {
+                    "line_no": item.get("line_no"),
+                    "stage": stage,
+                    "emitted_at": payload.get("emitted_at"),
+                    "record_id": payload.get("record_id"),
+                    "stock_code": payload.get("stock_code"),
+                    "reasons": sorted(reasons),
+                    "gap_fields": {},
+                    "source_quality_route": fields.get("source_quality_route"),
+                    "source_quality_blocker": fields.get("source_quality_blocker"),
+                    "threshold_family": fields.get("threshold_family"),
+                }
+            )
+    for hint in producer_hint.values():
+        hint["top_reasons"] = sorted(reason_counts, key=lambda key: (-reason_counts[key], key))[:5]
+    return {
+        "stage_counts": dict(sorted(stage_counts.items())),
+        "field_gap_counts": {},
+        "exclusion_reasons": dict(sorted(reason_counts.items())),
+        "first_timestamp": min(timestamps) if timestamps else None,
+        "last_timestamp": max(timestamps) if timestamps else None,
+        "sample_rows": sample_rows,
+        "producer_hint": sorted(producer_hint.values(), key=lambda item: (-int(item.get("count") or 0), str(item.get("stage") or ""))),
+    }
 
 
 def _codebase_performance_followup_orders(report: dict[str, Any]) -> list[dict[str, Any]]:
@@ -3854,6 +4385,9 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
     stage_hook_scaffold_by_name = _stage_hook_scaffold_by_name(stage_hook_runtime_scaffold)
     buy_funnel_sentinel_path = buy_funnel_sentinel_report_path(target_date)
     buy_funnel_sentinel = _load_source_json(buy_funnel_sentinel_path, isolated_source_mode=isolated_source_mode)
+    conversion_lane_path = conversion_lane_report_path(target_date)
+    conversion_lane = _load_source_json(conversion_lane_path, isolated_source_mode=isolated_source_mode)
+    conversion_rank = _conversion_rank_by_candidate(conversion_lane)
     calibration_source_path = _calibration_report_path_from_ev(ev_report)
     calibration_report = _calibration_report_from_ev(ev_report)
     candidate_source_paths = {
@@ -3875,6 +4409,7 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
         "stage_hook_workorder_discovery": stage_hook_workorder_discovery_path,
         "stage_hook_runtime_scaffold": stage_hook_runtime_scaffold_path,
         "buy_funnel_sentinel": buy_funnel_sentinel_path,
+        "conversion_lane": conversion_lane_path,
     }
     source_paths = {
         label: path
@@ -3978,6 +4513,7 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
         for item in (stage_hook_workorder_discovery.get("code_improvement_orders") or [])
         if isinstance(item, dict)
     ]
+    conversion_lane_orders = _conversion_lane_followup_orders(conversion_lane)
     buy_funnel_sentinel_orders = _buy_funnel_sentinel_followup_orders(buy_funnel_sentinel)
     buy_funnel_sentinel_order_ids = {
         str(order.get("order_id"))
@@ -3995,6 +4531,7 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
     lifecycle_scale_in_bucket_orders = _lifecycle_scale_in_bucket_followup_orders(lifecycle_report)
     lifecycle_overnight_bucket_orders = _lifecycle_overnight_bucket_followup_orders(lifecycle_report)
     lifecycle_bucket_discovery_orders = _lifecycle_bucket_discovery_followup_orders(lifecycle_bucket_discovery)
+    observation_source_quality_orders = _observation_source_quality_followup_orders(observation_source_quality)
     threshold_ev_orders = [
         *_threshold_ev_followup_orders(ev_report),
         *_entry_adm_followup_orders(ev_report),
@@ -4002,7 +4539,7 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
         *_window_policy_audit_followup_orders(calibration_report),
         *_panic_lifecycle_followup_orders(calibration_report),
         *_pipeline_event_verbosity_followup_orders(pipeline_event_verbosity),
-        *_observation_source_quality_followup_orders(observation_source_quality),
+        *observation_source_quality_orders,
         *_codebase_performance_followup_orders(codebase_performance),
         *buy_funnel_sentinel_orders,
     ]
@@ -4018,6 +4555,7 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
         *pattern_lab_ai_review_orders,
         *producer_gap_discovery_orders,
         *stage_hook_workorder_discovery_orders,
+        *conversion_lane_orders,
         *lifecycle_entry_bucket_orders,
         *lifecycle_submit_bucket_orders,
         *lifecycle_flow_bucket_orders,
@@ -4027,6 +4565,8 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
         *lifecycle_bucket_discovery_orders,
         *threshold_ev_orders,
     ]
+    if conversion_rank:
+        orders = [_annotate_order_conversion_fields(order, conversion_rank) for order in orders]
     seen_keys: set[tuple[str, str, str]] = set()
     deduped_orders: list[dict[str, Any]] = []
     collision_warnings: list[str] = []
@@ -4120,6 +4660,17 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
         for order in buy_funnel_sentinel_orders
         if order.get("order_id")
     )
+    required_handoff_order_ids.update(
+        str(order.get("order_id"))
+        for order in conversion_lane_orders
+        if order.get("order_id")
+    )
+    required_handoff_order_ids.update(
+        str(order.get("order_id"))
+        for order in observation_source_quality_orders
+        if order.get("order_id")
+        and order.get("improvement_type") == "source_quality_raw_row_exclusion_producer_gap"
+    )
     selected_order_ids = {str(item.order.get("order_id")) for item in selected if item.order.get("order_id")}
     for item in classified:
         order_id = str(item.order.get("order_id") or "")
@@ -4195,6 +4746,7 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
             "stage_hook_workorder_discovery": source_ref("stage_hook_workorder_discovery"),
             "stage_hook_runtime_scaffold": source_ref("stage_hook_runtime_scaffold"),
             "buy_funnel_sentinel": source_ref("buy_funnel_sentinel"),
+            "conversion_lane": source_ref("conversion_lane"),
             "threshold_cycle_calibration": source_ref("threshold_cycle_calibration"),
         },
         "source_fingerprint": source_fingerprint["files"],
@@ -4230,6 +4782,7 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
             "stage_hook_workorder_discovery_status": stage_hook_workorder_discovery.get("status"),
             "stage_hook_runtime_scaffold_status": stage_hook_runtime_scaffold.get("status"),
             "stage_hook_runtime_scaffold_implemented_hook_count": len(stage_hook_scaffold_by_name),
+            "conversion_lane_source_order_count": len(conversion_lane_orders),
             "producer_gap_discovery_high_priority_selected": bool(
                 {
                     str(order.get("order_id"))
@@ -4262,7 +4815,7 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
             "decision_counts": counts,
             "selected_decision_counts": selected_decision_counts,
             "selected_route_counts": selected_route_counts,
-            "selected_implement_now_route_count": selected_route_counts.get("implement_now", 0),
+            "selected_implement_now_route_count": selected_decision_counts.get("implement_now", 0),
             "already_implemented_source_handoff_count": already_implemented_source_handoff_count,
             "selected_runtime_effect_false_count": selected_runtime_effect_false_count,
             "selected_unimplemented_runtime_effect_false_count": selected_unimplemented_runtime_effect_false_count,
@@ -4297,6 +4850,7 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
             "pattern_lab_ai_review_status": pattern_lab_ai_review.get("status"),
             "pattern_lab_ai_review_workorder_count": ((pattern_lab_ai_review.get("summary") or {}).get("workorder_count")),
             "buy_funnel_sentinel_source_order_count": len(buy_funnel_sentinel_orders),
+            "conversion_blocker_rank_count": len(conversion_rank),
             "buy_funnel_sentinel_primary": ((buy_funnel_sentinel.get("classification") or {}).get("primary")),
             "entry_submit_drought_primary": ((buy_funnel_sentinel.get("classification") or {}).get("primary")),
             "entry_submit_drought_selected": bool(

@@ -81,6 +81,154 @@ def test_source_quality_hard_block_status_passes_when_blocked_artifacts_handoff_
     assert status["workorder_handoff_present"] is True
 
 
+def test_raw_row_exclusion_handoff_fails_without_producer_fix_workorder():
+    status = mod._raw_row_exclusion_handoff_status(
+        {
+            "raw_row_exclusion": {
+                "excluded_row_count": 2,
+                "stage_counts": {"custom_runtime_context_stage": 2},
+                "exclusion_reasons": {"required_field_missing": 2},
+            }
+        },
+        workorder={"orders": []},
+    )
+
+    assert status["status"] == "fail"
+    assert status["excluded_row_count"] == 2
+    assert status["workorder_handoff_present"] is False
+
+
+def test_raw_row_exclusion_handoff_passes_with_producer_fix_workorder():
+    status = mod._raw_row_exclusion_handoff_status(
+        {"raw_row_exclusion": {"excluded_row_count": 1}},
+        workorder={
+            "orders": [
+                {
+                    "order_id": "order_observation_source_quality_raw_row_exclusion_producer_gap",
+                    "decision": "implement_now",
+                    "runtime_effect": False,
+                    "allowed_runtime_apply": False,
+                    "forbidden_uses": ["real_order_authority"],
+                }
+            ]
+        },
+    )
+
+    assert status["status"] == "pass"
+    assert status["workorder_handoff_present"] is True
+
+
+def test_raw_row_exclusion_handoff_passes_with_limit_up_review_only_context():
+    status = mod._raw_row_exclusion_handoff_status(
+        {
+            "raw_row_exclusion": {
+                "excluded_row_count": 6,
+                "stage_counts": {"blocked_overbought": 3, "blocked_strength_momentum": 3},
+                "field_gap_counts": {"zero_fields:intraday_range_pct": 6},
+            }
+        },
+        workorder={
+            "orders": [],
+            "non_selected_orders": [
+                {
+                    "order_id": "order_observation_source_quality_raw_row_exclusion_producer_gap",
+                    "improvement_type": "source_quality_raw_row_exclusion_limit_up_locked_context",
+                    "route": "review_required_limit_up_locked_context",
+                    "raw_row_exclusion_context_classification": "limit_up_locked_context",
+                    "decision": "attach_existing_family",
+                    "runtime_effect": False,
+                    "allowed_runtime_apply": False,
+                }
+            ],
+        },
+    )
+
+    assert status["status"] == "pass"
+    assert status["workorder_handoff_present"] is True
+    assert status["review_only_context_count"] == 1
+
+
+def test_raw_row_exclusion_handoff_fails_when_order_is_non_selected_only():
+    status = mod._raw_row_exclusion_handoff_status(
+        {"raw_row_exclusion": {"excluded_row_count": 1}},
+        workorder={
+            "orders": [],
+            "non_selected_orders": [
+                {
+                    "order_id": "order_observation_source_quality_raw_row_exclusion_producer_gap",
+                    "decision": "implement_now",
+                    "runtime_effect": False,
+                }
+            ],
+        },
+    )
+
+    assert status["status"] == "fail"
+    assert status["workorder_handoff_present"] is False
+
+
+def test_raw_row_exclusion_handoff_fails_when_safe_producer_fix_is_non_selected_only():
+    status = mod._raw_row_exclusion_handoff_status(
+        {"raw_row_exclusion": {"excluded_row_count": 1}},
+        workorder={
+            "orders": [],
+            "non_selected_orders": [
+                {
+                    "order_id": "order_observation_source_quality_raw_row_exclusion_producer_gap",
+                    "decision": "implement_now",
+                    "runtime_effect": False,
+                    "allowed_runtime_apply": False,
+                    "forbidden_uses": ["real_order_authority"],
+                }
+            ],
+        },
+    )
+
+    assert status["status"] == "fail"
+    assert status["workorder_handoff_present"] is False
+
+
+def test_raw_row_exclusion_handoff_fails_when_workorder_contract_is_not_safe_scope():
+    status = mod._raw_row_exclusion_handoff_status(
+        {"raw_row_exclusion": {"excluded_row_count": 1}},
+        workorder={
+            "orders": [
+                {
+                    "order_id": "order_observation_source_quality_raw_row_exclusion_producer_gap",
+                    "decision": "implement_now",
+                    "runtime_effect": True,
+                    "allowed_runtime_apply": False,
+                    "forbidden_uses": ["real_order_authority"],
+                }
+            ],
+        },
+    )
+
+    assert status["status"] == "fail"
+    assert status["workorder_handoff_present"] is False
+    assert status["invalid_contract_reasons"] == ["runtime_effect_not_false"]
+
+
+def test_raw_row_exclusion_handoff_fails_without_forbidden_uses_contract():
+    status = mod._raw_row_exclusion_handoff_status(
+        {"raw_row_exclusion": {"excluded_row_count": 1}},
+        workorder={
+            "orders": [
+                {
+                    "order_id": "order_observation_source_quality_raw_row_exclusion_producer_gap",
+                    "decision": "implement_now",
+                    "runtime_effect": False,
+                    "allowed_runtime_apply": False,
+                }
+            ],
+        },
+    )
+
+    assert status["status"] == "fail"
+    assert status["workorder_handoff_present"] is False
+    assert status["invalid_contract_reasons"] == ["missing_forbidden_uses_contract"]
+
+
 def test_read_lines_includes_rotated_numeric_log(tmp_path):
     log_path = tmp_path / "threshold_cycle_postclose_cron.log"
     (tmp_path / "threshold_cycle_postclose_cron.log.1").write_text(

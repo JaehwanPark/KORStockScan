@@ -42,6 +42,19 @@ def _safe_order(order_id="safe", **extra):
     return payload
 
 
+def _successful_attempt(**kwargs):
+    order_ids = [item["order_id"] for item in kwargs["orders"]]
+    return {
+        "attempt": kwargs["attempt_index"] + 1,
+        "status": "committed_branch",
+        "codex_error": None,
+        "order_ids": order_ids,
+        "branch": f"{kwargs['branch_prefix']}-{kwargs['attempt_index']}",
+        "validation_results": [{"command": ["ok"], "exit_code": 0, "status": "pass"}],
+        "commit_sha": f"sha-{'-'.join(order_ids)}",
+    }
+
+
 def test_safe_missing_forbidden_uses_is_repaired_into_canonical_queue(monkeypatch, tmp_path):
     report_dir = _patch_report_dirs(monkeypatch, tmp_path)
     _write_workorder(
@@ -277,6 +290,7 @@ def test_non_selected_orders_are_not_promoted_or_executed(monkeypatch, tmp_path)
 
 def test_strict_completion_requires_branch_commit_merge_and_push(monkeypatch, tmp_path):
     report_dir = _patch_report_dirs(monkeypatch, tmp_path)
+    monkeypatch.setenv("CODEX_WORKORDER_TWO_PASS_ENABLED", "false")
     _write_workorder(report_dir, [_safe_order()])
     monkeypatch.setattr(
         mod,
@@ -315,6 +329,7 @@ def test_strict_completion_requires_branch_commit_merge_and_push(monkeypatch, tm
 
 def test_push_disabled_keeps_runner_incomplete(monkeypatch, tmp_path):
     report_dir = _patch_report_dirs(monkeypatch, tmp_path)
+    monkeypatch.setenv("CODEX_WORKORDER_TWO_PASS_ENABLED", "false")
     _write_workorder(report_dir, [_safe_order()])
     monkeypatch.setattr(
         mod,
@@ -627,6 +642,290 @@ def test_unsupported_acceptance_tests_block_completion(monkeypatch, tmp_path):
     assert report["unsupported_acceptance_tests"] == ["bash deploy/run_bot.sh"]
     assert report["forbidden_diff_scan"]["status"] == "not_run"
     assert report["order_execution_results"][0]["reason"] == "validation_failed"
+
+
+def test_merge_and_push_updates_main_sha_after_push_rejected_rebase_retry(monkeypatch, tmp_path):
+    commands = []
+    push_calls = [0]
+    head_values = iter(["pre-rebase-sha", "post-rebase-sha"])
+    monkeypatch.setattr(mod, "WORKTREE_ROOT", tmp_path / "worktrees")
+    monkeypatch.setattr(
+        mod,
+        "_run_validation",
+        lambda worktree, command_runner, dry_run: [{"command": ["ok"], "exit_code": 0, "status": "pass"}],
+    )
+    monkeypatch.setattr(mod, "_head_sha", lambda worktree: next(head_values))
+
+    def fake_runner(cmd, cwd=None):
+        commands.append(cmd)
+        if cmd == ["git", "push", "origin", "HEAD:main"]:
+            push_calls[0] += 1
+            return 1 if push_calls[0] == 1 else 0
+        return 0
+
+    merge_result, push_result = mod._merge_and_push_main(
+        target_date="2026-06-03",
+        branch_commits=[{"branch": "pass1", "commit_sha": "sha-pass1"}],
+        command_runner=fake_runner,
+        dry_run=False,
+        auto_push=True,
+    )
+
+    assert push_result["status"] == "pushed"
+    assert push_result["rebase_exit_code"] == 0
+    assert merge_result["merged_main_sha"] == "post-rebase-sha"
+    assert commands.count(["git", "push", "origin", "HEAD:main"]) == 2
+    assert ["git", "rebase", "origin/main"] in commands
+
+
+def test_regeneration_commands_run_in_required_order():
+    commands = mod._regeneration_commands("2026-06-03", 7)
+    joined = [" ".join(command) for command in commands]
+
+    assert "src.engine.observation_source_quality_audit --target-date 2026-06-03 --write" in joined[0]
+    assert "src.engine.automation.key_lineage_ledger --date 2026-06-03" in joined[1]
+    assert "src.engine.automation.conversion_lane --date 2026-06-03" in joined[2]
+    assert "src.engine.build_code_improvement_workorder --date 2026-06-03 --max-orders 7" in joined[3]
+    assert "src.engine.verify_threshold_cycle_postclose_chain --date 2026-06-03" in joined[4]
+
+
+def test_two_pass_skips_pass2_when_regenerated_workorder_has_no_new_safe_orders(monkeypatch, tmp_path):
+    report_dir = _patch_report_dirs(monkeypatch, tmp_path)
+    order = _safe_order("pass1")
+    _write_workorder(report_dir, [order])
+    monkeypatch.setattr(mod, "_attempt_codex_batch", _successful_attempt)
+    monkeypatch.setattr(
+        mod,
+        "_run_two_pass_regeneration",
+        lambda **kwargs: (
+            {"status": "regeneration_completed", "results": [{"status": "merged_pass1"}]},
+            {"generation_id": "g2", "source_hash": "h2", "orders": [order], "lineage": {}},
+        ),
+    )
+    monkeypatch.setattr(
+        mod,
+        "_merge_and_push_main",
+        lambda **kwargs: (
+            {"status": "merged_main", "merged_main_sha": "main-sha", "branches": ["pass1"]},
+            {"status": "pushed", "pushed": True, "exit_code": 0},
+        ),
+    )
+
+    report = mod.build_codex_workorder_runner("2026-06-03", command_runner=lambda cmd, cwd=None: 0)
+
+    assert report["status"] == "completed"
+    assert report["two_pass_status"] == "pass2_not_required"
+    assert report["pass1_order_ids"] == ["pass1"]
+    assert report["pass2_order_ids"] == []
+    assert report["regeneration_results"] == [{"status": "merged_pass1"}]
+
+
+def test_two_pass_new_safe_order_runs_pass2_before_final_merge(monkeypatch, tmp_path):
+    report_dir = _patch_report_dirs(monkeypatch, tmp_path)
+    pass1 = _safe_order("pass1")
+    pass2 = _safe_order("pass2")
+    _write_workorder(report_dir, [pass1])
+    attempt_base_refs = []
+
+    def fake_attempt(**kwargs):
+        attempt_base_refs.append((kwargs["branch_prefix"], kwargs["base_ref"]))
+        return _successful_attempt(**kwargs)
+
+    monkeypatch.setattr(mod, "_attempt_codex_batch", fake_attempt)
+    monkeypatch.setattr(
+        mod,
+        "_run_two_pass_regeneration",
+        lambda **kwargs: (
+            {"status": "regeneration_completed", "results": [{"status": "merged_pass1"}]},
+            {
+                "generation_id": "g2",
+                "orders": [pass1, pass2],
+                "lineage": {"new_order_ids": ["pass2"]},
+            },
+        ),
+    )
+    monkeypatch.setattr(
+        mod,
+        "_merge_and_push_main",
+        lambda **kwargs: (
+            {
+                "status": "merged_main",
+                "merged_main_sha": "main-sha",
+                "branches": [item["branch"] for item in kwargs["branch_commits"]],
+            },
+            {"status": "pushed", "pushed": True, "exit_code": 0},
+        ),
+    )
+
+    report = mod.build_codex_workorder_runner("2026-06-03", command_runner=lambda cmd, cwd=None: 0)
+
+    assert report["status"] == "completed"
+    assert report["two_pass_status"] == "pass2_completed"
+    assert report["canonical_implement_order_ids"] == ["pass1", "pass2"]
+    assert report["pass2_order_ids"] == ["pass2"]
+    assert report["pass2_selection_reason"] == [{"order_id": "pass2", "reason": "new_or_changed_order"}]
+    assert all(item["final_status"] == "completed" for item in report["order_execution_results"])
+    assert ("codex-workorder-pass2", "codex-regeneration-2026-06-03") in attempt_base_refs
+
+
+def test_two_pass_regeneration_failure_blocks_completion(monkeypatch, tmp_path):
+    report_dir = _patch_report_dirs(monkeypatch, tmp_path)
+    _write_workorder(report_dir, [_safe_order("pass1")])
+    monkeypatch.setattr(mod, "_attempt_codex_batch", _successful_attempt)
+    monkeypatch.setattr(
+        mod,
+        "_run_two_pass_regeneration",
+        lambda **kwargs: (
+            {"status": "blocked_regeneration_failed", "results": [{"status": "fail"}]},
+            {},
+        ),
+    )
+
+    report = mod.build_codex_workorder_runner("2026-06-03", command_runner=lambda cmd, cwd=None: 0)
+
+    assert report["status"] == "blocked_regeneration_failed"
+    assert report["two_pass_status"] == "blocked_regeneration_failed"
+    assert report["main_merge_result"]["status"] == "not_required"
+
+
+def test_two_pass_regeneration_blocks_when_regenerated_workorder_is_missing(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        mod,
+        "_prepare_regeneration_worktree",
+        lambda **kwargs: (tmp_path / "regen", {"status": "merged_pass1", "worktree": str(tmp_path / "regen")}),
+    )
+
+    status, regenerated = mod._run_two_pass_regeneration(
+        target_date="2026-06-03",
+        max_orders=5,
+        branch_commits=[{"branch": "pass1"}],
+        command_runner=lambda cmd, cwd=None: 0,
+        dry_run=False,
+    )
+
+    assert regenerated == {}
+    assert status["status"] == "blocked_regeneration_failed"
+    assert status["results"][-1]["reason"] == "regenerated_workorder_missing_or_invalid"
+
+
+def test_two_pass_new_unsafe_order_is_terminal_user_authority_not_pass2(monkeypatch, tmp_path):
+    report_dir = _patch_report_dirs(monkeypatch, tmp_path)
+    pass1 = _safe_order("pass1")
+    unsafe = _safe_order("unsafe", title="provider route change")
+    _write_workorder(report_dir, [pass1])
+    monkeypatch.setattr(mod, "_attempt_codex_batch", _successful_attempt)
+    monkeypatch.setattr(
+        mod,
+        "_run_two_pass_regeneration",
+        lambda **kwargs: (
+            {"status": "regeneration_completed", "results": [{"status": "merged_pass1"}]},
+            {"generation_id": "g2", "orders": [pass1, unsafe], "lineage": {"new_order_ids": ["unsafe"]}},
+        ),
+    )
+
+    report = mod.build_codex_workorder_runner("2026-06-03", command_runner=lambda cmd, cwd=None: 0)
+
+    assert report["status"] == "blocked_non_recoverable"
+    assert report["pass2_order_ids"] == []
+    assert report["normalized_out_orders"][-1]["order_id"] == "unsafe"
+    assert report["normalized_out_orders"][-1]["terminal_status"] == "requires_user_authority"
+
+
+def test_two_pass_pass2_incomplete_blocks_completion(monkeypatch, tmp_path):
+    report_dir = _patch_report_dirs(monkeypatch, tmp_path)
+    pass1 = _safe_order("pass1")
+    pass2 = _safe_order("pass2")
+    _write_workorder(report_dir, [pass1])
+
+    def fake_attempt(**kwargs):
+        if "pass2" in kwargs["branch_prefix"]:
+            return {
+                "attempt": kwargs["attempt_index"] + 1,
+                "status": "validation_failed",
+                "codex_error": None,
+                "order_ids": [item["order_id"] for item in kwargs["orders"]],
+                "branch": "pass2",
+                "validation_results": [{"command": ["pytest"], "exit_code": 1, "status": "fail"}],
+            }
+        return _successful_attempt(**kwargs)
+
+    monkeypatch.setattr(mod, "_attempt_codex_batch", fake_attempt)
+    monkeypatch.setattr(
+        mod,
+        "_run_two_pass_regeneration",
+        lambda **kwargs: (
+            {"status": "regeneration_completed", "results": [{"status": "merged_pass1"}]},
+            {"generation_id": "g2", "orders": [pass1, pass2], "lineage": {"new_order_ids": ["pass2"]}},
+        ),
+    )
+
+    report = mod.build_codex_workorder_runner(
+        "2026-06-03",
+        command_runner=lambda cmd, cwd=None: 0,
+        max_orders=1,
+    )
+
+    assert report["status"] == "blocked_uncompleted_implementation"
+    assert report["two_pass_status"] == "blocked_new_orders_uncompleted"
+    assert report["pass2_order_ids"] == ["pass2"]
+
+
+def test_two_pass_regenerated_non_implement_instrumentation_promotes_to_pass2(monkeypatch, tmp_path):
+    report_dir = _patch_report_dirs(monkeypatch, tmp_path)
+    pass1 = _safe_order("pass1")
+    attach = {
+        "order_id": "attach_instrumentation",
+        "decision": "attach_existing_family",
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "route": "instrumentation_order",
+    }
+    _write_workorder(report_dir, [pass1])
+    monkeypatch.setattr(mod, "_attempt_codex_batch", _successful_attempt)
+    monkeypatch.setattr(
+        mod,
+        "_run_two_pass_regeneration",
+        lambda **kwargs: (
+            {"status": "regeneration_completed", "results": [{"status": "merged_pass1"}]},
+            {"generation_id": "g2", "orders": [pass1, attach], "lineage": {"new_order_ids": ["attach_instrumentation"]}},
+        ),
+    )
+    monkeypatch.setattr(
+        mod,
+        "_merge_and_push_main",
+        lambda **kwargs: (
+            {"status": "merged_main", "merged_main_sha": "main-sha", "branches": []},
+            {"status": "pushed", "pushed": True, "exit_code": 0},
+        ),
+    )
+
+    report = mod.build_codex_workorder_runner("2026-06-03", command_runner=lambda cmd, cwd=None: 0)
+
+    assert report["status"] == "completed"
+    assert report["pass2_order_ids"] == ["attach_instrumentation"]
+    assert any(
+        item["order_id"] == "attach_instrumentation" and item["terminal_status"] == "promoted_to_implement_now"
+        for item in report["non_implement_dispositions"]
+    )
+
+
+def test_two_pass_regenerated_non_selected_order_is_not_promoted(monkeypatch, tmp_path):
+    pass1 = _safe_order("pass1")
+    non_selected = _safe_order("non_selected")
+    pass2, normalized_out, dispositions, reasons = mod._pass2_orders_from_regenerated(
+        {
+            "orders": [pass1],
+            "non_selected_orders": [non_selected],
+            "lineage": {"new_order_ids": ["non_selected"]},
+        },
+        completed_pass1_ids={"pass1"},
+        lineage_diff={"new_order_ids": ["non_selected"], "decision_changed_order_ids": []},
+    )
+
+    assert pass2 == []
+    assert normalized_out == []
+    assert dispositions == []
+    assert reasons == []
 
 
 def test_codex_turns_requires_login_without_waiting_when_interactive_disabled(monkeypatch, tmp_path):

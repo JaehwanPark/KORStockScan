@@ -590,7 +590,67 @@ def test_observation_source_quality_write_excludes_bad_rows_instead_of_blocking_
     payload = json.loads(manifest.read_text(encoding="utf-8"))
     assert payload["policy"] == "exclude_defective_rows_not_full_day_raw"
     assert payload["excluded_row_count"] == 1
+    assert payload["stage_counts"] == {"swing_same_symbol_loss_reentry_cooldown": 1}
+    assert payload["field_gap_counts"] == {
+        "missing_fields:source_probe_id": 1,
+        "missing_fields:source_record_id": 1,
+    }
+    assert payload["exclusion_reasons"]["required_field_missing"] == 1
+    assert payload["exclusion_reasons"]["provenance_missing"] == 1
+    assert payload["producer_hint"][0]["stage"] == "swing_same_symbol_loss_reentry_cooldown"
+    assert payload["sample_rows"][0]["gap_fields"]["missing_fields"] == [
+        "source_probe_id",
+        "source_record_id",
+    ]
     assert Path(payload["backup_path"]).exists()
+
+
+def test_observation_source_quality_raw_row_exclusion_summary_is_stage_generic(monkeypatch, tmp_path):
+    monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
+    monkeypatch.setitem(
+        audit.STAGE_CONTRACTS,
+        "custom_runtime_context_stage",
+        audit.StageContract(
+            required_fields=("source_record_id", "risk_context"),
+            zero_sensitive_fields=("risk_context",),
+            max_zero_rate=0.0,
+        ),
+    )
+    _write_events(
+        tmp_path,
+        "2026-06-04",
+        [
+            _event(
+                "custom_runtime_context_stage",
+                {
+                    "source_quality_route": "source_quality_blocker_or_workorder_only",
+                    "source_quality_blocker": "context_not_ready",
+                    "risk_context": "0",
+                    "reason": "insufficient_history",
+                },
+                record_id=1,
+            ),
+            _event(
+                "custom_runtime_context_stage",
+                {
+                    "source_record_id": "SRC-2",
+                    "risk_context": "5",
+                },
+                record_id=2,
+            ),
+        ],
+    )
+
+    report = audit.write_report("2026-06-04")
+    manifest = json.loads(Path(report["raw_row_exclusion"]["manifest_path"]).read_text(encoding="utf-8"))
+
+    assert manifest["stage_counts"] == {"custom_runtime_context_stage": 1}
+    assert manifest["field_gap_counts"]["missing_fields:source_record_id"] == 1
+    assert manifest["field_gap_counts"]["zero_fields:risk_context"] == 1
+    assert manifest["exclusion_reasons"]["source_quality_blocker"] == 1
+    assert manifest["exclusion_reasons"]["insufficient_history"] == 1
+    assert manifest["exclusion_reasons"]["provenance_missing"] == 1
+    assert manifest["producer_hint"][0]["stage"] == "custom_runtime_context_stage"
 
 
 def test_observation_source_quality_does_not_exclude_rows_when_contract_passes_tolerance(monkeypatch, tmp_path):

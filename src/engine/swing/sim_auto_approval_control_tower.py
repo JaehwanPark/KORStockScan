@@ -7,6 +7,7 @@ thresholds, providers, bot state, or recommendation_history.
 
 from __future__ import annotations
 
+import argparse
 import json
 import hashlib
 from datetime import date, datetime
@@ -24,6 +25,7 @@ DECISION_AUTHORITY = "swing_sim_auto_approval_control_tower"
 
 SIM_AUTO_APPROVAL_DIR = Path(DATA_DIR) / "threshold_cycle" / "sim_auto_approvals"
 SWING_SIM_POLICY_DIR = Path(DATA_DIR) / "threshold_cycle" / "swing_sim_policies"
+LDM_HYPOTHESIS_PLAN_DIR = Path(DATA_DIR) / "threshold_cycle" / "ldm_hypothesis_observation_plans"
 SWING_LIFECYCLE_BUCKET_REPORT_DIR = Path(DATA_DIR) / "report" / "swing_lifecycle_bucket_discovery"
 BOTTOM_REBOUND_POLICY_REPORT_DIR = Path(DATA_DIR) / "report" / "swing_bottom_rebound_policy_auto_loop"
 SWING_RUNTIME_APPROVAL_REPORT_DIR = Path(DATA_DIR) / "report" / "swing_runtime_approval"
@@ -63,6 +65,21 @@ def swing_sim_auto_approval_path(target_date: str) -> Path:
 
 def swing_sim_policy_catalog_path(target_date: str) -> Path:
     return SWING_SIM_POLICY_DIR / f"swing_sim_policy_catalog_{target_date}.json"
+
+
+def _latest_hypothesis_observation_plan(target_date: str) -> dict[str, Any]:
+    exact = LDM_HYPOTHESIS_PLAN_DIR / f"ldm_hypothesis_observation_plan_{target_date}.json"
+    if exact.exists():
+        return _load_json(exact)
+    candidates: list[tuple[str, Path]] = []
+    if LDM_HYPOTHESIS_PLAN_DIR.exists():
+        for path in LDM_HYPOTHESIS_PLAN_DIR.glob("ldm_hypothesis_observation_plan_*.json"):
+            plan_date = path.stem.removeprefix("ldm_hypothesis_observation_plan_")
+            if plan_date <= target_date:
+                candidates.append((plan_date, path))
+    if not candidates:
+        return {}
+    return _load_json(sorted(candidates)[-1][1])
 
 
 def swing_lifecycle_bucket_report_path(target_date: str) -> Path:
@@ -435,6 +452,8 @@ def build_swing_sim_auto_approval(
 
 
 def build_policy_catalog(approval: dict[str, Any]) -> dict[str, Any]:
+    target_date = _date_text(approval.get("date"))
+    hypothesis_plan = _latest_hypothesis_observation_plan(target_date)
     return {
         "schema_version": "swing_sim_policy_catalog_v1",
         "date": approval.get("date"),
@@ -447,6 +466,12 @@ def build_policy_catalog(approval: dict[str, Any]) -> dict[str, Any]:
         "approved_source_ids": approval.get("approved_source_ids") or [],
         "policies": approval.get("approved_policies") or [],
         "active_arm_priority_policies": approval.get("active_arm_priority_policies") or [],
+        "active_priority_lineage": {
+            "source": "swing_sim_auto_approval",
+            "active_arm_priority_policy_count": len(approval.get("active_arm_priority_policies") or []),
+            "lineage_artifact": f"data/report/key_lineage_ledger/key_lineage_ledger_{target_date}.json",
+        },
+        "hypothesis_observation_plan": hypothesis_plan or {},
         "forbidden_uses": FORBIDDEN_USES,
     }
 
@@ -493,3 +518,16 @@ def bottom_rebound_is_approved_by_control_tower(approval: dict[str, Any]) -> boo
         and approval.get("broker_order_forbidden") is True
         and "bottom_rebound_policy_auto_loop" in set(approval.get("approved_source_ids") or [])
     )
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="Build Swing sim-only auto-approval artifact")
+    parser.add_argument("--date", default=date.today().isoformat())
+    args = parser.parse_args(argv)
+    paths = refresh_swing_sim_auto_approval(args.date)
+    print(json.dumps({key: str(value) for key, value in paths.items()}, ensure_ascii=True))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -942,12 +942,155 @@ def _hard_blocking_row_exclusions(
                 **_row_identity(row, line_no=line_no),
                 **violations,
                 "reason": "row_contract_gap",
+                "exclusion_reasons": _raw_row_exclusion_reasons(row, violations, contract),
+                "producer_hint": _producer_hint_for_row(row),
                 "tuning_input_allowed": False,
                 "runtime_effect": False,
                 "allowed_runtime_apply": False,
             }
         )
     return exclusions
+
+
+def _value_text(value: Any) -> str:
+    if isinstance(value, (dict, list, tuple, set)):
+        try:
+            return json.dumps(value, ensure_ascii=False, sort_keys=True)
+        except Exception:
+            return str(value)
+    return str(value)
+
+
+def _raw_row_exclusion_reasons(
+    row: dict[str, Any],
+    violations: dict[str, list[str]],
+    contract: StageContract | None,
+) -> list[str]:
+    fields = row.get("fields") if isinstance(row.get("fields"), dict) else {}
+    reasons: set[str] = set()
+    if violations.get("missing_fields"):
+        reasons.add("required_field_missing")
+    if violations.get("invalid_fields"):
+        reasons.add("invalid_label")
+    if violations.get("zero_fields"):
+        reasons.add("zero_context_sensitive")
+    if contract is None:
+        reasons.add("no_contract_stage")
+    missing_source_fields = [
+        field for field in violations.get("missing_fields", []) if _source_like_field(field)
+    ]
+    if missing_source_fields:
+        reasons.add("provenance_missing")
+    for key, value in fields.items():
+        text = _value_text(value).lower()
+        lowered_key = str(key).lower()
+        if "source_quality_block" in text or lowered_key == "source_quality_blocker":
+            reasons.add("source_quality_blocker")
+        if "not_evaluated" in text:
+            reasons.add("not_evaluated_context")
+        if "insufficient_history" in text or "insufficient_sample" in text:
+            reasons.add("insufficient_history")
+        if _unknown_token_present(value):
+            reasons.add("unknown_token")
+    return sorted(reasons) or ["row_contract_gap"]
+
+
+def _producer_hint_for_row(row: dict[str, Any]) -> dict[str, Any]:
+    stage = _stage_name(row)
+    pipeline = str(row.get("pipeline") or "")
+    fields = row.get("fields") if isinstance(row.get("fields"), dict) else {}
+    stage_lower = stage.lower()
+    if stage_lower.startswith("swing") or "swing" in pipeline.lower():
+        subsystem = "swing_runtime_or_sim_producer"
+    elif stage_lower.startswith("scalp") or "entry" in pipeline.lower():
+        subsystem = "scalping_entry_or_sim_producer"
+    elif "holding" in stage_lower or "exit" in stage_lower:
+        subsystem = "holding_exit_runtime_producer"
+    else:
+        subsystem = "runtime_instrumentation_producer"
+    return {
+        "stage": stage,
+        "pipeline": pipeline or None,
+        "subsystem": subsystem,
+        "threshold_family": fields.get("threshold_family"),
+        "source_stage": fields.get("source_stage"),
+    }
+
+
+def _summarize_raw_row_exclusions(
+    excluded_payloads: list[dict[str, Any]],
+    exclusions_by_line: dict[int, dict[str, Any]],
+) -> dict[str, Any]:
+    stage_counts: Counter[str] = Counter()
+    field_gap_counts: Counter[str] = Counter()
+    reason_counts: Counter[str] = Counter()
+    producer_hints: dict[str, dict[str, Any]] = {}
+    timestamps: list[str] = []
+    sample_rows: list[dict[str, Any]] = []
+    for item in excluded_payloads:
+        line_no = int(item.get("line_no") or 0)
+        payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
+        exclusion = exclusions_by_line.get(line_no, {})
+        stage = str(payload.get("stage") or exclusion.get("stage") or "-")
+        fields = payload.get("fields") if isinstance(payload.get("fields"), dict) else {}
+        stage_counts[stage] += 1
+        if timestamp := _row_ts(payload):
+            timestamps.append(timestamp)
+        reasons = exclusion.get("exclusion_reasons")
+        if not isinstance(reasons, list) or not reasons:
+            reasons = _raw_row_exclusion_reasons(payload, exclusion, STAGE_CONTRACTS.get(stage))
+        for reason in reasons:
+            reason_counts[str(reason)] += 1
+        for category in ("missing_fields", "zero_fields", "invalid_fields"):
+            for field in exclusion.get(category) or []:
+                field_gap_counts[f"{category}:{field}"] += 1
+        if stage not in producer_hints:
+            producer_hints[stage] = {
+                **_producer_hint_for_row(payload),
+                "count": 0,
+                "top_reasons": [],
+            }
+        producer_hints[stage]["count"] += 1
+        if len(sample_rows) < 10:
+            sample_rows.append(
+                {
+                    "line_no": line_no,
+                    "stage": stage,
+                    "emitted_at": payload.get("emitted_at"),
+                    "record_id": payload.get("record_id"),
+                    "stock_code": payload.get("stock_code"),
+                    "reasons": reasons,
+                    "gap_fields": {
+                        key: list(exclusion.get(key) or [])
+                        for key in ("missing_fields", "zero_fields", "invalid_fields")
+                        if exclusion.get(key)
+                    },
+                    "source_quality_route": fields.get("source_quality_route"),
+                    "source_quality_blocker": fields.get("source_quality_blocker"),
+                    "threshold_family": fields.get("threshold_family"),
+                }
+            )
+    stage_reason_counts: dict[str, Counter[str]] = defaultdict(Counter)
+    for item in excluded_payloads:
+        line_no = int(item.get("line_no") or 0)
+        payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
+        stage = str(payload.get("stage") or "-")
+        exclusion = exclusions_by_line.get(line_no, {})
+        for reason in exclusion.get("exclusion_reasons") or []:
+            stage_reason_counts[stage][str(reason)] += 1
+    for stage, hint in producer_hints.items():
+        hint["top_reasons"] = [
+            reason for reason, _ in stage_reason_counts.get(stage, Counter()).most_common(5)
+        ]
+    return {
+        "stage_counts": dict(sorted(stage_counts.items())),
+        "field_gap_counts": dict(sorted(field_gap_counts.items())),
+        "exclusion_reasons": dict(sorted(reason_counts.items())),
+        "first_timestamp": min(timestamps) if timestamps else None,
+        "last_timestamp": max(timestamps) if timestamps else None,
+        "sample_rows": sample_rows,
+        "producer_hint": sorted(producer_hints.values(), key=lambda item: (-int(item.get("count") or 0), str(item.get("stage") or ""))),
+    }
 
 
 def _evaluate_contracts(rows: list[dict[str, Any]], stage_counts: Counter[str]) -> dict[str, Any]:
@@ -1735,6 +1878,11 @@ def _exclude_hard_blocking_rows_from_raw(target_date: str, report: dict[str, Any
     manifest_path, backup_path = _raw_row_exclusion_paths(target_date)
     manifest_path.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(raw_path, backup_path)
+    exclusions_by_line = {
+        int(item.get("line_no")): item
+        for item in exclusions
+        if isinstance(item, dict) and str(item.get("line_no") or "").isdigit()
+    }
     kept: list[str] = []
     excluded_payloads: list[dict[str, Any]] = []
     with raw_path.open("r", encoding="utf-8") as fh:
@@ -1747,6 +1895,7 @@ def _exclude_hard_blocking_rows_from_raw(target_date: str, report: dict[str, Any
             except json.JSONDecodeError:
                 payload = {"raw": line.rstrip("\n")}
             excluded_payloads.append({"line_no": line_no, "payload": payload})
+    exclusion_summary = _summarize_raw_row_exclusions(excluded_payloads, exclusions_by_line)
     tmp_path = raw_path.with_suffix(raw_path.suffix + ".tmp_row_exclusion")
     tmp_path.write_text("".join(kept), encoding="utf-8")
     tmp_path.replace(raw_path)
@@ -1759,6 +1908,7 @@ def _exclude_hard_blocking_rows_from_raw(target_date: str, report: dict[str, Any
         "source_path": str(raw_path),
         "backup_path": str(backup_path),
         "excluded_row_count": len(excluded_payloads),
+        **exclusion_summary,
         "excluded_lines": sorted(excluded_lines),
         "forbidden_uses": [
             "EV",
@@ -1783,6 +1933,13 @@ def write_report(target_date: str) -> dict[str, Any]:
             "manifest_path": exclusion_manifest.get("manifest_path"),
             "backup_path": exclusion_manifest.get("backup_path"),
             "excluded_row_count": exclusion_manifest.get("excluded_row_count"),
+            "stage_counts": exclusion_manifest.get("stage_counts") or {},
+            "field_gap_counts": exclusion_manifest.get("field_gap_counts") or {},
+            "exclusion_reasons": exclusion_manifest.get("exclusion_reasons") or {},
+            "first_timestamp": exclusion_manifest.get("first_timestamp"),
+            "last_timestamp": exclusion_manifest.get("last_timestamp"),
+            "sample_rows": exclusion_manifest.get("sample_rows") or [],
+            "producer_hint": exclusion_manifest.get("producer_hint") or [],
             "policy": exclusion_manifest.get("policy"),
         }
         report["summary"]["raw_row_exclusion_applied"] = True

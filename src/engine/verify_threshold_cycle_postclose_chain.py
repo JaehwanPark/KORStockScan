@@ -64,6 +64,8 @@ _OPTIONAL_ARTIFACT_LABELS = {
     "swing_sim_policy_catalog",
     "observation_source_quality_audit",
     "ldm_hypothesis_parent_refinement",
+    "key_lineage_ledger",
+    "conversion_lane",
 }
 _AI_EXEMPT_RUNTIME_FAMILIES = {
     "latency_classifier_runtime_profile",
@@ -159,6 +161,104 @@ def _source_quality_hard_block_status(
         "hard_blocking_contract_gap_count": summary.get("hard_blocking_contract_gap_count")
         or preflight.get("hard_blocking_contract_gap_count"),
         "hard_blocking_stages": summary.get("hard_blocking_stages") or preflight.get("hard_blocking_stages") or [],
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+    }
+
+
+def _raw_row_exclusion_handoff_status(
+    preflight: dict[str, Any],
+    *,
+    workorder: dict[str, Any],
+) -> dict[str, Any]:
+    raw_exclusion = preflight.get("raw_row_exclusion") if isinstance(preflight.get("raw_row_exclusion"), dict) else {}
+    excluded_row_count = int(raw_exclusion.get("excluded_row_count") or 0)
+    if excluded_row_count <= 0:
+        return {
+            "status": "pass",
+            "excluded_row_count": 0,
+            "workorder_handoff_present": True,
+        }
+    orders = workorder.get("orders") if isinstance(workorder.get("orders"), list) else []
+    non_selected = workorder.get("non_selected_orders") if isinstance(workorder.get("non_selected_orders"), list) else []
+    selected_matching_orders = [
+        item
+        for item in orders
+        if isinstance(item, dict)
+        and (
+            item.get("order_id") == "order_observation_source_quality_raw_row_exclusion_producer_gap"
+            or item.get("improvement_type") == "source_quality_raw_row_exclusion_producer_gap"
+            or item.get("improvement_type") == "source_quality_raw_row_exclusion_limit_up_locked_context"
+            or item.get("route") == "source_quality_raw_row_exclusion_producer_fix"
+            or item.get("route") == "review_required_limit_up_locked_context"
+        )
+    ]
+    review_only_matching_orders = [
+        item
+        for item in [*orders, *non_selected]
+        if isinstance(item, dict)
+        and (
+            item.get("raw_row_exclusion_context_classification") == "limit_up_locked_context"
+            or item.get("improvement_type") == "source_quality_raw_row_exclusion_limit_up_locked_context"
+            or item.get("route") == "review_required_limit_up_locked_context"
+        )
+    ]
+    matching_orders = [
+        item
+        for item in [*selected_matching_orders, *review_only_matching_orders]
+    ]
+    invalid_contract_reasons: list[str] = []
+    for item in matching_orders:
+        if (
+            item.get("raw_row_exclusion_context_classification") == "limit_up_locked_context"
+            or item.get("improvement_type") == "source_quality_raw_row_exclusion_limit_up_locked_context"
+            or item.get("route") == "review_required_limit_up_locked_context"
+        ):
+            if str(item.get("decision") or "") not in {"attach_existing_family", "defer_evidence"}:
+                invalid_contract_reasons.append("limit_up_context_decision_not_review_only")
+                continue
+            if item.get("runtime_effect") is not False:
+                invalid_contract_reasons.append("runtime_effect_not_false")
+                continue
+            if item.get("allowed_runtime_apply") is not False:
+                invalid_contract_reasons.append("allowed_runtime_apply_not_false")
+                continue
+            invalid_contract_reasons = []
+            break
+        if str(item.get("decision") or "") != "implement_now":
+            invalid_contract_reasons.append("decision_not_implement_now")
+            continue
+        if item.get("runtime_effect") is not False:
+            invalid_contract_reasons.append("runtime_effect_not_false")
+            continue
+        if item.get("allowed_runtime_apply") is not False:
+            invalid_contract_reasons.append("allowed_runtime_apply_not_false")
+            continue
+        forbidden_uses = item.get("forbidden_uses")
+        if not isinstance(forbidden_uses, list) or not any(str(value).strip() for value in forbidden_uses):
+            invalid_contract_reasons.append("missing_forbidden_uses_contract")
+            continue
+        invalid_contract_reasons = []
+        break
+    workorder_handoff_present = bool(matching_orders) and not invalid_contract_reasons
+    return {
+        "status": "pass" if workorder_handoff_present else "fail",
+        "excluded_row_count": excluded_row_count,
+        "stage_counts": raw_exclusion.get("stage_counts") or {},
+        "exclusion_reasons": raw_exclusion.get("exclusion_reasons") or {},
+        "workorder_handoff_present": workorder_handoff_present,
+        "matching_workorder_count": len(matching_orders),
+        "invalid_contract_reasons": sorted(set(invalid_contract_reasons)),
+        "review_only_context_count": sum(
+            1
+            for item in matching_orders
+            if isinstance(item, dict)
+            and (
+                item.get("raw_row_exclusion_context_classification") == "limit_up_locked_context"
+                or item.get("improvement_type") == "source_quality_raw_row_exclusion_limit_up_locked_context"
+                or item.get("route") == "review_required_limit_up_locked_context"
+            )
+        ),
         "runtime_effect": False,
         "allowed_runtime_apply": False,
     }
@@ -313,6 +413,8 @@ def _artifact_paths(target_date: str) -> dict[str, Path]:
         "runtime_apply_gap_audit": REPORT_DIR
         / "runtime_apply_gap_audit"
         / f"runtime_apply_gap_audit_{target_date}.json",
+        "key_lineage_ledger": REPORT_DIR / "key_lineage_ledger" / f"key_lineage_ledger_{target_date}.json",
+        "conversion_lane": REPORT_DIR / "conversion_lane" / f"conversion_lane_{target_date}.json",
         "runtime_apply_bridge": REPORT_DIR
         / "runtime_apply_bridge"
         / f"runtime_apply_bridge_{target_date}.json",
@@ -2623,6 +2725,8 @@ def build_threshold_cycle_postclose_verification(
     observation_source_quality_audit = _load_json(paths["observation_source_quality_audit"])
     runtime_summary = _load_json(paths["runtime_approval_summary"])
     runtime_apply_gap_audit = _load_json(paths["runtime_apply_gap_audit"])
+    key_lineage_ledger = _load_json(paths["key_lineage_ledger"])
+    conversion_lane = _load_json(paths["conversion_lane"])
     bridge_report = _load_json(paths["runtime_apply_bridge"])
     preopen_apply_next = _load_json(paths["threshold_preopen_apply_next"])
     scalp_sim_policy_catalog = _load_json(paths["scalp_sim_policy_catalog"])
@@ -2693,6 +2797,12 @@ def build_threshold_cycle_postclose_verification(
         log_issues.append("source_quality_hard_block_candidate_generated")
     if source_quality_hard_block.get("workorder_handoff_present") is False:
         log_issues.append("source_quality_hard_block_handoff_missing")
+    raw_row_exclusion_handoff = _raw_row_exclusion_handoff_status(
+        observation_source_quality_audit,
+        workorder=workorder,
+    )
+    if raw_row_exclusion_handoff.get("status") == "fail":
+        log_issues.append("raw_row_exclusion_workorder_handoff_missing")
     entry_bucket_handoff = _entry_bucket_handoff_status(ldm_report, ev_report, runtime_summary, workorder)
     if entry_bucket_handoff.get("status") == "fail":
         log_issues.append("ldm_entry_bucket_handoff_missing")
@@ -3174,6 +3284,39 @@ def build_threshold_cycle_postclose_verification(
             runtime_apply_gap_audit_issues.append("runtime_apply_gap_audit_stale_before_runtime_apply_bridge")
         if preopen_apply_next and _consumer_stale(runtime_apply_gap_audit, preopen_apply_next):
             runtime_apply_gap_audit_issues.append("runtime_apply_gap_audit_stale_before_threshold_preopen_apply")
+    key_lineage_summary = (
+        key_lineage_ledger.get("summary") if isinstance(key_lineage_ledger.get("summary"), dict) else {}
+    )
+    conversion_lane_summary = (
+        conversion_lane.get("summary") if isinstance(conversion_lane.get("summary"), dict) else {}
+    )
+    conversion_kpi_status = "pass"
+    conversion_kpi_issues: list[str] = []
+    conversion_kpi_warnings: list[str] = []
+    conversion_check_enabled = (
+        execution_flags.get("key_lineage_ledger") is True
+        or execution_flags.get("conversion_lane") is True
+        or bool(key_lineage_ledger)
+        or bool(conversion_lane)
+    )
+    if conversion_check_enabled and not key_lineage_ledger:
+        conversion_kpi_issues.append("key_lineage_ledger_missing")
+    if conversion_check_enabled and not conversion_lane:
+        conversion_kpi_issues.append("conversion_lane_missing")
+    if conversion_check_enabled and _safe_int(key_lineage_summary.get("key_mismatch_count")) > 0:
+        conversion_kpi_issues.append("active_or_hypothesis_key_mismatch")
+    if conversion_check_enabled and _safe_int(key_lineage_summary.get("catalog_missing_count")) > 0:
+        conversion_kpi_issues.append("active_or_hypothesis_catalog_missing")
+    if conversion_check_enabled and _safe_int(key_lineage_summary.get("preopen_missing_count")) > 0:
+        conversion_kpi_issues.append("active_or_hypothesis_preopen_missing")
+    if conversion_check_enabled and _safe_int(key_lineage_summary.get("not_instrumented_count")) > 0:
+        conversion_kpi_warnings.append("active_or_hypothesis_not_instrumented")
+    if conversion_check_enabled and _safe_int(conversion_lane_summary.get("conversion_candidate_count")) == 0 and conversion_lane:
+        conversion_kpi_warnings.append("conversion_lane_no_candidates")
+    if conversion_kpi_issues:
+        conversion_kpi_status = "fail"
+    elif conversion_kpi_warnings:
+        conversion_kpi_status = "warning"
     stale_downstream_links: list[str] = []
     if "daily_ev" not in disabled_stage_flags:
         if downstream_links.get("threshold_cycle_ev_sources_workorder") and _consumer_stale(ev_report, workorder):
@@ -3294,9 +3437,11 @@ def build_threshold_cycle_postclose_verification(
         status = "fail"
     elif runtime_apply_gap_audit_issues:
         status = "fail"
+    elif conversion_kpi_status == "fail":
+        status = "fail"
     elif stale_downstream_links:
         status = "fail"
-    elif handoff_warnings:
+    elif handoff_warnings or conversion_kpi_warnings:
         status = "warning"
     elif predecessor_waits:
         status = "warning"
@@ -3371,10 +3516,18 @@ def build_threshold_cycle_postclose_verification(
             "runtime_apply_bridge_generated_at": bridge_report.get("generated_at"),
             "threshold_preopen_apply_next_generated_at": preopen_apply_next.get("generated_at"),
         },
+        "conversion_kpi": {
+            "status": conversion_kpi_status,
+            "issues": conversion_kpi_issues,
+            "warnings": conversion_kpi_warnings,
+            "key_lineage_summary": key_lineage_summary,
+            "conversion_lane_summary": conversion_lane_summary,
+        },
         "handoff_warnings": sorted(set(handoff_warnings)),
         "clean_baseline_report_residue": clean_baseline_report_residue,
         "clean_baseline_analytics_residue": clean_baseline_analytics_residue,
         "source_quality_hard_block": source_quality_hard_block,
+        "raw_row_exclusion_handoff": raw_row_exclusion_handoff,
         "ai_correction": ai_correction,
         "scalp_sim_overnight_source_quality": scalp_sim_overnight_quality,
         "entry_bucket_handoff": entry_bucket_handoff,

@@ -186,11 +186,27 @@ def _is_done_verifier_status(target_date: str, verification: dict[str, Any], iss
     return set(issues).issubset(DONE_ACCEPTABLE_WARNING_ISSUES)
 
 
+def _runner_completed(runner_report: dict[str, Any], *, dry_run: bool = False) -> bool:
+    runner_status = str(runner_report.get("status") or "missing")
+    two_pass_status = str(runner_report.get("two_pass_status") or "missing")
+    if dry_run:
+        return runner_status == "dry_run_planned"
+    return runner_status == "completed" and two_pass_status in {"pass2_completed", "pass2_not_required", "not_required"}
+
+
 def _build_verify_action(target_date: str) -> RecoveryAction:
     return RecoveryAction(
         "verify_postclose_chain",
         [_python_bin(), "-m", "src.engine.verify_threshold_cycle_postclose_chain", "--date", target_date],
         "refresh verifier status",
+    )
+
+
+def _build_codex_runner_action(target_date: str) -> RecoveryAction:
+    return RecoveryAction(
+        "run_codex_workorder_runner",
+        [_python_bin(), "-m", "src.engine.automation.codex_workorder_runner", "--date", target_date],
+        "codex workorder runner strict completion or 2-pass incomplete",
     )
 
 
@@ -337,6 +353,25 @@ def build_postclose_done_controller(
             }
         )
         if _is_done_verifier_status(target_date, final_verifier, issues):
+            if require_codex_completed and not dry_run:
+                runner_report = _load_json(_runner_path(target_date))
+                if not _runner_completed(runner_report, dry_run=dry_run):
+                    action = _build_codex_runner_action(target_date)
+                    rc = command_runner(action.command or [], _action_env(action))
+                    actions_done.append(
+                        {
+                            "attempt": attempt,
+                            "action": action.action,
+                            "reason": action.reason,
+                            "command": action.command,
+                            "status": "success" if rc == 0 else "failed",
+                            "exit_code": rc,
+                        }
+                    )
+                    if rc != 0:
+                        blocked_reasons.append(f"{action.action}_failed")
+                        break
+                    continue
             break
         if _has_non_recoverable_issue(issues):
             blocked_reasons = issues or [f"verifier_status={verifier_status}"]
@@ -367,9 +402,10 @@ def build_postclose_done_controller(
     final_issues = _flatten_issues(final_verifier)
     runner_report = _load_json(_runner_path(target_date))
     runner_status = str(runner_report.get("status") or "missing")
-    runner_completed = runner_status in {"completed", "dry_run_planned"}
+    runner_two_pass_status = str(runner_report.get("two_pass_status") or "missing")
+    runner_completed = _runner_completed(runner_report, dry_run=dry_run)
     if require_codex_completed and not dry_run and not runner_completed:
-        blocked_reasons = list(dict.fromkeys([*blocked_reasons, f"codex_workorder_runner_not_completed:{runner_status}"]))
+        blocked_reasons = list(dict.fromkeys([*blocked_reasons, f"codex_workorder_runner_not_completed:{runner_status}:{runner_two_pass_status}"]))
 
     if _is_done_verifier_status(target_date, final_verifier, final_issues) and not (
         require_codex_completed and not dry_run and not runner_completed
@@ -405,6 +441,7 @@ def build_postclose_done_controller(
         "runtime_apply_gap_status": _load_json(_runtime_gap_path(target_date)).get("status"),
         "workorder_generation_id": _load_json(_workorder_path(target_date)).get("generation_id"),
         "codex_workorder_runner_status": runner_status,
+        "codex_workorder_runner_two_pass_status": runner_two_pass_status,
         "codex_workorder_runner_completed": runner_completed,
         "attempts": attempts,
         "actions": actions_done,

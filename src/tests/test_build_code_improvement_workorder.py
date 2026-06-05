@@ -171,6 +171,103 @@ def test_build_code_improvement_workorder_limits_selected_orders(tmp_path, monke
     assert report["deferred_or_rejected_count"] == 3
 
 
+def test_build_code_improvement_workorder_adds_conversion_lane_orders(tmp_path, monkeypatch):
+    automation_dir = tmp_path / "automation"
+    conversion_dir = tmp_path / "conversion_lane"
+    report_dir = tmp_path / "report"
+    doc_dir = tmp_path / "docs"
+    automation_dir.mkdir()
+    conversion_dir.mkdir()
+    (automation_dir / "scalping_pattern_lab_automation_2026-05-08.json").write_text(
+        json.dumps({"date": "2026-05-08", "code_improvement_orders": []}),
+        encoding="utf-8",
+    )
+    (conversion_dir / "conversion_lane_2026-05-08.json").write_text(
+        json.dumps(
+            {
+                "conversion_blocker_rank": [
+                    {
+                        "conversion_candidate_id": "active_seed_x",
+                        "blocker_class": "key_lineage",
+                        "conversion_impact_rank": 1,
+                        "remaining_gap_count": 2,
+                        "next_repair_action": "runtime_observed_seed_not_in_catalog",
+                        "acceptance_test": "same key is continuous",
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", automation_dir)
+    monkeypatch.setattr(mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing")
+    monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", tmp_path / "missing-ev")
+    monkeypatch.setattr(mod, "CONVERSION_LANE_DIR", conversion_dir)
+    monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_DIR", doc_dir)
+
+    report = mod.build_code_improvement_workorder("2026-05-08", max_orders=1)
+
+    order = report["orders"][0]
+    assert order["source_report_type"] == "conversion_lane"
+    assert order["decision"] == "implement_now"
+    assert order["conversion_candidate_id"] == "active_seed_x"
+    assert order["blocks_bounded_real_canary"] is True
+    assert report["summary"]["conversion_lane_source_order_count"] == 1
+    assert report["summary"]["selected_implement_now_route_count"] == 1
+
+
+def test_conversion_lane_orders_are_required_handoff_beyond_max_orders(tmp_path, monkeypatch):
+    automation_dir = tmp_path / "automation"
+    conversion_dir = tmp_path / "conversion_lane"
+    report_dir = tmp_path / "report"
+    doc_dir = tmp_path / "docs"
+    automation_dir.mkdir()
+    conversion_dir.mkdir()
+    (automation_dir / "scalping_pattern_lab_automation_2026-05-08.json").write_text(
+        json.dumps({"date": "2026-05-08", "code_improvement_orders": []}),
+        encoding="utf-8",
+    )
+    (conversion_dir / "conversion_lane_2026-05-08.json").write_text(
+        json.dumps(
+            {
+                "conversion_blocker_rank": [
+                    {
+                        "conversion_candidate_id": "hyp_1",
+                        "blocker_class": "key_lineage",
+                        "conversion_impact_rank": 1,
+                        "remaining_gap_count": 2,
+                        "next_repair_action": "hypothesis_catalog_missing",
+                        "acceptance_test": "same key is continuous",
+                    },
+                    {
+                        "conversion_candidate_id": "submit_drought:LATENCY_PRE_SUBMIT",
+                        "blocker_class": "submit_drought",
+                        "conversion_impact_rank": 2,
+                        "remaining_gap_count": 2,
+                        "next_repair_action": "close_submit_drought_latency_pre_submit",
+                        "acceptance_test": "submit drought ledger splits weak contracts",
+                    },
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", automation_dir)
+    monkeypatch.setattr(mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing")
+    monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", tmp_path / "missing-ev")
+    monkeypatch.setattr(mod, "CONVERSION_LANE_DIR", conversion_dir)
+    monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_DIR", doc_dir)
+
+    report = mod.build_code_improvement_workorder("2026-05-08", max_orders=1)
+
+    selected_ids = {order["order_id"] for order in report["orders"]}
+    assert "order_conversion_lane_key_lineage_hyp_1" in selected_ids
+    assert "order_conversion_lane_submit_drought_submit_drought_latency_pre_submit" in selected_ids
+    assert report["summary"]["selected_implement_now_route_count"] == 2
+
+
 def test_build_code_improvement_workorder_escalates_repeated_unresolved_attach(tmp_path, monkeypatch):
     automation_dir = tmp_path / "automation"
     report_dir = tmp_path / "report"
@@ -1131,6 +1228,156 @@ def test_observation_source_quality_arbitrary_unknown_token_routes_to_workorder(
     assert unknown_orders[0]["decision"] == "implement_now"
     assert codex_workorder_runner.is_safe_implement_now(unknown_orders[0])
     assert any("custom_context_state:1:0.01" in item for item in unknown_orders[0]["evidence"])
+
+
+def test_observation_source_quality_raw_row_exclusion_routes_to_implement_now_workorder():
+    report = {
+        "status": "warning",
+        "summary": {
+            "event_count": 100,
+            "warning_stage_count": 0,
+            "high_volume_no_source_field_stage_count": 0,
+            "unknown_token_stage_count": 0,
+            "review_warning_count": 0,
+            "tuning_input_allowed": True,
+        },
+        "stage_contracts": {},
+        "raw_row_exclusion": {
+            "manifest_path": "/tmp/raw_row_exclusion/manifest.json",
+            "excluded_row_count": 2,
+            "stage_counts": {"custom_runtime_context_stage": 2},
+            "field_gap_counts": {"missing_fields:source_record_id": 2},
+            "exclusion_reasons": {"required_field_missing": 2, "provenance_missing": 2},
+            "first_timestamp": "2026-06-05T09:00:00+09:00",
+            "last_timestamp": "2026-06-05T09:05:00+09:00",
+            "producer_hint": [
+                {
+                    "stage": "custom_runtime_context_stage",
+                    "count": 2,
+                    "pipeline": "ENTRY_PIPELINE",
+                    "subsystem": "scalping_entry_or_sim_producer",
+                    "top_reasons": ["required_field_missing", "provenance_missing"],
+                }
+            ],
+            "sample_rows": [
+                {
+                    "line_no": 10,
+                    "stage": "custom_runtime_context_stage",
+                    "record_id": 1,
+                    "reasons": ["required_field_missing"],
+                    "gap_fields": {"missing_fields": ["source_record_id"]},
+                }
+            ],
+        },
+    }
+
+    orders = mod._observation_source_quality_followup_orders(report)
+    classified = [
+        mod._classify_order(
+            order,
+            finding_by_order_id={},
+            finding_by_title_slug={},
+            auto_family_order_ids=set(),
+            closed_instrumentation_order_families={},
+        )
+        for order in orders
+    ]
+    serialized = [mod._serialize_classified_order(item) for item in classified]
+    raw_orders = [
+        item
+        for item in serialized
+        if item["order_id"] == "order_observation_source_quality_raw_row_exclusion_producer_gap"
+    ]
+
+    assert len(raw_orders) == 1
+    assert raw_orders[0]["decision"] == "implement_now"
+    assert raw_orders[0]["route"] == "source_quality_raw_row_exclusion_producer_fix"
+    assert raw_orders[0]["runtime_effect"] is False
+    assert codex_workorder_runner.is_safe_implement_now(raw_orders[0])
+    assert any("excluded_row_count=2" in item for item in raw_orders[0]["evidence"])
+    assert any("custom_runtime_context_stage" in item for item in raw_orders[0]["evidence"])
+
+
+def test_observation_source_quality_raw_row_exclusion_limit_up_context_is_review_only(tmp_path):
+    manifest_path = tmp_path / "manifest.json"
+    rows = []
+    for idx in range(6):
+        rows.append(
+            {
+                "line_no": idx + 1,
+                "payload": {
+                    "stage": "blocked_overbought" if idx % 2 == 0 else "blocked_strength_momentum",
+                    "stock_code": "003220",
+                    "record_id": 9276,
+                    "fields": {
+                        "fluctuation": "29.94" if idx % 2 == 0 else "",
+                        "intraday_range_pct": "0.000",
+                    },
+                },
+            }
+        )
+    manifest_path.write_text(json.dumps({"excluded_rows": rows}, ensure_ascii=False), encoding="utf-8")
+    report = {
+        "status": "warning",
+        "summary": {"event_count": 6, "tuning_input_allowed": True},
+        "raw_row_exclusion": {
+            "manifest_path": str(manifest_path),
+            "excluded_row_count": 6,
+            "stage_counts": {"blocked_overbought": 3, "blocked_strength_momentum": 3},
+            "field_gap_counts": {"zero_fields:intraday_range_pct": 6},
+            "exclusion_reasons": {
+                "source_quality_blocker": 6,
+                "not_evaluated_context": 3,
+                "insufficient_history": 3,
+            },
+        },
+    }
+
+    orders = mod._observation_source_quality_followup_orders(report)
+    classified = [
+        mod._classify_order(
+            order,
+            finding_by_order_id={},
+            finding_by_title_slug={},
+            auto_family_order_ids=set(),
+            closed_instrumentation_order_families={},
+        )
+        for order in orders
+    ]
+    serialized = [mod._serialize_classified_order(item) for item in classified]
+    raw_order = next(
+        item
+        for item in serialized
+        if item["order_id"] == "order_observation_source_quality_raw_row_exclusion_producer_gap"
+    )
+
+    assert raw_order["decision"] == "attach_existing_family"
+    assert raw_order["route"] == "review_required_limit_up_locked_context"
+    assert raw_order["improvement_type"] == "source_quality_raw_row_exclusion_limit_up_locked_context"
+    assert raw_order["raw_row_exclusion_context_classification"] == "limit_up_locked_context"
+    assert raw_order["terminal_disposition"] == "no_code_required_pending_policy_classification"
+    assert raw_order["implementation_candidate"] is False
+    assert not codex_workorder_runner.is_safe_implement_now(raw_order)
+    assert any("context_classification=limit_up_locked_context" in item for item in raw_order["evidence"])
+
+
+def test_observation_source_quality_raw_row_exclusion_routes_even_when_audit_status_passes():
+    report = {
+        "status": "pass",
+        "summary": {"event_count": 2, "tuning_input_allowed": True},
+        "raw_row_exclusion": {
+            "excluded_row_count": 1,
+            "stage_counts": {"custom_stage": 1},
+            "exclusion_reasons": {"required_field_missing": 1},
+        },
+    }
+
+    orders = mod._observation_source_quality_followup_orders(report)
+
+    assert any(
+        item["order_id"] == "order_observation_source_quality_raw_row_exclusion_producer_gap"
+        for item in orders
+    )
 
 
 def test_observation_source_quality_known_fixed_unknown_tokens_attach_existing_family():
@@ -2467,6 +2714,51 @@ def test_build_code_improvement_workorder_adds_source_quality_hard_block_order(t
     assert order["improvement_type"] == "source_quality_hard_block_contract_gap"
     assert order["runtime_effect"] is False
     assert any("first_timestamp=2026-05-15T09:00:00+09:00" in item for item in order["evidence"])
+
+
+def test_build_code_improvement_workorder_keeps_raw_row_exclusion_order_beyond_max_orders(tmp_path, monkeypatch):
+    automation_dir = tmp_path / "automation"
+    audit_dir = tmp_path / "observation-audit"
+    report_dir = tmp_path / "report"
+    doc_dir = tmp_path / "docs"
+    automation_dir.mkdir()
+    audit_dir.mkdir()
+    (automation_dir / "scalping_pattern_lab_automation_2026-05-15.json").write_text(
+        json.dumps({"date": "2026-05-15", "code_improvement_orders": []}),
+        encoding="utf-8",
+    )
+    (audit_dir / "observation_source_quality_audit_2026-05-15.json").write_text(
+        json.dumps(
+            {
+                "status": "pass",
+                "summary": {"event_count": 2, "tuning_input_allowed": True},
+                "raw_row_exclusion": {
+                    "excluded_row_count": 1,
+                    "stage_counts": {"custom_stage": 1},
+                    "exclusion_reasons": {"required_field_missing": 1},
+                },
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", automation_dir)
+    monkeypatch.setattr(mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing")
+    monkeypatch.setattr(mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-swing-lab")
+    monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", tmp_path / "missing-ev")
+    monkeypatch.setattr(mod, "PIPELINE_EVENT_VERBOSITY_DIR", tmp_path / "missing-verbosity")
+    monkeypatch.setattr(mod, "OBSERVATION_SOURCE_QUALITY_AUDIT_DIR", audit_dir)
+    monkeypatch.setattr(mod, "CODEBASE_PERFORMANCE_WORKORDER_DIR", tmp_path / "missing-performance")
+    monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_DIR", doc_dir)
+
+    report = mod.build_code_improvement_workorder("2026-05-15", max_orders=0)
+
+    selected_ids = {order["order_id"] for order in report["orders"]}
+    assert "order_observation_source_quality_raw_row_exclusion_producer_gap" in selected_ids
+    assert report["summary"]["selected_implement_now_new_runtime_effect_false_order_ids"] == [
+        "order_observation_source_quality_raw_row_exclusion_producer_gap"
+    ]
 
 
 def test_build_code_improvement_workorder_treats_implemented_report_order_as_existing_family(

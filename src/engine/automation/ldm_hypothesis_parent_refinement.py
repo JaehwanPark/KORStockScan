@@ -54,6 +54,21 @@ def observation_plan_path(target_date: str) -> Path:
     return LDM_PLAN_DIR / f"ldm_hypothesis_observation_plan_{target_date}.json"
 
 
+def latest_observation_plan_path(target_date: str) -> Path:
+    exact = observation_plan_path(target_date)
+    if exact.exists():
+        return exact
+    candidates: list[tuple[str, Path]] = []
+    if LDM_PLAN_DIR.exists():
+        for path in LDM_PLAN_DIR.glob("ldm_hypothesis_observation_plan_*.json"):
+            plan_date = path.stem.removeprefix("ldm_hypothesis_observation_plan_")
+            if plan_date <= target_date:
+                candidates.append((plan_date, path))
+    if candidates:
+        return sorted(candidates)[-1][1]
+    return exact
+
+
 def _load_json(path: Path) -> dict[str, Any]:
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
@@ -163,7 +178,7 @@ def _observable_features(features: dict[str, Any], requirements: list[dict[str, 
 
 
 def _load_observation_plan(target_date: str) -> dict[str, Any]:
-    payload = _load_json(observation_plan_path(target_date))
+    payload = _load_json(latest_observation_plan_path(target_date))
     if payload.get("schema_version") == OBSERVATION_PLAN_SCHEMA_VERSION:
         return payload
     return {}
@@ -629,7 +644,7 @@ def build_refinement_report(target_date: str) -> dict[str, Any]:
         "forbidden_uses": list(FORBIDDEN_USES),
         "source_artifacts": {
             "pipeline_events": str(_pipeline_event_path(target_date)),
-            "observation_plan": str(observation_plan_path(target_date)),
+            "observation_plan": str(latest_observation_plan_path(target_date)),
             "previous_lifecycle_bucket_discovery": str(
                 LIFECYCLE_BUCKET_DIR / f"lifecycle_bucket_discovery_{lifecycle_report.get('date')}.json"
             )

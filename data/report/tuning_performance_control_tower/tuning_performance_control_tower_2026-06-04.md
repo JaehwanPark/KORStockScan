@@ -1,9 +1,16 @@
 # Tuning Performance Control Tower - 2026-06-04
 
+## Conversion First
+
+- real_conversion_queue: `3`
+- sim_priority_only: `71`
+- key_lineage: pass=`4` mismatch=`0` catalog_missing=`12` preopen_missing=`0` not_instrumented=`0`
+- top_blocker: `key_lineage`
+
 ## 판정
 
-- 판정: `sim_progress_no_live_bucket`
-- bridge_policy_emit_state: `not_emitted_no_complete_lifecycle_flow`, promotion_window: `mtd`, verifier_status: `warning`, lifecycle_bucket_windows_status: `pass`.
+- 판정: `postclose_verifier_blocked`
+- bridge_policy_emit_state: `not_emitted_no_complete_lifecycle_flow`, promotion_window: `mtd`, verifier_status: `fail`, lifecycle_bucket_windows_status: `pass`.
 - 근거: LDM `sim_auto_approved=86` (`n/a`), `live_auto_apply_ready=0` (`n/a`), swing sim-auto `0` (`n/a`).
 - 실현손익 해석: `real_pnl_is_tuning_performance=false` (post_apply_attribution_not_ready:pending_applied_cohort).
 - 다음 액션: 내일은 `live_auto_apply_ready`, `post_apply_attribution`, `pending_future_quote_count`, selected workorder backlog만 먼저 본다.
@@ -12,7 +19,7 @@
 
 - Live-ready split: daily_discovery `0`, promotion_window `0`, bridge_ready `0`.
 - Parent bucket: daily parent_granularity_status `43`/`target_pass`, mtd `43`/`target_pass`, absorbed_sample `2303`, conflict_children `2`.
-- Bridge/verifier: greenfield_policy_emit_state `not_emitted_no_complete_lifecycle_flow`, promotion_contract_passed `True`, verifier_status `warning`, verifier_missing `[]`, handoff_warnings `["active_sim_priority_preopen_handoff_pending"]`.
+- Bridge/verifier: greenfield_policy_emit_state `not_emitted_no_complete_lifecycle_flow`, promotion_contract_passed `True`, verifier_status `fail`, verifier_missing `[]`, handoff_warnings `["swing_active_arm_priority_runtime_observation_missing"]`.
 - Runtime gap audit: status `pass`, directives `0`, source_dimension_gap `94`, quiet_gap `212`, quiet_gap_directives `0`.
 - Source freshness: status `pass`, stale_pairs `0`, warning `-`.
 - Lifecycle bucket: candidates `434` (`n/a`), surfaced `148` (`n/a`), sim-auto `86` (`n/a`), live-ready `0` (`n/a`).
@@ -34,7 +41,7 @@
 
 ## Workorder
 
-- selected orders `84`, selected decisions `{"attach_existing_family": 79, "implement_now": 5}`, routes `{"ai_review_coverage_review": 1, "existing_family": 72, "instrumentation_order": 3, "parent_conflict_exclusion_review": 1, "pattern_lab_ai_review_handoff_evidence": 3, "positive_source_only_review": 1, "review_ai_output": 1, "source_dimension_rollup": 1, "source_quality_warning_producer_fix": 1}`.
+- selected orders `100`, selected decisions `{"attach_existing_family": 79, "defer_evidence": 1, "implement_now": 20}`, routes `{"ai_review_coverage_review": 1, "existing_family": 72, "instrumentation_order": 20, "parent_conflict_exclusion_review": 1, "pattern_lab_ai_review_followup_evidence": 1, "pattern_lab_ai_review_handoff_evidence": 3, "positive_source_only_review": 1, "source_dimension_rollup": 1}`.
 - pattern lab AI review source orders `6`, pattern lab currentness source orders `0`.
 - 해석: `implement_now`는 자동 repo 수정이 아니라 `runtime_effect=false` intake다. 사용자가 Codex 구현을 지시한 경우에만 코드 작업이다.
 
@@ -49,6 +56,8 @@
 - runtime_approval_summary: `/home/ubuntu/KORStockScan/data/report/runtime_approval_summary/runtime_approval_summary_2026-06-04.json` exists=true json_valid=true
 - runtime_apply_bridge: `/home/ubuntu/KORStockScan/data/report/runtime_apply_bridge/runtime_apply_bridge_2026-06-04.json` exists=true json_valid=true
 - runtime_apply_gap_audit: `/home/ubuntu/KORStockScan/data/report/runtime_apply_gap_audit/runtime_apply_gap_audit_2026-06-04.json` exists=true json_valid=true
+- key_lineage_ledger: `/home/ubuntu/KORStockScan/data/report/key_lineage_ledger/key_lineage_ledger_2026-06-04.json` exists=true json_valid=true
+- conversion_lane: `/home/ubuntu/KORStockScan/data/report/conversion_lane/conversion_lane_2026-06-04.json` exists=true json_valid=true
 - lifecycle_decision_matrix: `/home/ubuntu/KORStockScan/data/report/lifecycle_decision_matrix/lifecycle_decision_matrix_2026-06-04.json` exists=true json_valid=true
 - lifecycle_bucket_discovery: `/home/ubuntu/KORStockScan/data/report/lifecycle_bucket_discovery/lifecycle_bucket_discovery_2026-06-04.json` exists=true json_valid=true
 - swing_lifecycle_decision_matrix: `/home/ubuntu/KORStockScan/data/report/swing_lifecycle_decision_matrix/swing_lifecycle_decision_matrix_2026-06-04.json` exists=true json_valid=true

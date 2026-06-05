@@ -224,17 +224,22 @@ def test_postclose_done_controller_blocks_done_when_codex_runner_incomplete_is_r
         {"status": "blocked_uncompleted_implementation"},
     )
 
+    calls = []
+
     report = mod.build_postclose_done_controller(
         "2026-06-03",
+        max_attempts=1,
         require_codex_completed=True,
-        command_runner=lambda cmd, env=None: 0,
+        command_runner=lambda cmd, env=None: calls.append(cmd) or 0,
     )
 
     assert report["status"] == "blocked_uncompleted_implementation"
     assert report["codex_workorder_runner_status"] == "blocked_uncompleted_implementation"
+    assert report["codex_workorder_runner_two_pass_status"] == "missing"
     assert report["blocked_reasons"] == [
-        "codex_workorder_runner_not_completed:blocked_uncompleted_implementation"
+        "codex_workorder_runner_not_completed:blocked_uncompleted_implementation:missing"
     ]
+    assert any("codex_workorder_runner" in " ".join(cmd) for cmd in calls)
 
 
 def test_postclose_done_controller_accepts_done_when_required_codex_runner_completed(monkeypatch, tmp_path):
@@ -248,7 +253,7 @@ def test_postclose_done_controller_accepts_done_when_required_codex_runner_compl
     )
     _write_json(
         report_dir / "codex_workorder_runner" / "codex_workorder_runner_2026-06-03.json",
-        {"status": "completed"},
+        {"status": "completed", "two_pass_status": "pass2_not_required"},
     )
 
     report = mod.build_postclose_done_controller(
@@ -259,6 +264,65 @@ def test_postclose_done_controller_accepts_done_when_required_codex_runner_compl
 
     assert report["status"] == "done"
     assert report["codex_workorder_runner_completed"] is True
+
+
+def test_postclose_done_controller_rejects_completed_runner_without_two_pass_terminal_status(monkeypatch, tmp_path):
+    report_dir = tmp_path / "report"
+    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "OUTPUT_DIR", report_dir / "postclose_done_controller")
+    _write_succeeded_status(report_dir)
+    _write_json(
+        report_dir / "threshold_cycle_postclose_verification" / "threshold_cycle_postclose_verification_2026-06-03.json",
+        {"status": "pass"},
+    )
+    _write_json(
+        report_dir / "codex_workorder_runner" / "codex_workorder_runner_2026-06-03.json",
+        {"status": "completed", "two_pass_status": "blocked_regeneration_failed"},
+    )
+
+    report = mod.build_postclose_done_controller(
+        "2026-06-03",
+        max_attempts=1,
+        require_codex_completed=True,
+        command_runner=lambda cmd, env=None: 0,
+    )
+
+    assert report["status"] == "blocked_uncompleted_implementation"
+    assert report["codex_workorder_runner_completed"] is False
+    assert report["blocked_reasons"] == [
+        "codex_workorder_runner_not_completed:completed:blocked_regeneration_failed"
+    ]
+
+
+def test_postclose_done_controller_runs_codex_runner_recovery_until_two_pass_completed(monkeypatch, tmp_path):
+    report_dir = tmp_path / "report"
+    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "OUTPUT_DIR", report_dir / "postclose_done_controller")
+    _write_succeeded_status(report_dir)
+    _write_json(
+        report_dir / "threshold_cycle_postclose_verification" / "threshold_cycle_postclose_verification_2026-06-03.json",
+        {"status": "pass"},
+    )
+    runner_path = report_dir / "codex_workorder_runner" / "codex_workorder_runner_2026-06-03.json"
+    _write_json(runner_path, {"status": "blocked_regeneration_failed", "two_pass_status": "blocked_regeneration_failed"})
+    calls = []
+
+    def fake_runner(cmd, env=None):
+        calls.append(cmd)
+        if "codex_workorder_runner" in " ".join(cmd):
+            _write_json(runner_path, {"status": "completed", "two_pass_status": "pass2_completed"})
+        return 0
+
+    report = mod.build_postclose_done_controller(
+        "2026-06-03",
+        max_attempts=2,
+        require_codex_completed=True,
+        command_runner=fake_runner,
+    )
+
+    assert report["status"] == "done"
+    assert report["codex_workorder_runner_completed"] is True
+    assert any("codex_workorder_runner" in " ".join(cmd) for cmd in calls)
 
 
 def test_postclose_done_controller_blocks_done_marker_with_unknown_warning(monkeypatch, tmp_path):

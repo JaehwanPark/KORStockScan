@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import os
 import signal
@@ -93,6 +94,7 @@ TERMINAL_NON_IMPLEMENT_STATUSES = {
     "requires_user_authority",
 }
 COMPLETED_RUNNER_STATUSES = {"completed", "dry_run_planned"}
+TWO_PASS_COMPLETED_STATUSES = {"pass2_completed", "pass2_not_required", "not_required"}
 
 
 @dataclass(frozen=True)
@@ -418,6 +420,7 @@ def _make_worktree(
     command_runner: CommandRunner,
     dry_run: bool,
     capture_runner: CaptureRunner | None = None,
+    base_ref: str = "HEAD",
 ) -> tuple[Path, str, int, str]:
     branch = f"{branch_prefix.rstrip('/')}-{target_date}"
     worktree = WORKTREE_ROOT / branch
@@ -432,7 +435,7 @@ def _make_worktree(
             return worktree, branch, status_rc, "worktree_status_failed"
         if status_stdout.strip():
             return worktree, branch, 2, "worktree_dirty"
-        root_rc, root_head = capture_runner(["git", "rev-parse", "HEAD"], PROJECT_ROOT)
+        root_rc, root_head = capture_runner(["git", "rev-parse", base_ref], PROJECT_ROOT)
         tree_rc, tree_head = capture_runner(["git", "rev-parse", "HEAD"], worktree)
         if root_rc != 0 or tree_rc != 0:
             return worktree, branch, 2, "worktree_head_check_failed"
@@ -440,7 +443,7 @@ def _make_worktree(
             return worktree, branch, 2, "worktree_stale_head"
         return worktree, branch, 0, "reused_clean_worktree"
     worktree.parent.mkdir(parents=True, exist_ok=True)
-    rc = command_runner(["git", "worktree", "add", "-B", branch, str(worktree), "HEAD"], PROJECT_ROOT)
+    rc = command_runner(["git", "worktree", "add", "-B", branch, str(worktree), base_ref], PROJECT_ROOT)
     return worktree, branch, rc, "created" if rc == 0 else "worktree_add_failed"
 
 
@@ -509,9 +512,10 @@ def _make_retry_worktree(
     attempt_index: int,
     command_runner: CommandRunner,
     dry_run: bool,
+    base_ref: str = "HEAD",
 ) -> tuple[Path, str, int, str]:
     retry_prefix = branch_prefix if attempt_index == 0 else f"{branch_prefix}-retry{attempt_index}"
-    return _make_worktree(target_date, retry_prefix, command_runner, dry_run)
+    return _make_worktree(target_date, retry_prefix, command_runner, dry_run, base_ref=base_ref)
 
 
 def _codex_turns(
@@ -915,6 +919,7 @@ def _attempt_codex_batch(
     model_policy: str,
     command_runner: CommandRunner,
     dry_run: bool,
+    base_ref: str = "HEAD",
 ) -> dict[str, Any]:
     worktree, branch, worktree_rc, worktree_status = _make_retry_worktree(
         target_date=target_date,
@@ -922,12 +927,14 @@ def _attempt_codex_batch(
         attempt_index=attempt_index,
         command_runner=command_runner,
         dry_run=dry_run,
+        base_ref=base_ref,
     )
     result: dict[str, Any] = {
         "attempt": attempt_index + 1,
         "branch": branch,
         "worktree": str(worktree),
         "worktree_status": worktree_status,
+        "base_ref": base_ref,
         "order_ids": [item.get("order_id") for item in orders],
         "model": model,
         "effort": effort,
@@ -1016,6 +1023,7 @@ def _process_order_batch(
     recovery_attempts: list[dict[str, Any]],
     branch_commits: list[dict[str, Any]],
     max_recovery_attempts: int,
+    base_ref: str = "HEAD",
 ) -> list[dict[str, Any]]:
     if not orders:
         return []
@@ -1044,6 +1052,7 @@ def _process_order_batch(
                 model_policy=model_policy,
                 command_runner=command_runner,
                 dry_run=dry_run,
+                base_ref=base_ref,
             )
             result["recovery_mode"] = recovery_mode
             result["timeout_sec"] = timeout_value
@@ -1101,6 +1110,7 @@ def _process_order_batch(
                 recovery_attempts=recovery_attempts,
                 branch_commits=branch_commits,
                 max_recovery_attempts=max_recovery_attempts,
+                base_ref=base_ref,
             ),
             *_process_order_batch(
                 target_date=target_date,
@@ -1115,6 +1125,7 @@ def _process_order_batch(
                 recovery_attempts=recovery_attempts,
                 branch_commits=branch_commits,
                 max_recovery_attempts=max_recovery_attempts,
+                base_ref=base_ref,
             ),
         ]
     return [
@@ -1199,9 +1210,160 @@ def _merge_and_push_main(
             validation_results = _run_validation(integration_worktree, command_runner, dry_run=False)
             push_result["post_rebase_validation_results"] = validation_results
             if validation_results and all(item.get("exit_code") == 0 for item in validation_results):
+                merge_result["merged_main_sha"] = _head_sha(integration_worktree)
                 push_rc = command_runner(["git", "push", "origin", "HEAD:main"], integration_worktree)
                 push_result.update({"exit_code": push_rc, "status": "pushed" if push_rc == 0 else "push_rejected_after_rebase", "pushed": push_rc == 0})
     return merge_result, push_result
+
+
+def _workorder_path_for_root(root: Path, target_date: str) -> Path:
+    return root / "data" / "report" / "code_improvement_workorder" / f"code_improvement_workorder_{target_date}.json"
+
+
+def _regeneration_commands(target_date: str, max_orders: int) -> list[list[str]]:
+    return [
+        [_python_bin(), "-m", "src.engine.observation_source_quality_audit", "--target-date", target_date, "--write"],
+        [_python_bin(), "-m", "src.engine.automation.key_lineage_ledger", "--date", target_date],
+        [_python_bin(), "-m", "src.engine.automation.conversion_lane", "--date", target_date],
+        [_python_bin(), "-m", "src.engine.build_code_improvement_workorder", "--date", target_date, "--max-orders", str(max_orders)],
+        [_python_bin(), "-m", "src.engine.verify_threshold_cycle_postclose_chain", "--date", target_date],
+    ]
+
+
+def _prepare_regeneration_worktree(
+    *,
+    target_date: str,
+    branch_commits: list[dict[str, Any]],
+    command_runner: CommandRunner,
+    dry_run: bool,
+) -> tuple[Path, dict[str, Any]]:
+    regen_branch = f"codex-regeneration-{target_date}"
+    regen_worktree = WORKTREE_ROOT / regen_branch
+    result: dict[str, Any] = {
+        "status": "started",
+        "worktree": str(regen_worktree),
+        "branch": regen_branch,
+        "branches": [item.get("branch") for item in branch_commits],
+        "merge_exit_codes": [],
+    }
+    if dry_run:
+        result["status"] = "dry_run_planned"
+        return regen_worktree, result
+    command_runner(["git", "fetch", "origin", "main"], PROJECT_ROOT)
+    if regen_worktree.exists():
+        command_runner(["git", "worktree", "remove", "--force", str(regen_worktree)], PROJECT_ROOT)
+    add_rc = command_runner(["git", "worktree", "add", "-B", regen_branch, str(regen_worktree), "origin/main"], PROJECT_ROOT)
+    result["worktree_add_exit_code"] = add_rc
+    if add_rc != 0:
+        result["status"] = "regeneration_worktree_failed"
+        return regen_worktree, result
+    for item in branch_commits:
+        branch = str(item.get("branch") or "")
+        merge_rc = command_runner(["git", "merge", "--no-ff", branch, "-m", f"Merge Codex pass1 branch {branch}"], regen_worktree)
+        result["merge_exit_codes"].append({"branch": branch, "exit_code": merge_rc})
+        if merge_rc != 0:
+            result["status"] = "regeneration_merge_conflict"
+            return regen_worktree, result
+    result["status"] = "merged_pass1"
+    return regen_worktree, result
+
+
+def _run_two_pass_regeneration(
+    *,
+    target_date: str,
+    max_orders: int,
+    branch_commits: list[dict[str, Any]],
+    command_runner: CommandRunner,
+    dry_run: bool,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    regen_worktree, prep = _prepare_regeneration_worktree(
+        target_date=target_date,
+        branch_commits=branch_commits,
+        command_runner=command_runner,
+        dry_run=dry_run,
+    )
+    results = [prep]
+    if prep.get("status") not in {"merged_pass1", "dry_run_planned"}:
+        return {"status": "blocked_regeneration_failed", "worktree": str(regen_worktree), "results": results}, {}
+    for command in _regeneration_commands(target_date, max_orders):
+        rc = 0 if dry_run else command_runner(command, regen_worktree)
+        results.append(
+            {
+                "status": "planned" if dry_run else ("pass" if rc == 0 else "fail"),
+                "command": command,
+                "exit_code": rc,
+            }
+        )
+        if rc != 0 and not dry_run:
+            return {"status": "blocked_regeneration_failed", "worktree": str(regen_worktree), "results": results}, {}
+    regenerated = _load_json(_workorder_path_for_root(regen_worktree, target_date)) if not dry_run else {}
+    if dry_run:
+        regenerated = {}
+    elif not regenerated.get("generation_id"):
+        results.append(
+            {
+                "status": "fail",
+                "command": ["load_regenerated_code_improvement_workorder", str(_workorder_path_for_root(regen_worktree, target_date))],
+                "exit_code": 1,
+                "reason": "regenerated_workorder_missing_or_invalid",
+            }
+        )
+        return {"status": "blocked_regeneration_failed", "worktree": str(regen_worktree), "results": results}, {}
+    return {
+        "status": "regeneration_completed",
+        "worktree": str(regen_worktree),
+        "base_ref": prep.get("branch"),
+        "results": results,
+    }, regenerated
+
+
+def _workorder_lineage_diff(original: dict[str, Any], regenerated: dict[str, Any]) -> dict[str, Any]:
+    lineage = regenerated.get("lineage") if isinstance(regenerated.get("lineage"), dict) else {}
+    original_order_ids = {str(item.get("order_id") or "") for item in original.get("orders") or [] if isinstance(item, dict)}
+    regenerated_order_ids = {str(item.get("order_id") or "") for item in regenerated.get("orders") or [] if isinstance(item, dict)}
+    inferred_new = sorted(item for item in regenerated_order_ids - original_order_ids if item)
+    inferred_removed = sorted(item for item in original_order_ids - regenerated_order_ids if item)
+    return {
+        "previous_generation_id": original.get("generation_id"),
+        "regenerated_generation_id": regenerated.get("generation_id"),
+        "previous_source_hash": original.get("source_hash"),
+        "regenerated_source_hash": regenerated.get("source_hash"),
+        "new_order_ids": sorted(set(lineage.get("new_order_ids") or inferred_new)),
+        "removed_order_ids": sorted(set(lineage.get("removed_order_ids") or inferred_removed)),
+        "decision_changed_order_ids": sorted(set(lineage.get("decision_changed_order_ids") or [])),
+        "source_hash_changed": bool(original.get("source_hash") and regenerated.get("source_hash") and original.get("source_hash") != regenerated.get("source_hash")),
+    }
+
+
+def _pass2_orders_from_regenerated(
+    regenerated: dict[str, Any],
+    *,
+    completed_pass1_ids: set[str],
+    lineage_diff: dict[str, Any],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]], list[dict[str, str]]]:
+    changed_ids = {
+        *[str(item) for item in lineage_diff.get("new_order_ids") or []],
+        *[str(item) for item in lineage_diff.get("decision_changed_order_ids") or []],
+    }
+    selected = [item for item in regenerated.get("orders") or [] if isinstance(item, dict)]
+    canonical, normalized_out, non_implement_dispositions, _recoveries = _normalize_workorders(
+        selected,
+        execute_implement_now=True,
+        promote_non_implement=True,
+    )
+    pass2: list[dict[str, Any]] = []
+    reasons: list[dict[str, str]] = []
+    for order in canonical:
+        order_id = str(order.get("order_id") or "")
+        if order_id and (order_id not in completed_pass1_ids or order_id in changed_ids):
+            pass2.append(order)
+            reasons.append(
+                {
+                    "order_id": order_id,
+                    "reason": "new_or_changed_order" if order_id in changed_ids else "not_completed_in_pass1",
+                }
+            )
+    return pass2, normalized_out, non_implement_dispositions, reasons
 
 
 def _forbidden_diff_scan(
@@ -1286,6 +1448,7 @@ def build_codex_workorder_runner(
 ) -> dict[str, Any]:
     command_runner = command_runner or _run_command
     workorder = _load_json(_workorder_path(target_date))
+    original_workorder = copy.deepcopy(workorder)
     orders = [item for item in workorder.get("orders") or [] if isinstance(item, dict)]
     non_selected_orders = [item for item in workorder.get("non_selected_orders") or [] if isinstance(item, dict)]
     canonical_orders, normalized_out, non_implement_dispositions, contract_recoveries = _normalize_workorders(
@@ -1309,10 +1472,17 @@ def build_codex_workorder_runner(
         1,
         int(os.environ.get("CODEX_WORKORDER_MAX_RECOVERY_ATTEMPTS", str(max(8, len(canonical_orders) * 4 or 1)))),
     )
+    two_pass_enabled = _env_bool("CODEX_WORKORDER_TWO_PASS_ENABLED", True)
     recovery_attempts: list[dict[str, Any]] = []
     branch_commits: list[dict[str, Any]] = []
     attempt_counter = [0]
     order_execution_results: list[dict[str, Any]] = []
+    regeneration_results: list[dict[str, Any]] = []
+    workorder_lineage_diff: dict[str, Any] = {}
+    pass2_selection_reason: list[dict[str, str]] = []
+    pass1_order_ids = [item.get("order_id") for item in canonical_orders]
+    pass2_order_ids: list[Any] = []
+    two_pass_status = "not_required"
     if dry_run:
         order_execution_results = [
             {
@@ -1362,10 +1532,83 @@ def build_codex_workorder_runner(
                 )
             )
 
-    implementation_complete = (
+    pass1_complete = (
         bool(canonical_orders)
         and len(order_execution_results) == len(canonical_orders)
         and all(item.get("final_status") == "committed_branch" for item in order_execution_results)
+    )
+    all_canonical_orders = list(canonical_orders)
+    if two_pass_enabled and not dry_run and pass1_complete:
+        two_pass_status = "pass1_completed"
+        regen_status, regenerated_workorder = _run_two_pass_regeneration(
+            target_date=target_date,
+            max_orders=max_orders,
+            branch_commits=branch_commits,
+            command_runner=command_runner,
+            dry_run=dry_run,
+        )
+        regeneration_results = regen_status.get("results") or []
+        if regen_status.get("status") != "regeneration_completed":
+            two_pass_status = "blocked_regeneration_failed"
+        else:
+            two_pass_status = "regeneration_completed"
+            workorder_lineage_diff = _workorder_lineage_diff(original_workorder, regenerated_workorder)
+            completed_pass1_ids = {
+                str(item.get("order_id") or "")
+                for item in order_execution_results
+                if item.get("final_status") == "committed_branch"
+            }
+            pass2_orders, pass2_normalized_out, pass2_non_implement, pass2_selection_reason = _pass2_orders_from_regenerated(
+                regenerated_workorder,
+                completed_pass1_ids=completed_pass1_ids,
+                lineage_diff=workorder_lineage_diff,
+            )
+            normalized_out = [*normalized_out, *pass2_normalized_out]
+            non_implement_dispositions = [*non_implement_dispositions, *pass2_non_implement]
+            pass2_order_ids = [item.get("order_id") for item in pass2_orders]
+            if pass2_orders:
+                all_canonical_orders = [*all_canonical_orders, *pass2_orders]
+                pass2_base_ref = str(regen_status.get("base_ref") or f"codex-regeneration-{target_date}")
+                for batch in _chunked(pass2_orders, batch_size):
+                    order_execution_results.extend(
+                        _process_order_batch(
+                            target_date=target_date,
+                            branch_prefix=f"{branch_prefix}-pass2",
+                            orders=batch,
+                            model=model,
+                            effort=effort,
+                            model_policy=model_policy,
+                            command_runner=command_runner,
+                            dry_run=dry_run,
+                            attempt_counter=attempt_counter,
+                            recovery_attempts=recovery_attempts,
+                            branch_commits=branch_commits,
+                            max_recovery_attempts=max_recovery_attempts,
+                            base_ref=pass2_base_ref,
+                        )
+                    )
+                pass2_completed = all(
+                    item.get("final_status") == "committed_branch"
+                    for item in order_execution_results
+                    if item.get("order_id") in set(pass2_order_ids)
+                )
+                two_pass_status = "pass2_completed" if pass2_completed else "blocked_new_orders_uncompleted"
+            else:
+                two_pass_status = "pass2_not_required"
+    elif two_pass_enabled and dry_run and canonical_orders:
+        two_pass_status = "pass2_not_required"
+    elif two_pass_enabled and canonical_orders and not pass1_complete:
+        two_pass_status = "blocked_new_orders_uncompleted"
+
+    has_user_authority_blocker = any(
+        str(item.get("terminal_status")) == "requires_user_authority" for item in normalized_out
+    )
+    implementation_complete = (
+        bool(all_canonical_orders)
+        and len(order_execution_results) == len(all_canonical_orders)
+        and all(item.get("final_status") == "committed_branch" for item in order_execution_results)
+        and (not two_pass_enabled or two_pass_status in TWO_PASS_COMPLETED_STATUSES)
+        and not has_user_authority_blocker
     )
     merge_result = {"status": "not_required", "merged_main_sha": None, "branches": []}
     push_result = {"status": "not_required", "pushed": False}
@@ -1390,25 +1633,31 @@ def build_codex_workorder_runner(
         for item in non_implement_dispositions
     )
     all_implement_completed = (
-        not canonical_orders
+        not all_canonical_orders
         or (
-            len(order_execution_results) == len(canonical_orders)
+            len(order_execution_results) == len(all_canonical_orders)
             and all(item.get("final_status") == "completed" for item in order_execution_results)
         )
     )
     if dry_run:
         status = "dry_run_planned"
+    elif two_pass_status == "blocked_regeneration_failed":
+        status = "blocked_regeneration_failed"
+    elif two_pass_status == "blocked_new_orders_uncompleted":
+        status = "blocked_uncompleted_implementation"
     elif not canonical_orders and non_implement_complete:
         status = "completed"
     elif all_implement_completed and non_implement_complete:
         status = "completed"
     else:
         status = "blocked_uncompleted_implementation"
-    if not dry_run and any(str(item.get("terminal_status")) == "requires_user_authority" for item in normalized_out):
+    if not dry_run and has_user_authority_blocker:
         status = "blocked_non_recoverable"
 
     completion_summary = {
-        "canonical_implement_count": len(canonical_orders),
+        "canonical_implement_count": len(all_canonical_orders),
+        "pass1_implement_count": len(pass1_order_ids),
+        "pass2_implement_count": len(pass2_order_ids),
         "completed_implement_count": sum(1 for item in order_execution_results if item.get("final_status") == "completed"),
         "blocked_implement_count": sum(1 for item in order_execution_results if item.get("final_status") != "completed"),
         "normalized_out_count": len(normalized_out),
@@ -1426,13 +1675,20 @@ def build_codex_workorder_runner(
         "generated_at": _now(),
         "status": status,
         "dry_run": dry_run,
+        "two_pass_mode": two_pass_enabled,
+        "two_pass_status": two_pass_status,
         "batch_size": batch_size,
         "max_recovery_attempts": max_recovery_attempts,
         "codex_model": model,
         "codex_effort": effort,
         "codex_model_policy": model_policy,
         "source_generation_id": workorder.get("generation_id"),
-        "canonical_implement_order_ids": [item.get("order_id") for item in canonical_orders],
+        "canonical_implement_order_ids": [item.get("order_id") for item in all_canonical_orders],
+        "pass1_order_ids": pass1_order_ids,
+        "pass2_order_ids": pass2_order_ids,
+        "regeneration_results": regeneration_results,
+        "workorder_lineage_diff": workorder_lineage_diff,
+        "pass2_selection_reason": pass2_selection_reason,
         "normalized_out_orders": normalized_out,
         "non_selected_order_ids": [item.get("order_id") for item in non_selected_orders],
         "non_selected_dispositions": non_selected_dispositions,
@@ -1456,7 +1712,7 @@ def build_codex_workorder_runner(
                     "planned" if dry_run else "not_started",
                 ),
             }
-            for item in canonical_orders
+            for item in all_canonical_orders
         ],
         "blocked_orders": normalized_out,
         "non_implement_triage": non_implement_dispositions,

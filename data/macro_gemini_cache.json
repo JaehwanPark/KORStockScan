@@ -1,84 +1,86 @@
 {
-  "bundle_as_of": "2026-06-03T22:20:29Z",
+  "bundle_as_of": "2026-06-04T22:20:22Z",
   "sp500": {
     "name": "S&P500",
-    "value": 7553.68,
-    "prev_value": 7609.78,
-    "change": -56.1,
-    "change_pct": -0.74,
-    "as_of": "2026-06-03T20:00:00Z",
-    "source": "Associated Press"
+    "value": 7584.31,
+    "prev_value": 7553.68,
+    "change": 30.63,
+    "change_pct": 0.41,
+    "as_of": "2026-06-04T22:20:22Z",
+    "source": "The Motley Fool"
   },
   "nasdaq": {
     "name": "NASDAQ",
-    "value": 26853.98,
-    "prev_value": 27093.91,
-    "change": -239.93,
-    "change_pct": -0.89,
-    "as_of": "2026-06-03T20:00:00Z",
-    "source": "Associated Press"
+    "value": 26830.96,
+    "prev_value": 26853.98,
+    "change": -23.02,
+    "change_pct": -0.09,
+    "as_of": "2026-06-04T22:20:22Z",
+    "source": "The Motley Fool"
   },
   "vix": {
     "name": "VIX",
-    "value": 16.05,
-    "prev_value": 15.77,
-    "change": 0.28,
-    "change_pct": 1.78,
-    "as_of": "2026-06-03T20:00:00Z",
+    "value": 15.38,
+    "prev_value": 16.06,
+    "change": -0.68,
+    "change_pct": -4.23,
+    "as_of": "2026-06-04T22:20:22Z",
     "source": "Cboe Global Markets"
   },
   "us10y": {
     "name": "US10Y",
-    "value": 4.49,
-    "prev_value": 4.46,
-    "change": 0.03,
-    "change_pct": 0.67,
-    "as_of": "2026-06-03T20:00:00Z",
-    "source": "LA Times"
+    "value": 4.47,
+    "prev_value": 4.49,
+    "change": -0.02,
+    "change_pct": -0.45,
+    "as_of": "2026-06-04T22:20:22Z",
+    "source": "Associated Press"
   },
   "brent": {
     "name": "BRENT",
-    "value": 97.81,
-    "prev_value": 96.0,
-    "change": 1.81,
-    "change_pct": 1.89,
-    "as_of": "2026-06-03T20:00:00Z",
-    "source": "ICE Futures Europe"
+    "value": 95.03,
+    "prev_value": 97.77,
+    "change": -2.74,
+    "change_pct": -2.8,
+    "as_of": "2026-06-04T22:20:22Z",
+    "source": "Associated Press"
   },
   "headlines": [
     {
-      "title": "Trump to hit more than 60 countries including Canada with new tariffs over 'forced labour'",
-      "source": "CBC News",
-      "published_at": "2026-06-03T19:26:00Z",
-      "url": "https://www.cbc.ca/news"
+      "title": "The Dow leaps to a record as oil prices ease and stocks outside of AI rally",
+      "source": "LA Times",
+      "published_at": "2026-06-04T20:24:00Z",
+      "url": "https://www.latimes.com"
     },
     {
-      "title": "Trump administration floats tariffs on 60 trading partners — including China, U.K., EU — after forced labor probes",
-      "source": "CBS News",
-      "published_at": "2026-06-03T06:46:00Z",
-      "url": "https://www.cbsnews.com/"
+      "title": "Stock Market Today, June 4: Broadcom Shares Plunge After AI Outlook Misses High Investor Expectations",
+      "source": "The Motley Fool",
+      "published_at": "2026-06-04T21:00:00Z",
+      "url": "https://www.fool.com"
     },
     {
-      "title": "Oil prices climb back toward $100, and US stocks halt their record-breaking rally",
-      "source": "Associated Press",
-      "published_at": "2026-06-03T19:04:00Z",
-      "url": "https://apnews.com/"
+      "title": "US signaled it could impose additional tariffs",
+      "source": "OTP Morning Brief",
+      "published_at": "2026-06-04T09:10:00Z",
+      "url": "https://www.otpbank.hu"
     },
     {
-      "title": "US stock markets today: Oil nears $100 amid Iran tensions, Wall Street stays close to record highs",
-      "source": "The Times of India",
-      "published_at": "2026-06-03T14:06:00Z",
-      "url": "https://timesofindia.indiatimes.com/"
+      "title": "Oil Prices Decline On Fragile Peace Hope In Middle East",
+      "source": "MarketForces Africa",
+      "published_at": "2026-06-04T10:20:00Z",
+      "url": "https://marketforcesafrica.com"
     },
     {
-      "title": "US proposes new tariffs over forced labor, irking Europe",
-      "source": "Courthouse News Service",
-      "published_at": "2026-06-03T16:00:00Z",
-      "url": "https://www.courthousenews.com/"
+      "title": "The U.S.-China Trade Stalemate: What It Means for Global Markets",
+      "source": "FINTECH.TV",
+      "published_at": "2026-06-04T16:20:00Z",
+      "url": "https://fintech.tv"
     }
   ],
   "notes": [
-    "Market closed lower amid renewed Iran-US tensions pushing Brent crude toward $100.",
-    "The US administration proposed new 10-12.5% tariffs on 60 trading partners, citing forced labor concerns."
+    "S&P 500 rose modestly, led by value stocks outside of tech, while the Dow closed at a record high.",
+    "NASDAQ dipped due to weakness in semiconductor stocks following Broadcom's underwhelming AI revenue guidance.",
+    "Treasury yields and crude oil prices dropped as geopolitical tensions in the Middle East showed signs of easing.",
+    "Market sentiment reflects increasing confidence in potential resolutions to ongoing U.S.-Iran negotiations."
   ]
 }

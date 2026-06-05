@@ -25,6 +25,8 @@ SOURCE_SPECS: dict[str, tuple[Path, str]] = {
     "runtime_approval_summary": (REPORT_ROOT_DIR / "runtime_approval_summary", "runtime_approval_summary"),
     "runtime_apply_bridge": (REPORT_ROOT_DIR / "runtime_apply_bridge", "runtime_apply_bridge"),
     "runtime_apply_gap_audit": (REPORT_ROOT_DIR / "runtime_apply_gap_audit", "runtime_apply_gap_audit"),
+    "key_lineage_ledger": (REPORT_ROOT_DIR / "key_lineage_ledger", "key_lineage_ledger"),
+    "conversion_lane": (REPORT_ROOT_DIR / "conversion_lane", "conversion_lane"),
     "lifecycle_decision_matrix": (REPORT_ROOT_DIR / "lifecycle_decision_matrix", "lifecycle_decision_matrix"),
     "lifecycle_bucket_discovery": (REPORT_ROOT_DIR / "lifecycle_bucket_discovery", "lifecycle_bucket_discovery"),
     "swing_lifecycle_decision_matrix": (
@@ -40,6 +42,8 @@ SOURCE_SPECS: dict[str, tuple[Path, str]] = {
         "code_improvement_workorder",
     ),
 }
+
+OPTIONAL_CONTROL_TOWER_SOURCES = {"key_lineage_ledger", "conversion_lane"}
 
 PROGRESS_KEYS: dict[str, tuple[str, ...]] = {
     "lifecycle_bucket_discovery": (
@@ -389,6 +393,37 @@ def _runtime_gap_audit_summary(runtime_gap_audit: dict[str, Any]) -> dict[str, A
         "actionable_unknown_gap_count": _safe_int(summary.get("actionable_unknown_gap_count")),
         "critical_failure_count": _safe_int(summary.get("critical_failure_count")),
         "retry_queue_count": _safe_int(summary.get("retry_queue_count")),
+    }
+
+
+def _conversion_first_summary(conversion_lane: dict[str, Any], key_lineage_ledger: dict[str, Any]) -> dict[str, Any]:
+    conversion_summary = _summary(conversion_lane)
+    lineage_summary = _summary(key_lineage_ledger)
+    blockers = conversion_lane.get("conversion_blocker_rank")
+    if not isinstance(blockers, list):
+        blockers = []
+    queue = conversion_lane.get("real_conversion_queue")
+    if not isinstance(queue, list):
+        queue = []
+    sim_priority_only = conversion_lane.get("sim_priority_only")
+    if not isinstance(sim_priority_only, list):
+        sim_priority_only = []
+    return {
+        "top_conversion_candidates": queue[:10],
+        "top_conversion_blockers": blockers[:10],
+        "key_lineage_status": {
+            "source_key_count": _safe_int(lineage_summary.get("source_key_count")),
+            "same_key_continuity_pass_count": _safe_int(lineage_summary.get("same_key_continuity_pass_count")),
+            "key_mismatch_count": _safe_int(lineage_summary.get("key_mismatch_count")),
+            "catalog_missing_count": _safe_int(lineage_summary.get("catalog_missing_count")),
+            "preopen_missing_count": _safe_int(lineage_summary.get("preopen_missing_count")),
+            "not_instrumented_count": _safe_int(lineage_summary.get("not_instrumented_count")),
+            "natural_match_0_count": _safe_int(lineage_summary.get("natural_match_0_count")),
+        },
+        "sim_priority_only_count": _safe_int(conversion_summary.get("sim_priority_only_count") or len(sim_priority_only)),
+        "real_conversion_queue_count": _safe_int(conversion_summary.get("real_conversion_queue_count") or len(queue)),
+        "why_not_real_runtime": blockers[:20],
+        "summary": conversion_summary,
     }
 
 
@@ -750,6 +785,19 @@ def _markdown(report: dict[str, Any]) -> str:
     bridge = report.get("bridge_summary") if isinstance(report.get("bridge_summary"), dict) else {}
     verifier = report.get("postclose_verifier_summary") if isinstance(report.get("postclose_verifier_summary"), dict) else {}
     runtime_gap = report.get("runtime_apply_gap_audit") if isinstance(report.get("runtime_apply_gap_audit"), dict) else {}
+    conversion_first = (
+        report.get("conversion_first_summary") if isinstance(report.get("conversion_first_summary"), dict) else {}
+    )
+    top_blockers = (
+        conversion_first.get("top_conversion_blockers")
+        if isinstance(conversion_first.get("top_conversion_blockers"), list)
+        else []
+    )
+    lineage_status = (
+        conversion_first.get("key_lineage_status")
+        if isinstance(conversion_first.get("key_lineage_status"), dict)
+        else {}
+    )
     freshness = report.get("source_freshness") if isinstance(report.get("source_freshness"), dict) else {}
     daily_window = bucket_windows.get("daily") if isinstance(bucket_windows.get("daily"), dict) else {}
     promotion_window = str(bucket_windows.get("promotion_window") or "mtd")
@@ -780,6 +828,17 @@ def _markdown(report: dict[str, Any]) -> str:
 
     lines = [
         f"# Tuning Performance Control Tower - {report['date']}",
+        "",
+        "## Conversion First",
+        "",
+        f"- real_conversion_queue: `{conversion_first.get('real_conversion_queue_count', 0)}`",
+        f"- sim_priority_only: `{conversion_first.get('sim_priority_only_count', 0)}`",
+        f"- key_lineage: pass=`{lineage_status.get('same_key_continuity_pass_count', 0)}` "
+        f"mismatch=`{lineage_status.get('key_mismatch_count', 0)}` "
+        f"catalog_missing=`{lineage_status.get('catalog_missing_count', 0)}` "
+        f"preopen_missing=`{lineage_status.get('preopen_missing_count', 0)}` "
+        f"not_instrumented=`{lineage_status.get('not_instrumented_count', 0)}`",
+        f"- top_blocker: `{top_blockers[0].get('blocker_class') if top_blockers else 'none'}`",
         "",
         "## 판정",
         "",
@@ -910,6 +969,8 @@ def build_tuning_performance_control_tower(target_date: str) -> dict[str, Any]:
         payload = _load_json(path)
         payloads[label] = payload
         sources[label] = _artifact_status(path, payload)
+        if label in OPTIONAL_CONTROL_TOWER_SOURCES and not path.exists():
+            continue
         if not path.exists():
             warnings.append(f"{label}_missing")
         elif not payload:
@@ -971,6 +1032,7 @@ def build_tuning_performance_control_tower(target_date: str) -> dict[str, Any]:
     )
     bridge = _bridge_summary(payloads["runtime_apply_bridge"])
     runtime_gap_audit = _runtime_gap_audit_summary(payloads["runtime_apply_gap_audit"])
+    conversion_first = _conversion_first_summary(payloads["conversion_lane"], payloads["key_lineage_ledger"])
     verifier = _postclose_verifier_summary(
         payloads["threshold_cycle_postclose_verification"],
         sources["threshold_cycle_postclose_verification"],
@@ -1040,6 +1102,18 @@ def build_tuning_performance_control_tower(target_date: str) -> dict[str, Any]:
             "verifier_handoff_warning_count": len(verifier.get("handoff_warnings") or []),
             "verifier_missing_downstream_link_count": len(verifier.get("missing_downstream_links") or []),
             "runtime_apply_gap_audit_status": runtime_gap_audit.get("status"),
+            "real_conversion_queue_count": conversion_first["real_conversion_queue_count"],
+            "top_conversion_blocker_class": (
+                conversion_first["top_conversion_blockers"][0].get("blocker_class")
+                if conversion_first["top_conversion_blockers"]
+                else None
+            ),
+            "key_lineage_blocker_count": (
+                conversion_first["key_lineage_status"]["key_mismatch_count"]
+                + conversion_first["key_lineage_status"]["catalog_missing_count"]
+                + conversion_first["key_lineage_status"]["preopen_missing_count"]
+                + conversion_first["key_lineage_status"]["not_instrumented_count"]
+            ),
             "runtime_apply_gap_audit_codex_directive_count": runtime_gap_audit.get("codex_directive_count"),
             "runtime_apply_gap_audit_source_dimension_gap_count": runtime_gap_audit.get("source_dimension_gap_count"),
             "runtime_apply_gap_audit_quiet_gap_count": runtime_gap_audit.get("quiet_gap_count"),
@@ -1074,6 +1148,7 @@ def build_tuning_performance_control_tower(target_date: str) -> dict[str, Any]:
         "selected_runtime": _selected_runtime(apply_plan, threshold_ev),
         "runtime_approval": runtime,
         "runtime_apply_gap_audit": runtime_gap_audit,
+        "conversion_first_summary": conversion_first,
         "lifecycle_bucket_window_summary": lifecycle_bucket_windows,
         "bridge_summary": bridge,
         "postclose_verifier_summary": verifier,

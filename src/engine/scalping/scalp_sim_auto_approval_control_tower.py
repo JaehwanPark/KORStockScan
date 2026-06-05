@@ -21,6 +21,7 @@ DECISION_AUTHORITY = "scalp_sim_auto_approval_control_tower"
 
 SIM_AUTO_APPROVAL_DIR = Path(DATA_DIR) / "threshold_cycle" / "sim_auto_approvals"
 SCALP_SIM_POLICY_DIR = Path(DATA_DIR) / "threshold_cycle" / "scalp_sim_policies"
+LDM_HYPOTHESIS_PLAN_DIR = Path(DATA_DIR) / "threshold_cycle" / "ldm_hypothesis_observation_plans"
 
 FORBIDDEN_USES = [
     "broker_order_submit",
@@ -53,6 +54,21 @@ def scalp_sim_auto_approval_path(target_date: str) -> Path:
 
 def scalp_sim_policy_catalog_path(target_date: str) -> Path:
     return SCALP_SIM_POLICY_DIR / f"scalp_sim_policy_catalog_{target_date}.json"
+
+
+def _latest_hypothesis_observation_plan(target_date: str) -> dict[str, Any]:
+    exact = LDM_HYPOTHESIS_PLAN_DIR / f"ldm_hypothesis_observation_plan_{target_date}.json"
+    if exact.exists():
+        return _load_json(exact)
+    candidates: list[tuple[str, Path]] = []
+    if LDM_HYPOTHESIS_PLAN_DIR.exists():
+        for path in LDM_HYPOTHESIS_PLAN_DIR.glob("ldm_hypothesis_observation_plan_*.json"):
+            plan_date = path.stem.removeprefix("ldm_hypothesis_observation_plan_")
+            if plan_date <= target_date:
+                candidates.append((plan_date, path))
+    if not candidates:
+        return {}
+    return _load_json(sorted(candidates)[-1][1])
 
 
 def _lifecycle_contract_ok(payload: dict[str, Any]) -> bool:
@@ -289,6 +305,8 @@ def build_policy_catalog(approval: dict[str, Any]) -> dict[str, Any]:
             for item in (policy.get("active_sim_priority_seeds") or [])
             if isinstance(item, dict) and str(item.get("active_seed_id") or "").strip()
         )
+    target_date = _date_text(approval.get("date"))
+    hypothesis_plan = _latest_hypothesis_observation_plan(target_date)
     return {
         "schema_version": "scalp_sim_policy_catalog_v1",
         "date": approval.get("date"),
@@ -301,6 +319,12 @@ def build_policy_catalog(approval: dict[str, Any]) -> dict[str, Any]:
         "approved_source_ids": approval.get("approved_source_ids") or [],
         "policies": approval.get("approved_policies") or [],
         "active_sim_priority_seeds": active_seeds,
+        "active_priority_lineage": {
+            "source": "scalp_sim_auto_approval",
+            "active_sim_priority_seed_count": len(active_seeds),
+            "lineage_artifact": f"data/report/key_lineage_ledger/key_lineage_ledger_{target_date}.json",
+        },
+        "hypothesis_observation_plan": hypothesis_plan or {},
         "forbidden_uses": FORBIDDEN_USES,
     }
 

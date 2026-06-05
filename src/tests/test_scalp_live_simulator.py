@@ -292,7 +292,7 @@ def test_candidate_window_resolves_approved_lifecycle_flow_from_entry_identity(m
 
     entry_bucket_key = (
         "score=score_60_62|source=blocked_ai_score|stale=fresh_or_unflagged|"
-        "liquidity=liquidity_unknown|overbought=overbought_unknown|time=time_0900_1000"
+        "liquidity=liquidity_not_available|overbought=overbought_not_available|time=time_0900_1000"
     )
     entry_bucket_id = state_handlers._scalp_sim_ldm_bucket_id("entry", "combo_entry_spot", entry_bucket_key)
     flow_bucket_id = (
@@ -590,7 +590,7 @@ def test_scalp_simulator_logs_liquidity_unknown_when_source_missing(monkeypatch)
     assert "scalp_sim_pre_submit_liquidity_guard_would_pass" not in stages
     guard = next(fields for stage, fields in logs if stage == "scalp_sim_pre_submit_liquidity_guard_unknown")
     assert guard["sim_pre_submit_liquidity_guard_action"] == "WOULD_UNKNOWN"
-    assert guard["sim_pre_submit_liquidity_reason"] == "liquidity_unknown"
+    assert guard["sim_pre_submit_liquidity_reason"] == "liquidity_not_available"
 
 
 def test_scalp_simulator_derives_liquidity_from_ws_when_runtime_source_unset(monkeypatch):
@@ -680,8 +680,8 @@ def test_scalp_simulator_marks_liquidity_unknown_when_runtime_zero_is_missing_to
     assert "scalp_sim_pre_submit_liquidity_guard_unknown" in stages
     guard = next(fields for stage, fields in logs if stage == "scalp_sim_pre_submit_liquidity_guard_unknown")
     assert guard["sim_pre_submit_liquidity_guard_action"] == "WOULD_UNKNOWN"
-    assert guard["sim_pre_submit_liquidity_reason"] == "liquidity_unknown"
-    assert guard["sim_liquidity_value"] == "UNKNOWN"
+    assert guard["sim_pre_submit_liquidity_reason"] == "liquidity_not_available"
+    assert guard["sim_liquidity_value"] == "not_available"
 
 
 def test_scalp_simulator_derives_overbought_context_from_intraday_range(monkeypatch):

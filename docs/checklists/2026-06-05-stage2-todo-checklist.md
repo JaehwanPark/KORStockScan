@@ -79,6 +79,15 @@
   - 금지: 장중 관찰 결과로 runtime threshold mutation을 수행하지 않는다.
   - 다음 액션: provenance present/missing, rollback guard breach 여부를 분리 기록한다.
 
+- [x] `[ScalpSimOperatorLockRestoreIntraday0605] 스캘핑 sim-only 후보창 및 AI budget operator lock 장중 복구` (`Due: 2026-06-05`, `Slot: INTRADAY`, `TimeWindow: 11:45~12:00`, `Track: ScalpingLogic`)
+  - Source: [threshold_runtime_env_2026-06-05.env](/home/ubuntu/KORStockScan/data/threshold_cycle/runtime_env/threshold_runtime_env_2026-06-05.env), [threshold_runtime_env_2026-06-05.json](/home/ubuntu/KORStockScan/data/threshold_cycle/runtime_env/threshold_runtime_env_2026-06-05.json), [scalp_sim_candidate_window_expansion_2026-06-05.json](/home/ubuntu/KORStockScan/data/threshold_cycle/operator_runtime_env_locks/scalp_sim_candidate_window_expansion_2026-06-05.json), [scalp_sim_ai_budget_manager_2026-06-05.json](/home/ubuntu/KORStockScan/data/threshold_cycle/operator_runtime_env_locks/scalp_sim_ai_budget_manager_2026-06-05.json)
+  - 판정 기준: 누락된 `operator_runtime_env_locks` 때문에 장중 sim raw 수집이 급감한 상태를 사용자 명시 override로 복구하되, `actual_order_submitted=false`, `broker_order_forbidden=true`, `decision_authority=sim_observation_only`를 유지한다.
+  - 금지: broker submit, real execution 품질 주장, live BUY 승격, threshold/provider/order guard 변경 근거로 사용하지 않는다.
+  - 처리 결과: `operator_sim_only_override_restored_intraday`
+  - 근거: 2026-06-05 PREOPEN apply는 `operator_runtime_env_locks=[]`로 생성되어 `scalp_sim_candidate_window_expansion`과 `scalp_sim_ai_budget_manager`가 빠졌고, 장중 active scalp sim은 2건까지 축소됐다. 사용자 지시에 따라 `KORSTOCKSCAN_SCALP_SIM_CANDIDATE_WINDOW_EXPANSION_ENABLED=true`, score `55~100`, `MAX_OPEN=20`, `MAX_DAILY=240`, `SCALP_SIM_AI_BUDGET_ENABLED=true`, `MAX_CALLS_PER_MIN=10`, holding cooldown `90/30/180s`, deferred review enabled를 sim-only env/lock으로 복구한다.
+  - 검증: 봇 `bot_main.py`를 PID `79947`로 재기동했고 `/proc/79947/environ`에서 `KORSTOCKSCAN_SCALP_SIM_CANDIDATE_WINDOW_EXPANSION_ENABLED=true`, `MAX_OPEN=20`, `MAX_DAILY=240`, `SCALP_SIM_AI_BUDGET_ENABLED=true`, `MAX_CALLS_PER_MIN=10`, holding cooldown `90/30/180s`, deferred review enabled 로드를 확인했다. 11:44:30 이후 pipeline event에서 `scalp_sim_buy_order_assumed_filled=14`, `scalp_sim_holding_started=14`, `scalp_sim_ai_holding_live_call=2`가 발생했고 `scalp_live_simulator_state.json` active position은 17건으로 회복됐다. active rows는 `actual_order_submitted=false`, `broker_order_forbidden=true`를 유지한다.
+  - 다음 액션: 장후 `threshold_cycle_ev`, `lifecycle_decision_matrix`, `sim_post_sell_evaluations`에서 11:45 이후 sim cohort를 별도 provenance로 본다. 이 복구는 sim raw 수집용이며 broker/order/provider/cap/threshold 변경 권한을 열지 않는다.
+
 - [ ] `[SimProbeIntradayCoverage0605] sim/probe 관찰축 actual_order_submitted=false 및 source-quality 확인` (`Due: 2026-06-05`, `Slot: INTRADAY`, `TimeWindow: 09:35~09:50`, `Track: ScalpingLogic`)
   - Source: [threshold_cycle_ev_2026-06-04.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-06-04.json)
   - 판정 기준: sim/probe 표본이 real execution과 분리되고 `actual_order_submitted=false` provenance가 유지되는지 확인한다.
@@ -108,6 +117,8 @@
 - [ ] `[CodeImprovementWorkorderReview0605] code improvement workorder 구현 필요 여부 및 Codex 지시 대상 확인` (`Due: 2026-06-05`, `Slot: POSTCLOSE`, `TimeWindow: 16:45~17:00`, `Track: ScalpingLogic`)
   - Source: [code_improvement_workorder_2026-06-04.md](/home/ubuntu/KORStockScan/docs/code-improvement-workorders/code_improvement_workorder_2026-06-04.md), [code_improvement_workorder_2026-06-04.json](/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-06-04.json)
   - 판정 기준: selected_order_count=84와 `implement_now`, `attach_existing_family`, `design_family_candidate`, `reject` 분류를 확인한다.
+  - 해석 보류 가드: `blocked_overbought` 또는 `blocked_strength_momentum`에서 `fluctuation>=29.0`, `intraday_range_pct=0`, `tick_context_quality=not_evaluated` 또는 `source_quality_block_reason=insufficient_history`가 같은 종목/record에 집중되면 우선 `limit_up_locked_context` 후보로 본다. 이 후보는 장 시작 직후 상한가 잠김으로 high/low range와 체결 history가 자연히 얇아진 상황일 수 있으므로 자동 `implement_now`나 producer bug로 분류하지 않는다.
+  - 닫는 기준: non-limit-up 종목에서도 같은 `intraday_range_pct=0` 결손이 반복되거나 high/low/candle source 누락이 독립 증거로 확인될 때만 `source_quality_gap` 구현 후보로 넘긴다. 그 전에는 `review_required_limit_up_locked_context` 또는 `no_code_required_pending_policy_classification`으로 닫는다.
   - 금지: code-improvement workorder를 자동 repo 수정으로 취급하지 않는다. 사용자가 Codex 구현을 지시한 경우에만 실행한다.
   - 다음 액션: 구현 필요, 설계 보류, reject, already_implemented 중 하나로 닫는다.
 
@@ -122,6 +133,12 @@
   - 판정 기준: quiet gap summary의 quiet_gap_count=`212`, rollup_required_count=`212`, sim_live_connected_quiet_gap_count=`0`, observation_source_quality_warning_count=`0`, quiet_gap_type_counts=`{'ai_review_parsed_low_coverage': 1, 'exclusion_dimension_candidate': 3, 'parent_conflict_child': 10, 'positive_source_only_keep_collecting': 201}`를 확인하고 parent conflict/exclusion, positive source-only, source-quality warning, AI coverage 누락을 닫는다.
   - 금지: quiet gap을 threshold/env/provider/order/bot 변경 근거로 사용하지 않는다.
   - 다음 액션: `rollup_only`, `implement_now`, `already_covered_by_parent_policy`, `defer_until_more_sample`, `reject_not_applicable` 중 하나로 닫는다.
+
+- [ ] `[ConversionLaneKeyLineageReview0605] SIM-to-real conversion lane 및 active/hypothesis key lineage 확인` (`Due: 2026-06-05`, `Slot: POSTCLOSE`, `TimeWindow: 17:45~18:00`, `Track: RuntimeStability`)
+  - Source: [key_lineage_ledger_2026-06-05.json](/home/ubuntu/KORStockScan/data/report/key_lineage_ledger/key_lineage_ledger_2026-06-05.json), [conversion_lane_2026-06-05.json](/home/ubuntu/KORStockScan/data/report/conversion_lane/conversion_lane_2026-06-05.json), [threshold_cycle_postclose_verification_2026-06-05.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_postclose_verification/threshold_cycle_postclose_verification_2026-06-05.json), [tuning_performance_control_tower_2026-06-05.json](/home/ubuntu/KORStockScan/data/report/tuning_performance_control_tower/tuning_performance_control_tower_2026-06-05.json)
+  - 판정 기준: `key_mismatch_count`, `catalog_missing_count`, `preopen_missing_count`, `not_instrumented_count`, `real_conversion_queue_count`, `top_blocker_class`, `bounded_real_canary_requestable_count`를 확인하고 active priority/hypothesis/bucket key continuity를 전환 KPI로 닫는다.
+  - 금지: conversion lane이나 key lineage ledger를 real order/provider/bot/cap/threshold 변경 권한으로 해석하지 않는다. `bounded_real_canary_requestable`도 사용자 승인 없는 실주문 권한이 아니다.
+  - 다음 액션: `conversion_kpi_pass`, `key_mismatch_fix_required`, `hypothesis_runtime_not_instrumented`, `natural_match_0_observe`, `source_quality_or_bridge_blocker_ranked`, `artifact_missing_fix_wrapper_first` 중 하나로 닫는다.
 
 - [ ] `[AutomationTriggerDecisionSummary0605] 자동화체인 trigger decision run/skip 요약 및 wrapper marker 대조 확인` (`Due: 2026-06-05`, `Slot: POSTCLOSE`, `TimeWindow: 18:10~18:25`, `Track: RuntimeStability`)
   - Source: [automation_chain_trigger_decision_2026-06-04.json](/home/ubuntu/KORStockScan/data/report/automation_chain_trigger_decision/automation_chain_trigger_decision_2026-06-04.json), [run_threshold_cycle_postclose.sh](/home/ubuntu/KORStockScan/deploy/run_threshold_cycle_postclose.sh)

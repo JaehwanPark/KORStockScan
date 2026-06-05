@@ -27,9 +27,9 @@
 - stage_hook_workorder_discovery: `/home/ubuntu/KORStockScan/data/report/stage_hook_workorder_discovery/stage_hook_workorder_discovery_2026-06-04.json`
 - stage_hook_runtime_scaffold: `/home/ubuntu/KORStockScan/data/report/stage_hook_runtime_scaffold/stage_hook_runtime_scaffold_2026-06-04.json`
 - buy_funnel_sentinel: `/home/ubuntu/KORStockScan/data/report/buy_funnel_sentinel/buy_funnel_sentinel_2026-06-04.json`
-- generated_at: `2026-06-04T20:34:28+09:00`
-- generation_id: `2026-06-04-0b9d29de55a0`
-- source_hash: `0b9d29de55a0a987e1dcbbe46ac6881616ae9079ec7447e984c52ba3d14a3577`
+- generated_at: `2026-06-05T10:37:00+09:00`
+- generation_id: `2026-06-04-db0780ecadea`
+- source_hash: `db0780ecadea5a47a06082c1eba52633da699babc0c4301488606237d189351c`
 
 ## 운영 원칙
 
@@ -51,15 +51,15 @@
 ## Snapshot Lineage
 
 - previous_exists: `True`
-- previous_generation_id: `2026-06-04-483c5bfa7f7c`
-- previous_source_hash: `483c5bfa7f7c4eafe9095d1ed4801325cce36ff6845f0e742e7811482c46b435`
+- previous_generation_id: `2026-06-04-9bb41d347e25`
+- previous_source_hash: `9bb41d347e25676660805a3fb5e74e8225e3958e5551dde8469582e7dcd63488`
 - new_order_ids: `[]`
-- removed_order_ids: `['order_observation_source_quality_unknown_token_provenance_gap']`
+- removed_order_ids: `[]`
 - decision_changed_order_ids: `[]`
 
 ## Summary
 
-- source_order_count: `120`
+- source_order_count: `140`
 - scalping_source_order_count: `11`
 - swing_source_order_count: `9`
 - swing_entry_bottleneck_primary: `SWING_ENTRY_BOTTLENECK_OBSERVE`
@@ -80,22 +80,22 @@
 - entry_submit_drought_selected: `True`
 - entry_submit_drought_handoff_missing: `False`
 - panic_lifecycle_source_order_count: `2`
-- selected_order_count: `81`
-- non_selected_order_count: `39`
-- source_decision_counts: `{'attach_existing_family': 102, 'design_family_candidate': 5, 'defer_evidence': 10, 'reject': 3}`
-- selected_decision_counts: `{'attach_existing_family': 80, 'defer_evidence': 1}`
-- selected_route_counts: `{'existing_family': 73, 'ai_review_coverage_review': 1, 'parent_conflict_exclusion_review': 1, 'positive_source_only_review': 1, 'source_dimension_rollup': 1, 'pattern_lab_ai_review_handoff_evidence': 3, 'pattern_lab_ai_review_followup_evidence': 1}`
-- selected_implement_now_route_count: `0`
-- selected_runtime_effect_false_count: `81`
-- selected_unimplemented_runtime_effect_false_count: `1`
-- selected_unimplemented_route_counts: `{'pattern_lab_ai_review_followup_evidence': 1}`
+- selected_order_count: `100`
+- non_selected_order_count: `40`
+- source_decision_counts: `{'implement_now': 20, 'attach_existing_family': 102, 'design_family_candidate': 5, 'defer_evidence': 10, 'reject': 3}`
+- selected_decision_counts: `{'implement_now': 20, 'attach_existing_family': 79, 'defer_evidence': 1}`
+- selected_route_counts: `{'instrumentation_order': 20, 'existing_family': 72, 'ai_review_coverage_review': 1, 'parent_conflict_exclusion_review': 1, 'positive_source_only_review': 1, 'source_dimension_rollup': 1, 'pattern_lab_ai_review_handoff_evidence': 3, 'pattern_lab_ai_review_followup_evidence': 1}`
+- selected_implement_now_route_count: `20`
+- selected_runtime_effect_false_count: `100`
+- selected_unimplemented_runtime_effect_false_count: `21`
+- selected_unimplemented_route_counts: `{'instrumentation_order': 20, 'pattern_lab_ai_review_followup_evidence': 1}`
 - selected_implement_now_existing_implementation_count: `0`
 - selected_implement_now_existing_implementation_order_ids: `[]`
-- selected_implement_now_new_runtime_effect_false_count: `0`
-- selected_implement_now_new_runtime_effect_false_order_ids: `[]`
+- selected_implement_now_new_runtime_effect_false_count: `20`
+- selected_implement_now_new_runtime_effect_false_order_ids: `['order_conversion_lane_env_mapping_scale_in_arm_pyramid', 'order_conversion_lane_env_mapping_scale_in_blocker_reason_trend_not_strong', 'order_conversion_lane_key_lineage_ldm_hypothesis_00d0b765311ad7aa', 'order_conversion_lane_key_lineage_ldm_hypothesis_0f038214d5ac5a30', 'order_conversion_lane_key_lineage_ldm_hypothesis_4782cc3ea9609ffc', 'order_conversion_lane_key_lineage_ldm_hypothesis_6039289bbc789fbf', 'order_conversion_lane_key_lineage_ldm_hypothesis_711caa66c89b3f51', 'order_conversion_lane_key_lineage_ldm_hypothesis_76e02836d5c6bea3', 'order_conversion_lane_key_lineage_ldm_hypothesis_85018f5d185ec23b', 'order_conversion_lane_key_lineage_ldm_hypothesis_92dfecb5a05caa64', 'order_conversion_lane_key_lineage_ldm_hypothesis_bd95657855656936', 'order_conversion_lane_key_lineage_ldm_hypothesis_dead5c62e79220e3', 'order_conversion_lane_key_lineage_ldm_hypothesis_e04e4d815fd8d0f9', 'order_conversion_lane_key_lineage_ldm_hypothesis_e9af2ba90970f01d', 'order_conversion_lane_submit_drought_submit_drought_broker_receipt', 'order_conversion_lane_submit_drought_submit_drought_budget_pass_collapse', 'order_conversion_lane_submit_drought_submit_drought_latency_pre_submit', 'order_conversion_lane_submit_drought_submit_drought_sim_real_authority', 'order_conversion_lane_submit_drought_submit_drought_source_taxonomy_leakage', 'order_conversion_lane_submit_drought_submit_drought_upstream_gate']`
 - repeat_unresolved_escalation_count: `0`
 - repeat_unresolved_escalated_order_ids: `[]`
-- non_selected_decision_counts: `{'attach_existing_family': 22, 'design_family_candidate': 5, 'defer_evidence': 9, 'reject': 3}`
+- non_selected_decision_counts: `{'attach_existing_family': 23, 'design_family_candidate': 5, 'defer_evidence': 9, 'reject': 3}`
 - gemini_fresh: `True`
 - claude_fresh: `True`
 - swing_lifecycle_audit_available: `True`
@@ -134,7 +134,687 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 
 ## Implementation Orders
 
-### 1. `order_entry_submit_drought_auto_resolution`
+### 1. `order_conversion_lane_key_lineage_ldm_hypothesis_00d0b765311ad7aa`
+
+- title: Conversion lane blocker follow-up: key_lineage ldm_hypothesis_00d0b765311ad7aa
+- decision: `implement_now`
+- decision_reason: conversion lane blocker is source-only lineage/report/instrumentation work needed before any bounded real canary request can be considered
+- source_report_type: `conversion_lane`
+- lifecycle_stage: `conversion`
+- target_subsystem: `sim_to_real_conversion_lineage`
+- route: `instrumentation_order`
+- mapped_family: `sim_to_real_conversion_lane`
+- threshold_family: `sim_to_real_conversion_lane`
+- improvement_type: `conversion_key_lineage_blocker`
+- confidence: `conversion_kpi`
+- priority: `1`
+- runtime_effect: `False`
+- strategy_effect: `False`
+- data_quality_effect: `False`
+- tuning_axis_effect: `False`
+- expected_ev_effect: reduce remaining blocker count before bounded real canary can be requested
+- evidence: `conversion_candidate_id=ldm_hypothesis_00d0b765311ad7aa`, `blocker_class=key_lineage`, `conversion_impact_rank=1`, `next_repair_action=hypothesis_catalog_missing`, `acceptance_test=same source key is continuous producer->catalog->PREOPEN->runtime->postclose or closes natural_match_0`, `runtime_effect=false`, `allowed_runtime_apply=false`
+- parity_contract: -
+- next_postclose_metric: -
+- files_likely_touched: `src/engine/automation/key_lineage_ledger.py`, `src/engine/automation/conversion_lane.py`, `src/engine/verify_threshold_cycle_postclose_chain.py`, `src/engine/build_code_improvement_workorder.py`
+- acceptance_tests: `PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_conversion_lane_key_lineage.py src/tests/test_build_code_improvement_workorder.py src/tests/test_verify_threshold_cycle_postclose_chain.py`
+- implementation_status: `-`
+- implementation_provenance: `-`
+- automation_reentry: After implementation, rerun key_lineage_ledger, conversion_lane, code_improvement_workorder, tuning performance control tower, and postclose verifier; runtime/live order guards remain unchanged.
+
+실행 기준:
+
+- instrumentation/provenance/report source 보강을 우선 구현한다.
+- runtime 판단값을 직접 바꾸지 않는다.
+- 다음 postclose report에서 source freshness, warning 감소, sample count가 확인되어야 한다.
+
+### 2. `order_conversion_lane_key_lineage_ldm_hypothesis_0f038214d5ac5a30`
+
+- title: Conversion lane blocker follow-up: key_lineage ldm_hypothesis_0f038214d5ac5a30
+- decision: `implement_now`
+- decision_reason: conversion lane blocker is source-only lineage/report/instrumentation work needed before any bounded real canary request can be considered
+- source_report_type: `conversion_lane`
+- lifecycle_stage: `conversion`
+- target_subsystem: `sim_to_real_conversion_lineage`
+- route: `instrumentation_order`
+- mapped_family: `sim_to_real_conversion_lane`
+- threshold_family: `sim_to_real_conversion_lane`
+- improvement_type: `conversion_key_lineage_blocker`
+- confidence: `conversion_kpi`
+- priority: `2`
+- runtime_effect: `False`
+- strategy_effect: `False`
+- data_quality_effect: `False`
+- tuning_axis_effect: `False`
+- expected_ev_effect: reduce remaining blocker count before bounded real canary can be requested
+- evidence: `conversion_candidate_id=ldm_hypothesis_0f038214d5ac5a30`, `blocker_class=key_lineage`, `conversion_impact_rank=2`, `next_repair_action=hypothesis_catalog_missing`, `acceptance_test=same source key is continuous producer->catalog->PREOPEN->runtime->postclose or closes natural_match_0`, `runtime_effect=false`, `allowed_runtime_apply=false`
+- parity_contract: -
+- next_postclose_metric: -
+- files_likely_touched: `src/engine/automation/key_lineage_ledger.py`, `src/engine/automation/conversion_lane.py`, `src/engine/verify_threshold_cycle_postclose_chain.py`, `src/engine/build_code_improvement_workorder.py`
+- acceptance_tests: `PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_conversion_lane_key_lineage.py src/tests/test_build_code_improvement_workorder.py src/tests/test_verify_threshold_cycle_postclose_chain.py`
+- implementation_status: `-`
+- implementation_provenance: `-`
+- automation_reentry: After implementation, rerun key_lineage_ledger, conversion_lane, code_improvement_workorder, tuning performance control tower, and postclose verifier; runtime/live order guards remain unchanged.
+
+실행 기준:
+
+- instrumentation/provenance/report source 보강을 우선 구현한다.
+- runtime 판단값을 직접 바꾸지 않는다.
+- 다음 postclose report에서 source freshness, warning 감소, sample count가 확인되어야 한다.
+
+### 3. `order_conversion_lane_key_lineage_ldm_hypothesis_4782cc3ea9609ffc`
+
+- title: Conversion lane blocker follow-up: key_lineage ldm_hypothesis_4782cc3ea9609ffc
+- decision: `implement_now`
+- decision_reason: conversion lane blocker is source-only lineage/report/instrumentation work needed before any bounded real canary request can be considered
+- source_report_type: `conversion_lane`
+- lifecycle_stage: `conversion`
+- target_subsystem: `sim_to_real_conversion_lineage`
+- route: `instrumentation_order`
+- mapped_family: `sim_to_real_conversion_lane`
+- threshold_family: `sim_to_real_conversion_lane`
+- improvement_type: `conversion_key_lineage_blocker`
+- confidence: `conversion_kpi`
+- priority: `3`
+- runtime_effect: `False`
+- strategy_effect: `False`
+- data_quality_effect: `False`
+- tuning_axis_effect: `False`
+- expected_ev_effect: reduce remaining blocker count before bounded real canary can be requested
+- evidence: `conversion_candidate_id=ldm_hypothesis_4782cc3ea9609ffc`, `blocker_class=key_lineage`, `conversion_impact_rank=3`, `next_repair_action=hypothesis_catalog_missing`, `acceptance_test=same source key is continuous producer->catalog->PREOPEN->runtime->postclose or closes natural_match_0`, `runtime_effect=false`, `allowed_runtime_apply=false`
+- parity_contract: -
+- next_postclose_metric: -
+- files_likely_touched: `src/engine/automation/key_lineage_ledger.py`, `src/engine/automation/conversion_lane.py`, `src/engine/verify_threshold_cycle_postclose_chain.py`, `src/engine/build_code_improvement_workorder.py`
+- acceptance_tests: `PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_conversion_lane_key_lineage.py src/tests/test_build_code_improvement_workorder.py src/tests/test_verify_threshold_cycle_postclose_chain.py`
+- implementation_status: `-`
+- implementation_provenance: `-`
+- automation_reentry: After implementation, rerun key_lineage_ledger, conversion_lane, code_improvement_workorder, tuning performance control tower, and postclose verifier; runtime/live order guards remain unchanged.
+
+실행 기준:
+
+- instrumentation/provenance/report source 보강을 우선 구현한다.
+- runtime 판단값을 직접 바꾸지 않는다.
+- 다음 postclose report에서 source freshness, warning 감소, sample count가 확인되어야 한다.
+
+### 4. `order_conversion_lane_key_lineage_ldm_hypothesis_6039289bbc789fbf`
+
+- title: Conversion lane blocker follow-up: key_lineage ldm_hypothesis_6039289bbc789fbf
+- decision: `implement_now`
+- decision_reason: conversion lane blocker is source-only lineage/report/instrumentation work needed before any bounded real canary request can be considered
+- source_report_type: `conversion_lane`
+- lifecycle_stage: `conversion`
+- target_subsystem: `sim_to_real_conversion_lineage`
+- route: `instrumentation_order`
+- mapped_family: `sim_to_real_conversion_lane`
+- threshold_family: `sim_to_real_conversion_lane`
+- improvement_type: `conversion_key_lineage_blocker`
+- confidence: `conversion_kpi`
+- priority: `4`
+- runtime_effect: `False`
+- strategy_effect: `False`
+- data_quality_effect: `False`
+- tuning_axis_effect: `False`
+- expected_ev_effect: reduce remaining blocker count before bounded real canary can be requested
+- evidence: `conversion_candidate_id=ldm_hypothesis_6039289bbc789fbf`, `blocker_class=key_lineage`, `conversion_impact_rank=4`, `next_repair_action=hypothesis_catalog_missing`, `acceptance_test=same source key is continuous producer->catalog->PREOPEN->runtime->postclose or closes natural_match_0`, `runtime_effect=false`, `allowed_runtime_apply=false`
+- parity_contract: -
+- next_postclose_metric: -
+- files_likely_touched: `src/engine/automation/key_lineage_ledger.py`, `src/engine/automation/conversion_lane.py`, `src/engine/verify_threshold_cycle_postclose_chain.py`, `src/engine/build_code_improvement_workorder.py`
+- acceptance_tests: `PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_conversion_lane_key_lineage.py src/tests/test_build_code_improvement_workorder.py src/tests/test_verify_threshold_cycle_postclose_chain.py`
+- implementation_status: `-`
+- implementation_provenance: `-`
+- automation_reentry: After implementation, rerun key_lineage_ledger, conversion_lane, code_improvement_workorder, tuning performance control tower, and postclose verifier; runtime/live order guards remain unchanged.
+
+실행 기준:
+
+- instrumentation/provenance/report source 보강을 우선 구현한다.
+- runtime 판단값을 직접 바꾸지 않는다.
+- 다음 postclose report에서 source freshness, warning 감소, sample count가 확인되어야 한다.
+
+### 5. `order_conversion_lane_key_lineage_ldm_hypothesis_711caa66c89b3f51`
+
+- title: Conversion lane blocker follow-up: key_lineage ldm_hypothesis_711caa66c89b3f51
+- decision: `implement_now`
+- decision_reason: conversion lane blocker is source-only lineage/report/instrumentation work needed before any bounded real canary request can be considered
+- source_report_type: `conversion_lane`
+- lifecycle_stage: `conversion`
+- target_subsystem: `sim_to_real_conversion_lineage`
+- route: `instrumentation_order`
+- mapped_family: `sim_to_real_conversion_lane`
+- threshold_family: `sim_to_real_conversion_lane`
+- improvement_type: `conversion_key_lineage_blocker`
+- confidence: `conversion_kpi`
+- priority: `5`
+- runtime_effect: `False`
+- strategy_effect: `False`
+- data_quality_effect: `False`
+- tuning_axis_effect: `False`
+- expected_ev_effect: reduce remaining blocker count before bounded real canary can be requested
+- evidence: `conversion_candidate_id=ldm_hypothesis_711caa66c89b3f51`, `blocker_class=key_lineage`, `conversion_impact_rank=5`, `next_repair_action=hypothesis_catalog_missing`, `acceptance_test=same source key is continuous producer->catalog->PREOPEN->runtime->postclose or closes natural_match_0`, `runtime_effect=false`, `allowed_runtime_apply=false`
+- parity_contract: -
+- next_postclose_metric: -
+- files_likely_touched: `src/engine/automation/key_lineage_ledger.py`, `src/engine/automation/conversion_lane.py`, `src/engine/verify_threshold_cycle_postclose_chain.py`, `src/engine/build_code_improvement_workorder.py`
+- acceptance_tests: `PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_conversion_lane_key_lineage.py src/tests/test_build_code_improvement_workorder.py src/tests/test_verify_threshold_cycle_postclose_chain.py`
+- implementation_status: `-`
+- implementation_provenance: `-`
+- automation_reentry: After implementation, rerun key_lineage_ledger, conversion_lane, code_improvement_workorder, tuning performance control tower, and postclose verifier; runtime/live order guards remain unchanged.
+
+실행 기준:
+
+- instrumentation/provenance/report source 보강을 우선 구현한다.
+- runtime 판단값을 직접 바꾸지 않는다.
+- 다음 postclose report에서 source freshness, warning 감소, sample count가 확인되어야 한다.
+
+### 6. `order_conversion_lane_key_lineage_ldm_hypothesis_76e02836d5c6bea3`
+
+- title: Conversion lane blocker follow-up: key_lineage ldm_hypothesis_76e02836d5c6bea3
+- decision: `implement_now`
+- decision_reason: conversion lane blocker is source-only lineage/report/instrumentation work needed before any bounded real canary request can be considered
+- source_report_type: `conversion_lane`
+- lifecycle_stage: `conversion`
+- target_subsystem: `sim_to_real_conversion_lineage`
+- route: `instrumentation_order`
+- mapped_family: `sim_to_real_conversion_lane`
+- threshold_family: `sim_to_real_conversion_lane`
+- improvement_type: `conversion_key_lineage_blocker`
+- confidence: `conversion_kpi`
+- priority: `6`
+- runtime_effect: `False`
+- strategy_effect: `False`
+- data_quality_effect: `False`
+- tuning_axis_effect: `False`
+- expected_ev_effect: reduce remaining blocker count before bounded real canary can be requested
+- evidence: `conversion_candidate_id=ldm_hypothesis_76e02836d5c6bea3`, `blocker_class=key_lineage`, `conversion_impact_rank=6`, `next_repair_action=hypothesis_catalog_missing`, `acceptance_test=same source key is continuous producer->catalog->PREOPEN->runtime->postclose or closes natural_match_0`, `runtime_effect=false`, `allowed_runtime_apply=false`
+- parity_contract: -
+- next_postclose_metric: -
+- files_likely_touched: `src/engine/automation/key_lineage_ledger.py`, `src/engine/automation/conversion_lane.py`, `src/engine/verify_threshold_cycle_postclose_chain.py`, `src/engine/build_code_improvement_workorder.py`
+- acceptance_tests: `PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_conversion_lane_key_lineage.py src/tests/test_build_code_improvement_workorder.py src/tests/test_verify_threshold_cycle_postclose_chain.py`
+- implementation_status: `-`
+- implementation_provenance: `-`
+- automation_reentry: After implementation, rerun key_lineage_ledger, conversion_lane, code_improvement_workorder, tuning performance control tower, and postclose verifier; runtime/live order guards remain unchanged.
+
+실행 기준:
+
+- instrumentation/provenance/report source 보강을 우선 구현한다.
+- runtime 판단값을 직접 바꾸지 않는다.
+- 다음 postclose report에서 source freshness, warning 감소, sample count가 확인되어야 한다.
+
+### 7. `order_conversion_lane_key_lineage_ldm_hypothesis_85018f5d185ec23b`
+
+- title: Conversion lane blocker follow-up: key_lineage ldm_hypothesis_85018f5d185ec23b
+- decision: `implement_now`
+- decision_reason: conversion lane blocker is source-only lineage/report/instrumentation work needed before any bounded real canary request can be considered
+- source_report_type: `conversion_lane`
+- lifecycle_stage: `conversion`
+- target_subsystem: `sim_to_real_conversion_lineage`
+- route: `instrumentation_order`
+- mapped_family: `sim_to_real_conversion_lane`
+- threshold_family: `sim_to_real_conversion_lane`
+- improvement_type: `conversion_key_lineage_blocker`
+- confidence: `conversion_kpi`
+- priority: `7`
+- runtime_effect: `False`
+- strategy_effect: `False`
+- data_quality_effect: `False`
+- tuning_axis_effect: `False`
+- expected_ev_effect: reduce remaining blocker count before bounded real canary can be requested
+- evidence: `conversion_candidate_id=ldm_hypothesis_85018f5d185ec23b`, `blocker_class=key_lineage`, `conversion_impact_rank=7`, `next_repair_action=hypothesis_catalog_missing`, `acceptance_test=same source key is continuous producer->catalog->PREOPEN->runtime->postclose or closes natural_match_0`, `runtime_effect=false`, `allowed_runtime_apply=false`
+- parity_contract: -
+- next_postclose_metric: -
+- files_likely_touched: `src/engine/automation/key_lineage_ledger.py`, `src/engine/automation/conversion_lane.py`, `src/engine/verify_threshold_cycle_postclose_chain.py`, `src/engine/build_code_improvement_workorder.py`
+- acceptance_tests: `PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_conversion_lane_key_lineage.py src/tests/test_build_code_improvement_workorder.py src/tests/test_verify_threshold_cycle_postclose_chain.py`
+- implementation_status: `-`
+- implementation_provenance: `-`
+- automation_reentry: After implementation, rerun key_lineage_ledger, conversion_lane, code_improvement_workorder, tuning performance control tower, and postclose verifier; runtime/live order guards remain unchanged.
+
+실행 기준:
+
+- instrumentation/provenance/report source 보강을 우선 구현한다.
+- runtime 판단값을 직접 바꾸지 않는다.
+- 다음 postclose report에서 source freshness, warning 감소, sample count가 확인되어야 한다.
+
+### 8. `order_conversion_lane_key_lineage_ldm_hypothesis_92dfecb5a05caa64`
+
+- title: Conversion lane blocker follow-up: key_lineage ldm_hypothesis_92dfecb5a05caa64
+- decision: `implement_now`
+- decision_reason: conversion lane blocker is source-only lineage/report/instrumentation work needed before any bounded real canary request can be considered
+- source_report_type: `conversion_lane`
+- lifecycle_stage: `conversion`
+- target_subsystem: `sim_to_real_conversion_lineage`
+- route: `instrumentation_order`
+- mapped_family: `sim_to_real_conversion_lane`
+- threshold_family: `sim_to_real_conversion_lane`
+- improvement_type: `conversion_key_lineage_blocker`
+- confidence: `conversion_kpi`
+- priority: `8`
+- runtime_effect: `False`
+- strategy_effect: `False`
+- data_quality_effect: `False`
+- tuning_axis_effect: `False`
+- expected_ev_effect: reduce remaining blocker count before bounded real canary can be requested
+- evidence: `conversion_candidate_id=ldm_hypothesis_92dfecb5a05caa64`, `blocker_class=key_lineage`, `conversion_impact_rank=8`, `next_repair_action=hypothesis_catalog_missing`, `acceptance_test=same source key is continuous producer->catalog->PREOPEN->runtime->postclose or closes natural_match_0`, `runtime_effect=false`, `allowed_runtime_apply=false`
+- parity_contract: -
+- next_postclose_metric: -
+- files_likely_touched: `src/engine/automation/key_lineage_ledger.py`, `src/engine/automation/conversion_lane.py`, `src/engine/verify_threshold_cycle_postclose_chain.py`, `src/engine/build_code_improvement_workorder.py`
+- acceptance_tests: `PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_conversion_lane_key_lineage.py src/tests/test_build_code_improvement_workorder.py src/tests/test_verify_threshold_cycle_postclose_chain.py`
+- implementation_status: `-`
+- implementation_provenance: `-`
+- automation_reentry: After implementation, rerun key_lineage_ledger, conversion_lane, code_improvement_workorder, tuning performance control tower, and postclose verifier; runtime/live order guards remain unchanged.
+
+실행 기준:
+
+- instrumentation/provenance/report source 보강을 우선 구현한다.
+- runtime 판단값을 직접 바꾸지 않는다.
+- 다음 postclose report에서 source freshness, warning 감소, sample count가 확인되어야 한다.
+
+### 9. `order_conversion_lane_key_lineage_ldm_hypothesis_bd95657855656936`
+
+- title: Conversion lane blocker follow-up: key_lineage ldm_hypothesis_bd95657855656936
+- decision: `implement_now`
+- decision_reason: conversion lane blocker is source-only lineage/report/instrumentation work needed before any bounded real canary request can be considered
+- source_report_type: `conversion_lane`
+- lifecycle_stage: `conversion`
+- target_subsystem: `sim_to_real_conversion_lineage`
+- route: `instrumentation_order`
+- mapped_family: `sim_to_real_conversion_lane`
+- threshold_family: `sim_to_real_conversion_lane`
+- improvement_type: `conversion_key_lineage_blocker`
+- confidence: `conversion_kpi`
+- priority: `9`
+- runtime_effect: `False`
+- strategy_effect: `False`
+- data_quality_effect: `False`
+- tuning_axis_effect: `False`
+- expected_ev_effect: reduce remaining blocker count before bounded real canary can be requested
+- evidence: `conversion_candidate_id=ldm_hypothesis_bd95657855656936`, `blocker_class=key_lineage`, `conversion_impact_rank=9`, `next_repair_action=hypothesis_catalog_missing`, `acceptance_test=same source key is continuous producer->catalog->PREOPEN->runtime->postclose or closes natural_match_0`, `runtime_effect=false`, `allowed_runtime_apply=false`
+- parity_contract: -
+- next_postclose_metric: -
+- files_likely_touched: `src/engine/automation/key_lineage_ledger.py`, `src/engine/automation/conversion_lane.py`, `src/engine/verify_threshold_cycle_postclose_chain.py`, `src/engine/build_code_improvement_workorder.py`
+- acceptance_tests: `PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_conversion_lane_key_lineage.py src/tests/test_build_code_improvement_workorder.py src/tests/test_verify_threshold_cycle_postclose_chain.py`
+- implementation_status: `-`
+- implementation_provenance: `-`
+- automation_reentry: After implementation, rerun key_lineage_ledger, conversion_lane, code_improvement_workorder, tuning performance control tower, and postclose verifier; runtime/live order guards remain unchanged.
+
+실행 기준:
+
+- instrumentation/provenance/report source 보강을 우선 구현한다.
+- runtime 판단값을 직접 바꾸지 않는다.
+- 다음 postclose report에서 source freshness, warning 감소, sample count가 확인되어야 한다.
+
+### 10. `order_conversion_lane_key_lineage_ldm_hypothesis_dead5c62e79220e3`
+
+- title: Conversion lane blocker follow-up: key_lineage ldm_hypothesis_dead5c62e79220e3
+- decision: `implement_now`
+- decision_reason: conversion lane blocker is source-only lineage/report/instrumentation work needed before any bounded real canary request can be considered
+- source_report_type: `conversion_lane`
+- lifecycle_stage: `conversion`
+- target_subsystem: `sim_to_real_conversion_lineage`
+- route: `instrumentation_order`
+- mapped_family: `sim_to_real_conversion_lane`
+- threshold_family: `sim_to_real_conversion_lane`
+- improvement_type: `conversion_key_lineage_blocker`
+- confidence: `conversion_kpi`
+- priority: `10`
+- runtime_effect: `False`
+- strategy_effect: `False`
+- data_quality_effect: `False`
+- tuning_axis_effect: `False`
+- expected_ev_effect: reduce remaining blocker count before bounded real canary can be requested
+- evidence: `conversion_candidate_id=ldm_hypothesis_dead5c62e79220e3`, `blocker_class=key_lineage`, `conversion_impact_rank=10`, `next_repair_action=hypothesis_catalog_missing`, `acceptance_test=same source key is continuous producer->catalog->PREOPEN->runtime->postclose or closes natural_match_0`, `runtime_effect=false`, `allowed_runtime_apply=false`
+- parity_contract: -
+- next_postclose_metric: -
+- files_likely_touched: `src/engine/automation/key_lineage_ledger.py`, `src/engine/automation/conversion_lane.py`, `src/engine/verify_threshold_cycle_postclose_chain.py`, `src/engine/build_code_improvement_workorder.py`
+- acceptance_tests: `PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_conversion_lane_key_lineage.py src/tests/test_build_code_improvement_workorder.py src/tests/test_verify_threshold_cycle_postclose_chain.py`
+- implementation_status: `-`
+- implementation_provenance: `-`
+- automation_reentry: After implementation, rerun key_lineage_ledger, conversion_lane, code_improvement_workorder, tuning performance control tower, and postclose verifier; runtime/live order guards remain unchanged.
+
+실행 기준:
+
+- instrumentation/provenance/report source 보강을 우선 구현한다.
+- runtime 판단값을 직접 바꾸지 않는다.
+- 다음 postclose report에서 source freshness, warning 감소, sample count가 확인되어야 한다.
+
+### 11. `order_conversion_lane_key_lineage_ldm_hypothesis_e04e4d815fd8d0f9`
+
+- title: Conversion lane blocker follow-up: key_lineage ldm_hypothesis_e04e4d815fd8d0f9
+- decision: `implement_now`
+- decision_reason: conversion lane blocker is source-only lineage/report/instrumentation work needed before any bounded real canary request can be considered
+- source_report_type: `conversion_lane`
+- lifecycle_stage: `conversion`
+- target_subsystem: `sim_to_real_conversion_lineage`
+- route: `instrumentation_order`
+- mapped_family: `sim_to_real_conversion_lane`
+- threshold_family: `sim_to_real_conversion_lane`
+- improvement_type: `conversion_key_lineage_blocker`
+- confidence: `conversion_kpi`
+- priority: `11`
+- runtime_effect: `False`
+- strategy_effect: `False`
+- data_quality_effect: `False`
+- tuning_axis_effect: `False`
+- expected_ev_effect: reduce remaining blocker count before bounded real canary can be requested
+- evidence: `conversion_candidate_id=ldm_hypothesis_e04e4d815fd8d0f9`, `blocker_class=key_lineage`, `conversion_impact_rank=11`, `next_repair_action=hypothesis_catalog_missing`, `acceptance_test=same source key is continuous producer->catalog->PREOPEN->runtime->postclose or closes natural_match_0`, `runtime_effect=false`, `allowed_runtime_apply=false`
+- parity_contract: -
+- next_postclose_metric: -
+- files_likely_touched: `src/engine/automation/key_lineage_ledger.py`, `src/engine/automation/conversion_lane.py`, `src/engine/verify_threshold_cycle_postclose_chain.py`, `src/engine/build_code_improvement_workorder.py`
+- acceptance_tests: `PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_conversion_lane_key_lineage.py src/tests/test_build_code_improvement_workorder.py src/tests/test_verify_threshold_cycle_postclose_chain.py`
+- implementation_status: `-`
+- implementation_provenance: `-`
+- automation_reentry: After implementation, rerun key_lineage_ledger, conversion_lane, code_improvement_workorder, tuning performance control tower, and postclose verifier; runtime/live order guards remain unchanged.
+
+실행 기준:
+
+- instrumentation/provenance/report source 보강을 우선 구현한다.
+- runtime 판단값을 직접 바꾸지 않는다.
+- 다음 postclose report에서 source freshness, warning 감소, sample count가 확인되어야 한다.
+
+### 12. `order_conversion_lane_key_lineage_ldm_hypothesis_e9af2ba90970f01d`
+
+- title: Conversion lane blocker follow-up: key_lineage ldm_hypothesis_e9af2ba90970f01d
+- decision: `implement_now`
+- decision_reason: conversion lane blocker is source-only lineage/report/instrumentation work needed before any bounded real canary request can be considered
+- source_report_type: `conversion_lane`
+- lifecycle_stage: `conversion`
+- target_subsystem: `sim_to_real_conversion_lineage`
+- route: `instrumentation_order`
+- mapped_family: `sim_to_real_conversion_lane`
+- threshold_family: `sim_to_real_conversion_lane`
+- improvement_type: `conversion_key_lineage_blocker`
+- confidence: `conversion_kpi`
+- priority: `12`
+- runtime_effect: `False`
+- strategy_effect: `False`
+- data_quality_effect: `False`
+- tuning_axis_effect: `False`
+- expected_ev_effect: reduce remaining blocker count before bounded real canary can be requested
+- evidence: `conversion_candidate_id=ldm_hypothesis_e9af2ba90970f01d`, `blocker_class=key_lineage`, `conversion_impact_rank=12`, `next_repair_action=hypothesis_catalog_missing`, `acceptance_test=same source key is continuous producer->catalog->PREOPEN->runtime->postclose or closes natural_match_0`, `runtime_effect=false`, `allowed_runtime_apply=false`
+- parity_contract: -
+- next_postclose_metric: -
+- files_likely_touched: `src/engine/automation/key_lineage_ledger.py`, `src/engine/automation/conversion_lane.py`, `src/engine/verify_threshold_cycle_postclose_chain.py`, `src/engine/build_code_improvement_workorder.py`
+- acceptance_tests: `PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_conversion_lane_key_lineage.py src/tests/test_build_code_improvement_workorder.py src/tests/test_verify_threshold_cycle_postclose_chain.py`
+- implementation_status: `-`
+- implementation_provenance: `-`
+- automation_reentry: After implementation, rerun key_lineage_ledger, conversion_lane, code_improvement_workorder, tuning performance control tower, and postclose verifier; runtime/live order guards remain unchanged.
+
+실행 기준:
+
+- instrumentation/provenance/report source 보강을 우선 구현한다.
+- runtime 판단값을 직접 바꾸지 않는다.
+- 다음 postclose report에서 source freshness, warning 감소, sample count가 확인되어야 한다.
+
+### 13. `order_conversion_lane_submit_drought_submit_drought_broker_receipt`
+
+- title: Conversion lane blocker follow-up: submit_drought submit_drought:BROKER_RECEIPT
+- decision: `implement_now`
+- decision_reason: conversion lane blocker is source-only lineage/report/instrumentation work needed before any bounded real canary request can be considered
+- source_report_type: `conversion_lane`
+- lifecycle_stage: `conversion`
+- target_subsystem: `sim_to_real_conversion_lineage`
+- route: `instrumentation_order`
+- mapped_family: `sim_to_real_conversion_lane`
+- threshold_family: `sim_to_real_conversion_lane`
+- improvement_type: `conversion_submit_drought_blocker`
+- confidence: `conversion_kpi`
+- priority: `13`
+- runtime_effect: `False`
+- strategy_effect: `False`
+- data_quality_effect: `False`
+- tuning_axis_effect: `False`
+- expected_ev_effect: reduce remaining blocker count before bounded real canary can be requested
+- evidence: `conversion_candidate_id=submit_drought:BROKER_RECEIPT`, `blocker_class=submit_drought`, `conversion_impact_rank=13`, `next_repair_action=close_submit_drought_broker_receipt`, `acceptance_test=submit drought ledger splits LATENCY_PRE_SUBMIT/BROKER_RECEIPT/BUDGET_PASS_COLLAPSE/SIM_REAL_AUTHORITY/SOURCE_TAXONOMY_LEAKAGE/UPSTREAM_GATE`, `runtime_effect=false`, `allowed_runtime_apply=false`
+- parity_contract: -
+- next_postclose_metric: -
+- files_likely_touched: `src/engine/automation/key_lineage_ledger.py`, `src/engine/automation/conversion_lane.py`, `src/engine/verify_threshold_cycle_postclose_chain.py`, `src/engine/build_code_improvement_workorder.py`
+- acceptance_tests: `PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_conversion_lane_key_lineage.py src/tests/test_build_code_improvement_workorder.py src/tests/test_verify_threshold_cycle_postclose_chain.py`
+- implementation_status: `-`
+- implementation_provenance: `-`
+- automation_reentry: After implementation, rerun key_lineage_ledger, conversion_lane, code_improvement_workorder, tuning performance control tower, and postclose verifier; runtime/live order guards remain unchanged.
+
+실행 기준:
+
+- instrumentation/provenance/report source 보강을 우선 구현한다.
+- runtime 판단값을 직접 바꾸지 않는다.
+- 다음 postclose report에서 source freshness, warning 감소, sample count가 확인되어야 한다.
+
+### 14. `order_conversion_lane_submit_drought_submit_drought_budget_pass_collapse`
+
+- title: Conversion lane blocker follow-up: submit_drought submit_drought:BUDGET_PASS_COLLAPSE
+- decision: `implement_now`
+- decision_reason: conversion lane blocker is source-only lineage/report/instrumentation work needed before any bounded real canary request can be considered
+- source_report_type: `conversion_lane`
+- lifecycle_stage: `conversion`
+- target_subsystem: `sim_to_real_conversion_lineage`
+- route: `instrumentation_order`
+- mapped_family: `sim_to_real_conversion_lane`
+- threshold_family: `sim_to_real_conversion_lane`
+- improvement_type: `conversion_submit_drought_blocker`
+- confidence: `conversion_kpi`
+- priority: `14`
+- runtime_effect: `False`
+- strategy_effect: `False`
+- data_quality_effect: `False`
+- tuning_axis_effect: `False`
+- expected_ev_effect: reduce remaining blocker count before bounded real canary can be requested
+- evidence: `conversion_candidate_id=submit_drought:BUDGET_PASS_COLLAPSE`, `blocker_class=submit_drought`, `conversion_impact_rank=14`, `next_repair_action=close_submit_drought_budget_pass_collapse`, `acceptance_test=submit drought ledger splits LATENCY_PRE_SUBMIT/BROKER_RECEIPT/BUDGET_PASS_COLLAPSE/SIM_REAL_AUTHORITY/SOURCE_TAXONOMY_LEAKAGE/UPSTREAM_GATE`, `runtime_effect=false`, `allowed_runtime_apply=false`
+- parity_contract: -
+- next_postclose_metric: -
+- files_likely_touched: `src/engine/automation/key_lineage_ledger.py`, `src/engine/automation/conversion_lane.py`, `src/engine/verify_threshold_cycle_postclose_chain.py`, `src/engine/build_code_improvement_workorder.py`
+- acceptance_tests: `PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_conversion_lane_key_lineage.py src/tests/test_build_code_improvement_workorder.py src/tests/test_verify_threshold_cycle_postclose_chain.py`
+- implementation_status: `-`
+- implementation_provenance: `-`
+- automation_reentry: After implementation, rerun key_lineage_ledger, conversion_lane, code_improvement_workorder, tuning performance control tower, and postclose verifier; runtime/live order guards remain unchanged.
+
+실행 기준:
+
+- instrumentation/provenance/report source 보강을 우선 구현한다.
+- runtime 판단값을 직접 바꾸지 않는다.
+- 다음 postclose report에서 source freshness, warning 감소, sample count가 확인되어야 한다.
+
+### 15. `order_conversion_lane_submit_drought_submit_drought_latency_pre_submit`
+
+- title: Conversion lane blocker follow-up: submit_drought submit_drought:LATENCY_PRE_SUBMIT
+- decision: `implement_now`
+- decision_reason: conversion lane blocker is source-only lineage/report/instrumentation work needed before any bounded real canary request can be considered
+- source_report_type: `conversion_lane`
+- lifecycle_stage: `conversion`
+- target_subsystem: `sim_to_real_conversion_lineage`
+- route: `instrumentation_order`
+- mapped_family: `sim_to_real_conversion_lane`
+- threshold_family: `sim_to_real_conversion_lane`
+- improvement_type: `conversion_submit_drought_blocker`
+- confidence: `conversion_kpi`
+- priority: `15`
+- runtime_effect: `False`
+- strategy_effect: `False`
+- data_quality_effect: `False`
+- tuning_axis_effect: `False`
+- expected_ev_effect: reduce remaining blocker count before bounded real canary can be requested
+- evidence: `conversion_candidate_id=submit_drought:LATENCY_PRE_SUBMIT`, `blocker_class=submit_drought`, `conversion_impact_rank=15`, `next_repair_action=close_submit_drought_latency_pre_submit`, `acceptance_test=submit drought ledger splits LATENCY_PRE_SUBMIT/BROKER_RECEIPT/BUDGET_PASS_COLLAPSE/SIM_REAL_AUTHORITY/SOURCE_TAXONOMY_LEAKAGE/UPSTREAM_GATE`, `runtime_effect=false`, `allowed_runtime_apply=false`
+- parity_contract: -
+- next_postclose_metric: -
+- files_likely_touched: `src/engine/automation/key_lineage_ledger.py`, `src/engine/automation/conversion_lane.py`, `src/engine/verify_threshold_cycle_postclose_chain.py`, `src/engine/build_code_improvement_workorder.py`
+- acceptance_tests: `PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_conversion_lane_key_lineage.py src/tests/test_build_code_improvement_workorder.py src/tests/test_verify_threshold_cycle_postclose_chain.py`
+- implementation_status: `-`
+- implementation_provenance: `-`
+- automation_reentry: After implementation, rerun key_lineage_ledger, conversion_lane, code_improvement_workorder, tuning performance control tower, and postclose verifier; runtime/live order guards remain unchanged.
+
+실행 기준:
+
+- instrumentation/provenance/report source 보강을 우선 구현한다.
+- runtime 판단값을 직접 바꾸지 않는다.
+- 다음 postclose report에서 source freshness, warning 감소, sample count가 확인되어야 한다.
+
+### 16. `order_conversion_lane_submit_drought_submit_drought_sim_real_authority`
+
+- title: Conversion lane blocker follow-up: submit_drought submit_drought:SIM_REAL_AUTHORITY
+- decision: `implement_now`
+- decision_reason: conversion lane blocker is source-only lineage/report/instrumentation work needed before any bounded real canary request can be considered
+- source_report_type: `conversion_lane`
+- lifecycle_stage: `conversion`
+- target_subsystem: `sim_to_real_conversion_lineage`
+- route: `instrumentation_order`
+- mapped_family: `sim_to_real_conversion_lane`
+- threshold_family: `sim_to_real_conversion_lane`
+- improvement_type: `conversion_submit_drought_blocker`
+- confidence: `conversion_kpi`
+- priority: `16`
+- runtime_effect: `False`
+- strategy_effect: `False`
+- data_quality_effect: `False`
+- tuning_axis_effect: `False`
+- expected_ev_effect: reduce remaining blocker count before bounded real canary can be requested
+- evidence: `conversion_candidate_id=submit_drought:SIM_REAL_AUTHORITY`, `blocker_class=submit_drought`, `conversion_impact_rank=16`, `next_repair_action=close_submit_drought_sim_real_authority`, `acceptance_test=submit drought ledger splits LATENCY_PRE_SUBMIT/BROKER_RECEIPT/BUDGET_PASS_COLLAPSE/SIM_REAL_AUTHORITY/SOURCE_TAXONOMY_LEAKAGE/UPSTREAM_GATE`, `runtime_effect=false`, `allowed_runtime_apply=false`
+- parity_contract: -
+- next_postclose_metric: -
+- files_likely_touched: `src/engine/automation/key_lineage_ledger.py`, `src/engine/automation/conversion_lane.py`, `src/engine/verify_threshold_cycle_postclose_chain.py`, `src/engine/build_code_improvement_workorder.py`
+- acceptance_tests: `PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_conversion_lane_key_lineage.py src/tests/test_build_code_improvement_workorder.py src/tests/test_verify_threshold_cycle_postclose_chain.py`
+- implementation_status: `-`
+- implementation_provenance: `-`
+- automation_reentry: After implementation, rerun key_lineage_ledger, conversion_lane, code_improvement_workorder, tuning performance control tower, and postclose verifier; runtime/live order guards remain unchanged.
+
+실행 기준:
+
+- instrumentation/provenance/report source 보강을 우선 구현한다.
+- runtime 판단값을 직접 바꾸지 않는다.
+- 다음 postclose report에서 source freshness, warning 감소, sample count가 확인되어야 한다.
+
+### 17. `order_conversion_lane_submit_drought_submit_drought_source_taxonomy_leakage`
+
+- title: Conversion lane blocker follow-up: submit_drought submit_drought:SOURCE_TAXONOMY_LEAKAGE
+- decision: `implement_now`
+- decision_reason: conversion lane blocker is source-only lineage/report/instrumentation work needed before any bounded real canary request can be considered
+- source_report_type: `conversion_lane`
+- lifecycle_stage: `conversion`
+- target_subsystem: `sim_to_real_conversion_lineage`
+- route: `instrumentation_order`
+- mapped_family: `sim_to_real_conversion_lane`
+- threshold_family: `sim_to_real_conversion_lane`
+- improvement_type: `conversion_submit_drought_blocker`
+- confidence: `conversion_kpi`
+- priority: `17`
+- runtime_effect: `False`
+- strategy_effect: `False`
+- data_quality_effect: `False`
+- tuning_axis_effect: `False`
+- expected_ev_effect: reduce remaining blocker count before bounded real canary can be requested
+- evidence: `conversion_candidate_id=submit_drought:SOURCE_TAXONOMY_LEAKAGE`, `blocker_class=submit_drought`, `conversion_impact_rank=17`, `next_repair_action=close_submit_drought_source_taxonomy_leakage`, `acceptance_test=submit drought ledger splits LATENCY_PRE_SUBMIT/BROKER_RECEIPT/BUDGET_PASS_COLLAPSE/SIM_REAL_AUTHORITY/SOURCE_TAXONOMY_LEAKAGE/UPSTREAM_GATE`, `runtime_effect=false`, `allowed_runtime_apply=false`
+- parity_contract: -
+- next_postclose_metric: -
+- files_likely_touched: `src/engine/automation/key_lineage_ledger.py`, `src/engine/automation/conversion_lane.py`, `src/engine/verify_threshold_cycle_postclose_chain.py`, `src/engine/build_code_improvement_workorder.py`
+- acceptance_tests: `PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_conversion_lane_key_lineage.py src/tests/test_build_code_improvement_workorder.py src/tests/test_verify_threshold_cycle_postclose_chain.py`
+- implementation_status: `-`
+- implementation_provenance: `-`
+- automation_reentry: After implementation, rerun key_lineage_ledger, conversion_lane, code_improvement_workorder, tuning performance control tower, and postclose verifier; runtime/live order guards remain unchanged.
+
+실행 기준:
+
+- instrumentation/provenance/report source 보강을 우선 구현한다.
+- runtime 판단값을 직접 바꾸지 않는다.
+- 다음 postclose report에서 source freshness, warning 감소, sample count가 확인되어야 한다.
+
+### 18. `order_conversion_lane_submit_drought_submit_drought_upstream_gate`
+
+- title: Conversion lane blocker follow-up: submit_drought submit_drought:UPSTREAM_GATE
+- decision: `implement_now`
+- decision_reason: conversion lane blocker is source-only lineage/report/instrumentation work needed before any bounded real canary request can be considered
+- source_report_type: `conversion_lane`
+- lifecycle_stage: `conversion`
+- target_subsystem: `sim_to_real_conversion_lineage`
+- route: `instrumentation_order`
+- mapped_family: `sim_to_real_conversion_lane`
+- threshold_family: `sim_to_real_conversion_lane`
+- improvement_type: `conversion_submit_drought_blocker`
+- confidence: `conversion_kpi`
+- priority: `18`
+- runtime_effect: `False`
+- strategy_effect: `False`
+- data_quality_effect: `False`
+- tuning_axis_effect: `False`
+- expected_ev_effect: reduce remaining blocker count before bounded real canary can be requested
+- evidence: `conversion_candidate_id=submit_drought:UPSTREAM_GATE`, `blocker_class=submit_drought`, `conversion_impact_rank=18`, `next_repair_action=close_submit_drought_upstream_gate`, `acceptance_test=submit drought ledger splits LATENCY_PRE_SUBMIT/BROKER_RECEIPT/BUDGET_PASS_COLLAPSE/SIM_REAL_AUTHORITY/SOURCE_TAXONOMY_LEAKAGE/UPSTREAM_GATE`, `runtime_effect=false`, `allowed_runtime_apply=false`
+- parity_contract: -
+- next_postclose_metric: -
+- files_likely_touched: `src/engine/automation/key_lineage_ledger.py`, `src/engine/automation/conversion_lane.py`, `src/engine/verify_threshold_cycle_postclose_chain.py`, `src/engine/build_code_improvement_workorder.py`
+- acceptance_tests: `PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_conversion_lane_key_lineage.py src/tests/test_build_code_improvement_workorder.py src/tests/test_verify_threshold_cycle_postclose_chain.py`
+- implementation_status: `-`
+- implementation_provenance: `-`
+- automation_reentry: After implementation, rerun key_lineage_ledger, conversion_lane, code_improvement_workorder, tuning performance control tower, and postclose verifier; runtime/live order guards remain unchanged.
+
+실행 기준:
+
+- instrumentation/provenance/report source 보강을 우선 구현한다.
+- runtime 판단값을 직접 바꾸지 않는다.
+- 다음 postclose report에서 source freshness, warning 감소, sample count가 확인되어야 한다.
+
+### 19. `order_conversion_lane_env_mapping_scale_in_blocker_reason_trend_not_strong`
+
+- title: Conversion lane blocker follow-up: env_mapping scale_in:blocker_reason:trend_not_strong
+- decision: `implement_now`
+- decision_reason: conversion lane blocker is source-only lineage/report/instrumentation work needed before any bounded real canary request can be considered
+- source_report_type: `conversion_lane`
+- lifecycle_stage: `conversion`
+- target_subsystem: `sim_to_real_conversion_lineage`
+- route: `instrumentation_order`
+- mapped_family: `sim_to_real_conversion_lane`
+- threshold_family: `sim_to_real_conversion_lane`
+- improvement_type: `conversion_env_mapping_blocker`
+- confidence: `conversion_kpi`
+- priority: `19`
+- runtime_effect: `False`
+- strategy_effect: `False`
+- data_quality_effect: `False`
+- tuning_axis_effect: `False`
+- expected_ev_effect: reduce remaining blocker count before bounded real canary can be requested
+- evidence: `conversion_candidate_id=scale_in:blocker_reason:trend_not_strong`, `blocker_class=env_mapping`, `conversion_impact_rank=19`, `next_repair_action=complete_parent_flow`, `acceptance_test=next PREOPEN policy/env contains the same candidate key`, `runtime_effect=false`, `allowed_runtime_apply=false`
+- parity_contract: -
+- next_postclose_metric: -
+- files_likely_touched: `src/engine/automation/key_lineage_ledger.py`, `src/engine/automation/conversion_lane.py`, `src/engine/verify_threshold_cycle_postclose_chain.py`, `src/engine/build_code_improvement_workorder.py`
+- acceptance_tests: `PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_conversion_lane_key_lineage.py src/tests/test_build_code_improvement_workorder.py src/tests/test_verify_threshold_cycle_postclose_chain.py`
+- implementation_status: `-`
+- implementation_provenance: `-`
+- automation_reentry: After implementation, rerun key_lineage_ledger, conversion_lane, code_improvement_workorder, tuning performance control tower, and postclose verifier; runtime/live order guards remain unchanged.
+
+실행 기준:
+
+- instrumentation/provenance/report source 보강을 우선 구현한다.
+- runtime 판단값을 직접 바꾸지 않는다.
+- 다음 postclose report에서 source freshness, warning 감소, sample count가 확인되어야 한다.
+
+### 20. `order_conversion_lane_env_mapping_scale_in_arm_pyramid`
+
+- title: Conversion lane blocker follow-up: env_mapping scale_in:arm:pyramid
+- decision: `implement_now`
+- decision_reason: conversion lane blocker is source-only lineage/report/instrumentation work needed before any bounded real canary request can be considered
+- source_report_type: `conversion_lane`
+- lifecycle_stage: `conversion`
+- target_subsystem: `sim_to_real_conversion_lineage`
+- route: `instrumentation_order`
+- mapped_family: `sim_to_real_conversion_lane`
+- threshold_family: `sim_to_real_conversion_lane`
+- improvement_type: `conversion_env_mapping_blocker`
+- confidence: `conversion_kpi`
+- priority: `20`
+- runtime_effect: `False`
+- strategy_effect: `False`
+- data_quality_effect: `False`
+- tuning_axis_effect: `False`
+- expected_ev_effect: reduce remaining blocker count before bounded real canary can be requested
+- evidence: `conversion_candidate_id=scale_in:arm:pyramid`, `blocker_class=env_mapping`, `conversion_impact_rank=20`, `next_repair_action=complete_parent_flow`, `acceptance_test=next PREOPEN policy/env contains the same candidate key`, `runtime_effect=false`, `allowed_runtime_apply=false`
+- parity_contract: -
+- next_postclose_metric: -
+- files_likely_touched: `src/engine/automation/key_lineage_ledger.py`, `src/engine/automation/conversion_lane.py`, `src/engine/verify_threshold_cycle_postclose_chain.py`, `src/engine/build_code_improvement_workorder.py`
+- acceptance_tests: `PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_conversion_lane_key_lineage.py src/tests/test_build_code_improvement_workorder.py src/tests/test_verify_threshold_cycle_postclose_chain.py`
+- implementation_status: `-`
+- implementation_provenance: `-`
+- automation_reentry: After implementation, rerun key_lineage_ledger, conversion_lane, code_improvement_workorder, tuning performance control tower, and postclose verifier; runtime/live order guards remain unchanged.
+
+실행 기준:
+
+- instrumentation/provenance/report source 보강을 우선 구현한다.
+- runtime 판단값을 직접 바꾸지 않는다.
+- 다음 postclose report에서 source freshness, warning 감소, sample count가 확인되어야 한다.
+
+### 21. `order_entry_submit_drought_auto_resolution`
 
 - title: Entry submit drought automatic resolution handoff
 - decision: `attach_existing_family`
@@ -168,41 +848,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 2. `order_ai_threshold_miss_ev_recovery`
-
-- title: AI threshold miss EV recovery
-- decision: `attach_existing_family`
-- decision_reason: finding maps to an existing threshold family and should strengthen source metrics/provenance
-- source_report_type: `scalping_pattern_lab_automation`
-- lifecycle_stage: `-`
-- target_subsystem: `entry_funnel`
-- route: `existing_family`
-- mapped_family: `score65_74_recovery_probe`
-- threshold_family: `score65_74_recovery_probe`
-- improvement_type: `threshold_family_input`
-- confidence: `consensus`
-- priority: `1`
-- runtime_effect: `False`
-- strategy_effect: `False`
-- data_quality_effect: `False`
-- tuning_axis_effect: `False`
-- expected_ev_effect: Improve EV attribution and prepare bounded calibration input.
-- evidence: `{'total_blocked': 51205, 'block_ratio': 99.9, 'days': 3}`, `{'total_blocked': 7299, 'block_ratio': 100.0, 'days': 1}`
-- parity_contract: -
-- next_postclose_metric: -
-- files_likely_touched: `src/engine/daily_threshold_cycle_report.py`, `src/engine/sniper_missed_entry_counterfactual.py`
-- acceptance_tests: `pytest relevant report/threshold tests`, `runtime_effect remains false until a separate implementation order is completed`, `daily EV report includes the order summary`
-- implementation_status: `-`
-- implementation_provenance: `-`
-- automation_reentry: After implementation, intraday/postclose calibration should include the updated family input.
-
-실행 기준:
-
-- 기존 threshold family의 source metric/provenance를 보강한다.
-- 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
-- family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
-
-### 3. `order_entry_broker_receipt_contract_gap_review`
+### 22. `order_entry_broker_receipt_contract_gap_review`
 
 - title: Entry broker receipt contract gap review
 - decision: `attach_existing_family`
@@ -236,7 +882,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 4. `order_entry_fill_quality_contract_gap_review`
+### 23. `order_entry_fill_quality_contract_gap_review`
 
 - title: Entry fill quality contract gap review
 - decision: `attach_existing_family`
@@ -270,7 +916,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 5. `order_entry_post_submit_contract_gap_review`
+### 24. `order_entry_post_submit_contract_gap_review`
 
 - title: Entry post-submit contract gap review
 - decision: `attach_existing_family`
@@ -304,7 +950,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 6. `order_entry_source_taxonomy_contract_gap_review`
+### 25. `order_entry_source_taxonomy_contract_gap_review`
 
 - title: Entry source taxonomy contract gap review
 - decision: `attach_existing_family`
@@ -338,7 +984,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 7. `order_entry_telegram_post_submit_contract_gap_review`
+### 26. `order_entry_telegram_post_submit_contract_gap_review`
 
 - title: Entry Telegram post-submit contract gap review
 - decision: `attach_existing_family`
@@ -372,7 +1018,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 8. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_10_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_38e305f8`
+### 27. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_10_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_38e305f8`
 
 - title: LDM lifecycle flow bucket follow-up: lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_lt60_source_sca:5fb1b7c4ae
 - decision: `attach_existing_family`
@@ -406,7 +1052,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 9. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_11_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_ec2de208`
+### 28. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_11_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_ec2de208`
 
 - title: LDM lifecycle flow bucket follow-up: lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_sc:f834887d28
 - decision: `attach_existing_family`
@@ -440,7 +1086,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 10. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_12_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_cc9b2af1`
+### 29. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_12_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_cc9b2af1`
 
 - title: LDM lifecycle flow bucket follow-up: lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_lt60_source_blo:ffa670224b
 - decision: `attach_existing_family`
@@ -474,7 +1120,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 11. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_13_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_cc9b2af1`
+### 30. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_13_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_cc9b2af1`
 
 - title: LDM lifecycle flow bucket follow-up: lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_lt60_source_blo:ffa670224b
 - decision: `attach_existing_family`
@@ -508,7 +1154,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 12. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_14_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_f1d28ca6`
+### 31. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_14_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_f1d28ca6`
 
 - title: LDM lifecycle flow bucket follow-up: lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_lt60_source_blo:23320ac43e
 - decision: `attach_existing_family`
@@ -542,7 +1188,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 13. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_15_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_fcb5bb7a`
+### 32. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_15_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_fcb5bb7a`
 
 - title: LDM lifecycle flow bucket follow-up: lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_lt60_source_blo:cd35307aa6
 - decision: `attach_existing_family`
@@ -576,7 +1222,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 14. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_16_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_b737a2e1`
+### 33. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_16_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_b737a2e1`
 
 - title: LDM lifecycle flow bucket follow-up: lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_sc:dc71748efe
 - decision: `attach_existing_family`
@@ -610,7 +1256,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 15. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_17_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_32463a04`
+### 34. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_17_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_32463a04`
 
 - title: LDM lifecycle flow bucket follow-up: lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_lt60_source_blo:fcd588ff6c
 - decision: `attach_existing_family`
@@ -644,7 +1290,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 16. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_18_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_a81b0e0c`
+### 35. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_18_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_a81b0e0c`
 
 - title: LDM lifecycle flow bucket follow-up: lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_70p_source_scal:ced83f755c
 - decision: `attach_existing_family`
@@ -678,7 +1324,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 17. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_19_lifecycle_flow_combo_lifecycle_flow_entry_entry_missing_submit_submit_c_264969e0`
+### 36. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_19_lifecycle_flow_combo_lifecycle_flow_entry_entry_missing_submit_submit_c_264969e0`
 
 - title: LDM lifecycle flow bucket follow-up: lifecycle_flow:combo_lifecycle_flow:entry_entry_missing_submit_submit_combo_submit_quality_s:d4ae6b4cbc
 - decision: `attach_existing_family`
@@ -712,7 +1358,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 18. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_1_lifecycle_flow_combo_lifecycle_flow_entry_entry_missing_submit_submit_c_6d30a10b`
+### 37. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_1_lifecycle_flow_combo_lifecycle_flow_entry_entry_missing_submit_submit_c_6d30a10b`
 
 - title: LDM lifecycle flow bucket follow-up: lifecycle_flow:combo_lifecycle_flow:entry_entry_missing_submit_submit_combo_submit_quality_s:fdddb9a443
 - decision: `attach_existing_family`
@@ -746,7 +1392,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 19. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_20_lifecycle_flow_combo_lifecycle_flow_entry_entry_missing_submit_submit_c_264969e0`
+### 38. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_20_lifecycle_flow_combo_lifecycle_flow_entry_entry_missing_submit_submit_c_264969e0`
 
 - title: LDM lifecycle flow bucket follow-up: lifecycle_flow:combo_lifecycle_flow:entry_entry_missing_submit_submit_combo_submit_quality_s:d4ae6b4cbc
 - decision: `attach_existing_family`
@@ -780,7 +1426,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 20. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_2_lifecycle_flow_combo_lifecycle_flow_entry_entry_missing_submit_submit_c_6d30a10b`
+### 39. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_2_lifecycle_flow_combo_lifecycle_flow_entry_entry_missing_submit_submit_c_6d30a10b`
 
 - title: LDM lifecycle flow bucket follow-up: lifecycle_flow:combo_lifecycle_flow:entry_entry_missing_submit_submit_combo_submit_quality_s:fdddb9a443
 - decision: `attach_existing_family`
@@ -814,7 +1460,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 21. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_3_lifecycle_flow_combo_lifecycle_flow_entry_entry_missing_submit_submit_c_6d30a10b`
+### 40. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_3_lifecycle_flow_combo_lifecycle_flow_entry_entry_missing_submit_submit_c_6d30a10b`
 
 - title: LDM lifecycle flow bucket follow-up: lifecycle_flow:combo_lifecycle_flow:entry_entry_missing_submit_submit_combo_submit_quality_s:fdddb9a443
 - decision: `attach_existing_family`
@@ -848,7 +1494,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 22. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_4_lifecycle_flow_combo_lifecycle_flow_entry_entry_missing_submit_submit_c_264969e0`
+### 41. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_4_lifecycle_flow_combo_lifecycle_flow_entry_entry_missing_submit_submit_c_264969e0`
 
 - title: LDM lifecycle flow bucket follow-up: lifecycle_flow:combo_lifecycle_flow:entry_entry_missing_submit_submit_combo_submit_quality_s:d4ae6b4cbc
 - decision: `attach_existing_family`
@@ -882,7 +1528,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 23. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_5_lifecycle_flow_combo_lifecycle_flow_entry_entry_missing_submit_submit_c_264969e0`
+### 42. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_5_lifecycle_flow_combo_lifecycle_flow_entry_entry_missing_submit_submit_c_264969e0`
 
 - title: LDM lifecycle flow bucket follow-up: lifecycle_flow:combo_lifecycle_flow:entry_entry_missing_submit_submit_combo_submit_quality_s:d4ae6b4cbc
 - decision: `attach_existing_family`
@@ -916,7 +1562,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 24. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_6_lifecycle_flow_combo_lifecycle_flow_entry_entry_missing_submit_submit_c_6d30a10b`
+### 43. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_6_lifecycle_flow_combo_lifecycle_flow_entry_entry_missing_submit_submit_c_6d30a10b`
 
 - title: LDM lifecycle flow bucket follow-up: lifecycle_flow:combo_lifecycle_flow:entry_entry_missing_submit_submit_combo_submit_quality_s:fdddb9a443
 - decision: `attach_existing_family`
@@ -950,7 +1596,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 25. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_7_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_39247078`
+### 44. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_7_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_39247078`
 
 - title: LDM lifecycle flow bucket follow-up: lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_lt60_source_blo:0562f02c36
 - decision: `attach_existing_family`
@@ -984,7 +1630,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 26. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_8_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_b737a2e1`
+### 45. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_8_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_b737a2e1`
 
 - title: LDM lifecycle flow bucket follow-up: lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_sc:dc71748efe
 - decision: `attach_existing_family`
@@ -1018,7 +1664,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 27. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_9_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_cc9b2af1`
+### 46. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_9_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_cc9b2af1`
 
 - title: LDM lifecycle flow bucket follow-up: lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_lt60_source_blo:ffa670224b
 - decision: `attach_existing_family`
@@ -1052,7 +1698,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 28. `order_lifecycle_entry_bucket_combo_entry_spot_score_score_60_62_source_blocked_ai_score_stale_fresh_liquidity_liquidity_unknow`
+### 47. `order_lifecycle_entry_bucket_combo_entry_spot_score_score_60_62_source_blocked_ai_score_stale_fresh_liquidity_liquidity_unknow`
 
 - title: LDM entry bucket attribution follow-up: combo_entry_spot=score=score_60_62|source=blocked_ai_score|stale=fresh|liquidity=liquidity_unknown|overbought=overbought_normal|time=time_1400_close
 - decision: `attach_existing_family`
@@ -1086,7 +1732,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 29. `order_lifecycle_entry_bucket_combo_entry_spot_score_score_60_62_source_blocked_ai_score_stale_stale_block_liquidity_liquidity_`
+### 48. `order_lifecycle_entry_bucket_combo_entry_spot_score_score_60_62_source_blocked_ai_score_stale_stale_block_liquidity_liquidity_`
 
 - title: LDM entry bucket attribution follow-up: combo_entry_spot=score=score_60_62|source=blocked_ai_score|stale=stale_block|liquidity=liquidity_unknown|overbought=overbought_chase_risk|time=time_1400_close
 - decision: `attach_existing_family`
@@ -1120,7 +1766,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 30. `order_lifecycle_entry_bucket_combo_entry_spot_score_score_70p_source_scalp_entry_action_decision_snapshot_stale_fresh_liquidit`
+### 49. `order_lifecycle_entry_bucket_combo_entry_spot_score_score_70p_source_scalp_entry_action_decision_snapshot_stale_fresh_liquidit`
 
 - title: LDM entry bucket attribution follow-up: combo_entry_spot=score=score_70p|source=scalp_entry_action_decision_snapshot|stale=fresh|liquidity=liquidity_unknown|overbought=overbought_ok|time=time_1400_close
 - decision: `attach_existing_family`
@@ -1154,7 +1800,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 31. `order_lifecycle_entry_bucket_combo_entry_spot_score_score_lt60_source_scalp_entry_action_decision_snapshot_stale_fresh_liquidi`
+### 50. `order_lifecycle_entry_bucket_combo_entry_spot_score_score_lt60_source_scalp_entry_action_decision_snapshot_stale_fresh_liquidi`
 
 - title: LDM entry bucket attribution follow-up: combo_entry_spot=score=score_lt60|source=scalp_entry_action_decision_snapshot|stale=fresh|liquidity=liquidity_unknown|overbought=pullback_required|time=time_1400_close
 - decision: `attach_existing_family`
@@ -1188,7 +1834,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 32. `order_lifecycle_exit_bucket_combo_exit_result_source_scalp_sim_overnight_sell_today_rule_scalp_sim_overnight_sell_tod_d982edbd`
+### 51. `order_lifecycle_exit_bucket_combo_exit_result_source_scalp_sim_overnight_sell_today_rule_scalp_sim_overnight_sell_tod_d982edbd`
 
 - title: LDM exit bucket source-quality follow-up: combo_exit_result=source=scalp_sim_overnight_sell_today|rule=scalp_sim_overnight_sell_today|outcome=outcome_unknown|profit=profit_lt_neg070
 - decision: `attach_existing_family`
@@ -1222,7 +1868,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 33. `order_lifecycle_exit_bucket_combo_exit_result_source_scalp_sim_partial_sell_order_assumed_filled_rule_scalp_sim_panic_73281913`
+### 52. `order_lifecycle_exit_bucket_combo_exit_result_source_scalp_sim_partial_sell_order_assumed_filled_rule_scalp_sim_panic_73281913`
 
 - title: LDM exit bucket source-quality follow-up: combo_exit_result=source=scalp_sim_partial_sell_order_assumed_filled|rule=scalp_sim_panic_lifecycle_partial_exit|outcome=outcome_not_applicable_partial_exit|profit=profit_neg070_neg010
 - decision: `attach_existing_family`
@@ -1256,7 +1902,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 34. `order_lifecycle_exit_bucket_combo_exit_result_source_scalp_sim_partial_sell_order_assumed_filled_rule_scalp_sim_panic_823fe278`
+### 53. `order_lifecycle_exit_bucket_combo_exit_result_source_scalp_sim_partial_sell_order_assumed_filled_rule_scalp_sim_panic_823fe278`
 
 - title: LDM exit bucket source-quality follow-up: combo_exit_result=source=scalp_sim_partial_sell_order_assumed_filled|rule=scalp_sim_panic_lifecycle_partial_exit|outcome=outcome_not_applicable_partial_exit|profit=profit_lt_neg070
 - decision: `attach_existing_family`
@@ -1290,7 +1936,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 35. `order_lifecycle_exit_bucket_combo_exit_result_source_sim_post_sell_evaluation_rule_scalp_hard_stop_pct_outcome_good_e_d8c33947`
+### 54. `order_lifecycle_exit_bucket_combo_exit_result_source_sim_post_sell_evaluation_rule_scalp_hard_stop_pct_outcome_good_e_d8c33947`
 
 - title: LDM exit bucket source-quality follow-up: combo_exit_result=source=sim_post_sell_evaluation|rule=scalp_hard_stop_pct|outcome=GOOD_EXIT|profit=profit_lt_neg070
 - decision: `attach_existing_family`
@@ -1324,7 +1970,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 36. `order_lifecycle_exit_bucket_combo_exit_result_source_sim_post_sell_evaluation_rule_scalp_hard_stop_pct_outcome_missed_30bb5c8f`
+### 55. `order_lifecycle_exit_bucket_combo_exit_result_source_sim_post_sell_evaluation_rule_scalp_hard_stop_pct_outcome_missed_30bb5c8f`
 
 - title: LDM exit bucket source-quality follow-up: combo_exit_result=source=sim_post_sell_evaluation|rule=scalp_hard_stop_pct|outcome=MISSED_UPSIDE|profit=profit_lt_neg070
 - decision: `attach_existing_family`
@@ -1358,7 +2004,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 37. `order_lifecycle_exit_bucket_combo_exit_result_source_sim_post_sell_evaluation_rule_scalp_soft_stop_pct_outcome_good_e_71b132b9`
+### 56. `order_lifecycle_exit_bucket_combo_exit_result_source_sim_post_sell_evaluation_rule_scalp_soft_stop_pct_outcome_good_e_71b132b9`
 
 - title: LDM exit bucket source-quality follow-up: combo_exit_result=source=sim_post_sell_evaluation|rule=scalp_soft_stop_pct|outcome=GOOD_EXIT|profit=profit_lt_neg070
 - decision: `attach_existing_family`
@@ -1392,7 +2038,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 38. `order_lifecycle_exit_bucket_combo_exit_result_source_sim_post_sell_evaluation_rule_scalp_soft_stop_pct_outcome_missed_bb293be8`
+### 57. `order_lifecycle_exit_bucket_combo_exit_result_source_sim_post_sell_evaluation_rule_scalp_soft_stop_pct_outcome_missed_bb293be8`
 
 - title: LDM exit bucket source-quality follow-up: combo_exit_result=source=sim_post_sell_evaluation|rule=scalp_soft_stop_pct|outcome=MISSED_UPSIDE|profit=profit_lt_neg070
 - decision: `attach_existing_family`
@@ -1426,7 +2072,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 39. `order_lifecycle_exit_bucket_combo_exit_result_source_sim_post_sell_evaluation_rule_scalp_soft_stop_pct_outcome_neutra_d73738ba`
+### 58. `order_lifecycle_exit_bucket_combo_exit_result_source_sim_post_sell_evaluation_rule_scalp_soft_stop_pct_outcome_neutra_d73738ba`
 
 - title: LDM exit bucket source-quality follow-up: combo_exit_result=source=sim_post_sell_evaluation|rule=scalp_soft_stop_pct|outcome=NEUTRAL|profit=profit_lt_neg070
 - decision: `attach_existing_family`
@@ -1460,7 +2106,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 40. `order_lifecycle_exit_bucket_combo_exit_result_source_sim_post_sell_evaluation_rule_scalp_trailing_take_profit_outcome_9ba77f3e`
+### 59. `order_lifecycle_exit_bucket_combo_exit_result_source_sim_post_sell_evaluation_rule_scalp_trailing_take_profit_outcome_9ba77f3e`
 
 - title: LDM exit bucket source-quality follow-up: combo_exit_result=source=sim_post_sell_evaluation|rule=scalp_trailing_take_profit|outcome=MISSED_UPSIDE|profit=profit_pos150_pos300
 - decision: `attach_existing_family`
@@ -1494,7 +2140,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 41. `order_lifecycle_exit_bucket_combo_exit_result_source_sim_post_sell_evaluation_rule_scalp_trailing_take_profit_outcome_b3ffe955`
+### 60. `order_lifecycle_exit_bucket_combo_exit_result_source_sim_post_sell_evaluation_rule_scalp_trailing_take_profit_outcome_b3ffe955`
 
 - title: LDM exit bucket source-quality follow-up: combo_exit_result=source=sim_post_sell_evaluation|rule=scalp_trailing_take_profit|outcome=GOOD_EXIT|profit=profit_pos080_pos150
 - decision: `attach_existing_family`
@@ -1528,7 +2174,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 42. `order_lifecycle_holding_bucket_combo_holding_flow_source_scalp_sim_holding_started_action_holding_action_not_applicable_a_fc555278`
+### 61. `order_lifecycle_holding_bucket_combo_holding_flow_source_scalp_sim_holding_started_action_holding_action_not_applicable_a_fc555278`
 
 - title: LDM holding bucket source-quality follow-up: combo_holding_flow=source=scalp_sim_holding_started|action=holding_action_not_applicable_at_start|profit=profit_lt_neg070|held=held_not_applicable_at_start
 - decision: `attach_existing_family`
@@ -1562,7 +2208,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 43. `order_lifecycle_holding_bucket_combo_holding_flow_source_scalp_sim_holding_started_action_wait_profit_profit_lt_neg070_he_ed505a3f`
+### 62. `order_lifecycle_holding_bucket_combo_holding_flow_source_scalp_sim_holding_started_action_wait_profit_profit_lt_neg070_he_ed505a3f`
 
 - title: LDM holding bucket source-quality follow-up: combo_holding_flow=source=scalp_sim_holding_started|action=WAIT|profit=profit_lt_neg070|held=held_not_applicable_at_start
 - decision: `attach_existing_family`
@@ -1596,7 +2242,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 44. `order_lifecycle_holding_bucket_held_bucket_held_not_applicable_at_start_508784a3`
+### 63. `order_lifecycle_holding_bucket_held_bucket_held_not_applicable_at_start_508784a3`
 
 - title: LDM holding bucket source-quality follow-up: held_bucket=held_not_applicable_at_start
 - decision: `attach_existing_family`
@@ -1630,7 +2276,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 45. `order_lifecycle_holding_bucket_holding_action_holding_action_not_applicable_at_start_c20ec935`
+### 64. `order_lifecycle_holding_bucket_holding_action_holding_action_not_applicable_at_start_c20ec935`
 
 - title: LDM holding bucket source-quality follow-up: holding_action=holding_action_not_applicable_at_start
 - decision: `attach_existing_family`
@@ -1664,7 +2310,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 46. `order_lifecycle_holding_bucket_holding_action_wait_c26d74df`
+### 65. `order_lifecycle_holding_bucket_holding_action_wait_c26d74df`
 
 - title: LDM holding bucket source-quality follow-up: holding_action=WAIT
 - decision: `attach_existing_family`
@@ -1698,7 +2344,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 47. `order_lifecycle_holding_bucket_holding_source_stage_scalp_sim_holding_started_78913f30`
+### 66. `order_lifecycle_holding_bucket_holding_source_stage_scalp_sim_holding_started_78913f30`
 
 - title: LDM holding bucket source-quality follow-up: holding_source_stage=scalp_sim_holding_started
 - decision: `attach_existing_family`
@@ -1732,7 +2378,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 48. `order_lifecycle_holding_bucket_profit_band_profit_lt_neg070_711f1b3f`
+### 67. `order_lifecycle_holding_bucket_profit_band_profit_lt_neg070_711f1b3f`
 
 - title: LDM holding bucket source-quality follow-up: profit_band=profit_lt_neg070
 - decision: `attach_existing_family`
@@ -1766,7 +2412,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 49. `order_lifecycle_quiet_gap_ai_review_coverage_rollup`
+### 68. `order_lifecycle_quiet_gap_ai_review_coverage_rollup`
 
 - title: Lifecycle quiet gap AI review coverage review
 - decision: `attach_existing_family`
@@ -1800,7 +2446,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 50. `order_lifecycle_quiet_gap_parent_conflict_rollup`
+### 69. `order_lifecycle_quiet_gap_parent_conflict_rollup`
 
 - title: Lifecycle quiet gap parent conflict/exclusion review
 - decision: `attach_existing_family`
@@ -1834,7 +2480,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 51. `order_lifecycle_quiet_gap_positive_source_only_rollup`
+### 70. `order_lifecycle_quiet_gap_positive_source_only_rollup`
 
 - title: Lifecycle quiet gap positive source-only review
 - decision: `attach_existing_family`
@@ -1868,7 +2514,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 52. `order_lifecycle_source_dimension_gap_rollup`
+### 71. `order_lifecycle_source_dimension_gap_rollup`
 
 - title: None
 - decision: `attach_existing_family`
@@ -1902,7 +2548,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 53. `order_lifecycle_overnight_bucket_combo_overnight_decision_action_sell_today_status_sell_today_confidence_confidence_070p_profit_profit_lt_`
+### 72. `order_lifecycle_overnight_bucket_combo_overnight_decision_action_sell_today_status_sell_today_confidence_confidence_070p_profit_profit_lt_`
 
 - title: LDM overnight bucket attribution follow-up: combo_overnight_decision=action=SELL_TODAY|status=SELL_TODAY|confidence=confidence_070p|profit=profit_lt_neg070
 - decision: `attach_existing_family`
@@ -1936,7 +2582,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 54. `order_lifecycle_overnight_bucket_confidence_band_confidence_070p`
+### 73. `order_lifecycle_overnight_bucket_confidence_band_confidence_070p`
 
 - title: LDM overnight bucket attribution follow-up: confidence_band=confidence_070p
 - decision: `attach_existing_family`
@@ -1970,7 +2616,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 55. `order_lifecycle_overnight_bucket_held_bucket_held_600_1800s`
+### 74. `order_lifecycle_overnight_bucket_held_bucket_held_600_1800s`
 
 - title: LDM overnight bucket attribution follow-up: held_bucket=held_600_1800s
 - decision: `attach_existing_family`
@@ -2004,7 +2650,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 56. `order_lifecycle_overnight_bucket_held_bucket_held_600_1800s_plus`
+### 75. `order_lifecycle_overnight_bucket_held_bucket_held_600_1800s_plus`
 
 - title: LDM overnight bucket attribution follow-up: held_bucket=held_600_1800s_plus
 - decision: `attach_existing_family`
@@ -2038,7 +2684,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 57. `order_lifecycle_overnight_bucket_overnight_action_sell_today`
+### 76. `order_lifecycle_overnight_bucket_overnight_action_sell_today`
 
 - title: LDM overnight bucket attribution follow-up: overnight_action=SELL_TODAY
 - decision: `attach_existing_family`
@@ -2072,7 +2718,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 58. `order_lifecycle_overnight_bucket_overnight_status_sell_today`
+### 77. `order_lifecycle_overnight_bucket_overnight_status_sell_today`
 
 - title: LDM overnight bucket attribution follow-up: overnight_status=SELL_TODAY
 - decision: `attach_existing_family`
@@ -2106,7 +2752,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 59. `order_lifecycle_overnight_bucket_peak_profit_band_peak_lt_zero`
+### 78. `order_lifecycle_overnight_bucket_peak_profit_band_peak_lt_zero`
 
 - title: LDM overnight bucket attribution follow-up: peak_profit_band=peak_lt_zero
 - decision: `attach_existing_family`
@@ -2140,7 +2786,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 60. `order_lifecycle_overnight_bucket_price_source_holding_price_samples_last`
+### 79. `order_lifecycle_overnight_bucket_price_source_holding_price_samples_last`
 
 - title: LDM overnight bucket attribution follow-up: price_source=holding_price_samples_last
 - decision: `attach_existing_family`
@@ -2174,7 +2820,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 61. `order_lifecycle_overnight_bucket_profit_band_profit_lt_neg070`
+### 80. `order_lifecycle_overnight_bucket_profit_band_profit_lt_neg070`
 
 - title: LDM overnight bucket attribution follow-up: profit_band=profit_lt_neg070
 - decision: `attach_existing_family`
@@ -2208,7 +2854,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 62. `order_lifecycle_overnight_bucket_source_quality_gate_overnight_decision_coverage`
+### 81. `order_lifecycle_overnight_bucket_source_quality_gate_overnight_decision_coverage`
 
 - title: LDM overnight bucket attribution follow-up: source_quality_gate=overnight_decision_coverage
 - decision: `attach_existing_family`
@@ -2242,7 +2888,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 63. `order_lifecycle_scale_in_bucket_ai_score_band_score_60_62`
+### 82. `order_lifecycle_scale_in_bucket_ai_score_band_score_60_62`
 
 - title: LDM scale-in bucket attribution follow-up: ai_score_band=score_60_62
 - decision: `attach_existing_family`
@@ -2276,7 +2922,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 64. `order_lifecycle_scale_in_bucket_ai_score_band_score_63_65`
+### 83. `order_lifecycle_scale_in_bucket_ai_score_band_score_63_65`
 
 - title: LDM scale-in bucket attribution follow-up: ai_score_band=score_63_65
 - decision: `attach_existing_family`
@@ -2310,7 +2956,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 65. `order_lifecycle_scale_in_bucket_ai_score_band_score_66_69`
+### 84. `order_lifecycle_scale_in_bucket_ai_score_band_score_66_69`
 
 - title: LDM scale-in bucket attribution follow-up: ai_score_band=score_66_69
 - decision: `attach_existing_family`
@@ -2344,7 +2990,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 66. `order_lifecycle_scale_in_bucket_ai_score_band_score_70p`
+### 85. `order_lifecycle_scale_in_bucket_ai_score_band_score_70p`
 
 - title: LDM scale-in bucket attribution follow-up: ai_score_band=score_70p
 - decision: `attach_existing_family`
@@ -2378,7 +3024,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 67. `order_lifecycle_scale_in_bucket_ai_score_band_score_lt60`
+### 86. `order_lifecycle_scale_in_bucket_ai_score_band_score_lt60`
 
 - title: LDM scale-in bucket attribution follow-up: ai_score_band=score_lt60
 - decision: `attach_existing_family`
@@ -2412,7 +3058,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 68. `order_lifecycle_scale_in_bucket_ai_score_source_score_field_backfilled`
+### 87. `order_lifecycle_scale_in_bucket_ai_score_source_score_field_backfilled`
 
 - title: LDM scale-in bucket attribution follow-up: ai_score_source=score_field_backfilled
 - decision: `attach_existing_family`
@@ -2446,7 +3092,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 69. `order_lifecycle_scale_in_bucket_arm_avg_down`
+### 88. `order_lifecycle_scale_in_bucket_arm_avg_down`
 
 - title: LDM scale-in bucket attribution follow-up: arm=AVG_DOWN
 - decision: `attach_existing_family`
@@ -2480,7 +3126,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 70. `order_lifecycle_scale_in_bucket_arm_pyramid`
+### 89. `order_lifecycle_scale_in_bucket_arm_pyramid`
 
 - title: LDM scale-in bucket attribution follow-up: arm=PYRAMID
 - decision: `attach_existing_family`
@@ -2514,7 +3160,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 71. `order_lifecycle_scale_in_bucket_blocker_namespace_avg_down`
+### 90. `order_lifecycle_scale_in_bucket_blocker_namespace_avg_down`
 
 - title: LDM scale-in bucket attribution follow-up: blocker_namespace=AVG_DOWN
 - decision: `attach_existing_family`
@@ -2548,7 +3194,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 72. `order_lifecycle_scale_in_bucket_blocker_namespace_avg_down_only`
+### 91. `order_lifecycle_scale_in_bucket_blocker_namespace_avg_down_only`
 
 - title: LDM scale-in bucket attribution follow-up: blocker_namespace=AVG_DOWN_ONLY
 - decision: `attach_existing_family`
@@ -2582,7 +3228,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 73. `order_lifecycle_entry_bucket_chosen_action_buy_now`
+### 92. `order_lifecycle_entry_bucket_chosen_action_buy_now`
 
 - title: LDM entry bucket attribution follow-up: chosen_action=BUY_NOW
 - decision: `attach_existing_family`
@@ -2616,7 +3262,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 74. `order_lifecycle_entry_bucket_chosen_action_no_buy_ai`
+### 93. `order_lifecycle_entry_bucket_chosen_action_no_buy_ai`
 
 - title: LDM entry bucket attribution follow-up: chosen_action=NO_BUY_AI
 - decision: `attach_existing_family`
@@ -2650,7 +3296,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 75. `order_lifecycle_entry_bucket_chosen_action_skip_source_quality`
+### 94. `order_lifecycle_entry_bucket_chosen_action_skip_source_quality`
 
 - title: LDM entry bucket attribution follow-up: chosen_action=SKIP_SOURCE_QUALITY
 - decision: `attach_existing_family`
@@ -2684,7 +3330,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 76. `order_pattern_lab_ai_review_code_improvement_workorder`
+### 95. `order_pattern_lab_ai_review_code_improvement_workorder`
 
 - title: Pattern Lab AI review follow-up: code_improvement_workorder
 - decision: `attach_existing_family`
@@ -2718,7 +3364,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 77. `order_pattern_lab_ai_review_lifecycle_decision_matrix`
+### 96. `order_pattern_lab_ai_review_lifecycle_decision_matrix`
 
 - title: Pattern Lab AI review follow-up: lifecycle_decision_matrix
 - decision: `attach_existing_family`
@@ -2752,7 +3398,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 78. `order_pattern_lab_ai_review_swing_lifecycle_decision_matrix`
+### 97. `order_pattern_lab_ai_review_swing_lifecycle_decision_matrix`
 
 - title: Pattern Lab AI review follow-up: swing_lifecycle_decision_matrix
 - decision: `attach_existing_family`
@@ -2786,7 +3432,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 79. `order_pattern_lab_ai_review_swing_pattern_lab_automation`
+### 98. `order_pattern_lab_ai_review_swing_pattern_lab_automation`
 
 - title: Pattern Lab AI review follow-up: swing_pattern_lab_automation
 - decision: `attach_existing_family`
@@ -2820,7 +3466,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 80. `order_pattern_lab_ai_review_swing_strategy_discovery_ev`
+### 99. `order_pattern_lab_ai_review_swing_strategy_discovery_ev`
 
 - title: Pattern Lab AI review follow-up: swing_strategy_discovery_ev
 - decision: `attach_existing_family`
@@ -2854,7 +3500,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 81. `order_pattern_lab_ai_review_ai_review_followup_2026_06_04`
+### 100. `order_pattern_lab_ai_review_ai_review_followup_2026_06_04`
 
 - title: Resolve Pattern Lab AI review follow-up
 - decision: `defer_evidence`
@@ -2891,7 +3537,21 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 
 아래 항목은 source order로 분류됐지만 selected implementation order에는 포함되지 않았다. 재작업 지시 시 `decision`, `decision_reason`, `runtime_effect`를 먼저 재판정한다.
 
-### N1. `order_observation_source_quality_unknown_token_provenance_gap`
+### N1. `order_ai_threshold_miss_ev_recovery`
+
+- title: AI threshold miss EV recovery
+- decision: `attach_existing_family`
+- decision_reason: finding maps to an existing threshold family and should strengthen source metrics/provenance
+- source_report_type: `scalping_pattern_lab_automation`
+- lifecycle_stage: `-`
+- target_subsystem: `entry_funnel`
+- runtime_effect: `False`
+- allowed_runtime_apply: `False`
+- implementation_status: `-`
+- files_likely_touched: `src/engine/daily_threshold_cycle_report.py`, `src/engine/sniper_missed_entry_counterfactual.py`
+- acceptance_tests: `pytest relevant report/threshold tests`, `runtime_effect remains false until a separate implementation order is completed`, `daily EV report includes the order summary`
+
+### N2. `order_observation_source_quality_unknown_token_provenance_gap`
 
 - title: Observation source-quality unknown-token provenance gap
 - decision: `attach_existing_family`
@@ -2905,7 +3565,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - files_likely_touched: `src/engine/observation_source_quality_audit.py`, `src/engine/build_code_improvement_workorder.py`, `src/engine/sniper_state_handlers.py`, `src/engine/lifecycle_decision_matrix.py`, `src/engine/scalp_sim_overnight.py`, `docs/report-based-automation-traceability.md`
 - acceptance_tests: `PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_observation_source_quality_audit.py src/tests/test_build_code_improvement_workorder.py`
 
-### N2. `order_perf_buy_funnel_json_scan`
+### N3. `order_perf_buy_funnel_json_scan`
 
 - title: BUY funnel sentinel field scan without repeated json.dumps
 - decision: `attach_existing_family`
@@ -2919,7 +3579,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - files_likely_touched: `src/engine/buy_funnel_sentinel.py`
 - acceptance_tests: `pytest src/tests/test_buy_funnel_sentinel.py`, `BUY Sentinel classification parity on same raw/cache input`
 
-### N3. `order_perf_daily_report_bulk_history`
+### N4. `order_perf_daily_report_bulk_history`
 
 - title: Daily report market snapshot bulk history query
 - decision: `attach_existing_family`
@@ -2933,7 +3593,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - files_likely_touched: `src/engine/daily_report_service.py`
 - acceptance_tests: `pytest src/tests/test_daily_report_service.py src/tests/test_daily_report.py`, `daily report output parity on injected DB/model fixture`
 
-### N4. `order_latency_guard_miss_ev_recovery`
+### N5. `order_latency_guard_miss_ev_recovery`
 
 - title: latency guard miss EV recovery
 - decision: `attach_existing_family`
@@ -2947,7 +3607,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - files_likely_touched: `src/engine/sniper_performance_tuning_report.py`, `src/engine/daily_threshold_cycle_report.py`
 - acceptance_tests: `pytest relevant report/threshold tests`, `runtime_effect remains false until a separate implementation order is completed`, `daily EV report includes the order summary`
 
-### N5. `order_perf_daily_report_engine_singleton`
+### N6. `order_perf_daily_report_engine_singleton`
 
 - title: Daily report SQLAlchemy engine singleton
 - decision: `attach_existing_family`
@@ -2961,7 +3621,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - files_likely_touched: `src/engine/daily_report_service.py`
 - acceptance_tests: `pytest src/tests/test_daily_report_service.py src/tests/test_daily_report.py`, `engine creation count regression test`
 
-### N6. `order_swing_gatekeeper_reject_threshold_review`
+### N7. `order_swing_gatekeeper_reject_threshold_review`
 
 - title: swing gatekeeper reject threshold review
 - decision: `attach_existing_family`
@@ -2975,7 +3635,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - files_likely_touched: `src/engine/sniper_state_handlers.py`, `src/engine/swing_lifecycle_audit.py`
 - acceptance_tests: `pytest swing lifecycle audit tests`, `pytest state handler fast signatures`
 
-### N7. `order_swing_pattern_lab_deepseek_scale_in_events_observed`
+### N8. `order_swing_pattern_lab_deepseek_scale_in_events_observed`
 
 - title: Scale-in events observed for swing positions
 - decision: `attach_existing_family`
@@ -2989,7 +3649,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - files_likely_touched: `src/engine/swing_lifecycle_audit.py`, `src/engine/swing_selection_funnel_report.py`, `src/model/common_v2.py`
 - acceptance_tests: `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_swing_model_selection_funnel_repair.py`, `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_deepseek_swing_pattern_lab.py`
 
-### N8. `order_perf_recommend_update_vectorization`
+### N9. `order_perf_recommend_update_vectorization`
 
 - title: Recommendation and update_kospi vectorized membership checks
 - decision: `attach_existing_family`
@@ -3003,7 +3663,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - files_likely_touched: `src/model/recommend_daily_v2.py`, `src/utils/update_kospi.py`
 - acceptance_tests: `pytest src/tests/test_swing_retrain_automation.py src/tests/test_swing_feature_ssot.py`, `recommendation CSV and diagnostics parity`
 
-### N9. `order_swing_holding_exit_contract_gap_review`
+### N10. `order_swing_holding_exit_contract_gap_review`
 
 - title: swing holding/exit contract gap review
 - decision: `attach_existing_family`
@@ -3017,7 +3677,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - files_likely_touched: `src/engine/swing_lifecycle_audit.py`, `src/engine/ai_prompt_contracts.py`, `src/engine/ai_engine_openai.py`
 - acceptance_tests: `pytest swing lifecycle audit tests`
 
-### N10. `order_swing_market_regime_sensitivity_review`
+### N11. `order_swing_market_regime_sensitivity_review`
 
 - title: swing market regime sensitivity review
 - decision: `attach_existing_family`
@@ -3031,7 +3691,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - files_likely_touched: `src/engine/sniper_state_handlers.py`, `src/engine/swing_lifecycle_audit.py`
 - acceptance_tests: `pytest swing lifecycle audit tests`
 
-### N11. `order_swing_ofi_qi_stale_or_missing_context`
+### N12. `order_swing_ofi_qi_stale_or_missing_context`
 
 - title: swing OFI/QI stale or missing context
 - decision: `attach_existing_family`
@@ -3045,7 +3705,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - files_likely_touched: `src/engine/sniper_state_handlers.py`, `src/engine/orderbook_stability.py`, `src/engine/swing_lifecycle_audit.py`
 - acceptance_tests: `pytest orderbook stability tests`, `pytest swing lifecycle audit tests`
 
-### N12. `order_swing_scale_in_contract_gap_review`
+### N13. `order_swing_scale_in_contract_gap_review`
 
 - title: swing scale-in contract gap review
 - decision: `attach_existing_family`
@@ -3059,7 +3719,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - files_likely_touched: `src/engine/swing_lifecycle_audit.py`, `src/engine/sniper_scale_in.py`
 - acceptance_tests: `pytest swing lifecycle audit tests`
 
-### N13. `order_perf_swing_simulation_iteration`
+### N14. `order_perf_swing_simulation_iteration`
 
 - title: Swing simulation iteration and quote grouping
 - decision: `attach_existing_family`
@@ -3073,7 +3733,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - files_likely_touched: `src/engine/swing_daily_simulation_report.py`
 - acceptance_tests: `pytest src/tests/test_swing_model_selection_funnel_repair.py`, `swing simulation JSON parity on injected sources`
 
-### N14. `order_swing_discovery_label_contract_gap_review`
+### N15. `order_swing_discovery_label_contract_gap_review`
 
 - title: swing discovery label contract gap review
 - decision: `attach_existing_family`
@@ -3087,7 +3747,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - files_likely_touched: `src/engine/swing_strategy_discovery_label_builder.py`, `src/engine/swing_strategy_discovery_ev_report.py`
 - acceptance_tests: `pytest swing lifecycle audit tests`
 
-### N15. `order_latency_canary_tag_완화_1축_canary_승인`
+### N16. `order_latency_canary_tag_완화_1축_canary_승인`
 
 - title: latency canary tag 완화 1축 canary 승인
 - decision: `attach_existing_family`
@@ -3101,7 +3761,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - files_likely_touched: `src/engine/sniper_performance_tuning_report.py`, `src/engine/daily_threshold_cycle_report.py`
 - acceptance_tests: `pytest relevant report/threshold tests`, `runtime_effect remains false until a separate implementation order is completed`, `daily EV report includes the order summary`
 
-### N16. `order_panic_sell_defense_lifecycle_transition_pack`
+### N17. `order_panic_sell_defense_lifecycle_transition_pack`
 
 - title: panic sell defense lifecycle transition pack
 - decision: `attach_existing_family`
@@ -3115,7 +3775,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - files_likely_touched: `src/engine/panic_sell_defense_report.py`, `src/engine/daily_threshold_cycle_report.py`, `src/engine/runtime_approval_summary.py`, `docs/plan-korStockScanPerformanceOptimization.rebase.md`
 - acceptance_tests: `pytest panic sell defense/report lifecycle tests`, `pytest src/tests/test_build_code_improvement_workorder.py src/tests/test_runtime_approval_summary.py`
 
-### N17. `order_perf_monitor_snapshot_stream_tail`
+### N18. `order_perf_monitor_snapshot_stream_tail`
 
 - title: Monitor snapshot runtime streaming tail read
 - decision: `attach_existing_family`
@@ -3129,7 +3789,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - files_likely_touched: `src/engine/monitor_snapshot_runtime.py`
 - acceptance_tests: `pytest src/tests/test_log_archive_service.py`, `last valid JSON line parity`
 
-### N18. `order_swing_exit_ofi_qi_smoothing_distribution`
+### N19. `order_swing_exit_ofi_qi_smoothing_distribution`
 
 - title: swing exit OFI/QI smoothing distribution
 - decision: `attach_existing_family`
@@ -3143,7 +3803,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - files_likely_touched: `src/engine/sniper_state_handlers.py`, `src/engine/swing_lifecycle_audit.py`
 - acceptance_tests: `pytest OFI smoothing tests`, `pytest swing lifecycle audit tests`
 
-### N19. `order_swing_strategy_discovery_source_quality_followup`
+### N20. `order_swing_strategy_discovery_source_quality_followup`
 
 - title: swing strategy discovery label/source quality follow-up
 - decision: `attach_existing_family`
@@ -3157,7 +3817,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - files_likely_touched: `src/engine/swing_strategy_discovery_label_builder.py`, `src/engine/swing_strategy_discovery_ev_report.py`, `src/engine/swing_sector_theme_source.py`
 - acceptance_tests: `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_swing_strategy_discovery_label_builder.py src/tests/test_swing_strategy_discovery_ev_report.py src/tests/test_swing_sector_theme_source.py`
 
-### N20. `order_latency_guard_miss_ev_회수_조건_점검`
+### N21. `order_latency_guard_miss_ev_회수_조건_점검`
 
 - title: latency guard miss EV 회수 조건 점검
 - decision: `attach_existing_family`
@@ -3171,7 +3831,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - files_likely_touched: `src/engine/sniper_performance_tuning_report.py`, `src/engine/daily_threshold_cycle_report.py`
 - acceptance_tests: `pytest relevant report/threshold tests`, `runtime_effect remains false until a separate implementation order is completed`, `daily EV report includes the order summary`
 
-### N21. `order_panic_buying_source_quality_market_breadth_micro_coverage`
+### N22. `order_panic_buying_source_quality_market_breadth_micro_coverage`
 
 - title: panic buying source-quality market breadth and micro coverage
 - decision: `attach_existing_family`
@@ -3185,7 +3845,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - files_likely_touched: `src/engine/panic_buying_report.py`, `src/engine/daily_threshold_cycle_report.py`, `src/engine/runtime_approval_summary.py`, `docs/plan-korStockScanPerformanceOptimization.rebase.md`, `docs/code-improvement-workorders/panic_buying_regime_mode_v2_2026-05-14.md`
 - acceptance_tests: `pytest src/tests/test_panic_buying_report.py`, `pytest src/tests/test_build_code_improvement_workorder.py src/tests/test_runtime_approval_summary.py`
 
-### N22. `order_perf_final_ensemble_records`
+### N23. `order_perf_final_ensemble_records`
 
 - title: Final ensemble scanner records conversion without iterrows
 - decision: `attach_existing_family`
@@ -3199,7 +3859,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - files_likely_touched: `src/scanners/final_ensemble_scanner.py`
 - acceptance_tests: `pytest src/tests/test_swing_model_selection_funnel_repair.py`, `V2 CSV pick list parity`
 
-### N23. `order_swing_pattern_lab_deepseek_entry_no_submissions`
+### N24. `order_swing_pattern_lab_deepseek_entry_no_submissions`
 
 - title: All selected candidates failed to reach order submission
 - decision: `design_family_candidate`
@@ -3213,7 +3873,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - files_likely_touched: `src/engine/swing_lifecycle_audit.py`, `src/engine/swing_selection_funnel_report.py`, `src/model/common_v2.py`
 - acceptance_tests: `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_swing_model_selection_funnel_repair.py`, `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_deepseek_swing_pattern_lab.py`
 
-### N24. `order_no_acute_observability_alert`
+### N25. `order_no_acute_observability_alert`
 
 - title: No acute observability alert
 - decision: `design_family_candidate`
@@ -3227,7 +3887,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - files_likely_touched: `src/engine/daily_threshold_cycle_report.py`
 - acceptance_tests: `pytest relevant report/threshold tests`, `runtime_effect remains false until a separate implementation order is completed`, `daily EV report includes the order summary`
 
-### N25. `order_liquidity_gate_miss_ev_recovery`
+### N26. `order_liquidity_gate_miss_ev_recovery`
 
 - title: liquidity gate miss EV recovery
 - decision: `design_family_candidate`
@@ -3241,7 +3901,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - files_likely_touched: `src/engine/daily_threshold_cycle_report.py`, `src/engine/sniper_state_handlers.py`
 - acceptance_tests: `pytest relevant report/threshold tests`, `runtime_effect remains false until a separate implementation order is completed`, `daily EV report includes the order summary`
 
-### N26. `order_overbought_gate_miss_ev_recovery`
+### N27. `order_overbought_gate_miss_ev_recovery`
 
 - title: overbought gate miss EV recovery
 - decision: `design_family_candidate`
@@ -3255,7 +3915,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - files_likely_touched: `src/engine/daily_threshold_cycle_report.py`, `src/engine/sniper_state_handlers.py`
 - acceptance_tests: `pytest relevant report/threshold tests`, `runtime_effect remains false until a separate implementation order is completed`, `daily EV report includes the order summary`
 
-### N27. `order_swing_ai_contract_structured_output_eval`
+### N28. `order_swing_ai_contract_structured_output_eval`
 
 - title: swing AI contract structured output eval
 - decision: `design_family_candidate`
@@ -3269,7 +3929,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - files_likely_touched: `src/engine/ai_prompt_contracts.py`, `src/engine/ai_engine_openai.py`, `src/engine/ai_response_contracts.py`
 - acceptance_tests: `pytest OpenAI transport/schema tests`, `pytest swing lifecycle audit tests`
 
-### N28. `order_swing_lifecycle_observation_coverage`
+### N29. `order_swing_lifecycle_observation_coverage`
 
 - title: swing lifecycle observation coverage
 - decision: `defer_evidence`
@@ -3283,7 +3943,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - files_likely_touched: `src/engine/swing_lifecycle_audit.py`, `src/engine/sniper_state_handlers.py`, `src/engine/sniper_scale_in.py`
 - acceptance_tests: `pytest swing lifecycle audit tests`, `pipeline event field coverage smoke`
 
-### N29. `order_scalp_entry_adm_daily_tuning_coverage`
+### N30. `order_scalp_entry_adm_daily_tuning_coverage`
 
 - title: scalp entry ADM daily tuning coverage
 - decision: `defer_evidence`
@@ -3297,7 +3957,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - files_likely_touched: `src/engine/scalp_entry_action_decision_matrix.py`, `src/engine/sniper_state_handlers.py`, `src/engine/scalp_entry_adm_runtime.py`, `src/engine/threshold_cycle_ev_report.py`
 - acceptance_tests: `PYTHONPATH=. .venv/bin/pytest src/tests/test_scalp_entry_action_decision_matrix.py src/tests/test_build_code_improvement_workorder.py`, `runtime_effect remains false and broker submit safety guards remain owner`
 
-### N30. `order_swing_pattern_lab_deepseek_ofi_qi_smoothing_review`
+### N31. `order_swing_pattern_lab_deepseek_ofi_qi_smoothing_review`
 
 - title: OFI/QI exit smoothing action distribution
 - decision: `defer_evidence`
@@ -3311,7 +3971,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - files_likely_touched: `src/engine/swing_lifecycle_audit.py`, `src/engine/swing_selection_funnel_report.py`, `src/model/common_v2.py`
 - acceptance_tests: `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_swing_model_selection_funnel_repair.py`, `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_deepseek_swing_pattern_lab.py`
 
-### N31. `order_ai_threshold_miss_ev_회수_조건_점검`
+### N32. `order_ai_threshold_miss_ev_회수_조건_점검`
 
 - title: AI threshold miss EV 회수 조건 점검
 - decision: `defer_evidence`
@@ -3325,7 +3985,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - files_likely_touched: `src/engine/daily_threshold_cycle_report.py`, `src/engine/sniper_missed_entry_counterfactual.py`
 - acceptance_tests: `pytest relevant report/threshold tests`, `runtime_effect remains false until a separate implementation order is completed`, `daily EV report includes the order summary`
 
-### N32. `order_split_entry_rebase_수량_정합성_report_only_감사`
+### N33. `order_split_entry_rebase_수량_정합성_report_only_감사`
 
 - title: split-entry rebase 수량 정합성 report-only 감사
 - decision: `defer_evidence`
@@ -3339,7 +3999,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - files_likely_touched: `src/engine/daily_threshold_cycle_report.py`, `src/engine/sniper_state_handlers.py`
 - acceptance_tests: `pytest relevant report/threshold tests`, `runtime_effect remains false until a separate implementation order is completed`, `daily EV report includes the order summary`
 
-### N33. `order_동일_종목_split_entry_soft_stop_재진입_cooldown_report_only`
+### N34. `order_동일_종목_split_entry_soft_stop_재진입_cooldown_report_only`
 
 - title: 동일 종목 split-entry soft-stop 재진입 cooldown report-only
 - decision: `defer_evidence`
@@ -3353,7 +4013,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - files_likely_touched: `src/engine/daily_threshold_cycle_report.py`, `src/engine/sniper_state_handlers.py`
 - acceptance_tests: `pytest relevant report/threshold tests`, `runtime_effect remains false until a separate implementation order is completed`, `daily EV report includes the order summary`
 
-### N34. `order_perf_kiwoom_orders_http_session_review`
+### N35. `order_perf_kiwoom_orders_http_session_review`
 
 - title: Kiwoom orders HTTP session reuse manual review
 - decision: `defer_evidence`
@@ -3367,7 +4027,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - files_likely_touched: `src/engine/kiwoom_orders.py`
 - acceptance_tests: `pytest src/tests/test_kiwoom_orders.py src/tests/test_sniper_scale_in.py`
 
-### N35. `order_perf_config_cache_scope_review`
+### N36. `order_perf_config_cache_scope_review`
 
 - title: Config cache scope review
 - decision: `defer_evidence`
@@ -3381,7 +4041,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - files_likely_touched: `src/utils/constants.py`, `src/utils/kiwoom_utils.py`
 - acceptance_tests: `pytest config/import smoke tests`
 
-### N36. `order_perf_dashboard_db_pool_review`
+### N37. `order_perf_dashboard_db_pool_review`
 
 - title: Legacy dashboard DB connection pool review
 - decision: `defer_evidence`
@@ -3395,7 +4055,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - files_likely_touched: `src/engine/dashboard_data_repository.py`
 - acceptance_tests: `pytest src/tests/test_dashboard_data_repository.py`
 
-### N37. `order_partial_fallback_확대_직후_즉시_재평가_report_only`
+### N38. `order_partial_fallback_확대_직후_즉시_재평가_report_only`
 
 - title: partial → fallback 확대 직후 즉시 재평가 report-only
 - decision: `reject`
@@ -3409,7 +4069,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - files_likely_touched: `src/engine/daily_threshold_cycle_report.py`, `src/engine/sniper_state_handlers.py`
 - acceptance_tests: `pytest relevant report/threshold tests`, `runtime_effect remains false until a separate implementation order is completed`, `daily EV report includes the order summary`
 
-### N38. `order_perf_kiwoom_ws_tick_parse_fastpath`
+### N39. `order_perf_kiwoom_ws_tick_parse_fastpath`
 
 - title: Kiwoom websocket tick parsing fast path
 - decision: `reject`
@@ -3423,7 +4083,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - files_likely_touched: `src/engine/kiwoom_websocket.py`
 - acceptance_tests: `pytest websocket parsing/data-quality tests`
 
-### N39. `order_perf_raw_event_suppression_out_of_scope`
+### N40. `order_perf_raw_event_suppression_out_of_scope`
 
 - title: Raw pipeline event suppression out of scope
 - decision: `reject`

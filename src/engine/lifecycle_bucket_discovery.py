@@ -789,6 +789,28 @@ def _lifecycle_flow_source_only_blocker(bucket: dict[str, Any]) -> bool:
     return any(str(stage_contract.get(key) or "").strip().lower() == "missing" for key in ("entry", "submit", "holding", "exit"))
 
 
+def _flow_sim_transition_state(state: str, bucket: dict[str, Any], grade: dict[str, Any]) -> tuple[str | None, str | None, str | None]:
+    if str(bucket.get("stage") or "") != "lifecycle_flow" and str(bucket.get("bucket_type") or "") != "combo_lifecycle_flow":
+        return None, None, None
+    if state == LIFECYCLE_FLOW_SIM_PROBE_STATE:
+        return "sim_probe_promoted", None, "sim_applied"
+    if _lifecycle_flow_source_only_blocker(bucket):
+        return "blocked_observable_prefix_missing", "lifecycle_flow_incomplete_stage_contract", "source_only_keep_collecting"
+    if _safe_int(bucket.get("complete_flow_count")) <= 0:
+        return "source_only_keep_collecting", "complete_flow_sample_missing", "collecting"
+    if _safe_int(bucket.get("incomplete_flow_count")) > 0:
+        return "blocked_incomplete_mixed_parent", "incomplete_flow_mixed_into_parent", "collecting"
+    primary_ev = _safe_float(
+        bucket.get("source_quality_adjusted_ev_pct"),
+        _safe_float(bucket.get("equal_weight_avg_profit_pct"), None),
+    )
+    if primary_ev is not None and primary_ev <= 0:
+        return "blocked_ev_not_positive", "primary_ev_not_positive", "collecting"
+    if str(grade.get("source_quality_gate") or "").lower() in {"fail", "blocked", "source_quality_blocked"}:
+        return "blocked_source_quality", "source_quality_gate_not_pass", "source_quality_blocked"
+    return "blocked_sample_floor", "sim_probe_contract_not_ready", "collecting"
+
+
 def _recommended_resolution(candidate_state: str, bucket: dict[str, Any]) -> str:
     if _lifecycle_flow_source_only_blocker(bucket):
         return "explicit_lifecycle_flow_source_only_blocker"
@@ -2432,6 +2454,16 @@ def _candidate_from_bucket(stage: str, bucket: dict[str, Any]) -> dict[str, Any]
     runtime_apply_allowed = state == "live_auto_apply_ready" and not lifecycle_flow_source_only_blocker
     runtime_metadata_state = state if not lifecycle_flow_source_only_blocker else "source_only_keep_collecting"
     review_category, review_sub_state = _review_category_for_state(runtime_metadata_state)
+    flow_transition_state, flow_transition_blocker, conversion_lane_hint = _flow_sim_transition_state(
+        state,
+        {
+            **bucket,
+            "stage": stage,
+            "bucket_type": bucket_type,
+            "bucket_key": bucket_key,
+        },
+        grade,
+    )
     return {
         "bucket_id": bucket_id,
         "source_bucket_id": source_bucket_id,
@@ -2448,6 +2480,9 @@ def _candidate_from_bucket(stage: str, bucket: dict[str, Any]) -> dict[str, Any]
         "evidence_grade": grade.get("evidence_grade"),
         "transition_target": "bounded_live_canary" if runtime_apply_allowed else grade.get("transition_target"),
         "grade_reason": grade.get("grade_reason"),
+        "flow_sim_transition_state": flow_transition_state,
+        "flow_sim_transition_blocker": flow_transition_blocker,
+        "conversion_lane_hint": conversion_lane_hint,
         "full_real_conversion_allowed": False,
         "sim_lifecycle_handoff_allowed": state in SIM_APPROVAL_STATES and not lifecycle_flow_source_only_blocker,
         "bounded_live_canary_allowed": runtime_apply_allowed,
