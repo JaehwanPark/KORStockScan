@@ -25,17 +25,27 @@
 
 ## 장전 체크리스트 (08:45~09:00)
 
-- [ ] `[SwingPreFinalAutoAndFinalApprovalPreopen0608] 스윙 pre-final auto state 및 final approval artifact 확인` (`Due: 2026-06-08`, `Slot: PREOPEN`, `TimeWindow: 08:45~08:50`, `Track: RuntimeStability`)
+- [x] `[SwingPreFinalAutoAndFinalApprovalPreopen0608] 스윙 pre-final auto state 및 final approval artifact 확인` (`Due: 2026-06-08`, `Slot: PREOPEN`, `TimeWindow: 08:45~08:50`, `Track: RuntimeStability`)
   - Source: [swing_runtime_approval_2026-06-05.json](/home/ubuntu/KORStockScan/data/report/swing_runtime_approval/swing_runtime_approval_2026-06-05.json), [threshold_cycle_ev_2026-06-05.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-06-05.json)
   - 판정 기준: pre-final은 parsed AI Tier2 auto state가 있어야 하고, final-stage는 사용자 승인 artifact가 있어야 한다.
   - 금지: 스윙 full-live 전환, cap release, provider/bot 변경, hard-safety 완화를 pre-final auto state로 처리하지 않는다.
   - 다음 액션: `pre_final_auto_selected`, `final_approval_artifact_present`, `blocked_by_policy` 중 하나로 닫는다.
+  - 처리 결과: `blocked_by_policy`.
+  - 판정: 스윙 pre-final/final runtime 반영 대상 없음. full-live 전환, cap release, provider/bot 변경, hard-safety 완화는 열지 않는다.
+  - 근거: `swing_runtime_approval_2026-06-05.json` summary가 `requested=0`, `approved=0`, `blocked=12`, `runtime_change=false`이고, `threshold_apply_2026-06-08.json`의 `swing_runtime_approval`도 `approval_artifact=null`, `requested=0`, `approved=0`, `selected=[]`, `dry_run_forced=false`다.
+  - 다음 액션: 별도 사용자 승인 artifact가 생기기 전까지 final-stage는 차단 유지. 오늘은 `swing_sim_auto_approval` sim policy env만 관찰 대상으로 둔다.
 
-- [ ] `[ThresholdEnvAutoApplyPreopen0608] threshold env 자동 apply 산출물 및 사용자 개입 여부 확인` (`Due: 2026-06-08`, `Slot: PREOPEN`, `TimeWindow: 08:50~08:55`, `Track: RuntimeStability`)
+- [x] `[ThresholdEnvAutoApplyPreopen0608] threshold env 자동 apply 산출물 및 사용자 개입 여부 확인` (`Due: 2026-06-08`, `Slot: PREOPEN`, `TimeWindow: 08:50~08:55`, `Track: RuntimeStability`)
   - Source: [threshold_cycle_ev_2026-06-05.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-06-05.json), [threshold_cycle_preopen_apply.py](/home/ubuntu/KORStockScan/src/engine/threshold_cycle_preopen_apply.py), [run_bot.sh](/home/ubuntu/KORStockScan/src/run_bot.sh)
   - 판정 기준: 전일 postclose EV와 당일 apply plan/runtime env를 확인하고 `auto_bounded_live` guard 통과분만 runtime env로 인정한다.
   - 금지: blocked family, approval artifact missing, same-stage owner conflict를 수동 env override로 우회하지 않는다.
   - 다음 액션: `applied_guard_passed_env`, `blocked_no_env`, `partial_apply_with_blocked_families`, `failed_preopen_wrapper`, `not_yet_due` 중 하나로 닫는다.
+  - 처리 결과: `partial_apply_with_blocked_families`.
+  - 판정: preopen wrapper와 runtime env 생성은 pass지만, bridge live-auto 후보는 계약/품질 차단으로 수동 우회하지 않는다.
+  - 근거: `threshold_cycle_preopen_2026-06-08.status.json`은 `status=succeeded`, `exit_code=0`, `finished_at=2026-06-08T07:35:01+09:00`이고, `threshold_apply_2026-06-08.json`은 `status=auto_bounded_live_ready`, `apply_mode=auto_bounded_live`, `runtime_change=true`, `warnings=[]`다. `threshold_runtime_env_2026-06-08.json` selected families는 `soft_stop_whipsaw_confirmation`, `score65_74_recovery_probe`, `scalp_sim_candidate_window_expansion`, `scalp_sim_ai_budget_manager`, `lifecycle_decision_matrix_runtime`, `scalp_sim_auto_approval`, `swing_sim_auto_approval`다. `runtime_apply_bridge`는 `entry_wait6579_score66_69_recovery_gate_v1`이 `blocked_source_quality`/`auto_live_contract_missing`, `scale_in_bucket_runtime_policy_v1`이 `bootstrap_pending`/`auto_live_contract_missing`으로 selected 없음.
+  - 다음 액션: 생성된 `threshold_runtime_env_2026-06-08.env`만 runtime source로 인정한다. bridge blocked family, approval artifact missing, same-stage owner conflict는 postclose source-quality/contract workorder로만 넘기고 장중 env override 금지.
+
+운영 확인 메모: `[PreopenAutomationHealthCheck20260608]` 판정은 `warning`. `threshold_cycle_preopen_cron.log`에는 2026-06-08 `[DONE]` marker가 있고 status artifact도 succeeded다. `ensemble_scanner.log`에는 `final_ensemble_scanner target_date=2026-06-08` `[DONE]` marker가 있으나 `data/daily_recommendations_v2.csv`와 diagnostics의 mtime/generated_at이 2026-06-05로 남아 추천 산출물 freshness는 재확인이 필요하다. 봇은 2026-06-08 07:40 이후 기동되어 env 생성 07:35보다 늦다.
 
 ## 장중 체크리스트 (09:05~15:20)
 

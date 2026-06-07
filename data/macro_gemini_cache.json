@@ -1,86 +1,85 @@
 {
-  "bundle_as_of": "2026-06-04T22:20:22Z",
+  "bundle_as_of": "2026-06-07T22:20:25Z",
   "sp500": {
     "name": "S&P500",
-    "value": 7584.31,
-    "prev_value": 7553.68,
-    "change": 30.63,
-    "change_pct": 0.41,
-    "as_of": "2026-06-04T22:20:22Z",
-    "source": "The Motley Fool"
+    "value": 7383.74,
+    "prev_value": 7584.31,
+    "change": -200.57,
+    "change_pct": -2.64,
+    "as_of": "2026-06-05T20:00:00Z",
+    "source": "Yahoo Finance"
   },
   "nasdaq": {
     "name": "NASDAQ",
-    "value": 26830.96,
-    "prev_value": 26853.98,
-    "change": -23.02,
-    "change_pct": -0.09,
-    "as_of": "2026-06-04T22:20:22Z",
-    "source": "The Motley Fool"
+    "value": 25709.43,
+    "prev_value": 26830.96,
+    "change": -1121.53,
+    "change_pct": -4.18,
+    "as_of": "2026-06-05T20:00:00Z",
+    "source": "Yahoo Finance"
   },
   "vix": {
     "name": "VIX",
-    "value": 15.38,
-    "prev_value": 16.06,
-    "change": -0.68,
-    "change_pct": -4.23,
-    "as_of": "2026-06-04T22:20:22Z",
+    "value": 21.51,
+    "prev_value": 15.4,
+    "change": 6.11,
+    "change_pct": 39.68,
+    "as_of": "2026-06-05T20:15:00Z",
     "source": "Cboe Global Markets"
   },
   "us10y": {
     "name": "US10Y",
-    "value": 4.47,
-    "prev_value": 4.49,
-    "change": -0.02,
-    "change_pct": -0.45,
-    "as_of": "2026-06-04T22:20:22Z",
-    "source": "Associated Press"
+    "value": 4.52,
+    "prev_value": 4.48,
+    "change": 0.04,
+    "change_pct": 0.89,
+    "as_of": "2026-06-05T21:00:00Z",
+    "source": "Trading Economics"
   },
   "brent": {
     "name": "BRENT",
-    "value": 95.03,
-    "prev_value": 97.77,
-    "change": -2.74,
-    "change_pct": -2.8,
-    "as_of": "2026-06-04T22:20:22Z",
-    "source": "Associated Press"
+    "value": 93.09,
+    "prev_value": 95.03,
+    "change": -1.94,
+    "change_pct": -2.04,
+    "as_of": "2026-06-05T21:00:00Z",
+    "source": "Trading Economics"
   },
   "headlines": [
     {
-      "title": "The Dow leaps to a record as oil prices ease and stocks outside of AI rally",
-      "source": "LA Times",
-      "published_at": "2026-06-04T20:24:00Z",
-      "url": "https://www.latimes.com"
+      "title": "West Asia war LIVE: Israel army says territory being targeted by Iranian missiles",
+      "source": "The Hindu",
+      "published_at": "2026-06-07T07:43:00Z",
+      "url": "https://www.thehindu.com/"
     },
     {
-      "title": "Stock Market Today, June 4: Broadcom Shares Plunge After AI Outlook Misses High Investor Expectations",
-      "source": "The Motley Fool",
-      "published_at": "2026-06-04T21:00:00Z",
-      "url": "https://www.fool.com"
+      "title": "Israel says Iran launched a missile at it, in a first during fragile ceasefire",
+      "source": "NPR",
+      "published_at": "2026-06-07T19:56:00Z",
+      "url": "https://www.npr.org/"
     },
     {
-      "title": "US signaled it could impose additional tariffs",
-      "source": "OTP Morning Brief",
-      "published_at": "2026-06-04T09:10:00Z",
-      "url": "https://www.otpbank.hu"
+      "title": "Kuwait and Bahrain targeted by Iran after exchange of fire with US",
+      "source": "The Guardian",
+      "published_at": "2026-06-06T11:09:00Z",
+      "url": "https://www.theguardian.com/"
     },
     {
-      "title": "Oil Prices Decline On Fragile Peace Hope In Middle East",
-      "source": "MarketForces Africa",
-      "published_at": "2026-06-04T10:20:00Z",
-      "url": "https://marketforcesafrica.com"
+      "title": "Trump news at a glance: Iran war pushing millions into hunger, UN says, as president struggles to reach peace deal",
+      "source": "The Guardian",
+      "published_at": "2026-06-07T01:59:00Z",
+      "url": "https://www.theguardian.com/"
     },
     {
-      "title": "The U.S.-China Trade Stalemate: What It Means for Global Markets",
-      "source": "FINTECH.TV",
-      "published_at": "2026-06-04T16:20:00Z",
-      "url": "https://fintech.tv"
+      "title": "What's next for the War Powers Resolution on Iran? PolitiFact explains",
+      "source": "PBS News",
+      "published_at": "2026-06-06T21:16:00Z",
+      "url": "https://www.pbs.org/"
     }
   ],
   "notes": [
-    "S&P 500 rose modestly, led by value stocks outside of tech, while the Dow closed at a record high.",
-    "NASDAQ dipped due to weakness in semiconductor stocks following Broadcom's underwhelming AI revenue guidance.",
-    "Treasury yields and crude oil prices dropped as geopolitical tensions in the Middle East showed signs of easing.",
-    "Market sentiment reflects increasing confidence in potential resolutions to ongoing U.S.-Iran negotiations."
+    "S&P 500 and Nasdaq posted their worst daily drops since October on Friday, driven by a broad tech selloff and a stronger-than-expected May jobs report dampening rate-cut hopes.",
+    "VIX spiked nearly 40% amid rising geopolitical tensions and shifting interest rate expectations.",
+    "Escalating military exchanges between the US, Israel, and Iran have sparked global concerns over an escalating Middle East conflict and potential oil supply disruptions."
   ]
 }
