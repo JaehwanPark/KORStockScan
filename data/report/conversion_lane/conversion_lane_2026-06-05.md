@@ -7,9 +7,13 @@
 - positive EV not due until next PREOPEN: `26`
 - positive EV previous-policy natural match 0: `4`
 - positive EV real conversion queue: `0`
-- positive EV sample-floor blocked: `15`
+- positive EV sample-floor blocked known floor: `4`
+- positive EV sample-floor unknown floor: `11`
+- positive EV sample-floor related total: `15`
+- positive EV sample-floor provenance: scope=`conversion_candidates` window=`mixed_source_windows` window_counts=`{'same_day_source_bundle_plus_rolling_threshold_cycle_consumer': 4, 'source_report_window': 11}` basis=`candidate_sample_vs_required_sample`
+- conversion candidate strategy scope: scalp=`199` swing=`374` unscoped=`1`
 - bounded real canary requestable: `0`
-- top blocker overall: `submit_drought`
+- top blocker ranked: `submit_drought`; top blocker by count: `sample_floor`
 - top LDM bucket blocker: `env_mapping`
 - submit funnel blocker count: `6` (submit_drought_is_ldm_bucket_blocker=`False`)
 

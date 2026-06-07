@@ -13,8 +13,8 @@
 - full_fill_completed_avg_profit_rate: `0.0`%
 
 ## Entry Funnel
-- budget_pass_to_submitted: `1` / `4444` (`0.02`%)
-- latency pass/block: `24` / `4418`
+- budget_pass_to_submitted: `1` / `4527` (`0.02`%)
+- latency pass/block: `24` / `4501`
 - latency submit routing: `latency_classifier_runtime_semantics_gap`
 - latency recommended action: `reject` (`recovery_count=0 below floor=450`)
 - latency profile generation: `{'mode': 'grid_quantile_search', 'profile_count': 900, 'age_cap_ms': 1500, 'jitter_cap_ms': 1500, 'spread_cap_ratio': 0.012, 'counterfactual_sample_floor': 3, 'recovery_event_floor_ratio': 0.1}`
@@ -178,8 +178,8 @@
 ## Code Improvement Workorder
 - artifact: `/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-06-04.json`
 - markdown: `/home/ubuntu/KORStockScan/docs/code-improvement-workorders/code_improvement_workorder_2026-06-04.md`
-- selected_order_count: `84`
-- decision_counts: `{'implement_now': 5, 'attach_existing_family': 100, 'design_family_candidate': 5, 'defer_evidence': 7, 'reject': 3}`
+- selected_order_count: `100`
+- decision_counts: `{'implement_now': 20, 'attach_existing_family': 102, 'design_family_candidate': 5, 'defer_evidence': 10, 'reject': 3}`
 
 ## Approval Requests
 - `position_sizing_cap_release` sample=`58/30` reason=`window_policy primary=rolling_10d 기준 재평가: 1주 cap 해제 efficient trade-off 기준 충족(score=0.19/0.70): 자동 적용하지 않고 사용자 승인 요청 artifact로만 승격한다.` contract=`final_user_approval_required` live_ready=`False`
@@ -189,9 +189,9 @@
 
 ## Calibration Decisions
 ## Code Improvement Top Orders
-- `order_observation_source_quality_unknown_token_provenance_gap` decision=`implement_now` subsystem=`runtime_instrumentation`
-- `order_swing_lifecycle_observation_coverage` decision=`implement_now` subsystem=`runtime_instrumentation`
-- `order_lifecycle_exit_bucket_combo_exit_result_source_scalp_sim_overnight_sell_today_rule_scalp_sim_overnight_sell_tod_d982edbd` decision=`implement_now` subsystem=`lifecycle_decision_matrix`
+- `order_conversion_lane_key_lineage_ldm_hypothesis_00d0b765311ad7aa` decision=`implement_now` subsystem=`sim_to_real_conversion_lineage`
+- `order_conversion_lane_key_lineage_ldm_hypothesis_0f038214d5ac5a30` decision=`implement_now` subsystem=`sim_to_real_conversion_lineage`
+- `order_conversion_lane_key_lineage_ldm_hypothesis_4782cc3ea9609ffc` decision=`implement_now` subsystem=`sim_to_real_conversion_lineage`
 
 ## Pattern Lab Top Findings
 - `AI threshold miss EV recovery` route=`existing_family` family=`score65_74_recovery_probe`

@@ -98,6 +98,14 @@ def _write_control_tower_minimal_sources(
         "warnings": [],
     }
     _write_json(
+        report_root / "observation_source_quality_audit" / f"observation_source_quality_audit_{target}.json",
+        {
+            "generated_at": f"{target}T16:00:00+09:00",
+            "status": "pass",
+            "summary": {"review_warning_count": 0, "tuning_input_allowed": True},
+        },
+    )
+    _write_json(
         report_root / "threshold_cycle_ev" / f"threshold_cycle_ev_{target}.json",
         {
             "daily_ev_summary": {"source_split": {"combined_authority": "diagnostic_only"}},
@@ -222,6 +230,14 @@ def test_tuning_performance_control_tower_separates_sim_progress_from_real_pnl(m
     report_root, apply_dir, output_dir = _patch_dirs(monkeypatch, tmp_path)
     target = "2026-05-26"
     previous = "2026-05-22"
+    _write_json(
+        report_root / "observation_source_quality_audit" / f"observation_source_quality_audit_{target}.json",
+        {
+            "generated_at": "2026-05-26T16:00:00+09:00",
+            "status": "pass",
+            "summary": {"review_warning_count": 0, "tuning_input_allowed": True},
+        },
+    )
     _write_json(
         report_root / "threshold_cycle_ev" / f"threshold_cycle_ev_{target}.json",
         {
@@ -505,6 +521,8 @@ def test_control_tower_promotion_confirmed_waits_for_bridge(monkeypatch, tmp_pat
     report = mod.build_tuning_performance_control_tower(target)
 
     assert report["summary"]["primary_verdict"] == "promotion_confirmed_waiting_bridge"
+    assert report["bridge_summary"]["greenfield_policy_emit_state"] == "not_emitted_no_live_auto_ready_lifecycle_flow"
+    assert report["bridge_summary"]["greenfield_policy_emit_state_raw"] == "not_emitted_no_complete_lifecycle_flow"
     assert report["summary"]["bridge_policy_emit_blocker"] == "no_live_auto_ready_lifecycle_flow"
 
 
@@ -546,6 +564,10 @@ def test_control_tower_separates_not_due_positive_ev_and_submit_funnel_blockers(
                 "natural_match_0_count": 1,
                 "positive_ev_runtime_observed_count": 0,
                 "positive_ev_sample_floor_blocked_count": 0,
+                "positive_ev_sample_floor_count_scope": "lineage_rows",
+                "positive_ev_sample_floor_window_policy": "source_report_window",
+                "positive_ev_sample_floor_window_policy_counts": {"source_report_window": 2},
+                "positive_ev_sample_floor_basis": "lineage_evidence_sample_vs_sample_floor",
                 "runtime_policy_source_date": "2026-05-28",
                 "postclose_candidate_source_date": target,
                 "new_postclose_candidates_due_state": "not_due_until_next_preopen",
@@ -559,7 +581,13 @@ def test_control_tower_separates_not_due_positive_ev_and_submit_funnel_blockers(
                 "real_conversion_queue_count": 0,
                 "positive_ev_runtime_observed_count": 0,
                 "positive_ev_real_conversion_queue_count": 0,
-                "positive_ev_sample_floor_blocked_count": 0,
+                "positive_ev_sample_floor_blocked_count": 4,
+                "positive_ev_sample_floor_unknown_floor_count": 11,
+                "positive_ev_sample_floor_related_count": 15,
+                "positive_ev_sample_floor_count_scope": "conversion_candidates",
+                "positive_ev_sample_floor_window_policy": "source_report_window",
+                "positive_ev_sample_floor_window_policy_counts": {"source_report_window": 15},
+                "positive_ev_sample_floor_basis": "candidate_sample_vs_required_sample",
                 "positive_ev_not_due_until_next_preopen_count": 1,
                 "positive_ev_previous_policy_natural_match_0_count": 1,
                 "sim_priority_only_count": 0,
@@ -576,12 +604,63 @@ def test_control_tower_separates_not_due_positive_ev_and_submit_funnel_blockers(
     report = mod.build_tuning_performance_control_tower(target)
 
     assert report["summary"]["positive_ev_not_due_until_next_preopen_count"] == 1
+    assert report["summary"]["positive_ev_sample_floor_blocked_count"] == 4
+    assert report["summary"]["positive_ev_sample_floor_unknown_floor_count"] == 11
+    assert report["summary"]["positive_ev_sample_floor_related_count"] == 15
+    assert report["summary"]["conversion_lane_positive_ev_sample_floor_count_scope"] == "conversion_candidates"
+    assert report["summary"]["key_lineage_positive_ev_sample_floor_count_scope"] == "lineage_rows"
+    assert report["summary"]["conversion_lane_positive_ev_sample_floor_basis"] == "candidate_sample_vs_required_sample"
+    assert report["summary"]["key_lineage_positive_ev_sample_floor_basis"] == "lineage_evidence_sample_vs_sample_floor"
+    assert report["summary"]["conversion_lane_positive_ev_sample_floor_window_policy_counts"] == {
+        "source_report_window": 15
+    }
+    assert report["summary"]["key_lineage_positive_ev_sample_floor_window_policy_counts"] == {
+        "source_report_window": 2
+    }
     assert report["summary"]["top_ldm_bucket_blocker_class"] == "sample_floor"
     assert report["summary"]["submit_drought_is_ldm_bucket_blocker"] is False
     markdown = (output_dir / f"tuning_performance_control_tower_{target}.md").read_text(encoding="utf-8")
     assert "positive_ev_not_due_until_next_preopen" in markdown
+    assert "positive_ev_sample_floor_blocked_known_floor: `4`" in markdown
+    assert "positive_ev_sample_floor_unknown_floor: `11`" in markdown
+    assert "scope=`conversion_candidates`" in markdown
+    assert "scope=`lineage_rows`" in markdown
+    assert "counts=`{'source_report_window': 15}`" in markdown
+    assert "counts=`{'source_report_window': 2}`" in markdown
+    assert "candidate_sample_vs_required_sample" in markdown
+    assert "lineage_evidence_sample_vs_sample_floor" in markdown
     assert "new_postclose_candidates_due_state=`not_due_until_next_preopen`" in markdown
     assert "submit_drought_is_ldm_bucket_blocker=`False`" in markdown
+
+
+def test_control_tower_preserves_zero_conversion_sample_floor_scope_mismatch(monkeypatch, tmp_path):
+    report_root, apply_dir, _ = _patch_dirs(monkeypatch, tmp_path)
+    target = "2026-05-29"
+    _write_control_tower_minimal_sources(report_root, apply_dir, target, lifecycle_sim=3)
+    _write_json(
+        report_root / "key_lineage_ledger" / f"key_lineage_ledger_{target}.json",
+        {"summary": {"positive_ev_sample_floor_blocked_count": 2}},
+    )
+    _write_json(
+        report_root / "conversion_lane" / f"conversion_lane_{target}.json",
+        {
+            "summary": {
+                "positive_ev_sample_floor_blocked_count": 0,
+                "top_blocker_by_count_class": "sample_floor",
+            },
+            "conversion_blocker_rank": [],
+            "real_conversion_queue": [],
+        },
+    )
+
+    report = mod.build_tuning_performance_control_tower(target)
+
+    assert report["summary"]["positive_ev_sample_floor_blocked_count"] == 0
+    assert report["summary"]["conversion_lane_positive_ev_sample_floor_blocked_count"] == 0
+    assert report["summary"]["key_lineage_positive_ev_sample_floor_blocked_count"] == 2
+    assert report["summary"]["conversion_lane_positive_ev_sample_floor_count_scope"] == "conversion_candidates"
+    assert report["summary"]["key_lineage_positive_ev_sample_floor_count_scope"] == "lineage_rows"
+    assert report["summary"]["positive_ev_sample_floor_blocked_scope_mismatch"] is True
 
 
 def test_control_tower_treats_missing_verifier_as_pending_not_source_gap(monkeypatch, tmp_path):
@@ -646,6 +725,14 @@ def test_control_tower_surfaces_source_generation_stale_warning(monkeypatch, tmp
         },
     )
     _write_json(
+        report_root / "observation_source_quality_audit" / f"observation_source_quality_audit_{target}.json",
+        {
+            "generated_at": "2026-05-29T17:02:00+09:00",
+            "status": "pass",
+            "summary": {"review_warning_count": 0, "tuning_input_allowed": True},
+        },
+    )
+    _write_json(
         report_root / "swing_lifecycle_decision_matrix" / f"swing_lifecycle_decision_matrix_{target}.json",
         {"generated_at": "2026-05-29T18:00:00+09:00", "summary": {"status": "pass"}},
     )
@@ -656,6 +743,10 @@ def test_control_tower_surfaces_source_generation_stale_warning(monkeypatch, tmp
     assert report["summary"]["source_freshness_status"] == "warning"
     assert report["summary"]["source_generation_stale_warning_count"] > 0
     assert "source_generation_stale_warning" in report["warnings"]
+    assert any(
+        item.get("source") == "observation_source_quality_audit"
+        for item in report["source_freshness"]["stale_pairs"]
+    )
 
 
 def test_control_tower_source_freshness_handles_mixed_timezone_formats(monkeypatch, tmp_path):

@@ -102,8 +102,8 @@ def test_runtime_approval_summary_combines_scalping_and_swing(tmp_path, monkeypa
     assert report["scalping"][0]["gate_review_class"] == "entry_unlock_probe"
     assert report["scalping"][0]["legacy_hard_gate_risk"] == "no_unreviewed_hard_gate"
     assert "PREOPEN env" in report["scalping"][0]["state_interpretation"]
-    assert report["scalping"][1]["reason_label"] == "표본 부족"
-    assert "표본 부족" in report["scalping"][1]["state_interpretation"]
+    assert report["scalping"][1]["reason_label"] == "소스 표본 없음"
+    assert "표본/소스 계약" in report["scalping"][1]["state_interpretation"]
     assert report["swing"][0]["reason_label"] == "계측 gap, DB gap"
     assert report["swing"][0]["current_application"] == "스윙 dry-run/probe 관찰: 실주문 변경 없음"
     assert report["swing"][0]["gate_review_class"] == "approval_route_available"
@@ -175,6 +175,59 @@ def test_runtime_approval_summary_surfaces_microstructure_source_only_context(tm
     assert "standalone_buy" in summary["forbidden_uses"]
     markdown = (out_dir / "runtime_approval_summary_2026-05-31.md").read_text(encoding="utf-8")
     assert "Microstructure Reaction Context" in markdown
+
+
+def test_runtime_approval_summary_labels_hold_sample_contract_gaps(tmp_path, monkeypatch):
+    ev_dir = tmp_path / "threshold_cycle_ev"
+    swing_dir = tmp_path / "swing_runtime_approval"
+    out_dir = tmp_path / "runtime_approval_summary"
+    ev_dir.mkdir(parents=True)
+    swing_dir.mkdir(parents=True)
+    monkeypatch.setattr(
+        mod,
+        "ev_report_paths",
+        lambda target_date: (
+            ev_dir / f"threshold_cycle_ev_{target_date}.json",
+            ev_dir / f"threshold_cycle_ev_{target_date}.md",
+        ),
+    )
+    monkeypatch.setattr(mod, "SWING_RUNTIME_APPROVAL_DIR", swing_dir)
+    monkeypatch.setattr(mod, "SUMMARY_DIR", out_dir)
+    (ev_dir / "threshold_cycle_ev_2026-06-05.json").write_text(
+        json.dumps(
+            {
+                "calibration_outcome": {
+                    "decisions": [
+                        {
+                            "family": "pre_submit_price_guard",
+                            "calibration_state": "hold_sample",
+                            "sample_count": 24790,
+                            "source_sample_count": 24790,
+                            "sample_floor": 20,
+                            "source_metrics": {
+                                "coverage_gap_type": "counterfactual_join_gap",
+                                "attribution_gap": True,
+                                "recommended_action_reason": "recovery_count=0 below floor=2479",
+                            },
+                        }
+                    ]
+                }
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    (swing_dir / "swing_runtime_approval_2026-06-05.json").write_text(
+        json.dumps({"summary": {"requested": 0, "approved": 0}, "blocked_requests": []}),
+        encoding="utf-8",
+    )
+
+    report = mod.build_runtime_approval_summary("2026-06-05")
+
+    row = next(item for item in report["scalping"] if item["family"] == "pre_submit_price_guard")
+    assert row["reasons"] == ["counterfactual_join_gap", "recovery_floor_not_met"]
+    assert row["reason_label"] == "counterfactual join gap, recovery floor 미달"
+    assert "표본/소스 계약" in row["state_interpretation"]
 
 
 def test_runtime_approval_summary_microstructure_summary_tolerates_malformed_types():

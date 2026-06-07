@@ -2446,7 +2446,11 @@ def _is_explicit_source_only_lifecycle_flow_exclusion(report: dict[str, Any], it
     summary = report.get("summary") if isinstance(report.get("summary"), dict) else {}
     greenfield_state = str(summary.get("greenfield_policy_emit_state") or "").strip()
     if family == "greenfield_real_environment_authority" and (
-        greenfield_state == "not_emitted_no_complete_lifecycle_flow"
+        greenfield_state
+        in {
+            "not_emitted_no_complete_lifecycle_flow",
+            "not_emitted_no_live_auto_ready_lifecycle_flow",
+        }
         or item.get("allowed_runtime_apply") is False
         or item.get("broker_order_forbidden") is True
     ):

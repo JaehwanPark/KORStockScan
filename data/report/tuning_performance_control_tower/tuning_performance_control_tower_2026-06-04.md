@@ -3,14 +3,22 @@
 ## Conversion First
 
 - real_conversion_queue: `3`
+- positive_ev_runtime_observed: `3`
+- positive_ev_not_due_until_next_preopen: `4`
+- positive_ev_previous_policy_natural_match_0: `4`
+- positive_ev_real_conversion_queue: `3`
+- positive_ev_sample_floor_blocked: `5`
+- positive_ev_sample_floor_scope: conversion_lane=`5` key_lineage=`0` mismatch=`True`
 - sim_priority_only: `71`
+- observation_scope: runtime_policy_source_date=`-` postclose_candidate_source_date=`-` new_postclose_candidates_due_state=`-`
 - key_lineage: pass=`4` mismatch=`0` catalog_missing=`12` preopen_missing=`0` not_instrumented=`0`
-- top_blocker: `key_lineage`
+- top_blocker_ranked: `key_lineage`; top_blocker_by_count=`sample_floor`
+- top_ldm_bucket_blocker: `key_lineage`; submit_funnel_blocker_count=`6` submit_drought_is_ldm_bucket_blocker=`False`
 
 ## 판정
 
 - 판정: `postclose_verifier_blocked`
-- bridge_policy_emit_state: `not_emitted_no_complete_lifecycle_flow`, promotion_window: `mtd`, verifier_status: `fail`, lifecycle_bucket_windows_status: `pass`.
+- bridge_policy_emit_state: `not_emitted_no_live_auto_ready_lifecycle_flow`, promotion_window: `mtd`, verifier_status: `fail`, lifecycle_bucket_windows_status: `pass`.
 - 근거: LDM `sim_auto_approved=86` (`n/a`), `live_auto_apply_ready=0` (`n/a`), swing sim-auto `0` (`n/a`).
 - 실현손익 해석: `real_pnl_is_tuning_performance=false` (post_apply_attribution_not_ready:pending_applied_cohort).
 - 다음 액션: 내일은 `live_auto_apply_ready`, `post_apply_attribution`, `pending_future_quote_count`, selected workorder backlog만 먼저 본다.
@@ -19,7 +27,7 @@
 
 - Live-ready split: daily_discovery `0`, promotion_window `0`, bridge_ready `0`.
 - Parent bucket: daily parent_granularity_status `43`/`target_pass`, mtd `43`/`target_pass`, absorbed_sample `2303`, conflict_children `2`.
-- Bridge/verifier: greenfield_policy_emit_state `not_emitted_no_complete_lifecycle_flow`, promotion_contract_passed `True`, verifier_status `fail`, verifier_missing `[]`, handoff_warnings `["swing_active_arm_priority_runtime_observation_missing"]`.
+- Bridge/verifier: greenfield_policy_emit_state `not_emitted_no_live_auto_ready_lifecycle_flow`, greenfield_policy_emit_blocker `no_live_auto_ready_lifecycle_flow`, promotion_contract_passed `True`, verifier_status `fail`, verifier_missing `[]`, handoff_warnings `["swing_active_arm_priority_runtime_observation_missing"]`.
 - Runtime gap audit: status `pass`, directives `0`, source_dimension_gap `94`, quiet_gap `212`, quiet_gap_directives `0`.
 - Source freshness: status `pass`, stale_pairs `0`, warning `-`.
 - Lifecycle bucket: candidates `434` (`n/a`), surfaced `148` (`n/a`), sim-auto `86` (`n/a`), live-ready `0` (`n/a`).
@@ -52,6 +60,7 @@
 
 ## Source
 
+- observation_source_quality_audit: `/home/ubuntu/KORStockScan/data/report/observation_source_quality_audit/observation_source_quality_audit_2026-06-04.json` exists=true json_valid=true
 - threshold_cycle_ev: `/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-06-04.json` exists=true json_valid=true
 - runtime_approval_summary: `/home/ubuntu/KORStockScan/data/report/runtime_approval_summary/runtime_approval_summary_2026-06-04.json` exists=true json_valid=true
 - runtime_apply_bridge: `/home/ubuntu/KORStockScan/data/report/runtime_apply_bridge/runtime_apply_bridge_2026-06-04.json` exists=true json_valid=true

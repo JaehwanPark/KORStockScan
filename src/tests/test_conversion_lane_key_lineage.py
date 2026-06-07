@@ -202,7 +202,28 @@ def test_key_lineage_marks_new_postclose_candidates_not_due_when_runtime_uses_pr
 ):
     _patch_dirs(monkeypatch, tmp_path)
     target = "2026-06-05"
-    _write(tmp_path / "report" / "lifecycle_bucket_discovery" / f"lifecycle_bucket_discovery_{target}.json", {})
+    _write(
+        tmp_path / "report" / "lifecycle_bucket_discovery" / f"lifecycle_bucket_discovery_{target}.json",
+        {
+            "surfaced_candidates": [
+                {
+                    "bucket_id": "lifecycle_flow:known_shortfall",
+                    "source_bucket_id": "lifecycle_flow:known_shortfall:abc",
+                    "classification_state": "lifecycle_flow_sim_probe_candidate",
+                    "source_quality_adjusted_ev_pct": 0.5,
+                    "sample": 1,
+                    "sample_floor": 10,
+                },
+                {
+                    "bucket_id": "lifecycle_flow:unknown_floor",
+                    "source_bucket_id": "lifecycle_flow:unknown_floor:abc",
+                    "classification_state": "lifecycle_flow_sim_probe_candidate",
+                    "source_quality_adjusted_ev_pct": 0.5,
+                    "sample": 0,
+                },
+            ]
+        },
+    )
     _write(tmp_path / "threshold_cycle" / "scalp_sim_policies" / "scalp_sim_policy_catalog_2026-06-04.json", {})
     _write(tmp_path / "threshold_cycle" / "swing_sim_policies" / "swing_sim_policy_catalog_2026-06-04.json", {})
     _write(
@@ -224,6 +245,12 @@ def test_key_lineage_marks_new_postclose_candidates_not_due_when_runtime_uses_pr
     assert report["summary"]["postclose_candidate_source_date"] == target
     assert report["summary"]["runtime_policy_matches_postclose_candidate_source"] is False
     assert report["summary"]["new_postclose_candidates_due_state"] == "not_due_until_next_preopen"
+    assert report["summary"]["positive_ev_sample_floor_blocked_count"] == 1
+    assert report["summary"]["positive_ev_sample_floor_unknown_floor_count"] == 1
+    assert report["summary"]["positive_ev_sample_floor_related_count"] == 2
+    assert report["summary"]["positive_ev_sample_floor_count_scope"] == "lineage_rows"
+    assert report["summary"]["positive_ev_sample_floor_window_policy"] == "source_report_window"
+    assert report["summary"]["positive_ev_sample_floor_basis"] == "lineage_evidence_sample_vs_sample_floor"
 
 
 def test_key_lineage_keeps_explicit_zero_primary_ev_non_positive(monkeypatch, tmp_path):
@@ -311,11 +338,17 @@ def test_conversion_lane_adds_runtime_observed_matched_bucket_to_real_queue(monk
     assert report["summary"]["real_conversion_queue_count"] == 1
     assert report["summary"]["positive_ev_runtime_observed_count"] == 1
     assert report["summary"]["positive_ev_real_conversion_queue_count"] == 1
-    assert report["summary"]["positive_ev_sample_floor_blocked_count"] == 1
+    assert report["summary"]["positive_ev_sample_floor_blocked_count"] == 0
+    assert report["summary"]["positive_ev_sample_floor_unknown_floor_count"] == 1
+    assert report["summary"]["positive_ev_sample_floor_related_count"] == 1
+    assert report["summary"]["conversion_candidate_strategy_scope_counts"]["scalp"] == 1
+    assert report["summary"]["unscoped_conversion_candidate_count"] == 0
+    assert report["summary"]["conversion_blocker_count"] == 1
     assert report["real_conversion_queue"][0]["conversion_state"] == "runtime_observed"
     assert report["real_conversion_queue"][0]["runtime_observation_scope"] == "previous_preopen_policy_runtime_observed"
     assert report["real_conversion_queue"][0]["positive_ev_candidate"] is True
-    assert report["real_conversion_queue"][0]["sample_floor_blocked"] is True
+    assert report["real_conversion_queue"][0]["sample_floor_blocked"] is False
+    assert report["real_conversion_queue"][0]["sample_floor_unknown_floor"] is True
 
 
 def test_conversion_lane_merges_lineage_match_into_existing_lifecycle_candidate(monkeypatch, tmp_path):
@@ -396,6 +429,8 @@ def test_conversion_lane_does_not_count_non_positive_ev_as_positive(monkeypatch,
 
     assert report["summary"]["real_conversion_queue_count"] == 0
     assert report["summary"]["positive_ev_runtime_observed_count"] == 0
+    assert report["summary"]["top_blocker_ranked_class"] == "sample_floor"
+    assert report["summary"]["top_blocker_by_count_class"] == "sample_floor"
     assert report["summary"]["positive_ev_real_conversion_queue_count"] == 0
 
 
@@ -506,8 +541,159 @@ def test_conversion_lane_marks_new_positive_postclose_candidate_not_due_until_ne
     assert candidate["runtime_observed_same_key"] is False
     assert candidate["runtime_observation_scope"] == "new_postclose_candidate_not_due_until_next_preopen"
     assert candidate["sample_floor_status"] == "pass"
+    assert candidate["sample_floor_blocked"] is False
+    assert candidate["sample_floor_unknown_floor"] is False
     assert report["summary"]["positive_ev_not_due_until_next_preopen_count"] == 1
     assert report["summary"]["positive_ev_runtime_observed_count"] == 0
+    assert report["summary"]["positive_ev_sample_floor_blocked_count"] == 0
+    assert report["summary"]["positive_ev_sample_floor_unknown_floor_count"] == 0
+
+
+def test_conversion_lane_counts_known_positive_sample_floor_shortfall(monkeypatch, tmp_path):
+    _patch_dirs(monkeypatch, tmp_path)
+    target = "2026-06-05"
+    _write(
+        tmp_path / "report" / "key_lineage_ledger" / f"key_lineage_ledger_{target}.json",
+        {"summary": {"lineage_blocker_count": 0}, "lineage_rows": [], "lineage_blockers": []},
+    )
+    _write(
+        tmp_path / "report" / "lifecycle_bucket_discovery" / f"lifecycle_bucket_discovery_{target}.json",
+        {
+            "surfaced_candidates": [
+                {
+                    "bucket_id": "lifecycle_flow:thin_positive",
+                    "source_bucket_id": "lifecycle_flow:thin_positive:abc",
+                    "classification_state": "lifecycle_flow_sim_probe_candidate",
+                    "source_quality_adjusted_ev_pct": 0.5,
+                    "sample": 1,
+                    "sample_floor": 10,
+                }
+            ]
+        },
+    )
+
+    report = lane.build_conversion_lane(target)
+    candidate = report["conversion_candidates"][0]
+
+    assert candidate["required_sample"] == 10
+    assert candidate["sample_floor_status"] == "below_floor"
+    assert candidate["sample_floor_blocked"] is True
+    assert candidate["sample_floor_unknown_floor"] is False
+    assert report["summary"]["positive_ev_sample_floor_blocked_count"] == 1
+    assert report["summary"]["positive_ev_sample_floor_unknown_floor_count"] == 0
+    assert report["summary"]["positive_ev_sample_floor_related_count"] == 1
+    assert report["summary"]["positive_ev_sample_floor_count_scope"] == "conversion_candidates"
+    assert report["summary"]["positive_ev_sample_floor_window_policy"] == "source_report_window"
+    assert report["summary"]["positive_ev_sample_floor_basis"] == "candidate_sample_vs_required_sample"
+
+
+def test_conversion_lane_marks_mixed_sample_floor_windows(monkeypatch, tmp_path):
+    _patch_dirs(monkeypatch, tmp_path)
+    target = "2026-06-05"
+    _write(
+        tmp_path / "report" / "key_lineage_ledger" / f"key_lineage_ledger_{target}.json",
+        {"summary": {"lineage_blocker_count": 0}, "lineage_rows": [], "lineage_blockers": []},
+    )
+    _write(
+        tmp_path / "report" / "lifecycle_bucket_discovery" / f"lifecycle_bucket_discovery_{target}.json",
+        {
+            "summary": {"source_window_policy": "scalp_daily_window"},
+            "surfaced_candidates": [
+                {
+                    "bucket_id": "scalp:thin_positive",
+                    "source_bucket_id": "scalp:thin_positive:abc",
+                    "classification_state": "lifecycle_flow_sim_probe_candidate",
+                    "source_quality_adjusted_ev_pct": 0.5,
+                    "sample": 1,
+                    "sample_floor": 10,
+                }
+            ],
+        },
+    )
+    _write(
+        tmp_path / "report" / "swing_lifecycle_bucket_discovery" / f"swing_lifecycle_bucket_discovery_{target}.json",
+        {
+            "summary": {"source_window_policy": "swing_rolling_window"},
+            "surfaced_candidates": [
+                {
+                    "bucket_id": "swing:thin_positive",
+                    "source_bucket_id": "swing:thin_positive:abc",
+                    "classification_state": "lifecycle_flow_sim_probe_candidate",
+                    "source_quality_adjusted_ev_pct": 0.8,
+                    "sample": 1,
+                    "sample_floor": 10,
+                }
+            ],
+        },
+    )
+
+    report = lane.build_conversion_lane(target)
+
+    assert report["summary"]["positive_ev_sample_floor_blocked_count"] == 2
+    assert report["summary"]["positive_ev_sample_floor_window_policy"] == "mixed_source_windows"
+    assert report["summary"]["positive_ev_sample_floor_window_policy_counts"] == {
+        "scalp_daily_window": 1,
+        "swing_rolling_window": 1,
+    }
+    markdown = lane._render_markdown(report)
+    assert "window_counts=`{'scalp_daily_window': 1, 'swing_rolling_window': 1}`" in markdown
+
+
+def test_key_lineage_marks_mixed_sample_floor_windows(monkeypatch, tmp_path):
+    _patch_dirs(monkeypatch, tmp_path)
+    target = "2026-06-05"
+    _write(
+        tmp_path / "report" / "lifecycle_bucket_discovery" / f"lifecycle_bucket_discovery_{target}.json",
+        {"summary": {"source_window_policy": "scalp_daily_window"}},
+    )
+    _write(
+        tmp_path / "threshold_cycle" / "scalp_sim_policies" / "scalp_sim_policy_catalog_2026-06-04.json",
+        {"hypothesis_observation_plan": {"hypotheses": [{"hypothesis_id": "hypothesis_a"}]}},
+    )
+    _write(tmp_path / "threshold_cycle" / "swing_sim_policies" / "swing_sim_policy_catalog_2026-06-04.json", {})
+    _write(
+        tmp_path / "threshold_cycle" / "apply_plans" / f"threshold_apply_{target}.json",
+        {
+            "source_date": "2026-06-04",
+            "scalp_sim_auto_approval": {
+                "catalog": str(tmp_path / "threshold_cycle" / "scalp_sim_policies" / "scalp_sim_policy_catalog_2026-06-04.json")
+            },
+            "swing_sim_auto_approval": {
+                "catalog": str(tmp_path / "threshold_cycle" / "swing_sim_policies" / "swing_sim_policy_catalog_2026-06-04.json")
+            },
+        },
+    )
+    _write(
+        tmp_path / "report" / "lifecycle_bucket_discovery" / f"lifecycle_bucket_discovery_{target}.json",
+        {
+            "summary": {"source_window_policy": "scalp_daily_window"},
+            "surfaced_candidates": [
+                {
+                    "bucket_id": "bucket_a",
+                    "source_bucket_id": "bucket_a:source",
+                    "classification_state": "lifecycle_flow_sim_probe_candidate",
+                    "source_quality_adjusted_ev_pct": 0.6,
+                    "sample": 1,
+                    "sample_floor": 10,
+                },
+                {
+                    "bucket_id": "bucket_b",
+                    "source_bucket_id": "bucket_b:source",
+                    "classification_state": "lifecycle_flow_sim_probe_candidate",
+                    "source_quality_adjusted_ev_pct": 0.7,
+                    "sample": 1,
+                    "sample_floor": 10,
+                    "sample_floor_window_policy": "bucket_custom_window",
+                },
+            ],
+        },
+    )
+
+    report = ledger.build_key_lineage_ledger(target)
+
+    assert report["summary"]["positive_ev_sample_floor_window_policy"] == "mixed_source_windows"
+    assert report["summary"]["positive_ev_sample_floor_window_policy_counts"]["scalp_daily_window"] == 1
+    assert report["summary"]["positive_ev_sample_floor_window_policy_counts"]["bucket_custom_window"] == 1
 
 
 def test_conversion_blocker_class_ignores_source_key_field_names():

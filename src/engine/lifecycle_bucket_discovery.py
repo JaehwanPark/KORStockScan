@@ -1651,7 +1651,15 @@ def _build_active_sim_priority_seeds(report: dict[str, Any]) -> list[dict[str, A
         ev = _safe_float(parent.get("parent_source_quality_adjusted_ev_pct"), None)
         complete_flow_count = _safe_int(parent.get("complete_flow_count"))
         floor_pass = bool(parent.get("parent_granularity_floor_passed"))
-        eligible = bool(observable_prefix) and ev is not None and ev > 0 and complete_flow_count > 0 and floor_pass
+        eligible = bool(observable_prefix) and ev is not None and ev > 0 and floor_pass
+        live_conversion_blocked_reason = "incomplete_lifecycle_flow" if complete_flow_count <= 0 else ""
+        active_collection_reason = (
+            "positive_ev_parent_needs_sim_collection"
+            if eligible and live_conversion_blocked_reason
+            else "positive_ev_parent_active_sim_collection"
+            if eligible
+            else ""
+        )
         previous = previous_by_parent.get(parent_id, {})
         previous_prefix = previous.get("observable_prefix") if isinstance(previous.get("observable_prefix"), dict) else {}
         effective_prefix = observable_prefix or previous_prefix
@@ -1685,6 +1693,8 @@ def _build_active_sim_priority_seeds(report: dict[str, Any]) -> list[dict[str, A
             "parent_ev_pct": ev,
             "parent_joined_sample": parent.get("parent_joined_sample"),
             "complete_flow_count": complete_flow_count,
+            "active_collection_reason": active_collection_reason,
+            "live_conversion_blocked_reason": live_conversion_blocked_reason,
             "ldm_refinement_pressure_summary": {
                 "input_count": len(ldm_pressure_items),
                 "closure_counts": dict(sorted(ldm_pressure_counts.items())),
@@ -1712,6 +1722,8 @@ def _build_active_sim_priority_seeds(report: dict[str, Any]) -> list[dict[str, A
             "broker_order_forbidden": True,
             "retired_reason": "consecutive_fail_or_nonpositive_ev" if status == "retired" else "",
         }
+        if has_previous and status == "active" and not eligible:
+            seed["active_collection_reason"] = "previous_active_first_fail_grace"
         if seed["active_seed_id"] and effective_prefix:
             seeds.append(seed)
     for parent_id, previous in previous_by_parent.items():
@@ -1746,6 +1758,39 @@ def _build_active_sim_priority_seeds(report: dict[str, Any]) -> list[dict[str, A
             str(item.get("active_seed_id") or ""),
         ),
     )
+
+
+def _active_sim_priority_diagnostics(report: dict[str, Any], seeds: list[dict[str, Any]]) -> dict[str, int]:
+    eligible_count = 0
+    blocked_nonpositive_ev_count = 0
+    blocked_observable_prefix_count = 0
+    for parent in report.get("parent_bucket_summaries") or []:
+        if not isinstance(parent, dict):
+            continue
+        dimensions = parent.get("dimension_filters") if isinstance(parent.get("dimension_filters"), dict) else {}
+        observable_prefix = _observable_prefix_for_parent(dimensions)
+        ev = _safe_float(parent.get("parent_source_quality_adjusted_ev_pct"), None)
+        floor_pass = bool(parent.get("parent_granularity_floor_passed"))
+        if not observable_prefix:
+            blocked_observable_prefix_count += 1
+        if ev is None or ev <= 0:
+            blocked_nonpositive_ev_count += 1
+        if observable_prefix and ev is not None and ev > 0 and floor_pass:
+            eligible_count += 1
+    live_conversion_blocked_incomplete_flow_count = sum(
+        1
+        for seed in seeds
+        if str(seed.get("status") or "") == "active"
+        and str(seed.get("live_conversion_blocked_reason") or "") == "incomplete_lifecycle_flow"
+    )
+    return {
+        "active_sim_priority_eligible_count": eligible_count,
+        "active_sim_priority_blocked_nonpositive_ev_count": blocked_nonpositive_ev_count,
+        "active_sim_priority_blocked_observable_prefix_count": blocked_observable_prefix_count,
+        "active_sim_priority_live_conversion_blocked_incomplete_flow_count": (
+            live_conversion_blocked_incomplete_flow_count
+        ),
+    }
 
 
 def _parent_granularity_status(parent_count: int) -> str:
@@ -2074,6 +2119,7 @@ def _apply_lifecycle_flow_parent_absorption(report: dict[str, Any], candidates: 
     summary["active_sim_priority_seed_count"] = len(active_seeds)
     summary["active_sim_priority_seed_status_counts"] = dict(sorted(active_seed_counts.items()))
     summary["active_sim_priority_active_seed_count"] = active_seed_counts.get("active", 0)
+    summary.update(_active_sim_priority_diagnostics(report, active_seeds))
     report["summary"] = summary
 
 

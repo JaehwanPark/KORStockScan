@@ -161,7 +161,7 @@
 
 ## Pattern Lab Audits
 - currentness: status=`pass` fail=`0` orders=`0` artifact=`/home/ubuntu/KORStockScan/data/report/pattern_lab_currentness_audit/pattern_lab_currentness_audit_2026-06-05.json`
-- ai_review: status=`warning` orders=`2` artifact=`/home/ubuntu/KORStockScan/data/report/pattern_lab_ai_review/pattern_lab_ai_review_2026-06-05.json`
+- ai_review: status=`pass` orders=`0` artifact=`/home/ubuntu/KORStockScan/data/report/pattern_lab_ai_review/pattern_lab_ai_review_2026-06-05.json`
 - time_window_regime_counterfactual: status=`pass` artifact=`/home/ubuntu/KORStockScan/data/report/time_window_regime_counterfactual/time_window_regime_counterfactual_2026-06-05.json`
 - producer_gap_discovery: status=`pass` orders=`0` artifact=`/home/ubuntu/KORStockScan/data/report/producer_gap_discovery/producer_gap_discovery_2026-06-05.json`
 - stage_hook_workorder_discovery: status=`pass` orders=`0` artifact=`/home/ubuntu/KORStockScan/data/report/stage_hook_workorder_discovery/stage_hook_workorder_discovery_2026-06-05.json`
@@ -178,8 +178,8 @@
 ## Code Improvement Workorder
 - artifact: `/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-06-05.json`
 - markdown: `/home/ubuntu/KORStockScan/docs/code-improvement-workorders/code_improvement_workorder_2026-06-05.md`
-- selected_order_count: `108`
-- decision_counts: `{'implement_now': 21, 'attach_existing_family': 110, 'design_family_candidate': 4, 'defer_evidence': 6, 'reject': 2}`
+- selected_order_count: `106`
+- decision_counts: `{'attach_existing_family': 129, 'design_family_candidate': 4, 'defer_evidence': 5, 'reject': 2}`
 
 ## Approval Requests
 - `position_sizing_cap_release` sample=`52/30` reason=`window_policy primary=rolling_10d 기준 재평가: 1주 cap 해제 efficient trade-off 기준 충족(score=0.17/0.70): 자동 적용하지 않고 사용자 승인 요청 artifact로만 승격한다.` contract=`final_user_approval_required` live_ready=`False`
@@ -189,9 +189,9 @@
 
 ## Calibration Decisions
 ## Code Improvement Top Orders
-- `order_conversion_lane_submit_drought_submit_drought_broker_receipt` decision=`implement_now` subsystem=`sim_to_real_conversion_lineage`
-- `order_observation_source_quality_unknown_token_provenance_gap` decision=`implement_now` subsystem=`runtime_instrumentation`
-- `order_conversion_lane_submit_drought_submit_drought_budget_pass_collapse` decision=`implement_now` subsystem=`sim_to_real_conversion_lineage`
+- `order_entry_submit_drought_auto_resolution` decision=`attach_existing_family` subsystem=`runtime_instrumentation`
+- `order_ai_threshold_dominance` decision=`attach_existing_family` subsystem=`entry_funnel`
+- `order_conversion_lane_submit_drought_submit_drought_broker_receipt` decision=`attach_existing_family` subsystem=`sim_to_real_conversion_lineage`
 
 ## Pattern Lab Top Findings
 - `AI threshold dominance` route=`existing_family` family=`score65_74_recovery_probe`
@@ -222,5 +222,3 @@
 - `swing_strategy_discovery:clean_tuning_baseline_swing_discovery_lookback_filtered`
 - `swing_lifecycle_decision_matrix:pending_future_quotes`
 - `swing_lifecycle_decision_matrix:clean_tuning_baseline_swing_discovery_lookback_filtered`
-- `pattern_lab_ai_review_warning`
-- `pattern_lab_ai_review_ai_review_followup_required`

@@ -21,6 +21,10 @@ SCALP_SIM_AUTO_APPROVAL_DIR = DATA_DIR / "threshold_cycle" / "sim_auto_approvals
 SCALP_SIM_POLICY_DIR = DATA_DIR / "threshold_cycle" / "scalp_sim_policies"
 
 SOURCE_SPECS: dict[str, tuple[Path, str]] = {
+    "observation_source_quality_audit": (
+        REPORT_ROOT_DIR / "observation_source_quality_audit",
+        "observation_source_quality_audit",
+    ),
     "threshold_cycle_ev": (REPORT_ROOT_DIR / "threshold_cycle_ev", "threshold_cycle_ev"),
     "runtime_approval_summary": (REPORT_ROOT_DIR / "runtime_approval_summary", "runtime_approval_summary"),
     "runtime_apply_bridge": (REPORT_ROOT_DIR / "runtime_apply_bridge", "runtime_apply_bridge"),
@@ -408,6 +412,27 @@ def _conversion_first_summary(conversion_lane: dict[str, Any], key_lineage_ledge
     sim_priority_only = conversion_lane.get("sim_priority_only")
     if not isinstance(sim_priority_only, list):
         sim_priority_only = []
+    if "positive_ev_sample_floor_blocked_count" in conversion_summary:
+        conversion_positive_sample_floor = _safe_int(conversion_summary.get("positive_ev_sample_floor_blocked_count"))
+    else:
+        conversion_positive_sample_floor = _safe_int(lineage_summary.get("positive_ev_sample_floor_blocked_count"))
+    conversion_positive_unknown_floor = _safe_int(
+        conversion_summary.get("positive_ev_sample_floor_unknown_floor_count")
+    )
+    conversion_positive_floor_related = _safe_int(
+        conversion_summary.get("positive_ev_sample_floor_related_count")
+    )
+    lineage_positive_sample_floor = _safe_int(lineage_summary.get("positive_ev_sample_floor_blocked_count"))
+    conversion_sample_floor_count_scope = ""
+    if conversion_summary:
+        conversion_sample_floor_count_scope = (
+            conversion_summary.get("positive_ev_sample_floor_count_scope") or "conversion_candidates"
+        )
+    lineage_sample_floor_count_scope = ""
+    if lineage_summary:
+        lineage_sample_floor_count_scope = (
+            lineage_summary.get("positive_ev_sample_floor_count_scope") or "lineage_rows"
+        )
     return {
         "top_conversion_candidates": queue[:10],
         "top_conversion_blockers": blockers[:10],
@@ -443,8 +468,38 @@ def _conversion_first_summary(conversion_lane: dict[str, Any], key_lineage_ledge
             conversion_summary.get("positive_ev_real_conversion_queue_count")
         ),
         "positive_ev_sample_floor_blocked_count": _safe_int(
-            conversion_summary.get("positive_ev_sample_floor_blocked_count")
-            or lineage_summary.get("positive_ev_sample_floor_blocked_count")
+            conversion_positive_sample_floor
+        ),
+        "positive_ev_sample_floor_unknown_floor_count": conversion_positive_unknown_floor,
+        "positive_ev_sample_floor_related_count": conversion_positive_floor_related,
+        "conversion_lane_positive_ev_sample_floor_blocked_count": conversion_positive_sample_floor,
+        "key_lineage_positive_ev_sample_floor_blocked_count": lineage_positive_sample_floor,
+        "conversion_lane_positive_ev_sample_floor_count_scope": conversion_sample_floor_count_scope,
+        "key_lineage_positive_ev_sample_floor_count_scope": lineage_sample_floor_count_scope,
+        "conversion_lane_positive_ev_sample_floor_window_policy": conversion_summary.get(
+            "positive_ev_sample_floor_window_policy"
+        ),
+        "key_lineage_positive_ev_sample_floor_window_policy": lineage_summary.get(
+            "positive_ev_sample_floor_window_policy"
+        ),
+        "conversion_lane_positive_ev_sample_floor_window_policy_counts": conversion_summary.get(
+            "positive_ev_sample_floor_window_policy_counts"
+        )
+        or {},
+        "key_lineage_positive_ev_sample_floor_window_policy_counts": lineage_summary.get(
+            "positive_ev_sample_floor_window_policy_counts"
+        )
+        or {},
+        "conversion_lane_positive_ev_sample_floor_basis": conversion_summary.get(
+            "positive_ev_sample_floor_basis"
+        ),
+        "key_lineage_positive_ev_sample_floor_basis": lineage_summary.get(
+            "positive_ev_sample_floor_basis"
+        ),
+        "positive_ev_sample_floor_blocked_scope_mismatch": (
+            bool(conversion_lane)
+            and bool(key_lineage_ledger)
+            and conversion_positive_sample_floor != lineage_positive_sample_floor
         ),
         "positive_ev_not_due_until_next_preopen_count": _safe_int(
             conversion_summary.get("positive_ev_not_due_until_next_preopen_count")
@@ -466,6 +521,7 @@ def _source_freshness(payloads: dict[str, dict[str, Any]], verifier_report: dict
         "runtime_approval_summary": "runtime_approval_summary",
     }
     source_flag_by_key = {
+        "observation_source_quality_audit": "observation_source_quality_audit",
         "lifecycle_decision_matrix": "lifecycle_decision_matrix",
         "lifecycle_bucket_discovery": "lifecycle_bucket_discovery",
         "swing_lifecycle_decision_matrix": "swing_lifecycle_matrix",
@@ -643,12 +699,30 @@ def _lifecycle_bucket_window_summary(
 def _bridge_summary(bridge_report: dict[str, Any]) -> dict[str, Any]:
     summary = _summary(bridge_report)
     promotion_contract_passed = summary.get("lifecycle_bucket_promotion_contract_passed")
+    raw_emit_state = summary.get("greenfield_policy_emit_state")
+    emit_state = raw_emit_state
+    greenfield_flow_exists = (
+        _safe_int(summary.get("greenfield_lifecycle_flow_candidate_count")) > 0
+        or _safe_int(summary.get("greenfield_lifecycle_flow_surfaced_candidate_count")) > 0
+    )
+    if (
+        raw_emit_state == "not_emitted_no_complete_lifecycle_flow"
+        and (
+            summary.get("greenfield_policy_emit_blocker") == "no_live_auto_ready_lifecycle_flow"
+            or (
+                greenfield_flow_exists
+                and _safe_int(summary.get("greenfield_lifecycle_flow_live_auto_apply_candidate_count")) <= 0
+            )
+        )
+    ):
+        emit_state = "not_emitted_no_live_auto_ready_lifecycle_flow"
     return {
         "status": bridge_report.get("status"),
         "candidate_count": _safe_int(summary.get("candidate_count")),
         "live_auto_apply_ready_count": _safe_int(summary.get("live_auto_apply_ready_count")),
         "greenfield_real_env_ready_count": _safe_int(summary.get("greenfield_real_env_ready_count")),
-        "greenfield_policy_emit_state": summary.get("greenfield_policy_emit_state"),
+        "greenfield_policy_emit_state": emit_state,
+        "greenfield_policy_emit_state_raw": raw_emit_state,
         "greenfield_policy_emit_blocker": summary.get("greenfield_policy_emit_blocker"),
         "greenfield_policy_emit_blocker_detail": summary.get("greenfield_policy_emit_blocker_detail"),
         "greenfield_live_auto_ready_lifecycle_flow_count": _safe_int(
@@ -874,7 +948,20 @@ def _markdown(report: dict[str, Any]) -> str:
         f"- positive_ev_not_due_until_next_preopen: `{conversion_first.get('positive_ev_not_due_until_next_preopen_count', 0)}`",
         f"- positive_ev_previous_policy_natural_match_0: `{conversion_first.get('positive_ev_previous_policy_natural_match_0_count', 0)}`",
         f"- positive_ev_real_conversion_queue: `{conversion_first.get('positive_ev_real_conversion_queue_count', 0)}`",
-        f"- positive_ev_sample_floor_blocked: `{conversion_first.get('positive_ev_sample_floor_blocked_count', 0)}`",
+        f"- positive_ev_sample_floor_blocked_known_floor: `{conversion_first.get('positive_ev_sample_floor_blocked_count', 0)}`",
+        f"- positive_ev_sample_floor_unknown_floor: `{conversion_first.get('positive_ev_sample_floor_unknown_floor_count', 0)}`",
+        f"- positive_ev_sample_floor_related_total: `{conversion_first.get('positive_ev_sample_floor_related_count', 0)}`",
+        f"- positive_ev_sample_floor_scope: conversion_lane=`{conversion_first.get('conversion_lane_positive_ev_sample_floor_blocked_count', 0)}` "
+        f"scope=`{conversion_first.get('conversion_lane_positive_ev_sample_floor_count_scope') or '-'}` "
+        f"key_lineage=`{conversion_first.get('key_lineage_positive_ev_sample_floor_blocked_count', 0)}` "
+        f"scope=`{conversion_first.get('key_lineage_positive_ev_sample_floor_count_scope') or '-'}` "
+        f"mismatch=`{conversion_first.get('positive_ev_sample_floor_blocked_scope_mismatch')}`",
+        f"- positive_ev_sample_floor_window: conversion_lane=`{conversion_first.get('conversion_lane_positive_ev_sample_floor_window_policy') or '-'}` "
+        f"counts=`{conversion_first.get('conversion_lane_positive_ev_sample_floor_window_policy_counts') or {}}` "
+        f"key_lineage=`{conversion_first.get('key_lineage_positive_ev_sample_floor_window_policy') or '-'}` "
+        f"counts=`{conversion_first.get('key_lineage_positive_ev_sample_floor_window_policy_counts') or {}}`",
+        f"- positive_ev_sample_floor_basis: conversion_lane=`{conversion_first.get('conversion_lane_positive_ev_sample_floor_basis') or '-'}` "
+        f"key_lineage=`{conversion_first.get('key_lineage_positive_ev_sample_floor_basis') or '-'}`",
         f"- sim_priority_only: `{conversion_first.get('sim_priority_only_count', 0)}`",
         f"- observation_scope: runtime_policy_source_date=`{lineage_status.get('runtime_policy_source_date') or '-'}` "
         f"postclose_candidate_source_date=`{lineage_status.get('postclose_candidate_source_date') or '-'}` "
@@ -884,7 +971,8 @@ def _markdown(report: dict[str, Any]) -> str:
         f"catalog_missing=`{lineage_status.get('catalog_missing_count', 0)}` "
         f"preopen_missing=`{lineage_status.get('preopen_missing_count', 0)}` "
         f"not_instrumented=`{lineage_status.get('not_instrumented_count', 0)}`",
-        f"- top_blocker_overall: `{top_blockers[0].get('blocker_class') if top_blockers else 'none'}`",
+        f"- top_blocker_ranked: `{top_blockers[0].get('blocker_class') if top_blockers else 'none'}`; "
+        f"top_blocker_by_count=`{(conversion_first.get('summary') or {}).get('top_blocker_by_count_class') or 'none'}`",
         f"- top_ldm_bucket_blocker: `{conversion_first.get('top_ldm_bucket_blocker_class') or 'none'}`; "
         f"submit_funnel_blocker_count=`{conversion_first.get('submit_funnel_blocker_count', 0)}` "
         f"submit_drought_is_ldm_bucket_blocker=`{conversion_first.get('submit_drought_is_ldm_bucket_blocker')}`",
@@ -1161,6 +1249,45 @@ def build_tuning_performance_control_tower(target_date: str) -> dict[str, Any]:
             "positive_ev_runtime_observed_count": conversion_first["positive_ev_runtime_observed_count"],
             "positive_ev_real_conversion_queue_count": conversion_first["positive_ev_real_conversion_queue_count"],
             "positive_ev_sample_floor_blocked_count": conversion_first["positive_ev_sample_floor_blocked_count"],
+            "positive_ev_sample_floor_unknown_floor_count": conversion_first[
+                "positive_ev_sample_floor_unknown_floor_count"
+            ],
+            "positive_ev_sample_floor_related_count": conversion_first[
+                "positive_ev_sample_floor_related_count"
+            ],
+            "conversion_lane_positive_ev_sample_floor_blocked_count": conversion_first[
+                "conversion_lane_positive_ev_sample_floor_blocked_count"
+            ],
+            "key_lineage_positive_ev_sample_floor_blocked_count": conversion_first[
+                "key_lineage_positive_ev_sample_floor_blocked_count"
+            ],
+            "conversion_lane_positive_ev_sample_floor_count_scope": conversion_first[
+                "conversion_lane_positive_ev_sample_floor_count_scope"
+            ],
+            "key_lineage_positive_ev_sample_floor_count_scope": conversion_first[
+                "key_lineage_positive_ev_sample_floor_count_scope"
+            ],
+            "conversion_lane_positive_ev_sample_floor_window_policy": conversion_first[
+                "conversion_lane_positive_ev_sample_floor_window_policy"
+            ],
+            "key_lineage_positive_ev_sample_floor_window_policy": conversion_first[
+                "key_lineage_positive_ev_sample_floor_window_policy"
+            ],
+            "conversion_lane_positive_ev_sample_floor_window_policy_counts": conversion_first[
+                "conversion_lane_positive_ev_sample_floor_window_policy_counts"
+            ],
+            "key_lineage_positive_ev_sample_floor_window_policy_counts": conversion_first[
+                "key_lineage_positive_ev_sample_floor_window_policy_counts"
+            ],
+            "conversion_lane_positive_ev_sample_floor_basis": conversion_first[
+                "conversion_lane_positive_ev_sample_floor_basis"
+            ],
+            "key_lineage_positive_ev_sample_floor_basis": conversion_first[
+                "key_lineage_positive_ev_sample_floor_basis"
+            ],
+            "positive_ev_sample_floor_blocked_scope_mismatch": conversion_first[
+                "positive_ev_sample_floor_blocked_scope_mismatch"
+            ],
             "positive_ev_not_due_until_next_preopen_count": conversion_first[
                 "positive_ev_not_due_until_next_preopen_count"
             ],
@@ -1170,6 +1297,11 @@ def build_tuning_performance_control_tower(target_date: str) -> dict[str, Any]:
             "top_conversion_blocker_class": (
                 conversion_first["top_conversion_blockers"][0].get("blocker_class")
                 if conversion_first["top_conversion_blockers"]
+                else None
+            ),
+            "top_conversion_blocker_by_count_class": (
+                conversion_first["summary"].get("top_blocker_by_count_class")
+                if isinstance(conversion_first.get("summary"), dict)
                 else None
             ),
             "top_ldm_bucket_blocker_class": conversion_first["top_ldm_bucket_blocker_class"],

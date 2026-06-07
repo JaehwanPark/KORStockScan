@@ -4,19 +4,19 @@
 
 - status: `pass`
 - live_auto_apply_ready_count: `0`
-- greenfield_policy_emit_state: `not_emitted_no_complete_lifecycle_flow`
+- greenfield_policy_emit_state: `not_emitted_no_live_auto_ready_lifecycle_flow`
 - greenfield_policy_emit_blocker: `no_live_auto_ready_lifecycle_flow`
-- greenfield_policy_emit_blocker_detail: `complete flow may exist, but no lifecycle flow is live_auto_apply_ready for greenfield policy emission`
+- greenfield_policy_emit_blocker_detail: `lifecycle flow exists, but no lifecycle flow is live_auto_apply_ready for greenfield policy emission`
 - greenfield_lifecycle_flow live/surfaced/total: `0` / `134` / `134`
 - lifecycle_bucket_discovery_source_contract_status: `pass`
 - lifecycle_bucket_discovery_ai_review_status: `parsed`
 - lifecycle_bucket_promotion_window: `mtd`
 - lifecycle_bucket_promotion_contract_passed: `True`
 - lifecycle_bucket_discovery_live_followup_count: `0`
-- note: `not_emitted_no_complete_lifecycle_flow` is a legacy compatibility state; the blocker field states whether the actual reason is no live-auto-ready lifecycle flow.
+- note: `not_emitted_no_live_auto_ready_lifecycle_flow` means lifecycle flow exists but no greenfield live-auto-ready flow is available.
 - human_approval_required: `False`
 - runtime mutation: `none`
-- warnings: `['greenfield_policy_not_emitted_no_complete_lifecycle_flow']`
+- warnings: `['greenfield_policy_not_emitted_no_live_auto_ready_lifecycle_flow']`
 
 ## 근거
 

@@ -3,8 +3,16 @@
 ## Decision
 - conversion candidates: `396`
 - real conversion queue: `3`
+- positive EV runtime observed: `3`
+- positive EV not due until next PREOPEN: `4`
+- positive EV previous-policy natural match 0: `4`
+- positive EV real conversion queue: `3`
+- positive EV sample-floor blocked: `5`
+- conversion candidate strategy scope: scalp=`107` swing=`288` unscoped=`1`
 - bounded real canary requestable: `0`
-- top blocker: `key_lineage`
+- top blocker ranked: `key_lineage`; top blocker by count: `sample_floor`
+- top LDM bucket blocker: `key_lineage`
+- submit funnel blocker count: `6` (submit_drought_is_ldm_bucket_blocker=`False`)
 
 ## Top Conversion Blockers
 - #1 `ldm_hypothesis_00d0b765311ad7aa`: key_lineage -> hypothesis_catalog_missing

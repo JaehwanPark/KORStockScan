@@ -189,10 +189,10 @@ def test_runtime_apply_bridge_ignores_lifecycle_flow_sim_probe_candidate(tmp_pat
     assert report["summary"]["live_auto_apply_ready_count"] == 0
     assert report["summary"]["greenfield_real_env_ready_count"] == 0
     assert report["summary"]["greenfield_policy_emit_state"] == "not_emitted_no_complete_lifecycle_flow"
-    assert report["summary"]["greenfield_policy_emit_blocker"] == "no_live_auto_ready_lifecycle_flow"
+    assert report["summary"]["greenfield_policy_emit_blocker"] == "no_complete_lifecycle_flow"
     assert (
         report["summary"]["greenfield_policy_emit_blocker_detail"]
-        == "complete flow may exist, but no lifecycle flow is live_auto_apply_ready for greenfield policy emission"
+        == "no lifecycle flow candidate is available for greenfield policy emission"
     )
     assert report["summary"]["greenfield_live_auto_ready_lifecycle_flow_count"] == 0
 

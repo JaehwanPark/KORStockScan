@@ -1197,7 +1197,10 @@ def build_runtime_apply_bridge_report(target_date: str) -> dict[str, Any]:
                 warnings.append(str(greenfield.get("greenfield_policy_contract_state")))
             candidates.append(greenfield)
         elif discovery and greenfield_flow_counts["live_auto_apply_candidate_count"] <= 0:
-            warnings.append("greenfield_policy_not_emitted_no_complete_lifecycle_flow")
+            if greenfield_flow_counts["candidate_count"] > 0 or greenfield_flow_counts["surfaced_candidate_count"] > 0:
+                warnings.append("greenfield_policy_not_emitted_no_live_auto_ready_lifecycle_flow")
+            else:
+                warnings.append("greenfield_policy_not_emitted_no_complete_lifecycle_flow")
     if discovery and discovery_source_contract_status and discovery_source_contract_status != "pass":
         warnings.append(f"lifecycle_bucket_discovery_source_contract_{discovery_source_contract_status}")
     if discovery and any(item.get("lifecycle_bucket_discovery_ai_followup_required") for item in candidates):
@@ -1229,6 +1232,10 @@ def build_runtime_apply_bridge_report(target_date: str) -> dict[str, Any]:
     cumulative_confirmation_blocked = any(
         item.get("bridge_candidate_state") == "blocked_cumulative_confirmation_missing" for item in candidates
     )
+    greenfield_flow_exists = (
+        greenfield_flow_counts["candidate_count"] > 0
+        or greenfield_flow_counts["surfaced_candidate_count"] > 0
+    )
     greenfield_policy_emit_state = (
         "ready"
         if greenfield_ready_count > 0
@@ -1236,6 +1243,8 @@ def build_runtime_apply_bridge_report(target_date: str) -> dict[str, Any]:
         if greenfield_contract_gap
         else "not_emitted_cumulative_confirmation_missing"
         if cumulative_confirmation_blocked
+        else "not_emitted_no_live_auto_ready_lifecycle_flow"
+        if discovery and greenfield_flow_exists and greenfield_live_ready_flow_count <= 0
         else "not_emitted_no_complete_lifecycle_flow"
         if discovery
         else "not_emitted_discovery_missing"
@@ -1248,6 +1257,8 @@ def build_runtime_apply_bridge_report(target_date: str) -> dict[str, Any]:
         else "cumulative_confirmation_missing"
         if cumulative_confirmation_blocked
         else "no_live_auto_ready_lifecycle_flow"
+        if discovery and greenfield_flow_exists
+        else "no_complete_lifecycle_flow"
         if discovery
         else "discovery_missing"
     )
@@ -1258,7 +1269,9 @@ def build_runtime_apply_bridge_report(target_date: str) -> dict[str, Any]:
         if greenfield_contract_gap
         else "promotion window confirmation is missing for a live-auto lifecycle flow"
         if cumulative_confirmation_blocked
-        else "complete flow may exist, but no lifecycle flow is live_auto_apply_ready for greenfield policy emission"
+        else "lifecycle flow exists, but no lifecycle flow is live_auto_apply_ready for greenfield policy emission"
+        if discovery and greenfield_flow_exists
+        else "no lifecycle flow candidate is available for greenfield policy emission"
         if discovery
         else "lifecycle bucket discovery artifact is missing"
     )
@@ -1338,8 +1351,8 @@ def _write_markdown(report: dict[str, Any]) -> None:
         f"- lifecycle_bucket_promotion_window: `{report.get('summary', {}).get('lifecycle_bucket_promotion_window') or '-'}`",
         f"- lifecycle_bucket_promotion_contract_passed: `{report.get('summary', {}).get('lifecycle_bucket_promotion_contract_passed')}`",
         f"- lifecycle_bucket_discovery_live_followup_count: `{report.get('summary', {}).get('lifecycle_bucket_discovery_live_followup_count')}`",
-        "- note: `not_emitted_no_complete_lifecycle_flow` is a legacy compatibility state; "
-        "the blocker field states whether the actual reason is no live-auto-ready lifecycle flow.",
+        "- note: `not_emitted_no_live_auto_ready_lifecycle_flow` means lifecycle flow exists but no "
+        "greenfield live-auto-ready flow is available.",
         f"- human_approval_required: `{report.get('summary', {}).get('human_approval_required')}`",
         "- runtime mutation: `none`",
         f"- warnings: `{report.get('warnings') or []}`",

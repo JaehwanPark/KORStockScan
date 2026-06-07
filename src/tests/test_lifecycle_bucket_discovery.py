@@ -579,6 +579,73 @@ def test_active_sim_priority_seed_status_uses_two_day_cooldown_and_five_day_reti
     assert cooldown_missing["consecutive_missing_count"] == 1
 
 
+def test_active_sim_priority_allows_incomplete_positive_parent_for_collection(monkeypatch, tmp_path):
+    monkeypatch.setattr(mod, "REPORT_DIR", tmp_path)
+
+    seeds = mod._build_active_sim_priority_seeds(
+        {
+            "date": "2026-06-01",
+            "parent_bucket_summaries": [
+                {
+                    "source_parent_bucket_id": "parent_positive_incomplete",
+                    "parent_source_quality_adjusted_ev_pct": 1.1,
+                    "complete_flow_count": 0,
+                    "parent_granularity_floor_passed": True,
+                    "dimension_filters": {
+                        "entry_score_parent": "score_watch_recovery",
+                        "entry_source_parent": "entry_source_wait6579",
+                    },
+                }
+            ],
+        }
+    )
+
+    assert len(seeds) == 1
+    seed = seeds[0]
+    assert seed["status"] == "active"
+    assert seed["complete_flow_count"] == 0
+    assert seed["active_collection_reason"] == "positive_ev_parent_needs_sim_collection"
+    assert seed["live_conversion_blocked_reason"] == "incomplete_lifecycle_flow"
+    assert seed["runtime_effect"] is False
+    assert seed["broker_order_forbidden"] is True
+
+
+def test_active_sim_priority_summary_exposes_collection_and_live_blockers(monkeypatch, tmp_path):
+    monkeypatch.setattr(mod, "REPORT_DIR", tmp_path)
+    monkeypatch.setattr(mod, "LIFECYCLE_FLOW_PARENT_TARGET_MIN", 1)
+    candidates = [
+        mod._candidate_from_bucket(
+            "lifecycle_flow",
+            {
+                "bucket_type": "combo_lifecycle_flow",
+                "bucket_key": (
+                    "entry=entry:combo_entry_spot:"
+                    "score_score_66_69_source_wait6579_ev_cohort_stale_fresh_or_unflagged_liquidity_liquidity_unknown|"
+                    "submit=submit:combo_submit_quality:submit_missing|"
+                    "holding=holding:combo_holding_flow:holding_missing|"
+                    "scale_in=scale_in:none|"
+                    "exit=exit:combo_exit_result:exit_missing"
+                ),
+                "sample": 3,
+                "joined_sample": 3,
+                "complete_flow_count": 0,
+                "incomplete_flow_count": 3,
+                "source_quality_gate": "pass",
+                "source_quality_adjusted_ev_pct": 1.2,
+                "recommended_route": "hold_sample",
+            },
+        )
+    ]
+
+    report = mod._finalize_report({"date": "2026-06-01", "summary": {}}, candidates, [])
+
+    assert report["summary"]["active_sim_priority_eligible_count"] == 1
+    assert report["summary"]["active_sim_priority_active_seed_count"] == 1
+    assert report["summary"]["active_sim_priority_live_conversion_blocked_incomplete_flow_count"] == 1
+    assert report["summary"]["parent_live_auto_apply_ready_count"] == 0
+    assert report["active_sim_priority_seeds"][0]["live_conversion_blocked_reason"] == "incomplete_lifecycle_flow"
+
+
 def test_lifecycle_bucket_discovery_summarizes_quiet_gaps():
     report = {
         "ai_two_pass_review": {

@@ -7,17 +7,22 @@
 - positive_ev_not_due_until_next_preopen: `26`
 - positive_ev_previous_policy_natural_match_0: `4`
 - positive_ev_real_conversion_queue: `0`
-- positive_ev_sample_floor_blocked: `15`
+- positive_ev_sample_floor_blocked_known_floor: `4`
+- positive_ev_sample_floor_unknown_floor: `11`
+- positive_ev_sample_floor_related_total: `15`
+- positive_ev_sample_floor_scope: conversion_lane=`4` scope=`conversion_candidates` key_lineage=`7` scope=`lineage_rows` mismatch=`True`
+- positive_ev_sample_floor_window: conversion_lane=`mixed_source_windows` counts=`{'same_day_source_bundle_plus_rolling_threshold_cycle_consumer': 4, 'source_report_window': 11}` key_lineage=`same_day_source_bundle_plus_rolling_threshold_cycle_consumer` counts=`{'same_day_source_bundle_plus_rolling_threshold_cycle_consumer': 14}`
+- positive_ev_sample_floor_basis: conversion_lane=`candidate_sample_vs_required_sample` key_lineage=`lineage_evidence_sample_vs_sample_floor`
 - sim_priority_only: `31`
-- observation_scope: runtime_policy_source_date=`-` postclose_candidate_source_date=`-` new_postclose_candidates_due_state=`-`
+- observation_scope: runtime_policy_source_date=`2026-06-04` postclose_candidate_source_date=`2026-06-05` new_postclose_candidates_due_state=`not_due_until_next_preopen`
 - key_lineage: pass=`3` mismatch=`0` catalog_missing=`0` preopen_missing=`0` not_instrumented=`0`
-- top_blocker_overall: `submit_drought`
+- top_blocker_ranked: `submit_drought`; top_blocker_by_count=`sample_floor`
 - top_ldm_bucket_blocker: `env_mapping`; submit_funnel_blocker_count=`6` submit_drought_is_ldm_bucket_blocker=`False`
 
 ## 판정
 
 - 판정: `sim_progress_no_live_bucket`
-- bridge_policy_emit_state: `not_emitted_no_complete_lifecycle_flow`, promotion_window: `mtd`, verifier_status: `pass`, lifecycle_bucket_windows_status: `pass`.
+- bridge_policy_emit_state: `not_emitted_no_live_auto_ready_lifecycle_flow`, promotion_window: `mtd`, verifier_status: `pass`, lifecycle_bucket_windows_status: `pass`.
 - 근거: LDM `sim_auto_approved=165` (`+79`), `live_auto_apply_ready=0` (`+0`), swing sim-auto `0` (`+0`).
 - 실현손익 해석: `real_pnl_is_tuning_performance=false` (post_apply_attribution_not_ready:pending_applied_cohort).
 - 다음 액션: 내일은 `live_auto_apply_ready`, `post_apply_attribution`, `pending_future_quote_count`, selected workorder backlog만 먼저 본다.
@@ -26,7 +31,7 @@
 
 - Live-ready split: daily_discovery `0`, promotion_window `0`, bridge_ready `0`.
 - Parent bucket: daily parent_granularity_status `34`/`target_pass`, mtd `48`/`target_pass`, absorbed_sample `14597`, conflict_children `7`.
-- Bridge/verifier: greenfield_policy_emit_state `not_emitted_no_complete_lifecycle_flow`, greenfield_policy_emit_blocker `no_live_auto_ready_lifecycle_flow`, promotion_contract_passed `True`, verifier_status `pass`, verifier_missing `[]`, handoff_warnings `[]`.
+- Bridge/verifier: greenfield_policy_emit_state `not_emitted_no_live_auto_ready_lifecycle_flow`, greenfield_policy_emit_blocker `no_live_auto_ready_lifecycle_flow`, promotion_contract_passed `True`, verifier_status `pass`, verifier_missing `[]`, handoff_warnings `[]`.
 - Runtime gap audit: status `pass`, directives `0`, source_dimension_gap `46`, quiet_gap `199`, quiet_gap_directives `0`.
 - Source freshness: status `pass`, stale_pairs `0`, warning `-`.
 - Lifecycle bucket: candidates `500` (`+66`), surfaced `255` (`+107`), sim-auto `165` (`+79`), live-ready `0` (`+0`).
@@ -44,7 +49,7 @@
 - Daily completed trades `1`, win-rate `0.0`, avg profit pct `-2.52`, realized PnL KRW `-3184`.
 - Real split sample `38`, avg `-0.5997`, win-rate `0.5`.
 - Sim split sample `888`, avg `-1.1644`, win-rate `0.2646`.
-- EV warnings: `scalp_entry_adm:unknown_bucket_source_quality_gap, swing_strategy_discovery:pending_future_quotes, swing_strategy_discovery:sample_floor_not_met, swing_strategy_discovery:clean_tuning_baseline_swing_discovery_lookback_filtered, swing_lifecycle_decision_matrix:pending_future_quotes, swing_lifecycle_decision_matrix:clean_tuning_baseline_swing_discovery_lookback_filtered, pattern_lab_ai_review_warning, pattern_lab_ai_review_ai_review_followup_required`.
+- EV warnings: `scalp_entry_adm:unknown_bucket_source_quality_gap, swing_strategy_discovery:pending_future_quotes, swing_strategy_discovery:sample_floor_not_met, swing_strategy_discovery:clean_tuning_baseline_swing_discovery_lookback_filtered, swing_lifecycle_decision_matrix:pending_future_quotes, swing_lifecycle_decision_matrix:clean_tuning_baseline_swing_discovery_lookback_filtered`.
 
 ## Workorder
 
@@ -55,10 +60,11 @@
 ## Runtime Summary
 
 - runtime mutation allowed `false`; scalping selected auto-bounded-live `1`.
-- pattern lab currentness `pass`, AI review `warning`, propagation `pass`, producer gap `pass`.
+- pattern lab currentness `pass`, AI review `pass`, propagation `pass`, producer gap `pass`.
 
 ## Source
 
+- observation_source_quality_audit: `/home/ubuntu/KORStockScan/data/report/observation_source_quality_audit/observation_source_quality_audit_2026-06-05.json` exists=true json_valid=true
 - threshold_cycle_ev: `/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-06-05.json` exists=true json_valid=true
 - runtime_approval_summary: `/home/ubuntu/KORStockScan/data/report/runtime_approval_summary/runtime_approval_summary_2026-06-05.json` exists=true json_valid=true
 - runtime_apply_bridge: `/home/ubuntu/KORStockScan/data/report/runtime_apply_bridge/runtime_apply_bridge_2026-06-05.json` exists=true json_valid=true

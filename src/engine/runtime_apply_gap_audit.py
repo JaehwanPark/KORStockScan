@@ -344,7 +344,9 @@ def _derived_review_labels(row: dict[str, Any]) -> tuple[str, str]:
         return "runtime_blocked_contract_gap", "lifecycle_flow_incomplete_stage_contract"
     if exclusion_reason in {
         "greenfield_policy_not_emitted_no_complete_lifecycle_flow",
+        "greenfield_policy_not_emitted_no_live_auto_ready_lifecycle_flow",
         "not_emitted_no_complete_lifecycle_flow",
+        "not_emitted_no_live_auto_ready_lifecycle_flow",
     }:
         return "source_only_keep_collecting", "greenfield_policy_not_emitted"
     if disposition == "tier2_fail_closed":

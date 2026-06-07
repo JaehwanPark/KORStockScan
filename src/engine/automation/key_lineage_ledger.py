@@ -276,6 +276,14 @@ def _row(
     primary_ev = _safe_float(raw_primary_ev)
     runtime_observed_same_key = same_key_continuity == "pass"
     positive_ev_candidate = bool(primary_ev is not None and primary_ev > 0)
+    sample = _safe_float(evidence.get("sample"), 0.0) or 0.0
+    required_sample = _safe_float(
+        evidence.get("parent_sample_floor") or evidence.get("sample_floor"),
+        0.0,
+    ) or 0.0
+    sample_floor_related = next_blocker == "sample_floor"
+    sample_floor_blocked = sample_floor_related and required_sample > 0 and sample < required_sample
+    sample_floor_unknown_floor = sample_floor_related and required_sample <= 0
     return {
         "source_key_id": source_key_id,
         "source_key_type": source_key_type,
@@ -289,7 +297,8 @@ def _row(
         "next_blocker": next_blocker,
         "positive_ev_candidate": positive_ev_candidate,
         "runtime_observed_same_key": runtime_observed_same_key,
-        "sample_floor_blocked": next_blocker == "sample_floor",
+        "sample_floor_blocked": sample_floor_blocked,
+        "sample_floor_unknown_floor": sample_floor_unknown_floor,
         "evidence": evidence,
     }
 
@@ -453,6 +462,11 @@ def _hypothesis_rows(
                 next_blocker=blocker,
                 evidence={
                     "source_quality_adjusted_ev_pct": item.get("source_quality_adjusted_ev_pct"),
+                    "sample": item.get("sample"),
+                    "sample_floor": item.get("sample_floor"),
+                    "parent_sample_floor": item.get("parent_sample_floor"),
+                    "sample_floor_window_policy": item.get("sample_floor_window_policy")
+                    or item.get("window_policy"),
                     "parent_bucket_id": item.get("parent_bucket_id") or item.get("hypothesis_parent_bucket_id"),
                 },
             )
@@ -556,6 +570,10 @@ def _bucket_rows(
                     "primary_ev": item.get("primary_ev"),
                     "source_quality_adjusted_ev_pct": item.get("source_quality_adjusted_ev_pct"),
                     "sample": item.get("sample"),
+                    "sample_floor": item.get("sample_floor"),
+                    "parent_sample_floor": item.get("parent_sample_floor"),
+                    "sample_floor_window_policy": item.get("sample_floor_window_policy")
+                    or item.get("window_policy"),
                     "bucket_id": bucket_id or None,
                     "source_bucket_kind": item.get("source_bucket_kind"),
                     "runtime_seen": runtime_seen,
@@ -614,7 +632,32 @@ def build_key_lineage_ledger(target_date: str) -> dict[str, Any]:
         1 for row in rows if row.get("positive_ev_candidate") and row.get("runtime_observed_same_key")
     )
     positive_ev_sample_floor_blocked_count = sum(
-        1 for row in rows if row.get("positive_ev_candidate") and row.get("next_blocker") == "sample_floor"
+        1 for row in rows if row.get("positive_ev_candidate") and row.get("sample_floor_blocked")
+    )
+    positive_ev_sample_floor_unknown_floor_count = sum(
+        1 for row in rows if row.get("positive_ev_candidate") and row.get("sample_floor_unknown_floor")
+    )
+    positive_ev_sample_floor_related_count = (
+        positive_ev_sample_floor_blocked_count + positive_ev_sample_floor_unknown_floor_count
+    )
+    discovery_summary = discovery.get("summary") if isinstance(discovery.get("summary"), dict) else {}
+    default_sample_floor_window_policy = str(
+        discovery_summary.get("source_window_policy")
+        or discovery.get("window_policy")
+        or "source_report_window"
+    )
+    sample_floor_window_counts = Counter(
+        str((row.get("evidence") or {}).get("sample_floor_window_policy") or default_sample_floor_window_policy)
+        for row in rows
+        if row.get("positive_ev_candidate")
+        and (row.get("sample_floor_blocked") or row.get("sample_floor_unknown_floor"))
+    )
+    sample_floor_window_policy = (
+        next(iter(sample_floor_window_counts))
+        if len(sample_floor_window_counts) == 1
+        else "mixed_source_windows"
+        if sample_floor_window_counts
+        else default_sample_floor_window_policy
     )
     blockers = []
     for row in rows:
@@ -674,6 +717,12 @@ def build_key_lineage_ledger(target_date: str) -> dict[str, Any]:
             "lineage_blocker_count": len(blockers),
             "positive_ev_runtime_observed_count": positive_ev_runtime_observed_count,
             "positive_ev_sample_floor_blocked_count": positive_ev_sample_floor_blocked_count,
+            "positive_ev_sample_floor_unknown_floor_count": positive_ev_sample_floor_unknown_floor_count,
+            "positive_ev_sample_floor_related_count": positive_ev_sample_floor_related_count,
+            "positive_ev_sample_floor_count_scope": "lineage_rows",
+            "positive_ev_sample_floor_window_policy": sample_floor_window_policy,
+            "positive_ev_sample_floor_window_policy_counts": dict(sorted(sample_floor_window_counts.items())),
+            "positive_ev_sample_floor_basis": "lineage_evidence_sample_vs_sample_floor",
             "state_counts": dict(state_counts),
         },
         "lineage_rows": rows,
@@ -694,7 +743,12 @@ def _render_markdown(report: dict[str, Any]) -> str:
         f"- new postclose candidate due state: `{summary.get('new_postclose_candidates_due_state') or '-'}`",
         f"- same-key continuity pass: `{summary.get('same_key_continuity_pass_count', 0)}`",
         f"- positive EV runtime observed: `{summary.get('positive_ev_runtime_observed_count', 0)}`",
-        f"- positive EV sample-floor blocked: `{summary.get('positive_ev_sample_floor_blocked_count', 0)}`",
+        f"- positive EV sample-floor blocked known floor: `{summary.get('positive_ev_sample_floor_blocked_count', 0)}`",
+        f"- positive EV sample-floor unknown floor: `{summary.get('positive_ev_sample_floor_unknown_floor_count', 0)}`",
+        f"- positive EV sample-floor related total: `{summary.get('positive_ev_sample_floor_related_count', 0)}`",
+        f"- positive EV sample-floor provenance: scope=`{summary.get('positive_ev_sample_floor_count_scope') or '-'}` "
+        f"window=`{summary.get('positive_ev_sample_floor_window_policy') or '-'}` "
+        f"basis=`{summary.get('positive_ev_sample_floor_basis') or '-'}`",
         f"- blockers: mismatch=`{summary.get('key_mismatch_count', 0)}`, catalog_missing=`{summary.get('catalog_missing_count', 0)}`, preopen_missing=`{summary.get('preopen_missing_count', 0)}`, not_instrumented=`{summary.get('not_instrumented_count', 0)}`",
         "",
         "## Top Blockers",

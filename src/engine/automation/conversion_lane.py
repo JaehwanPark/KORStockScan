@@ -156,6 +156,7 @@ def _candidate_from_lifecycle(item: dict[str, Any], strategy_scope: str) -> dict
         "primary_ev": ev,
         "sample": sample,
         "required_sample": required_sample or None,
+        "sample_floor_window_policy": str(item.get("sample_floor_window_policy") or item.get("window_policy") or ""),
         "sample_floor_status": "unknown_floor" if not required_sample else (
             "pass" if sample >= required_sample else "below_floor"
         ),
@@ -194,6 +195,7 @@ def _candidate_from_matched_bucket_lineage(row: dict[str, Any]) -> dict[str, Any
         "primary_ev": ev,
         "sample": sample,
         "required_sample": required_sample or None,
+        "sample_floor_window_policy": str(evidence.get("sample_floor_window_policy") or ""),
         "sample_floor_status": "unknown_floor" if not required_sample else (
             "pass" if sample >= required_sample else "below_floor"
         ),
@@ -219,9 +221,14 @@ def _annotate_conversion_candidate(candidate: dict[str, Any]) -> None:
         "runtime_observed",
         "joined",
     } or candidate.get("conversion_state") == "runtime_observed"
-    sample_floor_blocked = str(candidate.get("next_blocker") or "") == "sample_floor"
+    sample_floor_related = str(candidate.get("next_blocker") or "") == "sample_floor"
+    sample = _safe_int(candidate.get("sample"), 0)
+    required_sample = _safe_int(candidate.get("required_sample"), 0)
+    sample_floor_unknown = sample_floor_related and required_sample <= 0
+    sample_floor_blocked = sample_floor_related and required_sample > 0 and sample < required_sample
     candidate["positive_ev_candidate"] = bool(ev is not None and ev > 0)
     candidate["sample_floor_blocked"] = sample_floor_blocked
+    candidate["sample_floor_unknown_floor"] = sample_floor_unknown
     candidate["runtime_observed_same_key"] = bool(runtime_observed)
     if candidate.get("runtime_observed_same_key"):
         candidate.setdefault("runtime_observation_scope", "previous_preopen_policy_runtime_observed")
@@ -252,7 +259,13 @@ def _merge_lineage_candidate(candidate: dict[str, Any], lineage: dict[str, Any])
             candidate["sample_floor_status"] = "pass" if _safe_int(candidate.get("sample")) >= floor else "below_floor"
 
 
+def _source_sample_floor_window_policy(discovery: dict[str, Any]) -> str:
+    summary = discovery.get("summary") if isinstance(discovery.get("summary"), dict) else {}
+    return str(summary.get("source_window_policy") or discovery.get("window_policy") or "source_report_window")
+
+
 def _candidates_from_lifecycle(discovery: dict[str, Any], strategy_scope: str) -> list[dict[str, Any]]:
+    source_window_policy = _source_sample_floor_window_policy(discovery)
     candidates: list[dict[str, Any]] = []
     seen: set[str] = set()
     for section in ("live_auto_apply_candidates", "sim_auto_approved_candidates", "surfaced_candidates"):
@@ -260,6 +273,8 @@ def _candidates_from_lifecycle(discovery: dict[str, Any], strategy_scope: str) -
             if not isinstance(item, dict):
                 continue
             row = _candidate_from_lifecycle(item, strategy_scope)
+            if not row.get("sample_floor_window_policy"):
+                row["sample_floor_window_policy"] = source_window_policy
             if row["candidate_id"] in seen:
                 continue
             seen.add(row["candidate_id"])
@@ -575,6 +590,7 @@ def build_conversion_lane(target_date: str) -> dict[str, Any]:
     ]
     blocker_counts = Counter(str(item.get("blocker_class") or "unknown") for item in blockers)
     blocker_axis_counts = Counter(str(item.get("blocker_axis") or "unknown") for item in blockers)
+    strategy_scope_counts = Counter(str(item.get("strategy_scope") or "unscoped") for item in candidates)
     submit_drought_axes = sorted(
         {
             str(item.get("blocker_axis"))
@@ -589,6 +605,26 @@ def build_conversion_lane(target_date: str) -> dict[str, Any]:
     positive_ev_sample_floor_blocked_count = sum(
         1 for item in candidates if item.get("positive_ev_candidate") and item.get("sample_floor_blocked")
     )
+    positive_ev_sample_floor_unknown_floor_count = sum(
+        1 for item in candidates if item.get("positive_ev_candidate") and item.get("sample_floor_unknown_floor")
+    )
+    positive_ev_sample_floor_related_count = (
+        positive_ev_sample_floor_blocked_count + positive_ev_sample_floor_unknown_floor_count
+    )
+    default_sample_floor_window_policy = _source_sample_floor_window_policy(lifecycle)
+    sample_floor_window_counts = Counter(
+        str(item.get("sample_floor_window_policy") or default_sample_floor_window_policy)
+        for item in candidates
+        if item.get("positive_ev_candidate")
+        and (item.get("sample_floor_blocked") or item.get("sample_floor_unknown_floor"))
+    )
+    sample_floor_window_policy = (
+        next(iter(sample_floor_window_counts))
+        if len(sample_floor_window_counts) == 1
+        else "mixed_source_windows"
+        if sample_floor_window_counts
+        else default_sample_floor_window_policy
+    )
     positive_ev_not_due_until_next_preopen_count = sum(
         1
         for item in candidates
@@ -602,26 +638,40 @@ def build_conversion_lane(target_date: str) -> dict[str, Any]:
         and item.get("runtime_observation_scope") == "previous_preopen_policy_natural_match_0"
     )
     ldm_bucket_blockers = [item for item in blockers if item.get("blocker_class") != "submit_drought"]
+    top_blocker_by_count = blocker_counts.most_common(1)[0][0] if blocker_counts else None
     summary = {
         "conversion_candidate_count": len(candidates),
+        "conversion_candidate_strategy_scope_counts": dict(strategy_scope_counts),
         "bounded_real_canary_requestable_count": sum(
             1 for item in candidates if item.get("conversion_state") == "bounded_real_canary_requestable"
         ),
         "top_blocker_class": blockers[0]["blocker_class"] if blockers else None,
+        "top_blocker_ranked_class": blockers[0]["blocker_class"] if blockers else None,
+        "top_blocker_by_count_class": top_blocker_by_count,
         "top_ldm_bucket_blocker_class": ldm_bucket_blockers[0]["blocker_class"] if ldm_bucket_blockers else None,
         "submit_funnel_blocker_count": len(submit_drought_blockers),
         "submit_drought_is_ldm_bucket_blocker": False,
         "scalp_conversion_candidate_count": sum(1 for item in candidates if item.get("strategy_scope") == "scalp"),
         "swing_conversion_candidate_count": sum(1 for item in candidates if item.get("strategy_scope") == "swing"),
+        "unscoped_conversion_candidate_count": sum(
+            1 for item in candidates if str(item.get("strategy_scope") or "") not in {"scalp", "swing"}
+        ),
         "sim_priority_only_count": len(sim_priority_only),
         "key_lineage_blocker_count": _safe_int((key_ledger.get("summary") or {}).get("lineage_blocker_count")),
         "real_conversion_queue_count": len(real_queue),
         "positive_ev_runtime_observed_count": positive_ev_runtime_observed_count,
         "positive_ev_real_conversion_queue_count": positive_ev_real_conversion_queue_count,
         "positive_ev_sample_floor_blocked_count": positive_ev_sample_floor_blocked_count,
+        "positive_ev_sample_floor_unknown_floor_count": positive_ev_sample_floor_unknown_floor_count,
+        "positive_ev_sample_floor_related_count": positive_ev_sample_floor_related_count,
+        "positive_ev_sample_floor_count_scope": "conversion_candidates",
+        "positive_ev_sample_floor_window_policy": sample_floor_window_policy,
+        "positive_ev_sample_floor_window_policy_counts": dict(sorted(sample_floor_window_counts.items())),
+        "positive_ev_sample_floor_basis": "candidate_sample_vs_required_sample",
         "positive_ev_not_due_until_next_preopen_count": positive_ev_not_due_until_next_preopen_count,
         "positive_ev_previous_policy_natural_match_0_count": positive_ev_previous_policy_natural_match_0_count,
         "blocker_class_counts": dict(blocker_counts),
+        "conversion_blocker_count": len(blockers),
         "blocker_axis_counts": dict(blocker_axis_counts),
         "submit_drought_closure_axis_count": len(submit_drought_axes),
         "submit_drought_closure_axes": submit_drought_axes,
@@ -658,9 +708,19 @@ def _render_markdown(report: dict[str, Any]) -> str:
         f"- positive EV not due until next PREOPEN: `{summary.get('positive_ev_not_due_until_next_preopen_count', 0)}`",
         f"- positive EV previous-policy natural match 0: `{summary.get('positive_ev_previous_policy_natural_match_0_count', 0)}`",
         f"- positive EV real conversion queue: `{summary.get('positive_ev_real_conversion_queue_count', 0)}`",
-        f"- positive EV sample-floor blocked: `{summary.get('positive_ev_sample_floor_blocked_count', 0)}`",
+        f"- positive EV sample-floor blocked known floor: `{summary.get('positive_ev_sample_floor_blocked_count', 0)}`",
+        f"- positive EV sample-floor unknown floor: `{summary.get('positive_ev_sample_floor_unknown_floor_count', 0)}`",
+        f"- positive EV sample-floor related total: `{summary.get('positive_ev_sample_floor_related_count', 0)}`",
+        f"- positive EV sample-floor provenance: scope=`{summary.get('positive_ev_sample_floor_count_scope') or '-'}` "
+        f"window=`{summary.get('positive_ev_sample_floor_window_policy') or '-'}` "
+        f"window_counts=`{summary.get('positive_ev_sample_floor_window_policy_counts') or {}}` "
+        f"basis=`{summary.get('positive_ev_sample_floor_basis') or '-'}`",
+        f"- conversion candidate strategy scope: scalp=`{summary.get('scalp_conversion_candidate_count', 0)}` "
+        f"swing=`{summary.get('swing_conversion_candidate_count', 0)}` "
+        f"unscoped=`{summary.get('unscoped_conversion_candidate_count', 0)}`",
         f"- bounded real canary requestable: `{summary.get('bounded_real_canary_requestable_count', 0)}`",
-        f"- top blocker overall: `{summary.get('top_blocker_class') or 'none'}`",
+        f"- top blocker ranked: `{summary.get('top_blocker_ranked_class') or 'none'}`; "
+        f"top blocker by count: `{summary.get('top_blocker_by_count_class') or 'none'}`",
         f"- top LDM bucket blocker: `{summary.get('top_ldm_bucket_blocker_class') or 'none'}`",
         f"- submit funnel blocker count: `{summary.get('submit_funnel_blocker_count', 0)}` "
         f"(submit_drought_is_ldm_bucket_blocker=`{summary.get('submit_drought_is_ldm_bucket_blocker')}`)",

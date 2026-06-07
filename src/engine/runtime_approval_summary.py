@@ -64,6 +64,10 @@ _REASON_LABELS = {
     "runtime_family_guard_missing": "runtime guard 없음",
     "family_sample_floor_not_met": "표본 부족",
     "sample_floor_not_met": "표본 부족",
+    "source_sample_missing": "소스 표본 없음",
+    "counterfactual_join_gap": "counterfactual join gap",
+    "recovery_floor_not_met": "recovery floor 미달",
+    "latency_classifier_runtime_semantics_gap": "latency semantics gap",
     "source_quality_blocker": "소스 품질 차단",
     "missing_action_bucket": "ADM action bucket 누락",
     "prompt_context_not_loaded": "ADM prompt context 미적재",
@@ -155,7 +159,7 @@ _STATE_INTERPRETATIONS = {
     "adjust_up": "자동 반영 후보로 선택되면 PREOPEN env에 적용된다",
     "adjust_down": "자동 반영 후보로 선택되면 PREOPEN env에 적용된다",
     "hold": "현재 적용 상태와 값을 유지하고 추가 env 변경은 하지 않는다",
-    "hold_sample": "축은 유지/관찰하지만 표본 부족으로 runtime 변경은 하지 않는다",
+    "hold_sample": "축은 유지/관찰하지만 표본/소스 계약 미충족으로 runtime 변경은 하지 않는다",
     "hold_no_edge": "명확한 edge가 없어 runtime 변경은 하지 않는다",
     "freeze": "계측/DB/safety 문제로 runtime 변경을 금지한다",
     "approval_required": "approval artifact가 있어야 다음 PREOPEN env 반영 후보가 된다",
@@ -525,6 +529,27 @@ def _candidate_by_family(items: Any) -> dict[str, dict[str, Any]]:
     }
 
 
+def _hold_sample_reasons(item: dict[str, Any]) -> list[str]:
+    sample_count = _as_int(item.get("sample_count"))
+    source_sample_count = _as_int(item.get("source_sample_count"))
+    sample_floor = _as_int(item.get("sample_floor"))
+    source_metrics = item.get("source_metrics") if isinstance(item.get("source_metrics"), dict) else {}
+    reasons: list[str] = []
+    if sample_floor and sample_count < sample_floor:
+        reasons.append("family_sample_floor_not_met")
+    if sample_floor and sample_count >= sample_floor and source_sample_count <= 0:
+        reasons.append("source_sample_missing")
+    coverage_gap = str(source_metrics.get("coverage_gap_type") or "").strip()
+    if coverage_gap:
+        reasons.append(coverage_gap)
+    if source_metrics.get("attribution_gap") is True and "counterfactual_join_gap" not in reasons:
+        reasons.append("counterfactual_join_gap")
+    recommended_reason = str(source_metrics.get("recommended_action_reason") or "").strip()
+    if "recovery_count=" in recommended_reason and "below floor=" in recommended_reason:
+        reasons.append("recovery_floor_not_met")
+    return list(dict.fromkeys(reasons or ["family_sample_floor_not_met"]))
+
+
 def _count_field(rows: list[dict[str, Any]], field: str) -> dict[str, int]:
     counts: dict[str, int] = {}
     for row in rows:
@@ -556,7 +581,7 @@ def _scalping_rows(ev_report: dict[str, Any], calibration_report: dict[str, Any]
         state = str(item.get("calibration_state") or "-")
         reasons: list[str] = []
         if state == "hold_sample":
-            reasons.append("family_sample_floor_not_met")
+            reasons.extend(_hold_sample_reasons(item))
         if state == "freeze":
             reasons.append(str(item.get("calibration_reason") or "freeze"))
         if family in selected:
