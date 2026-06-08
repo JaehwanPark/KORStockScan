@@ -307,6 +307,63 @@ def test_runtime_observed_seed_not_in_catalog_is_key_mismatch(monkeypatch, tmp_p
     assert report["lineage_blockers"][0]["blocker_class"] == "key_lineage"
 
 
+def test_key_lineage_event_io_guard_streams_and_truncates_untracked_ids(monkeypatch, tmp_path):
+    _patch_dirs(monkeypatch, tmp_path)
+    monkeypatch.setenv("KORSTOCKSCAN_KEY_LINEAGE_EVENT_UNTRACKED_VALUE_LIMIT", "1")
+    target = "2026-06-04"
+    _write(tmp_path / "report" / "lifecycle_bucket_discovery" / f"lifecycle_bucket_discovery_{target}.json", {})
+    _write(
+        tmp_path / "threshold_cycle" / "scalp_sim_policies" / f"scalp_sim_policy_catalog_{target}.json",
+        {"active_sim_priority_seeds": [{"active_seed_id": "tracked_seed", "status": "active"}]},
+    )
+    _write(tmp_path / "threshold_cycle" / "swing_sim_policies" / f"swing_sim_policy_catalog_{target}.json", {})
+    _write(
+        tmp_path / "threshold_cycle" / "apply_plans" / f"threshold_apply_{target}.json",
+        {
+            "source_date": target,
+            "scalp_sim_auto_approval": {"approved_request": {"active_sim_priority_seed_ids": ["tracked_seed"]}},
+        },
+    )
+    event_path = tmp_path / "pipeline_events" / f"pipeline_events_{target}.jsonl"
+    event_path.parent.mkdir(parents=True, exist_ok=True)
+    event_path.write_text(
+        "\n".join(
+            [
+                json.dumps({"fields": {"active_seed_id": "unknown_seed_a"}}),
+                json.dumps({"fields": {"active_seed_id": "unknown_seed_b"}}),
+                json.dumps({"fields": {"active_seed_id": "tracked_seed"}}),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    report = ledger.build_key_lineage_ledger(target)
+
+    assert report["summary"]["same_key_continuity_pass_count"] == 1
+    assert report["summary"]["event_io_guard"]["mode"] == "streaming_jsonl"
+    assert report["summary"]["event_io_guard"]["lines_read"] == 3
+    assert report["summary"]["event_io_guard"]["truncated_untracked_value_count"] == 1
+    assert report["summary"]["event_io_guard"]["truncated_untracked_value_count_by_field"] == {"active_seed_id": 1}
+
+
+def test_key_lineage_event_io_guard_skips_oversized_lines(monkeypatch, tmp_path):
+    _patch_dirs(monkeypatch, tmp_path)
+    monkeypatch.setenv("KORSTOCKSCAN_KEY_LINEAGE_EVENT_LINE_BYTES_LIMIT", "20")
+    target = "2026-06-04"
+    _write(tmp_path / "report" / "lifecycle_bucket_discovery" / f"lifecycle_bucket_discovery_{target}.json", {})
+    _write(tmp_path / "threshold_cycle" / "scalp_sim_policies" / f"scalp_sim_policy_catalog_{target}.json", {})
+    _write(tmp_path / "threshold_cycle" / "swing_sim_policies" / f"swing_sim_policy_catalog_{target}.json", {})
+    event_path = tmp_path / "pipeline_events" / f"pipeline_events_{target}.jsonl"
+    event_path.parent.mkdir(parents=True, exist_ok=True)
+    event_path.write_text(json.dumps({"fields": {"active_seed_id": "too_large"}}) + "\n", encoding="utf-8")
+
+    report = ledger.build_key_lineage_ledger(target)
+
+    assert report["summary"]["source_key_count"] == 0
+    assert report["summary"]["event_io_guard"]["oversized_line_skipped_count"] == 1
+
+
 def test_runtime_lineage_uses_target_apply_catalog_not_next_catalog(monkeypatch, tmp_path):
     _patch_dirs(monkeypatch, tmp_path)
     target = "2026-06-04"

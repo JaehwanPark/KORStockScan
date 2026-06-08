@@ -1561,12 +1561,6 @@ class GPTSniperEngine:
             transport_meta.update(result.usage_meta)
         self._set_last_transport_meta(transport_meta)
         if isinstance(result.payload, dict):
-            self._enqueue_bedrock_runtime_shadows(
-                request=request,
-                openai_payload=result.payload,
-                transport_meta=transport_meta,
-                roundtrip_ms=int(getattr(result, "roundtrip_ms", 0) or 0),
-            )
             return result.payload
         return str(result.payload or "").strip()
 
@@ -1631,23 +1625,6 @@ class GPTSniperEngine:
             )
             self._set_last_transport_meta(transport_meta)
             write_provider_audit_row(provider_audit_row(request_meta=request_meta, result=result, payload=result.payload))
-            if str(request.model_name or "") == "gpt-5.4-mini":
-                primary_family = str(os.getenv("KORSTOCKSCAN_BEDROCK_NOVA_LITE_PRIMARY_FAMILY", "lite")).strip().lower()
-                if primary_family in {"lite_v2", "v2", "nova_lite_v2"}:
-                    self._enqueue_bedrock_nova_lite_runtime_shadow(
-                        request=request,
-                        openai_payload=result.payload,
-                        transport_meta=transport_meta,
-                        roundtrip_ms=result.latency_ms,
-                        allow_during_primary=True,
-                    )
-                else:
-                    self._enqueue_bedrock_nova_lite_v2_runtime_shadow(
-                        request=request,
-                        baseline_payload=result.payload,
-                        transport_meta=transport_meta,
-                        roundtrip_ms=result.latency_ms,
-                    )
             return result.payload
         except Exception as exc:
             failback_enabled = str(os.getenv("KORSTOCKSCAN_BEDROCK_PRIMARY_FAILBACK_TO_OPENAI", "true")).strip().lower() in {
@@ -1879,91 +1856,6 @@ class GPTSniperEngine:
             "pipeline_event_emitted_at": (request.metadata or {}).get("pipeline_event_emitted_at"),
             "openai_latency_ms": roundtrip_ms or transport_meta.get("openai_ws_roundtrip_ms") or 0,
         }
-
-    def _enqueue_bedrock_runtime_shadows(self, *, request, openai_payload, transport_meta, roundtrip_ms=0):
-        self._enqueue_bedrock_nova_lite_runtime_shadow(
-            request=request,
-            openai_payload=openai_payload,
-            transport_meta=transport_meta,
-            roundtrip_ms=roundtrip_ms,
-        )
-
-    def _enqueue_bedrock_nova_lite_runtime_shadow(
-        self, *, request, openai_payload, transport_meta, roundtrip_ms=0, allow_during_primary=False
-    ):
-        try:
-            if str(os.getenv("KORSTOCKSCAN_BEDROCK_NOVA_LITE_SHADOW_ENABLED", "")).strip().lower() not in {
-                "1",
-                "true",
-                "yes",
-                "y",
-                "on",
-            }:
-                return
-            if not (bool(request.require_json) and str(request.model_name) == "gpt-5.4-mini"):
-                return
-            if (
-                str(os.getenv("KORSTOCKSCAN_BEDROCK_NOVA_LITE_ROUTE_MODE", "shadow")).strip().lower() == "primary"
-                and not allow_during_primary
-            ):
-                return
-            from src.engine.bedrock_nova_lite_shadow import enqueue_runtime_shadow
-
-            request_meta = self._build_bedrock_shadow_request_meta(
-                request=request,
-                transport_meta=transport_meta,
-                roundtrip_ms=roundtrip_ms,
-            )
-            if allow_during_primary:
-                request_meta["baseline_bedrock_model_id"] = str(transport_meta.get("bedrock_model_id") or "")
-                request_meta["baseline_model_id"] = request_meta["baseline_bedrock_model_id"]
-                transport_meta = dict(transport_meta or {})
-                transport_meta.setdefault("openai_input_tokens", transport_meta.get("bedrock_input_tokens"))
-                transport_meta.setdefault("openai_output_tokens", transport_meta.get("bedrock_output_tokens"))
-            enqueue_runtime_shadow(
-                model_name=str(request.model_name),
-                require_json=bool(request.require_json),
-                prompt=request.prompt,
-                user_input=request.user_input,
-                openai_payload=openai_payload,
-                transport_meta=transport_meta,
-                request_meta=request_meta,
-            )
-        except Exception as exc:
-            log_error(f"[BedrockNovaLiteShadow] enqueue skipped: {exc}")
-
-    def _enqueue_bedrock_nova_lite_v2_runtime_shadow(self, *, request, baseline_payload, transport_meta, roundtrip_ms=0):
-        try:
-            if str(os.getenv("KORSTOCKSCAN_BEDROCK_NOVA_LITE_V2_SHADOW_ENABLED", "")).strip().lower() not in {
-                "1",
-                "true",
-                "yes",
-                "y",
-                "on",
-            }:
-                return
-            if not (bool(request.require_json) and str(request.model_name) == "gpt-5.4-mini"):
-                return
-            from src.engine.bedrock_nova_lite_v2_shadow import enqueue_runtime_shadow
-
-            request_meta = self._build_bedrock_shadow_request_meta(
-                request=request,
-                transport_meta=transport_meta,
-                roundtrip_ms=roundtrip_ms,
-            )
-            request_meta["target_run_date"] = os.getenv("KORSTOCKSCAN_BEDROCK_NOVA_LITE_V2_TARGET_RUN_DATE", "")
-            request_meta["baseline_bedrock_model_id"] = str(transport_meta.get("bedrock_model_id") or "")
-            enqueue_runtime_shadow(
-                model_name=str(request.model_name),
-                require_json=bool(request.require_json),
-                prompt=request.prompt,
-                user_input=request.user_input,
-                baseline_payload=baseline_payload,
-                transport_meta=transport_meta,
-                request_meta=request_meta,
-            )
-        except Exception as exc:
-            log_error(f"[BedrockNovaLiteV2Shadow] enqueue skipped: {exc}")
 
     # ==========================================
     # 데이터 포맷팅

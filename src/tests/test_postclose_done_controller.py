@@ -985,6 +985,83 @@ def test_postclose_done_controller_blocks_done_with_unknown_conversion_kpi_warni
     assert report["blocked_reasons"] == ["conversion_lane_no_candidates"]
 
 
+def test_postclose_done_controller_accepts_next_preopen_handoff_conversion_warning(
+    monkeypatch,
+    tmp_path,
+):
+    report_dir = tmp_path / "report"
+    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "OUTPUT_DIR", report_dir / "postclose_done_controller")
+    _write_succeeded_status(report_dir)
+    _write_json(
+        report_dir / "threshold_cycle_postclose_verification" / "threshold_cycle_postclose_verification_2026-06-03.json",
+        {
+            "status": "warning",
+            "latest_done_marker": "[DONE] threshold-cycle postclose target_date=2026-06-03",
+            "handoff_warnings": ["active_sim_priority_preopen_handoff_pending"],
+            "conversion_kpi": {
+                "status": "warning",
+                "warnings": ["active_or_hypothesis_preopen_handoff_pending"],
+            },
+        },
+    )
+    _write_json(
+        report_dir / "code_improvement_workorder" / "code_improvement_workorder_2026-06-03.json",
+        {"generation_id": "g1"},
+    )
+
+    report = mod.build_postclose_done_controller(
+        "2026-06-03",
+        max_attempts=1,
+        allow_wrapper_rerun=True,
+        command_runner=lambda cmd, env=None: 0,
+    )
+
+    assert report["status"] == "done"
+    assert report["final_verifier_status"] == "warning"
+    assert report["blocked_reasons"] == []
+
+
+def test_postclose_done_controller_accepts_missing_next_preopen_apply_as_optional(
+    monkeypatch,
+    tmp_path,
+):
+    report_dir = tmp_path / "report"
+    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "OUTPUT_DIR", report_dir / "postclose_done_controller")
+    _write_succeeded_status(report_dir)
+    _write_json(
+        report_dir / "threshold_cycle_postclose_verification" / "threshold_cycle_postclose_verification_2026-06-03.json",
+        {
+            "status": "warning",
+            "latest_done_marker": "[DONE] threshold-cycle postclose target_date=2026-06-03",
+            "handoff_warnings": ["active_sim_priority_preopen_handoff_pending"],
+            "conversion_kpi": {
+                "status": "warning",
+                "warnings": ["active_or_hypothesis_preopen_handoff_pending"],
+            },
+            "artifact_status": [
+                {"label": "threshold_cycle_ev", "exists": True, "json_valid": True},
+                {"label": "threshold_preopen_apply_next", "exists": False, "json_valid": False},
+            ],
+        },
+    )
+    _write_json(
+        report_dir / "code_improvement_workorder" / "code_improvement_workorder_2026-06-03.json",
+        {"generation_id": "g1"},
+    )
+
+    report = mod.build_postclose_done_controller(
+        "2026-06-03",
+        max_attempts=1,
+        allow_wrapper_rerun=True,
+        command_runner=lambda cmd, env=None: 0,
+    )
+
+    assert report["status"] == "done"
+    assert report["blocked_reasons"] == []
+
+
 def test_postclose_done_controller_reruns_wrapper_only_for_missing_start_marker(monkeypatch, tmp_path):
     report_dir = tmp_path / "report"
     monkeypatch.setattr(mod, "REPORT_DIR", report_dir)

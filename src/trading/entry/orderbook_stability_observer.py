@@ -402,7 +402,7 @@ class OrderbookStabilityObserver:
     @staticmethod
     def _price_bucket(price: int) -> str:
         if price <= 0:
-            return "unknown"
+            return "not_available_no_price"
         if price < 10_000:
             return "low"
         if price <= 50_000:
@@ -412,7 +412,7 @@ class OrderbookStabilityObserver:
     @staticmethod
     def _depth_bucket(depth_total: int) -> str:
         if depth_total <= 0:
-            return "unknown"
+            return "not_available_no_depth"
         if depth_total < 1_000:
             return "thin"
         if depth_total < 10_000:
@@ -422,7 +422,7 @@ class OrderbookStabilityObserver:
     @staticmethod
     def _spread_bucket(bid: int, ask: int) -> str:
         if bid <= 0 or ask <= 0:
-            return "unknown"
+            return "not_available_no_bid_ask"
         tick_size = max(1, int(get_tick_size(max(bid, ask)) or 1))
         spread_ticks = max(0, int(round((ask - bid) / tick_size)))
         if spread_ticks <= 1:

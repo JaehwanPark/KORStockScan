@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 from collections import Counter
 from datetime import date, datetime
 from pathlib import Path
@@ -20,6 +21,8 @@ APPLY_PLAN_DIR = DATA_DIR / "threshold_cycle" / "apply_plans"
 SCALP_POLICY_DIR = DATA_DIR / "threshold_cycle" / "scalp_sim_policies"
 SWING_POLICY_DIR = DATA_DIR / "threshold_cycle" / "swing_sim_policies"
 HYPOTHESIS_PLAN_DIR = DATA_DIR / "threshold_cycle" / "ldm_hypothesis_observation_plans"
+DEFAULT_EVENT_UNTRACKED_VALUE_LIMIT = 200_000
+DEFAULT_EVENT_LINE_BYTES_LIMIT = 8_000_000
 
 LINEAGE_BLOCKER_STATES = {"key_mismatch", "catalog_missing", "preopen_missing", "not_instrumented"}
 ALLOWED_STATES = {
@@ -155,7 +158,71 @@ def _collect_values(payload: Any, keys: set[str]) -> set[str]:
     return values
 
 
-def _event_field_values(target_date: str) -> dict[str, set[str]]:
+def _event_io_guard_config() -> tuple[int, int]:
+    return (
+        max(
+            0,
+            _safe_int(
+                os.environ.get("KORSTOCKSCAN_KEY_LINEAGE_EVENT_UNTRACKED_VALUE_LIMIT"),
+                DEFAULT_EVENT_UNTRACKED_VALUE_LIMIT,
+            ),
+        ),
+        max(
+            0,
+            _safe_int(
+                os.environ.get("KORSTOCKSCAN_KEY_LINEAGE_EVENT_LINE_BYTES_LIMIT"),
+                DEFAULT_EVENT_LINE_BYTES_LIMIT,
+            ),
+        ),
+    )
+
+
+def _bounded_add(
+    values: dict[str, Any],
+    *,
+    key: str,
+    value: str,
+    tracked_values: dict[str, set[str]],
+    untracked_value_limit: int,
+) -> None:
+    bucket = values.get(key)
+    if not isinstance(bucket, set):
+        return
+    if value in tracked_values.get(key, set()) or len(bucket) < untracked_value_limit:
+        bucket.add(value)
+        return
+    guard = values["io_guard"]
+    guard["truncated_untracked_value_count"] += 1
+    by_field = guard["truncated_untracked_value_count_by_field"]
+    by_field[key] = by_field.get(key, 0) + 1
+
+
+def _iter_jsonl_payloads(path: Path, values: dict[str, Any], *, line_bytes_limit: int):
+    guard = values["io_guard"]
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            for raw_line in handle:
+                guard["lines_read"] += 1
+                if line_bytes_limit and len(raw_line) > line_bytes_limit:
+                    guard["oversized_line_skipped_count"] += 1
+                    continue
+                line = raw_line.strip()
+                if not line:
+                    continue
+                try:
+                    payload = json.loads(line)
+                except Exception:
+                    guard["json_decode_error_count"] += 1
+                    continue
+                if isinstance(payload, dict):
+                    yield payload
+    except Exception:
+        guard["file_read_error_count"] += 1
+
+
+def _event_field_values(target_date: str, tracked_values: dict[str, set[str]] | None = None) -> dict[str, Any]:
+    tracked_values = tracked_values or {}
+    untracked_value_limit, line_bytes_limit = _event_io_guard_config()
     field_keys = {
         "active_seed_id",
         "active_sim_priority_seed_id",
@@ -176,6 +243,21 @@ def _event_field_values(target_date: str) -> dict[str, set[str]]:
         "lifecycle_bucket_matched_source_bucket_id",
     }
     values: dict[str, Any] = {key: set() for key in field_keys}
+    values["pre_policy_active_seed_id"] = set()
+    values["io_guard"] = {
+        "mode": "streaming_jsonl",
+        "untracked_value_limit_per_field": untracked_value_limit,
+        "line_bytes_limit": line_bytes_limit,
+        "files_seen": 0,
+        "lines_read": 0,
+        "json_decode_error_count": 0,
+        "file_read_error_count": 0,
+        "oversized_line_skipped_count": 0,
+        "truncated_untracked_value_count": 0,
+        "truncated_untracked_value_count_by_field": {},
+        "truncated_panic_sim_record_id_count": 0,
+        "truncated_panic_no_match_sim_record_id_count": 0,
+    }
     values["active_policy_observation"] = {
         "event_count": 0,
         "active_seed_count_zero_event_count": 0,
@@ -214,17 +296,8 @@ def _event_field_values(target_date: str) -> dict[str, set[str]]:
     for path in paths:
         if not path.exists():
             continue
-        try:
-            lines = path.read_text(encoding="utf-8").splitlines()
-        except Exception:
-            continue
-        for line in lines:
-            if not line.strip():
-                continue
-            try:
-                payload = json.loads(line)
-            except Exception:
-                continue
+        values["io_guard"]["files_seen"] += 1
+        for payload in _iter_jsonl_payloads(path, values, line_bytes_limit=line_bytes_limit):
             fields = payload.get("fields") if isinstance(payload, dict) else {}
             stage = str(payload.get("stage") or "").strip() if isinstance(payload, dict) else ""
             active_count_raw = fields.get("scalp_sim_auto_policy_active_seed_count") if isinstance(fields, dict) else None
@@ -266,14 +339,24 @@ def _event_field_values(target_date: str) -> dict[str, set[str]]:
                         or ""
                     ).strip()
                     if sim_record_id:
-                        panic_sim_record_ids.add(sim_record_id)
+                        if len(panic_sim_record_ids) < untracked_value_limit:
+                            panic_sim_record_ids.add(sim_record_id)
+                        else:
+                            values["io_guard"]["truncated_panic_sim_record_id_count"] = (
+                                values["io_guard"].get("truncated_panic_sim_record_id_count", 0) + 1
+                            )
                     match_status = str(fields.get("lifecycle_bucket_match_status") or "missing").strip() or "missing"
                     status_counts = policy_diag["panic_scale_in_match_status_counts"]
                     status_counts[match_status] = status_counts.get(match_status, 0) + 1
                     if match_status == "no_match":
                         policy_diag["panic_scale_in_no_match_event_count"] += 1
                         if sim_record_id:
-                            panic_no_match_sim_record_ids.add(sim_record_id)
+                            if len(panic_no_match_sim_record_ids) < untracked_value_limit:
+                                panic_no_match_sim_record_ids.add(sim_record_id)
+                            else:
+                                values["io_guard"]["truncated_panic_no_match_sim_record_id_count"] = (
+                                    values["io_guard"].get("truncated_panic_no_match_sim_record_id_count", 0) + 1
+                                )
                         else:
                             policy_diag["panic_scale_in_no_match_missing_sim_record_id_event_count"] += 1
                         source_stage = str(
@@ -302,23 +385,53 @@ def _event_field_values(target_date: str) -> dict[str, set[str]]:
                 if str(value or "").strip():
                     if key in {"active_seed_id", "active_sim_priority_seed_id", "scalp_sim_active_priority_seed_id"}:
                         if active_count is None or active_count > 0:
-                            values[key].add(str(value))
+                            _bounded_add(
+                                values,
+                                key=key,
+                                value=str(value),
+                                tracked_values=tracked_values,
+                                untracked_value_limit=untracked_value_limit,
+                            )
                             if active_count is None:
                                 policy_diag["active_seed_id_without_count_event_count"] += 1
                                 policy_diag["policy_loaded_for_active_priority_effect"] = True
                         else:
-                            values.setdefault("pre_policy_active_seed_id", set()).add(str(value))
+                            _bounded_add(
+                                values,
+                                key="pre_policy_active_seed_id",
+                                value=str(value),
+                                tracked_values=tracked_values,
+                                untracked_value_limit=untracked_value_limit,
+                            )
                     else:
-                        values[key].add(str(value))
+                        _bounded_add(
+                            values,
+                            key=key,
+                            value=str(value),
+                            tracked_values=tracked_values,
+                            untracked_value_limit=untracked_value_limit,
+                        )
             if not isinstance(fields, dict):
                 continue
             if str(fields.get("lifecycle_bucket_match_status") or "").strip().lower() == "matched":
                 bucket_id = str(fields.get("lifecycle_bucket_bucket_id") or "").strip()
                 source_bucket_id = str(fields.get("lifecycle_bucket_source_bucket_id") or "").strip()
                 if bucket_id:
-                    values["lifecycle_bucket_matched_bucket_id"].add(bucket_id)
+                    _bounded_add(
+                        values,
+                        key="lifecycle_bucket_matched_bucket_id",
+                        value=bucket_id,
+                        tracked_values=tracked_values,
+                        untracked_value_limit=untracked_value_limit,
+                    )
                 if source_bucket_id:
-                    values["lifecycle_bucket_matched_source_bucket_id"].add(source_bucket_id)
+                    _bounded_add(
+                        values,
+                        key="lifecycle_bucket_matched_source_bucket_id",
+                        value=source_bucket_id,
+                        tracked_values=tracked_values,
+                        untracked_value_limit=untracked_value_limit,
+                    )
     policy_diag = values["active_policy_observation"]
     policy_diag["panic_scale_in_unique_sim_record_count"] = len(panic_sim_record_ids)
     policy_diag["panic_scale_in_no_match_unique_sim_record_count"] = len(panic_no_match_sim_record_ids)
@@ -664,6 +777,61 @@ def _iter_bucket_items(payload: Any) -> list[dict[str, Any]]:
     return items
 
 
+def _tracked_event_values(
+    *,
+    apply_plan: dict[str, Any],
+    scalp_catalog: dict[str, Any],
+    swing_catalog: dict[str, Any],
+    hypothesis_plan: dict[str, Any],
+    refinement: dict[str, Any],
+) -> dict[str, set[str]]:
+    scalp_ids = {
+        _seed_id(item)
+        for item in scalp_catalog.get("active_sim_priority_seeds") or []
+        if isinstance(item, dict) and _seed_id(item)
+    }
+    scalp_ids.update(_collect_values(apply_plan, {"active_sim_priority_seed_ids", "active_seed_id"}))
+    swing_ids = {
+        _policy_id(item)
+        for item in swing_catalog.get("active_arm_priority_policies") or []
+        if isinstance(item, dict) and _policy_id(item)
+    }
+    swing_ids.update(_collect_values(apply_plan, {"active_arm_priority_policy_ids", "priority_policy_id"}))
+    hypothesis_ids = {
+        _hypothesis_id(item)
+        for item in [
+            *_hypotheses_from_plan(hypothesis_plan),
+            *_catalog_hypotheses(scalp_catalog),
+            *_catalog_hypotheses(swing_catalog),
+        ]
+        if _hypothesis_id(item)
+    }
+    hypothesis_ids.update(_collect_values(refinement, {"hypothesis_id", "ldm_hypothesis_id", "soft_hypothesis_id"}))
+    bucket_source_ids = set()
+    bucket_ids = set()
+    for item in _iter_bucket_items(scalp_catalog):
+        source_id = _bucket_identity(item)
+        bucket_id = str(item.get("bucket_id") or "").strip() if isinstance(item, dict) else ""
+        if source_id:
+            bucket_source_ids.add(source_id)
+        if bucket_id:
+            bucket_ids.add(bucket_id)
+    return {
+        "active_seed_id": scalp_ids,
+        "active_sim_priority_seed_id": scalp_ids,
+        "scalp_sim_active_priority_seed_id": scalp_ids,
+        "priority_policy_id": swing_ids,
+        "active_arm_priority_policy_id": swing_ids,
+        "swing_priority_policy_id": swing_ids,
+        "ldm_hypothesis_id": hypothesis_ids,
+        "hypothesis_id": hypothesis_ids,
+        "lifecycle_bucket_bucket_id": bucket_ids,
+        "lifecycle_bucket_matched_bucket_id": bucket_ids,
+        "lifecycle_bucket_source_bucket_id": bucket_source_ids,
+        "lifecycle_bucket_matched_source_bucket_id": bucket_source_ids,
+    }
+
+
 def _bucket_rows(
     discovery: dict[str, Any],
     *,
@@ -774,12 +942,22 @@ def build_key_lineage_ledger(target_date: str) -> dict[str, Any]:
     scalp_catalog = _load_json(scalp_catalog_path)
     swing_catalog = _load_json(swing_catalog_path)
     hypothesis_plan = _load_json(hypothesis_plan_path)
-    events = _event_field_values(target_date)
+    events = _event_field_values(
+        target_date,
+        _tracked_event_values(
+            apply_plan=apply_plan,
+            scalp_catalog=scalp_catalog,
+            swing_catalog=swing_catalog,
+            hypothesis_plan=hypothesis_plan,
+            refinement=refinement,
+        ),
+    )
     active_policy_observation = (
         events.get("active_policy_observation")
         if isinstance(events.get("active_policy_observation"), dict)
         else {}
     )
+    io_guard = events.get("io_guard") if isinstance(events.get("io_guard"), dict) else {}
 
     rows: list[dict[str, Any]] = []
     rows.extend(_scalp_rows(discovery=discovery, catalog=scalp_catalog, apply_plan=apply_plan, events=events))
@@ -995,6 +1173,7 @@ def build_key_lineage_ledger(target_date: str) -> dict[str, Any]:
             "active_sim_priority_pending_taxonomy_contract_count": active_seed_taxonomy_counts.get(
                 "new_axis_pending_taxonomy", 0
             ),
+            "event_io_guard": io_guard,
             "state_counts": dict(state_counts),
         },
         "lineage_rows": rows,
@@ -1029,6 +1208,7 @@ def _render_markdown(report: dict[str, Any]) -> str:
         f"zero_count_effect_excluded=`{summary.get('active_sim_policy_zero_count_effect_excluded')}`",
         f"- active sim taxonomy contracts: pending=`{summary.get('active_sim_priority_pending_taxonomy_contract_count', 0)}` "
         f"counts=`{summary.get('active_sim_priority_entry_source_taxonomy_contract_counts') or {}}`",
+        f"- event IO guard: `{summary.get('event_io_guard') or {}}`",
         f"- active seed candidate validation: total=`{summary.get('active_seed_candidate_event_count', 0)}` "
         f"new_entry=`{summary.get('active_seed_candidate_new_entry_event_count', 0)}` "
         f"followup=`{summary.get('active_seed_candidate_followup_event_count', 0)}` "

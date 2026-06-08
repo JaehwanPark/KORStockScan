@@ -214,6 +214,65 @@ def test_observation_source_quality_audit_separates_reviewed_unknown_tokens(monk
     assert reviewed_fields["orderbook_micro_ofi_bucket_key"]["reviewed_reason"] == "reviewed_insufficient_sample"
 
 
+def test_observation_source_quality_audit_reviews_legacy_orderbook_micro_unknown_bucket(monkeypatch, tmp_path):
+    monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
+    _write_events(
+        tmp_path,
+        "2026-06-04",
+        [
+            _event(
+                "swing_scale_in_micro_context_observed",
+                {
+                    "orderbook_micro_ofi_threshold_bucket_key": (
+                        "spread=unknown|price=high|depth=normal|sample=normal"
+                    ),
+                    "orderbook_micro_ofi_calibration_bucket": (
+                        "spread=unknown|price=high|depth=normal|sample=normal"
+                    ),
+                    "orderbook_micro_ofi_bucket_key": (
+                        "spread=unknown|price=high|depth=normal|sample=normal"
+                    ),
+                    "custom_context_state": "observed",
+                },
+                record_id=1,
+            )
+        ],
+    )
+
+    report = audit.build_observation_source_quality_audit("2026-06-04")
+
+    assert report["summary"]["unknown_token_stage_count"] == 0
+    assert report["summary"]["reviewed_unknown_token_stage_count"] == 1
+    reviewed = report["reviewed_unknown_token_findings"][0]
+    fields = {item["field"]: item for item in reviewed["fields"]}
+    assert fields["orderbook_micro_ofi_bucket_key"]["reviewed_reason"] == (
+        "reviewed_orderbook_micro_legacy_not_available_bucket"
+    )
+
+
+def test_observation_source_quality_audit_warns_on_new_orderbook_micro_unknown_bucket(monkeypatch, tmp_path):
+    monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
+    row = _event(
+        "swing_scale_in_micro_context_observed",
+        {
+            "orderbook_micro_ofi_bucket_key": "spread=unknown|price=high|depth=normal|sample=normal",
+            "custom_context_state": "observed",
+        },
+        record_id=1,
+    )
+    row["emitted_at"] = "2026-06-09T10:00:00"
+    row["emitted_date"] = "2026-06-09"
+    _write_events(tmp_path, "2026-06-09", [row])
+
+    report = audit.build_observation_source_quality_audit("2026-06-09")
+
+    assert report["summary"]["unknown_token_stage_count"] == 1
+    assert report["summary"]["reviewed_unknown_token_stage_count"] == 0
+    finding = report["unknown_token_findings"][0]
+    fields = {item["field"]: item for item in finding["fields"]}
+    assert fields["orderbook_micro_ofi_bucket_key"]["count"] == 1
+
+
 def test_observation_source_quality_audit_reviews_missing_risk_regime_context(monkeypatch, tmp_path):
     monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
     _write_events(

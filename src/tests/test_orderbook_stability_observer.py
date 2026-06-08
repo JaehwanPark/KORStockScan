@@ -101,6 +101,30 @@ def test_orderbook_micro_qi_ofi_and_depth_normalization():
     assert micro["ofi_calibration_warning"] == "insufficient_symbol_samples"
 
 
+def test_orderbook_micro_bucket_key_uses_explicit_not_available_provenance():
+    observer = OrderbookStabilityObserver(window_sec=10, micro_z_min_samples=3)
+    observer.record_quote(
+        "123456",
+        best_bid=0,
+        best_ask=0,
+        best_bid_qty=100,
+        best_ask_qty=100,
+        bid_depth_l=0,
+        ask_depth_l=0,
+        ts=100.0,
+    )
+
+    micro = observer.snapshot("123456", now=100.0)["orderbook_micro"]
+
+    assert "unknown" not in micro["ofi_bucket_key"]
+    assert micro["ofi_bucket_key"] == (
+        "spread=not_available_no_bid_ask|price=not_available_no_price|"
+        "depth=not_available_no_depth|sample=insufficient"
+    )
+    assert micro["ofi_calibration_bucket"] == micro["ofi_bucket_key"]
+    assert micro["ofi_threshold_bucket_key"] == micro["ofi_bucket_key"]
+
+
 def test_orderbook_micro_becomes_ready_after_min_samples_and_prunes_window():
     observer = OrderbookStabilityObserver(window_sec=10, micro_window_sec=2, micro_z_min_samples=3)
     observer.record_quote(

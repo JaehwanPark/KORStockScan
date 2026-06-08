@@ -42,6 +42,7 @@ NON_RECOVERABLE_TERMS = {
 }
 DONE_ACCEPTABLE_WARNING_ISSUES = {
     "active_sim_priority_preopen_handoff_pending",
+    "active_or_hypothesis_preopen_handoff_pending",
 }
 FULL_WRAPPER_RERUN_LOG_ISSUES = {
     "postclose_start_marker_missing",
@@ -52,6 +53,9 @@ MARKER_RECONCILIATION_LOG_ISSUES = {
 }
 EV_WORKORDER_STALE_ISSUES = {
     "threshold_cycle_ev_stale_before_code_improvement_workorder",
+}
+OPTIONAL_MISSING_ARTIFACT_LABELS = {
+    "threshold_preopen_apply_next",
 }
 _RESOURCE_PASS_RE = re.compile(r"resource guard pass label=(?P<label>\S+)")
 _RESOURCE_TIMEOUT_RE = re.compile(r"resource guard timeout label=(?P<label>\S+)")
@@ -305,6 +309,8 @@ def _verification_artifacts_passable(verification: dict[str, Any]) -> bool:
     for item in artifact_status:
         if not isinstance(item, dict) or not item.get("label") or "exists" not in item:
             return False
+        if item.get("exists") is False and item.get("label") in OPTIONAL_MISSING_ARTIFACT_LABELS:
+            continue
         if item.get("json_valid") is False:
             return False
     return True
@@ -317,6 +323,8 @@ def _has_invalid_artifact_status(verification: dict[str, Any]) -> bool:
     for item in artifact_status:
         if not isinstance(item, dict) or not item.get("label") or "exists" not in item:
             return True
+        if item.get("exists") is False and item.get("label") in OPTIONAL_MISSING_ARTIFACT_LABELS:
+            continue
         if item.get("json_valid") is False:
             return True
     return False
@@ -443,6 +451,16 @@ def _tail_stage_repair_actions(target_date: str, failed_stage: str) -> list[Reco
             actions.append(action)
     actions.extend(
         [
+            RecoveryAction(
+                "refresh_threshold_cycle_ev",
+                [_python_bin(), "-m", "src.engine.threshold_cycle_ev_report", "--date", target_date],
+                "wrapper tail repair EV refresh after post-conversion workorder",
+            ),
+            RecoveryAction(
+                "refresh_runtime_approval_summary",
+                [_python_bin(), "-m", "src.engine.runtime_approval_summary", "--date", target_date],
+                "wrapper tail repair runtime summary refresh after EV",
+            ),
             _build_pending_verify_action(target_date),
             _build_tail_done_reconciliation_action(target_date),
             _build_verify_action(target_date),

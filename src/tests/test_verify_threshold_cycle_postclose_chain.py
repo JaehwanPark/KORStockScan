@@ -98,6 +98,40 @@ def test_raw_row_exclusion_handoff_fails_without_producer_fix_workorder():
     assert status["workorder_handoff_present"] is False
 
 
+def test_conversion_kpi_warns_when_new_postclose_candidate_not_due_until_next_preopen():
+    status, issues, warnings = mod._conversion_kpi_health(
+        conversion_check_enabled=True,
+        key_lineage_ledger={"summary": {}},
+        conversion_lane={"summary": {"conversion_candidate_count": 1}},
+        key_lineage_summary={
+            "preopen_missing_count": 23,
+            "new_postclose_candidates_due_state": "not_due_until_next_preopen",
+        },
+        conversion_lane_summary={"conversion_candidate_count": 1},
+    )
+
+    assert status == "warning"
+    assert issues == []
+    assert warnings == ["active_or_hypothesis_preopen_handoff_pending"]
+
+
+def test_conversion_kpi_fails_when_due_preopen_candidate_is_missing():
+    status, issues, warnings = mod._conversion_kpi_health(
+        conversion_check_enabled=True,
+        key_lineage_ledger={"summary": {}},
+        conversion_lane={"summary": {"conversion_candidate_count": 1}},
+        key_lineage_summary={
+            "preopen_missing_count": 1,
+            "new_postclose_candidates_due_state": "due_same_day",
+        },
+        conversion_lane_summary={"conversion_candidate_count": 1},
+    )
+
+    assert status == "fail"
+    assert issues == ["active_or_hypothesis_preopen_missing"]
+    assert warnings == []
+
+
 def test_raw_row_exclusion_handoff_passes_with_producer_fix_workorder():
     status = mod._raw_row_exclusion_handoff_status(
         {"raw_row_exclusion": {"excluded_row_count": 1}},
@@ -2568,6 +2602,7 @@ def test_build_threshold_cycle_postclose_verification_prefers_workorder_lineage(
         "\n".join(
             [
                 "[START] threshold-cycle postclose target_date=2026-05-12 started_at=2026-05-12T21:00:00+0900",
+                "[FAIL] threshold-cycle postclose target_date=2026-05-12 reason=command_failed failed_at=2026-05-12T21:10:00+0900",
                 "[DONE] threshold-cycle postclose target_date=2026-05-12 recovery_action=tail_repair_done_reconciliation full_wrapper_rerun=false finished_at=2026-05-12T21:35:00+0900",
             ]
         ),
@@ -2582,6 +2617,7 @@ def test_build_threshold_cycle_postclose_verification_prefers_workorder_lineage(
     assert tail_repair_report["execution_profile"]["recovery_action"] == "tail_repair_done_reconciliation"
     assert tail_repair_report["execution_profile"]["required_flags_checked"] is False
     assert tail_repair_report["execution_profile"]["missing_required_flags"] == []
+    assert "postclose_fail_marker_present" not in tail_repair_report["predecessor_integrity"]["log_issues"]
     assert "tail_repair_done_reconciliation" in tail_repair_report["execution_profile"]["interpretation"]
 
     strict_report = mod.build_threshold_cycle_postclose_verification("2026-05-12")

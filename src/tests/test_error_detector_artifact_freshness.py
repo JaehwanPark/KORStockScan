@@ -194,6 +194,67 @@ class TestArtifactFreshnessDetector:
             assert result.details.get("threshold_postclose_report_status") == "warning"
             assert result.details.get("threshold_postclose_report_upstream_status") == "in_progress"
 
+    def test_missing_critical_artifact_warns_when_upstream_process_in_progress(self, tmp_path):
+        now = datetime.now()
+        artifact = {
+            "id": "threshold_postclose_report",
+            "path_template": str(tmp_path / "missing_threshold_ev.json"),
+            "max_staleness_sec": 600,
+            "critical": True,
+            "window_start": (now.hour, now.minute),
+            "window_end": (23, 59),
+            "suppress_missing_while_cron_in_progress": {
+                "id": "threshold_cycle_postclose",
+                "log": str(tmp_path / "missing_postclose.log"),
+                "process_patterns": ["deploy/run_threshold_cycle_postclose.sh"],
+            },
+        }
+        with (
+            patch(_TRADING_MOCK, return_value=True),
+            patch("src.engine.error_detectors.artifact_freshness.ARTIFACT_REGISTRY", [artifact]),
+            patch(
+                "src.engine.error_detectors.artifact_freshness."
+                "ArtifactFreshnessDetector._has_matching_live_process",
+                return_value=True,
+            ),
+        ):
+            detector = ArtifactFreshnessDetector()
+            result = detector.check()
+            assert result.severity == "warning"
+            assert result.details.get("threshold_postclose_report_status") == "warning"
+            assert result.details.get("threshold_postclose_report_upstream_status") == "in_progress"
+
+    def test_postclose_done_controller_report_uses_controller_cron_for_in_progress_suppression(self, tmp_path):
+        now = datetime.now()
+        today = now.strftime("%Y-%m-%d")
+        controller_log = tmp_path / "postclose_done_controller_cron.log"
+        controller_log.write_text(
+            f"[START] postclose_done_controller target_date={today} started_at={today}T16:05:01+0900\n",
+            encoding="utf-8",
+        )
+        artifact = {
+            "id": "postclose_done_controller_report",
+            "path_template": str(tmp_path / "postclose_done_controller_missing.json"),
+            "max_staleness_sec": 3600,
+            "critical": True,
+            "window_start": (now.hour, now.minute),
+            "window_end": (23, 59),
+            "suppress_missing_while_cron_in_progress": {
+                "id": "postclose_done_controller",
+                "log": str(controller_log),
+            },
+            "allow_missing_after_window_while_cron_in_progress": True,
+        }
+        with (
+            patch(_TRADING_MOCK, return_value=True),
+            patch("src.engine.error_detectors.artifact_freshness.ARTIFACT_REGISTRY", [artifact]),
+        ):
+            detector = ArtifactFreshnessDetector()
+            result = detector.check()
+            assert result.severity == "warning"
+            assert result.details.get("postclose_done_controller_report_status") == "warning"
+            assert result.details.get("postclose_done_controller_report_upstream_status") == "in_progress"
+
     def test_missing_critical_artifact_warns_after_window_when_upstream_cron_still_in_progress(self, tmp_path):
         today = datetime.now().strftime("%Y-%m-%d")
         cron_log = tmp_path / "postclose.log"

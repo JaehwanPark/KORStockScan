@@ -366,6 +366,49 @@ def _safe_int(value: Any, default: int = 0) -> int:
         return default
 
 
+def _conversion_kpi_health(
+    *,
+    conversion_check_enabled: bool,
+    key_lineage_ledger: dict[str, Any],
+    conversion_lane: dict[str, Any],
+    key_lineage_summary: dict[str, Any],
+    conversion_lane_summary: dict[str, Any],
+) -> tuple[str, list[str], list[str]]:
+    status = "pass"
+    issues: list[str] = []
+    warnings: list[str] = []
+    if not conversion_check_enabled:
+        return status, issues, warnings
+
+    if not key_lineage_ledger:
+        issues.append("key_lineage_ledger_missing")
+    if not conversion_lane:
+        issues.append("conversion_lane_missing")
+    if _safe_int(key_lineage_summary.get("key_mismatch_count")) > 0:
+        issues.append("active_or_hypothesis_key_mismatch")
+    if _safe_int(key_lineage_summary.get("catalog_missing_count")) > 0:
+        issues.append("active_or_hypothesis_catalog_missing")
+
+    preopen_missing_count = _safe_int(key_lineage_summary.get("preopen_missing_count"))
+    due_state = str(key_lineage_summary.get("new_postclose_candidates_due_state") or "").strip()
+    if preopen_missing_count > 0:
+        if due_state == "not_due_until_next_preopen":
+            warnings.append("active_or_hypothesis_preopen_handoff_pending")
+        else:
+            issues.append("active_or_hypothesis_preopen_missing")
+
+    if _safe_int(key_lineage_summary.get("not_instrumented_count")) > 0:
+        warnings.append("active_or_hypothesis_not_instrumented")
+    if _safe_int(conversion_lane_summary.get("conversion_candidate_count")) == 0 and conversion_lane:
+        warnings.append("conversion_lane_no_candidates")
+
+    if issues:
+        status = "fail"
+    elif warnings:
+        status = "warning"
+    return status, issues, warnings
+
+
 def _safe_float(value: Any, default: float = 0.0) -> float:
     try:
         if value in (None, ""):
@@ -2723,6 +2766,8 @@ def build_threshold_cycle_postclose_verification(
             log_issues.append("postclose_paused_marker_present")
         if _DONE_MARKER in line and f"target_date={target_date}" in line:
             done_line = line
+    if done_line and "recovery_action=" in done_line:
+        log_issues = [item for item in log_issues if item != "postclose_fail_marker_present"]
 
     artifact_status = []
     for label, path in _artifact_paths(target_date).items():
@@ -3313,33 +3358,19 @@ def build_threshold_cycle_postclose_verification(
     conversion_lane_summary = (
         conversion_lane.get("summary") if isinstance(conversion_lane.get("summary"), dict) else {}
     )
-    conversion_kpi_status = "pass"
-    conversion_kpi_issues: list[str] = []
-    conversion_kpi_warnings: list[str] = []
     conversion_check_enabled = (
         execution_flags.get("key_lineage_ledger") is True
         or execution_flags.get("conversion_lane") is True
         or bool(key_lineage_ledger)
         or bool(conversion_lane)
     )
-    if conversion_check_enabled and not key_lineage_ledger:
-        conversion_kpi_issues.append("key_lineage_ledger_missing")
-    if conversion_check_enabled and not conversion_lane:
-        conversion_kpi_issues.append("conversion_lane_missing")
-    if conversion_check_enabled and _safe_int(key_lineage_summary.get("key_mismatch_count")) > 0:
-        conversion_kpi_issues.append("active_or_hypothesis_key_mismatch")
-    if conversion_check_enabled and _safe_int(key_lineage_summary.get("catalog_missing_count")) > 0:
-        conversion_kpi_issues.append("active_or_hypothesis_catalog_missing")
-    if conversion_check_enabled and _safe_int(key_lineage_summary.get("preopen_missing_count")) > 0:
-        conversion_kpi_issues.append("active_or_hypothesis_preopen_missing")
-    if conversion_check_enabled and _safe_int(key_lineage_summary.get("not_instrumented_count")) > 0:
-        conversion_kpi_warnings.append("active_or_hypothesis_not_instrumented")
-    if conversion_check_enabled and _safe_int(conversion_lane_summary.get("conversion_candidate_count")) == 0 and conversion_lane:
-        conversion_kpi_warnings.append("conversion_lane_no_candidates")
-    if conversion_kpi_issues:
-        conversion_kpi_status = "fail"
-    elif conversion_kpi_warnings:
-        conversion_kpi_status = "warning"
+    conversion_kpi_status, conversion_kpi_issues, conversion_kpi_warnings = _conversion_kpi_health(
+        conversion_check_enabled=conversion_check_enabled,
+        key_lineage_ledger=key_lineage_ledger,
+        conversion_lane=conversion_lane,
+        key_lineage_summary=key_lineage_summary,
+        conversion_lane_summary=conversion_lane_summary,
+    )
     stale_downstream_links: list[str] = []
     if "daily_ev" not in disabled_stage_flags:
         if downstream_links.get("threshold_cycle_ev_sources_workorder") and _consumer_stale(ev_report, workorder):

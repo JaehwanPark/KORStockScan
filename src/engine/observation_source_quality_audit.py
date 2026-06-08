@@ -94,6 +94,7 @@ BACKFILL_PREFILTER_PATTERN = (
     "lifecycle_matrix_|holding|overbought|assumed_filled|virtual_fill"
 )
 RAW_ROW_EXCLUSION_DIRNAME = "raw_row_exclusion"
+ORDERBOOK_MICRO_LEGACY_UNKNOWN_BUCKET_REVIEW_CUTOFF = "2026-06-08"
 
 
 @dataclass(frozen=True)
@@ -643,6 +644,27 @@ def _reviewed_unknown_reason(value: Any) -> str | None:
         return "reviewed_missing_risk_regime_context"
     if "panic_level_reason" in lowered and "context_not_ok" in lowered and "market_risk_state" in lowered:
         return "reviewed_missing_risk_regime_context"
+    return None
+
+
+def _reviewed_unknown_reason_for_field(key: str, value: Any, *, emitted_date: str | None = None) -> str | None:
+    reviewed_reason = _reviewed_unknown_reason(value)
+    if reviewed_reason:
+        return reviewed_reason
+    field = str(key or "")
+    if not field.startswith("orderbook_micro_ofi_"):
+        return None
+    date_text = str(emitted_date or "")
+    if not date_text or date_text > ORDERBOOK_MICRO_LEGACY_UNKNOWN_BUCKET_REVIEW_CUTOFF:
+        return None
+    text = str(value or "").lower()
+    if "unknown" not in text:
+        return None
+    parts = {part.partition("=")[0]: part.partition("=")[2] for part in text.split("|") if "=" in part}
+    if not parts:
+        return None
+    if any(parts.get(name) == "unknown" for name in ("spread", "price", "depth")):
+        return "reviewed_orderbook_micro_legacy_not_available_bucket"
     return None
 
 
@@ -1315,7 +1337,11 @@ def _evaluate_contracts(rows: list[dict[str, Any]], stage_counts: Counter[str]) 
                 field_presence[stage][key] += 1
         for key, value in _unknown_scan_values(row, normalized).items():
             if _unknown_token_present(value):
-                reviewed_reason = _reviewed_unknown_reason(value)
+                reviewed_reason = _reviewed_unknown_reason_for_field(
+                    key,
+                    value,
+                    emitted_date=str(row.get("emitted_date") or row.get("date") or ""),
+                )
                 if (
                     not reviewed_reason
                     and stage == "scalp_sim_panic_context_warning"

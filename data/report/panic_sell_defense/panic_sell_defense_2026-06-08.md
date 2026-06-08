@@ -2,16 +2,16 @@
 
 ## 판정
 
-- panic_state: `RECOVERY_WATCH`
-- panic_regime_mode: `STABILIZING`
-- risk_regime_gate_state: `watch`
+- panic_state: `RECOVERY_CONFIRMED`
+- panic_regime_mode: `RECOVERY_CONFIRMED`
+- risk_regime_gate_state: `recovery_confirmed`
 - risk_regime_threshold_mode: `insufficient_sample`
 - panic_confirmation_policy: `portfolio stop-loss clusters are evidence; PANIC_DETECTED requires market or microstructure confirmation`
 - report_only: `true`
 - runtime_effect: `report_only_no_mutation`
-- as_of: `2026-06-08T15:28:16`
-- latest_event_at: `2026-06-08T15:20:28`
-- reasons: `live market panic breadth risk_off advisory; market breadth risk-off watch without panic confirmation`
+- as_of: `2026-06-08T16:50:23`
+- latest_event_at: `2026-06-08T16:00:01`
+- reasons: `live market panic breadth risk_off advisory; recovery confirmed by active sim/probe or post-sell rebound above buy`
 
 ## 패닉 지표
 
@@ -42,8 +42,8 @@
 - active_avg_unrealized_profit_rate_pct: `-0.1689`
 - active_win_rate_pct: `28.6`
 - sim_probe_provenance_passed: `true`
-- post_sell_rebound_above_sell_10_20m_pct: `0`
-- post_sell_rebound_above_buy_10_20m_pct: `0`
+- post_sell_rebound_above_sell_10_20m_pct: `100`
+- post_sell_rebound_above_buy_10_20m_pct: `36.4`
 
 ## Microstructure Detector
 
@@ -53,18 +53,18 @@
 - panic_signal_count: `0`
 - recovery_candidate_count: `0`
 - recovery_confirmed_count: `0`
-- missing_orderbook_count: `93`
-- degraded_orderbook_count: `93`
-- max_panic_score: `0.3454`
+- missing_orderbook_count: `100`
+- degraded_orderbook_count: `100`
+- max_panic_score: `0.3`
 - max_recovery_score: `0.5793`
-- micro_cusum_triggered_symbol_count: `3`
+- micro_cusum_triggered_symbol_count: `2`
 - micro_consensus_pass_symbol_count: `0`
 - micro_cusum_decision_authority: `source_quality_only`
 
 ## Microstructure Market Context
 
 - market_risk_state: `RISK_OFF`
-- market_panic_breadth_as_of: `2026-06-08T15:28:01`
+- market_panic_breadth_as_of: `2026-06-08T16:49:31`
 - market_panic_breadth_source_quality_status: `ok`
 - market_panic_breadth_risk_off_advisory: `true`
 - market_panic_breadth_single_market_risk_off_advisory: `false`
@@ -86,7 +86,7 @@
 
 - `panic_entry_freeze_guard`: `report_only_candidate`, allowed_runtime_apply=`false`
 - `panic_stop_confirmation`: `hold_no_eligible_exit`, allowed_runtime_apply=`false`
-- `panic_rebound_probe`: `hold_until_recovery_confirmed`, allowed_runtime_apply=`false`
+- `panic_rebound_probe`: `report_only_candidate`, allowed_runtime_apply=`false`
 - `panic_attribution_pack`: `active_report_only`, allowed_runtime_apply=`false`
 
 ## 금지된 자동변경

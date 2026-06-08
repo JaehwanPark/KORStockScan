@@ -21,14 +21,14 @@ def test_postclose_wrapper_runs_pattern_labs_before_automation_and_ev_report():
     assert 'PATTERN_LAB_AI_REVIEW_PROVIDER="${KORSTOCKSCAN_PATTERN_LAB_AI_REVIEW_PROVIDER:-openai}"' in script
 
 
-def test_scalp_sim_overnight_preclose_wrapper_uses_live_openai_and_bedrock_lite_shadow():
+def test_scalp_sim_overnight_preclose_wrapper_uses_live_openai_without_bedrock_lite_shadow():
     script = Path("deploy/run_scalp_sim_overnight_preclose.sh").read_text(encoding="utf-8")
 
     assert "PYTHONPATH=." in script
     assert "src.engine.scalp_sim_overnight --date \"$TARGET_DATE\" --live-openai" in script
     assert "--report-only" not in script
-    assert 'KORSTOCKSCAN_BEDROCK_NOVA_LITE_SHADOW_ENABLED="${KORSTOCKSCAN_BEDROCK_NOVA_LITE_SHADOW_ENABLED:-false}"' in script
-    assert 'KORSTOCKSCAN_BEDROCK_NOVA_LITE_ROUTE_MODE="${KORSTOCKSCAN_BEDROCK_NOVA_LITE_ROUTE_MODE:-shadow}"' in script
+    assert "KORSTOCKSCAN_BEDROCK_NOVA_LITE_SHADOW_ENABLED" not in script
+    assert "KORSTOCKSCAN_BEDROCK_NOVA_LITE_ROUTE_MODE=off" in script
 
 
 def test_threshold_cycle_cron_installs_scalp_sim_overnight_preclose_once():

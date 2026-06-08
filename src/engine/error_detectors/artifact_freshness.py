@@ -178,6 +178,10 @@ ARTIFACT_REGISTRY: list[dict[str, Any]] = [
         "suppress_missing_while_cron_in_progress": {
             "id": "threshold_cycle_postclose",
             "log": "logs/threshold_cycle_postclose_cron.log",
+            "process_patterns": [
+                "deploy/run_threshold_cycle_postclose.sh",
+                "run_threshold_cycle_postclose.sh",
+            ],
         },
         "allow_missing_after_window_while_cron_in_progress": True,
     },
@@ -194,6 +198,10 @@ ARTIFACT_REGISTRY: list[dict[str, Any]] = [
         "suppress_missing_while_cron_in_progress": {
             "id": "threshold_cycle_postclose",
             "log": "logs/threshold_cycle_postclose_cron.log",
+            "process_patterns": [
+                "deploy/run_threshold_cycle_postclose.sh",
+                "run_threshold_cycle_postclose.sh",
+            ],
         },
         "allow_missing_after_window_while_cron_in_progress": True,
     },
@@ -209,8 +217,8 @@ ARTIFACT_REGISTRY: list[dict[str, Any]] = [
         "json_status_field": "status",
         "json_ok_values": ["done", "dry_run_planned"],
         "suppress_missing_while_cron_in_progress": {
-            "id": "threshold_cycle_postclose",
-            "log": "logs/threshold_cycle_postclose_cron.log",
+            "id": "postclose_done_controller",
+            "log": "logs/postclose_done_controller_cron.log",
         },
         "allow_missing_after_window_while_cron_in_progress": True,
     },
@@ -699,6 +707,8 @@ class ArtifactFreshnessDetector(BaseDetector):
     def _is_upstream_cron_in_progress(config: Any, today: str) -> bool:
         if not isinstance(config, dict):
             return False
+        if ArtifactFreshnessDetector._has_matching_live_process(config):
+            return True
         log_value = str(config.get("log") or "").strip()
         if not log_value:
             return False
@@ -720,6 +730,40 @@ class ArtifactFreshnessDetector(BaseDetector):
         if has_fail:
             return False
         return True
+
+    @staticmethod
+    def _has_matching_live_process(config: dict[str, Any]) -> bool:
+        patterns_raw = config.get("process_patterns")
+        if not isinstance(patterns_raw, list):
+            return False
+        patterns = [str(pattern).strip() for pattern in patterns_raw if str(pattern).strip()]
+        if not patterns:
+            return False
+        proc_root = Path("/proc")
+        try:
+            proc_entries = list(proc_root.iterdir())
+        except OSError:
+            return False
+        current_pid = os.getpid()
+        for entry in proc_entries:
+            if not entry.name.isdigit():
+                continue
+            try:
+                pid = int(entry.name)
+            except ValueError:
+                continue
+            if pid == current_pid:
+                continue
+            try:
+                cmdline = (entry / "cmdline").read_bytes().replace(b"\x00", b" ").decode(
+                    "utf-8",
+                    errors="replace",
+                )
+            except OSError:
+                continue
+            if cmdline and any(pattern in cmdline for pattern in patterns):
+                return True
+        return False
 
     @staticmethod
     def _validate_partitioned_compact(

@@ -3163,6 +3163,30 @@ def test_entry_ai_price_context_omits_orderbook_micro_when_disabled(monkeypatch)
     assert "orderbook_micro" not in ctx
 
 
+def test_entry_ai_price_missing_micro_snapshot_uses_explicit_provenance(monkeypatch):
+    monkeypatch.setattr(
+        state_handlers,
+        "TRADING_RULES",
+        replace(CONFIG, SCALPING_ENTRY_PRICE_ORDERBOOK_MICRO_ENABLED=True),
+    )
+
+    ctx = state_handlers._build_entry_ai_price_context(
+        {"strategy": "SCALPING", "position_tag": "SCANNER", "prob": 0.8},
+        {"order_price": 9990, "orderbook_stability": {}},
+        curr_price=10020,
+        best_bid=10020,
+        best_ask=10030,
+    )
+
+    micro = ctx["orderbook_micro"]
+    assert micro["ofi_threshold_source"] == "fallback"
+    assert "unknown" not in micro["ofi_bucket_key"]
+    assert micro["ofi_bucket_key"] == (
+        "spread=not_available_no_bid_ask|price=not_available_no_price|"
+        "depth=not_available_no_depth|sample=insufficient"
+    )
+
+
 def test_entry_ai_price_skip_logs_bearish_policy_basis(monkeypatch):
     monkeypatch.setattr(
         state_handlers,

@@ -7654,8 +7654,14 @@ def _build_orderbook_micro_context(
             "observer_missing_reason": "missing_snapshot",
             "ofi_threshold_source": "fallback",
             "ofi_threshold_fallback_reason": "missing_snapshot",
-            "ofi_bucket_key": "spread=unknown|price=unknown|depth=unknown|sample=insufficient",
-            "ofi_calibration_bucket": "spread=unknown|price=unknown|depth=unknown|sample=insufficient",
+            "ofi_bucket_key": (
+                "spread=not_available_no_bid_ask|price=not_available_no_price|"
+                "depth=not_available_no_depth|sample=insufficient"
+            ),
+            "ofi_calibration_bucket": (
+                "spread=not_available_no_bid_ask|price=not_available_no_price|"
+                "depth=not_available_no_depth|sample=insufficient"
+            ),
             "ofi_calibration_warning": "missing_snapshot",
         }
 
