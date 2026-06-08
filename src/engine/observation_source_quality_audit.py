@@ -17,6 +17,7 @@ from src.engine.ai_response_contracts import (
     normalize_flow_state_label,
     normalize_gatekeeper_action_key,
 )
+from src.engine.monitoring.market_halt_windows import load_market_halt_windows
 from src.utils.constants import DATA_DIR
 from src.utils.jsonl_io import existing_or_gzip_path, iter_jsonl
 
@@ -1024,6 +1025,8 @@ def _producer_hint_for_row(row: dict[str, Any]) -> dict[str, Any]:
 def _summarize_raw_row_exclusions(
     excluded_payloads: list[dict[str, Any]],
     exclusions_by_line: dict[int, dict[str, Any]],
+    *,
+    target_date: str,
 ) -> dict[str, Any]:
     stage_counts: Counter[str] = Counter()
     field_gap_counts: Counter[str] = Counter()
@@ -1086,14 +1089,69 @@ def _summarize_raw_row_exclusions(
         hint["top_reasons"] = [
             reason for reason, _ in stage_reason_counts.get(stage, Counter()).most_common(5)
         ]
+    halt_context = _market_halt_context_for_exclusion_timestamps(target_date, timestamps)
     return {
         "stage_counts": dict(sorted(stage_counts.items())),
         "field_gap_counts": dict(sorted(field_gap_counts.items())),
         "exclusion_reasons": dict(sorted(reason_counts.items())),
         "first_timestamp": min(timestamps) if timestamps else None,
         "last_timestamp": max(timestamps) if timestamps else None,
+        **halt_context,
         "sample_rows": sample_rows,
         "producer_hint": sorted(producer_hints.values(), key=lambda item: (-int(item.get("count") or 0), str(item.get("stage") or ""))),
+    }
+
+
+def _market_halt_context_for_exclusion_timestamps(
+    target_date: str,
+    timestamps: list[str],
+) -> dict[str, Any]:
+    windows = load_market_halt_windows(target_date, data_dir=DATA_DIR)
+    if not windows or not timestamps:
+        return {
+            "market_halt_or_circuit_window_overlap": False,
+            "market_halt_or_circuit_context": None,
+        }
+    ts_values = sorted(str(ts) for ts in timestamps if ts)
+    if not ts_values:
+        return {
+            "market_halt_or_circuit_window_overlap": False,
+            "market_halt_or_circuit_context": None,
+        }
+    contexts: list[dict[str, Any]] = []
+    for window in windows:
+        start = str(window.get("halt_started_at") or "")
+        end = str(window.get("normal_flow_check_after") or window.get("single_price_order_acceptance_until") or "")
+        if not start or not end:
+            continue
+        overlap_count = sum(1 for ts in ts_values if start <= ts < end)
+        after_normal_count = sum(1 for ts in ts_values if ts >= end)
+        contexts.append(
+            {
+                **window,
+                "excluded_row_count": len(ts_values),
+                "overlap_excluded_row_count": overlap_count,
+                "after_normal_flow_excluded_row_count": after_normal_count,
+                "overlap_ratio": round(overlap_count / len(ts_values), 6),
+                "first_excluded_timestamp": ts_values[0],
+                "last_excluded_timestamp": ts_values[-1],
+                "classification": (
+                    "market_halt_or_circuit_window_overlap"
+                    if overlap_count >= max(1, int(len(ts_values) * 0.8))
+                    else "no_material_market_halt_overlap"
+                ),
+                "runtime_effect": False,
+                "allowed_runtime_apply": False,
+            }
+        )
+    active_contexts = [
+        context
+        for context in contexts
+        if context.get("classification") == "market_halt_or_circuit_window_overlap"
+    ]
+    return {
+        "market_halt_or_circuit_window_overlap": bool(active_contexts),
+        "market_halt_or_circuit_context": active_contexts[0] if active_contexts else None,
     }
 
 
@@ -1906,7 +1964,11 @@ def _exclude_hard_blocking_rows_from_raw(target_date: str, report: dict[str, Any
             except json.JSONDecodeError:
                 payload = {"raw": line.rstrip("\n")}
             excluded_payloads.append({"line_no": line_no, "payload": payload})
-    exclusion_summary = _summarize_raw_row_exclusions(excluded_payloads, exclusions_by_line)
+    exclusion_summary = _summarize_raw_row_exclusions(
+        excluded_payloads,
+        exclusions_by_line,
+        target_date=target_date,
+    )
     tmp_path = raw_path.with_suffix(raw_path.suffix + ".tmp_row_exclusion")
     tmp_path.write_text("".join(kept), encoding="utf-8")
     tmp_path.replace(raw_path)
@@ -1949,6 +2011,12 @@ def write_report(target_date: str) -> dict[str, Any]:
             "exclusion_reasons": exclusion_manifest.get("exclusion_reasons") or {},
             "first_timestamp": exclusion_manifest.get("first_timestamp"),
             "last_timestamp": exclusion_manifest.get("last_timestamp"),
+            "market_halt_or_circuit_window_overlap": exclusion_manifest.get(
+                "market_halt_or_circuit_window_overlap"
+            ),
+            "market_halt_or_circuit_context": exclusion_manifest.get(
+                "market_halt_or_circuit_context"
+            ),
             "sample_rows": exclusion_manifest.get("sample_rows") or [],
             "producer_hint": exclusion_manifest.get("producer_hint") or [],
             "policy": exclusion_manifest.get("policy"),

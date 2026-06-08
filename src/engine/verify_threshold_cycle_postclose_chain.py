@@ -189,8 +189,10 @@ def _raw_row_exclusion_handoff_status(
             item.get("order_id") == "order_observation_source_quality_raw_row_exclusion_producer_gap"
             or item.get("improvement_type") == "source_quality_raw_row_exclusion_producer_gap"
             or item.get("improvement_type") == "source_quality_raw_row_exclusion_limit_up_locked_context"
+            or item.get("improvement_type") == "source_quality_raw_row_exclusion_market_halt_context"
             or item.get("route") == "source_quality_raw_row_exclusion_producer_fix"
             or item.get("route") == "review_required_limit_up_locked_context"
+            or item.get("route") == "review_required_market_halt_context"
         )
     ]
     review_only_matching_orders = [
@@ -199,8 +201,11 @@ def _raw_row_exclusion_handoff_status(
         if isinstance(item, dict)
         and (
             item.get("raw_row_exclusion_context_classification") == "limit_up_locked_context"
+            or item.get("raw_row_exclusion_context_classification") == "market_halt_or_circuit_window_overlap"
             or item.get("improvement_type") == "source_quality_raw_row_exclusion_limit_up_locked_context"
+            or item.get("improvement_type") == "source_quality_raw_row_exclusion_market_halt_context"
             or item.get("route") == "review_required_limit_up_locked_context"
+            or item.get("route") == "review_required_market_halt_context"
         )
     ]
     matching_orders = [
@@ -211,11 +216,14 @@ def _raw_row_exclusion_handoff_status(
     for item in matching_orders:
         if (
             item.get("raw_row_exclusion_context_classification") == "limit_up_locked_context"
+            or item.get("raw_row_exclusion_context_classification") == "market_halt_or_circuit_window_overlap"
             or item.get("improvement_type") == "source_quality_raw_row_exclusion_limit_up_locked_context"
+            or item.get("improvement_type") == "source_quality_raw_row_exclusion_market_halt_context"
             or item.get("route") == "review_required_limit_up_locked_context"
+            or item.get("route") == "review_required_market_halt_context"
         ):
             if str(item.get("decision") or "") not in {"attach_existing_family", "defer_evidence"}:
-                invalid_contract_reasons.append("limit_up_context_decision_not_review_only")
+                invalid_contract_reasons.append("review_context_decision_not_review_only")
                 continue
             if item.get("runtime_effect") is not False:
                 invalid_contract_reasons.append("runtime_effect_not_false")
@@ -255,8 +263,11 @@ def _raw_row_exclusion_handoff_status(
             if isinstance(item, dict)
             and (
                 item.get("raw_row_exclusion_context_classification") == "limit_up_locked_context"
+                or item.get("raw_row_exclusion_context_classification") == "market_halt_or_circuit_window_overlap"
                 or item.get("improvement_type") == "source_quality_raw_row_exclusion_limit_up_locked_context"
+                or item.get("improvement_type") == "source_quality_raw_row_exclusion_market_halt_context"
                 or item.get("route") == "review_required_limit_up_locked_context"
+                or item.get("route") == "review_required_market_halt_context"
             )
         ),
         "runtime_effect": False,

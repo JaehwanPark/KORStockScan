@@ -1411,6 +1411,64 @@ def test_observation_source_quality_raw_row_exclusion_limit_up_context_is_review
     assert any("context_classification=limit_up_locked_context" in item for item in raw_order["evidence"])
 
 
+def test_observation_source_quality_raw_row_exclusion_market_halt_context_is_review_only(
+    tmp_path,
+):
+    report = {
+        "status": "warning",
+        "summary": {"event_count": 10, "tuning_input_allowed": True},
+        "raw_row_exclusion": {
+            "excluded_row_count": 10,
+            "stage_counts": {"blocked_strength_momentum": 10},
+            "field_gap_counts": {"zero_fields:intraday_range_pct": 10},
+            "exclusion_reasons": {
+                "zero_context_sensitive": 10,
+                "insufficient_history": 10,
+            },
+            "market_halt_or_circuit_window_overlap": True,
+            "market_halt_or_circuit_context": {
+                "classification": "market_halt_or_circuit_window_overlap",
+                "overlap_excluded_row_count": 10,
+                "after_normal_flow_excluded_row_count": 0,
+                "normal_flow_check_after": "2026-06-08T09:35:00",
+            },
+        },
+    }
+
+    orders = mod._observation_source_quality_followup_orders(report)
+    classified = [
+        mod._classify_order(
+            order,
+            finding_by_order_id={},
+            finding_by_title_slug={},
+            auto_family_order_ids=set(),
+            closed_instrumentation_order_families={},
+        )
+        for order in orders
+    ]
+    serialized = [mod._serialize_classified_order(item) for item in classified]
+    raw_order = next(
+        item
+        for item in serialized
+        if item["order_id"] == "order_observation_source_quality_raw_row_exclusion_producer_gap"
+    )
+
+    assert raw_order["decision"] == "attach_existing_family"
+    assert raw_order["route"] == "review_required_market_halt_context"
+    assert raw_order["improvement_type"] == "source_quality_raw_row_exclusion_market_halt_context"
+    assert (
+        raw_order["raw_row_exclusion_context_classification"]
+        == "market_halt_or_circuit_window_overlap"
+    )
+    assert raw_order["terminal_disposition"] == "no_code_required_pending_policy_classification"
+    assert raw_order["implementation_candidate"] is False
+    assert not codex_workorder_runner.is_safe_implement_now(raw_order)
+    assert any(
+        "context_classification=market_halt_or_circuit_window_overlap" in item
+        for item in raw_order["evidence"]
+    )
+
+
 def test_observation_source_quality_raw_row_exclusion_routes_even_when_audit_status_passes():
     report = {
         "status": "pass",

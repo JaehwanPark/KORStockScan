@@ -1520,6 +1520,24 @@ def _classify_order(
             ),
         )
 
+    if order.get("improvement_type") == "source_quality_raw_row_exclusion_market_halt_context":
+        return ClassifiedOrder(
+            order=order,
+            decision="attach_existing_family",
+            reason=(
+                "raw row exclusion is concentrated inside a confirmed market halt/circuit-breaker recovery "
+                "window; keep it as reviewed source-quality evidence and do not create an automatic producer-fix "
+                "implementation unless the gap repeats after normal flow resumes"
+            ),
+            mapped_family=mapped_family or "observation_source_quality_audit",
+            route=route or "review_required_market_halt_context",
+            confidence=confidence or "audit",
+            automation_reentry=(
+                "Next postclose source-quality audit should reclassify only if the same intraday_range_pct=0 "
+                "gap repeats outside the market halt/circuit-breaker recovery window."
+            ),
+        )
+
     if order.get("improvement_type") == "source_quality_unknown_token_provenance_gap":
         return ClassifiedOrder(
             order=order,
@@ -2991,6 +3009,12 @@ def _observation_source_quality_followup_orders(report: dict[str, Any]) -> list[
     excluded_row_count = int(raw_row_exclusion.get("excluded_row_count") or 0)
     if excluded_row_count > 0:
         context_review = _raw_row_exclusion_limit_up_locked_context(raw_row_exclusion)
+        market_halt_context_review = None if context_review else _raw_row_exclusion_market_halt_context(raw_row_exclusion)
+        context_classification = None
+        if context_review:
+            context_classification = "limit_up_locked_context"
+        elif market_halt_context_review:
+            context_classification = "market_halt_or_circuit_window_overlap"
         stage_counts = (
             raw_row_exclusion.get("stage_counts")
             if isinstance(raw_row_exclusion.get("stage_counts"), dict)
@@ -3059,6 +3083,17 @@ def _observation_source_quality_followup_orders(report: dict[str, Any]) -> list[
                     ),
                 ]
             )
+        if market_halt_context_review:
+            raw_exclusion_evidence.extend(
+                [
+                    "context_classification=market_halt_or_circuit_window_overlap",
+                    f"context_evidence={json.dumps(market_halt_context_review, ensure_ascii=False, sort_keys=True)}",
+                    (
+                        "required_action=review postclose only; do not auto-implement unless the same zero "
+                        "intraday range gap repeats after normal market flow resumes"
+                    ),
+                ]
+            )
         orders.append(
             {
                 **base,
@@ -3066,12 +3101,16 @@ def _observation_source_quality_followup_orders(report: dict[str, Any]) -> list[
                 "title": (
                     "Observation source-quality raw row exclusion limit-up locked context"
                     if context_review
+                    else "Observation source-quality raw row exclusion market halt context"
+                    if market_halt_context_review
                     else "Observation source-quality raw row exclusion producer gap"
                 ),
                 "priority": 0,
                 "route": (
                     "review_required_limit_up_locked_context"
                     if context_review
+                    else "review_required_market_halt_context"
+                    if market_halt_context_review
                     else "source_quality_raw_row_exclusion_producer_fix"
                 ),
                 "mapped_family": "observation_source_quality_audit",
@@ -3079,12 +3118,19 @@ def _observation_source_quality_followup_orders(report: dict[str, Any]) -> list[
                 "improvement_type": (
                     "source_quality_raw_row_exclusion_limit_up_locked_context"
                     if context_review
+                    else "source_quality_raw_row_exclusion_market_halt_context"
+                    if market_halt_context_review
                     else "source_quality_raw_row_exclusion_producer_gap"
                 ),
                 "intent": (
                     "Keep the excluded rows out of tuning inputs, but treat the current cluster as a reviewed "
                     "limit-up locked market context until non-limit-up evidence proves a producer gap."
                     if context_review
+                    else (
+                        "Keep the excluded rows out of tuning inputs, but treat the current cluster as a reviewed "
+                        "market halt/circuit-breaker recovery context until post-resume evidence proves a producer gap."
+                    )
+                    if market_halt_context_review
                     else (
                         "Analyze all excluded raw rows by stage/field/reason and fix producer-side source-quality "
                         "or provenance causes so the postclose chain does not repeatedly need to exclude the same "
@@ -3102,9 +3148,9 @@ def _observation_source_quality_followup_orders(report: dict[str, Any]) -> list[
                 "acceptance_tests": [
                     "PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_observation_source_quality_audit.py src/tests/test_build_code_improvement_workorder.py src/tests/test_verify_threshold_cycle_postclose_chain.py",
                 ],
-                "raw_row_exclusion_context_classification": "limit_up_locked_context" if context_review else None,
-                "raw_row_exclusion_context": context_review,
-                "terminal_disposition": "no_code_required_pending_policy_classification" if context_review else None,
+                "raw_row_exclusion_context_classification": context_classification,
+                "raw_row_exclusion_context": context_review or market_halt_context_review,
+                "terminal_disposition": "no_code_required_pending_policy_classification" if context_classification else None,
             }
         )
     if unknown_token_findings:
@@ -3437,6 +3483,39 @@ def _raw_row_exclusion_limit_up_locked_context(raw_row_exclusion: dict[str, Any]
         "stages_seen": sorted(stages_seen),
         "required_followup": (
             "review_only_until_non_limit_up_zero_range_repeats_or_high_low_candle_source_loss_is_proven"
+        ),
+    }
+
+
+def _raw_row_exclusion_market_halt_context(raw_row_exclusion: dict[str, Any]) -> dict[str, Any] | None:
+    if raw_row_exclusion.get("market_halt_or_circuit_window_overlap") is not True:
+        return None
+    excluded_row_count = int(raw_row_exclusion.get("excluded_row_count") or 0)
+    if excluded_row_count <= 0:
+        return None
+    field_gap_counts = (
+        raw_row_exclusion.get("field_gap_counts")
+        if isinstance(raw_row_exclusion.get("field_gap_counts"), dict)
+        else {}
+    )
+    zero_range_count = int(field_gap_counts.get("zero_fields:intraday_range_pct") or 0)
+    if zero_range_count < max(1, int(excluded_row_count * 0.8)):
+        return None
+    context = (
+        raw_row_exclusion.get("market_halt_or_circuit_context")
+        if isinstance(raw_row_exclusion.get("market_halt_or_circuit_context"), dict)
+        else {}
+    )
+    overlap_count = int(context.get("overlap_excluded_row_count") or 0)
+    if overlap_count < max(1, int(excluded_row_count * 0.8)):
+        return None
+    return {
+        **context,
+        "classification": "market_halt_or_circuit_window_overlap",
+        "excluded_row_count": excluded_row_count,
+        "zero_intraday_range_count": zero_range_count,
+        "required_followup": (
+            "review_only_until_zero_range_repeats_after_normal_market_flow_resumes"
         ),
     }
 

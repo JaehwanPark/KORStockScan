@@ -49,23 +49,45 @@
 
 ## 장중 체크리스트 (09:05~15:20)
 
-- [ ] `[RuntimeEnvIntradayObserve0608] 전일 selected runtime family 장중 provenance 및 rollback guard 확인` (`Due: 2026-06-08`, `Slot: INTRADAY`, `TimeWindow: 09:05~09:20`, `Track: RuntimeStability`)
+- [x] `[RuntimeEnvIntradayObserve0608] 전일 selected runtime family 장중 provenance 및 rollback guard 확인` (`Due: 2026-06-08`, `Slot: INTRADAY`, `TimeWindow: 09:05~09:20`, `Track: RuntimeStability`)
   - Source: [threshold_cycle_ev_2026-06-05.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-06-05.json)
   - 판정 기준: selected_families=soft_stop_whipsaw_confirmation가 runtime event provenance에 찍히는지 확인한다.
   - 금지: 장중 관찰 결과로 runtime threshold mutation을 수행하지 않는다.
   - 다음 액션: provenance present/missing, rollback guard breach 여부를 분리 기록한다.
+  - 처리 결과: `provenance_present`.
+  - 판정: 장중 runtime event append와 selected family provenance가 확인됐고 rollback guard breach는 없다. 장중 threshold/env mutation은 수행하지 않는다.
+  - 근거: `pipeline_events_2026-06-08.jsonl`은 09:42 KST 기준 30,629 events, 108 stages, first=`2026-06-08T07:40:21.384844`, last=`2026-06-08T09:42:38.592571`로 append 중이다. `soft_stop_whipsaw_confirmation` mention/event는 13건이며, `error_detection full`은 `summary_severity=pass`, process/thread/resource/artifact freshness 모두 pass다.
+  - 다음 액션: 장후 `threshold_cycle_ev_2026-06-08`와 post-apply attribution에서 selected family의 실제 효과를 확인한다. 장중 결과로 runtime threshold mutation은 금지 유지.
 
-- [ ] `[SimProbeIntradayCoverage0608] sim/probe 관찰축 actual_order_submitted=false 및 source-quality 확인` (`Due: 2026-06-08`, `Slot: INTRADAY`, `TimeWindow: 09:35~09:50`, `Track: ScalpingLogic`)
+- [x] `[SimProbeIntradayCoverage0608] sim/probe 관찰축 actual_order_submitted=false 및 source-quality 확인` (`Due: 2026-06-08`, `Slot: INTRADAY`, `TimeWindow: 09:35~09:50`, `Track: ScalpingLogic`)
   - Source: [threshold_cycle_ev_2026-06-05.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-06-05.json)
   - 판정 기준: sim/probe 표본이 real execution과 분리되고 `actual_order_submitted=false` provenance가 유지되는지 확인한다.
   - 금지: sim/probe EV를 broker execution 품질이나 실주문 전환 근거로 단독 사용하지 않는다.
   - 다음 액션: source-quality split, active state 복원, open/closed count를 같이 기록한다.
+  - 처리 결과: `source_quality_split_observed`.
+  - 판정: sim/probe event는 실주문과 분리되어 관측 중이며 real execution 품질이나 실주문 전환 근거로 쓰지 않는다.
+  - 근거: `actual_order_submitted` 필드는 9,220건 모두 `False`이며, `broker_order_forbidden=True` 7,337건/`False` 1,862건으로 provenance가 분리된다. 주요 sim/probe event는 `scalp_sim_panic_scale_in_blocked=733`, `scalp_sim_duplicate_buy_signal=575`, `scalp_sim_ai_holding_live_call=298`, `scalp_sim_buy_order_assumed_filled=96`, `swing_probe_discarded=259`, `swing_probe_state_restored=12`, `swing_probe_entry_candidate=10`, `swing_probe_holding_started=10`이다.
+  - 다음 액션: 장후 `key_lineage_ledger_2026-06-08`와 `conversion_lane_2026-06-08`에서 active priority same-key observation과 sim/probe source-quality split을 최종 확인한다.
 
-- [ ] `[IntradaySourceQualityGateCheck0608] 장중 raw source-quality 결손/unknown 조기 경보 및 튜닝 입력 차단 준비 확인` (`Due: 2026-06-08`, `Slot: INTRADAY`, `TimeWindow: 14:20~14:35`, `Track: RuntimeStability`)
+- [x] `[IntradaySourceQualityGateCheck0608] 장중 raw source-quality 결손/unknown 조기 경보 및 튜닝 입력 차단 준비 확인` (`Due: 2026-06-08`, `Slot: INTRADAY`, `TimeWindow: 14:20~14:35`, `Track: RuntimeStability`)
   - Source: [pipeline_events_2026-06-08.jsonl](/home/ubuntu/KORStockScan/data/pipeline_events/pipeline_events_2026-06-08.jsonl), [threshold_events_2026-06-08.jsonl](/home/ubuntu/KORStockScan/data/threshold_cycle/threshold_events_2026-06-08.jsonl), [observation_source_quality_audit_2026-06-08.json](/home/ubuntu/KORStockScan/data/report/observation_source_quality_audit/observation_source_quality_audit_2026-06-08.json), [observation_source_quality_audit.py](/home/ubuntu/KORStockScan/src/engine/observation_source_quality_audit.py)
   - 판정 기준: 장중 `PYTHONPATH=. .venv/bin/python -m src.engine.observation_source_quality_audit --target-date 2026-06-08 --write` 재감사를 실행하거나 최신 산출물을 확인해 `hard_blocking_contract_gap_count`, `hard_blocking_excluded_row_count`, `tuning_input_allowed`, `raw_row_exclusion_applied`, `unknown_token_stage_count`, `review_warning_count`를 기록한다.
   - 금지: hard contract gap 또는 unknown-token warning을 답변에만 남기지 않는다. 결손 row/window는 튜닝 입력 제외 또는 workorder handoff 대상으로 고정하고, broker/order/provider/cap/bot/threshold 변경 근거로 사용하지 않는다.
   - 다음 액션: `source_quality_clean_intraday`, `defective_rows_excluded`, `hard_block_requires_producer_fix`, `unknown_warning_workorder_required`, `audit_missing_or_stale` 중 하나로 닫는다. hard gap/unknown warning이 있으면 장후 `PostcloseSourceQualityGateReview`와 `CodeImprovementWorkorderReview`에서 누락 없이 재확인한다.
+  - 처리 결과: `defective_rows_excluded`.
+  - 판정: 장중 source-quality audit은 `warning`이나 hard block은 없다. 결손 row/window는 raw-row exclusion으로 제외됐고 tuning input은 허용된다.
+  - 근거: `observation_source_quality_audit --target-date 2026-06-08 --write` 실행 결과 `status=warning`, `event_count=30449`, `stage_count=107`, `hard_blocking_contract_gap_count=0`, `hard_blocking_excluded_row_count=0`, `tuning_input_allowed=true`, `raw_row_exclusion_applied=true`, `unknown_token_stage_count=3`, `review_warning_count=3`이다. raw-row exclusion manifest는 `data/source_quality/raw_row_exclusion/2026-06-08_20260608T094156148660+0900/manifest.json`이며 500 rows of `blocked_strength_momentum` zero `intraday_range_pct` rows가 제외됐다.
+  - 보강: 09:03:42 서킷브레이커, 20분 매매정지, 10분 단일가 접수 구간과 500 rows 집중 시간이 겹친다. 09:35 이후 대량 zero context는 정상 유입으로 회복됐고, 09:59 `아진엑스텍(059120)` 단일 종목 6건은 신규 관측 `insufficient_history`로 분리한다. 확정 window는 tracked `data/source_quality/market_halt_windows/windows/2026-06-08.json` artifact로 기록하고, WebSocket `0s` 장운영구분은 ignored `data/source_quality/market_halt_windows/session_events/` raw session event로 중복 skip 저장한다. source-quality audit/workorder/verifier에는 artifact 기반 `market_halt_or_circuit_window_overlap` review-only provenance를 추가해 producer-fix implement_now로 과잉 라우팅하지 않도록 보강했다.
+  - 다음 액션: 장후 `PostcloseSourceQualityGateReview0608`에서 warning stages `scale_in_qty_block`, `swing_scale_in_micro_context_observed`, `swing_probe_sell_order_assumed_filled`와 exclusion manifest가 EV/report 소비에서 유지되는지 확인한다.
+
+- [x] `[IntradayAutomationHealthCheck20260608] 장중 자동화체인 상태 확인` (`Due: 2026-06-08`, `Slot: INTRADAY`, `TimeWindow: 09:05~15:30`, `Track: RunbookOps`)
+  - Source: [time-based-operations-runbook.md](/home/ubuntu/KORStockScan/docs/time-based-operations-runbook.md)
+  - 판정 기준: Runbook 장중 확인 절차의 sentinel/log/event append/panic/error detection 상태를 확인하고 `pass`, `warning`, `fail`, `not_yet_due` 중 하나로 닫는다.
+  - 금지: sentinel/panic/source-quality 관찰 결과를 장중 threshold/env/provider/order/bot 변경 근거로 사용하지 않는다.
+  - 처리 결과: `pass`.
+  - 판정: 장중 자동화체인은 정상 동작 중이다. 일부 sentinel은 위험/드라우트 상태를 보고하지만 report-only/관찰 지표이며 장중 runtime 변경 근거가 아니다.
+  - 근거: buy funnel sentinel은 09:40 DONE 및 `SUBMIT_DROUGHT_CRITICAL`, holding/exit sentinel은 09:40 DONE 및 `HOLD_DEFER_DANGER`, panic sell defense는 `RECOVERY_WATCH`/`report_only_no_mutation`, panic buying은 `NORMAL`/`report_only_no_mutation`이다. `pipeline_events`와 `threshold_events`는 09:42 기준 fresh이며, `error_detection full`은 cron/process/artifact/resource/stale-lock 모두 `pass`다.
+  - 다음 액션: 장후 postclose 산출물에서 sentinel warning과 source-quality warning이 code-improvement/workorder handoff 또는 report-only 관찰로 올바르게 분리됐는지 확인한다.
 
 ## 장후 체크리스트 (16:30~18:55)
 

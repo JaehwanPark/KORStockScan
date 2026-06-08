@@ -14,6 +14,7 @@ from src.utils.logger import log_error
 from src.core.event_bus import EventBus
 from src.utils.constants import CONFIG_PATH, DEV_PATH, TRADING_RULES
 from src.engine.bd_fbuy_accum_pre_scanner import write_ws_snapshot
+from src.engine.monitoring.market_halt_windows import append_market_session_event
 from src.trading.entry.orderbook_stability_observer import ORDERBOOK_STABILITY_OBSERVER
 
 
@@ -72,6 +73,7 @@ class KiwoomWSManager:
         self.condition_dict = {} # 💡 [추가] 일련번호(seq)와 검색식 이름을 매핑할 사전
         self.market_session_state = ''
         self.market_session_remaining = ''
+        self._last_market_session_event_key = None
         
         print(f"🌐 [WS] 웹소켓 매니저 초기화 완료 (Target: {self.uri})")
 
@@ -786,6 +788,27 @@ class KiwoomWSManager:
                     if real_type == '0s' or d.get('name') == '장시작시간':
                         self.market_session_state = str(values.get('215', '') or '').strip()
                         self.market_session_remaining = str(values.get('214', '') or '').strip()
+                        event_key = (
+                            self.market_session_state,
+                            self.market_session_remaining,
+                            str(real_type or ""),
+                        )
+                        if event_key != self._last_market_session_event_key:
+                            self._last_market_session_event_key = event_key
+                            try:
+                                append_market_session_event(
+                                    target_date=datetime.now().strftime("%Y-%m-%d"),
+                                    event={
+                                        "source": "kiwoom_websocket_0s",
+                                        "real_type": real_type,
+                                        "name": d.get("name"),
+                                        "market_session_state": self.market_session_state,
+                                        "market_session_remaining": self.market_session_remaining,
+                                        "raw_values": dict(values),
+                                    },
+                                )
+                            except Exception as exc:
+                                log_error(f"🚨 [WS] 장운영구분 source-quality artifact 기록 실패: {exc}")
                         continue
 
                     # ===================================================

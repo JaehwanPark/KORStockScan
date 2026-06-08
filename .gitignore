@@ -38,6 +38,10 @@ dist/
 !data/config/ofi_bucket_threshold_manifest.json
 !data/source_quality/
 !data/source_quality/clean_baseline_policy.json
+!data/source_quality/market_halt_windows/
+!data/source_quality/market_halt_windows/windows/
+!data/source_quality/market_halt_windows/windows/*.json
+data/source_quality/market_halt_windows/session_events/
 data/source_quality/raw_quarantine/
 data/source_quality/report_quarantine/
 data/source_quality/analytics_quarantine/

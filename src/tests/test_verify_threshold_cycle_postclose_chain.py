@@ -148,6 +148,39 @@ def test_raw_row_exclusion_handoff_passes_with_limit_up_review_only_context():
     assert status["review_only_context_count"] == 1
 
 
+def test_raw_row_exclusion_handoff_passes_with_market_halt_review_only_context():
+    status = mod._raw_row_exclusion_handoff_status(
+        {
+            "raw_row_exclusion": {
+                "excluded_row_count": 10,
+                "stage_counts": {"blocked_strength_momentum": 10},
+                "field_gap_counts": {"zero_fields:intraday_range_pct": 10},
+                "market_halt_or_circuit_window_overlap": True,
+            }
+        },
+        workorder={
+            "orders": [],
+            "non_selected_orders": [
+                {
+                    "order_id": "order_observation_source_quality_raw_row_exclusion_producer_gap",
+                    "improvement_type": "source_quality_raw_row_exclusion_market_halt_context",
+                    "route": "review_required_market_halt_context",
+                    "raw_row_exclusion_context_classification": (
+                        "market_halt_or_circuit_window_overlap"
+                    ),
+                    "decision": "attach_existing_family",
+                    "runtime_effect": False,
+                    "allowed_runtime_apply": False,
+                }
+            ],
+        },
+    )
+
+    assert status["status"] == "pass"
+    assert status["workorder_handoff_present"] is True
+    assert status["review_only_context_count"] == 1
+
+
 def test_raw_row_exclusion_handoff_fails_when_order_is_non_selected_only():
     status = mod._raw_row_exclusion_handoff_status(
         {"raw_row_exclusion": {"excluded_row_count": 1}},

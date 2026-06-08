@@ -1,0 +1,26 @@
+{
+  "report_type": "market_halt_windows",
+  "target_date": "2026-06-08",
+  "schema_version": 1,
+  "decision_authority": "source_quality_only",
+  "runtime_effect": false,
+  "allowed_runtime_apply": false,
+  "forbidden_uses": [
+    "runtime_threshold_apply",
+    "order_submit",
+    "provider_route_change",
+    "bot_restart",
+    "cap_release",
+    "hard_safety_relaxation"
+  ],
+  "windows": [
+    {
+      "context_type": "market_halt_or_circuit_window",
+      "source": "operator_confirmed_intraday_circuit_breaker",
+      "halt_started_at": "2026-06-08T09:03:42",
+      "continuous_trading_halted_until": "2026-06-08T09:23:42",
+      "single_price_order_acceptance_until": "2026-06-08T09:33:42",
+      "normal_flow_check_after": "2026-06-08T09:35:00"
+    }
+  ]
+}

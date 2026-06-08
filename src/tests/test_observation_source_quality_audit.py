@@ -1,4 +1,5 @@
 import json
+import subprocess
 from pathlib import Path
 
 from src.engine import observation_source_quality_audit as audit
@@ -24,6 +25,28 @@ def _write_events(tmp_path, target_date: str, rows: list[dict]) -> None:
     with (event_dir / f"pipeline_events_{target_date}.jsonl").open("w", encoding="utf-8") as handle:
         for row in rows:
             handle.write(json.dumps(row, ensure_ascii=False) + "\n")
+
+
+def test_market_halt_window_artifact_is_not_gitignored():
+    path = Path("data/source_quality/market_halt_windows/windows/2026-06-08.json")
+    result = subprocess.run(
+        ["git", "check-ignore", "-q", str(path)],
+        cwd=Path(__file__).resolve().parents[2],
+        check=False,
+    )
+
+    assert result.returncode == 1
+
+
+def test_market_halt_session_events_artifact_is_gitignored():
+    path = Path("data/source_quality/market_halt_windows/session_events/2026-06-08.json")
+    result = subprocess.run(
+        ["git", "check-ignore", "-q", str(path)],
+        cwd=Path(__file__).resolve().parents[2],
+        check=False,
+    )
+
+    assert result.returncode == 0
 
 
 def test_observation_source_quality_audit_flags_missing_ai_fields(monkeypatch, tmp_path):
@@ -716,6 +739,74 @@ def test_observation_source_quality_raw_row_exclusion_summary_is_stage_generic(m
     assert manifest["exclusion_reasons"]["insufficient_history"] == 1
     assert manifest["exclusion_reasons"]["provenance_missing"] == 1
     assert manifest["producer_hint"][0]["stage"] == "custom_runtime_context_stage"
+
+
+def test_observation_source_quality_raw_row_exclusion_marks_market_halt_overlap(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
+    market_halt_dir = tmp_path / "source_quality" / "market_halt_windows" / "windows"
+    market_halt_dir.mkdir(parents=True, exist_ok=True)
+    (market_halt_dir / "2026-06-08.json").write_text(
+        json.dumps(
+            {
+                "report_type": "market_halt_windows",
+                "target_date": "2026-06-08",
+                "windows": [
+                    {
+                        "context_type": "market_halt_or_circuit_window",
+                        "source": "operator_confirmed_intraday_circuit_breaker",
+                        "halt_started_at": "2026-06-08T09:03:42",
+                        "continuous_trading_halted_until": "2026-06-08T09:23:42",
+                        "single_price_order_acceptance_until": "2026-06-08T09:33:42",
+                        "normal_flow_check_after": "2026-06-08T09:35:00",
+                    }
+                ],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    rows = []
+    base_fields = {
+        "latest_strength": "0.0",
+        "buy_pressure_10t": "0.00",
+        "distance_from_day_high_pct": "0.000",
+        "intraday_range_pct": "0.000",
+        "metric_role": "risk_context",
+        "decision_authority": "source_quality_only",
+        "runtime_effect": False,
+        "forbidden_uses": "runtime_threshold_apply/order_submit/provider_route_change/bot_restart",
+        "threshold_family": "strength_momentum_soft_gate_p1",
+        "gate_action": "source_quality_block",
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "reason": "insufficient_history",
+    }
+    for idx in range(10):
+        row = _event("blocked_strength_momentum", dict(base_fields), record_id=idx + 1)
+        row["emitted_at"] = f"2026-06-08T09:{6 + idx:02d}:00"
+        row["emitted_date"] = "2026-06-08"
+        rows.append(row)
+    good_row = _event(
+        "blocked_strength_momentum",
+        {**base_fields, "intraday_range_pct": "5.000"},
+        record_id=99,
+    )
+    good_row["emitted_at"] = "2026-06-08T09:40:00"
+    good_row["emitted_date"] = "2026-06-08"
+    rows.append(good_row)
+    _write_events(tmp_path, "2026-06-08", rows)
+
+    report = audit.write_report("2026-06-08")
+    manifest = json.loads(Path(report["raw_row_exclusion"]["manifest_path"]).read_text(encoding="utf-8"))
+
+    assert manifest["market_halt_or_circuit_window_overlap"] is True
+    context = manifest["market_halt_or_circuit_context"]
+    assert context["classification"] == "market_halt_or_circuit_window_overlap"
+    assert context["overlap_excluded_row_count"] == 10
+    assert context["after_normal_flow_excluded_row_count"] == 0
+    assert report["raw_row_exclusion"]["market_halt_or_circuit_window_overlap"] is True
 
 
 def test_observation_source_quality_does_not_exclude_rows_when_contract_passes_tolerance(monkeypatch, tmp_path):
