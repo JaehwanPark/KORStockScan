@@ -33,6 +33,7 @@ from src.engine.lifecycle.bucket_taxonomy import (
     compare_taxonomy_proposals,
     default_ai_tier2_proposal,
     normalize_lifecycle_bucket,
+    normalize_entry_source_parent,
 )
 from src.utils.constants import DATA_DIR
 
@@ -1229,20 +1230,7 @@ def _missing_or_none_text(text: str) -> bool:
 
 
 def _entry_source_parent(value: Any) -> str:
-    text = str(value or "").lower()
-    if _missing_or_none_text(text):
-        return "entry_missing"
-    if "blocked_ai_score" in text:
-        return "entry_source_blocked_ai_score"
-    if "wait6579" in text:
-        return "entry_source_wait6579"
-    if "scalp_entry_action_decision" in text:
-        return "entry_source_action_decision"
-    if "scalp_sim" in text:
-        return "entry_source_scalp_sim"
-    if "panic" in text:
-        return "entry_source_panic"
-    return "entry_source_observed_other"
+    return str(normalize_entry_source_parent(value).get("parent") or "entry_source_observed_other")
 
 
 def _submit_quality_parent(value: Any) -> str:
@@ -1328,13 +1316,21 @@ def _exit_rule_parent(value: Any) -> str:
 def _lifecycle_flow_parent_dimensions(item: dict[str, Any]) -> dict[str, str]:
     source_dimensions = item.get("source_dimensions") if isinstance(item.get("source_dimensions"), dict) else {}
     entry = item.get("entry_bucket_id") or source_dimensions.get("entry") or ""
+    entry_source_contract = normalize_entry_source_parent(entry)
     submit = item.get("submit_bucket_id") or source_dimensions.get("submit") or ""
     holding = item.get("holding_bucket_id") or source_dimensions.get("holding") or ""
     scale_in = item.get("scale_in_bucket_id") or source_dimensions.get("scale_in") or ""
     exit_value = item.get("exit_bucket_id") or source_dimensions.get("exit") or ""
     return {
         "entry_score_parent": _score_parent_from_text(entry),
-        "entry_source_parent": _entry_source_parent(entry),
+        "entry_source_parent": str(entry_source_contract.get("parent") or "entry_source_observed_other"),
+        "entry_source_parent_contract_state": str(entry_source_contract.get("contract_state") or ""),
+        "entry_source_parent_contract_reason": str(entry_source_contract.get("reason") or ""),
+        "entry_source_parent_alias_version": str(entry_source_contract.get("alias_version") or ""),
+        "entry_source_parent_consume_data": str(bool(entry_source_contract.get("consume_data"))),
+        "entry_source_parent_runtime_effect_allowed": str(
+            bool(entry_source_contract.get("runtime_effect_allowed"))
+        ),
         "submit_quality_parent": _submit_quality_parent(submit),
         "exit_outcome_parent": _exit_outcome_parent(exit_value),
         "major_holding_parent": _major_holding_parent(holding),
@@ -1648,6 +1644,17 @@ def _build_active_sim_priority_seeds(report: dict[str, Any]) -> list[dict[str, A
         seen_parent_ids.add(parent_id)
         dimensions = parent.get("dimension_filters") if isinstance(parent.get("dimension_filters"), dict) else {}
         observable_prefix = _observable_prefix_for_parent(dimensions)
+        entry_source_taxonomy_contract = {
+            "contract_state": dimensions.get("entry_source_parent_contract_state"),
+            "reason": dimensions.get("entry_source_parent_contract_reason"),
+            "alias_version": dimensions.get("entry_source_parent_alias_version"),
+            "consume_data": str(dimensions.get("entry_source_parent_consume_data") or "").lower()
+            == "true",
+            "runtime_effect_allowed": str(
+                dimensions.get("entry_source_parent_runtime_effect_allowed") or ""
+            ).lower()
+            == "true",
+        }
         ev = _safe_float(parent.get("parent_source_quality_adjusted_ev_pct"), None)
         complete_flow_count = _safe_int(parent.get("complete_flow_count"))
         floor_pass = bool(parent.get("parent_granularity_floor_passed"))
@@ -1689,6 +1696,11 @@ def _build_active_sim_priority_seeds(report: dict[str, Any]) -> list[dict[str, A
             "status": status,
             "priority_tier": "rare_positive_parent_seed",
             "observable_prefix": effective_prefix,
+            "entry_source_taxonomy_contract": entry_source_taxonomy_contract,
+            "taxonomy_contract_data_consumed": bool(entry_source_taxonomy_contract["consume_data"]),
+            "taxonomy_contract_runtime_effect_allowed": bool(
+                entry_source_taxonomy_contract["runtime_effect_allowed"]
+            ),
             "target_validation_parent_dimensions": _target_validation_dimensions(dimensions),
             "parent_ev_pct": ev,
             "parent_joined_sample": parent.get("parent_joined_sample"),
@@ -2116,9 +2128,20 @@ def _apply_lifecycle_flow_parent_absorption(report: dict[str, Any], candidates: 
     active_seeds = _build_active_sim_priority_seeds(report)
     report["active_sim_priority_seeds"] = active_seeds
     active_seed_counts = Counter(str(item.get("status") or "unknown") for item in active_seeds)
+    active_seed_taxonomy_counts = Counter(
+        str((item.get("entry_source_taxonomy_contract") or {}).get("contract_state") or "unknown")
+        for item in active_seeds
+        if isinstance(item, dict)
+    )
     summary["active_sim_priority_seed_count"] = len(active_seeds)
     summary["active_sim_priority_seed_status_counts"] = dict(sorted(active_seed_counts.items()))
     summary["active_sim_priority_active_seed_count"] = active_seed_counts.get("active", 0)
+    summary["active_sim_priority_entry_source_taxonomy_contract_counts"] = dict(
+        sorted(active_seed_taxonomy_counts.items())
+    )
+    summary["active_sim_priority_pending_taxonomy_contract_count"] = active_seed_taxonomy_counts.get(
+        "new_axis_pending_taxonomy", 0
+    )
     summary.update(_active_sim_priority_diagnostics(report, active_seeds))
     report["summary"] = summary
 

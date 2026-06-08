@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
+from src.engine import lifecycle_bucket_discovery
 from src.engine.lifecycle_bucket_discovery import bucket_catalog_path, sim_auto_approval_path
 from src.engine.runtime_apply_bridge import runtime_apply_bridge_report_path
 from src.engine.scalp_sim_scale_in_window_approval import approval_path as scale_in_approval_path
@@ -34,6 +36,12 @@ FORBIDDEN_USES = [
 ]
 
 
+SCALP_SIM_POLICY_GENERATOR_FILES = (
+    Path(lifecycle_bucket_discovery.__file__),
+    Path(__file__),
+)
+
+
 def _date_text(value: str | date | datetime | None) -> str:
     if value is None:
         return date.today().isoformat()
@@ -46,6 +54,25 @@ def _load_json(path: Path) -> dict[str, Any]:
     except Exception:
         return {}
     return payload if isinstance(payload, dict) else {}
+
+
+def _file_sha256(path: Path) -> str:
+    try:
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+    except OSError:
+        return ""
+
+
+def _generator_provenance() -> dict[str, Any]:
+    files = {}
+    for path in SCALP_SIM_POLICY_GENERATOR_FILES:
+        digest = _file_sha256(path)
+        if digest:
+            files[path.name] = digest
+    return {
+        "hash_algorithm": "sha256",
+        "files": files,
+    }
 
 
 def scalp_sim_auto_approval_path(target_date: str) -> Path:
@@ -311,6 +338,7 @@ def build_policy_catalog(approval: dict[str, Any]) -> dict[str, Any]:
         "schema_version": "scalp_sim_policy_catalog_v1",
         "date": approval.get("date"),
         "generated_at": approval.get("generated_at"),
+        "generator_provenance": _generator_provenance(),
         "decision_authority": DECISION_AUTHORITY,
         "runtime_effect": False,
         "actual_order_submitted": False,

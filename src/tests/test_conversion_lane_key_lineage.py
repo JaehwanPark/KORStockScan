@@ -32,7 +32,21 @@ def test_active_seed_same_key_continuity_pass(monkeypatch, tmp_path):
     )
     _write(
         tmp_path / "threshold_cycle" / "scalp_sim_policies" / f"scalp_sim_policy_catalog_{target}.json",
-        {"active_sim_priority_seeds": [{"active_seed_id": "seed_a", "status": "active"}]},
+        {
+            "active_sim_priority_seeds": [
+                {
+                    "active_seed_id": "seed_a",
+                    "status": "active",
+                    "entry_source_taxonomy_contract": {
+                        "contract_state": "new_axis_pending_taxonomy",
+                        "consume_data": True,
+                        "runtime_effect_allowed": False,
+                    },
+                    "taxonomy_contract_data_consumed": True,
+                    "taxonomy_contract_runtime_effect_allowed": False,
+                }
+            ]
+        },
     )
     _write(tmp_path / "threshold_cycle" / "swing_sim_policies" / f"swing_sim_policy_catalog_{target}.json", {})
     _write(
@@ -47,6 +61,233 @@ def test_active_seed_same_key_continuity_pass(monkeypatch, tmp_path):
 
     assert report["summary"]["same_key_continuity_pass_count"] == 1
     assert report["summary"]["key_mismatch_count"] == 0
+    assert report["summary"]["active_sim_policy_loaded_for_effect"] is True
+    assert report["summary"]["active_sim_policy_active_seed_id_without_count_event_count"] == 1
+
+
+def test_active_seed_count_zero_window_is_consumed_but_excluded_from_effect(monkeypatch, tmp_path):
+    _patch_dirs(monkeypatch, tmp_path)
+    target = "2026-06-04"
+    _write(
+        tmp_path / "report" / "lifecycle_bucket_discovery" / f"lifecycle_bucket_discovery_{target}.json",
+        {},
+    )
+    _write(
+        tmp_path / "threshold_cycle" / "scalp_sim_policies" / f"scalp_sim_policy_catalog_{target}.json",
+        {
+            "active_sim_priority_seeds": [
+                {
+                    "active_seed_id": "seed_a",
+                    "status": "active",
+                    "entry_source_taxonomy_contract": {
+                        "contract_state": "new_axis_pending_taxonomy",
+                        "consume_data": True,
+                        "runtime_effect_allowed": False,
+                    },
+                    "taxonomy_contract_data_consumed": True,
+                    "taxonomy_contract_runtime_effect_allowed": False,
+                }
+            ]
+        },
+    )
+    _write(tmp_path / "threshold_cycle" / "swing_sim_policies" / f"swing_sim_policy_catalog_{target}.json", {})
+    _write(
+        tmp_path / "threshold_cycle" / "apply_plans" / f"threshold_apply_{target}.json",
+        {
+            "source_date": target,
+            "scalp_sim_auto_approval": {"approved_request": {"active_sim_priority_seed_ids": ["seed_a"]}},
+        },
+    )
+    event_path = tmp_path / "pipeline_events" / f"pipeline_events_{target}.jsonl"
+    event_path.parent.mkdir(parents=True, exist_ok=True)
+    event_path.write_text(
+        json.dumps({"fields": {"scalp_sim_auto_policy_active_seed_count": "0"}}) + "\n",
+        encoding="utf-8",
+    )
+
+    report = ledger.build_key_lineage_ledger(target)
+
+    row = report["lineage_rows"][0]
+    assert row["conversion_state"] == "policy_not_loaded_window"
+    assert row["same_key_continuity"] == "not_observed"
+    assert row["evidence"]["excluded_from_active_priority_effect"] is True
+    assert row["evidence"]["entry_source_taxonomy_contract"]["contract_state"] == "new_axis_pending_taxonomy"
+    assert report["summary"]["active_sim_policy_zero_count_event_count"] == 1
+    assert report["summary"]["active_sim_policy_zero_count_data_consumed"] is True
+    assert report["summary"]["active_sim_policy_zero_count_effect_excluded"] is True
+    assert report["summary"]["active_sim_priority_pending_taxonomy_contract_count"] == 1
+    assert report["summary"]["natural_match_0_count"] == 0
+
+
+def test_active_seed_count_positive_window_allows_natural_match_zero(monkeypatch, tmp_path):
+    _patch_dirs(monkeypatch, tmp_path)
+    target = "2026-06-04"
+    _write(
+        tmp_path / "report" / "lifecycle_bucket_discovery" / f"lifecycle_bucket_discovery_{target}.json",
+        {},
+    )
+    _write(
+        tmp_path / "threshold_cycle" / "scalp_sim_policies" / f"scalp_sim_policy_catalog_{target}.json",
+        {"active_sim_priority_seeds": [{"active_seed_id": "seed_a", "status": "active"}]},
+    )
+    _write(tmp_path / "threshold_cycle" / "swing_sim_policies" / f"swing_sim_policy_catalog_{target}.json", {})
+    _write(
+        tmp_path / "threshold_cycle" / "apply_plans" / f"threshold_apply_{target}.json",
+        {
+            "source_date": target,
+            "scalp_sim_auto_approval": {"approved_request": {"active_sim_priority_seed_ids": ["seed_a"]}},
+        },
+    )
+    event_path = tmp_path / "pipeline_events" / f"pipeline_events_{target}.jsonl"
+    event_path.parent.mkdir(parents=True, exist_ok=True)
+    event_path.write_text(
+        json.dumps({"fields": {"scalp_sim_auto_policy_active_seed_count": "2"}}) + "\n",
+        encoding="utf-8",
+    )
+
+    report = ledger.build_key_lineage_ledger(target)
+
+    assert report["lineage_rows"][0]["conversion_state"] == "natural_match_0"
+    assert report["summary"]["active_sim_policy_loaded_for_effect"] is True
+    assert report["summary"]["active_sim_policy_positive_count_event_count"] == 1
+    assert report["summary"]["natural_match_0_count"] == 1
+
+
+def test_key_lineage_splits_active_seed_new_entry_from_followup_context(monkeypatch, tmp_path):
+    _patch_dirs(monkeypatch, tmp_path)
+    target = "2026-06-04"
+    _write(tmp_path / "report" / "lifecycle_bucket_discovery" / f"lifecycle_bucket_discovery_{target}.json", {})
+    _write(tmp_path / "threshold_cycle" / "scalp_sim_policies" / f"scalp_sim_policy_catalog_{target}.json", {})
+    _write(tmp_path / "threshold_cycle" / "swing_sim_policies" / f"swing_sim_policy_catalog_{target}.json", {})
+    _write(tmp_path / "threshold_cycle" / "apply_plans" / f"threshold_apply_{target}.json", {"source_date": target})
+    event_path = tmp_path / "pipeline_events" / f"pipeline_events_{target}.jsonl"
+    event_path.parent.mkdir(parents=True, exist_ok=True)
+    event_path.write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "stage": "scalp_sim_entry_armed",
+                        "fields": {
+                            "scalp_sim_auto_policy_active_seed_count": "2",
+                            "active_seed_candidate_observable_prefix": "{\"entry_score_parent\":\"score_watch_recovery\"}",
+                            "active_seed_id": "seed_a",
+                            "scalp_sim_active_priority_seed_matched": "True",
+                        },
+                    }
+                ),
+                json.dumps(
+                    {
+                        "stage": "scalp_sim_panic_scale_in_blocked",
+                        "fields": {
+                            "scalp_sim_auto_policy_active_seed_count": "2",
+                            "active_seed_candidate_observable_prefix": "{\"entry_score_parent\":\"score_watch_recovery\"}",
+                            "scalp_sim_active_priority_seed_matched": "True",
+                        },
+                    }
+                ),
+                json.dumps(
+                    {
+                        "stage": "scalp_sim_entry_armed",
+                        "fields": {
+                            "scalp_sim_auto_policy_active_seed_count": "2",
+                            "active_seed_candidate_observable_prefix": "{\"entry_score_parent\":\"score_mid_recovery\"}",
+                            "scalp_sim_active_priority_seed_matched": "False",
+                        },
+                    }
+                ),
+                json.dumps(
+                    {
+                        "stage": "scalp_sim_holding_started",
+                        "fields": {
+                            "scalp_sim_auto_policy_active_seed_count": "2",
+                            "active_seed_candidate_observable_prefix": "{\"entry_score_parent\":\"score_mid_recovery\"}",
+                            "scalp_sim_active_priority_seed_matched": "False",
+                        },
+                    }
+                ),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    report = ledger.build_key_lineage_ledger(target)
+
+    assert report["summary"]["active_seed_candidate_event_count"] == 4
+    assert report["summary"]["active_seed_candidate_new_entry_event_count"] == 2
+    assert report["summary"]["active_seed_candidate_followup_event_count"] == 2
+    assert report["summary"]["active_seed_candidate_matched_event_count"] == 1
+    assert report["summary"]["active_seed_candidate_matched_true_without_seed_id_event_count"] == 1
+    assert report["summary"]["active_seed_candidate_unmatched_event_count"] == 2
+    assert report["summary"]["active_seed_candidate_new_entry_unmatched_event_count"] == 1
+    assert report["summary"]["active_seed_candidate_followup_unmatched_event_count"] == 1
+    assert report["summary"]["active_seed_candidate_without_seed_id_event_count"] == 3
+    assert report["summary"]["active_seed_candidate_followup_without_seed_id_event_count"] == 2
+    assert report["summary"]["active_seed_candidate_followup_stage_counts"] == {
+        "scalp_sim_holding_started": 1,
+        "scalp_sim_panic_scale_in_blocked": 1,
+    }
+
+
+def test_key_lineage_dedupes_panic_scale_in_no_match_followup(monkeypatch, tmp_path):
+    _patch_dirs(monkeypatch, tmp_path)
+    target = "2026-06-04"
+    _write(tmp_path / "report" / "lifecycle_bucket_discovery" / f"lifecycle_bucket_discovery_{target}.json", {})
+    _write(tmp_path / "threshold_cycle" / "scalp_sim_policies" / f"scalp_sim_policy_catalog_{target}.json", {})
+    _write(tmp_path / "threshold_cycle" / "swing_sim_policies" / f"swing_sim_policy_catalog_{target}.json", {})
+    _write(tmp_path / "threshold_cycle" / "apply_plans" / f"threshold_apply_{target}.json", {"source_date": target})
+    event_path = tmp_path / "pipeline_events" / f"pipeline_events_{target}.jsonl"
+    event_path.parent.mkdir(parents=True, exist_ok=True)
+    rows = [
+        {
+            "stage": "scalp_sim_panic_scale_in_blocked",
+            "fields": {
+                "sim_record_id": "sim_a",
+                "source_stage": "scale_in",
+                "scalp_sim_candidate_window_source_stage": "first_ai_wait",
+                "lifecycle_bucket_match_status": "no_match",
+                "active_seed_candidate_observable_prefix": "{\"entry_source_parent\":\"entry_source_observed_other\"}",
+            },
+        },
+        {
+            "stage": "scalp_sim_panic_scale_in_blocked",
+            "fields": {
+                "sim_record_id": "sim_a",
+                "source_stage": "scale_in",
+                "scalp_sim_candidate_window_source_stage": "first_ai_wait",
+                "lifecycle_bucket_match_status": "no_match",
+                "active_seed_candidate_observable_prefix": "{\"entry_source_parent\":\"entry_source_observed_other\"}",
+            },
+        },
+        {
+            "stage": "scalp_sim_panic_scale_in_blocked",
+            "fields": {
+                "sim_record_id": "sim_b",
+                "source_stage": "scale_in",
+                "lifecycle_bucket_match_status": "matched",
+            },
+        },
+        {
+            "stage": "scalp_sim_panic_scale_in_blocked",
+            "fields": {
+                "source_stage": "scale_in",
+                "lifecycle_bucket_match_status": "no_match",
+            },
+        },
+    ]
+    event_path.write_text("\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8")
+
+    report = ledger.build_key_lineage_ledger(target)
+
+    assert report["summary"]["panic_scale_in_event_count"] == 4
+    assert report["summary"]["panic_scale_in_unique_sim_record_count"] == 2
+    assert report["summary"]["panic_scale_in_match_status_counts"] == {"matched": 1, "no_match": 3}
+    assert report["summary"]["panic_scale_in_no_match_event_count"] == 3
+    assert report["summary"]["panic_scale_in_no_match_unique_sim_record_count"] == 1
+    assert report["summary"]["panic_scale_in_no_match_missing_sim_record_id_event_count"] == 1
+    assert report["summary"]["panic_scale_in_no_match_repeated_followup_event_count"] == 1
+    assert report["summary"]["panic_scale_in_no_match_source_stage_counts"] == {"first_ai_wait": 2, "scale_in": 1}
 
 
 def test_runtime_observed_seed_not_in_catalog_is_key_mismatch(monkeypatch, tmp_path):
@@ -491,6 +732,9 @@ def test_conversion_lane_submit_drought_blockers_have_split_axes(monkeypatch, tm
     assert report["summary"]["submit_drought_closure_axis_count"] == 6
     assert report["summary"]["submit_funnel_blocker_count"] == 6
     assert report["summary"]["submit_drought_is_ldm_bucket_blocker"] is False
+    assert report["summary"]["buy_funnel_source_present"] is True
+    assert report["summary"]["buy_funnel_classification_primary"] == "SUBMIT_DROUGHT_CRITICAL"
+    assert report["summary"]["submit_drought_blocker_source_state"] == "submit_drought_critical"
     assert report["summary"]["top_ldm_bucket_blocker_class"] is None
     submit_blockers = [
         item for item in report["conversion_blocker_rank"] if item["blocker_class"] == "submit_drought"
@@ -498,6 +742,39 @@ def test_conversion_lane_submit_drought_blockers_have_split_axes(monkeypatch, tm
     assert {item["blocker_axis"] for item in submit_blockers} == set(lane.SUBMIT_DROUGHT_CLOSURE_AXES)
     assert all(item["blocker_runtime_effect"] is False for item in submit_blockers)
     assert all(item["blocker_allowed_runtime_apply"] is False for item in submit_blockers)
+
+
+def test_conversion_lane_records_buy_funnel_non_submit_drought_source_state(monkeypatch, tmp_path):
+    _patch_dirs(monkeypatch, tmp_path)
+    target = "2026-06-04"
+    _write(
+        tmp_path / "report" / "key_lineage_ledger" / f"key_lineage_ledger_{target}.json",
+        {"summary": {"lineage_blocker_count": 0}, "lineage_rows": [], "lineage_blockers": []},
+    )
+    _write(tmp_path / "report" / "lifecycle_bucket_discovery" / f"lifecycle_bucket_discovery_{target}.json", {})
+    _write(
+        tmp_path / "report" / "buy_funnel_sentinel" / f"buy_funnel_sentinel_{target}.json",
+        {
+            "report_type": "buy_funnel_sentinel",
+            "classification": {
+                "primary": "PRICE_GUARD_DROUGHT",
+                "matches": ["PRICE_GUARD_DROUGHT", "LATENCY_DROUGHT"],
+            },
+        },
+    )
+
+    report = lane.build_conversion_lane(target)
+
+    assert report["summary"]["submit_funnel_blocker_count"] == 0
+    assert report["summary"]["submit_drought_split_complete"] is False
+    assert report["summary"]["buy_funnel_source_present"] is True
+    assert report["summary"]["buy_funnel_report_type"] == "buy_funnel_sentinel"
+    assert report["summary"]["buy_funnel_classification_primary"] == "PRICE_GUARD_DROUGHT"
+    assert report["summary"]["buy_funnel_classification_matches"] == [
+        "PRICE_GUARD_DROUGHT",
+        "LATENCY_DROUGHT",
+    ]
+    assert report["summary"]["submit_drought_blocker_source_state"] == "not_submit_drought_critical"
 
 
 def test_conversion_lane_marks_new_positive_postclose_candidate_not_due_until_next_preopen(

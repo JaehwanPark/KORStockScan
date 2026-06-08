@@ -15,7 +15,7 @@
 - sim_auto_approved_count: `165`
 - lifecycle_flow_sim_probe_candidate_count: `7`
 - source_dimension_gap_count: `46` / actionable_unknown_gap_count: `0`
-- quiet_gap_count: `199` / sim_live_connected: `7`
+- quiet_gap_count: `198` / sim_live_connected: `7`
 - live_auto_apply_ready_count: `0`
 - human_intervention_required: `False`
 - warnings: `[]`

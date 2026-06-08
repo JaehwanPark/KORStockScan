@@ -69,6 +69,7 @@ from src.engine.lifecycle.greenfield_authority import (
     greenfield_authority_active,
     greenfield_stage_telegram_enabled,
 )
+from src.engine.lifecycle.bucket_taxonomy import normalize_entry_source_parent
 from src.engine.lifecycle_bucket_discovery import ENTRY_LIVE_AUTO_BUCKET_KEY
 from src.engine.sniper_dynamic_thresholds import (
     estimate_turnover_hint,
@@ -329,20 +330,7 @@ def _scalp_score_parent_from_value(score_value) -> str:
 
 
 def _scalp_entry_source_parent_from_stage(source_stage: str | None) -> str:
-    text = str(source_stage or "").lower()
-    if not text or text in {"-", "missing", "none", "null"}:
-        return "entry_missing"
-    if "blocked_ai_score" in text:
-        return "entry_source_blocked_ai_score"
-    if "wait6579" in text:
-        return "entry_source_wait6579"
-    if "scalp_entry_action_decision" in text or "action_decision" in text:
-        return "entry_source_action_decision"
-    if "scalp_sim" in text:
-        return "entry_source_scalp_sim"
-    if "panic" in text:
-        return "entry_source_panic"
-    return "entry_source_observed_other"
+    return str(normalize_entry_source_parent(source_stage).get("parent") or "entry_source_observed_other")
 
 
 def _scalp_submit_quality_parent_from_fields(fields: dict | None = None) -> str:
@@ -369,13 +357,28 @@ def _scalp_active_seed_match_fields(
         if isinstance(cache.get("active_seeds_by_prefix"), dict)
         else {}
     )
+    entry_source_contract = normalize_entry_source_parent(source_stage)
     candidate_prefix = {
         "entry_score_parent": _scalp_score_parent_from_value(score_value),
-        "entry_source_parent": _scalp_entry_source_parent_from_stage(source_stage),
+        "entry_source_parent": str(entry_source_contract.get("parent") or "entry_source_observed_other"),
     }
     submit_quality = _scalp_submit_quality_parent_from_fields(fields)
     if submit_quality != "submit_missing":
         candidate_prefix["submit_quality_parent"] = submit_quality
+    taxonomy_fields = {
+        "entry_source_parent_contract_state": entry_source_contract.get("contract_state"),
+        "entry_source_parent_contract_reason": entry_source_contract.get("reason"),
+        "entry_source_parent_alias_version": entry_source_contract.get("alias_version"),
+        "entry_source_parent_consume_data": entry_source_contract.get("consume_data"),
+        "entry_source_parent_runtime_effect_allowed": entry_source_contract.get("runtime_effect_allowed"),
+    }
+    if entry_source_contract.get("runtime_effect_allowed") is not True:
+        return {
+            "scalp_sim_active_priority_seed_matched": False,
+            "active_seed_candidate_observable_prefix": json.dumps(candidate_prefix, ensure_ascii=True, sort_keys=True),
+            "active_seed_match_blocked_reason": "entry_source_taxonomy_pending_runtime_effect_blocked",
+            **taxonomy_fields,
+        }
     probes = [_scalp_active_seed_prefix_key(candidate_prefix)]
     if "submit_quality_parent" in candidate_prefix:
         relaxed = dict(candidate_prefix)
@@ -390,6 +393,7 @@ def _scalp_active_seed_match_fields(
         return {
             "scalp_sim_active_priority_seed_matched": False,
             "active_seed_candidate_observable_prefix": json.dumps(candidate_prefix, ensure_ascii=True, sort_keys=True),
+            **taxonomy_fields,
         }
     return {
         "scalp_sim_active_priority_seed_matched": True,
@@ -398,6 +402,7 @@ def _scalp_active_seed_match_fields(
         "active_seed_status": seed.get("status"),
         "active_seed_observable_prefix": json.dumps(seed.get("observable_prefix") or {}, ensure_ascii=True, sort_keys=True),
         "active_seed_candidate_observable_prefix": json.dumps(candidate_prefix, ensure_ascii=True, sort_keys=True),
+        **taxonomy_fields,
         "active_seed_priority_tier": seed.get("priority_tier"),
         "quota_policy": "active_parent_seed_v1",
     }
@@ -2832,6 +2837,12 @@ def _scalp_sim_candidate_window_context_fields(source: dict | None) -> dict:
         "active_seed_status",
         "active_seed_observable_prefix",
         "active_seed_candidate_observable_prefix",
+        "active_seed_match_blocked_reason",
+        "entry_source_parent_contract_state",
+        "entry_source_parent_contract_reason",
+        "entry_source_parent_alias_version",
+        "entry_source_parent_consume_data",
+        "entry_source_parent_runtime_effect_allowed",
         "active_seed_priority_tier",
         "ldm_hypothesis_matched",
         "ldm_hypothesis_id",
@@ -2843,6 +2854,30 @@ def _scalp_sim_candidate_window_context_fields(source: dict | None) -> dict:
         "quota_policy",
     )
     fields = {key: source.get(key) for key in keys if source.get(key) not in (None, "")}
+    source_stage = str(fields.get("scalp_sim_candidate_window_source_stage") or "").strip()
+    score_value = _safe_float(fields.get("scalp_sim_candidate_window_original_score"), None)
+    entry_source_contract = normalize_entry_source_parent(source_stage)
+    expected_entry_parent = str(entry_source_contract.get("parent") or "entry_source_observed_other")
+    prefix_entry_parent = ""
+    try:
+        prefix_payload = json.loads(str(fields.get("active_seed_candidate_observable_prefix") or "{}"))
+        if isinstance(prefix_payload, dict):
+            prefix_entry_parent = str(prefix_payload.get("entry_source_parent") or "").strip()
+    except Exception:
+        prefix_entry_parent = ""
+    should_refresh_active_seed = (
+        not str(fields.get("active_seed_id") or "").strip()
+        or str(fields.get("scalp_sim_active_priority_seed_matched") or "").strip().lower() != "true"
+        or (bool(prefix_entry_parent) and prefix_entry_parent != expected_entry_parent)
+    )
+    if source_stage and score_value is not None and should_refresh_active_seed:
+        fields.update(
+            _scalp_active_seed_match_fields(
+                score_value=score_value,
+                source_stage=source_stage,
+                fields=fields,
+            )
+        )
     fields.update(
         {
             "would_real_submit": False,

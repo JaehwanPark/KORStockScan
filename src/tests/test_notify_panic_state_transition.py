@@ -112,6 +112,109 @@ def test_panic_sell_second_recovery_confirmed_releases_after_pending(tmp_path, m
     assert "패닉셀 경보 해제" in sent[1][1]
 
 
+def test_panic_sell_restart_notice_is_suppressed_right_after_release(tmp_path, monkeypatch):
+    report = tmp_path / "panic_sell_defense_2026-06-08.json"
+    state = tmp_path / "state.json"
+    sent = []
+
+    monkeypatch.setattr(mod, "_load_telegram_config", lambda: ("token", "admin"))
+    monkeypatch.setattr(mod, "_load_all_chat_ids", lambda: ["admin"])
+    monkeypatch.setattr(mod, "_send_telegram", lambda token, chat_id, message: sent.append((chat_id, message)))
+
+    report.write_text(json.dumps({"target_date": "2026-06-08", "panic_state": "PANIC_SELL"}), encoding="utf-8")
+    assert mod.notify_from_report(report, kind="panic_sell", state_file=state, now_ts=1000.0) == "sent"
+
+    report.write_text(json.dumps({"target_date": "2026-06-08", "panic_state": "NORMAL"}), encoding="utf-8")
+    assert mod.notify_from_report(report, kind="panic_sell", state_file=state, now_ts=1010.0) == "release_pending"
+    assert mod.notify_from_report(report, kind="panic_sell", state_file=state, now_ts=1020.0) == "sent"
+
+    report.write_text(json.dumps({"target_date": "2026-06-08", "panic_state": "RECOVERY_WATCH"}), encoding="utf-8")
+    assert (
+        mod.notify_from_report(report, kind="panic_sell", state_file=state, now_ts=1030.0)
+        == "restart_suppressed_after_release"
+    )
+
+    assert len(sent) == 2
+    assert "패닉셀 주의" in sent[0][1]
+    assert "패닉셀 경보 해제" in sent[1][1]
+    saved = json.loads(state.read_text(encoding="utf-8"))
+    assert saved["panic_sell"]["phase"] == "active"
+    assert saved["panic_sell"]["state"] == "RECOVERY_WATCH"
+    assert saved["panic_sell"]["last_notification"]["transition"] == "release"
+
+
+def test_panic_sell_restart_notice_sends_after_release_suppression_window(tmp_path, monkeypatch):
+    report = tmp_path / "panic_sell_defense_2026-06-08.json"
+    state = tmp_path / "state.json"
+    sent = []
+
+    monkeypatch.setattr(mod, "_load_telegram_config", lambda: ("token", "admin"))
+    monkeypatch.setattr(mod, "_load_all_chat_ids", lambda: ["admin"])
+    monkeypatch.setattr(mod, "_send_telegram", lambda token, chat_id, message: sent.append((chat_id, message)))
+
+    state.write_text(
+        json.dumps(
+            {
+                "panic_sell": {
+                    "phase": "released",
+                    "state": "NORMAL",
+                    "session_key": "2026-06-08",
+                    "updated_at_ts": 1000.0,
+                    "report_file": str(report),
+                    "last_notification": {
+                        "transition": "release",
+                        "sent_at_ts": 1000.0,
+                        "state": "NORMAL",
+                    },
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    report.write_text(json.dumps({"target_date": "2026-06-08", "panic_state": "PANIC_SELL"}), encoding="utf-8")
+
+    assert mod.notify_from_report(report, kind="panic_sell", state_file=state, now_ts=2000.0) == "sent"
+
+    assert len(sent) == 1
+    assert "패닉셀 주의" in sent[0][1]
+
+
+def test_panic_sell_force_bypasses_restart_suppression_after_release(tmp_path, monkeypatch):
+    report = tmp_path / "panic_sell_defense_2026-06-08.json"
+    state = tmp_path / "state.json"
+    sent = []
+
+    monkeypatch.setattr(mod, "_load_telegram_config", lambda: ("token", "admin"))
+    monkeypatch.setattr(mod, "_load_all_chat_ids", lambda: ["admin"])
+    monkeypatch.setattr(mod, "_send_telegram", lambda token, chat_id, message: sent.append((chat_id, message)))
+
+    state.write_text(
+        json.dumps(
+            {
+                "panic_sell": {
+                    "phase": "released",
+                    "state": "NORMAL",
+                    "session_key": "2026-06-08",
+                    "updated_at_ts": 1000.0,
+                    "report_file": str(report),
+                    "last_notification": {
+                        "transition": "release",
+                        "sent_at_ts": 1000.0,
+                        "state": "NORMAL",
+                    },
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    report.write_text(json.dumps({"target_date": "2026-06-08", "panic_state": "RECOVERY_WATCH"}), encoding="utf-8")
+
+    assert mod.notify_from_report(report, kind="panic_sell", state_file=state, force=True, now_ts=1030.0) == "sent"
+
+    assert len(sent) == 1
+    assert "패닉셀" in sent[0][1]
+
+
 def test_panic_sell_release_is_suppressed_for_stale_previous_day_active_state(tmp_path, monkeypatch):
     report = tmp_path / "panic_sell_defense_2026-05-21.json"
     state = tmp_path / "state.json"

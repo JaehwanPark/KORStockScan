@@ -28,6 +28,7 @@ ALLOWED_STATES = {
     "cooldown_blocks_conversion",
     "matched",
     "natural_match_0",
+    "policy_not_loaded_window",
     "not_instrumented",
     "key_mismatch",
     "catalog_missing",
@@ -67,6 +68,15 @@ def _safe_float(value: Any, default: float | None = None) -> float | None:
     except Exception:
         return default
     return number if number == number else default
+
+
+def _safe_int(value: Any, default: int = 0) -> int:
+    try:
+        if value in (None, "", "-"):
+            return default
+        return int(float(value))
+    except Exception:
+        return default
 
 
 def _runtime_apply_path(target_date: str) -> Path:
@@ -165,7 +175,38 @@ def _event_field_values(target_date: str) -> dict[str, set[str]]:
         "lifecycle_bucket_matched_bucket_id",
         "lifecycle_bucket_matched_source_bucket_id",
     }
-    values = {key: set() for key in field_keys}
+    values: dict[str, Any] = {key: set() for key in field_keys}
+    values["active_policy_observation"] = {
+        "event_count": 0,
+        "active_seed_count_zero_event_count": 0,
+        "active_seed_count_positive_event_count": 0,
+        "active_seed_id_without_count_event_count": 0,
+        "active_seed_count_values": {},
+        "policy_loaded_for_active_priority_effect": False,
+        "zero_count_data_consumed": False,
+        "active_seed_candidate_event_count": 0,
+        "active_seed_candidate_new_entry_event_count": 0,
+        "active_seed_candidate_followup_event_count": 0,
+        "active_seed_candidate_matched_event_count": 0,
+        "active_seed_candidate_matched_true_without_seed_id_event_count": 0,
+        "active_seed_candidate_unmatched_event_count": 0,
+        "active_seed_candidate_new_entry_unmatched_event_count": 0,
+        "active_seed_candidate_followup_unmatched_event_count": 0,
+        "active_seed_candidate_without_seed_id_event_count": 0,
+        "active_seed_candidate_followup_without_seed_id_event_count": 0,
+        "active_seed_candidate_followup_stage_counts": {},
+        "panic_scale_in_event_count": 0,
+        "panic_scale_in_unique_sim_record_count": 0,
+        "panic_scale_in_match_status_counts": {},
+        "panic_scale_in_no_match_event_count": 0,
+        "panic_scale_in_no_match_unique_sim_record_count": 0,
+        "panic_scale_in_no_match_missing_sim_record_id_event_count": 0,
+        "panic_scale_in_no_match_repeated_followup_event_count": 0,
+        "panic_scale_in_no_match_source_stage_counts": {},
+        "panic_scale_in_no_match_prefix_counts": {},
+    }
+    panic_sim_record_ids: set[str] = set()
+    panic_no_match_sim_record_ids: set[str] = set()
     paths = [
         DATA_DIR / "pipeline_events" / f"pipeline_events_{target_date}.jsonl",
         DATA_DIR / "threshold_cycle" / f"threshold_events_{target_date}.jsonl",
@@ -185,10 +226,90 @@ def _event_field_values(target_date: str) -> dict[str, set[str]]:
             except Exception:
                 continue
             fields = payload.get("fields") if isinstance(payload, dict) else {}
+            stage = str(payload.get("stage") or "").strip() if isinstance(payload, dict) else ""
+            active_count_raw = fields.get("scalp_sim_auto_policy_active_seed_count") if isinstance(fields, dict) else None
+            active_count = _safe_int(active_count_raw, None) if active_count_raw not in (None, "") else None
+            policy_diag = values["active_policy_observation"]
+            if isinstance(fields, dict):
+                candidate_prefix = str(fields.get("active_seed_candidate_observable_prefix") or "").strip()
+                if candidate_prefix:
+                    policy_diag["active_seed_candidate_event_count"] += 1
+                    seed_id = str(fields.get("active_seed_id") or "").strip()
+                    matched = str(fields.get("scalp_sim_active_priority_seed_matched") or "").strip().lower()
+                    if stage == "scalp_sim_entry_armed":
+                        policy_diag["active_seed_candidate_new_entry_event_count"] += 1
+                    else:
+                        policy_diag["active_seed_candidate_followup_event_count"] += 1
+                        followup_counts = policy_diag["active_seed_candidate_followup_stage_counts"]
+                        followup_counts[stage or "unknown"] = followup_counts.get(stage or "unknown", 0) + 1
+                    if seed_id:
+                        policy_diag["active_seed_candidate_matched_event_count"] += 1
+                    elif matched == "true":
+                        policy_diag["active_seed_candidate_matched_true_without_seed_id_event_count"] += 1
+                    else:
+                        policy_diag["active_seed_candidate_unmatched_event_count"] += 1
+                        if stage == "scalp_sim_entry_armed":
+                            policy_diag["active_seed_candidate_new_entry_unmatched_event_count"] += 1
+                        else:
+                            policy_diag["active_seed_candidate_followup_unmatched_event_count"] += 1
+                    if not seed_id:
+                        policy_diag["active_seed_candidate_without_seed_id_event_count"] += 1
+                        if stage != "scalp_sim_entry_armed":
+                            policy_diag["active_seed_candidate_followup_without_seed_id_event_count"] += 1
+                if stage == "scalp_sim_panic_scale_in_blocked":
+                    policy_diag["panic_scale_in_event_count"] += 1
+                    sim_record_id = str(
+                        fields.get("sim_record_id")
+                        or fields.get("scalp_sim_record_id")
+                        or fields.get("parent_sim_record_id")
+                        or fields.get("sim_parent_record_id")
+                        or ""
+                    ).strip()
+                    if sim_record_id:
+                        panic_sim_record_ids.add(sim_record_id)
+                    match_status = str(fields.get("lifecycle_bucket_match_status") or "missing").strip() or "missing"
+                    status_counts = policy_diag["panic_scale_in_match_status_counts"]
+                    status_counts[match_status] = status_counts.get(match_status, 0) + 1
+                    if match_status == "no_match":
+                        policy_diag["panic_scale_in_no_match_event_count"] += 1
+                        if sim_record_id:
+                            panic_no_match_sim_record_ids.add(sim_record_id)
+                        else:
+                            policy_diag["panic_scale_in_no_match_missing_sim_record_id_event_count"] += 1
+                        source_stage = str(
+                            fields.get("scalp_sim_candidate_window_source_stage")
+                            or fields.get("source_stage")
+                            or "missing"
+                        ).strip() or "missing"
+                        source_counts = policy_diag["panic_scale_in_no_match_source_stage_counts"]
+                        source_counts[source_stage] = source_counts.get(source_stage, 0) + 1
+                        prefix_counts = policy_diag["panic_scale_in_no_match_prefix_counts"]
+                        prefix_key = candidate_prefix or "missing"
+                        prefix_counts[prefix_key] = prefix_counts.get(prefix_key, 0) + 1
+            if active_count is not None:
+                policy_diag["event_count"] += 1
+                policy_diag["active_seed_count_values"][str(active_count)] = (
+                    policy_diag["active_seed_count_values"].get(str(active_count), 0) + 1
+                )
+                if active_count > 0:
+                    policy_diag["active_seed_count_positive_event_count"] += 1
+                    policy_diag["policy_loaded_for_active_priority_effect"] = True
+                else:
+                    policy_diag["active_seed_count_zero_event_count"] += 1
+                    policy_diag["zero_count_data_consumed"] = True
             for key in field_keys:
                 value = fields.get(key) if isinstance(fields, dict) else None
                 if str(value or "").strip():
-                    values[key].add(str(value))
+                    if key in {"active_seed_id", "active_sim_priority_seed_id", "scalp_sim_active_priority_seed_id"}:
+                        if active_count is None or active_count > 0:
+                            values[key].add(str(value))
+                            if active_count is None:
+                                policy_diag["active_seed_id_without_count_event_count"] += 1
+                                policy_diag["policy_loaded_for_active_priority_effect"] = True
+                        else:
+                            values.setdefault("pre_policy_active_seed_id", set()).add(str(value))
+                    else:
+                        values[key].add(str(value))
             if not isinstance(fields, dict):
                 continue
             if str(fields.get("lifecycle_bucket_match_status") or "").strip().lower() == "matched":
@@ -198,6 +319,15 @@ def _event_field_values(target_date: str) -> dict[str, set[str]]:
                     values["lifecycle_bucket_matched_bucket_id"].add(bucket_id)
                 if source_bucket_id:
                     values["lifecycle_bucket_matched_source_bucket_id"].add(source_bucket_id)
+    policy_diag = values["active_policy_observation"]
+    policy_diag["panic_scale_in_unique_sim_record_count"] = len(panic_sim_record_ids)
+    policy_diag["panic_scale_in_no_match_unique_sim_record_count"] = len(panic_no_match_sim_record_ids)
+    policy_diag["panic_scale_in_no_match_repeated_followup_event_count"] = max(
+        0,
+        int(policy_diag.get("panic_scale_in_no_match_event_count") or 0)
+        - int(policy_diag.get("panic_scale_in_no_match_missing_sim_record_id_event_count") or 0)
+        - len(panic_no_match_sim_record_ids),
+    )
     return values
 
 
@@ -318,6 +448,16 @@ def _scalp_rows(
         events.get("active_sim_priority_seed_id", set()),
         events.get("scalp_sim_active_priority_seed_id", set()),
     )
+    policy_observation = (
+        events.get("active_policy_observation")
+        if isinstance(events.get("active_policy_observation"), dict)
+        else {}
+    )
+    policy_loaded_for_effect = bool(policy_observation.get("policy_loaded_for_active_priority_effect"))
+    policy_zero_only_window = bool(
+        policy_observation.get("active_seed_count_zero_event_count")
+        and not policy_observation.get("active_seed_count_positive_event_count")
+    )
     rows: list[dict[str, Any]] = []
     source_ids = sorted(catalog_by_id)
     for seed_id in source_ids:
@@ -335,6 +475,8 @@ def _scalp_rows(
             blocker = "" if state == "cooldown_intentional" else "key_lineage_cooldown_blocks_conversion"
         elif not preopen_selected:
             state, blocker = "preopen_missing", "key_lineage_preopen_missing"
+        elif policy_zero_only_window:
+            state, blocker = "policy_not_loaded_window", "active_policy_not_loaded_window"
         else:
             state, blocker = "natural_match_0", "runtime_natural_match_0"
         rows.append(
@@ -348,7 +490,28 @@ def _scalp_rows(
                 postclose_observed_key=seed_id if observed else None,
                 conversion_state=state,
                 next_blocker=blocker,
-                evidence={"producer_present": True, "seed_status": status or None},
+                evidence={
+                    "producer_present": True,
+                    "seed_status": status or None,
+                    "entry_source_taxonomy_contract": seed.get("entry_source_taxonomy_contract")
+                    if isinstance(seed.get("entry_source_taxonomy_contract"), dict)
+                    else {},
+                    "taxonomy_contract_data_consumed": seed.get("taxonomy_contract_data_consumed"),
+                    "taxonomy_contract_runtime_effect_allowed": seed.get(
+                        "taxonomy_contract_runtime_effect_allowed"
+                    ),
+                    "runtime_policy_observation_state": (
+                        "policy_loaded_active_seed_window"
+                        if policy_loaded_for_effect
+                        else "policy_not_loaded_window"
+                        if policy_zero_only_window
+                        else "policy_observation_absent"
+                    ),
+                    "excluded_from_active_priority_effect": bool(policy_zero_only_window and not observed),
+                    "excluded_from_active_priority_effect_reason": (
+                        "policy_not_loaded_window" if policy_zero_only_window and not observed else None
+                    ),
+                },
             )
         )
     for observed_id in sorted(observed_ids - set(catalog_by_id)):
@@ -612,6 +775,11 @@ def build_key_lineage_ledger(target_date: str) -> dict[str, Any]:
     swing_catalog = _load_json(swing_catalog_path)
     hypothesis_plan = _load_json(hypothesis_plan_path)
     events = _event_field_values(target_date)
+    active_policy_observation = (
+        events.get("active_policy_observation")
+        if isinstance(events.get("active_policy_observation"), dict)
+        else {}
+    )
 
     rows: list[dict[str, Any]] = []
     rows.extend(_scalp_rows(discovery=discovery, catalog=scalp_catalog, apply_plan=apply_plan, events=events))
@@ -639,6 +807,11 @@ def build_key_lineage_ledger(target_date: str) -> dict[str, Any]:
     )
     positive_ev_sample_floor_related_count = (
         positive_ev_sample_floor_blocked_count + positive_ev_sample_floor_unknown_floor_count
+    )
+    active_seed_taxonomy_counts = Counter(
+        str(((row.get("evidence") or {}).get("entry_source_taxonomy_contract") or {}).get("contract_state") or "unknown")
+        for row in rows
+        if row.get("source_key_type") == "active_seed"
     )
     discovery_summary = discovery.get("summary") if isinstance(discovery.get("summary"), dict) else {}
     default_sample_floor_window_policy = str(
@@ -723,6 +896,105 @@ def build_key_lineage_ledger(target_date: str) -> dict[str, Any]:
             "positive_ev_sample_floor_window_policy": sample_floor_window_policy,
             "positive_ev_sample_floor_window_policy_counts": dict(sorted(sample_floor_window_counts.items())),
             "positive_ev_sample_floor_basis": "lineage_evidence_sample_vs_sample_floor",
+            "active_sim_policy_observation_window_policy": "consume_all_events_but_score_active_priority_effect_only_when_active_seed_count_positive",
+            "active_sim_policy_event_count": _safe_int(active_policy_observation.get("event_count")),
+            "active_sim_policy_zero_count_event_count": _safe_int(
+                active_policy_observation.get("active_seed_count_zero_event_count")
+            ),
+            "active_sim_policy_positive_count_event_count": _safe_int(
+                active_policy_observation.get("active_seed_count_positive_event_count")
+            ),
+            "active_sim_policy_active_seed_id_without_count_event_count": _safe_int(
+                active_policy_observation.get("active_seed_id_without_count_event_count")
+            ),
+            "active_sim_policy_active_seed_count_values": active_policy_observation.get("active_seed_count_values")
+            or {},
+            "active_sim_policy_loaded_for_effect": bool(
+                active_policy_observation.get("policy_loaded_for_active_priority_effect")
+            ),
+            "active_sim_policy_zero_count_data_consumed": bool(
+                active_policy_observation.get("zero_count_data_consumed")
+            ),
+            "active_sim_policy_zero_count_effect_excluded": bool(
+                active_policy_observation.get("active_seed_count_zero_event_count")
+            ),
+            "active_seed_candidate_event_count": _safe_int(
+                active_policy_observation.get("active_seed_candidate_event_count")
+            ),
+            "active_seed_candidate_new_entry_event_count": _safe_int(
+                active_policy_observation.get("active_seed_candidate_new_entry_event_count")
+            ),
+            "active_seed_candidate_followup_event_count": _safe_int(
+                active_policy_observation.get("active_seed_candidate_followup_event_count")
+            ),
+            "active_seed_candidate_matched_event_count": _safe_int(
+                active_policy_observation.get("active_seed_candidate_matched_event_count")
+            ),
+            "active_seed_candidate_matched_true_without_seed_id_event_count": _safe_int(
+                active_policy_observation.get("active_seed_candidate_matched_true_without_seed_id_event_count")
+            ),
+            "active_seed_candidate_unmatched_event_count": _safe_int(
+                active_policy_observation.get("active_seed_candidate_unmatched_event_count")
+            ),
+            "active_seed_candidate_new_entry_unmatched_event_count": _safe_int(
+                active_policy_observation.get("active_seed_candidate_new_entry_unmatched_event_count")
+            ),
+            "active_seed_candidate_followup_unmatched_event_count": _safe_int(
+                active_policy_observation.get("active_seed_candidate_followup_unmatched_event_count")
+            ),
+            "active_seed_candidate_without_seed_id_event_count": _safe_int(
+                active_policy_observation.get("active_seed_candidate_without_seed_id_event_count")
+            ),
+            "active_seed_candidate_followup_without_seed_id_event_count": _safe_int(
+                active_policy_observation.get("active_seed_candidate_followup_without_seed_id_event_count")
+            ),
+            "active_seed_candidate_followup_stage_counts": active_policy_observation.get(
+                "active_seed_candidate_followup_stage_counts"
+            )
+            or {},
+            "active_seed_candidate_validation_scope": (
+                "new_entry_events_only_validate_active_seed_apply; "
+                "followup_events_are_existing_sim_context_provenance"
+            ),
+            "panic_scale_in_event_count": _safe_int(
+                active_policy_observation.get("panic_scale_in_event_count")
+            ),
+            "panic_scale_in_unique_sim_record_count": _safe_int(
+                active_policy_observation.get("panic_scale_in_unique_sim_record_count")
+            ),
+            "panic_scale_in_match_status_counts": active_policy_observation.get(
+                "panic_scale_in_match_status_counts"
+            )
+            or {},
+            "panic_scale_in_no_match_event_count": _safe_int(
+                active_policy_observation.get("panic_scale_in_no_match_event_count")
+            ),
+            "panic_scale_in_no_match_unique_sim_record_count": _safe_int(
+                active_policy_observation.get("panic_scale_in_no_match_unique_sim_record_count")
+            ),
+            "panic_scale_in_no_match_missing_sim_record_id_event_count": _safe_int(
+                active_policy_observation.get("panic_scale_in_no_match_missing_sim_record_id_event_count")
+            ),
+            "panic_scale_in_no_match_repeated_followup_event_count": _safe_int(
+                active_policy_observation.get("panic_scale_in_no_match_repeated_followup_event_count")
+            ),
+            "panic_scale_in_no_match_source_stage_counts": active_policy_observation.get(
+                "panic_scale_in_no_match_source_stage_counts"
+            )
+            or {},
+            "panic_scale_in_no_match_prefix_counts": active_policy_observation.get(
+                "panic_scale_in_no_match_prefix_counts"
+            )
+            or {},
+            "panic_scale_in_no_match_count_scope": (
+                "raw_followup_events_and_unique_sim_records; repeated followup is not a unique bucket count"
+            ),
+            "active_sim_priority_entry_source_taxonomy_contract_counts": dict(
+                sorted(active_seed_taxonomy_counts.items())
+            ),
+            "active_sim_priority_pending_taxonomy_contract_count": active_seed_taxonomy_counts.get(
+                "new_axis_pending_taxonomy", 0
+            ),
             "state_counts": dict(state_counts),
         },
         "lineage_rows": rows,
@@ -749,6 +1021,30 @@ def _render_markdown(report: dict[str, Any]) -> str:
         f"- positive EV sample-floor provenance: scope=`{summary.get('positive_ev_sample_floor_count_scope') or '-'}` "
         f"window=`{summary.get('positive_ev_sample_floor_window_policy') or '-'}` "
         f"basis=`{summary.get('positive_ev_sample_floor_basis') or '-'}`",
+        f"- active sim policy windows: events=`{summary.get('active_sim_policy_event_count', 0)}` "
+        f"zero_count=`{summary.get('active_sim_policy_zero_count_event_count', 0)}` "
+        f"positive_count=`{summary.get('active_sim_policy_positive_count_event_count', 0)}` "
+        f"id_without_count=`{summary.get('active_sim_policy_active_seed_id_without_count_event_count', 0)}` "
+        f"loaded_for_effect=`{summary.get('active_sim_policy_loaded_for_effect')}` "
+        f"zero_count_effect_excluded=`{summary.get('active_sim_policy_zero_count_effect_excluded')}`",
+        f"- active sim taxonomy contracts: pending=`{summary.get('active_sim_priority_pending_taxonomy_contract_count', 0)}` "
+        f"counts=`{summary.get('active_sim_priority_entry_source_taxonomy_contract_counts') or {}}`",
+        f"- active seed candidate validation: total=`{summary.get('active_seed_candidate_event_count', 0)}` "
+        f"new_entry=`{summary.get('active_seed_candidate_new_entry_event_count', 0)}` "
+        f"followup=`{summary.get('active_seed_candidate_followup_event_count', 0)}` "
+        f"matched=`{summary.get('active_seed_candidate_matched_event_count', 0)}` "
+        f"matched_true_without_seed_id=`{summary.get('active_seed_candidate_matched_true_without_seed_id_event_count', 0)}` "
+        f"unmatched=`{summary.get('active_seed_candidate_unmatched_event_count', 0)}` "
+        f"new_entry_unmatched=`{summary.get('active_seed_candidate_new_entry_unmatched_event_count', 0)}` "
+        f"followup_unmatched=`{summary.get('active_seed_candidate_followup_unmatched_event_count', 0)}` "
+        f"without_seed_id=`{summary.get('active_seed_candidate_without_seed_id_event_count', 0)}` "
+        f"followup_without_seed_id=`{summary.get('active_seed_candidate_followup_without_seed_id_event_count', 0)}`",
+        f"- panic scale-in no-match: events=`{summary.get('panic_scale_in_no_match_event_count', 0)}` "
+        f"unique_sim_records=`{summary.get('panic_scale_in_no_match_unique_sim_record_count', 0)}` "
+        f"missing_sim_record_id=`{summary.get('panic_scale_in_no_match_missing_sim_record_id_event_count', 0)}` "
+        f"repeated_followup=`{summary.get('panic_scale_in_no_match_repeated_followup_event_count', 0)}` "
+        f"status_counts=`{summary.get('panic_scale_in_match_status_counts') or {}}` "
+        f"source_stage_counts=`{summary.get('panic_scale_in_no_match_source_stage_counts') or {}}`",
         f"- blockers: mismatch=`{summary.get('key_mismatch_count', 0)}`, catalog_missing=`{summary.get('catalog_missing_count', 0)}`, preopen_missing=`{summary.get('preopen_missing_count', 0)}`, not_instrumented=`{summary.get('not_instrumented_count', 0)}`",
         "",
         "## Top Blockers",

@@ -594,6 +594,11 @@ def test_active_sim_priority_allows_incomplete_positive_parent_for_collection(mo
                     "dimension_filters": {
                         "entry_score_parent": "score_watch_recovery",
                         "entry_source_parent": "entry_source_wait6579",
+                        "entry_source_parent_contract_state": "canonical_alias",
+                        "entry_source_parent_contract_reason": "alias_of_wait6579_counterfactual",
+                        "entry_source_parent_alias_version": "entry_source_parent_alias_v1",
+                        "entry_source_parent_consume_data": "True",
+                        "entry_source_parent_runtime_effect_allowed": "True",
                     },
                 }
             ],
@@ -606,8 +611,49 @@ def test_active_sim_priority_allows_incomplete_positive_parent_for_collection(mo
     assert seed["complete_flow_count"] == 0
     assert seed["active_collection_reason"] == "positive_ev_parent_needs_sim_collection"
     assert seed["live_conversion_blocked_reason"] == "incomplete_lifecycle_flow"
+    assert seed["entry_source_taxonomy_contract"]["contract_state"] == "canonical_alias"
+    assert seed["taxonomy_contract_data_consumed"] is True
+    assert seed["taxonomy_contract_runtime_effect_allowed"] is True
     assert seed["runtime_effect"] is False
     assert seed["broker_order_forbidden"] is True
+
+
+def test_entry_source_parent_maps_first_ai_wait_to_wait6579_parent():
+    assert mod._entry_source_parent("first_ai_wait") == "entry_source_wait6579"
+    assert (
+        mod._entry_source_parent(
+            "entry:combo_entry_spot:score_score_60_62_source_first_ai_wait_stale_fresh_or_unflagged"
+        )
+        == "entry_source_wait6579"
+    )
+
+
+def test_entry_source_parent_unknown_axis_is_consumed_as_pending_taxonomy():
+    from src.engine.lifecycle.bucket_taxonomy import normalize_entry_source_parent
+
+    normalized = normalize_entry_source_parent("new_observation_axis_v1")
+
+    assert normalized["parent"] == "entry_source_observed_other"
+    assert normalized["contract_state"] == "new_axis_pending_taxonomy"
+    assert normalized["consume_data"] is True
+    assert normalized["runtime_effect_allowed"] is False
+
+
+def test_lifecycle_parent_dimensions_preserve_pending_taxonomy_metadata():
+    dimensions = mod._lifecycle_flow_parent_dimensions(
+        {
+            "entry_bucket_id": "entry:combo_entry_spot:score_score_60_62_source_new_axis_v1",
+            "submit_bucket_id": "submit:combo_submit_quality:submit_missing",
+            "holding_bucket_id": "holding:combo_holding_flow:holding_missing",
+            "scale_in_bucket_id": "scale_in:none",
+            "exit_bucket_id": "exit:combo_exit_result:exit_missing",
+        }
+    )
+
+    assert dimensions["entry_source_parent"] == "entry_source_observed_other"
+    assert dimensions["entry_source_parent_contract_state"] == "new_axis_pending_taxonomy"
+    assert dimensions["entry_source_parent_consume_data"] == "True"
+    assert dimensions["entry_source_parent_runtime_effect_allowed"] == "False"
 
 
 def test_active_sim_priority_summary_exposes_collection_and_live_blockers(monkeypatch, tmp_path):

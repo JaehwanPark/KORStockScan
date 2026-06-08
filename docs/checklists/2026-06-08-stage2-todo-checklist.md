@@ -135,7 +135,7 @@
 
 - [ ] `[ActiveSimPrioritySameKeyObservation0608] active sim priority same-key runtime observation 최종 확인` (`Due: 2026-06-08`, `Slot: POSTCLOSE`, `TimeWindow: 17:45~18:00`, `Track: ScalpingLogic`)
   - Source: [key_lineage_ledger_2026-06-08.json](/home/ubuntu/KORStockScan/data/report/key_lineage_ledger/key_lineage_ledger_2026-06-08.json), [conversion_lane_2026-06-08.json](/home/ubuntu/KORStockScan/data/report/conversion_lane/conversion_lane_2026-06-08.json), [tuning_performance_control_tower_2026-06-08.json](/home/ubuntu/KORStockScan/data/report/tuning_performance_control_tower/tuning_performance_control_tower_2026-06-08.json), [threshold_cycle_postclose_verification_2026-06-08.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_postclose_verification/threshold_cycle_postclose_verification_2026-06-08.json)
-  - 판정 기준: PREOPEN catalog/apply에 들어간 active priority key가 장중 runtime/sim event와 postclose `key_lineage_ledger`에서 같은 key로 닫히는지 확인한다. `same_key_continuity_pass`, `positive_ev_runtime_observed`, `natural_match_0`, `catalog_missing`, `preopen_missing`, `not_instrumented`를 분리 기록한다.
+  - 판정 기준: PREOPEN catalog/apply에 들어간 active priority key가 장중 runtime/sim event와 postclose `key_lineage_ledger`에서 같은 key로 닫히는지 확인한다. 중간점검에서 관측된 `sim_record_id` present but `source_stage/source_record_id` missing, `lifecycle_bucket_match_status=no_match`, `scalp_sim_auto_policy_active_seed_count=0` 패턴이 postclose lineage reconstruction에서 정상 bridge됐는지 별도 확인한다. `same_key_continuity_pass`, `positive_ev_runtime_observed`, `natural_match_0`, `catalog_missing`, `preopen_missing`, `not_instrumented`를 분리 기록한다.
   - 금지: natural match 0을 전략 실패로 단정하지 않는다. catalog/PREOPEN handoff가 intact면 warning으로 닫고, key/schema/contract mismatch, unknown key, inactive key consumption, forbidden authority leak만 fail로 닫는다. sim-only priority를 실주문, threshold, provider, bot, cap 변경 근거로 사용하지 않는다.
   - 다음 액션: `same_key_runtime_observed`, `natural_match_0_warning`, `catalog_or_preopen_missing`, `runtime_observation_not_instrumented`, `key_contract_mismatch_fail`, `postclose_artifact_missing` 중 하나로 닫는다.
 
@@ -154,3 +154,18 @@
 ```bash
 PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTHONPATH=. .venv/bin/python -m src.engine.sync_github_project_calendar
 ```
+
+<!-- AUTO_SERVER_COMPARISON_START -->
+### 본서버 vs songstockscan 자동 비교 (`2026-06-08 15:48:57`)
+
+- 기준: `profit-derived metrics are excluded by default because fallback-normalized values such as NULL -> 0 can distort comparison`
+- 상세 리포트: `data/report/server_comparison/server_comparison_2026-06-08.md`
+- `Trade Review`: status=`remote_error`, differing_safe_metrics=`0`
+  - safe 기준 차이 없음
+- `Performance Tuning`: status=`remote_error`, differing_safe_metrics=`0`
+  - safe 기준 차이 없음
+- `Post Sell Feedback`: status=`remote_error`, differing_safe_metrics=`0`
+  - safe 기준 차이 없음
+- `Entry Pipeline Flow`: status=`remote_error`, differing_safe_metrics=`0`
+  - safe 기준 차이 없음
+<!-- AUTO_SERVER_COMPARISON_END -->

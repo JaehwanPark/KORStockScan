@@ -12,6 +12,7 @@ from typing import Any
 
 BUCKET_ALIAS_VERSION = "lifecycle_bucket_alias_v1"
 DIMENSION_SET_VERSION = "lifecycle_dimension_set_v1"
+ENTRY_SOURCE_PARENT_ALIAS_VERSION = "entry_source_parent_alias_v1"
 REQUIRED_METRIC_CONTRACT_FIELDS = (
     "metric_role",
     "decision_authority",
@@ -38,6 +39,16 @@ _NUMERIC_EMBEDDED_RE = re.compile(
 _SCORE_LT_RE = re.compile(r"\bscore[_=:]?lt[_-]?(?P<high>\d{1,3})\b")
 _SCORE_BUCKET_RE = re.compile(
     r"\bscore(?:[_=:]score)?(?:[_=:])?(?P<low>\d{1,3})(?:[_-](?P<high>\d{1,3}|p))?(?=\D|$)"
+)
+
+ENTRY_SOURCE_PARENT_ALIASES = (
+    ("first_ai_wait", "entry_source_wait6579", "alias_of_wait6579_counterfactual"),
+    ("wait6579", "entry_source_wait6579", "canonical_wait6579_counterfactual"),
+    ("blocked_ai_score", "entry_source_blocked_ai_score", "canonical_blocked_ai_score"),
+    ("scalp_entry_action_decision", "entry_source_action_decision", "canonical_action_decision"),
+    ("action_decision", "entry_source_action_decision", "alias_of_action_decision"),
+    ("scalp_sim", "entry_source_scalp_sim", "canonical_scalp_sim"),
+    ("panic", "entry_source_panic", "canonical_panic"),
 )
 
 
@@ -136,6 +147,42 @@ def _is_missing_unknown_dimension_value(value: Any) -> bool:
     if text in {"", "unknown", "missing", "none", "null"}:
         return True
     return text.endswith(":unknown") or text.endswith(":missing")
+
+
+def normalize_entry_source_parent(value: Any) -> dict[str, Any]:
+    """Normalize runtime/discovery entry source labels without dropping rows."""
+    raw = str(value or "").strip()
+    text = raw.lower()
+    if not text or text in {"-", "missing", "none", "null"}:
+        return {
+            "parent": "entry_missing",
+            "raw_value": raw,
+            "alias_version": ENTRY_SOURCE_PARENT_ALIAS_VERSION,
+            "contract_state": "missing_source",
+            "reason": "entry_source_missing",
+            "consume_data": True,
+            "runtime_effect_allowed": False,
+        }
+    for token, parent, reason in ENTRY_SOURCE_PARENT_ALIASES:
+        if token in text:
+            return {
+                "parent": parent,
+                "raw_value": raw,
+                "alias_version": ENTRY_SOURCE_PARENT_ALIAS_VERSION,
+                "contract_state": "canonical_alias" if reason.startswith("alias_") else "canonical",
+                "reason": reason,
+                "consume_data": True,
+                "runtime_effect_allowed": True,
+            }
+    return {
+        "parent": "entry_source_observed_other",
+        "raw_value": raw,
+        "alias_version": ENTRY_SOURCE_PARENT_ALIAS_VERSION,
+        "contract_state": "new_axis_pending_taxonomy",
+        "reason": "entry_source_parent_taxonomy_not_declared",
+        "consume_data": True,
+        "runtime_effect_allowed": False,
+    }
 
 
 def _coarsen_dimensions_for_parent(

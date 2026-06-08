@@ -19,6 +19,7 @@ SELL_ACTIVE_STATES = {"PANIC_SELL", "RECOVERY_WATCH"}
 SELL_RELEASE_STATES = {"NORMAL", "RECOVERY_CONFIRMED"}
 BUY_ACTIVE_STATES = {"PANIC_BUY_WATCH", "PANIC_BUY", "EXHAUSTION_WATCH"}
 BUY_RELEASE_STATES = {"NORMAL", "BUYING_EXHAUSTED"}
+SELL_RESTART_SUPPRESS_AFTER_RELEASE_SEC = 10 * 60
 
 
 def _report_session_key(report_file: Path, report: dict) -> str:
@@ -385,6 +386,22 @@ def notify_from_report(
         transition = "update"
 
     now = time.time() if now_ts is None else now_ts
+    previous_last_notification = (
+        previous.get("last_notification") if isinstance(previous.get("last_notification"), dict) else {}
+    )
+    suppress_sell_restart_after_release = False
+    if not force and kind == "panic_sell" and transition == "start" and previous_phase == "released":
+        previous_release_ts = _safe_float(previous_last_notification.get("sent_at_ts"))
+        suppress_sell_restart_after_release = (
+            previous_last_notification.get("transition") == "release"
+            and bool(current_session_key)
+            and previous_session_key == current_session_key
+            and previous_release_ts is not None
+            and now - previous_release_ts <= SELL_RESTART_SUPPRESS_AFTER_RELEASE_SEC
+        )
+        if suppress_sell_restart_after_release:
+            transition = "restart_suppressed_after_release"
+
     next_phase = "release_pending" if transition == "release_pending" else current_phase
     next_state = {
         "phase": next_phase,
@@ -398,9 +415,11 @@ def notify_from_report(
     if isinstance(previous, dict) and isinstance(previous.get("last_notification"), dict):
         next_state["last_notification"] = previous["last_notification"]
 
-    if transition in {"none", "release_pending"}:
+    if transition in {"none", "release_pending", "restart_suppressed_after_release"}:
         state[kind] = next_state
         _write_state(state_file, state)
+        if transition == "restart_suppressed_after_release":
+            return "restart_suppressed_after_release"
         if stale_previous_session and current_phase == "released":
             return "stale_previous_active_reset"
         return "release_pending" if transition == "release_pending" else "no_transition"

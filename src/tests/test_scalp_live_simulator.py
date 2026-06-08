@@ -1425,6 +1425,224 @@ def test_scalp_sim_candidate_window_active_seed_uses_reserved_sim_quota(monkeypa
     assert armed["broker_order_forbidden"] is True
 
 
+def test_scalp_sim_active_seed_matches_first_ai_wait_wait6579_parent(monkeypatch, tmp_path):
+    catalog_path = tmp_path / "scalp_sim_policy_catalog_2026-06-01.json"
+    catalog_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "scalp_sim_policy_catalog_v1",
+                "active_sim_priority_seeds": [
+                    {
+                        "active_seed_id": "active_seed_wait6579",
+                        "source_parent_bucket_id": "parent_wait6579",
+                        "status": "active",
+                        "priority_tier": "rare_positive_parent_seed",
+                        "observable_prefix": {
+                            "entry_score_parent": "score_watch_recovery",
+                            "entry_source_parent": "entry_source_wait6579",
+                        },
+                        "runtime_effect": False,
+                        "allowed_runtime_apply": False,
+                        "actual_order_submitted": False,
+                        "broker_order_forbidden": True,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    rules = replace(
+        CONFIG,
+        SCALP_SIM_AUTO_POLICY_ENABLED=True,
+        SCALP_SIM_AUTO_POLICY_FILE=str(catalog_path),
+        SCALP_SIM_AUTO_POLICY_VERSION="scalp_sim_auto_approval:2026-06-01",
+    )
+    monkeypatch.setattr(state_handlers, "TRADING_RULES", rules)
+    state_handlers._SCALP_SIM_AUTO_POLICY_CACHE.clear()
+
+    fields = state_handlers._scalp_active_seed_match_fields(
+        score_value=61,
+        source_stage="first_ai_wait",
+        fields={},
+    )
+
+    assert fields["scalp_sim_active_priority_seed_matched"] is True
+    assert fields["active_seed_id"] == "active_seed_wait6579"
+    assert json.loads(fields["active_seed_candidate_observable_prefix"]) == {
+        "entry_score_parent": "score_watch_recovery",
+        "entry_source_parent": "entry_source_wait6579",
+    }
+    assert fields["entry_source_parent_contract_state"] == "canonical_alias"
+    assert fields["entry_source_parent_runtime_effect_allowed"] is True
+
+
+def test_scalp_sim_active_seed_unmatched_new_axis_preserves_taxonomy_contract(monkeypatch, tmp_path):
+    catalog_path = tmp_path / "scalp_sim_policy_catalog_2026-06-01.json"
+    catalog_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "scalp_sim_policy_catalog_v1",
+                "active_sim_priority_seeds": [
+                    {
+                        "active_seed_id": "active_seed_observed_other",
+                        "source_parent_bucket_id": "parent_observed_other",
+                        "status": "active",
+                        "observable_prefix": {
+                            "entry_score_parent": "score_watch_recovery",
+                            "entry_source_parent": "entry_source_observed_other",
+                        },
+                        "runtime_effect": False,
+                        "allowed_runtime_apply": False,
+                        "actual_order_submitted": False,
+                        "broker_order_forbidden": True,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    rules = replace(
+        CONFIG,
+        SCALP_SIM_AUTO_POLICY_ENABLED=True,
+        SCALP_SIM_AUTO_POLICY_FILE=str(catalog_path),
+        SCALP_SIM_AUTO_POLICY_VERSION="scalp_sim_auto_approval:2026-06-01",
+    )
+    monkeypatch.setattr(state_handlers, "TRADING_RULES", rules)
+    state_handlers._SCALP_SIM_AUTO_POLICY_CACHE.clear()
+
+    fields = state_handlers._scalp_active_seed_match_fields(
+        score_value=61,
+        source_stage="new_observation_axis_v1",
+        fields={},
+    )
+
+    assert fields["scalp_sim_active_priority_seed_matched"] is False
+    assert "active_seed_id" not in fields
+    assert json.loads(fields["active_seed_candidate_observable_prefix"]) == {
+        "entry_score_parent": "score_watch_recovery",
+        "entry_source_parent": "entry_source_observed_other",
+    }
+    assert fields["active_seed_match_blocked_reason"] == "entry_source_taxonomy_pending_runtime_effect_blocked"
+    assert fields["entry_source_parent_contract_state"] == "new_axis_pending_taxonomy"
+    assert fields["entry_source_parent_consume_data"] is True
+    assert fields["entry_source_parent_runtime_effect_allowed"] is False
+
+
+def test_scalp_sim_candidate_window_context_recomputes_stale_active_seed_alias(monkeypatch, tmp_path):
+    catalog_path = tmp_path / "scalp_sim_policy_catalog_2026-06-01.json"
+    catalog_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "scalp_sim_policy_catalog_v1",
+                "active_sim_priority_seeds": [
+                    {
+                        "active_seed_id": "active_seed_wait6579",
+                        "source_parent_bucket_id": "parent_wait6579",
+                        "status": "active",
+                        "priority_tier": "rare_positive_parent_seed",
+                        "observable_prefix": {
+                            "entry_score_parent": "score_watch_recovery",
+                            "entry_source_parent": "entry_source_wait6579",
+                        },
+                        "runtime_effect": False,
+                        "allowed_runtime_apply": False,
+                        "actual_order_submitted": False,
+                        "broker_order_forbidden": True,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    rules = replace(
+        CONFIG,
+        SCALP_SIM_AUTO_POLICY_ENABLED=True,
+        SCALP_SIM_AUTO_POLICY_FILE=str(catalog_path),
+        SCALP_SIM_AUTO_POLICY_VERSION="scalp_sim_auto_approval:2026-06-01",
+    )
+    monkeypatch.setattr(state_handlers, "TRADING_RULES", rules)
+    state_handlers._SCALP_SIM_AUTO_POLICY_CACHE.clear()
+
+    fields = state_handlers._scalp_sim_candidate_window_context_fields(
+        {
+            "scalp_sim_candidate_window_expansion": True,
+            "scalp_sim_candidate_window_source_stage": "first_ai_wait",
+            "scalp_sim_candidate_window_original_score": "61.0",
+            "scalp_sim_active_priority_seed_matched": False,
+            "active_seed_candidate_observable_prefix": json.dumps(
+                {
+                    "entry_score_parent": "score_watch_recovery",
+                    "entry_source_parent": "entry_source_observed_other",
+                },
+                sort_keys=True,
+            ),
+        }
+    )
+
+    assert fields["scalp_sim_active_priority_seed_matched"] is True
+    assert fields["active_seed_id"] == "active_seed_wait6579"
+    assert json.loads(fields["active_seed_candidate_observable_prefix"]) == {
+        "entry_score_parent": "score_watch_recovery",
+        "entry_source_parent": "entry_source_wait6579",
+    }
+    assert fields["entry_source_parent_contract_state"] == "canonical_alias"
+
+
+def test_scalp_sim_candidate_window_context_refreshes_stale_prefix_even_with_seed_id(monkeypatch, tmp_path):
+    catalog_path = tmp_path / "scalp_sim_policy_catalog_2026-06-01.json"
+    catalog_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "scalp_sim_policy_catalog_v1",
+                "active_sim_priority_seeds": [
+                    {
+                        "active_seed_id": "active_seed_wait6579",
+                        "source_parent_bucket_id": "parent_wait6579",
+                        "status": "active",
+                        "observable_prefix": {
+                            "entry_score_parent": "score_watch_recovery",
+                            "entry_source_parent": "entry_source_wait6579",
+                        },
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    rules = replace(
+        CONFIG,
+        SCALP_SIM_AUTO_POLICY_ENABLED=True,
+        SCALP_SIM_AUTO_POLICY_FILE=str(catalog_path),
+        SCALP_SIM_AUTO_POLICY_VERSION="scalp_sim_auto_approval:2026-06-01",
+    )
+    monkeypatch.setattr(state_handlers, "TRADING_RULES", rules)
+    state_handlers._SCALP_SIM_AUTO_POLICY_CACHE.clear()
+
+    fields = state_handlers._scalp_sim_candidate_window_context_fields(
+        {
+            "scalp_sim_candidate_window_expansion": True,
+            "scalp_sim_candidate_window_source_stage": "first_ai_wait",
+            "scalp_sim_candidate_window_original_score": "61.0",
+            "scalp_sim_active_priority_seed_matched": True,
+            "active_seed_id": "stale_seed",
+            "active_seed_candidate_observable_prefix": json.dumps(
+                {
+                    "entry_score_parent": "score_watch_recovery",
+                    "entry_source_parent": "entry_source_observed_other",
+                },
+                sort_keys=True,
+            ),
+        }
+    )
+
+    assert fields["scalp_sim_active_priority_seed_matched"] is True
+    assert fields["active_seed_id"] == "active_seed_wait6579"
+    assert json.loads(fields["active_seed_candidate_observable_prefix"]) == {
+        "entry_score_parent": "score_watch_recovery",
+        "entry_source_parent": "entry_source_wait6579",
+    }
+
+
 def test_scalp_sim_candidate_window_hypothesis_uses_sim_only_reserved_quota(monkeypatch, tmp_path):
     logs = []
     monkeypatch.setattr(

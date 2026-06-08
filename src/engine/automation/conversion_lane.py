@@ -404,6 +404,25 @@ def _submit_drought_blockers(buy_funnel: dict[str, Any]) -> list[dict[str, Any]]
     ]
 
 
+def _buy_funnel_provenance(buy_funnel: dict[str, Any]) -> dict[str, Any]:
+    classification = buy_funnel.get("classification") if isinstance(buy_funnel.get("classification"), dict) else {}
+    matches = classification.get("matches") if isinstance(classification.get("matches"), list) else []
+    return {
+        "buy_funnel_source_present": bool(buy_funnel),
+        "buy_funnel_report_type": buy_funnel.get("report_type"),
+        "buy_funnel_classification_primary": classification.get("primary"),
+        "buy_funnel_classification_matches": matches,
+        "submit_drought_blocker_source_state": (
+            "submit_drought_critical"
+            if classification.get("primary") == "SUBMIT_DROUGHT_CRITICAL"
+            or "SUBMIT_DROUGHT_CRITICAL" in matches
+            else "not_submit_drought_critical"
+            if classification
+            else "buy_funnel_missing_or_unclassified"
+        ),
+    }
+
+
 def _lineage_by_source_key(ledger: dict[str, Any]) -> dict[str, dict[str, Any]]:
     out: dict[str, dict[str, Any]] = {}
     for row in ledger.get("lineage_rows") or []:
@@ -611,6 +630,7 @@ def build_conversion_lane(target_date: str) -> dict[str, Any]:
     positive_ev_sample_floor_related_count = (
         positive_ev_sample_floor_blocked_count + positive_ev_sample_floor_unknown_floor_count
     )
+    buy_funnel_provenance = _buy_funnel_provenance(buy_funnel)
     default_sample_floor_window_policy = _source_sample_floor_window_policy(lifecycle)
     sample_floor_window_counts = Counter(
         str(item.get("sample_floor_window_policy") or default_sample_floor_window_policy)
@@ -670,12 +690,100 @@ def build_conversion_lane(target_date: str) -> dict[str, Any]:
         "positive_ev_sample_floor_basis": "candidate_sample_vs_required_sample",
         "positive_ev_not_due_until_next_preopen_count": positive_ev_not_due_until_next_preopen_count,
         "positive_ev_previous_policy_natural_match_0_count": positive_ev_previous_policy_natural_match_0_count,
+        "active_sim_policy_observation_window_policy": (key_ledger.get("summary") or {}).get(
+            "active_sim_policy_observation_window_policy"
+        ),
+        "active_sim_policy_event_count": _safe_int(
+            (key_ledger.get("summary") or {}).get("active_sim_policy_event_count")
+        ),
+        "active_sim_policy_zero_count_event_count": _safe_int(
+            (key_ledger.get("summary") or {}).get("active_sim_policy_zero_count_event_count")
+        ),
+        "active_sim_policy_positive_count_event_count": _safe_int(
+            (key_ledger.get("summary") or {}).get("active_sim_policy_positive_count_event_count")
+        ),
+        "active_sim_policy_active_seed_id_without_count_event_count": _safe_int(
+            (key_ledger.get("summary") or {}).get("active_sim_policy_active_seed_id_without_count_event_count")
+        ),
+        "active_sim_policy_zero_count_effect_excluded": bool(
+            (key_ledger.get("summary") or {}).get("active_sim_policy_zero_count_effect_excluded")
+        ),
+        "active_sim_priority_entry_source_taxonomy_contract_counts": (key_ledger.get("summary") or {}).get(
+            "active_sim_priority_entry_source_taxonomy_contract_counts"
+        )
+        or {},
+        "active_sim_priority_pending_taxonomy_contract_count": _safe_int(
+            (key_ledger.get("summary") or {}).get("active_sim_priority_pending_taxonomy_contract_count")
+        ),
+        "active_seed_candidate_event_count": _safe_int(
+            (key_ledger.get("summary") or {}).get("active_seed_candidate_event_count")
+        ),
+        "active_seed_candidate_new_entry_event_count": _safe_int(
+            (key_ledger.get("summary") or {}).get("active_seed_candidate_new_entry_event_count")
+        ),
+        "active_seed_candidate_followup_event_count": _safe_int(
+            (key_ledger.get("summary") or {}).get("active_seed_candidate_followup_event_count")
+        ),
+        "active_seed_candidate_matched_event_count": _safe_int(
+            (key_ledger.get("summary") or {}).get("active_seed_candidate_matched_event_count")
+        ),
+        "active_seed_candidate_matched_true_without_seed_id_event_count": _safe_int(
+            (key_ledger.get("summary") or {}).get("active_seed_candidate_matched_true_without_seed_id_event_count")
+        ),
+        "active_seed_candidate_unmatched_event_count": _safe_int(
+            (key_ledger.get("summary") or {}).get("active_seed_candidate_unmatched_event_count")
+        ),
+        "active_seed_candidate_new_entry_unmatched_event_count": _safe_int(
+            (key_ledger.get("summary") or {}).get("active_seed_candidate_new_entry_unmatched_event_count")
+        ),
+        "active_seed_candidate_followup_unmatched_event_count": _safe_int(
+            (key_ledger.get("summary") or {}).get("active_seed_candidate_followup_unmatched_event_count")
+        ),
+        "active_seed_candidate_without_seed_id_event_count": _safe_int(
+            (key_ledger.get("summary") or {}).get("active_seed_candidate_without_seed_id_event_count")
+        ),
+        "active_seed_candidate_followup_without_seed_id_event_count": _safe_int(
+            (key_ledger.get("summary") or {}).get("active_seed_candidate_followup_without_seed_id_event_count")
+        ),
+        "active_seed_candidate_validation_scope": (key_ledger.get("summary") or {}).get(
+            "active_seed_candidate_validation_scope"
+        ),
+        "panic_scale_in_event_count": _safe_int(
+            (key_ledger.get("summary") or {}).get("panic_scale_in_event_count")
+        ),
+        "panic_scale_in_unique_sim_record_count": _safe_int(
+            (key_ledger.get("summary") or {}).get("panic_scale_in_unique_sim_record_count")
+        ),
+        "panic_scale_in_match_status_counts": (key_ledger.get("summary") or {}).get(
+            "panic_scale_in_match_status_counts"
+        )
+        or {},
+        "panic_scale_in_no_match_event_count": _safe_int(
+            (key_ledger.get("summary") or {}).get("panic_scale_in_no_match_event_count")
+        ),
+        "panic_scale_in_no_match_unique_sim_record_count": _safe_int(
+            (key_ledger.get("summary") or {}).get("panic_scale_in_no_match_unique_sim_record_count")
+        ),
+        "panic_scale_in_no_match_missing_sim_record_id_event_count": _safe_int(
+            (key_ledger.get("summary") or {}).get("panic_scale_in_no_match_missing_sim_record_id_event_count")
+        ),
+        "panic_scale_in_no_match_repeated_followup_event_count": _safe_int(
+            (key_ledger.get("summary") or {}).get("panic_scale_in_no_match_repeated_followup_event_count")
+        ),
+        "panic_scale_in_no_match_source_stage_counts": (key_ledger.get("summary") or {}).get(
+            "panic_scale_in_no_match_source_stage_counts"
+        )
+        or {},
+        "panic_scale_in_no_match_count_scope": (key_ledger.get("summary") or {}).get(
+            "panic_scale_in_no_match_count_scope"
+        ),
         "blocker_class_counts": dict(blocker_counts),
         "conversion_blocker_count": len(blockers),
         "blocker_axis_counts": dict(blocker_axis_counts),
         "submit_drought_closure_axis_count": len(submit_drought_axes),
         "submit_drought_closure_axes": submit_drought_axes,
         "submit_drought_split_complete": set(submit_drought_axes) == set(SUBMIT_DROUGHT_CLOSURE_AXES),
+        **buy_funnel_provenance,
     }
     return {
         "schema_version": SCHEMA_VERSION,
@@ -715,6 +823,29 @@ def _render_markdown(report: dict[str, Any]) -> str:
         f"window=`{summary.get('positive_ev_sample_floor_window_policy') or '-'}` "
         f"window_counts=`{summary.get('positive_ev_sample_floor_window_policy_counts') or {}}` "
         f"basis=`{summary.get('positive_ev_sample_floor_basis') or '-'}`",
+        f"- active sim policy windows: events=`{summary.get('active_sim_policy_event_count', 0)}` "
+        f"zero_count=`{summary.get('active_sim_policy_zero_count_event_count', 0)}` "
+        f"positive_count=`{summary.get('active_sim_policy_positive_count_event_count', 0)}` "
+        f"id_without_count=`{summary.get('active_sim_policy_active_seed_id_without_count_event_count', 0)}` "
+        f"zero_count_effect_excluded=`{summary.get('active_sim_policy_zero_count_effect_excluded')}`",
+        f"- active sim taxonomy contracts: pending=`{summary.get('active_sim_priority_pending_taxonomy_contract_count', 0)}` "
+        f"counts=`{summary.get('active_sim_priority_entry_source_taxonomy_contract_counts') or {}}`",
+        f"- active seed candidate validation: total=`{summary.get('active_seed_candidate_event_count', 0)}` "
+        f"new_entry=`{summary.get('active_seed_candidate_new_entry_event_count', 0)}` "
+        f"followup=`{summary.get('active_seed_candidate_followup_event_count', 0)}` "
+        f"matched=`{summary.get('active_seed_candidate_matched_event_count', 0)}` "
+        f"matched_true_without_seed_id=`{summary.get('active_seed_candidate_matched_true_without_seed_id_event_count', 0)}` "
+        f"unmatched=`{summary.get('active_seed_candidate_unmatched_event_count', 0)}` "
+        f"new_entry_unmatched=`{summary.get('active_seed_candidate_new_entry_unmatched_event_count', 0)}` "
+        f"followup_unmatched=`{summary.get('active_seed_candidate_followup_unmatched_event_count', 0)}` "
+        f"without_seed_id=`{summary.get('active_seed_candidate_without_seed_id_event_count', 0)}` "
+        f"followup_without_seed_id=`{summary.get('active_seed_candidate_followup_without_seed_id_event_count', 0)}`",
+        f"- panic scale-in no-match: events=`{summary.get('panic_scale_in_no_match_event_count', 0)}` "
+        f"unique_sim_records=`{summary.get('panic_scale_in_no_match_unique_sim_record_count', 0)}` "
+        f"missing_sim_record_id=`{summary.get('panic_scale_in_no_match_missing_sim_record_id_event_count', 0)}` "
+        f"repeated_followup=`{summary.get('panic_scale_in_no_match_repeated_followup_event_count', 0)}` "
+        f"status_counts=`{summary.get('panic_scale_in_match_status_counts') or {}}` "
+        f"source_stage_counts=`{summary.get('panic_scale_in_no_match_source_stage_counts') or {}}`",
         f"- conversion candidate strategy scope: scalp=`{summary.get('scalp_conversion_candidate_count', 0)}` "
         f"swing=`{summary.get('swing_conversion_candidate_count', 0)}` "
         f"unscoped=`{summary.get('unscoped_conversion_candidate_count', 0)}`",
@@ -724,6 +855,10 @@ def _render_markdown(report: dict[str, Any]) -> str:
         f"- top LDM bucket blocker: `{summary.get('top_ldm_bucket_blocker_class') or 'none'}`",
         f"- submit funnel blocker count: `{summary.get('submit_funnel_blocker_count', 0)}` "
         f"(submit_drought_is_ldm_bucket_blocker=`{summary.get('submit_drought_is_ldm_bucket_blocker')}`)",
+        f"- buy funnel source: present=`{summary.get('buy_funnel_source_present')}` "
+        f"primary=`{summary.get('buy_funnel_classification_primary') or '-'}` "
+        f"matches=`{summary.get('buy_funnel_classification_matches') or []}` "
+        f"submit_drought_source_state=`{summary.get('submit_drought_blocker_source_state') or '-'}`",
         "",
         "## Top Conversion Blockers",
     ]

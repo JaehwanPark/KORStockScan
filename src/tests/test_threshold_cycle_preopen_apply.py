@@ -1,5 +1,4 @@
 import json
-
 from src.engine import runtime_apply_bridge as bridge_mod
 from src.engine import scalp_sim_scale_in_window_approval as scale_in_approval_mod
 from src.engine import threshold_cycle_preopen_apply as mod
@@ -2240,10 +2239,23 @@ def _install_scalp_sim_auto_test_dirs(tmp_path, monkeypatch):
     return runtime_dir, approval_dir, policy_dir, legacy_approval_dir
 
 
+def _scalp_sim_policy_catalog_payload(**extra):
+    payload = {
+        "schema_version": "scalp_sim_policy_catalog_v1",
+        "generated_at": "2026-05-26T15:40:00+09:00",
+        "generator_provenance": {
+            "hash_algorithm": "sha256",
+            "files": mod._generator_hashes(mod.SCALP_SIM_POLICY_STALENESS_CHECK_FILES),
+        },
+    }
+    payload.update(extra)
+    return payload
+
+
 def test_scalp_sim_auto_approval_writes_sim_policy_env(tmp_path, monkeypatch):
     runtime_dir, approval_dir, policy_dir, _ = _install_scalp_sim_auto_test_dirs(tmp_path, monkeypatch)
     catalog_path = policy_dir / "scalp_sim_policy_catalog_2026-05-26.json"
-    catalog_path.write_text(json.dumps({"schema_version": "scalp_sim_policy_catalog_v1"}), encoding="utf-8")
+    catalog_path.write_text(json.dumps(_scalp_sim_policy_catalog_payload()), encoding="utf-8")
     (approval_dir / "scalp_sim_auto_approval_2026-05-26.json").write_text(
         json.dumps(
             {
@@ -2360,7 +2372,7 @@ def test_scalp_sim_auto_approval_blocked_does_not_write_env(tmp_path, monkeypatc
 def test_scalp_sim_auto_approval_rejects_empty_policy_artifact(tmp_path, monkeypatch):
     _, approval_dir, policy_dir, _ = _install_scalp_sim_auto_test_dirs(tmp_path, monkeypatch)
     (policy_dir / "scalp_sim_policy_catalog_2026-05-26.json").write_text(
-        json.dumps({"schema_version": "scalp_sim_policy_catalog_v1"}),
+        json.dumps(_scalp_sim_policy_catalog_payload()),
         encoding="utf-8",
     )
     (approval_dir / "scalp_sim_auto_approval_2026-05-26.json").write_text(
@@ -2399,9 +2411,8 @@ def test_scalp_sim_auto_approval_rejects_active_priority_posterior_prefix(tmp_pa
     _, approval_dir, policy_dir, _ = _install_scalp_sim_auto_test_dirs(tmp_path, monkeypatch)
     (policy_dir / "scalp_sim_policy_catalog_2026-05-26.json").write_text(
         json.dumps(
-            {
-                "schema_version": "scalp_sim_policy_catalog_v1",
-                "active_sim_priority_seeds": [
+            _scalp_sim_policy_catalog_payload(
+                active_sim_priority_seeds=[
                     {
                         "active_seed_id": "active_seed_bad",
                         "source_parent_bucket_id": "parent_positive",
@@ -2416,7 +2427,7 @@ def test_scalp_sim_auto_approval_rejects_active_priority_posterior_prefix(tmp_pa
                         "runtime_effect": False,
                     }
                 ],
-            }
+            )
         ),
         encoding="utf-8",
     )
@@ -2461,7 +2472,7 @@ def test_scalp_sim_auto_approval_rejects_active_priority_posterior_prefix(tmp_pa
 def test_scalp_sim_auto_approval_rejects_malformed_policy_count(tmp_path, monkeypatch):
     _, approval_dir, policy_dir, _ = _install_scalp_sim_auto_test_dirs(tmp_path, monkeypatch)
     (policy_dir / "scalp_sim_policy_catalog_2026-05-26.json").write_text(
-        json.dumps({"schema_version": "scalp_sim_policy_catalog_v1"}),
+        json.dumps(_scalp_sim_policy_catalog_payload()),
         encoding="utf-8",
     )
     (approval_dir / "scalp_sim_auto_approval_2026-05-26.json").write_text(
@@ -2501,10 +2512,114 @@ def test_scalp_sim_auto_approval_rejects_malformed_policy_count(tmp_path, monkey
     assert "scalp_sim_auto_approval_empty" in manifest["scalp_sim_auto_approval"]["blocked"]
 
 
-def test_scalp_sim_auto_approval_ignores_non_scalp_nested_env_keys(tmp_path, monkeypatch):
+def test_scalp_sim_auto_approval_blocks_catalog_stale_after_generator_change(tmp_path, monkeypatch):
+    _, approval_dir, policy_dir, _ = _install_scalp_sim_auto_test_dirs(tmp_path, monkeypatch)
+    generator_file = tmp_path / "lifecycle_bucket_discovery.py"
+    generator_file.write_text("# newer generator\n", encoding="utf-8")
+    monkeypatch.setattr(mod, "SCALP_SIM_POLICY_STALENESS_CHECK_FILES", (generator_file,))
+    (policy_dir / "scalp_sim_policy_catalog_2026-05-26.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "scalp_sim_policy_catalog_v1",
+                "generated_at": "2026-05-26T15:40:00+09:00",
+                "generator_provenance": {
+                    "hash_algorithm": "sha256",
+                    "files": {"lifecycle_bucket_discovery.py": "old_hash"},
+                },
+                "active_sim_priority_seeds": [
+                    {
+                        "active_seed_id": "active_seed_old",
+                        "source_parent_bucket_id": "parent_old",
+                        "status": "cooldown",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (approval_dir / "scalp_sim_auto_approval_2026-05-26.json").write_text(
+        json.dumps(
+            {
+                "report_type": "scalp_sim_auto_approval",
+                "approved": True,
+                "human_approval_required": False,
+                "runtime_effect": False,
+                "allowed_runtime_apply": False,
+                "actual_order_submitted": False,
+                "broker_order_forbidden": True,
+                "decision_authority": "scalp_sim_auto_approval_control_tower",
+                "approved_source_ids": ["lifecycle_bucket_discovery"],
+                "approved_policy_count": 1,
+                "approved_policies": [
+                    {
+                        "source_id": "lifecycle_bucket_discovery",
+                        "policy_id": "lifecycle_bucket_discovery_sim_auto_approval",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    manifest = mod.build_preopen_apply_manifest(
+        "2026-05-27",
+        source_date="2026-05-26",
+        apply_mode="auto_bounded_live",
+        auto_apply=True,
+        require_ai=False,
+    )
+
+    assert manifest["scalp_sim_auto_approval"]["selected"] == []
+    assert "scalp_sim_policy_catalog_stale_after_generator_change" in manifest["scalp_sim_auto_approval"]["blocked"]
+
+
+def test_scalp_sim_auto_approval_blocks_catalog_missing_generator_provenance(tmp_path, monkeypatch):
     _, approval_dir, policy_dir, _ = _install_scalp_sim_auto_test_dirs(tmp_path, monkeypatch)
     (policy_dir / "scalp_sim_policy_catalog_2026-05-26.json").write_text(
         json.dumps({"schema_version": "scalp_sim_policy_catalog_v1"}),
+        encoding="utf-8",
+    )
+    (approval_dir / "scalp_sim_auto_approval_2026-05-26.json").write_text(
+        json.dumps(
+            {
+                "report_type": "scalp_sim_auto_approval",
+                "approved": True,
+                "human_approval_required": False,
+                "runtime_effect": False,
+                "allowed_runtime_apply": False,
+                "actual_order_submitted": False,
+                "broker_order_forbidden": True,
+                "decision_authority": "scalp_sim_auto_approval_control_tower",
+                "approved_source_ids": ["lifecycle_bucket_discovery"],
+                "approved_policy_count": 1,
+                "approved_policies": [
+                    {
+                        "source_id": "lifecycle_bucket_discovery",
+                        "policy_id": "lifecycle_bucket_discovery_sim_auto_approval",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    manifest = mod.build_preopen_apply_manifest(
+        "2026-05-27",
+        source_date="2026-05-26",
+        apply_mode="auto_bounded_live",
+        auto_apply=True,
+        require_ai=False,
+    )
+
+    assert manifest["scalp_sim_auto_approval"]["selected"] == []
+    assert "scalp_sim_policy_catalog_generated_at_missing" in manifest["scalp_sim_auto_approval"]["blocked"]
+    assert "scalp_sim_policy_catalog_generator_provenance_missing" in manifest["scalp_sim_auto_approval"]["blocked"]
+
+
+def test_scalp_sim_auto_approval_ignores_non_scalp_nested_env_keys(tmp_path, monkeypatch):
+    _, approval_dir, policy_dir, _ = _install_scalp_sim_auto_test_dirs(tmp_path, monkeypatch)
+    (policy_dir / "scalp_sim_policy_catalog_2026-05-26.json").write_text(
+        json.dumps(_scalp_sim_policy_catalog_payload()),
         encoding="utf-8",
     )
     (approval_dir / "scalp_sim_auto_approval_2026-05-26.json").write_text(

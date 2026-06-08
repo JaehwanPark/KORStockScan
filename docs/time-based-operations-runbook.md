@@ -261,6 +261,16 @@ ls -l data/report/error_detection/error_detection_$(TZ=Asia/Seoul date +%F).json
 
 maintenance mutation도 전략 runtime 변경이 아니다. 실패하거나 반복되면 `warning/fail`로 보고 원인 복구를 진행하며, 매매 threshold를 수동 조정하지 않는다.
 
+### Graceful bot restart
+
+수동 또는 detector 복구로 봇 재기동이 필요한 경우 표준 경로는 `restart.flag` handoff다.
+
+```bash
+./restart.sh
+```
+
+이 스크립트는 `restart.flag`만 생성하고 `bot_main.py`의 기존 감지 루프가 자체 종료하도록 둔다. 이후 `src/run_bot.sh` supervisor 루프가 같은 runtime env source 경로로 봇을 다시 올린다. `pkill -9`, 직접 `nohup python src/engine/kiwoom_sniper_v2.py`, 텔레그램 매니저 별도 중복 기동, provider/threshold/order env hot mutation은 금지한다. 재시작 후에는 새 `bot_main.py` PID, `logs/bot_history.log`, heartbeat, Kiwoom WS/REST 회복, 그리고 `/proc/<pid>/environ`의 당일 `threshold_runtime_env_YYYY-MM-DD.env` 반영 여부를 확인한다.
+
 ### Env override
 
 | env var | 효과 | 사용 기준 |

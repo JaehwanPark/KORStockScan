@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import shlex
@@ -27,6 +28,8 @@ from src.engine.scalping.scalp_sim_auto_approval_control_tower import (
     scalp_sim_auto_approval_path,
     scalp_sim_policy_catalog_path,
 )
+from src.engine.scalping import scalp_sim_auto_approval_control_tower
+from src.engine import lifecycle_bucket_discovery
 from src.engine.lifecycle_bucket_discovery import (
     bucket_catalog_path,
     discovery_report_path,
@@ -63,6 +66,10 @@ ACTIVE_SIM_PRIORITY_OBSERVABLE_PREFIX_KEYS = {
     "entry_source_parent",
     "submit_quality_parent",
 }
+SCALP_SIM_POLICY_STALENESS_CHECK_FILES = (
+    Path(lifecycle_bucket_discovery.__file__),
+    Path(scalp_sim_auto_approval_control_tower.__file__),
+)
 LOCK_ALLOWED_CLOSE_KEYWORDS = {
     "safety_revert",
     "severe_loss",
@@ -171,6 +178,32 @@ def _load_json(path: Path) -> dict[str, Any]:
     except Exception:
         return {}
     return payload if isinstance(payload, dict) else {}
+
+
+def _parse_dt(value: Any) -> datetime | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        return datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def _file_sha256(path: Path) -> str:
+    try:
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+    except OSError:
+        return ""
+
+
+def _generator_hashes(paths: tuple[Path, ...]) -> dict[str, str]:
+    hashes: dict[str, str] = {}
+    for path in paths:
+        digest = _file_sha256(path)
+        if digest:
+            hashes[path.name] = digest
+    return hashes
 
 
 def _int_or_default(value: Any, default: int) -> int | None:
@@ -1089,6 +1122,22 @@ def _load_scalp_sim_auto_approval(source_date: str | None) -> dict[str, Any]:
     elif catalog_payload.get("schema_version") != "scalp_sim_policy_catalog_v1":
         blocked.append("scalp_sim_policy_catalog_schema_invalid")
     else:
+        generated_at = _parse_dt(catalog_payload.get("generated_at"))
+        generator_provenance = (
+            catalog_payload.get("generator_provenance")
+            if isinstance(catalog_payload.get("generator_provenance"), dict)
+            else {}
+        )
+        catalog_generator_hashes = (
+            generator_provenance.get("files") if isinstance(generator_provenance.get("files"), dict) else {}
+        )
+        current_generator_hashes = _generator_hashes(SCALP_SIM_POLICY_STALENESS_CHECK_FILES)
+        if generated_at is None:
+            blocked.append("scalp_sim_policy_catalog_generated_at_missing")
+        if not catalog_generator_hashes:
+            blocked.append("scalp_sim_policy_catalog_generator_provenance_missing")
+        elif current_generator_hashes and catalog_generator_hashes != current_generator_hashes:
+            blocked.append("scalp_sim_policy_catalog_stale_after_generator_change")
         for seed in catalog_payload.get("active_sim_priority_seeds") or []:
             if not isinstance(seed, dict):
                 blocked.append("active_sim_priority_seed_invalid")
