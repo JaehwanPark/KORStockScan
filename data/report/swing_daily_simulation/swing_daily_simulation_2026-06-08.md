@@ -1,13 +1,13 @@
 # Swing Daily Simulation - 2026-06-08
 
 - runtime_change: `False`
-- recommendation_rows: `23` / live `23` / diagnostic `0`
-- recommendation_sources: `{'recommendation_history': 20, 'daily_recommendations_v2_csv': 3}`
+- recommendation_rows: `22` / live `22` / diagnostic `0`
+- recommendation_sources: `{'recommendation_history': 20, 'daily_recommendations_v2_csv': 2}`
 - db_recommendation_rows: `20`
-- source_signal_dates: `['2026-06-05', '2026-06-08']`
-- simulated_count: `23`
+- source_signal_dates: `['2026-06-08']`
+- simulated_count: `22`
 - closed_count: `0`
-- planned_or_open_count: `23`
+- planned_or_open_count: `22`
 - closed win_rate: `0.00%`
 - closed avg_net_ret: `0.00%`
 
@@ -30,9 +30,9 @@
 
 | arm | simulated | closed | win_rate | avg_net_ret | status_counts |
 | --- | ---: | ---: | ---: | ---: | --- |
-| `gap_pass` | 23 | 0 | 0.00% | 0.00% | `{'PENDING_ENTRY': 23}` |
-| `gatekeeper_pass` | 23 | 0 | 0.00% | 0.00% | `{'PENDING_ENTRY': 23}` |
-| `selection_only` | 23 | 0 | 0.00% | 0.00% | `{'PENDING_ENTRY': 23}` |
+| `gap_pass` | 22 | 0 | 0.00% | 0.00% | `{'PENDING_ENTRY': 22}` |
+| `gatekeeper_pass` | 22 | 0 | 0.00% | 0.00% | `{'PENDING_ENTRY': 22}` |
+| `selection_only` | 22 | 0 | 0.00% | 0.00% | `{'PENDING_ENTRY': 22}` |
 
 ## Runtime Entry Funnel
 
@@ -50,11 +50,10 @@
 | code | name | source | status | guard | qty | entry | exit | net_ret | reason |
 | --- | --- | --- | --- | --- | ---: | --- | --- | ---: | --- |
 | `000270` | 기아 | `recommendation_history` | `PENDING_ENTRY` | `WAITING_FOR_NEXT_SESSION_QUOTE` | 0 |  |  |  |  |
-| `000660` | SK하이닉스 | `daily_recommendations_v2_csv` | `PENDING_ENTRY` | `WAITING_FOR_NEXT_SESSION_QUOTE` | 0 |  |  |  |  |
 | `000810` | 삼성화재 | `recommendation_history` | `PENDING_ENTRY` | `WAITING_FOR_NEXT_SESSION_QUOTE` | 0 |  |  |  |  |
+| `001200` | 유진투자증권 | `daily_recommendations_v2_csv` | `PENDING_ENTRY` | `WAITING_FOR_NEXT_SESSION_QUOTE` | 0 |  |  |  |  |
 | `003550` | LG | `recommendation_history` | `PENDING_ENTRY` | `WAITING_FOR_NEXT_SESSION_QUOTE` | 0 |  |  |  |  |
-| `003550` | LG | `daily_recommendations_v2_csv` | `PENDING_ENTRY` | `WAITING_FOR_NEXT_SESSION_QUOTE` | 0 |  |  |  |  |
-| `005385` | 현대차우 | `daily_recommendations_v2_csv` | `PENDING_ENTRY` | `WAITING_FOR_NEXT_SESSION_QUOTE` | 0 |  |  |  |  |
+| `008040` | 사조동아원 | `daily_recommendations_v2_csv` | `PENDING_ENTRY` | `WAITING_FOR_NEXT_SESSION_QUOTE` | 0 |  |  |  |  |
 | `009420` | 한올바이오파마 | `recommendation_history` | `PENDING_ENTRY` | `WAITING_FOR_NEXT_SESSION_QUOTE` | 0 |  |  |  |  |
 | `024110` | 기업은행 | `recommendation_history` | `PENDING_ENTRY` | `WAITING_FOR_NEXT_SESSION_QUOTE` | 0 |  |  |  |  |
 | `030000` | 제일기획 | `recommendation_history` | `PENDING_ENTRY` | `WAITING_FOR_NEXT_SESSION_QUOTE` | 0 |  |  |  |  |
