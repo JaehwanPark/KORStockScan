@@ -15,20 +15,20 @@
 
 ## 근거
 
-- as_of: `2026-06-08T10:25:07`
+- as_of: `2026-06-08T11:50:05`
 - baseline_date: `2026-06-05`
-- ai_confirmed unique: `73`
-- budget_pass unique: `71`
-- latency_pass unique: `34`
-- submitted unique: `5`
-- holding_started unique: `3`
-- budget/ai unique: `97.3%` (baseline `17.2`)
-- submitted/ai unique: `6.8%` (baseline `0.0`)
+- ai_confirmed unique: `85`
+- budget_pass unique: `89`
+- latency_pass unique: `41`
+- submitted unique: `12`
+- holding_started unique: `12`
+- budget/ai unique: `104.7%` (baseline `14.1`)
+- submitted/ai unique: `14.1%` (baseline `0.0`)
 - critical submit thresholds: `submitted/ai < 20.0%` or `submitted/budget <= 10.0%` (floors: ai>=20, budget>=3)
-- top blockers: `latency_block:latency_state_danger=4437, blocked_strength_momentum:below_window_buy_value=2687, blocked_gatekeeper_reject:전량 회피=1712, blocked_swing_score_vpw:-=1521, blocked_strength_momentum:below_buy_ratio=1332`
-- upstream blockers: `blocked_ai_score:ai_score_50_buy_hold_override=99, blocked_ai_score:score_62.0=96, first_ai_wait:-=73, blocked_ai_score:score_58.0=32, blocked_ai_score:score_60.0=16`
-- latency blockers: `latency_block:latency_state_danger=4437`
-- price guards: `entry_ai_price_canary_fallback:invalid_price=33, entry_ai_price_canary_fallback:pre_submit_price_guard=33, entry_ai_price_canary_skip_order:orderbook_micro is bearish with negative ofi and weak bid-side depth=1`
+- top blockers: `latency_block:latency_state_danger=6786, blocked_strength_momentum:below_window_buy_value=3926, blocked_gatekeeper_reject:전량 회피=2467, blocked_swing_score_vpw:-=2138, blocked_strength_momentum:below_buy_ratio=1923`
+- upstream blockers: `blocked_ai_score:score_62.0=180, blocked_ai_score:ai_score_50_buy_hold_override=169, first_ai_wait:-=78, blocked_ai_score:score_58.0=61, blocked_ai_score:score_60.0=46`
+- latency blockers: `latency_block:latency_state_danger=6786`
+- price guards: `entry_ai_price_canary_fallback:pre_submit_price_guard=63, entry_ai_price_canary_fallback:invalid_price=33, scale_in_price_guard_block:micro_vwap_bp>60.0=17, entry_ai_price_canary_skip_order:orderbook_micro is bearish with negative ofi and weak bid-side depth=1, entry_ai_price_canary_fallback:above_best_ask=1`
 
 ## 금지된 자동변경
 
@@ -46,6 +46,6 @@
 
 ## Window Summary
 
-- `5m`: ai=13, budget=13, latency=1, submitted=0, top=`latency_block:latency_state_danger=148, blocked_strength_momentum:below_window_buy_value=101, blocked_gatekeeper_reject:전량 회피=56`, upstream=`blocked_ai_score:score_62.0=10, blocked_ai_score:ai_score_50_buy_hold_override=6, blocked_ai_score:score_60.0=2`
-- `10m`: ai=18, budget=15, latency=2, submitted=1, top=`latency_block:latency_state_danger=288, blocked_strength_momentum:below_window_buy_value=184, blocked_gatekeeper_reject:전량 회피=103`, upstream=`blocked_ai_score:score_62.0=19, blocked_ai_score:ai_score_50_buy_hold_override=15, blocked_ai_score:score_58.0=4`
-- `30m`: ai=29, budget=28, latency=10, submitted=5, top=`latency_block:latency_state_danger=1135, blocked_strength_momentum:below_window_buy_value=897, blocked_strength_momentum:below_buy_ratio=432`, upstream=`blocked_ai_score:ai_score_50_buy_hold_override=48, blocked_ai_score:score_62.0=35, blocked_ai_score:score_58.0=11`
+- `5m`: ai=12, budget=23, latency=1, submitted=1, top=`latency_block:latency_state_danger=98, blocked_strength_momentum:below_window_buy_value=41, entry_armed_expired:qualification_passed=39`, upstream=`blocked_ai_score:score_60.0=1, wait65_79_ev_candidate:score_66.0=1, blocked_ai_score:score_62.0=1`
+- `10m`: ai=21, budget=27, latency=1, submitted=1, top=`latency_block:latency_state_danger=196, blocked_strength_momentum:below_window_buy_value=91, entry_armed_expired:qualification_passed=77`, upstream=`blocked_ai_score:score_62.0=6, blocked_ai_score:score_74.0=3, wait65_79_ev_candidate:score_74.0=3`
+- `30m`: ai=31, budget=37, latency=7, submitted=5, top=`latency_block:latency_state_danger=693, blocked_strength_momentum:below_window_buy_value=312, blocked_overbought:-=236`, upstream=`blocked_ai_score:score_62.0=19, blocked_ai_score:ai_score_50_buy_hold_override=15, wait65_79_ev_candidate:score_74.0=11`
