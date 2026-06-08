@@ -9,8 +9,8 @@
 - panic_confirmation_policy: `portfolio stop-loss clusters are evidence; PANIC_DETECTED requires market or microstructure confirmation`
 - report_only: `true`
 - runtime_effect: `report_only_no_mutation`
-- as_of: `2026-06-08T10:18:07`
-- latest_event_at: `2026-06-08T10:18:06`
+- as_of: `2026-06-08T10:26:05`
+- latest_event_at: `2026-06-08T10:26:05`
 - reasons: `live market panic breadth risk_off advisory; market breadth risk-off watch without panic confirmation`
 
 ## 패닉 지표
@@ -18,8 +18,8 @@
 - panic_decision_basis: `real_exit_with_broker_provenance_only`
 - real_exit_provenance_required: `true`
 - real_exit_count: `0`
-- non_real_exit_count: `130`
-- unproven_exit_count: `120`
+- non_real_exit_count: `136`
+- unproven_exit_count: `126`
 - sim_probe_exit_excluded_from_panic: `true`
 - stop_loss_exit_count: `0`
 - current_30m_stop_loss_exit_count: `0`
@@ -37,10 +37,10 @@
 
 ## 회복 지표
 
-- active_positions: `42`
-- active_profit_sample: `39`
-- active_avg_unrealized_profit_rate_pct: `0.1523`
-- active_win_rate_pct: `43.6`
+- active_positions: `40`
+- active_profit_sample: `37`
+- active_avg_unrealized_profit_rate_pct: `0.0839`
+- active_win_rate_pct: `45.9`
 - sim_probe_provenance_passed: `true`
 - post_sell_rebound_above_sell_10_20m_pct: `0`
 - post_sell_rebound_above_buy_10_20m_pct: `0`
@@ -53,9 +53,9 @@
 - panic_signal_count: `0`
 - recovery_candidate_count: `0`
 - recovery_confirmed_count: `0`
-- missing_orderbook_count: `68`
-- degraded_orderbook_count: `68`
-- max_panic_score: `0.3025`
+- missing_orderbook_count: `70`
+- degraded_orderbook_count: `70`
+- max_panic_score: `0.3`
 - max_recovery_score: `0.5793`
 - micro_cusum_triggered_symbol_count: `3`
 - micro_consensus_pass_symbol_count: `0`
@@ -64,7 +64,7 @@
 ## Microstructure Market Context
 
 - market_risk_state: `RISK_OFF`
-- market_panic_breadth_as_of: `2026-06-08T10:18:01`
+- market_panic_breadth_as_of: `2026-06-08T10:26:01`
 - market_panic_breadth_source_quality_status: `ok`
 - market_panic_breadth_risk_off_advisory: `true`
 - market_panic_breadth_single_market_risk_off_advisory: `false`

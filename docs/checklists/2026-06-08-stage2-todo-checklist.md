@@ -103,6 +103,12 @@
   - 금지: sim/combined EV만으로 broker execution 품질이나 live 전환을 확정하지 않는다.
   - 다음 액션: 다음 장전 apply 입력으로 쓸 수 있는 항목과 hold_sample/freeze 항목을 분리한다.
 
+- [ ] `[HoldingFlowDeferCostConclusion0608] HOLD_DEFER_DANGER 반복 신호의 자동화체인 판정 및 장후 결론 확인` (`Due: 2026-06-08`, `Slot: POSTCLOSE`, `TimeWindow: 16:45~16:55`, `Track: ScalpingLogic`)
+  - Source: [holding_exit_sentinel_2026-06-08.json](/home/ubuntu/KORStockScan/data/report/holding_exit_sentinel/holding_exit_sentinel_2026-06-08.json), [threshold_cycle_ev_2026-06-08.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-06-08.json), [threshold_cycle_ai_review_2026-06-08_postclose.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ai_review/threshold_cycle_ai_review_2026-06-08_postclose.json), [threshold_apply_2026-06-09.json](/home/ubuntu/KORStockScan/data/threshold_cycle/apply_plans/threshold_apply_2026-06-09.json)
+  - 판정 기준: `holding_exit_sentinel.primary=HOLD_DEFER_DANGER`가 `holding_flow_defer_cost_review`로 라우팅됐는지 확인하고, `threshold_cycle_ev`의 `holding_flow_ofi_smoothing` source metrics(`holding_flow_override_defer_exit`, `holding_flow_override_force_exit`, `holding_flow_override_exit_confirmed`, `max_defer_worsen_pct`, `source_sample_count/sample_floor`)와 calibration/apply 결과(`adjust_down|hold|hold_sample|freeze`, `runtime_change`, `selected`)를 대조해 최종 결론을 기록한다.
+  - 금지: sentinel 경고만으로 장중 자동매도, holding threshold mutation, provider/order/bot/cap 변경을 하지 않는다. 반대로 반복 `HOLD_DEFER_DANGER`를 단순 관찰로만 방치하지 않고, 자동화체인에서 `hold`로 닫힌 경우 반드시 guard reason과 부족한 evidence를 남긴다.
+  - 다음 액션: `adjust_down_selected_for_next_preopen`, `hold_with_cost_effect_not_confirmed`, `hold_sample_or_freeze_evidence_gap`, `workorder_required_for_defer_cost_attribution_gap`, `postclose_artifact_missing`, `forbidden_runtime_change_detected` 중 하나로 닫는다.
+
 - [ ] `[CodeImprovementWorkorderReview0608] code improvement workorder 구현 필요 여부 및 Codex 지시 대상 확인` (`Due: 2026-06-08`, `Slot: POSTCLOSE`, `TimeWindow: 16:45~17:00`, `Track: ScalpingLogic`)
   - Source: [code_improvement_workorder_2026-06-05.md](/home/ubuntu/KORStockScan/docs/code-improvement-workorders/code_improvement_workorder_2026-06-05.md), [code_improvement_workorder_2026-06-05.json](/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-06-05.json)
   - 판정 기준: selected_order_count=116와 `implement_now`, `attach_existing_family`, `design_family_candidate`, `reject` 분류를 확인한다.
