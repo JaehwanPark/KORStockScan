@@ -279,6 +279,11 @@ class TradingConfig:
     SCALP_PARTIAL_FILL_MIN_RATIO_PRESET_TP: float = 0.00  # SCALP_PRESET_TP 예외(적용 제외)
     SCALPING_PRE_SUBMIT_PRICE_GUARD_ENABLED: bool = True  # submitted 전 비정상 저가 지정가 차단
     SCALPING_PRE_SUBMIT_MAX_BELOW_BID_BPS: int = 80  # best_bid 대비 허용 하향 괴리(bp)
+    SCALPING_NORMAL_DEFENSIVE_TICKS: int = 1  # 일반 SCALPING 실주문 기본 방어 제출가 tick offset
+    SCALPING_CONDITIONAL_1TICK_REAL_ENABLED: bool = True  # real SCALPING 강한 micro 조건에서 1틱 제출 허용
+    SCALPING_CONDITIONAL_1TICK_MIN_BUY_RATIO: float = 60.0  # 1틱 허용 최소 매수 체결비율(%)
+    SCALPING_CONDITIONAL_1TICK_MIN_OFI_NORM: float = 0.45  # 1틱 허용 최소 normalized OFI
+    SCALPING_CONDITIONAL_1TICK_MIN_BID_ASK_RATIO: float = 1.20  # 1틱 허용 최소 bid/ask depth ratio
     SCALPING_ENTRY_PRICE_RESOLVER_ENABLED: bool = True  # 스캘핑 기준가/제출가 분리 resolver
     SCALPING_ENTRY_PRICE_RESOLVER_MAX_BELOW_BID_BPS: int = 80  # 기준가 적용 허용 하향 괴리(bp)
     SCALPING_ENTRY_AI_PRICE_CANARY_ENABLED: bool = True  # submitted 직전 Tier2 AI 가격결정 canary
@@ -1108,6 +1113,13 @@ def _build_trading_rules() -> TradingConfig:
     env_partial_fill_min_preset = _env_float("KORSTOCKSCAN_SCALP_PARTIAL_FILL_MIN_RATIO_PRESET_TP")
     env_pre_submit_price_guard_enabled = _env_bool("KORSTOCKSCAN_SCALPING_PRE_SUBMIT_PRICE_GUARD_ENABLED")
     env_pre_submit_max_below_bid_bps = _env_int("KORSTOCKSCAN_SCALPING_PRE_SUBMIT_MAX_BELOW_BID_BPS")
+    env_scalping_normal_defensive_ticks = _env_int("KORSTOCKSCAN_SCALPING_NORMAL_DEFENSIVE_TICKS")
+    env_conditional_1tick_real_enabled = _env_bool("KORSTOCKSCAN_SCALPING_CONDITIONAL_1TICK_REAL_ENABLED")
+    env_conditional_1tick_min_buy_ratio = _env_float("KORSTOCKSCAN_SCALPING_CONDITIONAL_1TICK_MIN_BUY_RATIO")
+    env_conditional_1tick_min_ofi_norm = _env_float("KORSTOCKSCAN_SCALPING_CONDITIONAL_1TICK_MIN_OFI_NORM")
+    env_conditional_1tick_min_bid_ask_ratio = _env_float(
+        "KORSTOCKSCAN_SCALPING_CONDITIONAL_1TICK_MIN_BID_ASK_RATIO"
+    )
     env_entry_price_resolver_enabled = _env_bool("KORSTOCKSCAN_SCALPING_ENTRY_PRICE_RESOLVER_ENABLED")
     env_entry_price_resolver_max_below_bid_bps = _env_int(
         "KORSTOCKSCAN_SCALPING_ENTRY_PRICE_RESOLVER_MAX_BELOW_BID_BPS"
@@ -1188,6 +1200,11 @@ def _build_trading_rules() -> TradingConfig:
         or env_partial_fill_min_preset is not None
         or env_pre_submit_price_guard_enabled is not None
         or env_pre_submit_max_below_bid_bps is not None
+        or env_scalping_normal_defensive_ticks is not None
+        or env_conditional_1tick_real_enabled is not None
+        or env_conditional_1tick_min_buy_ratio is not None
+        or env_conditional_1tick_min_ofi_norm is not None
+        or env_conditional_1tick_min_bid_ask_ratio is not None
         or env_entry_price_resolver_enabled is not None
         or env_entry_price_resolver_max_below_bid_bps is not None
         or env_entry_ai_price_enabled is not None
@@ -1304,6 +1321,21 @@ def _build_trading_rules() -> TradingConfig:
             SCALPING_PRE_SUBMIT_MAX_BELOW_BID_BPS=env_pre_submit_max_below_bid_bps
             if env_pre_submit_max_below_bid_bps is not None
             else config.SCALPING_PRE_SUBMIT_MAX_BELOW_BID_BPS,
+            SCALPING_NORMAL_DEFENSIVE_TICKS=env_scalping_normal_defensive_ticks
+            if env_scalping_normal_defensive_ticks is not None
+            else config.SCALPING_NORMAL_DEFENSIVE_TICKS,
+            SCALPING_CONDITIONAL_1TICK_REAL_ENABLED=env_conditional_1tick_real_enabled
+            if env_conditional_1tick_real_enabled is not None
+            else config.SCALPING_CONDITIONAL_1TICK_REAL_ENABLED,
+            SCALPING_CONDITIONAL_1TICK_MIN_BUY_RATIO=env_conditional_1tick_min_buy_ratio
+            if env_conditional_1tick_min_buy_ratio is not None
+            else config.SCALPING_CONDITIONAL_1TICK_MIN_BUY_RATIO,
+            SCALPING_CONDITIONAL_1TICK_MIN_OFI_NORM=env_conditional_1tick_min_ofi_norm
+            if env_conditional_1tick_min_ofi_norm is not None
+            else config.SCALPING_CONDITIONAL_1TICK_MIN_OFI_NORM,
+            SCALPING_CONDITIONAL_1TICK_MIN_BID_ASK_RATIO=env_conditional_1tick_min_bid_ask_ratio
+            if env_conditional_1tick_min_bid_ask_ratio is not None
+            else config.SCALPING_CONDITIONAL_1TICK_MIN_BID_ASK_RATIO,
             SCALPING_ENTRY_PRICE_RESOLVER_ENABLED=env_entry_price_resolver_enabled
             if env_entry_price_resolver_enabled is not None
             else config.SCALPING_ENTRY_PRICE_RESOLVER_ENABLED,

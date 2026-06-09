@@ -3768,11 +3768,138 @@ def _closed_instrumentation_order_families(ev_report: dict[str, Any]) -> dict[st
         source_metrics = item.get("source_metrics") if isinstance(item.get("source_metrics"), dict) else {}
         if source_metrics.get("instrumentation_status") != "implemented":
             continue
-        if family == "pre_submit_price_guard":
+        if family == "dynamic_entry_price_resolver":
             closed["order_latency_guard_miss_ev_recovery"] = family
+        elif family == "pre_submit_price_guard":
+            closed["order_pre_submit_price_guard_safety_audit"] = family
         elif family == "holding_exit_decision_matrix_advisory":
             closed["order_holding_exit_decision_matrix_edge_counterfactual"] = family
     return closed
+
+
+def _dynamic_entry_price_report_contract_orders(ev_report: dict[str, Any]) -> list[dict[str, Any]]:
+    outcome = ev_report.get("calibration_outcome") if isinstance(ev_report.get("calibration_outcome"), dict) else {}
+    decisions = outcome.get("decisions") if isinstance(outcome.get("decisions"), list) else []
+    dynamic = next(
+        (
+            item
+            for item in decisions
+            if isinstance(item, dict) and str(item.get("family") or "") == "dynamic_entry_price_resolver"
+        ),
+        {},
+    )
+    source_metrics = dynamic.get("source_metrics") if isinstance(dynamic.get("source_metrics"), dict) else {}
+    if not source_metrics:
+        return []
+    orders: list[dict[str, Any]] = []
+    contract_status = str(
+        source_metrics.get("report_contract_status")
+        or source_metrics.get("dynamic_entry_price_report_contract_status")
+        or ""
+    ).strip().lower()
+
+    def _truthy_contract_gap(value: Any) -> bool:
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, (int, float)):
+            return value != 0
+        if isinstance(value, str):
+            return value.strip().lower() in {"true", "1", "yes", "y", "gap", "contract_gap", "report_contract_gap"}
+        return False
+
+    explicit_contract_gap = any(
+        _truthy_contract_gap(source_metrics.get(key))
+        for key in (
+            "report_contract_gap",
+            "contract_gap",
+            "candidate_quality_contract_gap",
+            "sim_submit_path_contract_gap",
+        )
+    ) or contract_status in {
+        "missing",
+        "incomplete",
+        "failed",
+        "fail",
+        "contract_gap",
+        "report_contract_gap",
+    }
+    if not explicit_contract_gap:
+        return []
+    candidate_quality = (
+        source_metrics.get("candidate_quality") if isinstance(source_metrics.get("candidate_quality"), dict) else {}
+    )
+    ai_quality = (
+        candidate_quality.get("AI_candidate") if isinstance(candidate_quality.get("AI_candidate"), dict) else {}
+    )
+    failure_count = _safe_int(ai_quality.get("candidate_failure_count"), 0)
+    if failure_count > 0:
+        orders.append(
+            {
+                "order_id": "order_dynamic_entry_price_ai_candidate_failure_contract",
+                "title": "dynamic entry price AI_candidate failure contract",
+                "source_report_type": "threshold_cycle_ev",
+                "lifecycle_stage": "entry",
+                "target_subsystem": "daily_threshold_cycle_report",
+                "route": "source_quality_gap",
+                "mapped_family": "dynamic_entry_price_resolver",
+                "threshold_family": "dynamic_entry_price_resolver",
+                "improvement_type": "report_contract_gap",
+                "confidence": "postclose_threshold_ev_source",
+                "priority": 2,
+                "runtime_effect": False,
+                "allowed_runtime_apply": False,
+                "expected_ev_effect": "Keep AI_candidate missing_snapshot/invalid_price out of priced candidate EV while preserving failure provenance.",
+                "evidence": [
+                    f"candidate_failure_count={failure_count}",
+                    f"candidate_failure_rate={ai_quality.get('candidate_failure_rate')}",
+                    f"failure_reasons={json.dumps(ai_quality.get('failure_reasons') or {}, ensure_ascii=False, sort_keys=True)}",
+                    "forbidden_uses=runtime_threshold_apply/order_submit/provider_route_change/bot_restart",
+                ],
+                "next_postclose_metric": "AI_candidate candidate_failure_count should be explicit and priced EV should use priced candidate samples only.",
+                "files_likely_touched": [
+                    "src/engine/daily_threshold_cycle_report.py",
+                    "src/tests/test_daily_threshold_cycle_report.py",
+                ],
+                "acceptance_tests": [
+                    "PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py src/tests/test_build_code_improvement_workorder.py",
+                ],
+            }
+        )
+    unpriced_count = _safe_int(source_metrics.get("unpriced_or_stale_warning_count"), 0)
+    if unpriced_count > 0:
+        orders.append(
+            {
+                "order_id": "order_dynamic_entry_price_sim_unpriced_stale_contract",
+                "title": "dynamic entry price sim unpriced stale contract",
+                "source_report_type": "threshold_cycle_ev",
+                "lifecycle_stage": "submit",
+                "target_subsystem": "daily_threshold_cycle_report",
+                "route": "source_quality_gap",
+                "mapped_family": "dynamic_entry_price_resolver",
+                "threshold_family": "dynamic_entry_price_resolver",
+                "improvement_type": "report_contract_gap",
+                "confidence": "postclose_threshold_ev_source",
+                "priority": 2,
+                "runtime_effect": False,
+                "allowed_runtime_apply": False,
+                "expected_ev_effect": "Prevent sim stale/unpriced warning rows from becoming fill/EV denominator evidence.",
+                "evidence": [
+                    f"unpriced_or_stale_warning_count={unpriced_count}",
+                    f"sim_submit_path_quality={json.dumps(source_metrics.get('sim_submit_path_quality') or {}, ensure_ascii=False, sort_keys=True)[:1200]}",
+                    "actual_order_submitted=false",
+                    "broker_order_forbidden=true",
+                ],
+                "next_postclose_metric": "sim unpriced/stale rows should remain preserved as provenance and excluded_from_fill_ev_count.",
+                "files_likely_touched": [
+                    "src/engine/daily_threshold_cycle_report.py",
+                    "src/tests/test_daily_threshold_cycle_report.py",
+                ],
+                "acceptance_tests": [
+                    "PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py src/tests/test_build_code_improvement_workorder.py",
+                ],
+            }
+        )
+    return orders
 
 
 def _calibration_report_from_ev(ev_report: dict[str, Any]) -> dict[str, Any]:
@@ -4642,6 +4769,7 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
         *_entry_adm_followup_orders(ev_report),
         *_lifecycle_ai_context_followup_orders(ev_report),
         *_window_policy_audit_followup_orders(calibration_report),
+        *_dynamic_entry_price_report_contract_orders(ev_report),
         *_panic_lifecycle_followup_orders(calibration_report),
         *_pipeline_event_verbosity_followup_orders(pipeline_event_verbosity),
         *observation_source_quality_orders,

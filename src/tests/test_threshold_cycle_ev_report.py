@@ -1215,7 +1215,21 @@ def test_build_threshold_cycle_ev_report_renders_swing_pattern_lab_section(tmp_p
                 ],
                 "data_quality": {
                     "warnings": ["OFI/QI stale/missing ratio: 0.5000 (1/2); reasons: micro_missing=1"],
-                    "ofi_qi_quality": {"stale_missing_unique_record_count": 1},
+                    "ofi_qi_quality": {
+                        "stale_missing_unique_record_count": 1,
+                        "sample_count": 20,
+                        "micro_ready_count": 7,
+                        "micro_insufficient_samples_count": 3,
+                        "wide_spread_count": 4,
+                        "max_spread_ticks": 18,
+                        "reason_counts": {
+                            "micro_missing": 9,
+                            "micro_not_ready": 3,
+                            "state_insufficient": 2,
+                            "observer_unhealthy": 1,
+                            "provenance_gap": 5,
+                        },
+                    },
                 },
             },
             ensure_ascii=False,
@@ -1236,6 +1250,15 @@ def test_build_threshold_cycle_ev_report_renders_swing_pattern_lab_section(tmp_p
     assert report["swing_pattern_lab_automation"]["source_quality_blocked_families"][0]["family"] == (
         "swing_scale_in_ofi_qi_confirmation"
     )
+    blocked = report["swing_pattern_lab_automation"]["source_quality_blocked_families"][0]
+    assert blocked["provenance_gap_count"] == 5
+    assert blocked["readiness_counts"]["micro_ready_count"] == 7
+    assert blocked["readiness_counts"]["micro_insufficient_samples_count"] == 3
+    assert blocked["spread_quality"]["wide_spread_count"] == 4
+    assert blocked["spread_quality"]["wide_spread_rate"] == 20.0
+    assert blocked["spread_quality"]["max_spread_ticks"] == 18.0
+    assert blocked["spread_quality"]["hard_block"] is False
+    assert blocked["source_quality_reason_stage_split"]["observer_unhealthy"] == 1
 
     markdown = (ev_dir / "threshold_cycle_ev_2026-05-08.md").read_text(encoding="utf-8")
     assert "Swing Pattern Lab Automation" in markdown
@@ -1244,3 +1267,21 @@ def test_build_threshold_cycle_ev_report_renders_swing_pattern_lab_section(tmp_p
     assert "resolved_data_quality_warnings" in markdown
     assert "carryover_warnings" in markdown
     assert "population_split_available" in markdown
+
+
+def test_swing_micro_provenance_gap_does_not_fallback_to_micro_missing():
+    enriched = mod._enrich_swing_micro_source_quality_blockers(
+        [{"family": "swing_scale_in_ofi_qi_confirmation"}],
+        {
+            "sample_count": 10,
+            "reason_counts": {
+                "micro_missing": 7,
+                "micro_not_ready": 2,
+            },
+        },
+    )
+
+    blocked = enriched[0]
+    assert blocked["provenance_gap_count"] == 0
+    assert blocked["source_quality_reason_stage_split"]["micro_missing"] == 7
+    assert blocked["source_quality_reason_stage_split"]["provenance_gap"] == 0

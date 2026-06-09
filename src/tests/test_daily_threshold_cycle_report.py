@@ -15,7 +15,7 @@ def test_build_daily_threshold_cycle_report_generates_candidates_from_samples():
             {"stage": "budget_pass", "fields": {"signal_score": "72", "latest_strength": "111", "buy_pressure_10t": "53", "ws_age_ms": "900", "ws_jitter_ms": "410", "spread_ratio": "0.0078"}},
             {"stage": "budget_pass", "fields": {"signal_score": "74", "latest_strength": "114", "buy_pressure_10t": "56", "ws_age_ms": "980", "ws_jitter_ms": "430", "spread_ratio": "0.0080"}},
             {"stage": "budget_pass", "fields": {"signal_score": "76", "latest_strength": "118", "buy_pressure_10t": "58", "ws_age_ms": "1030", "ws_jitter_ms": "450", "spread_ratio": "0.0081"}},
-            {"stage": "order_bundle_submitted", "fields": {"price_below_bid_bps": "71"}},
+            {"stage": "order_bundle_submitted", "fields": {"price_below_bid_bps": "71", "late_fill": "false"}},
             {"stage": "order_bundle_submitted", "fields": {"price_below_bid_bps": "77"}},
             {"stage": "bad_entry_block_observed", "fields": {"held_sec": "65", "profit_rate": "-0.88", "peak_profit": "0.12", "ai_score": "41"}},
             {"stage": "bad_entry_block_observed", "fields": {"held_sec": "72", "profit_rate": "-0.94", "peak_profit": "0.18", "ai_score": "43"}},
@@ -151,6 +151,23 @@ def test_build_daily_threshold_cycle_report_generates_candidates_from_samples():
     pre_submit = report["threshold_snapshot"]["pre_submit_price_guard"]
     assert pre_submit["apply_ready"] is False
     assert 60 <= pre_submit["recommended"]["max_below_bid_bps"] <= 120
+    dynamic_entry = report["threshold_snapshot"]["dynamic_entry_price_resolver"]
+    assert dynamic_entry["sample"]["candidate_labels"] == [
+        "bid-1",
+        "bid-2",
+        "bid-3",
+        "best_bid",
+        "AI_candidate",
+        "reference_target",
+        "timeout_15s",
+        "timeout_30s",
+    ]
+    assert dynamic_entry["sample"]["candidate_metrics"]["real"]["fill_rate"] is None
+    assert dynamic_entry["sample"]["candidate_metrics"]["real"]["late_fill_rate"] == 0.0
+    assert dynamic_entry["sample"]["candidate_metrics_ready"] is False
+    execution_quality = report["threshold_snapshot"]["entry_price_execution_quality"]
+    assert execution_quality["sample"]["fill_join_events"] == 0
+    assert execution_quality["sample"]["fill_join_available"] is False
 
     soft_stop = report["threshold_snapshot"]["soft_stop_micro_grace"]
     assert soft_stop["apply_ready"] is True
@@ -182,7 +199,9 @@ def test_build_daily_threshold_cycle_report_generates_candidates_from_samples():
     assert action_weight["recommended"]["data_completeness"]["price_known"] == 3
 
     apply_families = {item["family"] for item in report["apply_candidate_list"]}
-    assert "pre_submit_price_guard" in apply_families or "entry_mechanical_momentum" in apply_families
+    assert "pre_submit_price_guard" not in apply_families
+    assert "dynamic_entry_price_resolver" not in apply_families
+    assert "entry_mechanical_momentum" in apply_families
 
 
 def test_threshold_cycle_report_marks_calibration_sample_and_live_risk_states():
@@ -203,8 +222,11 @@ def test_threshold_cycle_report_marks_calibration_sample_and_live_risk_states():
     assert candidates["scale_in_price_guard"]["allowed_runtime_apply"] is False
     assert candidates["scale_in_price_guard"]["apply_mode"] == "report_only_calibration"
     assert candidates["scale_in_price_guard"]["sample_window"] == "rolling_10d_or_cumulative_sparse"
-    assert candidates["pre_submit_price_guard"]["calibration_state"] == "hold_sample"
-    assert candidates["pre_submit_price_guard"]["allowed_runtime_apply"] is True
+    assert candidates["pre_submit_price_guard"]["calibration_state"] == "hold"
+    assert candidates["pre_submit_price_guard"]["allowed_runtime_apply"] is False
+    assert candidates["dynamic_entry_price_resolver"]["calibration_state"] == "hold_sample"
+    assert candidates["dynamic_entry_price_resolver"]["allowed_runtime_apply"] is True
+    assert candidates["entry_price_execution_quality"]["allowed_runtime_apply"] is False
     assert "liquidity_gate_refined_candidate" not in candidates
     assert "overbought_gate_refined_candidate" not in candidates
     assert candidates["liquidity_pre_submit_guard_p1"]["allowed_runtime_apply"] is False
@@ -297,21 +319,21 @@ def test_threshold_cycle_report_counts_scalp_sim_entry_price_and_revalidation_sc
         {
             "stage": "scalp_sim_entry_ai_price_applied",
             "fields": {
-                "threshold_family": "pre_submit_price_guard",
+                "threshold_family": "dynamic_entry_price_resolver",
                 "actual_order_submitted": "false",
             },
         },
         {
             "stage": "scalp_sim_entry_ai_price_skip_order",
             "fields": {
-                "threshold_family": "pre_submit_price_guard",
+                "threshold_family": "dynamic_entry_price_resolver",
                 "actual_order_submitted": "false",
             },
         },
         {
             "stage": "scalp_sim_entry_submit_revalidation_warning",
             "fields": {
-                "threshold_family": "pre_submit_price_guard",
+                "threshold_family": "dynamic_entry_price_resolver",
                 "entry_submit_revalidation_warning": "stale_quote",
                 "price_below_bid_bps": "15",
                 "actual_order_submitted": "false",
@@ -320,7 +342,7 @@ def test_threshold_cycle_report_counts_scalp_sim_entry_price_and_revalidation_sc
         {
             "stage": "scalp_sim_entry_submit_revalidation_block",
             "fields": {
-                "threshold_family": "pre_submit_price_guard",
+                "threshold_family": "dynamic_entry_price_resolver",
                 "block_reason": "stale_context_or_quote",
                 "actual_order_submitted": "false",
             },
@@ -328,7 +350,7 @@ def test_threshold_cycle_report_counts_scalp_sim_entry_price_and_revalidation_sc
         {
             "stage": "scalp_sim_buy_order_virtual_pending",
             "fields": {
-                "threshold_family": "pre_submit_price_guard",
+                "threshold_family": "dynamic_entry_price_resolver",
                 "price_below_bid_bps": "12",
                 "actual_order_submitted": "false",
             },
@@ -353,13 +375,17 @@ def test_threshold_cycle_report_counts_scalp_sim_entry_price_and_revalidation_sc
         completed_rows_loader=lambda start_date, end_date: [],
     )
 
-    pre_submit = report["threshold_snapshot"]["pre_submit_price_guard"]["sample"]
-    assert pre_submit["sim_entry_ai_price_applied"] == 1
-    assert pre_submit["sim_entry_ai_price_skip_order"] == 1
-    assert pre_submit["sim_submit_revalidation_warning"] == 1
-    assert pre_submit["sim_submit_revalidation_block"] == 1
-    assert pre_submit["sim_price_below_bid_bps"] == 1
-    assert pre_submit["price_below_bid_bps"] == 0
+    dynamic_entry = report["threshold_snapshot"]["dynamic_entry_price_resolver"]["sample"]
+    assert dynamic_entry["sim_entry_ai_price_applied"] == 1
+    assert dynamic_entry["sim_entry_ai_price_skip_order"] == 1
+    assert dynamic_entry["sim_submit_revalidation_block"] == 1
+    assert dynamic_entry["sim_price_below_bid_bps"] == 1
+    assert dynamic_entry["price_below_bid_bps"] == 0
+    assert dynamic_entry["sim_actual_order_submitted"] is False
+    assert dynamic_entry["sim_broker_order_forbidden"] is True
+    assert dynamic_entry["candidate_metrics"]["real"]["fill_rate"] is None
+    assert dynamic_entry["candidate_metrics"]["real"]["late_fill_rate"] == 0.0
+    assert dynamic_entry["candidate_metrics_ready"] is False
 
     scalp_sim = report["scalp_simulator"]
     assert scalp_sim["entry_ai_price_applied"] == 1
@@ -425,8 +451,10 @@ def test_threshold_cycle_report_routes_entry_filter_ev_sources_to_calibration_fa
     )
 
     candidates = {item["family"]: item for item in report["calibration_candidates"]}
-    assert candidates["pre_submit_price_guard"]["calibration_state"] == "adjust_up"
-    assert candidates["pre_submit_price_guard"]["source_metrics"]["missed_winner_rate"] == 70.0
+    assert candidates["pre_submit_price_guard"]["calibration_state"] == "hold"
+    assert candidates["pre_submit_price_guard"]["allowed_runtime_apply"] is False
+    assert candidates["dynamic_entry_price_resolver"]["calibration_state"] == "hold_sample"
+    assert candidates["dynamic_entry_price_resolver"]["source_metrics"]["missed_winner_rate"] == 70.0
     assert candidates["score65_74_recovery_probe"]["source_metrics"]["blocked_ai_score_evaluated"] == 22
     assert "liquidity_gate_refined_candidate" not in candidates
     assert "overbought_gate_refined_candidate" not in candidates
@@ -437,6 +465,302 @@ def test_threshold_cycle_report_routes_entry_filter_ev_sources_to_calibration_fa
     assert candidates["overbought_pullback_guard_p1"]["calibration_state"] == "hold"
     assert candidates["overbought_pullback_guard_p1"]["source_metrics"]["avoided_loser_rate"] == 45.0
     assert candidates["overbought_pullback_guard_p1"]["sample_count"] == 21
+
+
+def test_dynamic_entry_price_resolver_opens_when_source_candidate_metrics_are_complete():
+    complete_metrics = {
+        "fill_rate": 62.0,
+        "full_fill_rate": 51.0,
+        "partial_fill_rate": 11.0,
+        "cancel_rate": 18.0,
+        "late_fill_rate": 3.0,
+        "missed_upside": 0.21,
+        "source_quality_adjusted_ev_pct": 0.42,
+    }
+    report_sources = {
+        "sources": {
+            "entry_price_candidate_quality": {
+                "path": "data/report/entry_price_candidate_quality/entry_price_candidate_quality_2026-05-08.json",
+                "exists": True,
+            },
+        },
+        "source_metrics": {
+            "dynamic_entry_price_resolver": {
+                "candidate_observations": 25,
+                "sim_candidate_observations": 18,
+                "real_candidate_observations": 7,
+                "source_quality_adjusted_ev_pct": 0.37,
+                "candidate_metrics": {
+                    "sim": dict(complete_metrics),
+                    "real": dict(complete_metrics),
+                },
+                "recommended_values": {
+                    "enabled": True,
+                    "normal_defensive_ticks": "2",
+                    "max_below_bid_bps": "70",
+                    "conditional_1tick_real_enabled": False,
+                },
+            },
+        },
+    }
+    report = report_mod.build_daily_threshold_cycle_report(
+        "2026-05-08",
+        pipeline_loader=lambda target_date: [
+            {"stage": "order_bundle_submitted", "fields": {"price_below_bid_bps": "75"}}
+            for _ in range(7)
+        ],
+        report_source_loader=lambda target_date: report_sources,
+        completed_rows_loader=lambda start_date, end_date: [],
+    )
+
+    candidates = {item["family"]: item for item in report["calibration_candidates"]}
+    dynamic = candidates["dynamic_entry_price_resolver"]
+    assert dynamic["calibration_state"] == "adjust_up"
+    assert dynamic["apply_mode"] == "calibrated_apply_candidate"
+    assert dynamic["sample_floor_status"] == "ready"
+    assert dynamic["recommended_values"]["normal_defensive_ticks"] == 2
+    assert dynamic["recommended_values"]["max_below_bid_bps"] == 70
+    assert dynamic["recommended_values"]["conditional_1tick_real_enabled"] is False
+    assert dynamic["source_metrics"]["recommended_values_audit"]["accepted"]["normal_defensive_ticks"] == 2
+    assert dynamic["source_metrics"]["recommended_values_audit"]["accepted"]["max_below_bid_bps"] == 70
+    assert dynamic["source_metrics"]["recommended_values_audit"]["clamped"] == {}
+    assert dynamic["source_metrics"]["candidate_metrics_ready"] is True
+    assert dynamic["source_metrics"]["candidate_metrics_missing"] == {}
+
+
+def test_dynamic_entry_price_resolver_separates_sim_unpriced_stale_and_ai_candidate_failures():
+    report = report_mod.build_daily_threshold_cycle_report(
+        "2026-05-08",
+        pipeline_loader=lambda target_date: [
+            {
+                "stage": "scalp_sim_buy_order_virtual_pending",
+                "fields": {
+                    "submitted_order_price": "0",
+                    "entry_submit_revalidation_warning": "stale_context_or_quote",
+                    "quote_stale_at_submit": "true",
+                    "actual_order_submitted": "false",
+                    "broker_order_forbidden": "true",
+                },
+            },
+            {
+                "stage": "scalp_sim_buy_order_assumed_filled",
+                "fields": {
+                    "submitted_order_price": "0",
+                    "quote_stale_at_submit": "true",
+                    "actual_order_submitted": "false",
+                    "broker_order_forbidden": "true",
+                },
+            },
+            {
+                "stage": "scalp_sim_buy_order_virtual_pending",
+                "fields": {
+                    "submitted_order_price": "10000",
+                    "actual_order_submitted": "false",
+                    "broker_order_forbidden": "true",
+                },
+            },
+            {
+                "stage": "scalp_sim_buy_order_assumed_filled",
+                "fields": {
+                    "submitted_order_price": "10000",
+                    "actual_order_submitted": "false",
+                    "broker_order_forbidden": "true",
+                    "fill_type": "full_fill",
+                },
+            },
+            {
+                "stage": "entry_ai_price_canary_fallback",
+                "fields": {
+                    "reason": "invalid_price",
+                    "orderbook_micro_reason": "missing_snapshot",
+                    "orderbook_micro_state": "insufficient",
+                    "orderbook_micro_observer_missing_reason": "missing_snapshot",
+                },
+            },
+            {"stage": "entry_ai_price_canary_applied", "fields": {"submitted_order_price": "10000"}},
+        ],
+        completed_rows_loader=lambda start_date, end_date: [],
+    )
+
+    dynamic = report["threshold_snapshot"]["dynamic_entry_price_resolver"]["sample"]
+    sim_metrics = dynamic["candidate_metrics"]["sim"]
+    assert sim_metrics["priced_sample_count"] == 2
+    assert sim_metrics["unpriced_sample_count"] == 2
+    assert sim_metrics["stale_warning_count"] == 2
+    assert sim_metrics["excluded_from_fill_ev_count"] == 2
+    assert sim_metrics["excluded_from_fill_ev_reasons"] == {
+        "quote_stale_at_submit": 1,
+        "stale_context_or_quote": 1,
+    }
+    assert sim_metrics["fill_rate"] == 100.0
+    assert dynamic["unpriced_or_stale_warning_count"] == 2
+    assert dynamic["sim_submit_path_quality"]["scalp_sim_buy_order_virtual_pending"] == {
+        "sample_count": 2,
+        "priced_sample_count": 1,
+        "unpriced_sample_count": 1,
+        "stale_warning_count": 1,
+        "excluded_from_fill_ev_count": 1,
+        "actual_order_submitted_violation_count": 0,
+        "broker_order_forbidden_violation_count": 0,
+        "classification": "sim_unpriced_stale_warning",
+    }
+    ai_quality = dynamic["candidate_quality"]["AI_candidate"]
+    assert ai_quality["candidate_event_count"] == 2
+    assert ai_quality["candidate_failure_count"] == 1
+    assert ai_quality["candidate_failure_rate"] == 50.0
+    assert ai_quality["failure_reasons"] == {"invalid_price": 1, "missing_snapshot": 1}
+
+
+def test_dynamic_entry_price_resolver_clamps_invalid_source_recommended_values():
+    complete_metrics = {
+        "fill_rate": 62.0,
+        "full_fill_rate": 51.0,
+        "partial_fill_rate": 11.0,
+        "cancel_rate": 18.0,
+        "late_fill_rate": 3.0,
+        "missed_upside": 0.21,
+        "source_quality_adjusted_ev_pct": 0.42,
+    }
+    report_sources = {
+        "sources": {},
+        "source_metrics": {
+            "dynamic_entry_price_resolver": {
+                "candidate_observations": 25,
+                "sim_candidate_observations": 18,
+                "real_candidate_observations": 7,
+                "source_quality_adjusted_ev_pct": 0.37,
+                "candidate_metrics": {
+                    "sim": dict(complete_metrics),
+                    "real": dict(complete_metrics),
+                },
+                "recommended_values": {
+                    "enabled": "true",
+                    "normal_defensive_ticks": 10,
+                    "max_below_bid_bps": 200,
+                    "conditional_1tick_real_enabled": "false",
+                },
+            },
+        },
+    }
+    report = report_mod.build_daily_threshold_cycle_report(
+        "2026-05-08",
+        pipeline_loader=lambda target_date: [
+            {"stage": "order_bundle_submitted", "fields": {"price_below_bid_bps": "75"}}
+            for _ in range(25)
+        ],
+        report_source_loader=lambda target_date: report_sources,
+        completed_rows_loader=lambda start_date, end_date: [],
+    )
+
+    dynamic = {item["family"]: item for item in report["calibration_candidates"]}["dynamic_entry_price_resolver"]
+    assert dynamic["recommended_values"]["normal_defensive_ticks"] == 2
+    assert dynamic["recommended_values"]["max_below_bid_bps"] == 90
+    assert dynamic["recommended_values"]["conditional_1tick_real_enabled"] is True
+    audit = dynamic["source_metrics"]["recommended_values_audit"]
+    assert audit["clamped"]["normal_defensive_ticks"] == {"requested": 10, "applied": 2}
+    assert audit["clamped"]["max_below_bid_bps"] == {"requested": 200, "applied": 90}
+    assert audit["rejected"]["enabled"]["reason"] == "invalid_bool"
+    assert audit["rejected"]["conditional_1tick_real_enabled"]["reason"] == "invalid_bool"
+
+
+def test_dynamic_entry_price_resolver_holds_without_runtime_recommendation_change():
+    complete_metrics = {
+        "fill_rate": 62.0,
+        "full_fill_rate": 51.0,
+        "partial_fill_rate": 11.0,
+        "cancel_rate": 18.0,
+        "late_fill_rate": 3.0,
+        "missed_upside": 0.21,
+        "source_quality_adjusted_ev_pct": 0.42,
+    }
+    report_sources = {
+        "sources": {},
+        "source_metrics": {
+            "dynamic_entry_price_resolver": {
+                "candidate_observations": 25,
+                "sim_candidate_observations": 18,
+                "real_candidate_observations": 7,
+                "source_quality_adjusted_ev_pct": 0.37,
+                "candidate_metrics": {
+                    "sim": dict(complete_metrics),
+                    "real": dict(complete_metrics),
+                },
+            },
+        },
+    }
+    report = report_mod.build_daily_threshold_cycle_report(
+        "2026-05-08",
+        pipeline_loader=lambda target_date: [
+            {"stage": "order_bundle_submitted", "fields": {"price_below_bid_bps": "75"}}
+            for _ in range(25)
+        ],
+        report_source_loader=lambda target_date: report_sources,
+        completed_rows_loader=lambda start_date, end_date: [],
+    )
+
+    dynamic = {item["family"]: item for item in report["calibration_candidates"]}["dynamic_entry_price_resolver"]
+    assert dynamic["calibration_state"] == "hold_sample"
+    assert dynamic["apply_mode"] == "report_only_calibration"
+    assert dynamic["source_metrics"]["candidate_metrics_ready"] is True
+    assert dynamic["source_metrics"]["recommended_values_valid"] is False
+    assert dynamic["source_metrics"]["recommended_values_runtime_change_ready"] is False
+    assert "recommended_values_audit" not in dynamic["source_metrics"]
+
+
+def test_dynamic_entry_price_resolver_holds_when_conditional_1tick_recommendation_matches_current(monkeypatch):
+    monkeypatch.setattr(
+        report_mod,
+        "TRADING_RULES",
+        SimpleNamespace(
+            SCALPING_ENTRY_PRICE_RESOLVER_ENABLED=True,
+            SCALPING_NORMAL_DEFENSIVE_TICKS=1,
+            SCALPING_ENTRY_PRICE_RESOLVER_MAX_BELOW_BID_BPS=80,
+            SCALPING_CONDITIONAL_1TICK_REAL_ENABLED=False,
+        ),
+    )
+    complete_metrics = {
+        "fill_rate": 62.0,
+        "full_fill_rate": 51.0,
+        "partial_fill_rate": 11.0,
+        "cancel_rate": 18.0,
+        "late_fill_rate": 3.0,
+        "missed_upside": 0.21,
+        "source_quality_adjusted_ev_pct": 0.42,
+    }
+    report_sources = {
+        "sources": {},
+        "source_metrics": {
+            "dynamic_entry_price_resolver": {
+                "candidate_observations": 25,
+                "sim_candidate_observations": 18,
+                "real_candidate_observations": 7,
+                "source_quality_adjusted_ev_pct": 0.37,
+                "candidate_metrics": {
+                    "sim": dict(complete_metrics),
+                    "real": dict(complete_metrics),
+                },
+                "recommended_values": {
+                    "conditional_1tick_real_enabled": False,
+                },
+            },
+        },
+    }
+    report = report_mod.build_daily_threshold_cycle_report(
+        "2026-05-08",
+        pipeline_loader=lambda target_date: [
+            {"stage": "order_bundle_submitted", "fields": {"price_below_bid_bps": "75"}}
+            for _ in range(25)
+        ],
+        report_source_loader=lambda target_date: report_sources,
+        completed_rows_loader=lambda start_date, end_date: [],
+    )
+
+    dynamic = {item["family"]: item for item in report["calibration_candidates"]}["dynamic_entry_price_resolver"]
+    assert dynamic["current_values"]["conditional_1tick_real_enabled"] is False
+    assert dynamic["recommended_values"]["conditional_1tick_real_enabled"] is False
+    assert dynamic["calibration_state"] == "hold_sample"
+    assert dynamic["source_metrics"]["recommended_values_valid"] is True
+    assert dynamic["source_metrics"]["recommended_values_runtime_change_ready"] is False
 
 
 def test_window_policy_registry_demotes_score65_daily_trigger_without_rolling_denominator():
@@ -1222,8 +1546,11 @@ def test_efficient_tradeoff_calibration_adds_entry_bad_entry_and_adm_candidates(
     assert candidates["score65_74_recovery_probe"]["apply_mode"] == "efficient_tradeoff_canary_candidate"
     assert candidates["score65_74_recovery_probe"]["calibration_state"] == "adjust_up"
     assert candidates["score65_74_recovery_probe"]["source_metrics"]["partial_samples"] == 0
-    assert candidates["pre_submit_price_guard"]["source_metrics"]["events_without_counterfactual"] == 0
-    assert candidates["pre_submit_price_guard"]["source_metrics"]["next_action"] == "use_latency_block_ev_for_refined_guard_review"
+    assert candidates["dynamic_entry_price_resolver"]["source_metrics"]["events_without_counterfactual"] == 0
+    assert (
+        candidates["dynamic_entry_price_resolver"]["source_metrics"]["next_action"]
+        == "use_latency_block_ev_for_refined_guard_review"
+    )
     assert candidates["bad_entry_refined_canary"]["apply_mode"] == "efficient_tradeoff_canary_candidate"
     assert candidates["bad_entry_refined_canary"]["source_metrics"]["holding_flow_override_defer_exit"] == 67
     assert candidates["holding_exit_decision_matrix_advisory"]["calibration_state"] == "hold_no_edge"

@@ -70,6 +70,7 @@ def test_latency_entry_config_uses_runtime_classifier_overrides(monkeypatch):
         "TRADING_RULES",
         replace(
             CONFIG,
+            SCALPING_NORMAL_DEFENSIVE_TICKS=3,
             SCALP_ENTRY_LATENCY_MAX_WS_AGE_MS_FOR_CAUTION=1200,
             SCALP_ENTRY_LATENCY_MAX_WS_JITTER_MS_FOR_CAUTION=1500,
             SCALP_ENTRY_LATENCY_MAX_SPREAD_RATIO_FOR_CAUTION=0.01,
@@ -78,9 +79,241 @@ def test_latency_entry_config_uses_runtime_classifier_overrides(monkeypatch):
 
     config = entry_latency_module._build_entry_config()
 
+    assert config.normal_defensive_ticks == 3
     assert config.max_ws_age_ms_for_caution == 1200
     assert config.max_ws_jitter_ms_for_caution == 1500
     assert config.max_spread_ratio_for_caution == 0.01
+
+
+def test_latency_entry_runtime_override_uses_more_conservative_defensive_ticks(monkeypatch):
+    monkeypatch.setattr(
+        entry_latency_module,
+        "TRADING_RULES",
+        replace(CONFIG, SCALPING_NORMAL_DEFENSIVE_TICKS=3),
+    )
+    monkeypatch.setattr(entry_latency_module, "_CONFIG", entry_latency_module._build_entry_config())
+    monkeypatch.setattr(entry_latency_module, "_NORMAL_BUILDER", entry_latency_module.NormalEntryBuilder(entry_latency_module._CONFIG))
+    monkeypatch.setattr(entry_latency_module, "_ENTRY_POLICY", entry_latency_module.EntryPolicy(entry_latency_module._CONFIG))
+    monkeypatch.setattr(entry_latency_module, "_LATENCY_MONITOR", entry_latency_module.LatencyMonitor(entry_latency_module._CONFIG))
+
+    stock = {"name": "TEST", "position_tag": "MIDDLE"}
+    entry_latency_module.ORDERBOOK_STABILITY_OBSERVER.reset()
+    entry_latency_module.ORDERBOOK_STABILITY_OBSERVER.record_quote(
+        "123456_defensive3",
+        best_bid=10_000,
+        best_ask=10_010,
+        ts=time.time(),
+    )
+    result = evaluate_live_buy_entry(
+        stock=stock,
+        code="123456_defensive3",
+        ws_data={
+            "curr": 10_000,
+            "last_ws_update_ts": datetime.now(UTC).timestamp(),
+            "orderbook": {
+                "asks": [{"price": 10_010, "volume": 100}],
+                "bids": [{"price": 10_000, "volume": 100}],
+            },
+        },
+        strategy_id="SCALPING",
+        planned_qty=3,
+        signal_price=10_000,
+        signal_strength=0.9,
+        target_buy_price=10_000,
+    )
+
+    assert result["allowed"] is True
+    assert result["decision"] == "ALLOW_NORMAL"
+    assert result["order_price"] == 9_970
+    assert result["entry_price_guard"] == "normal_defensive"
+    assert result["entry_price_defensive_ticks"] == 3
+    assert result["counterfactual_order_price_1tick"] == 9_990
+
+
+def test_latency_entry_conditional_real_1tick_override_for_strong_micro(monkeypatch):
+    monkeypatch.setattr(
+        entry_latency_module,
+        "TRADING_RULES",
+        replace(CONFIG, SCALPING_NORMAL_DEFENSIVE_TICKS=3),
+    )
+    monkeypatch.setattr(entry_latency_module, "_CONFIG", entry_latency_module._build_entry_config())
+    monkeypatch.setattr(entry_latency_module, "_NORMAL_BUILDER", entry_latency_module.NormalEntryBuilder(entry_latency_module._CONFIG))
+    monkeypatch.setattr(entry_latency_module, "_ENTRY_POLICY", entry_latency_module.EntryPolicy(entry_latency_module._CONFIG))
+    monkeypatch.setattr(entry_latency_module, "_LATENCY_MONITOR", entry_latency_module.LatencyMonitor(entry_latency_module._CONFIG))
+
+    stock = {"name": "TEST", "position_tag": "MIDDLE"}
+    entry_latency_module.ORDERBOOK_STABILITY_OBSERVER.reset()
+    entry_latency_module.ORDERBOOK_STABILITY_OBSERVER.record_quote(
+        "123456_conditional_1tick",
+        best_bid=10_000,
+        best_ask=10_010,
+        ts=time.time(),
+    )
+    result = evaluate_live_buy_entry(
+        stock=stock,
+        code="123456_conditional_1tick",
+        ws_data={
+            "curr": 10_000,
+            "last_ws_update_ts": datetime.now(UTC).timestamp(),
+            "buy_exec_volume": 70,
+            "sell_exec_volume": 30,
+            "net_buy_exec_volume": 40,
+            "orderbook": {
+                "asks": [{"price": 10_010, "volume": 100}],
+                "bids": [{"price": 10_000, "volume": 100}],
+            },
+        },
+        strategy_id="SCALPING",
+        planned_qty=3,
+        signal_price=10_000,
+        signal_strength=0.9,
+        target_buy_price=10_000,
+    )
+
+    assert result["allowed"] is True
+    assert result["order_price"] == 9_990
+    assert result["entry_price_defensive_ticks"] == 1
+    assert result["entry_price_guard"] == "conditional_1tick_real_micro_override"
+    assert result["conditional_1tick_real_override_applied"] is True
+    assert result["conditional_1tick_real_override_context"]["spread_ticks"] == 1
+    assert result["conditional_1tick_real_override_context"]["buy_pressure_ok"] is True
+    assert result["normal_defensive_order_price"] == 9_970
+
+
+def test_latency_entry_conditional_1tick_does_not_apply_to_non_scalping(monkeypatch):
+    monkeypatch.setattr(
+        entry_latency_module,
+        "TRADING_RULES",
+        replace(CONFIG, SCALPING_NORMAL_DEFENSIVE_TICKS=3),
+    )
+    monkeypatch.setattr(entry_latency_module, "_CONFIG", entry_latency_module._build_entry_config())
+    monkeypatch.setattr(entry_latency_module, "_NORMAL_BUILDER", entry_latency_module.NormalEntryBuilder(entry_latency_module._CONFIG))
+    monkeypatch.setattr(entry_latency_module, "_ENTRY_POLICY", entry_latency_module.EntryPolicy(entry_latency_module._CONFIG))
+    monkeypatch.setattr(entry_latency_module, "_LATENCY_MONITOR", entry_latency_module.LatencyMonitor(entry_latency_module._CONFIG))
+
+    stock = {"name": "TEST", "position_tag": "MIDDLE"}
+    entry_latency_module.ORDERBOOK_STABILITY_OBSERVER.reset()
+    entry_latency_module.ORDERBOOK_STABILITY_OBSERVER.record_quote(
+        "123456_non_scalping_conditional_1tick",
+        best_bid=10_000,
+        best_ask=10_010,
+        ts=time.time(),
+    )
+    result = evaluate_live_buy_entry(
+        stock=stock,
+        code="123456_non_scalping_conditional_1tick",
+        ws_data={
+            "curr": 10_000,
+            "last_ws_update_ts": datetime.now(UTC).timestamp(),
+            "buy_exec_volume": 70,
+            "sell_exec_volume": 30,
+            "net_buy_exec_volume": 40,
+            "orderbook": {
+                "asks": [{"price": 10_010, "volume": 100}],
+                "bids": [{"price": 10_000, "volume": 100}],
+            },
+        },
+        strategy_id="SWING",
+        planned_qty=3,
+        signal_price=10_000,
+        signal_strength=0.9,
+        target_buy_price=10_000,
+    )
+
+    assert result["allowed"] is True
+    assert result["order_price"] == 9_990
+    assert result["entry_price_defensive_ticks"] == 1
+    assert result["conditional_1tick_real_override_applied"] is False
+    assert result["conditional_1tick_real_override_reason"] == "disabled_or_non_scalping"
+
+
+def test_latency_entry_three_tick_override_is_limited_to_scalping(monkeypatch):
+    monkeypatch.setattr(
+        entry_latency_module,
+        "TRADING_RULES",
+        replace(CONFIG, SCALPING_NORMAL_DEFENSIVE_TICKS=3),
+    )
+    monkeypatch.setattr(entry_latency_module, "_CONFIG", entry_latency_module._build_entry_config())
+    monkeypatch.setattr(entry_latency_module, "_NORMAL_BUILDER", entry_latency_module.NormalEntryBuilder(entry_latency_module._CONFIG))
+    monkeypatch.setattr(entry_latency_module, "_ENTRY_POLICY", entry_latency_module.EntryPolicy(entry_latency_module._CONFIG))
+    monkeypatch.setattr(entry_latency_module, "_LATENCY_MONITOR", entry_latency_module.LatencyMonitor(entry_latency_module._CONFIG))
+
+    stock = {"name": "TEST", "position_tag": "MIDDLE"}
+    entry_latency_module.ORDERBOOK_STABILITY_OBSERVER.reset()
+    entry_latency_module.ORDERBOOK_STABILITY_OBSERVER.record_quote(
+        "123456_s15_fast_not_three_tick",
+        best_bid=10_000,
+        best_ask=10_010,
+        ts=time.time(),
+    )
+    result = evaluate_live_buy_entry(
+        stock=stock,
+        code="123456_s15_fast_not_three_tick",
+        ws_data={
+            "curr": 10_000,
+            "last_ws_update_ts": datetime.now(UTC).timestamp(),
+            "orderbook": {
+                "asks": [{"price": 10_010, "volume": 100}],
+                "bids": [{"price": 10_000, "volume": 100}],
+            },
+        },
+        strategy_id="S15_FAST",
+        planned_qty=3,
+        signal_price=10_000,
+        signal_strength=0.9,
+        target_buy_price=0,
+    )
+
+    assert result["allowed"] is True
+    assert result["order_price"] == 9_990
+    assert result["entry_price_defensive_ticks"] == 1
+    assert result["entry_price_guard"] == "normal_defensive"
+    assert result["conditional_1tick_real_override_applied"] is False
+
+
+def test_latency_entry_conditional_1tick_requires_complete_depth_context(monkeypatch):
+    monkeypatch.setattr(
+        entry_latency_module,
+        "TRADING_RULES",
+        replace(CONFIG, SCALPING_NORMAL_DEFENSIVE_TICKS=3),
+    )
+    monkeypatch.setattr(entry_latency_module, "_CONFIG", entry_latency_module._build_entry_config())
+    monkeypatch.setattr(entry_latency_module, "_NORMAL_BUILDER", entry_latency_module.NormalEntryBuilder(entry_latency_module._CONFIG))
+    monkeypatch.setattr(entry_latency_module, "_ENTRY_POLICY", entry_latency_module.EntryPolicy(entry_latency_module._CONFIG))
+    monkeypatch.setattr(entry_latency_module, "_LATENCY_MONITOR", entry_latency_module.LatencyMonitor(entry_latency_module._CONFIG))
+
+    stock = {"name": "TEST", "position_tag": "MIDDLE"}
+    entry_latency_module.ORDERBOOK_STABILITY_OBSERVER.reset()
+    entry_latency_module.ORDERBOOK_STABILITY_OBSERVER.record_quote(
+        "123456_missing_ask_depth",
+        best_bid=10_000,
+        best_ask=10_010,
+        ts=time.time(),
+    )
+    result = evaluate_live_buy_entry(
+        stock=stock,
+        code="123456_missing_ask_depth",
+        ws_data={
+            "curr": 10_000,
+            "last_ws_update_ts": datetime.now(UTC).timestamp(),
+            "net_buy_exec_volume": 0,
+            "orderbook": {
+                "asks": [{"price": 10_010, "volume": 0}],
+                "bids": [{"price": 10_000, "volume": 500}],
+            },
+        },
+        strategy_id="SCALPING",
+        planned_qty=3,
+        signal_price=10_000,
+        signal_strength=0.9,
+        target_buy_price=10_000,
+    )
+
+    assert result["allowed"] is True
+    assert result["order_price"] == 9_970
+    assert result["entry_price_defensive_ticks"] == 3
+    assert result["conditional_1tick_real_override_applied"] is False
+    assert result["conditional_1tick_real_override_context"]["depth_ok"] is False
 
 
 def test_latency_entry_blocks_stale_quote_as_danger():

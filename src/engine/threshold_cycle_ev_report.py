@@ -119,7 +119,7 @@ def _latency_classifier_source_metrics(
                     merged[key] = candidate.get(key)
             return merged, recommendation
 
-    for family in ("latency_classifier_runtime_profile", "pre_submit_price_guard"):
+    for family in ("latency_classifier_runtime_profile", "dynamic_entry_price_resolver", "pre_submit_price_guard"):
         for item in calibration.get("calibration_candidates") or []:
             if isinstance(item, dict) and item.get("family") == family:
                 metrics = item.get("source_metrics")
@@ -295,6 +295,57 @@ def _runtime_apply_bridge_summary(apply_manifest: dict[str, Any]) -> dict[str, A
             if isinstance(item, dict)
         ],
     }
+
+
+def _enrich_swing_micro_source_quality_blockers(blocked: list[Any], ofi_qi_quality: dict[str, Any]) -> list[dict[str, Any]]:
+    reason_counts = ofi_qi_quality.get("reason_counts") if isinstance(ofi_qi_quality.get("reason_counts"), dict) else {}
+    readiness_counts = {
+        "micro_ready_count": _safe_int(ofi_qi_quality.get("micro_ready_count"), 0),
+        "micro_insufficient_samples_count": _safe_int(
+            ofi_qi_quality.get("micro_insufficient_samples_count"),
+            _safe_int(reason_counts.get("micro_not_ready"), 0),
+        ),
+        "micro_not_ready_count": _safe_int(reason_counts.get("micro_not_ready"), 0),
+        "state_insufficient_count": _safe_int(reason_counts.get("state_insufficient"), 0),
+    }
+    provenance_gap_count = _safe_int(
+        ofi_qi_quality.get("provenance_gap_count"),
+        _safe_int(reason_counts.get("provenance_gap"), 0),
+    )
+    wide_spread_count = _safe_int(ofi_qi_quality.get("wide_spread_count"), 0)
+    total = max(
+        _safe_int(ofi_qi_quality.get("sample_count"), 0),
+        sum(_safe_int(value, 0) for value in reason_counts.values()),
+        1,
+    )
+    spread_quality = {
+        "wide_spread_threshold_ticks": 10,
+        "wide_spread_count": wide_spread_count,
+        "wide_spread_rate": round(wide_spread_count * 100.0 / total, 4) if total else 0.0,
+        "max_spread_ticks": _safe_float(ofi_qi_quality.get("max_spread_ticks"), None),
+        "hard_block": False,
+        "decision_use": "source_quality_adjusted_ev_penalty_or_filter_candidate",
+    }
+    enriched: list[dict[str, Any]] = []
+    for item in blocked:
+        if not isinstance(item, dict):
+            continue
+        enriched.append(
+            {
+                **item,
+                "provenance_gap_count": provenance_gap_count,
+                "readiness_counts": readiness_counts,
+                "spread_quality": spread_quality,
+                "source_quality_reason_stage_split": {
+                    "micro_missing": _safe_int(reason_counts.get("micro_missing"), 0),
+                    "micro_not_ready": _safe_int(reason_counts.get("micro_not_ready"), 0),
+                    "state_insufficient": _safe_int(reason_counts.get("state_insufficient"), 0),
+                    "observer_unhealthy": _safe_int(reason_counts.get("observer_unhealthy"), 0),
+                    "provenance_gap": provenance_gap_count,
+                },
+            }
+        )
+    return enriched
 
 
 def _lifecycle_bucket_discovery_apply_summary(apply_manifest: dict[str, Any]) -> dict[str, Any]:
@@ -498,6 +549,11 @@ def _swing_pattern_lab_automation_summary(target_date: str) -> tuple[dict[str, A
         if isinstance(data_quality.get("source_quality_blocked_families"), list)
         else []
     )
+    ofi_qi_quality = data_quality.get("ofi_qi_quality") if isinstance(data_quality.get("ofi_qi_quality"), dict) else {}
+    source_quality_blocked_families = _enrich_swing_micro_source_quality_blockers(
+        source_quality_blocked_families,
+        ofi_qi_quality,
+    )
     warnings: list[str] = []
     resolved_dq_warnings: list[str] = []
     dq_warnings = data_quality.get("warnings", [])
@@ -524,7 +580,7 @@ def _swing_pattern_lab_automation_summary(target_date: str) -> tuple[dict[str, A
             "top_level_data_quality_warning_count": len(warnings),
             "resolved_data_quality_warnings": resolved_dq_warnings,
             "resolved_data_quality_warning_count": len(resolved_dq_warnings),
-            "ofi_qi_quality": data_quality.get("ofi_qi_quality") if isinstance(data_quality.get("ofi_qi_quality"), dict) else {},
+            "ofi_qi_quality": ofi_qi_quality,
             "source_quality_blocked_families": source_quality_blocked_families,
             "carryover_warning_count": carryover_count,
             "population_split_available": bool(summary.get("population_split_available")),

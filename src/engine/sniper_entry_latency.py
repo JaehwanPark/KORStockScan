@@ -14,6 +14,7 @@ from src.trading.entry.normal_entry_builder import NormalEntryBuilder
 from src.trading.entry.orderbook_stability_observer import ORDERBOOK_STABILITY_OBSERVER
 from src.trading.entry.signal_snapshot import build_signal_snapshot
 from src.trading.market.market_data_cache import MarketDataCache
+from src.trading.order.tick_utils import get_tick_size
 from src.trading.order.tick_utils import move_price_by_ticks
 from src.utils.constants import TRADING_RULES
 from src.utils.logger import log_info
@@ -21,6 +22,10 @@ from src.utils.logger import log_info
 
 def _build_entry_config() -> EntryConfig:
     return EntryConfig(
+        normal_defensive_ticks=max(
+            1,
+            int(getattr(TRADING_RULES, "SCALPING_NORMAL_DEFENSIVE_TICKS", 1) or 1),
+        ),
         max_ws_age_ms_for_caution=int(
             getattr(TRADING_RULES, "SCALP_ENTRY_LATENCY_MAX_WS_AGE_MS_FOR_CAUTION", 700) or 700
         ),
@@ -70,6 +75,77 @@ def _compute_price_below_bid_bps(price: int, best_bid: int) -> int:
     if normalized_price <= 0 or normalized_best_bid <= 0 or normalized_price >= normalized_best_bid:
         return 0
     return int(round(((normalized_best_bid - normalized_price) / normalized_best_bid) * 10000))
+
+
+def _compute_spread_ticks(best_ask: int, best_bid: int) -> int:
+    if best_ask <= 0 or best_bid <= 0 or best_ask <= best_bid:
+        return 0
+    tick_size = get_tick_size(best_bid)
+    if tick_size <= 0:
+        return 0
+    return max(0, int(round((best_ask - best_bid) / tick_size)))
+
+
+def _conditional_real_1tick_context(ws_data: dict[str, Any] | None, *, best_ask: int, best_bid: int) -> dict[str, Any]:
+    ws = ws_data or {}
+    orderbook = ws.get("orderbook") or {}
+    asks = orderbook.get("asks") or []
+    bids = orderbook.get("bids") or []
+    ask_depth = _to_float(ws.get("ask_tot"), 0.0)
+    bid_depth = _to_float(ws.get("bid_tot"), 0.0)
+    if ask_depth <= 0 and asks:
+        ask_depth = sum(_to_float((level or {}).get("volume"), 0.0) for level in asks[:3])
+    if bid_depth <= 0 and bids:
+        bid_depth = sum(_to_float((level or {}).get("volume"), 0.0) for level in bids[:3])
+
+    buy_volume = _to_float(ws.get("buy_exec_volume"), 0.0)
+    sell_volume = _to_float(ws.get("sell_exec_volume"), 0.0)
+    total_exec_volume = buy_volume + sell_volume
+    buy_ratio = _to_float(ws.get("buy_ratio"), 0.0)
+    if total_exec_volume > 0:
+        buy_ratio = (buy_volume / total_exec_volume) * 100.0
+    net_buy_exec_volume = _to_float(ws.get("net_buy_exec_volume"), buy_volume - sell_volume)
+
+    ofi_norm = max(
+        _to_float(ws.get("orderbook_micro_ofi_norm"), -999.0),
+        _to_float(ws.get("ofi_norm"), -999.0),
+        _to_float(ws.get("ofi"), -999.0),
+    )
+    bid_ask_ratio = (bid_depth / ask_depth) if ask_depth > 0 and bid_depth > 0 else 0.0
+    spread_ticks = _compute_spread_ticks(best_ask, best_bid)
+
+    min_buy_ratio = float(getattr(TRADING_RULES, "SCALPING_CONDITIONAL_1TICK_MIN_BUY_RATIO", 60.0) or 60.0)
+    min_ofi_norm = float(getattr(TRADING_RULES, "SCALPING_CONDITIONAL_1TICK_MIN_OFI_NORM", 0.45) or 0.45)
+    min_bid_ask_ratio = float(
+        getattr(TRADING_RULES, "SCALPING_CONDITIONAL_1TICK_MIN_BID_ASK_RATIO", 1.20) or 1.20
+    )
+    buy_pressure_ok = net_buy_exec_volume > 0 and buy_ratio >= min_buy_ratio
+    ofi_ok = ofi_norm >= min_ofi_norm
+    depth_ok = bid_depth > 0 and ask_depth > 0 and bid_ask_ratio >= min_bid_ask_ratio
+
+    return {
+        "spread_ticks": spread_ticks,
+        "buy_ratio": round(float(buy_ratio), 6),
+        "net_buy_exec_volume": int(net_buy_exec_volume),
+        "ofi_norm": None if ofi_norm == -999.0 else round(float(ofi_norm), 6),
+        "bid_ask_depth_ratio": round(float(bid_ask_ratio), 6),
+        "buy_pressure_ok": buy_pressure_ok,
+        "ofi_ok": ofi_ok,
+        "depth_ok": depth_ok,
+        "eligible": spread_ticks == 1 and (buy_pressure_ok or ofi_ok or depth_ok),
+    }
+
+
+def _conditional_real_1tick_enabled(strategy_id: str) -> bool:
+    if str(strategy_id or "").upper() not in {"SCALPING", "SCALP"}:
+        return False
+    return bool(getattr(TRADING_RULES, "SCALPING_CONDITIONAL_1TICK_REAL_ENABLED", True))
+
+
+def _normal_defensive_ticks_for_strategy(strategy_id: str) -> int:
+    if str(strategy_id or "").upper() in {"SCALPING", "SCALP"}:
+        return max(1, int(_CONFIG.normal_defensive_ticks or 1))
+    return 1
 
 
 def _can_apply_target_buy_price_cap(*, target_buy_price: int, best_bid: int) -> bool:
@@ -1079,6 +1155,9 @@ def evaluate_live_buy_entry(
         "normal_defensive_order_price": 0,
         "latency_guarded_order_price": 0,
         "counterfactual_order_price_1tick": 0,
+        "conditional_1tick_real_override_applied": False,
+        "conditional_1tick_real_override_reason": "",
+        "conditional_1tick_real_override_context": {},
         "price_resolution_reason": "none",
         "reference_target_applied": False,
         "reference_target_rejected_reason": "",
@@ -1104,21 +1183,47 @@ def evaluate_live_buy_entry(
         defensive_ticks = (
             _CONFIG.latency_override_defensive_ticks
             if is_latency_override
-            else _CONFIG.normal_defensive_ticks
+            else _normal_defensive_ticks_for_strategy(strategy_id)
         )
         entry_price_guard = (
             "latency_danger_override_defensive"
             if is_latency_override
             else "normal_defensive"
         )
+        conditional_1tick_context = _conditional_real_1tick_context(
+            ws_data,
+            best_ask=best_ask,
+            best_bid=best_bid,
+        )
+        conditional_1tick_applied = False
+        conditional_1tick_reason = "not_eligible"
+        if (
+            not is_latency_override
+            and defensive_ticks > 1
+            and _conditional_real_1tick_enabled(strategy_id)
+            and bool(conditional_1tick_context.get("eligible"))
+        ):
+            defensive_ticks = 1
+            entry_price_guard = "conditional_1tick_real_micro_override"
+            conditional_1tick_applied = True
+            conditional_1tick_reason = "spread_1tick_strong_buy_pressure"
+        elif not _conditional_real_1tick_enabled(strategy_id):
+            conditional_1tick_reason = "disabled_or_non_scalping"
+        elif is_latency_override:
+            conditional_1tick_reason = "latency_override_keeps_defensive"
+        elif defensive_ticks <= 1:
+            conditional_1tick_reason = "already_1tick_or_less"
         defensive_order = _NORMAL_BUILDER.build(
             snapshot=snapshot,
             latest_price=latest_price,
             defensive_ticks=defensive_ticks,
         )
-        normal_defensive_order_price = move_price_by_ticks(latest_price, -_CONFIG.normal_defensive_ticks)
+        normal_defensive_order_price = move_price_by_ticks(
+            latest_price,
+            -_normal_defensive_ticks_for_strategy(strategy_id),
+        )
         latency_guarded_order_price = int(defensive_order.price)
-        counterfactual_order_price_1tick = normal_defensive_order_price
+        counterfactual_order_price_1tick = move_price_by_ticks(latest_price, -1)
         order_price = int(defensive_order.price)
         price_resolution = _resolve_scalping_order_price(
             strategy_id=strategy_id,
@@ -1138,6 +1243,9 @@ def evaluate_live_buy_entry(
         result["normal_defensive_order_price"] = int(normal_defensive_order_price)
         result["latency_guarded_order_price"] = int(latency_guarded_order_price)
         result["counterfactual_order_price_1tick"] = int(counterfactual_order_price_1tick)
+        result["conditional_1tick_real_override_applied"] = conditional_1tick_applied
+        result["conditional_1tick_real_override_reason"] = conditional_1tick_reason
+        result["conditional_1tick_real_override_context"] = conditional_1tick_context
         result["price_resolution_reason"] = price_resolution.get("price_resolution_reason", "defensive_order_price")
         result["reference_target_applied"] = bool(price_resolution.get("reference_target_applied"))
         result["reference_target_rejected_reason"] = price_resolution.get("reference_target_rejected_reason", "")

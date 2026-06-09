@@ -3836,7 +3836,7 @@ def test_build_code_improvement_workorder_moves_closed_latency_instrumentation_t
                 "calibration_outcome": {
                     "decisions": [
                         {
-                            "family": "pre_submit_price_guard",
+                            "family": "dynamic_entry_price_resolver",
                             "calibration_state": "hold_sample",
                             "source_metrics": {
                                 "instrumentation_status": "implemented",
@@ -3866,7 +3866,127 @@ def test_build_code_improvement_workorder_moves_closed_latency_instrumentation_t
     order = report["orders"][0]
     assert order["order_id"] == "order_latency_guard_miss_ev_recovery"
     assert order["decision"] == "attach_existing_family"
-    assert order["mapped_family"] == "pre_submit_price_guard"
+    assert order["mapped_family"] == "dynamic_entry_price_resolver"
+
+
+def test_build_code_improvement_workorder_does_not_route_dynamic_entry_normal_telemetry(tmp_path, monkeypatch):
+    ev_dir = tmp_path / "ev"
+    report_dir = tmp_path / "report"
+    doc_dir = tmp_path / "docs"
+    ev_dir.mkdir()
+    report_dir.mkdir()
+    doc_dir.mkdir()
+    (ev_dir / "threshold_cycle_ev_2026-05-12.json").write_text(
+        json.dumps(
+            {
+                "calibration_outcome": {
+                    "decisions": [
+                        {
+                            "family": "dynamic_entry_price_resolver",
+                            "source_metrics": {
+                                "report_contract_gap": "false",
+                                "candidate_quality_contract_gap": "0",
+                                "sim_submit_path_contract_gap": "no",
+                                "candidate_quality": {
+                                    "AI_candidate": {
+                                        "candidate_failure_count": 3,
+                                        "candidate_failure_rate": 75.0,
+                                        "failure_reasons": {
+                                            "missing_snapshot": 2,
+                                            "invalid_price": 1,
+                                        },
+                                    }
+                                },
+                                "unpriced_or_stale_warning_count": 4,
+                                "sim_submit_path_quality": {
+                                    "scalp_sim_buy_order_virtual_pending": {
+                                        "sample_count": 5,
+                                        "unpriced_sample_count": 4,
+                                        "excluded_from_fill_ev_count": 4,
+                                    }
+                                },
+                            },
+                        }
+                    ]
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-pattern")
+    monkeypatch.setattr(mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing")
+    monkeypatch.setattr(mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-swing-lab")
+    monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", ev_dir)
+    monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_DIR", doc_dir)
+
+    report = mod.build_code_improvement_workorder("2026-05-12", max_orders=10)
+
+    orders = {item["order_id"]: item for item in report["orders"]}
+    assert "order_dynamic_entry_price_ai_candidate_failure_contract" not in orders
+    assert "order_dynamic_entry_price_sim_unpriced_stale_contract" not in orders
+
+
+def test_build_code_improvement_workorder_routes_dynamic_entry_report_contract_gaps(tmp_path, monkeypatch):
+    ev_dir = tmp_path / "ev"
+    report_dir = tmp_path / "report"
+    doc_dir = tmp_path / "docs"
+    ev_dir.mkdir()
+    report_dir.mkdir()
+    doc_dir.mkdir()
+    (ev_dir / "threshold_cycle_ev_2026-05-12.json").write_text(
+        json.dumps(
+            {
+                "calibration_outcome": {
+                    "decisions": [
+                        {
+                            "family": "dynamic_entry_price_resolver",
+                            "source_metrics": {
+                                "report_contract_gap": True,
+                                "candidate_quality": {
+                                    "AI_candidate": {
+                                        "candidate_failure_count": 3,
+                                        "candidate_failure_rate": 75.0,
+                                        "failure_reasons": {
+                                            "missing_snapshot": 2,
+                                            "invalid_price": 1,
+                                        },
+                                    }
+                                },
+                                "unpriced_or_stale_warning_count": 4,
+                                "sim_submit_path_quality": {
+                                    "scalp_sim_buy_order_virtual_pending": {
+                                        "sample_count": 5,
+                                        "unpriced_sample_count": 4,
+                                        "excluded_from_fill_ev_count": 4,
+                                    }
+                                },
+                            },
+                        }
+                    ]
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-pattern")
+    monkeypatch.setattr(mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing")
+    monkeypatch.setattr(mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-swing-lab")
+    monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", ev_dir)
+    monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_DIR", doc_dir)
+
+    report = mod.build_code_improvement_workorder("2026-05-12", max_orders=10)
+
+    orders = {item["order_id"]: item for item in report["orders"]}
+    ai_order = orders["order_dynamic_entry_price_ai_candidate_failure_contract"]
+    assert ai_order["mapped_family"] == "dynamic_entry_price_resolver"
+    assert ai_order["runtime_effect"] is False
+    assert any("candidate_failure_count=3" in item for item in ai_order["evidence"])
+    unpriced_order = orders["order_dynamic_entry_price_sim_unpriced_stale_contract"]
+    assert unpriced_order["lifecycle_stage"] == "submit"
+    assert unpriced_order["allowed_runtime_apply"] is False
+    assert any("unpriced_or_stale_warning_count=4" in item for item in unpriced_order["evidence"])
 
 
 def test_build_code_improvement_workorder_reports_previous_generation_diff(tmp_path, monkeypatch):

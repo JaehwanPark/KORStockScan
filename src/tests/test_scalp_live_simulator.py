@@ -2367,10 +2367,13 @@ def test_scalp_simulator_threshold_stages_are_included():
         == "overbought_pullback_guard_p1"
     )
     assert threshold_family_for_stage("scalp_sim_entry_armed") == "entry_mechanical_momentum"
-    assert threshold_family_for_stage("scalp_sim_entry_ai_price_applied") == "pre_submit_price_guard"
-    assert threshold_family_for_stage("scalp_sim_entry_ai_price_skip_order") == "pre_submit_price_guard"
-    assert threshold_family_for_stage("scalp_sim_entry_submit_revalidation_warning") == "pre_submit_price_guard"
-    assert threshold_family_for_stage("scalp_sim_entry_submit_revalidation_block") == "pre_submit_price_guard"
+    assert threshold_family_for_stage("pre_submit_price_guard_block") == "pre_submit_price_guard"
+    assert threshold_family_for_stage("entry_submit_revalidation_block") == "pre_submit_price_guard"
+    assert threshold_family_for_stage("entry_order_cancel_confirmed") == "entry_price_execution_quality"
+    assert threshold_family_for_stage("scalp_sim_entry_ai_price_applied") == "dynamic_entry_price_resolver"
+    assert threshold_family_for_stage("scalp_sim_entry_ai_price_skip_order") == "dynamic_entry_price_resolver"
+    assert threshold_family_for_stage("scalp_sim_entry_submit_revalidation_warning") == "dynamic_entry_price_resolver"
+    assert threshold_family_for_stage("scalp_sim_entry_submit_revalidation_block") == "dynamic_entry_price_resolver"
     assert (
         threshold_family_for_stage("scalp_sim_pre_submit_liquidity_guard_would_block")
         == "liquidity_pre_submit_guard_p1"
@@ -2391,7 +2394,7 @@ def test_scalp_simulator_threshold_stages_are_included():
         threshold_family_for_stage("scalp_sim_pre_submit_overbought_guard_would_pass")
         == "overbought_pullback_guard_p1"
     )
-    assert threshold_family_for_stage("scalp_sim_buy_order_assumed_filled") == "pre_submit_price_guard"
+    assert threshold_family_for_stage("scalp_sim_buy_order_assumed_filled") == "dynamic_entry_price_resolver"
     assert threshold_family_for_stage("scalp_sim_sell_order_assumed_filled") == "statistical_action_weight"
     assert threshold_family_for_stage("scalp_sim_ai_holding_live_call") == "scalp_sim_ai_budget_manager"
     assert threshold_family_for_stage("scalp_sim_ai_holding_reuse") == "scalp_sim_ai_budget_manager"

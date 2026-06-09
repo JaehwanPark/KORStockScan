@@ -65,6 +65,9 @@ THRESHOLD_EVENT_FIELD_KEEP_KEYS = {
     "buy_price",
     "chosen_action",
     "confirmation_elapsed_sec",
+    "conditional_1tick_real_override_applied",
+    "conditional_1tick_real_override_context",
+    "conditional_1tick_real_override_reason",
     "current_ai_score",
     "drawdown_from_peak",
     "effective_qty",
@@ -73,6 +76,7 @@ THRESHOLD_EVENT_FIELD_KEEP_KEYS = {
     "entry_ai_price_ofi_regime",
     "entry_order_lifecycle",
     "entry_passive_probe_applied",
+    "entry_price_defensive_ticks",
     "entry_price_guard",
     "exclusion_reason",
     "exit_decision_source",
@@ -288,12 +292,32 @@ CALIBRATION_FAMILY_METADATA = {
     "pre_submit_price_guard": {
         "priority": 9,
         "source_family": "pre_submit_price_guard",
+        "target_env_keys": [],
+        "primary_key": "safety_guard_enabled",
+        "bounds": {},
+        "sample_floor": 1,
+        "sample_window": "daily_intraday_with_rolling_confirmation",
+        "window_policy": {
+            "primary": "daily_intraday",
+            "secondary": ["rolling_5d", "cumulative_since_2026-04-21"],
+            "use": "broker 제출 직전 stale/passive-probe/가격품질 hard safety 차단만 감사한다. runtime apply 후보가 아니다.",
+            "daily_only_allowed": True,
+        },
+        "allowed_runtime_apply": False,
+        "runtime_effect": False,
+    },
+    "dynamic_entry_price_resolver": {
+        "priority": 9,
+        "source_family": "dynamic_entry_price_resolver",
         "target_env_keys": [
-            "SCALPING_PRE_SUBMIT_PRICE_GUARD_ENABLED",
-            "SCALPING_PRE_SUBMIT_MAX_BELOW_BID_BPS",
+            "SCALPING_ENTRY_PRICE_RESOLVER_ENABLED",
+            "SCALPING_ENTRY_PRICE_RESOLVER_MAX_BELOW_BID_BPS",
+            "SCALPING_NORMAL_DEFENSIVE_TICKS",
+            "SCALPING_CONDITIONAL_1TICK_REAL_ENABLED",
         ],
-        "primary_key": "max_below_bid_bps",
+        "primary_key": "normal_defensive_ticks",
         "bounds": {
+            "normal_defensive_ticks": {"min": 1, "max": 3, "max_step_per_day": 1},
             "max_below_bid_bps": {"min": 60, "max": 120, "max_step_per_day": 10},
         },
         "sample_floor": 20,
@@ -301,10 +325,30 @@ CALIBRATION_FAMILY_METADATA = {
         "window_policy": {
             "primary": "daily_intraday",
             "secondary": ["rolling_5d", "cumulative_since_2026-04-21"],
-            "use": "후행 가격품질 guard를 관찰한다. latency submit drought/recovery 후보는 latency_classifier_runtime_profile가 소유한다.",
+            "use": "bid-1/bid-2/bid-3/best_bid/AI/reference/timeout 후보별 fill, cancel, late-fill, EV를 비교해 다음 PREOPEN bounded 후보만 만든다.",
             "daily_only_allowed": True,
         },
+        "sample_denominator_keys": ["candidate_observations", "sim_candidate_observations", "real_candidate_observations"],
+        "primary_decision_metric": "source_quality_adjusted_ev_pct",
         "allowed_runtime_apply": True,
+    },
+    "entry_price_execution_quality": {
+        "priority": 9,
+        "source_family": "entry_price_execution_quality",
+        "target_env_keys": [],
+        "primary_key": "real_execution_quality_audit",
+        "bounds": {},
+        "sample_floor": 5,
+        "sample_window": "daily_intraday",
+        "window_policy": {
+            "primary": "daily_intraday",
+            "secondary": ["rolling_5d"],
+            "use": "real-only 제출/체결/취소/late-fill/partial/full fill 품질을 감사한다. sim 후보 EV와 섞지 않는다.",
+            "daily_only_allowed": True,
+        },
+        "sample_denominator_keys": ["real_broker_events", "cancel_events", "fill_join_events"],
+        "allowed_runtime_apply": False,
+        "runtime_effect": False,
     },
     "score65_74_recovery_probe": {
         "priority": 10,
@@ -3838,55 +3882,477 @@ def _build_score65_74_recovery_probe_family(events: list[dict]) -> dict:
     }
 
 
+ENTRY_PRICE_CANDIDATE_LABELS = [
+    "bid-1",
+    "bid-2",
+    "bid-3",
+    "best_bid",
+    "AI_candidate",
+    "reference_target",
+    "timeout_15s",
+    "timeout_30s",
+]
+
+
 def _build_pre_submit_guard_family(events: list[dict]) -> dict:
     current = {
+        "safety_guard_enabled": True,
         "max_below_bid_bps": int(getattr(TRADING_RULES, "SCALPING_PRE_SUBMIT_MAX_BELOW_BID_BPS", 80) or 80),
     }
-    values = _extract_field_values(events, "order_bundle_submitted", "price_below_bid_bps")
-    if not values:
-        values = _extract_field_values(events, "latency_pass", "price_below_bid_bps")
-    sim_values = _extract_field_values(events, "scalp_sim_buy_order_virtual_pending", "price_below_bid_bps")
     passive_probe_events = [
         event
         for event in events
         if str(_event_fields(event).get("entry_order_lifecycle") or "") == "passive_probe"
-        or bool(_event_fields(event).get("entry_passive_probe_applied"))
+        or _field_bool(_event_fields(event).get("entry_passive_probe_applied"))
     ]
-    cancel_confirmed = _events_for_stage(events, "entry_order_cancel_confirmed")
-    revalidation_warnings = _events_for_stage(events, "entry_submit_revalidation_warning")
     revalidation_blocks = _events_for_stage(events, "entry_submit_revalidation_block")
-    sim_revalidation_warnings = _events_for_stage(events, "scalp_sim_entry_submit_revalidation_warning")
-    sim_revalidation_blocks = _events_for_stage(events, "scalp_sim_entry_submit_revalidation_block")
-    sim_ai_price_applied = _events_for_stage(events, "scalp_sim_entry_ai_price_applied")
-    sim_ai_price_skip = _events_for_stage(events, "scalp_sim_entry_ai_price_skip_order")
-    sample_ready = len(values) >= 50
-    recommended = {
-        "max_below_bid_bps": int(round(_clamp(_percentile(values, 90, current["max_below_bid_bps"]), 60.0, 120.0))),
-    }
+    guard_blocks = _events_for_stage(events, "pre_submit_price_guard_block")
+    sample_ready = bool(guard_blocks or revalidation_blocks)
     return {
         "family": "pre_submit_price_guard",
         "stage": "entry",
         "sample": {
+            "guard_block": len(guard_blocks),
+            "passive_probe": len(passive_probe_events),
+            "submit_revalidation_block": len(revalidation_blocks),
+        },
+        "apply_ready": False,
+        "current": current,
+        "recommended": dict(current),
+        "apply_mode": "safety_source_quality_report",
+        "notes": [
+            "broker 제출 직전 hard safety 차단 전용 family다.",
+            "가격 후보 비교, sim 가정체결, cancel/late-fill 감사는 별도 family에서 처리한다.",
+            "pre_submit_price_guard는 다음 PREOPEN auto_bounded_live 후보를 만들 수 없다.",
+        ],
+    }
+
+
+def _candidate_metric_pack(
+    events: list[dict],
+    *,
+    submitted_stages: set[str],
+    fill_stages: set[str],
+    cancel_stages: set[str],
+    fill_metrics_available: bool = True,
+) -> dict:
+    excluded = [event for event in events if _entry_price_unpriced_or_stale_warning(event)]
+    excluded_ids = {id(event) for event in excluded}
+    priced_events = [event for event in events if id(event) not in excluded_ids]
+    submitted = [event for event in priced_events if str(event.get("stage") or "") in submitted_stages]
+    filled = [event for event in priced_events if str(event.get("stage") or "") in fill_stages]
+    canceled = [event for event in priced_events if str(event.get("stage") or "") in cancel_stages]
+    partial = [
+        event
+        for event in priced_events
+        if str(_event_fields(event).get("fill_type") or _event_fields(event).get("entry_order_lifecycle") or "").lower()
+        == "partial_fill"
+    ]
+    full = [
+        event
+        for event in filled
+        if str(_event_fields(event).get("fill_type") or _event_fields(event).get("entry_order_lifecycle") or "").lower()
+        in {"", "filled", "full_fill", "assumed_filled"}
+    ]
+    late = [
+        event
+        for event in priced_events
+        if _field_bool(_event_fields(event).get("late_fill"))
+        or str(_event_fields(event).get("entry_order_lifecycle") or "").lower() == "late_fill"
+    ]
+    excluded_reasons = Counter(_entry_price_exclusion_reason(event) for event in excluded)
+    denominator = max(len(submitted), len(filled) + len(canceled), 1)
+    stale_warning_reasons = {"stale_context_or_quote", "quote_stale_at_submit"}
+    return {
+        "priced_sample_count": len(priced_events),
+        "unpriced_sample_count": len(excluded),
+        "stale_warning_count": sum(
+            1 for event in excluded if _entry_price_exclusion_reason(event) in stale_warning_reasons
+        ),
+        "excluded_from_fill_ev_count": len(excluded),
+        "excluded_from_fill_ev_reasons": dict(excluded_reasons),
+        "fill_rate": round(len(filled) * 100.0 / denominator, 4) if fill_metrics_available else None,
+        "full_fill_rate": round(len(full) * 100.0 / denominator, 4) if fill_metrics_available else None,
+        "partial_fill_rate": round(len(partial) * 100.0 / denominator, 4) if fill_metrics_available else None,
+        "cancel_rate": round(len(canceled) * 100.0 / denominator, 4),
+        "late_fill_rate": round(len(late) * 100.0 / denominator, 4),
+        "missed_upside": None,
+        "source_quality_adjusted_ev_pct": None,
+    }
+
+
+ENTRY_PRICE_CANDIDATE_FAILURE_REASONS = {
+    "missing_snapshot",
+    "invalid_price",
+    "pre_submit_price_guard",
+    "above_best_ask",
+    "skip_low_confidence",
+}
+ENTRY_PRICE_REQUIRED_METRIC_NAMES = {
+    "fill_rate",
+    "full_fill_rate",
+    "partial_fill_rate",
+    "cancel_rate",
+    "late_fill_rate",
+    "missed_upside",
+    "source_quality_adjusted_ev_pct",
+}
+ENTRY_PRICE_TARGET_ENV_VALUE_KEYS = {
+    "SCALPING_ENTRY_PRICE_RESOLVER_ENABLED": "enabled",
+    "SCALPING_ENTRY_PRICE_RESOLVER_MAX_BELOW_BID_BPS": "max_below_bid_bps",
+    "SCALPING_NORMAL_DEFENSIVE_TICKS": "normal_defensive_ticks",
+    "SCALPING_CONDITIONAL_1TICK_REAL_ENABLED": "conditional_1tick_real_enabled",
+}
+
+
+def _entry_price_missing_metrics(candidate_metrics: dict) -> dict[str, list[str]]:
+    missing_by_book: dict[str, list[str]] = {}
+    for book in ("sim", "real"):
+        book_metrics = candidate_metrics.get(book) if isinstance(candidate_metrics.get(book), dict) else {}
+        missing = [
+            name
+            for name in ENTRY_PRICE_REQUIRED_METRIC_NAMES
+            if name not in book_metrics or book_metrics.get(name) is None
+        ]
+        if missing:
+            missing_by_book[book] = missing
+    return missing_by_book
+
+
+def _entry_price_candidate_metrics_ready(candidate_metrics: dict) -> bool:
+    return not _entry_price_missing_metrics(candidate_metrics if isinstance(candidate_metrics, dict) else {})
+
+
+def _entry_price_exclusion_reason(event: dict) -> str:
+    fields = _event_fields(event)
+    if str(fields.get("entry_submit_revalidation_warning") or "").strip() == "stale_context_or_quote":
+        return "stale_context_or_quote"
+    if _field_bool(fields.get("quote_stale_at_submit")):
+        return "quote_stale_at_submit"
+    if str(event.get("stage") or "") in {"scalp_sim_entry_unpriced"}:
+        return "sim_unpriced"
+    return "unpriced_or_stale"
+
+
+def _entry_price_unpriced_or_stale_warning(event: dict) -> bool:
+    fields = _event_fields(event)
+    stage = str(event.get("stage") or "")
+    if stage not in {
+        "scalp_sim_buy_order_virtual_pending",
+        "scalp_sim_buy_order_assumed_filled",
+        "scalp_sim_entry_submit_revalidation_warning",
+        "scalp_sim_pre_submit_liquidity_guard_would_block",
+        "scalp_sim_pre_submit_liquidity_guard_would_pass",
+        "scalp_sim_pre_submit_overbought_guard_would_block",
+        "scalp_sim_pre_submit_overbought_guard_would_pass",
+        "scalp_sim_entry_unpriced",
+    }:
+        return False
+    submitted_price = _safe_float(fields.get("submitted_order_price"), None)
+    if submitted_price != 0:
+        return False
+    return (
+        str(fields.get("entry_submit_revalidation_warning") or "").strip() == "stale_context_or_quote"
+        or _field_bool(fields.get("quote_stale_at_submit"))
+        or stage == "scalp_sim_entry_unpriced"
+    )
+
+
+def _entry_price_candidate_failure_reasons(event: dict) -> list[str]:
+    fields = _event_fields(event)
+    values = [
+        str(fields.get("reason") or "").strip(),
+        str(fields.get("fallback_reason") or "").strip(),
+        str(fields.get("entry_ai_price_canary_reason") or "").strip(),
+        str(fields.get("orderbook_micro_reason") or "").strip(),
+        str(fields.get("orderbook_micro_observer_missing_reason") or "").strip(),
+    ]
+    seen: set[str] = set()
+    reasons: list[str] = []
+    for value in values:
+        if value in ENTRY_PRICE_CANDIDATE_FAILURE_REASONS and value not in seen:
+            seen.add(value)
+            reasons.append(value)
+    return reasons
+
+
+def _entry_price_ai_candidate_quality(events: list[dict]) -> dict:
+    candidate_events = [
+        event
+        for event in events
+        if str(event.get("stage") or "").startswith("entry_ai_price_canary_")
+        or str(event.get("stage") or "").startswith("scalp_sim_entry_ai_price_")
+    ]
+    failed = [event for event in candidate_events if _entry_price_candidate_failure_reasons(event)]
+    reasons: Counter[str] = Counter()
+    for event in failed:
+        reasons.update(_entry_price_candidate_failure_reasons(event))
+    total = len(candidate_events)
+    return {
+        "candidate_label": "AI_candidate",
+        "candidate_event_count": total,
+        "candidate_failure_count": len(failed),
+        "candidate_failure_rate": round(len(failed) * 100.0 / total, 4) if total else 0.0,
+        "failure_reasons": {str(key): value for key, value in reasons.items() if key},
+    }
+
+
+def _entry_price_sim_submit_path_quality(events: list[dict]) -> dict:
+    stages = {
+        "scalp_sim_buy_order_virtual_pending",
+        "scalp_sim_entry_submit_revalidation_warning",
+        "scalp_sim_pre_submit_liquidity_guard_would_block",
+        "scalp_sim_pre_submit_liquidity_guard_would_pass",
+        "scalp_sim_pre_submit_overbought_guard_would_block",
+        "scalp_sim_pre_submit_overbought_guard_would_pass",
+    }
+    summary: dict[str, dict[str, Any]] = {}
+    for stage in sorted(stages):
+        stage_events = [event for event in events if str(event.get("stage") or "") == stage]
+        unpriced = [event for event in stage_events if _entry_price_unpriced_or_stale_warning(event)]
+        unpriced_ids = {id(event) for event in unpriced}
+        priced = [event for event in stage_events if id(event) not in unpriced_ids]
+        stale = [event for event in unpriced if _entry_price_exclusion_reason(event) in {"stale_context_or_quote", "quote_stale_at_submit"}]
+        actual_order_violations = [
+            event
+            for event in stage_events
+            if "actual_order_submitted" in _event_fields(event)
+            and _field_bool(_event_fields(event).get("actual_order_submitted"))
+        ]
+        broker_forbidden_violations = [
+            event
+            for event in stage_events
+            if "broker_order_forbidden" in _event_fields(event)
+            and not _field_bool(_event_fields(event).get("broker_order_forbidden"))
+        ]
+        if stage_events:
+            summary[stage] = {
+                "sample_count": len(stage_events),
+                "priced_sample_count": len(priced),
+                "unpriced_sample_count": len(unpriced),
+                "stale_warning_count": len(stale),
+                "excluded_from_fill_ev_count": len(unpriced),
+                "actual_order_submitted_violation_count": len(actual_order_violations),
+                "broker_order_forbidden_violation_count": len(broker_forbidden_violations),
+                "classification": "sim_unpriced_stale_warning" if unpriced else "sim_priced_observation",
+            }
+    return summary
+
+
+def _merged_entry_price_candidate_metrics(family_sample: dict, source_metrics: dict) -> dict:
+    base = family_sample.get("candidate_metrics") if isinstance(family_sample.get("candidate_metrics"), dict) else {}
+    source_pack = source_metrics.get("candidate_metrics") if isinstance(source_metrics.get("candidate_metrics"), dict) else {}
+    merged: dict[str, dict] = {}
+    for book in ("sim", "real"):
+        book_base = base.get(book) if isinstance(base.get(book), dict) else {}
+        book_source = source_pack.get(book) if isinstance(source_pack.get(book), dict) else {}
+        merged[book] = {**book_base, **book_source}
+    return merged
+
+
+def _entry_price_source_recommended_values(source_metrics: dict, current: dict, metadata: dict) -> tuple[dict, dict]:
+    recommended = (
+        source_metrics.get("recommended_values")
+        if isinstance(source_metrics.get("recommended_values"), dict)
+        else source_metrics.get("recommended_policy")
+        if isinstance(source_metrics.get("recommended_policy"), dict)
+        else {}
+    )
+    clean: dict[str, Any] = {}
+    audit: dict[str, Any] = {"accepted": {}, "clamped": {}, "rejected": {}}
+
+    for key in ("enabled", "conditional_1tick_real_enabled"):
+        if key not in recommended:
+            continue
+        raw_value = recommended.get(key)
+        if isinstance(raw_value, bool):
+            clean[key] = raw_value
+            audit["accepted"][key] = raw_value
+        else:
+            audit["rejected"][key] = {"value": raw_value, "reason": "invalid_bool"}
+
+    bounds = metadata.get("bounds") if isinstance(metadata.get("bounds"), dict) else {}
+    for key in ("normal_defensive_ticks", "max_below_bid_bps"):
+        if key not in recommended:
+            continue
+        raw_value = recommended.get(key)
+        numeric = _safe_float(raw_value, None)
+        if numeric is None:
+            audit["rejected"][key] = {"value": raw_value, "reason": "invalid_number"}
+            continue
+        key_bounds = bounds.get(key) if isinstance(bounds.get(key), dict) else {}
+        lower = _safe_float(key_bounds.get("min"), numeric)
+        upper = _safe_float(key_bounds.get("max"), numeric)
+        max_step = _safe_float(key_bounds.get("max_step_per_day"), None)
+        current_value = _safe_float(current.get(key), numeric)
+        bounded = _clamp(numeric, lower if lower is not None else numeric, upper if upper is not None else numeric)
+        if max_step is not None and current_value is not None:
+            bounded = _clamp(bounded, current_value - max_step, current_value + max_step)
+        if key in {"normal_defensive_ticks", "max_below_bid_bps"}:
+            bounded_value: Any = int(round(bounded))
+        else:
+            bounded_value = bounded
+        clean[key] = bounded_value
+        raw_numeric_equivalent = int(round(numeric)) if key in {"normal_defensive_ticks", "max_below_bid_bps"} else numeric
+        if bounded_value != raw_numeric_equivalent:
+            audit["clamped"][key] = {"requested": raw_value, "applied": bounded_value}
+        else:
+            audit["accepted"][key] = bounded_value
+    return clean, audit
+
+
+def _entry_price_recommendation_has_audit_entries(audit: dict) -> bool:
+    return any(bool(audit.get(key)) for key in ("accepted", "clamped", "rejected"))
+
+
+def _entry_price_recommendation_has_runtime_change(recommended: dict, current: dict, metadata: dict) -> bool:
+    target_env_keys = metadata.get("target_env_keys") if isinstance(metadata.get("target_env_keys"), list) else []
+    for target_key in target_env_keys:
+        value_key = ENTRY_PRICE_TARGET_ENV_VALUE_KEYS.get(str(target_key))
+        if not value_key or value_key not in recommended:
+            continue
+        if recommended.get(value_key) != current.get(value_key):
+            return True
+    return False
+
+
+def _build_dynamic_entry_price_resolver_family(events: list[dict]) -> dict:
+    current = {
+        "enabled": bool(getattr(TRADING_RULES, "SCALPING_ENTRY_PRICE_RESOLVER_ENABLED", True)),
+        "normal_defensive_ticks": int(getattr(TRADING_RULES, "SCALPING_NORMAL_DEFENSIVE_TICKS", 1) or 1),
+        "max_below_bid_bps": int(getattr(TRADING_RULES, "SCALPING_ENTRY_PRICE_RESOLVER_MAX_BELOW_BID_BPS", 80) or 80),
+        "conditional_1tick_real_enabled": bool(
+            getattr(TRADING_RULES, "SCALPING_CONDITIONAL_1TICK_REAL_ENABLED", True)
+        ),
+        "candidate_labels": ENTRY_PRICE_CANDIDATE_LABELS,
+    }
+    real_stages = {
+        "latency_pass",
+        "order_leg_request",
+        "order_bundle_submitted",
+        "entry_ai_price_canary_applied",
+        "entry_ai_price_canary_fallback",
+        "entry_ai_price_canary_skip_order",
+        "entry_ai_price_canary_skip_followup",
+        "entry_submit_revalidation_warning",
+    }
+    sim_stages = {
+        "scalp_sim_entry_ai_price_applied",
+        "scalp_sim_entry_ai_price_skip_order",
+        "scalp_sim_entry_submit_revalidation_warning",
+        "scalp_sim_entry_submit_revalidation_block",
+        "scalp_sim_buy_order_virtual_pending",
+        "scalp_sim_buy_order_assumed_filled",
+        "scalp_sim_entry_unpriced",
+        "scalp_sim_entry_expired",
+    }
+    real_events = [event for event in events if str(event.get("stage") or "") in real_stages]
+    sim_events = [event for event in events if str(event.get("stage") or "") in sim_stages]
+    values = _extract_field_values(events, "order_bundle_submitted", "price_below_bid_bps")
+    if not values:
+        values = _extract_field_values(events, "latency_pass", "price_below_bid_bps")
+    sim_values = _extract_field_values(events, "scalp_sim_buy_order_virtual_pending", "price_below_bid_bps")
+    recommended = dict(current)
+    if values:
+        recommended["max_below_bid_bps"] = int(round(_clamp(_percentile(values, 90, current["max_below_bid_bps"]), 60.0, 120.0)))
+    candidate_metrics = {
+        "sim": _candidate_metric_pack(
+            sim_events,
+            submitted_stages={"scalp_sim_buy_order_virtual_pending"},
+            fill_stages={"scalp_sim_buy_order_assumed_filled"},
+            cancel_stages={"scalp_sim_entry_expired", "scalp_sim_entry_unpriced"},
+        ),
+        "real": _candidate_metric_pack(
+            real_events,
+            submitted_stages={"order_leg_request", "order_bundle_submitted"},
+            fill_stages=set(),
+            cancel_stages=set(),
+            fill_metrics_available=False,
+        ),
+    }
+    candidate_quality = {
+        "AI_candidate": _entry_price_ai_candidate_quality(real_events + sim_events),
+    }
+    sim_submit_path_quality = _entry_price_sim_submit_path_quality(events)
+    sim_unpriced_or_stale_warning_count = int(
+        candidate_metrics["sim"].get("excluded_from_fill_ev_count") or 0
+    )
+    sample_floor_ready = (len(real_events) + len(sim_events)) >= 20
+    metrics_ready = _entry_price_candidate_metrics_ready(candidate_metrics)
+    sample_ready = sample_floor_ready and metrics_ready
+    return {
+        "family": "dynamic_entry_price_resolver",
+        "stage": "entry",
+        "sample": {
+            "candidate_observations": len(real_events) + len(sim_events),
+            "real_candidate_observations": len(real_events),
+            "sim_candidate_observations": len(sim_events),
             "price_below_bid_bps": len(values),
             "sim_price_below_bid_bps": len(sim_values),
-            "guard_block": _stage_count(events, "pre_submit_price_guard_block"),
-            "passive_probe": len(passive_probe_events),
-            "entry_timeout_cancel_confirmed": len(cancel_confirmed),
-            "submit_revalidation_warning": len(revalidation_warnings),
-            "submit_revalidation_block": len(revalidation_blocks),
-            "sim_entry_ai_price_applied": len(sim_ai_price_applied),
-            "sim_entry_ai_price_skip_order": len(sim_ai_price_skip),
-            "sim_submit_revalidation_warning": len(sim_revalidation_warnings),
-            "sim_submit_revalidation_block": len(sim_revalidation_blocks),
+            "entry_ai_price_canary_applied": _stage_count(events, "entry_ai_price_canary_applied"),
+            "entry_ai_price_canary_skip_order": _stage_count(events, "entry_ai_price_canary_skip_order"),
+            "sim_entry_ai_price_applied": _stage_count(events, "scalp_sim_entry_ai_price_applied"),
+            "sim_entry_ai_price_skip_order": _stage_count(events, "scalp_sim_entry_ai_price_skip_order"),
+            "sim_submit_revalidation_block": _stage_count(events, "scalp_sim_entry_submit_revalidation_block"),
+            "sim_actual_order_submitted": False,
+            "sim_broker_order_forbidden": True,
+            "candidate_labels": ENTRY_PRICE_CANDIDATE_LABELS,
+            "candidate_metrics": candidate_metrics,
+            "candidate_quality": candidate_quality,
+            "candidate_metrics_ready": metrics_ready,
+            "sim_submit_path_quality": sim_submit_path_quality,
+            "unpriced_or_stale_warning_count": sim_unpriced_or_stale_warning_count,
         },
         "apply_ready": sample_ready,
         "current": current,
         "recommended": recommended,
         "apply_mode": "next_preopen_single_owner" if sample_ready else "observe_only",
         "notes": [
-            "실제 guard_block 표본이 0이면 분포 anchor만 사용한다.",
-            "일일 변경폭은 +-10bps cap으로 본다.",
-            "WAIT+score 통과+DANGER+1주 passive_probe와 timeout cancel은 같은 pre_submit_price_guard family에서 attribution한다.",
+            "가격 후보 비교와 dynamic entry tuning 전용 family다.",
+            "sim 표본은 actual_order_submitted=false, broker_order_forbidden=true로 real execution 품질과 분리한다.",
+            "real 반영은 hard safety, stale quote, broker/account/order/quantity/cooldown guard를 우회하지 않는다.",
+        ],
+    }
+
+
+def _build_entry_price_execution_quality_family(events: list[dict]) -> dict:
+    stages = {
+        "order_leg_request",
+        "order_bundle_submitted",
+        "entry_order_cancel_requested",
+        "entry_order_cancel_confirmed",
+        "entry_order_cancel_failed",
+    }
+    real_events = [event for event in events if str(event.get("stage") or "") in stages]
+    cancel_events = [
+        event for event in real_events if str(event.get("stage") or "").startswith("entry_order_cancel_")
+    ]
+    submitted = [event for event in real_events if str(event.get("stage") or "") in {"order_leg_request", "order_bundle_submitted"}]
+    return {
+        "family": "entry_price_execution_quality",
+        "stage": "entry",
+        "sample": {
+            "real_broker_events": len(real_events),
+            "submitted_events": len(submitted),
+            "cancel_events": len(cancel_events),
+            "fill_join_events": 0,
+            "fill_join_available": False,
+            "candidate_metrics": _candidate_metric_pack(
+                real_events,
+                submitted_stages={"order_leg_request", "order_bundle_submitted"},
+                fill_stages=set(),
+                cancel_stages={"entry_order_cancel_requested", "entry_order_cancel_confirmed", "entry_order_cancel_failed"},
+                fill_metrics_available=False,
+            ),
+            "sim_mixed": False,
+        },
+        "apply_ready": False,
+        "current": {"real_execution_quality_audit": "report_only"},
+        "recommended": {"real_execution_quality_audit": "report_only"},
+        "apply_mode": "real_only_audit",
+        "notes": [
+            "real broker 제출/취소/체결 join 품질 감사 전용 family다.",
+            "동적 가격 후보 EV 산정에는 직접 섞지 않고 audit/source-quality 근거로만 전달한다.",
         ],
     }
 
@@ -4913,6 +5379,8 @@ def _build_family_reports(
         _build_mechanical_entry_family(events),
         _build_score65_74_recovery_probe_family(events),
         _build_pre_submit_guard_family(events),
+        _build_dynamic_entry_price_resolver_family(events),
+        _build_entry_price_execution_quality_family(events),
         _build_entry_filter_refined_candidate_family(
             events,
             "blocked_strength_momentum",
@@ -5304,9 +5772,19 @@ def _source_metrics_for_family(output_family: str, report_source_context: dict |
         combined.update(alias)
         return combined
     if output_family == "pre_submit_price_guard":
+        return metrics.get("pre_submit_price_guard") if isinstance(metrics.get("pre_submit_price_guard"), dict) else {}
+    if output_family == "dynamic_entry_price_resolver":
         return (
-            metrics.get("latency_guard_miss_ev_recovery")
+            metrics.get("dynamic_entry_price_resolver")
+            if isinstance(metrics.get("dynamic_entry_price_resolver"), dict)
+            else metrics.get("latency_guard_miss_ev_recovery")
             if isinstance(metrics.get("latency_guard_miss_ev_recovery"), dict)
+            else {}
+        )
+    if output_family == "entry_price_execution_quality":
+        return (
+            metrics.get("entry_price_execution_quality")
+            if isinstance(metrics.get("entry_price_execution_quality"), dict)
             else {}
         )
     if output_family in {"liquidity_gate_refined_candidate", "liquidity_pre_submit_guard_p1"}:
@@ -5350,8 +5828,22 @@ def _source_sample_count_for_family(output_family: str, source_metrics: dict) ->
         )
     if output_family == "pre_submit_price_guard":
         return max(
+            _safe_int(source_metrics.get("guard_block"), 0) or 0,
+            _safe_int(source_metrics.get("submit_revalidation_block"), 0) or 0,
+        )
+    if output_family == "dynamic_entry_price_resolver":
+        return max(
+            _safe_int(source_metrics.get("candidate_observations"), 0) or 0,
+            _safe_int(source_metrics.get("sim_candidate_observations"), 0) or 0,
+            _safe_int(source_metrics.get("real_candidate_observations"), 0) or 0,
             _safe_int(source_metrics.get("evaluated_candidates"), 0) or 0,
             _safe_int(source_metrics.get("performance_latency_block_events"), 0) or 0,
+        )
+    if output_family == "entry_price_execution_quality":
+        return max(
+            _safe_int(source_metrics.get("real_broker_events"), 0) or 0,
+            _safe_int(source_metrics.get("cancel_events"), 0) or 0,
+            _safe_int(source_metrics.get("fill_join_events"), 0) or 0,
         )
     if output_family in {"liquidity_gate_refined_candidate", "liquidity_pre_submit_guard_p1"}:
         return max(
@@ -5548,40 +6040,49 @@ def _calibration_state_for_family(
         ):
             return ("hold_sample", f"score{effective_range} 후보는 있으나 source/report sample floor가 부족해 cap 유지")
     if output_family == "pre_submit_price_guard":
-        recommended_action = str(source_metrics.get("recommended_action") or "")
-        recovery_count = _safe_int(source_metrics.get("would_recovery_canary_events"), 0) or 0
-        counterfactual_joined = _safe_int(source_metrics.get("counterfactual_joined_sample"), 0) or 0
-        if recommended_action in {"bounded_apply", "hold", "reject"}:
-            if recommended_action == "bounded_apply":
-                return (
-                    "hold",
-                    "latency submit recovery는 latency_classifier_runtime_profile가 소유한다. "
-                    "pre_submit_price_guard는 후행 가격품질 guard로 유지한다.",
-                )
-            if recovery_count > 0:
-                state = "hold_sample" if counterfactual_joined < 3 else "hold_no_edge"
-                return (
-                    state,
-                    "latency recovery 후보가 있으나 counterfactual EV/label gate 미충족으로 "
-                    "pre_submit_price_guard 완화가 아니라 latency classifier 후보 보류로 라우팅한다.",
-                )
-            return (
-                "hold_sample",
-                "latency_classifier runtime semantics 기준 후보가 없어 pre_submit_price_guard는 현행 유지한다.",
-            )
-        missed_rate = _safe_float(source_metrics.get("missed_winner_rate"), None)
-        avoided_rate = _safe_float(source_metrics.get("avoided_loser_rate"), None)
-        quote_pass_rate = _safe_float(source_metrics.get("quote_fresh_latency_pass_rate"), None)
+        return (
+            "hold",
+            "pre_submit_price_guard는 broker 제출 직전 hard safety/source-quality 감사 전용으로 유지하며 runtime apply 후보에서 제외한다.",
+        )
+    if output_family == "entry_price_execution_quality":
+        return (
+            "hold",
+            "entry_price_execution_quality는 real-only 제출/체결/취소/late-fill 감사 전용이며 runtime threshold apply 권한이 없다.",
+        )
+    if output_family == "dynamic_entry_price_resolver":
+        family_sample = family.get("sample") if isinstance(family.get("sample"), dict) else {}
+        candidate_metrics = _merged_entry_price_candidate_metrics(family_sample, source_metrics)
+        missing_by_book = _entry_price_missing_metrics(candidate_metrics)
         if sample_count < sample_floor:
             return (
                 "hold_sample",
-                f"latency guard miss source sample floor 미달({sample_count}/{sample_floor}); 현재 pre-submit guard 유지",
+                f"dynamic entry price resolver 후보 표본 미달({sample_count}/{sample_floor}); bid-1/bid-2/bid-3/best_bid/AI/reference/timeout 비교 유지",
             )
-        if quote_pass_rate is not None and quote_pass_rate < 30.0:
-            return ("freeze", "quote freshness 품질이 낮아 threshold 완화가 아니라 runtime/instrumentation 원인 분해 우선")
-        if missed_rate is not None and avoided_rate is not None and missed_rate > avoided_rate + 10.0:
-            return ("adjust_up", "latency_block missed-winner 우위가 있어 max_below_bid_bps bounded 상향 후보")
-        return ("hold", "latency guard miss EV 회복 우위가 충분하지 않아 현행 pre-submit guard 유지")
+        if missing_by_book:
+            return (
+                "hold_sample",
+                f"가격 후보별 fill/cancel/late-fill/EV 필수 지표 미완성({missing_by_book}); PREOPEN apply 보류",
+            )
+        if not bool(source_metrics.get("recommended_values_runtime_change_ready")):
+            return (
+                "hold_sample",
+                "dynamic entry price 후보 지표는 준비됐지만 유효한 bounded 추천값 또는 runtime env 변경값이 없어 PREOPEN apply 보류",
+            )
+        ev = _safe_float(source_metrics.get("source_quality_adjusted_ev_pct"), None)
+        if ev is None:
+            sim_ev = _safe_float((candidate_metrics.get("sim") or {}).get("source_quality_adjusted_ev_pct"), None)
+            real_ev = _safe_float((candidate_metrics.get("real") or {}).get("source_quality_adjusted_ev_pct"), None)
+            ev_values = [value for value in (sim_ev, real_ev) if value is not None]
+            ev = min(ev_values) if ev_values else None
+        if ev is not None and ev > 0:
+            return (
+                "adjust_up",
+                "dynamic entry price 후보 EV가 source-quality adjusted 기준 양수라 다음 PREOPEN bounded resolver 후보로 둔다.",
+            )
+        return (
+            "hold",
+            "가격 후보별 체결품질/EV 우위가 확인되지 않아 현행 resolver 값을 유지한다.",
+        )
     if output_family in {
         "liquidity_gate_refined_candidate",
         "overbought_gate_refined_candidate",
@@ -5868,6 +6369,37 @@ def _build_calibration_candidates(families: list[dict], report_source_context: d
                 recommended = dict(recommended)
                 recommended["enabled"] = True
                 source_metrics["entry_unlock_probe_ready"] = True
+        if output_family == "dynamic_entry_price_resolver":
+            family_sample = family.get("sample") if isinstance(family.get("sample"), dict) else {}
+            candidate_metrics = _merged_entry_price_candidate_metrics(family_sample, source_metrics)
+            source_ready = source_ready and _entry_price_candidate_metrics_ready(candidate_metrics)
+            if candidate_metrics:
+                source_metrics = dict(source_metrics)
+                source_metrics["candidate_metrics_ready"] = _entry_price_candidate_metrics_ready(candidate_metrics)
+                source_metrics["candidate_metrics_missing"] = _entry_price_missing_metrics(candidate_metrics)
+            for key in (
+                "candidate_quality",
+                "sim_submit_path_quality",
+                "unpriced_or_stale_warning_count",
+            ):
+                if key in family_sample and key not in source_metrics:
+                    source_metrics = dict(source_metrics)
+                    source_metrics[key] = family_sample.get(key)
+            source_recommended, source_recommended_audit = _entry_price_source_recommended_values(
+                source_metrics,
+                current,
+                metadata,
+            )
+            runtime_change_ready = _entry_price_recommendation_has_runtime_change(source_recommended, current, metadata)
+            source_metrics = dict(source_metrics)
+            source_metrics["recommended_values_runtime_change_ready"] = runtime_change_ready
+            source_metrics["recommended_values_valid"] = bool(source_recommended)
+            if _entry_price_recommendation_has_audit_entries(source_recommended_audit):
+                source_metrics = dict(source_metrics)
+                source_metrics["recommended_values_audit"] = source_recommended_audit
+            if source_recommended:
+                recommended = dict(recommended)
+                recommended.update(source_recommended)
         sample_ready = bool(family.get("apply_ready")) or source_ready
         calibration_state, calibration_reason = _calibration_state_for_family(
             output_family,

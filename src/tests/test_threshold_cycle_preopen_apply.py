@@ -281,6 +281,87 @@ def test_auto_bounded_live_writes_runtime_env_with_ai_guard_and_stage_priority(t
     assert "KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_MIN_BUY_PRESSURE=65" in env_text
 
 
+def test_auto_bounded_live_writes_dynamic_entry_price_resolver_env(tmp_path, monkeypatch):
+    report_dir = tmp_path / "report"
+    apply_dir = tmp_path / "apply_plans"
+    runtime_dir = tmp_path / "runtime_env"
+    ai_dir = report_dir / "threshold_cycle_ai_review"
+    report_dir.mkdir(parents=True)
+    ai_dir.mkdir(parents=True)
+    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "APPLY_PLAN_DIR", apply_dir)
+    monkeypatch.setattr(mod, "RUNTIME_ENV_DIR", runtime_dir)
+    monkeypatch.setattr(mod, "AI_REVIEW_DIR", ai_dir)
+
+    (report_dir / "threshold_cycle_2026-05-08.json").write_text(
+        json.dumps(
+            {
+                "date": "2026-05-08",
+                "apply_candidate_list": [],
+                "calibration_candidates": [
+                    {
+                        "family": "dynamic_entry_price_resolver",
+                        "stage": "entry",
+                        "priority": 9,
+                        "allowed_runtime_apply": True,
+                        "safety_revert_required": False,
+                        "calibration_state": "adjust_up",
+                        "target_env_keys": [
+                            "SCALPING_ENTRY_PRICE_RESOLVER_ENABLED",
+                            "SCALPING_ENTRY_PRICE_RESOLVER_MAX_BELOW_BID_BPS",
+                            "SCALPING_NORMAL_DEFENSIVE_TICKS",
+                            "SCALPING_CONDITIONAL_1TICK_REAL_ENABLED",
+                        ],
+                        "current_values": {
+                            "enabled": True,
+                            "max_below_bid_bps": 80,
+                            "normal_defensive_ticks": 3,
+                            "conditional_1tick_real_enabled": True,
+                        },
+                        "recommended_values": {
+                            "enabled": True,
+                            "max_below_bid_bps": 70,
+                            "normal_defensive_ticks": 2,
+                            "conditional_1tick_real_enabled": False,
+                        },
+                        "threshold_version": "dynamic_entry_price_resolver:test",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (ai_dir / "threshold_cycle_ai_review_2026-05-08_postclose.json").write_text(
+        json.dumps(
+            {
+                "ai_status": "parsed",
+                "items": [
+                    {
+                        "family": "dynamic_entry_price_resolver",
+                        "guard_accepted": True,
+                        "ai_anomaly_route": "threshold_candidate",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    manifest = mod.build_preopen_apply_manifest(
+        "2026-05-09",
+        source_date="2026-05-08",
+        apply_mode="auto_bounded_live",
+        auto_apply=True,
+    )
+
+    assert manifest["status"] == "auto_bounded_live_ready"
+    assert manifest["runtime_change"] is True
+    env = manifest["runtime_env_overrides"]
+    assert env["KORSTOCKSCAN_SCALPING_ENTRY_PRICE_RESOLVER_MAX_BELOW_BID_BPS"] == "70"
+    assert env["KORSTOCKSCAN_SCALPING_NORMAL_DEFENSIVE_TICKS"] == "2"
+    assert env["KORSTOCKSCAN_SCALPING_CONDITIONAL_1TICK_REAL_ENABLED"] == "false"
+
+
 def test_preopen_apply_consumes_lifecycle_bucket_auto_apply_without_human_artifact(tmp_path, monkeypatch):
     report_dir = tmp_path / "report"
     apply_dir = tmp_path / "apply_plans"
