@@ -593,6 +593,9 @@ def test_dynamic_entry_price_resolver_separates_sim_unpriced_stale_and_ai_candid
         "stale_context_or_quote": 1,
     }
     assert sim_metrics["fill_rate"] == 100.0
+    assert sim_metrics["forbidden_zero_price_observation_count"] == 0
+    assert sim_metrics["limit_fill_price_missing_but_assumed_present_count"] == 0
+    assert sim_metrics["real_execution_quality_sample_count"] == 0
     assert dynamic["unpriced_or_stale_warning_count"] == 2
     assert dynamic["sim_submit_path_quality"]["scalp_sim_buy_order_virtual_pending"] == {
         "sample_count": 2,
@@ -602,6 +605,9 @@ def test_dynamic_entry_price_resolver_separates_sim_unpriced_stale_and_ai_candid
         "excluded_from_fill_ev_count": 1,
         "actual_order_submitted_violation_count": 0,
         "broker_order_forbidden_violation_count": 0,
+        "canonical_sim_fill_price_defect_breakdown": {"priced_valid": 1},
+        "forbidden_zero_price_observation_count": 0,
+        "limit_fill_price_missing_but_assumed_present_count": 0,
         "classification": "sim_unpriced_stale_warning",
     }
     ai_quality = dynamic["candidate_quality"]["AI_candidate"]
@@ -3057,3 +3063,329 @@ def test_window_policy_audit_keeps_ready_rolling_daily_source_split_as_lineage()
     item = audit["items"][0]
     assert item["source_sample_split_status"] == "documented_daily_source_split"
     assert "lineage evidence" in item["source_sample_split_reason"]
+
+
+def test_classify_fill_price_defect_limit_missing_not_unpriced():
+    from src.engine import daily_threshold_cycle_report as target
+
+    fields = {
+        "assumed_fill_price": "10000",
+        "limit_fill_price": "0",
+        "submitted_order_price": "9990",
+    }
+    classification = target._classify_sim_fill_price_defect(fields, "scalp_sim_buy_order_assumed_filled")
+    assert classification == "limit_fill_price_missing_but_assumed_present"
+
+    canonical = target._canonical_sim_fill_price(fields)
+    assert canonical == 10000.0
+
+
+def test_classify_fill_price_defect_unpriced_no_canonical():
+    from src.engine import daily_threshold_cycle_report as target
+
+    fields = {
+        "submitted_order_price": "0",
+        "actual_order_submitted": True,
+        "broker_order_forbidden": False,
+    }
+    classification = target._classify_sim_fill_price_defect(fields, "scalp_sim_buy_order_virtual_pending")
+    assert classification == "unpriced_no_canonical"
+
+
+def test_classify_fill_price_defect_forbidden_zero_price():
+    from src.engine import daily_threshold_cycle_report as target
+
+    fields = {
+        "submitted_order_price": "0",
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+    }
+    classification = target._classify_sim_fill_price_defect(fields, "scalp_sim_buy_order_virtual_pending")
+    assert classification == "forbidden_zero_price_observation"
+
+
+def test_active_seed_matched_string_boolean_separation():
+    from src.engine import daily_threshold_cycle_report as target
+
+    events = [
+        {"stage": "scalp_sim_entry_armed", "fields": {"active_seed_matched": False, "ldm_hypothesis_matched": True, "lifecycle_bucket_match_status": "no_match"}},
+        {"stage": "scalp_sim_entry_armed", "fields": {"active_seed_matched": "false", "ldm_hypothesis_matched": True, "lifecycle_bucket_match_status": "no_match"}},
+        {"stage": "scalp_sim_entry_armed", "fields": {"active_seed_matched": "0", "ldm_hypothesis_matched": True, "lifecycle_bucket_match_status": "no_match"}},
+        {"stage": "scalp_sim_entry_armed", "fields": {"active_seed_matched": "no", "ldm_hypothesis_matched": True, "lifecycle_bucket_match_status": "no_match"}},
+        {"stage": "scalp_sim_entry_armed", "fields": {"ldm_hypothesis_matched": True, "lifecycle_bucket_match_status": "no_match"}},
+        {"stage": "scalp_sim_entry_armed", "fields": {"active_seed_matched": True, "lifecycle_bucket_match_status": "matched"}},
+        {"stage": "scalp_sim_entry_armed", "fields": {"active_seed_matched": "true", "lifecycle_bucket_match_status": "matched"}},
+    ]
+
+    result = target._sim_lifecycle_bucket_match_aggregation(events)
+
+    assert result["active_seed_matched_false_count"] == 4
+    assert result["active_seed_matched_none_count"] == 1
+    assert result["active_seed_matched_true_count"] == 2
+    assert result["hypothesis_matched_but_parent_bucket_no_match_count"] == 5
+    assert result["no_match_count"] == 5
+    assert result["natural_no_match_count"] == 5
+    assert result["matched_count"] == 2
+    assert result["matched_entry_child_bridge_count"] == 0
+    assert result["panic_scale_in_stage_excluded_count"] == 0
+    assert result["contract_missing_count"] == 0
+    assert result["active_seed_match_source_alias_used_count"] == 0
+
+
+def test_panic_scale_in_not_counted_in_lifecycle_match():
+    from src.engine import daily_threshold_cycle_report as target
+
+    events = [
+        {"stage": "scalp_sim_panic_scale_in_blocked", "fields": {"lifecycle_bucket_match_status": "no_match", "active_seed_matched": True}},
+        {"stage": "scalp_sim_panic_scale_in_blocked", "fields": {"lifecycle_bucket_match_status": "no_match", "active_seed_matched": False}},
+        {"stage": "scalp_sim_entry_armed", "fields": {"lifecycle_bucket_match_status": "no_match", "active_seed_matched": False}},
+    ]
+
+    result = target._sim_lifecycle_bucket_match_aggregation(events)
+
+    assert result["panic_scale_in_stage_excluded_count"] == 2
+    assert result["natural_no_match_count"] == 1
+    assert result["no_match_count"] == 3
+    assert result["hypothesis_matched_but_parent_bucket_no_match_count"] == 0
+
+
+def test_active_seed_alias_from_priority_field():
+    from src.engine import daily_threshold_cycle_report as target
+
+    events = [
+        {"stage": "scalp_sim_entry_armed", "fields": {"scalp_sim_active_priority_seed_matched": True, "lifecycle_bucket_match_status": "matched"}},
+        {"stage": "scalp_sim_entry_armed", "fields": {"scalp_sim_active_priority_seed_matched": False, "lifecycle_bucket_match_status": "no_match"}},
+        {"stage": "scalp_sim_entry_armed", "fields": {"scalp_sim_active_priority_seed_matched": "true", "lifecycle_bucket_match_status": "matched"}},
+        {"stage": "scalp_sim_entry_armed", "fields": {"scalp_sim_active_priority_seed_matched": "false", "lifecycle_bucket_match_status": "no_match"}},
+        {"stage": "scalp_sim_entry_armed", "fields": {"lifecycle_bucket_match_status": "no_match"}},
+    ]
+
+    result = target._sim_lifecycle_bucket_match_aggregation(events)
+
+    assert result["active_seed_matched_true_count"] == 2
+    assert result["active_seed_matched_false_count"] == 2
+    assert result["active_seed_matched_none_count"] == 1
+    assert result["active_seed_match_source_alias_used_count"] == 4
+    assert result["matched_count"] == 2
+    assert result["natural_no_match_count"] == 3
+
+
+def test_reclassify_entry_child_bridge_from_bucket_id():
+    from src.engine import daily_threshold_cycle_report as target
+
+    result = target._reclassify_match_status(
+        raw_match_status="no_match",
+        fields={
+            "lifecycle_bucket_match_status": "no_match",
+            "lifecycle_bucket_bucket_id": "entry:combo_entry_spot:score66-69:stale_low",
+            "lifecycle_bucket_source_bucket_id": "parent_bucket_abc123",
+            "lifecycle_bucket_entry_bucket_key": "score=66-69|source=buy_signal",
+        },
+        stage="scalp_sim_entry_armed",
+        active_seed_state="false",
+    )
+    assert result == "matched_entry_child_bridge"
+
+
+def test_reclassify_prefix_true_not_bridge_without_source():
+    from src.engine import daily_threshold_cycle_report as target
+
+    result = target._reclassify_match_status(
+        raw_match_status="no_match",
+        fields={
+            "lifecycle_bucket_match_status": "no_match",
+            "lifecycle_bucket_bucket_id": "entry:combo_entry_spot:score66-69:stale_low",
+        },
+        stage="scalp_sim_entry_armed",
+        active_seed_state="true",
+    )
+    assert result == "active_seed_prefix_matched_parent_missing"
+
+
+def test_reclassify_false_prefix_alone_natural_no_match():
+    from src.engine import daily_threshold_cycle_report as target
+
+    result = target._reclassify_match_status(
+        raw_match_status="no_match",
+        fields={
+            "lifecycle_bucket_match_status": "no_match",
+            "lifecycle_bucket_bucket_id": "entry:combo_entry_spot:score66-69:stale_low",
+        },
+        stage="scalp_sim_entry_armed",
+        active_seed_state="false",
+    )
+    assert result == "natural_no_match"
+
+
+def test_reclassify_diagnostic_stage_missing_not_instrumented():
+    from src.engine import daily_threshold_cycle_report as target
+
+    result = target._reclassify_match_status(
+        raw_match_status="missing",
+        fields={},
+        stage="scalp_sim_ai_holding_live_call",
+        active_seed_state="none",
+    )
+    assert result == "not_instrumented"
+
+
+def test_reclassify_lifecycle_stage_missing_contract_missing():
+    from src.engine import daily_threshold_cycle_report as target
+
+    result = target._reclassify_match_status(
+        raw_match_status="missing",
+        fields={},
+        stage="scalp_sim_entry_armed",
+        active_seed_state="none",
+    )
+    assert result == "contract_missing"
+
+
+def test_hypothesis_count_includes_prefix_matched_parent_missing():
+    from src.engine import daily_threshold_cycle_report as target
+
+    events = [
+        {"stage": "scalp_sim_entry_armed", "fields": {"lifecycle_bucket_match_status": "no_match", "active_seed_matched": True, "ldm_hypothesis_matched": True}},
+        {"stage": "scalp_sim_entry_armed", "fields": {"lifecycle_bucket_match_status": "no_match", "active_seed_matched": False, "ldm_hypothesis_matched": True}},
+        {"stage": "scalp_sim_entry_armed", "fields": {"lifecycle_bucket_match_status": "no_match", "active_seed_matched": False}},
+    ]
+
+    result = target._sim_lifecycle_bucket_match_aggregation(events)
+
+    assert result["active_seed_prefix_matched_parent_missing_count"] == 1
+    assert result["natural_no_match_count"] == 2
+    assert result["hypothesis_matched_but_parent_bucket_no_match_count"] == 2
+
+
+def test_not_instrumented_separated_from_contract_missing():
+    from src.engine import daily_threshold_cycle_report as target
+
+    events = [
+        {"stage": "scalp_sim_entry_armed", "fields": {}},
+        {"stage": "scalp_sim_entry_armed", "fields": {}},
+        {"stage": "scalp_sim_ai_holding_live_call", "fields": {}},
+        {"stage": "scalp_sim_ai_holding_deferred", "fields": {}},
+        {"stage": "scalp_sim_ai_holding_reuse", "fields": {}},
+    ]
+
+    result = target._sim_lifecycle_bucket_match_aggregation(events)
+
+    assert result["contract_missing_count"] == 2
+    assert result["not_instrumented_count"] == 3
+
+
+def test_duplicate_buy_signal_is_not_instrumented():
+    from src.engine import daily_threshold_cycle_report as target
+
+    result = target._reclassify_match_status(
+        raw_match_status="missing",
+        fields={},
+        stage="scalp_sim_duplicate_buy_signal",
+        active_seed_state="none",
+    )
+    assert result == "not_instrumented"
+
+
+def test_lifecycle_entry_armed_remains_contract_missing():
+    from src.engine import daily_threshold_cycle_report as target
+
+    result = target._reclassify_match_status(
+        raw_match_status="missing",
+        fields={},
+        stage="scalp_sim_entry_armed",
+        active_seed_state="none",
+    )
+    assert result == "contract_missing"
+
+
+def test_duplicate_not_in_lifecycle_eligible_stages():
+    from src.engine import daily_threshold_cycle_report as target
+
+    assert not target._is_lifecycle_match_eligible_stage("scalp_sim_duplicate_buy_signal")
+    assert target._is_lifecycle_match_eligible_stage("scalp_sim_entry_armed")
+    assert target._is_lifecycle_match_eligible_stage("scalp_sim_buy_order_assumed_filled")
+    assert target._is_lifecycle_match_eligible_stage("scalp_sim_holding_started")
+
+
+def test_producer_parent_catalog_missing_reason_flow():
+    from src.engine import daily_threshold_cycle_report as target
+
+    events = [
+        {"stage": "scalp_sim_entry_armed", "fields": {
+            "lifecycle_bucket_match_status": "no_match",
+            "lifecycle_bucket_match_reason": "parent_catalog_missing",
+            "lifecycle_bucket_bucket_id": "entry:combo_entry_spot:score66-69:stale_low",
+            "active_seed_matched": True,
+        }},
+        {"stage": "scalp_sim_entry_armed", "fields": {
+            "lifecycle_bucket_match_status": "no_match",
+            "lifecycle_bucket_bucket_id": "entry:combo_entry_spot:score60-65",
+            "active_seed_matched": False,
+        }},
+        {"stage": "scalp_sim_entry_armed", "fields": {
+            "lifecycle_bucket_match_status": "matched",
+            "lifecycle_bucket_bucket_id": "entry:combo_entry_spot:score60-65",
+            "lifecycle_bucket_source_bucket_id": "parent_bucket_abc123",
+            "active_seed_matched": True,
+        }},
+    ]
+
+    result = target._sim_lifecycle_bucket_match_aggregation(events)
+
+    assert result["active_seed_prefix_matched_parent_missing_count"] == 1
+    assert result["natural_no_match_count"] == 1
+    assert result["matched_count"] == 1
+    assert result["matched_entry_child_bridge_count"] == 0
+
+
+def test_parent_catalog_missing_blocks_bridge():
+    from src.engine import daily_threshold_cycle_report as target
+
+    result = target._reclassify_match_status(
+        raw_match_status="no_match",
+        fields={
+            "lifecycle_bucket_match_status": "no_match",
+            "lifecycle_bucket_match_reason": "parent_catalog_missing",
+            "lifecycle_bucket_bucket_id": "entry:combo_entry_spot:score66-69:stale_low",
+            "lifecycle_bucket_source_bucket_id": "parent_bucket_abc123",
+        },
+        stage="scalp_sim_entry_armed",
+        active_seed_state="false",
+    )
+    assert result != "matched_entry_child_bridge"
+    assert result == "natural_no_match"
+
+
+def test_parent_catalog_missing_none_also_blocks_bridge():
+    from src.engine import daily_threshold_cycle_report as target
+
+    result = target._reclassify_match_status(
+        raw_match_status="no_match",
+        fields={
+            "lifecycle_bucket_match_status": "no_match",
+            "lifecycle_bucket_match_reason": "parent_catalog_missing",
+            "lifecycle_bucket_bucket_id": "entry:combo_entry_spot:score66-69",
+            "lifecycle_bucket_source_bucket_id": "parent_bucket_xyz",
+        },
+        stage="scalp_sim_entry_armed",
+        active_seed_state="none",
+    )
+    assert result != "matched_entry_child_bridge"
+    assert result == "natural_no_match"
+
+
+def test_bridge_still_works_without_parent_catalog_missing():
+    from src.engine import daily_threshold_cycle_report as target
+
+    result = target._reclassify_match_status(
+        raw_match_status="no_match",
+        fields={
+            "lifecycle_bucket_match_status": "no_match",
+            "lifecycle_bucket_match_reason": "",
+            "lifecycle_bucket_bucket_id": "entry:combo_entry_spot:score66-69:stale_low",
+            "lifecycle_bucket_source_bucket_id": "parent_bucket_abc123",
+        },
+        stage="scalp_sim_entry_armed",
+        active_seed_state="false",
+    )
+    assert result == "matched_entry_child_bridge"

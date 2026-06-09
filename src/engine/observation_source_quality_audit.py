@@ -187,6 +187,28 @@ ORDERBOOK_MICRO_FIELDS = (
     "orderbook_micro_observer_healthy",
 )
 
+ADM_ENTRY_CONTRACT_FIELDS = (
+    "entry_adm_status",
+    "entry_adm_bucket_token",
+    "entry_adm_decision_alignment",
+    "entry_adm_bucket_joined_sample",
+)
+
+LIFECYCLE_BUCKET_CONTRACT_FIELDS = (
+    "lifecycle_bucket_match_status",
+    "ldm_hypothesis_matched",
+    "active_seed_matched",
+)
+
+SWING_MICRO_CONTRACT_FIELDS = (
+    "swing_micro_ws_quote_source",
+    "orderbook_micro_reason",
+    "orderbook_micro_ready",
+    "orderbook_micro_spread_ticks",
+    "orderbook_micro_ofi_norm",
+    "orderbook_micro_sample_quote_count",
+)
+
 PRE_AI_RISK_CONTEXT_FIELDS = (
     "metric_role",
     "decision_authority",

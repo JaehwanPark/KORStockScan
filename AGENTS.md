@@ -2,7 +2,7 @@ KORStockScan working rules:
 
 ## 1. Required References
 
-- Before starting work, read `docs/plan-korStockScanPerformanceOptimization.rebase.md` §1 through §8 and the two top summary sections of the current daily `docs/YYYY-MM-DD-stage2-todo-checklist.md`: the daily objective and the daily mandatory rules.
+- Before starting work, read `docs/plan-korStockScanPerformanceOptimization.rebase.md` §1 through §8 and the two top summary sections of the current daily `docs/checklists/YYYY-MM-DD-stage2-todo-checklist.md`: the daily objective and the daily mandatory rules.
 - Use `Plan Rebase` as the source of truth for tuning principles, decision axes, rollback guards, and active/open state. The daily checklist owns executable work items.
 - The clean tuning data decision baseline is `clean_tuning_baseline_date=2026-06-04` and `clean_tuning_baseline_ts_kst=2026-06-04T14:29:09+09:00`. Pre-baseline raw/report/analytics artifacts are archive/audit evidence only and must not be used for EV, rolling/MTD/cumulative tuning, live-auto promotion, runtime approval, pattern lab promotion, or real execution quality approval. The policy artifact is `data/source_quality/clean_baseline_policy.json`.
 - Read the current active/open state from `Plan Rebase` §7 through §8. Do not treat completed `[x]` items in older checklists as current OPEN owners. Completed items are evidence links. The current owner is the runtime owner named on the same row or the open item in the current checklist.

@@ -45,3 +45,23 @@ def move_price_by_ticks(price: int | float, ticks: int) -> int:
             previous = max(1, moved - 1)
             moved = clamp_price_to_tick(previous)
     return moved
+
+
+def move_price_down_by_bps(price: int | float, bps: int, *, floor_ticks: int = 1) -> int:
+    """Move price down by bps (1 bps = 0.01%), clamp to tick, enforce minimum tick floor.
+
+    Returns int price at least floor_ticks below the original price.
+    """
+
+    p = int(price)
+    tick = get_tick_size(p)
+    discount = max(1, p) * bps // 10000
+    target = max(tick, p - discount)
+    target_clamped = clamp_price_to_tick(target)
+
+    tick_below = move_price_by_ticks(p, -floor_ticks)
+    if target_clamped >= p:
+        return tick_below
+    if target_clamped > tick_below:
+        return max(tick_below, clamp_price_to_tick(target_clamped))
+    return target_clamped

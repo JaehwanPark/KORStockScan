@@ -3332,6 +3332,8 @@ def _scalp_simulator_event_summary(
     sim_events = [event for event in events or [] if _is_scalp_sim_event(event)]
     stage_counts = Counter(str(event.get("stage") or "-") for event in sim_events)
     completed_rows = sim_completed_rows if sim_completed_rows is not None else _extract_scalp_sim_completed_rows(events)
+    lifecycle_bucket_match = _sim_lifecycle_bucket_match_aggregation(events)
+    swing_micro_quality = _swing_micro_source_quality_breakdown(events)
     return {
         "enabled_default": True,
         "simulation_book": "scalp_ai_buy_all",
@@ -3374,6 +3376,8 @@ def _scalp_simulator_event_summary(
             target_date=target_date,
             completed_rows=completed_rows or [],
         ),
+        "lifecycle_bucket_match_aggregation": lifecycle_bucket_match,
+        "swing_micro_source_quality": swing_micro_quality,
     }
 
 
@@ -3444,7 +3448,202 @@ def _field_bool(value: Any) -> bool:
         return value
     if value is None:
         return False
-    return str(value).strip().lower() in {"1", "true", "yes", "y", "on"}
+    return str(value).strip().lower() in {"1", "true", "yes", "y", "on"    }
+
+
+def _sim_lifecycle_bucket_match_aggregation(events: list[dict]) -> dict:
+    sim_events = [event for event in events or [] if _is_scalp_sim_event(event)]
+
+    raw_match_status_counts: Counter[str] = Counter()
+    reclassified_status_counts: Counter[str] = Counter()
+    hypo_no_match = 0
+    active_seed_false_count = 0
+    active_seed_true_count = 0
+    active_seed_none_count = 0
+    active_seed_alias_used = 0
+    panic_excluded_count = 0
+    entry_child_bridged_count = 0
+    prefix_matched_parent_missing_count = 0
+    natural_no_match_count = 0
+    contract_missing_count = 0
+    not_instrumented_count = 0
+    bridge_breakdown: Counter[str] = Counter()
+
+    def _active_seed_tri_state(value: Any) -> str:
+        if value is None:
+            return "none"
+        if isinstance(value, bool):
+            if value:
+                return "true"
+            return "false"
+        text = str(value).strip().lower()
+        if text in {"true", "1", "yes"}:
+            return "true"
+        if text in {"false", "0", "no"}:
+            return "false"
+        if not text:
+            return "none"
+        return "none"
+
+    for event in sim_events:
+        fields = _event_fields(event)
+        stage = str(event.get("stage") or "")
+        raw_match_status = str(fields.get("lifecycle_bucket_match_status") or "missing").strip() or "missing"
+        raw_match_status_counts[raw_match_status] += 1
+
+        active_seed_val = fields.get("active_seed_matched")
+        if active_seed_val is None:
+            alias_val = fields.get("scalp_sim_active_priority_seed_matched")
+            if alias_val is not None:
+                active_seed_val = alias_val
+                active_seed_alias_used += 1
+
+        active_seed_state = _active_seed_tri_state(active_seed_val)
+        if active_seed_state == "none":
+            active_seed_none_count += 1
+        elif active_seed_state == "false":
+            active_seed_false_count += 1
+        elif active_seed_state == "true":
+            active_seed_true_count += 1
+
+        reclassified = _reclassify_match_status(
+            raw_match_status=raw_match_status,
+            fields=fields,
+            stage=stage,
+            active_seed_state=active_seed_state,
+        )
+        reclassified_status_counts[reclassified] += 1
+
+        if reclassified == "matched":
+            pass
+        elif reclassified == "matched_entry_child_bridge":
+            entry_child_bridged_count += 1
+            bucket_id = str(fields.get("lifecycle_bucket_bucket_id") or "").strip()
+            bridge_breakdown[bucket_id or "bridge_applied"] += 1
+        elif reclassified == "panic_scale_in_stage_excluded":
+            panic_excluded_count += 1
+        elif reclassified == "active_seed_prefix_matched_parent_missing":
+            prefix_matched_parent_missing_count += 1
+            if _field_bool(fields.get("ldm_hypothesis_matched")):
+                hypo_no_match += 1
+        elif reclassified == "natural_no_match":
+            natural_no_match_count += 1
+            if _field_bool(fields.get("ldm_hypothesis_matched")):
+                hypo_no_match += 1
+        elif reclassified == "contract_missing":
+            contract_missing_count += 1
+        elif reclassified == "not_instrumented":
+            not_instrumented_count += 1
+
+    return {
+        "lifecycle_bucket_match_status_counts": dict(raw_match_status_counts),
+        "lifecycle_bucket_reclassified_status_counts": dict(reclassified_status_counts),
+        "matched_count": reclassified_status_counts.get("matched", 0),
+        "matched_entry_child_bridge_count": entry_child_bridged_count,
+        "matched_entry_child_bridge_breakdown": dict(bridge_breakdown),
+        "no_match_count": raw_match_status_counts.get("no_match", 0),
+        "natural_no_match_count": natural_no_match_count,
+        "panic_scale_in_stage_excluded_count": panic_excluded_count,
+        "active_seed_prefix_matched_parent_missing_count": prefix_matched_parent_missing_count,
+        "contract_missing_count": contract_missing_count,
+        "not_instrumented_count": not_instrumented_count,
+        "not_instrumented_count_scope": "non-lifecycle-match-eligible diagnostic/observation stages where lifecycle fields are not required",
+        "policy_missing_count": reclassified_status_counts.get("policy_missing", 0),
+        "candidate_context_only_count": reclassified_status_counts.get("candidate_context_only", 0),
+        "missing_count": raw_match_status_counts.get("missing", 0),
+        "hypothesis_matched_but_parent_bucket_no_match_count": hypo_no_match,
+        "active_seed_matched_true_count": active_seed_true_count,
+        "active_seed_matched_false_count": active_seed_false_count,
+        "active_seed_matched_none_count": active_seed_none_count,
+        "active_seed_match_source_alias_used_count": active_seed_alias_used,
+        "active_seed_match_alias_fields": "scalp_sim_active_priority_seed_matched",
+        "active_seed_false_policy": "natural_no_match_candidate_taxonomy_handoff_diagnosis_target",
+        "active_seed_none_policy": "instrumentation_or_contract_missing_candidate_workorder_target",
+        "match_bridge_version": "entry_child_bridge_v1",
+        "derived_compatibility_backfill": True,
+        "raw_event_unchanged": True,
+        "metric_role": "lifecycle_bucket_contract_quality",
+        "decision_authority": "source_quality_only",
+        "runtime_effect": False,
+        "forbidden_uses": [
+            "threshold_mutation",
+            "order_guard_mutation",
+            "provider_change",
+            "bot_restart",
+            "broker_order_submit",
+            "active_seed_match_for_live_conversion",
+            "real_order_approval",
+            "real_execution_quality",
+            "intraday_mutation",
+        ],
+    }
+
+
+def _reclassify_match_status(
+    *,
+    raw_match_status: str,
+    fields: dict,
+    stage: str,
+    active_seed_state: str,
+) -> str:
+    if raw_match_status == "matched":
+        return "matched"
+    if raw_match_status in {"candidate_context_only", "policy_missing"}:
+        return raw_match_status
+
+    if stage == "scalp_sim_panic_scale_in_blocked":
+        return "panic_scale_in_stage_excluded"
+
+    if not raw_match_status or raw_match_status == "missing":
+        if _is_lifecycle_match_eligible_stage(stage):
+            return "contract_missing"
+        return "not_instrumented"
+
+    if raw_match_status == "no_match":
+        if active_seed_state == "true":
+            return "active_seed_prefix_matched_parent_missing"
+
+        match_reason = str(fields.get("lifecycle_bucket_match_reason") or "").strip()
+        bucket_id = str(fields.get("lifecycle_bucket_bucket_id") or "").strip()
+        source_bucket_id = str(fields.get("lifecycle_bucket_source_bucket_id") or "").strip()
+        if (
+            match_reason != "parent_catalog_missing"
+            and bucket_id
+            and bucket_id.startswith("entry:combo_entry_spot:")
+            and source_bucket_id
+        ):
+            return "matched_entry_child_bridge"
+
+        return "natural_no_match"
+
+    return "natural_no_match"
+
+
+_LIFECYCLE_MATCH_ELIGIBLE_STAGES: set[str] = {
+    "scalp_sim_entry_armed",
+    "scalp_sim_buy_order_virtual_pending",
+    "scalp_sim_buy_order_assumed_filled",
+    "scalp_sim_holding_started",
+    "scalp_sim_scale_in_order_assumed_filled",
+    "scalp_sim_scale_in_order_unfilled",
+    "scalp_sim_sell_order_assumed_filled",
+    "scalp_sim_entry_submit_revalidation_warning",
+    "scalp_sim_pre_submit_liquidity_guard_would_block",
+    "scalp_sim_pre_submit_liquidity_guard_would_pass",
+    "scalp_sim_pre_submit_overbought_guard_would_block",
+    "scalp_sim_pre_submit_overbought_guard_would_pass",
+    "scalp_sim_entry_unpriced",
+    "scalp_sim_overnight_decision",
+    "scalp_sim_overnight_sell_today",
+    "scalp_sim_overnight_hold",
+    "scalp_sim_overnight_carry_restored",
+    "scalp_sim_entry_ai_price_applied",
+    "scalp_sim_entry_ai_price_skip_order",
+}
+
+
+def _is_lifecycle_match_eligible_stage(stage: str) -> bool:
+    return stage in _LIFECYCLE_MATCH_ELIGIBLE_STAGES
 
 
 def _score_between(value: float | None, floor: float, target: float) -> float:
@@ -3961,6 +4160,21 @@ def _candidate_metric_pack(
         or str(_event_fields(event).get("entry_order_lifecycle") or "").lower() == "late_fill"
     ]
     excluded_reasons = Counter(_entry_price_exclusion_reason(event) for event in excluded)
+    defect_breakdown: Counter[str] = Counter()
+    forbidden_zero_price_count = 0
+    limit_missing_assumed_present_count = 0
+    real_execution_quality_count = 0
+    for event in priced_events:
+        fields = _event_fields(event)
+        stage = str(event.get("stage") or "")
+        classification = _classify_sim_fill_price_defect(fields, stage)
+        defect_breakdown[classification] += 1
+        if classification == "forbidden_zero_price_observation":
+            forbidden_zero_price_count += 1
+        if classification == "limit_fill_price_missing_but_assumed_present":
+            limit_missing_assumed_present_count += 1
+        if _field_bool(fields.get("actual_order_submitted")) or fields.get("broker_receipt_time"):
+            real_execution_quality_count += 1
     denominator = max(len(submitted), len(filled) + len(canceled), 1)
     stale_warning_reasons = {"stale_context_or_quote", "quote_stale_at_submit"}
     return {
@@ -3971,6 +4185,10 @@ def _candidate_metric_pack(
         ),
         "excluded_from_fill_ev_count": len(excluded),
         "excluded_from_fill_ev_reasons": dict(excluded_reasons),
+        "canonical_sim_fill_price_defect_breakdown": dict(defect_breakdown),
+        "forbidden_zero_price_observation_count": forbidden_zero_price_count,
+        "limit_fill_price_missing_but_assumed_present_count": limit_missing_assumed_present_count,
+        "real_execution_quality_sample_count": real_execution_quality_count,
         "fill_rate": round(len(filled) * 100.0 / denominator, 4) if fill_metrics_available else None,
         "full_fill_rate": round(len(full) * 100.0 / denominator, 4) if fill_metrics_available else None,
         "partial_fill_rate": round(len(partial) * 100.0 / denominator, 4) if fill_metrics_available else None,
@@ -4058,6 +4276,46 @@ def _entry_price_unpriced_or_stale_warning(event: dict) -> bool:
     )
 
 
+def _canonical_sim_fill_price(fields: dict) -> float | None:
+    assumed = _safe_float(fields.get("assumed_fill_price"), None)
+    if assumed is not None and assumed > 0:
+        return assumed
+    limit = _safe_float(fields.get("limit_fill_price"), None)
+    if limit is not None and limit > 0:
+        return limit
+    submitted = _safe_float(fields.get("submitted_order_price"), None)
+    if submitted is not None and submitted > 0:
+        return submitted
+    return None
+
+
+def _classify_sim_fill_price_defect(fields: dict, stage: str) -> str:
+    submitted_price = _safe_float(fields.get("submitted_order_price"), None)
+    assumed_price = _safe_float(fields.get("assumed_fill_price"), None)
+    limit_price = _safe_float(fields.get("limit_fill_price"), None)
+
+    canonical = _canonical_sim_fill_price(fields)
+    if canonical is not None and canonical > 0:
+        if limit_price is not None and limit_price <= 0 and assumed_price is not None and assumed_price > 0:
+            return "limit_fill_price_missing_but_assumed_present"
+        return "priced_valid"
+
+    if submitted_price is not None and submitted_price <= 0:
+        stale = str(fields.get("entry_submit_revalidation_warning") or "").strip() == "stale_context_or_quote"
+        quote_stale = _field_bool(fields.get("quote_stale_at_submit"))
+        if stale or quote_stale or stage == "scalp_sim_entry_unpriced":
+            return "sim_unpriced_stale_warning"
+
+        actual_order = _field_bool(fields.get("actual_order_submitted"))
+        broker_forbidden = _field_bool(fields.get("broker_order_forbidden"))
+        if not actual_order and broker_forbidden:
+            return "forbidden_zero_price_observation"
+
+        return "unpriced_no_canonical"
+
+    return "unpriced_no_canonical"
+
+
 def _entry_price_candidate_failure_reasons(event: dict) -> list[str]:
     fields = _event_fields(event)
     values = [
@@ -4125,6 +4383,17 @@ def _entry_price_sim_submit_path_quality(events: list[dict]) -> dict:
             if "broker_order_forbidden" in _event_fields(event)
             and not _field_bool(_event_fields(event).get("broker_order_forbidden"))
         ]
+        defect_breakdown: Counter[str] = Counter()
+        forbidden_zero_price = 0
+        limit_missing_assumed_present = 0
+        for event in priced:
+            fields = _event_fields(event)
+            classification = _classify_sim_fill_price_defect(fields, stage)
+            defect_breakdown[classification] += 1
+            if classification == "forbidden_zero_price_observation":
+                forbidden_zero_price += 1
+            if classification == "limit_fill_price_missing_but_assumed_present":
+                limit_missing_assumed_present += 1
         if stage_events:
             summary[stage] = {
                 "sample_count": len(stage_events),
@@ -4134,6 +4403,9 @@ def _entry_price_sim_submit_path_quality(events: list[dict]) -> dict:
                 "excluded_from_fill_ev_count": len(unpriced),
                 "actual_order_submitted_violation_count": len(actual_order_violations),
                 "broker_order_forbidden_violation_count": len(broker_forbidden_violations),
+                "canonical_sim_fill_price_defect_breakdown": dict(defect_breakdown),
+                "forbidden_zero_price_observation_count": forbidden_zero_price,
+                "limit_fill_price_missing_but_assumed_present_count": limit_missing_assumed_present,
                 "classification": "sim_unpriced_stale_warning" if unpriced else "sim_priced_observation",
             }
     return summary
@@ -4377,6 +4649,73 @@ def _build_entry_filter_refined_candidate_family(events: list[dict], stage: str,
         },
         "apply_mode": "report_only_calibration",
         "notes": notes,
+    }
+
+
+def _swing_micro_source_quality_breakdown(events: list[dict]) -> dict:
+    micro_events = [
+        event
+        for event in events
+        if _event_fields(event).get("orderbook_micro_state") is not None
+        or _event_fields(event).get("swing_micro_ws_quote_source") is not None
+        or _event_fields(event).get("orderbook_micro_reason") is not None
+    ]
+    provenance_gap_count = 0
+    insufficient_samples_count = 0
+    wide_spread_count = 0
+    ofi_outlier_count = 0
+    ready_count = 0
+    missing_ws_quote_count = 0
+    readiness_breakdown: Counter[str] = Counter()
+
+    for event in micro_events:
+        fields = _event_fields(event)
+        ws_quote = str(fields.get("swing_micro_ws_quote_source") or "").strip()
+        micro_reason = str(fields.get("orderbook_micro_reason") or "").strip()
+        micro_ready = _field_bool(fields.get("orderbook_micro_ready"))
+        spread_ticks = _safe_float(fields.get("orderbook_micro_spread_ticks"), None)
+        ofi_norm = _safe_float(fields.get("orderbook_micro_ofi_norm"), None)
+        sample_quote_count = _safe_int(fields.get("orderbook_micro_sample_quote_count"), None)
+
+        if ws_quote == "missing":
+            missing_ws_quote_count += 1
+            provenance_gap_count += 1
+        if micro_reason == "insufficient_samples":
+            insufficient_samples_count += 1
+            readiness_breakdown["insufficient_samples"] += 1
+        if sample_quote_count is not None and sample_quote_count <= 0:
+            readiness_breakdown["sample_quote_count_zero"] += 1
+        if spread_ticks is not None and spread_ticks > 10:
+            wide_spread_count += 1
+        if ofi_norm is not None and abs(ofi_norm) > 10:
+            ofi_outlier_count += 1
+        if micro_ready:
+            ready_count += 1
+            readiness_breakdown["ready"] += 1
+        if micro_reason == "ready" and ws_quote == "missing":
+            provenance_gap_count += 0
+
+    return {
+        "micro_event_count": len(micro_events),
+        "ready_count": ready_count,
+        "provenance_gap_count": provenance_gap_count,
+        "missing_ws_quote_source_count": missing_ws_quote_count,
+        "insufficient_samples_count": insufficient_samples_count,
+        "wide_spread_count": wide_spread_count,
+        "ofi_outlier_count": ofi_outlier_count,
+        "readiness_breakdown": dict(readiness_breakdown),
+        "wide_spread_policy": "source_quality_adjusted_ev_pct_discount_candidate_not_hard_block",
+        "ofi_outlier_policy": "source_quality_adjusted_ev_pct_discount_candidate_not_hard_block",
+        "forbidden_uses": [
+            "real_order_enable",
+            "threshold_mutation",
+            "provider_route_change",
+            "bot_restart",
+            "hard_block_for_entry_submit",
+        ],
+        "metric_role": "source_quality_gate",
+        "decision_authority": "source_quality_only",
+        "runtime_effect": False,
     }
 
 

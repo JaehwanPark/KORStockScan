@@ -4197,3 +4197,173 @@ def test_build_code_improvement_workorder_consumes_lifecycle_entry_bucket_workor
     assert report["summary"]["lifecycle_scale_in_bucket_source_order_count"] == 1
     assert report["summary"]["lifecycle_overnight_bucket_source_order_count"] == 1
     assert report["source"]["lifecycle_decision_matrix"] == str(ldm_path)
+
+
+def test_sim_fill_canonical_price_gap_fires_only_for_unpriced_no_canonical():
+    family_reports = [
+        {
+            "family": "dynamic_entry_price_resolver",
+            "sim_submit_path_quality": {
+                "scalp_sim_buy_order_virtual_pending": {
+                    "priced_sample_count": 3,
+                    "canonical_sim_fill_price_defect_breakdown": {
+                        "priced_valid": 1,
+                        "limit_fill_price_missing_but_assumed_present": 2,
+                        "unpriced_no_canonical": 0,
+                    },
+                },
+            },
+        },
+    ]
+    ev_report = {
+        "calibration": {"scalp_simulator": {}},
+        "family_reports": family_reports,
+    }
+    orders = mod._sim_fill_and_match_report_contract_orders(ev_report)
+    gap_ids = [o["order_id"] for o in orders]
+    assert "order_sim_fill_canonical_price_contract_gap" not in gap_ids
+
+
+def test_sim_fill_canonical_price_gap_fires_for_unpriced_no_canonical_present():
+    family_reports = [
+        {
+            "family": "dynamic_entry_price_resolver",
+            "sim_submit_path_quality": {
+                "scalp_sim_buy_order_virtual_pending": {
+                    "priced_sample_count": 3,
+                    "canonical_sim_fill_price_defect_breakdown": {
+                        "priced_valid": 1,
+                        "limit_fill_price_missing_but_assumed_present": 1,
+                        "unpriced_no_canonical": 1,
+                    },
+                },
+            },
+        },
+    ]
+    ev_report = {
+        "calibration": {"scalp_simulator": {}},
+        "family_reports": family_reports,
+    }
+    orders = mod._sim_fill_and_match_report_contract_orders(ev_report)
+    gap_ids = [o["order_id"] for o in orders]
+    assert "order_sim_fill_canonical_price_contract_gap" in gap_ids
+
+
+def test_contract_missing_threshold_creates_workorder():
+    ev_report = {
+        "calibration": {
+            "scalp_simulator": {
+                "lifecycle_bucket_match_aggregation": {
+                    "contract_missing_count": 5,
+                    "active_seed_prefix_matched_parent_missing_count": 0,
+                    "active_seed_matched_none_count": 5,
+                    "natural_no_match_count": 10,
+                    "panic_scale_in_stage_excluded_count": 3,
+                    "hypothesis_matched_but_parent_bucket_no_match_count": 0,
+                },
+                "swing_micro_source_quality": {
+                    "provenance_gap_count": 0,
+                    "missing_ws_quote_source_count": 0,
+                    "ready_count": 0,
+                },
+            },
+        },
+        "family_reports": [],
+    }
+    orders = mod._sim_fill_and_match_report_contract_orders(ev_report)
+    gap_ids = [o["order_id"] for o in orders]
+    assert "order_active_seed_or_ldm_match_missing_contract_gap" in gap_ids
+
+
+def test_contract_missing_below_threshold_no_workorder():
+    ev_report = {
+        "calibration": {
+            "scalp_simulator": {
+                "lifecycle_bucket_match_aggregation": {
+                    "contract_missing_count": 1,
+                    "active_seed_prefix_matched_parent_missing_count": 1,
+                    "active_seed_matched_none_count": 1,
+                    "natural_no_match_count": 2,
+                    "panic_scale_in_stage_excluded_count": 0,
+                    "hypothesis_matched_but_parent_bucket_no_match_count": 0,
+                },
+                "swing_micro_source_quality": {
+                    "provenance_gap_count": 0,
+                    "missing_ws_quote_source_count": 0,
+                    "ready_count": 0,
+                },
+            },
+        },
+        "family_reports": [],
+    }
+    orders = mod._sim_fill_and_match_report_contract_orders(ev_report)
+    gap_ids = [o["order_id"] for o in orders]
+    assert "order_active_seed_or_ldm_match_missing_contract_gap" not in gap_ids
+
+
+def test_prefix_parent_missing_creates_workorder():
+    ev_report = {
+        "calibration": {
+            "scalp_simulator": {
+                "lifecycle_bucket_match_aggregation": {
+                    "contract_missing_count": 0,
+                    "active_seed_prefix_matched_parent_missing_count": 5,
+                    "active_seed_matched_none_count": 1,
+                    "natural_no_match_count": 0,
+                    "panic_scale_in_stage_excluded_count": 0,
+                    "hypothesis_matched_but_parent_bucket_no_match_count": 0,
+                },
+                "swing_micro_source_quality": {
+                    "provenance_gap_count": 0,
+                    "missing_ws_quote_source_count": 0,
+                    "ready_count": 0,
+                },
+            },
+        },
+        "family_reports": [],
+    }
+    orders = mod._sim_fill_and_match_report_contract_orders(ev_report)
+    gap_ids = [o["order_id"] for o in orders]
+    assert "order_active_seed_or_ldm_match_missing_contract_gap" in gap_ids
+
+
+def test_natural_no_match_not_workorder_trigger():
+    ev_report = {
+        "calibration": {
+            "scalp_simulator": {
+                "lifecycle_bucket_match_aggregation": {
+                    "contract_missing_count": 0,
+                    "active_seed_prefix_matched_parent_missing_count": 1,
+                    "active_seed_matched_none_count": 0,
+                    "natural_no_match_count": 20,
+                    "panic_scale_in_stage_excluded_count": 5,
+                    "hypothesis_matched_but_parent_bucket_no_match_count": 3,
+                },
+                "swing_micro_source_quality": {
+                    "provenance_gap_count": 0,
+                    "missing_ws_quote_source_count": 0,
+                    "ready_count": 0,
+                },
+            },
+        },
+        "family_reports": [],
+    }
+    orders = mod._sim_fill_and_match_report_contract_orders(ev_report)
+    gap_ids = [o["order_id"] for o in orders]
+    assert "order_active_seed_or_ldm_match_missing_contract_gap" not in gap_ids
+
+
+def test_source_quality_contract_gap_creates_workorder():
+    sq_report = {"status": "fail"}
+    ev_report = {
+        "calibration": {
+            "scalp_simulator": {
+                "lifecycle_bucket_match_aggregation": {},
+                "swing_micro_source_quality": {},
+            },
+        },
+        "family_reports": [],
+    }
+    orders = mod._sim_fill_and_match_report_contract_orders(ev_report, sq_report)
+    gap_ids = [o["order_id"] for o in orders]
+    assert "order_source_quality_report_contract_status_gap" in gap_ids

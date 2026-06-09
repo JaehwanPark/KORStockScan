@@ -702,6 +702,8 @@ def _scalp_sim_bucket_policy_fields(source: dict | None) -> dict:
         row = rows_by_bucket.get(bucket_id)
     if not isinstance(row, dict):
         base["lifecycle_bucket_match_status"] = "no_match" if (source_bucket_id or bucket_id) else "candidate_context_only"
+        if base["lifecycle_bucket_match_status"] == "no_match":
+            base["lifecycle_bucket_match_reason"] = "parent_catalog_missing"
         if source_bucket_id:
             base["lifecycle_bucket_source_bucket_id"] = source_bucket_id
         if bucket_id:
@@ -915,6 +917,8 @@ def _attach_scalp_sim_bucket_identity(
         )
     else:
         set_fields["lifecycle_bucket_bucket_id"] = str(identity.get("lifecycle_bucket_entry_bucket_id") or "")
+        set_fields["lifecycle_bucket_match_status"] = "no_match"
+        set_fields["lifecycle_bucket_match_reason"] = "parent_catalog_missing"
     _mutate_stock_state(stock, set_fields=set_fields)
     return _scalp_sim_bucket_policy_fields(stock)
 

@@ -280,6 +280,9 @@ class TradingConfig:
     SCALPING_PRE_SUBMIT_PRICE_GUARD_ENABLED: bool = True  # submitted 전 비정상 저가 지정가 차단
     SCALPING_PRE_SUBMIT_MAX_BELOW_BID_BPS: int = 80  # best_bid 대비 허용 하향 괴리(bp)
     SCALPING_NORMAL_DEFENSIVE_TICKS: int = 1  # 일반 SCALPING 실주문 기본 방어 제출가 tick offset
+    SCALPING_NORMAL_DEFENSIVE_BPS: int = 50  # percent_bps 모드 일반 방어 제출가 bp (0.5%)
+    SCALPING_CONDITIONAL_STRONG_DEFENSIVE_BPS: int = 20  # percent_bps 모드 강세 조건 방어 제출가 bp (0.2%)
+    SCALPING_ENTRY_PRICE_DEFENSE_MODE: str = "tick"  # tick | percent_bps
     SCALPING_CONDITIONAL_1TICK_REAL_ENABLED: bool = True  # real SCALPING 강한 micro 조건에서 1틱 제출 허용
     SCALPING_CONDITIONAL_1TICK_MIN_BUY_RATIO: float = 60.0  # 1틱 허용 최소 매수 체결비율(%)
     SCALPING_CONDITIONAL_1TICK_MIN_OFI_NORM: float = 0.45  # 1틱 허용 최소 normalized OFI
@@ -1114,6 +1117,9 @@ def _build_trading_rules() -> TradingConfig:
     env_pre_submit_price_guard_enabled = _env_bool("KORSTOCKSCAN_SCALPING_PRE_SUBMIT_PRICE_GUARD_ENABLED")
     env_pre_submit_max_below_bid_bps = _env_int("KORSTOCKSCAN_SCALPING_PRE_SUBMIT_MAX_BELOW_BID_BPS")
     env_scalping_normal_defensive_ticks = _env_int("KORSTOCKSCAN_SCALPING_NORMAL_DEFENSIVE_TICKS")
+    env_scalping_normal_defensive_bps = _env_int("KORSTOCKSCAN_SCALPING_NORMAL_DEFENSIVE_BPS")
+    env_scalping_conditional_strong_defensive_bps = _env_int("KORSTOCKSCAN_SCALPING_CONDITIONAL_STRONG_DEFENSIVE_BPS")
+    env_scalping_entry_price_defense_mode = _env_str("KORSTOCKSCAN_SCALPING_ENTRY_PRICE_DEFENSE_MODE")
     env_conditional_1tick_real_enabled = _env_bool("KORSTOCKSCAN_SCALPING_CONDITIONAL_1TICK_REAL_ENABLED")
     env_conditional_1tick_min_buy_ratio = _env_float("KORSTOCKSCAN_SCALPING_CONDITIONAL_1TICK_MIN_BUY_RATIO")
     env_conditional_1tick_min_ofi_norm = _env_float("KORSTOCKSCAN_SCALPING_CONDITIONAL_1TICK_MIN_OFI_NORM")
@@ -1324,6 +1330,15 @@ def _build_trading_rules() -> TradingConfig:
             SCALPING_NORMAL_DEFENSIVE_TICKS=env_scalping_normal_defensive_ticks
             if env_scalping_normal_defensive_ticks is not None
             else config.SCALPING_NORMAL_DEFENSIVE_TICKS,
+            SCALPING_NORMAL_DEFENSIVE_BPS=env_scalping_normal_defensive_bps
+            if env_scalping_normal_defensive_bps is not None
+            else config.SCALPING_NORMAL_DEFENSIVE_BPS,
+            SCALPING_CONDITIONAL_STRONG_DEFENSIVE_BPS=env_scalping_conditional_strong_defensive_bps
+            if env_scalping_conditional_strong_defensive_bps is not None
+            else config.SCALPING_CONDITIONAL_STRONG_DEFENSIVE_BPS,
+            SCALPING_ENTRY_PRICE_DEFENSE_MODE=env_scalping_entry_price_defense_mode
+            if env_scalping_entry_price_defense_mode is not None
+            else config.SCALPING_ENTRY_PRICE_DEFENSE_MODE,
             SCALPING_CONDITIONAL_1TICK_REAL_ENABLED=env_conditional_1tick_real_enabled
             if env_conditional_1tick_real_enabled is not None
             else config.SCALPING_CONDITIONAL_1TICK_REAL_ENABLED,

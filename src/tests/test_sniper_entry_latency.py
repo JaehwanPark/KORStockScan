@@ -1445,3 +1445,129 @@ def test_latency_danger_reason_helper_uses_thresholds(monkeypatch):
         "ws_jitter_too_high",
         "spread_too_wide",
     ]
+
+
+def test_percent_bps_mode_normal_defensive_005_pct(monkeypatch):
+    monkeypatch.setattr(entry_latency_module, "_defense_mode_is_percent_bps", lambda: True)
+    monkeypatch.setattr(entry_latency_module, "_normal_defensive_bps", lambda: 50)
+    monkeypatch.setattr(entry_latency_module, "_conditional_strong_defensive_bps", lambda: 20)
+
+    entry_latency_module.ORDERBOOK_STABILITY_OBSERVER.reset()
+    entry_latency_module.ORDERBOOK_STABILITY_OBSERVER.record_quote(
+        "005930_bps1", best_bid=10_000, best_ask=10_010, ts=time.time(),
+    )
+    result = evaluate_live_buy_entry(
+        stock={"name": "삼성전자", "position_tag": "SCANNER"},
+        code="005930_bps1",
+        ws_data={
+            "curr": 10_000,
+            "last_ws_update_ts": datetime.now(UTC).timestamp(),
+            "orderbook": {
+                "asks": [{"price": 10_010, "volume": 100}],
+                "bids": [{"price": 10_000, "volume": 100}],
+            },
+        },
+        strategy_id="SCALPING",
+        planned_qty=1,
+        signal_price=10_000,
+        signal_strength=0.9,
+    )
+
+    assert result["allowed"] is True
+    assert result["entry_price_defense_mode"] == "percent_bps"
+    assert result["entry_price_defensive_bps"] == 50
+    assert result["order_price"] <= 9950
+    assert result["order_price"] >= 9940
+
+
+def test_percent_bps_mode_strong_defensive_002_pct(monkeypatch):
+    monkeypatch.setattr(entry_latency_module, "_defense_mode_is_percent_bps", lambda: True)
+    monkeypatch.setattr(entry_latency_module, "_normal_defensive_bps", lambda: 50)
+    monkeypatch.setattr(entry_latency_module, "_conditional_strong_defensive_bps", lambda: 20)
+    monkeypatch.setattr(entry_latency_module, "_conditional_real_1tick_enabled", lambda s: True)
+
+    entry_latency_module.ORDERBOOK_STABILITY_OBSERVER.reset()
+    entry_latency_module.ORDERBOOK_STABILITY_OBSERVER.record_quote(
+        "005930_bps2", best_bid=10_000, best_ask=10_010, ts=time.time(),
+    )
+    result = evaluate_live_buy_entry(
+        stock={"name": "삼성전자", "position_tag": "SCANNER"},
+        code="005930_bps2",
+        ws_data={
+            "curr": 10_000,
+            "last_ws_update_ts": datetime.now(UTC).timestamp(),
+            "orderbook": {
+                "asks": [{"price": 10_010, "volume": 100}],
+                "bids": [{"price": 10_000, "volume": 5000}],
+            },
+            "volume_data_tick2": {"buy": 150, "sell": 50},
+        },
+        strategy_id="SCALPING",
+        planned_qty=1,
+        signal_price=10_000,
+        signal_strength=0.9,
+    )
+
+    assert result["allowed"] is True
+    assert result["entry_price_defense_mode"] == "percent_bps"
+    assert result["entry_price_defensive_bps"] == 20
+    assert result["conditional_1tick_real_override_applied"] is True
+    assert result["conditional_1tick_real_override_reason"] == "spread_1tick_strong_buy_pressure_percent_bps"
+    assert result["order_price"] <= 9980
+
+
+def test_percent_bps_mode_non_scalping_stays_tick(monkeypatch):
+    monkeypatch.setattr(entry_latency_module, "_defense_mode_is_percent_bps", lambda: True)
+
+    entry_latency_module.ORDERBOOK_STABILITY_OBSERVER.reset()
+    entry_latency_module.ORDERBOOK_STABILITY_OBSERVER.record_quote(
+        "005930_swing1", best_bid=10_000, best_ask=10_010, ts=time.time(),
+    )
+    result = evaluate_live_buy_entry(
+        stock={"name": "삼성전자", "position_tag": "SCANNER"},
+        code="005930_swing1",
+        ws_data={
+            "curr": 10_000,
+            "last_ws_update_ts": datetime.now(UTC).timestamp(),
+            "orderbook": {
+                "asks": [{"price": 10_010, "volume": 100}],
+                "bids": [{"price": 10_000, "volume": 100}],
+            },
+        },
+        strategy_id="SWING",
+        planned_qty=1,
+        signal_price=10_000,
+        signal_strength=0.9,
+    )
+
+    assert result["allowed"] is True
+    assert result.get("entry_price_defense_mode") == "tick"
+    assert result["entry_price_defensive_ticks"] == 1
+
+
+def test_tick_mode_default_unchanged():
+    entry_latency_module.ORDERBOOK_STABILITY_OBSERVER.reset()
+    entry_latency_module.ORDERBOOK_STABILITY_OBSERVER.record_quote(
+        "005930_tick", best_bid=10_000, best_ask=10_010, ts=time.time(),
+    )
+    result = evaluate_live_buy_entry(
+        stock={"name": "삼성전자", "position_tag": "SCANNER"},
+        code="005930_tick",
+        ws_data={
+            "curr": 10_000,
+            "last_ws_update_ts": datetime.now(UTC).timestamp(),
+            "orderbook": {
+                "asks": [{"price": 10_010, "volume": 100}],
+                "bids": [{"price": 10_000, "volume": 100}],
+            },
+        },
+        strategy_id="SCALPING",
+        planned_qty=1,
+        signal_price=10_000,
+        signal_strength=0.9,
+    )
+
+    assert result["allowed"] is True
+    assert result["entry_price_defense_mode"] == "tick"
+    assert result["entry_price_defensive_ticks"] == 1
+    assert result["order_price"] == 9990

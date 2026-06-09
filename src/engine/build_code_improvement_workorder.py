@@ -2881,6 +2881,194 @@ def _pipeline_event_verbosity_followup_orders(report: dict[str, Any]) -> list[di
     return []
 
 
+_SIM_FILL_CONTRACT_GAP_ORDER_METRIC_THRESHOLD = 3
+_LDM_MATCH_MISSING_ORDER_THRESHOLD = 5
+_ACTIVE_SEED_NONE_ORDER_THRESHOLD = 3
+
+
+def _sim_fill_and_match_report_contract_orders(ev_report: dict[str, Any], source_quality_report: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    orders: list[dict[str, Any]] = []
+    calibration = ev_report.get("calibration") if isinstance(ev_report.get("calibration"), dict) else {}
+    scalp_simulator = calibration.get("scalp_simulator") if isinstance(calibration.get("scalp_simulator"), dict) else {}
+    lifecycle_match = (
+        scalp_simulator.get("lifecycle_bucket_match_aggregation")
+        if isinstance(scalp_simulator.get("lifecycle_bucket_match_aggregation"), dict)
+        else {}
+    )
+    swing_micro = (
+        scalp_simulator.get("swing_micro_source_quality")
+        if isinstance(scalp_simulator.get("swing_micro_source_quality"), dict)
+        else {}
+    )
+
+    sim_quality = {}
+    family_reports = ev_report.get("family_reports") if isinstance(ev_report.get("family_reports"), list) else []
+    for family in family_reports:
+        if not isinstance(family, dict):
+            continue
+        if str(family.get("family") or "") == "dynamic_entry_price_resolver":
+            sim_quality = family.get("sim_submit_path_quality") if isinstance(family.get("sim_submit_path_quality"), dict) else {}
+            break
+
+    has_canonical_fill_price_gap = False
+    unpriced_no_canonical_total = 0
+    if sim_quality:
+        for stage, data in sim_quality.items():
+            if not isinstance(data, dict):
+                continue
+            defect = data.get("canonical_sim_fill_price_defect_breakdown") if isinstance(data.get("canonical_sim_fill_price_defect_breakdown"), dict) else {}
+            unpriced_no_canonical_total += _safe_int(defect.get("unpriced_no_canonical"), 0)
+    has_canonical_fill_price_gap = unpriced_no_canonical_total > 0
+
+    active_seed_none = _safe_int(lifecycle_match.get("active_seed_matched_none_count"), 0)
+    contract_missing = _safe_int(lifecycle_match.get("contract_missing_count"), 0)
+    not_instrumented = _safe_int(lifecycle_match.get("not_instrumented_count"), 0)
+    prefix_parent_missing = _safe_int(lifecycle_match.get("active_seed_prefix_matched_parent_missing_count"), 0)
+    natural_no_match = _safe_int(lifecycle_match.get("natural_no_match_count"), 0)
+    hypothesis_no_match = _safe_int(lifecycle_match.get("hypothesis_matched_but_parent_bucket_no_match_count"), 0)
+    panic_excluded = _safe_int(lifecycle_match.get("panic_scale_in_stage_excluded_count"), 0)
+    provenance_gap = _safe_int(swing_micro.get("provenance_gap_count"), 0)
+    missing_ws_quote = _safe_int(swing_micro.get("missing_ws_quote_source_count"), 0)
+
+    source_quality_status = str((source_quality_report or {}).get("status") or "").strip()
+    source_quality_contract_gap = source_quality_status in {"fail", "missing", "incomplete"}
+
+    base = {
+        "source_report_type": "threshold_cycle_ev_report",
+        "lifecycle_stage": "entry",
+        "target_subsystem": "daily_threshold_cycle_report",
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "expected_ev_effect": "Keep fill/EV denominator clean and ADM/LDM/sim matching contracts accurate without affecting real order authority.",
+        "forbidden_uses": [
+            "runtime_threshold_apply",
+            "order_submit",
+            "provider_route_change",
+            "bot_restart",
+            "cap_release",
+        ],
+    }
+
+    if has_canonical_fill_price_gap:
+        orders.append({
+            **base,
+            "order_id": "order_sim_fill_canonical_price_contract_gap",
+            "title": "Sim fill canonical price contract gap",
+            "priority": 1,
+            "route": "source_quality_gap",
+            "mapped_family": "dynamic_entry_price_resolver",
+            "threshold_family": "dynamic_entry_price_resolver",
+            "improvement_type": "sim_fill_canonical_price_contract_gap",
+            "confidence": "postclose_threshold_ev_source",
+            "intent": "Priced sim fill rows must produce a canonical_sim_fill_price. Fix the producer or report contract so no priced row has unpriced_no_canonical classification.",
+            "evidence": [
+                f"unpriced_no_canonical_total={unpriced_no_canonical_total}",
+                f"has_canonical_fill_price_gap={has_canonical_fill_price_gap}",
+            ],
+            "next_postclose_metric": "canonical_sim_fill_price_defect_breakdown.unpriced_no_canonical=0 for all priced stages",
+            "files_likely_touched": [
+                "src/engine/daily_threshold_cycle_report.py",
+                "src/engine/sniper_state_handlers.py",
+                "docs/report-based-automation-traceability.md",
+            ],
+            "acceptance_tests": [
+                "PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_daily_threshold_cycle_report.py",
+            ],
+        })
+
+    if contract_missing >= _LDM_MATCH_MISSING_ORDER_THRESHOLD or prefix_parent_missing >= _LDM_MATCH_MISSING_ORDER_THRESHOLD:
+        orders.append({
+            **base,
+            "order_id": "order_active_seed_or_ldm_match_missing_contract_gap",
+            "title": "Contract missing or active seed parent bridge missing above threshold",
+            "priority": 1,
+            "route": "source_quality_gap",
+            "mapped_family": "lifecycle_decision_matrix_runtime",
+            "threshold_family": "lifecycle_decision_matrix_runtime",
+            "improvement_type": "active_seed_ldm_match_contract_gap",
+            "confidence": "postclose_threshold_ev_source",
+            "intent": "contract_missing indicates required instrumentation gap; prefix_matched_parent_missing indicates active seed prefix found but parent lifecycle-flow approved row not closed. Both must be diagnosed.",
+            "evidence": [
+                f"contract_missing_count={contract_missing} (lifecycle-eligible stages only)",
+                f"not_instrumented_count={not_instrumented} (excluded: diagnostic/observation stages without lifecycle contract requirement)",
+                f"active_seed_prefix_matched_parent_missing_count={prefix_parent_missing}",
+                f"active_seed_matched_none_count={active_seed_none}",
+                f"natural_no_match_count={natural_no_match} (excluded from workorder trigger)",
+                f"panic_scale_in_stage_excluded_count={panic_excluded} (excluded from workorder trigger)",
+                f"hypothesis_matched_but_parent_bucket_no_match_count={hypothesis_no_match} (includes natural_no_match + prefix_matched_parent_missing)",
+                f"ldm_match_missing_order_threshold={_LDM_MATCH_MISSING_ORDER_THRESHOLD}",
+            ],
+            "next_postclose_metric": "contract_missing_count < threshold AND prefix_parent_missing_count < threshold",
+            "files_likely_touched": [
+                "src/engine/daily_threshold_cycle_report.py",
+                "src/engine/observation_source_quality_audit.py",
+                "docs/report-based-automation-traceability.md",
+            ],
+            "acceptance_tests": [
+                "PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_daily_threshold_cycle_report.py src/tests/test_observation_source_quality_audit.py",
+            ],
+        })
+
+    if provenance_gap > 0 and missing_ws_quote > 0 and swing_micro.get("ready_count", 0) > 0:
+        orders.append({
+            **base,
+            "order_id": "order_swing_micro_provenance_gap_missing_from_report",
+            "title": "Swing micro ws_quote_source=missing provenance gap not surfaced in postclose report",
+            "priority": 2,
+            "route": "source_quality_gap",
+            "mapped_family": "swing_micro_source_quality",
+            "threshold_family": "swing_micro_source_quality",
+            "improvement_type": "swing_micro_provenance_gap",
+            "confidence": "postclose_threshold_ev_source",
+            "intent": "Swing micro ws_quote_source=missing with orderbook_micro ready state is a provenance gap, not a readiness gap. Ensure it is tracked separately in postclose reports.",
+            "evidence": [
+                f"provenance_gap_count={provenance_gap}",
+                f"missing_ws_quote_source_count={missing_ws_quote}",
+                f"ready_count={swing_micro.get('ready_count', 0)}",
+                f"wide_spread_count={swing_micro.get('wide_spread_count', 0)}",
+                f"ofi_outlier_count={swing_micro.get('ofi_outlier_count', 0)}",
+            ],
+            "next_postclose_metric": "swing_micro_source_quality.provenance_gap_count visible and ws_quote_source=missing not mixed with readiness",
+            "files_likely_touched": [
+                "src/engine/daily_threshold_cycle_report.py",
+                "src/engine/observation_source_quality_audit.py",
+                "src/engine/sniper_state_handlers.py",
+                "docs/report-based-automation-traceability.md",
+            ],
+            "acceptance_tests": [
+                "PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_daily_threshold_cycle_report.py src/tests/test_observation_source_quality_audit.py",
+            ],
+        })
+
+    if source_quality_contract_gap:
+        orders.append({
+            **base,
+            "order_id": "order_source_quality_report_contract_status_gap",
+            "title": "Source quality report contract status failed/missing/incomplete",
+            "priority": 0,
+            "route": "source_quality_hard_gap",
+            "mapped_family": "observation_source_quality_audit",
+            "threshold_family": "observation_source_quality_audit",
+            "improvement_type": "report_contract_gap",
+            "confidence": "postclose_source_quality_fail",
+            "intent": "Report contract status is failed/missing/incomplete. Tuning inputs using this report must be blocked until the contract is restored.",
+            "evidence": [
+                f"source_quality_status={source_quality_status}",
+            ],
+            "next_postclose_metric": "observation_source_quality_audit status=pass or warning",
+            "files_likely_touched": [
+                "src/engine/observation_source_quality_audit.py",
+                "src/engine/daily_threshold_cycle_report.py",
+                "docs/report-based-automation-traceability.md",
+            ],
+            "acceptance_tests": [
+                "PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_observation_source_quality_audit.py src/tests/test_build_code_improvement_workorder.py",
+            ],
+        })
+
+    return orders
+
+
 def _observation_source_quality_followup_orders(report: dict[str, Any]) -> list[dict[str, Any]]:
     if not report:
         return []
@@ -4764,12 +4952,14 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
     lifecycle_overnight_bucket_orders = _lifecycle_overnight_bucket_followup_orders(lifecycle_report)
     lifecycle_bucket_discovery_orders = _lifecycle_bucket_discovery_followup_orders(lifecycle_bucket_discovery)
     observation_source_quality_orders = _observation_source_quality_followup_orders(observation_source_quality)
+    sim_fill_match_orders = _sim_fill_and_match_report_contract_orders(ev_report, observation_source_quality)
     threshold_ev_orders = [
         *_threshold_ev_followup_orders(ev_report),
         *_entry_adm_followup_orders(ev_report),
         *_lifecycle_ai_context_followup_orders(ev_report),
         *_window_policy_audit_followup_orders(calibration_report),
         *_dynamic_entry_price_report_contract_orders(ev_report),
+        *sim_fill_match_orders,
         *_panic_lifecycle_followup_orders(calibration_report),
         *_pipeline_event_verbosity_followup_orders(pipeline_event_verbosity),
         *observation_source_quality_orders,

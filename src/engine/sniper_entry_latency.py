@@ -14,8 +14,10 @@ from src.trading.entry.normal_entry_builder import NormalEntryBuilder
 from src.trading.entry.orderbook_stability_observer import ORDERBOOK_STABILITY_OBSERVER
 from src.trading.entry.signal_snapshot import build_signal_snapshot
 from src.trading.market.market_data_cache import MarketDataCache
+from src.trading.order.tick_utils import clamp_price_to_tick
 from src.trading.order.tick_utils import get_tick_size
 from src.trading.order.tick_utils import move_price_by_ticks
+from src.trading.order.tick_utils import move_price_down_by_bps
 from src.utils.constants import TRADING_RULES
 from src.utils.logger import log_info
 
@@ -142,10 +144,38 @@ def _conditional_real_1tick_enabled(strategy_id: str) -> bool:
     return bool(getattr(TRADING_RULES, "SCALPING_CONDITIONAL_1TICK_REAL_ENABLED", True))
 
 
+def _defense_mode_is_percent_bps() -> bool:
+    mode = str(getattr(TRADING_RULES, "SCALPING_ENTRY_PRICE_DEFENSE_MODE", "tick") or "").strip().lower()
+    return mode == "percent_bps"
+
+
+def _normal_defensive_bps() -> int:
+    return max(1, int(getattr(TRADING_RULES, "SCALPING_NORMAL_DEFENSIVE_BPS", 50) or 50))
+
+
+def _conditional_strong_defensive_bps() -> int:
+    return max(1, int(getattr(TRADING_RULES, "SCALPING_CONDITIONAL_STRONG_DEFENSIVE_BPS", 20) or 20))
+
+
 def _normal_defensive_ticks_for_strategy(strategy_id: str) -> int:
     if str(strategy_id or "").upper() in {"SCALPING", "SCALP"}:
         return max(1, int(_CONFIG.normal_defensive_ticks or 1))
     return 1
+
+
+def _ticks_between(lower: int | float, upper: int | float) -> int:
+    """Count how many 1-tick upward moves from lower to reach upper."""
+    current = clamp_price_to_tick(int(lower))
+    target = int(upper)
+    if current >= target:
+        return 0
+    ticks = 0
+    for _ in range(100):
+        if current >= target:
+            return ticks
+        current = move_price_by_ticks(current, 1)
+        ticks += 1
+    return 0
 
 
 def _can_apply_target_buy_price_cap(*, target_buy_price: int, best_bid: int) -> bool:
@@ -1180,6 +1210,99 @@ def evaluate_live_buy_entry(
 
     if effective_decision == EntryDecision.ALLOW_NORMAL:
         is_latency_override = latency.state.value == "DANGER" and latency_canary_applied
+        percent_bps_mode = _defense_mode_is_percent_bps()
+        is_scalping = str(strategy_id or "").upper() in {"SCALPING", "SCALP"}
+
+        if percent_bps_mode and is_scalping:
+            normal_defensive_bps = _normal_defensive_bps()
+            strong_defensive_bps = _conditional_strong_defensive_bps()
+            conditional_1tick_context = _conditional_real_1tick_context(
+                ws_data,
+                best_ask=best_ask,
+                best_bid=best_bid,
+            )
+            conditional_1tick_applied = False
+            conditional_1tick_reason = "not_eligible"
+            applied_bps = normal_defensive_bps
+            entry_price_guard = "normal_defensive_percent_bps"
+
+            if (
+                not is_latency_override
+                and _conditional_real_1tick_enabled(strategy_id)
+                and bool(conditional_1tick_context.get("eligible"))
+            ):
+                applied_bps = strong_defensive_bps
+                entry_price_guard = "conditional_strong_defensive_percent_bps"
+                conditional_1tick_applied = True
+                conditional_1tick_reason = "spread_1tick_strong_buy_pressure_percent_bps"
+            elif not _conditional_real_1tick_enabled(strategy_id):
+                conditional_1tick_reason = "disabled_or_non_scalping"
+            elif is_latency_override:
+                conditional_1tick_reason = "latency_override_keeps_defensive"
+            else:
+                conditional_1tick_reason = "micro_condition_not_eligible"
+
+            if is_latency_override:
+                defensive_ticks = _CONFIG.latency_override_defensive_ticks
+                defensive_order = _NORMAL_BUILDER.build(
+                    snapshot=snapshot,
+                    latest_price=latest_price,
+                    defensive_ticks=defensive_ticks,
+                )
+                order_price = int(defensive_order.price)
+                entry_price_guard = "latency_danger_override_defensive"
+                applied_bps = 0
+            else:
+                order_price = move_price_down_by_bps(latest_price, applied_bps, floor_ticks=1)
+                defensive_ticks = 0
+
+            normal_defensive_order_price = move_price_down_by_bps(
+                latest_price, normal_defensive_bps, floor_ticks=1
+            )
+            latency_guarded_order_price = order_price
+            counterfactual_order_price_1tick = move_price_by_ticks(latest_price, -1)
+            price_resolution = _resolve_scalping_order_price(
+                strategy_id=strategy_id,
+                defensive_order_price=order_price,
+                target_buy_price=int(target_buy_price or 0),
+                best_bid=best_bid,
+            )
+            if int(target_buy_price or 0) > 0:
+                target_cap = int(target_buy_price)
+                counterfactual_order_price_1tick = min(counterfactual_order_price_1tick, target_cap)
+                order_price = int(price_resolution.get("order_price", order_price) or order_price)
+            result["allowed"] = True
+            result["mode"] = "normal"
+            result["order_price"] = order_price
+            result["entry_price_guard"] = entry_price_guard
+            result["entry_price_defensive_ticks"] = _ticks_between(order_price, latest_price)
+            result["entry_price_defense_mode"] = "percent_bps"
+            result["entry_price_defensive_bps"] = applied_bps
+            result["entry_price_defensive_floor_ticks"] = 1
+            result["normal_defensive_order_price"] = int(normal_defensive_order_price)
+            result["latency_guarded_order_price"] = int(latency_guarded_order_price)
+            result["counterfactual_order_price_1tick"] = int(counterfactual_order_price_1tick)
+            result["conditional_1tick_real_override_applied"] = conditional_1tick_applied
+            result["conditional_1tick_real_override_reason"] = conditional_1tick_reason
+            result["conditional_1tick_real_override_context"] = conditional_1tick_context
+            result["price_resolution_reason"] = price_resolution.get("price_resolution_reason", "defensive_order_price")
+            result["reference_target_applied"] = bool(price_resolution.get("reference_target_applied"))
+            result["reference_target_rejected_reason"] = price_resolution.get("reference_target_rejected_reason", "")
+            result["reference_target_below_bid_bps"] = int(price_resolution.get("reference_target_below_bid_bps", 0) or 0)
+            result["reference_target_max_below_bid_bps"] = int(
+                price_resolution.get("reference_target_max_below_bid_bps", 0) or 0
+            )
+            result["entry_price_resolver_enabled"] = bool(price_resolution.get("entry_price_resolver_enabled"))
+            result["orders"] = [
+                {
+                    "tag": "normal",
+                    "price": int(order_price),
+                    "qty": int(snapshot.planned_qty) if snapshot and snapshot.planned_qty else 0,
+                }
+            ]
+            return result
+
+        # tick-based mode (default, fallback)
         defensive_ticks = (
             _CONFIG.latency_override_defensive_ticks
             if is_latency_override
@@ -1240,6 +1363,7 @@ def evaluate_live_buy_entry(
         result["order_price"] = order_price
         result["entry_price_guard"] = entry_price_guard
         result["entry_price_defensive_ticks"] = int(defensive_ticks)
+        result["entry_price_defense_mode"] = "tick"
         result["normal_defensive_order_price"] = int(normal_defensive_order_price)
         result["latency_guarded_order_price"] = int(latency_guarded_order_price)
         result["counterfactual_order_price_1tick"] = int(counterfactual_order_price_1tick)
@@ -1257,10 +1381,8 @@ def evaluate_live_buy_entry(
         result["orders"] = [
             {
                 "tag": "normal",
-                "qty": int(snapshot.planned_qty),
-                "price": order_price,
-                "order_type": defensive_order.order_type,
-                "tif": defensive_order.tif,
+                "price": int(order_price),
+                "qty": int(snapshot.planned_qty) if snapshot and snapshot.planned_qty else 0,
             }
         ]
         return result

@@ -55,6 +55,8 @@
 
 운영자 장전 override 보강 메모: `[OperatorPreopenConditionalOneTickReal0609]` 판정은 `applied_real_only_conditional_override`. 2026-06-09 08:40 KST 사용자 지시로 실제 SCALPING 제출가 경로에 한정해 `spread_tick=1`이고 매수 체결/OFI 또는 bid depth가 강한 경우만 1틱 제출가를 허용하는 예외를 추가했다. 기본 runtime override는 `KORSTOCKSCAN_SCALPING_NORMAL_DEFENSIVE_TICKS=3`을 유지한다. 예외가 적용되면 `entry_price_guard=conditional_1tick_real_micro_override`, `entry_price_defensive_ticks=1`, `conditional_1tick_real_override_applied=true`와 context를 남긴다. SCALPING 외 전략, latency DANGER override, 조건 미충족 표본은 기존 3틱 보수 제출을 유지한다. 이 변경은 operator real override이며 sim/threshold-cycle 자동 튜닝 진행 또는 live-auto promotion 근거가 아니다.
 
+운영자 장중 override 메모: `[OperatorIntradayEntryPricePercentBps0609]` 판정은 `applied_operator_runtime_override`. 2026-06-09 12:50 KST 사용자 지시로 실제 SCALPING 진입 제출가만 tick 기반에서 percent bps 기반으로 전환했다. 오늘 runtime env `threshold_runtime_env_2026-06-09.env/json`에 `KORSTOCKSCAN_SCALPING_ENTRY_PRICE_DEFENSE_MODE=percent_bps`, `KORSTOCKSCAN_SCALPING_NORMAL_DEFENSIVE_BPS=50`, `KORSTOCKSCAN_SCALPING_CONDITIONAL_STRONG_DEFENSIVE_BPS=20`, source=`operator_intraday_override_2026-06-09`를 기록했다. 가격 smoke는 대표 가격대와 10,000원 기준 normal `9,950`, strong `9,980`으로 한국시장 호가 단위 위반 0건이다. 변경 범위는 실제 SCALPING entry submit price뿐이며 sim/probe, broker/stale/account/order/quantity/cooldown guard, provider route, BUY threshold, cap은 변경하지 않는다. rollback env는 `KORSTOCKSCAN_SCALPING_ENTRY_PRICE_DEFENSE_MODE=tick`.
+
 ## 장중 체크리스트 (09:05~15:20)
 
 - [x] `[RuntimeEnvIntradayObserve0609] 전일 selected runtime family 장중 provenance 및 rollback guard 확인` (`Due: 2026-06-09`, `Slot: INTRADAY`, `TimeWindow: 09:05~09:20`, `Track: RuntimeStability`)

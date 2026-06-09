@@ -241,6 +241,7 @@ def _event_field_values(target_date: str, tracked_values: dict[str, set[str]] | 
         "lifecycle_bucket_source_bucket_id",
         "lifecycle_bucket_matched_bucket_id",
         "lifecycle_bucket_matched_source_bucket_id",
+        "active_seed_matched",
     }
     values: dict[str, Any] = {key: set() for key in field_keys}
     values["pre_policy_active_seed_id"] = set()
@@ -286,6 +287,24 @@ def _event_field_values(target_date: str, tracked_values: dict[str, set[str]] | 
         "panic_scale_in_no_match_repeated_followup_event_count": 0,
         "panic_scale_in_no_match_source_stage_counts": {},
         "panic_scale_in_no_match_prefix_counts": {},
+        "lifecycle_bucket_match_status_global_counts": {},
+        "lifecycle_bucket_reclassified_status_global_counts": {},
+        "hypothesis_matched_but_parent_bucket_no_match_count": 0,
+        "active_seed_matched_false_count": 0,
+        "active_seed_matched_none_count": 0,
+        "active_seed_matched_true_count": 0,
+        "active_seed_alias_used_count": 0,
+        "lifecycle_bucket_match_status_no_match_global_count": 0,
+        "lifecycle_bucket_match_status_matched_global_count": 0,
+        "lifecycle_bucket_match_status_candidate_context_only_global_count": 0,
+        "lifecycle_bucket_match_status_policy_missing_global_count": 0,
+        "lifecycle_bucket_match_status_missing_global_count": 0,
+        "natural_no_match_global_count": 0,
+        "panic_scale_in_stage_excluded_global_count": 0,
+        "matched_entry_child_bridge_global_count": 0,
+        "active_seed_prefix_matched_parent_missing_global_count": 0,
+        "contract_missing_global_count": 0,
+        "not_instrumented_global_count": 0,
     }
     panic_sim_record_ids: set[str] = set()
     panic_no_match_sim_record_ids: set[str] = set()
@@ -369,6 +388,73 @@ def _event_field_values(target_date: str, tracked_values: dict[str, set[str]] | 
                         prefix_counts = policy_diag["panic_scale_in_no_match_prefix_counts"]
                         prefix_key = candidate_prefix or "missing"
                         prefix_counts[prefix_key] = prefix_counts.get(prefix_key, 0) + 1
+                global_match_status = str(fields.get("lifecycle_bucket_match_status") or "missing").strip() or "missing"
+                global_match_counts = policy_diag["lifecycle_bucket_match_status_global_counts"]
+                global_match_counts[global_match_status] = global_match_counts.get(global_match_status, 0) + 1
+                if global_match_status == "no_match":
+                    policy_diag["lifecycle_bucket_match_status_no_match_global_count"] += 1
+                elif global_match_status == "matched":
+                    policy_diag["lifecycle_bucket_match_status_matched_global_count"] += 1
+                elif global_match_status == "candidate_context_only":
+                    policy_diag["lifecycle_bucket_match_status_candidate_context_only_global_count"] += 1
+                elif global_match_status == "policy_missing":
+                    policy_diag["lifecycle_bucket_match_status_policy_missing_global_count"] += 1
+                elif global_match_status == "missing":
+                    policy_diag["lifecycle_bucket_match_status_missing_global_count"] += 1
+                if global_match_status == "no_match":
+                    hypothesis_val = fields.get("ldm_hypothesis_matched") if isinstance(fields, dict) else None
+                    if hypothesis_val is True or str(hypothesis_val or "").strip().lower() in {"true", "1", "yes"}:
+                        policy_diag["hypothesis_matched_but_parent_bucket_no_match_count"] += 1
+
+                active_seed_val = fields.get("active_seed_matched")
+                if active_seed_val is None:
+                    alias_val = fields.get("scalp_sim_active_priority_seed_matched")
+                    if alias_val is not None:
+                        active_seed_val = alias_val
+                        policy_diag["active_seed_alias_used_count"] += 1
+
+                if active_seed_val is None:
+                    policy_diag["active_seed_matched_none_count"] += 1
+                    active_seed_state = "none"
+                elif isinstance(active_seed_val, bool):
+                    if active_seed_val:
+                        policy_diag["active_seed_matched_true_count"] += 1
+                        active_seed_state = "true"
+                    else:
+                        policy_diag["active_seed_matched_false_count"] += 1
+                        active_seed_state = "false"
+                else:
+                    text = str(active_seed_val).strip().lower()
+                    if text in {"true", "1", "yes"}:
+                        policy_diag["active_seed_matched_true_count"] += 1
+                        active_seed_state = "true"
+                    elif text in {"false", "0", "no"}:
+                        policy_diag["active_seed_matched_false_count"] += 1
+                        active_seed_state = "false"
+                    else:
+                        policy_diag["active_seed_matched_none_count"] += 1
+                        active_seed_state = "none"
+
+                reclassified_status = _reclassify_match_status_lineage(
+                    raw_match_status=global_match_status,
+                    fields=fields,
+                    stage=stage,
+                    active_seed_state=active_seed_state,
+                )
+                reclassified_counts = policy_diag["lifecycle_bucket_reclassified_status_global_counts"]
+                reclassified_counts[reclassified_status] = reclassified_counts.get(reclassified_status, 0) + 1
+                if reclassified_status == "natural_no_match":
+                    policy_diag["natural_no_match_global_count"] += 1
+                elif reclassified_status == "panic_scale_in_stage_excluded":
+                    policy_diag["panic_scale_in_stage_excluded_global_count"] += 1
+                elif reclassified_status == "matched_entry_child_bridge":
+                    policy_diag["matched_entry_child_bridge_global_count"] += 1
+                elif reclassified_status == "active_seed_prefix_matched_parent_missing":
+                    policy_diag["active_seed_prefix_matched_parent_missing_global_count"] += 1
+                elif reclassified_status == "contract_missing":
+                    policy_diag["contract_missing_global_count"] += 1
+                elif reclassified_status == "not_instrumented":
+                    policy_diag["not_instrumented_global_count"] += 1
             if active_count is not None:
                 policy_diag["event_count"] += 1
                 policy_diag["active_seed_count_values"][str(active_count)] = (
@@ -442,6 +528,73 @@ def _event_field_values(target_date: str, tracked_values: dict[str, set[str]] | 
         - len(panic_no_match_sim_record_ids),
     )
     return values
+
+
+def _reclassify_match_status_lineage(
+    *,
+    raw_match_status: str,
+    fields: dict,
+    stage: str,
+    active_seed_state: str,
+) -> str:
+    if raw_match_status == "matched":
+        return "matched"
+    if raw_match_status in {"candidate_context_only", "policy_missing"}:
+        return raw_match_status
+
+    if stage == "scalp_sim_panic_scale_in_blocked":
+        return "panic_scale_in_stage_excluded"
+
+    if not raw_match_status or raw_match_status == "missing":
+        if _is_lineage_lifecycle_match_eligible_stage(stage):
+            return "contract_missing"
+        return "not_instrumented"
+
+    if raw_match_status == "no_match":
+        if active_seed_state == "true":
+            return "active_seed_prefix_matched_parent_missing"
+
+        match_reason = str(fields.get("lifecycle_bucket_match_reason") or "").strip()
+        bucket_id = str(fields.get("lifecycle_bucket_bucket_id") or "").strip()
+        source_bucket_id = str(fields.get("lifecycle_bucket_source_bucket_id") or "").strip()
+        if (
+            match_reason != "parent_catalog_missing"
+            and bucket_id
+            and bucket_id.startswith("entry:combo_entry_spot:")
+            and source_bucket_id
+        ):
+            return "matched_entry_child_bridge"
+
+        return "natural_no_match"
+
+    return "natural_no_match"
+
+
+_LINEAGE_LIFECYCLE_MATCH_ELIGIBLE_STAGES: set[str] = {
+    "scalp_sim_entry_armed",
+    "scalp_sim_buy_order_virtual_pending",
+    "scalp_sim_buy_order_assumed_filled",
+    "scalp_sim_holding_started",
+    "scalp_sim_scale_in_order_assumed_filled",
+    "scalp_sim_scale_in_order_unfilled",
+    "scalp_sim_sell_order_assumed_filled",
+    "scalp_sim_entry_submit_revalidation_warning",
+    "scalp_sim_pre_submit_liquidity_guard_would_block",
+    "scalp_sim_pre_submit_liquidity_guard_would_pass",
+    "scalp_sim_pre_submit_overbought_guard_would_block",
+    "scalp_sim_pre_submit_overbought_guard_would_pass",
+    "scalp_sim_entry_unpriced",
+    "scalp_sim_overnight_decision",
+    "scalp_sim_overnight_sell_today",
+    "scalp_sim_overnight_hold",
+    "scalp_sim_overnight_carry_restored",
+    "scalp_sim_entry_ai_price_applied",
+    "scalp_sim_entry_ai_price_skip_order",
+}
+
+
+def _is_lineage_lifecycle_match_eligible_stage(stage: str) -> bool:
+    return stage in _LINEAGE_LIFECYCLE_MATCH_ELIGIBLE_STAGES
 
 
 def _event_any_hypothesis_instrumented(events: dict[str, set[str]]) -> bool:
@@ -1167,6 +1320,57 @@ def build_key_lineage_ledger(target_date: str) -> dict[str, Any]:
             "panic_scale_in_no_match_count_scope": (
                 "raw_followup_events_and_unique_sim_records; repeated followup is not a unique bucket count"
             ),
+            "lifecycle_bucket_match_status_global_counts": active_policy_observation.get(
+                "lifecycle_bucket_match_status_global_counts"
+            )
+            or {},
+            "hypothesis_matched_but_parent_bucket_no_match_count": _safe_int(
+                active_policy_observation.get("hypothesis_matched_but_parent_bucket_no_match_count")
+            ),
+            "active_seed_matched_false_count": _safe_int(
+                active_policy_observation.get("active_seed_matched_false_count")
+            ),
+            "active_seed_matched_none_count": _safe_int(
+                active_policy_observation.get("active_seed_matched_none_count")
+            ),
+            "active_seed_matched_true_count": _safe_int(
+                active_policy_observation.get("active_seed_matched_true_count")
+            ),
+            "active_seed_match_source_alias_used_count": _safe_int(
+                active_policy_observation.get("active_seed_alias_used_count")
+            ),
+            "active_seed_match_alias_fields": "scalp_sim_active_priority_seed_matched",
+            "lifecycle_bucket_reclassified_status_global_counts": active_policy_observation.get(
+                "lifecycle_bucket_reclassified_status_global_counts"
+            )
+            or {},
+            "natural_no_match_global_count": _safe_int(
+                active_policy_observation.get("natural_no_match_global_count")
+            ),
+            "panic_scale_in_stage_excluded_global_count": _safe_int(
+                active_policy_observation.get("panic_scale_in_stage_excluded_global_count")
+            ),
+            "matched_entry_child_bridge_global_count": _safe_int(
+                active_policy_observation.get("matched_entry_child_bridge_global_count")
+            ),
+            "active_seed_prefix_matched_parent_missing_global_count": _safe_int(
+                active_policy_observation.get("active_seed_prefix_matched_parent_missing_global_count")
+            ),
+            "contract_missing_global_count": _safe_int(
+                active_policy_observation.get("contract_missing_global_count")
+            ),
+            "not_instrumented_global_count": _safe_int(
+                active_policy_observation.get("not_instrumented_global_count")
+            ),
+            "not_instrumented_count_scope": "non-lifecycle-match-eligible diagnostic/observation stages where lifecycle fields are not required",
+            "lifecycle_bucket_match_status_no_match_global_count": _safe_int(
+                active_policy_observation.get("lifecycle_bucket_match_status_no_match_global_count")
+            ),
+            "lifecycle_bucket_match_status_matched_global_count": _safe_int(
+                active_policy_observation.get("lifecycle_bucket_match_status_matched_global_count")
+            ),
+            "active_seed_matched_false_policy": "natural_no_match_candidate_taxonomy_handoff_diagnosis_target",
+            "active_seed_matched_none_policy": "instrumentation_or_contract_missing_candidate_workorder_target",
             "active_sim_priority_entry_source_taxonomy_contract_counts": dict(
                 sorted(active_seed_taxonomy_counts.items())
             ),

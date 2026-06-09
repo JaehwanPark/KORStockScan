@@ -8,19 +8,19 @@
 - risk_regime_threshold_mode: `dynamic_quantile`
 - report_only: `true`
 - runtime_effect: `report_only_no_mutation`
-- as_of: `2026-06-09T10:59:04`
-- latest_event_at: `2026-06-09T10:59:00`
+- as_of: `2026-06-09T13:23:10`
+- latest_event_at: `2026-06-09T13:23:07`
 - reasons: `no panic buying threshold breached`
 
 ## 패닉바잉 지표
 
-- evaluated_symbol_count: `124`
+- evaluated_symbol_count: `138`
 - panic_buy_active_count: `0`
 - panic_buy_watch_count: `0`
 - allow_tp_override_count: `0`
 - allow_runner_count: `0`
 - max_panic_buy_score: `0.45`
-- avg_confidence: `0.775`
+- avg_confidence: `0.7786`
 
 ## 소진 지표
 
@@ -33,8 +33,8 @@
 
 - tp_like_exit_count: `0`
 - real_exit_count: `0`
-- non_real_exit_count: `1562`
-- unproven_exit_count: `0`
+- non_real_exit_count: `2740`
+- unproven_exit_count: `62`
 - trailing_winner_count: `0`
 - candidate_context_count: `0`
 - avg_tp_profit_rate_pct: `-`
@@ -42,11 +42,11 @@
 
 ## Microstructure Detector
 
-- missing_orderbook_count: `51`
-- degraded_orderbook_count: `51`
-- missing_trade_aggressor_count: `8`
-- carried_orderbook_snapshot_count: `2522`
-- carried_trade_aggressor_snapshot_count: `1958`
+- missing_orderbook_count: `58`
+- degraded_orderbook_count: `58`
+- missing_trade_aggressor_count: `6`
+- carried_orderbook_snapshot_count: `4591`
+- carried_trade_aggressor_snapshot_count: `3827`
 - micro_cusum_triggered_symbol_count: `3`
 - micro_consensus_pass_symbol_count: `0`
 - micro_cusum_decision_authority: `source_quality_only`
