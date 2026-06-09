@@ -268,9 +268,36 @@ def test_describe_buy_capacity_respects_absolute_budget_cap():
     assert used_ratio == 0.95
 
 
-def test_scalping_initial_entry_qty_cap_config_defaults_to_one_share():
-    assert CONFIG.SCALPING_INITIAL_ENTRY_QTY_CAP_ENABLED is True
-    assert CONFIG.SCALPING_INITIAL_ENTRY_MAX_QTY == 1
+def test_describe_buy_capacity_min_one_share_floor_is_opt_in():
+    target_budget, safe_budget, qty, used_ratio = kiwoom_orders.describe_buy_capacity(
+        current_price=200_000,
+        total_deposit=1_000_000,
+        ratio=0.10,
+    )
+    assert target_budget == 100_000
+    assert safe_budget == 95_000
+    assert qty == 0
+    assert used_ratio == 0.95
+
+    target_budget, safe_budget, qty, used_ratio = kiwoom_orders.describe_buy_capacity(
+        current_price=200_000,
+        total_deposit=1_000_000,
+        ratio=0.10,
+        allow_min_one_share_over_budget=True,
+    )
+    assert target_budget == 100_000
+    assert safe_budget == 95_000
+    assert qty == 1
+    assert used_ratio == 0.95
+
+
+def test_scalping_initial_entry_qty_config_uses_percent_budget_without_one_share_cap():
+    assert CONFIG.INVEST_RATIO_SCALPING_MIN == 0.10
+    assert CONFIG.INVEST_RATIO_SCALPING_MAX == 0.30
+    assert CONFIG.SCALPING_MAX_BUY_BUDGET_KRW == 0
+    assert CONFIG.SCALPING_INITIAL_ENTRY_QTY_CAP_ENABLED is False
+    assert CONFIG.SCALPING_INITIAL_ENTRY_MAX_QTY == 0
+    assert CONFIG.SCALPING_MIN_ONE_SHARE_FLOOR_ENABLED is True
     assert CONFIG.SCALPING_PYRAMID_ZERO_QTY_STAGE1_ENABLED is True
 
 

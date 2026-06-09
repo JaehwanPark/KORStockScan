@@ -52,7 +52,8 @@ class TradingConfig:
     SCALP_PYRAMID_POST_ADD_TRAILING_GRACE_SEC: int = 180  # 불타기 체결 직후 trailing 조기청산 억제
     SCALPING_SCALE_IN_PRICE_RESOLVER_ENABLED: bool = True  # 추가매수 주문 직전 P1 지정가 resolver
     SCALPING_SCALE_IN_DYNAMIC_QTY_ENABLED: bool = True  # 추가매수 live 수량 safety 결정
-    SCALPING_SCALE_IN_EFFECTIVE_QTY_CAP: int = 1  # 추가매수 수량 hard cap. 0 이하는 수량 cap 없음
+    SCALPING_SCALE_IN_EFFECTIVE_QTY_CAP: int = 0  # 추가매수 수량 hard cap. 0 이하는 수량 cap 없음
+    SCALPING_SCALE_IN_MIN_ONE_SHARE_FLOOR_ENABLED: bool = True  # 추가매수 비중 예산 초과 시 주문가능금액 내 최소 1주 허용
     SCALPING_SCALE_IN_MAX_SPREAD_BPS: float = 80.0  # 추가매수 resolver 스프레드 상한(bp)
     SCALPING_PYRAMID_PRICE_GUARD_ENABLED: bool = True  # 불타기 추격 지정가 안전장치
     SCALPING_PYRAMID_MAX_SPREAD_BPS: float = 80.0  # 호환 alias: scale-in spread guard
@@ -165,11 +166,12 @@ class TradingConfig:
     # [매매 비중 설정] 전략별 주문 가능 현금 대비 1회 매수 투입 비율
     INVEST_RATIO_KOSPI: float = 0.25  # DEPRECATED: MIN/MAX 비중으로 대체됨
     INVEST_RATIO_KOSDAQ: float = 0.15  # DEPRECATED: MIN/MAX 비중으로 대체됨
-    INVEST_RATIO_SCALPING_MIN: float = 0.07  # 2026-04-20 risk cut: 스캘핑 최소 투자 비율 (10% -> 7%)
-    INVEST_RATIO_SCALPING_MAX: float = 0.22  # 2026-04-20 risk cut: 스캘핑 최대 투자 비율 (30% -> 22%)
-    SCALPING_MAX_BUY_BUDGET_KRW: int = 1_200_000  # 2026-04-20 risk cut: 스캘핑 신규 진입 1회 절대 투자금 상한 (1,600,000 -> 1,200,000)
-    SCALPING_INITIAL_ENTRY_QTY_CAP_ENABLED: bool = True  # 신규 BUY 접수 1주 cap 기본 ON
-    SCALPING_INITIAL_ENTRY_MAX_QTY: int = 1  # 0 이하는 신규 BUY 수량 cap 없음
+    INVEST_RATIO_SCALPING_MIN: float = 0.10  # 스캘핑 신규 real BUY 최소 주문가능금액 비중
+    INVEST_RATIO_SCALPING_MAX: float = 0.30  # 스캘핑 신규 real BUY 최대 주문가능금액 비중
+    SCALPING_MAX_BUY_BUDGET_KRW: int = 0  # 0 이하는 절대 투자금 상한 없음; 주문가능금액 비중 guard 사용
+    SCALPING_INITIAL_ENTRY_QTY_CAP_ENABLED: bool = False  # 신규 BUY 수량 hard cap 기본 OFF
+    SCALPING_INITIAL_ENTRY_MAX_QTY: int = 0  # 0 이하는 신규 BUY 수량 cap 없음
+    SCALPING_MIN_ONE_SHARE_FLOOR_ENABLED: bool = True  # 비중 예산 초과 시 주문가능금액 내 최소 1주 허용
     BUY_SIDE_TIME_BLOCK_ENABLED: bool = True  # 신규 매수/추가매수 브로커 제출 시간 차단
     BUY_SIDE_TIME_BLOCK_UNTIL_HHMM: str = "10:00"  # KST 기준, 이 시각 전 BUY 제출 차단
 
@@ -1691,6 +1693,9 @@ def _build_trading_rules() -> TradingConfig:
     env_scalping_initial_entry_max_qty = _env_int(
         "KORSTOCKSCAN_SCALPING_INITIAL_ENTRY_MAX_QTY"
     )
+    env_scalping_min_one_share_floor_enabled = _env_bool(
+        "KORSTOCKSCAN_SCALPING_MIN_ONE_SHARE_FLOOR_ENABLED"
+    )
     env_buy_side_time_block_enabled = _env_bool("KORSTOCKSCAN_BUY_SIDE_TIME_BLOCK_ENABLED")
     env_buy_side_time_block_until = _env_str("KORSTOCKSCAN_BUY_SIDE_TIME_BLOCK_UNTIL_HHMM")
     env_scale_in_price_resolver_enabled = _env_bool(
@@ -1700,6 +1705,9 @@ def _build_trading_rules() -> TradingConfig:
         "KORSTOCKSCAN_SCALPING_SCALE_IN_DYNAMIC_QTY_ENABLED"
     )
     env_scale_in_effective_qty_cap = _env_int("KORSTOCKSCAN_SCALPING_SCALE_IN_EFFECTIVE_QTY_CAP")
+    env_scale_in_min_one_share_floor_enabled = _env_bool(
+        "KORSTOCKSCAN_SCALPING_SCALE_IN_MIN_ONE_SHARE_FLOOR_ENABLED"
+    )
     env_scale_in_max_spread_bps = _env_float("KORSTOCKSCAN_SCALPING_SCALE_IN_MAX_SPREAD_BPS")
     env_pyramid_price_guard_enabled = _env_bool("KORSTOCKSCAN_SCALPING_PYRAMID_PRICE_GUARD_ENABLED")
     env_pyramid_max_spread_bps = _env_float("KORSTOCKSCAN_SCALPING_PYRAMID_MAX_SPREAD_BPS")
@@ -2035,6 +2043,9 @@ def _build_trading_rules() -> TradingConfig:
             SCALPING_INITIAL_ENTRY_MAX_QTY=env_scalping_initial_entry_max_qty
             if env_scalping_initial_entry_max_qty is not None
             else config.SCALPING_INITIAL_ENTRY_MAX_QTY,
+            SCALPING_MIN_ONE_SHARE_FLOOR_ENABLED=env_scalping_min_one_share_floor_enabled
+            if env_scalping_min_one_share_floor_enabled is not None
+            else config.SCALPING_MIN_ONE_SHARE_FLOOR_ENABLED,
             BUY_SIDE_TIME_BLOCK_ENABLED=env_buy_side_time_block_enabled
             if env_buy_side_time_block_enabled is not None
             else config.BUY_SIDE_TIME_BLOCK_ENABLED,
@@ -2050,6 +2061,9 @@ def _build_trading_rules() -> TradingConfig:
             SCALPING_SCALE_IN_EFFECTIVE_QTY_CAP=env_scale_in_effective_qty_cap
             if env_scale_in_effective_qty_cap is not None
             else config.SCALPING_SCALE_IN_EFFECTIVE_QTY_CAP,
+            SCALPING_SCALE_IN_MIN_ONE_SHARE_FLOOR_ENABLED=env_scale_in_min_one_share_floor_enabled
+            if env_scale_in_min_one_share_floor_enabled is not None
+            else config.SCALPING_SCALE_IN_MIN_ONE_SHARE_FLOOR_ENABLED,
             SCALPING_SCALE_IN_MAX_SPREAD_BPS=env_scale_in_max_spread_bps
             if env_scale_in_max_spread_bps is not None
             else config.SCALPING_SCALE_IN_MAX_SPREAD_BPS,

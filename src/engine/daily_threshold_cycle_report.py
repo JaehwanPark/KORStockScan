@@ -599,6 +599,7 @@ CALIBRATION_FAMILY_METADATA = {
         "target_env_keys": [
             "SCALPING_INITIAL_ENTRY_QTY_CAP_ENABLED",
             "SCALPING_INITIAL_ENTRY_MAX_QTY",
+            "SCALPING_MIN_ONE_SHARE_FLOOR_ENABLED",
             "AI_WAIT6579_PROBE_CANARY_MAX_QTY",
             "SCALPING_SCALE_IN_EFFECTIVE_QTY_CAP",
         ],
@@ -3718,7 +3719,10 @@ def _build_position_sizing_cap_release_family(events: list[dict], completed_rows
         "initial_entry_qty_cap_enabled": bool(
             getattr(TRADING_RULES, "SCALPING_INITIAL_ENTRY_QTY_CAP_ENABLED", True)
         ),
-        "initial_entry_max_qty": int(getattr(TRADING_RULES, "SCALPING_INITIAL_ENTRY_MAX_QTY", 1)),
+        "initial_entry_max_qty": int(getattr(TRADING_RULES, "SCALPING_INITIAL_ENTRY_MAX_QTY", 0)),
+        "min_one_share_floor_enabled": bool(
+            getattr(TRADING_RULES, "SCALPING_MIN_ONE_SHARE_FLOOR_ENABLED", True)
+        ),
         "wait6579_probe_max_qty": int(getattr(TRADING_RULES, "AI_WAIT6579_PROBE_CANARY_MAX_QTY", 1)),
         "scale_in_effective_qty_cap": int(getattr(TRADING_RULES, "SCALPING_SCALE_IN_EFFECTIVE_QTY_CAP", 1)),
     }

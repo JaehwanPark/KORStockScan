@@ -705,11 +705,46 @@ def describe_dynamic_scale_in_qty(
     if resolved_price <= 0 or deposit <= 0:
         details.update({"would_qty": 0, "effective_qty": 0, "qty": 0, "qty_reason": "invalid_price_or_deposit"})
         return details
-    if cap_qty <= 0:
-        details.update({"would_qty": 0, "effective_qty": 0, "qty": 0, "qty_reason": "position_cap_or_budget"})
-        return details
     if not (price_resolution or {}).get("allowed", False):
         details.update({"would_qty": 0, "effective_qty": 0, "qty": 0, "qty_reason": "price_resolution_blocked"})
+        return details
+
+    scalp_budget_qty = None
+    scalp_min_one_share_floor_applied = False
+    if normalized_strategy == "SCALPING" and not details["sim_uncapped_qty"]:
+        current_ai_score_for_ratio = _safe_float(
+            (action or {}).get("current_ai_score", stock.get("current_ai_score", (stock.get("rt_ai_prob") or 0) * 100)),
+            0.0,
+        )
+        min_ratio = float(getattr(TRADING_RULES, "INVEST_RATIO_SCALPING_MIN", 0.10) or 0.10)
+        max_ratio = float(getattr(TRADING_RULES, "INVEST_RATIO_SCALPING_MAX", 0.30) or 0.30)
+        if max_ratio < min_ratio:
+            min_ratio, max_ratio = max_ratio, min_ratio
+        score = max(0.0, min(100.0, current_ai_score_for_ratio))
+        scale_in_ratio = min_ratio + (score / 100.0) * (max_ratio - min_ratio)
+        target_budget = max(float(deposit) * float(scale_in_ratio), 0.0)
+        safe_budget = target_budget * float(getattr(TRADING_RULES, "BUY_BUDGET_SAFETY_RATIO", 0.95) or 0.95)
+        scalp_budget_qty = int(safe_budget // resolved_price)
+        min_one_share_floor_enabled = bool(
+            getattr(TRADING_RULES, "SCALPING_SCALE_IN_MIN_ONE_SHARE_FLOOR_ENABLED", True)
+        )
+        if scalp_budget_qty <= 0 and min_one_share_floor_enabled and float(deposit) >= float(resolved_price):
+            scalp_budget_qty = 1
+            scalp_min_one_share_floor_applied = True
+        cap_qty = max(0, scalp_budget_qty)
+        effective_cap = configured_effective_cap if configured_effective_cap > 0 else cap_qty
+        details.update(
+            {
+                "scale_in_budget_ratio": round(scale_in_ratio, 6),
+                "scale_in_target_budget": int(target_budget),
+                "scale_in_safe_budget": int(safe_budget),
+                "scale_in_budget_qty": int(scalp_budget_qty),
+                "scale_in_min_one_share_floor_enabled": min_one_share_floor_enabled,
+                "scale_in_min_one_share_floor_applied": scalp_min_one_share_floor_applied,
+            }
+        )
+    if cap_qty <= 0:
+        details.update({"would_qty": 0, "effective_qty": 0, "qty": 0, "qty_reason": "position_cap_or_budget"})
         return details
 
     if normalized_strategy in {"KOSPI_ML", "KOSDAQ_ML", "MAIN"}:
@@ -722,7 +757,7 @@ def describe_dynamic_scale_in_qty(
         if add_type == "PYRAMID" and add_reason != "swing_pyramid_ok":
             details.update({"would_qty": 0, "effective_qty": 0, "qty": 0, "qty_reason": "swing_pyramid_probe_missing"})
             return details
-        would_qty = max(1, int(legacy.get("template_qty", 0) or legacy.get("qty", 0) or 0))
+        would_qty = max(1, int(scalp_budget_qty or legacy.get("template_qty", 0) or legacy.get("qty", 0) or 0))
         effective_qty = max(0, min(would_qty, cap_qty, effective_cap))
         qty_reason = "swing_dynamic_allowed" if configured_effective_cap <= 0 else "swing_dynamic_capped_allowed"
         details.update(
@@ -776,7 +811,7 @@ def describe_dynamic_scale_in_qty(
             failed = [name for name, ok in checks.items() if not ok]
             details.update({"would_qty": 0, "effective_qty": 0, "qty": 0, "qty_reason": "pyramid_evidence_insufficient:" + ",".join(failed)})
             return details
-        would_qty = max(1, int(legacy.get("template_qty", 0) or legacy.get("qty", 0) or 0))
+        would_qty = max(1, int(scalp_budget_qty or legacy.get("template_qty", 0) or legacy.get("qty", 0) or 0))
     elif add_type == "AVG_DOWN":
         if add_reason != "reversal_add_ok":
             details.update({"would_qty": 0, "effective_qty": 0, "qty": 0, "qty_reason": "reversal_probe_missing"})

@@ -75,8 +75,8 @@ def _sim_virtual_budget_krw() -> int:
 
 
 def _scalp_ratio_from_score(ai_score: float) -> float:
-    min_ratio = float(getattr(TRADING_RULES, "INVEST_RATIO_SCALPING_MIN", 0.07) or 0.07)
-    max_ratio = float(getattr(TRADING_RULES, "INVEST_RATIO_SCALPING_MAX", 0.22) or 0.22)
+    min_ratio = float(getattr(TRADING_RULES, "INVEST_RATIO_SCALPING_MIN", 0.10) or 0.10)
+    max_ratio = float(getattr(TRADING_RULES, "INVEST_RATIO_SCALPING_MAX", 0.30) or 0.30)
     score = max(0.0, min(100.0, float(ai_score or 0.0)))
     return min_ratio + (score / 100.0) * (max_ratio - min_ratio)
 

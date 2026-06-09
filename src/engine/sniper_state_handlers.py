@@ -12050,10 +12050,24 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
     budget_cap = 0
     if strategy == 'SCALPING':
         budget_cap = int(_rule('SCALPING_MAX_BUY_BUDGET_KRW', 0) or 0)
+    min_one_share_floor_enabled = (
+        strategy == 'SCALPING'
+        and bool(_rule("SCALPING_MIN_ONE_SHARE_FLOOR_ENABLED", True))
+    )
     target_budget, safe_budget, real_buy_qty, used_safety_ratio = kiwoom_orders.describe_buy_capacity(
-        curr_price, deposit, ratio, max_budget=budget_cap
+        curr_price,
+        deposit,
+        ratio,
+        max_budget=budget_cap,
+        allow_min_one_share_over_budget=min_one_share_floor_enabled,
     )
     budget_cap_applied = budget_cap > 0 and target_budget < uncapped_target_budget
+    min_one_share_floor_applied = (
+        min_one_share_floor_enabled
+        and real_buy_qty == 1
+        and safe_budget < curr_price
+        and _safe_int(deposit, 0) >= curr_price
+    )
     budget_cap_msg = f", 절대한도 {budget_cap:,}원 적용" if budget_cap_applied else ""
 
     if real_buy_qty <= 0:
@@ -12078,7 +12092,8 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             f"[DEBUG] {code} 매수 수량 0주 "
             f"(deposit={deposit}, ratio={ratio:.4f}, uncapped_target_budget={uncapped_target_budget}, "
             f"target_budget={target_budget}, safe_budget={safe_budget}, safety_ratio={used_safety_ratio:.4f}, "
-            f"curr_price={curr_price}, retry_cooldown_sec={zero_qty_cooldown_sec})"
+            f"curr_price={curr_price}, min_one_share_floor_enabled={min_one_share_floor_enabled}, "
+            f"retry_cooldown_sec={zero_qty_cooldown_sec})"
         )
         with ENTRY_LOCK:
             cooldowns[code] = now_ts + zero_qty_cooldown_sec
@@ -12086,6 +12101,8 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             stock, code, zero_qty_stage, deposit=deposit, ratio=f"{ratio:.4f}", target_budget=target_budget,
             safe_budget=safe_budget, safety_ratio=f"{used_safety_ratio:.4f}", curr_price=curr_price,
             budget_cap=budget_cap if budget_cap_applied else "-", cooldown_sec=zero_qty_cooldown_sec,
+            min_one_share_floor_enabled=min_one_share_floor_enabled,
+            min_one_share_floor_applied=False,
             auth_return_code=(auth_failure or {}).get("return_code", "-"),
             auth_return_msg=(auth_failure or {}).get("return_msg", "-"),
         )
@@ -12112,6 +12129,8 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         stock, code, "budget_pass", deposit=deposit, ratio=f"{ratio:.4f}", target_budget=target_budget,
         safe_budget=safe_budget, safety_ratio=f"{used_safety_ratio:.4f}",
         budget_cap=budget_cap if budget_cap_applied else "-", qty=real_buy_qty,
+        min_one_share_floor_enabled=min_one_share_floor_enabled,
+        min_one_share_floor_applied=min_one_share_floor_applied,
         deposit_source=deposit_meta.get("source", "-"),
         deposit_age_sec=deposit_meta.get("age_sec", "-"),
         deposit_cache_hit=deposit_meta.get("cache_hit", False),
@@ -12344,23 +12363,33 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         )
 
     if strategy == "SCALPING" and bool(_rule("SCALPING_INITIAL_ENTRY_QTY_CAP_ENABLED", False)):
-        initial_entry_qty_cap = int(_rule("SCALPING_INITIAL_ENTRY_MAX_QTY", 1) or 1)
-        adjusted_orders, original_qty, scaled_qty, applied = _apply_initial_entry_qty_cap(planned_orders, max_total_qty=initial_entry_qty_cap)
-        if adjusted_orders:
-            planned_orders = adjusted_orders
-            latency_gate["orders"] = planned_orders
-        if scaled_qty > 0:
-            requested_qty = scaled_qty
-        _log_entry_pipeline(
-            stock, code, "initial_entry_qty_cap_applied", enabled=True, cap_qty=initial_entry_qty_cap,
-            original_qty=original_qty, scaled_qty=scaled_qty, applied=bool(applied),
-            entry_mode=entry_mode, legs=len(planned_orders),
-        )
-        if applied:
-            log_info(
-                f"[INITIAL_ENTRY_QTY_CAP] {stock.get('name')}({code}) "
-                f"qty={original_qty}->{scaled_qty} cap={initial_entry_qty_cap} entry_mode={entry_mode}"
+        initial_entry_qty_cap = int(_rule("SCALPING_INITIAL_ENTRY_MAX_QTY", 0) or 0)
+        if initial_entry_qty_cap <= 0:
+            _log_entry_pipeline(
+                stock, code, "initial_entry_qty_cap_skipped", enabled=True, cap_qty=0,
+                original_qty=requested_qty, scaled_qty=requested_qty, applied=False,
+                entry_mode=entry_mode, legs=len(planned_orders),
             )
+        else:
+            adjusted_orders, original_qty, scaled_qty, applied = _apply_initial_entry_qty_cap(
+                planned_orders,
+                max_total_qty=initial_entry_qty_cap,
+            )
+            if adjusted_orders:
+                planned_orders = adjusted_orders
+                latency_gate["orders"] = planned_orders
+            if scaled_qty > 0:
+                requested_qty = scaled_qty
+            _log_entry_pipeline(
+                stock, code, "initial_entry_qty_cap_applied", enabled=True, cap_qty=initial_entry_qty_cap,
+                original_qty=original_qty, scaled_qty=scaled_qty, applied=bool(applied),
+                entry_mode=entry_mode, legs=len(planned_orders),
+            )
+            if applied:
+                log_info(
+                    f"[INITIAL_ENTRY_QTY_CAP] {stock.get('name')}({code}) "
+                    f"qty={original_qty}->{scaled_qty} cap={initial_entry_qty_cap} entry_mode={entry_mode}"
+                )
 
     planned_orders, ai_price_canary_touched = _apply_entry_ai_price_canary(
         stock=stock,
@@ -13911,8 +13940,8 @@ def handle_watching_state(stock, code, ws_data, admin_id, *, now_ts=None, now_dt
     SNIPER_AGGRESSIVE_PROB = _rule_float('SNIPER_AGGRESSIVE_PROB', 0.70)
     BUY_SCORE_THRESHOLD = _rule_float('BUY_SCORE_THRESHOLD', 70)
     VPW_STRONG_LIMIT = _rule_float('VPW_STRONG_LIMIT', 120)
-    INVEST_RATIO_SCALPING_MIN = _rule_float('INVEST_RATIO_SCALPING_MIN', 0.05)
-    INVEST_RATIO_SCALPING_MAX = _rule_float('INVEST_RATIO_SCALPING_MAX', 0.25)
+    INVEST_RATIO_SCALPING_MIN = _rule_float('INVEST_RATIO_SCALPING_MIN', 0.10)
+    INVEST_RATIO_SCALPING_MAX = _rule_float('INVEST_RATIO_SCALPING_MAX', 0.30)
     VPW_SCALP_LIMIT = _rule_float('VPW_SCALP_LIMIT', 120)
     AI_WATCHING_COOLDOWN = _rule_int('AI_WATCHING_COOLDOWN', 60)
     VIP_LIQUIDITY_THRESHOLD = _rule_float('VIP_LIQUIDITY_THRESHOLD', 1_000_000_000)

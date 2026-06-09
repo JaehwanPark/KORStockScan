@@ -768,6 +768,10 @@ def check_watching_conditions(stock, code, ws_data, admin_id, radar=None, ai_eng
         deposit,
         ratio,
         max_budget=budget_cap,
+        allow_min_one_share_over_budget=(
+            strategy == 'SCALPING'
+            and bool(getattr(TRADING_RULES, 'SCALPING_MIN_ONE_SHARE_FLOOR_ENABLED', True))
+        ),
     )
     if real_buy_qty <= 0:
         return (

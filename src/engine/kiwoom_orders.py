@@ -174,15 +174,28 @@ def _post_kiwoom_with_auth_retry(url, headers, payload, api_id, *, timeout=5):
     return retry_response, retry_data
 
 
-def calc_buy_qty(current_price, total_deposit, ratio=0.1, max_budget=None):
+def calc_buy_qty(current_price, total_deposit, ratio=0.1, max_budget=None, allow_min_one_share_over_budget=False):
     """
     [v12.1] 예수금 대비 비중을 계산하여 정수 수량 산출
     """
-    _, _, qty, _ = describe_buy_capacity(current_price, total_deposit, ratio, max_budget=max_budget)
+    _, _, qty, _ = describe_buy_capacity(
+        current_price,
+        total_deposit,
+        ratio,
+        max_budget=max_budget,
+        allow_min_one_share_over_budget=allow_min_one_share_over_budget,
+    )
     return qty
 
 
-def describe_buy_capacity(current_price, total_deposit, ratio=0.1, safety_ratio=None, max_budget=None):
+def describe_buy_capacity(
+    current_price,
+    total_deposit,
+    ratio=0.1,
+    safety_ratio=None,
+    max_budget=None,
+    allow_min_one_share_over_budget=False,
+):
     """
     주문가능금액과 전략 비중을 바탕으로 실제 주문 가능 예산/수량을 설명합니다.
     """
@@ -216,6 +229,9 @@ def describe_buy_capacity(current_price, total_deposit, ratio=0.1, safety_ratio=
             safe_budget = relaxed_budget
             qty = relaxed_qty
             used_ratio = relaxed_ratio
+
+    if qty <= 0 and allow_min_one_share_over_budget and float(total_deposit) >= float(current_price):
+        qty = 1
 
     return int(target_budget), int(safe_budget), qty, float(used_ratio)
 

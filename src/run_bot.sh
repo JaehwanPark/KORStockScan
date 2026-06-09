@@ -42,12 +42,15 @@ wait_for_threshold_runtime_env() {
 while true; do
     echo "🚀 KORStockScan 스나이퍼 엔진을 시작합니다..."
 
-    # 2026-05-06 intraday cash withdrawal override:
-    # orderable cash is expected to be about 3,000,000 KRW today.
-    # Keep the 1-share initial entry cap; only re-anchor scalping budget math.
-    export KORSTOCKSCAN_INVEST_RATIO_SCALPING_MIN=1.0
-    export KORSTOCKSCAN_INVEST_RATIO_SCALPING_MAX=1.0
-    export KORSTOCKSCAN_SCALPING_MAX_BUY_BUDGET_KRW=3000000
+    # 2026-06-10 operator sizing release:
+    # real scalping initial BUY uses 10%~30% of orderable cash, with no hard
+    # share cap and a one-share floor only when orderable cash can cover it.
+    export KORSTOCKSCAN_INVEST_RATIO_SCALPING_MIN=0.10
+    export KORSTOCKSCAN_INVEST_RATIO_SCALPING_MAX=0.30
+    export KORSTOCKSCAN_SCALPING_MAX_BUY_BUDGET_KRW=0
+    export KORSTOCKSCAN_SCALPING_INITIAL_ENTRY_QTY_CAP_ENABLED=false
+    export KORSTOCKSCAN_SCALPING_INITIAL_ENTRY_MAX_QTY=0
+    export KORSTOCKSCAN_SCALPING_MIN_ONE_SHARE_FLOOR_ENABLED=true
     export KORSTOCKSCAN_OPENAI_TRANSPORT_MODE=responses_ws
     export KORSTOCKSCAN_OPENAI_RESPONSES_WS_ENABLED=true
     export KORSTOCKSCAN_OPENAI_RESPONSES_WS_POOL_SIZE=2
