@@ -1,7 +1,7 @@
 # Observation Source Quality Audit - 2026-06-09
 
 - status: `pass`
-- event_count: `63894`
+- event_count: `274293`
 - tuning_input_policy: `exclude_defective_rows_not_full_day_raw`
 - hard_blocking_excluded_row_count: `0`
 - tuning_input_allowed: `True`
@@ -25,31 +25,32 @@
 - none
 
 ## Reviewed Unknown Token Findings
-- `scalp_entry_action_decision_snapshot` count=`2062` routing=`reviewed_unknown_token_provenance` fields=`risk_regime_context=5(reviewed_missing_risk_regime_context)`
+- `scalp_entry_action_decision_snapshot` count=`5911` routing=`reviewed_unknown_token_provenance` fields=`risk_regime_context=5(reviewed_missing_risk_regime_context)`
+- `lifecycle_decision_matrix_runtime_policy` count=`22` routing=`reviewed_unknown_token_provenance` fields=`risk_regime_context=1(reviewed_missing_risk_regime_context)`
+- `order_leg_request` count=`21` routing=`reviewed_unknown_token_provenance` fields=`risk_regime_context=1(reviewed_missing_risk_regime_context)`
+- `swing_sim_buy_order_assumed_filled` count=`13` routing=`reviewed_unknown_token_provenance` fields=`risk_regime_context=1(reviewed_missing_risk_regime_context)`
+- `swing_sim_order_bundle_assumed_filled` count=`13` routing=`reviewed_unknown_token_provenance` fields=`risk_regime_context=1(reviewed_missing_risk_regime_context)`
 - `scalp_sim_panic_context_warning` count=`8` routing=`reviewed_unknown_token_provenance` fields=`panic_epoch_id=8(reviewed_missing_risk_regime_context), market_risk_state=8(reviewed_missing_risk_regime_context), liquidity_state=8(reviewed_missing_risk_regime_context), risk_regime_epoch_id=8(reviewed_missing_risk_regime_context)`
-- `lifecycle_decision_matrix_runtime_policy` count=`5` routing=`reviewed_unknown_token_provenance` fields=`risk_regime_context=1(reviewed_missing_risk_regime_context)`
-- `order_leg_request` count=`5` routing=`reviewed_unknown_token_provenance` fields=`risk_regime_context=1(reviewed_missing_risk_regime_context)`
-- `swing_sim_buy_order_assumed_filled` count=`3` routing=`reviewed_unknown_token_provenance` fields=`risk_regime_context=1(reviewed_missing_risk_regime_context)`
-- `swing_sim_order_bundle_assumed_filled` count=`3` routing=`reviewed_unknown_token_provenance` fields=`risk_regime_context=1(reviewed_missing_risk_regime_context)`
+- `order_bundle_submitted` count=`6` routing=`reviewed_unknown_token_provenance` fields=`broker_order_no=6(reviewed_pre_contract_placeholder), broker_receipt_status=6(reviewed_pre_contract_placeholder), filled_qty=6(reviewed_pre_contract_placeholder), remaining_qty=6(reviewed_pre_contract_placeholder), fill_quality=6(reviewed_pre_contract_placeholder)`
 
 ## Top Stages
-- `bad_entry_refined_candidate`: `4377`
-- `scalp_sim_panic_scale_in_blocked`: `3755`
-- `stat_action_decision_snapshot`: `2772`
-- `budget_pass`: `2560`
-- `orderbook_stability_observed`: `2560`
-- `latency_block`: `2549`
-- `strength_momentum_observed`: `2354`
-- `blocked_strength_momentum`: `2354`
-- `market_regime_prior_observed`: `2272`
-- `swing_entry_policy_evaluated`: `2272`
-- `swing_entry_micro_context_observed`: `2255`
-- `scalp_entry_action_decision_snapshot`: `2062`
-- `reversal_add_blocked_reason`: `1639`
-- `blocked_gatekeeper_reject`: `1603`
-- `scalp_sim_panic_action_deduped`: `1586`
-- `ai_holding_fast_reuse_band`: `1581`
-- `ai_holding_reuse_bypass`: `1581`
-- `gatekeeper_fast_reuse_bypass`: `1553`
-- `swing_probe_discarded`: `1521`
-- `gatekeeper_reject_cache_reuse`: `1311`
+- `bad_entry_refined_candidate`: `15688`
+- `scalp_sim_panic_scale_in_blocked`: `14850`
+- `budget_pass`: `14109`
+- `orderbook_stability_observed`: `14108`
+- `latency_block`: `14045`
+- `market_regime_prior_observed`: `13097`
+- `swing_entry_policy_evaluated`: `13097`
+- `swing_entry_micro_context_observed`: `13049`
+- `strength_momentum_observed`: `12000`
+- `blocked_strength_momentum`: `12000`
+- `blocked_swing_gap`: `11055`
+- `stat_action_decision_snapshot`: `10401`
+- `blocked_gatekeeper_reject`: `8377`
+- `gatekeeper_fast_reuse_bypass`: `8057`
+- `gatekeeper_reject_cache_reuse`: `7359`
+- `scalp_sim_panic_action_deduped`: `6585`
+- `scalp_entry_action_decision_snapshot`: `5911`
+- `ai_holding_fast_reuse_band`: `5738`
+- `ai_holding_reuse_bypass`: `5728`
+- `reversal_add_blocked_reason`: `5469`

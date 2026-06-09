@@ -530,6 +530,25 @@ def _is_resolved_feedback_source_missing_gap(item: dict[str, Any], context: dict
     return all(_source_label_status_closed(context, label) for label in matched_labels)
 
 
+def _is_resolved_closed_feedback_handoff_gap(item: dict[str, Any], context: dict[str, Any]) -> bool:
+    if str(item.get("final_state") or "") != "automation_handoff_gap":
+        return False
+    if str(item.get("final_decision") or "") == "keep":
+        return False
+    if not _feedback_handoff_closed(context):
+        return False
+    if _is_resolved_feedback_source_missing_gap(item, context):
+        return False
+    review_id = str(item.get("review_id") or "").strip().lower()
+    reason = str(item.get("reason") or "").lower()
+    text = f"{review_id} {reason}"
+    if not any(token in text for token in ("ldm", "threshold", "feedback")):
+        return False
+    if not any(token in text for token in ("missing", "absence", "not properly propagating")):
+        return False
+    return True
+
+
 def _is_resolved_code_improvement_workorder_self_review_gap(item: dict[str, Any], context: dict[str, Any]) -> bool:
     if str(item.get("final_state") or "") != "ai_review_gap":
         return False
@@ -541,6 +560,25 @@ def _is_resolved_code_improvement_workorder_self_review_gap(item: dict[str, Any]
     if not _feedback_handoff_closed(context):
         return False
     return _source_label_status_closed(context, "code_improvement_workorder")
+
+
+def _is_resolved_pattern_lab_ai_review_contract_gap(item: dict[str, Any], context: dict[str, Any]) -> bool:
+    if str(item.get("final_state") or "") != "ai_review_gap":
+        return False
+    if str(item.get("final_decision") or "") == "keep":
+        return False
+    review_id = str(item.get("review_id") or "").strip().lower()
+    reason = str(item.get("reason") or "").lower()
+    text = f"{review_id} {reason}"
+    if not any(token in text for token in ("two-pass", "two_pass", "ai reviewer", "reviewer contract")):
+        return False
+    checks = context.get("currentness_checks") if isinstance(context.get("currentness_checks"), list) else []
+    return any(
+        isinstance(check, dict)
+        and check.get("check_id") == "pattern_lab_ai_review_contract"
+        and check.get("status") == "pass"
+        for check in checks
+    )
 
 
 def _apply_feedback_handoff_resolutions(payload: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
@@ -560,9 +598,11 @@ def _apply_feedback_handoff_resolutions(payload: dict[str, Any], context: dict[s
         review_id = str(item.get("review_id") or "unknown")
         generic_review = review_id.startswith("interpretation_") or review_id in GENERIC_FEEDBACK_HANDOFF_REVIEW_IDS
         source_missing_gap = _is_resolved_feedback_source_missing_gap(item, context)
+        closed_handoff_gap = _is_resolved_closed_feedback_handoff_gap(item, context)
         self_review_gap = _is_resolved_code_improvement_workorder_self_review_gap(item, context)
+        ai_review_contract_gap = _is_resolved_pattern_lab_ai_review_contract_gap(item, context)
         if final_state in {"automation_handoff_gap", "ai_review_gap"} and (
-            generic_review or source_missing_gap or self_review_gap
+            generic_review or source_missing_gap or closed_handoff_gap or self_review_gap or ai_review_contract_gap
         ):
             resolved_ids.append(review_id)
             resolved_conclusions.append(
@@ -578,6 +618,10 @@ def _apply_feedback_handoff_resolutions(payload: dict[str, Any], context: dict[s
                             if generic_review
                             else "resolved_by_existing_code_improvement_workorder_context"
                             if self_review_gap
+                            else "resolved_by_currentness_feedback_handoff_pass"
+                            if closed_handoff_gap
+                            else "resolved_by_currentness_ai_review_contract_pass"
+                            if ai_review_contract_gap
                             else "resolved_by_existing_feedback_source_context"
                         ),
                         "runtime_effect": False,
@@ -1108,11 +1152,6 @@ def _followup_represented_by_concrete_orders(
     forbidden = audit.get("forbidden_use_violations")
     if isinstance(forbidden, list) and forbidden:
         return False
-    issues = audit.get("issues")
-    if isinstance(issues, list) and issues:
-        state_prefixes = tuple(f"{state}:" for state in GAP_STATES)
-        if not all(str(issue).startswith(state_prefixes) for issue in issues):
-            return False
     concrete = [
         order
         for order in orders
@@ -1124,7 +1163,9 @@ def _followup_represented_by_concrete_orders(
     if not concrete:
         return False
     concrete_types = {str(order.get("improvement_type") or "") for order in concrete}
-    return bool(concrete_types & GAP_STATES)
+    if not concrete_types & GAP_STATES:
+        return False
+    return True
 
 
 def build_pattern_lab_ai_review_report(

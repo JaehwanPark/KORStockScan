@@ -221,6 +221,127 @@ def test_pattern_lab_ai_review_keeps_specific_handoff_gap_when_feedback_sources_
     assert "feedback_handoff_resolution" not in conclusion
 
 
+def test_pattern_lab_ai_review_resolves_closed_ldm_threshold_feedback_false_positive(tmp_path, monkeypatch):
+    report_dir = tmp_path / "data" / "report"
+    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+    _write_json(
+        report_dir / "pattern_lab_currentness_audit" / "pattern_lab_currentness_audit_2026-05-15.json",
+        {
+            "status": "pass",
+            "summary": {
+                "consumed_feedback_source_count": 6,
+                "missing_feedback_source_count": 0,
+            },
+            "checks": [],
+        },
+    )
+    for label in (
+        "threshold_cycle_ev",
+        "lifecycle_decision_matrix",
+        "lifecycle_bucket_discovery",
+        "swing_lifecycle_decision_matrix",
+        "swing_lifecycle_bucket_discovery",
+        "swing_strategy_discovery_ev",
+    ):
+        _write_json(
+            report_dir / label / f"{label}_2026-05-15.json",
+            {"status": "pass", "runtime_effect": False, "allowed_runtime_apply": False},
+        )
+    raw_response = {
+        "schema_version": 1,
+        "interpretation": {"review_items": [], "source_feedback_status": "warning"},
+        "audit": {
+            "status": "correction_required",
+            "issues": ["scalp_entry_adm_unknown_bucket_source_quality_gap"],
+            "forbidden_use_violations": [],
+            "reason": "AI over-classified a closed feedback handoff.",
+        },
+        "final_conclusions": [
+            {
+                "review_id": "scalp_entry_adm_unknown_bucket_source_quality_gap",
+                "domain": "scalping",
+                "final_state": "automation_handoff_gap",
+                "final_decision": "block_runtime_use",
+                "reason": "Missing LDM/threshold feedback in scalping pattern lab prevents closed-loop improvement",
+                "required_followup": ["create_workorder"],
+            }
+        ],
+    }
+
+    report = mod.build_pattern_lab_ai_review_report("2026-05-15", provider="openai", ai_raw_response=raw_response)
+
+    assert report["status"] == "pass"
+    assert report["summary"]["audit_status"] == "pass"
+    assert report["code_improvement_orders"] == []
+    conclusion = report["ai_two_pass_review"]["final_conclusions"][0]
+    assert conclusion["final_state"] == "source_only_keep_collecting"
+    assert conclusion["feedback_handoff_resolution"]["status"] == "resolved_by_currentness_feedback_handoff_pass"
+
+
+def test_pattern_lab_ai_review_resolves_contract_gap_when_currentness_contract_passes(tmp_path, monkeypatch):
+    report_dir = tmp_path / "data" / "report"
+    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+    _write_json(
+        report_dir / "pattern_lab_currentness_audit" / "pattern_lab_currentness_audit_2026-05-15.json",
+        {
+            "status": "pass",
+            "summary": {
+                "consumed_feedback_source_count": 6,
+                "missing_feedback_source_count": 0,
+            },
+            "checks": [
+                {
+                    "check_id": "pattern_lab_ai_review_contract",
+                    "status": "pass",
+                    "severity": "info",
+                    "finding": "AI review contract is present.",
+                }
+            ],
+        },
+    )
+    for label in (
+        "threshold_cycle_ev",
+        "lifecycle_decision_matrix",
+        "lifecycle_bucket_discovery",
+        "swing_lifecycle_decision_matrix",
+        "swing_lifecycle_bucket_discovery",
+        "swing_strategy_discovery_ev",
+    ):
+        _write_json(
+            report_dir / label / f"{label}_2026-05-15.json",
+            {"status": "pass", "runtime_effect": False, "allowed_runtime_apply": False},
+        )
+    raw_response = {
+        "schema_version": 1,
+        "interpretation": {"review_items": [], "source_feedback_status": "warning"},
+        "audit": {
+            "status": "correction_required",
+            "issues": ["ai_review_gap"],
+            "forbidden_use_violations": [],
+            "reason": "AI over-classified an implemented reviewer contract.",
+        },
+        "final_conclusions": [
+            {
+                "review_id": "ai_review_gap",
+                "domain": "scalping",
+                "final_state": "ai_review_gap",
+                "final_decision": "block_runtime_use",
+                "reason": "The scalping pattern lab lacks a mandatory two-pass AI reviewer contract.",
+                "required_followup": ["create_workorder"],
+            }
+        ],
+    }
+
+    report = mod.build_pattern_lab_ai_review_report("2026-05-15", provider="openai", ai_raw_response=raw_response)
+
+    assert report["status"] == "pass"
+    assert report["summary"]["audit_status"] == "pass"
+    assert report["code_improvement_orders"] == []
+    conclusion = report["ai_two_pass_review"]["final_conclusions"][0]
+    assert conclusion["final_state"] == "source_only_keep_collecting"
+    assert conclusion["feedback_handoff_resolution"]["status"] == "resolved_by_currentness_ai_review_contract_pass"
+
+
 def test_pattern_lab_ai_review_resolves_stale_source_missing_gaps_when_feedback_sources_closed(tmp_path, monkeypatch):
     report_dir = tmp_path / "data" / "report"
     monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
@@ -797,9 +918,11 @@ def test_pattern_lab_ai_review_does_not_retry_parsed_audit_correction(tmp_path, 
     report = mod.build_pattern_lab_ai_review_report("2026-05-15", provider="openai")
 
     assert [call.reasoning_effort for call in calls] == ["medium"]
-    assert report["summary"]["ai_review_followup_required"] is True
+    assert report["summary"]["ai_review_followup_required"] is False
+    assert report["summary"]["generic_ai_review_followup_resolved_by_concrete_orders"] is True
     assert report["ai_two_pass_review"]["provider_status"]["retry_attempted"] is False
     assert any(order["improvement_type"] == "source_quality_gap" for order in report["code_improvement_orders"])
+    assert not any(order["improvement_type"] == "ai_review_followup" for order in report["code_improvement_orders"])
 
 
 def test_pattern_lab_ai_review_normalizes_empty_correction_audit(tmp_path, monkeypatch):

@@ -417,6 +417,13 @@ def _eligible_actions(action: str, fields: dict[str, Any]) -> list[str]:
     return ["NO_BUY_AI"]
 
 
+def _adm_source_bucket_value(fields: dict[str, Any], adm_key: str, fallback_value: str) -> tuple[str, str]:
+    adm_value = _nonempty(fields.get(adm_key))
+    if adm_value:
+        return adm_value, "adm_field"
+    return fallback_value, "raw_recomputed"
+
+
 def _base_row(event: dict[str, Any]) -> dict[str, Any]:
     fields = _event_fields(event)
     stage = str(event.get("stage") or "")
@@ -432,6 +439,21 @@ def _base_row(event: dict[str, Any]) -> dict[str, Any]:
         or _record_key(event)
     )
     sim_record_id = _nonempty(fields.get("sim_record_id"))
+
+    raw_score_bucket = _score_bucket(fields.get("ai_score") or fields.get("ai_score_after_bonus"))
+    raw_risk_bucket = _risk_context_bucket(fields)
+    raw_stale = _stale_bucket(fields)
+    raw_price = _price_resolution_bucket(fields)
+    raw_liquidity = _liquidity_bucket(fields)
+    raw_overbought = _overbought_bucket(fields)
+
+    score_bucket, score_prov = _adm_source_bucket_value(fields, "entry_adm_score_bucket", raw_score_bucket)
+    risk_context_bucket, risk_prov = _adm_source_bucket_value(fields, "entry_adm_risk_context_bucket", raw_risk_bucket)
+    stale_bucket, stale_prov = _adm_source_bucket_value(fields, "entry_adm_stale_bucket", raw_stale)
+    price_resolution_bucket, price_prov = _adm_source_bucket_value(fields, "entry_adm_price_resolution_bucket", raw_price)
+    liquidity_bucket, liquidity_prov = _adm_source_bucket_value(fields, "entry_adm_liquidity_bucket", raw_liquidity)
+    overbought_bucket, overbought_prov = _adm_source_bucket_value(fields, "entry_adm_overbought_bucket", raw_overbought)
+
     row = {
         "candidate_id": candidate_id,
         "record_id": _nonempty(event.get("record_id") or fields.get("record_id")),
@@ -450,8 +472,8 @@ def _base_row(event: dict[str, Any]) -> dict[str, Any]:
         "action_normalization_reason": normalization_reason,
         "eligible_actions": _eligible_actions(action, fields),
         "rejected_actions": [item for item in ACTION_ORDER if item not in _eligible_actions(action, fields)],
-        "score_bucket": _score_bucket(fields.get("ai_score") or fields.get("ai_score_after_bonus")),
-        "risk_context_bucket": _risk_context_bucket(fields),
+        "score_bucket": score_bucket,
+        "risk_context_bucket": risk_context_bucket,
         "market_regime_continuous_bucket": _market_regime_continuous_bucket(fields),
         "market_regime": _nonempty(fields.get("market_regime")),
         "market_regime_continuous_score": _safe_float(fields.get("market_regime_continuous_score"), None),
@@ -465,10 +487,10 @@ def _base_row(event: dict[str, Any]) -> dict[str, Any]:
         "market_regime_score_version": _nonempty(fields.get("market_regime_score_version")),
         "market_regime_source_quality": _nonempty(fields.get("market_regime_source_quality")),
         "risk_context_owner": _nonempty(fields.get("risk_context_owner")),
-        "stale_bucket": _stale_bucket(fields),
-        "price_resolution_bucket": _price_resolution_bucket(fields),
-        "liquidity_bucket": _liquidity_bucket(fields),
-        "overbought_bucket": _overbought_bucket(fields),
+        "stale_bucket": stale_bucket,
+        "price_resolution_bucket": price_resolution_bucket,
+        "liquidity_bucket": liquidity_bucket,
+        "overbought_bucket": overbought_bucket,
         "time_bucket": _time_bucket(event.get("emitted_at") or fields.get("tick_latest_time")),
         "actual_order_submitted": _safe_bool(fields.get("actual_order_submitted"), stage == "order_bundle_submitted"),
         "broker_order_forbidden": _safe_bool(fields.get("broker_order_forbidden"), stage.startswith("scalp_sim_") or action not in {"BUY_NOW", "BUY_DEFENSIVE"}),
@@ -491,6 +513,14 @@ def _base_row(event: dict[str, Any]) -> dict[str, Any]:
         "entry_adm_forced_action": _nonempty(fields.get("entry_adm_forced_action")),
         "entry_adm_runtime_reason": _nonempty(fields.get("entry_adm_runtime_reason")),
         "entry_adm_runtime_bias_applied": _safe_bool(fields.get("entry_adm_runtime_bias_applied")),
+        "bucket_field_provenance": {
+            "score_bucket": score_prov,
+            "risk_context_bucket": risk_prov,
+            "stale_bucket": stale_prov,
+            "price_resolution_bucket": price_prov,
+            "liquidity_bucket": liquidity_prov,
+            "overbought_bucket": overbought_prov,
+        },
     }
     if not row["sim_record_id"] and str(stage).startswith("scalp_sim_"):
         row["sim_record_id"] = candidate_id if str(candidate_id).startswith("SCALPSIM-") else ""
@@ -642,6 +672,15 @@ def _bucket_summary(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return sorted(summaries, key=lambda item: (-_safe_int(item.get("sample_count")), item.get("bucket_token") or ""))[:50]
 
 
+def _is_not_available_bucket(value: str) -> bool:
+    return "not_available" in str(value or "").lower()
+
+
+def _is_unknown_bucket(value: str) -> bool:
+    compact = str(value or "").lower()
+    return "unknown" in compact and "not_available" not in compact
+
+
 def _unknown_bucket_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
     dimensions = (
         "score_bucket",
@@ -653,16 +692,39 @@ def _unknown_bucket_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
     )
     total = len(rows)
     dimension_counts: dict[str, int] = {}
+    not_available_counts: dict[str, int] = {}
+    unknown_affected_row_count = 0
+    not_available_affected_row_count = 0
     stage_counts: Counter[str] = Counter()
     examples: list[dict[str, Any]] = []
+    adm_source_count = 0
+    raw_recomputed_count = 0
+    adm_source_total = 0
     for row in rows:
+        provenance = row.get("bucket_field_provenance")
+        if isinstance(provenance, dict):
+            adm_count = sum(1 for v in provenance.values() if v == "adm_field")
+            raw_count = sum(1 for v in provenance.values() if v == "raw_recomputed")
+            adm_source_total += adm_count
+            raw_recomputed_count += raw_count
+            if adm_count > 0:
+                adm_source_count += 1
         unknown_dimensions = [
-            key for key in dimensions if "unknown" in str(row.get(key) or "").lower()
+            key for key in dimensions if _is_unknown_bucket(row.get(key) or "")
         ]
-        if not unknown_dimensions:
+        not_available_dimensions = [
+            key for key in dimensions if _is_not_available_bucket(row.get(key) or "")
+        ]
+        if not unknown_dimensions and not not_available_dimensions:
             continue
+        if unknown_dimensions:
+            unknown_affected_row_count += 1
+        if not_available_dimensions:
+            not_available_affected_row_count += 1
         for key in unknown_dimensions:
             dimension_counts[key] = dimension_counts.get(key, 0) + 1
+        for key in not_available_dimensions:
+            not_available_counts[key] = not_available_counts.get(key, 0) + 1
         stage_counts[str(row.get("stage") or "-")] += 1
         if len(examples) < 10:
             examples.append(
@@ -671,19 +733,31 @@ def _unknown_bucket_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
                     "stock_code": row.get("stock_code"),
                     "event_time": row.get("event_time"),
                     "unknown_dimensions": unknown_dimensions,
+                    "not_available_dimensions": not_available_dimensions,
                     "bucket_token": "|".join(str(row.get(key) or "-") for key in dimensions),
+                    "bucket_provenance": provenance if isinstance(provenance, dict) else None,
                 }
             )
-    affected = sum(stage_counts.values())
+    unknown_dimension_occurrence = sum(dimension_counts.values())
+    not_available_dimension_occurrence = sum(not_available_counts.values())
     return {
-        "affected_rows": affected,
+        "affected_rows": unknown_affected_row_count,
+        "not_available_affected_rows": not_available_affected_row_count,
+        "unknown_dimension_occurrence_count": unknown_dimension_occurrence,
+        "not_available_dimension_occurrence_count": not_available_dimension_occurrence,
         "total_rows": total,
-        "affected_rate": round(affected / total, 4) if total else 0.0,
+        "affected_rate": round(unknown_affected_row_count / total, 4) if total else 0.0,
+        "not_available_affected_rate": round(not_available_affected_row_count / total, 4) if total else 0.0,
         "dimension_counts": dimension_counts,
+        "not_available_dimension_counts": not_available_counts,
         "stage_counts": dict(stage_counts),
         "examples": examples,
-        "source_quality_gate": "source_quality_blocker" if affected else "pass",
-        "recommended_route": "source_quality_workorder" if affected else "none",
+        "source_quality_gate": "source_quality_blocker" if unknown_affected_row_count else "pass",
+        "recommended_route": "source_quality_workorder" if unknown_affected_row_count else "none",
+        "recomputed_unknown_count": raw_recomputed_count,
+        "adm_source_bucket_used_count": adm_source_count,
+        "adm_source_bucket_field_count": adm_source_total,
+        "not_available_route": "field_legitimately_unavailable_no_workorder",
     }
 
 
@@ -819,7 +893,13 @@ def render_scalp_entry_action_decision_matrix_markdown(report: dict[str, Any]) -
         f"- missing_actions: `{summary.get('missing_actions')}`",
         f"- zero_sample_actions: `{summary.get('zero_sample_actions')}`",
         f"- unknown_bucket_affected_rows: `{unknown_summary.get('affected_rows', 0)}`",
+        f"- unknown_dimension_occurrence_count: `{unknown_summary.get('unknown_dimension_occurrence_count', 0)}`",
+        f"- unknown_bucket_not_available_rows: `{unknown_summary.get('not_available_affected_rows', 0)}`",
+        f"- not_available_dimension_occurrence_count: `{unknown_summary.get('not_available_dimension_occurrence_count', 0)}`",
         f"- unknown_bucket_dimension_counts: `{unknown_summary.get('dimension_counts') or {}}`",
+        f"- unknown_bucket_not_available_dimension_counts: `{unknown_summary.get('not_available_dimension_counts') or {}}`",
+        f"- adm_source_bucket_used_count: `{unknown_summary.get('adm_source_bucket_used_count', 0)}`",
+        f"- recomputed_unknown_count: `{unknown_summary.get('recomputed_unknown_count', 0)}`",
         "",
         "## Action Summary",
         "| action | sample | joined | sq_adjusted_ev_pct | equal_weight_avg_profit_pct | missed_winner | avoided_loser |",

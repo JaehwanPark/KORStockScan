@@ -507,6 +507,43 @@ def _can_finalize_tail_repair(verification: dict[str, Any]) -> bool:
     return True
 
 
+def _can_attempt_failed_done_reconciliation(target_date: str, verification: dict[str, Any]) -> bool:
+    if _postclose_status_succeeded(target_date):
+        return False
+    predecessor = verification.get("predecessor_integrity")
+    log_issues = (
+        set(str(item) for item in predecessor.get("log_issues") or [] if str(item))
+        if isinstance(predecessor, dict)
+        else set()
+    )
+    if log_issues != {"postclose_fail_marker_present"}:
+        return False
+    flattened_issues = set(_flatten_issues(verification))
+    allowed_issues = {"postclose_fail_marker_present"} | DONE_ACCEPTABLE_WARNING_ISSUES
+    if flattened_issues and not flattened_issues.issubset(allowed_issues):
+        return False
+    if verification.get("missing_required_artifacts"):
+        return False
+    if verification.get("missing_downstream_links") or verification.get("stale_downstream_links"):
+        return False
+    if verification.get("source_generation_warnings"):
+        return False
+    if not _verification_artifacts_passable(verification):
+        return False
+    if _has_invalid_artifact_status(verification):
+        return False
+    runtime_gap = verification.get("runtime_apply_gap_audit")
+    if isinstance(runtime_gap, dict) and runtime_gap.get("status") == "fail":
+        return False
+    conversion_kpi = verification.get("conversion_kpi")
+    if isinstance(conversion_kpi, dict) and conversion_kpi.get("status") == "fail":
+        return False
+    workorder_snapshot = verification.get("workorder_snapshot")
+    if isinstance(workorder_snapshot, dict) and workorder_snapshot.get("status") == "missing_snapshot_identity":
+        return False
+    return True
+
+
 def _can_reconcile_marker(target_date: str, verification: dict[str, Any]) -> bool:
     if not _postclose_status_succeeded(target_date):
         return False
@@ -582,6 +619,7 @@ def _run_internal_action(target_date: str, action: RecoveryAction, verification:
         recovery_action = "tail_repair_done_reconciliation"
         status_path = _status_path(target_date)
         status_payload = _load_json(status_path)
+        now = datetime.now().astimezone().isoformat(timespec="seconds")
         status_payload.update(
             {
                 "status": "succeeded",
@@ -589,7 +627,8 @@ def _run_internal_action(target_date: str, action: RecoveryAction, verification:
                 "exit_code": 0,
                 "runtime_effect": False,
                 "allowed_runtime_apply": False,
-                "finished_at": datetime.now().astimezone().isoformat(timespec="seconds"),
+                "finished_at": now,
+                "updated_at": now,
             }
         )
         _write_json(status_path, status_payload)
@@ -633,6 +672,20 @@ def _recovery_actions(target_date: str, verification: dict[str, Any], *, allow_w
         return actions
     if "postclose_fail_marker_present" in log_issue_set and failed_tail_stage:
         return _tail_stage_repair_actions(target_date, failed_tail_stage)
+    if log_issue_set & MARKER_RECONCILIATION_LOG_ISSUES and _can_reconcile_marker(target_date, verification):
+        actions.extend([_build_marker_reconciliation_action(target_date), _build_verify_action(target_date)])
+        return actions
+    if "postclose_fail_marker_present" in log_issue_set and _can_attempt_failed_done_reconciliation(
+        target_date, verification
+    ):
+        actions.extend(
+            [
+                _build_pending_verify_action(target_date),
+                _build_tail_done_reconciliation_action(target_date),
+                _build_verify_action(target_date),
+            ]
+        )
+        return actions
     if EV_WORKORDER_STALE_ISSUES & set(issues):
         actions.extend(
             [
@@ -646,6 +699,9 @@ def _recovery_actions(target_date: str, verification: dict[str, Any], *, allow_w
                         target_date,
                         "--calibration-run-phase",
                         "postclose",
+                        "--ai-correction-provider",
+                        "openai",
+                        "--reuse-ai-review-if-valid",
                     ],
                     "daily report refresh before EV/workorder repair",
                 ),
@@ -662,9 +718,6 @@ def _recovery_actions(target_date: str, verification: dict[str, Any], *, allow_w
                 _build_verify_action(target_date),
             ]
         )
-        return actions
-    if log_issue_set & MARKER_RECONCILIATION_LOG_ISSUES and _can_reconcile_marker(target_date, verification):
-        actions.extend([_build_marker_reconciliation_action(target_date), _build_verify_action(target_date)])
         return actions
     if "runtime_apply_gap" in issue_text:
         actions.append(

@@ -17,8 +17,14 @@
 - action_counts: `{'WAIT_REQUOTE': 6, 'BUY_NOW': 2, 'NO_BUY_AI': 388, 'SKIP_PRE_SUBMIT_SAFETY': 73, 'SKIP_SOURCE_QUALITY': 1, 'BUY_DEFENSIVE': 1}`
 - missing_actions: `[]`
 - zero_sample_actions: `['SKIP_STALE']`
-- unknown_bucket_affected_rows: `469`
-- unknown_bucket_dimension_counts: `{'price_resolution_bucket': 395, 'risk_context_bucket': 356, 'score_bucket': 88}`
+- unknown_bucket_affected_rows: `198`
+- unknown_dimension_occurrence_count: `300`
+- unknown_bucket_not_available_rows: `200`
+- not_available_dimension_occurrence_count: `266`
+- unknown_bucket_dimension_counts: `{'price_resolution_bucket': 124, 'score_bucket': 88, 'risk_context_bucket': 88}`
+- unknown_bucket_not_available_dimension_counts: `{'liquidity_bucket': 127, 'stale_bucket': 121, 'overbought_bucket': 18}`
+- adm_source_bucket_used_count: `271`
+- recomputed_unknown_count: `1200`
 
 ## Action Summary
 | action | sample | joined | sq_adjusted_ev_pct | equal_weight_avg_profit_pct | missed_winner | avoided_loser |
@@ -32,16 +38,16 @@
 | `SKIP_PRE_SUBMIT_SAFETY` | 73 | 66 | -0.906 | -1.0021 | 36 | 47 |
 
 ## Top Buckets
-- `score50_64|risk_unknown|-|fresh|price_unknown|liquidity_not_available|overbought_not_available|time_1000_1200` sample=`92` joined=`11` action=`NO_BUY_AI` sq_ev=`-0.1889`
-- `score50_64|risk_unknown|-|fresh|price_unknown|liquidity_not_available|overbought_not_available|time_0900_1000` sample=`64` joined=`1` action=`NO_BUY_AI` sq_ev=`-0.0331`
-- `score50_64|risk_unknown|-|fresh|price_unknown|liquidity_not_available|overbought_not_available|time_1200_1400` sample=`37` joined=`16` action=`NO_BUY_AI` sq_ev=`-0.1673`
+- `score50_64|weak_strength_momentum|-|fresh|quote_based|liquidity_high|overbought_normal|time_1000_1200` sample=`92` joined=`10` action=`NO_BUY_AI` sq_ev=`-0.1695`
+- `score50_64|weak_strength_momentum|-|fresh|quote_based|liquidity_high|overbought_normal|time_0900_1000` sample=`43` joined=`1` action=`NO_BUY_AI` sq_ev=`-0.0493`
+- `score50_64|weak_strength_momentum|-|fresh|quote_based|liquidity_high|overbought_normal|time_1200_1400` sample=`43` joined=`15` action=`NO_BUY_AI` sq_ev=`-0.2982`
 - `score_unknown|risk_unknown|-|stale_not_available|resolved_price|below_min_liquidity|overbought_ok|time_1200_1400` sample=`28` joined=`27` action=`SKIP_PRE_SUBMIT_SAFETY` sq_ev=`-0.6018`
+- `score50_64|weak_strength_momentum|-|fresh|quote_based|liquidity_high|overbought_watch|time_0900_1000` sample=`25` joined=`0` action=`NO_BUY_AI` sq_ev=`0.0`
+- `score50_64|weak_strength_momentum|-|fresh|quote_based|liquidity_high|overbought_normal|time_1400_close` sample=`18` joined=`5` action=`NO_BUY_AI` sq_ev=`-0.3833`
 - `score_unknown|risk_unknown|-|stale_not_available|resolved_price|below_min_liquidity|overbought_ok|time_1400_close` sample=`17` joined=`14` action=`SKIP_PRE_SUBMIT_SAFETY` sq_ev=`-1.677`
-- `score50_64|risk_unknown|-|fresh|price_unknown|liquidity_not_available|overbought_not_available|time_1400_close` sample=`15` joined=`6` action=`NO_BUY_AI` sq_ev=`-0.584`
+- `score50_64|weak_strength_momentum|-|fresh|quote_based|liquidity_high|overbought_watch|time_1000_1200` sample=`16` joined=`0` action=`NO_BUY_AI` sq_ev=`0.0`
 - `score50_64|weak_strength_momentum|-|fresh|price_unknown|liquidity_not_available|overbought_normal|time_0900_1000` sample=`15` joined=`0` action=`NO_BUY_AI` sq_ev=`0.0`
 - `score50_64|weak_strength_momentum|-|stale_not_available|price_unknown|liquidity_not_available|overbought_normal|time_0900_1000` sample=`15` joined=`0` action=`NO_BUY_AI` sq_ev=`0.0`
-- `score_unknown|risk_unknown|-|stale_not_available|resolved_price|below_min_liquidity|overbought_ok|time_1000_1200` sample=`15` joined=`15` action=`SKIP_PRE_SUBMIT_SAFETY` sq_ev=`-0.8253`
-- `score_unknown|risk_unknown|-|stale_not_available|price_unknown|liquidity_not_available|overbought_not_available|time_1400_close` sample=`14` joined=`0` action=`NO_BUY_AI` sq_ev=`0.0`
 
 ## Warnings
 - `unknown_bucket_source_quality_gap`

@@ -7,6 +7,7 @@ import hashlib
 import json
 import math
 import re
+from collections import Counter
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -966,6 +967,9 @@ def _serialize_classified_order(item: ClassifiedOrder) -> dict[str, Any]:
         "implementation_status": item.order.get("implementation_status"),
         "original_implementation_status": item.order.get("original_implementation_status"),
         "implementation_checks": item.order.get("implementation_checks") or [],
+        "implementation_id": item.order.get("implementation_id"),
+        "explicit_redecision_required": item.order.get("explicit_redecision_required"),
+        "conflict_resolution_acceptance_test": item.order.get("conflict_resolution_acceptance_test"),
         "implementation_provenance": item.order.get("implementation_provenance"),
         "repeat_unresolved_escalation": item.order.get("repeat_unresolved_escalation"),
         "parity_contract": item.order.get("parity_contract"),
@@ -1435,6 +1439,25 @@ def _classify_order(
         )
 
     if order.get("source_report_type") == "lifecycle_bucket_discovery_quiet_gap_rollup":
+        is_conflict_order = order.get("route") == "parent_conflict_exclusion_review"
+        conflict_ready = is_conflict_order and bool(order.get("implementation_candidate"))
+        if conflict_ready:
+            return ClassifiedOrder(
+                order=order,
+                decision="implement_now",
+                reason=(
+                    "parent conflict resolution evidence is closed with resolution states and child "
+                    "reclassification items; implementation is source-only output generation and does "
+                    "not authorize runtime mutation"
+                ),
+                mapped_family=mapped_family or "lifecycle_bucket_discovery",
+                route=route or "parent_conflict_resolution_implement_now",
+                confidence=confidence or "postclose_discovery_source",
+                automation_reentry=(
+                    "After implementation, rerun lifecycle_bucket_discovery, code_improvement_workorder, "
+                    "threshold EV, and postclose verifier. runtime_effect=false, allowed_runtime_apply=false."
+                ),
+            )
         return ClassifiedOrder(
             order=order,
             decision="attach_existing_family",
@@ -2671,44 +2694,86 @@ def _lifecycle_bucket_discovery_followup_orders(report: dict[str, Any]) -> list[
             _safe_int(quiet_type_counts.get("ai_review_parsed_low_coverage")),
         ),
     ]
+    parent_conflict_resolution = (
+        report.get("parent_conflict_resolution")
+        if isinstance(report.get("parent_conflict_resolution"), list)
+        else []
+    )
     for order_id, title, route, count in quiet_orders:
         if count <= 0:
             continue
-        orders.append(
-            {
-                "order_id": order_id,
-                "title": title,
-                "source_report_type": "lifecycle_bucket_discovery_quiet_gap_rollup",
-                "lifecycle_stage": "multi_stage",
-                "target_subsystem": "lifecycle_bucket_discovery_taxonomy_provenance",
-                "route": route,
-                "mapped_family": "lifecycle_bucket_discovery",
-                "threshold_family": "lifecycle_bucket_discovery",
-                "improvement_type": "quiet_gap_rollup_evidence",
-                "confidence": "postclose_discovery_source",
-                "priority": 3,
-                "runtime_effect": False,
-                "allowed_runtime_apply": False,
-                "expected_ev_effect": (
-                    "Keep quiet source-quality gaps visible without treating every rollup as an immediate "
-                    "code patch requirement."
-                ),
-                "evidence": [
-                    f"quiet_gap_count={quiet_summary.get('quiet_gap_count')}",
-                    f"rollup_required_count={quiet_summary.get('rollup_required_count')}",
-                    f"sim_live_connected_quiet_gap_count={quiet_summary.get('sim_live_connected_quiet_gap_count')}",
-                    f"quiet_gap_type_counts={quiet_type_counts}",
-                    f"ai_review_coverage={quiet_summary.get('ai_review_coverage') or {}}",
-                    "runtime_effect=false",
-                    "allowed_runtime_apply=false",
-                ],
-                "intent": (
-                    "Surface parent conflict/exclusion children, positive source-only keep-collecting rows, "
-                    "absorbed parent-policy evidence, and low AI coverage in the postclose workorder chain."
-                ),
-                "next_postclose_metric": "quiet_gap_summary rollup counts remain visible until explicitly resolved.",
-            }
-        )
+        is_conflict_order = route == "parent_conflict_exclusion_review"
+        order = {
+            "order_id": order_id,
+            "title": title,
+            "source_report_type": "lifecycle_bucket_discovery_quiet_gap_rollup",
+            "lifecycle_stage": "multi_stage",
+            "target_subsystem": "lifecycle_bucket_discovery_taxonomy_provenance",
+            "route": route,
+            "mapped_family": "lifecycle_bucket_discovery",
+            "threshold_family": "lifecycle_bucket_discovery",
+            "improvement_type": "quiet_gap_rollup_evidence",
+            "confidence": "postclose_discovery_source",
+            "priority": 3,
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+            "expected_ev_effect": (
+                "Keep quiet source-quality gaps visible without treating every rollup as an immediate "
+                "code patch requirement."
+            ),
+            "evidence": [
+                f"quiet_gap_count={quiet_summary.get('quiet_gap_count')}",
+                f"rollup_required_count={quiet_summary.get('rollup_required_count')}",
+                f"sim_live_connected_quiet_gap_count={quiet_summary.get('sim_live_connected_quiet_gap_count')}",
+                f"quiet_gap_type_counts={quiet_type_counts}",
+                f"ai_review_coverage={quiet_summary.get('ai_review_coverage') or {}}",
+                "runtime_effect=false",
+                "allowed_runtime_apply=false",
+            ],
+            "intent": (
+                "Surface parent conflict/exclusion children, positive source-only keep-collecting rows, "
+                "absorbed parent-policy evidence, and low AI coverage in the postclose workorder chain."
+            ),
+            "next_postclose_metric": "quiet_gap_summary rollup counts remain visible until explicitly resolved.",
+        }
+        if is_conflict_order:
+            conflict_resolved = len(parent_conflict_resolution) > 0
+            order["implementation_candidate"] = conflict_resolved
+            order["explicit_redecision_required"] = not conflict_resolved
+            if conflict_resolved:
+                resolution_states = Counter(
+                    str(p.get("conflict_resolution_state") or "")
+                    for p in parent_conflict_resolution
+                )
+                sim_eligible = sum(
+                    1 for p in parent_conflict_resolution
+                    if p.get("sim_policy_eligible_after_resolution")
+                )
+                order["evidence"].extend([
+                    f"parent_conflict_resolution_count={len(parent_conflict_resolution)}",
+                    f"resolution_states={dict(resolution_states)}",
+                    f"sim_eligible_after_resolution={sim_eligible}",
+                ])
+                order["conflict_resolution_acceptance_test"] = "pass"
+                order["implementation_id"] = "parent_conflict_resolution_produced"
+                order["implementation_status"] = "implemented"
+                order["implementation_checks"] = [
+                    {
+                        "name": "parent_conflict_resolution_present",
+                        "status": "pass",
+                        "resolution_count": len(parent_conflict_resolution),
+                        "sim_eligible_after_resolution": sim_eligible,
+                    }
+                ]
+            else:
+                order["evidence"].append(
+                    "parent_conflict_resolution_missing: child_conflict_warning > 0 but no resolution items produced"
+                )
+                order["conflict_resolution_acceptance_test"] = "fail"
+                order["warnings"] = [
+                    "parent_conflict_resolution_missing",
+                ]
+        orders.append(order)
     return orders
 
 

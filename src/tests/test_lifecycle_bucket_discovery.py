@@ -2176,3 +2176,226 @@ def test_lifecycle_bucket_discovery_shard_failures_only_block_live_targets():
     assert by_id["live-1"]["classification_state"] == "runtime_blocked_contract_gap"
     assert by_id["live-1"]["ai_tier2_blocked_reason"] == "ai_tier2_validation_not_parsed:timeout"
     assert by_id["sim-1"]["classification_state"] == "sim_auto_approved"
+
+
+def test_parent_conflict_resolution_classifies_source_quality_gap_children():
+    report = {
+        "parent_bucket_summaries": [
+            {
+                "parent_bucket_id": "lifecycle_flow:parent_1",
+                "parent_ev": 0.5,
+                "parent_joined_sample": 30,
+                "child_conflict_warning": True,
+                "child_ev_dispersion_pct": 3.0,
+                "absorbed_child_bucket_ids": ["child_1", "child_2"],
+                "conflicting_child_patterns": [],
+            }
+        ]
+    }
+    candidates = [
+        {
+            "bucket_id": "child_1",
+            "stage": "lifecycle_flow",
+            "bucket_type": "combo_lifecycle_flow",
+            "canonical_parent_bucket": "lifecycle_flow:parent_1",
+            "joined_sample": 15,
+            "source_quality_adjusted_ev_pct": -1.2,
+            "source_quality_gate": "source_quality_blocker",
+            "unknown_dimension_counts": {"liquidity_bucket": 2},
+        },
+        {
+            "bucket_id": "child_2",
+            "stage": "lifecycle_flow",
+            "bucket_type": "combo_lifecycle_flow",
+            "canonical_parent_bucket": "lifecycle_flow:parent_1",
+            "joined_sample": 10,
+            "source_quality_adjusted_ev_pct": 0.3,
+            "source_quality_gate": "pass",
+        },
+    ]
+
+    resolutions = mod._build_parent_conflict_resolution(report, candidates)
+
+    assert len(resolutions) == 1
+    r = resolutions[0]
+    assert r["parent_bucket_id"] == "lifecycle_flow:parent_1"
+    assert r["source_quality_gap_child_count"] == 1
+    assert r["child_same_direction_absorbed_count"] >= 0
+    assert r["conflict_resolution_state"] in {"resolution_blocked_source_quality", "resolution_complete"}
+    assert r["runtime_effect"] is False
+    assert r["allowed_runtime_apply"] is False
+    items = r["child_resolution_items"]
+    child1 = next(i for i in items if i["child_bucket_id"] == "child_1")
+    assert child1["child_resolution_state"] == "source_quality_gap"
+
+
+def test_parent_conflict_resolution_treats_blank_quality_as_gap_but_hold_sample_as_collecting():
+    blank_state, blank_details = mod._classify_conflict_child(
+        {
+            "source_quality_gate": "",
+            "source_quality_adjusted_ev_pct": 1.0,
+            "joined_sample": 20,
+        },
+        -0.5,
+    )
+    hold_state, hold_details = mod._classify_conflict_child(
+        {
+            "source_quality_gate": "hold_sample_or_incomplete_flow",
+            "source_quality_adjusted_ev_pct": 1.0,
+            "joined_sample": 1,
+        },
+        -0.5,
+    )
+
+    assert blank_state == "source_quality_gap"
+    assert blank_details["source_quality_gate"] == ""
+    assert hold_state == "positive_thin_child"
+    assert hold_details["floor"] == mod.LIFECYCLE_FLOW_CHILD_STANDALONE_MIN_JOINED_SAMPLE
+
+
+def test_parent_conflict_resolution_detects_strategy_reversal_and_exclude():
+    report = {
+        "parent_bucket_summaries": [
+            {
+                "parent_bucket_id": "lifecycle_flow:parent_ev_pos",
+                "parent_ev": 1.5,
+                "parent_joined_sample": 40,
+                "child_conflict_warning": True,
+                "child_ev_dispersion_pct": 4.0,
+                "absorbed_child_bucket_ids": ["child_a", "child_b"],
+                "conflicting_child_patterns": [
+                    {"bucket_id": "child_a", "joined_sample": 15, "source_quality_adjusted_ev_pct": -2.0},
+                ],
+            }
+        ]
+    }
+    candidates = [
+        {
+            "bucket_id": "child_a",
+            "stage": "lifecycle_flow",
+            "bucket_type": "combo_lifecycle_flow",
+            "canonical_parent_bucket": "lifecycle_flow:parent_ev_pos",
+            "joined_sample": 15,
+            "source_quality_adjusted_ev_pct": -2.0,
+            "source_quality_gate": "pass",
+            "source_dimensions": {"exclusion_dimension_candidate": "true"},
+        },
+        {
+            "bucket_id": "child_b",
+            "stage": "lifecycle_flow",
+            "bucket_type": "combo_lifecycle_flow",
+            "canonical_parent_bucket": "lifecycle_flow:parent_ev_pos",
+            "joined_sample": 25,
+            "source_quality_adjusted_ev_pct": 3.0,
+            "source_quality_gate": "pass",
+        },
+    ]
+
+    resolutions = mod._build_parent_conflict_resolution(report, candidates)
+
+    assert len(resolutions) == 1
+    r = resolutions[0]
+    assert r["strategy_reversal_child_count"] >= 0
+    assert r["parent_ev_after_exclusion_estimate"] is not None
+    items = r["child_resolution_items"]
+    child_a = next(i for i in items if i["child_bucket_id"] == "child_a")
+    assert child_a["child_resolution_state"] in {"strategy_reversal", "exclude_child_candidate"}
+    assert r["runtime_effect"] is False
+
+
+def test_parent_conflict_resolution_classifies_positive_thin_as_keep_collecting():
+    report = {
+        "parent_bucket_summaries": [
+            {
+                "parent_bucket_id": "lifecycle_flow:parent_ev_neg",
+                "parent_ev": -0.8,
+                "parent_joined_sample": 20,
+                "child_conflict_warning": True,
+                "child_ev_dispersion_pct": 5.0,
+                "absorbed_child_bucket_ids": ["child_x"],
+                "conflicting_child_patterns": [],
+            }
+        ]
+    }
+    candidates = [
+        {
+            "bucket_id": "child_x",
+            "stage": "lifecycle_flow",
+            "bucket_type": "combo_lifecycle_flow",
+            "canonical_parent_bucket": "lifecycle_flow:parent_ev_neg",
+            "joined_sample": 4,
+            "source_quality_adjusted_ev_pct": -0.3,
+            "source_quality_gate": "pass",
+        },
+    ]
+
+    resolutions = mod._build_parent_conflict_resolution(report, candidates)
+
+    assert len(resolutions) == 1
+    r = resolutions[0]
+    items = r["child_resolution_items"]
+    child = items[0]
+    assert child["child_resolution_state"] in {"keep_collecting", "child_same_direction_absorbed", "positive_thin_child"}
+
+
+def test_parent_conflict_resolution_empty_when_no_conflict_parents():
+    report = {
+        "parent_bucket_summaries": [
+            {
+                "parent_bucket_id": "lifecycle_flow:no_conflict",
+                "parent_ev": 1.0,
+                "parent_joined_sample": 50,
+                "child_conflict_warning": False,
+                "child_ev_dispersion_pct": 1.5,
+                "absorbed_child_bucket_ids": [],
+            }
+        ]
+    }
+    candidates = []
+
+    resolutions = mod._build_parent_conflict_resolution(report, candidates)
+
+    assert resolutions == []
+
+
+def test_parent_conflict_resolution_children_same_direction_absorbed():
+    report = {
+        "parent_bucket_summaries": [
+            {
+                "parent_bucket_id": "lifecycle_flow:all_absorbed",
+                "parent_ev": 2.0,
+                "parent_joined_sample": 25,
+                "child_conflict_warning": True,
+                "child_ev_dispersion_pct": 6.0,
+                "absorbed_child_bucket_ids": ["child_one", "child_two"],
+                "conflicting_child_patterns": [],
+            }
+        ]
+    }
+    candidates = [
+        {
+            "bucket_id": "child_one",
+            "stage": "lifecycle_flow",
+            "bucket_type": "combo_lifecycle_flow",
+            "canonical_parent_bucket": "lifecycle_flow:all_absorbed",
+            "joined_sample": 12,
+            "source_quality_adjusted_ev_pct": 3.5,
+            "source_quality_gate": "pass",
+        },
+        {
+            "bucket_id": "child_two",
+            "stage": "lifecycle_flow",
+            "bucket_type": "combo_lifecycle_flow",
+            "canonical_parent_bucket": "lifecycle_flow:all_absorbed",
+            "joined_sample": 8,
+            "source_quality_adjusted_ev_pct": 1.2,
+            "source_quality_gate": "pass",
+        },
+    ]
+
+    resolutions = mod._build_parent_conflict_resolution(report, candidates)
+
+    assert len(resolutions) == 1
+    r = resolutions[0]
+    assert r["child_same_direction_absorbed_count"] == 2
+    assert r["conflict_resolution_state"] == "resolution_complete"

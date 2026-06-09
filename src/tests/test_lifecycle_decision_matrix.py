@@ -1677,3 +1677,114 @@ def test_lifecycle_matrix_emits_overnight_bucket_attribution_workorders(tmp_path
     assert action_bucket["bucket_key"] == "SELL_TODAY"
     assert action_bucket["recommended_route"] == "candidate_recovery_or_relax"
     assert report["summary"]["overnight_bucket_runtime_candidate_count"] >= 1
+
+
+def test_lifecycle_flow_denominator_excludes_scale_in_noise_and_incomplete_seeds():
+    rows = []
+    for idx in range(5):
+        rows.append(
+            {
+                "candidate_id": f"ADM-00000{idx}-{idx}-x",
+                "stock_code": f"00000{idx}",
+                "event_time": f"2026-05-28T09:0{idx}:00+09:00",
+                "stage": "entry",
+                "source_stage": "entry",
+                "runtime_features": {
+                    "entry_adm_candidate_id": f"ADM-00000{idx}-{idx}-x",
+                    "broker_order_forbidden": True,
+                },
+                "labels": {"profit_rate": 0.4},
+                "stage_ev_composite_pct": 0.4,
+            }
+        )
+    for idx in range(3):
+        base_id = "SIM-ORPHAN"
+        rows.append(
+            {
+                "candidate_id": f"{base_id}-{idx}",
+                "stock_code": f"20000{idx}",
+                "event_time": f"2026-05-28T10:0{idx}:00+09:00",
+                "stage": "scale_in",
+                "source_stage": "scale_in",
+                "runtime_features": {
+                    "sim_record_id": f"{base_id}-{idx}",
+                    "add_type": "PYRAMID",
+                    "scale_in_arm": "PYRAMID",
+                    "broker_order_forbidden": True,
+                },
+                "labels": {"profit_rate": 0.2},
+                "stage_ev_composite_pct": 0.2,
+            }
+        )
+
+    attribution = mod._lifecycle_flow_bucket_attribution(rows)
+
+    summary = attribution["summary"]
+    assert summary["complete_flow_count"] == 0
+    assert summary["scale_in_followup_event_count"] == 3
+    assert 0 <= summary["scale_in_unique_flow_count"] <= summary["scale_in_followup_event_count"]
+    assert summary["scale_in_noise_flow_count"] == 3
+    assert summary.get("active_priority_incomplete_seed_count", 0) >= 0
+    assert "denominator_exclusion_counts" in summary
+    assert summary.get("denominator_exclusion_counts", {}).get("scale_in_noise_flow_excluded", 0) == 3
+    assert "conversion_blocker_reason_counts" in summary
+    assert "observation_seed_reason_counts" in summary
+    assert "scale_in_noise_only" in str(summary.get("observation_seed_reason_counts", {}))
+    assert "complete_flow_conversion_denominator" in summary
+    assert summary["incomplete_flow_reason_counts"].get("scale_in_noise_only", 0) == 3
+
+
+def test_lifecycle_flow_denominator_separates_conversion_blockers_from_observation_seeds():
+    rows = []
+    for idx in range(4):
+        rows.append(
+            {
+                "candidate_id": f"ADM-{idx}",
+                "stock_code": f"10000{idx}",
+                "event_time": f"2026-05-28T09:0{idx}:00+09:00",
+                "stage": "entry",
+                "source_stage": "entry",
+                "runtime_features": {
+                    "entry_adm_candidate_id": f"ADM-{idx}",
+                    "broker_order_forbidden": True,
+                },
+                "labels": {"profit_rate": 0.4},
+                "stage_ev_composite_pct": 0.4,
+            }
+        )
+
+    attribution = mod._lifecycle_flow_bucket_attribution(rows)
+
+    summary = attribution["summary"]
+    assert summary["complete_flow_count"] == 0
+    assert summary["active_priority_incomplete_seed_count"] == 4
+    assert summary.get("complete_flow_conversion_denominator", 0) == 0
+
+
+def test_lifecycle_flow_complete_conversion_denominator_counts_complete_flows():
+    rows = []
+    for idx in range(2):
+        for stage_idx, stage in enumerate(("entry", "submit", "holding", "exit")):
+            rows.append(
+                {
+                    "candidate_id": f"ADM-{idx}-{idx}-x",
+                    "stock_code": f"0000{idx}",
+                    "event_time": f"2026-05-28T09:0{idx}:0{stage_idx}+09:00",
+                    "stage": stage,
+                    "source_stage": stage,
+                    "runtime_features": {
+                        "entry_adm_candidate_id": f"ADM-{idx}-{idx}-x",
+                        "broker_order_forbidden": True,
+                    },
+                    "labels": {"profit_rate": 0.4},
+                    "stage_ev_composite_pct": 0.4,
+                }
+            )
+
+    attribution = mod._lifecycle_flow_bucket_attribution(rows)
+
+    summary = attribution["summary"]
+    assert summary["complete_flow_count"] == 2
+    assert summary["complete_flow_conversion_denominator"] == 2
+    assert summary["active_priority_incomplete_seed_count"] == 0
+    assert summary["scale_in_noise_flow_count"] == 0

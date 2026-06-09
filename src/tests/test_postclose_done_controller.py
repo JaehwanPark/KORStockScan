@@ -193,6 +193,8 @@ def test_postclose_done_controller_repairs_ev_workorder_stale_link_without_full_
     joined = "\n".join(" ".join(cmd) for cmd in calls)
     assert report["status"] == "done"
     assert "daily_threshold_cycle_report" in joined
+    assert "--ai-correction-provider openai" in joined
+    assert "--reuse-ai-review-if-valid" in joined
     assert "threshold_cycle_ev_report" in joined
     assert "build_code_improvement_workorder" in joined
     assert not any(cmd[:2] == ["bash", "deploy/run_threshold_cycle_postclose.sh"] for cmd in calls)
@@ -279,6 +281,93 @@ def test_postclose_done_controller_reconciles_fail_marker_without_full_wrapper_r
     assert any(item["action"] == "marker_reconciliation" for item in report["actions"])
     assert report["full_wrapper_rerun_used"] is False
     assert report["selected_recovery_action"] == "marker_reconciliation"
+
+
+def test_postclose_done_controller_reconciles_repaired_failed_status_without_full_wrapper_rerun(
+    monkeypatch, tmp_path
+):
+    report_dir = tmp_path / "report"
+    log_path = tmp_path / "logs" / "threshold_cycle_postclose_cron.log"
+    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "OUTPUT_DIR", report_dir / "postclose_done_controller")
+    monkeypatch.setattr(mod, "POSTCLOSE_LOG_PATH", log_path)
+    _write_json(
+        report_dir / "threshold_cycle_postclose_status" / "threshold_cycle_postclose_2026-06-03.status.json",
+        {"status": "failed", "reason": "command_failed"},
+    )
+    log_path.parent.mkdir(parents=True)
+    log_path.write_text(
+        "\n".join(
+            [
+                "[START] threshold-cycle postclose target_date=2026-06-03 started_at=2026-06-03T18:00:00+0900",
+                "[DONE] threshold-cycle postclose target_date=2026-06-03 finished_at=2026-06-03T18:09:00+0900",
+                "[FAIL] threshold-cycle postclose target_date=2026-06-03 reason=command_failed failed_at=2026-06-03T18:10:00+0900",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    verification = report_dir / "threshold_cycle_postclose_verification" / "threshold_cycle_postclose_verification_2026-06-03.json"
+    _write_json(
+        verification,
+        {
+            "status": "fail",
+            "predecessor_integrity": {"log_issues": ["postclose_fail_marker_present"]},
+            "artifact_status": _passable_artifact_status(),
+            "handoff_warnings": ["active_sim_priority_preopen_handoff_pending"],
+            "conversion_kpi": {"status": "warning", "warnings": ["active_or_hypothesis_preopen_handoff_pending"]},
+        },
+    )
+    calls = []
+
+    def fake_runner(cmd, env=None):
+        calls.append(cmd)
+        joined = " ".join(cmd)
+        if "verify_threshold_cycle_postclose_chain" in joined and "--allow-pending-done-marker" in cmd:
+            _write_json(
+                verification,
+                {
+                    "status": "warning",
+                    "predecessor_integrity": {"log_issues": ["postclose_fail_marker_present"]},
+                    "artifact_status": _passable_artifact_status(),
+                    "handoff_warnings": ["active_sim_priority_preopen_handoff_pending"],
+                    "conversion_kpi": {"status": "warning", "warnings": ["active_or_hypothesis_preopen_handoff_pending"]},
+                },
+            )
+        elif "verify_threshold_cycle_postclose_chain" in joined:
+            status_payload = json.loads(
+                (report_dir / "threshold_cycle_postclose_status" / "threshold_cycle_postclose_2026-06-03.status.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            if status_payload.get("status") == "succeeded":
+                _write_json(
+                    verification,
+                    {
+                        "status": "warning",
+                        "latest_done_marker": "[DONE] threshold-cycle postclose target_date=2026-06-03 recovery_action=tail_repair_done_reconciliation",
+                        "predecessor_integrity": {"log_issues": []},
+                        "artifact_status": _passable_artifact_status(),
+                        "handoff_warnings": ["active_sim_priority_preopen_handoff_pending"],
+                        "conversion_kpi": {
+                            "status": "warning",
+                            "warnings": ["active_or_hypothesis_preopen_handoff_pending"],
+                        },
+                    },
+                )
+        return 0
+
+    report = mod.build_postclose_done_controller(
+        "2026-06-03",
+        max_attempts=2,
+        allow_wrapper_rerun=True,
+        command_runner=fake_runner,
+    )
+
+    assert report["status"] == "done"
+    assert any(item["action"] == "tail_repair_done_reconciliation" for item in report["actions"])
+    assert not any(cmd[:2] == ["bash", "deploy/run_threshold_cycle_postclose.sh"] for cmd in calls)
+    assert report["full_wrapper_rerun_used"] is False
 
 
 def test_postclose_done_controller_repairs_failed_tail_stage_without_full_wrapper_rerun(monkeypatch, tmp_path):

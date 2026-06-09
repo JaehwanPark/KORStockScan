@@ -3418,8 +3418,43 @@ def _flow_identity_stage_summary(rows: list[dict[str, Any]], flows: list[dict[st
             "identity_join_rate": round(present / len(stage_rows), 4) if stage_rows else 0.0,
         }
     incomplete_reasons: Counter[str] = Counter()
+    conversion_blocker_reasons: Counter[str] = Counter()
+    observation_seed_reasons: Counter[str] = Counter()
+    scale_in_noise_flow_count = 0
+    active_priority_incomplete_seed_count = 0
+    scale_in_event_count = 0
+    scale_in_unique_flow_count = 0
     for flow in flows:
-        incomplete_reasons.update(_flow_incomplete_reasons(flow))
+        reasons = _flow_incomplete_reasons(flow)
+        incomplete_reasons.update(reasons)
+        if flow.get("stage_completion_state") != "complete":
+            if "scale_in_noise_only" in reasons:
+                scale_in_noise_flow_count += 1
+                observation_seed_reasons.update(reasons)
+            elif any(r in reasons for r in ("identity_namespace_mismatch", "join_contract_blocked", "entry_adm_candidate_id_missing", "entry_candidate_id_to_sim_record_id_bridge_missing", "fallback_identity_incomplete", "missing_entry", "postclose_exit_without_entry")):
+                conversion_blocker_reasons.update(reasons)
+            else:
+                active_priority_incomplete_seed_count += 1
+                observation_seed_reasons.update(reasons)
+    scale_in_rows = by_stage.get("scale_in", [])
+    scale_in_event_count = len(scale_in_rows)
+    unique_scale_in_ids: set[str] = set()
+    for row in scale_in_rows:
+        features = row.get("runtime_features") if isinstance(row.get("runtime_features"), dict) else {}
+        sim_id = str(features.get("sim_record_id") or "").strip()
+        if sim_id:
+            unique_scale_in_ids.add(sim_id)
+            continue
+        cand_id = str(row.get("candidate_id") or "").strip()
+        if cand_id:
+            colon_idx = cand_id.rfind(":")
+            if colon_idx > 0:
+                parent_id = cand_id[:colon_idx]
+                unique_scale_in_ids.add(parent_id)
+            else:
+                unique_scale_in_ids.add(cand_id)
+    deduped_by_identity = len(unique_scale_in_ids) if unique_scale_in_ids else scale_in_event_count
+    scale_in_unique_flow_count = deduped_by_identity
     flow_count = len(flows)
     complete_flow_count = sum(1 for item in flows if item.get("stage_completion_state") == "complete")
     total_stage_rows = sum(len(stage_rows) for stage_rows in by_stage.values())
@@ -3435,14 +3470,24 @@ def _flow_identity_stage_summary(rows: list[dict[str, Any]], flows: list[dict[st
     if required_sources_present and complete_flow_count == 0:
         incomplete_reasons["identity_namespace_mismatch"] += 1
         incomplete_reasons["join_contract_blocked"] += 1
+        conversion_blocker_reasons["identity_namespace_mismatch"] += 1
+        conversion_blocker_reasons["join_contract_blocked"] += 1
         entry_qualities = set(stage_summary.get("entry", {}).get("identity_quality_counts", {}).keys())
         downstream_qualities = set()
         for stage in ("submit", "holding", "exit"):
             downstream_qualities.update(stage_summary.get(stage, {}).get("identity_quality_counts", {}).keys())
         if "candidate_id" in entry_qualities and "exact_sim_record_id" in downstream_qualities:
             incomplete_reasons["entry_candidate_id_to_sim_record_id_bridge_missing"] += 1
+            conversion_blocker_reasons["entry_candidate_id_to_sim_record_id_bridge_missing"] += 1
         if not {"entry_adm_candidate_id", "entry_adm_bridge_key"} & entry_qualities:
             incomplete_reasons["entry_adm_candidate_id_missing"] += 1
+            conversion_blocker_reasons["entry_adm_candidate_id_missing"] += 1
+    complete_flow_conversion_denominator = flow_count - scale_in_noise_flow_count - active_priority_incomplete_seed_count
+    denominator_exclusion_counts: dict[str, int] = {}
+    if scale_in_noise_flow_count > 0:
+        denominator_exclusion_counts["scale_in_noise_flow_excluded"] = scale_in_noise_flow_count
+    if active_priority_incomplete_seed_count > 0:
+        denominator_exclusion_counts["active_priority_incomplete_seed_excluded"] = active_priority_incomplete_seed_count
     return {
         "stage": stage_summary,
         "required_stage_source_counts": required_stage_counts,
@@ -3453,7 +3498,16 @@ def _flow_identity_stage_summary(rows: list[dict[str, Any]], flows: list[dict[st
         "complete_flow_count": complete_flow_count,
         "incomplete_flow_count": flow_count - complete_flow_count,
         "complete_flow_rate": round(complete_flow_count / flow_count, 4) if flow_count else 0.0,
+        "complete_flow_conversion_denominator": complete_flow_conversion_denominator,
+        "complete_flow_conversion_rate": round(complete_flow_count / complete_flow_conversion_denominator, 4) if complete_flow_conversion_denominator else 0.0,
         "incomplete_flow_reason_counts": dict(incomplete_reasons),
+        "conversion_blocker_reason_counts": dict(conversion_blocker_reasons),
+        "observation_seed_reason_counts": dict(observation_seed_reasons),
+        "active_priority_incomplete_seed_count": active_priority_incomplete_seed_count,
+        "scale_in_followup_event_count": scale_in_event_count,
+        "scale_in_unique_flow_count": scale_in_unique_flow_count,
+        "scale_in_noise_flow_count": scale_in_noise_flow_count,
+        "denominator_exclusion_counts": denominator_exclusion_counts,
         "join_contract_blocked": bool(required_sources_present and complete_flow_count == 0),
     }
 
@@ -3600,7 +3654,8 @@ def _flow_record(attribution_key: str, identity_quality: str, rows: list[dict[st
         "exit": _exit_combo_bucket_id(exit_row) if exit_row else None,
     }
     stage_presence = {stage: bool(by_stage.get(stage)) for stage in LIFECYCLE_FLOW_REQUIRED_STAGES}
-    complete = all(stage_presence.values())
+    stage_presence["scale_in"] = bool(scale_in_rows)
+    complete = all(stage_presence[stage] for stage in LIFECYCLE_FLOW_REQUIRED_STAGES)
     ev = _flow_ev(by_stage)
     if identity_quality == "fallback_incomplete":
         source_quality = "fallback_identity_incomplete"
@@ -3893,6 +3948,15 @@ def _lifecycle_flow_bucket_attribution(rows: list[dict[str, Any]]) -> dict[str, 
             "identity_present_count": identity_summary["identity_present_count"],
             "identity_join_rate": identity_summary["identity_join_rate"],
             "complete_flow_rate": identity_summary["complete_flow_rate"],
+            "complete_flow_conversion_denominator": identity_summary.get("complete_flow_conversion_denominator", flow_count),
+            "complete_flow_conversion_rate": identity_summary.get("complete_flow_conversion_rate", identity_summary["complete_flow_rate"]),
+            "active_priority_incomplete_seed_count": identity_summary.get("active_priority_incomplete_seed_count", 0),
+            "scale_in_followup_event_count": identity_summary.get("scale_in_followup_event_count", 0),
+            "scale_in_unique_flow_count": identity_summary.get("scale_in_unique_flow_count", 0),
+            "scale_in_noise_flow_count": identity_summary.get("scale_in_noise_flow_count", 0),
+            "denominator_exclusion_counts": identity_summary.get("denominator_exclusion_counts", {}),
+            "conversion_blocker_reason_counts": identity_summary.get("conversion_blocker_reason_counts", {}),
+            "observation_seed_reason_counts": identity_summary.get("observation_seed_reason_counts", {}),
             "join_contract_blocked": join_contract_blocked,
             "bundle_ev_tuning_state": "blocked_join_gap" if join_contract_blocked else "ready_for_bundle_ev_tuning",
             "top_incomplete_reason": top_incomplete_reason,
@@ -4507,6 +4571,51 @@ def build_lifecycle_decision_matrix_report(
                 lifecycle_flow_bucket_attribution.get("summary", {}).get("complete_flow_count")
                 if isinstance(lifecycle_flow_bucket_attribution.get("summary"), dict)
                 else 0
+            ),
+            "complete_flow_conversion_denominator": (
+                lifecycle_flow_bucket_attribution.get("summary", {}).get("complete_flow_conversion_denominator")
+                if isinstance(lifecycle_flow_bucket_attribution.get("summary"), dict)
+                else 0
+            ),
+            "complete_flow_conversion_rate": (
+                lifecycle_flow_bucket_attribution.get("summary", {}).get("complete_flow_conversion_rate")
+                if isinstance(lifecycle_flow_bucket_attribution.get("summary"), dict)
+                else 0.0
+            ),
+            "active_priority_incomplete_seed_count": (
+                lifecycle_flow_bucket_attribution.get("summary", {}).get("active_priority_incomplete_seed_count")
+                if isinstance(lifecycle_flow_bucket_attribution.get("summary"), dict)
+                else 0
+            ),
+            "scale_in_followup_event_count": (
+                lifecycle_flow_bucket_attribution.get("summary", {}).get("scale_in_followup_event_count")
+                if isinstance(lifecycle_flow_bucket_attribution.get("summary"), dict)
+                else 0
+            ),
+            "scale_in_unique_flow_count": (
+                lifecycle_flow_bucket_attribution.get("summary", {}).get("scale_in_unique_flow_count")
+                if isinstance(lifecycle_flow_bucket_attribution.get("summary"), dict)
+                else 0
+            ),
+            "scale_in_noise_flow_count": (
+                lifecycle_flow_bucket_attribution.get("summary", {}).get("scale_in_noise_flow_count")
+                if isinstance(lifecycle_flow_bucket_attribution.get("summary"), dict)
+                else 0
+            ),
+            "denominator_exclusion_counts": (
+                lifecycle_flow_bucket_attribution.get("summary", {}).get("denominator_exclusion_counts")
+                if isinstance(lifecycle_flow_bucket_attribution.get("summary"), dict)
+                else {}
+            ),
+            "conversion_blocker_reason_counts": (
+                lifecycle_flow_bucket_attribution.get("summary", {}).get("conversion_blocker_reason_counts")
+                if isinstance(lifecycle_flow_bucket_attribution.get("summary"), dict)
+                else {}
+            ),
+            "observation_seed_reason_counts": (
+                lifecycle_flow_bucket_attribution.get("summary", {}).get("observation_seed_reason_counts")
+                if isinstance(lifecycle_flow_bucket_attribution.get("summary"), dict)
+                else {}
             ),
             "direct_sim_record_complete_flow_count": (
                 lifecycle_flow_bucket_attribution.get("summary", {}).get("direct_sim_record_complete_flow_count")

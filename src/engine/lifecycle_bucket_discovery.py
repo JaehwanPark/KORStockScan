@@ -1176,6 +1176,271 @@ def _quiet_gap_summary(report: dict[str, Any], candidates: list[dict[str, Any]])
     }
 
 
+CONFLICT_RESOLUTION_STATES = {
+    "source_quality_gap",
+    "strategy_reversal",
+    "exclude_child_candidate",
+    "keep_collecting",
+    "positive_thin_child",
+    "child_same_direction_absorbed",
+}
+
+PARENT_RESOLUTION_STATES = {
+    "resolution_complete",
+    "resolution_blocked_source_quality",
+    "resolution_blocked_thin_sample",
+    "sim_eligible_after_resolution",
+    "sim_ineligible_ev_negative",
+    "sim_ineligible_live_blockers_remain",
+}
+
+
+NON_BLOCKING_CONFLICT_SOURCE_QUALITY_STATES = {
+    "hold_sample_or_incomplete_flow",
+}
+
+
+def _classify_conflict_child(
+    child: dict[str, Any],
+    parent_ev: float | None,
+) -> tuple[str, dict[str, Any]]:
+    child_ev = _safe_float(child.get("source_quality_adjusted_ev_pct"), None)
+    child_sample = _safe_int(child.get("joined_sample"))
+    source_quality = str(child.get("source_quality_gate") or "")
+    has_unknown = bool(child.get("unknown_dimension_counts"))
+    dimensions = child.get("source_dimensions") if isinstance(child.get("source_dimensions"), dict) else {}
+
+    source_quality_non_blocking = source_quality in NON_BLOCKING_CONFLICT_SOURCE_QUALITY_STATES
+    is_source_quality_fail = (source_quality != "pass" and not source_quality_non_blocking) or has_unknown
+    child_same_direction = (
+        parent_ev is not None
+        and child_ev is not None
+        and ((parent_ev >= 0 and child_ev >= 0) or (parent_ev < 0 and child_ev < 0))
+    )
+
+    if is_source_quality_fail:
+        reason_details = {
+            "source_quality_gate": source_quality,
+            "has_unknown_dimensions": has_unknown,
+            "unknown_dimension_counts": child.get("unknown_dimension_counts"),
+            "recommended_resolution": child.get("recommended_resolution"),
+        }
+        return "source_quality_gap", reason_details
+
+    if child_same_direction:
+        return "child_same_direction_absorbed", {
+            "child_ev": child_ev,
+            "parent_ev": parent_ev,
+        }
+
+    if child_ev is not None and child_ev > 0 and child_sample < LIFECYCLE_FLOW_CHILD_STANDALONE_MIN_JOINED_SAMPLE:
+        return "positive_thin_child", {
+            "child_ev": child_ev,
+            "joined_sample": child_sample,
+            "floor": LIFECYCLE_FLOW_CHILD_STANDALONE_MIN_JOINED_SAMPLE,
+        }
+
+    if child_sample >= LIFECYCLE_FLOW_CHILD_STANDALONE_MIN_JOINED_SAMPLE:
+        return "strategy_reversal", {
+            "child_ev": child_ev,
+            "joined_sample": child_sample,
+            "direction": "opposite_parent",
+        }
+
+    return "keep_collecting", {
+        "child_ev": child_ev,
+        "joined_sample": child_sample,
+        "reason": "sample_below_floor_or_ev_unstable",
+    }
+
+
+def _classify_exclude_child_candidates(
+    children: list[dict[str, Any]],
+    parent_ev: float | None,
+    resolution_items: list[dict[str, Any]],
+) -> None:
+    exclude_candidates = [
+        item for item in resolution_items
+        if item.get("child_resolution_state") == "strategy_reversal"
+        and item.get("child_ev") is not None
+        and parent_ev is not None
+    ]
+    if not exclude_candidates:
+        return
+    for item in exclude_candidates:
+        child_ev = item.get("child_ev")
+        if child_ev is not None:
+            sample = item.get("child_joined_sample", 0)
+            if sample < LIFECYCLE_FLOW_CHILD_STANDALONE_MIN_JOINED_SAMPLE:
+                continue
+            parent_sign = 1 if parent_ev >= 0 else -1
+            child_sign = 1 if child_ev >= 0 else -1
+            if parent_sign != child_sign:
+                item["child_resolution_state"] = "exclude_child_candidate"
+                item["exclude_impact"] = {
+                    "direction": "exclude_from_parent_may_improve_ev",
+                    "child_ev": child_ev,
+                    "child_sample": sample,
+                }
+
+
+def _estimate_parent_ev_after_exclusion(
+    children: list[dict[str, Any]],
+    parent_ev: float | None,
+    resolution_items: list[dict[str, Any]] | None = None,
+) -> float | None:
+    if parent_ev is None:
+        return None
+    total_sample = sum(_safe_int(c.get("joined_sample")) for c in children)
+    if total_sample <= 0:
+        return parent_ev
+    exclude_samples = 0
+    exclude_ev_sum = 0.0
+    for index, c in enumerate(children):
+        r_item = resolution_items[index] if resolution_items and index < len(resolution_items) else {}
+        if r_item.get("child_resolution_state") != "exclude_child_candidate":
+            continue
+        ev = _safe_float(c.get("source_quality_adjusted_ev_pct"), None)
+        sample = _safe_int(c.get("joined_sample"))
+        if ev is not None and sample > 0:
+            exclude_samples += sample
+            exclude_ev_sum += ev * sample
+    if exclude_samples <= 0:
+        return parent_ev
+    weighted_parent = (parent_ev * total_sample - exclude_ev_sum) / max(1, total_sample - exclude_samples)
+    return round(weighted_parent, 4)
+
+
+def _build_parent_conflict_resolution(
+    report: dict[str, Any],
+    candidates: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    parent_summaries = report.get("parent_bucket_summaries")
+    if not isinstance(parent_summaries, list):
+        return []
+    conflict_parents = [p for p in parent_summaries if p.get("child_conflict_warning") is True]
+    if not conflict_parents:
+        return []
+
+    lf_children = [
+        c for c in candidates
+        if str(c.get("stage") or "") == "lifecycle_flow"
+        and str(c.get("bucket_type") or "") == "combo_lifecycle_flow"
+    ]
+
+    resolutions: list[dict[str, Any]] = []
+    for parent in conflict_parents:
+        parent_id = str(parent.get("parent_bucket_id") or "")
+        parent_ev = _safe_float(parent.get("parent_ev"), None)
+        parent_joined_sample = _safe_int(parent.get("parent_joined_sample"))
+        child_ids = parent.get("absorbed_child_bucket_ids") if isinstance(parent.get("absorbed_child_bucket_ids"), list) else []
+        conflicting_patterns = parent.get("conflicting_child_patterns")
+        if not isinstance(conflicting_patterns, list):
+            conflicting_patterns = []
+
+        children_in_parent = [
+            c for c in lf_children
+            if str(c.get("canonical_parent_bucket") or c.get("policy_bucket_id") or "") == parent_id
+        ]
+        if not children_in_parent and not child_ids:
+            continue
+
+        resolution_items: list[dict[str, Any]] = []
+        source_quality_gap_count = 0
+        strategy_reversal_count = 0
+        exclude_child_count = 0
+        keep_collecting_count = 0
+        positive_thin_count = 0
+        child_same_direction_count = 0
+
+        for child in children_in_parent:
+            child_id = str(child.get("bucket_id") or child.get("source_bucket_id") or "")
+            child_state, child_details = _classify_conflict_child(child, parent_ev)
+            item = {
+                "child_bucket_id": child_id,
+                "child_resolution_state": child_state,
+                "child_ev": _safe_float(child.get("source_quality_adjusted_ev_pct"), None),
+                "child_joined_sample": _safe_int(child.get("joined_sample")),
+                "child_source_quality_gate": child.get("source_quality_gate"),
+                "details": child_details,
+            }
+            resolution_items.append(item)
+
+            if child_state == "source_quality_gap":
+                source_quality_gap_count += 1
+            elif child_state == "strategy_reversal":
+                strategy_reversal_count += 1
+            elif child_state == "child_same_direction_absorbed":
+                child_same_direction_count += 1
+
+        _classify_exclude_child_candidates(children_in_parent, parent_ev, resolution_items)
+        strategy_reversal_count = sum(1 for r in resolution_items if r.get("child_resolution_state") == "strategy_reversal")
+        exclude_child_count = sum(1 for r in resolution_items if r.get("child_resolution_state") == "exclude_child_candidate")
+        keep_collecting_count = sum(1 for r in resolution_items if r.get("child_resolution_state") == "keep_collecting")
+        positive_thin_count = sum(1 for r in resolution_items if r.get("child_resolution_state") == "positive_thin_child")
+
+        parent_ev_after = _estimate_parent_ev_after_exclusion(children_in_parent, parent_ev, resolution_items)
+        all_quality_ok = source_quality_gap_count == 0
+        has_meaningful_sample = parent_joined_sample >= LIFECYCLE_FLOW_PARENT_MIN_JOINED_SAMPLE
+        ev_positive = parent_ev_after is not None and parent_ev_after > 0
+        has_reversal_or_exclude = strategy_reversal_count > 0 or exclude_child_count > 0
+
+        if not all_quality_ok:
+            parent_resolution_state = "resolution_blocked_source_quality"
+        elif not has_meaningful_sample:
+            parent_resolution_state = "resolution_blocked_thin_sample"
+        elif not has_reversal_or_exclude:
+            parent_resolution_state = "resolution_complete"
+        elif ev_positive:
+            parent_resolution_state = "sim_eligible_after_resolution"
+        else:
+            parent_resolution_state = "sim_ineligible_ev_negative"
+
+        live_blockers: list[str] = []
+        if not all_quality_ok:
+            live_blockers.append("source_quality_gap_children")
+        if not ev_positive:
+            live_blockers.append("parent_ev_not_positive")
+        if exclude_child_count > 0:
+            live_blockers.append("exclusion_proposed_not_applied")
+        if not has_meaningful_sample:
+            live_blockers.append("sample_below_live_floor")
+
+        resolutions.append({
+            "parent_bucket_id": parent_id,
+            "complete_flow_count": _safe_int(parent.get("complete_flow_count")),
+            "parent_ev_before": parent_ev,
+            "parent_joined_sample": parent_joined_sample,
+            "child_count": len(children_in_parent),
+            "source_quality_gap_child_count": source_quality_gap_count,
+            "strategy_reversal_child_count": strategy_reversal_count,
+            "exclude_child_candidate_count": exclude_child_count,
+            "keep_collecting_child_count": keep_collecting_count,
+            "positive_thin_child_count": positive_thin_count,
+            "child_same_direction_absorbed_count": child_same_direction_count,
+            "child_ev_dispersion_pct": parent.get("child_ev_dispersion_pct", 0.0),
+            "conflict_resolution_state": parent_resolution_state,
+            "resolution_reason": (
+                "source_quality_blocks_resolution"
+                if not all_quality_ok
+                else "all_children_absorbed_or_collecting"
+                if not has_reversal_or_exclude
+                else "exclusion_may_improve_ev"
+                if ev_positive
+                else "ev_negative_after_exclusion"
+            ),
+            "parent_ev_after_exclusion_estimate": parent_ev_after,
+            "sim_policy_eligible_after_resolution": parent_resolution_state == "sim_eligible_after_resolution",
+            "live_policy_blockers": live_blockers,
+            "child_resolution_items": resolution_items,
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+            "decision_authority": "parent_conflict_resolution_source_only",
+        })
+
+    return resolutions
+
+
 def _weighted_average(items: list[dict[str, Any]], value_key: str, weight_key: str) -> float | None:
     numerator = 0.0
     denominator = 0
@@ -3903,6 +4168,20 @@ def _finalize_report(
     report["summary"] = summary
     report["source_dimension_gap_summary"] = source_dimension_summary
     report["quiet_gap_summary"] = quiet_gap_summary
+    parent_conflict_resolution = _build_parent_conflict_resolution(report, candidates)
+    report["parent_conflict_resolution"] = parent_conflict_resolution
+    parent_conflict_count = sum(1 for p in parent_conflict_resolution if isinstance(p, dict))
+    if parent_conflict_count > 0:
+        report["summary"]["parent_conflict_resolution_count"] = parent_conflict_count
+        resolution_states = Counter(
+            str(p.get("conflict_resolution_state") or "") for p in parent_conflict_resolution
+        )
+        report["summary"]["parent_conflict_resolution_state_counts"] = dict(resolution_states)
+        sim_eligible = sum(1 for p in parent_conflict_resolution if p.get("sim_policy_eligible_after_resolution"))
+        report["summary"]["parent_conflict_sim_eligible_after_resolution"] = sim_eligible
+    else:
+        report["summary"]["parent_conflict_resolution_count"] = 0
+        report["summary"]["parent_conflict_sim_eligible_after_resolution"] = 0
     report["candidates"] = candidates[:500]
     report["surfaced_candidates"] = surfaced[:200]
     report["live_auto_apply_candidates"] = [
@@ -4052,9 +4331,46 @@ def _render_markdown(report: dict[str, Any]) -> str:
         f"- human_intervention_required: `{summary.get('human_intervention_required')}`",
         f"- warnings: `{summary.get('warnings') or []}`",
         "",
+        "## 판정 (Conflict Resolution)",
+        f"- parent_conflict_resolution_count: `{summary.get('parent_conflict_resolution_count', 0)}`",
+        f"- sim_eligible_after_resolution: `{summary.get('parent_conflict_sim_eligible_after_resolution', 0)}`",
+        f"- resolution_states: `{summary.get('parent_conflict_resolution_state_counts') or {}}`",
+    ]
+    parent_conflict_resolution = report.get("parent_conflict_resolution")
+    if isinstance(parent_conflict_resolution, list) and parent_conflict_resolution:
+        lines.append("")
+        for p in parent_conflict_resolution:
+            if not isinstance(p, dict):
+                continue
+            state_label = p.get("conflict_resolution_state", "?")
+            if state_label in ("sim_eligible_after_resolution",):
+                tag = "승격 가능"
+            elif state_label == "sim_ineligible_ev_negative":
+                tag = "제외 후에도 EV 음수"
+            elif state_label == "resolution_blocked_source_quality":
+                tag = "source-quality 때문에 판정 불가"
+            elif state_label == "resolution_blocked_thin_sample":
+                tag = "sample 부족 keep collecting"
+            else:
+                tag = state_label
+            lines.append(
+                f"- conflict_parent=`{p.get('parent_bucket_id', '?')[:80]}` "
+                f"state=`{state_label}` tag=`{tag}` "
+                f"ev_before=`{p.get('parent_ev_before')}` ev_after=`{p.get('parent_ev_after_exclusion_estimate')}` "
+                f"children=`{p.get('child_count', 0)}` "
+                f"sq_gap=`{p.get('source_quality_gap_child_count', 0)}` "
+                f"strategy_reversal=`{p.get('strategy_reversal_child_count', 0)}` "
+                f"exclude=`{p.get('exclude_child_candidate_count', 0)}` "
+                f"collecting=`{p.get('keep_collecting_child_count', 0)}` "
+                f"positive_thin=`{p.get('positive_thin_child_count', 0)}` "
+                f"sim_eligible=`{p.get('sim_policy_eligible_after_resolution')}` "
+                f"live_blockers=`{p.get('live_policy_blockers', [])}` "
+            )
+    lines.extend([
+        "",
         "## 근거",
         "",
-    ]
+    ])
     if report.get("source_contract_changes"):
         lines.append("### Source Contract Changes")
         for change in (report.get("source_contract_changes") or [])[:12]:

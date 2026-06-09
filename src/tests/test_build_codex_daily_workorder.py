@@ -131,7 +131,7 @@ def test_build_runbook_operational_checks_for_slot(monkeypatch):
     assert "threshold_apply_2026-05-11.json" in "\n".join(checks[0].artifact_checks)
     assert "swing_runtime_approval" in "\n".join(checks[0].artifact_checks)
     assert "수동 env override" in checks[0].forbidden
-    assert "approval artifact 또는 phase0 auto-approval 없는 스윙 env 반영" in checks[0].forbidden
+    assert "final approval artifact 없는 스윙 env 반영" in checks[0].forbidden
     assert "스윙 dry-run 해제" in checks[0].forbidden
 
     all_checks = build_runbook_operational_checks(target_date="2026-05-11", slots=None)
@@ -140,7 +140,7 @@ def test_build_runbook_operational_checks_for_slot(monkeypatch):
     assert "swing_lifecycle_audit_2026-05-11.md" in "\n".join(postclose.artifact_checks)
     assert "swing_improvement_automation_2026-05-11.json" in "\n".join(postclose.artifact_checks)
     assert "swing_runtime_approval_2026-05-11.json" in "\n".join(postclose.artifact_checks)
-    assert postclose.time_window == "16:00~20:45"
+    assert postclose.time_window == "15:45~21:30"
     assert "swing_model_retrain_2026-05-11.status.json" in "\n".join(postclose.artifact_checks)
     assert "swing_model_retrain_2026-05-11.json" in "\n".join(postclose.artifact_checks)
     assert "logs/tuning_monitoring_postclose_cron.log" in postclose.artifact_checks

@@ -14,21 +14,21 @@
 - joined_rows: `24122`
 - policy_pass_count: `5`
 - promote_ready_count: `1`
-- entry_bucket_actionable_count: `6`
-- entry_bucket_runtime_candidate_count: `5`
+- entry_bucket_actionable_count: `14`
+- entry_bucket_runtime_candidate_count: `10`
 - holding_bucket_count/workorders: `35` / `10`
 - exit_bucket_count/workorders: `52` / `10`
 - scale_in_bucket_actionable_count: `231`
 - scale_in_bucket_runtime_candidate_count: `10`
 - overnight_bucket_actionable_count: `8`
 - overnight_bucket_runtime_candidate_count: `7`
-- lifecycle_flow_bucket_count: `115`
+- lifecycle_flow_bucket_count: `107`
 - lifecycle_flow_complete_count: `79`
 - lifecycle_flow_complete_breakdown direct/adm/fallback: `0` / `79` / `0`
 - lifecycle_flow_runtime_candidate_count: `0`
 - identity_missing_count/join_rate: `0` / `1.0`
 - complete_flow_rate: `0.0034`
-- incomplete_flow_reason_counts: `{'missing_entry': 22936, 'missing_holding': 23389, 'missing_exit': 22692, 'postclose_exit_without_entry': 719, 'missing_submit': 23373, 'candidate_id_only': 22981, 'sim_record_id_only': 376}`
+- incomplete_flow_reason_counts: `{'missing_entry': 22936, 'missing_holding': 23389, 'missing_exit': 22692, 'postclose_exit_without_entry': 719, 'missing_submit': 23373, 'candidate_id_only': 22981, 'scale_in_noise_only': 22191, 'sim_record_id_only': 376}`
 - bucket_directed_sim_probe: `{'observed_row_count': 2197, 'matched_row_count': 999, 'background_row_count': 1198, 'matched_unique_source_bucket_count': 2, 'match_status_counts': {'matched': 999, 'no_match': 473, 'not_instrumented': 725}, 'matched_classification_state_counts': {'lifecycle_flow_sim_probe_candidate': 999}, 'primary_source': 'matched_bucket_directed_sim_probe_only', 'background_source': 'unmatched_or_policy_missing_sim_observation', 'runtime_effect': False, 'actual_order_submitted': False, 'broker_order_forbidden': True}`
 - lifecycle_ai_context_feedback: `{'implementation_status': 'implemented', 'runtime_effect': False, 'decision_authority': 'lifecycle_ai_context_feedback_source_only', 'policy_entry_count': 5, 'bounded_auxiliary_weight_nonzero_count': 1, 'route_counts': {'bounded_auxiliary_weight': 1, 'hold_sample': 4}, 'quality_counts': {'observational_only_pending_outcome': 1, 'hold_sample': 4}}`
 - warnings: `[]`
@@ -47,93 +47,105 @@
 - decision_authority: `adm_ldm_lifecycle_flow_bucket_attribution_source_only`
 - metric_scope: `lifecycle_bundle_ev`
 - primary_decision_metric: `source_quality_adjusted_ev_pct`
-- summary: `{'flow_count': 23490, 'complete_flow_count': 79, 'direct_sim_record_complete_flow_count': 0, 'adm_bridge_complete_flow_count': 79, 'fallback_complete_flow_count': 0, 'incomplete_flow_count': 23411, 'fallback_identity_count': 0, 'identity_missing_count': 0, 'identity_present_count': 25034, 'identity_join_rate': 1.0, 'complete_flow_rate': 0.0034, 'join_contract_blocked': False, 'bundle_ev_tuning_state': 'ready_for_bundle_ev_tuning', 'top_incomplete_reason': 'missing_holding', 'stage_identity': {'entry': {'source_row_count': 622, 'identity_missing_count': 0, 'identity_quality_counts': {'entry_adm_bridge_key': 164, 'candidate_id': 458}, 'identity_join_rate': 1.0}, 'submit': {'source_row_count': 434, 'identity_missing_count': 0, 'identity_quality_counts': {'entry_adm_bridge_key': 434}, 'identity_join_rate': 1.0}, 'holding': {'source_row_count': 386, 'identity_missing_count': 0, 'identity_quality_counts': {'entry_adm_bridge_key': 376, 'exact_sim_record_id': 10}, 'identity_join_rate': 1.0}, 'scale_in': {'source_row_count': 22511, 'identity_missing_count': 0, 'identity_quality_counts': {'candidate_id': 22136, 'exact_sim_record_id': 375}, 'identity_join_rate': 1.0}, 'exit': {'source_row_count': 1081, 'identity_missing_count': 0, 'identity_quality_counts': {'entry_adm_bridge_key': 366, 'exact_sim_record_id': 328, 'candidate_id': 387}, 'identity_join_rate': 1.0}}, 'required_stage_source_counts': {'entry': 622, 'submit': 434, 'holding': 386, 'exit': 1081}, 'incomplete_flow_reason_counts': {'missing_entry': 22936, 'missing_holding': 23389, 'missing_exit': 22692, 'postclose_exit_without_entry': 719, 'missing_submit': 23373, 'candidate_id_only': 22981, 'sim_record_id_only': 376}, 'bucket_count': 115, 'runtime_candidate_count': 0, 'workorder_count': 20}`
+- summary: `{'flow_count': 23490, 'complete_flow_count': 79, 'direct_sim_record_complete_flow_count': 0, 'adm_bridge_complete_flow_count': 79, 'fallback_complete_flow_count': 0, 'incomplete_flow_count': 23411, 'fallback_identity_count': 0, 'identity_missing_count': 0, 'identity_present_count': 25034, 'identity_join_rate': 1.0, 'complete_flow_rate': 0.0034, 'complete_flow_conversion_denominator': 824, 'complete_flow_conversion_rate': 0.0959, 'active_priority_incomplete_seed_count': 475, 'scale_in_followup_event_count': 22511, 'scale_in_unique_flow_count': 18262, 'scale_in_noise_flow_count': 22191, 'denominator_exclusion_counts': {'scale_in_noise_flow_excluded': 22191, 'active_priority_incomplete_seed_excluded': 475}, 'conversion_blocker_reason_counts': {'missing_entry': 745, 'missing_holding': 724, 'missing_exit': 26, 'postclose_exit_without_entry': 719, 'missing_submit': 708, 'sim_record_id_only': 321, 'candidate_id_only': 387}, 'observation_seed_reason_counts': {'missing_submit': 22665, 'missing_holding': 22665, 'missing_exit': 22666, 'candidate_id_only': 22594, 'missing_entry': 22191, 'scale_in_noise_only': 22191, 'sim_record_id_only': 55}, 'join_contract_blocked': False, 'bundle_ev_tuning_state': 'ready_for_bundle_ev_tuning', 'top_incomplete_reason': 'missing_holding', 'stage_identity': {'entry': {'source_row_count': 622, 'identity_missing_count': 0, 'identity_quality_counts': {'entry_adm_bridge_key': 164, 'candidate_id': 458}, 'identity_join_rate': 1.0}, 'submit': {'source_row_count': 434, 'identity_missing_count': 0, 'identity_quality_counts': {'entry_adm_bridge_key': 434}, 'identity_join_rate': 1.0}, 'holding': {'source_row_count': 386, 'identity_missing_count': 0, 'identity_quality_counts': {'entry_adm_bridge_key': 376, 'exact_sim_record_id': 10}, 'identity_join_rate': 1.0}, 'scale_in': {'source_row_count': 22511, 'identity_missing_count': 0, 'identity_quality_counts': {'candidate_id': 22136, 'exact_sim_record_id': 375}, 'identity_join_rate': 1.0}, 'exit': {'source_row_count': 1081, 'identity_missing_count': 0, 'identity_quality_counts': {'entry_adm_bridge_key': 366, 'exact_sim_record_id': 328, 'candidate_id': 387}, 'identity_join_rate': 1.0}}, 'required_stage_source_counts': {'entry': 622, 'submit': 434, 'holding': 386, 'exit': 1081}, 'incomplete_flow_reason_counts': {'missing_entry': 22936, 'missing_holding': 23389, 'missing_exit': 22692, 'postclose_exit_without_entry': 719, 'missing_submit': 23373, 'candidate_id_only': 22981, 'scale_in_noise_only': 22191, 'sim_record_id_only': 376}, 'bucket_count': 107, 'runtime_candidate_count': 0, 'workorder_count': 20}`
 
 | lifecycle_flow_bucket_id | sample | joined | ev | route | source_quality |
 | --- | ---: | ---: | ---: | --- | --- |
-| `lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_sc:a651f1d6ab` | 3 | 3 | -2.1459 | `candidate_tighten_or_exclude` | `pass` |
-| `lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_lt60_source_blo:317a9fbb32` | 2 | 2 | -2.649 | `candidate_tighten_or_exclude` | `pass` |
-| `lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_lt60_source_blo:4c9a720020` | 2 | 2 | -0.2597 | `hold_no_edge` | `pass` |
+| `lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_sc:ec33ba7790` | 3 | 3 | -2.1459 | `candidate_tighten_or_exclude` | `pass` |
+| `lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_sc:bdd3af3121` | 3 | 3 | 0.9552 | `candidate_recovery_or_relax` | `pass` |
+| `lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_lt60_source_sca:5035e8a5e2` | 3 | 3 | -0.9556 | `candidate_tighten_or_exclude` | `pass` |
+| `lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_bl:af7d5c8fc1` | 2 | 2 | -1.8192 | `candidate_tighten_or_exclude` | `pass` |
+| `lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_sc:9c99306a62` | 2 | 2 | -1.3372 | `candidate_tighten_or_exclude` | `pass` |
+| `lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_sc:f3928c3e95` | 2 | 2 | -0.7964 | `candidate_tighten_or_exclude` | `pass` |
+| `lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_lt60_source_blo:2f79e0a458` | 2 | 2 | -2.649 | `candidate_tighten_or_exclude` | `pass` |
+| `lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_lt60_source_blo:0925bb0755` | 2 | 2 | -0.2597 | `hold_no_edge` | `pass` |
 | `lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_lt60_source_blo:a0da04849a` | 2 | 2 | -0.8785 | `candidate_tighten_or_exclude` | `pass` |
 | `lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_lt60_source_blo:bbc4a80a0b` | 2 | 2 | -1.7694 | `candidate_tighten_or_exclude` | `pass` |
 | `lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_lt60_source_blo:ce63fe0afc` | 2 | 2 | -0.3346 | `candidate_tighten_or_exclude` | `pass` |
-| `lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_lt60_source_sca:06d58683d8` | 2 | 2 | -0.7941 | `candidate_tighten_or_exclude` | `pass` |
-| `lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_ai:60e4cc7fd7` | 1 | 1 | -0.9219 | `candidate_tighten_or_exclude` | `pass` |
-| `lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_ai:c7b64d599a` | 1 | 1 | -0.7784 | `candidate_tighten_or_exclude` | `pass` |
-| `lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_ai:c1461a2a87` | 1 | 1 | -1.6188 | `candidate_tighten_or_exclude` | `pass` |
+| `lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_ai:eea5fd0867` | 1 | 1 | -0.9219 | `candidate_tighten_or_exclude` | `pass` |
+| `lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_ai:e397a3cc31` | 1 | 1 | -0.7784 | `candidate_tighten_or_exclude` | `pass` |
+| `lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_ai:3428f86331` | 1 | 1 | -1.6188 | `candidate_tighten_or_exclude` | `pass` |
+| `lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_bl:e7d65a7c45` | 1 | 1 | -2.7806 | `candidate_tighten_or_exclude` | `pass` |
+| `lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_bl:6513e82ce9` | 1 | 1 | 0.0593 | `hold_no_edge` | `pass` |
+| `lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_bl:3036de4e2e` | 1 | 1 | -0.1287 | `hold_no_edge` | `pass` |
 | `lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_bl:86108067b2` | 1 | 1 | -4.1326 | `candidate_tighten_or_exclude` | `pass` |
-| `lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_bl:71bca02827` | 1 | 1 | -1.879 | `candidate_tighten_or_exclude` | `pass` |
 | `lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_bl:77e4bf5bad` | 1 | 1 | -1.7712 | `candidate_tighten_or_exclude` | `pass` |
 | `lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_bl:1b4e4b3128` | 1 | 1 | -1.0941 | `candidate_tighten_or_exclude` | `pass` |
-| `lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_bl:4942861a2b` | 1 | 1 | -2.7806 | `candidate_tighten_or_exclude` | `pass` |
-| `lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_bl:b2dec390d9` | 1 | 1 | -1.7593 | `candidate_tighten_or_exclude` | `pass` |
-| `lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_bl:8f7185c6cd` | 1 | 1 | 0.0593 | `hold_no_edge` | `pass` |
-| `lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_bl:769ce01120` | 1 | 1 | -0.1287 | `hold_no_edge` | `pass` |
-| `lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_bl:d43dbcd7d2` | 1 | 1 | -1.351 | `candidate_tighten_or_exclude` | `pass` |
-| `lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_bl:56671a44b6` | 1 | 1 | -0.7705 | `candidate_tighten_or_exclude` | `pass` |
 
 ## Entry Bucket Attribution
 
 - decision_authority: `adm_ldm_entry_bucket_attribution_source_only`
 - primary_decision_metric: `source_quality_adjusted_ev_pct`
-- summary: `{'entry_rows': 622, 'bucket_count': 181, 'actionable_bucket_count': 6, 'source_quality_blocked_bucket_count': 57, 'runtime_candidate_count': 5, 'workorder_count': 16}`
+- summary: `{'entry_rows': 622, 'bucket_count': 180, 'actionable_bucket_count': 14, 'source_quality_blocked_bucket_count': 0, 'runtime_candidate_count': 10, 'workorder_count': 10}`
 
 | bucket_type | bucket_key | sample | joined | ev | avg_profit | win_rate | route |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | --- |
 | `chosen_action` | `WAIT_REQUOTE` | 113 | 113 | 0.4274 | 0.7753 | 0.6372 | `candidate_recovery_or_relax` |
-| `chosen_action` | `NO_BUY_AI` | 150 | 53 | 0.1117 | -0.8726 | 0.3019 | `source_quality_workorder` |
+| `chosen_action` | `NO_BUY_AI` | 150 | 53 | 0.1117 | -0.8726 | 0.3019 | `hold_no_edge` |
 | `chosen_action` | `ALLOW_BOTTOMING_ENTRY` | 73 | 0 | None | None | None | `hold_sample` |
 | `chosen_action` | `ALLOW_LEVEL1_RISK_OFF_ENTRY` | 272 | 0 | None | None | None | `hold_sample` |
-| `chosen_action` | `BUY_NOW` | 2 | 0 | None | None | None | `source_quality_workorder` |
+| `chosen_action` | `BUY_NOW` | 2 | 0 | None | None | None | `hold_sample` |
 | `chosen_action` | `SKIP_SOURCE_QUALITY` | 12 | 0 | None | None | None | `hold_sample` |
-| `combo_entry_spot` | `score=score_60_62|source=scalp_entry_action_decision_snapshot|stale=fresh|liquidity=liquidity_not_available|overbought=overbought_not_available|time=time_0900_1000` | 15 | 13 | 0.2167 | 0.9931 | 0.5385 | `source_quality_workorder` |
+| `combo_entry_spot` | `score=score_60_62|source=scalp_entry_action_decision_snapshot|stale=fresh|liquidity=liquidity_high|overbought=overbought_watch|time=time_0900_1000` | 15 | 9 | -0.0554 | 0.3122 | 0.4444 | `hold_sample` |
 | `combo_entry_spot` | `score=score_66_69|source=wait6579_ev_cohort|stale=fresh_or_unflagged|liquidity=liquidity_high|overbought=overbought_normal|time=time_1000_1200` | 9 | 9 | 0.5518 | 0.0144 | 0.8889 | `hold_sample` |
 | `combo_entry_spot` | `score=score_70p|source=wait6579_ev_cohort|stale=fresh_or_unflagged|liquidity=liquidity_high|overbought=overbought_normal|time=time_1000_1200` | 9 | 9 | -0.2127 | -0.8454 | 0.6667 | `hold_sample` |
-| `combo_entry_spot` | `score=score_60_62|source=scalp_entry_action_decision_snapshot|stale=fresh|liquidity=liquidity_not_available|overbought=overbought_not_available|time=time_1000_1200` | 8 | 8 | 0.2143 | -0.6113 | 0.5 | `source_quality_workorder` |
+| `combo_entry_spot` | `score=score_60_62|source=scalp_entry_action_decision_snapshot|stale=fresh|liquidity=liquidity_high|overbought=overbought_normal|time=time_0900_1000` | 8 | 8 | 0.435 | 0.8975 | 0.5 | `hold_sample` |
 | `combo_entry_spot` | `score=score_63_65|source=wait6579_ev_cohort|stale=fresh_or_unflagged|liquidity=liquidity_high|overbought=overbought_normal|time=time_1000_1200` | 8 | 8 | 0.49 | -0.6527 | 0.875 | `hold_sample` |
-| `combo_entry_spot` | `score=score_60_62|source=scalp_entry_action_decision_snapshot|stale=fresh|liquidity=liquidity_not_available|overbought=overbought_not_available|time=time_1200_1400` | 7 | 6 | 0.2863 | -2.2017 | 0.0 | `source_quality_workorder` |
+| `combo_entry_spot` | `score=score_60_62|source=scalp_entry_action_decision_snapshot|stale=fresh|liquidity=liquidity_high|overbought=overbought_normal|time=time_1000_1200` | 7 | 6 | 0.2291 | -1.0933 | 0.3333 | `hold_sample` |
+| `combo_entry_spot` | `score=score_60_62|source=scalp_entry_action_decision_snapshot|stale=fresh|liquidity=liquidity_high|overbought=overbought_normal|time=time_1200_1400` | 7 | 6 | 0.2863 | -2.2017 | 0.0 | `hold_sample` |
 | `combo_entry_spot` | `score=score_66_69|source=wait6579_ev_cohort|stale=fresh_or_unflagged|liquidity=liquidity_high|overbought=overbought_watch|time=time_0900_1000` | 6 | 6 | 1.9045 | 3.0702 | 0.5 | `hold_sample` |
 | `combo_entry_spot` | `score=score_70p|source=wait6579_ev_cohort|stale=fresh_or_unflagged|liquidity=liquidity_high|overbought=overbought_normal|time=time_1200_1400` | 6 | 6 | 1.2053 | 2.2553 | 0.8333 | `hold_sample` |
 | `combo_entry_spot` | `score=score_70p|source=wait6579_ev_cohort|stale=fresh_or_unflagged|liquidity=liquidity_high|overbought=overbought_ok|time=time_1000_1200` | 6 | 6 | 0.9961 | 3.1119 | 0.8333 | `hold_sample` |
 | `combo_entry_spot` | `score=score_66_69|source=wait6579_ev_cohort|stale=fresh_or_unflagged|liquidity=liquidity_high|overbought=overbought_normal|time=time_1200_1400` | 5 | 5 | 0.7745 | 0.5288 | 0.8 | `hold_sample` |
 | `combo_entry_spot` | `score=score_70p|source=wait6579_ev_cohort|stale=fresh_or_unflagged|liquidity=liquidity_high|overbought=overbought_ok|time=time_1200_1400` | 5 | 5 | -0.2604 | 0.8837 | 0.8 | `hold_sample` |
-| `combo_entry_spot` | `score=score_60_62|source=scalp_entry_action_decision_snapshot|stale=fresh|liquidity=liquidity_not_available|overbought=overbought_ok|time=time_1200_1400` | 5 | 4 | -0.035 | -2.5225 | 0.0 | `source_quality_workorder` |
-| `combo_entry_spot` | `score=score_60_62|source=scalp_entry_action_decision_snapshot|stale=stale_watch|liquidity=liquidity_not_available|overbought=overbought_not_available|time=time_0900_1000` | 5 | 4 | 0.041 | -0.73 | 0.25 | `source_quality_workorder` |
+| `combo_entry_spot` | `score=score_60_62|source=scalp_entry_action_decision_snapshot|stale=fresh|liquidity=liquidity_high|overbought=overbought_ok|time=time_1200_1400` | 5 | 4 | -0.035 | -2.5225 | 0.0 | `hold_sample` |
 | `combo_entry_spot` | `score=score_63_65|source=wait6579_ev_cohort|stale=fresh_or_unflagged|liquidity=liquidity_high|overbought=overbought_normal|time=time_1400_close` | 4 | 4 | -1.0251 | -1.5808 | 0.25 | `hold_sample` |
-| `liquidity_bucket` | `liquidity_high` | 113 | 113 | 0.4274 | 0.7753 | 0.6372 | `candidate_recovery_or_relax` |
-| `overbought_bucket` | `overbought_normal` | 79 | 49 | 0.1661 | -0.2144 | 0.6939 | `hold_no_edge` |
-| `overbought_bucket` | `overbought_watch` | 69 | 25 | 0.803 | 1.1319 | 0.48 | `candidate_recovery_or_relax` |
+| `exit_rule` | `exit_unknown` | 569 | 113 | 0.4274 | 0.7753 | 0.6372 | `candidate_recovery_or_relax` |
+| `exit_rule` | `scalp_soft_stop_pct` | 27 | 27 | 0.009 | -1.9285 | 0.0 | `hold_no_edge` |
+| `exit_rule` | `scalp_trailing_take_profit` | 16 | 16 | 0.5474 | 2.1394 | 1.0 | `candidate_recovery_or_relax` |
+| `exit_rule` | `scalp_hard_stop_pct` | 10 | 10 | -0.308 | -2.841 | 0.0 | `candidate_tighten_or_exclude` |
+| `liquidity_bucket` | `liquidity_high` | 232 | 166 | 0.3266 | 0.2492 | 0.5301 | `candidate_recovery_or_relax` |
+| `overbought_bucket` | `overbought_normal` | 123 | 80 | 0.1725 | -0.5015 | 0.525 | `hold_no_edge` |
+| `overbought_bucket` | `overbought_watch` | 95 | 41 | 0.6116 | 0.6631 | 0.4878 | `candidate_recovery_or_relax` |
+| `overbought_bucket` | `overbought_ok` | 49 | 36 | 0.3415 | 1.1413 | 0.6111 | `candidate_recovery_or_relax` |
+| `score_band` | `score_70p` | 86 | 48 | 0.058 | 0.621 | 0.5625 | `hold_no_edge` |
+| `score_band` | `score_66_69` | 55 | 40 | 0.8819 | 1.073 | 0.7 | `candidate_recovery_or_relax` |
+| `score_band` | `score_60_62` | 341 | 39 | 0.054 | -0.6179 | 0.3333 | `hold_no_edge` |
+| `score_band` | `score_63_65` | 66 | 31 | 0.2996 | -0.0067 | 0.5484 | `hold_no_edge` |
 | `source_stage` | `wait6579_ev_cohort` | 113 | 113 | 0.4274 | 0.7753 | 0.6372 | `candidate_recovery_or_relax` |
+| `source_stage` | `scalp_entry_action_decision_snapshot` | 89 | 53 | 0.1117 | -0.8726 | 0.3019 | `hold_no_edge` |
 | `stale_bucket` | `fresh_or_unflagged` | 458 | 113 | 0.4274 | 0.7753 | 0.6372 | `candidate_recovery_or_relax` |
-| `strength_bucket` | `strong_strength_momentum` | 111 | 87 | 0.581 | 0.9524 | 0.6437 | `candidate_recovery_or_relax` |
-| `strength_bucket` | `weak_strength_momentum` | 56 | 22 | -0.0691 | 0.1286 | 0.5909 | `hold_no_edge` |
+| `stale_bucket` | `fresh` | 115 | 52 | 0.1217 | -0.9096 | 0.2885 | `hold_no_edge` |
+| `strength_bucket` | `strong_strength_momentum` | 111 | 90 | 0.5549 | 0.9835 | 0.6556 | `candidate_recovery_or_relax` |
+| `strength_bucket` | `weak_strength_momentum` | 142 | 69 | 0.0642 | -0.6264 | 0.3768 | `hold_no_edge` |
+| `time_bucket` | `time_1000_1200` | 187 | 62 | 0.4787 | 0.5476 | 0.6935 | `candidate_recovery_or_relax` |
+| `time_bucket` | `time_0900_1000` | 198 | 42 | 0.4019 | 0.7813 | 0.4762 | `candidate_recovery_or_relax` |
 
 ### Entry Bucket Runtime Approval Candidates
 
-- `entry_bucket_2`: `liquidity_bucket` / `liquidity_high` -> `candidate_recovery_or_relax`
-- `entry_bucket_3`: `overbought_bucket` / `overbought_watch` -> `candidate_recovery_or_relax`
-- `entry_bucket_4`: `source_stage` / `wait6579_ev_cohort` -> `candidate_recovery_or_relax`
-- `entry_bucket_5`: `stale_bucket` / `fresh_or_unflagged` -> `candidate_recovery_or_relax`
-- `entry_bucket_6`: `strength_bucket` / `strong_strength_momentum` -> `candidate_recovery_or_relax`
+- `entry_bucket_5`: `liquidity_bucket` / `liquidity_high` -> `candidate_recovery_or_relax`
+- `entry_bucket_6`: `overbought_bucket` / `overbought_watch` -> `candidate_recovery_or_relax`
+- `entry_bucket_7`: `overbought_bucket` / `overbought_ok` -> `candidate_recovery_or_relax`
+- `entry_bucket_8`: `score_band` / `score_66_69` -> `candidate_recovery_or_relax`
+- `entry_bucket_9`: `source_stage` / `wait6579_ev_cohort` -> `candidate_recovery_or_relax`
+- `entry_bucket_10`: `stale_bucket` / `fresh_or_unflagged` -> `candidate_recovery_or_relax`
+- `entry_bucket_11`: `strength_bucket` / `strong_strength_momentum` -> `candidate_recovery_or_relax`
+- `entry_bucket_12`: `time_bucket` / `time_1000_1200` -> `candidate_recovery_or_relax`
+- `entry_bucket_13`: `time_bucket` / `time_0900_1000` -> `candidate_recovery_or_relax`
+- `entry_bucket_14`: `time_bucket` / `time_1200_1400` -> `candidate_recovery_or_relax`
 
 ### Entry Bucket Workorders
 
-- `entry_bucket_unknown_source_quality_1`: `chosen_action` / `NO_BUY_AI` -> `unknown_bucket_source_quality_blocker`
-- `entry_bucket_unknown_source_quality_2`: `chosen_action` / `BUY_NOW` -> `unknown_bucket_source_quality_blocker`
-- `entry_bucket_unknown_source_quality_3`: `combo_entry_spot` / `score=score_60_62|source=scalp_entry_action_decision_snapshot|stale=fresh|liquidity=liquidity_not_available|overbought=overbought_not_available|time=time_0900_1000` -> `unknown_bucket_source_quality_blocker`
-- `entry_bucket_unknown_source_quality_4`: `combo_entry_spot` / `score=score_60_62|source=scalp_entry_action_decision_snapshot|stale=fresh|liquidity=liquidity_not_available|overbought=overbought_not_available|time=time_1000_1200` -> `unknown_bucket_source_quality_blocker`
-- `entry_bucket_unknown_source_quality_5`: `combo_entry_spot` / `score=score_60_62|source=scalp_entry_action_decision_snapshot|stale=fresh|liquidity=liquidity_not_available|overbought=overbought_not_available|time=time_1200_1400` -> `unknown_bucket_source_quality_blocker`
-- `entry_bucket_unknown_source_quality_6`: `combo_entry_spot` / `score=score_60_62|source=scalp_entry_action_decision_snapshot|stale=fresh|liquidity=liquidity_not_available|overbought=overbought_ok|time=time_1200_1400` -> `unknown_bucket_source_quality_blocker`
-- `entry_bucket_unknown_source_quality_7`: `combo_entry_spot` / `score=score_60_62|source=scalp_entry_action_decision_snapshot|stale=stale_watch|liquidity=liquidity_not_available|overbought=overbought_not_available|time=time_0900_1000` -> `unknown_bucket_source_quality_blocker`
-- `entry_bucket_unknown_source_quality_8`: `combo_entry_spot` / `score=score_70p|source=scalp_entry_action_decision_snapshot|stale=fresh|liquidity=liquidity_not_available|overbought=overbought_not_available|time=time_0900_1000` -> `unknown_bucket_source_quality_blocker`
-- `entry_bucket_unknown_source_quality_9`: `combo_entry_spot` / `score=score_60_62|source=scalp_entry_action_decision_snapshot|stale=fresh|liquidity=liquidity_not_available|overbought=overbought_not_available|time=time_1400_close` -> `unknown_bucket_source_quality_blocker`
-- `entry_bucket_unknown_source_quality_10`: `combo_entry_spot` / `score=score_lt60|source=scalp_entry_action_decision_snapshot|stale=fresh|liquidity=liquidity_not_available|overbought=overbought_not_available|time=time_0900_1000` -> `unknown_bucket_source_quality_blocker`
 - `entry_bucket_source_quality_1`: `chosen_action` / `WAIT_REQUOTE` -> `bucket_has_edge_but_needs_rolling_or_feature_confirmation`
-- `entry_bucket_source_quality_2`: `liquidity_bucket` / `liquidity_high` -> `bucket_has_edge_but_needs_rolling_or_feature_confirmation`
-- `entry_bucket_source_quality_3`: `overbought_bucket` / `overbought_watch` -> `bucket_has_edge_but_needs_rolling_or_feature_confirmation`
-- `entry_bucket_source_quality_4`: `source_stage` / `wait6579_ev_cohort` -> `bucket_has_edge_but_needs_rolling_or_feature_confirmation`
-- `entry_bucket_source_quality_5`: `stale_bucket` / `fresh_or_unflagged` -> `bucket_has_edge_but_needs_rolling_or_feature_confirmation`
-- `entry_bucket_source_quality_6`: `strength_bucket` / `strong_strength_momentum` -> `bucket_has_edge_but_needs_rolling_or_feature_confirmation`
+- `entry_bucket_source_quality_2`: `exit_rule` / `exit_unknown` -> `bucket_has_edge_but_needs_rolling_or_feature_confirmation`
+- `entry_bucket_source_quality_3`: `exit_rule` / `scalp_trailing_take_profit` -> `bucket_has_edge_but_needs_rolling_or_feature_confirmation`
+- `entry_bucket_source_quality_4`: `exit_rule` / `scalp_hard_stop_pct` -> `bucket_has_edge_but_needs_rolling_or_feature_confirmation`
+- `entry_bucket_source_quality_5`: `liquidity_bucket` / `liquidity_high` -> `bucket_has_edge_but_needs_rolling_or_feature_confirmation`
+- `entry_bucket_source_quality_6`: `overbought_bucket` / `overbought_watch` -> `bucket_has_edge_but_needs_rolling_or_feature_confirmation`
+- `entry_bucket_source_quality_7`: `overbought_bucket` / `overbought_ok` -> `bucket_has_edge_but_needs_rolling_or_feature_confirmation`
+- `entry_bucket_source_quality_8`: `score_band` / `score_66_69` -> `bucket_has_edge_but_needs_rolling_or_feature_confirmation`
+- `entry_bucket_source_quality_9`: `source_stage` / `wait6579_ev_cohort` -> `bucket_has_edge_but_needs_rolling_or_feature_confirmation`
+- `entry_bucket_source_quality_10`: `stale_bucket` / `fresh_or_unflagged` -> `bucket_has_edge_but_needs_rolling_or_feature_confirmation`
 
 ## Submit Bucket Attribution
 

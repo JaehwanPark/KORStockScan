@@ -91,6 +91,8 @@
 
 운영 확인 메모: `[IntradayAutomationHealthCheck20260609]` 판정은 `pass`. `buy_funnel_sentinel`, `holding_exit_sentinel`, `panic_sell_defense`, `panic_buying` cron log는 모두 2026-06-09 10:55~10:57 KST `[DONE]` marker를 남겼고 각 JSON/Markdown artifact가 생성됐다. `error_detection_2026-06-09.json`은 `summary_severity=pass`, detector 7개 모두 pass이며 process/thread, cron, error log, Kiwoom auth, critical artifact, resource, lock 상태가 정상이다. `pipeline_events_2026-06-09.jsonl`와 `threshold_events_2026-06-09.jsonl`은 10:58 KST까지 append가 유지됐다. 장중 runbook 확인은 운영 상태 점검이며 threshold/env/provider/order/bot 변경 권한이 없다.
 
+운영 스케줄 변경 메모: `[PostcloseCronScheduleUpdate0609]` crontab에서 `THRESHOLD_CYCLE_POSTCLOSE`는 16:00에서 15:45로, `POSTCLOSE_DONE_CONTROLLER`는 16:05에서 15:50으로 15분 앞당겼다. EC2 22:00 종료 전 완료를 위해 `DASHBOARD_DB_ARCHIVE`는 23:10에서 21:10으로, `LOG_ROTATION_CLEANUP`은 23:20에서 21:20으로 이동했다. 이 변경은 운영 cron 시간표와 runbook 현행화이며 threshold/order/provider/cap/bot runtime authority를 추가하지 않는다.
+
 ## 장후 체크리스트 (16:30~18:55)
 
 - [ ] `[PostcloseSourceQualityGateReview0609] 장후 source-quality gate 결과 및 튜닝 입력 허용/제외 확인` (`Due: 2026-06-09`, `Slot: POSTCLOSE`, `TimeWindow: 16:25~16:35`, `Track: RuntimeStability`)

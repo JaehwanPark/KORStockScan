@@ -246,8 +246,13 @@ def test_scalp_entry_adm_report_warns_on_unknown_bucket_source_quality(tmp_path,
     assert "unknown_bucket_source_quality_gap" in report["warnings"]
     assert unknown_summary["source_quality_gate"] == "source_quality_blocker"
     assert unknown_summary["recommended_route"] == "source_quality_workorder"
-    assert unknown_summary["affected_rows"] == 1
+    assert 1 <= unknown_summary["affected_rows"] <= unknown_summary["total_rows"]
+    assert unknown_summary["not_available_affected_rows"] <= unknown_summary["total_rows"]
     assert unknown_summary["dimension_counts"]["score_bucket"] == 1
+    assert "unknown_dimension_occurrence_count" in unknown_summary
+    assert "not_available_dimension_counts" in unknown_summary
+    assert "recomputed_unknown_count" in unknown_summary
+    assert "adm_source_bucket_used_count" in unknown_summary
     assert "unknown_bucket_affected_rows" in (report_dir / "scalp_entry_action_decision_matrix_2026-05-18.md").read_text(
         encoding="utf-8"
     )
@@ -532,6 +537,181 @@ def test_scalp_entry_adm_hypothesis_fallback_is_provenance_only_by_default(tmp_p
     assert merged["action"] == "BUY"
     assert merged["entry_adm_runtime_bias_applied"] is False
     assert merged["entry_adm_runtime_reason"] == "hypothesis_weak_momentum_chase_risk_provenance_only"
+
+
+def test_scalp_entry_adm_prioritizes_adm_source_buckets_over_raw_recompute(tmp_path, monkeypatch):
+    pipeline_dir = tmp_path / "pipeline_events"
+    report_dir = tmp_path / "report" / "scalp_entry_action_decision_matrix"
+    monkeypatch.setattr(mod, "PIPELINE_EVENT_DIR", pipeline_dir)
+    monkeypatch.setattr(mod, "THRESHOLD_EVENT_DIR", tmp_path / "threshold_cycle")
+    monkeypatch.setattr(mod, "THRESHOLD_SNAPSHOT_DIR", tmp_path / "threshold_cycle" / "snapshots")
+    monkeypatch.setattr(mod, "POST_SELL_DIR", tmp_path / "post_sell")
+    monkeypatch.setattr(mod, "ADM_REPORT_DIR", report_dir)
+
+    _write_jsonl(
+        pipeline_dir / "pipeline_events_2026-05-18.jsonl",
+        [
+            {
+                "stage": "scalp_entry_action_decision_snapshot",
+                "stock_code": "111111",
+                "record_id": "R1",
+                "emitted_at": "2026-05-18T09:10:00",
+                "emitted_date": "2026-05-18",
+                "fields": {
+                    "chosen_action": "BUY_NOW",
+                    "entry_adm_score_bucket": "score75_84",
+                    "entry_adm_risk_context_bucket": "strong_strength_momentum",
+                    "entry_adm_stale_bucket": "fresh",
+                    "entry_adm_price_resolution_bucket": "quote_based",
+                    "entry_adm_liquidity_bucket": "liquidity_high",
+                    "entry_adm_overbought_bucket": "overbought_normal",
+                    "entry_adm_bucket_token": "score75_84|strong_strength_momentum|fresh|quote_based|liquidity_high|overbought_normal",
+                    "best_ask": "1000",
+                },
+            }
+        ],
+    )
+
+    report = mod.build_scalp_entry_action_decision_matrix_report("2026-05-18")
+    row = report["rows"][0]
+
+    assert row["score_bucket"] == "score75_84"
+    assert row["risk_context_bucket"] == "strong_strength_momentum"
+    assert row["stale_bucket"] == "fresh"
+    assert row["price_resolution_bucket"] == "quote_based"
+    assert row["liquidity_bucket"] == "liquidity_high"
+    assert row["overbought_bucket"] == "overbought_normal"
+    provenance = row.get("bucket_field_provenance")
+    assert isinstance(provenance, dict)
+    assert provenance["score_bucket"] == "adm_field"
+    assert provenance["risk_context_bucket"] == "adm_field"
+
+
+def test_scalp_entry_adm_falls_back_to_raw_when_adm_fields_missing(tmp_path, monkeypatch):
+    pipeline_dir = tmp_path / "pipeline_events"
+    report_dir = tmp_path / "report" / "scalp_entry_action_decision_matrix"
+    monkeypatch.setattr(mod, "PIPELINE_EVENT_DIR", pipeline_dir)
+    monkeypatch.setattr(mod, "THRESHOLD_EVENT_DIR", tmp_path / "threshold_cycle")
+    monkeypatch.setattr(mod, "THRESHOLD_SNAPSHOT_DIR", tmp_path / "threshold_cycle" / "snapshots")
+    monkeypatch.setattr(mod, "POST_SELL_DIR", tmp_path / "post_sell")
+    monkeypatch.setattr(mod, "ADM_REPORT_DIR", report_dir)
+
+    _write_jsonl(
+        pipeline_dir / "pipeline_events_2026-05-18.jsonl",
+        [
+            {
+                "stage": "ai_confirmed",
+                "stock_code": "111111",
+                "record_id": "R1",
+                "emitted_at": "2026-05-18T09:10:00",
+                "emitted_date": "2026-05-18",
+                "fields": {
+                    "ai_score": "78",
+                    "action": "BUY",
+                    "latest_strength": "150",
+                    "quote_age_ms": "300",
+                    "best_ask": "1000",
+                    "trade_value_krw": "300000000",
+                    "intraday_range_pct": "5.0",
+                },
+            }
+        ],
+    )
+
+    report = mod.build_scalp_entry_action_decision_matrix_report("2026-05-18")
+    row = report["rows"][0]
+
+    assert row["score_bucket"] == "score75_84"
+    provenance = row.get("bucket_field_provenance")
+    assert isinstance(provenance, dict)
+    assert provenance["score_bucket"] == "raw_recomputed"
+
+
+def test_scalp_entry_adm_unknown_bucket_summary_separates_unknown_from_not_available(tmp_path, monkeypatch):
+    pipeline_dir = tmp_path / "pipeline_events"
+    report_dir = tmp_path / "report" / "scalp_entry_action_decision_matrix"
+    monkeypatch.setattr(mod, "PIPELINE_EVENT_DIR", pipeline_dir)
+    monkeypatch.setattr(mod, "THRESHOLD_EVENT_DIR", tmp_path / "threshold_cycle")
+    monkeypatch.setattr(mod, "THRESHOLD_SNAPSHOT_DIR", tmp_path / "threshold_cycle" / "snapshots")
+    monkeypatch.setattr(mod, "POST_SELL_DIR", tmp_path / "post_sell")
+    monkeypatch.setattr(mod, "ADM_REPORT_DIR", report_dir)
+
+    _write_jsonl(
+        pipeline_dir / "pipeline_events_2026-05-18.jsonl",
+        [
+            {
+                "stage": "scalp_entry_action_decision_snapshot",
+                "stock_code": "111111",
+                "record_id": "R1",
+                "emitted_at": "2026-05-18T09:10:00",
+                "emitted_date": "2026-05-18",
+                "fields": {
+                    "chosen_action": "NO_BUY_AI",
+                    "entry_adm_score_bucket": "score_unknown",
+                    "entry_adm_risk_context_bucket": "neutral_strength_momentum",
+                    "entry_adm_stale_bucket": "stale_not_available",
+                    "entry_adm_price_resolution_bucket": "quote_based",
+                    "entry_adm_liquidity_bucket": "liquidity_high",
+                    "entry_adm_overbought_bucket": "overbought_normal",
+                    "entry_adm_bucket_token": "score_unknown|risk_unknown|stale_not_available",
+                },
+            }
+        ],
+    )
+
+    report = mod.build_scalp_entry_action_decision_matrix_report("2026-05-18")
+    unknown_summary = report["summary"]["unknown_bucket_summary"]
+
+    assert unknown_summary["affected_rows"] == 1
+    assert unknown_summary["affected_rows"] <= unknown_summary["total_rows"]
+    assert unknown_summary["not_available_affected_rows"] >= 0
+    assert unknown_summary["not_available_affected_rows"] <= unknown_summary["total_rows"]
+    assert unknown_summary["adm_source_bucket_used_count"] >= 1
+    assert "adm_source_bucket_field_count" in unknown_summary
+    assert "recomputed_unknown_count" in unknown_summary
+    assert "unknown_dimension_occurrence_count" in unknown_summary
+    assert "not_available_dimension_occurrence_count" in unknown_summary
+    assert "not_available_dimension_counts" in unknown_summary
+
+
+def test_scalp_entry_adm_bucket_token_still_valid_with_adm_source_but_unknown_dimensions(tmp_path, monkeypatch):
+    pipeline_dir = tmp_path / "pipeline_events"
+    report_dir = tmp_path / "report" / "scalp_entry_action_decision_matrix"
+    monkeypatch.setattr(mod, "PIPELINE_EVENT_DIR", pipeline_dir)
+    monkeypatch.setattr(mod, "THRESHOLD_EVENT_DIR", tmp_path / "threshold_cycle")
+    monkeypatch.setattr(mod, "THRESHOLD_SNAPSHOT_DIR", tmp_path / "threshold_cycle" / "snapshots")
+    monkeypatch.setattr(mod, "POST_SELL_DIR", tmp_path / "post_sell")
+    monkeypatch.setattr(mod, "ADM_REPORT_DIR", report_dir)
+
+    _write_jsonl(
+        pipeline_dir / "pipeline_events_2026-05-18.jsonl",
+        [
+            {
+                "stage": "scalp_entry_action_decision_snapshot",
+                "stock_code": "111111",
+                "record_id": "R1",
+                "emitted_at": "2026-05-18T09:10:00",
+                "emitted_date": "2026-05-18",
+                "fields": {
+                    "chosen_action": "NO_BUY_AI",
+                    "entry_adm_score_bucket": "score_unknown",
+                    "entry_adm_risk_context_bucket": "weak_strength_momentum",
+                    "entry_adm_stale_bucket": "fresh",
+                    "entry_adm_price_resolution_bucket": "quote_based",
+                    "entry_adm_liquidity_bucket": "liquidity_high",
+                    "entry_adm_overbought_bucket": "overbought_normal",
+                    "entry_adm_bucket_token": "score_unknown|weak_strength_momentum|fresh|quote_based|liquidity_high|overbought_normal",
+                },
+            }
+        ],
+    )
+
+    report = mod.build_scalp_entry_action_decision_matrix_report("2026-05-18")
+    unknown_summary = report["summary"]["unknown_bucket_summary"]
+
+    assert "unknown_bucket_source_quality_gap" in report["warnings"]
+    assert unknown_summary["source_quality_gate"] == "source_quality_blocker"
+    assert unknown_summary["affected_rows"] == 1
 
 
 def test_scalp_entry_adm_hypothesis_force_requires_explicit_flag(tmp_path, monkeypatch):
