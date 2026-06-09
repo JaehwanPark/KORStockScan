@@ -2,9 +2,9 @@
 
 - owner: `SwingModelSelectionFunnelRepair`
 - selection_mode: `SELECTED`
-- selected_count: `2`
+- selected_count: `3`
 - fallback_written_to_recommendations: `False`
-- csv_rows: `2`
+- csv_rows: `3`
 - db_rows: `9`
 - db_load_gap: `False`
 - db_load_skip_reason: `loaded`

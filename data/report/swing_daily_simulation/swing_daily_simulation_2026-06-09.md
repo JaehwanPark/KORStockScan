@@ -1,13 +1,13 @@
 # Swing Daily Simulation - 2026-06-09
 
 - runtime_change: `False`
-- recommendation_rows: `9` / live `9` / diagnostic `0`
-- recommendation_sources: `{'recommendation_history': 7, 'daily_recommendations_v2_csv': 2}`
+- recommendation_rows: `10` / live `10` / diagnostic `0`
+- recommendation_sources: `{'recommendation_history': 7, 'daily_recommendations_v2_csv': 3}`
 - db_recommendation_rows: `7`
-- source_signal_dates: `['2026-06-08', '2026-06-09']`
-- simulated_count: `9`
+- source_signal_dates: `['2026-06-09']`
+- simulated_count: `10`
 - closed_count: `0`
-- planned_or_open_count: `9`
+- planned_or_open_count: `10`
 - closed win_rate: `0.00%`
 - closed avg_net_ret: `0.00%`
 
@@ -30,9 +30,9 @@
 
 | arm | simulated | closed | win_rate | avg_net_ret | status_counts |
 | --- | ---: | ---: | ---: | ---: | --- |
-| `gap_pass` | 9 | 0 | 0.00% | 0.00% | `{'PENDING_ENTRY': 9}` |
-| `gatekeeper_pass` | 9 | 0 | 0.00% | 0.00% | `{'PENDING_ENTRY': 9}` |
-| `selection_only` | 9 | 0 | 0.00% | 0.00% | `{'PENDING_ENTRY': 9}` |
+| `gap_pass` | 10 | 0 | 0.00% | 0.00% | `{'PENDING_ENTRY': 10}` |
+| `gatekeeper_pass` | 10 | 0 | 0.00% | 0.00% | `{'PENDING_ENTRY': 10}` |
+| `selection_only` | 10 | 0 | 0.00% | 0.00% | `{'PENDING_ENTRY': 10}` |
 
 ## Runtime Entry Funnel
 
@@ -50,12 +50,13 @@
 
 | code | name | source | status | guard | qty | entry | exit | net_ret | reason |
 | --- | --- | --- | --- | --- | ---: | --- | --- | ---: | --- |
-| `001200` | 유진투자증권 | `daily_recommendations_v2_csv` | `PENDING_ENTRY` | `WAITING_FOR_NEXT_SESSION_QUOTE` | 0 |  |  |  |  |
-| `008040` | 사조동아원 | `daily_recommendations_v2_csv` | `PENDING_ENTRY` | `WAITING_FOR_NEXT_SESSION_QUOTE` | 0 |  |  |  |  |
 | `009150` | 삼성전기 | `recommendation_history` | `PENDING_ENTRY` | `WAITING_FOR_NEXT_SESSION_QUOTE` | 0 |  |  |  |  |
 | `010950` | S-Oil | `recommendation_history` | `PENDING_ENTRY` | `WAITING_FOR_NEXT_SESSION_QUOTE` | 0 |  |  |  |  |
+| `016360` | 삼성증권 | `daily_recommendations_v2_csv` | `PENDING_ENTRY` | `WAITING_FOR_NEXT_SESSION_QUOTE` | 0 |  |  |  |  |
 | `032830` | 삼성생명 | `recommendation_history` | `PENDING_ENTRY` | `WAITING_FOR_NEXT_SESSION_QUOTE` | 0 |  |  |  |  |
 | `055550` | 신한지주 | `recommendation_history` | `PENDING_ENTRY` | `WAITING_FOR_NEXT_SESSION_QUOTE` | 0 |  |  |  |  |
 | `105560` | KB금융 | `recommendation_history` | `PENDING_ENTRY` | `WAITING_FOR_NEXT_SESSION_QUOTE` | 0 |  |  |  |  |
 | `175330` | JB금융지주 | `recommendation_history` | `PENDING_ENTRY` | `WAITING_FOR_NEXT_SESSION_QUOTE` | 0 |  |  |  |  |
+| `248070` | 솔루엠 | `daily_recommendations_v2_csv` | `PENDING_ENTRY` | `WAITING_FOR_NEXT_SESSION_QUOTE` | 0 |  |  |  |  |
 | `323410` | 카카오뱅크 | `recommendation_history` | `PENDING_ENTRY` | `WAITING_FOR_NEXT_SESSION_QUOTE` | 0 |  |  |  |  |
+| `404990` | 신한서부티엔디리츠 | `daily_recommendations_v2_csv` | `PENDING_ENTRY` | `WAITING_FOR_NEXT_SESSION_QUOTE` | 0 |  |  |  |  |

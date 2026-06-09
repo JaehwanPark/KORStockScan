@@ -1,22 +1,22 @@
 # Swing Strategy Discovery Sim - 2026-06-09
 
-- generated_at: `2026-06-09T16:04:44`
+- generated_at: `2026-06-09T20:48:18`
 - policy_version: `swing_strategy_discovery_sim_v1`
 - mode: `sim_only_aggressive_exploration`
 - runtime_effect: `False`
 - decision_authority: `swing_sim_exploration_only`
-- candidate_count: `21`
-- arm_count: `168`
-- bottom_rebound_selected_candidate_count: `0`
-- bottom_rebound_arm_count: `0`
-- bottom_rebound_persisted_candidate_count: `0`
-- bottom_rebound_persisted_arm_count: `0`
+- candidate_count: `50`
+- arm_count: `265`
+- bottom_rebound_selected_candidate_count: `27`
+- bottom_rebound_arm_count: `81`
+- bottom_rebound_persisted_candidate_count: `27`
+- bottom_rebound_persisted_arm_count: `81`
 - active_arm_priority_policy_count: `0`
 - active_arm_priority_arm_count: `0`
 - effective_max_daily_candidates: `50`
-- selection_arm_counts: `{'diversity_exploration': 6, 'lifecycle_rank': 15}`
-- block_reason_counts: `{'no_block_observed': 19, 'blocked_gatekeeper_reject': 2}`
-- source_family_bucket_counts: `{'safe_pool': 21}`
+- selection_arm_counts: `{'diversity_exploration': 15, 'lifecycle_rank': 35}`
+- block_reason_counts: `{'no_block_observed': 49, 'blocked_gatekeeper_reject': 1}`
+- source_family_bucket_counts: `{'safe_pool': 23, 'bottom_rebound': 27}`
 - quote_feature_coverage: `1.0`
 - warnings: `[]`
 

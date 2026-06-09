@@ -25,17 +25,32 @@
 
 ## 장전 체크리스트 (08:45~09:00)
 
-- [ ] `[SwingPreFinalAutoAndFinalApprovalPreopen0610] 스윙 pre-final auto state 및 final approval artifact 확인` (`Due: 2026-06-10`, `Slot: PREOPEN`, `TimeWindow: 08:45~08:50`, `Track: RuntimeStability`)
+- [x] `[SwingPreFinalAutoAndFinalApprovalPreopen0610] 스윙 pre-final auto state 및 final approval artifact 확인` (`Due: 2026-06-10`, `Slot: PREOPEN`, `TimeWindow: 08:45~08:50`, `Track: RuntimeStability`)
   - Source: [swing_runtime_approval_2026-06-09.json](/home/ubuntu/KORStockScan/data/report/swing_runtime_approval/swing_runtime_approval_2026-06-09.json), [threshold_cycle_ev_2026-06-09.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-06-09.json)
   - 판정 기준: pre-final은 parsed AI Tier2 auto state가 있어야 하고, final-stage는 사용자 승인 artifact가 있어야 한다.
   - 금지: 스윙 full-live 전환, cap release, provider/bot 변경, hard-safety 완화를 pre-final auto state로 처리하지 않는다.
   - 다음 액션: `pre_final_auto_selected`, `final_approval_artifact_present`, `blocked_by_policy` 중 하나로 닫는다.
+  - 처리 결과: `pre_final_auto_selected`.
+  - 판정: 스윙 final full-live 승인 artifact는 없고, `swing_gatekeeper_reject_cooldown`만 AI Tier2 pre-final auto 상태로 2026-06-10 PREOPEN dry-run env 후보에 선택됐다. 실주문, full-live 전환, cap release, provider/bot 변경 권한은 열지 않는다.
+  - 근거: `swing_runtime_approval_2026-06-09.json` summary는 `requested=1`, `blocked=12`, `runtime_change=false`이고 `swing_entry_ofi_qi_execution_quality`, `swing_scale_in_ofi_qi_confirmation` source-quality blocked family를 남겼다. `threshold_apply_2026-06-10.json`의 PREOPEN 소비 결과는 `swing_gatekeeper_reject_cooldown` 1건을 `approval_mode=ai_tier2_pre_final_auto`, `approval_runtime_scope=swing_dry_run_env_only`, `dry_run_forced=true`로 선택했고, `KORSTOCKSCAN_ML_GATEKEEPER_REJECT_COOLDOWN=6600`만 env 후보에 반영했다.
+  - 다음 액션: 오늘 장중에는 dry-run env provenance만 관찰한다. 스윙 OFI/QI source-quality blocked family와 final full-live conversion은 장후 source-quality/workorder 및 별도 final approval artifact 기준으로 재확인한다.
 
-- [ ] `[ThresholdEnvAutoApplyPreopen0610] threshold env 자동 apply 산출물 및 사용자 개입 여부 확인` (`Due: 2026-06-10`, `Slot: PREOPEN`, `TimeWindow: 08:50~08:55`, `Track: RuntimeStability`)
+- [x] `[ThresholdEnvAutoApplyPreopen0610] threshold env 자동 apply 산출물 및 사용자 개입 여부 확인` (`Due: 2026-06-10`, `Slot: PREOPEN`, `TimeWindow: 08:50~08:55`, `Track: RuntimeStability`)
   - Source: [threshold_cycle_ev_2026-06-09.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-06-09.json), [threshold_cycle_preopen_apply.py](/home/ubuntu/KORStockScan/src/engine/threshold_cycle_preopen_apply.py), [run_bot.sh](/home/ubuntu/KORStockScan/src/run_bot.sh)
   - 판정 기준: 전일 postclose EV와 당일 apply plan/runtime env를 확인하고 `auto_bounded_live` guard 통과분만 runtime env로 인정한다.
   - 금지: blocked family, approval artifact missing, same-stage owner conflict를 수동 env override로 우회하지 않는다.
   - 다음 액션: `applied_guard_passed_env`, `blocked_no_env`, `partial_apply_with_blocked_families`, `failed_preopen_wrapper`, `not_yet_due` 중 하나로 닫는다.
+  - 처리 결과: `applied_guard_passed_env`.
+  - 판정: 2026-06-10 PREOPEN wrapper, apply plan, runtime env 생성은 성공했다. 단, lifecycle/runtime apply bridge live-auto 후보는 계속 blocked/selected 없음으로 남아 있고 수동 override는 감지되지 않았다.
+  - 근거: `threshold_cycle_preopen_2026-06-10.status.json`은 `status=succeeded`, `exit_code=0`, `apply_mode=auto_bounded_live`, `runtime_effect=preopen_runtime_env_apply_only`, `finished_at=2026-06-10T07:35:01+09:00`이다. `threshold_apply_2026-06-10.json`은 `status=auto_bounded_live_ready`, `runtime_change=true`, `warnings=[]`, runtime env path를 기록했다. `threshold_runtime_env_2026-06-10.json`의 selected families는 `soft_stop_whipsaw_confirmation`, `score65_74_recovery_probe`, `scalp_sim_candidate_window_expansion`, `scalp_sim_ai_budget_manager`, `swing_gatekeeper_reject_cooldown`, `scalp_sim_scale_in_window_expansion`, `lifecycle_bucket_discovery_sim_auto_approval`, `swing_sim_auto_approval`이고 `operator_runtime_override=null`이다. runtime apply bridge는 `approved=0`, `selected=[]`이며 bridge/source-quality/AI parse blocker를 유지한다.
+  - 주의: 현재 bot process env에서는 2026-06-09 operator percent-bps 진입가 override 계열 env가 확인되지 않았다. 오늘도 해당 override를 유지하려면 별도 operator 지시와 우아한 재기동 판단이 필요하며, 이 체크리스트 처리에서는 runtime 값을 변경하지 않았다.
+  - 다음 액션: 오늘 장중에는 생성된 2026-06-10 runtime env만 source로 보고 provenance/rollback guard를 관찰한다. blocked bridge family는 수동 env override로 우회하지 않는다.
+
+운영 확인 메모: `[PreopenAutomationHealthCheck20260610]` 판정은 `warning`.
+
+- 판정: 장전 자동화 core chain은 정상 완료됐고 bot도 07:40 정상 기동했지만, 07:20 scanner의 macro Gemini 호출이 `RESOURCE_EXHAUSTED`로 실패해 cache fallback을 사용했으므로 운영 상태는 `warning`으로 닫는다.
+- 근거: `logs/threshold_cycle_preopen_cron.log`는 `[DONE] threshold-cycle preopen target_date=2026-06-10 finished_at=2026-06-10T07:35:01+0900`를 남겼고, `logs/bot_history.log`는 tmux bot 기동, Kiwoom login/WS 연결, 계좌 sync, 조건식 등록, OpenAI engine 초기화, 07:45~07:55 monitor heartbeat를 기록했다. `data/report/error_detection/error_detection_2026-06-10.json`은 `summary_severity=pass`이며 process/cron/log/auth/artifact/resource/stale-lock detector가 모두 pass다. `logs/ensemble_scanner.log`는 final scanner DONE과 V2 CSV 3개 우선 적재를 기록했지만 macro Gemini 429 cache fallback도 함께 기록했다.
+- 다음 액션: Gemini quota/provider fallback은 threshold/order/provider route 변경 근거로 쓰지 않고, 장중 RunbookOps에서는 bot heartbeat, Kiwoom WS, scanner fallback 지속 여부만 추가 관찰한다.
 
 ## 장중 체크리스트 (09:05~15:20)
 
