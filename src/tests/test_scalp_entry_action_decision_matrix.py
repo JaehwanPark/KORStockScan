@@ -296,7 +296,7 @@ def test_scalp_entry_adm_runtime_context_adds_prompt_and_cache_token(tmp_path, m
     report_dir = tmp_path / "report" / "scalp_entry_action_decision_matrix"
     report_dir.mkdir(parents=True)
     monkeypatch.setattr(runtime_mod, "ADM_DIR", report_dir)
-    bucket_token = "score75_84|strong_strength_momentum|fresh|quote_based|liquidity_high|overbought_normal|time_outside_regular"
+    bucket_token = "score75_84|strong_strength_momentum|-|fresh|quote_based|liquidity_high|overbought_normal|time_1400_close"
     (report_dir / "scalp_entry_action_decision_matrix_2026-05-18.json").write_text(
         json.dumps(
             {
@@ -337,6 +337,8 @@ def test_scalp_entry_adm_runtime_context_adds_prompt_and_cache_token(tmp_path, m
     merged = runtime_mod.merge_scalp_entry_adm_result_fields({"action": "BUY", "score": 78}, context)
     assert merged["entry_adm_prompt_applied"] is True
     assert merged["entry_adm_bucket_token"] == bucket_token
+    assert merged["entry_adm_bucket_schema_version"] == "entry_adm_bucket_v2"
+    assert merged["entry_adm_market_regime_continuous_bucket"] == "-"
     assert merged["entry_adm_recommended_action"] == "BUY_NOW"
     assert merged["entry_adm_decision_alignment"] == "aligned_buy_bucket"
 
@@ -367,7 +369,7 @@ def test_scalp_entry_adm_runtime_bias_forces_wait_on_negative_buy_bucket(tmp_pat
         "TRADING_RULES",
         replace(runtime_mod.TRADING_RULES, SCALP_ENTRY_ADM_RUNTIME_BIAS_ENABLED=True),
     )
-    bucket_token = "score75_84|strong_strength_momentum|fresh|quote_based|liquidity_high|overbought_normal|time_outside_regular"
+    bucket_token = "score75_84|strong_strength_momentum|-|fresh|quote_based|liquidity_high|overbought_normal|time_1400_close"
     (report_dir / "scalp_entry_action_decision_matrix_2026-05-18.json").write_text(
         json.dumps(
             {
@@ -446,11 +448,69 @@ def test_scalp_entry_adm_runtime_maps_runtime_context_without_unknown_buckets(tm
     fields = context["fields"]
     assert fields["entry_adm_score_bucket"] == "score50_64"
     assert fields["entry_adm_risk_context_bucket"] == "weak_strength_momentum"
+    assert fields["entry_adm_market_regime_continuous_bucket"] == "-"
     assert fields["entry_adm_stale_bucket"] == "fresh"
     assert fields["entry_adm_price_resolution_bucket"] == "quote_based"
     assert fields["entry_adm_liquidity_bucket"] == "liquidity_high"
     assert fields["entry_adm_overbought_bucket"] == "overbought_ok"
     assert "unknown" not in fields["entry_adm_bucket_token"]
+
+
+def test_scalp_entry_adm_report_and_runtime_share_market_regime_bucket_contract(tmp_path, monkeypatch):
+    pipeline_dir = tmp_path / "pipeline_events"
+    report_dir = tmp_path / "report" / "scalp_entry_action_decision_matrix"
+    monkeypatch.setattr(mod, "PIPELINE_EVENT_DIR", pipeline_dir)
+    monkeypatch.setattr(mod, "THRESHOLD_EVENT_DIR", tmp_path / "threshold_cycle")
+    monkeypatch.setattr(mod, "THRESHOLD_SNAPSHOT_DIR", tmp_path / "threshold_cycle" / "snapshots")
+    monkeypatch.setattr(mod, "POST_SELL_DIR", tmp_path / "post_sell")
+    monkeypatch.setattr(mod, "ADM_REPORT_DIR", report_dir)
+    monkeypatch.setattr(runtime_mod, "ADM_DIR", report_dir)
+
+    _write_jsonl(
+        pipeline_dir / "pipeline_events_2026-05-18.jsonl",
+        [
+            {
+                "stage": "ai_confirmed",
+                "stock_code": "111111",
+                "record_id": "R1",
+                "emitted_at": "2026-05-18T09:10:00",
+                "emitted_date": "2026-05-18",
+                "fields": {
+                    "ai_score": "78",
+                    "action": "BUY",
+                    "latest_strength": "150",
+                    "quote_age_ms": "300",
+                    "best_ask": "1000",
+                    "trade_value_krw": "300000000",
+                    "intraday_range_pct": "5.0",
+                    "market_regime_continuous_label": "RISK_ON",
+                },
+            }
+        ],
+    )
+
+    report = mod.build_scalp_entry_action_decision_matrix_report("2026-05-18")
+    report_token = report["rows"][0]["entry_adm_bucket_token_recomputed"]
+    assert report["rows"][0]["market_regime_continuous_bucket"] == "market_regime_risk_on"
+
+    context = runtime_mod.build_scalp_entry_adm_runtime_context(
+        prompt_profile="watching",
+        ws_data={
+            "current_ai_score": 78,
+            "latest_strength": 150,
+            "quote_age_ms": 300,
+            "best_ask": 1000,
+            "trade_value_krw": 300000000,
+            "intraday_range_pct": 5.0,
+            "market_regime_continuous_label": "RISK_ON",
+        },
+        advisory_enabled=True,
+        now=datetime(2026, 5, 18, 9, 10),
+    )
+
+    fields = context["fields"]
+    assert fields["entry_adm_market_regime_continuous_bucket"] == "market_regime_risk_on"
+    assert fields["entry_adm_bucket_token"] == report_token
 
 
 def test_scalp_entry_adm_bucket_sample_floor_blocks_force_wait(tmp_path, monkeypatch):
@@ -462,7 +522,7 @@ def test_scalp_entry_adm_bucket_sample_floor_blocks_force_wait(tmp_path, monkeyp
         "TRADING_RULES",
         replace(runtime_mod.TRADING_RULES, SCALP_ENTRY_ADM_RUNTIME_BIAS_ENABLED=True),
     )
-    bucket_token = "score75_84|strong_strength_momentum|fresh|quote_based|liquidity_high|overbought_normal|time_outside_regular"
+    bucket_token = "score75_84|strong_strength_momentum|-|fresh|quote_based|liquidity_high|overbought_normal|time_1400_close"
     (report_dir / "scalp_entry_action_decision_matrix_2026-05-18.json").write_text(
         json.dumps(
             {
@@ -565,7 +625,7 @@ def test_scalp_entry_adm_prioritizes_adm_source_buckets_over_raw_recompute(tmp_p
                     "entry_adm_price_resolution_bucket": "quote_based",
                     "entry_adm_liquidity_bucket": "liquidity_high",
                     "entry_adm_overbought_bucket": "overbought_normal",
-                    "entry_adm_bucket_token": "score75_84|strong_strength_momentum|fresh|quote_based|liquidity_high|overbought_normal",
+                    "entry_adm_bucket_token": "score75_84|strong_strength_momentum|fresh|quote_based|liquidity_high|overbought_normal|time_0900_1000",
                     "best_ask": "1000",
                 },
             }
@@ -581,6 +641,11 @@ def test_scalp_entry_adm_prioritizes_adm_source_buckets_over_raw_recompute(tmp_p
     assert row["price_resolution_bucket"] == "quote_based"
     assert row["liquidity_bucket"] == "liquidity_high"
     assert row["overbought_bucket"] == "overbought_normal"
+    assert row["entry_adm_bucket_token"] == "score75_84|strong_strength_momentum|fresh|quote_based|liquidity_high|overbought_normal|time_0900_1000"
+    assert row["entry_adm_bucket_token_recomputed"] == "score75_84|strong_strength_momentum|-|fresh|quote_based|liquidity_high|overbought_normal|time_0900_1000"
+    assert row["entry_adm_bucket_schema_version"] == "entry_adm_bucket_v2"
+    assert row["raw_token_preserved"] is True
+    assert row["adm_token_backfill_applied"] is True
     provenance = row.get("bucket_field_provenance")
     assert isinstance(provenance, dict)
     assert provenance["score_bucket"] == "adm_field"
@@ -653,7 +718,7 @@ def test_scalp_entry_adm_unknown_bucket_summary_separates_unknown_from_not_avail
                     "entry_adm_price_resolution_bucket": "quote_based",
                     "entry_adm_liquidity_bucket": "liquidity_high",
                     "entry_adm_overbought_bucket": "overbought_normal",
-                    "entry_adm_bucket_token": "score_unknown|risk_unknown|stale_not_available",
+                    "entry_adm_bucket_token": "score_unknown|risk_unknown|-|stale_not_available|-|-|-|-",
                 },
             }
         ],
@@ -672,6 +737,7 @@ def test_scalp_entry_adm_unknown_bucket_summary_separates_unknown_from_not_avail
     assert "unknown_dimension_occurrence_count" in unknown_summary
     assert "not_available_dimension_occurrence_count" in unknown_summary
     assert "not_available_dimension_counts" in unknown_summary
+    assert unknown_summary["examples"][0]["bucket_token"].count("|") == 7
 
 
 def test_scalp_entry_adm_bucket_token_still_valid_with_adm_source_but_unknown_dimensions(tmp_path, monkeypatch):
@@ -700,7 +766,7 @@ def test_scalp_entry_adm_bucket_token_still_valid_with_adm_source_but_unknown_di
                     "entry_adm_price_resolution_bucket": "quote_based",
                     "entry_adm_liquidity_bucket": "liquidity_high",
                     "entry_adm_overbought_bucket": "overbought_normal",
-                    "entry_adm_bucket_token": "score_unknown|weak_strength_momentum|fresh|quote_based|liquidity_high|overbought_normal",
+                    "entry_adm_bucket_token": "score_unknown|weak_strength_momentum|-|fresh|quote_based|liquidity_high|overbought_normal|time_0900_1000",
                 },
             }
         ],

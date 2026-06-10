@@ -15,20 +15,20 @@
 
 ## 근거
 
-- as_of: `2026-06-10T11:50:05`
+- as_of: `2026-06-10T12:45:08`
 - baseline_date: `2026-06-09`
-- ai_confirmed unique: `118`
-- budget_pass unique: `120`
-- latency_pass unique: `45`
-- submitted unique: `12`
+- ai_confirmed unique: `126`
+- budget_pass unique: `127`
+- latency_pass unique: `53`
+- submitted unique: `19`
 - holding_started unique: `5`
-- budget/ai unique: `101.7%` (baseline `33.5`)
-- submitted/ai unique: `10.2%` (baseline `1.2`)
+- budget/ai unique: `100.8%` (baseline `35.3`)
+- submitted/ai unique: `15.1%` (baseline `2.4`)
 - critical submit thresholds: `submitted/ai < 20.0%` or `submitted/budget <= 10.0%` (floors: ai>=20, budget>=3)
-- top blockers: `latency_block:latency_state_danger=5493, blocked_swing_score_vpw:-=3451, blocked_strength_momentum:below_window_buy_value=1658, blocked_strength_momentum:below_strength_base=1236, blocked_vpw:-=1162`
-- upstream blockers: `blocked_ai_score:ai_score_50_buy_hold_override=322, first_ai_wait:-=195, blocked_ai_score:score_62.0=173, blocked_ai_score:score_58.0=106, wait65_79_ev_candidate:score_65.0=33`
-- latency blockers: `latency_block:latency_state_danger=5493`
-- price guards: `entry_ai_price_canary_fallback:pre_submit_price_guard=77, scale_in_price_guard_block:micro_vwap_bp>60.0=65, scale_in_price_guard_block:micro_vwap_bp<-5.0=52, entry_ai_price_canary_fallback:invalid_price=45, scale_in_price_guard_block:spread_bps>80.0=3`
+- top blockers: `latency_block:latency_state_danger=9824, blocked_swing_score_vpw:-=6379, blocked_strength_momentum:below_window_buy_value=2641, blocked_strength_momentum:below_strength_base=1848, blocked_vpw:-=1783`
+- upstream blockers: `blocked_ai_score:ai_score_50_buy_hold_override=455, blocked_ai_score:score_62.0=249, first_ai_wait:-=220, blocked_ai_score:score_58.0=149, wait65_79_ev_candidate:score_65.0=39`
+- latency blockers: `latency_block:latency_state_danger=9824`
+- price guards: `entry_ai_price_canary_fallback:pre_submit_price_guard=90, scale_in_price_guard_block:micro_vwap_bp>60.0=65, scale_in_price_guard_block:micro_vwap_bp<-5.0=52, entry_ai_price_canary_fallback:invalid_price=45, entry_ai_price_canary_fallback:skip_low_confidence=3`
 
 ## 금지된 자동변경
 
@@ -46,6 +46,6 @@
 
 ## Window Summary
 
-- `5m`: ai=21, budget=27, latency=4, submitted=1, top=`latency_block:latency_state_danger=271, blocked_swing_score_vpw:-=154, blocked_strength_momentum:below_window_buy_value=101`, upstream=`blocked_ai_score:ai_score_50_buy_hold_override=12, blocked_ai_score:score_62.0=11, blocked_ai_score:score_58.0=5`
-- `10m`: ai=28, budget=34, latency=5, submitted=2, top=`latency_block:latency_state_danger=641, blocked_swing_score_vpw:-=361, blocked_strength_momentum:below_window_buy_value=196`, upstream=`blocked_ai_score:ai_score_50_buy_hold_override=20, blocked_ai_score:score_62.0=19, blocked_ai_score:score_58.0=8`
-- `30m`: ai=44, budget=46, latency=11, submitted=2, top=`latency_block:latency_state_danger=1941, blocked_swing_score_vpw:-=1248, blocked_strength_momentum:below_window_buy_value=532`, upstream=`blocked_ai_score:ai_score_50_buy_hold_override=66, blocked_ai_score:score_62.0=60, blocked_ai_score:score_58.0=20`
+- `5m`: ai=16, budget=22, latency=4, submitted=1, top=`latency_block:latency_state_danger=211, blocked_swing_score_vpw:-=141, blocked_strength_momentum:below_window_buy_value=69`, upstream=`blocked_ai_score:ai_score_50_buy_hold_override=7, blocked_ai_score:score_62.0=5, blocked_ai_score:score_57.0=3`
+- `10m`: ai=29, budget=32, latency=7, submitted=3, top=`latency_block:latency_state_danger=506, blocked_swing_score_vpw:-=326, blocked_strength_momentum:below_window_buy_value=156`, upstream=`blocked_ai_score:ai_score_50_buy_hold_override=16, blocked_ai_score:score_62.0=12, blocked_ai_score:score_58.0=8`
+- `30m`: ai=43, budget=45, latency=13, submitted=5, top=`latency_block:latency_state_danger=2044, blocked_swing_score_vpw:-=1316, blocked_strength_momentum:below_window_buy_value=500`, upstream=`blocked_ai_score:ai_score_50_buy_hold_override=63, blocked_ai_score:score_62.0=41, blocked_ai_score:score_58.0=22`

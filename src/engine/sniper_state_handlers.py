@@ -8599,8 +8599,9 @@ def _extract_ai_overlap_snapshot(
     snapshot = {
         "latest_strength": float(ws_data.get("v_pw", 0.0) or 0.0),
         "buy_pressure_10t": float(ws_data.get("buy_ratio", 0.0) or 0.0),
-        "distance_from_day_high_pct": 0.0,
-        "intraday_range_pct": 0.0,
+        "distance_from_day_high_pct": None,
+        "intraday_range_pct": None,
+        "overlap_context_source_quality": "missing_range_context",
     }
 
     ticks = list(recent_ticks or [])
@@ -8638,6 +8639,7 @@ def _extract_ai_overlap_snapshot(
         snapshot["distance_from_day_high_pct"] = ((curr_price - high_price) / high_price) * 100.0
     if curr_price > 0 and high_price and low_price and low_price > 0 and high_price >= low_price:
         snapshot["intraday_range_pct"] = ((high_price - low_price) / low_price) * 100.0
+        snapshot["overlap_context_source_quality"] = "ws_high_low"
 
     if candles and curr_price > 0:
         highs = []
@@ -8654,20 +8656,20 @@ def _extract_ai_overlap_snapshot(
             snapshot["distance_from_day_high_pct"] = ((curr_price - candle_high_price) / candle_high_price) * 100.0
         if candle_low_price > 0 and candle_high_price >= candle_low_price:
             snapshot["intraday_range_pct"] = ((candle_high_price - candle_low_price) / candle_low_price) * 100.0
+            snapshot["overlap_context_source_quality"] = "recent_candles"
 
     if ai_engine and hasattr(ai_engine, "_extract_scalping_features"):
         try:
             feature_map = ai_engine._extract_scalping_features(ws_data, ticks, candles)
             snapshot["latest_strength"] = float(feature_map.get("latest_strength", snapshot["latest_strength"]) or snapshot["latest_strength"])
             snapshot["buy_pressure_10t"] = float(feature_map.get("buy_pressure_10t", snapshot["buy_pressure_10t"]) or snapshot["buy_pressure_10t"])
-            snapshot["distance_from_day_high_pct"] = float(
-                feature_map.get("distance_from_day_high_pct", snapshot["distance_from_day_high_pct"])
-                or snapshot["distance_from_day_high_pct"]
-            )
-            snapshot["intraday_range_pct"] = float(
-                feature_map.get("intraday_range_pct", snapshot["intraday_range_pct"])
-                or snapshot["intraday_range_pct"]
-            )
+            feature_distance = feature_map.get("distance_from_day_high_pct")
+            feature_range = feature_map.get("intraday_range_pct")
+            if feature_distance not in (None, "", "-", "None", "none", "null"):
+                snapshot["distance_from_day_high_pct"] = float(feature_distance)
+            if feature_range not in (None, "", "-", "None", "none", "null"):
+                snapshot["intraday_range_pct"] = float(feature_range)
+                snapshot["overlap_context_source_quality"] = "scalping_feature_packet"
         except Exception:
             pass
 
@@ -8806,12 +8808,19 @@ def _build_ai_overlap_log_fields(
     overlap_snapshot=None,
 ):
     snapshot = overlap_snapshot or (stock.get("last_ai_overlap_snapshot") or {})
+    distance_high = snapshot.get("distance_from_day_high_pct")
+    intraday_range = snapshot.get("intraday_range_pct")
     return {
         "ai_score": f"{float(ai_score or 0.0):.1f}",
         "latest_strength": f"{float(snapshot.get('latest_strength', 0.0) or 0.0):.1f}",
         "buy_pressure_10t": f"{float(snapshot.get('buy_pressure_10t', 0.0) or 0.0):.2f}",
-        "distance_from_day_high_pct": f"{float(snapshot.get('distance_from_day_high_pct', 0.0) or 0.0):.3f}",
-        "intraday_range_pct": f"{float(snapshot.get('intraday_range_pct', 0.0) or 0.0):.3f}",
+        "distance_from_day_high_pct": (
+            "not_evaluated" if distance_high is None else f"{float(distance_high or 0.0):.3f}"
+        ),
+        "intraday_range_pct": (
+            "not_evaluated" if intraday_range is None else f"{float(intraday_range or 0.0):.3f}"
+        ),
+        "ai_overlap_source_quality": snapshot.get("overlap_context_source_quality") or "missing_range_context",
         "momentum_tag": momentum_tag or stock.get("entry_momentum_tag") or stock.get("position_tag") or "-",
         "threshold_profile": threshold_profile or stock.get("entry_threshold_profile") or "-",
         "overbought_blocked": bool(overbought_blocked),

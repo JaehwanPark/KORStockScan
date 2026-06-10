@@ -10,6 +10,13 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Iterable
 
+from src.engine.scalping.entry_adm_bucket_contract import (
+    ENTRY_ADM_BUCKET_DIMENSIONS,
+    ENTRY_ADM_BUCKET_SCHEMA_VERSION,
+    entry_adm_bucket_token,
+    entry_adm_market_regime_continuous_bucket,
+    entry_adm_time_bucket,
+)
 from src.utils.jsonl_io import existing_or_gzip_path
 
 
@@ -209,22 +216,7 @@ def _score_bucket(score: Any) -> str:
 
 
 def _time_bucket(value: Any) -> str:
-    raw = _nonempty(value)
-    hour = -1
-    try:
-        hour = datetime.fromisoformat(str(value)).hour
-    except Exception:
-        if len(raw) >= 2 and raw[:2].isdigit() and not raw.startswith("20"):
-            hour = int(raw[:2])
-    if hour < 0:
-        return "time_unknown"
-    if hour < 10:
-        return "time_0900_1000"
-    if hour < 12:
-        return "time_1000_1200"
-    if hour < 14:
-        return "time_1200_1400"
-    return "time_1400_close"
+    return entry_adm_time_bucket(value)
 
 
 def _stale_bucket(fields: dict[str, Any]) -> str:
@@ -315,17 +307,13 @@ def _risk_context_bucket(fields: dict[str, Any]) -> str:
 
 
 def _market_regime_continuous_bucket(fields: dict[str, Any]) -> str | None:
-    label = _nonempty(fields.get("market_regime_continuous_label"))
-    score = _safe_float(fields.get("market_regime_continuous_score"), None)
-    if label in {"RISK_ON", "NEUTRAL", "RISK_OFF"}:
-        return f"market_regime_{label.lower()}"
-    if score is None:
+    bucket = entry_adm_market_regime_continuous_bucket(
+        label=fields.get("market_regime_continuous_label"),
+        score=fields.get("market_regime_continuous_score"),
+    )
+    if bucket == "-":
         return None
-    if score >= 65:
-        return "market_regime_risk_on"
-    if score >= 45:
-        return "market_regime_neutral"
-    return "market_regime_risk_off"
+    return bucket
 
 
 def _price_resolution_bucket(fields: dict[str, Any]) -> str:
@@ -446,14 +434,21 @@ def _base_row(event: dict[str, Any]) -> dict[str, Any]:
     raw_price = _price_resolution_bucket(fields)
     raw_liquidity = _liquidity_bucket(fields)
     raw_overbought = _overbought_bucket(fields)
+    raw_market_regime_continuous = _market_regime_continuous_bucket(fields) or "-"
 
     score_bucket, score_prov = _adm_source_bucket_value(fields, "entry_adm_score_bucket", raw_score_bucket)
     risk_context_bucket, risk_prov = _adm_source_bucket_value(fields, "entry_adm_risk_context_bucket", raw_risk_bucket)
+    market_regime_continuous_bucket, market_prov = _adm_source_bucket_value(
+        fields,
+        "entry_adm_market_regime_continuous_bucket",
+        raw_market_regime_continuous,
+    )
     stale_bucket, stale_prov = _adm_source_bucket_value(fields, "entry_adm_stale_bucket", raw_stale)
     price_resolution_bucket, price_prov = _adm_source_bucket_value(fields, "entry_adm_price_resolution_bucket", raw_price)
     liquidity_bucket, liquidity_prov = _adm_source_bucket_value(fields, "entry_adm_liquidity_bucket", raw_liquidity)
     overbought_bucket, overbought_prov = _adm_source_bucket_value(fields, "entry_adm_overbought_bucket", raw_overbought)
 
+    raw_entry_adm_bucket_token = _nonempty(fields.get("entry_adm_bucket_token"))
     row = {
         "candidate_id": candidate_id,
         "record_id": _nonempty(event.get("record_id") or fields.get("record_id")),
@@ -474,7 +469,7 @@ def _base_row(event: dict[str, Any]) -> dict[str, Any]:
         "rejected_actions": [item for item in ACTION_ORDER if item not in _eligible_actions(action, fields)],
         "score_bucket": score_bucket,
         "risk_context_bucket": risk_context_bucket,
-        "market_regime_continuous_bucket": _market_regime_continuous_bucket(fields),
+        "market_regime_continuous_bucket": market_regime_continuous_bucket,
         "market_regime": _nonempty(fields.get("market_regime")),
         "market_regime_continuous_score": _safe_float(fields.get("market_regime_continuous_score"), None),
         "market_regime_continuous_label": _nonempty(fields.get("market_regime_continuous_label")),
@@ -507,7 +502,7 @@ def _base_row(event: dict[str, Any]) -> dict[str, Any]:
         "entry_adm_prompt_applied": _safe_bool(fields.get("entry_adm_prompt_applied")),
         "entry_adm_version": _nonempty(fields.get("entry_adm_version")),
         "entry_adm_source_date": _nonempty(fields.get("entry_adm_source_date")),
-        "entry_adm_bucket_token": _nonempty(fields.get("entry_adm_bucket_token")),
+        "entry_adm_bucket_token": raw_entry_adm_bucket_token,
         "entry_adm_decision_alignment": _nonempty(fields.get("entry_adm_decision_alignment")),
         "entry_adm_runtime_effect": _nonempty(fields.get("entry_adm_runtime_effect")),
         "entry_adm_forced_action": _nonempty(fields.get("entry_adm_forced_action")),
@@ -516,12 +511,20 @@ def _base_row(event: dict[str, Any]) -> dict[str, Any]:
         "bucket_field_provenance": {
             "score_bucket": score_prov,
             "risk_context_bucket": risk_prov,
+            "market_regime_continuous_bucket": market_prov,
             "stale_bucket": stale_prov,
             "price_resolution_bucket": price_prov,
             "liquidity_bucket": liquidity_prov,
             "overbought_bucket": overbought_prov,
         },
     }
+    row["entry_adm_bucket_token_recomputed"] = entry_adm_bucket_token(row)
+    row["entry_adm_bucket_schema_version"] = ENTRY_ADM_BUCKET_SCHEMA_VERSION
+    row["raw_token_preserved"] = bool(raw_entry_adm_bucket_token)
+    row["adm_token_backfill_applied"] = bool(
+        raw_entry_adm_bucket_token
+        and raw_entry_adm_bucket_token != row["entry_adm_bucket_token_recomputed"]
+    )
     if not row["sim_record_id"] and str(stage).startswith("scalp_sim_"):
         row["sim_record_id"] = candidate_id if str(candidate_id).startswith("SCALPSIM-") else ""
     return row
@@ -634,19 +637,7 @@ def _action_summary(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def _bucket_token(row: dict[str, Any]) -> str:
-    return "|".join(
-        str(row.get(key) or "-")
-        for key in (
-            "score_bucket",
-            "risk_context_bucket",
-            "market_regime_continuous_bucket",
-            "stale_bucket",
-            "price_resolution_bucket",
-            "liquidity_bucket",
-            "overbought_bucket",
-            "time_bucket",
-        )
-    )
+    return entry_adm_bucket_token(row)
 
 
 def _bucket_summary(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -682,14 +673,7 @@ def _is_unknown_bucket(value: str) -> bool:
 
 
 def _unknown_bucket_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
-    dimensions = (
-        "score_bucket",
-        "risk_context_bucket",
-        "stale_bucket",
-        "price_resolution_bucket",
-        "liquidity_bucket",
-        "overbought_bucket",
-    )
+    dimensions = ENTRY_ADM_BUCKET_DIMENSIONS
     total = len(rows)
     dimension_counts: dict[str, int] = {}
     not_available_counts: dict[str, int] = {}
@@ -734,7 +718,7 @@ def _unknown_bucket_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
                     "event_time": row.get("event_time"),
                     "unknown_dimensions": unknown_dimensions,
                     "not_available_dimensions": not_available_dimensions,
-                    "bucket_token": "|".join(str(row.get(key) or "-") for key in dimensions),
+                    "bucket_token": entry_adm_bucket_token(row),
                     "bucket_provenance": provenance if isinstance(provenance, dict) else None,
                 }
             )
@@ -778,6 +762,8 @@ def build_scalp_entry_action_decision_matrix_report(target_date: str) -> dict[st
     joined_sample = sum(1 for row in rows if row.get("outcome_joined"))
     prompt_applied = sum(1 for row in rows if row.get("entry_adm_prompt_applied"))
     runtime_bias_applied = sum(1 for row in rows if row.get("entry_adm_runtime_bias_applied"))
+    raw_token_preserved_count = sum(1 for row in rows if row.get("raw_token_preserved"))
+    adm_token_backfill_applied_count = sum(1 for row in rows if row.get("adm_token_backfill_applied"))
     runtime_effect_counts = Counter(str(row.get("entry_adm_runtime_effect") or "-") for row in rows)
     forced_action_counts = Counter(str(row.get("entry_adm_forced_action") or "-") for row in rows)
     unknown_summary = _unknown_bucket_summary(rows)
@@ -818,22 +804,19 @@ def build_scalp_entry_action_decision_matrix_report(target_date: str) -> dict[st
             "broker order submit",
         ],
         "matrix_version": f"{MATRIX_VERSION_PREFIX}_{target_date}",
+        "bucket_schema_version": ENTRY_ADM_BUCKET_SCHEMA_VERSION,
         "actions": list(ACTION_ORDER),
-        "bucket_dimensions": [
-            "score_bucket",
-            "risk_context_bucket",
-            "stale_bucket",
-            "price_resolution_bucket",
-            "liquidity_bucket",
-            "overbought_bucket",
-            "time_bucket",
-        ],
+        "bucket_dimensions": list(ENTRY_ADM_BUCKET_DIMENSIONS),
         "summary": {
             "total_candidates": len(rows),
             "joined_sample": joined_sample,
             "sample_floor": SAMPLE_FLOOR,
             "prompt_applied_count": prompt_applied,
             "runtime_bias_applied_count": runtime_bias_applied,
+            "raw_token_preserved_count": raw_token_preserved_count,
+            "adm_token_backfill_applied_count": adm_token_backfill_applied_count,
+            "raw_token_preserved": raw_token_preserved_count > 0,
+            "adm_token_backfill_applied": adm_token_backfill_applied_count > 0,
             "runtime_effect_counts": dict(runtime_effect_counts),
             "forced_action_counts": dict(forced_action_counts),
             "action_counts": dict(action_counts),

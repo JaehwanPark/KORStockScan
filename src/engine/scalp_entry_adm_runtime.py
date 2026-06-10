@@ -10,6 +10,12 @@ from src.engine.lifecycle_decision_matrix_runtime import (
     apply_lifecycle_decision_to_payload,
     resolve_lifecycle_decision,
 )
+from src.engine.scalping.entry_adm_bucket_contract import (
+    ENTRY_ADM_BUCKET_SCHEMA_VERSION,
+    entry_adm_bucket_token,
+    entry_adm_market_regime_continuous_bucket,
+    entry_adm_time_bucket,
+)
 from src.utils.constants import DATA_DIR, TRADING_RULES
 
 
@@ -46,18 +52,7 @@ def _truthy(value: Any) -> bool:
 
 
 def _time_bucket(value: datetime | None) -> str:
-    if value is None:
-        return "time_unknown"
-    minute = value.hour * 60 + value.minute
-    if minute < 9 * 60 or minute >= 15 * 60 + 30:
-        return "time_outside_regular"
-    if minute < 9 * 60 + 30:
-        return "time_0900_0930"
-    if minute < 10 * 60 + 30:
-        return "time_0930_1030"
-    if minute < 14 * 60:
-        return "time_1030_1400"
-    return "time_1400_1530"
+    return entry_adm_time_bucket(value)
 
 
 def _score_bucket(value: Any) -> str:
@@ -122,9 +117,18 @@ def _stale_bucket(ws_data: dict[str, Any] | None) -> str:
 
 def _liquidity_bucket(ws_data: dict[str, Any] | None) -> str:
     ws = ws_data or {}
-    curr = _safe_float(ws.get("curr") or ws.get("curr_price"), 0.0)
-    volume = _safe_float(ws.get("volume") or ws.get("today_vol") or ws.get("acc_volume"), 0.0)
-    notional = curr * volume
+    explicit_notional = _safe_float(
+        ws.get("trade_value_krw")
+        or ws.get("liquidity_value")
+        or ws.get("sim_liquidity_value"),
+        0.0,
+    )
+    if explicit_notional > 0:
+        notional = explicit_notional
+    else:
+        curr = _safe_float(ws.get("curr") or ws.get("curr_price"), 0.0)
+        volume = _safe_float(ws.get("volume") or ws.get("today_vol") or ws.get("acc_volume"), 0.0)
+        notional = curr * volume
     if notional <= 0:
         return "liquidity_not_available"
     if notional < 100_000_000:
@@ -177,6 +181,15 @@ def _price_resolution_bucket(ws_data: dict[str, Any] | None) -> str:
     return "price_unknown"
 
 
+def _market_regime_continuous_bucket(ws_data: dict[str, Any] | None) -> str:
+    ws = ws_data or {}
+    return entry_adm_market_regime_continuous_bucket(
+        bucket=ws.get("market_regime_continuous_bucket"),
+        label=ws.get("market_regime_continuous_label"),
+        score=ws.get("market_regime_continuous_score"),
+    )
+
+
 def _session_cutoff_source_date(now: datetime) -> date:
     if now.hour >= 16:
         return now.date()
@@ -215,18 +228,7 @@ def _read_payload(path: Path | None) -> dict[str, Any]:
 
 
 def _bucket_token(buckets: dict[str, str]) -> str:
-    return "|".join(
-        buckets.get(key, "-")
-        for key in (
-            "score_bucket",
-            "risk_context_bucket",
-            "stale_bucket",
-            "price_resolution_bucket",
-            "liquidity_bucket",
-            "overbought_bucket",
-            "time_bucket",
-        )
-    )
+    return entry_adm_bucket_token(buckets)
 
 
 def _matched_bucket(payload: dict[str, Any], token: str) -> dict[str, Any]:
@@ -409,6 +411,7 @@ def build_scalp_entry_adm_runtime_context(
     buckets = {
         "score_bucket": _score_bucket(score_source),
         "risk_context_bucket": _risk_context_bucket(ws),
+        "market_regime_continuous_bucket": _market_regime_continuous_bucket(ws),
         "stale_bucket": _stale_bucket(ws),
         "price_resolution_bucket": _price_resolution_bucket(ws),
         "liquidity_bucket": _liquidity_bucket(ws),
@@ -484,8 +487,10 @@ def _fields(
         "entry_adm_loaded_from": loaded_from or "-",
         "entry_adm_cache_token": f"entry_adm:{version or status}:{token}",
         "entry_adm_bucket_token": token,
+        "entry_adm_bucket_schema_version": ENTRY_ADM_BUCKET_SCHEMA_VERSION,
         "entry_adm_score_bucket": buckets.get("score_bucket", "-"),
         "entry_adm_risk_context_bucket": buckets.get("risk_context_bucket", "-"),
+        "entry_adm_market_regime_continuous_bucket": buckets.get("market_regime_continuous_bucket", "-"),
         "entry_adm_stale_bucket": buckets.get("stale_bucket", "-"),
         "entry_adm_price_resolution_bucket": buckets.get("price_resolution_bucket", "-"),
         "entry_adm_liquidity_bucket": buckets.get("liquidity_bucket", "-"),
