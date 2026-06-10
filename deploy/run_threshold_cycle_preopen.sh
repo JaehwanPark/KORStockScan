@@ -27,6 +27,10 @@ from pathlib import Path
 
 path = Path(sys.argv[1])
 target_date, apply_mode, auto_apply, require_ai, status, reason, exit_code, finished = sys.argv[2:10]
+project_dir = path.parents[3]
+apply_plan_path = project_dir / "data" / "threshold_cycle" / "apply_plans" / f"threshold_apply_{target_date}.json"
+runtime_env_path = project_dir / "data" / "threshold_cycle" / "runtime_env" / f"threshold_runtime_env_{target_date}.env"
+runtime_env_manifest_path = project_dir / "data" / "threshold_cycle" / "runtime_env" / f"threshold_runtime_env_{target_date}.json"
 payload = {}
 if path.exists():
     try:
@@ -46,6 +50,12 @@ payload.update(
         "exit_code": int(exit_code or 0),
         "updated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
         "runtime_effect": "preopen_runtime_env_apply_only",
+        "apply_plan_path": str(apply_plan_path),
+        "runtime_env_path": str(runtime_env_path),
+        "runtime_env_manifest_path": str(runtime_env_manifest_path),
+        "apply_plan_exists": apply_plan_path.exists(),
+        "runtime_env_exists": runtime_env_path.exists(),
+        "runtime_env_manifest_exists": runtime_env_manifest_path.exists(),
     }
 )
 payload.setdefault("started_at", payload["updated_at"])

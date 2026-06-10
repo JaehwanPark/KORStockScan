@@ -1,85 +1,85 @@
 {
-  "bundle_as_of": "2026-06-07T22:20:25Z",
+  "bundle_as_of": "2026-06-10T22:20:26Z",
   "sp500": {
-    "name": "S&P500",
-    "value": 7383.74,
-    "prev_value": 7584.31,
-    "change": -200.57,
-    "change_pct": -2.64,
-    "as_of": "2026-06-05T20:00:00Z",
-    "source": "Yahoo Finance"
+    "name": "S&P 500",
+    "value": 7266.99,
+    "prev_value": 7386.65,
+    "change": -119.66,
+    "change_pct": -1.62,
+    "as_of": "2026-06-10T20:27:00Z",
+    "source": "Dow Jones Market Data / Morningstar"
   },
   "nasdaq": {
     "name": "NASDAQ",
-    "value": 25709.43,
-    "prev_value": 26830.96,
-    "change": -1121.53,
-    "change_pct": -4.18,
-    "as_of": "2026-06-05T20:00:00Z",
-    "source": "Yahoo Finance"
+    "value": 25169.5,
+    "prev_value": 25678.82,
+    "change": -509.32,
+    "change_pct": -1.98,
+    "as_of": "2026-06-10T20:27:00Z",
+    "source": "Dow Jones Market Data / Morningstar"
   },
   "vix": {
     "name": "VIX",
-    "value": 21.51,
-    "prev_value": 15.4,
-    "change": 6.11,
-    "change_pct": 39.68,
-    "as_of": "2026-06-05T20:15:00Z",
+    "value": 22.22,
+    "prev_value": 19.87,
+    "change": 2.35,
+    "change_pct": 11.83,
+    "as_of": "2026-06-10T22:20:26Z",
     "source": "Cboe Global Markets"
   },
   "us10y": {
-    "name": "US10Y",
-    "value": 4.52,
-    "prev_value": 4.48,
-    "change": 0.04,
-    "change_pct": 0.89,
-    "as_of": "2026-06-05T21:00:00Z",
+    "name": "US 10-Year Treasury Yield",
+    "value": 4.55,
+    "prev_value": 4.53,
+    "change": 0.02,
+    "change_pct": 0.44,
+    "as_of": "2026-06-10T22:20:26Z",
     "source": "Trading Economics"
   },
   "brent": {
-    "name": "BRENT",
-    "value": 93.09,
-    "prev_value": 95.03,
-    "change": -1.94,
-    "change_pct": -2.04,
-    "as_of": "2026-06-05T21:00:00Z",
-    "source": "Trading Economics"
+    "name": "Brent Crude",
+    "value": 93.1,
+    "prev_value": 91.45,
+    "change": 1.65,
+    "change_pct": 1.8,
+    "as_of": "2026-06-10T19:20:00Z",
+    "source": "Dow Jones Market Data / Morningstar"
   },
   "headlines": [
     {
-      "title": "West Asia war LIVE: Israel army says territory being targeted by Iranian missiles",
+      "title": "U.S. strikes 'multiple targets' in Iran after Trump threatened more attacks",
+      "source": "CTV News",
+      "published_at": "2026-06-10T21:15:00Z",
+      "url": "https://www.ctvnews.ca"
+    },
+    {
+      "title": "Iran Updates: Trump vows to hit Iran 'hard' tonight, Hegseth says U.S. willing to 'negotiate with bombs' if needed",
+      "source": "CBS News",
+      "published_at": "2026-06-10T21:44:00Z",
+      "url": "https://www.cbsnews.com"
+    },
+    {
+      "title": "West Asia war LIVE: Iran has taken too long to negotiate, they will have to pay the price, says Trump",
       "source": "The Hindu",
-      "published_at": "2026-06-07T07:43:00Z",
-      "url": "https://www.thehindu.com/"
+      "published_at": "2026-06-10T21:21:00Z",
+      "url": "https://www.thehindu.com"
     },
     {
-      "title": "Israel says Iran launched a missile at it, in a first during fragile ceasefire",
-      "source": "NPR",
-      "published_at": "2026-06-07T19:56:00Z",
-      "url": "https://www.npr.org/"
+      "title": "Morning Briefing: US strikes hit southern Iran, IRGC says 21 US military targets hit across region",
+      "source": "Anadolu Agency",
+      "published_at": "2026-06-10T05:00:00Z",
+      "url": "https://www.aa.com.tr"
     },
     {
-      "title": "Kuwait and Bahrain targeted by Iran after exchange of fire with US",
-      "source": "The Guardian",
-      "published_at": "2026-06-06T11:09:00Z",
-      "url": "https://www.theguardian.com/"
-    },
-    {
-      "title": "Trump news at a glance: Iran war pushing millions into hunger, UN says, as president struggles to reach peace deal",
-      "source": "The Guardian",
-      "published_at": "2026-06-07T01:59:00Z",
-      "url": "https://www.theguardian.com/"
-    },
-    {
-      "title": "What's next for the War Powers Resolution on Iran? PolitiFact explains",
-      "source": "PBS News",
-      "published_at": "2026-06-06T21:16:00Z",
-      "url": "https://www.pbs.org/"
+      "title": "US bombs Iran's water facilities: Why that's so significant",
+      "source": "Al Jazeera",
+      "published_at": "2026-06-10T14:00:00Z",
+      "url": "https://www.aljazeera.com"
     }
   ],
   "notes": [
-    "S&P 500 and Nasdaq posted their worst daily drops since October on Friday, driven by a broad tech selloff and a stronger-than-expected May jobs report dampening rate-cut hopes.",
-    "VIX spiked nearly 40% amid rising geopolitical tensions and shifting interest rate expectations.",
-    "Escalating military exchanges between the US, Israel, and Iran have sparked global concerns over an escalating Middle East conflict and potential oil supply disruptions."
+    "Equities sold off sharply as AI and technology stocks faced downward pressure and U.S.-Iran hostilities escalated.",
+    "Brent crude rose above $93 per barrel as the renewed exchange of strikes between the U.S. and Iran threatens to prolong the blockade on the Strait of Hormuz.",
+    "Volatility spiked significantly, with the VIX jumping over 11% to 22.22 amid market uncertainty and rising geopolitical tensions."
   ]
 }

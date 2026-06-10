@@ -16,6 +16,24 @@
 - `actual_order_submitted=false`인 sim/probe 표본은 EV/source-quality 입력이며 실주문 전환 근거가 아니다.
 - Project/Calendar 동기화는 사용자가 표준 동기화 명령으로 수행한다.
 
+운영 확인 메모: `[PreopenAutomationHealthCheck20260611]` 판정은 `warning`.
+
+- 판정: 장전 자동화체인은 실행 완료 및 bot runtime uptake까지 확인됐으나, `threshold_cycle_preopen_status`가 `runtime_env_path`/`apply_plan_path`를 기록하지 않아 status artifact completeness 경고를 둔다.
+- 근거: `logs/threshold_cycle_preopen_cron.log`는 `[DONE] threshold-cycle preopen target_date=2026-06-11 finished_at=2026-06-11T07:35:02+0900`를 남겼고, `data/report/threshold_cycle_preopen_status/threshold_cycle_preopen_2026-06-11.status.json`은 `status=succeeded`, `exit_code=0`이다. `data/threshold_cycle/runtime_env/threshold_runtime_env_2026-06-11.json`은 selected families `soft_stop_whipsaw_confirmation`, `scalp_sim_candidate_window_expansion`, `scalp_sim_ai_budget_manager`, `lifecycle_decision_matrix_runtime`, `scalp_sim_auto_approval`, `swing_sim_auto_approval`와 46개 env override를 기록했다. bot PID `3162`의 `/proc` 환경에서 `KORSTOCKSCAN_THRESHOLD_RUNTIME_APPLY_DATE=2026-06-11`, soft-stop, scalp/swing sim policy, lifecycle matrix env가 실제 source된 것을 확인했다. `logs/bot_history.log`는 07:40 기동, WS 로그인, 조건식 등록, heartbeat를 기록했다. `logs/ensemble_scanner.log`는 `[DONE] final_ensemble_scanner target_date=2026-06-11`를 남겼고 V2 CSV 2종목 적재를 기록했다.
+- 다음 액션: preopen status writer가 다음 실행부터 `apply_plan_path`, `runtime_env_path`, `runtime_env_manifest_path`와 각 존재 여부를 남기도록 보강했다. 현재 경고는 status completeness 문제이며 runtime threshold/order/provider/bot strategy 변경 근거가 아니다.
+
+운영 변경 메모: `[CronScheduleBeforeEc2Shutdown0611]` 판정은 `implemented_verified`.
+
+- 판정: EC2 21:00 종료 기준에 맞춰 21시 이후 또는 21시 이후에도 반복될 수 있는 cron을 20:55 이전으로 조정했다.
+- 근거: crontab 백업을 `logs/crontab_backup_20260611_074911_before_21_shutdown_adjust.txt`에 남기고, `update_kospi.py`는 `20:10 -> 19:50`, dashboard DB archive는 `21:10 -> 20:35`, log rotation/data maintenance는 `21:20 -> 20:45`, bot tmux 종료 guard는 `22:55 -> 20:55`로 변경했다. 반복 작업은 `kiwoom_sniper_v2_info.log` truncation `*/30 7-20`, system metric sampler `* 7-20`, error detector `*/5 7-20`로 제한했다.
+- 다음 액션: 20:35/20:45 정기 실행 후 각각 `logs/dashboard_db_archive_cron.log`, `logs/log_rotation_cleanup_cron.log`의 `[DONE]` marker를 확인한다. 이 변경은 cron 운영 시간표 조정이며 threshold/order/provider/bot strategy authority를 추가하지 않는다.
+
+운영 변경 메모: `[LogRotationDataMaintenanceExpansion0611]` 판정은 `implemented_verified`.
+
+- 판정: 기존 21:20 `run_logs_rotation_cleanup_cron.sh`를 확장해 log rotation 외에 repo 내부 tmp/cache 정리, 과거 sentinel event cache gzip, 과거 threshold-cycle pipeline snapshot gzip, `raw_row_exclusion` 날짜별 중복 run 최신 1개 유지까지 자동화했다. 최신 target date plain sentinel cache/snapshot, 원본 `data/pipeline_events`, clean-baseline quarantine/raw audit evidence는 삭제/압축 대상에서 제외한다.
+- 근거: [run_logs_rotation_cleanup_cron.sh](/home/ubuntu/KORStockScan/deploy/run_logs_rotation_cleanup_cron.sh)는 `DATA_MAINTENANCE_ENABLED=true` 기본값과 `tmp_deleted`, `cache_deleted`, `sentinel_compressed`, `snapshot_compressed`, `raw_row_exclusion_deleted` marker를 `[LOG_CLEANUP]`/`[DONE]`에 남긴다. 임시 PROJECT_DIR 검증에서 active log rotate 1건, tmp 삭제 2건, cache 삭제 2건, sentinel gzip 1건, snapshot gzip 1건, raw-row-exclusion 중복 삭제 1건을 확인했다.
+- 다음 액션: 20:45 정기 실행 후 `logs/log_rotation_cleanup_cron.log`에서 새 marker와 size 추세를 확인한다. 이 변경은 filesystem maintenance이며 threshold/order/provider/bot runtime authority를 추가하지 않는다.
+
 <!-- AUTO_NEXT_STAGE2_CHECKLIST_START -->
 ## 자동 생성 체크리스트 (`2026-06-10` postclose -> `2026-06-11`)
 
@@ -25,17 +43,19 @@
 
 ## 장전 체크리스트 (08:45~09:00)
 
-- [ ] `[SwingPreFinalAutoAndFinalApprovalPreopen0611] 스윙 pre-final auto state 및 final approval artifact 확인` (`Due: 2026-06-11`, `Slot: PREOPEN`, `TimeWindow: 08:45~08:50`, `Track: RuntimeStability`)
+- [x] `[SwingPreFinalAutoAndFinalApprovalPreopen0611] 스윙 pre-final auto state 및 final approval artifact 확인` (`Due: 2026-06-11`, `Slot: PREOPEN`, `TimeWindow: 08:45~08:50`, `Track: RuntimeStability`)
   - Source: [swing_runtime_approval_2026-06-10.json](/home/ubuntu/KORStockScan/data/report/swing_runtime_approval/swing_runtime_approval_2026-06-10.json), [threshold_cycle_ev_2026-06-10.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-06-10.json)
   - 판정 기준: pre-final은 parsed AI Tier2 auto state가 있어야 하고, final-stage는 사용자 승인 artifact가 있어야 한다.
   - 금지: 스윙 full-live 전환, cap release, provider/bot 변경, hard-safety 완화를 pre-final auto state로 처리하지 않는다.
   - 다음 액션: `pre_final_auto_selected`, `final_approval_artifact_present`, `blocked_by_policy` 중 하나로 닫는다.
+  - 처리 결과 (`2026-06-11 PREOPEN`): 판정=`blocked_by_policy`. 근거: `swing_runtime_approval_2026-06-10.json` summary는 `requested=0`, `approved=0`, `blocked=12`, `runtime_change=false`이고, policy는 final full live에 user approval artifact가 필요하다고 명시한다. `threshold_apply_2026-06-11.json`의 `swing_runtime_approval`도 `approval_artifact=null`, `requested=0`, `approved=0`, `selected=[]`, `dry_run_forced=false`다. 다음 액션: 스윙 full-live/cap/provider/bot/hard-safety 변경은 열지 않고, 차단된 12건은 장후 source-quality/approval request 맥락에서만 재확인한다.
 
-- [ ] `[ThresholdEnvAutoApplyPreopen0611] threshold env 자동 apply 산출물 및 사용자 개입 여부 확인` (`Due: 2026-06-11`, `Slot: PREOPEN`, `TimeWindow: 08:50~08:55`, `Track: RuntimeStability`)
+- [x] `[ThresholdEnvAutoApplyPreopen0611] threshold env 자동 apply 산출물 및 사용자 개입 여부 확인` (`Due: 2026-06-11`, `Slot: PREOPEN`, `TimeWindow: 08:50~08:55`, `Track: RuntimeStability`)
   - Source: [threshold_cycle_ev_2026-06-10.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-06-10.json), [threshold_cycle_preopen_apply.py](/home/ubuntu/KORStockScan/src/engine/threshold_cycle_preopen_apply.py), [run_bot.sh](/home/ubuntu/KORStockScan/src/run_bot.sh)
   - 판정 기준: 전일 postclose EV와 당일 apply plan/runtime env를 확인하고 `auto_bounded_live` guard 통과분만 runtime env로 인정한다.
   - 금지: blocked family, approval artifact missing, same-stage owner conflict를 수동 env override로 우회하지 않는다.
   - 다음 액션: `applied_guard_passed_env`, `blocked_no_env`, `partial_apply_with_blocked_families`, `failed_preopen_wrapper`, `not_yet_due` 중 하나로 닫는다.
+  - 처리 결과 (`2026-06-11 PREOPEN`): 판정=`applied_guard_passed_env` with status completeness warning. 근거: `threshold_apply_2026-06-11.json`은 `status=auto_bounded_live_ready`, `apply_mode=auto_bounded_live`, `runtime_change=true`, `runtime_env_file=/home/ubuntu/KORStockScan/data/threshold_cycle/runtime_env/threshold_runtime_env_2026-06-11.env`, 46개 env override를 기록했다. selected runtime env family는 `soft_stop_whipsaw_confirmation`, `scalp_sim_candidate_window_expansion`, `scalp_sim_ai_budget_manager`, `lifecycle_decision_matrix_runtime`, `scalp_sim_auto_approval`, `swing_sim_auto_approval`다. bot PID 환경에서도 당일 runtime env가 source됐다. blocked bridge는 `entry_wait6579_score66_69_recovery_gate_v1`와 `scale_in_bucket_runtime_policy_v1`이 `blocked_source_quality/bootstrap_pending/contract_missing/runtime_apply_not_allowed`로 정상 차단됐으며 수동 env override는 하지 않았다. 다음 액션: `threshold_cycle_preopen_status`의 path field omission completeness warning은 status writer 보강으로 다음 실행부터 확인한다.
 
 ## 장중 체크리스트 (09:05~15:20)
 

@@ -441,7 +441,7 @@ def parse_runbook_operational_tasks() -> list[BacklogTask]:
             BacklogTask(
                 title=(
                     f"[Runbook 운영 확인] 장후 자동화체인 상태 확인 "
-                    f"(Due: {due_date}, Slot: POSTCLOSE, TimeWindow: 15:45~21:30, Track: RunbookOps)"
+                    f"(Due: {due_date}, Slot: POSTCLOSE, TimeWindow: 15:45~20:55, Track: RunbookOps)"
                 ),
                 source="docs/time-based-operations-runbook.md",
                 section="Runbook 운영 확인 큐 / 장후 확인 절차",

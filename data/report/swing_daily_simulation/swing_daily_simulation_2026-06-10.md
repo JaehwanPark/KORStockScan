@@ -1,13 +1,13 @@
 # Swing Daily Simulation - 2026-06-10
 
 - runtime_change: `False`
-- recommendation_rows: `28` / live `28` / diagnostic `0`
-- recommendation_sources: `{'recommendation_history': 25, 'daily_recommendations_v2_csv': 3}`
+- recommendation_rows: `27` / live `27` / diagnostic `0`
+- recommendation_sources: `{'recommendation_history': 25, 'daily_recommendations_v2_csv': 2}`
 - db_recommendation_rows: `25`
-- source_signal_dates: `['2026-06-09', '2026-06-10']`
-- simulated_count: `28`
+- source_signal_dates: `['2026-06-10']`
+- simulated_count: `27`
 - closed_count: `0`
-- planned_or_open_count: `28`
+- planned_or_open_count: `27`
 - closed win_rate: `0.00%`
 - closed avg_net_ret: `0.00%`
 
@@ -30,9 +30,9 @@
 
 | arm | simulated | closed | win_rate | avg_net_ret | status_counts |
 | --- | ---: | ---: | ---: | ---: | --- |
-| `gap_pass` | 28 | 0 | 0.00% | 0.00% | `{'PENDING_ENTRY': 28}` |
-| `gatekeeper_pass` | 28 | 0 | 0.00% | 0.00% | `{'PENDING_ENTRY': 28}` |
-| `selection_only` | 28 | 0 | 0.00% | 0.00% | `{'PENDING_ENTRY': 28}` |
+| `gap_pass` | 27 | 0 | 0.00% | 0.00% | `{'PENDING_ENTRY': 27}` |
+| `gatekeeper_pass` | 27 | 0 | 0.00% | 0.00% | `{'PENDING_ENTRY': 27}` |
+| `selection_only` | 27 | 0 | 0.00% | 0.00% | `{'PENDING_ENTRY': 27}` |
 
 ## Runtime Entry Funnel
 
@@ -57,7 +57,6 @@
 | `002790` | 아모레퍼시픽홀딩스 | `recommendation_history` | `PENDING_ENTRY` | `WAITING_FOR_NEXT_SESSION_QUOTE` | 0 |  |  |  |  |
 | `003690` | 코리안리 | `recommendation_history` | `PENDING_ENTRY` | `WAITING_FOR_NEXT_SESSION_QUOTE` | 0 |  |  |  |  |
 | `005440` | 현대지에프홀딩스 | `recommendation_history` | `PENDING_ENTRY` | `WAITING_FOR_NEXT_SESSION_QUOTE` | 0 |  |  |  |  |
-| `016360` | 삼성증권 | `daily_recommendations_v2_csv` | `PENDING_ENTRY` | `WAITING_FOR_NEXT_SESSION_QUOTE` | 0 |  |  |  |  |
 | `024110` | 기업은행 | `recommendation_history` | `PENDING_ENTRY` | `WAITING_FOR_NEXT_SESSION_QUOTE` | 0 |  |  |  |  |
 | `028670` | 팬오션 | `recommendation_history` | `PENDING_ENTRY` | `WAITING_FOR_NEXT_SESSION_QUOTE` | 0 |  |  |  |  |
 | `034220` | LG디스플레이 | `recommendation_history` | `PENDING_ENTRY` | `WAITING_FOR_NEXT_SESSION_QUOTE` | 0 |  |  |  |  |
@@ -70,11 +69,11 @@
 | `093370` | 후성 | `recommendation_history` | `PENDING_ENTRY` | `WAITING_FOR_NEXT_SESSION_QUOTE` | 0 |  |  |  |  |
 | `097230` | HJ중공업 | `recommendation_history` | `PENDING_ENTRY` | `WAITING_FOR_NEXT_SESSION_QUOTE` | 0 |  |  |  |  |
 | `105560` | KB금융 | `recommendation_history` | `PENDING_ENTRY` | `WAITING_FOR_NEXT_SESSION_QUOTE` | 0 |  |  |  |  |
+| `126560` | 현대퓨처넷 | `daily_recommendations_v2_csv` | `PENDING_ENTRY` | `WAITING_FOR_NEXT_SESSION_QUOTE` | 0 |  |  |  |  |
 | `138930` | BNK금융지주 | `recommendation_history` | `PENDING_ENTRY` | `WAITING_FOR_NEXT_SESSION_QUOTE` | 0 |  |  |  |  |
 | `139130` | iM금융지주 | `recommendation_history` | `PENDING_ENTRY` | `WAITING_FOR_NEXT_SESSION_QUOTE` | 0 |  |  |  |  |
 | `161390` | 한국타이어앤테크놀로지 | `recommendation_history` | `PENDING_ENTRY` | `WAITING_FOR_NEXT_SESSION_QUOTE` | 0 |  |  |  |  |
-| `248070` | 솔루엠 | `daily_recommendations_v2_csv` | `PENDING_ENTRY` | `WAITING_FOR_NEXT_SESSION_QUOTE` | 0 |  |  |  |  |
 | `251270` | 넷마블 | `recommendation_history` | `PENDING_ENTRY` | `WAITING_FOR_NEXT_SESSION_QUOTE` | 0 |  |  |  |  |
 | `373220` | LG에너지솔루션 | `recommendation_history` | `PENDING_ENTRY` | `WAITING_FOR_NEXT_SESSION_QUOTE` | 0 |  |  |  |  |
 | `377300` | 카카오페이 | `recommendation_history` | `PENDING_ENTRY` | `WAITING_FOR_NEXT_SESSION_QUOTE` | 0 |  |  |  |  |
-| `404990` | 신한서부티엔디리츠 | `daily_recommendations_v2_csv` | `PENDING_ENTRY` | `WAITING_FOR_NEXT_SESSION_QUOTE` | 0 |  |  |  |  |
+| `395400` | SK리츠 | `daily_recommendations_v2_csv` | `PENDING_ENTRY` | `WAITING_FOR_NEXT_SESSION_QUOTE` | 0 |  |  |  |  |
