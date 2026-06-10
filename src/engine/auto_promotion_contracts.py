@@ -100,7 +100,7 @@ def pre_final_promotion_contract() -> dict[str, Any]:
         "manual_only_final_families": sorted(FINAL_USER_APPROVAL_FAMILIES),
         "forbidden_pre_final_uses": [
             "full_live_conversion",
-            "position_cap_release",
+            "sizing_formula_runtime_apply_without_guard",
             "provider_route_change",
             "bot_restart",
             "hard_safety_relaxation",

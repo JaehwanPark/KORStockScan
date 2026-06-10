@@ -96,7 +96,7 @@ _FAMILY_DESCRIPTIONS = {
     "dynamic_entry_price_resolver": "bid-1/bid-2/bid-3/best_bid/AI/reference/timeout 후보별 체결품질과 EV를 비교하는 진입가 튜닝 축",
     "entry_price_execution_quality": "real-only 제출/체결/취소/late-fill/partial/full fill 품질을 감사하는 실행품질 축",
     "latency_classifier_runtime_profile": "latency SAFE/CAUTION/DANGER classifier와 bounded submit recovery canary를 분리 적용하는 진입 실행품질 축",
-    "score65_74_recovery_probe": "family id는 score65_74로 유지하지만 현 runtime floor 기준 AI 점수 60~74 WAIT 구간 중 수급/가속 조건이 좋은 후보를 1주/소액 canary로 회수하는 축",
+    "score65_74_recovery_probe": "family id는 score65_74로 유지하지만 현 runtime floor 기준 AI 점수 60~74 WAIT 구간 중 수급/가속 조건이 좋은 후보를 기본 신규 BUY sizing으로 회수하는 축",
     "liquidity_gate_refined_candidate": "유동성 gate가 막은 후보의 후행 EV를 보고 gate 완화/유지 필요성을 판단하는 축",
     "overbought_gate_refined_candidate": "과열 gate가 막은 후보의 후행 EV를 보고 과열 차단 기준을 다듬는 축",
     "bad_entry_refined_canary": "진입 직후 never-green/AI fade 위험이 큰 표본을 조기 정리할 수 있는지 보는 축",

@@ -517,9 +517,9 @@ class TradingConfig:
     AI_MAIN_BUY_RECOVERY_CANARY_MIN_TICK_ACCEL: float = 1.20  # 최소 틱 가속 비율
     AI_MAIN_BUY_RECOVERY_CANARY_MIN_MICRO_VWAP_BP: float = 0.0  # 최소 micro VWAP bp
     AI_WAIT6579_PROBE_CANARY_ENABLED: bool = False  # 2026-04-27: soft_stop live canary 관찰 중 entry probe OFF
-    AI_WAIT6579_PROBE_CANARY_MAX_BUDGET_KRW: int = 50_000  # probe 최대 예산
+    AI_WAIT6579_PROBE_CANARY_MAX_BUDGET_KRW: int = 0  # 0 이하는 probe 별도 예산 cap 없음; 기본 신규 BUY sizing 사용
     AI_WAIT6579_PROBE_CANARY_MIN_QTY: int = 1  # probe 최소 수량
-    AI_WAIT6579_PROBE_CANARY_MAX_QTY: int = 1  # probe 최대 수량. 0 이하는 수량 cap 없음
+    AI_WAIT6579_PROBE_CANARY_MAX_QTY: int = 0  # 0 이하는 probe 별도 수량 cap 없음; 기본 신규 BUY sizing 사용
     AI_SCORE65_74_RECOVERY_PROBE_ENABLED: bool = False  # 2026-05-06: score60~74 전용 신규 canary 기본 OFF
     AI_SCORE65_74_RECOVERY_PROBE_MIN_SCORE: int = 60
     AI_SCORE65_74_RECOVERY_PROBE_MAX_SCORE: int = 74
@@ -1206,6 +1206,9 @@ def _build_trading_rules() -> TradingConfig:
         or env_pre_submit_price_guard_enabled is not None
         or env_pre_submit_max_below_bid_bps is not None
         or env_scalping_normal_defensive_ticks is not None
+        or env_scalping_normal_defensive_bps is not None
+        or env_scalping_conditional_strong_defensive_bps is not None
+        or env_scalping_entry_price_defense_mode is not None
         or env_conditional_1tick_real_enabled is not None
         or env_conditional_1tick_min_buy_ratio is not None
         or env_conditional_1tick_min_ofi_norm is not None

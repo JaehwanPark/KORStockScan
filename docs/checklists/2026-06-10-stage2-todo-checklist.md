@@ -55,23 +55,41 @@
 
 ## 장중 체크리스트 (09:05~15:20)
 
-- [ ] `[RuntimeEnvIntradayObserve0610] 전일 selected runtime family 장중 provenance 및 rollback guard 확인` (`Due: 2026-06-10`, `Slot: INTRADAY`, `TimeWindow: 09:05~09:20`, `Track: RuntimeStability`)
+- [x] `[RuntimeEnvIntradayObserve0610] 전일 selected runtime family 장중 provenance 및 rollback guard 확인` (`Due: 2026-06-10`, `Slot: INTRADAY`, `TimeWindow: 09:05~09:20`, `Track: RuntimeStability`)
   - Source: [threshold_cycle_ev_2026-06-09.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-06-09.json)
   - 판정 기준: selected_families=soft_stop_whipsaw_confirmation, scalp_sim_candidate_window_expansion, scalp_sim_ai_budget_manager, lifecycle_decision_matrix_runtime가 runtime event provenance에 찍히는지 확인한다.
   - 금지: 장중 관찰 결과로 runtime threshold mutation을 수행하지 않는다.
   - 다음 액션: provenance present/missing, rollback guard breach 여부를 분리 기록한다.
+  - 처리 결과: `provenance_partial_warning_no_rollback_breach`.
+  - 판정: 2026-06-10 PREOPEN runtime env는 새 wrapper 재기동 후 PID `62861`에 정상 로드됐고, 장중 raw에는 `score65_74_recovery_probe`, `soft_stop_whipsaw_confirmation`, `scalp_sim_candidate_window_expansion` 계열 provenance가 관찰된다. 다만 `scalp_sim_ai_budget_manager`, `lifecycle_bucket_discovery_sim_auto_approval`, `swing_sim_auto_approval`, `swing_gatekeeper_reject_cooldown`은 09:43 KST 기준 직접 match event가 아직 없어서 partial warning으로 닫는다. rollback/revert breach evidence는 없다.
+  - 근거: [threshold_runtime_env_2026-06-10.json](/home/ubuntu/KORStockScan/data/threshold_cycle/runtime_env/threshold_runtime_env_2026-06-10.json)은 selected families `soft_stop_whipsaw_confirmation`, `score65_74_recovery_probe`, `scalp_sim_candidate_window_expansion`, `scalp_sim_ai_budget_manager`, `swing_gatekeeper_reject_cooldown`, `scalp_sim_scale_in_window_expansion`, `lifecycle_bucket_discovery_sim_auto_approval`, `swing_sim_auto_approval`를 기록했다. `/proc/62861/environ` 기준 `KORSTOCKSCAN_THRESHOLD_RUNTIME_APPLY_DATE=2026-06-10`, `KORSTOCKSCAN_INVEST_RATIO_SCALPING_MIN=0.10`, `KORSTOCKSCAN_INVEST_RATIO_SCALPING_MAX=0.30`, 삭제된 legacy cap env 미로드를 확인했다. [pipeline_events_2026-06-10.jsonl](/home/ubuntu/KORStockScan/data/pipeline_events/pipeline_events_2026-06-10.jsonl) 집계는 `score65_74_recovery_probe` 269건, `soft_stop_whipsaw_confirmation` 5건, `scalp_sim_candidate_window_expansion` 619건이며 rollback sample은 0건이다.
+  - 다음 액션: 장후 `threshold_cycle_ev`/`runtime_apply_bridge`에서 selected family post-apply attribution과 missing direct-match family의 natural-match 여부를 재확인한다. 장중 threshold/env/provider/order/bot 변경은 하지 않는다.
 
-- [ ] `[SimProbeIntradayCoverage0610] sim/probe 관찰축 actual_order_submitted=false 및 source-quality 확인` (`Due: 2026-06-10`, `Slot: INTRADAY`, `TimeWindow: 09:35~09:50`, `Track: ScalpingLogic`)
+- [x] `[SimProbeIntradayCoverage0610] sim/probe 관찰축 actual_order_submitted=false 및 source-quality 확인` (`Due: 2026-06-10`, `Slot: INTRADAY`, `TimeWindow: 09:35~09:50`, `Track: ScalpingLogic`)
   - Source: [threshold_cycle_ev_2026-06-09.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-06-09.json)
   - 판정 기준: sim/probe 표본이 real execution과 분리되고 `actual_order_submitted=false` provenance가 유지되는지 확인한다.
   - 금지: sim/probe EV를 broker execution 품질이나 실주문 전환 근거로 단독 사용하지 않는다.
   - 다음 액션: source-quality split, active state 복원, open/closed count를 같이 기록한다.
+  - 처리 결과: `sim_probe_coverage_warning_swing_broker_forbidden_missing`.
+  - 판정: 스캘핑 sim/probe는 real execution과 분리되어 있고 `actual_order_submitted=true` 위반은 없다. 다만 swing sim 일부 row에서 `actual_order_submitted=false`는 있으나 `broker_order_forbidden`이 비어 있어 source-quality/report 계약 warning으로 남긴다. 이는 실주문 발생 증거가 아니라 sim/probe provenance field 누락이다.
+  - 근거: 09:43 KST 기준 `scalp_sim*`/`swing_probe*`/`swing_sim*` stage는 2,265건이다. `actual_order_submitted`를 선언한 sim/probe row 2,254건 중 actual true 위반은 0건이고 runtime_effect true 위반도 0건이다. 권한 필드 위반은 21건이며 stage는 `swing_sim_holding_started` 20건, `swing_sim_sell_order_assumed_filled` 1건으로 모두 `broker_order_forbidden` 누락이다. 주요 stage는 `scalp_sim_ai_holding_live_call` 226건, `scalp_sim_panic_scale_in_blocked` 226건, `scalp_sim_entry_armed`/`scalp_sim_buy_order_virtual_pending`/`scalp_sim_buy_order_assumed_filled`/`scalp_sim_holding_started` 각 109건, `scalp_sim_sell_order_assumed_filled` 49건이다.
+  - 다음 액션: 장후 source-quality/workorder에서 swing sim `broker_order_forbidden` 누락 21건이 producer/report 계약 보강 대상으로 라우팅되는지 확인한다. sim/probe EV는 계속 real execution quality나 실주문 전환 근거로 단독 사용하지 않는다.
 
-- [ ] `[IntradaySourceQualityGateCheck0610] 장중 raw source-quality 결손/unknown 조기 경보 및 튜닝 입력 차단 준비 확인` (`Due: 2026-06-10`, `Slot: INTRADAY`, `TimeWindow: 14:20~14:35`, `Track: RuntimeStability`)
+- [x] `[IntradaySourceQualityGateCheck0610] 장중 raw source-quality 결손/unknown 조기 경보 및 튜닝 입력 차단 준비 확인` (`Due: 2026-06-10`, `Slot: INTRADAY`, `TimeWindow: 14:20~14:35`, `Track: RuntimeStability`)
   - Source: [pipeline_events_2026-06-10.jsonl](/home/ubuntu/KORStockScan/data/pipeline_events/pipeline_events_2026-06-10.jsonl), [threshold_events_2026-06-10.jsonl](/home/ubuntu/KORStockScan/data/threshold_cycle/threshold_events_2026-06-10.jsonl), [observation_source_quality_audit_2026-06-10.json](/home/ubuntu/KORStockScan/data/report/observation_source_quality_audit/observation_source_quality_audit_2026-06-10.json), [observation_source_quality_audit.py](/home/ubuntu/KORStockScan/src/engine/observation_source_quality_audit.py)
   - 판정 기준: 장중 `PYTHONPATH=. .venv/bin/python -m src.engine.observation_source_quality_audit --target-date 2026-06-10 --write` 재감사를 실행하거나 최신 산출물을 확인해 `hard_blocking_contract_gap_count`, `hard_blocking_excluded_row_count`, `tuning_input_allowed`, `raw_row_exclusion_applied`, `unknown_token_stage_count`, `review_warning_count`를 기록한다.
   - 금지: hard contract gap 또는 unknown-token warning을 답변에만 남기지 않는다. 결손 row/window는 튜닝 입력 제외 또는 workorder handoff 대상으로 고정하고, broker/order/provider/cap/bot/threshold 변경 근거로 사용하지 않는다.
   - 다음 액션: `source_quality_clean_intraday`, `defective_rows_excluded`, `hard_block_requires_producer_fix`, `unknown_warning_workorder_required`, `audit_missing_or_stale` 중 하나로 닫는다. hard gap/unknown warning이 있으면 장후 `PostcloseSourceQualityGateReview`와 `CodeImprovementWorkorderReview`에서 누락 없이 재확인한다.
+  - 처리 결과: `defective_rows_excluded`.
+  - 판정: 장중 source-quality audit는 `warning`이지만 hard blocking contract gap은 없다. 튜닝 입력은 허용되며, 결손 row/window는 raw row exclusion으로 분리됐다. unknown/review warning은 장후 workorder/source-quality handoff 재확인 대상으로 남긴다.
+  - 근거: `PYTHONPATH=. .venv/bin/python -m src.engine.observation_source_quality_audit --target-date 2026-06-10 --write`를 09:43 KST에 실행했다. [observation_source_quality_audit_2026-06-10.json](/home/ubuntu/KORStockScan/data/report/observation_source_quality_audit/observation_source_quality_audit_2026-06-10.json)은 `status=warning`, `event_count=14220`, `stage_count=129`, `hard_blocking_contract_gap_count=0`, `hard_blocking_excluded_row_count=0`, `tuning_input_allowed=true`, `raw_row_exclusion_applied=true`, `unknown_token_stage_count=9`, `reviewed_unknown_token_stage_count=5`, `review_warning_count=9`를 기록했다. raw row exclusion manifest는 [manifest.json](/home/ubuntu/KORStockScan/data/source_quality/raw_row_exclusion/2026-06-10_20260610T094318678009+0900/manifest.json)이고 excluded row는 25건, stage는 `blocked_overbought`, gap은 `zero_fields:intraday_range_pct`다.
+  - 다음 액션: 장후 `PostcloseSourceQualityGateReview0610`에서 raw row exclusion이 EV/rolling/approval 입력에 반영됐는지 확인하고, `scalp_entry_action_decision_snapshot`, `scalp_sim_*`, `position_rebased_after_fill`, `preset_exit_sync_ok`, `scalp_sim_pre_submit_liquidity_guard_unknown` review warning 9개가 workorder/source-quality handoff에서 누락되지 않았는지 확인한다.
+
+운영 확인 메모: `[IntradayAutomationHealthCheck20260610]` 판정은 `warning`.
+
+- 판정: 장중 자동화체인은 동작 중이며 core artifact freshness와 bot/WS 상태는 정상이나, error detector가 `error_detection_full: recent errors detected` 때문에 warning이고 source-quality audit도 unknown/review warning을 남겼으므로 RunbookOps는 `warning`으로 닫는다.
+- 근거: [error_detection_2026-06-10.json](/home/ubuntu/KORStockScan/data/report/error_detection/error_detection_2026-06-10.json)은 `summary_severity=warning`이고 process health, log scanner, Kiwoom auth 8005, artifact freshness, resource usage, stale lock은 pass다. `cron_completion`만 warning이며 `logs/run_error_detection.log`는 09:40 KST `[DONE] error detection mode=full`와 `Telegram notify status=no_alert`를 남겼다. `pipeline_events_2026-06-10.jsonl`은 14,198 lines, `threshold_events_2026-06-10.jsonl`은 7,535 lines로 갱신 중이고, `buy_funnel_sentinel`, `holding_exit_sentinel`, `panic_sell_defense`, `panic_buying`, `market_panic_breadth`, `system_metric_samples` freshness는 pass다. 봇은 tmux `bot`의 PID `62861`로 실행 중이며 Kiwoom WS 실시간 수신을 확인했다.
+- 다음 액션: 14:20~14:35 원래 TimeWindow 이후에도 source-quality audit을 한 번 더 돌려 unknown/review warning 지속 여부를 확인한다. 장후에는 postclose source-quality gate와 code-improvement workorder handoff에서 이번 warning과 swing sim provenance 누락을 재확인한다.
 
 ## 장후 체크리스트 (16:30~18:55)
 

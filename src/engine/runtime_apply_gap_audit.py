@@ -320,7 +320,13 @@ def _swing_source_only_handoff(item: dict[str, Any]) -> tuple[str, str]:
     forbidden = item.get("forbidden_uses") if isinstance(item.get("forbidden_uses"), list) else []
     forbidden_values = {str(value) for value in forbidden}
     if not forbidden_values.intersection(
-        {"broker_submit", "runtime_threshold_apply", "provider_route_change", "bot_restart_trigger", "position_cap_release"}
+        {
+            "broker_submit",
+            "runtime_threshold_apply",
+            "provider_route_change",
+            "bot_restart_trigger",
+            "sizing_formula_runtime_apply_without_guard",
+        }
     ):
         return "", ""
     ai_status = str(item.get("ai_review_status") or "").strip().lower()

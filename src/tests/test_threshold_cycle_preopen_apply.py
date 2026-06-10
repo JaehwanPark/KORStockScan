@@ -2838,24 +2838,18 @@ def test_runtime_apply_bridge_entry_wait6579_live_auto_writes_probe_env(tmp_path
                             "AI_SCORE65_74_RECOVERY_PROBE_ENABLED",
                             "AI_SCORE65_74_RECOVERY_PROBE_MIN_SCORE",
                             "AI_SCORE65_74_RECOVERY_PROBE_MAX_SCORE",
-                            "AI_WAIT6579_PROBE_CANARY_MAX_BUDGET_KRW",
-                            "AI_WAIT6579_PROBE_CANARY_MAX_QTY",
                             "AI_SCORE65_74_RECOVERY_PROBE_THRESHOLD_VERSION",
                         ],
                         "recommended_values": {
                             "enabled": True,
                             "min_score": 66,
                             "max_score": 69,
-                            "max_budget_krw": 50000,
-                            "max_qty": 1,
                             "threshold_version": candidate_id,
                         },
                         "current_values": {
                             "enabled": False,
                             "min_score": 65,
                             "max_score": 74,
-                            "max_budget_krw": 50000,
-                            "max_qty": 1,
                             "threshold_version": "runtime_default",
                         },
                         "source_bucket_keys": [bridge_mod.ENTRY_TARGET_BUCKET_KEY],
@@ -3142,7 +3136,7 @@ def test_runtime_apply_bridge_scale_live_auto_writes_tighten_env_without_guard_b
                             "reversal_add_min_buy_pressure": 55.0,
                             "reversal_add_min_tick_accel": 0.95,
                         },
-                        "forbidden_uses": ["scale_in_safety_guard_bypass", "position_cap_release"],
+                        "forbidden_uses": ["scale_in_safety_guard_bypass", "sizing_formula_runtime_apply_without_guard"],
                     }
                 ],
             }

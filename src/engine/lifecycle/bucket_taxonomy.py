@@ -315,7 +315,7 @@ def normalize_lifecycle_bucket(
             "runtime_threshold_apply",
             "provider_route_change",
             "bot_restart_trigger",
-            "position_cap_release",
+            "sizing_formula_runtime_apply_without_guard",
         ],
     }
     return {

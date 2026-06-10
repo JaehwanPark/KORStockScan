@@ -65,6 +65,18 @@ def test_trading_rules_entry_latency_classifier_jitter_env_override(monkeypatch)
     assert reloaded.TRADING_RULES.SCALP_LATENCY_SUBMIT_RECOVERY_MAX_SPREAD_RATIO == 0.01
 
 
+def test_trading_rules_scalping_entry_price_percent_bps_env_override(monkeypatch):
+    monkeypatch.setenv("KORSTOCKSCAN_SCALPING_ENTRY_PRICE_DEFENSE_MODE", "percent_bps")
+    monkeypatch.setenv("KORSTOCKSCAN_SCALPING_NORMAL_DEFENSIVE_BPS", "50")
+    monkeypatch.setenv("KORSTOCKSCAN_SCALPING_CONDITIONAL_STRONG_DEFENSIVE_BPS", "20")
+
+    reloaded = importlib.reload(constants)
+
+    assert reloaded.TRADING_RULES.SCALPING_ENTRY_PRICE_DEFENSE_MODE == "percent_bps"
+    assert reloaded.TRADING_RULES.SCALPING_NORMAL_DEFENSIVE_BPS == 50
+    assert reloaded.TRADING_RULES.SCALPING_CONDITIONAL_STRONG_DEFENSIVE_BPS == 20
+
+
 def test_trading_rules_dynamic_strength_relief_env_override(monkeypatch):
     monkeypatch.setenv("KORSTOCKSCAN_SCALP_DYNAMIC_STRENGTH_RELIEF_ENABLED", "false")
     monkeypatch.setenv("KORSTOCKSCAN_SCALP_DYNAMIC_STRENGTH_RELIEF_TAGS", "SCANNER")

@@ -41,7 +41,7 @@ FORBIDDEN_USES = [
     "bot_restart",
     "runtime_threshold_mutation",
     "recommendation_history_replacement",
-    "position_cap_release",
+    "sizing_formula_runtime_apply_without_guard",
 ]
 
 

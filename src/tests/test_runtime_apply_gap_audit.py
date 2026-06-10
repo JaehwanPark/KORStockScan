@@ -503,7 +503,7 @@ def test_swing_positive_edge_source_only_tier2_missing_is_fail_closed_handoff(tm
                         "runtime_threshold_apply",
                         "provider_route_change",
                         "bot_restart_trigger",
-                        "position_cap_release",
+                        "sizing_formula_runtime_apply_without_guard",
                     ],
                     "ai_review_status": "missing",
                     "ai_tier2_proposal": {"proposal_status": "not_provided", "proposal_decision": "reject"},
@@ -1029,7 +1029,7 @@ def test_bridge_bootstrap_pending_with_env_mapping_is_not_code_directive(tmp_pat
                     "stage": "scale_in",
                     "bridge_candidate_state": "bootstrap_pending",
                     "source_quality_gate": "pass",
-                    "target_env_keys": ["SCALPING_SCALE_IN_EFFECTIVE_QTY_CAP"],
+                    "target_env_keys": ["REVERSAL_ADD_MIN_AI_SCORE"],
                     "rolling_confirmation": {
                         "avg_down": {
                             "runtime_bridge_exclusion_reason": "primary_ev_uplift_below_live_floor"

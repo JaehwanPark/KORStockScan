@@ -360,15 +360,12 @@ CALIBRATION_FAMILY_METADATA = {
             "AI_SCORE65_74_RECOVERY_PROBE_MIN_BUY_PRESSURE",
             "AI_SCORE65_74_RECOVERY_PROBE_MIN_TICK_ACCEL",
             "AI_SCORE65_74_RECOVERY_PROBE_MIN_MICRO_VWAP_BP",
-            "AI_WAIT6579_PROBE_CANARY_MAX_BUDGET_KRW",
-            "AI_WAIT6579_PROBE_CANARY_MAX_QTY",
         ],
         "primary_key": "enabled",
         "bounds": {
             "min_buy_pressure": {"min": 55.0, "max": 75.0, "max_step_per_day": 5.0},
             "min_tick_accel": {"min": 0.8, "max": 1.5, "max_step_per_day": 0.1},
             "min_micro_vwap_bp": {"min": -10.0, "max": 20.0, "max_step_per_day": 5.0},
-            "max_budget_krw": {"min": 10_000, "max": 50_000, "max_step_per_day": 10_000},
         },
         "sample_floor": 20,
         "sample_window": "rolling_5d_with_daily_trigger",
@@ -4253,7 +4250,7 @@ def _build_score65_74_recovery_probe_family(events: list[dict]) -> dict:
         "min_micro_vwap_bp": float(
             getattr(TRADING_RULES, "AI_SCORE65_74_RECOVERY_PROBE_MIN_MICRO_VWAP_BP", 0.0) or 0.0
         ),
-        "max_budget_krw": int(getattr(TRADING_RULES, "AI_WAIT6579_PROBE_CANARY_MAX_BUDGET_KRW", 50_000) or 50_000),
+        "max_budget_krw": int(getattr(TRADING_RULES, "AI_WAIT6579_PROBE_CANARY_MAX_BUDGET_KRW", 0) or 0),
         "max_qty": int(getattr(TRADING_RULES, "AI_WAIT6579_PROBE_CANARY_MAX_QTY", 0) or 0),
     }
     current["effective_score_range"] = f"{current['min_score']}-{current['max_score']}"
@@ -6586,14 +6583,14 @@ def _calibration_state_for_family(
             return (
                 "adjust_up",
                 f"rolling primary score{effective_range} missed EV가 양수이고 panic/source guard가 정상이다. "
-                "submitted drought를 풀기 위해 기존 1주/5만원 bounded entry probe를 연다.",
+                "submitted drought를 풀기 위해 기본 신규 BUY sizing을 쓰는 bounded entry probe를 연다.",
             )
         if risk_gate == "confirmed_panic":
             return ("hold_sample", f"confirmed panic risk-regime에서는 score{effective_range} live 확대 없이 source-quality review로 보류")
         if sample_count >= sample_floor and ready:
             return (
                 "adjust_up",
-                "partial_samples=0은 전면 금지가 아니라 post-apply calibration target; 1주/5만원 bounded canary 후보",
+                "partial_samples=0은 전면 금지가 아니라 post-apply calibration target; 기본 신규 BUY sizing bounded canary 후보",
             )
         if (
             _safe_int(family_sample.get("wait65_79_score60_74_candidate"), 0)

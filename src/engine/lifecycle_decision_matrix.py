@@ -3084,7 +3084,7 @@ def _scale_in_bucket_attribution(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "source_quality_gate": "scale_in arm + blocker namespace + joined source labels",
         "forbidden_uses": [
             "real_scale_in_submit",
-            "position_cap_release",
+            "sizing_formula_runtime_apply_without_guard",
             "intraday_threshold_mutation",
             "provider_route_change",
             "bot_restart_trigger",

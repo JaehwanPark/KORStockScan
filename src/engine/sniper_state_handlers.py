@@ -2682,6 +2682,9 @@ def _mark_swing_simulated_holding(stock, code, curr_price, requested_qty, entry_
         legs=len(entry_orders or []),
         simulation_owner=_swing_live_order_dry_run_owner(),
         actual_order_submitted=False,
+        broker_order_forbidden=True,
+        simulated_order=True,
+        decision_authority="swing_sim_exploration_only",
         runtime_effect="in_memory_holding_only",
     )
 
@@ -11093,7 +11096,7 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                                     threshold_applied_value=(
                                         f"enabled=True|score={int(_rule('AI_SCORE65_74_RECOVERY_PROBE_MIN_SCORE', 60) or 60)}-"
                                         f"{int(_rule('AI_SCORE65_74_RECOVERY_PROBE_MAX_SCORE', 74) or 74)}|"
-                                        f"budget={int(_rule('AI_WAIT6579_PROBE_CANARY_MAX_BUDGET_KRW', 50_000) or 50_000)}|qty=1"
+                                        f"budget={int(_rule('AI_WAIT6579_PROBE_CANARY_MAX_BUDGET_KRW', 0) or 0)}|qty=default"
                                     ),
                                     ai_score=f"{float(ai_score or 0.0):.1f}",
                                     buy_pressure=f"{float(feature_probe.get('buy_pressure', 0.0) or 0.0):.2f}",
@@ -11101,8 +11104,8 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                                     micro_vwap_bp=f"{float(feature_probe.get('micro_vwap_bp', 0.0) or 0.0):.2f}",
                                     latency_state=str((ws_data or {}).get("latency_state", "") or "").strip().upper() or "-",
                                     **_build_tick_source_quality_log_fields(feature_probe),
-                                    qty_cap=1,
-                                    budget_cap_krw=int(_rule("AI_WAIT6579_PROBE_CANARY_MAX_BUDGET_KRW", 50_000) or 50_000),
+                                    qty_cap=0,
+                                    budget_cap_krw=int(_rule("AI_WAIT6579_PROBE_CANARY_MAX_BUDGET_KRW", 0) or 0),
                                 )
                             _submit_watching_shared_prompt_shadow(
                                 stock_name=stock['name'],
@@ -11403,8 +11406,8 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                         ai_score=f"{current_ai_score:.1f}",
                         entry_score_threshold=75,
                         source=wait6579_probe_entry_unlock.get("source") or stock.get("wait6579_probe_canary_source", "-"),
-                        qty_cap=1,
-                        budget_cap_krw=int(_rule("AI_WAIT6579_PROBE_CANARY_MAX_BUDGET_KRW", 50_000) or 50_000),
+                        qty_cap=0,
+                        budget_cap_krw=int(_rule("AI_WAIT6579_PROBE_CANARY_MAX_BUDGET_KRW", 0) or 0),
                     )
 
                 final_target_buy_price, final_used_drop_pct = radar.get_smart_target_price(
@@ -12334,7 +12337,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         or bool(_rule("AI_MAIN_BUY_RECOVERY_CANARY_ENABLED", False))
     )
     if strategy == 'SCALPING' and wait6579_cap_enabled and bool(stock.get('wait6579_probe_canary_armed')):
-        probe_max_budget = int(_rule("AI_WAIT6579_PROBE_CANARY_MAX_BUDGET_KRW", 50_000) or 50_000)
+        probe_max_budget = int(_rule("AI_WAIT6579_PROBE_CANARY_MAX_BUDGET_KRW", 0) or 0)
         probe_min_qty = int(_rule("AI_WAIT6579_PROBE_CANARY_MIN_QTY", 1) or 1)
         probe_max_qty = int(_rule("AI_WAIT6579_PROBE_CANARY_MAX_QTY", 0) or 0)
         adjusted_orders, original_qty, scaled_qty, applied = _apply_wait6579_probe_canary(
@@ -13584,7 +13587,12 @@ def _stage_buy_order_submission(stock, code, curr_price, requested_qty, msg, ent
         existing_filled_qty = int(stock.get('entry_filled_qty', 0) or 0)
         existing_fill_amount = int(stock.get('entry_fill_amount', 0) or 0)
         stock['status'] = 'HOLDING' if requested_qty > 0 and existing_filled_qty >= requested_qty else 'BUY_ORDERED'
-        stock['order_time'] = float(stock.get('order_time', 0) or time.time())
+        order_sent_times = [
+            _safe_float((order or {}).get('sent_at'), 0.0)
+            for order in (entry_orders or [])
+            if _safe_float((order or {}).get('sent_at'), 0.0) > 0
+        ]
+        stock['order_time'] = min(order_sent_times) if order_sent_times else time.time()
         stock['order_price'] = curr_price
         stock['requested_buy_qty'] = requested_qty
         stock['entry_requested_qty'] = requested_qty
@@ -15913,6 +15921,10 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                             "profit_rate": f"{profit_rate:+.2f}",
                             "simulation_owner": _swing_live_order_dry_run_owner(),
                             "actual_order_submitted": False,
+                            "broker_order_forbidden": True,
+                            "simulated_order": True,
+                            "decision_authority": "swing_sim_exploration_only",
+                            "runtime_effect": "in_memory_exit_block_only",
                         }
                     ),
                 )
@@ -15979,6 +15991,9 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                         "profit_rate": f"{profit_rate:+.2f}",
                         "simulation_owner": _swing_live_order_dry_run_owner(),
                         "actual_order_submitted": False,
+                        "broker_order_forbidden": True,
+                        "simulated_order": True,
+                        "decision_authority": "swing_sim_exploration_only",
                         "would_submit_stage": "sell_order_sent",
                         "runtime_effect": "in_memory_completed_only",
                         **swing_sell_micro_fields,

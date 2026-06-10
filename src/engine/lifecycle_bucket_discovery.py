@@ -185,7 +185,7 @@ BASE_FORBIDDEN_USES = with_evidence_authority_forbidden_uses(
         "stale_quote_submit",
         "provider_route_change",
         "bot_restart_trigger",
-        "position_cap_release",
+        "sizing_formula_runtime_apply_without_guard",
     ]
 )
 SOURCE_CONTRACT_SCHEMA_VERSION = "lifecycle_source_contract_snapshot_v2"

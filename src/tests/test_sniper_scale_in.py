@@ -3104,6 +3104,43 @@ def test_pending_entry_cancel_logs_receipt_provenance(monkeypatch):
     assert stages["entry_order_cancel_confirmed"]["submitted_price"] == 91900
 
 
+def test_stage_buy_order_submission_resets_stale_order_time(monkeypatch):
+    old_time = time.time() - 120
+    new_time = old_time + 121
+    monkeypatch.setattr(state_handlers.time, "time", lambda: new_time)
+
+    stock = {
+        "id": 1,
+        "name": "TEST",
+        "strategy": "SCALPING",
+        "status": "WATCHING",
+        "order_time": old_time,
+    }
+
+    state_handlers._stage_buy_order_submission(
+        stock,
+        "240810",
+        curr_price=123_300,
+        requested_qty=1,
+        msg="submitted",
+        entry_orders=[
+            {
+                "tag": "normal",
+                "qty": 1,
+                "price": 123_300,
+                "ord_no": "0046858",
+                "status": "OPEN",
+                "filled_qty": 0,
+                "sent_at": new_time,
+            }
+        ],
+    )
+
+    assert stock["status"] == "BUY_ORDERED"
+    assert stock["order_time"] == new_time
+    assert stock["pending_entry_orders"][0]["ord_no"] == "0046858"
+
+
 def test_entry_ai_price_context_includes_orderbook_micro_when_enabled(monkeypatch):
     monkeypatch.setattr(
         state_handlers,
