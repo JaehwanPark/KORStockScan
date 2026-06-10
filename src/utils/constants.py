@@ -170,7 +170,7 @@ class TradingConfig:
     SCALPING_MAX_BUY_BUDGET_KRW: int = 0  # 0 이하는 절대 투자금 상한 없음; 주문가능금액 비중 guard 사용
     SCALPING_MIN_ONE_SHARE_FLOOR_ENABLED: bool = True  # 비중 예산 초과 시 주문가능금액 내 최소 1주 허용
     BUY_SIDE_TIME_BLOCK_ENABLED: bool = True  # 신규 매수/추가매수 브로커 제출 시간 차단
-    BUY_SIDE_TIME_BLOCK_UNTIL_HHMM: str = "10:00"  # KST 기준, 이 시각 전 BUY 제출 차단
+    BUY_SIDE_TIME_BLOCK_UNTIL_HHMM: str = "09:20"  # KST 기준, 이 시각 전 BUY 제출 차단
 
     # 💡 [신규 추가] 스윙 AI 동적 비중 조절용 (Min~Max)
     INVEST_RATIO_KOSDAQ_MIN: float = 0.05  # 코스닥 AI 점수 60점일 때 (5%)

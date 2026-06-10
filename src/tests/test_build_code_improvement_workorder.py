@@ -895,6 +895,136 @@ def test_build_code_improvement_workorder_does_not_signature_escalate_sparse_ord
     assert report["summary"]["repeat_unresolved_escalation_count"] == 0
 
 
+def test_build_code_improvement_workorder_does_not_escalate_rejudged_not_applicable(tmp_path, monkeypatch):
+    automation_dir = tmp_path / "automation"
+    report_dir = tmp_path / "report"
+    doc_dir = tmp_path / "docs"
+    automation_dir.mkdir()
+    report_dir.mkdir()
+    current_order = {
+        "order_id": "order_not_applicable_repeat",
+        "title": "Not applicable explicit repeat",
+        "source_report_type": "scalping_pattern_lab_automation",
+        "target_subsystem": "entry_funnel",
+        "lifecycle_stage": "entry",
+        "improvement_type": "source_quality_gap",
+        "route": "existing_family",
+        "mapped_family": "lifecycle_decision_matrix_runtime",
+        "priority": 5,
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "implementation_provenance": {
+            "recommended_resolution": "mark_not_applicable_explicitly",
+        },
+        "files_likely_touched": [],
+        "acceptance_tests": [],
+    }
+    (automation_dir / "scalping_pattern_lab_automation_2026-06-10.json").write_text(
+        json.dumps(
+            {
+                "date": "2026-06-10",
+                "consensus_findings": [],
+                "solo_findings": [],
+                "auto_family_candidates": [],
+                "code_improvement_orders": [current_order],
+            }
+        ),
+        encoding="utf-8",
+    )
+    for previous_date in ("2026-06-09", "2026-06-08"):
+        (report_dir / f"code_improvement_workorder_{previous_date}.json").write_text(
+            json.dumps(
+                {
+                    "date": previous_date,
+                    "orders": [{**current_order, "decision": "attach_existing_family"}],
+                    "non_selected_orders": [],
+                }
+            ),
+            encoding="utf-8",
+        )
+    monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", automation_dir)
+    monkeypatch.setattr(mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing")
+    monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", tmp_path / "missing-ev")
+    monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_DIR", doc_dir)
+
+    report = mod.build_code_improvement_workorder("2026-06-10", max_orders=1)
+
+    order = report["orders"][0]
+    assert order["order_id"] == "order_not_applicable_repeat"
+    assert order["decision"] == "attach_existing_family"
+    assert order["route"] == "existing_family"
+    assert report["summary"]["repeat_unresolved_escalation_count"] == 0
+    assert report["summary"]["selected_implement_now_new_runtime_effect_false_count"] == 0
+
+
+def test_build_code_improvement_workorder_does_not_escalate_rejudged_lifecycle_holding_no_files(tmp_path, monkeypatch):
+    ldm_dir = tmp_path / "lifecycle_matrix"
+    report_dir = tmp_path / "report"
+    doc_dir = tmp_path / "docs"
+    ldm_dir.mkdir()
+    report_dir.mkdir()
+    ldm_dir.mkdir(parents=True, exist_ok=True)
+    lifecycle_report = {
+        "holding_bucket_attribution": {
+            "parser_version": "1.0.0",
+            "code_improvement_workorders": [
+                {
+                    "bucket_type": "source_quality_gap",
+                    "bucket_key": "holding_bucket_001",
+                    "reason": "source-quality gap detected in holding bucket",
+                    "recommended_route": "instrumentation_order",
+                    "workorder_id": "wo_hold_001",
+                }
+            ],
+        },
+    }
+    (ldm_dir / "lifecycle_decision_matrix_2026-06-10.json").write_text(
+        json.dumps(lifecycle_report),
+        encoding="utf-8",
+    )
+    for previous_date in ("2026-06-09", "2026-06-08"):
+        previous_order = {
+            "order_id": "order_holding_bucket_001_holding_bucket_attribution",
+            "title": "LDM holding bucket source-quality follow-up: source_quality_gap=holding_bucket_001",
+            "source_report_type": "lifecycle_decision_matrix_holding_bucket_attribution",
+            "lifecycle_stage": "holding",
+            "target_subsystem": "lifecycle_decision_matrix",
+            "route": "instrumentation_order",
+            "mapped_family": "lifecycle_decision_matrix_runtime",
+            "improvement_type": "holding_bucket_source_quality_child_evidence",
+            "priority": 2,
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+            "decision": "defer_evidence",
+            "files_likely_touched": [],
+            "acceptance_tests": [],
+        }
+        (report_dir / f"code_improvement_workorder_{previous_date}.json").write_text(
+            json.dumps(
+                {
+                    "date": previous_date,
+                    "orders": [previous_order],
+                    "non_selected_orders": [],
+                }
+            ),
+            encoding="utf-8",
+        )
+    monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-scalping")
+    monkeypatch.setattr(mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing")
+    monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", tmp_path / "missing-ev")
+    monkeypatch.setattr(mod, "LIFECYCLE_DECISION_MATRIX_DIR", ldm_dir)
+    monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_DIR", doc_dir)
+
+    report = mod.build_code_improvement_workorder("2026-06-10", max_orders=1)
+
+    order = report["orders"][0]
+    assert order["decision"] == "defer_evidence"
+    assert report["summary"]["repeat_unresolved_escalation_count"] == 0
+    assert report["summary"]["selected_implement_now_new_runtime_effect_false_count"] == 0
+
+
 def test_lifecycle_bucket_discovery_source_dimension_gap_groups_same_bucket():
     report = {
         "surfaced_candidates": [],

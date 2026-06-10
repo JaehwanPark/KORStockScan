@@ -77,6 +77,7 @@ class ClassifiedOrder:
     route: str | None
     confidence: str | None
     automation_reentry: str
+    decision_source: str | None = None
 
 
 def _load_json(path: Path) -> dict[str, Any]:
@@ -468,6 +469,7 @@ def _escalate_repeated_unresolved_orders(
             and item.decision in unresolved_decisions
             and not implemented_status_present
             and item.order.get("runtime_effect") is not True
+            and item.decision_source != "implement_now_rejudge"
             and not existing_family_only
             and not pattern_lab_design_only
             and not pattern_lab_existing_family_evidence_only
@@ -1166,6 +1168,7 @@ def _classify_order(
             mapped_family=mapped_family or str(order.get("threshold_family") or "").strip() or None,
             route="existing_family" if decision == "attach_existing_family" else route or "evidence_wait",
             confidence=confidence,
+            decision_source="implement_now_rejudge",
             automation_reentry=(
                 "Keep the item out of the canonical implement_now queue; regenerated postclose reports and "
                 "runner terminal dispositions must preserve the non-implement decision."

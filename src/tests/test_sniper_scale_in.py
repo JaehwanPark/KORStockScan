@@ -2027,8 +2027,20 @@ def test_send_buy_order_market_blocked_before_buy_time_cutoff(monkeypatch):
     result = kiwoom_orders.send_buy_order_market("123456", 1, "token")
 
     assert result["return_code"] == "BUY_TIME_BLOCKED"
-    assert "10:00" in result["return_msg"]
+    assert "09:20" in result["return_msg"]
     assert published == []
+
+
+def test_buy_side_time_block_allows_from_0920(monkeypatch):
+    monkeypatch.setattr(
+        kiwoom_orders,
+        "TRADING_RULES",
+        replace(CONFIG, BUY_SIDE_TIME_BLOCK_ENABLED=True, BUY_SIDE_TIME_BLOCK_UNTIL_HHMM="09:20"),
+    )
+    today = datetime.now().date()
+
+    assert kiwoom_orders.is_buy_side_time_blocked(datetime.combine(today, dt_time(9, 19, 59)))
+    assert not kiwoom_orders.is_buy_side_time_blocked(datetime.combine(today, dt_time(9, 20, 0)))
 
 
 def test_send_buy_order_market_allows_order_after_resume(monkeypatch):

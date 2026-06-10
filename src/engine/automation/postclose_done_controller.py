@@ -706,14 +706,19 @@ def _recovery_actions(target_date: str, verification: dict[str, Any], *, allow_w
                     "daily report refresh before EV/workorder repair",
                 ),
                 RecoveryAction(
-                    "refresh_threshold_cycle_ev",
-                    [_python_bin(), "-m", "src.engine.threshold_cycle_ev_report", "--date", target_date],
-                    "threshold EV stale before workorder",
-                ),
-                RecoveryAction(
                     "refresh_code_improvement_workorder",
                     [_python_bin(), "-m", "src.engine.build_code_improvement_workorder", "--date", target_date],
-                    "workorder lineage repair after EV refresh",
+                    "workorder lineage repair before consumer refresh",
+                ),
+                RecoveryAction(
+                    "refresh_threshold_cycle_ev",
+                    [_python_bin(), "-m", "src.engine.threshold_cycle_ev_report", "--date", target_date],
+                    "threshold EV refresh after workorder repair",
+                ),
+                RecoveryAction(
+                    "refresh_runtime_approval_summary",
+                    [_python_bin(), "-m", "src.engine.runtime_approval_summary", "--date", target_date],
+                    "runtime summary refresh after EV repair",
                 ),
                 _build_verify_action(target_date),
             ]

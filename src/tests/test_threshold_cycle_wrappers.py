@@ -337,6 +337,8 @@ def test_postclose_wrapper_waits_for_prerequisite_artifacts_before_downstream_st
     assert "src.engine.verify_threshold_cycle_postclose_chain" in script
     assert "--allow-pending-done-marker" in script
     assert "run_postclose_cmd env PYTHONPATH=. \"$VENV_PY\" -m src.engine.verify_threshold_cycle_postclose_chain" in script
+    assert 'run_threshold_cycle_ev_and_wait "post_conversion_lane_workorder_refresh"' in script
+    assert 'runtime_approval_summary_post_conversion_lane_workorder' in script
     assert '"$PROJECT_DIR/data/report/threshold_cycle_postclose_verification/threshold_cycle_postclose_verification_${TARGET_DATE}.json"' in script
     assert "pattern_lab_currentness_audit=$RUN_PATTERN_LAB_CURRENTNESS_AUDIT" in script
     assert "pattern_lab_ai_review=$RUN_PATTERN_LAB_AI_REVIEW" in script

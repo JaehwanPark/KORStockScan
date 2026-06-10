@@ -197,6 +197,15 @@ def test_postclose_done_controller_repairs_ev_workorder_stale_link_without_full_
     assert "--reuse-ai-review-if-valid" in joined
     assert "threshold_cycle_ev_report" in joined
     assert "build_code_improvement_workorder" in joined
+    assert "runtime_approval_summary" in joined
+    action_names = [item["action"] for item in report["actions"]]
+    assert action_names == [
+        "refresh_daily_threshold_cycle_report",
+        "refresh_code_improvement_workorder",
+        "refresh_threshold_cycle_ev",
+        "refresh_runtime_approval_summary",
+        "verify_postclose_chain",
+    ]
     assert not any(cmd[:2] == ["bash", "deploy/run_threshold_cycle_postclose.sh"] for cmd in calls)
     assert report["full_wrapper_rerun_used"] is False
     assert report["root_cause"] == "threshold_cycle_ev_stale_before_code_improvement_workorder"

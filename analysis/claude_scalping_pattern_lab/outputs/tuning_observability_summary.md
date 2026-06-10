@@ -1,28 +1,28 @@
 # Tuning Observability Summary
 
-- target_date: `2026-06-09`
-- analysis_period: `2026-06-04 ~ 2026-06-09`
+- target_date: `2026-06-10`
+- analysis_period: `2026-06-04 ~ 2026-06-10`
 
 ## Entry Funnel
 
-- gatekeeper_decisions: `3403`
-- gatekeeper_eval_ms_p95: `3625ms`
+- gatekeeper_decisions: `1001`
+- gatekeeper_eval_ms_p95: `4652ms`
 - gatekeeper_lock_wait_ms_p95: `0ms`
-- gatekeeper_model_call_ms_p95: `3734ms`
-- budget_pass_events: `5169`
-- submitted_events: `2`
-- budget_pass_to_submitted_rate: `0.0%`
-- latency_block_events: `5140`
-- quote_fresh_latency_blocks: `1776`
+- gatekeeper_model_call_ms_p95: `4691ms`
+- budget_pass_events: `6419`
+- submitted_events: `21`
+- budget_pass_to_submitted_rate: `0.3%`
+- latency_block_events: `6242`
+- quote_fresh_latency_blocks: `2736`
 
 ## Buy Recovery Canary
 
-- total_candidates: `114`
+- total_candidates: `86`
 - recovery_check: `0`
 - promoted: `0`
 - submitted: `0`
-- blocked_ai_score_share: `90.4%`
+- blocked_ai_score_share: `18.6%`
 
 ## Priority Findings
 
-- `AI threshold dominance`: 경고 — `blocked_ai_score_share=90.4%`로 WAIT/BLOCK 비중이 높아 BUY drought 해석을 지지한다.
+- `No acute observability alert`: 중립 — 주요 관찰축에서 즉시 경고할 단일 병목이 두드러지지 않는다.
