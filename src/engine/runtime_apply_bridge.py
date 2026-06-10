@@ -708,7 +708,6 @@ def _greenfield_candidate(
                 "intraday_threshold_mutation",
                 "provider_route_change",
                 "bot_restart_trigger",
-                "position_cap_release",
             ],
         }
     bundle_issue = validate_greenfield_policy_payload(policy, expected_version=str(policy.get("policy_version") or ""))
@@ -755,7 +754,6 @@ def _greenfield_candidate(
                 "intraday_threshold_mutation",
                 "provider_route_change",
                 "bot_restart_trigger",
-                "position_cap_release",
             ],
         }
     policy_path = greenfield_real_env_policy_path(target_date)
@@ -1043,7 +1041,7 @@ def _scale_candidate(
         discovery_live_by_family=discovery_live_by_family,
     )
 
-    target_env_keys = ["SCALPING_SCALE_IN_EFFECTIVE_QTY_CAP"]
+    target_env_keys: list[str] = []
     recommended_values: dict[str, Any] = {
         "effective_qty_cap": 1,
         "threshold_version": f"{SCALE_IN_BRIDGE_FAMILY}:{target_date}",
@@ -1115,7 +1113,6 @@ def _scale_candidate(
         "primary_decision_metric": "source_quality_adjusted_ev_pct",
         "decision_authority": "lifecycle_bucket_discovery_live_auto_apply",
         "forbidden_uses": [
-            "position_cap_release",
             "scale_in_safety_guard_bypass",
             "intraday_threshold_mutation",
             "provider_route_change",

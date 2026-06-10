@@ -1362,7 +1362,7 @@ def test_scalp_sim_candidate_window_active_seed_uses_reserved_sim_quota(monkeypa
                                 "threshold_apply",
                                 "provider_route_change",
                                 "bot_restart",
-                                "position_cap_release",
+                                "sizing_formula_runtime_apply_without_guard",
                                 "broker_order",
                                 "hard_safety_bypass",
                             ],
@@ -1385,6 +1385,21 @@ def test_scalp_sim_candidate_window_active_seed_uses_reserved_sim_quota(monkeypa
         SCALP_SIM_CANDIDATE_WINDOW_BLOCKED_AI_SCORE_MAX_SHARE_PCT=60,
     )
     monkeypatch.setattr(state_handlers, "TRADING_RULES", rules)
+    state_handlers._SCALP_SIM_AUTO_POLICY_CACHE.update(
+        {
+            "path": None,
+            "mtime_ns": None,
+            "version": None,
+            "status": "not_loaded",
+            "approved_rows": [],
+            "rows_by_source_bucket_id": {},
+            "rows_by_bucket_id": {},
+            "active_seeds": [],
+            "active_seeds_by_prefix": {},
+            "hypotheses": [],
+            "approved_row_count": 0,
+        }
+    )
     state_handlers._SCALP_SIM_CANDIDATE_WINDOW_DAILY_CREATED["1970-01-01"] = 6
     state_handlers._SCALP_SIM_CANDIDATE_WINDOW_DAILY_SOURCE_CREATED[("1970-01-01", "blocked_ai_score")] = 6
 
@@ -1686,7 +1701,7 @@ def test_scalp_sim_candidate_window_hypothesis_uses_sim_only_reserved_quota(monk
                                 "threshold_apply",
                                 "provider_route_change",
                                 "bot_restart",
-                                "position_cap_release",
+                                "sizing_formula_runtime_apply_without_guard",
                                 "broker_order",
                                 "hard_safety_bypass",
                             ],
@@ -1709,6 +1724,21 @@ def test_scalp_sim_candidate_window_hypothesis_uses_sim_only_reserved_quota(monk
         SCALP_SIM_CANDIDATE_WINDOW_BLOCKED_AI_SCORE_MAX_SHARE_PCT=60,
     )
     monkeypatch.setattr(state_handlers, "TRADING_RULES", rules)
+    state_handlers._SCALP_SIM_AUTO_POLICY_CACHE.update(
+        {
+            "path": None,
+            "mtime_ns": None,
+            "version": None,
+            "status": "not_loaded",
+            "approved_rows": [],
+            "rows_by_source_bucket_id": {},
+            "rows_by_bucket_id": {},
+            "active_seeds": [],
+            "active_seeds_by_prefix": {},
+            "hypotheses": [],
+            "approved_row_count": 0,
+        }
+    )
     state_handlers._SCALP_SIM_CANDIDATE_WINDOW_DAILY_CREATED["1970-01-01"] = 6
     state_handlers._SCALP_SIM_CANDIDATE_WINDOW_DAILY_SOURCE_CREATED[("1970-01-01", "blocked_ai_score")] = 6
 
@@ -1778,7 +1808,6 @@ def test_scalp_sim_policy_loader_rejects_invalid_hypothesis_contract(monkeypatch
                                 "threshold_apply",
                                 "provider_route_change",
                                 "bot_restart",
-                                "position_cap_release",
                                 "broker_order",
                                 "hard_safety_bypass",
                             ],
@@ -2152,7 +2181,7 @@ def test_scalp_simulator_scale_in_does_not_call_real_buy(monkeypatch):
 
 
 def test_scalp_simulator_scale_in_dynamic_qty_ignores_real_one_share_cap(monkeypatch):
-    rules = replace(CONFIG, SCALPING_SCALE_IN_DYNAMIC_QTY_ENABLED=True, SCALPING_SCALE_IN_EFFECTIVE_QTY_CAP=1)
+    rules = replace(CONFIG, SCALPING_SCALE_IN_DYNAMIC_QTY_ENABLED=True)
     monkeypatch.setattr(scale_in, "TRADING_RULES", rules)
     stock = {
         "name": "TEST",
@@ -2183,6 +2212,89 @@ def test_scalp_simulator_scale_in_dynamic_qty_ignores_real_one_share_cap(monkeyp
     assert details["would_qty"] == 3
     assert details["effective_qty"] == 3
     assert details["qty"] == 3
+
+
+def test_real_scalp_scale_in_uses_orderable_percent_budget_without_one_share_cap(monkeypatch):
+    rules = replace(
+        CONFIG,
+        INVEST_RATIO_SCALPING_MIN=0.10,
+        INVEST_RATIO_SCALPING_MAX=0.30,
+        SCALPING_SCALE_IN_DYNAMIC_QTY_ENABLED=True,
+        SCALPING_SCALE_IN_MIN_ONE_SHARE_FLOOR_ENABLED=True,
+    )
+    monkeypatch.setattr(scale_in, "TRADING_RULES", rules)
+    stock = {
+        "name": "TEST",
+        "code": "123456",
+        "strategy": "SCALPING",
+        "status": "HOLDING",
+        "buy_price": 10_000,
+        "buy_qty": 1,
+        "hard_stop_price": 9_000,
+        "rt_ai_prob": 0.90,
+        "actual_order_submitted": True,
+    }
+
+    details = scale_in.describe_dynamic_scale_in_qty(
+        stock=stock,
+        resolved_price=10_000,
+        deposit=1_000_000,
+        add_type="AVG_DOWN",
+        strategy="SCALPING",
+        add_reason="reversal_add_ok",
+        price_resolution={"allowed": True},
+        action={"reason": "reversal_add_ok", "current_ai_score": 100},
+    )
+
+    assert details["sim_uncapped_qty"] is False
+    assert details["effective_qty_cap"] == 0
+    assert details["scale_in_budget_ratio"] == 0.30
+    assert details["scale_in_target_budget"] == 300_000
+    assert details["scale_in_safe_budget"] == 285_000
+    assert details["scale_in_budget_qty"] == 28
+    assert details["would_qty"] == 28
+    assert details["effective_qty"] == 28
+    assert details["qty"] == 28
+
+
+def test_real_scalp_scale_in_min_one_share_floor_when_percent_budget_is_below_price(monkeypatch):
+    rules = replace(
+        CONFIG,
+        INVEST_RATIO_SCALPING_MIN=0.10,
+        INVEST_RATIO_SCALPING_MAX=0.30,
+        SCALPING_SCALE_IN_DYNAMIC_QTY_ENABLED=True,
+        SCALPING_SCALE_IN_MIN_ONE_SHARE_FLOOR_ENABLED=True,
+    )
+    monkeypatch.setattr(scale_in, "TRADING_RULES", rules)
+    stock = {
+        "name": "TEST",
+        "code": "123456",
+        "strategy": "SCALPING",
+        "status": "HOLDING",
+        "buy_price": 200_000,
+        "buy_qty": 100,
+        "hard_stop_price": 100_000,
+        "rt_ai_prob": 0.0,
+        "actual_order_submitted": True,
+    }
+
+    details = scale_in.describe_dynamic_scale_in_qty(
+        stock=stock,
+        resolved_price=200_000,
+        deposit=1_000_000,
+        add_type="AVG_DOWN",
+        strategy="SCALPING",
+        add_reason="reversal_add_ok",
+        price_resolution={"allowed": True},
+        action={"reason": "reversal_add_ok", "current_ai_score": 0},
+    )
+
+    assert details["scale_in_budget_ratio"] == 0.10
+    assert details["scale_in_target_budget"] == 100_000
+    assert details["scale_in_safe_budget"] == 95_000
+    assert details["scale_in_budget_qty"] == 1
+    assert details["scale_in_min_one_share_floor_applied"] is True
+    assert details["qty"] == 1
 
 
 def test_scalp_simulator_scale_in_uses_virtual_budget_not_real_deposit(monkeypatch):

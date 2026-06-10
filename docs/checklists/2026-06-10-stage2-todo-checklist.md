@@ -14,7 +14,7 @@
 - 장중과 장후에는 `observation_source_quality_audit --write` 또는 최신 artifact로 raw source-quality를 반복 확인한다. Hard contract gap은 결손 row/window 제외 또는 `source_quality_blocked` 없이는 튜닝 입력에 들어갈 수 없고, unknown-token warning은 hard block이 아니더라도 code-improvement workorder handoff 확인 대상이다.
 - provider transport/provenance 확인은 threshold 값, 주문가/수량 guard, 스윙 dry-run guard 변경과 분리한다.
 - `actual_order_submitted=false`인 sim/probe 표본은 EV/source-quality 입력이며 실주문 전환 근거가 아니다.
-- 2026-06-10 사용자 승인으로 실제 스캘핑 신규 BUY의 1주 hard cap은 해제하고, 주문가능금액 기준 10~30% 비중 산식과 주문가능금액 내 최소 1주 floor만 허용한다. sim/probe, 스윙 dry-run, threshold/provider/bot 권한과 분리한다.
+- 2026-06-10 사용자 승인으로 실제 스캘핑 신규 BUY와 불타기/물타기 추가매수의 1주 hard cap은 해제하고, 주문가능금액 기준 10~30% 비중 산식과 주문가능금액 내 최소 1주 floor만 허용한다. `position_sizing_cap_release` family는 제거됐으며 `position_sizing_dynamic_formula`가 단일 sizing owner로 승격됐다. sim/probe, 스윙 dry-run, threshold/provider/bot 권한과 분리한다.
 - Project/Calendar 동기화는 사용자가 표준 동기화 명령으로 수행한다.
 
 <!-- AUTO_NEXT_STAGE2_CHECKLIST_START -->

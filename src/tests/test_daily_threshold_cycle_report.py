@@ -2063,9 +2063,9 @@ def test_daily_threshold_cycle_keeps_sim_completed_out_of_family_candidate_input
     assert action_weight["sample"]["completed_valid"] == 1
     assert action_weight["recommended"]["data_completeness"]["price_known"] == 1
 
-    sizing = report["threshold_snapshot"]["position_sizing_cap_release"]
-    assert sizing["sample"]["normal_completed_valid"] == 1
-    assert sizing["sample"]["normal_completed_summary"]["avg_profit_rate"] == -0.4
+    sizing = report["threshold_snapshot"]["position_sizing_dynamic_formula"]
+    assert sizing["sample"]["real_completed_valid"] == 1
+    assert sizing["sample"]["real_completed_summary"]["avg_profit_rate"] == -0.4
 
 
 def test_daily_threshold_cycle_joins_sim_post_sell_mfe_mae(monkeypatch, tmp_path):
@@ -2335,7 +2335,6 @@ def test_scale_in_price_guard_family_generates_manifest_only_candidate():
     assert family["sample"]["p2_observe"] == 3
     assert family["sample"]["block_reason"]["spread_too_wide"] == 10
     assert family["current"]["max_spread_bps"] == 80.0
-    assert family["current"]["effective_qty_cap"] == 1
 
     manifest_families = {
         item["family"]
@@ -2349,57 +2348,64 @@ def test_scale_in_price_guard_family_generates_manifest_only_candidate():
     assert candidate["allowed_runtime_apply"] is False
 
 
-def test_position_sizing_cap_release_generates_manual_approval_candidate():
+def test_position_sizing_dynamic_formula_generates_candidate_grid():
     pipeline_rows = []
-    for record_id in range(1, 12):
-        pipeline_rows.append(
-            {
-                "stage": "initial_entry_qty_cap_applied",
-                "record_id": record_id,
-                "fields": {"applied": "True", "original_qty": "5", "scaled_qty": "1"},
-            }
-        )
-    for record_id in range(1, 24):
-        pipeline_rows.append({"stage": "order_bundle_submitted", "record_id": record_id, "fields": {}})
-    for record_id in range(1, 21):
-        pipeline_rows.append({"stage": "full_fill", "record_id": record_id, "fields": {}})
-    for record_id in range(21, 24):
-        pipeline_rows.append({"stage": "partial_fill", "record_id": record_id, "fields": {}})
-    for record_id in range(1, 6):
-        pipeline_rows.append(
-            {
-                "stage": "sell_completed",
-                "record_id": record_id,
-                "fields": {"exit_rule": "scalp_soft_stop_pct", "profit_rate": "-0.20"},
-            }
-        )
+    for record_id in range(1, 36):
+        event = {
+            "stage": "budget_pass",
+            "record_id": record_id,
+            "stock_code": f"{100000 + record_id:06d}",
+            "fields": {
+                "score": "82",
+                "strategy": "SCALPING",
+                "volatility_bucket": "mid",
+                "liquidity_value": "850000000",
+                "liquidity_bucket": "high",
+                "spread_bps": "18.5",
+                "price_band": "10000_30000",
+                "recent_loss_bucket": "none",
+                "portfolio_exposure_bucket": "low",
+                "target_budget": "500000.0",
+                "resolved_price": "10000.0",
+                "actual_order_submitted": "true",
+            },
+        }
+        pipeline_rows.append(event)
 
-    completed_rows = [{"profit_rate": 0.5, "strategy": "SCALPING"} for _ in range(24)] + [
-        {"profit_rate": -0.2, "strategy": "SCALPING"} for _ in range(18)
+    completed_rows = [{"profit_rate": 0.5, "strategy": "SCALPING", "stock_code": f"{100000 + i:06d}", "buy_price": 10000, "buy_qty": 5} for i in range(1, 21)] + [
+        {"profit_rate": -0.2, "strategy": "SCALPING", "stock_code": f"{100000 + (i + 20):06d}", "buy_price": 8000, "buy_qty": 4} for i in range(1, 16)
     ]
 
     report = report_mod.build_daily_threshold_cycle_report(
-        "2026-05-06",
+        "2026-06-10",
         pipeline_loader=lambda target_date: pipeline_rows,
         completed_rows_loader=lambda start_date, end_date: completed_rows,
         skip_completed_rows=False,
     )
 
-    family = report["threshold_snapshot"]["position_sizing_cap_release"]
+    family = report["threshold_snapshot"]["position_sizing_dynamic_formula"]
     assert family["apply_ready"] is True
-    assert family["apply_mode"] == "manual_approval_required"
-    assert family["sample"]["tradeoff_score"] >= family["sample"]["tradeoff_score_required"]
-    assert all(family["sample"]["safety_floor"].values())
-    assert family["recommended"]["initial_entry_qty_cap_enabled"] is False
-    assert family["recommended"]["scale_in_effective_qty_cap"] == 0
+    assert family["apply_mode"] == "candidate_grid_comparison"
+    assert family["current"]["runtime_apply_allowed"] is False
+    assert family["current"]["formula_version"] == "linear_10_30_current"
+    candidate_grid = family["candidate_grid"]
+    assert isinstance(candidate_grid, list)
+    assert len(candidate_grid) == 7
+    baseline = candidate_grid[0]
+    assert baseline["formula_candidate_id"] == "linear_10_30_current"
+    assert baseline["formula_type"] == "baseline"
+    assert baseline["real_sample_count"] > 0
+    assert baseline["real_completed_overall_ev_pct"] is not None
+    assert baseline["source_quality_blocked"] is False
+    assert baseline["real_actual_order_submitted_count"] > 0
 
-    candidate = next(item for item in report["calibration_candidates"] if item["family"] == "position_sizing_cap_release")
-    assert candidate["calibration_state"] == "approval_required"
-    assert candidate["human_approval_required"] is True
+    candidate = next(item for item in report["calibration_candidates"] if item["family"] == "position_sizing_dynamic_formula")
+    assert candidate["calibration_state"] == "hold"
     assert candidate["allowed_runtime_apply"] is False
+    assert candidate["human_approval_required"] is False
 
 
-def test_position_sizing_dynamic_formula_enters_report_only_chain():
+def test_position_sizing_dynamic_formula_enters_candidate_grid_chain():
     pipeline_rows = []
     for record_id in range(1, 36):
         pipeline_rows.append(
@@ -2416,8 +2422,8 @@ def test_position_sizing_dynamic_formula_enters_report_only_chain():
                     "price_band": "10000_30000",
                     "recent_loss_bucket": "none",
                     "portfolio_exposure_bucket": "low",
-                    "baseline_qty": "3",
-                    "candidate_qty": "2",
+                    "target_budget": "500000.0",
+                    "resolved_price": "10000.0",
                     "actual_order_submitted": "true",
                 },
             }
@@ -2442,28 +2448,30 @@ def test_position_sizing_dynamic_formula_enters_report_only_chain():
     ]
 
     report = report_mod.build_daily_threshold_cycle_report(
-        "2026-05-14",
+        "2026-06-10",
         pipeline_loader=lambda target_date: pipeline_rows,
         completed_rows_loader=lambda start_date, end_date: completed_rows,
         skip_completed_rows=False,
     )
 
     family = report["threshold_snapshot"]["position_sizing_dynamic_formula"]
-    assert family["apply_mode"] == "report_only_design"
+    assert family["apply_mode"] == "candidate_grid_comparison"
     assert family["apply_ready"] is True
     assert family["sample"]["real_completed_valid"] == 35
     assert family["sample"]["source_quality_passed"] is True
     assert family["sample"]["notional_weighted_ev_pct"] is not None
-    assert family["sample"]["qty_source_counts"]["sim_virtual_budget_dynamic_formula"] == 1
+    assert len(family["candidate_grid"]) == 7
+    baseline = family["candidate_grid"][0]
+    assert baseline["formula_candidate_id"] == "linear_10_30_current"
+    assert baseline["real_sample_count"] > 0
+    assert baseline["source_quality_blocked"] is False
 
     candidate = next(
         item for item in report["calibration_candidates"] if item["family"] == "position_sizing_dynamic_formula"
     )
     assert candidate["calibration_state"] == "hold"
-    assert candidate["apply_mode"] == "report_only_calibration"
     assert candidate["allowed_runtime_apply"] is False
-    assert candidate["human_approval_required"] is True
-    assert candidate["target_env_keys"] == []
+    assert candidate["human_approval_required"] is False
 
 
 def test_position_sizing_dynamic_formula_does_not_use_sim_as_real_floor():
@@ -2489,7 +2497,7 @@ def test_position_sizing_dynamic_formula_does_not_use_sim_as_real_floor():
     ]
 
     report = report_mod.build_daily_threshold_cycle_report(
-        "2026-05-14",
+        "2026-06-10",
         pipeline_loader=lambda target_date: pipeline_rows,
         completed_rows_loader=lambda start_date, end_date: [],
         skip_completed_rows=False,
@@ -2499,57 +2507,64 @@ def test_position_sizing_dynamic_formula_does_not_use_sim_as_real_floor():
     assert family["sample"]["real_completed_valid"] == 0
     assert family["sample"]["sim_probe_sizing_event_count"] == 40
     assert family["apply_ready"] is False
+    assert len(family["candidate_grid"]) == 7
+    for candidate_entry in family["candidate_grid"]:
+        assert candidate_entry["real_sample_count"] == 0
+        assert candidate_entry["sim_probe_sample_count"] >= 0
+        assert candidate_entry["sim_probe_actual_order_submitted_false_count"] >= 0
 
     candidate = next(
         item for item in report["calibration_candidates"] if item["family"] == "position_sizing_dynamic_formula"
     )
     assert candidate["calibration_state"] == "hold_sample"
-    assert candidate["sample_floor_status"] == "hold_sample"
     assert candidate["allowed_runtime_apply"] is False
 
 
-def test_position_sizing_cap_release_uses_tradeoff_not_all_metric_gates():
+def test_position_sizing_dynamic_formula_candidate_grid_excludes_source_quality_blocked():
     pipeline_rows = []
-    for record_id in range(1, 16):
+    for record_id in range(1, 36):
         pipeline_rows.append(
             {
-                "stage": "initial_entry_qty_cap_applied",
+                "stage": "budget_pass",
                 "record_id": record_id,
-                "fields": {"applied": "True", "original_qty": "3", "scaled_qty": "1"},
-            }
-        )
-    for record_id in range(1, 25):
-        pipeline_rows.append({"stage": "order_bundle_submitted", "record_id": record_id, "fields": {}})
-    for record_id in range(1, 19):
-        pipeline_rows.append({"stage": "full_fill", "record_id": record_id, "fields": {}})
-    for record_id in range(19, 25):
-        pipeline_rows.append({"stage": "partial_fill", "record_id": record_id, "fields": {}})
-    for record_id in range(1, 13):
-        pipeline_rows.append(
-            {
-                "stage": "sell_completed",
-                "record_id": record_id,
-                "fields": {"exit_rule": "scalp_soft_stop_pct", "profit_rate": "-0.10"},
+                "fields": {
+                    "score": "75",
+                    "strategy": "SCALPING",
+                    "volatility_bucket": "mid",
+                    "liquidity_value": "500000000",
+                    "spread_bps": "25.0",
+                    "price_band": "5000_15000",
+                    "recent_loss_bucket": "none",
+                    "portfolio_exposure_bucket": "low",
+                    "target_budget": "300000.0",
+                    "resolved_price": "8000.0",
+                    "actual_order_submitted": "true",
+                },
             }
         )
 
-    completed_rows = [{"profit_rate": 0.7, "strategy": "SCALPING"} for _ in range(16)] + [
-        {"profit_rate": -0.1, "strategy": "SCALPING"} for _ in range(16)
+    completed_rows = [{"profit_rate": 0.7, "strategy": "SCALPING", "buy_price": 8000, "buy_qty": 5} for _ in range(16)] + [
+        {"profit_rate": -0.1, "strategy": "SCALPING", "buy_price": 8000, "buy_qty": 4} for _ in range(16)
     ]
 
     report = report_mod.build_daily_threshold_cycle_report(
-        "2026-05-06",
+        "2026-06-10",
         pipeline_loader=lambda target_date: pipeline_rows,
         completed_rows_loader=lambda start_date, end_date: completed_rows,
         skip_completed_rows=False,
     )
 
-    family = report["threshold_snapshot"]["position_sizing_cap_release"]
-    assert family["sample"]["full_fill_rate"] < 0.80
-    assert family["sample"]["soft_stop_rate"] > 0.35
-    assert family["sample"]["normal_completed_summary"]["win_rate"] < 0.52
+    family = report["threshold_snapshot"]["position_sizing_dynamic_formula"]
     assert family["apply_ready"] is True
-    assert family["sample"]["tradeoff_score"] >= 0.70
+    candidate_grid = family["candidate_grid"]
+    assert len(candidate_grid) == 7
+    for candidate_entry in candidate_grid:
+        assert "formula_candidate_id" in candidate_entry
+        assert "real_sample_count" in candidate_entry
+        assert "sim_probe_sample_count" in candidate_entry
+        assert candidate_entry["sim_probe_actual_order_submitted_false_count"] >= 0
+    blocked = [c for c in candidate_grid if c.get("source_quality_blocked")]
+    assert len(blocked) == 0
 
 
 def test_build_daily_threshold_cycle_report_keeps_unready_family_observe_only():
@@ -2905,7 +2920,7 @@ def test_window_policy_audit_uses_registered_denominators_for_position_sizing():
                 "source_sample_count": 0,
                 "sample_floor": 30,
                 "calibration_state": "hold_sample",
-                "apply_mode": "report_only_calibration",
+                "apply_mode": "candidate_grid_comparison",
                 "window_policy": {
                     "primary": "rolling_10d",
                     "secondary": ["daily", "cumulative_since_2026-04-21"],

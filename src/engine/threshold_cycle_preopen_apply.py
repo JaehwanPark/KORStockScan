@@ -99,7 +99,6 @@ TARGET_ENV_VALUE_KEYS = {
     "AI_SCORE65_74_RECOVERY_PROBE_CALIBRATION_STATE": "calibration_state",
     "AI_WAIT6579_PROBE_CANARY_MAX_BUDGET_KRW": "max_budget_krw",
     "AI_WAIT6579_PROBE_CANARY_MAX_QTY": "max_qty",
-    "SCALPING_SCALE_IN_EFFECTIVE_QTY_CAP": "effective_qty_cap",
     "SCALPING_ENABLE_PYRAMID": "scalping_enable_pyramid",
     "REVERSAL_ADD_MIN_AI_SCORE": "reversal_add_min_ai_score",
     "REVERSAL_ADD_MIN_BUY_PRESSURE": "reversal_add_min_buy_pressure",

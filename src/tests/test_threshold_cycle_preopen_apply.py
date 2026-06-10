@@ -3123,7 +3123,6 @@ def test_runtime_apply_bridge_scale_live_auto_writes_tighten_env_without_guard_b
                         "lifecycle_bucket_discovery_ai_review_status": "parsed",
                         "auto_promotion_contract": {"tier2_status": "parsed", "tier2_policy": "fail_closed"},
                         "target_env_keys": [
-                            "SCALPING_SCALE_IN_EFFECTIVE_QTY_CAP",
                             "SCALPING_ENABLE_PYRAMID",
                             "REVERSAL_ADD_MIN_AI_SCORE",
                             "REVERSAL_ADD_MIN_BUY_PRESSURE",
@@ -3161,7 +3160,6 @@ def test_runtime_apply_bridge_scale_live_auto_writes_tighten_env_without_guard_b
 
     env = manifest["runtime_env_overrides"]
     assert manifest["runtime_change"] is True
-    assert env["KORSTOCKSCAN_SCALPING_SCALE_IN_EFFECTIVE_QTY_CAP"] == "1"
     assert env["KORSTOCKSCAN_SCALPING_ENABLE_PYRAMID"] == "false"
     assert env["KORSTOCKSCAN_REVERSAL_ADD_MIN_AI_SCORE"] == "65"
     assert env["KORSTOCKSCAN_REVERSAL_ADD_MIN_BUY_PRESSURE"] == "60"

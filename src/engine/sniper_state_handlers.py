@@ -242,7 +242,7 @@ _LDM_HYPOTHESIS_FORBIDDEN_USES = {
     "threshold_apply",
     "provider_route_change",
     "bot_restart",
-    "position_cap_release",
+    "sizing_formula_runtime_apply_without_guard",
     "broker_order",
     "hard_safety_bypass",
 }
@@ -12362,35 +12362,6 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             pop_fields=['wait6579_probe_canary_armed', 'wait6579_probe_canary_source', 'wait6579_probe_canary_score'],
         )
 
-    if strategy == "SCALPING" and bool(_rule("SCALPING_INITIAL_ENTRY_QTY_CAP_ENABLED", False)):
-        initial_entry_qty_cap = int(_rule("SCALPING_INITIAL_ENTRY_MAX_QTY", 0) or 0)
-        if initial_entry_qty_cap <= 0:
-            _log_entry_pipeline(
-                stock, code, "initial_entry_qty_cap_skipped", enabled=True, cap_qty=0,
-                original_qty=requested_qty, scaled_qty=requested_qty, applied=False,
-                entry_mode=entry_mode, legs=len(planned_orders),
-            )
-        else:
-            adjusted_orders, original_qty, scaled_qty, applied = _apply_initial_entry_qty_cap(
-                planned_orders,
-                max_total_qty=initial_entry_qty_cap,
-            )
-            if adjusted_orders:
-                planned_orders = adjusted_orders
-                latency_gate["orders"] = planned_orders
-            if scaled_qty > 0:
-                requested_qty = scaled_qty
-            _log_entry_pipeline(
-                stock, code, "initial_entry_qty_cap_applied", enabled=True, cap_qty=initial_entry_qty_cap,
-                original_qty=original_qty, scaled_qty=scaled_qty, applied=bool(applied),
-                entry_mode=entry_mode, legs=len(planned_orders),
-            )
-            if applied:
-                log_info(
-                    f"[INITIAL_ENTRY_QTY_CAP] {stock.get('name')}({code}) "
-                    f"qty={original_qty}->{scaled_qty} cap={initial_entry_qty_cap} entry_mode={entry_mode}"
-                )
-
     planned_orders, ai_price_canary_touched = _apply_entry_ai_price_canary(
         stock=stock,
         code=code,
@@ -16172,7 +16143,7 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                         runtime_effect=False,
                         forbidden_uses=(
                             "runtime_threshold_apply/provider_route_change/bot_restart/"
-                            "position_sizing_cap_release"
+                            "sizing_formula_runtime_apply_without_guard"
                         ),
                         actual_order_submitted=True,
                         broker_order_forbidden=False,
@@ -17196,6 +17167,18 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
     would_qty = int(qty_details.get("would_qty", template_qty) or 0)
     effective_qty = int(qty_details.get("effective_qty", qty) or 0)
     qty_reason = qty_details.get("qty_reason", "")
+    scale_in_qty_budget_fields = {
+        key: qty_details.get(key)
+        for key in (
+            "scale_in_budget_ratio",
+            "scale_in_target_budget",
+            "scale_in_safe_budget",
+            "scale_in_budget_qty",
+            "scale_in_min_one_share_floor_enabled",
+            "scale_in_min_one_share_floor_applied",
+        )
+        if key in qty_details
+    }
     if qty <= 0:
         _log_holding_pipeline(
             stock,
@@ -17213,6 +17196,7 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
             effective_qty=effective_qty,
             cap_qty=cap_qty,
             floor_applied=floor_applied,
+            **scale_in_qty_budget_fields,
             **sim_budget_fields,
             **swing_scale_micro_fields,
         )
@@ -17256,6 +17240,7 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
         would_qty=would_qty,
         effective_qty=effective_qty,
         qty_reason=qty_reason,
+        **scale_in_qty_budget_fields,
         **sim_budget_fields,
         **swing_scale_micro_fields,
     )
@@ -17309,6 +17294,7 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
                     cap_qty=cap_qty,
                     floor_applied=floor_applied,
                     qty_reason=qty_reason,
+                    **scale_in_qty_budget_fields,
                     **sim_budget_fields,
                     **_scalp_sim_candidate_window_context_fields(stock),
                 ),
@@ -17367,6 +17353,7 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
                 cap_qty=cap_qty,
                 floor_applied=floor_applied,
                 qty_reason=qty_reason,
+                **scale_in_qty_budget_fields,
                 **sim_budget_fields,
                 runtime_effect="simulated_holding_only",
                 **_scalp_sim_candidate_window_context_fields(stock),
@@ -17443,6 +17430,7 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
             cap_qty=cap_qty,
             floor_applied=floor_applied,
             qty_reason=qty_reason,
+            **scale_in_qty_budget_fields,
             **sim_budget_fields,
             **swing_scale_micro_fields,
         )
@@ -17476,6 +17464,7 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
                     cap_qty=cap_qty,
                     floor_applied=floor_applied,
                     qty_reason=qty_reason,
+                    **scale_in_qty_budget_fields,
                     **sim_budget_fields,
                     **swing_scale_micro_fields,
                 ),

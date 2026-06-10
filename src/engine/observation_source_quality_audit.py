@@ -809,7 +809,7 @@ def _normalized_fields_for_contract(stage: str, fields: dict[str, Any]) -> dict[
         normalized.setdefault("runtime_effect", False)
         normalized.setdefault(
             "forbidden_uses",
-            "runtime_threshold_apply/provider_route_change/bot_restart/position_sizing_cap_release",
+            "runtime_threshold_apply/provider_route_change/bot_restart",
         )
         normalized.setdefault("actual_order_submitted", True)
         normalized.setdefault("broker_order_forbidden", False)

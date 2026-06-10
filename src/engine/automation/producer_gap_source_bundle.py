@@ -28,7 +28,6 @@ FORBIDDEN_USES = [
     "threshold_mutation",
     "provider_route_change",
     "bot_restart",
-    "position_sizing_cap_release",
 ]
 
 SECTION_SPECS: dict[str, dict[str, Any]] = {

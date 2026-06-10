@@ -295,9 +295,8 @@ def test_scalping_initial_entry_qty_config_uses_percent_budget_without_one_share
     assert CONFIG.INVEST_RATIO_SCALPING_MIN == 0.10
     assert CONFIG.INVEST_RATIO_SCALPING_MAX == 0.30
     assert CONFIG.SCALPING_MAX_BUY_BUDGET_KRW == 0
-    assert CONFIG.SCALPING_INITIAL_ENTRY_QTY_CAP_ENABLED is False
-    assert CONFIG.SCALPING_INITIAL_ENTRY_MAX_QTY == 0
     assert CONFIG.SCALPING_MIN_ONE_SHARE_FLOOR_ENABLED is True
+    assert CONFIG.SCALPING_SCALE_IN_MIN_ONE_SHARE_FLOOR_ENABLED is True
     assert CONFIG.SCALPING_PYRAMID_ZERO_QTY_STAGE1_ENABLED is True
 
 
@@ -739,7 +738,7 @@ def test_execute_scalping_pyramid_blocks_wide_spread_price_guard(monkeypatch):
     assert stock.get("pending_add_order") is None
 
 
-def test_execute_scalping_pyramid_sends_resolved_best_bid_with_one_share_cap(monkeypatch):
+def test_execute_scalping_pyramid_sends_resolved_best_bid_with_percent_budget_qty(monkeypatch):
     rules = replace(CONFIG, MAX_POSITION_PCT=1.0)
     monkeypatch.setattr(state_handlers, "TRADING_RULES", rules)
     monkeypatch.setattr(scale_in, "TRADING_RULES", rules)
@@ -794,7 +793,7 @@ def test_execute_scalping_pyramid_sends_resolved_best_bid_with_one_share_cap(mon
         admin_id=1,
     )
 
-    assert sent_orders == [("123456", 1, 9_990, "00")]
+    assert sent_orders == [("123456", 237, 9_990, "00")]
     assert history[0]["request_price"] == 9_990
     assert any(stage == "scale_in_price_resolved" for stage, _ in logs)
     assert any(stage == "scale_in_price_p2_observe" for stage, _ in logs)
@@ -1039,7 +1038,7 @@ def test_execute_scalping_reversal_add_uses_resolved_price_not_curr(monkeypatch)
         admin_id=1,
     )
 
-    assert sent_orders == [("123456", 1, 9_980, "00")]
+    assert sent_orders == [("123456", 95, 9_980, "00")]
 
 
 def test_dynamic_scale_in_qty_blocks_weak_pyramid_evidence(monkeypatch):
@@ -1137,7 +1136,7 @@ def test_p2_observe_skip_does_not_change_live_order(monkeypatch):
         admin_id=1,
     )
 
-    assert sent_orders == [("123456", 1, 9_990, "00")]
+    assert sent_orders == [("123456", 232, 9_990, "00")]
     p2_logs = [fields for stage, fields in logs if stage == "scale_in_price_p2_observe"]
     assert p2_logs
     assert p2_logs[0]["live_runtime_effect"] is False
@@ -2094,7 +2093,6 @@ def test_watching_state_rejects_deprecated_fallback_bundle(monkeypatch):
     state_handlers.TRADING_RULES = replace(
         CONFIG,
         SCALE_IN_REQUIRE_HISTORY_TABLE=False,
-        SCALPING_INITIAL_ENTRY_QTY_CAP_ENABLED=False,
     )
     state_handlers.COOLDOWNS = {}
     state_handlers.ALERTED_STOCKS = set()
@@ -2159,7 +2157,6 @@ def test_watching_state_logs_latency_entry_price_guard(monkeypatch):
     state_handlers.TRADING_RULES = replace(
         CONFIG,
         SCALE_IN_REQUIRE_HISTORY_TABLE=False,
-        SCALPING_INITIAL_ENTRY_QTY_CAP_ENABLED=False,
     )
     state_handlers.COOLDOWNS = {}
     state_handlers.ALERTED_STOCKS = set()
@@ -2314,7 +2311,6 @@ def test_watching_state_blocks_deep_below_bid_pre_submit_price(monkeypatch):
     state_handlers.TRADING_RULES = replace(
         CONFIG,
         SCALE_IN_REQUIRE_HISTORY_TABLE=False,
-        SCALPING_INITIAL_ENTRY_QTY_CAP_ENABLED=False,
         SCALPING_PRE_SUBMIT_PRICE_GUARD_ENABLED=True,
         SCALPING_PRE_SUBMIT_MAX_BELOW_BID_BPS=80,
     )

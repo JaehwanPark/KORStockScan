@@ -572,7 +572,6 @@ CALIBRATION_FAMILY_METADATA = {
             "SCALPING_PYRAMID_MIN_AI_SCORE",
             "SCALPING_PYRAMID_MIN_BUY_PRESSURE",
             "SCALPING_PYRAMID_MIN_TICK_ACCEL",
-            "SCALPING_SCALE_IN_EFFECTIVE_QTY_CAP",
         ],
         "primary_key": "pyramid_max_micro_vwap_bps",
         "bounds": {
@@ -581,7 +580,6 @@ CALIBRATION_FAMILY_METADATA = {
             "pyramid_min_ai_score": {"min": 65, "max": 80, "max_step_per_day": 2},
             "pyramid_min_buy_pressure": {"min": 55.0, "max": 75.0, "max_step_per_day": 2.5},
             "pyramid_min_tick_accel": {"min": 0.3, "max": 1.0, "max_step_per_day": 0.1},
-            "effective_qty_cap": {"min": 0, "max": 0, "max_step_per_day": 0},
         },
         "sample_floor": 20,
         "sample_window": "rolling_10d_or_cumulative_sparse",
@@ -593,32 +591,8 @@ CALIBRATION_FAMILY_METADATA = {
         },
         "allowed_runtime_apply": False,
     },
-    "position_sizing_cap_release": {
-        "priority": 41,
-        "source_family": "position_sizing_cap_release",
-        "target_env_keys": [
-            "SCALPING_INITIAL_ENTRY_QTY_CAP_ENABLED",
-            "SCALPING_INITIAL_ENTRY_MAX_QTY",
-            "SCALPING_MIN_ONE_SHARE_FLOOR_ENABLED",
-            "AI_WAIT6579_PROBE_CANARY_MAX_QTY",
-            "SCALPING_SCALE_IN_EFFECTIVE_QTY_CAP",
-        ],
-        "primary_key": "initial_entry_qty_cap_enabled",
-        "bounds": {},
-        "sample_floor": 30,
-        "sample_window": "rolling_10d_with_daily_guard",
-        "window_policy": {
-            "primary": "rolling_10d",
-            "secondary": ["daily", "cumulative_since_2026-04-21"],
-            "use": "1주 cap 해제는 완벽한 spot이 아니라 전체 EV가 충분하고 safety floor를 통과한 efficient trade-off 지점에서 사용자 승인 요청으로 승격한다.",
-            "daily_only_allowed": False,
-        },
-        "sample_denominator_keys": ["normal_completed_valid"],
-        "allowed_runtime_apply": False,
-        "human_approval_required": True,
-    },
     "position_sizing_dynamic_formula": {
-        "priority": 42,
+        "priority": 41,
         "source_family": "position_sizing_dynamic_formula",
         "target_env_keys": [],
         "primary_key": "formula_version",
@@ -628,12 +602,12 @@ CALIBRATION_FAMILY_METADATA = {
         "window_policy": {
             "primary": "rolling_10d",
             "secondary": ["daily", "cumulative_since_2026-04-21", "sim_probe_counterfactual_diagnostic"],
-            "use": "동적수량 산식은 score/strategy/volatility/liquidity/spread/price band/recent loss/portfolio exposure 입력 품질과 real-only EV를 먼저 report-only로 검증한다.",
+            "use": "position_sizing_dynamic_formula는 신규 BUY와 scale-in에 주문가능금액 10~30% 산식 + 최소 1주 floor를 적용하는 단일 owner이며, 후보 산식 grid를 생성해 postclose 비교 후 PREOPEN bounded candidate를 만든다.",
             "daily_only_allowed": False,
         },
         "sample_denominator_keys": ["real_completed_valid"],
         "allowed_runtime_apply": False,
-        "human_approval_required": True,
+        "human_approval_required": False,
     },
 }
 
@@ -3655,126 +3629,6 @@ def _score_between(value: float | None, floor: float, target: float) -> float:
     return round(_clamp((value - floor) / (target - floor), 0.0, 1.0), 4)
 
 
-def _build_position_sizing_cap_release_family(events: list[dict], completed_rows: list[dict]) -> dict:
-    cap_events = _events_for_stage(events, "initial_entry_qty_cap_applied")
-    cap_reduced = [event for event in cap_events if _field_bool(_event_fields(event).get("applied"))]
-    wait_probe_cap_events = _events_for_stage(events, "wait6579_probe_canary_applied")
-    scale_in_resolved = _events_for_stage(events, "scale_in_price_resolved")
-    scale_in_executed = _events_for_stage(events, "scale_in_executed")
-    submitted = _events_for_stage(events, "order_bundle_submitted")
-    full_fill = _events_for_stage(events, "full_fill")
-    partial_fill = _events_for_stage(events, "partial_fill")
-    order_failed = _events_for_stage(events, "order_bundle_failed") + _events_for_stage(events, "buy_order_failed")
-    soft_stop = _events_for_stage(events, "sell_completed")
-    soft_stop = [
-        event
-        for event in soft_stop
-        if "soft" in str(_event_fields(event).get("exit_rule") or _event_fields(event).get("sell_reason_type") or "").lower()
-    ]
-
-    normal_only_rows = [row for row in _valid_profit_rows(completed_rows) if _is_normal_only_row(row)]
-    initial_only_rows = [row for row in normal_only_rows if _is_initial_only_row(row)]
-    normal_summary = _completed_profit_summary(normal_only_rows)
-    initial_summary = _completed_profit_summary(initial_only_rows)
-
-    completed_sample = int(normal_summary.get("sample") or 0)
-    avg_profit = _safe_float(normal_summary.get("avg_profit_rate"), None)
-    win_rate = _safe_float(normal_summary.get("win_rate"), None)
-    downside_p10 = _safe_float(normal_summary.get("downside_p10_profit_rate"), None)
-    fill_total = len(full_fill) + len(partial_fill)
-    full_fill_rate = (len(full_fill) / fill_total) if fill_total > 0 else None
-    submitted_count = len(submitted)
-    order_failed_rate = (len(order_failed) / submitted_count) if submitted_count > 0 else 0.0
-    soft_stop_rate = (len(soft_stop) / completed_sample) if completed_sample > 0 else None
-
-    safety_floor = {
-        "normal_completed_sample": completed_sample >= 30,
-        "cap_reduced_sample": len(cap_reduced) >= 5,
-        "submitted_sample": submitted_count >= 15,
-        "overall_ev_floor": avg_profit is not None and avg_profit >= 0.10,
-        "severe_downside_floor": downside_p10 is not None and downside_p10 >= -2.00,
-        "order_failure_floor": order_failed_rate <= 0.10,
-    }
-    tradeoff_components = {
-        "overall_ev": _score_between(avg_profit, 0.10, 0.35),
-        "win_rate": _score_between(win_rate, 0.45, 0.55),
-        "full_fill_quality": _score_between(full_fill_rate, 0.60, 0.85),
-        "downside_tail": _score_between(downside_p10, -2.00, -1.20),
-        "order_failure": _score_between(0.10 - order_failed_rate, 0.0, 0.10),
-        "soft_stop_tail": _score_between(None if soft_stop_rate is None else 0.45 - soft_stop_rate, 0.0, 0.45),
-        "cap_opportunity": _score_between(float(len(cap_reduced)), 5.0, 15.0),
-    }
-    tradeoff_score = round(
-        (tradeoff_components["overall_ev"] * 0.40)
-        + (tradeoff_components["win_rate"] * 0.10)
-        + (tradeoff_components["full_fill_quality"] * 0.10)
-        + (tradeoff_components["downside_tail"] * 0.15)
-        + (tradeoff_components["order_failure"] * 0.10)
-        + (tradeoff_components["soft_stop_tail"] * 0.10)
-        + (tradeoff_components["cap_opportunity"] * 0.05),
-        4,
-    )
-    approval_ready = all(safety_floor.values()) and tradeoff_score >= 0.70
-    current = {
-        "initial_entry_qty_cap_enabled": bool(
-            getattr(TRADING_RULES, "SCALPING_INITIAL_ENTRY_QTY_CAP_ENABLED", True)
-        ),
-        "initial_entry_max_qty": int(getattr(TRADING_RULES, "SCALPING_INITIAL_ENTRY_MAX_QTY", 0)),
-        "min_one_share_floor_enabled": bool(
-            getattr(TRADING_RULES, "SCALPING_MIN_ONE_SHARE_FLOOR_ENABLED", True)
-        ),
-        "wait6579_probe_max_qty": int(getattr(TRADING_RULES, "AI_WAIT6579_PROBE_CANARY_MAX_QTY", 1)),
-        "scale_in_effective_qty_cap": int(getattr(TRADING_RULES, "SCALPING_SCALE_IN_EFFECTIVE_QTY_CAP", 1)),
-    }
-    recommended = dict(current)
-    if approval_ready:
-        recommended.update(
-            {
-                "initial_entry_qty_cap_enabled": False,
-                "initial_entry_max_qty": 0,
-                "wait6579_probe_max_qty": 0,
-                "scale_in_effective_qty_cap": 0,
-            }
-        )
-    return {
-        "family": "position_sizing_cap_release",
-        "stage": "position_sizing",
-        "sample": {
-            "normal_completed_valid": completed_sample,
-            "initial_only_completed_valid": int(initial_summary.get("sample") or 0),
-            "initial_entry_cap_events": len(cap_events),
-            "initial_entry_cap_reduced": len(cap_reduced),
-            "wait6579_probe_cap_events": len(wait_probe_cap_events),
-            "scale_in_resolved": len(scale_in_resolved),
-            "scale_in_executed": len(scale_in_executed),
-            "submitted": submitted_count,
-            "full_fill": len(full_fill),
-            "partial_fill": len(partial_fill),
-            "order_failed": len(order_failed),
-            "soft_stop_completed": len(soft_stop),
-            "full_fill_rate": round(full_fill_rate, 4) if full_fill_rate is not None else None,
-            "order_failed_rate": round(order_failed_rate, 4),
-            "soft_stop_rate": round(soft_stop_rate, 4) if soft_stop_rate is not None else None,
-            "normal_completed_summary": normal_summary,
-            "initial_only_completed_summary": initial_summary,
-            "safety_floor": safety_floor,
-            "tradeoff_components": tradeoff_components,
-            "tradeoff_score": tradeoff_score,
-            "tradeoff_score_required": 0.70,
-        },
-        "apply_ready": approval_ready,
-        "current": current,
-        "recommended": recommended,
-        "apply_mode": "manual_approval_required" if approval_ready else "observe_only",
-        "notes": [
-            "1주 cap 해제는 자동 runtime apply 대상이 아니라 사용자 승인 요청 대상이다.",
-            "완벽한 spot을 기다리지 않고 overall EV와 체결품질, 손실 tail, cap opportunity를 가중한 efficient trade-off score로 판단한다.",
-            "표본, overall EV floor, severe downside, 주문 실패율만 safety floor로 hard하게 본다.",
-            "승인 전에는 신규 BUY, wait6579 probe, REVERSAL_ADD/PYRAMID 모두 1주 cap을 유지한다.",
-        ],
-    }
-
-
 def _notional_weighted_ev_pct(rows: list[dict]) -> float | None:
     weighted_sum = 0.0
     total_notional = 0.0
@@ -3822,13 +3676,380 @@ def _numeric_event_values(events: list[dict], *field_names: str) -> list[float]:
     return values
 
 
+def _compute_candidate_qty(
+    score: float,
+    target_budget: float,
+    price: float,
+    spread_bps: float | None,
+    liquidity_bucket: str | None,
+    recent_loss_bucket: str | None,
+    portfolio_exposure_bucket: str | None,
+    formula_id: str,
+    min_ratio: float = 0.10,
+    max_ratio: float = 0.30,
+) -> dict:
+    score = max(0.0, min(100.0, score))
+    if formula_id == "linear_10_30_current":
+        ratio = min_ratio + (score / 100.0) * (max_ratio - min_ratio)
+    elif formula_id == "linear_10_20_defensive":
+        ratio = 0.10 + (score / 100.0) * (0.20 - 0.10)
+    elif formula_id == "linear_15_30_aggressive":
+        ratio = 0.15 + (score / 100.0) * (0.30 - 0.15)
+    elif formula_id == "spread_penalized_10_30":
+        base_ratio = min_ratio + (score / 100.0) * (max_ratio - min_ratio)
+        spread_penalty = min(0.5, max(0.0, (float(spread_bps or 0) - 20.0) / 200.0))
+        ratio = base_ratio * (1.0 - spread_penalty * 0.3)
+    elif formula_id == "liquidity_adjusted_10_30":
+        base_ratio = min_ratio + (score / 100.0) * (max_ratio - min_ratio)
+        liq_mult = 1.0
+        if liquidity_bucket and "low" in str(liquidity_bucket).lower():
+            liq_mult = 0.7
+        elif liquidity_bucket and "high" in str(liquidity_bucket).lower():
+            liq_mult = 1.2
+        ratio = base_ratio * liq_mult
+    elif formula_id == "recent_loss_capped_10_20":
+        if recent_loss_bucket and "loss" in str(recent_loss_bucket).lower():
+            ratio = 0.10 + (score / 100.0) * (0.20 - 0.10)
+        else:
+            ratio = min_ratio + (score / 100.0) * (max_ratio - min_ratio)
+    elif formula_id == "portfolio_exposure_capped_10_30":
+        base_ratio = min_ratio + (score / 100.0) * (max_ratio - min_ratio)
+        exposure_penalty = 1.0
+        if portfolio_exposure_bucket and "high" in str(portfolio_exposure_bucket).lower():
+            exposure_penalty = 0.7
+        ratio = base_ratio * exposure_penalty
+    else:
+        ratio = min_ratio + (score / 100.0) * (max_ratio - min_ratio)
+    ratio = max(min_ratio, min(max_ratio, ratio))
+    candidate_budget = max(float(target_budget) * ratio, 0.0)
+    candidate_qty = int(candidate_budget // price) if price > 0 else 0
+    min_one_share_floor = candidate_qty <= 0 and float(target_budget) >= price
+    if min_one_share_floor:
+        candidate_qty = 1
+    return {
+        "ratio": round(ratio, 6),
+        "candidate_budget": int(candidate_budget),
+        "candidate_qty": candidate_qty,
+        "min_one_share_floor_applied": min_one_share_floor,
+    }
+
+
+_POSITION_SIZING_FORMULA_CANDIDATES = [
+    {
+        "formula_candidate_id": "linear_10_30_current",
+        "formula_version": "linear_10_30_current",
+        "description": "score-linear 10-30% budget with min 1-share floor",
+        "type": "baseline",
+    },
+    {
+        "formula_candidate_id": "linear_10_20_defensive",
+        "formula_version": "linear_10_20_defensive",
+        "description": "defensive 10-20% budget range, score-linear",
+        "type": "variant",
+    },
+    {
+        "formula_candidate_id": "linear_15_30_aggressive",
+        "formula_version": "linear_15_30_aggressive",
+        "description": "aggressive 15-30% budget range, score-linear",
+        "type": "variant",
+    },
+    {
+        "formula_candidate_id": "spread_penalized_10_30",
+        "formula_version": "spread_penalized_10_30",
+        "description": "10-30% base with spread penalty above 20bps",
+        "type": "variant",
+    },
+    {
+        "formula_candidate_id": "liquidity_adjusted_10_30",
+        "formula_version": "liquidity_adjusted_10_30",
+        "description": "10-30% base with liquidity bucket multiplier",
+        "type": "variant",
+    },
+    {
+        "formula_candidate_id": "recent_loss_capped_10_20",
+        "formula_version": "recent_loss_capped_10_20",
+        "description": "10-20% when recent loss detected, else 10-30%",
+        "type": "variant",
+    },
+    {
+        "formula_candidate_id": "portfolio_exposure_capped_10_30",
+        "formula_version": "portfolio_exposure_capped_10_30",
+        "description": "10-30% base with high-exposure penalty",
+        "type": "variant",
+    },
+]
+
+
+def _build_candidate_metrics(
+    candidate: dict,
+    sizing_events: list[dict],
+    completed_rows: list[dict],
+    real_order_rows: list[dict],
+    sim_probe_rows: list[dict],
+) -> dict:
+    fid = candidate["formula_candidate_id"]
+    candidate_events: list[dict] = []
+    candidate_qty_values: list[float] = []
+    candidate_real_rows: list[dict] = []
+    candidate_sim_rows: list[dict] = []
+    min_one_share_count = 0
+    total_budget_used = 0.0
+    total_target_budget = 0.0
+    full_fill_count = 0
+    partial_fill_count = 0
+    cancel_count = 0
+    late_fill_count = 0
+    order_fail_count = 0
+    total_events = 0
+    sim_broker_forbidden_true_count = 0
+    sim_broker_forbidden_false_count = 0
+    sim_broker_forbidden_missing_count = 0
+
+    for event in sizing_events:
+        fields = dict(_event_fields(event))
+        score = _safe_float(
+            fields.get("score") or fields.get("ai_score") or fields.get("current_ai_score"),
+            50.0,
+        ) or 50.0
+        deposit = _safe_float(
+            fields.get("deposit")
+            or fields.get("orderable_amount")
+            or fields.get("orderable_cash")
+            or fields.get("virtual_budget_krw"),
+            0.0,
+        ) or 0.0
+        budget_from_event = _safe_float(
+            fields.get("target_budget")
+            or fields.get("safe_budget")
+            or fields.get("buy_budget")
+            or fields.get("scale_in_target_budget")
+            or fields.get("scale_in_safe_budget"),
+            0.0,
+        ) or 0.0
+        if deposit <= 0 and budget_from_event > 0:
+            current_ratio = _safe_float(
+                fields.get("budget_ratio")
+                or fields.get("scale_in_budget_ratio")
+                or fields.get("ratio")
+                or fields.get("effective_ratio"),
+                None,
+            )
+            if current_ratio and float(current_ratio) > 0:
+                deposit = budget_from_event / float(current_ratio)
+            else:
+                deposit = budget_from_event
+        target_budget = deposit if deposit > 0 else budget_from_event
+        price = _safe_float(
+            fields.get("resolved_price") or fields.get("buy_price") or fields.get("reference_price"),
+            0.0,
+        ) or 0.0
+        spread_bps = _safe_float(fields.get("spread_bps"), None)
+        liquidity_bucket = str(fields.get("liquidity_bucket") or fields.get("liquidity_value") or "")
+        recent_loss_bucket = str(fields.get("recent_loss_bucket") or fields.get("loss_bucket") or "")
+        portfolio_exposure_bucket = str(fields.get("portfolio_exposure_bucket") or fields.get("exposure_bucket") or "")
+
+        input_missing = target_budget <= 0 or price <= 0
+        if input_missing:
+            continue
+
+        result = _compute_candidate_qty(
+            score=score,
+            target_budget=target_budget,
+            price=price,
+            spread_bps=spread_bps,
+            liquidity_bucket=liquidity_bucket if liquidity_bucket else None,
+            recent_loss_bucket=recent_loss_bucket if recent_loss_bucket else None,
+            portfolio_exposure_bucket=portfolio_exposure_bucket if portfolio_exposure_bucket else None,
+            formula_id=fid,
+        )
+
+        fields["formula_version"] = fid
+        fields["formula_candidate_id"] = fid
+        fields["input_score"] = score
+        fields["input_strategy"] = str(fields.get("strategy") or fields.get("trade_type") or "")
+        fields["input_spread_bps"] = spread_bps
+        fields["input_liquidity_bucket"] = liquidity_bucket if liquidity_bucket else "unknown"
+        fields["input_recent_loss_bucket"] = recent_loss_bucket if recent_loss_bucket else "unknown"
+        fields["input_portfolio_exposure_bucket"] = portfolio_exposure_bucket if portfolio_exposure_bucket else "unknown"
+        fields["target_budget"] = int(target_budget)
+        fields["safe_budget"] = int(target_budget * 0.95)
+        fields["candidate_qty"] = result["candidate_qty"]
+        fields["effective_qty"] = result["candidate_qty"]
+        fields["min_one_share_floor_applied"] = result["min_one_share_floor_applied"]
+
+        candidate_qty_values.append(float(result["candidate_qty"]))
+        if result["min_one_share_floor_applied"]:
+            min_one_share_count += 1
+        total_events += 1
+        total_budget_used += float(result["candidate_budget"])
+        total_target_budget += float(target_budget)
+
+        is_real = str(fields.get("actual_order_submitted") or "").strip().lower() == "true"
+        is_sim = (
+            str(fields.get("actual_order_submitted") or "").strip().lower() == "false"
+            or str(fields.get("budget_authority") or "").strip() == "sim_virtual_not_real_orderable_amount"
+            or str(fields.get("qty_source") or "").strip() == "sim_virtual_budget_dynamic_formula"
+            or str(fields.get("scalp_sim_entry_qty_source") or "").strip() == "sim_virtual_budget_dynamic_formula"
+        )
+
+        event_with_candidate = dict(event)
+        event_with_candidate.update(fields)
+        candidate_events.append(event_with_candidate)
+
+        if is_real:
+            candidate_real_rows.append(event_with_candidate)
+            fill_type = str(fields.get("fill_type") or fields.get("order_status") or "").strip().lower()
+            if "full" in fill_type or fields.get("full_fill"):
+                full_fill_count += 1
+            elif "partial" in fill_type or fields.get("partial_fill"):
+                partial_fill_count += 1
+            elif "cancel" in fill_type or "cancelled" in fill_type:
+                cancel_count += 1
+            elif "late" in fill_type:
+                late_fill_count += 1
+            elif "fail" in fill_type or "reject" in fill_type:
+                order_fail_count += 1
+        elif is_sim:
+            candidate_sim_rows.append(event_with_candidate)
+            broker_forbidden = str(fields.get("broker_order_forbidden") or "").strip().lower()
+            if broker_forbidden == "true":
+                sim_broker_forbidden_true_count += 1
+            elif broker_forbidden == "false":
+                sim_broker_forbidden_false_count += 1
+            else:
+                sim_broker_forbidden_missing_count += 1
+
+    real_sample = len(candidate_real_rows)
+    sim_sample = len(candidate_sim_rows)
+    qty_avg = round(_avg(candidate_qty_values) or 0.0, 4) if candidate_qty_values else None
+    min_one_share_rate = round(min_one_share_count / total_events, 4) if total_events > 0 else None
+    cash_usage = round(total_budget_used / total_target_budget, 4) if total_target_budget > 0 else None
+
+    completed_by_code: list[dict] = [
+        row
+        for row in completed_rows
+        if _is_normal_only_row(row) and str(row.get("stock_code") or "").strip()
+    ]
+    completed_index: dict[str, list[dict]] = {}
+    for row in completed_by_code:
+        code = str(row.get("stock_code") or "").strip()
+        completed_index.setdefault(code, []).append(row)
+
+    weak_match_count = 0
+    strong_match_count = 0
+    candidate_weighted_sum = 0.0
+    candidate_total_notional = 0.0
+    strong_weighted_sum = 0.0
+    strong_total_notional = 0.0
+    for event in candidate_real_rows:
+        code = str(event.get("stock_code") or "").strip()
+        if not code:
+            continue
+        rows = completed_index.get(code)
+        if not rows:
+            continue
+        event_buy_ts = _safe_float(event.get("buy_time") or event.get("emitted_at"), None)
+        event_record_id = str(event.get("record_id") or event.get("trade_id") or event.get("order_id") or "")
+        matched = None
+        if event_record_id:
+            for row in rows:
+                row_trade_id = str(row.get("trade_id") or row.get("order_id") or row.get("record_id") or "")
+                if row_trade_id and row_trade_id == event_record_id:
+                    matched = row
+                    break
+        if matched is None and event_buy_ts is not None:
+            best_diff = float("inf")
+            for row in rows:
+                row_buy_ts = _safe_float(row.get("buy_time") or row.get("rec_date") or row.get("sell_time"), None)
+                if row_buy_ts is not None:
+                    diff = abs(float(event_buy_ts) - float(row_buy_ts))
+                    if diff < best_diff:
+                        best_diff = diff
+                        matched = row
+            if matched is not None and best_diff > 3600:
+                matched = None
+        if matched is None:
+            matched = rows[0]
+            weak_match_count += 1
+            is_weak_match = True
+        else:
+            strong_match_count += 1
+            is_weak_match = False
+        profit_rate = _safe_float(matched.get("profit_rate"), None)
+        if profit_rate is None:
+            continue
+        price = _safe_float(event.get("price") or event.get("resolved_price") or matched.get("buy_price"), None)
+        cqty = _safe_float(event.get("candidate_qty"), None)
+        if price is None or cqty is None or price <= 0 or cqty <= 0:
+            continue
+        notional = float(price) * float(cqty)
+        weighted = float(profit_rate) * notional
+        candidate_weighted_sum += weighted
+        candidate_total_notional += notional
+        if not is_weak_match:
+            strong_weighted_sum += weighted
+            strong_total_notional += notional
+
+    candidate_notional_ev = round(candidate_weighted_sum / candidate_total_notional, 4) if candidate_total_notional > 0 else None
+    strong_notional_ev = round(strong_weighted_sum / strong_total_notional, 4) if strong_total_notional > 0 else None
+
+    real_completed = [r for r in completed_rows if _is_normal_only_row(r)]
+    real_summary = _completed_profit_summary(real_completed)
+    overall_ev = _notional_weighted_ev_pct(real_completed)
+    win_rate = _safe_float(real_summary.get("win_rate"), None)
+    downside_p10 = _safe_float(real_summary.get("downside_p10_profit_rate"), None)
+    source_quality_adjusted_ev = strong_notional_ev if strong_notional_ev is not None else candidate_notional_ev
+    ev_match_total = strong_match_count + weak_match_count
+    weak_match_rate = round(weak_match_count / ev_match_total, 4) if ev_match_total > 0 else None
+    weak_match_included_in_ev = weak_match_count > 0
+
+    total_order_events = full_fill_count + partial_fill_count + cancel_count + late_fill_count + order_fail_count
+    full_fill_rate = round(full_fill_count / total_order_events, 4) if total_order_events > 0 else None
+    partial_fill_rate = round(partial_fill_count / total_order_events, 4) if total_order_events > 0 else None
+    cancel_rate = round(cancel_count / total_order_events, 4) if total_order_events > 0 else None
+    late_fill_rate = round(late_fill_count / total_order_events, 4) if total_order_events > 0 else None
+    order_failure_rate = round(order_fail_count / total_order_events, 4) if total_order_events > 0 else None
+
+    return {
+        "formula_candidate_id": fid,
+        "formula_version": fid,
+        "formula_type": candidate.get("type", "variant"),
+        "description": candidate.get("description", ""),
+        "real_sample_count": real_sample,
+        "sim_probe_sample_count": sim_sample,
+        "total_event_count": total_events,
+        "notional_weighted_ev_pct": candidate_notional_ev,
+        "real_completed_overall_ev_pct": overall_ev,
+        "source_quality_adjusted_ev_pct": source_quality_adjusted_ev,
+        "diagnostic_win_rate": win_rate,
+        "full_fill_rate": full_fill_rate,
+        "partial_fill_rate": partial_fill_rate,
+        "cancel_rate": cancel_rate,
+        "late_fill_rate": late_fill_rate,
+        "order_failure_rate": order_failure_rate,
+        "min_one_share_floor_rate": min_one_share_rate,
+        "cash_usage_pct": cash_usage,
+        "downside_p10_profit_rate": downside_p10,
+        "candidate_qty_avg": qty_avg,
+        "candidate_notional_total": round(candidate_total_notional, 2) if candidate_total_notional > 0 else 0.0,
+        "real_actual_order_submitted_count": real_sample,
+        "sim_probe_actual_order_submitted_false_count": sim_sample,
+        "sim_probe_broker_order_forbidden_true_count": sim_broker_forbidden_true_count,
+        "sim_probe_broker_order_forbidden_false_count": sim_broker_forbidden_false_count,
+        "sim_probe_broker_order_forbidden_missing_count": sim_broker_forbidden_missing_count,
+        "ev_match_strong_count": strong_match_count,
+        "ev_match_weak_count": weak_match_count,
+        "ev_weak_match_rate": weak_match_rate,
+        "ev_weak_match_included_in_notional": weak_match_included_in_ev,
+        "budget_authority": "real_orderable_amount" if real_sample > 0 else "sim_virtual_not_real_orderable_amount",
+    }
+
+
 def _build_position_sizing_dynamic_formula_family(events: list[dict], completed_rows: list[dict]) -> dict:
     sizing_stages = {
         "budget_pass",
         "blocked_zero_qty",
         "auth_zero_qty",
-        "initial_entry_qty_cap_applied",
-        "wait6579_probe_canary_applied",
         "scale_in_price_resolved",
         "scalp_sim_entry_armed",
         "scalp_sim_buy_order_assumed_filled",
@@ -3863,15 +4084,6 @@ def _build_position_sizing_dynamic_formula_family(events: list[dict], completed_
         if str(_event_fields(event).get("actual_order_submitted") or "").strip().lower() == "true"
     ]
 
-    baseline_qty_values = _numeric_event_values(sizing_events, "baseline_qty", "original_qty", "would_qty")
-    candidate_qty_values = _numeric_event_values(
-        sizing_events,
-        "candidate_qty",
-        "effective_qty",
-        "qty",
-        "real_buy_qty",
-        "requested_buy_qty",
-    )
     spread_values = _numeric_event_values(sizing_events, "spread_bps")
     liquidity_values = _numeric_event_values(sizing_events, "liquidity_value")
     score_values = _numeric_event_values(sizing_events, "score", "ai_score", "current_ai_score")
@@ -3895,16 +4107,33 @@ def _build_position_sizing_dynamic_formula_family(events: list[dict], completed_
     )
     sample_ready = real_sample >= 30 and source_quality_passed
 
+    candidate_grid = []
+    for candidate_def in _POSITION_SIZING_FORMULA_CANDIDATES:
+        metrics = _build_candidate_metrics(
+            candidate_def,
+            sizing_events,
+            completed_rows,
+            real_order_rows,
+            sim_probe_rows,
+        )
+        if source_quality_blockers:
+            metrics["source_quality_blocked"] = True
+            metrics["notional_weighted_ev_pct"] = None
+            metrics["source_quality_adjusted_ev_pct"] = None
+            metrics["diagnostic_win_rate"] = None
+        else:
+            metrics["source_quality_blocked"] = False
+        candidate_grid.append(metrics)
+
     current = {
-        "formula_version": "baseline_describe_buy_capacity",
+        "formula_version": "linear_10_30_current",
         "formula_mode": "current_runtime_formula",
         "runtime_apply_allowed": False,
     }
     recommended = {
-        "formula_version": "position_sizing_dynamic_formula:v1_report_only",
-        "formula_mode": "report_only",
+        "formula_version": "linear_10_30_current",
+        "formula_mode": "candidate_grid_comparison",
         "runtime_apply_allowed": False,
-        "approval_artifact_path": "data/threshold_cycle/approvals/position_sizing_dynamic_formula_YYYY-MM-DD.json",
     }
     return {
         "family": "position_sizing_dynamic_formula",
@@ -3924,45 +4153,37 @@ def _build_position_sizing_dynamic_formula_family(events: list[dict], completed_
             "notional_weighted_ev_pct": notional_ev,
             "source_quality_adjusted_ev_pct": source_quality_adjusted_ev,
             "real_completed_summary": real_summary,
-            "baseline_qty_avg": round(_avg(baseline_qty_values) or 0.0, 4) if baseline_qty_values else None,
-            "candidate_qty_avg": round(_avg(candidate_qty_values) or 0.0, 4) if candidate_qty_values else None,
             "score_avg": round(_avg(score_values) or 0.0, 4) if score_values else None,
             "spread_bps_p90": round(_percentile(spread_values, 90, 0.0), 4) if spread_values else None,
             "liquidity_value_p50": round(_percentile(liquidity_values, 50, 0.0), 4)
             if liquidity_values
             else None,
             "strategy_counts": _bucket_counter(sizing_events, "strategy", "trade_type"),
-            "price_band_counts": _bucket_counter(sizing_events, "price_band", "price_bucket"),
             "volatility_bucket_counts": _bucket_counter(sizing_events, "volatility_bucket", "volatility_mode"),
-            "recent_loss_bucket_counts": _bucket_counter(sizing_events, "recent_loss_bucket", "loss_bucket"),
-            "portfolio_exposure_bucket_counts": _bucket_counter(
-                sizing_events,
-                "portfolio_exposure_bucket",
-                "exposure_bucket",
-            ),
         },
         "apply_ready": sample_ready,
         "current": current,
         "recommended": recommended,
-        "apply_mode": "report_only_design",
+        "candidate_grid": candidate_grid,
+        "apply_mode": "candidate_grid_comparison",
         "metric_contract": {
             "metric_role": "primary_ev",
-            "decision_authority": "report_only_until_approval_artifact",
+            "decision_authority": "candidate_grid_comparison_runtime_apply_blocked_until_guard_tests_pass",
             "window_policy": "rolling_10d_with_real_denominator",
             "sample_floor": 30,
             "primary_decision_metric": ["notional_weighted_ev_pct", "source_quality_adjusted_ev_pct"],
             "source_quality_gate": "all_required_inputs_present_and_real_sim_probe_split",
             "forbidden_uses": [
-                "sim_probe_single_source_live_cap_release",
-                "runtime_order_qty_change_without_approval",
-                "reuse_position_sizing_cap_release_approval",
+                "sim_probe_single_source_live_apply",
+                "runtime_order_qty_change_without_approval_guard",
             ],
         },
         "notes": [
-            "동적수량 산식 튜닝 owner를 자동화체인 report-only source bundle에 편입한다.",
-            "position_sizing_cap_release와 분리하며 cap 해제 approval을 재사용하지 않는다.",
-            "sim/probe/counterfactual은 diagnostic 가속 입력이며 real denominator를 대체하지 않는다.",
-            "실주문 수량 확대는 별도 approval artifact, same-stage owner guard, rollback guard가 필요하다.",
+            "position_sizing_dynamic_formula는 신규 BUY와 scale-in 수량 산식의 단일 owner이며, cap release family는 제거됐다.",
+            "sim/probe sizing rows는 actual_order_submitted=false, broker_order_forbidden=true, runtime_effect=false로 분리하며 real execution quality 분모에 섞지 않는다.",
+            "source-quality 결손 후보는 EV 분모에서 제외하고 source_quality_blocked로 닫는다.",
+            "runtime_apply_allowed=false로 시작하며 approval/preopen guard 테스트가 닫힌 뒤에만 bounded candidate를 연다.",
+            "후보 grid는 postclose 비교 후 PREOPEN bounded candidate 생성에 사용된다.",
         ],
     }
 
@@ -5459,7 +5680,6 @@ def _build_scale_in_price_guard_family(events: list[dict]) -> dict:
         "pyramid_min_tick_accel": float(
             getattr(TRADING_RULES, "SCALPING_PYRAMID_MIN_TICK_ACCEL", 0.5) or 0.5
         ),
-        "effective_qty_cap": int(getattr(TRADING_RULES, "SCALPING_SCALE_IN_EFFECTIVE_QTY_CAP", 0) or 0),
     }
     recommended = dict(current)
     if spread_values:
@@ -5761,7 +5981,6 @@ def _build_family_reports(
         _build_protect_trailing_smoothing_family(events),
         _build_holding_flow_ofi_smoothing_family(events),
         _build_scale_in_price_guard_family(events),
-        _build_position_sizing_cap_release_family(events, completed_rows),
         _build_position_sizing_dynamic_formula_family(events, completed_rows),
         _build_statistical_action_weight_family(events, completed_rows, target_date=target_date),
         _build_lifecycle_decision_matrix_runtime_family(target_date),
@@ -6506,38 +6725,35 @@ def _calibration_state_for_family(
             "hold",
             "scale_in_price_guard는 별도 승인 전 report-only calibration으로만 산출하며 live apply는 금지한다.",
         )
-    if output_family == "position_sizing_cap_release":
-        sample = family.get("sample") if isinstance(family.get("sample"), dict) else {}
-        safety_floor = sample.get("safety_floor") if isinstance(sample.get("safety_floor"), dict) else {}
-        tradeoff_score = _safe_float(sample.get("tradeoff_score"), 0.0) or 0.0
-        required_score = _safe_float(sample.get("tradeoff_score_required"), 0.70) or 0.70
-        if sample_count < sample_floor or not ready:
-            failed = [key for key, value in safety_floor.items() if not bool(value)]
-            suffix = f"; failed_safety_floor={','.join(failed)}" if failed else ""
-            return (
-                "hold_sample",
-                f"1주 cap 해제 trade-off 기준 미달({sample_count}/{sample_floor}, score={tradeoff_score:.2f}/{required_score:.2f}){suffix}",
-            )
-        return (
-            "approval_required",
-            f"1주 cap 해제 efficient trade-off 기준 충족(score={tradeoff_score:.2f}/{required_score:.2f}): 자동 적용하지 않고 사용자 승인 요청 artifact로만 승격한다.",
-        )
     if output_family == "position_sizing_dynamic_formula":
         sample = family.get("sample") if isinstance(family.get("sample"), dict) else {}
         blockers = sample.get("source_quality_blockers") if isinstance(sample.get("source_quality_blockers"), list) else []
+        candidate_grid = family.get("candidate_grid") if isinstance(family.get("candidate_grid"), list) else []
+        candidate_count = len(candidate_grid)
+        blocked_candidates = sum(1 for c in candidate_grid if c.get("source_quality_blocked"))
         if sample_count < sample_floor:
             return (
                 "hold_sample",
-                f"동적수량 산식 real denominator sample floor 미달({sample_count}/{sample_floor}); report-only source bundle만 유지",
+                f"position_sizing_dynamic_formula real denominator sample floor 미달({sample_count}/{sample_floor}); candidate grid 유지",
             )
         if blockers:
             return (
                 "hold_sample",
-                "동적수량 산식 입력 coverage 미충족: " + ",".join(str(item) for item in blockers[:8]),
+                "position_sizing_dynamic_formula 입력 coverage 미충족: " + ",".join(str(item) for item in blockers[:8]),
+            )
+        if candidate_count == 0:
+            return (
+                "hold_sample",
+                "position_sizing_dynamic_formula candidate grid 미생성; sizing event 부족",
+            )
+        if blocked_candidates >= candidate_count:
+            return (
+                "source_quality_blocked",
+                f"position_sizing_dynamic_formula 모든 {candidate_count}개 후보가 source-quality blocked; instrumentation gap 해소 필요",
             )
         return (
             "hold",
-            "동적수량 산식 source bundle은 준비됐지만 runtime 수량 변경은 별도 approval artifact 전까지 금지한다.",
+            f"position_sizing_dynamic_formula candidate grid 생성됨({candidate_count}개, source_quality_blocked={blocked_candidates}); runtime_apply_allowed=false, approval/preopen guard 테스트 통과 전까지 bounded candidate 열지 않음",
         )
     if output_family == "soft_stop_whipsaw_confirmation":
         source_count = _source_sample_count_for_family(output_family, source_metrics)
@@ -7276,7 +7492,7 @@ def _build_window_policy_audit(candidates: list[dict]) -> dict:
         if str(candidate.get("runtime_apply_blocker") or "") == "window_policy_primary_not_ready":
             issues.append("daily_only_leak_blocked")
         denominator_keys = _sample_denominator_keys_for_family(family)
-        if family in {"score65_74_recovery_probe", "position_sizing_cap_release", "position_sizing_dynamic_formula"} and not denominator_keys:
+        if family in {"score65_74_recovery_probe", "position_sizing_dynamic_formula"} and not denominator_keys:
             issues.append("sample_denominator_missing")
         for issue in issues:
             issue_counts[issue] += 1
@@ -9597,6 +9813,7 @@ def build_daily_threshold_cycle_report(
             "apply_mode": family.get("apply_mode"),
             "current": family["current"],
             "recommended": family["recommended"],
+            "candidate_grid": family.get("candidate_grid", []),
         }
         for family in families
     }

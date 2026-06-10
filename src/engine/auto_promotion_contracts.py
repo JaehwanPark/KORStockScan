@@ -21,7 +21,6 @@ AUTO_PROMOTION_STATES = (
 FINAL_USER_APPROVAL_FAMILIES = {
     "full_swing_live_conversion",
     "full_scalping_live_conversion",
-    "position_sizing_cap_release",
     "provider_route_change",
     "bot_restart",
     "hard_safety_relaxation",

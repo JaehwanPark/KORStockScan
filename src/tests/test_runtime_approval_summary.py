@@ -48,13 +48,6 @@ def test_runtime_approval_summary_combines_scalping_and_swing(tmp_path, monkeypa
                             "sample_count": 712,
                             "sample_floor": 20,
                         },
-                        {
-                            "family": "position_sizing_cap_release",
-                            "calibration_state": "hold_sample",
-                            "confidence": 0.8,
-                            "sample_count": 49,
-                            "sample_floor": 30,
-                        },
                     ]
                 },
             }
@@ -89,7 +82,7 @@ def test_runtime_approval_summary_combines_scalping_and_swing(tmp_path, monkeypa
     report = mod.build_runtime_approval_summary("2026-05-11")
 
     assert report["runtime_mutation_allowed"] is False
-    assert report["summary"]["scalping_items"] == 2
+    assert report["summary"]["scalping_items"] == 1
     assert report["summary"]["scalping_selected_auto_bounded_live"] == 1
     assert report["summary"]["scalping_legacy_hard_gate_risk_counts"]["no_unreviewed_hard_gate"] == 1
     assert report["summary"]["swing_blocked"] == 1
@@ -102,8 +95,6 @@ def test_runtime_approval_summary_combines_scalping_and_swing(tmp_path, monkeypa
     assert report["scalping"][0]["gate_review_class"] == "entry_unlock_probe"
     assert report["scalping"][0]["legacy_hard_gate_risk"] == "no_unreviewed_hard_gate"
     assert "PREOPEN env" in report["scalping"][0]["state_interpretation"]
-    assert report["scalping"][1]["reason_label"] == "소스 표본 없음"
-    assert "표본/소스 계약" in report["scalping"][1]["state_interpretation"]
     assert report["swing"][0]["reason_label"] == "계측 gap, DB gap"
     assert report["swing"][0]["current_application"] == "스윙 dry-run/probe 관찰: 실주문 변경 없음"
     assert report["swing"][0]["gate_review_class"] == "approval_route_available"

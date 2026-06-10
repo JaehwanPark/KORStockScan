@@ -29,11 +29,11 @@ def test_approval_contract_registry_marks_runtime_apply_bridge_contract_states()
     assert greenfield["missing_components"] == []
 
 
-def test_approval_contract_registry_marks_missing_scalping_manual_contract():
-    request = annotate_approval_request({"family": "position_sizing_cap_release"}, "2026-05-15")
+def test_approval_contract_registry_marks_dynamic_formula_as_candidate_grid():
+    request = annotate_approval_request({"family": "position_sizing_dynamic_formula"}, "2026-06-10")
 
-    assert request["approval_contract_status"] == "final_user_approval_required"
-    assert request["approval_mode"] == "final_user_approval_required"
-    assert request["approval_artifact_required"] is True
+    assert request["approval_contract_status"] == "candidate_grid_active_runtime_apply_blocked"
+    assert request["approval_mode"] == "candidate_grid_comparison"
+    assert request["approval_artifact_required"] is False
     assert request["approval_live_ready"] is False
-    assert request["approval_artifact_path"].endswith("position_sizing_cap_release_2026-05-15.json")
+    assert request["approval_artifact_path"].endswith("position_sizing_dynamic_formula_2026-06-10.json")

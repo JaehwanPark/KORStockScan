@@ -674,7 +674,7 @@ def describe_dynamic_scale_in_qty(
             "effective_qty": int(legacy.get("qty", 0) or 0),
             "qty_reason": "legacy_template",
             "dynamic_enabled": bool(getattr(TRADING_RULES, "SCALPING_SCALE_IN_DYNAMIC_QTY_ENABLED", True)),
-            "effective_qty_cap": int(getattr(TRADING_RULES, "SCALPING_SCALE_IN_EFFECTIVE_QTY_CAP", 0) or 0),
+            "effective_qty_cap": 0,
             "sim_uncapped_qty": bool(
                 stock.get("scalp_live_simulator")
                 or str(stock.get("simulation_book") or "") == "scalp_ai_buy_all"
@@ -820,7 +820,7 @@ def describe_dynamic_scale_in_qty(
         if hard_stop_price > 0 and resolved_price <= hard_stop_price:
             details.update({"would_qty": 0, "effective_qty": 0, "qty": 0, "qty_reason": "protection_distance_invalid"})
             return details
-        would_qty = max(1, int(legacy.get("template_qty", 0) or legacy.get("qty", 0) or 0))
+        would_qty = max(1, int(scalp_budget_qty or legacy.get("template_qty", 0) or legacy.get("qty", 0) or 0))
     else:
         details.update({"would_qty": 0, "effective_qty": 0, "qty": 0, "qty_reason": "invalid_add_type"})
         return details

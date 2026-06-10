@@ -103,7 +103,6 @@ def build_scalp_sim_scale_in_window_approval(target_date: str) -> dict[str, Any]
         },
         "forbidden_uses": [
             "real_scale_in_order",
-            "position_size_cap_release",
             "hard_safety_override",
             "intraday_threshold_mutation",
             "real_execution_quality_claim",
