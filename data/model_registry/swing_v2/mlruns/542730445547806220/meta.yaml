@@ -1,8 +1,0 @@
-artifact_location: file:///home/ubuntu/KORStockScan/data/model_registry/swing_v2/mlruns/542730445547806220
-creation_time: 1779687904289
-experiment_id: '542730445547806220'
-last_update_time: 1779687904289
-lifecycle_stage: active
-name: korstockscan_swing_v2_model_upgrade
-trace_location: null
-workspace: default

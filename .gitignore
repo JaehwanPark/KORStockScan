@@ -58,6 +58,11 @@ data/source_quality/analytics_quarantine/
 *.zip
 *.tar.gz
 
+# Generated model registry run stores. Keep local artifacts, but do not track
+# per-run MLflow/output directories in git.
+data/model_registry/**/mlruns/
+data/model_registry/**/runs/
+
 # bot_main.py에서 생성하는 로그 폴더
 logs/
 *.log
