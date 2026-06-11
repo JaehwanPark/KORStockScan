@@ -1,85 +1,84 @@
 {
-  "bundle_as_of": "2026-06-10T22:20:26Z",
+  "bundle_as_of": "2026-06-11T22:20:26Z",
   "sp500": {
-    "name": "S&P 500",
-    "value": 7266.99,
-    "prev_value": 7386.65,
-    "change": -119.66,
-    "change_pct": -1.62,
-    "as_of": "2026-06-10T20:27:00Z",
+    "name": "S&P500",
+    "value": 7394.3,
+    "prev_value": 7266.99,
+    "change": 127.31,
+    "change_pct": 1.75,
+    "as_of": "2026-06-11T20:26:00Z",
     "source": "Dow Jones Market Data / Morningstar"
   },
   "nasdaq": {
     "name": "NASDAQ",
-    "value": 25169.5,
-    "prev_value": 25678.82,
-    "change": -509.32,
-    "change_pct": -1.98,
-    "as_of": "2026-06-10T20:27:00Z",
-    "source": "Dow Jones Market Data / Morningstar"
+    "value": 25809.66,
+    "prev_value": 25169.5,
+    "change": 640.16,
+    "change_pct": 2.54,
+    "as_of": "2026-06-11T20:00:00Z",
+    "source": "Associated Press"
   },
   "vix": {
     "name": "VIX",
-    "value": 22.22,
-    "prev_value": 19.87,
-    "change": 2.35,
-    "change_pct": 11.83,
-    "as_of": "2026-06-10T22:20:26Z",
+    "value": 19.89,
+    "prev_value": 22.22,
+    "change": -2.33,
+    "change_pct": -10.49,
+    "as_of": "2026-06-11T21:50:00Z",
     "source": "Cboe Global Markets"
   },
   "us10y": {
-    "name": "US 10-Year Treasury Yield",
-    "value": 4.55,
-    "prev_value": 4.53,
-    "change": 0.02,
-    "change_pct": 0.44,
-    "as_of": "2026-06-10T22:20:26Z",
-    "source": "Trading Economics"
+    "name": "US10Y",
+    "value": 4.51,
+    "prev_value": 4.55,
+    "change": -0.04,
+    "change_pct": -0.88,
+    "as_of": "2026-06-11T20:00:00Z",
+    "source": "Eurasia Business News"
   },
   "brent": {
-    "name": "Brent Crude",
-    "value": 93.1,
-    "prev_value": 91.45,
-    "change": 1.65,
-    "change_pct": 1.8,
-    "as_of": "2026-06-10T19:20:00Z",
+    "name": "BRENT",
+    "value": 90.38,
+    "prev_value": 93.1,
+    "change": -2.72,
+    "change_pct": -2.92,
+    "as_of": "2026-06-11T19:15:00Z",
     "source": "Dow Jones Market Data / Morningstar"
   },
   "headlines": [
     {
-      "title": "U.S. strikes 'multiple targets' in Iran after Trump threatened more attacks",
-      "source": "CTV News",
-      "published_at": "2026-06-10T21:15:00Z",
-      "url": "https://www.ctvnews.ca"
+      "title": "U.S. stocks jump, and oil prices fall after Trump calls off his threat to attack Iran",
+      "source": "Associated Press",
+      "published_at": "2026-06-11T18:41:00Z",
+      "url": "https://apnews.com/"
     },
     {
-      "title": "Iran Updates: Trump vows to hit Iran 'hard' tonight, Hegseth says U.S. willing to 'negotiate with bombs' if needed",
-      "source": "CBS News",
-      "published_at": "2026-06-10T21:44:00Z",
-      "url": "https://www.cbsnews.com"
+      "title": "Enverus sees Brent above $100 through 2027 after Hormuz disruption",
+      "source": "World Oil",
+      "published_at": "2026-06-11T15:00:00Z",
+      "url": "https://www.worldoil.com/"
     },
     {
-      "title": "West Asia war LIVE: Iran has taken too long to negotiate, they will have to pay the price, says Trump",
-      "source": "The Hindu",
-      "published_at": "2026-06-10T21:21:00Z",
-      "url": "https://www.thehindu.com"
+      "title": "Average US long-term mortgage rate rises to 6.52%, just below its high for the year",
+      "source": "Associated Press",
+      "published_at": "2026-06-11T16:02:00Z",
+      "url": "https://apnews.com/"
     },
     {
-      "title": "Morning Briefing: US strikes hit southern Iran, IRGC says 21 US military targets hit across region",
+      "title": "All eyes turn to monetary policy decisions amid waning risk appetite in global markets",
       "source": "Anadolu Agency",
-      "published_at": "2026-06-10T05:00:00Z",
-      "url": "https://www.aa.com.tr"
+      "published_at": "2026-06-11T12:00:00Z",
+      "url": "https://www.aa.com.tr/"
     },
     {
-      "title": "US bombs Iran's water facilities: Why that's so significant",
-      "source": "Al Jazeera",
-      "published_at": "2026-06-10T14:00:00Z",
-      "url": "https://www.aljazeera.com"
+      "title": "Letter to the London Stock Exchange Group and FTSE Russell Re: SpaceX",
+      "source": "Office of the New York City Comptroller",
+      "published_at": "2026-06-11T19:00:00Z",
+      "url": "https://comptroller.nyc.gov/"
     }
   ],
   "notes": [
-    "Equities sold off sharply as AI and technology stocks faced downward pressure and U.S.-Iran hostilities escalated.",
-    "Brent crude rose above $93 per barrel as the renewed exchange of strikes between the U.S. and Iran threatens to prolong the blockade on the Strait of Hormuz.",
-    "Volatility spiked significantly, with the VIX jumping over 11% to 22.22 amid market uncertainty and rising geopolitical tensions."
+    "U.S. equities rallied sharply following the de-escalation of the geopolitical situation with Iran.",
+    "Brent crude and the VIX both dropped significantly as near-term geopolitical fear premiums unwound."
   ]
 }

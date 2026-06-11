@@ -395,7 +395,7 @@ class TradingConfig:
     MAX_SCALP_SURGE_PCT: float = 20.0  # 초단타 진입 금지 급등률 (20%)
     MAX_INTRADAY_SURGE: float = 16.0  # 당일 시가 대비 최대 급등률 (1차 완화: 16%)
     # [V3 스캘핑 동적 트레일링 전용 상수]
-    SCALP_SAFE_PROFIT = 0.5            # 💡 [신규] 수수료/세금/슬리피지를 커버하는 최소 안전 마진 (이 선을 넘으면 무조건 수익 마감 모드 돌입)
+    SCALP_SAFE_PROFIT: float = 0.5     # 💡 [신규] 수수료/세금/슬리피지를 커버하는 최소 안전 마진 (이 선을 넘으면 무조건 수익 마감 모드 돌입)
     SCALP_TRAILING_LIMIT_STRONG = 0.8  # 💡 [신규] AI 점수가 75점 이상(수급 폭발)일 때 허용하는 고점 대비 눌림폭 (%)
     SCALP_TRAILING_LIMIT_WEAK = 0.4    # 💡 [신규] AI 점수가 75점 미만(수급 애매)일 때 타이트하게 끊어내는 고점 대비 눌림폭 (%)
     SCALP_PROTECT_TRAILING_SMOOTH_ENABLED: bool = True  # 보호 트레일링은 단일 tick 대신 평탄화 이탈 확인
@@ -1177,10 +1177,12 @@ def _build_trading_rules() -> TradingConfig:
     env_bad_entry_refined_recovery_max = _env_float("KORSTOCKSCAN_SCALP_BAD_ENTRY_REFINED_RECOVERY_PROB_MAX")
     env_soft_stop_expert_enabled = _env_bool("KORSTOCKSCAN_SCALP_SOFT_STOP_EXPERT_DEFENSE_ENABLED")
     env_soft_stop_expert_activate_at = _env_str("KORSTOCKSCAN_SCALP_SOFT_STOP_EXPERT_DEFENSE_ACTIVATE_AT")
+    env_soft_stop_micro_grace_sec = _env_int("KORSTOCKSCAN_SCALP_SOFT_STOP_MICRO_GRACE_SEC")
     env_soft_stop_whipsaw_enabled = _env_bool("KORSTOCKSCAN_SCALP_SOFT_STOP_WHIPSAW_CONFIRMATION_ENABLED")
     env_soft_stop_whipsaw_sec = _env_int("KORSTOCKSCAN_SCALP_SOFT_STOP_WHIPSAW_CONFIRMATION_SEC")
     env_soft_stop_whipsaw_buffer = _env_float("KORSTOCKSCAN_SCALP_SOFT_STOP_WHIPSAW_CONFIRMATION_BUFFER_PCT")
     env_soft_stop_whipsaw_worsen = _env_float("KORSTOCKSCAN_SCALP_SOFT_STOP_WHIPSAW_CONFIRMATION_MAX_WORSEN_PCT")
+    env_scalp_safe_profit = _env_float("KORSTOCKSCAN_SCALP_SAFE_PROFIT")
     env_protect_trailing_smooth_enabled = _env_bool("KORSTOCKSCAN_SCALP_PROTECT_TRAILING_SMOOTH_ENABLED")
     env_protect_trailing_smooth_window = _env_int("KORSTOCKSCAN_SCALP_PROTECT_TRAILING_SMOOTH_WINDOW_SEC")
     env_protect_trailing_smooth_min_span = _env_int("KORSTOCKSCAN_SCALP_PROTECT_TRAILING_SMOOTH_MIN_SPAN_SEC")
@@ -1255,10 +1257,12 @@ def _build_trading_rules() -> TradingConfig:
         or env_bad_entry_refined_recovery_max is not None
         or env_soft_stop_expert_enabled is not None
         or env_soft_stop_expert_activate_at is not None
+        or env_soft_stop_micro_grace_sec is not None
         or env_soft_stop_whipsaw_enabled is not None
         or env_soft_stop_whipsaw_sec is not None
         or env_soft_stop_whipsaw_buffer is not None
         or env_soft_stop_whipsaw_worsen is not None
+        or env_scalp_safe_profit is not None
         or env_protect_trailing_smooth_enabled is not None
         or env_protect_trailing_smooth_window is not None
         or env_protect_trailing_smooth_min_span is not None
@@ -1476,6 +1480,9 @@ def _build_trading_rules() -> TradingConfig:
             SCALP_SOFT_STOP_EXPERT_DEFENSE_ACTIVATE_AT=env_soft_stop_expert_activate_at
             if env_soft_stop_expert_activate_at is not None
             else config.SCALP_SOFT_STOP_EXPERT_DEFENSE_ACTIVATE_AT,
+            SCALP_SOFT_STOP_MICRO_GRACE_SEC=env_soft_stop_micro_grace_sec
+            if env_soft_stop_micro_grace_sec is not None
+            else config.SCALP_SOFT_STOP_MICRO_GRACE_SEC,
             SCALP_SOFT_STOP_WHIPSAW_CONFIRMATION_ENABLED=env_soft_stop_whipsaw_enabled
             if env_soft_stop_whipsaw_enabled is not None
             else config.SCALP_SOFT_STOP_WHIPSAW_CONFIRMATION_ENABLED,
@@ -1488,6 +1495,9 @@ def _build_trading_rules() -> TradingConfig:
             SCALP_SOFT_STOP_WHIPSAW_CONFIRMATION_MAX_WORSEN_PCT=env_soft_stop_whipsaw_worsen
             if env_soft_stop_whipsaw_worsen is not None
             else config.SCALP_SOFT_STOP_WHIPSAW_CONFIRMATION_MAX_WORSEN_PCT,
+            SCALP_SAFE_PROFIT=env_scalp_safe_profit
+            if env_scalp_safe_profit is not None
+            else config.SCALP_SAFE_PROFIT,
             SCALP_PROTECT_TRAILING_SMOOTH_ENABLED=env_protect_trailing_smooth_enabled
             if env_protect_trailing_smooth_enabled is not None
             else config.SCALP_PROTECT_TRAILING_SMOOTH_ENABLED,

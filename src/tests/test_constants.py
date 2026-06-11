@@ -101,6 +101,26 @@ def test_trading_rules_dynamic_strength_relief_env_override(monkeypatch):
     assert reloaded.TRADING_RULES.SCALP_DYNAMIC_STRENGTH_RELIEF_EXEC_BUY_RATIO_TOL == 0.01
 
 
+def test_trading_rules_soft_stop_micro_grace_sec_env_override(monkeypatch):
+    monkeypatch.setenv("KORSTOCKSCAN_SCALP_SOFT_STOP_MICRO_GRACE_SEC", "60")
+
+    reloaded = importlib.reload(constants)
+
+    assert reloaded.TRADING_RULES.SCALP_SOFT_STOP_MICRO_GRACE_SEC == 60
+    assert reloaded.TRADING_RULES.SCALP_SOFT_STOP_MICRO_GRACE_EMERGENCY_PCT == -2.0
+    assert reloaded.TRADING_RULES.SCALP_HARD_STOP == -2.5
+
+
+def test_trading_rules_scalp_safe_profit_env_override(monkeypatch):
+    monkeypatch.setenv("KORSTOCKSCAN_SCALP_SAFE_PROFIT", "1.0")
+
+    reloaded = importlib.reload(constants)
+
+    assert reloaded.TRADING_RULES.SCALP_SAFE_PROFIT == 1.0
+    assert reloaded.TRADING_RULES.SCALP_TRAILING_LIMIT_WEAK == 0.4
+    assert reloaded.TRADING_RULES.SCALP_TRAILING_LIMIT_STRONG == 0.8
+
+
 def test_trading_rules_ai_cadence_defaults_are_rate_limited(monkeypatch):
     for key in (
         "KORSTOCKSCAN_AI_WATCHING_COOLDOWN",
