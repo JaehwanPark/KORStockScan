@@ -82,6 +82,8 @@ _REASON_LABELS = {
     "legacy_phase0_real_canary_ignored": "phase0 real canary legacy ignored",
     "selected_auto_bounded_live": "auto_bounded_live 선택",
     "latency_recovery_hold_by_counterfactual_ev": "latency recovery 보류",
+    "severe_downside_guard": "심각한 하방위험 guard",
+    "hold_defer_component_field_gap": "hold defer 구성 필드 부족",
     "hold": "유지",
     "hold_no_edge": "edge 부족",
     "freeze": "동결",
@@ -370,10 +372,10 @@ _SWING_GATE_REVIEW = {
         "analysis_coverage": "exit source + post-sell rebound",
     },
     "swing_holding_flow_defer": {
-        "gate_review_class": "sample_or_contract_gap_holding_axis",
-        "legacy_hard_gate_risk": "sample_or_contract_gap",
-        "hard_gate_review": "보유/청산 defer 축으로 표본과 runtime guard가 아직 부족하다",
-        "tuning_route": "sample floor + runtime guard contract",
+        "gate_review_class": "runtime_contract_gap_holding_axis",
+        "legacy_hard_gate_risk": "contract_gap",
+        "hard_gate_review": "보유/청산 defer 축은 표본 floor를 따로 판정하고 runtime guard/하방위험/구성 필드 gap을 분리해 본다",
+        "tuning_route": "hold-defer component quality + runtime guard contract",
         "analysis_coverage": "holding flow defer fields",
     },
     "swing_entry_ofi_qi_execution_quality": {
@@ -461,6 +463,93 @@ def _gate_review(domain: str, family: str, reasons: list[Any] | None = None) -> 
     if "runtime_family_guard_missing" in reasons:
         annotation.setdefault("legacy_hard_gate_risk", "contract_gap")
     return annotation
+
+
+def _sample_floor_status(sample_count: Any, sample_floor: Any) -> str:
+    floor = _as_int(sample_floor)
+    if floor <= 0:
+        return "not_required"
+    return "ready" if _as_int(sample_count) >= floor else "below_floor"
+
+
+def _hold_defer_breakdown(candidate: dict[str, Any], reasons: list[Any]) -> dict[str, Any]:
+    source_metrics = candidate.get("source_metrics") if isinstance(candidate.get("source_metrics"), dict) else {}
+    field_coverage = source_metrics.get("field_coverage") if isinstance(source_metrics.get("field_coverage"), dict) else {}
+    required_fields = ["flow_action", "defer_sec", "worsen_after_candidate"]
+    missing_fields = [
+        field
+        for field in required_fields
+        if _as_int(field_coverage.get(field)) <= 0
+    ]
+    sample_count = candidate.get("sample_count", source_metrics.get("sample_count"))
+    sample_floor = candidate.get("sample_floor")
+    return {
+        "sample_floor_status": _sample_floor_status(sample_count, sample_floor),
+        "sample_count": _as_int(sample_count),
+        "sample_floor": _as_int(sample_floor),
+        "field_coverage": {field: _as_int(field_coverage.get(field)) for field in required_fields},
+        "missing_component_fields": missing_fields,
+        "runtime_guard_status": (
+            "missing" if "runtime_family_guard_missing" in [str(reason) for reason in reasons] else "available"
+        ),
+        "downside_guard_status": (
+            "blocked" if "severe_downside_guard" in [str(reason) for reason in reasons] else "clear"
+        ),
+    }
+
+
+def _refine_swing_gate_review(
+    family: str,
+    annotation: dict[str, Any],
+    candidate: dict[str, Any],
+    reasons: list[Any],
+) -> dict[str, Any]:
+    if family != "swing_holding_flow_defer":
+        sample_ready = _sample_floor_status(candidate.get("sample_count"), candidate.get("sample_floor")) == "ready"
+        current_class = str(annotation.get("gate_review_class") or "")
+        if sample_ready and current_class.startswith("sample_or_contract_gap_"):
+            reason_text = " ".join(str(reason) for reason in reasons)
+            refined = dict(annotation)
+            if "source_quality" in reason_text or "invalid_micro_context" in reason_text or "severe_downside_guard" in reason_text:
+                refined["legacy_hard_gate_risk"] = "source_quality_or_contract_gap"
+                refined["gate_review_class"] = current_class.replace(
+                    "sample_or_contract_gap_", "source_quality_or_contract_gap_", 1
+                )
+            else:
+                refined["legacy_hard_gate_risk"] = "contract_gap"
+                refined["gate_review_class"] = current_class.replace(
+                    "sample_or_contract_gap_", "runtime_contract_gap_", 1
+                )
+            refined["hard_gate_review"] = (
+                "표본 floor는 충족했다. 남은 차단은 source-quality/risk guard 또는 runtime guard 계약으로 분리 판정한다"
+            )
+            refined["sample_floor_status"] = "ready"
+            return refined
+        return annotation
+    breakdown = _hold_defer_breakdown(candidate, reasons)
+    sample_ready = breakdown["sample_floor_status"] == "ready"
+    component_gap = bool(breakdown["missing_component_fields"])
+    runtime_gap = breakdown["runtime_guard_status"] == "missing"
+    downside_blocked = breakdown["downside_guard_status"] == "blocked"
+    refined = dict(annotation)
+    if sample_ready and (runtime_gap or downside_blocked or component_gap):
+        if downside_blocked:
+            refined["gate_review_class"] = "source_quality_and_runtime_contract_gap_holding_axis"
+            refined["legacy_hard_gate_risk"] = "source_quality_or_contract_gap"
+        else:
+            refined["gate_review_class"] = "runtime_contract_gap_holding_axis"
+            refined["legacy_hard_gate_risk"] = "contract_gap"
+        refined["hard_gate_review"] = (
+            "hold defer 표본 floor는 충족했다. runtime guard, severe downside guard, "
+            "flow_action/defer_sec/worsen_after_candidate coverage를 분리 판정해야 한다"
+        )
+        refined["tuning_route"] = "hold-defer component decomposition before runtime guard approval"
+    elif not sample_ready:
+        refined["gate_review_class"] = "sample_gap_holding_axis"
+        refined["legacy_hard_gate_risk"] = "sample_or_contract_gap"
+        refined["hard_gate_review"] = "hold defer 표본 floor 미달이라 runtime guard 검토 전에 표본 보강이 필요하다"
+    refined["hold_defer_breakdown"] = breakdown
+    return refined
 
 
 def summary_paths(target_date: str) -> tuple[Path, Path]:
@@ -870,7 +959,14 @@ def _swing_rows(swing_report: dict[str, Any]) -> list[dict[str, Any]]:
             "reason_label": _reason_text(reasons),
             "selected_auto_bounded_live": False,
         }
-        row.update(_gate_review("swing", family, reasons))
+        gate_review = _gate_review("swing", family, reasons)
+        gate_review = _refine_swing_gate_review(family, gate_review, candidate, reasons)
+        row.update(gate_review)
+        if "sample_floor_status" in gate_review:
+            row["sample"]["status"] = gate_review["sample_floor_status"]
+        if "hold_defer_breakdown" in gate_review:
+            row["hold_defer_breakdown"] = gate_review["hold_defer_breakdown"]
+            row["sample"]["status"] = gate_review["hold_defer_breakdown"]["sample_floor_status"]
         rows.append(row)
     requests = swing_report.get("approval_requests") if isinstance(swing_report.get("approval_requests"), list) else []
     blocked_families = {row["family"] for row in rows}

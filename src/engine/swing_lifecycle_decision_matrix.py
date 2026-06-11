@@ -569,11 +569,11 @@ def _bucket_summary(bucket_type: str, bucket_key: str, rows: list[dict[str, Any]
         for dimension, info in field_coverage.items()
         if isinstance(info, dict) and int(info.get("present_count") or 0) <= 0
     ]
-    implementation_status = (
-        "implemented_source_quality_contract_waiting_sample"
-        if field_coverage and (source_gate == "source_quality_blocker" or missing_dimensions)
-        else None
-    )
+    implementation_status = None
+    if field_coverage and missing_dimensions:
+        implementation_status = "implemented_source_quality_contract_waiting_sample"
+    elif field_coverage and source_gate == "source_quality_blocker":
+        implementation_status = "implemented_source_quality_contract_available"
     implementation_provenance = {
         "implementation_type": "swing_ldm_source_field_coverage_contract",
         "source_report_type": REPORT_TYPE,

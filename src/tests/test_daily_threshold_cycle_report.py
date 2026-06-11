@@ -487,13 +487,14 @@ def test_dynamic_entry_price_resolver_opens_when_source_candidate_metrics_are_co
         "source_metrics": {
             "dynamic_entry_price_resolver": {
                 "candidate_observations": 25,
-                "sim_candidate_observations": 18,
-                "real_candidate_observations": 7,
+                "sim_candidate_observations": 25,
+                "real_candidate_observations": 0,
                 "source_quality_adjusted_ev_pct": 0.37,
                 "candidate_metrics": {
                     "sim": dict(complete_metrics),
                     "real": dict(complete_metrics),
                 },
+                "recommended_values_decision_scope": "sim_probe_ev",
                 "recommended_values": {
                     "enabled": True,
                     "normal_defensive_ticks": "2",
@@ -526,6 +527,126 @@ def test_dynamic_entry_price_resolver_opens_when_source_candidate_metrics_are_co
     assert dynamic["source_metrics"]["recommended_values_audit"]["clamped"] == {}
     assert dynamic["source_metrics"]["candidate_metrics_ready"] is True
     assert dynamic["source_metrics"]["candidate_metrics_missing"] == {}
+
+
+def test_dynamic_entry_price_resolver_uses_sim_metrics_for_readiness_and_keeps_real_diagnostic():
+    complete_sim_metrics = {
+        "fill_rate": 62.0,
+        "full_fill_rate": 51.0,
+        "partial_fill_rate": 11.0,
+        "cancel_rate": 18.0,
+        "late_fill_rate": 3.0,
+        "missed_upside": 0.21,
+        "source_quality_adjusted_ev_pct": 0.42,
+    }
+    real_diagnostic_metrics = {
+        "cancel_rate": 0.0,
+        "late_fill_rate": 0.0,
+        "fill_rate": None,
+        "full_fill_rate": None,
+        "partial_fill_rate": None,
+        "missed_upside": None,
+        "source_quality_adjusted_ev_pct": -9.5,
+    }
+    report_sources = {
+        "sources": {
+            "entry_price_candidate_quality": {
+                "path": "data/report/entry_price_candidate_quality/entry_price_candidate_quality_2026-05-08.json",
+                "exists": True,
+            },
+        },
+        "source_metrics": {
+            "dynamic_entry_price_resolver": {
+                "candidate_observations": 25,
+                "sim_candidate_observations": 25,
+                "real_candidate_observations": 7,
+                "source_quality_adjusted_ev_pct": -9.5,
+                "candidate_metrics": {
+                    "sim": dict(complete_sim_metrics),
+                    "real": dict(real_diagnostic_metrics),
+                },
+                "recommended_values_decision_scope": "sim",
+                "recommended_values": {
+                    "enabled": True,
+                    "normal_defensive_ticks": "2",
+                    "max_below_bid_bps": "70",
+                    "conditional_1tick_real_enabled": False,
+                },
+            },
+        },
+    }
+    report = report_mod.build_daily_threshold_cycle_report(
+        "2026-05-08",
+        pipeline_loader=lambda target_date: [
+            {"stage": "order_bundle_submitted", "fields": {"price_below_bid_bps": "75"}}
+            for _ in range(7)
+        ],
+        report_source_loader=lambda target_date: report_sources,
+        completed_rows_loader=lambda start_date, end_date: [],
+    )
+
+    candidates = {item["family"]: item for item in report["calibration_candidates"]}
+    dynamic = candidates["dynamic_entry_price_resolver"]
+    assert dynamic["calibration_state"] == "adjust_up"
+    assert dynamic["apply_mode"] == "calibrated_apply_candidate"
+    assert dynamic["source_metrics"]["candidate_metrics_ready"] is True
+    assert dynamic["source_metrics"]["candidate_metrics_missing"] == {}
+    assert set(dynamic["source_metrics"]["candidate_metrics_diagnostic_missing"]) == {"real"}
+    assert set(dynamic["source_metrics"]["candidate_metrics_diagnostic_missing"]["real"]) == {
+        "fill_rate",
+        "full_fill_rate",
+        "partial_fill_rate",
+        "missed_upside",
+    }
+
+
+def test_dynamic_entry_price_resolver_does_not_use_real_observations_for_sample_floor():
+    complete_sim_metrics = {
+        "fill_rate": 62.0,
+        "full_fill_rate": 51.0,
+        "partial_fill_rate": 11.0,
+        "cancel_rate": 18.0,
+        "late_fill_rate": 3.0,
+        "missed_upside": 0.21,
+        "source_quality_adjusted_ev_pct": 0.42,
+    }
+    report_sources = {
+        "sources": {},
+        "source_metrics": {
+            "dynamic_entry_price_resolver": {
+                "candidate_observations": 25,
+                "sim_candidate_observations": 5,
+                "real_candidate_observations": 20,
+                "candidate_metrics": {
+                    "sim": dict(complete_sim_metrics),
+                },
+                "recommended_values_decision_scope": "sim",
+                "recommended_values": {
+                    "enabled": True,
+                    "normal_defensive_ticks": "2",
+                    "max_below_bid_bps": "70",
+                    "conditional_1tick_real_enabled": False,
+                },
+            },
+        },
+    }
+    report = report_mod.build_daily_threshold_cycle_report(
+        "2026-05-08",
+        pipeline_loader=lambda target_date: [
+            {"stage": "order_bundle_submitted", "fields": {"price_below_bid_bps": "75"}}
+            for _ in range(20)
+        ],
+        report_source_loader=lambda target_date: report_sources,
+        completed_rows_loader=lambda start_date, end_date: [],
+    )
+
+    dynamic = {item["family"]: item for item in report["calibration_candidates"]}[
+        "dynamic_entry_price_resolver"
+    ]
+    assert dynamic["calibration_state"] == "hold_sample"
+    assert dynamic["sample_count"] == 5
+    assert dynamic["sample_floor_status"] == "hold_sample"
+    assert "후보 표본 미달(5/20)" in dynamic["calibration_reason"]
 
 
 def test_dynamic_entry_price_resolver_separates_sim_unpriced_stale_and_ai_candidate_failures():
@@ -639,6 +760,7 @@ def test_dynamic_entry_price_resolver_clamps_invalid_source_recommended_values()
                     "sim": dict(complete_metrics),
                     "real": dict(complete_metrics),
                 },
+                "recommended_values_decision_scope": "sim",
                 "recommended_values": {
                     "enabled": "true",
                     "normal_defensive_ticks": 10,
@@ -745,6 +867,7 @@ def test_dynamic_entry_price_resolver_holds_when_conditional_1tick_recommendatio
                     "sim": dict(complete_metrics),
                     "real": dict(complete_metrics),
                 },
+                "recommended_values_decision_scope": "sim",
                 "recommended_values": {
                     "conditional_1tick_real_enabled": False,
                 },
@@ -767,6 +890,108 @@ def test_dynamic_entry_price_resolver_holds_when_conditional_1tick_recommendatio
     assert dynamic["calibration_state"] == "hold_sample"
     assert dynamic["source_metrics"]["recommended_values_valid"] is True
     assert dynamic["source_metrics"]["recommended_values_runtime_change_ready"] is False
+
+
+def test_dynamic_entry_price_resolver_rejects_recommendation_without_sim_scope():
+    complete_metrics = {
+        "fill_rate": 62.0,
+        "full_fill_rate": 51.0,
+        "partial_fill_rate": 11.0,
+        "cancel_rate": 18.0,
+        "late_fill_rate": 3.0,
+        "missed_upside": 0.21,
+        "source_quality_adjusted_ev_pct": 0.42,
+    }
+    report_sources = {
+        "sources": {},
+        "source_metrics": {
+            "dynamic_entry_price_resolver": {
+                "candidate_observations": 25,
+                "sim_candidate_observations": 25,
+                "real_candidate_observations": 25,
+                "candidate_metrics": {
+                    "sim": dict(complete_metrics),
+                },
+                "recommended_values": {
+                    "normal_defensive_ticks": "2",
+                    "max_below_bid_bps": "70",
+                },
+            },
+        },
+    }
+    report = report_mod.build_daily_threshold_cycle_report(
+        "2026-05-08",
+        pipeline_loader=lambda target_date: [
+            {"stage": "order_bundle_submitted", "fields": {"price_below_bid_bps": "120"}}
+            for _ in range(25)
+        ],
+        report_source_loader=lambda target_date: report_sources,
+        completed_rows_loader=lambda start_date, end_date: [],
+    )
+
+    dynamic = {item["family"]: item for item in report["calibration_candidates"]}[
+        "dynamic_entry_price_resolver"
+    ]
+    assert dynamic["calibration_state"] == "hold_sample"
+    assert dynamic["recommended_values"]["normal_defensive_ticks"] == dynamic["current_values"]["normal_defensive_ticks"]
+    assert dynamic["recommended_values"]["max_below_bid_bps"] == dynamic["current_values"]["max_below_bid_bps"]
+    assert dynamic["source_metrics"]["recommended_values_valid"] is False
+    assert dynamic["source_metrics"]["recommended_values_runtime_change_ready"] is False
+    audit = dynamic["source_metrics"]["recommended_values_audit"]
+    assert audit["rejected"]["recommended_values_decision_scope"] == {
+        "value": None,
+        "reason": "required_sim_scope",
+    }
+
+
+def test_dynamic_entry_price_resolver_partial_sim_recommendation_keeps_unspecified_keys_current():
+    complete_metrics = {
+        "fill_rate": 62.0,
+        "full_fill_rate": 51.0,
+        "partial_fill_rate": 11.0,
+        "cancel_rate": 18.0,
+        "late_fill_rate": 3.0,
+        "missed_upside": 0.21,
+        "source_quality_adjusted_ev_pct": 0.42,
+    }
+    report_sources = {
+        "sources": {},
+        "source_metrics": {
+            "dynamic_entry_price_resolver": {
+                "candidate_observations": 25,
+                "sim_candidate_observations": 25,
+                "real_candidate_observations": 25,
+                "candidate_metrics": {
+                    "sim": dict(complete_metrics),
+                },
+                "recommended_values_decision_scope": "sim",
+                "recommended_values": {
+                    "normal_defensive_ticks": "2",
+                },
+            },
+        },
+    }
+    report = report_mod.build_daily_threshold_cycle_report(
+        "2026-05-08",
+        pipeline_loader=lambda target_date: [
+            {"stage": "order_bundle_submitted", "fields": {"price_below_bid_bps": "120"}}
+            for _ in range(25)
+        ],
+        report_source_loader=lambda target_date: report_sources,
+        completed_rows_loader=lambda start_date, end_date: [],
+    )
+
+    dynamic = {item["family"]: item for item in report["calibration_candidates"]}[
+        "dynamic_entry_price_resolver"
+    ]
+    assert dynamic["calibration_state"] == "adjust_up"
+    assert dynamic["recommended_values"]["normal_defensive_ticks"] == 2
+    assert dynamic["recommended_values"]["max_below_bid_bps"] == dynamic["current_values"]["max_below_bid_bps"]
+    assert dynamic["recommended_values"]["conditional_1tick_real_enabled"] == dynamic["current_values"][
+        "conditional_1tick_real_enabled"
+    ]
+    assert dynamic["source_metrics"]["recommended_values_valid"] is True
+    assert dynamic["source_metrics"]["recommended_values_runtime_change_ready"] is True
 
 
 def test_window_policy_registry_demotes_score65_daily_trigger_without_rolling_denominator():
@@ -3404,3 +3629,263 @@ def test_bridge_still_works_without_parent_catalog_missing():
         active_seed_state="false",
     )
     assert result == "matched_entry_child_bridge"
+
+
+def test_enrich_entry_price_sim_metrics_with_post_sell_joins_and_populates_metrics(tmp_path, monkeypatch):
+    from src.engine import daily_threshold_cycle_report as mod
+
+    post_sell_dir = tmp_path / "post_sell"
+    post_sell_dir.mkdir()
+    eval_path = post_sell_dir / "sim_post_sell_evaluations_2026-06-11.jsonl"
+
+    evaluations = [
+        {
+            "sim_record_id": "sim-1",
+            "sim_parent_record_id": "",
+            "profit_rate": 0.85,
+            "outcome": "MISSED_UPSIDE",
+            "metrics_10m": {"mfe_pct": 1.2, "mae_pct": -0.5, "close_ret_pct": 0.3},
+        },
+        {
+            "sim_record_id": "sim-2",
+            "sim_parent_record_id": "",
+            "profit_rate": -0.42,
+            "outcome": "GOOD_EXIT",
+            "metrics_10m": {"mfe_pct": 0.3, "mae_pct": -1.1, "close_ret_pct": -0.5},
+        },
+        {
+            "sim_record_id": "sim-3",
+            "sim_parent_record_id": "",
+            "profit_rate": 0.10,
+            "outcome": "NEUTRAL",
+            "metrics_10m": {"mfe_pct": 0.1, "mae_pct": -0.1, "close_ret_pct": 0.0},
+        },
+    ]
+    eval_path.write_text("\n".join(json.dumps(row) for row in evaluations), encoding="utf-8")
+
+    sim_events = [
+        {"stage": "scalp_sim_buy_order_virtual_pending", "fields": {"sim_record_id": "sim-1", "submitted_order_price": "10000"}},
+        {"stage": "scalp_sim_buy_order_assumed_filled", "fields": {"sim_record_id": "sim-1"}},
+        {"stage": "scalp_sim_buy_order_virtual_pending", "fields": {"sim_record_id": "sim-2", "submitted_order_price": "10000"}},
+        {"stage": "scalp_sim_buy_order_assumed_filled", "fields": {"sim_record_id": "sim-2"}},
+        {"stage": "scalp_sim_buy_order_virtual_pending", "fields": {"sim_record_id": "sim-3", "submitted_order_price": "10000"}},
+        {"stage": "scalp_sim_buy_order_virtual_pending", "fields": {"sim_record_id": "sim-noeval", "submitted_order_price": "10000"}},
+    ]
+
+    monkeypatch.setattr(mod, "POST_SELL_DIR", post_sell_dir)
+
+    sim_metrics = mod._candidate_metric_pack(
+        sim_events,
+        submitted_stages={"scalp_sim_buy_order_virtual_pending"},
+        fill_stages={"scalp_sim_buy_order_assumed_filled"},
+        cancel_stages={"scalp_sim_entry_expired", "scalp_sim_entry_unpriced"},
+    )
+
+    enriched = mod._enrich_entry_price_sim_metrics_with_post_sell(
+        sim_metrics,
+        sim_events,
+        target_date="2026-06-11",
+    )
+
+    assert enriched["post_sell_joined_count"] == 3
+    assert enriched["post_sell_join_pending_count"] == 1
+    assert enriched["post_sell_join_status"] == "evaluated"
+    assert enriched["missed_upside"] == round(1 / 3 * 100, 2)
+    assert enriched["missed_upside_source"] == "sim_post_sell_evaluations_10m"
+    assert enriched["source_quality_adjusted_ev_pct"] == round((0.85 - 0.42 + 0.10) / 3, 4)
+    assert enriched["ev_source"] == "joined_sim_post_sell_profit_rate"
+    assert enriched["post_sell_outcome_counts"] == {"MISSED_UPSIDE": 1, "GOOD_EXIT": 1, "NEUTRAL": 1}
+    assert enriched["fill_rate"] is not None
+
+
+def test_enrich_entry_price_sim_metrics_without_post_sell_artifact_keeps_metrics_none(monkeypatch):
+    from src.engine import daily_threshold_cycle_report as mod
+    import tempfile
+
+    empty_dir = Path(tempfile.mkdtemp()) / "post_sell"
+    empty_dir.mkdir(parents=True)
+    monkeypatch.setattr(mod, "POST_SELL_DIR", empty_dir)
+
+    sim_events = [
+        {"stage": "scalp_sim_buy_order_virtual_pending", "fields": {"submitted_order_price": "10000"}},
+    ]
+    sim_metrics = mod._candidate_metric_pack(
+        sim_events,
+        submitted_stages={"scalp_sim_buy_order_virtual_pending"},
+        fill_stages={"scalp_sim_buy_order_assumed_filled"},
+        cancel_stages={"scalp_sim_entry_expired", "scalp_sim_entry_unpriced"},
+    )
+
+    enriched = mod._enrich_entry_price_sim_metrics_with_post_sell(
+        sim_metrics, sim_events, target_date="2026-06-11",
+    )
+
+    assert enriched["post_sell_join_status"] == "missing_or_empty_artifact"
+    assert enriched["post_sell_joined_count"] == 0
+    assert enriched["post_sell_join_pending_count"] == 1
+    assert enriched["missed_upside"] is None
+    assert enriched["source_quality_adjusted_ev_pct"] is None
+
+
+def test_enrich_sim_parent_record_id_fallback_joins(tmp_path, monkeypatch):
+    from src.engine import daily_threshold_cycle_report as mod
+
+    post_sell_dir = tmp_path / "post_sell"
+    post_sell_dir.mkdir()
+    eval_path = post_sell_dir / "sim_post_sell_evaluations_2026-06-11.jsonl"
+    eval_path.write_text(
+        json.dumps({"sim_parent_record_id": "parent-1", "post_sell_id": "ps-1", "profit_rate": 0.55, "outcome": "GOOD_EXIT"})
+        + "\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(mod, "POST_SELL_DIR", post_sell_dir)
+
+    sim_events = [
+        {"stage": "scalp_sim_buy_order_virtual_pending",
+         "fields": {"sim_parent_record_id": "parent-1", "submitted_order_price": "10000"}},
+    ]
+    sim_metrics = mod._candidate_metric_pack(
+        sim_events,
+        submitted_stages={"scalp_sim_buy_order_virtual_pending"},
+        fill_stages={"scalp_sim_buy_order_assumed_filled"},
+        cancel_stages={"scalp_sim_entry_expired", "scalp_sim_entry_unpriced"},
+    )
+    enriched = mod._enrich_entry_price_sim_metrics_with_post_sell(
+        sim_metrics, sim_events, target_date="2026-06-11",
+    )
+    assert enriched["post_sell_join_status"] == "evaluated"
+    assert enriched["post_sell_joined_count"] == 1
+    assert enriched["post_sell_join_pending_count"] == 0
+
+
+def test_enrich_sim_candidate_id_fallback_joins(tmp_path, monkeypatch):
+    from src.engine import daily_threshold_cycle_report as mod
+
+    post_sell_dir = tmp_path / "post_sell"
+    post_sell_dir.mkdir()
+    eval_path = post_sell_dir / "sim_post_sell_evaluations_2026-06-11.jsonl"
+    eval_path.write_text(
+        json.dumps({"candidate_id": "cid-99", "post_sell_id": "ps-2", "profit_rate": -0.33, "outcome": "NEUTRAL"})
+        + "\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(mod, "POST_SELL_DIR", post_sell_dir)
+
+    sim_events = [
+        {"stage": "scalp_sim_buy_order_virtual_pending",
+         "fields": {"candidate_id": "cid-99", "submitted_order_price": "10000"}},
+    ]
+    sim_metrics = mod._candidate_metric_pack(
+        sim_events,
+        submitted_stages={"scalp_sim_buy_order_virtual_pending"},
+        fill_stages={"scalp_sim_buy_order_assumed_filled"},
+        cancel_stages={"scalp_sim_entry_expired", "scalp_sim_entry_unpriced"},
+    )
+    enriched = mod._enrich_entry_price_sim_metrics_with_post_sell(
+        sim_metrics, sim_events, target_date="2026-06-11",
+    )
+    assert enriched["post_sell_join_status"] == "evaluated"
+    assert enriched["post_sell_joined_count"] == 1
+    assert enriched["post_sell_join_pending_count"] == 0
+
+
+def test_enrich_sim_parent_priority_over_candidate_when_both_exist(tmp_path, monkeypatch):
+    from src.engine import daily_threshold_cycle_report as mod
+
+    post_sell_dir = tmp_path / "post_sell"
+    post_sell_dir.mkdir()
+    eval_path = post_sell_dir / "sim_post_sell_evaluations_2026-06-11.jsonl"
+    eval_path.write_text(
+        "\n".join([
+            json.dumps({"sim_parent_record_id": "parent-x", "post_sell_id": "ps-parent", "profit_rate": 0.60, "outcome": "GOOD_EXIT"}),
+            json.dumps({"candidate_id": "cid-x", "post_sell_id": "ps-cid", "profit_rate": 0.30, "outcome": "GOOD_EXIT"}),
+        ]),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(mod, "POST_SELL_DIR", post_sell_dir)
+
+    sim_events = [
+        {"stage": "scalp_sim_buy_order_virtual_pending",
+         "fields": {"sim_parent_record_id": "parent-x", "candidate_id": "cid-x", "submitted_order_price": "10000"}},
+    ]
+    sim_metrics = mod._candidate_metric_pack(
+        sim_events,
+        submitted_stages={"scalp_sim_buy_order_virtual_pending"},
+        fill_stages={"scalp_sim_buy_order_assumed_filled"},
+        cancel_stages={"scalp_sim_entry_expired", "scalp_sim_entry_unpriced"},
+    )
+    enriched = mod._enrich_entry_price_sim_metrics_with_post_sell(
+        sim_metrics, sim_events, target_date="2026-06-11",
+    )
+    assert enriched["post_sell_joined_count"] == 1
+    assert enriched["post_sell_join_pending_count"] == 0
+    assert enriched["source_quality_adjusted_ev_pct"] == 0.60
+
+
+def test_enrich_sim_separate_events_same_eval_via_different_keys_pending_zero(tmp_path, monkeypatch):
+    from src.engine import daily_threshold_cycle_report as mod
+
+    post_sell_dir = tmp_path / "post_sell"
+    post_sell_dir.mkdir()
+    eval_path = post_sell_dir / "sim_post_sell_evaluations_2026-06-11.jsonl"
+    eval_path.write_text(
+        json.dumps({"sim_record_id": "sim-x", "candidate_id": "cid-x", "post_sell_id": "ps-x", "profit_rate": 0.77, "outcome": "MISSED_UPSIDE"})
+        + "\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(mod, "POST_SELL_DIR", post_sell_dir)
+
+    sim_events = [
+        {"stage": "scalp_sim_buy_order_virtual_pending",
+         "fields": {"sim_record_id": "sim-x", "submitted_order_price": "10000"}},
+        {"stage": "scalp_sim_buy_order_assumed_filled",
+         "fields": {"candidate_id": "cid-x"}},
+    ]
+    sim_metrics = mod._candidate_metric_pack(
+        sim_events,
+        submitted_stages={"scalp_sim_buy_order_virtual_pending"},
+        fill_stages={"scalp_sim_buy_order_assumed_filled"},
+        cancel_stages={"scalp_sim_entry_expired", "scalp_sim_entry_unpriced"},
+    )
+    enriched = mod._enrich_entry_price_sim_metrics_with_post_sell(
+        sim_metrics, sim_events, target_date="2026-06-11",
+    )
+    assert enriched["post_sell_joined_count"] == 1
+    assert enriched["post_sell_join_pending_count"] == 0
+    assert enriched["missed_upside"] == 100.0
+
+
+def test_enrich_sim_same_eval_via_both_record_id_and_candidate_id_not_duplicated(tmp_path, monkeypatch):
+    from src.engine import daily_threshold_cycle_report as mod
+
+    post_sell_dir = tmp_path / "post_sell"
+    post_sell_dir.mkdir()
+    eval_path = post_sell_dir / "sim_post_sell_evaluations_2026-06-11.jsonl"
+    eval_path.write_text(
+        json.dumps({"sim_record_id": "sim-x", "candidate_id": "cid-x", "post_sell_id": "ps-x", "profit_rate": 0.77, "outcome": "MISSED_UPSIDE"})
+        + "\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(mod, "POST_SELL_DIR", post_sell_dir)
+
+    sim_events = [
+        {"stage": "scalp_sim_buy_order_virtual_pending",
+         "fields": {"sim_record_id": "sim-x", "candidate_id": "cid-x", "submitted_order_price": "10000"}},
+    ]
+    sim_metrics = mod._candidate_metric_pack(
+        sim_events,
+        submitted_stages={"scalp_sim_buy_order_virtual_pending"},
+        fill_stages={"scalp_sim_buy_order_assumed_filled"},
+        cancel_stages={"scalp_sim_entry_expired", "scalp_sim_entry_unpriced"},
+    )
+    enriched = mod._enrich_entry_price_sim_metrics_with_post_sell(
+        sim_metrics, sim_events, target_date="2026-06-11",
+    )
+    assert enriched["post_sell_joined_count"] == 1
+    assert enriched["post_sell_join_pending_count"] == 0
+    assert enriched["missed_upside"] == 100.0

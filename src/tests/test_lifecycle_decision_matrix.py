@@ -406,6 +406,101 @@ def test_lifecycle_submit_bucket_attribution_creates_contract_gap_workorders():
     }
 
 
+def test_lifecycle_submit_bucket_attribution_surfaces_post_submit_join_gap():
+    rows = [
+        {
+            "stage": "submit",
+            "source_stage": "order_bundle_submitted",
+            "runtime_features": {
+                "actual_order_submitted": True,
+                "broker_order_forbidden": False,
+                "stock_code": "011070",
+                "order_price": 10049,
+            },
+            "labels": {"profit_rate": None},
+            "stage_ev_composite_pct": None,
+        }
+    ]
+
+    attribution = mod._submit_bucket_attribution(rows)
+
+    assert attribution["summary"]["real_submitted_row_count"] == 1
+    assert attribution["summary"]["missing_broker_order_key_count"] == 1
+    assert attribution["summary"]["missing_broker_order_key_rate"] == 1.0
+    assert attribution["summary"]["post_submit_provenance_join_gap"] is True
+    assert {
+        item["workorder_id"]
+        for item in attribution["code_improvement_workorders"]
+    } >= {"order_entry_post_submit_provenance_join_gap"}
+
+
+def test_lifecycle_submit_bucket_attribution_surfaces_bot_history_backfill_candidates(tmp_path, monkeypatch):
+    bot_history = tmp_path / "bot_history.log"
+    bot_history.write_text(
+        "\n".join(
+            [
+                "[2026-06-11 12:34:55] 📩 [WS 주문상태] 131970 | 주문번호: '0049916' | 상태: '접수' | 구분: '+매수'",
+                "[2026-06-11 12:35:31] 📩 [WS 주문상태] 131970 | 주문번호: '0049962' | 상태: '접수' | 구분: '매수취소'",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(mod, "BOT_HISTORY_LOG", bot_history)
+    rows = [
+        {
+            "stage": "submit",
+            "source_stage": "order_bundle_submitted",
+            "stock_code": "131970",
+            "event_time": "2026-06-11T12:34:54",
+            "runtime_features": {
+                "actual_order_submitted": True,
+                "broker_order_forbidden": False,
+            },
+            "labels": {"profit_rate": None},
+            "stage_ev_composite_pct": None,
+        }
+    ]
+
+    attribution = mod._submit_bucket_attribution(rows)
+    summary = attribution["summary"]
+
+    assert summary["post_submit_provenance_join_gap"] is True
+    assert summary["bot_history_broker_order_key_backfill_candidate_count"] == 1
+    assert summary["bot_history_broker_order_key_backfill_full_coverage"] is True
+    candidate = summary["bot_history_broker_order_key_backfill_candidates"][0]
+    assert candidate["best_candidate"]["broker_order_no"] == "0049916"
+    assert candidate["best_candidate"]["delta_sec"] == 1
+
+
+def test_lifecycle_submit_bucket_attribution_does_not_gap_when_broker_key_present():
+    rows = [
+        {
+            "stage": "submit",
+            "source_stage": "order_bundle_submitted",
+            "runtime_features": {
+                "actual_order_submitted": True,
+                "broker_order_forbidden": False,
+                "broker_order_no": "0046858",
+                "order_response_ord_no": "0046858",
+                "submit_attempt_id": "011070:1781160000000:0046858",
+            },
+            "labels": {"profit_rate": None},
+            "stage_ev_composite_pct": None,
+        }
+    ]
+
+    attribution = mod._submit_bucket_attribution(rows)
+
+    assert attribution["summary"]["real_submitted_row_count"] == 1
+    assert attribution["summary"]["missing_broker_order_key_count"] == 0
+    assert attribution["summary"]["missing_broker_order_key_rate"] == 0.0
+    assert attribution["summary"]["post_submit_provenance_join_gap"] is False
+    assert "order_entry_post_submit_provenance_join_gap" not in {
+        item["workorder_id"]
+        for item in attribution["code_improvement_workorders"]
+    }
+
+
 def test_lifecycle_submit_unknown_bucket_is_source_quality_blocker():
     rows = [
         {

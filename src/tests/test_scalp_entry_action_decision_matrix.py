@@ -249,6 +249,7 @@ def test_scalp_entry_adm_report_warns_on_unknown_bucket_source_quality(tmp_path,
     assert 1 <= unknown_summary["affected_rows"] <= unknown_summary["total_rows"]
     assert unknown_summary["not_available_affected_rows"] <= unknown_summary["total_rows"]
     assert unknown_summary["dimension_counts"]["score_bucket"] == 1
+    assert unknown_summary["unknown_root_cause_counts"]["score_bucket:source_score_missing"] == 1
     assert "unknown_dimension_occurrence_count" in unknown_summary
     assert "not_available_dimension_counts" in unknown_summary
     assert "recomputed_unknown_count" in unknown_summary
@@ -263,6 +264,13 @@ def test_scalp_entry_adm_normalizes_submitted_snapshot_action():
         "source_stage": "order_bundle_submitted",
         "chosen_action": "NO_BUY_AI",
         "actual_order_submitted": True,
+        "broker_order_submitted": True,
+        "broker_order_no": "0046858",
+        "order_no": "0046858",
+        "ord_no": "0046858",
+        "broker_order_no_list": "0046858,0046859",
+        "order_response_ord_no": "0046858",
+        "submit_attempt_id": "005930:1781160000000:0046858",
         "price_resolution_reason": "defensive_order_price",
     }
 
@@ -280,6 +288,13 @@ def test_scalp_entry_adm_normalizes_submitted_snapshot_action():
     assert row["chosen_action"] == "BUY_DEFENSIVE"
     assert row["action_normalized"] is True
     assert row["action_normalization_reason"] == "submitted_or_latency_pass_non_buy_action_normalized"
+    assert row["broker_order_submitted"] is True
+    assert row["broker_order_no"] == "0046858"
+    assert row["order_no"] == "0046858"
+    assert row["ord_no"] == "0046858"
+    assert row["broker_order_no_list"] == "0046858,0046859"
+    assert row["order_response_ord_no"] == "0046858"
+    assert row["submit_attempt_id"] == "005930:1781160000000:0046858"
     assert (
         mod._chosen_action(
             "scalp_entry_action_decision_snapshot",
@@ -737,6 +752,7 @@ def test_scalp_entry_adm_unknown_bucket_summary_separates_unknown_from_not_avail
     assert "unknown_dimension_occurrence_count" in unknown_summary
     assert "not_available_dimension_occurrence_count" in unknown_summary
     assert "not_available_dimension_counts" in unknown_summary
+    assert unknown_summary["unknown_root_cause_counts"]["score_bucket:adm_field_unknown"] == 1
     assert unknown_summary["examples"][0]["bucket_token"].count("|") == 7
 
 
@@ -876,3 +892,31 @@ def test_scalp_entry_adm_hypothesis_force_requires_explicit_flag(tmp_path, monke
     assert merged["action"] == "WAIT"
     assert merged["entry_adm_runtime_bias_applied"] is True
     assert merged["entry_adm_runtime_reason"] == "hypothesis_weak_momentum_chase_risk"
+
+
+def test_adm_bucket_lookup_status_matched_prior_bucket():
+    from src.engine.scalp_entry_adm_runtime import _bucket_lookup_status
+
+    payload = {"bucket_summary": [{"bucket_token": "tk", "sample_count": 114, "joined_sample": 32}]}
+    matched = {"bucket_token": "tk", "sample_count": 114, "joined_sample": 32}
+    assert _bucket_lookup_status(payload, matched) == "matched_prior_bucket"
+
+
+def test_adm_bucket_lookup_status_new_or_unseen_token():
+    from src.engine.scalp_entry_adm_runtime import _bucket_lookup_status
+
+    payload = {"bucket_summary": [{"bucket_token": "other"}]}
+    assert _bucket_lookup_status(payload, {}) == "new_or_unseen_token_vs_prior_adm"
+
+
+def test_adm_bucket_lookup_status_prior_bucket_missing_sample():
+    from src.engine.scalp_entry_adm_runtime import _bucket_lookup_status
+
+    payload = {"bucket_summary": [{"bucket_token": "tk", "sample_count": 0, "joined_sample": 0}]}
+    matched = {"bucket_token": "tk", "sample_count": 0, "joined_sample": 0}
+    assert _bucket_lookup_status(payload, matched) == "prior_bucket_present_but_runtime_sample_missing"
+
+
+def test_adm_bucket_lookup_status_no_payload():
+    from src.engine.scalp_entry_adm_runtime import _bucket_lookup_status
+    assert _bucket_lookup_status({}, {}) == "bucket_lookup_not_performed"

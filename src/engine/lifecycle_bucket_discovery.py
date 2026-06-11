@@ -1000,6 +1000,7 @@ def _source_dimension_gap_summary(candidates: list[dict[str, Any]]) -> dict[str,
     resolution_counts: Counter[str] = Counter()
     missing_dimension_counts: Counter[str] = Counter()
     unknown_reason_counts: Counter[str] = Counter()
+    policy_key_gap_classification_counts: Counter[str] = Counter()
     actionable: list[dict[str, Any]] = []
     rollup: list[dict[str, Any]] = []
     lifecycle_flow_incomplete = 0
@@ -1026,6 +1027,9 @@ def _source_dimension_gap_summary(candidates: list[dict[str, Any]]) -> dict[str,
         reason_counts = item.get("unknown_reason_counts") if isinstance(item.get("unknown_reason_counts"), dict) else {}
         for key, value in reason_counts.items():
             unknown_reason_counts[str(key)] += _safe_int(value)
+        classification = str(item.get("policy_key_gap_classification") or "").strip()
+        if classification:
+            policy_key_gap_classification_counts[classification] += 1
         compact = {
             "bucket_id": item.get("bucket_id"),
             "source_bucket_id": item.get("source_bucket_id"),
@@ -1058,6 +1062,7 @@ def _source_dimension_gap_summary(candidates: list[dict[str, Any]]) -> dict[str,
         "recommended_resolution_counts": dict(resolution_counts),
         "missing_dimension_key_counts": dict(missing_dimension_counts),
         "unknown_reason_counts": dict(unknown_reason_counts),
+        "policy_key_gap_classification_counts": dict(policy_key_gap_classification_counts),
         "actionable_candidates": actionable[:50],
         "rollup_candidates": rollup[:50],
     }
@@ -3060,14 +3065,31 @@ def _policy_stage_candidates(payload: dict[str, Any]) -> list[dict[str, Any]]:
         if not isinstance(entry, dict):
             continue
         stage = str(entry.get("stage") or "unknown")
-        bucket_id = f"{stage}:stage_policy:{_slug(entry.get('policy_key') or stage)}"
-        policy_key = str(entry.get("policy_key") or stage)
+        raw_policy_key = str(entry.get("policy_key") or "").strip()
+        policy_key = raw_policy_key if raw_policy_key else "-"
+        bucket_id = f"{stage}:stage_policy:{_slug(raw_policy_key or stage)}"
+        policy_key_gap_classification = str(entry.get("policy_key_gap_classification") or "")
         state = (
             "sim_auto_approved"
             if str(entry.get("source_quality_gate") or "") == "pass"
             else "source_only_keep_collecting"
         )
         source_dimensions = {"policy_key": policy_key}
+        missing_dimension_overrides: list[str] = []
+        source_dimension_gap_override: str | None = None
+        if not raw_policy_key:
+            source_dimensions = {"policy_key": "-"}
+            source_dimension_gap_override = "unknown_source_dimensions"
+            missing_dimension_overrides = ["policy_key"]
+            state = "source_only_keep_collecting"
+            policy_key_gap_classification = "policy_key_required_missing"
+        if not policy_key_gap_classification:
+            if policy_key != "-":
+                policy_key_gap_classification = "policy_key_provided"
+            elif state == "source_only_keep_collecting":
+                policy_key_gap_classification = "policy_key_not_required_context_row"
+            else:
+                policy_key_gap_classification = "policy_key_required_missing"
         taxonomy = normalize_lifecycle_bucket(
             stage=stage,
             bucket_type="stage_policy",
@@ -3099,6 +3121,7 @@ def _policy_stage_candidates(payload: dict[str, Any]) -> list[dict[str, Any]]:
                 "bounded_live_canary_allowed": False,
                 "source_stage_split_required": False,
                 "source_dimensions": source_dimensions,
+                "policy_key_gap_classification": policy_key_gap_classification,
                 "canonical_bucket": taxonomy["canonical_bucket"],
                 "legacy_raw_bucket_key": taxonomy["legacy_raw_bucket_key"],
                 "bucket_alias_version": taxonomy["bucket_alias_version"],
@@ -3107,7 +3130,8 @@ def _policy_stage_candidates(payload: dict[str, Any]) -> list[dict[str, Any]]:
                 "taxonomy_candidate_type": taxonomy["taxonomy_candidate_type"],
                 "normalized_dimensions": taxonomy["normalized_dimensions"],
                 "normalized_metrics": taxonomy["normalized_metrics"],
-                "missing_dimension_keys": taxonomy["missing_dimension_keys"],
+                "missing_dimension_keys": sorted(set(taxonomy["missing_dimension_keys"]) | set(missing_dimension_overrides)),
+                "source_dimension_gap": source_dimension_gap_override,
                 "deterministic_proposal": deterministic_proposal,
                 "ai_tier2_proposal": default_ai_tier2_proposal(bucket_id, deterministic_proposal),
                 "ai_tier2_comparative_review": compare_taxonomy_proposals(
@@ -3125,8 +3149,8 @@ def _policy_stage_candidates(payload: dict[str, Any]) -> list[dict[str, Any]]:
                 "recommended_resolution": "next_preopen_sim_policy_input"
                 if state == "sim_auto_approved"
                 else "keep_collecting_until_sample_floor",
-                "unknown_dimension_counts": {},
-                "unknown_reason_counts": {},
+                "unknown_dimension_counts": {"policy_key": 1} if source_dimension_gap_override else {},
+                "unknown_reason_counts": {"policy_key_missing": 1} if source_dimension_gap_override else {},
                 "source_field_coverage": {},
                 "actual_order_submitted": False,
                 "broker_order_forbidden": True,

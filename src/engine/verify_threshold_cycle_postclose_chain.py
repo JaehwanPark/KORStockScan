@@ -999,6 +999,21 @@ def _lifecycle_bucket_discovery_handoff_status(
         missing.append("lifecycle_bucket_discovery_source_contract_fail")
     elif source_contract_status and source_contract_status != "pass":
         warnings.append(f"lifecycle_bucket_discovery_source_contract_{source_contract_status}")
+    missing_dimension_keys = source_dimension_summary.get("missing_dimension_key_counts") if isinstance(source_dimension_summary.get("missing_dimension_key_counts"), dict) else {}
+    policy_key_missing_count = _safe_int(missing_dimension_keys.get("policy_key"), 0)
+    policy_key_gap_classification_counts = (
+        source_dimension_summary.get("policy_key_gap_classification_counts")
+        if isinstance(source_dimension_summary.get("policy_key_gap_classification_counts"), dict)
+        else {}
+    )
+    policy_key_required_missing_count = _safe_int(policy_key_gap_classification_counts.get("policy_key_required_missing"), 0)
+    if policy_key_missing_count > 0:
+        if policy_key_required_missing_count > 0:
+            warnings.append("lifecycle_bucket_discovery_policy_key_required_missing")
+        elif policy_key_gap_classification_counts:
+            warnings.append("lifecycle_bucket_discovery_policy_key_missing_non_blocking_context")
+        else:
+            warnings.append("lifecycle_bucket_discovery_policy_key_missing_await_classification")
     if ai_followup_ids:
         warnings.append("lifecycle_bucket_discovery_ai_post_apply_followup_required")
     warnings.extend(
@@ -1010,6 +1025,9 @@ def _lifecycle_bucket_discovery_handoff_status(
     status_warning_reasons = {
         "lifecycle_source_dimension_gap_handoff_missing",
         "lifecycle_quiet_gap_handoff_missing",
+        "lifecycle_bucket_discovery_policy_key_required_missing",
+        "lifecycle_bucket_discovery_policy_key_missing_non_blocking_context",
+        "lifecycle_bucket_discovery_policy_key_missing_await_classification",
     }
     handoff_warning = any(item in status_warning_reasons for item in warnings)
     return {
@@ -1481,6 +1499,7 @@ def _buy_funnel_submit_drought_handoff_status(
         if isinstance(ldm_report.get("submit_bucket_attribution"), dict)
         else {}
     )
+    ldm_submit_summary = ldm_submit.get("summary") if isinstance(ldm_submit.get("summary"), dict) else {}
     ev_entry_funnel = ev_report.get("entry_funnel") if isinstance(ev_report.get("entry_funnel"), dict) else {}
     ev_buy = ev_report.get("buy_funnel_sentinel") if isinstance(ev_report.get("buy_funnel_sentinel"), dict) else {}
     runtime_buy = (
@@ -1517,6 +1536,22 @@ def _buy_funnel_submit_drought_handoff_status(
             sorted(set(ENTRY_SUBMIT_DROUGHT_REQUIRED_ORDER_IDS) - actual_order_ids) if critical else []
         ),
         "ldm_submit_bucket_attribution_present": bool(ldm_submit),
+        "ldm_submit_real_submitted_row_count": _safe_int(ldm_submit_summary.get("real_submitted_row_count"), 0),
+        "ldm_submit_missing_broker_order_key_count": _safe_int(
+            ldm_submit_summary.get("missing_broker_order_key_count"),
+            0,
+        ),
+        "ldm_submit_missing_broker_order_key_rate": ldm_submit_summary.get("missing_broker_order_key_rate"),
+        "ldm_submit_bot_history_backfill_candidate_count": _safe_int(
+            ldm_submit_summary.get("bot_history_broker_order_key_backfill_candidate_count"),
+            0,
+        ),
+        "ldm_submit_bot_history_backfill_full_coverage": bool(
+            ldm_submit_summary.get("bot_history_broker_order_key_backfill_full_coverage")
+        ),
+        "ldm_submit_post_submit_provenance_join_gap": bool(
+            ldm_submit_summary.get("post_submit_provenance_join_gap")
+        ),
         "threshold_cycle_ev_primary": ev_buy.get("primary"),
         "runtime_approval_summary_primary": runtime_buy.get("primary"),
         "missing": missing,
@@ -1527,6 +1562,218 @@ def _buy_funnel_submit_drought_handoff_status(
             if critical
             else "BUY Funnel Sentinel submit drought is not critical."
         ),
+    }
+
+
+def _warning_followup_summary(
+    *,
+    buy_funnel_submit_drought_handoff: dict[str, Any],
+    scalp_entry_adm: dict[str, Any],
+    currentness_audit: dict[str, Any],
+    pattern_lab_ai_review: dict[str, Any],
+    discovery_report: dict[str, Any],
+    runtime_apply_gap_audit: dict[str, Any],
+    lifecycle_bucket_discovery_handoff: dict[str, Any],
+) -> dict[str, Any]:
+    adm_summary = scalp_entry_adm.get("summary") if isinstance(scalp_entry_adm.get("summary"), dict) else {}
+    adm_unknown = (
+        adm_summary.get("unknown_bucket_summary")
+        if isinstance(adm_summary.get("unknown_bucket_summary"), dict)
+        else {}
+    )
+    currentness_summary = (
+        currentness_audit.get("summary") if isinstance(currentness_audit.get("summary"), dict) else {}
+    )
+    currentness_status = str(currentness_audit.get("status") or currentness_summary.get("status") or "").strip()
+    ai_review_summary = (
+        pattern_lab_ai_review.get("summary") if isinstance(pattern_lab_ai_review.get("summary"), dict) else {}
+    )
+    ai_review_status = str(pattern_lab_ai_review.get("status") or ai_review_summary.get("status") or "").strip()
+    discovery_summary = discovery_report.get("summary") if isinstance(discovery_report.get("summary"), dict) else {}
+    runtime_gap_summary = (
+        runtime_apply_gap_audit.get("summary")
+        if isinstance(runtime_apply_gap_audit.get("summary"), dict)
+        else {}
+    )
+
+    live_auto_ready = _safe_int(discovery_summary.get("live_auto_apply_ready_count"), 0)
+    live_auto_breakdown = {
+        "live_auto_apply_ready_count": live_auto_ready,
+        "state_counts": discovery_summary.get("state_counts") if isinstance(discovery_summary.get("state_counts"), dict) else {},
+        "source_bucket_kind_counts": (
+            discovery_summary.get("source_bucket_kind_counts")
+            if isinstance(discovery_summary.get("source_bucket_kind_counts"), dict)
+            else {}
+        ),
+        "runtime_gap_categories": (
+            runtime_gap_summary.get("derived_review_category_counts")
+            if isinstance(runtime_gap_summary.get("derived_review_category_counts"), dict)
+            else {}
+        ),
+        "source_contract_status": discovery_summary.get("source_contract_status"),
+        "source_contract_change_count": _safe_int(discovery_summary.get("source_contract_change_count"), 0),
+        "ai_two_pass_review_status": discovery_summary.get("ai_two_pass_review_status"),
+        "positive_edge_source_quality_pass_count": _safe_int(
+            runtime_gap_summary.get("positive_edge_source_quality_pass_count"),
+            0,
+        ),
+        "bridge_blocker_ledger_count": _safe_int(runtime_gap_summary.get("bridge_blocker_ledger_count"), 0),
+        "runtime_uptake_rate_pct": runtime_gap_summary.get("runtime_uptake_rate_pct"),
+        "handoff_warnings": lifecycle_bucket_discovery_handoff.get("warnings") or [],
+    }
+    if not discovery_summary:
+        live_auto_decision = "pass_no_live_auto_context"
+        live_auto_next_action = "No lifecycle bucket discovery summary was available for live-auto follow-up decomposition."
+    elif live_auto_ready <= 0:
+        live_auto_decision = "warning_explained_no_live_auto_ready"
+        live_auto_next_action = (
+            "Keep complete lifecycle promotion as the owner; close source-contract drift, source-quality blockers, "
+            "and runtime_blocked_contract_gap buckets before expecting live-auto candidates."
+        )
+    else:
+        live_auto_decision = "pass_live_auto_ready_present"
+        live_auto_next_action = "Validate bridge/runtime/preopen uptake for the surfaced live-auto candidates."
+
+    items = [
+        {
+            "priority": 1,
+            "topic": "submit_drought",
+            "decision": (
+                "post_submit_provenance_join_gap_open"
+                if buy_funnel_submit_drought_handoff.get("ldm_submit_post_submit_provenance_join_gap")
+                else (
+                    "pass_no_submit_drought_critical"
+                    if not buy_funnel_submit_drought_handoff.get("critical")
+                    else (
+                    "pass_handoff_closed"
+                    if buy_funnel_submit_drought_handoff.get("status") == "pass"
+                    else "needs_followup"
+                    )
+                )
+            ),
+            "evidence": {
+                "status": buy_funnel_submit_drought_handoff.get("status"),
+                "critical": buy_funnel_submit_drought_handoff.get("critical"),
+                "primary": buy_funnel_submit_drought_handoff.get("primary"),
+                "matches": buy_funnel_submit_drought_handoff.get("matches") or [],
+                "missing": buy_funnel_submit_drought_handoff.get("missing") or [],
+                "ldm_submit_real_submitted_row_count": buy_funnel_submit_drought_handoff.get(
+                    "ldm_submit_real_submitted_row_count"
+                ),
+                "ldm_submit_missing_broker_order_key_count": buy_funnel_submit_drought_handoff.get(
+                    "ldm_submit_missing_broker_order_key_count"
+                ),
+                "ldm_submit_missing_broker_order_key_rate": buy_funnel_submit_drought_handoff.get(
+                    "ldm_submit_missing_broker_order_key_rate"
+                ),
+                "ldm_submit_post_submit_provenance_join_gap": buy_funnel_submit_drought_handoff.get(
+                    "ldm_submit_post_submit_provenance_join_gap"
+                ),
+                "ldm_submit_bot_history_backfill_candidate_count": buy_funnel_submit_drought_handoff.get(
+                    "ldm_submit_bot_history_backfill_candidate_count"
+                ),
+                "ldm_submit_bot_history_backfill_full_coverage": buy_funnel_submit_drought_handoff.get(
+                    "ldm_submit_bot_history_backfill_full_coverage"
+                ),
+            },
+            "next_action": (
+                "Bot history contains same-stock WS buy-order candidates for every missing broker-key row; "
+                "verify exact submit-time mapping before treating today's rows as fill-joinable, and keep future "
+                "order_bundle_submitted broker-key emission enabled."
+                if buy_funnel_submit_drought_handoff.get("ldm_submit_post_submit_provenance_join_gap")
+                and buy_funnel_submit_drought_handoff.get("ldm_submit_bot_history_backfill_full_coverage")
+                else
+                "Future order_bundle_submitted rows must emit broker_order_no/order_no/ord_no/order_response_ord_no; "
+                "today's existing submitted rows cannot be treated as fill-joinable until a broker key is recovered."
+                if buy_funnel_submit_drought_handoff.get("ldm_submit_post_submit_provenance_join_gap")
+                else (
+                    "No submit drought critical condition was active in this verification context."
+                    if not buy_funnel_submit_drought_handoff.get("critical")
+                    else (
+                    "No new implementation from this warning pass; continue postclose attribution and submit blocker tracking."
+                    if buy_funnel_submit_drought_handoff.get("status") == "pass"
+                    else "Restore missing workorder/LDM/EV/runtime-summary submit drought handoff."
+                    )
+                )
+            ),
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+        },
+        {
+            "priority": 2,
+            "topic": "scalp_entry_adm_unknown_bucket_source_quality_gap",
+            "decision": "source_quality_followup_required"
+            if "unknown_bucket_source_quality_gap" in (adm_summary.get("warnings") or [])
+            else "pass_no_unknown_bucket_warning",
+            "evidence": {
+                "status": adm_summary.get("status"),
+                "warnings": adm_summary.get("warnings") or [],
+                "affected_rows": _safe_int(adm_unknown.get("affected_rows"), 0),
+                "affected_rate": adm_unknown.get("affected_rate"),
+                "dimension_counts": adm_unknown.get("dimension_counts") or {},
+                "unknown_root_cause_counts": adm_unknown.get("unknown_root_cause_counts") or {},
+                "stage_counts": adm_unknown.get("stage_counts") or {},
+                "recommended_route": adm_unknown.get("recommended_route"),
+                "not_available_route": adm_unknown.get("not_available_route"),
+                "lookup_status_counts": adm_summary.get("adm_bucket_lookup_status_counts") or {},
+            },
+            "next_action": (
+                "Prioritize source score emission for score_bucket unknown rows, then risk_context/price_resolution "
+                "source fields; keep not_available buckets as explicit non-workorder context unless they become "
+                "required source fields."
+            ),
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+        },
+        {
+            "priority": 3,
+            "topic": "pattern_lab_warning",
+            "decision": "pass_no_current_handoff_workorder"
+            if (
+                (currentness_status in {"", "pass"})
+                and (ai_review_status in {"", "pass"})
+                and _safe_int(ai_review_summary.get("workorder_count"), 0) == 0
+            )
+            else "warning_review_required",
+            "evidence": {
+                "currentness_status": currentness_status,
+                "currentness_fail_count": _safe_int(currentness_summary.get("fail_count"), 0),
+                "ai_review_status": ai_review_status,
+                "ai_review_workorder_count": _safe_int(ai_review_summary.get("workorder_count"), 0),
+                "ai_review_warnings": ai_review_summary.get("warnings") or [],
+            },
+            "next_action": (
+                "No new pattern-lab implement_now item; keep pattern lab warning as source-only monitoring unless "
+                "fresh currentness or AI review emits a concrete workorder."
+            ),
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+        },
+        {
+            "priority": 4,
+            "topic": "live_auto_ready_zero_breakdown",
+            "decision": live_auto_decision,
+            "evidence": live_auto_breakdown,
+            "next_action": live_auto_next_action,
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+        },
+    ]
+    def _is_warning_followup_decision(item: dict[str, Any]) -> bool:
+        decision = str(item.get("decision") or "")
+        if decision.startswith("pass"):
+            return False
+        return any(token in decision for token in ("warning", "required", "gap_open", "needs_followup"))
+
+    return {
+        "status": (
+            "warning"
+            if any(_is_warning_followup_decision(item) for item in items)
+            else "pass"
+        ),
+        "items": items,
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
     }
 
 
@@ -2803,6 +3050,7 @@ def build_threshold_cycle_postclose_verification(
     scalp_sim_policy_catalog = _load_json(paths["scalp_sim_policy_catalog"])
     swing_sim_policy_catalog = _load_json(paths["swing_sim_policy_catalog"])
     buy_funnel_report = _load_json(paths["buy_funnel_sentinel"])
+    scalp_entry_adm_report = _load_json(paths["scalp_entry_action_decision_matrix"])
     currentness_audit = _load_json(paths["pattern_lab_currentness_audit"])
     pattern_lab_ai_review = _load_json(paths["pattern_lab_ai_review"])
     producer_gap_discovery = _load_json(paths["producer_gap_discovery"])
@@ -3496,6 +3744,16 @@ def build_threshold_cycle_postclose_verification(
         stale_downstream_links = [key for key in stale_downstream_links if "pattern_lab_propagation_audit" not in key]
     if "daily_ev" in disabled_stage_flags or "runtime_approval_summary" in disabled_stage_flags:
         stale_downstream_links = []
+
+    warning_followup_summary = _warning_followup_summary(
+        buy_funnel_submit_drought_handoff=buy_funnel_submit_drought_handoff,
+        scalp_entry_adm=scalp_entry_adm_report,
+        currentness_audit=currentness_audit,
+        pattern_lab_ai_review=pattern_lab_ai_review,
+        discovery_report=discovery_report,
+        runtime_apply_gap_audit=runtime_apply_gap_audit,
+        lifecycle_bucket_discovery_handoff=lifecycle_bucket_discovery_handoff,
+    )
     if stale_downstream_links and not require_done_marker:
         handoff_warnings.append("pending_done_stale_downstream_links_present")
     pending_done_marker = bool(start_line and done_line is None and not require_done_marker)
@@ -3543,6 +3801,8 @@ def build_threshold_cycle_postclose_verification(
     elif workorder_snapshot_status == "missing_snapshot_identity":
         status = "fail"
     elif handoff_warnings or conversion_kpi_warnings:
+        status = "warning"
+    elif warning_followup_summary.get("status") == "warning":
         status = "warning"
     elif predecessor_waits:
         status = "warning"
@@ -3628,6 +3888,7 @@ def build_threshold_cycle_postclose_verification(
             "key_lineage_summary": key_lineage_summary,
             "conversion_lane_summary": conversion_lane_summary,
         },
+        "warning_followup_summary": warning_followup_summary,
         "handoff_warnings": sorted(set(handoff_warnings)),
         "gap_provenance": gap_provenance,
         "gap_affected_handoffs": gap_affected_handoffs,
@@ -3671,6 +3932,11 @@ def _render_markdown(report: dict[str, Any]) -> str:
     workorder = report.get("workorder_snapshot") if isinstance(report.get("workorder_snapshot"), dict) else {}
     ai_correction = report.get("ai_correction") if isinstance(report.get("ai_correction"), dict) else {}
     runtime_gap = report.get("runtime_apply_gap_audit") if isinstance(report.get("runtime_apply_gap_audit"), dict) else {}
+    warning_followup = (
+        report.get("warning_followup_summary")
+        if isinstance(report.get("warning_followup_summary"), dict)
+        else {}
+    )
     gap_provenance = report.get("gap_provenance") if isinstance(report.get("gap_provenance"), dict) else {}
     gap_affected_handoffs = report.get("gap_affected_handoffs") or []
     overnight_quality = (
@@ -3760,6 +4026,24 @@ def _render_markdown(report: dict[str, Any]) -> str:
         f"- stale_downstream_links: `{report.get('stale_downstream_links') or []}`",
         f"- runtime_apply_gap_issues: `{runtime_gap.get('issues') or []}`",
         "",
+        "## Warning Follow-Up Summary",
+        f"- status: `{warning_followup.get('status') or '-'}`",
+        f"- runtime_effect: `{warning_followup.get('runtime_effect')}`",
+        f"- allowed_runtime_apply: `{warning_followup.get('allowed_runtime_apply')}`",
+    ]
+    for item in warning_followup.get("items") if isinstance(warning_followup.get("items"), list) else []:
+        if not isinstance(item, dict):
+            continue
+        lines.extend(
+            [
+                f"- P{item.get('priority')} `{item.get('topic')}` 판정: `{item.get('decision')}`",
+                f"  - 근거: `{item.get('evidence') or {}}`",
+                f"  - 다음 액션: `{item.get('next_action') or '-'}`",
+            ]
+        )
+    lines.extend(
+        [
+            "",
         "## Runtime Apply Gap Audit",
         f"- status: `{runtime_gap.get('status') or '-'}`",
         f"- retry_queue_count: `{runtime_gap.get('retry_queue_count') or 0}`",
@@ -3942,6 +4226,7 @@ def _render_markdown(report: dict[str, Any]) -> str:
         f"- raw_preserved: `{gap_provenance.get('raw_preserved')}`",
         f"- gap_affected_handoff_count: `{len(gap_affected_handoffs)}`",
     ]
+    )
     if gap_affected_handoffs:
         lines.extend(
             f"- gap_affected: `{item.get('family')}` type=`{item.get('gap_type')}` rule=`{item.get('interpretation_rule')}` issues=`{item.get('affected_log_issues')}`"

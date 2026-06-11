@@ -166,3 +166,116 @@ def test_lifecycle_runtime_effect_kill_switch_keeps_policy_as_context_only(tmp_p
     assert decision["lifecycle_matrix_runtime_effect"] == "none"
     assert decision["lifecycle_matrix_runtime_reason"] == "runtime_effect_disabled_context_only"
     assert payload["action"] == "WAIT"
+
+
+def test_lifecycle_runtime_policy_key_gap_classification_hard_safety_passthrough(tmp_path, monkeypatch):
+    policy_file = tmp_path / "lifecycle_decision_matrix_2026-05-18.json"
+    _write_policy(policy_file)
+    _enable_rules(monkeypatch, policy_file=policy_file)
+
+    decision = mod.resolve_lifecycle_decision(
+        stage="entry",
+        original_action="WAIT",
+        context={"broker_submit_blocked": True},
+        now=datetime.fromisoformat("2026-05-19T09:10:00"),
+    )
+
+    assert decision["lifecycle_matrix_policy_key"] == "-"
+    assert decision["lifecycle_matrix_policy_key_gap_classification"] == "policy_key_not_applicable_hard_safety_passthrough"
+
+
+def test_lifecycle_runtime_policy_key_gap_classification_provided(tmp_path, monkeypatch):
+    policy_file = tmp_path / "lifecycle_decision_matrix_2026-05-18.json"
+    _write_policy(policy_file)
+    _enable_rules(monkeypatch, policy_file=policy_file)
+
+    decision = mod.resolve_lifecycle_decision(
+        stage="entry",
+        original_action="WAIT",
+        context={},
+        now=datetime.fromisoformat("2026-05-19T09:10:00"),
+    )
+
+    assert decision["lifecycle_matrix_policy_key"] != "-"
+    assert decision["lifecycle_matrix_policy_key_gap_classification"] == "policy_key_provided"
+
+
+def test_lifecycle_runtime_policy_key_gap_classification_disabled():
+    decision = mod.resolve_lifecycle_decision(
+        stage="entry",
+        original_action="WAIT",
+        context={},
+        now=datetime.fromisoformat("2026-05-19T09:10:00"),
+    )
+
+    assert decision["lifecycle_matrix_policy_key"] == "-"
+    assert decision["lifecycle_matrix_policy_key_gap_classification"] == "policy_key_not_applicable_matrix_disabled"
+
+
+def test_lifecycle_runtime_policy_key_gap_classification_stage_missing(tmp_path, monkeypatch):
+    policy_file = tmp_path / "lifecycle_decision_matrix_2026-05-18.json"
+    _write_policy(policy_file)
+    _enable_rules(monkeypatch, policy_file=policy_file)
+
+    decision = mod.resolve_lifecycle_decision(
+        stage="exit",
+        original_action="EXIT",
+        context={},
+        now=datetime.fromisoformat("2026-05-19T09:10:00"),
+    )
+
+    assert decision["lifecycle_matrix_policy_key"] == "-"
+    assert decision["lifecycle_matrix_policy_key_gap_classification"] == "policy_key_not_applicable_matrix_missing"
+
+
+def test_lifecycle_runtime_policy_key_gap_classification_effect_disabled(tmp_path, monkeypatch):
+    policy_file = tmp_path / "lifecycle_decision_matrix_2026-05-18.json"
+    _write_policy(policy_file)
+    _enable_rules(monkeypatch, policy_file=policy_file)
+    monkeypatch.setattr(
+        mod,
+        "TRADING_RULES",
+        replace(mod.TRADING_RULES, LIFECYCLE_DECISION_MATRIX_RUNTIME_EFFECT_ENABLED=False),
+    )
+
+    decision = mod.resolve_lifecycle_decision(
+        stage="entry",
+        original_action="WAIT",
+        context={},
+        now=datetime.fromisoformat("2026-05-19T09:10:00"),
+    )
+
+    assert decision["lifecycle_matrix_policy_key"] != "-"
+    assert decision["lifecycle_matrix_policy_key_gap_classification"] == "policy_key_provided"
+
+
+def test_lifecycle_runtime_policy_key_gap_classification_sim_context(tmp_path, monkeypatch):
+    policy_file = tmp_path / "lifecycle_decision_matrix_2026-05-18.json"
+    policy_file.write_text(
+        json.dumps(
+            {
+                "matrix_version": "lifecycle_decision_matrix_v1_2026-05-18",
+                "policy_entries": [
+                    {
+                        "policy_key": "entry:test",
+                        "stage": "entry",
+                        "confidence": 0.8,
+                        "selected_action": "BUY_DEFENSIVE",
+                        "source_quality_gate": "pass",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    _enable_rules(monkeypatch, policy_file=policy_file)
+
+    decision = mod.resolve_lifecycle_decision(
+        stage="entry",
+        original_action="WAIT",
+        context={"simulation_book": "scalp_ai_buy_all"},
+        now=datetime.fromisoformat("2026-05-19T09:10:00"),
+    )
+
+    assert decision["lifecycle_matrix_policy_key"] != "-"
+    assert decision["lifecycle_matrix_policy_key_gap_classification"] == "policy_key_provided"

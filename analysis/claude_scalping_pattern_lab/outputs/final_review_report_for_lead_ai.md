@@ -1,7 +1,7 @@
 # 스캘핑 패턴 분석 최종 리뷰 보고서 (for Lead AI)
 
-생성일: 2026-06-10 16:18:54
-분석 기간: 2026-06-04 ~ 2026-06-10
+생성일: 2026-06-11 16:10:12
+분석 기간: 2026-06-04 ~ 2026-06-11
 
 ---
 
@@ -12,11 +12,12 @@
 | 코호트 | 거래수 | 승률 | 손익 중앙값 | 기여손익 합 | 표본충분 |
 |---|---:|---:|---:|---:|---|
 | full_fill | 41 | 46.3% | -1.380% | -15.290% | ✓ |
+| split-entry | 1 | 0.0% | -1.960% | -1.960% | ⚠️부족 |
 
 ### 1-4. 튜닝 관찰축 요약
 
-- `WAIT65~79 total_candidates=86`, `recovery_check=0`, `promoted=0`, `submitted=0`
-- `blocked_ai_score_share=18.6%`, `gatekeeper_eval_ms_p95=4652ms`, `budget_pass_to_submitted_rate=0.3%`
+- `WAIT65~79 total_candidates=73`, `recovery_check=0`, `promoted=0`, `submitted=0`
+- `blocked_ai_score_share=53.4%`, `gatekeeper_eval_ms_p95=4237ms`, `budget_pass_to_submitted_rate=0.2%`
 
 - `No acute observability alert`: 중립 — 주요 관찰축에서 즉시 경고할 단일 병목이 두드러지지 않는다.
 
@@ -32,12 +33,17 @@
 - 보유시간 중앙값: 732.5초
 - 선행 조건: 없음
 
-**#3** — 코호트: `full_fill` / 청산규칙: `scalp_preset_hard_stop_pct`
+**#3** — 코호트: `split-entry` / 청산규칙: `scalp_soft_stop_pct`
+- 빈도: 1건 | 손익 중앙값: -1.960% | 기여손익: -1.960%
+- 보유시간 중앙값: 2580.0초
+- 선행 조건: 없음
+
+**#4** — 코호트: `full_fill` / 청산규칙: `scalp_preset_hard_stop_pct`
 - 빈도: 1건 | 손익 중앙값: -1.380% | 기여손익: -1.380%
 - 보유시간 중앙값: 15.0초
 - 선행 조건: 없음
 
-**#4** — 코호트: `full_fill` / 청산규칙: `scalp_preset_protect_profit`
+**#5** — 코호트: `full_fill` / 청산규칙: `scalp_preset_protect_profit`
 - 빈도: 1건 | 손익 중앙값: -0.310% | 기여손익: -0.310%
 - 보유시간 중앙값: 654.0초
 - 선행 조건: 없음
@@ -50,16 +56,16 @@
 ### 1-4. 기회비용 회수 후보 Top 5
 
 **#1** — `AI threshold miss`
-- 차단 건수 합계: 118605건 | 차단 비율: 100.0% | 관찰 일수: 5일
+- 차단 건수 합계: 128877건 | 차단 비율: 99.9% | 관찰 일수: 6일
 
 **#2** — `latency guard miss`
-- 차단 건수 합계: 55581건 | 차단 비율: 99.9% | 관찰 일수: 5일
+- 차단 건수 합계: 60894건 | 차단 비율: 99.9% | 관찰 일수: 6일
 
 **#3** — `overbought gate miss`
-- 차단 건수 합계: 9414건 | 차단 비율: 99.4% | 관찰 일수: 5일
+- 차단 건수 합계: 9939건 | 차단 비율: 99.3% | 관찰 일수: 6일
 
 **#4** — `liquidity gate miss`
-- 차단 건수 합계: 0건 | 차단 비율: 0.0% | 관찰 일수: 5일
+- 차단 건수 합계: 0건 | 차단 비율: 0.0% | 관찰 일수: 6일
 
 ---
 
@@ -67,10 +73,10 @@
 
 ### 2-1. split-entry 코호트 핵심 위험
 
-- rebase_integrity_flag: 0건
-- partial_then_expand_flag: 0건
-- same_symbol_repeat_flag: 407건
-- same_ts_multi_rebase_flag: 0건
+- rebase_integrity_flag: 3건
+- partial_then_expand_flag: 2건
+- same_symbol_repeat_flag: 729건
+- same_ts_multi_rebase_flag: 2건
 
 ### 2-2. 전역 손절 강화 비권고 이유
 
@@ -86,7 +92,10 @@
 
 **report-only observation (즉시 시작 가능):**
 
+- `split-entry rebase 수량 정합성 report-only 감사` — 검증지표: cum_filled_qty > requested_qty 비율, same_ts_multi_rebase_count 분포
+- `partial → fallback 확대 직후 즉시 재평가 report-only` — 검증지표: 확대 후 90초 내 held_sec soft stop 비율 감소 여부
 - `동일 종목 split-entry soft-stop 재진입 cooldown report-only` — 검증지표: same-symbol repeat soft stop 건수, cooldown 차단 후 10분 missed upside
+- `partial-only 표류 전용 timeout report-only` — 검증지표: partial-only held_sec 중앙값, timeout 이후 실현손익 분포
 
 **canary-only candidate (workorder 구현 후):**
 

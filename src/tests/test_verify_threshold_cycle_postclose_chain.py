@@ -819,6 +819,115 @@ def test_lifecycle_bucket_discovery_handoff_fails_source_contract_fail():
     assert "lifecycle_bucket_discovery_source_contract_fail" in report["missing"]
 
 
+def test_lifecycle_bucket_discovery_handoff_warns_policy_key_required_missing():
+    discovery = {
+        "source_dimension_gap_summary": {
+            "missing_dimension_key_counts": {"policy_key": 5},
+            "policy_key_gap_classification_counts": {"policy_key_required_missing": 3, "policy_key_provided": 12},
+        },
+        "surfaced_candidates": [],
+    }
+
+    report = mod._lifecycle_bucket_discovery_handoff_status(discovery, {}, {}, {"orders": []})
+
+    assert report["status"] == "warning"
+    assert "lifecycle_bucket_discovery_policy_key_required_missing" in report["warnings"]
+
+
+def test_lifecycle_bucket_discovery_handoff_warns_policy_key_missing_non_blocking_context():
+    discovery = {
+        "source_dimension_gap_summary": {
+            "missing_dimension_key_counts": {"policy_key": 8},
+            "policy_key_gap_classification_counts": {"policy_key_not_required_context_row": 5, "policy_key_not_applicable_matrix_missing": 3},
+        },
+        "surfaced_candidates": [],
+    }
+
+    report = mod._lifecycle_bucket_discovery_handoff_status(discovery, {}, {}, {"orders": []})
+
+    assert report["status"] == "warning"
+    assert "lifecycle_bucket_discovery_policy_key_missing_non_blocking_context" in report["warnings"]
+
+
+def test_lifecycle_bucket_discovery_handoff_warns_policy_key_missing_await_classification():
+    discovery = {
+        "source_dimension_gap_summary": {
+            "missing_dimension_key_counts": {"policy_key": 10},
+        },
+        "surfaced_candidates": [],
+    }
+
+    report = mod._lifecycle_bucket_discovery_handoff_status(discovery, {}, {}, {"orders": []})
+
+    assert report["status"] == "warning"
+    assert "lifecycle_bucket_discovery_policy_key_missing_await_classification" in report["warnings"]
+
+
+def test_warning_followup_summary_breaks_down_postclose_warning_priorities():
+    summary = mod._warning_followup_summary(
+        buy_funnel_submit_drought_handoff={
+            "status": "pass",
+            "critical": True,
+            "primary": "SUBMIT_DROUGHT_CRITICAL",
+            "matches": ["SUBMIT_DROUGHT_CRITICAL"],
+            "missing": [],
+        },
+        scalp_entry_adm={
+            "summary": {
+                "status": "warning",
+                "warnings": ["unknown_bucket_source_quality_gap"],
+                "unknown_bucket_summary": {
+                    "affected_rows": 255,
+                    "dimension_counts": {"score_bucket": 255},
+                    "recommended_route": "source_quality_workorder",
+                    "not_available_route": "field_legitimately_unavailable_no_workorder",
+                },
+                "adm_bucket_lookup_status_counts": {
+                    "new_or_unseen_token_vs_prior_adm": 386,
+                    "matched_prior_bucket": 373,
+                },
+            }
+        },
+        currentness_audit={"status": "pass", "summary": {"fail_count": 0}},
+        pattern_lab_ai_review={"status": "pass", "summary": {"workorder_count": 0}},
+        discovery_report={
+            "summary": {
+                "live_auto_apply_ready_count": 0,
+                "state_counts": {"source_only_keep_collecting": 401},
+                "source_bucket_kind_counts": {"source_only_observation": 335},
+                "source_contract_status": "warning",
+                "source_contract_change_count": 11,
+                "ai_two_pass_review_status": "parsed",
+            }
+        },
+        runtime_apply_gap_audit={
+            "summary": {
+                "derived_review_category_counts": {"source_quality_blocker": 536},
+                "positive_edge_source_quality_pass_count": 24,
+                "bridge_blocker_ledger_count": 200,
+                "runtime_uptake_rate_pct": 0.0,
+            }
+        },
+        lifecycle_bucket_discovery_handoff={
+            "warnings": ["lifecycle_bucket_discovery_source_contract_warning"]
+        },
+    )
+
+    items = {item["topic"]: item for item in summary["items"]}
+    assert summary["status"] == "warning"
+    assert summary["runtime_effect"] is False
+    assert summary["allowed_runtime_apply"] is False
+    assert items["submit_drought"]["decision"] == "pass_handoff_closed"
+    assert items["scalp_entry_adm_unknown_bucket_source_quality_gap"]["decision"] == (
+        "source_quality_followup_required"
+    )
+    assert items["pattern_lab_warning"]["decision"] == "pass_no_current_handoff_workorder"
+    assert items["live_auto_ready_zero_breakdown"]["decision"] == "warning_explained_no_live_auto_ready"
+    assert items["live_auto_ready_zero_breakdown"]["evidence"]["runtime_gap_categories"] == {
+        "source_quality_blocker": 536
+    }
+
+
 def test_submit_bucket_handoff_status_detects_downstream_drops():
     ldm = {
         "submit_bucket_attribution": {
@@ -1011,6 +1120,83 @@ def test_buy_funnel_submit_drought_handoff_passes_when_surfaced():
 
     assert report["status"] == "pass"
     assert report["missing"] == []
+
+
+def test_buy_funnel_submit_drought_handoff_surfaces_post_submit_join_gap():
+    buy = {
+        "classification": {
+            "primary": "SUBMIT_DROUGHT_CRITICAL",
+            "matches": ["SUBMIT_DROUGHT_CRITICAL"],
+        }
+    }
+    ldm = {
+        "submit_bucket_attribution": {
+            "summary": {
+                "submit_rows": 41,
+                "real_submitted_row_count": 17,
+                "missing_broker_order_key_count": 17,
+                "missing_broker_order_key_rate": 1.0,
+                "post_submit_provenance_join_gap": True,
+            }
+        }
+    }
+    ev_report = {
+        "buy_funnel_sentinel": {"primary": "SUBMIT_DROUGHT_CRITICAL"},
+        "entry_funnel": {"entry_submit_drought_handoff_selected": True},
+    }
+    runtime_summary = {
+        "buy_funnel_sentinel": {"primary": "SUBMIT_DROUGHT_CRITICAL"},
+        "summary": {"entry_submit_drought_handoff_selected": True},
+    }
+    workorder = {
+        "orders": [
+            {"order_id": "order_entry_submit_drought_auto_resolution"},
+            {"order_id": "order_entry_post_submit_contract_gap_review"},
+            {"order_id": "order_entry_broker_receipt_contract_gap_review"},
+            {"order_id": "order_entry_fill_quality_contract_gap_review"},
+            {"order_id": "order_entry_telegram_post_submit_contract_gap_review"},
+            {"order_id": "order_entry_source_taxonomy_contract_gap_review"},
+        ]
+    }
+
+    report = mod._buy_funnel_submit_drought_handoff_status(
+        buy, ldm, ev_report, runtime_summary, workorder
+    )
+
+    assert report["status"] == "pass"
+    assert report["ldm_submit_real_submitted_row_count"] == 17
+    assert report["ldm_submit_missing_broker_order_key_count"] == 17
+    assert report["ldm_submit_missing_broker_order_key_rate"] == 1.0
+    assert report["ldm_submit_post_submit_provenance_join_gap"] is True
+
+
+def test_warning_followup_submit_drought_reports_join_gap():
+    summary = mod._warning_followup_summary(
+        buy_funnel_submit_drought_handoff={
+            "status": "pass",
+            "critical": True,
+            "primary": "SUBMIT_DROUGHT_CRITICAL",
+            "matches": ["SUBMIT_DROUGHT_CRITICAL"],
+            "missing": [],
+            "ldm_submit_real_submitted_row_count": 17,
+            "ldm_submit_missing_broker_order_key_count": 17,
+            "ldm_submit_missing_broker_order_key_rate": 1.0,
+            "ldm_submit_post_submit_provenance_join_gap": True,
+        },
+        scalp_entry_adm={},
+        currentness_audit={},
+        pattern_lab_ai_review={},
+        discovery_report={},
+        runtime_apply_gap_audit={},
+        lifecycle_bucket_discovery_handoff={},
+    )
+
+    submit_item = summary["items"][0]
+
+    assert summary["status"] == "warning"
+    assert submit_item["decision"] == "post_submit_provenance_join_gap_open"
+    assert submit_item["evidence"]["ldm_submit_missing_broker_order_key_count"] == 17
+    assert "broker_order_no" in submit_item["next_action"]
 
 
 def test_producer_gap_discovery_handoff_fails_ai_review_or_missing_workorder():

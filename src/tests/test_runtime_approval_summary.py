@@ -852,6 +852,147 @@ def test_runtime_approval_summary_classifies_legacy_gate_and_contract_gaps(tmp_p
     assert report["summary"]["swing_legacy_hard_gate_risk_counts"]["contract_gap"] == 1
 
 
+def test_runtime_approval_summary_decomposes_hold_defer_when_sample_ready(tmp_path, monkeypatch):
+    ev_dir = tmp_path / "threshold_cycle_ev"
+    swing_dir = tmp_path / "swing_runtime_approval"
+    out_dir = tmp_path / "runtime_approval_summary"
+    ev_dir.mkdir(parents=True)
+    swing_dir.mkdir(parents=True)
+    monkeypatch.setattr(
+        mod,
+        "ev_report_paths",
+        lambda target_date: (
+            ev_dir / f"threshold_cycle_ev_{target_date}.json",
+            ev_dir / f"threshold_cycle_ev_{target_date}.md",
+        ),
+    )
+    monkeypatch.setattr(mod, "SWING_RUNTIME_APPROVAL_DIR", swing_dir)
+    monkeypatch.setattr(mod, "SUMMARY_DIR", out_dir)
+
+    (ev_dir / "threshold_cycle_ev_2026-06-11.json").write_text(
+        json.dumps({"calibration_outcome": {"decisions": []}}),
+        encoding="utf-8",
+    )
+    (swing_dir / "swing_runtime_approval_2026-06-11.json").write_text(
+        json.dumps(
+            {
+                "date": "2026-06-11",
+                "summary": {"requested": 0, "approved": 0},
+                "candidates": [
+                    {
+                        "family": "swing_holding_flow_defer",
+                        "sample_count": 137,
+                        "sample_floor": 5,
+                        "source_metrics": {
+                            "sample_count": 137,
+                            "field_coverage": {
+                                "flow_action": 0,
+                                "defer_sec": 0,
+                                "worsen_after_candidate": 0,
+                            },
+                        },
+                    }
+                ],
+                "blocked_requests": [
+                    {
+                        "family": "swing_holding_flow_defer",
+                        "calibration_state": "freeze",
+                        "tradeoff_score": 0.32,
+                        "block_reasons": ["severe_downside_guard", "runtime_family_guard_missing"],
+                    }
+                ],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    report = mod.build_runtime_approval_summary("2026-06-11")
+
+    row = report["swing"][0]
+    assert row["family"] == "swing_holding_flow_defer"
+    assert row["sample"]["status"] == "ready"
+    assert row["gate_review_class"] == "source_quality_and_runtime_contract_gap_holding_axis"
+    assert row["legacy_hard_gate_risk"] == "source_quality_or_contract_gap"
+    assert row["hold_defer_breakdown"] == {
+        "sample_floor_status": "ready",
+        "sample_count": 137,
+        "sample_floor": 5,
+        "field_coverage": {
+            "flow_action": 0,
+            "defer_sec": 0,
+            "worsen_after_candidate": 0,
+        },
+        "missing_component_fields": ["flow_action", "defer_sec", "worsen_after_candidate"],
+        "runtime_guard_status": "missing",
+        "downside_guard_status": "blocked",
+    }
+    assert "표본 floor는 충족" in row["hard_gate_review"]
+    assert report["summary"]["swing_legacy_hard_gate_risk_counts"]["source_quality_or_contract_gap"] == 1
+
+
+def test_runtime_approval_summary_does_not_mark_sample_ready_swing_quality_axis_as_sample_gap(
+    tmp_path, monkeypatch
+):
+    ev_dir = tmp_path / "threshold_cycle_ev"
+    swing_dir = tmp_path / "swing_runtime_approval"
+    out_dir = tmp_path / "runtime_approval_summary"
+    ev_dir.mkdir(parents=True)
+    swing_dir.mkdir(parents=True)
+    monkeypatch.setattr(
+        mod,
+        "ev_report_paths",
+        lambda target_date: (
+            ev_dir / f"threshold_cycle_ev_{target_date}.json",
+            ev_dir / f"threshold_cycle_ev_{target_date}.md",
+        ),
+    )
+    monkeypatch.setattr(mod, "SWING_RUNTIME_APPROVAL_DIR", swing_dir)
+    monkeypatch.setattr(mod, "SUMMARY_DIR", out_dir)
+
+    (ev_dir / "threshold_cycle_ev_2026-06-11.json").write_text(
+        json.dumps({"calibration_outcome": {"decisions": []}}),
+        encoding="utf-8",
+    )
+    (swing_dir / "swing_runtime_approval_2026-06-11.json").write_text(
+        json.dumps(
+            {
+                "date": "2026-06-11",
+                "summary": {"requested": 0, "approved": 0},
+                "candidates": [
+                    {
+                        "family": "swing_entry_ofi_qi_execution_quality",
+                        "sample_count": 17701,
+                        "sample_floor": 5,
+                    }
+                ],
+                "blocked_requests": [
+                    {
+                        "family": "swing_entry_ofi_qi_execution_quality",
+                        "calibration_state": "freeze",
+                        "tradeoff_score": 0.32,
+                        "block_reasons": [
+                            "entry_ofi_qi_invalid_micro_context",
+                            "runtime_family_guard_missing",
+                        ],
+                    }
+                ],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    report = mod.build_runtime_approval_summary("2026-06-11")
+
+    row = report["swing"][0]
+    assert row["sample"]["status"] == "ready"
+    assert row["gate_review_class"] == "source_quality_or_contract_gap_entry_quality_axis"
+    assert row["legacy_hard_gate_risk"] == "source_quality_or_contract_gap"
+    assert "표본 floor는 충족" in row["hard_gate_review"]
+    assert "sample_or_contract_gap" not in report["summary"]["swing_legacy_hard_gate_risk_counts"]
+
+
 def test_runtime_approval_summary_surfaces_swing_one_share_legacy_archive_request(tmp_path, monkeypatch):
     ev_dir = tmp_path / "threshold_cycle_ev"
     swing_dir = tmp_path / "swing_runtime_approval"

@@ -2448,3 +2448,63 @@ def test_parent_conflict_resolution_children_same_direction_absorbed():
     r = resolutions[0]
     assert r["child_same_direction_absorbed_count"] == 2
     assert r["conflict_resolution_state"] == "resolution_complete"
+
+
+def test_policy_stage_candidates_missing_policy_key_generates_source_dimension_gap():
+    from src.engine.lifecycle_bucket_discovery import _policy_stage_candidates, _source_dimension_gap_summary
+
+    payload = {
+        "policy_entries": [
+            {
+                "stage": "entry",
+                "policy_key": "",
+                "source_quality_gate": "pass",
+                "confidence": 0.9,
+                "selected_action": "BUY_DEFENSIVE",
+            },
+            {
+                "stage": "submit",
+                "policy_key": "submit:valid_key",
+                "source_quality_gate": "pass",
+                "confidence": 0.8,
+                "selected_action": "ALLOW_SUBMIT",
+            },
+            {
+                "stage": "exit",
+                "policy_key": "",
+                "source_quality_gate": "fail",
+                "confidence": 0.7,
+                "selected_action": "EXIT",
+            },
+        ]
+    }
+
+    candidates = _policy_stage_candidates(payload)
+    assert len(candidates) == 3
+
+    entry_candidate = [c for c in candidates if c["stage"] == "entry"][0]
+    assert entry_candidate["bucket_key"] == "-"
+    assert entry_candidate["source_dimension_gap"] == "unknown_source_dimensions"
+    assert "policy_key" in entry_candidate["missing_dimension_keys"]
+    assert entry_candidate["policy_key_gap_classification"] == "policy_key_required_missing"
+    assert entry_candidate["classification_state"] == "source_only_keep_collecting"
+    assert entry_candidate["sim_lifecycle_handoff_allowed"] is False
+    assert entry_candidate["source_bucket_kind"] == "source_only_observation"
+
+    submit_candidate = [c for c in candidates if c["stage"] == "submit"][0]
+    assert submit_candidate["bucket_key"] == "submit:valid_key"
+    assert submit_candidate["source_dimension_gap"] is None
+    assert "policy_key" not in submit_candidate["missing_dimension_keys"]
+    assert submit_candidate["policy_key_gap_classification"] == "policy_key_provided"
+    assert submit_candidate["classification_state"] == "sim_auto_approved"
+
+    exit_candidate = [c for c in candidates if c["stage"] == "exit"][0]
+    assert exit_candidate["bucket_key"] == "-"
+    assert exit_candidate["source_dimension_gap"] == "unknown_source_dimensions"
+    assert "policy_key" in exit_candidate["missing_dimension_keys"]
+    assert exit_candidate["policy_key_gap_classification"] == "policy_key_required_missing"
+    assert exit_candidate["classification_state"] == "source_only_keep_collecting"
+
+    summary = _source_dimension_gap_summary(candidates)
+    assert summary["missing_dimension_key_counts"].get("policy_key", 0) == 2
+    assert summary["policy_key_gap_classification_counts"].get("policy_key_required_missing", 0) == 2

@@ -536,6 +536,30 @@ def test_bucket_summary_uses_notional_weighted_ev_when_virtual_notional_exists()
     assert summary["source_quality_adjusted_ev_pct"] != summary["equal_weight_avg_profit_pct"]
 
 
+def test_bucket_summary_source_fields_available_is_not_waiting_sample():
+    rows = [
+        {
+            "runtime_features": {
+                "entry_policy": "breakout_confirm_entry",
+                "sizing_policy": "risk_capped",
+                "exit_policy": "trailing_after_mfe",
+                "sector": "Manufacture of Basic Iron and Steel",
+                "theme_tags": "조선_해양플랜트기자재",
+            },
+            "label_fields": {"final_return_pct": 1.0},
+            "source_quality_status": "warning",
+        }
+        for _ in range(mod.SAMPLE_FLOOR)
+    ]
+
+    summary = mod._bucket_summary("discovery_arm_attribution", "bucket=a", rows, "selection")
+
+    assert summary["source_quality_gate"] == "source_quality_blocker"
+    assert summary["implementation_status"] == "implemented_source_quality_contract_available"
+    assert summary["implementation_provenance"]["sample_status"] == "source_fields_available"
+    assert summary["implementation_provenance"]["missing_dimensions"] == []
+
+
 def test_swing_ldm_stage_only_candidates_remain_child_evidence(tmp_path, monkeypatch):
     target = "2026-05-22"
     event_dir = tmp_path / "pipeline_events"

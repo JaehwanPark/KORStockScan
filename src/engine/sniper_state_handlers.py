@@ -13332,6 +13332,13 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         stock, code, latency_gate=latency_gate, curr_price=curr_price,
     )
     submitted_qty = sum(_safe_int(order.get('qty'), 0) for order in successful_orders if isinstance(order, dict))
+    broker_order_numbers = [
+        str(order.get('ord_no') or '').strip()
+        for order in successful_orders
+        if isinstance(order, dict) and str(order.get('ord_no') or '').strip()
+    ]
+    primary_broker_order_no = broker_order_numbers[0] if broker_order_numbers else ""
+    submit_attempt_id = f"{code}:{int(now_ts * 1000)}:{primary_broker_order_no or len(successful_orders)}"
     _publish_buy_signal_submission_notice(
         stock, code, strategy=strategy, curr_price=curr_price, requested_qty=submitted_qty, entry_mode=entry_mode,
         latency_gate=latency_gate, liquidity_value=liquidity_value, ai_score=latency_signal_score,
@@ -13372,6 +13379,13 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         runtime_effect=bool(latency_gate.get('latency_canary_applied')),
         actual_order_submitted=True,
         broker_order_forbidden=False,
+        broker_order_submitted=True,
+        broker_order_no=primary_broker_order_no,
+        order_no=primary_broker_order_no,
+        ord_no=primary_broker_order_no,
+        broker_order_no_list=",".join(broker_order_numbers),
+        order_response_ord_no=primary_broker_order_no,
+        submit_attempt_id=submit_attempt_id,
         **_merge_entry_pipeline_field_groups(
             pre_ai_gate_submit_log_fields,
             microstructure_submit_log_fields,
@@ -13397,6 +13411,13 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             "requested_qty": requested_qty,
             "legs": len(successful_orders),
             "order_price": int(latency_gate.get('order_price', 0) or 0),
+            "broker_order_submitted": True,
+            "broker_order_no": primary_broker_order_no,
+            "order_no": primary_broker_order_no,
+            "ord_no": primary_broker_order_no,
+            "broker_order_no_list": ",".join(broker_order_numbers),
+            "order_response_ord_no": primary_broker_order_no,
+            "submit_attempt_id": submit_attempt_id,
             **real_pre_submit_guard_fields,
         },
     )

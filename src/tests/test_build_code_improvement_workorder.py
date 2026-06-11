@@ -2511,6 +2511,19 @@ def test_buy_funnel_submit_drought_creates_all_post_submit_weak_contract_workord
                 "primary": "SUBMIT_DROUGHT_CRITICAL",
                 "matches": ["SUBMIT_DROUGHT_CRITICAL"],
             },
+            "entry_submit_drought_contract": {
+                "required_downstream": [
+                    "code_improvement_workorder",
+                    "lifecycle_decision_matrix.submit_bucket_attribution",
+                    "threshold_cycle_ev_report",
+                    "runtime_approval_summary",
+                    "postclose_verifier",
+                ],
+                "weak_contract_matches": ["BROKER_RECEIPT_WEAK"],
+                "stage_unique": {"order_bundle_submitted": 17},
+                "runtime_effect": False,
+                "allowed_runtime_apply": False,
+            },
             "current": {
                 "session": {
                     "stage_unique": {
@@ -2542,6 +2555,65 @@ def test_buy_funnel_submit_drought_creates_all_post_submit_weak_contract_workord
         assert by_id[order_id]["runtime_effect"] is False
         assert by_id[order_id]["allowed_runtime_apply"] is False
         assert by_id[order_id]["source_report_type"] == "buy_funnel_sentinel"
+
+
+def test_buy_funnel_submit_drought_marks_post_submit_gap_when_submit_sample_exists():
+    orders = mod._buy_funnel_sentinel_followup_orders(
+        {
+            "classification": {
+                "primary": "SUBMIT_DROUGHT_CRITICAL",
+                "matches": ["SUBMIT_DROUGHT_CRITICAL"],
+            },
+            "entry_submit_drought_contract": {
+                "required_downstream": [
+                    "code_improvement_workorder",
+                    "lifecycle_decision_matrix.submit_bucket_attribution",
+                    "threshold_cycle_ev_report",
+                    "runtime_approval_summary",
+                    "postclose_verifier",
+                ],
+                "weak_contract_matches": ["BROKER_RECEIPT_WEAK"],
+                "stage_unique": {"order_bundle_submitted": 17},
+                "runtime_effect": False,
+                "allowed_runtime_apply": False,
+            },
+            "current": {
+                "session": {
+                    "stage_unique": {
+                        "ai_confirmed": 235,
+                        "budget_pass": 3,
+                        "latency_pass": 3,
+                        "order_bundle_submitted": 17,
+                    },
+                    "ratios": {
+                        "submitted_to_ai_unique_pct": 7.23,
+                        "submitted_to_budget_unique_pct": 100.0,
+                    },
+                    "blocker_top": [],
+                    "upstream_blocker_top": [],
+                    "latency_blocker_top": [],
+                }
+            },
+        }
+    )
+
+    by_id = {item["order_id"]: item for item in orders}
+    order = by_id["order_entry_broker_receipt_contract_gap_review"]
+    taxonomy_order = by_id["order_entry_source_taxonomy_contract_gap_review"]
+
+    assert order["implementation_status"] == "open_post_submit_provenance_join_gap"
+    assert order["implementation_provenance"]["implementation_type"] == "post_submit_provenance_join_gap"
+    assert order["implementation_provenance"]["submitted_unique"] == 17
+    assert (
+        order["implementation_provenance"]["sample_status"]
+        == "submitted_sample_exists_broker_or_fill_join_missing"
+    )
+    assert taxonomy_order["implementation_status"] == "open_source_taxonomy_provenance_gap"
+    assert taxonomy_order["implementation_provenance"]["implementation_type"] == "source_taxonomy_provenance_gap"
+    assert taxonomy_order["implementation_provenance"]["sample_status"] == (
+        "submitted_sample_exists_source_taxonomy_missing"
+    )
+    assert taxonomy_order["implementation_provenance"]["submitted_unique"] == 17
 
 
 def test_build_code_improvement_workorder_consumes_ldm_submit_bucket_workorders(tmp_path, monkeypatch):

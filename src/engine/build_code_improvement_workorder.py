@@ -41,6 +41,7 @@ IMPLEMENTED_STATUSES = {
     "implemented",
     "implemented_but_hold_sample",
     "implemented_but_waiting_sample",
+    "implemented_source_quality_contract_available",
     "implemented_source_quality_contract_waiting_sample",
 }
 
@@ -802,6 +803,59 @@ def _entry_submit_weak_contract_implementation_marker(
     required = contract.get("required_downstream") if isinstance(contract.get("required_downstream"), list) else []
     if "lifecycle_decision_matrix.submit_bucket_attribution" not in {str(item) for item in required}:
         return {}
+    stage_unique = contract.get("stage_unique") if isinstance(contract.get("stage_unique"), dict) else {}
+    submitted_unique = _safe_int(stage_unique.get("order_bundle_submitted"), 0)
+    if submitted_unique > 0 and gap_type == "source_taxonomy_contract_gap":
+        return {
+            "implementation_status": "open_source_taxonomy_provenance_gap",
+            "implementation_checks": [
+                "buy_funnel_sentinel weak contract workorder is source-only",
+                "real order_bundle_submitted samples exist",
+                "strategy/source/blocker taxonomy must be emitted or explicitly marked not applicable",
+                "weak contract gap=source_taxonomy_contract_gap",
+                "runtime_effect=false",
+                "allowed_runtime_apply=false",
+            ],
+            "implementation_provenance": {
+                "implementation_type": "source_taxonomy_provenance_gap",
+                "source_report_type": "buy_funnel_sentinel",
+                "downstream_consumer": "lifecycle_decision_matrix.submit_bucket_attribution",
+                "gap_type": gap_type,
+                "weak_contract_matches": contract.get("weak_contract_matches") or [],
+                "sample_status": "submitted_sample_exists_source_taxonomy_missing",
+                "submitted_unique": submitted_unique,
+                "runtime_effect": contract.get("runtime_effect"),
+                "allowed_runtime_apply": contract.get("allowed_runtime_apply"),
+            },
+        }
+    if submitted_unique > 0 and gap_type in {
+        "broker_receipt_contract_gap",
+        "fill_quality_contract_gap",
+        "post_submit_contract_gap",
+        "telegram_post_submit_contract_gap",
+    }:
+        return {
+            "implementation_status": "open_post_submit_provenance_join_gap",
+            "implementation_checks": [
+                "buy_funnel_sentinel weak contract workorder is source-only",
+                "real order_bundle_submitted samples exist",
+                "broker/fill/post-submit provenance must join from broker order key instead of waiting for sample",
+                f"weak contract gap={gap_type}",
+                "runtime_effect=false",
+                "allowed_runtime_apply=false",
+            ],
+            "implementation_provenance": {
+                "implementation_type": "post_submit_provenance_join_gap",
+                "source_report_type": "buy_funnel_sentinel",
+                "downstream_consumer": "lifecycle_decision_matrix.submit_bucket_attribution",
+                "gap_type": gap_type,
+                "weak_contract_matches": contract.get("weak_contract_matches") or [],
+                "sample_status": "submitted_sample_exists_broker_or_fill_join_missing",
+                "submitted_unique": submitted_unique,
+                "runtime_effect": contract.get("runtime_effect"),
+                "allowed_runtime_apply": contract.get("allowed_runtime_apply"),
+            },
+        }
     return {
         "implementation_status": "implemented_but_waiting_sample",
         "implementation_checks": [

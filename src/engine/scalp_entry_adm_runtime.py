@@ -261,6 +261,21 @@ def _matched_bucket(payload: dict[str, Any], token: str) -> dict[str, Any]:
     return {}
 
 
+def _bucket_lookup_status(
+    payload: dict[str, Any],
+    matched_bucket: dict[str, Any],
+) -> str:
+    if not payload:
+        return "bucket_lookup_not_performed"
+    if not matched_bucket:
+        return "new_or_unseen_token_vs_prior_adm"
+    sample = _safe_int(matched_bucket.get("sample_count"), -1)
+    joined = _safe_int(matched_bucket.get("joined_sample"), -1)
+    if sample <= 0 and joined <= 0:
+        return "prior_bucket_present_but_runtime_sample_missing"
+    return "matched_prior_bucket"
+
+
 def _prompt_context(payload: dict[str, Any], bucket_token: str, bucket: dict[str, Any]) -> str:
     return "\n".join(
         [
@@ -447,7 +462,7 @@ def build_scalp_entry_adm_runtime_context(
             "status": "excluded_non_entry_prompt",
             "cache_token": f"entry_adm:excluded:non_entry:{token}",
             "prompt_context": "",
-            "fields": _fields(False, "excluded_non_entry_prompt", "", "", "", token, buckets, "-"),
+            "fields": _fields(False, "excluded_non_entry_prompt", "", "", "", token, buckets, "-", lookup_status="-"),
             "matched_bucket": {},
         }
 
@@ -460,11 +475,12 @@ def build_scalp_entry_adm_runtime_context(
             "status": status,
             "cache_token": f"entry_adm:missing:{token}",
             "prompt_context": "",
-            "fields": _fields(bool(advisory_enabled), status, "", "", str(matrix_path) if matrix_path else "", token, buckets, "-"),
+            "fields": _fields(bool(advisory_enabled), status, "", "", str(matrix_path) if matrix_path else "", token, buckets, "-", lookup_status="bucket_lookup_not_performed"),
             "matched_bucket": {},
         }
 
     bucket = _matched_bucket(payload, token)
+    lookup_status = _bucket_lookup_status(payload, bucket)
     status = "advisory_prompt_applied" if advisory_enabled else "loaded_feature_disabled"
     matrix_version = str(payload.get("matrix_version") or "-")
     source_date = str(payload.get("date") or "-")
@@ -478,6 +494,8 @@ def build_scalp_entry_adm_runtime_context(
         token,
         buckets,
         str(bucket.get("dominant_action") or "-"),
+        lookup_status=lookup_status,
+        matched_bucket=bucket,
     )
     return {
         "applied": bool(advisory_enabled),
@@ -498,7 +516,10 @@ def _fields(
     token: str,
     buckets: dict[str, str],
     dominant_action: str,
+    lookup_status: str = "",
+    matched_bucket: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    mb = matched_bucket or {}
     return {
         "entry_adm_feature_enabled": bool(feature_enabled),
         "entry_adm_prompt_applied": bool(feature_enabled and status == "advisory_prompt_applied"),
@@ -519,6 +540,9 @@ def _fields(
         "entry_adm_overbought_bucket": buckets.get("overbought_bucket", "-"),
         "entry_adm_time_bucket": buckets.get("time_bucket", "-"),
         "entry_adm_recommended_action": dominant_action or "-",
+        "entry_adm_bucket_lookup_status": lookup_status or "-",
+        "entry_adm_bucket_sample_count": _safe_int(mb.get("sample_count"), 0),
+        "entry_adm_bucket_joined_sample": _safe_int(mb.get("joined_sample"), 0),
         "entry_adm_runtime_bias_enabled": bool(getattr(TRADING_RULES, "SCALP_ENTRY_ADM_RUNTIME_BIAS_ENABLED", False)),
         "entry_adm_runtime_bias_applied": False,
         "entry_adm_runtime_effect": "none",

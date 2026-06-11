@@ -511,6 +511,13 @@ def _base_row(event: dict[str, Any]) -> dict[str, Any]:
         "time_bucket": _time_bucket(event.get("emitted_at") or fields.get("tick_latest_time")),
         "actual_order_submitted": _safe_bool(fields.get("actual_order_submitted"), stage == "order_bundle_submitted"),
         "broker_order_forbidden": _safe_bool(fields.get("broker_order_forbidden"), stage.startswith("scalp_sim_") or action not in {"BUY_NOW", "BUY_DEFENSIVE"}),
+        "broker_order_submitted": _safe_bool(fields.get("broker_order_submitted"), stage == "order_bundle_submitted"),
+        "broker_order_no": _nonempty(fields.get("broker_order_no")),
+        "order_no": _nonempty(fields.get("order_no")),
+        "ord_no": _nonempty(fields.get("ord_no")),
+        "broker_order_no_list": _nonempty(fields.get("broker_order_no_list")),
+        "order_response_ord_no": _nonempty(fields.get("order_response_ord_no")),
+        "submit_attempt_id": _nonempty(fields.get("submit_attempt_id")),
         "context_age_ms": _safe_float(fields.get("context_age_ms") or fields.get("tick_latest_age_ms"), None),
         "quote_age_ms": _safe_float(fields.get("quote_age_ms"), None),
         "entry_submit_revalidation_warning": _safe_bool(fields.get("entry_submit_revalidation_warning")),
@@ -530,6 +537,9 @@ def _base_row(event: dict[str, Any]) -> dict[str, Any]:
         "entry_adm_forced_action": _nonempty(fields.get("entry_adm_forced_action")),
         "entry_adm_runtime_reason": _nonempty(fields.get("entry_adm_runtime_reason")),
         "entry_adm_runtime_bias_applied": _safe_bool(fields.get("entry_adm_runtime_bias_applied")),
+        "entry_adm_bucket_lookup_status": _nonempty(fields.get("entry_adm_bucket_lookup_status")),
+        "entry_adm_bucket_sample_count": _safe_int(fields.get("entry_adm_bucket_sample_count"), 0),
+        "entry_adm_bucket_joined_sample": _safe_int(fields.get("entry_adm_bucket_joined_sample"), 0),
         "bucket_field_provenance": {
             "score_bucket": score_prov,
             "risk_context_bucket": risk_prov,
@@ -570,6 +580,65 @@ def _load_sim_evaluations(target_date: str) -> tuple[dict[str, dict[str, Any]], 
                 by_key[key] = item
                 joined_keys.add(key)
     return by_key, {"artifact": str(path), "rows": total, "join_keys": len(joined_keys)}
+
+
+def _load_prior_adm_bucket_summary(target_date: str) -> dict[str, dict[str, Any]]:
+    try:
+        target_dt = date.fromisoformat(target_date)
+    except ValueError:
+        return {}
+    prior_date = target_dt - __import__("datetime").timedelta(days=1)
+    prior_path = ADM_REPORT_DIR / f"scalp_entry_action_decision_matrix_{prior_date.isoformat()}.json"
+    gz_path = prior_path.with_suffix(prior_path.suffix + ".gz")
+    for path in (prior_path, gz_path):
+        real_path = existing_or_gzip_path(path)
+        if real_path.exists():
+            try:
+                with _open_text(real_path) as handle:
+                    payload = json.loads(handle.read())
+            except Exception:
+                return {}
+            if not isinstance(payload, dict):
+                return {}
+            bucket_list = payload.get("bucket_summary") if isinstance(payload.get("bucket_summary"), list) else []
+            by_token: dict[str, dict[str, Any]] = {}
+            for item in bucket_list:
+                if isinstance(item, dict):
+                    token = str(item.get("bucket_token") or "").strip()
+                    if token:
+                        by_token[token] = item
+            return by_token
+    return {}
+
+
+def _backfill_adm_lookup_status(rows: list[dict[str, Any]], prior_summary: dict[str, dict[str, Any]]) -> None:
+    if not prior_summary:
+        return
+    for row in rows:
+        existing = str(row.get("entry_adm_bucket_lookup_status") or "").strip()
+        if existing and existing not in {"-", ""}:
+            continue
+        token = str(
+            row.get("entry_adm_bucket_token_recomputed")
+            or row.get("entry_adm_bucket_token")
+            or ""
+        ).strip()
+        if not token:
+            continue
+        prior_bucket = prior_summary.get(token)
+        if prior_bucket is None:
+            row["entry_adm_bucket_lookup_status"] = "new_or_unseen_token_vs_prior_adm"
+            row["entry_adm_bucket_sample_count"] = 0
+            row["entry_adm_bucket_joined_sample"] = 0
+            continue
+        sample = _safe_int(prior_bucket.get("sample_count"), -1)
+        joined = _safe_int(prior_bucket.get("joined_sample"), -1)
+        row["entry_adm_bucket_lookup_status"] = (
+            "matched_prior_bucket" if sample > 0 or joined > 0
+            else "prior_bucket_present_but_runtime_sample_missing"
+        )
+        row["entry_adm_bucket_sample_count"] = max(0, sample)
+        row["entry_adm_bucket_joined_sample"] = max(0, joined)
 
 
 def _apply_outcome(row: dict[str, Any], evaluations: dict[str, dict[str, Any]]) -> dict[str, Any]:
@@ -702,6 +771,7 @@ def _unknown_bucket_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
     unknown_affected_row_count = 0
     not_available_affected_row_count = 0
     stage_counts: Counter[str] = Counter()
+    unknown_root_causes: Counter[str] = Counter()
     examples: list[dict[str, Any]] = []
     adm_source_count = 0
     raw_recomputed_count = 0
@@ -729,6 +799,19 @@ def _unknown_bucket_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
             not_available_affected_row_count += 1
         for key in unknown_dimensions:
             dimension_counts[key] = dimension_counts.get(key, 0) + 1
+            provenance_value = ""
+            if isinstance(provenance, dict):
+                provenance_value = str(provenance.get(key) or "")
+            if provenance_value == "adm_field":
+                unknown_root_causes[f"{key}:adm_field_unknown"] += 1
+            elif key == "score_bucket" and row.get("ai_score") is None:
+                unknown_root_causes[f"{key}:source_score_missing"] += 1
+            elif key == "risk_context_bucket":
+                unknown_root_causes[f"{key}:risk_context_source_missing"] += 1
+            elif key == "price_resolution_bucket":
+                unknown_root_causes[f"{key}:price_context_source_missing"] += 1
+            else:
+                unknown_root_causes[f"{key}:raw_recomputed_unknown"] += 1
         for key in not_available_dimensions:
             not_available_counts[key] = not_available_counts.get(key, 0) + 1
         stage_counts[str(row.get("stage") or "-")] += 1
@@ -757,6 +840,7 @@ def _unknown_bucket_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "dimension_counts": dimension_counts,
         "not_available_dimension_counts": not_available_counts,
         "stage_counts": dict(stage_counts),
+        "unknown_root_cause_counts": dict(unknown_root_causes),
         "examples": examples,
         "source_quality_gate": "source_quality_blocker" if unknown_affected_row_count else "pass",
         "recommended_route": "source_quality_workorder" if unknown_affected_row_count else "none",
@@ -772,6 +856,10 @@ def build_scalp_entry_action_decision_matrix_report(target_date: str) -> dict[st
     evaluations, eval_summary = _load_sim_evaluations(target_date)
     raw_rows = [_base_row(event) for event in _iter_relevant_events(target_date)]
     rows = [_apply_outcome(row, evaluations) for row in _dedupe_rows(raw_rows)]
+
+    prior_summary = _load_prior_adm_bucket_summary(target_date)
+    _backfill_adm_lookup_status(rows, prior_summary)
+
     action_counts = Counter(str(row.get("chosen_action")) for row in rows)
     raw_action_counts = Counter(str(row.get("raw_chosen_action") or "-") for row in rows)
     action_normalization_counts = Counter(
@@ -784,6 +872,31 @@ def build_scalp_entry_action_decision_matrix_report(target_date: str) -> dict[st
     joined_sample = sum(1 for row in rows if row.get("outcome_joined"))
     prompt_applied = sum(1 for row in rows if row.get("entry_adm_prompt_applied"))
     runtime_bias_applied = sum(1 for row in rows if row.get("entry_adm_runtime_bias_applied"))
+    adm_bucket_lookup_status_counts = Counter(
+        str(row.get("entry_adm_bucket_lookup_status") or "-") for row in rows
+    )
+    new_or_unseen_tokens = [
+        row for row in rows
+        if str(row.get("entry_adm_bucket_lookup_status") or "") == "new_or_unseen_token_vs_prior_adm"
+    ]
+    prior_bucket_sample_missing_rows = [
+        row for row in rows
+        if str(row.get("entry_adm_bucket_lookup_status") or "") == "prior_bucket_present_but_runtime_sample_missing"
+    ]
+    new_or_unseen_top_tokens = Counter(
+        str(row.get("entry_adm_bucket_token_recomputed") or row.get("entry_adm_bucket_token") or "-")
+        for row in new_or_unseen_tokens
+    ).most_common(20)
+    new_or_unseen_top_stages = Counter(
+        str(row.get("stage") or "-") for row in new_or_unseen_tokens
+    ).most_common(10)
+    prior_missing_top_tokens = Counter(
+        str(row.get("entry_adm_bucket_token_recomputed") or row.get("entry_adm_bucket_token") or "-")
+        for row in prior_bucket_sample_missing_rows
+    ).most_common(20)
+    prior_missing_top_stages = Counter(
+        str(row.get("stage") or "-") for row in prior_bucket_sample_missing_rows
+    ).most_common(10)
     raw_token_preserved_count = sum(1 for row in rows if row.get("raw_token_preserved"))
     adm_token_backfill_applied_count = sum(1 for row in rows if row.get("adm_token_backfill_applied"))
     runtime_effect_counts = Counter(str(row.get("entry_adm_runtime_effect") or "-") for row in rows)
@@ -801,6 +914,8 @@ def build_scalp_entry_action_decision_matrix_report(target_date: str) -> dict[st
         warnings.append("source_quality_gap")
     if _safe_int(unknown_summary.get("affected_rows"), 0) > 0:
         warnings.append("unknown_bucket_source_quality_gap")
+    if prior_bucket_sample_missing_rows:
+        warnings.append("prior_bucket_present_but_runtime_sample_missing")
     if rows and prompt_applied == 0:
         warnings.append("prompt_context_not_loaded")
     status = "pass" if not warnings else "warning"
@@ -848,6 +963,13 @@ def build_scalp_entry_action_decision_matrix_report(target_date: str) -> dict[st
             "missing_actions": missing_actions,
             "zero_sample_actions": zero_sample_actions,
             "missing_action_summary_rows": missing_action_summary_rows,
+            "adm_bucket_lookup_status_counts": dict(adm_bucket_lookup_status_counts),
+            "new_or_unseen_token_count": len(new_or_unseen_tokens),
+            "prior_bucket_sample_missing_count": len(prior_bucket_sample_missing_rows),
+            "new_or_unseen_top_tokens": [[token, count] for token, count in new_or_unseen_top_tokens],
+            "new_or_unseen_top_stages": [[stage, count] for stage, count in new_or_unseen_top_stages],
+            "prior_missing_top_tokens": [[token, count] for token, count in prior_missing_top_tokens],
+            "prior_missing_top_stages": [[stage, count] for stage, count in prior_missing_top_stages],
             "unknown_bucket_summary": unknown_summary,
             "status": status,
             "warnings": warnings,

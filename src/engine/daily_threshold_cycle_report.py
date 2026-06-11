@@ -2538,6 +2538,8 @@ def _load_sim_post_sell_evaluation_by_sim_id(target_date: str | None) -> dict[st
             payload.get("sim_record_id"),
             payload.get("sim_parent_record_id"),
             payload.get("post_sell_id"),
+            payload.get("candidate_id"),
+            payload.get("entry_adm_candidate_id"),
         ):
             if key in (None, "", "-"):
                 continue
@@ -4421,6 +4423,103 @@ def _candidate_metric_pack(
     }
 
 
+def _enrich_entry_price_sim_metrics_with_post_sell(
+    sim_metrics: dict,
+    sim_events: list[dict],
+    *,
+    target_date: str | None = None,
+) -> dict:
+    sim_metrics = dict(sim_metrics or {})
+    if not target_date:
+        sim_metrics["post_sell_join_status"] = "missing_target_date"
+        return sim_metrics
+
+    evaluations = _load_sim_post_sell_evaluation_by_sim_id(target_date)
+    artifact_path = str(POST_SELL_DIR / f"sim_post_sell_evaluations_{target_date}.jsonl")
+    sim_metrics["post_sell_evaluation_artifact"] = artifact_path
+
+    join_key_priority = ("sim_record_id", "sim_parent_record_id", "candidate_id")
+    trade_key_to_field_values: dict[str, list[tuple[str, str]]] = {}
+    for event in sim_events:
+        fields = _event_fields(event)
+        field_values: list[tuple[str, str]] = []
+        primary_key: str | None = None
+        for key_field in join_key_priority:
+            key_val = str(fields.get(key_field) or "").strip()
+            if key_val not in ("", "-"):
+                field_values.append((key_field, key_val))
+                if primary_key is None:
+                    primary_key = key_val
+        if primary_key is None:
+            primary_key = f"event_{id(event)}"
+        existing = trade_key_to_field_values.setdefault(primary_key, [])
+        for fv in field_values:
+            if fv not in existing:
+                existing.append(fv)
+
+    observed_trade_count = len(trade_key_to_field_values)
+
+    if not evaluations:
+        sim_metrics["post_sell_join_status"] = "missing_or_empty_artifact"
+        sim_metrics["post_sell_joined_count"] = 0
+        sim_metrics["post_sell_join_pending_count"] = observed_trade_count
+        return sim_metrics
+
+    profit_values: list[float] = []
+    outcome_counter: Counter[str] = Counter()
+    joined_eval_sids: set[str] = set()
+    resolved_trade_count = 0
+    joined_eval_count = 0
+    missed_upside_count = 0
+
+    for trade_key, field_values in sorted(trade_key_to_field_values.items()):
+        eval_row = None
+        for field_name in join_key_priority:
+            for fname, val in field_values:
+                if fname == field_name and val in evaluations:
+                    eval_row = evaluations[val]
+                    break
+            if eval_row is not None:
+                break
+
+        if eval_row is None:
+            continue
+
+        resolved_trade_count += 1
+
+        eval_sid = str(eval_row.get("post_sell_id") or id(eval_row))
+        if eval_sid in joined_eval_sids:
+            continue
+        joined_eval_sids.add(eval_sid)
+
+        joined_eval_count += 1
+        profit_rate = _safe_float(eval_row.get("profit_rate"), None)
+        outcome = str(eval_row.get("outcome") or "").upper()
+
+        if profit_rate is not None:
+            profit_values.append(profit_rate)
+        outcome_counter[outcome] += 1
+        if outcome == "MISSED_UPSIDE":
+            missed_upside_count += 1
+
+    pending_count = observed_trade_count - resolved_trade_count
+
+    sim_metrics["post_sell_joined_count"] = joined_eval_count
+    sim_metrics["post_sell_join_pending_count"] = pending_count
+    sim_metrics["post_sell_join_status"] = "evaluated" if joined_eval_count > 0 else "no_joined_events"
+    sim_metrics["missed_upside"] = (
+        round(missed_upside_count * 100.0 / max(joined_eval_count, 1), 2) if joined_eval_count > 0 else None
+    )
+    sim_metrics["missed_upside_source"] = "sim_post_sell_evaluations_10m" if joined_eval_count > 0 else "-"
+    sim_metrics["source_quality_adjusted_ev_pct"] = (
+        round(sum(profit_values) / len(profit_values), 4) if profit_values else None
+    )
+    sim_metrics["ev_source"] = "joined_sim_post_sell_profit_rate" if profit_values else "-"
+    sim_metrics["post_sell_outcome_counts"] = dict(outcome_counter) if outcome_counter else {}
+
+    return sim_metrics
+
+
 ENTRY_PRICE_CANDIDATE_FAILURE_REASONS = {
     "missing_snapshot",
     "invalid_price",
@@ -4445,9 +4544,13 @@ ENTRY_PRICE_TARGET_ENV_VALUE_KEYS = {
 }
 
 
-def _entry_price_missing_metrics(candidate_metrics: dict) -> dict[str, list[str]]:
+def _entry_price_missing_metrics(
+    candidate_metrics: dict,
+    *,
+    required_books: tuple[str, ...] = ("sim", "real"),
+) -> dict[str, list[str]]:
     missing_by_book: dict[str, list[str]] = {}
-    for book in ("sim", "real"):
+    for book in required_books:
         book_metrics = candidate_metrics.get(book) if isinstance(candidate_metrics.get(book), dict) else {}
         missing = [
             name
@@ -4459,8 +4562,15 @@ def _entry_price_missing_metrics(candidate_metrics: dict) -> dict[str, list[str]
     return missing_by_book
 
 
-def _entry_price_candidate_metrics_ready(candidate_metrics: dict) -> bool:
-    return not _entry_price_missing_metrics(candidate_metrics if isinstance(candidate_metrics, dict) else {})
+def _entry_price_candidate_metrics_ready(
+    candidate_metrics: dict,
+    *,
+    required_books: tuple[str, ...] = ("sim", "real"),
+) -> bool:
+    return not _entry_price_missing_metrics(
+        candidate_metrics if isinstance(candidate_metrics, dict) else {},
+        required_books=required_books,
+    )
 
 
 def _entry_price_exclusion_reason(event: dict) -> str:
@@ -4644,6 +4754,39 @@ def _merged_entry_price_candidate_metrics(family_sample: dict, source_metrics: d
     return merged
 
 
+def _entry_price_recommended_values_scope(source_metrics: dict, recommended: dict) -> str:
+    for key in (
+        "recommended_values_decision_scope",
+        "recommended_values_scope",
+        "decision_scope",
+    ):
+        value = str(source_metrics.get(key) or "").strip().lower()
+        if value:
+            return value
+    for key in (
+        "decision_scope",
+        "metric_scope",
+        "source_scope",
+        "recommended_values_decision_scope",
+    ):
+        value = str(recommended.get(key) or "").strip().lower()
+        if value:
+            return value
+    return ""
+
+
+def _entry_price_recommended_values_scope_is_sim(scope: str) -> bool:
+    normalized = str(scope or "").strip().lower()
+    return normalized in {
+        "sim",
+        "sim_only",
+        "sim_probe",
+        "sim_probe_ev",
+        "scalp_sim",
+        "scalp_sim_only",
+    }
+
+
 def _entry_price_source_recommended_values(source_metrics: dict, current: dict, metadata: dict) -> tuple[dict, dict]:
     recommended = (
         source_metrics.get("recommended_values")
@@ -4654,6 +4797,15 @@ def _entry_price_source_recommended_values(source_metrics: dict, current: dict, 
     )
     clean: dict[str, Any] = {}
     audit: dict[str, Any] = {"accepted": {}, "clamped": {}, "rejected": {}}
+    if not recommended:
+        return clean, audit
+    scope = _entry_price_recommended_values_scope(source_metrics, recommended)
+    if not _entry_price_recommended_values_scope_is_sim(scope):
+        audit["rejected"]["recommended_values_decision_scope"] = {
+            "value": scope or None,
+            "reason": "required_sim_scope",
+        }
+        return clean, audit
 
     for key in ("enabled", "conditional_1tick_real_enabled"):
         if key not in recommended:
@@ -4710,7 +4862,7 @@ def _entry_price_recommendation_has_runtime_change(recommended: dict, current: d
     return False
 
 
-def _build_dynamic_entry_price_resolver_family(events: list[dict]) -> dict:
+def _build_dynamic_entry_price_resolver_family(events: list[dict], *, target_date: str | None = None) -> dict:
     current = {
         "enabled": bool(getattr(TRADING_RULES, "SCALPING_ENTRY_PRICE_RESOLVER_ENABLED", True)),
         "normal_defensive_ticks": int(getattr(TRADING_RULES, "SCALPING_NORMAL_DEFENSIVE_TICKS", 1) or 1),
@@ -4764,6 +4916,11 @@ def _build_dynamic_entry_price_resolver_family(events: list[dict]) -> dict:
             fill_metrics_available=False,
         ),
     }
+    candidate_metrics["sim"] = _enrich_entry_price_sim_metrics_with_post_sell(
+        candidate_metrics.get("sim") or {},
+        sim_events,
+        target_date=target_date,
+    )
     candidate_quality = {
         "AI_candidate": _entry_price_ai_candidate_quality(real_events + sim_events),
     }
@@ -4771,8 +4928,8 @@ def _build_dynamic_entry_price_resolver_family(events: list[dict]) -> dict:
     sim_unpriced_or_stale_warning_count = int(
         candidate_metrics["sim"].get("excluded_from_fill_ev_count") or 0
     )
-    sample_floor_ready = (len(real_events) + len(sim_events)) >= 20
-    metrics_ready = _entry_price_candidate_metrics_ready(candidate_metrics)
+    sample_floor_ready = len(sim_events) >= 20
+    metrics_ready = _entry_price_candidate_metrics_ready(candidate_metrics, required_books=("sim",))
     sample_ready = sample_floor_ready and metrics_ready
     return {
         "family": "dynamic_entry_price_resolver",
@@ -5939,7 +6096,7 @@ def _build_family_reports(
         _build_mechanical_entry_family(events),
         _build_score65_74_recovery_probe_family(events),
         _build_pre_submit_guard_family(events),
-        _build_dynamic_entry_price_resolver_family(events),
+        _build_dynamic_entry_price_resolver_family(events, target_date=target_date),
         _build_entry_price_execution_quality_family(events),
         _build_entry_filter_refined_candidate_family(
             events,
@@ -6391,13 +6548,7 @@ def _source_sample_count_for_family(output_family: str, source_metrics: dict) ->
             _safe_int(source_metrics.get("submit_revalidation_block"), 0) or 0,
         )
     if output_family == "dynamic_entry_price_resolver":
-        return max(
-            _safe_int(source_metrics.get("candidate_observations"), 0) or 0,
-            _safe_int(source_metrics.get("sim_candidate_observations"), 0) or 0,
-            _safe_int(source_metrics.get("real_candidate_observations"), 0) or 0,
-            _safe_int(source_metrics.get("evaluated_candidates"), 0) or 0,
-            _safe_int(source_metrics.get("performance_latency_block_events"), 0) or 0,
-        )
+        return _safe_int(source_metrics.get("sim_candidate_observations"), 0) or 0
     if output_family == "entry_price_execution_quality":
         return max(
             _safe_int(source_metrics.get("real_broker_events"), 0) or 0,
@@ -6611,7 +6762,7 @@ def _calibration_state_for_family(
     if output_family == "dynamic_entry_price_resolver":
         family_sample = family.get("sample") if isinstance(family.get("sample"), dict) else {}
         candidate_metrics = _merged_entry_price_candidate_metrics(family_sample, source_metrics)
-        missing_by_book = _entry_price_missing_metrics(candidate_metrics)
+        missing_by_book = _entry_price_missing_metrics(candidate_metrics, required_books=("sim",))
         if sample_count < sample_floor:
             return (
                 "hold_sample",
@@ -6627,12 +6778,7 @@ def _calibration_state_for_family(
                 "hold_sample",
                 "dynamic entry price 후보 지표는 준비됐지만 유효한 bounded 추천값 또는 runtime env 변경값이 없어 PREOPEN apply 보류",
             )
-        ev = _safe_float(source_metrics.get("source_quality_adjusted_ev_pct"), None)
-        if ev is None:
-            sim_ev = _safe_float((candidate_metrics.get("sim") or {}).get("source_quality_adjusted_ev_pct"), None)
-            real_ev = _safe_float((candidate_metrics.get("real") or {}).get("source_quality_adjusted_ev_pct"), None)
-            ev_values = [value for value in (sim_ev, real_ev) if value is not None]
-            ev = min(ev_values) if ev_values else None
+        ev = _safe_float((candidate_metrics.get("sim") or {}).get("source_quality_adjusted_ev_pct"), None)
         if ev is not None and ev > 0:
             return (
                 "adjust_up",
@@ -6797,6 +6943,8 @@ def _build_calibration_candidates(families: list[dict], report_source_context: d
             continue
         current = family.get("current") if isinstance(family.get("current"), dict) else {}
         recommended = family.get("recommended") if isinstance(family.get("recommended"), dict) else {}
+        if output_family == "dynamic_entry_price_resolver":
+            recommended = dict(current)
         source_metrics = dict(_source_metrics_for_family(output_family, report_source_context))
         if output_family == "lifecycle_decision_matrix_runtime":
             family_sample = family.get("sample") if isinstance(family.get("sample"), dict) else {}
@@ -6883,6 +7031,12 @@ def _build_calibration_candidates(families: list[dict], report_source_context: d
                     type_counts.get("late_detected_soft_stop_zone"), 0
                 ) or 0
         source_sample_count = _source_sample_count_for_family(output_family, source_metrics)
+        if output_family == "dynamic_entry_price_resolver":
+            family_sample = family.get("sample") if isinstance(family.get("sample"), dict) else {}
+            source_sample_count = max(
+                source_sample_count,
+                _safe_int(family_sample.get("sim_candidate_observations"), 0) or 0,
+            )
         if output_family == "bad_entry_refined_canary":
             lifecycle = source_metrics.get("lifecycle_attribution")
             if isinstance(lifecycle, dict):
@@ -6893,6 +7047,8 @@ def _build_calibration_candidates(families: list[dict], report_source_context: d
         if output_family == "score65_74_recovery_probe":
             # The family sample includes broad funnel events such as budget_pass.
             # Runtime readiness must use the bounded low-score source cohort only.
+            sample_count = source_sample_count
+        elif output_family == "dynamic_entry_price_resolver":
             sample_count = source_sample_count
         elif output_family == "position_sizing_dynamic_formula":
             family_sample = family.get("sample") if isinstance(family.get("sample"), dict) else {}
@@ -6928,11 +7084,26 @@ def _build_calibration_candidates(families: list[dict], report_source_context: d
         if output_family == "dynamic_entry_price_resolver":
             family_sample = family.get("sample") if isinstance(family.get("sample"), dict) else {}
             candidate_metrics = _merged_entry_price_candidate_metrics(family_sample, source_metrics)
-            source_ready = source_ready and _entry_price_candidate_metrics_ready(candidate_metrics)
+            source_ready = source_ready and _entry_price_candidate_metrics_ready(
+                candidate_metrics,
+                required_books=("sim",),
+            )
             if candidate_metrics:
                 source_metrics = dict(source_metrics)
-                source_metrics["candidate_metrics_ready"] = _entry_price_candidate_metrics_ready(candidate_metrics)
-                source_metrics["candidate_metrics_missing"] = _entry_price_missing_metrics(candidate_metrics)
+                source_metrics["candidate_metrics_ready"] = _entry_price_candidate_metrics_ready(
+                    candidate_metrics,
+                    required_books=("sim",),
+                )
+                source_metrics["candidate_metrics_missing"] = _entry_price_missing_metrics(
+                    candidate_metrics,
+                    required_books=("sim",),
+                )
+                diagnostic_missing = _entry_price_missing_metrics(
+                    candidate_metrics,
+                    required_books=("real",),
+                )
+                if diagnostic_missing:
+                    source_metrics["candidate_metrics_diagnostic_missing"] = diagnostic_missing
             for key in (
                 "candidate_quality",
                 "sim_submit_path_quality",
