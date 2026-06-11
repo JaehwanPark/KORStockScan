@@ -25,6 +25,9 @@ from src.engine.automation.source_quality_hard_gate import (
     source_quality_preflight_blocked,
 )
 from src.engine.daily_threshold_cycle_report import REPORT_DIR
+from src.engine.threshold_cycle_preopen_apply import (
+    runtime_gap_provenance_artifact_path,
+)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 LOG_PATH = PROJECT_ROOT / "logs" / "threshold_cycle_postclose_cron.log"
@@ -40,6 +43,12 @@ _START_MARKER = "[START] threshold-cycle postclose"
 _DONE_MARKER = "[DONE] threshold-cycle postclose"
 _FAIL_MARKER = "[FAIL] threshold-cycle postclose"
 _PAUSED_MARKER = "[PAUSED] threshold-cycle postclose"
+
+
+def _normalized_for_match(text: str) -> str:
+    return text.lower().replace("_", "")
+
+
 _READY_RE = re.compile(
     r"artifact ready label=(?P<label>\S+) path=(?P<path>\S+) waited=(?P<waited>\d+)s(?: json_valid=(?P<json_valid>\w+))?"
 )
@@ -3447,6 +3456,30 @@ def build_threshold_cycle_postclose_verification(
     if "daily_ev" in disabled_stage_flags or "runtime_approval_summary" in disabled_stage_flags:
         source_generation_warnings = []
     handoff_warnings.extend(source_generation_warnings)
+
+    gap_provenance_path = runtime_gap_provenance_artifact_path(target_date)
+    gap_provenance = _load_json(gap_provenance_path) if gap_provenance_path.exists() else {}
+    gap_affected_handoffs: list[dict[str, Any]] = []
+    if gap_provenance and gap_provenance.get("gaps"):
+        for gap in gap_provenance["gaps"]:
+            gap_affected_families = [gap.get("family")]
+            gap_affected_metric_scopes = gap.get("excluded_metrics") or []
+            relevant_issues = [
+                issue for issue in log_issues
+                if any(scope.lower() in issue.lower() for scope in gap_affected_metric_scopes)
+                or any(
+                    _normalized_for_match(family) in _normalized_for_match(issue)
+                    for family in gap_affected_families if family
+                )
+            ]
+            if relevant_issues:
+                gap_affected_handoffs.append({
+                    "family": gap.get("family"),
+                    "gap_type": gap.get("gap_type"),
+                    "interpretation_rule": gap.get("interpretation_rule"),
+                    "affected_log_issues": relevant_issues,
+                })
+                handoff_warnings.append(f"runtime_gap_affected:{gap.get('family')}:{gap.get('gap_type')}")
     if "code_improvement_workorder" in disabled_stage_flags:
         stale_downstream_links = [key for key in stale_downstream_links if "code_improvement_workorder" not in key]
     if "pattern_lab_currentness_audit" in disabled_stage_flags:
@@ -3596,6 +3629,8 @@ def build_threshold_cycle_postclose_verification(
             "conversion_lane_summary": conversion_lane_summary,
         },
         "handoff_warnings": sorted(set(handoff_warnings)),
+        "gap_provenance": gap_provenance,
+        "gap_affected_handoffs": gap_affected_handoffs,
         "clean_baseline_report_residue": clean_baseline_report_residue,
         "clean_baseline_analytics_residue": clean_baseline_analytics_residue,
         "source_quality_hard_block": source_quality_hard_block,
@@ -3636,6 +3671,8 @@ def _render_markdown(report: dict[str, Any]) -> str:
     workorder = report.get("workorder_snapshot") if isinstance(report.get("workorder_snapshot"), dict) else {}
     ai_correction = report.get("ai_correction") if isinstance(report.get("ai_correction"), dict) else {}
     runtime_gap = report.get("runtime_apply_gap_audit") if isinstance(report.get("runtime_apply_gap_audit"), dict) else {}
+    gap_provenance = report.get("gap_provenance") if isinstance(report.get("gap_provenance"), dict) else {}
+    gap_affected_handoffs = report.get("gap_affected_handoffs") or []
     overnight_quality = (
         report.get("scalp_sim_overnight_source_quality")
         if isinstance(report.get("scalp_sim_overnight_source_quality"), dict)
@@ -3900,7 +3937,20 @@ def _render_markdown(report: dict[str, Any]) -> str:
         f"- missing: `{bottom_rebound.get('missing') or []}`",
         f"- interpretation: `{bottom_rebound.get('interpretation') or '-'}`",
         "",
-        "## Workorder Snapshot",
+        "## Runtime Gap Provenance",
+        f"- active_gap_count: `{gap_provenance.get('active_gap_count') or 0}`",
+        f"- raw_preserved: `{gap_provenance.get('raw_preserved')}`",
+        f"- gap_affected_handoff_count: `{len(gap_affected_handoffs)}`",
+    ]
+    if gap_affected_handoffs:
+        lines.extend(
+            f"- gap_affected: `{item.get('family')}` type=`{item.get('gap_type')}` rule=`{item.get('interpretation_rule')}` issues=`{item.get('affected_log_issues')}`"
+            for item in gap_affected_handoffs
+        )
+    lines.extend(
+        [
+            "",
+            "## Workorder Snapshot",
         f"- generation_id: `{workorder.get('generation_id') or '-'}`",
         f"- source_hash: `{workorder.get('source_hash') or '-'}`",
         f"- snapshot_status: `{workorder.get('status') or '-'}`",
@@ -3910,6 +3960,7 @@ def _render_markdown(report: dict[str, Any]) -> str:
         f"- removed_order_ids: `{workorder.get('removed_order_ids') or []}`",
         f"- decision_changed_order_ids: `{workorder.get('decision_changed_order_ids') or []}`",
     ]
+    )
     return "\n".join(lines) + "\n"
 
 

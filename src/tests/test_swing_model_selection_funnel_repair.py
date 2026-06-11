@@ -1288,7 +1288,7 @@ def _allowing_latency_gate(qty=2, price=10_000):
     }
 
 
-def test_swing_dry_run_submit_path_assumes_fill_after_legacy_prior(monkeypatch):
+def test_swing_dry_run_submit_path_assumes_fill_after_legacy_prior(monkeypatch, tmp_path):
     rules = replace(
         CONFIG,
         SWING_LIVE_ORDER_DRY_RUN_ENABLED=True,
@@ -1296,7 +1296,43 @@ def test_swing_dry_run_submit_path_assumes_fill_after_legacy_prior(monkeypatch):
         SWING_SAME_SYMBOL_LOSS_REENTRY_GUARD_ENABLED=False,
     )
     logs = []
+    policy_path = tmp_path / "swing_sim_policy_catalog.json"
+    policy_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "swing_sim_policy_catalog_v1",
+                "active_arm_priority_policies": [
+                    {
+                        "priority_policy_id": "active_arm_df7d7b3f62ece14a",
+                        "priority_arm_id": "arm05_breakout_conf_trailing",
+                        "status": "active",
+                        "priority_source": "surviving_arms",
+                        "source_report_date": "2026-06-10",
+                        "runtime_effect": False,
+                        "allowed_runtime_apply": False,
+                        "actual_order_submitted": False,
+                        "broker_order_forbidden": True,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    state_handlers._SWING_SIM_AUTO_POLICY_CACHE.update(
+        {
+            "path": None,
+            "mtime_ns": None,
+            "version": None,
+            "status": "not_loaded",
+            "active_arm_priority_policies": [],
+            "active_policies_by_arm": {},
+            "active_policies_by_bucket": {},
+        }
+    )
     monkeypatch.setattr(state_handlers, "TRADING_RULES", rules)
+    monkeypatch.setenv("KORSTOCKSCAN_SWING_SIM_AUTO_POLICY_ENABLED", "true")
+    monkeypatch.setenv("KORSTOCKSCAN_SWING_SIM_AUTO_POLICY_FILE", str(policy_path))
+    monkeypatch.setenv("KORSTOCKSCAN_SWING_SIM_AUTO_POLICY_VERSION", "swing_sim_auto_approval:2026-06-10")
     monkeypatch.setattr(state_handlers, "ACTIVE_TARGETS", [])
     monkeypatch.setattr(state_handlers.kiwoom_orders, "get_deposit", lambda *args, **kwargs: 1_000_000)
     monkeypatch.setattr(state_handlers.kiwoom_orders, "describe_buy_capacity", lambda *args, **kwargs: (100_000, 100_000, 2, 1.0))
@@ -1313,7 +1349,13 @@ def test_swing_dry_run_submit_path_assumes_fill_after_legacy_prior(monkeypatch):
     monkeypatch.setattr(state_handlers, "_log_entry_pipeline", lambda stock, code, stage, **fields: logs.append((stage, fields)))
 
     result = state_handlers._submit_watching_triggered_entry(
-        {"id": 706, "name": "DRY", "code": "000001", "strategy": "KOSPI_ML"},
+        {
+            "id": 706,
+            "name": "DRY",
+            "code": "000001",
+            "strategy": "KOSPI_ML",
+            "arm_id": "arm05_breakout_conf_trailing",
+        },
         "000001",
         {"curr": 10_000, "orderbook": {"asks": [{"price": 10_010}], "bids": [{"price": 9_990}]}},
         admin_id=1,
@@ -1341,9 +1383,60 @@ def test_swing_dry_run_submit_path_assumes_fill_after_legacy_prior(monkeypatch):
     assert sim_fill["actual_order_submitted"] is False
     assert sim_fill["broker_order_forbidden"] is True
     assert sim_fill["would_submit_stage"] == "order_leg_sent"
+    assert sim_fill["priority_policy_id"] == "active_arm_df7d7b3f62ece14a"
+    assert sim_fill["active_arm_priority_policy_id"] == "active_arm_df7d7b3f62ece14a"
+    assert sim_fill["swing_active_arm_priority"] is True
+    assert sim_fill["swing_priority_policy_match_status"] == "matched"
+    assert sim_fill["swing_priority_policy_match_source"] == "priority_arm_id"
     bundle = next(fields for stage, fields in logs if stage == "swing_sim_order_bundle_assumed_filled")
     assert bundle["actual_order_submitted"] is False
     assert bundle["broker_order_forbidden"] is True
+    assert bundle["priority_policy_id"] == "active_arm_df7d7b3f62ece14a"
+
+
+def test_swing_priority_policy_attaches_bucket_policy_from_catalog(monkeypatch, tmp_path):
+    policy_path = tmp_path / "swing_sim_policy_catalog.json"
+    policy_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "swing_sim_policy_catalog_v1",
+                "active_arm_priority_policies": [
+                    {
+                        "priority_policy_id": "active_arm_bucket_policy",
+                        "priority_bucket_id": "swing_bucket_1",
+                        "status": "active",
+                        "priority_source": "sim_auto_approved_candidates",
+                        "source_report_date": "2026-06-10",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    state_handlers._SWING_SIM_AUTO_POLICY_CACHE.update(
+        {
+            "path": None,
+            "mtime_ns": None,
+            "version": None,
+            "status": "not_loaded",
+            "active_arm_priority_policies": [],
+            "active_policies_by_arm": {},
+            "active_policies_by_bucket": {},
+        }
+    )
+    monkeypatch.setenv("KORSTOCKSCAN_SWING_SIM_AUTO_POLICY_ENABLED", "true")
+    monkeypatch.setenv("KORSTOCKSCAN_SWING_SIM_AUTO_POLICY_FILE", str(policy_path))
+    monkeypatch.setenv("KORSTOCKSCAN_SWING_SIM_AUTO_POLICY_VERSION", "swing_sim_auto_approval:2026-06-10")
+    monkeypatch.setattr(state_handlers, "TRADING_RULES", CONFIG)
+
+    stock = {"id": 707, "name": "DRY", "code": "000002", "strategy": "KOSPI_ML", "lifecycle_bucket_bucket_id": "swing_bucket_1"}
+    fields = state_handlers._swing_sim_priority_event_fields(stock)
+
+    assert fields["priority_policy_id"] == "active_arm_bucket_policy"
+    assert fields["active_arm_priority_policy_id"] == "active_arm_bucket_policy"
+    assert fields["priority_bucket_id"] == "swing_bucket_1"
+    assert fields["swing_priority_policy_match_status"] == "matched"
+    assert fields["swing_priority_policy_match_source"] == "priority_bucket_id"
 
 
 def test_swing_submit_lifecycle_context_tolerates_missing_liquidity_value(monkeypatch):

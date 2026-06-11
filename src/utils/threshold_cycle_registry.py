@@ -30,6 +30,7 @@ THRESHOLD_STAGE_FAMILY_MAP = {
     "entry_order_cancel_requested": "entry_price_execution_quality",
     "entry_order_cancel_confirmed": "entry_price_execution_quality",
     "entry_order_cancel_failed": "entry_price_execution_quality",
+    "entry_cancel_wait_attribution": "entry_cancel_wait_attribution",
     "entry_ai_price_ofi_skip_demoted": "entry_ofi_ai_smoothing",
     "holding_flow_ofi_smoothing_applied": "holding_flow_ofi_smoothing",
     "holding_flow_override_force_exit": "holding_flow_ofi_smoothing",

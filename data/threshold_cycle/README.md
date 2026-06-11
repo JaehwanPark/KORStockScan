@@ -115,7 +115,7 @@ cron completion detector는 wrapper log의 terminal marker를 source of truth로
 bounded calibration family는 아래 묶음이 중심이다. 목적은 완벽한 threshold spot 탐색이 아니라 efficient trade-off 지점의 bounded live canary와 자동 calibration이다.
 
 1. `lifecycle_decision_matrix_runtime`: Entry ADM, Holding/Exit ADM, submit, scale-in adapter를 감싼 umbrella weighted ADM runtime 후보. selected 시에도 hard safety 우회 없이 policy file/version/promote cap만 다음 PREOPEN env로 전달한다.
-2. `score65_74_recovery_probe`: family id는 유지하지만 current runtime floor는 score60이다. broad score threshold 완화가 아니라 score60~74, latency DANGER 제외, 수급/가속/micro-VWAP 유지, 1주/5만원 cap 후보
+2. `score65_74_recovery_probe`: family id는 유지하지만 current runtime floor는 score60이다. broad score threshold 완화가 아니라 score60~74, latency DANGER 제외, 수급/가속/micro-VWAP 유지 조건의 entry unlock 후보다. 현재 `WAIT6579_PROBE_CANARY` 별도 예산/수량 cap은 `0`일 때 기본 신규 BUY sizing을 사용하므로 1주/5만원 cap이 active 설명이 아니다.
 3. `latency_classifier_runtime_profile`: 전일 latency_block의 age/jitter/spread를 감사하되 CAUTION submit 차단은 제거한다. `SAFE`/`CAUTION`은 slippage check 이후 normal submit, `DANGER`/stale/broker safety만 차단으로 본다.
 4. `bad_entry_refined_canary`: naive hard block 재개가 아니라 soft-stop tail/defer cost 감소 후보. `bad_entry_refined_candidate`는 runtime provisional signal이며, 최종 유형은 장후 `post_sell_evaluations`가 `record_id`로 join된 뒤 lifecycle attribution으로만 닫는다.
 5. `soft_stop_whipsaw_confirmation`

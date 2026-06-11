@@ -127,7 +127,7 @@ def test_runtime_apply_bridge_blocks_daily_only_bucket_without_cumulative_confir
     report = mod.write_runtime_apply_bridge_report("2026-05-21")
 
     states = {item["family"]: item["bridge_candidate_state"] for item in report["candidates"]}
-    assert states[mod.ENTRY_BRIDGE_FAMILY] == "runtime_blocked_contract_gap"
+    assert states[mod.ENTRY_BRIDGE_FAMILY] == "entry_only_bridge_metadata"
     assert states[mod.SCALE_IN_BRIDGE_FAMILY] == "runtime_blocked_contract_gap"
     assert report["summary"]["live_auto_apply_ready_count"] == 0
     assert "promotion_lifecycle_bucket_discovery_missing" in report["warnings"]
@@ -136,6 +136,8 @@ def test_runtime_apply_bridge_blocks_daily_only_bucket_without_cumulative_confir
     assert entry["allowed_runtime_apply"] is False
     assert entry["target_env_keys"] == []
     assert entry["evidence_grade"] == "grade_2_counterfactual"
+    assert entry["metadata_only"] is True
+    assert entry["bridge_exclusion_reason"] == "entry_only_bridge_metadata_not_live_candidate"
     assert entry["legacy_family_archived"] is False
     assert report["summary"]["approval_required_count"] == 0
     assert report["summary"]["runtime_mutation_performed"] is False
@@ -197,7 +199,7 @@ def test_runtime_apply_bridge_ignores_lifecycle_flow_sim_probe_candidate(tmp_pat
     assert report["summary"]["greenfield_live_auto_ready_lifecycle_flow_count"] == 0
 
 
-def test_runtime_apply_bridge_keeps_rolling_confirmed_entry_and_scale_candidates_live_auto(tmp_path, monkeypatch):
+def test_runtime_apply_bridge_keeps_entry_as_metadata_and_scale_candidates_live_auto(tmp_path, monkeypatch):
     ldm_dir = tmp_path / "ldm"
     ldm_dir.mkdir()
     monkeypatch.setattr(mod, "LDM_REPORT_DIR", ldm_dir)
@@ -212,10 +214,12 @@ def test_runtime_apply_bridge_keeps_rolling_confirmed_entry_and_scale_candidates
     entry = by_family[mod.ENTRY_BRIDGE_FAMILY]
     scale = by_family[mod.SCALE_IN_BRIDGE_FAMILY]
 
-    assert entry["bridge_candidate_state"] == "live_auto_apply_ready"
+    assert entry["bridge_candidate_state"] == "entry_only_bridge_metadata"
     assert entry["approval_required"] is False
-    assert entry["allowed_runtime_apply"] is True
-    assert entry["transition_target"] == "bounded_live_canary"
+    assert entry["allowed_runtime_apply"] is False
+    assert entry["target_env_keys"] == []
+    assert entry["metadata_only"] is True
+    assert entry["transition_target"] == "entry_dimension_provenance_only"
     assert scale["bridge_candidate_state"] == "live_auto_apply_ready"
     assert scale["approval_required"] is False
     assert scale["allowed_runtime_apply"] is True
@@ -237,11 +241,11 @@ def test_runtime_apply_bridge_blocks_live_when_discovery_does_not_confirm(tmp_pa
     states = {item["family"]: item["bridge_candidate_state"] for item in report["candidates"]}
     entry = {item["family"]: item for item in report["candidates"]}[mod.ENTRY_BRIDGE_FAMILY]
 
-    assert states[mod.ENTRY_BRIDGE_FAMILY] == "runtime_blocked_contract_gap"
+    assert states[mod.ENTRY_BRIDGE_FAMILY] == "entry_only_bridge_metadata"
     assert states[mod.SCALE_IN_BRIDGE_FAMILY] == "runtime_blocked_contract_gap"
     assert entry["explicit_runtime_exclusion"] is True
-    assert entry["bridge_exclusion_reason"] == "counterfactual_sim_lifecycle_handoff"
-    assert entry["transition_target"] == "sim_lifecycle_handoff"
+    assert entry["bridge_exclusion_reason"] == "entry_only_bridge_metadata_not_live_candidate"
+    assert entry["transition_target"] == "entry_dimension_provenance_only"
     assert report["summary"]["live_auto_apply_ready_count"] == 0
 
 
@@ -257,11 +261,11 @@ def test_runtime_apply_bridge_blocks_live_when_discovery_tier2_not_parsed(tmp_pa
     report = mod.build_runtime_apply_bridge_report("2026-05-21")
     states = {item["family"]: item["bridge_candidate_state"] for item in report["candidates"]}
 
-    assert states[mod.ENTRY_BRIDGE_FAMILY] == "runtime_blocked_contract_gap"
+    assert states[mod.ENTRY_BRIDGE_FAMILY] == "entry_only_bridge_metadata"
     assert states[mod.SCALE_IN_BRIDGE_FAMILY] == "runtime_blocked_contract_gap"
 
 
-def test_runtime_apply_bridge_accepts_wait6579_live_discovery_candidate(tmp_path, monkeypatch):
+def test_runtime_apply_bridge_keeps_wait6579_discovery_candidate_as_entry_metadata(tmp_path, monkeypatch):
     ldm_dir = tmp_path / "ldm"
     ldm_dir.mkdir()
     discovery_path = tmp_path / "discovery" / "lifecycle_bucket_discovery_2026-05-21.json"
@@ -273,10 +277,12 @@ def test_runtime_apply_bridge_accepts_wait6579_live_discovery_candidate(tmp_path
     report = mod.build_runtime_apply_bridge_report("2026-05-21")
     entry = {item["family"]: item for item in report["candidates"]}[mod.ENTRY_BRIDGE_FAMILY]
 
-    assert entry["bridge_candidate_state"] == "live_auto_apply_ready"
-    assert entry["live_auto_apply"] is True
-    assert entry["allowed_runtime_apply"] is True
-    assert entry["runtime_effect_after_approval"] == "bounded_entry_probe_recovery_live_auto"
+    assert entry["bridge_candidate_state"] == "entry_only_bridge_metadata"
+    assert entry["live_auto_apply"] is False
+    assert entry["allowed_runtime_apply"] is False
+    assert entry["target_env_keys"] == []
+    assert entry["runtime_effect_after_approval"] == "none"
+    assert entry["metadata_only"] is True
 
 
 def test_runtime_apply_bridge_writes_greenfield_real_env_policy(tmp_path, monkeypatch):
@@ -376,9 +382,9 @@ def test_runtime_apply_bridge_writes_greenfield_real_env_policy(tmp_path, monkey
         "GREENFIELD_REAL_ENV_AUTHORITY_POLICY_VERSION",
         "GREENFIELD_REAL_ENV_TELEGRAM_ENABLED",
     ]
-    assert report["summary"]["live_auto_apply_ready_count"] == 2
+    assert report["summary"]["live_auto_apply_ready_count"] == 1
     assert report["summary"]["greenfield_real_env_ready_count"] == 1
-    assert report["summary"]["stage_local_live_auto_apply_ready_count"] == 1
+    assert report["summary"]["stage_local_live_auto_apply_ready_count"] == 0
     assert policy["scope"] == "full_lifecycle"
     assert policy["schema_version"] == "greenfield_lifecycle_bundle_policy_v1"
     assert policy["bundle_id"] == "lifecycle_flow:combo_lifecycle_flow:complete_good"
@@ -682,5 +688,5 @@ def test_runtime_apply_bridge_rejects_malformed_discovery_live_candidate(tmp_pat
     report = mod.build_runtime_apply_bridge_report("2026-05-21")
     entry = {item["family"]: item for item in report["candidates"]}[mod.ENTRY_BRIDGE_FAMILY]
 
-    assert entry["bridge_candidate_state"] == "runtime_blocked_contract_gap"
+    assert entry["bridge_candidate_state"] == "entry_only_bridge_metadata"
     assert entry["allowed_runtime_apply"] is False

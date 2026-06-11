@@ -50,6 +50,34 @@ def test_runtime_apply_bridge_summary_preserves_post_apply_provenance():
     assert summary["selected"][0]["actual_runtime_effect"] == "bounded_scale_in_policy_tighten_live_auto"
 
 
+def test_runtime_apply_bridge_summary_does_not_select_entry_metadata():
+    manifest = {
+        "runtime_apply_bridge": {
+            "candidate_count": 1,
+            "approved": 0,
+            "metadata": [
+                {
+                    "family": "entry_wait6579_score66_69_recovery_gate_v1",
+                    "candidate_id": "entry_wait6579_score66_69_recovery_gate_v1:2026-05-21",
+                    "state": "entry_only_bridge_metadata",
+                    "reason": "entry_only_bridge_metadata_not_live_candidate",
+                    "allowed_runtime_apply": False,
+                    "target_env_keys": [],
+                    "runtime_effect": False,
+                }
+            ],
+            "selected": [],
+            "decisions": [],
+        }
+    }
+
+    assert mod._selected_families(manifest) == []
+    summary = mod._runtime_apply_bridge_summary(manifest)
+    assert summary["approved"] == 0
+    assert summary["selected_count"] == 0
+    assert summary["selected"] == []
+
+
 def test_calibration_path_does_not_fallback_to_intraday_artifact(tmp_path, monkeypatch):
     calibration_dir = tmp_path / "threshold_cycle_calibration"
     calibration_dir.mkdir(parents=True)

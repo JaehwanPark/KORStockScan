@@ -16,6 +16,7 @@ set -euo pipefail
 # bot process directly, and does not mutate runtime threshold/provider/order env.
 
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+VENV_PY="${KORSTOCKSCAN_VENV_PY:-$PROJECT_DIR/.venv/bin/python}"
 RESTART_FLAG="$PROJECT_DIR/restart.flag"
 BOT_PATTERN="${KORSTOCKSCAN_BOT_PROCESS_PATTERN:-python.*bot_main.py}"
 STOP_TIMEOUT_SEC="${KORSTOCKSCAN_GRACEFUL_RESTART_STOP_TIMEOUT_SEC:-90}"
@@ -78,6 +79,19 @@ while [ "$elapsed" -lt "$START_TIMEOUT_SEC" ]; do
     for pid in "${CURRENT_PIDS[@]}"; do
         if ! contains_pid "$pid" "${OLD_PIDS[@]}"; then
             echo "Graceful restart completed. New bot PID: $pid"
+            APPLICATION_DATE="${KORSTOCKSCAN_THRESHOLD_RUNTIME_APPLY_DATE:-$(date +%Y-%m-%d)}"
+            echo "Verifying runtime env handoff for PID $pid ..."
+            set +e
+            VERIFY_RC=0
+            PYTHONPATH="$PROJECT_DIR" "$VENV_PY" -m src.engine.threshold_cycle_preopen_apply \
+                --verify --date "$APPLICATION_DATE" --pid "$pid" --write-verify-artifact || VERIFY_RC=$?
+            set -e
+            if [ "$VERIFY_RC" -ne 0 ]; then
+                echo "[WARN] Runtime env handoff verification failed for PID $pid (rc=$VERIFY_RC)."
+                echo "[WARN] Verification artifact written to data/threshold_cycle/runtime_env/threshold_runtime_env_verify_${APPLICATION_DATE}.json"
+            else
+                echo "Runtime env handoff verification passed."
+            fi
             exit 0
         fi
     done

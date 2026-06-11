@@ -977,6 +977,47 @@ def test_bridge_counterfactual_source_field_gap_does_not_emit_runtime_directive(
     )
 
 
+def test_entry_only_bridge_metadata_is_not_code_patch_directive(tmp_path, monkeypatch):
+    report_dir = _patch_dirs(tmp_path, monkeypatch)
+    _write_core_artifacts(report_dir)
+    candidate_id = "entry_wait6579_score66_69_recovery_gate_v1:2026-05-22"
+    _write_json(
+        report_dir / "runtime_apply_bridge" / "runtime_apply_bridge_2026-05-22.json",
+        {
+            "candidates": [
+                {
+                    "candidate_id": candidate_id,
+                    "family": "entry_wait6579_score66_69_recovery_gate_v1",
+                    "stage": "entry",
+                    "bridge_candidate_state": "entry_only_bridge_metadata",
+                    "source_quality_gate": "pass",
+                    "source_quality_adjusted_ev_pct": 1.18,
+                    "target_env_keys": [],
+                    "evidence_grade": "grade_2_counterfactual",
+                    "transition_target": "entry_dimension_provenance_only",
+                    "metadata_only": True,
+                    "explicit_runtime_exclusion": True,
+                    "bridge_exclusion_reason": "entry_only_bridge_metadata_not_live_candidate",
+                    "missing_runtime_source_fields": [],
+                }
+            ]
+        },
+    )
+
+    report = mod.build_runtime_apply_gap_audit("2026-05-22", ai_review_provider="none")
+
+    row = next(item for item in report["candidate_route_ledger"] if item["candidate_id"] == candidate_id)
+    assert row["failure_state"] == "pass"
+    assert row["final_disposition"] == "source_only_explicit_exclusion"
+    assert row["runtime_hook_state"] == "not_applicable_source_only"
+    assert row["runtime_exclusion_reason"] == "entry_only_bridge_metadata_not_live_candidate"
+    assert not any(
+        item["candidate_id"] == candidate_id
+        and item["directive_type"] == "IMPLEMENT_RUNTIME_BRIDGE_FOR_ENTRY_BUCKET"
+        for item in report["codex_workorder_directives"]
+    )
+
+
 def test_wait6579_bridge_missing_split_bucket_is_sim_lifecycle_handoff(tmp_path, monkeypatch):
     report_dir = _patch_dirs(tmp_path, monkeypatch)
     _write_core_artifacts(report_dir)

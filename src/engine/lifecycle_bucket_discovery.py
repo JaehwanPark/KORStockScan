@@ -67,6 +67,7 @@ SIM_APPROVAL_STATES = {
     "entry_only_sim_auto_approved",
     LIFECYCLE_FLOW_SIM_PROBE_STATE,
 }
+ENTRY_ONLY_BRIDGE_METADATA_STATE = "entry_only_bridge_metadata"
 EVIDENCE_GRADE_1_COMPLETED_SIM = "grade_1_completed_sim"
 EVIDENCE_GRADE_2_COUNTERFACTUAL = "grade_2_counterfactual"
 EVIDENCE_GRADE_MIXED_SOURCE = "mixed_source"
@@ -136,6 +137,7 @@ AUTO_SURFACE_STATES = {
     "entry_only_sim_auto_approved",
     LIFECYCLE_FLOW_SIM_PROBE_STATE,
     "entry_only_source_candidate",
+    ENTRY_ONLY_BRIDGE_METADATA_STATE,
     "live_auto_apply_ready",
     "runtime_blocked_contract_gap",
     "code_patch_required",
@@ -148,6 +150,7 @@ FINAL_CLASSIFICATION_STATES = {
     "entry_only_sim_auto_approved",
     LIFECYCLE_FLOW_SIM_PROBE_STATE,
     "entry_only_source_candidate",
+    ENTRY_ONLY_BRIDGE_METADATA_STATE,
     "live_auto_apply_ready",
     "runtime_blocked_contract_gap",
     "code_patch_required",
@@ -752,6 +755,8 @@ def _source_bucket_kind(candidate_state: str, bucket: dict[str, Any]) -> str:
         return "lifecycle_flow_sim_probe_policy"
     if candidate_state == "entry_only_source_candidate":
         return "entry_only_source_candidate"
+    if candidate_state == ENTRY_ONLY_BRIDGE_METADATA_STATE:
+        return "entry_only_bridge_metadata"
     if bucket.get("unknown_dimension_counts") or "unknown" in str(bucket.get("bucket_key") or ""):
         return "taxonomy_provenance_gap"
     if candidate_state in {"code_patch_required", "automation_handoff_gap", "runtime_blocked_contract_gap"}:
@@ -830,6 +835,8 @@ def _recommended_resolution(candidate_state: str, bucket: dict[str, Any]) -> str
         return "next_preopen_lifecycle_flow_sim_probe_policy_input"
     if candidate_state == "entry_only_source_candidate":
         return "entry_only_keep_collecting_no_greenfield_live"
+    if candidate_state == ENTRY_ONLY_BRIDGE_METADATA_STATE:
+        return "entry_only_bridge_metadata_no_live_candidate"
     if str(bucket.get("source_quality_gate") or "") != "pass":
         return "keep_collecting_until_sample_floor"
     return "keep_collecting"
@@ -866,6 +873,8 @@ def _decision_authority_for_state(state: str) -> str:
         return "lifecycle_bucket_discovery_entry_only_sim_auto"
     if state == "entry_only_source_candidate":
         return "lifecycle_bucket_discovery_entry_only_source_quality"
+    if state == ENTRY_ONLY_BRIDGE_METADATA_STATE:
+        return "lifecycle_bucket_discovery_entry_only_bridge_metadata"
     if state == LIFECYCLE_FLOW_SIM_PROBE_STATE:
         return "lifecycle_bucket_discovery_lifecycle_flow_sim_probe"
     if state == "sim_auto_approved":
@@ -882,6 +891,8 @@ def _runtime_effect_after_approval_for_state(state: str) -> str:
         return "lifecycle_flow_sim_probe_policy"
     if state == "entry_only_source_candidate":
         return "none_entry_only_source_candidate"
+    if state == ENTRY_ONLY_BRIDGE_METADATA_STATE:
+        return "none_entry_only_bridge_metadata"
     if state == "sim_auto_approved":
         return "sim_only_bucket_policy"
     return "none"
@@ -894,6 +905,8 @@ def _auto_promotion_contract_state_for_state(state: str) -> str:
         return "entry_only_sim_auto_approved"
     if state == "entry_only_source_candidate":
         return "entry_only_source_candidate"
+    if state == ENTRY_ONLY_BRIDGE_METADATA_STATE:
+        return "entry_only_bridge_metadata"
     if state == LIFECYCLE_FLOW_SIM_PROBE_STATE:
         return "lifecycle_flow_sim_probe_candidate"
     if state == "sim_auto_approved":
@@ -908,6 +921,8 @@ def _review_category_for_state(state: str) -> tuple[str, str]:
         return "sim_auto_approved", "lifecycle_flow_sim_probe_candidate"
     if state == "entry_only_source_candidate":
         return "source_only_keep_collecting", "entry_only_source_candidate"
+    if state == ENTRY_ONLY_BRIDGE_METADATA_STATE:
+        return "source_only_keep_collecting", "entry_only_bridge_metadata"
     if state in {
         "live_auto_apply_ready",
         "sim_auto_approved",
@@ -1923,7 +1938,8 @@ def _build_active_sim_priority_seeds(report: dict[str, Any]) -> list[dict[str, A
         ev = _safe_float(parent.get("parent_source_quality_adjusted_ev_pct"), None)
         complete_flow_count = _safe_int(parent.get("complete_flow_count"))
         floor_pass = bool(parent.get("parent_granularity_floor_passed"))
-        eligible = bool(observable_prefix) and ev is not None and ev > 0 and floor_pass
+        ev_positive = ev is not None and ev > 0
+        eligible = bool(observable_prefix) and ev_positive and floor_pass
         live_conversion_blocked_reason = "incomplete_lifecycle_flow" if complete_flow_count <= 0 else ""
         active_collection_reason = (
             "positive_ev_parent_needs_sim_collection"
@@ -1942,10 +1958,16 @@ def _build_active_sim_priority_seeds(report: dict[str, Any]) -> list[dict[str, A
         has_previous = bool(previous)
         previous_status = str(previous.get("status") or "").strip()
         failed_count = 0 if eligible else _safe_int(previous.get("consecutive_fail_count")) + 1
+        first_fail_grace_allowed = (
+            has_previous
+            and previous_status == "active"
+            and failed_count < 2
+            and ev_positive
+        )
         missing_count = 0
         status = (
             "active"
-            if eligible or (has_previous and previous_status == "active" and failed_count < 2)
+            if eligible or first_fail_grace_allowed
             else "retired"
             if previous_status == "retired" or failed_count >= 5
             else "cooldown"
@@ -1988,7 +2010,7 @@ def _build_active_sim_priority_seeds(report: dict[str, Any]) -> list[dict[str, A
                 "pass"
                 if eligible
                 else "first_fail_grace"
-                if has_previous and status == "active"
+                if first_fail_grace_allowed
                 else "source_quality_or_granularity_blocked"
             ),
             "consecutive_fail_count": failed_count,
@@ -1999,7 +2021,9 @@ def _build_active_sim_priority_seeds(report: dict[str, Any]) -> list[dict[str, A
             "broker_order_forbidden": True,
             "retired_reason": "consecutive_fail_or_nonpositive_ev" if status == "retired" else "",
         }
-        if has_previous and status == "active" and not eligible:
+        if has_previous and previous_status == "active" and failed_count < 2 and not ev_positive:
+            seed["active_grace_blocked_reason"] = "nonpositive_ev"
+        if first_fail_grace_allowed:
             seed["active_collection_reason"] = "previous_active_first_fail_grace"
         if seed["active_seed_id"] and effective_prefix:
             seeds.append(seed)
@@ -2710,9 +2734,11 @@ def _classify_bucket(stage: str, bucket: dict[str, Any]) -> tuple[str, str | Non
         and bucket_type == "combo_entry_spot"
         and bucket_key == ENTRY_LIVE_AUTO_BUCKET_KEY
     ):
-        if _sim_handoff_allowed(bucket, grade):
-            return "entry_only_sim_auto_approved", None, grade
-        return "entry_only_source_candidate", None, grade
+        return ENTRY_ONLY_BRIDGE_METADATA_STATE, None, {
+            **grade,
+            "transition_target": "entry_dimension_provenance_only",
+            "grade_reason": "entry_wait6579_bridge_metadata_not_complete_lifecycle_bucket",
+        }
     if str(grade.get("evidence_grade") or "") in {EVIDENCE_GRADE_2_COUNTERFACTUAL, EVIDENCE_GRADE_MIXED_SOURCE}:
         if route in {"candidate_recovery_or_relax", "candidate_tighten_or_exclude"} and _sim_handoff_allowed(bucket, grade):
             return "sim_auto_approved", None, grade
@@ -3154,8 +3180,9 @@ def _build_ai_review_context(
             ),
             "grade_policy": (
                 "Grade 2 counterfactual and mixed_source candidates cannot become bounded live candidates by AI promotion. "
-                "A deterministic entry bridge candidate that is already live_auto_apply_ready is an explicit contract exception "
-                "and must stay live unless an explicit contract or safety gap is found."
+                "Entry-only bridge metadata is not a live candidate and must not be promoted or kept as "
+                "live_auto_apply_ready. Only complete lifecycle_flow candidates and supported non-entry bridge "
+                "candidates with deterministic live contracts may remain live."
             ),
             "non_conservative_live_policy": (
                 "For Grade 1 completed-sim deterministic live_auto_apply_ready candidates, do not block solely for small effect size, "
@@ -3358,7 +3385,8 @@ def _build_ai_review_instructions() -> str:
         "In comparative_reviews choose selected_source as deterministic, ai_tier2, hybrid, or reject and selected_decision as "
         "merge, absorb_as_dimension, create_new_metric, create_new_dimension, keep_bucket, reject, source_quality_blocker, or instrumentation_gap.\n"
         "Grade 2 counterfactual and mixed_source candidates cannot become bounded live candidates by AI promotion. "
-        "However, if a deterministic entry bridge candidate is already live_auto_apply_ready, keep it live unless an explicit contract or safety gap is found.\n"
+        "Entry-only bridge metadata is not a live candidate and must not be promoted or kept as live_auto_apply_ready. "
+        "Only complete lifecycle_flow candidates and supported non-entry bridge candidates with deterministic live contracts may remain live.\n"
         "Do not be conservative by default for Grade 1 completed-sim deterministic live candidates. A Grade 1 deterministic live candidate with even a 1% plausible positive effect should not be blocked solely for small effect size, novelty, low confidence, or ambiguity.\n"
         "When the decision is ambiguous, keep Grade 1 deterministic live candidates live and rely on post-apply verification.\n"
         "Use runtime_blocked_contract_gap or code_patch_required only for explicit source-quality, source schema, env mapping, runtime hook, post-apply attribution, safety, broker, stale quote, qty/cooldown, provider, cap, forbidden-use, leakage, or missing-contract gaps.\n"

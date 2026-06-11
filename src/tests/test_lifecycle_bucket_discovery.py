@@ -479,8 +479,9 @@ def test_active_sim_priority_seed_status_uses_two_day_cooldown_and_five_day_reti
         }
     )[0]
 
-    assert first_fail["status"] == "active"
-    assert first_fail["source_quality_status"] == "first_fail_grace"
+    assert first_fail["status"] == "cooldown"
+    assert first_fail["source_quality_status"] == "source_quality_or_granularity_blocked"
+    assert first_fail["active_grace_blocked_reason"] == "nonpositive_ev"
     assert first_fail["consecutive_fail_count"] == 1
 
     previous_seed["consecutive_fail_count"] = 1
@@ -565,7 +566,8 @@ def test_active_sim_priority_seed_status_uses_two_day_cooldown_and_five_day_reti
             ],
         }
     )[0]
-    assert fail_after_recovery["status"] == "active"
+    assert fail_after_recovery["status"] == "cooldown"
+    assert fail_after_recovery["active_grace_blocked_reason"] == "nonpositive_ev"
     assert fail_after_recovery["consecutive_fail_count"] == 1
 
     recovered["status"] = "cooldown"
@@ -577,6 +579,51 @@ def test_active_sim_priority_seed_status_uses_two_day_cooldown_and_five_day_reti
     cooldown_missing = mod._build_active_sim_priority_seeds({"date": "2026-06-01", "parent_bucket_summaries": []})[0]
     assert cooldown_missing["status"] == "cooldown"
     assert cooldown_missing["consecutive_missing_count"] == 1
+
+
+def test_active_sim_priority_first_fail_grace_requires_positive_ev(tmp_path, monkeypatch):
+    previous_seed = {
+        "active_seed_id": "active_seed_previous",
+        "source_parent_bucket_id": "parent_was_positive",
+        "status": "active",
+        "observable_prefix": {
+            "entry_score_parent": "score_watch_recovery",
+            "entry_source_parent": "entry_source_blocked_ai_score",
+        },
+        "consecutive_fail_count": 0,
+        "consecutive_missing_count": 0,
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+    }
+    tmp_path.joinpath("lifecycle_bucket_discovery_2026-05-31.json").write_text(
+        json.dumps({"active_sim_priority_seeds": [previous_seed]}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(mod, "REPORT_DIR", tmp_path)
+
+    floor_gap = mod._build_active_sim_priority_seeds(
+        {
+            "date": "2026-06-01",
+            "parent_bucket_summaries": [
+                {
+                    "source_parent_bucket_id": "parent_was_positive",
+                    "parent_source_quality_adjusted_ev_pct": 0.4,
+                    "complete_flow_count": 1,
+                    "parent_granularity_floor_passed": False,
+                    "dimension_filters": {
+                        "entry_score_parent": "score_watch_recovery",
+                        "entry_source_parent": "entry_source_blocked_ai_score",
+                    },
+                }
+            ],
+        }
+    )[0]
+
+    assert floor_gap["status"] == "active"
+    assert floor_gap["source_quality_status"] == "first_fail_grace"
+    assert floor_gap["active_collection_reason"] == "previous_active_first_fail_grace"
 
 
 def test_active_sim_priority_allows_incomplete_positive_parent_for_collection(monkeypatch, tmp_path):
@@ -1082,16 +1129,17 @@ def test_lifecycle_bucket_discovery_classifies_live_sim_and_new_buckets(tmp_path
     ]
     assert {item["live_auto_apply_family"] for item in live} == {mod.SCALE_IN_LIVE_AUTO_FAMILY}
     wait6579 = states["entry:combo_entry_spot:score_score_66_69_source_wait6579_ev_cohort_stale_fresh_or_unflagged_liquidity_liquidity_unknown"]
-    assert wait6579["classification_state"] == "entry_only_sim_auto_approved"
-    assert wait6579["review_category"] == "sim_auto_approved"
-    assert wait6579["review_sub_state"] == "entry_only_sim_auto_approved"
+    assert wait6579["classification_state"] == mod.ENTRY_ONLY_BRIDGE_METADATA_STATE
+    assert wait6579["review_category"] == "source_only_keep_collecting"
+    assert wait6579["review_sub_state"] == "entry_only_bridge_metadata"
     assert wait6579["evidence_grade"] == mod.EVIDENCE_GRADE_2_COUNTERFACTUAL
-    assert wait6579["transition_target"] == "sim_lifecycle_handoff"
+    assert wait6579["transition_target"] == "entry_dimension_provenance_only"
     assert wait6579["full_real_conversion_allowed"] is False
     assert wait6579["live_auto_apply_family"] is None
     assert wait6579["legacy_contract_known_unknown"] is False
     assert wait6579["source_dimension_gap"] == "unknown_source_dimensions"
     assert (wait6579["auto_promotion_contract"] or {})["deterministic_contract_required"] is False
+    assert wait6579["bounded_live_canary_allowed"] is False
     flow_parent = next(
         item
         for item in states.values()
@@ -1189,7 +1237,7 @@ def test_lifecycle_bucket_discovery_classifies_live_sim_and_new_buckets(tmp_path
     assert flow_probe_row["source_bucket_id"] == flow_probe["source_bucket_id"]
     assert flow_probe_row["complete_flow_count"] == 1
     assert flow_probe_row["incomplete_flow_count"] == 0
-    assert auto["approved_evidence_grade_counts"].get(mod.EVIDENCE_GRADE_2_COUNTERFACTUAL, 0) == 1
+    assert auto["approved_evidence_grade_counts"].get(mod.EVIDENCE_GRADE_2_COUNTERFACTUAL, 0) == 0
     assert auto["source_quality_status"] == "pass"
 
 
@@ -1693,7 +1741,8 @@ def test_lifecycle_bucket_discovery_quarantines_contaminated_live_candidates(tmp
     wait6579 = by_id[
         "entry:combo_entry_spot:score_score_66_69_source_wait6579_ev_cohort_stale_fresh_or_unflagged_liquidity_liquidity_unknown"
     ]
-    assert wait6579["classification_state"] == "entry_only_sim_auto_approved"
+    assert wait6579["classification_state"] == mod.ENTRY_ONLY_BRIDGE_METADATA_STATE
+    assert wait6579["bounded_live_canary_allowed"] is False
     assert report["summary"]["live_auto_apply_ready_count"] == 0
     assert "contamination_quarantine_live_auto_blocked:1" in report["warnings"]
 

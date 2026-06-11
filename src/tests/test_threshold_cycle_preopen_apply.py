@@ -397,23 +397,25 @@ def test_preopen_apply_consumes_lifecycle_bucket_auto_apply_without_human_artifa
                 "date": "2026-05-22",
                 "candidates": [
                     {
-                        "candidate_id": "entry_wait6579_score66_69_recovery_gate_v1:2026-05-22",
-                        "family": bridge_mod.ENTRY_BRIDGE_FAMILY,
-                        "stage": "entry",
-                        "priority": 9,
+                        "candidate_id": "scale_in_bucket_runtime_policy_v1:2026-05-22",
+                        "family": bridge_mod.SCALE_IN_BRIDGE_FAMILY,
+                        "stage": "scale_in",
+                        "priority": 39,
                         "bridge_candidate_state": "live_auto_apply_ready",
                         "approval_required": False,
                         "live_auto_apply": True,
                         "allowed_runtime_apply": True,
                         "target_env_keys": [
-                            "AI_SCORE65_74_RECOVERY_PROBE_ENABLED",
-                            "AI_SCORE65_74_RECOVERY_PROBE_MIN_SCORE",
-                            "AI_SCORE65_74_RECOVERY_PROBE_MAX_SCORE",
+                            "REVERSAL_ADD_MIN_AI_SCORE",
+                            "REVERSAL_ADD_MIN_BUY_PRESSURE",
                         ],
-                        "recommended_values": {"enabled": True, "min_score": 66, "max_score": 69},
-                        "current_values": {"enabled": False, "min_score": 65, "max_score": 74},
-                        "runtime_effect_after_approval": "bounded_entry_probe_recovery_live_auto",
-                        "lifecycle_bucket_discovery_bucket_id": "entry:combo_entry_spot:score_66_69",
+                        "recommended_values": {
+                            "reversal_add_min_ai_score": 65,
+                            "reversal_add_min_buy_pressure": 60.0,
+                        },
+                        "current_values": {"reversal_add_min_ai_score": 60, "reversal_add_min_buy_pressure": 55.0},
+                        "runtime_effect_after_approval": "bounded_scale_in_policy_tighten_live_auto",
+                        "lifecycle_bucket_discovery_bucket_id": "scale_in:blocker_namespace:AVG_DOWN_ONLY",
                         "lifecycle_bucket_discovery_ai_review_status": "parsed",
                         "auto_promotion_contract": {"tier2_status": "parsed", "tier2_policy": "fail_closed"},
                         "source_bucket_keys": ["score=score_66_69"],
@@ -467,7 +469,7 @@ def test_preopen_apply_consumes_lifecycle_bucket_auto_apply_without_human_artifa
 
     assert manifest["status"] == "auto_bounded_live_ready"
     assert manifest["runtime_apply_bridge"]["approved"] == 1
-    assert manifest["runtime_apply_bridge"]["selected"][0]["family"] == bridge_mod.ENTRY_BRIDGE_FAMILY
+    assert manifest["runtime_apply_bridge"]["selected"][0]["family"] == bridge_mod.SCALE_IN_BRIDGE_FAMILY
     assert manifest["lifecycle_bucket_discovery"]["approved"] == 1
     assert manifest["lifecycle_bucket_discovery"]["selected"][0]["recommended_values"]["live_auto_apply_enabled"] is False
     assert manifest["swing_sim_auto_approval"]["approved"] == 1
@@ -1352,6 +1354,144 @@ def test_operator_runtime_env_lock_does_not_preserve_score65_probe_on_safety_rev
     assert decision["decision_reason"] == "safety_revert_required"
     assert decision["operator_runtime_env_lock"]["allowed_close"] is True
     assert "KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_ENABLED" not in manifest["runtime_env_overrides"]
+
+
+def test_operator_runtime_env_lock_until_explicit_close_survives_observation_date(tmp_path, monkeypatch):
+    report_dir = tmp_path / "report"
+    apply_dir = tmp_path / "apply_plans"
+    runtime_dir = tmp_path / "runtime_env"
+    lock_dir = tmp_path / "operator_runtime_env_locks"
+    latency_dir = tmp_path / "missing_latency_classifier_recommendation"
+    report_dir.mkdir(parents=True)
+    lock_dir.mkdir(parents=True)
+    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "APPLY_PLAN_DIR", apply_dir)
+    monkeypatch.setattr(mod, "RUNTIME_ENV_DIR", runtime_dir)
+    monkeypatch.setattr(mod, "OPERATOR_RUNTIME_ENV_LOCK_DIR", lock_dir)
+    monkeypatch.setattr(mod, "LATENCY_CLASSIFIER_RECOMMENDATION_DIR", latency_dir)
+
+    (report_dir / "threshold_cycle_2026-06-20.json").write_text(
+        json.dumps(
+            {
+                "date": "2026-06-20",
+                "calibration_candidates": [
+                    {
+                        "family": "score65_74_recovery_probe",
+                        "stage": "entry",
+                        "priority": 10,
+                        "allowed_runtime_apply": True,
+                        "safety_revert_required": False,
+                        "calibration_state": "hold",
+                        "target_env_keys": ["AI_SCORE65_74_RECOVERY_PROBE_ENABLED"],
+                        "recommended_values": {"enabled": False},
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (lock_dir / "score65_74_recovery_probe_2026-06-11.json").write_text(
+        json.dumps(
+            {
+                "lock_id": "score65_74_recovery_probe_real_operator_override_2026-06-11",
+                "enabled": True,
+                "family": "score65_74_recovery_probe",
+                "stage": "entry",
+                "env_key": "KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_ENABLED",
+                "env_value": "true",
+                "active_from_date": "2026-06-11",
+                "min_observation_until_date": "2026-06-12",
+                "lock_until_explicit_close": True,
+                "allowed_close_reason_keywords": ["safety_revert", "severe_loss", "stale_quote"],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    manifest = mod.build_preopen_apply_manifest(
+        "2026-06-21",
+        source_date="2026-06-20",
+        apply_mode="auto_bounded_live",
+        auto_apply=True,
+        require_ai=False,
+    )
+
+    decision = manifest["auto_apply_decisions"][0]
+    assert decision["selected"] is True
+    assert decision["decision_reason"] == (
+        "operator_runtime_env_lock_preserved:score65_74_recovery_probe_real_operator_override_2026-06-11"
+    )
+    assert decision["operator_runtime_env_lock"]["applied"] is True
+    assert manifest["runtime_env_overrides"]["KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_ENABLED"] == "true"
+
+
+def test_operator_runtime_env_lock_applies_when_target_date_reaches_active_from(tmp_path, monkeypatch):
+    report_dir = tmp_path / "report"
+    apply_dir = tmp_path / "apply_plans"
+    runtime_dir = tmp_path / "runtime_env"
+    lock_dir = tmp_path / "operator_runtime_env_locks"
+    latency_dir = tmp_path / "missing_latency_classifier_recommendation"
+    report_dir.mkdir(parents=True)
+    lock_dir.mkdir(parents=True)
+    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "APPLY_PLAN_DIR", apply_dir)
+    monkeypatch.setattr(mod, "RUNTIME_ENV_DIR", runtime_dir)
+    monkeypatch.setattr(mod, "OPERATOR_RUNTIME_ENV_LOCK_DIR", lock_dir)
+    monkeypatch.setattr(mod, "LATENCY_CLASSIFIER_RECOMMENDATION_DIR", latency_dir)
+
+    (report_dir / "threshold_cycle_2026-06-10.json").write_text(
+        json.dumps(
+            {
+                "date": "2026-06-10",
+                "calibration_candidates": [
+                    {
+                        "family": "score65_74_recovery_probe",
+                        "stage": "entry",
+                        "priority": 10,
+                        "allowed_runtime_apply": True,
+                        "safety_revert_required": False,
+                        "calibration_state": "hold",
+                        "target_env_keys": ["AI_SCORE65_74_RECOVERY_PROBE_ENABLED"],
+                        "recommended_values": {"enabled": False},
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (lock_dir / "score65_74_recovery_probe_2026-06-11.json").write_text(
+        json.dumps(
+            {
+                "lock_id": "score65_74_recovery_probe_real_operator_override_2026-06-11",
+                "enabled": True,
+                "family": "score65_74_recovery_probe",
+                "stage": "entry",
+                "env_key": "KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_ENABLED",
+                "env_value": "true",
+                "active_from_date": "2026-06-11",
+                "min_observation_until_date": "2026-06-12",
+                "explicit_close_required": True,
+                "allowed_close_reason_keywords": ["safety_revert", "severe_loss", "stale_quote"],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    manifest = mod.build_preopen_apply_manifest(
+        "2026-06-11",
+        source_date="2026-06-10",
+        apply_mode="auto_bounded_live",
+        auto_apply=True,
+        require_ai=False,
+    )
+
+    decision = manifest["auto_apply_decisions"][0]
+    assert decision["selected"] is True
+    assert decision["decision_reason"] == (
+        "operator_runtime_env_lock_preserved:score65_74_recovery_probe_real_operator_override_2026-06-11"
+    )
+    assert decision["operator_runtime_env_lock"]["applied"] is True
+    assert manifest["runtime_env_overrides"]["KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_ENABLED"] == "true"
 
 
 def test_operator_runtime_env_lock_supports_env_overrides_without_env_key(tmp_path, monkeypatch):
@@ -2335,8 +2475,33 @@ def _scalp_sim_policy_catalog_payload(**extra):
 
 def test_scalp_sim_auto_approval_writes_sim_policy_env(tmp_path, monkeypatch):
     runtime_dir, approval_dir, policy_dir, _ = _install_scalp_sim_auto_test_dirs(tmp_path, monkeypatch)
+    lifecycle_catalog_dir = tmp_path / "lifecycle_bucket_catalog"
+    lifecycle_sim_dir = tmp_path / "lifecycle_sim_auto"
+    lifecycle_report_dir = tmp_path / "lifecycle_bucket_discovery"
+    lifecycle_catalog_dir.mkdir(parents=True)
+    lifecycle_sim_dir.mkdir(parents=True)
+    lifecycle_report_dir.mkdir(parents=True)
+    monkeypatch.setattr(discovery_mod, "CATALOG_DIR", lifecycle_catalog_dir)
+    monkeypatch.setattr(discovery_mod, "SIM_AUTO_APPROVAL_DIR", lifecycle_sim_dir)
+    monkeypatch.setattr(discovery_mod, "REPORT_DIR", lifecycle_report_dir)
     catalog_path = policy_dir / "scalp_sim_policy_catalog_2026-05-26.json"
+    lifecycle_catalog_path = lifecycle_catalog_dir / "lifecycle_bucket_catalog_2026-05-26.json"
     catalog_path.write_text(json.dumps(_scalp_sim_policy_catalog_payload()), encoding="utf-8")
+    lifecycle_catalog_path.write_text(json.dumps({"schema_version": "lifecycle_bucket_catalog_v1"}), encoding="utf-8")
+    (lifecycle_sim_dir / "lifecycle_bucket_sim_auto_approval_2026-05-26.json").write_text(
+        json.dumps(
+            {
+                "approved": True,
+                "runtime_effect": False,
+                "allowed_runtime_apply": False,
+                "actual_order_submitted": False,
+                "broker_order_forbidden": True,
+                "approved_bucket_ids": ["entry:combo:test"],
+                "approved_bucket_count": 1,
+            }
+        ),
+        encoding="utf-8",
+    )
     (approval_dir / "scalp_sim_auto_approval_2026-05-26.json").write_text(
         json.dumps(
             {
@@ -2377,12 +2542,28 @@ def test_scalp_sim_auto_approval_writes_sim_policy_env(tmp_path, monkeypatch):
         == "scalp_sim_auto_approval:2026-05-26"
     )
     assert manifest["runtime_env_overrides"]["KORSTOCKSCAN_LIFECYCLE_BUCKET_DISCOVERY_ENABLED"] == "true"
+    assert (
+        manifest["runtime_env_overrides"]["KORSTOCKSCAN_LIFECYCLE_BUCKET_DISCOVERY_POLICY_FILE"]
+        == str(lifecycle_catalog_path)
+    )
+    assert (
+        manifest["runtime_env_overrides"]["KORSTOCKSCAN_LIFECYCLE_BUCKET_DISCOVERY_POLICY_VERSION"]
+        == "lifecycle_bucket_discovery:2026-05-26"
+    )
+    assert (
+        manifest["runtime_env_overrides"]["KORSTOCKSCAN_LIFECYCLE_BUCKET_DISCOVERY_LIVE_AUTO_APPLY_ENABLED"]
+        == "false"
+    )
     assert manifest["runtime_env_overrides"]["KORSTOCKSCAN_SCALP_SIM_SCALE_IN_WINDOW_EXPANSION_ENABLED"] == "true"
     assert manifest["scalp_sim_auto_approval"]["selected"][0]["family"] == "scalp_sim_auto_approval"
     assert manifest["scalp_sim_scale_in_window_approval"]["selected"] == []
-    assert manifest["lifecycle_bucket_discovery"]["selected"] == []
+    assert (
+        manifest["lifecycle_bucket_discovery"]["selected"][0]["family"]
+        == "lifecycle_bucket_discovery_sim_auto_approval"
+    )
     env_text = (runtime_dir / "threshold_runtime_env_2026-05-27.env").read_text(encoding="utf-8")
     assert "KORSTOCKSCAN_SCALP_SIM_AUTO_POLICY_ENABLED=true" in env_text
+    assert "KORSTOCKSCAN_LIFECYCLE_BUCKET_DISCOVERY_POLICY_FILE=" in env_text
 
 
 def test_scalp_sim_auto_approval_missing_keeps_legacy_scale_in_fallback(tmp_path, monkeypatch):
@@ -2769,7 +2950,7 @@ def _install_runtime_bridge_test_dirs(tmp_path, monkeypatch):
     return runtime_dir, bridge_dir, approval_dir
 
 
-def test_runtime_apply_bridge_entry_requires_ready_state_and_artifact(tmp_path, monkeypatch):
+def test_runtime_apply_bridge_entry_metadata_is_not_live_blocker(tmp_path, monkeypatch):
     runtime_dir, bridge_dir, approval_dir = _install_runtime_bridge_test_dirs(tmp_path, monkeypatch)
     family = bridge_mod.ENTRY_BRIDGE_FAMILY
     candidate_id = f"{family}:2026-05-30"
@@ -2783,10 +2964,13 @@ def test_runtime_apply_bridge_entry_requires_ready_state_and_artifact(tmp_path, 
                         "family": family,
                         "stage": "entry",
                         "priority": 9,
-                        "bridge_candidate_state": "bootstrap_pending",
+                        "bridge_candidate_state": "entry_only_bridge_metadata",
                         "allowed_runtime_apply": False,
-                        "target_env_keys": ["AI_SCORE65_74_RECOVERY_PROBE_ENABLED"],
-                        "recommended_values": {"enabled": True},
+                        "live_auto_apply": False,
+                        "metadata_only": True,
+                        "bridge_exclusion_reason": "entry_only_bridge_metadata_not_live_candidate",
+                        "target_env_keys": [],
+                        "recommended_values": {"enabled": False},
                         "current_values": {"enabled": False},
                     }
                 ],
@@ -2808,12 +2992,14 @@ def test_runtime_apply_bridge_entry_requires_ready_state_and_artifact(tmp_path, 
     )
 
     assert manifest["runtime_change"] is False
-    assert f"runtime_apply_blocked_bridge_not_ready:bootstrap_pending:{family}" in manifest["runtime_apply_bridge"]["blocked"]
+    assert manifest["runtime_apply_bridge"]["blocked"] == []
+    assert manifest["runtime_apply_bridge"]["metadata"][0]["family"] == family
+    assert manifest["runtime_apply_bridge"]["metadata"][0]["reason"] == "entry_only_bridge_metadata_not_live_candidate"
     env_text = (runtime_dir / "threshold_runtime_env_2026-06-01.env").read_text(encoding="utf-8")
     assert "KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_ENABLED" not in env_text
 
 
-def test_runtime_apply_bridge_entry_wait6579_live_auto_writes_probe_env(tmp_path, monkeypatch):
+def test_runtime_apply_bridge_entry_wait6579_live_auto_is_kept_as_metadata(tmp_path, monkeypatch):
     runtime_dir, bridge_dir, approval_dir = _install_runtime_bridge_test_dirs(tmp_path, monkeypatch)
     family = bridge_mod.ENTRY_BRIDGE_FAMILY
     candidate_id = f"{family}:2026-05-30"
@@ -2834,12 +3020,7 @@ def test_runtime_apply_bridge_entry_wait6579_live_auto_writes_probe_env(tmp_path
                         "runtime_effect_after_approval": "bounded_entry_probe_recovery_live_auto",
                         "lifecycle_bucket_discovery_ai_review_status": "parsed",
                         "auto_promotion_contract": {"tier2_status": "parsed", "tier2_policy": "fail_closed"},
-                        "target_env_keys": [
-                            "AI_SCORE65_74_RECOVERY_PROBE_ENABLED",
-                            "AI_SCORE65_74_RECOVERY_PROBE_MIN_SCORE",
-                            "AI_SCORE65_74_RECOVERY_PROBE_MAX_SCORE",
-                            "AI_SCORE65_74_RECOVERY_PROBE_THRESHOLD_VERSION",
-                        ],
+                        "target_env_keys": [],
                         "recommended_values": {
                             "enabled": True,
                             "min_score": 66,
@@ -2869,13 +3050,15 @@ def test_runtime_apply_bridge_entry_wait6579_live_auto_writes_probe_env(tmp_path
     )
 
     env = manifest["runtime_env_overrides"]
-    assert manifest["runtime_change"] is True
-    assert env["KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_ENABLED"] == "true"
-    assert env["KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_MIN_SCORE"] == "66"
-    assert env["KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_MAX_SCORE"] == "69"
-    assert manifest["runtime_apply_bridge"]["selected"][0]["family"] == family
+    assert manifest["runtime_change"] is False
+    assert "KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_ENABLED" not in env
+    assert manifest["runtime_apply_bridge"]["selected"] == []
+    assert manifest["runtime_apply_bridge"]["metadata"][0]["family"] == family
+    assert manifest["runtime_apply_bridge"]["metadata"][0]["state"] == "entry_only_bridge_metadata"
+    assert manifest["runtime_apply_bridge"]["metadata"][0]["legacy_source_state"] == "live_auto_apply_ready"
+    assert manifest["runtime_apply_bridge"]["metadata"][0]["reason"] == "entry_only_bridge_metadata_not_live_candidate"
     env_manifest = json.loads((runtime_dir / "threshold_runtime_env_2026-06-01.json").read_text(encoding="utf-8"))
-    assert family in env_manifest["selected_families"]
+    assert family not in env_manifest["selected_families"]
 
 
 def test_runtime_apply_bridge_greenfield_live_auto_writes_full_lifecycle_env(tmp_path, monkeypatch):
@@ -3051,7 +3234,7 @@ def test_runtime_apply_bridge_greenfield_blocks_missing_policy_file(tmp_path, mo
     assert f"greenfield_policy_file_missing:{family}" in manifest["runtime_apply_bridge"]["blocked"]
 
 
-def test_runtime_apply_bridge_legacy_ready_for_approval_is_blocked(tmp_path, monkeypatch):
+def test_runtime_apply_bridge_legacy_ready_for_approval_is_metadata(tmp_path, monkeypatch):
     runtime_dir, bridge_dir, approval_dir = _install_runtime_bridge_test_dirs(tmp_path, monkeypatch)
     family = bridge_mod.ENTRY_BRIDGE_FAMILY
     candidate_id = f"{family}:2026-05-30"
@@ -3090,7 +3273,11 @@ def test_runtime_apply_bridge_legacy_ready_for_approval_is_blocked(tmp_path, mon
     )
 
     assert manifest["runtime_change"] is False
-    assert f"runtime_apply_blocked_bridge_not_ready:ready_for_approval:{family}" in manifest["runtime_apply_bridge"]["blocked"]
+    assert manifest["runtime_apply_bridge"]["blocked"] == []
+    assert manifest["runtime_apply_bridge"]["metadata"][0]["family"] == family
+    assert manifest["runtime_apply_bridge"]["metadata"][0]["state"] == "entry_only_bridge_metadata"
+    assert manifest["runtime_apply_bridge"]["metadata"][0]["legacy_source_state"] == "ready_for_approval"
+    assert manifest["runtime_apply_bridge"]["metadata"][0]["reason"] == "entry_only_bridge_metadata_not_live_candidate"
     env_text = (runtime_dir / "threshold_runtime_env_2026-06-01.env").read_text(encoding="utf-8")
     assert "KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_ENABLED" not in env_text
 
@@ -3159,3 +3346,656 @@ def test_runtime_apply_bridge_scale_live_auto_writes_tighten_env_without_guard_b
     assert env["KORSTOCKSCAN_REVERSAL_ADD_MIN_BUY_PRESSURE"] == "60"
     assert env["KORSTOCKSCAN_REVERSAL_ADD_MIN_TICK_ACCEL"] == "1.05"
     assert "scale_in_safety_guard_bypass" in manifest["runtime_apply_bridge"]["selected"][0]["forbidden_uses"]
+
+
+# ── hold separation tests ──
+
+
+def test_hold_carry_forward_previously_enabled_no_blockers(tmp_path, monkeypatch):
+    report_dir = tmp_path / "report"
+    apply_dir = tmp_path / "apply_plans"
+    runtime_dir = tmp_path / "runtime_env"
+    latency_dir = tmp_path / "missing_latency_classifier_recommendation"
+    lock_dir = tmp_path / "operator_runtime_env_locks"
+    report_dir.mkdir(parents=True)
+    runtime_dir.mkdir(parents=True)
+    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "APPLY_PLAN_DIR", apply_dir)
+    monkeypatch.setattr(mod, "RUNTIME_ENV_DIR", runtime_dir)
+    monkeypatch.setattr(mod, "OPERATOR_RUNTIME_ENV_LOCK_DIR", lock_dir)
+    monkeypatch.setattr(mod, "LATENCY_CLASSIFIER_RECOMMENDATION_DIR", latency_dir)
+
+    prev_manifest = runtime_dir / "threshold_runtime_env_2026-06-10.json"
+    prev_manifest.write_text(
+        json.dumps(
+            {
+                "target_date": "2026-06-10",
+                "selected_families": ["soft_stop_whipsaw_confirmation"],
+                "env_overrides": {
+                    "KORSTOCKSCAN_SCALP_SOFT_STOP_WHIPSAW_CONFIRMATION_ENABLED": "true",
+                    "KORSTOCKSCAN_SCALP_SOFT_STOP_WHIPSAW_CONFIRMATION_SEC": "20",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    (report_dir / "threshold_cycle_2026-06-10.json").write_text(
+        json.dumps(
+            {
+                "date": "2026-06-10",
+                "calibration_candidates": [
+                    {
+                        "family": "soft_stop_whipsaw_confirmation",
+                        "stage": "holding",
+                        "priority": 5,
+                        "allowed_runtime_apply": True,
+                        "safety_revert_required": False,
+                        "calibration_state": "hold",
+                        "target_env_keys": [],
+                        "recommended_values": {},
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    manifest = mod.build_preopen_apply_manifest(
+        "2026-06-11",
+        source_date="2026-06-10",
+        apply_mode="auto_bounded_live",
+        auto_apply=True,
+        require_ai=False,
+    )
+    decision = manifest["auto_apply_decisions"][0]
+    assert decision["selected"] is True
+    assert decision["decision_reason"].startswith("hold_carry_forward_previous_runtime:")
+    assert decision["hold_carry_forward"]["previous_selected"] is True
+    assert decision["env_overrides"]["KORSTOCKSCAN_SCALP_SOFT_STOP_WHIPSAW_CONFIRMATION_ENABLED"] == "true"
+    assert decision["env_overrides"]["KORSTOCKSCAN_SCALP_SOFT_STOP_WHIPSAW_CONFIRMATION_SEC"] == "20"
+
+
+def test_hold_not_previously_enabled_rejects(tmp_path, monkeypatch):
+    report_dir = tmp_path / "report"
+    apply_dir = tmp_path / "apply_plans"
+    runtime_dir = tmp_path / "runtime_env"
+    latency_dir = tmp_path / "missing_latency_classifier_recommendation"
+    lock_dir = tmp_path / "operator_runtime_env_locks"
+    report_dir.mkdir(parents=True)
+    runtime_dir.mkdir(parents=True)
+    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "APPLY_PLAN_DIR", apply_dir)
+    monkeypatch.setattr(mod, "RUNTIME_ENV_DIR", runtime_dir)
+    monkeypatch.setattr(mod, "OPERATOR_RUNTIME_ENV_LOCK_DIR", lock_dir)
+    monkeypatch.setattr(mod, "LATENCY_CLASSIFIER_RECOMMENDATION_DIR", latency_dir)
+
+    (report_dir / "threshold_cycle_2026-06-10.json").write_text(
+        json.dumps(
+            {
+                "date": "2026-06-10",
+                "calibration_candidates": [
+                    {
+                        "family": "soft_stop_whipsaw_confirmation",
+                        "stage": "holding",
+                        "priority": 5,
+                        "allowed_runtime_apply": True,
+                        "safety_revert_required": False,
+                        "calibration_state": "hold",
+                        "target_env_keys": [],
+                        "recommended_values": {},
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    manifest = mod.build_preopen_apply_manifest(
+        "2026-06-11",
+        source_date="2026-06-10",
+        apply_mode="auto_bounded_live",
+        auto_apply=True,
+        require_ai=False,
+    )
+    decision = manifest["auto_apply_decisions"][0]
+    assert decision["selected"] is False
+    assert decision["decision_reason"] == "hold_not_previously_enabled"
+
+
+def test_hold_sample_always_blocks_even_when_previously_enabled(tmp_path, monkeypatch):
+    report_dir = tmp_path / "report"
+    apply_dir = tmp_path / "apply_plans"
+    runtime_dir = tmp_path / "runtime_env"
+    latency_dir = tmp_path / "missing_latency_classifier_recommendation"
+    lock_dir = tmp_path / "operator_runtime_env_locks"
+    report_dir.mkdir(parents=True)
+    runtime_dir.mkdir(parents=True)
+    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "APPLY_PLAN_DIR", apply_dir)
+    monkeypatch.setattr(mod, "RUNTIME_ENV_DIR", runtime_dir)
+    monkeypatch.setattr(mod, "OPERATOR_RUNTIME_ENV_LOCK_DIR", lock_dir)
+    monkeypatch.setattr(mod, "LATENCY_CLASSIFIER_RECOMMENDATION_DIR", latency_dir)
+
+    prev_manifest = runtime_dir / "threshold_runtime_env_2026-06-10.json"
+    prev_manifest.write_text(
+        json.dumps(
+            {
+                "target_date": "2026-06-10",
+                "selected_families": ["soft_stop_whipsaw_confirmation"],
+                "env_overrides": {
+                    "KORSTOCKSCAN_SCALP_SOFT_STOP_WHIPSAW_CONFIRMATION_ENABLED": "true",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    (report_dir / "threshold_cycle_2026-06-10.json").write_text(
+        json.dumps(
+            {
+                "date": "2026-06-10",
+                "calibration_candidates": [
+                    {
+                        "family": "soft_stop_whipsaw_confirmation",
+                        "stage": "holding",
+                        "priority": 5,
+                        "allowed_runtime_apply": True,
+                        "safety_revert_required": False,
+                        "calibration_state": "hold_sample",
+                        "target_env_keys": [],
+                        "recommended_values": {},
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    manifest = mod.build_preopen_apply_manifest(
+        "2026-06-11",
+        source_date="2026-06-10",
+        apply_mode="auto_bounded_live",
+        auto_apply=True,
+        require_ai=False,
+    )
+    decision = manifest["auto_apply_decisions"][0]
+    assert decision["selected"] is False
+    assert decision["decision_reason"] == "calibration_state_blocked:hold_sample"
+
+
+def test_hold_carry_forward_blocked_by_safety_revert_required(tmp_path, monkeypatch):
+    report_dir = tmp_path / "report"
+    apply_dir = tmp_path / "apply_plans"
+    runtime_dir = tmp_path / "runtime_env"
+    latency_dir = tmp_path / "missing_latency_classifier_recommendation"
+    lock_dir = tmp_path / "operator_runtime_env_locks"
+    report_dir.mkdir(parents=True)
+    runtime_dir.mkdir(parents=True)
+    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "APPLY_PLAN_DIR", apply_dir)
+    monkeypatch.setattr(mod, "RUNTIME_ENV_DIR", runtime_dir)
+    monkeypatch.setattr(mod, "OPERATOR_RUNTIME_ENV_LOCK_DIR", lock_dir)
+    monkeypatch.setattr(mod, "LATENCY_CLASSIFIER_RECOMMENDATION_DIR", latency_dir)
+
+    prev_manifest = runtime_dir / "threshold_runtime_env_2026-06-10.json"
+    prev_manifest.write_text(
+        json.dumps(
+            {
+                "target_date": "2026-06-10",
+                "selected_families": ["score65_74_recovery_probe"],
+                "env_overrides": {
+                    "KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_ENABLED": "true",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    (report_dir / "threshold_cycle_2026-06-10.json").write_text(
+        json.dumps(
+            {
+                "date": "2026-06-10",
+                "calibration_candidates": [
+                    {
+                        "family": "score65_74_recovery_probe",
+                        "stage": "entry",
+                        "priority": 10,
+                        "allowed_runtime_apply": True,
+                        "safety_revert_required": True,
+                        "calibration_state": "hold",
+                        "target_env_keys": [],
+                        "recommended_values": {},
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    manifest = mod.build_preopen_apply_manifest(
+        "2026-06-11",
+        source_date="2026-06-10",
+        apply_mode="auto_bounded_live",
+        auto_apply=True,
+        require_ai=False,
+    )
+    decision = manifest["auto_apply_decisions"][0]
+    assert decision["selected"] is False
+    assert decision["decision_reason"] == "safety_revert_required"
+
+
+def test_hold_carry_forward_blocked_by_source_quality(tmp_path, monkeypatch):
+    report_dir = tmp_path / "report"
+    apply_dir = tmp_path / "apply_plans"
+    runtime_dir = tmp_path / "runtime_env"
+    latency_dir = tmp_path / "missing_latency_classifier_recommendation"
+    lock_dir = tmp_path / "operator_runtime_env_locks"
+    report_dir.mkdir(parents=True)
+    runtime_dir.mkdir(parents=True)
+    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "APPLY_PLAN_DIR", apply_dir)
+    monkeypatch.setattr(mod, "RUNTIME_ENV_DIR", runtime_dir)
+    monkeypatch.setattr(mod, "OPERATOR_RUNTIME_ENV_LOCK_DIR", lock_dir)
+    monkeypatch.setattr(mod, "LATENCY_CLASSIFIER_RECOMMENDATION_DIR", latency_dir)
+
+    prev_manifest = runtime_dir / "threshold_runtime_env_2026-06-10.json"
+    prev_manifest.write_text(
+        json.dumps(
+            {
+                "target_date": "2026-06-10",
+                "selected_families": ["soft_stop_whipsaw_confirmation"],
+                "env_overrides": {
+                    "KORSTOCKSCAN_SCALP_SOFT_STOP_WHIPSAW_CONFIRMATION_ENABLED": "true",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    (report_dir / "threshold_cycle_2026-06-10.json").write_text(
+        json.dumps(
+            {
+                "date": "2026-06-10",
+                "calibration_candidates": [
+                    {
+                        "family": "soft_stop_whipsaw_confirmation",
+                        "stage": "holding",
+                        "priority": 5,
+                        "allowed_runtime_apply": True,
+                        "safety_revert_required": False,
+                        "calibration_state": "hold",
+                        "source_quality_blocked": "hard gap in pipeline events",
+                        "target_env_keys": [],
+                        "recommended_values": {},
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    manifest = mod.build_preopen_apply_manifest(
+        "2026-06-11",
+        source_date="2026-06-10",
+        apply_mode="auto_bounded_live",
+        auto_apply=True,
+        require_ai=False,
+    )
+    decision = manifest["auto_apply_decisions"][0]
+    assert decision["selected"] is False
+    assert "hold_carry_forward_blocked" in decision["decision_reason"]
+    assert "source_quality_hard_block" in decision["decision_reason"]
+
+
+def test_verify_runtime_env_handoff_pass(tmp_path, monkeypatch):
+    report_dir = tmp_path / "report"
+    apply_dir = tmp_path / "apply_plans"
+    runtime_dir = tmp_path / "runtime_env"
+    latency_dir = tmp_path / "missing_latency_classifier_recommendation"
+    lock_dir = tmp_path / "operator_runtime_env_locks"
+    report_dir.mkdir(parents=True)
+    runtime_dir.mkdir(parents=True)
+    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "APPLY_PLAN_DIR", apply_dir)
+    monkeypatch.setattr(mod, "RUNTIME_ENV_DIR", runtime_dir)
+    monkeypatch.setattr(mod, "OPERATOR_RUNTIME_ENV_LOCK_DIR", lock_dir)
+    monkeypatch.setattr(mod, "LATENCY_CLASSIFIER_RECOMMENDATION_DIR", latency_dir)
+
+    manifest = runtime_dir / "threshold_runtime_env_2026-06-11.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "target_date": "2026-06-11",
+                "selected_families": ["soft_stop_whipsaw_confirmation"],
+                "env_overrides": {
+                    "KORSTOCKSCAN_SCALP_SOFT_STOP_WHIPSAW_CONFIRMATION_ENABLED": "true",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    result = mod.verify_runtime_env_handoff("2026-06-11")
+    assert result["status"] == "pass"
+    assert result["passed"] is True
+    assert result["findings"] == []
+    assert result["missing_family_count"] == 0
+
+
+def test_verify_runtime_env_handoff_missing_key(tmp_path, monkeypatch):
+    report_dir = tmp_path / "report"
+    apply_dir = tmp_path / "apply_plans"
+    runtime_dir = tmp_path / "runtime_env"
+    latency_dir = tmp_path / "missing_latency_classifier_recommendation"
+    lock_dir = tmp_path / "operator_runtime_env_locks"
+    report_dir.mkdir(parents=True)
+    runtime_dir.mkdir(parents=True)
+    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "APPLY_PLAN_DIR", apply_dir)
+    monkeypatch.setattr(mod, "RUNTIME_ENV_DIR", runtime_dir)
+    monkeypatch.setattr(mod, "OPERATOR_RUNTIME_ENV_LOCK_DIR", lock_dir)
+    monkeypatch.setattr(mod, "LATENCY_CLASSIFIER_RECOMMENDATION_DIR", latency_dir)
+
+    manifest = runtime_dir / "threshold_runtime_env_2026-06-11.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "target_date": "2026-06-11",
+                "selected_families": ["soft_stop_whipsaw_confirmation"],
+                "env_overrides": {},
+            }
+        ),
+        encoding="utf-8",
+    )
+    result = mod.verify_runtime_env_handoff("2026-06-11")
+    assert result["status"] == "fail"
+    assert result["passed"] is False
+    assert len(result["findings"]) == 1
+    assert result["findings"][0]["severity"] == "runtime_env_handoff_missing"
+    assert result["missing_family_count"] == 1
+
+
+def test_build_runtime_gap_provenance_artifact_preserves_raw(tmp_path):
+    artifact = mod.build_runtime_gap_provenance_artifact("2026-06-11")
+    assert artifact["raw_preserved"] is True
+    assert artifact["active_gap_count"] >= 2
+    assert any(g["family"] == "score65_74_recovery_probe" for g in artifact["gaps"])
+    assert any(
+        g["family"] == "lifecycle_bucket_discovery_sim_auto_approval" for g in artifact["gaps"]
+    )
+
+
+def test_classify_postclose_interpretation_scope_during_gap():
+    result = mod.classify_postclose_interpretation_scope(
+        "2026-06-11T09:00:00+09:00",
+        target_date="2026-06-11",
+    )
+    assert result["scope"] == "gap_affected"
+    assert len(result["active_gaps"]) >= 1
+    assert any("real_probe_attribution_missing" in g["gap_type"] for g in result["active_gaps"])
+
+
+def test_classify_postclose_interpretation_scope_after_restore():
+    result = mod.classify_postclose_interpretation_scope(
+        "2026-06-11T11:00:00+09:00",
+        target_date="2026-06-11",
+    )
+    assert result["scope"] == "normal_runtime"
+    assert result["active_gaps"] == []
+
+
+def test_verify_runtime_env_handoff_pid_missing_key(tmp_path, monkeypatch):
+    report_dir = tmp_path / "report"
+    apply_dir = tmp_path / "apply_plans"
+    runtime_dir = tmp_path / "runtime_env"
+    latency_dir = tmp_path / "missing_latency_classifier_recommendation"
+    lock_dir = tmp_path / "operator_runtime_env_locks"
+    report_dir.mkdir(parents=True)
+    runtime_dir.mkdir(parents=True)
+    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "APPLY_PLAN_DIR", apply_dir)
+    monkeypatch.setattr(mod, "RUNTIME_ENV_DIR", runtime_dir)
+    monkeypatch.setattr(mod, "OPERATOR_RUNTIME_ENV_LOCK_DIR", lock_dir)
+    monkeypatch.setattr(mod, "LATENCY_CLASSIFIER_RECOMMENDATION_DIR", latency_dir)
+
+    manifest = runtime_dir / "threshold_runtime_env_2026-06-11.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "target_date": "2026-06-11",
+                "selected_families": ["soft_stop_whipsaw_confirmation"],
+                "env_overrides": {
+                    "KORSTOCKSCAN_SCALP_SOFT_STOP_WHIPSAW_CONFIRMATION_ENABLED": "true",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    def _fake_empty_environ(pid):
+        return {}
+
+    monkeypatch.setattr(mod, "_read_pid_environ", _fake_empty_environ)
+
+    result = mod.verify_runtime_env_handoff("2026-06-11", pid=12345)
+    assert result["status"] == "fail"
+    assert result["fail_reason"] == "runtime_env_pid_missing"
+    assert len(result["pid_missing"]) == 1
+    assert result["pid_missing"][0]["env_key"] == "KORSTOCKSCAN_SCALP_SOFT_STOP_WHIPSAW_CONFIRMATION_ENABLED"
+    assert result["pid_missing"][0]["severity"] == "runtime_env_pid_missing"
+
+
+def test_verify_runtime_env_handoff_lifecycle_bucket_missing_live_auto_apply(tmp_path, monkeypatch):
+    report_dir = tmp_path / "report"
+    apply_dir = tmp_path / "apply_plans"
+    runtime_dir = tmp_path / "runtime_env"
+    latency_dir = tmp_path / "missing_latency_classifier_recommendation"
+    lock_dir = tmp_path / "operator_runtime_env_locks"
+    report_dir.mkdir(parents=True)
+    runtime_dir.mkdir(parents=True)
+    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "APPLY_PLAN_DIR", apply_dir)
+    monkeypatch.setattr(mod, "RUNTIME_ENV_DIR", runtime_dir)
+    monkeypatch.setattr(mod, "OPERATOR_RUNTIME_ENV_LOCK_DIR", lock_dir)
+    monkeypatch.setattr(mod, "LATENCY_CLASSIFIER_RECOMMENDATION_DIR", latency_dir)
+
+    manifest = runtime_dir / "threshold_runtime_env_2026-06-11.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "target_date": "2026-06-11",
+                "selected_families": ["lifecycle_bucket_discovery_sim_auto_approval"],
+                "env_overrides": {
+                    "KORSTOCKSCAN_LIFECYCLE_BUCKET_DISCOVERY_ENABLED": "true",
+                    "KORSTOCKSCAN_LIFECYCLE_BUCKET_DISCOVERY_POLICY_FILE": "/some/path.json",
+                    "KORSTOCKSCAN_LIFECYCLE_BUCKET_DISCOVERY_POLICY_VERSION": "v1",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    result = mod.verify_runtime_env_handoff("2026-06-11")
+    assert result["status"] == "fail"
+    assert result["fail_reason"] == "runtime_env_handoff_missing"
+    assert result["missing_family_count"] == 1
+    assert "KORSTOCKSCAN_LIFECYCLE_BUCKET_DISCOVERY_LIVE_AUTO_APPLY_ENABLED" in result["findings"][0]["missing_env_keys"]
+
+
+def test_gap_provenance_empty_for_wrong_target_date(tmp_path):
+    artifact = mod.build_runtime_gap_provenance_artifact("2026-06-12")
+    assert artifact["active_gap_count"] == 0
+    assert artifact["gaps"] == []
+
+
+def test_classify_postclose_interpretation_scope_empty_for_wrong_target_date():
+    result = mod.classify_postclose_interpretation_scope(
+        "2026-06-11T09:00:00+09:00",
+        target_date="2026-06-12",
+    )
+    assert result["scope"] == "normal_runtime"
+    assert result["active_gaps"] == []
+
+
+def test_hold_carry_forward_blocked_by_direct_severe_loss_guard(tmp_path, monkeypatch):
+    report_dir = tmp_path / "report"
+    apply_dir = tmp_path / "apply_plans"
+    runtime_dir = tmp_path / "runtime_env"
+    latency_dir = tmp_path / "missing_latency_classifier_recommendation"
+    lock_dir = tmp_path / "operator_runtime_env_locks"
+    report_dir.mkdir(parents=True)
+    runtime_dir.mkdir(parents=True)
+    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "APPLY_PLAN_DIR", apply_dir)
+    monkeypatch.setattr(mod, "RUNTIME_ENV_DIR", runtime_dir)
+    monkeypatch.setattr(mod, "OPERATOR_RUNTIME_ENV_LOCK_DIR", lock_dir)
+    monkeypatch.setattr(mod, "LATENCY_CLASSIFIER_RECOMMENDATION_DIR", latency_dir)
+
+    prev_manifest = runtime_dir / "threshold_runtime_env_2026-06-10.json"
+    prev_manifest.write_text(
+        json.dumps(
+            {
+                "target_date": "2026-06-10",
+                "selected_families": ["soft_stop_whipsaw_confirmation"],
+                "env_overrides": {
+                    "KORSTOCKSCAN_SCALP_SOFT_STOP_WHIPSAW_CONFIRMATION_ENABLED": "true",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    (report_dir / "threshold_cycle_2026-06-10.json").write_text(
+        json.dumps(
+            {
+                "date": "2026-06-10",
+                "calibration_candidates": [
+                    {
+                        "family": "soft_stop_whipsaw_confirmation",
+                        "stage": "holding",
+                        "priority": 5,
+                        "allowed_runtime_apply": True,
+                        "safety_revert_required": False,
+                        "calibration_state": "hold",
+                        "severe_loss_guard": True,
+                        "target_env_keys": [],
+                        "recommended_values": {},
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    manifest = mod.build_preopen_apply_manifest(
+        "2026-06-11",
+        source_date="2026-06-10",
+        apply_mode="auto_bounded_live",
+        auto_apply=True,
+        require_ai=False,
+    )
+    decision = manifest["auto_apply_decisions"][0]
+    assert decision["selected"] is False
+    assert "hold_carry_forward_blocked" in decision["decision_reason"]
+    assert "severe_loss_guard" in decision["decision_reason"]
+
+
+def test_hold_carry_forward_blocked_by_direct_provenance_breach(tmp_path, monkeypatch):
+    report_dir = tmp_path / "report"
+    apply_dir = tmp_path / "apply_plans"
+    runtime_dir = tmp_path / "runtime_env"
+    latency_dir = tmp_path / "missing_latency_classifier_recommendation"
+    lock_dir = tmp_path / "operator_runtime_env_locks"
+    report_dir.mkdir(parents=True)
+    runtime_dir.mkdir(parents=True)
+    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "APPLY_PLAN_DIR", apply_dir)
+    monkeypatch.setattr(mod, "RUNTIME_ENV_DIR", runtime_dir)
+    monkeypatch.setattr(mod, "OPERATOR_RUNTIME_ENV_LOCK_DIR", lock_dir)
+    monkeypatch.setattr(mod, "LATENCY_CLASSIFIER_RECOMMENDATION_DIR", latency_dir)
+
+    prev_manifest = runtime_dir / "threshold_runtime_env_2026-06-10.json"
+    prev_manifest.write_text(
+        json.dumps(
+            {
+                "target_date": "2026-06-10",
+                "selected_families": ["soft_stop_whipsaw_confirmation"],
+                "env_overrides": {
+                    "KORSTOCKSCAN_SCALP_SOFT_STOP_WHIPSAW_CONFIRMATION_ENABLED": "true",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    (report_dir / "threshold_cycle_2026-06-10.json").write_text(
+        json.dumps(
+            {
+                "date": "2026-06-10",
+                "calibration_candidates": [
+                    {
+                        "family": "soft_stop_whipsaw_confirmation",
+                        "stage": "holding",
+                        "priority": 5,
+                        "allowed_runtime_apply": True,
+                        "safety_revert_required": False,
+                        "calibration_state": "hold",
+                        "order_provenance_breach": True,
+                        "target_env_keys": [],
+                        "recommended_values": {},
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    manifest = mod.build_preopen_apply_manifest(
+        "2026-06-11",
+        source_date="2026-06-10",
+        apply_mode="auto_bounded_live",
+        auto_apply=True,
+        require_ai=False,
+    )
+    decision = manifest["auto_apply_decisions"][0]
+    assert decision["selected"] is False
+    assert "hold_carry_forward_blocked" in decision["decision_reason"]
+    assert "order_provenance_breach" in decision["decision_reason"]
+
+
+def test_gap_provenance_written_during_auto_apply(tmp_path, monkeypatch):
+    report_dir = tmp_path / "report"
+    apply_dir = tmp_path / "apply_plans"
+    runtime_dir = tmp_path / "runtime_env"
+    gap_dir = tmp_path / "runtime_gap_provenance"
+    latency_dir = tmp_path / "missing_latency_classifier_recommendation"
+    lock_dir = tmp_path / "operator_runtime_env_locks"
+    report_dir.mkdir(parents=True)
+    runtime_dir.mkdir(parents=True)
+    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "APPLY_PLAN_DIR", apply_dir)
+    monkeypatch.setattr(mod, "RUNTIME_ENV_DIR", runtime_dir)
+    monkeypatch.setattr(mod, "RUNTIME_GAP_PROVENANCE_DIR", gap_dir)
+    monkeypatch.setattr(mod, "OPERATOR_RUNTIME_ENV_LOCK_DIR", lock_dir)
+    monkeypatch.setattr(mod, "LATENCY_CLASSIFIER_RECOMMENDATION_DIR", latency_dir)
+    (report_dir / "threshold_cycle_calibration_2026-06-10_postclose.json").write_text(
+        json.dumps(
+            {
+                "date": "2026-06-10",
+                "calibration_candidates": [
+                    {
+                        "family": "soft_stop_whipsaw_confirmation",
+                        "stage": "holding",
+                        "priority": 5,
+                        "allowed_runtime_apply": True,
+                        "safety_revert_required": False,
+                        "calibration_state": "adjust_up",
+                        "target_env_keys": ["SCALP_SOFT_STOP_WHIPSAW_CONFIRMATION_ENABLED"],
+                        "recommended_values": {"enabled": True},
+                        "current_values": {"enabled": False},
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    manifest = mod.build_preopen_apply_manifest(
+        "2026-06-11",
+        source_date="2026-06-10",
+        apply_mode="auto_bounded_live",
+        auto_apply=True,
+        require_ai=False,
+    )
+
+    gap_path = mod.runtime_gap_provenance_artifact_path("2026-06-11")
+    assert gap_path.exists()
+    gap_artifact = json.loads(gap_path.read_text(encoding="utf-8"))
+    assert gap_artifact["raw_preserved"] is True
+    assert gap_artifact["active_gap_count"] == 2

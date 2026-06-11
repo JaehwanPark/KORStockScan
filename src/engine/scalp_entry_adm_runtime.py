@@ -21,6 +21,22 @@ from src.utils.constants import DATA_DIR, TRADING_RULES
 
 ADM_DIR = DATA_DIR / "report" / "scalp_entry_action_decision_matrix"
 ADM_FILE_RE = re.compile(r"scalp_entry_action_decision_matrix_(\d{4}-\d{2}-\d{2})\.json$")
+PRE_SUBMIT_CONTEXT_OPTIONAL_STAGES = {
+    "blocked_ai_score",
+    "latency_block",
+    "entry_submit_revalidation_warning",
+    "entry_submit_revalidation_block",
+    "pre_submit_liquidity_guard_block",
+    "pre_submit_overbought_pullback_guard_block",
+    "scalp_sim_entry_armed",
+    "scalp_sim_entry_ai_price_skip_order",
+    "scalp_sim_pre_submit_liquidity_guard_would_block",
+    "scalp_sim_pre_submit_liquidity_guard_unknown",
+    "scalp_sim_pre_submit_overbought_guard_would_block",
+    "scalp_sim_buy_order_virtual_pending",
+    "scalp_sim_entry_submit_revalidation_warning",
+    "scalp_sim_entry_submit_revalidation_block",
+}
 
 
 def _safe_float(value: Any, default: float = 0.0) -> float:
@@ -93,6 +109,9 @@ def _risk_context_bucket(ws_data: dict[str, Any] | None) -> str:
     strength = _safe_float(ws.get("latest_strength") or ws.get("strength"), -1.0)
     buy_pressure = _safe_float(ws.get("buy_pressure_10t") or ws.get("buy_pressure"), -1.0)
     if strength < 0 and buy_pressure < 0:
+        stage = str(ws.get("source_stage") or ws.get("stage") or "").strip()
+        if stage in PRE_SUBMIT_CONTEXT_OPTIONAL_STAGES:
+            return "risk_context_not_available"
         return "risk_unknown"
     if (0 <= strength < 80) or (0 <= buy_pressure < 40):
         return "weak_strength_momentum"
@@ -178,6 +197,9 @@ def _price_resolution_bucket(ws_data: dict[str, Any] | None) -> str:
     bids = orderbook.get("bids") if isinstance(orderbook.get("bids"), list) else []
     if asks or bids:
         return "quote_based"
+    stage = str(ws.get("source_stage") or ws.get("stage") or "").strip()
+    if stage in PRE_SUBMIT_CONTEXT_OPTIONAL_STAGES:
+        return "price_not_available_pre_submit"
     return "price_unknown"
 
 

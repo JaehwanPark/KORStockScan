@@ -35,6 +35,8 @@ SCALE_IN_BRIDGE_FAMILY = SCALE_IN_LIVE_AUTO_FAMILY
 GREENFIELD_REAL_ENV_FAMILY = "greenfield_real_environment_authority"
 
 ENTRY_TARGET_BUCKET_KEY = ENTRY_LIVE_AUTO_BUCKET_KEY
+ENTRY_BRIDGE_METADATA_STATE = "entry_only_bridge_metadata"
+ENTRY_BRIDGE_METADATA_REASON = "entry_only_bridge_metadata_not_live_candidate"
 ARCHIVED_RUNTIME_APPLY_BRIDGE_FAMILIES: set[str] = set()
 
 
@@ -865,7 +867,7 @@ def _entry_candidate(
     discovery_available: bool,
 ) -> dict[str, Any]:
     bucket = _find_bucket(payload, "entry_bucket_attribution", "combo_entry_spot", ENTRY_TARGET_BUCKET_KEY)
-    state, rolling = _state_for_bucket(
+    source_state, rolling = _state_for_bucket(
         bucket,
         history,
         section="entry_bucket_attribution",
@@ -873,40 +875,26 @@ def _entry_candidate(
         bucket_key=ENTRY_TARGET_BUCKET_KEY,
         positive_edge=True,
     )
-    state, rolling = _align_with_discovery(
-        state,
+    source_state, rolling = _align_with_discovery(
+        source_state,
         rolling,
         family=ENTRY_BRIDGE_FAMILY,
         discovery_live_families=discovery_live_families,
         discovery_available=discovery_available,
     )
+    state = ENTRY_BRIDGE_METADATA_STATE
     discovery_meta = _discovery_candidate_meta(
         family=ENTRY_BRIDGE_FAMILY,
         discovery=discovery,
         discovery_live_by_family=discovery_live_by_family,
     )
     target_env_keys = []
-    if state == "live_auto_apply_ready":
-        target_env_keys = [
-            "AI_SCORE65_74_RECOVERY_PROBE_ENABLED",
-            "AI_SCORE65_74_RECOVERY_PROBE_MIN_SCORE",
-            "AI_SCORE65_74_RECOVERY_PROBE_MAX_SCORE",
-            "AI_SCORE65_74_RECOVERY_PROBE_MIN_BUY_PRESSURE",
-            "AI_SCORE65_74_RECOVERY_PROBE_MIN_TICK_ACCEL",
-            "AI_SCORE65_74_RECOVERY_PROBE_MIN_MICRO_VWAP_BP",
-            "AI_SCORE65_74_RECOVERY_PROBE_THRESHOLD_VERSION",
-            "AI_SCORE65_74_RECOVERY_PROBE_CALIBRATION_STATE",
-        ]
     missing_fields = _missing_source_fields(bucket)
-    explicit_exclusion = state != "live_auto_apply_ready" and (
-        bool(missing_fields) or rolling.get("lifecycle_bucket_discovery_gate") == "blocked" or not bool(bucket)
-    )
+    explicit_exclusion = True
     exclusion_reason = (
         "counterfactual_source_field_gap"
         if missing_fields
-        else "counterfactual_sim_lifecycle_handoff"
-        if explicit_exclusion
-        else ""
+        else ENTRY_BRIDGE_METADATA_REASON
     )
     return {
         "candidate_id": f"{ENTRY_BRIDGE_FAMILY}:{target_date}",
@@ -946,27 +934,31 @@ def _entry_candidate(
         },
         "source_bucket_keys": [ENTRY_TARGET_BUCKET_KEY],
         "source_bucket": bucket,
-        "rolling_confirmation": rolling,
+        "rolling_confirmation": {
+            **rolling,
+            "entry_bridge_source_state": source_state,
+            "metadata_only": True,
+        },
         **discovery_meta,
         "evidence_grade": EVIDENCE_GRADE_2_COUNTERFACTUAL,
-        "transition_target": "bounded_live_canary" if state == "live_auto_apply_ready" else "sim_lifecycle_handoff",
+        "transition_target": "entry_dimension_provenance_only",
+        "metadata_only": True,
+        "legacy_bridge_metadata": True,
         "explicit_runtime_exclusion": explicit_exclusion,
         "bridge_exclusion_reason": exclusion_reason,
         "runtime_exclusion_reason": exclusion_reason,
         "missing_runtime_source_fields": missing_fields,
         "counterfactual_contract": {
             "evidence_grade": EVIDENCE_GRADE_2_COUNTERFACTUAL,
-            "transition_target": "sim_lifecycle_handoff",
+            "transition_target": "entry_dimension_provenance_only",
             "source_field_gap_fields": missing_fields,
         },
-        "grade_reason": "wait6579_ev_cohort_is_counterfactual_source_not_completed_lifecycle_evidence",
+        "grade_reason": "entry_wait6579_bridge_metadata_not_complete_lifecycle_bucket",
         "full_real_conversion_allowed": False,
         "legacy_family_archived": False,
         "archived_live_exception_reason": None,
         "primary_decision_metric": "source_quality_adjusted_ev_pct",
-        "decision_authority": "lifecycle_bucket_discovery_live_auto_apply"
-        if state == "live_auto_apply_ready"
-        else "runtime_apply_bridge_source_quality",
+        "decision_authority": "runtime_apply_bridge_entry_only_metadata",
         "forbidden_uses": [
             "intraday_threshold_mutation",
             "broker_guard_bypass",
@@ -1362,6 +1354,7 @@ def _write_markdown(report: dict[str, Any]) -> None:
                 f"allowed_runtime_apply=`{item.get('allowed_runtime_apply')}`, "
                 f"approval_required=`{item.get('approval_required')}`, "
                 f"live_auto_apply=`{item.get('live_auto_apply')}`, "
+                f"metadata_only=`{item.get('metadata_only', False)}`, "
                 f"ai_followup=`{item.get('lifecycle_bucket_discovery_ai_followup_required') or '-'}`",
             ]
         )
@@ -1370,7 +1363,8 @@ def _write_markdown(report: dict[str, Any]) -> None:
             "",
             "## 다음 액션",
             "",
-            "- `live_auto_apply_ready` 후보는 별도 approval artifact 없이 다음 PREOPEN env 후보로 소비한다.",
+            "- `live_auto_apply_ready` complete lifecycle/scale-in 후보는 별도 approval artifact 없이 다음 PREOPEN env 후보로 소비한다.",
+            "- `entry_only_bridge_metadata` 후보는 entry dimension/provenance로만 보존하며 PREOPEN live env 후보로 소비하지 않는다.",
             "- `blocked_*` 후보는 source-quality/rolling conflict가 해소될 때까지 env로 소비하지 않는다.",
         ]
     )

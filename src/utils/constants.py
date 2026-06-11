@@ -307,6 +307,9 @@ class TradingConfig:
     SCALPING_BREAKOUT_ENTRY_TIMEOUT_SEC: int = 120  # 돌파형 스캘핑 미체결 취소 대기
     SCALPING_PULLBACK_ENTRY_TIMEOUT_SEC: int = 600  # 눌림/예약형 스캘핑 미체결 취소 대기
     SCALPING_RESERVE_ENTRY_TIMEOUT_SEC: int = 1200  # 명시적 예약형 스캘핑 미체결 취소 대기
+    ENTRY_CANCEL_WAIT_ATTRIBUTION_ENABLED: bool = False  # 종목 attribution 기반 매수 취소 대기시간 산출 활성화
+    ENTRY_CANCEL_WAIT_ATTRIBUTION_REAL_MIN_SEC: int = 60  # real standard entry 최소 취소 대기시간
+    ENTRY_CANCEL_WAIT_ATTRIBUTION_STALE_MAX_SEC: int = 30  # stale/passive 위험 시 단축 대기시간 상한
     SCALP_OPEN_RECLAIM_NEVER_GREEN_HOLD_SEC: int = 300  # OPEN_RECLAIM never-green 조기 정리 최소 보유시간
     SCALP_OPEN_RECLAIM_NEVER_GREEN_PEAK_MAX_PCT: float = 0.20  # OPEN_RECLAIM never-green 최대 허용 고점수익
     SCALP_OPEN_RECLAIM_NEAR_AI_EXIT_SCORE_BUFFER: int = 5  # OPEN_RECLAIM near_ai_exit 점수 여유폭
@@ -1156,6 +1159,9 @@ def _build_trading_rules() -> TradingConfig:
     env_scalping_breakout_entry_timeout = _env_int("KORSTOCKSCAN_SCALPING_BREAKOUT_ENTRY_TIMEOUT_SEC")
     env_scalping_pullback_entry_timeout = _env_int("KORSTOCKSCAN_SCALPING_PULLBACK_ENTRY_TIMEOUT_SEC")
     env_scalping_reserve_entry_timeout = _env_int("KORSTOCKSCAN_SCALPING_RESERVE_ENTRY_TIMEOUT_SEC")
+    env_entry_cancel_wait_attribution_enabled = _env_bool("KORSTOCKSCAN_ENTRY_CANCEL_WAIT_ATTRIBUTION_ENABLED")
+    env_entry_cancel_wait_attribution_real_min_sec = _env_int("KORSTOCKSCAN_ENTRY_CANCEL_WAIT_ATTRIBUTION_REAL_MIN_SEC")
+    env_entry_cancel_wait_attribution_stale_max_sec = _env_int("KORSTOCKSCAN_ENTRY_CANCEL_WAIT_ATTRIBUTION_STALE_MAX_SEC")
     env_reversal_add_enabled = _env_bool("KORSTOCKSCAN_REVERSAL_ADD_ENABLED")
     env_reversal_add_min_ai_score = _env_int("KORSTOCKSCAN_REVERSAL_ADD_MIN_AI_SCORE")
     env_reversal_add_min_buy_pressure = _env_float("KORSTOCKSCAN_REVERSAL_ADD_MIN_BUY_PRESSURE")
@@ -1416,6 +1422,15 @@ def _build_trading_rules() -> TradingConfig:
             SCALPING_RESERVE_ENTRY_TIMEOUT_SEC=env_scalping_reserve_entry_timeout
             if env_scalping_reserve_entry_timeout is not None
             else config.SCALPING_RESERVE_ENTRY_TIMEOUT_SEC,
+            ENTRY_CANCEL_WAIT_ATTRIBUTION_ENABLED=env_entry_cancel_wait_attribution_enabled
+            if env_entry_cancel_wait_attribution_enabled is not None
+            else config.ENTRY_CANCEL_WAIT_ATTRIBUTION_ENABLED,
+            ENTRY_CANCEL_WAIT_ATTRIBUTION_REAL_MIN_SEC=env_entry_cancel_wait_attribution_real_min_sec
+            if env_entry_cancel_wait_attribution_real_min_sec is not None
+            else config.ENTRY_CANCEL_WAIT_ATTRIBUTION_REAL_MIN_SEC,
+            ENTRY_CANCEL_WAIT_ATTRIBUTION_STALE_MAX_SEC=env_entry_cancel_wait_attribution_stale_max_sec
+            if env_entry_cancel_wait_attribution_stale_max_sec is not None
+            else config.ENTRY_CANCEL_WAIT_ATTRIBUTION_STALE_MAX_SEC,
             REVERSAL_ADD_ENABLED=env_reversal_add_enabled
             if env_reversal_add_enabled is not None
             else config.REVERSAL_ADD_ENABLED,

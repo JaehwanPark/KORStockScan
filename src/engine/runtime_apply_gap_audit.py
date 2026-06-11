@@ -268,6 +268,8 @@ def _sample(item: dict[str, Any]) -> int:
 def _source_state_to_disposition(state: str, gate: str) -> str:
     if state in FINAL_DISPOSITIONS:
         return state
+    if state == "entry_only_bridge_metadata":
+        return "source_only_explicit_exclusion"
     if state == "source_only_keep_collecting":
         return "source_quality_blocker" if gate != "pass" else "post_apply_attribution_pending"
     if state in {"automation_handoff_gap", "code_review_failed", "new_bucket_candidate"}:
@@ -804,6 +806,10 @@ def _ledger_from_bridge(
             disposition = "runtime_blocked_contract_gap"
             if exclusion_reason:
                 disposition = "source_only_explicit_exclusion"
+        elif state == "entry_only_bridge_metadata":
+            disposition = "source_only_explicit_exclusion"
+            failure_state = "pass"
+            failure_reason = ""
         elif state == "blocked_source_quality":
             failure_state = "blocked_source_quality"
             failure_reason = "source_quality_gate_not_pass"

@@ -2,6 +2,7 @@
 
 import fcntl
 import json
+import os
 import re
 import time
 import math
@@ -96,6 +97,10 @@ from src.engine.lifecycle.ofi_ai_smoothing import (
 )
 from src.trading.entry.orderbook_stability_observer import ORDERBOOK_STABILITY_OBSERVER
 from src.trading.order.tick_utils import clamp_price_to_tick
+from src.engine.scalping.entry_cancel_wait_attribution import (
+    EntryCancelWaitAttributionResult,
+    compute_entry_cancel_wait_attribution,
+)
 
 
 KIWOOM_TOKEN = None
@@ -235,6 +240,15 @@ _SCALP_SIM_AUTO_POLICY_CACHE: dict[str, object] = {
     "active_seeds_by_prefix": {},
     "hypotheses": [],
     "approved_row_count": 0,
+}
+_SWING_SIM_AUTO_POLICY_CACHE: dict[str, object] = {
+    "path": None,
+    "mtime_ns": None,
+    "version": None,
+    "status": "not_loaded",
+    "active_arm_priority_policies": [],
+    "active_policies_by_arm": {},
+    "active_policies_by_bucket": {},
 }
 _LDM_HYPOTHESIS_RUNTIME_REQUIREMENT_FIELDS = {"entry_score_parent", "entry_source_parent"}
 _LDM_HYPOTHESIS_FORBIDDEN_USES = {
@@ -649,6 +663,186 @@ def _load_scalp_sim_auto_policy_cache() -> dict:
         }
     )
     return _SCALP_SIM_AUTO_POLICY_CACHE
+
+
+def _load_swing_sim_auto_policy_cache() -> dict:
+    enabled = _rule_bool("SWING_SIM_AUTO_POLICY_ENABLED", False) or str(
+        os.environ.get("KORSTOCKSCAN_SWING_SIM_AUTO_POLICY_ENABLED") or ""
+    ).strip().lower() in {"1", "true", "yes", "on"}
+    policy_file = (
+        _rule_str("SWING_SIM_AUTO_POLICY_FILE", "").strip()
+        or str(os.environ.get("KORSTOCKSCAN_SWING_SIM_AUTO_POLICY_FILE") or "").strip()
+    )
+    policy_version = (
+        _rule_str("SWING_SIM_AUTO_POLICY_VERSION", "").strip()
+        or str(os.environ.get("KORSTOCKSCAN_SWING_SIM_AUTO_POLICY_VERSION") or "").strip()
+    )
+    if not enabled:
+        _SWING_SIM_AUTO_POLICY_CACHE.update(
+            {
+                "path": policy_file or None,
+                "mtime_ns": None,
+                "version": policy_version or None,
+                "status": "policy_disabled",
+                "active_arm_priority_policies": [],
+                "active_policies_by_arm": {},
+                "active_policies_by_bucket": {},
+            }
+        )
+        return _SWING_SIM_AUTO_POLICY_CACHE
+    if not policy_file:
+        _SWING_SIM_AUTO_POLICY_CACHE.update(
+            {
+                "path": None,
+                "mtime_ns": None,
+                "version": policy_version or None,
+                "status": "policy_missing",
+                "active_arm_priority_policies": [],
+                "active_policies_by_arm": {},
+                "active_policies_by_bucket": {},
+            }
+        )
+        return _SWING_SIM_AUTO_POLICY_CACHE
+    path = Path(policy_file)
+    try:
+        stat = path.stat()
+    except OSError:
+        _SWING_SIM_AUTO_POLICY_CACHE.update(
+            {
+                "path": str(path),
+                "mtime_ns": None,
+                "version": policy_version or None,
+                "status": "policy_missing",
+                "active_arm_priority_policies": [],
+                "active_policies_by_arm": {},
+                "active_policies_by_bucket": {},
+            }
+        )
+        return _SWING_SIM_AUTO_POLICY_CACHE
+    if (
+        _SWING_SIM_AUTO_POLICY_CACHE.get("path") == str(path)
+        and _SWING_SIM_AUTO_POLICY_CACHE.get("mtime_ns") == stat.st_mtime_ns
+        and _SWING_SIM_AUTO_POLICY_CACHE.get("version") == policy_version
+    ):
+        return _SWING_SIM_AUTO_POLICY_CACHE
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        log_error(f"[SWING_SIM_AUTO_POLICY] policy load failed path={path}: {exc}")
+        _SWING_SIM_AUTO_POLICY_CACHE.update(
+            {
+                "path": str(path),
+                "mtime_ns": stat.st_mtime_ns,
+                "version": policy_version or None,
+                "status": "policy_invalid",
+                "active_arm_priority_policies": [],
+                "active_policies_by_arm": {},
+                "active_policies_by_bucket": {},
+            }
+        )
+        return _SWING_SIM_AUTO_POLICY_CACHE
+    policies = []
+    if isinstance(payload, dict) and payload.get("schema_version") == "swing_sim_policy_catalog_v1":
+        policies = [
+            policy
+            for policy in (payload.get("active_arm_priority_policies") or [])
+            if isinstance(policy, dict) and str(policy.get("status") or "") == "active"
+        ]
+        status = "loaded"
+    else:
+        status = "policy_invalid"
+    by_arm: dict[str, dict] = {}
+    by_bucket: dict[str, dict] = {}
+    for policy in policies:
+        arm_id = str(policy.get("priority_arm_id") or "").strip()
+        bucket_id = str(policy.get("priority_bucket_id") or "").strip()
+        if arm_id and str(policy.get("priority_policy_id") or "").strip():
+            by_arm[arm_id] = policy
+        if bucket_id and str(policy.get("priority_policy_id") or "").strip():
+            by_bucket[bucket_id] = policy
+    _SWING_SIM_AUTO_POLICY_CACHE.update(
+        {
+            "path": str(path),
+            "mtime_ns": stat.st_mtime_ns,
+            "version": policy_version or None,
+            "status": status,
+            "active_arm_priority_policies": policies,
+            "active_policies_by_arm": by_arm,
+            "active_policies_by_bucket": by_bucket,
+        }
+    )
+    return _SWING_SIM_AUTO_POLICY_CACHE
+
+
+def _swing_priority_candidate_ids(stock: dict | None = None) -> tuple[str, str]:
+    stock = stock or {}
+    arm_id = str(
+        stock.get("priority_arm_id")
+        or stock.get("arm_id")
+        or stock.get("selection_arm_id")
+        or stock.get("selection_arm")
+        or ""
+    ).strip()
+    bucket_id = str(
+        stock.get("priority_bucket_id")
+        or stock.get("bucket_id")
+        or stock.get("swing_bucket_id")
+        or stock.get("lifecycle_bucket_bucket_id")
+        or stock.get("lifecycle_flow_bucket_id")
+        or ""
+    ).strip()
+    return arm_id, bucket_id
+
+
+def _attach_swing_sim_priority_policy(stock: dict | None = None) -> dict:
+    if not isinstance(stock, dict):
+        return {"swing_priority_policy_match_status": "no_stock_context"}
+    if str(
+        stock.get("priority_policy_id")
+        or stock.get("active_arm_priority_policy_id")
+        or stock.get("swing_priority_policy_id")
+        or ""
+    ).strip():
+        return {"swing_priority_policy_match_status": "pretagged"}
+    cache = _load_swing_sim_auto_policy_cache()
+    if cache.get("status") in {"policy_disabled", "policy_missing"}:
+        return {}
+    arm_id, bucket_id = _swing_priority_candidate_ids(stock)
+    match = None
+    match_source = ""
+    by_arm = cache.get("active_policies_by_arm") if isinstance(cache.get("active_policies_by_arm"), dict) else {}
+    by_bucket = cache.get("active_policies_by_bucket") if isinstance(cache.get("active_policies_by_bucket"), dict) else {}
+    if arm_id and arm_id in by_arm:
+        match = by_arm[arm_id]
+        match_source = "priority_arm_id"
+    elif bucket_id and bucket_id in by_bucket:
+        match = by_bucket[bucket_id]
+        match_source = "priority_bucket_id"
+    if not isinstance(match, dict):
+        return {
+            "swing_priority_policy_match_status": "no_match",
+            "swing_priority_policy_cache_status": cache.get("status"),
+            "swing_priority_candidate_arm_id": arm_id,
+            "swing_priority_candidate_bucket_id": bucket_id,
+        }
+    set_fields = {
+        "priority_policy_id": match.get("priority_policy_id"),
+        "active_arm_priority_policy_id": match.get("priority_policy_id"),
+        "swing_priority_policy_id": match.get("priority_policy_id"),
+        "priority_arm_id": match.get("priority_arm_id") or arm_id,
+        "priority_bucket_id": match.get("priority_bucket_id") or bucket_id,
+        "priority_status": match.get("status"),
+        "priority_source": match.get("priority_source"),
+        "priority_source_report_date": match.get("source_report_date"),
+        "swing_active_arm_priority": True,
+        "swing_priority_policy_match_status": "matched",
+        "swing_priority_policy_match_source": match_source,
+    }
+    _mutate_stock_state(stock, set_fields={key: value for key, value in set_fields.items() if value not in (None, "")})
+    return {
+        "swing_priority_policy_match_status": "matched",
+        "swing_priority_policy_match_source": match_source,
+    }
 
 
 def _stringify_child_bucket_ids(row: dict) -> str:
@@ -1860,6 +2054,34 @@ def _simulated_order_no(prefix: str, code: str) -> str:
     return f"{prefix}-{code}-{int(time.time() * 1000)}-{uuid4().hex[:6]}"
 
 
+def _swing_sim_priority_event_fields(stock: dict | None = None) -> dict:
+    stock = stock or {}
+    match_fields = _attach_swing_sim_priority_policy(stock)
+    policy_id = (
+        stock.get("priority_policy_id")
+        or stock.get("active_arm_priority_policy_id")
+        or stock.get("swing_priority_policy_id")
+    )
+    arm_id = stock.get("priority_arm_id") or stock.get("arm_id") or stock.get("selection_arm_id")
+    bucket_id = stock.get("priority_bucket_id") or stock.get("bucket_id") or stock.get("swing_bucket_id")
+    fields = {
+        "priority_policy_id": policy_id,
+        "active_arm_priority_policy_id": stock.get("active_arm_priority_policy_id") or policy_id,
+        "swing_priority_policy_id": stock.get("swing_priority_policy_id") or policy_id,
+        "priority_arm_id": arm_id,
+        "priority_bucket_id": bucket_id,
+        "priority_status": stock.get("priority_status") or stock.get("active_arm_priority_status"),
+        "priority_source": stock.get("priority_source"),
+        "priority_source_report_date": stock.get("priority_source_report_date"),
+        "swing_active_arm_priority": stock.get("swing_active_arm_priority"),
+        **match_fields,
+    }
+    compact = {key: value for key, value in fields.items() if value not in (None, "")}
+    if policy_id and "swing_active_arm_priority" not in compact:
+        compact["swing_active_arm_priority"] = True
+    return compact
+
+
 def _swing_probe_event_fields(stock: dict | None = None, **extra) -> dict:
     stock = stock or {}
     fields = {
@@ -1877,6 +2099,7 @@ def _swing_probe_event_fields(stock: dict | None = None, **extra) -> dict:
         "evidence_quality": stock.get("evidence_quality"),
         "evidence_quality_weight": stock.get("evidence_quality_weight"),
         "source_record_id": stock.get("source_record_id"),
+        **_swing_sim_priority_event_fields(stock),
     }
     fields.update(extra)
     return fields
@@ -2686,6 +2909,7 @@ def _mark_swing_simulated_holding(stock, code, curr_price, requested_qty, entry_
         simulated_order=True,
         decision_authority="swing_sim_exploration_only",
         runtime_effect="in_memory_holding_only",
+        **_swing_sim_priority_event_fields(stock),
     )
 
 
@@ -8165,8 +8389,15 @@ def _resolve_buy_order_timeout_sec(stock, strategy):
             return _rule_int('RESERVE_TIMEOUT_SEC', 1200)
         return _rule_int('ORDER_TIMEOUT_SEC', 30)
 
+    attribution_enabled = _rule_bool('ENTRY_CANCEL_WAIT_ATTRIBUTION_ENABLED', False)
+
+    if attribution_enabled:
+        stored_result = (stock or {}).get('entry_cancel_wait_attribution_result')
+        if isinstance(stored_result, dict) and stored_result.get('cancel_wait_sec'):
+            return max(5, min(1200, int(stored_result.get('cancel_wait_sec', 90) or 90)))
+
     explicit_timeout = _coerce_int_value((stock or {}).get('entry_timeout_sec_override'))
-    if explicit_timeout > 0:
+    if explicit_timeout > 0 and not attribution_enabled:
         return max(5, min(1200, explicit_timeout))
 
     profile = str(
@@ -8178,12 +8409,136 @@ def _resolve_buy_order_timeout_sec(stock, strategy):
     pos_tag = normalize_position_tag('SCALPING', (stock or {}).get('position_tag'))
 
     if profile in {'RESERVE', 'RESERVED'} or pos_tag in {'RESERVE', 'RESERVED'}:
-        return _rule_int('SCALPING_RESERVE_ENTRY_TIMEOUT_SEC', 1200)
-    if 'PULLBACK' in profile or 'PULLBACK' in pos_tag:
-        return _rule_int('SCALPING_PULLBACK_ENTRY_TIMEOUT_SEC', 600)
-    if 'BREAKOUT' in profile or 'BREAKOUT' in pos_tag:
-        return _rule_int('SCALPING_BREAKOUT_ENTRY_TIMEOUT_SEC', 120)
-    return _rule_int('SCALPING_ENTRY_TIMEOUT_SEC', 90)
+        base_sec = _rule_int('SCALPING_RESERVE_ENTRY_TIMEOUT_SEC', 1200)
+    elif 'PULLBACK' in profile or 'PULLBACK' in pos_tag:
+        base_sec = _rule_int('SCALPING_PULLBACK_ENTRY_TIMEOUT_SEC', 600)
+    elif 'BREAKOUT' in profile or 'BREAKOUT' in pos_tag:
+        base_sec = _rule_int('SCALPING_BREAKOUT_ENTRY_TIMEOUT_SEC', 120)
+    else:
+        base_sec = _rule_int('SCALPING_ENTRY_TIMEOUT_SEC', 90)
+
+    if attribution_enabled and explicit_timeout > 0:
+        return max(5, min(1200, max(base_sec, explicit_timeout)))
+
+    return base_sec
+
+
+def _compute_and_emit_entry_cancel_wait_attribution(stock, code, *, latency_gate=None, curr_price=0):
+    if not isinstance(stock, dict):
+        return None
+    attribution_enabled = _rule_bool('ENTRY_CANCEL_WAIT_ATTRIBUTION_ENABLED', False)
+    real_min_sec = _rule_int('ENTRY_CANCEL_WAIT_ATTRIBUTION_REAL_MIN_SEC', 60)
+    stale_max_sec = _rule_int('ENTRY_CANCEL_WAIT_ATTRIBUTION_STALE_MAX_SEC', 30)
+    gate = latency_gate or {}
+
+    entry_order_lifecycle = str(
+        (stock or {}).get('entry_order_lifecycle')
+        or gate.get('entry_order_lifecycle')
+        or 'standard'
+    ).strip()
+    entry_passive_probe_applied = bool(
+        stock.get('entry_passive_probe_applied') or gate.get('entry_passive_probe_applied')
+    )
+
+    position_tag = normalize_position_tag('SCALPING', stock.get('position_tag'))
+    entry_mode = str(stock.get('entry_mode') or '').strip()
+
+    best_bid = _coerce_int_value(gate.get('ai_entry_price_canary_context_best_bid') or gate.get('best_bid_at_submit'))
+    best_ask = _coerce_int_value(gate.get('ai_entry_price_canary_context_best_ask') or gate.get('best_ask_at_submit'))
+    order_price = _coerce_int_value(gate.get('order_price'))
+
+    quote_age_ms = _safe_int(gate.get('quote_age_at_submit_ms') or stock.get('quote_age_at_submit_ms'), 0)
+    quote_stale = bool(gate.get('quote_stale_at_submit') or stock.get('quote_stale_at_submit'))
+    context_age_ms = _safe_int(
+        gate.get('ai_entry_price_canary_context_age_ms') or gate.get('price_decision_context_age_ms'), 0
+    )
+    context_stale = bool(gate.get('price_context_stale_at_submit') or stock.get('price_context_stale_at_submit'))
+
+    liquidity_verdict = str(gate.get('liquidity_guard_action') or gate.get('liquidity_value') or '').strip()
+    ai_action = str(gate.get('ai_entry_price_canary_action') or '').strip().upper()
+    ai_confidence = _safe_int(gate.get('ai_entry_price_canary_confidence'), 0)
+    ofi_direction = str(gate.get('ofi_ai_smoothing_verdict') or gate.get('ofi_direction_label') or '').strip()
+
+    score_bucket = str(stock.get('score_bucket') or stock.get('ai_score_bucket') or '').strip()
+
+    active_priority = bool(
+        stock.get('entry_adm_active_priority_matched')
+        or gate.get('active_priority_matched')
+    )
+
+    cancelled_or_filled_qty = _safe_int(stock.get('entry_filled_qty'), 0)
+    requested_qty = _safe_int(stock.get('entry_requested_qty') or stock.get('requested_buy_qty'), 0)
+
+    spread_ratio = 0.0
+    if best_bid > 0 and best_ask > 0 and best_ask > best_bid:
+        spread_ratio = float(best_ask - best_bid) / float(best_bid)
+
+    overbought_action = str(gate.get('overbought_guard_action') or '').strip()
+
+    suggested_wait_sec = _coerce_int_value((stock or {}).get('entry_timeout_sec_override'))
+
+    result = compute_entry_cancel_wait_attribution(
+        cancelled_or_partial_filled_qty=cancelled_or_filled_qty,
+        requested_qty=requested_qty,
+        position_tag=position_tag,
+        entry_mode=entry_mode,
+        entry_order_lifecycle=entry_order_lifecycle,
+        entry_passive_probe_applied=entry_passive_probe_applied,
+        best_bid=best_bid,
+        best_ask=best_ask,
+        order_price=order_price,
+        quote_age_ms=quote_age_ms,
+        quote_stale_at_submit=quote_stale,
+        context_age_ms=context_age_ms,
+        context_stale_at_submit=context_stale,
+        liquidity_verdict=liquidity_verdict,
+        ai_action=ai_action,
+        ai_confidence=ai_confidence,
+        score_bucket=score_bucket,
+        ofi_direction_label=ofi_direction,
+        active_priority_matched=active_priority,
+        suggested_wait_sec=suggested_wait_sec,
+        is_report_only=not attribution_enabled,
+        real_min_sec=real_min_sec,
+        stale_max_sec=stale_max_sec,
+        spread_ratio=spread_ratio,
+        overbought_guard_action=overbought_action,
+    )
+
+    wait_log_fields = result.as_log_fields()
+    wait_log_fields.update({
+        key: str(value)
+        for key, value in (result.attribution_context_summary or {}).items()
+    })
+    wait_log_fields["wait_policy_applied"] = str(attribution_enabled).lower()
+    wait_log_fields["is_report_only"] = str(not attribution_enabled).lower()
+    _log_entry_pipeline(stock, code, "entry_cancel_wait_attribution", **wait_log_fields)
+
+    stored = {
+        "cancel_wait_sec": result.cancel_wait_sec,
+        "base_wait_sec": result.base_wait_sec,
+        "min_wait_sec": result.min_wait_sec,
+        "max_wait_sec": result.max_wait_sec,
+        "suggested_wait_sec": result.suggested_wait_sec,
+        "wait_adjustment_reasons": result.adjustment_reasons,
+        "wait_policy_version": result.wait_policy_version,
+        "decision_authority": result.decision_authority,
+        "forbidden_uses": result.forbidden_uses,
+        "wait_policy_applied": attribution_enabled,
+        "is_report_only": not attribution_enabled,
+        "actual_timeout_sec": 0,
+        "attribution_emitted_at": time.time(),
+    }
+    with ENTRY_LOCK:
+        stock['entry_cancel_wait_attribution_result'] = stored
+
+    actual_timeout_sec = _resolve_buy_order_timeout_sec(stock, stock.get('strategy'))
+    with ENTRY_LOCK:
+        stored = stock.get('entry_cancel_wait_attribution_result', {})
+        if isinstance(stored, dict):
+            stored['actual_timeout_sec'] = actual_timeout_sec
+
+    return result
 
 
 def _build_entry_ai_price_context(stock, latency_gate, *, curr_price, best_bid, best_ask):
@@ -12845,6 +13200,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 actual_order_submitted=False,
                 broker_order_forbidden=True,
                 would_submit_stage="order_leg_sent",
+                **_swing_sim_priority_event_fields(stock),
                 **_merge_entry_pipeline_field_groups(
                     submit_revalidation_fields,
                     price_snapshot,
@@ -12958,6 +13314,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             broker_order_forbidden=True,
             would_submit_stage="order_bundle_submitted",
             runtime_effect="in_memory_holding_only",
+            **_swing_sim_priority_event_fields(stock),
             **_merge_entry_pipeline_field_groups(
                 submit_revalidation_fields,
                 bundle_price_snapshot,
@@ -12970,6 +13327,9 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
     _mutate_stock_state(stock, set_fields={'entry_mode': entry_mode})
     _finalize_buy_order_submission(
         stock=stock, code=code, curr_price=curr_price, requested_qty=requested_qty, msg=msg, entry_orders=successful_orders,
+    )
+    _compute_and_emit_entry_cancel_wait_attribution(
+        stock, code, latency_gate=latency_gate, curr_price=curr_price,
     )
     submitted_qty = sum(_safe_int(order.get('qty'), 0) for order in successful_orders if isinstance(order, dict))
     _publish_buy_signal_submission_notice(
@@ -13538,6 +13898,22 @@ def _cancel_pending_entry_orders(stock, code, *, force=False):
                 "price_decision_context_age_ms": order.get('price_decision_context_age_ms', "-"),
                 "quote_age_at_submit_ms": order.get('quote_age_at_submit_ms', "-"),
             }
+            wait_result = (stock or {}).get('entry_cancel_wait_attribution_result')
+            if isinstance(wait_result, dict):
+                timeout_sec = _resolve_buy_order_timeout_sec(stock, stock.get('strategy'))
+                wait_elapsed_overrun = max(0.0, order_age_sec - float(timeout_sec))
+                cancel_fields["cancel_wait_sec"] = str(wait_result.get("cancel_wait_sec", "-"))
+                cancel_fields["base_wait_sec"] = str(wait_result.get("base_wait_sec", "-"))
+                cancel_fields["wait_policy_version"] = str(wait_result.get("wait_policy_version", "-"))
+                cancel_fields["wait_adjustment_reasons"] = (
+                    "|".join(wait_result.get("wait_adjustment_reasons", []))
+                    if isinstance(wait_result.get("wait_adjustment_reasons"), list)
+                    else str(wait_result.get("wait_adjustment_reasons", "-"))
+                )
+                cancel_fields["wait_elapsed_overrun_sec"] = f"{wait_elapsed_overrun:.1f}"
+                cancel_fields["wait_policy_applied"] = str(wait_result.get("wait_policy_applied", "false")).lower()
+                cancel_fields["is_report_only"] = str(wait_result.get("is_report_only", "true")).lower()
+                cancel_fields["actual_timeout_sec"] = str(timeout_sec)
             _log_entry_pipeline(stock, code, "entry_order_cancel_requested", **cancel_fields)
             res = kiwoom_orders.send_cancel_order(code=code, orig_ord_no=ord_no, token=KIWOOM_TOKEN, qty=0)
             is_success = False
@@ -16005,6 +16381,7 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                         "decision_authority": "swing_sim_exploration_only",
                         "would_submit_stage": "sell_order_sent",
                         "runtime_effect": "in_memory_completed_only",
+                        **_swing_sim_priority_event_fields(stock),
                         **swing_sell_micro_fields,
                     }
                 ),
@@ -17454,6 +17831,7 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
             cap_qty=cap_qty,
             floor_applied=floor_applied,
             qty_reason=qty_reason,
+            **_swing_sim_priority_event_fields(stock),
             **scale_in_qty_budget_fields,
             **sim_budget_fields,
             **swing_scale_micro_fields,

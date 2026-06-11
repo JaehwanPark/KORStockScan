@@ -69,6 +69,23 @@ RELEVANT_STAGES = {
     "scalp_sim_sell_order_assumed_filled",
 }
 
+PRE_SUBMIT_CONTEXT_OPTIONAL_STAGES = {
+    "blocked_ai_score",
+    "latency_block",
+    "entry_submit_revalidation_warning",
+    "entry_submit_revalidation_block",
+    "pre_submit_liquidity_guard_block",
+    "pre_submit_overbought_pullback_guard_block",
+    "scalp_sim_entry_armed",
+    "scalp_sim_entry_ai_price_skip_order",
+    "scalp_sim_pre_submit_liquidity_guard_would_block",
+    "scalp_sim_pre_submit_liquidity_guard_unknown",
+    "scalp_sim_pre_submit_overbought_guard_would_block",
+    "scalp_sim_buy_order_virtual_pending",
+    "scalp_sim_entry_submit_revalidation_warning",
+    "scalp_sim_entry_submit_revalidation_block",
+}
+
 
 def report_paths(target_date: str) -> tuple[Path, Path]:
     base = ADM_REPORT_DIR / f"scalp_entry_action_decision_matrix_{target_date}"
@@ -291,13 +308,15 @@ def _overbought_bucket(fields: dict[str, Any]) -> str:
     return "overbought_normal"
 
 
-def _risk_context_bucket(fields: dict[str, Any]) -> str:
+def _risk_context_bucket(fields: dict[str, Any], *, stage: str = "") -> str:
     if _safe_bool(fields.get("source_quality_blocked")) or _nonempty(fields.get("source_quality_block_reason")):
         return "source_quality_blocker"
     strength = _safe_float(fields.get("latest_strength") or fields.get("strength_momentum"), None)
     buy_pressure = _safe_float(fields.get("buy_pressure_10t") or fields.get("buy_pressure"), None)
     vpw = _safe_float(fields.get("vpw"), None)
     if strength is None and buy_pressure is None and vpw is None:
+        if stage in PRE_SUBMIT_CONTEXT_OPTIONAL_STAGES:
+            return "risk_context_not_available"
         return "risk_unknown"
     if (strength is not None and strength < 80) or (buy_pressure is not None and buy_pressure < 40):
         return "weak_strength_momentum"
@@ -316,7 +335,7 @@ def _market_regime_continuous_bucket(fields: dict[str, Any]) -> str | None:
     return bucket
 
 
-def _price_resolution_bucket(fields: dict[str, Any]) -> str:
+def _price_resolution_bucket(fields: dict[str, Any], *, stage: str = "") -> str:
     action = _nonempty(fields.get("ai_entry_price_canary_action"))
     reason = _nonempty(fields.get("price_resolution_reason") or fields.get("entry_price_resolution_reason"))
     if action == "USE_DEFENSIVE" or "defensive" in reason.lower():
@@ -325,6 +344,8 @@ def _price_resolution_bucket(fields: dict[str, Any]) -> str:
         return "resolved_price"
     if _nonempty(fields.get("best_ask")) or _nonempty(fields.get("best_bid")):
         return "quote_based"
+    if stage in PRE_SUBMIT_CONTEXT_OPTIONAL_STAGES:
+        return "price_not_available_pre_submit"
     return "price_unknown"
 
 
@@ -418,6 +439,7 @@ def _base_row(event: dict[str, Any]) -> dict[str, Any]:
     action = _chosen_action(stage, fields)
     raw_action = _raw_chosen_action(fields)
     source_stage = _nonempty(fields.get("source_stage")) or stage
+    effective_bucket_stage = source_stage if stage == "scalp_entry_action_decision_snapshot" else stage
     normalization_reason = _action_normalization_reason(stage, fields, action)
     candidate_id = (
         _nonempty(fields.get("entry_adm_candidate_id"))
@@ -429,9 +451,9 @@ def _base_row(event: dict[str, Any]) -> dict[str, Any]:
     sim_record_id = _nonempty(fields.get("sim_record_id"))
 
     raw_score_bucket = _score_bucket(fields.get("ai_score") or fields.get("ai_score_after_bonus"))
-    raw_risk_bucket = _risk_context_bucket(fields)
+    raw_risk_bucket = _risk_context_bucket(fields, stage=effective_bucket_stage)
     raw_stale = _stale_bucket(fields)
-    raw_price = _price_resolution_bucket(fields)
+    raw_price = _price_resolution_bucket(fields, stage=effective_bucket_stage)
     raw_liquidity = _liquidity_bucket(fields)
     raw_overbought = _overbought_bucket(fields)
     raw_market_regime_continuous = _market_regime_continuous_bucket(fields) or "-"

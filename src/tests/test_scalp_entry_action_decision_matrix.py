@@ -740,6 +740,63 @@ def test_scalp_entry_adm_unknown_bucket_summary_separates_unknown_from_not_avail
     assert unknown_summary["examples"][0]["bucket_token"].count("|") == 7
 
 
+def test_scalp_entry_adm_pre_submit_missing_context_is_not_available(tmp_path, monkeypatch):
+    pipeline_dir = tmp_path / "pipeline_events"
+    report_dir = tmp_path / "report" / "scalp_entry_action_decision_matrix"
+    monkeypatch.setattr(mod, "PIPELINE_EVENT_DIR", pipeline_dir)
+    monkeypatch.setattr(mod, "THRESHOLD_EVENT_DIR", tmp_path / "threshold_cycle")
+    monkeypatch.setattr(mod, "THRESHOLD_SNAPSHOT_DIR", tmp_path / "threshold_cycle" / "snapshots")
+    monkeypatch.setattr(mod, "POST_SELL_DIR", tmp_path / "post_sell")
+    monkeypatch.setattr(mod, "ADM_REPORT_DIR", report_dir)
+
+    _write_jsonl(
+        pipeline_dir / "pipeline_events_2026-05-18.jsonl",
+        [
+            {
+                "stage": "scalp_entry_action_decision_snapshot",
+                "stock_code": "111111",
+                "record_id": "R1",
+                "emitted_at": "2026-05-18T09:10:00",
+                "emitted_date": "2026-05-18",
+                "fields": {
+                    "source_stage": "latency_block",
+                    "ai_score": 66,
+                    "chosen_action": "SKIP_PRE_SUBMIT_SAFETY",
+                },
+            }
+        ],
+    )
+
+    report = mod.build_scalp_entry_action_decision_matrix_report("2026-05-18")
+    row = report["rows"][0]
+    unknown_summary = report["summary"]["unknown_bucket_summary"]
+
+    assert row["stage"] == "scalp_entry_action_decision_snapshot"
+    assert row["source_stage"] == "latency_block"
+    assert row["risk_context_bucket"] == "risk_context_not_available"
+    assert row["price_resolution_bucket"] == "price_not_available_pre_submit"
+    assert "risk_context_bucket" not in unknown_summary["dimension_counts"]
+    assert "price_resolution_bucket" not in unknown_summary["dimension_counts"]
+    assert unknown_summary["not_available_dimension_counts"]["risk_context_bucket"] == 1
+    assert unknown_summary["not_available_dimension_counts"]["price_resolution_bucket"] == 1
+
+
+def test_scalp_entry_adm_runtime_pre_submit_missing_context_is_not_available():
+    context = runtime_mod.build_scalp_entry_adm_runtime_context(
+        prompt_profile="watching",
+        ws_data={
+            "stage": "latency_block",
+            "current_ai_score": 66,
+        },
+        now=datetime(2026, 5, 18, 9, 10),
+        advisory_enabled=False,
+    )
+    fields = context["fields"]
+
+    assert fields["entry_adm_risk_context_bucket"] == "risk_context_not_available"
+    assert fields["entry_adm_price_resolution_bucket"] == "price_not_available_pre_submit"
+
+
 def test_scalp_entry_adm_bucket_token_still_valid_with_adm_source_but_unknown_dimensions(tmp_path, monkeypatch):
     pipeline_dir = tmp_path / "pipeline_events"
     report_dir = tmp_path / "report" / "scalp_entry_action_decision_matrix"
