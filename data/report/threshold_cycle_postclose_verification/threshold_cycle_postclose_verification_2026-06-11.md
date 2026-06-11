@@ -23,7 +23,7 @@
 - runtime_effect: `False`
 - allowed_runtime_apply: `False`
 - P1 `submit_drought` 판정: `post_submit_provenance_join_gap_open`
-  - 근거: `{'status': 'pass', 'critical': True, 'primary': 'SUBMIT_DROUGHT_CRITICAL', 'matches': ['PRICE_GUARD_DROUGHT', 'LATENCY_DROUGHT', 'UPSTREAM_AI_THRESHOLD', 'SUBMIT_DROUGHT_CRITICAL'], 'missing': [], 'ldm_submit_real_submitted_row_count': 17, 'ldm_submit_missing_broker_order_key_count': 17, 'ldm_submit_missing_broker_order_key_rate': 1.0, 'ldm_submit_post_submit_provenance_join_gap': True, 'ldm_submit_bot_history_backfill_candidate_count': 17, 'ldm_submit_bot_history_backfill_full_coverage': True}`
+  - 근거: `{'status': 'pass', 'critical': True, 'primary': 'SUBMIT_DROUGHT_CRITICAL', 'matches': ['PRICE_GUARD_DROUGHT', 'LATENCY_DROUGHT', 'UPSTREAM_AI_THRESHOLD', 'SUBMIT_DROUGHT_CRITICAL'], 'missing': [], 'ldm_submit_real_submitted_row_count': 17, 'ldm_submit_missing_broker_order_key_count': 17, 'ldm_submit_missing_broker_order_key_rate': 1.0, 'ldm_submit_post_submit_provenance_join_gap': True, 'ldm_submit_post_submit_provenance_join_gap_raw': True, 'ldm_submit_bot_history_backfill_candidate_count': 17, 'ldm_submit_bot_history_backfill_full_coverage': True, 'ldm_submit_bot_history_exact_mapping_count': 0, 'ldm_submit_bot_history_exact_mapping_full_coverage': False, 'ldm_submit_post_submit_provenance_join_resolution': 'candidate_backfill_available_but_exact_mapping_required'}`
   - 다음 액션: `Bot history contains same-stock WS buy-order candidates for every missing broker-key row; verify exact submit-time mapping before treating today's rows as fill-joinable, and keep future order_bundle_submitted broker-key emission enabled.`
 - P2 `scalp_entry_adm_unknown_bucket_source_quality_gap` 판정: `source_quality_followup_required`
   - 근거: `{'status': 'warning', 'warnings': ['unknown_bucket_source_quality_gap'], 'affected_rows': 255, 'affected_rate': 0.336, 'dimension_counts': {'score_bucket': 255, 'risk_context_bucket': 56, 'price_resolution_bucket': 39}, 'unknown_root_cause_counts': {'score_bucket:source_score_missing': 255, 'risk_context_bucket:risk_context_source_missing': 56, 'price_resolution_bucket:price_context_source_missing': 39}, 'stage_counts': {'latency_block': 31, 'blocked_ai_score': 75, 'scalp_sim_pre_submit_liquidity_guard_would_block': 182, 'pre_submit_liquidity_guard_block': 10, 'order_bundle_submitted': 17, 'scalp_sim_pre_submit_overbought_guard_would_block': 7, 'scalp_sim_sell_order_assumed_filled': 39}, 'recommended_route': 'source_quality_workorder', 'not_available_route': 'field_legitimately_unavailable_no_workorder', 'lookup_status_counts': {'new_or_unseen_token_vs_prior_adm': 386, 'matched_prior_bucket': 373}}`
@@ -72,12 +72,12 @@
 ## Lifecycle Flow Bucket Handoff
 - status: `pass`
 - attribution_present: `True`
-- flow_count: `14457`
+- flow_count: `14462`
 - complete_flow_count: `108`
 - direct_sim_record_complete_flow_count: `0`
 - adm_bridge_complete_flow_count: `108`
 - fallback_complete_flow_count: `0`
-- incomplete_flow_count: `14349`
+- incomplete_flow_count: `14354`
 - complete_flow_rate: `0.0075`
 - join_contract_blocked: `False`
 - bundle_ev_tuning_state: `ready_for_bundle_ev_tuning`
@@ -218,11 +218,11 @@
 - gap_affected_handoff_count: `0`
 
 ## Workorder Snapshot
-- generation_id: `2026-06-11-8bd7bec8a619`
-- source_hash: `8bd7bec8a619cfe14262bbaa8d62ddd2dcda14600ff2acbbf090b5b65500aebf`
+- generation_id: `2026-06-11-32e3fe1d27f7`
+- source_hash: `32e3fe1d27f74daf377f9c001a284f888cfa792a51b32d90a0152df26220121d`
 - snapshot_status: `source_changed_with_lineage`
-- previous_generation_id: `2026-06-11-64b1ef854a64`
-- previous_source_hash: `64b1ef854a64f5193734e4b0886fe0c45cc5e1df0d222deb1cd415db443f0c97`
+- previous_generation_id: `2026-06-11-f8cefde2db25`
+- previous_source_hash: `f8cefde2db254419cbf9069d72e950b3ba82b057170f32bb462af400330d3c5a`
 - new_order_ids: `[]`
 - removed_order_ids: `[]`
 - decision_changed_order_ids: `[]`

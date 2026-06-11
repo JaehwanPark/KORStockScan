@@ -85,14 +85,14 @@
 - status: `pass`
 - matrix_version: `lifecycle_decision_matrix_v1_2026-06-11`
 - runtime_bias_scope: `stage_action_proposal_micro_canary`
-- total/joined/floor: `16418` / `14853` / `20`
+- total/joined/floor: `16424` / `14854` / `20`
 - policy_pass/promote_ready: `5` / `0`
-- lifecycle_flow buckets/complete/runtime/workorders: `150` / `108` / `0` / `20`
+- lifecycle_flow buckets/complete/runtime/workorders: `151` / `108` / `0` / `20`
 - holding/exit buckets: `41` / `54`
 - holding/exit workorders: `10` / `10`
 - lifecycle identity missing/join_rate: `0` / `1.0`
 - lifecycle complete_flow_rate: `0.0075`
-- incomplete_flow_reason_counts: `{'missing_entry': 13855, 'missing_holding': 14298, 'missing_exit': 13341, 'missing_submit': 14305, 'postclose_exit_without_entry': 1008, 'candidate_id_only': 13842, 'scale_in_noise_only': 12816, 'sim_record_id_only': 432}`
+- incomplete_flow_reason_counts: `{'missing_entry': 13860, 'missing_holding': 14302, 'missing_exit': 13344, 'missing_submit': 14309, 'postclose_exit_without_entry': 1010, 'candidate_id_only': 13846, 'scale_in_noise_only': 12818, 'sim_record_id_only': 432}`
 - fixed_threshold_roles: `{'hard_safety': ['broker_submit_guard', 'stale_quote_submit_block', 'price_freshness_guard', 'hard_stop', 'protect_stop', 'emergency_stop', 'account_order_cooldown_qty_guard'], 'baseline_prior': ['BUY_SCORE_THRESHOLD', 'VPW_MIN_SCORE', 'strength_momentum_cutoff', 'entry_score_cutoff'], 'bounded_tunable': ['SCALP_ENTRY_LATENCY_MAX_WS_AGE_MS_FOR_CAUTION', 'SCALP_ENTRY_LATENCY_MAX_WS_JITTER_MS_FOR_CAUTION', 'SCALP_ENTRY_LATENCY_MAX_SPREAD_RATIO_FOR_CAUTION', 'score65_74_recovery_probe', 'soft_stop_whipsaw_confirmation', 'holding_flow_override', 'scale_in_price_guard'], 'legacy_archive': ['fallback_scout_main', 'fallback_single', 'latency_fallback_split_entry', 'legacy_latency_composite', 'closed_shadow_axes']}`
 - ready_for_bounded_apply: `True`
 - warnings: `[]`

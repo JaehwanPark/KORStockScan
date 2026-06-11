@@ -428,6 +428,7 @@ def test_lifecycle_submit_bucket_attribution_surfaces_post_submit_join_gap():
     assert attribution["summary"]["missing_broker_order_key_count"] == 1
     assert attribution["summary"]["missing_broker_order_key_rate"] == 1.0
     assert attribution["summary"]["post_submit_provenance_join_gap"] is True
+    assert attribution["summary"]["post_submit_provenance_join_gap_raw"] is True
     assert {
         item["workorder_id"]
         for item in attribution["code_improvement_workorders"]
@@ -464,12 +465,56 @@ def test_lifecycle_submit_bucket_attribution_surfaces_bot_history_backfill_candi
     attribution = mod._submit_bucket_attribution(rows)
     summary = attribution["summary"]
 
-    assert summary["post_submit_provenance_join_gap"] is True
+    assert summary["post_submit_provenance_join_gap_raw"] is True
+    assert summary["post_submit_provenance_join_gap"] is False
     assert summary["bot_history_broker_order_key_backfill_candidate_count"] == 1
     assert summary["bot_history_broker_order_key_backfill_full_coverage"] is True
+    assert summary["bot_history_broker_order_key_exact_mapping_count"] == 1
+    assert summary["bot_history_broker_order_key_exact_mapping_full_coverage"] is True
+    assert summary["post_submit_provenance_join_resolution"] == "resolved_by_exact_bot_history_submit_time_mapping"
     candidate = summary["bot_history_broker_order_key_backfill_candidates"][0]
     assert candidate["best_candidate"]["broker_order_no"] == "0049916"
     assert candidate["best_candidate"]["delta_sec"] == 1
+    assert candidate["exact_submit_time_mapping"] is True
+
+
+def test_lifecycle_submit_bucket_attribution_keeps_ambiguous_bot_history_backfill_open(tmp_path, monkeypatch):
+    bot_history = tmp_path / "bot_history.log"
+    bot_history.write_text(
+        "\n".join(
+            [
+                "[2026-06-11 12:34:55] 📩 [WS 주문상태] 131970 | 주문번호: '0049916' | 상태: '접수' | 구분: '+매수'",
+                "[2026-06-11 12:35:12] 📩 [WS 주문상태] 131970 | 주문번호: '0049917' | 상태: '접수' | 구분: '+매수'",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(mod, "BOT_HISTORY_LOG", bot_history)
+    rows = [
+        {
+            "stage": "submit",
+            "source_stage": "order_bundle_submitted",
+            "stock_code": "131970",
+            "event_time": "2026-06-11T12:34:54",
+            "runtime_features": {
+                "actual_order_submitted": True,
+                "broker_order_forbidden": False,
+            },
+            "labels": {"profit_rate": None},
+            "stage_ev_composite_pct": None,
+        }
+    ]
+
+    summary = mod._submit_bucket_attribution(rows)["summary"]
+
+    assert summary["bot_history_broker_order_key_backfill_candidate_count"] == 1
+    assert summary["bot_history_broker_order_key_backfill_full_coverage"] is True
+    assert summary["bot_history_broker_order_key_exact_mapping_count"] == 0
+    assert summary["bot_history_broker_order_key_exact_mapping_full_coverage"] is False
+    assert summary["post_submit_provenance_join_resolution"] == "candidate_backfill_available_but_exact_mapping_required"
+    candidate = summary["bot_history_broker_order_key_backfill_candidates"][0]
+    assert candidate["candidate_count"] == 2
+    assert candidate["exact_submit_time_mapping"] is False
 
 
 def test_lifecycle_submit_bucket_attribution_does_not_gap_when_broker_key_present():
@@ -494,11 +539,68 @@ def test_lifecycle_submit_bucket_attribution_does_not_gap_when_broker_key_presen
     assert attribution["summary"]["real_submitted_row_count"] == 1
     assert attribution["summary"]["missing_broker_order_key_count"] == 0
     assert attribution["summary"]["missing_broker_order_key_rate"] == 0.0
+    assert attribution["summary"]["post_submit_provenance_join_gap_raw"] is False
     assert attribution["summary"]["post_submit_provenance_join_gap"] is False
     assert "order_entry_post_submit_provenance_join_gap" not in {
         item["workorder_id"]
         for item in attribution["code_improvement_workorders"]
     }
+
+
+def test_lifecycle_submit_bucket_attribution_accepts_top_level_order_keys():
+    rows = [
+        {
+            "stage": "submit",
+            "source_stage": "order_bundle_submitted",
+            "ord_no": "0046858",
+            "order_response_ord_no": "0046858",
+            "runtime_features": {},
+            "labels": {"profit_rate": None},
+            "stage_ev_composite_pct": None,
+        }
+    ]
+
+    attribution = mod._submit_bucket_attribution(rows)
+
+    assert attribution["summary"]["real_submitted_row_count"] == 1
+    assert attribution["summary"]["missing_broker_order_key_count"] == 0
+    assert attribution["summary"]["post_submit_provenance_join_gap_raw"] is False
+    assert attribution["summary"]["post_submit_provenance_join_gap"] is False
+
+
+def test_lifecycle_submit_bucket_attribution_normalizes_post_submit_contract_fields():
+    rows = [
+        {
+            "stage": "submit",
+            "source_stage": "order_bundle_submitted",
+            "actual_order_submitted": True,
+            "ord_no": "0046858",
+            "qty": 3,
+            "submitted_order_price": 11200,
+            "strategy": "scalping",
+            "runtime_features": {
+                "actual_order_submitted": True,
+                "broker_order_forbidden": False,
+                "resolved_order_price": 11200,
+                "limit_price": 11200,
+            },
+            "labels": {"profit_rate": None},
+            "stage_ev_composite_pct": None,
+        }
+    ]
+
+    attribution = mod._submit_bucket_attribution(rows)
+    gaps = {
+        item["gap_type"]
+        for item in attribution["post_submit_contract_gaps"]
+    }
+
+    assert attribution["summary"]["contract_gap_count"] == 0
+    assert "broker_receipt_contract_gap" not in gaps
+    assert "fill_quality_contract_gap" not in gaps
+    assert "post_submit_contract_gap" not in gaps
+    assert "telegram_post_submit_contract_gap" not in gaps
+    assert "source_taxonomy_contract_gap" not in gaps
 
 
 def test_lifecycle_submit_unknown_bucket_is_source_quality_blocker():

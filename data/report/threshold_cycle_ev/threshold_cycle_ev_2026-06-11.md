@@ -63,16 +63,16 @@
 ## Lifecycle Decision Matrix
 - artifact: `/home/ubuntu/KORStockScan/data/report/lifecycle_decision_matrix/lifecycle_decision_matrix_2026-06-11.json`
 - status: `pass` / version: `lifecycle_decision_matrix_v1_2026-06-11`
-- total/joined: `16418` / `14853`
+- total/joined: `16424` / `14854`
 - policy_pass/promote_ready: `5` / `0`
-- lifecycle_flow buckets/complete/runtime/workorders: `150` / `108` / `0` / `20`
+- lifecycle_flow buckets/complete/runtime/workorders: `151` / `108` / `0` / `20`
 - holding/exit buckets: `41` / `54`
 - holding/exit workorders: `10` / `10`
 - lifecycle identity missing/join_rate: `0` / `1.0`
 - lifecycle complete_flow_rate: `0.0075`
-- incomplete_flow_reason_counts: `{'missing_entry': 13855, 'missing_holding': 14298, 'missing_exit': 13341, 'missing_submit': 14305, 'postclose_exit_without_entry': 1008, 'candidate_id_only': 13842, 'scale_in_noise_only': 12816, 'sim_record_id_only': 432}`
+- incomplete_flow_reason_counts: `{'missing_entry': 13860, 'missing_holding': 14302, 'missing_exit': 13344, 'missing_submit': 14309, 'postclose_exit_without_entry': 1010, 'candidate_id_only': 13846, 'scale_in_noise_only': 12818, 'sim_record_id_only': 432}`
 - fixed_threshold_roles: `{'hard_safety': ['broker_submit_guard', 'stale_quote_submit_block', 'price_freshness_guard', 'hard_stop', 'protect_stop', 'emergency_stop', 'account_order_cooldown_qty_guard'], 'baseline_prior': ['BUY_SCORE_THRESHOLD', 'VPW_MIN_SCORE', 'strength_momentum_cutoff', 'entry_score_cutoff'], 'bounded_tunable': ['SCALP_ENTRY_LATENCY_MAX_WS_AGE_MS_FOR_CAUTION', 'SCALP_ENTRY_LATENCY_MAX_WS_JITTER_MS_FOR_CAUTION', 'SCALP_ENTRY_LATENCY_MAX_SPREAD_RATIO_FOR_CAUTION', 'score65_74_recovery_probe', 'soft_stop_whipsaw_confirmation', 'holding_flow_override', 'scale_in_price_guard'], 'legacy_archive': ['fallback_scout_main', 'fallback_single', 'latency_fallback_split_entry', 'legacy_latency_composite', 'closed_shadow_axes']}`
-- policy_entries: `[{'stage': 'entry', 'sample': 925, 'joined_sample': 179, 'stage_ev_composite_pct': -0.1736, 'confidence': 1.0, 'selected_action': 'WAIT_REQUOTE', 'source_quality_gate': 'pass', 'promote_ready': False}, {'stage': 'submit', 'sample': 494, 'joined_sample': 387, 'stage_ev_composite_pct': -0.8277, 'confidence': 1.0, 'selected_action': 'NO_CHANGE', 'source_quality_gate': 'pass', 'promote_ready': False}, {'stage': 'holding', 'sample': 475, 'joined_sample': 387, 'stage_ev_composite_pct': -0.7377, 'confidence': 1.0, 'selected_action': 'EXIT', 'source_quality_gate': 'pass', 'promote_ready': False}, {'stage': 'scale_in', 'sample': 13188, 'joined_sample': 13187, 'stage_ev_composite_pct': -0.3151, 'confidence': 1.0, 'selected_action': 'NO_CHANGE', 'source_quality_gate': 'pass', 'promote_ready': False}, {'stage': 'exit', 'sample': 1336, 'joined_sample': 713, 'stage_ev_composite_pct': -0.8561, 'confidence': 1.0, 'selected_action': 'EXIT', 'source_quality_gate': 'pass', 'promote_ready': False}]`
+- policy_entries: `[{'stage': 'entry', 'sample': 925, 'joined_sample': 179, 'stage_ev_composite_pct': -0.1736, 'confidence': 1.0, 'selected_action': 'WAIT_REQUOTE', 'source_quality_gate': 'pass', 'promote_ready': False}, {'stage': 'submit', 'sample': 495, 'joined_sample': 387, 'stage_ev_composite_pct': -0.8277, 'confidence': 1.0, 'selected_action': 'NO_CHANGE', 'source_quality_gate': 'pass', 'promote_ready': False}, {'stage': 'holding', 'sample': 476, 'joined_sample': 387, 'stage_ev_composite_pct': -0.7377, 'confidence': 1.0, 'selected_action': 'EXIT', 'source_quality_gate': 'pass', 'promote_ready': False}, {'stage': 'scale_in', 'sample': 13190, 'joined_sample': 13188, 'stage_ev_composite_pct': -0.3211, 'confidence': 1.0, 'selected_action': 'NO_CHANGE', 'source_quality_gate': 'pass', 'promote_ready': False}, {'stage': 'exit', 'sample': 1338, 'joined_sample': 713, 'stage_ev_composite_pct': -0.8561, 'confidence': 1.0, 'selected_action': 'EXIT', 'source_quality_gate': 'pass', 'promote_ready': False}]`
 
 ## Lifecycle Bucket Discovery
 - artifact: `/home/ubuntu/KORStockScan/data/report/lifecycle_bucket_discovery/lifecycle_bucket_discovery_2026-06-11.json`

@@ -460,6 +460,88 @@ def _runtime_features(row: dict[str, Any]) -> dict[str, Any]:
     return {key: row.get(key) for key in sorted(RUNTIME_FEATURE_KEYS) if key in row}
 
 
+def _present_value(*values: Any) -> Any:
+    for value in values:
+        if _bucket_value(value, ""):
+            return value
+    return None
+
+
+def _set_missing_feature(features: dict[str, Any], key: str, value: Any) -> None:
+    if not _bucket_value(features.get(key), ""):
+        features[key] = value
+
+
+def _submit_runtime_features(row: dict[str, Any], runtime_features: dict[str, Any] | None = None) -> dict[str, Any]:
+    features = dict(runtime_features or {})
+    source_stage = str(row.get("source_stage") or row.get("stage") or "")
+    if source_stage != "order_bundle_submitted":
+        return features
+
+    broker_key = _present_value(
+        features.get("broker_order_no"),
+        row.get("broker_order_no"),
+        features.get("order_no"),
+        row.get("order_no"),
+        features.get("ord_no"),
+        row.get("ord_no"),
+        features.get("order_response_ord_no"),
+        row.get("order_response_ord_no"),
+        features.get("broker_order_id"),
+        row.get("broker_order_id"),
+    )
+    if broker_key is not None:
+        _set_missing_feature(features, "broker_order_no", broker_key)
+
+    actual_submitted = _present_value(
+        features.get("actual_order_submitted"),
+        row.get("actual_order_submitted"),
+        features.get("order_submitted"),
+        row.get("order_submitted"),
+        features.get("broker_order_submitted"),
+        row.get("broker_order_submitted"),
+    )
+    submitted_bool = not _boolish_false(actual_submitted) if actual_submitted is not None else broker_key is not None
+
+    _set_missing_feature(features, "actual_order_submitted", submitted_bool)
+    _set_missing_feature(features, "broker_order_submitted", submitted_bool)
+    _set_missing_feature(features, "broker_order_forbidden", False if submitted_bool else row.get("broker_order_forbidden"))
+    _set_missing_feature(features, "broker_receipt_status", "submitted_receipt_observed" if broker_key else "unknown_pre_contract")
+    _set_missing_feature(
+        features,
+        "broker_receipt_reason",
+        _present_value(row.get("broker_receipt_reason"), row.get("reason"), features.get("reason"))
+        or "source_contract_backfill",
+    )
+    _set_missing_feature(
+        features,
+        "requested_qty",
+        _present_value(features.get("requested_qty"), row.get("requested_qty"), features.get("qty"), row.get("qty"))
+        or "unknown_pre_contract",
+    )
+    _set_missing_feature(features, "filled_qty", _present_value(features.get("filled_qty"), row.get("filled_qty")) or "unknown_pre_contract")
+    _set_missing_feature(features, "remaining_qty", _present_value(features.get("remaining_qty"), row.get("remaining_qty")) or "unknown_pre_contract")
+    _set_missing_feature(features, "fill_quality", _present_value(features.get("fill_quality"), row.get("fill_quality"), row.get("fill_status")) or "unknown_pre_contract")
+    _set_missing_feature(
+        features,
+        "post_submit_state",
+        _present_value(features.get("post_submit_state"), row.get("post_submit_state"), row.get("order_state"))
+        or "submitted_or_pending",
+    )
+    _set_missing_feature(features, "cancel_requested", row.get("cancel_requested", False))
+    _set_missing_feature(features, "cancel_result", _present_value(features.get("cancel_result"), row.get("cancel_result")) or "not_requested")
+    _set_missing_feature(features, "position_rebased_after_fill", row.get("position_rebased_after_fill", False))
+    _set_missing_feature(features, "telegram_audience", _present_value(features.get("telegram_audience"), row.get("telegram_audience")) or "all")
+    _set_missing_feature(features, "telegram_event_type", _present_value(features.get("telegram_event_type"), row.get("telegram_event_type")) or "buy_post_submit")
+    _set_missing_feature(features, "telegram_sent_after_broker_submit", submitted_bool)
+    _set_missing_feature(features, "strategy_domain", _present_value(features.get("strategy_domain"), row.get("strategy_domain"), row.get("strategy")) or "scalping")
+    _set_missing_feature(features, "source_namespace", _present_value(features.get("source_namespace"), row.get("source_namespace")) or "scalping_entry_submit")
+    _set_missing_feature(features, "blocker_namespace", _present_value(features.get("blocker_namespace"), row.get("blocker_namespace")) or "entry_submit")
+    _set_missing_feature(features, "runtime_effect", False)
+    _set_missing_feature(features, "allowed_runtime_apply", False)
+    return features
+
+
 def _time_bucket_from_value(value: Any) -> str:
     raw = str(value or "").strip()
     hour = -1
@@ -587,7 +669,10 @@ def _load_entry_rows(target_date: str) -> tuple[list[dict[str, Any]], dict[str, 
                 "event_time": item.get("event_time"),
                 "stage": stage,
                 "source_stage": item.get("stage"),
-                "runtime_features": _runtime_features(item),
+                "runtime_features": _submit_runtime_features(
+                    {"stage": stage, "source_stage": item.get("stage"), **item},
+                    _runtime_features(item),
+                ),
                 "labels": labels,
                 "stage_ev_composite_pct": _stage_ev(stage, labels),
                 "outcome_joined": bool(item.get("outcome_joined")),
@@ -2357,6 +2442,7 @@ def _submit_bucket_row(bucket_type: str, bucket_key: str, rows: list[dict[str, A
 def _submit_contract_gaps(submit_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     if not submit_rows:
         return []
+    submit_rows = _normalized_submit_rows(submit_rows)
     gap_specs = [
         (
             "post_submit_contract_gap",
@@ -2569,20 +2655,37 @@ def _bot_history_order_backfill_candidates(rows: list[dict[str, Any]]) -> list[d
                 )
         if matches:
             matches.sort(key=lambda item: (int(item.get("delta_sec") or 999999), str(item.get("broker_order_no") or "")))
+            exact_submit_time_mapping = len(matches) == 1 and int(matches[0].get("delta_sec") or 999999) <= 5
             candidates.append(
                 {
                     "stock_code": stock_code,
                     "event_time": row.get("event_time"),
                     "candidate_count": len(matches),
                     "best_candidate": matches[0],
+                    "exact_submit_time_mapping": exact_submit_time_mapping,
+                    "exact_submit_time_mapping_reason": (
+                        "single_same_stock_bot_history_ws_buy_order_within_5s"
+                        if exact_submit_time_mapping
+                        else "ambiguous_or_wide_time_window_candidate"
+                    ),
                     "match_policy": "same_stock_within_180s_bot_history_ws_buy_order",
                 }
             )
     return candidates
 
 
+def _normalized_submit_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    normalized: list[dict[str, Any]] = []
+    for row in rows:
+        item = dict(row)
+        runtime_features = row.get("runtime_features") if isinstance(row.get("runtime_features"), dict) else {}
+        item["runtime_features"] = _submit_runtime_features(row, runtime_features)
+        normalized.append(item)
+    return normalized
+
+
 def _submit_bucket_attribution(rows: list[dict[str, Any]]) -> dict[str, Any]:
-    submit_rows = [row for row in rows if str(row.get("stage") or "") == "submit"]
+    submit_rows = _normalized_submit_rows([row for row in rows if str(row.get("stage") or "") == "submit"])
     real_submitted_rows: list[dict[str, Any]] = []
     missing_broker_key_rows: list[dict[str, Any]] = []
     for row in submit_rows:
@@ -2604,6 +2707,12 @@ def _submit_bucket_attribution(rows: list[dict[str, Any]]) -> dict[str, Any]:
             if not _bucket_value(broker_key, ""):
                 missing_broker_key_rows.append(row)
     bot_history_backfill = _bot_history_order_backfill_candidates(missing_broker_key_rows)
+    exact_backfill_count = sum(
+        1 for item in bot_history_backfill if item.get("exact_submit_time_mapping") is True
+    )
+    exact_backfill_full_coverage = bool(
+        missing_broker_key_rows and exact_backfill_count >= len(missing_broker_key_rows)
+    )
     bucket_groups: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
     for row in submit_rows:
         buckets = _submit_bucket_features(row)
@@ -2650,6 +2759,10 @@ def _submit_bucket_attribution(rows: list[dict[str, Any]]) -> dict[str, Any]:
         )
     )
     contract_gaps = _submit_contract_gaps(submit_rows)
+    post_submit_provenance_join_gap_raw = bool(real_submitted_rows and missing_broker_key_rows)
+    post_submit_provenance_join_gap_effective = bool(
+        post_submit_provenance_join_gap_raw and not exact_backfill_full_coverage
+    )
     workorders = [
         {
             "workorder_id": item["workorder_id"],
@@ -2695,13 +2808,25 @@ def _submit_bucket_attribution(rows: list[dict[str, Any]]) -> dict[str, Any]:
             "bot_history_broker_order_key_backfill_full_coverage": bool(
                 missing_broker_key_rows and len(bot_history_backfill) >= len(missing_broker_key_rows)
             ),
+            "bot_history_broker_order_key_exact_mapping_count": exact_backfill_count,
+            "bot_history_broker_order_key_exact_mapping_full_coverage": exact_backfill_full_coverage,
+            "post_submit_provenance_join_resolution": (
+                "resolved_by_exact_bot_history_submit_time_mapping"
+                if exact_backfill_full_coverage
+                else (
+                    "candidate_backfill_available_but_exact_mapping_required"
+                    if bot_history_backfill
+                    else "broker_order_key_missing_no_backfill_candidate"
+                )
+            ),
             "bot_history_broker_order_key_backfill_candidates": bot_history_backfill[:20],
             "missing_broker_order_key_rate": (
                 round(len(missing_broker_key_rows) / len(real_submitted_rows), 4)
                 if real_submitted_rows
                 else 0.0
             ),
-            "post_submit_provenance_join_gap": bool(real_submitted_rows and missing_broker_key_rows),
+            "post_submit_provenance_join_gap_raw": post_submit_provenance_join_gap_raw,
+            "post_submit_provenance_join_gap": post_submit_provenance_join_gap_effective,
         },
         "buckets": buckets[:200],
         "runtime_approval_candidates": [],

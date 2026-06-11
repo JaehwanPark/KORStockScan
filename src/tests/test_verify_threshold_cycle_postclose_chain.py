@@ -1199,6 +1199,43 @@ def test_warning_followup_submit_drought_reports_join_gap():
     assert "broker_order_no" in submit_item["next_action"]
 
 
+def test_warning_followup_submit_drought_reports_exact_bot_history_resolution():
+    summary = mod._warning_followup_summary(
+        buy_funnel_submit_drought_handoff={
+            "status": "pass",
+            "critical": True,
+            "primary": "SUBMIT_DROUGHT_CRITICAL",
+            "matches": ["SUBMIT_DROUGHT_CRITICAL"],
+            "missing": [],
+            "ldm_submit_real_submitted_row_count": 17,
+            "ldm_submit_missing_broker_order_key_count": 17,
+            "ldm_submit_missing_broker_order_key_rate": 1.0,
+            "ldm_submit_post_submit_provenance_join_gap_raw": True,
+            "ldm_submit_post_submit_provenance_join_gap": False,
+            "ldm_submit_bot_history_backfill_candidate_count": 17,
+            "ldm_submit_bot_history_backfill_full_coverage": True,
+            "ldm_submit_bot_history_exact_mapping_count": 17,
+            "ldm_submit_bot_history_exact_mapping_full_coverage": True,
+            "ldm_submit_post_submit_provenance_join_resolution": (
+                "resolved_by_exact_bot_history_submit_time_mapping"
+            ),
+        },
+        scalp_entry_adm={},
+        currentness_audit={},
+        pattern_lab_ai_review={},
+        discovery_report={},
+        runtime_apply_gap_audit={},
+        lifecycle_bucket_discovery_handoff={},
+    )
+
+    submit_item = summary["items"][0]
+
+    assert summary["status"] == "pass"
+    assert submit_item["decision"] == "post_submit_provenance_join_gap_resolved_by_bot_history"
+    assert submit_item["evidence"]["ldm_submit_bot_history_exact_mapping_count"] == 17
+    assert "Exact same-stock" in submit_item["next_action"]
+
+
 def test_producer_gap_discovery_handoff_fails_ai_review_or_missing_workorder():
     producer_gap = {
         "status": "fail",

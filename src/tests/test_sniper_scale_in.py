@@ -63,6 +63,14 @@ def test_entry_adm_submitted_stage_uses_buy_action_despite_warning_dimension():
     )
 
 
+def test_extract_broker_order_no_accepts_flat_and_nested_response_keys():
+    assert state_handlers._extract_broker_order_no({"ord_no": "O1"}) == "O1"
+    assert state_handlers._extract_broker_order_no({"order_no": "O2"}) == "O2"
+    assert state_handlers._extract_broker_order_no({"output": {"ord_no": "O3"}}) == "O3"
+    assert state_handlers._extract_broker_order_no({"data": {"odno": "O4"}}) == "O4"
+    assert state_handlers._extract_broker_order_no(None) == ""
+
+
 def test_scalping_pyramid_signal():
     stock = {"pyramid_count": 0}
     result = scale_in.evaluate_scalping_pyramid(
@@ -2292,10 +2300,19 @@ def test_watching_state_logs_latency_entry_price_guard(monkeypatch):
     assert by_stage["latency_pass"]["liquidity_guard_reason"] == "liquidity_ok"
     assert by_stage["order_leg_request"]["liquidity_guard_action"] == "WOULD_PASS"
     assert by_stage["order_leg_sent"]["liquidity_guard_action"] == "WOULD_PASS"
+    assert by_stage["order_leg_sent"]["broker_order_no"] == "O1"
+    assert by_stage["order_leg_sent"]["order_no"] == "O1"
+    assert by_stage["order_leg_sent"]["ord_no"] == "O1"
+    assert by_stage["order_leg_sent"]["order_response_ord_no"] == "O1"
     assert by_stage["order_bundle_submitted"]["liquidity_guard_action"] == "WOULD_PASS"
     assert by_stage["order_bundle_submitted"]["overbought_guard_action"] == "WOULD_PASS"
     assert by_stage["order_bundle_submitted"]["order_price"] == 9_990
     assert by_stage["order_bundle_submitted"]["submitted_order_price"] == 9_990
+    assert by_stage["order_bundle_submitted"]["broker_order_no"] == "O1"
+    assert by_stage["order_bundle_submitted"]["order_no"] == "O1"
+    assert by_stage["order_bundle_submitted"]["ord_no"] == "O1"
+    assert by_stage["order_bundle_submitted"]["order_response_ord_no"] == "O1"
+    assert by_stage["order_bundle_submitted"]["broker_order_no_list"] == "O1"
     adm_snapshots = [
         fields for stage, fields in logs if stage == "scalp_entry_action_decision_snapshot"
     ]
@@ -2309,6 +2326,11 @@ def test_watching_state_logs_latency_entry_price_guard(monkeypatch):
     assert latency_snapshot["actual_order_submitted"] is False
     assert submitted_snapshot["chosen_action"] == "BUY_DEFENSIVE"
     assert submitted_snapshot["actual_order_submitted"] is True
+    assert submitted_snapshot["broker_order_no"] == "O1"
+    assert submitted_snapshot["order_no"] == "O1"
+    assert submitted_snapshot["ord_no"] == "O1"
+    assert submitted_snapshot["order_response_ord_no"] == "O1"
+    assert submitted_snapshot["broker_order_no_list"] == "O1"
 
 
 def test_watching_state_blocks_deep_below_bid_pre_submit_price(monkeypatch):

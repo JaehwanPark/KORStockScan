@@ -1549,6 +1549,19 @@ def _buy_funnel_submit_drought_handoff_status(
         "ldm_submit_bot_history_backfill_full_coverage": bool(
             ldm_submit_summary.get("bot_history_broker_order_key_backfill_full_coverage")
         ),
+        "ldm_submit_bot_history_exact_mapping_count": _safe_int(
+            ldm_submit_summary.get("bot_history_broker_order_key_exact_mapping_count"),
+            0,
+        ),
+        "ldm_submit_bot_history_exact_mapping_full_coverage": bool(
+            ldm_submit_summary.get("bot_history_broker_order_key_exact_mapping_full_coverage")
+        ),
+        "ldm_submit_post_submit_provenance_join_resolution": ldm_submit_summary.get(
+            "post_submit_provenance_join_resolution"
+        ),
+        "ldm_submit_post_submit_provenance_join_gap_raw": bool(
+            ldm_submit_summary.get("post_submit_provenance_join_gap_raw")
+        ),
         "ldm_submit_post_submit_provenance_join_gap": bool(
             ldm_submit_summary.get("post_submit_provenance_join_gap")
         ),
@@ -1634,13 +1647,21 @@ def _warning_followup_summary(
         live_auto_decision = "pass_live_auto_ready_present"
         live_auto_next_action = "Validate bridge/runtime/preopen uptake for the surfaced live-auto candidates."
 
+    raw_post_submit_join_gap = bool(
+        buy_funnel_submit_drought_handoff.get("ldm_submit_post_submit_provenance_join_gap_raw")
+        or buy_funnel_submit_drought_handoff.get("ldm_submit_post_submit_provenance_join_gap")
+    )
     items = [
         {
             "priority": 1,
             "topic": "submit_drought",
             "decision": (
+                "post_submit_provenance_join_gap_resolved_by_bot_history"
+                if raw_post_submit_join_gap
+                and buy_funnel_submit_drought_handoff.get("ldm_submit_bot_history_exact_mapping_full_coverage")
+                else
                 "post_submit_provenance_join_gap_open"
-                if buy_funnel_submit_drought_handoff.get("ldm_submit_post_submit_provenance_join_gap")
+                if raw_post_submit_join_gap
                 else (
                     "pass_no_submit_drought_critical"
                     if not buy_funnel_submit_drought_handoff.get("critical")
@@ -1669,23 +1690,41 @@ def _warning_followup_summary(
                 "ldm_submit_post_submit_provenance_join_gap": buy_funnel_submit_drought_handoff.get(
                     "ldm_submit_post_submit_provenance_join_gap"
                 ),
+                "ldm_submit_post_submit_provenance_join_gap_raw": buy_funnel_submit_drought_handoff.get(
+                    "ldm_submit_post_submit_provenance_join_gap_raw"
+                ),
                 "ldm_submit_bot_history_backfill_candidate_count": buy_funnel_submit_drought_handoff.get(
                     "ldm_submit_bot_history_backfill_candidate_count"
                 ),
                 "ldm_submit_bot_history_backfill_full_coverage": buy_funnel_submit_drought_handoff.get(
                     "ldm_submit_bot_history_backfill_full_coverage"
                 ),
+                "ldm_submit_bot_history_exact_mapping_count": buy_funnel_submit_drought_handoff.get(
+                    "ldm_submit_bot_history_exact_mapping_count"
+                ),
+                "ldm_submit_bot_history_exact_mapping_full_coverage": buy_funnel_submit_drought_handoff.get(
+                    "ldm_submit_bot_history_exact_mapping_full_coverage"
+                ),
+                "ldm_submit_post_submit_provenance_join_resolution": buy_funnel_submit_drought_handoff.get(
+                    "ldm_submit_post_submit_provenance_join_resolution"
+                ),
             },
             "next_action": (
+                "Exact same-stock bot_history WS buy-order mapping covers every missing broker-key row; use the recovered "
+                "broker_order_no candidates for report/backfill attribution and keep future order_bundle_submitted "
+                "broker-key emission enabled."
+                if raw_post_submit_join_gap
+                and buy_funnel_submit_drought_handoff.get("ldm_submit_bot_history_exact_mapping_full_coverage")
+                else
                 "Bot history contains same-stock WS buy-order candidates for every missing broker-key row; "
                 "verify exact submit-time mapping before treating today's rows as fill-joinable, and keep future "
                 "order_bundle_submitted broker-key emission enabled."
-                if buy_funnel_submit_drought_handoff.get("ldm_submit_post_submit_provenance_join_gap")
+                if raw_post_submit_join_gap
                 and buy_funnel_submit_drought_handoff.get("ldm_submit_bot_history_backfill_full_coverage")
                 else
                 "Future order_bundle_submitted rows must emit broker_order_no/order_no/ord_no/order_response_ord_no; "
                 "today's existing submitted rows cannot be treated as fill-joinable until a broker key is recovered."
-                if buy_funnel_submit_drought_handoff.get("ldm_submit_post_submit_provenance_join_gap")
+                if raw_post_submit_join_gap
                 else (
                     "No submit drought critical condition was active in this verification context."
                     if not buy_funnel_submit_drought_handoff.get("critical")

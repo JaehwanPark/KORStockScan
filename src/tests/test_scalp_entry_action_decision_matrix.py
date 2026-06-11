@@ -707,6 +707,45 @@ def test_scalp_entry_adm_falls_back_to_raw_when_adm_fields_missing(tmp_path, mon
     assert provenance["score_bucket"] == "raw_recomputed"
 
 
+def test_scalp_entry_adm_uses_current_ai_score_as_score_source(tmp_path, monkeypatch):
+    pipeline_dir = tmp_path / "pipeline_events"
+    report_dir = tmp_path / "report" / "scalp_entry_action_decision_matrix"
+    monkeypatch.setattr(mod, "PIPELINE_EVENT_DIR", pipeline_dir)
+    monkeypatch.setattr(mod, "THRESHOLD_EVENT_DIR", tmp_path / "threshold_cycle")
+    monkeypatch.setattr(mod, "THRESHOLD_SNAPSHOT_DIR", tmp_path / "threshold_cycle" / "snapshots")
+    monkeypatch.setattr(mod, "POST_SELL_DIR", tmp_path / "post_sell")
+    monkeypatch.setattr(mod, "ADM_REPORT_DIR", report_dir)
+
+    _write_jsonl(
+        pipeline_dir / "pipeline_events_2026-05-18.jsonl",
+        [
+            {
+                "stage": "ai_confirmed",
+                "stock_code": "111111",
+                "record_id": "R1",
+                "emitted_at": "2026-05-18T09:10:00",
+                "emitted_date": "2026-05-18",
+                "fields": {
+                    "current_ai_score": "66",
+                    "action": "BUY",
+                    "latest_strength": "120",
+                    "quote_age_ms": "300",
+                    "best_ask": "1000",
+                    "trade_value_krw": "300000000",
+                    "intraday_range_pct": "5.0",
+                },
+            }
+        ],
+    )
+
+    report = mod.build_scalp_entry_action_decision_matrix_report("2026-05-18")
+    row = report["rows"][0]
+
+    assert row["score_bucket"] == "score65_74"
+    assert row["score_source_value"] == 66.0
+    assert "score_bucket" not in report["summary"]["unknown_bucket_summary"]["dimension_counts"]
+
+
 def test_scalp_entry_adm_unknown_bucket_summary_separates_unknown_from_not_available(tmp_path, monkeypatch):
     pipeline_dir = tmp_path / "pipeline_events"
     report_dir = tmp_path / "report" / "scalp_entry_action_decision_matrix"

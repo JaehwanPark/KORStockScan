@@ -232,6 +232,22 @@ def _score_bucket(score: Any) -> str:
     return "score85_plus"
 
 
+def _score_source(fields: dict[str, Any]) -> Any:
+    for key in (
+        "ai_score",
+        "ai_score_after_bonus",
+        "current_ai_score",
+        "ai_score_raw",
+        "entry_score",
+        "score",
+        "swing_entry_recovery_gate_score",
+    ):
+        value = fields.get(key)
+        if _safe_float(value, None) is not None:
+            return value
+    return None
+
+
 def _time_bucket(value: Any) -> str:
     return entry_adm_time_bucket(value)
 
@@ -450,7 +466,8 @@ def _base_row(event: dict[str, Any]) -> dict[str, Any]:
     )
     sim_record_id = _nonempty(fields.get("sim_record_id"))
 
-    raw_score_bucket = _score_bucket(fields.get("ai_score") or fields.get("ai_score_after_bonus"))
+    raw_score_value = _score_source(fields)
+    raw_score_bucket = _score_bucket(raw_score_value)
     raw_risk_bucket = _risk_context_bucket(fields, stage=effective_bucket_stage)
     raw_stale = _stale_bucket(fields)
     raw_price = _price_resolution_bucket(fields, stage=effective_bucket_stage)
@@ -482,6 +499,7 @@ def _base_row(event: dict[str, Any]) -> dict[str, Any]:
         "event_time": _nonempty(event.get("emitted_at")),
         "source_path": event.get("_source_path"),
         "ai_score": _safe_float(fields.get("ai_score") or fields.get("ai_score_after_bonus"), None),
+        "score_source_value": _safe_float(raw_score_value, None),
         "ai_action": _nonempty(fields.get("action") or fields.get("ai_action")),
         "chosen_action": action,
         "raw_chosen_action": raw_action,
@@ -804,7 +822,7 @@ def _unknown_bucket_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
                 provenance_value = str(provenance.get(key) or "")
             if provenance_value == "adm_field":
                 unknown_root_causes[f"{key}:adm_field_unknown"] += 1
-            elif key == "score_bucket" and row.get("ai_score") is None:
+            elif key == "score_bucket" and row.get("score_source_value") is None:
                 unknown_root_causes[f"{key}:source_score_missing"] += 1
             elif key == "risk_context_bucket":
                 unknown_root_causes[f"{key}:risk_context_source_missing"] += 1

@@ -2054,6 +2054,35 @@ def _simulated_order_no(prefix: str, code: str) -> str:
     return f"{prefix}-{code}-{int(time.time() * 1000)}-{uuid4().hex[:6]}"
 
 
+def _extract_broker_order_no(response) -> str:
+    if not isinstance(response, dict):
+        return ""
+    candidates = [
+        response.get("ord_no"),
+        response.get("odno"),
+        response.get("order_no"),
+        response.get("broker_order_no"),
+        response.get("order_response_ord_no"),
+    ]
+    for nested_key in ("output", "data", "body"):
+        nested = response.get(nested_key)
+        if isinstance(nested, dict):
+            candidates.extend(
+                [
+                    nested.get("ord_no"),
+                    nested.get("odno"),
+                    nested.get("order_no"),
+                    nested.get("broker_order_no"),
+                    nested.get("order_response_ord_no"),
+                ]
+            )
+    for value in candidates:
+        text = str(value or "").strip()
+        if text:
+            return text
+    return ""
+
+
 def _swing_sim_priority_event_fields(stock: dict | None = None) -> dict:
     stock = stock or {}
     match_fields = _attach_swing_sim_priority_policy(stock)
@@ -13224,7 +13253,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 **real_pre_submit_guard_fields,
             )
             continue
-        ord_no = str(res.get('ord_no', '') or res.get('odno', ''))
+        ord_no = _extract_broker_order_no(res)
         successful_orders.append({
             'tag': request['tag'], 'qty': qty, 'price': price, 'ord_no': ord_no, 'tif': request['tif'],
             'order_type': request['order_type_code'], 'status': 'OPEN', 'filled_qty': 0, 'sent_at': now_ts,
@@ -13249,6 +13278,9 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             "order_leg_sent",
             tag=request['tag'],
             ord_no=ord_no,
+            broker_order_no=ord_no,
+            order_no=ord_no,
+            order_response_ord_no=ord_no,
             **_merge_entry_pipeline_field_groups(
                 real_pre_submit_guard_fields,
             ),
