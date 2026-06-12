@@ -1,0 +1,40 @@
+{
+  "lock_id": "aggressive_entry_price_override_real_operator_override_2026-06-13",
+  "family": "aggressive_entry_price_override_runtime",
+  "stage": "entry",
+  "priority": 900,
+  "enabled": true,
+  "active_from_date": "2026-06-15",
+  "explicit_close_required": true,
+  "reason": "real SCALPING defensive/reference-target missed-upside zero-fill cancel cases on 2026-06-10 through 2026-06-12 repeatedly used over-defensive entry prices and moved up after cancellation",
+  "env_overrides": {
+    "KORSTOCKSCAN_SCALP_AGGRESSIVE_ENTRY_PRICE_OVERRIDE_ENABLED": "true",
+    "KORSTOCKSCAN_SCALP_AGGRESSIVE_ENTRY_PRICE_OVERRIDE_TYPES": "defensive_missed_upside_v1,reference_target_cap_missed_upside_v1",
+    "KORSTOCKSCAN_SCALP_DEFENSIVE_MISSED_UPSIDE_MIN_ORIGINAL_BPS": "35",
+    "KORSTOCKSCAN_SCALP_DEFENSIVE_MISSED_UPSIDE_TARGET_MODE": "best_bid_near",
+    "KORSTOCKSCAN_SCALP_DEFENSIVE_MISSED_UPSIDE_NEUTRAL_BID_MINUS_TICKS": "1",
+    "KORSTOCKSCAN_SCALP_DEFENSIVE_MISSED_UPSIDE_BULLISH_BID_MINUS_TICKS": "0",
+    "KORSTOCKSCAN_SCALP_REFERENCE_TARGET_MISSED_UPSIDE_MIN_BELOW_BID_BPS": "20",
+    "KORSTOCKSCAN_SCALP_REFERENCE_TARGET_MISSED_UPSIDE_TARGET_MODE": "best_bid_near",
+    "KORSTOCKSCAN_SCALP_REFERENCE_TARGET_MISSED_UPSIDE_NEUTRAL_BID_MINUS_TICKS": "1",
+    "KORSTOCKSCAN_SCALP_REFERENCE_TARGET_MISSED_UPSIDE_BULLISH_BID_MINUS_TICKS": "0"
+  },
+  "allowed_close_reason_keywords": [
+    "same_stage_owner_conflict",
+    "dynamic_entry_price_resolver",
+    "live_auto_apply_ready",
+    "tuning_override",
+    "safety_revert_required",
+    "order_provenance_breach",
+    "severe_loss"
+  ],
+  "forbidden_uses": [
+    "sim_probe_authority_change",
+    "provider_route_change",
+    "score_threshold_mutation",
+    "quantity_cap_release",
+    "broker_guard_bypass",
+    "hard_safety_bypass",
+    "dynamic_entry_price_resolver_live_tuning_bypass"
+  ]
+}

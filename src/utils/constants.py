@@ -256,6 +256,14 @@ class TradingConfig:
     SCALP_SOFT_STOP_ABSORPTION_MIN_TICK_ACCEL: float = 0.95
     SCALP_SOFT_STOP_ABSORPTION_MIN_MICRO_VWAP_BP: float = -5.0
     SCALP_SOFT_STOP_ABSORPTION_MAX_TOP3_DEPTH_RATIO: float = 1.35
+    SCALP_SOFT_STOP_DYNAMIC_GRACE_OVERRIDE_ENABLED: bool = False  # real SCALPING operator override; PREOPEN env로만 ON
+    SCALP_SOFT_STOP_DYNAMIC_GRACE_WEAK_SEC: int = 20
+    SCALP_SOFT_STOP_DYNAMIC_GRACE_BASE_SEC: int = 45
+    SCALP_SOFT_STOP_DYNAMIC_GRACE_STRONG_SEC: int = 90
+    SCALP_SOFT_STOP_DYNAMIC_GRACE_MIN_AI_SCORE: int = 65
+    SCALP_SOFT_STOP_DYNAMIC_GRACE_EMERGENCY_PCT: float = -2.8
+    SCALP_SOFT_STOP_DYNAMIC_GRACE_MAX_WORSEN_PCT: float = 0.30
+    HOLDING_EXIT_LIVE_TUNING_SELECTED: bool = False
     SCALP_SOFT_STOP_THESIS_TICK_ACCEL_MIN: float = 0.60
     SCALP_SOFT_STOP_THESIS_MICRO_VWAP_BP_MIN: float = -20.0
     SCALP_AI_MOMENTUM_DECAY_SCORE_LIMIT: int = 45  # 이 값 미만일 때만 AI 모멘텀 둔화 익절 검토
@@ -289,6 +297,23 @@ class TradingConfig:
     SCALPING_CONDITIONAL_STRONG_DEFENSIVE_BPS: int = 10  # percent_bps 모드 강세 조건 방어 제출가 bp (0.1%)
     SCALPING_NORMAL_FAVORABLE_DEFENSIVE_BPS: int = 35  # percent_bps 모드 우호 micro 방어 제출가 bp
     SCALPING_NORMAL_WEAK_DEFENSIVE_BPS: int = 65  # percent_bps 모드 약한 유동성/넓은 spread 방어 제출가 bp
+    SCALP_REAL_WEAK_PULLBACK_ENTRY_BLOCK_ENABLED: bool = False  # real SCALPING 약한 눌림/CAUTION 진입 차단은 runtime env로만 ON
+    SCALP_REAL_WEAK_PULLBACK_ENTRY_BLOCK_MIN_MICRO_POSITIVES: int = 2
+    SCALP_REAL_WEAK_PULLBACK_ENTRY_BLOCK_MIN_SPREAD_TICKS: int = 5
+    SCALP_AGGRESSIVE_ENTRY_PRICE_OVERRIDE_ENABLED: bool = False  # real SCALPING missed-upside 가격 override는 PREOPEN env로만 ON
+    SCALP_AGGRESSIVE_ENTRY_PRICE_OVERRIDE_TYPES: str = (
+        "defensive_missed_upside_v1,reference_target_cap_missed_upside_v1"
+    )
+    SCALP_DEFENSIVE_MISSED_UPSIDE_MIN_ORIGINAL_BPS: int = 35
+    SCALP_DEFENSIVE_MISSED_UPSIDE_TARGET_MODE: str = "best_bid_near"
+    SCALP_DEFENSIVE_MISSED_UPSIDE_NEUTRAL_BID_MINUS_TICKS: int = 1
+    SCALP_DEFENSIVE_MISSED_UPSIDE_BULLISH_BID_MINUS_TICKS: int = 0
+    SCALP_REFERENCE_TARGET_MISSED_UPSIDE_MIN_BELOW_BID_BPS: int = 20
+    SCALP_REFERENCE_TARGET_MISSED_UPSIDE_TARGET_MODE: str = "best_bid_near"
+    SCALP_REFERENCE_TARGET_MISSED_UPSIDE_NEUTRAL_BID_MINUS_TICKS: int = 1
+    SCALP_REFERENCE_TARGET_MISSED_UPSIDE_BULLISH_BID_MINUS_TICKS: int = 0
+    DYNAMIC_ENTRY_PRICE_RESOLVER_LIVE_SELECTED: bool = False
+    ENTRY_PRICE_LIVE_TUNING_SELECTED: bool = False
     SCALPING_ENTRY_PRICE_DEFENSE_MODE: str = "tick"  # tick | percent_bps
     SCALPING_CONDITIONAL_1TICK_REAL_ENABLED: bool = True  # real SCALPING 강한 micro 조건에서 1틱 제출 허용
     SCALPING_CONDITIONAL_1TICK_MIN_BUY_RATIO: float = 60.0  # 1틱 허용 최소 매수 체결비율(%)
@@ -1145,6 +1170,51 @@ def _build_trading_rules() -> TradingConfig:
         "KORSTOCKSCAN_SCALPING_NORMAL_FAVORABLE_DEFENSIVE_BPS"
     )
     env_scalping_normal_weak_defensive_bps = _env_int("KORSTOCKSCAN_SCALPING_NORMAL_WEAK_DEFENSIVE_BPS")
+    env_scalp_real_weak_pullback_entry_block_enabled = _env_bool(
+        "KORSTOCKSCAN_SCALP_REAL_WEAK_PULLBACK_ENTRY_BLOCK_ENABLED"
+    )
+    env_scalp_real_weak_pullback_entry_block_min_micro_positives = _env_int(
+        "KORSTOCKSCAN_SCALP_REAL_WEAK_PULLBACK_ENTRY_BLOCK_MIN_MICRO_POSITIVES"
+    )
+    env_scalp_real_weak_pullback_entry_block_min_spread_ticks = _env_int(
+        "KORSTOCKSCAN_SCALP_REAL_WEAK_PULLBACK_ENTRY_BLOCK_MIN_SPREAD_TICKS"
+    )
+    env_scalp_aggressive_entry_price_override_enabled = _env_bool(
+        "KORSTOCKSCAN_SCALP_AGGRESSIVE_ENTRY_PRICE_OVERRIDE_ENABLED"
+    )
+    env_scalp_aggressive_entry_price_override_types = _env_str(
+        "KORSTOCKSCAN_SCALP_AGGRESSIVE_ENTRY_PRICE_OVERRIDE_TYPES"
+    )
+    env_scalp_defensive_missed_upside_min_original_bps = _env_int(
+        "KORSTOCKSCAN_SCALP_DEFENSIVE_MISSED_UPSIDE_MIN_ORIGINAL_BPS"
+    )
+    env_scalp_defensive_missed_upside_target_mode = _env_str(
+        "KORSTOCKSCAN_SCALP_DEFENSIVE_MISSED_UPSIDE_TARGET_MODE"
+    )
+    env_scalp_defensive_missed_upside_neutral_bid_minus_ticks = _env_int(
+        "KORSTOCKSCAN_SCALP_DEFENSIVE_MISSED_UPSIDE_NEUTRAL_BID_MINUS_TICKS"
+    )
+    env_scalp_defensive_missed_upside_bullish_bid_minus_ticks = _env_int(
+        "KORSTOCKSCAN_SCALP_DEFENSIVE_MISSED_UPSIDE_BULLISH_BID_MINUS_TICKS"
+    )
+    env_scalp_reference_target_missed_upside_min_below_bid_bps = _env_int(
+        "KORSTOCKSCAN_SCALP_REFERENCE_TARGET_MISSED_UPSIDE_MIN_BELOW_BID_BPS"
+    )
+    env_scalp_reference_target_missed_upside_target_mode = _env_str(
+        "KORSTOCKSCAN_SCALP_REFERENCE_TARGET_MISSED_UPSIDE_TARGET_MODE"
+    )
+    env_scalp_reference_target_missed_upside_neutral_bid_minus_ticks = _env_int(
+        "KORSTOCKSCAN_SCALP_REFERENCE_TARGET_MISSED_UPSIDE_NEUTRAL_BID_MINUS_TICKS"
+    )
+    env_scalp_reference_target_missed_upside_bullish_bid_minus_ticks = _env_int(
+        "KORSTOCKSCAN_SCALP_REFERENCE_TARGET_MISSED_UPSIDE_BULLISH_BID_MINUS_TICKS"
+    )
+    env_dynamic_entry_price_resolver_live_selected = _env_bool(
+        "KORSTOCKSCAN_DYNAMIC_ENTRY_PRICE_RESOLVER_LIVE_SELECTED"
+    )
+    env_entry_price_live_tuning_selected = _env_bool(
+        "KORSTOCKSCAN_ENTRY_PRICE_LIVE_TUNING_SELECTED"
+    )
     env_scalping_entry_price_defense_mode = _env_str("KORSTOCKSCAN_SCALPING_ENTRY_PRICE_DEFENSE_MODE")
     env_conditional_1tick_real_enabled = _env_bool("KORSTOCKSCAN_SCALPING_CONDITIONAL_1TICK_REAL_ENABLED")
     env_conditional_1tick_min_buy_ratio = _env_float("KORSTOCKSCAN_SCALPING_CONDITIONAL_1TICK_MIN_BUY_RATIO")
@@ -1212,6 +1282,18 @@ def _build_trading_rules() -> TradingConfig:
     env_soft_stop_whipsaw_sec = _env_int("KORSTOCKSCAN_SCALP_SOFT_STOP_WHIPSAW_CONFIRMATION_SEC")
     env_soft_stop_whipsaw_buffer = _env_float("KORSTOCKSCAN_SCALP_SOFT_STOP_WHIPSAW_CONFIRMATION_BUFFER_PCT")
     env_soft_stop_whipsaw_worsen = _env_float("KORSTOCKSCAN_SCALP_SOFT_STOP_WHIPSAW_CONFIRMATION_MAX_WORSEN_PCT")
+    env_soft_stop_dynamic_grace_enabled = _env_bool(
+        "KORSTOCKSCAN_SCALP_SOFT_STOP_DYNAMIC_GRACE_OVERRIDE_ENABLED"
+    )
+    env_soft_stop_dynamic_grace_weak_sec = _env_int("KORSTOCKSCAN_SCALP_SOFT_STOP_DYNAMIC_GRACE_WEAK_SEC")
+    env_soft_stop_dynamic_grace_base_sec = _env_int("KORSTOCKSCAN_SCALP_SOFT_STOP_DYNAMIC_GRACE_BASE_SEC")
+    env_soft_stop_dynamic_grace_strong_sec = _env_int("KORSTOCKSCAN_SCALP_SOFT_STOP_DYNAMIC_GRACE_STRONG_SEC")
+    env_soft_stop_dynamic_grace_min_ai = _env_int("KORSTOCKSCAN_SCALP_SOFT_STOP_DYNAMIC_GRACE_MIN_AI_SCORE")
+    env_soft_stop_dynamic_grace_emergency = _env_float("KORSTOCKSCAN_SCALP_SOFT_STOP_DYNAMIC_GRACE_EMERGENCY_PCT")
+    env_soft_stop_dynamic_grace_max_worsen = _env_float(
+        "KORSTOCKSCAN_SCALP_SOFT_STOP_DYNAMIC_GRACE_MAX_WORSEN_PCT"
+    )
+    env_holding_exit_live_tuning_selected = _env_bool("KORSTOCKSCAN_HOLDING_EXIT_LIVE_TUNING_SELECTED")
     env_scalp_safe_profit = _env_float("KORSTOCKSCAN_SCALP_SAFE_PROFIT")
     env_profit_stagnation_enabled = _env_bool("KORSTOCKSCAN_SCALP_PROFIT_STAGNATION_EXIT_ENABLED")
     env_profit_stagnation_min_profit = _env_float("KORSTOCKSCAN_SCALP_PROFIT_STAGNATION_MIN_PROFIT_PCT")
@@ -1306,6 +1388,14 @@ def _build_trading_rules() -> TradingConfig:
         or env_soft_stop_whipsaw_sec is not None
         or env_soft_stop_whipsaw_buffer is not None
         or env_soft_stop_whipsaw_worsen is not None
+        or env_soft_stop_dynamic_grace_enabled is not None
+        or env_soft_stop_dynamic_grace_weak_sec is not None
+        or env_soft_stop_dynamic_grace_base_sec is not None
+        or env_soft_stop_dynamic_grace_strong_sec is not None
+        or env_soft_stop_dynamic_grace_min_ai is not None
+        or env_soft_stop_dynamic_grace_emergency is not None
+        or env_soft_stop_dynamic_grace_max_worsen is not None
+        or env_holding_exit_live_tuning_selected is not None
         or env_scalp_safe_profit is not None
         or env_profit_stagnation_enabled is not None
         or env_profit_stagnation_min_profit is not None
@@ -1404,6 +1494,51 @@ def _build_trading_rules() -> TradingConfig:
             SCALPING_NORMAL_WEAK_DEFENSIVE_BPS=env_scalping_normal_weak_defensive_bps
             if env_scalping_normal_weak_defensive_bps is not None
             else config.SCALPING_NORMAL_WEAK_DEFENSIVE_BPS,
+            SCALP_REAL_WEAK_PULLBACK_ENTRY_BLOCK_ENABLED=env_scalp_real_weak_pullback_entry_block_enabled
+            if env_scalp_real_weak_pullback_entry_block_enabled is not None
+            else config.SCALP_REAL_WEAK_PULLBACK_ENTRY_BLOCK_ENABLED,
+            SCALP_REAL_WEAK_PULLBACK_ENTRY_BLOCK_MIN_MICRO_POSITIVES=env_scalp_real_weak_pullback_entry_block_min_micro_positives
+            if env_scalp_real_weak_pullback_entry_block_min_micro_positives is not None
+            else config.SCALP_REAL_WEAK_PULLBACK_ENTRY_BLOCK_MIN_MICRO_POSITIVES,
+            SCALP_REAL_WEAK_PULLBACK_ENTRY_BLOCK_MIN_SPREAD_TICKS=env_scalp_real_weak_pullback_entry_block_min_spread_ticks
+            if env_scalp_real_weak_pullback_entry_block_min_spread_ticks is not None
+            else config.SCALP_REAL_WEAK_PULLBACK_ENTRY_BLOCK_MIN_SPREAD_TICKS,
+            SCALP_AGGRESSIVE_ENTRY_PRICE_OVERRIDE_ENABLED=env_scalp_aggressive_entry_price_override_enabled
+            if env_scalp_aggressive_entry_price_override_enabled is not None
+            else config.SCALP_AGGRESSIVE_ENTRY_PRICE_OVERRIDE_ENABLED,
+            SCALP_AGGRESSIVE_ENTRY_PRICE_OVERRIDE_TYPES=env_scalp_aggressive_entry_price_override_types
+            if env_scalp_aggressive_entry_price_override_types is not None
+            else config.SCALP_AGGRESSIVE_ENTRY_PRICE_OVERRIDE_TYPES,
+            SCALP_DEFENSIVE_MISSED_UPSIDE_MIN_ORIGINAL_BPS=env_scalp_defensive_missed_upside_min_original_bps
+            if env_scalp_defensive_missed_upside_min_original_bps is not None
+            else config.SCALP_DEFENSIVE_MISSED_UPSIDE_MIN_ORIGINAL_BPS,
+            SCALP_DEFENSIVE_MISSED_UPSIDE_TARGET_MODE=env_scalp_defensive_missed_upside_target_mode
+            if env_scalp_defensive_missed_upside_target_mode is not None
+            else config.SCALP_DEFENSIVE_MISSED_UPSIDE_TARGET_MODE,
+            SCALP_DEFENSIVE_MISSED_UPSIDE_NEUTRAL_BID_MINUS_TICKS=env_scalp_defensive_missed_upside_neutral_bid_minus_ticks
+            if env_scalp_defensive_missed_upside_neutral_bid_minus_ticks is not None
+            else config.SCALP_DEFENSIVE_MISSED_UPSIDE_NEUTRAL_BID_MINUS_TICKS,
+            SCALP_DEFENSIVE_MISSED_UPSIDE_BULLISH_BID_MINUS_TICKS=env_scalp_defensive_missed_upside_bullish_bid_minus_ticks
+            if env_scalp_defensive_missed_upside_bullish_bid_minus_ticks is not None
+            else config.SCALP_DEFENSIVE_MISSED_UPSIDE_BULLISH_BID_MINUS_TICKS,
+            SCALP_REFERENCE_TARGET_MISSED_UPSIDE_MIN_BELOW_BID_BPS=env_scalp_reference_target_missed_upside_min_below_bid_bps
+            if env_scalp_reference_target_missed_upside_min_below_bid_bps is not None
+            else config.SCALP_REFERENCE_TARGET_MISSED_UPSIDE_MIN_BELOW_BID_BPS,
+            SCALP_REFERENCE_TARGET_MISSED_UPSIDE_TARGET_MODE=env_scalp_reference_target_missed_upside_target_mode
+            if env_scalp_reference_target_missed_upside_target_mode is not None
+            else config.SCALP_REFERENCE_TARGET_MISSED_UPSIDE_TARGET_MODE,
+            SCALP_REFERENCE_TARGET_MISSED_UPSIDE_NEUTRAL_BID_MINUS_TICKS=env_scalp_reference_target_missed_upside_neutral_bid_minus_ticks
+            if env_scalp_reference_target_missed_upside_neutral_bid_minus_ticks is not None
+            else config.SCALP_REFERENCE_TARGET_MISSED_UPSIDE_NEUTRAL_BID_MINUS_TICKS,
+            SCALP_REFERENCE_TARGET_MISSED_UPSIDE_BULLISH_BID_MINUS_TICKS=env_scalp_reference_target_missed_upside_bullish_bid_minus_ticks
+            if env_scalp_reference_target_missed_upside_bullish_bid_minus_ticks is not None
+            else config.SCALP_REFERENCE_TARGET_MISSED_UPSIDE_BULLISH_BID_MINUS_TICKS,
+            DYNAMIC_ENTRY_PRICE_RESOLVER_LIVE_SELECTED=env_dynamic_entry_price_resolver_live_selected
+            if env_dynamic_entry_price_resolver_live_selected is not None
+            else config.DYNAMIC_ENTRY_PRICE_RESOLVER_LIVE_SELECTED,
+            ENTRY_PRICE_LIVE_TUNING_SELECTED=env_entry_price_live_tuning_selected
+            if env_entry_price_live_tuning_selected is not None
+            else config.ENTRY_PRICE_LIVE_TUNING_SELECTED,
             SCALPING_ENTRY_PRICE_DEFENSE_MODE=env_scalping_entry_price_defense_mode
             if env_scalping_entry_price_defense_mode is not None
             else config.SCALPING_ENTRY_PRICE_DEFENSE_MODE,
@@ -1569,6 +1704,30 @@ def _build_trading_rules() -> TradingConfig:
             SCALP_SOFT_STOP_WHIPSAW_CONFIRMATION_MAX_WORSEN_PCT=env_soft_stop_whipsaw_worsen
             if env_soft_stop_whipsaw_worsen is not None
             else config.SCALP_SOFT_STOP_WHIPSAW_CONFIRMATION_MAX_WORSEN_PCT,
+            SCALP_SOFT_STOP_DYNAMIC_GRACE_OVERRIDE_ENABLED=env_soft_stop_dynamic_grace_enabled
+            if env_soft_stop_dynamic_grace_enabled is not None
+            else config.SCALP_SOFT_STOP_DYNAMIC_GRACE_OVERRIDE_ENABLED,
+            SCALP_SOFT_STOP_DYNAMIC_GRACE_WEAK_SEC=env_soft_stop_dynamic_grace_weak_sec
+            if env_soft_stop_dynamic_grace_weak_sec is not None
+            else config.SCALP_SOFT_STOP_DYNAMIC_GRACE_WEAK_SEC,
+            SCALP_SOFT_STOP_DYNAMIC_GRACE_BASE_SEC=env_soft_stop_dynamic_grace_base_sec
+            if env_soft_stop_dynamic_grace_base_sec is not None
+            else config.SCALP_SOFT_STOP_DYNAMIC_GRACE_BASE_SEC,
+            SCALP_SOFT_STOP_DYNAMIC_GRACE_STRONG_SEC=env_soft_stop_dynamic_grace_strong_sec
+            if env_soft_stop_dynamic_grace_strong_sec is not None
+            else config.SCALP_SOFT_STOP_DYNAMIC_GRACE_STRONG_SEC,
+            SCALP_SOFT_STOP_DYNAMIC_GRACE_MIN_AI_SCORE=env_soft_stop_dynamic_grace_min_ai
+            if env_soft_stop_dynamic_grace_min_ai is not None
+            else config.SCALP_SOFT_STOP_DYNAMIC_GRACE_MIN_AI_SCORE,
+            SCALP_SOFT_STOP_DYNAMIC_GRACE_EMERGENCY_PCT=env_soft_stop_dynamic_grace_emergency
+            if env_soft_stop_dynamic_grace_emergency is not None
+            else config.SCALP_SOFT_STOP_DYNAMIC_GRACE_EMERGENCY_PCT,
+            SCALP_SOFT_STOP_DYNAMIC_GRACE_MAX_WORSEN_PCT=env_soft_stop_dynamic_grace_max_worsen
+            if env_soft_stop_dynamic_grace_max_worsen is not None
+            else config.SCALP_SOFT_STOP_DYNAMIC_GRACE_MAX_WORSEN_PCT,
+            HOLDING_EXIT_LIVE_TUNING_SELECTED=env_holding_exit_live_tuning_selected
+            if env_holding_exit_live_tuning_selected is not None
+            else config.HOLDING_EXIT_LIVE_TUNING_SELECTED,
             SCALP_SAFE_PROFIT=env_scalp_safe_profit
             if env_scalp_safe_profit is not None
             else config.SCALP_SAFE_PROFIT,

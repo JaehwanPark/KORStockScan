@@ -2,9 +2,9 @@
 
 - owner: `SwingModelSelectionFunnelRepair`
 - selection_mode: `SELECTED`
-- selected_count: `2`
+- selected_count: `3`
 - fallback_written_to_recommendations: `False`
-- csv_rows: `2`
+- csv_rows: `3`
 - db_rows: `26`
 - db_load_gap: `False`
 - db_load_skip_reason: `loaded`
@@ -22,7 +22,7 @@
 | `gatekeeper_fast_reuse_bypass` | 5133 | 24 |
 | `gatekeeper_reject_cache_reuse` | 3181 | 24 |
 | `holding_flow_ofi_smoothing_applied` | 274 | 95 |
-| `holding_started` | 27 | 1 |
+| `holding_started` | 31 | 1 |
 | `market_regime_prior_observed` | 10392 | 26 |
 | `swing_entry_micro_context_observed` | 10388 | 26 |
 | `swing_probe_discarded` | 4645 | 16 |

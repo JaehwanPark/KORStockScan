@@ -165,6 +165,216 @@ def _normal_weak_defensive_bps() -> int:
     return max(1, int(getattr(TRADING_RULES, "SCALPING_NORMAL_WEAK_DEFENSIVE_BPS", 65) or 65))
 
 
+def _aggressive_entry_price_override_enabled() -> bool:
+    return bool(getattr(TRADING_RULES, "SCALP_AGGRESSIVE_ENTRY_PRICE_OVERRIDE_ENABLED", False))
+
+
+def _dynamic_entry_price_resolver_live_selected() -> bool:
+    return bool(getattr(TRADING_RULES, "DYNAMIC_ENTRY_PRICE_RESOLVER_LIVE_SELECTED", False)) or bool(
+        getattr(TRADING_RULES, "ENTRY_PRICE_LIVE_TUNING_SELECTED", False)
+    )
+
+
+def _aggressive_entry_price_override_types() -> set[str]:
+    raw = str(
+        getattr(
+            TRADING_RULES,
+            "SCALP_AGGRESSIVE_ENTRY_PRICE_OVERRIDE_TYPES",
+            "defensive_missed_upside_v1,reference_target_cap_missed_upside_v1",
+        )
+        or ""
+    )
+    return {item.strip() for item in raw.split(",") if item.strip()}
+
+
+def _micro_state_from_inputs(stock: dict[str, Any] | None, ws_data: dict[str, Any] | None) -> str:
+    for source in (stock, ws_data):
+        if isinstance(source, dict):
+            state = str(source.get("orderbook_micro_state") or source.get("micro_state") or "").strip().lower()
+            if state:
+                return state
+    return "neutral"
+
+
+def _weak_pullback_like_context(stock: dict[str, Any] | None, positive_signal_count: int) -> bool:
+    if positive_signal_count > 0:
+        return False
+    context = stock.get("scalp_pre_ai_gate_context") if isinstance(stock, dict) else {}
+    strength = context.get("strength_momentum") if isinstance(context, dict) else {}
+    strength = strength if isinstance(strength, dict) else {}
+    state = str(
+        strength.get("risk_state")
+        or strength.get("state")
+        or (stock or {}).get("entry_strength_momentum_risk_state")
+        or ""
+    ).strip()
+    reason = str(strength.get("reason") or (stock or {}).get("entry_strength_momentum_reason") or "").strip()
+    return state in {"weak_momentum_context", "below_static_vpw_context"} or reason in {
+        "below_buy_ratio",
+        "below_window_buy_value",
+    }
+
+
+def _defensive_missed_upside_aggressive_entry_override(
+    *,
+    stock: dict[str, Any] | None,
+    ws_data: dict[str, Any] | None,
+    strategy_id: str,
+    gap_profile: dict[str, Any],
+    applied_bps: int,
+    best_bid: int,
+    best_ask: int,
+    defensive_order_price: int,
+    is_latency_override: bool,
+    quote_stale: bool,
+) -> dict[str, Any]:
+    if not _aggressive_entry_price_override_enabled():
+        return {"applied": False, "reason": "disabled"}
+    if _dynamic_entry_price_resolver_live_selected():
+        return {"applied": False, "reason": "dynamic_entry_price_resolver_live_selected"}
+    if "defensive_missed_upside_v1" not in _aggressive_entry_price_override_types():
+        return {"applied": False, "reason": "type_disabled"}
+    if str(strategy_id or "").upper() not in {"SCALPING", "SCALP"}:
+        return {"applied": False, "reason": "non_scalping"}
+    if is_latency_override:
+        return {"applied": False, "reason": "latency_override"}
+    if quote_stale:
+        return {"applied": False, "reason": "quote_stale"}
+    if best_bid <= 0 or defensive_order_price <= 0:
+        return {"applied": False, "reason": "missing_bid_or_defensive_price"}
+
+    profile = str(gap_profile.get("profile") or "")
+    if profile not in {"normal", "favorable_micro", "favorable_wide_micro", "weak_liquidity_wide_spread"}:
+        return {"applied": False, "reason": "profile_not_eligible"}
+    min_bps = max(1, int(getattr(TRADING_RULES, "SCALP_DEFENSIVE_MISSED_UPSIDE_MIN_ORIGINAL_BPS", 35) or 35))
+    if int(applied_bps or 0) < min_bps:
+        return {"applied": False, "reason": "original_bps_below_min"}
+
+    context = gap_profile.get("context") if isinstance(gap_profile.get("context"), dict) else {}
+    positive_signal_count = int(context.get("positive_signal_count") or 0)
+    micro_state = _micro_state_from_inputs(stock, ws_data)
+    if micro_state not in {"neutral", "bullish", "strong_bullish"} and positive_signal_count <= 0:
+        return {"applied": False, "reason": "micro_not_eligible"}
+    if _weak_pullback_like_context(stock, positive_signal_count):
+        return {"applied": False, "reason": "weak_pullback_like_context"}
+
+    target_mode = str(
+        getattr(TRADING_RULES, "SCALP_DEFENSIVE_MISSED_UPSIDE_TARGET_MODE", "best_bid_near") or "best_bid_near"
+    ).strip()
+    bullish = micro_state in {"bullish", "strong_bullish"} or positive_signal_count > 0
+    minus_ticks = (
+        int(getattr(TRADING_RULES, "SCALP_DEFENSIVE_MISSED_UPSIDE_BULLISH_BID_MINUS_TICKS", 0) or 0)
+        if bullish
+        else int(getattr(TRADING_RULES, "SCALP_DEFENSIVE_MISSED_UPSIDE_NEUTRAL_BID_MINUS_TICKS", 1) or 1)
+    )
+    minus_ticks = max(0, minus_ticks)
+    target_price = move_price_by_ticks(best_bid, -minus_ticks) if minus_ticks else int(best_bid)
+    if best_ask > 0:
+        target_price = min(target_price, best_ask)
+    if target_price <= defensive_order_price:
+        return {"applied": False, "reason": "target_not_more_aggressive"}
+    return {
+        "applied": True,
+        "type": "defensive_missed_upside_v1",
+        "reason": "defensive_price_missed_upside_best_bid_near",
+        "target_mode": target_mode,
+        "target_price": int(target_price),
+        "minus_ticks": minus_ticks,
+        "micro_state": micro_state,
+        "positive_signal_count": positive_signal_count,
+        "original_profile": profile,
+        "original_bps": int(applied_bps or 0),
+    }
+
+
+def _reference_target_cap_missed_upside_aggressive_entry_override(
+    *,
+    stock: dict[str, Any] | None,
+    ws_data: dict[str, Any] | None,
+    strategy_id: str,
+    gap_profile: dict[str, Any],
+    applied_bps: int,
+    best_bid: int,
+    best_ask: int,
+    defensive_order_price: int,
+    target_buy_price: int,
+    is_latency_override: bool,
+    quote_stale: bool,
+) -> dict[str, Any]:
+    if not _aggressive_entry_price_override_enabled():
+        return {"applied": False, "reason": "disabled"}
+    if _dynamic_entry_price_resolver_live_selected():
+        return {"applied": False, "reason": "dynamic_entry_price_resolver_live_selected"}
+    if "reference_target_cap_missed_upside_v1" not in _aggressive_entry_price_override_types():
+        return {"applied": False, "reason": "type_disabled"}
+    if str(strategy_id or "").upper() not in {"SCALPING", "SCALP"}:
+        return {"applied": False, "reason": "non_scalping"}
+    if is_latency_override:
+        return {"applied": False, "reason": "latency_override"}
+    if quote_stale:
+        return {"applied": False, "reason": "quote_stale"}
+    if best_bid <= 0 or defensive_order_price <= 0:
+        return {"applied": False, "reason": "missing_bid_or_defensive_price"}
+    if int(target_buy_price or 0) <= 0:
+        return {"applied": False, "reason": "missing_reference_target"}
+    if int(target_buy_price) >= best_bid:
+        return {"applied": False, "reason": "reference_target_not_below_bid"}
+
+    below_bid_bps = _compute_price_below_bid_bps(int(target_buy_price), int(best_bid))
+    min_bps = max(
+        1,
+        int(getattr(TRADING_RULES, "SCALP_REFERENCE_TARGET_MISSED_UPSIDE_MIN_BELOW_BID_BPS", 20) or 20),
+    )
+    if below_bid_bps < min_bps:
+        return {
+            "applied": False,
+            "reason": "reference_target_below_bid_bps_below_min",
+            "reference_target_price": int(target_buy_price),
+            "reference_target_below_bid_bps": int(below_bid_bps),
+            "reference_target_missed_upside_min_bps": int(min_bps),
+        }
+
+    context = gap_profile.get("context") if isinstance(gap_profile.get("context"), dict) else {}
+    positive_signal_count = int(context.get("positive_signal_count") or 0)
+    micro_state = _micro_state_from_inputs(stock, ws_data)
+    if micro_state not in {"neutral", "bullish", "strong_bullish"} and positive_signal_count <= 0:
+        return {"applied": False, "reason": "micro_not_eligible"}
+    if _weak_pullback_like_context(stock, positive_signal_count):
+        return {"applied": False, "reason": "weak_pullback_like_context"}
+
+    target_mode = str(
+        getattr(TRADING_RULES, "SCALP_REFERENCE_TARGET_MISSED_UPSIDE_TARGET_MODE", "best_bid_near")
+        or "best_bid_near"
+    ).strip()
+    bullish = micro_state in {"bullish", "strong_bullish"} or positive_signal_count > 0
+    minus_ticks = (
+        int(getattr(TRADING_RULES, "SCALP_REFERENCE_TARGET_MISSED_UPSIDE_BULLISH_BID_MINUS_TICKS", 0) or 0)
+        if bullish
+        else int(getattr(TRADING_RULES, "SCALP_REFERENCE_TARGET_MISSED_UPSIDE_NEUTRAL_BID_MINUS_TICKS", 1) or 1)
+    )
+    minus_ticks = max(0, minus_ticks)
+    target_price = move_price_by_ticks(best_bid, -minus_ticks) if minus_ticks else int(best_bid)
+    if best_ask > 0:
+        target_price = min(target_price, best_ask)
+    if target_price <= max(int(defensive_order_price), int(target_buy_price)):
+        return {"applied": False, "reason": "target_not_more_aggressive"}
+    return {
+        "applied": True,
+        "type": "reference_target_cap_missed_upside_v1",
+        "reason": "reference_target_cap_missed_upside_best_bid_near",
+        "target_mode": target_mode,
+        "target_price": int(target_price),
+        "minus_ticks": minus_ticks,
+        "micro_state": micro_state,
+        "positive_signal_count": positive_signal_count,
+        "original_profile": str(gap_profile.get("profile") or ""),
+        "original_bps": int(applied_bps or 0),
+        "reference_target_price": int(target_buy_price),
+        "reference_target_below_bid_bps": int(below_bid_bps),
+        "reference_target_missed_upside_min_bps": int(min_bps),
+    }
+
+
 def _normal_market_gap_profile(
     conditional_context: dict[str, Any],
     *,
@@ -1346,21 +1556,117 @@ def evaluate_live_buy_entry(
                 applied_bps = 0
                 gap_profile.update(profile="latency_override", bps=0, reason="latency_override_keeps_defensive")
             else:
-                order_price = move_price_down_by_bps(latest_price, applied_bps, floor_ticks=1)
+                defensive_price = move_price_down_by_bps(latest_price, applied_bps, floor_ticks=1)
+                aggressive_override = _reference_target_cap_missed_upside_aggressive_entry_override(
+                    stock=stock,
+                    ws_data=ws_data,
+                    strategy_id=strategy_id,
+                    gap_profile=gap_profile,
+                    applied_bps=applied_bps,
+                    best_bid=best_bid,
+                    best_ask=best_ask,
+                    defensive_order_price=defensive_price,
+                    target_buy_price=int(target_buy_price or 0),
+                    is_latency_override=is_latency_override,
+                    quote_stale=bool(latency.quote_stale),
+                )
+                if not aggressive_override.get("applied"):
+                    defensive_override = _defensive_missed_upside_aggressive_entry_override(
+                        stock=stock,
+                        ws_data=ws_data,
+                        strategy_id=strategy_id,
+                        gap_profile=gap_profile,
+                        applied_bps=applied_bps,
+                        best_bid=best_bid,
+                        best_ask=best_ask,
+                        defensive_order_price=defensive_price,
+                        is_latency_override=is_latency_override,
+                        quote_stale=bool(latency.quote_stale),
+                    )
+                    if defensive_override.get("applied") or aggressive_override.get("reason") == "type_disabled":
+                        aggressive_override = defensive_override
+                if aggressive_override.get("applied"):
+                    order_price = int(aggressive_override.get("target_price") or defensive_price)
+                    override_type = str(aggressive_override.get("type") or "")
+                    gap_profile.update(
+                        profile=override_type,
+                        bps=int(aggressive_override.get("original_bps") or applied_bps),
+                        reason=str(aggressive_override.get("reason")),
+                    )
+                    gap_profile["context"] = {
+                        **(gap_profile.get("context") if isinstance(gap_profile.get("context"), dict) else {}),
+                        "aggressive_entry_price_override_applied": True,
+                        "aggressive_entry_price_override_type": override_type,
+                        "aggressive_entry_price_override_reason": str(aggressive_override.get("reason")),
+                        "aggressive_entry_price_original_profile": str(aggressive_override.get("original_profile")),
+                        "aggressive_entry_price_original_bps": int(aggressive_override.get("original_bps") or applied_bps),
+                        "aggressive_entry_price_target_mode": str(aggressive_override.get("target_mode")),
+                        "aggressive_entry_price_order_price": int(order_price),
+                        "aggressive_entry_price_minus_ticks": int(aggressive_override.get("minus_ticks") or 0),
+                        "aggressive_entry_price_micro_state": str(aggressive_override.get("micro_state") or ""),
+                    }
+                    if "reference_target_price" in aggressive_override:
+                        gap_profile["context"].update(
+                            {
+                                "reference_target_price": int(aggressive_override.get("reference_target_price") or 0),
+                                "reference_target_below_bid_bps": int(
+                                    aggressive_override.get("reference_target_below_bid_bps") or 0
+                                ),
+                                "reference_target_missed_upside_min_bps": int(
+                                    aggressive_override.get("reference_target_missed_upside_min_bps") or 0
+                                ),
+                            }
+                        )
+                    entry_price_guard = (
+                        "reference_target_cap_missed_upside_aggressive_entry"
+                        if override_type == "reference_target_cap_missed_upside_v1"
+                        else "defensive_missed_upside_aggressive_entry"
+                    )
+                else:
+                    order_price = defensive_price
+                    gap_profile["context"] = {
+                        **(gap_profile.get("context") if isinstance(gap_profile.get("context"), dict) else {}),
+                        "aggressive_entry_price_override_skip_reason": str(
+                            aggressive_override.get("reason") or ""
+                        ),
+                    }
                 defensive_ticks = 0
+                aggressive_override_applied = bool(aggressive_override.get("applied"))
+                reference_target_override_diagnostics = aggressive_override
+            if is_latency_override:
+                aggressive_override_applied = False
+                reference_target_override_diagnostics = {}
 
             normal_defensive_order_price = move_price_down_by_bps(
                 latest_price, normal_defensive_bps, floor_ticks=1
             )
             latency_guarded_order_price = order_price
             counterfactual_order_price_1tick = move_price_by_ticks(latest_price, -1)
-            price_resolution = _resolve_scalping_order_price(
-                strategy_id=strategy_id,
-                defensive_order_price=order_price,
-                target_buy_price=int(target_buy_price or 0),
-                best_bid=best_bid,
-            )
-            if int(target_buy_price or 0) > 0:
+            if aggressive_override_applied:
+                price_resolution = {
+                    "order_price": int(order_price),
+                    "price_resolution_reason": "aggressive_entry_price_override",
+                    "reference_target_applied": False,
+                    "reference_target_rejected_reason": "aggressive_entry_price_override_applied",
+                    "reference_target_below_bid_bps": int(
+                        reference_target_override_diagnostics.get("reference_target_below_bid_bps")
+                        or _compute_price_below_bid_bps(int(target_buy_price or 0), best_bid)
+                    ),
+                    "reference_target_max_below_bid_bps": int(
+                        getattr(TRADING_RULES, "SCALPING_ENTRY_PRICE_RESOLVER_MAX_BELOW_BID_BPS", 80)
+                    ),
+                    "entry_price_resolver_enabled": bool(
+                        getattr(TRADING_RULES, "SCALPING_ENTRY_PRICE_RESOLVER_ENABLED", True)
+                    ),
+                }
+            else:
+                price_resolution = _resolve_scalping_order_price(
+                    strategy_id=strategy_id,
+                    defensive_order_price=order_price,
+                    target_buy_price=int(target_buy_price or 0),
+                    best_bid=best_bid,
+                )
+            if int(target_buy_price or 0) > 0 and not aggressive_override_applied:
                 target_cap = int(target_buy_price)
                 counterfactual_order_price_1tick = min(counterfactual_order_price_1tick, target_cap)
                 order_price = int(price_resolution.get("order_price", order_price) or order_price)
@@ -1376,6 +1682,46 @@ def evaluate_live_buy_entry(
             result["entry_price_gap_profile_bps"] = int(gap_profile.get("bps", applied_bps) or applied_bps)
             result["entry_price_gap_profile_reason"] = str(gap_profile.get("reason") or "")
             result["entry_price_gap_profile_context"] = gap_profile.get("context", {})
+            result["aggressive_entry_price_override_applied"] = bool(
+                (gap_profile.get("context") or {}).get("aggressive_entry_price_override_applied")
+                if isinstance(gap_profile.get("context"), dict)
+                else False
+            )
+            result["aggressive_entry_price_override_type"] = str(
+                (gap_profile.get("context") or {}).get("aggressive_entry_price_override_type", "")
+                if isinstance(gap_profile.get("context"), dict)
+                else ""
+            )
+            result["aggressive_entry_price_override_reason"] = str(
+                (gap_profile.get("context") or {}).get("aggressive_entry_price_override_reason", "")
+                if isinstance(gap_profile.get("context"), dict)
+                else ""
+            )
+            result["aggressive_entry_price_override_skip_reason"] = str(
+                (gap_profile.get("context") or {}).get("aggressive_entry_price_override_skip_reason", "")
+                if isinstance(gap_profile.get("context"), dict)
+                else ""
+            )
+            result["aggressive_entry_price_original_profile"] = str(
+                (gap_profile.get("context") or {}).get("aggressive_entry_price_original_profile", "")
+                if isinstance(gap_profile.get("context"), dict)
+                else ""
+            )
+            result["aggressive_entry_price_original_bps"] = int(
+                (gap_profile.get("context") or {}).get("aggressive_entry_price_original_bps", 0)
+                if isinstance(gap_profile.get("context"), dict)
+                else 0
+            )
+            result["aggressive_entry_price_target_mode"] = str(
+                (gap_profile.get("context") or {}).get("aggressive_entry_price_target_mode", "")
+                if isinstance(gap_profile.get("context"), dict)
+                else ""
+            )
+            result["aggressive_entry_price_order_price"] = int(
+                (gap_profile.get("context") or {}).get("aggressive_entry_price_order_price", 0)
+                if isinstance(gap_profile.get("context"), dict)
+                else 0
+            )
             result["normal_defensive_order_price"] = int(normal_defensive_order_price)
             result["latency_guarded_order_price"] = int(latency_guarded_order_price)
             result["counterfactual_order_price_1tick"] = int(counterfactual_order_price_1tick)

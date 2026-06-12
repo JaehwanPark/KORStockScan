@@ -201,7 +201,9 @@ def test_diagnostic_artifact_is_explicitly_non_authoritative(tmp_path):
     assert report["transition_guard"]["eligible"] is False
     assert report["metrics"]["regular_observed_count"] == 1
     assert report["metrics"]["projection_observed_count"] == 0
-    assert report["metrics"]["valid_response_count"] == 0
+    assert report["metrics"]["primary_observation_stage"] == "ai_confirmed"
+    assert report["metrics"]["primary_observation_count"] == 1
+    assert report["metrics"]["valid_response_count"] == 1
     assert (tmp_path / "report" / "ai_watching_score_smoothing_diagnostic" / "ai_watching_score_smoothing_diagnostic_2026-06-12.json").exists()
 
 
@@ -758,7 +760,7 @@ def test_diagnostic_invalid_projection_rows_do_not_count_for_symbol_or_sequence(
     assert report["transition_guard"]["criteria"]["sequence_3plus_count"]["status"] == "pending"
 
 
-def test_diagnostic_regular_only_sessions_do_not_count_as_normal_projection_sessions(tmp_path):
+def test_diagnostic_regular_only_sessions_count_as_primary_observation_sessions(tmp_path):
     session_dates = ["2026-06-15", "2026-06-16", "2026-06-17"]
     pipeline_dir = tmp_path / "pipeline_events"
     pipeline_dir.mkdir()
@@ -790,8 +792,53 @@ def test_diagnostic_regular_only_sessions_do_not_count_as_normal_projection_sess
 
     assert report["metrics"]["regular_observed_count"] == 3
     assert report["metrics"]["projection_observed_count"] == 0
-    assert report["metrics"]["normal_session_count"] == 0
-    assert report["transition_guard"]["criteria"]["normal_session_count"]["status"] == "pending"
+    assert report["metrics"]["primary_observation_stage"] == "ai_confirmed"
+    assert report["metrics"]["normal_session_count"] == 3
+    assert report["transition_guard"]["criteria"]["normal_session_count"]["status"] == "pass"
+    assert report["transition_guard"]["criteria"]["valid_response_count"]["status"] == "pending"
+    assert report["transition_guard"]["criteria"]["sequence_3plus_count"]["status"] == "pending"
+
+
+def test_diagnostic_uses_projection_fallback_per_session_when_regular_is_mixed(tmp_path):
+    session_dates = ["2026-06-15", "2026-06-16", "2026-06-17"]
+    pipeline_dir = tmp_path / "pipeline_events"
+    pipeline_dir.mkdir()
+    for idx, target_date in enumerate(session_dates):
+        stage = "ai_confirmed" if idx == 0 else "ai_watching_score_projection"
+        (pipeline_dir / f"pipeline_events_{target_date}.jsonl").write_text(
+            json.dumps(
+                {
+                    "stage": stage,
+                    "stock_code": "005930",
+                    "fields": {
+                        "ai_score_policy_version": "watching_score_smoothing_v1",
+                        "ai_score_raw": 80,
+                        "ai_score_projected": 78,
+                        "ai_score_excluded_reason": "-",
+                    },
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+    evidence = {
+        "source": "three_session_postclose_review",
+        "reviewed": True,
+        "normal_session_dates": session_dates,
+        "artifacts": _write_guard_artifacts(tmp_path, session_dates),
+    }
+
+    report = build_diagnostic_artifact("2026-06-17", data_root=tmp_path, guard_evidence=evidence)
+
+    assert report["metrics"]["primary_observation_stage"] == "mixed_by_session"
+    assert report["metrics"]["primary_observation_stages_by_session"] == {
+        "2026-06-15": "ai_confirmed",
+        "2026-06-16": "ai_watching_score_projection",
+        "2026-06-17": "ai_watching_score_projection",
+    }
+    assert report["metrics"]["primary_observation_count"] == 3
+    assert report["metrics"]["normal_session_count"] == 3
+    assert report["transition_guard"]["criteria"]["normal_session_count"]["status"] == "pass"
 
 
 def test_unreviewed_guard_evidence_cannot_make_transition_eligible(tmp_path):

@@ -161,6 +161,23 @@ TARGET_ENV_VALUE_KEYS = {
     "SCALPING_NORMAL_FAVORABLE_DEFENSIVE_BPS": "normal_favorable_defensive_bps",
     "SCALPING_NORMAL_WEAK_DEFENSIVE_BPS": "normal_weak_defensive_bps",
     "SCALPING_CONDITIONAL_1TICK_REAL_ENABLED": "conditional_1tick_real_enabled",
+    "SCALP_AGGRESSIVE_ENTRY_PRICE_OVERRIDE_ENABLED": "enabled",
+    "SCALP_AGGRESSIVE_ENTRY_PRICE_OVERRIDE_TYPES": "types",
+    "SCALP_DEFENSIVE_MISSED_UPSIDE_MIN_ORIGINAL_BPS": "min_original_bps",
+    "SCALP_DEFENSIVE_MISSED_UPSIDE_TARGET_MODE": "target_mode",
+    "SCALP_DEFENSIVE_MISSED_UPSIDE_NEUTRAL_BID_MINUS_TICKS": "neutral_bid_minus_ticks",
+    "SCALP_DEFENSIVE_MISSED_UPSIDE_BULLISH_BID_MINUS_TICKS": "bullish_bid_minus_ticks",
+    "SCALP_REFERENCE_TARGET_MISSED_UPSIDE_MIN_BELOW_BID_BPS": "reference_target_min_below_bid_bps",
+    "SCALP_REFERENCE_TARGET_MISSED_UPSIDE_TARGET_MODE": "reference_target_target_mode",
+    "SCALP_REFERENCE_TARGET_MISSED_UPSIDE_NEUTRAL_BID_MINUS_TICKS": "reference_target_neutral_bid_minus_ticks",
+    "SCALP_REFERENCE_TARGET_MISSED_UPSIDE_BULLISH_BID_MINUS_TICKS": "reference_target_bullish_bid_minus_ticks",
+    "SCALP_SOFT_STOP_DYNAMIC_GRACE_OVERRIDE_ENABLED": "enabled",
+    "SCALP_SOFT_STOP_DYNAMIC_GRACE_WEAK_SEC": "weak_sec",
+    "SCALP_SOFT_STOP_DYNAMIC_GRACE_BASE_SEC": "base_sec",
+    "SCALP_SOFT_STOP_DYNAMIC_GRACE_STRONG_SEC": "strong_sec",
+    "SCALP_SOFT_STOP_DYNAMIC_GRACE_MIN_AI_SCORE": "min_ai_score",
+    "SCALP_SOFT_STOP_DYNAMIC_GRACE_EMERGENCY_PCT": "emergency_pct",
+    "SCALP_SOFT_STOP_DYNAMIC_GRACE_MAX_WORSEN_PCT": "max_worsen_pct",
     "LIFECYCLE_DECISION_MATRIX_ENABLED": "enabled",
     "LIFECYCLE_DECISION_MATRIX_POLICY_FILE": "policy_file",
     "LIFECYCLE_DECISION_MATRIX_POLICY_VERSION": "policy_version",
@@ -204,6 +221,36 @@ TARGET_ENV_VALUE_KEYS = {
     "GREENFIELD_REAL_ENV_AUTHORITY_POLICY_VERSION": "policy_version",
     "GREENFIELD_REAL_ENV_TELEGRAM_ENABLED": "telegram_enabled",
 }
+
+AGGRESSIVE_ENTRY_PRICE_OVERRIDE_FAMILY = "aggressive_entry_price_override_runtime"
+ENTRY_PRICE_LIVE_TUNING_MARKER_ENV = "KORSTOCKSCAN_ENTRY_PRICE_LIVE_TUNING_SELECTED"
+SOFT_STOP_DYNAMIC_GRACE_FAMILY = "soft_stop_dynamic_grace_runtime"
+HOLDING_EXIT_LIVE_TUNING_MARKER_ENV = "KORSTOCKSCAN_HOLDING_EXIT_LIVE_TUNING_SELECTED"
+AGGRESSIVE_ENTRY_PRICE_OVERRIDE_ENV_KEYS = frozenset(
+    {
+        "KORSTOCKSCAN_SCALP_AGGRESSIVE_ENTRY_PRICE_OVERRIDE_ENABLED",
+        "KORSTOCKSCAN_SCALP_AGGRESSIVE_ENTRY_PRICE_OVERRIDE_TYPES",
+        "KORSTOCKSCAN_SCALP_DEFENSIVE_MISSED_UPSIDE_MIN_ORIGINAL_BPS",
+        "KORSTOCKSCAN_SCALP_DEFENSIVE_MISSED_UPSIDE_TARGET_MODE",
+        "KORSTOCKSCAN_SCALP_DEFENSIVE_MISSED_UPSIDE_NEUTRAL_BID_MINUS_TICKS",
+        "KORSTOCKSCAN_SCALP_DEFENSIVE_MISSED_UPSIDE_BULLISH_BID_MINUS_TICKS",
+        "KORSTOCKSCAN_SCALP_REFERENCE_TARGET_MISSED_UPSIDE_MIN_BELOW_BID_BPS",
+        "KORSTOCKSCAN_SCALP_REFERENCE_TARGET_MISSED_UPSIDE_TARGET_MODE",
+        "KORSTOCKSCAN_SCALP_REFERENCE_TARGET_MISSED_UPSIDE_NEUTRAL_BID_MINUS_TICKS",
+        "KORSTOCKSCAN_SCALP_REFERENCE_TARGET_MISSED_UPSIDE_BULLISH_BID_MINUS_TICKS",
+    }
+)
+SOFT_STOP_DYNAMIC_GRACE_ENV_KEYS = frozenset(
+    {
+        "KORSTOCKSCAN_SCALP_SOFT_STOP_DYNAMIC_GRACE_OVERRIDE_ENABLED",
+        "KORSTOCKSCAN_SCALP_SOFT_STOP_DYNAMIC_GRACE_WEAK_SEC",
+        "KORSTOCKSCAN_SCALP_SOFT_STOP_DYNAMIC_GRACE_BASE_SEC",
+        "KORSTOCKSCAN_SCALP_SOFT_STOP_DYNAMIC_GRACE_STRONG_SEC",
+        "KORSTOCKSCAN_SCALP_SOFT_STOP_DYNAMIC_GRACE_MIN_AI_SCORE",
+        "KORSTOCKSCAN_SCALP_SOFT_STOP_DYNAMIC_GRACE_EMERGENCY_PCT",
+        "KORSTOCKSCAN_SCALP_SOFT_STOP_DYNAMIC_GRACE_MAX_WORSEN_PCT",
+    }
+)
 
 
 def _load_json(path: Path) -> dict[str, Any]:
@@ -1716,16 +1763,24 @@ def _select_auto_apply_candidates(
             reject_reason = f"same_stage_owner_conflict:{selected_by_stage[stage].get('family')}"
 
         lock_applied = False
+        lock_stage_conflict_reason = ""
+        if lock and stage in selected_by_stage:
+            lock_stage_conflict_reason = f"same_stage_owner_conflict:{selected_by_stage[stage].get('family')}"
         lock_close_reasons = _candidate_close_reasons(candidate, reject_reason)
+        if lock_stage_conflict_reason:
+            lock_close_reasons.append(lock_stage_conflict_reason)
         if lock and (include_families is None or family in include_families):
             lock_overrides = _lock_env_overrides(lock)
-            lock_can_preserve = bool(lock_overrides) and not _lock_allows_close(lock, lock_close_reasons)
+            lock_allowed_close = _lock_allows_close(lock, lock_close_reasons)
+            lock_can_preserve = bool(lock_overrides) and not lock_allowed_close
             if lock_can_preserve:
                 reject_reason = ""
                 reason = f"operator_runtime_env_lock_preserved:{lock.get('lock_id') or family}"
                 hold_carry_forward = False
                 lock_applied = True
             elif bool(lock_overrides):
+                if lock_stage_conflict_reason:
+                    reject_reason = lock_stage_conflict_reason
                 reason = f"operator_runtime_env_lock_allowed_close:{lock.get('lock_id') or family}"
 
         decision = {
@@ -1759,6 +1814,9 @@ def _select_auto_apply_candidates(
                 "applied": bool(lock_applied),
                 "close_reasons": lock_close_reasons,
                 "allowed_close": _lock_allows_close(lock, lock_close_reasons),
+                "allowed_close_reason_keywords": list(
+                    lock.get("allowed_close_reason_keywords") or []
+                ),
             }
         if reject_reason:
             decisions.append(decision)
@@ -1771,6 +1829,115 @@ def _select_auto_apply_candidates(
     for decision in selected_decisions:
         env_overrides.update(decision.get("env_overrides") or {})
     return selected_decisions, decisions, env_overrides
+
+
+def _entry_price_live_owner_family(*selected_groups: list[dict[str, Any]]) -> str:
+    for group in selected_groups:
+        for item in group or []:
+            if not isinstance(item, dict):
+                continue
+            family = str(item.get("family") or "")
+            if family == AGGRESSIVE_ENTRY_PRICE_OVERRIDE_FAMILY:
+                continue
+            if str(item.get("stage") or "") == "entry":
+                return family
+    return ""
+
+
+def _holding_exit_live_owner_family(*selected_groups: list[dict[str, Any]]) -> str:
+    for group in selected_groups:
+        for item in group or []:
+            if not isinstance(item, dict):
+                continue
+            family = str(item.get("family") or "")
+            if family == SOFT_STOP_DYNAMIC_GRACE_FAMILY:
+                continue
+            stage = str(item.get("stage") or "")
+            if stage in {"holding_exit", "holding", "exit"}:
+                return family
+    return ""
+
+
+def _close_aggressive_entry_price_override_for_live_owner(
+    *,
+    selected: list[dict[str, Any]],
+    decisions: list[dict[str, Any]],
+    env_overrides: dict[str, str],
+    owner_family: str,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, str]]:
+    if not owner_family:
+        return selected, decisions, env_overrides
+    reason = f"same_stage_owner_conflict:{owner_family}"
+    filtered_selected = [
+        item
+        for item in selected
+        if str(item.get("family") or "") != AGGRESSIVE_ENTRY_PRICE_OVERRIDE_FAMILY
+    ]
+    filtered_env = {
+        key: value
+        for key, value in env_overrides.items()
+        if str(key) not in AGGRESSIVE_ENTRY_PRICE_OVERRIDE_ENV_KEYS
+    }
+    updated_decisions: list[dict[str, Any]] = []
+    for decision in decisions:
+        if str(decision.get("family") or "") != AGGRESSIVE_ENTRY_PRICE_OVERRIDE_FAMILY:
+            updated_decisions.append(decision)
+            continue
+        next_decision = {**decision, "selected": False, "decision_reason": reason, "env_overrides": {}}
+        lock = next_decision.get("operator_runtime_env_lock")
+        if isinstance(lock, dict):
+            close_reasons = list(lock.get("close_reasons") or [])
+            if reason not in close_reasons:
+                close_reasons.append(reason)
+            next_decision["operator_runtime_env_lock"] = {
+                **lock,
+                "applied": False,
+                "close_reasons": close_reasons,
+                "allowed_close": True,
+            }
+        updated_decisions.append(next_decision)
+    return filtered_selected, updated_decisions, filtered_env
+
+
+def _close_soft_stop_dynamic_grace_for_live_owner(
+    *,
+    selected: list[dict[str, Any]],
+    decisions: list[dict[str, Any]],
+    env_overrides: dict[str, str],
+    owner_family: str,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, str]]:
+    if not owner_family:
+        return selected, decisions, env_overrides
+    reason = f"same_stage_owner_conflict:{owner_family}"
+    filtered_selected = [
+        item
+        for item in selected
+        if str(item.get("family") or "") != SOFT_STOP_DYNAMIC_GRACE_FAMILY
+    ]
+    filtered_env = {
+        key: value
+        for key, value in env_overrides.items()
+        if str(key) not in SOFT_STOP_DYNAMIC_GRACE_ENV_KEYS
+    }
+    updated_decisions: list[dict[str, Any]] = []
+    for decision in decisions:
+        if str(decision.get("family") or "") != SOFT_STOP_DYNAMIC_GRACE_FAMILY:
+            updated_decisions.append(decision)
+            continue
+        next_decision = {**decision, "selected": False, "decision_reason": reason, "env_overrides": {}}
+        lock = next_decision.get("operator_runtime_env_lock")
+        if isinstance(lock, dict):
+            close_reasons = list(lock.get("close_reasons") or [])
+            if reason not in close_reasons:
+                close_reasons.append(reason)
+            next_decision["operator_runtime_env_lock"] = {
+                **lock,
+                "applied": False,
+                "close_reasons": close_reasons,
+                "allowed_close": _lock_allows_close(lock, close_reasons),
+            }
+        updated_decisions.append(next_decision)
+    return filtered_selected, updated_decisions, filtered_env
 
 
 def _lifecycle_ai_context_overlay_env(
@@ -2398,6 +2565,26 @@ def build_preopen_apply_manifest(
                 calibration_candidates,
                 include_families=include_families,
             )
+            entry_price_live_owner_family = _entry_price_live_owner_family(
+                selected,
+                runtime_bridge_selected,
+            )
+            holding_exit_live_owner_family = _holding_exit_live_owner_family(
+                selected,
+                runtime_bridge_selected,
+            )
+            selected, decisions, env_overrides = _close_aggressive_entry_price_override_for_live_owner(
+                selected=selected,
+                decisions=decisions,
+                env_overrides=env_overrides,
+                owner_family=entry_price_live_owner_family,
+            )
+            selected, decisions, env_overrides = _close_soft_stop_dynamic_grace_for_live_owner(
+                selected=selected,
+                decisions=decisions,
+                env_overrides=env_overrides,
+                owner_family=holding_exit_live_owner_family,
+            )
             env_overrides = {
                 **env_overrides,
                 **entry_cancel_wait_env_overrides,
@@ -2414,6 +2601,12 @@ def build_preopen_apply_manifest(
                 for key, value in env_overrides.items()
                 if str(key) not in REMOVED_RUNTIME_ENV_KEYS
             }
+            if any(str(item.get("family") or "") == "dynamic_entry_price_resolver" for item in selected):
+                env_overrides["KORSTOCKSCAN_DYNAMIC_ENTRY_PRICE_RESOLVER_LIVE_SELECTED"] = "true"
+            if entry_price_live_owner_family:
+                env_overrides[ENTRY_PRICE_LIVE_TUNING_MARKER_ENV] = "true"
+            if holding_exit_live_owner_family:
+                env_overrides[HOLDING_EXIT_LIVE_TUNING_MARKER_ENV] = "true"
         runtime_change = bool(auto_apply_requested and env_overrides)
         status = (
             "auto_bounded_live_ready"

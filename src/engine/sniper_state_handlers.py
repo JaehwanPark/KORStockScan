@@ -7483,6 +7483,127 @@ def _build_soft_stop_expert_decision(
     }
 
 
+def _build_soft_stop_dynamic_grace_decision(
+    stock: dict,
+    *,
+    strategy: str,
+    now_ts: float,
+    profit_rate: float,
+    current_ai_score: float,
+    dynamic_stop_pct: float,
+    hard_stop_pct: float,
+    quote_stale: bool = False,
+    source_quality_hard_gap: bool = False,
+) -> dict:
+    enabled = _rule_bool("SCALP_SOFT_STOP_DYNAMIC_GRACE_OVERRIDE_ENABLED", False)
+    formal_live_selected = _rule_bool("HOLDING_EXIT_LIVE_TUNING_SELECTED", False)
+    weak_sec = max(0, _rule_int("SCALP_SOFT_STOP_DYNAMIC_GRACE_WEAK_SEC", 20))
+    base_sec = max(0, _rule_int("SCALP_SOFT_STOP_DYNAMIC_GRACE_BASE_SEC", 45))
+    strong_sec = max(0, _rule_int("SCALP_SOFT_STOP_DYNAMIC_GRACE_STRONG_SEC", 90))
+    min_ai_score = _rule_float("SCALP_SOFT_STOP_DYNAMIC_GRACE_MIN_AI_SCORE", 65.0)
+    emergency_pct = min(
+        _rule_float("SCALP_SOFT_STOP_DYNAMIC_GRACE_EMERGENCY_PCT", -2.8),
+        float(dynamic_stop_pct),
+    )
+    max_worsen_pct = max(0.0, _rule_float("SCALP_SOFT_STOP_DYNAMIC_GRACE_MAX_WORSEN_PCT", 0.30))
+
+    features, feature_valid = _normalize_soft_stop_expert_features(stock)
+    buy_pressure = _safe_float(features.get("buy_pressure_10t"), 50.0)
+    tick_accel = _safe_float(features.get("tick_acceleration_ratio"), 0.0)
+    large_sell = bool(features.get("large_sell_print_detected", False))
+    micro_vwap_bp = _safe_float(features.get("curr_vs_micro_vwap_bp"), 0.0)
+    net_delta = _safe_int(features.get("net_aggressive_delta_10t"), 0)
+    absorption_count = _safe_int(features.get("same_price_buy_absorption"), 0)
+    microprice_edge_bp = _safe_float(features.get("microprice_edge_bp"), 0.0)
+    top3_depth_ratio = _safe_float(features.get("top3_depth_ratio"), 999.0)
+    checks = {
+        "buy_pressure": buy_pressure >= _rule_float("SCALP_SOFT_STOP_ABSORPTION_MIN_BUY_PRESSURE", 55.0),
+        "net_aggressive_delta": net_delta > 0,
+        "same_price_buy_absorption": absorption_count >= 2,
+        "curr_vs_micro_vwap": micro_vwap_bp >= _rule_float("SCALP_SOFT_STOP_ABSORPTION_MIN_MICRO_VWAP_BP", -5.0),
+        "microprice_edge": microprice_edge_bp >= 0.0,
+        "tick_acceleration": tick_accel >= _rule_float("SCALP_SOFT_STOP_ABSORPTION_MIN_TICK_ACCEL", 0.95),
+        "top3_depth": top3_depth_ratio <= _rule_float("SCALP_SOFT_STOP_ABSORPTION_MAX_TOP3_DEPTH_RATIO", 1.35),
+    }
+    absorption_score = sum(1 for ok in checks.values() if ok)
+    thesis_invalidated = bool(
+        large_sell
+        or (
+            tick_accel < _rule_float("SCALP_SOFT_STOP_THESIS_TICK_ACCEL_MIN", 0.60)
+            and micro_vwap_bp < _rule_float("SCALP_SOFT_STOP_THESIS_MICRO_VWAP_BP_MIN", -20.0)
+        )
+    )
+    positive_micro = bool(feature_valid and absorption_score >= 1 and not thesis_invalidated)
+
+    started_at = _safe_float(stock.get("soft_stop_dynamic_grace_started_at"), 0.0)
+    anchor_profit = _safe_float(stock.get("soft_stop_dynamic_grace_anchor_profit"), profit_rate)
+    if started_at <= 0:
+        anchor_profit = float(profit_rate or 0.0)
+    elapsed_sec = max(0, int(now_ts - started_at)) if started_at > 0 else 0
+    additional_worsen = max(0.0, float(anchor_profit or 0.0) - float(profit_rate or 0.0))
+
+    grace_sec = weak_sec
+    reason = "weak_confirmed_soft_stop_dynamic_grace"
+    if positive_micro:
+        grace_sec = base_sec
+        reason = "base_micro_confirmed_soft_stop_dynamic_grace"
+    if positive_micro and (absorption_score >= 3 or current_ai_score >= (min_ai_score + 5)):
+        grace_sec = strong_sec
+        reason = "strong_absorption_soft_stop_dynamic_grace"
+
+    skip_reason = ""
+    if not enabled:
+        skip_reason = "disabled"
+    elif formal_live_selected:
+        skip_reason = "formal_holding_exit_live_tuning_selected"
+    elif strategy != "SCALPING":
+        skip_reason = "non_scalping"
+    elif _is_scalp_simulated_position(stock, strategy) or _has_sim_probe_provenance(stock):
+        skip_reason = "sim_or_probe_position"
+    elif bool(quote_stale) or bool(source_quality_hard_gap):
+        skip_reason = "source_or_quote_stale"
+    elif profit_rate > dynamic_stop_pct:
+        skip_reason = "not_soft_stop_zone"
+    elif profit_rate <= hard_stop_pct:
+        skip_reason = "hard_stop_zone"
+    elif profit_rate <= emergency_pct:
+        skip_reason = "emergency_pct"
+    elif current_ai_score < min_ai_score:
+        skip_reason = "ai_score_below_min"
+    elif profit_rate < -2.50 or profit_rate > -1.70:
+        skip_reason = "outside_baseline_soft_stop_missed_upside_band"
+    elif thesis_invalidated:
+        skip_reason = "thesis_invalidated"
+    elif grace_sec <= 0:
+        skip_reason = "grace_sec_zero"
+    elif additional_worsen > max_worsen_pct:
+        skip_reason = "max_worsen_exceeded"
+    elif started_at > 0 and elapsed_sec >= grace_sec:
+        skip_reason = "expired"
+
+    should_defer = not bool(skip_reason)
+    return {
+        "enabled": bool(enabled),
+        "formal_holding_exit_tuning_selected": bool(formal_live_selected),
+        "should_defer": bool(should_defer),
+        "skip_reason": skip_reason,
+        "reason": reason,
+        "grace_sec": int(grace_sec),
+        "elapsed_sec": int(elapsed_sec),
+        "started_at": float(started_at),
+        "anchor_profit": float(anchor_profit),
+        "current_profit": float(profit_rate or 0.0),
+        "max_worsen_pct": float(max_worsen_pct),
+        "additional_worsen": float(additional_worsen),
+        "emergency_pct": float(emergency_pct),
+        "absorption_score": int(absorption_score),
+        "positive_micro": bool(positive_micro),
+        "feature_valid": bool(feature_valid),
+        "data_window_start": "2026-06-04T14:29:09+09:00",
+        "data_window_end": "2026-06-12",
+    }
+
+
 def _emit_soft_stop_expert_observations(
     stock: dict,
     code: str,
@@ -8153,6 +8274,16 @@ def _build_entry_price_snapshot_fields(latency_gate, *, request_price, curr_pric
         'entry_price_gap_profile_bps': _coerce_int_value(latency_gate.get('entry_price_gap_profile_bps')),
         'entry_price_gap_profile_reason': str(latency_gate.get('entry_price_gap_profile_reason') or ''),
         'entry_price_gap_profile_context': latency_gate.get('entry_price_gap_profile_context') or {},
+        'aggressive_entry_price_override_applied': bool(latency_gate.get('aggressive_entry_price_override_applied')),
+        'aggressive_entry_price_override_type': str(latency_gate.get('aggressive_entry_price_override_type') or ''),
+        'aggressive_entry_price_override_reason': str(latency_gate.get('aggressive_entry_price_override_reason') or ''),
+        'aggressive_entry_price_override_skip_reason': str(
+            latency_gate.get('aggressive_entry_price_override_skip_reason') or ''
+        ),
+        'aggressive_entry_price_original_profile': str(latency_gate.get('aggressive_entry_price_original_profile') or ''),
+        'aggressive_entry_price_original_bps': _coerce_int_value(latency_gate.get('aggressive_entry_price_original_bps')),
+        'aggressive_entry_price_target_mode': str(latency_gate.get('aggressive_entry_price_target_mode') or ''),
+        'aggressive_entry_price_order_price': _coerce_int_value(latency_gate.get('aggressive_entry_price_order_price')),
         'reference_target_applied': bool(latency_gate.get('reference_target_applied')),
         'reference_target_rejected_reason': str(latency_gate.get('reference_target_rejected_reason') or ''),
         'reference_target_below_bid_bps': _coerce_int_value(latency_gate.get('reference_target_below_bid_bps')),
@@ -8754,6 +8885,145 @@ def _is_pre_submit_price_guard_block(strategy, price, best_bid):
     if threshold_bps < 0:
         return False
     return _compute_price_below_bid_bps(price, best_bid) > threshold_bps
+
+
+def _truthy_field(value) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on", "y"}
+
+
+def _entry_latency_allows_normal_submit(latency_gate: dict | None) -> bool:
+    fields = latency_gate if isinstance(latency_gate, dict) else {}
+    for key in ("effective_decision", "policy_decision", "decision"):
+        decision = str(fields.get(key) or "").strip().upper()
+        if decision:
+            return decision == "ALLOW_NORMAL"
+    return False
+
+
+def _entry_submit_field(*sources, key: str, default=None, aliases=None):
+    keys = [key, *(aliases or [])]
+    for source in sources:
+        if not isinstance(source, dict):
+            continue
+        for candidate_key in keys:
+            if source.get(candidate_key) not in (None, ""):
+                return source.get(candidate_key)
+    return default
+
+
+def _evaluate_real_weak_pullback_entry_block(
+    *,
+    strategy,
+    stock,
+    latency_gate,
+    pre_ai_fields,
+    guard_fields,
+    orderbook_fields,
+    microstructure_fields=None,
+) -> dict:
+    if str(strategy or "").upper() not in {"SCALPING", "SCALP"}:
+        return {"blocked": False, "reason": "non_scalping"}
+    if not _rule_bool("SCALP_REAL_WEAK_PULLBACK_ENTRY_BLOCK_ENABLED", False):
+        return {"blocked": False, "reason": "disabled"}
+    if _is_any_simulated_position(stock, strategy) or _is_swing_live_order_dry_run(strategy):
+        return {"blocked": False, "reason": "sim_or_dry_run"}
+
+    latency_fields = latency_gate if isinstance(latency_gate, dict) else {}
+    if str(latency_fields.get("latency_state") or "").strip().upper() != "CAUTION":
+        return {"blocked": False, "reason": "latency_not_caution"}
+    if not _entry_latency_allows_normal_submit(latency_fields):
+        return {"blocked": False, "reason": "not_allow_normal"}
+
+    weak_states = {"weak_momentum_context", "below_static_vpw_context"}
+    weak_reasons = {"below_buy_ratio", "below_window_buy_value"}
+    strength_state = str(
+        _entry_submit_field(
+            pre_ai_fields,
+            guard_fields,
+            latency_fields,
+            stock,
+            key="strength_momentum_risk_state",
+            aliases=("entry_strength_momentum_risk_state", "strength_momentum_state"),
+            default="",
+        )
+    ).strip()
+    strength_reason = str(
+        _entry_submit_field(
+            pre_ai_fields,
+            guard_fields,
+            latency_fields,
+            stock,
+            key="strength_momentum_reason",
+            aliases=("entry_strength_momentum_reason",),
+            default="",
+        )
+    ).strip()
+    weak_strength = strength_state in weak_states or strength_reason in weak_reasons
+    if not weak_strength:
+        return {"blocked": False, "reason": "strength_not_weak"}
+
+    context = latency_fields.get("conditional_1tick_real_override_context")
+    context = context if isinstance(context, dict) else {}
+    spread_ticks = _safe_int(
+        context.get("spread_ticks")
+        or _entry_submit_field(orderbook_fields, microstructure_fields, key="orderbook_micro_spread_ticks", default=0),
+        0,
+    )
+    min_spread_ticks = max(0, _rule_int("SCALP_REAL_WEAK_PULLBACK_ENTRY_BLOCK_MIN_SPREAD_TICKS", 5))
+    if spread_ticks < min_spread_ticks:
+        return {"blocked": False, "reason": "spread_not_wide", "spread_ticks": spread_ticks}
+
+    positive_signal_count = sum(
+        1
+        for name in ("buy_pressure_ok", "ofi_ok", "depth_ok")
+        if _truthy_field(context.get(name))
+    )
+    micro_state = str(
+        _entry_submit_field(orderbook_fields, microstructure_fields, latency_fields, key="orderbook_micro_state", default="")
+    ).strip().lower()
+    if micro_state in {"bullish", "strong_bullish"} and positive_signal_count <= 0:
+        positive_signal_count = 1
+
+    min_micro_positives = max(0, _rule_int("SCALP_REAL_WEAK_PULLBACK_ENTRY_BLOCK_MIN_MICRO_POSITIVES", 2))
+    if positive_signal_count >= min_micro_positives:
+        return {
+            "blocked": False,
+            "reason": "micro_confirmed",
+            "positive_signal_count": positive_signal_count,
+            "spread_ticks": spread_ticks,
+        }
+
+    overbought_state = str(
+        _entry_submit_field(pre_ai_fields, guard_fields, latency_fields, key="overbought_risk_state", default="")
+    ).strip()
+    overbought_bucket = str(
+        _entry_submit_field(pre_ai_fields, guard_fields, latency_fields, key="overbought_risk_bucket", default="")
+    ).strip()
+    return {
+        "blocked": True,
+        "reason": "weak_momentum_caution_without_micro_confirmation",
+        "block_reason": "weak_momentum_caution_without_micro_confirmation",
+        "threshold_family": "operator_real_weak_pullback_entry_block",
+        "decision_authority": "operator_runtime_override_real_entry_block",
+        "runtime_effect": True,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "weak_pullback_entry_block_enabled": True,
+        "weak_pullback_entry_block_min_micro_positives": min_micro_positives,
+        "weak_pullback_entry_block_min_spread_ticks": min_spread_ticks,
+        "weak_pullback_entry_block_positive_signal_count": positive_signal_count,
+        "weak_pullback_entry_block_spread_ticks": spread_ticks,
+        "weak_pullback_entry_block_strength_state": strength_state or "-",
+        "weak_pullback_entry_block_strength_reason": strength_reason or "-",
+        "weak_pullback_entry_block_overbought_state": overbought_state or "-",
+        "weak_pullback_entry_block_overbought_bucket": overbought_bucket or "-",
+        "weak_pullback_entry_block_micro_state": micro_state or "-",
+        "forbidden_uses": "sim_probe_authority_change,provider_route_change,score_threshold_mutation,quantity_cap_release,broker_guard_bypass,tuning_auto_apply_authority",
+    }
 
 
 def _entry_planned_total_qty(planned_orders) -> int:
@@ -13830,6 +14100,55 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             **lifecycle_submit_log_fields,
         )
 
+    weak_pullback_block_verdict = _evaluate_real_weak_pullback_entry_block(
+        strategy=strategy,
+        stock=stock,
+        latency_gate=latency_gate,
+        pre_ai_fields=pre_ai_gate_submit_log_fields,
+        guard_fields=real_pre_submit_guard_fields,
+        orderbook_fields=entry_orderbook_micro_fields,
+        microstructure_fields=microstructure_submit_log_fields,
+    )
+    if weak_pullback_block_verdict.get("blocked"):
+        log_info(
+            f"[REAL_WEAK_PULLBACK_ENTRY_BLOCK] {stock.get('name')}({code}) "
+            f"reason={weak_pullback_block_verdict.get('reason')} "
+            f"spread_ticks={weak_pullback_block_verdict.get('weak_pullback_entry_block_spread_ticks')} "
+            f"micro_pos={weak_pullback_block_verdict.get('weak_pullback_entry_block_positive_signal_count')}"
+        )
+        clear_signal_reference(stock)
+        _log_entry_pipeline(
+            stock,
+            code,
+            "real_weak_pullback_entry_block",
+            **_build_pre_submit_gate_contract_fields("operator_real_weak_pullback_entry_block"),
+            **_merge_entry_pipeline_field_groups(
+                pre_ai_gate_submit_log_fields,
+                real_pre_submit_guard_fields,
+                submit_revalidation_fields,
+                latency_price_snapshot,
+                entry_orderbook_micro_fields,
+                microstructure_submit_log_fields,
+                _panic_gap_weight_log_fields(latency_gate),
+                weak_pullback_block_verdict,
+            ),
+        )
+        _emit_scalp_entry_adm_snapshot(
+            stock,
+            code,
+            "real_weak_pullback_entry_block",
+            ai_score=latency_signal_score,
+            chosen_action="SKIP_PRE_SUBMIT_SAFETY",
+            latency_gate=latency_gate,
+            submit_fields=submit_revalidation_fields,
+            price_snapshot=latency_price_snapshot,
+            orderbook_fields=entry_orderbook_micro_fields,
+            actual_order_submitted=False,
+            broker_order_forbidden=True,
+            extra_fields=weak_pullback_block_verdict,
+        )
+        return False
+
     big_bite_summary = ""
     if stock.get('big_bite_triggered') or stock.get('big_bite_confirmed'):
         info = stock.get('big_bite_info') or {}
@@ -16263,6 +16582,11 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                     'soft_stop_absorption_extension_started_at',
                     'soft_stop_absorption_extension_used',
                     'soft_stop_absorption_extension_count',
+                    'soft_stop_dynamic_grace_started_at',
+                    'soft_stop_dynamic_grace_sec',
+                    'soft_stop_dynamic_grace_reason',
+                    'soft_stop_dynamic_grace_anchor_profit',
+                    'soft_stop_dynamic_grace_min_profit',
                     '_soft_stop_expert_shadow_logged_key',
                 ),
             )
@@ -16430,6 +16754,39 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                 ),
                 float(dynamic_stop_pct),
             )
+            raw_quote_stale = (ws_data or {}).get("quote_stale") or stock.get("quote_stale_at_submit")
+            quote_stale_for_dynamic_grace = (
+                str(raw_quote_stale).strip().lower() in {"1", "true", "yes", "y", "stale"}
+                if isinstance(raw_quote_stale, str)
+                else bool(raw_quote_stale)
+            )
+            source_quality_hard_gap_tokens = {
+                "source_quality_blocker",
+                "source_quality_blocked",
+                "hard_gap",
+                "stale",
+                "fail",
+                "failed",
+            }
+            source_quality_hard_gap_for_dynamic_grace = any(
+                str(stock.get(key) or "").strip().lower() in source_quality_hard_gap_tokens
+                for key in (
+                    "source_quality_gate",
+                    "ai_input_source_quality_status",
+                    "tick_context_quality",
+                )
+            )
+            soft_stop_dynamic_grace_decision = _build_soft_stop_dynamic_grace_decision(
+                stock,
+                strategy=strategy,
+                now_ts=now_ts,
+                profit_rate=profit_rate,
+                current_ai_score=current_ai_score,
+                dynamic_stop_pct=dynamic_stop_pct,
+                hard_stop_pct=hard_stop_pct,
+                quote_stale=quote_stale_for_dynamic_grace,
+                source_quality_hard_gap=source_quality_hard_gap_for_dynamic_grace,
+            )
             soft_stop_grace_started_at = float(stock.get('soft_stop_micro_grace_started_at', 0.0) or 0.0)
             if soft_stop_grace_started_at <= 0:
                 soft_stop_grace_started_at = now_ts
@@ -16452,12 +16809,77 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                 and profit_rate > soft_stop_emergency_pct
                 and profit_rate >= (float(dynamic_stop_pct) - soft_stop_grace_extend_buffer_pct)
             )
+            soft_stop_dynamic_grace_within = bool(soft_stop_dynamic_grace_decision.get("should_defer"))
+            if soft_stop_dynamic_grace_within:
+                dynamic_started_at = _safe_float(
+                    stock.get("soft_stop_dynamic_grace_started_at"), 0.0
+                )
+                if dynamic_started_at <= 0:
+                    dynamic_started_at = now_ts
+                    _mutate_stock_state(
+                        stock,
+                        set_fields={
+                            "soft_stop_dynamic_grace_started_at": dynamic_started_at,
+                            "soft_stop_dynamic_grace_sec": int(
+                                soft_stop_dynamic_grace_decision.get("grace_sec", 0) or 0
+                            ),
+                            "soft_stop_dynamic_grace_reason": soft_stop_dynamic_grace_decision.get("reason", "-"),
+                            "soft_stop_dynamic_grace_anchor_profit": float(profit_rate or 0.0),
+                            "soft_stop_dynamic_grace_min_profit": float(profit_rate or 0.0),
+                        },
+                    )
+                    soft_stop_dynamic_grace_decision = dict(soft_stop_dynamic_grace_decision)
+                    soft_stop_dynamic_grace_decision["started_at"] = dynamic_started_at
+                    soft_stop_dynamic_grace_decision["anchor_profit"] = float(profit_rate or 0.0)
+                else:
+                    _mutate_stock_state(
+                        stock,
+                        set_fields={
+                            "soft_stop_dynamic_grace_min_profit": min(
+                                _safe_float(stock.get("soft_stop_dynamic_grace_min_profit"), profit_rate),
+                                float(profit_rate or 0.0),
+                            )
+                        },
+                    )
+                _log_holding_pipeline(
+                    stock,
+                    code,
+                    "soft_stop_dynamic_grace",
+                    soft_stop_dynamic_grace_applied=True,
+                    soft_stop_dynamic_grace_reason=soft_stop_dynamic_grace_decision.get("reason", "-"),
+                    soft_stop_dynamic_grace_sec=int(
+                        soft_stop_dynamic_grace_decision.get("grace_sec", 0) or 0
+                    ),
+                    soft_stop_dynamic_grace_elapsed_sec=int(
+                        soft_stop_dynamic_grace_decision.get("elapsed_sec", 0) or 0
+                    ),
+                    soft_stop_dynamic_grace_anchor_profit=f"{_safe_float(soft_stop_dynamic_grace_decision.get('anchor_profit'), profit_rate):+.2f}",
+                    soft_stop_dynamic_grace_current_profit=f"{profit_rate:+.2f}",
+                    soft_stop_dynamic_grace_max_worsen_pct=f"{_safe_float(soft_stop_dynamic_grace_decision.get('max_worsen_pct'), 0.0):.2f}",
+                    soft_stop_dynamic_grace_additional_worsen=f"{_safe_float(soft_stop_dynamic_grace_decision.get('additional_worsen'), 0.0):.2f}",
+                    formal_holding_exit_tuning_selected=bool(
+                        soft_stop_dynamic_grace_decision.get("formal_holding_exit_tuning_selected")
+                    ),
+                    soft_stop_dynamic_grace_data_window_start=soft_stop_dynamic_grace_decision.get("data_window_start"),
+                    soft_stop_dynamic_grace_data_window_end=soft_stop_dynamic_grace_decision.get("data_window_end"),
+                    profit_rate=f"{profit_rate:+.2f}",
+                    soft_stop_pct=f"{dynamic_stop_pct:+.2f}",
+                    emergency_pct=f"{_safe_float(soft_stop_dynamic_grace_decision.get('emergency_pct'), soft_stop_emergency_pct):+.2f}",
+                    current_ai_score=f"{current_ai_score:.0f}",
+                    absorption_score=int(soft_stop_dynamic_grace_decision.get("absorption_score", 0) or 0),
+                    positive_micro=bool(soft_stop_dynamic_grace_decision.get("positive_micro")),
+                    exit_rule_candidate="scalp_soft_stop_pct",
+                )
             if soft_stop_extension_within_grace and soft_stop_grace_elapsed_sec >= soft_stop_grace_sec:
                 _mutate_stock_state(
                     stock,
                     set_fields={'soft_stop_micro_grace_extension_used': True},
                 )
-            soft_stop_within_grace = soft_stop_within_grace or soft_stop_extension_within_grace
+            soft_stop_within_grace = (
+                soft_stop_dynamic_grace_within
+                or soft_stop_within_grace
+                or soft_stop_extension_within_grace
+            )
             soft_stop_expert_decision = _build_soft_stop_expert_decision(
                 stock,
                 now_ts=now_ts,
@@ -16659,12 +17081,46 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                     expert_exclusion_reason=soft_stop_expert_decision.get("exclusion_reason", "-"),
                     absorption_score=soft_stop_expert_decision.get("absorption_score", 0),
                     recovery_prob_shadow=f"{soft_stop_expert_decision.get('recovery_prob_shadow', 0.0):.3f}",
+                    soft_stop_dynamic_grace_applied=bool(soft_stop_dynamic_grace_within),
+                    soft_stop_dynamic_grace_reason=soft_stop_dynamic_grace_decision.get("reason", "-")
+                    if soft_stop_dynamic_grace_within
+                    else "-",
+                    soft_stop_dynamic_grace_sec=int(soft_stop_dynamic_grace_decision.get("grace_sec", 0) or 0),
+                    soft_stop_dynamic_grace_elapsed_sec=int(
+                        soft_stop_dynamic_grace_decision.get("elapsed_sec", 0) or 0
+                    ),
+                    soft_stop_dynamic_grace_skip_reason=soft_stop_dynamic_grace_decision.get("skip_reason", "-"),
+                    formal_holding_exit_tuning_selected=bool(
+                        soft_stop_dynamic_grace_decision.get("formal_holding_exit_tuning_selected")
+                    ),
                     current_ai_score=f"{current_ai_score:.0f}",
                     held_sec=int(held_time_min * 60),
                     exit_rule_candidate="scalp_soft_stop_pct",
                     **_build_observation_contract_fields("ops_volume_diagnostic"),
                 )
             else:
+                if soft_stop_dynamic_grace_decision.get("enabled"):
+                    _log_holding_pipeline(
+                        stock,
+                        code,
+                        "soft_stop_dynamic_grace_exit",
+                        soft_stop_dynamic_grace_applied=False,
+                        soft_stop_dynamic_grace_skip_reason=soft_stop_dynamic_grace_decision.get("skip_reason", "-"),
+                        soft_stop_dynamic_grace_reason=soft_stop_dynamic_grace_decision.get("reason", "-"),
+                        soft_stop_dynamic_grace_sec=int(soft_stop_dynamic_grace_decision.get("grace_sec", 0) or 0),
+                        soft_stop_dynamic_grace_elapsed_sec=int(
+                            soft_stop_dynamic_grace_decision.get("elapsed_sec", 0) or 0
+                        ),
+                        soft_stop_dynamic_grace_anchor_profit=f"{_safe_float(soft_stop_dynamic_grace_decision.get('anchor_profit'), profit_rate):+.2f}",
+                        soft_stop_dynamic_grace_current_profit=f"{profit_rate:+.2f}",
+                        soft_stop_dynamic_grace_max_worsen_pct=f"{_safe_float(soft_stop_dynamic_grace_decision.get('max_worsen_pct'), 0.0):.2f}",
+                        formal_holding_exit_tuning_selected=bool(
+                            soft_stop_dynamic_grace_decision.get("formal_holding_exit_tuning_selected")
+                        ),
+                        soft_stop_dynamic_grace_data_window_start=soft_stop_dynamic_grace_decision.get("data_window_start"),
+                        soft_stop_dynamic_grace_data_window_end=soft_stop_dynamic_grace_decision.get("data_window_end"),
+                        exit_rule_candidate="scalp_soft_stop_pct",
+                    )
                 is_sell_signal = True
                 sell_reason_type = "LOSS"
                 reason = f"🔪 소프트 손절 ({dynamic_stop_pct}%) [AI: {current_ai_score:.0f}]"

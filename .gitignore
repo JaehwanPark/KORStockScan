@@ -36,6 +36,7 @@ dist/
 *.sqlite3
 *.json
 !data/config/ofi_bucket_threshold_manifest.json
+!data/threshold_cycle/operator_runtime_env_locks/aggressive_entry_price_override_2026-06-13.json
 !data/source_quality/
 !data/source_quality/clean_baseline_policy.json
 !data/source_quality/market_halt_windows/

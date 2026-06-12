@@ -389,7 +389,40 @@ def build_diagnostic_artifact(
 
     regular_rows = [row for row in rows if row.get("event_stage") == "ai_confirmed"]
     projection_rows = [row for row in rows if row.get("event_stage") == "ai_watching_score_projection"]
-    valid_rows = [row for row in projection_rows if str(row.get("ai_score_excluded_reason") or "-") == "-"]
+    regular_rows_by_session: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    projection_rows_by_session: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in regular_rows:
+        regular_rows_by_session[str(row.get("session_date") or target_date)].append(row)
+    for row in projection_rows:
+        projection_rows_by_session[str(row.get("session_date") or target_date)].append(row)
+    primary_observation_rows: list[dict[str, Any]] = []
+    primary_observation_stages_by_session: dict[str, str] = {}
+    for session_date in selected_dates:
+        session_regular_rows = regular_rows_by_session.get(session_date, [])
+        if session_regular_rows:
+            primary_observation_rows.extend(session_regular_rows)
+            primary_observation_stages_by_session[session_date] = "ai_confirmed"
+            continue
+        session_projection_rows = projection_rows_by_session.get(session_date, [])
+        primary_observation_rows.extend(session_projection_rows)
+        primary_observation_stages_by_session[session_date] = (
+            "ai_watching_score_projection" if session_projection_rows else "none"
+        )
+    observed_primary_stages = {
+        stage for stage in primary_observation_stages_by_session.values() if stage != "none"
+    }
+    primary_observation_stage = (
+        next(iter(observed_primary_stages))
+        if len(observed_primary_stages) == 1
+        else "mixed_by_session"
+        if observed_primary_stages
+        else "none"
+    )
+    valid_rows = [
+        row
+        for row in primary_observation_rows
+        if str(row.get("ai_score_excluded_reason") or "-") == "-"
+    ]
     raw_scores = [_float(row.get("ai_score_raw")) for row in valid_rows]
     projected_scores = [_float(row.get("ai_score_projected")) for row in valid_rows]
     projection_by_symbol: dict[str, list[dict[str, Any]]] = defaultdict(list)
@@ -406,23 +439,29 @@ def build_diagnostic_artifact(
         if raw_stddev not in (None, 0.0) and projected_stddev is not None
         else None
     )
+    primary_exclusion_counts = Counter(
+        str(row.get("ai_score_excluded_reason"))
+        for row in primary_observation_rows
+        if str(row.get("ai_score_excluded_reason") or "-") != "-"
+    )
     projection_exclusion_counts = Counter(
         str(row.get("ai_score_excluded_reason"))
         for row in projection_rows
         if str(row.get("ai_score_excluded_reason") or "-") != "-"
     )
-    contention_count = projection_exclusion_counts.get("lock_contention", 0)
-    contention_rate = contention_count / len(projection_rows) * 100.0 if projection_rows else None
-    parse_invalid_count = projection_exclusion_counts.get("parse_invalid", 0)
-    fallback_count = projection_exclusion_counts.get("fallback_score_50", 0)
-    engine_disabled_count = projection_exclusion_counts.get("engine_disabled", 0)
-    cache_hit_count = projection_exclusion_counts.get("cache_hit_same_input", 0)
-    parse_invalid_rate = parse_invalid_count / len(projection_rows) * 100.0 if projection_rows else None
+    contention_count = primary_exclusion_counts.get("lock_contention", 0)
+    primary_observation_count = len(primary_observation_rows)
+    contention_rate = contention_count / primary_observation_count * 100.0 if primary_observation_count else None
+    parse_invalid_count = primary_exclusion_counts.get("parse_invalid", 0)
+    fallback_count = primary_exclusion_counts.get("fallback_score_50", 0)
+    engine_disabled_count = primary_exclusion_counts.get("engine_disabled", 0)
+    cache_hit_count = primary_exclusion_counts.get("cache_hit_same_input", 0)
+    parse_invalid_rate = parse_invalid_count / primary_observation_count * 100.0 if primary_observation_count else None
     fallback_or_lock_contention_rate = (
-        (fallback_count + contention_count) / len(projection_rows) * 100.0 if projection_rows else None
+        (fallback_count + contention_count) / primary_observation_count * 100.0 if primary_observation_count else None
     )
-    engine_disabled_rate = engine_disabled_count / len(projection_rows) * 100.0 if projection_rows else None
-    cache_hit_rate = cache_hit_count / len(projection_rows) * 100.0 if projection_rows else None
+    engine_disabled_rate = engine_disabled_count / primary_observation_count * 100.0 if primary_observation_count else None
+    cache_hit_rate = cache_hit_count / primary_observation_count * 100.0 if primary_observation_count else None
     stale_invalid_applied_count = sum(
         1
         for row in rows
@@ -519,9 +558,13 @@ def build_diagnostic_artifact(
         "input_artifact_checks": input_artifact_checks,
         "metrics": {
             "observed_count": len(rows),
+            "primary_observation_stage": primary_observation_stage,
+            "primary_observation_stages_by_session": primary_observation_stages_by_session,
+            "primary_observation_count": primary_observation_count,
             "normal_session_count": projection_session_count,
             "regular_observed_count": len(regular_rows),
             "projection_observed_count": len(projection_rows),
+            "early_projection_observed_count": len(projection_rows),
             "valid_response_count": len(valid_rows),
             "unique_symbol_count": len(valid_projection_by_symbol),
             "sequence_3plus_count": sequence_count,
@@ -536,6 +579,7 @@ def build_diagnostic_artifact(
             "engine_disabled_rate_pct": round(engine_disabled_rate, 4) if engine_disabled_rate is not None else None,
             "cache_hit_same_input_rate_observed_pct": round(cache_hit_rate, 4) if cache_hit_rate is not None else None,
             "exclusion_counts": dict(sorted(exclusion_counts.items())),
+            "primary_exclusion_counts": dict(sorted(primary_exclusion_counts.items())),
             "projection_exclusion_counts": dict(sorted(projection_exclusion_counts.items())),
         },
         "transition_guard": {

@@ -1,13 +1,13 @@
 # Swing Daily Simulation - 2026-06-12
 
 - runtime_change: `False`
-- recommendation_rows: `26` / live `26` / diagnostic `0`
-- recommendation_sources: `{'recommendation_history': 24, 'daily_recommendations_v2_csv': 2}`
+- recommendation_rows: `27` / live `27` / diagnostic `0`
+- recommendation_sources: `{'recommendation_history': 24, 'daily_recommendations_v2_csv': 3}`
 - db_recommendation_rows: `24`
-- source_signal_dates: `['2026-06-11', '2026-06-12']`
-- simulated_count: `26`
+- source_signal_dates: `['2026-06-12']`
+- simulated_count: `27`
 - closed_count: `0`
-- planned_or_open_count: `26`
+- planned_or_open_count: `27`
 - closed win_rate: `0.00%`
 - closed avg_net_ret: `0.00%`
 
@@ -30,9 +30,9 @@
 
 | arm | simulated | closed | win_rate | avg_net_ret | status_counts |
 | --- | ---: | ---: | ---: | ---: | --- |
-| `gap_pass` | 26 | 0 | 0.00% | 0.00% | `{'PENDING_ENTRY': 26}` |
-| `gatekeeper_pass` | 26 | 0 | 0.00% | 0.00% | `{'PENDING_ENTRY': 26}` |
-| `selection_only` | 26 | 0 | 0.00% | 0.00% | `{'PENDING_ENTRY': 26}` |
+| `gap_pass` | 27 | 0 | 0.00% | 0.00% | `{'PENDING_ENTRY': 27}` |
+| `gatekeeper_pass` | 27 | 0 | 0.00% | 0.00% | `{'PENDING_ENTRY': 27}` |
+| `selection_only` | 27 | 0 | 0.00% | 0.00% | `{'PENDING_ENTRY': 27}` |
 
 ## Runtime Entry Funnel
 
@@ -53,9 +53,11 @@
 | `001740` | SK네트웍스 | `recommendation_history` | `PENDING_ENTRY` | `WAITING_FOR_NEXT_SESSION_QUOTE` | 0 |  |  |  |  |
 | `002790` | 아모레퍼시픽홀딩스 | `recommendation_history` | `PENDING_ENTRY` | `WAITING_FOR_NEXT_SESSION_QUOTE` | 0 |  |  |  |  |
 | `003690` | 코리안리 | `recommendation_history` | `PENDING_ENTRY` | `WAITING_FOR_NEXT_SESSION_QUOTE` | 0 |  |  |  |  |
+| `004560` | 현대비앤지스틸 | `daily_recommendations_v2_csv` | `PENDING_ENTRY` | `WAITING_FOR_NEXT_SESSION_QUOTE` | 0 |  |  |  |  |
 | `005440` | 현대지에프홀딩스 | `recommendation_history` | `PENDING_ENTRY` | `WAITING_FOR_NEXT_SESSION_QUOTE` | 0 |  |  |  |  |
 | `005830` | DB손해보험 | `recommendation_history` | `PENDING_ENTRY` | `WAITING_FOR_NEXT_SESSION_QUOTE` | 0 |  |  |  |  |
 | `005940` | NH투자증권 | `recommendation_history` | `PENDING_ENTRY` | `WAITING_FOR_NEXT_SESSION_QUOTE` | 0 |  |  |  |  |
+| `015860` | 일진홀딩스 | `daily_recommendations_v2_csv` | `PENDING_ENTRY` | `WAITING_FOR_NEXT_SESSION_QUOTE` | 0 |  |  |  |  |
 | `017670` | SK텔레콤 | `recommendation_history` | `PENDING_ENTRY` | `WAITING_FOR_NEXT_SESSION_QUOTE` | 0 |  |  |  |  |
 | `017800` | 현대엘리베이터 | `recommendation_history` | `PENDING_ENTRY` | `WAITING_FOR_NEXT_SESSION_QUOTE` | 0 |  |  |  |  |
 | `032640` | LG유플러스 | `recommendation_history` | `PENDING_ENTRY` | `WAITING_FOR_NEXT_SESSION_QUOTE` | 0 |  |  |  |  |
@@ -66,13 +68,12 @@
 | `086790` | 하나금융지주 | `recommendation_history` | `PENDING_ENTRY` | `WAITING_FOR_NEXT_SESSION_QUOTE` | 0 |  |  |  |  |
 | `090430` | 아모레퍼시픽 | `recommendation_history` | `PENDING_ENTRY` | `WAITING_FOR_NEXT_SESSION_QUOTE` | 0 |  |  |  |  |
 | `097230` | HJ중공업 | `recommendation_history` | `PENDING_ENTRY` | `WAITING_FOR_NEXT_SESSION_QUOTE` | 0 |  |  |  |  |
+| `108320` | LX세미콘 | `daily_recommendations_v2_csv` | `PENDING_ENTRY` | `WAITING_FOR_NEXT_SESSION_QUOTE` | 0 |  |  |  |  |
 | `138930` | BNK금융지주 | `recommendation_history` | `PENDING_ENTRY` | `WAITING_FOR_NEXT_SESSION_QUOTE` | 0 |  |  |  |  |
 | `139130` | iM금융지주 | `recommendation_history` | `PENDING_ENTRY` | `WAITING_FOR_NEXT_SESSION_QUOTE` | 0 |  |  |  |  |
 | `161390` | 한국타이어앤테크놀로지 | `recommendation_history` | `PENDING_ENTRY` | `WAITING_FOR_NEXT_SESSION_QUOTE` | 0 |  |  |  |  |
-| `241590` | 화승엔터프라이즈 | `daily_recommendations_v2_csv` | `PENDING_ENTRY` | `WAITING_FOR_NEXT_SESSION_QUOTE` | 0 |  |  |  |  |
 | `251270` | 넷마블 | `recommendation_history` | `PENDING_ENTRY` | `WAITING_FOR_NEXT_SESSION_QUOTE` | 0 |  |  |  |  |
 | `316140` | 우리금융지주 | `recommendation_history` | `PENDING_ENTRY` | `WAITING_FOR_NEXT_SESSION_QUOTE` | 0 |  |  |  |  |
 | `323410` | 카카오뱅크 | `recommendation_history` | `PENDING_ENTRY` | `WAITING_FOR_NEXT_SESSION_QUOTE` | 0 |  |  |  |  |
-| `330590` | 롯데리츠 | `daily_recommendations_v2_csv` | `PENDING_ENTRY` | `WAITING_FOR_NEXT_SESSION_QUOTE` | 0 |  |  |  |  |
 | `361610` | SK아이이테크놀로지 | `recommendation_history` | `PENDING_ENTRY` | `WAITING_FOR_NEXT_SESSION_QUOTE` | 0 |  |  |  |  |
 | `377300` | 카카오페이 | `recommendation_history` | `PENDING_ENTRY` | `WAITING_FOR_NEXT_SESSION_QUOTE` | 0 |  |  |  |  |

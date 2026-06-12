@@ -1606,6 +1606,403 @@ def test_percent_bps_mode_weak_liquidity_wide_spread_0065_pct(monkeypatch):
     assert result["order_price"] == 9930
 
 
+def test_aggressive_entry_price_override_moves_neutral_defensive_to_bid_minus_tick(monkeypatch):
+    monkeypatch.setattr(entry_latency_module, "_defense_mode_is_percent_bps", lambda: True)
+    monkeypatch.setattr(entry_latency_module, "_normal_defensive_bps", lambda: 50)
+    monkeypatch.setattr(entry_latency_module, "_conditional_strong_defensive_bps", lambda: 10)
+    monkeypatch.setattr(entry_latency_module, "_normal_favorable_defensive_bps", lambda: 35)
+    monkeypatch.setattr(entry_latency_module, "_normal_weak_defensive_bps", lambda: 65)
+    monkeypatch.setattr(entry_latency_module, "_conditional_real_1tick_enabled", lambda s: True)
+    monkeypatch.setattr(
+        entry_latency_module,
+        "TRADING_RULES",
+        replace(
+            CONFIG,
+            SCALP_AGGRESSIVE_ENTRY_PRICE_OVERRIDE_ENABLED=True,
+            SCALP_AGGRESSIVE_ENTRY_PRICE_OVERRIDE_TYPES="defensive_missed_upside_v1",
+            SCALP_DEFENSIVE_MISSED_UPSIDE_MIN_ORIGINAL_BPS=35,
+            SCALP_DEFENSIVE_MISSED_UPSIDE_NEUTRAL_BID_MINUS_TICKS=1,
+            SCALP_DEFENSIVE_MISSED_UPSIDE_BULLISH_BID_MINUS_TICKS=0,
+        ),
+    )
+
+    entry_latency_module.ORDERBOOK_STABILITY_OBSERVER.reset()
+    entry_latency_module.ORDERBOOK_STABILITY_OBSERVER.record_quote(
+        "005930_aggressive_neutral", best_bid=10_000, best_ask=10_050, ts=time.time(),
+    )
+    result = evaluate_live_buy_entry(
+        stock={"name": "삼성전자", "position_tag": "SCANNER"},
+        code="005930_aggressive_neutral",
+        ws_data={
+            "curr": 10_000,
+            "last_ws_update_ts": datetime.now(UTC).timestamp(),
+            "orderbook_micro_state": "neutral",
+            "orderbook": {
+                "asks": [{"price": 10_050, "volume": 5000}],
+                "bids": [{"price": 10_000, "volume": 500}],
+            },
+            "buy_exec_volume": 20,
+            "sell_exec_volume": 80,
+            "net_buy_exec_volume": -60,
+        },
+        strategy_id="SCALPING",
+        planned_qty=1,
+        signal_price=10_000,
+        signal_strength=0.9,
+    )
+
+    assert result["allowed"] is True
+    assert result["entry_price_guard"] == "defensive_missed_upside_aggressive_entry"
+    assert result["order_price"] == 9990
+    assert result["aggressive_entry_price_override_applied"] is True
+    assert result["aggressive_entry_price_override_type"] == "defensive_missed_upside_v1"
+    assert result["aggressive_entry_price_original_profile"] == "weak_liquidity_wide_spread"
+    assert result["aggressive_entry_price_original_bps"] == 65
+    assert result["aggressive_entry_price_target_mode"] == "best_bid_near"
+    assert result["aggressive_entry_price_order_price"] == 9990
+
+
+def test_aggressive_entry_price_override_moves_positive_micro_to_best_bid(monkeypatch):
+    monkeypatch.setattr(entry_latency_module, "_defense_mode_is_percent_bps", lambda: True)
+    monkeypatch.setattr(entry_latency_module, "_normal_defensive_bps", lambda: 50)
+    monkeypatch.setattr(entry_latency_module, "_conditional_strong_defensive_bps", lambda: 10)
+    monkeypatch.setattr(entry_latency_module, "_normal_favorable_defensive_bps", lambda: 35)
+    monkeypatch.setattr(entry_latency_module, "_normal_weak_defensive_bps", lambda: 65)
+    monkeypatch.setattr(entry_latency_module, "_conditional_real_1tick_enabled", lambda s: True)
+    monkeypatch.setattr(
+        entry_latency_module,
+        "TRADING_RULES",
+        replace(
+            CONFIG,
+            SCALP_AGGRESSIVE_ENTRY_PRICE_OVERRIDE_ENABLED=True,
+            SCALP_AGGRESSIVE_ENTRY_PRICE_OVERRIDE_TYPES="defensive_missed_upside_v1",
+            SCALP_DEFENSIVE_MISSED_UPSIDE_MIN_ORIGINAL_BPS=35,
+            SCALP_DEFENSIVE_MISSED_UPSIDE_NEUTRAL_BID_MINUS_TICKS=1,
+            SCALP_DEFENSIVE_MISSED_UPSIDE_BULLISH_BID_MINUS_TICKS=0,
+        ),
+    )
+
+    entry_latency_module.ORDERBOOK_STABILITY_OBSERVER.reset()
+    entry_latency_module.ORDERBOOK_STABILITY_OBSERVER.record_quote(
+        "005930_aggressive_positive", best_bid=10_000, best_ask=10_020, ts=time.time(),
+    )
+    result = evaluate_live_buy_entry(
+        stock={"name": "삼성전자", "position_tag": "SCANNER"},
+        code="005930_aggressive_positive",
+        ws_data={
+            "curr": 10_000,
+            "last_ws_update_ts": datetime.now(UTC).timestamp(),
+            "orderbook_micro_state": "bullish",
+            "orderbook": {
+                "asks": [{"price": 10_020, "volume": 1000}],
+                "bids": [{"price": 10_000, "volume": 1000}],
+            },
+            "buy_exec_volume": 120,
+            "sell_exec_volume": 80,
+            "net_buy_exec_volume": 40,
+        },
+        strategy_id="SCALPING",
+        planned_qty=1,
+        signal_price=10_000,
+        signal_strength=0.9,
+    )
+
+    assert result["entry_price_guard"] == "defensive_missed_upside_aggressive_entry"
+    assert result["order_price"] == 10000
+    assert result["aggressive_entry_price_original_profile"] == "favorable_micro"
+    assert result["aggressive_entry_price_original_bps"] == 35
+
+
+def test_reference_target_missed_upside_override_moves_positive_micro_to_best_bid(monkeypatch):
+    monkeypatch.setattr(entry_latency_module, "_defense_mode_is_percent_bps", lambda: True)
+    monkeypatch.setattr(entry_latency_module, "_normal_defensive_bps", lambda: 50)
+    monkeypatch.setattr(entry_latency_module, "_conditional_strong_defensive_bps", lambda: 10)
+    monkeypatch.setattr(entry_latency_module, "_normal_favorable_defensive_bps", lambda: 35)
+    monkeypatch.setattr(entry_latency_module, "_normal_weak_defensive_bps", lambda: 65)
+    monkeypatch.setattr(entry_latency_module, "_conditional_real_1tick_enabled", lambda s: True)
+    monkeypatch.setattr(
+        entry_latency_module,
+        "TRADING_RULES",
+        replace(
+            CONFIG,
+            SCALP_AGGRESSIVE_ENTRY_PRICE_OVERRIDE_ENABLED=True,
+            SCALP_AGGRESSIVE_ENTRY_PRICE_OVERRIDE_TYPES="defensive_missed_upside_v1,reference_target_cap_missed_upside_v1",
+            SCALP_REFERENCE_TARGET_MISSED_UPSIDE_MIN_BELOW_BID_BPS=20,
+            SCALP_REFERENCE_TARGET_MISSED_UPSIDE_NEUTRAL_BID_MINUS_TICKS=1,
+            SCALP_REFERENCE_TARGET_MISSED_UPSIDE_BULLISH_BID_MINUS_TICKS=0,
+        ),
+    )
+
+    result = evaluate_live_buy_entry(
+        stock={"name": "삼성전자", "position_tag": "SCANNER"},
+        code="005930_reference_target_positive",
+        ws_data={
+            "curr": 10_000,
+            "last_ws_update_ts": datetime.now(UTC).timestamp(),
+            "orderbook_micro_state": "bullish",
+            "orderbook": {
+                "asks": [{"price": 10_020, "volume": 1000}],
+                "bids": [{"price": 10_000, "volume": 1000}],
+            },
+            "buy_exec_volume": 120,
+            "sell_exec_volume": 80,
+            "net_buy_exec_volume": 40,
+        },
+        strategy_id="SCALPING",
+        planned_qty=1,
+        signal_price=10_000,
+        signal_strength=0.9,
+        target_buy_price=9_900,
+    )
+
+    assert result["entry_price_guard"] == "reference_target_cap_missed_upside_aggressive_entry"
+    assert result["order_price"] == 10000
+    assert result["price_resolution_reason"] == "aggressive_entry_price_override"
+    assert result["reference_target_applied"] is False
+    assert result["reference_target_rejected_reason"] == "aggressive_entry_price_override_applied"
+    assert result["aggressive_entry_price_override_applied"] is True
+    assert result["aggressive_entry_price_override_type"] == "reference_target_cap_missed_upside_v1"
+    assert result["aggressive_entry_price_override_reason"] == "reference_target_cap_missed_upside_best_bid_near"
+    context = result["entry_price_gap_profile_context"]
+    assert context["reference_target_price"] == 9900
+    assert context["reference_target_below_bid_bps"] == 100
+    assert context["reference_target_missed_upside_min_bps"] == 20
+
+
+def test_reference_target_missed_upside_override_moves_neutral_to_bid_minus_tick(monkeypatch):
+    monkeypatch.setattr(entry_latency_module, "_defense_mode_is_percent_bps", lambda: True)
+    monkeypatch.setattr(entry_latency_module, "_normal_defensive_bps", lambda: 50)
+    monkeypatch.setattr(entry_latency_module, "_conditional_strong_defensive_bps", lambda: 10)
+    monkeypatch.setattr(entry_latency_module, "_normal_favorable_defensive_bps", lambda: 35)
+    monkeypatch.setattr(entry_latency_module, "_normal_weak_defensive_bps", lambda: 65)
+    monkeypatch.setattr(entry_latency_module, "_conditional_real_1tick_enabled", lambda s: True)
+    monkeypatch.setattr(
+        entry_latency_module,
+        "TRADING_RULES",
+        replace(
+            CONFIG,
+            SCALP_AGGRESSIVE_ENTRY_PRICE_OVERRIDE_ENABLED=True,
+            SCALP_AGGRESSIVE_ENTRY_PRICE_OVERRIDE_TYPES="reference_target_cap_missed_upside_v1",
+            SCALP_REFERENCE_TARGET_MISSED_UPSIDE_MIN_BELOW_BID_BPS=20,
+            SCALP_REFERENCE_TARGET_MISSED_UPSIDE_NEUTRAL_BID_MINUS_TICKS=1,
+            SCALP_REFERENCE_TARGET_MISSED_UPSIDE_BULLISH_BID_MINUS_TICKS=0,
+        ),
+    )
+
+    result = evaluate_live_buy_entry(
+        stock={"name": "삼성전자", "position_tag": "SCANNER"},
+        code="005930_reference_target_neutral",
+        ws_data={
+            "curr": 10_000,
+            "last_ws_update_ts": datetime.now(UTC).timestamp(),
+            "orderbook_micro_state": "neutral",
+            "orderbook": {
+                "asks": [{"price": 10_050, "volume": 5000}],
+                "bids": [{"price": 10_000, "volume": 500}],
+            },
+            "buy_exec_volume": 20,
+            "sell_exec_volume": 80,
+            "net_buy_exec_volume": -60,
+        },
+        strategy_id="SCALPING",
+        planned_qty=1,
+        signal_price=10_000,
+        signal_strength=0.9,
+        target_buy_price=9_900,
+    )
+
+    assert result["entry_price_guard"] == "reference_target_cap_missed_upside_aggressive_entry"
+    assert result["order_price"] == 9990
+    assert result["aggressive_entry_price_override_type"] == "reference_target_cap_missed_upside_v1"
+    assert result["aggressive_entry_price_target_mode"] == "best_bid_near"
+
+
+def test_reference_target_missed_upside_override_skips_below_min_bps(monkeypatch):
+    monkeypatch.setattr(entry_latency_module, "_defense_mode_is_percent_bps", lambda: True)
+    monkeypatch.setattr(entry_latency_module, "_normal_defensive_bps", lambda: 50)
+    monkeypatch.setattr(entry_latency_module, "_conditional_strong_defensive_bps", lambda: 10)
+    monkeypatch.setattr(entry_latency_module, "_normal_favorable_defensive_bps", lambda: 35)
+    monkeypatch.setattr(entry_latency_module, "_normal_weak_defensive_bps", lambda: 65)
+    monkeypatch.setattr(entry_latency_module, "_conditional_real_1tick_enabled", lambda s: True)
+    monkeypatch.setattr(
+        entry_latency_module,
+        "TRADING_RULES",
+        replace(
+            CONFIG,
+            SCALP_AGGRESSIVE_ENTRY_PRICE_OVERRIDE_ENABLED=True,
+            SCALP_AGGRESSIVE_ENTRY_PRICE_OVERRIDE_TYPES="reference_target_cap_missed_upside_v1",
+            SCALP_REFERENCE_TARGET_MISSED_UPSIDE_MIN_BELOW_BID_BPS=20,
+        ),
+    )
+
+    result = evaluate_live_buy_entry(
+        stock={"name": "삼성전자", "position_tag": "SCANNER"},
+        code="005930_reference_target_below_min",
+        ws_data={
+            "curr": 10_000,
+            "last_ws_update_ts": datetime.now(UTC).timestamp(),
+            "orderbook_micro_state": "bullish",
+            "orderbook": {
+                "asks": [{"price": 10_020, "volume": 1000}],
+                "bids": [{"price": 10_000, "volume": 1000}],
+            },
+            "buy_exec_volume": 120,
+            "sell_exec_volume": 80,
+            "net_buy_exec_volume": 40,
+        },
+        strategy_id="SCALPING",
+        planned_qty=1,
+        signal_price=10_000,
+        signal_strength=0.9,
+        target_buy_price=9_990,
+    )
+
+    assert result["entry_price_guard"] == "favorable_micro_percent_bps"
+    assert result["order_price"] == 9960
+    assert result["aggressive_entry_price_override_applied"] is False
+    assert result["aggressive_entry_price_override_skip_reason"] == "reference_target_below_bid_bps_below_min"
+
+
+def test_aggressive_entry_price_override_skips_when_dynamic_resolver_live_selected(monkeypatch):
+    monkeypatch.setattr(entry_latency_module, "_defense_mode_is_percent_bps", lambda: True)
+    monkeypatch.setattr(entry_latency_module, "_normal_defensive_bps", lambda: 50)
+    monkeypatch.setattr(entry_latency_module, "_conditional_strong_defensive_bps", lambda: 10)
+    monkeypatch.setattr(entry_latency_module, "_normal_favorable_defensive_bps", lambda: 35)
+    monkeypatch.setattr(entry_latency_module, "_normal_weak_defensive_bps", lambda: 65)
+    monkeypatch.setattr(entry_latency_module, "_conditional_real_1tick_enabled", lambda s: True)
+    monkeypatch.setattr(
+        entry_latency_module,
+        "TRADING_RULES",
+        replace(
+            CONFIG,
+            SCALP_AGGRESSIVE_ENTRY_PRICE_OVERRIDE_ENABLED=True,
+            SCALP_AGGRESSIVE_ENTRY_PRICE_OVERRIDE_TYPES="defensive_missed_upside_v1,reference_target_cap_missed_upside_v1",
+            DYNAMIC_ENTRY_PRICE_RESOLVER_LIVE_SELECTED=True,
+        ),
+    )
+
+    result = evaluate_live_buy_entry(
+        stock={"name": "삼성전자", "position_tag": "SCANNER"},
+        code="005930_aggressive_resolver_selected",
+        ws_data={
+            "curr": 10_000,
+            "last_ws_update_ts": datetime.now(UTC).timestamp(),
+            "orderbook_micro_state": "bullish",
+            "orderbook": {
+                "asks": [{"price": 10_020, "volume": 1000}],
+                "bids": [{"price": 10_000, "volume": 1000}],
+            },
+            "buy_exec_volume": 120,
+            "sell_exec_volume": 80,
+            "net_buy_exec_volume": 40,
+        },
+        strategy_id="SCALPING",
+        planned_qty=1,
+        signal_price=10_000,
+        signal_strength=0.9,
+        target_buy_price=9_900,
+    )
+
+    assert result["entry_price_guard"] == "favorable_micro_percent_bps"
+    assert result["order_price"] == 9960
+    assert result["aggressive_entry_price_override_applied"] is False
+    assert result["aggressive_entry_price_override_skip_reason"] == "dynamic_entry_price_resolver_live_selected"
+
+
+def test_aggressive_entry_price_override_skips_when_entry_price_live_tuning_selected(monkeypatch):
+    monkeypatch.setattr(entry_latency_module, "_defense_mode_is_percent_bps", lambda: True)
+    monkeypatch.setattr(entry_latency_module, "_normal_defensive_bps", lambda: 50)
+    monkeypatch.setattr(entry_latency_module, "_conditional_strong_defensive_bps", lambda: 10)
+    monkeypatch.setattr(entry_latency_module, "_normal_favorable_defensive_bps", lambda: 35)
+    monkeypatch.setattr(entry_latency_module, "_normal_weak_defensive_bps", lambda: 65)
+    monkeypatch.setattr(entry_latency_module, "_conditional_real_1tick_enabled", lambda s: True)
+    monkeypatch.setattr(
+        entry_latency_module,
+        "TRADING_RULES",
+        replace(
+            CONFIG,
+            SCALP_AGGRESSIVE_ENTRY_PRICE_OVERRIDE_ENABLED=True,
+            SCALP_AGGRESSIVE_ENTRY_PRICE_OVERRIDE_TYPES="defensive_missed_upside_v1,reference_target_cap_missed_upside_v1",
+            ENTRY_PRICE_LIVE_TUNING_SELECTED=True,
+        ),
+    )
+
+    result = evaluate_live_buy_entry(
+        stock={"name": "삼성전자", "position_tag": "SCANNER"},
+        code="005930_aggressive_entry_live_owner",
+        ws_data={
+            "curr": 10_000,
+            "last_ws_update_ts": datetime.now(UTC).timestamp(),
+            "orderbook_micro_state": "bullish",
+            "orderbook": {
+                "asks": [{"price": 10_020, "volume": 1000}],
+                "bids": [{"price": 10_000, "volume": 1000}],
+            },
+            "buy_exec_volume": 120,
+            "sell_exec_volume": 80,
+            "net_buy_exec_volume": 40,
+        },
+        strategy_id="SCALPING",
+        planned_qty=1,
+        signal_price=10_000,
+        signal_strength=0.9,
+        target_buy_price=9_900,
+    )
+
+    assert result["entry_price_guard"] == "favorable_micro_percent_bps"
+    assert result["order_price"] == 9960
+    assert result["aggressive_entry_price_override_applied"] is False
+    assert result["aggressive_entry_price_override_skip_reason"] == "dynamic_entry_price_resolver_live_selected"
+
+
+def test_aggressive_entry_price_override_skips_weak_pullback_like_context(monkeypatch):
+    monkeypatch.setattr(entry_latency_module, "_defense_mode_is_percent_bps", lambda: True)
+    monkeypatch.setattr(entry_latency_module, "_normal_defensive_bps", lambda: 50)
+    monkeypatch.setattr(entry_latency_module, "_conditional_strong_defensive_bps", lambda: 10)
+    monkeypatch.setattr(entry_latency_module, "_normal_favorable_defensive_bps", lambda: 35)
+    monkeypatch.setattr(entry_latency_module, "_normal_weak_defensive_bps", lambda: 65)
+    monkeypatch.setattr(entry_latency_module, "_conditional_real_1tick_enabled", lambda s: True)
+    monkeypatch.setattr(
+        entry_latency_module,
+        "TRADING_RULES",
+        replace(CONFIG, SCALP_AGGRESSIVE_ENTRY_PRICE_OVERRIDE_ENABLED=True),
+    )
+
+    result = evaluate_live_buy_entry(
+        stock={
+            "name": "삼성전자",
+            "position_tag": "SCANNER",
+            "scalp_pre_ai_gate_context": {
+                "strength_momentum": {
+                    "risk_state": "weak_momentum_context",
+                    "reason": "below_buy_ratio",
+                }
+            },
+        },
+        code="005930_aggressive_weak_pullback",
+        ws_data={
+            "curr": 10_000,
+            "last_ws_update_ts": datetime.now(UTC).timestamp(),
+            "orderbook_micro_state": "neutral",
+            "orderbook": {
+                "asks": [{"price": 10_050, "volume": 5000}],
+                "bids": [{"price": 10_000, "volume": 500}],
+            },
+            "buy_exec_volume": 20,
+            "sell_exec_volume": 80,
+            "net_buy_exec_volume": -60,
+        },
+        strategy_id="SCALPING",
+        planned_qty=1,
+        signal_price=10_000,
+        signal_strength=0.9,
+    )
+
+    assert result["entry_price_guard"] == "weak_liquidity_wide_spread_percent_bps"
+    assert result["order_price"] == 9930
+    assert result["aggressive_entry_price_override_applied"] is False
+
+
 def test_percent_bps_mode_non_scalping_stays_tick(monkeypatch):
     monkeypatch.setattr(entry_latency_module, "_defense_mode_is_percent_bps", lambda: True)
 
