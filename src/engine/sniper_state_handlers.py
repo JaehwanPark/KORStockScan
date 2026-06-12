@@ -45,6 +45,10 @@ from src.engine.scalping.microstructure_reaction_context import (
     CONTEXT_KEYS as MICROSTRUCTURE_REACTION_CONTEXT_KEYS,
     neutral_microstructure_reaction_context,
 )
+from src.engine.scalping.watching_score_smoothing import (
+    evaluate_watching_score,
+    normalize_mode as normalize_watching_score_smoothing_mode,
+)
 from src.engine.sniper_scale_in_utils import record_add_history_event
 from src.engine.trade_pause_control import is_buy_side_paused, get_pause_state_label
 from src.engine.sniper_entry_latency import (
@@ -100,6 +104,14 @@ from src.trading.order.tick_utils import clamp_price_to_tick
 from src.engine.scalping.entry_cancel_wait_attribution import (
     EntryCancelWaitAttributionResult,
     compute_entry_cancel_wait_attribution,
+)
+from src.engine.scalping.entry_cancel_wait_runtime import (
+    COUNTERFACTUAL_AUTHORITY as ENTRY_CANCEL_WAIT_COUNTERFACTUAL_AUTHORITY,
+    POLICY_VERSION as ENTRY_CANCEL_WAIT_POLICY_VERSION,
+    RUNTIME_FAMILY as ENTRY_CANCEL_WAIT_RUNTIME_FAMILY,
+    new_counterfactual_observation,
+    observe_counterfactual,
+    resolve_profile as resolve_entry_cancel_wait_profile,
 )
 
 
@@ -5930,10 +5942,21 @@ def _publish_buy_signal_submission_notice(
         or stock.get('entry_armed_dynamic_reason')
         or '-'
     )
+    order_price = _coerce_int_value(
+        (latency_gate or {}).get('order_price')
+        or (latency_gate or {}).get('submitted_order_price')
+        or (latency_gate or {}).get('latency_guarded_order_price')
+    )
+    gap_pct = 0.0
+    if _coerce_int_value(curr_price) > 0 and order_price > 0:
+        gap_pct = ((float(order_price) - float(curr_price)) / float(curr_price)) * 100.0
+    order_price_text = f"{order_price:,}원" if order_price > 0 else "-"
+    gap_text = f"{gap_pct:+.2f}%" if order_price > 0 and _coerce_int_value(curr_price) > 0 else "-"
     msg = (
         f"🛒 **[BUY 주문 제출] {stock.get('name')} ({code})**\n"
         f"전략: `{strategy}` | 진입모드: `{entry_mode}`\n"
         f"현재가: `{int(curr_price):,}원` | 제출수량: `{int(requested_qty or 0)}주`\n"
+        f"주문가: `{order_price_text}` | 현재가대비: `{gap_text}`\n"
         f"진입근거: `{dynamic_reason}`\n"
         f"Latency: `{_translate_latency_state(latency_gate.get('latency_state'))}` / "
         f"`{_translate_entry_decision(latency_gate.get('decision'))}`"
@@ -5952,6 +5975,10 @@ def _publish_buy_signal_submission_notice(
             audience=audience,
             entry_mode=entry_mode,
             requested_qty=_safe_int(requested_qty, 0),
+            order_price=order_price,
+            current_price=_coerce_int_value(curr_price),
+            order_price_gap_pct=f"{gap_pct:.4f}" if order_price > 0 and _coerce_int_value(curr_price) > 0 else "-",
+            price_below_bid_bps=_coerce_int_value((latency_gate or {}).get("price_below_bid_bps")),
             liquidity_value=_safe_int(liquidity_value, 0),
             ai_score=f"{float(ai_score or 0):.1f}",
             latency=latency_gate.get('latency_state'),
@@ -8426,8 +8453,6 @@ def _resolve_buy_order_timeout_sec(stock, strategy):
             return max(5, min(1200, int(stored_result.get('cancel_wait_sec', 90) or 90)))
 
     explicit_timeout = _coerce_int_value((stock or {}).get('entry_timeout_sec_override'))
-    if explicit_timeout > 0 and not attribution_enabled:
-        return max(5, min(1200, explicit_timeout))
 
     profile = str(
         (stock or {}).get('entry_timeout_profile')
@@ -8446,10 +8471,20 @@ def _resolve_buy_order_timeout_sec(stock, strategy):
     else:
         base_sec = _rule_int('SCALPING_ENTRY_TIMEOUT_SEC', 90)
 
-    if attribution_enabled and explicit_timeout > 0:
-        return max(5, min(1200, max(base_sec, explicit_timeout)))
-
     return base_sec
+
+
+def _entry_cancel_wait_profile_base_sec(stock) -> tuple[str, int]:
+    profile = resolve_entry_cancel_wait_profile(
+        (stock or {}).get("position_tag"), (stock or {}).get("entry_mode")
+    )
+    rule_name, default = {
+        "standard": ("SCALPING_ENTRY_TIMEOUT_SEC", 60),
+        "breakout": ("SCALPING_BREAKOUT_ENTRY_TIMEOUT_SEC", 120),
+        "pullback": ("SCALPING_PULLBACK_ENTRY_TIMEOUT_SEC", 600),
+        "reserve": ("SCALPING_RESERVE_ENTRY_TIMEOUT_SEC", 1200),
+    }[profile]
+    return profile, max(5, min(1200, _rule_int(rule_name, default)))
 
 
 def _compute_and_emit_entry_cancel_wait_attribution(stock, code, *, latency_gate=None, curr_price=0):
@@ -8505,6 +8540,7 @@ def _compute_and_emit_entry_cancel_wait_attribution(stock, code, *, latency_gate
     overbought_action = str(gate.get('overbought_guard_action') or '').strip()
 
     suggested_wait_sec = _coerce_int_value((stock or {}).get('entry_timeout_sec_override'))
+    wait_profile, profile_base_wait_sec = _entry_cancel_wait_profile_base_sec(stock)
 
     result = compute_entry_cancel_wait_attribution(
         cancelled_or_partial_filled_qty=cancelled_or_filled_qty,
@@ -8532,6 +8568,7 @@ def _compute_and_emit_entry_cancel_wait_attribution(stock, code, *, latency_gate
         stale_max_sec=stale_max_sec,
         spread_ratio=spread_ratio,
         overbought_guard_action=overbought_action,
+        profile_base_wait_sec=profile_base_wait_sec,
     )
 
     wait_log_fields = result.as_log_fields()
@@ -8539,10 +8576,6 @@ def _compute_and_emit_entry_cancel_wait_attribution(stock, code, *, latency_gate
         key: str(value)
         for key, value in (result.attribution_context_summary or {}).items()
     })
-    wait_log_fields["wait_policy_applied"] = str(attribution_enabled).lower()
-    wait_log_fields["is_report_only"] = str(not attribution_enabled).lower()
-    _log_entry_pipeline(stock, code, "entry_cancel_wait_attribution", **wait_log_fields)
-
     stored = {
         "cancel_wait_sec": result.cancel_wait_sec,
         "base_wait_sec": result.base_wait_sec,
@@ -8557,6 +8590,9 @@ def _compute_and_emit_entry_cancel_wait_attribution(stock, code, *, latency_gate
         "is_report_only": not attribution_enabled,
         "actual_timeout_sec": 0,
         "attribution_emitted_at": time.time(),
+        "wait_profile": wait_profile,
+        "runtime_family": ENTRY_CANCEL_WAIT_RUNTIME_FAMILY,
+        "policy_version": ENTRY_CANCEL_WAIT_POLICY_VERSION,
     }
     with ENTRY_LOCK:
         stock['entry_cancel_wait_attribution_result'] = stored
@@ -8566,8 +8602,55 @@ def _compute_and_emit_entry_cancel_wait_attribution(stock, code, *, latency_gate
         stored = stock.get('entry_cancel_wait_attribution_result', {})
         if isinstance(stored, dict):
             stored['actual_timeout_sec'] = actual_timeout_sec
+            stored['projected_cancel_wait_sec'] = result.cancel_wait_sec
+            if not attribution_enabled:
+                stored['cancel_wait_sec'] = actual_timeout_sec
+
+    wait_log_fields.update({
+        "projected_cancel_wait_sec": str(result.cancel_wait_sec),
+        "cancel_wait_sec": str(actual_timeout_sec if not attribution_enabled else result.cancel_wait_sec),
+        "wait_policy_applied": str(attribution_enabled).lower(),
+        "is_report_only": str(not attribution_enabled).lower(),
+        "selected_timeout_sec": str(actual_timeout_sec),
+        "actual_timeout_sec": str(actual_timeout_sec),
+        "wait_profile": wait_profile,
+        "runtime_family": ENTRY_CANCEL_WAIT_RUNTIME_FAMILY,
+        "policy_version": ENTRY_CANCEL_WAIT_POLICY_VERSION,
+    })
+    _log_entry_pipeline(stock, code, "entry_cancel_wait_attribution", **wait_log_fields)
 
     return result
+
+
+def _observe_entry_cancel_wait_counterfactuals(stock, code, *, now_ts: float, curr_price: int) -> None:
+    observations = list((stock or {}).get("entry_cancel_wait_counterfactuals") or [])
+    if not observations or curr_price <= 0:
+        return
+    remaining = []
+    for observation in observations:
+        updated, events = observe_counterfactual(observation, now_ts=now_ts, current_price=curr_price)
+        common = {
+            "runtime_family": ENTRY_CANCEL_WAIT_RUNTIME_FAMILY,
+            "policy_version": ENTRY_CANCEL_WAIT_POLICY_VERSION,
+            "decision_authority": ENTRY_CANCEL_WAIT_COUNTERFACTUAL_AUTHORITY,
+            "runtime_effect": False,
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+            "forbidden_uses": "adm_ldm_input|lifecycle_bucket_input|general_threshold_ev_input|order_authority",
+            "source_order_no": updated.get("order_no"),
+            "wait_profile": updated.get("profile"),
+            "submitted_price": updated.get("submitted_price"),
+            "qty": updated.get("qty"),
+            "actual_timeout_sec": updated.get("actual_timeout_sec"),
+            "selected_timeout_sec": updated.get("selected_timeout_sec"),
+        }
+        for event in events:
+            payload = dict(event)
+            stage = str(payload.pop("stage"))
+            _log_entry_pipeline(stock, code, stage, **common, **payload)
+        if not updated.get("completed"):
+            remaining.append(updated)
+    _mutate_stock_state(stock, set_fields={"entry_cancel_wait_counterfactuals": remaining})
 
 
 def _build_entry_ai_price_context(stock, latency_gate, *, curr_price, best_bid, best_ask):
@@ -9124,27 +9207,71 @@ def _quote_freshness_bucket(ws_data) -> str:
 
 def _build_watching_state_change_signature(ws_data, feature_packet=None) -> dict:
     packet = feature_packet if isinstance(feature_packet, dict) else {}
+    source = ws_data if isinstance(ws_data, dict) else {}
     buy_pressure = packet.get("buy_pressure_10t", packet.get("buy_pressure", (ws_data or {}).get("buy_ratio", 0.0)))
     top3_ratio = packet.get("top3_depth_ratio")
     if top3_ratio in (None, "", 0):
         top3_ratio = _entry_top3_depth_ratio(ws_data)
-    tick_accel = packet.get("tick_acceleration_ratio", packet.get("tick_accel", 0.0))
-    micro_vwap_bp = packet.get("curr_vs_micro_vwap_bp", packet.get("micro_vwap_bp", 0.0))
-    ma5_bp = packet.get("curr_vs_ma5_bp", 0.0)
-    large_sell = packet.get("large_sell_print_detected", packet.get("large_sell_print", False))
+    tick_accel = packet.get(
+        "tick_acceleration_ratio",
+        packet.get(
+            "tick_accel",
+            source.get("tick_acceleration_ratio", source.get("tick_accel", 0.0)),
+        ),
+    )
+    micro_vwap_bp = packet.get(
+        "curr_vs_micro_vwap_bp",
+        packet.get(
+            "micro_vwap_bp",
+            source.get("curr_vs_micro_vwap_bp", source.get("micro_vwap_bp", 0.0)),
+        ),
+    )
+    ma5_bp = packet.get("curr_vs_ma5_bp", source.get("curr_vs_ma5_bp", 0.0))
+    large_sell = packet.get(
+        "large_sell_print_detected",
+        packet.get(
+            "large_sell_print",
+            source.get("large_sell_print_detected", source.get("large_sell_print", False)),
+        ),
+    )
     return {
         "micro_vwap_side": _signed_regime(micro_vwap_bp),
         "ma5_side": _signed_regime(ma5_bp),
         "buy_pressure_10t": round(_safe_float(buy_pressure, 0.0), 3),
         "tick_acceleration_regime": _bucket_tick_acceleration(tick_accel),
-        "large_sell_print_detected": bool(large_sell),
+        "large_sell_print_detected": _boolish_true(large_sell),
         "top3_depth_regime": _bucket_top_depth_ratio(top3_ratio),
         "quote_freshness": _quote_freshness_bucket(ws_data),
     }
 
 
+def _watching_refresh_available_axes(ws_data, feature_packet=None) -> list[str]:
+    packet = feature_packet if isinstance(feature_packet, dict) else {}
+    source = ws_data if isinstance(ws_data, dict) else {}
+    axes = ["buy_pressure_10t", "top3_depth_regime", "quote_freshness"]
+    if any(key in packet or key in source for key in ("curr_vs_micro_vwap_bp", "micro_vwap_bp")):
+        axes.append("micro_vwap_side")
+    if "curr_vs_ma5_bp" in packet or "curr_vs_ma5_bp" in source:
+        axes.append("ma5_side")
+    if any(key in packet or key in source for key in ("tick_acceleration_ratio", "tick_accel")):
+        axes.append("tick_acceleration_regime")
+    if any(key in packet or key in source for key in ("large_sell_print_detected", "large_sell_print")):
+        axes.append("large_sell_print_detected")
+    return sorted(set(axes))
+
+
+def _build_watching_refresh_signature(ws_data, feature_packet=None) -> dict:
+    signature = _build_watching_state_change_signature(ws_data, feature_packet)
+    signature["signature_source"] = "runtime_context_v2"
+    signature["available_axes"] = _watching_refresh_available_axes(ws_data, feature_packet)
+    return signature
+
+
 def _resolve_watching_state_change_refresh(stock, ws_data, *, now_ts, last_ai_time, cooldown_sec) -> dict:
-    if not bool(_rule("AI_WATCHING_STATE_CHANGE_REFRESH_ENABLED", False)):
+    smoothing_mode = normalize_watching_score_smoothing_mode(
+        _rule("AI_WATCHING_SCORE_SMOOTHING_MODE", "off")
+    )
+    if not bool(_rule("AI_WATCHING_STATE_CHANGE_REFRESH_ENABLED", False)) and smoothing_mode == "off":
         return {"allowed": False, "reason": "disabled", "signature": {}}
     if last_ai_time <= 0:
         return {"allowed": False, "reason": "first_call_uses_normal_path", "signature": {}}
@@ -9156,16 +9283,27 @@ def _resolve_watching_state_change_refresh(stock, ws_data, *, now_ts, last_ai_ti
     block_until = _safe_float((stock or {}).get("watching_state_change_refresh_block_until"), 0.0)
     if block_until > 0 and now_ts < block_until:
         return {"allowed": False, "reason": "already_refreshed_this_cooldown", "signature": {}}
+    if smoothing_mode != "off" and now_ts - last_ai_time < 20.0:
+        return {"allowed": False, "reason": "early_refresh_min_interval", "signature": {}}
 
     previous = (stock or {}).get("last_watching_ai_state_signature")
     if not isinstance(previous, dict):
         return {"allowed": False, "reason": "missing_previous_signature", "signature": {}}
-    current = _build_watching_state_change_signature(ws_data)
+    current = _build_watching_refresh_signature(ws_data)
+    if smoothing_mode != "off" and previous.get("signature_source") not in {current.get("signature_source"), "ws_runtime_context_v1"}:
+        return {"allowed": False, "reason": "legacy_signature_source_mismatch", "signature": current}
     reasons = []
+    previous_axes = set(previous.get("available_axes") or ())
+    current_axes = set(current.get("available_axes") or ())
+    if not previous_axes:
+        previous_axes = {"buy_pressure_10t", "top3_depth_regime", "quote_freshness"}
+    comparable_axes = previous_axes & current_axes
     for key in ("micro_vwap_side", "ma5_side", "tick_acceleration_regime", "top3_depth_regime", "quote_freshness"):
+        if key not in comparable_axes:
+            continue
         if previous.get(key) and current.get(key) and previous.get(key) != current.get(key):
             reasons.append(f"{key}_changed")
-    if bool(previous.get("large_sell_print_detected")) != bool(current.get("large_sell_print_detected")):
+    if "large_sell_print_detected" in comparable_axes and bool(previous.get("large_sell_print_detected")) != bool(current.get("large_sell_print_detected")):
         reasons.append("large_sell_print_changed")
     pressure_delta = abs(
         _safe_float(current.get("buy_pressure_10t"), 0.0)
@@ -9179,6 +9317,106 @@ def _resolve_watching_state_change_refresh(stock, ws_data, *, now_ts, last_ai_ti
         "reason": "|".join(reasons) if reasons else "state_unchanged",
         "signature": current,
     }
+
+
+def _run_watching_score_projection_refresh(
+    stock,
+    code,
+    ws_data,
+    *,
+    now_ts,
+    last_ai_time,
+    cooldown_sec,
+    refresh_reason,
+    current_ai_score,
+) -> bool:
+    """Collect an early Tier 1 observation without changing runtime authority."""
+    try:
+        projection_engine = DUAL_PERSONA_ENGINE
+        if projection_engine is None or not hasattr(projection_engine, "submit_watching_score_projection"):
+            return False
+        if stock.get("watching_score_projection_inflight"):
+            return False
+        if not ws_data.get("orderbook"):
+            return False
+        _mutate_stock_state(stock, set_fields={"watching_score_projection_inflight": True})
+        recent_ticks = kiwoom_utils.get_tick_history_ka10003(KIWOOM_TOKEN, code, limit=10)
+        recent_candles = kiwoom_utils.get_minute_candles_ka10080(KIWOOM_TOKEN, code, limit=40)
+        if not recent_ticks:
+            _mutate_stock_state(stock, set_fields={"watching_score_projection_inflight": False})
+            return False
+        quote_age_sec = _get_ws_snapshot_age_sec(ws_data)
+        if quote_age_sec is not None:
+            ws_data.setdefault("quote_age_ms", int(round(quote_age_sec * 1000.0)))
+            ws_data.setdefault("quote_age_source", "last_ws_update_ts")
+        ws_data.setdefault("current_ai_score", current_ai_score)
+        ws_data.setdefault("ai_score_baseline_source", "pre_analyze_target_runtime_score")
+
+        def _on_projection(result):
+            try:
+                result = dict(result or {})
+                action = str(result.get("action") or "WAIT").upper()
+                raw_score = result.get("score", 50)
+                decision, observations = evaluate_watching_score(
+                    stock.get("watching_score_smoothing_observations") or [],
+                    now_ts=time.time(), raw_score=raw_score, action=action, mode="report_only",
+                    ai_result=result, previous_applied_score=current_ai_score,
+                    quote_stale=ws_data.get("quote_stale", False),
+                    context_stale=result.get("tick_context_stale", False) or ws_data.get("context_stale", False),
+                )
+                projection_fields = decision.provenance_fields(early_refresh_trigger=refresh_reason)
+                _mutate_stock_state(stock, set_fields={
+                    "watching_score_smoothing_observations": observations,
+                    "watching_state_change_refresh_last_ai_time": f"{float(last_ai_time):.3f}",
+                    "watching_state_change_refresh_block_until": time.time() + max(1, int(cooldown_sec)),
+                    "last_watching_projection_state_signature": _build_watching_refresh_signature(ws_data),
+                    "last_watching_projection_at": time.time(),
+                })
+                result.update(projection_fields)
+                projection_log_fields = _merge_entry_pipeline_field_groups(
+                    _build_observation_contract_fields("ops_volume_diagnostic"),
+                    {
+                "action": action,
+                "ai_score": f"{float(current_ai_score):.1f}",
+                "runtime_score_preserved": f"{float(current_ai_score):.1f}",
+                "runtime_action_preserved": str(stock.get("last_watching_ai_action") or "-").upper(),
+                "actual_order_submitted": False,
+                "broker_order_forbidden": True,
+                "decision_authority": "report_only_no_runtime_effect",
+                "runtime_effect": False,
+                "forbidden_uses": "adm_ldm_input|threshold_cycle_input|order_authority|runtime_score_mutation",
+            },
+                    _build_ai_ops_log_fields(
+                        result, ai_score_raw=raw_score, ai_score_after_bonus=current_ai_score,
+                        entry_score_threshold=75, big_bite_bonus_applied=False, ai_cooldown_blocked=False,
+                    ),
+                )
+                _log_entry_pipeline(stock, code, "ai_watching_score_projection", **projection_log_fields)
+            finally:
+                _mutate_stock_state(stock, set_fields={"watching_score_projection_inflight": False})
+
+        projection_future = projection_engine.submit_watching_score_projection(
+            stock_name=stock["name"], stock_code=code, ws_data=dict(ws_data),
+            recent_ticks=list(recent_ticks), recent_candles=list(recent_candles),
+            record_id=stock.get("id"), callback=_on_projection,
+        )
+        if projection_future is None:
+            _mutate_stock_state(stock, set_fields={"watching_score_projection_inflight": False})
+            return False
+        return True
+    except Exception as exc:
+        _mutate_stock_state(stock, set_fields={"watching_score_projection_inflight": False})
+        _log_entry_pipeline(
+            stock,
+            code,
+            "ai_watching_score_projection_failed",
+            error=str(exc),
+            decision_authority="report_only_no_runtime_effect",
+            runtime_effect=False,
+            actual_order_submitted=False,
+            broker_order_forbidden=True,
+        )
+        return False
 
 
 def _build_ai_overlap_log_fields(
@@ -9281,6 +9519,11 @@ def _build_ai_ops_log_fields(
         "entry_adm_forced_action",
         "entry_adm_runtime_reason",
         "ai_reason_language_policy",
+        "ai_score_smoothing_mode",
+        "ai_score_smoothing_confidence",
+        "ai_early_refresh_trigger",
+        "ai_score_excluded_reason",
+        "ai_score_policy_version",
     ):
         if field_name in payload:
             out[field_name] = str(payload.get(field_name, "-") or "-")
@@ -9335,6 +9578,19 @@ def _build_ai_ops_log_fields(
         out["entry_adm_runtime_bias_applied"] = bool(payload.get("entry_adm_runtime_bias_applied"))
     if "ai_reason_language_violation" in payload:
         out["ai_reason_language_violation"] = bool(payload.get("ai_reason_language_violation"))
+    if "ai_score_smoothing_applied" in payload:
+        out["ai_score_smoothing_applied"] = bool(payload.get("ai_score_smoothing_applied"))
+    if "ai_score_buy_guard_blocked" in payload:
+        out["ai_score_buy_guard_blocked"] = bool(payload.get("ai_score_buy_guard_blocked"))
+    for field_name in (
+        "ai_score_raw",
+        "ai_score_projected",
+        "ai_score_valid_observation_count",
+        "ai_score_dispersion",
+        "ai_action_consistency",
+    ):
+        if field_name in payload:
+            out[field_name] = payload.get(field_name)
     if payload.get("scalp_feature_packet_version"):
         out["scalp_feature_packet_version"] = str(payload.get("scalp_feature_packet_version"))
     for field_name in (
@@ -11266,6 +11522,9 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                 last_ai_time = LAST_AI_CALL_TIMES.get(code, 0)
                 time_elapsed = now_ts - last_ai_time
                 is_vip_target = (target_buy_price > 0) and (curr_price <= target_buy_price * 1.015)
+                smoothing_mode = normalize_watching_score_smoothing_mode(
+                    _rule("AI_WATCHING_SCORE_SMOOTHING_MODE", "off")
+                )
                 watching_state_refresh = _resolve_watching_state_change_refresh(
                     stock,
                     ws_data,
@@ -11286,10 +11545,34 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                 if is_vip_target and last_ai_time == 0:
                     log_info(f"⏳ [{stock['name']}] 첫 AI 분석을 시작합니다... (기계적 매수 일시 보류)")
 
+                projection_only_refresh = bool(
+                    ai_engine
+                    and is_vip_target
+                    and smoothing_mode == "report_only"
+                    and watching_state_refresh.get("allowed")
+                    and last_ai_time > 0
+                    and time_elapsed <= config["AI_WATCHING_COOLDOWN"]
+                )
+                if projection_only_refresh:
+                    _run_watching_score_projection_refresh(
+                        stock,
+                        code,
+                        ws_data,
+                        now_ts=now_ts,
+                        last_ai_time=last_ai_time,
+                        cooldown_sec=config["AI_WATCHING_COOLDOWN"],
+                        refresh_reason=str(watching_state_refresh.get("reason") or "state_change"),
+                        current_ai_score=current_ai_score,
+                    )
+
+                runtime_refresh_allowed = bool(
+                    watching_state_refresh.get("allowed") and smoothing_mode != "report_only"
+                )
+
                 if ai_engine and is_vip_target and (
                     time_elapsed > config["AI_WATCHING_COOLDOWN"]
                     or last_ai_time == 0
-                    or watching_state_refresh.get("allowed")
+                    or runtime_refresh_allowed
                 ):
                     ai_call_executed = False
                     try:
@@ -11349,7 +11632,35 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                             )
 
                             action = ai_decision.get('action', 'WAIT')
-                            ai_score = ai_decision.get('score', 50)
+                            raw_ai_score = ai_decision.get('score', 50)
+                            smoothing_decision, smoothing_observations = evaluate_watching_score(
+                                stock.get("watching_score_smoothing_observations") or [],
+                                now_ts=now_ts,
+                                raw_score=raw_ai_score,
+                                action=action,
+                                mode=smoothing_mode,
+                                ai_result=ai_decision,
+                                previous_applied_score=current_ai_score,
+                                quote_stale=ws_data.get("quote_stale", False),
+                                context_stale=(
+                                    ai_decision.get("tick_context_stale", False)
+                                    or ws_data.get("context_stale", False)
+                                ),
+                            )
+                            smoothing_fields = smoothing_decision.provenance_fields(
+                                early_refresh_trigger=(
+                                    watching_state_refresh.get("reason")
+                                    if watching_state_refresh.get("allowed")
+                                    else "-"
+                                )
+                            )
+                            ai_score = smoothing_decision.applied_score
+                            smoothing_buy_guard_blocked = bool(
+                                smoothing_mode == "applied" and smoothing_decision.buy_guard_blocked
+                            )
+                            ai_decision = dict(ai_decision or {})
+                            ai_decision.update(smoothing_fields)
+                            ai_decision["score"] = ai_score
                             reason = ai_decision.get('reason', '사유 없음')
                             ai_source_quality_fields = _build_tick_source_quality_log_fields(ai_decision)
                             _mutate_stock_state(
@@ -11357,9 +11668,11 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                                 set_fields={
                                     'last_watching_ai_action': str(action or 'WAIT').upper(),
                                     'last_watching_ai_score': float(ai_score or 0.0),
+                                    'last_watching_ai_score_raw': float(raw_ai_score or 0.0),
                                     'last_watching_ai_reason': str(reason or '')[:240],
                                     'last_watching_ai_confirmed_at': now_ts,
                                     'last_watching_ai_source_quality_fields': ai_source_quality_fields,
+                                    'watching_score_smoothing_observations': smoothing_observations,
                                 },
                             )
                             feature_probe = _extract_buy_recovery_probe_features(
@@ -11380,10 +11693,11 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                                 recent_candles=recent_candles,
                                 ai_engine=ai_engine,
                             )
-                            state_signature = _build_watching_state_change_signature(ws_data, feature_probe)
+                            state_signature = _build_watching_refresh_signature(ws_data, feature_probe)
                             state_fields = {
                                 'last_ai_overlap_snapshot': overlap_snapshot,
                                 'last_watching_ai_state_signature': state_signature,
+                                'last_watching_ai_feature_signature': _build_watching_state_change_signature(ws_data, feature_probe),
                                 'last_watching_ai_call_trigger_reason': ai_call_trigger_reason,
                             }
                             if watching_state_refresh.get("allowed"):
@@ -11417,7 +11731,7 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                                 ),
                                 **_build_ai_ops_log_fields(
                                     ai_decision,
-                                    ai_score_raw=ai_score,
+                                    ai_score_raw=raw_ai_score,
                                     ai_score_after_bonus=ai_score,
                                     entry_score_threshold=75,
                                     big_bite_bonus_applied=False,
@@ -11444,7 +11758,7 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                                     ws_data=ws_data,
                                     feature_probe=feature_probe,
                                 )
-                            if _should_run_score65_74_recovery_probe(
+                            if not smoothing_buy_guard_blocked and _should_run_score65_74_recovery_probe(
                                 ai_decision,
                                 ai_score,
                                 ws_data,
@@ -11510,7 +11824,7 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                                 record_id=stock.get("id"),
                             )
 
-                            if _should_run_main_buy_recovery_canary(
+                            if not smoothing_buy_guard_blocked and _should_run_main_buy_recovery_canary(
                                 ai_decision,
                                 ai_score,
                                 ws_data,
@@ -13992,6 +14306,42 @@ def _cancel_pending_entry_orders(stock, code, *, force=False):
                     cancel_response="success" if is_success else "already_resolved",
                     cancel_message=err_msg[:160],
                 )
+                if is_success and normalize_strategy(stock.get("strategy")) == "SCALPING":
+                    wait_result = (stock or {}).get("entry_cancel_wait_attribution_result") or {}
+                    wait_profile, profile_base_wait_sec = _entry_cancel_wait_profile_base_sec(stock)
+                    selected_timeout_sec = _safe_int(wait_result.get("cancel_wait_sec"), profile_base_wait_sec)
+                    observation = new_counterfactual_observation(
+                        order_no=ord_no,
+                        submitted_at=sent_at or time.time(),
+                        cancelled_at=time.time(),
+                        submitted_price=_coerce_int_value(order.get("price")),
+                        qty=max(0, _coerce_int_value(order.get("qty")) - _coerce_int_value(order.get("filled_qty"))),
+                        profile=wait_profile,
+                        actual_timeout_sec=_resolve_buy_order_timeout_sec(stock, stock.get("strategy")),
+                        selected_timeout_sec=selected_timeout_sec,
+                    )
+                    pending = list(stock.get("entry_cancel_wait_counterfactuals") or [])
+                    pending.append(observation)
+                    _mutate_stock_state(stock, set_fields={"entry_cancel_wait_counterfactuals": pending})
+                    _log_entry_pipeline(
+                        stock,
+                        code,
+                        "entry_cancel_wait_counterfactual_registered",
+                        runtime_family=ENTRY_CANCEL_WAIT_RUNTIME_FAMILY,
+                        policy_version=ENTRY_CANCEL_WAIT_POLICY_VERSION,
+                        decision_authority=ENTRY_CANCEL_WAIT_COUNTERFACTUAL_AUTHORITY,
+                        runtime_effect=False,
+                        actual_order_submitted=False,
+                        broker_order_forbidden=True,
+                        forbidden_uses="adm_ldm_input|lifecycle_bucket_input|general_threshold_ev_input|order_authority",
+                        source_order_no=ord_no,
+                        wait_profile=wait_profile,
+                        submitted_price=observation["submitted_price"],
+                        qty=observation["qty"],
+                        actual_timeout_sec=observation["actual_timeout_sec"],
+                        selected_timeout_sec=observation["selected_timeout_sec"],
+                        candidate_timeout_secs="|".join(str(v) for v in observation["candidate_timeout_secs"]),
+                    )
                 continue
 
             had_failure = True
@@ -14338,6 +14688,9 @@ def handle_watching_state(stock, code, ws_data, admin_id, *, now_ts=None, now_dt
     if now_dt is None:
         now_dt = datetime.now()
     now_t = now_dt.time()
+    _observe_entry_cancel_wait_counterfactuals(
+        stock, code, now_ts=now_ts, curr_price=_safe_int(ws_data.get("curr"), 0)
+    )
 
     _log_watching_state_debug(stock, code, radar=radar, ai_engine=ai_engine)
 
@@ -14506,6 +14859,7 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
 
     curr_p = _safe_int(ws_data.get('curr'), 0)
     buy_p = _safe_float(stock.get('buy_price'), 0.0)
+    _observe_entry_cancel_wait_counterfactuals(stock, code, now_ts=now_ts, curr_price=curr_p)
     _reconcile_pending_entry_orders(stock, code, strategy)
     if curr_p <= 0 or buy_p <= 0:
         return

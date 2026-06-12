@@ -171,6 +171,9 @@ def _iter_jsonl(path: Path, *, filter_entry_tokens: bool = True) -> Iterable[dic
                 except json.JSONDecodeError:
                     continue
                 if isinstance(payload, dict):
+                    fields = payload.get("fields") if isinstance(payload.get("fields"), dict) else {}
+                    if str(fields.get("runtime_family") or "") == "entry_cancel_wait_runtime":
+                        continue
                     yield payload
     except OSError:
         return

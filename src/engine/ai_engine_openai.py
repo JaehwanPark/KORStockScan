@@ -4717,3 +4717,38 @@ class OpenAIDualPersonaShadowEngine(GPTSniperEngine):
                     log_error(f"🚨 [WATCHING shared prompt shadow callback] {stock_name}({stock_code}) 실패: {exc}")
             future.add_done_callback(_emit_result)
         return future
+
+    def submit_watching_score_projection(
+        self,
+        *,
+        stock_name,
+        stock_code,
+        ws_data,
+        recent_ticks,
+        recent_candles,
+        record_id=None,
+        callback=None,
+    ):
+        """Run the exact WATCHING contract on the isolated shadow engine."""
+        future = self.shadow_executor.submit(
+            self.analyze_target,
+            stock_name,
+            ws_data,
+            recent_ticks,
+            recent_candles,
+            prompt_profile="watching",
+            metadata_extra={
+                "record_id": record_id,
+                "stock_code": stock_code,
+                "source_event_stage": "ai_watching_score_projection",
+                "decision_authority": "report_only_no_runtime_effect",
+            },
+        )
+        if callback is not None:
+            def _emit_result(done_future):
+                try:
+                    callback(done_future.result())
+                except Exception as exc:
+                    log_error(f"[WATCHING score projection callback] {stock_name}({stock_code}) failed: {exc}")
+            future.add_done_callback(_emit_result)
+        return future

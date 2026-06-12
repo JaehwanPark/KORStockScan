@@ -172,8 +172,13 @@ def compute_entry_cancel_wait_attribution(
     stale_max_sec: int = STALE_PASSIVE_RISK_MAX_SEC,
     spread_ratio: float = 0.0,
     overbought_guard_action: str = "",
+    profile_base_wait_sec: int | None = None,
 ) -> EntryCancelWaitAttributionResult:
-    base_wait_sec = _resolve_base_wait_sec(position_tag, entry_mode)
+    base_wait_sec = (
+        max(5, min(1200, int(profile_base_wait_sec)))
+        if profile_base_wait_sec is not None and int(profile_base_wait_sec) > 0
+        else _resolve_base_wait_sec(position_tag, entry_mode)
+    )
 
     has_stale_or_passive = (
         entry_passive_probe_applied
@@ -255,9 +260,16 @@ def compute_entry_cancel_wait_attribution(
     if not reasons:
         reasons.append("baseline_no_adjustment")
 
-    resolve_from = clamped_suggested if clamped_suggested is not None else base_wait_sec
+    # Entry-price AI wait is advisory. It may shorten only stale/passive orders;
+    # normal orders retain the independently tuned profile threshold.
+    resolve_from = (
+        clamped_suggested
+        if has_stale_or_passive and clamped_suggested is not None
+        else base_wait_sec
+    )
     raw_wait_sec = resolve_from + net_adjustment
-    cancel_wait_sec = max(min_wait_sec, min(max_wait_sec, raw_wait_sec))
+    effective_min_sec = min_wait_sec if has_stale_or_passive else max(min_wait_sec, base_wait_sec)
+    cancel_wait_sec = max(effective_min_sec, min(max_wait_sec, raw_wait_sec))
 
     attributes = {
         "base_wait_source": "position_tag" if position_tag else "entry_mode" if entry_mode else "strategy_default",

@@ -384,9 +384,44 @@ def test_integration_disabled_stores_provenance_only(monkeypatch):
     assert stored.get("is_report_only") is True
 
     actual_timeout = sniper_state_handlers._resolve_buy_order_timeout_sec(stock, "SCALPING")
-    assert actual_timeout == 30, (
-        f"disabled: entry_timeout_sec_override=30 should give timeout=30, got {actual_timeout}"
+    assert actual_timeout == 90, (
+        f"disabled: legacy entry_timeout_sec_override must not control runtime, got {actual_timeout}"
     )
-    assert stored.get("actual_timeout_sec") == 30, (
-        f"disabled: stored actual_timeout_sec should be 30, got {stored.get('actual_timeout_sec')}"
+    assert stored.get("actual_timeout_sec") == 90, (
+        f"disabled: stored actual_timeout_sec should be 90, got {stored.get('actual_timeout_sec')}"
     )
+    assert stored.get("cancel_wait_sec") == stored.get("actual_timeout_sec")
+    assert stored.get("projected_cancel_wait_sec") >= 60
+
+
+def test_profile_thresholds_are_not_collapsed_by_ai_suggestion():
+    for mode, expected in (("STANDARD", 60), ("BREAKOUT", 120), ("PULLBACK", 600), ("RESERVE", 1200)):
+        r = compute_entry_cancel_wait_attribution(
+            entry_mode=mode,
+            suggested_wait_sec=30,
+            ai_action="USE_DEFENSIVE",
+            profile_base_wait_sec=expected,
+            is_report_only=False,
+        )
+        assert r.cancel_wait_sec == expected
+
+
+def test_enabled_without_stored_result_does_not_use_legacy_override(monkeypatch):
+    from dataclasses import replace
+    from src.engine import sniper_state_handlers
+    from src.utils.constants import TRADING_RULES as CONFIG
+
+    rules = replace(
+        CONFIG,
+        ENTRY_CANCEL_WAIT_ATTRIBUTION_ENABLED=True,
+        SCALPING_ENTRY_TIMEOUT_SEC=60,
+    )
+    monkeypatch.setattr(sniper_state_handlers, "TRADING_RULES", rules)
+
+    stock = {
+        "strategy": "SCALPING",
+        "entry_mode": "STANDARD",
+        "entry_timeout_sec_override": 300,
+    }
+
+    assert sniper_state_handlers._resolve_buy_order_timeout_sec(stock, "SCALPING") == 60

@@ -2,6 +2,49 @@ import json
 from src.engine import runtime_apply_bridge as bridge_mod
 from src.engine import scalp_sim_scale_in_window_approval as scale_in_approval_mod
 from src.engine import threshold_cycle_preopen_apply as mod
+
+
+def test_entry_cancel_wait_standalone_defaults_on(tmp_path, monkeypatch):
+    monkeypatch.setattr(mod, "ENTRY_CANCEL_WAIT_TUNING_DIR", tmp_path / "reports")
+    monkeypatch.setattr(mod, "RUNTIME_ENV_DIR", tmp_path / "runtime_env")
+    decision, env = mod._entry_cancel_wait_standalone_decision("2026-06-12", "2026-06-15", [])
+    assert decision["selected"] is True
+    assert decision["automatic_off_allowed"] is False
+    assert env["KORSTOCKSCAN_ENTRY_CANCEL_WAIT_ATTRIBUTION_ENABLED"] == "true"
+    assert env["KORSTOCKSCAN_SCALPING_ENTRY_TIMEOUT_SEC"] == "60"
+    assert env["KORSTOCKSCAN_SCALPING_BREAKOUT_ENTRY_TIMEOUT_SEC"] == "120"
+    assert env["KORSTOCKSCAN_SCALPING_PULLBACK_ENTRY_TIMEOUT_SEC"] == "600"
+    assert env["KORSTOCKSCAN_SCALPING_RESERVE_ENTRY_TIMEOUT_SEC"] == "1200"
+
+
+def test_entry_cancel_wait_only_explicit_operator_lock_turns_off(tmp_path, monkeypatch):
+    monkeypatch.setattr(mod, "ENTRY_CANCEL_WAIT_TUNING_DIR", tmp_path / "reports")
+    monkeypatch.setattr(mod, "RUNTIME_ENV_DIR", tmp_path / "runtime_env")
+    locks = [{
+        "family": "entry_cancel_wait_runtime",
+        "lock_id": "operator-off",
+        "env_overrides": {"KORSTOCKSCAN_ENTRY_CANCEL_WAIT_ATTRIBUTION_ENABLED": "false"},
+    }]
+    decision, env = mod._entry_cancel_wait_standalone_decision("2026-06-12", "2026-06-15", locks)
+    assert decision["selected"] is False
+    assert decision["decision_reason"] == "explicit_operator_off:operator-off"
+    assert env["KORSTOCKSCAN_ENTRY_CANCEL_WAIT_ATTRIBUTION_ENABLED"] == "false"
+
+
+def test_entry_cancel_wait_is_written_to_runtime_selected_families(tmp_path, monkeypatch):
+    monkeypatch.setattr(mod, "RUNTIME_ENV_DIR", tmp_path / "runtime_env")
+    decision, env = mod._entry_cancel_wait_standalone_decision("2026-06-12", "2026-06-15", [])
+    manifest = {
+        "source_date": "2026-06-12",
+        "source_report": "source.json",
+        "generated_at": "2026-06-12T18:00:00+09:00",
+        "auto_apply_selected": [],
+        "entry_cancel_wait_runtime": decision,
+    }
+    mod._write_runtime_env("2026-06-15", manifest, env)
+    runtime_manifest = json.loads(mod.runtime_env_manifest_path("2026-06-15").read_text(encoding="utf-8"))
+    assert "entry_cancel_wait_runtime" in runtime_manifest["selected_families"]
+    assert runtime_manifest["env_overrides"]["KORSTOCKSCAN_ENTRY_CANCEL_WAIT_ATTRIBUTION_ENABLED"] == "true"
 from src.engine import lifecycle_bucket_discovery as discovery_mod
 from src.engine.scalping import scalp_sim_auto_approval_control_tower as scalp_sim_auto_mod
 from src.engine.swing import sim_auto_approval_control_tower as swing_sim_mod

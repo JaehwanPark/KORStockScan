@@ -51,6 +51,9 @@ SWING_RUNTIME_APPROVAL_REPORT_DIR = DATA_DIR / "report" / "swing_runtime_approva
 SWING_RUNTIME_APPROVAL_ARTIFACT_DIR = DATA_DIR / "threshold_cycle" / "approvals"
 LATENCY_CLASSIFIER_RECOMMENDATION_DIR = DATA_DIR / "report" / "latency_classifier_recommendation"
 RUNTIME_GAP_PROVENANCE_DIR = DATA_DIR / "threshold_cycle" / "runtime_gap_provenance"
+ENTRY_CANCEL_WAIT_TUNING_DIR = DATA_DIR / "report" / "entry_cancel_wait_tuning"
+ENTRY_CANCEL_WAIT_FAMILY = "entry_cancel_wait_runtime"
+ENTRY_CANCEL_WAIT_ACTIVATION_DATE = "2026-06-15"
 
 AUTO_APPLY_MODES = {"auto_bounded_live"}
 AUTO_APPLY_ALLOWED_STATES = {"adjust_up", "adjust_down"}
@@ -535,6 +538,7 @@ def _hold_carry_forward_blockers(candidate: dict[str, Any]) -> list[str]:
 
 
 _FAMILY_ENV_KEY_PREFIXES: dict[str, str] = {
+    "entry_cancel_wait_runtime": "KORSTOCKSCAN_ENTRY_CANCEL_WAIT_",
     "soft_stop_whipsaw_confirmation": "KORSTOCKSCAN_SCALP_SOFT_STOP_WHIPSAW_CONFIRMATION_",
     "score65_74_recovery_probe": "KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_",
     "scalp_sim_candidate_window_expansion": "KORSTOCKSCAN_SCALP_SIM_CANDIDATE_WINDOW_",
@@ -1838,6 +1842,13 @@ def _lifecycle_ai_context_overlay_env(
 
 
 SELECTED_FAMILY_REQUIRED_ENV_KEYS: dict[str, list[str]] = {
+    "entry_cancel_wait_runtime": [
+        "KORSTOCKSCAN_ENTRY_CANCEL_WAIT_ATTRIBUTION_ENABLED",
+        "KORSTOCKSCAN_SCALPING_ENTRY_TIMEOUT_SEC",
+        "KORSTOCKSCAN_SCALPING_BREAKOUT_ENTRY_TIMEOUT_SEC",
+        "KORSTOCKSCAN_SCALPING_PULLBACK_ENTRY_TIMEOUT_SEC",
+        "KORSTOCKSCAN_SCALPING_RESERVE_ENTRY_TIMEOUT_SEC",
+    ],
     "soft_stop_whipsaw_confirmation": [
         "KORSTOCKSCAN_SCALP_SOFT_STOP_WHIPSAW_CONFIRMATION_ENABLED",
     ],
@@ -2152,6 +2163,11 @@ def _write_runtime_env(target_date: str, manifest: dict[str, Any], env_overrides
                         *((manifest.get("runtime_apply_bridge") or {}).get("selected") or []),
                         *((manifest.get("lifecycle_bucket_discovery") or {}).get("selected") or []),
                         *((manifest.get("swing_sim_auto_approval") or {}).get("selected") or []),
+                        *(
+                            [manifest.get("entry_cancel_wait_runtime")]
+                            if (manifest.get("entry_cancel_wait_runtime") or {}).get("selected")
+                            else []
+                        ),
                     ]
                 ],
             },
@@ -2160,6 +2176,74 @@ def _write_runtime_env(target_date: str, manifest: dict[str, Any], env_overrides
         ),
         encoding="utf-8",
     )
+
+
+def _entry_cancel_wait_standalone_decision(
+    source_date: str, target_date: str, operator_locks: list[dict[str, Any]]
+) -> tuple[dict[str, Any], dict[str, str]]:
+    if target_date < ENTRY_CANCEL_WAIT_ACTIVATION_DATE:
+        return ({
+            "family": ENTRY_CANCEL_WAIT_FAMILY,
+            "selected": False,
+            "decision_reason": "before_activation_date",
+            "activation_date": ENTRY_CANCEL_WAIT_ACTIVATION_DATE,
+            "runtime_effect": False,
+            "env_overrides": {},
+        }, {})
+    defaults = {"standard": 60, "breakout": 120, "pullback": 600, "reserve": 1200}
+    report_path = ENTRY_CANCEL_WAIT_TUNING_DIR / f"entry_cancel_wait_tuning_{source_date}.json"
+    report = _load_json(report_path) if report_path.exists() else {}
+    values = report.get("recommended_thresholds") if isinstance(report.get("recommended_thresholds"), dict) else {}
+    _previous_families, previous_manifest = _load_previous_runtime_env_selected_families(target_date)
+    previous_env = previous_manifest.get("env_overrides") if isinstance(previous_manifest.get("env_overrides"), dict) else {}
+    env_keys = {
+        "standard": "KORSTOCKSCAN_SCALPING_ENTRY_TIMEOUT_SEC",
+        "breakout": "KORSTOCKSCAN_SCALPING_BREAKOUT_ENTRY_TIMEOUT_SEC",
+        "pullback": "KORSTOCKSCAN_SCALPING_PULLBACK_ENTRY_TIMEOUT_SEC",
+        "reserve": "KORSTOCKSCAN_SCALPING_RESERVE_ENTRY_TIMEOUT_SEC",
+    }
+    selected_values: dict[str, int] = {}
+    for profile, default in defaults.items():
+        value = int(values.get(profile, 0) or 0)
+        if value <= 0:
+            value = int(previous_env.get(env_keys[profile], 0) or 0)
+        selected_values[profile] = value if value > 0 else default
+
+    explicit_off = False
+    off_lock_id = ""
+    for lock in operator_locks or []:
+        if str(lock.get("family") or "") != ENTRY_CANCEL_WAIT_FAMILY:
+            continue
+        lock_env = _lock_env_overrides(lock)
+        enabled = str(lock_env.get("KORSTOCKSCAN_ENTRY_CANCEL_WAIT_ATTRIBUTION_ENABLED", "true")).lower()
+        if enabled in {"false", "0", "off"}:
+            explicit_off = True
+            off_lock_id = str(lock.get("lock_id") or "operator_lock")
+            break
+    env_overrides = {
+        "KORSTOCKSCAN_ENTRY_CANCEL_WAIT_ATTRIBUTION_ENABLED": "false" if explicit_off else "true",
+        "KORSTOCKSCAN_ENTRY_CANCEL_WAIT_ATTRIBUTION_REAL_MIN_SEC": "60",
+        "KORSTOCKSCAN_ENTRY_CANCEL_WAIT_ATTRIBUTION_STALE_MAX_SEC": "30",
+        **{env_keys[profile]: str(value) for profile, value in selected_values.items()},
+    }
+    decision = {
+        "family": ENTRY_CANCEL_WAIT_FAMILY,
+        "stage": "entry_cancel_wait_operational",
+        "family_type": "standalone_operational_runtime",
+        "selected": not explicit_off,
+        "decision_reason": (
+            f"explicit_operator_off:{off_lock_id}" if explicit_off else "persistent_on_daily_deterministic_ev"
+        ),
+        "runtime_effect": not explicit_off,
+        "allowed_runtime_apply": True,
+        "automatic_off_allowed": False,
+        "source_artifact": str(report_path) if report_path.exists() else None,
+        "source_quality_status": str(report.get("source_quality_status") or "missing_hold_defaults"),
+        "selected_thresholds": selected_values,
+        "env_overrides": env_overrides,
+        "excluded_consumers": ["ADM", "LDM", "lifecycle_bucket", "threshold_cycle_ev", "runtime_apply_bridge"],
+    }
+    return decision, env_overrides
 
 
 def build_preopen_apply_manifest(
@@ -2243,6 +2327,11 @@ def build_preopen_apply_manifest(
             report_source_date,
             target_date,
         )
+        entry_cancel_wait_decision, entry_cancel_wait_env_overrides = (
+            _entry_cancel_wait_standalone_decision(
+                report_source_date, target_date, operator_runtime_env_locks
+            )
+        )
         selected, decisions, env_overrides = ([], [], {})
         lifecycle_context_overlay, lifecycle_context_env_overrides = ({}, {})
         swing_bundle = _load_swing_runtime_approval_bundle(report_source_date)
@@ -2302,6 +2391,7 @@ def build_preopen_apply_manifest(
             )
             env_overrides = {
                 **env_overrides,
+                **entry_cancel_wait_env_overrides,
                 **lifecycle_context_env_overrides,
                 **swing_env_overrides,
                 **scalp_sim_auto_env_overrides,
@@ -2359,6 +2449,7 @@ def build_preopen_apply_manifest(
             "latency_classifier_recommendation": latency_recommendation,
             "auto_apply_selected": selected,
             "auto_apply_decisions": decisions,
+            "entry_cancel_wait_runtime": entry_cancel_wait_decision,
             "lifecycle_ai_context_overlay": lifecycle_context_overlay,
             "operator_runtime_env_locks": operator_runtime_env_locks,
             "approval_requests": approval_requests,

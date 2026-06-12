@@ -101,6 +101,23 @@ Runbook 운영 확인 기록: `[PreopenAutomationHealthCheck20260612] 장전 자
   - 금지: trigger decision을 PREOPEN apply, final verifier, broker/order/provider/cap/bot/threshold, hard-safety/source-quality fail-closed 경계 변경 근거로 사용하지 않는다.
   - 다음 액션: `trigger_contract_pass`, `unexpected_all_run`, `skip_marker_missing`, `source_missing_run_required`, `force_override_detected`, `needs_followup_patch` 중 하나로 닫는다.
 
+- [ ] `[Tier1WatchingScoreReportOnlyPreopen0615] Tier 1 WATCHING score smoothing report-only PREOPEN 전환 및 PID env 확인` (`Due: 2026-06-15`, `Slot: PREOPEN`, `TimeWindow: 08:45~09:00`, `Track: ScalpingLogic`)
+  - Source: [watching_score_smoothing.py](/home/ubuntu/KORStockScan/src/engine/scalping/watching_score_smoothing.py), [sniper_state_handlers.py](/home/ubuntu/KORStockScan/src/engine/sniper_state_handlers.py)
+  - 판정 기준: 코드/회귀 검증 완료 후에만 다음 PREOPEN runtime env에 `KORSTOCKSCAN_AI_WATCHING_SCORE_SMOOTHING_MODE=report_only`를 명시하고 graceful restart 후 PID env 및 첫 3개 `ai_confirmed` event의 `ai_score==ai_score_raw`, `ai_score_smoothing_applied=false`, projected provenance를 확인한다.
+  - 금지: 장중 mode 변경, `applied` 직접 전환, 정규 ADM/LDM/threshold-cycle report schema·산식 변경, projected score의 주문 권한 사용을 금지한다.
+  - 다음 액션: `report_only_loaded_contract_pass`, `pid_env_missing`, `event_contract_mismatch`, `keep_off_due_regression` 중 하나로 닫는다.
+
+- [ ] `[Tier1WatchingScoreAppliedGateReview0617] Tier 1 WATCHING score smoothing 3-session applied 전환조건 판정` (`Due: 2026-06-17`, `Slot: POSTCLOSE`, `TimeWindow: 17:25~17:40`, `Track: ScalpingLogic`)
+  - Source: [watching_score_smoothing.py](/home/ubuntu/KORStockScan/src/engine/scalping/watching_score_smoothing.py), `data/report/ai_watching_score_smoothing_diagnostic/ai_watching_score_smoothing_diagnostic_2026-06-17.json`
+  - 판정 기준: 3개 정상 세션, 유효응답 300건, 종목 20개, 3회 이상 sequence 50개, contention/stale/dispersion/flip/delay/EV/missed-upside/source-quality guard를 모두 확인하고 artifact `transition_guard.eligible=true`일 때만 다음 PREOPEN `applied` 후보로 분류한다.
+  - 금지: diagnostic artifact를 threshold-cycle/ADM/LDM/preopen-auto-apply 입력으로 등록하거나, 조건 일부 누락 상태에서 applied로 전환하지 않는다.
+  - 다음 액션: `eligible_next_preopen_applied_review`, `continue_report_only`, `rollback_off`, `diagnostic_join_fix_required` 중 하나로 닫는다.
+
+- [x] `[EntryCancelWaitStandaloneRuntime0612] 매수취소 대기시간 독립 튜닝축 구현 및 다음 PREOPEN handoff 준비` (`Due: 2026-06-12`, `Slot: INTRADAY`, `TimeWindow: 09:30~15:20`, `Track: ScalpingLogic`)
+  - Source: [entry_cancel_wait_attribution.py](/home/ubuntu/KORStockScan/src/engine/scalping/entry_cancel_wait_attribution.py), [entry_cancel_wait_runtime.py](/home/ubuntu/KORStockScan/src/engine/scalping/entry_cancel_wait_runtime.py), [entry_cancel_wait_tuning.py](/home/ubuntu/KORStockScan/src/engine/automation/entry_cancel_wait_tuning.py), [threshold_cycle_preopen_apply.py](/home/ubuntu/KORStockScan/src/engine/threshold_cycle_preopen_apply.py)
+  - 판정: `implemented_next_preopen_activation_ready`. 근거: legacy AI `entry_timeout_sec_override`의 실주문 직접 권한을 제거하고 report/selected/actual timeout 계약을 정렬했다. profile threshold는 `60/120/600/1200`, 일일 step은 일반/돌파 `±30초`, 눌림/예약 `±10%`이며 stale/passive만 30초 guard를 허용한다. Counterfactual producer와 deterministic EV 전용 report를 추가하고 ADM/LDM/lifecycle/general EV/runtime bridge 입력에서 제외했다.
+  - 다음 액션: `2026-06-15 PREOPEN` runtime env에서 family selected, enabled=true, profile 4개 threshold, runtime handoff verification을 확인한다. 이후 hold/warning/missing report는 직전 ON/value 유지이며 explicit operator OFF 외 자동 비활성화 금지다.
+
 <!-- AUTO_NEXT_STAGE2_CHECKLIST_END -->
 
 

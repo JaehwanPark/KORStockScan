@@ -983,6 +983,12 @@ while true; do
 	if [ "$AI_CORRECTION_PROVIDER" != "none" ] && [ -z "$AI_CORRECTION_RESPONSE_JSON" ] && [ "$ai_correction_status" != "parsed" ]; then
 	  echo "[threshold-cycle] ai correction final unavailable target_date=$TARGET_DATE provider=$AI_CORRECTION_PROVIDER status=$ai_correction_status action=postclose_verifier_will_fail_if_runtime_candidates_blocked" >&2
 	fi
+run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.automation.entry_cancel_wait_tuning \
+  --date "$TARGET_DATE"
+wait_for_report_artifact \
+  "$PROJECT_DIR/data/report/entry_cancel_wait_tuning/entry_cancel_wait_tuning_${TARGET_DATE}.json" \
+  "$PROJECT_DIR/data/report/entry_cancel_wait_tuning/entry_cancel_wait_tuning_${TARGET_DATE}.md" \
+  "entry_cancel_wait_tuning"
 wait_for_report_artifact \
   "$PROJECT_DIR/data/report/statistical_action_weight/statistical_action_weight_${TARGET_DATE}.json" \
   "$PROJECT_DIR/data/report/statistical_action_weight/statistical_action_weight_${TARGET_DATE}.md" \

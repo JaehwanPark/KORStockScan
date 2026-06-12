@@ -3668,7 +3668,12 @@ def test_publish_buy_signal_submission_notice_enqueues_once(monkeypatch):
         "entry_dynamic_reason": "strong_absolute_override",
         "msg_audience": "ADMIN_ONLY",
     }
-    latency_gate = {"latency_state": "SAFE", "decision": "ALLOW_NORMAL"}
+    latency_gate = {
+        "latency_state": "SAFE",
+        "decision": "ALLOW_NORMAL",
+        "order_price": 16500,
+        "price_below_bid_bps": 132,
+    }
 
     state_handlers._publish_buy_signal_submission_notice(
         stock,
@@ -3697,6 +3702,10 @@ def test_publish_buy_signal_submission_notice_enqueues_once(monkeypatch):
     assert "BUY 주문 제출" in payload["message"]
     assert "덕산하이메탈 (077360)" in payload["message"]
     assert "제출수량" in payload["message"]
+    assert "주문가" in payload["message"]
+    assert "16,500원" in payload["message"]
+    assert "현재가대비" in payload["message"]
+    assert "-1.32%" in payload["message"]
     assert "strong_absolute_override" in payload["message"]
     assert pipeline_stages == ["buy_signal_telegram_enqueued"]
 
