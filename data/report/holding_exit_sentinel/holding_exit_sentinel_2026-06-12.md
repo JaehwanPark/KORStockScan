@@ -13,7 +13,7 @@
 
 ## 근거
 
-- as_of: `2026-06-12T10:50:04`
+- as_of: `2026-06-12T10:55:06`
 - exit_signal unique: `52`
 - sell_order_sent unique: `1`
 - sell_completed unique: `1`
@@ -26,7 +26,7 @@
 - AI holding cache MISS: `100.0%`
 - soft_stop rebound above sell 10m: `0.0%`
 - trailing missed-upside: `0.0%`
-- top reasons: `AI보유감시:cache_miss=682, soft_stop_grace=187, flow유예:scalp_soft_stop_pct=132, flow유예:scalp_trailing_take_profit=61, 청산신호:scalp_hard_stop_pct=28`
+- top reasons: `AI보유감시:cache_miss=682, soft_stop_grace=191, flow유예:scalp_soft_stop_pct=132, flow유예:scalp_trailing_take_profit=61, 청산신호:scalp_hard_stop_pct=28`
 
 ## 금지된 자동변경
 
