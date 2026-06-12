@@ -79,6 +79,10 @@ LIFECYCLE_FLOW_PARENT_TARGET_MIN = 30
 LIFECYCLE_FLOW_PARENT_TARGET_MAX = 60
 LIFECYCLE_FLOW_PARENT_TARGET_MID = 45
 ACTIVE_SIM_PRIORITY_POLICY_VERSION = "active_parent_seed_v1"
+ACTIVE_SIM_PRIORITY_QUOTA_POLICY_VERSION = "active_parent_seed_targeted_quota_v1"
+ACTIVE_SIM_PRIORITY_TOTAL_SHARE_PCT = 35
+ACTIVE_SIM_PRIORITY_PER_SEED_DAILY_LIMIT = 20
+ACTIVE_SIM_PRIORITY_SAMPLE_GOAL_PER_BUCKET = 10
 LDM_REFINEMENT_CONSUMER = "lifecycle_bucket_discovery"
 LDM_REFINEMENT_SCHEMA_VERSION = "ldm_hypothesis_parent_refinement_v1"
 LDM_REFINEMENT_CLOSURE_STATUSES = {
@@ -1695,6 +1699,30 @@ def _target_validation_dimensions(dimensions: dict[str, Any]) -> dict[str, str]:
     return {key: str(dimensions.get(key) or "") for key in keys if str(dimensions.get(key) or "").strip()}
 
 
+def _active_sim_priority_targeted_quota(parent: dict[str, Any], *, eligible: bool) -> dict[str, Any]:
+    joined_sample = _safe_int(parent.get("parent_joined_sample"))
+    complete_flow_count = _safe_int(parent.get("complete_flow_count"))
+    return {
+        "quota_policy_version": ACTIVE_SIM_PRIORITY_QUOTA_POLICY_VERSION,
+        "quota_scope": "positive_parent_prefix_revisit",
+        "daily_total_share_pct": ACTIVE_SIM_PRIORITY_TOTAL_SHARE_PCT,
+        "per_seed_daily_limit": ACTIVE_SIM_PRIORITY_PER_SEED_DAILY_LIMIT,
+        "sample_goal_per_bucket": ACTIVE_SIM_PRIORITY_SAMPLE_GOAL_PER_BUCKET,
+        "needs_revisit_sample": joined_sample < ACTIVE_SIM_PRIORITY_SAMPLE_GOAL_PER_BUCKET,
+        "current_parent_joined_sample": joined_sample,
+        "current_complete_flow_count": complete_flow_count,
+        "reason": (
+            "positive_parent_prefix_targeted_sample_accumulation"
+            if eligible
+            else "metadata_only_until_parent_requalifies"
+        ),
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+    }
+
+
 def _ldm_refinement_report_path(target_date: str) -> Path:
     return LDM_REFINEMENT_REPORT_DIR / f"ldm_hypothesis_parent_refinement_{target_date}.json"
 
@@ -1998,6 +2026,7 @@ def _build_active_sim_priority_seeds(report: dict[str, Any]) -> list[dict[str, A
             "parent_joined_sample": parent.get("parent_joined_sample"),
             "complete_flow_count": complete_flow_count,
             "active_collection_reason": active_collection_reason,
+            "targeted_sim_quota": _active_sim_priority_targeted_quota(parent, eligible=eligible),
             "live_conversion_blocked_reason": live_conversion_blocked_reason,
             "ldm_refinement_pressure_summary": {
                 "input_count": len(ldm_pressure_items),
@@ -2055,6 +2084,22 @@ def _build_active_sim_priority_seeds(report: dict[str, Any]) -> list[dict[str, A
             "broker_order_forbidden": True,
             "retired_reason": "consecutive_missing" if status == "retired" else str(previous.get("retired_reason") or ""),
         }
+        seed.setdefault(
+            "targeted_sim_quota",
+            {
+                "quota_policy_version": ACTIVE_SIM_PRIORITY_QUOTA_POLICY_VERSION,
+                "quota_scope": "positive_parent_prefix_revisit",
+                "daily_total_share_pct": ACTIVE_SIM_PRIORITY_TOTAL_SHARE_PCT,
+                "per_seed_daily_limit": ACTIVE_SIM_PRIORITY_PER_SEED_DAILY_LIMIT,
+                "sample_goal_per_bucket": ACTIVE_SIM_PRIORITY_SAMPLE_GOAL_PER_BUCKET,
+                "needs_revisit_sample": True,
+                "reason": "previous_seed_carried_forward_metadata_only",
+                "runtime_effect": False,
+                "allowed_runtime_apply": False,
+                "actual_order_submitted": False,
+                "broker_order_forbidden": True,
+            },
+        )
         seeds.append(seed)
     return sorted(
         seeds,
@@ -2089,6 +2134,20 @@ def _active_sim_priority_diagnostics(report: dict[str, Any], seeds: list[dict[st
         if str(seed.get("status") or "") == "active"
         and str(seed.get("live_conversion_blocked_reason") or "") == "incomplete_lifecycle_flow"
     )
+    active_targeted_quota_count = sum(
+        1
+        for seed in seeds
+        if str(seed.get("status") or "") == "active"
+        and isinstance(seed.get("targeted_sim_quota"), dict)
+        and str((seed.get("targeted_sim_quota") or {}).get("quota_policy_version") or "")
+        == ACTIVE_SIM_PRIORITY_QUOTA_POLICY_VERSION
+    )
+    active_revisit_sample_need_count = sum(
+        1
+        for seed in seeds
+        if str(seed.get("status") or "") == "active"
+        and bool((seed.get("targeted_sim_quota") or {}).get("needs_revisit_sample"))
+    )
     return {
         "active_sim_priority_eligible_count": eligible_count,
         "active_sim_priority_blocked_nonpositive_ev_count": blocked_nonpositive_ev_count,
@@ -2096,6 +2155,11 @@ def _active_sim_priority_diagnostics(report: dict[str, Any], seeds: list[dict[st
         "active_sim_priority_live_conversion_blocked_incomplete_flow_count": (
             live_conversion_blocked_incomplete_flow_count
         ),
+        "active_sim_priority_targeted_quota_count": active_targeted_quota_count,
+        "active_sim_priority_revisit_sample_need_count": active_revisit_sample_need_count,
+        "active_sim_priority_targeted_total_share_pct": ACTIVE_SIM_PRIORITY_TOTAL_SHARE_PCT,
+        "active_sim_priority_targeted_per_seed_daily_limit": ACTIVE_SIM_PRIORITY_PER_SEED_DAILY_LIMIT,
+        "active_sim_priority_sample_goal_per_bucket": ACTIVE_SIM_PRIORITY_SAMPLE_GOAL_PER_BUCKET,
     }
 
 
@@ -4487,6 +4551,18 @@ def _write_catalog(report: dict[str, Any]) -> None:
         "generated_at": report.get("generated_at"),
         "active_bucket_count": len(report.get("surfaced_candidates") or []),
         "buckets": report.get("surfaced_candidates") or [],
+        "active_sim_priority_seeds": report.get("active_sim_priority_seeds") or [],
+        "targeted_sim_collection": {
+            "policy_version": ACTIVE_SIM_PRIORITY_QUOTA_POLICY_VERSION,
+            "scope": "positive_parent_prefix_revisit",
+            "daily_total_share_pct": ACTIVE_SIM_PRIORITY_TOTAL_SHARE_PCT,
+            "per_seed_daily_limit": ACTIVE_SIM_PRIORITY_PER_SEED_DAILY_LIMIT,
+            "sample_goal_per_bucket": ACTIVE_SIM_PRIORITY_SAMPLE_GOAL_PER_BUCKET,
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+        },
     }
     bucket_catalog_path(target_date).write_text(json.dumps(catalog, ensure_ascii=False, indent=2), encoding="utf-8")
 
@@ -4544,6 +4620,17 @@ def _write_sim_auto_approval(report: dict[str, Any]) -> None:
         "approved_bucket_ids": approved_bucket_ids,
         "approved_bucket_rows": approved_bucket_rows,
         "active_sim_priority_seeds": active_sim_priority_seeds,
+        "targeted_sim_collection": {
+            "policy_version": ACTIVE_SIM_PRIORITY_QUOTA_POLICY_VERSION,
+            "scope": "positive_parent_prefix_revisit",
+            "daily_total_share_pct": ACTIVE_SIM_PRIORITY_TOTAL_SHARE_PCT,
+            "per_seed_daily_limit": ACTIVE_SIM_PRIORITY_PER_SEED_DAILY_LIMIT,
+            "sample_goal_per_bucket": ACTIVE_SIM_PRIORITY_SAMPLE_GOAL_PER_BUCKET,
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+        },
         "approved_bucket_count": len(approved_bucket_ids),
         "approved_unique_source_bucket_count": len(set(approved_source_bucket_ids)),
         "approved_state_counts": dict(sorted(state_counts.items())),

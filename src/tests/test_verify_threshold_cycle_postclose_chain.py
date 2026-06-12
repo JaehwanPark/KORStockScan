@@ -1648,6 +1648,50 @@ def test_active_sim_priority_handoff_fails_unknown_runtime_key(monkeypatch):
 
     assert status["status"] == "fail"
     assert "active_sim_priority_unknown_key_observed" in status["missing"]
+    assert status["unknown_consumed_ids"] == ["active_seed_unknown"]
+
+
+def test_active_sim_priority_handoff_reports_inactive_consumed_ids(monkeypatch):
+    monkeypatch.setattr(
+        mod,
+        "_iter_pipeline_event_fields",
+        lambda target_date: [
+            {
+                "active_seed_id": "active_seed_cooldown",
+                "actual_order_submitted": False,
+                "broker_order_forbidden": True,
+            }
+        ],
+    )
+
+    status = mod._active_sim_priority_handoff_status(
+        target_date="2026-06-01",
+        discovery={},
+        scalp_catalog={
+            "schema_version": "scalp_sim_policy_catalog_v1",
+            "active_sim_priority_seeds": [
+                {
+                    "active_seed_id": "active_seed_cooldown",
+                    "source_parent_bucket_id": "parent_positive",
+                    "status": "cooldown",
+                    "observable_prefix": {
+                        "entry_score_parent": "score_watch_recovery",
+                        "entry_source_parent": "entry_source_blocked_ai_score",
+                    },
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                    "runtime_effect": False,
+                }
+            ],
+        },
+        swing_catalog={},
+        preopen_apply={},
+        swing_sim_report={},
+    )
+
+    assert status["status"] == "fail"
+    assert "active_sim_priority_inactive_key_consumed" in status["missing"]
+    assert status["inactive_consumed_ids"] == ["active_seed_cooldown"]
 
 
 def test_active_sim_priority_accepts_runtime_referenced_preopen_catalog(monkeypatch, tmp_path):

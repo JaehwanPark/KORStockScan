@@ -2811,7 +2811,9 @@ def _submit_bucket_attribution(rows: list[dict[str, Any]]) -> dict[str, Any]:
             "bot_history_broker_order_key_exact_mapping_count": exact_backfill_count,
             "bot_history_broker_order_key_exact_mapping_full_coverage": exact_backfill_full_coverage,
             "post_submit_provenance_join_resolution": (
-                "resolved_by_exact_bot_history_submit_time_mapping"
+                "no_gap_broker_order_key_present_or_no_missing_rows"
+                if not post_submit_provenance_join_gap_raw
+                else "resolved_by_exact_bot_history_submit_time_mapping"
                 if exact_backfill_full_coverage
                 else (
                     "candidate_backfill_available_but_exact_mapping_required"

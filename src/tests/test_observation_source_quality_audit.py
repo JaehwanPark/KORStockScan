@@ -113,6 +113,45 @@ def test_observation_source_quality_audit_detects_high_volume_contract_gap(monke
     assert report["summary"]["hard_blocking_contract_gap_count"] == 1
 
 
+def test_partial_fill_reconciled_metric_contract_prevents_high_volume_hard_block(monkeypatch, tmp_path):
+    monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
+    _write_events(
+        tmp_path,
+        "2026-05-15",
+        [
+            _event(
+                "partial_fill_reconciled",
+                {
+                    "requested_qty": 10,
+                    "filled_qty": 3,
+                    "fill_ratio": "0.300",
+                    "metric_role": "ops_reconciliation_diagnostic",
+                    "decision_authority": "diagnostic_only_no_tuning_authority",
+                    "window_policy": "same_day_reconciliation_diagnostic",
+                    "sample_floor": "not_applicable_diagnostic",
+                    "primary_decision_metric": "none_diagnostic_only",
+                    "source_quality_gate": "partial_fill_reconciled_contract_fields_present",
+                    "runtime_effect": False,
+                    "allowed_runtime_apply": False,
+                    "forbidden_uses": (
+                        "EV/rolling/MTD/cumulative tuning/live-auto promotion/runtime approval/"
+                        "broker_order_authority/provider_route_change/bot_restart/threshold_mutation"
+                    ),
+                },
+                record_id=idx,
+            )
+            for idx in range(60)
+        ],
+    )
+
+    report = audit.build_observation_source_quality_audit("2026-05-15")
+
+    gaps = {item["stage"]: item for item in report["high_volume_no_source_fields"]}
+    assert "partial_fill_reconciled" not in gaps
+    assert report["summary"]["hard_blocking_contract_gap_count"] == 0
+    assert report["summary"]["tuning_input_allowed"] is True
+
+
 def test_observation_source_quality_audit_warns_on_high_rate_unknown_tokens(monkeypatch, tmp_path):
     monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
     _write_events(
@@ -336,6 +375,210 @@ def test_observation_source_quality_audit_reviews_panic_context_warning_unknown_
     }
     assert reviewed_fields["panic_epoch_id"]["reviewed_reason"] == "reviewed_missing_risk_regime_context"
     assert reviewed_fields["market_risk_state"]["reviewed_reason"] == "reviewed_missing_risk_regime_context"
+
+
+def test_observation_source_quality_audit_reviews_explicit_sim_liquidity_unknown(monkeypatch, tmp_path):
+    monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
+    _write_events(
+        tmp_path,
+        "2026-06-12",
+        [
+            _event(
+                "scalp_sim_pre_submit_liquidity_guard_unknown",
+                {
+                    "simulation_book": "scalp_ai_buy_all",
+                    "simulated_order": True,
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                    "decision_authority": "sim_submit_path_observation_only",
+                    "runtime_effect": False,
+                    "sim_record_id": "SIM-1",
+                    "threshold_family": "liquidity_pre_submit_guard_p1",
+                    "sim_pre_submit_liquidity_guard_action": "WOULD_UNKNOWN",
+                    "sim_pre_submit_liquidity_reason": "liquidity_not_available",
+                    "sim_liquidity_value": "not_available",
+                    "sim_min_liquidity": 500_000_000,
+                    "sim_parent_record_id": 1,
+                },
+                record_id=1,
+            )
+        ],
+    )
+
+    report = audit.build_observation_source_quality_audit("2026-06-12")
+
+    assert report["summary"]["unknown_token_stage_count"] == 0
+    assert report["summary"]["reviewed_unknown_token_stage_count"] == 1
+    reviewed = report["reviewed_unknown_token_findings"][0]
+    fields = {item["field"]: item for item in reviewed["fields"]}
+    assert fields["sim_pre_submit_liquidity_guard_action"]["reviewed_reason"] == (
+        "reviewed_sim_liquidity_not_available"
+    )
+    assert fields["__stage"]["reviewed_reason"] == "reviewed_explicit_sim_liquidity_unknown_stage"
+
+
+def test_observation_source_quality_audit_warns_on_uncontracted_liquidity_unknown(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
+    _write_events(
+        tmp_path,
+        "2026-06-12",
+        [
+            _event(
+                "scalp_sim_pre_submit_liquidity_guard_unknown",
+                {
+                    "simulation_book": "scalp_ai_buy_all",
+                    "simulated_order": True,
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                    "decision_authority": "unexpected_authority",
+                    "runtime_effect": False,
+                    "sim_record_id": "SIM-1",
+                    "threshold_family": "liquidity_pre_submit_guard_p1",
+                    "sim_pre_submit_liquidity_guard_action": "WOULD_UNKNOWN",
+                    "sim_pre_submit_liquidity_reason": "producer_placeholder_unknown",
+                    "sim_liquidity_value": "UNKNOWN",
+                    "sim_min_liquidity": 500_000_000,
+                    "sim_parent_record_id": 1,
+                },
+                record_id=1,
+            )
+        ],
+    )
+
+    report = audit.build_observation_source_quality_audit("2026-06-12")
+
+    assert report["summary"]["unknown_token_stage_count"] == 1
+    assert report["summary"]["reviewed_unknown_token_stage_count"] == 0
+    finding = report["unknown_token_findings"][0]
+    fields = {item["field"]: item for item in finding["fields"]}
+    assert "sim_pre_submit_liquidity_guard_action" in fields
+    assert "__stage" in fields
+
+
+def test_observation_source_quality_audit_reviews_propagated_sim_liquidity_unknown(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
+    common = {
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "runtime_effect": False,
+        "sim_pre_submit_liquidity_guard_action": "WOULD_UNKNOWN",
+        "sim_pre_submit_liquidity_reason": "liquidity_not_available",
+        "sim_liquidity_value": "not_available",
+        "sim_min_liquidity": 350_000_000,
+        "sim_parent_record_id": 1,
+    }
+    _write_events(
+        tmp_path,
+        "2026-06-12",
+        [
+            _event(
+                "scalp_sim_entry_armed",
+                {
+                    **common,
+                    "decision_authority": "sim_observation_only",
+                },
+                record_id=1,
+            ),
+            _event(
+                "scalp_entry_action_decision_snapshot",
+                {
+                    **common,
+                    "decision_authority": "entry_advisory_prompt_context_only",
+                    "source_stage": "scalp_sim_entry_armed",
+                },
+                record_id=2,
+            ),
+        ],
+    )
+
+    report = audit.build_observation_source_quality_audit("2026-06-12")
+
+    assert report["summary"]["unknown_token_stage_count"] == 0
+    assert report["summary"]["reviewed_unknown_token_stage_count"] == 2
+    reviewed = {
+        item["stage"]: {field["field"]: field for field in item["fields"]}
+        for item in report["reviewed_unknown_token_findings"]
+    }
+    assert reviewed["scalp_sim_entry_armed"]["sim_pre_submit_liquidity_guard_action"][
+        "reviewed_reason"
+    ] == "reviewed_sim_liquidity_not_available"
+    assert reviewed["scalp_entry_action_decision_snapshot"]["sim_pre_submit_liquidity_guard_action"][
+        "reviewed_reason"
+    ] == "reviewed_sim_liquidity_not_available"
+
+
+def test_observation_source_quality_audit_reviews_unknown_fill_quality_without_requested_qty(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
+    _write_events(
+        tmp_path,
+        "2026-06-12",
+        [
+            _event(
+                "position_rebased_after_fill",
+                {
+                    "metric_role": "execution_quality_real_only",
+                    "decision_authority": "broker_receipt_observation_only",
+                    "runtime_effect": False,
+                    "actual_order_submitted": True,
+                    "broker_order_forbidden": False,
+                    "requested_qty": 0,
+                    "fill_quality": "UNKNOWN",
+                },
+                record_id=1,
+            )
+        ],
+    )
+
+    report = audit.build_observation_source_quality_audit("2026-06-12")
+
+    assert report["summary"]["unknown_token_stage_count"] == 0
+    assert report["summary"]["reviewed_unknown_token_stage_count"] == 1
+    reviewed = report["reviewed_unknown_token_findings"][0]
+    assert reviewed["stage"] == "position_rebased_after_fill"
+    assert reviewed["fields"][0]["field"] == "fill_quality"
+    assert reviewed["fields"][0]["reviewed_reason"] == "reviewed_fill_quality_pre_contract_no_requested_qty"
+
+
+def test_observation_source_quality_audit_warns_on_unknown_fill_quality_with_missing_requested_qty(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
+    _write_events(
+        tmp_path,
+        "2026-06-12",
+        [
+            _event(
+                "position_rebased_after_fill",
+                {
+                    "metric_role": "execution_quality_real_only",
+                    "decision_authority": "broker_receipt_observation_only",
+                    "runtime_effect": False,
+                    "actual_order_submitted": True,
+                    "broker_order_forbidden": False,
+                    "fill_quality": "UNKNOWN",
+                },
+                record_id=1,
+            )
+        ],
+    )
+
+    report = audit.build_observation_source_quality_audit("2026-06-12")
+
+    assert report["summary"]["unknown_token_stage_count"] == 1
+    assert report["summary"]["reviewed_unknown_token_stage_count"] == 0
+    finding = report["unknown_token_findings"][0]
+    assert finding["stage"] == "position_rebased_after_fill"
+    assert finding["fields"][0]["field"] == "fill_quality"
 
 
 def test_observation_source_quality_audit_warns_on_top_level_and_all_unknown_fields(monkeypatch, tmp_path):

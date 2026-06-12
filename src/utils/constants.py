@@ -260,6 +260,12 @@ class TradingConfig:
     SCALP_SOFT_STOP_THESIS_MICRO_VWAP_BP_MIN: float = -20.0
     SCALP_AI_MOMENTUM_DECAY_SCORE_LIMIT: int = 45  # 이 값 미만일 때만 AI 모멘텀 둔화 익절 검토
     SCALP_AI_MOMENTUM_DECAY_MIN_HOLD_SEC: int = 90  # AI 모멘텀 둔화 익절 최소 보유시간(초)
+    SCALP_PROFIT_STAGNATION_EXIT_ENABLED: bool = False  # real SCALPING 익절권 횡보 시간청산은 runtime env로만 ON
+    SCALP_PROFIT_STAGNATION_MIN_PROFIT_PCT: float = 1.0
+    SCALP_PROFIT_STAGNATION_MIN_SEC: int = 180
+    SCALP_PROFIT_STAGNATION_MAX_PROFIT_MOVE_PCT: float = 0.15
+    SCALP_PROFIT_STAGNATION_MAX_PEAK_IMPROVE_PCT: float = 0.10
+    SCALP_PROFIT_STAGNATION_MIN_AI_SCORE: int = 45
     SCALP_PRESET_HARD_STOP_PCT: float = -0.7  # SCALP_PRESET_TP 기본 손절선
     SCALP_PRESET_HARD_STOP_GRACE_SEC: int = 0  # SCALP_PRESET_TP 공통 유예시간(초)
     SCALP_PRESET_HARD_STOP_EMERGENCY_PCT: float = -1.2  # 유예 중에도 강제 청산하는 비상 손절선
@@ -280,7 +286,9 @@ class TradingConfig:
     SCALPING_PRE_SUBMIT_MAX_BELOW_BID_BPS: int = 80  # best_bid 대비 허용 하향 괴리(bp)
     SCALPING_NORMAL_DEFENSIVE_TICKS: int = 1  # 일반 SCALPING 실주문 기본 방어 제출가 tick offset
     SCALPING_NORMAL_DEFENSIVE_BPS: int = 50  # percent_bps 모드 일반 방어 제출가 bp (0.5%)
-    SCALPING_CONDITIONAL_STRONG_DEFENSIVE_BPS: int = 20  # percent_bps 모드 강세 조건 방어 제출가 bp (0.2%)
+    SCALPING_CONDITIONAL_STRONG_DEFENSIVE_BPS: int = 10  # percent_bps 모드 강세 조건 방어 제출가 bp (0.1%)
+    SCALPING_NORMAL_FAVORABLE_DEFENSIVE_BPS: int = 35  # percent_bps 모드 우호 micro 방어 제출가 bp
+    SCALPING_NORMAL_WEAK_DEFENSIVE_BPS: int = 65  # percent_bps 모드 약한 유동성/넓은 spread 방어 제출가 bp
     SCALPING_ENTRY_PRICE_DEFENSE_MODE: str = "tick"  # tick | percent_bps
     SCALPING_CONDITIONAL_1TICK_REAL_ENABLED: bool = True  # real SCALPING 강한 micro 조건에서 1틱 제출 허용
     SCALPING_CONDITIONAL_1TICK_MIN_BUY_RATIO: float = 60.0  # 1틱 허용 최소 매수 체결비율(%)
@@ -1133,6 +1141,10 @@ def _build_trading_rules() -> TradingConfig:
     env_scalping_normal_defensive_ticks = _env_int("KORSTOCKSCAN_SCALPING_NORMAL_DEFENSIVE_TICKS")
     env_scalping_normal_defensive_bps = _env_int("KORSTOCKSCAN_SCALPING_NORMAL_DEFENSIVE_BPS")
     env_scalping_conditional_strong_defensive_bps = _env_int("KORSTOCKSCAN_SCALPING_CONDITIONAL_STRONG_DEFENSIVE_BPS")
+    env_scalping_normal_favorable_defensive_bps = _env_int(
+        "KORSTOCKSCAN_SCALPING_NORMAL_FAVORABLE_DEFENSIVE_BPS"
+    )
+    env_scalping_normal_weak_defensive_bps = _env_int("KORSTOCKSCAN_SCALPING_NORMAL_WEAK_DEFENSIVE_BPS")
     env_scalping_entry_price_defense_mode = _env_str("KORSTOCKSCAN_SCALPING_ENTRY_PRICE_DEFENSE_MODE")
     env_conditional_1tick_real_enabled = _env_bool("KORSTOCKSCAN_SCALPING_CONDITIONAL_1TICK_REAL_ENABLED")
     env_conditional_1tick_min_buy_ratio = _env_float("KORSTOCKSCAN_SCALPING_CONDITIONAL_1TICK_MIN_BUY_RATIO")
@@ -1201,6 +1213,12 @@ def _build_trading_rules() -> TradingConfig:
     env_soft_stop_whipsaw_buffer = _env_float("KORSTOCKSCAN_SCALP_SOFT_STOP_WHIPSAW_CONFIRMATION_BUFFER_PCT")
     env_soft_stop_whipsaw_worsen = _env_float("KORSTOCKSCAN_SCALP_SOFT_STOP_WHIPSAW_CONFIRMATION_MAX_WORSEN_PCT")
     env_scalp_safe_profit = _env_float("KORSTOCKSCAN_SCALP_SAFE_PROFIT")
+    env_profit_stagnation_enabled = _env_bool("KORSTOCKSCAN_SCALP_PROFIT_STAGNATION_EXIT_ENABLED")
+    env_profit_stagnation_min_profit = _env_float("KORSTOCKSCAN_SCALP_PROFIT_STAGNATION_MIN_PROFIT_PCT")
+    env_profit_stagnation_min_sec = _env_int("KORSTOCKSCAN_SCALP_PROFIT_STAGNATION_MIN_SEC")
+    env_profit_stagnation_max_move = _env_float("KORSTOCKSCAN_SCALP_PROFIT_STAGNATION_MAX_PROFIT_MOVE_PCT")
+    env_profit_stagnation_max_peak = _env_float("KORSTOCKSCAN_SCALP_PROFIT_STAGNATION_MAX_PEAK_IMPROVE_PCT")
+    env_profit_stagnation_min_ai = _env_int("KORSTOCKSCAN_SCALP_PROFIT_STAGNATION_MIN_AI_SCORE")
     env_protect_trailing_smooth_enabled = _env_bool("KORSTOCKSCAN_SCALP_PROTECT_TRAILING_SMOOTH_ENABLED")
     env_protect_trailing_smooth_window = _env_int("KORSTOCKSCAN_SCALP_PROTECT_TRAILING_SMOOTH_WINDOW_SEC")
     env_protect_trailing_smooth_min_span = _env_int("KORSTOCKSCAN_SCALP_PROTECT_TRAILING_SMOOTH_MIN_SPAN_SEC")
@@ -1234,6 +1252,8 @@ def _build_trading_rules() -> TradingConfig:
         or env_scalping_normal_defensive_ticks is not None
         or env_scalping_normal_defensive_bps is not None
         or env_scalping_conditional_strong_defensive_bps is not None
+        or env_scalping_normal_favorable_defensive_bps is not None
+        or env_scalping_normal_weak_defensive_bps is not None
         or env_scalping_entry_price_defense_mode is not None
         or env_conditional_1tick_real_enabled is not None
         or env_conditional_1tick_min_buy_ratio is not None
@@ -1287,6 +1307,12 @@ def _build_trading_rules() -> TradingConfig:
         or env_soft_stop_whipsaw_buffer is not None
         or env_soft_stop_whipsaw_worsen is not None
         or env_scalp_safe_profit is not None
+        or env_profit_stagnation_enabled is not None
+        or env_profit_stagnation_min_profit is not None
+        or env_profit_stagnation_min_sec is not None
+        or env_profit_stagnation_max_move is not None
+        or env_profit_stagnation_max_peak is not None
+        or env_profit_stagnation_min_ai is not None
         or env_protect_trailing_smooth_enabled is not None
         or env_protect_trailing_smooth_window is not None
         or env_protect_trailing_smooth_min_span is not None
@@ -1372,6 +1398,12 @@ def _build_trading_rules() -> TradingConfig:
             SCALPING_CONDITIONAL_STRONG_DEFENSIVE_BPS=env_scalping_conditional_strong_defensive_bps
             if env_scalping_conditional_strong_defensive_bps is not None
             else config.SCALPING_CONDITIONAL_STRONG_DEFENSIVE_BPS,
+            SCALPING_NORMAL_FAVORABLE_DEFENSIVE_BPS=env_scalping_normal_favorable_defensive_bps
+            if env_scalping_normal_favorable_defensive_bps is not None
+            else config.SCALPING_NORMAL_FAVORABLE_DEFENSIVE_BPS,
+            SCALPING_NORMAL_WEAK_DEFENSIVE_BPS=env_scalping_normal_weak_defensive_bps
+            if env_scalping_normal_weak_defensive_bps is not None
+            else config.SCALPING_NORMAL_WEAK_DEFENSIVE_BPS,
             SCALPING_ENTRY_PRICE_DEFENSE_MODE=env_scalping_entry_price_defense_mode
             if env_scalping_entry_price_defense_mode is not None
             else config.SCALPING_ENTRY_PRICE_DEFENSE_MODE,
@@ -1540,6 +1572,24 @@ def _build_trading_rules() -> TradingConfig:
             SCALP_SAFE_PROFIT=env_scalp_safe_profit
             if env_scalp_safe_profit is not None
             else config.SCALP_SAFE_PROFIT,
+            SCALP_PROFIT_STAGNATION_EXIT_ENABLED=env_profit_stagnation_enabled
+            if env_profit_stagnation_enabled is not None
+            else config.SCALP_PROFIT_STAGNATION_EXIT_ENABLED,
+            SCALP_PROFIT_STAGNATION_MIN_PROFIT_PCT=env_profit_stagnation_min_profit
+            if env_profit_stagnation_min_profit is not None
+            else config.SCALP_PROFIT_STAGNATION_MIN_PROFIT_PCT,
+            SCALP_PROFIT_STAGNATION_MIN_SEC=env_profit_stagnation_min_sec
+            if env_profit_stagnation_min_sec is not None
+            else config.SCALP_PROFIT_STAGNATION_MIN_SEC,
+            SCALP_PROFIT_STAGNATION_MAX_PROFIT_MOVE_PCT=env_profit_stagnation_max_move
+            if env_profit_stagnation_max_move is not None
+            else config.SCALP_PROFIT_STAGNATION_MAX_PROFIT_MOVE_PCT,
+            SCALP_PROFIT_STAGNATION_MAX_PEAK_IMPROVE_PCT=env_profit_stagnation_max_peak
+            if env_profit_stagnation_max_peak is not None
+            else config.SCALP_PROFIT_STAGNATION_MAX_PEAK_IMPROVE_PCT,
+            SCALP_PROFIT_STAGNATION_MIN_AI_SCORE=env_profit_stagnation_min_ai
+            if env_profit_stagnation_min_ai is not None
+            else config.SCALP_PROFIT_STAGNATION_MIN_AI_SCORE,
             SCALP_PROTECT_TRAILING_SMOOTH_ENABLED=env_protect_trailing_smooth_enabled
             if env_protect_trailing_smooth_enabled is not None
             else config.SCALP_PROTECT_TRAILING_SMOOTH_ENABLED,

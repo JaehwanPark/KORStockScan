@@ -223,8 +223,14 @@ _HOLDING_FLOW_OVERRIDE_EXIT_RULES = {
     "scalp_soft_stop_pct",
     "scalp_ai_momentum_decay",
     "scalp_trailing_take_profit",
+    "scalp_profit_stagnation_time_exit",
     "scalp_bad_entry_refined_canary",
 }
+_PROFIT_STAGNATION_STATE_FIELDS = (
+    "profit_stagnation_started_at",
+    "profit_stagnation_anchor_profit",
+    "profit_stagnation_anchor_peak",
+)
 SCALP_SIMULATION_BOOK = "scalp_ai_buy_all"
 SCALP_SIM_PENDING_STATUS = "SCALP_SIM_PENDING_BUY"
 SCALP_SIM_STATE_PATH = DATA_DIR / "runtime" / "scalp_live_simulator_state.json"
@@ -326,6 +332,22 @@ def _rule_str(name, default=""):
     return str(value)
 
 
+def _runtime_apply_date_for_policy_guard() -> str:
+    return str(os.environ.get("KORSTOCKSCAN_THRESHOLD_RUNTIME_APPLY_DATE") or "").strip()
+
+
+def _scalp_sim_policy_source_date_for_guard() -> str:
+    return str(os.environ.get("KORSTOCKSCAN_SCALP_SIM_AUTO_POLICY_SOURCE_DATE") or "").strip()
+
+
+def _scalp_sim_policy_date(policy_file: str, policy_version: str) -> str:
+    for value in (policy_version, policy_file):
+        match = re.search(r"20\d{2}-\d{2}-\d{2}", str(value or ""))
+        if match:
+            return match.group(0)
+    return ""
+
+
 def _scalp_active_seed_prefix_key(prefix: dict | None) -> str:
     prefix = prefix if isinstance(prefix, dict) else {}
     entry_score = str(prefix.get("entry_score_parent") or "").strip()
@@ -337,6 +359,43 @@ def _scalp_active_seed_prefix_key(prefix: dict | None) -> str:
     if submit_quality:
         parts.append(f"submit_quality_parent={submit_quality}")
     return "|".join(parts)
+
+
+def _scalp_active_seed_quota_fields(seed: dict | None) -> dict:
+    seed = seed if isinstance(seed, dict) else {}
+    quota = seed.get("targeted_sim_quota") if isinstance(seed.get("targeted_sim_quota"), dict) else {}
+
+    def _bounded_int(value, default: int, *, low: int, high: int) -> int:
+        try:
+            parsed = int(float(value))
+        except Exception:
+            parsed = default
+        return max(low, min(high, parsed))
+
+    return {
+        "active_seed_quota_policy_version": str(
+            quota.get("quota_policy_version") or "active_parent_seed_targeted_quota_v1"
+        ),
+        "active_seed_daily_total_share_pct": _bounded_int(
+            quota.get("daily_total_share_pct"),
+            _rule_int("SCALP_SIM_ACTIVE_SEED_DAILY_TOTAL_SHARE_PCT", 35),
+            low=0,
+            high=100,
+        ),
+        "active_seed_daily_per_seed_limit": _bounded_int(
+            quota.get("per_seed_daily_limit"),
+            _rule_int("SCALP_SIM_ACTIVE_SEED_DAILY_PER_SEED_LIMIT", 20),
+            low=0,
+            high=200,
+        ),
+        "active_seed_sample_goal_per_bucket": _bounded_int(
+            quota.get("sample_goal_per_bucket"),
+            _rule_int("SCALP_SIM_ACTIVE_SEED_SAMPLE_GOAL_PER_BUCKET", 10),
+            low=1,
+            high=200,
+        ),
+        "active_seed_quota_scope": str(quota.get("quota_scope") or "positive_parent_prefix_revisit"),
+    }
 
 
 def _scalp_score_parent_from_value(score_value) -> str:
@@ -378,6 +437,7 @@ def _scalp_active_seed_match_fields(
     fields: dict | None = None,
 ) -> dict:
     cache = _load_scalp_sim_auto_policy_cache()
+    policy_status = str(cache.get("status") or "").strip()
     seeds_by_prefix = (
         cache.get("active_seeds_by_prefix")
         if isinstance(cache.get("active_seeds_by_prefix"), dict)
@@ -403,6 +463,15 @@ def _scalp_active_seed_match_fields(
             "scalp_sim_active_priority_seed_matched": False,
             "active_seed_candidate_observable_prefix": json.dumps(candidate_prefix, ensure_ascii=True, sort_keys=True),
             "active_seed_match_blocked_reason": "entry_source_taxonomy_pending_runtime_effect_blocked",
+            "active_seed_match_source": "no_match",
+            **taxonomy_fields,
+        }
+    if policy_status in {"policy_stale_source_date_mismatch", "policy_source_date_missing"}:
+        return {
+            "scalp_sim_active_priority_seed_matched": False,
+            "active_seed_candidate_observable_prefix": json.dumps(candidate_prefix, ensure_ascii=True, sort_keys=True),
+            "active_seed_match_blocked_reason": policy_status,
+            "active_seed_match_source": policy_status,
             **taxonomy_fields,
         }
     probes = [_scalp_active_seed_prefix_key(candidate_prefix)]
@@ -419,6 +488,16 @@ def _scalp_active_seed_match_fields(
         return {
             "scalp_sim_active_priority_seed_matched": False,
             "active_seed_candidate_observable_prefix": json.dumps(candidate_prefix, ensure_ascii=True, sort_keys=True),
+            "active_seed_match_source": "no_match",
+            **taxonomy_fields,
+        }
+    if str(seed.get("status") or "") != "active":
+        return {
+            "scalp_sim_active_priority_seed_matched": False,
+            "active_seed_candidate_observable_prefix": json.dumps(candidate_prefix, ensure_ascii=True, sort_keys=True),
+            "active_seed_match_blocked_reason": "active_seed_inactive_not_runtime_eligible",
+            "active_seed_status": seed.get("status"),
+            "active_seed_match_source": "inactive_seed_blocked",
             **taxonomy_fields,
         }
     return {
@@ -426,11 +505,13 @@ def _scalp_active_seed_match_fields(
         "active_seed_id": seed.get("active_seed_id"),
         "source_parent_bucket_id": seed.get("source_parent_bucket_id"),
         "active_seed_status": seed.get("status"),
+        "active_seed_match_source": "current_preopen_active_policy",
         "active_seed_observable_prefix": json.dumps(seed.get("observable_prefix") or {}, ensure_ascii=True, sort_keys=True),
         "active_seed_candidate_observable_prefix": json.dumps(candidate_prefix, ensure_ascii=True, sort_keys=True),
         **taxonomy_fields,
         "active_seed_priority_tier": seed.get("priority_tier"),
         "quota_policy": "active_parent_seed_v1",
+        **_scalp_active_seed_quota_fields(seed),
     }
 
 
@@ -528,6 +609,9 @@ def _load_scalp_sim_auto_policy_cache() -> dict:
     enabled = _rule_bool("SCALP_SIM_AUTO_POLICY_ENABLED", False)
     policy_file = _rule_str("SCALP_SIM_AUTO_POLICY_FILE", "").strip()
     policy_version = _rule_str("SCALP_SIM_AUTO_POLICY_VERSION", "").strip()
+    runtime_apply_date = _runtime_apply_date_for_policy_guard()
+    expected_policy_source_date = _scalp_sim_policy_source_date_for_guard()
+    policy_date = _scalp_sim_policy_date(policy_file, policy_version)
     if not enabled:
         _SCALP_SIM_AUTO_POLICY_CACHE.update(
             {
@@ -540,6 +624,9 @@ def _load_scalp_sim_auto_policy_cache() -> dict:
                 "rows_by_bucket_id": {},
                 "active_seeds": [],
                 "active_seeds_by_prefix": {},
+                "policy_date": policy_date or None,
+                "runtime_apply_date": runtime_apply_date or None,
+                "expected_policy_source_date": expected_policy_source_date or None,
                 "hypotheses": [],
                 "approved_row_count": 0,
             }
@@ -557,6 +644,9 @@ def _load_scalp_sim_auto_policy_cache() -> dict:
                 "rows_by_bucket_id": {},
                 "active_seeds": [],
                 "active_seeds_by_prefix": {},
+                "policy_date": policy_date or None,
+                "runtime_apply_date": runtime_apply_date or None,
+                "expected_policy_source_date": expected_policy_source_date or None,
                 "hypotheses": [],
                 "approved_row_count": 0,
             }
@@ -577,6 +667,9 @@ def _load_scalp_sim_auto_policy_cache() -> dict:
                 "rows_by_bucket_id": {},
                 "active_seeds": [],
                 "active_seeds_by_prefix": {},
+                "policy_date": policy_date or None,
+                "runtime_apply_date": runtime_apply_date or None,
+                "expected_policy_source_date": expected_policy_source_date or None,
                 "hypotheses": [],
                 "approved_row_count": 0,
             }
@@ -586,6 +679,8 @@ def _load_scalp_sim_auto_policy_cache() -> dict:
         _SCALP_SIM_AUTO_POLICY_CACHE.get("path") == str(path)
         and _SCALP_SIM_AUTO_POLICY_CACHE.get("mtime_ns") == stat.st_mtime_ns
         and _SCALP_SIM_AUTO_POLICY_CACHE.get("version") == policy_version
+        and _SCALP_SIM_AUTO_POLICY_CACHE.get("runtime_apply_date") == (runtime_apply_date or None)
+        and _SCALP_SIM_AUTO_POLICY_CACHE.get("expected_policy_source_date") == (expected_policy_source_date or None)
     ):
         return _SCALP_SIM_AUTO_POLICY_CACHE
     try:
@@ -603,6 +698,9 @@ def _load_scalp_sim_auto_policy_cache() -> dict:
                 "rows_by_bucket_id": {},
                 "active_seeds": [],
                 "active_seeds_by_prefix": {},
+                "policy_date": policy_date or None,
+                "runtime_apply_date": runtime_apply_date or None,
+                "expected_policy_source_date": expected_policy_source_date or None,
                 "hypotheses": [],
                 "approved_row_count": 0,
             }
@@ -657,12 +755,23 @@ def _load_scalp_sim_auto_policy_cache() -> dict:
                 hypotheses.append(hypothesis)
     if status == "loaded" and not (rows_by_source_bucket_id or rows_by_bucket_id or active_seeds_by_prefix or hypotheses):
         status = "policy_invalid"
+    if status == "loaded" and runtime_apply_date and active_seeds_by_prefix and policy_date and not expected_policy_source_date:
+        status = "policy_source_date_missing"
+        active_seeds = []
+        active_seeds_by_prefix = {}
+    if status == "loaded" and expected_policy_source_date and policy_date and expected_policy_source_date != policy_date:
+        status = "policy_stale_source_date_mismatch"
+        active_seeds = []
+        active_seeds_by_prefix = {}
     _SCALP_SIM_AUTO_POLICY_CACHE.update(
         {
             "path": str(path),
             "mtime_ns": stat.st_mtime_ns,
             "version": policy_version or None,
             "status": status,
+            "policy_date": policy_date or None,
+            "runtime_apply_date": runtime_apply_date or None,
+            "expected_policy_source_date": expected_policy_source_date or None,
             "approved_rows": approved_rows,
             "rows_by_source_bucket_id": rows_by_source_bucket_id,
             "rows_by_bucket_id": rows_by_bucket_id,
@@ -1233,6 +1342,113 @@ def _is_scalp_simulated_position(stock: dict | None, strategy: str | None = None
         return False
     resolved_strategy = strategy or stock.get("strategy")
     return _is_scalp_strategy(resolved_strategy) and _is_scalp_simulator_target(stock)
+
+
+def _has_sim_probe_provenance(stock: dict | None) -> bool:
+    if not isinstance(stock, dict):
+        return False
+    authority = str(stock.get("decision_authority") or "").strip().lower()
+    simulation_owner = str(stock.get("simulation_owner") or "").strip().lower()
+    simulation_book = str(stock.get("simulation_book") or "").strip().lower()
+    if any(token in authority for token in ("sim", "probe", "observation_only")):
+        return True
+    if simulation_owner or simulation_book:
+        return True
+    if _boolish_true(stock.get("broker_order_forbidden")):
+        return True
+    if stock.get("actual_order_submitted") is False:
+        return True
+    if stock.get("probe_id") or _boolish_true(stock.get("swing_intraday_probe")):
+        return True
+    return False
+
+
+def _clear_profit_stagnation_state(stock: dict | None) -> None:
+    if isinstance(stock, dict):
+        _mutate_stock_state(stock, pop_fields=_PROFIT_STAGNATION_STATE_FIELDS)
+
+
+def _evaluate_scalp_profit_stagnation_exit(
+    stock: dict | None,
+    *,
+    strategy: str | None,
+    profit_rate: float,
+    peak_profit: float,
+    current_ai_score: float,
+    now_ts: float,
+) -> dict:
+    if not _rule_bool("SCALP_PROFIT_STAGNATION_EXIT_ENABLED", False):
+        _clear_profit_stagnation_state(stock)
+        return {"should_exit": False, "reason": "disabled"}
+    if not isinstance(stock, dict) or not _is_scalp_strategy(strategy):
+        _clear_profit_stagnation_state(stock)
+        return {"should_exit": False, "reason": "not_real_scalping"}
+    if _is_scalp_simulated_position(stock, strategy) or _has_sim_probe_provenance(stock):
+        _clear_profit_stagnation_state(stock)
+        return {"should_exit": False, "reason": "simulated_position"}
+
+    min_profit = _rule_float("SCALP_PROFIT_STAGNATION_MIN_PROFIT_PCT", 1.0)
+    min_sec = max(1, _rule_int("SCALP_PROFIT_STAGNATION_MIN_SEC", 180))
+    max_profit_move = max(0.0, _rule_float("SCALP_PROFIT_STAGNATION_MAX_PROFIT_MOVE_PCT", 0.15))
+    max_peak_improve = max(0.0, _rule_float("SCALP_PROFIT_STAGNATION_MAX_PEAK_IMPROVE_PCT", 0.10))
+    min_ai_score = _rule_float("SCALP_PROFIT_STAGNATION_MIN_AI_SCORE", 45.0)
+
+    if profit_rate < min_profit:
+        _clear_profit_stagnation_state(stock)
+        return {"should_exit": False, "reason": "below_min_profit"}
+    if current_ai_score < min_ai_score:
+        _clear_profit_stagnation_state(stock)
+        return {"should_exit": False, "reason": "ai_score_below_min"}
+
+    started_at = _safe_float(stock.get("profit_stagnation_started_at"), 0.0)
+    anchor_profit = _safe_float(stock.get("profit_stagnation_anchor_profit"), profit_rate)
+    anchor_peak = _safe_float(stock.get("profit_stagnation_anchor_peak"), peak_profit)
+    profit_move = abs(profit_rate - anchor_profit)
+    peak_improve = peak_profit - anchor_peak
+
+    if started_at <= 0 or profit_move > max_profit_move or peak_improve > max_peak_improve:
+        _mutate_stock_state(
+            stock,
+            set_fields={
+                "profit_stagnation_started_at": float(now_ts),
+                "profit_stagnation_anchor_profit": float(profit_rate),
+                "profit_stagnation_anchor_peak": float(peak_profit),
+            },
+        )
+        return {
+            "should_exit": False,
+            "reason": "anchor_reset",
+            "elapsed_sec": 0,
+            "anchor_profit": float(profit_rate),
+            "anchor_peak": float(peak_profit),
+            "profit_move": 0.0,
+            "peak_improve": 0.0,
+        }
+
+    elapsed_sec = max(0, int(float(now_ts) - started_at))
+    if elapsed_sec >= min_sec:
+        return {
+            "should_exit": True,
+            "exit_rule": "scalp_profit_stagnation_time_exit",
+            "sell_reason_type": "PROFIT_STAGNATION",
+            "elapsed_sec": elapsed_sec,
+            "anchor_profit": anchor_profit,
+            "anchor_peak": anchor_peak,
+            "profit_move": profit_move,
+            "peak_improve": max(0.0, peak_improve),
+            "min_sec": min_sec,
+            "max_profit_move": max_profit_move,
+            "max_peak_improve": max_peak_improve,
+        }
+    return {
+        "should_exit": False,
+        "reason": "waiting",
+        "elapsed_sec": elapsed_sec,
+        "anchor_profit": anchor_profit,
+        "anchor_peak": anchor_peak,
+        "profit_move": profit_move,
+        "peak_improve": max(0.0, peak_improve),
+    }
 
 
 def _boolish_true(value) -> bool:
@@ -3107,9 +3323,18 @@ def _scalp_sim_candidate_window_context_fields(source: dict | None) -> dict:
         "active_seed_id",
         "source_parent_bucket_id",
         "active_seed_status",
+        "active_seed_match_source",
         "active_seed_observable_prefix",
         "active_seed_candidate_observable_prefix",
         "active_seed_match_blocked_reason",
+        "active_seed_quota_policy_version",
+        "active_seed_daily_total_share_pct",
+        "active_seed_daily_total_limit",
+        "active_seed_daily_total_created",
+        "active_seed_daily_per_seed_limit",
+        "active_seed_daily_created",
+        "active_seed_sample_goal_per_bucket",
+        "active_seed_quota_scope",
         "entry_source_parent_contract_state",
         "entry_source_parent_contract_reason",
         "entry_source_parent_alias_version",
@@ -4020,7 +4245,13 @@ def _maybe_arm_scalp_sim_candidate_window(
     )
     active_seed_id = str(active_seed_fields.get("active_seed_id") or "").strip()
     active_seed_matched = bool(active_seed_fields.get("scalp_sim_active_priority_seed_matched")) and active_seed_id
-    active_seed_total_limit = int(max_daily * 20 / 100) if max_daily > 0 else 0
+    active_seed_total_share_pct = int(active_seed_fields.get("active_seed_daily_total_share_pct", 35))
+    active_seed_per_seed_limit = int(active_seed_fields.get("active_seed_daily_per_seed_limit", 20))
+    active_seed_total_limit = (
+        int(max_daily * active_seed_total_share_pct / 100)
+        if max_daily > 0 and active_seed_total_share_pct > 0
+        else 0
+    )
     active_seed_total_created = sum(
         int(value or 0)
         for (created_day, _seed_id), value in _SCALP_SIM_CANDIDATE_WINDOW_DAILY_ACTIVE_SEED_CREATED.items()
@@ -4031,8 +4262,10 @@ def _maybe_arm_scalp_sim_candidate_window(
     )
     active_seed_reserve_allowed = (
         active_seed_matched
-        and (active_seed_total_limit <= 0 or active_seed_total_created < active_seed_total_limit)
-        and active_seed_created < 12
+        and active_seed_total_limit > 0
+        and active_seed_total_created < active_seed_total_limit
+        and active_seed_per_seed_limit > 0
+        and active_seed_created < active_seed_per_seed_limit
     )
     hypothesis_fields = _scalp_hypothesis_match_fields(
         score_value=score_value,
@@ -4085,6 +4318,11 @@ def _maybe_arm_scalp_sim_candidate_window(
                     ai_score=f"{score_value:.1f}",
                     created_today=created_today,
                     max_daily=max_daily,
+                    active_seed_daily_total_share_pct=active_seed_total_share_pct,
+                    active_seed_daily_total_limit=active_seed_total_limit,
+                    active_seed_daily_total_created=active_seed_total_created,
+                    active_seed_daily_per_seed_limit=active_seed_per_seed_limit,
+                    active_seed_daily_created=active_seed_created,
                     time_bucket=bucket_label,
                     time_bucket_created=bucket_created,
                     time_bucket_limit=bucket_limit,
@@ -4130,6 +4368,11 @@ def _maybe_arm_scalp_sim_candidate_window(
                 max_daily=max_daily,
                 source_bucket_created=blocked_created,
                 source_bucket_limit=blocked_limit,
+                active_seed_daily_total_share_pct=active_seed_total_share_pct,
+                active_seed_daily_total_limit=active_seed_total_limit,
+                active_seed_daily_total_created=active_seed_total_created,
+                active_seed_daily_per_seed_limit=active_seed_per_seed_limit,
+                active_seed_daily_created=active_seed_created,
                 runtime_effect="sim_observation_skipped",
                 decision_authority="sim_observation_only",
             ),
@@ -4156,6 +4399,11 @@ def _maybe_arm_scalp_sim_candidate_window(
                 max_daily=max_daily,
                 first_ai_wait_created=first_wait_created,
                 first_ai_wait_reserve=first_wait_reserve,
+                active_seed_daily_total_share_pct=active_seed_total_share_pct,
+                active_seed_daily_total_limit=active_seed_total_limit,
+                active_seed_daily_total_created=active_seed_total_created,
+                active_seed_daily_per_seed_limit=active_seed_per_seed_limit,
+                active_seed_daily_created=active_seed_created,
                 runtime_effect="sim_observation_skipped",
                 decision_authority="sim_observation_only",
             ),
@@ -7901,6 +8149,10 @@ def _build_entry_price_snapshot_fields(latency_gate, *, request_price, curr_pric
         'resolved_order_price': submitted_order_price,
         'resolution_reason': resolution_reason,
         'price_below_bid_bps': price_below_bid_bps,
+        'entry_price_gap_profile': str(latency_gate.get('entry_price_gap_profile') or ''),
+        'entry_price_gap_profile_bps': _coerce_int_value(latency_gate.get('entry_price_gap_profile_bps')),
+        'entry_price_gap_profile_reason': str(latency_gate.get('entry_price_gap_profile_reason') or ''),
+        'entry_price_gap_profile_context': latency_gate.get('entry_price_gap_profile_context') or {},
         'reference_target_applied': bool(latency_gate.get('reference_target_applied')),
         'reference_target_rejected_reason': str(latency_gate.get('reference_target_rejected_reason') or ''),
         'reference_target_below_bid_bps': _coerce_int_value(latency_gate.get('reference_target_below_bid_bps')),
@@ -14745,6 +14997,18 @@ def _reconcile_pending_entry_orders(stock, code, strategy):
             min_fill_ratio=f"{min_fill_ratio:.3f}",
             min_fill_ratio_enabled=partial_fill_ratio_guard_enabled,
             dynamic_reason=stock.get('entry_dynamic_reason'),
+            metric_role="ops_reconciliation_diagnostic",
+            decision_authority="diagnostic_only_no_tuning_authority",
+            window_policy="same_day_reconciliation_diagnostic",
+            sample_floor="not_applicable_diagnostic",
+            primary_decision_metric="none_diagnostic_only",
+            source_quality_gate="partial_fill_reconciled_contract_fields_present",
+            runtime_effect=False,
+            allowed_runtime_apply=False,
+            forbidden_uses=(
+                "EV/rolling/MTD/cumulative tuning/live-auto promotion/runtime approval/"
+                "broker_order_authority/provider_route_change/bot_restart/threshold_mutation"
+            ),
         )
 
         if partial_fill_ratio_guard_enabled and min_fill_ratio > 0 and fill_ratio < min_fill_ratio:
@@ -15972,6 +16236,14 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
         else:
             dynamic_stop_pct = soft_stop_pct
             dynamic_trailing_limit = _rule_float('SCALP_TRAILING_LIMIT_WEAK', 0.4)
+        _evaluate_scalp_profit_stagnation_exit(
+            stock,
+            strategy=strategy,
+            profit_rate=profit_rate,
+            peak_profit=peak_profit,
+            current_ai_score=current_ai_score,
+            now_ts=now_ts,
+        )
         if profit_rate > dynamic_stop_pct:
             if stock.get('soft_stop_absorption_extension_used'):
                 _log_holding_pipeline(
@@ -16493,6 +16765,25 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                     sell_reason_type = "TRAILING"
                     reason = f"🔥 고점 대비 밀림 (-{drawdown:.2f}%). 트레일링 익절 (+{profit_rate:.2f}%)"
                     exit_rule = "scalp_trailing_take_profit"
+            else:
+                stagnation_exit = _evaluate_scalp_profit_stagnation_exit(
+                    stock,
+                    strategy=strategy,
+                    profit_rate=profit_rate,
+                    peak_profit=peak_profit,
+                    current_ai_score=current_ai_score,
+                    now_ts=now_ts,
+                )
+                if stagnation_exit.get("should_exit"):
+                    is_sell_signal = True
+                    sell_reason_type = "PROFIT_STAGNATION"
+                    reason = (
+                        "익절권 횡보 시간청산 "
+                        f"(hold={held_sec}s, stable={stagnation_exit.get('elapsed_sec', 0)}s, "
+                        f"profit=+{profit_rate:.2f}%, anchor=+{_safe_float(stagnation_exit.get('anchor_profit'), profit_rate):.2f}%, "
+                        f"peak=+{peak_profit:.2f}%, peak_improve={_safe_float(stagnation_exit.get('peak_improve'), 0.0):.2f}%p)"
+                    )
+                    exit_rule = "scalp_profit_stagnation_time_exit"
 
     elif strategy == 'KOSDAQ_ML':
         try:

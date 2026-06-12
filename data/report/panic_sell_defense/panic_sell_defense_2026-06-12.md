@@ -9,8 +9,8 @@
 - panic_confirmation_policy: `portfolio stop-loss clusters are evidence; PANIC_DETECTED requires market or microstructure confirmation`
 - report_only: `true`
 - runtime_effect: `report_only_no_mutation`
-- as_of: `2026-06-12T11:54:08`
-- latest_event_at: `2026-06-12T11:54:04`
+- as_of: `2026-06-12T15:53:01`
+- latest_event_at: `2026-06-12T15:45:00`
 - reasons: `panic thresholds not breached`
 
 ## 패닉 지표
@@ -18,8 +18,8 @@
 - panic_decision_basis: `real_exit_with_broker_provenance_only`
 - real_exit_provenance_required: `true`
 - real_exit_count: `0`
-- non_real_exit_count: `210`
-- unproven_exit_count: `204`
+- non_real_exit_count: `367`
+- unproven_exit_count: `358`
 - sim_probe_exit_excluded_from_panic: `true`
 - stop_loss_exit_count: `0`
 - current_30m_stop_loss_exit_count: `0`
@@ -37,38 +37,38 @@
 
 ## 회복 지표
 
-- active_positions: `50`
-- active_profit_sample: `45`
-- active_avg_unrealized_profit_rate_pct: `-0.1699`
-- active_win_rate_pct: `24.4`
+- active_positions: `10`
+- active_profit_sample: `7`
+- active_avg_unrealized_profit_rate_pct: `-1.1169`
+- active_win_rate_pct: `14.3`
 - sim_probe_provenance_passed: `true`
-- post_sell_rebound_above_sell_10_20m_pct: `0`
+- post_sell_rebound_above_sell_10_20m_pct: `100`
 - post_sell_rebound_above_buy_10_20m_pct: `0`
 
 ## Microstructure Detector
 
-- evaluated_symbol_count: `161`
+- evaluated_symbol_count: `183`
 - risk_off_advisory_count: `0`
 - allow_new_long_false_count: `0`
 - panic_signal_count: `0`
 - recovery_candidate_count: `0`
 - recovery_confirmed_count: `0`
-- missing_orderbook_count: `120`
-- degraded_orderbook_count: `120`
-- max_panic_score: `0.3164`
+- missing_orderbook_count: `150`
+- degraded_orderbook_count: `150`
+- max_panic_score: `0.37`
 - max_recovery_score: `0.5793`
-- micro_cusum_triggered_symbol_count: `7`
+- micro_cusum_triggered_symbol_count: `4`
 - micro_consensus_pass_symbol_count: `0`
 - micro_cusum_decision_authority: `source_quality_only`
 
 ## Microstructure Market Context
 
 - market_risk_state: `NEUTRAL`
-- market_panic_breadth_as_of: `2026-06-12T11:54:01`
+- market_panic_breadth_as_of: `2026-06-12T15:52:51`
 - market_panic_breadth_source_quality_status: `ok`
 - market_panic_breadth_risk_off_advisory: `false`
 - market_panic_breadth_single_market_risk_off_advisory: `false`
-- evaluated_symbol_count: `161`
+- evaluated_symbol_count: `183`
 - risk_off_advisory_ratio_pct: `0`
 - confirmed_micro_risk_off_advisory: `false`
 - confirmed_risk_off_advisory: `false`

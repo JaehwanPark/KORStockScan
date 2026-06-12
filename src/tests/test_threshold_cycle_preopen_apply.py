@@ -353,18 +353,30 @@ def test_auto_bounded_live_writes_dynamic_entry_price_resolver_env(tmp_path, mon
                             "SCALPING_ENTRY_PRICE_RESOLVER_ENABLED",
                             "SCALPING_ENTRY_PRICE_RESOLVER_MAX_BELOW_BID_BPS",
                             "SCALPING_NORMAL_DEFENSIVE_TICKS",
+                            "SCALPING_NORMAL_DEFENSIVE_BPS",
+                            "SCALPING_CONDITIONAL_STRONG_DEFENSIVE_BPS",
+                            "SCALPING_NORMAL_FAVORABLE_DEFENSIVE_BPS",
+                            "SCALPING_NORMAL_WEAK_DEFENSIVE_BPS",
                             "SCALPING_CONDITIONAL_1TICK_REAL_ENABLED",
                         ],
                         "current_values": {
                             "enabled": True,
                             "max_below_bid_bps": 80,
                             "normal_defensive_ticks": 3,
+                            "normal_defensive_bps": 45,
+                            "conditional_strong_defensive_bps": 20,
+                            "normal_favorable_defensive_bps": 40,
+                            "normal_weak_defensive_bps": 80,
                             "conditional_1tick_real_enabled": True,
                         },
                         "recommended_values": {
                             "enabled": True,
                             "max_below_bid_bps": 70,
                             "normal_defensive_ticks": 2,
+                            "normal_defensive_bps": 50,
+                            "conditional_strong_defensive_bps": 10,
+                            "normal_favorable_defensive_bps": 35,
+                            "normal_weak_defensive_bps": 65,
                             "conditional_1tick_real_enabled": False,
                         },
                         "threshold_version": "dynamic_entry_price_resolver:test",
@@ -402,6 +414,10 @@ def test_auto_bounded_live_writes_dynamic_entry_price_resolver_env(tmp_path, mon
     env = manifest["runtime_env_overrides"]
     assert env["KORSTOCKSCAN_SCALPING_ENTRY_PRICE_RESOLVER_MAX_BELOW_BID_BPS"] == "70"
     assert env["KORSTOCKSCAN_SCALPING_NORMAL_DEFENSIVE_TICKS"] == "2"
+    assert env["KORSTOCKSCAN_SCALPING_NORMAL_DEFENSIVE_BPS"] == "50"
+    assert env["KORSTOCKSCAN_SCALPING_CONDITIONAL_STRONG_DEFENSIVE_BPS"] == "10"
+    assert env["KORSTOCKSCAN_SCALPING_NORMAL_FAVORABLE_DEFENSIVE_BPS"] == "35"
+    assert env["KORSTOCKSCAN_SCALPING_NORMAL_WEAK_DEFENSIVE_BPS"] == "65"
     assert env["KORSTOCKSCAN_SCALPING_CONDITIONAL_1TICK_REAL_ENABLED"] == "false"
 
 
@@ -2584,6 +2600,7 @@ def test_scalp_sim_auto_approval_writes_sim_policy_env(tmp_path, monkeypatch):
         manifest["runtime_env_overrides"]["KORSTOCKSCAN_SCALP_SIM_AUTO_POLICY_VERSION"]
         == "scalp_sim_auto_approval:2026-05-26"
     )
+    assert manifest["runtime_env_overrides"]["KORSTOCKSCAN_SCALP_SIM_AUTO_POLICY_SOURCE_DATE"] == "2026-05-26"
     assert manifest["runtime_env_overrides"]["KORSTOCKSCAN_LIFECYCLE_BUCKET_DISCOVERY_ENABLED"] == "true"
     assert (
         manifest["runtime_env_overrides"]["KORSTOCKSCAN_LIFECYCLE_BUCKET_DISCOVERY_POLICY_FILE"]
@@ -2606,6 +2623,7 @@ def test_scalp_sim_auto_approval_writes_sim_policy_env(tmp_path, monkeypatch):
     )
     env_text = (runtime_dir / "threshold_runtime_env_2026-05-27.env").read_text(encoding="utf-8")
     assert "KORSTOCKSCAN_SCALP_SIM_AUTO_POLICY_ENABLED=true" in env_text
+    assert "KORSTOCKSCAN_SCALP_SIM_AUTO_POLICY_SOURCE_DATE=2026-05-26" in env_text
     assert "KORSTOCKSCAN_LIFECYCLE_BUCKET_DISCOVERY_POLICY_FILE=" in env_text
 
 
@@ -3747,6 +3765,44 @@ def test_verify_runtime_env_handoff_missing_key(tmp_path, monkeypatch):
     assert len(result["findings"]) == 1
     assert result["findings"][0]["severity"] == "runtime_env_handoff_missing"
     assert result["missing_family_count"] == 1
+
+
+def test_verify_runtime_env_handoff_requires_scalp_sim_policy_source_date(tmp_path, monkeypatch):
+    report_dir = tmp_path / "report"
+    apply_dir = tmp_path / "apply_plans"
+    runtime_dir = tmp_path / "runtime_env"
+    latency_dir = tmp_path / "missing_latency_classifier_recommendation"
+    lock_dir = tmp_path / "operator_runtime_env_locks"
+    report_dir.mkdir(parents=True)
+    runtime_dir.mkdir(parents=True)
+    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "APPLY_PLAN_DIR", apply_dir)
+    monkeypatch.setattr(mod, "RUNTIME_ENV_DIR", runtime_dir)
+    monkeypatch.setattr(mod, "OPERATOR_RUNTIME_ENV_LOCK_DIR", lock_dir)
+    monkeypatch.setattr(mod, "LATENCY_CLASSIFIER_RECOMMENDATION_DIR", latency_dir)
+
+    manifest = runtime_dir / "threshold_runtime_env_2026-06-11.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "target_date": "2026-06-11",
+                "selected_families": ["scalp_sim_auto_approval"],
+                "env_overrides": {
+                    "KORSTOCKSCAN_SCALP_SIM_AUTO_POLICY_ENABLED": "true",
+                    "KORSTOCKSCAN_SCALP_SIM_AUTO_POLICY_FILE": "data/runtime/scalp_sim_policy_catalog.json",
+                    "KORSTOCKSCAN_SCALP_SIM_AUTO_POLICY_VERSION": "scalp_sim_auto_approval:2026-06-10",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = mod.verify_runtime_env_handoff("2026-06-11")
+
+    assert result["status"] == "fail"
+    assert result["passed"] is False
+    assert result["findings"][0]["family"] == "scalp_sim_auto_approval"
+    assert "KORSTOCKSCAN_SCALP_SIM_AUTO_POLICY_SOURCE_DATE" in result["findings"][0]["missing_env_keys"]
 
 
 def test_build_runtime_gap_provenance_artifact_preserves_raw(tmp_path):

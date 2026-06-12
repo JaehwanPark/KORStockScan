@@ -156,6 +156,10 @@ TARGET_ENV_VALUE_KEYS = {
     "SCALPING_ENTRY_PRICE_RESOLVER_ENABLED": "enabled",
     "SCALPING_ENTRY_PRICE_RESOLVER_MAX_BELOW_BID_BPS": "max_below_bid_bps",
     "SCALPING_NORMAL_DEFENSIVE_TICKS": "normal_defensive_ticks",
+    "SCALPING_NORMAL_DEFENSIVE_BPS": "normal_defensive_bps",
+    "SCALPING_CONDITIONAL_STRONG_DEFENSIVE_BPS": "conditional_strong_defensive_bps",
+    "SCALPING_NORMAL_FAVORABLE_DEFENSIVE_BPS": "normal_favorable_defensive_bps",
+    "SCALPING_NORMAL_WEAK_DEFENSIVE_BPS": "normal_weak_defensive_bps",
     "SCALPING_CONDITIONAL_1TICK_REAL_ENABLED": "conditional_1tick_real_enabled",
     "LIFECYCLE_DECISION_MATRIX_ENABLED": "enabled",
     "LIFECYCLE_DECISION_MATRIX_POLICY_FILE": "policy_file",
@@ -189,6 +193,7 @@ TARGET_ENV_VALUE_KEYS = {
     "SCALP_SIM_AUTO_POLICY_ENABLED": "enabled",
     "SCALP_SIM_AUTO_POLICY_FILE": "policy_file",
     "SCALP_SIM_AUTO_POLICY_VERSION": "policy_version",
+    "SCALP_SIM_AUTO_POLICY_SOURCE_DATE": "policy_source_date",
     "SWING_SIM_AUTO_POLICY_ENABLED": "enabled",
     "SWING_SIM_AUTO_POLICY_FILE": "policy_file",
     "SWING_SIM_AUTO_POLICY_VERSION": "policy_version",
@@ -1360,17 +1365,20 @@ def _load_scalp_sim_auto_approval(source_date: str | None) -> dict[str, Any]:
             "enabled": True,
             "policy_file": str(catalog_path),
             "policy_version": f"scalp_sim_auto_approval:{source_date}",
+            "policy_source_date": str(source_date),
         }
         target_env_keys = [
             "SCALP_SIM_AUTO_POLICY_ENABLED",
             "SCALP_SIM_AUTO_POLICY_FILE",
             "SCALP_SIM_AUTO_POLICY_VERSION",
+            "SCALP_SIM_AUTO_POLICY_SOURCE_DATE",
             "LIFECYCLE_BUCKET_DISCOVERY_ENABLED",
         ]
         current_values = {
             "enabled": False,
             "policy_file": "",
             "policy_version": "",
+            "policy_source_date": "",
         }
         for policy in policies:
             if not isinstance(policy, dict) or policy.get("policy_id") != "scalp_sim_scale_in_window_expansion":
@@ -1874,6 +1882,7 @@ SELECTED_FAMILY_REQUIRED_ENV_KEYS: dict[str, list[str]] = {
         "KORSTOCKSCAN_SCALP_SIM_AUTO_POLICY_ENABLED",
         "KORSTOCKSCAN_SCALP_SIM_AUTO_POLICY_FILE",
         "KORSTOCKSCAN_SCALP_SIM_AUTO_POLICY_VERSION",
+        "KORSTOCKSCAN_SCALP_SIM_AUTO_POLICY_SOURCE_DATE",
     ],
     "swing_sim_auto_approval": [
         "KORSTOCKSCAN_SWING_SIM_AUTO_POLICY_ENABLED",

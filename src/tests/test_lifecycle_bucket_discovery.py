@@ -735,8 +735,21 @@ def test_active_sim_priority_summary_exposes_collection_and_live_blockers(monkey
     assert report["summary"]["active_sim_priority_eligible_count"] == 1
     assert report["summary"]["active_sim_priority_active_seed_count"] == 1
     assert report["summary"]["active_sim_priority_live_conversion_blocked_incomplete_flow_count"] == 1
+    assert report["summary"]["active_sim_priority_targeted_quota_count"] == 1
+    assert report["summary"]["active_sim_priority_revisit_sample_need_count"] == 1
+    assert report["summary"]["active_sim_priority_targeted_total_share_pct"] == 35
+    assert report["summary"]["active_sim_priority_targeted_per_seed_daily_limit"] == 20
+    assert report["summary"]["active_sim_priority_sample_goal_per_bucket"] == 10
     assert report["summary"]["parent_live_auto_apply_ready_count"] == 0
-    assert report["active_sim_priority_seeds"][0]["live_conversion_blocked_reason"] == "incomplete_lifecycle_flow"
+    seed = report["active_sim_priority_seeds"][0]
+    assert seed["live_conversion_blocked_reason"] == "incomplete_lifecycle_flow"
+    assert seed["targeted_sim_quota"]["quota_policy_version"] == "active_parent_seed_targeted_quota_v1"
+    assert seed["targeted_sim_quota"]["daily_total_share_pct"] == 35
+    assert seed["targeted_sim_quota"]["per_seed_daily_limit"] == 20
+    assert seed["targeted_sim_quota"]["sample_goal_per_bucket"] == 10
+    assert seed["targeted_sim_quota"]["needs_revisit_sample"] is True
+    assert seed["targeted_sim_quota"]["actual_order_submitted"] is False
+    assert seed["targeted_sim_quota"]["broker_order_forbidden"] is True
 
 
 def test_lifecycle_bucket_discovery_summarizes_quiet_gaps():
@@ -1221,6 +1234,11 @@ def test_lifecycle_bucket_discovery_classifies_live_sim_and_new_buckets(tmp_path
     assert report["summary"]["ai_two_pass_review_shard_count"] == 5
     assert (report_dir / "lifecycle_bucket_discovery_2026-05-22.json").exists()
     assert (catalog_dir / "lifecycle_bucket_catalog_2026-05-22.json").exists()
+    catalog = json.loads((catalog_dir / "lifecycle_bucket_catalog_2026-05-22.json").read_text())
+    assert catalog["targeted_sim_collection"]["policy_version"] == "active_parent_seed_targeted_quota_v1"
+    assert catalog["targeted_sim_collection"]["daily_total_share_pct"] == 35
+    assert catalog["targeted_sim_collection"]["per_seed_daily_limit"] == 20
+    assert "active_sim_priority_seeds" in catalog
     auto = json.loads((sim_dir / "lifecycle_bucket_sim_auto_approval_2026-05-22.json").read_text())
     assert auto["approved"] is True
     assert auto["broker_order_forbidden"] is True
@@ -1233,6 +1251,9 @@ def test_lifecycle_bucket_discovery_classifies_live_sim_and_new_buckets(tmp_path
     assert auto["approved_lifecycle_flow_sim_probe_count"] == 1
     assert auto["approved_state_counts"][mod.LIFECYCLE_FLOW_SIM_PROBE_STATE] == 1
     assert flow_probe["bucket_id"] in auto["approved_bucket_ids"]
+    assert auto["targeted_sim_collection"]["policy_version"] == "active_parent_seed_targeted_quota_v1"
+    assert auto["targeted_sim_collection"]["daily_total_share_pct"] == 35
+    assert auto["targeted_sim_collection"]["per_seed_daily_limit"] == 20
     flow_probe_row = next(row for row in auto["approved_bucket_rows"] if row["bucket_id"] == flow_probe["bucket_id"])
     assert flow_probe_row["source_bucket_id"] == flow_probe["source_bucket_id"]
     assert flow_probe_row["complete_flow_count"] == 1

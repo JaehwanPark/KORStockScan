@@ -7,7 +7,7 @@
 
 | profile | previous | recommended | state | completed |
 |---|---:|---:|---|---:|
-| standard | 60 | 60 | hold_sample | 2 |
+| standard | 60 | 60 | hold_best_unchanged | 76 |
 | breakout | 120 | 120 | hold_sample | 0 |
 | pullback | 600 | 600 | hold_sample | 0 |
 | reserve | 1200 | 1200 | hold_sample | 0 |

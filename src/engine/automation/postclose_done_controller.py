@@ -205,6 +205,42 @@ def _has_non_recoverable_issue(issues: list[str]) -> bool:
     return any(term in joined for term in NON_RECOVERABLE_TERMS)
 
 
+def _structural_blockers(verification: dict[str, Any], issues: list[str]) -> list[str]:
+    blockers: list[str] = []
+    source_quality = verification.get("source_quality_hard_block")
+    if isinstance(source_quality, dict):
+        hard_count = source_quality.get("hard_blocking_contract_gap_count")
+        try:
+            hard_count_int = int(hard_count or 0)
+        except Exception:
+            hard_count_int = 0
+        if hard_count_int > 0 or source_quality.get("status") == "fail":
+            blockers.append("requires_code_fix:source_quality_hard_contract_gap")
+    active_handoff = verification.get("active_sim_priority_handoff")
+    if isinstance(active_handoff, dict):
+        active_missing = [str(item) for item in active_handoff.get("missing") or [] if str(item)]
+        if "active_sim_priority_inactive_key_consumed" in active_missing:
+            blockers.append("requires_policy_lineage_fix:active_sim_priority_inactive_key_consumed")
+        if "active_sim_priority_unknown_key_observed" in active_missing:
+            blockers.append("requires_policy_lineage_fix:active_sim_priority_unknown_key_observed")
+    issue_set = set(str(item) for item in issues if str(item))
+    if "source_quality_hard_block_handoff_missing" in issue_set:
+        blockers.append("requires_code_fix:source_quality_hard_block_handoff_missing")
+    if "active_sim_priority_handoff_missing" in issue_set:
+        blockers.append("requires_policy_lineage_fix:active_sim_priority_handoff_missing")
+    return list(dict.fromkeys(blockers))
+
+
+def _structural_next_actions(blockers: list[str]) -> list[str]:
+    actions: list[str] = []
+    for blocker in blockers:
+        if blocker.startswith("requires_code_fix:source_quality"):
+            actions.append("fix_source_quality_metric_contract_and_rerun_postclose_audit")
+        elif blocker.startswith("requires_policy_lineage_fix:active_sim_priority"):
+            actions.append("fix_active_sim_priority_seed_lineage_and_verify_no_inactive_runtime_key")
+    return list(dict.fromkeys(actions))
+
+
 def _has_done_marker(verification: dict[str, Any]) -> bool:
     marker = str(verification.get("latest_done_marker") or "").strip()
     return bool(marker and marker != "-")
@@ -787,6 +823,16 @@ def _render_markdown(report: dict[str, Any]) -> str:
     if blocked:
         lines.extend(["", "## Blocked Reasons"])
         lines.extend(f"- `{item}`" for item in blocked)
+    structural = report.get("structural_blockers") or []
+    if structural:
+        lines.extend(["", "## Structural Blockers"])
+        lines.extend(f"- `{item}`" for item in structural)
+        lines.append(f"- requires_code_fix: `{report.get('requires_code_fix')}`")
+        lines.append(f"- requires_policy_lineage_fix: `{report.get('requires_policy_lineage_fix')}`")
+    next_actions = report.get("structural_next_actions") or []
+    if next_actions:
+        lines.extend(["", "## Structural Next Actions"])
+        lines.extend(f"- `{item}`" for item in next_actions)
     lines.append("")
     return "\n".join(lines)
 
@@ -906,6 +952,8 @@ def build_postclose_done_controller(
 
     final_status = str(final_verifier.get("status") or "missing")
     final_issues = _flatten_issues(final_verifier)
+    structural_blockers = _structural_blockers(final_verifier, final_issues)
+    structural_next_actions = _structural_next_actions(structural_blockers)
     latest_failed_tail_stage = _latest_failed_tail_stage(target_date) or _tail_stage_from_actions(actions_done)
     selected_recovery_action = next(
         (
@@ -939,6 +987,8 @@ def build_postclose_done_controller(
         status = "dry_run_planned"
     elif require_codex_completed and not dry_run and not runner_completed:
         status = "blocked_uncompleted_implementation"
+    elif structural_blockers:
+        status = "blocked_structural_contract_gap"
     elif blocked_reasons and _has_non_recoverable_issue(blocked_reasons):
         status = "blocked_non_recoverable"
     elif any(str(reason).startswith("verifier_status=") for reason in blocked_reasons):
@@ -964,6 +1014,12 @@ def build_postclose_done_controller(
         "full_wrapper_rerun_used": full_wrapper_rerun_used,
         "minimal_repair_commands": minimal_repair_commands,
         "blocked_reason": blocked_reason,
+        "structural_blockers": structural_blockers,
+        "requires_code_fix": any(str(item).startswith("requires_code_fix:") for item in structural_blockers),
+        "requires_policy_lineage_fix": any(
+            str(item).startswith("requires_policy_lineage_fix:") for item in structural_blockers
+        ),
+        "structural_next_actions": structural_next_actions,
         "require_codex_completed": require_codex_completed,
         "max_attempts": max_attempts,
         "predecessor_wait_sec": predecessor_wait_sec,

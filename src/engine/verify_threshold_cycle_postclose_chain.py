@@ -2410,6 +2410,8 @@ def _active_sim_priority_handoff_status(
         "preopen_seed_ids": sorted(preopen_seed_ids),
         "observed_seed_ids": sorted(observed_seed_ids),
         "referenced_runtime_seed_ids": sorted(referenced_runtime_seed_ids),
+        "inactive_consumed_ids": sorted(inactive_consumed),
+        "unknown_consumed_ids": sorted(unknown_consumed),
         "swing_priority_policy_ids": sorted(swing_policy_ids),
         "active_swing_priority_policy_ids": sorted(active_swing_policy_ids),
         "preopen_swing_priority_policy_ids": sorted(preopen_swing_policy_ids),

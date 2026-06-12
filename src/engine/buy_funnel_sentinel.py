@@ -225,6 +225,10 @@ def _blocker_label_from_stage_fields(stage: str, fields: dict[str, str]) -> str:
     return default_reason_label(stage, fields)
 
 
+def _is_swing_blocker_label(label: str) -> bool:
+    return _safe_str(label).startswith("blocked_swing_")
+
+
 def _event_from_cache_row(row: dict[str, Any]) -> PipelineEvent | None:
     emitted_at = _parse_iso_datetime(_safe_str(row.get("emitted_at")))
     if emitted_at is None:
@@ -475,6 +479,7 @@ def _summarize_events(
     summary_event_count = 0
     summary_latest_candidates: list[datetime] = []
     summary_blocker_counter: Counter[str] = Counter()
+    summary_swing_blocker_counter: Counter[str] = Counter()
     for row in summary_rows or []:
         count, latest = _summary_row_count_in_range(row, start_at=start_at, end_at=end_at)
         if count <= 0:
@@ -486,13 +491,19 @@ def _summarize_events(
         if latest is not None:
             summary_latest_candidates.append(latest)
         if _is_blocker_stage(stage):
-            summary_blocker_counter[label] += count
+            if _is_swing_blocker_label(label):
+                summary_swing_blocker_counter[label] += count
+            else:
+                summary_blocker_counter[label] += count
     stage_unique_counts = {
         stage: len({_attempt_key(event) for event in lossless_scoped if event.stage == stage})
         for stage in sorted(set(stage_event_counts) | ENTRY_STAGES | HOLDING_STAGES)
     }
-    blocker_counter = Counter(_blocker_label(event) for event in lossless_scoped if _is_blocker_stage(event.stage))
+    raw_blocker_labels = [_blocker_label(event) for event in lossless_scoped if _is_blocker_stage(event.stage)]
+    blocker_counter = Counter(label for label in raw_blocker_labels if not _is_swing_blocker_label(label))
     blocker_counter.update(summary_blocker_counter)
+    swing_blocker_counter = Counter(label for label in raw_blocker_labels if _is_swing_blocker_label(label))
+    swing_blocker_counter.update(summary_swing_blocker_counter)
     upstream_events = [
         event
         for event in lossless_scoped
@@ -533,6 +544,10 @@ def _summarize_events(
         "blocker_top": [
             {"label": label, "count": count}
             for label, count in blocker_counter.most_common(10)
+        ],
+        "swing_blocker_top": [
+            {"label": label, "count": count}
+            for label, count in swing_blocker_counter.most_common(10)
         ],
         "upstream_blocker_top": [
             {"label": label, "count": count}
@@ -987,6 +1002,7 @@ def build_markdown(report: dict[str, Any]) -> str:
         f"or `submitted/budget <= {SUBMIT_TO_BUDGET_CRITICAL_PCT}%` "
         f"(floors: ai>={SUBMIT_DROUGHT_MIN_AI_UNIQUE}, budget>={SUBMIT_DROUGHT_MIN_BUDGET_UNIQUE})",
         f"- top blockers: `{_format_top_blockers(session['blocker_top'])}`",
+        f"- swing blockers: `{_format_top_blockers(session.get('swing_blocker_top') or [])}`",
         f"- upstream blockers: `{_format_top_blockers(session['upstream_blocker_top'])}`",
         f"- latency blockers: `{_format_top_blockers(session['latency_blocker_top'])}`",
         f"- price guards: `{_format_top_blockers(session['price_guard_top'])}`",
@@ -1006,6 +1022,7 @@ def build_markdown(report: dict[str, Any]) -> str:
             f"latency={stage_unique.get('latency_pass', 0)}, "
             f"submitted={stage_unique.get('order_bundle_submitted', 0)}, "
             f"top=`{_format_top_blockers(summary['blocker_top'], limit=3)}`, "
+            f"swing=`{_format_top_blockers(summary.get('swing_blocker_top') or [], limit=3)}`, "
             f"upstream=`{_format_top_blockers(summary['upstream_blocker_top'], limit=3)}`"
         )
     lines.append("")

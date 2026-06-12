@@ -157,6 +157,85 @@ def _conditional_strong_defensive_bps() -> int:
     return max(1, int(getattr(TRADING_RULES, "SCALPING_CONDITIONAL_STRONG_DEFENSIVE_BPS", 20) or 20))
 
 
+def _normal_favorable_defensive_bps() -> int:
+    return max(1, int(getattr(TRADING_RULES, "SCALPING_NORMAL_FAVORABLE_DEFENSIVE_BPS", 35) or 35))
+
+
+def _normal_weak_defensive_bps() -> int:
+    return max(1, int(getattr(TRADING_RULES, "SCALPING_NORMAL_WEAK_DEFENSIVE_BPS", 65) or 65))
+
+
+def _normal_market_gap_profile(
+    conditional_context: dict[str, Any],
+    *,
+    normal_bps: int,
+    strong_bps: int,
+    favorable_bps: int,
+    weak_bps: int,
+    strong_enabled: bool,
+    is_latency_override: bool,
+) -> dict[str, Any]:
+    spread_ticks = int(conditional_context.get("spread_ticks") or 0)
+    positive_signals = [
+        name
+        for name in ("buy_pressure_ok", "ofi_ok", "depth_ok")
+        if bool(conditional_context.get(name))
+    ]
+    positive_signal_count = len(positive_signals)
+    profile_context = {
+        "spread_ticks": spread_ticks,
+        "positive_signal_count": positive_signal_count,
+        "positive_signals": ",".join(positive_signals),
+        "buy_pressure_ok": bool(conditional_context.get("buy_pressure_ok")),
+        "ofi_ok": bool(conditional_context.get("ofi_ok")),
+        "depth_ok": bool(conditional_context.get("depth_ok")),
+        "conditional_1tick_eligible": bool(conditional_context.get("eligible")),
+        "conditional_1tick_enabled": bool(strong_enabled),
+        "latency_override": bool(is_latency_override),
+    }
+    profile = {
+        "profile": "normal",
+        "bps": normal_bps,
+        "reason": "normal_market_default",
+        "context": profile_context,
+    }
+    if is_latency_override:
+        profile.update(profile="latency_override", bps=0, reason="latency_override_keeps_defensive")
+        return profile
+    if not strong_enabled:
+        profile["reason"] = "conditional_1tick_disabled"
+        return profile
+    if bool(conditional_context.get("eligible")):
+        profile.update(
+            profile="strong_1tick_pressure",
+            bps=strong_bps,
+            reason="spread_1tick_strong_buy_pressure_percent_bps",
+        )
+        return profile
+    if spread_ticks <= 3 and positive_signal_count >= 1:
+        profile.update(
+            profile="favorable_micro",
+            bps=favorable_bps,
+            reason="spread_lte3_positive_micro_percent_bps",
+        )
+        return profile
+    if spread_ticks <= 5 and positive_signal_count >= 2:
+        profile.update(
+            profile="favorable_wide_micro",
+            bps=favorable_bps,
+            reason="spread_lte5_two_positive_micro_percent_bps",
+        )
+        return profile
+    if spread_ticks >= 6 or (spread_ticks >= 4 and positive_signal_count == 0):
+        profile.update(
+            profile="weak_liquidity_wide_spread",
+            bps=weak_bps,
+            reason="wide_spread_or_no_positive_micro_percent_bps",
+        )
+        return profile
+    return profile
+
+
 def _normal_defensive_ticks_for_strategy(strategy_id: str) -> int:
     if str(strategy_id or "").upper() in {"SCALPING", "SCALP"}:
         return max(1, int(_CONFIG.normal_defensive_ticks or 1))
@@ -1216,6 +1295,8 @@ def evaluate_live_buy_entry(
         if percent_bps_mode and is_scalping:
             normal_defensive_bps = _normal_defensive_bps()
             strong_defensive_bps = _conditional_strong_defensive_bps()
+            favorable_defensive_bps = _normal_favorable_defensive_bps()
+            weak_defensive_bps = _normal_weak_defensive_bps()
             conditional_1tick_context = _conditional_real_1tick_context(
                 ws_data,
                 best_ask=best_ask,
@@ -1223,19 +1304,30 @@ def evaluate_live_buy_entry(
             )
             conditional_1tick_applied = False
             conditional_1tick_reason = "not_eligible"
-            applied_bps = normal_defensive_bps
-            entry_price_guard = "normal_defensive_percent_bps"
+            conditional_1tick_enabled = _conditional_real_1tick_enabled(strategy_id)
+            gap_profile = _normal_market_gap_profile(
+                conditional_1tick_context,
+                normal_bps=normal_defensive_bps,
+                strong_bps=strong_defensive_bps,
+                favorable_bps=favorable_defensive_bps,
+                weak_bps=weak_defensive_bps,
+                strong_enabled=conditional_1tick_enabled,
+                is_latency_override=is_latency_override,
+            )
+            applied_bps = int(gap_profile.get("bps", normal_defensive_bps) or normal_defensive_bps)
+            entry_price_guard = {
+                "normal": "normal_defensive_percent_bps",
+                "strong_1tick_pressure": "conditional_strong_defensive_percent_bps",
+                "favorable_micro": "favorable_micro_percent_bps",
+                "favorable_wide_micro": "favorable_wide_micro_percent_bps",
+                "weak_liquidity_wide_spread": "weak_liquidity_wide_spread_percent_bps",
+                "latency_override": "latency_danger_override_defensive",
+            }.get(str(gap_profile.get("profile")), "normal_defensive_percent_bps")
 
-            if (
-                not is_latency_override
-                and _conditional_real_1tick_enabled(strategy_id)
-                and bool(conditional_1tick_context.get("eligible"))
-            ):
-                applied_bps = strong_defensive_bps
-                entry_price_guard = "conditional_strong_defensive_percent_bps"
+            if str(gap_profile.get("profile")) == "strong_1tick_pressure":
                 conditional_1tick_applied = True
-                conditional_1tick_reason = "spread_1tick_strong_buy_pressure_percent_bps"
-            elif not _conditional_real_1tick_enabled(strategy_id):
+                conditional_1tick_reason = str(gap_profile.get("reason"))
+            elif not conditional_1tick_enabled:
                 conditional_1tick_reason = "disabled_or_non_scalping"
             elif is_latency_override:
                 conditional_1tick_reason = "latency_override_keeps_defensive"
@@ -1252,6 +1344,7 @@ def evaluate_live_buy_entry(
                 order_price = int(defensive_order.price)
                 entry_price_guard = "latency_danger_override_defensive"
                 applied_bps = 0
+                gap_profile.update(profile="latency_override", bps=0, reason="latency_override_keeps_defensive")
             else:
                 order_price = move_price_down_by_bps(latest_price, applied_bps, floor_ticks=1)
                 defensive_ticks = 0
@@ -1279,6 +1372,10 @@ def evaluate_live_buy_entry(
             result["entry_price_defense_mode"] = "percent_bps"
             result["entry_price_defensive_bps"] = applied_bps
             result["entry_price_defensive_floor_ticks"] = 1
+            result["entry_price_gap_profile"] = str(gap_profile.get("profile"))
+            result["entry_price_gap_profile_bps"] = int(gap_profile.get("bps", applied_bps) or applied_bps)
+            result["entry_price_gap_profile_reason"] = str(gap_profile.get("reason") or "")
+            result["entry_price_gap_profile_context"] = gap_profile.get("context", {})
             result["normal_defensive_order_price"] = int(normal_defensive_order_price)
             result["latency_guarded_order_price"] = int(latency_guarded_order_price)
             result["counterfactual_order_price_1tick"] = int(counterfactual_order_price_1tick)

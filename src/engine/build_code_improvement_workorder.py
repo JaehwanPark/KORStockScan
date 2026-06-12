@@ -41,8 +41,16 @@ IMPLEMENTED_STATUSES = {
     "implemented",
     "implemented_but_hold_sample",
     "implemented_but_waiting_sample",
+    "implemented_submit_contract_verified",
     "implemented_source_quality_contract_available",
     "implemented_source_quality_contract_waiting_sample",
+}
+TERMINAL_NON_IMPLEMENT_STATUSES = {
+    "terminal_design_family_candidate",
+    "terminal_deferred_evidence",
+    "terminal_existing_family_evidence",
+    "terminal_not_applicable_evidence",
+    "terminal_rejected",
 }
 
 KNOWN_FIXED_UNKNOWN_TOKEN_FIELDS = {
@@ -365,6 +373,8 @@ def _unresolved_repeat_counts(reports: list[dict[str, Any]]) -> dict[str, dict[s
                     continue
                 if _is_implemented_status(status):
                     continue
+                if _is_terminal_non_implement_status(status):
+                    continue
                 if order.get("runtime_effect") is True:
                     continue
                 signature = _repeat_unresolved_signature(order)
@@ -431,6 +441,9 @@ def _escalate_repeated_unresolved_orders(
         status = str(item.order.get("implementation_status") or "").strip()
         primary_history_status = _repeat_info_primary_status(repeat_counts.get(repeat_key))
         implemented_status_present = _is_implemented_status(status)
+        terminal_non_implement_status_present = _is_terminal_non_implement_status(status) or _is_terminal_non_implement_status(
+            primary_history_status
+        )
         existing_family_only = (
             item.decision == "attach_existing_family"
             and bool(item.mapped_family)
@@ -469,6 +482,7 @@ def _escalate_repeated_unresolved_orders(
             and repeat_count >= repeat_floor
             and item.decision in unresolved_decisions
             and not implemented_status_present
+            and not terminal_non_implement_status_present
             and item.order.get("runtime_effect") is not True
             and item.decision_source != "implement_now_rejudge"
             and not existing_family_only
@@ -763,6 +777,49 @@ def _is_implemented_status(value: Any) -> bool:
     return str(value or "").strip() in IMPLEMENTED_STATUSES
 
 
+def _is_terminal_non_implement_status(value: Any) -> bool:
+    return str(value or "").strip() in TERMINAL_NON_IMPLEMENT_STATUSES
+
+
+def _terminal_non_implement_status(item: ClassifiedOrder) -> str | None:
+    status = str(item.order.get("implementation_status") or "").strip()
+    if _is_implemented_status(status) or _is_terminal_non_implement_status(status):
+        return status
+    source_type = str(item.order.get("source_report_type") or "").strip()
+    if item.decision == "attach_existing_family":
+        provenance = (
+            item.order.get("implementation_provenance")
+            if isinstance(item.order.get("implementation_provenance"), dict)
+            else {}
+        )
+        if str(provenance.get("recommended_resolution") or "") == "mark_not_applicable_explicitly":
+            return "terminal_not_applicable_evidence"
+        if not status:
+            return "terminal_existing_family_evidence"
+        return None
+    if item.decision == "design_family_candidate":
+        if source_type in {"scalping_pattern_lab_automation", "swing_pattern_lab_automation", "swing_improvement_automation"}:
+            return "terminal_design_family_candidate"
+        return None
+    if item.decision == "defer_evidence":
+        if item.decision_source == "implement_now_rejudge":
+            return "terminal_deferred_evidence"
+        if source_type in {
+            "scalping_pattern_lab_automation",
+            "swing_pattern_lab_automation",
+        } and str(item.order.get("improvement_type") or "").strip() in {
+            "threshold_family_input",
+            "pattern_lab_observation",
+        }:
+            return "terminal_deferred_evidence"
+        if source_type in {"pattern_lab_ai_review", "codebase_performance_workorder"}:
+            return "terminal_deferred_evidence"
+        return None
+    if item.decision == "reject":
+        return "terminal_rejected"
+    return None
+
+
 def _entry_submit_drought_implementation_marker(contract: dict[str, Any]) -> dict[str, Any]:
     required = contract.get("required_downstream") if isinstance(contract.get("required_downstream"), list) else []
     if not {
@@ -799,10 +856,77 @@ def _entry_submit_weak_contract_implementation_marker(
     *,
     gap_type: str,
     contract: dict[str, Any],
+    taxonomy_leakage_labels: list[str] | None = None,
+    lifecycle_report: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     required = contract.get("required_downstream") if isinstance(contract.get("required_downstream"), list) else []
     if "lifecycle_decision_matrix.submit_bucket_attribution" not in {str(item) for item in required}:
         return {}
+    submit_attribution = (
+        lifecycle_report.get("submit_bucket_attribution")
+        if isinstance(lifecycle_report, dict) and isinstance(lifecycle_report.get("submit_bucket_attribution"), dict)
+        else {}
+    )
+    submit_summary = (
+        submit_attribution.get("summary")
+        if isinstance(submit_attribution.get("summary"), dict)
+        else {}
+    )
+    post_submit_gaps = (
+        submit_attribution.get("post_submit_contract_gaps")
+        if isinstance(submit_attribution.get("post_submit_contract_gaps"), list)
+        else []
+    )
+    unresolved_gap_types = {
+        str(item.get("gap_type") or "")
+        for item in post_submit_gaps
+        if isinstance(item, dict)
+    }
+    unresolved_taxonomy_leakage = [
+        str(item)
+        for item in (taxonomy_leakage_labels or [])
+        if str(item).strip()
+    ]
+    if (
+        submit_attribution
+        and _safe_int(submit_summary.get("submit_rows"), 0) > 0
+        and _safe_int(submit_summary.get("contract_gap_count"), 0) == 0
+        and not bool(submit_summary.get("post_submit_provenance_join_gap"))
+        and gap_type not in unresolved_gap_types
+        and (gap_type != "source_taxonomy_contract_gap" or not unresolved_taxonomy_leakage)
+    ):
+        return {
+            "implementation_status": "implemented_submit_contract_verified",
+            "implementation_checks": [
+                "buy_funnel_sentinel weak contract workorder is source-only",
+                "lifecycle_decision_matrix submit_bucket_attribution is present",
+                "submit_bucket_attribution contract_gap_count=0",
+                "post_submit_provenance_join_gap=false",
+                f"weak contract gap={gap_type}",
+                "runtime_effect=false",
+                "allowed_runtime_apply=false",
+            ],
+            "implementation_provenance": {
+                "implementation_type": "submit_contract_report_provenance_verified",
+                "source_report_type": "buy_funnel_sentinel",
+                "downstream_consumer": "lifecycle_decision_matrix.submit_bucket_attribution",
+                "gap_type": gap_type,
+                "weak_contract_matches": contract.get("weak_contract_matches") or [],
+                "sample_status": "ldm_submit_contract_verified",
+                "submit_rows": _safe_int(submit_summary.get("submit_rows"), 0),
+                "real_submitted_row_count": _safe_int(submit_summary.get("real_submitted_row_count"), 0),
+                "missing_broker_order_key_count": _safe_int(
+                    submit_summary.get("missing_broker_order_key_count"),
+                    0,
+                ),
+                "taxonomy_leakage_labels": unresolved_taxonomy_leakage,
+                "post_submit_provenance_join_resolution": submit_summary.get(
+                    "post_submit_provenance_join_resolution"
+                ),
+                "runtime_effect": contract.get("runtime_effect"),
+                "allowed_runtime_apply": contract.get("allowed_runtime_apply"),
+            },
+        }
     stage_unique = contract.get("stage_unique") if isinstance(contract.get("stage_unique"), dict) else {}
     submitted_unique = _safe_int(stage_unique.get("order_bundle_submitted"), 0)
     if submitted_unique > 0 and gap_type == "source_taxonomy_contract_gap":
@@ -984,6 +1108,7 @@ def _serialize_classified_order(item: ClassifiedOrder) -> dict[str, Any]:
         item.decision == "attach_existing_family"
         and str(item.order.get("target_subsystem") or "") == "lifecycle_decision_matrix"
     )
+    implementation_status = _terminal_non_implement_status(item) or item.order.get("implementation_status")
     return {
         "order_id": item.order.get("order_id"),
         "title": item.order.get("title"),
@@ -1020,7 +1145,7 @@ def _serialize_classified_order(item: ClassifiedOrder) -> dict[str, Any]:
         "strategy_effect": bool(item.order.get("strategy_effect")),
         "data_quality_effect": bool(item.order.get("data_quality_effect")),
         "tuning_axis_effect": bool(item.order.get("tuning_axis_effect")),
-        "implementation_status": item.order.get("implementation_status"),
+        "implementation_status": implementation_status,
         "original_implementation_status": item.order.get("original_implementation_status"),
         "implementation_checks": item.order.get("implementation_checks") or [],
         "implementation_id": item.order.get("implementation_id"),
@@ -2194,6 +2319,7 @@ def _entry_post_submit_weak_contract_orders(
     contract: dict[str, Any],
     weak_contract_matches: list[Any],
     taxonomy_leakage_labels: list[str],
+    lifecycle_report: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     required_downstream = contract.get("required_downstream") if contract else []
     orders: list[dict[str, Any]] = []
@@ -2219,7 +2345,12 @@ def _entry_post_submit_weak_contract_orders(
                 "priority": 1,
                 "runtime_effect": False,
                 "allowed_runtime_apply": False,
-                **_entry_submit_weak_contract_implementation_marker(gap_type=gap_type, contract=contract),
+                **_entry_submit_weak_contract_implementation_marker(
+                    gap_type=gap_type,
+                    contract=contract,
+                    taxonomy_leakage_labels=taxonomy_leakage_labels,
+                    lifecycle_report=lifecycle_report,
+                ),
                 "strategy_effect": gap_type,
                 "data_quality_effect": "post_entry_contract_gap",
                 "tuning_axis_effect": "source_quality_only",
@@ -3959,7 +4090,11 @@ def _codebase_performance_followup_orders(report: dict[str, Any]) -> list[dict[s
     return result
 
 
-def _buy_funnel_sentinel_followup_orders(report: dict[str, Any]) -> list[dict[str, Any]]:
+def _buy_funnel_sentinel_followup_orders(
+    report: dict[str, Any],
+    *,
+    lifecycle_report: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
     if not report:
         return []
     classification = report.get("classification") if isinstance(report.get("classification"), dict) else {}
@@ -4062,6 +4197,7 @@ def _buy_funnel_sentinel_followup_orders(report: dict[str, Any]) -> list[dict[st
             contract=contract,
             weak_contract_matches=weak_contract_matches,
             taxonomy_leakage_labels=taxonomy_leakage_labels,
+            lifecycle_report=lifecycle_report,
         )
     )
     return orders
@@ -5056,7 +5192,10 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
         if isinstance(item, dict)
     ]
     conversion_lane_orders = _conversion_lane_followup_orders(conversion_lane)
-    buy_funnel_sentinel_orders = _buy_funnel_sentinel_followup_orders(buy_funnel_sentinel)
+    buy_funnel_sentinel_orders = _buy_funnel_sentinel_followup_orders(
+        buy_funnel_sentinel,
+        lifecycle_report=lifecycle_report,
+    )
     buy_funnel_sentinel_order_ids = {
         str(order.get("order_id"))
         for order in buy_funnel_sentinel_orders
@@ -5230,14 +5369,23 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
     selected_decision_counts: dict[str, int] = {}
     selected_route_counts: dict[str, int] = {}
     selected_unimplemented_route_counts: dict[str, int] = {}
+    selected_terminal_non_implement_route_counts: dict[str, int] = {}
     selected_runtime_effect_false_count = 0
     selected_unimplemented_runtime_effect_false_count = 0
+    selected_terminal_non_implement_runtime_effect_false_count = 0
     for item in selected:
         selected_decision_counts[item.decision] = selected_decision_counts.get(item.decision, 0) + 1
         route = str(item.route or item.order.get("route") or item.decision or "unknown")
         selected_route_counts[route] = selected_route_counts.get(route, 0) + 1
         if item.order.get("runtime_effect") is False:
             selected_runtime_effect_false_count += 1
+            terminal_status = _terminal_non_implement_status(item)
+            if terminal_status and _is_terminal_non_implement_status(terminal_status):
+                selected_terminal_non_implement_runtime_effect_false_count += 1
+                selected_terminal_non_implement_route_counts[route] = (
+                    selected_terminal_non_implement_route_counts.get(route, 0) + 1
+                )
+                continue
             if item.decision != "attach_existing_family" and not _is_implemented_status(
                 _repeat_unresolved_original_status(item.order)
             ):
@@ -5365,6 +5513,10 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
             "selected_runtime_effect_false_count": selected_runtime_effect_false_count,
             "selected_unimplemented_runtime_effect_false_count": selected_unimplemented_runtime_effect_false_count,
             "selected_unimplemented_route_counts": selected_unimplemented_route_counts,
+            "selected_terminal_non_implement_runtime_effect_false_count": (
+                selected_terminal_non_implement_runtime_effect_false_count
+            ),
+            "selected_terminal_non_implement_route_counts": selected_terminal_non_implement_route_counts,
             "selected_implement_now_resolution_summary": implement_now_resolution_summary,
             "selected_implement_now_existing_implementation_count": implement_now_resolution_summary[
                 "existing_implementation_count"
@@ -5546,6 +5698,8 @@ def render_code_improvement_workorder_markdown(report: dict[str, Any]) -> str:
         f"- selected_runtime_effect_false_count: `{summary.get('selected_runtime_effect_false_count')}`",
         f"- selected_unimplemented_runtime_effect_false_count: `{summary.get('selected_unimplemented_runtime_effect_false_count')}`",
         f"- selected_unimplemented_route_counts: `{summary.get('selected_unimplemented_route_counts')}`",
+        f"- selected_terminal_non_implement_runtime_effect_false_count: `{summary.get('selected_terminal_non_implement_runtime_effect_false_count')}`",
+        f"- selected_terminal_non_implement_route_counts: `{summary.get('selected_terminal_non_implement_route_counts')}`",
         f"- selected_implement_now_existing_implementation_count: `{summary.get('selected_implement_now_existing_implementation_count')}`",
         f"- selected_implement_now_existing_implementation_order_ids: `{summary.get('selected_implement_now_existing_implementation_order_ids')}`",
         f"- selected_implement_now_new_runtime_effect_false_count: `{summary.get('selected_implement_now_new_runtime_effect_false_count')}`",

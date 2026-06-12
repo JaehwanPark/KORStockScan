@@ -457,7 +457,10 @@ def test_summary_failure_falls_back_to_raw_events(monkeypatch, tmp_path):
 
     assert report["event_load"]["summary_status"] == "summary_unavailable"
     assert report["event_load"]["fallback_to_raw_cache"] is True
-    assert report["current"]["session"]["blocker_top"][0] == {
+    assert report["current"]["session"]["blocker_top"] == []
+    assert report["current"]["session"]["swing_blocker_top"][0] == {
         "label": "blocked_swing_gap:gap_pct_high",
         "count": 1,
     }
+    assert report["entry_submit_drought_contract"]["source_taxonomy_leakage"] is False
+    assert "SOURCE_TAXONOMY_LEAKAGE" not in report["entry_submit_drought_contract"]["weak_contract_matches"]

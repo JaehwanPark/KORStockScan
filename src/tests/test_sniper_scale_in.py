@@ -4587,6 +4587,12 @@ def test_reconcile_partial_fill_below_min_ratio_sends_exit_order(monkeypatch):
     state_handlers.KIWOOM_TOKEN = "token"
 
     monkeypatch.setattr(state_handlers, "_cancel_pending_entry_orders", lambda *args, **kwargs: "cancelled")
+    event_logs = []
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_entry_pipeline",
+        lambda stock, code, stage, **fields: event_logs.append((stage, fields)),
+    )
     sell_calls = []
     monkeypatch.setattr(
         state_handlers.kiwoom_orders,
@@ -4613,6 +4619,16 @@ def test_reconcile_partial_fill_below_min_ratio_sends_exit_order(monkeypatch):
     assert stock.get("pending_sell_msg", "").startswith("partial_fill_ratio_below_min")
     assert len(sell_calls) == 1
     assert sell_calls[0]["qty"] == 1
+    stage, fields = next(item for item in event_logs if item[0] == "partial_fill_reconciled")
+    assert stage == "partial_fill_reconciled"
+    assert fields["metric_role"] == "ops_reconciliation_diagnostic"
+    assert fields["decision_authority"] == "diagnostic_only_no_tuning_authority"
+    assert fields["window_policy"] == "same_day_reconciliation_diagnostic"
+    assert fields["sample_floor"] == "not_applicable_diagnostic"
+    assert fields["primary_decision_metric"] == "none_diagnostic_only"
+    assert fields["source_quality_gate"] == "partial_fill_reconciled_contract_fields_present"
+    assert fields["runtime_effect"] is False
+    assert fields["allowed_runtime_apply"] is False
 
 
 def test_reconcile_partial_fill_strong_override_uses_relaxed_ratio(monkeypatch):
@@ -6897,6 +6913,226 @@ def test_same_symbol_loss_reentry_cooldown_targets_loss_exits_only():
     )
     assert state_handlers._resolve_same_symbol_loss_reentry_cooldown_sec("scalp_trailing_take_profit", 1.2) == 0
     assert state_handlers._resolve_same_symbol_loss_reentry_cooldown_sec("protect_trailing_stop", 0.19) == 0
+
+
+def test_scalp_profit_stagnation_time_exit_triggers_for_real_position(monkeypatch):
+    state_handlers.TRADING_RULES = replace(
+        CONFIG,
+        SCALP_PROFIT_STAGNATION_EXIT_ENABLED=True,
+        SCALP_PROFIT_STAGNATION_MIN_PROFIT_PCT=1.0,
+        SCALP_PROFIT_STAGNATION_MIN_SEC=180,
+        SCALP_PROFIT_STAGNATION_MAX_PROFIT_MOVE_PCT=0.15,
+        SCALP_PROFIT_STAGNATION_MAX_PEAK_IMPROVE_PCT=0.10,
+        SCALP_PROFIT_STAGNATION_MIN_AI_SCORE=45,
+    )
+    stock = {
+        "strategy": "SCALPING",
+        "profit_stagnation_started_at": 1_000.0,
+        "profit_stagnation_anchor_profit": 1.05,
+        "profit_stagnation_anchor_peak": 1.10,
+    }
+
+    decision = state_handlers._evaluate_scalp_profit_stagnation_exit(
+        stock,
+        strategy="SCALPING",
+        profit_rate=1.12,
+        peak_profit=1.18,
+        current_ai_score=62,
+        now_ts=1_181.0,
+    )
+
+    assert decision["should_exit"] is True
+    assert decision["exit_rule"] == "scalp_profit_stagnation_time_exit"
+    assert decision["sell_reason_type"] == "PROFIT_STAGNATION"
+    assert decision["elapsed_sec"] == 181
+
+
+def test_scalp_profit_stagnation_time_exit_skips_simulated_position(monkeypatch):
+    state_handlers.TRADING_RULES = replace(CONFIG, SCALP_PROFIT_STAGNATION_EXIT_ENABLED=True)
+    stock = {
+        "strategy": "SCALPING",
+        "scalp_live_simulator": True,
+        "profit_stagnation_started_at": 1_000.0,
+        "profit_stagnation_anchor_profit": 1.05,
+        "profit_stagnation_anchor_peak": 1.10,
+    }
+
+    decision = state_handlers._evaluate_scalp_profit_stagnation_exit(
+        stock,
+        strategy="SCALPING",
+        profit_rate=1.08,
+        peak_profit=1.12,
+        current_ai_score=62,
+        now_ts=1_240.0,
+    )
+
+    assert decision == {"should_exit": False, "reason": "simulated_position"}
+    assert "profit_stagnation_started_at" not in stock
+
+
+def test_scalp_profit_stagnation_time_exit_skips_probe_provenance(monkeypatch):
+    state_handlers.TRADING_RULES = replace(CONFIG, SCALP_PROFIT_STAGNATION_EXIT_ENABLED=True)
+    stock = {
+        "strategy": "SCALPING",
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "decision_authority": "sim_observation_only",
+        "profit_stagnation_started_at": 1_000.0,
+        "profit_stagnation_anchor_profit": 1.05,
+        "profit_stagnation_anchor_peak": 1.10,
+    }
+
+    decision = state_handlers._evaluate_scalp_profit_stagnation_exit(
+        stock,
+        strategy="SCALPING",
+        profit_rate=1.08,
+        peak_profit=1.12,
+        current_ai_score=62,
+        now_ts=1_240.0,
+    )
+
+    assert decision == {"should_exit": False, "reason": "simulated_position"}
+    assert "profit_stagnation_started_at" not in stock
+
+
+def test_scalp_profit_stagnation_time_exit_resets_when_ai_score_below_floor(monkeypatch):
+    state_handlers.TRADING_RULES = replace(
+        CONFIG,
+        SCALP_PROFIT_STAGNATION_EXIT_ENABLED=True,
+        SCALP_PROFIT_STAGNATION_MIN_AI_SCORE=45,
+    )
+    stock = {
+        "strategy": "SCALPING",
+        "profit_stagnation_started_at": 1_000.0,
+        "profit_stagnation_anchor_profit": 1.05,
+        "profit_stagnation_anchor_peak": 1.10,
+    }
+
+    decision = state_handlers._evaluate_scalp_profit_stagnation_exit(
+        stock,
+        strategy="SCALPING",
+        profit_rate=1.08,
+        peak_profit=1.12,
+        current_ai_score=44,
+        now_ts=1_240.0,
+    )
+
+    assert decision == {"should_exit": False, "reason": "ai_score_below_min"}
+    assert "profit_stagnation_started_at" not in stock
+
+
+def test_handle_holding_state_clears_profit_stagnation_anchor_below_min_profit(monkeypatch):
+    state_handlers.TRADING_RULES = replace(
+        CONFIG,
+        SCALE_IN_REQUIRE_HISTORY_TABLE=False,
+        SCALP_PROFIT_STAGNATION_EXIT_ENABLED=True,
+        SCALP_PROFIT_STAGNATION_MIN_PROFIT_PCT=1.0,
+        SCALP_PROFIT_STAGNATION_MIN_SEC=180,
+        SCALP_PROFIT_STAGNATION_MIN_AI_SCORE=45,
+    )
+    state_handlers.COOLDOWNS = {}
+    state_handlers.ALERTED_STOCKS = set()
+    state_handlers.HIGHEST_PRICES = {"123456": 10_100}
+    state_handlers.LAST_AI_CALL_TIMES = {}
+    state_handlers.LAST_LOG_TIMES = {}
+    state_handlers.DB = None
+
+    calls = {"sell": 0}
+    monkeypatch.setattr(
+        state_handlers,
+        "can_consider_scale_in",
+        lambda *args, **kwargs: {"allowed": False, "reason": "test_no_add"},
+    )
+    monkeypatch.setattr(
+        state_handlers.kiwoom_orders,
+        "send_smart_sell_order",
+        lambda *args, **kwargs: calls.__setitem__("sell", calls["sell"] + 1) or {"return_code": "0"},
+    )
+
+    stock = {
+        "id": 1,
+        "code": "123456",
+        "name": "TEST",
+        "status": "HOLDING",
+        "strategy": "SCALPING",
+        "buy_price": 10_000,
+        "buy_qty": 1,
+        "rt_ai_prob": 0.62,
+        "profit_stagnation_started_at": 1_000.0,
+        "profit_stagnation_anchor_profit": 1.05,
+        "profit_stagnation_anchor_peak": 1.10,
+    }
+
+    state_handlers.handle_holding_state(
+        stock=stock,
+        code="123456",
+        ws_data={"curr": 10_080},
+        admin_id=1,
+        market_regime="BULL",
+        now_ts=1_240.0,
+        now_dt=datetime(2026, 6, 12, 13, 45, 0),
+        radar=None,
+        ai_engine=None,
+    )
+
+    assert calls["sell"] == 0
+    assert "profit_stagnation_started_at" not in stock
+    assert "profit_stagnation_anchor_profit" not in stock
+    assert "profit_stagnation_anchor_peak" not in stock
+
+
+def test_scalp_profit_stagnation_time_exit_resets_on_profit_or_peak_breakout(monkeypatch):
+    state_handlers.TRADING_RULES = replace(
+        CONFIG,
+        SCALP_PROFIT_STAGNATION_EXIT_ENABLED=True,
+        SCALP_PROFIT_STAGNATION_MAX_PROFIT_MOVE_PCT=0.15,
+        SCALP_PROFIT_STAGNATION_MAX_PEAK_IMPROVE_PCT=0.10,
+    )
+    stock = {
+        "strategy": "SCALPING",
+        "profit_stagnation_started_at": 1_000.0,
+        "profit_stagnation_anchor_profit": 1.05,
+        "profit_stagnation_anchor_peak": 1.10,
+    }
+
+    profit_reset = state_handlers._evaluate_scalp_profit_stagnation_exit(
+        stock,
+        strategy="SCALPING",
+        profit_rate=1.30,
+        peak_profit=1.18,
+        current_ai_score=62,
+        now_ts=1_240.0,
+    )
+    assert profit_reset["should_exit"] is False
+    assert profit_reset["reason"] == "anchor_reset"
+    assert stock["profit_stagnation_started_at"] == 1_240.0
+    assert stock["profit_stagnation_anchor_profit"] == 1.30
+
+    peak_reset = state_handlers._evaluate_scalp_profit_stagnation_exit(
+        stock,
+        strategy="SCALPING",
+        profit_rate=1.32,
+        peak_profit=1.35,
+        current_ai_score=62,
+        now_ts=1_260.0,
+    )
+    assert peak_reset["should_exit"] is False
+    assert peak_reset["reason"] == "anchor_reset"
+    assert stock["profit_stagnation_started_at"] == 1_260.0
+    assert stock["profit_stagnation_anchor_peak"] == 1.35
+
+
+def test_scalp_profit_stagnation_time_exit_allows_holding_flow_override(monkeypatch):
+    state_handlers.TRADING_RULES = replace(
+        CONFIG,
+        HOLDING_FLOW_OVERRIDE_ENABLED=True,
+        SCALP_PROFIT_STAGNATION_EXIT_ENABLED=True,
+    )
+
+    assert state_handlers._holding_flow_override_applicable(
+        "SCALPING",
+        "scalp_profit_stagnation_time_exit",
+    ) is True
 
 
 def test_emit_same_symbol_soft_stop_cooldown_shadow_once(monkeypatch):

@@ -1477,6 +1477,72 @@ def test_postclose_done_controller_blocks_non_recoverable(monkeypatch, tmp_path)
     assert report["actions"] == []
 
 
+def test_postclose_done_controller_classifies_structural_source_quality_gap(monkeypatch, tmp_path):
+    report_dir = tmp_path / "report"
+    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "OUTPUT_DIR", report_dir / "postclose_done_controller")
+    _write_succeeded_status(report_dir)
+    _write_json(
+        report_dir / "threshold_cycle_postclose_verification" / "threshold_cycle_postclose_verification_2026-06-03.json",
+        {
+            "status": "fail",
+            "source_quality_hard_block": {
+                "status": "pass",
+                "hard_blocking_contract_gap_count": 1,
+                "hard_blocking_stages": ["partial_fill_reconciled"],
+            },
+        },
+    )
+
+    report = mod.build_postclose_done_controller(
+        "2026-06-03",
+        max_attempts=1,
+        command_runner=lambda cmd, env=None: 0,
+    )
+
+    assert report["status"] == "blocked_structural_contract_gap"
+    assert report["requires_code_fix"] is True
+    assert report["requires_policy_lineage_fix"] is False
+    assert report["structural_blockers"] == ["requires_code_fix:source_quality_hard_contract_gap"]
+    assert report["structural_next_actions"] == ["fix_source_quality_metric_contract_and_rerun_postclose_audit"]
+    md_path = report_dir / "postclose_done_controller" / "postclose_done_controller_2026-06-03.md"
+    assert "Structural Blockers" in md_path.read_text(encoding="utf-8")
+
+
+def test_postclose_done_controller_classifies_active_priority_lineage_gap(monkeypatch, tmp_path):
+    report_dir = tmp_path / "report"
+    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "OUTPUT_DIR", report_dir / "postclose_done_controller")
+    _write_succeeded_status(report_dir)
+    _write_json(
+        report_dir / "threshold_cycle_postclose_verification" / "threshold_cycle_postclose_verification_2026-06-03.json",
+        {
+            "status": "fail",
+            "active_sim_priority_handoff": {
+                "status": "fail",
+                "missing": ["active_sim_priority_inactive_key_consumed"],
+                "inactive_consumed_ids": ["active_seed_old"],
+            },
+            "predecessor_integrity": {"log_issues": ["active_sim_priority_handoff_missing"]},
+        },
+    )
+
+    report = mod.build_postclose_done_controller(
+        "2026-06-03",
+        max_attempts=1,
+        command_runner=lambda cmd, env=None: 0,
+    )
+
+    assert report["status"] == "blocked_structural_contract_gap"
+    assert report["requires_code_fix"] is False
+    assert report["requires_policy_lineage_fix"] is True
+    assert "requires_policy_lineage_fix:active_sim_priority_inactive_key_consumed" in report["structural_blockers"]
+    assert "requires_policy_lineage_fix:active_sim_priority_handoff_missing" in report["structural_blockers"]
+    assert report["structural_next_actions"] == [
+        "fix_active_sim_priority_seed_lineage_and_verify_no_inactive_runtime_key"
+    ]
+
+
 def test_postclose_done_controller_waits_for_running_predecessor_without_spending_recovery_attempts(monkeypatch, tmp_path):
     report_dir = tmp_path / "report"
     monkeypatch.setattr(mod, "REPORT_DIR", report_dir)

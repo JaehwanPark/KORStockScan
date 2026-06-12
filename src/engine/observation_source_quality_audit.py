@@ -690,6 +690,60 @@ def _reviewed_unknown_reason_for_field(key: str, value: Any, *, emitted_date: st
     return None
 
 
+def _reviewed_unknown_reason_for_stage_field(
+    stage: str,
+    key: str,
+    value: Any,
+    normalized: dict[str, Any],
+) -> str | None:
+    def _field_text(field: str) -> str:
+        value = normalized.get(field)
+        return "" if value is None else str(value).strip()
+
+    def _is_reviewed_sim_liquidity_not_available() -> bool:
+        authority = _field_text("decision_authority")
+        source_stage = _field_text("source_stage")
+        return (
+            authority
+            in {
+                "sim_submit_path_observation_only",
+                "sim_observation_only",
+                "entry_advisory_prompt_context_only",
+            }
+            and (authority != "entry_advisory_prompt_context_only" or source_stage == "scalp_sim_entry_armed")
+            and _field_text("actual_order_submitted").lower() in {"false", "0", "no"}
+            and _field_text("broker_order_forbidden").lower() in {"true", "1", "yes"}
+            and _field_text("sim_pre_submit_liquidity_reason") == "liquidity_not_available"
+            and _field_text("sim_liquidity_value") == "not_available"
+            and _field_text("sim_min_liquidity") not in {"", "-", "unknown_pre_contract"}
+            and _field_text("sim_parent_record_id") not in {"", "-", "unknown_pre_contract"}
+        )
+
+    if not _unknown_token_present(value):
+        return None
+    if str(key or "") == "sim_pre_submit_liquidity_guard_action" and str(value or "").upper() == "WOULD_UNKNOWN":
+        if _is_reviewed_sim_liquidity_not_available():
+            return "reviewed_sim_liquidity_not_available"
+        return None
+    if str(key or "") == "__stage" and str(stage or "") == "scalp_sim_pre_submit_liquidity_guard_unknown":
+        if _is_reviewed_sim_liquidity_not_available():
+            return "reviewed_explicit_sim_liquidity_unknown_stage"
+        return None
+    if str(key or "") == "fill_quality" and str(value or "").upper() == "UNKNOWN":
+        requested_qty_value = (
+            normalized.get("requested_qty")
+            if normalized.get("requested_qty") is not None
+            else normalized.get("entry_requested_qty")
+        )
+        requested_qty = str(requested_qty_value).strip()
+        if str(stage or "") in {"position_rebased_after_fill", "preset_exit_sync_ok"} and requested_qty in {
+            "0",
+            "0.0",
+        }:
+            return "reviewed_fill_quality_pre_contract_no_requested_qty"
+    return None
+
+
 def _unknown_scan_values(row: dict[str, Any], normalized: dict[str, Any]) -> dict[str, Any]:
     values = dict(normalized)
     for key in ("stage", "pipeline", "stock_code", "stock_name", "event_type"):
@@ -1364,6 +1418,8 @@ def _evaluate_contracts(rows: list[dict[str, Any]], stage_counts: Counter[str]) 
                     value,
                     emitted_date=str(row.get("emitted_date") or row.get("date") or ""),
                 )
+                if not reviewed_reason:
+                    reviewed_reason = _reviewed_unknown_reason_for_stage_field(stage, key, value, normalized)
                 if (
                     not reviewed_reason
                     and stage == "scalp_sim_panic_context_warning"

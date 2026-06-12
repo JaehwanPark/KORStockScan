@@ -1450,7 +1450,9 @@ def test_latency_danger_reason_helper_uses_thresholds(monkeypatch):
 def test_percent_bps_mode_normal_defensive_005_pct(monkeypatch):
     monkeypatch.setattr(entry_latency_module, "_defense_mode_is_percent_bps", lambda: True)
     monkeypatch.setattr(entry_latency_module, "_normal_defensive_bps", lambda: 50)
-    monkeypatch.setattr(entry_latency_module, "_conditional_strong_defensive_bps", lambda: 20)
+    monkeypatch.setattr(entry_latency_module, "_conditional_strong_defensive_bps", lambda: 10)
+    monkeypatch.setattr(entry_latency_module, "_normal_favorable_defensive_bps", lambda: 35)
+    monkeypatch.setattr(entry_latency_module, "_normal_weak_defensive_bps", lambda: 65)
 
     entry_latency_module.ORDERBOOK_STABILITY_OBSERVER.reset()
     entry_latency_module.ORDERBOOK_STABILITY_OBSERVER.record_quote(
@@ -1476,14 +1478,18 @@ def test_percent_bps_mode_normal_defensive_005_pct(monkeypatch):
     assert result["allowed"] is True
     assert result["entry_price_defense_mode"] == "percent_bps"
     assert result["entry_price_defensive_bps"] == 50
+    assert result["entry_price_gap_profile"] == "normal"
+    assert result["entry_price_gap_profile_bps"] == 50
     assert result["order_price"] <= 9950
     assert result["order_price"] >= 9940
 
 
-def test_percent_bps_mode_strong_defensive_002_pct(monkeypatch):
+def test_percent_bps_mode_strong_defensive_001_pct(monkeypatch):
     monkeypatch.setattr(entry_latency_module, "_defense_mode_is_percent_bps", lambda: True)
     monkeypatch.setattr(entry_latency_module, "_normal_defensive_bps", lambda: 50)
-    monkeypatch.setattr(entry_latency_module, "_conditional_strong_defensive_bps", lambda: 20)
+    monkeypatch.setattr(entry_latency_module, "_conditional_strong_defensive_bps", lambda: 10)
+    monkeypatch.setattr(entry_latency_module, "_normal_favorable_defensive_bps", lambda: 35)
+    monkeypatch.setattr(entry_latency_module, "_normal_weak_defensive_bps", lambda: 65)
     monkeypatch.setattr(entry_latency_module, "_conditional_real_1tick_enabled", lambda s: True)
 
     entry_latency_module.ORDERBOOK_STABILITY_OBSERVER.reset()
@@ -1510,10 +1516,94 @@ def test_percent_bps_mode_strong_defensive_002_pct(monkeypatch):
 
     assert result["allowed"] is True
     assert result["entry_price_defense_mode"] == "percent_bps"
-    assert result["entry_price_defensive_bps"] == 20
+    assert result["entry_price_defensive_bps"] == 10
+    assert result["entry_price_gap_profile"] == "strong_1tick_pressure"
+    assert result["entry_price_gap_profile_bps"] == 10
     assert result["conditional_1tick_real_override_applied"] is True
     assert result["conditional_1tick_real_override_reason"] == "spread_1tick_strong_buy_pressure_percent_bps"
-    assert result["order_price"] <= 9980
+    assert result["order_price"] == 9990
+
+
+def test_percent_bps_mode_favorable_micro_0035_pct(monkeypatch):
+    monkeypatch.setattr(entry_latency_module, "_defense_mode_is_percent_bps", lambda: True)
+    monkeypatch.setattr(entry_latency_module, "_normal_defensive_bps", lambda: 50)
+    monkeypatch.setattr(entry_latency_module, "_conditional_strong_defensive_bps", lambda: 10)
+    monkeypatch.setattr(entry_latency_module, "_normal_favorable_defensive_bps", lambda: 35)
+    monkeypatch.setattr(entry_latency_module, "_normal_weak_defensive_bps", lambda: 65)
+    monkeypatch.setattr(entry_latency_module, "_conditional_real_1tick_enabled", lambda s: True)
+
+    entry_latency_module.ORDERBOOK_STABILITY_OBSERVER.reset()
+    entry_latency_module.ORDERBOOK_STABILITY_OBSERVER.record_quote(
+        "005930_bps_favorable", best_bid=10_000, best_ask=10_020, ts=time.time(),
+    )
+    result = evaluate_live_buy_entry(
+        stock={"name": "삼성전자", "position_tag": "SCANNER"},
+        code="005930_bps_favorable",
+        ws_data={
+            "curr": 10_000,
+            "last_ws_update_ts": datetime.now(UTC).timestamp(),
+            "orderbook": {
+                "asks": [{"price": 10_020, "volume": 1000}],
+                "bids": [{"price": 10_000, "volume": 1000}],
+            },
+            "buy_exec_volume": 120,
+            "sell_exec_volume": 80,
+            "net_buy_exec_volume": 40,
+        },
+        strategy_id="SCALPING",
+        planned_qty=1,
+        signal_price=10_000,
+        signal_strength=0.9,
+    )
+
+    assert result["allowed"] is True
+    assert result["entry_price_guard"] == "favorable_micro_percent_bps"
+    assert result["entry_price_defensive_bps"] == 35
+    assert result["entry_price_gap_profile"] == "favorable_micro"
+    assert result["entry_price_gap_profile_bps"] == 35
+    assert result["conditional_1tick_real_override_applied"] is False
+    assert result["order_price"] == 9960
+
+
+def test_percent_bps_mode_weak_liquidity_wide_spread_0065_pct(monkeypatch):
+    monkeypatch.setattr(entry_latency_module, "_defense_mode_is_percent_bps", lambda: True)
+    monkeypatch.setattr(entry_latency_module, "_normal_defensive_bps", lambda: 50)
+    monkeypatch.setattr(entry_latency_module, "_conditional_strong_defensive_bps", lambda: 10)
+    monkeypatch.setattr(entry_latency_module, "_normal_favorable_defensive_bps", lambda: 35)
+    monkeypatch.setattr(entry_latency_module, "_normal_weak_defensive_bps", lambda: 65)
+    monkeypatch.setattr(entry_latency_module, "_conditional_real_1tick_enabled", lambda s: True)
+
+    entry_latency_module.ORDERBOOK_STABILITY_OBSERVER.reset()
+    entry_latency_module.ORDERBOOK_STABILITY_OBSERVER.record_quote(
+        "005930_bps_weak", best_bid=10_000, best_ask=10_050, ts=time.time(),
+    )
+    result = evaluate_live_buy_entry(
+        stock={"name": "삼성전자", "position_tag": "SCANNER"},
+        code="005930_bps_weak",
+        ws_data={
+            "curr": 10_000,
+            "last_ws_update_ts": datetime.now(UTC).timestamp(),
+            "orderbook": {
+                "asks": [{"price": 10_050, "volume": 5000}],
+                "bids": [{"price": 10_000, "volume": 500}],
+            },
+            "buy_exec_volume": 20,
+            "sell_exec_volume": 80,
+            "net_buy_exec_volume": -60,
+        },
+        strategy_id="SCALPING",
+        planned_qty=1,
+        signal_price=10_000,
+        signal_strength=0.9,
+    )
+
+    assert result["allowed"] is True
+    assert result["entry_price_guard"] == "weak_liquidity_wide_spread_percent_bps"
+    assert result["entry_price_defensive_bps"] == 65
+    assert result["entry_price_gap_profile"] == "weak_liquidity_wide_spread"
+    assert result["entry_price_gap_profile_bps"] == 65
+    assert result["conditional_1tick_real_override_applied"] is False
+    assert result["order_price"] == 9930
 
 
 def test_percent_bps_mode_non_scalping_stays_tick(monkeypatch):

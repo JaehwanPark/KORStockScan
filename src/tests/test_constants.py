@@ -68,13 +68,17 @@ def test_trading_rules_entry_latency_classifier_jitter_env_override(monkeypatch)
 def test_trading_rules_scalping_entry_price_percent_bps_env_override(monkeypatch):
     monkeypatch.setenv("KORSTOCKSCAN_SCALPING_ENTRY_PRICE_DEFENSE_MODE", "percent_bps")
     monkeypatch.setenv("KORSTOCKSCAN_SCALPING_NORMAL_DEFENSIVE_BPS", "50")
-    monkeypatch.setenv("KORSTOCKSCAN_SCALPING_CONDITIONAL_STRONG_DEFENSIVE_BPS", "20")
+    monkeypatch.setenv("KORSTOCKSCAN_SCALPING_CONDITIONAL_STRONG_DEFENSIVE_BPS", "10")
+    monkeypatch.setenv("KORSTOCKSCAN_SCALPING_NORMAL_FAVORABLE_DEFENSIVE_BPS", "35")
+    monkeypatch.setenv("KORSTOCKSCAN_SCALPING_NORMAL_WEAK_DEFENSIVE_BPS", "65")
 
     reloaded = importlib.reload(constants)
 
     assert reloaded.TRADING_RULES.SCALPING_ENTRY_PRICE_DEFENSE_MODE == "percent_bps"
     assert reloaded.TRADING_RULES.SCALPING_NORMAL_DEFENSIVE_BPS == 50
-    assert reloaded.TRADING_RULES.SCALPING_CONDITIONAL_STRONG_DEFENSIVE_BPS == 20
+    assert reloaded.TRADING_RULES.SCALPING_CONDITIONAL_STRONG_DEFENSIVE_BPS == 10
+    assert reloaded.TRADING_RULES.SCALPING_NORMAL_FAVORABLE_DEFENSIVE_BPS == 35
+    assert reloaded.TRADING_RULES.SCALPING_NORMAL_WEAK_DEFENSIVE_BPS == 65
 
 
 def test_trading_rules_real_entry_panic_gap_weight_env_override(monkeypatch):
@@ -137,6 +141,24 @@ def test_trading_rules_scalp_safe_profit_env_override(monkeypatch):
     assert reloaded.TRADING_RULES.SCALP_SAFE_PROFIT == 1.0
     assert reloaded.TRADING_RULES.SCALP_TRAILING_LIMIT_WEAK == 0.4
     assert reloaded.TRADING_RULES.SCALP_TRAILING_LIMIT_STRONG == 0.8
+
+
+def test_trading_rules_profit_stagnation_exit_env_override(monkeypatch):
+    monkeypatch.setenv("KORSTOCKSCAN_SCALP_PROFIT_STAGNATION_EXIT_ENABLED", "true")
+    monkeypatch.setenv("KORSTOCKSCAN_SCALP_PROFIT_STAGNATION_MIN_PROFIT_PCT", "1.0")
+    monkeypatch.setenv("KORSTOCKSCAN_SCALP_PROFIT_STAGNATION_MIN_SEC", "180")
+    monkeypatch.setenv("KORSTOCKSCAN_SCALP_PROFIT_STAGNATION_MAX_PROFIT_MOVE_PCT", "0.15")
+    monkeypatch.setenv("KORSTOCKSCAN_SCALP_PROFIT_STAGNATION_MAX_PEAK_IMPROVE_PCT", "0.10")
+    monkeypatch.setenv("KORSTOCKSCAN_SCALP_PROFIT_STAGNATION_MIN_AI_SCORE", "45")
+
+    reloaded = importlib.reload(constants)
+
+    assert reloaded.TRADING_RULES.SCALP_PROFIT_STAGNATION_EXIT_ENABLED is True
+    assert reloaded.TRADING_RULES.SCALP_PROFIT_STAGNATION_MIN_PROFIT_PCT == 1.0
+    assert reloaded.TRADING_RULES.SCALP_PROFIT_STAGNATION_MIN_SEC == 180
+    assert reloaded.TRADING_RULES.SCALP_PROFIT_STAGNATION_MAX_PROFIT_MOVE_PCT == 0.15
+    assert reloaded.TRADING_RULES.SCALP_PROFIT_STAGNATION_MAX_PEAK_IMPROVE_PCT == 0.10
+    assert reloaded.TRADING_RULES.SCALP_PROFIT_STAGNATION_MIN_AI_SCORE == 45
 
 
 def test_trading_rules_ai_cadence_defaults_are_rate_limited(monkeypatch):
