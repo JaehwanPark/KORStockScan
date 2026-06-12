@@ -100,7 +100,7 @@ from src.engine.lifecycle.ofi_ai_smoothing import (
     ofi_smoothing_log_fields,
 )
 from src.trading.entry.orderbook_stability_observer import ORDERBOOK_STABILITY_OBSERVER
-from src.trading.order.tick_utils import clamp_price_to_tick
+from src.trading.order.tick_utils import clamp_price_to_tick, move_price_down_by_bps
 from src.engine.scalping.entry_cancel_wait_attribution import (
     EntryCancelWaitAttributionResult,
     compute_entry_cancel_wait_attribution,
@@ -5984,6 +5984,7 @@ def _publish_buy_signal_submission_notice(
             latency=latency_gate.get('latency_state'),
             decision=latency_gate.get('decision'),
             dynamic_reason=dynamic_reason,
+            **_panic_gap_weight_log_fields(latency_gate),
             actual_order_submitted=True,
             broker_order_forbidden=False,
             greenfield_stage_notice=bool(greenfield_stage_telegram_enabled()),
@@ -7917,6 +7918,184 @@ def _build_entry_price_snapshot_fields(latency_gate, *, request_price, curr_pric
             latency_gate.get('ai_entry_price_canary_max_wait_sec')
         ),
     }
+
+
+REAL_ENTRY_PANIC_GAP_WEIGHT_FAMILY = "real_entry_panic_gap_weight"
+
+
+def _base_panic_gap_weight_fields(reason: str = "not_evaluated") -> dict:
+    return {
+        "panic_gap_weight_runtime_family": REAL_ENTRY_PANIC_GAP_WEIGHT_FAMILY,
+        "panic_gap_weight_applied": False,
+        "panic_gap_weight_bps": 0,
+        "panic_gap_weight_reason": reason,
+        "panic_regime_mode": "NORMAL",
+        "panic_buy_regime_mode": "NORMAL",
+        "original_order_price": 0,
+        "panic_adjusted_order_price": 0,
+        "panic_gap_weight_runtime_effect": False,
+        "forbidden_uses": "sim_probe|adm_ldm_input|threshold_cycle_ev_input|tuning_input",
+    }
+
+
+def _panic_gap_weight_log_fields(latency_gate: dict | None) -> dict:
+    gate = latency_gate if isinstance(latency_gate, dict) else {}
+    fields = _base_panic_gap_weight_fields(str(gate.get("panic_gap_weight_reason") or "not_evaluated"))
+    for key in fields:
+        if key in gate:
+            fields[key] = gate.get(key)
+    return fields
+
+
+def _resolve_real_entry_panic_gap_weight_delta(panic_context: dict | None, euphoria_context: dict | None) -> dict:
+    fields = _base_panic_gap_weight_fields("normal_market")
+    panic = panic_context if isinstance(panic_context, dict) else {}
+    euphoria = euphoria_context if isinstance(euphoria_context, dict) else {}
+    panic_status = str(panic.get("panic_context_status") or "MISSING").upper()
+    euphoria_status = str(euphoria.get("euphoria_context_status") or "MISSING").upper()
+    panic_regime = str(panic.get("panic_regime_mode") or "NORMAL").upper()
+    panic_state = str(panic.get("panic_state") or "NORMAL").upper()
+    panic_buy_mode = str(euphoria.get("panic_buy_regime_mode") or "NORMAL").upper()
+    panic_buy_state = str(euphoria.get("panic_buy_state") or "NORMAL").upper()
+    fields["panic_regime_mode"] = panic_regime
+    fields["panic_buy_regime_mode"] = panic_buy_mode
+
+    if panic_status == "OK":
+        panic_level = _safe_int(panic.get("panic_level"), 0)
+        liquidity_state = str(panic.get("liquidity_state") or "NORMAL").upper()
+        if liquidity_state in {"BROKEN", "LIQUIDITY_BROKEN", "THIN_BROKEN"} or panic_level >= 2:
+            fields.update({
+                "panic_gap_weight_bps": _rule_int("REAL_ENTRY_PANIC_SELL_BROKEN_EXTRA_BPS", 50),
+                "panic_gap_weight_reason": "panic_sell_liquidity_broken_or_level2",
+            })
+            return fields
+        if panic_level > 0 or panic_regime == "PANIC_DETECTED" or panic_state == "PANIC_SELL":
+            fields.update({
+                "panic_gap_weight_bps": _rule_int("REAL_ENTRY_PANIC_SELL_EXTRA_BPS", 30),
+                "panic_gap_weight_reason": "panic_sell_detected",
+            })
+            return fields
+    elif panic_status not in {"", "MISSING", "DISABLED"}:
+        fields["panic_gap_weight_reason"] = f"panic_context_not_ok:{panic_status.lower()}"
+
+    if euphoria_status == "OK":
+        level = _safe_int(euphoria.get("euphoria_risk_level"), 0)
+        if panic_buy_mode in {"PANIC_BUY_EXHAUSTION", "COOLDOWN"} or panic_buy_state in {
+            "BUYING_EXHAUSTED",
+            "EXHAUSTION_WATCH",
+        } or level >= 3:
+            fields.update({
+                "panic_gap_weight_bps": _rule_int("REAL_ENTRY_PANIC_BUY_EXHAUSTION_EXTRA_BPS", 30),
+                "panic_gap_weight_reason": "panic_buy_exhaustion",
+            })
+            return fields
+        if panic_buy_mode == "PANIC_BUY_CONTINUATION" or panic_buy_state == "PANIC_BUY" or level == 2:
+            fields.update({
+                "panic_gap_weight_bps": -_rule_int("REAL_ENTRY_PANIC_BUY_ACTIVE_REDUCE_BPS", 20),
+                "panic_gap_weight_reason": "panic_buy_active",
+            })
+            return fields
+        if panic_buy_mode == "PANIC_BUY_DETECTED" or panic_buy_state == "PANIC_BUY_WATCH" or level == 1:
+            fields.update({
+                "panic_gap_weight_bps": -_rule_int("REAL_ENTRY_PANIC_BUY_WATCH_REDUCE_BPS", 10),
+                "panic_gap_weight_reason": "panic_buy_watch",
+            })
+            return fields
+    elif euphoria_status not in {"", "MISSING", "DISABLED"}:
+        if fields.get("panic_gap_weight_reason") == "normal_market":
+            fields["panic_gap_weight_reason"] = f"panic_buy_context_not_ok:{euphoria_status.lower()}"
+        return fields
+
+    return fields
+
+
+def _apply_real_entry_panic_gap_weight(
+    *,
+    stock: dict,
+    strategy: str,
+    latency_gate: dict,
+    planned_orders: list,
+    curr_price: int,
+    best_bid: int,
+    best_ask: int,
+    panic_context: dict | None,
+    euphoria_context: dict | None,
+    real_order_subject: bool,
+) -> tuple[list, dict]:
+    fields = _base_panic_gap_weight_fields("disabled")
+    current_price = _coerce_int_value(curr_price)
+    original_price = _coerce_int_value((latency_gate or {}).get("order_price"))
+    fields["original_order_price"] = original_price
+    fields["panic_adjusted_order_price"] = original_price
+    if not _rule_bool("REAL_ENTRY_PANIC_GAP_WEIGHT_ENABLED", True):
+        fields["panic_gap_weight_reason"] = "disabled"
+        latency_gate.update(fields)
+        return planned_orders, fields
+    if str(strategy or "").upper() not in {"SCALPING", "SCALP"}:
+        fields["panic_gap_weight_reason"] = "non_scalping_noop"
+        latency_gate.update(fields)
+        return planned_orders, fields
+    if not real_order_subject:
+        fields["panic_gap_weight_reason"] = "non_real_order_subject_noop"
+        latency_gate.update(fields)
+        return planned_orders, fields
+    if current_price <= 0 or original_price <= 0:
+        fields["panic_gap_weight_reason"] = "invalid_price_noop"
+        latency_gate.update(fields)
+        return planned_orders, fields
+
+    decision = _resolve_real_entry_panic_gap_weight_delta(panic_context, euphoria_context)
+    fields.update(decision)
+    delta_bps = _safe_int(fields.get("panic_gap_weight_bps"), 0)
+    if delta_bps == 0:
+        latency_gate.update(fields)
+        return planned_orders, fields
+
+    current_gap_bps = max(0, int(round(((current_price - original_price) / current_price) * 10000.0)))
+    adjusted_gap_bps = max(0, current_gap_bps + delta_bps)
+    if delta_bps < 0 and best_ask <= 0:
+        fields["panic_gap_weight_reason"] = f"{fields.get('panic_gap_weight_reason')}:best_ask_missing_noop"
+        latency_gate.update(fields)
+        return planned_orders, fields
+    adjusted_price = move_price_down_by_bps(current_price, adjusted_gap_bps, floor_ticks=0)
+    if best_ask > 0 and adjusted_price > best_ask:
+        adjusted_price = clamp_price_to_tick(best_ask)
+    adjusted_price = clamp_price_to_tick(adjusted_price)
+    if adjusted_price <= 0:
+        fields["panic_gap_weight_reason"] = "adjusted_price_invalid_noop"
+        latency_gate.update(fields)
+        return planned_orders, fields
+    if adjusted_price == original_price:
+        fields["panic_gap_weight_reason"] = f"{fields.get('panic_gap_weight_reason')}:rounded_no_change"
+        latency_gate.update(fields)
+        return planned_orders, fields
+
+    adjusted_orders = []
+    for order in planned_orders or []:
+        next_order = dict(order)
+        if str(next_order.get("tif", "DAY") or "DAY").upper() != "IOC":
+            next_order["price"] = adjusted_price
+        adjusted_orders.append(next_order)
+
+    latency_gate["orders"] = adjusted_orders
+    latency_gate["order_price"] = adjusted_price
+    latency_gate["price_resolution_reason"] = f"{latency_gate.get('price_resolution_reason') or 'defensive_order_price'}|panic_gap_weight"
+    latency_gate["price_below_bid_bps"] = _compute_price_below_bid_bps(adjusted_price, best_bid)
+    fields.update({
+        "panic_gap_weight_applied": True,
+        "panic_adjusted_order_price": adjusted_price,
+        "panic_gap_weight_runtime_effect": True,
+    })
+    latency_gate.update(fields)
+    _mutate_stock_state(
+        stock,
+        set_fields={
+            "real_entry_panic_gap_weight_applied": True,
+            "real_entry_panic_gap_weight_bps": delta_bps,
+            "real_entry_panic_adjusted_order_price": adjusted_price,
+        },
+    )
+    return adjusted_orders, fields
 
 
 def _build_orderbook_micro_context(
@@ -13090,6 +13269,37 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             latency_gate, request_price=latency_gate.get('order_price', 0), curr_price=curr_price,
             best_bid=best_bid_at_submit, best_ask=best_ask_at_submit,
         )
+    real_entry_panic_gap_subject = (
+        strategy == "SCALPING"
+        and not _is_any_simulated_position(stock, strategy)
+        and not _is_swing_live_order_dry_run(strategy)
+    )
+    panic_context = None
+    euphoria_context = None
+    if real_entry_panic_gap_subject and _rule_bool("REAL_ENTRY_PANIC_GAP_WEIGHT_ENABLED", True):
+        panic_gap_now = datetime.fromtimestamp(time.time())
+        panic_context = resolve_panic_risk_regime_context(now=panic_gap_now)
+        euphoria_context = resolve_euphoria_risk_context(now=panic_gap_now)
+    planned_orders, panic_gap_weight_fields = _apply_real_entry_panic_gap_weight(
+        stock=stock,
+        strategy=strategy,
+        latency_gate=latency_gate,
+        planned_orders=planned_orders,
+        curr_price=curr_price,
+        best_bid=best_bid_at_submit,
+        best_ask=best_ask_at_submit,
+        panic_context=panic_context,
+        euphoria_context=euphoria_context,
+        real_order_subject=real_entry_panic_gap_subject,
+    )
+    if panic_gap_weight_fields.get("panic_gap_weight_applied"):
+        latency_price_snapshot = _build_entry_price_snapshot_fields(
+            latency_gate,
+            request_price=latency_gate.get('order_price', 0),
+            curr_price=curr_price,
+            best_bid=best_bid_at_submit,
+            best_ask=best_ask_at_submit,
+        )
     submit_revalidation_fields = _build_entry_submit_revalidation_fields(ws_data, latency_gate, now_ts=time.time())
     scalp_pre_ai_gate_context = runtime.get("scalp_pre_ai_gate_context") if isinstance(runtime.get("scalp_pre_ai_gate_context"), dict) else {}
     pre_ai_gate_submit_log_fields = _scalp_pre_ai_gate_context_log_fields(scalp_pre_ai_gate_context)
@@ -13160,6 +13370,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             submit_revalidation_fields,
             latency_price_snapshot,
             entry_orderbook_micro_fields,
+            _panic_gap_weight_log_fields(latency_gate),
         ),
         **_build_ai_overlap_log_fields(
             stock=stock, ai_score=latency_signal_score, momentum_tag=stock.get("entry_momentum_tag"),
@@ -13488,6 +13699,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                     real_pre_submit_guard_fields,
                     price_snapshot,
                     microstructure_submit_log_fields,
+                    _panic_gap_weight_log_fields(latency_gate),
                 ),
             )
             log_info(
@@ -13512,6 +13724,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 submit_revalidation_fields,
                 price_snapshot,
                 swing_entry_micro_fields,
+                _panic_gap_weight_log_fields(latency_gate),
             ),
             actual_order_submitted=False,
             broker_order_forbidden=broker_order_forbidden_for_request,
@@ -13739,6 +13952,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             submit_revalidation_fields,
             bundle_price_snapshot,
             swing_entry_micro_fields,
+            _panic_gap_weight_log_fields(latency_gate),
         ),
     )
     _emit_scalp_entry_adm_snapshot(

@@ -257,6 +257,7 @@ def test_panic_buying_report_includes_market_breadth_context(monkeypatch, tmp_pa
     assert context["market_panic_breadth_risk_on_advisory"] is True
     assert context["market_panic_breadth_risk_off_advisory"] is False
     assert context["market_panic_breadth_source_quality_status"] == "ok"
+    assert context["market_panic_buy_interpretation"] == "market_risk_on_only"
     assert "order_submit" in context["forbidden_uses"]
 
 
@@ -294,6 +295,170 @@ def test_tp_counterfactual_does_not_create_order_decision(monkeypatch, tmp_path)
     assert tp["policy"]["runtime_effect"] == "counterfactual_only_no_order_change"
     assert report["canary_candidates"][0]["family"] == "panic_buy_runner_tp_canary"
     assert report["canary_candidates"][0]["allowed_runtime_apply"] is False
+
+
+def test_holding_rows_are_excluded_from_panic_buy_micro_detector_but_kept_for_tp(monkeypatch, tmp_path):
+    monkeypatch.setattr(report_mod, "DATA_DIR", tmp_path)
+    _write_events(
+        tmp_path,
+        [
+            _event(
+                "10:00:00",
+                pipeline="HOLDING_PIPELINE",
+                stage="exit_signal",
+                fields={
+                    "curr_price": "10200",
+                    "open": "10000",
+                    "high": "10300",
+                    "low": "9900",
+                    "volume": "500",
+                    "buy_exec_volume": "420",
+                    "sell_exec_volume": "80",
+                    "best_bid": "10190",
+                    "best_ask": "10200",
+                    "orderbook_micro_ofi_z": "3.4",
+                    "panic_buy_spread_ratio": "2.1",
+                    "exit_rule": "scalp_trailing_take_profit",
+                    "profit_rate": "1.2",
+                    "peak_profit": "1.8",
+                    "actual_order_submitted": "true",
+                },
+            )
+        ],
+    )
+
+    report = report_mod.build_panic_buying_report(
+        TARGET_DATE,
+        as_of=datetime.fromisoformat(f"{TARGET_DATE}T10:01:00"),
+    )
+
+    micro = report["microstructure_detector"]
+    tp = report["tp_counterfactual_summary"]
+    assert micro["evaluated_symbol_count"] == 0
+    assert micro["panic_buy_active_count"] == 0
+    assert micro["metrics"]["max_panic_buy_score"] == 0.0
+    assert micro["input_provenance"]["input_universe"] == "entry_observation_only"
+    assert micro["input_provenance"]["excluded_holding_row_count"] == 1
+    assert micro["input_provenance"]["excluded_exit_sell_row_count"] == 1
+    assert tp["real_exit_count"] == 1
+    assert tp["tp_like_exit_count"] == 1
+    assert tp["candidate_context_count"] == 1
+
+
+def test_entry_rows_remain_panic_buy_micro_detector_inputs(monkeypatch, tmp_path):
+    monkeypatch.setattr(report_mod, "DATA_DIR", tmp_path)
+    _write_events(
+        tmp_path,
+        [
+            _micro_event("10:00:00", close=100.0),
+            _micro_event("10:01:00", close=100.0),
+            _micro_event(
+                "10:02:00",
+                close=102.6,
+                open=100.0,
+                high=102.8,
+                low=99.9,
+                volume=430,
+                buy=76,
+                sell=24,
+                best_bid=10250,
+                best_ask=10260,
+                bid_depth_l5=1300,
+                ask_depth_l5=520,
+                ask_depth_drop_ratio=0.48,
+                bid_depth_support_ratio=1.30,
+                panic_buy_spread_ratio=2.0,
+                orderbook_micro_ofi_z=3.0,
+                orderbook_micro_state="bullish",
+                orderbook_micro_ready=True,
+                orderbook_micro_observer_healthy=True,
+            ),
+            _micro_event(
+                "10:03:00",
+                close=103.2,
+                open=102.5,
+                high=103.4,
+                low=102.4,
+                volume=440,
+                buy=75,
+                sell=25,
+                best_bid=10310,
+                best_ask=10320,
+                bid_depth_l5=1350,
+                ask_depth_l5=500,
+                ask_depth_drop_ratio=0.50,
+                bid_depth_support_ratio=1.35,
+                panic_buy_spread_ratio=2.1,
+                orderbook_micro_ofi_z=3.1,
+                orderbook_micro_state="bullish",
+                orderbook_micro_ready=True,
+                orderbook_micro_observer_healthy=True,
+            ),
+        ],
+    )
+
+    report = report_mod.build_panic_buying_report(
+        TARGET_DATE,
+        as_of=datetime.fromisoformat(f"{TARGET_DATE}T10:04:00"),
+    )
+
+    micro = report["microstructure_detector"]
+    assert micro["input_provenance"]["excluded_event_count"] == 0
+    assert micro["evaluated_symbol_count"] == 1
+    assert micro["panic_buy_active_count"] == 1
+    assert report["panic_buy_state"] == "PANIC_BUY"
+
+
+def test_entry_rows_with_order_provenance_are_excluded_from_micro_detector(monkeypatch, tmp_path):
+    monkeypatch.setattr(report_mod, "DATA_DIR", tmp_path)
+    _write_events(
+        tmp_path,
+        [
+            _micro_event(
+                "10:00:00",
+                close=102.0,
+                actual_order_submitted="true",
+                broker_order_id="12345",
+            ),
+            {
+                **_micro_event("10:01:00", close=103.0),
+                "actual_order_submitted": True,
+                "broker_order_id": "top-level-1",
+            },
+        ],
+    )
+
+    report = report_mod.build_panic_buying_report(
+        TARGET_DATE,
+        as_of=datetime.fromisoformat(f"{TARGET_DATE}T10:02:00"),
+    )
+
+    micro = report["microstructure_detector"]
+    assert micro["evaluated_symbol_count"] == 0
+    assert micro["input_provenance"]["excluded_reason_counts"]["actual_order_submitted"] == 2
+
+
+def test_micro_input_provenance_respects_as_of_cutoff(monkeypatch, tmp_path):
+    monkeypatch.setattr(report_mod, "DATA_DIR", tmp_path)
+    _write_events(
+        tmp_path,
+        [
+            _micro_event("10:00:00", close=100.0),
+            _micro_event("10:01:00", close=100.1),
+            _micro_event("10:02:00", close=100.2),
+            _micro_event("10:03:00", close=105.0),
+        ],
+    )
+
+    report = report_mod.build_panic_buying_report(
+        TARGET_DATE,
+        as_of=datetime.fromisoformat(f"{TARGET_DATE}T10:02:00"),
+    )
+
+    micro = report["microstructure_detector"]
+    assert micro["input_provenance"]["input_event_count"] == 3
+    assert micro["input_provenance"]["future_event_count"] == 1
+    assert micro["evaluated_symbol_count"] == 1
 
 
 def test_panic_buy_regime_mode_maps_exhaustion_and_cooldown():

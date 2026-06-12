@@ -194,6 +194,23 @@ def test_microstructure_summary_exposes_static_threshold_contract():
     assert "runtime_threshold_apply" in summary["threshold_contract"]["forbidden_uses"]
 
 
+def test_microstructure_summary_carries_input_provenance_diagnostics():
+    summary = summarize_microstructure_detector_from_events(
+        [],
+        as_of=BASE + timedelta(minutes=3),
+        input_provenance={
+            "input_universe": "entry_observation_only",
+            "excluded_holding_row_count": 2,
+            "excluded_exit_sell_row_count": 1,
+        },
+    )
+
+    assert summary["evaluated_symbol_count"] == 0
+    assert summary["input_provenance"]["input_universe"] == "entry_observation_only"
+    assert summary["input_provenance"]["excluded_holding_row_count"] == 2
+    assert summary["input_provenance"]["excluded_exit_sell_row_count"] == 1
+
+
 def test_single_small_red_bar_does_not_confirm_exhaustion_when_buy_flow_stays_strong():
     detector = PanicBuyingStateDetector(_config())
     _enter_panic_buy(detector)

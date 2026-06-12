@@ -1226,6 +1226,7 @@ def summarize_microstructure_detector_from_events(
     config: PanicBuyingDetectorConfig | None = None,
     max_symbols: int = 20,
     micro_snapshot_max_age_sec: float = 120.0,
+    input_provenance: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     cfg = config or PanicBuyingDetectorConfig()
     grouped: dict[str, list[dict[str, Any]]] = {}
@@ -1374,6 +1375,7 @@ def summarize_microstructure_detector_from_events(
         "carried_orderbook_snapshot_count": carried_orderbook,
         "carried_trade_aggressor_snapshot_count": carried_trade,
         "micro_snapshot_max_age_sec": int(micro_snapshot_max_age_sec),
+        "input_provenance": dict(input_provenance or {}),
         "state_counts": dict(state_counter),
         "reason_counts": dict(reason_counter.most_common(20)),
         "micro_cusum_observer": {

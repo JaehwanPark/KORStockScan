@@ -15,20 +15,20 @@
 
 ## 근거
 
-- as_of: `2026-06-12T10:55:09`
+- as_of: `2026-06-12T11:50:05`
 - baseline_date: `2026-06-11`
-- ai_confirmed unique: `146`
-- budget_pass unique: `131`
-- latency_pass unique: `42`
+- ai_confirmed unique: `163`
+- budget_pass unique: `143`
+- latency_pass unique: `43`
 - submitted unique: `15`
 - holding_started unique: `1`
-- budget/ai unique: `89.7%` (baseline `49.5`)
-- submitted/ai unique: `10.3%` (baseline `0.9`)
+- budget/ai unique: `87.7%` (baseline `76.1`)
+- submitted/ai unique: `9.2%` (baseline `7.7`)
 - critical submit thresholds: `submitted/ai < 20.0%` or `submitted/budget <= 10.0%` (floors: ai>=20, budget>=3)
-- top blockers: `latency_block:latency_state_danger=6685, blocked_swing_score_vpw:-=3789, blocked_strength_momentum:below_window_buy_value=2240, blocked_swing_gap:-=1321, blocked_gatekeeper_reject:전량 회피=1318`
-- upstream blockers: `first_ai_wait:-=146, blocked_ai_score:ai_score_50_buy_hold_override=115, blocked_ai_score:score_58.0=110, blocked_ai_score:score_62.0=92, blocked_ai_score:score_54.0=55`
-- latency blockers: `latency_block:latency_state_danger=6685`
-- price guards: `entry_ai_price_canary_fallback:invalid_price=59, entry_ai_price_canary_fallback:pre_submit_price_guard=38, scale_in_price_guard_block:micro_vwap_bp>60.0=17, entry_ai_price_canary_fallback:above_best_ask=3, scale_in_price_guard_block:micro_vwap_bp<-5.0=2`
+- top blockers: `latency_block:latency_state_danger=7380, blocked_swing_score_vpw:-=3948, blocked_strength_momentum:below_window_buy_value=2673, blocked_swing_gap:-=1595, blocked_gatekeeper_reject:전량 회피=1494`
+- upstream blockers: `first_ai_wait:-=213, blocked_ai_score:ai_score_50_buy_hold_override=170, blocked_ai_score:score_58.0=133, blocked_ai_score:score_62.0=130, blocked_ai_score:score_60.0=68`
+- latency blockers: `latency_block:latency_state_danger=7380`
+- price guards: `entry_ai_price_canary_fallback:invalid_price=78, entry_ai_price_canary_fallback:pre_submit_price_guard=49, scale_in_price_guard_block:micro_vwap_bp>60.0=19, scale_in_price_guard_block:micro_vwap_bp<-5.0=8, entry_ai_price_canary_fallback:above_best_ask=3`
 
 ## 금지된 자동변경
 
@@ -46,6 +46,6 @@
 
 ## Window Summary
 
-- `5m`: ai=35, budget=43, latency=6, submitted=5, top=`latency_block:latency_state_danger=325, blocked_swing_score_vpw:-=152, blocked_strength_momentum:below_window_buy_value=69`, upstream=`blocked_ai_score:ai_score_50_buy_hold_override=6, blocked_ai_score:score_62.0=5, blocked_ai_score:score_58.0=4`
-- `10m`: ai=53, budget=50, latency=7, submitted=5, top=`latency_block:latency_state_danger=1257, blocked_swing_score_vpw:-=690, blocked_swing_gap:-=287`, upstream=`blocked_ai_score:score_62.0=17, blocked_ai_score:score_58.0=10, blocked_ai_score:score_60.0=10`
-- `30m`: ai=82, budget=83, latency=20, submitted=12, top=`latency_block:latency_state_danger=2718, blocked_swing_score_vpw:-=1434, blocked_strength_momentum:below_window_buy_value=682`, upstream=`blocked_ai_score:score_62.0=41, blocked_ai_score:ai_score_50_buy_hold_override=37, blocked_ai_score:score_58.0=31`
+- `5m`: ai=25, budget=33, latency=0, submitted=0, top=`latency_block:latency_state_danger=71, blocked_strength_momentum:below_window_buy_value=38, blocked_swing_gap:-=30`, upstream=`blocked_ai_score:score_62.0=8, first_ai_wait:-=2, wait65_79_ev_candidate:score_65.0=2`
+- `10m`: ai=34, budget=37, latency=0, submitted=0, top=`latency_block:latency_state_danger=132, blocked_strength_momentum:below_window_buy_value=94, blocked_swing_gap:-=54`, upstream=`blocked_ai_score:score_62.0=12, blocked_ai_score:ai_score_50_buy_hold_override=8, blocked_ai_score:score_58.0=4`
+- `30m`: ai=70, budget=62, latency=0, submitted=0, top=`latency_block:latency_state_danger=377, blocked_strength_momentum:below_window_buy_value=237, blocked_swing_gap:-=153`, upstream=`blocked_ai_score:ai_score_50_buy_hold_override=31, blocked_ai_score:score_62.0=26, first_ai_wait:-=16`

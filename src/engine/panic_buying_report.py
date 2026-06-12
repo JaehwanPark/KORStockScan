@@ -48,6 +48,8 @@ BROKER_ORDER_ID_FIELDS = (
     "broker_order_id",
     "actual_order_id",
 )
+PANIC_BUY_MICRO_INPUT_UNIVERSE = "entry_observation_only"
+PANIC_BUY_EXCLUDED_STAGE_MARKERS = ("exit", "sell", "holding", "scale_in", "position")
 
 
 def _pipeline_events_path(target_date: str) -> Path:
@@ -103,6 +105,60 @@ def _parse_dt(value: Any) -> datetime | None:
 
 def _avg(values: list[float]) -> float | None:
     return round(sum(values) / len(values), 4) if values else None
+
+
+def _micro_input_exclusion_reason(row: dict[str, Any]) -> str | None:
+    """Keep panic-buy microstructure detection on entry/watch universe only."""
+    fields = _event_fields(row)
+    pipeline = _safe_str(row.get("pipeline"))
+    stage = _safe_str(row.get("stage")).lower()
+    if pipeline == "HOLDING_PIPELINE":
+        return "holding_pipeline"
+    if pipeline != "ENTRY_PIPELINE":
+        return "non_entry_pipeline"
+    if any(marker in stage for marker in PANIC_BUY_EXCLUDED_STAGE_MARKERS):
+        return "post_entry_stage"
+    if _truthy(fields.get("actual_order_submitted")) or _truthy(row.get("actual_order_submitted")):
+        return "actual_order_submitted"
+    if any(_safe_str(fields.get(name)) or _safe_str(row.get(name)) for name in BROKER_ORDER_ID_FIELDS):
+        return "broker_order_provenance"
+    return None
+
+
+def _panic_buy_micro_detector_events(
+    events: list[dict[str, Any]],
+    *,
+    as_of: datetime | None = None,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    filtered: list[dict[str, Any]] = []
+    excluded = Counter()
+    excluded_stage = Counter()
+    future_event_count = 0
+    for row in events:
+        event_ts = _parse_dt(row.get("emitted_at"))
+        if as_of is not None and event_ts is not None and event_ts > as_of:
+            future_event_count += 1
+            continue
+        stage = _safe_str(row.get("stage")).lower()
+        reason = _micro_input_exclusion_reason(row)
+        if reason:
+            excluded[reason] += 1
+            if "exit" in stage or "sell" in stage:
+                excluded_stage["exit_sell"] += 1
+            if any(marker in stage for marker in ("holding", "scale_in", "position")):
+                excluded_stage["holding_scale_position"] += 1
+            continue
+        filtered.append(row)
+    return filtered, {
+        "input_universe": PANIC_BUY_MICRO_INPUT_UNIVERSE,
+        "input_event_count": len(filtered),
+        "excluded_event_count": sum(excluded.values()),
+        "future_event_count": future_event_count,
+        "excluded_reason_counts": dict(sorted(excluded.items())),
+        "excluded_holding_row_count": excluded.get("holding_pipeline", 0),
+        "excluded_exit_sell_row_count": excluded_stage.get("exit_sell", 0),
+        "excluded_holding_scale_position_stage_count": excluded_stage.get("holding_scale_position", 0),
+    }
 
 
 def _quantile(values: list[float], q: float) -> float | None:
@@ -368,10 +424,18 @@ def _market_breadth_context(source_summary: dict[str, Any], micro: dict[str, Any
         reasons.append("local_panic_buy_unconfirmed_by_market_breadth")
     if not source_ok:
         reasons.append("market_panic_breadth_source_unavailable")
+    interpretation = "normal"
+    if risk_on and active_or_watch == 0:
+        interpretation = "market_risk_on_only"
+    elif active_or_watch > 0 and risk_on:
+        interpretation = "market_and_local_panic_buy_confirmed"
+    elif active_or_watch > 0:
+        interpretation = "local_panic_buy_unconfirmed"
     return {
         "metric_role": "source_quality_gate",
         "decision_authority": "source_quality_only",
         "runtime_effect": "report_only_no_mutation",
+        "market_panic_buy_interpretation": interpretation,
         "market_panic_breadth_source": market.get("path"),
         "market_panic_breadth_as_of": market.get("as_of"),
         "market_panic_breadth_source_quality_status": market.get("source_quality_status"),
@@ -688,7 +752,12 @@ def build_panic_buying_report(
     latest_dt = max(event_datetimes) if event_datetimes else None
     if as_of is None:
         as_of = datetime.now()
-    micro = summarize_microstructure_detector_from_events(events, as_of=as_of)
+    micro_events, micro_input_provenance = _panic_buy_micro_detector_events(events, as_of=as_of)
+    micro = summarize_microstructure_detector_from_events(
+        micro_events,
+        as_of=as_of,
+        input_provenance=micro_input_provenance,
+    )
     source_summary = _load_source_summary(target_date)
     market_breadth_context = _market_breadth_context(source_summary, micro)
     panic_buy_state, reasons = _resolve_panic_buy_state(micro)
@@ -763,6 +832,7 @@ def build_markdown(report: dict[str, Any]) -> str:
     exhaustion = report["exhaustion_metrics"]
     tp = report["tp_counterfactual_summary"]
     micro = report.get("microstructure_detector") if isinstance(report.get("microstructure_detector"), dict) else {}
+    micro_input = micro.get("input_provenance") if isinstance(micro.get("input_provenance"), dict) else {}
     market = report.get("market_breadth_context") if isinstance(report.get("market_breadth_context"), dict) else {}
     lines = [
         f"# Panic Buying {report['target_date']}",
@@ -809,6 +879,10 @@ def build_markdown(report: dict[str, Any]) -> str:
         "",
         "## Microstructure Detector",
         "",
+        f"- input_universe: `{micro_input.get('input_universe', '-')}`",
+        f"- input_event_count: `{micro_input.get('input_event_count', 0)}`",
+        f"- excluded_holding_row_count: `{micro_input.get('excluded_holding_row_count', 0)}`",
+        f"- excluded_exit_sell_row_count: `{micro_input.get('excluded_exit_sell_row_count', 0)}`",
         f"- missing_orderbook_count: `{micro.get('missing_orderbook_count', 0)}`",
         f"- degraded_orderbook_count: `{micro.get('degraded_orderbook_count', 0)}`",
         f"- missing_trade_aggressor_count: `{micro.get('missing_trade_aggressor_count', 0)}`",
@@ -826,6 +900,7 @@ def build_markdown(report: dict[str, Any]) -> str:
         f"- market_panic_breadth_single_market_risk_on_advisory: `{str(market.get('market_panic_breadth_single_market_risk_on_advisory', False)).lower()}`",
         f"- market_panic_breadth_single_market_risk_off_advisory: `{str(market.get('market_panic_breadth_single_market_risk_off_advisory', False)).lower()}`",
         f"- market_wide_panic_buy_confirmed: `{str(market.get('market_wide_panic_buy_confirmed', False)).lower()}`",
+        f"- market_panic_buy_interpretation: `{market.get('market_panic_buy_interpretation', '-')}`",
         f"- market_breadth_decision_authority: `{market.get('decision_authority', '-')}`",
         "",
         "## Canary Candidates",

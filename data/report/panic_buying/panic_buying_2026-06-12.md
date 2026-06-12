@@ -8,19 +8,19 @@
 - risk_regime_threshold_mode: `dynamic_quantile`
 - report_only: `true`
 - runtime_effect: `report_only_no_mutation`
-- as_of: `2026-06-12T10:55:14`
-- latest_event_at: `2026-06-12T10:55:13`
+- as_of: `2026-06-12T11:53:07`
+- latest_event_at: `2026-06-12T11:53:06`
 - reasons: `no panic buying threshold breached`
 
 ## 패닉바잉 지표
 
-- evaluated_symbol_count: `148`
+- evaluated_symbol_count: `158`
 - panic_buy_active_count: `0`
 - panic_buy_watch_count: `0`
 - allow_tp_override_count: `0`
 - allow_runner_count: `0`
 - max_panic_buy_score: `0.45`
-- avg_confidence: `0.7682`
+- avg_confidence: `0.8256`
 
 ## 소진 지표
 
@@ -33,8 +33,8 @@
 
 - tp_like_exit_count: `0`
 - real_exit_count: `0`
-- non_real_exit_count: `376`
-- unproven_exit_count: `422`
+- non_real_exit_count: `425`
+- unproven_exit_count: `519`
 - trailing_winner_count: `0`
 - candidate_context_count: `0`
 - avg_tp_profit_rate_pct: `-`
@@ -42,13 +42,17 @@
 
 ## Microstructure Detector
 
-- missing_orderbook_count: `53`
-- degraded_orderbook_count: `53`
-- missing_trade_aggressor_count: `23`
-- carried_orderbook_snapshot_count: `3542`
-- carried_trade_aggressor_snapshot_count: `5642`
+- input_universe: `entry_observation_only`
+- input_event_count: `84889`
+- excluded_holding_row_count: `20125`
+- excluded_exit_sell_row_count: `966`
+- missing_orderbook_count: `13`
+- degraded_orderbook_count: `13`
+- missing_trade_aggressor_count: `21`
+- carried_orderbook_snapshot_count: `2389`
+- carried_trade_aggressor_snapshot_count: `4760`
 - micro_cusum_triggered_symbol_count: `4`
-- micro_consensus_pass_symbol_count: `0`
+- micro_consensus_pass_symbol_count: `1`
 - micro_cusum_decision_authority: `source_quality_only`
 
 ## Market Breadth Context
@@ -59,6 +63,7 @@
 - market_panic_breadth_single_market_risk_on_advisory: `false`
 - market_panic_breadth_single_market_risk_off_advisory: `false`
 - market_wide_panic_buy_confirmed: `false`
+- market_panic_buy_interpretation: `market_risk_on_only`
 - market_breadth_decision_authority: `source_quality_only`
 
 ## Canary Candidates

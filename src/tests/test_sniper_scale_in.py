@@ -3710,6 +3710,222 @@ def test_publish_buy_signal_submission_notice_enqueues_once(monkeypatch):
     assert pipeline_stages == ["buy_signal_telegram_enqueued"]
 
 
+def test_real_entry_panic_gap_weight_keeps_normal_market_price(monkeypatch):
+    monkeypatch.setattr(state_handlers, "TRADING_RULES", replace(CONFIG, REAL_ENTRY_PANIC_GAP_WEIGHT_ENABLED=True))
+    latency_gate = {"order_price": 9_950, "price_resolution_reason": "defensive_order_price"}
+    planned = [{"tag": "main", "qty": 1, "price": 9_950, "tif": "DAY"}]
+
+    adjusted, fields = state_handlers._apply_real_entry_panic_gap_weight(
+        stock={"name": "정상", "strategy": "SCALPING"},
+        strategy="SCALPING",
+        latency_gate=latency_gate,
+        planned_orders=planned,
+        curr_price=10_000,
+        best_bid=10_000,
+        best_ask=10_010,
+        panic_context={"panic_context_status": "OK", "panic_level": 0, "panic_regime_mode": "NORMAL"},
+        euphoria_context={"euphoria_context_status": "OK", "euphoria_risk_level": 0, "panic_buy_regime_mode": "NORMAL"},
+        real_order_subject=True,
+    )
+
+    assert adjusted == planned
+    assert fields["panic_gap_weight_applied"] is False
+    assert fields["panic_gap_weight_reason"] == "normal_market"
+    assert latency_gate["order_price"] == 9_950
+
+
+def test_real_entry_panic_gap_weight_panic_sell_adds_conservative_gap(monkeypatch):
+    monkeypatch.setattr(state_handlers, "TRADING_RULES", replace(CONFIG, REAL_ENTRY_PANIC_GAP_WEIGHT_ENABLED=True))
+    latency_gate = {"order_price": 9_950, "price_resolution_reason": "defensive_order_price"}
+    planned = [{"tag": "main", "qty": 1, "price": 9_950, "tif": "DAY"}]
+
+    adjusted, fields = state_handlers._apply_real_entry_panic_gap_weight(
+        stock={"name": "패닉셀", "strategy": "SCALPING"},
+        strategy="SCALPING",
+        latency_gate=latency_gate,
+        planned_orders=planned,
+        curr_price=10_000,
+        best_bid=10_000,
+        best_ask=10_010,
+        panic_context={
+            "panic_context_status": "OK",
+            "panic_level": 1,
+            "panic_regime_mode": "PANIC_DETECTED",
+            "panic_state": "PANIC_SELL",
+            "liquidity_state": "NORMAL",
+        },
+        euphoria_context={"euphoria_context_status": "OK", "euphoria_risk_level": 0, "panic_buy_regime_mode": "NORMAL"},
+        real_order_subject=True,
+    )
+
+    assert fields["panic_gap_weight_applied"] is True
+    assert fields["panic_gap_weight_bps"] == 30
+    assert latency_gate["order_price"] == 9_920
+    assert adjusted[0]["price"] == 9_920
+    assert latency_gate["price_below_bid_bps"] == 80
+
+
+def test_real_entry_panic_gap_weight_liquidity_broken_uses_larger_gap(monkeypatch):
+    monkeypatch.setattr(state_handlers, "TRADING_RULES", replace(CONFIG, REAL_ENTRY_PANIC_GAP_WEIGHT_ENABLED=True))
+    latency_gate = {"order_price": 9_950, "price_resolution_reason": "defensive_order_price"}
+
+    adjusted, fields = state_handlers._apply_real_entry_panic_gap_weight(
+        stock={"name": "유동성붕괴", "strategy": "SCALPING"},
+        strategy="SCALPING",
+        latency_gate=latency_gate,
+        planned_orders=[{"tag": "main", "qty": 1, "price": 9_950, "tif": "DAY"}],
+        curr_price=10_000,
+        best_bid=10_000,
+        best_ask=10_010,
+        panic_context={
+            "panic_context_status": "OK",
+            "panic_level": 2,
+            "panic_regime_mode": "PANIC_DETECTED",
+            "liquidity_state": "LIQUIDITY_BROKEN",
+        },
+        euphoria_context={"euphoria_context_status": "OK", "euphoria_risk_level": 0},
+        real_order_subject=True,
+    )
+
+    assert fields["panic_gap_weight_bps"] == 50
+    assert latency_gate["order_price"] == 9_900
+    assert adjusted[0]["price"] == 9_900
+
+
+def test_real_entry_panic_gap_weight_panic_buy_active_narrows_gap(monkeypatch):
+    monkeypatch.setattr(state_handlers, "TRADING_RULES", replace(CONFIG, REAL_ENTRY_PANIC_GAP_WEIGHT_ENABLED=True))
+    latency_gate = {"order_price": 9_950, "price_resolution_reason": "defensive_order_price"}
+
+    adjusted, fields = state_handlers._apply_real_entry_panic_gap_weight(
+        stock={"name": "패닉바잉", "strategy": "SCALPING"},
+        strategy="SCALPING",
+        latency_gate=latency_gate,
+        planned_orders=[{"tag": "main", "qty": 1, "price": 9_950, "tif": "DAY"}],
+        curr_price=10_000,
+        best_bid=10_000,
+        best_ask=10_010,
+        panic_context={"panic_context_status": "OK", "panic_level": 0, "panic_regime_mode": "NORMAL"},
+        euphoria_context={
+            "euphoria_context_status": "OK",
+            "euphoria_risk_level": 2,
+            "panic_buy_state": "PANIC_BUY",
+            "panic_buy_regime_mode": "PANIC_BUY_CONTINUATION",
+        },
+        real_order_subject=True,
+    )
+
+    assert fields["panic_gap_weight_applied"] is True
+    assert fields["panic_gap_weight_bps"] == -20
+    assert latency_gate["order_price"] == 9_970
+    assert adjusted[0]["price"] == 9_970
+
+
+def test_real_entry_panic_gap_weight_panic_buy_missing_best_ask_noops(monkeypatch):
+    monkeypatch.setattr(state_handlers, "TRADING_RULES", replace(CONFIG, REAL_ENTRY_PANIC_GAP_WEIGHT_ENABLED=True))
+    latency_gate = {"order_price": 9_950, "price_resolution_reason": "defensive_order_price"}
+    planned = [{"tag": "main", "qty": 1, "price": 9_950, "tif": "DAY"}]
+
+    adjusted, fields = state_handlers._apply_real_entry_panic_gap_weight(
+        stock={"name": "패닉바잉호가없음", "strategy": "SCALPING"},
+        strategy="SCALPING",
+        latency_gate=latency_gate,
+        planned_orders=planned,
+        curr_price=10_000,
+        best_bid=10_000,
+        best_ask=0,
+        panic_context={"panic_context_status": "OK", "panic_level": 0, "panic_regime_mode": "NORMAL"},
+        euphoria_context={
+            "euphoria_context_status": "OK",
+            "euphoria_risk_level": 2,
+            "panic_buy_state": "PANIC_BUY",
+            "panic_buy_regime_mode": "PANIC_BUY_CONTINUATION",
+        },
+        real_order_subject=True,
+    )
+
+    assert adjusted == planned
+    assert fields["panic_gap_weight_applied"] is False
+    assert fields["panic_gap_weight_bps"] == -20
+    assert fields["panic_gap_weight_reason"] == "panic_buy_active:best_ask_missing_noop"
+    assert latency_gate["order_price"] == 9_950
+
+
+def test_real_entry_panic_gap_weight_panic_sell_stale_does_not_block_panic_buy(monkeypatch):
+    monkeypatch.setattr(state_handlers, "TRADING_RULES", replace(CONFIG, REAL_ENTRY_PANIC_GAP_WEIGHT_ENABLED=True))
+    latency_gate = {"order_price": 9_950, "price_resolution_reason": "defensive_order_price"}
+
+    adjusted, fields = state_handlers._apply_real_entry_panic_gap_weight(
+        stock={"name": "패닉바잉독립", "strategy": "SCALPING"},
+        strategy="SCALPING",
+        latency_gate=latency_gate,
+        planned_orders=[{"tag": "main", "qty": 1, "price": 9_950, "tif": "DAY"}],
+        curr_price=10_000,
+        best_bid=10_000,
+        best_ask=10_010,
+        panic_context={"panic_context_status": "STALE", "panic_level": 0, "panic_regime_mode": "NORMAL"},
+        euphoria_context={
+            "euphoria_context_status": "OK",
+            "euphoria_risk_level": 2,
+            "panic_buy_state": "PANIC_BUY",
+            "panic_buy_regime_mode": "PANIC_BUY_CONTINUATION",
+        },
+        real_order_subject=True,
+    )
+
+    assert fields["panic_gap_weight_applied"] is True
+    assert fields["panic_gap_weight_bps"] == -20
+    assert fields["panic_gap_weight_reason"] == "panic_buy_active"
+    assert latency_gate["order_price"] == 9_970
+    assert adjusted[0]["price"] == 9_970
+
+
+def test_real_entry_panic_gap_weight_exhaustion_expands_gap_and_sim_noops(monkeypatch):
+    monkeypatch.setattr(state_handlers, "TRADING_RULES", replace(CONFIG, REAL_ENTRY_PANIC_GAP_WEIGHT_ENABLED=True))
+    latency_gate = {"order_price": 9_950, "price_resolution_reason": "defensive_order_price"}
+    planned = [{"tag": "main", "qty": 1, "price": 9_950, "tif": "DAY"}]
+
+    adjusted, fields = state_handlers._apply_real_entry_panic_gap_weight(
+        stock={"name": "과열", "strategy": "SCALPING"},
+        strategy="SCALPING",
+        latency_gate=latency_gate,
+        planned_orders=planned,
+        curr_price=10_000,
+        best_bid=10_000,
+        best_ask=10_010,
+        panic_context={"panic_context_status": "OK", "panic_level": 0, "panic_regime_mode": "NORMAL"},
+        euphoria_context={
+            "euphoria_context_status": "OK",
+            "euphoria_risk_level": 3,
+            "panic_buy_state": "EXHAUSTION_WATCH",
+            "panic_buy_regime_mode": "PANIC_BUY_EXHAUSTION",
+        },
+        real_order_subject=True,
+    )
+
+    assert fields["panic_gap_weight_bps"] == 30
+    assert latency_gate["order_price"] == 9_920
+    assert adjusted[0]["price"] == 9_920
+
+    sim_gate = {"order_price": 9_950, "price_resolution_reason": "defensive_order_price"}
+    sim_adjusted, sim_fields = state_handlers._apply_real_entry_panic_gap_weight(
+        stock={"name": "sim", "strategy": "SCALPING", "actual_order_submitted": False},
+        strategy="SCALPING",
+        latency_gate=sim_gate,
+        planned_orders=planned,
+        curr_price=10_000,
+        best_bid=10_000,
+        best_ask=10_010,
+        panic_context={"panic_context_status": "OK", "panic_level": 2, "panic_regime_mode": "PANIC_DETECTED"},
+        euphoria_context={"euphoria_context_status": "OK", "euphoria_risk_level": 0},
+        real_order_subject=False,
+    )
+
+    assert sim_adjusted == planned
+    assert sim_fields["panic_gap_weight_applied"] is False
+    assert sim_fields["panic_gap_weight_reason"] == "non_real_order_subject_noop"
+    assert sim_gate["order_price"] == 9_950
+
+
 def test_publish_buy_signal_submission_notice_uses_vip_liquidity_gate(monkeypatch):
     published = []
 
