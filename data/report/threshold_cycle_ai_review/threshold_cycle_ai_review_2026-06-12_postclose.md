@@ -1,34 +1,30 @@
 # Threshold Cycle AI Correction - 2026-06-12 postclose
 
-- AI status: `unavailable`
+- AI status: `parsed`
 - Authority: proposal-only; deterministic calibration guard is the source of truth.
 - Runtime change: `false`
-- Input context chars: `79188`
-- Input context hash: `9e80f68160a81765033fe9a23de99429255f818164d73c3da607167bd0e2ab49`
-- Provider status: `none / not_requested`
-- Usage: input_tokens=`None`, output_tokens=`None`, total_tokens=`None`, elapsed_ms=`None`
-- Cost: estimated_cost_usd=`None`, status=`not_available`
+- Input context chars: `80339`
+- Input context hash: `97335284d4d0a90cdc20d7bccd899629ca50b4f9ee4eed69a7fa9f30f20d946e`
+- Provider status: `openai / success`
+- Usage: input_tokens=`31232`, output_tokens=`9523`, total_tokens=`40755`, elapsed_ms=`141585`
+- Cost: estimated_cost_usd=`None`, status=`missing_price_contract`
 
 | family | ai_state | route | proposal | guard | reason |
 | --- | --- | --- | --- | --- | --- |
-| soft_stop_whipsaw_confirmation | unavailable | - | state=-, value=-, window=- | accepted=False, effective_state=adjust_up, effective_value=60, runtime_change=False | ai_unavailable |
-| holding_flow_ofi_smoothing | unavailable | - | state=-, value=-, window=- | accepted=False, effective_state=hold, effective_value=90, runtime_change=False | ai_unavailable |
-| protect_trailing_smoothing | unavailable | - | state=-, value=-, window=- | accepted=False, effective_state=adjust_down, effective_value=20, runtime_change=False | ai_unavailable |
-| trailing_continuation | unavailable | - | state=-, value=-, window=- | accepted=False, effective_state=freeze, effective_value=0.4, runtime_change=False | ai_unavailable |
-| market_regime_continuous_thresholds | unavailable | - | state=-, value=-, window=- | accepted=False, effective_state=hold_sample, effective_value=65, runtime_change=False | ai_unavailable |
-| pre_submit_price_guard | unavailable | - | state=-, value=-, window=- | accepted=False, effective_state=hold, effective_value=True, runtime_change=False | ai_unavailable |
-| dynamic_entry_price_resolver | unavailable | - | state=-, value=-, window=- | accepted=False, effective_state=hold_sample, effective_value=1, runtime_change=False | ai_unavailable |
-| entry_price_execution_quality | unavailable | - | state=-, value=-, window=- | accepted=False, effective_state=hold, effective_value=report_only, runtime_change=False | ai_unavailable |
-| score65_74_recovery_probe | unavailable | - | state=-, value=-, window=- | accepted=False, effective_state=adjust_up, effective_value=False, runtime_change=False | ai_unavailable |
-| strength_momentum_soft_gate_p1 | unavailable | - | state=-, value=-, window=- | accepted=False, effective_state=hold, effective_value=False, runtime_change=False | ai_unavailable |
-| overbought_pullback_guard_p1 | unavailable | - | state=-, value=-, window=- | accepted=False, effective_state=hold, effective_value=False, runtime_change=False | ai_unavailable |
-| liquidity_pre_submit_guard_p1 | unavailable | - | state=-, value=-, window=- | accepted=False, effective_state=hold, effective_value=False, runtime_change=False | ai_unavailable |
-| bad_entry_refined_canary | unavailable | - | state=-, value=-, window=- | accepted=False, effective_state=adjust_up, effective_value=False, runtime_change=False | ai_unavailable |
-| holding_exit_decision_matrix_advisory | unavailable | - | state=-, value=-, window=- | accepted=False, effective_state=hold_no_edge, effective_value=False, runtime_change=False | ai_unavailable |
-| lifecycle_decision_matrix_runtime | unavailable | - | state=-, value=-, window=- | accepted=False, effective_state=adjust_up, effective_value=False, runtime_change=False | ai_unavailable |
-| scale_in_price_guard | unavailable | - | state=-, value=-, window=- | accepted=False, effective_state=hold, effective_value=60, runtime_change=False | ai_unavailable |
-| position_sizing_dynamic_formula | unavailable | - | state=-, value=-, window=- | accepted=False, effective_state=hold_sample, effective_value=linear_10_30_current, runtime_change=False | ai_unavailable |
-
-## Parse Warnings
-
-- ai correction response not provided
+| soft_stop_whipsaw_confirmation | correction_proposed | threshold_candidate | state=adjust_down, value=40, window=rolling_10d | accepted=True, effective_state=adjust_down, effective_value=40, runtime_change=False | current_value 60 to recommended_value 20 is numeric adjust_down, not calibration_state "adjust_up". The 40-point jump also exceeds max_step_per_day 20; 40 is the bounded next candidate if this numeric threshold is used. |
+| holding_flow_ofi_smoothing | agree | - | state=hold, value=90, window=daily_intraday | accepted=True, effective_state=hold, effective_value=90, runtime_change=False | current_value and recommended_value are both 90. Hold is consistent, while "HOLD_DEFER_DANGER" remains a caution flag rather than enough evidence for a numeric change here. |
+| protect_trailing_smoothing | correction_proposed | threshold_candidate | state=hold_sample, value=20, window=rolling_10d | accepted=True, effective_state=hold_sample, effective_value=20, runtime_change=False | adjust_down from 20 to 12 is within max_step_per_day, but eligible_for_live_review is false and qualifying_cohort_count is 0. Holding the current value is safer until a qualifying cohort exists. |
+| trailing_continuation | agree | threshold_candidate | state=freeze, value=0.4, window=rolling_10d | accepted=True, effective_state=freeze, effective_value=0.4, runtime_change=False | freeze is consistent with direction_conflict_or_live_risk and eligible_for_live_review=false. The recommended_value 0.8 should remain report-only under the provided evidence. |
+| market_regime_continuous_thresholds | agree | normal_drift | state=hold_sample, value=65, window=rolling_10d | accepted=False, effective_state=hold_sample, effective_value=65, runtime_change=False | window_policy_blocks_single_case_live_candidate:7/10 |
+| pre_submit_price_guard | agree | - | state=hold, value=True, window=daily_intraday | accepted=True, effective_state=hold, effective_value=True, runtime_change=False | Holding true is consistent with a broker pre-submit hard safety/source-quality guard and exclusion from runtime apply candidates. |
+| dynamic_entry_price_resolver | agree | instrumentation_gap | state=hold_sample, value=1, window=daily_intraday | accepted=True, effective_state=hold_sample, effective_value=1, runtime_change=False | hold_sample is consistent with evaluated_candidates=0 and coverage_gap_type "counterfactual_join_gap" despite instrumentation_status "implemented". |
+| entry_price_execution_quality | correction_proposed | instrumentation_gap | state=hold_sample, value=report_only, window=daily_intraday | accepted=True, effective_state=hold_sample, effective_value=report_only, runtime_change=False | sample_count is 281 but source_sample_count is 0 and source_metrics_summary is empty. For a real-only audit, this should remain hold_sample until fill/cancel/late-fill joins are available. |
+| score65_74_recovery_probe | correction_proposed | incident | state=hold_sample, value=False, window=rolling_5d | accepted=True, effective_state=hold_sample, effective_value=False, runtime_change=False | calibration_state "adjust_up" conflicts with current_value false, recommended_value false, and threshold_relaxation_approved=false. "SUBMIT_DROUGHT_CRITICAL" should be treated as an incident/context signal, not enough by itself to enable a BUY canary. |
+| strength_momentum_soft_gate_p1 | correction_proposed | instrumentation_gap | state=hold_sample, value=False, window=rolling_5d | accepted=True, effective_state=hold_sample, effective_value=False, runtime_change=False | source_sample_count is 0 and source_metrics_summary is empty while sample_floor is 20. The report-only redesign hold should be represented as hold_sample until an approval artifact and usable source metrics exist. |
+| overbought_pullback_guard_p1 | correction_proposed | instrumentation_gap | state=hold_sample, value=False, window=rolling_5d | accepted=True, effective_state=hold_sample, effective_value=False, runtime_change=False | Hold direction is conservative, but evaluated_candidates is only 1 in the candidate and 0 in the source bundle summary, with allowed_runtime_apply=false. Treat as hold_sample rather than a mature hold. |
+| liquidity_pre_submit_guard_p1 | correction_proposed | instrumentation_gap | state=hold_sample, value=False, window=rolling_5d | accepted=True, effective_state=hold_sample, effective_value=False, runtime_change=False | Hold direction is conservative, but evaluated_candidates is only 1 in the candidate and 0 in the source bundle summary, with allowed_runtime_apply=false. Treat as hold_sample until joined pre-submit outcomes are available. |
+| bad_entry_refined_canary | correction_proposed | threshold_candidate | state=hold_sample, value=False, window=rolling_10d | accepted=True, effective_state=hold_sample, effective_value=False, runtime_change=False | adjust_up to true is not well supported by the provided lifecycle view: preventable_candidate is 0 and completed_valid_cumulative is 0, while soft_stop rebound evidence indicates whipsaw risk. Keep as a sampled candidate until post-sell joined outcomes validate benefit. |
+| holding_exit_decision_matrix_advisory | correction_proposed | instrumentation_gap | state=hold, value=False, window=rolling_5d | accepted=True, effective_state=hold_sample, effective_value=False, runtime_change=False | Input calibration_state "hold_no_edge" is not an allowed proposal state. The semantic correction is hold because matrix_non_clear_edge is 0 and counterfactual_ready_count is 0. |
+| lifecycle_decision_matrix_runtime | correction_proposed | threshold_candidate | state=hold_sample, value=False, window=rolling_5d | accepted=True, effective_state=hold_sample, effective_value=False, runtime_change=False | adjust_up to true conflicts with promote_ready_count=0 and candidate records showing approval_required=true and allowed_runtime_apply=false. Keep the umbrella canary as hold_sample pending rolling confirmation and approval evidence. |
+| scale_in_price_guard | agree | - | state=hold, value=60, window=rolling_10d | accepted=True, effective_state=hold, effective_value=60, runtime_change=False | Hold is consistent with report-only calibration and saw_weight_source_ready=false. No live apply evidence is present. |
+| position_sizing_dynamic_formula | agree | instrumentation_gap | state=hold_sample, value=linear_10_30_current, window=rolling_10d | accepted=True, effective_state=hold_sample, effective_value=linear_10_30_current, runtime_change=False | hold_sample is consistent with real denominator sample_floor unmet at 0/30. Candidate grid should remain observational until real denominator evidence exists. |

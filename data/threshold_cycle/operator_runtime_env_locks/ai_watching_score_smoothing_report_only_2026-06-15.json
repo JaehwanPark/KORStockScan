@@ -1,0 +1,46 @@
+{
+  "lock_id": "ai_watching_score_smoothing_report_only_operator_observation_2026-06-15",
+  "enabled": true,
+  "family": "ai_watching_score_smoothing_report_only",
+  "stage": "entry_observation",
+  "priority": 22,
+  "active_from_date": "2026-06-15",
+  "explicit_close_required": true,
+  "requested_by": "user_operator_observation",
+  "runtime_effect": false,
+  "decision_authority": "watching_score_smoothing_report_only",
+  "scope": {
+    "strategy": "SCALPING",
+    "state": "WATCHING",
+    "actual_order_submitted": false,
+    "broker_order_forbidden": true,
+    "score_mutation_forbidden": true
+  },
+  "env_overrides": {
+    "KORSTOCKSCAN_AI_WATCHING_SCORE_SMOOTHING_MODE": "report_only"
+  },
+  "allowed_close_reason_keywords": [
+    "explicit_operator_close",
+    "safety_revert_required",
+    "provenance_breach"
+  ],
+  "forbidden_uses": [
+    "score_threshold_change",
+    "ai_score_live_gate",
+    "broker_submit",
+    "provider_route_change",
+    "order_price_change",
+    "quantity_or_cap_change",
+    "hard_safety_override"
+  ],
+  "rollback_guard": {
+    "disable_key": "KORSTOCKSCAN_AI_WATCHING_SCORE_SMOOTHING_MODE=off",
+    "explicit_operator_close_required": true,
+    "real_order_path_unchanged": true
+  },
+  "source_evidence": {
+    "reason": "Continue WATCHING Tier1 score smoothing provenance collection across PREOPEN runtime env regeneration.",
+    "prior_intraday_env": "KORSTOCKSCAN_AI_WATCHING_SCORE_SMOOTHING_MODE=report_only",
+    "user_instruction": "계속 관찰해야함"
+  }
+}

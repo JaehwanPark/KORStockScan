@@ -199,6 +199,16 @@ def test_trading_rules_soft_stop_micro_grace_sec_env_override(monkeypatch):
     assert reloaded.TRADING_RULES.SCALP_HARD_STOP == -2.5
 
 
+def test_trading_rules_real_scalp_holding_exit_defaults(monkeypatch):
+    monkeypatch.delenv("KORSTOCKSCAN_SCALP_SOFT_STOP_MICRO_GRACE_SEC", raising=False)
+    monkeypatch.delenv("KORSTOCKSCAN_SCALP_SAFE_PROFIT", raising=False)
+
+    reloaded = importlib.reload(constants)
+
+    assert reloaded.TRADING_RULES.SCALP_SOFT_STOP_MICRO_GRACE_SEC == 60
+    assert reloaded.TRADING_RULES.SCALP_SAFE_PROFIT == 1.0
+
+
 def test_trading_rules_scalp_safe_profit_env_override(monkeypatch):
     monkeypatch.setenv("KORSTOCKSCAN_SCALP_SAFE_PROFIT", "1.0")
 

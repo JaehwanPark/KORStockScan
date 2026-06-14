@@ -683,12 +683,12 @@ def _resolve_buy_order_type(order_type, price=0, tif=None):
 
 
 def _buy_time_block_cutoff():
-    raw_cutoff = str(getattr(TRADING_RULES, "BUY_SIDE_TIME_BLOCK_UNTIL_HHMM", "09:20") or "").strip()
+    raw_cutoff = str(getattr(TRADING_RULES, "BUY_SIDE_TIME_BLOCK_UNTIL_HHMM", "09:10") or "").strip()
     try:
         hour_text, minute_text = raw_cutoff.split(":", 1)
         return datetime_time(hour=int(hour_text), minute=int(minute_text))
     except Exception:
-        return datetime_time(hour=9, minute=20)
+        return datetime_time(hour=9, minute=10)
 
 
 def is_buy_side_time_blocked(now=None) -> bool:

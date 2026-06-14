@@ -3112,6 +3112,14 @@ def test_scalp_sim_scale_in_window_approval_writes_runtime_env(tmp_path, monkeyp
         == "PYRAMID,AVG_DOWN"
     )
     assert manifest["runtime_env_overrides"]["KORSTOCKSCAN_SCALP_SIM_SCALE_IN_WINDOW_MAX_ORDERS_PER_DAY"] == "30"
+    assert (
+        manifest["runtime_env_overrides"]["KORSTOCKSCAN_SCALP_SIM_SCALE_IN_EXECUTION_OBSERVATION_ENABLED"]
+        == "true"
+    )
+    assert (
+        manifest["runtime_env_overrides"]["KORSTOCKSCAN_SCALP_SIM_SCALE_IN_EXECUTION_ARMS"]
+        == "PASSIVE_BASELINE,MARKETABLE_OBSERVATION"
+    )
     assert manifest["scalp_sim_scale_in_window_approval"]["selected"][0]["family"] == (
         "scalp_sim_scale_in_window_expansion"
     )

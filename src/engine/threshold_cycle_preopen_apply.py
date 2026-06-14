@@ -974,6 +974,18 @@ def _load_scalp_sim_scale_in_window_approval(source_date: str | None) -> dict[st
     request = None
     if payload and not blocked:
         recommended = payload.get("recommended_values") if isinstance(payload.get("recommended_values"), dict) else {}
+        recommended = dict(recommended)
+        if "execution_observation_enabled" not in recommended:
+            recommended["execution_observation_enabled"] = True
+        if not recommended.get("execution_arms"):
+            recommended["execution_arms"] = "PASSIVE_BASELINE,MARKETABLE_OBSERVATION"
+        target_env_keys = list(payload.get("target_env_keys") or [])
+        for key in (
+            "SCALP_SIM_SCALE_IN_EXECUTION_OBSERVATION_ENABLED",
+            "SCALP_SIM_SCALE_IN_EXECUTION_ARMS",
+        ):
+            if key not in target_env_keys:
+                target_env_keys.append(key)
         request = {
             "family": "scalp_sim_scale_in_window_expansion",
             "policy_id": "scalp_sim_scale_in_window_expansion",
@@ -981,7 +993,7 @@ def _load_scalp_sim_scale_in_window_approval(source_date: str | None) -> dict[st
             "calibration_state": "sim_auto_approved",
             "allowed_runtime_apply": True,
             "safety_revert_required": False,
-            "target_env_keys": payload.get("target_env_keys") or [],
+            "target_env_keys": target_env_keys,
             "recommended_values": recommended,
             "current_values": {
                 "enabled": False,

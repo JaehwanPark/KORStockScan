@@ -176,7 +176,7 @@ class TradingConfig:
     SCALPING_MAX_BUY_BUDGET_KRW: int = 0  # 0 이하는 절대 투자금 상한 없음; 주문가능금액 비중 guard 사용
     SCALPING_MIN_ONE_SHARE_FLOOR_ENABLED: bool = True  # 비중 예산 초과 시 주문가능금액 내 최소 1주 허용
     BUY_SIDE_TIME_BLOCK_ENABLED: bool = True  # 신규 매수/추가매수 브로커 제출 시간 차단
-    BUY_SIDE_TIME_BLOCK_UNTIL_HHMM: str = "09:20"  # KST 기준, 이 시각 전 BUY 제출 차단
+    BUY_SIDE_TIME_BLOCK_UNTIL_HHMM: str = "09:10"  # KST 기준, 이 시각 전 BUY 제출 차단
 
     # 💡 [신규 추가] 스윙 AI 동적 비중 조절용 (Min~Max)
     INVEST_RATIO_KOSDAQ_MIN: float = 0.05  # 코스닥 AI 점수 60점일 때 (5%)
@@ -244,7 +244,7 @@ class TradingConfig:
     SCALP_STOP: float = -1.5  # 초단타 완충 손절(soft stop)
     SCALP_HARD_STOP: float = -2.5  # 초단타 최종 안전장치(hard stop)
     SCALP_SOFT_STOP_MICRO_GRACE_ENABLED: bool = True  # soft_stop 휩쏘 완화 canary
-    SCALP_SOFT_STOP_MICRO_GRACE_SEC: int = 20  # soft_stop 최초 터치 후 확인유예(초)
+    SCALP_SOFT_STOP_MICRO_GRACE_SEC: int = 60  # soft_stop 최초 터치 후 확인유예(초)
     SCALP_SOFT_STOP_MICRO_GRACE_EMERGENCY_PCT: float = -2.0  # 유예 중에도 즉시 청산하는 손실폭
     SCALP_SOFT_STOP_MICRO_GRACE_EXTEND_ENABLED: bool = False  # 예비 파라미터: threshold 근처 1회 추가 확인유예
     SCALP_SOFT_STOP_MICRO_GRACE_EXTEND_SEC: int = 10  # 추가 확인유예 최대 초
@@ -445,7 +445,7 @@ class TradingConfig:
     MAX_SCALP_SURGE_PCT: float = 20.0  # 초단타 진입 금지 급등률 (20%)
     MAX_INTRADAY_SURGE: float = 16.0  # 당일 시가 대비 최대 급등률 (1차 완화: 16%)
     # [V3 스캘핑 동적 트레일링 전용 상수]
-    SCALP_SAFE_PROFIT: float = 0.5     # 💡 [신규] 수수료/세금/슬리피지를 커버하는 최소 안전 마진 (이 선을 넘으면 무조건 수익 마감 모드 돌입)
+    SCALP_SAFE_PROFIT: float = 1.0     # 💡 [신규] 수수료/세금/슬리피지를 커버하는 최소 안전 마진 (이 선을 넘으면 무조건 수익 마감 모드 돌입)
     SCALP_TRAILING_LIMIT_STRONG = 0.8  # 💡 [신규] AI 점수가 75점 이상(수급 폭발)일 때 허용하는 고점 대비 눌림폭 (%)
     SCALP_TRAILING_LIMIT_WEAK = 0.4    # 💡 [신규] AI 점수가 75점 미만(수급 애매)일 때 타이트하게 끊어내는 고점 대비 눌림폭 (%)
     SCALP_PROTECT_TRAILING_SMOOTH_ENABLED: bool = True  # 보호 트레일링은 단일 tick 대신 평탄화 이탈 확인
