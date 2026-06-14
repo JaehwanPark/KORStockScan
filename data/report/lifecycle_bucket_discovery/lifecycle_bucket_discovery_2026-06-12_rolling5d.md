@@ -3,30 +3,29 @@
 ## 판정
 - status: `pass`
 - source_contract_status: `pass` / changes: `0`
-- ai_two_pass_review: `parsed` / model: `sharded` / tier: `tier2`
-- ai_review_shards: `2` / `5` parsed, reviewed_candidates=`2`
+- ai_two_pass_review: `disabled` / model: `-` / tier: `tier2`
+- ai_review_shards: `0` / `5` parsed, reviewed_candidates=`0`
 - surfaced_candidate_count: `500`
-- canonical/legacy buckets: `3` / `500`
-- dual_proposals: deterministic=`500` ai=`159` hybrid_selected=`159`
-- absorbed/source_quality_blocker: `500` / `0`
+- canonical/legacy buckets: `4` / `500`
+- dual_proposals: deterministic=`500` ai=`0` hybrid_selected=`0`
+- absorbed/source_quality_blocker: `499` / `0`
 - lifecycle_flow_parent_granularity: `target_pass` level=`L1_broad` parents=`39` target=`30-60`
-- lifecycle_flow_absorbed_children: child=`500` sample=`97641` conflict_parents=`18`
+- lifecycle_flow_absorbed_children: child=`499` sample=`97577` conflict_parents=`17`
 - ldm_refinement_pressure: input=`0` consumed=`0` closures=`{}`
-- sim_auto_approved_count: `0`
+- sim_auto_approved_count: `1`
 - lifecycle_flow_sim_probe_candidate_count: `45`
-- source_dimension_gap_count: `134` / actionable_unknown_gap_count: `0`
-- quiet_gap_count: `469` / sim_live_connected: `44`
+- source_dimension_gap_count: `133` / actionable_unknown_gap_count: `0`
+- quiet_gap_count: `454` / sim_live_connected: `44`
 - live_auto_apply_ready_count: `0`
 - human_intervention_required: `False`
-- warnings: `[]`
+- warnings: `['ai_review_provider_disabled', 'lifecycle_flow_review:ai_review_provider_disabled', 'ai_review_provider_disabled', 'sim_policy_review:ai_review_provider_disabled']`
 
 ## 판정 (Conflict Resolution)
-- parent_conflict_resolution_count: `18`
+- parent_conflict_resolution_count: `17`
 - sim_eligible_after_resolution: `0`
-- resolution_states: `{'resolution_complete': 13, 'resolution_blocked_thin_sample': 5}`
+- resolution_states: `{'resolution_complete': 12, 'resolution_blocked_thin_sample': 5}`
 
 - conflict_parent=`lifecycle_flow:combo_lifecycle_flow:entry_score_parent=score_unobserved|submit_q` state=`resolution_complete` tag=`resolution_complete` ev_before=`-1.007553` ev_after=`-1.007553` children=`27` sq_gap=`0` strategy_reversal=`0` exclude=`0` collecting=`2` positive_thin=`7` sim_eligible=`False` live_blockers=`['parent_ev_not_positive']`
-- conflict_parent=`lifecycle_flow:combo_lifecycle_flow:entry_score_parent=score_watch_recovery|subm` state=`resolution_complete` tag=`resolution_complete` ev_before=`1.302987` ev_after=`1.302987` children=`14` sq_gap=`0` strategy_reversal=`0` exclude=`0` collecting=`12` positive_thin=`0` sim_eligible=`False` live_blockers=`[]`
 - conflict_parent=`lifecycle_flow:combo_lifecycle_flow:entry_score_parent=score_watch_recovery|subm` state=`resolution_complete` tag=`resolution_complete` ev_before=`-0.219045` ev_after=`-0.219045` children=`68` sq_gap=`0` strategy_reversal=`0` exclude=`0` collecting=`0` positive_thin=`29` sim_eligible=`False` live_blockers=`['parent_ev_not_positive']`
 - conflict_parent=`lifecycle_flow:combo_lifecycle_flow:entry_score_parent=score_watch_recovery|subm` state=`resolution_complete` tag=`resolution_complete` ev_before=`-0.969889` ev_after=`-0.969889` children=`63` sq_gap=`0` strategy_reversal=`0` exclude=`0` collecting=`0` positive_thin=`20` sim_eligible=`False` live_blockers=`['parent_ev_not_positive']`
 - conflict_parent=`lifecycle_flow:combo_lifecycle_flow:entry_score_parent=score_unobserved|submit_q` state=`resolution_complete` tag=`resolution_complete` ev_before=`-1.221579` ev_after=`-1.221579` children=`52` sq_gap=`0` strategy_reversal=`0` exclude=`0` collecting=`0` positive_thin=`12` sim_eligible=`False` live_blockers=`['parent_ev_not_positive']`
@@ -47,19 +46,19 @@
 ## 근거
 
 ### AI Two-Pass Review
-- interpretation_count: `2`
-- ai_tier2_proposal_count: `2`
-- comparative_review_count: `2`
+- interpretation_count: `0`
+- ai_tier2_proposal_count: `0`
+- comparative_review_count: `0`
 - audit_status: `pass`
 - audit_issues: `[]`
 - audit_reason: `sharded review aggregate`
 
 ### AI Review Shards
-- `live_contract_review` status=`skipped_empty` candidates=`0` omitted=`0` context_chars=`28757`
-- `lifecycle_flow_review` status=`parsed` candidates=`1` omitted=`199` context_chars=`35335`
-- `sim_policy_review` status=`parsed` candidates=`1` omitted=`14` context_chars=`35299`
-- `gap_workorder_review` status=`skipped_empty` candidates=`0` omitted=`0` context_chars=`28733`
-- `taxonomy_discovery_review` status=`skipped_empty` candidates=`0` omitted=`0` context_chars=`28729`
+- `live_contract_review` status=`skipped_empty` candidates=`0` omitted=`0` context_chars=`30074`
+- `lifecycle_flow_review` status=`disabled` candidates=`1` omitted=`199` context_chars=`36652`
+- `sim_policy_review` status=`disabled` candidates=`1` omitted=`14` context_chars=`36616`
+- `gap_workorder_review` status=`skipped_empty` candidates=`0` omitted=`0` context_chars=`30050`
+- `taxonomy_discovery_review` status=`skipped_empty` candidates=`0` omitted=`0` context_chars=`30046`
 
 - `lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_scalp_entry_action_decision_snapshot_stale` stage=`lifecycle_flow` state=`source_only_keep_collecting` action=`relax_or_recover` relation=`existing_bucket_refinement` canonical=`lifecycle_flow:combo_lifecycle_flow:entry=score_watch_recovery|submit=submit_observed|holding=holding_observed|scale_in=scale_in_observed|exit=exit_observed` joined=`3` ev=`1.0873` ai_final=`-` taxonomy=`absorb_as_dimension`
 - `lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_scalp_entry_action_decision_snapshot_stale` stage=`lifecycle_flow` state=`source_only_keep_collecting` action=`relax_or_recover` relation=`existing_bucket_refinement` canonical=`lifecycle_flow:combo_lifecycle_flow:entry=score_watch_recovery|submit=submit_observed|holding=holding_observed|scale_in=scale_in_observed|exit=exit_observed` joined=`3` ev=`2.5298` ai_final=`-` taxonomy=`absorb_as_dimension`

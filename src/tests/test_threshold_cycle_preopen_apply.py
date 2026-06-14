@@ -474,7 +474,7 @@ def test_preopen_apply_consumes_lifecycle_bucket_auto_apply_without_human_artifa
                         },
                         "current_values": {"reversal_add_min_ai_score": 60, "reversal_add_min_buy_pressure": 55.0},
                         "runtime_effect_after_approval": "bounded_scale_in_policy_tighten_live_auto",
-                        "lifecycle_bucket_discovery_bucket_id": "scale_in:blocker_namespace:AVG_DOWN_ONLY",
+                        "lifecycle_bucket_discovery_bucket_id": "scale_in:arm:AVG_DOWN",
                         "lifecycle_bucket_discovery_ai_review_status": "parsed",
                         "auto_promotion_contract": {"tier2_status": "parsed", "tier2_policy": "fail_closed"},
                         "source_bucket_keys": ["score=score_66_69"],
@@ -1752,6 +1752,216 @@ def test_aggressive_entry_price_operator_lock_applies_without_formal_entry_price
     )
 
 
+def test_scalping_scanner_real_source_guard_operator_lock_applies(tmp_path, monkeypatch):
+    report_dir = tmp_path / "report"
+    apply_dir = tmp_path / "apply_plans"
+    runtime_dir = tmp_path / "runtime_env"
+    lock_dir = tmp_path / "operator_runtime_env_locks"
+    latency_dir = tmp_path / "missing_latency_classifier_recommendation"
+    report_dir.mkdir(parents=True)
+    lock_dir.mkdir(parents=True)
+    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "APPLY_PLAN_DIR", apply_dir)
+    monkeypatch.setattr(mod, "RUNTIME_ENV_DIR", runtime_dir)
+    monkeypatch.setattr(mod, "OPERATOR_RUNTIME_ENV_LOCK_DIR", lock_dir)
+    monkeypatch.setattr(mod, "LATENCY_CLASSIFIER_RECOMMENDATION_DIR", latency_dir)
+
+    (report_dir / "threshold_cycle_2026-06-14.json").write_text(
+        json.dumps({"date": "2026-06-14", "calibration_candidates": []}),
+        encoding="utf-8",
+    )
+    (lock_dir / "scalping_scanner_real_source_guard_2026-06-14.json").write_text(
+        json.dumps(
+            {
+                "lock_id": "scalping_scanner_real_source_guard_operator_override_2026-06-14",
+                "enabled": True,
+                "family": "scalping_scanner_real_source_guard_runtime",
+                "stage": "entry",
+                "priority": 900,
+                "active_from_date": "2026-06-15",
+                "explicit_close_required": True,
+                "env_overrides": {
+                    "KORSTOCKSCAN_SCALP_SCANNER_REAL_SOURCE_GUARD_ENABLED": "true",
+                    "KORSTOCKSCAN_SCALP_SCANNER_REAL_SOURCE_GUARD_BLOCK_VALUE_TOP_ONLY": "true",
+                    "KORSTOCKSCAN_SCALP_SCANNER_REAL_SOURCE_GUARD_MAX_DECLINE_PCT": "0.0",
+                    "KORSTOCKSCAN_SCALP_CONDITION_UNMATCH_GUARD_ENABLED": "true",
+                    "KORSTOCKSCAN_SCALP_CONDITION_UNMATCH_GUARD_TAGS": "VWAP_RECLAIM,DRYUP_SQUEEZE,PRECLOSE",
+                },
+                "allowed_close_reason_keywords": [
+                    "same_stage_owner_conflict",
+                    "live_auto_apply_ready",
+                    "tuning_override",
+                    "safety_revert_required",
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    manifest = mod.build_preopen_apply_manifest(
+        "2026-06-15",
+        source_date="2026-06-14",
+        apply_mode="auto_bounded_live",
+        auto_apply=True,
+        require_ai=False,
+    )
+
+    decision = [
+        item
+        for item in manifest["auto_apply_decisions"]
+        if item["family"] == "scalping_scanner_real_source_guard_runtime"
+    ][0]
+    assert decision["selected"] is True
+    assert decision["operator_runtime_env_lock"]["applied"] is True
+    assert manifest["runtime_env_overrides"]["KORSTOCKSCAN_SCALP_SCANNER_REAL_SOURCE_GUARD_ENABLED"] == "true"
+    assert manifest["runtime_env_overrides"]["KORSTOCKSCAN_SCALP_CONDITION_UNMATCH_GUARD_ENABLED"] == "true"
+
+
+def test_scalping_scanner_real_source_guard_coexists_with_score65_operator_lock(tmp_path, monkeypatch):
+    report_dir = tmp_path / "report"
+    apply_dir = tmp_path / "apply_plans"
+    runtime_dir = tmp_path / "runtime_env"
+    lock_dir = tmp_path / "operator_runtime_env_locks"
+    latency_dir = tmp_path / "missing_latency_classifier_recommendation"
+    report_dir.mkdir(parents=True)
+    lock_dir.mkdir(parents=True)
+    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "APPLY_PLAN_DIR", apply_dir)
+    monkeypatch.setattr(mod, "RUNTIME_ENV_DIR", runtime_dir)
+    monkeypatch.setattr(mod, "OPERATOR_RUNTIME_ENV_LOCK_DIR", lock_dir)
+    monkeypatch.setattr(mod, "LATENCY_CLASSIFIER_RECOMMENDATION_DIR", latency_dir)
+
+    (report_dir / "threshold_cycle_2026-06-12.json").write_text(
+        json.dumps({"date": "2026-06-12", "calibration_candidates": []}),
+        encoding="utf-8",
+    )
+    (lock_dir / "score65_74_recovery_probe_2026-06-11.json").write_text(
+        json.dumps(
+            {
+                "lock_id": "score65_74_recovery_probe_real_operator_override_2026-06-11",
+                "enabled": True,
+                "family": "score65_74_recovery_probe",
+                "stage": "entry",
+                "env_key": "KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_ENABLED",
+                "env_value": "true",
+                "active_from_date": "2026-06-11",
+                "explicit_close_required": True,
+                "allowed_close_reason_keywords": ["safety_revert", "severe_loss", "stale_quote"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (lock_dir / "scalping_scanner_real_source_guard_2026-06-14.json").write_text(
+        json.dumps(
+            {
+                "lock_id": "scalping_scanner_real_source_guard_operator_override_2026-06-14",
+                "enabled": True,
+                "family": "scalping_scanner_real_source_guard_runtime",
+                "stage": "entry",
+                "priority": 900,
+                "active_from_date": "2026-06-15",
+                "explicit_close_required": True,
+                "env_overrides": {
+                    "KORSTOCKSCAN_SCALP_SCANNER_REAL_SOURCE_GUARD_ENABLED": "true",
+                    "KORSTOCKSCAN_SCALP_CONDITION_UNMATCH_GUARD_ENABLED": "true",
+                },
+                "allowed_close_reason_keywords": [
+                    "same_stage_owner_conflict",
+                    "live_auto_apply_ready",
+                    "tuning_override",
+                    "safety_revert_required",
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    manifest = mod.build_preopen_apply_manifest(
+        "2026-06-15",
+        source_date="2026-06-12",
+        apply_mode="auto_bounded_live",
+        auto_apply=True,
+        require_ai=False,
+    )
+
+    decisions = {item["family"]: item for item in manifest["auto_apply_decisions"]}
+    assert decisions["score65_74_recovery_probe"]["selected"] is True
+    assert decisions["scalping_scanner_real_source_guard_runtime"]["selected"] is True
+    assert manifest["runtime_env_overrides"]["KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_ENABLED"] == "true"
+    assert manifest["runtime_env_overrides"]["KORSTOCKSCAN_SCALP_SCANNER_REAL_SOURCE_GUARD_ENABLED"] == "true"
+    assert manifest["runtime_env_overrides"]["KORSTOCKSCAN_SCALP_CONDITION_UNMATCH_GUARD_ENABLED"] == "true"
+
+
+def test_scalping_scanner_real_source_guard_closes_for_same_stage_live_owner(tmp_path, monkeypatch):
+    report_dir = tmp_path / "report"
+    apply_dir = tmp_path / "apply_plans"
+    runtime_dir = tmp_path / "runtime_env"
+    lock_dir = tmp_path / "operator_runtime_env_locks"
+    latency_dir = tmp_path / "missing_latency_classifier_recommendation"
+    report_dir.mkdir(parents=True)
+    lock_dir.mkdir(parents=True)
+    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "APPLY_PLAN_DIR", apply_dir)
+    monkeypatch.setattr(mod, "RUNTIME_ENV_DIR", runtime_dir)
+    monkeypatch.setattr(mod, "OPERATOR_RUNTIME_ENV_LOCK_DIR", lock_dir)
+    monkeypatch.setattr(mod, "LATENCY_CLASSIFIER_RECOMMENDATION_DIR", latency_dir)
+
+    (report_dir / "threshold_cycle_2026-06-14.json").write_text(
+        json.dumps(
+            {
+                "date": "2026-06-14",
+                "calibration_candidates": [
+                    {
+                        "family": "future_entry_live_bucket",
+                        "stage": "entry",
+                        "priority": 10,
+                        "allowed_runtime_apply": True,
+                        "safety_revert_required": False,
+                        "calibration_state": "adjust_up",
+                        "target_env_keys": ["SCALPING_NORMAL_DEFENSIVE_BPS"],
+                        "current_values": {"normal_defensive_bps": 50},
+                        "recommended_values": {"normal_defensive_bps": 45},
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (lock_dir / "scalping_scanner_real_source_guard_2026-06-14.json").write_text(
+        json.dumps(
+            {
+                "lock_id": "scalping_scanner_real_source_guard_operator_override_2026-06-14",
+                "enabled": True,
+                "family": "scalping_scanner_real_source_guard_runtime",
+                "stage": "entry",
+                "priority": 900,
+                "active_from_date": "2026-06-15",
+                "explicit_close_required": True,
+                "env_overrides": {
+                    "KORSTOCKSCAN_SCALP_SCANNER_REAL_SOURCE_GUARD_ENABLED": "true",
+                },
+                "allowed_close_reason_keywords": ["same_stage_owner_conflict", "tuning_override"],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    manifest = mod.build_preopen_apply_manifest(
+        "2026-06-15",
+        source_date="2026-06-14",
+        apply_mode="auto_bounded_live",
+        auto_apply=True,
+        require_ai=False,
+    )
+
+    decisions = {item["family"]: item for item in manifest["auto_apply_decisions"]}
+    assert decisions["future_entry_live_bucket"]["selected"] is True
+    scanner_decision = decisions["scalping_scanner_real_source_guard_runtime"]
+    assert scanner_decision["selected"] is False
+    assert scanner_decision["decision_reason"] == "same_stage_owner_conflict:future_entry_live_bucket"
+    assert "KORSTOCKSCAN_SCALP_SCANNER_REAL_SOURCE_GUARD_ENABLED" not in manifest["runtime_env_overrides"]
+
+
 def test_aggressive_entry_price_operator_lock_closes_for_dynamic_entry_price_resolver(tmp_path, monkeypatch):
     report_dir = tmp_path / "report"
     apply_dir = tmp_path / "apply_plans"
@@ -2948,6 +3158,11 @@ def test_scalp_sim_scale_in_window_artifact_is_sim_auto_approved(tmp_path, monke
     assert artifact["broker_order_forbidden"] is True
     assert artifact["source_quality_status"] == "pass"
     assert artifact["blocked_reasons"] == []
+    assert artifact["recommended_values"]["execution_observation_enabled"] is True
+    assert artifact["recommended_values"]["execution_arms"] == (
+        "PASSIVE_BASELINE,MARKETABLE_OBSERVATION"
+    )
+    assert "SCALP_SIM_SCALE_IN_EXECUTION_OBSERVATION_ENABLED" in artifact["target_env_keys"]
     assert artifact["approval_contract"]["operator_action"] == "none_required_for_sim_policy"
     saved = json.loads(
         (approval_dir / "scalp_sim_scale_in_window_expansion_2026-05-22.json").read_text(encoding="utf-8")
@@ -2984,6 +3199,41 @@ def test_scalp_sim_scale_in_window_artifact_blocks_unreadable_source_report(tmp_
     assert artifact["approval_state"] == "source_quality_blocked"
     assert artifact["source_quality_status"] == "source_report_unreadable"
     assert artifact["blocked_reasons"] == ["source_report_unreadable"]
+
+
+def test_scalp_sim_scale_in_window_artifact_blocks_unknown_matrix_status(tmp_path, monkeypatch):
+    approval_dir = tmp_path / "approvals"
+    report_dir = tmp_path / "lifecycle_decision_matrix"
+    report_dir.mkdir(parents=True)
+    monkeypatch.setattr(scale_in_approval_mod, "APPROVAL_DIR", approval_dir)
+    monkeypatch.setattr(scale_in_approval_mod, "REPORT_DIR", report_dir)
+    (report_dir / "lifecycle_decision_matrix_2026-05-22.json").write_text(
+        json.dumps({"summary": {"status": "warning"}}), encoding="utf-8"
+    )
+
+    artifact = scale_in_approval_mod.build_scalp_sim_scale_in_window_approval("2026-05-22")
+
+    assert artifact["approved"] is False
+    assert artifact["allowed_runtime_apply"] is False
+    assert artifact["source_quality_status"] == "warning"
+    assert artifact["blocked_reasons"] == ["warning"]
+
+
+def test_scalp_sim_scale_in_window_artifact_blocks_source_quality_blocked_matrix(tmp_path, monkeypatch):
+    approval_dir = tmp_path / "approvals"
+    report_dir = tmp_path / "lifecycle_decision_matrix"
+    report_dir.mkdir(parents=True)
+    monkeypatch.setattr(scale_in_approval_mod, "APPROVAL_DIR", approval_dir)
+    monkeypatch.setattr(scale_in_approval_mod, "REPORT_DIR", report_dir)
+    (report_dir / "lifecycle_decision_matrix_2026-05-22.json").write_text(
+        json.dumps({"summary": {"status": "source_quality_blocked"}}), encoding="utf-8"
+    )
+
+    artifact = scale_in_approval_mod.build_scalp_sim_scale_in_window_approval("2026-05-22")
+
+    assert artifact["approved"] is False
+    assert artifact["approval_state"] == "source_quality_blocked"
+    assert artifact["blocked_reasons"] == ["source_quality_blocked"]
 
 
 def test_scalp_sim_scale_in_window_preopen_rejects_source_quality_blocked_artifact(tmp_path, monkeypatch):
@@ -3946,6 +4196,57 @@ def test_runtime_apply_bridge_scale_live_auto_writes_tighten_env_without_guard_b
     assert env["KORSTOCKSCAN_REVERSAL_ADD_MIN_BUY_PRESSURE"] == "60"
     assert env["KORSTOCKSCAN_REVERSAL_ADD_MIN_TICK_ACCEL"] == "1.05"
     assert "scale_in_safety_guard_bypass" in manifest["runtime_apply_bridge"]["selected"][0]["forbidden_uses"]
+
+
+def test_runtime_apply_bridge_partial_scale_arm_emits_only_ready_arm_env(tmp_path, monkeypatch):
+    _runtime_dir, bridge_dir, _approval_dir = _install_runtime_bridge_test_dirs(tmp_path, monkeypatch)
+    family = bridge_mod.SCALE_IN_BRIDGE_FAMILY
+    (bridge_dir / "runtime_apply_bridge_2026-05-30.json").write_text(
+        json.dumps(
+            {
+                "date": "2026-05-30",
+                "candidates": [
+                    {
+                        "candidate_id": f"{family}:2026-05-30",
+                        "family": family,
+                        "stage": "scale_in",
+                        "priority": 39,
+                        "bridge_candidate_state": "live_auto_apply_ready",
+                        "approval_required": False,
+                        "live_auto_apply": True,
+                        "allowed_runtime_apply": True,
+                        "runtime_effect_after_approval": "bounded_scale_in_policy_tighten_live_auto",
+                        "lifecycle_bucket_discovery_ai_review_status": "parsed",
+                        "auto_promotion_contract": {"tier2_status": "parsed", "tier2_policy": "fail_closed"},
+                        "target_env_keys": ["SCALPING_ENABLE_PYRAMID"],
+                        "recommended_values": {
+                            "scalping_enable_pyramid": False,
+                            "reversal_add_min_ai_score": 65,
+                            "reversal_add_min_buy_pressure": 60.0,
+                            "reversal_add_min_tick_accel": 1.05,
+                        },
+                        "current_values": {"scalping_enable_pyramid": True},
+                        "forbidden_uses": ["scale_in_safety_guard_bypass"],
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    manifest = mod.build_preopen_apply_manifest(
+        "2026-06-01",
+        source_date="2026-05-30",
+        apply_mode="auto_bounded_live",
+        auto_apply=True,
+        require_ai=False,
+    )
+
+    env = manifest["runtime_env_overrides"]
+    assert env["KORSTOCKSCAN_SCALPING_ENABLE_PYRAMID"] == "false"
+    assert "KORSTOCKSCAN_REVERSAL_ADD_MIN_AI_SCORE" not in env
+    assert "KORSTOCKSCAN_REVERSAL_ADD_MIN_BUY_PRESSURE" not in env
+    assert "KORSTOCKSCAN_REVERSAL_ADD_MIN_TICK_ACCEL" not in env
 
 
 # ── hold separation tests ──

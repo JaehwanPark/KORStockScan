@@ -141,6 +141,12 @@ class TradingConfig:
     SCALP_SIM_SCALE_IN_WINDOW_MAX_PROFIT_PCT: float = 2.5
     SCALP_SIM_SCALE_IN_WINDOW_MAX_ORDERS_PER_POSITION: int = 1
     SCALP_SIM_SCALE_IN_WINDOW_MAX_ORDERS_PER_DAY: int = 30
+    SCALP_SIM_SCALE_IN_EXECUTION_OBSERVATION_ENABLED: bool = False
+    SCALP_SIM_SCALE_IN_EXECUTION_ARMS: str = "PASSIVE_BASELINE,MARKETABLE_OBSERVATION"
+    SCALP_SIM_SCALE_IN_PYRAMID_MAX_ORDERS_PER_POSITION: int = 1
+    SCALP_SIM_SCALE_IN_PYRAMID_MAX_ORDERS_PER_DAY: int = 30
+    SCALP_SIM_SCALE_IN_AVG_DOWN_MAX_ORDERS_PER_POSITION: int = 1
+    SCALP_SIM_SCALE_IN_AVG_DOWN_MAX_ORDERS_PER_DAY: int = 30
     SCALP_SIM_PANIC_LIFECYCLE_ENABLED: bool = True
     SCALP_SIM_PANIC_ENTRY_BLOCK_ENABLED: bool = True
     SCALP_SIM_PANIC_SCALE_IN_BLOCK_ENABLED: bool = True
@@ -300,6 +306,11 @@ class TradingConfig:
     SCALP_REAL_WEAK_PULLBACK_ENTRY_BLOCK_ENABLED: bool = False  # real SCALPING 약한 눌림/CAUTION 진입 차단은 runtime env로만 ON
     SCALP_REAL_WEAK_PULLBACK_ENTRY_BLOCK_MIN_MICRO_POSITIVES: int = 2
     SCALP_REAL_WEAK_PULLBACK_ENTRY_BLOCK_MIN_SPREAD_TICKS: int = 5
+    SCALP_SCANNER_REAL_SOURCE_GUARD_ENABLED: bool = False  # real SCALPING scanner churn/repeat guard는 PREOPEN env로만 ON
+    SCALP_SCANNER_REAL_SOURCE_GUARD_BLOCK_VALUE_TOP_ONLY: bool = True
+    SCALP_SCANNER_REAL_SOURCE_GUARD_MAX_DECLINE_PCT: float = 0.0
+    SCALP_CONDITION_UNMATCH_GUARD_ENABLED: bool = False  # real SCALPING 조건검색 unmatched-only churn guard는 PREOPEN env로만 ON
+    SCALP_CONDITION_UNMATCH_GUARD_TAGS: tuple = ("VWAP_RECLAIM", "DRYUP_SQUEEZE", "PRECLOSE")
     SCALP_AGGRESSIVE_ENTRY_PRICE_OVERRIDE_ENABLED: bool = False  # real SCALPING missed-upside 가격 override는 PREOPEN env로만 ON
     SCALP_AGGRESSIVE_ENTRY_PRICE_OVERRIDE_TYPES: str = (
         "defensive_missed_upside_v1,reference_target_cap_missed_upside_v1"
@@ -1179,6 +1190,21 @@ def _build_trading_rules() -> TradingConfig:
     env_scalp_real_weak_pullback_entry_block_min_spread_ticks = _env_int(
         "KORSTOCKSCAN_SCALP_REAL_WEAK_PULLBACK_ENTRY_BLOCK_MIN_SPREAD_TICKS"
     )
+    env_scalp_scanner_real_source_guard_enabled = _env_bool(
+        "KORSTOCKSCAN_SCALP_SCANNER_REAL_SOURCE_GUARD_ENABLED"
+    )
+    env_scalp_scanner_real_source_guard_block_value_top_only = _env_bool(
+        "KORSTOCKSCAN_SCALP_SCANNER_REAL_SOURCE_GUARD_BLOCK_VALUE_TOP_ONLY"
+    )
+    env_scalp_scanner_real_source_guard_max_decline_pct = _env_float(
+        "KORSTOCKSCAN_SCALP_SCANNER_REAL_SOURCE_GUARD_MAX_DECLINE_PCT"
+    )
+    env_scalp_condition_unmatch_guard_enabled = _env_bool(
+        "KORSTOCKSCAN_SCALP_CONDITION_UNMATCH_GUARD_ENABLED"
+    )
+    env_scalp_condition_unmatch_guard_tags = _env_csv_tuple(
+        "KORSTOCKSCAN_SCALP_CONDITION_UNMATCH_GUARD_TAGS"
+    )
     env_scalp_aggressive_entry_price_override_enabled = _env_bool(
         "KORSTOCKSCAN_SCALP_AGGRESSIVE_ENTRY_PRICE_OVERRIDE_ENABLED"
     )
@@ -1336,6 +1362,11 @@ def _build_trading_rules() -> TradingConfig:
         or env_scalping_conditional_strong_defensive_bps is not None
         or env_scalping_normal_favorable_defensive_bps is not None
         or env_scalping_normal_weak_defensive_bps is not None
+        or env_scalp_scanner_real_source_guard_enabled is not None
+        or env_scalp_scanner_real_source_guard_block_value_top_only is not None
+        or env_scalp_scanner_real_source_guard_max_decline_pct is not None
+        or env_scalp_condition_unmatch_guard_enabled is not None
+        or env_scalp_condition_unmatch_guard_tags is not None
         or env_scalping_entry_price_defense_mode is not None
         or env_conditional_1tick_real_enabled is not None
         or env_conditional_1tick_min_buy_ratio is not None
@@ -1503,6 +1534,21 @@ def _build_trading_rules() -> TradingConfig:
             SCALP_REAL_WEAK_PULLBACK_ENTRY_BLOCK_MIN_SPREAD_TICKS=env_scalp_real_weak_pullback_entry_block_min_spread_ticks
             if env_scalp_real_weak_pullback_entry_block_min_spread_ticks is not None
             else config.SCALP_REAL_WEAK_PULLBACK_ENTRY_BLOCK_MIN_SPREAD_TICKS,
+            SCALP_SCANNER_REAL_SOURCE_GUARD_ENABLED=env_scalp_scanner_real_source_guard_enabled
+            if env_scalp_scanner_real_source_guard_enabled is not None
+            else config.SCALP_SCANNER_REAL_SOURCE_GUARD_ENABLED,
+            SCALP_SCANNER_REAL_SOURCE_GUARD_BLOCK_VALUE_TOP_ONLY=env_scalp_scanner_real_source_guard_block_value_top_only
+            if env_scalp_scanner_real_source_guard_block_value_top_only is not None
+            else config.SCALP_SCANNER_REAL_SOURCE_GUARD_BLOCK_VALUE_TOP_ONLY,
+            SCALP_SCANNER_REAL_SOURCE_GUARD_MAX_DECLINE_PCT=env_scalp_scanner_real_source_guard_max_decline_pct
+            if env_scalp_scanner_real_source_guard_max_decline_pct is not None
+            else config.SCALP_SCANNER_REAL_SOURCE_GUARD_MAX_DECLINE_PCT,
+            SCALP_CONDITION_UNMATCH_GUARD_ENABLED=env_scalp_condition_unmatch_guard_enabled
+            if env_scalp_condition_unmatch_guard_enabled is not None
+            else config.SCALP_CONDITION_UNMATCH_GUARD_ENABLED,
+            SCALP_CONDITION_UNMATCH_GUARD_TAGS=env_scalp_condition_unmatch_guard_tags
+            if env_scalp_condition_unmatch_guard_tags is not None
+            else config.SCALP_CONDITION_UNMATCH_GUARD_TAGS,
             SCALP_AGGRESSIVE_ENTRY_PRICE_OVERRIDE_ENABLED=env_scalp_aggressive_entry_price_override_enabled
             if env_scalp_aggressive_entry_price_override_enabled is not None
             else config.SCALP_AGGRESSIVE_ENTRY_PRICE_OVERRIDE_ENABLED,
@@ -1893,6 +1939,24 @@ def _build_trading_rules() -> TradingConfig:
     env_scalp_sim_scale_in_window_max_orders_day = _env_int(
         "KORSTOCKSCAN_SCALP_SIM_SCALE_IN_WINDOW_MAX_ORDERS_PER_DAY"
     )
+    env_scalp_sim_scale_in_execution_observation_enabled = _env_bool(
+        "KORSTOCKSCAN_SCALP_SIM_SCALE_IN_EXECUTION_OBSERVATION_ENABLED"
+    )
+    env_scalp_sim_scale_in_execution_arms = _env_str(
+        "KORSTOCKSCAN_SCALP_SIM_SCALE_IN_EXECUTION_ARMS"
+    )
+    env_scalp_sim_scale_in_pyramid_max_orders_position = _env_int(
+        "KORSTOCKSCAN_SCALP_SIM_SCALE_IN_PYRAMID_MAX_ORDERS_PER_POSITION"
+    )
+    env_scalp_sim_scale_in_pyramid_max_orders_day = _env_int(
+        "KORSTOCKSCAN_SCALP_SIM_SCALE_IN_PYRAMID_MAX_ORDERS_PER_DAY"
+    )
+    env_scalp_sim_scale_in_avg_down_max_orders_position = _env_int(
+        "KORSTOCKSCAN_SCALP_SIM_SCALE_IN_AVG_DOWN_MAX_ORDERS_PER_POSITION"
+    )
+    env_scalp_sim_scale_in_avg_down_max_orders_day = _env_int(
+        "KORSTOCKSCAN_SCALP_SIM_SCALE_IN_AVG_DOWN_MAX_ORDERS_PER_DAY"
+    )
     env_scalp_sim_panic_lifecycle_enabled = _env_bool(
         "KORSTOCKSCAN_SCALP_SIM_PANIC_LIFECYCLE_ENABLED"
     )
@@ -2042,6 +2106,18 @@ def _build_trading_rules() -> TradingConfig:
         or env_scalp_sim_ai_soft_loss_defer_enabled is not None
         or env_scalp_sim_ai_safe_profit_bypass_enabled is not None
         or env_scalp_sim_ai_critical_drawdown is not None
+        or env_scalp_sim_scale_in_window_enabled is not None
+        or env_scalp_sim_scale_in_window_allowed_arms is not None
+        or env_scalp_sim_scale_in_window_min_profit is not None
+        or env_scalp_sim_scale_in_window_max_profit is not None
+        or env_scalp_sim_scale_in_window_max_orders_position is not None
+        or env_scalp_sim_scale_in_window_max_orders_day is not None
+        or env_scalp_sim_scale_in_execution_observation_enabled is not None
+        or env_scalp_sim_scale_in_execution_arms is not None
+        or env_scalp_sim_scale_in_pyramid_max_orders_position is not None
+        or env_scalp_sim_scale_in_pyramid_max_orders_day is not None
+        or env_scalp_sim_scale_in_avg_down_max_orders_position is not None
+        or env_scalp_sim_scale_in_avg_down_max_orders_day is not None
         or env_sim_virtual_budget_krw is not None
         or env_scalp_live_simulator_timeout is not None
         or env_stat_action_snapshot_enabled is not None
@@ -2234,6 +2310,24 @@ def _build_trading_rules() -> TradingConfig:
             SCALP_SIM_SCALE_IN_WINDOW_MAX_ORDERS_PER_DAY=env_scalp_sim_scale_in_window_max_orders_day
             if env_scalp_sim_scale_in_window_max_orders_day is not None
             else config.SCALP_SIM_SCALE_IN_WINDOW_MAX_ORDERS_PER_DAY,
+            SCALP_SIM_SCALE_IN_EXECUTION_OBSERVATION_ENABLED=env_scalp_sim_scale_in_execution_observation_enabled
+            if env_scalp_sim_scale_in_execution_observation_enabled is not None
+            else config.SCALP_SIM_SCALE_IN_EXECUTION_OBSERVATION_ENABLED,
+            SCALP_SIM_SCALE_IN_EXECUTION_ARMS=env_scalp_sim_scale_in_execution_arms
+            if env_scalp_sim_scale_in_execution_arms is not None
+            else config.SCALP_SIM_SCALE_IN_EXECUTION_ARMS,
+            SCALP_SIM_SCALE_IN_PYRAMID_MAX_ORDERS_PER_POSITION=env_scalp_sim_scale_in_pyramid_max_orders_position
+            if env_scalp_sim_scale_in_pyramid_max_orders_position is not None
+            else config.SCALP_SIM_SCALE_IN_PYRAMID_MAX_ORDERS_PER_POSITION,
+            SCALP_SIM_SCALE_IN_PYRAMID_MAX_ORDERS_PER_DAY=env_scalp_sim_scale_in_pyramid_max_orders_day
+            if env_scalp_sim_scale_in_pyramid_max_orders_day is not None
+            else config.SCALP_SIM_SCALE_IN_PYRAMID_MAX_ORDERS_PER_DAY,
+            SCALP_SIM_SCALE_IN_AVG_DOWN_MAX_ORDERS_PER_POSITION=env_scalp_sim_scale_in_avg_down_max_orders_position
+            if env_scalp_sim_scale_in_avg_down_max_orders_position is not None
+            else config.SCALP_SIM_SCALE_IN_AVG_DOWN_MAX_ORDERS_PER_POSITION,
+            SCALP_SIM_SCALE_IN_AVG_DOWN_MAX_ORDERS_PER_DAY=env_scalp_sim_scale_in_avg_down_max_orders_day
+            if env_scalp_sim_scale_in_avg_down_max_orders_day is not None
+            else config.SCALP_SIM_SCALE_IN_AVG_DOWN_MAX_ORDERS_PER_DAY,
             SCALP_SIM_PANIC_LIFECYCLE_ENABLED=env_scalp_sim_panic_lifecycle_enabled
             if env_scalp_sim_panic_lifecycle_enabled is not None
             else config.SCALP_SIM_PANIC_LIFECYCLE_ENABLED,

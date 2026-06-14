@@ -483,6 +483,13 @@ class DBManager:
             if df.empty:
                 return []
 
+            # S15 rows are owned by the fast-track module: S15_CANDID is TTL
+            # arm persistence, and S15_FAST is shadow lifecycle tracking.
+            # Neither should enter the generic WATCHING/HOLDING loop.
+            df = df[~df['strategy'].astype(str).str.upper().isin({'S15_CANDID', 'S15_FAST'})]
+            if df.empty:
+                return []
+
             df['strategy'] = df['strategy'].apply(normalize_strategy)
             df['position_tag'] = df.apply(
                 lambda row: normalize_position_tag(row.get('strategy'), row.get('position_tag')),

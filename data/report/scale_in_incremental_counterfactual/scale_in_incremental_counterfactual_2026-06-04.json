@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "date": "2026-06-04",
+  "report_type": "scale_in_incremental_counterfactual",
+  "runtime_effect": false,
+  "decision_authority": "sim_scale_in_counterfactual_only",
+  "error": "no_counterfactual_events_found",
+  "rows": [],
+  "summary": {
+    "counterfactual_event_count": 0
+  }
+}

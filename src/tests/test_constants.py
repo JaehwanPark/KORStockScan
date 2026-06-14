@@ -74,6 +74,11 @@ def test_trading_rules_scalping_entry_price_percent_bps_env_override(monkeypatch
     monkeypatch.setenv("KORSTOCKSCAN_SCALP_REAL_WEAK_PULLBACK_ENTRY_BLOCK_ENABLED", "true")
     monkeypatch.setenv("KORSTOCKSCAN_SCALP_REAL_WEAK_PULLBACK_ENTRY_BLOCK_MIN_MICRO_POSITIVES", "2")
     monkeypatch.setenv("KORSTOCKSCAN_SCALP_REAL_WEAK_PULLBACK_ENTRY_BLOCK_MIN_SPREAD_TICKS", "5")
+    monkeypatch.setenv("KORSTOCKSCAN_SCALP_SCANNER_REAL_SOURCE_GUARD_ENABLED", "true")
+    monkeypatch.setenv("KORSTOCKSCAN_SCALP_SCANNER_REAL_SOURCE_GUARD_BLOCK_VALUE_TOP_ONLY", "true")
+    monkeypatch.setenv("KORSTOCKSCAN_SCALP_SCANNER_REAL_SOURCE_GUARD_MAX_DECLINE_PCT", "0.0")
+    monkeypatch.setenv("KORSTOCKSCAN_SCALP_CONDITION_UNMATCH_GUARD_ENABLED", "true")
+    monkeypatch.setenv("KORSTOCKSCAN_SCALP_CONDITION_UNMATCH_GUARD_TAGS", "VWAP_RECLAIM,DRYUP_SQUEEZE,PRECLOSE")
     monkeypatch.setenv("KORSTOCKSCAN_SCALP_AGGRESSIVE_ENTRY_PRICE_OVERRIDE_ENABLED", "true")
     monkeypatch.setenv(
         "KORSTOCKSCAN_SCALP_AGGRESSIVE_ENTRY_PRICE_OVERRIDE_TYPES",
@@ -108,6 +113,15 @@ def test_trading_rules_scalping_entry_price_percent_bps_env_override(monkeypatch
     assert reloaded.TRADING_RULES.SCALP_REAL_WEAK_PULLBACK_ENTRY_BLOCK_ENABLED is True
     assert reloaded.TRADING_RULES.SCALP_REAL_WEAK_PULLBACK_ENTRY_BLOCK_MIN_MICRO_POSITIVES == 2
     assert reloaded.TRADING_RULES.SCALP_REAL_WEAK_PULLBACK_ENTRY_BLOCK_MIN_SPREAD_TICKS == 5
+    assert reloaded.TRADING_RULES.SCALP_SCANNER_REAL_SOURCE_GUARD_ENABLED is True
+    assert reloaded.TRADING_RULES.SCALP_SCANNER_REAL_SOURCE_GUARD_BLOCK_VALUE_TOP_ONLY is True
+    assert reloaded.TRADING_RULES.SCALP_SCANNER_REAL_SOURCE_GUARD_MAX_DECLINE_PCT == 0.0
+    assert reloaded.TRADING_RULES.SCALP_CONDITION_UNMATCH_GUARD_ENABLED is True
+    assert reloaded.TRADING_RULES.SCALP_CONDITION_UNMATCH_GUARD_TAGS == (
+        "VWAP_RECLAIM",
+        "DRYUP_SQUEEZE",
+        "PRECLOSE",
+    )
     assert reloaded.TRADING_RULES.SCALP_AGGRESSIVE_ENTRY_PRICE_OVERRIDE_ENABLED is True
     assert (
         reloaded.TRADING_RULES.SCALP_AGGRESSIVE_ENTRY_PRICE_OVERRIDE_TYPES
@@ -262,6 +276,25 @@ def test_trading_rules_scalp_sim_candidate_window_defaults_and_env_override(monk
     assert reloaded.TRADING_RULES.SCALP_SIM_CANDIDATE_WINDOW_TIME_BUCKET_POLICY == (
         "09:00-10:00=100,10:00-15:30=220"
     )
+
+
+def test_trading_rules_scalp_sim_scale_in_execution_observation_env(monkeypatch):
+    monkeypatch.setenv("KORSTOCKSCAN_SCALP_SIM_SCALE_IN_EXECUTION_OBSERVATION_ENABLED", "true")
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_SCALP_SIM_SCALE_IN_EXECUTION_ARMS",
+        "PASSIVE_BASELINE,MARKETABLE_OBSERVATION",
+    )
+    monkeypatch.setenv("KORSTOCKSCAN_SCALP_SIM_SCALE_IN_PYRAMID_MAX_ORDERS_PER_DAY", "12")
+    monkeypatch.setenv("KORSTOCKSCAN_SCALP_SIM_SCALE_IN_AVG_DOWN_MAX_ORDERS_PER_POSITION", "2")
+
+    reloaded = importlib.reload(constants)
+
+    assert reloaded.TRADING_RULES.SCALP_SIM_SCALE_IN_EXECUTION_OBSERVATION_ENABLED is True
+    assert reloaded.TRADING_RULES.SCALP_SIM_SCALE_IN_EXECUTION_ARMS == (
+        "PASSIVE_BASELINE,MARKETABLE_OBSERVATION"
+    )
+    assert reloaded.TRADING_RULES.SCALP_SIM_SCALE_IN_PYRAMID_MAX_ORDERS_PER_DAY == 12
+    assert reloaded.TRADING_RULES.SCALP_SIM_SCALE_IN_AVG_DOWN_MAX_ORDERS_PER_POSITION == 2
 
 
 def test_trading_rules_runtime_shadow_defaults_are_off(monkeypatch):

@@ -41,12 +41,15 @@ def build_scalp_sim_scale_in_window_approval(target_date: str) -> dict[str, Any]
         (item for item in policy_entries if isinstance(item, dict) and item.get("stage") == "scale_in"),
         {},
     )
+    matrix_status = str(summary.get("status") or "")
     if not matrix_exists:
         source_quality_status = "source_report_missing"
     elif not matrix:
         source_quality_status = "source_report_unreadable"
-    else:
+    elif matrix_status == "pass":
         source_quality_status = "pass"
+    else:
+        source_quality_status = matrix_status or "source_report_status_missing"
     auto_approved = source_quality_status == "pass"
     artifact = {
         "schema_version": 1,
@@ -60,7 +63,7 @@ def build_scalp_sim_scale_in_window_approval(target_date: str) -> dict[str, Any]
         "human_approval_required": False,
         "decision_authority": "sim_auto_approval_only",
         "runtime_effect": False,
-        "allowed_runtime_apply": True,
+        "allowed_runtime_apply": auto_approved,
         "actual_order_submitted": False,
         "broker_order_forbidden": True,
         "real_order_forbidden": True,
@@ -83,6 +86,12 @@ def build_scalp_sim_scale_in_window_approval(target_date: str) -> dict[str, Any]
             "SCALP_SIM_SCALE_IN_WINDOW_MAX_PROFIT_PCT",
             "SCALP_SIM_SCALE_IN_WINDOW_MAX_ORDERS_PER_POSITION",
             "SCALP_SIM_SCALE_IN_WINDOW_MAX_ORDERS_PER_DAY",
+            "SCALP_SIM_SCALE_IN_EXECUTION_OBSERVATION_ENABLED",
+            "SCALP_SIM_SCALE_IN_EXECUTION_ARMS",
+            "SCALP_SIM_SCALE_IN_PYRAMID_MAX_ORDERS_PER_POSITION",
+            "SCALP_SIM_SCALE_IN_PYRAMID_MAX_ORDERS_PER_DAY",
+            "SCALP_SIM_SCALE_IN_AVG_DOWN_MAX_ORDERS_PER_POSITION",
+            "SCALP_SIM_SCALE_IN_AVG_DOWN_MAX_ORDERS_PER_DAY",
         ],
         "recommended_values": {
             "enabled": True,
@@ -91,6 +100,12 @@ def build_scalp_sim_scale_in_window_approval(target_date: str) -> dict[str, Any]
             "max_profit_pct": 2.5,
             "max_orders_per_position": 1,
             "max_orders_per_day": 30,
+            "execution_observation_enabled": True,
+            "execution_arms": "PASSIVE_BASELINE,MARKETABLE_OBSERVATION",
+            "pyramid_max_orders_per_position": 1,
+            "pyramid_max_orders_per_day": 30,
+            "avg_down_max_orders_per_position": 1,
+            "avg_down_max_orders_per_day": 30,
         },
         "approval_contract": {
             "actual_order_submitted": False,

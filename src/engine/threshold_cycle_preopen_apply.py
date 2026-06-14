@@ -163,6 +163,11 @@ TARGET_ENV_VALUE_KEYS = {
     "SCALPING_CONDITIONAL_1TICK_REAL_ENABLED": "conditional_1tick_real_enabled",
     "SCALP_AGGRESSIVE_ENTRY_PRICE_OVERRIDE_ENABLED": "enabled",
     "SCALP_AGGRESSIVE_ENTRY_PRICE_OVERRIDE_TYPES": "types",
+    "SCALP_SCANNER_REAL_SOURCE_GUARD_ENABLED": "enabled",
+    "SCALP_SCANNER_REAL_SOURCE_GUARD_BLOCK_VALUE_TOP_ONLY": "block_value_top_only",
+    "SCALP_SCANNER_REAL_SOURCE_GUARD_MAX_DECLINE_PCT": "max_decline_pct",
+    "SCALP_CONDITION_UNMATCH_GUARD_ENABLED": "condition_unmatch_guard_enabled",
+    "SCALP_CONDITION_UNMATCH_GUARD_TAGS": "condition_unmatch_guard_tags",
     "SCALP_DEFENSIVE_MISSED_UPSIDE_MIN_ORIGINAL_BPS": "min_original_bps",
     "SCALP_DEFENSIVE_MISSED_UPSIDE_TARGET_MODE": "target_mode",
     "SCALP_DEFENSIVE_MISSED_UPSIDE_NEUTRAL_BID_MINUS_TICKS": "neutral_bid_minus_ticks",
@@ -199,6 +204,12 @@ TARGET_ENV_VALUE_KEYS = {
     "SCALP_SIM_SCALE_IN_WINDOW_MAX_PROFIT_PCT": "max_profit_pct",
     "SCALP_SIM_SCALE_IN_WINDOW_MAX_ORDERS_PER_POSITION": "max_orders_per_position",
     "SCALP_SIM_SCALE_IN_WINDOW_MAX_ORDERS_PER_DAY": "max_orders_per_day",
+    "SCALP_SIM_SCALE_IN_EXECUTION_OBSERVATION_ENABLED": "execution_observation_enabled",
+    "SCALP_SIM_SCALE_IN_EXECUTION_ARMS": "execution_arms",
+    "SCALP_SIM_SCALE_IN_PYRAMID_MAX_ORDERS_PER_POSITION": "pyramid_max_orders_per_position",
+    "SCALP_SIM_SCALE_IN_PYRAMID_MAX_ORDERS_PER_DAY": "pyramid_max_orders_per_day",
+    "SCALP_SIM_SCALE_IN_AVG_DOWN_MAX_ORDERS_PER_POSITION": "avg_down_max_orders_per_position",
+    "SCALP_SIM_SCALE_IN_AVG_DOWN_MAX_ORDERS_PER_DAY": "avg_down_max_orders_per_day",
     "SCALP_SIM_CANDIDATE_WINDOW_MAX_DAILY": "max_daily",
     "SCALP_SIM_CANDIDATE_WINDOW_BLOCKED_AI_SCORE_MAX_SHARE_PCT": "blocked_ai_score_max_share_pct",
     "SCALP_SIM_CANDIDATE_WINDOW_FIRST_AI_WAIT_MIN_SHARE_PCT": "first_ai_wait_min_share_pct",
@@ -223,9 +234,19 @@ TARGET_ENV_VALUE_KEYS = {
 }
 
 AGGRESSIVE_ENTRY_PRICE_OVERRIDE_FAMILY = "aggressive_entry_price_override_runtime"
+SCALPING_SCANNER_REAL_SOURCE_GUARD_FAMILY = "scalping_scanner_real_source_guard_runtime"
 ENTRY_PRICE_LIVE_TUNING_MARKER_ENV = "KORSTOCKSCAN_ENTRY_PRICE_LIVE_TUNING_SELECTED"
 SOFT_STOP_DYNAMIC_GRACE_FAMILY = "soft_stop_dynamic_grace_runtime"
 HOLDING_EXIT_LIVE_TUNING_MARKER_ENV = "KORSTOCKSCAN_HOLDING_EXIT_LIVE_TUNING_SELECTED"
+SCALPING_SCANNER_REAL_SOURCE_GUARD_ENV_KEYS = frozenset(
+    {
+        "KORSTOCKSCAN_SCALP_SCANNER_REAL_SOURCE_GUARD_ENABLED",
+        "KORSTOCKSCAN_SCALP_SCANNER_REAL_SOURCE_GUARD_BLOCK_VALUE_TOP_ONLY",
+        "KORSTOCKSCAN_SCALP_SCANNER_REAL_SOURCE_GUARD_MAX_DECLINE_PCT",
+        "KORSTOCKSCAN_SCALP_CONDITION_UNMATCH_GUARD_ENABLED",
+        "KORSTOCKSCAN_SCALP_CONDITION_UNMATCH_GUARD_TAGS",
+    }
+)
 AGGRESSIVE_ENTRY_PRICE_OVERRIDE_ENV_KEYS = frozenset(
     {
         "KORSTOCKSCAN_SCALP_AGGRESSIVE_ENTRY_PRICE_OVERRIDE_ENABLED",
@@ -598,7 +619,7 @@ _FAMILY_ENV_KEY_PREFIXES: dict[str, str] = {
     "lifecycle_decision_matrix_runtime": "KORSTOCKSCAN_LIFECYCLE_DECISION_MATRIX_",
     "scalp_sim_auto_approval": "KORSTOCKSCAN_SCALP_SIM_AUTO_POLICY_",
     "swing_sim_auto_approval": "KORSTOCKSCAN_SWING_SIM_AUTO_POLICY_",
-    "scalp_sim_scale_in_window_expansion": "KORSTOCKSCAN_SCALP_SIM_SCALE_IN_WINDOW_",
+    "scalp_sim_scale_in_window_expansion": "KORSTOCKSCAN_SCALP_SIM_SCALE_IN_",
     "lifecycle_bucket_discovery_sim_auto_approval": "KORSTOCKSCAN_LIFECYCLE_BUCKET_DISCOVERY_",
 }
 
@@ -1435,7 +1456,7 @@ def _load_scalp_sim_auto_approval(source_date: str | None) -> dict[str, Any]:
             target_env_keys.extend(
                 str(item)
                 for item in (policy.get("target_env_keys") or [])
-                if str(item or "").startswith("SCALP_SIM_SCALE_IN_WINDOW_")
+                if str(item or "").startswith("SCALP_SIM_SCALE_IN_")
             )
             current_values.update(
                 {
@@ -1687,6 +1708,23 @@ def _ai_guard_allows_candidate(candidate: dict[str, Any], ai_review: dict[str, A
     return (True, "ai_guard_accepted")
 
 
+def _scanner_guard_operator_lock_stage_coexist(
+    *,
+    family: str,
+    stage: str,
+    selected_by_stage: dict[str, dict[str, Any]],
+    locks_by_family: dict[str, dict[str, Any]],
+) -> bool:
+    if family != SCALPING_SCANNER_REAL_SOURCE_GUARD_FAMILY or stage not in selected_by_stage:
+        return False
+    previous = selected_by_stage[stage]
+    previous_family = str(previous.get("family") or "")
+    return (
+        str(previous.get("calibration_state") or "") == "operator_locked"
+        or previous_family in locks_by_family
+    )
+
+
 def _select_auto_apply_candidates(
     calibration_candidates: list[dict[str, Any]],
     *,
@@ -1759,12 +1797,22 @@ def _select_auto_apply_candidates(
             reject_reason = reason
         elif not _env_overrides_for_candidate(candidate):
             reject_reason = "no_runtime_env_override"
-        elif stage in selected_by_stage:
+        elif stage in selected_by_stage and not _scanner_guard_operator_lock_stage_coexist(
+            family=family,
+            stage=stage,
+            selected_by_stage=selected_by_stage,
+            locks_by_family=locks_by_family,
+        ):
             reject_reason = f"same_stage_owner_conflict:{selected_by_stage[stage].get('family')}"
 
         lock_applied = False
         lock_stage_conflict_reason = ""
-        if lock and stage in selected_by_stage:
+        if lock and stage in selected_by_stage and not _scanner_guard_operator_lock_stage_coexist(
+            family=family,
+            stage=stage,
+            selected_by_stage=selected_by_stage,
+            locks_by_family=locks_by_family,
+        ):
             lock_stage_conflict_reason = f"same_stage_owner_conflict:{selected_by_stage[stage].get('family')}"
         lock_close_reasons = _candidate_close_reasons(candidate, reject_reason)
         if lock_stage_conflict_reason:
@@ -1837,11 +1885,76 @@ def _entry_price_live_owner_family(*selected_groups: list[dict[str, Any]]) -> st
             if not isinstance(item, dict):
                 continue
             family = str(item.get("family") or "")
-            if family == AGGRESSIVE_ENTRY_PRICE_OVERRIDE_FAMILY:
+            if family in {
+                AGGRESSIVE_ENTRY_PRICE_OVERRIDE_FAMILY,
+                SCALPING_SCANNER_REAL_SOURCE_GUARD_FAMILY,
+            }:
                 continue
             if str(item.get("stage") or "") == "entry":
                 return family
     return ""
+
+
+def _entry_live_tuning_owner_family(*selected_groups: list[dict[str, Any]]) -> str:
+    for group in selected_groups:
+        for item in group or []:
+            if not isinstance(item, dict):
+                continue
+            family = str(item.get("family") or "")
+            if family in {
+                AGGRESSIVE_ENTRY_PRICE_OVERRIDE_FAMILY,
+                SCALPING_SCANNER_REAL_SOURCE_GUARD_FAMILY,
+            }:
+                continue
+            if str(item.get("stage") or "") != "entry":
+                continue
+            if str(item.get("calibration_state") or "") == "operator_locked":
+                continue
+            if isinstance(item.get("operator_runtime_env_lock"), dict):
+                continue
+            return family
+    return ""
+
+
+def _close_scalping_scanner_real_source_guard_for_live_owner(
+    *,
+    selected: list[dict[str, Any]],
+    decisions: list[dict[str, Any]],
+    env_overrides: dict[str, str],
+    owner_family: str,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, str]]:
+    if not owner_family:
+        return selected, decisions, env_overrides
+    reason = f"same_stage_owner_conflict:{owner_family}"
+    filtered_selected = [
+        item
+        for item in selected
+        if str(item.get("family") or "") != SCALPING_SCANNER_REAL_SOURCE_GUARD_FAMILY
+    ]
+    filtered_env = {
+        key: value
+        for key, value in env_overrides.items()
+        if str(key) not in SCALPING_SCANNER_REAL_SOURCE_GUARD_ENV_KEYS
+    }
+    updated_decisions: list[dict[str, Any]] = []
+    for decision in decisions:
+        if str(decision.get("family") or "") != SCALPING_SCANNER_REAL_SOURCE_GUARD_FAMILY:
+            updated_decisions.append(decision)
+            continue
+        next_decision = {**decision, "selected": False, "decision_reason": reason, "env_overrides": {}}
+        lock = next_decision.get("operator_runtime_env_lock")
+        if isinstance(lock, dict):
+            close_reasons = list(lock.get("close_reasons") or [])
+            if reason not in close_reasons:
+                close_reasons.append(reason)
+            next_decision["operator_runtime_env_lock"] = {
+                **lock,
+                "applied": False,
+                "close_reasons": close_reasons,
+                "allowed_close": _lock_allows_close(lock, close_reasons),
+            }
+        updated_decisions.append(next_decision)
+    return filtered_selected, updated_decisions, filtered_env
 
 
 def _holding_exit_live_owner_family(*selected_groups: list[dict[str, Any]]) -> str:
@@ -2058,6 +2171,8 @@ SELECTED_FAMILY_REQUIRED_ENV_KEYS: dict[str, list[str]] = {
     ],
     "scalp_sim_scale_in_window_expansion": [
         "KORSTOCKSCAN_SCALP_SIM_SCALE_IN_WINDOW_EXPANSION_ENABLED",
+        "KORSTOCKSCAN_SCALP_SIM_SCALE_IN_EXECUTION_OBSERVATION_ENABLED",
+        "KORSTOCKSCAN_SCALP_SIM_SCALE_IN_EXECUTION_ARMS",
     ],
 }
 
@@ -2569,6 +2684,10 @@ def build_preopen_apply_manifest(
                 selected,
                 runtime_bridge_selected,
             )
+            entry_live_tuning_owner_family = _entry_live_tuning_owner_family(
+                selected,
+                runtime_bridge_selected,
+            )
             holding_exit_live_owner_family = _holding_exit_live_owner_family(
                 selected,
                 runtime_bridge_selected,
@@ -2578,6 +2697,12 @@ def build_preopen_apply_manifest(
                 decisions=decisions,
                 env_overrides=env_overrides,
                 owner_family=entry_price_live_owner_family,
+            )
+            selected, decisions, env_overrides = _close_scalping_scanner_real_source_guard_for_live_owner(
+                selected=selected,
+                decisions=decisions,
+                env_overrides=env_overrides,
+                owner_family=entry_live_tuning_owner_family,
             )
             selected, decisions, env_overrides = _close_soft_stop_dynamic_grace_for_live_owner(
                 selected=selected,

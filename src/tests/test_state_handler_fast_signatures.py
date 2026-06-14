@@ -9,11 +9,14 @@ from src.engine.sniper_state_handlers import (
     _build_ai_overlap_log_fields,
     _build_ai_ops_log_fields,
     _build_observation_contract_fields,
+    _score65_74_recovery_probe_block_contract_fields,
     _ensure_ai_source_quality_fields,
     _build_gatekeeper_fast_signature,
     _build_holding_ai_fast_signature,
     _extract_ai_overlap_snapshot,
     _is_score65_74_recovery_probe_entry_unlocked,
+    _score65_74_recovery_probe_decision,
+    _score65_74_recovery_probe_reuse_guard,
     _resolve_wait6579_probe_entry_unlock,
     _should_apply_ai_score_50_buy_hold_override,
     _should_publish_watching_buy_analysis_telegram,
@@ -140,12 +143,16 @@ def test_watching_state_change_refresh_allows_one_call_per_cooldown(monkeypatch)
     assert blocked_after_refresh_call["reason"] == "already_refreshed_this_cooldown"
 
 
-def test_scalping_entry_blocker_role_registry_keeps_micro_and_gap_non_hard():
+def test_scalping_entry_blocker_role_registry_marks_score6574_micro_as_runtime_gate():
     assert SCALPING_ENTRY_BLOCKER_ROLE_REGISTRY["blocked_gap_from_scan"]["role"] == "baseline_prior_feature"
     assert SCALPING_ENTRY_BLOCKER_ROLE_REGISTRY["blocked_gap_from_scan"]["hard_block_allowed"] is False
     assert (
         SCALPING_ENTRY_BLOCKER_ROLE_REGISTRY["score65_74_recovery_probe_micro_context"]["gate_action"]
-        == "feature_snapshot_only"
+        == "runtime_min_micro_gate"
+    )
+    assert (
+        SCALPING_ENTRY_BLOCKER_ROLE_REGISTRY["score65_74_recovery_probe_micro_context"]["hard_block_allowed"]
+        is True
     )
     assert (
         SCALPING_ENTRY_BLOCKER_ROLE_REGISTRY["main_buy_recovery_canary_micro_context"]["hard_block_allowed"]
@@ -568,7 +575,7 @@ def test_should_run_score65_74_recovery_probe_uses_dedicated_default_off_flag(mo
     ) is False
 
 
-def test_score65_74_recovery_probe_keeps_micro_context_feature_only(monkeypatch):
+def test_score65_74_recovery_probe_enforces_micro_context_hard_gate(monkeypatch):
     rules = replace(
         TRADING_RULES,
         AI_SCORE65_74_RECOVERY_PROBE_ENABLED=True,
@@ -594,7 +601,20 @@ def test_score65_74_recovery_probe_keeps_micro_context_feature_only(monkeypatch)
         [],
         None,
         feature_probe=weak_micro_feature_probe,
-    ) is True
+    ) is False
+    decision = _score65_74_recovery_probe_decision(
+        {"action": "WAIT"},
+        62,
+        {"latency_state": "OK"},
+        [],
+        [],
+        None,
+        feature_probe=weak_micro_feature_probe,
+    )
+    assert decision["allowed"] is False
+    assert decision["score65_74_recovery_probe_skip_reason"] == (
+        "buy_pressure_below_min|tick_accel_below_min|micro_vwap_below_min"
+    )
     assert _should_run_score65_74_recovery_probe(
         {"action": "WAIT"},
         62,
@@ -613,6 +633,122 @@ def test_score65_74_recovery_probe_keeps_micro_context_feature_only(monkeypatch)
         None,
         feature_probe=weak_micro_feature_probe,
     ) is False
+
+
+def test_score65_74_recovery_probe_blocks_lg_innotek_style_falling_wait(monkeypatch):
+    rules = replace(
+        TRADING_RULES,
+        AI_SCORE65_74_RECOVERY_PROBE_ENABLED=True,
+        AI_SCORE65_74_RECOVERY_PROBE_MIN_SCORE=60,
+        AI_SCORE65_74_RECOVERY_PROBE_MAX_SCORE=74,
+        AI_SCORE65_74_RECOVERY_PROBE_MIN_BUY_PRESSURE=65.0,
+        AI_SCORE65_74_RECOVERY_PROBE_MIN_TICK_ACCEL=1.2,
+        AI_SCORE65_74_RECOVERY_PROBE_MIN_MICRO_VWAP_BP=0.0,
+    )
+    monkeypatch.setattr("src.engine.sniper_state_handlers.TRADING_RULES", rules)
+
+    decision = _score65_74_recovery_probe_decision(
+        {"action": "WAIT"},
+        62,
+        {"latency_state": "OK", "curr": 1050000},
+        [],
+        [],
+        None,
+        feature_probe={
+            "buy_pressure": 50.0,
+            "tick_accel": 1.0,
+            "micro_vwap_bp": -8.34,
+            "large_sell_print": False,
+        },
+    )
+
+    assert decision["allowed"] is False
+    assert "micro_vwap_below_min" in decision["score65_74_recovery_probe_skip_reason"]
+    assert "tick_accel_below_min" in decision["score65_74_recovery_probe_skip_reason"]
+
+
+def test_score65_74_recovery_probe_blocks_same_symbol_cooldown(monkeypatch):
+    rules = replace(
+        TRADING_RULES,
+        AI_SCORE65_74_RECOVERY_PROBE_ENABLED=True,
+        AI_SCORE65_74_RECOVERY_PROBE_MIN_SCORE=60,
+        AI_SCORE65_74_RECOVERY_PROBE_MAX_SCORE=74,
+        AI_SCORE65_74_RECOVERY_PROBE_MIN_BUY_PRESSURE=65.0,
+        AI_SCORE65_74_RECOVERY_PROBE_MIN_TICK_ACCEL=1.2,
+        AI_SCORE65_74_RECOVERY_PROBE_MIN_MICRO_VWAP_BP=0.0,
+    )
+    monkeypatch.setattr("src.engine.sniper_state_handlers.TRADING_RULES", rules)
+
+    decision = _score65_74_recovery_probe_decision(
+        {"action": "WAIT"},
+        62,
+        {"latency_state": "OK", "curr": 1050000},
+        [],
+        [],
+        None,
+        feature_probe={
+            "buy_pressure": 80.0,
+            "tick_accel": 1.5,
+            "micro_vwap_bp": 3.0,
+            "large_sell_print": False,
+        },
+        stock={"score65_74_recovery_probe_cancel_cooldown_until": 2_000.0},
+        code="011070",
+        now_ts=1_000.0,
+    )
+
+    assert decision["allowed"] is False
+    assert decision["score65_74_recovery_probe_skip_reason"] == (
+        "same_symbol_cooldown_active:entry_cancel_confirmed"
+    )
+
+
+def test_score65_74_recovery_probe_block_contract_fields_are_single_source_of_authority():
+    fields = dict(
+        **_score65_74_recovery_probe_block_contract_fields(),
+        applied=False,
+        threshold_family="score65_74_recovery_probe",
+        score65_74_recovery_probe_skip_reason="tick_accel_below_min",
+        ai_score="62.0",
+        buy_pressure="70.00",
+        tick_accel="0.900",
+        micro_vwap_bp="2.00",
+        score65_74_recovery_probe_min_buy_pressure="65.00",
+        score65_74_recovery_probe_min_tick_accel="1.200",
+        score65_74_recovery_probe_min_micro_vwap_bp="0.00",
+    )
+
+    assert fields["runtime_effect"] is False
+    assert fields["decision_authority"] == "score65_74_recovery_probe_block_observation_only"
+    assert fields["actual_order_submitted"] is False
+    assert fields["broker_order_forbidden"] is True
+
+
+def test_score65_74_recovery_probe_reuse_guard_blocks_stale_armed_cancel_cooldown(monkeypatch):
+    rules = replace(
+        TRADING_RULES,
+        AI_SCORE65_74_RECOVERY_PROBE_MIN_BUY_PRESSURE=65.0,
+        AI_SCORE65_74_RECOVERY_PROBE_MIN_TICK_ACCEL=1.2,
+        AI_SCORE65_74_RECOVERY_PROBE_MIN_MICRO_VWAP_BP=0.0,
+    )
+    monkeypatch.setattr("src.engine.sniper_state_handlers.TRADING_RULES", rules)
+
+    decision = _score65_74_recovery_probe_reuse_guard(
+        {
+            "score65_74_recovery_probe_cancel_cooldown_until": 2_000.0,
+            "score65_74_recovery_probe_last_buy_pressure": 80.0,
+            "score65_74_recovery_probe_last_tick_accel": 1.5,
+            "score65_74_recovery_probe_last_micro_vwap_bp": 2.0,
+        },
+        "011070",
+        {"curr": 1050000},
+        now_ts=1_000.0,
+    )
+
+    assert decision["allowed"] is False
+    assert decision["score65_74_recovery_probe_skip_reason"] == (
+        "same_symbol_cooldown_active:entry_cancel_confirmed"
+    )
 
 
 def test_score65_74_recovery_probe_default_floor_includes_low_60s(monkeypatch):

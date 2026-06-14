@@ -764,6 +764,12 @@ if [ "$RUN_OBSERVATION_SOURCE_QUALITY_AUDIT" = "true" ] || [ "$RUN_OBSERVATION_S
     "observation_source_quality_preflight"
 fi
 if [ "$RUN_LIFECYCLE_DECISION_MATRIX" = "true" ] || [ "$RUN_LIFECYCLE_DECISION_MATRIX" = "1" ]; then
+  wait_for_postclose_resources "scale_in_incremental_counterfactual"
+  run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.lifecycle.scale_in_incremental_counterfactual --date "$TARGET_DATE"
+  wait_for_report_artifact \
+    "$PROJECT_DIR/data/report/scale_in_incremental_counterfactual/scale_in_incremental_counterfactual_${TARGET_DATE}.json" \
+    "$PROJECT_DIR/data/report/scale_in_incremental_counterfactual/scale_in_incremental_counterfactual_${TARGET_DATE}.md" \
+    "scale_in_incremental_counterfactual"
   wait_for_postclose_resources "lifecycle_decision_matrix"
   run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.lifecycle_decision_matrix --date "$TARGET_DATE"
   wait_for_report_artifact \

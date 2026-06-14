@@ -161,9 +161,11 @@ def test_postclose_wrapper_runs_threshold_ev_before_and_after_workorder():
     entry_adm_idx = script.index("src.engine.scalp_entry_action_decision_matrix")
     microstructure_idx = script.index("src.engine.scalping.microstructure_reaction_context")
     observation_preflight_idx = script.index("observation_source_quality_preflight")
+    scale_in_cf_idx = script.index("src.engine.lifecycle.scale_in_incremental_counterfactual")
     lifecycle_matrix_idx = script.index("src.engine.lifecycle_decision_matrix")
     context_attribution_idx = script.index("src.engine.lifecycle_ai_context --date \"$TARGET_DATE\" --mode attribution")
     context_idx = script.index("src.engine.lifecycle_ai_context --date \"$TARGET_DATE\" --mode context")
+    assert observation_preflight_idx < scale_in_cf_idx < lifecycle_matrix_idx
     discovery_idx = script.index("src.engine.lifecycle_bucket_discovery")
     bridge_idx = script.index("src.engine.runtime_apply_bridge")
     verbosity_idx = script.index("src.engine.pipeline_event_verbosity_report")

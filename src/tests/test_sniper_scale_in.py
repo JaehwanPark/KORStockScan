@@ -953,6 +953,195 @@ def test_execute_scalping_pyramid_sends_resolved_best_bid_with_percent_budget_qt
     assert any(stage == "scale_in_price_p2_observe" for stage, _ in logs)
 
 
+def test_scalp_sim_scale_in_execution_observation_uses_shadow_marketable_arm(monkeypatch):
+    rules = replace(
+        CONFIG,
+        SCALP_SIM_SCALE_IN_EXECUTION_OBSERVATION_ENABLED=True,
+        SCALP_SIM_SCALE_IN_EXECUTION_ARMS="PASSIVE_BASELINE,MARKETABLE_OBSERVATION",
+    )
+    monkeypatch.setattr(state_handlers, "TRADING_RULES", rules)
+    monkeypatch.setattr(scale_in, "TRADING_RULES", rules)
+    monkeypatch.setattr(
+        state_handlers,
+        "resolve_scale_in_order_price",
+        lambda **kwargs: {
+            "allowed": True,
+            "order_price": 9_990,
+            "best_bid": 9_990,
+            "best_ask": 10_000,
+            "max_spread_bps": 80.0,
+            "price_source": "best_bid",
+            "reason": "ok",
+        },
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "describe_dynamic_scale_in_qty",
+        lambda **kwargs: {
+            "qty": 2,
+            "template_qty": 2,
+            "cap_qty": 2,
+            "would_qty": 2,
+            "effective_qty": 2,
+            "floor_applied": False,
+            "qty_reason": "test",
+        },
+    )
+    monkeypatch.setattr(state_handlers, "is_buy_side_paused", lambda: False)
+    monkeypatch.setattr(state_handlers, "persist_scalp_simulator_state", lambda: None)
+    logs = []
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_holding_pipeline",
+        lambda stock, code, stage, **fields: logs.append((stage, fields)),
+    )
+    stock = {
+        "id": 1,
+        "name": "SIM",
+        "strategy": "SCALPING",
+        "simulation_book": "scalp_ai_buy_all",
+        "scalp_live_simulator": True,
+        "sim_record_id": "sim-1",
+        "buy_qty": 5,
+        "buy_price": 9_800,
+    }
+
+    result = state_handlers.execute_scale_in_order(
+        stock=stock,
+        code="123456",
+        ws_data={
+            "curr": 10_000,
+            "best_bid": 9_990,
+            "best_ask": 10_000,
+            "last_ws_update_ts": state_handlers.time.time(),
+            "orderbook": {"bids": [{"price": 9_990}], "asks": [{"price": 10_000}]},
+        },
+        action={"add_type": "PYRAMID", "source": "scalp_sim_scale_in_window_expansion"},
+        admin_id=None,
+    )
+
+    assert result["shadow_tranche_only"] is True
+    assert stock["buy_qty"] == 5
+    assert stock["buy_price"] == 9_800
+    passive = [fields for stage, fields in logs if stage == "scalp_sim_scale_in_order_unfilled"][0]
+    marketable = [
+        fields
+        for stage, fields in logs
+        if stage == "scalp_sim_scale_in_order_assumed_filled"
+        and fields.get("execution_arm") == "MARKETABLE_OBSERVATION"
+    ][0]
+    started = [fields for stage, fields in logs if stage == "scalp_sim_scale_in_counterfactual_started"][0]
+    assert passive["runtime_ev_eligible"] is False
+    assert marketable["assumed_fill_price"] == 10_000
+    assert marketable["runtime_ev_eligible"] is True
+    assert passive["scale_in_decision_id"] == marketable["scale_in_decision_id"] == started["scale_in_decision_id"]
+
+
+def test_scalp_sim_scale_in_marketable_arm_requires_fresh_quote_timestamp(monkeypatch):
+    rules = replace(
+        CONFIG,
+        SCALP_SIM_SCALE_IN_EXECUTION_OBSERVATION_ENABLED=True,
+        SCALP_SIM_SCALE_IN_EXECUTION_ARMS="MARKETABLE_OBSERVATION",
+        SCALP_PRE_AI_MAX_WS_AGE_SEC=3.0,
+    )
+    monkeypatch.setattr(state_handlers, "TRADING_RULES", rules)
+    monkeypatch.setattr(scale_in, "TRADING_RULES", rules)
+    monkeypatch.setattr(
+        state_handlers,
+        "resolve_scale_in_order_price",
+        lambda **kwargs: {
+            "allowed": True,
+            "order_price": 9_990,
+            "best_bid": 9_990,
+            "best_ask": 10_000,
+            "max_spread_bps": 80.0,
+            "price_source": "best_bid",
+            "reason": "ok",
+        },
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "describe_dynamic_scale_in_qty",
+        lambda **kwargs: {
+            "qty": 2,
+            "template_qty": 2,
+            "cap_qty": 2,
+            "would_qty": 2,
+            "effective_qty": 2,
+            "floor_applied": False,
+            "qty_reason": "test",
+        },
+    )
+    monkeypatch.setattr(state_handlers, "is_buy_side_paused", lambda: False)
+    monkeypatch.setattr(state_handlers, "persist_scalp_simulator_state", lambda: None)
+    logs = []
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_holding_pipeline",
+        lambda stock, code, stage, **fields: logs.append((stage, fields)),
+    )
+    stock = {
+        "strategy": "SCALPING",
+        "simulation_book": "scalp_ai_buy_all",
+        "scalp_live_simulator": True,
+        "sim_record_id": "sim-stale",
+        "buy_qty": 5,
+        "buy_price": 9_800,
+    }
+
+    result = state_handlers.execute_scale_in_order(
+        stock=stock,
+        code="123456",
+        ws_data={
+            "curr": 10_000,
+            "best_bid": 9_990,
+            "best_ask": 10_000,
+            "last_ws_update_ts": state_handlers.time.time() - 10,
+        },
+        action={"add_type": "PYRAMID", "source": "scalp_sim_scale_in_window_expansion"},
+        admin_id=None,
+    )
+
+    assert result is None
+    assert not any(
+        stage == "scalp_sim_scale_in_order_assumed_filled"
+        and fields.get("execution_arm") == "MARKETABLE_OBSERVATION"
+        for stage, fields in logs
+    )
+    unavailable = [
+        fields
+        for stage, fields in logs
+        if stage == "scalp_sim_scale_in_order_unfilled"
+        and fields.get("execution_arm") == "MARKETABLE_OBSERVATION"
+    ][0]
+    assert unavailable["scale_in_candidate_funnel_state"] == "quote_unavailable"
+    assert unavailable["quote_age_sec"] >= 10
+    assert not any(fields.get("execution_arm") == "PASSIVE_BASELINE" for _, fields in logs)
+
+
+def test_scalp_sim_scale_in_window_has_no_cross_arm_fallback_and_counts_attempts(monkeypatch):
+    rules = replace(
+        CONFIG,
+        SCALP_SIM_SCALE_IN_WINDOW_EXPANSION_ENABLED=True,
+        SCALP_SIM_SCALE_IN_WINDOW_ALLOWED_ARMS="PYRAMID",
+        SCALP_SIM_SCALE_IN_PYRAMID_MAX_ORDERS_PER_POSITION=1,
+    )
+    monkeypatch.setattr(state_handlers, "TRADING_RULES", rules)
+    stock = {"strategy": "SCALPING", "scalp_live_simulator": True, "simulation_book": "scalp_ai_buy_all"}
+
+    assert state_handlers._evaluate_scalp_sim_scale_in_window_expansion(
+        stock=stock, strategy="SCALPING", profit_rate=-1.0, peak_profit=0.0
+    ) == {}
+    first = state_handlers._evaluate_scalp_sim_scale_in_window_expansion(
+        stock=stock, strategy="SCALPING", profit_rate=1.0, peak_profit=1.0
+    )
+    second = state_handlers._evaluate_scalp_sim_scale_in_window_expansion(
+        stock=stock, strategy="SCALPING", profit_rate=1.1, peak_profit=1.1
+    )
+    assert first["add_type"] == "PYRAMID"
+    assert second == {}
+
+
 def test_execute_swing_sim_scale_in_logs_automation_fields(monkeypatch):
     rules = replace(
         CONFIG,
@@ -3284,6 +3473,47 @@ def test_pending_entry_cancel_logs_receipt_provenance(monkeypatch):
     assert stages["entry_order_cancel_confirmed"]["submitted_price"] == 91900
 
 
+def test_pending_entry_cancel_already_resolved_sets_recovery_probe_cooldown(monkeypatch):
+    now_ts = 1_800.0
+    logs = []
+    rules = replace(
+        CONFIG,
+        SCALP_SAME_SYMBOL_LOSS_REENTRY_COOLDOWN_ENABLED=True,
+        SCALP_SAME_SYMBOL_LOSS_REENTRY_COOLDOWN_SEC=3600,
+    )
+    monkeypatch.setattr(state_handlers, "TRADING_RULES", rules)
+    monkeypatch.setattr(state_handlers.time, "time", lambda: now_ts)
+    monkeypatch.setattr(state_handlers, "_log_entry_pipeline", lambda stock, code, stage, **fields: logs.append((stage, fields)))
+    monkeypatch.setattr(
+        state_handlers.kiwoom_orders,
+        "send_cancel_order",
+        lambda **kwargs: {"return_code": "-1", "ord_no": "", "return_msg": "주문없음"},
+    )
+    stock = {
+        "id": 1,
+        "name": "TEST",
+        "strategy": "SCALPING",
+        "pending_entry_orders": [
+            {
+                "tag": "normal",
+                "qty": 1,
+                "filled_qty": 0,
+                "price": 91900,
+                "ord_no": "O1",
+                "status": "OPEN",
+                "sent_at": now_ts - 31,
+            }
+        ],
+    }
+
+    assert state_handlers._cancel_pending_entry_orders(stock, "440110", force=True) == "cancelled"
+
+    assert stock["last_entry_cancel_confirmed_at"] == now_ts
+    assert stock["score65_74_recovery_probe_cancel_cooldown_until"] == now_ts + 3600
+    stages = {stage: fields for stage, fields in logs}
+    assert stages["entry_order_cancel_confirmed"]["cancel_response"] == "already_resolved"
+
+
 def test_stage_buy_order_submission_resets_stale_order_time(monkeypatch):
     old_time = time.time() - 120
     new_time = old_time + 121
@@ -5014,7 +5244,20 @@ def test_s15_fast_track_pause_is_policy_blocked_not_failed(tmp_path, monkeypatch
     runtime_flags.set_trading_paused()
 
     updates = []
+    events = []
     monkeypatch.setattr(s15, "update_s15_shadow_record", lambda shadow_id, **kwargs: updates.append(kwargs))
+    monkeypatch.setattr(
+        s15,
+        "_log_s15_event",
+        lambda stage, code, name="-", actual_order_submitted=False, **fields: events.append(
+            {
+                "stage": stage,
+                "code": code,
+                "actual_order_submitted": actual_order_submitted,
+                "fields": fields,
+            }
+        ),
+    )
     monkeypatch.setattr(s15, "_unarm_s15_candidate", lambda code: None)
     monkeypatch.setattr(s15, "_pop_fast_state", lambda code: None)
 
@@ -5032,6 +5275,118 @@ def test_s15_fast_track_pause_is_policy_blocked_not_failed(tmp_path, monkeypatch
     assert updates
     assert updates[-1]["status"] == "WATCHING"
     assert updates[-1]["position_tag"] == "S15_FAST_PAUSED"
+    assert events
+    assert events[-1]["stage"] == "s15_trigger_blocked"
+    assert events[-1]["fields"]["s15_block_reason"] == "trading_paused"
+    assert events[-1]["actual_order_submitted"] is False
+
+
+def test_s15_fast_track_ai_score_below_buy_threshold_blocks_with_provenance(monkeypatch):
+    import src.engine.sniper_s15_fast_track as s15
+
+    updates = []
+    events = []
+    state = {
+        "shadow_id": 99,
+        "status": "WATCHING",
+        "lock": type("DummyLock", (), {"__enter__": lambda self: None, "__exit__": lambda self, *args: None})(),
+    }
+
+    monkeypatch.setattr(s15, "_get_fast_state", lambda code: state)
+    monkeypatch.setattr(s15, "update_s15_shadow_record", lambda shadow_id, **kwargs: updates.append(kwargs))
+    monkeypatch.setattr(s15, "_unarm_s15_candidate", lambda code: None)
+    monkeypatch.setattr(s15, "_pop_fast_state", lambda code: None)
+    monkeypatch.setattr(s15, "is_trading_paused", lambda: False)
+    monkeypatch.setattr(
+        s15,
+        "WS_MANAGER",
+        type("WS", (), {"get_latest_data": lambda self, code: {"curr": 10000, "orderbook": {"asks": [], "bids": []}}})(),
+    )
+    monkeypatch.setattr(s15.kiwoom_utils, "get_tick_history_ka10003", lambda *args, **kwargs: [])
+    monkeypatch.setattr(
+        s15,
+        "AI_ENGINE",
+        type("AI", (), {"analyze_target": lambda self, *args, **kwargs: {"action": "BUY", "score": 74}})(),
+    )
+    monkeypatch.setattr(
+        s15,
+        "_log_s15_event",
+        lambda stage, code, name="-", actual_order_submitted=False, **fields: events.append(
+            {
+                "stage": stage,
+                "actual_order_submitted": actual_order_submitted,
+                "fields": fields,
+            }
+        ),
+    )
+
+    s15.execute_fast_track_scalp_v2("123456", "TEST", 10000)
+
+    assert state["status"] == "FAILED"
+    assert updates[-1]["status"] == "EXPIRED"
+    assert events[-1]["stage"] == "s15_trigger_blocked"
+    assert events[-1]["fields"]["s15_block_reason"] == "ai_score_below_buy_threshold"
+    assert events[-1]["fields"]["ai_score"] == 74
+    assert events[-1]["fields"]["ai_score_threshold"] == 75
+
+
+def test_s15_fast_track_ai_score_75_passes_ai_gate(monkeypatch):
+    import src.engine.sniper_s15_fast_track as s15
+
+    updates = []
+    events = []
+    state = {
+        "shadow_id": 99,
+        "status": "WATCHING",
+        "lock": type("DummyLock", (), {"__enter__": lambda self: None, "__exit__": lambda self, *args: None})(),
+    }
+
+    monkeypatch.setattr(s15, "_get_fast_state", lambda code: state)
+    monkeypatch.setattr(s15, "update_s15_shadow_record", lambda shadow_id, **kwargs: updates.append(kwargs))
+    monkeypatch.setattr(s15, "_unarm_s15_candidate", lambda code: None)
+    monkeypatch.setattr(s15, "_pop_fast_state", lambda code: None)
+    monkeypatch.setattr(s15, "is_trading_paused", lambda: False)
+    monkeypatch.setattr(
+        s15,
+        "WS_MANAGER",
+        type("WS", (), {"get_latest_data": lambda self, code: {"curr": 10000, "orderbook": {"asks": [], "bids": []}}})(),
+    )
+    monkeypatch.setattr(s15.kiwoom_utils, "get_tick_history_ka10003", lambda *args, **kwargs: [])
+    monkeypatch.setattr(s15.kiwoom_orders, "get_deposit", lambda *args, **kwargs: 1_000_000)
+    monkeypatch.setattr(s15.kiwoom_orders, "calc_buy_qty", lambda *args, **kwargs: 1)
+    monkeypatch.setattr(
+        s15,
+        "evaluate_live_buy_entry",
+        lambda **kwargs: {
+            "allowed": False,
+            "decision": "REJECT_DANGER",
+            "latency_state": "DANGER",
+            "reason": "test_latency_stop",
+        },
+    )
+    monkeypatch.setattr(
+        s15,
+        "AI_ENGINE",
+        type("AI", (), {"analyze_target": lambda self, *args, **kwargs: {"action": "BUY", "score": 75}})(),
+    )
+    monkeypatch.setattr(
+        s15,
+        "_log_s15_event",
+        lambda stage, code, name="-", actual_order_submitted=False, **fields: events.append(
+            {
+                "stage": stage,
+                "actual_order_submitted": actual_order_submitted,
+                "fields": fields,
+            }
+        ),
+    )
+
+    s15.execute_fast_track_scalp_v2("123456", "TEST", 10000)
+
+    assert state["status"] == "BLOCKED"
+    assert updates[-1]["position_tag"] == "S15_FAST_LATENCY_BLOCKED"
+    assert events[-1]["stage"] == "s15_trigger_blocked"
+    assert events[-1]["fields"]["s15_block_reason"] == "latency_block"
 
 
 def test_add_receipt_without_order_no_matches_single_pending_target(monkeypatch):

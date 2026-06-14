@@ -806,6 +806,230 @@ def test_observation_source_quality_audit_accepts_complete_sim_authority_contrac
     assert report["stage_contracts"]["swing_probe_discarded"]["status"] == "pass"
 
 
+def test_observation_source_quality_audit_accepts_score65_74_recovery_probe_block_contract(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
+    _write_events(
+        tmp_path,
+        "2026-06-15",
+        [
+            _event(
+                "score65_74_recovery_probe_blocked",
+                {
+                    "metric_role": "source_quality_gate",
+                    "decision_authority": "score65_74_recovery_probe_block_observation_only",
+                    "window_policy": "same_day_intraday_events",
+                    "sample_floor": 1,
+                    "primary_decision_metric": "source_quality_gate",
+                    "source_quality_gate": "score65_74_recovery_probe_block_contract_fields_present",
+                    "runtime_effect": False,
+                    "forbidden_uses": "runtime_threshold_apply/order_submit/provider_route_change/bot_restart",
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                    "threshold_family": "score65_74_recovery_probe",
+                    "score65_74_recovery_probe_skip_reason": "tick_accel_below_min",
+                    "ai_score": "62.0",
+                    "buy_pressure": "70.0",
+                    "tick_accel": "0.900",
+                    "micro_vwap_bp": "2.00",
+                    "score65_74_recovery_probe_min_buy_pressure": "65.00",
+                    "score65_74_recovery_probe_min_tick_accel": "1.200",
+                    "score65_74_recovery_probe_min_micro_vwap_bp": "0.00",
+                },
+            )
+        ],
+    )
+
+    report = audit.build_observation_source_quality_audit("2026-06-15")
+
+    assert report["stage_contracts"]["score65_74_recovery_probe_blocked"]["status"] == "pass"
+    assert report["status"] == "pass"
+
+
+def test_observation_source_quality_audit_accepts_scanner_source_guard_contracts(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
+    common_fields = {
+        "metric_role": "source_quality_gate",
+        "window_policy": "intraday_operational_guard",
+        "sample_floor": "not_applicable_runtime_guard",
+        "primary_decision_metric": "funnel_count",
+        "runtime_effect": True,
+        "forbidden_uses": "score_threshold_change,provider_route_change,order_price_change",
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+    }
+    _write_events(
+        tmp_path,
+        "2026-06-15",
+        [
+            _event(
+                "scalping_scanner_real_source_guard_block",
+                {
+                    **common_fields,
+                    "decision_authority": "real_scalping_scanner_source_guard_only",
+                    "source_quality_gate": "scalping_scanner_real_source_guard",
+                    "scanner_real_source_guard_applied": True,
+                    "scanner_real_source_guard_skip_reason": (
+                        "value_top_only_repeat_deteriorating_without_strength"
+                    ),
+                    "scanner_real_source_guard_block_event_emitted": True,
+                    "source_signature": "VALUE_TOP",
+                    "first_seen_flu_rate": "8.40",
+                    "current_flu_rate": "0.00",
+                    "last_promoted_at": "1000.0",
+                },
+            ),
+            _event(
+                "condition_unmatch_guard",
+                {
+                    **common_fields,
+                    "decision_authority": "real_scalping_condition_unmatch_guard_only",
+                    "source_quality_gate": "condition_unmatch_guard",
+                    "condition_unmatch_guard_applied": True,
+                    "condition_unmatch_guard_action": "pending_unmatched",
+                    "condition_unmatch_guard_reason": "unmatched_only_guard_hold",
+                    "condition_unmatch_age_sec": "40",
+                    "condition_name": "scalp_vwap_reclaim_01",
+                    "position_tag": "VWAP_RECLAIM",
+                },
+            ),
+        ],
+    )
+
+    report = audit.build_observation_source_quality_audit("2026-06-15")
+
+    assert report["stage_contracts"]["scalping_scanner_real_source_guard_block"]["status"] == "pass"
+    assert report["stage_contracts"]["condition_unmatch_guard"]["status"] == "pass"
+    assert report["status"] == "pass"
+
+
+def test_observation_source_quality_audit_accepts_s15_fast_track_contracts(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
+    common_fields = {
+        "metric_role": "source_quality_gate",
+        "decision_authority": "real_s15_fast_track_runtime_only",
+        "source_quality_gate": "s15_fast_track_contract",
+        "window_policy": "intraday_operational_guard",
+        "sample_floor": "not_applicable_runtime_guard",
+        "primary_decision_metric": "funnel_count",
+        "runtime_effect": True,
+        "forbidden_uses": "score_threshold_change,provider_route_change,hard_safety_change",
+        "actual_order_submitted": False,
+        "broker_order_forbidden": False,
+        "s15_fast_track_contract_version": "s15_fast_track_v1",
+    }
+    _write_events(
+        tmp_path,
+        "2026-06-15",
+        [
+            _event(
+                "s15_candidate_armed",
+                {
+                    **common_fields,
+                    "s15_condition_role": "candidate_arm",
+                    "base_condition": "s15_scan_base_01",
+                    "armed_at": "1000.0",
+                    "expires_at": "1180.0",
+                    "ttl_sec": "180",
+                },
+            ),
+            _event(
+                "s15_trigger_received",
+                {
+                    **common_fields,
+                    "s15_condition_role": "trigger_break",
+                    "condition_name": "s15_trigger_break_01",
+                    "armed": True,
+                    "reentry_blocked": False,
+                    "existing_fast_state": False,
+                    "trigger_price": "10000",
+                },
+            ),
+            _event(
+                "s15_trigger_blocked",
+                {
+                    **common_fields,
+                    "s15_condition_role": "fast_track_submit",
+                    "s15_block_reason": "ai_score_below_80",
+                },
+            ),
+            _event(
+                "s15_fast_track_submitted",
+                {
+                    **common_fields,
+                    "actual_order_submitted": True,
+                    "s15_condition_role": "fast_track_submit",
+                    "shadow_id": "10",
+                    "requested_qty": "1",
+                    "order_price": "10000",
+                    "broker_order_no": "B1",
+                },
+            ),
+            _event(
+                "s15_fast_track_cancelled",
+                {
+                    **common_fields,
+                    "s15_condition_role": "fast_track_submit",
+                    "shadow_id": "10",
+                    "s15_cancel_reason": "no_fill_after_20s",
+                },
+            ),
+            _event(
+                "s15_fast_track_holding",
+                {
+                    **common_fields,
+                    "s15_condition_role": "fast_track_holding",
+                    "shadow_id": "10",
+                    "avg_buy_price": "10000",
+                    "buy_qty": "1",
+                    "target_price": "10180",
+                    "stop_price": "9930",
+                },
+            ),
+            _event(
+                "s15_fast_track_completed",
+                {
+                    **common_fields,
+                    "s15_condition_role": "fast_track_exit",
+                    "shadow_id": "10",
+                    "buy_price": "10000",
+                    "sell_price": "10180",
+                    "buy_qty": "1",
+                    "profit_rate": "1.8",
+                },
+            ),
+            _event(
+                "s15_fast_track_failed",
+                {
+                    **common_fields,
+                    "s15_condition_role": "fast_track_submit",
+                    "s15_block_reason": "exception",
+                },
+            ),
+        ],
+    )
+
+    report = audit.build_observation_source_quality_audit("2026-06-15")
+
+    for stage in (
+        "s15_candidate_armed",
+        "s15_trigger_received",
+        "s15_trigger_blocked",
+        "s15_fast_track_submitted",
+        "s15_fast_track_cancelled",
+        "s15_fast_track_holding",
+        "s15_fast_track_completed",
+        "s15_fast_track_failed",
+    ):
+        assert report["stage_contracts"][stage]["status"] == "pass"
+    assert report["status"] == "pass"
+
+
 def test_observation_source_quality_audit_normalizes_pre_contract_ai_and_latency(monkeypatch, tmp_path):
     monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
     _write_events(

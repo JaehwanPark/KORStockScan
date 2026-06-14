@@ -23,6 +23,7 @@ from src.engine.sniper_s15_fast_track import (
     _set_fast_state,
     create_s15_shadow_record,
     execute_fast_track_scalp_v2,
+    _log_s15_event,
 )
 from src.engine.sniper_position_tags import (
     default_position_tag_for_strategy,
@@ -34,6 +35,7 @@ from src.engine.sniper_position_tags import (
 from src.utils import kiwoom_utils
 from src.utils.constants import TRADING_RULES
 from src.utils.logger import log_error
+from src.utils.pipeline_event_logger import emit_pipeline_event
 
 
 KIWOOM_TOKEN = None
@@ -109,6 +111,90 @@ def _should_log_match_event(key, cooldown_sec=300):
     return True
 
 
+def _condition_unmatch_guard_enabled(target_strategy, target_position_tag):
+    if not bool(getattr(TRADING_RULES, "SCALP_CONDITION_UNMATCH_GUARD_ENABLED", False)):
+        return False
+    if normalize_strategy(target_strategy) != "SCALPING":
+        return False
+    allowed_tags = {
+        str(item).strip().upper()
+        for item in getattr(TRADING_RULES, "SCALP_CONDITION_UNMATCH_GUARD_TAGS", ()) or ()
+        if str(item).strip()
+    }
+    return str(target_position_tag or "").strip().upper() in allowed_tags
+
+
+def _ensure_condition_guard_state(key, code, *, now_ts, confirmed=True):
+    state = _CONDITION_STATE.get(key)
+    if state is None:
+        state = {
+            'first_seen': now_ts,
+            'last_seen': now_ts,
+            'confirmed': bool(confirmed),
+            'captured_price': _get_latest_price(code),
+            'last_strength': _get_latest_strength(code),
+            'hold_until': 0,
+            'last_unmatched': 0,
+            'unmatched_since': 0,
+            'pending_unmatched': False,
+        }
+        _CONDITION_STATE[key] = state
+    else:
+        state['last_seen'] = now_ts
+        state['confirmed'] = bool(confirmed or state.get('confirmed'))
+        state['last_unmatched'] = 0
+        state['unmatched_since'] = 0
+        state['pending_unmatched'] = False
+    return state
+
+
+def _log_condition_unmatch_guard_event(
+    *,
+    code,
+    cnd_name,
+    target_strategy,
+    target_position_tag,
+    action,
+    reason,
+    unmatched_age_sec=0,
+    current_price=0,
+    open_price=0,
+    vwap_price=0,
+):
+    emit_pipeline_event(
+        "ENTRY_PIPELINE",
+        "-",
+        code,
+        "condition_unmatch_guard",
+        fields={
+            "metric_role": "source_quality_gate",
+            "decision_authority": "real_scalping_condition_unmatch_guard_only",
+            "source_quality_gate": "condition_unmatch_guard",
+            "window_policy": "intraday_operational_guard",
+            "sample_floor": "not_applicable_runtime_guard",
+            "primary_decision_metric": "funnel_count",
+            "forbidden_uses": (
+                "score_threshold_change,provider_route_change,order_price_change,"
+                "quantity_or_cap_change,broker_guard_change,bot_restart_authority,"
+                "ai_score_smoothing_live_gate,real_execution_quality_approval"
+            ),
+            "runtime_effect": True,
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+            "condition_unmatch_guard_applied": True,
+            "condition_unmatch_guard_action": action,
+            "condition_unmatch_guard_reason": reason,
+            "condition_unmatch_age_sec": unmatched_age_sec,
+            "condition_name": cnd_name,
+            "strategy": normalize_strategy(target_strategy),
+            "position_tag": target_position_tag,
+            "current_price": current_price,
+            "open_price": open_price,
+            "vwap_price": vwap_price,
+        },
+    )
+
+
 def _condition_key(code, target_date, strategy, position_tag):
     normalized_strategy = normalize_strategy(strategy)
     normalized_tag = normalize_position_tag(normalized_strategy, position_tag)
@@ -131,12 +217,25 @@ def _find_reusable_watch_record(session, *, rec_date, stock_code, strategy):
 
 
 def _has_active_target(code, strategy):
+    return _find_active_target(code, strategy) is not None
+
+
+def _find_active_target(code, strategy, *, statuses=None):
     identity = target_identity(code, strategy)
-    return any(
-        target_identity(t.get('code', ''), t.get('strategy', '')) == identity
-        and str((t or {}).get("simulation_book") or "") != "scalp_ai_buy_all"
-        for t in (ACTIVE_TARGETS or [])
-    )
+    allowed_statuses = None
+    if statuses is not None:
+        allowed_statuses = {str(status or "").strip().upper() for status in statuses}
+    for target in (ACTIVE_TARGETS or []):
+        if target_identity(target.get('code', ''), target.get('strategy', '')) != identity:
+            continue
+        if str((target or {}).get("simulation_book") or "") == "scalp_ai_buy_all":
+            continue
+        if allowed_statuses is not None:
+            target_status = str((target or {}).get("status") or "").strip().upper()
+            if target_status not in allowed_statuses:
+                continue
+        return target
+    return None
 
 
 def _coerce_positive_int(value, default=0):
@@ -376,12 +475,14 @@ def resolve_condition_profile(cnd_name):
         profile['position_tag'] = 'VCP_NEXT'
     elif "s15_scan_base" in cnd_name:
         profile['start'], profile['end'] = dt_time(9, 2), dt_time(10, 30)
-        profile['is_next_day_target'] = True
+        profile['is_next_day_target'] = False
         profile['position_tag'] = 'S15_CANDID'
+        profile['use_debounce'] = False
     elif "s15_trigger_break" in cnd_name:
         profile['start'], profile['end'] = dt_time(9, 5), dt_time(11, 0)
-        profile['is_next_day_target'] = True
+        profile['is_next_day_target'] = False
         profile['position_tag'] = 'S15_SHOOTING'
+        profile['use_debounce'] = False
     else:
         return None
 
@@ -429,6 +530,9 @@ def handle_condition_matched(payload):
 
     key = _condition_key(code, get_condition_target_date(profile['is_next_day_target']), target_strategy, target_position_tag)
     now_ts = time.time()
+    if _condition_unmatch_guard_enabled(target_strategy, target_position_tag) and not is_next_day_target:
+        _ensure_condition_guard_state(key, code, now_ts=now_ts, confirmed=True)
+
     is_debounce_target = (
         bool(profile.get('use_debounce', True))
         and not profile['is_next_day_target']
@@ -465,9 +569,9 @@ def handle_condition_matched(payload):
                 return
 
     # 당일 감시망에 이미 있으면 일반 케이스는 스킵
-    # 단, VCP_SHOOTING은 기존 CANDID -> SHOOTING 승격이 있으므로 통과
+    # 단, VCP_SHOOTING/S15_SHOOTING은 별도 승격/fast-track 계약이 있으므로 통과
     if _has_active_target(code, target_strategy):
-        if not is_next_day_target and target_position_tag != 'VCP_SHOOTING':
+        if not is_next_day_target and target_position_tag not in {'VCP_SHOOTING', 'S15_SHOOTING'}:
             return
 
     if target_position_tag == 'VWAP_RECLAIM':
@@ -505,11 +609,107 @@ def handle_condition_matched(payload):
             return
 
         if target_position_tag == 'S15_SHOOTING':
-            if not _is_s15_armed(code):
+            is_armed = _is_s15_armed(code)
+            reentry_blocked = _is_s15_reentry_blocked(code)
+            existing_fast_state = _get_fast_state(code)
+            rt = WS_MANAGER.get_latest_data(code) if WS_MANAGER else {}
+            trigger_price = int(float((rt or {}).get('curr', 0) or 0))
+            _log_s15_event(
+                "s15_trigger_received",
+                code,
+                name,
+                s15_condition_role="trigger_break",
+                condition_name=cnd_name,
+                armed=is_armed,
+                reentry_blocked=reentry_blocked,
+                existing_fast_state=bool(existing_fast_state),
+                trigger_price=trigger_price,
+            )
+            if not is_armed:
+                _log_s15_event(
+                    "s15_trigger_blocked",
+                    code,
+                    name,
+                    s15_condition_role="trigger_break",
+                    condition_name=cnd_name,
+                    s15_block_reason="not_armed",
+                    armed=False,
+                    reentry_blocked=reentry_blocked,
+                    existing_fast_state=bool(existing_fast_state),
+                    trigger_price=trigger_price,
+                )
                 return
-            if _is_s15_reentry_blocked(code):
+            if reentry_blocked:
+                _log_s15_event(
+                    "s15_trigger_blocked",
+                    code,
+                    name,
+                    s15_condition_role="trigger_break",
+                    condition_name=cnd_name,
+                    s15_block_reason="reentry_blocked",
+                    armed=True,
+                    reentry_blocked=True,
+                    existing_fast_state=bool(existing_fast_state),
+                    trigger_price=trigger_price,
+                )
                 return
-            if _get_fast_state(code):
+            if existing_fast_state:
+                _log_s15_event(
+                    "s15_trigger_blocked",
+                    code,
+                    name,
+                    s15_condition_role="trigger_break",
+                    condition_name=cnd_name,
+                    s15_block_reason="fast_state_exists",
+                    armed=True,
+                    reentry_blocked=False,
+                    existing_fast_state=True,
+                    trigger_price=trigger_price,
+                )
+                return
+
+            same_symbol_active = _find_active_target(
+                code,
+                target_strategy,
+                statuses={
+                    "BUY_ORDERED",
+                    "SELL_ORDERED",
+                    "HOLDING",
+                    "HOLDING_NEEDS_EXIT",
+                    "EXIT_SENT",
+                    "EXIT_RETRY",
+                },
+            )
+            if same_symbol_active:
+                _log_s15_event(
+                    "s15_trigger_blocked",
+                    code,
+                    name,
+                    s15_condition_role="trigger_break",
+                    condition_name=cnd_name,
+                    s15_block_reason="same_symbol_active_order_or_holding",
+                    armed=True,
+                    reentry_blocked=False,
+                    existing_fast_state=False,
+                    active_target_status=same_symbol_active.get("status"),
+                    active_target_position_tag=same_symbol_active.get("position_tag"),
+                    trigger_price=trigger_price,
+                )
+                return
+
+            if trigger_price <= 0:
+                _log_s15_event(
+                    "s15_trigger_blocked",
+                    code,
+                    name,
+                    s15_condition_role="trigger_break",
+                    condition_name=cnd_name,
+                    s15_block_reason="missing_price",
+                    armed=True,
+                    reentry_blocked=False,
+                    existing_fast_state=False,
+                    trigger_price=trigger_price,
+                )
                 return
 
             shadow_id = create_s15_shadow_record(code, name)
@@ -536,8 +736,6 @@ def handle_condition_matched(payload):
             }
             _set_fast_state(code, state)
 
-            rt = WS_MANAGER.get_latest_data(code) if WS_MANAGER else {}
-            trigger_price = int(float((rt or {}).get('curr', 0) or 0))
             state['trigger_price'] = trigger_price
 
             threading.Thread(
@@ -793,6 +991,11 @@ def handle_condition_unmatched(payload):
     removed = False
     removal_reason = "unmatched"
     unmatched_age_sec = 0
+    guard_enabled = _condition_unmatch_guard_enabled(target_strategy, target_position_tag)
+
+    if guard_enabled and state is None:
+        state = _ensure_condition_guard_state(key, code, now_ts=now_ts, confirmed=True)
+        state['last_seen'] = now_ts - UNMATCH_GRACE_SEC
 
     if state and not state.get('confirmed'):
         age = now_ts - state.get('first_seen', now_ts)
@@ -834,6 +1037,29 @@ def handle_condition_unmatched(payload):
             if not drop_triggered and not ma_broken:
                 if state.get('unmatched_since') == 0:
                     state['unmatched_since'] = now_ts
+                    state['pending_unmatched'] = True
+                    if guard_enabled:
+                        _log_condition_unmatch_guard_event(
+                            code=code,
+                            cnd_name=cnd_name,
+                            target_strategy=target_strategy,
+                            target_position_tag=target_position_tag,
+                            action="pending_unmatched",
+                            reason="unmatched_only_guard_hold",
+                            unmatched_age_sec=unmatched_age_sec,
+                            current_price=current_price,
+                            open_price=open_price,
+                            vwap_price=vwap_price,
+                        )
+                    log_key = f"{code}:{cnd_name}:{target_position_tag}:pending_unmatched"
+                    if guard_enabled and _should_log_unmatch_event(log_key):
+                        print(
+                            f"🧯 [조건검색 이탈 guard] {code} unmatched-only 이탈 보류 "
+                            f"(출처: {cnd_name}, tag={target_position_tag}, "
+                            f"condition_unmatch_guard_applied=true, "
+                            f"condition_unmatch_guard_reason=pending_unmatched, "
+                            f"condition_unmatch_age_sec={unmatched_age_sec})"
+                        )
                 if (now_ts - state['unmatched_since']) < UNMATCH_MAX_HOLD_SEC:
                     return
                 removal_reason = "unmatched_timeout"
@@ -882,6 +1108,20 @@ def handle_condition_unmatched(payload):
             retained_targets.append(target)
 
         if removed:
+            if guard_enabled:
+                _log_condition_unmatch_guard_event(
+                    code=code,
+                    cnd_name=cnd_name,
+                    target_strategy=target_strategy,
+                    target_position_tag=target_position_tag,
+                    action="removed",
+                    reason=removal_reason,
+                    unmatched_age_sec=unmatched_age_sec,
+                    current_price=current_price if 'current_price' in locals() else 0,
+                    open_price=open_price if 'open_price' in locals() else 0,
+                    vwap_price=vwap_price if 'vwap_price' in locals() else 0,
+                )
+
             ACTIVE_TARGETS[:] = retained_targets
 
             still_tracking = any(

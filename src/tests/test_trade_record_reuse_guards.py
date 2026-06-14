@@ -1,5 +1,7 @@
 from datetime import date
 
+import pandas as pd
+
 from src.database.db_manager import DBManager
 from src.database.models import RecommendationHistory
 
@@ -68,6 +70,120 @@ class _DummyDB(DBManager):
                 continue
             return record
         return None
+
+
+class _ActiveTargetSession:
+    bind = object()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+
+class _ActiveTargetDB(DBManager):
+    def get_session(self):
+        return _ActiveTargetSession()
+
+
+def test_get_active_targets_excludes_s15_fast_track_owned_rows(monkeypatch):
+    today = date.today()
+
+    def _fake_read_sql(query, bind):
+        assert "recommendation_history" in query
+        return pd.DataFrame(
+            [
+                {
+                    "id": 1,
+                    "date": today,
+                    "code": "123456",
+                    "name": "S15",
+                    "type": "SCALP",
+                    "status": "WATCHING",
+                    "strategy": "S15_CANDID",
+                    "position_tag": "S15_CANDID:s15_scan_base_01",
+                    "prob": 0.0,
+                    "nxt": 1000.0,
+                    "buy_price": 0,
+                    "buy_qty": 0,
+                    "buy_time": None,
+                    "sell_price": None,
+                    "sell_time": None,
+                    "profit_rate": 0.0,
+                    "add_count": 0,
+                    "avg_down_count": 0,
+                    "pyramid_count": 0,
+                    "last_add_type": None,
+                    "last_add_at": None,
+                    "scale_in_locked": False,
+                    "hard_stop_price": 1180.0,
+                    "trailing_stop_price": 0,
+                    "marcap": 0,
+                },
+                {
+                    "id": 2,
+                    "date": today,
+                    "code": "234567",
+                    "name": "S15FAST",
+                    "type": "SCALP",
+                    "status": "WATCHING",
+                    "strategy": "S15_FAST",
+                    "position_tag": "S15_FAST",
+                    "prob": 0.0,
+                    "nxt": 0,
+                    "buy_price": 0,
+                    "buy_qty": 0,
+                    "buy_time": None,
+                    "sell_price": None,
+                    "sell_time": None,
+                    "profit_rate": 0.0,
+                    "add_count": 0,
+                    "avg_down_count": 0,
+                    "pyramid_count": 0,
+                    "last_add_type": None,
+                    "last_add_at": None,
+                    "scale_in_locked": False,
+                    "hard_stop_price": 0,
+                    "trailing_stop_price": 0,
+                    "marcap": 0,
+                },
+                {
+                    "id": 3,
+                    "date": today,
+                    "code": "005930",
+                    "name": "삼성전자",
+                    "type": "SCALP",
+                    "status": "WATCHING",
+                    "strategy": "SCALPING",
+                    "position_tag": "SCANNER",
+                    "prob": 0.8,
+                    "nxt": 0,
+                    "buy_price": 0,
+                    "buy_qty": 0,
+                    "buy_time": None,
+                    "sell_price": None,
+                    "sell_time": None,
+                    "profit_rate": 0.0,
+                    "add_count": 0,
+                    "avg_down_count": 0,
+                    "pyramid_count": 0,
+                    "last_add_type": None,
+                    "last_add_at": None,
+                    "scale_in_locked": False,
+                    "hard_stop_price": 0,
+                    "trailing_stop_price": 0,
+                    "marcap": 0,
+                },
+            ]
+        )
+
+    monkeypatch.setattr(pd, "read_sql", _fake_read_sql)
+
+    targets = _ActiveTargetDB().get_active_targets()
+
+    assert [target["code"] for target in targets] == ["005930"]
+    assert targets[0]["strategy"] == "SCALPING"
 
 
 def test_save_recommendation_does_not_reuse_completed_trade_row():

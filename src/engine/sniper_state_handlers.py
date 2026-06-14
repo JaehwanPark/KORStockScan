@@ -129,8 +129,8 @@ SCALPING_ENTRY_BLOCKER_ROLE_REGISTRY = {
     },
     "score65_74_recovery_probe_micro_context": {
         "role": "bounded_tunable",
-        "gate_action": "feature_snapshot_only",
-        "hard_block_allowed": False,
+        "gate_action": "runtime_min_micro_gate",
+        "hard_block_allowed": True,
     },
     "main_buy_recovery_canary_micro_context": {
         "role": "bounded_tunable",
@@ -6529,6 +6529,67 @@ def _log_holding_pipeline(stock, code, stage, **fields):
     )
 
 
+def _log_scale_in_counterfactual_started(
+    *,
+    stock: dict,
+    code: str,
+    add_type: str,
+    ord_no: str,
+    qty: int,
+    proposed_add_price: int,
+    curr_price: int,
+    quote_touched: bool,
+    scale_in_decision_id: str,
+    decision_time: float,
+    pre_add_buy_qty: int,
+    pre_add_buy_price: int,
+    execution_arm: str = "PASSIVE_BASELINE",
+    runtime_ev_eligible: bool | None = None,
+):
+    sim_record_id = stock.get("sim_record_id")
+    if not sim_record_id:
+        return
+    prev_qty = pre_add_buy_qty
+    prev_price = pre_add_buy_price
+    decision_profit_rate = round((curr_price - prev_price) / prev_price * 100.0, 2) if prev_price > 0 else 0.0
+    proposed_notional = proposed_add_price * qty if proposed_add_price > 0 and qty > 0 else 0
+    _log_holding_pipeline(
+        stock,
+        code,
+        "scalp_sim_scale_in_counterfactual_started",
+        **_scalp_sim_event_fields(
+            threshold_family="scale_in_counterfactual",
+            scale_in_decision_id=scale_in_decision_id,
+            sim_record_id=sim_record_id,
+            sim_parent_record_id=stock.get("sim_parent_record_id"),
+            candidate_id=ord_no,
+            scale_in_arm=add_type,
+            decision_time=decision_time,
+            decision_profit_rate=decision_profit_rate,
+            pre_add_buy_price=prev_price,
+            pre_add_buy_qty=prev_qty,
+            proposed_add_price=proposed_add_price,
+            proposed_add_qty=qty,
+            proposed_add_notional=proposed_notional,
+            quote_touched=quote_touched,
+            treatment_state="ADD_FILLED" if quote_touched else "WOULD_ADD_UNFILLED",
+            execution_arm=execution_arm,
+            runtime_ev_eligible=(
+                execution_arm == "MARKETABLE_OBSERVATION" and quote_touched
+                if runtime_ev_eligible is None
+                else runtime_ev_eligible
+            ),
+            control_state="NO_ADD",
+            actual_order_submitted=False,
+            broker_order_forbidden=True,
+            runtime_effect=False,
+            decision_authority="sim_scale_in_counterfactual_only",
+            curr_price=curr_price,
+            add_type=add_type,
+        ),
+    )
+
+
 def _log_watching_state_debug(stock, code, *, radar=None, ai_engine=None):
     if not _rule_bool("WATCHING_STATE_DEBUG_LOG_ENABLED", False):
         return
@@ -10477,9 +10538,27 @@ def _build_observation_contract_fields(metric_role: str) -> dict:
     return {
         "metric_role": role,
         "decision_authority": "source_quality_only",
+        "window_policy": "same_day_intraday_events",
+        "sample_floor": 1,
+        "primary_decision_metric": "source_quality_gate",
+        "source_quality_gate": "contract_fields_present",
         "runtime_effect": False,
         "forbidden_uses": "runtime_threshold_apply/order_submit/provider_route_change/bot_restart",
         "source_quality_route": "source_quality_blocker_or_workorder_only",
+    }
+
+
+def _score65_74_recovery_probe_block_contract_fields() -> dict:
+    return {
+        **_build_observation_contract_fields("source_quality_gate"),
+        "decision_authority": "score65_74_recovery_probe_block_observation_only",
+        "source_quality_gate": "score65_74_recovery_probe_block_contract_fields_present",
+        "forbidden_uses": (
+            "runtime_threshold_apply/order_submit/provider_route_change/"
+            "bot_restart/score_threshold_change"
+        ),
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
     }
 
 
@@ -11653,6 +11732,167 @@ def _should_run_main_buy_recovery_canary(
     return True
 
 
+def _score65_74_recovery_probe_micro_guard(probe: dict | None) -> dict:
+    probe = probe if isinstance(probe, dict) else {}
+    buy_pressure = _safe_float(probe.get("buy_pressure"), 0.0)
+    tick_accel = _safe_float(probe.get("tick_accel"), 0.0)
+    micro_vwap_bp = _safe_float(probe.get("micro_vwap_bp"), 0.0)
+    min_buy_pressure = _rule_float("AI_SCORE65_74_RECOVERY_PROBE_MIN_BUY_PRESSURE", 65.0)
+    min_tick_accel = _rule_float("AI_SCORE65_74_RECOVERY_PROBE_MIN_TICK_ACCEL", 1.20)
+    min_micro_vwap_bp = _rule_float("AI_SCORE65_74_RECOVERY_PROBE_MIN_MICRO_VWAP_BP", 0.0)
+    failed = []
+    if buy_pressure < min_buy_pressure:
+        failed.append("buy_pressure_below_min")
+    if tick_accel < min_tick_accel:
+        failed.append("tick_accel_below_min")
+    if micro_vwap_bp < min_micro_vwap_bp:
+        failed.append("micro_vwap_below_min")
+    return {
+        "allowed": not failed,
+        "score65_74_recovery_probe_skip_reason": "|".join(failed),
+        "buy_pressure": buy_pressure,
+        "tick_accel": tick_accel,
+        "micro_vwap_bp": micro_vwap_bp,
+        "score65_74_recovery_probe_min_buy_pressure": min_buy_pressure,
+        "score65_74_recovery_probe_min_tick_accel": min_tick_accel,
+        "score65_74_recovery_probe_min_micro_vwap_bp": min_micro_vwap_bp,
+    }
+
+
+def _score65_74_recovery_probe_repeat_guard(
+    stock: dict | None,
+    code: str | None,
+    ws_data: dict | None,
+    probe: dict | None,
+    *,
+    now_ts: float | None = None,
+) -> dict:
+    stock = stock if isinstance(stock, dict) else {}
+    probe = probe if isinstance(probe, dict) else {}
+    now_value = _safe_float(now_ts, time.time())
+    guard_fields = _score65_74_recovery_probe_micro_guard(probe)
+    cooldown_until = 0.0
+    cooldown_source = ""
+    try:
+        if code and isinstance(COOLDOWNS, dict):
+            cooldown_until = max(cooldown_until, _safe_float(COOLDOWNS.get(code), 0.0))
+            if cooldown_until > now_value:
+                cooldown_source = "entry_cooldown"
+    except Exception:
+        pass
+    cancel_until = _safe_float(stock.get("score65_74_recovery_probe_cancel_cooldown_until"), 0.0)
+    if cancel_until > cooldown_until:
+        cooldown_until = cancel_until
+        cooldown_source = "entry_cancel_confirmed"
+    if cooldown_until > now_value:
+        return {
+            **guard_fields,
+            "allowed": False,
+            "score65_74_recovery_probe_skip_reason": (
+                f"same_symbol_cooldown_active:{cooldown_source or 'unknown'}"
+            ),
+            "same_symbol_recovery_probe_cooldown_until": f"{cooldown_until:.3f}",
+            "same_symbol_recovery_probe_cooldown_remaining_sec": f"{max(0.0, cooldown_until - now_value):.1f}",
+        }
+
+    curr_price = _safe_int((ws_data or {}).get("curr") or stock.get("curr_price") or stock.get("target_buy_price"), 0)
+    anchor_price = _safe_int(stock.get("score65_74_recovery_probe_anchor_price"), 0)
+    if anchor_price > 0 and curr_price > 0 and curr_price < anchor_price:
+        tick_accel = _safe_float(probe.get("tick_accel"), 0.0)
+        micro_vwap_bp = _safe_float(probe.get("micro_vwap_bp"), 0.0)
+        min_tick_accel = _rule_float("AI_SCORE65_74_RECOVERY_PROBE_MIN_TICK_ACCEL", 1.20)
+        if micro_vwap_bp < 0.0 or tick_accel < min_tick_accel:
+            return {
+                **guard_fields,
+                "allowed": False,
+                "score65_74_recovery_probe_skip_reason": "falling_from_probe_anchor",
+                "score65_74_recovery_probe_anchor_price": anchor_price,
+                "score65_74_recovery_probe_current_price": curr_price,
+            }
+    return guard_fields
+
+
+def _score65_74_recovery_probe_reuse_guard(
+    stock: dict | None,
+    code: str | None,
+    ws_data: dict | None,
+    *,
+    now_ts: float | None = None,
+) -> dict:
+    stock = stock if isinstance(stock, dict) else {}
+    probe = {
+        "buy_pressure": stock.get("score65_74_recovery_probe_last_buy_pressure"),
+        "tick_accel": stock.get("score65_74_recovery_probe_last_tick_accel"),
+        "micro_vwap_bp": stock.get("score65_74_recovery_probe_last_micro_vwap_bp"),
+    }
+    return _score65_74_recovery_probe_repeat_guard(
+        stock,
+        code,
+        ws_data,
+        probe,
+        now_ts=now_ts,
+    )
+
+
+def _score65_74_recovery_probe_decision(
+    ai_decision,
+    ai_score,
+    ws_data,
+    recent_ticks,
+    recent_candles,
+    ai_engine,
+    *,
+    feature_probe=None,
+    stock: dict | None = None,
+    code: str | None = None,
+    now_ts: float | None = None,
+) -> dict:
+    if not _rule_bool("AI_SCORE65_74_RECOVERY_PROBE_ENABLED", False):
+        return {"allowed": False, "evaluated": False, "score65_74_recovery_probe_skip_reason": "disabled"}
+    if bool((ai_decision or {}).get("ai_fallback_score_50", False)):
+        return {"allowed": False, "evaluated": False, "score65_74_recovery_probe_skip_reason": "fallback_score_50"}
+    if str((ai_decision or {}).get("action", "WAIT") or "WAIT").upper() == "BUY":
+        return {"allowed": False, "evaluated": False, "score65_74_recovery_probe_skip_reason": "already_buy"}
+
+    try:
+        score = float(ai_score or 0.0)
+    except Exception:
+        return {"allowed": False, "evaluated": False, "score65_74_recovery_probe_skip_reason": "invalid_score"}
+    min_score = _rule_float("AI_SCORE65_74_RECOVERY_PROBE_MIN_SCORE", 60)
+    max_score = _rule_float("AI_SCORE65_74_RECOVERY_PROBE_MAX_SCORE", 74)
+    if score < min_score or score > max_score:
+        return {"allowed": False, "evaluated": False, "score65_74_recovery_probe_skip_reason": "score_out_of_range"}
+
+    latency_state = str((ws_data or {}).get("latency_state", "") or "").strip().upper()
+    if latency_state == "DANGER":
+        return {"allowed": False, "evaluated": True, "score65_74_recovery_probe_skip_reason": "latency_state_danger"}
+
+    probe = feature_probe or _extract_buy_recovery_probe_features(
+        ai_engine,
+        ws_data,
+        recent_ticks,
+        recent_candles,
+    )
+    if not isinstance(probe, dict):
+        return {"allowed": False, "evaluated": True, "score65_74_recovery_probe_skip_reason": "feature_probe_missing"}
+    if _buy_recovery_probe_source_quality_hard_block(probe):
+        return {
+            **_score65_74_recovery_probe_micro_guard(probe),
+            "allowed": False,
+            "evaluated": True,
+            "score65_74_recovery_probe_skip_reason": "source_quality_hard_block",
+        }
+
+    guard = _score65_74_recovery_probe_repeat_guard(
+        stock,
+        code,
+        ws_data,
+        probe,
+        now_ts=now_ts,
+    )
+    return {**guard, "evaluated": True, "allowed": bool(guard.get("allowed"))}
+
+
 def _should_run_score65_74_recovery_probe(
     ai_decision,
     ai_score,
@@ -11663,40 +11903,17 @@ def _should_run_score65_74_recovery_probe(
     *,
     feature_probe=None,
 ):
-    if not _rule_bool("AI_SCORE65_74_RECOVERY_PROBE_ENABLED", False):
-        return False
-    if bool((ai_decision or {}).get("ai_fallback_score_50", False)):
-        return False
-    if str((ai_decision or {}).get("action", "WAIT") or "WAIT").upper() == "BUY":
-        return False
-
-    try:
-        score = float(ai_score or 0.0)
-    except Exception:
-        return False
-    min_score = _rule_float("AI_SCORE65_74_RECOVERY_PROBE_MIN_SCORE", 60)
-    max_score = _rule_float("AI_SCORE65_74_RECOVERY_PROBE_MAX_SCORE", 74)
-    if score < min_score or score > max_score:
-        return False
-
-    latency_state = str((ws_data or {}).get("latency_state", "") or "").strip().upper()
-    if latency_state == "DANGER":
-        return False
-
-    probe = feature_probe or _extract_buy_recovery_probe_features(
-        ai_engine,
-        ws_data,
-        recent_ticks,
-        recent_candles,
+    return bool(
+        _score65_74_recovery_probe_decision(
+            ai_decision,
+            ai_score,
+            ws_data,
+            recent_ticks,
+            recent_candles,
+            ai_engine,
+            feature_probe=feature_probe,
+        ).get("allowed")
     )
-    if not isinstance(probe, dict):
-        return False
-    if _buy_recovery_probe_source_quality_hard_block(probe):
-        return False
-
-    # Micro context is recorded downstream as submit-quality attribution. It
-    # must not recreate a hard AND gate for score 60-74 recovery candidates.
-    return True
 
 
 def _resolve_wait6579_probe_entry_unlock(stock) -> dict:
@@ -12459,7 +12676,7 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                                     ws_data=ws_data,
                                     feature_probe=feature_probe,
                                 )
-                            if not smoothing_buy_guard_blocked and _should_run_score65_74_recovery_probe(
+                            score65_74_probe_decision = _score65_74_recovery_probe_decision(
                                 ai_decision,
                                 ai_score,
                                 ws_data,
@@ -12467,7 +12684,11 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                                 recent_candles,
                                 ai_engine,
                                 feature_probe=feature_probe,
-                            ):
+                                stock=stock,
+                                code=code,
+                                now_ts=now_ts,
+                            )
+                            if not smoothing_buy_guard_blocked and score65_74_probe_decision.get("allowed"):
                                 action = "BUY"
                                 reason = (
                                     f"{reason} | score65_74_recovery_probe:{float(ai_score or 0.0):.0f}"
@@ -12484,6 +12705,20 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                                         'wait6579_probe_canary_armed': True,
                                         'wait6579_probe_canary_source': "score65_74_recovery_probe",
                                         'wait6579_probe_canary_score': f"{float(ai_score):.1f}",
+                                        'score65_74_recovery_probe_last_applied_at': now_ts,
+                                        'score65_74_recovery_probe_anchor_price': _safe_int(
+                                            (ws_data or {}).get("curr") or curr_price,
+                                            0,
+                                        ),
+                                        'score65_74_recovery_probe_last_buy_pressure': float(
+                                            feature_probe.get("buy_pressure", 0.0) or 0.0
+                                        ),
+                                        'score65_74_recovery_probe_last_tick_accel': float(
+                                            feature_probe.get("tick_accel", 0.0) or 0.0
+                                        ),
+                                        'score65_74_recovery_probe_last_micro_vwap_bp': float(
+                                            feature_probe.get("micro_vwap_bp", 0.0) or 0.0
+                                        ),
                                     },
                                 )
                                 _log_entry_pipeline(
@@ -12510,10 +12745,70 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                                     buy_pressure=f"{float(feature_probe.get('buy_pressure', 0.0) or 0.0):.2f}",
                                     tick_accel=f"{float(feature_probe.get('tick_accel', 0.0) or 0.0):.3f}",
                                     micro_vwap_bp=f"{float(feature_probe.get('micro_vwap_bp', 0.0) or 0.0):.2f}",
+                                    score65_74_recovery_probe_min_buy_pressure=(
+                                        f"{float(score65_74_probe_decision.get('score65_74_recovery_probe_min_buy_pressure') or 0.0):.2f}"
+                                    ),
+                                    score65_74_recovery_probe_min_tick_accel=(
+                                        f"{float(score65_74_probe_decision.get('score65_74_recovery_probe_min_tick_accel') or 0.0):.3f}"
+                                    ),
+                                    score65_74_recovery_probe_min_micro_vwap_bp=(
+                                        f"{float(score65_74_probe_decision.get('score65_74_recovery_probe_min_micro_vwap_bp') or 0.0):.2f}"
+                                    ),
                                     latency_state=str((ws_data or {}).get("latency_state", "") or "").strip().upper() or "-",
                                     **_build_tick_source_quality_log_fields(feature_probe),
                                     qty_cap=0,
                                     budget_cap_krw=int(_rule("AI_WAIT6579_PROBE_CANARY_MAX_BUDGET_KRW", 0) or 0),
+                                )
+                            elif not smoothing_buy_guard_blocked and score65_74_probe_decision.get("evaluated"):
+                                _log_entry_pipeline(
+                                    stock,
+                                    code,
+                                    "score65_74_recovery_probe_blocked",
+                                    **_score65_74_recovery_probe_block_contract_fields(),
+                                    applied=False,
+                                    decision_source="BUY_SCORE65_74_RECOVERY_PROBE",
+                                    threshold_family="score65_74_recovery_probe",
+                                    threshold_version=str(
+                                        _rule("AI_SCORE65_74_RECOVERY_PROBE_THRESHOLD_VERSION", "runtime_default")
+                                        or "runtime_default"
+                                    ),
+                                    threshold_calibration_state=str(
+                                        _rule("AI_SCORE65_74_RECOVERY_PROBE_CALIBRATION_STATE", "runtime_default")
+                                        or "runtime_default"
+                                    ),
+                                    score65_74_recovery_probe_skip_reason=(
+                                        score65_74_probe_decision.get("score65_74_recovery_probe_skip_reason") or "-"
+                                    ),
+                                    ai_score=f"{float(ai_score or 0.0):.1f}",
+                                    buy_pressure=f"{float(score65_74_probe_decision.get('buy_pressure') or 0.0):.2f}",
+                                    tick_accel=f"{float(score65_74_probe_decision.get('tick_accel') or 0.0):.3f}",
+                                    micro_vwap_bp=f"{float(score65_74_probe_decision.get('micro_vwap_bp') or 0.0):.2f}",
+                                    score65_74_recovery_probe_min_buy_pressure=(
+                                        f"{float(score65_74_probe_decision.get('score65_74_recovery_probe_min_buy_pressure') or 0.0):.2f}"
+                                    ),
+                                    score65_74_recovery_probe_min_tick_accel=(
+                                        f"{float(score65_74_probe_decision.get('score65_74_recovery_probe_min_tick_accel') or 0.0):.3f}"
+                                    ),
+                                    score65_74_recovery_probe_min_micro_vwap_bp=(
+                                        f"{float(score65_74_probe_decision.get('score65_74_recovery_probe_min_micro_vwap_bp') or 0.0):.2f}"
+                                    ),
+                                    same_symbol_recovery_probe_cooldown_until=(
+                                        score65_74_probe_decision.get("same_symbol_recovery_probe_cooldown_until", "-")
+                                    ),
+                                    same_symbol_recovery_probe_cooldown_remaining_sec=(
+                                        score65_74_probe_decision.get(
+                                            "same_symbol_recovery_probe_cooldown_remaining_sec",
+                                            "-",
+                                        )
+                                    ),
+                                    score65_74_recovery_probe_anchor_price=(
+                                        score65_74_probe_decision.get("score65_74_recovery_probe_anchor_price", "-")
+                                    ),
+                                    score65_74_recovery_probe_current_price=(
+                                        score65_74_probe_decision.get("score65_74_recovery_probe_current_price", "-")
+                                    ),
+                                    latency_state=str((ws_data or {}).get("latency_state", "") or "").strip().upper() or "-",
+                                    **_build_tick_source_quality_log_fields(feature_probe),
                                 )
                             _submit_watching_shared_prompt_shadow(
                                 stock_name=stock['name'],
@@ -12750,6 +13045,67 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
 
                 wait6579_probe_entry_unlock = _resolve_wait6579_probe_entry_unlock(stock)
                 wait6579_probe_entry_unlocked = bool(wait6579_probe_entry_unlock.get("unlocked"))
+                if (
+                    wait6579_probe_entry_unlocked
+                    and wait6579_probe_entry_unlock.get("source") == "score65_74_recovery_probe"
+                ):
+                    score65_74_reuse_decision = _score65_74_recovery_probe_reuse_guard(
+                        stock,
+                        code,
+                        ws_data,
+                        now_ts=now_ts,
+                    )
+                    if not score65_74_reuse_decision.get("allowed"):
+                        wait6579_probe_entry_unlocked = False
+                        _mutate_stock_state(
+                            stock,
+                            pop_fields=[
+                                "wait6579_probe_canary_armed",
+                                "wait6579_probe_canary_source",
+                                "wait6579_probe_canary_score",
+                            ],
+                        )
+                        _log_entry_pipeline(
+                            stock,
+                            code,
+                            "score65_74_recovery_probe_blocked",
+                            **_score65_74_recovery_probe_block_contract_fields(),
+                            applied=False,
+                            decision_source="BUY_SCORE65_74_RECOVERY_PROBE",
+                            threshold_family="score65_74_recovery_probe",
+                            score65_74_recovery_probe_skip_reason=(
+                                score65_74_reuse_decision.get("score65_74_recovery_probe_skip_reason")
+                                or "reused_unlock_guard_blocked"
+                            ),
+                            ai_score=f"{current_ai_score:.1f}",
+                            buy_pressure=f"{float(score65_74_reuse_decision.get('buy_pressure') or 0.0):.2f}",
+                            tick_accel=f"{float(score65_74_reuse_decision.get('tick_accel') or 0.0):.3f}",
+                            micro_vwap_bp=f"{float(score65_74_reuse_decision.get('micro_vwap_bp') or 0.0):.2f}",
+                            score65_74_recovery_probe_min_buy_pressure=(
+                                f"{float(score65_74_reuse_decision.get('score65_74_recovery_probe_min_buy_pressure') or 0.0):.2f}"
+                            ),
+                            score65_74_recovery_probe_min_tick_accel=(
+                                f"{float(score65_74_reuse_decision.get('score65_74_recovery_probe_min_tick_accel') or 0.0):.3f}"
+                            ),
+                            score65_74_recovery_probe_min_micro_vwap_bp=(
+                                f"{float(score65_74_reuse_decision.get('score65_74_recovery_probe_min_micro_vwap_bp') or 0.0):.2f}"
+                            ),
+                            same_symbol_recovery_probe_cooldown_until=(
+                                score65_74_reuse_decision.get("same_symbol_recovery_probe_cooldown_until", "-")
+                            ),
+                            same_symbol_recovery_probe_cooldown_remaining_sec=(
+                                score65_74_reuse_decision.get(
+                                    "same_symbol_recovery_probe_cooldown_remaining_sec",
+                                    "-",
+                                )
+                            ),
+                            score65_74_recovery_probe_anchor_price=(
+                                score65_74_reuse_decision.get("score65_74_recovery_probe_anchor_price", "-")
+                            ),
+                            score65_74_recovery_probe_current_price=(
+                                score65_74_reuse_decision.get("score65_74_recovery_probe_current_price", "-")
+                            ),
+                        )
                 if current_ai_score < 75 and current_ai_score != 50 and not wait6579_probe_entry_unlocked:
                     cooldown_time = config["AI_WAIT_DROP_COOLDOWN"]
                     with ENTRY_LOCK:
@@ -15079,9 +15435,11 @@ def _cancel_pending_entry_orders(stock, code, *, force=False):
             elif res:
                 is_success = True
 
-            if is_success or any(keyword in err_msg for keyword in ['취소가능수량', '잔고', '주문없음', '체결']):
+            already_resolved = any(keyword in err_msg for keyword in ['취소가능수량', '잔고', '주문없음', '체결'])
+            if is_success or already_resolved:
                 order['status'] = 'CANCELLED'
-                order['cancelled_at'] = time.time()
+                cancelled_at = time.time()
+                order['cancelled_at'] = cancelled_at
                 _log_entry_pipeline(
                     stock,
                     code,
@@ -15091,7 +15449,26 @@ def _cancel_pending_entry_orders(stock, code, *, force=False):
                     cancel_response="success" if is_success else "already_resolved",
                     cancel_message=err_msg[:160],
                 )
-                if is_success and normalize_strategy(stock.get("strategy")) == "SCALPING":
+                cancel_cooldown_eligible = (
+                    normalize_strategy(stock.get("strategy")) == "SCALPING"
+                    and (is_success or (already_resolved and "체결" not in err_msg))
+                )
+                if cancel_cooldown_eligible:
+                    recovery_probe_cancel_cooldown_sec = (
+                        max(0, _rule_int("SCALP_SAME_SYMBOL_LOSS_REENTRY_COOLDOWN_SEC", 3600))
+                        if _rule_bool("SCALP_SAME_SYMBOL_LOSS_REENTRY_COOLDOWN_ENABLED", True)
+                        else 0
+                    )
+                    if recovery_probe_cancel_cooldown_sec > 0:
+                        _mutate_stock_state(
+                            stock,
+                            set_fields={
+                                "last_entry_cancel_confirmed_at": cancelled_at,
+                                "score65_74_recovery_probe_cancel_cooldown_until": (
+                                    cancelled_at + recovery_probe_cancel_cooldown_sec
+                                ),
+                            },
+                        )
                     wait_result = (stock or {}).get("entry_cancel_wait_attribution_result") or {}
                     wait_profile, profile_base_wait_sec = _entry_cancel_wait_profile_base_sec(stock)
                     selected_timeout_sec = _safe_int(wait_result.get("cancel_wait_sec"), profile_base_wait_sec)
@@ -18776,18 +19153,45 @@ def _evaluate_scalp_sim_scale_in_window_expansion(
         return {}
     if not _rule_bool("SCALP_LIVE_SIMULATOR_ENABLED", True):
         return {}
-    max_per_position = max(0, _rule_int("SCALP_SIM_SCALE_IN_WINDOW_MAX_ORDERS_PER_POSITION", 1))
-    filled_count = 1 if stock.get("last_simulated_add_ord_no") else 0
-    if max_per_position > 0 and filled_count >= max_per_position:
-        return {}
-    day_key = datetime.now().strftime("%Y-%m-%d")
-    max_daily = max(0, _rule_int("SCALP_SIM_SCALE_IN_WINDOW_MAX_ORDERS_PER_DAY", 30))
-    created_today = int(_SCALP_SIM_SCALE_IN_WINDOW_DAILY_CREATED.get(day_key, 0) or 0)
-    if max_daily > 0 and created_today >= max_daily:
-        return {}
+    inferred_arm = "PYRAMID" if profit_rate >= 0 else "AVG_DOWN"
+    code = str(stock.get("code") or stock.get("stock_code") or "")
+
+    def log_funnel(state: str, reason: str) -> None:
+        _log_holding_pipeline(
+            stock,
+            code,
+            "scalp_sim_scale_in_candidate_funnel",
+            **_scalp_sim_event_fields(
+                threshold_family="scalp_sim_scale_in_window_expansion",
+                sim_record_id=stock.get("sim_record_id"),
+                add_type=inferred_arm,
+                scale_in_arm=inferred_arm,
+                scale_in_candidate_funnel_state=state,
+                scale_in_candidate_funnel_reason=reason,
+                profit_rate=profit_rate,
+                peak_profit=peak_profit,
+                current_ai_score=current_ai_score,
+                held_sec=held_sec,
+                metric_role="funnel_count",
+                window_policy="daily_arm_separated",
+                sample_floor="not_applicable_diagnostic",
+                primary_decision_metric="funnel_count",
+                source_quality_gate="sim_position_and_numeric_profit_rate",
+                runtime_effect=False,
+                actual_order_submitted=False,
+                broker_order_forbidden=True,
+                decision_authority="sim_observation_only",
+                forbidden_uses=[
+                    "real_scale_in_order",
+                    "runtime_ev_sample_floor",
+                    "real_execution_quality_claim",
+                ],
+            ),
+        )
     min_profit = _rule_float("SCALP_SIM_SCALE_IN_WINDOW_MIN_PROFIT_PCT", -2.5)
     max_profit = _rule_float("SCALP_SIM_SCALE_IN_WINDOW_MAX_PROFIT_PCT", 2.5)
     if profit_rate < min_profit or profit_rate > max_profit:
+        log_funnel("profit_window_blocked", "profit_rate_outside_window")
         return {}
     allowed = {
         str(item).strip().upper()
@@ -18796,11 +19200,36 @@ def _evaluate_scalp_sim_scale_in_window_expansion(
     }
     add_type = "PYRAMID" if profit_rate >= 0 else "AVG_DOWN"
     if add_type not in allowed:
-        fallback = sorted(allowed & {"PYRAMID", "AVG_DOWN"})
-        if not fallback:
-            return {}
-        add_type = fallback[0]
-    _SCALP_SIM_SCALE_IN_WINDOW_DAILY_CREATED[day_key] = created_today + 1
+        log_funnel("arm_not_allowed", "inferred_arm_not_enabled")
+        return {}
+    max_per_position = max(
+        0,
+        _rule_int(
+            f"SCALP_SIM_SCALE_IN_{add_type}_MAX_ORDERS_PER_POSITION",
+            _rule_int("SCALP_SIM_SCALE_IN_WINDOW_MAX_ORDERS_PER_POSITION", 1),
+        ),
+    )
+    attempt_key = f"sim_scale_in_attempt_count_{add_type.lower()}"
+    attempted_for_position = _safe_int(stock.get(attempt_key), 0)
+    if max_per_position > 0 and attempted_for_position >= max_per_position:
+        log_funnel("position_quota_blocked", "arm_position_attempt_quota_reached")
+        return {}
+    day_key = datetime.now().strftime("%Y-%m-%d")
+    max_daily = max(
+        0,
+        _rule_int(
+            f"SCALP_SIM_SCALE_IN_{add_type}_MAX_ORDERS_PER_DAY",
+            _rule_int("SCALP_SIM_SCALE_IN_WINDOW_MAX_ORDERS_PER_DAY", 30),
+        ),
+    )
+    daily_key = f"{day_key}:{add_type}"
+    created_today = int(_SCALP_SIM_SCALE_IN_WINDOW_DAILY_CREATED.get(daily_key, 0) or 0)
+    if max_daily > 0 and created_today >= max_daily:
+        log_funnel("daily_quota_blocked", "arm_daily_attempt_quota_reached")
+        return {}
+    _SCALP_SIM_SCALE_IN_WINDOW_DAILY_CREATED[daily_key] = created_today + 1
+    stock[attempt_key] = attempted_for_position + 1
+    log_funnel("eligible", "arm_window_and_attempt_quota_pass")
     return {
         "should_add": True,
         "add_type": add_type,
@@ -18816,6 +19245,7 @@ def _evaluate_scalp_sim_scale_in_window_expansion(
         "held_sec": held_sec,
         "max_orders_per_position": max_per_position,
         "max_orders_per_day": max_daily,
+        "scale_in_candidate_funnel_state": "eligible",
     }
 
 
@@ -18855,6 +19285,22 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
 
     raw_strategy = (stock.get('strategy') or 'KOSPI_ML').upper()
     strategy = 'SCALPING' if raw_strategy in ['SCALPING', 'SCALP'] else raw_strategy
+    simulated_position = _is_any_simulated_position(stock, strategy)
+    sim_window_observation = (
+        simulated_position
+        and action.get("source") == "scalp_sim_scale_in_window_expansion"
+    )
+    sim_funnel_fields = (
+        _scalp_sim_event_fields(
+            sim_record_id=stock.get("sim_record_id"),
+            actual_order_submitted=False,
+            broker_order_forbidden=True,
+            runtime_effect=False,
+            decision_authority="sim_observation_only",
+        )
+        if sim_window_observation
+        else {}
+    )
     swing_scale_micro_fields = {}
     if _is_swing_orderbook_micro_context_enabled(strategy):
         swing_scale_micro_fields = _build_swing_micro_log_fields(
@@ -18899,6 +19345,10 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
             curr_vs_micro_vwap_bp=f"{float(price_resolution.get('curr_vs_micro_vwap_bp') or 0):.2f}",
             max_micro_vwap_bps=f"{float(price_resolution.get('max_micro_vwap_bps') or 0):.2f}",
             price_source=price_resolution.get("price_source"),
+            scale_in_candidate_funnel_state=(
+                "price_guard_blocked" if sim_window_observation else None
+            ),
+            **sim_funnel_fields,
             **swing_scale_micro_fields,
         )
         log_info(
@@ -18907,7 +19357,6 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
         )
         return None
 
-    simulated_position = _is_any_simulated_position(stock, strategy)
     deposit = _sim_virtual_budget_krw() if simulated_position else kiwoom_orders.get_deposit(KIWOOM_TOKEN)
     sim_budget_fields = (
         {
@@ -18965,8 +19414,12 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
             effective_qty=effective_qty,
             cap_qty=cap_qty,
             floor_applied=floor_applied,
+            scale_in_candidate_funnel_state=(
+                "qty_guard_blocked" if sim_window_observation else None
+            ),
             **scale_in_qty_budget_fields,
             **sim_budget_fields,
+            **sim_funnel_fields,
             **swing_scale_micro_fields,
         )
         log_info(
@@ -19039,6 +19492,162 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
     if _is_scalp_simulated_position(stock, strategy):
         touched, fill_price, best_ask, best_bid = _scalp_sim_buy_quote_touch(ws_data or {}, final_price)
         ord_no = _simulated_order_no("SIMADD", code)
+        decision_time = time.time()
+        decision_time_ms = int(decision_time * 1000)
+        scale_in_decision_id = f"{stock.get('sim_record_id')}+{add_type}+{decision_time_ms}+{ord_no}"
+        prev_qty = _safe_int(stock.get("buy_qty"), 0)
+        prev_price = _safe_int(stock.get("buy_price"), curr_price)
+        execution_observation_enabled = _rule_bool(
+            "SCALP_SIM_SCALE_IN_EXECUTION_OBSERVATION_ENABLED", False
+        ) and action.get("source") == "scalp_sim_scale_in_window_expansion"
+        execution_arms = {
+            str(item).strip().upper()
+            for item in str(
+                _rule(
+                    "SCALP_SIM_SCALE_IN_EXECUTION_ARMS",
+                    "PASSIVE_BASELINE,MARKETABLE_OBSERVATION",
+                )
+                or ""
+            ).split(",")
+            if str(item).strip()
+        }
+        if execution_observation_enabled:
+            if "PASSIVE_BASELINE" in execution_arms:
+                passive_stage = (
+                    "scalp_sim_scale_in_order_assumed_filled"
+                    if touched
+                    else "scalp_sim_scale_in_order_unfilled"
+                )
+                _log_holding_pipeline(
+                    stock,
+                    code,
+                    passive_stage,
+                    **_scalp_sim_event_fields(
+                        threshold_family="scale_in_price_guard",
+                        sim_record_id=stock.get("sim_record_id"),
+                        sim_parent_record_id=stock.get("sim_parent_record_id"),
+                        add_type=add_type,
+                        qty=qty,
+                        ord_no=ord_no,
+                        scale_in_decision_id=scale_in_decision_id,
+                        execution_arm="PASSIVE_BASELINE",
+                        runtime_ev_eligible=False,
+                        limit_price=final_price,
+                        assumed_fill_price=fill_price if touched else None,
+                        curr_price=curr_price,
+                        best_ask=best_ask,
+                        best_bid=best_bid,
+                        quote_touched=touched,
+                        scale_in_candidate_funnel_state=("passive_filled" if touched else "passive_unfilled"),
+                        runtime_effect="sim_passive_execution_diagnostic_only",
+                        **sim_budget_fields,
+                        **_scalp_sim_candidate_window_context_fields(stock),
+                    ),
+                )
+            max_spread_bps = float(price_resolution.get("max_spread_bps") or 0.0)
+            observed_spread_bps = (
+                ((best_ask - best_bid) / best_bid * 10000.0)
+                if best_ask > 0 and best_bid > 0 and best_ask >= best_bid
+                else None
+            )
+            marketable_enabled = "MARKETABLE_OBSERVATION" in execution_arms
+            quote_age_sec = _get_ws_snapshot_age_sec(ws_data or {})
+            max_quote_age_sec = _rule_float("SCALP_PRE_AI_MAX_WS_AGE_SEC", 3.0)
+            quote_fresh = (
+                quote_age_sec is not None
+                and quote_age_sec <= max_quote_age_sec
+                and not _boolish_true((ws_data or {}).get("quote_stale"))
+            )
+            marketable_available = (
+                marketable_enabled
+                and best_ask > 0
+                and best_bid > 0
+                and quote_fresh
+                and observed_spread_bps is not None
+                and (max_spread_bps <= 0 or observed_spread_bps <= max_spread_bps)
+            )
+            if not marketable_available:
+                unavailable_state = (
+                    "execution_arm_disabled"
+                    if not marketable_enabled
+                    else "quote_unavailable"
+                )
+                _log_holding_pipeline(
+                    stock,
+                    code,
+                    "scalp_sim_scale_in_order_unfilled",
+                    **_scalp_sim_event_fields(
+                        threshold_family="scale_in_counterfactual",
+                        sim_record_id=stock.get("sim_record_id"),
+                        scale_in_decision_id=scale_in_decision_id,
+                        add_type=add_type,
+                        execution_arm="MARKETABLE_OBSERVATION",
+                        best_ask=best_ask,
+                        best_bid=best_bid,
+                        spread_bps=observed_spread_bps,
+                        max_spread_bps=max_spread_bps,
+                        quote_stale=_boolish_true((ws_data or {}).get("quote_stale")),
+                        quote_age_sec=quote_age_sec,
+                        max_quote_age_sec=max_quote_age_sec,
+                        scale_in_candidate_funnel_state=unavailable_state,
+                        runtime_ev_eligible=False,
+                        runtime_effect=False,
+                    ),
+                )
+                persist_scalp_simulator_state()
+                return None
+            marketable_price = best_ask
+            _log_holding_pipeline(
+                stock,
+                code,
+                "scalp_sim_scale_in_order_assumed_filled",
+                **_scalp_sim_event_fields(
+                    threshold_family="scale_in_counterfactual",
+                    sim_record_id=stock.get("sim_record_id"),
+                    sim_parent_record_id=stock.get("sim_parent_record_id"),
+                    add_type=add_type,
+                    qty=qty,
+                    ord_no=ord_no,
+                    scale_in_decision_id=scale_in_decision_id,
+                    execution_arm="MARKETABLE_OBSERVATION",
+                    runtime_ev_eligible=True,
+                    assumed_fill_price=marketable_price,
+                    prev_buy_qty=prev_qty,
+                    prev_buy_price=prev_price,
+                    curr_price=curr_price,
+                    best_ask=best_ask,
+                    best_bid=best_bid,
+                    quote_touched=True,
+                    scale_in_candidate_funnel_state="marketable_filled",
+                    runtime_effect="sim_shadow_tranche_only",
+                    **sim_budget_fields,
+                    **_scalp_sim_candidate_window_context_fields(stock),
+                ),
+            )
+            _log_scale_in_counterfactual_started(
+                stock=stock,
+                code=code,
+                add_type=add_type,
+                ord_no=ord_no,
+                qty=qty,
+                proposed_add_price=marketable_price,
+                curr_price=curr_price,
+                quote_touched=True,
+                scale_in_decision_id=scale_in_decision_id,
+                decision_time=decision_time,
+                pre_add_buy_qty=prev_qty,
+                pre_add_buy_price=prev_price,
+                execution_arm="MARKETABLE_OBSERVATION",
+                runtime_ev_eligible=True,
+            )
+            persist_scalp_simulator_state()
+            return {
+                "return_code": "0",
+                "ord_no": ord_no,
+                "simulated_order": True,
+                "shadow_tranche_only": True,
+                "actual_order_submitted": False,
+            }
         if not touched:
             _log_holding_pipeline(
                 stock,
@@ -19051,6 +19660,7 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
                     add_type=add_type,
                     qty=qty,
                     ord_no=ord_no,
+                    scale_in_decision_id=scale_in_decision_id,
                     limit_price=final_price,
                     curr_price=curr_price,
                     best_ask=best_ask,
@@ -19068,11 +19678,23 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
                     **_scalp_sim_candidate_window_context_fields(stock),
                 ),
             )
+            _log_scale_in_counterfactual_started(
+                stock=stock,
+                code=code,
+                add_type=add_type,
+                ord_no=ord_no,
+                qty=qty,
+                proposed_add_price=final_price,
+                curr_price=curr_price,
+                quote_touched=False,
+                scale_in_decision_id=scale_in_decision_id,
+                decision_time=decision_time,
+                pre_add_buy_qty=prev_qty,
+                pre_add_buy_price=prev_price,
+            )
             persist_scalp_simulator_state()
             return None
         now_ts = time.time()
-        prev_qty = _safe_int(stock.get("buy_qty"), 0)
-        prev_price = _safe_int(stock.get("buy_price"), curr_price)
         new_qty = prev_qty + qty
         new_avg_price = (
             int(round(((prev_price * prev_qty) + (fill_price * qty)) / new_qty))
@@ -19107,6 +19729,7 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
                 add_type=add_type,
                 qty=qty,
                 ord_no=ord_no,
+                scale_in_decision_id=scale_in_decision_id,
                 assumed_fill_price=fill_price,
                 prev_buy_qty=prev_qty,
                 new_buy_qty=new_qty,
@@ -19127,6 +19750,20 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
                 runtime_effect="simulated_holding_only",
                 **_scalp_sim_candidate_window_context_fields(stock),
             ),
+        )
+        _log_scale_in_counterfactual_started(
+            stock=stock,
+            code=code,
+            add_type=add_type,
+            ord_no=ord_no,
+            qty=qty,
+            proposed_add_price=fill_price,
+            curr_price=curr_price,
+            quote_touched=True,
+            scale_in_decision_id=scale_in_decision_id,
+            decision_time=decision_time,
+            pre_add_buy_qty=prev_qty,
+            pre_add_buy_price=prev_price,
         )
         persist_scalp_simulator_state()
         return {

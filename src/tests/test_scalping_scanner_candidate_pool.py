@@ -233,6 +233,141 @@ def test_promote_candidates_allows_value_top_reentry(monkeypatch):
     assert event_bus.events == [("COMMAND_WS_REG", {"codes": ["005930"]})]
 
 
+def test_real_source_guard_blocks_deteriorating_value_top_only_without_strength(monkeypatch, capsys):
+    emitted = []
+    monkeypatch.setattr(kiwoom_utils, "is_valid_stock", lambda *args, **kwargs: True)
+    monkeypatch.setattr(
+        scalping_scanner,
+        "emit_pipeline_event",
+        lambda pipeline, name, code, stage, *, record_id=None, fields=None: emitted.append(
+            {
+                "pipeline": pipeline,
+                "name": name,
+                "code": code,
+                "stage": stage,
+                "fields": fields or {},
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        scalping_scanner,
+        "TRADING_RULES",
+        SimpleNamespace(
+            SCALP_SCANNER_REAL_SOURCE_GUARD_ENABLED=True,
+            SCALP_SCANNER_REAL_SOURCE_GUARD_BLOCK_VALUE_TOP_ONLY=True,
+            SCALP_SCANNER_REAL_SOURCE_GUARD_MAX_DECLINE_PCT=0.0,
+        ),
+    )
+    db = _DB()
+    event_bus = _EventBus()
+    recent = {
+        "011070": {
+            "last_promoted_at": 1000.0,
+            "last_source_signature": ("VALUE_TOP",),
+            "last_score": 100.0,
+            "first_flu_rate": 8.4,
+            "first_price": 1082000,
+        }
+    }
+    target = {
+        "Code": "011070",
+        "Name": "LG이노텍",
+        "Price": 1050000,
+        "FluRate": 0.0,
+        "CntrStr": 0.0,
+        "CntrStrAvailable": False,
+        "Source": "VALUE_TOP",
+        "SourceSet": {"VALUE_TOP"},
+        "PriorityScore": 0.0,
+        "SpikeRate": 0.0,
+        "TradeValue": 90000000000,
+        "RankNow": 1,
+        "RankPrev": 2,
+    }
+
+    codes, recent = scalping_scanner.promote_candidates(
+        db,
+        event_bus,
+        [target],
+        recent,
+        max_new_codes=12,
+        reentry_cooldown_sec=1500,
+        token="TOKEN",
+        now_ts=1100.0,
+    )
+
+    assert codes == []
+    assert event_bus.events == []
+    assert db.records == []
+    assert recent["011070"]["last_flu_rate"] == 0.0
+    assert "value_top_only_repeat_deteriorating_without_strength" in capsys.readouterr().out
+    assert emitted
+    event = emitted[0]
+    assert event["pipeline"] == "ENTRY_PIPELINE"
+    assert event["stage"] == "scalping_scanner_real_source_guard_block"
+    assert event["fields"]["scanner_real_source_guard_applied"] is True
+    assert event["fields"]["scanner_real_source_guard_skip_reason"] == (
+        "value_top_only_repeat_deteriorating_without_strength"
+    )
+    assert event["fields"]["scanner_real_source_guard_block_event_emitted"] is True
+    assert event["fields"]["actual_order_submitted"] is False
+    assert event["fields"]["broker_order_forbidden"] is True
+    assert event["fields"]["decision_authority"] == "real_scalping_scanner_source_guard_only"
+
+
+def test_real_source_guard_allows_independent_source_even_when_guard_enabled(monkeypatch):
+    monkeypatch.setattr(kiwoom_utils, "is_valid_stock", lambda *args, **kwargs: True)
+    monkeypatch.setattr(
+        scalping_scanner,
+        "TRADING_RULES",
+        SimpleNamespace(
+            SCALP_SCANNER_REAL_SOURCE_GUARD_ENABLED=True,
+            SCALP_SCANNER_REAL_SOURCE_GUARD_BLOCK_VALUE_TOP_ONLY=True,
+            SCALP_SCANNER_REAL_SOURCE_GUARD_MAX_DECLINE_PCT=0.0,
+        ),
+    )
+    db = _DB()
+    event_bus = _EventBus()
+    recent = {
+        "005930": {
+            "last_promoted_at": 1000.0,
+            "last_source_signature": ("VALUE_TOP",),
+            "last_score": 100.0,
+            "first_flu_rate": 10.0,
+            "first_price": 70000,
+        }
+    }
+    target = {
+        "Code": "005930",
+        "Name": "삼성전자",
+        "Price": 69000,
+        "FluRate": 8.0,
+        "CntrStr": 0.0,
+        "CntrStrAvailable": False,
+        "Source": "VI+VALUE",
+        "SourceSet": {"VALUE_TOP", "VI_TRIGGERED"},
+        "PriorityScore": 0.0,
+        "SpikeRate": 0.0,
+        "TradeValue": 90000000000,
+        "RankNow": 1,
+        "RankPrev": 2,
+    }
+
+    codes, _ = scalping_scanner.promote_candidates(
+        db,
+        event_bus,
+        [target],
+        recent,
+        max_new_codes=12,
+        reentry_cooldown_sec=1500,
+        token="TOKEN",
+        now_ts=1100.0,
+    )
+
+    assert codes == ["005930"]
+    assert event_bus.events == [("COMMAND_WS_REG", {"codes": ["005930"]})]
+
+
 def test_run_scalper_iteration_keeps_ws_payload_and_max_new_codes(monkeypatch):
     monkeypatch.setattr(kiwoom_utils, "is_valid_stock", lambda *args, **kwargs: True)
     monkeypatch.setattr(

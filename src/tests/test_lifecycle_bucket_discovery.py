@@ -976,6 +976,10 @@ def _write_ldm(path):
                             "source_quality_gate": "pass",
                             "source_quality_adjusted_ev_pct": -13.3,
                             "recommended_route": "candidate_tighten_or_exclude",
+                            "scale_in_ev_coverage_state": "v2_ready",
+                            "scale_in_ev_label_version": "incremental_counterfactual_v2",
+                            "primary_decision_metric": "incremental_notional_ev_pct",
+                            "runtime_authority_ready": True,
                         },
                         {
                             "bucket_type": "blocker_reason",
@@ -986,6 +990,7 @@ def _write_ldm(path):
                             "source_quality_gate": "pass",
                             "source_quality_adjusted_ev_pct": 0.32,
                             "recommended_route": "candidate_recovery_or_relax",
+                            "runtime_authority_ready": True,
                         },
                     ]
                 },
@@ -1134,7 +1139,7 @@ def test_lifecycle_bucket_discovery_classifies_live_sim_and_new_buckets(tmp_path
         ai_raw_response=_ai_keep_response(),
     )
 
-    states = {item["bucket_id"]: item for item in report["surfaced_candidates"]}
+    states = {item["bucket_id"]: item for item in report["candidates"]}
     live = [item for item in states.values() if item["classification_state"] == "live_auto_apply_ready"]
     sim = [item for item in states.values() if item["classification_state"] == "sim_auto_approved"]
     entry_only_sources = [
@@ -1260,6 +1265,90 @@ def test_lifecycle_bucket_discovery_classifies_live_sim_and_new_buckets(tmp_path
     assert flow_probe_row["incomplete_flow_count"] == 0
     assert auto["approved_evidence_grade_counts"].get(mod.EVIDENCE_GRADE_2_COUNTERFACTUAL, 0) == 0
     assert auto["source_quality_status"] == "pass"
+
+
+def test_lifecycle_bucket_discovery_assigns_live_family_to_avg_down_arm(tmp_path, monkeypatch):
+    ldm_dir = tmp_path / "ldm"
+    report_dir = tmp_path / "report"
+    catalog_dir = tmp_path / "catalog"
+    sim_dir = tmp_path / "sim"
+    ldm_dir.mkdir()
+    monkeypatch.setattr(mod, "LDM_REPORT_DIR", ldm_dir)
+    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "CATALOG_DIR", catalog_dir)
+    monkeypatch.setattr(mod, "SIM_AUTO_APPROVAL_DIR", sim_dir)
+    ldm_path = ldm_dir / "lifecycle_decision_matrix_2026-05-22.json"
+    _write_ldm(ldm_path)
+    payload = json.loads(ldm_path.read_text(encoding="utf-8"))
+    payload["scale_in_bucket_attribution"]["buckets"].append(
+        {
+            "bucket_type": "arm",
+            "bucket_key": "AVG_DOWN",
+            "sample": 12,
+            "joined_sample": 12,
+            "join_rate": 1.0,
+            "source_quality_gate": "pass",
+            "source_quality_adjusted_ev_pct": -1.4,
+            "recommended_route": "candidate_tighten_or_exclude",
+            "scale_in_ev_coverage_state": "v2_ready",
+            "scale_in_ev_label_version": "incremental_counterfactual_v2",
+            "primary_decision_metric": "incremental_notional_ev_pct",
+            "runtime_authority_ready": True,
+        }
+    )
+    ldm_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+
+    report = mod.write_lifecycle_bucket_discovery_report(
+        "2026-05-22",
+        ai_raw_response=_ai_keep_response(),
+    )
+
+    states = {item["bucket_id"]: item for item in report["candidates"]}
+    avg_down = states["scale_in:arm:avg_down"]
+    assert avg_down["classification_state"] == "live_auto_apply_ready"
+    assert avg_down["live_auto_apply_family"] == mod.SCALE_IN_LIVE_AUTO_FAMILY
+    assert avg_down["bucket_type"] == "arm"
+    assert avg_down["bucket_key"] == "AVG_DOWN"
+
+
+def test_lifecycle_bucket_discovery_blocks_scale_in_arm_without_v2_coverage(tmp_path, monkeypatch):
+    ldm_dir = tmp_path / "ldm"
+    report_dir = tmp_path / "report"
+    catalog_dir = tmp_path / "catalog"
+    sim_dir = tmp_path / "sim"
+    ldm_dir.mkdir()
+    monkeypatch.setattr(mod, "LDM_REPORT_DIR", ldm_dir)
+    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "CATALOG_DIR", catalog_dir)
+    monkeypatch.setattr(mod, "SIM_AUTO_APPROVAL_DIR", sim_dir)
+    ldm_path = ldm_dir / "lifecycle_decision_matrix_2026-05-22.json"
+    _write_ldm(ldm_path)
+    payload = json.loads(ldm_path.read_text(encoding="utf-8"))
+    payload["scale_in_bucket_attribution"]["buckets"].append(
+        {
+            "bucket_type": "arm",
+            "bucket_key": "AVG_DOWN",
+            "sample": 12,
+            "joined_sample": 12,
+            "join_rate": 1.0,
+            "source_quality_gate": "pass",
+            "source_quality_adjusted_ev_pct": -1.4,
+            "recommended_route": "candidate_tighten_or_exclude",
+            "runtime_authority_ready": True,
+        }
+    )
+    ldm_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+
+    report = mod.write_lifecycle_bucket_discovery_report(
+        "2026-05-22",
+        ai_raw_response=_ai_keep_response(),
+    )
+
+    states = {item["bucket_id"]: item for item in report["candidates"]}
+    avg_down = states["scale_in:arm:avg_down"]
+    assert avg_down["classification_state"] == "source_only_keep_collecting"
+    assert avg_down.get("live_auto_apply_family") is None
+    assert avg_down["grade_reason"] == "scale_in_incremental_v2_coverage_not_ready"
 
 
 def test_lifecycle_flow_parent_absorbs_thin_children_for_live_policy(tmp_path, monkeypatch):

@@ -14,6 +14,11 @@ from pathlib import Path
 from typing import Any
 
 from src.engine.auto_promotion_contracts import primary_ev_uplift_passes, tier2_validation_passed
+from src.engine.automation.source_quality_clean_baseline import (
+    clean_baseline_policy,
+    is_date_allowed,
+    report_generated_before_clean_baseline,
+)
 from src.utils.constants import DATA_DIR
 from src.engine.lifecycle_bucket_discovery import (
     ENTRY_LIVE_AUTO_FAMILY,
@@ -35,6 +40,10 @@ SCALE_IN_BRIDGE_FAMILY = SCALE_IN_LIVE_AUTO_FAMILY
 GREENFIELD_REAL_ENV_FAMILY = "greenfield_real_environment_authority"
 
 ENTRY_TARGET_BUCKET_KEY = ENTRY_LIVE_AUTO_BUCKET_KEY
+SCALE_IN_PYRAMID_BUCKET_TYPE = "arm"
+SCALE_IN_PYRAMID_BUCKET_KEY = "PYRAMID"
+SCALE_IN_AVG_DOWN_BUCKET_TYPE = "arm"
+SCALE_IN_AVG_DOWN_BUCKET_KEY = "AVG_DOWN"
 ENTRY_BRIDGE_METADATA_STATE = "entry_only_bridge_metadata"
 ENTRY_BRIDGE_METADATA_REASON = "entry_only_bridge_metadata_not_live_candidate"
 ARCHIVED_RUNTIME_APPLY_BRIDGE_FAMILIES: set[str] = set()
@@ -135,16 +144,69 @@ def _discovery_report_path(target_date: str, *, suffix: str | None = None) -> Pa
 
 def _history_reports(target_date: str) -> list[dict[str, Any]]:
     reports: list[dict[str, Any]] = []
+    policy = clean_baseline_policy()
     for path in sorted(LDM_REPORT_DIR.glob("lifecycle_decision_matrix_*.json")):
         report_date = path.stem.removeprefix("lifecycle_decision_matrix_")
         if "_" in report_date:
             continue
         if report_date >= target_date:
             continue
+        if not is_date_allowed(report_date, policy):
+            continue
+        if report_generated_before_clean_baseline(path, policy):
+            continue
         payload = _load_json(path)
         if payload:
             reports.append(payload)
     return reports[-5:]
+
+
+def _scale_confirmation_reports(target_date: str) -> list[dict[str, Any]]:
+    """Load one independent prior-date canonical MTD confirmation artifact."""
+    policy = clean_baseline_policy()
+    if not is_date_allowed(target_date, policy):
+        return []
+    candidates: list[tuple[str, Path]] = []
+    for path in LDM_REPORT_DIR.glob("lifecycle_decision_matrix_*_mtd.json"):
+        report_date = path.stem.removeprefix("lifecycle_decision_matrix_").removesuffix("_mtd")
+        if report_date < target_date and is_date_allowed(report_date, policy):
+            candidates.append((report_date, path))
+    if not candidates:
+        return []
+    report_date, path = max(candidates, key=lambda item: item[0])
+    if not path.exists() or report_generated_before_clean_baseline(path, policy):
+        return []
+    payload = _load_json(path)
+    attribution = (
+        payload.get("scale_in_bucket_attribution")
+        if isinstance(payload.get("scale_in_bucket_attribution"), dict)
+        else {}
+    )
+    if str(payload.get("date") or "") != report_date:
+        return []
+    if str(payload.get("window_policy") or "") != "mtd":
+        return []
+    if str(attribution.get("window_policy") or "") != "mtd":
+        return []
+    summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
+    source_dates = [str(item) for item in (summary.get("source_dates") or []) if str(item)]
+    if len(source_dates) < 2:
+        return []
+    if source_dates[-1] != report_date or any(item >= target_date for item in source_dates):
+        return []
+    if any(not is_date_allowed(item, policy) for item in source_dates):
+        return []
+    if summary.get("clean_baseline_excluded_source_dates") != []:
+        return []
+    if summary.get("excluded_daily_report_dates") not in (None, {}):
+        return []
+    unavailable = [str(item) for item in (summary.get("unavailable_daily_report_dates") or []) if str(item)]
+    try:
+        if any(date.fromisoformat(item).weekday() < 5 for item in unavailable):
+            return []
+    except ValueError:
+        return []
+    return [payload]
 
 
 def _find_bucket(payload: dict[str, Any], section: str, bucket_type: str, bucket_key: str) -> dict[str, Any]:
@@ -201,6 +263,12 @@ def _state_for_bucket(
         bucket = _find_bucket(payload, section, bucket_type, bucket_key)
         if not bucket or str(bucket.get("source_quality_gate") or "") != "pass":
             continue
+        if section == "scale_in_bucket_attribution" and str(
+            bucket.get("scale_in_ev_coverage_state") or ""
+        ) != "v2_ready":
+            continue
+        if section == "scale_in_bucket_attribution" and bucket.get("runtime_authority_ready") is not True:
+            continue
         ev = _safe_float(bucket.get("source_quality_adjusted_ev_pct"), None)
         if ev is None:
             continue
@@ -211,7 +279,15 @@ def _state_for_bucket(
     meta = {"confirmation_count": confirmations, "conflict_count": conflicts}
     if conflicts:
         return "blocked_rolling_conflict", meta
-    meta["daily_only_auto_apply"] = confirmations <= 0
+    if confirmations <= 0:
+        meta.update(
+            {
+                "daily_only_auto_apply": False,
+                "runtime_bridge_exclusion_reason": "rolling_authority_confirmation_missing",
+            }
+        )
+        return "hold_rolling_confirmation_missing", meta
+    meta["daily_only_auto_apply"] = False
     return "live_auto_apply_ready", meta
 
 
@@ -225,6 +301,21 @@ def _discovery_live_families(discovery: dict[str, Any]) -> set[str]:
         )
         if _discovery_live_candidate_contract_passed(item)
     }
+
+
+def _discovery_scale_bucket_ready(
+    discovery: dict[str, Any], *, bucket_type: str, bucket_key: str
+) -> bool:
+    for item in discovery.get("live_auto_apply_candidates") or []:
+        if not _discovery_live_candidate_contract_passed(item):
+            continue
+        if str(item.get("live_auto_apply_family") or "") != SCALE_IN_BRIDGE_FAMILY:
+            continue
+        if str(item.get("stage") or "") != "scale_in":
+            continue
+        if str(item.get("bucket_type") or "") == bucket_type and str(item.get("bucket_key") or "") == bucket_key:
+            return True
+    return False
 
 
 def _discovery_candidate_tier2_passed(item: dict[str, Any]) -> bool:
@@ -977,6 +1068,111 @@ def _scale_source(bucket: dict[str, Any], *, role: str) -> dict[str, Any]:
         "source_quality_adjusted_ev_pct": bucket.get("source_quality_adjusted_ev_pct"),
         "recommended_route": bucket.get("recommended_route"),
         "source_quality_gate": bucket.get("source_quality_gate"),
+        "scale_in_ev_coverage_state": bucket.get("scale_in_ev_coverage_state"),
+        "counterfactual_method": bucket.get("counterfactual_method"),
+        "runtime_authority_ready": bucket.get("runtime_authority_ready"),
+        "runtime_authority_block_reason": bucket.get("runtime_authority_block_reason"),
+    }
+
+
+def _scale_candidate_legacy_blocked(
+    *,
+    target_date: str,
+    ev_label_version: str,
+    pyramid: dict[str, Any],
+    avg_down: dict[str, Any],
+    discovery: dict[str, Any],
+    discovery_live_by_family: dict[str, dict[str, Any]],
+    discovery_available: bool,
+) -> dict[str, Any]:
+    discovery_meta = _discovery_candidate_meta(
+        family=SCALE_IN_BRIDGE_FAMILY,
+        discovery=discovery,
+        discovery_live_by_family=discovery_live_by_family,
+    )
+    has_v2_observation = ev_label_version == "incremental_counterfactual_v2"
+    blocked_role = (
+        "v2_treatment_path_observation_not_runtime_authority"
+        if has_v2_observation
+        else "legacy_v1_state_profit_frozen_not_runtime_authority"
+    )
+    source_buckets = []
+    if pyramid:
+        source_buckets.append(_scale_source(pyramid, role=blocked_role))
+    if avg_down:
+        source_buckets.append(_scale_source(avg_down, role=blocked_role))
+    blocked_state = (
+        "blocked_incremental_ev_runtime_authority"
+        if has_v2_observation
+        else "blocked_legacy_v1_label_missing_incremental_ev"
+    )
+    return {
+        "candidate_id": f"{SCALE_IN_BRIDGE_FAMILY}:{target_date}",
+        "family": SCALE_IN_BRIDGE_FAMILY,
+        "stage": "scale_in",
+        "priority": 39,
+        "bridge_candidate_state": blocked_state,
+        "approval_required": False,
+        "human_approval_required": False,
+        "live_auto_apply": False,
+        "allowed_runtime_apply": False,
+        "runtime_effect": False,
+        "runtime_effect_after_approval": (
+            "blocked_until_paired_no_add_replay_available"
+            if has_v2_observation
+            else "blocked_until_incremental_counterfactual_v2_label_available"
+        ),
+        "target_env_keys": [],
+        "recommended_values": {
+            "effective_qty_cap": 1,
+            "threshold_version": f"{SCALE_IN_BRIDGE_FAMILY}:{target_date}",
+            "calibration_state": (
+                "blocked_paired_add_lifecycle_replay_missing"
+                if has_v2_observation
+                else "blocked_legacy_v1_label"
+            ),
+            "ev_label_version": ev_label_version or "missing",
+            "legacy_state_label_not_runtime_authority": not has_v2_observation,
+            "treatment_path_observation_not_runtime_authority": has_v2_observation,
+            "source_only_keep_collecting": True,
+        },
+        "current_values": {
+            "effective_qty_cap": 1,
+            "scalping_enable_pyramid": True,
+            "reversal_add_min_ai_score": 60,
+            "reversal_add_min_buy_pressure": 55.0,
+            "reversal_add_min_tick_accel": 0.95,
+        },
+        "source_bucket_keys": [str(item.get("bucket_key") or "") for item in source_buckets],
+        "source_buckets": source_buckets,
+        "observe_only_reference_buckets": [],
+        "rolling_confirmation": (
+            {
+                "pyramid": {
+                    "runtime_authority_ready": False,
+                    "block_reason": "paired_add_lifecycle_replay_not_implemented",
+                },
+                "avg_down": {
+                    "runtime_authority_ready": False,
+                    "block_reason": "paired_add_lifecycle_replay_not_implemented",
+                },
+            }
+            if has_v2_observation
+            else {
+                "pyramid": {"legacy_v1_frozen": True},
+                "avg_down": {"legacy_v1_frozen": True},
+            }
+        ),
+        **discovery_meta,
+        "primary_decision_metric": "incremental_notional_ev_pct",
+        "scale_in_ev_label_version": ev_label_version or "missing",
+        "decision_authority": "lifecycle_bucket_discovery_live_auto_apply",
+        "forbidden_uses": [
+            "scale_in_safety_guard_bypass",
+            "intraday_threshold_mutation",
+            "provider_route_change",
+            "bot_restart_trigger",
+        ],
     }
 
 
@@ -990,41 +1186,104 @@ def _scale_candidate(
     discovery: dict[str, Any],
     discovery_available: bool,
 ) -> dict[str, Any]:
-    pyramid = _find_bucket(payload, "scale_in_bucket_attribution", "arm", "PYRAMID")
-    avg_down = _find_bucket(payload, "scale_in_bucket_attribution", "blocker_namespace", "AVG_DOWN_ONLY")
-    pyramid_state, pyramid_roll = _state_for_bucket(
-        pyramid,
-        history,
-        section="scale_in_bucket_attribution",
-        bucket_type="arm",
-        bucket_key="PYRAMID",
-        positive_edge=False,
+    scale_attribution = payload.get("scale_in_bucket_attribution") if isinstance(payload.get("scale_in_bucket_attribution"), dict) else {}
+    ev_label_version = str(scale_attribution.get("scale_in_ev_label_version") or "")
+
+    pyramid = _find_bucket(
+        payload,
+        "scale_in_bucket_attribution",
+        SCALE_IN_PYRAMID_BUCKET_TYPE,
+        SCALE_IN_PYRAMID_BUCKET_KEY,
     )
-    avg_state, avg_roll = _state_for_bucket(
-        avg_down,
-        history,
-        section="scale_in_bucket_attribution",
-        bucket_type="blocker_namespace",
-        bucket_key="AVG_DOWN_ONLY",
-        positive_edge=False,
+    avg_down = _find_bucket(
+        payload,
+        "scale_in_bucket_attribution",
+        SCALE_IN_AVG_DOWN_BUCKET_TYPE,
+        SCALE_IN_AVG_DOWN_BUCKET_KEY,
     )
+    pyramid_ev = _safe_float(pyramid.get("source_quality_adjusted_ev_pct"), None)
+    avg_ev = _safe_float(avg_down.get("source_quality_adjusted_ev_pct"), None)
+
+    pyramid_ready = (
+        str(pyramid.get("scale_in_ev_coverage_state") or "") == "v2_ready"
+        and pyramid.get("runtime_authority_ready") is True
+    )
+    avg_down_ready = (
+        str(avg_down.get("scale_in_ev_coverage_state") or "") == "v2_ready"
+        and avg_down.get("runtime_authority_ready") is True
+    )
+    if not pyramid_ready and not avg_down_ready:
+        return _scale_candidate_legacy_blocked(
+            target_date=target_date,
+            ev_label_version=ev_label_version,
+            pyramid=pyramid,
+            avg_down=avg_down,
+            discovery=discovery,
+            discovery_live_by_family=discovery_live_by_family,
+            discovery_available=discovery_available,
+        )
+
+    pyramid_state, pyramid_roll = (
+        _state_for_bucket(
+            pyramid,
+            history,
+            section="scale_in_bucket_attribution",
+            bucket_type=SCALE_IN_PYRAMID_BUCKET_TYPE,
+            bucket_key=SCALE_IN_PYRAMID_BUCKET_KEY,
+            positive_edge=bool(pyramid_ev is not None and pyramid_ev > 0),
+        )
+        if pyramid_ready
+        else ("blocked_source_quality", {"scale_in_ev_coverage_state": pyramid.get("scale_in_ev_coverage_state") or "missing"})
+    )
+    avg_state, avg_roll = (
+        _state_for_bucket(
+            avg_down,
+            history,
+            section="scale_in_bucket_attribution",
+            bucket_type=SCALE_IN_AVG_DOWN_BUCKET_TYPE,
+            bucket_key=SCALE_IN_AVG_DOWN_BUCKET_KEY,
+            positive_edge=bool(avg_ev is not None and avg_ev > 0),
+        )
+        if avg_down_ready
+        else ("blocked_source_quality", {"scale_in_ev_coverage_state": avg_down.get("scale_in_ev_coverage_state") or "missing"})
+    )
+    pyramid_discovery_ready = _discovery_scale_bucket_ready(
+        discovery,
+        bucket_type=SCALE_IN_PYRAMID_BUCKET_TYPE,
+        bucket_key=SCALE_IN_PYRAMID_BUCKET_KEY,
+    )
+    avg_down_discovery_ready = _discovery_scale_bucket_ready(
+        discovery,
+        bucket_type=SCALE_IN_AVG_DOWN_BUCKET_TYPE,
+        bucket_key=SCALE_IN_AVG_DOWN_BUCKET_KEY,
+    )
+    if pyramid_state == "live_auto_apply_ready" and not pyramid_discovery_ready:
+        pyramid_state = "runtime_blocked_contract_gap"
+        pyramid_roll = {**pyramid_roll, "lifecycle_bucket_discovery_gate": "blocked_exact_bucket_missing"}
+    if avg_state == "live_auto_apply_ready" and not avg_down_discovery_ready:
+        avg_state = "runtime_blocked_contract_gap"
+        avg_roll = {**avg_roll, "lifecycle_bucket_discovery_gate": "blocked_exact_bucket_missing"}
     ready = pyramid_state == "live_auto_apply_ready" or avg_state == "live_auto_apply_ready"
     blocked_conflict = pyramid_state == "blocked_rolling_conflict" or avg_state == "blocked_rolling_conflict"
     blocked_source = pyramid_state == "blocked_source_quality" and avg_state == "blocked_source_quality"
-    if blocked_conflict:
-        state = "blocked_rolling_conflict"
-    elif ready:
+    blocked_discovery = (
+        pyramid_state == "runtime_blocked_contract_gap"
+        or avg_state == "runtime_blocked_contract_gap"
+    )
+    if ready:
         state = "live_auto_apply_ready"
-    elif blocked_source:
-        state = "blocked_source_quality"
-    else:
-        state = "bootstrap_pending"
-    if state == "live_auto_apply_ready" and SCALE_IN_BRIDGE_FAMILY not in discovery_live_families:
+    elif blocked_discovery:
         state = "runtime_blocked_contract_gap"
         pyramid_roll = {**pyramid_roll, "lifecycle_bucket_discovery_gate": "blocked"}
         avg_roll = {**avg_roll, "lifecycle_bucket_discovery_gate": "blocked"}
         pyramid_roll["lifecycle_bucket_discovery_available"] = bool(discovery_available)
         avg_roll["lifecycle_bucket_discovery_available"] = bool(discovery_available)
+    elif blocked_conflict:
+        state = "blocked_rolling_conflict"
+    elif blocked_source:
+        state = "blocked_source_quality"
+    else:
+        state = "bootstrap_pending"
     discovery_meta = _discovery_candidate_meta(
         family=SCALE_IN_BRIDGE_FAMILY,
         discovery=discovery,
@@ -1036,6 +1295,7 @@ def _scale_candidate(
         "effective_qty_cap": 1,
         "threshold_version": f"{SCALE_IN_BRIDGE_FAMILY}:{target_date}",
         "calibration_state": f"runtime_apply_bridge:{state}",
+        "ev_label_version": ev_label_version,
     }
     current_values: dict[str, Any] = {
         "effective_qty_cap": 1,
@@ -1045,8 +1305,14 @@ def _scale_candidate(
         "reversal_add_min_tick_accel": 0.95,
     }
     if pyramid_state == "live_auto_apply_ready":
-        target_env_keys.append("SCALPING_ENABLE_PYRAMID")
-        recommended_values["scalping_enable_pyramid"] = False
+        if pyramid_ev is not None and pyramid_ev > 0:
+            target_env_keys.append("SCALPING_ENABLE_PYRAMID")
+            recommended_values["scalping_enable_pyramid"] = True
+            recommended_values["pyramid_direction"] = "maintain_or_relax_positive_ev"
+        else:
+            target_env_keys.append("SCALPING_ENABLE_PYRAMID")
+            recommended_values["scalping_enable_pyramid"] = False
+            recommended_values["pyramid_direction"] = "tighten_or_disable_negative_ev"
     if avg_state == "live_auto_apply_ready":
         target_env_keys.extend(
             [
@@ -1055,19 +1321,40 @@ def _scale_candidate(
                 "REVERSAL_ADD_MIN_TICK_ACCEL",
             ]
         )
-        recommended_values.update(
-            {
-                "reversal_add_min_ai_score": 65,
-                "reversal_add_min_buy_pressure": 60.0,
-                "reversal_add_min_tick_accel": 1.05,
-            }
-        )
+        if avg_ev is not None and avg_ev > 0:
+            recommended_values.update(
+                {
+                    "reversal_add_min_ai_score": 55,
+                    "reversal_add_min_buy_pressure": 50.0,
+                    "reversal_add_min_tick_accel": 0.85,
+                    "avg_down_direction": "limited_recovery_positive_ev",
+                }
+            )
+        else:
+            recommended_values.update(
+                {
+                    "reversal_add_min_ai_score": 65,
+                    "reversal_add_min_buy_pressure": 60.0,
+                    "reversal_add_min_tick_accel": 1.05,
+                    "avg_down_direction": "tighten_or_exclude_negative_ev",
+                }
+            )
 
     source_buckets = []
     if pyramid:
-        source_buckets.append(_scale_source(pyramid, role="pyramid_tighten_or_disable"))
+        pyramid_role = (
+            "pyramid_maintain_or_relax_positive_incremental_ev"
+            if (pyramid_ev is not None and pyramid_ev > 0)
+            else "pyramid_tighten_or_disable_negative_incremental_ev"
+        )
+        source_buckets.append(_scale_source(pyramid, role=pyramid_role))
     if avg_down:
-        source_buckets.append(_scale_source(avg_down, role="avg_down_reversal_tighten"))
+        avg_down_role = (
+            "avg_down_limited_recovery_positive_incremental_ev"
+            if (avg_ev is not None and avg_ev > 0)
+            else "avg_down_tighten_or_exclude_negative_incremental_ev"
+        )
+        source_buckets.append(_scale_source(avg_down, role=avg_down_role))
     positive_refs = []
     for item in payload.get("scale_in_bucket_attribution", {}).get("buckets", []):
         if not isinstance(item, dict):
@@ -1100,7 +1387,7 @@ def _scale_candidate(
             "avg_down_state": avg_state,
         },
         **discovery_meta,
-        "primary_decision_metric": "source_quality_adjusted_ev_pct",
+        "primary_decision_metric": "incremental_notional_ev_pct",
         "decision_authority": "lifecycle_bucket_discovery_live_auto_apply",
         "forbidden_uses": [
             "scale_in_safety_guard_bypass",
@@ -1150,6 +1437,7 @@ def build_runtime_apply_bridge_report(target_date: str) -> dict[str, Any]:
         warnings.append("lifecycle_decision_matrix_missing")
     else:
         history = _history_reports(target_date)
+        scale_confirmation_reports = _scale_confirmation_reports(target_date)
         if not discovery:
             warnings.append("lifecycle_bucket_discovery_missing")
         candidates.append(
@@ -1166,7 +1454,7 @@ def build_runtime_apply_bridge_report(target_date: str) -> dict[str, Any]:
         candidates.append(
             _scale_candidate(
                 payload,
-                history,
+                scale_confirmation_reports,
                 target_date,
                 discovery_live_families=discovery_live_families,
                 discovery_live_by_family=discovery_live_by_family,

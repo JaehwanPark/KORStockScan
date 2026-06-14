@@ -1,4 +1,5 @@
 import json
+from datetime import date, timedelta
 
 from src.engine import runtime_apply_bridge as mod
 
@@ -20,6 +21,22 @@ def _write_discovery(path, *, live=True, tier2_status="parsed", with_windows=Tru
             },
             {
                 "bucket_id": "scale_in:arm:pyramid",
+                "stage": "scale_in",
+                "bucket_type": "arm",
+                "bucket_key": "PYRAMID",
+                "classification_state": "live_auto_apply_ready",
+                "live_auto_apply_family": mod.SCALE_IN_BRIDGE_FAMILY,
+                "allowed_runtime_apply": True,
+                "broker_order_forbidden": False,
+                "source_quality_gate": "pass",
+                "ai_review_status": tier2_status,
+                "auto_promotion_contract": {"tier2_status": tier2_status, "tier2_policy": "fail_closed"},
+            },
+            {
+                "bucket_id": "scale_in:arm:avg_down",
+                "stage": "scale_in",
+                "bucket_type": "arm",
+                "bucket_key": "AVG_DOWN",
                 "classification_state": "live_auto_apply_ready",
                 "live_auto_apply_family": mod.SCALE_IN_BRIDGE_FAMILY,
                 "allowed_runtime_apply": True,
@@ -52,11 +69,23 @@ def _write_discovery(path, *, live=True, tier2_status="parsed", with_windows=Tru
             window_path.write_text(path.read_text(encoding="utf-8"), encoding="utf-8")
 
 
-def _write_ldm(path, *, entry_ev=1.2, pyramid_ev=-3.0, avg_down_ev=-1.4):
+def _write_ldm(path, *, entry_ev=1.2, pyramid_ev=-3.0, avg_down_ev=-1.4, v2=False, avg_v2=None):
+    report_date = path.stem.removeprefix("lifecycle_decision_matrix_").split("_")[0]
+    previous_date = (date.fromisoformat(report_date) - timedelta(days=1)).isoformat()
+    is_window = path.stem.endswith(("_rolling5d", "_rolling10d", "_mtd"))
+    pyramid_coverage = "v2_ready" if v2 else "legacy_only"
+    avg_coverage = "v2_ready" if (v2 if avg_v2 is None else avg_v2) else "legacy_only"
     path.write_text(
         json.dumps(
             {
-                "date": path.stem.removeprefix("lifecycle_decision_matrix_"),
+                "date": report_date,
+                "window_policy": path.stem.split("_")[-1] if path.stem.endswith(("_rolling5d", "_rolling10d", "_mtd")) else "daily",
+                "summary": {
+                    "source_dates": [previous_date, report_date] if is_window else [report_date],
+                    "clean_baseline_excluded_source_dates": [],
+                    "excluded_daily_report_dates": {},
+                    "unavailable_daily_report_dates": [],
+                },
                 "entry_bucket_attribution": {
                     "buckets": [
                         {
@@ -70,6 +99,9 @@ def _write_ldm(path, *, entry_ev=1.2, pyramid_ev=-3.0, avg_down_ev=-1.4):
                     ]
                 },
                 "scale_in_bucket_attribution": {
+                    "window_policy": path.stem.split("_")[-1] if path.stem.endswith(("_rolling5d", "_rolling10d", "_mtd")) else "daily",
+                    "scale_in_ev_label_version": "incremental_counterfactual_v2" if v2 else "legacy_state_profit_v1",
+                    "primary_decision_metric": "incremental_notional_ev_pct" if v2 else "stage_ev_composite_pct",
                     "buckets": [
                         {
                             "bucket_type": "arm",
@@ -78,14 +110,18 @@ def _write_ldm(path, *, entry_ev=1.2, pyramid_ev=-3.0, avg_down_ev=-1.4):
                             "source_quality_adjusted_ev_pct": pyramid_ev,
                             "source_quality_gate": "pass",
                             "recommended_route": "candidate_tighten_or_exclude",
+                            "scale_in_ev_coverage_state": pyramid_coverage,
+                            "runtime_authority_ready": bool(v2),
                         },
                         {
-                            "bucket_type": "blocker_namespace",
-                            "bucket_key": "AVG_DOWN_ONLY",
+                            "bucket_type": "arm",
+                            "bucket_key": "AVG_DOWN",
                             "joined_sample": 2712,
                             "source_quality_adjusted_ev_pct": avg_down_ev,
                             "source_quality_gate": "pass",
                             "recommended_route": "candidate_tighten_or_exclude",
+                            "scale_in_ev_coverage_state": avg_coverage,
+                            "runtime_authority_ready": bool(v2 if avg_v2 is None else avg_v2),
                         },
                         {
                             "bucket_type": "blocker_reason",
@@ -102,6 +138,225 @@ def _write_ldm(path, *, entry_ev=1.2, pyramid_ev=-3.0, avg_down_ev=-1.4):
         ),
         encoding="utf-8",
     )
+
+
+def test_runtime_apply_bridge_gates_scale_in_arms_independently(tmp_path, monkeypatch):
+    ldm_dir = tmp_path / "ldm"
+    report_dir = tmp_path / "bridge"
+    ldm_dir.mkdir()
+    monkeypatch.setattr(mod, "LDM_REPORT_DIR", ldm_dir)
+    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+    discovery_path = tmp_path / "discovery" / "lifecycle_bucket_discovery_2026-06-12.json"
+    monkeypatch.setattr(mod, "discovery_report_path", lambda target_date: discovery_path)
+    _write_ldm(
+        ldm_dir / "lifecycle_decision_matrix_2026-06-11_mtd.json",
+        pyramid_ev=-3.0,
+        avg_down_ev=-1.4,
+        v2=True,
+        avg_v2=False,
+    )
+    _write_ldm(
+        ldm_dir / "lifecycle_decision_matrix_2026-06-12.json",
+        pyramid_ev=-3.0,
+        avg_down_ev=-1.4,
+        v2=True,
+        avg_v2=False,
+    )
+    _write_discovery(discovery_path)
+
+    report = mod.build_runtime_apply_bridge_report("2026-06-12")
+    scale = {item["family"]: item for item in report["candidates"]}[mod.SCALE_IN_BRIDGE_FAMILY]
+
+    assert scale["rolling_confirmation"]["avg_down"]["scale_in_ev_coverage_state"] == "legacy_only"
+    assert "SCALPING_ENABLE_PYRAMID" in scale["target_env_keys"]
+    assert "REVERSAL_ADD_MIN_AI_SCORE" not in scale["target_env_keys"]
+
+
+def test_scale_in_rolling_confirmation_excludes_treatment_only_history():
+    current = {
+        "bucket_type": "arm",
+        "bucket_key": "PYRAMID",
+        "source_quality_gate": "pass",
+        "recommended_route": "candidate_recovery_or_relax",
+        "source_quality_adjusted_ev_pct": 1.2,
+        "scale_in_ev_coverage_state": "v2_ready",
+        "runtime_authority_ready": True,
+    }
+    treatment_only_history = {
+        "scale_in_bucket_attribution": {
+            "buckets": [
+                {
+                    **current,
+                    "runtime_authority_ready": False,
+                    "source_quality_adjusted_ev_pct": -2.0,
+                    "recommended_route": "candidate_tighten_or_exclude",
+                }
+            ]
+        }
+    }
+
+    state, meta = mod._state_for_bucket(
+        current,
+        [treatment_only_history],
+        section="scale_in_bucket_attribution",
+        bucket_type="arm",
+        bucket_key="PYRAMID",
+        positive_edge=True,
+    )
+
+    assert state == "hold_rolling_confirmation_missing"
+    assert meta["confirmation_count"] == 0
+    assert meta["conflict_count"] == 0
+    assert meta["runtime_bridge_exclusion_reason"] == "rolling_authority_confirmation_missing"
+
+
+def test_scale_confirmation_reports_require_explicit_clean_window(tmp_path, monkeypatch):
+    monkeypatch.setattr(mod, "LDM_REPORT_DIR", tmp_path)
+    _write_ldm(tmp_path / "lifecycle_decision_matrix_2026-06-11_mtd.json", v2=True)
+    _write_ldm(tmp_path / "lifecycle_decision_matrix_2026-06-12_mtd.json", v2=True)
+    _write_ldm(tmp_path / "lifecycle_decision_matrix_2026-06-12.json", v2=True)
+    malformed = tmp_path / "lifecycle_decision_matrix_2026-06-11_rolling5d.json"
+    _write_ldm(malformed, v2=True)
+    payload = json.loads(malformed.read_text(encoding="utf-8"))
+    payload["window_policy"] = "daily"
+    malformed.write_text(json.dumps(payload), encoding="utf-8")
+
+    reports = mod._scale_confirmation_reports("2026-06-12")
+
+    assert len(reports) == 1
+    assert reports[0]["window_policy"] == "mtd"
+    assert reports[0]["date"] == "2026-06-11"
+
+
+def test_scale_confirmation_reports_require_explicit_clean_provenance(tmp_path, monkeypatch):
+    monkeypatch.setattr(mod, "LDM_REPORT_DIR", tmp_path)
+    path = tmp_path / "lifecycle_decision_matrix_2026-06-11_mtd.json"
+    _write_ldm(path, v2=True)
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["summary"].pop("clean_baseline_excluded_source_dates")
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    assert mod._scale_confirmation_reports("2026-06-12") == []
+
+
+def test_scale_confirmation_reports_reject_weekday_coverage_gap(tmp_path, monkeypatch):
+    monkeypatch.setattr(mod, "LDM_REPORT_DIR", tmp_path)
+    path = tmp_path / "lifecycle_decision_matrix_2026-06-11_mtd.json"
+    _write_ldm(path, v2=True)
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["summary"]["unavailable_daily_report_dates"] = ["2026-06-09"]
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    assert mod._scale_confirmation_reports("2026-06-12") == []
+
+
+def test_scale_confirmation_reports_accept_weekend_coverage_gap(tmp_path, monkeypatch):
+    monkeypatch.setattr(mod, "LDM_REPORT_DIR", tmp_path)
+    path = tmp_path / "lifecycle_decision_matrix_2026-06-08_mtd.json"
+    _write_ldm(path, v2=True)
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["summary"]["source_dates"] = ["2026-06-05", "2026-06-08"]
+    payload["summary"]["unavailable_daily_report_dates"] = ["2026-06-06", "2026-06-07"]
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    reports = mod._scale_confirmation_reports("2026-06-09")
+
+    assert len(reports) == 1
+    assert reports[0]["date"] == "2026-06-08"
+
+
+def test_scale_confirmation_reports_do_not_fallback_past_invalid_latest(tmp_path, monkeypatch):
+    monkeypatch.setattr(mod, "LDM_REPORT_DIR", tmp_path)
+    _write_ldm(tmp_path / "lifecycle_decision_matrix_2026-06-10_mtd.json", v2=True)
+    latest = tmp_path / "lifecycle_decision_matrix_2026-06-11_mtd.json"
+    _write_ldm(latest, v2=True)
+    payload = json.loads(latest.read_text(encoding="utf-8"))
+    payload["summary"]["excluded_daily_report_dates"] = {
+        "2026-06-11": "daily_lifecycle_source_quality_preflight_blocked"
+    }
+    latest.write_text(json.dumps(payload), encoding="utf-8")
+
+    assert mod._scale_confirmation_reports("2026-06-12") == []
+
+
+def test_history_reports_exclude_pre_clean_baseline(tmp_path, monkeypatch):
+    monkeypatch.setattr(mod, "LDM_REPORT_DIR", tmp_path)
+    _write_ldm(tmp_path / "lifecycle_decision_matrix_2026-06-03.json")
+    _write_ldm(tmp_path / "lifecycle_decision_matrix_2026-06-05.json")
+
+    reports = mod._history_reports("2026-06-12")
+
+    assert [item["date"] for item in reports] == ["2026-06-05"]
+
+
+def test_scale_in_arm_conflict_does_not_block_other_ready_arm():
+    pyramid = {
+        "bucket_type": "arm",
+        "bucket_key": "PYRAMID",
+        "source_quality_gate": "pass",
+        "recommended_route": "candidate_recovery_or_relax",
+        "source_quality_adjusted_ev_pct": 1.5,
+        "scale_in_ev_coverage_state": "v2_ready",
+        "runtime_authority_ready": True,
+    }
+    avg_down = {
+        "bucket_type": "arm",
+        "bucket_key": "AVG_DOWN",
+        "source_quality_gate": "pass",
+        "recommended_route": "candidate_tighten_or_exclude",
+        "source_quality_adjusted_ev_pct": -1.5,
+        "scale_in_ev_coverage_state": "v2_ready",
+        "runtime_authority_ready": True,
+    }
+    current = {
+        "scale_in_bucket_attribution": {
+            "scale_in_ev_label_version": "incremental_counterfactual_v2",
+            "buckets": [pyramid, avg_down],
+        }
+    }
+    history = [
+        {
+            "scale_in_bucket_attribution": {
+                "buckets": [
+                    pyramid,
+                    {
+                        **avg_down,
+                        "recommended_route": "candidate_recovery_or_relax",
+                        "source_quality_adjusted_ev_pct": 1.5,
+                    },
+                ]
+            }
+        }
+    ]
+    discovery = {
+        "live_auto_apply_candidates": [
+            {
+                "stage": "scale_in",
+                "bucket_type": "arm",
+                "bucket_key": "PYRAMID",
+                "live_auto_apply_family": mod.SCALE_IN_BRIDGE_FAMILY,
+                "classification_state": "live_auto_apply_ready",
+                "allowed_runtime_apply": True,
+                "source_quality_gate": "pass",
+                "auto_promotion_contract": {"tier2_status": "parsed"},
+            }
+        ]
+    }
+
+    candidate = mod._scale_candidate(
+        current,
+        history,
+        "2026-06-12",
+        discovery_live_families={mod.SCALE_IN_BRIDGE_FAMILY},
+        discovery_live_by_family={},
+        discovery=discovery,
+        discovery_available=True,
+    )
+
+    assert candidate["bridge_candidate_state"] == "live_auto_apply_ready"
+    assert candidate["rolling_confirmation"]["pyramid_state"] == "live_auto_apply_ready"
+    assert candidate["rolling_confirmation"]["avg_down_state"] == "blocked_rolling_conflict"
+    assert candidate["target_env_keys"] == ["SCALPING_ENABLE_PYRAMID"]
 
 
 def _copy_discovery_windows(path):
@@ -128,7 +383,7 @@ def test_runtime_apply_bridge_blocks_daily_only_bucket_without_cumulative_confir
 
     states = {item["family"]: item["bridge_candidate_state"] for item in report["candidates"]}
     assert states[mod.ENTRY_BRIDGE_FAMILY] == "entry_only_bridge_metadata"
-    assert states[mod.SCALE_IN_BRIDGE_FAMILY] == "runtime_blocked_contract_gap"
+    assert states[mod.SCALE_IN_BRIDGE_FAMILY] == "blocked_legacy_v1_label_missing_incremental_ev"
     assert report["summary"]["live_auto_apply_ready_count"] == 0
     assert "promotion_lifecycle_bucket_discovery_missing" in report["warnings"]
     assert report["summary"]["lifecycle_bucket_discovery_live_followup_count"] == 0
@@ -220,12 +475,12 @@ def test_runtime_apply_bridge_keeps_entry_as_metadata_and_scale_candidates_live_
     assert entry["target_env_keys"] == []
     assert entry["metadata_only"] is True
     assert entry["transition_target"] == "entry_dimension_provenance_only"
-    assert scale["bridge_candidate_state"] == "live_auto_apply_ready"
+    assert scale["bridge_candidate_state"] == "blocked_legacy_v1_label_missing_incremental_ev"
     assert scale["approval_required"] is False
-    assert scale["allowed_runtime_apply"] is True
-    assert scale["recommended_values"]["scalping_enable_pyramid"] is False
-    assert scale["recommended_values"]["reversal_add_min_ai_score"] == 65
-    assert scale["observe_only_reference_buckets"][0]["role"] == "observe_only_reference"
+    assert scale["allowed_runtime_apply"] is False
+    assert scale["recommended_values"]["legacy_state_label_not_runtime_authority"] is True
+    assert scale["recommended_values"]["source_only_keep_collecting"] is True
+    assert scale["observe_only_reference_buckets"] == []
 
 
 def test_runtime_apply_bridge_blocks_live_when_discovery_does_not_confirm(tmp_path, monkeypatch):
@@ -242,10 +497,7 @@ def test_runtime_apply_bridge_blocks_live_when_discovery_does_not_confirm(tmp_pa
     entry = {item["family"]: item for item in report["candidates"]}[mod.ENTRY_BRIDGE_FAMILY]
 
     assert states[mod.ENTRY_BRIDGE_FAMILY] == "entry_only_bridge_metadata"
-    assert states[mod.SCALE_IN_BRIDGE_FAMILY] == "runtime_blocked_contract_gap"
-    assert entry["explicit_runtime_exclusion"] is True
-    assert entry["bridge_exclusion_reason"] == "entry_only_bridge_metadata_not_live_candidate"
-    assert entry["transition_target"] == "entry_dimension_provenance_only"
+    assert states[mod.SCALE_IN_BRIDGE_FAMILY] == "blocked_legacy_v1_label_missing_incremental_ev"
     assert report["summary"]["live_auto_apply_ready_count"] == 0
 
 
@@ -262,7 +514,7 @@ def test_runtime_apply_bridge_blocks_live_when_discovery_tier2_not_parsed(tmp_pa
     states = {item["family"]: item["bridge_candidate_state"] for item in report["candidates"]}
 
     assert states[mod.ENTRY_BRIDGE_FAMILY] == "entry_only_bridge_metadata"
-    assert states[mod.SCALE_IN_BRIDGE_FAMILY] == "runtime_blocked_contract_gap"
+    assert states[mod.SCALE_IN_BRIDGE_FAMILY] == "blocked_legacy_v1_label_missing_incremental_ev"
 
 
 def test_runtime_apply_bridge_keeps_wait6579_discovery_candidate_as_entry_metadata(tmp_path, monkeypatch):
@@ -648,12 +900,9 @@ def test_runtime_apply_bridge_scale_ev_floor_miss_is_explicit_hold_not_contract_
     report = mod.build_runtime_apply_bridge_report("2026-05-21")
     scale = {item["family"]: item for item in report["candidates"]}[mod.SCALE_IN_BRIDGE_FAMILY]
 
-    assert scale["bridge_candidate_state"] == "bootstrap_pending"
+    assert scale["bridge_candidate_state"] == "blocked_legacy_v1_label_missing_incremental_ev"
     assert scale["allowed_runtime_apply"] is False
-    assert scale["rolling_confirmation"]["avg_down"]["runtime_bridge_exclusion_reason"] == (
-        "primary_ev_uplift_below_live_floor"
-    )
-    assert scale["rolling_confirmation"]["avg_down"]["primary_ev_uplift_floor_passed"] is False
+    assert scale["recommended_values"]["legacy_state_label_not_runtime_authority"] is True
 
 
 def test_runtime_apply_bridge_rejects_malformed_discovery_live_candidate(tmp_path, monkeypatch):

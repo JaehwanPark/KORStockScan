@@ -1,0 +1,380 @@
+{
+  "schema_version": 1,
+  "date": "2026-06-10",
+  "generated_at": "2026-06-13T09:53:27+09:00",
+  "report_type": "scale_in_incremental_counterfactual",
+  "metric_role": "sim_probe_ev",
+  "decision_authority": "sim_scale_in_counterfactual_only",
+  "primary_decision_metric": "incremental_notional_ev_pct",
+  "scale_in_ev_label_version": "incremental_counterfactual_v2",
+  "runtime_effect": false,
+  "sample_floor": 5,
+  "forbidden_uses": [
+    "real order enablement",
+    "threshold mutation",
+    "provider change",
+    "bot restart",
+    "position cap release",
+    "broker order submit",
+    "real scale_in submit",
+    "intraday threshold mutation"
+  ],
+  "source_quality_gate": "clean_baseline_policy_sim_only_probe_events",
+  "clean_baseline_policy": {
+    "report_type": "source_quality_clean_baseline",
+    "enabled": true,
+    "clean_tuning_baseline_date": "2026-06-04",
+    "clean_tuning_baseline_ts_kst": "2026-06-04T14:29:09+09:00",
+    "pre_baseline_decision": "decision_disqualified_archive_only",
+    "same_day_pre_baseline_decision": "raw_quarantined_archive_only",
+    "raw_data_policy": "archive_then_reset_current_day_raw; preserve archives for audit only",
+    "derived_report_policy": "regenerate_from_clean_baseline_only",
+    "operator_action_required": false,
+    "runtime_effect": false,
+    "allowed_runtime_apply": false,
+    "reason": "operator_requested_clean_tuning_restart_after_sim_probe_provenance_patch",
+    "forbidden_uses": [
+      "runtime_threshold_apply",
+      "order_submit",
+      "provider_route_change",
+      "bot_restart",
+      "real_execution_quality_approval",
+      "manual_threshold_promotion_from_pre_baseline_data"
+    ]
+  },
+  "summary": {
+    "counterfactual_event_count": 6,
+    "complete_row_count": 0,
+    "incomplete_row_count": 6,
+    "incomplete_reasons": {
+      "horizon_incomplete_30min": 5,
+      "horizon_incomplete_60min": 6,
+      "horizon_incomplete_10min": 3
+    },
+    "arm_counts": {
+      "PYRAMID": 6
+    },
+    "filled_count": 0,
+    "unfilled_count": 6,
+    "horizon_summary": {
+      "10min": {
+        "sample": 0,
+        "incremental_notional_ev_pct": null,
+        "diagnostic_win_rate": null
+      },
+      "30min": {
+        "sample": 0,
+        "incremental_notional_ev_pct": null,
+        "diagnostic_win_rate": null
+      },
+      "60min": {
+        "sample": 0,
+        "incremental_notional_ev_pct": null,
+        "diagnostic_win_rate": null
+      },
+      "final": {
+        "sample": 0,
+        "incremental_notional_ev_pct": null,
+        "diagnostic_win_rate": null
+      }
+    }
+  },
+  "cohorts": {
+    "by_arm": {
+      "AVG_DOWN": {
+        "sample": 0,
+        "horizons": {}
+      },
+      "PYRAMID": {
+        "sample": 0,
+        "horizons": {}
+      }
+    },
+    "by_quote_touched": {
+      "filled": {
+        "sample": 0,
+        "horizons": {}
+      },
+      "unfilled": {
+        "sample": 0,
+        "horizons": {}
+      }
+    },
+    "combined": {
+      "sample": 0,
+      "horizons": {}
+    }
+  },
+  "rows": [
+    {
+      "scale_in_decision_id": "SCALPSIM-475300-1781050927100-8fb8b8+PYRAMID+1781051556.784791",
+      "sim_record_id": "SCALPSIM-475300-1781050927100-8fb8b8",
+      "candidate_id": "SIMADD-475300-1781051556784-36ed52",
+      "scale_in_arm": "PYRAMID",
+      "decision_time": 1781051556.784791,
+      "decision_profit_rate": 0.0,
+      "pre_add_buy_price": 26135,
+      "pre_add_buy_qty": 0,
+      "proposed_add_price": 26135,
+      "proposed_add_qty": 18,
+      "proposed_add_notional": 470430,
+      "quote_touched": false,
+      "treatment_state": "ADD",
+      "control_state": "NO_ADD",
+      "actual_order_submitted": false,
+      "broker_order_forbidden": true,
+      "runtime_effect": false,
+      "decision_authority": "sim_scale_in_counterfactual_only",
+      "source_provenance": "reconstructed_from_legacy_pipeline_event",
+      "horizons": {
+        "10min": {
+          "no_add_pnl_krw": 0,
+          "add_pnl_krw": -15179,
+          "incremental_pnl_krw": -15179,
+          "incremental_notional_ev_pct": -3.2266,
+          "evaluation_price": 25350.468
+        },
+        "30min": {
+          "status": "horizon_incomplete",
+          "reason": "no_evaluation_price"
+        },
+        "60min": {
+          "status": "horizon_incomplete",
+          "reason": "no_evaluation_price"
+        },
+        "final": {
+          "no_add_pnl_krw": 0,
+          "add_pnl_krw": -14102,
+          "incremental_pnl_krw": -14102,
+          "incremental_notional_ev_pct": -2.9977,
+          "evaluation_price": 25410.0
+        }
+      },
+      "all_horizons_complete": false
+    },
+    {
+      "scale_in_decision_id": "SCALPSIM-475300-1781050927100-8fb8b8+PYRAMID+1781051658.791095",
+      "sim_record_id": "SCALPSIM-475300-1781050927100-8fb8b8",
+      "candidate_id": "SIMADD-475300-1781051658790-cd10b9",
+      "scale_in_arm": "PYRAMID",
+      "decision_time": 1781051658.791095,
+      "decision_profit_rate": 0.0,
+      "pre_add_buy_price": 26150,
+      "pre_add_buy_qty": 0,
+      "proposed_add_price": 26150,
+      "proposed_add_qty": 18,
+      "proposed_add_notional": 470700,
+      "quote_touched": false,
+      "treatment_state": "ADD",
+      "control_state": "NO_ADD",
+      "actual_order_submitted": false,
+      "broker_order_forbidden": true,
+      "runtime_effect": false,
+      "decision_authority": "sim_scale_in_counterfactual_only",
+      "source_provenance": "reconstructed_from_legacy_pipeline_event",
+      "horizons": {
+        "10min": {
+          "status": "horizon_incomplete",
+          "reason": "no_evaluation_price"
+        },
+        "30min": {
+          "status": "horizon_incomplete",
+          "reason": "no_evaluation_price"
+        },
+        "60min": {
+          "status": "horizon_incomplete",
+          "reason": "no_evaluation_price"
+        },
+        "final": {
+          "no_add_pnl_krw": 0,
+          "add_pnl_krw": -14372,
+          "incremental_pnl_krw": -14372,
+          "incremental_notional_ev_pct": -3.0533,
+          "evaluation_price": 25410.0
+        }
+      },
+      "all_horizons_complete": false
+    },
+    {
+      "scale_in_decision_id": "SCALPSIM-089970-1781051825921-df2f81+PYRAMID+1781054305.529955",
+      "sim_record_id": "SCALPSIM-089970-1781051825921-df2f81",
+      "candidate_id": "SIMADD-089970-1781054305529-26fa68",
+      "scale_in_arm": "PYRAMID",
+      "decision_time": 1781054305.529955,
+      "decision_profit_rate": 0.0,
+      "pre_add_buy_price": 82800,
+      "pre_add_buy_qty": 0,
+      "proposed_add_price": 82800,
+      "proposed_add_qty": 1,
+      "proposed_add_notional": 82800,
+      "quote_touched": false,
+      "treatment_state": "ADD",
+      "control_state": "NO_ADD",
+      "actual_order_submitted": false,
+      "broker_order_forbidden": true,
+      "runtime_effect": false,
+      "decision_authority": "sim_scale_in_counterfactual_only",
+      "source_provenance": "reconstructed_from_legacy_pipeline_event",
+      "horizons": {
+        "10min": {
+          "no_add_pnl_krw": 0,
+          "add_pnl_krw": -80,
+          "incremental_pnl_krw": -80,
+          "incremental_notional_ev_pct": -0.0966,
+          "evaluation_price": 82911.6
+        },
+        "30min": {
+          "status": "horizon_incomplete",
+          "reason": "no_evaluation_price"
+        },
+        "60min": {
+          "status": "horizon_incomplete",
+          "reason": "no_evaluation_price"
+        },
+        "final": {
+          "no_add_pnl_krw": 0,
+          "add_pnl_krw": 109,
+          "incremental_pnl_krw": 109,
+          "incremental_notional_ev_pct": 0.1316,
+          "evaluation_price": 83100.0
+        }
+      },
+      "all_horizons_complete": false
+    },
+    {
+      "scale_in_decision_id": "SCALPSIM-083450-1781052129614-90bbdf+PYRAMID+1781054219.341523",
+      "sim_record_id": "SCALPSIM-083450-1781052129614-90bbdf",
+      "candidate_id": "SIMADD-083450-1781054219341-04abc2",
+      "scale_in_arm": "PYRAMID",
+      "decision_time": 1781054219.341523,
+      "decision_profit_rate": 0.0,
+      "pre_add_buy_price": 58900,
+      "pre_add_buy_qty": 0,
+      "proposed_add_price": 58900,
+      "proposed_add_qty": 9,
+      "proposed_add_notional": 530100,
+      "quote_touched": false,
+      "treatment_state": "ADD",
+      "control_state": "NO_ADD",
+      "actual_order_submitted": false,
+      "broker_order_forbidden": true,
+      "runtime_effect": false,
+      "decision_authority": "sim_scale_in_counterfactual_only",
+      "source_provenance": "reconstructed_from_legacy_pipeline_event",
+      "horizons": {
+        "10min": {
+          "status": "horizon_incomplete",
+          "reason": "no_evaluation_price"
+        },
+        "30min": {
+          "status": "horizon_incomplete",
+          "reason": "no_evaluation_price"
+        },
+        "60min": {
+          "status": "horizon_incomplete",
+          "reason": "no_evaluation_price"
+        },
+        "final": {
+          "no_add_pnl_krw": 0,
+          "add_pnl_krw": -4811,
+          "incremental_pnl_krw": -4811,
+          "incremental_notional_ev_pct": -0.9076,
+          "evaluation_price": 58500.0
+        }
+      },
+      "all_horizons_complete": false
+    },
+    {
+      "scale_in_decision_id": "SCALPSIM-222800-1781052350270-69dbc7+PYRAMID+1781053867.121624",
+      "sim_record_id": "SCALPSIM-222800-1781052350270-69dbc7",
+      "candidate_id": "SIMADD-222800-1781053867121-8e6b7a",
+      "scale_in_arm": "PYRAMID",
+      "decision_time": 1781053867.121624,
+      "decision_profit_rate": 0.0,
+      "pre_add_buy_price": 120400,
+      "pre_add_buy_qty": 0,
+      "proposed_add_price": 120400,
+      "proposed_add_qty": 1,
+      "proposed_add_notional": 120400,
+      "quote_touched": false,
+      "treatment_state": "ADD",
+      "control_state": "NO_ADD",
+      "actual_order_submitted": false,
+      "broker_order_forbidden": true,
+      "runtime_effect": false,
+      "decision_authority": "sim_scale_in_counterfactual_only",
+      "source_provenance": "reconstructed_from_legacy_pipeline_event",
+      "horizons": {
+        "10min": {
+          "no_add_pnl_krw": 0,
+          "add_pnl_krw": -2649,
+          "incremental_pnl_krw": -2649,
+          "incremental_notional_ev_pct": -2.2002,
+          "evaluation_price": 118022.27
+        },
+        "30min": {
+          "no_add_pnl_krw": 0,
+          "add_pnl_krw": -2649,
+          "incremental_pnl_krw": -2649,
+          "incremental_notional_ev_pct": -2.2002,
+          "evaluation_price": 118022.27
+        },
+        "60min": {
+          "status": "horizon_incomplete",
+          "reason": "no_evaluation_price"
+        },
+        "final": {
+          "no_add_pnl_krw": 0,
+          "add_pnl_krw": -2372,
+          "incremental_pnl_krw": -2372,
+          "incremental_notional_ev_pct": -1.9701,
+          "evaluation_price": 118300.0
+        }
+      },
+      "all_horizons_complete": false
+    },
+    {
+      "scale_in_decision_id": "SCALPSIM-005690-1781052515260-c37c57+PYRAMID+1781054829.04242",
+      "sim_record_id": "SCALPSIM-005690-1781052515260-c37c57",
+      "candidate_id": "SIMADD-005690-1781054829042-0ef74d",
+      "scale_in_arm": "PYRAMID",
+      "decision_time": 1781054829.04242,
+      "decision_profit_rate": 0.0,
+      "pre_add_buy_price": 13520,
+      "pre_add_buy_qty": 0,
+      "proposed_add_price": 13520,
+      "proposed_add_qty": 20,
+      "proposed_add_notional": 270400,
+      "quote_touched": false,
+      "treatment_state": "ADD",
+      "control_state": "NO_ADD",
+      "actual_order_submitted": false,
+      "broker_order_forbidden": true,
+      "runtime_effect": false,
+      "decision_authority": "sim_scale_in_counterfactual_only",
+      "source_provenance": "reconstructed_from_legacy_pipeline_event",
+      "horizons": {
+        "10min": {
+          "status": "horizon_incomplete",
+          "reason": "no_evaluation_price"
+        },
+        "30min": {
+          "status": "horizon_incomplete",
+          "reason": "no_evaluation_price"
+        },
+        "60min": {
+          "status": "horizon_incomplete",
+          "reason": "no_evaluation_price"
+        },
+        "final": {
+          "no_add_pnl_krw": 0,
+          "add_pnl_krw": -2817,
+          "incremental_pnl_krw": -2817,
+          "incremental_notional_ev_pct": -1.0418,
+          "evaluation_price": 13410.0
+        }
+      },
+      "all_horizons_complete": false
+    }
+  ]
+}

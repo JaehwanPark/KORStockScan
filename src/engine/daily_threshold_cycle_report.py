@@ -3170,6 +3170,19 @@ def _is_scalp_sim_event(event: dict) -> bool:
     )
 
 
+def _is_synthetic_test_event(event: dict) -> bool:
+    fields = _event_fields(event)
+    code = str(fields.get("code") or event.get("stock_code") or event.get("code") or "").strip()
+    name = str(fields.get("name") or event.get("stock_name") or event.get("name") or "").strip().upper()
+    return name == "TEST" or (code == "123456" and name.startswith("TEST"))
+
+
+def _is_synthetic_test_row(row: dict) -> bool:
+    code = str(row.get("stock_code") or row.get("code") or "").strip()
+    name = str(row.get("stock_name") or row.get("name") or "").strip().upper()
+    return name == "TEST" or (code == "123456" and name.startswith("TEST"))
+
+
 def _extract_scalp_sim_completed_rows(events: list[dict]) -> list[dict]:
     rows: list[dict] = []
     seen: set[str] = set()
@@ -3303,10 +3316,25 @@ def _scalp_simulator_event_summary(
     *,
     target_date: str | None = None,
 ) -> dict:
-    sim_events = [event for event in events or [] if _is_scalp_sim_event(event)]
+    raw_sim_events = [event for event in events or [] if _is_scalp_sim_event(event)]
+    synthetic_excluded = [event for event in raw_sim_events if _is_synthetic_test_event(event)]
+    sim_events = [event for event in raw_sim_events if not _is_synthetic_test_event(event)]
     stage_counts = Counter(str(event.get("stage") or "-") for event in sim_events)
-    completed_rows = sim_completed_rows if sim_completed_rows is not None else _extract_scalp_sim_completed_rows(events)
-    lifecycle_bucket_match = _sim_lifecycle_bucket_match_aggregation(events)
+    duplicate_events = _events_for_stage(sim_events, "scalp_sim_duplicate_buy_signal")
+    duplicate_by_symbol = Counter(
+        str(event.get("stock_code") or _event_fields(event).get("code") or "-").strip()
+        for event in duplicate_events
+    )
+    duplicate_by_symbol_time_bucket = Counter(
+        (
+            str(event.get("stock_code") or _event_fields(event).get("code") or "-").strip(),
+            _time_bucket(event.get("emitted_at") or _event_fields(event).get("emitted_at")),
+        )
+        for event in duplicate_events
+    )
+    raw_completed_rows = sim_completed_rows if sim_completed_rows is not None else _extract_scalp_sim_completed_rows(events)
+    completed_rows = [row for row in raw_completed_rows or [] if not _is_synthetic_test_row(row)]
+    lifecycle_bucket_match = _sim_lifecycle_bucket_match_aggregation(sim_events)
     swing_micro_quality = _swing_micro_source_quality_breakdown(events)
     return {
         "enabled_default": True,
@@ -3314,6 +3342,7 @@ def _scalp_simulator_event_summary(
         "fill_policy": "signal_inclusive_best_ask_v1",
         "calibration_authority": "equal_weight",
         "event_count": len(sim_events),
+        "synthetic_excluded_count": len(synthetic_excluded),
         "stage_counts": dict(stage_counts),
         "entry_armed": int(stage_counts.get("scalp_sim_entry_armed", 0)),
         "buy_filled": int(stage_counts.get("scalp_sim_buy_order_assumed_filled", 0)),
@@ -3322,6 +3351,15 @@ def _scalp_simulator_event_summary(
         "entry_expired": int(stage_counts.get("scalp_sim_entry_expired", 0)),
         "entry_unpriced": int(stage_counts.get("scalp_sim_entry_unpriced", 0)),
         "duplicate_buy_signal": int(stage_counts.get("scalp_sim_duplicate_buy_signal", 0)),
+        "duplicate_buy_signal_by_symbol_top": dict(duplicate_by_symbol.most_common(10)),
+        "duplicate_dominance_symbol_count": sum(1 for count in duplicate_by_symbol.values() if count >= 10),
+        "duplicate_buy_signal_by_symbol_time_bucket_top": {
+            f"{symbol}|{bucket}": count
+            for (symbol, bucket), count in duplicate_by_symbol_time_bucket.most_common(10)
+        },
+        "duplicate_dominance_symbol_time_bucket_count": sum(
+            1 for count in duplicate_by_symbol_time_bucket.values() if count >= 5
+        ),
         "entry_ai_price_applied": int(stage_counts.get("scalp_sim_entry_ai_price_applied", 0)),
         "entry_ai_price_skip_order": int(stage_counts.get("scalp_sim_entry_ai_price_skip_order", 0)),
         "entry_submit_revalidation_warning": int(

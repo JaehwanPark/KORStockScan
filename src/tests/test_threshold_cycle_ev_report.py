@@ -24,7 +24,7 @@ def test_runtime_apply_bridge_summary_preserves_post_apply_provenance():
                     "approval_id": "scale-approval",
                     "runtime_apply_bridge_family": "scale_in_bucket_runtime_policy_v1",
                     "bridge_candidate_id": "scale_in_bucket_runtime_policy_v1:2026-05-21",
-                    "source_bucket_key": "PYRAMID,AVG_DOWN_ONLY",
+                    "source_bucket_key": "PYRAMID,AVG_DOWN",
                     "actual_runtime_effect": "bounded_scale_in_policy_tighten_live_auto",
                 }
             ],
@@ -46,7 +46,7 @@ def test_runtime_apply_bridge_summary_preserves_post_apply_provenance():
     summary = mod._runtime_apply_bridge_summary(manifest)
     assert summary["selected_count"] == 1
     assert summary["selected"][0]["approval_id"] == "scale-approval"
-    assert summary["selected"][0]["source_bucket_key"] == "PYRAMID,AVG_DOWN_ONLY"
+    assert summary["selected"][0]["source_bucket_key"] == "PYRAMID,AVG_DOWN"
     assert summary["selected"][0]["actual_runtime_effect"] == "bounded_scale_in_policy_tighten_live_auto"
 
 

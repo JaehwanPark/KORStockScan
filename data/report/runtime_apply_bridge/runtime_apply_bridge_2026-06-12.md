@@ -9,19 +9,19 @@
 - greenfield_policy_emit_blocker_detail: `lifecycle flow exists, but no lifecycle flow is live_auto_apply_ready for greenfield policy emission`
 - greenfield_lifecycle_flow live/surfaced/total: `0` / `200` / `500`
 - lifecycle_bucket_discovery_source_contract_status: `pass`
-- lifecycle_bucket_discovery_ai_review_status: `parsed`
+- lifecycle_bucket_discovery_ai_review_status: `disabled`
 - lifecycle_bucket_promotion_window: `mtd`
-- lifecycle_bucket_promotion_contract_passed: `True`
+- lifecycle_bucket_promotion_contract_passed: `False`
 - lifecycle_bucket_discovery_live_followup_count: `0`
 - note: `not_emitted_no_live_auto_ready_lifecycle_flow` means lifecycle flow exists but no greenfield live-auto-ready flow is available.
 - human_approval_required: `False`
 - runtime mutation: `none`
-- warnings: `['greenfield_policy_not_emitted_no_live_auto_ready_lifecycle_flow']`
+- warnings: `['promotion_lifecycle_bucket_discovery_contract_not_passed', 'greenfield_policy_not_emitted_no_live_auto_ready_lifecycle_flow', 'ai_review_provider_disabled']`
 
 ## 근거
 
 - `entry_wait6579_score66_69_recovery_gate_v1`: state=`entry_only_bridge_metadata`, allowed_runtime_apply=`False`, approval_required=`False`, live_auto_apply=`False`, metadata_only=`True`, ai_followup=`-`
-- `scale_in_bucket_runtime_policy_v1`: state=`bootstrap_pending`, allowed_runtime_apply=`False`, approval_required=`False`, live_auto_apply=`False`, metadata_only=`False`, ai_followup=`-`
+- `scale_in_bucket_runtime_policy_v1`: state=`blocked_incremental_ev_runtime_authority`, allowed_runtime_apply=`False`, approval_required=`False`, live_auto_apply=`False`, metadata_only=`False`, ai_followup=`-`
 
 ## 다음 액션
 

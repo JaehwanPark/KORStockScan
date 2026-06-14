@@ -7,11 +7,11 @@
 - primary_decision_metric: `stage_ev_composite_pct`
 
 ## Summary
-- total_rows: `123025`
-- source_rows_total: `192771`
-- retained_rows: `123025`
+- total_rows: `122969`
+- source_rows_total: `192735`
+- retained_rows: `122969`
 - dropped_rows_by_source: `{}`
-- joined_rows: `113490`
+- joined_rows: `113414`
 - policy_pass_count: `5`
 - promote_ready_count: `0`
 - entry_bucket_actionable_count: `None`
@@ -22,7 +22,7 @@
 - scale_in_bucket_runtime_candidate_count: `None`
 - overnight_bucket_actionable_count: `None`
 - overnight_bucket_runtime_candidate_count: `None`
-- lifecycle_flow_bucket_count: `570`
+- lifecycle_flow_bucket_count: `569`
 - lifecycle_flow_complete_count: `579`
 - lifecycle_flow_complete_breakdown direct/adm/fallback: `None` / `None` / `None`
 - lifecycle_flow_runtime_candidate_count: `0`
@@ -36,27 +36,27 @@
 ## Policy Entries
 | stage | sample | joined | ev | confidence | source_quality | action | promote_ready |
 | --- | ---: | ---: | ---: | ---: | --- | --- | --- |
-| `entry` | 5285 | 977 | 0.4942 | 0.996 | `pass` | `BUY_DEFENSIVE` | False |
-| `submit` | 2742 | 1911 | -0.5891 | 0.997 | `pass` | `NO_CHANGE` | False |
-| `holding` | 2584 | 1911 | -0.9652 | 0.9966 | `pass` | `EXIT` | False |
-| `scale_in` | 106169 | 105314 | -0.4165 | 1.0 | `pass` | `NO_CHANGE` | False |
-| `exit` | 6245 | 3377 | -0.9841 | 1.0 | `pass` | `EXIT` | False |
+| `entry` | 5209 | 901 | 0.393 | 0.9639 | `pass` | `WAIT_REQUOTE` | False |
+| `submit` | 2746 | 1911 | -0.5891 | 0.997 | `pass` | `NO_CHANGE` | False |
+| `holding` | 2588 | 1911 | -0.9652 | 0.9966 | `pass` | `EXIT` | False |
+| `scale_in` | 106173 | 105314 | -0.4165 | 1.0 | `pass` | `NO_CHANGE` | False |
+| `exit` | 6253 | 3377 | -0.9841 | 1.0 | `pass` | `EXIT` | False |
 
 ## Lifecycle Flow Bucket Attribution
 
 - decision_authority: `aggregated_lifecycle_flow_bucket_attribution_source_only`
 - metric_scope: `None`
 - primary_decision_metric: `None`
-- summary: `{'bucket_count': 570, 'complete_flow_count': 579, 'incomplete_flow_count': 111659, 'runtime_candidate_count': 0, 'workorder_count': 0}`
+- summary: `{'bucket_count': 569, 'complete_flow_count': 579, 'incomplete_flow_count': 111595, 'runtime_candidate_count': 0, 'workorder_count': 0}`
 
 | lifecycle_flow_bucket_id | sample | joined | ev | route | source_quality |
 | --- | ---: | ---: | ---: | --- | --- |
-| `lifecycle_flow:combo_lifecycle_flow:entry_entry_missing_submit_submit_missing_holding_holdin:8cd4f96ab3` | 80133 | 79821 | -0.7414 | `candidate_tighten_or_exclude` | `hold_sample_or_incomplete_flow` |
+| `lifecycle_flow:combo_lifecycle_flow:entry_entry_missing_submit_submit_missing_holding_holdin:8cd4f96ab3` | 80137 | 79821 | -0.7414 | `candidate_tighten_or_exclude` | `hold_sample_or_incomplete_flow` |
 | `lifecycle_flow:combo_lifecycle_flow:entry_entry_missing_submit_submit_missing_holding_holdin:7d607fe77a` | 24671 | 24128 | 0.6822 | `candidate_recovery_or_relax` | `hold_sample_or_incomplete_flow` |
 | `lifecycle_flow:combo_lifecycle_flow:entry_entry_missing_submit_submit_missing_holding_holdin:b3a435d983` | 1147 | 1147 | -1.093 | `candidate_tighten_or_exclude` | `hold_sample_or_incomplete_flow` |
-| `lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_70p_source_wait:2f82bccefe` | 188 | 188 | 1.1795 | `candidate_recovery_or_relax` | `hold_sample_or_incomplete_flow` |
-| `lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_66_69_source_wa:7535817223` | 165 | 165 | 1.3089 | `candidate_recovery_or_relax` | `hold_sample_or_incomplete_flow` |
-| `lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_63_65_source_wa:0b05a5c5af` | 162 | 162 | 1.4495 | `candidate_recovery_or_relax` | `hold_sample_or_incomplete_flow` |
+| `lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_70p_source_wait:2f82bccefe` | 183 | 183 | 1.3108 | `candidate_recovery_or_relax` | `hold_sample_or_incomplete_flow` |
+| `lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_66_69_source_wa:7535817223` | 133 | 133 | 1.3106 | `candidate_recovery_or_relax` | `hold_sample_or_incomplete_flow` |
+| `lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_63_65_source_wa:0b05a5c5af` | 124 | 124 | 1.0774 | `candidate_recovery_or_relax` | `hold_sample_or_incomplete_flow` |
 | `lifecycle_flow:combo_lifecycle_flow:entry_entry_missing_submit_submit_missing_holding_holdin:8f11eac72c` | 98 | 98 | -0.3721 | `candidate_tighten_or_exclude` | `hold_sample_or_incomplete_flow` |
 | `lifecycle_flow:combo_lifecycle_flow:entry_entry_missing_submit_submit_missing_holding_holdin:8c4b62cc28` | 34 | 34 | -0.9123 | `candidate_tighten_or_exclude` | `hold_sample_or_incomplete_flow` |
 | `lifecycle_flow:combo_lifecycle_flow:entry_entry_missing_submit_submit_missing_holding_holdin:8aa313d5fb` | 22 | 22 | -0.9105 | `candidate_tighten_or_exclude` | `hold_sample_or_incomplete_flow` |
@@ -76,32 +76,32 @@
 
 - decision_authority: `aggregated_entry_bucket_attribution_source_only`
 - primary_decision_metric: `None`
-- summary: `{'bucket_count': 375, 'complete_flow_count': 0, 'incomplete_flow_count': 0, 'runtime_candidate_count': 0, 'workorder_count': 0}`
+- summary: `{'bucket_count': 374, 'complete_flow_count': 0, 'incomplete_flow_count': 0, 'runtime_candidate_count': 0, 'workorder_count': 0}`
 
 | bucket_type | bucket_key | sample | joined | ev | avg_profit | win_rate | route |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | --- |
-| `liquidity_bucket` | `liquidity_high` | 3203 | 974 | 0.4932 | 0.6828 | 0.4671 | `hold_sample` |
-| `overbought_bucket` | `overbought_normal` | 2791 | 671 | 0.5002 | 0.325 | 0.4545 | `source_quality_workorder` |
-| `chosen_action` | `WAIT_REQUOTE` | 516 | 516 | 1.3111 | 2.368 | 0.6531 | `hold_sample` |
-| `exit_rule` | `exit_unknown` | 4824 | 516 | 1.3111 | 2.368 | 0.6531 | `source_quality_workorder` |
+| `liquidity_bucket` | `liquidity_high` | 3128 | 899 | 0.3956 | 0.4438 | 0.4438 | `hold_sample` |
+| `overbought_bucket` | `overbought_normal` | 2731 | 611 | 0.3772 | -0.0012 | 0.4255 | `source_quality_workorder` |
+| `chosen_action` | `WAIT_REQUOTE` | 440 | 440 | 1.245 | 2.1599 | 0.6364 | `hold_sample` |
+| `exit_rule` | `exit_unknown` | 4748 | 440 | 1.245 | 2.1599 | 0.6364 | `source_quality_workorder` |
 | `chosen_action` | `NO_BUY_AI` | 3210 | 438 | -0.4147 | -1.2569 | 0.2443 | `source_quality_workorder` |
-| `stale_bucket` | `fresh_or_unflagged` | 1577 | 402 | 0.9455 | 1.8436 | 0.6343 | `hold_sample` |
-| `source_stage` | `wait6579_ev_cohort` | 402 | 402 | 0.9455 | 1.8436 | 0.6343 | `hold_sample` |
-| `strength_bucket` | `weak_strength_momentum` | 1861 | 392 | -0.1533 | -0.7811 | 0.3163 | `source_quality_workorder` |
 | `source_stage` | `scalp_entry_action_decision_snapshot` | 1643 | 374 | -0.4251 | -1.2793 | 0.246 | `source_quality_workorder` |
+| `strength_bucket` | `weak_strength_momentum` | 1843 | 374 | -0.2326 | -0.9536 | 0.2888 | `source_quality_workorder` |
 | `stale_bucket` | `fresh` | 1950 | 373 | -0.4251 | -1.2856 | 0.244 | `source_quality_workorder` |
-| `time_bucket` | `time_1000_1200` | 1365 | 367 | 0.4688 | 0.786 | 0.5095 | `candidate_recovery_or_relax` |
-| `strength_bucket` | `strong_strength_momentum` | 548 | 341 | 0.8603 | 1.6583 | 0.5924 | `source_quality_workorder` |
+| `stale_bucket` | `fresh_or_unflagged` | 1501 | 326 | 0.7711 | 1.4404 | 0.6074 | `hold_sample` |
+| `source_stage` | `wait6579_ev_cohort` | 326 | 326 | 0.7711 | 1.4404 | 0.6074 | `hold_sample` |
+| `time_bucket` | `time_1000_1200` | 1302 | 304 | 0.2358 | 0.1319 | 0.4605 | `candidate_recovery_or_relax` |
+| `strength_bucket` | `strong_strength_momentum` | 495 | 288 | 0.6652 | 1.2023 | 0.5729 | `source_quality_workorder` |
 | `score_band` | `score_60_62` | 1979 | 240 | -0.4598 | -1.2252 | 0.2375 | `source_quality_workorder` |
 | `exit_rule` | `scalp_soft_stop_pct` | 216 | 216 | -0.3477 | -1.9931 | 0.0 | `source_quality_workorder` |
-| `time_bucket` | `time_0900_1000` | 1030 | 190 | 0.4474 | 0.3087 | 0.4474 | `candidate_tighten_or_exclude` |
-| `score_band` | `score_63_65` | 413 | 177 | 1.0178 | 1.6471 | 0.5763 | `source_quality_workorder` |
+| `time_bucket` | `time_0900_1000` | 1017 | 177 | 0.3199 | 0.2005 | 0.4237 | `candidate_tighten_or_exclude` |
 | `time_bucket` | `time_1200_1400` | 960 | 154 | -0.0149 | -0.0803 | 0.3701 | `candidate_recovery_or_relax` |
-| `overbought_bucket` | `overbought_ok` | 395 | 144 | 0.2665 | 1.9411 | 0.5278 | `source_quality_workorder` |
-| `score_band` | `score_66_69` | 208 | 144 | 0.8563 | 1.6766 | 0.6181 | `hold_sample` |
-| `score_band` | `score_70p` | 299 | 143 | 0.2764 | 0.7773 | 0.5455 | `source_quality_workorder` |
+| `overbought_bucket` | `overbought_ok` | 389 | 138 | 0.0694 | 1.6689 | 0.5072 | `source_quality_workorder` |
+| `score_band` | `score_63_65` | 374 | 138 | 0.5431 | 0.8231 | 0.5 | `source_quality_workorder` |
+| `score_band` | `score_70p` | 294 | 138 | 0.4178 | 0.9781 | 0.558 | `source_quality_workorder` |
+| `overbought_bucket` | `overbought_watch` | 544 | 128 | 0.704 | 0.7222 | 0.4453 | `source_quality_workorder` |
 | `exit_rule` | `scalp_trailing_take_profit` | 116 | 116 | -0.7011 | 1.7825 | 1.0 | `hold_no_edge` |
-| `combo_entry_spot` | `score=score_63_65|source=wait6579_ev_cohort|stale=fresh_or_unflagged|liquidity=liquidity_high|overbought=overbought_normal|time=time_1000_1200` | 85 | 85 | 1.48 | 2.4716 | 0.6941 | `hold_no_edge` |
+| `combo_entry_spot` | `score=score_63_65|source=wait6579_ev_cohort|stale=fresh_or_unflagged|liquidity=liquidity_high|overbought=overbought_normal|time=time_1000_1200` | 59 | 59 | 0.7906 | 1.1097 | 0.6271 | `hold_no_edge` |
 
 ### Entry Bucket Runtime Approval Candidates
 
@@ -115,50 +115,50 @@
 
 - decision_authority: `aggregated_submit_bucket_attribution_source_only`
 - primary_decision_metric: `None`
-- summary: `{'bucket_count': 91, 'complete_flow_count': 0, 'incomplete_flow_count': 0, 'runtime_candidate_count': 0, 'workorder_count': 0}`
+- summary: `{'bucket_count': 97, 'complete_flow_count': 0, 'incomplete_flow_count': 0, 'runtime_candidate_count': 0, 'workorder_count': 0}`
 
 | bucket_type | bucket_key | sample | joined | ev | route |
 | --- | --- | ---: | ---: | ---: | --- |
-| `liquidity_guard_action` | `would_pass` | 3453 | 2642 | -0.5274 | `keep_collecting` |
-| `actual_order_submitted` | `false` | 3242 | 2047 | -0.5669 | `keep_collecting` |
-| `actual_order_submitted` | `true` | 2735 | 1912 | -0.5887 | `keep_collecting` |
-| `latency_reason` | `scalp_live_simulator` | 2443 | 1911 | -0.5891 | `keep_collecting` |
-| `latency_state` | `simulated` | 2443 | 1911 | -0.5891 | `keep_collecting` |
-| `would_limit_fill` | `would_limit_fill_unknown` | 2249 | 1774 | -0.615 | `source_quality_workorder` |
+| `actual_order_submitted` | `false` | 2650 | 1911 | -0.5891 | `keep_collecting` |
+| `latency_reason` | `scalp_live_simulator` | 2447 | 1911 | -0.5891 | `keep_collecting` |
+| `latency_state` | `simulated` | 2447 | 1911 | -0.5891 | `keep_collecting` |
+| `broker_order_forbidden` | `true` | 2642 | 1911 | -0.5891 | `keep_collecting` |
+| `overbought_guard_action` | `would_pass` | 2409 | 1883 | -0.5727 | `keep_collecting` |
+| `would_limit_fill` | `would_limit_fill_unknown` | 2253 | 1774 | -0.615 | `source_quality_workorder` |
 | `revalidation_state` | `warning_stale_context_or_quote` | 1980 | 1565 | -0.6114 | `keep_collecting` |
 | `overbought_bucket` | `overbought_ok` | 1965 | 1538 | -0.644 | `keep_collecting` |
-| `price_resolution_bucket` | `defensive_order_price` | 1637 | 1264 | -0.6833 | `keep_collecting` |
-| `liquidity_guard_action` | `would_block` | 1405 | 1180 | -0.7272 | `keep_collecting` |
+| `price_resolution_bucket` | `defensive_order_price` | 1641 | 1264 | -0.6833 | `keep_collecting` |
 | `liquidity_bucket` | `below_min_liquidity` | 1445 | 1152 | -0.7038 | `keep_collecting` |
 | `submit_source_stage` | `scalp_sim_pre_submit_liquidity_guard_would_block` | 1367 | 1152 | -0.7038 | `keep_collecting` |
+| `liquidity_guard_action` | `would_block` | 1367 | 1152 | -0.7038 | `keep_collecting` |
 | `price_below_bid_bucket` | `below_bid_20bps_plus` | 1449 | 1132 | -0.6144 | `keep_collecting` |
 | `quote_age_bucket` | `quote_age_3_10s` | 1399 | 1110 | -0.6405 | `keep_collecting` |
 | `liquidity_bucket` | `liquidity_ok` | 1048 | 759 | -0.4149 | `keep_collecting` |
-| `price_below_bid_bucket` | `not_below_bid` | 830 | 667 | -0.4976 | `keep_collecting` |
+| `liquidity_guard_action` | `would_pass` | 1048 | 759 | -0.4149 | `keep_collecting` |
+| `price_below_bid_bucket` | `not_below_bid` | 834 | 667 | -0.4976 | `keep_collecting` |
 | `quote_age_bucket` | `quote_age_1_3s` | 806 | 658 | -0.584 | `keep_collecting` |
 | `combo_submit_quality` | `source=scalp_sim_pre_submit_liquidity_guard_would_block|revalidation=warning_stale_context_or_quote|quote_age=quote_age_3_10s|liquidity=below_min_liquidity|liquidity_guard=would_block|overbought=overbought_ok|latency=simulated|fill=would_limit_fill_unknown|submitted=false` | 784 | 655 | -0.7617 | `source_quality_workorder` |
 | `submit_source_stage` | `scalp_sim_entry_submit_revalidation_warning` | 836 | 608 | -0.3991 | `keep_collecting` |
 | `price_resolution_bucket` | `scalp_sim_initial_limit` | 598 | 502 | -0.4485 | `keep_collecting` |
 | `combo_submit_quality` | `source=scalp_sim_entry_submit_revalidation_warning|revalidation=warning_stale_context_or_quote|quote_age=quote_age_3_10s|liquidity=liquidity_ok|liquidity_guard=would_pass|overbought=overbought_ok|latency=simulated|fill=would_limit_fill_unknown|submitted=false` | 570 | 419 | -0.4115 | `source_quality_workorder` |
-| `revalidation_state` | `ok_or_unflagged` | 463 | 346 | -0.4881 | `keep_collecting` |
-| `overbought_bucket` | `overbought_context_missing` | 460 | 345 | -0.2548 | `keep_collecting` |
+| `revalidation_state` | `ok_or_unflagged` | 467 | 346 | -0.4881 | `keep_collecting` |
+| `overbought_bucket` | `overbought_context_missing` | 464 | 345 | -0.2548 | `keep_collecting` |
 | `combo_submit_quality` | `source=scalp_sim_pre_submit_liquidity_guard_would_block|revalidation=warning_stale_context_or_quote|quote_age=quote_age_1_3s|liquidity=below_min_liquidity|liquidity_guard=would_block|overbought=overbought_ok|latency=simulated|fill=would_limit_fill_unknown|submitted=false` | 270 | 232 | -0.6135 | `source_quality_workorder` |
 | `combo_submit_quality` | `source=scalp_sim_entry_submit_revalidation_warning|revalidation=warning_stale_context_or_quote|quote_age=quote_age_1_3s|liquidity=liquidity_ok|liquidity_guard=would_pass|overbought=overbought_ok|latency=simulated|fill=would_limit_fill_unknown|submitted=false` | 243 | 174 | -0.4172 | `source_quality_workorder` |
 | `combo_submit_quality` | `source=scalp_sim_pre_submit_liquidity_guard_would_block|revalidation=ok_or_unflagged|quote_age=quote_age_1_3s|liquidity=below_min_liquidity|liquidity_guard=would_block|overbought=overbought_context_missing|latency=simulated|fill=would_limit_fill_unknown|submitted=false` | 185 | 163 | -0.3062 | `source_quality_workorder` |
 | `price_resolution_bucket` | `price_resolution_unknown` | 194 | 137 | -0.253 | `source_quality_workorder` |
-| `quote_age_bucket` | `quote_age_unknown` | 521 | 137 | -0.253 | `source_quality_workorder` |
+| `quote_age_bucket` | `quote_age_unknown` | 525 | 137 | -0.253 | `source_quality_workorder` |
 | `submit_source_stage` | `scalp_sim_buy_order_assumed_filled` | 194 | 137 | -0.253 | `keep_collecting` |
+| `would_limit_fill` | `false` | 492 | 136 | -0.2553 | `keep_collecting` |
 | `combo_submit_quality` | `source=scalp_sim_buy_order_assumed_filled|revalidation=ok_or_unflagged|quote_age=quote_age_unknown|liquidity=liquidity_ok|liquidity_guard=would_pass|overbought=overbought_context_missing|latency=simulated|fill=false|submitted=false` | 173 | 121 | -0.0888 | `source_quality_workorder` |
 | `price_below_bid_bucket` | `below_bid_5_20bps` | 162 | 111 | -0.886 | `keep_collecting` |
 | `combo_submit_quality` | `source=scalp_sim_pre_submit_liquidity_guard_would_block|revalidation=ok_or_unflagged|quote_age=quote_age_1_3s|liquidity=below_min_liquidity|liquidity_guard=would_block|overbought=overbought_ok|latency=simulated|fill=would_limit_fill_unknown|submitted=false` | 45 | 39 | -2.0609 | `source_quality_workorder` |
 | `combo_submit_quality` | `source=scalp_sim_pre_submit_liquidity_guard_would_block|revalidation=warning_stale_context_or_quote|quote_age=quote_age_1_3s|liquidity=below_min_liquidity|liquidity_guard=would_block|overbought=overbought_context_missing|latency=simulated|fill=would_limit_fill_unknown|submitted=false` | 37 | 30 | -0.7436 | `source_quality_workorder` |
 | `overbought_bucket` | `pullback_or_rebreak_not_confirmed` | 38 | 28 | -1.6902 | `keep_collecting` |
+| `overbought_guard_action` | `would_block` | 38 | 28 | -1.6902 | `keep_collecting` |
 | `combo_submit_quality` | `source=scalp_sim_pre_submit_liquidity_guard_would_block|revalidation=warning_stale_context_or_quote|quote_age=quote_age_3_10s|liquidity=below_min_liquidity|liquidity_guard=would_block|overbought=overbought_context_missing|latency=simulated|fill=would_limit_fill_unknown|submitted=false` | 19 | 16 | -0.7283 | `source_quality_workorder` |
 | `combo_submit_quality` | `source=scalp_sim_buy_order_assumed_filled|revalidation=ok_or_unflagged|quote_age=quote_age_unknown|liquidity=liquidity_ok|liquidity_guard=would_pass|overbought=overbought_ok|latency=simulated|fill=false|submitted=false` | 20 | 15 | -1.5985 | `source_quality_workorder` |
 | `submit_source_stage` | `scalp_sim_pre_submit_overbought_guard_would_block` | 18 | 14 | -2.6878 | `keep_collecting` |
-| `combo_submit_quality` | `source=scalp_sim_entry_submit_revalidation_warning|revalidation=warning_stale_context_or_quote|quote_age=quote_age_1_3s|liquidity=liquidity_ok|liquidity_guard=would_pass|overbought=overbought_context_missing|latency=simulated|fill=would_limit_fill_unknown|submitted=false` | 13 | 11 | 0.0522 | `source_quality_workorder` |
-| `combo_submit_quality` | `source=scalp_sim_pre_submit_liquidity_guard_would_block|revalidation=warning_stale_context_or_quote|quote_age=quote_age_3_10s|liquidity=below_min_liquidity|liquidity_guard=would_block|overbought=pullback_or_rebreak_not_confirmed|latency=simulated|fill=would_limit_fill_unknown|submitted=false` | 13 | 10 | -0.7459 | `source_quality_workorder` |
-| `combo_submit_quality` | `source=scalp_sim_pre_submit_overbought_guard_would_block|revalidation=warning_stale_context_or_quote|quote_age=quote_age_3_10s|liquidity=liquidity_ok|liquidity_guard=would_pass|overbought=pullback_or_rebreak_not_confirmed|latency=simulated|fill=would_limit_fill_unknown|submitted=false` | 12 | 9 | -2.502 | `source_quality_workorder` |
 
 ### Submit Bucket Workorders
 
@@ -173,10 +173,10 @@
 
 | bucket_type | bucket_key | sample | joined | ev | route |
 | --- | --- | ---: | ---: | ---: | --- |
-| `held_bucket` | `held_not_applicable_at_start` | 2443 | 1911 | -0.9652 | `candidate_tighten_or_exclude` |
-| `holding_source_stage` | `scalp_sim_holding_started` | 2443 | 1911 | -0.9652 | `candidate_tighten_or_exclude` |
+| `held_bucket` | `held_not_applicable_at_start` | 2447 | 1911 | -0.9652 | `candidate_tighten_or_exclude` |
+| `holding_source_stage` | `scalp_sim_holding_started` | 2447 | 1911 | -0.9652 | `candidate_tighten_or_exclude` |
 | `profit_band` | `profit_lt_neg070` | 1474 | 1416 | -1.4673 | `candidate_tighten_or_exclude` |
-| `holding_action` | `holding_action_not_applicable_at_start` | 1667 | 1266 | -1.0546 | `candidate_tighten_or_exclude` |
+| `holding_action` | `holding_action_not_applicable_at_start` | 1671 | 1266 | -1.0546 | `candidate_tighten_or_exclude` |
 | `combo_holding_flow` | `source=scalp_sim_holding_started|action=holding_action_not_applicable_at_start|profit=profit_lt_neg070|held=held_not_applicable_at_start` | 954 | 954 | -1.5222 | `candidate_tighten_or_exclude` |
 | `holding_action` | `WAIT` | 623 | 520 | -0.7158 | `candidate_tighten_or_exclude` |
 | `combo_holding_flow` | `source=scalp_sim_holding_started|action=WAIT|profit=profit_lt_neg070|held=held_not_applicable_at_start` | 355 | 355 | -1.3294 | `candidate_tighten_or_exclude` |
@@ -204,11 +204,11 @@
 | `holding_action` | `SELL_TODAY` | 141 | 0 | None | `hold_sample` |
 | `held_bucket` | `held_600_1800s` | 52 | 0 | None | `hold_sample` |
 | `held_bucket` | `held_600_1800s_plus` | 89 | 0 | None | `hold_sample` |
-| `profit_band` | `profit_not_applicable_at_start` | 532 | 0 | None | `hold_sample` |
+| `profit_band` | `profit_not_applicable_at_start` | 536 | 0 | None | `hold_sample` |
 | `holding_source_stage` | `scalp_sim_overnight_decision` | 141 | 0 | None | `hold_sample` |
 | `combo_holding_flow` | `source=scalp_sim_holding_started|action=BUY|profit=profit_not_applicable_at_start|held=held_not_applicable_at_start` | 28 | 0 | None | `hold_sample` |
 | `combo_holding_flow` | `source=scalp_sim_holding_started|action=WAIT|profit=profit_not_applicable_at_start|held=held_not_applicable_at_start` | 103 | 0 | None | `hold_sample` |
-| `combo_holding_flow` | `source=scalp_sim_holding_started|action=holding_action_not_applicable_at_start|profit=profit_not_applicable_at_start|held=held_not_applicable_at_start` | 401 | 0 | None | `hold_sample` |
+| `combo_holding_flow` | `source=scalp_sim_holding_started|action=holding_action_not_applicable_at_start|profit=profit_not_applicable_at_start|held=held_not_applicable_at_start` | 405 | 0 | None | `hold_sample` |
 | `combo_holding_flow` | `source=scalp_sim_overnight_decision|action=SELL_TODAY|profit=profit_lt_neg070|held=held_600_1800s` | 21 | 0 | None | `hold_sample` |
 | `combo_holding_flow` | `source=scalp_sim_overnight_decision|action=SELL_TODAY|profit=profit_lt_neg070|held=held_600_1800s_plus` | 37 | 0 | None | `hold_sample` |
 | `combo_holding_flow` | `source=scalp_sim_overnight_decision|action=SELL_TODAY|profit=profit_neg010_pos080|held=held_600_1800s` | 13 | 0 | None | `hold_sample` |
@@ -223,7 +223,7 @@
 - decision_authority: `aggregated_exit_bucket_attribution_source_only`
 - primary_decision_metric: `None`
 - allowed_runtime_apply: `False`
-- summary: `{'bucket_count': 72, 'complete_flow_count': 0, 'incomplete_flow_count': 0, 'runtime_candidate_count': 0, 'workorder_count': 0}`
+- summary: `{'bucket_count': 73, 'complete_flow_count': 0, 'incomplete_flow_count': 0, 'runtime_candidate_count': 0, 'workorder_count': 0}`
 
 | bucket_type | bucket_key | sample | joined | ev | route |
 | --- | --- | ---: | ---: | ---: | --- |
@@ -241,7 +241,6 @@
 | `exit_rule` | `scalp_trailing_take_profit` | 440 | 440 | 0.4571 | `candidate_recovery_or_relax` |
 | `profit_band` | `profit_neg070_neg010` | 317 | 317 | -0.5139 | `candidate_tighten_or_exclude` |
 | `combo_exit_result` | `source=sim_post_sell_evaluation|rule=scalp_soft_stop_pct|outcome=GOOD_EXIT|profit=profit_lt_neg070` | 305 | 305 | -1.7548 | `candidate_tighten_or_exclude` |
-| `exit_rule` | `scalp_sim_overnight_sell_today` | 282 | 282 | -0.1806 | `candidate_tighten_or_exclude` |
 | `combo_exit_result` | `source=scalp_sim_partial_sell_order_assumed_filled|rule=scalp_sim_panic_lifecycle_partial_exit|outcome=outcome_not_applicable_partial_exit|profit=profit_neg070_neg010` | 279 | 279 | -0.5406 | `candidate_tighten_or_exclude` |
 | `combo_exit_result` | `source=sim_post_sell_evaluation|rule=scalp_soft_stop_pct|outcome=MISSED_UPSIDE|profit=profit_lt_neg070` | 260 | 260 | -0.9306 | `candidate_tighten_or_exclude` |
 | `combo_exit_result` | `source=sim_post_sell_evaluation|rule=scalp_soft_stop_pct|outcome=NEUTRAL|profit=profit_lt_neg070` | 253 | 253 | -1.2503 | `candidate_tighten_or_exclude` |
@@ -249,7 +248,9 @@
 | `combo_exit_result` | `source=sim_post_sell_evaluation|rule=scalp_hard_stop_pct|outcome=GOOD_EXIT|profit=profit_lt_neg070` | 217 | 217 | -2.3955 | `candidate_tighten_or_exclude` |
 | `profit_band` | `profit_pos080_pos150` | 166 | 166 | 0.19 | `hold_no_edge` |
 | `profit_band` | `profit_neg010_pos080` | 154 | 154 | 0.0439 | `hold_no_edge` |
-| `exit_outcome` | `outcome_unknown` | 3009 | 141 | -0.1806 | `source_quality_workorder` |
+| `exit_outcome` | `outcome_unknown` | 3017 | 141 | -0.1806 | `source_quality_workorder` |
+| `exit_rule` | `scalp_sim_overnight_sell_today` | 141 | 141 | -0.1806 | `candidate_tighten_or_exclude` |
+| `exit_source_stage` | `scalp_sim_overnight_sell_today` | 141 | 141 | -0.1806 | `candidate_tighten_or_exclude` |
 | `profit_band` | `profit_pos150_pos300` | 129 | 129 | 0.6182 | `candidate_recovery_or_relax` |
 | `combo_exit_result` | `source=sim_post_sell_evaluation|rule=scalp_hard_stop_pct|outcome=NEUTRAL|profit=profit_lt_neg070` | 82 | 82 | -1.7283 | `candidate_tighten_or_exclude` |
 | `profit_band` | `profit_pos150_pos300_plus` | 77 | 77 | 2.203 | `candidate_recovery_or_relax` |
@@ -266,7 +267,6 @@
 | `combo_exit_result` | `source=scalp_sim_overnight_sell_today|rule=scalp_sim_overnight_sell_today|outcome=outcome_unknown|profit=profit_neg070_neg010` | 33 | 33 | -0.3125 | `source_quality_workorder` |
 | `combo_exit_result` | `source=sim_post_sell_evaluation|rule=scalp_preset_hard_stop_pct|outcome=NEUTRAL|profit=profit_lt_neg070` | 33 | 33 | -0.4546 | `hold_sample` |
 | `combo_exit_result` | `source=sim_post_sell_evaluation|rule=scalp_trailing_take_profit|outcome=GOOD_EXIT|profit=profit_pos150_pos300_plus` | 28 | 28 | 1.0969 | `hold_no_edge` |
-| `combo_exit_result` | `source=sim_post_sell_evaluation|rule=scalp_trailing_take_profit|outcome=NEUTRAL|profit=profit_neg010_pos080` | 28 | 28 | -0.034 | `hold_sample` |
 
 ### Exit Bucket Attribution Workorders
 
@@ -275,51 +275,31 @@
 ## Scale-In Bucket Attribution
 
 - decision_authority: `aggregated_scale_in_bucket_attribution_source_only`
-- primary_decision_metric: `None`
-- summary: `{'bucket_count': 560, 'complete_flow_count': 0, 'incomplete_flow_count': 0, 'runtime_candidate_count': 0, 'workorder_count': 0}`
+- primary_decision_metric: `stage_ev_composite_pct`
+- summary: `{'bucket_count': 562, 'complete_flow_count': 0, 'incomplete_flow_count': 0, 'runtime_candidate_count': 0, 'workorder_count': 0}`
 
 | bucket_type | bucket_key | sample | joined | ev | avg_profit | win_rate | route |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | --- |
-| `arm` | `AVG_DOWN` | 138948 | 138324 | -0.8112 | -0.8943 | 0.0 | `candidate_tighten_or_exclude` |
-| `ai_score_source` | `score_field_backfilled` | 105303 | 105303 | -0.4166 | -0.4935 | 0.2255 | `candidate_tighten_or_exclude` |
-| `ai_score_band` | `score_70p` | 52688 | 52688 | -0.4167 | -0.4991 | 0.2247 | `candidate_tighten_or_exclude` |
-| `arm` | `PYRAMID` | 49552 | 48466 | 0.6813 | 0.6157 | 0.9802 | `candidate_recovery_or_relax` |
-| `blocker_namespace` | `AVG_DOWN_ONLY` | 23838 | 23838 | -0.358 | -0.4218 | 0.0 | `candidate_tighten_or_exclude` |
-| `blocker_reason` | `profit_not_enough` | 21249 | 21249 | 0.6071 | 0.534 | 0.9822 | `candidate_recovery_or_relax` |
-| `ai_score_band` | `score_66_69` | 21025 | 21025 | -0.3558 | -0.4319 | 0.2478 | `candidate_tighten_or_exclude` |
-| `ai_score_band` | `score_60_62` | 17669 | 17669 | -0.4512 | -0.5107 | 0.2215 | `candidate_tighten_or_exclude` |
-| `ai_score_band` | `score_63_65` | 7953 | 7953 | -0.4475 | -0.5189 | 0.1993 | `candidate_tighten_or_exclude` |
-| `blocker_reason` | `add_judgment_locked` | 7818 | 7818 | -0.281 | -0.3008 | 0.201 | `candidate_tighten_or_exclude` |
-| `ai_score_band` | `score_lt60` | 5968 | 5968 | -0.4872 | -0.5757 | 0.2011 | `candidate_tighten_or_exclude` |
-| `blocker_reason` | `low_broken` | 2450 | 2450 | -0.4296 | -0.4544 | 0.0 | `candidate_tighten_or_exclude` |
-| `blocker_reason` | `scalp_sim_panic_scale_in_blocked` | 1552 | 1552 | -0.8764 | -0.876 | 0.0825 | `candidate_tighten_or_exclude` |
-| `blocker_reason` | `pnl_out_of_range(-0.96)` | 1077 | 1077 | -0.86 | -0.96 | 0.0 | `candidate_tighten_or_exclude` |
-| `blocker_reason` | `ok` | 1075 | 1075 | -1.9301 | -2.3761 | 0.0 | `candidate_tighten_or_exclude` |
-| `blocker_reason` | `pnl_out_of_range(-1.20)` | 1007 | 1007 | -1.0588 | -1.2 | 0.0 | `candidate_tighten_or_exclude` |
-| `blocker_reason` | `pnl_out_of_range(-0.78)` | 928 | 928 | -0.7151 | -0.78 | 0.0 | `hold_sample` |
-| `blocker_reason` | `pnl_out_of_range(-0.82)` | 885 | 885 | -0.6823 | -0.82 | 0.0 | `candidate_tighten_or_exclude` |
-| `blocker_reason` | `pnl_out_of_range(-1.10)` | 858 | 858 | -1.0133 | -1.1 | 0.0 | `candidate_tighten_or_exclude` |
-| `blocker_reason` | `pnl_out_of_range(-1.00)` | 833 | 833 | -0.9214 | -1.0 | 0.0 | `candidate_tighten_or_exclude` |
-| `blocker_reason` | `pnl_out_of_range(-0.94)` | 730 | 730 | -0.8646 | -0.94 | 0.0 | `candidate_tighten_or_exclude` |
-| `blocker_reason` | `pnl_out_of_range(-0.86)` | 727 | 727 | -0.7907 | -0.86 | 0.0 | `candidate_tighten_or_exclude` |
-| `blocker_reason` | `pnl_out_of_range(-0.88)` | 723 | 723 | -0.8069 | -0.88 | 0.0 | `candidate_tighten_or_exclude` |
-| `blocker_reason` | `scalping_cutoff` | 713 | 713 | -0.3139 | -0.3555 | 0.2146 | `candidate_tighten_or_exclude` |
-| `blocker_reason` | `pnl_out_of_range(-1.43)` | 707 | 707 | -1.2688 | -1.43 | 0.0 | `candidate_tighten_or_exclude` |
-| `blocker_reason` | `pnl_out_of_range(-1.05)` | 618 | 618 | -0.9619 | -1.05 | 0.0 | `candidate_tighten_or_exclude` |
-| `blocker_reason` | `pnl_out_of_range(-0.91)` | 608 | 608 | -0.8254 | -0.91 | 0.0 | `candidate_tighten_or_exclude` |
-| `blocker_reason` | `pnl_out_of_range(-0.71)` | 602 | 602 | -0.6468 | -0.71 | 0.0 | `candidate_tighten_or_exclude` |
-| `blocker_reason` | `pnl_out_of_range(-1.14)` | 598 | 598 | -1.0232 | -1.14 | 0.0 | `candidate_tighten_or_exclude` |
-| `blocker_reason` | `pnl_out_of_range(-1.01)` | 590 | 590 | -0.9323 | -1.01 | 0.0 | `candidate_tighten_or_exclude` |
-| `blocker_reason` | `pnl_out_of_range(-1.18)` | 588 | 588 | -1.0923 | -1.18 | 0.0 | `candidate_tighten_or_exclude` |
-| `blocker_reason` | `pnl_out_of_range(-1.04)` | 583 | 583 | -0.9405 | -1.04 | 0.0 | `candidate_tighten_or_exclude` |
-| `blocker_reason` | `pnl_out_of_range(-0.75)` | 561 | 561 | -0.6837 | -0.75 | 0.0 | `candidate_tighten_or_exclude` |
-| `blocker_reason` | `pnl_out_of_range(-0.73)` | 555 | 555 | -0.6543 | -0.73 | 0.0 | `candidate_tighten_or_exclude` |
-| `blocker_reason` | `pnl_out_of_range(-0.80)` | 541 | 541 | -0.7278 | -0.8 | 0.0 | `candidate_tighten_or_exclude` |
-| `blocker_reason` | `pnl_out_of_range(-0.93)` | 541 | 541 | -0.8545 | -0.93 | 0.0 | `candidate_tighten_or_exclude` |
-| `blocker_reason` | `pnl_out_of_range(-0.81)` | 526 | 526 | -0.7509 | -0.81 | 0.0 | `candidate_tighten_or_exclude` |
-| `blocker_reason` | `pnl_out_of_range(-1.06)` | 514 | 514 | -0.9716 | -1.06 | 0.0 | `candidate_tighten_or_exclude` |
-| `blocker_reason` | `pnl_out_of_range(-0.90)` | 509 | 509 | -0.8184 | -0.9 | 0.0 | `candidate_tighten_or_exclude` |
-| `blocker_reason` | `pnl_out_of_range(-0.79)` | 500 | 500 | -0.7172 | -0.79 | 0.0 | `candidate_tighten_or_exclude` |
+| `ai_score_source` | `score_field_backfilled` | 105303 | 105303 | None | -0.4935 | 0.2255 | `hold_sample` |
+| `arm` | `AVG_DOWN` | 81397 | 81081 | None | -0.8248 | 0.0 | `hold_sample` |
+| `blocker_namespace` | `AVG_DOWN` | 57559 | 57243 | None | -0.9926 | 0.0 | `hold_sample` |
+| `ai_score_band` | `score_70p` | 52688 | 52688 | None | -0.4991 | 0.2247 | `hold_sample` |
+| `arm` | `PYRAMID` | 24776 | 24233 | None | 0.6157 | 0.9802 | `hold_sample` |
+| `blocker_namespace` | `PYRAMID` | 24776 | 24233 | None | 0.6157 | 0.9802 | `hold_sample` |
+| `blocker_namespace` | `AVG_DOWN_ONLY` | 23838 | 23838 | None | -0.4218 | 0.0 | `hold_sample` |
+| `blocker_reason` | `profit_not_enough` | 21249 | 21249 | None | 0.534 | 0.9822 | `hold_sample` |
+| `ai_score_band` | `score_66_69` | 21025 | 21025 | None | -0.4319 | 0.2478 | `hold_sample` |
+| `ai_score_band` | `score_60_62` | 17669 | 17669 | None | -0.5107 | 0.2215 | `hold_sample` |
+| `ai_score_band` | `score_63_65` | 7953 | 7953 | None | -0.5189 | 0.1993 | `hold_sample` |
+| `blocker_reason` | `add_judgment_locked` | 7818 | 7818 | None | -0.3008 | 0.201 | `hold_sample` |
+| `ai_score_band` | `score_lt60` | 5968 | 5968 | None | -0.5757 | 0.2011 | `hold_sample` |
+| `blocker_reason` | `low_broken` | 2450 | 2450 | None | -0.4544 | 0.0 | `hold_sample` |
+| `blocker_reason` | `scalp_sim_panic_scale_in_blocked` | 1552 | 1552 | None | -0.876 | 0.0825 | `hold_sample` |
+| `blocker_reason` | `pnl_out_of_range(-0.96)` | 1077 | 1077 | None | -0.96 | 0.0 | `hold_sample` |
+| `blocker_reason` | `ok` | 1075 | 1075 | None | -2.3761 | 0.0 | `hold_sample` |
+| `blocker_reason` | `pnl_out_of_range(-1.20)` | 1007 | 1007 | None | -1.2 | 0.0 | `hold_sample` |
+| `blocker_reason` | `pnl_out_of_range(-0.78)` | 928 | 928 | None | -0.78 | 0.0 | `hold_sample` |
+| `blocker_reason` | `pnl_out_of_range(-0.82)` | 885 | 885 | None | -0.82 | 0.0 | `hold_sample` |
 
 ### Scale-In Bucket Runtime Approval Candidates
 
@@ -333,11 +313,12 @@
 
 - decision_authority: `aggregated_overnight_bucket_attribution_source_only`
 - primary_decision_metric: `None`
-- summary: `{'bucket_count': 34, 'complete_flow_count': 0, 'incomplete_flow_count': 0, 'runtime_candidate_count': 0, 'workorder_count': 0}`
+- summary: `{'bucket_count': 35, 'complete_flow_count': 0, 'incomplete_flow_count': 0, 'runtime_candidate_count': 0, 'workorder_count': 0}`
 
 | bucket_type | bucket_key | sample | joined | ev | avg_profit | win_rate | route |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | --- |
-| `overnight_action` | `SELL_TODAY` | 423 | 282 | -0.1806 | -0.2408 | 0.3333 | `candidate_tighten_or_exclude` |
+| `overnight_action` | `SELL_TODAY` | 282 | 141 | -0.1806 | -0.2408 | 0.3333 | `candidate_tighten_or_exclude` |
+| `overnight_status` | `SELL_TODAY` | 141 | 141 | -0.1806 | -0.2408 | 0.3333 | `candidate_tighten_or_exclude` |
 | `confidence_band` | `confidence_070p` | 282 | 141 | -0.1806 | -0.2408 | 0.3333 | `candidate_tighten_or_exclude` |
 | `stage` | `exit` | 141 | 141 | -0.1806 | -0.2408 | 0.3333 | `candidate_tighten_or_exclude` |
 | `price_source` | `holding_price_samples_last` | 282 | 141 | -0.1806 | -0.2408 | 0.3333 | `candidate_tighten_or_exclude` |
@@ -356,7 +337,6 @@
 | `combo_overnight_decision` | `action=SELL_TODAY|status=SELL_TODAY|confidence=confidence_070p|profit=profit_pos080_pos150` | 13 | 13 | 0.8636 | 1.1515 | 1.0 | `hold_sample` |
 | `peak_profit_band` | `peak_pos080_pos150` | 26 | 13 | 0.8636 | 1.1515 | 1.0 | `hold_sample` |
 | `profit_band` | `profit_pos080_pos150` | 26 | 13 | 0.8636 | 1.1515 | 1.0 | `hold_sample` |
-| `combo_overnight_decision` | `action=SELL_TODAY|status=SELL_TODAY|confidence=confidence_070p|profit=profit_pos150_pos300` | 6 | 6 | 1.4287 | 1.905 | 1.0 | `hold_sample` |
 
 ### Overnight Bucket Runtime Approval Candidates
 

@@ -19,6 +19,8 @@ from src.database.db_manager import DBManager
 from src.database.models import RecommendationHistory
 from src.core.event_bus import EventBus
 from src.engine.signal_radar import SniperRadar
+from src.utils.constants import TRADING_RULES
+from src.utils.pipeline_event_logger import emit_pipeline_event
 
 
 def _resolve_scan_interval_sec(now_time):
@@ -305,12 +307,116 @@ def _should_promote_candidate(target, recent_picks, now_ts, reentry_cooldown_sec
     return previous_score > 0 and current_score >= previous_score * 1.2
 
 
+def _scanner_real_source_guard_decision(target, recent_picks):
+    if not bool(getattr(TRADING_RULES, "SCALP_SCANNER_REAL_SOURCE_GUARD_ENABLED", False)):
+        return {"blocked": False, "reason": "guard_disabled"}
+
+    source_signature = _source_signature(target)
+    source_set = set(source_signature)
+    previous = (recent_picks or {}).get(target.get("Code")) or {}
+    if not previous:
+        return {"blocked": False, "reason": "first_seen"}
+
+    if source_set != {"VALUE_TOP"}:
+        return {"blocked": False, "reason": "independent_source_present"}
+    if not bool(getattr(TRADING_RULES, "SCALP_SCANNER_REAL_SOURCE_GUARD_BLOCK_VALUE_TOP_ONLY", True)):
+        return {"blocked": False, "reason": "value_top_only_guard_disabled"}
+    if bool(target.get("CntrStrAvailable", False)):
+        return {"blocked": False, "reason": "strength_available"}
+
+    first_flu = _safe_float(previous.get("first_flu_rate"), _safe_float(target.get("FluRate")))
+    current_flu = _safe_float(target.get("FluRate"))
+    max_decline = float(getattr(TRADING_RULES, "SCALP_SCANNER_REAL_SOURCE_GUARD_MAX_DECLINE_PCT", 0.0) or 0.0)
+    flu_declined = current_flu < (first_flu - max_decline)
+
+    first_price = _safe_positive_int(previous.get("first_price"))
+    current_price = _safe_positive_int(target.get("Price"))
+    price_declined = first_price > 0 and current_price > 0 and current_price < first_price
+
+    previous_signature = tuple(previous.get("last_source_signature") or ())
+    same_source_family = previous_signature == source_signature
+
+    if same_source_family and (flu_declined or price_declined):
+        return {
+            "blocked": True,
+            "reason": "value_top_only_repeat_deteriorating_without_strength",
+            "source_signature": ",".join(source_signature),
+            "first_seen_flu_rate": f"{first_flu:.2f}",
+            "current_flu_rate": f"{current_flu:.2f}",
+            "first_price": str(first_price or "-"),
+            "current_price": str(current_price or "-"),
+            "last_promoted_at": str(previous.get("last_promoted_at") or "-"),
+        }
+
+    return {"blocked": False, "reason": "no_deterioration"}
+
+
 def _remember_pick(recent_picks, target, now_ts):
+    previous = recent_picks.get(target["Code"]) or {}
     recent_picks[target["Code"]] = {
         "last_promoted_at": now_ts,
         "last_source_signature": _source_signature(target),
         "last_score": _freshness_score(target),
+        "first_seen_at": previous.get("first_seen_at", now_ts),
+        "first_flu_rate": previous.get("first_flu_rate", _safe_float(target.get("FluRate"))),
+        "first_price": previous.get("first_price", _safe_positive_int(target.get("Price"))),
+        "last_flu_rate": _safe_float(target.get("FluRate")),
+        "last_price": _safe_positive_int(target.get("Price")),
     }
+
+
+def _remember_guard_block(recent_picks, target, now_ts, reason):
+    previous = recent_picks.get(target["Code"]) or {}
+    recent_picks[target["Code"]] = {
+        **previous,
+        "last_guard_blocked_at": now_ts,
+        "last_guard_block_reason": reason,
+        "last_source_signature": _source_signature(target),
+        "last_score": _freshness_score(target),
+        "first_seen_at": previous.get("first_seen_at", now_ts),
+        "first_flu_rate": previous.get("first_flu_rate", _safe_float(target.get("FluRate"))),
+        "first_price": previous.get("first_price", _safe_positive_int(target.get("Price"))),
+        "last_flu_rate": _safe_float(target.get("FluRate")),
+        "last_price": _safe_positive_int(target.get("Price")),
+    }
+
+
+def _log_scanner_real_source_guard_block(target, source_guard, now_ts):
+    emit_pipeline_event(
+        "ENTRY_PIPELINE",
+        str(target.get("Name") or "-"),
+        str(target.get("Code") or ""),
+        "scalping_scanner_real_source_guard_block",
+        fields={
+            "metric_role": "source_quality_gate",
+            "decision_authority": "real_scalping_scanner_source_guard_only",
+            "source_quality_gate": "scalping_scanner_real_source_guard",
+            "window_policy": "intraday_operational_guard",
+            "sample_floor": "not_applicable_runtime_guard",
+            "primary_decision_metric": "funnel_count",
+            "forbidden_uses": (
+                "score_threshold_change,provider_route_change,order_price_change,"
+                "quantity_or_cap_change,broker_guard_change,bot_restart_authority,"
+                "ai_score_smoothing_live_gate,real_execution_quality_approval"
+            ),
+            "runtime_effect": True,
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+            "scanner_real_source_guard_applied": True,
+            "scanner_real_source_guard_skip_reason": source_guard.get("reason"),
+            "scanner_real_source_guard_block_event_emitted": True,
+            "source_signature": source_guard.get("source_signature") or ",".join(_source_signature(target)),
+            "first_seen_flu_rate": source_guard.get("first_seen_flu_rate"),
+            "current_flu_rate": source_guard.get("current_flu_rate"),
+            "first_price": source_guard.get("first_price"),
+            "current_price": source_guard.get("current_price"),
+            "last_promoted_at": source_guard.get("last_promoted_at"),
+            "current_price_observed": _safe_positive_int(target.get("Price")),
+            "current_source": target.get("Source"),
+            "current_cntr_str_available": bool(target.get("CntrStrAvailable", False)),
+            "guard_blocked_at_ts": now_ts,
+        },
+    )
 
 
 def promote_candidates(db, event_bus, ranked_targets, recent_picks, *, max_new_codes, reentry_cooldown_sec, token=None, now_ts=None):
@@ -321,6 +427,21 @@ def promote_candidates(db, event_bus, ranked_targets, recent_picks, *, max_new_c
     for target in ranked_targets:
         code = target["Code"]
         if not _should_promote_candidate(target, recent_picks, now_ts, reentry_cooldown_sec):
+            continue
+
+        source_guard = _scanner_real_source_guard_decision(target, recent_picks)
+        if source_guard.get("blocked"):
+            _log_scanner_real_source_guard_block(target, source_guard, now_ts)
+            print(
+                "🧯 [SCALPING 스캐너 guard] "
+                f"{target['Name']}({code}) real WATCHING 승격 차단 "
+                f"reason={source_guard.get('reason')} "
+                f"source_signature={source_guard.get('source_signature')} "
+                f"first_flu={source_guard.get('first_seen_flu_rate')} "
+                f"current_flu={source_guard.get('current_flu_rate')} "
+                f"last_promoted_at={source_guard.get('last_promoted_at')}"
+            )
+            _remember_guard_block(recent_picks, target, now_ts, source_guard.get("reason"))
             continue
 
         curr_p = float(target.get("Price", 0))

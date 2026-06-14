@@ -414,6 +414,10 @@ SOURCE_CONTRACT_SECTION_SCHEMAS: dict[str, dict[str, tuple[str, ...]]] = {
             "bucket_key",
             "bucket_type",
             "close_10m_pct",
+            "counterfactual_eligible_sample",
+            "counterfactual_join_rate",
+            "counterfactual_joined_sample",
+            "counterfactual_method",
             "decision_authority",
             "diagnostic_win_rate",
             "equal_weight_avg_profit_pct",
@@ -422,13 +426,18 @@ SOURCE_CONTRACT_SECTION_SCHEMAS: dict[str, dict[str, tuple[str, ...]]] = {
             "joined_sample",
             "mae_10m_pct",
             "mfe_10m_pct",
+            "primary_decision_metric",
             "recommended_resolution",
             "recommended_route",
+            "runtime_authority_block_reason",
+            "runtime_authority_ready",
             "runtime_effect",
             "sample",
             "source_field_coverage",
             "source_quality_adjusted_ev_pct",
             "source_quality_gate",
+            "scale_in_ev_coverage_state",
+            "scale_in_ev_label_version",
             "unknown_dimension_counts",
             "unknown_reason_counts",
         ),
@@ -2692,7 +2701,9 @@ def _recommended_action(route: str, *, stage: str = "", bucket_type: str = "", e
 def _live_family_for(stage: str, bucket_type: str, bucket_key: str) -> str | None:
     if stage == "lifecycle_flow" and bucket_type == "combo_lifecycle_flow":
         return GREENFIELD_REAL_ENV_FAMILY
-    if stage == "scale_in" and bucket_type in {"arm", "blocker_namespace"} and bucket_key in {"PYRAMID", "AVG_DOWN_ONLY"}:
+    if stage == "scale_in" and bucket_type == "arm" and bucket_key in {"PYRAMID", "AVG_DOWN"}:
+        return SCALE_IN_LIVE_AUTO_FAMILY
+    if stage == "scale_in" and bucket_type == "blocker_namespace" and bucket_key == "AVG_DOWN_ONLY":
         return SCALE_IN_LIVE_AUTO_FAMILY
     return None
 
@@ -2766,9 +2777,33 @@ def _classify_bucket(stage: str, bucket: dict[str, Any]) -> tuple[str, str | Non
     route = str(bucket.get("recommended_route") or "")
     quality = str(bucket.get("source_quality_gate") or "")
     grade = _evidence_grade_for_bucket(stage, bucket)
+    live_family = _live_family_for(stage, bucket_type, bucket_key)
+    if stage == "scale_in" and live_family:
+        coverage_state = str(bucket.get("scale_in_ev_coverage_state") or "")
+        label_version = str(bucket.get("scale_in_ev_label_version") or "")
+        primary_metric = str(bucket.get("primary_decision_metric") or "")
+        scale_in_ready = (
+            coverage_state == "v2_ready"
+            and label_version == "incremental_counterfactual_v2"
+            and primary_metric == "incremental_notional_ev_pct"
+            and bucket.get("runtime_authority_ready") is True
+        )
+        if not scale_in_ready:
+            if coverage_state != "v2_ready":
+                reason = "scale_in_incremental_v2_coverage_not_ready"
+            elif label_version != "incremental_counterfactual_v2":
+                reason = "scale_in_incremental_v2_label_missing"
+            elif primary_metric != "incremental_notional_ev_pct":
+                reason = "scale_in_incremental_v2_primary_metric_missing"
+            else:
+                reason = str(bucket.get("runtime_authority_block_reason") or "scale_in_runtime_authority_not_ready")
+            return "source_only_keep_collecting", None, {
+                **grade,
+                "transition_target": "source_only_keep_collecting",
+                "grade_reason": reason,
+            }
     if quality != "pass":
         return "source_only_keep_collecting", None, grade
-    live_family = _live_family_for(stage, bucket_type, bucket_key)
     ev = _safe_float(bucket.get("source_quality_adjusted_ev_pct"), None)
     if stage in {"holding", "exit"}:
         return "source_only_keep_collecting", None, {

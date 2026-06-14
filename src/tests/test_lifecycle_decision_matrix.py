@@ -4,6 +4,333 @@ import json
 from src.engine import lifecycle_decision_matrix as mod
 
 
+def test_scale_in_bucket_v2_sample_floor_excludes_legacy_rows():
+    rows = [
+        {
+            "runtime_features": {
+                "scale_in_applicability": "applied",
+                "scale_in_decision_id": f"decision-{idx}",
+            },
+            "labels": {
+                "scale_in_ev_label_version": mod.SCALE_IN_EV_LABEL_VERSION,
+                "incremental_notional_ev_pct": 1.2,
+                "runtime_authority_ready": False,
+            } if idx == 0 else {"profit_rate": 0.5},
+            "stage_ev_composite_pct": 0.5,
+        }
+        for idx in range(mod.SCALE_IN_BUCKET_SAMPLE_FLOOR + 5)
+    ]
+
+    bucket = mod._scale_in_bucket_row("arm", "PYRAMID", rows)
+
+    assert bucket["counterfactual_eligible_sample"] == len(rows)
+    assert bucket["counterfactual_joined_sample"] == 1
+    assert bucket["filled_sample"] == 1
+    assert bucket["runtime_authority_ready_sample"] == 0
+    assert bucket["counterfactual_method"] == "treatment_path_added_tranche_return"
+    assert bucket["runtime_authority_method_required"] == "paired_add_no_add_lifecycle_replay"
+    assert bucket["scale_in_ev_coverage_state"] == "v2_partial"
+    assert bucket["source_quality_gate"] == "hold_sample"
+    assert bucket["recommended_route"] == "hold_sample"
+    assert bucket["runtime_authority_ready"] is False
+
+
+def test_scale_in_rolling_aggregation_uses_only_v2_joined_ev_and_authority_samples():
+    legacy = {
+        "bucket_key": "PYRAMID",
+        "sample": 100,
+        "joined_sample": 100,
+        "source_quality_adjusted_ev_pct": -5.0,
+        "runtime_authority_ready": False,
+    }
+    v2 = {
+        "bucket_key": "PYRAMID",
+        "sample": mod.SCALE_IN_BUCKET_SAMPLE_FLOOR,
+        "joined_sample": mod.SCALE_IN_BUCKET_SAMPLE_FLOOR,
+        "source_quality_adjusted_ev_pct": 1.5,
+        "counterfactual_eligible_sample": mod.SCALE_IN_BUCKET_SAMPLE_FLOOR,
+        "counterfactual_joined_sample": mod.SCALE_IN_BUCKET_SAMPLE_FLOOR,
+        "filled_sample": mod.SCALE_IN_BUCKET_SAMPLE_FLOOR,
+        "runtime_authority_ready": True,
+        "runtime_authority_ready_sample": mod.SCALE_IN_BUCKET_SAMPLE_FLOOR,
+    }
+
+    bucket = mod._aggregate_bucket_rows([legacy, v2], scale_in=True)[0]
+
+    assert bucket["source_quality_adjusted_ev_pct"] == 1.5
+    assert bucket["counterfactual_joined_sample"] == mod.SCALE_IN_BUCKET_SAMPLE_FLOOR
+    assert bucket["filled_sample"] == mod.SCALE_IN_BUCKET_SAMPLE_FLOOR
+    assert bucket["counterfactual_method"] == "treatment_path_added_tranche_return"
+    assert bucket["runtime_authority_method_required"] == "paired_add_no_add_lifecycle_replay"
+    assert bucket["scale_in_ev_coverage_state"] == "v2_ready"
+    assert bucket["runtime_authority_ready"] is True
+
+
+def test_scale_in_v2_edge_without_runtime_authority_stays_source_only():
+    rows = [
+        {
+            "stage": "scale_in",
+            "runtime_features": {
+                "scale_in_applicability": "applied",
+                "scale_in_arm": "PYRAMID",
+                "scale_in_blocker_namespace": "PYRAMID",
+                "scale_in_execution_arm": "MARKETABLE_OBSERVATION",
+            },
+            "labels": {
+                "scale_in_ev_label_version": mod.SCALE_IN_EV_LABEL_VERSION,
+                "incremental_notional_ev_pct": 1.2,
+                "runtime_authority_ready": False,
+                "profit_rate": 0.5,
+            },
+            "stage_ev_composite_pct": 0.5,
+        }
+        for _ in range(mod.SCALE_IN_BUCKET_SAMPLE_FLOOR)
+    ]
+
+    attribution = mod._scale_in_bucket_attribution(rows)
+
+    assert attribution["summary"]["edge_bucket_count"] > 0
+    assert attribution["summary"]["actionable_bucket_count"] == 0
+    assert (
+        attribution["summary"]["runtime_authority_blocked_count"]
+        == attribution["summary"]["edge_bucket_count"]
+    )
+    assert attribution["summary"]["runtime_candidate_count"] == 0
+    assert attribution["summary"]["workorder_count"] == 0
+    blocked = next(
+        item
+        for item in attribution["runtime_authority_blocked_buckets"]
+        if item["bucket_type"] == "arm"
+    )
+    assert blocked["bucket_type"] == "arm"
+    assert blocked["bucket_key"] == "PYRAMID"
+    assert blocked["next_route"] == "source_only_keep_collecting_until_paired_add_lifecycle_replay"
+    assert blocked["allowed_runtime_apply"] is False
+
+
+def test_bucket_aggregation_keeps_same_key_separate_by_bucket_type():
+    rows = [
+        {
+            "bucket_type": "arm",
+            "bucket_key": "SAME",
+            "sample": 3,
+            "joined_sample": 3,
+            "source_quality_adjusted_ev_pct": 1.0,
+        },
+        {
+            "bucket_type": "blocker_namespace",
+            "bucket_key": "SAME",
+            "sample": 4,
+            "joined_sample": 4,
+            "source_quality_adjusted_ev_pct": -1.0,
+        },
+    ]
+
+    buckets = mod._aggregate_bucket_rows(rows)
+
+    assert len(buckets) == 2
+    assert {(item["bucket_type"], item["sample"]) for item in buckets} == {
+        ("arm", 3),
+        ("blocker_namespace", 4),
+    }
+
+
+def test_rolling_aggregation_excludes_source_quality_blocked_daily_report(tmp_path, monkeypatch):
+    monkeypatch.setattr(mod, "MATRIX_DIR", tmp_path)
+    monkeypatch.setattr(
+        mod,
+        "load_source_quality_preflight",
+        lambda target_date: {
+            "status": "pass",
+            "tuning_input_allowed": True,
+            "allowed_runtime_apply": True,
+            "hard_blocking_contract_gap_count": 0,
+        },
+    )
+    sections = {
+        name: {"buckets": []}
+        for name in (
+            "entry_bucket_attribution",
+            "submit_bucket_attribution",
+            "holding_bucket_attribution",
+            "exit_bucket_attribution",
+            "scale_in_bucket_attribution",
+            "overnight_bucket_attribution",
+            "lifecycle_flow_bucket_attribution",
+        )
+    }
+    for source_date, blocked in (("2026-06-11", False), ("2026-06-12", True)):
+        payload = {
+            "date": source_date,
+            "summary": {"total_rows": 1, "source_rows_total": 1, "retained_rows": 1},
+            "policy_entries": [],
+            "source_quality_preflight_gate": {
+                "status": "fail" if blocked else "pass",
+                "tuning_input_allowed": not blocked,
+                "allowed_runtime_apply": not blocked,
+                "hard_blocking_contract_gap_count": int(blocked),
+            },
+            **sections,
+        }
+        (tmp_path / f"lifecycle_decision_matrix_{source_date}.json").write_text(
+            json.dumps(payload), encoding="utf-8"
+        )
+
+    report = mod._aggregate_existing_daily_lifecycle_reports(
+        "2026-06-12",
+        ["2026-06-11", "2026-06-12"],
+        window_policy="rolling5d",
+        output_suffix="rolling5d",
+    )
+
+    assert report is not None
+    assert report["summary"]["source_dates"] == ["2026-06-11"]
+    assert report["summary"]["excluded_daily_report_dates"] == {
+        "2026-06-12": "daily_lifecycle_source_quality_preflight_blocked"
+    }
+    assert report["summary"]["unavailable_daily_report_dates"] == []
+
+
+def test_scale_in_counterfactual_enrichment_requires_exact_decision_id():
+    rows = [
+        {
+            "stage": "scale_in",
+            "candidate_id": "candidate-1",
+            "runtime_features": {
+                "sim_record_id": "sim-1",
+                "scale_in_arm": "PYRAMID",
+                "scale_in_decision_id": "decision-exact",
+                "scale_in_execution_arm": "MARKETABLE_OBSERVATION",
+            },
+            "labels": {},
+        },
+        {
+            "stage": "scale_in",
+            "candidate_id": "candidate-2",
+            "runtime_features": {
+                "sim_record_id": "sim-1",
+                "scale_in_arm": "PYRAMID",
+                "scale_in_decision_id": "",
+            },
+            "labels": {},
+        },
+    ]
+    labels = {
+        "decision-exact": {
+            "scale_in_ev_label_version": mod.SCALE_IN_EV_LABEL_VERSION,
+            "incremental_notional_ev_pct": 1.0,
+        }
+    }
+
+    assert mod._enrich_scale_in_rows_with_counterfactual_ev(rows, labels) == 1
+    assert rows[0]["labels"]["incremental_notional_ev_pct"] == 1.0
+    assert "incremental_notional_ev_pct" not in rows[1]["labels"]
+
+
+def test_scale_in_counterfactual_enrichment_rejects_passive_arm():
+    rows = [
+        {
+            "stage": "scale_in",
+            "runtime_features": {
+                "scale_in_decision_id": "decision-1",
+                "scale_in_execution_arm": "PASSIVE_BASELINE",
+            },
+            "labels": {},
+        },
+        {
+            "stage": "scale_in",
+            "runtime_features": {
+                "scale_in_decision_id": "decision-1",
+                "scale_in_execution_arm": "MARKETABLE_OBSERVATION",
+            },
+            "labels": {},
+        },
+    ]
+    labels = {
+        "decision-1": {
+            "scale_in_ev_label_version": mod.SCALE_IN_EV_LABEL_VERSION,
+            "incremental_notional_ev_pct": 1.0,
+        }
+    }
+
+    assert mod._enrich_scale_in_rows_with_counterfactual_ev(rows, labels) == 1
+    assert rows[0]["labels"] == {}
+    assert rows[1]["labels"]["incremental_notional_ev_pct"] == 1.0
+
+
+def test_scale_in_label_report_authority_does_not_upgrade_row(monkeypatch):
+    monkeypatch.setattr(
+        mod,
+        "_load_json",
+        lambda path: {
+            "scale_in_ev_label_version": mod.SCALE_IN_EV_LABEL_VERSION,
+            "runtime_authority_ready": True,
+            "rows": [
+                {
+                    "scale_in_decision_id": "decision-treatment-only",
+                    "runtime_ev_eligible": True,
+                    "runtime_authority_ready": False,
+                    "horizons": {"final": {"incremental_notional_ev_pct": 1.2}},
+                }
+            ],
+        },
+    )
+
+    labels = mod._load_scale_in_counterfactual_labels("2026-06-12")
+
+    assert labels["decision-treatment-only"]["runtime_authority_ready"] is False
+
+
+def test_complete_lifecycle_without_scale_in_is_not_applicable_and_keeps_ev():
+    rows = [
+        {"stage": "entry", "candidate_id": "c1", "runtime_features": {}, "labels": {}},
+        {"stage": "submit", "candidate_id": "c1", "runtime_features": {}, "labels": {}},
+        {
+            "stage": "holding",
+            "candidate_id": "c1",
+            "runtime_features": {},
+            "labels": {"profit_rate": 1.4},
+            "stage_ev_composite_pct": 1.4,
+        },
+        {
+            "stage": "exit",
+            "candidate_id": "c1",
+            "runtime_features": {},
+            "labels": {"profit_rate": 1.4},
+            "stage_ev_composite_pct": 1.4,
+        },
+    ]
+
+    flow = mod._flow_record("c1", "exact_sim_record_id", rows)
+
+    assert flow["stage_completion_state"] == "complete"
+    assert flow["source_quality_gate"] == "pass"
+    assert flow["scale_in_applicability"] == "not_applicable"
+    assert flow["scale_in_incremental_label_required"] is False
+    assert flow["source_quality_adjusted_ev_pct"] is not None
+
+
+def test_complete_lifecycle_with_unfilled_scale_in_is_considered_not_applied():
+    rows = [
+        {"stage": "entry", "runtime_features": {}, "labels": {}},
+        {"stage": "submit", "runtime_features": {}, "labels": {}},
+        {"stage": "holding", "runtime_features": {}, "labels": {"profit_rate": 0.5}, "stage_ev_composite_pct": 0.5},
+        {
+            "stage": "scale_in",
+            "runtime_features": {"scale_in_applicability": "considered_not_applied"},
+            "labels": {"profit_rate": 0.5},
+            "stage_ev_composite_pct": 0.5,
+        },
+        {"stage": "exit", "runtime_features": {}, "labels": {"profit_rate": 0.5}, "stage_ev_composite_pct": 0.5},
+    ]
+
+    flow = mod._flow_record("c2", "exact_sim_record_id", rows)
+
+    assert flow["stage_completion_state"] == "complete"
+    assert flow["scale_in_applicability"] == "considered_not_applied"
+    assert flow["scale_in_incremental_label_required"] is False
+
+
 def test_lifecycle_bucket_rows_explain_unknown_source_field_causes():
     rows = [
         {
@@ -300,6 +627,7 @@ def test_lifecycle_entry_score_bands_keep_score60_floor_granular():
 def test_lifecycle_decision_matrix_reads_gzip_pipeline_events(tmp_path, monkeypatch):
     pipeline_dir = tmp_path / "pipeline_events"
     monkeypatch.setattr(mod, "PIPELINE_EVENTS_DIR", pipeline_dir)
+    monkeypatch.setattr(mod, "POST_SELL_DIR", tmp_path / "post_sell")
     pipeline_dir.mkdir(parents=True)
     with gzip.open(pipeline_dir / "pipeline_events_2026-05-20.jsonl.gz", "wt", encoding="utf-8") as handle:
         handle.write(
@@ -323,6 +651,77 @@ def test_lifecycle_decision_matrix_reads_gzip_pipeline_events(tmp_path, monkeypa
 
     assert len(rows) == 1
     assert meta["stage_counts"]["scalp_sim_holding_started"] == 1
+
+
+def test_lifecycle_decision_matrix_excludes_synthetic_scalp_sim_events_from_authority_rows(
+    tmp_path, monkeypatch
+):
+    pipeline_dir = tmp_path / "pipeline_events"
+    monkeypatch.setattr(mod, "PIPELINE_EVENTS_DIR", pipeline_dir)
+    pipeline_dir.mkdir(parents=True)
+    rows = [
+        {
+            "stage": "scalp_sim_buy_order_assumed_filled",
+            "stock_code": "123456",
+            "stock_name": "TEST",
+            "fields": {
+                "simulation_book": "scalp_ai_buy_all",
+                "sim_record_id": "SIM-SYNTH",
+                "actual_order_submitted": False,
+                "broker_order_forbidden": True,
+            },
+            "emitted_at": "2026-06-15T10:00:00+09:00",
+        },
+        {
+            "stage": "scalp_sim_buy_order_assumed_filled",
+            "stock_code": "011070",
+            "stock_name": "LG이노텍",
+            "fields": {
+                "simulation_book": "scalp_ai_buy_all",
+                "sim_record_id": "SIM-REAL",
+                "actual_order_submitted": False,
+                "broker_order_forbidden": True,
+            },
+            "emitted_at": "2026-06-15T10:01:00+09:00",
+        },
+        {
+            "stage": "scalp_sim_scale_in_order_assumed_filled",
+            "stock_code": "123456",
+            "stock_name": "TEST",
+            "fields": {
+                "simulation_book": "scalp_ai_buy_all",
+                "sim_record_id": "SIM-SYNTH-SCALE",
+                "actual_order_submitted": False,
+                "broker_order_forbidden": True,
+            },
+            "emitted_at": "2026-06-15T10:02:00+09:00",
+        },
+        {
+            "stage": "scalp_sim_scale_in_order_assumed_filled",
+            "stock_code": "011070",
+            "stock_name": "LG이노텍",
+            "fields": {
+                "simulation_book": "scalp_ai_buy_all",
+                "sim_record_id": "SIM-REAL-SCALE",
+                "actual_order_submitted": False,
+                "broker_order_forbidden": True,
+            },
+            "emitted_at": "2026-06-15T10:03:00+09:00",
+        },
+    ]
+    with (pipeline_dir / "pipeline_events_2026-06-15.jsonl").open("w", encoding="utf-8") as handle:
+        for row in rows:
+            handle.write(json.dumps(row, ensure_ascii=False) + "\n")
+
+    submit_rows, submit_meta = mod._load_scalp_sim_submit_rows("2026-06-15")
+
+    assert [row["stock_code"] for row in submit_rows] == ["011070"]
+    assert submit_meta["stage_counts"] == {"scalp_sim_buy_order_assumed_filled": 1}
+    assert submit_meta["synthetic_excluded_count"] == 2
+    scale_rows, scale_meta = mod._load_scalp_sim_scale_in_rows("2026-06-15")
+    assert [row["stock_code"] for row in scale_rows] == ["011070"]
+    assert scale_meta["filled_events"] == 1
+    assert scale_meta["synthetic_excluded_count"] == 2
 
 
 def test_lifecycle_submit_bucket_attribution_is_source_only_and_surfaces_gaps():
@@ -1684,12 +2083,13 @@ def test_lifecycle_matrix_emits_scale_in_bucket_attribution_workorders(tmp_path,
     attribution = report["scale_in_bucket_attribution"]
     assert attribution["decision_authority"] == "adm_ldm_scale_in_bucket_attribution_source_only"
     assert attribution["summary"]["arm_counts"]["PYRAMID"] == 11
-    assert attribution["summary"]["runtime_candidate_count"] >= 1
-    assert attribution["summary"]["workorder_count"] >= 1
+    assert attribution["summary"]["runtime_candidate_count"] == 0
+    assert attribution["summary"]["workorder_count"] == 0
     arm_bucket = next(item for item in attribution["buckets"] if item["bucket_type"] == "arm")
     assert arm_bucket["bucket_key"] == "PYRAMID"
-    assert arm_bucket["recommended_route"] == "candidate_recovery_or_relax"
-    assert report["summary"]["scale_in_bucket_runtime_candidate_count"] >= 1
+    assert arm_bucket["scale_in_ev_coverage_state"] == "legacy_only"
+    assert arm_bucket["recommended_route"] == "hold_sample"
+    assert report["summary"]["scale_in_bucket_runtime_candidate_count"] == 0
 
 
 def test_lifecycle_matrix_wait6579_rows_carry_runtime_bucket_fields(tmp_path, monkeypatch):

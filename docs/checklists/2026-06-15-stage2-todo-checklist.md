@@ -25,6 +25,12 @@
 
 ## 장전 체크리스트 (08:45~09:00)
 
+- [ ] `[ScalpSimScaleInExecutionObservationPreopen0615] sim scale-in paired execution observation env 및 PID 로드 확인` (`Due: 2026-06-15`, `Slot: PREOPEN`, `TimeWindow: 08:45~09:00`, `Track: ScalpingLogic`)
+  - Source: [scalp_sim_scale_in_window_approval.py](/home/ubuntu/KORStockScan/src/engine/scalp_sim_scale_in_window_approval.py), [threshold_cycle_preopen_apply.py](/home/ubuntu/KORStockScan/src/engine/threshold_cycle_preopen_apply.py), [sniper_state_handlers.py](/home/ubuntu/KORStockScan/src/engine/sniper_state_handlers.py)
+  - 판정 기준: approval source가 source-quality pass일 때 `KORSTOCKSCAN_SCALP_SIM_SCALE_IN_EXECUTION_OBSERVATION_ENABLED=true`, execution arms와 PYRAMID/AVG_DOWN arm별 quota가 runtime env 및 bot PID env에 로드되는지 확인한다.
+  - 금지: real scale-in resolver/주문/수량/cap/provider/bot/hard-safety 변경 또는 passive hypothetical row의 runtime EV 권한 사용.
+  - 다음 액션: `paired_execution_env_loaded`, `source_quality_blocked_no_env`, `preopen_env_missing`, `pid_env_missing` 중 하나로 닫는다.
+
 - [ ] `[SwingPreFinalAutoAndFinalApprovalPreopen0615] 스윙 pre-final auto state 및 final approval artifact 확인` (`Due: 2026-06-15`, `Slot: PREOPEN`, `TimeWindow: 08:45~08:50`, `Track: RuntimeStability`)
   - Source: [swing_runtime_approval_2026-06-12.json](/home/ubuntu/KORStockScan/data/report/swing_runtime_approval/swing_runtime_approval_2026-06-12.json), [threshold_cycle_ev_2026-06-12.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-06-12.json)
   - 판정 기준: pre-final은 parsed AI Tier2 auto state가 있어야 하고, final-stage는 사용자 승인 artifact가 있어야 한다.
@@ -61,6 +67,12 @@
   - 금지: 이 override를 sim/probe 권한, provider route, entry/score threshold, quantity/cap, broker guard, hard/protect/emergency stop 변경 근거로 사용하지 않는다.
   - 다음 액션: `soft_stop_dynamic_grace_loaded_contract_pass`, `preopen_env_missing`, `pid_env_missing`, `operator_lock_rejected`, `runtime_safety_revert_required`, `closed_by_holding_exit_tuning` 중 하나로 닫는다.
 
+- [ ] `[ScalpingScannerRealSourceGuardPreopen0615] real SCALPING 스캐닝 churn/repeat guard operator lock 및 PID env 확인` (`Due: 2026-06-15`, `Slot: PREOPEN`, `TimeWindow: 08:55~09:00`, `Track: ScalpingLogic`)
+  - Source: [scalping_scanner_real_source_guard_2026-06-14.json](/home/ubuntu/KORStockScan/data/threshold_cycle/operator_runtime_env_locks/scalping_scanner_real_source_guard_2026-06-14.json), [scalping_scanner.py](/home/ubuntu/KORStockScan/src/scanners/scalping_scanner.py), [sniper_condition_handlers.py](/home/ubuntu/KORStockScan/src/engine/sniper_condition_handlers.py), [threshold_cycle_preopen_apply.py](/home/ubuntu/KORStockScan/src/engine/threshold_cycle_preopen_apply.py)
+  - 판정 기준: PREOPEN apply 산출물과 `threshold_runtime_env_2026-06-15.env`에 operator lock 기원의 `KORSTOCKSCAN_SCALP_SCANNER_REAL_SOURCE_GUARD_ENABLED=true`, `KORSTOCKSCAN_SCALP_SCANNER_REAL_SOURCE_GUARD_BLOCK_VALUE_TOP_ONLY=true`, `KORSTOCKSCAN_SCALP_CONDITION_UNMATCH_GUARD_ENABLED=true`, `KORSTOCKSCAN_SCALP_CONDITION_UNMATCH_GUARD_TAGS=VWAP_RECLAIM,DRYUP_SQUEEZE,PRECLOSE`가 남고 graceful restart 후 bot PID env에도 동일하게 로드되는지 확인한다. 단, 같은 entry-stage live tuning 후보가 선택되어 operator lock이 `same_stage_owner_conflict`, `live_auto_apply_ready`, 또는 `tuning_override`로 닫히면 해당 튜닝 env가 우선이며 scanner guard env 미적용을 정상으로 본다.
+  - 금지: 이 guard를 score threshold, AI smoothing live gate, provider route, order price, quantity/cap, broker guard, bot process 변경 근거로 사용하지 않는다. sim/probe 관찰은 real 승격 guard와 분리한다.
+  - 다음 액션: `scanner_source_guard_loaded_contract_pass`, `preopen_env_missing`, `pid_env_missing`, `operator_lock_rejected`, `closed_by_entry_tuning`, `runtime_safety_revert_required` 중 하나로 닫는다.
+
 ## 장중 체크리스트 (09:05~15:20)
 
 - [ ] `[RuntimeEnvIntradayObserve0615] 전일 selected runtime family 장중 provenance 및 rollback guard 확인` (`Due: 2026-06-15`, `Slot: INTRADAY`, `TimeWindow: 09:05~09:20`, `Track: RuntimeStability`)
@@ -75,6 +87,24 @@
   - 금지: sim/probe EV를 broker execution 품질이나 실주문 전환 근거로 단독 사용하지 않는다.
   - 다음 액션: source-quality split, active state 복원, open/closed count를 같이 기록한다.
 
+- [ ] `[Score6574RecoveryProbeGuardIntraday0615] score65_74 recovery probe micro hard-gate 및 동일종목 반복 차단 확인` (`Due: 2026-06-15`, `Slot: INTRADAY`, `TimeWindow: 10:00~14:40`, `Track: ScalpingLogic`)
+  - Source: [sniper_state_handlers.py](/home/ubuntu/KORStockScan/src/engine/sniper_state_handlers.py), [threshold_runtime_env_2026-06-15.env](/home/ubuntu/KORStockScan/data/threshold_cycle/runtime_env/threshold_runtime_env_2026-06-15.env), [pipeline_events_2026-06-15.jsonl](/home/ubuntu/KORStockScan/data/pipeline_events/pipeline_events_2026-06-15.jsonl)
+  - 판정 기준: `score65_74_recovery_probe`가 `MIN_BUY_PRESSURE`, `MIN_TICK_ACCEL`, `MIN_MICRO_VWAP_BP`를 hard gate로 적용하고, cancel/soft-stop/hard-stop 이후 동일종목 recovery probe 재진입이 `score65_74_recovery_probe_blocked` provenance로 닫히는지 확인한다.
+  - 금지: 이 확인을 score threshold, provider, order price, quantity/cap, broker guard, bot process 변경 근거로 사용하지 않는다. AI score smoothing `report_only`는 BUY 차단/허용 owner로 보지 않는다.
+  - 다음 액션: `micro_hard_gate_loaded`, `same_symbol_recovery_probe_block_observed`, `blocked_events_missing`, `runtime_env_missing`, `unexpected_repeated_real_entry` 중 하나로 닫는다.
+
+- [ ] `[ScalpingScannerChurnRepeatGuardIntraday0615] 조건검색 churn guard 및 VALUE_TOP-only 반복 차단 관찰` (`Due: 2026-06-15`, `Slot: INTRADAY`, `TimeWindow: 10:00~14:50`, `Track: ScalpingLogic`)
+  - Source: [scalping_scanner.py](/home/ubuntu/KORStockScan/src/scanners/scalping_scanner.py), [sniper_condition_handlers.py](/home/ubuntu/KORStockScan/src/engine/sniper_condition_handlers.py), [pipeline_events_2026-06-15.jsonl](/home/ubuntu/KORStockScan/data/pipeline_events/pipeline_events_2026-06-15.jsonl), [bot_history.log](/home/ubuntu/KORStockScan/logs/bot_history.log)
+  - 판정 기준: unmatched-only 조건검색 이탈이 `pending_unmatched`로 보류되고 즉시 `COMMAND_WS_UNREG`로 이어지지 않는지, `VALUE_TOP only + CntrStrUnavailable + anchor 대비 하락` 후보가 real WATCHING 승격에서 차단되는지 확인한다. 독립 소스(`VI_TRIGGERED`, `SUPERNOVA`, `OPEN_TOP+VALUE_TOP`)가 붙은 후보는 기존 승격 경로가 유지되는지 같이 확인한다.
+  - 금지: sim/probe duplicate 관찰을 real execution quality 또는 score threshold 변경 근거로 단독 사용하지 않는다. AI score smoothing report-only artifact를 runtime gate로 해석하지 않는다.
+  - 다음 액션: `condition_churn_guard_observed`, `value_top_repeat_block_observed`, `independent_source_allowed`, `guard_env_missing`, `unexpected_repeated_real_watching` 중 하나로 닫는다.
+
+- [ ] `[S15FastTrackContractIntraday0615] S15 당일 2단계 fast-track 조건검색 계약 및 provenance 확인` (`Due: 2026-06-15`, `Slot: INTRADAY`, `TimeWindow: 09:05~11:10`, `Track: ScalpingLogic`)
+  - Source: [kiwoom_websocket.py](/home/ubuntu/KORStockScan/src/engine/kiwoom_websocket.py), [sniper_condition_handlers.py](/home/ubuntu/KORStockScan/src/engine/sniper_condition_handlers.py), [sniper_s15_fast_track.py](/home/ubuntu/KORStockScan/src/engine/sniper_s15_fast_track.py), [pipeline_events_2026-06-15.jsonl](/home/ubuntu/KORStockScan/data/pipeline_events/pipeline_events_2026-06-15.jsonl)
+  - 판정 기준: 조건검색식 목록에 `s15_scan_base_01`, `s15_trigger_break_01`가 로드되고, `s15_scan_base_01`은 당일 `s15_candidate_armed`로 TTL 180초 arm만 생성하며, `s15_trigger_break_01`은 `s15_trigger_received` 이후 `s15_trigger_blocked` 또는 `s15_fast_track_submitted` provenance로 닫히는지 확인한다.
+  - 금지: S15를 next-day 예약/VCP 경로 또는 `SCANNER`/`VALUE_TOP` API scanner 경로로 해석하지 않는다. S15 provenance를 score threshold, provider, order price, quantity/cap, broker guard, hard-safety 변경 근거로 사용하지 않는다.
+  - 다음 액션: `s15_condition_list_loaded`, `s15_arm_event_observed`, `s15_trigger_blocked_observed`, `s15_fast_track_submitted_observed`, `s15_condition_missing`, `s15_provenance_missing` 중 하나로 닫는다.
+
 - [ ] `[IntradaySourceQualityGateCheck0615] 장중 raw source-quality 결손/unknown 조기 경보 및 튜닝 입력 차단 준비 확인` (`Due: 2026-06-15`, `Slot: INTRADAY`, `TimeWindow: 14:20~14:35`, `Track: RuntimeStability`)
   - Source: [pipeline_events_2026-06-15.jsonl](/home/ubuntu/KORStockScan/data/pipeline_events/pipeline_events_2026-06-15.jsonl), [threshold_events_2026-06-15.jsonl](/home/ubuntu/KORStockScan/data/threshold_cycle/threshold_events_2026-06-15.jsonl), [observation_source_quality_audit_2026-06-15.json](/home/ubuntu/KORStockScan/data/report/observation_source_quality_audit/observation_source_quality_audit_2026-06-15.json), [observation_source_quality_audit.py](/home/ubuntu/KORStockScan/src/engine/observation_source_quality_audit.py)
   - 판정 기준: 장중 `PYTHONPATH=. .venv/bin/python -m src.engine.observation_source_quality_audit --target-date 2026-06-15 --write` 재감사를 실행하거나 최신 산출물을 확인해 `hard_blocking_contract_gap_count`, `hard_blocking_excluded_row_count`, `tuning_input_allowed`, `raw_row_exclusion_applied`, `unknown_token_stage_count`, `review_warning_count`를 기록한다.
@@ -82,6 +112,18 @@
   - 다음 액션: `source_quality_clean_intraday`, `defective_rows_excluded`, `hard_block_requires_producer_fix`, `unknown_warning_workorder_required`, `audit_missing_or_stale` 중 하나로 닫는다. hard gap/unknown warning이 있으면 장후 `PostcloseSourceQualityGateReview`와 `CodeImprovementWorkorderReview`에서 누락 없이 재확인한다.
 
 ## 장후 체크리스트 (16:30~18:55)
+
+- [ ] `[ScalpSimScaleInExecutionFunnelPostclose0615] sim scale-in arm별 체결 funnel 및 증분 EV coverage 확인` (`Due: 2026-06-15`, `Slot: POSTCLOSE`, `TimeWindow: 16:35~16:50`, `Track: ScalpingLogic`)
+  - Source: [scale_in_incremental_counterfactual.py](/home/ubuntu/KORStockScan/src/engine/lifecycle/scale_in_incremental_counterfactual.py), [lifecycle_decision_matrix.py](/home/ubuntu/KORStockScan/src/engine/lifecycle_decision_matrix.py), [runtime_apply_bridge.py](/home/ubuntu/KORStockScan/src/engine/runtime_apply_bridge.py)
+  - 판정 기준: PYRAMID/AVG_DOWN별 `eligible`, passive fill/unfilled, quote unavailable, marketable filled, exact v2 joined/final-label/runtime-authority sample을 분리하고 `scale_in:none` complete lifecycle EV가 유지되는지 확인한다.
+  - 금지: passive/unfilled 표본을 primary EV 또는 runtime sample floor에 포함하거나 sim 결과를 real execution-quality 승인으로 사용하지 않는다.
+  - 다음 액션: `paired_samples_collecting`, `avg_down_candidate_drought`, `quote_or_guard_blocked`, `v2_ready_source_only`, `source_quality_blocked` 중 하나로 닫는다.
+
+- [ ] `[ScaleInIncrementalEVPostclose0615] scale-in 증분 관찰 producer/LDM 결합 및 runtime 차단 계약 확인` (`Due: 2026-06-15`, `Slot: POSTCLOSE`, `TimeWindow: 16:25~16:35`, `Track: ScalpingLogic`)
+  - Source: [scale_in_incremental_counterfactual.py](/home/ubuntu/KORStockScan/src/engine/lifecycle/scale_in_incremental_counterfactual.py), [lifecycle_decision_matrix.py](/home/ubuntu/KORStockScan/src/engine/lifecycle_decision_matrix.py), [runtime_apply_bridge.py](/home/ubuntu/KORStockScan/src/engine/runtime_apply_bridge.py), [run_threshold_cycle_postclose.sh](/home/ubuntu/KORStockScan/deploy/run_threshold_cycle_postclose.sh)
+  - 판정 기준: postclose wrapper가 counterfactual producer를 LDM보다 먼저 실행하고 exact decision-id 결합, passive/marketable cohort 분리, clean-baseline 적용을 유지하는지 확인한다. `paired shadow tranche`는 분석용 EV로만 인정하고, 완전한 ADD/NO_ADD lifecycle replay가 구현되기 전에는 `runtime_authority_ready=false`로 유지한다.
+  - 금지: passive/unfilled 수익률을 primary EV로 해석하거나 단일 arm/얇은 일별 표본으로 real scale-in threshold/env를 변경하지 않는다. `scale_in=none` complete lifecycle bucket에 scale-in label을 요구하지 않는다.
+  - 다음 액션: `producer_order_and_source_contract_pass`, `exact_join_missing`, `paired_control_label_missing`, `runtime_authority_leak_blocked`, `postclose_artifact_missing` 중 하나로 닫는다.
 
 - [ ] `[PostcloseSourceQualityGateReview0615] 장후 source-quality gate 결과 및 튜닝 입력 허용/제외 확인` (`Due: 2026-06-15`, `Slot: POSTCLOSE`, `TimeWindow: 16:25~16:35`, `Track: RuntimeStability`)
   - Source: [observation_source_quality_audit_2026-06-15.json](/home/ubuntu/KORStockScan/data/report/observation_source_quality_audit/observation_source_quality_audit_2026-06-15.json), [threshold_cycle_ev_2026-06-15.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-06-15.json), [code_improvement_workorder_2026-06-15.json](/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-06-15.json), [threshold_cycle_postclose_verification_2026-06-15.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_postclose_verification/threshold_cycle_postclose_verification_2026-06-15.json)
@@ -100,6 +142,12 @@
   - 판정 기준: threshold cycle EV를 보고 `live_auto_apply_ready`, `sim_auto_approved`, post-apply attribution, EV authority를 분리해 확인한다.
   - 금지: sim/combined EV만으로 broker execution 품질이나 live 전환을 확정하지 않는다.
   - 다음 액션: 다음 장전 apply 입력으로 쓸 수 있는 항목과 hold_sample/freeze 항목을 분리한다.
+
+- [ ] `[ScalpSimDuplicateDominancePostclose0615] sim duplicate dominance 및 synthetic row 제외 확인` (`Due: 2026-06-15`, `Slot: POSTCLOSE`, `TimeWindow: 16:40~16:55`, `Track: ScalpingLogic`)
+  - Source: [daily_threshold_cycle_report.py](/home/ubuntu/KORStockScan/src/engine/daily_threshold_cycle_report.py), [threshold_cycle_ev_2026-06-15.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-06-15.json)
+  - 판정 기준: scalp sim summary의 `synthetic_excluded_count`, `duplicate_buy_signal_by_symbol_top`, `duplicate_dominance_symbol_count`를 확인하고, `123456 TEST` row가 production sim/tuning authority 표본에 포함되지 않는지 확인한다.
+  - 금지: duplicate dominance count나 synthetic 제외 row를 real execution quality, live-auto promotion, broker/order/provider/bot/threshold 변경 근거로 사용하지 않는다.
+  - 다음 액션: `duplicate_dominance_separated`, `synthetic_excluded_contract_pass`, `synthetic_row_leak`, `duplicate_dominance_requires_workorder`, `artifact_missing` 중 하나로 닫는다.
 
 - [ ] `[CodeImprovementWorkorderReview0615] code improvement workorder 구현 필요 여부 및 Codex 지시 대상 확인` (`Due: 2026-06-15`, `Slot: POSTCLOSE`, `TimeWindow: 16:45~17:00`, `Track: ScalpingLogic`)
   - Source: [code_improvement_workorder_2026-06-12.md](/home/ubuntu/KORStockScan/docs/code-improvement-workorders/code_improvement_workorder_2026-06-12.md), [code_improvement_workorder_2026-06-12.json](/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-06-12.json)

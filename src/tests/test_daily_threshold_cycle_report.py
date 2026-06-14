@@ -260,6 +260,48 @@ def test_score65_74_recovery_probe_reports_effective_score60_aliases():
     assert family["sample"]["effective_score_range"] == "60-74"
 
 
+def test_scalp_simulator_summary_excludes_synthetic_and_tracks_duplicate_dominance():
+    events = [
+        {
+            "stage": "scalp_sim_duplicate_buy_signal",
+            "stock_code": "123456",
+            "stock_name": "TEST",
+            "fields": {"simulation_book": "scalp_ai_buy_all"},
+        },
+        *[
+            {
+                "stage": "scalp_sim_duplicate_buy_signal",
+                "stock_code": "011070",
+                "stock_name": "LG이노텍",
+                "emitted_at": "2026-06-12T13:48:00+09:00",
+                "fields": {"simulation_book": "scalp_ai_buy_all"},
+            }
+            for _ in range(10)
+        ],
+        {
+            "stage": "scalp_sim_entry_armed",
+            "stock_code": "000660",
+            "stock_name": "SK하이닉스",
+            "fields": {"simulation_book": "scalp_ai_buy_all"},
+        },
+    ]
+    summary = report_mod._scalp_simulator_event_summary(
+        events,
+        sim_completed_rows=[
+            {"stock_code": "123456", "stock_name": "TEST", "profit_rate": 1.0},
+            {"stock_code": "000660", "stock_name": "SK하이닉스", "profit_rate": 1.0},
+        ],
+    )
+
+    assert summary["synthetic_excluded_count"] == 1
+    assert summary["duplicate_buy_signal"] == 10
+    assert summary["duplicate_buy_signal_by_symbol_top"] == {"011070": 10}
+    assert summary["duplicate_dominance_symbol_count"] == 1
+    assert summary["duplicate_buy_signal_by_symbol_time_bucket_top"] == {"011070|time_1030_1400": 10}
+    assert summary["duplicate_dominance_symbol_time_bucket_count"] == 1
+    assert summary["completed_profit_summary"]["sample"] == 1
+
+
 def test_market_regime_continuous_threshold_family_metadata_and_source_bundle(tmp_path, monkeypatch):
     report_dir = tmp_path / "report"
     report_dir.mkdir(parents=True)
