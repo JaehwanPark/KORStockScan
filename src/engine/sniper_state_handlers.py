@@ -8,6 +8,7 @@ import time
 import math
 from datetime import date as date_cls, datetime, timedelta
 from pathlib import Path
+from typing import Any
 from uuid import uuid4
 
 import numpy as np
@@ -231,6 +232,11 @@ _PROFIT_STAGNATION_STATE_FIELDS = (
     "profit_stagnation_anchor_profit",
     "profit_stagnation_anchor_peak",
 )
+_PRESET_TP_SOFT_STOP_STATE_FIELDS = (
+    "preset_tp_soft_stop_started_at",
+    "preset_tp_soft_stop_anchor_profit",
+    "preset_tp_soft_stop_anchor_price",
+)
 SCALP_SIMULATION_BOOK = "scalp_ai_buy_all"
 SCALP_SIM_PENDING_STATUS = "SCALP_SIM_PENDING_BUY"
 SCALP_SIM_STATE_PATH = DATA_DIR / "runtime" / "scalp_live_simulator_state.json"
@@ -338,6 +344,10 @@ def _runtime_apply_date_for_policy_guard() -> str:
 
 def _scalp_sim_policy_source_date_for_guard() -> str:
     return str(os.environ.get("KORSTOCKSCAN_SCALP_SIM_AUTO_POLICY_SOURCE_DATE") or "").strip()
+
+
+def _lifecycle_bucket_discovery_policy_source_date_for_guard() -> str:
+    return str(os.environ.get("KORSTOCKSCAN_LIFECYCLE_BUCKET_DISCOVERY_POLICY_SOURCE_DATE") or "").strip()
 
 
 def _scalp_sim_policy_date(policy_file: str, policy_version: str) -> str:
@@ -606,12 +616,24 @@ def _scalp_hypothesis_match_fields(*, score_value, source_stage: str | None, fie
 
 
 def _load_scalp_sim_auto_policy_cache() -> dict:
-    enabled = _rule_bool("SCALP_SIM_AUTO_POLICY_ENABLED", False)
-    policy_file = _rule_str("SCALP_SIM_AUTO_POLICY_FILE", "").strip()
-    policy_version = _rule_str("SCALP_SIM_AUTO_POLICY_VERSION", "").strip()
+    direct_enabled = _rule_bool("SCALP_SIM_AUTO_POLICY_ENABLED", False)
+    direct_policy_file = _rule_str("SCALP_SIM_AUTO_POLICY_FILE", "").strip()
+    direct_policy_version = _rule_str("SCALP_SIM_AUTO_POLICY_VERSION", "").strip()
+    lifecycle_enabled = _rule_bool("LIFECYCLE_BUCKET_DISCOVERY_ENABLED", False)
+    lifecycle_policy_file = _rule_str("LIFECYCLE_BUCKET_DISCOVERY_POLICY_FILE", "").strip()
+    lifecycle_policy_version = _rule_str("LIFECYCLE_BUCKET_DISCOVERY_POLICY_VERSION", "").strip()
+    use_lifecycle_handoff = not direct_enabled and lifecycle_enabled and bool(lifecycle_policy_file)
+    enabled = direct_enabled or use_lifecycle_handoff
+    policy_file = direct_policy_file if direct_enabled else lifecycle_policy_file
+    policy_version = direct_policy_version if direct_enabled else lifecycle_policy_version
+    policy_source = "scalp_sim_auto_policy" if direct_enabled else "lifecycle_bucket_discovery_catalog_handoff"
     runtime_apply_date = _runtime_apply_date_for_policy_guard()
-    expected_policy_source_date = _scalp_sim_policy_source_date_for_guard()
     policy_date = _scalp_sim_policy_date(policy_file, policy_version)
+    expected_policy_source_date = (
+        _scalp_sim_policy_source_date_for_guard()
+        if direct_enabled
+        else (_lifecycle_bucket_discovery_policy_source_date_for_guard() or policy_date)
+    )
     if not enabled:
         _SCALP_SIM_AUTO_POLICY_CACHE.update(
             {
@@ -627,6 +649,9 @@ def _load_scalp_sim_auto_policy_cache() -> dict:
                 "policy_date": policy_date or None,
                 "runtime_apply_date": runtime_apply_date or None,
                 "expected_policy_source_date": expected_policy_source_date or None,
+                "policy_source": policy_source,
+                "direct_scalp_sim_auto_policy_enabled": direct_enabled,
+                "lifecycle_bucket_catalog_handoff_enabled": use_lifecycle_handoff,
                 "hypotheses": [],
                 "approved_row_count": 0,
             }
@@ -647,6 +672,9 @@ def _load_scalp_sim_auto_policy_cache() -> dict:
                 "policy_date": policy_date or None,
                 "runtime_apply_date": runtime_apply_date or None,
                 "expected_policy_source_date": expected_policy_source_date or None,
+                "policy_source": policy_source,
+                "direct_scalp_sim_auto_policy_enabled": direct_enabled,
+                "lifecycle_bucket_catalog_handoff_enabled": use_lifecycle_handoff,
                 "hypotheses": [],
                 "approved_row_count": 0,
             }
@@ -670,6 +698,9 @@ def _load_scalp_sim_auto_policy_cache() -> dict:
                 "policy_date": policy_date or None,
                 "runtime_apply_date": runtime_apply_date or None,
                 "expected_policy_source_date": expected_policy_source_date or None,
+                "policy_source": policy_source,
+                "direct_scalp_sim_auto_policy_enabled": direct_enabled,
+                "lifecycle_bucket_catalog_handoff_enabled": use_lifecycle_handoff,
                 "hypotheses": [],
                 "approved_row_count": 0,
             }
@@ -681,6 +712,7 @@ def _load_scalp_sim_auto_policy_cache() -> dict:
         and _SCALP_SIM_AUTO_POLICY_CACHE.get("version") == policy_version
         and _SCALP_SIM_AUTO_POLICY_CACHE.get("runtime_apply_date") == (runtime_apply_date or None)
         and _SCALP_SIM_AUTO_POLICY_CACHE.get("expected_policy_source_date") == (expected_policy_source_date or None)
+        and _SCALP_SIM_AUTO_POLICY_CACHE.get("policy_source") == policy_source
     ):
         return _SCALP_SIM_AUTO_POLICY_CACHE
     try:
@@ -701,36 +733,59 @@ def _load_scalp_sim_auto_policy_cache() -> dict:
                 "policy_date": policy_date or None,
                 "runtime_apply_date": runtime_apply_date or None,
                 "expected_policy_source_date": expected_policy_source_date or None,
+                "policy_source": policy_source,
+                "direct_scalp_sim_auto_policy_enabled": direct_enabled,
+                "lifecycle_bucket_catalog_handoff_enabled": use_lifecycle_handoff,
                 "hypotheses": [],
                 "approved_row_count": 0,
             }
         )
         return _SCALP_SIM_AUTO_POLICY_CACHE
-    if not isinstance(payload, dict) or payload.get("schema_version") != "scalp_sim_policy_catalog_v1":
+    schema_version = str(payload.get("schema_version") or "") if isinstance(payload, dict) else ""
+    if not isinstance(payload, dict) or schema_version not in {
+        "scalp_sim_policy_catalog_v1",
+        "lifecycle_bucket_catalog_v1",
+    }:
         status = "policy_invalid"
         policies = []
+        catalog_buckets = []
     else:
         status = "loaded"
         policies = payload.get("policies") if isinstance(payload.get("policies"), list) else []
+        catalog_buckets = payload.get("buckets") if isinstance(payload.get("buckets"), list) else []
     rows_by_source_bucket_id: dict[str, dict] = {}
     rows_by_bucket_id: dict[str, dict] = {}
     approved_rows: list[dict] = []
     active_seeds: list[dict] = []
     active_seeds_by_prefix: dict[str, dict] = {}
     hypotheses: list[dict] = []
-    for policy in policies:
-        if not isinstance(policy, dict) or policy.get("source_id") != "lifecycle_bucket_discovery":
-            continue
-        for row in policy.get("approved_bucket_rows") or []:
+    if schema_version == "lifecycle_bucket_catalog_v1":
+        for row in catalog_buckets:
             if not isinstance(row, dict):
+                continue
+            if row.get("sim_lifecycle_handoff_allowed") is not True:
                 continue
             approved_rows.append(row)
             source_bucket_id = str(row.get("source_bucket_id") or "").strip()
-            bucket_id = str(row.get("bucket_id") or "").strip()
+            bucket_id = str(row.get("bucket_id") or row.get("lifecycle_flow_bucket_id") or "").strip()
             if source_bucket_id:
                 rows_by_source_bucket_id[source_bucket_id] = row
             if bucket_id:
                 rows_by_bucket_id[bucket_id] = row
+    else:
+        for policy in policies:
+            if not isinstance(policy, dict) or policy.get("source_id") != "lifecycle_bucket_discovery":
+                continue
+            for row in policy.get("approved_bucket_rows") or []:
+                if not isinstance(row, dict):
+                    continue
+                approved_rows.append(row)
+                source_bucket_id = str(row.get("source_bucket_id") or "").strip()
+                bucket_id = str(row.get("bucket_id") or "").strip()
+                if source_bucket_id:
+                    rows_by_source_bucket_id[source_bucket_id] = row
+                if bucket_id:
+                    rows_by_bucket_id[bucket_id] = row
     for seed in payload.get("active_sim_priority_seeds") or []:
         if not isinstance(seed, dict) or str(seed.get("status") or "") != "active":
             continue
@@ -753,7 +808,11 @@ def _load_scalp_sim_auto_policy_cache() -> dict:
         for hypothesis in plan.get("hypotheses") or []:
             if _scalp_hypothesis_contract_valid(hypothesis):
                 hypotheses.append(hypothesis)
-    if status == "loaded" and not (rows_by_source_bucket_id or rows_by_bucket_id or active_seeds_by_prefix or hypotheses):
+    if (
+        status == "loaded"
+        and schema_version != "lifecycle_bucket_catalog_v1"
+        and not (rows_by_source_bucket_id or rows_by_bucket_id or active_seeds_by_prefix or hypotheses)
+    ):
         status = "policy_invalid"
     if status == "loaded" and runtime_apply_date and active_seeds_by_prefix and policy_date and not expected_policy_source_date:
         status = "policy_source_date_missing"
@@ -772,6 +831,10 @@ def _load_scalp_sim_auto_policy_cache() -> dict:
             "policy_date": policy_date or None,
             "runtime_apply_date": runtime_apply_date or None,
             "expected_policy_source_date": expected_policy_source_date or None,
+            "policy_source": policy_source,
+            "direct_scalp_sim_auto_policy_enabled": direct_enabled,
+            "lifecycle_bucket_catalog_handoff_enabled": use_lifecycle_handoff,
+            "policy_schema_version": schema_version or None,
             "approved_rows": approved_rows,
             "rows_by_source_bucket_id": rows_by_source_bucket_id,
             "rows_by_bucket_id": rows_by_bucket_id,
@@ -979,9 +1042,13 @@ def _scalp_sim_bucket_policy_fields(source: dict | None) -> dict:
     cache = _load_scalp_sim_auto_policy_cache()
     status = str(cache.get("status") or "policy_invalid")
     base = {
-        "scalp_sim_auto_policy_enabled": _rule_bool("SCALP_SIM_AUTO_POLICY_ENABLED", False),
+        "scalp_sim_auto_policy_enabled": status == "loaded",
+        "scalp_sim_auto_policy_direct_enabled": cache.get("direct_scalp_sim_auto_policy_enabled") or False,
+        "scalp_sim_policy_source": cache.get("policy_source") or "scalp_sim_auto_policy",
+        "lifecycle_bucket_catalog_handoff_enabled": cache.get("lifecycle_bucket_catalog_handoff_enabled") or False,
         "scalp_sim_auto_policy_file": cache.get("path") or _rule_str("SCALP_SIM_AUTO_POLICY_FILE", ""),
         "scalp_sim_auto_policy_version": cache.get("version") or _rule_str("SCALP_SIM_AUTO_POLICY_VERSION", ""),
+        "scalp_sim_auto_policy_schema_version": cache.get("policy_schema_version") or "-",
         "scalp_sim_auto_policy_approved_row_count": cache.get("approved_row_count") or 0,
         "scalp_sim_auto_policy_active_seed_count": cache.get("active_seed_count") or 0,
         "scalp_sim_auto_policy_hypothesis_count": cache.get("hypothesis_count") or 0,
@@ -2778,6 +2845,9 @@ def _log_swing_probe_discard(stock, code, origin_stage: str, reason: str, **fiel
         f"swing_probe_discard:{dedup_code}:{str(origin_stage or '').strip()}:{normalized_reason}"
     )
     base_fields = {
+        "probe_id": source_probe_id or discard_source_record_id,
+        "probe_arm": origin_stage or "discarded_before_probe_open",
+        "evidence_quality_weight": _safe_float(fields.pop("evidence_quality_weight", None), 0.25),
         "probe_origin_stage": origin_stage,
         "discard_reason": normalized_reason,
         "blocker_authority": "probe_capacity_only",
@@ -7665,6 +7735,121 @@ def _build_soft_stop_dynamic_grace_decision(
     }
 
 
+def _clear_preset_tp_soft_stop_state(stock: dict) -> None:
+    for field in _PRESET_TP_SOFT_STOP_STATE_FIELDS:
+        stock.pop(field, None)
+
+
+def _preset_tp_soft_stop_common_fields(
+    *,
+    trigger_pct: float,
+    emergency_pct: float,
+    grace_sec: int,
+    elapsed_sec: int,
+    anchor_profit: float,
+    current_profit: float,
+    max_worsen_pct: float,
+    recovery_buffer_pct: float,
+    formal_live_selected: bool,
+) -> dict[str, Any]:
+    return {
+        "preset_tp_soft_stop_trigger_pct": f"{trigger_pct:+.2f}",
+        "preset_tp_soft_stop_emergency_pct": f"{emergency_pct:+.2f}",
+        "preset_tp_soft_stop_grace_sec": int(grace_sec),
+        "preset_tp_soft_stop_elapsed_sec": int(max(0, elapsed_sec)),
+        "preset_tp_soft_stop_anchor_profit": f"{anchor_profit:+.2f}",
+        "preset_tp_soft_stop_current_profit": f"{current_profit:+.2f}",
+        "preset_tp_soft_stop_max_worsen_pct": f"{max_worsen_pct:.2f}",
+        "preset_tp_soft_stop_recovery_buffer_pct": f"{recovery_buffer_pct:.2f}",
+        "formal_preset_tp_exit_tuning_selected": bool(formal_live_selected),
+    }
+
+
+def _build_preset_tp_soft_stop_decision(
+    stock: dict,
+    *,
+    strategy: str,
+    now_ts: float,
+    curr_price: int,
+    profit_rate: float,
+) -> dict[str, Any]:
+    enabled = _rule_bool("SCALP_PRESET_TP_SOFT_STOP_OVERRIDE_ENABLED", False)
+    formal_live_selected = _rule_bool("PRESET_TP_EXIT_LIVE_TUNING_SELECTED", False)
+    trigger_pct = _rule_float("SCALP_PRESET_TP_SOFT_STOP_TRIGGER_PCT", -0.7)
+    grace_sec = max(0, _rule_int("SCALP_PRESET_TP_SOFT_STOP_GRACE_SEC", 45))
+    emergency_pct = min(
+        _rule_float("SCALP_PRESET_TP_SOFT_STOP_EMERGENCY_PCT", -1.2),
+        float(trigger_pct),
+    )
+    max_worsen_pct = max(0.0, _rule_float("SCALP_PRESET_TP_SOFT_STOP_MAX_WORSEN_PCT", 0.30))
+    recovery_buffer_pct = max(0.0, _rule_float("SCALP_PRESET_TP_SOFT_STOP_RECOVERY_BUFFER_PCT", 0.05))
+    started_at = _safe_float(stock.get("preset_tp_soft_stop_started_at"), 0.0)
+    anchor_profit = _safe_float(stock.get("preset_tp_soft_stop_anchor_profit"), profit_rate)
+    if started_at <= 0:
+        anchor_profit = float(profit_rate or 0.0)
+    elapsed_sec = max(0, int(now_ts - started_at)) if started_at > 0 else 0
+    additional_worsen = max(0.0, float(anchor_profit or 0.0) - float(profit_rate or 0.0))
+    base = {
+        "enabled": bool(enabled),
+        "formal_live_selected": bool(formal_live_selected),
+        "trigger_pct": float(trigger_pct),
+        "emergency_pct": float(emergency_pct),
+        "grace_sec": int(grace_sec),
+        "elapsed_sec": int(elapsed_sec),
+        "anchor_profit": float(anchor_profit),
+        "current_profit": float(profit_rate or 0.0),
+        "max_worsen_pct": float(max_worsen_pct),
+        "recovery_buffer_pct": float(recovery_buffer_pct),
+        "additional_worsen": float(additional_worsen),
+    }
+    skip_reason = ""
+    if not enabled:
+        skip_reason = "disabled"
+    elif formal_live_selected:
+        skip_reason = "formal_preset_tp_exit_tuning_selected"
+    elif strategy != "SCALPING":
+        skip_reason = "non_scalping"
+    elif _is_scalp_simulated_position(stock, strategy) or _has_sim_probe_provenance(stock):
+        skip_reason = "sim_or_probe_position"
+    if skip_reason:
+        return {**base, "action": "skip", "skip_reason": skip_reason}
+
+    recovery_threshold = trigger_pct + recovery_buffer_pct
+    if started_at > 0 and profit_rate > trigger_pct:
+        return {
+            **base,
+            "action": "recovered",
+            "reason": "preset_tp_soft_stop_recovered"
+            if profit_rate >= recovery_threshold
+            else "preset_tp_soft_stop_recovered_above_trigger",
+        }
+    if profit_rate > trigger_pct:
+        return {**base, "action": "idle", "reason": "above_trigger"}
+    if profit_rate <= emergency_pct:
+        return {**base, "action": "emergency", "reason": "emergency_pct_breached"}
+    if started_at <= 0:
+        _mutate_stock_state(
+            stock,
+            set_fields={
+                "preset_tp_soft_stop_started_at": float(now_ts),
+                "preset_tp_soft_stop_anchor_profit": float(profit_rate or 0.0),
+                "preset_tp_soft_stop_anchor_price": int(curr_price or 0),
+            },
+        )
+        return {
+            **base,
+            "action": "defer",
+            "reason": "preset_tp_soft_stop_triggered",
+            "elapsed_sec": 0,
+            "anchor_profit": float(profit_rate or 0.0),
+        }
+    if additional_worsen > max_worsen_pct:
+        return {**base, "action": "emergency", "reason": "max_worsen_exceeded"}
+    if elapsed_sec < grace_sec:
+        return {**base, "action": "defer", "reason": "preset_tp_soft_stop_deferred"}
+    return {**base, "action": "confirmed", "reason": "grace_elapsed_below_trigger"}
+
+
 def _emit_soft_stop_expert_observations(
     stock: dict,
     code: str,
@@ -8162,6 +8347,7 @@ def _dispatch_scalp_preset_exit(
     sell_reason_type,
     reason,
     exit_rule,
+    extra_fields: dict | None = None,
 ):
     target_id = stock.get('id')
     expected_qty = _safe_int(stock.get('buy_qty'), 0)
@@ -8202,6 +8388,7 @@ def _dispatch_scalp_preset_exit(
         curr_price=curr_p,
         buy_price=buy_p,
         buy_qty=expected_qty,
+        **(extra_fields or {}),
     )
 
     if _is_scalp_simulated_position(stock, strategy):
@@ -8413,7 +8600,7 @@ def _resolve_real_entry_panic_gap_weight_delta(panic_context: dict | None, eupho
                 "panic_gap_weight_reason": "panic_sell_liquidity_broken_or_level2",
             })
             return fields
-        if panic_level > 0 or panic_regime == "PANIC_DETECTED" or panic_state == "PANIC_SELL":
+        if panic_regime == "PANIC_DETECTED" or panic_state == "PANIC_SELL":
             fields.update({
                 "panic_gap_weight_bps": _rule_int("REAL_ENTRY_PANIC_SELL_EXTRA_BPS", 30),
                 "panic_gap_weight_reason": "panic_sell_detected",
@@ -8994,8 +9181,9 @@ def _evaluate_real_weak_pullback_entry_block(
         return {"blocked": False, "reason": "sim_or_dry_run"}
 
     latency_fields = latency_gate if isinstance(latency_gate, dict) else {}
-    if str(latency_fields.get("latency_state") or "").strip().upper() != "CAUTION":
-        return {"blocked": False, "reason": "latency_not_caution"}
+    latency_state = str(latency_fields.get("latency_state") or "").strip().upper()
+    if latency_state == "DANGER":
+        return {"blocked": False, "reason": "latency_danger_precedes_weak_pullback"}
     if not _entry_latency_allows_normal_submit(latency_fields):
         return {"blocked": False, "reason": "not_allow_normal"}
 
@@ -10081,6 +10269,183 @@ def _resolve_watching_state_change_refresh(stock, ws_data, *, now_ts, last_ai_ti
     }
 
 
+EARLY_ACCEL_RECHECK_FORBIDDEN_USES = (
+    "EV|rolling|MTD|cumulative_tuning|live_auto_promotion|runtime_apply_bridge|"
+    "threshold_mutation|provider_route_change|order_price_change|quantity_cap_change"
+)
+EARLY_ACCEL_RECHECK_PROMOTION_REASONS = frozenset(
+    {
+        "probe_acceleration_confirmed",
+        "early_discovery_source_present",
+        "new_vi_triggered_source",
+        "new_supernova_source",
+        "rank_jump_acceleration",
+        "spike_rate_acceleration",
+        "priority_score_acceleration",
+        "execution_strength_acceleration",
+    }
+)
+
+
+def _early_accel_recheck_contract_fields() -> dict:
+    return {
+        "metric_role": "funnel_count",
+        "decision_authority": "operator_runtime_observation_retry_only",
+        "source_quality_gate": "early_accel_recheck_contract_fields_present",
+        "window_policy": "intraday_operator_runtime_retry",
+        "sample_floor": "not_applicable_operator_runtime_retry",
+        "primary_decision_metric": "funnel_count",
+        "runtime_effect": True,
+        "allowed_runtime_apply": False,
+        "forbidden_uses": EARLY_ACCEL_RECHECK_FORBIDDEN_USES,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+    }
+
+
+def _early_accel_recheck_attempt_exclusion_fields(ai_call_trigger_reason: str | None) -> dict:
+    if str(ai_call_trigger_reason or "").strip() != "early_accel_recheck":
+        return {}
+    return {
+        "ai_call_trigger_reason": "early_accel_recheck",
+        "tuning_authority_excluded_reason": "early_accel_recheck_operator_retry",
+        "allowed_runtime_apply": False,
+    }
+
+
+def _early_accel_recheck_feature_values(ws_data: dict | None) -> dict:
+    source = ws_data if isinstance(ws_data, dict) else {}
+    tick_accel = _safe_float(
+        source.get("tick_acceleration_ratio", source.get("tick_accel", source.get("tick_acceleration_ratio_raw"))),
+        0.0,
+    )
+    micro_vwap_bp = _safe_float(
+        source.get("curr_vs_micro_vwap_bp", source.get("micro_vwap_bp")),
+        0.0,
+    )
+    return {
+        "tick_accel": tick_accel,
+        "micro_vwap_bp": micro_vwap_bp,
+        "quote_stale": bool(source.get("quote_stale") or source.get("context_stale")),
+    }
+
+
+def _early_accel_recheck_pre_ai_context_flags(stock: dict | None) -> dict:
+    context = (stock or {}).get("scalp_pre_ai_gate_context")
+    context = context if isinstance(context, dict) else {}
+    stages = set()
+    source_quality_block = False
+    for key, value in context.items():
+        if not isinstance(value, dict):
+            continue
+        legacy_stage = str(value.get("legacy_blocked_stage") or "").strip()
+        if legacy_stage:
+            stages.add(legacy_stage)
+        risk_state = str(value.get("risk_state") or "").strip()
+        gate_action = str(value.get("gate_action") or "").strip()
+        if gate_action == "source_quality_block" or risk_state.startswith("source_quality"):
+            source_quality_block = True
+    return {
+        "blocked_stages": stages,
+        "source_quality_block": source_quality_block,
+    }
+
+
+def _resolve_early_accel_recheck(
+    stock,
+    ws_data,
+    *,
+    now_ts,
+    last_ai_time,
+    cooldown_sec,
+    strategy,
+    pos_tag,
+    current_ai_score,
+) -> dict:
+    features = _early_accel_recheck_feature_values(ws_data)
+    promotion_price = _safe_int((stock or {}).get("buy_price"), 0)
+    current_price = _safe_int((ws_data or {}).get("curr"), 0)
+    promoted_at = _safe_float((stock or {}).get("entry_armed_at_epoch"), 0.0)
+    promotion_age_sec = max(0.0, now_ts - promoted_at) if promoted_at > 0 else 0.0
+    recheck_count = _safe_int((stock or {}).get("early_accel_recheck_count"), 0)
+    last_elapsed = max(0.0, now_ts - last_ai_time) if last_ai_time > 0 else 0.0
+    context_flags = _early_accel_recheck_pre_ai_context_flags(stock)
+    blocked_stages = context_flags.get("blocked_stages") or set()
+
+    base = {
+        "scanner_promotion_reason": str((stock or {}).get("scanner_promotion_reason") or "scanner_runtime_watch"),
+        "promotion_price": promotion_price,
+        "current_price": current_price,
+        "promotion_age_sec": f"{promotion_age_sec:.1f}",
+        "recheck_count": recheck_count,
+        "last_ai_elapsed_sec": f"{last_elapsed:.1f}",
+        "tick_accel": f"{float(features.get('tick_accel') or 0.0):.3f}",
+        "micro_vwap_bp": f"{float(features.get('micro_vwap_bp') or 0.0):.2f}",
+        "quote_stale": bool(features.get("quote_stale")),
+    }
+
+    if not _rule_bool("EARLY_ACCEL_RECHECK_RUNTIME_ENABLED", False):
+        return {"allowed": False, "skip_reason": "disabled", **base}
+    if str(strategy or "").upper() != "SCALPING" or str(pos_tag or "").upper() != "SCANNER":
+        return {"allowed": False, "skip_reason": "scope_not_real_scalping_scanner", **base}
+    if str(base.get("scanner_promotion_reason") or "") not in EARLY_ACCEL_RECHECK_PROMOTION_REASONS:
+        return {"allowed": False, "skip_reason": "scanner_promotion_reason_not_early_accel", **base}
+    if last_ai_time <= 0 or last_elapsed > max(1, cooldown_sec):
+        return {"allowed": False, "skip_reason": "normal_ai_path", **base}
+    if promotion_price <= 0 or promoted_at <= 0:
+        return {"allowed": False, "skip_reason": "missing_scanner_promotion_anchor", **base}
+    if current_price <= 0:
+        return {"allowed": False, "skip_reason": "missing_current_price", **base}
+    if current_price > 0 and current_price < promotion_price:
+        return {"allowed": False, "skip_reason": "price_below_promotion_anchor", **base}
+    if promotion_age_sec > max(1, _rule_int("EARLY_ACCEL_RECHECK_MAX_AGE_SEC", 180)):
+        return {"allowed": False, "skip_reason": "promotion_age_expired", **base}
+    if recheck_count >= max(0, _rule_int("EARLY_ACCEL_RECHECK_MAX_COUNT", 2)):
+        return {"allowed": False, "skip_reason": "max_recheck_count_reached", **base}
+    if last_elapsed < max(1, _rule_int("EARLY_ACCEL_RECHECK_MIN_INTERVAL_SEC", 20)):
+        return {"allowed": False, "skip_reason": "min_interval_not_elapsed", **base}
+    if features.get("quote_stale"):
+        return {"allowed": False, "skip_reason": "stale_quote_or_context", **base}
+    if bool(context_flags.get("source_quality_block")):
+        return {"allowed": False, "skip_reason": "source_quality_hard_block", **base}
+    if (
+        "blocked_liquidity" in blocked_stages
+        and not _rule_bool("EARLY_ACCEL_RECHECK_ALLOW_LIQUIDITY_BLOCKED", True)
+    ):
+        return {"allowed": False, "skip_reason": "liquidity_blocked_not_allowed", **base}
+    if (
+        {"blocked_strength_momentum", "blocked_vpw"} & blocked_stages
+        and not _rule_bool("EARLY_ACCEL_RECHECK_ALLOW_STRENGTH_BLOCKED", True)
+    ):
+        return {"allowed": False, "skip_reason": "strength_blocked_not_allowed", **base}
+    if _safe_float(features.get("micro_vwap_bp"), 0.0) < _rule_float("EARLY_ACCEL_RECHECK_MIN_MICRO_VWAP_BP", 0.0):
+        return {"allowed": False, "skip_reason": "micro_vwap_below_min", **base}
+    if _safe_float(features.get("tick_accel"), 0.0) < _rule_float("EARLY_ACCEL_RECHECK_MIN_TICK_ACCEL", 1.10):
+        return {"allowed": False, "skip_reason": "tick_accel_below_min", **base}
+    if _safe_float(current_ai_score, 50.0) >= 75.0:
+        return {"allowed": False, "skip_reason": "already_buy_score_path", **base}
+    return {"allowed": True, "skip_reason": "", **base}
+
+
+def _log_early_accel_recheck(stock, code, stage: str, decision: dict) -> None:
+    _log_entry_pipeline(
+        stock,
+        code,
+        stage,
+        **_early_accel_recheck_contract_fields(),
+        scanner_promotion_reason=decision.get("scanner_promotion_reason") or "-",
+        promotion_price=decision.get("promotion_price") or 0,
+        current_price=decision.get("current_price") or 0,
+        promotion_age_sec=decision.get("promotion_age_sec") or "0.0",
+        recheck_count=decision.get("recheck_count") or 0,
+        last_ai_elapsed_sec=decision.get("last_ai_elapsed_sec") or "0.0",
+        skip_reason=decision.get("skip_reason") or ("allowed" if decision.get("allowed") else "unknown"),
+        tick_accel=decision.get("tick_accel") or "0.000",
+        micro_vwap_bp=decision.get("micro_vwap_bp") or "0.00",
+        quote_stale=bool(decision.get("quote_stale")),
+    )
+
+
 def _run_watching_score_projection_refresh(
     stock,
     code,
@@ -10991,6 +11356,16 @@ def _build_sim_pre_submit_guard_observation_fields(
             or "-"
         ),
         "sim_order_price": price_snapshot.get("submitted_order_price") or price_snapshot.get("resolved_order_price") or "-",
+        "sim_price_status": (
+            "sim_unpriced_stale_warning"
+            if _safe_int(price_snapshot.get("submitted_order_price"), 0) <= 0
+            and (
+                str(latency_gate.get("reason") or latency_gate.get("latency_danger_reasons") or "").find("stale") >= 0
+                or bool(price_snapshot.get("quote_stale_at_submit"))
+            )
+            else "priced_or_not_applicable"
+        ),
+        "sim_submitted_order_price_role": "legacy_real_submit_alias_not_ev_price",
         "sim_best_bid_at_submit": price_snapshot.get("best_bid_at_submit") or "-",
         "sim_price_below_bid_bps": price_snapshot.get("price_below_bid_bps") or 0,
     }
@@ -11659,6 +12034,7 @@ def _log_wait65_79_ev_candidate(
     ai_decision,
     ws_data,
     feature_probe,
+    ai_call_trigger_reason="-",
 ):
     probe = feature_probe or {}
     latency_state = str((ws_data or {}).get("latency_state", "") or "").strip().upper() or "-"
@@ -11677,6 +12053,13 @@ def _log_wait65_79_ev_candidate(
         tick_accel=f"{float(probe.get('tick_accel', 0.0) or 0.0):.3f}",
         micro_vwap_bp=f"{float(probe.get('micro_vwap_bp', 0.0) or 0.0):.2f}",
         latency_state=latency_state,
+        ai_call_trigger_reason=ai_call_trigger_reason or "-",
+        tuning_authority_excluded_reason=(
+            _early_accel_recheck_attempt_exclusion_fields(ai_call_trigger_reason).get(
+                "tuning_authority_excluded_reason",
+                "-",
+            )
+        ),
         **source_quality_fields,
         parse_ok=bool((ai_decision or {}).get("ai_parse_ok", False)),
         ai_response_ms=int((ai_decision or {}).get("ai_response_ms", 0) or 0),
@@ -11732,6 +12115,31 @@ def _should_run_main_buy_recovery_canary(
     return True
 
 
+_SCORE65_74_RECOVERY_PROBE_WAIT_NEGATIVE_REASON_TOKENS = (
+    "mixed signal",
+    "no clear",
+    "insufficient",
+    "unfavorable",
+    "below buy threshold",
+    "tick_acceleration_ratio below",
+    "tick acceleration below",
+    "absorption not confirmed",
+    "no clear two favorable",
+    "speed feature is unfavorable",
+    "하락",
+)
+
+
+def _score65_74_recovery_probe_wait_negative_reason(ai_decision) -> str:
+    reason = str((ai_decision or {}).get("reason") or "").strip().lower()
+    if not reason:
+        return ""
+    for token in _SCORE65_74_RECOVERY_PROBE_WAIT_NEGATIVE_REASON_TOKENS:
+        if token in reason:
+            return token.replace(" ", "_")
+    return ""
+
+
 def _score65_74_recovery_probe_micro_guard(probe: dict | None) -> dict:
     probe = probe if isinstance(probe, dict) else {}
     buy_pressure = _safe_float(probe.get("buy_pressure"), 0.0)
@@ -11739,7 +12147,11 @@ def _score65_74_recovery_probe_micro_guard(probe: dict | None) -> dict:
     micro_vwap_bp = _safe_float(probe.get("micro_vwap_bp"), 0.0)
     min_buy_pressure = _rule_float("AI_SCORE65_74_RECOVERY_PROBE_MIN_BUY_PRESSURE", 65.0)
     min_tick_accel = _rule_float("AI_SCORE65_74_RECOVERY_PROBE_MIN_TICK_ACCEL", 1.20)
-    min_micro_vwap_bp = _rule_float("AI_SCORE65_74_RECOVERY_PROBE_MIN_MICRO_VWAP_BP", 0.0)
+    configured_min_micro_vwap_bp = _rule_float("AI_SCORE65_74_RECOVERY_PROBE_MIN_MICRO_VWAP_BP", 0.0)
+    min_micro_vwap_bp = max(
+        configured_min_micro_vwap_bp,
+        _rule_float("AI_SCORE65_74_RECOVERY_PROBE_EFFECTIVE_MIN_MICRO_VWAP_FLOOR_BP", 10.0),
+    )
     failed = []
     if buy_pressure < min_buy_pressure:
         failed.append("buy_pressure_below_min")
@@ -11747,6 +12159,38 @@ def _score65_74_recovery_probe_micro_guard(probe: dict | None) -> dict:
         failed.append("tick_accel_below_min")
     if micro_vwap_bp < min_micro_vwap_bp:
         failed.append("micro_vwap_below_min")
+    strong_micro_override_enabled = (
+        _rule_bool(
+            "AI_SCORE65_74_RECOVERY_PROBE_STRONG_MICRO_OVERRIDE_ENABLED",
+            False,
+        )
+        and not _rule_bool("ENTRY_STAGE_LIVE_TUNING_SELECTED", False)
+    )
+    strong_micro_min_buy_pressure = _rule_float(
+        "AI_SCORE65_74_RECOVERY_PROBE_STRONG_MICRO_MIN_BUY_PRESSURE",
+        85.0,
+    )
+    strong_micro_min_micro_vwap_bp = _rule_float(
+        "AI_SCORE65_74_RECOVERY_PROBE_STRONG_MICRO_MIN_MICRO_VWAP_BP",
+        30.0,
+    )
+    tick_source_quality_ok = (
+        str(probe.get("tick_context_quality") or "").strip() == "fresh_computed"
+        and probe.get("tick_context_stale") is not True
+        and probe.get("quote_stale") is not True
+        and str(probe.get("tick_accel_source") or "").strip()
+        in {"computed_10ticks", "same_second_burst_10ticks"}
+    )
+    strong_micro_override_applied = False
+    if (
+        strong_micro_override_enabled
+        and failed == ["tick_accel_below_min"]
+        and buy_pressure >= strong_micro_min_buy_pressure
+        and micro_vwap_bp >= strong_micro_min_micro_vwap_bp
+        and tick_source_quality_ok
+    ):
+        failed = []
+        strong_micro_override_applied = True
     return {
         "allowed": not failed,
         "score65_74_recovery_probe_skip_reason": "|".join(failed),
@@ -11756,6 +12200,16 @@ def _score65_74_recovery_probe_micro_guard(probe: dict | None) -> dict:
         "score65_74_recovery_probe_min_buy_pressure": min_buy_pressure,
         "score65_74_recovery_probe_min_tick_accel": min_tick_accel,
         "score65_74_recovery_probe_min_micro_vwap_bp": min_micro_vwap_bp,
+        "score65_74_recovery_probe_configured_min_micro_vwap_bp": configured_min_micro_vwap_bp,
+        "score65_74_recovery_probe_effective_micro_vwap_floor_bp": _rule_float(
+            "AI_SCORE65_74_RECOVERY_PROBE_EFFECTIVE_MIN_MICRO_VWAP_FLOOR_BP",
+            10.0,
+        ),
+        "score65_74_recovery_probe_strong_micro_override_enabled": strong_micro_override_enabled,
+        "score65_74_recovery_probe_strong_micro_override_applied": strong_micro_override_applied,
+        "score65_74_recovery_probe_strong_micro_min_buy_pressure": strong_micro_min_buy_pressure,
+        "score65_74_recovery_probe_strong_micro_min_micro_vwap_bp": strong_micro_min_micro_vwap_bp,
+        "score65_74_recovery_probe_strong_micro_source_quality_ok": tick_source_quality_ok,
     }
 
 
@@ -11881,6 +12335,16 @@ def _score65_74_recovery_probe_decision(
             "allowed": False,
             "evaluated": True,
             "score65_74_recovery_probe_skip_reason": "source_quality_hard_block",
+        }
+    negative_reason = _score65_74_recovery_probe_wait_negative_reason(ai_decision)
+    if negative_reason:
+        return {
+            **_score65_74_recovery_probe_micro_guard(probe),
+            "allowed": False,
+            "evaluated": True,
+            "score65_74_recovery_probe_skip_reason": (
+                f"ai_wait_negative_reason_veto:{negative_reason}"
+            ),
         }
 
     guard = _score65_74_recovery_probe_repeat_guard(
@@ -12450,11 +12914,51 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                     last_ai_time=last_ai_time,
                     cooldown_sec=config["AI_WATCHING_COOLDOWN"],
                 )
+                early_accel_recheck = _resolve_early_accel_recheck(
+                    stock,
+                    ws_data,
+                    now_ts=now_ts,
+                    last_ai_time=last_ai_time,
+                    cooldown_sec=config["AI_WATCHING_COOLDOWN"],
+                    strategy=strategy,
+                    pos_tag=pos_tag,
+                    current_ai_score=current_ai_score,
+                )
+                early_accel_recheck_in_scope = bool(
+                    _rule_bool("EARLY_ACCEL_RECHECK_RUNTIME_ENABLED", False)
+                    and str(strategy or "").upper() == "SCALPING"
+                    and str(pos_tag or "").upper() == "SCANNER"
+                    and last_ai_time > 0
+                    and time_elapsed <= config["AI_WATCHING_COOLDOWN"]
+                )
+                if early_accel_recheck_in_scope:
+                    _log_early_accel_recheck(
+                        stock,
+                        code,
+                        "early_accel_recheck_evaluated",
+                        early_accel_recheck,
+                    )
+                if early_accel_recheck.get("allowed"):
+                    _log_early_accel_recheck(
+                        stock,
+                        code,
+                        "early_accel_recheck_ai_call_allowed",
+                        early_accel_recheck,
+                    )
+                elif early_accel_recheck_in_scope:
+                    _log_early_accel_recheck(
+                        stock,
+                        code,
+                        "early_accel_recheck_skipped",
+                        early_accel_recheck,
+                    )
                 ai_call_trigger_reason = (
                     "first_call"
                     if last_ai_time == 0
                     else "cooldown_elapsed"
                     if time_elapsed > config["AI_WATCHING_COOLDOWN"]
+                    else "early_accel_recheck"
+                    if early_accel_recheck.get("allowed")
                     else f"state_change:{watching_state_refresh.get('reason')}"
                     if watching_state_refresh.get("allowed")
                     else "cooldown_active"
@@ -12486,6 +12990,7 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                 runtime_refresh_allowed = bool(
                     watching_state_refresh.get("allowed") and smoothing_mode != "report_only"
                 )
+                runtime_refresh_allowed = bool(runtime_refresh_allowed or early_accel_recheck.get("allowed"))
 
                 if ai_engine and is_vip_target and (
                     time_elapsed > config["AI_WATCHING_COOLDOWN"]
@@ -12624,6 +13129,12 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                                     1,
                                     int(config["AI_WATCHING_COOLDOWN"]),
                                 )
+                            if early_accel_recheck.get("allowed"):
+                                state_fields["early_accel_recheck_count"] = _safe_int(
+                                    stock.get("early_accel_recheck_count"),
+                                    0,
+                                ) + 1
+                                state_fields["early_accel_recheck_last_at"] = now_ts
                             _mutate_stock_state(stock, set_fields=state_fields)
                             _log_entry_pipeline(
                                 stock,
@@ -12631,7 +13142,10 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                                 "ai_confirmed",
                                 action=action,
                                 vip_target=is_vip_target,
-                                ai_call_trigger_reason=ai_call_trigger_reason,
+                                **{
+                                    "ai_call_trigger_reason": ai_call_trigger_reason or "-",
+                                    **_early_accel_recheck_attempt_exclusion_fields(ai_call_trigger_reason),
+                                },
                                 buy_pressure=f"{float(feature_probe.get('buy_pressure', 0.0) or 0.0):.2f}",
                                 tick_accel=f"{float(feature_probe.get('tick_accel', 0.0) or 0.0):.3f}",
                                 micro_vwap_bp=f"{float(feature_probe.get('micro_vwap_bp', 0.0) or 0.0):.2f}",
@@ -12665,6 +13179,7 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                                 chosen_action="BUY_NOW" if str(action or "").upper() == "BUY" and _safe_float(ai_score, 0.0) >= 75 else "NO_BUY_AI",
                                 actual_order_submitted=False,
                                 broker_order_forbidden=True,
+                                extra_fields=_early_accel_recheck_attempt_exclusion_fields(ai_call_trigger_reason),
                             )
                             if _is_wait65_79_candidate(action, ai_score):
                                 _log_wait65_79_ev_candidate(
@@ -12675,6 +13190,7 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                                     ai_decision=ai_decision,
                                     ws_data=ws_data,
                                     feature_probe=feature_probe,
+                                    ai_call_trigger_reason=ai_call_trigger_reason,
                                 )
                             score65_74_probe_decision = _score65_74_recovery_probe_decision(
                                 ai_decision,
@@ -12754,6 +13270,36 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                                     score65_74_recovery_probe_min_micro_vwap_bp=(
                                         f"{float(score65_74_probe_decision.get('score65_74_recovery_probe_min_micro_vwap_bp') or 0.0):.2f}"
                                     ),
+                                    score65_74_recovery_probe_configured_min_micro_vwap_bp=(
+                                        f"{float(score65_74_probe_decision.get('score65_74_recovery_probe_configured_min_micro_vwap_bp') or 0.0):.2f}"
+                                    ),
+                                    score65_74_recovery_probe_effective_micro_vwap_floor_bp=(
+                                        f"{float(score65_74_probe_decision.get('score65_74_recovery_probe_effective_micro_vwap_floor_bp') or 0.0):.2f}"
+                                    ),
+                                    score65_74_recovery_probe_strong_micro_override_enabled=bool(
+                                        score65_74_probe_decision.get(
+                                            "score65_74_recovery_probe_strong_micro_override_enabled",
+                                            False,
+                                        )
+                                    ),
+                                    score65_74_recovery_probe_strong_micro_override_applied=bool(
+                                        score65_74_probe_decision.get(
+                                            "score65_74_recovery_probe_strong_micro_override_applied",
+                                            False,
+                                        )
+                                    ),
+                                    score65_74_recovery_probe_strong_micro_min_buy_pressure=(
+                                        f"{float(score65_74_probe_decision.get('score65_74_recovery_probe_strong_micro_min_buy_pressure') or 0.0):.2f}"
+                                    ),
+                                    score65_74_recovery_probe_strong_micro_min_micro_vwap_bp=(
+                                        f"{float(score65_74_probe_decision.get('score65_74_recovery_probe_strong_micro_min_micro_vwap_bp') or 0.0):.2f}"
+                                    ),
+                                    score65_74_recovery_probe_strong_micro_source_quality_ok=bool(
+                                        score65_74_probe_decision.get(
+                                            "score65_74_recovery_probe_strong_micro_source_quality_ok",
+                                            False,
+                                        )
+                                    ),
                                     latency_state=str((ws_data or {}).get("latency_state", "") or "").strip().upper() or "-",
                                     **_build_tick_source_quality_log_fields(feature_probe),
                                     qty_cap=0,
@@ -12791,6 +13337,36 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                                     ),
                                     score65_74_recovery_probe_min_micro_vwap_bp=(
                                         f"{float(score65_74_probe_decision.get('score65_74_recovery_probe_min_micro_vwap_bp') or 0.0):.2f}"
+                                    ),
+                                    score65_74_recovery_probe_configured_min_micro_vwap_bp=(
+                                        f"{float(score65_74_probe_decision.get('score65_74_recovery_probe_configured_min_micro_vwap_bp') or 0.0):.2f}"
+                                    ),
+                                    score65_74_recovery_probe_effective_micro_vwap_floor_bp=(
+                                        f"{float(score65_74_probe_decision.get('score65_74_recovery_probe_effective_micro_vwap_floor_bp') or 0.0):.2f}"
+                                    ),
+                                    score65_74_recovery_probe_strong_micro_override_enabled=bool(
+                                        score65_74_probe_decision.get(
+                                            "score65_74_recovery_probe_strong_micro_override_enabled",
+                                            False,
+                                        )
+                                    ),
+                                    score65_74_recovery_probe_strong_micro_override_applied=bool(
+                                        score65_74_probe_decision.get(
+                                            "score65_74_recovery_probe_strong_micro_override_applied",
+                                            False,
+                                        )
+                                    ),
+                                    score65_74_recovery_probe_strong_micro_min_buy_pressure=(
+                                        f"{float(score65_74_probe_decision.get('score65_74_recovery_probe_strong_micro_min_buy_pressure') or 0.0):.2f}"
+                                    ),
+                                    score65_74_recovery_probe_strong_micro_min_micro_vwap_bp=(
+                                        f"{float(score65_74_probe_decision.get('score65_74_recovery_probe_strong_micro_min_micro_vwap_bp') or 0.0):.2f}"
+                                    ),
+                                    score65_74_recovery_probe_strong_micro_source_quality_ok=bool(
+                                        score65_74_probe_decision.get(
+                                            "score65_74_recovery_probe_strong_micro_source_quality_ok",
+                                            False,
+                                        )
                                     ),
                                     same_symbol_recovery_probe_cooldown_until=(
                                         score65_74_probe_decision.get("same_symbol_recovery_probe_cooldown_until", "-")
@@ -13018,7 +13594,14 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                         },
                     )
 
-                if ai_engine and is_vip_target and last_ai_time > 0 and time_elapsed <= config["AI_WATCHING_COOLDOWN"]:
+                if (
+                    ai_engine
+                    and is_vip_target
+                    and last_ai_time > 0
+                    and time_elapsed <= config["AI_WATCHING_COOLDOWN"]
+                    and not early_accel_recheck.get("allowed")
+                    and not watching_state_refresh.get("allowed")
+                ):
                     _log_entry_pipeline(
                         stock,
                         code,
@@ -13090,6 +13673,12 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                             score65_74_recovery_probe_min_micro_vwap_bp=(
                                 f"{float(score65_74_reuse_decision.get('score65_74_recovery_probe_min_micro_vwap_bp') or 0.0):.2f}"
                             ),
+                            score65_74_recovery_probe_configured_min_micro_vwap_bp=(
+                                f"{float(score65_74_reuse_decision.get('score65_74_recovery_probe_configured_min_micro_vwap_bp') or 0.0):.2f}"
+                            ),
+                            score65_74_recovery_probe_effective_micro_vwap_floor_bp=(
+                                f"{float(score65_74_reuse_decision.get('score65_74_recovery_probe_effective_micro_vwap_floor_bp') or 0.0):.2f}"
+                            ),
                             same_symbol_recovery_probe_cooldown_until=(
                                 score65_74_reuse_decision.get("same_symbol_recovery_probe_cooldown_until", "-")
                             ),
@@ -13129,6 +13718,10 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                         "blocked_ai_score",
                         threshold=75,
                         cooldown_sec=cooldown_time,
+                        **{
+                            "ai_call_trigger_reason": ai_call_trigger_reason or "-",
+                            **_early_accel_recheck_attempt_exclusion_fields(ai_call_trigger_reason),
+                        },
                         **_build_ai_overlap_log_fields(
                             stock=stock,
                             ai_score=current_ai_score,
@@ -13148,6 +13741,7 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                         chosen_action="NO_BUY_AI",
                         actual_order_submitted=False,
                         broker_order_forbidden=True,
+                        extra_fields=_early_accel_recheck_attempt_exclusion_fields(ai_call_trigger_reason),
                     )
                     _maybe_arm_scalp_sim_candidate_window(
                         stock=stock,
@@ -14042,7 +14636,10 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             effective_decision=latency_gate.get('effective_decision', latency_gate.get('decision')),
             effective_reason=latency_gate.get('effective_reason', latency_gate.get('reason')),
             threshold_family=latency_gate.get('threshold_family', 'latency_classifier_runtime_profile'),
-            runtime_effect=bool(latency_gate.get('latency_canary_applied')),
+            runtime_effect=(
+                bool(latency_gate.get('latency_canary_applied'))
+                or bool(latency_gate.get('pre_submit_quote_refresh_applied'))
+            ),
             actual_order_submitted=False,
             broker_order_forbidden=True,
             latency_danger_reasons=latency_gate.get('latency_danger_reasons'),
@@ -14051,6 +14648,17 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             computed_allowed_slippage=int(latency_gate.get('computed_allowed_slippage', 0) or 0),
             latency_canary_applied=bool(latency_gate.get('latency_canary_applied')),
             latency_canary_reason=latency_gate.get('latency_canary_reason'),
+            pre_submit_quote_refresh_enabled=bool(latency_gate.get('pre_submit_quote_refresh_enabled')),
+            pre_submit_quote_refresh_applied=bool(latency_gate.get('pre_submit_quote_refresh_applied')),
+            pre_submit_quote_refresh_reason=latency_gate.get('pre_submit_quote_refresh_reason'),
+            pre_submit_quote_refresh_source=latency_gate.get('pre_submit_quote_refresh_source'),
+            pre_submit_quote_refresh_quote_age_ms=latency_gate.get('pre_submit_quote_refresh_quote_age_ms'),
+            pre_submit_quote_refresh_best_bid=int(latency_gate.get('pre_submit_quote_refresh_best_bid', 0) or 0),
+            pre_submit_quote_refresh_best_ask=int(latency_gate.get('pre_submit_quote_refresh_best_ask', 0) or 0),
+            pre_submit_quote_refresh_latest_price=int(
+                latency_gate.get('pre_submit_quote_refresh_latest_price', 0) or 0
+            ),
+            pre_submit_quote_refresh_spread_ratio=latency_gate.get('pre_submit_quote_refresh_spread_ratio'),
             **_build_ai_overlap_log_fields(
                 stock=stock, ai_score=latency_signal_score, momentum_tag=stock.get("entry_momentum_tag"),
                 threshold_profile=stock.get("entry_threshold_profile"), overbought_blocked=False,
@@ -14226,13 +14834,25 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         effective_decision=latency_gate.get('effective_decision', latency_gate.get('decision')),
         effective_reason=latency_gate.get('effective_reason', latency_gate.get('reason')),
         threshold_family=latency_gate.get('threshold_family', 'latency_classifier_runtime_profile'),
-        runtime_effect=bool(latency_gate.get('latency_canary_applied')),
+        runtime_effect=(
+            bool(latency_gate.get('latency_canary_applied'))
+            or bool(latency_gate.get('pre_submit_quote_refresh_applied'))
+        ),
         actual_order_submitted=False,
         broker_order_forbidden=False,
         signal_price=int(latency_gate.get('signal_price', 0) or 0), latest_price=int(latency_gate.get('latest_price', 0) or 0),
         computed_allowed_slippage=int(latency_gate.get('computed_allowed_slippage', 0) or 0),
         latency_canary_applied=bool(latency_gate.get('latency_canary_applied')),
         latency_canary_reason=latency_gate.get('latency_canary_reason'), entry_price_guard=latency_gate.get('entry_price_guard'),
+        pre_submit_quote_refresh_enabled=bool(latency_gate.get('pre_submit_quote_refresh_enabled')),
+        pre_submit_quote_refresh_applied=bool(latency_gate.get('pre_submit_quote_refresh_applied')),
+        pre_submit_quote_refresh_reason=latency_gate.get('pre_submit_quote_refresh_reason'),
+        pre_submit_quote_refresh_source=latency_gate.get('pre_submit_quote_refresh_source'),
+        pre_submit_quote_refresh_quote_age_ms=latency_gate.get('pre_submit_quote_refresh_quote_age_ms'),
+        pre_submit_quote_refresh_best_bid=int(latency_gate.get('pre_submit_quote_refresh_best_bid', 0) or 0),
+        pre_submit_quote_refresh_best_ask=int(latency_gate.get('pre_submit_quote_refresh_best_ask', 0) or 0),
+        pre_submit_quote_refresh_latest_price=int(latency_gate.get('pre_submit_quote_refresh_latest_price', 0) or 0),
+        pre_submit_quote_refresh_spread_ratio=latency_gate.get('pre_submit_quote_refresh_spread_ratio'),
         entry_price_defensive_ticks=int(latency_gate.get('entry_price_defensive_ticks', 0) or 0),
         normal_defensive_order_price=int(latency_gate.get('normal_defensive_order_price', 0) or 0),
         latency_guarded_order_price=int(latency_gate.get('latency_guarded_order_price', 0) or 0),
@@ -14343,7 +14963,6 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             "pre_submit_liquidity_guard_observed_greenfield_prior"
             if greenfield_active
             else "pre_submit_liquidity_guard_block",
-            **_build_pre_submit_gate_contract_fields("liquidity_pre_submit_guard_p1"),
             liquidity_value=int(liquidity_value),
             min_liquidity=min_liquidity,
             block_reason="below_min_liquidity",
@@ -14355,6 +14974,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 entry_orderbook_micro_fields,
                 microstructure_submit_log_fields,
                 pre_ai_gate_submit_log_fields,
+                _build_pre_submit_gate_contract_fields("liquidity_pre_submit_guard_p1"),
             ),
         )
         if not greenfield_active:
@@ -14392,7 +15012,6 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             "pre_submit_overbought_pullback_guard_observed_greenfield_prior"
             if greenfield_active
             else "pre_submit_overbought_pullback_guard_block",
-            **_build_pre_submit_gate_contract_fields("overbought_pullback_guard_p1"),
             block_reason="pullback_or_rebreak_not_confirmed",
             risk_state=overbought_context.get("risk_state") or "-",
             risk_bucket=overbought_context.get("risk_bucket") or "-",
@@ -14404,6 +15023,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 entry_orderbook_micro_fields,
                 microstructure_submit_log_fields,
                 pre_ai_gate_submit_log_fields,
+                _build_pre_submit_gate_contract_fields("overbought_pullback_guard_p1"),
             ),
         )
         if not greenfield_active:
@@ -14477,7 +15097,6 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             stock,
             code,
             "real_weak_pullback_entry_block",
-            **_build_pre_submit_gate_contract_fields("operator_real_weak_pullback_entry_block"),
             **_merge_entry_pipeline_field_groups(
                 pre_ai_gate_submit_log_fields,
                 real_pre_submit_guard_fields,
@@ -14487,6 +15106,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 microstructure_submit_log_fields,
                 _panic_gap_weight_log_fields(latency_gate),
                 weak_pullback_block_verdict,
+                _build_pre_submit_gate_contract_fields("operator_real_weak_pullback_entry_block"),
             ),
         )
         _emit_scalp_entry_adm_snapshot(
@@ -14825,6 +15445,10 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
     ]
     primary_broker_order_no = broker_order_numbers[0] if broker_order_numbers else ""
     submit_attempt_id = f"{code}:{int(now_ts * 1000)}:{primary_broker_order_no or len(successful_orders)}"
+    ai_call_trigger_reason_at_submit = str(stock.get("last_watching_ai_call_trigger_reason") or "-").strip() or "-"
+    early_accel_recheck_submit_exclusion_fields = _early_accel_recheck_attempt_exclusion_fields(
+        ai_call_trigger_reason_at_submit
+    )
     _publish_buy_signal_submission_notice(
         stock, code, strategy=strategy, curr_price=curr_price, requested_qty=submitted_qty, entry_mode=entry_mode,
         latency_gate=latency_gate, liquidity_value=liquidity_value, ai_score=latency_signal_score,
@@ -14872,6 +15496,10 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         broker_order_no_list=",".join(broker_order_numbers),
         order_response_ord_no=primary_broker_order_no,
         submit_attempt_id=submit_attempt_id,
+        **{
+            "ai_call_trigger_reason": ai_call_trigger_reason_at_submit,
+            **early_accel_recheck_submit_exclusion_fields,
+        },
         **_merge_entry_pipeline_field_groups(
             pre_ai_gate_submit_log_fields,
             microstructure_submit_log_fields,
@@ -14905,6 +15533,8 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             "broker_order_no_list": ",".join(broker_order_numbers),
             "order_response_ord_no": primary_broker_order_no,
             "submit_attempt_id": submit_attempt_id,
+            "ai_call_trigger_reason": ai_call_trigger_reason_at_submit,
+            **early_accel_recheck_submit_exclusion_fields,
             **real_pre_submit_guard_fields,
         },
     )
@@ -16121,7 +16751,115 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
 
         if legacy_broker_recovered:
             _mutate_stock_state(stock, set_fields={'last_exit_guard_reason': 'broker_recovered_legacy'})
-        elif profit_rate <= preset_hard_stop_pct:
+        else:
+            preset_soft_stop_decision = _build_preset_tp_soft_stop_decision(
+                stock,
+                strategy=strategy,
+                now_ts=now_ts,
+                curr_price=curr_p,
+                profit_rate=profit_rate,
+            )
+            preset_soft_stop_action = str(preset_soft_stop_decision.get("action") or "")
+            preset_soft_stop_fields = _preset_tp_soft_stop_common_fields(
+                trigger_pct=_safe_float(
+                    preset_soft_stop_decision.get("trigger_pct"),
+                    _rule("SCALP_PRESET_TP_SOFT_STOP_TRIGGER_PCT", -0.7),
+                ),
+                emergency_pct=_safe_float(
+                    preset_soft_stop_decision.get("emergency_pct"),
+                    _rule("SCALP_PRESET_TP_SOFT_STOP_EMERGENCY_PCT", -1.2),
+                ),
+                grace_sec=_safe_int(
+                    preset_soft_stop_decision.get("grace_sec"),
+                    _rule("SCALP_PRESET_TP_SOFT_STOP_GRACE_SEC", 45),
+                ),
+                elapsed_sec=_safe_int(preset_soft_stop_decision.get("elapsed_sec"), 0),
+                anchor_profit=_safe_float(preset_soft_stop_decision.get("anchor_profit"), profit_rate),
+                current_profit=_safe_float(preset_soft_stop_decision.get("current_profit"), profit_rate),
+                max_worsen_pct=_safe_float(
+                    preset_soft_stop_decision.get("max_worsen_pct"),
+                    _rule("SCALP_PRESET_TP_SOFT_STOP_MAX_WORSEN_PCT", 0.30),
+                ),
+                recovery_buffer_pct=_safe_float(
+                    preset_soft_stop_decision.get("recovery_buffer_pct"),
+                    _rule("SCALP_PRESET_TP_SOFT_STOP_RECOVERY_BUFFER_PCT", 0.05),
+                ),
+                formal_live_selected=bool(preset_soft_stop_decision.get("formal_live_selected")),
+            )
+            if preset_soft_stop_action == "recovered":
+                _log_holding_pipeline(
+                    stock,
+                    code,
+                    "preset_tp_soft_stop_recovered",
+                    **preset_soft_stop_fields,
+                    preset_tp_soft_stop_reason=preset_soft_stop_decision.get("reason", "-"),
+                )
+                _clear_preset_tp_soft_stop_state(stock)
+            elif preset_soft_stop_action == "defer":
+                stage = str(preset_soft_stop_decision.get("reason") or "preset_tp_soft_stop_deferred")
+                _log_holding_pipeline(
+                    stock,
+                    code,
+                    stage,
+                    preset_tp_soft_stop_triggered=True,
+                    preset_tp_soft_stop_deferred=True,
+                    preset_tp_soft_stop_reason=preset_soft_stop_decision.get("reason", "-"),
+                    preset_tp_soft_stop_additional_worsen=f"{_safe_float(preset_soft_stop_decision.get('additional_worsen'), 0.0):.2f}",
+                    **preset_soft_stop_fields,
+                )
+                return
+            elif preset_soft_stop_action in {"confirmed", "emergency"}:
+                exit_rule = (
+                    "scalp_preset_emergency_stop_pct"
+                    if preset_soft_stop_action == "emergency"
+                    else "scalp_preset_soft_stop_confirmed"
+                )
+                stage = exit_rule
+                _log_holding_pipeline(
+                    stock,
+                    code,
+                    stage,
+                    preset_tp_soft_stop_triggered=True,
+                    preset_tp_soft_stop_deferred=False,
+                    preset_tp_soft_stop_reason=preset_soft_stop_decision.get("reason", "-"),
+                    preset_tp_soft_stop_additional_worsen=f"{_safe_float(preset_soft_stop_decision.get('additional_worsen'), 0.0):.2f}",
+                    **preset_soft_stop_fields,
+                )
+                log_info(
+                    f"🔪 [SCALP 출구엔진] {stock['name']} preset TP 손절 soft-stop "
+                    f"{'비상' if preset_soft_stop_action == 'emergency' else '확정'}({profit_rate:.2f}%). "
+                    "최유리(IOC) 청산!"
+                )
+                _clear_preset_tp_soft_stop_state(stock)
+                _dispatch_scalp_preset_exit(
+                    stock=stock,
+                    code=code,
+                    now_ts=now_ts,
+                    curr_p=curr_p,
+                    buy_p=buy_p,
+                    profit_rate=profit_rate,
+                    peak_profit=peak_profit,
+                    strategy=strategy,
+                    sell_reason_type="LOSS",
+                    reason=(
+                        f"🚨 SCALP preset TP emergency stop ({preset_soft_stop_fields['preset_tp_soft_stop_emergency_pct']}%)"
+                        if preset_soft_stop_action == "emergency"
+                        else f"🛑 SCALP preset TP soft stop confirmed ({preset_soft_stop_fields['preset_tp_soft_stop_trigger_pct']}%)"
+                    ),
+                    exit_rule=exit_rule,
+                    extra_fields={
+                        **preset_soft_stop_fields,
+                        "preset_tp_soft_stop_triggered": True,
+                        "preset_tp_soft_stop_deferred": False,
+                        "preset_tp_soft_stop_reason": preset_soft_stop_decision.get("reason", "-"),
+                        "preset_tp_soft_stop_additional_worsen": (
+                            f"{_safe_float(preset_soft_stop_decision.get('additional_worsen'), 0.0):.2f}"
+                        ),
+                    },
+                )
+                return
+
+        if not legacy_broker_recovered and profit_rate <= preset_hard_stop_pct:
             within_grace = preset_hard_stop_grace_sec > 0 and preset_held_sec < preset_hard_stop_grace_sec
             emergency_break = profit_rate <= preset_hard_stop_emergency_pct
             if within_grace and not emergency_break:

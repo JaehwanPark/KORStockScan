@@ -176,6 +176,35 @@ def test_policy_excludes_telegram_alert(monkeypatch, tmp_path):
     assert report["policy"]["allowed_automations"] == ["json_report", "markdown_report", "action_recommendation"]
 
 
+def test_buy_funnel_sentinel_excludes_early_accel_recheck_retry_rows(monkeypatch, tmp_path):
+    monkeypatch.setattr(sentinel, "DATA_DIR", tmp_path)
+    _write_events(
+        tmp_path,
+        "2026-05-06",
+        [
+            _event(
+                "2026-05-06",
+                "10:00:00",
+                "ai_confirmed",
+                record_id=1,
+                fields={
+                    "ai_call_trigger_reason": "early_accel_recheck",
+                    "tuning_authority_excluded_reason": "early_accel_recheck_operator_retry",
+                },
+            ),
+            _event("2026-05-06", "10:01:00", "ai_confirmed", record_id=2),
+        ],
+    )
+
+    report = sentinel.build_buy_funnel_sentinel_report(
+        "2026-05-06",
+        as_of=sentinel._parse_as_of("2026-05-06", "10:05:00"),
+    )
+
+    assert report["current"]["session"]["stage_unique"]["ai_confirmed"] == 1
+    assert report["current"]["session"]["lossless_event_count"] == 1
+
+
 def test_followup_route_is_report_only_for_upstream_threshold(monkeypatch, tmp_path):
     monkeypatch.setattr(sentinel, "DATA_DIR", tmp_path)
     rows = []

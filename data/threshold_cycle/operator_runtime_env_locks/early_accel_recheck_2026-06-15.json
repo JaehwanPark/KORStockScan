@@ -1,0 +1,43 @@
+{
+  "lock_id": "early_accel_recheck_operator_override_2026-06-15",
+  "enabled": true,
+  "family": "early_accel_recheck_runtime",
+  "stage": "entry",
+  "manipulation_point": "watching_ai_recheck_timing",
+  "scope": "real_scalping_scanner_promoted_only",
+  "runtime_effect": true,
+  "active_from_date": "2026-06-16",
+  "priority": 905,
+  "explicit_close_required": true,
+  "env_overrides": {
+    "KORSTOCKSCAN_EARLY_ACCEL_RECHECK_RUNTIME_ENABLED": "true",
+    "KORSTOCKSCAN_EARLY_ACCEL_RECHECK_MAX_COUNT": "2",
+    "KORSTOCKSCAN_EARLY_ACCEL_RECHECK_MIN_INTERVAL_SEC": "20",
+    "KORSTOCKSCAN_EARLY_ACCEL_RECHECK_MAX_AGE_SEC": "180",
+    "KORSTOCKSCAN_EARLY_ACCEL_RECHECK_MIN_TICK_ACCEL": "1.10",
+    "KORSTOCKSCAN_EARLY_ACCEL_RECHECK_MIN_MICRO_VWAP_BP": "0.0",
+    "KORSTOCKSCAN_EARLY_ACCEL_RECHECK_ALLOW_LIQUIDITY_BLOCKED": "true",
+    "KORSTOCKSCAN_EARLY_ACCEL_RECHECK_ALLOW_STRENGTH_BLOCKED": "true"
+  },
+  "forbidden_uses": [
+    "EV",
+    "rolling",
+    "MTD",
+    "cumulative_tuning",
+    "live_auto_promotion",
+    "runtime_apply_bridge",
+    "threshold_mutation",
+    "provider_route_change",
+    "order_price_change",
+    "quantity_cap_change",
+    "broker_guard_change",
+    "bot_restart_authority"
+  ],
+  "allowed_close_reason_keywords": [
+    "same_stage_owner_conflict",
+    "live_auto_apply_ready",
+    "tuning_override",
+    "safety_revert_required"
+  ],
+  "notes": "Operator runtime override for additional AI recheck timing only. Does not relax BUY score, price, quantity, provider, broker, or hard-safety gates."
+}

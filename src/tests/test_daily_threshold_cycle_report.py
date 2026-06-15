@@ -254,10 +254,40 @@ def test_score65_74_recovery_probe_reports_effective_score60_aliases():
 
     assert family["current"]["min_score"] == 60
     assert family["current"]["effective_score_range"] == "60-74"
+    assert family["current"]["configured_min_micro_vwap_bp"] == 0.0
+    assert family["current"]["effective_min_micro_vwap_bp"] == 10.0
+    assert family["current"]["min_micro_vwap_bp"] == 10.0
     assert family["sample"]["wait65_79_score60_74_candidate"] == 1
     assert family["sample"]["blocked_score60_74"] == 1
     assert family["sample"]["wait65_79_score65_74_candidate"] == 1
     assert family["sample"]["effective_score_range"] == "60-74"
+
+
+def test_score65_74_recovery_probe_excludes_early_accel_recheck_retry_rows():
+    family = report_mod._build_score65_74_recovery_probe_family(
+        [
+            {
+                "stage": "wait65_79_ev_candidate",
+                "fields": {
+                    "ai_score": "61",
+                    "ai_call_trigger_reason": "early_accel_recheck",
+                    "tuning_authority_excluded_reason": "early_accel_recheck_operator_retry",
+                },
+            },
+            {
+                "stage": "blocked_ai_score",
+                "fields": {
+                    "ai_score": "62",
+                    "ai_call_trigger_reason": "early_accel_recheck",
+                },
+            },
+            {"stage": "wait65_79_ev_candidate", "fields": {"ai_score": "63"}},
+            {"stage": "blocked_ai_score", "fields": {"ai_score": "64"}},
+        ]
+    )
+
+    assert family["sample"]["wait65_79_score60_74_candidate"] == 1
+    assert family["sample"]["blocked_score60_74"] == 1
 
 
 def test_scalp_simulator_summary_excludes_synthetic_and_tracks_duplicate_dominance():

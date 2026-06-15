@@ -19,6 +19,73 @@ def _write_gzip_jsonl(path, rows):
             handle.write(json.dumps(row, ensure_ascii=False) + "\n")
 
 
+def test_entry_adm_excludes_early_accel_recheck_retry_rows(tmp_path, monkeypatch):
+    pipeline_dir = tmp_path / "pipeline_events"
+    threshold_dir = tmp_path / "threshold_cycle"
+    snapshot_dir = threshold_dir / "snapshots"
+    monkeypatch.setattr(mod, "PIPELINE_EVENT_DIR", pipeline_dir)
+    monkeypatch.setattr(mod, "THRESHOLD_EVENT_DIR", threshold_dir)
+    monkeypatch.setattr(mod, "THRESHOLD_SNAPSHOT_DIR", snapshot_dir)
+
+    _write_jsonl(
+        pipeline_dir / "pipeline_events_2026-05-18.jsonl",
+        [
+            {
+                "stage": "blocked_ai_score",
+                "stock_code": "111111",
+                "record_id": "R1",
+                "emitted_at": "2026-05-18T09:10:00",
+                "emitted_date": "2026-05-18",
+                "fields": {
+                    "ai_score": "62",
+                    "ai_call_trigger_reason": "early_accel_recheck",
+                    "tuning_authority_excluded_reason": "early_accel_recheck_operator_retry",
+                },
+            },
+            {
+                "stage": "scalp_entry_action_decision_snapshot",
+                "stock_code": "111111",
+                "record_id": "R1",
+                "emitted_at": "2026-05-18T09:10:01",
+                "emitted_date": "2026-05-18",
+                "fields": {
+                    "source_stage": "blocked_ai_score",
+                    "chosen_action": "NO_BUY_AI",
+                    "ai_score": "62",
+                    "ai_call_trigger_reason": "early_accel_recheck",
+                    "tuning_authority_excluded_reason": "early_accel_recheck_operator_retry",
+                },
+            },
+            {
+                "stage": "order_bundle_submitted",
+                "stock_code": "111111",
+                "record_id": "R1",
+                "emitted_at": "2026-05-18T09:10:02",
+                "emitted_date": "2026-05-18",
+                "fields": {
+                    "actual_order_submitted": "true",
+                    "broker_order_submitted": "true",
+                    "ai_call_trigger_reason": "early_accel_recheck",
+                    "tuning_authority_excluded_reason": "early_accel_recheck_operator_retry",
+                },
+            },
+            {
+                "stage": "blocked_ai_score",
+                "stock_code": "222222",
+                "record_id": "R2",
+                "emitted_at": "2026-05-18T09:11:00",
+                "emitted_date": "2026-05-18",
+                "fields": {"ai_score": "63"},
+            },
+        ],
+    )
+
+    rows = list(mod._iter_relevant_events("2026-05-18"))
+
+    assert len(rows) == 1
+    assert rows[0]["stock_code"] == "222222"
+
+
 def test_scalp_entry_adm_report_aggregates_actions_and_joins_outcomes(tmp_path, monkeypatch):
     pipeline_dir = tmp_path / "pipeline_events"
     threshold_dir = tmp_path / "threshold_cycle"

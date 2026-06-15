@@ -22,6 +22,7 @@ from src.engine.sniper_state_handlers import (
     _should_publish_watching_buy_analysis_telegram,
     _should_run_score65_74_recovery_probe,
     _should_run_main_buy_recovery_canary,
+    _resolve_early_accel_recheck,
     _resolve_gatekeeper_fast_reuse_sec,
     _resolve_holding_ai_fast_reuse_sec,
     _resolve_watching_state_change_refresh,
@@ -141,6 +142,152 @@ def test_watching_state_change_refresh_allows_one_call_per_cooldown(monkeypatch)
     )
     assert blocked_after_refresh_call["allowed"] is False
     assert blocked_after_refresh_call["reason"] == "already_refreshed_this_cooldown"
+
+
+def test_early_accel_recheck_allows_scanner_cooldown_retry(monkeypatch):
+    rules = replace(
+        TRADING_RULES,
+        EARLY_ACCEL_RECHECK_RUNTIME_ENABLED=True,
+        EARLY_ACCEL_RECHECK_MAX_COUNT=2,
+        EARLY_ACCEL_RECHECK_MIN_INTERVAL_SEC=20,
+        EARLY_ACCEL_RECHECK_MAX_AGE_SEC=180,
+        EARLY_ACCEL_RECHECK_MIN_TICK_ACCEL=1.10,
+        EARLY_ACCEL_RECHECK_MIN_MICRO_VWAP_BP=0.0,
+    )
+    monkeypatch.setattr(handlers, "TRADING_RULES", rules)
+    stock = {
+        "position_tag": "SCANNER",
+        "scanner_promotion_reason": "probe_acceleration_confirmed",
+        "buy_price": 12280,
+        "entry_armed_at_epoch": 100.0,
+        "early_accel_recheck_count": 0,
+        "scalp_pre_ai_gate_context": {
+            "strength_momentum": {"legacy_blocked_stage": "blocked_strength_momentum"},
+            "liquidity": {"legacy_blocked_stage": "blocked_liquidity"},
+        },
+    }
+    ws_data = {
+        "curr": 12430,
+        "tick_acceleration_ratio": 1.25,
+        "curr_vs_micro_vwap_bp": 12.0,
+        "quote_stale": False,
+    }
+
+    result = _resolve_early_accel_recheck(
+        stock,
+        ws_data,
+        now_ts=130.0,
+        last_ai_time=105.0,
+        cooldown_sec=90,
+        strategy="SCALPING",
+        pos_tag="SCANNER",
+        current_ai_score=64.0,
+    )
+
+    assert result["allowed"] is True
+    assert result["promotion_price"] == 12280
+    assert result["current_price"] == 12430
+
+
+def test_early_accel_recheck_blocks_stale_or_falling_context(monkeypatch):
+    rules = replace(TRADING_RULES, EARLY_ACCEL_RECHECK_RUNTIME_ENABLED=True)
+    monkeypatch.setattr(handlers, "TRADING_RULES", rules)
+    stock = {"position_tag": "SCANNER", "buy_price": 12280, "entry_armed_at_epoch": 100.0}
+    stock["scanner_promotion_reason"] = "rank_jump_acceleration"
+
+    falling = _resolve_early_accel_recheck(
+        stock,
+        {"curr": 12270, "tick_acceleration_ratio": 1.5, "curr_vs_micro_vwap_bp": 10.0},
+        now_ts=130.0,
+        last_ai_time=105.0,
+        cooldown_sec=90,
+        strategy="SCALPING",
+        pos_tag="SCANNER",
+        current_ai_score=64.0,
+    )
+    assert falling["allowed"] is False
+    assert falling["skip_reason"] == "price_below_promotion_anchor"
+
+    stale = _resolve_early_accel_recheck(
+        stock,
+        {"curr": 12350, "tick_acceleration_ratio": 1.5, "curr_vs_micro_vwap_bp": 10.0, "quote_stale": True},
+        now_ts=130.0,
+        last_ai_time=105.0,
+        cooldown_sec=90,
+        strategy="SCALPING",
+        pos_tag="SCANNER",
+        current_ai_score=64.0,
+    )
+    assert stale["allowed"] is False
+    assert stale["skip_reason"] == "stale_quote_or_context"
+
+    missing_price = _resolve_early_accel_recheck(
+        stock,
+        {"tick_acceleration_ratio": 1.5, "curr_vs_micro_vwap_bp": 10.0},
+        now_ts=130.0,
+        last_ai_time=105.0,
+        cooldown_sec=90,
+        strategy="SCALPING",
+        pos_tag="SCANNER",
+        current_ai_score=64.0,
+    )
+    assert missing_price["allowed"] is False
+    assert missing_price["skip_reason"] == "missing_current_price"
+
+    late_only = _resolve_early_accel_recheck(
+        {**stock, "scanner_promotion_reason": "value_top_only_guard_disabled"},
+        {"curr": 12350, "tick_acceleration_ratio": 1.5, "curr_vs_micro_vwap_bp": 10.0},
+        now_ts=130.0,
+        last_ai_time=105.0,
+        cooldown_sec=90,
+        strategy="SCALPING",
+        pos_tag="SCANNER",
+        current_ai_score=64.0,
+    )
+    assert late_only["allowed"] is False
+    assert late_only["skip_reason"] == "scanner_promotion_reason_not_early_accel"
+
+
+def test_early_accel_recheck_blocks_scope_and_limits(monkeypatch):
+    rules = replace(
+        TRADING_RULES,
+        EARLY_ACCEL_RECHECK_RUNTIME_ENABLED=True,
+        EARLY_ACCEL_RECHECK_MAX_COUNT=2,
+    )
+    monkeypatch.setattr(handlers, "TRADING_RULES", rules)
+    stock = {
+        "position_tag": "VWAP_RECLAIM",
+        "scanner_promotion_reason": "probe_acceleration_confirmed",
+        "buy_price": 12280,
+        "entry_armed_at_epoch": 100.0,
+        "early_accel_recheck_count": 2,
+    }
+    not_scanner = _resolve_early_accel_recheck(
+        stock,
+        {"curr": 12430, "tick_acceleration_ratio": 1.25, "curr_vs_micro_vwap_bp": 12.0},
+        now_ts=130.0,
+        last_ai_time=105.0,
+        cooldown_sec=90,
+        strategy="SCALPING",
+        pos_tag="VWAP_RECLAIM",
+        current_ai_score=64.0,
+    )
+    assert not_scanner["allowed"] is False
+    assert not_scanner["skip_reason"] == "scope_not_real_scalping_scanner"
+
+    stock["position_tag"] = "SCANNER"
+    max_count = _resolve_early_accel_recheck(
+        stock,
+        {"curr": 12430, "tick_acceleration_ratio": 1.25, "curr_vs_micro_vwap_bp": 12.0},
+        now_ts=130.0,
+        last_ai_time=105.0,
+        cooldown_sec=90,
+        strategy="SCALPING",
+        pos_tag="SCANNER",
+        current_ai_score=64.0,
+    )
+    assert max_count["allowed"] is False
+    assert max_count["skip_reason"] == "max_recheck_count_reached"
 
 
 def test_scalping_entry_blocker_role_registry_marks_score6574_micro_as_runtime_gate():
@@ -551,7 +698,7 @@ def test_should_run_score65_74_recovery_probe_uses_dedicated_default_off_flag(mo
     feature_probe = {
         "buy_pressure": 70.0,
         "tick_accel": 1.35,
-        "micro_vwap_bp": 3.0,
+        "micro_vwap_bp": 12.0,
         "large_sell_print": False,
     }
 
@@ -633,6 +780,225 @@ def test_score65_74_recovery_probe_enforces_micro_context_hard_gate(monkeypatch)
         None,
         feature_probe=weak_micro_feature_probe,
     ) is False
+
+
+def test_score65_74_recovery_probe_strong_micro_override_relaxes_tick_only_veto(monkeypatch):
+    rules = replace(
+        TRADING_RULES,
+        AI_SCORE65_74_RECOVERY_PROBE_ENABLED=True,
+        AI_SCORE65_74_RECOVERY_PROBE_MIN_SCORE=60,
+        AI_SCORE65_74_RECOVERY_PROBE_MAX_SCORE=74,
+        AI_SCORE65_74_RECOVERY_PROBE_MIN_BUY_PRESSURE=65.0,
+        AI_SCORE65_74_RECOVERY_PROBE_MIN_TICK_ACCEL=1.2,
+        AI_SCORE65_74_RECOVERY_PROBE_MIN_MICRO_VWAP_BP=0.0,
+        AI_SCORE65_74_RECOVERY_PROBE_STRONG_MICRO_OVERRIDE_ENABLED=True,
+        AI_SCORE65_74_RECOVERY_PROBE_STRONG_MICRO_MIN_BUY_PRESSURE=85.0,
+        AI_SCORE65_74_RECOVERY_PROBE_STRONG_MICRO_MIN_MICRO_VWAP_BP=30.0,
+    )
+    monkeypatch.setattr("src.engine.sniper_state_handlers.TRADING_RULES", rules)
+
+    decision = _score65_74_recovery_probe_decision(
+        {"action": "WAIT"},
+        62,
+        {"latency_state": "OK"},
+        [],
+        [],
+        None,
+        feature_probe={
+            "buy_pressure": 91.0,
+            "tick_accel": 0.0,
+            "micro_vwap_bp": 45.0,
+            "tick_accel_source": "computed_10ticks",
+            "tick_context_quality": "fresh_computed",
+            "tick_context_stale": False,
+            "quote_stale": False,
+        },
+    )
+
+    assert decision["allowed"] is True
+    assert decision["score65_74_recovery_probe_strong_micro_override_applied"] is True
+    assert decision["score65_74_recovery_probe_skip_reason"] == ""
+
+
+def test_score65_74_recovery_probe_requires_meaningful_micro_vwap_floor(monkeypatch):
+    rules = replace(
+        TRADING_RULES,
+        AI_SCORE65_74_RECOVERY_PROBE_ENABLED=True,
+        AI_SCORE65_74_RECOVERY_PROBE_MIN_SCORE=60,
+        AI_SCORE65_74_RECOVERY_PROBE_MAX_SCORE=74,
+        AI_SCORE65_74_RECOVERY_PROBE_MIN_BUY_PRESSURE=65.0,
+        AI_SCORE65_74_RECOVERY_PROBE_MIN_TICK_ACCEL=1.2,
+        AI_SCORE65_74_RECOVERY_PROBE_MIN_MICRO_VWAP_BP=0.0,
+    )
+    monkeypatch.setattr("src.engine.sniper_state_handlers.TRADING_RULES", rules)
+
+    decision = _score65_74_recovery_probe_decision(
+        {"action": "WAIT", "reason": "Position advantage but still checking recovery"},
+        74,
+        {"latency_state": "OK"},
+        [],
+        [],
+        None,
+        feature_probe={
+            "buy_pressure": 87.0,
+            "tick_accel": 1.25,
+            "micro_vwap_bp": 4.11,
+        },
+    )
+
+    assert decision["allowed"] is False
+    assert decision["score65_74_recovery_probe_skip_reason"] == "micro_vwap_below_min"
+    assert decision["score65_74_recovery_probe_min_micro_vwap_bp"] == 10.0
+    assert decision["score65_74_recovery_probe_configured_min_micro_vwap_bp"] == 0.0
+
+
+def test_score65_74_recovery_probe_blocks_negative_wait_reason_even_when_micro_passes(monkeypatch):
+    rules = replace(
+        TRADING_RULES,
+        AI_SCORE65_74_RECOVERY_PROBE_ENABLED=True,
+        AI_SCORE65_74_RECOVERY_PROBE_MIN_SCORE=60,
+        AI_SCORE65_74_RECOVERY_PROBE_MAX_SCORE=74,
+        AI_SCORE65_74_RECOVERY_PROBE_MIN_BUY_PRESSURE=65.0,
+        AI_SCORE65_74_RECOVERY_PROBE_MIN_TICK_ACCEL=1.2,
+        AI_SCORE65_74_RECOVERY_PROBE_MIN_MICRO_VWAP_BP=0.0,
+    )
+    monkeypatch.setattr("src.engine.sniper_state_handlers.TRADING_RULES", rules)
+
+    decision = _score65_74_recovery_probe_decision(
+        {
+            "action": "WAIT",
+            "reason": (
+                "mixed signals: tick_acceleration_ratio below BUY threshold "
+                "and absorption not confirmed"
+            ),
+        },
+        62,
+        {"latency_state": "OK"},
+        [],
+        [],
+        None,
+        feature_probe={
+            "buy_pressure": 91.0,
+            "tick_accel": 1.6,
+            "micro_vwap_bp": 45.0,
+        },
+    )
+
+    assert decision["allowed"] is False
+    assert decision["score65_74_recovery_probe_skip_reason"] == (
+        "ai_wait_negative_reason_veto:mixed_signal"
+    )
+
+
+def test_score65_74_recovery_probe_does_not_veto_positive_reason_with_negative_absent(monkeypatch):
+    rules = replace(
+        TRADING_RULES,
+        AI_SCORE65_74_RECOVERY_PROBE_ENABLED=True,
+        AI_SCORE65_74_RECOVERY_PROBE_MIN_SCORE=60,
+        AI_SCORE65_74_RECOVERY_PROBE_MAX_SCORE=74,
+        AI_SCORE65_74_RECOVERY_PROBE_MIN_BUY_PRESSURE=65.0,
+        AI_SCORE65_74_RECOVERY_PROBE_MIN_TICK_ACCEL=1.2,
+        AI_SCORE65_74_RECOVERY_PROBE_MIN_MICRO_VWAP_BP=0.0,
+    )
+    monkeypatch.setattr("src.engine.sniper_state_handlers.TRADING_RULES", rules)
+
+    decision = _score65_74_recovery_probe_decision(
+        {
+            "action": "WAIT",
+            "reason": "negative sell pressure absent; recovery microstructure is improving",
+        },
+        72,
+        {"latency_state": "OK"},
+        [],
+        [],
+        None,
+        feature_probe={
+            "buy_pressure": 91.0,
+            "tick_accel": 1.6,
+            "micro_vwap_bp": 45.0,
+        },
+    )
+
+    assert decision["allowed"] is True
+    assert decision["score65_74_recovery_probe_skip_reason"] == ""
+
+
+def test_score65_74_recovery_probe_strong_micro_override_does_not_relax_weak_micro(monkeypatch):
+    rules = replace(
+        TRADING_RULES,
+        AI_SCORE65_74_RECOVERY_PROBE_ENABLED=True,
+        AI_SCORE65_74_RECOVERY_PROBE_MIN_SCORE=60,
+        AI_SCORE65_74_RECOVERY_PROBE_MAX_SCORE=74,
+        AI_SCORE65_74_RECOVERY_PROBE_MIN_BUY_PRESSURE=65.0,
+        AI_SCORE65_74_RECOVERY_PROBE_MIN_TICK_ACCEL=1.2,
+        AI_SCORE65_74_RECOVERY_PROBE_MIN_MICRO_VWAP_BP=0.0,
+        AI_SCORE65_74_RECOVERY_PROBE_STRONG_MICRO_OVERRIDE_ENABLED=True,
+        AI_SCORE65_74_RECOVERY_PROBE_STRONG_MICRO_MIN_BUY_PRESSURE=85.0,
+        AI_SCORE65_74_RECOVERY_PROBE_STRONG_MICRO_MIN_MICRO_VWAP_BP=30.0,
+    )
+    monkeypatch.setattr("src.engine.sniper_state_handlers.TRADING_RULES", rules)
+
+    decision = _score65_74_recovery_probe_decision(
+        {"action": "WAIT"},
+        62,
+        {"latency_state": "OK"},
+        [],
+        [],
+        None,
+        feature_probe={
+            "buy_pressure": 91.0,
+            "tick_accel": 0.0,
+            "micro_vwap_bp": 12.0,
+            "tick_accel_source": "computed_10ticks",
+            "tick_context_quality": "fresh_computed",
+            "tick_context_stale": False,
+            "quote_stale": False,
+        },
+    )
+
+    assert decision["allowed"] is False
+    assert decision["score65_74_recovery_probe_strong_micro_override_applied"] is False
+    assert decision["score65_74_recovery_probe_skip_reason"] == "tick_accel_below_min"
+
+
+def test_score65_74_recovery_probe_strong_micro_override_skips_when_entry_tuning_live(monkeypatch):
+    rules = replace(
+        TRADING_RULES,
+        AI_SCORE65_74_RECOVERY_PROBE_ENABLED=True,
+        AI_SCORE65_74_RECOVERY_PROBE_MIN_SCORE=60,
+        AI_SCORE65_74_RECOVERY_PROBE_MAX_SCORE=74,
+        AI_SCORE65_74_RECOVERY_PROBE_MIN_BUY_PRESSURE=65.0,
+        AI_SCORE65_74_RECOVERY_PROBE_MIN_TICK_ACCEL=1.2,
+        AI_SCORE65_74_RECOVERY_PROBE_MIN_MICRO_VWAP_BP=0.0,
+        AI_SCORE65_74_RECOVERY_PROBE_STRONG_MICRO_OVERRIDE_ENABLED=True,
+        AI_SCORE65_74_RECOVERY_PROBE_STRONG_MICRO_MIN_BUY_PRESSURE=85.0,
+        AI_SCORE65_74_RECOVERY_PROBE_STRONG_MICRO_MIN_MICRO_VWAP_BP=30.0,
+        ENTRY_STAGE_LIVE_TUNING_SELECTED=True,
+    )
+    monkeypatch.setattr("src.engine.sniper_state_handlers.TRADING_RULES", rules)
+
+    decision = _score65_74_recovery_probe_decision(
+        {"action": "WAIT"},
+        62,
+        {"latency_state": "OK"},
+        [],
+        [],
+        None,
+        feature_probe={
+            "buy_pressure": 91.0,
+            "tick_accel": 0.0,
+            "micro_vwap_bp": 45.0,
+            "tick_accel_source": "computed_10ticks",
+            "tick_context_quality": "fresh_computed",
+            "tick_context_stale": False,
+            "quote_stale": False,
+        },
+    )
+
+    assert decision["allowed"] is False
+    assert decision["score65_74_recovery_probe_strong_micro_override_enabled"] is False
+    assert decision["score65_74_recovery_probe_strong_micro_override_applied"] is False
+    assert decision["score65_74_recovery_probe_skip_reason"] == "tick_accel_below_min"
 
 
 def test_score65_74_recovery_probe_blocks_lg_innotek_style_falling_wait(monkeypatch):
@@ -771,7 +1137,7 @@ def test_score65_74_recovery_probe_default_floor_includes_low_60s(monkeypatch):
         feature_probe={
             "buy_pressure": 72.0,
             "tick_accel": 1.35,
-            "micro_vwap_bp": 2.0,
+            "micro_vwap_bp": 12.0,
             "large_sell_print": False,
         },
     ) is True

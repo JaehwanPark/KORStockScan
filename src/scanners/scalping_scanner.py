@@ -37,12 +37,12 @@ def _source_priority(source):
     """장중 신선도는 시가대비 상위보다 최근 수급 급증 신호를 더 높게 봅니다."""
     return {
         "VI+VALUE": 0,
-        "BOTH+VALUE": 1,
-        "SUPERNOVA+VALUE": 2,
-        "VALUE_TOP": 3,
-        "VI_TRIGGERED": 4,
-        "BOTH": 5,
-        "SUPERNOVA": 6,
+        "SUPERNOVA+VALUE": 1,
+        "VI_TRIGGERED": 2,
+        "BOTH": 3,
+        "SUPERNOVA": 4,
+        "BOTH+VALUE": 5,
+        "VALUE_TOP": 6,
         "OPEN_TOP": 7,
     }.get(str(source or "OPEN_TOP"), 8)
 
@@ -138,6 +138,107 @@ def _source_signature(target):
     return tuple(sorted(set(target.get("SourceSet") or [target.get("Source") or "OPEN_TOP"])))
 
 
+def _scanner_rate_from_field(target, field_name):
+    if field_name in (target or {}) and target.get(field_name) not in (None, ""):
+        return _safe_float(target.get(field_name)), True
+    return 0.0, False
+
+
+def _scanner_flu_metric(target):
+    source_set = set(_source_signature(target))
+
+    if source_set and source_set.issubset({"OPEN_TOP", "VALUE_TOP"}):
+        open_rate, has_open = _scanner_rate_from_field(target, "OpenFluRate")
+        if has_open:
+            return open_rate, "open_flu_rate", "OPEN_TOP"
+        value_rate, has_value = _scanner_rate_from_field(target, "ValueFluRate")
+        if source_set == {"VALUE_TOP"} and has_value:
+            return value_rate, "day_flu_rate", "VALUE_TOP"
+
+    if "VI_TRIGGERED" in source_set:
+        vi_rate, has_vi = _scanner_rate_from_field(target, "ViFluRate")
+        if has_vi:
+            return vi_rate, "vi_disparity_or_open_rate", "VI_TRIGGERED"
+
+    if "SUPERNOVA" in source_set:
+        supernova_rate, has_supernova = _scanner_rate_from_field(target, "SupernovaFluRate")
+        if has_supernova:
+            return supernova_rate, "supernova_source_rate", "SUPERNOVA"
+
+    value_rate, has_value = _scanner_rate_from_field(target, "ValueFluRate")
+    if has_value:
+        return value_rate, "day_flu_rate", "VALUE_TOP"
+
+    legacy_rate = _safe_float(target.get("FluRate"))
+    return legacy_rate, "legacy_flu_rate", str(target.get("Source") or "UNKNOWN")
+
+
+def _rank_jump(target):
+    rank_now = _safe_int(target.get("RankNow"))
+    rank_prev = _safe_int(target.get("RankPrev"))
+    if rank_now > 0 and rank_prev > rank_now:
+        return rank_prev - rank_now
+    return 0
+
+
+def _scanner_candidate_role(target):
+    source_set = set(_source_signature(target))
+    if source_set in ({"VALUE_TOP"}, {"OPEN_TOP"}, {"OPEN_TOP", "VALUE_TOP"}):
+        return "late_confirmation"
+    return "early_discovery"
+
+
+def _price_delta_pct(first_price, current_price):
+    first = _safe_positive_int(first_price)
+    current = _safe_positive_int(current_price)
+    if first <= 0 or current <= 0:
+        return 0.0
+    return ((current - first) / first) * 100.0
+
+
+def _late_confirmation_probe_block_reason(*, probe_age, min_probe_sec, max_probe_sec, price_declined, flu_metric_changed=False):
+    if probe_age < min_probe_sec:
+        return "late_confirmation_probe_waiting"
+    if probe_age > max_probe_sec:
+        return "late_confirmation_probe_expired"
+    if price_declined:
+        return "late_confirmation_price_declined"
+    if flu_metric_changed:
+        return "late_confirmation_flu_metric_changed"
+    return "late_confirmation_probe_no_acceleration"
+
+
+def _acceleration_reason(target, previous=None):
+    source_set = set(_source_signature(target))
+    previous_sources = set((previous or {}).get("last_source_signature") or [])
+    if "VI_TRIGGERED" in source_set and "VI_TRIGGERED" not in previous_sources:
+        return "new_vi_triggered_source"
+    if "SUPERNOVA" in source_set and "SUPERNOVA" not in previous_sources:
+        return "new_supernova_source"
+
+    rank_jump = _rank_jump(target)
+    min_rank_jump = int(getattr(TRADING_RULES, "SCALP_SCANNER_ACCEL_MIN_RANK_JUMP", 10) or 10)
+    if rank_jump >= min_rank_jump:
+        return "rank_jump_acceleration"
+
+    spike_rate = _safe_float(target.get("SpikeRate"))
+    min_spike = float(getattr(TRADING_RULES, "SCALP_SCANNER_ACCEL_MIN_SPIKE_RATE", 80.0) or 80.0)
+    if spike_rate >= min_spike:
+        return "spike_rate_acceleration"
+
+    priority_score = _safe_float(target.get("PriorityScore"))
+    min_priority = float(getattr(TRADING_RULES, "SCALP_SCANNER_ACCEL_MIN_PRIORITY_SCORE", 80.0) or 80.0)
+    if priority_score >= min_priority:
+        return "priority_score_acceleration"
+
+    cntr_str = _safe_float(target.get("CntrStr"))
+    min_cntr = float(getattr(TRADING_RULES, "SCALP_SCANNER_ACCEL_MIN_CNTR_STR", 110.0) or 110.0)
+    if bool(target.get("CntrStrAvailable", False)) and cntr_str >= min_cntr:
+        return "execution_strength_acceleration"
+
+    return ""
+
+
 def _freshness_score(target):
     """
     `OPEN_TOP`은 하루 종일 순위가 고착되기 쉬워 보조 신호로만 쓰고,
@@ -145,36 +246,32 @@ def _freshness_score(target):
     """
     source_bias = {
         "VI+VALUE": 650.0,
-        "BOTH+VALUE": 600.0,
-        "SUPERNOVA+VALUE": 520.0,
-        "BOTH": 500.0,
-        "VALUE_TOP": 420.0,
-        "VI_TRIGGERED": 380.0,
-        "SUPERNOVA": 300.0,
+        "SUPERNOVA+VALUE": 620.0,
+        "VI_TRIGGERED": 560.0,
+        "BOTH": 520.0,
+        "SUPERNOVA": 460.0,
+        "BOTH+VALUE": 430.0,
+        "VALUE_TOP": 180.0,
         "OPEN_TOP": 0.0,
     }.get(str(target.get("Source") or "OPEN_TOP"), 0.0)
     priority_score = _bounded(target.get("PriorityScore"), 0.0, 300.0)
     spike_rate = _bounded(target.get("SpikeRate"), 0.0, 350.0)
-    flu_rate = _safe_float(target.get("FluRate"))
+    flu_rate, _, _ = _scanner_flu_metric(target)
     cntr_str = _bounded(target.get("CntrStr"), 0.0, 180.0)
     trade_value = _safe_positive_int(target.get("TradeValue"))
-    rank_now = _safe_int(target.get("RankNow"))
-    rank_prev = _safe_int(target.get("RankPrev"))
     source_set = set(target.get("SourceSet") or [])
 
     trade_value_score = 0.0
     if trade_value > 0:
         trade_value_score = min(220.0, log10(max(trade_value, 1)) * 30.0)
 
-    rank_jump_score = 0.0
-    if rank_now > 0 and rank_prev > rank_now:
-        rank_jump_score = min(180.0, (rank_prev - rank_now) * 3.0)
+    rank_jump_score = min(260.0, _rank_jump(target) * 5.0)
 
     vi_score = 0.0
     if "VI_TRIGGERED" in source_set:
-        vi_score = 250.0 + min(_safe_positive_int(target.get("VIMotionCount")), 5) * 25.0
+        vi_score = 320.0 + min(_safe_positive_int(target.get("VIMotionCount")), 5) * 30.0
 
-    source_count_score = min(240.0, max(0, len(source_set) - 1) * 80.0)
+    source_count_score = min(320.0, max(0, len(source_set) - 1) * 100.0)
     flu_score = _bounded(flu_rate * 8.0, 0.0, 220.0)
 
     return (
@@ -202,6 +299,7 @@ def _merge_candidate(candidate_pool, raw_target, source):
             "Code": code,
             "Name": name,
             "FluRate": 0.0,
+            "LegacyMaxFluRate": 0.0,
             "CntrStr": 0.0,
             "Price": 0,
             "Source": source,
@@ -221,7 +319,28 @@ def _merge_candidate(candidate_pool, raw_target, source):
     if name:
         current["Name"] = name
 
-    current["FluRate"] = max(current.get("FluRate", 0.0), _safe_float(raw_target.get("FluRate", raw_target.get("flu_rate"))))
+    raw_flu_value = raw_target.get("FluRate", raw_target.get("flu_rate"))
+    raw_flu_present = raw_flu_value not in (None, "")
+    raw_flu_rate = _safe_float(raw_flu_value)
+    current["LegacyMaxFluRate"] = max(current.get("LegacyMaxFluRate", 0.0), raw_flu_rate)
+    if source == "OPEN_TOP":
+        open_flu_value = raw_target.get("OpenFluRate", raw_flu_value)
+        if open_flu_value not in (None, ""):
+            current["OpenFluRate"] = _safe_float(open_flu_value)
+        if "DayFluRate" in raw_target:
+            current["DayFluRate"] = _safe_float(raw_target.get("DayFluRate"))
+        if "OpenPrice" in raw_target:
+            current["OpenPrice"] = _safe_positive_int(raw_target.get("OpenPrice"))
+    elif source == "VALUE_TOP":
+        if raw_flu_present:
+            current["ValueFluRate"] = raw_flu_rate
+            current.setdefault("DayFluRate", raw_flu_rate)
+    elif source == "VI_TRIGGERED":
+        if raw_flu_present:
+            current["ViFluRate"] = raw_flu_rate
+    elif source == "SUPERNOVA":
+        if raw_flu_present:
+            current["SupernovaFluRate"] = raw_flu_rate
     strength_value, strength_available = _extract_strength_value(raw_target)
     if strength_available:
         current["CntrStr"] = max(current.get("CntrStr", 0.0), strength_value)
@@ -234,6 +353,11 @@ def _merge_candidate(candidate_pool, raw_target, source):
     price = _safe_positive_int(raw_target.get("Price", raw_target.get("cur_prc")))
     if price > 0:
         current["Price"] = price
+    if "OPEN_TOP" in current["SourceSet"]:
+        open_price = _safe_positive_int(current.get("OpenPrice"))
+        current_price = _safe_positive_int(current.get("Price"))
+        if open_price > 0 and current_price > 0:
+            current["OpenFluRate"] = round(((current_price - open_price) / open_price) * 100.0, 2)
 
     rank_now = _safe_int(raw_target.get("RankNow"))
     rank_prev = _safe_int(raw_target.get("RankPrev"))
@@ -246,6 +370,11 @@ def _merge_candidate(candidate_pool, raw_target, source):
         current["VIReleaseTime"] = max(str(current.get("VIReleaseTime") or ""), vi_release_time)
 
     current["Source"] = _representative_source(current["SourceSet"])
+    scanner_flu_rate, scanner_flu_metric, scanner_flu_source = _scanner_flu_metric(current)
+    current["FluRate"] = scanner_flu_rate
+    current["ScannerFluRate"] = scanner_flu_rate
+    current["ScannerFluRateMetric"] = scanner_flu_metric
+    current["ScannerFluRateSource"] = scanner_flu_source
 
 
 def build_candidate_pool(
@@ -278,10 +407,17 @@ def rank_candidates(candidate_pool):
 
 
 def _filter_picks_within_cooldown(recent_picks, now_ts, reentry_cooldown_sec):
+    max_probe_sec = int(getattr(TRADING_RULES, "SCALP_SCANNER_PROBE_MAX_SEC", 300) or 300)
     return {
         code: meta
         for code, meta in (recent_picks or {}).items()
-        if (now_ts - float(meta.get("last_promoted_at", 0.0) or 0.0)) < reentry_cooldown_sec
+        if (
+            (now_ts - float(meta.get("last_promoted_at", 0.0) or 0.0)) < reentry_cooldown_sec
+            or (
+                str(meta.get("scanner_probe_state") or "") == "first_seen_probe"
+                and (now_ts - float(meta.get("first_seen_at", 0.0) or 0.0)) <= max_probe_sec
+            )
+        )
     }
 
 
@@ -289,6 +425,8 @@ def _should_promote_candidate(target, recent_picks, now_ts, reentry_cooldown_sec
     code = target.get("Code")
     previous = (recent_picks or {}).get(code)
     if not previous:
+        return True
+    if str(previous.get("scanner_probe_state") or "") == "first_seen_probe":
         return True
     if (now_ts - float(previous.get("last_promoted_at", 0.0) or 0.0)) >= reentry_cooldown_sec:
         return True
@@ -307,30 +445,160 @@ def _should_promote_candidate(target, recent_picks, now_ts, reentry_cooldown_sec
     return previous_score > 0 and current_score >= previous_score * 1.2
 
 
-def _scanner_real_source_guard_decision(target, recent_picks):
+def _scanner_real_source_guard_decision(target, recent_picks, now_ts):
     if not bool(getattr(TRADING_RULES, "SCALP_SCANNER_REAL_SOURCE_GUARD_ENABLED", False)):
         return {"blocked": False, "reason": "guard_disabled"}
 
     source_signature = _source_signature(target)
     source_set = set(source_signature)
     previous = (recent_picks or {}).get(target.get("Code")) or {}
-    if not previous:
-        return {"blocked": False, "reason": "first_seen"}
-
-    if source_set != {"VALUE_TOP"}:
-        return {"blocked": False, "reason": "independent_source_present"}
-    if not bool(getattr(TRADING_RULES, "SCALP_SCANNER_REAL_SOURCE_GUARD_BLOCK_VALUE_TOP_ONLY", True)):
-        return {"blocked": False, "reason": "value_top_only_guard_disabled"}
-    if bool(target.get("CntrStrAvailable", False)):
-        return {"blocked": False, "reason": "strength_available"}
-
-    first_flu = _safe_float(previous.get("first_flu_rate"), _safe_float(target.get("FluRate")))
-    current_flu = _safe_float(target.get("FluRate"))
-    max_decline = float(getattr(TRADING_RULES, "SCALP_SCANNER_REAL_SOURCE_GUARD_MAX_DECLINE_PCT", 0.0) or 0.0)
-    flu_declined = current_flu < (first_flu - max_decline)
-
+    candidate_role = _scanner_candidate_role(target)
+    acceleration_reason = _acceleration_reason(target, previous)
     first_price = _safe_positive_int(previous.get("first_price"))
     current_price = _safe_positive_int(target.get("Price"))
+    current_flu, current_flu_metric, current_flu_source = _scanner_flu_metric(target)
+    legacy_unknown_flu_anchor = bool(previous) and previous.get("first_flu_rate") not in (None, "") and (
+        not previous.get("first_flu_rate_metric") or not previous.get("first_flu_rate_source")
+    )
+    previous_flu_metric = str(
+        previous.get("first_flu_rate_metric") or ("legacy_unknown_flu_rate" if legacy_unknown_flu_anchor else current_flu_metric)
+    )
+    previous_flu_source = str(
+        previous.get("first_flu_rate_source") or ("legacy_unknown" if legacy_unknown_flu_anchor else current_flu_source)
+    )
+    first_flu = _safe_float(previous.get("first_flu_rate"), current_flu)
+    flu_metric_changed = bool(previous) and (
+        previous_flu_metric != current_flu_metric or previous_flu_source != current_flu_source
+    )
+    price_delta = _price_delta_pct(first_price, current_price)
+    flu_delta = current_flu - first_flu
+    comparable_flu_delta = 0.0 if flu_metric_changed else flu_delta
+    observed_context = {
+        "first_seen_flu_rate": f"{first_flu:.2f}",
+        "current_flu_rate": f"{current_flu:.2f}",
+        "first_flu_rate_metric": previous_flu_metric,
+        "current_flu_rate_metric": current_flu_metric,
+        "first_flu_rate_source": previous_flu_source,
+        "current_flu_rate_source": current_flu_source,
+        "flu_metric_changed": flu_metric_changed,
+        "first_price": str(first_price or current_price or "-"),
+        "current_price": str(current_price or "-"),
+        "price_delta_since_first_seen_pct": f"{price_delta:.2f}",
+        "flu_delta_since_first_seen": f"{flu_delta:.2f}",
+        "comparable_flu_delta_since_first_seen": f"{comparable_flu_delta:.2f}",
+        "last_promoted_at": str(previous.get("last_promoted_at") or "-"),
+    }
+
+    if candidate_role == "early_discovery":
+        return {
+            "blocked": False,
+            "reason": acceleration_reason or "early_discovery_source_present",
+            "candidate_role": candidate_role,
+            "acceleration_reason": acceleration_reason,
+            "source_signature": ",".join(source_signature),
+            **observed_context,
+        }
+
+    if acceleration_reason:
+        return {
+            "blocked": False,
+            "reason": acceleration_reason,
+            "candidate_role": candidate_role,
+            "acceleration_reason": acceleration_reason,
+            "source_signature": ",".join(source_signature),
+            **observed_context,
+        }
+
+    if not bool(getattr(TRADING_RULES, "SCALP_SCANNER_REAL_SOURCE_GUARD_BLOCK_LATE_FIRST_SEEN", True)):
+        return {
+            "blocked": False,
+            "reason": "late_first_seen_guard_disabled",
+            "candidate_role": candidate_role,
+            "source_signature": ",".join(source_signature),
+            **observed_context,
+        }
+
+    min_probe_sec = int(getattr(TRADING_RULES, "SCALP_SCANNER_PROBE_MIN_SEC", 30) or 30)
+    max_probe_sec = int(getattr(TRADING_RULES, "SCALP_SCANNER_PROBE_MAX_SEC", 300) or 300)
+    min_price_delta = float(getattr(TRADING_RULES, "SCALP_SCANNER_PROBE_MIN_PRICE_DELTA_PCT", 0.15) or 0.15)
+    min_flu_delta = float(getattr(TRADING_RULES, "SCALP_SCANNER_PROBE_MIN_FLU_DELTA_PCT", 0.30) or 0.30)
+
+    if not previous:
+        return {
+            "blocked": True,
+            "reason": "late_confirmation_first_seen_probe",
+            "candidate_role": candidate_role,
+            "source_signature": ",".join(source_signature),
+            "first_seen_flu_rate": f"{current_flu:.2f}",
+            "current_flu_rate": f"{current_flu:.2f}",
+            "first_flu_rate_metric": current_flu_metric,
+            "current_flu_rate_metric": current_flu_metric,
+            "first_flu_rate_source": current_flu_source,
+            "current_flu_rate_source": current_flu_source,
+            "flu_metric_changed": False,
+            "first_price": str(current_price or "-"),
+            "current_price": str(current_price or "-"),
+            "price_delta_since_first_seen_pct": "0.00",
+            "flu_delta_since_first_seen": "0.00",
+            "comparable_flu_delta_since_first_seen": "0.00",
+            "probe_age_sec": "0.0",
+            "last_promoted_at": "-",
+        }
+
+    first_seen_at = float(previous.get("first_seen_at", 0.0) or 0.0)
+    probe_age = max(0.0, now_ts - first_seen_at) if first_seen_at > 0 else 0.0
+    observed_context["probe_age_sec"] = f"{probe_age:.1f}"
+    price_declined = first_price > 0 and current_price > 0 and current_price < first_price
+    probe_confirmed = (
+        min_probe_sec <= probe_age <= max_probe_sec
+        and not price_declined
+        and (price_delta >= min_price_delta or comparable_flu_delta >= min_flu_delta)
+    )
+    if probe_confirmed:
+        return {
+            "blocked": False,
+            "reason": "probe_acceleration_confirmed",
+            "candidate_role": candidate_role,
+            "source_signature": ",".join(source_signature),
+            **observed_context,
+        }
+
+    if source_set != {"VALUE_TOP"}:
+        reason = _late_confirmation_probe_block_reason(
+            probe_age=probe_age,
+            min_probe_sec=min_probe_sec,
+            max_probe_sec=max_probe_sec,
+            price_declined=price_declined,
+            flu_metric_changed=flu_metric_changed,
+        )
+        return {
+            "blocked": True,
+            "reason": reason,
+            "candidate_role": candidate_role,
+            "source_signature": ",".join(source_signature),
+            **observed_context,
+        }
+
+    if not bool(getattr(TRADING_RULES, "SCALP_SCANNER_REAL_SOURCE_GUARD_BLOCK_VALUE_TOP_ONLY", True)):
+        return {
+            "blocked": False,
+            "reason": "value_top_only_guard_disabled",
+            "candidate_role": candidate_role,
+            "source_signature": ",".join(source_signature),
+            **observed_context,
+        }
+    if bool(target.get("CntrStrAvailable", False)):
+        return {
+            "blocked": False,
+            "reason": "strength_available",
+            "candidate_role": candidate_role,
+            "source_signature": ",".join(source_signature),
+            **observed_context,
+        }
+
+    max_decline = float(getattr(TRADING_RULES, "SCALP_SCANNER_REAL_SOURCE_GUARD_MAX_DECLINE_PCT", 0.0) or 0.0)
+    flu_declined = False if flu_metric_changed else current_flu < (first_flu - max_decline)
+
     price_declined = first_price > 0 and current_price > 0 and current_price < first_price
 
     previous_signature = tuple(previous.get("last_source_signature") or ())
@@ -343,42 +611,150 @@ def _scanner_real_source_guard_decision(target, recent_picks):
             "source_signature": ",".join(source_signature),
             "first_seen_flu_rate": f"{first_flu:.2f}",
             "current_flu_rate": f"{current_flu:.2f}",
+            "first_flu_rate_metric": previous_flu_metric,
+            "current_flu_rate_metric": current_flu_metric,
+            "first_flu_rate_source": previous_flu_source,
+            "current_flu_rate_source": current_flu_source,
+            "flu_metric_changed": flu_metric_changed,
             "first_price": str(first_price or "-"),
             "current_price": str(current_price or "-"),
+            "price_delta_since_first_seen_pct": f"{price_delta:.2f}",
+            "flu_delta_since_first_seen": f"{flu_delta:.2f}",
+            "comparable_flu_delta_since_first_seen": f"{comparable_flu_delta:.2f}",
             "last_promoted_at": str(previous.get("last_promoted_at") or "-"),
         }
 
-    return {"blocked": False, "reason": "no_deterioration"}
+    reason = _late_confirmation_probe_block_reason(
+        probe_age=probe_age,
+        min_probe_sec=min_probe_sec,
+        max_probe_sec=max_probe_sec,
+        price_declined=price_declined,
+        flu_metric_changed=flu_metric_changed,
+    )
+    return {
+        "blocked": True,
+        "reason": reason,
+        "candidate_role": candidate_role,
+        "source_signature": ",".join(source_signature),
+        **observed_context,
+    }
 
 
 def _remember_pick(recent_picks, target, now_ts):
     previous = recent_picks.get(target["Code"]) or {}
+    current_flu, current_flu_metric, current_flu_source = _scanner_flu_metric(target)
     recent_picks[target["Code"]] = {
         "last_promoted_at": now_ts,
         "last_source_signature": _source_signature(target),
         "last_score": _freshness_score(target),
         "first_seen_at": previous.get("first_seen_at", now_ts),
-        "first_flu_rate": previous.get("first_flu_rate", _safe_float(target.get("FluRate"))),
+        "first_flu_rate": previous.get("first_flu_rate", current_flu),
+        "first_flu_rate_metric": previous.get("first_flu_rate_metric", current_flu_metric),
+        "first_flu_rate_source": previous.get("first_flu_rate_source", current_flu_source),
         "first_price": previous.get("first_price", _safe_positive_int(target.get("Price"))),
-        "last_flu_rate": _safe_float(target.get("FluRate")),
+        "last_flu_rate": current_flu,
+        "last_flu_rate_metric": current_flu_metric,
+        "last_flu_rate_source": current_flu_source,
         "last_price": _safe_positive_int(target.get("Price")),
+        "scanner_probe_state": "promoted",
     }
 
 
 def _remember_guard_block(recent_picks, target, now_ts, reason):
     previous = recent_picks.get(target["Code"]) or {}
+    current_flu, current_flu_metric, current_flu_source = _scanner_flu_metric(target)
+    reset_probe_anchor = reason == "late_confirmation_flu_metric_changed"
+    first_seen_at = now_ts if reset_probe_anchor else previous.get("first_seen_at", now_ts)
+    first_flu_rate = current_flu if reset_probe_anchor else previous.get("first_flu_rate", current_flu)
+    first_flu_metric = (
+        current_flu_metric if reset_probe_anchor else previous.get("first_flu_rate_metric", current_flu_metric)
+    )
+    first_flu_source = (
+        current_flu_source if reset_probe_anchor else previous.get("first_flu_rate_source", current_flu_source)
+    )
+    first_price = (
+        _safe_positive_int(target.get("Price"))
+        if reset_probe_anchor
+        else previous.get("first_price", _safe_positive_int(target.get("Price")))
+    )
     recent_picks[target["Code"]] = {
         **previous,
         "last_guard_blocked_at": now_ts,
         "last_guard_block_reason": reason,
         "last_source_signature": _source_signature(target),
         "last_score": _freshness_score(target),
-        "first_seen_at": previous.get("first_seen_at", now_ts),
-        "first_flu_rate": previous.get("first_flu_rate", _safe_float(target.get("FluRate"))),
-        "first_price": previous.get("first_price", _safe_positive_int(target.get("Price"))),
-        "last_flu_rate": _safe_float(target.get("FluRate")),
+        "first_seen_at": first_seen_at,
+        "first_flu_rate": first_flu_rate,
+        "first_flu_rate_metric": first_flu_metric,
+        "first_flu_rate_source": first_flu_source,
+        "first_price": first_price,
+        "last_flu_rate": current_flu,
+        "last_flu_rate_metric": current_flu_metric,
+        "last_flu_rate_source": current_flu_source,
         "last_price": _safe_positive_int(target.get("Price")),
+        "scanner_probe_state": "first_seen_probe",
+        "last_observed_at": now_ts,
     }
+
+
+def _scanner_event_fields(target, source_guard=None):
+    source_guard = source_guard or {}
+    source_signature = source_guard.get("source_signature") or ",".join(_source_signature(target))
+    first_price = source_guard.get("first_price")
+    current_price = source_guard.get("current_price") or str(_safe_positive_int(target.get("Price")) or "-")
+    first_flu = source_guard.get("first_seen_flu_rate")
+    current_flu_value, current_flu_metric, current_flu_source = _scanner_flu_metric(target)
+    current_flu = source_guard.get("current_flu_rate") or f"{current_flu_value:.2f}"
+    return {
+        "metric_role": "source_quality_gate",
+        "decision_authority": "real_scalping_scanner_source_guard_only",
+        "source_quality_gate": "scalping_scanner_real_source_guard",
+        "window_policy": "intraday_operational_guard",
+        "sample_floor": "not_applicable_runtime_guard",
+        "primary_decision_metric": "funnel_count",
+        "forbidden_uses": (
+            "score_threshold_change,provider_route_change,order_price_change,"
+            "quantity_or_cap_change,broker_guard_change,bot_restart_authority,"
+            "ai_score_smoothing_live_gate,real_execution_quality_approval"
+        ),
+        "runtime_effect": True,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "source_signature": source_signature,
+        "scanner_candidate_role": source_guard.get("candidate_role") or _scanner_candidate_role(target),
+        "scanner_block_reason": source_guard.get("reason") if source_guard.get("blocked") else "",
+        "scanner_promotion_reason": "" if source_guard.get("blocked") else source_guard.get("reason"),
+        "first_seen_price": first_price,
+        "current_price": current_price,
+        "price_delta_since_first_seen_pct": source_guard.get("price_delta_since_first_seen_pct"),
+        "first_seen_flu_rate": first_flu,
+        "current_flu_rate": current_flu,
+        "first_flu_rate_metric": source_guard.get("first_flu_rate_metric"),
+        "current_flu_rate_metric": source_guard.get("current_flu_rate_metric") or current_flu_metric,
+        "first_flu_rate_source": source_guard.get("first_flu_rate_source"),
+        "current_flu_rate_source": source_guard.get("current_flu_rate_source") or current_flu_source,
+        "flu_metric_changed": source_guard.get("flu_metric_changed"),
+        "flu_delta_since_first_seen": source_guard.get("flu_delta_since_first_seen"),
+        "comparable_flu_delta_since_first_seen": source_guard.get("comparable_flu_delta_since_first_seen"),
+        "probe_age_sec": source_guard.get("probe_age_sec"),
+        "rank_jump": _rank_jump(target),
+        "spike_rate": _safe_float(target.get("SpikeRate")),
+        "priority_score": _safe_float(target.get("PriorityScore")),
+        "cntr_str_available": bool(target.get("CntrStrAvailable", False)),
+        "cntr_str": _safe_float(target.get("CntrStr")),
+        "current_price_observed": _safe_positive_int(target.get("Price")),
+        "current_source": target.get("Source"),
+    }
+
+
+def _log_scanner_candidate_event(stage, target, source_guard=None):
+    emit_pipeline_event(
+        "ENTRY_PIPELINE",
+        str(target.get("Name") or "-"),
+        str(target.get("Code") or ""),
+        stage,
+        fields=_scanner_event_fields(target, source_guard),
+    )
 
 
 def _log_scanner_real_source_guard_block(target, source_guard, now_ts):
@@ -388,31 +764,11 @@ def _log_scanner_real_source_guard_block(target, source_guard, now_ts):
         str(target.get("Code") or ""),
         "scalping_scanner_real_source_guard_block",
         fields={
-            "metric_role": "source_quality_gate",
-            "decision_authority": "real_scalping_scanner_source_guard_only",
-            "source_quality_gate": "scalping_scanner_real_source_guard",
-            "window_policy": "intraday_operational_guard",
-            "sample_floor": "not_applicable_runtime_guard",
-            "primary_decision_metric": "funnel_count",
-            "forbidden_uses": (
-                "score_threshold_change,provider_route_change,order_price_change,"
-                "quantity_or_cap_change,broker_guard_change,bot_restart_authority,"
-                "ai_score_smoothing_live_gate,real_execution_quality_approval"
-            ),
-            "runtime_effect": True,
-            "actual_order_submitted": False,
-            "broker_order_forbidden": True,
+            **_scanner_event_fields(target, {**source_guard, "blocked": True}),
             "scanner_real_source_guard_applied": True,
             "scanner_real_source_guard_skip_reason": source_guard.get("reason"),
             "scanner_real_source_guard_block_event_emitted": True,
-            "source_signature": source_guard.get("source_signature") or ",".join(_source_signature(target)),
-            "first_seen_flu_rate": source_guard.get("first_seen_flu_rate"),
-            "current_flu_rate": source_guard.get("current_flu_rate"),
-            "first_price": source_guard.get("first_price"),
-            "current_price": source_guard.get("current_price"),
             "last_promoted_at": source_guard.get("last_promoted_at"),
-            "current_price_observed": _safe_positive_int(target.get("Price")),
-            "current_source": target.get("Source"),
             "current_cntr_str_available": bool(target.get("CntrStrAvailable", False)),
             "guard_blocked_at_ts": now_ts,
         },
@@ -429,8 +785,9 @@ def promote_candidates(db, event_bus, ranked_targets, recent_picks, *, max_new_c
         if not _should_promote_candidate(target, recent_picks, now_ts, reentry_cooldown_sec):
             continue
 
-        source_guard = _scanner_real_source_guard_decision(target, recent_picks)
+        source_guard = _scanner_real_source_guard_decision(target, recent_picks, now_ts)
         if source_guard.get("blocked"):
+            _log_scanner_candidate_event("scalping_scanner_candidate_observed", target, {**source_guard, "blocked": True})
             _log_scanner_real_source_guard_block(target, source_guard, now_ts)
             print(
                 "🧯 [SCALPING 스캐너 guard] "
@@ -439,6 +796,11 @@ def promote_candidates(db, event_bus, ranked_targets, recent_picks, *, max_new_c
                 f"source_signature={source_guard.get('source_signature')} "
                 f"first_flu={source_guard.get('first_seen_flu_rate')} "
                 f"current_flu={source_guard.get('current_flu_rate')} "
+                f"flu_delta={source_guard.get('flu_delta_since_first_seen')} "
+                f"flu_metric={source_guard.get('current_flu_rate_metric')} "
+                f"flu_source={source_guard.get('current_flu_rate_source')} "
+                f"price_delta={source_guard.get('price_delta_since_first_seen_pct')} "
+                f"probe_age={source_guard.get('probe_age_sec')} "
                 f"last_promoted_at={source_guard.get('last_promoted_at')}"
             )
             _remember_guard_block(recent_picks, target, now_ts, source_guard.get("reason"))
@@ -471,7 +833,8 @@ def promote_candidates(db, event_bus, ranked_targets, recent_picks, *, max_new_c
                     record.stock_name = target['Name']
                     if record.status in ('WATCHING', 'COMPLETED', 'EXPIRED'):
                         record.strategy = 'SCALPING'
-                        record.buy_price = 0
+                        record.buy_price = curr_p
+                        record.entry_armed_at_epoch = now_ts
                         record.status = 'WATCHING'
                         record.position_tag = 'SCANNER'
                 else:
@@ -479,17 +842,20 @@ def promote_candidates(db, event_bus, ranked_targets, recent_picks, *, max_new_c
                         rec_date=today_date,
                         stock_code=code,
                         stock_name=target['Name'],
-                        buy_price=0,
+                        buy_price=curr_p,
                         trade_type='SCALP',
                         strategy='SCALPING',
                         status='WATCHING',
-                        position_tag='SCANNER'
+                        position_tag='SCANNER',
+                        entry_armed_at_epoch=now_ts,
                     )
                     session.add(new_record)
         except Exception as e:
             log_error(f"⚠️ DB 저장 실패 ({code}): {e}")
             continue
 
+        if bool(getattr(TRADING_RULES, "SCALP_SCANNER_REAL_SOURCE_GUARD_ENABLED", False)):
+            _log_scanner_candidate_event("scalping_scanner_candidate_promoted", target, source_guard)
         _remember_pick(recent_picks, target, now_ts)
         new_codes_found.append(code)
 

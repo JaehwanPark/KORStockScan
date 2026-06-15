@@ -183,6 +183,14 @@ def _classify_stage(stage: str) -> str:
     return "progress"
 
 
+def _is_early_accel_recheck_retry(fields: dict[str, str]) -> bool:
+    return (
+        str(fields.get("ai_call_trigger_reason") or "") == "early_accel_recheck"
+        or str(fields.get("tuning_authority_excluded_reason") or "")
+        == "early_accel_recheck_operator_retry"
+    )
+
+
 def _nonempty(value) -> str:
     raw = str(value or "").strip()
     return "" if raw in {"", "-", "None", "none", "null"} else raw
@@ -283,6 +291,9 @@ def _load_entry_events(target_date: str) -> list[EntryEvent]:
     for row in rows:
         if str(row.get("pipeline") or "").strip() != "ENTRY_PIPELINE":
             continue
+        fields = {str(key): str(value) for key, value in dict(row.get("fields") or {}).items()}
+        if _is_early_accel_recheck_retry(fields):
+            continue
         code = str(row.get("stock_code") or "").strip()[:6]
         if not code:
             continue
@@ -294,7 +305,7 @@ def _load_entry_events(target_date: str) -> list[EntryEvent]:
                 code=code,
                 stage=str(row.get("stage") or ""),
                 record_id=str(row.get("record_id") or row.get("id") or ""),
-                fields={str(key): str(value) for key, value in dict(row.get("fields") or {}).items()},
+                fields=fields,
             )
         )
     events.sort(key=lambda item: (_parse_event_dt(item.emitted_at) or datetime.min, item.code, item.stage))
@@ -807,6 +818,9 @@ def build_wait6579_preflight_report(target_date: str) -> dict:
                 stage = str(payload.get("stage") or "")
                 if stage not in _PREFLIGHT_STAGES:
                     continue
+                fields = {str(field_key): str(value) for field_key, value in dict(payload.get("fields") or {}).items()}
+                if _is_early_accel_recheck_retry(fields):
+                    continue
                 code = str(payload.get("stock_code") or "").strip()[:6]
                 record_id = str(payload.get("record_id") or payload.get("id") or "")
                 if not code:
@@ -818,7 +832,7 @@ def build_wait6579_preflight_report(target_date: str) -> dict:
                     code=code,
                     stage=stage,
                     record_id=record_id,
-                    fields={str(field_key): str(value) for field_key, value in dict(payload.get("fields") or {}).items()},
+                    fields=fields,
                 )
                 key = (code, record_id)
                 events_by_key[key].append(event)

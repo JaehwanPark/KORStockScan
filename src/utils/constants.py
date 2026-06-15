@@ -283,6 +283,13 @@ class TradingConfig:
     SCALP_PRESET_HARD_STOP_PCT: float = -0.7  # SCALP_PRESET_TP 기본 손절선
     SCALP_PRESET_HARD_STOP_GRACE_SEC: int = 0  # SCALP_PRESET_TP 공통 유예시간(초)
     SCALP_PRESET_HARD_STOP_EMERGENCY_PCT: float = -1.2  # 유예 중에도 강제 청산하는 비상 손절선
+    SCALP_PRESET_TP_SOFT_STOP_OVERRIDE_ENABLED: bool = False  # real SCALP_PRESET_TP 손절 soft-stop화 operator override
+    SCALP_PRESET_TP_SOFT_STOP_TRIGGER_PCT: float = -0.7
+    SCALP_PRESET_TP_SOFT_STOP_GRACE_SEC: int = 45
+    SCALP_PRESET_TP_SOFT_STOP_EMERGENCY_PCT: float = -1.2
+    SCALP_PRESET_TP_SOFT_STOP_MAX_WORSEN_PCT: float = 0.30
+    SCALP_PRESET_TP_SOFT_STOP_RECOVERY_BUFFER_PCT: float = 0.05
+    PRESET_TP_EXIT_LIVE_TUNING_SELECTED: bool = False
     SCALP_PRESET_HARD_STOP_FALLBACK_BASE_PCT: float = -0.7  # SCALP_BASE + fallback 전용 기본 손절선
     SCALP_PRESET_HARD_STOP_FALLBACK_BASE_GRACE_SEC: int = 35  # SCALP_BASE + fallback 전용 유예시간
     SCALP_PRESET_HARD_STOP_FALLBACK_BASE_EMERGENCY_PCT: float = -1.2  # SCALP_BASE + fallback 비상 손절선
@@ -309,6 +316,23 @@ class TradingConfig:
     SCALP_SCANNER_REAL_SOURCE_GUARD_ENABLED: bool = False  # real SCALPING scanner churn/repeat guard는 PREOPEN env로만 ON
     SCALP_SCANNER_REAL_SOURCE_GUARD_BLOCK_VALUE_TOP_ONLY: bool = True
     SCALP_SCANNER_REAL_SOURCE_GUARD_MAX_DECLINE_PCT: float = 0.0
+    SCALP_SCANNER_REAL_SOURCE_GUARD_BLOCK_LATE_FIRST_SEEN: bool = True
+    SCALP_SCANNER_ACCEL_MIN_RANK_JUMP: int = 10
+    SCALP_SCANNER_ACCEL_MIN_SPIKE_RATE: float = 80.0
+    SCALP_SCANNER_ACCEL_MIN_PRIORITY_SCORE: float = 80.0
+    SCALP_SCANNER_ACCEL_MIN_CNTR_STR: float = 110.0
+    SCALP_SCANNER_PROBE_MIN_SEC: int = 30
+    SCALP_SCANNER_PROBE_MAX_SEC: int = 300
+    SCALP_SCANNER_PROBE_MIN_PRICE_DELTA_PCT: float = 0.15
+    SCALP_SCANNER_PROBE_MIN_FLU_DELTA_PCT: float = 0.30
+    EARLY_ACCEL_RECHECK_RUNTIME_ENABLED: bool = False
+    EARLY_ACCEL_RECHECK_MAX_COUNT: int = 2
+    EARLY_ACCEL_RECHECK_MIN_INTERVAL_SEC: int = 20
+    EARLY_ACCEL_RECHECK_MAX_AGE_SEC: int = 180
+    EARLY_ACCEL_RECHECK_MIN_TICK_ACCEL: float = 1.10
+    EARLY_ACCEL_RECHECK_MIN_MICRO_VWAP_BP: float = 0.0
+    EARLY_ACCEL_RECHECK_ALLOW_LIQUIDITY_BLOCKED: bool = True
+    EARLY_ACCEL_RECHECK_ALLOW_STRENGTH_BLOCKED: bool = True
     SCALP_CONDITION_UNMATCH_GUARD_ENABLED: bool = False  # real SCALPING 조건검색 unmatched-only churn guard는 PREOPEN env로만 ON
     SCALP_CONDITION_UNMATCH_GUARD_TAGS: tuple = ("VWAP_RECLAIM", "DRYUP_SQUEEZE", "PRECLOSE")
     SCALP_AGGRESSIVE_ENTRY_PRICE_OVERRIDE_ENABLED: bool = False  # real SCALPING missed-upside 가격 override는 PREOPEN env로만 ON
@@ -323,6 +347,7 @@ class TradingConfig:
     SCALP_REFERENCE_TARGET_MISSED_UPSIDE_TARGET_MODE: str = "best_bid_near"
     SCALP_REFERENCE_TARGET_MISSED_UPSIDE_NEUTRAL_BID_MINUS_TICKS: int = 1
     SCALP_REFERENCE_TARGET_MISSED_UPSIDE_BULLISH_BID_MINUS_TICKS: int = 0
+    ENTRY_STAGE_LIVE_TUNING_SELECTED: bool = False
     DYNAMIC_ENTRY_PRICE_RESOLVER_LIVE_SELECTED: bool = False
     ENTRY_PRICE_LIVE_TUNING_SELECTED: bool = False
     SCALPING_ENTRY_PRICE_DEFENSE_MODE: str = "tick"  # tick | percent_bps
@@ -379,6 +404,9 @@ class TradingConfig:
     SCALP_ENTRY_LATENCY_MAX_WS_AGE_MS_FOR_CAUTION: int = 700  # latency classifier CAUTION 최대 ws_age
     SCALP_ENTRY_LATENCY_MAX_WS_JITTER_MS_FOR_CAUTION: int = 300  # latency classifier CAUTION 최대 ws_jitter
     SCALP_ENTRY_LATENCY_MAX_SPREAD_RATIO_FOR_CAUTION: float = 0.005  # latency classifier CAUTION 최대 spread_ratio
+    SCALP_PRE_SUBMIT_QUOTE_REFRESH_ENABLED: bool = False  # stale quote submit 전 최신 quote 재검증
+    SCALP_PRE_SUBMIT_QUOTE_REFRESH_MAX_AGE_MS: int = 700  # refresh source 최대 quote age
+    SCALP_PRE_SUBMIT_QUOTE_REFRESH_MAX_SPREAD_RATIO: float = 0.015  # refresh 후 허용 최대 spread
     SCALP_LATENCY_SUBMIT_RECOVERY_CANARY_ENABLED: bool = False  # legacy recovery flag; CAUTION now follows normal submit after slippage
     SCALP_LATENCY_SUBMIT_RECOVERY_MIN_SIGNAL_SCORE: float = 75.0  # recovery canary 최소 AI 점수
     SCALP_LATENCY_SUBMIT_RECOVERY_MAX_WS_AGE_MS: int = 1200  # recovery canary 최대 ws_age
@@ -409,6 +437,7 @@ class TradingConfig:
     SCALP_LATENCY_SPREAD_RELIEF_CANARY_ENABLED: bool = False  # replacement 완료: spread-only relief는 parking 유지
     SCALP_LATENCY_SPREAD_RELIEF_TAGS: tuple = ("SCANNER", "VWAP_RECLAIM", "OPEN_RECLAIM")  # spread relief 적용 태그
     SCALP_LATENCY_SPREAD_RELIEF_MIN_SIGNAL_SCORE: float = 85.0  # spread relief 최소 AI 점수
+    SCALP_LATENCY_SPREAD_RELIEF_EFFECTIVE_MIN_SIGNAL_SCORE_FLOOR: float = 85.0
     SCALP_LATENCY_SPREAD_RELIEF_MAX_SPREAD_RATIO: float = 0.0120  # spread relief 최대 허용 spread_ratio
     SCALP_LATENCY_WS_JITTER_RELIEF_CANARY_ENABLED: bool = False  # 2026-04-27 15:00 미개선 종료: ws_jitter-only residual live 축 OFF
     SCALP_LATENCY_WS_JITTER_RELIEF_TAGS: tuple = ("SCANNER", "VWAP_RECLAIM", "OPEN_RECLAIM")  # ws_jitter relief 적용 태그
@@ -580,6 +609,10 @@ class TradingConfig:
     AI_SCORE65_74_RECOVERY_PROBE_MIN_BUY_PRESSURE: float = 65.0
     AI_SCORE65_74_RECOVERY_PROBE_MIN_TICK_ACCEL: float = 1.20
     AI_SCORE65_74_RECOVERY_PROBE_MIN_MICRO_VWAP_BP: float = 0.0
+    AI_SCORE65_74_RECOVERY_PROBE_EFFECTIVE_MIN_MICRO_VWAP_FLOOR_BP: float = 10.0
+    AI_SCORE65_74_RECOVERY_PROBE_STRONG_MICRO_OVERRIDE_ENABLED: bool = False
+    AI_SCORE65_74_RECOVERY_PROBE_STRONG_MICRO_MIN_BUY_PRESSURE: float = 85.0
+    AI_SCORE65_74_RECOVERY_PROBE_STRONG_MICRO_MIN_MICRO_VWAP_BP: float = 30.0
     AI_SCORE65_74_RECOVERY_PROBE_THRESHOLD_VERSION: str = "runtime_default"
     AI_SCORE65_74_RECOVERY_PROBE_CALIBRATION_STATE: str = "runtime_default"
     SCALPING_PROMPT_SPLIT_ENABLED: bool = True  # WATCHING/HOLDING 프롬프트 분리 on/off 롤백 토글
@@ -838,6 +871,11 @@ def _build_trading_rules() -> TradingConfig:
     env_entry_latency_max_spread_caution = _env_float(
         "KORSTOCKSCAN_SCALP_ENTRY_LATENCY_MAX_SPREAD_RATIO_FOR_CAUTION"
     )
+    env_pre_submit_quote_refresh_enabled = _env_bool("KORSTOCKSCAN_SCALP_PRE_SUBMIT_QUOTE_REFRESH_ENABLED")
+    env_pre_submit_quote_refresh_max_age = _env_int("KORSTOCKSCAN_SCALP_PRE_SUBMIT_QUOTE_REFRESH_MAX_AGE_MS")
+    env_pre_submit_quote_refresh_max_spread = _env_float(
+        "KORSTOCKSCAN_SCALP_PRE_SUBMIT_QUOTE_REFRESH_MAX_SPREAD_RATIO"
+    )
     env_latency_submit_recovery_enabled = _env_bool(
         "KORSTOCKSCAN_SCALP_LATENCY_SUBMIT_RECOVERY_CANARY_ENABLED"
     )
@@ -930,6 +968,15 @@ def _build_trading_rules() -> TradingConfig:
             SCALP_ENTRY_LATENCY_MAX_SPREAD_RATIO_FOR_CAUTION=env_entry_latency_max_spread_caution
             if env_entry_latency_max_spread_caution is not None
             else config.SCALP_ENTRY_LATENCY_MAX_SPREAD_RATIO_FOR_CAUTION,
+            SCALP_PRE_SUBMIT_QUOTE_REFRESH_ENABLED=env_pre_submit_quote_refresh_enabled
+            if env_pre_submit_quote_refresh_enabled is not None
+            else config.SCALP_PRE_SUBMIT_QUOTE_REFRESH_ENABLED,
+            SCALP_PRE_SUBMIT_QUOTE_REFRESH_MAX_AGE_MS=env_pre_submit_quote_refresh_max_age
+            if env_pre_submit_quote_refresh_max_age is not None
+            else config.SCALP_PRE_SUBMIT_QUOTE_REFRESH_MAX_AGE_MS,
+            SCALP_PRE_SUBMIT_QUOTE_REFRESH_MAX_SPREAD_RATIO=env_pre_submit_quote_refresh_max_spread
+            if env_pre_submit_quote_refresh_max_spread is not None
+            else config.SCALP_PRE_SUBMIT_QUOTE_REFRESH_MAX_SPREAD_RATIO,
             SCALP_LATENCY_SUBMIT_RECOVERY_CANARY_ENABLED=env_latency_submit_recovery_enabled
             if env_latency_submit_recovery_enabled is not None
             else config.SCALP_LATENCY_SUBMIT_RECOVERY_CANARY_ENABLED,
@@ -1000,6 +1047,15 @@ def _build_trading_rules() -> TradingConfig:
     env_score6574_probe_min_pressure = _env_float("KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_MIN_BUY_PRESSURE")
     env_score6574_probe_min_accel = _env_float("KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_MIN_TICK_ACCEL")
     env_score6574_probe_min_vwap_bp = _env_float("KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_MIN_MICRO_VWAP_BP")
+    env_score6574_probe_strong_micro_override_enabled = _env_bool(
+        "KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_STRONG_MICRO_OVERRIDE_ENABLED"
+    )
+    env_score6574_probe_strong_micro_min_pressure = _env_float(
+        "KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_STRONG_MICRO_MIN_BUY_PRESSURE"
+    )
+    env_score6574_probe_strong_micro_min_vwap_bp = _env_float(
+        "KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_STRONG_MICRO_MIN_MICRO_VWAP_BP"
+    )
     env_score6574_probe_threshold_version = _env_str("KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_THRESHOLD_VERSION")
     env_score6574_probe_calibration_state = _env_str("KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_CALIBRATION_STATE")
     env_scalping_prompt_split_enabled = _env_bool("KORSTOCKSCAN_SCALPING_PROMPT_SPLIT_ENABLED")
@@ -1032,6 +1088,9 @@ def _build_trading_rules() -> TradingConfig:
         or env_score6574_probe_min_pressure is not None
         or env_score6574_probe_min_accel is not None
         or env_score6574_probe_min_vwap_bp is not None
+        or env_score6574_probe_strong_micro_override_enabled is not None
+        or env_score6574_probe_strong_micro_min_pressure is not None
+        or env_score6574_probe_strong_micro_min_vwap_bp is not None
         or env_score6574_probe_threshold_version is not None
         or env_score6574_probe_calibration_state is not None
         or env_scalping_prompt_split_enabled is not None
@@ -1098,6 +1157,15 @@ def _build_trading_rules() -> TradingConfig:
             AI_SCORE65_74_RECOVERY_PROBE_MIN_MICRO_VWAP_BP=env_score6574_probe_min_vwap_bp
             if env_score6574_probe_min_vwap_bp is not None
             else config.AI_SCORE65_74_RECOVERY_PROBE_MIN_MICRO_VWAP_BP,
+            AI_SCORE65_74_RECOVERY_PROBE_STRONG_MICRO_OVERRIDE_ENABLED=env_score6574_probe_strong_micro_override_enabled
+            if env_score6574_probe_strong_micro_override_enabled is not None
+            else config.AI_SCORE65_74_RECOVERY_PROBE_STRONG_MICRO_OVERRIDE_ENABLED,
+            AI_SCORE65_74_RECOVERY_PROBE_STRONG_MICRO_MIN_BUY_PRESSURE=env_score6574_probe_strong_micro_min_pressure
+            if env_score6574_probe_strong_micro_min_pressure is not None
+            else config.AI_SCORE65_74_RECOVERY_PROBE_STRONG_MICRO_MIN_BUY_PRESSURE,
+            AI_SCORE65_74_RECOVERY_PROBE_STRONG_MICRO_MIN_MICRO_VWAP_BP=env_score6574_probe_strong_micro_min_vwap_bp
+            if env_score6574_probe_strong_micro_min_vwap_bp is not None
+            else config.AI_SCORE65_74_RECOVERY_PROBE_STRONG_MICRO_MIN_MICRO_VWAP_BP,
             AI_SCORE65_74_RECOVERY_PROBE_THRESHOLD_VERSION=env_score6574_probe_threshold_version
             if env_score6574_probe_threshold_version is not None
             else config.AI_SCORE65_74_RECOVERY_PROBE_THRESHOLD_VERSION,
@@ -1199,6 +1267,35 @@ def _build_trading_rules() -> TradingConfig:
     env_scalp_scanner_real_source_guard_max_decline_pct = _env_float(
         "KORSTOCKSCAN_SCALP_SCANNER_REAL_SOURCE_GUARD_MAX_DECLINE_PCT"
     )
+    env_scalp_scanner_real_source_guard_block_late_first_seen = _env_bool(
+        "KORSTOCKSCAN_SCALP_SCANNER_REAL_SOURCE_GUARD_BLOCK_LATE_FIRST_SEEN"
+    )
+    env_scalp_scanner_accel_min_rank_jump = _env_int("KORSTOCKSCAN_SCALP_SCANNER_ACCEL_MIN_RANK_JUMP")
+    env_scalp_scanner_accel_min_spike_rate = _env_float("KORSTOCKSCAN_SCALP_SCANNER_ACCEL_MIN_SPIKE_RATE")
+    env_scalp_scanner_accel_min_priority_score = _env_float(
+        "KORSTOCKSCAN_SCALP_SCANNER_ACCEL_MIN_PRIORITY_SCORE"
+    )
+    env_scalp_scanner_accel_min_cntr_str = _env_float("KORSTOCKSCAN_SCALP_SCANNER_ACCEL_MIN_CNTR_STR")
+    env_scalp_scanner_probe_min_sec = _env_int("KORSTOCKSCAN_SCALP_SCANNER_PROBE_MIN_SEC")
+    env_scalp_scanner_probe_max_sec = _env_int("KORSTOCKSCAN_SCALP_SCANNER_PROBE_MAX_SEC")
+    env_scalp_scanner_probe_min_price_delta_pct = _env_float(
+        "KORSTOCKSCAN_SCALP_SCANNER_PROBE_MIN_PRICE_DELTA_PCT"
+    )
+    env_scalp_scanner_probe_min_flu_delta_pct = _env_float(
+        "KORSTOCKSCAN_SCALP_SCANNER_PROBE_MIN_FLU_DELTA_PCT"
+    )
+    env_early_accel_recheck_enabled = _env_bool("KORSTOCKSCAN_EARLY_ACCEL_RECHECK_RUNTIME_ENABLED")
+    env_early_accel_recheck_max_count = _env_int("KORSTOCKSCAN_EARLY_ACCEL_RECHECK_MAX_COUNT")
+    env_early_accel_recheck_min_interval = _env_int("KORSTOCKSCAN_EARLY_ACCEL_RECHECK_MIN_INTERVAL_SEC")
+    env_early_accel_recheck_max_age = _env_int("KORSTOCKSCAN_EARLY_ACCEL_RECHECK_MAX_AGE_SEC")
+    env_early_accel_recheck_min_tick_accel = _env_float("KORSTOCKSCAN_EARLY_ACCEL_RECHECK_MIN_TICK_ACCEL")
+    env_early_accel_recheck_min_micro_vwap = _env_float("KORSTOCKSCAN_EARLY_ACCEL_RECHECK_MIN_MICRO_VWAP_BP")
+    env_early_accel_recheck_allow_liquidity = _env_bool(
+        "KORSTOCKSCAN_EARLY_ACCEL_RECHECK_ALLOW_LIQUIDITY_BLOCKED"
+    )
+    env_early_accel_recheck_allow_strength = _env_bool(
+        "KORSTOCKSCAN_EARLY_ACCEL_RECHECK_ALLOW_STRENGTH_BLOCKED"
+    )
     env_scalp_condition_unmatch_guard_enabled = _env_bool(
         "KORSTOCKSCAN_SCALP_CONDITION_UNMATCH_GUARD_ENABLED"
     )
@@ -1235,6 +1332,7 @@ def _build_trading_rules() -> TradingConfig:
     env_scalp_reference_target_missed_upside_bullish_bid_minus_ticks = _env_int(
         "KORSTOCKSCAN_SCALP_REFERENCE_TARGET_MISSED_UPSIDE_BULLISH_BID_MINUS_TICKS"
     )
+    env_entry_stage_live_tuning_selected = _env_bool("KORSTOCKSCAN_ENTRY_STAGE_LIVE_TUNING_SELECTED")
     env_dynamic_entry_price_resolver_live_selected = _env_bool(
         "KORSTOCKSCAN_DYNAMIC_ENTRY_PRICE_RESOLVER_LIVE_SELECTED"
     )
@@ -1320,6 +1418,15 @@ def _build_trading_rules() -> TradingConfig:
         "KORSTOCKSCAN_SCALP_SOFT_STOP_DYNAMIC_GRACE_MAX_WORSEN_PCT"
     )
     env_holding_exit_live_tuning_selected = _env_bool("KORSTOCKSCAN_HOLDING_EXIT_LIVE_TUNING_SELECTED")
+    env_preset_tp_soft_stop_enabled = _env_bool("KORSTOCKSCAN_SCALP_PRESET_TP_SOFT_STOP_OVERRIDE_ENABLED")
+    env_preset_tp_soft_stop_trigger = _env_float("KORSTOCKSCAN_SCALP_PRESET_TP_SOFT_STOP_TRIGGER_PCT")
+    env_preset_tp_soft_stop_grace = _env_int("KORSTOCKSCAN_SCALP_PRESET_TP_SOFT_STOP_GRACE_SEC")
+    env_preset_tp_soft_stop_emergency = _env_float("KORSTOCKSCAN_SCALP_PRESET_TP_SOFT_STOP_EMERGENCY_PCT")
+    env_preset_tp_soft_stop_max_worsen = _env_float("KORSTOCKSCAN_SCALP_PRESET_TP_SOFT_STOP_MAX_WORSEN_PCT")
+    env_preset_tp_soft_stop_recovery_buffer = _env_float(
+        "KORSTOCKSCAN_SCALP_PRESET_TP_SOFT_STOP_RECOVERY_BUFFER_PCT"
+    )
+    env_preset_tp_exit_live_tuning_selected = _env_bool("KORSTOCKSCAN_PRESET_TP_EXIT_LIVE_TUNING_SELECTED")
     env_scalp_safe_profit = _env_float("KORSTOCKSCAN_SCALP_SAFE_PROFIT")
     env_profit_stagnation_enabled = _env_bool("KORSTOCKSCAN_SCALP_PROFIT_STAGNATION_EXIT_ENABLED")
     env_profit_stagnation_min_profit = _env_float("KORSTOCKSCAN_SCALP_PROFIT_STAGNATION_MIN_PROFIT_PCT")
@@ -1365,8 +1472,38 @@ def _build_trading_rules() -> TradingConfig:
         or env_scalp_scanner_real_source_guard_enabled is not None
         or env_scalp_scanner_real_source_guard_block_value_top_only is not None
         or env_scalp_scanner_real_source_guard_max_decline_pct is not None
+        or env_scalp_scanner_real_source_guard_block_late_first_seen is not None
+        or env_scalp_scanner_accel_min_rank_jump is not None
+        or env_scalp_scanner_accel_min_spike_rate is not None
+        or env_scalp_scanner_accel_min_priority_score is not None
+        or env_scalp_scanner_accel_min_cntr_str is not None
+        or env_scalp_scanner_probe_min_sec is not None
+        or env_scalp_scanner_probe_max_sec is not None
+        or env_scalp_scanner_probe_min_price_delta_pct is not None
+        or env_scalp_scanner_probe_min_flu_delta_pct is not None
+        or env_early_accel_recheck_enabled is not None
+        or env_early_accel_recheck_max_count is not None
+        or env_early_accel_recheck_min_interval is not None
+        or env_early_accel_recheck_max_age is not None
+        or env_early_accel_recheck_min_tick_accel is not None
+        or env_early_accel_recheck_min_micro_vwap is not None
+        or env_early_accel_recheck_allow_liquidity is not None
+        or env_early_accel_recheck_allow_strength is not None
         or env_scalp_condition_unmatch_guard_enabled is not None
         or env_scalp_condition_unmatch_guard_tags is not None
+        or env_scalp_aggressive_entry_price_override_enabled is not None
+        or env_scalp_aggressive_entry_price_override_types is not None
+        or env_scalp_defensive_missed_upside_min_original_bps is not None
+        or env_scalp_defensive_missed_upside_target_mode is not None
+        or env_scalp_defensive_missed_upside_neutral_bid_minus_ticks is not None
+        or env_scalp_defensive_missed_upside_bullish_bid_minus_ticks is not None
+        or env_scalp_reference_target_missed_upside_min_below_bid_bps is not None
+        or env_scalp_reference_target_missed_upside_target_mode is not None
+        or env_scalp_reference_target_missed_upside_neutral_bid_minus_ticks is not None
+        or env_scalp_reference_target_missed_upside_bullish_bid_minus_ticks is not None
+        or env_entry_stage_live_tuning_selected is not None
+        or env_dynamic_entry_price_resolver_live_selected is not None
+        or env_entry_price_live_tuning_selected is not None
         or env_scalping_entry_price_defense_mode is not None
         or env_conditional_1tick_real_enabled is not None
         or env_conditional_1tick_min_buy_ratio is not None
@@ -1427,6 +1564,13 @@ def _build_trading_rules() -> TradingConfig:
         or env_soft_stop_dynamic_grace_emergency is not None
         or env_soft_stop_dynamic_grace_max_worsen is not None
         or env_holding_exit_live_tuning_selected is not None
+        or env_preset_tp_soft_stop_enabled is not None
+        or env_preset_tp_soft_stop_trigger is not None
+        or env_preset_tp_soft_stop_grace is not None
+        or env_preset_tp_soft_stop_emergency is not None
+        or env_preset_tp_soft_stop_max_worsen is not None
+        or env_preset_tp_soft_stop_recovery_buffer is not None
+        or env_preset_tp_exit_live_tuning_selected is not None
         or env_scalp_safe_profit is not None
         or env_profit_stagnation_enabled is not None
         or env_profit_stagnation_min_profit is not None
@@ -1543,6 +1687,57 @@ def _build_trading_rules() -> TradingConfig:
             SCALP_SCANNER_REAL_SOURCE_GUARD_MAX_DECLINE_PCT=env_scalp_scanner_real_source_guard_max_decline_pct
             if env_scalp_scanner_real_source_guard_max_decline_pct is not None
             else config.SCALP_SCANNER_REAL_SOURCE_GUARD_MAX_DECLINE_PCT,
+            SCALP_SCANNER_REAL_SOURCE_GUARD_BLOCK_LATE_FIRST_SEEN=env_scalp_scanner_real_source_guard_block_late_first_seen
+            if env_scalp_scanner_real_source_guard_block_late_first_seen is not None
+            else config.SCALP_SCANNER_REAL_SOURCE_GUARD_BLOCK_LATE_FIRST_SEEN,
+            SCALP_SCANNER_ACCEL_MIN_RANK_JUMP=env_scalp_scanner_accel_min_rank_jump
+            if env_scalp_scanner_accel_min_rank_jump is not None
+            else config.SCALP_SCANNER_ACCEL_MIN_RANK_JUMP,
+            SCALP_SCANNER_ACCEL_MIN_SPIKE_RATE=env_scalp_scanner_accel_min_spike_rate
+            if env_scalp_scanner_accel_min_spike_rate is not None
+            else config.SCALP_SCANNER_ACCEL_MIN_SPIKE_RATE,
+            SCALP_SCANNER_ACCEL_MIN_PRIORITY_SCORE=env_scalp_scanner_accel_min_priority_score
+            if env_scalp_scanner_accel_min_priority_score is not None
+            else config.SCALP_SCANNER_ACCEL_MIN_PRIORITY_SCORE,
+            SCALP_SCANNER_ACCEL_MIN_CNTR_STR=env_scalp_scanner_accel_min_cntr_str
+            if env_scalp_scanner_accel_min_cntr_str is not None
+            else config.SCALP_SCANNER_ACCEL_MIN_CNTR_STR,
+            SCALP_SCANNER_PROBE_MIN_SEC=env_scalp_scanner_probe_min_sec
+            if env_scalp_scanner_probe_min_sec is not None
+            else config.SCALP_SCANNER_PROBE_MIN_SEC,
+            SCALP_SCANNER_PROBE_MAX_SEC=env_scalp_scanner_probe_max_sec
+            if env_scalp_scanner_probe_max_sec is not None
+            else config.SCALP_SCANNER_PROBE_MAX_SEC,
+            SCALP_SCANNER_PROBE_MIN_PRICE_DELTA_PCT=env_scalp_scanner_probe_min_price_delta_pct
+            if env_scalp_scanner_probe_min_price_delta_pct is not None
+            else config.SCALP_SCANNER_PROBE_MIN_PRICE_DELTA_PCT,
+            SCALP_SCANNER_PROBE_MIN_FLU_DELTA_PCT=env_scalp_scanner_probe_min_flu_delta_pct
+            if env_scalp_scanner_probe_min_flu_delta_pct is not None
+            else config.SCALP_SCANNER_PROBE_MIN_FLU_DELTA_PCT,
+            EARLY_ACCEL_RECHECK_RUNTIME_ENABLED=env_early_accel_recheck_enabled
+            if env_early_accel_recheck_enabled is not None
+            else config.EARLY_ACCEL_RECHECK_RUNTIME_ENABLED,
+            EARLY_ACCEL_RECHECK_MAX_COUNT=env_early_accel_recheck_max_count
+            if env_early_accel_recheck_max_count is not None
+            else config.EARLY_ACCEL_RECHECK_MAX_COUNT,
+            EARLY_ACCEL_RECHECK_MIN_INTERVAL_SEC=env_early_accel_recheck_min_interval
+            if env_early_accel_recheck_min_interval is not None
+            else config.EARLY_ACCEL_RECHECK_MIN_INTERVAL_SEC,
+            EARLY_ACCEL_RECHECK_MAX_AGE_SEC=env_early_accel_recheck_max_age
+            if env_early_accel_recheck_max_age is not None
+            else config.EARLY_ACCEL_RECHECK_MAX_AGE_SEC,
+            EARLY_ACCEL_RECHECK_MIN_TICK_ACCEL=env_early_accel_recheck_min_tick_accel
+            if env_early_accel_recheck_min_tick_accel is not None
+            else config.EARLY_ACCEL_RECHECK_MIN_TICK_ACCEL,
+            EARLY_ACCEL_RECHECK_MIN_MICRO_VWAP_BP=env_early_accel_recheck_min_micro_vwap
+            if env_early_accel_recheck_min_micro_vwap is not None
+            else config.EARLY_ACCEL_RECHECK_MIN_MICRO_VWAP_BP,
+            EARLY_ACCEL_RECHECK_ALLOW_LIQUIDITY_BLOCKED=env_early_accel_recheck_allow_liquidity
+            if env_early_accel_recheck_allow_liquidity is not None
+            else config.EARLY_ACCEL_RECHECK_ALLOW_LIQUIDITY_BLOCKED,
+            EARLY_ACCEL_RECHECK_ALLOW_STRENGTH_BLOCKED=env_early_accel_recheck_allow_strength
+            if env_early_accel_recheck_allow_strength is not None
+            else config.EARLY_ACCEL_RECHECK_ALLOW_STRENGTH_BLOCKED,
             SCALP_CONDITION_UNMATCH_GUARD_ENABLED=env_scalp_condition_unmatch_guard_enabled
             if env_scalp_condition_unmatch_guard_enabled is not None
             else config.SCALP_CONDITION_UNMATCH_GUARD_ENABLED,
@@ -1579,6 +1774,9 @@ def _build_trading_rules() -> TradingConfig:
             SCALP_REFERENCE_TARGET_MISSED_UPSIDE_BULLISH_BID_MINUS_TICKS=env_scalp_reference_target_missed_upside_bullish_bid_minus_ticks
             if env_scalp_reference_target_missed_upside_bullish_bid_minus_ticks is not None
             else config.SCALP_REFERENCE_TARGET_MISSED_UPSIDE_BULLISH_BID_MINUS_TICKS,
+            ENTRY_STAGE_LIVE_TUNING_SELECTED=env_entry_stage_live_tuning_selected
+            if env_entry_stage_live_tuning_selected is not None
+            else config.ENTRY_STAGE_LIVE_TUNING_SELECTED,
             DYNAMIC_ENTRY_PRICE_RESOLVER_LIVE_SELECTED=env_dynamic_entry_price_resolver_live_selected
             if env_dynamic_entry_price_resolver_live_selected is not None
             else config.DYNAMIC_ENTRY_PRICE_RESOLVER_LIVE_SELECTED,
@@ -1774,6 +1972,27 @@ def _build_trading_rules() -> TradingConfig:
             HOLDING_EXIT_LIVE_TUNING_SELECTED=env_holding_exit_live_tuning_selected
             if env_holding_exit_live_tuning_selected is not None
             else config.HOLDING_EXIT_LIVE_TUNING_SELECTED,
+            SCALP_PRESET_TP_SOFT_STOP_OVERRIDE_ENABLED=env_preset_tp_soft_stop_enabled
+            if env_preset_tp_soft_stop_enabled is not None
+            else config.SCALP_PRESET_TP_SOFT_STOP_OVERRIDE_ENABLED,
+            SCALP_PRESET_TP_SOFT_STOP_TRIGGER_PCT=env_preset_tp_soft_stop_trigger
+            if env_preset_tp_soft_stop_trigger is not None
+            else config.SCALP_PRESET_TP_SOFT_STOP_TRIGGER_PCT,
+            SCALP_PRESET_TP_SOFT_STOP_GRACE_SEC=env_preset_tp_soft_stop_grace
+            if env_preset_tp_soft_stop_grace is not None
+            else config.SCALP_PRESET_TP_SOFT_STOP_GRACE_SEC,
+            SCALP_PRESET_TP_SOFT_STOP_EMERGENCY_PCT=env_preset_tp_soft_stop_emergency
+            if env_preset_tp_soft_stop_emergency is not None
+            else config.SCALP_PRESET_TP_SOFT_STOP_EMERGENCY_PCT,
+            SCALP_PRESET_TP_SOFT_STOP_MAX_WORSEN_PCT=env_preset_tp_soft_stop_max_worsen
+            if env_preset_tp_soft_stop_max_worsen is not None
+            else config.SCALP_PRESET_TP_SOFT_STOP_MAX_WORSEN_PCT,
+            SCALP_PRESET_TP_SOFT_STOP_RECOVERY_BUFFER_PCT=env_preset_tp_soft_stop_recovery_buffer
+            if env_preset_tp_soft_stop_recovery_buffer is not None
+            else config.SCALP_PRESET_TP_SOFT_STOP_RECOVERY_BUFFER_PCT,
+            PRESET_TP_EXIT_LIVE_TUNING_SELECTED=env_preset_tp_exit_live_tuning_selected
+            if env_preset_tp_exit_live_tuning_selected is not None
+            else config.PRESET_TP_EXIT_LIVE_TUNING_SELECTED,
             SCALP_SAFE_PROFIT=env_scalp_safe_profit
             if env_scalp_safe_profit is not None
             else config.SCALP_SAFE_PROFIT,

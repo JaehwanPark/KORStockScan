@@ -4277,6 +4277,20 @@ def _event_score(event: dict) -> float:
 
 
 def _build_score65_74_recovery_probe_family(events: list[dict]) -> dict:
+    configured_min_micro_vwap_bp = float(
+        getattr(TRADING_RULES, "AI_SCORE65_74_RECOVERY_PROBE_MIN_MICRO_VWAP_BP", 0.0) or 0.0
+    )
+    effective_min_micro_vwap_bp = max(
+        configured_min_micro_vwap_bp,
+        float(
+            getattr(
+                TRADING_RULES,
+                "AI_SCORE65_74_RECOVERY_PROBE_EFFECTIVE_MIN_MICRO_VWAP_FLOOR_BP",
+                10.0,
+            )
+            or 10.0
+        ),
+    )
     current = {
         "enabled": bool(getattr(TRADING_RULES, "AI_SCORE65_74_RECOVERY_PROBE_ENABLED", False)),
         "min_score": int(getattr(TRADING_RULES, "AI_SCORE65_74_RECOVERY_PROBE_MIN_SCORE", 60) or 60),
@@ -4287,25 +4301,36 @@ def _build_score65_74_recovery_probe_family(events: list[dict]) -> dict:
         "min_tick_accel": float(
             getattr(TRADING_RULES, "AI_SCORE65_74_RECOVERY_PROBE_MIN_TICK_ACCEL", 1.20) or 1.20
         ),
-        "min_micro_vwap_bp": float(
-            getattr(TRADING_RULES, "AI_SCORE65_74_RECOVERY_PROBE_MIN_MICRO_VWAP_BP", 0.0) or 0.0
-        ),
+        "configured_min_micro_vwap_bp": configured_min_micro_vwap_bp,
+        "effective_min_micro_vwap_bp": effective_min_micro_vwap_bp,
+        "min_micro_vwap_bp": effective_min_micro_vwap_bp,
         "max_budget_krw": int(getattr(TRADING_RULES, "AI_WAIT6579_PROBE_CANARY_MAX_BUDGET_KRW", 0) or 0),
         "max_qty": int(getattr(TRADING_RULES, "AI_WAIT6579_PROBE_CANARY_MAX_QTY", 0) or 0),
     }
     current["effective_score_range"] = f"{current['min_score']}-{current['max_score']}"
     current["family_id_compat_note"] = "score65_74_recovery_probe id is retained for artifact compatibility"
+
+    def _is_early_accel_recheck_retry(event: dict) -> bool:
+        fields = event.get("fields") if isinstance(event.get("fields"), dict) else {}
+        return (
+            str(fields.get("ai_call_trigger_reason") or "") == "early_accel_recheck"
+            or str(fields.get("tuning_authority_excluded_reason") or "")
+            == "early_accel_recheck_operator_retry"
+        )
+
     wait_candidates = [
         event
         for event in events
         if str(event.get("stage") or "") == "wait65_79_ev_candidate"
         and current["min_score"] <= _event_score(event) <= current["max_score"]
+        and not _is_early_accel_recheck_retry(event)
     ]
     blocked_score = [
         event
         for event in events
         if str(event.get("stage") or "") == "blocked_ai_score"
         and current["min_score"] <= _event_score(event) <= current["max_score"]
+        and not _is_early_accel_recheck_retry(event)
     ]
     applied = _events_for_stage(events, "score65_74_recovery_probe")
     submitted = _events_for_stage(events, "order_bundle_submitted")
@@ -4337,6 +4362,7 @@ def _build_score65_74_recovery_probe_family(events: list[dict]) -> dict:
         "apply_mode": "efficient_tradeoff_canary_candidate" if sample_ready else "observe_only",
         "notes": [
             "family id는 호환성을 위해 score65_74를 유지하지만 현재 runtime floor 기준 score60~74 예산 bounded canary 후보만 만든다.",
+            "min_micro_vwap_bp는 실효값이며 configured_min_micro_vwap_bp와 effective_min_micro_vwap_bp를 분리해 기록한다.",
             "partial sample 0은 live 전면 차단이 아니라 post-apply calibration target으로 남긴다.",
             "latency DANGER 제외, 수급/가속/micro-VWAP gate와 예산/position/protection guard는 유지한다.",
         ],

@@ -168,6 +168,14 @@ def _contains_text_token(value: Any, token: str) -> bool:
     return token in _safe_str(value)
 
 
+def _is_early_accel_recheck_retry_fields(fields: dict[str, Any]) -> bool:
+    return (
+        _safe_str(fields.get("ai_call_trigger_reason")) == "early_accel_recheck"
+        or _safe_str(fields.get("tuning_authority_excluded_reason"))
+        == "early_accel_recheck_operator_retry"
+    )
+
+
 def _payload_requires_lossless_cache(payload: dict[str, Any], fields: dict[str, Any]) -> bool:
     for key in ("actual_order_submitted", "broker_order_submitted", "order_submitted"):
         if _is_truthy_text(payload.get(key)) or _is_truthy_text(fields.get(key)):
@@ -191,6 +199,8 @@ def _payload_to_cache_row(
     stage = _safe_str(payload.get("stage"))
     raw_fields = payload.get("fields") or {}
     raw_field_dict = raw_fields if isinstance(raw_fields, dict) else {}
+    if _is_early_accel_recheck_retry_fields(raw_field_dict):
+        return None
     if exclude_summary_stages and stage in SUMMARY_STAGES and not _payload_requires_lossless_cache(payload, raw_field_dict):
         return None
     if not (
@@ -223,6 +233,10 @@ def _payload_to_cache_row(
 
 def _blocker_label_from_stage_fields(stage: str, fields: dict[str, str]) -> str:
     return default_reason_label(stage, fields)
+
+
+def _is_early_accel_recheck_retry_event(event: PipelineEvent) -> bool:
+    return _is_early_accel_recheck_retry_fields(event.fields)
 
 
 def _is_swing_blocker_label(label: str) -> bool:
@@ -470,7 +484,11 @@ def _summarize_events(
     end_at: datetime,
     summary_rows: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    scoped = [event for event in events if start_at <= event.emitted_at <= end_at]
+    scoped = [
+        event
+        for event in events
+        if start_at <= event.emitted_at <= end_at and not _is_early_accel_recheck_retry_event(event)
+    ]
     has_summary_rows = bool(summary_rows)
     lossless_scoped = [
         event for event in scoped if not (has_summary_rows and event.stage in SUMMARY_STAGES)

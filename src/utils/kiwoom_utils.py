@@ -1612,6 +1612,7 @@ def get_top_open_fluctuation_ka10028(token, mrkt_tp="000", trde_qty_cnd="0100", 
                 'OpenPrice': open_price,
                 'HighPrice': high_price,
                 'LowPrice': low_price,
+                'OpenFluRate': open_flu_rate,
                 'FluRate': open_flu_rate,           # 💡 스캐너 병합용 메인 키 (이제 시가대비 상승률로 작동!)
                 'DayFluRate': to_f(item.get('flu_rt')), # 전일대비 등락률도 보존
                 'OpenDiff': to_i(item.get('open_pric_pre')), # 시가대비 상승액
@@ -1699,6 +1700,7 @@ def get_value_top_ka10032(token, mrkt_tp="000", limit=30):
             'Name': item.get('stk_nm', item.get('name', '')),
             'Price': _scanner_to_int(item.get('cur_prc', item.get('price'))),
             'FluRate': _scanner_to_float(item.get('flu_rt', item.get('change_rate'))),
+            'ValueFluRate': _scanner_to_float(item.get('flu_rt', item.get('change_rate'))),
             'CntrStr': _scanner_to_float(item.get('cntr_str')),
             'TradeValue': _scanner_to_int(
                 item.get('trde_prica', item.get('acc_trde_prica', item.get('trde_amt')))
@@ -1759,6 +1761,9 @@ def get_vi_triggered_ka10054(token, mrkt_tp="000", limit=30):
             'Name': item.get('stk_nm', item.get('name', '')),
             'Price': _scanner_to_int(item.get('motn_pric', item.get('cur_prc'))),
             'FluRate': _scanner_to_float(
+                item.get('open_pric_pre_flu_rt', item.get('dynm_dispty_rt', item.get('static_dispty_rt')))
+            ),
+            'ViFluRate': _scanner_to_float(
                 item.get('open_pric_pre_flu_rt', item.get('dynm_dispty_rt', item.get('static_dispty_rt')))
             ),
             'CntrStr': 0.0,

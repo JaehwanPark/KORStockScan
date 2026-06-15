@@ -711,7 +711,17 @@ def _should_apply_latency_spread_relief_canary(
     if allow_tags and normalized_tag not in allow_tags:
         return False, "tag_not_allowed"
 
-    min_signal = _to_float(getattr(TRADING_RULES, "SCALP_LATENCY_SPREAD_RELIEF_MIN_SIGNAL_SCORE", 85.0), 85.0)
+    configured_min_signal = _to_float(
+        getattr(TRADING_RULES, "SCALP_LATENCY_SPREAD_RELIEF_MIN_SIGNAL_SCORE", 85.0),
+        85.0,
+    )
+    min_signal = max(
+        configured_min_signal,
+        _to_float(
+            getattr(TRADING_RULES, "SCALP_LATENCY_SPREAD_RELIEF_EFFECTIVE_MIN_SIGNAL_SCORE_FLOOR", 85.0),
+            85.0,
+        ),
+    )
     signal_score = _normalize_signal_score(signal_strength)
     if signal_score < min_signal:
         return False, "low_signal"
@@ -733,6 +743,111 @@ def _should_apply_latency_spread_relief_canary(
         return False, "normal_slippage_exceeded"
 
     return True, "spread_relief_canary_applied"
+
+
+def _latency_spread_relief_signal_score_floors() -> tuple[float, float]:
+    configured_min_signal = _to_float(
+        getattr(TRADING_RULES, "SCALP_LATENCY_SPREAD_RELIEF_MIN_SIGNAL_SCORE", 85.0),
+        85.0,
+    )
+    effective_min_signal = max(
+        configured_min_signal,
+        _to_float(
+            getattr(TRADING_RULES, "SCALP_LATENCY_SPREAD_RELIEF_EFFECTIVE_MIN_SIGNAL_SCORE_FLOOR", 85.0),
+            85.0,
+        ),
+    )
+    return configured_min_signal, effective_min_signal
+
+
+def _pre_submit_quote_refresh_enabled(strategy_id: str) -> bool:
+    if str(strategy_id or "").upper() not in {"SCALPING", "SCALP"}:
+        return False
+    return bool(getattr(TRADING_RULES, "SCALP_PRE_SUBMIT_QUOTE_REFRESH_ENABLED", False))
+
+
+def _maybe_refresh_stale_quote_from_observer(
+    *,
+    code: str,
+    strategy_id: str,
+    latest_price: int,
+    frozen_price: int,
+    latency,
+) -> tuple[Any, dict[str, Any]]:
+    provenance = {
+        "pre_submit_quote_refresh_enabled": _pre_submit_quote_refresh_enabled(strategy_id),
+        "pre_submit_quote_refresh_applied": False,
+        "pre_submit_quote_refresh_reason": "not_attempted",
+        "pre_submit_quote_refresh_source": "orderbook_stability_observer",
+        "pre_submit_quote_refresh_quote_age_ms": None,
+        "pre_submit_quote_refresh_best_bid": 0,
+        "pre_submit_quote_refresh_best_ask": 0,
+        "pre_submit_quote_refresh_spread_ratio": None,
+    }
+    if not provenance["pre_submit_quote_refresh_enabled"]:
+        provenance["pre_submit_quote_refresh_reason"] = "disabled"
+        return latency, provenance
+    if not bool(getattr(latency, "quote_stale", False)):
+        provenance["pre_submit_quote_refresh_reason"] = "quote_not_stale"
+        return latency, provenance
+
+    snapshot = ORDERBOOK_STABILITY_OBSERVER.snapshot(code)
+    best_bid = int(snapshot.get("best_bid") or 0)
+    best_ask = int(snapshot.get("best_ask") or 0)
+    quote_age = snapshot.get("observer_last_quote_age_ms")
+    provenance.update(
+        {
+            "pre_submit_quote_refresh_quote_age_ms": quote_age,
+            "pre_submit_quote_refresh_best_bid": best_bid,
+            "pre_submit_quote_refresh_best_ask": best_ask,
+        }
+    )
+    if quote_age is None:
+        provenance["pre_submit_quote_refresh_reason"] = "observer_quote_missing"
+        return latency, provenance
+    max_age = int(getattr(TRADING_RULES, "SCALP_PRE_SUBMIT_QUOTE_REFRESH_MAX_AGE_MS", 700) or 700)
+    if float(quote_age) > max_age:
+        provenance["pre_submit_quote_refresh_reason"] = "observer_quote_stale"
+        return latency, provenance
+    if best_bid <= 0 or best_ask <= 0 or best_ask <= best_bid:
+        provenance["pre_submit_quote_refresh_reason"] = "observer_best_levels_invalid"
+        return latency, provenance
+
+    reference_price = int(latest_price or frozen_price or best_bid)
+    if reference_price <= 0:
+        provenance["pre_submit_quote_refresh_reason"] = "reference_price_missing"
+        return latency, provenance
+    spread_ratio = max(0.0, (best_ask - best_bid) / float(reference_price))
+    max_spread = _to_float(
+        getattr(TRADING_RULES, "SCALP_PRE_SUBMIT_QUOTE_REFRESH_MAX_SPREAD_RATIO", 0.015),
+        0.015,
+    )
+    if spread_ratio > max_spread:
+        provenance["pre_submit_quote_refresh_reason"] = "observer_spread_too_wide"
+        provenance["pre_submit_quote_refresh_spread_ratio"] = round(float(spread_ratio), 6)
+        return latency, provenance
+
+    refreshed_latency = _LATENCY_MONITOR.evaluate(
+        ws_age_ms=int(round(float(quote_age))),
+        ws_jitter_ms=int(getattr(latency, "ws_jitter_ms", 0) or 0),
+        order_rtt_avg_ms=int(getattr(latency, "order_rtt_avg_ms", 0) or 0),
+        order_rtt_p95_ms=int(getattr(latency, "order_rtt_p95_ms", 0) or 0),
+        quote_stale=False,
+        spread_ratio=spread_ratio,
+    )
+    provenance.update(
+        {
+            "pre_submit_quote_refresh_applied": True,
+            "pre_submit_quote_refresh_reason": "observer_quote_fresh",
+            "pre_submit_quote_refresh_spread_ratio": round(float(spread_ratio), 6),
+        }
+    )
+    log_info(
+        f"[PRE_SUBMIT_QUOTE_REFRESH] {code} source=orderbook_stability_observer "
+        f"quote_age_ms={quote_age} best_bid={best_bid} best_ask={best_ask} "
+        f"spread_ratio={spread_ratio:.6f}"
+    )
+    return refreshed_latency, provenance
 
 
 def _should_apply_latency_quote_fresh_composite_canary(
@@ -1198,6 +1313,29 @@ def evaluate_live_buy_entry(
         quote_stale=quote_health.quote_stale,
         spread_ratio=quote_health.spread_ratio,
     )
+    latency, pre_submit_quote_refresh = _maybe_refresh_stale_quote_from_observer(
+        code=code,
+        strategy_id=strategy_id,
+        latest_price=latest_price,
+        frozen_price=frozen_price,
+        latency=latency,
+    )
+    if pre_submit_quote_refresh.get("pre_submit_quote_refresh_applied"):
+        refreshed_best_bid = int(pre_submit_quote_refresh.get("pre_submit_quote_refresh_best_bid") or 0)
+        refreshed_best_ask = int(pre_submit_quote_refresh.get("pre_submit_quote_refresh_best_ask") or 0)
+        if refreshed_best_bid > 0 and refreshed_best_ask > refreshed_best_bid:
+            best_bid = refreshed_best_bid
+            best_ask = refreshed_best_ask
+            latest_price = refreshed_best_bid
+            pre_submit_quote_refresh["pre_submit_quote_refresh_latest_price"] = latest_price
+            with _CACHE_LOCK:
+                _CACHE.update(
+                    code,
+                    last_price=latest_price,
+                    best_ask=best_ask,
+                    best_bid=best_bid,
+                    received_at=None,
+                )
     snapshot = build_signal_snapshot(
         symbol=code,
         strategy_id=strategy_id,
@@ -1352,10 +1490,16 @@ def evaluate_live_buy_entry(
             if not latency_canary_reason or latency_canary_reason == "disabled":
                 latency_canary_reason = ws_jitter_relief_reason
 
-    if policy.decision == EntryDecision.REJECT_DANGER and not danger_relief_forbidden and effective_decision == EntryDecision.REJECT_DANGER:
+    spread_relief_tag = str(
+        stock.get("position_tag")
+        or stock.get("entry_momentum_tag")
+        or stock.get("momentum_tag")
+        or ""
+    )
+    if policy.decision == EntryDecision.REJECT_DANGER and effective_decision == EntryDecision.REJECT_DANGER:
         spread_relief_ok, spread_relief_reason = _should_apply_latency_spread_relief_canary(
             strategy_id=strategy_id,
-            position_tag=str(stock.get("position_tag") or ""),
+            position_tag=spread_relief_tag,
             signal_strength=float(signal_strength or 0.0),
             latency_status=latency,
             signal_price=frozen_price,
@@ -1369,7 +1513,7 @@ def evaluate_live_buy_entry(
             effective_reason = "latency_spread_relief_normal_override"
             log_info(
                 f"[LATENCY_SPREAD_RELIEF_CANARY] {stock.get('name')}({code}) "
-                f"tag={stock.get('position_tag')} signal_score={_normalize_signal_score(signal_strength):.1f} "
+                f"tag={spread_relief_tag} signal_score={_normalize_signal_score(signal_strength):.1f} "
                 f"ws_age_ms={latency.ws_age_ms} ws_jitter_ms={latency.ws_jitter_ms} "
                 f"spread_ratio={latency.spread_ratio:.6f} "
                 f"danger_reasons={latency_danger_reasons}"
@@ -1448,6 +1592,9 @@ def evaluate_live_buy_entry(
             pct_limit=pct_limit,
         )
 
+    spread_relief_configured_min_signal, spread_relief_effective_min_signal = (
+        _latency_spread_relief_signal_score_floors()
+    )
     result = {
         "allowed": False,
         "decision": effective_decision.value,
@@ -1494,6 +1641,11 @@ def evaluate_live_buy_entry(
         ),
         "latency_canary_applied": latency_canary_applied,
         "latency_canary_reason": latency_canary_reason,
+        "latency_spread_relief_signal_score": round(_normalize_signal_score(signal_strength), 3),
+        "latency_spread_relief_configured_min_signal_score": round(spread_relief_configured_min_signal, 3),
+        "latency_spread_relief_effective_min_signal_score": round(spread_relief_effective_min_signal, 3),
+        "latency_spread_relief_tag": spread_relief_tag,
+        **pre_submit_quote_refresh,
         "orderbook_stability": ORDERBOOK_STABILITY_OBSERVER.snapshot(code),
     }
 

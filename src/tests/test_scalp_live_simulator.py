@@ -186,6 +186,8 @@ def test_scalp_simulator_attaches_matched_lifecycle_bucket_provenance(monkeypatc
         ),
         encoding="utf-8",
     )
+    monkeypatch.setenv("KORSTOCKSCAN_THRESHOLD_RUNTIME_APPLY_DATE", "2026-06-15")
+    monkeypatch.delenv("KORSTOCKSCAN_LIFECYCLE_BUCKET_DISCOVERY_POLICY_SOURCE_DATE", raising=False)
     monkeypatch.setattr(
         state_handlers,
         "TRADING_RULES",
@@ -275,6 +277,174 @@ def test_scalp_simulator_attaches_matched_lifecycle_bucket_provenance(monkeypatc
     assert sell_event["bucket_directed_sim_probe"] is True
     assert sell_event["actual_order_submitted"] is False
     assert sell_event["broker_order_forbidden"] is True
+
+
+def test_scalp_simulator_consumes_lifecycle_bucket_catalog_handoff_when_direct_policy_off(monkeypatch, tmp_path):
+    source_bucket_id = "lifecycle_flow:combo_lifecycle_flow:entry_score_60_62:abc123"
+    bucket_id = "lifecycle_flow:combo_lifecycle_flow:entry_score_60_62"
+    catalog_path = tmp_path / "lifecycle_bucket_catalog_2026-06-12.json"
+    catalog_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "lifecycle_bucket_catalog_v1",
+                "buckets": [
+                    {
+                        "bucket_id": bucket_id,
+                        "source_bucket_id": source_bucket_id,
+                        "classification_state": "lifecycle_flow_sim_probe_candidate",
+                        "source_bucket_kind": "lifecycle_flow_sim_probe_policy",
+                        "stage": "lifecycle_flow",
+                        "bucket_type": "combo_lifecycle_flow",
+                        "sample": 2,
+                        "joined_sample": 2,
+                        "complete_flow_count": 1,
+                        "incomplete_flow_count": 0,
+                        "sim_lifecycle_handoff_allowed": True,
+                    }
+                ],
+                "active_sim_priority_seeds": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("KORSTOCKSCAN_THRESHOLD_RUNTIME_APPLY_DATE", "2026-06-15")
+    monkeypatch.delenv("KORSTOCKSCAN_LIFECYCLE_BUCKET_DISCOVERY_POLICY_SOURCE_DATE", raising=False)
+    monkeypatch.setattr(
+        state_handlers,
+        "TRADING_RULES",
+        replace(
+            state_handlers.TRADING_RULES,
+            SCALP_SIM_AUTO_POLICY_ENABLED=False,
+            SCALP_SIM_AUTO_POLICY_FILE="",
+            SCALP_SIM_AUTO_POLICY_VERSION="",
+            LIFECYCLE_BUCKET_DISCOVERY_ENABLED=True,
+            LIFECYCLE_BUCKET_DISCOVERY_POLICY_FILE=str(catalog_path),
+            LIFECYCLE_BUCKET_DISCOVERY_POLICY_VERSION="lifecycle_bucket_discovery:2026-06-12",
+        ),
+    )
+    logs = []
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_entry_pipeline",
+        lambda stock, code, stage, **fields: logs.append((stage, fields)),
+    )
+    monkeypatch.setattr(
+        state_handlers.kiwoom_orders,
+        "send_buy_order",
+        lambda *args, **kwargs: pytest.fail("real buy order must not be called"),
+    )
+
+    assert state_handlers.maybe_arm_scalp_live_simulator_from_buy_signal(
+        {
+            "id": 101,
+            "name": "TEST",
+            "code": "123456",
+            "strategy": "SCALPING",
+            "position_tag": "SCALP_BASE",
+            "target_buy_price": 10_000,
+            "lifecycle_bucket_source_bucket_id": source_bucket_id,
+        },
+        "123456",
+        {"curr": 9_990, "orderbook": {"asks": [{"price": 9_990}], "bids": [{"price": 9_980}]}},
+        {
+            "strategy": "SCALPING",
+            "is_trigger": True,
+            "now_ts": 1_000.0,
+            "current_ai_score": 82.0,
+            "latency_state": "DANGER",
+            "liquidity_value": 800_000_000,
+            "scalp_min_liquidity": 500_000_000,
+        },
+    )
+
+    armed = next(fields for stage, fields in logs if stage == "scalp_sim_entry_armed")
+    assert armed["lifecycle_bucket_match_status"] == "matched"
+    assert armed["scalp_sim_auto_policy_enabled"] is True
+    assert armed["scalp_sim_auto_policy_direct_enabled"] is False
+    assert armed["lifecycle_bucket_catalog_handoff_enabled"] is True
+    assert armed["scalp_sim_policy_source"] == "lifecycle_bucket_discovery_catalog_handoff"
+    assert armed["scalp_sim_auto_policy_schema_version"] == "lifecycle_bucket_catalog_v1"
+    assert armed["bucket_directed_sim_probe"] is True
+
+
+def test_lifecycle_bucket_catalog_handoff_does_not_direct_source_only_rows(monkeypatch, tmp_path):
+    source_bucket_id = "lifecycle_flow:combo_lifecycle_flow:source_only:abc123"
+    catalog_path = tmp_path / "lifecycle_bucket_catalog_2026-06-12.json"
+    catalog_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "lifecycle_bucket_catalog_v1",
+                "buckets": [
+                    {
+                        "bucket_id": "lifecycle_flow:combo_lifecycle_flow:source_only",
+                        "source_bucket_id": source_bucket_id,
+                        "classification_state": "source_only_keep_collecting",
+                        "source_bucket_kind": "source_only_observation",
+                        "stage": "lifecycle_flow",
+                        "bucket_type": "combo_lifecycle_flow",
+                        "sim_lifecycle_handoff_allowed": False,
+                    }
+                ],
+                "active_sim_priority_seeds": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("KORSTOCKSCAN_THRESHOLD_RUNTIME_APPLY_DATE", "2026-06-15")
+    monkeypatch.delenv("KORSTOCKSCAN_LIFECYCLE_BUCKET_DISCOVERY_POLICY_SOURCE_DATE", raising=False)
+    monkeypatch.setattr(
+        state_handlers,
+        "TRADING_RULES",
+        replace(
+            state_handlers.TRADING_RULES,
+            SCALP_SIM_AUTO_POLICY_ENABLED=False,
+            SCALP_SIM_AUTO_POLICY_FILE="",
+            SCALP_SIM_AUTO_POLICY_VERSION="",
+            LIFECYCLE_BUCKET_DISCOVERY_ENABLED=True,
+            LIFECYCLE_BUCKET_DISCOVERY_POLICY_FILE=str(catalog_path),
+            LIFECYCLE_BUCKET_DISCOVERY_POLICY_VERSION="lifecycle_bucket_discovery:2026-06-12",
+        ),
+    )
+    logs = []
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_entry_pipeline",
+        lambda stock, code, stage, **fields: logs.append((stage, fields)),
+    )
+    monkeypatch.setattr(
+        state_handlers.kiwoom_orders,
+        "send_buy_order",
+        lambda *args, **kwargs: pytest.fail("real buy order must not be called"),
+    )
+
+    assert state_handlers.maybe_arm_scalp_live_simulator_from_buy_signal(
+        {
+            "id": 101,
+            "name": "TEST",
+            "code": "123456",
+            "strategy": "SCALPING",
+            "position_tag": "SCALP_BASE",
+            "target_buy_price": 10_000,
+            "lifecycle_bucket_source_bucket_id": source_bucket_id,
+        },
+        "123456",
+        {"curr": 9_990, "orderbook": {"asks": [{"price": 9_990}], "bids": [{"price": 9_980}]}},
+        {
+            "strategy": "SCALPING",
+            "is_trigger": True,
+            "now_ts": 1_000.0,
+            "current_ai_score": 82.0,
+            "latency_state": "DANGER",
+            "liquidity_value": 800_000_000,
+            "scalp_min_liquidity": 500_000_000,
+        },
+    )
+
+    armed = next(fields for stage, fields in logs if stage == "scalp_sim_entry_armed")
+    assert armed["lifecycle_bucket_match_status"] == "no_match"
+    assert armed["bucket_directed_sim_probe"] is False
+    assert armed["scalp_sim_policy_source"] == "lifecycle_bucket_discovery_catalog_handoff"
+    assert armed["scalp_sim_auto_policy_enabled"] is True
 
 
 def test_candidate_window_resolves_approved_lifecycle_flow_from_entry_identity(monkeypatch, tmp_path):

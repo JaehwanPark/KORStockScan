@@ -186,6 +186,15 @@ def _event_fields(event: dict[str, Any]) -> dict[str, Any]:
     return {}
 
 
+def _is_early_accel_recheck_retry_event(event: dict[str, Any]) -> bool:
+    fields = _event_fields(event)
+    return (
+        str(fields.get("ai_call_trigger_reason") or "") == "early_accel_recheck"
+        or str(fields.get("tuning_authority_excluded_reason") or "")
+        == "early_accel_recheck_operator_retry"
+    )
+
+
 def _record_key(event: dict[str, Any]) -> str:
     fields = _event_fields(event)
     for key in ("candidate_id", "entry_adm_candidate_id", "sim_record_id", "record_id"):
@@ -201,6 +210,8 @@ def _iter_relevant_events(target_date: str) -> Iterable[dict[str, Any]]:
         for event in _iter_jsonl(path):
             stage = str(event.get("stage") or "").strip()
             if stage not in RELEVANT_STAGES:
+                continue
+            if _is_early_accel_recheck_retry_event(event):
                 continue
             if str(event.get("emitted_date") or target_date)[:10] != target_date:
                 continue

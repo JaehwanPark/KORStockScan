@@ -166,6 +166,23 @@ TARGET_ENV_VALUE_KEYS = {
     "SCALP_SCANNER_REAL_SOURCE_GUARD_ENABLED": "enabled",
     "SCALP_SCANNER_REAL_SOURCE_GUARD_BLOCK_VALUE_TOP_ONLY": "block_value_top_only",
     "SCALP_SCANNER_REAL_SOURCE_GUARD_MAX_DECLINE_PCT": "max_decline_pct",
+    "SCALP_SCANNER_REAL_SOURCE_GUARD_BLOCK_LATE_FIRST_SEEN": "block_late_first_seen",
+    "SCALP_SCANNER_ACCEL_MIN_RANK_JUMP": "accel_min_rank_jump",
+    "SCALP_SCANNER_ACCEL_MIN_SPIKE_RATE": "accel_min_spike_rate",
+    "SCALP_SCANNER_ACCEL_MIN_PRIORITY_SCORE": "accel_min_priority_score",
+    "SCALP_SCANNER_ACCEL_MIN_CNTR_STR": "accel_min_cntr_str",
+    "SCALP_SCANNER_PROBE_MIN_SEC": "probe_min_sec",
+    "SCALP_SCANNER_PROBE_MAX_SEC": "probe_max_sec",
+    "SCALP_SCANNER_PROBE_MIN_PRICE_DELTA_PCT": "probe_min_price_delta_pct",
+    "SCALP_SCANNER_PROBE_MIN_FLU_DELTA_PCT": "probe_min_flu_delta_pct",
+    "EARLY_ACCEL_RECHECK_RUNTIME_ENABLED": "enabled",
+    "EARLY_ACCEL_RECHECK_MAX_COUNT": "max_count",
+    "EARLY_ACCEL_RECHECK_MIN_INTERVAL_SEC": "min_interval_sec",
+    "EARLY_ACCEL_RECHECK_MAX_AGE_SEC": "max_age_sec",
+    "EARLY_ACCEL_RECHECK_MIN_TICK_ACCEL": "min_tick_accel",
+    "EARLY_ACCEL_RECHECK_MIN_MICRO_VWAP_BP": "min_micro_vwap_bp",
+    "EARLY_ACCEL_RECHECK_ALLOW_LIQUIDITY_BLOCKED": "allow_liquidity_blocked",
+    "EARLY_ACCEL_RECHECK_ALLOW_STRENGTH_BLOCKED": "allow_strength_blocked",
     "SCALP_CONDITION_UNMATCH_GUARD_ENABLED": "condition_unmatch_guard_enabled",
     "SCALP_CONDITION_UNMATCH_GUARD_TAGS": "condition_unmatch_guard_tags",
     "SCALP_DEFENSIVE_MISSED_UPSIDE_MIN_ORIGINAL_BPS": "min_original_bps",
@@ -183,6 +200,12 @@ TARGET_ENV_VALUE_KEYS = {
     "SCALP_SOFT_STOP_DYNAMIC_GRACE_MIN_AI_SCORE": "min_ai_score",
     "SCALP_SOFT_STOP_DYNAMIC_GRACE_EMERGENCY_PCT": "emergency_pct",
     "SCALP_SOFT_STOP_DYNAMIC_GRACE_MAX_WORSEN_PCT": "max_worsen_pct",
+    "SCALP_PRESET_TP_SOFT_STOP_OVERRIDE_ENABLED": "enabled",
+    "SCALP_PRESET_TP_SOFT_STOP_TRIGGER_PCT": "trigger_pct",
+    "SCALP_PRESET_TP_SOFT_STOP_GRACE_SEC": "grace_sec",
+    "SCALP_PRESET_TP_SOFT_STOP_EMERGENCY_PCT": "emergency_pct",
+    "SCALP_PRESET_TP_SOFT_STOP_MAX_WORSEN_PCT": "max_worsen_pct",
+    "SCALP_PRESET_TP_SOFT_STOP_RECOVERY_BUFFER_PCT": "recovery_buffer_pct",
     "LIFECYCLE_DECISION_MATRIX_ENABLED": "enabled",
     "LIFECYCLE_DECISION_MATRIX_POLICY_FILE": "policy_file",
     "LIFECYCLE_DECISION_MATRIX_POLICY_VERSION": "policy_version",
@@ -235,16 +258,50 @@ TARGET_ENV_VALUE_KEYS = {
 
 AGGRESSIVE_ENTRY_PRICE_OVERRIDE_FAMILY = "aggressive_entry_price_override_runtime"
 SCALPING_SCANNER_REAL_SOURCE_GUARD_FAMILY = "scalping_scanner_real_source_guard_runtime"
+EARLY_ACCEL_RECHECK_FAMILY = "early_accel_recheck_runtime"
+SCORE65_74_STRONG_MICRO_OVERRIDE_FAMILY = "score65_74_recovery_probe_strong_micro_override_runtime"
 ENTRY_PRICE_LIVE_TUNING_MARKER_ENV = "KORSTOCKSCAN_ENTRY_PRICE_LIVE_TUNING_SELECTED"
+ENTRY_STAGE_LIVE_TUNING_MARKER_ENV = "KORSTOCKSCAN_ENTRY_STAGE_LIVE_TUNING_SELECTED"
 SOFT_STOP_DYNAMIC_GRACE_FAMILY = "soft_stop_dynamic_grace_runtime"
+PRESET_TP_SOFT_STOP_FAMILY = "preset_tp_soft_stop_runtime"
+PROFIT_STAGNATION_EXIT_FAMILY = "profit_stagnation_exit_runtime"
 HOLDING_EXIT_LIVE_TUNING_MARKER_ENV = "KORSTOCKSCAN_HOLDING_EXIT_LIVE_TUNING_SELECTED"
+PRESET_TP_EXIT_LIVE_TUNING_MARKER_ENV = "KORSTOCKSCAN_PRESET_TP_EXIT_LIVE_TUNING_SELECTED"
 SCALPING_SCANNER_REAL_SOURCE_GUARD_ENV_KEYS = frozenset(
     {
         "KORSTOCKSCAN_SCALP_SCANNER_REAL_SOURCE_GUARD_ENABLED",
         "KORSTOCKSCAN_SCALP_SCANNER_REAL_SOURCE_GUARD_BLOCK_VALUE_TOP_ONLY",
         "KORSTOCKSCAN_SCALP_SCANNER_REAL_SOURCE_GUARD_MAX_DECLINE_PCT",
+        "KORSTOCKSCAN_SCALP_SCANNER_REAL_SOURCE_GUARD_BLOCK_LATE_FIRST_SEEN",
+        "KORSTOCKSCAN_SCALP_SCANNER_ACCEL_MIN_RANK_JUMP",
+        "KORSTOCKSCAN_SCALP_SCANNER_ACCEL_MIN_SPIKE_RATE",
+        "KORSTOCKSCAN_SCALP_SCANNER_ACCEL_MIN_PRIORITY_SCORE",
+        "KORSTOCKSCAN_SCALP_SCANNER_ACCEL_MIN_CNTR_STR",
+        "KORSTOCKSCAN_SCALP_SCANNER_PROBE_MIN_SEC",
+        "KORSTOCKSCAN_SCALP_SCANNER_PROBE_MAX_SEC",
+        "KORSTOCKSCAN_SCALP_SCANNER_PROBE_MIN_PRICE_DELTA_PCT",
+        "KORSTOCKSCAN_SCALP_SCANNER_PROBE_MIN_FLU_DELTA_PCT",
         "KORSTOCKSCAN_SCALP_CONDITION_UNMATCH_GUARD_ENABLED",
         "KORSTOCKSCAN_SCALP_CONDITION_UNMATCH_GUARD_TAGS",
+    }
+)
+SCORE65_74_STRONG_MICRO_OVERRIDE_ENV_KEYS = frozenset(
+    {
+        "KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_STRONG_MICRO_OVERRIDE_ENABLED",
+        "KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_STRONG_MICRO_MIN_BUY_PRESSURE",
+        "KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_STRONG_MICRO_MIN_MICRO_VWAP_BP",
+    }
+)
+EARLY_ACCEL_RECHECK_ENV_KEYS = frozenset(
+    {
+        "KORSTOCKSCAN_EARLY_ACCEL_RECHECK_RUNTIME_ENABLED",
+        "KORSTOCKSCAN_EARLY_ACCEL_RECHECK_MAX_COUNT",
+        "KORSTOCKSCAN_EARLY_ACCEL_RECHECK_MIN_INTERVAL_SEC",
+        "KORSTOCKSCAN_EARLY_ACCEL_RECHECK_MAX_AGE_SEC",
+        "KORSTOCKSCAN_EARLY_ACCEL_RECHECK_MIN_TICK_ACCEL",
+        "KORSTOCKSCAN_EARLY_ACCEL_RECHECK_MIN_MICRO_VWAP_BP",
+        "KORSTOCKSCAN_EARLY_ACCEL_RECHECK_ALLOW_LIQUIDITY_BLOCKED",
+        "KORSTOCKSCAN_EARLY_ACCEL_RECHECK_ALLOW_STRENGTH_BLOCKED",
     }
 )
 AGGRESSIVE_ENTRY_PRICE_OVERRIDE_ENV_KEYS = frozenset(
@@ -270,6 +327,16 @@ SOFT_STOP_DYNAMIC_GRACE_ENV_KEYS = frozenset(
         "KORSTOCKSCAN_SCALP_SOFT_STOP_DYNAMIC_GRACE_MIN_AI_SCORE",
         "KORSTOCKSCAN_SCALP_SOFT_STOP_DYNAMIC_GRACE_EMERGENCY_PCT",
         "KORSTOCKSCAN_SCALP_SOFT_STOP_DYNAMIC_GRACE_MAX_WORSEN_PCT",
+    }
+)
+PRESET_TP_SOFT_STOP_ENV_KEYS = frozenset(
+    {
+        "KORSTOCKSCAN_SCALP_PRESET_TP_SOFT_STOP_OVERRIDE_ENABLED",
+        "KORSTOCKSCAN_SCALP_PRESET_TP_SOFT_STOP_TRIGGER_PCT",
+        "KORSTOCKSCAN_SCALP_PRESET_TP_SOFT_STOP_GRACE_SEC",
+        "KORSTOCKSCAN_SCALP_PRESET_TP_SOFT_STOP_EMERGENCY_PCT",
+        "KORSTOCKSCAN_SCALP_PRESET_TP_SOFT_STOP_MAX_WORSEN_PCT",
+        "KORSTOCKSCAN_SCALP_PRESET_TP_SOFT_STOP_RECOVERY_BUFFER_PCT",
     }
 )
 
@@ -614,6 +681,7 @@ _FAMILY_ENV_KEY_PREFIXES: dict[str, str] = {
     "entry_cancel_wait_runtime": "KORSTOCKSCAN_ENTRY_CANCEL_WAIT_",
     "soft_stop_whipsaw_confirmation": "KORSTOCKSCAN_SCALP_SOFT_STOP_WHIPSAW_CONFIRMATION_",
     "score65_74_recovery_probe": "KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_",
+    SCORE65_74_STRONG_MICRO_OVERRIDE_FAMILY: "KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_STRONG_MICRO_",
     "scalp_sim_candidate_window_expansion": "KORSTOCKSCAN_SCALP_SIM_CANDIDATE_WINDOW_",
     "scalp_sim_ai_budget_manager": "KORSTOCKSCAN_SCALP_SIM_AI_",
     "lifecycle_decision_matrix_runtime": "KORSTOCKSCAN_LIFECYCLE_DECISION_MATRIX_",
@@ -1720,20 +1788,48 @@ def _ai_guard_allows_candidate(candidate: dict[str, Any], ai_review: dict[str, A
     return (True, "ai_guard_accepted")
 
 
-def _scanner_guard_operator_lock_stage_coexist(
+def _additive_entry_operator_lock_stage_coexist(
     *,
     family: str,
     stage: str,
     selected_by_stage: dict[str, dict[str, Any]],
     locks_by_family: dict[str, dict[str, Any]],
 ) -> bool:
-    if family != SCALPING_SCANNER_REAL_SOURCE_GUARD_FAMILY or stage not in selected_by_stage:
+    additive_entry_lock_families = {
+        SCALPING_SCANNER_REAL_SOURCE_GUARD_FAMILY,
+        SCORE65_74_STRONG_MICRO_OVERRIDE_FAMILY,
+    }
+    if family not in additive_entry_lock_families or stage not in selected_by_stage:
         return False
     previous = selected_by_stage[stage]
     previous_family = str(previous.get("family") or "")
     return (
         str(previous.get("calibration_state") or "") == "operator_locked"
         or previous_family in locks_by_family
+    )
+
+
+def _operator_lock_stage_coexist(
+    *,
+    family: str,
+    stage: str,
+    selected_by_stage: dict[str, dict[str, Any]],
+    locks_by_family: dict[str, dict[str, Any]],
+) -> bool:
+    if _additive_entry_operator_lock_stage_coexist(
+        family=family,
+        stage=stage,
+        selected_by_stage=selected_by_stage,
+        locks_by_family=locks_by_family,
+    ):
+        return True
+    if stage not in selected_by_stage:
+        return False
+    previous = selected_by_stage[stage]
+    previous_family = str(previous.get("family") or "")
+    return (
+        stage == "holding_exit"
+        and {family, previous_family} == {PRESET_TP_SOFT_STOP_FAMILY, PROFIT_STAGNATION_EXIT_FAMILY}
     )
 
 
@@ -1809,7 +1905,7 @@ def _select_auto_apply_candidates(
             reject_reason = reason
         elif not _env_overrides_for_candidate(candidate):
             reject_reason = "no_runtime_env_override"
-        elif stage in selected_by_stage and not _scanner_guard_operator_lock_stage_coexist(
+        elif stage in selected_by_stage and not _operator_lock_stage_coexist(
             family=family,
             stage=stage,
             selected_by_stage=selected_by_stage,
@@ -1819,7 +1915,7 @@ def _select_auto_apply_candidates(
 
         lock_applied = False
         lock_stage_conflict_reason = ""
-        if lock and stage in selected_by_stage and not _scanner_guard_operator_lock_stage_coexist(
+        if lock and stage in selected_by_stage and not _operator_lock_stage_coexist(
             family=family,
             stage=stage,
             selected_by_stage=selected_by_stage,
@@ -1900,6 +1996,7 @@ def _entry_price_live_owner_family(*selected_groups: list[dict[str, Any]]) -> st
             if family in {
                 AGGRESSIVE_ENTRY_PRICE_OVERRIDE_FAMILY,
                 SCALPING_SCANNER_REAL_SOURCE_GUARD_FAMILY,
+                SCORE65_74_STRONG_MICRO_OVERRIDE_FAMILY,
             }:
                 continue
             if str(item.get("stage") or "") == "entry":
@@ -1916,6 +2013,7 @@ def _entry_live_tuning_owner_family(*selected_groups: list[dict[str, Any]]) -> s
             if family in {
                 AGGRESSIVE_ENTRY_PRICE_OVERRIDE_FAMILY,
                 SCALPING_SCANNER_REAL_SOURCE_GUARD_FAMILY,
+                SCORE65_74_STRONG_MICRO_OVERRIDE_FAMILY,
             }:
                 continue
             if str(item.get("stage") or "") != "entry":
@@ -1969,13 +2067,109 @@ def _close_scalping_scanner_real_source_guard_for_live_owner(
     return filtered_selected, updated_decisions, filtered_env
 
 
+def _close_score65_74_strong_micro_override_for_live_owner(
+    *,
+    selected: list[dict[str, Any]],
+    decisions: list[dict[str, Any]],
+    env_overrides: dict[str, str],
+    owner_family: str,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, str]]:
+    if not owner_family:
+        return selected, decisions, env_overrides
+    reason = f"same_stage_owner_conflict:{owner_family}"
+    filtered_selected = [
+        item
+        for item in selected
+        if str(item.get("family") or "") != SCORE65_74_STRONG_MICRO_OVERRIDE_FAMILY
+    ]
+    filtered_env = {
+        key: value
+        for key, value in env_overrides.items()
+        if str(key) not in SCORE65_74_STRONG_MICRO_OVERRIDE_ENV_KEYS
+    }
+    updated_decisions: list[dict[str, Any]] = []
+    for decision in decisions:
+        if str(decision.get("family") or "") != SCORE65_74_STRONG_MICRO_OVERRIDE_FAMILY:
+            updated_decisions.append(decision)
+            continue
+        next_decision = {**decision, "selected": False, "decision_reason": reason, "env_overrides": {}}
+        lock = next_decision.get("operator_runtime_env_lock")
+        if isinstance(lock, dict):
+            close_reasons = list(lock.get("close_reasons") or [])
+            if reason not in close_reasons:
+                close_reasons.append(reason)
+            next_decision["operator_runtime_env_lock"] = {
+                **lock,
+                "applied": False,
+                "close_reasons": close_reasons,
+                "allowed_close": _lock_allows_close(lock, close_reasons),
+            }
+        updated_decisions.append(next_decision)
+    return filtered_selected, updated_decisions, filtered_env
+
+
+def _close_early_accel_recheck_for_live_owner(
+    *,
+    selected: list[dict[str, Any]],
+    decisions: list[dict[str, Any]],
+    env_overrides: dict[str, str],
+    owner_family: str,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, str]]:
+    if not owner_family:
+        return selected, decisions, env_overrides
+    reason = f"same_stage_owner_conflict:{owner_family}"
+    filtered_selected = [
+        item
+        for item in selected
+        if str(item.get("family") or "") != EARLY_ACCEL_RECHECK_FAMILY
+    ]
+    filtered_env = {
+        key: value
+        for key, value in env_overrides.items()
+        if str(key) not in EARLY_ACCEL_RECHECK_ENV_KEYS
+    }
+    updated_decisions: list[dict[str, Any]] = []
+    for decision in decisions:
+        if str(decision.get("family") or "") != EARLY_ACCEL_RECHECK_FAMILY:
+            updated_decisions.append(decision)
+            continue
+        next_decision = {**decision, "selected": False, "decision_reason": reason, "env_overrides": {}}
+        lock = next_decision.get("operator_runtime_env_lock")
+        if isinstance(lock, dict):
+            close_reasons = list(lock.get("close_reasons") or [])
+            if reason not in close_reasons:
+                close_reasons.append(reason)
+            next_decision["operator_runtime_env_lock"] = {
+                **lock,
+                "applied": False,
+                "close_reasons": close_reasons,
+                "allowed_close": _lock_allows_close(lock, close_reasons),
+            }
+        updated_decisions.append(next_decision)
+    return filtered_selected, updated_decisions, filtered_env
+
+
 def _holding_exit_live_owner_family(*selected_groups: list[dict[str, Any]]) -> str:
     for group in selected_groups:
         for item in group or []:
             if not isinstance(item, dict):
                 continue
             family = str(item.get("family") or "")
-            if family == SOFT_STOP_DYNAMIC_GRACE_FAMILY:
+            if family in {SOFT_STOP_DYNAMIC_GRACE_FAMILY, PRESET_TP_SOFT_STOP_FAMILY}:
+                continue
+            stage = str(item.get("stage") or "")
+            if stage in {"holding_exit", "holding", "exit"}:
+                return family
+    return ""
+
+
+def _preset_tp_exit_live_owner_family(*selected_groups: list[dict[str, Any]]) -> str:
+    for group in selected_groups:
+        for item in group or []:
+            if not isinstance(item, dict):
+                continue
+            family = str(item.get("family") or "")
+            if family in {PRESET_TP_SOFT_STOP_FAMILY, PROFIT_STAGNATION_EXIT_FAMILY}:
                 continue
             stage = str(item.get("stage") or "")
             if stage in {"holding_exit", "holding", "exit"}:
@@ -2047,6 +2241,47 @@ def _close_soft_stop_dynamic_grace_for_live_owner(
     updated_decisions: list[dict[str, Any]] = []
     for decision in decisions:
         if str(decision.get("family") or "") != SOFT_STOP_DYNAMIC_GRACE_FAMILY:
+            updated_decisions.append(decision)
+            continue
+        next_decision = {**decision, "selected": False, "decision_reason": reason, "env_overrides": {}}
+        lock = next_decision.get("operator_runtime_env_lock")
+        if isinstance(lock, dict):
+            close_reasons = list(lock.get("close_reasons") or [])
+            if reason not in close_reasons:
+                close_reasons.append(reason)
+            next_decision["operator_runtime_env_lock"] = {
+                **lock,
+                "applied": False,
+                "close_reasons": close_reasons,
+                "allowed_close": _lock_allows_close(lock, close_reasons),
+            }
+        updated_decisions.append(next_decision)
+    return filtered_selected, updated_decisions, filtered_env
+
+
+def _close_preset_tp_soft_stop_for_live_owner(
+    *,
+    selected: list[dict[str, Any]],
+    decisions: list[dict[str, Any]],
+    env_overrides: dict[str, str],
+    owner_family: str,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, str]]:
+    if not owner_family:
+        return selected, decisions, env_overrides
+    reason = f"same_stage_owner_conflict:{owner_family}"
+    filtered_selected = [
+        item
+        for item in selected
+        if str(item.get("family") or "") != PRESET_TP_SOFT_STOP_FAMILY
+    ]
+    filtered_env = {
+        key: value
+        for key, value in env_overrides.items()
+        if str(key) not in PRESET_TP_SOFT_STOP_ENV_KEYS
+    }
+    updated_decisions: list[dict[str, Any]] = []
+    for decision in decisions:
+        if str(decision.get("family") or "") != PRESET_TP_SOFT_STOP_FAMILY:
             updated_decisions.append(decision)
             continue
         next_decision = {**decision, "selected": False, "decision_reason": reason, "env_overrides": {}}
@@ -2704,6 +2939,10 @@ def build_preopen_apply_manifest(
                 selected,
                 runtime_bridge_selected,
             )
+            preset_tp_exit_live_owner_family = _preset_tp_exit_live_owner_family(
+                selected,
+                runtime_bridge_selected,
+            )
             selected, decisions, env_overrides = _close_aggressive_entry_price_override_for_live_owner(
                 selected=selected,
                 decisions=decisions,
@@ -2716,11 +2955,29 @@ def build_preopen_apply_manifest(
                 env_overrides=env_overrides,
                 owner_family=entry_live_tuning_owner_family,
             )
+            selected, decisions, env_overrides = _close_score65_74_strong_micro_override_for_live_owner(
+                selected=selected,
+                decisions=decisions,
+                env_overrides=env_overrides,
+                owner_family=entry_live_tuning_owner_family,
+            )
+            selected, decisions, env_overrides = _close_early_accel_recheck_for_live_owner(
+                selected=selected,
+                decisions=decisions,
+                env_overrides=env_overrides,
+                owner_family=entry_live_tuning_owner_family,
+            )
             selected, decisions, env_overrides = _close_soft_stop_dynamic_grace_for_live_owner(
                 selected=selected,
                 decisions=decisions,
                 env_overrides=env_overrides,
                 owner_family=holding_exit_live_owner_family,
+            )
+            selected, decisions, env_overrides = _close_preset_tp_soft_stop_for_live_owner(
+                selected=selected,
+                decisions=decisions,
+                env_overrides=env_overrides,
+                owner_family=preset_tp_exit_live_owner_family,
             )
             env_overrides = {
                 **env_overrides,
@@ -2742,8 +2999,12 @@ def build_preopen_apply_manifest(
                 env_overrides["KORSTOCKSCAN_DYNAMIC_ENTRY_PRICE_RESOLVER_LIVE_SELECTED"] = "true"
             if entry_price_live_owner_family:
                 env_overrides[ENTRY_PRICE_LIVE_TUNING_MARKER_ENV] = "true"
+            if entry_live_tuning_owner_family:
+                env_overrides[ENTRY_STAGE_LIVE_TUNING_MARKER_ENV] = "true"
             if holding_exit_live_owner_family:
                 env_overrides[HOLDING_EXIT_LIVE_TUNING_MARKER_ENV] = "true"
+            if preset_tp_exit_live_owner_family:
+                env_overrides[PRESET_TP_EXIT_LIVE_TUNING_MARKER_ENV] = "true"
         runtime_change = bool(auto_apply_requested and env_overrides)
         status = (
             "auto_bounded_live_ready"

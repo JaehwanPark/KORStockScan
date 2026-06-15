@@ -37,6 +37,9 @@ dist/
 *.json
 !data/config/ofi_bucket_threshold_manifest.json
 !data/threshold_cycle/operator_runtime_env_locks/aggressive_entry_price_override_2026-06-13.json
+!data/threshold_cycle/operator_runtime_env_locks/score65_74_strong_micro_override_2026-06-15.json
+!data/threshold_cycle/operator_runtime_env_locks/preset_tp_soft_stop_2026-06-15.json
+!data/threshold_cycle/operator_runtime_env_locks/early_accel_recheck_2026-06-15.json
 !data/source_quality/
 !data/source_quality/clean_baseline_policy.json
 !data/source_quality/market_halt_windows/

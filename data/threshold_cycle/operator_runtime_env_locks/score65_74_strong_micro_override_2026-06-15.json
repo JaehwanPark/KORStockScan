@@ -1,0 +1,35 @@
+{
+  "lock_id": "score65_74_strong_micro_operator_override_2026-06-15",
+  "enabled": true,
+  "family": "score65_74_recovery_probe_strong_micro_override_runtime",
+  "stage": "entry",
+  "scope": "real_scalping_only",
+  "runtime_effect": true,
+  "active_from_date": "2026-06-16",
+  "min_observation_until_date": "2026-06-16",
+  "explicit_close_required": true,
+  "env_overrides": {
+    "KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_STRONG_MICRO_OVERRIDE_ENABLED": "true",
+    "KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_STRONG_MICRO_MIN_BUY_PRESSURE": "85.0",
+    "KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_STRONG_MICRO_MIN_MICRO_VWAP_BP": "30.0"
+  },
+  "allowed_close_reason_keywords": [
+    "same_stage_owner_conflict",
+    "score65_74_recovery_probe",
+    "entry_bucket_live_selected",
+    "dynamic_entry_policy_tuning",
+    "live_auto_apply_ready",
+    "tuning_override",
+    "safety_revert_required",
+    "severe_loss",
+    "stale_quote",
+    "order_failure",
+    "provenance_breach"
+  ],
+  "decision_authority": "operator_runtime_override",
+  "source_evidence": [
+    "data/pipeline_events/pipeline_events_2026-06-15.jsonl",
+    "data/report/observation_source_quality_audit/observation_source_quality_audit_2026-06-15.json"
+  ],
+  "notes": "Relaxes the score65_74 recovery probe tick_accel-only veto only when buy pressure and micro VWAP are strongly positive with fresh computed tick context. Same-stage entry live tuning closes this lock."
+}

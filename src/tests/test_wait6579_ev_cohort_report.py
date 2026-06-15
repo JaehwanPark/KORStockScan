@@ -248,6 +248,58 @@ def test_build_wait6579_ev_cohort_report_empty(monkeypatch, tmp_path):
     assert report["counterfactual_summary"]["book"] == "scalp_score65_74_probe_counterfactual"
 
 
+def test_wait6579_ev_cohort_excludes_early_accel_recheck_retry(monkeypatch, tmp_path):
+    monkeypatch.setattr(report_mod, "DATA_DIR", tmp_path)
+    target_date = "2026-04-21"
+    retry_fields = {
+        "action": "WAIT",
+        "ai_score": "68",
+        "buy_pressure": "80.0",
+        "tick_accel": "1.50",
+        "micro_vwap_bp": "5.0",
+        "target_buy_price": "10000",
+        "ai_call_trigger_reason": "early_accel_recheck",
+        "tuning_authority_excluded_reason": "early_accel_recheck_operator_retry",
+    }
+    _write_pipeline_events(
+        tmp_path,
+        target_date,
+        [
+            {
+                "pipeline": "ENTRY_PIPELINE",
+                "stage": "wait65_79_ev_candidate",
+                "stock_name": "재판정후보",
+                "stock_code": "333333",
+                "record_id": 303,
+                "fields": retry_fields,
+                "emitted_at": "2026-04-21T10:00:01",
+                "emitted_date": target_date,
+            },
+            {
+                "pipeline": "ENTRY_PIPELINE",
+                "stage": "blocked_ai_score",
+                "stock_name": "재판정후보",
+                "stock_code": "333333",
+                "record_id": 303,
+                "fields": {
+                    "threshold": "75",
+                    "ai_call_trigger_reason": "early_accel_recheck",
+                    "tuning_authority_excluded_reason": "early_accel_recheck_operator_retry",
+                },
+                "emitted_at": "2026-04-21T10:00:02",
+                "emitted_date": target_date,
+            },
+        ],
+    )
+
+    report = report_mod.build_wait6579_ev_cohort_report(target_date, token="dummy")
+    preflight = report_mod.build_wait6579_preflight_report(target_date)
+
+    assert report["metrics"]["total_candidates"] == 0
+    assert report["rows"] == []
+    assert preflight["rows"] == []
+
+
 def test_wait6579_counterfactual_uses_virtual_qty_without_budget_pass(monkeypatch, tmp_path):
     monkeypatch.setattr(report_mod, "DATA_DIR", tmp_path)
     target_date = "2026-04-21"
@@ -312,12 +364,12 @@ def test_wait6579_counterfactual_uses_virtual_qty_without_budget_pass(monkeypatc
 
     row = report["rows"][0]
     assert row["target_qty"] == 0
-    assert row["counterfactual_qty"] == 114
+    assert row["counterfactual_qty"] == 224
     assert row["counterfactual_qty_source"] == "sim_virtual_budget_dynamic_formula"
     assert row["virtual_budget_override"] is True
     assert row["virtual_budget_krw"] == 10_000_000
-    assert row["counterfactual_safe_budget"] == 1_140_000
-    assert row["counterfactual_notional_krw"] == 1_140_000
+    assert row["counterfactual_safe_budget"] == 2_242_000
+    assert row["counterfactual_notional_krw"] == 2_240_000
     assert row["expected_ev_krw"] > 0
     assert report["metrics"]["expected_ev_krw_sum"] == row["expected_ev_krw"]
 

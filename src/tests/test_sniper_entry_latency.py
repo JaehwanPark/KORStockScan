@@ -341,6 +341,56 @@ def test_latency_entry_blocks_stale_quote_as_danger():
     assert result["latency_danger_reasons"] == "quote_stale,ws_age_too_high"
 
 
+def test_pre_submit_quote_refresh_uses_fresh_observer_quote_for_stale_ws(monkeypatch):
+    monkeypatch.setattr(
+        entry_latency_module,
+        "TRADING_RULES",
+        replace(
+            CONFIG,
+            SCALP_PRE_SUBMIT_QUOTE_REFRESH_ENABLED=True,
+            SCALP_PRE_SUBMIT_QUOTE_REFRESH_MAX_AGE_MS=700,
+            SCALP_PRE_SUBMIT_QUOTE_REFRESH_MAX_SPREAD_RATIO=0.015,
+        ),
+    )
+
+    stock = {"name": "TEST", "position_tag": "MIDDLE"}
+    entry_latency_module.ORDERBOOK_STABILITY_OBSERVER.reset()
+    entry_latency_module.ORDERBOOK_STABILITY_OBSERVER.record_quote(
+        "123456_refresh",
+        best_bid=10_020,
+        best_ask=10_030,
+        ts=time.time(),
+    )
+    result = evaluate_live_buy_entry(
+        stock=stock,
+        code="123456_refresh",
+        ws_data={
+            "curr": 10_000,
+            "last_ws_update_ts": time.time() - 3.0,
+            "orderbook": {
+                "asks": [{"price": 10_010, "volume": 100}],
+                "bids": [{"price": 10_000, "volume": 100}],
+            },
+        },
+        strategy_id="SCALPING",
+        planned_qty=3,
+        signal_price=10_000,
+        signal_strength=0.9,
+    )
+
+    assert result["allowed"] is True
+    assert result["decision"] == "ALLOW_NORMAL"
+    assert result["pre_submit_quote_refresh_enabled"] is True
+    assert result["pre_submit_quote_refresh_applied"] is True
+    assert result["pre_submit_quote_refresh_reason"] == "observer_quote_fresh"
+    assert result["quote_stale"] is False
+    assert result["latest_price"] == 10_020
+    assert result["pre_submit_quote_refresh_latest_price"] == 10_020
+    assert result["order_price"] == 10_010
+    assert result["orderbook_stability"]["best_bid"] == 10_020
+    assert result["orderbook_stability"]["best_ask"] == 10_030
+
+
 def test_latency_entry_caution_submits_normal_after_slippage_check():
     stock = {"name": "TEST", "position_tag": "MIDDLE"}
     signal_time = datetime.now(UTC)
@@ -581,7 +631,95 @@ def test_latency_spread_relief_canary_overrides_reject_danger_to_normal(monkeypa
         signal_strength=90.0,
     )
 
-    _assert_danger_hard_safety_block(result, danger_reasons="spread_too_wide")
+    assert result["decision"] == "ALLOW_NORMAL"
+    assert result["reason"] == "latency_spread_relief_normal_override"
+    assert result["latency_canary_applied"] is True
+    assert result["latency_canary_reason"] == "spread_relief_canary_applied"
+    assert result["latency_danger_reasons"] == "spread_too_wide"
+
+
+def test_latency_spread_relief_canary_uses_entry_momentum_tag_when_position_tag_missing(monkeypatch):
+    monkeypatch.setattr(
+        entry_latency_module,
+        "TRADING_RULES",
+        replace(
+            CONFIG,
+            SCALP_LATENCY_QUOTE_FRESH_COMPOSITE_CANARY_ENABLED=False,
+            SCALP_LATENCY_SIGNAL_QUALITY_QUOTE_COMPOSITE_CANARY_ENABLED=False,
+            SCALP_LATENCY_SPREAD_RELIEF_CANARY_ENABLED=True,
+            SCALP_LATENCY_WS_JITTER_RELIEF_CANARY_ENABLED=False,
+            SCALP_LATENCY_OTHER_DANGER_RELIEF_CANARY_ENABLED=False,
+            SCALP_LATENCY_SPREAD_RELIEF_TAGS=("KOSPI_BASE",),
+            SCALP_LATENCY_SPREAD_RELIEF_MIN_SIGNAL_SCORE=60.0,
+            SCALP_LATENCY_SPREAD_RELIEF_MAX_SPREAD_RATIO=0.0150,
+        ),
+    )
+
+    stock = {"name": "TEST", "entry_momentum_tag": "KOSPI_BASE"}
+    result = evaluate_live_buy_entry(
+        stock=stock,
+        code="123456_spread_relief_momentum_tag_pass",
+        ws_data={
+            "curr": 10_020,
+            "last_ws_update_ts": datetime.now(UTC).timestamp(),
+            "orderbook": {
+                "asks": [{"price": 10_130, "volume": 100}],
+                "bids": [{"price": 10_020, "volume": 100}],
+            },
+        },
+        strategy_id="SCALPING",
+        planned_qty=2,
+        signal_price=10_000,
+        signal_strength=90.0,
+    )
+
+    assert result["decision"] == "ALLOW_NORMAL"
+    assert result["reason"] == "latency_spread_relief_normal_override"
+    assert result["latency_canary_applied"] is True
+    assert result["latency_canary_reason"] == "spread_relief_canary_applied"
+
+
+def test_latency_spread_relief_canary_enforces_effective_min_signal_floor(monkeypatch):
+    monkeypatch.setattr(
+        entry_latency_module,
+        "TRADING_RULES",
+        replace(
+            CONFIG,
+            SCALP_LATENCY_QUOTE_FRESH_COMPOSITE_CANARY_ENABLED=False,
+            SCALP_LATENCY_SIGNAL_QUALITY_QUOTE_COMPOSITE_CANARY_ENABLED=False,
+            SCALP_LATENCY_SPREAD_RELIEF_CANARY_ENABLED=True,
+            SCALP_LATENCY_WS_JITTER_RELIEF_CANARY_ENABLED=False,
+            SCALP_LATENCY_OTHER_DANGER_RELIEF_CANARY_ENABLED=False,
+            SCALP_LATENCY_SPREAD_RELIEF_TAGS=("SCANNER",),
+            SCALP_LATENCY_SPREAD_RELIEF_MIN_SIGNAL_SCORE=60.0,
+            SCALP_LATENCY_SPREAD_RELIEF_MAX_SPREAD_RATIO=0.0150,
+        ),
+    )
+
+    result = evaluate_live_buy_entry(
+        stock={"name": "TEST", "position_tag": "SCANNER"},
+        code="123456_spread_relief_low_score_blocked",
+        ws_data={
+            "curr": 10_020,
+            "last_ws_update_ts": datetime.now(UTC).timestamp(),
+            "orderbook": {
+                "asks": [{"price": 10_130, "volume": 100}],
+                "bids": [{"price": 10_020, "volume": 100}],
+            },
+        },
+        strategy_id="SCALPING",
+        planned_qty=2,
+        signal_price=10_000,
+        signal_strength=78.0,
+    )
+
+    assert result["decision"] == "REJECT_DANGER"
+    assert result["latency_canary_applied"] is False
+    assert result["latency_danger_reasons"] == "spread_too_wide"
+    assert result["latency_spread_relief_signal_score"] == 78.0
+    assert result["latency_spread_relief_configured_min_signal_score"] == 60.0
+    assert result["latency_spread_relief_effective_min_signal_score"] == 85.0
+    assert result["latency_spread_relief_tag"] == "SCANNER"
 
 
 def test_latency_spread_relief_canary_requires_spread_only_danger(monkeypatch):

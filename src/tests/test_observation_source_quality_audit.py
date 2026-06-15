@@ -906,6 +906,58 @@ def test_observation_source_quality_audit_accepts_scanner_source_guard_contracts
     assert report["status"] == "pass"
 
 
+def test_observation_source_quality_audit_accepts_early_accel_recheck_contracts(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
+    common_fields = {
+        "metric_role": "funnel_count",
+        "window_policy": "intraday_operator_runtime_retry",
+        "sample_floor": "not_applicable_operator_runtime_retry",
+        "primary_decision_metric": "funnel_count",
+        "runtime_effect": True,
+        "allowed_runtime_apply": False,
+        "forbidden_uses": "EV|rolling|MTD|cumulative_tuning|live_auto_promotion|runtime_apply_bridge",
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "decision_authority": "operator_runtime_observation_retry_only",
+        "source_quality_gate": "early_accel_recheck_contract_fields_present",
+        "scanner_promotion_reason": "probe_acceleration_confirmed",
+        "promotion_price": 12280,
+        "current_price": 12430,
+        "promotion_age_sec": "45.0",
+        "recheck_count": 0,
+        "last_ai_elapsed_sec": "25.0",
+        "skip_reason": "allowed",
+        "tick_accel": "1.250",
+        "micro_vwap_bp": "12.00",
+        "quote_stale": False,
+    }
+    _write_events(
+        tmp_path,
+        "2026-06-15",
+        [
+            _event("early_accel_recheck_evaluated", common_fields),
+            _event("early_accel_recheck_ai_call_allowed", common_fields),
+            _event(
+                "early_accel_recheck_skipped",
+                {
+                    **common_fields,
+                    "skip_reason": "tick_accel_below_min",
+                    "tick_accel": "0.900",
+                },
+            ),
+        ],
+    )
+
+    report = audit.build_observation_source_quality_audit("2026-06-15")
+
+    assert report["stage_contracts"]["early_accel_recheck_evaluated"]["status"] == "pass"
+    assert report["stage_contracts"]["early_accel_recheck_ai_call_allowed"]["status"] == "pass"
+    assert report["stage_contracts"]["early_accel_recheck_skipped"]["status"] == "pass"
+    assert report["status"] == "pass"
+
+
 def test_observation_source_quality_audit_accepts_s15_fast_track_contracts(
     monkeypatch, tmp_path
 ):
