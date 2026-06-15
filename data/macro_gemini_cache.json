@@ -1,85 +1,87 @@
 {
-  "bundle_as_of": "2026-06-14T22:20:23Z",
+  "bundle_as_of": "2026-06-15T22:20:26Z",
   "sp500": {
     "name": "S&P 500",
-    "value": 7431.46,
-    "prev_value": 7394.3,
-    "change": 37.16,
-    "change_pct": 0.5,
-    "as_of": "2026-06-12T20:00:00Z",
-    "source": "FactSet / Morningstar"
+    "value": 7554.29,
+    "prev_value": 7431.46,
+    "change": 122.83,
+    "change_pct": 1.65,
+    "as_of": "2026-06-15T20:00:00Z",
+    "source": "BOE Report"
   },
   "nasdaq": {
     "name": "NASDAQ Composite",
-    "value": 25888.84,
-    "prev_value": 25809.66,
-    "change": 79.18,
-    "change_pct": 0.31,
-    "as_of": "2026-06-12T20:00:00Z",
-    "source": "FactSet / Dow Jones"
+    "value": 26683.94,
+    "prev_value": 25888.84,
+    "change": 795.1,
+    "change_pct": 3.07,
+    "as_of": "2026-06-15T20:00:00Z",
+    "source": "BOE Report"
   },
   "vix": {
     "name": "VIX",
-    "value": 18.78,
-    "prev_value": 19.44,
-    "change": -0.66,
-    "change_pct": -3.4,
-    "as_of": "2026-06-12T20:00:00Z",
-    "source": "Cboe Global Markets"
+    "value": 16.79,
+    "prev_value": 17.68,
+    "change": -0.89,
+    "change_pct": -5.03,
+    "as_of": "2026-06-15T20:03:41Z",
+    "source": "RootData"
   },
   "us10y": {
     "name": "US 10-Year Treasury Yield",
-    "value": 4.49,
-    "prev_value": 4.47,
-    "change": 0.02,
-    "change_pct": null,
-    "as_of": "2026-06-12T20:00:00Z",
+    "value": 4.46,
+    "prev_value": 4.49,
+    "change": -0.03,
+    "change_pct": -0.67,
+    "as_of": "2026-06-15T22:20:26Z",
     "source": "Trading Economics"
   },
   "brent": {
     "name": "Brent Crude",
-    "value": 87.33,
-    "prev_value": 90.38,
-    "change": -3.05,
-    "change_pct": -3.37,
-    "as_of": "2026-06-12T20:00:00Z",
-    "source": "Trading Economics"
+    "value": 83.17,
+    "prev_value": 87.36,
+    "change": -4.19,
+    "change_pct": -4.8,
+    "as_of": "2026-06-15T22:20:26Z",
+    "source": "Los Angeles Times"
   },
   "headlines": [
     {
-      "title": "Trump says deal to end Iran war will be signed Sunday, as Iran disagrees on timing",
-      "source": "NPR",
-      "published_at": "2026-06-14T15:50:00Z",
-      "url": "https://www.npr.org/"
+      "title": "Global stocks soar and oil prices drop as U.S., Iran reach tentative deal to end war",
+      "source": "CBC",
+      "published_at": "2026-06-15T16:00:00Z",
+      "url": "https://www.cbc.ca/news/business/global-stocks-soar-oil-prices-drop"
     },
     {
-      "title": "U.S. and Iran to close deal within a day, Trump says, but Tehran yet to confirm",
-      "source": "The Washington Post",
-      "published_at": "2026-06-13T19:14:00Z",
-      "url": "https://www.washingtonpost.com/"
+      "title": "TSX hits new record high as oil prices slide after U.S.-Iran deal",
+      "source": "BOE Report",
+      "published_at": "2026-06-15T18:46:00Z",
+      "url": "https://boereport.com/2026/06/15/tsx-hits-new-record-high-as-oil-prices-slide-after-u-s-iran-deal/"
     },
     {
-      "title": "SpaceX Opens At $150—Surging 20% After Largest IPO Ever",
-      "source": "Forbes",
-      "published_at": "2026-06-12T16:00:00Z",
-      "url": "https://www.forbes.com/"
+      "title": "Stocks leap worldwide, and oil prices drop after the US and Iran reach a tentative deal on their war",
+      "source": "Los Angeles Times",
+      "published_at": "2026-06-15T20:21:00Z",
+      "url": "https://www.latimes.com/business/story/2026-06-15/stocks-leap-worldwide-and-oil-prices-drop-after-us-iran-tentative-deal"
     },
     {
-      "title": "West Asia war LIVE: Israel strikes in Beirut delays U.S.-Iran peace deal by few hours, say reports",
-      "source": "The Hindu",
-      "published_at": "2026-06-14T08:00:00Z",
-      "url": "https://www.thehindu.com/"
+      "title": "Oil prices drop to cheapest level since early days of Middle East conflict",
+      "source": "GPB",
+      "published_at": "2026-06-15T13:46:00Z",
+      "url": "https://www.gpb.org/news/2026/06/15/oil-prices-drop-to-cheapest-level-since-early-days-of-middle-east-conflict"
     },
     {
-      "title": "U.S. stocks rise after oil prices ease and SpaceX soars in its debut on Wall Street",
-      "source": "The Associated Press",
-      "published_at": "2026-06-12T20:40:00Z",
-      "url": "https://apnews.com/"
+      "title": "Hopes for an Extended Ceasefire Lift Stocks",
+      "source": "Charles Schwab",
+      "published_at": "2026-06-15T13:20:00Z",
+      "url": "https://www.schwab.com/learn/story/hopes-for-an-extended-ceasefire-lift-stocks"
     }
   ],
   "notes": [
-    "US Equities finished the week higher as the record-breaking SpaceX IPO boosted market sentiment and lifted AI infrastructure stocks.",
-    "Brent crude prices retreated sharply amid optimism that an imminent peace deal between the US and Iran could quickly reopen the Strait of Hormuz to commercial shipping.",
-    "Treasury yields remained elevated as the 10-year note climbed to 4.49% despite softer energy prices."
+    "Equities rallied and oil prices fell significantly following the announcement of a tentative peace deal and extended ceasefire between the US and Iran.",
+    "The tentative agreement includes the reopening of the Strait of Hormuz, easing global inflation and energy supply fears.",
+    "S&P 500 closed up roughly 1.65% at 7554.29, while the NASDAQ surged over 3% as risk-on sentiment returned to the markets.",
+    "Brent Crude dropped nearly 5% to the low $83 range on the prospect of resumed crude flows.",
+    "VIX fell over 5% as market volatility expectations cooled on the geopolitical breakthrough."
   ]
 }
