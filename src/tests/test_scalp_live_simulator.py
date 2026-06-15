@@ -1880,6 +1880,7 @@ def test_scalp_sim_active_seed_matches_first_ai_wait_wait6579_parent(monkeypatch
     )
 
     assert fields["scalp_sim_active_priority_seed_matched"] is True
+    assert fields["active_seed_match_eligible"] is True
     assert fields["active_seed_id"] == "active_seed_wait6579"
     assert json.loads(fields["active_seed_candidate_observable_prefix"]) == {
         "entry_score_parent": "score_watch_recovery",
@@ -1928,6 +1929,7 @@ def test_scalp_sim_active_seed_ignores_inactive_catalog_seed(monkeypatch, tmp_pa
     )
 
     assert fields["scalp_sim_active_priority_seed_matched"] is False
+    assert fields["active_seed_match_eligible"] is True
     assert "active_seed_id" not in fields
     assert fields["active_seed_match_source"] == "no_match"
     cache = state_handlers._load_scalp_sim_auto_policy_cache()
@@ -1975,6 +1977,8 @@ def test_scalp_sim_active_seed_blocks_stale_apply_date_policy(monkeypatch, tmp_p
     )
 
     assert fields["scalp_sim_active_priority_seed_matched"] is False
+    assert fields["active_seed_match_eligible"] is False
+    assert fields["active_seed_match_exclusion_reason"] == "policy_stale_source_date_mismatch"
     assert "active_seed_id" not in fields
     assert fields["active_seed_match_blocked_reason"] == "policy_stale_source_date_mismatch"
     assert fields["active_seed_match_source"] == "policy_stale_source_date_mismatch"
@@ -2024,6 +2028,8 @@ def test_scalp_sim_active_seed_blocks_missing_source_date_in_runtime_apply(monke
     )
 
     assert fields["scalp_sim_active_priority_seed_matched"] is False
+    assert fields["active_seed_match_eligible"] is False
+    assert fields["active_seed_match_exclusion_reason"] == "policy_source_date_missing"
     assert "active_seed_id" not in fields
     assert fields["active_seed_match_blocked_reason"] == "policy_source_date_missing"
     assert fields["active_seed_match_source"] == "policy_source_date_missing"
@@ -2073,6 +2079,8 @@ def test_scalp_sim_active_seed_unmatched_new_axis_preserves_taxonomy_contract(mo
     )
 
     assert fields["scalp_sim_active_priority_seed_matched"] is False
+    assert fields["active_seed_match_eligible"] is False
+    assert fields["active_seed_match_exclusion_reason"] == "entry_source_taxonomy_pending_runtime_effect_blocked"
     assert "active_seed_id" not in fields
     assert json.loads(fields["active_seed_candidate_observable_prefix"]) == {
         "entry_score_parent": "score_watch_recovery",

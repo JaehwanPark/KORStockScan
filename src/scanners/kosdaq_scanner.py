@@ -51,7 +51,10 @@ def build_kosdaq_candidate_map(raw_targets, supernova_targets):
             'Code': code,
             'Name': t.get('Name', t.get('name', 'Unknown')),
             'Price': t.get('Price', t.get('cur_prc', 0)),
-            'flu_rate': t.get('FluRate', t.get('flu_rate', 0.0)),
+            'flu_rate': t.get('OpenFluRate', t.get('FluRate', t.get('flu_rate', 0.0))),
+            'open_flu_rate': t.get('OpenFluRate', t.get('FluRate', t.get('flu_rate', 0.0))),
+            'day_flu_rate': t.get('DayFluRate', 0.0),
+            'flu_rate_metric': 'open_flu_rate',
             'spike_rate': 0.0,
             'source': 'TOP'
         }

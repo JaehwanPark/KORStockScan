@@ -42,6 +42,31 @@ ALLOWED_STATES = {
     "real_canary_requestable",
 }
 
+ACTIVE_SEED_MATCH_ELIGIBLE_FOLLOWUP_STAGES = {
+    "scalp_sim_entry_ai_price_applied",
+    "scalp_sim_entry_ai_price_skip_order",
+    "scalp_sim_entry_submit_revalidation_warning",
+    "scalp_sim_entry_submit_revalidation_block",
+    "scalp_sim_pre_submit_liquidity_guard_would_block",
+    "scalp_sim_pre_submit_liquidity_guard_would_pass",
+    "scalp_sim_pre_submit_overbought_guard_would_block",
+    "scalp_sim_pre_submit_overbought_guard_would_pass",
+    "scalp_sim_buy_order_virtual_pending",
+    "scalp_sim_buy_order_assumed_filled",
+    "scalp_sim_holding_started",
+    "scalp_sim_scale_in_order_assumed_filled",
+    "scalp_sim_scale_in_order_unfilled",
+    "scalp_sim_sell_order_assumed_filled",
+    "scalp_sim_entry_unpriced",
+    "scalp_sim_entry_expired",
+}
+
+ACTIVE_SEED_MATCH_NOT_ELIGIBLE_STAGES = {
+    "scalp_sim_panic_scale_in_blocked",
+    "scalp_sim_panic_bottoming_entry_allowed",
+    "scalp_sim_panic_level1_entry_observed",
+}
+
 
 def report_paths(target_date: str) -> tuple[Path, Path]:
     base = REPORT_DIR / f"{REPORT_TYPE}_{target_date}"
@@ -80,6 +105,29 @@ def _safe_int(value: Any, default: int = 0) -> int:
         return int(float(value))
     except Exception:
         return default
+
+
+def _bool_field(value: Any, default: bool | None = None) -> bool | None:
+    if isinstance(value, bool):
+        return value
+    raw = str(value or "").strip().lower()
+    if raw in {"1", "true", "yes", "y", "on"}:
+        return True
+    if raw in {"0", "false", "no", "n", "off"}:
+        return False
+    return default
+
+
+def _active_seed_default_match_eligible(*, stage: str, seed_id: str, matched: str) -> bool:
+    if stage == "scalp_sim_entry_armed":
+        return True
+    if seed_id:
+        return True
+    if stage in ACTIVE_SEED_MATCH_NOT_ELIGIBLE_STAGES:
+        return False
+    if stage in ACTIVE_SEED_MATCH_ELIGIBLE_FOLLOWUP_STAGES:
+        return True
+    return matched == "true"
 
 
 def _runtime_apply_path(target_date: str) -> Path:
@@ -276,7 +324,12 @@ def _event_field_values(target_date: str, tracked_values: dict[str, set[str]] | 
         "active_seed_candidate_new_entry_unmatched_event_count": 0,
         "active_seed_candidate_followup_unmatched_event_count": 0,
         "active_seed_candidate_without_seed_id_event_count": 0,
+        "active_seed_candidate_raw_without_seed_id_event_count": 0,
         "active_seed_candidate_followup_without_seed_id_event_count": 0,
+        "active_seed_candidate_raw_followup_without_seed_id_event_count": 0,
+        "active_seed_candidate_eligible_event_count": 0,
+        "active_seed_candidate_not_match_eligible_event_count": 0,
+        "active_seed_candidate_not_match_eligible_reason_counts": {},
         "active_seed_candidate_followup_stage_counts": {},
         "panic_scale_in_event_count": 0,
         "panic_scale_in_unique_sim_record_count": 0,
@@ -328,26 +381,52 @@ def _event_field_values(target_date: str, tracked_values: dict[str, set[str]] | 
                     policy_diag["active_seed_candidate_event_count"] += 1
                     seed_id = str(fields.get("active_seed_id") or "").strip()
                     matched = str(fields.get("scalp_sim_active_priority_seed_matched") or "").strip().lower()
+                    explicit_eligible = _bool_field(fields.get("active_seed_match_eligible"), None)
+                    exclusion_reason = str(fields.get("active_seed_match_exclusion_reason") or "").strip()
+                    if explicit_eligible is None:
+                        eligible = _active_seed_default_match_eligible(
+                            stage=stage,
+                            seed_id=seed_id,
+                            matched=matched,
+                        )
+                    else:
+                        eligible = explicit_eligible
+                    if not eligible:
+                        reason = exclusion_reason or (
+                            "diagnostic_followup_without_seed_context"
+                            if stage != "scalp_sim_entry_armed"
+                            else "not_match_eligible"
+                        )
+                        policy_diag["active_seed_candidate_not_match_eligible_event_count"] += 1
+                        reason_counts = policy_diag["active_seed_candidate_not_match_eligible_reason_counts"]
+                        reason_counts[reason] = reason_counts.get(reason, 0) + 1
+                    else:
+                        policy_diag["active_seed_candidate_eligible_event_count"] += 1
                     if stage == "scalp_sim_entry_armed":
                         policy_diag["active_seed_candidate_new_entry_event_count"] += 1
                     else:
                         policy_diag["active_seed_candidate_followup_event_count"] += 1
                         followup_counts = policy_diag["active_seed_candidate_followup_stage_counts"]
                         followup_counts[stage or "unknown"] = followup_counts.get(stage or "unknown", 0) + 1
-                    if seed_id:
-                        policy_diag["active_seed_candidate_matched_event_count"] += 1
-                    elif matched == "true":
-                        policy_diag["active_seed_candidate_matched_true_without_seed_id_event_count"] += 1
-                    else:
-                        policy_diag["active_seed_candidate_unmatched_event_count"] += 1
-                        if stage == "scalp_sim_entry_armed":
-                            policy_diag["active_seed_candidate_new_entry_unmatched_event_count"] += 1
-                        else:
-                            policy_diag["active_seed_candidate_followup_unmatched_event_count"] += 1
                     if not seed_id:
-                        policy_diag["active_seed_candidate_without_seed_id_event_count"] += 1
+                        policy_diag["active_seed_candidate_raw_without_seed_id_event_count"] += 1
                         if stage != "scalp_sim_entry_armed":
-                            policy_diag["active_seed_candidate_followup_without_seed_id_event_count"] += 1
+                            policy_diag["active_seed_candidate_raw_followup_without_seed_id_event_count"] += 1
+                    if eligible:
+                        if seed_id:
+                            policy_diag["active_seed_candidate_matched_event_count"] += 1
+                        elif matched == "true":
+                            policy_diag["active_seed_candidate_matched_true_without_seed_id_event_count"] += 1
+                        else:
+                            policy_diag["active_seed_candidate_unmatched_event_count"] += 1
+                            if stage == "scalp_sim_entry_armed":
+                                policy_diag["active_seed_candidate_new_entry_unmatched_event_count"] += 1
+                            else:
+                                policy_diag["active_seed_candidate_followup_unmatched_event_count"] += 1
+                        if not seed_id:
+                            policy_diag["active_seed_candidate_without_seed_id_event_count"] += 1
+                            if stage != "scalp_sim_entry_armed":
+                                policy_diag["active_seed_candidate_followup_without_seed_id_event_count"] += 1
                 if stage == "scalp_sim_panic_scale_in_blocked":
                     policy_diag["panic_scale_in_event_count"] += 1
                     sim_record_id = str(
@@ -1276,16 +1355,32 @@ def build_key_lineage_ledger(target_date: str) -> dict[str, Any]:
             "active_seed_candidate_without_seed_id_event_count": _safe_int(
                 active_policy_observation.get("active_seed_candidate_without_seed_id_event_count")
             ),
+            "active_seed_candidate_raw_without_seed_id_event_count": _safe_int(
+                active_policy_observation.get("active_seed_candidate_raw_without_seed_id_event_count")
+            ),
             "active_seed_candidate_followup_without_seed_id_event_count": _safe_int(
                 active_policy_observation.get("active_seed_candidate_followup_without_seed_id_event_count")
             ),
+            "active_seed_candidate_raw_followup_without_seed_id_event_count": _safe_int(
+                active_policy_observation.get("active_seed_candidate_raw_followup_without_seed_id_event_count")
+            ),
+            "active_seed_candidate_eligible_event_count": _safe_int(
+                active_policy_observation.get("active_seed_candidate_eligible_event_count")
+            ),
+            "active_seed_candidate_not_match_eligible_event_count": _safe_int(
+                active_policy_observation.get("active_seed_candidate_not_match_eligible_event_count")
+            ),
+            "active_seed_candidate_not_match_eligible_reason_counts": active_policy_observation.get(
+                "active_seed_candidate_not_match_eligible_reason_counts"
+            )
+            or {},
             "active_seed_candidate_followup_stage_counts": active_policy_observation.get(
                 "active_seed_candidate_followup_stage_counts"
             )
             or {},
             "active_seed_candidate_validation_scope": (
-                "new_entry_events_only_validate_active_seed_apply; "
-                "followup_events_are_existing_sim_context_provenance"
+                "eligible new_entry/followup events validate active_seed_id; "
+                "diagnostic or observation-only events are not_match_eligible"
             ),
             "panic_scale_in_event_count": _safe_int(
                 active_policy_observation.get("panic_scale_in_event_count")
@@ -1414,6 +1509,9 @@ def _render_markdown(report: dict[str, Any]) -> str:
         f"counts=`{summary.get('active_sim_priority_entry_source_taxonomy_contract_counts') or {}}`",
         f"- event IO guard: `{summary.get('event_io_guard') or {}}`",
         f"- active seed candidate validation: total=`{summary.get('active_seed_candidate_event_count', 0)}` "
+        f"eligible=`{summary.get('active_seed_candidate_eligible_event_count', 0)}` "
+        f"not_match_eligible=`{summary.get('active_seed_candidate_not_match_eligible_event_count', 0)}` "
+        f"not_match_eligible_reasons=`{summary.get('active_seed_candidate_not_match_eligible_reason_counts') or {}}` "
         f"new_entry=`{summary.get('active_seed_candidate_new_entry_event_count', 0)}` "
         f"followup=`{summary.get('active_seed_candidate_followup_event_count', 0)}` "
         f"matched=`{summary.get('active_seed_candidate_matched_event_count', 0)}` "
@@ -1421,8 +1519,10 @@ def _render_markdown(report: dict[str, Any]) -> str:
         f"unmatched=`{summary.get('active_seed_candidate_unmatched_event_count', 0)}` "
         f"new_entry_unmatched=`{summary.get('active_seed_candidate_new_entry_unmatched_event_count', 0)}` "
         f"followup_unmatched=`{summary.get('active_seed_candidate_followup_unmatched_event_count', 0)}` "
-        f"without_seed_id=`{summary.get('active_seed_candidate_without_seed_id_event_count', 0)}` "
-        f"followup_without_seed_id=`{summary.get('active_seed_candidate_followup_without_seed_id_event_count', 0)}`",
+        f"eligible_without_seed_id=`{summary.get('active_seed_candidate_without_seed_id_event_count', 0)}` "
+        f"raw_without_seed_id=`{summary.get('active_seed_candidate_raw_without_seed_id_event_count', 0)}` "
+        f"eligible_followup_without_seed_id=`{summary.get('active_seed_candidate_followup_without_seed_id_event_count', 0)}` "
+        f"raw_followup_without_seed_id=`{summary.get('active_seed_candidate_raw_followup_without_seed_id_event_count', 0)}`",
         f"- panic scale-in no-match: events=`{summary.get('panic_scale_in_no_match_event_count', 0)}` "
         f"unique_sim_records=`{summary.get('panic_scale_in_no_match_unique_sim_record_count', 0)}` "
         f"missing_sim_record_id=`{summary.get('panic_scale_in_no_match_missing_sim_record_id_event_count', 0)}` "

@@ -742,9 +742,25 @@ def build_conversion_lane(target_date: str) -> dict[str, Any]:
         "active_seed_candidate_without_seed_id_event_count": _safe_int(
             (key_ledger.get("summary") or {}).get("active_seed_candidate_without_seed_id_event_count")
         ),
+        "active_seed_candidate_raw_without_seed_id_event_count": _safe_int(
+            (key_ledger.get("summary") or {}).get("active_seed_candidate_raw_without_seed_id_event_count")
+        ),
         "active_seed_candidate_followup_without_seed_id_event_count": _safe_int(
             (key_ledger.get("summary") or {}).get("active_seed_candidate_followup_without_seed_id_event_count")
         ),
+        "active_seed_candidate_raw_followup_without_seed_id_event_count": _safe_int(
+            (key_ledger.get("summary") or {}).get("active_seed_candidate_raw_followup_without_seed_id_event_count")
+        ),
+        "active_seed_candidate_eligible_event_count": _safe_int(
+            (key_ledger.get("summary") or {}).get("active_seed_candidate_eligible_event_count")
+        ),
+        "active_seed_candidate_not_match_eligible_event_count": _safe_int(
+            (key_ledger.get("summary") or {}).get("active_seed_candidate_not_match_eligible_event_count")
+        ),
+        "active_seed_candidate_not_match_eligible_reason_counts": (key_ledger.get("summary") or {}).get(
+            "active_seed_candidate_not_match_eligible_reason_counts"
+        )
+        or {},
         "active_seed_candidate_validation_scope": (key_ledger.get("summary") or {}).get(
             "active_seed_candidate_validation_scope"
         ),
@@ -831,6 +847,9 @@ def _render_markdown(report: dict[str, Any]) -> str:
         f"- active sim taxonomy contracts: pending=`{summary.get('active_sim_priority_pending_taxonomy_contract_count', 0)}` "
         f"counts=`{summary.get('active_sim_priority_entry_source_taxonomy_contract_counts') or {}}`",
         f"- active seed candidate validation: total=`{summary.get('active_seed_candidate_event_count', 0)}` "
+        f"eligible=`{summary.get('active_seed_candidate_eligible_event_count', 0)}` "
+        f"not_match_eligible=`{summary.get('active_seed_candidate_not_match_eligible_event_count', 0)}` "
+        f"not_match_eligible_reasons=`{summary.get('active_seed_candidate_not_match_eligible_reason_counts') or {}}` "
         f"new_entry=`{summary.get('active_seed_candidate_new_entry_event_count', 0)}` "
         f"followup=`{summary.get('active_seed_candidate_followup_event_count', 0)}` "
         f"matched=`{summary.get('active_seed_candidate_matched_event_count', 0)}` "
@@ -838,8 +857,10 @@ def _render_markdown(report: dict[str, Any]) -> str:
         f"unmatched=`{summary.get('active_seed_candidate_unmatched_event_count', 0)}` "
         f"new_entry_unmatched=`{summary.get('active_seed_candidate_new_entry_unmatched_event_count', 0)}` "
         f"followup_unmatched=`{summary.get('active_seed_candidate_followup_unmatched_event_count', 0)}` "
-        f"without_seed_id=`{summary.get('active_seed_candidate_without_seed_id_event_count', 0)}` "
-        f"followup_without_seed_id=`{summary.get('active_seed_candidate_followup_without_seed_id_event_count', 0)}`",
+        f"eligible_without_seed_id=`{summary.get('active_seed_candidate_without_seed_id_event_count', 0)}` "
+        f"raw_without_seed_id=`{summary.get('active_seed_candidate_raw_without_seed_id_event_count', 0)}` "
+        f"eligible_followup_without_seed_id=`{summary.get('active_seed_candidate_followup_without_seed_id_event_count', 0)}` "
+        f"raw_followup_without_seed_id=`{summary.get('active_seed_candidate_raw_followup_without_seed_id_event_count', 0)}`",
         f"- panic scale-in no-match: events=`{summary.get('panic_scale_in_no_match_event_count', 0)}` "
         f"unique_sim_records=`{summary.get('panic_scale_in_no_match_unique_sim_record_count', 0)}` "
         f"missing_sim_record_id=`{summary.get('panic_scale_in_no_match_missing_sim_record_id_event_count', 0)}` "

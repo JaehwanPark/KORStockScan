@@ -158,7 +158,7 @@ def _scanner_flu_metric(target):
     if "VI_TRIGGERED" in source_set:
         vi_rate, has_vi = _scanner_rate_from_field(target, "ViFluRate")
         if has_vi:
-            return vi_rate, "vi_disparity_or_open_rate", "VI_TRIGGERED"
+            return vi_rate, str(target.get("ViFluRateMetric") or "vi_open_flu_rate"), "VI_TRIGGERED"
 
     if "SUPERNOVA" in source_set:
         supernova_rate, has_supernova = _scanner_rate_from_field(target, "SupernovaFluRate")
@@ -256,7 +256,7 @@ def _freshness_score(target):
     }.get(str(target.get("Source") or "OPEN_TOP"), 0.0)
     priority_score = _bounded(target.get("PriorityScore"), 0.0, 300.0)
     spike_rate = _bounded(target.get("SpikeRate"), 0.0, 350.0)
-    flu_rate, _, _ = _scanner_flu_metric(target)
+    flu_rate, flu_metric, _ = _scanner_flu_metric(target)
     cntr_str = _bounded(target.get("CntrStr"), 0.0, 180.0)
     trade_value = _safe_positive_int(target.get("TradeValue"))
     source_set = set(target.get("SourceSet") or [])
@@ -273,6 +273,8 @@ def _freshness_score(target):
 
     source_count_score = min(320.0, max(0, len(source_set) - 1) * 100.0)
     flu_score = _bounded(flu_rate * 8.0, 0.0, 220.0)
+    if flu_metric in {"vi_dynamic_disparity_rate", "vi_static_disparity_rate"}:
+        flu_score = 0.0
 
     return (
         source_bias
@@ -338,6 +340,24 @@ def _merge_candidate(candidate_pool, raw_target, source):
     elif source == "VI_TRIGGERED":
         if raw_flu_present:
             current["ViFluRate"] = raw_flu_rate
+        if raw_target.get("ViOpenFluRate") not in (None, ""):
+            current["ViOpenFluRate"] = _safe_float(raw_target.get("ViOpenFluRate"))
+        if raw_target.get("ViDynamicDisparityRate") not in (None, ""):
+            current["ViDynamicDisparityRate"] = _safe_float(raw_target.get("ViDynamicDisparityRate"))
+        if raw_target.get("ViStaticDisparityRate") not in (None, ""):
+            current["ViStaticDisparityRate"] = _safe_float(raw_target.get("ViStaticDisparityRate"))
+        if raw_target.get("ViFluRateMetric"):
+            current["ViFluRateMetric"] = str(raw_target.get("ViFluRateMetric"))
+        if "ViFluRate" not in current:
+            if "ViOpenFluRate" in current:
+                current["ViFluRate"] = current["ViOpenFluRate"]
+                current.setdefault("ViFluRateMetric", "vi_open_flu_rate")
+            elif "ViDynamicDisparityRate" in current:
+                current["ViFluRate"] = current["ViDynamicDisparityRate"]
+                current.setdefault("ViFluRateMetric", "vi_dynamic_disparity_rate")
+            elif "ViStaticDisparityRate" in current:
+                current["ViFluRate"] = current["ViStaticDisparityRate"]
+                current.setdefault("ViFluRateMetric", "vi_static_disparity_rate")
     elif source == "SUPERNOVA":
         if raw_flu_present:
             current["SupernovaFluRate"] = raw_flu_rate
@@ -813,9 +833,11 @@ def promote_candidates(db, event_bus, ranked_targets, recent_picks, *, max_new_c
 
         score = _freshness_score(target)
         source_sig = ",".join(_source_signature(target))
+        display_flu, display_flu_metric, display_flu_source = _scanner_flu_metric(target)
         print(
             f"🎯 [타겟 포착] {target['Name']} "
-            f"(등락률: +{target['FluRate']}%, 체결강도: {_format_strength_display(target)}, "
+            f"(등락률: +{display_flu:.2f}% [{display_flu_metric}/{display_flu_source}], "
+            f"체결강도: {_format_strength_display(target)}, "
             f"신선도점수: {score:.1f} | 출처: {target['Source']} [{source_sig}])"
         )
         try:

@@ -4325,6 +4325,96 @@ def test_build_code_improvement_workorder_skips_adm_followup_when_instrumentatio
     assert all(item["order_id"] != "order_holding_exit_decision_matrix_edge_counterfactual" for item in report["orders"])
 
 
+def test_build_code_improvement_workorder_skips_adm_followup_when_matrix_contract_closed(
+    tmp_path,
+    monkeypatch,
+):
+    scalping_dir = tmp_path / "scalping"
+    ev_dir = tmp_path / "ev"
+    matrix_dir = tmp_path / "holding-exit-matrix"
+    report_dir = tmp_path / "report"
+    doc_dir = tmp_path / "docs"
+    scalping_dir.mkdir()
+    ev_dir.mkdir()
+    matrix_dir.mkdir()
+    (scalping_dir / "scalping_pattern_lab_automation_2026-05-11.json").write_text(
+        json.dumps(
+            {
+                "date": "2026-05-11",
+                "consensus_findings": [],
+                "solo_findings": [],
+                "auto_family_candidates": [],
+                "code_improvement_orders": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (ev_dir / "threshold_cycle_ev_2026-05-11.json").write_text(
+        json.dumps(
+            {
+                "calibration_outcome": {
+                    "decisions": [
+                        {
+                            "family": "holding_exit_decision_matrix_advisory",
+                            "calibration_state": "hold_no_edge",
+                            "sample_count": 42,
+                            "sample_floor": 20,
+                            "source_metrics": {
+                                "counterfactual_gap_count": 42,
+                                "eligible_but_not_chosen_sample_snapshots": 0,
+                                "eligible_but_not_chosen_post_sell_joined_candidates": 0,
+                                "counterfactual_proxy_missing_actions": ["hold_defer", "avg_down_wait"],
+                            },
+                        }
+                    ]
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    (matrix_dir / "holding_exit_decision_matrix_2026-05-11.json").write_text(
+        json.dumps(
+            {
+                "instrumentation_status": "implemented",
+                "runtime_change": False,
+                "summary": {
+                    "non_no_clear_edge_count": 3,
+                    "per_action_edge_buckets": {"hold_defer": {}, "exit_only": {}},
+                },
+                "counterfactual_proxy_summary": {
+                    "ready": True,
+                    "actions_present": ["hold_defer", "exit_only", "avg_down_wait", "pyramid_wait"],
+                    "per_action_samples": {
+                        "hold_defer": 10,
+                        "exit_only": 8,
+                        "avg_down_wait": 7,
+                        "pyramid_wait": 6,
+                    },
+                    "per_action_joined": {
+                        "hold_defer": 0,
+                        "exit_only": 0,
+                        "avg_down_wait": 0,
+                        "pyramid_wait": 0,
+                    },
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", scalping_dir)
+    monkeypatch.setattr(mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing")
+    monkeypatch.setattr(mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-swing-lab")
+    monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", ev_dir)
+    monkeypatch.setattr(mod, "HOLDING_EXIT_DECISION_MATRIX_DIR", matrix_dir)
+    monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_DIR", doc_dir)
+
+    report = mod.build_code_improvement_workorder("2026-05-11", max_orders=5)
+
+    assert report["summary"]["threshold_ev_source_order_count"] == 0
+    assert all(item["order_id"] != "order_holding_exit_decision_matrix_edge_counterfactual" for item in report["orders"])
+
+
 def test_build_code_improvement_workorder_moves_closed_latency_instrumentation_to_existing_family(
     tmp_path,
     monkeypatch,

@@ -472,6 +472,8 @@ def _scalp_active_seed_match_fields(
         return {
             "scalp_sim_active_priority_seed_matched": False,
             "active_seed_candidate_observable_prefix": json.dumps(candidate_prefix, ensure_ascii=True, sort_keys=True),
+            "active_seed_match_eligible": False,
+            "active_seed_match_exclusion_reason": "entry_source_taxonomy_pending_runtime_effect_blocked",
             "active_seed_match_blocked_reason": "entry_source_taxonomy_pending_runtime_effect_blocked",
             "active_seed_match_source": "no_match",
             **taxonomy_fields,
@@ -480,6 +482,8 @@ def _scalp_active_seed_match_fields(
         return {
             "scalp_sim_active_priority_seed_matched": False,
             "active_seed_candidate_observable_prefix": json.dumps(candidate_prefix, ensure_ascii=True, sort_keys=True),
+            "active_seed_match_eligible": False,
+            "active_seed_match_exclusion_reason": policy_status,
             "active_seed_match_blocked_reason": policy_status,
             "active_seed_match_source": policy_status,
             **taxonomy_fields,
@@ -498,6 +502,7 @@ def _scalp_active_seed_match_fields(
         return {
             "scalp_sim_active_priority_seed_matched": False,
             "active_seed_candidate_observable_prefix": json.dumps(candidate_prefix, ensure_ascii=True, sort_keys=True),
+            "active_seed_match_eligible": True,
             "active_seed_match_source": "no_match",
             **taxonomy_fields,
         }
@@ -505,6 +510,7 @@ def _scalp_active_seed_match_fields(
         return {
             "scalp_sim_active_priority_seed_matched": False,
             "active_seed_candidate_observable_prefix": json.dumps(candidate_prefix, ensure_ascii=True, sort_keys=True),
+            "active_seed_match_eligible": True,
             "active_seed_match_blocked_reason": "active_seed_inactive_not_runtime_eligible",
             "active_seed_status": seed.get("status"),
             "active_seed_match_source": "inactive_seed_blocked",
@@ -512,6 +518,7 @@ def _scalp_active_seed_match_fields(
         }
     return {
         "scalp_sim_active_priority_seed_matched": True,
+        "active_seed_match_eligible": True,
         "active_seed_id": seed.get("active_seed_id"),
         "source_parent_bucket_id": seed.get("source_parent_bucket_id"),
         "active_seed_status": seed.get("status"),
@@ -3396,6 +3403,8 @@ def _scalp_sim_candidate_window_context_fields(source: dict | None) -> dict:
         "active_seed_match_source",
         "active_seed_observable_prefix",
         "active_seed_candidate_observable_prefix",
+        "active_seed_match_eligible",
+        "active_seed_match_exclusion_reason",
         "active_seed_match_blocked_reason",
         "active_seed_quota_policy_version",
         "active_seed_daily_total_share_pct",

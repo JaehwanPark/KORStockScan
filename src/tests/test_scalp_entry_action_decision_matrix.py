@@ -903,6 +903,224 @@ def test_scalp_entry_adm_pre_submit_missing_context_is_not_available(tmp_path, m
     assert unknown_summary["not_available_dimension_counts"]["price_resolution_bucket"] == 1
 
 
+def test_scalp_entry_adm_post_entry_missing_score_is_not_available(tmp_path, monkeypatch):
+    pipeline_dir = tmp_path / "pipeline_events"
+    report_dir = tmp_path / "report" / "scalp_entry_action_decision_matrix"
+    monkeypatch.setattr(mod, "PIPELINE_EVENT_DIR", pipeline_dir)
+    monkeypatch.setattr(mod, "THRESHOLD_EVENT_DIR", tmp_path / "threshold_cycle")
+    monkeypatch.setattr(mod, "THRESHOLD_SNAPSHOT_DIR", tmp_path / "threshold_cycle" / "snapshots")
+    monkeypatch.setattr(mod, "POST_SELL_DIR", tmp_path / "post_sell")
+    monkeypatch.setattr(mod, "ADM_REPORT_DIR", report_dir)
+
+    _write_jsonl(
+        pipeline_dir / "pipeline_events_2026-05-18.jsonl",
+        [
+            {
+                "stage": "scalp_sim_sell_order_assumed_filled",
+                "stock_code": "111111",
+                "record_id": "R1",
+                "emitted_at": "2026-05-18T10:10:00",
+                "emitted_date": "2026-05-18",
+                "fields": {
+                    "chosen_action": "WAIT_REQUOTE",
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                    "entry_adm_risk_context_bucket": "neutral_strength_momentum",
+                    "entry_adm_stale_bucket": "fresh",
+                    "entry_adm_price_resolution_bucket": "quote_based",
+                    "entry_adm_liquidity_bucket": "liquidity_high",
+                    "entry_adm_overbought_bucket": "overbought_normal",
+                },
+            }
+        ],
+    )
+
+    report = mod.build_scalp_entry_action_decision_matrix_report("2026-05-18")
+    row = report["rows"][0]
+    unknown_summary = report["summary"]["unknown_bucket_summary"]
+
+    assert row["score_bucket"] == "score_not_available"
+    assert "score_bucket" not in unknown_summary["dimension_counts"]
+    assert unknown_summary["not_available_dimension_counts"]["score_bucket"] == 1
+    assert unknown_summary["score_root_cause_counts"]["not_applicable"] == 1
+    assert "unknown_bucket_source_quality_gap" not in report["warnings"]
+
+
+def test_scalp_entry_adm_pre_submit_missing_score_backfills_from_nearby_entry_event(tmp_path, monkeypatch):
+    pipeline_dir = tmp_path / "pipeline_events"
+    report_dir = tmp_path / "report" / "scalp_entry_action_decision_matrix"
+    monkeypatch.setattr(mod, "PIPELINE_EVENT_DIR", pipeline_dir)
+    monkeypatch.setattr(mod, "THRESHOLD_EVENT_DIR", tmp_path / "threshold_cycle")
+    monkeypatch.setattr(mod, "THRESHOLD_SNAPSHOT_DIR", tmp_path / "threshold_cycle" / "snapshots")
+    monkeypatch.setattr(mod, "POST_SELL_DIR", tmp_path / "post_sell")
+    monkeypatch.setattr(mod, "ADM_REPORT_DIR", report_dir)
+
+    _write_jsonl(
+        pipeline_dir / "pipeline_events_2026-05-18.jsonl",
+        [
+            {
+                "stage": "blocked_ai_score",
+                "stock_code": "111111",
+                "record_id": "R1",
+                "emitted_at": "2026-05-18T09:10:00",
+                "emitted_date": "2026-05-18",
+                "fields": {
+                    "ai_score": 66,
+                    "chosen_action": "NO_BUY_AI",
+                },
+            },
+            {
+                "stage": "scalp_sim_pre_submit_liquidity_guard_would_block",
+                "stock_code": "111111",
+                "record_id": "R2",
+                "emitted_at": "2026-05-18T09:10:30",
+                "emitted_date": "2026-05-18",
+                "fields": {
+                    "source_stage": "entry_pre_submit",
+                    "chosen_action": "SKIP_PRE_SUBMIT_SAFETY",
+                    "entry_adm_risk_context_bucket": "neutral_strength_momentum",
+                    "entry_adm_stale_bucket": "fresh",
+                    "entry_adm_price_resolution_bucket": "quote_based",
+                    "entry_adm_liquidity_bucket": "below_min_liquidity",
+                    "entry_adm_overbought_bucket": "overbought_normal",
+                },
+            },
+        ],
+    )
+
+    report = mod.build_scalp_entry_action_decision_matrix_report("2026-05-18")
+    rows = {row["record_id"]: row for row in report["rows"]}
+    row = rows["R2"]
+    unknown_summary = report["summary"]["unknown_bucket_summary"]
+
+    assert row["score_bucket"] == "score65_74"
+    assert row["score_source_value"] == 66.0
+    assert row["score_backfill_source"] == "prior_score_event"
+    assert row["score_backfill_match_type"] == "prior_same_stock_time"
+    assert row["bucket_field_provenance"]["score_bucket"] == "backfilled"
+    assert "score_bucket" not in unknown_summary["dimension_counts"]
+    assert unknown_summary["score_root_cause_counts"]["backfilled"] >= 1
+    assert unknown_summary["score_backfill_match_type_counts"]["prior_same_stock_time"] >= 1
+
+
+def test_scalp_entry_adm_score_backfill_does_not_use_future_event(tmp_path, monkeypatch):
+    pipeline_dir = tmp_path / "pipeline_events"
+    report_dir = tmp_path / "report" / "scalp_entry_action_decision_matrix"
+    monkeypatch.setattr(mod, "PIPELINE_EVENT_DIR", pipeline_dir)
+    monkeypatch.setattr(mod, "THRESHOLD_EVENT_DIR", tmp_path / "threshold_cycle")
+    monkeypatch.setattr(mod, "THRESHOLD_SNAPSHOT_DIR", tmp_path / "threshold_cycle" / "snapshots")
+    monkeypatch.setattr(mod, "POST_SELL_DIR", tmp_path / "post_sell")
+    monkeypatch.setattr(mod, "ADM_REPORT_DIR", report_dir)
+
+    _write_jsonl(
+        pipeline_dir / "pipeline_events_2026-05-18.jsonl",
+        [
+            {
+                "stage": "scalp_sim_pre_submit_liquidity_guard_would_block",
+                "stock_code": "111111",
+                "record_id": "R1",
+                "emitted_at": "2026-05-18T09:10:00",
+                "emitted_date": "2026-05-18",
+                "fields": {
+                    "source_stage": "entry_pre_submit",
+                    "chosen_action": "SKIP_PRE_SUBMIT_SAFETY",
+                    "entry_adm_risk_context_bucket": "neutral_strength_momentum",
+                    "entry_adm_stale_bucket": "fresh",
+                    "entry_adm_price_resolution_bucket": "quote_based",
+                    "entry_adm_liquidity_bucket": "below_min_liquidity",
+                    "entry_adm_overbought_bucket": "overbought_normal",
+                },
+            },
+            {
+                "stage": "blocked_ai_score",
+                "stock_code": "111111",
+                "record_id": "R2",
+                "emitted_at": "2026-05-18T09:10:30",
+                "emitted_date": "2026-05-18",
+                "fields": {
+                    "ai_score": 66,
+                    "chosen_action": "NO_BUY_AI",
+                },
+            },
+        ],
+    )
+
+    report = mod.build_scalp_entry_action_decision_matrix_report("2026-05-18")
+    rows = {row["record_id"]: row for row in report["rows"]}
+    row = rows["R1"]
+    unknown_summary = report["summary"]["unknown_bucket_summary"]
+
+    assert row["score_bucket"] == "score_unknown"
+    assert row.get("score_backfill_source") is None
+    assert unknown_summary["unknown_root_cause_counts"]["score_bucket:source_score_missing"] == 1
+
+
+def test_scalp_entry_adm_score_backfill_prefers_exact_key_over_nearer_stock_event(tmp_path, monkeypatch):
+    pipeline_dir = tmp_path / "pipeline_events"
+    report_dir = tmp_path / "report" / "scalp_entry_action_decision_matrix"
+    monkeypatch.setattr(mod, "PIPELINE_EVENT_DIR", pipeline_dir)
+    monkeypatch.setattr(mod, "THRESHOLD_EVENT_DIR", tmp_path / "threshold_cycle")
+    monkeypatch.setattr(mod, "THRESHOLD_SNAPSHOT_DIR", tmp_path / "threshold_cycle" / "snapshots")
+    monkeypatch.setattr(mod, "POST_SELL_DIR", tmp_path / "post_sell")
+    monkeypatch.setattr(mod, "ADM_REPORT_DIR", report_dir)
+
+    _write_jsonl(
+        pipeline_dir / "pipeline_events_2026-05-18.jsonl",
+        [
+            {
+                "stage": "blocked_ai_score",
+                "stock_code": "111111",
+                "record_id": "NEAR",
+                "emitted_at": "2026-05-18T09:10:10",
+                "emitted_date": "2026-05-18",
+                "fields": {
+                    "ai_score": 60,
+                    "chosen_action": "NO_BUY_AI",
+                },
+            },
+            {
+                "stage": "blocked_ai_score",
+                "stock_code": "111111",
+                "record_id": "SCORE",
+                "emitted_at": "2026-05-18T09:09:00",
+                "emitted_date": "2026-05-18",
+                "fields": {
+                    "candidate_id": "C1",
+                    "ai_score": 72,
+                    "chosen_action": "NO_BUY_AI",
+                },
+            },
+            {
+                "stage": "scalp_sim_pre_submit_liquidity_guard_would_block",
+                "stock_code": "111111",
+                "record_id": "TARGET",
+                "emitted_at": "2026-05-18T09:10:30",
+                "emitted_date": "2026-05-18",
+                "fields": {
+                    "candidate_id": "C1",
+                    "source_stage": "entry_pre_submit",
+                    "chosen_action": "SKIP_PRE_SUBMIT_SAFETY",
+                    "entry_adm_risk_context_bucket": "neutral_strength_momentum",
+                    "entry_adm_stale_bucket": "fresh",
+                    "entry_adm_price_resolution_bucket": "quote_based",
+                    "entry_adm_liquidity_bucket": "below_min_liquidity",
+                    "entry_adm_overbought_bucket": "overbought_normal",
+                },
+            },
+        ],
+    )
+
+    report = mod.build_scalp_entry_action_decision_matrix_report("2026-05-18")
+    rows = {row["record_id"]: row for row in report["rows"]}
+    row = rows["TARGET"]
+
+    assert row["score_source_value"] == 72.0
+    assert row["score_bucket"] == "score65_74"
+    assert row["score_backfill_match_type"] == "exact_key"
+    assert row["score_backfill_source_candidate_id"] == "C1"
+    assert row["score_backfill_seconds_since_source"] == 90.0
+
+
 def test_scalp_entry_adm_runtime_pre_submit_missing_context_is_not_available():
     context = runtime_mod.build_scalp_entry_adm_runtime_context(
         prompt_profile="watching",

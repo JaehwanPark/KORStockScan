@@ -2,6 +2,7 @@ import json
 
 import pandas as pd
 
+from analysis.claude_scalping_pattern_lab import build_claude_payload as payload
 from analysis.claude_scalping_pattern_lab import prepare_dataset as prepare
 
 
@@ -110,3 +111,22 @@ def test_claude_pattern_lab_empty_input_overwrites_trade_fact_with_header(monkey
     written = pd.read_csv(stale_path)
     assert list(written.columns) == prepare.TRADE_FACT_COLUMNS
     assert len(written) == 0
+
+
+def test_claude_payload_feedback_selector_uses_daily_clean_baseline_artifacts(monkeypatch, tmp_path):
+    report_dir = tmp_path / "data" / "report"
+    ev_dir = report_dir / "threshold_cycle_ev"
+    ev_dir.mkdir(parents=True)
+    (ev_dir / "threshold_cycle_ev_2026-06-05_rolling5d.json").write_text("{}", encoding="utf-8")
+    (ev_dir / "threshold_cycle_ev_2026-06-03.json").write_text("{}", encoding="utf-8")
+    (ev_dir / "threshold_cycle_ev_2026-06-04.json").write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(payload, "REPORT_DIR", report_dir)
+
+    path, source_date = payload._latest_feedback_artifact_path(
+        "threshold_cycle_ev",
+        "threshold_cycle_ev",
+        "2026-06-05",
+    )
+
+    assert path == ev_dir / "threshold_cycle_ev_2026-06-04.json"
+    assert source_date == "2026-06-04"

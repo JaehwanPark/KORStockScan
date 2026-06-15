@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from collections import Counter
 from datetime import datetime
 from pathlib import Path
@@ -19,6 +20,28 @@ SWING_FEEDBACK_SOURCES = {
     "swing_lifecycle_bucket_discovery": ("swing_lifecycle_bucket_discovery", "swing_lifecycle_bucket_discovery"),
     "swing_strategy_discovery_ev": ("swing_strategy_discovery_ev", "swing_strategy_discovery_ev"),
 }
+CLEAN_TUNING_BASELINE_DATE = "2026-06-04"
+
+
+def _latest_feedback_artifact_path(report_name: str, stem: str, target_date: str) -> tuple[Path | None, str | None]:
+    target = str(target_date).strip()[:10]
+    report_dir = REPORT_DIR / report_name
+    exact = report_dir / f"{stem}_{target}.json"
+    if exact.exists():
+        return exact, target
+    latest_path: Path | None = None
+    latest_date: str | None = None
+    for path in sorted(report_dir.glob(f"{stem}_*.json")):
+        suffix = path.name.removeprefix(f"{stem}_").removesuffix(".json")
+        if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", suffix):
+            continue
+        source_date = suffix
+        if target >= CLEAN_TUNING_BASELINE_DATE and source_date < CLEAN_TUNING_BASELINE_DATE:
+            continue
+        if source_date <= target and (latest_date is None or source_date > latest_date):
+            latest_path = path
+            latest_date = source_date
+    return latest_path, latest_date
 
 
 def _safe_int(value: Any, default: int = 0) -> int:
@@ -61,15 +84,23 @@ def _load_json(name: str) -> dict[str, Any]:
 def _load_feedback_sources() -> dict[str, Any]:
     consumed = []
     missing = []
+    target_date = str(END_DATE).strip()[:10]
     for source_id, (report_name, stem) in SWING_FEEDBACK_SOURCES.items():
-        path = REPORT_DIR / report_name / f"{stem}_{END_DATE}.json"
+        path, source_date = _latest_feedback_artifact_path(report_name, stem, target_date)
         item = {
             "source_id": source_id,
-            "path": str(path),
+            "path": str(path) if path else "",
+            "source_date": source_date,
+            "target_date": target_date,
+            "freshness": (
+                "same_day" if source_date == target_date
+                else "latest_available_lte_target" if source_date
+                else "missing"
+            ),
             "runtime_effect": False,
             "decision_authority": "source_quality_only",
         }
-        if path.exists():
+        if path and path.exists():
             try:
                 payload = json.loads(path.read_text(encoding="utf-8"))
             except Exception:

@@ -167,6 +167,71 @@ def test_currentness_audit_surfaces_pattern_lab_feedback_and_ai_review_gaps(tmp_
     assert all(order["runtime_effect"] is False for order in report["code_improvement_orders"])
 
 
+def test_currentness_audit_accepts_latest_prior_feedback_artifacts(tmp_path, monkeypatch):
+    project_root = tmp_path
+    report_dir = project_root / "data" / "report"
+    target_date = "2026-05-15"
+    prior_date = "2026-05-14"
+    _seed_labs(project_root, target_date)
+
+    for report_name, stem in (
+        ("threshold_cycle_ev", "threshold_cycle_ev"),
+        ("runtime_approval_summary", "runtime_approval_summary"),
+    ):
+        target_path = report_dir / report_name / f"{stem}_{target_date}.json"
+        if target_path.exists():
+            target_path.unlink()
+        _write_json(report_dir / report_name / f"{stem}_{prior_date}.json", {"runtime_effect": False})
+
+    monkeypatch.setattr(mod, "PROJECT_ROOT", project_root)
+    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+
+    report = mod.build_pattern_lab_currentness_audit(target_date)
+
+    assert report["status"] == "pass"
+    assert report["summary"]["missing_feedback_source_count"] == 0
+    scalping_sources = report["feedback_sources"]["scalping"]["consumed_feedback_sources"]
+    threshold_source = next(item for item in scalping_sources if item["source_id"] == "threshold_cycle_ev")
+    assert threshold_source["source_date"] == prior_date
+    assert threshold_source["freshness"] == "latest_available_lte_target"
+    assert threshold_source["runtime_effect"] is False
+    assert threshold_source["decision_authority"] == "source_quality_only"
+
+
+def test_currentness_audit_rejects_window_suffix_and_pre_baseline_feedback_fallback(
+    tmp_path,
+    monkeypatch,
+):
+    project_root = tmp_path
+    report_dir = project_root / "data" / "report"
+    target_date = "2026-06-05"
+    _seed_labs(project_root, target_date)
+
+    target_path = report_dir / "threshold_cycle_ev" / f"threshold_cycle_ev_{target_date}.json"
+    target_path.unlink()
+    _write_json(
+        report_dir / "threshold_cycle_ev" / f"threshold_cycle_ev_{target_date}_rolling5d.json",
+        {"runtime_effect": False},
+    )
+    _write_json(
+        report_dir / "threshold_cycle_ev" / "threshold_cycle_ev_2026-06-03.json",
+        {"runtime_effect": False},
+    )
+
+    monkeypatch.setattr(mod, "PROJECT_ROOT", project_root)
+    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+
+    report = mod.build_pattern_lab_currentness_audit(target_date)
+
+    scalping_sources = report["feedback_sources"]["scalping"]
+    threshold_missing = next(
+        item for item in scalping_sources["missing_feedback_sources"] if item["source_id"] == "threshold_cycle_ev"
+    )
+    assert threshold_missing["freshness"] == "missing"
+    assert threshold_missing["artifact_exists"] is False
+    assert report["summary"]["missing_feedback_source_count"] >= 1
+
+
 def test_currentness_audit_surfaces_observability_source_contract_orders(tmp_path, monkeypatch):
     project_root = tmp_path
     report_dir = project_root / "data" / "report"

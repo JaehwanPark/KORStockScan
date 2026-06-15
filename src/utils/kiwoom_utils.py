@@ -1598,11 +1598,13 @@ def get_top_open_fluctuation_ka10028(token, mrkt_tp="000", trde_qty_cnd="0100", 
             high_price = to_i(item.get('high_pric'))
             low_price = to_i(item.get('low_pric'))
             
-            # 💡 [핵심] 시가 대비 얼마나 올랐는지(%)를 직접 계산 (명세서의 open_pric_pre는 원화 단위 차이일 수 있으므로 안전하게 직접 계산)
+            # Kiwoom ka10028 exposes open_pric_pre as an open-relative rate.
+            # Recompute from price/open for scanner consistency, but preserve the raw rate separately.
             if open_price > 0:
                 open_flu_rate = round(((curr_price - open_price) / open_price) * 100, 2)
             else:
                 open_flu_rate = 0.0
+            open_pre_rate_raw = to_f(item.get('open_pric_pre'))
 
             # 🚀 스캐너 호환성을 위해 기존 키(FluRate)에 '시가대비 등락률'을 덮어씌움
             cleaned_list.append({
@@ -1613,11 +1615,15 @@ def get_top_open_fluctuation_ka10028(token, mrkt_tp="000", trde_qty_cnd="0100", 
                 'HighPrice': high_price,
                 'LowPrice': low_price,
                 'OpenFluRate': open_flu_rate,
+                'OpenFluRateRaw': open_pre_rate_raw,
+                'OpenPreRateRaw': open_pre_rate_raw,
                 'FluRate': open_flu_rate,           # 💡 스캐너 병합용 메인 키 (이제 시가대비 상승률로 작동!)
                 'DayFluRate': to_f(item.get('flu_rt')), # 전일대비 등락률도 보존
-                'OpenDiff': to_i(item.get('open_pric_pre')), # 시가대비 상승액
+                'OpenDiff': open_pre_rate_raw, # legacy key: ka10028 open_pric_pre is a percent rate, not a price diff
                 'Volume': to_i(item.get('now_trde_qty')), 
                 'CntrStr': to_f(item.get('cntr_str')),
+                'FluRateMetric': 'open_flu_rate',
+                'FluRateSource': 'OPEN_TOP',
                 'PreSig': item.get('pred_pre_sig', ''),
                 'Source': 'OPEN_TOP_RANK'
             })
@@ -1756,16 +1762,28 @@ def get_vi_triggered_ka10054(token, mrkt_tp="000", limit=30):
         code = normalize_stock_code(item.get('stk_cd', item.get('code', '')))
         if not code:
             continue
+        vi_open_flu_rate = _scanner_to_float(item.get('open_pric_pre_flu_rt'))
+        vi_dynamic_disparity_rate = _scanner_to_float(item.get('dynm_dispty_rt'))
+        vi_static_disparity_rate = _scanner_to_float(item.get('static_dispty_rt'))
+        if item.get('open_pric_pre_flu_rt') not in (None, ""):
+            vi_flu_rate = vi_open_flu_rate
+            vi_flu_metric = "vi_open_flu_rate"
+        elif item.get('dynm_dispty_rt') not in (None, ""):
+            vi_flu_rate = vi_dynamic_disparity_rate
+            vi_flu_metric = "vi_dynamic_disparity_rate"
+        else:
+            vi_flu_rate = vi_static_disparity_rate
+            vi_flu_metric = "vi_static_disparity_rate"
         cleaned_list.append({
             'Code': code,
             'Name': item.get('stk_nm', item.get('name', '')),
             'Price': _scanner_to_int(item.get('motn_pric', item.get('cur_prc'))),
-            'FluRate': _scanner_to_float(
-                item.get('open_pric_pre_flu_rt', item.get('dynm_dispty_rt', item.get('static_dispty_rt')))
-            ),
-            'ViFluRate': _scanner_to_float(
-                item.get('open_pric_pre_flu_rt', item.get('dynm_dispty_rt', item.get('static_dispty_rt')))
-            ),
+            'FluRate': vi_flu_rate,
+            'ViFluRate': vi_flu_rate,
+            'ViOpenFluRate': vi_open_flu_rate,
+            'ViDynamicDisparityRate': vi_dynamic_disparity_rate,
+            'ViStaticDisparityRate': vi_static_disparity_rate,
+            'ViFluRateMetric': vi_flu_metric,
             'CntrStr': 0.0,
             'TradeValue': 0,
             'RankNow': 0,

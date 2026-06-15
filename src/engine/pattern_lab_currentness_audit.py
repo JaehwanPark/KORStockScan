@@ -16,6 +16,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 REPORT_TYPE = "pattern_lab_currentness_audit"
 REPORT_SCHEMA_VERSION = 1
 REPORT_DIRNAME = REPORT_TYPE
+CLEAN_TUNING_BASELINE_DATE = "2026-06-04"
 FORBIDDEN_USES = [
     "threshold mutation",
     "order guard mutation",
@@ -281,6 +282,27 @@ def _feedback_artifact_path(report_name: str, stem: str, target_date: str) -> Pa
     return REPORT_DIR / report_name / f"{stem}_{target_date}.json"
 
 
+def _latest_feedback_artifact_path(report_name: str, stem: str, target_date: str) -> tuple[Path | None, str | None]:
+    target = str(target_date).strip()[:10]
+    report_dir = REPORT_DIR / report_name
+    exact = _feedback_artifact_path(report_name, stem, target)
+    if exact.exists():
+        return exact, target
+    latest_path: Path | None = None
+    latest_date: str | None = None
+    for path in sorted(report_dir.glob(f"{stem}_*.json")):
+        suffix = path.name.removeprefix(f"{stem}_").removesuffix(".json")
+        if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", suffix):
+            continue
+        source_date = suffix
+        if target >= CLEAN_TUNING_BASELINE_DATE and source_date < CLEAN_TUNING_BASELINE_DATE:
+            continue
+        if source_date <= target and (latest_date is None or source_date > latest_date):
+            latest_path = path
+            latest_date = source_date
+    return latest_path, latest_date
+
+
 def _feedback_source_status(
     *,
     target_date: str,
@@ -292,12 +314,19 @@ def _feedback_source_status(
     consumed: list[dict[str, Any]] = []
     missing: list[dict[str, Any]] = []
     for source_id, (report_name, stem) in contract["artifact_dirs"].items():
-        artifact_path = _feedback_artifact_path(report_name, stem, target_date)
+        artifact_path, source_date = _latest_feedback_artifact_path(report_name, stem, target_date)
         mentioned = source_id.lower() in active_text
-        exists = artifact_path.exists()
+        exists = artifact_path is not None and artifact_path.exists()
         item = {
             "source_id": source_id,
             "artifact_path": str(artifact_path) if exists else None,
+            "source_date": source_date,
+            "target_date": target_date,
+            "freshness": (
+                "same_day" if source_date == str(target_date).strip()[:10]
+                else "latest_available_lte_target" if source_date
+                else "missing"
+            ),
             "active_source_mentions": mentioned,
             "artifact_exists": exists,
             "decision_authority": "source_quality_only",

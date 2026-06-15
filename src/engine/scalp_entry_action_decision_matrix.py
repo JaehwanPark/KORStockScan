@@ -86,6 +86,38 @@ PRE_SUBMIT_CONTEXT_OPTIONAL_STAGES = {
     "scalp_sim_entry_submit_revalidation_block",
 }
 
+SCORE_CONTEXT_NOT_AVAILABLE_STAGES = {
+    "scalp_sim_sell_order_assumed_filled",
+    "scalp_sim_holding_started",
+    "scalp_sim_scale_in_order_assumed_filled",
+    "scalp_sim_scale_in_order_unfilled",
+    "scalp_sim_overnight_decision",
+    "scalp_sim_overnight_sell_today",
+    "scalp_sim_overnight_hold",
+    "scalp_sim_overnight_carry_restored",
+}
+
+SCORE_CONTEXT_BACKFILL_ELIGIBLE_STAGES = {
+    "order_bundle_submitted",
+    "pre_submit_liquidity_guard_block",
+    "pre_submit_overbought_pullback_guard_block",
+    "scalp_sim_pre_submit_liquidity_guard_would_block",
+    "scalp_sim_pre_submit_liquidity_guard_unknown",
+    "scalp_sim_pre_submit_overbought_guard_would_block",
+}
+
+SCORE_BACKFILL_MAX_PAST_SECONDS = 180.0
+SCORE_BACKFILL_KEY_FIELDS = (
+    "sim_record_id",
+    "candidate_id",
+    "record_id",
+    "submit_attempt_id",
+    "broker_order_no",
+    "order_no",
+    "ord_no",
+    "order_response_ord_no",
+)
+
 
 def report_paths(target_date: str) -> tuple[Path, Path]:
     base = ADM_REPORT_DIR / f"scalp_entry_action_decision_matrix_{target_date}"
@@ -231,9 +263,11 @@ def _iter_relevant_events(target_date: str) -> Iterable[dict[str, Any]]:
             yield event
 
 
-def _score_bucket(score: Any) -> str:
+def _score_bucket(score: Any, *, stage: str = "") -> str:
     value = _safe_float(score, None)
     if value is None:
+        if stage in SCORE_CONTEXT_NOT_AVAILABLE_STAGES:
+            return "score_not_available"
         return "score_unknown"
     if value < 50:
         return "score_lt50"
@@ -481,7 +515,7 @@ def _base_row(event: dict[str, Any]) -> dict[str, Any]:
     sim_record_id = _nonempty(fields.get("sim_record_id"))
 
     raw_score_value = _score_source(fields)
-    raw_score_bucket = _score_bucket(raw_score_value)
+    raw_score_bucket = _score_bucket(raw_score_value, stage=effective_bucket_stage)
     raw_risk_bucket = _risk_context_bucket(fields, stage=effective_bucket_stage)
     raw_stale = _stale_bucket(fields)
     raw_price = _price_resolution_bucket(fields, stage=effective_bucket_stage)
@@ -786,6 +820,108 @@ def _bucket_summary(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return sorted(summaries, key=lambda item: (-_safe_int(item.get("sample_count")), item.get("bucket_token") or ""))[:50]
 
 
+def _parse_event_ts(value: Any) -> datetime | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        return datetime.fromisoformat(text)
+    except ValueError:
+        try:
+            return datetime.fromisoformat(text.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+
+
+def _score_backfill_keys(row: dict[str, Any]) -> set[str]:
+    keys: set[str] = set()
+    for key in SCORE_BACKFILL_KEY_FIELDS:
+        value = _nonempty(row.get(key))
+        if value:
+            keys.add(f"{key}:{value}")
+    return keys
+
+
+def _prior_score_candidate(
+    candidates: Iterable[dict[str, Any]],
+    *,
+    event_ts: datetime,
+) -> tuple[dict[str, Any] | None, float | None]:
+    best_row = None
+    best_seconds = None
+    for scored in candidates:
+        scored_ts = _parse_event_ts(scored.get("event_time"))
+        if scored_ts is None:
+            continue
+        seconds_since_source = (event_ts - scored_ts).total_seconds()
+        if seconds_since_source < 0 or seconds_since_source > SCORE_BACKFILL_MAX_PAST_SECONDS:
+            continue
+        if best_seconds is None or seconds_since_source < best_seconds:
+            best_row = scored
+            best_seconds = seconds_since_source
+    return best_row, best_seconds
+
+
+def _backfill_score_context(rows: list[dict[str, Any]], source_rows: list[dict[str, Any]] | None = None) -> None:
+    scored_by_stock: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    scored_by_key: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in source_rows or rows:
+        score = _safe_float(row.get("score_source_value"), None)
+        stock_code = _nonempty(row.get("stock_code"))
+        event_ts = _parse_event_ts(row.get("event_time"))
+        if score is None or not stock_code or event_ts is None:
+            continue
+        scored_by_stock[stock_code].append(row)
+        for key in _score_backfill_keys(row):
+            scored_by_key[key].append(row)
+
+    for scored_rows in scored_by_stock.values():
+        scored_rows.sort(key=lambda item: item.get("event_time") or "")
+    for scored_rows in scored_by_key.values():
+        scored_rows.sort(key=lambda item: item.get("event_time") or "")
+
+    for row in rows:
+        if row.get("score_source_value") is not None:
+            continue
+        stage = str(row.get("stage") or "")
+        if stage not in SCORE_CONTEXT_BACKFILL_ELIGIBLE_STAGES:
+            continue
+        stock_code = _nonempty(row.get("stock_code"))
+        event_ts = _parse_event_ts(row.get("event_time"))
+        if not stock_code or event_ts is None:
+            continue
+        key_candidates: list[dict[str, Any]] = []
+        for key in _score_backfill_keys(row):
+            key_candidates.extend(scored_by_key.get(key, []))
+        best_row, best_seconds = _prior_score_candidate(key_candidates, event_ts=event_ts)
+        match_type = "exact_key" if best_row is not None else "prior_same_stock_time"
+        if best_row is None:
+            best_row, best_seconds = _prior_score_candidate(
+                scored_by_stock.get(stock_code, []),
+                event_ts=event_ts,
+            )
+        if best_row is None:
+            continue
+        score = _safe_float(best_row.get("score_source_value"), None)
+        if score is None:
+            continue
+        provenance = row.get("bucket_field_provenance")
+        if not isinstance(provenance, dict):
+            provenance = {}
+            row["bucket_field_provenance"] = provenance
+        row["score_source_value"] = score
+        row["score_bucket"] = _score_bucket(score)
+        row["score_backfill_source"] = "prior_score_event"
+        row["score_backfill_match_type"] = match_type
+        row["score_backfill_source_stage"] = best_row.get("stage")
+        row["score_backfill_source_event_time"] = best_row.get("event_time")
+        row["score_backfill_source_candidate_id"] = best_row.get("candidate_id")
+        row["score_backfill_seconds_since_source"] = round(float(best_seconds or 0.0), 3)
+        row["score_backfill_abs_seconds"] = round(float(best_seconds or 0.0), 3)
+        provenance["score_bucket"] = "backfilled"
+        row["entry_adm_bucket_token_recomputed"] = entry_adm_bucket_token(row)
+
+
 def _is_not_available_bucket(value: str) -> bool:
     return "not_available" in str(value or "").lower()
 
@@ -804,6 +940,8 @@ def _unknown_bucket_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
     not_available_affected_row_count = 0
     stage_counts: Counter[str] = Counter()
     unknown_root_causes: Counter[str] = Counter()
+    score_root_cause_counts: Counter[str] = Counter()
+    score_backfill_match_type_counts: Counter[str] = Counter()
     examples: list[dict[str, Any]] = []
     adm_source_count = 0
     raw_recomputed_count = 0
@@ -817,6 +955,13 @@ def _unknown_bucket_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
             raw_recomputed_count += raw_count
             if adm_count > 0:
                 adm_source_count += 1
+            if (
+                row.get("score_source_value") is not None
+                and provenance.get("score_bucket") in {"raw_recomputed", "backfilled"}
+            ):
+                score_root_cause_counts["backfilled"] += 1
+                if provenance.get("score_bucket") == "backfilled":
+                    score_backfill_match_type_counts[str(row.get("score_backfill_match_type") or "unknown")] += 1
         unknown_dimensions = [
             key for key in dimensions if _is_unknown_bucket(row.get(key) or "")
         ]
@@ -836,16 +981,23 @@ def _unknown_bucket_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
                 provenance_value = str(provenance.get(key) or "")
             if provenance_value == "adm_field":
                 unknown_root_causes[f"{key}:adm_field_unknown"] += 1
+                if key == "score_bucket":
+                    score_root_cause_counts["missing"] += 1
             elif key == "score_bucket" and row.get("score_source_value") is None:
                 unknown_root_causes[f"{key}:source_score_missing"] += 1
+                score_root_cause_counts["missing"] += 1
             elif key == "risk_context_bucket":
                 unknown_root_causes[f"{key}:risk_context_source_missing"] += 1
             elif key == "price_resolution_bucket":
                 unknown_root_causes[f"{key}:price_context_source_missing"] += 1
             else:
                 unknown_root_causes[f"{key}:raw_recomputed_unknown"] += 1
+                if key == "score_bucket":
+                    score_root_cause_counts["missing"] += 1
         for key in not_available_dimensions:
             not_available_counts[key] = not_available_counts.get(key, 0) + 1
+            if key == "score_bucket":
+                score_root_cause_counts["not_applicable"] += 1
         stage_counts[str(row.get("stage") or "-")] += 1
         if len(examples) < 10:
             examples.append(
@@ -873,6 +1025,12 @@ def _unknown_bucket_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "not_available_dimension_counts": not_available_counts,
         "stage_counts": dict(stage_counts),
         "unknown_root_cause_counts": dict(unknown_root_causes),
+        "score_root_cause_counts": {
+            "missing": score_root_cause_counts.get("missing", 0),
+            "not_applicable": score_root_cause_counts.get("not_applicable", 0),
+            "backfilled": score_root_cause_counts.get("backfilled", 0),
+        },
+        "score_backfill_match_type_counts": dict(score_backfill_match_type_counts),
         "examples": examples,
         "source_quality_gate": "source_quality_blocker" if unknown_affected_row_count else "pass",
         "recommended_route": "source_quality_workorder" if unknown_affected_row_count else "none",
@@ -887,7 +1045,9 @@ def build_scalp_entry_action_decision_matrix_report(target_date: str) -> dict[st
     target_date = str(target_date).strip()
     evaluations, eval_summary = _load_sim_evaluations(target_date)
     raw_rows = [_base_row(event) for event in _iter_relevant_events(target_date)]
-    rows = [_apply_outcome(row, evaluations) for row in _dedupe_rows(raw_rows)]
+    deduped_rows = _dedupe_rows(raw_rows)
+    _backfill_score_context(deduped_rows, source_rows=raw_rows)
+    rows = [_apply_outcome(row, evaluations) for row in deduped_rows]
 
     prior_summary = _load_prior_adm_bucket_summary(target_date)
     _backfill_adm_lookup_status(rows, prior_summary)

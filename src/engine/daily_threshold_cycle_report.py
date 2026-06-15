@@ -1016,6 +1016,143 @@ def _read_json_dict(path: Path) -> dict:
     return payload if isinstance(payload, dict) else {}
 
 
+def _payload_rows(payload: dict) -> list[dict]:
+    for key in ("rows", "events", "records", "observations", "samples"):
+        rows = payload.get(key) if isinstance(payload, dict) else None
+        if isinstance(rows, list):
+            return [row for row in rows if isinstance(row, dict)]
+    metrics = payload.get("metrics") if isinstance(payload.get("metrics"), dict) else {}
+    rows = metrics.get("rows") if isinstance(metrics.get("rows"), list) else []
+    return [row for row in rows if isinstance(row, dict)]
+
+
+def _entry_counterfactual_join_keys_from_fields(fields: dict) -> set[str]:
+    keys: set[str] = set()
+    for key in (
+        "submit_attempt_id",
+        "attempt_key",
+        "candidate_id",
+        "entry_price_candidate_id",
+        "entry_adm_candidate_id",
+        "sim_record_id",
+        "sim_parent_record_id",
+        "record_id",
+    ):
+        value = str(fields.get(key) or "").strip()
+        if value and value != "-":
+            keys.add(value)
+    return keys
+
+
+def _dynamic_entry_price_counterfactual_join_diagnostics(
+    events: list[dict],
+    *,
+    target_date: str | None,
+) -> dict:
+    relevant_stages = {
+        "latency_block",
+        "latency_pass",
+        "order_leg_request",
+        "order_bundle_submitted",
+        "scalp_sim_entry_ai_price_applied",
+        "scalp_sim_entry_ai_price_skip_order",
+        "scalp_sim_entry_submit_revalidation_warning",
+        "scalp_sim_entry_submit_revalidation_block",
+        "scalp_sim_buy_order_virtual_pending",
+        "scalp_sim_buy_order_assumed_filled",
+        "scalp_sim_entry_unpriced",
+        "scalp_sim_entry_expired",
+    }
+    reason_counts: Counter[str] = Counter(
+        {
+            "missing_counterfactual_artifact": 0,
+            "missing_attempt_key": 0,
+            "candidate_id_mismatch": 0,
+            "timestamp_window_mismatch": 0,
+            "not_join_eligible": 0,
+        }
+    )
+    eligible_events: list[dict] = []
+    event_key_sets: list[set[str]] = []
+    for event in events:
+        stage = str(event.get("stage") or "").strip()
+        if stage not in relevant_stages:
+            reason_counts["not_join_eligible"] += 1
+            continue
+        eligible_events.append(event)
+        event_key_sets.append(_entry_counterfactual_join_keys_from_fields(_event_fields(event)))
+
+    source_path = (
+        _existing_or_gzip_path(REPORT_DIR / "monitor_snapshots" / f"missed_entry_counterfactual_{target_date}.json")
+        if target_date
+        else REPORT_DIR / "monitor_snapshots" / "missed_entry_counterfactual_missing_date.json"
+    )
+    if not target_date or not source_path.exists():
+        reason_counts["missing_counterfactual_artifact"] += len(eligible_events)
+        return {
+            "status": "missing_counterfactual_artifact",
+            "counterfactual_artifact": str(source_path),
+            "counterfactual_artifact_exists": False,
+            "counterfactual_row_count": 0,
+            "attempted_event_count": len(events),
+            "join_eligible_event_count": len(eligible_events),
+            "joined_sample": 0,
+            "events_without_counterfactual": len(eligible_events),
+            "events_without_counterfactual_event_count": len(eligible_events),
+            "counterfactual_unmatched_row_count": 0,
+            "reason_counts": dict(reason_counts),
+            "runtime_effect": False,
+            "decision_authority": "dynamic_entry_price_counterfactual_join_diagnostics_only",
+        }
+
+    payload = _read_json_dict(source_path)
+    rows = _payload_rows(payload)
+    counterfactual_keys: set[str] = set()
+    counterfactual_row_keys: list[set[str]] = []
+    for row in rows:
+        row_keys = _entry_counterfactual_join_keys_from_fields(row)
+        nested = row.get("fields") if isinstance(row.get("fields"), dict) else {}
+        row_keys.update(_entry_counterfactual_join_keys_from_fields(nested))
+        counterfactual_row_keys.append(row_keys)
+        counterfactual_keys.update(row_keys)
+
+    matched_event_count = 0
+    joined_row_indexes: set[int] = set()
+    for keys in event_key_sets:
+        if not keys:
+            reason_counts["missing_attempt_key"] += 1
+            continue
+        matched_indexes = {
+            idx for idx, row_keys in enumerate(counterfactual_row_keys) if keys & row_keys
+        }
+        if matched_indexes:
+            matched_event_count += 1
+            joined_row_indexes.update(matched_indexes)
+        else:
+            reason_counts["candidate_id_mismatch"] += 1
+    joined = len(joined_row_indexes)
+    without_counterfactual = max(0, len(eligible_events) - matched_event_count)
+    unmatched_rows = max(0, len(rows) - joined)
+    status = "joined" if joined > 0 else "hold_sample"
+    return {
+        "status": status,
+        "counterfactual_artifact": str(source_path),
+        "counterfactual_artifact_exists": True,
+        "counterfactual_row_count": len(rows),
+        "counterfactual_join_key_count": len(counterfactual_keys),
+        "attempted_event_count": len(events),
+        "join_eligible_event_count": len(eligible_events),
+        "joined_sample": joined,
+        "matched_event_count": matched_event_count,
+        "events_without_counterfactual": without_counterfactual,
+        "events_without_counterfactual_event_count": without_counterfactual,
+        "counterfactual_unmatched_row_count": unmatched_rows,
+        "reason_counts": dict(reason_counts),
+        "runtime_effect": False,
+        "decision_authority": "dynamic_entry_price_counterfactual_join_diagnostics_only",
+    }
+
+
 def _existing_or_gzip_path(path: Path) -> Path:
     if path.exists():
         return path
@@ -4985,6 +5122,10 @@ def _build_dynamic_entry_price_resolver_family(events: list[dict], *, target_dat
         sim_events,
         target_date=target_date,
     )
+    counterfactual_join_diagnostics = _dynamic_entry_price_counterfactual_join_diagnostics(
+        real_events + sim_events,
+        target_date=target_date,
+    )
     candidate_quality = {
         "AI_candidate": _entry_price_ai_candidate_quality(real_events + sim_events),
     }
@@ -5016,6 +5157,19 @@ def _build_dynamic_entry_price_resolver_family(events: list[dict], *, target_dat
             "candidate_quality": candidate_quality,
             "candidate_metrics_ready": metrics_ready,
             "sim_submit_path_quality": sim_submit_path_quality,
+            "counterfactual_join_diagnostics": counterfactual_join_diagnostics,
+            "counterfactual_join_failure_reason_counts": counterfactual_join_diagnostics.get("reason_counts") or {},
+            "counterfactual_join_status": counterfactual_join_diagnostics.get("status"),
+            "counterfactual_joined_sample": _safe_int(counterfactual_join_diagnostics.get("joined_sample"), 0) or 0,
+            "events_without_counterfactual": (
+                _safe_int(counterfactual_join_diagnostics.get("events_without_counterfactual"), 0) or 0
+            ),
+            "events_without_counterfactual_event_count": (
+                _safe_int(counterfactual_join_diagnostics.get("events_without_counterfactual_event_count"), 0) or 0
+            ),
+            "counterfactual_unmatched_row_count": (
+                _safe_int(counterfactual_join_diagnostics.get("counterfactual_unmatched_row_count"), 0) or 0
+            ),
             "unpriced_or_stale_warning_count": sim_unpriced_or_stale_warning_count,
         },
         "apply_ready": sample_ready,
@@ -7171,11 +7325,41 @@ def _build_calibration_candidates(families: list[dict], report_source_context: d
             for key in (
                 "candidate_quality",
                 "sim_submit_path_quality",
+                "counterfactual_join_diagnostics",
+                "counterfactual_join_failure_reason_counts",
+                "counterfactual_join_status",
                 "unpriced_or_stale_warning_count",
             ):
                 if key in family_sample and key not in source_metrics:
                     source_metrics = dict(source_metrics)
                     source_metrics[key] = family_sample.get(key)
+            diagnostics = (
+                source_metrics.get("counterfactual_join_diagnostics")
+                if isinstance(source_metrics.get("counterfactual_join_diagnostics"), dict)
+                else {}
+            )
+            if diagnostics:
+                source_metrics = dict(source_metrics)
+                source_metrics.setdefault(
+                    "latency_classifier_counterfactual_joined_sample",
+                    source_metrics.get("counterfactual_joined_sample"),
+                )
+                source_metrics.setdefault(
+                    "latency_classifier_events_without_counterfactual",
+                    source_metrics.get("events_without_counterfactual"),
+                )
+                source_metrics["counterfactual_joined_sample"] = (
+                    _safe_int(diagnostics.get("joined_sample"), 0) or 0
+                )
+                source_metrics["events_without_counterfactual"] = (
+                    _safe_int(diagnostics.get("events_without_counterfactual"), 0) or 0
+                )
+                source_metrics["events_without_counterfactual_event_count"] = (
+                    _safe_int(diagnostics.get("events_without_counterfactual_event_count"), 0) or 0
+                )
+                source_metrics["counterfactual_unmatched_row_count"] = (
+                    _safe_int(diagnostics.get("counterfactual_unmatched_row_count"), 0) or 0
+                )
             source_recommended, source_recommended_audit = _entry_price_source_recommended_values(
                 source_metrics,
                 current,

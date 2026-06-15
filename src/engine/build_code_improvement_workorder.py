@@ -24,6 +24,7 @@ SWING_LIFECYCLE_DECISION_MATRIX_DIR = REPORT_DIR / "swing_lifecycle_decision_mat
 SWING_LIFECYCLE_BUCKET_DISCOVERY_DIR = REPORT_DIR / "swing_lifecycle_bucket_discovery"
 PATTERN_LAB_AI_REVIEW_DIR = REPORT_DIR / "pattern_lab_ai_review"
 THRESHOLD_CYCLE_EV_DIR = REPORT_DIR / "threshold_cycle_ev"
+HOLDING_EXIT_DECISION_MATRIX_DIR = REPORT_DIR / "holding_exit_decision_matrix"
 LIFECYCLE_DECISION_MATRIX_DIR = REPORT_DIR / "lifecycle_decision_matrix"
 PIPELINE_EVENT_VERBOSITY_DIR = REPORT_DIR / "pipeline_event_verbosity"
 OBSERVATION_SOURCE_QUALITY_AUDIT_DIR = REPORT_DIR / "observation_source_quality_audit"
@@ -1855,7 +1856,47 @@ def _sort_classified(items: list[ClassifiedOrder]) -> list[ClassifiedOrder]:
     )
 
 
-def _threshold_ev_followup_orders(ev_report: dict[str, Any]) -> list[dict[str, Any]]:
+def _holding_exit_counterfactual_contract_status(target_date: str) -> dict[str, Any]:
+    report = _load_json(
+        HOLDING_EXIT_DECISION_MATRIX_DIR / f"holding_exit_decision_matrix_{target_date}.json"
+    )
+    if not report:
+        return {"implemented": False, "reason": "missing_holding_exit_decision_matrix_report"}
+    summary = report.get("summary") if isinstance(report.get("summary"), dict) else {}
+    proxy = (
+        report.get("counterfactual_proxy_summary")
+        if isinstance(report.get("counterfactual_proxy_summary"), dict)
+        else {}
+    )
+    required_actions = {
+        "hold_defer",
+        "exit_only",
+        "avg_down_wait",
+        "pyramid_wait",
+    }
+    per_action_samples = (
+        proxy.get("per_action_samples") if isinstance(proxy.get("per_action_samples"), dict) else {}
+    )
+    actions_present = {str(value) for value in proxy.get("actions_present") or []}
+    has_required_actions = required_actions.issubset(actions_present) and all(
+        _safe_int(per_action_samples.get(action), 0) > 0 for action in required_actions
+    )
+    implemented = (
+        str(report.get("instrumentation_status") or "") == "implemented"
+        and report.get("runtime_change") is False
+        and "non_no_clear_edge_count" in summary
+        and bool(summary.get("per_action_edge_buckets"))
+        and bool(proxy.get("ready"))
+        and has_required_actions
+    )
+    return {
+        "implemented": implemented,
+        "reason": "implemented_contract_available" if implemented else "contract_incomplete",
+        "report_path": str(HOLDING_EXIT_DECISION_MATRIX_DIR / f"holding_exit_decision_matrix_{target_date}.json"),
+    }
+
+
+def _threshold_ev_followup_orders(ev_report: dict[str, Any], *, target_date: str) -> list[dict[str, Any]]:
     outcome = ev_report.get("calibration_outcome") if isinstance(ev_report.get("calibration_outcome"), dict) else {}
     decisions = outcome.get("decisions") if isinstance(outcome.get("decisions"), list) else []
     orders: list[dict[str, Any]] = []
@@ -1868,6 +1909,9 @@ def _threshold_ev_followup_orders(ev_report: dict[str, Any]) -> list[dict[str, A
             continue
         source_metrics = item.get("source_metrics") if isinstance(item.get("source_metrics"), dict) else {}
         if source_metrics.get("instrumentation_status") == "implemented":
+            continue
+        contract_status = _holding_exit_counterfactual_contract_status(target_date)
+        if contract_status.get("implemented") is True:
             continue
         counterfactual_gap_count = _safe_int(source_metrics.get("counterfactual_gap_count"), 0)
         proxy_sample_snapshots = _safe_int(source_metrics.get("eligible_but_not_chosen_sample_snapshots"), 0)
@@ -4203,7 +4247,7 @@ def _buy_funnel_sentinel_followup_orders(
     return orders
 
 
-def _closed_instrumentation_order_families(ev_report: dict[str, Any]) -> dict[str, str]:
+def _closed_instrumentation_order_families(ev_report: dict[str, Any], *, target_date: str) -> dict[str, str]:
     outcome = ev_report.get("calibration_outcome") if isinstance(ev_report.get("calibration_outcome"), dict) else {}
     decisions = outcome.get("decisions") if isinstance(outcome.get("decisions"), list) else []
     closed: dict[str, str] = {}
@@ -4220,6 +4264,10 @@ def _closed_instrumentation_order_families(ev_report: dict[str, Any]) -> dict[st
             closed["order_pre_submit_price_guard_safety_audit"] = family
         elif family == "holding_exit_decision_matrix_advisory":
             closed["order_holding_exit_decision_matrix_edge_counterfactual"] = family
+    if _holding_exit_counterfactual_contract_status(target_date).get("implemented") is True:
+        closed["order_holding_exit_decision_matrix_edge_counterfactual"] = (
+            "holding_exit_decision_matrix_advisory"
+        )
     return closed
 
 
@@ -5215,7 +5263,7 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
     observation_source_quality_orders = _observation_source_quality_followup_orders(observation_source_quality)
     sim_fill_match_orders = _sim_fill_and_match_report_contract_orders(ev_report, observation_source_quality)
     threshold_ev_orders = [
-        *_threshold_ev_followup_orders(ev_report),
+        *_threshold_ev_followup_orders(ev_report, target_date=target_date),
         *_entry_adm_followup_orders(ev_report),
         *_lifecycle_ai_context_followup_orders(ev_report),
         *_window_policy_audit_followup_orders(calibration_report),
@@ -5227,7 +5275,10 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
         *_codebase_performance_followup_orders(codebase_performance),
         *buy_funnel_sentinel_orders,
     ]
-    closed_instrumentation_order_families = _closed_instrumentation_order_families(ev_report)
+    closed_instrumentation_order_families = _closed_instrumentation_order_families(
+        ev_report,
+        target_date=target_date,
+    )
     orders = [
         *scalping_orders,
         *swing_orders,

@@ -3416,6 +3416,40 @@ def test_classify_fill_price_defect_forbidden_zero_price():
     assert classification == "forbidden_zero_price_observation"
 
 
+def test_dynamic_entry_price_counterfactual_join_diagnostics_breaks_down_reasons(monkeypatch, tmp_path):
+    from src.engine import daily_threshold_cycle_report as target
+
+    report_dir = tmp_path / "report"
+    source_dir = report_dir / "monitor_snapshots"
+    source_dir.mkdir(parents=True)
+    monkeypatch.setattr(target, "REPORT_DIR", report_dir)
+    (source_dir / "missed_entry_counterfactual_2026-05-20.json").write_text(
+        json.dumps({"rows": [{"candidate_id": "C1"}]}),
+        encoding="utf-8",
+    )
+
+    diagnostics = target._dynamic_entry_price_counterfactual_join_diagnostics(
+        [
+            {"stage": "latency_block", "fields": {"candidate_id": "C1"}},
+            {"stage": "order_bundle_submitted", "fields": {"candidate_id": "C1"}},
+            {"stage": "latency_block", "fields": {}},
+            {"stage": "order_bundle_submitted", "fields": {"candidate_id": "C2"}},
+            {"stage": "holding_observation", "fields": {"candidate_id": "C3"}},
+        ],
+        target_date="2026-05-20",
+    )
+
+    assert diagnostics["joined_sample"] == 1
+    assert diagnostics["matched_event_count"] == 2
+    assert diagnostics["events_without_counterfactual"] == 2
+    assert diagnostics["events_without_counterfactual_event_count"] == 2
+    assert diagnostics["counterfactual_unmatched_row_count"] == 0
+    assert diagnostics["reason_counts"]["missing_attempt_key"] == 1
+    assert diagnostics["reason_counts"]["candidate_id_mismatch"] == 1
+    assert diagnostics["reason_counts"]["not_join_eligible"] == 1
+    assert diagnostics["runtime_effect"] is False
+
+
 def test_active_seed_matched_string_boolean_separation():
     from src.engine import daily_threshold_cycle_report as target
 

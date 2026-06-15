@@ -9,7 +9,7 @@
 - panic_confirmation_policy: `portfolio stop-loss clusters are evidence; PANIC_DETECTED requires market or microstructure confirmation`
 - report_only: `true`
 - runtime_effect: `report_only_no_mutation`
-- as_of: `2026-06-15T15:28:16`
+- as_of: `2026-06-15T15:57:59`
 - latest_event_at: `2026-06-15T15:24:54`
 - reasons: `panic thresholds not breached`
 
@@ -53,8 +53,8 @@
 - panic_signal_count: `0`
 - recovery_candidate_count: `0`
 - recovery_confirmed_count: `0`
-- missing_orderbook_count: `165`
-- degraded_orderbook_count: `165`
+- missing_orderbook_count: `164`
+- degraded_orderbook_count: `164`
 - max_panic_score: `0.4364`
 - max_recovery_score: `0.5793`
 - micro_cusum_triggered_symbol_count: `0`
@@ -64,7 +64,7 @@
 ## Microstructure Market Context
 
 - market_risk_state: `RISK_OFF`
-- market_panic_breadth_as_of: `2026-06-15T15:28:01`
+- market_panic_breadth_as_of: `2026-06-15T15:57:44`
 - market_panic_breadth_source_quality_status: `ok`
 - market_panic_breadth_risk_off_advisory: `false`
 - market_panic_breadth_single_market_risk_off_advisory: `false`

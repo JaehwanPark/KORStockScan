@@ -27,6 +27,7 @@ from analysis.deepseek_swing_pattern_lab.analyze_swing_patterns import (
     build_swing_pattern_analysis_result,
     classify_finding_route,
 )
+from analysis.deepseek_swing_pattern_lab import build_deepseek_payload as payload_mod
 from analysis.deepseek_swing_pattern_lab.build_deepseek_payload import (
     build_payload_cases,
     build_payload_summary,
@@ -1106,3 +1107,22 @@ def test_swing_pattern_lab_automation_marks_ofi_qi_instrumentation_implemented(t
     blocked = report["data_quality"]["source_quality_blocked_families"][0]
     assert blocked["source_contract_version"] == "swing_micro_context_source_quality_v1"
     assert blocked["decision_authority"] == "swing_pattern_lab_analysis_workorder_source_only"
+
+
+def test_deepseek_payload_feedback_selector_uses_daily_clean_baseline_artifacts(monkeypatch, tmp_path):
+    report_dir = tmp_path / "data" / "report"
+    ldm_dir = report_dir / "swing_lifecycle_decision_matrix"
+    ldm_dir.mkdir(parents=True)
+    (ldm_dir / "swing_lifecycle_decision_matrix_2026-06-05_mtd.json").write_text("{}", encoding="utf-8")
+    (ldm_dir / "swing_lifecycle_decision_matrix_2026-06-03.json").write_text("{}", encoding="utf-8")
+    (ldm_dir / "swing_lifecycle_decision_matrix_2026-06-04.json").write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(payload_mod, "REPORT_DIR", report_dir)
+
+    path, source_date = payload_mod._latest_feedback_artifact_path(
+        "swing_lifecycle_decision_matrix",
+        "swing_lifecycle_decision_matrix",
+        "2026-06-05",
+    )
+
+    assert path == ldm_dir / "swing_lifecycle_decision_matrix_2026-06-04.json"
+    assert source_date == "2026-06-04"

@@ -39,6 +39,128 @@ class _EventBus:
         self.events.append((name, payload))
 
 
+def test_ka10028_open_pric_pre_is_preserved_as_rate(monkeypatch):
+    def fake_fetch(**kwargs):
+        assert kwargs["api_id"] == "ka10028"
+        return [
+            {
+                "open_pric_pre_flu_rt": [
+                    {
+                        "stk_cd": "487580",
+                        "stk_nm": "마키나락스",
+                        "cur_prc": "+74800",
+                        "open_pric": "+65000",
+                        "high_pric": "+76000",
+                        "low_pric": "+64000",
+                        "open_pric_pre": "+15.08",
+                        "flu_rt": "+18.20",
+                        "now_trde_qty": "123456",
+                        "cntr_str": "101.5",
+                    }
+                ]
+            }
+        ]
+
+    monkeypatch.setattr(kiwoom_utils, "fetch_kiwoom_api_continuous", fake_fetch)
+
+    rows = kiwoom_utils.get_top_open_fluctuation_ka10028("TOKEN", limit=10)
+
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["OpenFluRate"] == 15.08
+    assert row["OpenFluRateRaw"] == 15.08
+    assert row["OpenPreRateRaw"] == 15.08
+    assert row["OpenDiff"] == 15.08
+    assert row["DayFluRate"] == 18.20
+    assert row["FluRateMetric"] == "open_flu_rate"
+    assert row["FluRateSource"] == "OPEN_TOP"
+
+
+def test_ka10054_vi_rates_are_split_by_metric(monkeypatch):
+    def fake_fetch(**kwargs):
+        assert kwargs["api_id"] == "ka10054"
+        return [
+            {
+                "motn_stk": [
+                    {
+                        "stk_cd": "005930",
+                        "stk_nm": "삼성전자",
+                        "motn_pric": "+72000",
+                        "open_pric_pre_flu_rt": "+2.50",
+                        "dynm_dispty_rt": "+1.20",
+                        "static_dispty_rt": "+3.40",
+                        "vimotn_cnt": "2",
+                    }
+                ]
+            }
+        ]
+
+    monkeypatch.setattr(kiwoom_utils, "fetch_kiwoom_api_continuous", fake_fetch)
+
+    rows = kiwoom_utils.get_vi_triggered_ka10054("TOKEN", limit=10)
+
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["ViFluRate"] == 2.5
+    assert row["ViOpenFluRate"] == 2.5
+    assert row["ViDynamicDisparityRate"] == 1.2
+    assert row["ViStaticDisparityRate"] == 3.4
+    assert row["ViFluRateMetric"] == "vi_open_flu_rate"
+
+
+def test_candidate_pool_preserves_vi_flu_metric():
+    pool = scalping_scanner.build_candidate_pool(
+        vi_targets=[
+            {
+                "Code": "005930",
+                "Name": "삼성전자",
+                "Price": 72000,
+                "FluRate": 2.5,
+                "ViFluRate": 2.5,
+                "ViOpenFluRate": 2.5,
+                "ViDynamicDisparityRate": 1.2,
+                "ViStaticDisparityRate": 3.4,
+                "ViFluRateMetric": "vi_open_flu_rate",
+            }
+        ]
+    )
+
+    target = pool["005930"]
+    assert target["ViFluRate"] == 2.5
+    assert target["ViOpenFluRate"] == 2.5
+    assert target["ViDynamicDisparityRate"] == 1.2
+    assert target["ViStaticDisparityRate"] == 3.4
+    assert target["ScannerFluRateMetric"] == "vi_open_flu_rate"
+    assert target["ScannerFluRateSource"] == "VI_TRIGGERED"
+
+
+def test_freshness_score_does_not_treat_vi_disparity_as_flu_acceleration():
+    base = {
+        "Code": "005930",
+        "Name": "삼성전자",
+        "Price": 72000,
+        "Source": "VI_TRIGGERED",
+        "SourceSet": {"VI_TRIGGERED"},
+        "VIMotionCount": 1,
+        "PriorityScore": 0.0,
+        "SpikeRate": 0.0,
+        "TradeValue": 0,
+        "CntrStr": 0.0,
+    }
+    open_rate_target = {
+        **base,
+        "ViFluRate": 10.0,
+        "ViFluRateMetric": "vi_open_flu_rate",
+    }
+    disparity_target = {
+        **base,
+        "ViFluRate": 10.0,
+        "ViFluRateMetric": "vi_dynamic_disparity_rate",
+    }
+
+    assert scalping_scanner._freshness_score(open_rate_target) - scalping_scanner._freshness_score(disparity_target) == 80.0
+
+
 def test_candidate_pool_merges_sources_and_prefers_value_vi_combo():
     pool = scalping_scanner.build_candidate_pool(
         soaring_targets=[

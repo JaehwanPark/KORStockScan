@@ -218,15 +218,59 @@ def test_key_lineage_splits_active_seed_new_entry_from_followup_context(monkeypa
     assert report["summary"]["active_seed_candidate_new_entry_event_count"] == 2
     assert report["summary"]["active_seed_candidate_followup_event_count"] == 2
     assert report["summary"]["active_seed_candidate_matched_event_count"] == 1
-    assert report["summary"]["active_seed_candidate_matched_true_without_seed_id_event_count"] == 1
+    assert report["summary"]["active_seed_candidate_matched_true_without_seed_id_event_count"] == 0
     assert report["summary"]["active_seed_candidate_unmatched_event_count"] == 2
     assert report["summary"]["active_seed_candidate_new_entry_unmatched_event_count"] == 1
     assert report["summary"]["active_seed_candidate_followup_unmatched_event_count"] == 1
-    assert report["summary"]["active_seed_candidate_without_seed_id_event_count"] == 3
-    assert report["summary"]["active_seed_candidate_followup_without_seed_id_event_count"] == 2
+    assert report["summary"]["active_seed_candidate_eligible_event_count"] == 3
+    assert report["summary"]["active_seed_candidate_not_match_eligible_event_count"] == 1
+    assert report["summary"]["active_seed_candidate_without_seed_id_event_count"] == 2
+    assert report["summary"]["active_seed_candidate_raw_without_seed_id_event_count"] == 3
+    assert report["summary"]["active_seed_candidate_followup_without_seed_id_event_count"] == 1
+    assert report["summary"]["active_seed_candidate_raw_followup_without_seed_id_event_count"] == 2
+    assert report["summary"]["active_seed_candidate_not_match_eligible_reason_counts"] == {
+        "diagnostic_followup_without_seed_context": 1
+    }
     assert report["summary"]["active_seed_candidate_followup_stage_counts"] == {
         "scalp_sim_holding_started": 1,
         "scalp_sim_panic_scale_in_blocked": 1,
+    }
+
+
+def test_key_lineage_excludes_diagnostic_active_seed_candidate_from_blocker(monkeypatch, tmp_path):
+    _patch_dirs(monkeypatch, tmp_path)
+    target = "2026-06-04"
+    _write(tmp_path / "report" / "lifecycle_bucket_discovery" / f"lifecycle_bucket_discovery_{target}.json", {})
+    _write(tmp_path / "threshold_cycle" / "scalp_sim_policies" / f"scalp_sim_policy_catalog_{target}.json", {})
+    _write(tmp_path / "threshold_cycle" / "swing_sim_policies" / f"swing_sim_policy_catalog_{target}.json", {})
+    _write(tmp_path / "threshold_cycle" / "apply_plans" / f"threshold_apply_{target}.json", {"source_date": target})
+    event_path = tmp_path / "pipeline_events" / f"pipeline_events_{target}.jsonl"
+    event_path.parent.mkdir(parents=True, exist_ok=True)
+    event_path.write_text(
+        json.dumps(
+            {
+                "stage": "scalp_sim_holding_started",
+                "fields": {
+                    "scalp_sim_auto_policy_active_seed_count": "2",
+                    "active_seed_candidate_observable_prefix": "{\"entry_score_parent\":\"score_mid_recovery\"}",
+                    "active_seed_match_eligible": False,
+                    "active_seed_match_exclusion_reason": "diagnostic_followup_without_seed_context",
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    report = ledger.build_key_lineage_ledger(target)
+
+    assert report["summary"]["active_seed_candidate_event_count"] == 1
+    assert report["summary"]["active_seed_candidate_eligible_event_count"] == 0
+    assert report["summary"]["active_seed_candidate_not_match_eligible_event_count"] == 1
+    assert report["summary"]["active_seed_candidate_without_seed_id_event_count"] == 0
+    assert report["summary"]["active_seed_candidate_raw_without_seed_id_event_count"] == 1
+    assert report["summary"]["active_seed_candidate_not_match_eligible_reason_counts"] == {
+        "diagnostic_followup_without_seed_context": 1
     }
 
 
