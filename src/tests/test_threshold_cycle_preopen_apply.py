@@ -373,10 +373,10 @@ def test_auto_bounded_live_writes_dynamic_entry_price_resolver_env(tmp_path, mon
                             "enabled": True,
                             "max_below_bid_bps": 70,
                             "normal_defensive_ticks": 2,
-                            "normal_defensive_bps": 50,
+                            "normal_defensive_bps": 25,
                             "conditional_strong_defensive_bps": 10,
-                            "normal_favorable_defensive_bps": 35,
-                            "normal_weak_defensive_bps": 65,
+                            "normal_favorable_defensive_bps": 15,
+                            "normal_weak_defensive_bps": 40,
                             "conditional_1tick_real_enabled": False,
                         },
                         "threshold_version": "dynamic_entry_price_resolver:test",
@@ -414,10 +414,10 @@ def test_auto_bounded_live_writes_dynamic_entry_price_resolver_env(tmp_path, mon
     env = manifest["runtime_env_overrides"]
     assert env["KORSTOCKSCAN_SCALPING_ENTRY_PRICE_RESOLVER_MAX_BELOW_BID_BPS"] == "70"
     assert env["KORSTOCKSCAN_SCALPING_NORMAL_DEFENSIVE_TICKS"] == "2"
-    assert env["KORSTOCKSCAN_SCALPING_NORMAL_DEFENSIVE_BPS"] == "50"
+    assert env["KORSTOCKSCAN_SCALPING_NORMAL_DEFENSIVE_BPS"] == "25"
     assert env["KORSTOCKSCAN_SCALPING_CONDITIONAL_STRONG_DEFENSIVE_BPS"] == "10"
-    assert env["KORSTOCKSCAN_SCALPING_NORMAL_FAVORABLE_DEFENSIVE_BPS"] == "35"
-    assert env["KORSTOCKSCAN_SCALPING_NORMAL_WEAK_DEFENSIVE_BPS"] == "65"
+    assert env["KORSTOCKSCAN_SCALPING_NORMAL_FAVORABLE_DEFENSIVE_BPS"] == "15"
+    assert env["KORSTOCKSCAN_SCALPING_NORMAL_WEAK_DEFENSIVE_BPS"] == "40"
     assert env["KORSTOCKSCAN_SCALPING_CONDITIONAL_1TICK_REAL_ENABLED"] == "false"
 
 
@@ -1421,13 +1421,16 @@ def test_operator_runtime_env_lock_until_explicit_close_survives_observation_dat
     runtime_dir = tmp_path / "runtime_env"
     lock_dir = tmp_path / "operator_runtime_env_locks"
     latency_dir = tmp_path / "missing_latency_classifier_recommendation"
+    ai_dir = report_dir / "threshold_cycle_ai_review"
     report_dir.mkdir(parents=True)
+    ai_dir.mkdir(parents=True)
     lock_dir.mkdir(parents=True)
     monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
     monkeypatch.setattr(mod, "APPLY_PLAN_DIR", apply_dir)
     monkeypatch.setattr(mod, "RUNTIME_ENV_DIR", runtime_dir)
     monkeypatch.setattr(mod, "OPERATOR_RUNTIME_ENV_LOCK_DIR", lock_dir)
     monkeypatch.setattr(mod, "LATENCY_CLASSIFIER_RECOMMENDATION_DIR", latency_dir)
+    monkeypatch.setattr(mod, "AI_REVIEW_DIR", ai_dir)
 
     (report_dir / "threshold_cycle_2026-06-20.json").write_text(
         json.dumps(
@@ -1490,13 +1493,16 @@ def test_operator_runtime_env_lock_applies_when_target_date_reaches_active_from(
     runtime_dir = tmp_path / "runtime_env"
     lock_dir = tmp_path / "operator_runtime_env_locks"
     latency_dir = tmp_path / "missing_latency_classifier_recommendation"
+    ai_dir = report_dir / "threshold_cycle_ai_review"
     report_dir.mkdir(parents=True)
+    ai_dir.mkdir(parents=True)
     lock_dir.mkdir(parents=True)
     monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
     monkeypatch.setattr(mod, "APPLY_PLAN_DIR", apply_dir)
     monkeypatch.setattr(mod, "RUNTIME_ENV_DIR", runtime_dir)
     monkeypatch.setattr(mod, "OPERATOR_RUNTIME_ENV_LOCK_DIR", lock_dir)
     monkeypatch.setattr(mod, "LATENCY_CLASSIFIER_RECOMMENDATION_DIR", latency_dir)
+    monkeypatch.setattr(mod, "AI_REVIEW_DIR", ai_dir)
 
     (report_dir / "threshold_cycle_2026-06-10.json").write_text(
         json.dumps(
@@ -2007,13 +2013,16 @@ def test_score65_74_strong_micro_override_closes_for_entry_live_owner(tmp_path, 
     runtime_dir = tmp_path / "runtime_env"
     lock_dir = tmp_path / "operator_runtime_env_locks"
     latency_dir = tmp_path / "missing_latency_classifier_recommendation"
+    ai_dir = report_dir / "threshold_cycle_ai_review"
     report_dir.mkdir(parents=True)
+    ai_dir.mkdir(parents=True)
     lock_dir.mkdir(parents=True)
     monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
     monkeypatch.setattr(mod, "APPLY_PLAN_DIR", apply_dir)
     monkeypatch.setattr(mod, "RUNTIME_ENV_DIR", runtime_dir)
     monkeypatch.setattr(mod, "OPERATOR_RUNTIME_ENV_LOCK_DIR", lock_dir)
     monkeypatch.setattr(mod, "LATENCY_CLASSIFIER_RECOMMENDATION_DIR", latency_dir)
+    monkeypatch.setattr(mod, "AI_REVIEW_DIR", ai_dir)
 
     (report_dir / "threshold_cycle_2026-06-15.json").write_text(
         json.dumps(
@@ -2030,6 +2039,22 @@ def test_score65_74_strong_micro_override_closes_for_entry_live_owner(tmp_path, 
                         "target_env_keys": ["SCALPING_NORMAL_DEFENSIVE_BPS"],
                         "current_values": {"normal_defensive_bps": 50},
                         "recommended_values": {"normal_defensive_bps": 25},
+                        "threshold_version": "dynamic_entry_price_resolver:test",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (ai_dir / "threshold_cycle_ai_review_2026-06-15_postclose.json").write_text(
+        json.dumps(
+            {
+                "ai_status": "parsed",
+                "items": [
+                    {
+                        "family": "dynamic_entry_price_resolver",
+                        "guard_accepted": True,
+                        "ai_anomaly_route": "threshold_candidate",
                     }
                 ],
             }

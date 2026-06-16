@@ -2,7 +2,7 @@
 
 ## 판정
 
-- 상태: `collect_more_samples`
+- 상태: `candidate_weight_source_review`
 - weight_source_ready: `False`
 - runtime_change: `False`
 
@@ -10,10 +10,10 @@
 
 | metric | value |
 | --- | ---: |
-| completed_valid | 0 |
-| exit_only | 0 |
+| completed_valid | 21 |
+| exit_only | 19 |
 | avg_down_wait | 0 |
-| pyramid_wait | 0 |
+| pyramid_wait | 2 |
 | compact_exit_signal | 125 |
 | compact_sell_completed | 1 |
 | compact_scale_in_executed | 14 |
@@ -23,26 +23,40 @@
 
 | field | known |
 | --- | ---: |
-| price_known | 0 |
-| volume_known | 0 |
-| time_known | 0 |
+| price_known | 21 |
+| volume_known | 18 |
+| time_known | 21 |
 
 ## Policy Counts
 
 | policy | count |
 | --- | ---: |
+| candidate_weight_source | 6 |
+| insufficient_sample | 3 |
 
 ## Price Bucket
 
-- 표본 없음
+| bucket | best_action | score | edge | sample | avg_profit | loss_rate | policy |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | --- |
+| price_10k_30k | exit_only | -0.3751 | - | 8 | 0.78 | 0.5 | candidate_weight_source |
+| price_gte_70k | exit_only | -0.6441 | - | 11 | -0.2209 | 0.5455 | candidate_weight_source |
 
 ## Volume Bucket
 
-- 표본 없음
+| bucket | best_action | score | edge | sample | avg_profit | loss_rate | policy |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | --- |
+| volume_2m_10m | exit_only | -0.3693 | - | 8 | 0.7338 | 0.375 | candidate_weight_source |
+| volume_500k_2m | exit_only | -0.4881 | - | 7 | 0.5557 | 0.4286 | candidate_weight_source |
+| volume_gte_10m | insufficient_sample | - | - | - | - | - | insufficient_sample |
+| volume_unknown | insufficient_sample | - | - | - | - | - | insufficient_sample |
 
 ## Time Bucket
 
-- 표본 없음
+| bucket | best_action | score | edge | sample | avg_profit | loss_rate | policy |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | --- |
+| time_0930_1030 | exit_only | -0.1903 | - | 6 | 1.1883 | 0.3333 | candidate_weight_source |
+| time_1030_1400 | exit_only | -0.5215 | - | 12 | -0.0008 | 0.5833 | candidate_weight_source |
+| time_1400_1530 | insufficient_sample | - | - | - | - | - | insufficient_sample |
 
 ## Eligible But Not Chosen
 

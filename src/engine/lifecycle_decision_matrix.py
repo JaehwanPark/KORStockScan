@@ -4033,6 +4033,49 @@ def _flow_identity_stage_summary(rows: list[dict[str, Any]], flows: list[dict[st
     }
 
 
+def _direct_sim_record_flow_zero_diagnostic(
+    flows: list[dict[str, Any]],
+    *,
+    direct_sim_record_complete_flow_count: int,
+    adm_bridge_complete_flow_count: int,
+) -> dict[str, Any]:
+    direct_flows = [item for item in flows if item.get("identity_closure_type") == "direct_sim_record"]
+    direct_incomplete = [
+        item for item in direct_flows if item.get("stage_completion_state") != "complete"
+    ]
+    reason_counts: Counter[str] = Counter()
+    stage_coverage_counts: Counter[str] = Counter()
+    for item in direct_flows:
+        presence = item.get("stage_presence") if isinstance(item.get("stage_presence"), dict) else {}
+        for stage in LIFECYCLE_FLOW_REQUIRED_STAGES:
+            if presence.get(stage):
+                stage_coverage_counts[stage] += 1
+        reason_counts.update(item.get("incomplete_reasons") or [])
+    if direct_sim_record_complete_flow_count > 0:
+        zero_reason = "direct_sim_record_complete_present"
+    elif adm_bridge_complete_flow_count > 0:
+        zero_reason = "no_direct_complete_but_adm_bridge_complete"
+    elif not direct_flows:
+        zero_reason = "identity_namespace_mismatch"
+    elif reason_counts.get("sim_record_id_only"):
+        zero_reason = "producer_missing_sim_record_on_required_stage"
+    elif any(reason_counts.get(f"missing_{stage}") for stage in LIFECYCLE_FLOW_REQUIRED_STAGES):
+        zero_reason = "stage_sequence_missing"
+    elif reason_counts.get("scale_in_noise_only"):
+        zero_reason = "scale_in_noise_denominator"
+    else:
+        zero_reason = "identity_namespace_mismatch"
+    return {
+        "direct_flow_zero_reason": zero_reason,
+        "direct_sim_record_flow_count": len(direct_flows),
+        "direct_sim_record_incomplete_flow_count": len(direct_incomplete),
+        "direct_sim_record_stage_coverage_counts": dict(stage_coverage_counts),
+        "direct_sim_record_incomplete_reason_counts": dict(reason_counts),
+        "runtime_effect": False,
+        "decision_authority": "ldm_direct_flow_diagnostic_only",
+    }
+
+
 def _bucket_id(stage: str, bucket_type: str, bucket_key: str) -> str:
     return f"{stage}:{bucket_type}:{_slug(bucket_key)}"
 
@@ -4447,6 +4490,11 @@ def _lifecycle_flow_bucket_attribution(rows: list[dict[str, Any]]) -> dict[str, 
     fallback_complete_flow_count = sum(
         1 for item in flows if item.get("stage_completion_state") == "complete" and item.get("identity_closure_type") == "fallback"
     )
+    direct_flow_zero_diagnostic = _direct_sim_record_flow_zero_diagnostic(
+        flows,
+        direct_sim_record_complete_flow_count=direct_sim_record_complete_flow_count,
+        adm_bridge_complete_flow_count=adm_bridge_complete_flow_count,
+    )
     flow_count = len(flows)
     join_contract_blocked = bool(identity_summary.get("join_contract_blocked"))
     incomplete_reason_counts = identity_summary["incomplete_flow_reason_counts"]
@@ -4480,6 +4528,8 @@ def _lifecycle_flow_bucket_attribution(rows: list[dict[str, Any]]) -> dict[str, 
             "direct_sim_record_complete_flow_count": direct_sim_record_complete_flow_count,
             "adm_bridge_complete_flow_count": adm_bridge_complete_flow_count,
             "fallback_complete_flow_count": fallback_complete_flow_count,
+            "direct_flow_zero_diagnostic": direct_flow_zero_diagnostic,
+            "direct_flow_zero_reason": direct_flow_zero_diagnostic.get("direct_flow_zero_reason"),
             "incomplete_flow_count": flow_count - complete_flow_count,
             "fallback_identity_count": sum(1 for item in flows if item.get("identity_quality") == "fallback_incomplete"),
             "identity_missing_count": identity_summary["identity_missing_count"],

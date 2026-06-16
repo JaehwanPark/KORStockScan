@@ -237,6 +237,13 @@ def _swing_lifecycle_bucket_discovery_summary(context: dict[str, Any]) -> dict[s
     return summary
 
 
+def _source_summary(context: dict[str, Any], label: str) -> dict[str, Any]:
+    sources = context.get("sources") if isinstance(context.get("sources"), dict) else {}
+    source = sources.get(label) if isinstance(sources.get(label), dict) else {}
+    summary = source.get("summary") if isinstance(source.get("summary"), dict) else {}
+    return summary
+
+
 def _nested_report_summary(source_summary: dict[str, Any]) -> dict[str, Any]:
     summary = source_summary.get("summary") if isinstance(source_summary.get("summary"), dict) else {}
     return summary
@@ -270,12 +277,14 @@ def _is_resolved_swing_ai_review_missing_source_only_gap(item: dict[str, Any], c
         return False
     review_id = str(item.get("review_id") or "").lower()
     reason = str(item.get("reason") or "").lower()
-    if "ai_review_two_pass_missing" not in review_id and not (
+    if not any(token in review_id for token in ("ai_review_two_pass_missing", "ai_review_gap_missing_contract")) and not (
         "swing_lifecycle_bucket_discovery" in reason and "ai" in reason and "missing" in reason
     ):
         return False
     source_summary = _swing_lifecycle_bucket_discovery_summary(context)
     summary = _nested_report_summary(source_summary)
+    sim_auto_unreviewed = _safe_int(summary.get("sim_auto_unreviewed_candidate_count"))
+    sim_auto_downgraded = _safe_int(summary.get("sim_auto_downgraded_by_review_count"))
     return (
         summary.get("source_contract_status") == "pass"
         and source_summary.get("runtime_effect") is False
@@ -283,10 +292,44 @@ def _is_resolved_swing_ai_review_missing_source_only_gap(item: dict[str, Any], c
         and summary.get("ai_fail_closed") is False
         and summary.get("ai_review_followup_required") is False
         and summary.get("sim_auto_blocked_by_ai_review_followup") is False
-        and _safe_int(summary.get("pre_review_sim_auto_candidate_count")) == 0
-        and _safe_int(summary.get("sim_auto_unreviewed_candidate_count")) == 0
-        and _safe_int(summary.get("sim_auto_downgraded_by_review_count")) == 0
+        and sim_auto_unreviewed == 0
+        and sim_auto_downgraded == 0
     )
+
+
+def _is_resolved_pattern_lab_code_improvement_pending_source_only_gap(
+    item: dict[str, Any],
+    context: dict[str, Any],
+) -> bool:
+    if str(item.get("final_state") or "") != "code_patch_required":
+        return False
+    if str(item.get("final_decision") or "") == "keep":
+        return False
+    review_id = str(item.get("review_id") or "").strip().lower()
+    reason = str(item.get("reason") or "").lower()
+    if review_id != "code_improvement_order_pending":
+        return False
+    if "pending code improvement" not in reason and "pending" not in reason:
+        return False
+    if not _source_label_status_closed(context, "code_improvement_workorder"):
+        return False
+    orders = [
+        item
+        for item in (context.get("pattern_lab_workorder_orders") or [])
+        if isinstance(item, dict)
+    ]
+    if not orders:
+        return False
+    disallowed = [
+        order
+        for order in orders
+        if str(order.get("decision") or "") == "implement_now"
+        and str(order.get("order_id") or "") not in {
+            "order_pattern_lab_ai_review_ai_review_gap_missing_contract",
+            "order_pattern_lab_ai_review_code_improvement_order_pending",
+        }
+    ]
+    return not disallowed
 
 
 _CLASSIFIED_THRESHOLD_EV_WARNING_PREFIXES = {
@@ -324,6 +367,45 @@ def _threshold_ev_warnings_are_classified_source_only(context: dict[str, Any]) -
     if unknown_warnings:
         return False
     return _feedback_handoff_closed(context)
+
+
+def _classified_source_only_warning_present(context: dict[str, Any], warning: str) -> bool:
+    threshold_summary = _threshold_cycle_ev_source_summary(context)
+    threshold_warnings = threshold_summary.get("warnings") if isinstance(threshold_summary.get("warnings"), list) else []
+    return any(str(item) == warning for item in threshold_warnings)
+
+
+def _is_resolved_classified_source_quality_warning_gap(item: dict[str, Any], context: dict[str, Any]) -> bool:
+    if str(item.get("final_state") or "") != "source_quality_gap":
+        return False
+    if str(item.get("final_decision") or "") == "keep":
+        return False
+    review_id = str(item.get("review_id") or "").strip().lower()
+    if review_id == "lifecycle_bucket_discovery_source_contract_drift":
+        source = _source_summary(context, "lifecycle_bucket_discovery")
+        summary = _nested_report_summary(source)
+        return (
+            source.get("runtime_effect") is False
+            and source.get("allowed_runtime_apply") is not True
+            and summary.get("source_contract_status") == "warning"
+            and "source_contract_drift_warning" in [str(item) for item in source.get("warnings", [])]
+            and _classified_source_only_warning_present(
+                context,
+                "lifecycle_bucket_discovery:source_contract_drift_warning",
+            )
+        )
+    if review_id == "swing_strategy_discovery_pending_future_quotes":
+        source = _source_summary(context, "swing_strategy_discovery_ev")
+        return (
+            source.get("runtime_effect") is False
+            and source.get("allowed_runtime_apply") is False
+            and "pending_future_quotes" in [str(item) for item in source.get("warnings", [])]
+            and _classified_source_only_warning_present(
+                context,
+                "swing_strategy_discovery:pending_future_quotes",
+            )
+        )
+    return False
 
 
 def _is_resolved_threshold_cycle_ev_incomplete_gap(item: dict[str, Any], context: dict[str, Any]) -> bool:
@@ -424,8 +506,8 @@ def _apply_source_contract_resolutions(payload: dict[str, Any], context: dict[st
             resolved_conclusions.append(
                 _resolved_source_context_conclusion(
                     item,
-                    status="resolved_by_source_only_empty_sim_auto_review_contract",
-                    contract_id="swing_lifecycle_bucket_discovery_ai_review_source_only_no_candidate",
+                    status="resolved_by_source_only_sim_auto_review_contract",
+                    contract_id="swing_lifecycle_bucket_discovery_ai_review_source_only_reviewed",
                 )
             )
         elif _is_resolved_threshold_cycle_ev_incomplete_gap(item, context):
@@ -437,6 +519,28 @@ def _apply_source_contract_resolutions(payload: dict[str, Any], context: dict[st
                     item,
                     status="resolved_by_classified_threshold_ev_source_only_warnings",
                     contract_id="threshold_cycle_ev_warning_classification",
+                )
+            )
+        elif _is_resolved_pattern_lab_code_improvement_pending_source_only_gap(item, context):
+            review_id = str(item.get("review_id") or "unknown")
+            resolved_ids.append(review_id)
+            source_context_resolution_ids.append(review_id)
+            resolved_conclusions.append(
+                _resolved_source_context_conclusion(
+                    item,
+                    status="resolved_by_current_code_improvement_workorder_self_reference",
+                    contract_id="pattern_lab_ai_review_code_improvement_order_pending_source_only",
+                )
+            )
+        elif _is_resolved_classified_source_quality_warning_gap(item, context):
+            review_id = str(item.get("review_id") or "unknown")
+            resolved_ids.append(review_id)
+            source_context_resolution_ids.append(review_id)
+            resolved_conclusions.append(
+                _resolved_source_context_conclusion(
+                    item,
+                    status="resolved_by_classified_source_quality_warning",
+                    contract_id="pattern_lab_ai_review_classified_source_quality_warning",
                 )
             )
         else:
@@ -555,7 +659,7 @@ def _is_resolved_code_improvement_workorder_self_review_gap(item: dict[str, Any]
     if str(item.get("final_decision") or "") == "keep":
         return False
     review_id = str(item.get("review_id") or "").strip().lower()
-    if review_id != "code_improvement_workorder":
+    if review_id not in {"code_improvement_workorder", "code_improvement_workorder_ai_review_gap"}:
         return False
     if not _feedback_handoff_closed(context):
         return False

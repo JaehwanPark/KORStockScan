@@ -130,6 +130,18 @@ def _active_seed_default_match_eligible(*, stage: str, seed_id: str, matched: st
     return matched == "true"
 
 
+def _active_seed_without_seed_reason(*, stage: str, matched: str, candidate_prefix: str) -> str:
+    if matched == "true":
+        return "producer_missing_seed_id"
+    if stage == "scalp_sim_entry_armed":
+        return "new_entry_without_seed_id"
+    if stage:
+        return "followup_missing_parent_seed_id"
+    if "entry_source_parent" in candidate_prefix or "entry_score_parent" in candidate_prefix:
+        return "natural_no_match"
+    return "taxonomy_pending_source"
+
+
 def _runtime_apply_path(target_date: str) -> Path:
     exact = APPLY_PLAN_DIR / f"threshold_apply_{target_date}.json"
     if exact.exists():
@@ -330,6 +342,7 @@ def _event_field_values(target_date: str, tracked_values: dict[str, set[str]] | 
         "active_seed_candidate_eligible_event_count": 0,
         "active_seed_candidate_not_match_eligible_event_count": 0,
         "active_seed_candidate_not_match_eligible_reason_counts": {},
+        "active_seed_candidate_without_seed_id_reason_counts": {},
         "active_seed_candidate_followup_stage_counts": {},
         "panic_scale_in_event_count": 0,
         "panic_scale_in_unique_sim_record_count": 0,
@@ -425,6 +438,13 @@ def _event_field_values(target_date: str, tracked_values: dict[str, set[str]] | 
                                 policy_diag["active_seed_candidate_followup_unmatched_event_count"] += 1
                         if not seed_id:
                             policy_diag["active_seed_candidate_without_seed_id_event_count"] += 1
+                            reason = _active_seed_without_seed_reason(
+                                stage=stage,
+                                matched=matched,
+                                candidate_prefix=candidate_prefix,
+                            )
+                            reason_counts = policy_diag["active_seed_candidate_without_seed_id_reason_counts"]
+                            reason_counts[reason] = reason_counts.get(reason, 0) + 1
                             if stage != "scalp_sim_entry_armed":
                                 policy_diag["active_seed_candidate_followup_without_seed_id_event_count"] += 1
                 if stage == "scalp_sim_panic_scale_in_blocked":
@@ -1372,6 +1392,10 @@ def build_key_lineage_ledger(target_date: str) -> dict[str, Any]:
             ),
             "active_seed_candidate_not_match_eligible_reason_counts": active_policy_observation.get(
                 "active_seed_candidate_not_match_eligible_reason_counts"
+            )
+            or {},
+            "active_seed_candidate_without_seed_id_reason_counts": active_policy_observation.get(
+                "active_seed_candidate_without_seed_id_reason_counts"
             )
             or {},
             "active_seed_candidate_followup_stage_counts": active_policy_observation.get(

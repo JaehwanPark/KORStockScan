@@ -9363,6 +9363,47 @@ def _maybe_apply_entry_passive_probe(
     }
 
 
+def _fresh_entry_defensive_price_from_context(
+    *,
+    latency_gate,
+    current_price,
+    best_bid,
+    applied_bps,
+) -> tuple[int, dict[str, Any]]:
+    """Rebase defensive submit price on the freshest pre-submit price context."""
+    original_price = _coerce_int_value((latency_gate or {}).get("latency_guarded_order_price"))
+    original_basis = _coerce_int_value((latency_gate or {}).get("latest_price"))
+    context_best_bid = _coerce_int_value(best_bid)
+    context_current = _coerce_int_value(current_price)
+    fresh_basis = max(context_best_bid, context_current, original_basis)
+    if fresh_basis <= 0 or applied_bps <= 0:
+        return original_price, {
+            "entry_price_fresh_basis_applied": False,
+            "entry_price_fresh_basis_reason": "invalid_basis_or_bps",
+            "entry_price_fresh_basis_price": fresh_basis,
+            "entry_price_fresh_basis_original_price": original_price,
+        }
+
+    fresh_price = move_price_down_by_bps(fresh_basis, int(applied_bps), floor_ticks=1)
+    fresh_price = clamp_price_to_tick(fresh_price)
+    applied = fresh_price > original_price
+    return (fresh_price if applied else original_price), {
+        "entry_price_fresh_basis_applied": bool(applied),
+        "entry_price_fresh_basis_reason": (
+            "rebased_to_fresh_context"
+            if applied
+            else "fresh_context_not_more_aggressive_than_existing_defensive"
+        ),
+        "entry_price_fresh_basis_price": int(fresh_basis),
+        "entry_price_fresh_basis_original_price": int(original_price),
+        "entry_price_fresh_basis_recomputed_price": int(fresh_price),
+        "entry_price_fresh_basis_context_best_bid": int(context_best_bid),
+        "entry_price_fresh_basis_context_current": int(context_current),
+        "entry_price_fresh_basis_original_latest": int(original_basis),
+        "entry_price_fresh_basis_bps": int(applied_bps),
+    }
+
+
 def _build_entry_submit_revalidation_fields(ws_data, latency_gate, *, now_ts=None):
     now_ts = float(now_ts or time.time())
     decision_ts = _safe_float((latency_gate or {}).get("ai_entry_price_canary_decision_ts"), 0.0)
@@ -9878,7 +9919,19 @@ def _apply_entry_ai_price_canary(
         candidate_price = _coerce_int_value((result or {}).get("order_price"))
     else:
         action = "USE_DEFENSIVE"
-        candidate_price = defensive_price or resolved_price
+        applied_bps = _coerce_int_value((latency_gate or {}).get("entry_price_gap_profile_bps"))
+        candidate_price, fresh_basis_fields = _fresh_entry_defensive_price_from_context(
+            latency_gate=latency_gate,
+            current_price=current_price,
+            best_bid=best_bid,
+            applied_bps=applied_bps,
+        )
+        if candidate_price <= 0:
+            candidate_price = defensive_price or resolved_price
+            fresh_basis_fields = {
+                **fresh_basis_fields,
+                "entry_price_fresh_basis_reason": "fallback_to_existing_defensive",
+            }
 
     if candidate_price <= 0:
         _log_entry_pipeline(
@@ -9935,6 +9988,27 @@ def _apply_entry_ai_price_canary(
             )
             return planned_orders, False
 
+    if action == "USE_DEFENSIVE" and fresh_basis_fields.get("entry_price_fresh_basis_applied"):
+        defensive_price = _coerce_int_value(
+            fresh_basis_fields.get("entry_price_fresh_basis_recomputed_price")
+        ) or candidate_price
+        latency_gate["latency_guarded_order_price"] = defensive_price
+        latency_gate["normal_defensive_order_price"] = defensive_price
+        latency_gate["entry_price_fresh_basis_applied"] = True
+        latency_gate["entry_price_fresh_basis_reason"] = fresh_basis_fields.get(
+            "entry_price_fresh_basis_reason"
+        )
+        latency_gate["entry_price_fresh_basis_price"] = fresh_basis_fields.get(
+            "entry_price_fresh_basis_price"
+        )
+        latency_gate["entry_price_fresh_basis_recomputed_price"] = fresh_basis_fields.get(
+            "entry_price_fresh_basis_recomputed_price"
+        )
+        latency_gate["latest_price"] = max(
+            _coerce_int_value(latency_gate.get("latest_price")),
+            _coerce_int_value(fresh_basis_fields.get("entry_price_fresh_basis_price")),
+        )
+
     adjusted_orders = []
     for order in planned_orders or []:
         next_order = dict(order)
@@ -9977,6 +10051,7 @@ def _apply_entry_ai_price_canary(
         max_wait_sec=max_wait_sec,
         ai_eval_ms=ai_eval_ms,
         price_decision_context_age_ms=context_age_ms,
+        **(fresh_basis_fields if action == "USE_DEFENSIVE" else {}),
         **openai_transport_fields,
         **passive_fields,
         **micro_log_fields,
@@ -14661,6 +14736,8 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             pre_submit_quote_refresh_applied=bool(latency_gate.get('pre_submit_quote_refresh_applied')),
             pre_submit_quote_refresh_reason=latency_gate.get('pre_submit_quote_refresh_reason'),
             pre_submit_quote_refresh_source=latency_gate.get('pre_submit_quote_refresh_source'),
+            pre_submit_quote_refresh_strategy_id=latency_gate.get('pre_submit_quote_refresh_strategy_id'),
+            pre_submit_quote_refresh_env_value=latency_gate.get('pre_submit_quote_refresh_env_value'),
             pre_submit_quote_refresh_quote_age_ms=latency_gate.get('pre_submit_quote_refresh_quote_age_ms'),
             pre_submit_quote_refresh_best_bid=int(latency_gate.get('pre_submit_quote_refresh_best_bid', 0) or 0),
             pre_submit_quote_refresh_best_ask=int(latency_gate.get('pre_submit_quote_refresh_best_ask', 0) or 0),
@@ -14857,6 +14934,8 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         pre_submit_quote_refresh_applied=bool(latency_gate.get('pre_submit_quote_refresh_applied')),
         pre_submit_quote_refresh_reason=latency_gate.get('pre_submit_quote_refresh_reason'),
         pre_submit_quote_refresh_source=latency_gate.get('pre_submit_quote_refresh_source'),
+        pre_submit_quote_refresh_strategy_id=latency_gate.get('pre_submit_quote_refresh_strategy_id'),
+        pre_submit_quote_refresh_env_value=latency_gate.get('pre_submit_quote_refresh_env_value'),
         pre_submit_quote_refresh_quote_age_ms=latency_gate.get('pre_submit_quote_refresh_quote_age_ms'),
         pre_submit_quote_refresh_best_bid=int(latency_gate.get('pre_submit_quote_refresh_best_bid', 0) or 0),
         pre_submit_quote_refresh_best_ask=int(latency_gate.get('pre_submit_quote_refresh_best_ask', 0) or 0),

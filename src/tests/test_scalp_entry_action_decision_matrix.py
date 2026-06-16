@@ -862,6 +862,71 @@ def test_scalp_entry_adm_unknown_bucket_summary_separates_unknown_from_not_avail
     assert unknown_summary["examples"][0]["bucket_token"].count("|") == 7
 
 
+def test_scalp_entry_adm_unknown_bucket_summary_splits_context_root_causes():
+    summary = mod._unknown_bucket_summary(
+        [
+            {
+                "stage": "scalp_entry_action_decision_snapshot",
+                "stock_code": "111111",
+                "risk_context_bucket": "risk_unknown",
+                "price_resolution_bucket": "quote_based",
+                "score_bucket": "score65_74",
+                "bucket_field_provenance": {"risk_context_bucket": "raw_recomputed"},
+            },
+            {
+                "stage": "holding",
+                "stock_code": "222222",
+                "risk_context_bucket": "neutral_strength_momentum",
+                "price_resolution_bucket": "price_unknown",
+                "score_bucket": "score_not_available",
+                "bucket_field_provenance": {"price_resolution_bucket": "raw_recomputed"},
+            },
+        ]
+    )
+
+    assert summary["unknown_root_cause_counts"]["risk_context_bucket:source_field_missing"] == 1
+    assert summary["unknown_root_cause_counts"]["price_resolution_bucket:post_submit_or_exit_not_required"] == 1
+    assert summary["unknown_root_cause_detail_counts"] == {
+        "risk_context_bucket:source_field_missing": 1,
+        "price_resolution_bucket:post_submit_or_exit_not_required": 1,
+    }
+    assert summary["unknown_resolution_route_counts"] == {
+        "source_field_missing": 1,
+        "post_submit_or_exit_not_required": 1,
+    }
+    assert summary["source_quality_gate"] == "source_quality_blocker"
+    assert summary["recommended_route"] == "source_quality_workorder"
+    assert summary["actionable_unknown_route_counts"] == {
+        "risk_context_bucket:source_field_missing": 1,
+    }
+    assert not any("risk_context_source_missing" in key for key in summary["unknown_root_cause_counts"])
+    assert not any("price_context_source_missing" in key for key in summary["unknown_root_cause_counts"])
+
+
+def test_scalp_entry_adm_non_actionable_context_unknown_does_not_create_source_quality_workorder():
+    summary = mod._unknown_bucket_summary(
+        [
+            {
+                "stage": "holding",
+                "stock_code": "222222",
+                "risk_context_bucket": "risk_unknown",
+                "price_resolution_bucket": "price_unknown",
+                "score_bucket": "score_not_available",
+                "bucket_field_provenance": {
+                    "risk_context_bucket": "raw_recomputed",
+                    "price_resolution_bucket": "raw_recomputed",
+                },
+            }
+        ]
+    )
+
+    assert summary["affected_rows"] == 1
+    assert summary["source_quality_gate"] == "classified_non_actionable"
+    assert summary["recommended_route"] == "classified_not_applicable_no_workorder"
+    assert summary["actionable_unknown_route_counts"] == {}
+    assert summary["unknown_resolution_route_counts"] == {"post_submit_or_exit_not_required": 2}
+
+
 def test_scalp_entry_adm_pre_submit_missing_context_is_not_available(tmp_path, monkeypatch):
     pipeline_dir = tmp_path / "pipeline_events"
     report_dir = tmp_path / "report" / "scalp_entry_action_decision_matrix"

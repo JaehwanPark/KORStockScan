@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from datetime import time
 
 from src.scanners import scalping_scanner
 from src.utils import kiwoom_utils
@@ -37,6 +38,15 @@ class _EventBus:
 
     def publish(self, name, payload):
         self.events.append((name, payload))
+
+
+def test_resolve_scan_interval_matches_intraday_schedule():
+    assert scalping_scanner._resolve_scan_interval_sec(time(9, 5)) == 90
+    assert scalping_scanner._resolve_scan_interval_sec(time(10, 29)) == 90
+    assert scalping_scanner._resolve_scan_interval_sec(time(10, 30)) == 120
+    assert scalping_scanner._resolve_scan_interval_sec(time(13, 59)) == 120
+    assert scalping_scanner._resolve_scan_interval_sec(time(14, 0)) == 90
+    assert scalping_scanner._resolve_scan_interval_sec(time(15, 0)) == 90
 
 
 def test_ka10028_open_pric_pre_is_preserved_as_rate(monkeypatch):
@@ -106,6 +116,183 @@ def test_ka10054_vi_rates_are_split_by_metric(monkeypatch):
     assert row["ViDynamicDisparityRate"] == 1.2
     assert row["ViStaticDisparityRate"] == 3.4
     assert row["ViFluRateMetric"] == "vi_open_flu_rate"
+
+
+def test_ka00198_realtime_rank_start_is_normalized(monkeypatch):
+    def fake_fetch(**kwargs):
+        assert kwargs["api_id"] == "ka00198"
+        assert kwargs["payload"]["qry_tp"] == "5"
+        return [
+            {
+                "item_inq_rank": [
+                    {
+                        "stk_cd": "005930",
+                        "stk_nm": "삼성전자",
+                        "past_curr_prc": "+72000",
+                        "base_comp_chgr": "+1.25",
+                        "prev_base_chgr": "+0.35",
+                        "bigd_rank": "7",
+                        "rank_chg": "12",
+                        "rank_chg_sign": "+",
+                    }
+                ]
+            }
+        ]
+
+    monkeypatch.setattr(kiwoom_utils, "fetch_kiwoom_api_continuous", fake_fetch)
+
+    rows = kiwoom_utils.get_realtime_item_rank_ka00198("TOKEN", qry_tp="5", limit=10)
+
+    assert rows == [
+        {
+            "Code": "005930",
+            "Name": "삼성전자",
+            "Price": 72000,
+            "FluRate": 1.25,
+            "RealtimeRankFluRate": 1.25,
+            "RealtimePrevBaseChange": 0.35,
+            "RankNow": 7,
+            "RankChange": 12,
+            "RankChangeSign": "+",
+            "RealtimeRankWindow": "5",
+            "Source": "REALTIME_RANK_START",
+        }
+    ]
+
+
+def test_ka10019_price_jump_start_preserves_jump_metrics(monkeypatch):
+    def fake_fetch(**kwargs):
+        assert kwargs["api_id"] == "ka10019"
+        assert kwargs["payload"]["flu_tp"] == "1"
+        assert kwargs["payload"]["tm"] == "3"
+        return [
+            {
+                "pric_jmpflu": [
+                    {
+                        "stk_cd": "005930",
+                        "stk_nm": "삼성전자",
+                        "cur_prc": "+72000",
+                        "flu_rt": "+1.75",
+                        "jmp_rt": "+0.62",
+                        "trde_qty": "123456",
+                        "pred_pre_sig": "2",
+                    }
+                ]
+            }
+        ]
+
+    monkeypatch.setattr(kiwoom_utils, "fetch_kiwoom_api_continuous", fake_fetch)
+
+    rows = kiwoom_utils.get_price_jump_ka10019("TOKEN", minutes=3, limit=10)
+
+    assert len(rows) == 1
+    assert rows[0]["Code"] == "005930"
+    assert rows[0]["Price"] == 72000
+    assert rows[0]["FluRate"] == 1.75
+    assert rows[0]["JumpRate"] == 0.62
+    assert rows[0]["TradeQty"] == 123456
+    assert rows[0]["PreSig"] == "2"
+    assert rows[0]["Source"] == "PRICE_JUMP_START"
+
+
+def test_ka10023_positive_volume_surge_filters_non_positive(monkeypatch):
+    monkeypatch.setattr(
+        kiwoom_utils,
+        "scan_volume_spike_ka10023",
+        lambda *args, **kwargs: [
+            {"Code": "000001", "Name": "NEG", "Price": 10000, "FluRate": -0.1, "PreSig": "2"},
+            {"Code": "000002", "Name": "BAD_SIG", "Price": 10000, "FluRate": 0.4, "PreSig": "5"},
+            {"Code": "000003", "Name": "POS", "Price": 10000, "FluRate": 0.8, "PreSig": "2"},
+        ],
+    )
+
+    rows = kiwoom_utils.get_positive_volume_surge_ka10023("TOKEN", limit=10)
+
+    assert [row["Code"] for row in rows] == ["000003"]
+    assert rows[0]["Source"] == "VOLUME_SURGE_POSITIVE"
+
+
+def test_ka10021_bid_balance_surge_is_normalized(monkeypatch):
+    def fake_fetch(**kwargs):
+        assert kwargs["api_id"] == "ka10021"
+        assert kwargs["payload"]["trde_tp"] == "1"
+        assert kwargs["payload"]["tm_tp"] == "1"
+        assert kwargs["payload"]["tm"] == "3"
+        return [
+            {
+                "bid_req_sdnin": [
+                    {
+                        "stk_cd": "005930",
+                        "stk_nm": "삼성전자",
+                        "cur_prc": "+72000",
+                        "flu_rt": "+1.1",
+                        "sdnin_qty": "50000",
+                        "sdnin_rt": "95.5",
+                        "tot_buy_qty": "321000",
+                        "pred_pre_sig": "2",
+                    }
+                ]
+            }
+        ]
+
+    monkeypatch.setattr(kiwoom_utils, "fetch_kiwoom_api_continuous", fake_fetch)
+
+    rows = kiwoom_utils.get_bid_balance_surge_ka10021("TOKEN", minutes=3, limit=10)
+
+    assert len(rows) == 1
+    assert rows[0]["Code"] == "005930"
+    assert rows[0]["Price"] == 72000
+    assert rows[0]["FluRate"] == 1.1
+    assert rows[0]["BidSurgeQty"] == 50000
+    assert rows[0]["BidSurgeRate"] == 95.5
+    assert rows[0]["TotalBuyQty"] == 321000
+    assert rows[0]["Source"] == "BID_IMBALANCE_SURGE"
+
+
+def test_vi_triggered_without_primary_source_is_secondary_only_block(monkeypatch):
+    emitted = []
+    monkeypatch.setattr(kiwoom_utils, "is_valid_stock", lambda *args, **kwargs: True)
+    monkeypatch.setattr(
+        scalping_scanner,
+        "emit_pipeline_event",
+        lambda pipeline, name, code, stage, *, record_id=None, fields=None: emitted.append(
+            {"stage": stage, "fields": fields or {}}
+        ),
+    )
+    db = _DB()
+    event_bus = _EventBus()
+    pool = scalping_scanner.build_candidate_pool(
+        vi_targets=[
+            {
+                "Code": "005930",
+                "Name": "삼성전자",
+                "Price": 72000,
+                "FluRate": 2.5,
+                "ViFluRate": 2.5,
+                "ViOpenFluRate": 2.5,
+                "ViFluRateMetric": "vi_open_flu_rate",
+            }
+        ]
+    )
+
+    target = pool["005930"]
+    codes, recent = scalping_scanner.promote_candidates(
+        db,
+        event_bus,
+        [target],
+        {},
+        max_new_codes=1,
+        reentry_cooldown_sec=1500,
+        token="TOKEN",
+        now_ts=1000.0,
+    )
+
+    assert codes == []
+    assert event_bus.events == []
+    assert db.records == []
+    assert recent["005930"]["last_guard_block_reason"] == "vi_secondary_confirmation_only"
+    assert emitted[0]["fields"]["scanner_candidate_role"] == "late_confirmation"
+    assert emitted[0]["fields"]["scanner_block_reason"] == "vi_secondary_confirmation_only"
 
 
 def test_candidate_pool_preserves_vi_flu_metric():
@@ -252,8 +439,16 @@ def test_candidate_pool_recomputes_open_flu_rate_after_later_source_updates_pric
     assert target["ScannerFluRateMetric"] == "open_flu_rate"
 
 
-def test_value_top_without_strength_is_displayed_as_waiting(capsys, monkeypatch):
+def test_value_top_without_primary_source_is_liquidity_only_block(monkeypatch):
+    emitted = []
     monkeypatch.setattr(kiwoom_utils, "is_valid_stock", lambda *args, **kwargs: True)
+    monkeypatch.setattr(
+        scalping_scanner,
+        "emit_pipeline_event",
+        lambda pipeline, name, code, stage, *, record_id=None, fields=None: emitted.append(
+            {"stage": stage, "fields": fields or {}}
+        ),
+    )
     db = _DB()
     event_bus = _EventBus()
     pool = scalping_scanner.build_candidate_pool(
@@ -274,11 +469,12 @@ def test_value_top_without_strength_is_displayed_as_waiting(capsys, monkeypatch)
         now_ts=1000.0,
     )
 
-    captured = capsys.readouterr().out
-    assert codes == ["005930"]
+    assert codes == []
+    assert event_bus.events == []
+    assert db.records == []
     assert target["CntrStrAvailable"] is False
-    assert "체결강도: 수신대기" in captured
-    assert "체결강도: 0.0" not in captured
+    assert emitted[0]["fields"]["scanner_filter_reason"] == "liquidity_only_source_not_seed"
+    assert emitted[0]["fields"]["scanner_candidate_role"] == "liquidity_enrichment_only"
 
 
 def test_strength_aliases_are_preserved_for_scanner_display():
@@ -488,7 +684,7 @@ def test_real_source_guard_blocks_deteriorating_value_top_only_without_strength(
     assert event_bus.events == []
     assert db.records == []
     assert recent["011070"]["last_flu_rate"] == 0.0
-    assert "value_top_only_repeat_deteriorating_without_strength" in capsys.readouterr().out
+    assert capsys.readouterr().out == ""
     assert emitted
     assert [item["stage"] for item in emitted[:2]] == [
         "scalping_scanner_candidate_observed",
@@ -498,9 +694,7 @@ def test_real_source_guard_blocks_deteriorating_value_top_only_without_strength(
     assert event["pipeline"] == "ENTRY_PIPELINE"
     assert event["stage"] == "scalping_scanner_real_source_guard_block"
     assert event["fields"]["scanner_real_source_guard_applied"] is True
-    assert event["fields"]["scanner_real_source_guard_skip_reason"] == (
-        "value_top_only_repeat_deteriorating_without_strength"
-    )
+    assert event["fields"]["scanner_real_source_guard_skip_reason"] == "non_positive_liquidity_only_source"
     assert event["fields"]["scanner_real_source_guard_block_event_emitted"] is True
     assert event["fields"]["actual_order_submitted"] is False
     assert event["fields"]["broker_order_forbidden"] is True
@@ -579,8 +773,8 @@ def test_real_source_guard_blocks_value_top_first_seen_as_probe(monkeypatch):
         "scalping_scanner_candidate_observed",
         "scalping_scanner_real_source_guard_block",
     ]
-    assert emitted[0]["fields"]["scanner_candidate_role"] == "late_confirmation"
-    assert emitted[0]["fields"]["scanner_block_reason"] == "late_confirmation_first_seen_probe"
+    assert emitted[0]["fields"]["scanner_candidate_role"] == "liquidity_enrichment_only"
+    assert emitted[0]["fields"]["scanner_block_reason"] == "liquidity_only_source_not_seed"
 
 
 def test_real_source_guard_blocks_open_top_first_seen_without_acceleration(monkeypatch):
@@ -710,21 +904,18 @@ def test_real_source_guard_promotes_probe_after_price_or_flu_acceleration(monkey
         now_ts=1060.0,
     )
 
-    assert codes == ["011070"]
-    assert event_bus.events == [("COMMAND_WS_REG", {"codes": ["011070"]})]
-    assert recent["011070"]["scanner_probe_state"] == "promoted"
-    assert [event["stage"] for event in emitted] == ["scalping_scanner_candidate_promoted"]
-    promoted_fields = emitted[0]["fields"]
-    assert promoted_fields["scanner_promotion_reason"] == "probe_acceleration_confirmed"
-    assert promoted_fields["scanner_candidate_role"] == "late_confirmation"
-    assert promoted_fields["first_seen_price"] == "10000"
-    assert promoted_fields["current_price"] == "10020"
-    assert promoted_fields["price_delta_since_first_seen_pct"] == "0.20"
-    assert promoted_fields["first_seen_flu_rate"] == "4.00"
-    assert promoted_fields["current_flu_rate"] == "4.10"
-    assert promoted_fields["flu_delta_since_first_seen"] == "0.10"
-    assert promoted_fields["actual_order_submitted"] is False
-    assert promoted_fields["broker_order_forbidden"] is True
+    assert codes == []
+    assert event_bus.events == []
+    assert recent["011070"]["scanner_probe_state"] == "first_seen_probe"
+    assert [event["stage"] for event in emitted] == [
+        "scalping_scanner_candidate_observed",
+        "scalping_scanner_real_source_guard_block",
+    ]
+    blocked_fields = emitted[0]["fields"]
+    assert blocked_fields["scanner_block_reason"] == "liquidity_only_source_not_seed"
+    assert blocked_fields["scanner_candidate_role"] == "liquidity_enrichment_only"
+    assert blocked_fields["actual_order_submitted"] is False
+    assert blocked_fields["broker_order_forbidden"] is True
 
 
 def test_real_source_guard_reports_price_declined_even_when_flu_accelerated(monkeypatch):
@@ -1057,22 +1248,18 @@ def test_real_source_guard_strength_available_promotion_keeps_provenance(monkeyp
         now_ts=1060.0,
     )
 
-    assert codes == ["011070"]
-    assert event_bus.events == [("COMMAND_WS_REG", {"codes": ["011070"]})]
-    assert recent["011070"]["scanner_probe_state"] == "promoted"
-    assert [event["stage"] for event in emitted] == ["scalping_scanner_candidate_promoted"]
-    promoted_fields = emitted[0]["fields"]
-    assert promoted_fields["scanner_promotion_reason"] == "strength_available"
-    assert promoted_fields["scanner_candidate_role"] == "late_confirmation"
-    assert promoted_fields["source_signature"] == "VALUE_TOP"
-    assert promoted_fields["first_seen_price"] == "10000"
-    assert promoted_fields["current_price"] == "10010"
-    assert promoted_fields["price_delta_since_first_seen_pct"] == "0.10"
-    assert promoted_fields["first_seen_flu_rate"] == "4.00"
-    assert promoted_fields["current_flu_rate"] == "4.05"
-    assert promoted_fields["flu_delta_since_first_seen"] == "0.05"
-    assert promoted_fields["actual_order_submitted"] is False
-    assert promoted_fields["broker_order_forbidden"] is True
+    assert codes == []
+    assert event_bus.events == []
+    assert recent["011070"]["scanner_probe_state"] == "first_seen_probe"
+    assert [event["stage"] for event in emitted] == [
+        "scalping_scanner_candidate_observed",
+        "scalping_scanner_real_source_guard_block",
+    ]
+    blocked_fields = emitted[0]["fields"]
+    assert blocked_fields["scanner_block_reason"] == "liquidity_only_source_not_seed"
+    assert blocked_fields["scanner_candidate_role"] == "liquidity_enrichment_only"
+    assert blocked_fields["actual_order_submitted"] is False
+    assert blocked_fields["broker_order_forbidden"] is True
 
 
 def test_real_source_guard_value_top_disabled_promotion_keeps_provenance(monkeypatch):
@@ -1148,17 +1335,11 @@ def test_real_source_guard_value_top_disabled_promotion_keeps_provenance(monkeyp
         now_ts=1060.0,
     )
 
-    assert codes == ["011070"]
-    promoted_fields = emitted[0]["fields"]
-    assert promoted_fields["scanner_promotion_reason"] == "value_top_only_guard_disabled"
-    assert promoted_fields["scanner_candidate_role"] == "late_confirmation"
-    assert promoted_fields["source_signature"] == "VALUE_TOP"
-    assert promoted_fields["first_seen_price"] == "10000"
-    assert promoted_fields["current_price"] == "10000"
-    assert promoted_fields["price_delta_since_first_seen_pct"] == "0.00"
-    assert promoted_fields["first_seen_flu_rate"] == "4.00"
-    assert promoted_fields["current_flu_rate"] == "4.00"
-    assert promoted_fields["flu_delta_since_first_seen"] == "0.00"
+    assert codes == []
+    blocked_fields = emitted[0]["fields"]
+    assert blocked_fields["scanner_block_reason"] == "liquidity_only_source_not_seed"
+    assert blocked_fields["scanner_candidate_role"] == "liquidity_enrichment_only"
+    assert blocked_fields["source_signature"] == "VALUE_TOP"
 
 
 def test_real_source_guard_promotes_immediate_acceleration_sources(monkeypatch):
@@ -1201,15 +1382,16 @@ def test_real_source_guard_promotes_immediate_acceleration_sources(monkeypatch):
         },
         {
             "Code": "000102",
-            "Name": "RANKJUMP",
+            "Name": "PRICEJUMP",
             "Price": 10000,
             "FluRate": 1.0,
             "CntrStr": 0.0,
             "CntrStrAvailable": False,
-            "Source": "VALUE_TOP",
-            "SourceSet": {"VALUE_TOP"},
+            "Source": "PRICE_JUMP_START",
+            "SourceSet": {"PRICE_JUMP_START"},
             "PriorityScore": 0.0,
             "SpikeRate": 0.0,
+            "JumpRate": 0.5,
             "TradeValue": 90000000000,
             "RankNow": 3,
             "RankPrev": 30,
@@ -1231,8 +1413,16 @@ def test_real_source_guard_promotes_immediate_acceleration_sources(monkeypatch):
     assert event_bus.events == [("COMMAND_WS_REG", {"codes": ["000101", "000102"]})]
 
 
-def test_real_source_guard_allows_independent_source_even_when_guard_enabled(monkeypatch):
+def test_real_source_guard_blocks_vi_value_without_primary_source(monkeypatch):
+    emitted = []
     monkeypatch.setattr(kiwoom_utils, "is_valid_stock", lambda *args, **kwargs: True)
+    monkeypatch.setattr(
+        scalping_scanner,
+        "emit_pipeline_event",
+        lambda pipeline, name, code, stage, *, record_id=None, fields=None: emitted.append(
+            {"stage": stage, "fields": fields or {}}
+        ),
+    )
     monkeypatch.setattr(
         scalping_scanner,
         "TRADING_RULES",
@@ -1269,7 +1459,7 @@ def test_real_source_guard_allows_independent_source_even_when_guard_enabled(mon
         "RankPrev": 2,
     }
 
-    codes, _ = scalping_scanner.promote_candidates(
+    codes, recent = scalping_scanner.promote_candidates(
         db,
         event_bus,
         [target],
@@ -1280,19 +1470,85 @@ def test_real_source_guard_allows_independent_source_even_when_guard_enabled(mon
         now_ts=1100.0,
     )
 
-    assert codes == ["005930"]
-    assert event_bus.events == [("COMMAND_WS_REG", {"codes": ["005930"]})]
+    assert codes == []
+    assert event_bus.events == []
+    assert db.records == []
+    assert recent["005930"]["last_guard_block_reason"] == "vi_secondary_confirmation_only"
+    assert emitted[0]["fields"]["scanner_candidate_role"] == "late_confirmation"
+    assert emitted[0]["fields"]["scanner_block_reason"] == "vi_secondary_confirmation_only"
+
+
+def test_promote_candidates_records_invalid_stock_filter_as_block(monkeypatch):
+    emitted = []
+    monkeypatch.setattr(kiwoom_utils, "is_valid_stock", lambda *args, **kwargs: False)
+    monkeypatch.setattr(
+        scalping_scanner,
+        "emit_pipeline_event",
+        lambda pipeline, name, code, stage, *, record_id=None, fields=None: emitted.append(
+            {"stage": stage, "fields": fields or {}}
+        ),
+    )
+    db = _DB()
+    event_bus = _EventBus()
+    target = {
+        "Code": "001930",
+        "Name": "KODEX 삼성전자단일종목레버리지",
+        "Price": 26540,
+        "FluRate": 3.33,
+        "CntrStr": 0.0,
+        "CntrStrAvailable": False,
+        "Source": "VOLUME_SURGE_POSITIVE",
+        "SourceSet": {"VOLUME_SURGE_POSITIVE"},
+        "PriorityScore": 0.0,
+        "SpikeRate": 2.58,
+        "TradeValue": 0,
+        "RankNow": 0,
+        "RankPrev": 0,
+    }
+
+    codes, recent = scalping_scanner.promote_candidates(
+        db,
+        event_bus,
+        [target],
+        {},
+        max_new_codes=12,
+        reentry_cooldown_sec=1500,
+        token="TOKEN",
+        now_ts=1000.0,
+    )
+
+    assert codes == []
+    assert event_bus.events == []
+    assert db.records == []
+    assert recent["001930"]["last_guard_block_reason"] == "invalid_stock_filter"
+    assert recent["001930"]["scanner_probe_state"] == "first_seen_probe"
+    assert [event["stage"] for event in emitted] == [
+        "scalping_scanner_candidate_observed",
+        "scalping_scanner_real_source_guard_block",
+    ]
+    assert emitted[0]["fields"]["scanner_block_reason"] == "invalid_stock_filter"
+    assert emitted[0]["fields"]["scanner_filter_reason"] == "invalid_stock_filter"
+    assert emitted[0]["fields"]["actual_order_submitted"] is False
+    assert emitted[0]["fields"]["broker_order_forbidden"] is True
 
 
 def test_run_scalper_iteration_keeps_ws_payload_and_max_new_codes(monkeypatch):
     monkeypatch.setattr(kiwoom_utils, "is_valid_stock", lambda *args, **kwargs: True)
     monkeypatch.setattr(
         kiwoom_utils,
-        "get_top_open_fluctuation_ka10028",
+        "get_realtime_item_rank_ka00198",
         lambda *args, **kwargs: [
-            {"Code": f"00000{i}", "Name": f"OPEN{i}", "Price": 10000 + i, "FluRate": 1.0}
+            {"Code": f"00000{i}", "Name": f"RANK{i}", "Price": 10000 + i, "FluRate": 1.0}
             for i in range(5)
         ],
+    )
+    monkeypatch.setattr(kiwoom_utils, "get_price_jump_ka10019", lambda *args, **kwargs: [])
+    monkeypatch.setattr(kiwoom_utils, "get_positive_volume_surge_ka10023", lambda *args, **kwargs: [])
+    monkeypatch.setattr(kiwoom_utils, "get_bid_balance_surge_ka10021", lambda *args, **kwargs: [])
+    monkeypatch.setattr(
+        kiwoom_utils,
+        "get_top_open_fluctuation_ka10028",
+        lambda *args, **kwargs: [],
     )
     monkeypatch.setattr(kiwoom_utils, "get_value_top_ka10032", lambda *args, **kwargs: [])
     monkeypatch.setattr(kiwoom_utils, "get_vi_triggered_ka10054", lambda *args, **kwargs: [])
@@ -1321,13 +1577,27 @@ def test_run_scalper_iteration_continues_when_one_source_fails(monkeypatch):
     monkeypatch.setattr(kiwoom_utils, "is_valid_stock", lambda *args, **kwargs: True)
     monkeypatch.setattr(
         kiwoom_utils,
+        "get_realtime_item_rank_ka00198",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("timeout")),
+    )
+    monkeypatch.setattr(
+        kiwoom_utils,
+        "get_price_jump_ka10019",
+        lambda *args, **kwargs: [
+            {"Code": "005930", "Name": "삼성전자", "Price": 70000, "FluRate": 1.2, "JumpRate": 0.5}
+        ],
+    )
+    monkeypatch.setattr(kiwoom_utils, "get_positive_volume_surge_ka10023", lambda *args, **kwargs: [])
+    monkeypatch.setattr(kiwoom_utils, "get_bid_balance_surge_ka10021", lambda *args, **kwargs: [])
+    monkeypatch.setattr(
+        kiwoom_utils,
         "get_top_open_fluctuation_ka10028",
         lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("timeout")),
     )
     monkeypatch.setattr(
         kiwoom_utils,
         "get_value_top_ka10032",
-        lambda *args, **kwargs: [{"Code": "005930", "Name": "삼성전자", "Price": 70000}],
+        lambda *args, **kwargs: [],
     )
     monkeypatch.setattr(kiwoom_utils, "get_vi_triggered_ka10054", lambda *args, **kwargs: [])
     radar = SimpleNamespace(find_supernova_targets=lambda *args, **kwargs: [])
@@ -1358,3 +1628,6 @@ def test_new_kiwoom_source_helpers_return_empty_list_on_fetch_failure(monkeypatc
 
     assert kiwoom_utils.get_value_top_ka10032("TOKEN") == []
     assert kiwoom_utils.get_vi_triggered_ka10054("TOKEN") == []
+    assert kiwoom_utils.get_realtime_item_rank_ka00198("TOKEN") == []
+    assert kiwoom_utils.get_price_jump_ka10019("TOKEN") == []
+    assert kiwoom_utils.get_bid_balance_surge_ka10021("TOKEN") == []

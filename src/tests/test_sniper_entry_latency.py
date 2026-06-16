@@ -342,16 +342,18 @@ def test_latency_entry_blocks_stale_quote_as_danger():
 
 
 def test_pre_submit_quote_refresh_uses_fresh_observer_quote_for_stale_ws(monkeypatch):
+    runtime_rules = replace(
+        CONFIG,
+        SCALP_PRE_SUBMIT_QUOTE_REFRESH_ENABLED=True,
+        SCALP_PRE_SUBMIT_QUOTE_REFRESH_MAX_AGE_MS=700,
+        SCALP_PRE_SUBMIT_QUOTE_REFRESH_MAX_SPREAD_RATIO=0.015,
+    )
     monkeypatch.setattr(
         entry_latency_module,
         "TRADING_RULES",
-        replace(
-            CONFIG,
-            SCALP_PRE_SUBMIT_QUOTE_REFRESH_ENABLED=True,
-            SCALP_PRE_SUBMIT_QUOTE_REFRESH_MAX_AGE_MS=700,
-            SCALP_PRE_SUBMIT_QUOTE_REFRESH_MAX_SPREAD_RATIO=0.015,
-        ),
+        runtime_rules,
     )
+    monkeypatch.setattr(entry_latency_module.constants_module, "TRADING_RULES", runtime_rules)
 
     stock = {"name": "TEST", "position_tag": "MIDDLE"}
     entry_latency_module.ORDERBOOK_STABILITY_OBSERVER.reset()
@@ -389,6 +391,50 @@ def test_pre_submit_quote_refresh_uses_fresh_observer_quote_for_stale_ws(monkeyp
     assert result["order_price"] == 10_010
     assert result["orderbook_stability"]["best_bid"] == 10_020
     assert result["orderbook_stability"]["best_ask"] == 10_030
+
+
+def test_pre_submit_quote_refresh_uses_pid_env_when_runtime_rules_are_stale(monkeypatch):
+    stale_rules = replace(
+        CONFIG,
+        SCALP_PRE_SUBMIT_QUOTE_REFRESH_ENABLED=False,
+        SCALP_PRE_SUBMIT_QUOTE_REFRESH_MAX_AGE_MS=100,
+        SCALP_PRE_SUBMIT_QUOTE_REFRESH_MAX_SPREAD_RATIO=0.001,
+    )
+    monkeypatch.setattr(entry_latency_module, "TRADING_RULES", stale_rules)
+    monkeypatch.setattr(entry_latency_module.constants_module, "TRADING_RULES", stale_rules)
+    monkeypatch.setenv("KORSTOCKSCAN_SCALP_PRE_SUBMIT_QUOTE_REFRESH_ENABLED", "true")
+    monkeypatch.setenv("KORSTOCKSCAN_SCALP_PRE_SUBMIT_QUOTE_REFRESH_MAX_AGE_MS", "700")
+    monkeypatch.setenv("KORSTOCKSCAN_SCALP_PRE_SUBMIT_QUOTE_REFRESH_MAX_SPREAD_RATIO", "0.015")
+
+    stock = {"name": "TEST", "position_tag": "MIDDLE"}
+    entry_latency_module.ORDERBOOK_STABILITY_OBSERVER.reset()
+    entry_latency_module.ORDERBOOK_STABILITY_OBSERVER.record_quote(
+        "123456_refresh_env",
+        best_bid=10_020,
+        best_ask=10_030,
+        ts=time.time(),
+    )
+    result = evaluate_live_buy_entry(
+        stock=stock,
+        code="123456_refresh_env",
+        ws_data={
+            "curr": 10_000,
+            "last_ws_update_ts": time.time() - 3.0,
+            "orderbook": {
+                "asks": [{"price": 10_010, "volume": 100}],
+                "bids": [{"price": 10_000, "volume": 100}],
+            },
+        },
+        strategy_id="SCALPING",
+        planned_qty=3,
+        signal_price=10_000,
+        signal_strength=0.9,
+    )
+
+    assert result["allowed"] is True
+    assert result["pre_submit_quote_refresh_enabled"] is True
+    assert result["pre_submit_quote_refresh_applied"] is True
+    assert result["pre_submit_quote_refresh_reason"] == "observer_quote_fresh"
 
 
 def test_latency_entry_caution_submits_normal_after_slippage_check():
@@ -1585,12 +1631,12 @@ def test_latency_danger_reason_helper_uses_thresholds(monkeypatch):
     ]
 
 
-def test_percent_bps_mode_normal_defensive_005_pct(monkeypatch):
+def test_percent_bps_mode_normal_defensive_0025_pct(monkeypatch):
     monkeypatch.setattr(entry_latency_module, "_defense_mode_is_percent_bps", lambda: True)
-    monkeypatch.setattr(entry_latency_module, "_normal_defensive_bps", lambda: 50)
+    monkeypatch.setattr(entry_latency_module, "_normal_defensive_bps", lambda: 25)
     monkeypatch.setattr(entry_latency_module, "_conditional_strong_defensive_bps", lambda: 10)
-    monkeypatch.setattr(entry_latency_module, "_normal_favorable_defensive_bps", lambda: 35)
-    monkeypatch.setattr(entry_latency_module, "_normal_weak_defensive_bps", lambda: 65)
+    monkeypatch.setattr(entry_latency_module, "_normal_favorable_defensive_bps", lambda: 15)
+    monkeypatch.setattr(entry_latency_module, "_normal_weak_defensive_bps", lambda: 40)
 
     entry_latency_module.ORDERBOOK_STABILITY_OBSERVER.reset()
     entry_latency_module.ORDERBOOK_STABILITY_OBSERVER.record_quote(
@@ -1615,19 +1661,18 @@ def test_percent_bps_mode_normal_defensive_005_pct(monkeypatch):
 
     assert result["allowed"] is True
     assert result["entry_price_defense_mode"] == "percent_bps"
-    assert result["entry_price_defensive_bps"] == 50
+    assert result["entry_price_defensive_bps"] == 25
     assert result["entry_price_gap_profile"] == "normal"
-    assert result["entry_price_gap_profile_bps"] == 50
-    assert result["order_price"] <= 9950
-    assert result["order_price"] >= 9940
+    assert result["entry_price_gap_profile_bps"] == 25
+    assert result["order_price"] == 9970
 
 
 def test_percent_bps_mode_strong_defensive_001_pct(monkeypatch):
     monkeypatch.setattr(entry_latency_module, "_defense_mode_is_percent_bps", lambda: True)
-    monkeypatch.setattr(entry_latency_module, "_normal_defensive_bps", lambda: 50)
+    monkeypatch.setattr(entry_latency_module, "_normal_defensive_bps", lambda: 25)
     monkeypatch.setattr(entry_latency_module, "_conditional_strong_defensive_bps", lambda: 10)
-    monkeypatch.setattr(entry_latency_module, "_normal_favorable_defensive_bps", lambda: 35)
-    monkeypatch.setattr(entry_latency_module, "_normal_weak_defensive_bps", lambda: 65)
+    monkeypatch.setattr(entry_latency_module, "_normal_favorable_defensive_bps", lambda: 15)
+    monkeypatch.setattr(entry_latency_module, "_normal_weak_defensive_bps", lambda: 40)
     monkeypatch.setattr(entry_latency_module, "_conditional_real_1tick_enabled", lambda s: True)
 
     entry_latency_module.ORDERBOOK_STABILITY_OBSERVER.reset()
@@ -1662,12 +1707,12 @@ def test_percent_bps_mode_strong_defensive_001_pct(monkeypatch):
     assert result["order_price"] == 9990
 
 
-def test_percent_bps_mode_favorable_micro_0035_pct(monkeypatch):
+def test_percent_bps_mode_favorable_micro_0015_pct(monkeypatch):
     monkeypatch.setattr(entry_latency_module, "_defense_mode_is_percent_bps", lambda: True)
-    monkeypatch.setattr(entry_latency_module, "_normal_defensive_bps", lambda: 50)
+    monkeypatch.setattr(entry_latency_module, "_normal_defensive_bps", lambda: 25)
     monkeypatch.setattr(entry_latency_module, "_conditional_strong_defensive_bps", lambda: 10)
-    monkeypatch.setattr(entry_latency_module, "_normal_favorable_defensive_bps", lambda: 35)
-    monkeypatch.setattr(entry_latency_module, "_normal_weak_defensive_bps", lambda: 65)
+    monkeypatch.setattr(entry_latency_module, "_normal_favorable_defensive_bps", lambda: 15)
+    monkeypatch.setattr(entry_latency_module, "_normal_weak_defensive_bps", lambda: 40)
     monkeypatch.setattr(entry_latency_module, "_conditional_real_1tick_enabled", lambda s: True)
 
     entry_latency_module.ORDERBOOK_STABILITY_OBSERVER.reset()
@@ -1696,19 +1741,19 @@ def test_percent_bps_mode_favorable_micro_0035_pct(monkeypatch):
 
     assert result["allowed"] is True
     assert result["entry_price_guard"] == "favorable_micro_percent_bps"
-    assert result["entry_price_defensive_bps"] == 35
+    assert result["entry_price_defensive_bps"] == 15
     assert result["entry_price_gap_profile"] == "favorable_micro"
-    assert result["entry_price_gap_profile_bps"] == 35
+    assert result["entry_price_gap_profile_bps"] == 15
     assert result["conditional_1tick_real_override_applied"] is False
-    assert result["order_price"] == 9960
+    assert result["order_price"] == 9980
 
 
-def test_percent_bps_mode_weak_liquidity_wide_spread_0065_pct(monkeypatch):
+def test_percent_bps_mode_weak_liquidity_wide_spread_0040_pct(monkeypatch):
     monkeypatch.setattr(entry_latency_module, "_defense_mode_is_percent_bps", lambda: True)
-    monkeypatch.setattr(entry_latency_module, "_normal_defensive_bps", lambda: 50)
+    monkeypatch.setattr(entry_latency_module, "_normal_defensive_bps", lambda: 25)
     monkeypatch.setattr(entry_latency_module, "_conditional_strong_defensive_bps", lambda: 10)
-    monkeypatch.setattr(entry_latency_module, "_normal_favorable_defensive_bps", lambda: 35)
-    monkeypatch.setattr(entry_latency_module, "_normal_weak_defensive_bps", lambda: 65)
+    monkeypatch.setattr(entry_latency_module, "_normal_favorable_defensive_bps", lambda: 15)
+    monkeypatch.setattr(entry_latency_module, "_normal_weak_defensive_bps", lambda: 40)
     monkeypatch.setattr(entry_latency_module, "_conditional_real_1tick_enabled", lambda s: True)
 
     entry_latency_module.ORDERBOOK_STABILITY_OBSERVER.reset()
@@ -1737,31 +1782,31 @@ def test_percent_bps_mode_weak_liquidity_wide_spread_0065_pct(monkeypatch):
 
     assert result["allowed"] is True
     assert result["entry_price_guard"] == "weak_liquidity_wide_spread_percent_bps"
-    assert result["entry_price_defensive_bps"] == 65
+    assert result["entry_price_defensive_bps"] == 40
     assert result["entry_price_gap_profile"] == "weak_liquidity_wide_spread"
-    assert result["entry_price_gap_profile_bps"] == 65
+    assert result["entry_price_gap_profile_bps"] == 40
     assert result["conditional_1tick_real_override_applied"] is False
-    assert result["order_price"] == 9930
+    assert result["order_price"] == 9960
 
 
 def test_aggressive_entry_price_override_moves_neutral_defensive_to_bid_minus_tick(monkeypatch):
     monkeypatch.setattr(entry_latency_module, "_defense_mode_is_percent_bps", lambda: True)
-    monkeypatch.setattr(entry_latency_module, "_normal_defensive_bps", lambda: 50)
+    monkeypatch.setattr(entry_latency_module, "_normal_defensive_bps", lambda: 25)
     monkeypatch.setattr(entry_latency_module, "_conditional_strong_defensive_bps", lambda: 10)
-    monkeypatch.setattr(entry_latency_module, "_normal_favorable_defensive_bps", lambda: 35)
-    monkeypatch.setattr(entry_latency_module, "_normal_weak_defensive_bps", lambda: 65)
+    monkeypatch.setattr(entry_latency_module, "_normal_favorable_defensive_bps", lambda: 15)
+    monkeypatch.setattr(entry_latency_module, "_normal_weak_defensive_bps", lambda: 40)
     monkeypatch.setattr(entry_latency_module, "_conditional_real_1tick_enabled", lambda s: True)
     monkeypatch.setattr(
         entry_latency_module,
         "TRADING_RULES",
-        replace(
-            CONFIG,
-            SCALP_AGGRESSIVE_ENTRY_PRICE_OVERRIDE_ENABLED=True,
-            SCALP_AGGRESSIVE_ENTRY_PRICE_OVERRIDE_TYPES="defensive_missed_upside_v1",
-            SCALP_DEFENSIVE_MISSED_UPSIDE_MIN_ORIGINAL_BPS=35,
-            SCALP_DEFENSIVE_MISSED_UPSIDE_NEUTRAL_BID_MINUS_TICKS=1,
-            SCALP_DEFENSIVE_MISSED_UPSIDE_BULLISH_BID_MINUS_TICKS=0,
-        ),
+            replace(
+                CONFIG,
+                SCALP_AGGRESSIVE_ENTRY_PRICE_OVERRIDE_ENABLED=True,
+                SCALP_AGGRESSIVE_ENTRY_PRICE_OVERRIDE_TYPES="defensive_missed_upside_v1",
+                SCALP_DEFENSIVE_MISSED_UPSIDE_MIN_ORIGINAL_BPS=15,
+                SCALP_DEFENSIVE_MISSED_UPSIDE_NEUTRAL_BID_MINUS_TICKS=1,
+                SCALP_DEFENSIVE_MISSED_UPSIDE_BULLISH_BID_MINUS_TICKS=0,
+            ),
     )
 
     entry_latency_module.ORDERBOOK_STABILITY_OBSERVER.reset()
@@ -1795,17 +1840,17 @@ def test_aggressive_entry_price_override_moves_neutral_defensive_to_bid_minus_ti
     assert result["aggressive_entry_price_override_applied"] is True
     assert result["aggressive_entry_price_override_type"] == "defensive_missed_upside_v1"
     assert result["aggressive_entry_price_original_profile"] == "weak_liquidity_wide_spread"
-    assert result["aggressive_entry_price_original_bps"] == 65
+    assert result["aggressive_entry_price_original_bps"] == 40
     assert result["aggressive_entry_price_target_mode"] == "best_bid_near"
     assert result["aggressive_entry_price_order_price"] == 9990
 
 
 def test_aggressive_entry_price_override_moves_positive_micro_to_best_bid(monkeypatch):
     monkeypatch.setattr(entry_latency_module, "_defense_mode_is_percent_bps", lambda: True)
-    monkeypatch.setattr(entry_latency_module, "_normal_defensive_bps", lambda: 50)
+    monkeypatch.setattr(entry_latency_module, "_normal_defensive_bps", lambda: 25)
     monkeypatch.setattr(entry_latency_module, "_conditional_strong_defensive_bps", lambda: 10)
-    monkeypatch.setattr(entry_latency_module, "_normal_favorable_defensive_bps", lambda: 35)
-    monkeypatch.setattr(entry_latency_module, "_normal_weak_defensive_bps", lambda: 65)
+    monkeypatch.setattr(entry_latency_module, "_normal_favorable_defensive_bps", lambda: 15)
+    monkeypatch.setattr(entry_latency_module, "_normal_weak_defensive_bps", lambda: 40)
     monkeypatch.setattr(entry_latency_module, "_conditional_real_1tick_enabled", lambda s: True)
     monkeypatch.setattr(
         entry_latency_module,
@@ -1814,7 +1859,7 @@ def test_aggressive_entry_price_override_moves_positive_micro_to_best_bid(monkey
             CONFIG,
             SCALP_AGGRESSIVE_ENTRY_PRICE_OVERRIDE_ENABLED=True,
             SCALP_AGGRESSIVE_ENTRY_PRICE_OVERRIDE_TYPES="defensive_missed_upside_v1",
-            SCALP_DEFENSIVE_MISSED_UPSIDE_MIN_ORIGINAL_BPS=35,
+            SCALP_DEFENSIVE_MISSED_UPSIDE_MIN_ORIGINAL_BPS=15,
             SCALP_DEFENSIVE_MISSED_UPSIDE_NEUTRAL_BID_MINUS_TICKS=1,
             SCALP_DEFENSIVE_MISSED_UPSIDE_BULLISH_BID_MINUS_TICKS=0,
         ),
@@ -1848,15 +1893,15 @@ def test_aggressive_entry_price_override_moves_positive_micro_to_best_bid(monkey
     assert result["entry_price_guard"] == "defensive_missed_upside_aggressive_entry"
     assert result["order_price"] == 10000
     assert result["aggressive_entry_price_original_profile"] == "favorable_micro"
-    assert result["aggressive_entry_price_original_bps"] == 35
+    assert result["aggressive_entry_price_original_bps"] == 15
 
 
 def test_reference_target_missed_upside_override_moves_positive_micro_to_best_bid(monkeypatch):
     monkeypatch.setattr(entry_latency_module, "_defense_mode_is_percent_bps", lambda: True)
-    monkeypatch.setattr(entry_latency_module, "_normal_defensive_bps", lambda: 50)
+    monkeypatch.setattr(entry_latency_module, "_normal_defensive_bps", lambda: 25)
     monkeypatch.setattr(entry_latency_module, "_conditional_strong_defensive_bps", lambda: 10)
-    monkeypatch.setattr(entry_latency_module, "_normal_favorable_defensive_bps", lambda: 35)
-    monkeypatch.setattr(entry_latency_module, "_normal_weak_defensive_bps", lambda: 65)
+    monkeypatch.setattr(entry_latency_module, "_normal_favorable_defensive_bps", lambda: 15)
+    monkeypatch.setattr(entry_latency_module, "_normal_weak_defensive_bps", lambda: 40)
     monkeypatch.setattr(entry_latency_module, "_conditional_real_1tick_enabled", lambda s: True)
     monkeypatch.setattr(
         entry_latency_module,
@@ -1909,10 +1954,10 @@ def test_reference_target_missed_upside_override_moves_positive_micro_to_best_bi
 
 def test_reference_target_missed_upside_override_moves_neutral_to_bid_minus_tick(monkeypatch):
     monkeypatch.setattr(entry_latency_module, "_defense_mode_is_percent_bps", lambda: True)
-    monkeypatch.setattr(entry_latency_module, "_normal_defensive_bps", lambda: 50)
+    monkeypatch.setattr(entry_latency_module, "_normal_defensive_bps", lambda: 25)
     monkeypatch.setattr(entry_latency_module, "_conditional_strong_defensive_bps", lambda: 10)
-    monkeypatch.setattr(entry_latency_module, "_normal_favorable_defensive_bps", lambda: 35)
-    monkeypatch.setattr(entry_latency_module, "_normal_weak_defensive_bps", lambda: 65)
+    monkeypatch.setattr(entry_latency_module, "_normal_favorable_defensive_bps", lambda: 15)
+    monkeypatch.setattr(entry_latency_module, "_normal_weak_defensive_bps", lambda: 40)
     monkeypatch.setattr(entry_latency_module, "_conditional_real_1tick_enabled", lambda s: True)
     monkeypatch.setattr(
         entry_latency_module,
@@ -1957,10 +2002,10 @@ def test_reference_target_missed_upside_override_moves_neutral_to_bid_minus_tick
 
 def test_reference_target_missed_upside_override_skips_below_min_bps(monkeypatch):
     monkeypatch.setattr(entry_latency_module, "_defense_mode_is_percent_bps", lambda: True)
-    monkeypatch.setattr(entry_latency_module, "_normal_defensive_bps", lambda: 50)
+    monkeypatch.setattr(entry_latency_module, "_normal_defensive_bps", lambda: 25)
     monkeypatch.setattr(entry_latency_module, "_conditional_strong_defensive_bps", lambda: 10)
-    monkeypatch.setattr(entry_latency_module, "_normal_favorable_defensive_bps", lambda: 35)
-    monkeypatch.setattr(entry_latency_module, "_normal_weak_defensive_bps", lambda: 65)
+    monkeypatch.setattr(entry_latency_module, "_normal_favorable_defensive_bps", lambda: 15)
+    monkeypatch.setattr(entry_latency_module, "_normal_weak_defensive_bps", lambda: 40)
     monkeypatch.setattr(entry_latency_module, "_conditional_real_1tick_enabled", lambda s: True)
     monkeypatch.setattr(
         entry_latency_module,
@@ -1996,17 +2041,17 @@ def test_reference_target_missed_upside_override_skips_below_min_bps(monkeypatch
     )
 
     assert result["entry_price_guard"] == "favorable_micro_percent_bps"
-    assert result["order_price"] == 9960
+    assert result["order_price"] == 9980
     assert result["aggressive_entry_price_override_applied"] is False
     assert result["aggressive_entry_price_override_skip_reason"] == "reference_target_below_bid_bps_below_min"
 
 
 def test_aggressive_entry_price_override_skips_when_dynamic_resolver_live_selected(monkeypatch):
     monkeypatch.setattr(entry_latency_module, "_defense_mode_is_percent_bps", lambda: True)
-    monkeypatch.setattr(entry_latency_module, "_normal_defensive_bps", lambda: 50)
+    monkeypatch.setattr(entry_latency_module, "_normal_defensive_bps", lambda: 25)
     monkeypatch.setattr(entry_latency_module, "_conditional_strong_defensive_bps", lambda: 10)
-    monkeypatch.setattr(entry_latency_module, "_normal_favorable_defensive_bps", lambda: 35)
-    monkeypatch.setattr(entry_latency_module, "_normal_weak_defensive_bps", lambda: 65)
+    monkeypatch.setattr(entry_latency_module, "_normal_favorable_defensive_bps", lambda: 15)
+    monkeypatch.setattr(entry_latency_module, "_normal_weak_defensive_bps", lambda: 40)
     monkeypatch.setattr(entry_latency_module, "_conditional_real_1tick_enabled", lambda s: True)
     monkeypatch.setattr(
         entry_latency_module,
@@ -2042,17 +2087,17 @@ def test_aggressive_entry_price_override_skips_when_dynamic_resolver_live_select
     )
 
     assert result["entry_price_guard"] == "favorable_micro_percent_bps"
-    assert result["order_price"] == 9960
+    assert result["order_price"] == 9980
     assert result["aggressive_entry_price_override_applied"] is False
     assert result["aggressive_entry_price_override_skip_reason"] == "dynamic_entry_price_resolver_live_selected"
 
 
 def test_aggressive_entry_price_override_skips_when_entry_price_live_tuning_selected(monkeypatch):
     monkeypatch.setattr(entry_latency_module, "_defense_mode_is_percent_bps", lambda: True)
-    monkeypatch.setattr(entry_latency_module, "_normal_defensive_bps", lambda: 50)
+    monkeypatch.setattr(entry_latency_module, "_normal_defensive_bps", lambda: 25)
     monkeypatch.setattr(entry_latency_module, "_conditional_strong_defensive_bps", lambda: 10)
-    monkeypatch.setattr(entry_latency_module, "_normal_favorable_defensive_bps", lambda: 35)
-    monkeypatch.setattr(entry_latency_module, "_normal_weak_defensive_bps", lambda: 65)
+    monkeypatch.setattr(entry_latency_module, "_normal_favorable_defensive_bps", lambda: 15)
+    monkeypatch.setattr(entry_latency_module, "_normal_weak_defensive_bps", lambda: 40)
     monkeypatch.setattr(entry_latency_module, "_conditional_real_1tick_enabled", lambda s: True)
     monkeypatch.setattr(
         entry_latency_module,
@@ -2088,17 +2133,17 @@ def test_aggressive_entry_price_override_skips_when_entry_price_live_tuning_sele
     )
 
     assert result["entry_price_guard"] == "favorable_micro_percent_bps"
-    assert result["order_price"] == 9960
+    assert result["order_price"] == 9980
     assert result["aggressive_entry_price_override_applied"] is False
     assert result["aggressive_entry_price_override_skip_reason"] == "dynamic_entry_price_resolver_live_selected"
 
 
 def test_aggressive_entry_price_override_skips_weak_pullback_like_context(monkeypatch):
     monkeypatch.setattr(entry_latency_module, "_defense_mode_is_percent_bps", lambda: True)
-    monkeypatch.setattr(entry_latency_module, "_normal_defensive_bps", lambda: 50)
+    monkeypatch.setattr(entry_latency_module, "_normal_defensive_bps", lambda: 25)
     monkeypatch.setattr(entry_latency_module, "_conditional_strong_defensive_bps", lambda: 10)
-    monkeypatch.setattr(entry_latency_module, "_normal_favorable_defensive_bps", lambda: 35)
-    monkeypatch.setattr(entry_latency_module, "_normal_weak_defensive_bps", lambda: 65)
+    monkeypatch.setattr(entry_latency_module, "_normal_favorable_defensive_bps", lambda: 15)
+    monkeypatch.setattr(entry_latency_module, "_normal_weak_defensive_bps", lambda: 40)
     monkeypatch.setattr(entry_latency_module, "_conditional_real_1tick_enabled", lambda s: True)
     monkeypatch.setattr(
         entry_latency_module,
@@ -2137,7 +2182,7 @@ def test_aggressive_entry_price_override_skips_weak_pullback_like_context(monkey
     )
 
     assert result["entry_price_guard"] == "weak_liquidity_wide_spread_percent_bps"
-    assert result["order_price"] == 9930
+    assert result["order_price"] == 9960
     assert result["aggressive_entry_price_override_applied"] is False
 
 

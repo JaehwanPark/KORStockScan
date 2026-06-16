@@ -95,6 +95,59 @@ def _safe_int(value: Any, default: int = 0) -> int:
         return default
 
 
+def _top_level_summary(report: dict[str, Any]) -> dict[str, Any]:
+    warnings = report.get("warnings") if isinstance(report.get("warnings"), list) else []
+    source_quality = (
+        report.get("source_quality_preflight_gate")
+        if isinstance(report.get("source_quality_preflight_gate"), dict)
+        else {}
+    )
+    daily_ev = report.get("daily_ev_summary") if isinstance(report.get("daily_ev_summary"), dict) else {}
+    scalp_sim = report.get("scalp_simulator") if isinstance(report.get("scalp_simulator"), dict) else {}
+    lifecycle_discovery = (
+        report.get("lifecycle_bucket_discovery")
+        if isinstance(report.get("lifecycle_bucket_discovery"), dict)
+        else {}
+    )
+    live_auto_ready = _safe_int(lifecycle_discovery.get("live_auto_apply_ready_count"), 0)
+    source_split = daily_ev.get("source_split") if isinstance(daily_ev.get("source_split"), dict) else {}
+    real_split = source_split.get("real") if isinstance(source_split.get("real"), dict) else {}
+    sim_split = source_split.get("sim") if isinstance(source_split.get("sim"), dict) else {}
+    real_sample = _safe_int(daily_ev.get("completed_trades"), 0) or _safe_int(real_split.get("sample"), 0)
+    sim_sample = _safe_int(
+        scalp_sim.get("completed_count")
+        if scalp_sim.get("completed_count") is not None
+        else scalp_sim.get("completed"),
+        0,
+    ) or _safe_int(sim_split.get("sample"), 0)
+    if report.get("status"):
+        status = str(report.get("status"))
+    elif source_quality_preflight_blocked(source_quality):
+        status = "source_quality_blocked"
+    elif warnings:
+        status = "warning"
+    else:
+        status = "pass"
+    if live_auto_ready > 0:
+        primary_verdict = "live_auto_candidate_present"
+    elif sim_sample > 0:
+        primary_verdict = "sim_evidence_present_no_live_bucket"
+    else:
+        primary_verdict = "hold_sample"
+    return {
+        "status": status,
+        "warning_count": len(warnings),
+        "source_quality_status": source_quality.get("status"),
+        "source_quality_tuning_input_allowed": source_quality.get("tuning_input_allowed"),
+        "real_sample": real_sample,
+        "sim_sample": sim_sample,
+        "live_auto_ready_count": live_auto_ready,
+        "primary_verdict": primary_verdict,
+        "runtime_effect": False,
+        "decision_authority": "threshold_cycle_ev_summary_report_only",
+    }
+
+
 def ev_report_paths(target_date: str) -> tuple[Path, Path]:
     base = EV_REPORT_DIR / f"threshold_cycle_ev_{target_date}"
     return base.with_suffix(".json"), base.with_suffix(".md")
@@ -2025,7 +2078,9 @@ def build_threshold_cycle_ev_report(target_date: str) -> dict[str, Any]:
             if message
         ],
     }
+    report["summary"] = _top_level_summary(report)
     report = apply_source_quality_preflight_block(report, source_quality_preflight_gate)
+    report["summary"] = _top_level_summary(report)
     EV_REPORT_DIR.mkdir(parents=True, exist_ok=True)
     json_path, md_path = ev_report_paths(target_date)
     json_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -2034,6 +2089,7 @@ def build_threshold_cycle_ev_report(target_date: str) -> dict[str, Any]:
 
 
 def render_threshold_cycle_ev_markdown(report: dict[str, Any]) -> str:
+    summary = report.get("summary") if isinstance(report.get("summary"), dict) else {}
     ev = report.get("daily_ev_summary") if isinstance(report.get("daily_ev_summary"), dict) else {}
     funnel = report.get("entry_funnel") if isinstance(report.get("entry_funnel"), dict) else {}
     holding = report.get("holding_exit") if isinstance(report.get("holding_exit"), dict) else {}
@@ -2073,6 +2129,14 @@ def render_threshold_cycle_ev_markdown(report: dict[str, Any]) -> str:
     sim_post_sell = scalp_sim.get("post_sell_join") if isinstance(scalp_sim.get("post_sell_join"), dict) else {}
     lines = [
         f"# Threshold Cycle Daily EV Report - {report.get('date')}",
+        "",
+        "## Summary",
+        f"- status: `{summary.get('status')}`",
+        f"- warning_count: `{summary.get('warning_count', 0)}`",
+        f"- source_quality: status=`{summary.get('source_quality_status')}` allowed=`{summary.get('source_quality_tuning_input_allowed')}`",
+        f"- samples real/sim: `{summary.get('real_sample', 0)}` / `{summary.get('sim_sample', 0)}`",
+        f"- live_auto_ready_count: `{summary.get('live_auto_ready_count', 0)}`",
+        f"- primary_verdict: `{summary.get('primary_verdict')}`",
         "",
         "## Runtime Apply",
         f"- status: `{runtime.get('status')}`",

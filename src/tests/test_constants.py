@@ -67,10 +67,10 @@ def test_trading_rules_entry_latency_classifier_jitter_env_override(monkeypatch)
 
 def test_trading_rules_scalping_entry_price_percent_bps_env_override(monkeypatch):
     monkeypatch.setenv("KORSTOCKSCAN_SCALPING_ENTRY_PRICE_DEFENSE_MODE", "percent_bps")
-    monkeypatch.setenv("KORSTOCKSCAN_SCALPING_NORMAL_DEFENSIVE_BPS", "50")
+    monkeypatch.setenv("KORSTOCKSCAN_SCALPING_NORMAL_DEFENSIVE_BPS", "25")
     monkeypatch.setenv("KORSTOCKSCAN_SCALPING_CONDITIONAL_STRONG_DEFENSIVE_BPS", "10")
-    monkeypatch.setenv("KORSTOCKSCAN_SCALPING_NORMAL_FAVORABLE_DEFENSIVE_BPS", "35")
-    monkeypatch.setenv("KORSTOCKSCAN_SCALPING_NORMAL_WEAK_DEFENSIVE_BPS", "65")
+    monkeypatch.setenv("KORSTOCKSCAN_SCALPING_NORMAL_FAVORABLE_DEFENSIVE_BPS", "15")
+    monkeypatch.setenv("KORSTOCKSCAN_SCALPING_NORMAL_WEAK_DEFENSIVE_BPS", "40")
     monkeypatch.setenv("KORSTOCKSCAN_SCALP_REAL_WEAK_PULLBACK_ENTRY_BLOCK_ENABLED", "true")
     monkeypatch.setenv("KORSTOCKSCAN_SCALP_REAL_WEAK_PULLBACK_ENTRY_BLOCK_MIN_MICRO_POSITIVES", "2")
     monkeypatch.setenv("KORSTOCKSCAN_SCALP_REAL_WEAK_PULLBACK_ENTRY_BLOCK_MIN_SPREAD_TICKS", "5")
@@ -131,10 +131,10 @@ def test_trading_rules_scalping_entry_price_percent_bps_env_override(monkeypatch
     reloaded = importlib.reload(constants)
 
     assert reloaded.TRADING_RULES.SCALPING_ENTRY_PRICE_DEFENSE_MODE == "percent_bps"
-    assert reloaded.TRADING_RULES.SCALPING_NORMAL_DEFENSIVE_BPS == 50
+    assert reloaded.TRADING_RULES.SCALPING_NORMAL_DEFENSIVE_BPS == 25
     assert reloaded.TRADING_RULES.SCALPING_CONDITIONAL_STRONG_DEFENSIVE_BPS == 10
-    assert reloaded.TRADING_RULES.SCALPING_NORMAL_FAVORABLE_DEFENSIVE_BPS == 35
-    assert reloaded.TRADING_RULES.SCALPING_NORMAL_WEAK_DEFENSIVE_BPS == 65
+    assert reloaded.TRADING_RULES.SCALPING_NORMAL_FAVORABLE_DEFENSIVE_BPS == 15
+    assert reloaded.TRADING_RULES.SCALPING_NORMAL_WEAK_DEFENSIVE_BPS == 40
     assert reloaded.TRADING_RULES.SCALP_REAL_WEAK_PULLBACK_ENTRY_BLOCK_ENABLED is True
     assert reloaded.TRADING_RULES.SCALP_REAL_WEAK_PULLBACK_ENTRY_BLOCK_MIN_MICRO_POSITIVES == 2
     assert reloaded.TRADING_RULES.SCALP_REAL_WEAK_PULLBACK_ENTRY_BLOCK_MIN_SPREAD_TICKS == 5
@@ -367,6 +367,18 @@ def test_trading_rules_scalp_sim_scale_in_execution_observation_env(monkeypatch)
     )
     assert reloaded.TRADING_RULES.SCALP_SIM_SCALE_IN_PYRAMID_MAX_ORDERS_PER_DAY == 12
     assert reloaded.TRADING_RULES.SCALP_SIM_SCALE_IN_AVG_DOWN_MAX_ORDERS_PER_POSITION == 2
+
+
+def test_pre_submit_quote_refresh_env_override(monkeypatch):
+    monkeypatch.setenv("KORSTOCKSCAN_SCALP_PRE_SUBMIT_QUOTE_REFRESH_ENABLED", "true")
+    monkeypatch.setenv("KORSTOCKSCAN_SCALP_PRE_SUBMIT_QUOTE_REFRESH_MAX_AGE_MS", "500")
+    monkeypatch.setenv("KORSTOCKSCAN_SCALP_PRE_SUBMIT_QUOTE_REFRESH_MAX_SPREAD_RATIO", "0.012")
+
+    reloaded = importlib.reload(constants)
+
+    assert reloaded.TRADING_RULES.SCALP_PRE_SUBMIT_QUOTE_REFRESH_ENABLED is True
+    assert reloaded.TRADING_RULES.SCALP_PRE_SUBMIT_QUOTE_REFRESH_MAX_AGE_MS == 500
+    assert reloaded.TRADING_RULES.SCALP_PRE_SUBMIT_QUOTE_REFRESH_MAX_SPREAD_RATIO == 0.012
 
 
 def test_trading_rules_runtime_shadow_defaults_are_off(monkeypatch):

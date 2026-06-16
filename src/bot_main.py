@@ -368,7 +368,7 @@ if __name__ == '__main__':
         write_heartbeat("sniper_engine")
         print("✅ [시스템] 정상거래일 - 스나이퍼 매매 엔진 가동 완료. 조건검색식 가동기간으로 코스닥 스캐너 가동 임시중단 합니다.")
 
-        # 초단타 스캘핑 스캐너 가동 - 장초반/후반 2분, 그 외 3분 주기로
+        # 초단타 스캘핑 스캐너 가동 - 장초반/후반 90초, 그 외 120초 주기로
         # stale open-top 대신 회전형 신선도 우선 로직으로 감시 대상을 발굴
         try:
             import src.scanners.scalping_scanner as scalping_scanner

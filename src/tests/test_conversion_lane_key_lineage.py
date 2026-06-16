@@ -231,6 +231,10 @@ def test_key_lineage_splits_active_seed_new_entry_from_followup_context(monkeypa
     assert report["summary"]["active_seed_candidate_not_match_eligible_reason_counts"] == {
         "diagnostic_followup_without_seed_context": 1
     }
+    assert report["summary"]["active_seed_candidate_without_seed_id_reason_counts"] == {
+        "new_entry_without_seed_id": 1,
+        "followup_missing_parent_seed_id": 1,
+    }
     assert report["summary"]["active_seed_candidate_followup_stage_counts"] == {
         "scalp_sim_holding_started": 1,
         "scalp_sim_panic_scale_in_blocked": 1,
@@ -272,6 +276,7 @@ def test_key_lineage_excludes_diagnostic_active_seed_candidate_from_blocker(monk
     assert report["summary"]["active_seed_candidate_not_match_eligible_reason_counts"] == {
         "diagnostic_followup_without_seed_context": 1
     }
+    assert report["summary"]["active_seed_candidate_without_seed_id_reason_counts"] == {}
 
 
 def test_key_lineage_dedupes_panic_scale_in_no_match_followup(monkeypatch, tmp_path):

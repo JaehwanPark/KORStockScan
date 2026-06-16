@@ -1507,6 +1507,8 @@ def test_lifecycle_flow_adm_bridge_joins_entry_candidate_to_downstream_sim_rows(
     assert attribution["summary"]["complete_flow_count"] == 1
     assert attribution["summary"]["direct_sim_record_complete_flow_count"] == 0
     assert attribution["summary"]["adm_bridge_complete_flow_count"] == 1
+    assert attribution["summary"]["direct_flow_zero_reason"] == "no_direct_complete_but_adm_bridge_complete"
+    assert attribution["summary"]["direct_flow_zero_diagnostic"]["runtime_effect"] is False
     assert attribution["summary"]["join_contract_blocked"] is False
     assert attribution["summary"]["stage_identity"]["entry"]["identity_quality_counts"] == {"entry_adm_bridge_key": 1}
     assert attribution["flows"][0]["identity_quality"] == "entry_adm_bridge_key"

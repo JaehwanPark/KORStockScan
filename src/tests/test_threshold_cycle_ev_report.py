@@ -448,6 +448,10 @@ def test_build_threshold_cycle_ev_report_uses_existing_reports(tmp_path, monkeyp
     ]
     assert report["daily_ev_summary"]["completed_trades"] == 2
     assert report["daily_ev_summary"]["realized_pnl_krw"] == -282
+    assert report["summary"]["status"] == "warning"
+    assert report["summary"]["real_sample"] == 2
+    assert report["summary"]["live_auto_ready_count"] == 0
+    assert report["summary"]["runtime_effect"] is False
     assert report["entry_funnel"]["budget_pass_to_submitted_rate_pct"] == 5.0
     assert report["missed_probe_counterfactual"]["book"] == "scalp_score65_74_probe_counterfactual"
     assert report["missed_probe_counterfactual"]["score65_74_probe_candidates"] == 2
@@ -465,6 +469,7 @@ def test_build_threshold_cycle_ev_report_uses_existing_reports(tmp_path, monkeyp
     assert (ev_dir / "threshold_cycle_ev_2026-05-08.json").exists()
     assert (ev_dir / "threshold_cycle_ev_2026-05-08.md").exists()
     markdown = (ev_dir / "threshold_cycle_ev_2026-05-08.md").read_text(encoding="utf-8")
+    assert "## Summary" in markdown
     assert "Missed Probe Counterfactual" in markdown
     assert "Swing Runtime Approval" in markdown
     assert "Scalp Entry ADM" in markdown

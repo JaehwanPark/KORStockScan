@@ -1666,7 +1666,97 @@ def _extract_rank_items(results, preferred_keys):
     return []
 
 
-def get_value_top_ka10032(token, mrkt_tp="000", limit=30):
+def _is_positive_pred_signal(value):
+    return str(value or "").strip() in {"1", "2", "+", "상한", "상승"}
+
+
+def get_realtime_item_rank_ka00198(token, qry_tp="5", limit=60):
+    """
+    [ka00198] 실시간종목조회순위.
+    30초/1분 단위로 새롭게 순위에 오른 상승 시작 후보를 정규화한다.
+    """
+    url = get_api_url("/api/dostk/stkinfo")
+    payload = {"qry_tp": str(qry_tp)}
+
+    try:
+        results = fetch_kiwoom_api_continuous(
+            url=url, token=token, api_id='ka00198', payload=payload, use_continuous=False
+        )
+    except Exception as e:
+        log_info(f"⚠️ [ka00198] 실시간종목조회순위 조회 실패: {e}")
+        return []
+
+    cleaned_list = []
+    items = _extract_rank_items(results, ("item_inq_rank", "data"))
+    for item in items[:limit]:
+        code = normalize_stock_code(item.get('stk_cd', item.get('code', '')))
+        if not code:
+            continue
+        base_change = _scanner_to_float(item.get('base_comp_chgr', item.get('flu_rt')))
+        prev_change = _scanner_to_float(item.get('prev_base_chgr'))
+        cleaned_list.append({
+            'Code': code,
+            'Name': item.get('stk_nm', item.get('name', '')),
+            'Price': _scanner_to_int(item.get('past_curr_prc', item.get('cur_prc', item.get('price')))),
+            'FluRate': base_change,
+            'RealtimeRankFluRate': base_change,
+            'RealtimePrevBaseChange': prev_change,
+            'RankNow': _scanner_to_int(item.get('bigd_rank', item.get('rank'))),
+            'RankChange': _scanner_to_int(item.get('rank_chg')),
+            'RankChangeSign': str(item.get('rank_chg_sign') or '').strip(),
+            'RealtimeRankWindow': str(qry_tp),
+            'Source': 'REALTIME_RANK_START',
+        })
+    return cleaned_list
+
+
+def get_price_jump_ka10019(token, mrkt_tp="000", minutes=3, limit=60):
+    """
+    [ka10019] 가격급등락.
+    최근 n분 급등 시작 후보를 정규화한다.
+    """
+    url = get_api_url("/api/dostk/stkinfo")
+    payload = {
+        "mrkt_tp": mrkt_tp,
+        "flu_tp": "1",
+        "tm_tp": "1",
+        "tm": str(minutes),
+        "trde_qty_tp": "00050",
+        "stk_cnd": "4",
+        "crd_cnd": "0",
+        "pric_cnd": "0",
+        "updown_incls": "1",
+        "stex_tp": "3",
+    }
+
+    try:
+        results = fetch_kiwoom_api_continuous(
+            url=url, token=token, api_id='ka10019', payload=payload, use_continuous=False
+        )
+    except Exception as e:
+        log_info(f"⚠️ [ka10019] 가격급등락 조회 실패: {e}")
+        return []
+
+    cleaned_list = []
+    items = _extract_rank_items(results, ("pric_jmpflu", "data"))
+    for item in items[:limit]:
+        code = normalize_stock_code(item.get('stk_cd', item.get('code', '')))
+        if not code:
+            continue
+        cleaned_list.append({
+            'Code': code,
+            'Name': item.get('stk_nm', item.get('name', '')),
+            'Price': _scanner_to_int(item.get('cur_prc', item.get('price'))),
+            'FluRate': _scanner_to_float(item.get('flu_rt', item.get('change_rate'))),
+            'JumpRate': _scanner_to_float(item.get('jmp_rt')),
+            'TradeQty': _scanner_to_int(item.get('trde_qty')),
+            'PreSig': item.get('pred_pre_sig', ''),
+            'Source': 'PRICE_JUMP_START',
+        })
+    return cleaned_list
+
+
+def get_value_top_ka10032(token, mrkt_tp="000", limit=60):
     """
     [ka10032] 거래대금 상위 요청.
     스캐너 후보 발굴용 표준 키로 정규화하며, API/응답 이상 시 빈 리스트를 반환한다.
@@ -1718,7 +1808,52 @@ def get_value_top_ka10032(token, mrkt_tp="000", limit=30):
     return cleaned_list
 
 
-def get_vi_triggered_ka10054(token, mrkt_tp="000", limit=30):
+def get_bid_balance_surge_ka10021(token, mrkt_tp="000", minutes=3, limit=60):
+    """
+    [ka10021] 호가잔량급증.
+    매수잔량 급증을 상승 시작 pressure 후보로 정규화한다.
+    """
+    url = get_api_url("/api/dostk/rkinfo")
+    payload = {
+        "mrkt_tp": mrkt_tp,
+        "trde_tp": "1",
+        "sort_tp": "2",
+        "tm_tp": "1",
+        "tm": str(minutes),
+        "trde_qty_tp": "5",
+        "stk_cnd": "4",
+        "stex_tp": "3",
+    }
+
+    try:
+        results = fetch_kiwoom_api_continuous(
+            url=url, token=token, api_id='ka10021', payload=payload, use_continuous=False
+        )
+    except Exception as e:
+        log_info(f"⚠️ [ka10021] 호가잔량급증 조회 실패: {e}")
+        return []
+
+    cleaned_list = []
+    items = _extract_rank_items(results, ("bid_req_sdnin", "req_vol_sdnin", "data"))
+    for item in items[:limit]:
+        code = normalize_stock_code(item.get('stk_cd', item.get('code', '')))
+        if not code:
+            continue
+        cleaned_list.append({
+            'Code': code,
+            'Name': item.get('stk_nm', item.get('name', '')),
+            'Price': _scanner_to_int(item.get('cur_prc', item.get('price'))),
+            'FluRate': _scanner_to_float(item.get('flu_rt')),
+            'BidSurgeQty': _scanner_to_int(item.get('sdnin_qty')),
+            'BidSurgeRate': _scanner_to_float(item.get('sdnin_rt')),
+            'TotalBuyQty': _scanner_to_int(item.get('tot_buy_qty', item.get('tot_buy_req'))),
+            'PreSig': item.get('pred_pre_sig', ''),
+            'Source': 'BID_IMBALANCE_SURGE',
+        })
+    return cleaned_list
+
+
+def get_vi_triggered_ka10054(token, mrkt_tp="000", limit=60):
     """
     [ka10054] 변동성완화장치 발동 종목 요청.
     VI 자체는 승격 조건이 아니라 후보 발굴 가산점으로만 사용한다.
@@ -1828,23 +1963,47 @@ def scan_volume_spike_ka10023(token, mrkt_tp="000"):
         
         for item in data:
             # 💡 가격 추출 (사용자 제안 반영)
-            raw_p = str(item.get('cur_prc', '0')).replace('+', '').replace('-', '')
-            curr_price = int(raw_p) if raw_p.isdigit() else 0
-            
-            # 💡 등락률 추출 (안전한 파싱)
-            raw_flu = str(item.get('flu_rt', '0')).replace('+', '')
-            flu_rate = float(raw_flu) if raw_flu.replace('.', '', 1).replace('-', '', 1).isdigit() else 0.0
-            
+            curr_price = _scanner_to_int(item.get('cur_prc'))
+            flu_rate = _scanner_to_float(item.get('flu_rt'))
+
             candidates.append({
-                'code': item['stk_cd'],
-                'name': item['stk_nm'],
-                'spike_rate': float(str(item.get('sdnin_rt', '0')).replace('+', '')),
+                'code': item.get('stk_cd', ''),
+                'Code': normalize_stock_code(item.get('stk_cd', '')),
+                'name': item.get('stk_nm', ''),
+                'Name': item.get('stk_nm', ''),
+                'spike_rate': _scanner_to_float(item.get('sdnin_rt')),
+                'SpikeRate': _scanner_to_float(item.get('sdnin_rt')),
                 'flu_rate': flu_rate, # 💡 [추가] 당일 등락률 포함
+                'FluRate': flu_rate,
                 'Price': curr_price,  # 🚀 스캐너를 위해 'Price' 키로 통일
-                'cur_prc': curr_price # 하위 호환성 유지
+                'cur_prc': curr_price, # 하위 호환성 유지
+                'TradeQty': _scanner_to_int(item.get('now_trde_qty')),
+                'PreviousTradeQty': _scanner_to_int(item.get('prev_trde_qty')),
+                'SurgeQty': _scanner_to_int(item.get('sdnin_qty')),
+                'PreSig': item.get('pred_pre_sig', ''),
+                'Source': 'VOLUME_SURGE_POSITIVE',
             })
             
     return candidates
+
+
+def get_positive_volume_surge_ka10023(token, mrkt_tp="000", limit=60):
+    """[ka10023] 거래량급증 중 상승 부호와 양수 등락률을 모두 만족하는 seed만 반환한다."""
+    try:
+        candidates = scan_volume_spike_ka10023(token, mrkt_tp=mrkt_tp) or []
+    except Exception as e:
+        log_info(f"⚠️ [ka10023] 거래량급증 positive 조회 실패: {e}")
+        return []
+    positive = []
+    for item in candidates:
+        if _scanner_to_float(item.get('FluRate', item.get('flu_rate'))) <= 0:
+            continue
+        if item.get('PreSig') not in (None, "") and not _is_positive_pred_signal(item.get('PreSig')):
+            continue
+        positive.append({**item, 'Source': 'VOLUME_SURGE_POSITIVE'})
+        if len(positive) >= limit:
+            break
+    return positive
 
 def scan_orderbook_spike_ka10021(token, mrkt_tp="101"):
     """[ka10021] 호가창에 갑자기 거대 물량이 쌓인 종목 스캔"""
@@ -1863,7 +2022,7 @@ def scan_orderbook_spike_ka10021(token, mrkt_tp="101"):
     candidates = []
     
     if results:
-        data = results[0].get('req_vol_sdnin', [])
+        data = results[0].get('bid_req_sdnin', results[0].get('req_vol_sdnin', []))
         for item in data:
             # 💡 가격 추출 및 정제
             raw_p = str(item.get('cur_prc', '0')).replace('+', '').replace('-', '')

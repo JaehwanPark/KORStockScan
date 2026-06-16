@@ -931,6 +931,31 @@ def _is_unknown_bucket(value: str) -> bool:
     return "unknown" in compact and "not_available" not in compact
 
 
+def _context_unknown_reason(row: dict[str, Any], key: str, provenance_value: str) -> str:
+    stage = str(row.get("stage") or "").strip()
+    if stage and stage not in {"scalp_entry_action_decision_snapshot", "entry"}:
+        return "post_submit_or_exit_not_required"
+    if provenance_value == "adm_field":
+        return "producer_context_missing"
+    if key == "risk_context_bucket":
+        context_values = [
+            row.get("risk_regime_mode"),
+            row.get("panic_regime_mode"),
+            row.get("panic_buy_regime_mode"),
+        ]
+        return "source_field_missing" if not any(v not in (None, "") for v in context_values) else "backfilled"
+    if key == "price_resolution_bucket":
+        price_values = [
+            row.get("order_price"),
+            row.get("curr_price"),
+            row.get("current_price"),
+            row.get("best_bid"),
+            row.get("best_ask"),
+        ]
+        return "source_field_missing" if not any(v not in (None, "") for v in price_values) else "backfilled"
+    return "source_field_missing"
+
+
 def _unknown_bucket_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
     dimensions = ENTRY_ADM_BUCKET_DIMENSIONS
     total = len(rows)
@@ -940,6 +965,8 @@ def _unknown_bucket_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
     not_available_affected_row_count = 0
     stage_counts: Counter[str] = Counter()
     unknown_root_causes: Counter[str] = Counter()
+    unknown_root_cause_detail_counts: Counter[str] = Counter()
+    unknown_resolution_route_counts: Counter[str] = Counter()
     score_root_cause_counts: Counter[str] = Counter()
     score_backfill_match_type_counts: Counter[str] = Counter()
     examples: list[dict[str, Any]] = []
@@ -987,9 +1014,15 @@ def _unknown_bucket_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
                 unknown_root_causes[f"{key}:source_score_missing"] += 1
                 score_root_cause_counts["missing"] += 1
             elif key == "risk_context_bucket":
-                unknown_root_causes[f"{key}:risk_context_source_missing"] += 1
+                reason = _context_unknown_reason(row, key, provenance_value)
+                unknown_root_causes[f"{key}:{reason}"] += 1
+                unknown_root_cause_detail_counts[f"{key}:{reason}"] += 1
+                unknown_resolution_route_counts[reason] += 1
             elif key == "price_resolution_bucket":
-                unknown_root_causes[f"{key}:price_context_source_missing"] += 1
+                reason = _context_unknown_reason(row, key, provenance_value)
+                unknown_root_causes[f"{key}:{reason}"] += 1
+                unknown_root_cause_detail_counts[f"{key}:{reason}"] += 1
+                unknown_resolution_route_counts[reason] += 1
             else:
                 unknown_root_causes[f"{key}:raw_recomputed_unknown"] += 1
                 if key == "score_bucket":
@@ -1013,6 +1046,25 @@ def _unknown_bucket_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
             )
     unknown_dimension_occurrence = sum(dimension_counts.values())
     not_available_dimension_occurrence = sum(not_available_counts.values())
+    actionable_unknown_roots = {
+        key: value
+        for key, value in unknown_root_causes.items()
+        if not key.endswith(":post_submit_or_exit_not_required") and not key.endswith(":backfilled")
+    }
+    unknown_source_quality_gate = (
+        "source_quality_blocker"
+        if actionable_unknown_roots
+        else "classified_non_actionable"
+        if unknown_affected_row_count
+        else "pass"
+    )
+    unknown_recommended_route = (
+        "source_quality_workorder"
+        if actionable_unknown_roots
+        else "classified_not_applicable_no_workorder"
+        if unknown_affected_row_count
+        else "none"
+    )
     return {
         "affected_rows": unknown_affected_row_count,
         "not_available_affected_rows": not_available_affected_row_count,
@@ -1025,6 +1077,8 @@ def _unknown_bucket_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "not_available_dimension_counts": not_available_counts,
         "stage_counts": dict(stage_counts),
         "unknown_root_cause_counts": dict(unknown_root_causes),
+        "unknown_root_cause_detail_counts": dict(unknown_root_cause_detail_counts),
+        "unknown_resolution_route_counts": dict(unknown_resolution_route_counts),
         "score_root_cause_counts": {
             "missing": score_root_cause_counts.get("missing", 0),
             "not_applicable": score_root_cause_counts.get("not_applicable", 0),
@@ -1032,8 +1086,9 @@ def _unknown_bucket_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
         },
         "score_backfill_match_type_counts": dict(score_backfill_match_type_counts),
         "examples": examples,
-        "source_quality_gate": "source_quality_blocker" if unknown_affected_row_count else "pass",
-        "recommended_route": "source_quality_workorder" if unknown_affected_row_count else "none",
+        "source_quality_gate": unknown_source_quality_gate,
+        "recommended_route": unknown_recommended_route,
+        "actionable_unknown_route_counts": dict(actionable_unknown_roots),
         "recomputed_unknown_count": raw_recomputed_count,
         "adm_source_bucket_used_count": adm_source_count,
         "adm_source_bucket_field_count": adm_source_total,
@@ -1104,7 +1159,7 @@ def build_scalp_entry_action_decision_matrix_report(target_date: str) -> dict[st
         warnings.append("missing_action_bucket_summary_row")
     if any(row.get("risk_context_bucket") == "source_quality_blocker" for row in rows):
         warnings.append("source_quality_gap")
-    if _safe_int(unknown_summary.get("affected_rows"), 0) > 0:
+    if _safe_int(unknown_summary.get("affected_rows"), 0) > 0 and unknown_summary.get("source_quality_gate") == "source_quality_blocker":
         warnings.append("unknown_bucket_source_quality_gap")
     if prior_bucket_sample_missing_rows:
         warnings.append("prior_bucket_present_but_runtime_sample_missing")

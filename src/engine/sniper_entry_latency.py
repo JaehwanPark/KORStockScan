@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import threading
 from datetime import UTC, datetime
 from typing import Any
@@ -18,6 +19,7 @@ from src.trading.order.tick_utils import clamp_price_to_tick
 from src.trading.order.tick_utils import get_tick_size
 from src.trading.order.tick_utils import move_price_by_ticks
 from src.trading.order.tick_utils import move_price_down_by_bps
+from src.utils import constants as constants_module
 from src.utils.constants import TRADING_RULES
 from src.utils.logger import log_info
 
@@ -763,7 +765,36 @@ def _latency_spread_relief_signal_score_floors() -> tuple[float, float]:
 def _pre_submit_quote_refresh_enabled(strategy_id: str) -> bool:
     if str(strategy_id or "").upper() not in {"SCALPING", "SCALP"}:
         return False
-    return bool(getattr(TRADING_RULES, "SCALP_PRE_SUBMIT_QUOTE_REFRESH_ENABLED", False))
+    env_value = os.getenv("KORSTOCKSCAN_SCALP_PRE_SUBMIT_QUOTE_REFRESH_ENABLED")
+    if env_value is not None:
+        return str(env_value).strip().lower() in {"1", "true", "yes", "y", "on"}
+    runtime_rules = getattr(constants_module, "TRADING_RULES", TRADING_RULES)
+    return bool(getattr(runtime_rules, "SCALP_PRE_SUBMIT_QUOTE_REFRESH_ENABLED", False))
+
+
+def _pre_submit_quote_refresh_max_age_ms() -> int:
+    env_value = os.getenv("KORSTOCKSCAN_SCALP_PRE_SUBMIT_QUOTE_REFRESH_MAX_AGE_MS")
+    if env_value is not None:
+        try:
+            return max(0, int(float(env_value)))
+        except Exception:
+            pass
+    runtime_rules = getattr(constants_module, "TRADING_RULES", TRADING_RULES)
+    return int(getattr(runtime_rules, "SCALP_PRE_SUBMIT_QUOTE_REFRESH_MAX_AGE_MS", 700) or 700)
+
+
+def _pre_submit_quote_refresh_max_spread_ratio() -> float:
+    env_value = os.getenv("KORSTOCKSCAN_SCALP_PRE_SUBMIT_QUOTE_REFRESH_MAX_SPREAD_RATIO")
+    if env_value is not None:
+        try:
+            return max(0.0, float(env_value))
+        except Exception:
+            pass
+    runtime_rules = getattr(constants_module, "TRADING_RULES", TRADING_RULES)
+    return _to_float(
+        getattr(runtime_rules, "SCALP_PRE_SUBMIT_QUOTE_REFRESH_MAX_SPREAD_RATIO", 0.015),
+        0.015,
+    )
 
 
 def _maybe_refresh_stale_quote_from_observer(
@@ -779,6 +810,8 @@ def _maybe_refresh_stale_quote_from_observer(
         "pre_submit_quote_refresh_applied": False,
         "pre_submit_quote_refresh_reason": "not_attempted",
         "pre_submit_quote_refresh_source": "orderbook_stability_observer",
+        "pre_submit_quote_refresh_strategy_id": str(strategy_id or ""),
+        "pre_submit_quote_refresh_env_value": os.getenv("KORSTOCKSCAN_SCALP_PRE_SUBMIT_QUOTE_REFRESH_ENABLED"),
         "pre_submit_quote_refresh_quote_age_ms": None,
         "pre_submit_quote_refresh_best_bid": 0,
         "pre_submit_quote_refresh_best_ask": 0,
@@ -805,7 +838,7 @@ def _maybe_refresh_stale_quote_from_observer(
     if quote_age is None:
         provenance["pre_submit_quote_refresh_reason"] = "observer_quote_missing"
         return latency, provenance
-    max_age = int(getattr(TRADING_RULES, "SCALP_PRE_SUBMIT_QUOTE_REFRESH_MAX_AGE_MS", 700) or 700)
+    max_age = _pre_submit_quote_refresh_max_age_ms()
     if float(quote_age) > max_age:
         provenance["pre_submit_quote_refresh_reason"] = "observer_quote_stale"
         return latency, provenance
@@ -818,10 +851,7 @@ def _maybe_refresh_stale_quote_from_observer(
         provenance["pre_submit_quote_refresh_reason"] = "reference_price_missing"
         return latency, provenance
     spread_ratio = max(0.0, (best_ask - best_bid) / float(reference_price))
-    max_spread = _to_float(
-        getattr(TRADING_RULES, "SCALP_PRE_SUBMIT_QUOTE_REFRESH_MAX_SPREAD_RATIO", 0.015),
-        0.015,
-    )
+    max_spread = _pre_submit_quote_refresh_max_spread_ratio()
     if spread_ratio > max_spread:
         provenance["pre_submit_quote_refresh_reason"] = "observer_spread_too_wide"
         provenance["pre_submit_quote_refresh_spread_ratio"] = round(float(spread_ratio), 6)

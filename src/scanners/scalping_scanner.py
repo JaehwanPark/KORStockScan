@@ -22,29 +22,41 @@ from src.engine.signal_radar import SniperRadar
 from src.utils.constants import TRADING_RULES
 from src.utils.pipeline_event_logger import emit_pipeline_event
 
+SCANNER_RISING_START_SOURCE_FAMILY = "scalping_scanner_rising_start_source_v1"
+PRIMARY_RISING_START_SOURCES = {
+    "REALTIME_RANK_START",
+    "PRICE_JUMP_START",
+    "VOLUME_SURGE_POSITIVE",
+    "BID_IMBALANCE_SURGE",
+}
+
 
 def _resolve_scan_interval_sec(now_time):
     """장 초반/후반에는 더 자주 돌리고, 점심 구간은 약간 완화합니다."""
     hhmm = now_time.hour * 100 + now_time.minute
     if 905 <= hhmm < 1030:
-        return 120
+        return 90
     if 1400 <= hhmm <= 1500:
-        return 120
-    return 180
+        return 90
+    return 120
 
 
 def _source_priority(source):
-    """장중 신선도는 시가대비 상위보다 최근 수급 급증 신호를 더 높게 봅니다."""
+    """장중 신선도는 상승 시작 primary source를 시가/거래대금 보조 신호보다 앞세웁니다."""
     return {
-        "VI+VALUE": 0,
-        "SUPERNOVA+VALUE": 1,
-        "VI_TRIGGERED": 2,
-        "BOTH": 3,
-        "SUPERNOVA": 4,
-        "BOTH+VALUE": 5,
-        "VALUE_TOP": 6,
-        "OPEN_TOP": 7,
-    }.get(str(source or "OPEN_TOP"), 8)
+        "REALTIME_RANK_START": 0,
+        "PRICE_JUMP_START": 1,
+        "VOLUME_SURGE_POSITIVE": 2,
+        "BID_IMBALANCE_SURGE": 3,
+        "VI_TRIGGERED": 4,
+        "VI+VALUE": 5,
+        "SUPERNOVA+VALUE": 6,
+        "BOTH": 7,
+        "SUPERNOVA": 8,
+        "BOTH+VALUE": 9,
+        "OPEN_TOP": 10,
+        "VALUE_TOP": 11,
+    }.get(str(source or "OPEN_TOP"), 12)
 
 
 def _safe_float(value, default=0.0):
@@ -112,6 +124,14 @@ def _format_strength_display(target):
 
 def _representative_source(source_set):
     sources = set(source_set or [])
+    for source in (
+        "REALTIME_RANK_START",
+        "PRICE_JUMP_START",
+        "VOLUME_SURGE_POSITIVE",
+        "BID_IMBALANCE_SURGE",
+    ):
+        if source in sources:
+            return source
     has_open = "OPEN_TOP" in sources
     has_supernova = "SUPERNOVA" in sources
     has_value = "VALUE_TOP" in sources
@@ -146,6 +166,26 @@ def _scanner_rate_from_field(target, field_name):
 
 def _scanner_flu_metric(target):
     source_set = set(_source_signature(target))
+
+    if "REALTIME_RANK_START" in source_set:
+        rate, has_rate = _scanner_rate_from_field(target, "RealtimeRankFluRate")
+        if has_rate:
+            return rate, "realtime_rank_base_comp_chgr", "REALTIME_RANK_START"
+
+    if "PRICE_JUMP_START" in source_set:
+        rate, has_rate = _scanner_rate_from_field(target, "PriceJumpFluRate")
+        if has_rate:
+            return rate, "price_jump_flu_rate", "PRICE_JUMP_START"
+
+    if "VOLUME_SURGE_POSITIVE" in source_set:
+        rate, has_rate = _scanner_rate_from_field(target, "VolumeSurgeFluRate")
+        if has_rate:
+            return rate, "volume_surge_flu_rate", "VOLUME_SURGE_POSITIVE"
+
+    if "BID_IMBALANCE_SURGE" in source_set:
+        rate, has_rate = _scanner_rate_from_field(target, "BidImbalanceFluRate")
+        if has_rate:
+            return rate, "bid_imbalance_flu_rate", "BID_IMBALANCE_SURGE"
 
     if source_set and source_set.issubset({"OPEN_TOP", "VALUE_TOP"}):
         open_rate, has_open = _scanner_rate_from_field(target, "OpenFluRate")
@@ -183,9 +223,63 @@ def _rank_jump(target):
 
 def _scanner_candidate_role(target):
     source_set = set(_source_signature(target))
-    if source_set in ({"VALUE_TOP"}, {"OPEN_TOP"}, {"OPEN_TOP", "VALUE_TOP"}):
+    if source_set & PRIMARY_RISING_START_SOURCES:
+        return "early_discovery"
+    if source_set == {"VALUE_TOP"}:
+        return "liquidity_enrichment_only"
+    if source_set in (
+        {"VALUE_TOP"},
+        {"OPEN_TOP"},
+        {"OPEN_TOP", "VALUE_TOP"},
+        {"VI_TRIGGERED"},
+        {"VI_TRIGGERED", "VALUE_TOP"},
+    ):
         return "late_confirmation"
     return "early_discovery"
+
+
+def _rising_start_score(target):
+    source_set = set(_source_signature(target))
+    source_bias = {
+        "REALTIME_RANK_START": 720.0,
+        "PRICE_JUMP_START": 690.0,
+        "VOLUME_SURGE_POSITIVE": 650.0,
+        "BID_IMBALANCE_SURGE": 610.0,
+        "VI_TRIGGERED": 360.0,
+        "OPEN_TOP": 120.0,
+        "VALUE_TOP": 20.0,
+    }
+    best_source_bias = max((source_bias.get(source, 0.0) for source in source_set), default=0.0)
+    flu_rate, flu_metric, _ = _scanner_flu_metric(target)
+    flu_score = _bounded(flu_rate * 10.0, 0.0, 260.0)
+    if flu_metric in {"vi_dynamic_disparity_rate", "vi_static_disparity_rate"}:
+        flu_score = 0.0
+
+    rank_change = abs(_safe_int(target.get("RankChange")))
+    rank_score = min(240.0, rank_change * 8.0)
+    rank_jump_score = min(220.0, _rank_jump(target) * 4.0)
+    jump_score = _bounded(target.get("JumpRate"), 0.0, 20.0) * 18.0
+    volume_score = _bounded(target.get("VolumeSurgeRate", target.get("SpikeRate")), 0.0, 400.0)
+    bid_score = _bounded(target.get("BidSurgeRate"), 0.0, 250.0)
+    cntr_score = _bounded(target.get("CntrStr"), 0.0, 180.0)
+    priority_score = _bounded(target.get("PriorityScore"), 0.0, 220.0)
+    trade_value = _safe_positive_int(target.get("TradeValue"))
+    trade_value_score = min(160.0, log10(max(trade_value, 1)) * 22.0) if trade_value > 0 else 0.0
+    source_count_score = min(240.0, max(0, len(source_set) - 1) * 70.0)
+
+    return (
+        best_source_bias
+        + flu_score
+        + rank_score
+        + rank_jump_score
+        + jump_score
+        + volume_score
+        + bid_score
+        + cntr_score
+        + priority_score
+        + trade_value_score
+        + source_count_score
+    )
 
 
 def _price_delta_pct(first_price, current_price):
@@ -211,6 +305,14 @@ def _late_confirmation_probe_block_reason(*, probe_age, min_probe_sec, max_probe
 def _acceleration_reason(target, previous=None):
     source_set = set(_source_signature(target))
     previous_sources = set((previous or {}).get("last_source_signature") or [])
+    for source in (
+        "REALTIME_RANK_START",
+        "PRICE_JUMP_START",
+        "VOLUME_SURGE_POSITIVE",
+        "BID_IMBALANCE_SURGE",
+    ):
+        if source in source_set and source not in previous_sources:
+            return f"new_{source.lower()}_source"
     if "VI_TRIGGERED" in source_set and "VI_TRIGGERED" not in previous_sources:
         return "new_vi_triggered_source"
     if "SUPERNOVA" in source_set and "SUPERNOVA" not in previous_sources:
@@ -225,6 +327,14 @@ def _acceleration_reason(target, previous=None):
     min_spike = float(getattr(TRADING_RULES, "SCALP_SCANNER_ACCEL_MIN_SPIKE_RATE", 80.0) or 80.0)
     if spike_rate >= min_spike:
         return "spike_rate_acceleration"
+
+    jump_rate = _safe_float(target.get("JumpRate"))
+    if jump_rate >= max(0.3, min_spike / 200.0):
+        return "price_jump_start_acceleration"
+
+    bid_surge_rate = _safe_float(target.get("BidSurgeRate"))
+    if bid_surge_rate >= min_spike:
+        return "bid_imbalance_surge_acceleration"
 
     priority_score = _safe_float(target.get("PriorityScore"))
     min_priority = float(getattr(TRADING_RULES, "SCALP_SCANNER_ACCEL_MIN_PRIORITY_SCORE", 80.0) or 80.0)
@@ -244,6 +354,9 @@ def _freshness_score(target):
     `OPEN_TOP`은 하루 종일 순위가 고착되기 쉬워 보조 신호로만 쓰고,
     최근 거래량 급증/체결강도/등락률이 함께 살아난 종목을 앞세웁니다.
     """
+    if set(_source_signature(target)) & PRIMARY_RISING_START_SOURCES:
+        return _rising_start_score(target)
+
     source_bias = {
         "VI+VALUE": 650.0,
         "SUPERNOVA+VALUE": 620.0,
@@ -314,6 +427,7 @@ def _merge_candidate(candidate_pool, raw_target, source):
             "VIMotionCount": 0,
             "VIReleaseTime": "",
             "CntrStrAvailable": False,
+            "SourceFamily": SCANNER_RISING_START_SOURCE_FAMILY,
         },
     )
 
@@ -337,6 +451,41 @@ def _merge_candidate(candidate_pool, raw_target, source):
         if raw_flu_present:
             current["ValueFluRate"] = raw_flu_rate
             current.setdefault("DayFluRate", raw_flu_rate)
+    elif source == "REALTIME_RANK_START":
+        if raw_target.get("RealtimeRankFluRate") not in (None, ""):
+            current["RealtimeRankFluRate"] = _safe_float(raw_target.get("RealtimeRankFluRate"))
+        elif raw_flu_present:
+            current["RealtimeRankFluRate"] = raw_flu_rate
+        current["RealtimePrevBaseChange"] = _safe_float(raw_target.get("RealtimePrevBaseChange"))
+        current["RankChange"] = _safe_int(raw_target.get("RankChange"))
+        current["RankChangeSign"] = str(raw_target.get("RankChangeSign") or "").strip()
+        current["RealtimeRankWindow"] = str(raw_target.get("RealtimeRankWindow") or "")
+    elif source == "PRICE_JUMP_START":
+        if raw_flu_present:
+            current["PriceJumpFluRate"] = raw_flu_rate
+        current["JumpRate"] = max(current.get("JumpRate", 0.0), _safe_float(raw_target.get("JumpRate")))
+        current["PriceJumpTradeQty"] = max(
+            current.get("PriceJumpTradeQty", 0), _safe_positive_int(raw_target.get("TradeQty"))
+        )
+        current["PreSig"] = raw_target.get("PreSig", current.get("PreSig", ""))
+    elif source == "VOLUME_SURGE_POSITIVE":
+        if raw_flu_present:
+            current["VolumeSurgeFluRate"] = raw_flu_rate
+        current["VolumeSurgeRate"] = max(
+            current.get("VolumeSurgeRate", 0.0),
+            _safe_float(raw_target.get("VolumeSurgeRate", raw_target.get("SpikeRate", raw_target.get("spike_rate")))),
+        )
+        current["VolumeSurgeQty"] = max(
+            current.get("VolumeSurgeQty", 0), _safe_positive_int(raw_target.get("SurgeQty"))
+        )
+        current["PreSig"] = raw_target.get("PreSig", current.get("PreSig", ""))
+    elif source == "BID_IMBALANCE_SURGE":
+        if raw_flu_present:
+            current["BidImbalanceFluRate"] = raw_flu_rate
+        current["BidSurgeRate"] = max(current.get("BidSurgeRate", 0.0), _safe_float(raw_target.get("BidSurgeRate")))
+        current["BidSurgeQty"] = max(current.get("BidSurgeQty", 0), _safe_positive_int(raw_target.get("BidSurgeQty")))
+        current["TotalBuyQty"] = max(current.get("TotalBuyQty", 0), _safe_positive_int(raw_target.get("TotalBuyQty")))
+        current["PreSig"] = raw_target.get("PreSig", current.get("PreSig", ""))
     elif source == "VI_TRIGGERED":
         if raw_flu_present:
             current["ViFluRate"] = raw_flu_rate
@@ -395,15 +544,29 @@ def _merge_candidate(candidate_pool, raw_target, source):
     current["ScannerFluRate"] = scanner_flu_rate
     current["ScannerFluRateMetric"] = scanner_flu_metric
     current["ScannerFluRateSource"] = scanner_flu_source
+    current["SourceRole"] = _scanner_candidate_role(current)
+    current["RisingStartScore"] = _rising_start_score(current)
 
 
 def build_candidate_pool(
+    realtime_rank_targets=None,
+    price_jump_targets=None,
+    volume_surge_targets=None,
+    bid_imbalance_targets=None,
     soaring_targets=None,
     supernova_targets=None,
     value_targets=None,
     vi_targets=None,
 ):
     candidate_pool = {}
+    for target in realtime_rank_targets or []:
+        _merge_candidate(candidate_pool, target, "REALTIME_RANK_START")
+    for target in price_jump_targets or []:
+        _merge_candidate(candidate_pool, target, "PRICE_JUMP_START")
+    for target in volume_surge_targets or []:
+        _merge_candidate(candidate_pool, target, "VOLUME_SURGE_POSITIVE")
+    for target in bid_imbalance_targets or []:
+        _merge_candidate(candidate_pool, target, "BID_IMBALANCE_SURGE")
     for target in soaring_targets or []:
         _merge_candidate(candidate_pool, target, "OPEN_TOP")
     for target in supernova_targets or []:
@@ -420,10 +583,28 @@ def rank_candidates(candidate_pool):
         candidate_pool.values(),
         key=lambda item: (
             _source_priority(item.get("Source")),
+            -_rising_start_score(item),
             -_freshness_score(item),
             -_safe_float(item.get("FluRate")),
         ),
     )
+
+
+def _scanner_candidate_pre_filter_reason(target):
+    price = _safe_positive_int(target.get("Price"))
+    if price <= 0:
+        return "invalid_or_stale_price"
+    source_set = set(_source_signature(target))
+    flu_rate, _, _ = _scanner_flu_metric(target)
+    if source_set == {"VALUE_TOP"}:
+        if flu_rate <= 0:
+            return "non_positive_liquidity_only_source"
+        return "liquidity_only_source_not_seed"
+    if source_set in ({"VI_TRIGGERED"}, {"VI_TRIGGERED", "VALUE_TOP"}):
+        return "vi_secondary_confirmation_only"
+    if flu_rate <= 0:
+        return "non_positive_rising_start"
+    return ""
 
 
 def _filter_picks_within_cooldown(recent_picks, now_ts, reentry_cooldown_sec):
@@ -741,6 +922,15 @@ def _scanner_event_fields(target, source_guard=None):
         "actual_order_submitted": False,
         "broker_order_forbidden": True,
         "source_signature": source_signature,
+        "scanner_source_family": target.get("SourceFamily") or SCANNER_RISING_START_SOURCE_FAMILY,
+        "scanner_source_role": target.get("SourceRole") or _scanner_candidate_role(target),
+        "rising_start_score": _safe_float(target.get("RisingStartScore", _rising_start_score(target))),
+        "rank_change": _safe_int(target.get("RankChange")),
+        "rank_change_sign": target.get("RankChangeSign"),
+        "jump_rate": _safe_float(target.get("JumpRate")),
+        "volume_surge_rate": _safe_float(target.get("VolumeSurgeRate", target.get("SpikeRate"))),
+        "bid_surge_rate": _safe_float(target.get("BidSurgeRate")),
+        "scanner_filter_reason": source_guard.get("reason") if source_guard.get("blocked") else "",
         "scanner_candidate_role": source_guard.get("candidate_role") or _scanner_candidate_role(target),
         "scanner_block_reason": source_guard.get("reason") if source_guard.get("blocked") else "",
         "scanner_promotion_reason": "" if source_guard.get("blocked") else source_guard.get("reason"),
@@ -802,6 +992,18 @@ def promote_candidates(db, event_bus, ranked_targets, recent_picks, *, max_new_c
 
     for target in ranked_targets:
         code = target["Code"]
+        pre_filter_reason = _scanner_candidate_pre_filter_reason(target)
+        if pre_filter_reason:
+            source_guard = {
+                "blocked": True,
+                "reason": pre_filter_reason,
+                "candidate_role": _scanner_candidate_role(target),
+                "source_signature": ",".join(_source_signature(target)),
+            }
+            _log_scanner_candidate_event("scalping_scanner_candidate_observed", target, source_guard)
+            _log_scanner_real_source_guard_block(target, source_guard, now_ts)
+            _remember_guard_block(recent_picks, target, now_ts, pre_filter_reason)
+            continue
         if not _should_promote_candidate(target, recent_picks, now_ts, reentry_cooldown_sec):
             continue
 
@@ -828,7 +1030,15 @@ def promote_candidates(db, event_bus, ranked_targets, recent_picks, *, max_new_c
 
         curr_p = float(target.get("Price", 0))
         if not kiwoom_utils.is_valid_stock(code, target["Name"], token=token, current_price=curr_p):
-            _remember_pick(recent_picks, target, now_ts)
+            source_guard = {
+                "blocked": True,
+                "reason": "invalid_stock_filter",
+                "candidate_role": _scanner_candidate_role(target),
+                "source_signature": ",".join(_source_signature(target)),
+            }
+            _log_scanner_candidate_event("scalping_scanner_candidate_observed", target, source_guard)
+            _log_scanner_real_source_guard_block(target, source_guard, now_ts)
+            _remember_guard_block(recent_picks, target, now_ts, "invalid_stock_filter")
             continue
 
         score = _freshness_score(target)
@@ -836,7 +1046,7 @@ def promote_candidates(db, event_bus, ranked_targets, recent_picks, *, max_new_c
         display_flu, display_flu_metric, display_flu_source = _scanner_flu_metric(target)
         print(
             f"🎯 [타겟 포착] {target['Name']} "
-            f"(등락률: +{display_flu:.2f}% [{display_flu_metric}/{display_flu_source}], "
+            f"(등락률: {display_flu:+.2f}% [{display_flu_metric}/{display_flu_source}], "
             f"체결강도: {_format_strength_display(target)}, "
             f"신선도점수: {score:.1f} | 출처: {target['Source']} [{source_sig}])"
         )
@@ -911,6 +1121,36 @@ def run_scalper_iteration(
     open_top_limit,
     supernova_limit,
 ):
+    realtime_rank_targets = _fetch_scan_source(
+        "ka00198 실시간종목조회순위(30초)",
+        kiwoom_utils.get_realtime_item_rank_ka00198,
+        token,
+        qry_tp="5",
+        limit=60,
+    )
+    price_jump_targets = _fetch_scan_source(
+        "ka10019 가격급등락",
+        kiwoom_utils.get_price_jump_ka10019,
+        token,
+        mrkt_tp="000",
+        minutes=3,
+        limit=60,
+    )
+    volume_surge_targets = _fetch_scan_source(
+        "ka10023 거래량급증 positive",
+        kiwoom_utils.get_positive_volume_surge_ka10023,
+        token,
+        mrkt_tp="000",
+        limit=supernova_limit,
+    )
+    bid_imbalance_targets = _fetch_scan_source(
+        "ka10021 호가잔량급증",
+        kiwoom_utils.get_bid_balance_surge_ka10021,
+        token,
+        mrkt_tp="000",
+        minutes=3,
+        limit=60,
+    )
     soaring_targets = _fetch_scan_source(
         "ka10028 시가대비 상위",
         kiwoom_utils.get_top_open_fluctuation_ka10028,
@@ -918,30 +1158,27 @@ def run_scalper_iteration(
         mrkt_tp="000",
         limit=open_top_limit,
     )
-    supernova_targets = _fetch_scan_source(
-        "Supernova 수급 급증",
-        radar.find_supernova_targets,
-        mrkt_tp="000",
-        candidate_limit=supernova_limit,
-    )
     value_targets = _fetch_scan_source(
         "ka10032 거래대금 상위",
         kiwoom_utils.get_value_top_ka10032,
         token,
         mrkt_tp="000",
-        limit=30,
+        limit=60,
     )
     vi_targets = _fetch_scan_source(
         "ka10054 VI 발동",
         kiwoom_utils.get_vi_triggered_ka10054,
         token,
         mrkt_tp="000",
-        limit=30,
+        limit=60,
     )
 
     candidate_pool = build_candidate_pool(
+        realtime_rank_targets=realtime_rank_targets,
+        price_jump_targets=price_jump_targets,
+        volume_surge_targets=volume_surge_targets,
+        bid_imbalance_targets=bid_imbalance_targets,
         soaring_targets=soaring_targets,
-        supernova_targets=supernova_targets,
         value_targets=value_targets,
         vi_targets=vi_targets,
     )
@@ -963,7 +1200,7 @@ def run_scalper_iteration(
 def run_scalper(is_test_mode=False):
     """
     [역할] 
-    2~3분 주기로 시장을 스캔하여 당일 수급이 폭발하거나 급등 전조가 보이는
+    90~120초 주기로 시장을 스캔하여 당일 수급이 폭발하거나 급등 전조가 보이는
     '초단타(Scalping)' 타겟을 발굴합니다.
     
     [아키텍처 흐름]
@@ -972,7 +1209,7 @@ def run_scalper(is_test_mode=False):
     3. DB 저장: 발굴된 종목을 SQLAlchemy ORM을 사용하여 안전하게 Upsert(삽입/업데이트) 합니다.
     4. 이벤트 발행: 'COMMAND_WS_REG' 이벤트를 EventBus에 쏘아, 웹소켓 모듈이 해당 종목의 실시간 틱 데이터 감시를 즉각 시작하도록 지시합니다.
     """
-    print("⚡ [SCALPING 스캐너] 초단타 감시 엔진 가동 (장초반/후반 2분, 그 외 3분 주기)...")
+    print("⚡ [SCALPING 스캐너] 초단타 감시 엔진 가동 (장초반/후반 90초, 그 외 120초 주기)...")
     db = DBManager()
     event_bus = EventBus() # 💡 전역 싱글톤 이벤트 버스
     
@@ -984,7 +1221,7 @@ def run_scalper(is_test_mode=False):
     reentry_cooldown_sec = 25 * 60
     max_new_codes = 12
     open_top_limit = 60
-    supernova_limit = 30
+    supernova_limit = 60
 
     # 💡 무한 루프 밖에서 토큰과 레이더를 한 번만 초기화하여 부하 감소
     # (실제 운영 시에는 토큰 만료를 대비한 갱신 로직이 추가로 필요할 수 있음)

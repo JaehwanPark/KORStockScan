@@ -402,10 +402,15 @@ def notify_from_report(
         if suppress_sell_restart_after_release:
             transition = "restart_suppressed_after_release"
 
-    next_phase = "release_pending" if transition == "release_pending" else current_phase
+    if transition == "restart_suppressed_after_release":
+        next_phase = previous_phase or "released"
+        next_value = previous_value or current_value
+    else:
+        next_phase = "release_pending" if transition == "release_pending" else current_phase
+        next_value = current_value
     next_state = {
         "phase": next_phase,
-        "state": current_value,
+        "state": next_value,
         "session_key": current_session_key,
         "updated_at_ts": now,
         "report_file": str(report_file),

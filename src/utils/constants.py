@@ -306,10 +306,10 @@ class TradingConfig:
     SCALPING_PRE_SUBMIT_PRICE_GUARD_ENABLED: bool = True  # submitted 전 비정상 저가 지정가 차단
     SCALPING_PRE_SUBMIT_MAX_BELOW_BID_BPS: int = 80  # best_bid 대비 허용 하향 괴리(bp)
     SCALPING_NORMAL_DEFENSIVE_TICKS: int = 1  # 일반 SCALPING 실주문 기본 방어 제출가 tick offset
-    SCALPING_NORMAL_DEFENSIVE_BPS: int = 50  # percent_bps 모드 일반 방어 제출가 bp (0.5%)
+    SCALPING_NORMAL_DEFENSIVE_BPS: int = 25  # percent_bps 모드 일반 방어 제출가 bp (0.25%)
     SCALPING_CONDITIONAL_STRONG_DEFENSIVE_BPS: int = 10  # percent_bps 모드 강세 조건 방어 제출가 bp (0.1%)
-    SCALPING_NORMAL_FAVORABLE_DEFENSIVE_BPS: int = 35  # percent_bps 모드 우호 micro 방어 제출가 bp
-    SCALPING_NORMAL_WEAK_DEFENSIVE_BPS: int = 65  # percent_bps 모드 약한 유동성/넓은 spread 방어 제출가 bp
+    SCALPING_NORMAL_FAVORABLE_DEFENSIVE_BPS: int = 15  # percent_bps 모드 우호 micro 방어 제출가 bp
+    SCALPING_NORMAL_WEAK_DEFENSIVE_BPS: int = 40  # percent_bps 모드 약한 유동성/넓은 spread 방어 제출가 bp
     SCALP_REAL_WEAK_PULLBACK_ENTRY_BLOCK_ENABLED: bool = False  # real SCALPING 약한 눌림/CAUTION 진입 차단은 runtime env로만 ON
     SCALP_REAL_WEAK_PULLBACK_ENTRY_BLOCK_MIN_MICRO_POSITIVES: int = 2
     SCALP_REAL_WEAK_PULLBACK_ENTRY_BLOCK_MIN_SPREAD_TICKS: int = 5
@@ -927,6 +927,9 @@ def _build_trading_rules() -> TradingConfig:
         or env_entry_latency_max_ws_age_caution is not None
         or env_entry_latency_max_ws_jitter_caution is not None
         or env_entry_latency_max_spread_caution is not None
+        or env_pre_submit_quote_refresh_enabled is not None
+        or env_pre_submit_quote_refresh_max_age is not None
+        or env_pre_submit_quote_refresh_max_spread is not None
         or env_latency_submit_recovery_enabled is not None
         or env_latency_submit_recovery_min_signal is not None
         or env_latency_submit_recovery_max_ws_age is not None

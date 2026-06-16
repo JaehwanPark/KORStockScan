@@ -2319,7 +2319,12 @@ def _active_sim_priority_handoff_status(
             )
             if seed_id in runtime_catalog_ids:
                 referenced_runtime_seed_ids.add(seed_id)
-            if seed_id in inactive_seed_ids or seed_id in runtime_inactive_ids:
+            # Runtime events must be validated against the policy file that was
+            # actually loaded by that runtime.  The postclose catalog for
+            # target_date can legitimately move yesterday's active seeds to
+            # cooldown/retired for the next PREOPEN; that transition must not
+            # retroactively mark today's runtime observations as inactive.
+            if seed_id in runtime_inactive_ids or (not runtime_catalog_ids and seed_id in inactive_seed_ids):
                 inactive_consumed.add(seed_id)
             elif seed_id not in catalog_seed_ids and seed_id not in runtime_catalog_ids:
                 unknown_consumed.add(seed_id)
