@@ -779,6 +779,227 @@ def test_lifecycle_submit_bucket_attribution_is_source_only_and_surfaces_gaps():
     assert attribution["runtime_approval_candidates"] == []
 
 
+def test_lifecycle_submit_bucket_attribution_adds_quote_freshness_dimensions():
+    rows = [
+        {
+            "stage": "submit",
+            "source_stage": "latency_block",
+            "runtime_features": {
+                "actual_order_submitted": False,
+                "broker_order_forbidden": False,
+                "latency_state": "DANGER",
+                "latency_reason": "latency_state_danger",
+                "pre_submit_ws_snapshot_refresh_enabled": True,
+                "pre_submit_ws_snapshot_refresh_applied": False,
+                "pre_submit_ws_snapshot_refresh_reason": "latest_snapshot_stale",
+                "pre_submit_ws_snapshot_refresh_source": "ws_manager_latest_data",
+                "pre_submit_ws_snapshot_refresh_age_ms": 1400,
+            },
+            "labels": {},
+            "stage_ev_composite_pct": None,
+        },
+        {
+            "stage": "submit",
+            "source_stage": "scalp_sim_buy_order_virtual_pending",
+            "runtime_features": {
+                "actual_order_submitted": False,
+                "broker_order_forbidden": True,
+                "sim_record_id": "sim-1",
+                "quote_age_ms": 700,
+            },
+            "labels": {},
+            "stage_ev_composite_pct": None,
+        },
+    ]
+
+    attribution = mod._submit_bucket_attribution(rows)
+
+    assert attribution["summary"]["quote_freshness_attribution_present"] is True
+    assert attribution["summary"]["quote_freshness_resolution_counts"]["refresh_failed_quote_stale"] == 1
+    assert attribution["summary"]["quote_freshness_resolution_counts"]["sim_submit_path_not_applicable"] == 1
+    bucket_pairs = {(item["bucket_type"], item["bucket_key"]) for item in attribution["buckets"]}
+    assert ("pre_submit_refresh_source", "ws_manager_latest_data") in bucket_pairs
+    assert ("pre_submit_refresh_attempted", "refresh_attempted") in bucket_pairs
+    assert ("pre_submit_refresh_applied", "refresh_attempted_not_applied") in bucket_pairs
+    assert ("quote_freshness_resolution_state", "sim_submit_path_not_applicable") in bucket_pairs
+
+
+def test_submit_runtime_features_backfills_real_submit_refresh_fields_from_row():
+    features = mod._submit_runtime_features(
+        {
+            "source_stage": "order_bundle_submitted",
+            "actual_order_submitted": True,
+            "broker_order_no": "0027154",
+            "quote_age_ms": 2628.0,
+            "latency_state": "SAFE",
+            "latency_reason": "spread_too_wide",
+            "entry_submit_revalidation_warning": "stale_context_or_quote",
+            "best_bid": 16860.0,
+            "best_ask": 16910.0,
+            "resolved_order_price": 16830.0,
+            "pre_submit_quote_refresh_enabled": True,
+            "pre_submit_quote_refresh_applied": False,
+            "pre_submit_quote_refresh_reason": "observer_quote_stale",
+            "pre_submit_quote_refresh_source": "orderbook_micro_observer",
+            "pre_submit_quote_refresh_quote_age_ms": 1500.0,
+            "pre_submit_ws_snapshot_refresh_enabled": True,
+            "pre_submit_ws_snapshot_refresh_applied": True,
+            "pre_submit_ws_snapshot_refresh_reason": "latest_ws_snapshot_fresh",
+            "pre_submit_ws_snapshot_refresh_source": "ws_manager_latest_data",
+            "pre_submit_ws_snapshot_refresh_age_ms": 12.0,
+        },
+        {},
+    )
+
+    assert features["actual_order_submitted"] is True
+    assert features["broker_order_no"] == "0027154"
+    assert features["quote_age_ms"] == 2628.0
+    assert features["latency_state"] == "SAFE"
+    assert features["latency_reason"] == "spread_too_wide"
+    assert features["entry_submit_revalidation_warning"] == "stale_context_or_quote"
+    assert features["best_bid"] == 16860.0
+    assert features["best_ask"] == 16910.0
+    assert features["resolved_order_price"] == 16830.0
+    assert features["pre_submit_quote_refresh_enabled"] is True
+    assert features["pre_submit_quote_refresh_applied"] is False
+    assert features["pre_submit_quote_refresh_reason"] == "observer_quote_stale"
+    assert features["pre_submit_quote_refresh_source"] == "orderbook_micro_observer"
+    assert features["pre_submit_ws_snapshot_refresh_enabled"] is True
+    assert features["pre_submit_ws_snapshot_refresh_applied"] is True
+    assert features["pre_submit_ws_snapshot_refresh_reason"] == "latest_ws_snapshot_fresh"
+    assert features["pre_submit_ws_snapshot_refresh_source"] == "ws_manager_latest_data"
+
+
+def test_lifecycle_submit_bucket_attribution_treats_quote_not_stale_as_noop():
+    rows = [
+        {
+            "stage": "submit",
+            "source_stage": "latency_pass",
+            "runtime_features": {
+                "actual_order_submitted": False,
+                "broker_order_forbidden": False,
+                "latency_state": "SAFE",
+                "pre_submit_quote_refresh_enabled": True,
+                "pre_submit_quote_refresh_applied": False,
+                "pre_submit_quote_refresh_reason": "quote_not_stale",
+                "pre_submit_quote_refresh_source": "orderbook_micro_observer",
+            },
+            "labels": {},
+            "stage_ev_composite_pct": None,
+        },
+    ]
+
+    attribution = mod._submit_bucket_attribution(rows)
+
+    assert attribution["summary"]["quote_freshness_attribution_present"] is False
+    assert attribution["summary"]["quote_freshness_resolution_counts"][
+        "refresh_not_attempted_or_not_needed"
+    ] == 1
+    bucket_pairs = {(item["bucket_type"], item["bucket_key"]) for item in attribution["buckets"]}
+    assert ("pre_submit_refresh_attempted", "refresh_not_attempted_or_not_needed") in bucket_pairs
+    assert ("pre_submit_refresh_source", "refresh_source_not_needed") in bucket_pairs
+    assert ("pre_submit_refresh_reason", "refresh_not_attempted_or_not_needed") in bucket_pairs
+
+
+def test_lifecycle_submit_bucket_attribution_treats_fresh_ws_snapshot_as_noop():
+    rows = [
+        {
+            "stage": "submit",
+            "source_stage": "latency_pass",
+            "runtime_features": {
+                "actual_order_submitted": False,
+                "broker_order_forbidden": False,
+                "latency_state": "SAFE",
+                "pre_submit_ws_snapshot_refresh_enabled": True,
+                "pre_submit_ws_snapshot_refresh_applied": False,
+                "pre_submit_ws_snapshot_refresh_reason": "latest_ws_snapshot_fresh",
+                "pre_submit_ws_snapshot_refresh_source": "ws_manager_latest_data",
+            },
+            "labels": {},
+            "stage_ev_composite_pct": None,
+        },
+    ]
+
+    attribution = mod._submit_bucket_attribution(rows)
+
+    assert attribution["summary"]["quote_freshness_attribution_present"] is False
+    assert attribution["summary"]["quote_freshness_resolution_counts"][
+        "refresh_not_attempted_or_not_needed"
+    ] == 1
+    bucket_pairs = {(item["bucket_type"], item["bucket_key"]) for item in attribution["buckets"]}
+    assert ("pre_submit_refresh_attempted", "refresh_not_attempted_or_not_needed") in bucket_pairs
+    assert ("pre_submit_refresh_source", "refresh_source_not_needed") in bucket_pairs
+    assert ("pre_submit_refresh_reason", "refresh_not_attempted_or_not_needed") in bucket_pairs
+
+
+def test_lifecycle_submit_bucket_attribution_keeps_applied_fresh_ws_snapshot_source():
+    rows = [
+        {
+            "stage": "submit",
+            "source_stage": "latency_pass",
+            "runtime_features": {
+                "actual_order_submitted": False,
+                "broker_order_forbidden": False,
+                "latency_state": "SAFE",
+                "pre_submit_ws_snapshot_refresh_enabled": True,
+                "pre_submit_ws_snapshot_refresh_applied": True,
+                "pre_submit_ws_snapshot_refresh_reason": "latest_ws_snapshot_fresh",
+                "pre_submit_ws_snapshot_refresh_source": "ws_manager_latest_data",
+                "pre_submit_ws_snapshot_refresh_age_ms": 120,
+            },
+            "labels": {},
+            "stage_ev_composite_pct": None,
+        },
+    ]
+
+    attribution = mod._submit_bucket_attribution(rows)
+
+    assert attribution["summary"]["quote_freshness_attribution_present"] is True
+    assert attribution["summary"]["quote_freshness_resolution_counts"][
+        "refresh_resolved_quote_freshness"
+    ] == 1
+    bucket_pairs = {(item["bucket_type"], item["bucket_key"]) for item in attribution["buckets"]}
+    assert ("pre_submit_refresh_attempted", "refresh_attempted") in bucket_pairs
+    assert ("pre_submit_refresh_applied", "ws_snapshot_refresh_applied") in bucket_pairs
+    assert ("pre_submit_refresh_source", "ws_manager_latest_data") in bucket_pairs
+    assert ("pre_submit_refresh_reason", "ws_snapshot:latest_ws_snapshot_fresh") in bucket_pairs
+
+
+def test_lifecycle_submit_bucket_attribution_prefers_failure_over_noop_refresh_reason():
+    rows = [
+        {
+            "stage": "submit",
+            "source_stage": "latency_block",
+            "runtime_features": {
+                "actual_order_submitted": False,
+                "broker_order_forbidden": False,
+                "latency_state": "DANGER",
+                "pre_submit_ws_snapshot_refresh_enabled": True,
+                "pre_submit_ws_snapshot_refresh_applied": False,
+                "pre_submit_ws_snapshot_refresh_reason": "latest_ws_snapshot_fresh",
+                "pre_submit_ws_snapshot_refresh_source": "ws_manager_latest_data",
+                "pre_submit_quote_refresh_enabled": True,
+                "pre_submit_quote_refresh_applied": False,
+                "pre_submit_quote_refresh_reason": "observer_quote_missing",
+                "pre_submit_quote_refresh_source": "orderbook_micro_observer",
+            },
+            "labels": {},
+            "stage_ev_composite_pct": None,
+        },
+    ]
+
+    attribution = mod._submit_bucket_attribution(rows)
+
+    assert attribution["summary"]["quote_freshness_attribution_present"] is True
+    assert attribution["summary"]["quote_freshness_resolution_counts"][
+        "refresh_failed_source_unhealthy"
+    ] == 1
+    bucket_pairs = {(item["bucket_type"], item["bucket_key"]) for item in attribution["buckets"]}
+    assert ("pre_submit_refresh_attempted", "refresh_attempted") in bucket_pairs
+    assert ("pre_submit_refresh_source", "orderbook_micro_observer") in bucket_pairs
+    assert ("pre_submit_refresh_reason", "observer_quote:observer_quote_missing") in bucket_pairs
+
+
 def test_lifecycle_submit_bucket_attribution_creates_contract_gap_workorders():
     rows = [
         {
@@ -1508,6 +1729,8 @@ def test_lifecycle_flow_adm_bridge_joins_entry_candidate_to_downstream_sim_rows(
     assert attribution["summary"]["direct_sim_record_complete_flow_count"] == 0
     assert attribution["summary"]["adm_bridge_complete_flow_count"] == 1
     assert attribution["summary"]["direct_flow_zero_reason"] == "no_direct_complete_but_adm_bridge_complete"
+    assert attribution["summary"]["direct_flow_zero_closure_status"] == "closed_by_adm_bridge_complete"
+    assert attribution["summary"]["direct_flow_zero_followup_required"] is False
     assert attribution["summary"]["direct_flow_zero_diagnostic"]["runtime_effect"] is False
     assert attribution["summary"]["join_contract_blocked"] is False
     assert attribution["summary"]["stage_identity"]["entry"]["identity_quality_counts"] == {"entry_adm_bridge_key": 1}

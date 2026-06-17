@@ -343,6 +343,7 @@ def _event_field_values(target_date: str, tracked_values: dict[str, set[str]] | 
         "active_seed_candidate_not_match_eligible_event_count": 0,
         "active_seed_candidate_not_match_eligible_reason_counts": {},
         "active_seed_candidate_without_seed_id_reason_counts": {},
+        "active_seed_candidate_missing_parent_seed_lookup_key_counts": {},
         "active_seed_candidate_followup_stage_counts": {},
         "panic_scale_in_event_count": 0,
         "panic_scale_in_unique_sim_record_count": 0,
@@ -447,6 +448,12 @@ def _event_field_values(target_date: str, tracked_values: dict[str, set[str]] | 
                             reason_counts[reason] = reason_counts.get(reason, 0) + 1
                             if stage != "scalp_sim_entry_armed":
                                 policy_diag["active_seed_candidate_followup_without_seed_id_event_count"] += 1
+                                if reason == "followup_missing_parent_seed_id":
+                                    lookup_key = candidate_prefix or "missing_observable_prefix"
+                                    lookup_counts = policy_diag[
+                                        "active_seed_candidate_missing_parent_seed_lookup_key_counts"
+                                    ]
+                                    lookup_counts[lookup_key] = lookup_counts.get(lookup_key, 0) + 1
                 if stage == "scalp_sim_panic_scale_in_blocked":
                     policy_diag["panic_scale_in_event_count"] += 1
                     sim_record_id = str(
@@ -1398,6 +1405,18 @@ def build_key_lineage_ledger(target_date: str) -> dict[str, Any]:
                 "active_seed_candidate_without_seed_id_reason_counts"
             )
             or {},
+            "active_seed_candidate_missing_parent_seed_lookup_key_counts": active_policy_observation.get(
+                "active_seed_candidate_missing_parent_seed_lookup_key_counts"
+            )
+            or {},
+            "active_seed_candidate_lineage_closure_status": (
+                "closed"
+                if _safe_int(active_policy_observation.get("active_seed_candidate_without_seed_id_event_count")) <= 0
+                else "closed_with_producer_followup"
+            ),
+            "active_seed_candidate_lineage_followup_required": (
+                _safe_int(active_policy_observation.get("active_seed_candidate_without_seed_id_event_count")) > 0
+            ),
             "active_seed_candidate_followup_stage_counts": active_policy_observation.get(
                 "active_seed_candidate_followup_stage_counts"
             )

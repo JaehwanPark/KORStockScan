@@ -235,6 +235,11 @@ def test_key_lineage_splits_active_seed_new_entry_from_followup_context(monkeypa
         "new_entry_without_seed_id": 1,
         "followup_missing_parent_seed_id": 1,
     }
+    assert report["summary"]["active_seed_candidate_missing_parent_seed_lookup_key_counts"] == {
+        '{"entry_score_parent":"score_mid_recovery"}': 1,
+    }
+    assert report["summary"]["active_seed_candidate_lineage_closure_status"] == "closed_with_producer_followup"
+    assert report["summary"]["active_seed_candidate_lineage_followup_required"] is True
     assert report["summary"]["active_seed_candidate_followup_stage_counts"] == {
         "scalp_sim_holding_started": 1,
         "scalp_sim_panic_scale_in_blocked": 1,
@@ -829,7 +834,29 @@ def test_conversion_lane_submit_drought_blockers_have_split_axes(monkeypatch, tm
     _write(tmp_path / "report" / "lifecycle_bucket_discovery" / f"lifecycle_bucket_discovery_{target}.json", {})
     _write(
         tmp_path / "report" / "buy_funnel_sentinel" / f"buy_funnel_sentinel_{target}.json",
-        {"classification": {"primary": "SUBMIT_DROUGHT_CRITICAL", "matches": ["SUBMIT_DROUGHT_CRITICAL"]}},
+        {
+            "classification": {
+                "primary": "SUBMIT_DROUGHT_CRITICAL",
+                "matches": ["SUBMIT_DROUGHT_CRITICAL"],
+                "submit_drought_handoff_state": "handoff_required",
+                "submit_drought_root_cause": {
+                    "latency_root_cause_counts": {"unknown_latency_reason": 7},
+                    "quote_freshness_attribution": {
+                        "refresh_subreason_counts": {
+                            "ws_snapshot_refresh_failed_stale": 3,
+                            "observer_quote_refresh_failed_missing": 2,
+                            "observer_quote_refresh_failed_stale": 1,
+                        },
+                        "refresh_attempted_count": 5,
+                        "refresh_applied_count": 0,
+                        "latency_pass_recovered_count": 1,
+                        "order_bundle_submitted_after_refresh_count": 1,
+                    },
+                    "unknown_latency_reason_count": 7,
+                    "unknown_latency_workorder_required": True,
+                },
+            }
+        },
     )
 
     report = lane.build_conversion_lane(target)
@@ -841,11 +868,29 @@ def test_conversion_lane_submit_drought_blockers_have_split_axes(monkeypatch, tm
     assert report["summary"]["buy_funnel_source_present"] is True
     assert report["summary"]["buy_funnel_classification_primary"] == "SUBMIT_DROUGHT_CRITICAL"
     assert report["summary"]["submit_drought_blocker_source_state"] == "submit_drought_critical"
+    assert report["summary"]["submit_drought_unknown_latency_reason_count"] == 7
+    assert report["summary"]["submit_drought_unknown_latency_workorder_required"] is True
+    assert report["summary"]["submit_drought_refresh_attempted_count"] == 5
+    assert report["summary"]["submit_drought_quote_freshness_subaction_counts"][
+        "close_ws_snapshot_refresh_stale_source"
+    ] == 3
+    assert report["summary"]["submit_drought_quote_freshness_subaction_counts"][
+        "close_observer_quote_missing"
+    ] == 2
+    assert report["summary"]["submit_drought_quote_freshness_subaction_counts"][
+        "close_observer_quote_stale_source"
+    ] == 1
+    assert report["summary"]["submit_drought_quote_freshness_subaction_counts"][
+        "close_unknown_latency_reason"
+    ] == 7
     assert report["summary"]["top_ldm_bucket_blocker_class"] is None
     submit_blockers = [
         item for item in report["conversion_blocker_rank"] if item["blocker_class"] == "submit_drought"
     ]
     assert {item["blocker_axis"] for item in submit_blockers} == set(lane.SUBMIT_DROUGHT_CLOSURE_AXES)
+    latency_blocker = next(item for item in submit_blockers if item["blocker_axis"] == "LATENCY_PRE_SUBMIT")
+    assert latency_blocker["next_repair_action"] == "close_submit_drought_latency_pre_submit_quote_freshness"
+    assert latency_blocker["quote_freshness_subaction_counts"]["close_observer_quote_missing"] == 2
     assert all(item["blocker_runtime_effect"] is False for item in submit_blockers)
     assert all(item["blocker_allowed_runtime_apply"] is False for item in submit_blockers)
 

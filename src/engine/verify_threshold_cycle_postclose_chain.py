@@ -7,6 +7,7 @@ import hashlib
 import json
 import math
 import re
+from collections import Counter
 from datetime import date, datetime, time as dtime
 from pathlib import Path
 from typing import Any
@@ -1485,9 +1486,30 @@ def _buy_funnel_submit_drought_handoff_status(
         else {}
     )
     matches = classification.get("matches") if isinstance(classification.get("matches"), list) else []
+    root_cause = (
+        classification.get("submit_drought_root_cause")
+        if isinstance(classification.get("submit_drought_root_cause"), dict)
+        else {}
+    )
+    quote_freshness_attribution = (
+        root_cause.get("quote_freshness_attribution")
+        if isinstance(root_cause.get("quote_freshness_attribution"), dict)
+        else {}
+    )
     critical = (
         classification.get("primary") == "SUBMIT_DROUGHT_CRITICAL"
         or "SUBMIT_DROUGHT_CRITICAL" in matches
+    )
+    contract = (
+        buy_funnel.get("entry_submit_drought_contract")
+        if isinstance(buy_funnel.get("entry_submit_drought_contract"), dict)
+        else {}
+    )
+    followup = buy_funnel.get("followup") if isinstance(buy_funnel.get("followup"), dict) else {}
+    handoff_present = bool(
+        critical
+        and contract.get("critical") is True
+        and followup.get("route") == "entry_submit_drought_auto_workorder"
     )
     actual_order_ids = {
         str(item.get("order_id"))
@@ -1517,6 +1539,11 @@ def _buy_funnel_submit_drought_handoff_status(
             missing.append("code_improvement_workorder_entry_submit_drought_orders_missing")
         if not ldm_submit:
             missing.append("ldm_submit_bucket_attribution_missing")
+        elif (
+            _safe_int(quote_freshness_attribution.get("refresh_attempted_count"), 0) > 0
+            and not ldm_submit_summary.get("quote_freshness_attribution_present")
+        ):
+            missing.append("ldm_submit_quote_freshness_attribution_missing")
         if ev_buy.get("primary") != "SUBMIT_DROUGHT_CRITICAL":
             missing.append("threshold_cycle_ev_buy_funnel_sentinel_missing")
         if not ev_entry_funnel.get("entry_submit_drought_handoff_selected"):
@@ -1525,11 +1552,61 @@ def _buy_funnel_submit_drought_handoff_status(
             missing.append("runtime_approval_summary_buy_funnel_sentinel_missing")
         if not runtime_summary_section.get("entry_submit_drought_handoff_selected"):
             missing.append("runtime_approval_summary_entry_submit_drought_handoff_missing")
+    refresh_attempted_count = _safe_int(quote_freshness_attribution.get("refresh_attempted_count"), 0)
+    refresh_applied_count = _safe_int(quote_freshness_attribution.get("refresh_applied_count"), 0)
+    latency_pass_recovered_count = _safe_int(quote_freshness_attribution.get("latency_pass_recovered_count"), 0)
+    quote_freshness_attribution_inconsistent = (
+        (refresh_attempted_count <= 0 and latency_pass_recovered_count > 0)
+        or (refresh_attempted_count <= 0 and refresh_applied_count > 0)
+        or refresh_applied_count > refresh_attempted_count
+    )
+    root_cause_open_reasons: list[str] = []
+    if _safe_int(root_cause.get("unknown_latency_reason_count"), 0) > 0:
+        root_cause_open_reasons.append("unknown_latency_reason_present")
+    if bool(root_cause.get("unknown_latency_workorder_required")):
+        root_cause_open_reasons.append("unknown_latency_workorder_required")
+    if refresh_attempted_count > 0 and not ldm_submit_summary.get("quote_freshness_attribution_present"):
+        root_cause_open_reasons.append("ldm_submit_quote_freshness_attribution_missing")
+    if quote_freshness_attribution_inconsistent:
+        root_cause_open_reasons.append("quote_freshness_attribution_inconsistent")
+    if quote_freshness_attribution_inconsistent:
+        root_cause_closure_status = "artifact_regeneration_required"
+    elif root_cause_open_reasons:
+        root_cause_closure_status = "open"
+    elif critical:
+        root_cause_closure_status = "closed"
+    else:
+        root_cause_closure_status = "not_applicable"
     return {
-        "status": "fail" if missing else ("pass" if critical else "not_applicable"),
+        "status": "warning" if missing and handoff_present else ("fail" if missing else ("pass" if critical else "not_applicable")),
         "critical": critical,
         "primary": classification.get("primary"),
         "matches": matches,
+        "handoff_status": "pass" if handoff_present else ("fail" if critical else "not_applicable"),
+        "downstream_closure_status": "fail" if missing else ("pass" if critical else "not_applicable"),
+        "root_cause_closure_status": root_cause_closure_status,
+        "artifact_regeneration_required": quote_freshness_attribution_inconsistent,
+        "root_cause_open_reasons": root_cause_open_reasons,
+        "quote_freshness_attribution_inconsistent": quote_freshness_attribution_inconsistent,
+        "unresolved_root_cause_present": bool(
+            root_cause.get("unknown_latency_workorder_required")
+            or root_cause.get("unknown_latency_reason_count")
+            or quote_freshness_attribution_inconsistent
+        ),
+        "submit_drought_root_cause_counts": root_cause.get("latency_root_cause_counts") or {},
+        "submit_drought_quote_freshness_attribution": quote_freshness_attribution,
+        "submit_drought_quote_freshness_subreason_counts": (
+            quote_freshness_attribution.get("refresh_subreason_counts") or {}
+        ),
+        "submit_drought_refresh_attempted_count": refresh_attempted_count,
+        "submit_drought_refresh_applied_count": refresh_applied_count,
+        "submit_drought_latency_pass_recovered_count": latency_pass_recovered_count,
+        "submit_drought_unknown_latency_reason_count": _safe_int(
+            root_cause.get("unknown_latency_reason_count"), 0
+        ),
+        "submit_drought_unknown_latency_workorder_required": bool(
+            root_cause.get("unknown_latency_workorder_required")
+        ),
         "expected_workorder_order_ids": ENTRY_SUBMIT_DROUGHT_REQUIRED_ORDER_IDS if critical else [],
         "actual_workorder_order_ids": sorted(actual_order_ids),
         "missing_workorder_order_ids": (
@@ -1537,6 +1614,15 @@ def _buy_funnel_submit_drought_handoff_status(
         ),
         "ldm_submit_bucket_attribution_present": bool(ldm_submit),
         "ldm_submit_real_submitted_row_count": _safe_int(ldm_submit_summary.get("real_submitted_row_count"), 0),
+        "ldm_submit_quote_freshness_attribution_present": bool(
+            ldm_submit_summary.get("quote_freshness_attribution_present")
+        ),
+        "ldm_submit_quote_freshness_resolution_counts": (
+            ldm_submit_summary.get("quote_freshness_resolution_counts") or {}
+        ),
+        "ldm_submit_pre_submit_refresh_applied_counts": (
+            ldm_submit_summary.get("pre_submit_refresh_applied_counts") or {}
+        ),
         "ldm_submit_missing_broker_order_key_count": _safe_int(
             ldm_submit_summary.get("missing_broker_order_key_count"),
             0,
@@ -1666,7 +1752,13 @@ def _warning_followup_summary(
                     "pass_no_submit_drought_critical"
                     if not buy_funnel_submit_drought_handoff.get("critical")
                     else (
-                    "pass_handoff_closed"
+                    "artifact_regeneration_required"
+                    if buy_funnel_submit_drought_handoff.get("root_cause_closure_status")
+                    == "artifact_regeneration_required"
+                    else "pass_handoff_root_cause_open"
+                    if buy_funnel_submit_drought_handoff.get("status") == "pass"
+                    and buy_funnel_submit_drought_handoff.get("root_cause_closure_status") == "open"
+                    else "pass_handoff_closed"
                     if buy_funnel_submit_drought_handoff.get("status") == "pass"
                     else "needs_followup"
                     )
@@ -1674,10 +1766,31 @@ def _warning_followup_summary(
             ),
             "evidence": {
                 "status": buy_funnel_submit_drought_handoff.get("status"),
+                "handoff_status": buy_funnel_submit_drought_handoff.get("handoff_status"),
+                "root_cause_closure_status": buy_funnel_submit_drought_handoff.get("root_cause_closure_status"),
+                "root_cause_open_reasons": buy_funnel_submit_drought_handoff.get("root_cause_open_reasons") or [],
+                "artifact_regeneration_required": buy_funnel_submit_drought_handoff.get(
+                    "artifact_regeneration_required"
+                ),
                 "critical": buy_funnel_submit_drought_handoff.get("critical"),
                 "primary": buy_funnel_submit_drought_handoff.get("primary"),
                 "matches": buy_funnel_submit_drought_handoff.get("matches") or [],
                 "missing": buy_funnel_submit_drought_handoff.get("missing") or [],
+                "quote_freshness_attribution_inconsistent": buy_funnel_submit_drought_handoff.get(
+                    "quote_freshness_attribution_inconsistent"
+                ),
+                "submit_drought_refresh_attempted_count": buy_funnel_submit_drought_handoff.get(
+                    "submit_drought_refresh_attempted_count"
+                ),
+                "submit_drought_refresh_applied_count": buy_funnel_submit_drought_handoff.get(
+                    "submit_drought_refresh_applied_count"
+                ),
+                "submit_drought_latency_pass_recovered_count": buy_funnel_submit_drought_handoff.get(
+                    "submit_drought_latency_pass_recovered_count"
+                ),
+                "submit_drought_unknown_latency_reason_count": buy_funnel_submit_drought_handoff.get(
+                    "submit_drought_unknown_latency_reason_count"
+                ),
                 "ldm_submit_real_submitted_row_count": buy_funnel_submit_drought_handoff.get(
                     "ldm_submit_real_submitted_row_count"
                 ),
@@ -1729,7 +1842,16 @@ def _warning_followup_summary(
                     "No submit drought critical condition was active in this verification context."
                     if not buy_funnel_submit_drought_handoff.get("critical")
                     else (
-                    "No new implementation from this warning pass; continue postclose attribution and submit blocker tracking."
+                    "Regenerate buy_funnel_sentinel, lifecycle_decision_matrix submit attribution, conversion_lane, "
+                    "threshold_cycle_postclose_verification, tuning_performance_control_tower, and code_improvement_workorder "
+                    "before re-judging submit drought closure."
+                    if buy_funnel_submit_drought_handoff.get("root_cause_closure_status")
+                    == "artifact_regeneration_required"
+                    else "Handoff is closed but submit drought root-cause counts remain open; keep downstream attribution and "
+                    "unknown latency reason closure tracking until acceptance metrics actually drop."
+                    if buy_funnel_submit_drought_handoff.get("status") == "pass"
+                    and buy_funnel_submit_drought_handoff.get("root_cause_closure_status") == "open"
+                    else "No new implementation from this warning pass; continue postclose attribution and submit blocker tracking."
                     if buy_funnel_submit_drought_handoff.get("status") == "pass"
                     else "Restore missing workorder/LDM/EV/runtime-summary submit drought handoff."
                     )
@@ -2751,6 +2873,8 @@ def _lifecycle_flow_bucket_handoff_status(
     adm_bridge_complete_flow_count = _safe_int(summary.get("adm_bridge_complete_flow_count"), 0)
     fallback_complete_flow_count = _safe_int(summary.get("fallback_complete_flow_count"), 0)
     join_contract_blocked = bool(summary.get("join_contract_blocked"))
+    direct_flow_zero_closure_status = str(summary.get("direct_flow_zero_closure_status") or "").strip()
+    direct_flow_zero_followup_required = bool(summary.get("direct_flow_zero_followup_required"))
     ev_candidate_ids = _collect_lifecycle_flow_bucket_candidate_ids(ev_report)
     runtime_candidate_ids = _collect_lifecycle_flow_bucket_candidate_ids(runtime_summary)
     actual_order_ids = {
@@ -2779,6 +2903,9 @@ def _lifecycle_flow_bucket_handoff_status(
         "direct_sim_record_complete_flow_count": direct_sim_record_complete_flow_count,
         "adm_bridge_complete_flow_count": adm_bridge_complete_flow_count,
         "fallback_complete_flow_count": fallback_complete_flow_count,
+        "direct_flow_zero_reason": summary.get("direct_flow_zero_reason"),
+        "direct_flow_zero_closure_status": direct_flow_zero_closure_status,
+        "direct_flow_zero_followup_required": direct_flow_zero_followup_required,
         "complete_flow_rate": summary.get("complete_flow_rate"),
         "incomplete_flow_count": _safe_int(summary.get("incomplete_flow_count"), 0),
         "join_contract_blocked": join_contract_blocked,
@@ -3358,6 +3485,18 @@ def build_threshold_cycle_postclose_verification(
         "new_selected_order_count": ((workorder.get("summary") or {}).get("new_selected_order_count")),
         "removed_selected_order_count": ((workorder.get("summary") or {}).get("removed_selected_order_count")),
         "decision_changed_order_count": ((workorder.get("summary") or {}).get("decision_changed_order_count")),
+        "repeat_unresolved_structural_blocker_count": (
+            (workorder.get("summary") or {}).get("repeat_unresolved_structural_blocker_count")
+        ),
+        "repeat_unresolved_structural_blocker_order_ids": (
+            (workorder.get("summary") or {}).get("repeat_unresolved_structural_blocker_order_ids")
+        ),
+        "selected_terminal_non_implement_longstanding_count": (
+            (workorder.get("summary") or {}).get("selected_terminal_non_implement_longstanding_count")
+        ),
+        "selected_terminal_non_implement_longstanding_order_ids": (
+            (workorder.get("summary") or {}).get("selected_terminal_non_implement_longstanding_order_ids")
+        ),
     }
 
     if workorder_snapshot["generation_id"] and workorder_snapshot["source_hash"]:
@@ -3676,32 +3815,32 @@ def build_threshold_cycle_postclose_verification(
     )
     stale_downstream_links: list[str] = []
     if "daily_ev" not in disabled_stage_flags:
-        if downstream_links.get("threshold_cycle_ev_sources_workorder") and _consumer_stale(ev_report, workorder):
+        if downstream_links.get("threshold_cycle_ev_sources_workorder") and _consumer_stale(workorder, ev_report):
             stale_downstream_links.append("threshold_cycle_ev_stale_before_code_improvement_workorder")
         if (
             "pattern_lab_currentness_audit" not in disabled_stage_flags
             and downstream_links.get("threshold_cycle_ev_sources_pattern_lab_currentness_audit")
-            and _consumer_stale(ev_report, currentness_audit)
+            and _consumer_stale(currentness_audit, ev_report)
         ):
             stale_downstream_links.append("threshold_cycle_ev_stale_before_pattern_lab_currentness_audit")
         if (
             "pattern_lab_ai_review" in execution_flags
             and "pattern_lab_ai_review" not in disabled_stage_flags
             and downstream_links.get("threshold_cycle_ev_sources_pattern_lab_ai_review")
-            and _consumer_stale(ev_report, pattern_lab_ai_review)
+            and _consumer_stale(pattern_lab_ai_review, ev_report)
         ):
             stale_downstream_links.append("threshold_cycle_ev_stale_before_pattern_lab_ai_review")
         if (
             "producer_gap_discovery" in execution_flags
             and "producer_gap_discovery" not in disabled_stage_flags
             and downstream_links.get("threshold_cycle_ev_sources_producer_gap_discovery")
-            and _consumer_stale(ev_report, producer_gap_discovery)
+            and _consumer_stale(producer_gap_discovery, ev_report)
         ):
             stale_downstream_links.append("threshold_cycle_ev_stale_before_producer_gap_discovery")
         if (
             "pattern_lab_propagation_audit" not in disabled_stage_flags
             and downstream_links.get("threshold_cycle_ev_sources_pattern_lab_propagation_audit")
-            and _consumer_stale(ev_report, propagation_audit)
+            and _consumer_stale(propagation_audit, ev_report)
         ):
             stale_downstream_links.append("threshold_cycle_ev_stale_before_pattern_lab_propagation_audit")
     if "runtime_approval_summary" not in disabled_stage_flags:
@@ -3799,6 +3938,131 @@ def build_threshold_cycle_postclose_verification(
         discovery_report=discovery_report,
         runtime_apply_gap_audit=runtime_apply_gap_audit,
         lifecycle_bucket_discovery_handoff=lifecycle_bucket_discovery_handoff,
+    )
+    adm_summary = (
+        scalp_entry_adm_report.get("summary")
+        if isinstance(scalp_entry_adm_report.get("summary"), dict)
+        else {}
+    )
+    lifecycle_flow_closure_status = str(
+        lifecycle_flow_bucket_handoff.get("direct_flow_zero_closure_status") or ""
+    ).strip()
+    if not lifecycle_flow_closure_status:
+        lifecycle_flow_closure_status = (
+            "open"
+            if _safe_int(lifecycle_flow_bucket_handoff.get("direct_sim_record_complete_flow_count"), 0) <= 0
+            else "closed"
+        )
+    active_seed_lineage_closure_status = str(
+        key_lineage_summary.get("active_seed_candidate_lineage_closure_status") or ""
+    ).strip() or (
+        "open"
+        if _safe_int(key_lineage_summary.get("active_seed_candidate_without_seed_id_event_count"), 0) > 0
+        else "closed"
+    )
+    adm_lookup_closure = (
+        adm_summary.get("adm_bucket_lookup_closure")
+        if isinstance(adm_summary.get("adm_bucket_lookup_closure"), dict)
+        else {}
+    )
+    entry_adm_lookup_closure_status = str(
+        adm_summary.get("adm_bucket_lookup_closure_status")
+        or adm_lookup_closure.get("closure_status")
+        or ""
+    ).strip() or (
+        "open"
+        if _safe_int(
+            ((adm_summary.get("adm_bucket_lookup_status_counts") or {}).get("new_or_unseen_token_vs_prior_adm")),
+            0,
+        )
+        > 0
+        else "closed"
+    )
+    root_cause_closure_summary = {
+        "submit_drought": {
+            "handoff_status": buy_funnel_submit_drought_handoff.get("handoff_status"),
+            "root_cause_closure_status": buy_funnel_submit_drought_handoff.get("root_cause_closure_status"),
+            "artifact_regeneration_required": buy_funnel_submit_drought_handoff.get("artifact_regeneration_required"),
+            "root_cause_open_reasons": buy_funnel_submit_drought_handoff.get("root_cause_open_reasons") or [],
+            "unknown_latency_reason_count": buy_funnel_submit_drought_handoff.get(
+                "submit_drought_unknown_latency_reason_count"
+            ),
+        },
+        "lifecycle_flow": {
+            "direct_sim_record_complete_flow_count": lifecycle_flow_bucket_handoff.get(
+                "direct_sim_record_complete_flow_count"
+            ),
+            "adm_bridge_complete_flow_count": lifecycle_flow_bucket_handoff.get("adm_bridge_complete_flow_count"),
+            "direct_flow_zero_reason": lifecycle_flow_bucket_handoff.get("direct_flow_zero_reason"),
+            "direct_flow_zero_followup_required": bool(
+                lifecycle_flow_bucket_handoff.get("direct_flow_zero_followup_required")
+            ),
+            "root_cause_closure_status": lifecycle_flow_closure_status,
+        },
+        "active_seed_key_lineage": {
+            "active_seed_candidate_without_seed_id_event_count": _safe_int(
+                key_lineage_summary.get("active_seed_candidate_without_seed_id_event_count"),
+                0,
+            ),
+            "active_seed_candidate_without_seed_id_reason_counts": (
+                key_lineage_summary.get("active_seed_candidate_without_seed_id_reason_counts") or {}
+            ),
+            "active_seed_candidate_missing_parent_seed_lookup_key_counts": (
+                key_lineage_summary.get("active_seed_candidate_missing_parent_seed_lookup_key_counts") or {}
+            ),
+            "active_seed_candidate_lineage_followup_required": bool(
+                key_lineage_summary.get("active_seed_candidate_lineage_followup_required")
+            ),
+            "root_cause_closure_status": active_seed_lineage_closure_status,
+        },
+        "entry_adm_lookup": {
+            "new_or_unseen_token_vs_prior_adm_count": _safe_int(
+                ((adm_summary.get("adm_bucket_lookup_status_counts") or {}).get("new_or_unseen_token_vs_prior_adm")),
+                0,
+            ),
+            "adm_bucket_lookup_closure": adm_lookup_closure,
+            "adm_bucket_lookup_followup_required": bool(
+                adm_summary.get("adm_bucket_lookup_followup_required")
+                or adm_lookup_closure.get("followup_required")
+            ),
+            "root_cause_closure_status": entry_adm_lookup_closure_status,
+        },
+        "real_submit_drought_followup": {
+            "root_cause_closure_status": "operational_followup_required",
+            "runtime_effect": False,
+            "decision_authority": "real_submit_drought_followup_observation_only",
+            "submit_drought_root_cause_taxonomy_status": buy_funnel_submit_drought_handoff.get(
+                "root_cause_closure_status"
+            ),
+            "submit_drought_refresh_attempted_count": buy_funnel_submit_drought_handoff.get(
+                "submit_drought_refresh_attempted_count"
+            ),
+            "submit_drought_refresh_applied_count": buy_funnel_submit_drought_handoff.get(
+                "submit_drought_refresh_applied_count"
+            ),
+            "submit_drought_latency_pass_recovered_count": buy_funnel_submit_drought_handoff.get(
+                "submit_drought_latency_pass_recovered_count"
+            ),
+            "order_bundle_submitted_after_refresh_count": (
+                (buy_funnel_submit_drought_handoff.get("submit_drought_quote_freshness_attribution") or {}).get(
+                    "order_bundle_submitted_after_refresh_count"
+                )
+                if isinstance(
+                    buy_funnel_submit_drought_handoff.get("submit_drought_quote_freshness_attribution"),
+                    dict,
+                )
+                else None
+            ),
+            "known_guard_counts": buy_funnel_submit_drought_handoff.get("submit_drought_root_cause_counts") or {},
+            "next_axis": "real_only_known_guard_reduction",
+        },
+    }
+    root_cause_closure_status_counts = dict(
+        Counter(
+            str(section.get("root_cause_closure_status") or "").strip()
+            for section in root_cause_closure_summary.values()
+            if isinstance(section, dict) and str(section.get("root_cause_closure_status") or "").strip()
+        )
     )
     if stale_downstream_links and not require_done_marker:
         handoff_warnings.append("pending_done_stale_downstream_links_present")
@@ -3935,6 +4199,8 @@ def build_threshold_cycle_postclose_verification(
             "conversion_lane_summary": conversion_lane_summary,
         },
         "warning_followup_summary": warning_followup_summary,
+        "root_cause_closure_summary": root_cause_closure_summary,
+        "root_cause_closure_status_counts": root_cause_closure_status_counts,
         "handoff_warnings": sorted(set(handoff_warnings)),
         "gap_provenance": gap_provenance,
         "gap_affected_handoffs": gap_affected_handoffs,

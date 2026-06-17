@@ -96,8 +96,11 @@ POSTCLOSE_MARKER_LOG="${THRESHOLD_CYCLE_POSTCLOSE_MARKER_LOG:-$PROJECT_DIR/logs/
 POSTCLOSE_MARKER_LOG_ENABLED="${THRESHOLD_CYCLE_POSTCLOSE_MARKER_LOG_ENABLED:-true}"
 POSTCLOSE_BOT_ISOLATION_MARKER="$PROJECT_DIR/tmp/postclose_bot_isolation.json"
 AI_CORRECTION_FINAL_STATUS="not_run"
+AUTOMATION_TRIGGER_DECISION_REPORT_JSON="$PROJECT_DIR/data/report/automation_chain_trigger_decision/automation_chain_trigger_decision_${TARGET_DATE}.json"
+AUTOMATION_TRIGGER_DECISION_CACHE_MARKER="$PROJECT_DIR/tmp/automation_trigger_decision_${TARGET_DATE}_$$.cached"
 
-mkdir -p "$PROJECT_DIR/logs" "$STATUS_DIR"
+mkdir -p "$PROJECT_DIR/logs" "$STATUS_DIR" "$PROJECT_DIR/tmp"
+rm -f "$AUTOMATION_TRIGGER_DECISION_CACHE_MARKER"
 cd "$PROJECT_DIR"
 
 write_postclose_status() {
@@ -591,14 +594,52 @@ threshold_cycle_ev_refresh_decision() {
 automation_trigger_decision() {
   local step_id="$1"
   local decision="run"
+  if [ ! -f "$AUTOMATION_TRIGGER_DECISION_CACHE_MARKER" ]; then
+    if THRESHOLD_CYCLE_FORCE_LIFECYCLE_BUCKET_WINDOWS="$FORCE_LIFECYCLE_BUCKET_WINDOWS" \
+      THRESHOLD_CYCLE_FORCE_DEEP_AUDITS="$FORCE_DEEP_AUDITS" \
+      THRESHOLD_CYCLE_FORCE_WORKORDER_BRANCH="$FORCE_WORKORDER_BRANCH" \
+      PYTHONPATH=. "$VENV_PY" -m src.engine.automation.automation_chain_trigger_decision \
+        --date "$TARGET_DATE" \
+        --scope all \
+        --write >/dev/null 2>&1; then
+      mkdir -p "$(dirname "$AUTOMATION_TRIGGER_DECISION_CACHE_MARKER")"
+      : > "$AUTOMATION_TRIGGER_DECISION_CACHE_MARKER"
+    fi
+  fi
+  if [ -f "$AUTOMATION_TRIGGER_DECISION_CACHE_MARKER" ] && [ -f "$AUTOMATION_TRIGGER_DECISION_REPORT_JSON" ]; then
+    if decision="$("$VENV_PY" - "$AUTOMATION_TRIGGER_DECISION_REPORT_JSON" "$step_id" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+report_path = Path(sys.argv[1])
+step_id = sys.argv[2]
+payload = json.loads(report_path.read_text(encoding="utf-8"))
+decision = "run"
+for item in payload.get("decisions", []):
+    if item.get("step_id") == step_id:
+        decision = str(item.get("decision") or "run")
+        break
+print(decision)
+PY
+    )"; then
+      if [ "$decision" = "skip" ]; then
+        printf 'skip\n'
+        return 0
+      fi
+      if [ "$decision" = "run" ]; then
+        printf 'run\n'
+        return 0
+      fi
+    fi
+  fi
   if decision="$(THRESHOLD_CYCLE_FORCE_LIFECYCLE_BUCKET_WINDOWS="$FORCE_LIFECYCLE_BUCKET_WINDOWS" \
     THRESHOLD_CYCLE_FORCE_DEEP_AUDITS="$FORCE_DEEP_AUDITS" \
     THRESHOLD_CYCLE_FORCE_WORKORDER_BRANCH="$FORCE_WORKORDER_BRANCH" \
     PYTHONPATH=. "$VENV_PY" -m src.engine.automation.automation_chain_trigger_decision \
       --date "$TARGET_DATE" \
       --scope all \
-      --step "$step_id" \
-      --write 2>/dev/null)"; then
+      --step "$step_id" 2>/dev/null)"; then
     if [ "$decision" = "skip" ]; then
       printf 'skip\n'
       return 0
@@ -607,10 +648,48 @@ automation_trigger_decision() {
   printf 'run\n'
 }
 
+automation_trigger_reason() {
+  local step_id="$1"
+  if [ -f "$AUTOMATION_TRIGGER_DECISION_CACHE_MARKER" ] && [ -f "$AUTOMATION_TRIGGER_DECISION_REPORT_JSON" ]; then
+    "$VENV_PY" - "$AUTOMATION_TRIGGER_DECISION_REPORT_JSON" "$step_id" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+report_path = Path(sys.argv[1])
+step_id = sys.argv[2]
+payload = json.loads(report_path.read_text(encoding="utf-8"))
+reason = "unknown_trigger_reason"
+for item in payload.get("decisions", []):
+    if item.get("step_id") != step_id:
+        continue
+    reasons = [str(value) for value in item.get("trigger_reasons", []) if str(value)]
+    if reasons:
+        reason = ",".join(reasons)
+    break
+print(reason)
+PY
+    return 0
+  fi
+  printf 'decision_cache_unavailable\n'
+}
+
+automation_trigger_source() {
+  if [ -f "$AUTOMATION_TRIGGER_DECISION_CACHE_MARKER" ] && [ -f "$AUTOMATION_TRIGGER_DECISION_REPORT_JSON" ]; then
+    printf 'cached_trigger_snapshot\n'
+    return 0
+  fi
+  printf 'per_step_live_probe\n'
+}
+
 skip_triggered_step() {
   local step_id="$1"
   local reason="$2"
-  emit_postclose_marker "[SKIP] threshold-cycle postclose target_date=$TARGET_DATE step=$step_id reason=$reason trigger_decision=skip"
+  local trigger_reason
+  local trigger_source
+  trigger_reason="$(automation_trigger_reason "$step_id" 2>/dev/null || printf 'unknown_trigger_reason\n')"
+  trigger_source="$(automation_trigger_source)"
+  emit_postclose_marker "[SKIP] threshold-cycle postclose target_date=$TARGET_DATE step=$step_id reason=$reason trigger_decision=skip trigger_reason=$trigger_reason trigger_source=$trigger_source"
 }
 
 run_threshold_cycle_ev_and_wait() {

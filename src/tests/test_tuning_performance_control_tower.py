@@ -434,6 +434,42 @@ def test_tuning_performance_control_tower_separates_sim_progress_from_real_pnl(m
     assert "Runtime gap audit" in markdown
 
 
+def test_tuning_performance_control_tower_surfaces_workorder_root_cause_closure_summary(monkeypatch, tmp_path):
+    report_root, apply_dir, _ = _patch_dirs(monkeypatch, tmp_path)
+    target = "2026-05-30"
+    _write_control_tower_minimal_sources(report_root, apply_dir, target, lifecycle_sim=1)
+    _write_json(
+        report_root / "code_improvement_workorder" / f"code_improvement_workorder_{target}.json",
+        {
+            "summary": {
+                "selected_order_count": 3,
+                "root_cause_closure_status_counts": {
+                    "artifact_regeneration_required": 1,
+                    "handoff_closed_root_cause_open": 1,
+                    "root_cause_closed": 1,
+                },
+                "implementation_done_count": 0,
+                "artifact_regeneration_required_count": 1,
+                "handoff_closed_root_cause_open_count": 1,
+                "root_cause_closed_count": 1,
+                "needs_followup_workorder_count": 0,
+                "root_cause_open_top": [{"order_id": "order_entry_submit_drought_auto_resolution"}],
+            }
+        },
+    )
+
+    report = mod.build_tuning_performance_control_tower(target)
+
+    assert report["workorder"]["artifact_regeneration_required_count"] == 1
+    assert report["workorder"]["handoff_closed_root_cause_open_count"] == 1
+    assert report["summary"]["workorder_artifact_regeneration_required_count"] == 1
+    assert report["summary"]["workorder_root_cause_closure_status_counts"] == {
+        "artifact_regeneration_required": 1,
+        "handoff_closed_root_cause_open": 1,
+        "root_cause_closed": 1,
+    }
+
+
 def test_control_tower_blocks_daily_live_ready_without_cumulative_confirmation(monkeypatch, tmp_path):
     report_root, apply_dir, _ = _patch_dirs(monkeypatch, tmp_path)
     target = "2026-05-29"

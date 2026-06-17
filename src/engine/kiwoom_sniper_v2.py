@@ -439,6 +439,7 @@ def _ensure_state_handler_deps():
         'db': DB,
         'event_bus': event_bus,
         'active_targets': ACTIVE_TARGETS,
+        'ws_manager': WS_MANAGER,
         'cooldowns': cooldowns,
         'alerted_stocks': alerted_stocks,
         'highest_prices': highest_prices,
@@ -1138,6 +1139,7 @@ def run_sniper(is_test_mode=False):
         conf=CONF,
     )
     bind_condition_dependencies(kiwoom_token=KIWOOM_TOKEN, ws_manager=WS_MANAGER, db=DB, event_bus=event_bus)
+    bind_state_dependencies(ws_manager=WS_MANAGER)
     bind_analysis_dependencies(
         kiwoom_token=KIWOOM_TOKEN,
         ws_manager=WS_MANAGER,
@@ -1254,7 +1256,7 @@ def run_sniper(is_test_mode=False):
     bind_sync_dependencies(active_targets=ACTIVE_TARGETS)
     bind_condition_dependencies(active_targets=ACTIVE_TARGETS)
     bind_analysis_dependencies(active_targets=ACTIVE_TARGETS)
-    bind_state_dependencies(active_targets=ACTIVE_TARGETS)
+    bind_state_dependencies(active_targets=ACTIVE_TARGETS, ws_manager=WS_MANAGER)
     sniper_state_handlers.sanitize_pending_add_states(ACTIVE_TARGETS)
     bind_execution_dependencies(active_targets=ACTIVE_TARGETS)
     bind_overnight_dependencies(active_targets=ACTIVE_TARGETS)

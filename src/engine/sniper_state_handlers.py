@@ -114,12 +114,23 @@ from src.engine.scalping.entry_cancel_wait_runtime import (
     observe_counterfactual,
     resolve_profile as resolve_entry_cancel_wait_profile,
 )
+from src.engine.scalping.entry_reprice_after_submit import (
+    DEFAULT_EVAL_SEC as ENTRY_REPRICE_DEFAULT_EVAL_SEC,
+    DEFAULT_MAX_ATTEMPTS as ENTRY_REPRICE_DEFAULT_MAX_ATTEMPTS,
+    DEFAULT_MAX_QUOTE_AGE_MS as ENTRY_REPRICE_DEFAULT_MAX_QUOTE_AGE_MS,
+    DEFAULT_MAX_SPREAD_BPS as ENTRY_REPRICE_DEFAULT_MAX_SPREAD_BPS,
+    DEFAULT_MAX_UPWARD_BPS as ENTRY_REPRICE_DEFAULT_MAX_UPWARD_BPS,
+    POLICY_VERSION as ENTRY_REPRICE_POLICY_VERSION,
+    RUNTIME_FAMILY as ENTRY_REPRICE_RUNTIME_FAMILY,
+    evaluate_entry_reprice_after_submit,
+)
 
 
 KIWOOM_TOKEN = None
 DB = None
 EVENT_BUS = None
 ACTIVE_TARGETS = None
+WS_MANAGER = None
 _GREENFIELD_TELEGRAM_KEYS: set[str] = set()
 
 SCALPING_ENTRY_BLOCKER_ROLE_REGISTRY = {
@@ -6100,6 +6111,7 @@ def bind_state_dependencies(
     db=None,
     event_bus=None,
     active_targets=None,
+    ws_manager=None,
     cooldowns=None,
     alerted_stocks=None,
     highest_prices=None,
@@ -6115,7 +6127,7 @@ def bind_state_dependencies(
     global KIWOOM_TOKEN, DB, EVENT_BUS, ACTIVE_TARGETS, COOLDOWNS, ALERTED_STOCKS, HIGHEST_PRICES
     global LAST_AI_CALL_TIMES, LAST_LOG_TIMES, TRADING_RULES, PUBLISH_GATEKEEPER_REPORT
     global SHOULD_BLOCK_SWING_ENTRY, CONFIRM_CANCEL_OR_RELOAD_REMAINING, SEND_EXIT_BEST_IOC
-    global DUAL_PERSONA_ENGINE
+    global DUAL_PERSONA_ENGINE, WS_MANAGER
 
     if kiwoom_token is not None:
         KIWOOM_TOKEN = kiwoom_token
@@ -6125,6 +6137,8 @@ def bind_state_dependencies(
         EVENT_BUS = event_bus
     if active_targets is not None:
         ACTIVE_TARGETS = active_targets
+    if ws_manager is not None:
+        WS_MANAGER = ws_manager
     if cooldowns is not None:
         COOLDOWNS = cooldowns
     if alerted_stocks is not None:
@@ -8482,7 +8496,266 @@ def _get_best_levels_from_ws(ws_data):
             best_bid = _safe_int(bids[0].get('price'), 0)
     except Exception:
             best_bid = 0
+    if best_ask <= 0:
+        best_ask = _safe_int(
+            ws_data.get("best_ask") or ws_data.get("ask_price") or ws_data.get("ask"),
+            0,
+        )
+    if best_bid <= 0:
+        best_bid = _safe_int(
+            ws_data.get("best_bid") or ws_data.get("bid_price") or ws_data.get("bid"),
+            0,
+        )
     return best_ask, best_bid
+
+
+def _pre_submit_refresh_real_ws_snapshot(code: str, ws_data: dict | None, strategy: str) -> tuple[dict, dict]:
+    """Refresh the real SCALPING pre-submit snapshot from the live WS manager."""
+    base = dict(ws_data or {})
+    fields = {
+        "pre_submit_ws_snapshot_refresh_enabled": False,
+        "pre_submit_ws_snapshot_refresh_applied": False,
+        "pre_submit_ws_snapshot_refresh_reason": "not_attempted",
+        "pre_submit_ws_snapshot_refresh_source": "ws_manager_latest_data",
+        "pre_submit_ws_snapshot_refresh_age_ms": None,
+        "pre_submit_ws_snapshot_refresh_best_bid": 0,
+        "pre_submit_ws_snapshot_refresh_best_ask": 0,
+        "pre_submit_ws_snapshot_refresh_latest_price": _safe_int(base.get("curr"), 0),
+    }
+    if str(strategy or "").upper() not in {"SCALPING", "SCALP", "KOSPI_ML"}:
+        fields["pre_submit_ws_snapshot_refresh_reason"] = "non_scalping"
+        return base, fields
+    enabled_env = os.getenv("KORSTOCKSCAN_SCALP_PRE_SUBMIT_QUOTE_REFRESH_ENABLED")
+    if enabled_env is not None and str(enabled_env).strip().lower() not in {"1", "true", "yes", "y", "on"}:
+        fields["pre_submit_ws_snapshot_refresh_reason"] = "disabled"
+        return base, fields
+    fields["pre_submit_ws_snapshot_refresh_enabled"] = True
+    manager = WS_MANAGER
+    if manager is None or not hasattr(manager, "get_latest_data"):
+        fields["pre_submit_ws_snapshot_refresh_reason"] = "ws_manager_missing"
+        return base, fields
+    try:
+        latest = manager.get_latest_data(code) or {}
+    except Exception as exc:
+        fields["pre_submit_ws_snapshot_refresh_reason"] = "ws_manager_error"
+        fields["pre_submit_ws_snapshot_refresh_error"] = str(exc)[:120]
+        return base, fields
+    if not isinstance(latest, dict) or not latest:
+        fields["pre_submit_ws_snapshot_refresh_reason"] = "latest_snapshot_missing"
+        return base, fields
+    best_ask, best_bid = _get_best_levels_from_ws(latest)
+    latest_price = _safe_int(latest.get("curr"), 0)
+    latest_ts = _safe_float(latest.get("last_ws_update_ts"), 0.0)
+    now_ts = time.time()
+    age_ms = None if latest_ts <= 0 else max(0.0, (now_ts - latest_ts) * 1000.0)
+    fields.update(
+        {
+            "pre_submit_ws_snapshot_refresh_age_ms": None if age_ms is None else round(age_ms, 3),
+            "pre_submit_ws_snapshot_refresh_best_bid": best_bid,
+            "pre_submit_ws_snapshot_refresh_best_ask": best_ask,
+            "pre_submit_ws_snapshot_refresh_latest_price": latest_price,
+        }
+    )
+    max_age_ms = _safe_int(
+        os.getenv("KORSTOCKSCAN_SCALP_PRE_SUBMIT_QUOTE_REFRESH_MAX_AGE_MS"),
+        _safe_int(getattr(TRADING_RULES, "SCALP_PRE_SUBMIT_QUOTE_REFRESH_MAX_AGE_MS", 700), 700),
+    )
+    if latest_price <= 0:
+        fields["pre_submit_ws_snapshot_refresh_reason"] = "latest_price_missing"
+        return base, fields
+    if best_bid <= 0 or best_ask <= 0 or best_ask <= best_bid:
+        fields["pre_submit_ws_snapshot_refresh_reason"] = "latest_best_levels_invalid"
+        return base, fields
+    if age_ms is None:
+        fields["pre_submit_ws_snapshot_refresh_reason"] = "latest_timestamp_missing"
+        return base, fields
+    if age_ms > max_age_ms:
+        fields["pre_submit_ws_snapshot_refresh_reason"] = "latest_snapshot_stale"
+        return base, fields
+    base_ts = _safe_float(base.get("last_ws_update_ts"), 0.0)
+    if base_ts > 0 and latest_ts < base_ts:
+        fields["pre_submit_ws_snapshot_refresh_reason"] = "latest_snapshot_older_than_input"
+        return base, fields
+    refreshed = dict(latest)
+    refreshed.update(fields)
+    fields["pre_submit_ws_snapshot_refresh_applied"] = True
+    fields["pre_submit_ws_snapshot_refresh_reason"] = "latest_ws_snapshot_fresh"
+    refreshed.update(fields)
+    return refreshed, fields
+
+
+def _parse_hhmmss_age_ms(hhmmss: str, *, now_ts: float | None = None) -> float | None:
+    text = str(hhmmss or "").strip()
+    if len(text) < 6 or not text[:6].isdigit():
+        return None
+    now = datetime.fromtimestamp(float(now_ts or time.time()))
+    snapshot_dt = now.replace(
+        hour=int(text[:2]),
+        minute=int(text[2:4]),
+        second=int(text[4:6]),
+        microsecond=0,
+    )
+    age_ms = (now - snapshot_dt).total_seconds() * 1000.0
+    if age_ms < -3000:
+        return None
+    return max(0.0, age_ms)
+
+
+def _pre_submit_refresh_rest_orderbook_snapshot(
+    code: str,
+    ws_data: dict | None,
+    strategy: str,
+) -> tuple[dict, dict]:
+    """Refresh real SCALPING pre-submit orderbook from Kiwoom ka10004 REST."""
+    base = dict(ws_data or {})
+    fields = {
+        "pre_submit_rest_orderbook_refresh_enabled": False,
+        "pre_submit_rest_orderbook_refresh_applied": False,
+        "pre_submit_rest_orderbook_refresh_reason": "not_attempted",
+        "pre_submit_rest_orderbook_refresh_source": "ka10004_rest_orderbook",
+        "pre_submit_rest_orderbook_refresh_age_ms": None,
+        "pre_submit_rest_orderbook_refresh_best_bid": 0,
+        "pre_submit_rest_orderbook_refresh_best_ask": 0,
+        "pre_submit_rest_orderbook_refresh_latest_price": _safe_int(base.get("curr"), 0),
+        "pre_submit_rest_orderbook_refresh_bid_req_base_tm": "",
+    }
+    if str(strategy or "").upper() not in {"SCALPING", "SCALP", "KOSPI_ML"}:
+        fields["pre_submit_rest_orderbook_refresh_reason"] = "non_scalping"
+        return base, fields
+    enabled_env = os.getenv("KORSTOCKSCAN_SCALP_PRE_SUBMIT_QUOTE_REFRESH_ENABLED")
+    if enabled_env is not None and str(enabled_env).strip().lower() not in {"1", "true", "yes", "y", "on"}:
+        fields["pre_submit_rest_orderbook_refresh_reason"] = "disabled"
+        return base, fields
+    rest_enabled_env = os.getenv("KORSTOCKSCAN_SCALP_PRE_SUBMIT_REST_ORDERBOOK_REFRESH_ENABLED")
+    if rest_enabled_env is not None and str(rest_enabled_env).strip().lower() not in {"1", "true", "yes", "y", "on"}:
+        fields["pre_submit_rest_orderbook_refresh_reason"] = "rest_disabled"
+        return base, fields
+    fields["pre_submit_rest_orderbook_refresh_enabled"] = True
+    if not KIWOOM_TOKEN:
+        fields["pre_submit_rest_orderbook_refresh_reason"] = "token_missing"
+        return base, fields
+    try:
+        snapshot = kiwoom_utils.get_stock_orderbook_ka10004(KIWOOM_TOKEN, code) or {}
+    except Exception as exc:
+        fields["pre_submit_rest_orderbook_refresh_reason"] = "rest_orderbook_error"
+        fields["pre_submit_rest_orderbook_refresh_error"] = str(exc)[:120]
+        return base, fields
+    if not isinstance(snapshot, dict) or not snapshot:
+        fields["pre_submit_rest_orderbook_refresh_reason"] = "rest_orderbook_missing"
+        return base, fields
+    best_ask = _safe_int(snapshot.get("best_ask"), 0)
+    best_bid = _safe_int(snapshot.get("best_bid"), 0)
+    latest_price = _safe_int(snapshot.get("curr"), 0) or best_ask or best_bid
+    bid_req_base_tm = str(snapshot.get("bid_req_base_tm") or "").strip()
+    age_ms = _parse_hhmmss_age_ms(bid_req_base_tm)
+    fields.update(
+        {
+            "pre_submit_rest_orderbook_refresh_age_ms": None if age_ms is None else round(age_ms, 3),
+            "pre_submit_rest_orderbook_refresh_best_bid": best_bid,
+            "pre_submit_rest_orderbook_refresh_best_ask": best_ask,
+            "pre_submit_rest_orderbook_refresh_latest_price": latest_price,
+            "pre_submit_rest_orderbook_refresh_bid_req_base_tm": bid_req_base_tm,
+        }
+    )
+    max_age_ms = _safe_int(
+        os.getenv("KORSTOCKSCAN_SCALP_PRE_SUBMIT_REST_ORDERBOOK_MAX_AGE_MS"),
+        _safe_int(os.getenv("KORSTOCKSCAN_SCALP_PRE_SUBMIT_QUOTE_REFRESH_MAX_AGE_MS"), 1500),
+    )
+    max_spread_ratio = _safe_float(
+        os.getenv("KORSTOCKSCAN_SCALP_PRE_SUBMIT_QUOTE_REFRESH_MAX_SPREAD_RATIO"),
+        _safe_float(getattr(TRADING_RULES, "SCALP_PRE_SUBMIT_QUOTE_REFRESH_MAX_SPREAD_RATIO", 0.015), 0.015),
+    )
+    if latest_price <= 0:
+        fields["pre_submit_rest_orderbook_refresh_reason"] = "rest_latest_price_missing"
+        return base, fields
+    if best_bid <= 0 or best_ask <= 0 or best_ask <= best_bid:
+        fields["pre_submit_rest_orderbook_refresh_reason"] = "rest_best_levels_invalid"
+        return base, fields
+    if age_ms is None:
+        fields["pre_submit_rest_orderbook_refresh_reason"] = "rest_orderbook_time_missing"
+        return base, fields
+    if age_ms > max_age_ms:
+        fields["pre_submit_rest_orderbook_refresh_reason"] = "rest_orderbook_stale"
+        return base, fields
+    spread_ratio = (best_ask - best_bid) / max(best_bid, 1)
+    if spread_ratio > max_spread_ratio:
+        fields["pre_submit_rest_orderbook_refresh_reason"] = "rest_spread_too_wide"
+        fields["pre_submit_rest_orderbook_refresh_spread_ratio"] = round(spread_ratio, 6)
+        return base, fields
+
+    refreshed = dict(base)
+    refreshed.update(
+        {
+            "curr": latest_price,
+            "best_ask": best_ask,
+            "best_bid": best_bid,
+            "best_ask_qty": _safe_int(snapshot.get("best_ask_qty"), 0),
+            "best_bid_qty": _safe_int(snapshot.get("best_bid_qty"), 0),
+            "ask_tot": _safe_int(snapshot.get("ask_tot"), 0),
+            "bid_tot": _safe_int(snapshot.get("bid_tot"), 0),
+            "orderbook": snapshot.get("orderbook") or {},
+            "last_ws_update_ts": time.time() - (float(age_ms) / 1000.0),
+            "quote_refresh_source": "ka10004_rest_orderbook",
+        }
+    )
+    fields["pre_submit_rest_orderbook_refresh_applied"] = True
+    fields["pre_submit_rest_orderbook_refresh_reason"] = "rest_orderbook_fresh"
+    refreshed.update(fields)
+    return refreshed, fields
+
+
+def _pre_submit_ws_snapshot_refresh_log_fields(source: dict | None) -> dict:
+    data = source or {}
+    return {
+        "pre_submit_ws_snapshot_refresh_enabled": bool(data.get("pre_submit_ws_snapshot_refresh_enabled")),
+        "pre_submit_ws_snapshot_refresh_applied": bool(data.get("pre_submit_ws_snapshot_refresh_applied")),
+        "pre_submit_ws_snapshot_refresh_reason": data.get("pre_submit_ws_snapshot_refresh_reason"),
+        "pre_submit_ws_snapshot_refresh_source": data.get("pre_submit_ws_snapshot_refresh_source"),
+        "pre_submit_ws_snapshot_refresh_age_ms": data.get("pre_submit_ws_snapshot_refresh_age_ms"),
+        "pre_submit_ws_snapshot_refresh_best_bid": _safe_int(data.get("pre_submit_ws_snapshot_refresh_best_bid"), 0),
+        "pre_submit_ws_snapshot_refresh_best_ask": _safe_int(data.get("pre_submit_ws_snapshot_refresh_best_ask"), 0),
+        "pre_submit_ws_snapshot_refresh_latest_price": _safe_int(
+            data.get("pre_submit_ws_snapshot_refresh_latest_price"), 0
+        ),
+        "pre_submit_observer_unhealthy_refresh_attempted": bool(
+            data.get("pre_submit_observer_unhealthy_refresh_attempted")
+        ),
+        "pre_submit_observer_unhealthy_refresh_applied": bool(
+            data.get("pre_submit_observer_unhealthy_refresh_applied")
+        ),
+        "pre_submit_observer_unhealthy_refresh_reason": data.get(
+            "pre_submit_observer_unhealthy_refresh_reason"
+        ),
+        "pre_submit_rest_orderbook_refresh_enabled": bool(data.get("pre_submit_rest_orderbook_refresh_enabled")),
+        "pre_submit_rest_orderbook_refresh_applied": bool(data.get("pre_submit_rest_orderbook_refresh_applied")),
+        "pre_submit_rest_orderbook_refresh_reason": data.get("pre_submit_rest_orderbook_refresh_reason"),
+        "pre_submit_rest_orderbook_refresh_source": data.get("pre_submit_rest_orderbook_refresh_source"),
+        "pre_submit_rest_orderbook_refresh_age_ms": data.get("pre_submit_rest_orderbook_refresh_age_ms"),
+        "pre_submit_rest_orderbook_refresh_best_bid": _safe_int(
+            data.get("pre_submit_rest_orderbook_refresh_best_bid"), 0
+        ),
+        "pre_submit_rest_orderbook_refresh_best_ask": _safe_int(
+            data.get("pre_submit_rest_orderbook_refresh_best_ask"), 0
+        ),
+        "pre_submit_rest_orderbook_refresh_latest_price": _safe_int(
+            data.get("pre_submit_rest_orderbook_refresh_latest_price"), 0
+        ),
+        "pre_submit_rest_orderbook_refresh_bid_req_base_tm": data.get(
+            "pre_submit_rest_orderbook_refresh_bid_req_base_tm"
+        ),
+    }
+
+
+def _latency_gate_observer_unhealthy(latency_gate: dict | None) -> bool:
+    if not isinstance(latency_gate, dict):
+        return False
+    snapshot = latency_gate.get("orderbook_stability")
+    if not isinstance(snapshot, dict):
+        return False
+    if bool(snapshot.get("observer_healthy", True)):
+        return False
+    reason = str(snapshot.get("observer_missing_reason") or "").strip().lower()
+    return reason not in {"", "ok", "none"}
 
 
 def _compute_price_below_bid_bps(price, best_bid):
@@ -14643,11 +14916,85 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
 
     latency_signal_strength = float(stock.get('rt_ai_prob', stock.get('prob', 0.0)) or 0.0)
     latency_signal_score = latency_signal_strength * 100.0
+    ws_data, pre_submit_ws_snapshot_refresh = _pre_submit_refresh_real_ws_snapshot(code, ws_data, strategy)
+    pre_submit_rest_orderbook_refresh = {}
+    if not pre_submit_ws_snapshot_refresh.get("pre_submit_ws_snapshot_refresh_applied"):
+        ws_data, pre_submit_rest_orderbook_refresh = _pre_submit_refresh_rest_orderbook_snapshot(
+            code,
+            ws_data,
+            strategy,
+        )
+    if pre_submit_ws_snapshot_refresh.get("pre_submit_ws_snapshot_refresh_applied"):
+        curr_price = _safe_int(ws_data.get("curr"), curr_price)
+        if strategy == 'SCALPING':
+            final_price = int(float(stock.get('target_buy_price', curr_price) or curr_price))
+    elif pre_submit_rest_orderbook_refresh.get("pre_submit_rest_orderbook_refresh_applied"):
+        curr_price = _safe_int(ws_data.get("curr"), curr_price)
+        if strategy == 'SCALPING':
+            final_price = int(float(stock.get('target_buy_price', curr_price) or curr_price))
     latency_gate = evaluate_live_buy_entry(
         stock=stock, code=code, ws_data=ws_data, strategy_id=strategy, planned_qty=real_buy_qty,
         signal_price=curr_price, signal_strength=latency_signal_strength,
         target_buy_price=final_price if strategy == 'SCALPING' else 0,
     )
+    latency_gate.update(pre_submit_ws_snapshot_refresh)
+    latency_gate.update(pre_submit_rest_orderbook_refresh)
+    if (
+        _latency_gate_observer_unhealthy(latency_gate)
+        and not bool(latency_gate.get("pre_submit_ws_snapshot_refresh_applied"))
+        and not bool(latency_gate.get("pre_submit_rest_orderbook_refresh_applied"))
+        and bool(latency_gate.get("pre_submit_ws_snapshot_refresh_enabled"))
+    ):
+        refreshed_ws_data, observer_recheck_fields = _pre_submit_refresh_real_ws_snapshot(code, ws_data, strategy)
+        observer_recheck_fields.update(
+            {
+                "pre_submit_observer_unhealthy_refresh_attempted": True,
+                "pre_submit_observer_unhealthy_refresh_applied": bool(
+                    observer_recheck_fields.get("pre_submit_ws_snapshot_refresh_applied")
+                ),
+                "pre_submit_observer_unhealthy_refresh_reason": observer_recheck_fields.get(
+                    "pre_submit_ws_snapshot_refresh_reason"
+                ),
+            }
+        )
+        if observer_recheck_fields.get("pre_submit_ws_snapshot_refresh_applied"):
+            ws_data = refreshed_ws_data
+            curr_price = _safe_int(ws_data.get("curr"), curr_price)
+            if strategy == 'SCALPING':
+                final_price = int(float(stock.get('target_buy_price', curr_price) or curr_price))
+            latency_gate = evaluate_live_buy_entry(
+                stock=stock,
+                code=code,
+                ws_data=ws_data,
+                strategy_id=strategy,
+                planned_qty=real_buy_qty,
+                signal_price=curr_price,
+                signal_strength=latency_signal_strength,
+                target_buy_price=final_price if strategy == 'SCALPING' else 0,
+            )
+        latency_gate.update(observer_recheck_fields)
+    if (
+        _latency_gate_observer_unhealthy(latency_gate)
+        and not bool(latency_gate.get("pre_submit_ws_snapshot_refresh_applied"))
+        and not bool(latency_gate.get("pre_submit_rest_orderbook_refresh_applied"))
+    ):
+        refreshed_ws_data, rest_recheck_fields = _pre_submit_refresh_rest_orderbook_snapshot(code, ws_data, strategy)
+        if rest_recheck_fields.get("pre_submit_rest_orderbook_refresh_applied"):
+            ws_data = refreshed_ws_data
+            curr_price = _safe_int(ws_data.get("curr"), curr_price)
+            if strategy == 'SCALPING':
+                final_price = int(float(stock.get('target_buy_price', curr_price) or curr_price))
+            latency_gate = evaluate_live_buy_entry(
+                stock=stock,
+                code=code,
+                ws_data=ws_data,
+                strategy_id=strategy,
+                planned_qty=real_buy_qty,
+                signal_price=curr_price,
+                signal_strength=latency_signal_strength,
+                target_buy_price=final_price if strategy == 'SCALPING' else 0,
+            )
+        latency_gate.update(rest_recheck_fields)
     _mutate_stock_state(
         stock,
         set_fields={
@@ -14723,6 +15070,8 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             runtime_effect=(
                 bool(latency_gate.get('latency_canary_applied'))
                 or bool(latency_gate.get('pre_submit_quote_refresh_applied'))
+                or bool(latency_gate.get('pre_submit_ws_snapshot_refresh_applied'))
+                or bool(latency_gate.get('pre_submit_rest_orderbook_refresh_applied'))
             ),
             actual_order_submitted=False,
             broker_order_forbidden=True,
@@ -14745,6 +15094,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 latency_gate.get('pre_submit_quote_refresh_latest_price', 0) or 0
             ),
             pre_submit_quote_refresh_spread_ratio=latency_gate.get('pre_submit_quote_refresh_spread_ratio'),
+            **_pre_submit_ws_snapshot_refresh_log_fields(latency_gate),
             **_build_ai_overlap_log_fields(
                 stock=stock, ai_score=latency_signal_score, momentum_tag=stock.get("entry_momentum_tag"),
                 threshold_profile=stock.get("entry_threshold_profile"), overbought_blocked=False,
@@ -14923,6 +15273,8 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         runtime_effect=(
             bool(latency_gate.get('latency_canary_applied'))
             or bool(latency_gate.get('pre_submit_quote_refresh_applied'))
+            or bool(latency_gate.get('pre_submit_ws_snapshot_refresh_applied'))
+            or bool(latency_gate.get('pre_submit_rest_orderbook_refresh_applied'))
         ),
         actual_order_submitted=False,
         broker_order_forbidden=False,
@@ -14941,6 +15293,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         pre_submit_quote_refresh_best_ask=int(latency_gate.get('pre_submit_quote_refresh_best_ask', 0) or 0),
         pre_submit_quote_refresh_latest_price=int(latency_gate.get('pre_submit_quote_refresh_latest_price', 0) or 0),
         pre_submit_quote_refresh_spread_ratio=latency_gate.get('pre_submit_quote_refresh_spread_ratio'),
+        **_pre_submit_ws_snapshot_refresh_log_fields(latency_gate),
         entry_price_defensive_ticks=int(latency_gate.get('entry_price_defensive_ticks', 0) or 0),
         normal_defensive_order_price=int(latency_gate.get('normal_defensive_order_price', 0) or 0),
         latency_guarded_order_price=int(latency_gate.get('latency_guarded_order_price', 0) or 0),
@@ -15426,6 +15779,22 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             'price_below_bid_bps': price_snapshot.get('price_below_bid_bps'),
             'price_decision_context_age_ms': submit_revalidation_fields.get('price_decision_context_age_ms'),
             'quote_age_at_submit_ms': submit_revalidation_fields.get('quote_age_at_submit_ms'),
+            'ai_score': latency_signal_score,
+            'entry_reprice_action': 'BUY_DEFENSIVE' if strategy == 'SCALPING' else str(latency_gate.get('effective_decision', '')),
+            'chosen_action': 'BUY_DEFENSIVE' if strategy == 'SCALPING' else str(latency_gate.get('effective_decision', '')),
+            'entry_adm_recommended_action': real_pre_submit_guard_fields.get('entry_adm_recommended_action'),
+            'entry_adm_ev_pct': real_pre_submit_guard_fields.get('entry_adm_source_quality_adjusted_ev_pct')
+            or real_pre_submit_guard_fields.get('entry_adm_ev_pct'),
+            'lifecycle_matrix_selected_action': real_pre_submit_guard_fields.get('lifecycle_matrix_selected_action')
+            or real_pre_submit_guard_fields.get('lifecycle_matrix_recommended_action'),
+            'buy_pressure_10t': microstructure_submit_log_fields.get('buy_pressure_10t')
+            or entry_orderbook_micro_fields.get('buy_pressure_10t')
+            or stock.get('last_buy_pressure_10t'),
+            'orderbook_micro_state': entry_orderbook_micro_fields.get('orderbook_micro_state'),
+            'latency_state': latency_gate.get('latency_state'),
+            'mark_price_at_submit': int(latency_gate.get('latest_price', 0) or curr_price or 0),
+            'submitted_mark_price': int(latency_gate.get('signal_price', 0) or curr_price or 0),
+            'latest_price_at_submit': int(latency_gate.get('latest_price', 0) or curr_price or 0),
         })
         _stage_buy_order_submission(
             stock=stock, code=code, curr_price=curr_price, requested_qty=requested_qty, msg=msg, entry_orders=successful_orders,
@@ -16245,6 +16614,342 @@ def _cancel_pending_entry_orders(stock, code, *, force=False):
 
         _clear_pending_entry_meta(stock)
         return 'cancelled'
+
+
+def _entry_reprice_bool(name: str, default: bool) -> bool:
+    raw = os.getenv(f"KORSTOCKSCAN_{name}")
+    if raw is not None:
+        return str(raw).strip().lower() in {"1", "true", "yes", "y", "on"}
+    return bool(_rule_bool(name, default))
+
+
+def _entry_reprice_int(name: str, default: int) -> int:
+    raw = os.getenv(f"KORSTOCKSCAN_{name}")
+    if raw is not None:
+        try:
+            return int(float(str(raw).strip()))
+        except (TypeError, ValueError):
+            return int(default)
+    return int(_rule_int(name, default))
+
+
+def _entry_reprice_config() -> dict:
+    return {
+        "enabled": _entry_reprice_bool("ENTRY_REPRICE_AFTER_SUBMIT_ENABLED", True),
+        "eval_sec": max(1, _entry_reprice_int("ENTRY_REPRICE_AFTER_SUBMIT_EVAL_SEC", ENTRY_REPRICE_DEFAULT_EVAL_SEC)),
+        "max_attempts": max(0, _entry_reprice_int("ENTRY_REPRICE_AFTER_SUBMIT_MAX_ATTEMPTS", ENTRY_REPRICE_DEFAULT_MAX_ATTEMPTS)),
+        "max_upward_bps": max(0, _entry_reprice_int("ENTRY_REPRICE_AFTER_SUBMIT_MAX_UPWARD_BPS", ENTRY_REPRICE_DEFAULT_MAX_UPWARD_BPS)),
+        "max_quote_age_ms": max(1, _entry_reprice_int("ENTRY_REPRICE_AFTER_SUBMIT_MAX_QUOTE_AGE_MS", ENTRY_REPRICE_DEFAULT_MAX_QUOTE_AGE_MS)),
+        "max_spread_bps": max(1, _entry_reprice_int("ENTRY_REPRICE_AFTER_SUBMIT_MAX_SPREAD_BPS", ENTRY_REPRICE_DEFAULT_MAX_SPREAD_BPS)),
+    }
+
+
+def _cancel_response_success(response) -> tuple[bool, str, str]:
+    if isinstance(response, dict):
+        code = str(response.get("return_code", response.get("rt_cd", "")))
+        message = str(response.get("return_msg", response.get("msg1", response.get("err_msg", ""))) or "")
+        cancel_ord_no = str(response.get("ord_no", "") or response.get("odno", "") or "")
+        return code == "0", message, cancel_ord_no
+    return bool(response), str(response), ""
+
+
+def _open_reprice_candidate_orders(stock):
+    orders = []
+    for order in _iter_pending_entry_orders(stock):
+        if not isinstance(order, dict):
+            continue
+        status = str(order.get("status", "OPEN") or "OPEN").upper()
+        if status not in {"OPEN", "SENT"}:
+            continue
+        if not str(order.get("ord_no", "") or "").strip():
+            continue
+        orders.append(order)
+    return orders
+
+
+def _entry_reprice_latency_state_from_snapshot(snapshot: dict) -> str:
+    if not isinstance(snapshot, dict) or not snapshot:
+        return "DANGER"
+    missing_reason = str(snapshot.get("observer_missing_reason") or "").strip().lower()
+    best_bid = _coerce_int_value(snapshot.get("best_bid"))
+    best_ask = _coerce_int_value(snapshot.get("best_ask"))
+    if not bool(snapshot.get("observer_healthy", False)):
+        if missing_reason == "missing_trade" and best_bid > 0 and best_ask > 0 and best_ask >= best_bid:
+            return "CAUTION"
+        return "DANGER"
+    if bool(snapshot.get("unstable_quote_observed")):
+        return "DANGER"
+    return "SAFE"
+
+
+def _reset_entry_reprice_after_failed_resubmit(stock, code):
+    _mutate_stock_state(
+        stock,
+        set_fields={"status": "WATCHING"},
+        pop_fields=[
+            "pending_entry_orders",
+            "entry_mode",
+            "entry_requested_qty",
+            "entry_filled_qty",
+            "entry_fill_amount",
+            "entry_dynamic_reason",
+            "requested_buy_qty",
+            "entry_bundle_id",
+            "odno",
+            "order_time",
+            "pending_buy_msg",
+            "target_buy_price",
+            "order_price",
+            "buy_qty",
+        ],
+    )
+    _clear_entry_arm(stock)
+    if ALERTED_STOCKS is not None:
+        with ENTRY_LOCK:
+            ALERTED_STOCKS.discard(code)
+
+
+def _maybe_reprice_pending_entry_order(stock, code, strategy, *, timeout_sec=None):
+    if normalize_strategy(strategy) != "SCALPING":
+        return "not_applicable"
+    if not _has_open_pending_entry_orders(stock):
+        return "not_applicable"
+
+    open_orders = _open_reprice_candidate_orders(stock)
+    if not open_orders:
+        return "not_applicable"
+    if len(open_orders) != 1:
+        if not bool(stock.get("entry_reprice_multi_leg_block_logged")):
+            _log_entry_pipeline(
+                stock,
+                code,
+                "entry_reprice_after_submit_blocked",
+                runtime_family=ENTRY_REPRICE_RUNTIME_FAMILY,
+                policy_version=ENTRY_REPRICE_POLICY_VERSION,
+                actual_order_submitted=False,
+                broker_order_forbidden=False,
+                runtime_effect=False,
+                block_reason="multi_leg_pending_not_supported",
+                open_pending_leg_count=len(open_orders),
+            )
+            _mutate_stock_state(stock, set_fields={"entry_reprice_multi_leg_block_logged": True})
+        return "blocked"
+
+    order = open_orders[0]
+    if bool(order.get("entry_reprice_evaluated")) or bool(stock.get("entry_reprice_evaluated")):
+        return "already_evaluated"
+
+    now_ts = time.time()
+    sent_at = _safe_float(order.get("sent_at"), _safe_float(stock.get("order_time"), 0.0))
+    elapsed_sec = max(0.0, now_ts - sent_at) if sent_at > 0 else 0.0
+    config = _entry_reprice_config()
+    if elapsed_sec < float(config["eval_sec"]):
+        return "not_due"
+    if timeout_sec is not None and elapsed_sec >= float(timeout_sec):
+        return "timeout_owner"
+
+    snapshot = ORDERBOOK_STABILITY_OBSERVER.snapshot(code, now=now_ts)
+    if not isinstance(snapshot, dict):
+        snapshot = {}
+    best_bid = _coerce_int_value(snapshot.get("best_bid"))
+    best_ask = _coerce_int_value(snapshot.get("best_ask"))
+    current_price = _coerce_int_value(
+        snapshot.get("last_trade_price")
+        or stock.get("latest_price")
+        or order.get("latest_price_at_submit")
+        or best_bid
+        or best_ask
+    )
+    micro = snapshot.get("orderbook_micro") if isinstance(snapshot.get("orderbook_micro"), dict) else {}
+    micro_state = str(micro.get("micro_state") or order.get("orderbook_micro_state") or "")
+    quote_age_ms = snapshot.get("observer_last_quote_age_ms")
+    decision = evaluate_entry_reprice_after_submit(
+        order=order,
+        strategy=strategy,
+        elapsed_sec=elapsed_sec,
+        best_bid=best_bid,
+        best_ask=best_ask,
+        current_price=current_price,
+        quote_age_ms=quote_age_ms,
+        ai_score=order.get("ai_score"),
+        chosen_action=order.get("entry_reprice_action") or order.get("chosen_action"),
+        entry_adm_recommended_action=order.get("entry_adm_recommended_action"),
+        entry_adm_ev_pct=order.get("entry_adm_ev_pct"),
+        lifecycle_matrix_selected_action=order.get("lifecycle_matrix_selected_action"),
+        buy_pressure_10t=order.get("buy_pressure_10t"),
+        orderbook_micro_state=micro_state,
+        latency_state=_entry_reprice_latency_state_from_snapshot(snapshot),
+        simulated_order=bool(order.get("simulated_order")),
+        **config,
+    )
+    evaluated_fields = {
+        **decision.as_log_fields(),
+        "actual_order_submitted": False,
+        "broker_order_forbidden": False,
+        "runtime_effect": False,
+        "timeout_sec": timeout_sec if timeout_sec is not None else "-",
+    }
+    _log_entry_pipeline(stock, code, "entry_reprice_after_submit_evaluated", **evaluated_fields)
+
+    terminal_block = decision.reason != "quote_stale"
+    if not decision.allowed:
+        _log_entry_pipeline(stock, code, "entry_reprice_after_submit_blocked", **evaluated_fields)
+        if terminal_block:
+            with ENTRY_LOCK:
+                order["entry_reprice_evaluated"] = True
+                order["entry_reprice_block_reason"] = decision.reason
+                stock["entry_reprice_evaluated"] = True
+                stock["entry_reprice_block_reason"] = decision.reason
+        return "blocked"
+
+    with ENTRY_LOCK:
+        order["entry_reprice_attempt_count"] = _coerce_int_value(order.get("entry_reprice_attempt_count")) + 1
+        stock["entry_reprice_attempt_count"] = _coerce_int_value(stock.get("entry_reprice_attempt_count")) + 1
+
+    parent_order_no = str(order.get("ord_no") or "").strip()
+    qty = max(0, _coerce_int_value(order.get("qty")) - _coerce_int_value(order.get("filled_qty")))
+    request_fields = {
+        **decision.as_log_fields(),
+        "actual_order_submitted": False,
+        "broker_order_forbidden": False,
+        "runtime_effect": True,
+        "parent_order_no": parent_order_no,
+        "qty": qty,
+    }
+    _log_entry_pipeline(stock, code, "entry_reprice_cancel_requested", **request_fields)
+    cancel_res = kiwoom_orders.send_cancel_order(code=code, orig_ord_no=parent_order_no, token=KIWOOM_TOKEN, qty=0)
+    cancel_ok, cancel_msg, cancel_ord_no = _cancel_response_success(cancel_res)
+    if not cancel_ok:
+        with ENTRY_LOCK:
+            order["entry_reprice_evaluated"] = True
+            order["entry_reprice_block_reason"] = "cancel_failed"
+            stock["entry_reprice_evaluated"] = True
+            stock["entry_reprice_block_reason"] = "cancel_failed"
+        _log_entry_pipeline(
+            stock,
+            code,
+            "entry_reprice_after_submit_failed",
+            **request_fields,
+            failure_stage="cancel",
+            cancel_message=cancel_msg[:160],
+        )
+        return "failed"
+
+    _log_entry_pipeline(
+        stock,
+        code,
+        "entry_reprice_cancel_confirmed",
+        **request_fields,
+        cancel_ord_no=cancel_ord_no,
+        cancel_message=cancel_msg[:160],
+    )
+    with ENTRY_LOCK:
+        order["status"] = "CANCELLED"
+        order["cancelled_at"] = time.time()
+        order["entry_reprice_cancel_ord_no"] = cancel_ord_no
+
+    target_price = int(decision.target_price or 0)
+    _log_entry_pipeline(
+        stock,
+        code,
+        "entry_reprice_resubmit_requested",
+        **request_fields,
+    )
+    buy_res = kiwoom_orders.send_buy_order(
+        code,
+        qty,
+        target_price,
+        "00",
+        token=KIWOOM_TOKEN,
+        order_type_desc="매수재주문",
+        tif=str(order.get("tif") or "DAY"),
+    )
+    if not isinstance(buy_res, dict) or str(buy_res.get("return_code", buy_res.get("rt_cd", ""))) != "0":
+        message = str((buy_res or {}).get("return_msg", (buy_res or {}).get("err_msg", buy_res)) or "")
+        _log_entry_pipeline(
+            stock,
+            code,
+            "entry_reprice_after_submit_failed",
+            **request_fields,
+            failure_stage="resubmit",
+            resubmit_message=message[:160],
+        )
+        _reset_entry_reprice_after_failed_resubmit(stock, code)
+        return "failed"
+
+    child_order_no = _extract_broker_order_no(buy_res)
+    if not child_order_no:
+        _log_entry_pipeline(
+            stock,
+            code,
+            "entry_reprice_after_submit_failed",
+            **request_fields,
+            failure_stage="resubmit_missing_order_no",
+            resubmit_message=str(buy_res)[:160],
+        )
+        _reset_entry_reprice_after_failed_resubmit(stock, code)
+        return "failed"
+    child_order = {
+        "tag": order.get("tag", "normal"),
+        "qty": qty,
+        "price": target_price,
+        "ord_no": child_order_no,
+        "tif": str(order.get("tif") or "DAY"),
+        "order_type": "00",
+        "status": "OPEN",
+        "filled_qty": 0,
+        "sent_at": time.time(),
+        "entry_order_lifecycle": "repriced_after_submit",
+        "entry_passive_probe_applied": bool(order.get("entry_passive_probe_applied")),
+        "best_bid_at_submit": best_bid,
+        "best_ask_at_submit": best_ask,
+        "price_below_bid_bps": (
+            int(round(((best_bid - target_price) / best_bid) * 10000.0))
+            if best_bid > 0 and target_price > 0
+            else 0
+        ),
+        "price_decision_context_age_ms": 0,
+        "quote_age_at_submit_ms": quote_age_ms if quote_age_ms is not None else "-",
+        "entry_reprice_attempt_count": _coerce_int_value(order.get("entry_reprice_attempt_count"), 1),
+        "entry_reprice_parent_ord_no": parent_order_no,
+        "entry_reprice_child_ord_no": child_order_no,
+        "entry_reprice_evaluated": True,
+        "ai_score": order.get("ai_score"),
+        "entry_reprice_action": order.get("entry_reprice_action"),
+        "entry_adm_recommended_action": order.get("entry_adm_recommended_action"),
+        "entry_adm_ev_pct": order.get("entry_adm_ev_pct"),
+        "lifecycle_matrix_selected_action": order.get("lifecycle_matrix_selected_action"),
+        "buy_pressure_10t": order.get("buy_pressure_10t"),
+        "mark_price_at_submit": order.get("mark_price_at_submit") or order.get("submitted_mark_price"),
+    }
+    with ENTRY_LOCK:
+        stock["pending_entry_orders"] = [child_order]
+        stock["odno"] = child_order_no
+        stock["order_time"] = child_order["sent_at"]
+        stock["order_price"] = target_price
+        stock["entry_reprice_evaluated"] = True
+        stock["entry_reprice_attempt_count"] = child_order["entry_reprice_attempt_count"]
+        stock["entry_reprice_parent_ord_no"] = parent_order_no
+        stock["entry_reprice_child_ord_no"] = child_order_no
+    _log_entry_pipeline(
+        stock,
+        code,
+        "entry_reprice_resubmit_submitted",
+        **decision.as_log_fields(),
+        runtime_effect=True,
+        actual_order_submitted=True,
+        broker_order_forbidden=False,
+        broker_order_submitted=True,
+        child_order_no=child_order_no,
+        broker_order_no=child_order_no,
+        order_no=child_order_no,
+        qty=qty,
+    )
+    log_info(
+        f"[ENTRY_REPRICE_AFTER_SUBMIT] {stock.get('name')}({code}) "
+        f"parent={parent_order_no} child={child_order_no} qty={qty} price={target_price}"
+    )
+    return "submitted"
 
 
 def _stage_buy_order_submission(stock, code, curr_price, requested_qty, msg, entry_orders):
@@ -20866,6 +21571,16 @@ def handle_buy_ordered_state(stock, code):
     strategy = 'SCALPING' if raw_strategy in ['SCALPING', 'SCALP'] else raw_strategy
 
     timeout_sec = _resolve_buy_order_timeout_sec(stock, strategy)
+
+    if _has_open_pending_entry_orders(stock):
+        reprice_result = _maybe_reprice_pending_entry_order(
+            stock,
+            code,
+            strategy,
+            timeout_sec=timeout_sec,
+        )
+        if reprice_result in {"submitted", "failed"}:
+            return
 
     if _has_open_pending_entry_orders(stock) and time_elapsed > timeout_sec:
         _reconcile_pending_entry_orders(stock, code, strategy)

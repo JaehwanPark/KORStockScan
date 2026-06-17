@@ -4,7 +4,9 @@ from datetime import UTC, datetime
 from types import SimpleNamespace
 
 import src.engine.sniper_entry_latency as entry_latency_module
+import src.engine.sniper_state_handlers as state_handlers
 from src.engine.sniper_entry_latency import (
+    _best_ask_bid_from_ws,
     _latency_danger_reasons,
     clear_signal_reference,
     evaluate_live_buy_entry,
@@ -435,6 +437,292 @@ def test_pre_submit_quote_refresh_uses_pid_env_when_runtime_rules_are_stale(monk
     assert result["pre_submit_quote_refresh_enabled"] is True
     assert result["pre_submit_quote_refresh_applied"] is True
     assert result["pre_submit_quote_refresh_reason"] == "observer_quote_fresh"
+
+
+def test_pre_submit_quote_refresh_treats_kospi_ml_as_real_scalping_alias(monkeypatch):
+    stale_rules = replace(
+        CONFIG,
+        SCALP_PRE_SUBMIT_QUOTE_REFRESH_ENABLED=False,
+        SCALP_PRE_SUBMIT_QUOTE_REFRESH_MAX_AGE_MS=100,
+        SCALP_PRE_SUBMIT_QUOTE_REFRESH_MAX_SPREAD_RATIO=0.001,
+    )
+    monkeypatch.setattr(entry_latency_module, "TRADING_RULES", stale_rules)
+    monkeypatch.setattr(entry_latency_module.constants_module, "TRADING_RULES", stale_rules)
+    monkeypatch.setenv("KORSTOCKSCAN_SCALP_PRE_SUBMIT_QUOTE_REFRESH_ENABLED", "true")
+    monkeypatch.setenv("KORSTOCKSCAN_SCALP_PRE_SUBMIT_QUOTE_REFRESH_MAX_AGE_MS", "700")
+    monkeypatch.setenv("KORSTOCKSCAN_SCALP_PRE_SUBMIT_QUOTE_REFRESH_MAX_SPREAD_RATIO", "0.015")
+
+    stock = {"name": "TEST", "position_tag": "MIDDLE"}
+    entry_latency_module.ORDERBOOK_STABILITY_OBSERVER.reset()
+    entry_latency_module.ORDERBOOK_STABILITY_OBSERVER.record_quote(
+        "123456_refresh_kospi_ml",
+        best_bid=10_020,
+        best_ask=10_030,
+        ts=time.time(),
+    )
+
+    result = evaluate_live_buy_entry(
+        stock=stock,
+        code="123456_refresh_kospi_ml",
+        ws_data={
+            "curr": 10_000,
+            "last_ws_update_ts": time.time() - 3.0,
+            "orderbook": {
+                "asks": [{"price": 10_010, "volume": 100}],
+                "bids": [{"price": 10_000, "volume": 100}],
+            },
+        },
+        strategy_id="KOSPI_ML",
+        planned_qty=3,
+        signal_price=10_000,
+        signal_strength=0.9,
+    )
+
+    assert result["allowed"] is True
+    assert result["pre_submit_quote_refresh_strategy_id"] == "KOSPI_ML"
+    assert result["pre_submit_quote_refresh_env_value"] == "true"
+    assert result["pre_submit_quote_refresh_enabled"] is True
+    assert result["pre_submit_quote_refresh_applied"] is True
+    assert result["pre_submit_quote_refresh_reason"] == "observer_quote_fresh"
+    assert result["quote_stale"] is False
+    assert result["latest_price"] == 10_020
+    assert result["pre_submit_quote_refresh_latest_price"] == 10_020
+
+
+def test_latency_entry_accepts_flat_best_levels_from_ws_snapshot():
+    stock = {"name": "TEST", "position_tag": "MIDDLE"}
+    entry_latency_module.ORDERBOOK_STABILITY_OBSERVER.reset()
+    ws_data = {
+        "curr": 10_000,
+        "last_ws_update_ts": time.time(),
+        "best_ask": 10_010,
+        "best_bid": 10_000,
+    }
+    assert _best_ask_bid_from_ws(ws_data) == (10_010, 10_000)
+    result = evaluate_live_buy_entry(
+        stock=stock,
+        code="654321",
+        ws_data=ws_data,
+        strategy_id="SCALPING",
+        planned_qty=3,
+        signal_price=10_000,
+        signal_strength=0.9,
+    )
+
+    assert result["allowed"] is True
+    assert result["quote_stale"] is False
+    assert result["spread_ratio"] > 0
+
+
+def test_real_pre_submit_ws_snapshot_refresh_uses_fresh_ws_manager_snapshot(monkeypatch):
+    class FakeWsManager:
+        def get_latest_data(self, code):
+            assert code == "123456"
+            return {
+                "curr": 10_020,
+                "last_ws_update_ts": time.time(),
+                "orderbook": {
+                    "asks": [{"price": 10_030, "volume": 100}],
+                    "bids": [{"price": 10_020, "volume": 100}],
+                },
+            }
+
+    monkeypatch.setattr(state_handlers, "WS_MANAGER", FakeWsManager())
+    monkeypatch.setenv("KORSTOCKSCAN_SCALP_PRE_SUBMIT_QUOTE_REFRESH_MAX_AGE_MS", "700")
+    stale_input = {
+        "curr": 10_000,
+        "last_ws_update_ts": time.time() - 3.0,
+        "orderbook": {
+            "asks": [{"price": 10_010, "volume": 100}],
+            "bids": [{"price": 10_000, "volume": 100}],
+        },
+    }
+
+    refreshed, fields = state_handlers._pre_submit_refresh_real_ws_snapshot(
+        "123456",
+        stale_input,
+        "SCALPING",
+    )
+
+    assert fields["pre_submit_ws_snapshot_refresh_enabled"] is True
+    assert fields["pre_submit_ws_snapshot_refresh_applied"] is True
+    assert fields["pre_submit_ws_snapshot_refresh_reason"] == "latest_ws_snapshot_fresh"
+    assert refreshed["curr"] == 10_020
+    assert refreshed["orderbook"]["bids"][0]["price"] == 10_020
+    assert refreshed["pre_submit_ws_snapshot_refresh_latest_price"] == 10_020
+
+
+def test_real_pre_submit_ws_snapshot_refresh_accepts_flat_best_levels(monkeypatch):
+    class FakeWsManager:
+        def get_latest_data(self, code):
+            assert code == "123456"
+            return {
+                "curr": 10_020,
+                "last_ws_update_ts": time.time(),
+                "best_ask": 10_030,
+                "best_bid": 10_020,
+            }
+
+    monkeypatch.setattr(state_handlers, "WS_MANAGER", FakeWsManager())
+    monkeypatch.setenv("KORSTOCKSCAN_SCALP_PRE_SUBMIT_QUOTE_REFRESH_MAX_AGE_MS", "700")
+    refreshed, fields = state_handlers._pre_submit_refresh_real_ws_snapshot(
+        "123456",
+        {
+            "curr": 10_000,
+            "last_ws_update_ts": time.time() - 3.0,
+            "best_ask": 10_010,
+            "best_bid": 10_000,
+        },
+        "SCALPING",
+    )
+
+    assert fields["pre_submit_ws_snapshot_refresh_enabled"] is True
+    assert fields["pre_submit_ws_snapshot_refresh_applied"] is True
+    assert fields["pre_submit_ws_snapshot_refresh_reason"] == "latest_ws_snapshot_fresh"
+    assert fields["pre_submit_ws_snapshot_refresh_best_bid"] == 10_020
+    assert fields["pre_submit_ws_snapshot_refresh_best_ask"] == 10_030
+    assert refreshed["best_bid"] == 10_020
+
+
+def test_real_pre_submit_ws_snapshot_refresh_honors_explicit_operator_off(monkeypatch):
+    class FakeWsManager:
+        def get_latest_data(self, code):
+            raise AssertionError("WS manager must not be called when refresh is explicitly disabled")
+
+    monkeypatch.setattr(state_handlers, "WS_MANAGER", FakeWsManager())
+    monkeypatch.setenv("KORSTOCKSCAN_SCALP_PRE_SUBMIT_QUOTE_REFRESH_ENABLED", "false")
+    refreshed, fields = state_handlers._pre_submit_refresh_real_ws_snapshot(
+        "123456",
+        {
+            "curr": 10_000,
+            "last_ws_update_ts": time.time() - 3.0,
+            "best_ask": 10_010,
+            "best_bid": 10_000,
+        },
+        "SCALPING",
+    )
+
+    assert fields["pre_submit_ws_snapshot_refresh_enabled"] is False
+    assert fields["pre_submit_ws_snapshot_refresh_applied"] is False
+    assert fields["pre_submit_ws_snapshot_refresh_reason"] == "disabled"
+    assert refreshed["curr"] == 10_000
+
+
+def test_latency_gate_observer_unhealthy_detection():
+    assert state_handlers._latency_gate_observer_unhealthy(
+        {"orderbook_stability": {"observer_healthy": False, "observer_missing_reason": "missing_trade"}}
+    ) is True
+    assert state_handlers._latency_gate_observer_unhealthy(
+        {"orderbook_stability": {"observer_healthy": True, "observer_missing_reason": "ok"}}
+    ) is False
+    assert state_handlers._latency_gate_observer_unhealthy({}) is False
+
+
+def test_real_pre_submit_rest_orderbook_refresh_uses_ka10004_fresh_snapshot(monkeypatch):
+    now_hhmmss = datetime.now().strftime("%H%M%S")
+
+    monkeypatch.setattr(state_handlers, "KIWOOM_TOKEN", "TOKEN")
+    monkeypatch.setattr(
+        state_handlers.kiwoom_utils,
+        "get_stock_orderbook_ka10004",
+        lambda token, code: {
+            "source": "ka10004_rest_orderbook",
+            "bid_req_base_tm": now_hhmmss,
+            "curr": 10_030,
+            "best_ask": 10_030,
+            "best_bid": 10_020,
+            "best_ask_qty": 100,
+            "best_bid_qty": 200,
+            "ask_tot": 1000,
+            "bid_tot": 1200,
+            "orderbook": {
+                "asks": [{"price": 10_030, "volume": 100}],
+                "bids": [{"price": 10_020, "volume": 200}],
+            },
+        },
+    )
+    monkeypatch.setenv("KORSTOCKSCAN_SCALP_PRE_SUBMIT_REST_ORDERBOOK_MAX_AGE_MS", "3000")
+
+    refreshed, fields = state_handlers._pre_submit_refresh_rest_orderbook_snapshot(
+        "123456",
+        {"curr": 10_000, "best_ask": 10_010, "best_bid": 10_000},
+        "SCALPING",
+    )
+
+    assert fields["pre_submit_rest_orderbook_refresh_enabled"] is True
+    assert fields["pre_submit_rest_orderbook_refresh_applied"] is True
+    assert fields["pre_submit_rest_orderbook_refresh_reason"] == "rest_orderbook_fresh"
+    assert refreshed["curr"] == 10_030
+    assert refreshed["best_ask"] == 10_030
+    assert refreshed["best_bid"] == 10_020
+    assert refreshed["quote_refresh_source"] == "ka10004_rest_orderbook"
+
+
+def test_real_pre_submit_rest_orderbook_refresh_blocks_stale_ka10004_snapshot(monkeypatch):
+    stale_hhmmss = datetime.fromtimestamp(time.time() - 10).strftime("%H%M%S")
+
+    monkeypatch.setattr(state_handlers, "KIWOOM_TOKEN", "TOKEN")
+    monkeypatch.setattr(
+        state_handlers.kiwoom_utils,
+        "get_stock_orderbook_ka10004",
+        lambda token, code: {
+            "bid_req_base_tm": stale_hhmmss,
+            "curr": 10_030,
+            "best_ask": 10_030,
+            "best_bid": 10_020,
+            "orderbook": {
+                "asks": [{"price": 10_030, "volume": 100}],
+                "bids": [{"price": 10_020, "volume": 200}],
+            },
+        },
+    )
+    monkeypatch.setenv("KORSTOCKSCAN_SCALP_PRE_SUBMIT_REST_ORDERBOOK_MAX_AGE_MS", "500")
+
+    refreshed, fields = state_handlers._pre_submit_refresh_rest_orderbook_snapshot(
+        "123456",
+        {"curr": 10_000, "best_ask": 10_010, "best_bid": 10_000},
+        "SCALPING",
+    )
+
+    assert fields["pre_submit_rest_orderbook_refresh_enabled"] is True
+    assert fields["pre_submit_rest_orderbook_refresh_applied"] is False
+    assert fields["pre_submit_rest_orderbook_refresh_reason"] == "rest_orderbook_stale"
+    assert refreshed["curr"] == 10_000
+
+
+def test_real_pre_submit_ws_snapshot_refresh_blocks_stale_ws_manager_snapshot(monkeypatch):
+    class FakeWsManager:
+        def get_latest_data(self, code):
+            return {
+                "curr": 10_020,
+                "last_ws_update_ts": time.time() - 3.0,
+                "orderbook": {
+                    "asks": [{"price": 10_030, "volume": 100}],
+                    "bids": [{"price": 10_020, "volume": 100}],
+                },
+            }
+
+    monkeypatch.setattr(state_handlers, "WS_MANAGER", FakeWsManager())
+    monkeypatch.setenv("KORSTOCKSCAN_SCALP_PRE_SUBMIT_QUOTE_REFRESH_MAX_AGE_MS", "700")
+    stale_input = {
+        "curr": 10_000,
+        "last_ws_update_ts": time.time() - 4.0,
+        "orderbook": {
+            "asks": [{"price": 10_010, "volume": 100}],
+            "bids": [{"price": 10_000, "volume": 100}],
+        },
+    }
+
+    refreshed, fields = state_handlers._pre_submit_refresh_real_ws_snapshot(
+        "123456",
+        stale_input,
+        "SCALPING",
+    )
+
+    assert fields["pre_submit_ws_snapshot_refresh_enabled"] is True
+    assert fields["pre_submit_ws_snapshot_refresh_applied"] is False
+    assert fields["pre_submit_ws_snapshot_refresh_reason"] == "latest_snapshot_stale"
+    assert refreshed["curr"] == 10_000
 
 
 def test_latency_entry_caution_submits_normal_after_slippage_check():

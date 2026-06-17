@@ -158,6 +158,15 @@ def _nonempty(value: Any) -> str:
     return "" if raw in {"", "-", "None", "none", "null"} else raw
 
 
+def _optional_flag_reason(value: Any) -> str:
+    if isinstance(value, bool):
+        return "flagged" if value else ""
+    raw = _nonempty(value)
+    if raw.lower() in {"false", "0", "no", "off"}:
+        return ""
+    return raw
+
+
 def _open_text(path: Path):
     if path.suffix == ".gz":
         return gzip.open(path, "rt", encoding="utf-8", errors="ignore")
@@ -585,13 +594,30 @@ def _base_row(event: dict[str, Any]) -> dict[str, Any]:
         "order_response_ord_no": _nonempty(fields.get("order_response_ord_no")),
         "submit_attempt_id": _nonempty(fields.get("submit_attempt_id")),
         "context_age_ms": _safe_float(fields.get("context_age_ms") or fields.get("tick_latest_age_ms"), None),
-        "quote_age_ms": _safe_float(fields.get("quote_age_ms"), None),
-        "entry_submit_revalidation_warning": _safe_bool(fields.get("entry_submit_revalidation_warning")),
-        "entry_submit_revalidation_block": _safe_bool(fields.get("entry_submit_revalidation_block")),
-        "best_bid": _safe_float(fields.get("best_bid"), None),
-        "best_ask": _safe_float(fields.get("best_ask"), None),
-        "resolved_order_price": _safe_float(fields.get("resolved_order_price") or fields.get("order_price"), None),
+        "quote_age_ms": _safe_float(fields.get("quote_age_ms") or fields.get("quote_age_at_submit_ms"), None),
+        "latency_state": _nonempty(fields.get("latency_state") or fields.get("latency")),
+        "latency_reason": _nonempty(fields.get("latency_reason") or fields.get("latency_danger_reasons") or fields.get("reason")),
+        "entry_submit_revalidation_warning": _optional_flag_reason(fields.get("entry_submit_revalidation_warning")),
+        "entry_submit_revalidation_block": _optional_flag_reason(fields.get("entry_submit_revalidation_block")),
+        "best_bid": _safe_float(fields.get("best_bid") or fields.get("best_bid_at_submit"), None),
+        "best_ask": _safe_float(fields.get("best_ask") or fields.get("best_ask_at_submit"), None),
+        "resolved_order_price": _safe_float(
+            fields.get("resolved_order_price") or fields.get("submitted_order_price") or fields.get("order_price"),
+            None,
+        ),
         "would_limit_fill": _safe_bool(fields.get("would_limit_fill")),
+        "pre_submit_quote_refresh_enabled": _safe_bool(fields.get("pre_submit_quote_refresh_enabled")),
+        "pre_submit_quote_refresh_applied": _safe_bool(fields.get("pre_submit_quote_refresh_applied")),
+        "pre_submit_quote_refresh_reason": _nonempty(fields.get("pre_submit_quote_refresh_reason")),
+        "pre_submit_quote_refresh_source": _nonempty(fields.get("pre_submit_quote_refresh_source")),
+        "pre_submit_quote_refresh_quote_age_ms": _safe_float(fields.get("pre_submit_quote_refresh_quote_age_ms"), None),
+        "pre_submit_quote_refresh_strategy_id": _nonempty(fields.get("pre_submit_quote_refresh_strategy_id")),
+        "pre_submit_quote_refresh_env_value": _nonempty(fields.get("pre_submit_quote_refresh_env_value")),
+        "pre_submit_ws_snapshot_refresh_enabled": _safe_bool(fields.get("pre_submit_ws_snapshot_refresh_enabled")),
+        "pre_submit_ws_snapshot_refresh_applied": _safe_bool(fields.get("pre_submit_ws_snapshot_refresh_applied")),
+        "pre_submit_ws_snapshot_refresh_reason": _nonempty(fields.get("pre_submit_ws_snapshot_refresh_reason")),
+        "pre_submit_ws_snapshot_refresh_source": _nonempty(fields.get("pre_submit_ws_snapshot_refresh_source")),
+        "pre_submit_ws_snapshot_refresh_age_ms": _safe_float(fields.get("pre_submit_ws_snapshot_refresh_age_ms"), None),
         "source_quality_block_reason": _nonempty(fields.get("source_quality_block_reason") or fields.get("ai_input_source_quality_reason")),
         "gate_action": _nonempty(fields.get("gate_action")),
         "entry_adm_prompt_applied": _safe_bool(fields.get("entry_adm_prompt_applied")),
@@ -705,6 +731,68 @@ def _backfill_adm_lookup_status(rows: list[dict[str, Any]], prior_summary: dict[
         )
         row["entry_adm_bucket_sample_count"] = max(0, sample)
         row["entry_adm_bucket_joined_sample"] = max(0, joined)
+
+
+def _classify_adm_lookup_not_applicable(rows: list[dict[str, Any]]) -> None:
+    advisory_only_stages = {"ai_confirmed", "blocked_ai_score"}
+    for row in rows:
+        existing = str(row.get("entry_adm_bucket_lookup_status") or "").strip()
+        if existing and existing not in {"-", "None"}:
+            continue
+        if str(row.get("stage") or "") not in advisory_only_stages:
+            continue
+        if not row.get("entry_adm_bucket_token_recomputed") and not row.get("entry_adm_bucket_token"):
+            continue
+        row["entry_adm_bucket_lookup_status"] = "advisory_only_stage_without_prior_lookup"
+        row["entry_adm_bucket_lookup_not_applicable_reason"] = (
+            "adm_prompt_context_stage_without_prior_bucket_lookup"
+        )
+        row["entry_adm_bucket_sample_count"] = 0
+        row["entry_adm_bucket_joined_sample"] = 0
+
+
+def _adm_lookup_closure_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    status_counts: Counter[str] = Counter()
+    stage_counts: Counter[str] = Counter()
+    producer_context_missing_counts: Counter[str] = Counter()
+    for row in rows:
+        status = str(row.get("entry_adm_bucket_lookup_status") or "").strip()
+        if status != "new_or_unseen_token_vs_prior_adm":
+            continue
+        token = str(
+            row.get("entry_adm_bucket_token_recomputed")
+            or row.get("entry_adm_bucket_token")
+            or ""
+        )
+        stage = str(row.get("stage") or "-")
+        stage_counts[stage] += 1
+        missing_contexts = []
+        if "risk_context_not_available" in token:
+            missing_contexts.append("risk_context_not_available")
+        if "price_not_available_pre_submit" in token:
+            missing_contexts.append("price_not_available_pre_submit")
+        if "liquidity_not_available" in token:
+            missing_contexts.append("liquidity_not_available")
+        if missing_contexts:
+            status_counts["producer_context_missing"] += 1
+            for context in missing_contexts:
+                producer_context_missing_counts[context] += 1
+        elif stage in {"ai_confirmed", "blocked_ai_score"}:
+            status_counts["advisory_or_not_applicable_stage"] += 1
+        else:
+            status_counts["new_bucket_candidate_waiting_prior_rollup"] += 1
+    total = sum(status_counts.values())
+    followup_required = status_counts.get("producer_context_missing", 0) > 0
+    return {
+        "new_or_unseen_total": total,
+        "closure_status": "closed_with_producer_followup" if followup_required else "closed",
+        "followup_required": followup_required,
+        "status_counts": dict(status_counts),
+        "producer_context_missing_counts": dict(producer_context_missing_counts),
+        "top_stages": [[stage, count] for stage, count in stage_counts.most_common(10)],
+        "decision_authority": "entry_adm_lookup_closure_diagnostic_only",
+        "runtime_effect": False,
+    }
 
 
 def _apply_outcome(row: dict[str, Any], evaluations: dict[str, dict[str, Any]]) -> dict[str, Any]:
@@ -1106,6 +1194,7 @@ def build_scalp_entry_action_decision_matrix_report(target_date: str) -> dict[st
 
     prior_summary = _load_prior_adm_bucket_summary(target_date)
     _backfill_adm_lookup_status(rows, prior_summary)
+    _classify_adm_lookup_not_applicable(rows)
 
     action_counts = Counter(str(row.get("chosen_action")) for row in rows)
     raw_action_counts = Counter(str(row.get("raw_chosen_action") or "-") for row in rows)
@@ -1130,6 +1219,11 @@ def build_scalp_entry_action_decision_matrix_report(target_date: str) -> dict[st
         row for row in rows
         if str(row.get("entry_adm_bucket_lookup_status") or "") == "prior_bucket_present_but_runtime_sample_missing"
     ]
+    advisory_only_lookup_rows = [
+        row for row in rows
+        if str(row.get("entry_adm_bucket_lookup_status") or "")
+        == "advisory_only_stage_without_prior_lookup"
+    ]
     new_or_unseen_top_tokens = Counter(
         str(row.get("entry_adm_bucket_token_recomputed") or row.get("entry_adm_bucket_token") or "-")
         for row in new_or_unseen_tokens
@@ -1144,6 +1238,7 @@ def build_scalp_entry_action_decision_matrix_report(target_date: str) -> dict[st
     prior_missing_top_stages = Counter(
         str(row.get("stage") or "-") for row in prior_bucket_sample_missing_rows
     ).most_common(10)
+    adm_lookup_closure = _adm_lookup_closure_summary(rows)
     raw_token_preserved_count = sum(1 for row in rows if row.get("raw_token_preserved"))
     adm_token_backfill_applied_count = sum(1 for row in rows if row.get("adm_token_backfill_applied"))
     runtime_effect_counts = Counter(str(row.get("entry_adm_runtime_effect") or "-") for row in rows)
@@ -1212,9 +1307,13 @@ def build_scalp_entry_action_decision_matrix_report(target_date: str) -> dict[st
             "missing_action_summary_rows": missing_action_summary_rows,
             "adm_bucket_lookup_status_counts": dict(adm_bucket_lookup_status_counts),
             "new_or_unseen_token_count": len(new_or_unseen_tokens),
+            "advisory_only_stage_without_prior_lookup_count": len(advisory_only_lookup_rows),
             "prior_bucket_sample_missing_count": len(prior_bucket_sample_missing_rows),
             "new_or_unseen_top_tokens": [[token, count] for token, count in new_or_unseen_top_tokens],
             "new_or_unseen_top_stages": [[stage, count] for stage, count in new_or_unseen_top_stages],
+            "adm_bucket_lookup_closure": adm_lookup_closure,
+            "adm_bucket_lookup_closure_status": adm_lookup_closure.get("closure_status"),
+            "adm_bucket_lookup_followup_required": bool(adm_lookup_closure.get("followup_required")),
             "prior_missing_top_tokens": [[token, count] for token, count in prior_missing_top_tokens],
             "prior_missing_top_stages": [[stage, count] for stage, count in prior_missing_top_stages],
             "unknown_bucket_summary": unknown_summary,

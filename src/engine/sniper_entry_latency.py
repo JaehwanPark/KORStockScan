@@ -50,7 +50,15 @@ _ENTRY_POLICY = EntryPolicy(_CONFIG)
 _NORMAL_BUILDER = NormalEntryBuilder(_CONFIG)
 
 
+def _safe_price_int(value: Any) -> int:
+    try:
+        return int(float(str(value).replace(",", "").strip()))
+    except Exception:
+        return 0
+
+
 def _best_ask_bid_from_ws(ws_data: dict[str, Any] | None) -> tuple[int, int]:
+    data = ws_data or {}
     orderbook = (ws_data or {}).get("orderbook") or {}
     asks = orderbook.get("asks") or []
     bids = orderbook.get("bids") or []
@@ -58,15 +66,13 @@ def _best_ask_bid_from_ws(ws_data: dict[str, Any] | None) -> tuple[int, int]:
     best_ask = 0
     best_bid = 0
     if asks:
-        try:
-            best_ask = int(float((asks[0] or {}).get("price", 0) or 0))
-        except Exception:
-            best_ask = 0
+        best_ask = _safe_price_int((asks[0] or {}).get("price", 0))
     if bids:
-        try:
-            best_bid = int(float((bids[0] or {}).get("price", 0) or 0))
-        except Exception:
-            best_bid = 0
+        best_bid = _safe_price_int((bids[0] or {}).get("price", 0))
+    if best_ask <= 0:
+        best_ask = _safe_price_int(data.get("best_ask") or data.get("ask_price") or data.get("ask"))
+    if best_bid <= 0:
+        best_bid = _safe_price_int(data.get("best_bid") or data.get("bid_price") or data.get("bid"))
     return best_ask, best_bid
 
 
@@ -762,8 +768,11 @@ def _latency_spread_relief_signal_score_floors() -> tuple[float, float]:
     return configured_min_signal, effective_min_signal
 
 
+REAL_SCALPING_STRATEGY_IDS = {"SCALPING", "SCALP", "KOSPI_ML"}
+
+
 def _pre_submit_quote_refresh_enabled(strategy_id: str) -> bool:
-    if str(strategy_id or "").upper() not in {"SCALPING", "SCALP"}:
+    if str(strategy_id or "").upper() not in REAL_SCALPING_STRATEGY_IDS:
         return False
     env_value = os.getenv("KORSTOCKSCAN_SCALP_PRE_SUBMIT_QUOTE_REFRESH_ENABLED")
     if env_value is not None:
@@ -815,6 +824,7 @@ def _maybe_refresh_stale_quote_from_observer(
         "pre_submit_quote_refresh_quote_age_ms": None,
         "pre_submit_quote_refresh_best_bid": 0,
         "pre_submit_quote_refresh_best_ask": 0,
+        "pre_submit_quote_refresh_latest_price": int(latest_price or frozen_price or 0),
         "pre_submit_quote_refresh_spread_ratio": None,
     }
     if not provenance["pre_submit_quote_refresh_enabled"]:

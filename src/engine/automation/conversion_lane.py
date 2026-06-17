@@ -38,6 +38,17 @@ SUBMIT_DROUGHT_CLOSURE_AXES = (
     "SOURCE_TAXONOMY_LEAKAGE",
     "UPSTREAM_GATE",
 )
+SUBMIT_DROUGHT_QUOTE_FRESHNESS_SUBACTIONS = (
+    "close_ws_snapshot_refresh_stale_source",
+    "close_ws_snapshot_refresh_missing_source",
+    "close_ws_snapshot_refresh_invalid_source",
+    "close_observer_quote_stale_source",
+    "close_observer_quote_missing",
+    "close_observer_quote_invalid",
+    "close_observer_quote_spread_guard",
+    "close_refresh_alias_disabled",
+    "close_unknown_latency_reason",
+)
 
 
 def report_paths(target_date: str) -> tuple[Path, Path]:
@@ -404,14 +415,71 @@ def _submit_drought_blockers(buy_funnel: dict[str, Any]) -> list[dict[str, Any]]
     ]
 
 
+def _submit_drought_quote_freshness_subactions(subreason_counts: dict[str, Any]) -> dict[str, int]:
+    out: Counter[str] = Counter()
+    for reason, raw_count in (subreason_counts or {}).items():
+        text = str(reason or "").lower()
+        count = _safe_int(raw_count)
+        if count <= 0:
+            continue
+        if "ws_snapshot" in text and "stale" in text:
+            out["close_ws_snapshot_refresh_stale_source"] += count
+        elif "ws_snapshot" in text and "missing" in text:
+            out["close_ws_snapshot_refresh_missing_source"] += count
+        elif "ws_snapshot" in text and "invalid" in text:
+            out["close_ws_snapshot_refresh_invalid_source"] += count
+        elif "observer_quote" in text and "stale" in text:
+            out["close_observer_quote_stale_source"] += count
+        elif "observer_quote" in text and "missing" in text:
+            out["close_observer_quote_missing"] += count
+        elif "observer_quote" in text and "invalid" in text:
+            out["close_observer_quote_invalid"] += count
+        elif "observer_quote" in text and "spread" in text:
+            out["close_observer_quote_spread_guard"] += count
+        elif "disabled" in text or "alias" in text:
+            out["close_refresh_alias_disabled"] += count
+    return {key: out.get(key, 0) for key in SUBMIT_DROUGHT_QUOTE_FRESHNESS_SUBACTIONS if out.get(key, 0)}
+
+
 def _buy_funnel_provenance(buy_funnel: dict[str, Any]) -> dict[str, Any]:
     classification = buy_funnel.get("classification") if isinstance(buy_funnel.get("classification"), dict) else {}
     matches = classification.get("matches") if isinstance(classification.get("matches"), list) else []
+    root_cause = (
+        classification.get("submit_drought_root_cause")
+        if isinstance(classification.get("submit_drought_root_cause"), dict)
+        else {}
+    )
+    quote_freshness = (
+        root_cause.get("quote_freshness_attribution")
+        if isinstance(root_cause.get("quote_freshness_attribution"), dict)
+        else {}
+    )
+    subreason_counts = quote_freshness.get("refresh_subreason_counts") or {}
+    subactions = _submit_drought_quote_freshness_subactions(subreason_counts)
+    if root_cause.get("unknown_latency_reason_count"):
+        subactions["close_unknown_latency_reason"] = _safe_int(root_cause.get("unknown_latency_reason_count"))
     return {
         "buy_funnel_source_present": bool(buy_funnel),
         "buy_funnel_report_type": buy_funnel.get("report_type"),
         "buy_funnel_classification_primary": classification.get("primary"),
         "buy_funnel_classification_matches": matches,
+        "submit_drought_handoff_state": classification.get("submit_drought_handoff_state"),
+        "submit_drought_root_cause_counts": root_cause.get("latency_root_cause_counts") or {},
+        "submit_drought_quote_freshness_attribution": quote_freshness,
+        "submit_drought_quote_freshness_subreason_counts": subreason_counts,
+        "submit_drought_quote_freshness_subaction_counts": subactions,
+        "submit_drought_refresh_attempted_count": _safe_int(quote_freshness.get("refresh_attempted_count")),
+        "submit_drought_refresh_applied_count": _safe_int(quote_freshness.get("refresh_applied_count")),
+        "submit_drought_latency_pass_recovered_count": _safe_int(quote_freshness.get("latency_pass_recovered_count")),
+        "submit_drought_order_bundle_submitted_after_refresh_count": _safe_int(
+            quote_freshness.get("order_bundle_submitted_after_refresh_count")
+        ),
+        "submit_drought_unknown_latency_reason_count": _safe_int(
+            root_cause.get("unknown_latency_reason_count")
+        ),
+        "submit_drought_unknown_latency_workorder_required": bool(
+            root_cause.get("unknown_latency_workorder_required")
+        ),
         "submit_drought_blocker_source_state": (
             "submit_drought_critical"
             if classification.get("primary") == "SUBMIT_DROUGHT_CRITICAL"
@@ -631,6 +699,17 @@ def build_conversion_lane(target_date: str) -> dict[str, Any]:
         positive_ev_sample_floor_blocked_count + positive_ev_sample_floor_unknown_floor_count
     )
     buy_funnel_provenance = _buy_funnel_provenance(buy_funnel)
+    submit_drought_quote_freshness_subactions = (
+        buy_funnel_provenance.get("submit_drought_quote_freshness_subaction_counts") or {}
+    )
+    for blocker in blockers:
+        if (
+            blocker.get("blocker_class") == "submit_drought"
+            and blocker.get("blocker_axis") == "LATENCY_PRE_SUBMIT"
+        ):
+            blocker["quote_freshness_subaction_counts"] = submit_drought_quote_freshness_subactions
+            blocker["quote_freshness_source_only"] = True
+            blocker["next_repair_action"] = "close_submit_drought_latency_pre_submit_quote_freshness"
     default_sample_floor_window_policy = _source_sample_floor_window_policy(lifecycle)
     sample_floor_window_counts = Counter(
         str(item.get("sample_floor_window_policy") or default_sample_floor_window_policy)
@@ -765,6 +844,16 @@ def build_conversion_lane(target_date: str) -> dict[str, Any]:
             "active_seed_candidate_without_seed_id_reason_counts"
         )
         or {},
+        "active_seed_candidate_missing_parent_seed_lookup_key_counts": (key_ledger.get("summary") or {}).get(
+            "active_seed_candidate_missing_parent_seed_lookup_key_counts"
+        )
+        or {},
+        "active_seed_candidate_lineage_closure_status": (key_ledger.get("summary") or {}).get(
+            "active_seed_candidate_lineage_closure_status"
+        ),
+        "active_seed_candidate_lineage_followup_required": bool(
+            (key_ledger.get("summary") or {}).get("active_seed_candidate_lineage_followup_required")
+        ),
         "active_seed_candidate_validation_scope": (key_ledger.get("summary") or {}).get(
             "active_seed_candidate_validation_scope"
         ),

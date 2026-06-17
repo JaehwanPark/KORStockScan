@@ -250,6 +250,16 @@ def test_postclose_wrapper_duplicate_refresh_skip_contract_is_static():
     assert "threshold_cycle_ev_refresh_decision()" in script
     assert "automation_trigger_decision()" in script
     assert "src.engine.automation.automation_chain_trigger_decision" in script
+    assert 'AUTOMATION_TRIGGER_DECISION_REPORT_JSON="$PROJECT_DIR/data/report/automation_chain_trigger_decision/automation_chain_trigger_decision_${TARGET_DATE}.json"' in script
+    assert 'AUTOMATION_TRIGGER_DECISION_CACHE_MARKER="$PROJECT_DIR/tmp/automation_trigger_decision_${TARGET_DATE}_$$.cached"' in script
+    assert 'rm -f "$AUTOMATION_TRIGGER_DECISION_CACHE_MARKER"' in script
+    assert '--scope all \\' in script
+    assert '--write >/dev/null 2>&1; then' in script
+    assert 'if [ -f "$AUTOMATION_TRIGGER_DECISION_CACHE_MARKER" ] && [ -f "$AUTOMATION_TRIGGER_DECISION_REPORT_JSON" ]; then' in script
+    assert "automation_trigger_reason()" in script
+    assert "automation_trigger_source()" in script
+    assert "trigger_reason=$trigger_reason" in script
+    assert "trigger_source=$trigger_source" in script
     assert "duplicate_refresh_fresh" in script
     assert "lifecycle_window_${lifecycle_bucket_window}" in script
     assert "fresh_outputs_no_trigger" in script
@@ -258,6 +268,65 @@ def test_postclose_wrapper_duplicate_refresh_skip_contract_is_static():
     assert "pattern_lab_propagation_audit_${TARGET_DATE}.json" in script
     assert "verify_threshold_cycle_postclose_chain --date \"$TARGET_DATE\" --allow-pending-done-marker" in script
     assert "verify_threshold_cycle_postclose_chain --date \"$TARGET_DATE\"" in script
+
+
+def test_automation_trigger_decision_cache_survives_command_substitution(tmp_path):
+    script = Path("deploy/run_threshold_cycle_postclose.sh").read_text(encoding="utf-8")
+    function_text = "\n".join(
+        [
+            _extract_shell_function(script, "automation_trigger_decision"),
+            _extract_shell_function(script, "automation_trigger_reason"),
+            _extract_shell_function(script, "automation_trigger_source"),
+        ]
+    )
+    fake_python = tmp_path / "fake_python.sh"
+    report_path = tmp_path / "automation_chain_trigger_decision.json"
+    marker_path = tmp_path / "automation_trigger_decision.cached"
+    count_path = tmp_path / "write_count"
+    real_python = os.environ.get("PYTHON", "python3")
+    fake_python.write_text(
+        "\n".join(
+            [
+                "#!/usr/bin/env bash",
+                "set -euo pipefail",
+                'if [ "${1:-}" = "-m" ]; then',
+                '  count="$(cat "$WRITE_COUNT_PATH" 2>/dev/null || printf 0)"',
+                '  count="$((count + 1))"',
+                '  printf "%s\\n" "$count" > "$WRITE_COUNT_PATH"',
+                '  mkdir -p "$(dirname "$AUTOMATION_TRIGGER_DECISION_REPORT_JSON")"',
+                '  cat > "$AUTOMATION_TRIGGER_DECISION_REPORT_JSON" <<\'JSON\'',
+                '{"decisions":[{"step_id":"skip_step","decision":"skip","trigger_reasons":["fresh_outputs_no_trigger"]}]}',
+                "JSON",
+                "  exit 0",
+                "fi",
+                f'exec "{real_python}" "$@"',
+            ]
+        ),
+        encoding="utf-8",
+    )
+    fake_python.chmod(0o755)
+    shell = f"""
+set -euo pipefail
+{function_text}
+TARGET_DATE=2026-06-17
+FORCE_LIFECYCLE_BUCKET_WINDOWS=false
+FORCE_DEEP_AUDITS=false
+FORCE_WORKORDER_BRANCH=false
+VENV_PY={fake_python}
+AUTOMATION_TRIGGER_DECISION_REPORT_JSON={report_path}
+AUTOMATION_TRIGGER_DECISION_CACHE_MARKER={marker_path}
+WRITE_COUNT_PATH={count_path}
+export AUTOMATION_TRIGGER_DECISION_REPORT_JSON WRITE_COUNT_PATH
+first="$(automation_trigger_decision "skip_step")"
+second="$(automation_trigger_decision "skip_step")"
+reason="$(automation_trigger_reason "skip_step")"
+source="$(automation_trigger_source)"
+printf '%s|%s|%s|%s|%s\\n' "$first" "$second" "$reason" "$source" "$(cat "$WRITE_COUNT_PATH")"
+"""
+
+    proc = subprocess.run(["bash", "-c", shell], check=True, capture_output=True, text=True)
+
+    assert proc.stdout.strip() == "skip|skip|fresh_outputs_no_trigger|cached_trigger_snapshot|1"
 
 
 def test_postclose_wrapper_duplicate_refresh_decision_executes_timestamp_cases(tmp_path):

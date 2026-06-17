@@ -938,6 +938,37 @@ def test_runtime_hook_gap_closes_with_codex_directive(tmp_path, monkeypatch):
     )
 
 
+def test_scale_in_env_mapping_gap_emits_scale_in_contract_directive(tmp_path, monkeypatch):
+    report_dir = _patch_dirs(tmp_path, monkeypatch)
+    _write_core_artifacts(report_dir)
+    _write_json(
+        report_dir / "runtime_apply_bridge" / "runtime_apply_bridge_2026-05-22.json",
+        {
+            "candidates": [
+                {
+                    "candidate_id": "scale_in_bucket_runtime_policy_v1:2026-05-22",
+                    "family": "scale_in_bucket_runtime_policy_v1",
+                    "stage": "scale_in",
+                    "bridge_candidate_state": "live_auto_apply_ready",
+                    "runtime_hook_state": "env_mapping_missing",
+                    "source_quality_gate": "pass",
+                    "source_quality_adjusted_ev_pct": 0.42,
+                    "target_env_keys": [],
+                }
+            ]
+        },
+    )
+
+    report = mod.build_runtime_apply_gap_audit("2026-05-22", ai_review_provider="none")
+
+    assert any(
+        item["candidate_id"] == "scale_in_bucket_runtime_policy_v1:2026-05-22"
+        and item["directive_type"] == "IMPLEMENT_SCALE_IN_POLICY_CONTRACT"
+        and item["blocking_contract"] == "env_mapping_contract"
+        for item in report["codex_workorder_directives"]
+    )
+
+
 def test_bridge_counterfactual_source_field_gap_does_not_emit_runtime_directive(tmp_path, monkeypatch):
     report_dir = _patch_dirs(tmp_path, monkeypatch)
     _write_core_artifacts(report_dir)

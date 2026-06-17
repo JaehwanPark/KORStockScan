@@ -1069,6 +1069,37 @@ def test_lifecycle_flow_handoff_fails_when_complete_flow_absent():
     assert report["adm_bridge_complete_flow_count"] == 0
 
 
+def test_lifecycle_flow_handoff_keeps_adm_bridge_direct_zero_closure_fields():
+    ldm = {
+        "lifecycle_flow_bucket_attribution": {
+            "summary": {
+                "flow_count": 4,
+                "complete_flow_count": 1,
+                "direct_sim_record_complete_flow_count": 0,
+                "adm_bridge_complete_flow_count": 1,
+                "fallback_complete_flow_count": 0,
+                "incomplete_flow_count": 3,
+                "complete_flow_rate": 0.25,
+                "join_contract_blocked": False,
+                "direct_flow_zero_reason": "no_direct_complete_but_adm_bridge_complete",
+                "direct_flow_zero_closure_status": "closed_by_adm_bridge_complete",
+                "direct_flow_zero_followup_required": False,
+            },
+            "runtime_approval_candidates": [],
+            "code_improvement_workorders": [],
+        }
+    }
+
+    report = mod._lifecycle_flow_bucket_handoff_status(ldm, {}, {}, {"orders": []})
+
+    assert report["status"] == "pass"
+    assert report["direct_sim_record_complete_flow_count"] == 0
+    assert report["adm_bridge_complete_flow_count"] == 1
+    assert report["direct_flow_zero_reason"] == "no_direct_complete_but_adm_bridge_complete"
+    assert report["direct_flow_zero_closure_status"] == "closed_by_adm_bridge_complete"
+    assert report["direct_flow_zero_followup_required"] is False
+
+
 def test_buy_funnel_submit_drought_handoff_fails_when_downstream_missing():
     buy = {
         "classification": {
@@ -1087,12 +1118,38 @@ def test_buy_funnel_submit_drought_handoff_fails_when_downstream_missing():
     assert "ldm_submit_bucket_attribution_missing" in report["missing"]
 
 
+def test_buy_funnel_submit_drought_handoff_warns_when_handoff_exists_but_downstream_missing():
+    buy = {
+        "classification": {
+            "primary": "SUBMIT_DROUGHT_CRITICAL",
+            "matches": ["SUBMIT_DROUGHT_CRITICAL"],
+        },
+        "entry_submit_drought_contract": {"critical": True},
+        "followup": {"route": "entry_submit_drought_auto_workorder"},
+    }
+
+    report = mod._buy_funnel_submit_drought_handoff_status(buy, {}, {}, {}, {"orders": []})
+
+    assert report["status"] == "warning"
+    assert report["handoff_status"] == "pass"
+    assert report["downstream_closure_status"] == "fail"
+    assert "code_improvement_workorder_entry_submit_drought_orders_missing" in report["missing"]
+    assert "ldm_submit_bucket_attribution_missing" in report["missing"]
+
+
 def test_buy_funnel_submit_drought_handoff_passes_when_surfaced():
     buy = {
         "classification": {
             "primary": "SUBMIT_DROUGHT_CRITICAL",
             "matches": ["SUBMIT_DROUGHT_CRITICAL"],
-        }
+            "submit_drought_root_cause": {
+                "latency_root_cause_counts": {"unknown_latency_reason": 11},
+                "unknown_latency_reason_count": 11,
+                "unknown_latency_workorder_required": True,
+            },
+        },
+        "entry_submit_drought_contract": {"critical": True},
+        "followup": {"route": "entry_submit_drought_auto_workorder"},
     }
     ldm = {"submit_bucket_attribution": {"summary": {"submit_rows": 3}}}
     ev_report = {
@@ -1120,6 +1177,169 @@ def test_buy_funnel_submit_drought_handoff_passes_when_surfaced():
 
     assert report["status"] == "pass"
     assert report["missing"] == []
+    assert report["handoff_status"] == "pass"
+    assert report["downstream_closure_status"] == "pass"
+    assert report["unresolved_root_cause_present"] is True
+    assert report["submit_drought_unknown_latency_reason_count"] == 11
+
+
+def test_buy_funnel_submit_drought_handoff_warns_when_quote_freshness_attribution_missing():
+    buy = {
+        "classification": {
+            "primary": "SUBMIT_DROUGHT_CRITICAL",
+            "matches": ["SUBMIT_DROUGHT_CRITICAL"],
+            "submit_drought_root_cause": {
+                "latency_root_cause_counts": {"quote_stale": 4},
+                "quote_freshness_attribution": {
+                    "refresh_attempted_count": 4,
+                    "refresh_applied_count": 0,
+                    "refresh_subreason_counts": {"ws_snapshot_refresh_failed_stale": 4},
+                },
+            },
+        },
+        "entry_submit_drought_contract": {"critical": True},
+        "followup": {"route": "entry_submit_drought_auto_workorder"},
+    }
+    ldm = {"submit_bucket_attribution": {"summary": {"submit_rows": 3}}}
+    ev_report = {
+        "buy_funnel_sentinel": {"primary": "SUBMIT_DROUGHT_CRITICAL"},
+        "entry_funnel": {"entry_submit_drought_handoff_selected": True},
+    }
+    runtime_summary = {
+        "buy_funnel_sentinel": {"primary": "SUBMIT_DROUGHT_CRITICAL"},
+        "summary": {"entry_submit_drought_handoff_selected": True},
+    }
+    workorder = {
+        "orders": [
+            {"order_id": "order_entry_submit_drought_auto_resolution"},
+            {"order_id": "order_entry_post_submit_contract_gap_review"},
+            {"order_id": "order_entry_broker_receipt_contract_gap_review"},
+            {"order_id": "order_entry_fill_quality_contract_gap_review"},
+            {"order_id": "order_entry_telegram_post_submit_contract_gap_review"},
+            {"order_id": "order_entry_source_taxonomy_contract_gap_review"},
+        ]
+    }
+
+    report = mod._buy_funnel_submit_drought_handoff_status(
+        buy, ldm, ev_report, runtime_summary, workorder
+    )
+
+    assert report["status"] == "warning"
+    assert report["handoff_status"] == "pass"
+    assert report["downstream_closure_status"] == "fail"
+    assert "ldm_submit_quote_freshness_attribution_missing" in report["missing"]
+    assert report["submit_drought_refresh_attempted_count"] == 4
+    assert report["ldm_submit_quote_freshness_attribution_present"] is False
+
+
+def test_buy_funnel_submit_drought_handoff_closes_when_root_cause_is_fully_decomposed():
+    buy = {
+        "classification": {
+            "primary": "SUBMIT_DROUGHT_CRITICAL",
+            "matches": ["SUBMIT_DROUGHT_CRITICAL"],
+            "submit_drought_root_cause": {
+                "latency_root_cause_counts": {
+                    "quote_stale": 10,
+                    "spread_or_slippage_guard": 5,
+                    "observer_unhealthy": 2,
+                },
+                "unknown_latency_reason_count": 0,
+                "unknown_latency_workorder_required": False,
+                "quote_freshness_attribution": {
+                    "refresh_attempted_count": 7,
+                    "refresh_applied_count": 5,
+                    "latency_pass_recovered_count": 2,
+                },
+            },
+        },
+        "entry_submit_drought_contract": {"critical": True},
+        "followup": {"route": "entry_submit_drought_auto_workorder"},
+    }
+    ldm = {
+        "submit_bucket_attribution": {
+            "summary": {
+                "submit_rows": 3,
+                "quote_freshness_attribution_present": True,
+            }
+        }
+    }
+    ev_report = {
+        "buy_funnel_sentinel": {"primary": "SUBMIT_DROUGHT_CRITICAL"},
+        "entry_funnel": {"entry_submit_drought_handoff_selected": True},
+    }
+    runtime_summary = {
+        "buy_funnel_sentinel": {"primary": "SUBMIT_DROUGHT_CRITICAL"},
+        "summary": {"entry_submit_drought_handoff_selected": True},
+    }
+    workorder = {
+        "orders": [
+            {"order_id": "order_entry_submit_drought_auto_resolution"},
+            {"order_id": "order_entry_post_submit_contract_gap_review"},
+            {"order_id": "order_entry_broker_receipt_contract_gap_review"},
+            {"order_id": "order_entry_fill_quality_contract_gap_review"},
+            {"order_id": "order_entry_telegram_post_submit_contract_gap_review"},
+            {"order_id": "order_entry_source_taxonomy_contract_gap_review"},
+        ]
+    }
+
+    report = mod._buy_funnel_submit_drought_handoff_status(
+        buy, ldm, ev_report, runtime_summary, workorder
+    )
+
+    assert report["status"] == "pass"
+    assert report["handoff_status"] == "pass"
+    assert report["downstream_closure_status"] == "pass"
+    assert report["root_cause_closure_status"] == "closed"
+    assert report["root_cause_open_reasons"] == []
+    assert report["submit_drought_unknown_latency_reason_count"] == 0
+
+
+def test_buy_funnel_submit_drought_handoff_marks_artifact_regeneration_required_on_inconsistent_counts():
+    buy = {
+        "classification": {
+            "primary": "SUBMIT_DROUGHT_CRITICAL",
+            "matches": ["SUBMIT_DROUGHT_CRITICAL"],
+            "submit_drought_root_cause": {
+                "latency_root_cause_counts": {"quote_stale": 7},
+                "quote_freshness_attribution": {
+                    "refresh_attempted_count": 0,
+                    "refresh_applied_count": 0,
+                    "latency_pass_recovered_count": 2,
+                },
+            },
+        },
+        "entry_submit_drought_contract": {"critical": True},
+        "followup": {"route": "entry_submit_drought_auto_workorder"},
+    }
+    ldm = {"submit_bucket_attribution": {"summary": {"submit_rows": 3}}}
+    ev_report = {
+        "buy_funnel_sentinel": {"primary": "SUBMIT_DROUGHT_CRITICAL"},
+        "entry_funnel": {"entry_submit_drought_handoff_selected": True},
+    }
+    runtime_summary = {
+        "buy_funnel_sentinel": {"primary": "SUBMIT_DROUGHT_CRITICAL"},
+        "summary": {"entry_submit_drought_handoff_selected": True},
+    }
+    workorder = {
+        "orders": [
+            {"order_id": "order_entry_submit_drought_auto_resolution"},
+            {"order_id": "order_entry_post_submit_contract_gap_review"},
+            {"order_id": "order_entry_broker_receipt_contract_gap_review"},
+            {"order_id": "order_entry_fill_quality_contract_gap_review"},
+            {"order_id": "order_entry_telegram_post_submit_contract_gap_review"},
+            {"order_id": "order_entry_source_taxonomy_contract_gap_review"},
+        ]
+    }
+
+    report = mod._buy_funnel_submit_drought_handoff_status(
+        buy, ldm, ev_report, runtime_summary, workorder
+    )
+
+    assert report["status"] == "pass"
+    assert report["handoff_status"] == "pass"
+    assert report["root_cause_closure_status"] == "artifact_regeneration_required"
+    assert report["artifact_regeneration_required"] is True
+    assert report["quote_freshness_attribution_inconsistent"] is True
 
 
 def test_buy_funnel_submit_drought_handoff_surfaces_post_submit_join_gap():
@@ -2807,6 +3027,10 @@ def test_build_threshold_cycle_postclose_verification_prefers_workorder_lineage(
                     "new_selected_order_count": 1,
                     "removed_selected_order_count": 0,
                     "decision_changed_order_count": 0,
+                    "repeat_unresolved_structural_blocker_count": 1,
+                    "repeat_unresolved_structural_blocker_order_ids": ["order_new"],
+                    "selected_terminal_non_implement_longstanding_count": 2,
+                    "selected_terminal_non_implement_longstanding_order_ids": ["order_old_a", "order_old_b"],
                 },
                 "lineage": {
                     "previous_exists": True,
@@ -2876,6 +3100,8 @@ def test_build_threshold_cycle_postclose_verification_prefers_workorder_lineage(
     assert report["predecessor_integrity"]["wait_count"] == 0
     assert report["workorder_snapshot"]["status"] == "source_changed_with_lineage"
     assert report["workorder_snapshot"]["new_order_ids"] == ["order_new"]
+    assert report["workorder_snapshot"]["repeat_unresolved_structural_blocker_count"] == 1
+    assert report["workorder_snapshot"]["selected_terminal_non_implement_longstanding_count"] == 2
     assert report["downstream_links"]["runtime_approval_summary_sources_ev"].endswith(
         "threshold_cycle_ev_2026-05-12.json"
     )

@@ -564,6 +564,327 @@ def test_build_code_improvement_workorder_does_not_escalate_existing_family_only
     assert report["summary"]["repeat_unresolved_escalation_count"] == 0
 
 
+def test_build_code_improvement_workorder_keeps_rollup_non_implement_but_marks_longstanding(tmp_path, monkeypatch):
+    automation_dir = tmp_path / "automation"
+    report_dir = tmp_path / "report"
+    doc_dir = tmp_path / "docs"
+    automation_dir.mkdir()
+    report_dir.mkdir()
+    doc_dir.mkdir()
+    current_order = {
+        "order_id": "order_lifecycle_quiet_gap_positive_source_only_rollup",
+        "title": "Lifecycle quiet gap positive source-only review",
+        "source_report_type": "lifecycle_bucket_discovery_quiet_gap_rollup",
+        "target_subsystem": "lifecycle_bucket_discovery_taxonomy_provenance",
+        "lifecycle_stage": "multi_stage",
+        "improvement_type": "quiet_gap_rollup_evidence",
+        "route": "positive_source_only_review",
+        "mapped_family": "lifecycle_bucket_discovery",
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+    }
+    (automation_dir / "scalping_pattern_lab_automation_2026-05-08.json").write_text(
+        json.dumps(
+            {
+                "date": "2026-05-08",
+                "consensus_findings": [],
+                "solo_findings": [],
+                "auto_family_candidates": [],
+                "code_improvement_orders": [current_order],
+            }
+        ),
+        encoding="utf-8",
+    )
+    for previous_date in ("2026-05-07", "2026-05-06"):
+        (report_dir / f"code_improvement_workorder_{previous_date}.json").write_text(
+            json.dumps({"date": previous_date, "orders": [{**current_order, "decision": "attach_existing_family"}], "non_selected_orders": []}),
+            encoding="utf-8",
+        )
+    monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", automation_dir)
+    monkeypatch.setattr(mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing")
+    monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", tmp_path / "missing-ev")
+    monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_DIR", doc_dir)
+
+    report = mod.build_code_improvement_workorder("2026-05-08", max_orders=1)
+
+    order = report["orders"][0]
+    assert order["decision"] == "attach_existing_family"
+    assert order["route"] == "positive_source_only_review"
+    assert order["longstanding_non_implement_review"]["review_disposition"] == "keep_visible_by_design"
+    assert report["summary"]["repeat_unresolved_structural_blocker_count"] == 0
+    assert report["summary"]["selected_terminal_non_implement_longstanding_count"] == 1
+    assert report["summary"]["selected_terminal_non_implement_longstanding_order_ids"] == [
+        "order_lifecycle_quiet_gap_positive_source_only_rollup"
+    ]
+
+
+def test_build_code_improvement_workorder_escalates_repeated_implemented_submit_drought_as_structural_blocker(
+    tmp_path,
+    monkeypatch,
+):
+    automation_dir = tmp_path / "automation"
+    report_dir = tmp_path / "report"
+    doc_dir = tmp_path / "docs"
+    automation_dir.mkdir()
+    report_dir.mkdir()
+    doc_dir.mkdir()
+    current_order = {
+        "order_id": "order_entry_submit_drought_auto_resolution",
+        "title": "Entry submit drought automatic resolution handoff",
+        "source_report_type": "buy_funnel_sentinel",
+        "target_subsystem": "runtime_instrumentation",
+        "lifecycle_stage": "entry_submit",
+        "improvement_type": "source_only_report_provenance_handoff",
+        "route": "existing_family",
+        "mapped_family": "lifecycle_decision_matrix_runtime",
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "implementation_status": "implemented",
+        "next_postclose_metric": (
+            "SUBMIT_DROUGHT_CRITICAL must produce a selected implement_now workorder and the next postclose "
+            "LDM/runtime summary must show submit blocker attribution."
+        ),
+        "evidence": ["submitted_to_ai_pct=1.5"],
+    }
+    (automation_dir / "scalping_pattern_lab_automation_2026-05-08.json").write_text(
+        json.dumps(
+            {
+                "date": "2026-05-08",
+                "consensus_findings": [],
+                "solo_findings": [],
+                "auto_family_candidates": [],
+                "code_improvement_orders": [current_order],
+            }
+        ),
+        encoding="utf-8",
+    )
+    for previous_date in ("2026-05-07", "2026-05-06"):
+        (report_dir / f"code_improvement_workorder_{previous_date}.json").write_text(
+            json.dumps({"date": previous_date, "orders": [{**current_order, "decision": "attach_existing_family"}], "non_selected_orders": []}),
+            encoding="utf-8",
+        )
+    monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", automation_dir)
+    monkeypatch.setattr(mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing")
+    monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", tmp_path / "missing-ev")
+    monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_DIR", doc_dir)
+
+    report = mod.build_code_improvement_workorder("2026-05-08", max_orders=1)
+
+    order = report["orders"][0]
+    assert order["decision"] == "implement_now"
+    assert order["route"] == "repeat_unresolved_structural_blocker"
+    assert order["implementation_status"] == "repeat_unresolved_structural_blocker"
+    assert order["structural_blocker_escalation"]["repeat_count"] == 3
+    assert order["structural_blocker_escalation"]["required_next_route"] == "implement_now"
+    assert report["summary"]["repeat_unresolved_structural_blocker_count"] == 1
+    assert report["summary"]["repeat_unresolved_structural_blocker_order_ids"] == [
+        "order_entry_submit_drought_auto_resolution"
+    ]
+
+
+def test_build_code_improvement_workorder_does_not_reescalate_closed_submit_drought_root_cause(
+    tmp_path,
+    monkeypatch,
+):
+    automation_dir = tmp_path / "automation"
+    report_dir = tmp_path / "report"
+    doc_dir = tmp_path / "docs"
+    automation_dir.mkdir()
+    report_dir.mkdir()
+    doc_dir.mkdir()
+    current_order = {
+        "order_id": "order_entry_submit_drought_auto_resolution",
+        "title": "Entry submit drought automatic resolution handoff",
+        "source_report_type": "buy_funnel_sentinel",
+        "target_subsystem": "runtime_instrumentation",
+        "lifecycle_stage": "entry_submit",
+        "improvement_type": "source_only_report_provenance_handoff",
+        "route": "existing_family",
+        "mapped_family": "lifecycle_decision_matrix_runtime",
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "implementation_status": "implemented",
+        "implementation_provenance": {
+            "root_cause_closure_status_hint": "root_cause_closed",
+        },
+        "next_postclose_metric": (
+            "SUBMIT_DROUGHT_CRITICAL must produce a selected implement_now workorder and the next postclose "
+            "LDM/runtime summary must show submit blocker attribution."
+        ),
+        "evidence": ["submitted_to_ai_pct=1.5"],
+    }
+    (automation_dir / "scalping_pattern_lab_automation_2026-05-08.json").write_text(
+        json.dumps(
+            {
+                "date": "2026-05-08",
+                "consensus_findings": [],
+                "solo_findings": [],
+                "auto_family_candidates": [],
+                "code_improvement_orders": [current_order],
+            }
+        ),
+        encoding="utf-8",
+    )
+    for previous_date in ("2026-05-07", "2026-05-06"):
+        (report_dir / f"code_improvement_workorder_{previous_date}.json").write_text(
+            json.dumps({"date": previous_date, "orders": [{**current_order, "decision": "attach_existing_family"}], "non_selected_orders": []}),
+            encoding="utf-8",
+        )
+    monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", automation_dir)
+    monkeypatch.setattr(mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing")
+    monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", tmp_path / "missing-ev")
+    monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_DIR", doc_dir)
+
+    report = mod.build_code_improvement_workorder("2026-05-08", max_orders=1)
+
+    order = report["orders"][0]
+    assert order["implementation_status"] == "implemented"
+    assert order["route"] == "existing_family"
+    assert order["root_cause_closure_status"] == "root_cause_closed"
+    assert report["summary"]["repeat_unresolved_structural_blocker_count"] == 0
+
+
+def test_build_code_improvement_workorder_does_not_escalate_repeated_explicit_not_applicable_bucket(
+    tmp_path,
+    monkeypatch,
+):
+    automation_dir = tmp_path / "automation"
+    report_dir = tmp_path / "report"
+    doc_dir = tmp_path / "docs"
+    automation_dir.mkdir()
+    report_dir.mkdir()
+    doc_dir.mkdir()
+    current_order = {
+        "order_id": "order_not_applicable_terminal",
+        "title": "Not applicable terminal bucket",
+        "source_report_type": "lifecycle_decision_matrix_exit_bucket_attribution",
+        "target_subsystem": "lifecycle_decision_matrix",
+        "lifecycle_stage": "exit",
+        "improvement_type": "exit_bucket_source_quality_child_evidence",
+        "route": "existing_family",
+        "mapped_family": "lifecycle_decision_matrix_runtime",
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "implementation_status": "terminal_not_applicable_evidence",
+        "implementation_provenance": {"recommended_resolution": "mark_not_applicable_explicitly"},
+    }
+    (automation_dir / "scalping_pattern_lab_automation_2026-05-08.json").write_text(
+        json.dumps(
+            {
+                "date": "2026-05-08",
+                "consensus_findings": [],
+                "solo_findings": [],
+                "auto_family_candidates": [],
+                "code_improvement_orders": [current_order],
+            }
+        ),
+        encoding="utf-8",
+    )
+    for previous_date in ("2026-05-07", "2026-05-06"):
+        (report_dir / f"code_improvement_workorder_{previous_date}.json").write_text(
+            json.dumps({"date": previous_date, "orders": [{**current_order, "decision": "attach_existing_family"}], "non_selected_orders": []}),
+            encoding="utf-8",
+        )
+    monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", automation_dir)
+    monkeypatch.setattr(mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing")
+    monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", tmp_path / "missing-ev")
+    monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_DIR", doc_dir)
+
+    report = mod.build_code_improvement_workorder("2026-05-08", max_orders=1)
+
+    order = report["orders"][0]
+    assert order["decision"] == "attach_existing_family"
+    assert order["structural_blocker_escalation"] is None
+    assert order["longstanding_non_implement_review"]["review_disposition"] == "keep_visible_by_design"
+    assert report["summary"]["repeat_unresolved_structural_blocker_count"] == 0
+
+
+def test_build_code_improvement_workorder_does_not_double_escalate_summary_contract_gap_when_specific_gap_exists(
+    tmp_path,
+    monkeypatch,
+):
+    automation_dir = tmp_path / "automation"
+    report_dir = tmp_path / "report"
+    doc_dir = tmp_path / "docs"
+    automation_dir.mkdir()
+    report_dir.mkdir()
+    doc_dir.mkdir()
+    summary_order = {
+        "order_id": "order_swing_holding_exit_contract_gap_review",
+        "title": "swing holding/exit contract gap review",
+        "source_report_type": "swing_improvement_automation",
+        "target_subsystem": "swing_holding_exit",
+        "lifecycle_stage": "holding_exit",
+        "threshold_family": "swing_exit_ofi_qi_smoothing",
+        "improvement_type": "lifecycle_contract_gap",
+        "route": "existing_family",
+        "mapped_family": "swing_exit_ofi_qi_smoothing",
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "implementation_status": "implemented",
+        "next_postclose_metric": "holding/exit source-quality and structured contract gaps are visible without changing sell logic.",
+        "evidence": ["evidence={'stale_missing_ratio': 0.1407}"],
+    }
+    specific_order = {
+        "order_id": "order_swing_ofi_qi_stale_or_missing_context",
+        "title": "swing OFI/QI stale or missing context",
+        "source_report_type": "swing_improvement_automation",
+        "target_subsystem": "swing_orderbook_micro_context",
+        "lifecycle_stage": "entry",
+        "threshold_family": "swing_exit_ofi_qi_smoothing",
+        "improvement_type": "instrumentation",
+        "route": "existing_family",
+        "mapped_family": "swing_exit_ofi_qi_smoothing",
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "implementation_status": "terminal_existing_family_evidence",
+        "next_postclose_metric": "stale_missing_ratio decreases while submitted/simulated entry quality remains attributable.",
+    }
+    payload = {
+        "date": "2026-05-08",
+        "consensus_findings": [],
+        "solo_findings": [],
+        "auto_family_candidates": [],
+        "code_improvement_orders": [summary_order, specific_order],
+    }
+    (automation_dir / "scalping_pattern_lab_automation_2026-05-08.json").write_text(
+        json.dumps(payload),
+        encoding="utf-8",
+    )
+    for previous_date in ("2026-05-07", "2026-05-06"):
+        (report_dir / f"code_improvement_workorder_{previous_date}.json").write_text(
+            json.dumps(
+                {
+                    "date": previous_date,
+                    "orders": [
+                        {**summary_order, "decision": "attach_existing_family"},
+                        {**specific_order, "decision": "attach_existing_family"},
+                    ],
+                    "non_selected_orders": [],
+                }
+            ),
+            encoding="utf-8",
+        )
+    monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", automation_dir)
+    monkeypatch.setattr(mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing")
+    monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", tmp_path / "missing-ev")
+    monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_DIR", doc_dir)
+
+    report = mod.build_code_improvement_workorder("2026-05-08", max_orders=2)
+
+    by_id = {item["order_id"]: item for item in report["orders"]}
+    assert by_id["order_swing_ofi_qi_stale_or_missing_context"]["decision"] == "implement_now"
+    assert by_id["order_swing_ofi_qi_stale_or_missing_context"]["route"] == "repeat_unresolved_structural_blocker"
+    assert by_id["order_swing_holding_exit_contract_gap_review"]["decision"] == "attach_existing_family"
+    assert by_id["order_swing_holding_exit_contract_gap_review"]["structural_blocker_escalation"] is None
+    assert by_id["order_swing_holding_exit_contract_gap_review"]["longstanding_non_implement_review"]["review_disposition"] == "keep_visible_by_design"
+
+
 def test_build_code_improvement_workorder_does_not_escalate_current_implemented_hold_sample_repeat(tmp_path, monkeypatch):
     automation_dir = tmp_path / "automation"
     report_dir = tmp_path / "report"
@@ -2559,6 +2880,207 @@ def test_build_code_improvement_workorder_auto_selects_buy_funnel_submit_drought
     assert report["source"]["buy_funnel_sentinel"] == str(
         sentinel_dir / f"buy_funnel_sentinel_{target_date}.json"
     )
+
+
+def test_build_code_improvement_workorder_marks_submit_drought_artifact_regeneration_required(
+    tmp_path, monkeypatch
+):
+    target_date = "2099-01-03"
+    automation_dir = tmp_path / "automation"
+    sentinel_dir = tmp_path / "buy-funnel"
+    ldm_dir = tmp_path / "ldm"
+    report_dir = tmp_path / "report"
+    doc_dir = tmp_path / "docs"
+    automation_dir.mkdir()
+    sentinel_dir.mkdir()
+    ldm_dir.mkdir()
+    (automation_dir / f"scalping_pattern_lab_automation_{target_date}.json").write_text(
+        json.dumps({"date": target_date, "code_improvement_orders": []}),
+        encoding="utf-8",
+    )
+    (sentinel_dir / f"buy_funnel_sentinel_{target_date}.json").write_text(
+        json.dumps(
+            {
+                "classification": {
+                    "primary": "SUBMIT_DROUGHT_CRITICAL",
+                    "submit_drought_root_cause": {
+                        "latency_root_cause_counts": {"quote_stale": 9},
+                        "quote_freshness_attribution": {
+                            "refresh_attempted_count": 0,
+                            "refresh_applied_count": 0,
+                            "latency_pass_recovered_count": 3,
+                        },
+                    },
+                },
+                "entry_submit_drought_contract": {
+                    "critical": True,
+                    "required_downstream": [
+                        "code_improvement_workorder",
+                        "lifecycle_decision_matrix.submit_bucket_attribution",
+                        "threshold_cycle_ev_report",
+                        "runtime_approval_summary",
+                        "postclose_verifier",
+                    ],
+                    "runtime_effect": False,
+                    "allowed_runtime_apply": False,
+                    "broker_order_submit_allowed": False,
+                },
+                "current": {
+                    "session": {
+                        "stage_unique": {
+                            "ai_confirmed": 12,
+                            "budget_pass": 3,
+                            "latency_pass": 1,
+                            "order_bundle_submitted": 0,
+                        },
+                        "ratios": {
+                            "submitted_to_ai_unique_pct": 8.33,
+                            "submitted_to_budget_unique_pct": 33.33,
+                        },
+                        "blocker_top": [],
+                        "upstream_blocker_top": [],
+                        "latency_blocker_top": [],
+                    }
+                },
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    (ldm_dir / f"lifecycle_decision_matrix_{target_date}.json").write_text(
+        json.dumps({"submit_bucket_attribution": {"summary": {"submit_rows": 1}}}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", automation_dir)
+    monkeypatch.setattr(mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing")
+    monkeypatch.setattr(mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-swing-lab")
+    monkeypatch.setattr(mod, "SWING_STRATEGY_DISCOVERY_EV_DIR", tmp_path / "missing-swing-discovery")
+    monkeypatch.setattr(mod, "SWING_LIFECYCLE_DECISION_MATRIX_DIR", tmp_path / "missing-swing-ldm")
+    monkeypatch.setattr(mod, "SWING_LIFECYCLE_BUCKET_DISCOVERY_DIR", tmp_path / "missing-swing-bucket")
+    monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", tmp_path / "missing-ev")
+    monkeypatch.setattr(mod, "LIFECYCLE_DECISION_MATRIX_DIR", ldm_dir)
+    monkeypatch.setattr(mod, "PIPELINE_EVENT_VERBOSITY_DIR", tmp_path / "missing-verbosity")
+    monkeypatch.setattr(mod, "OBSERVATION_SOURCE_QUALITY_AUDIT_DIR", tmp_path / "missing-observation-audit")
+    monkeypatch.setattr(mod, "CODEBASE_PERFORMANCE_WORKORDER_DIR", tmp_path / "missing-performance")
+    monkeypatch.setattr(mod, "PATTERN_LAB_CURRENTNESS_AUDIT_DIR", tmp_path / "missing-currentness")
+    monkeypatch.setattr(mod, "PATTERN_LAB_AI_REVIEW_DIR", tmp_path / "missing-ai-review")
+    monkeypatch.setattr(mod, "BUY_FUNNEL_SENTINEL_DIR", sentinel_dir)
+    monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_DIR", doc_dir)
+
+    report = mod.build_code_improvement_workorder(target_date, max_orders=1)
+
+    order = next(item for item in report["orders"] if item["order_id"] == "order_entry_submit_drought_auto_resolution")
+    assert order["root_cause_closure_status"] == "artifact_regeneration_required"
+    assert order["implementation_provenance"]["artifact_regeneration_required"] is True
+    assert report["summary"]["artifact_regeneration_required_count"] >= 1
+
+
+def test_build_code_improvement_workorder_closes_submit_drought_when_root_cause_is_fully_decomposed(
+    tmp_path, monkeypatch
+):
+    target_date = "2099-01-04"
+    automation_dir = tmp_path / "automation"
+    sentinel_dir = tmp_path / "buy-funnel"
+    ldm_dir = tmp_path / "ldm"
+    report_dir = tmp_path / "report"
+    doc_dir = tmp_path / "docs"
+    automation_dir.mkdir()
+    sentinel_dir.mkdir()
+    ldm_dir.mkdir()
+    (automation_dir / f"scalping_pattern_lab_automation_{target_date}.json").write_text(
+        json.dumps({"date": target_date, "code_improvement_orders": []}),
+        encoding="utf-8",
+    )
+    (sentinel_dir / f"buy_funnel_sentinel_{target_date}.json").write_text(
+        json.dumps(
+            {
+                "classification": {
+                    "primary": "SUBMIT_DROUGHT_CRITICAL",
+                    "submit_drought_root_cause": {
+                        "latency_root_cause_counts": {
+                            "quote_stale": 9,
+                            "spread_or_slippage_guard": 4,
+                        },
+                        "unknown_latency_reason_count": 0,
+                        "unknown_latency_workorder_required": False,
+                        "quote_freshness_attribution": {
+                            "refresh_attempted_count": 5,
+                            "refresh_applied_count": 3,
+                            "latency_pass_recovered_count": 1,
+                        },
+                    },
+                },
+                "entry_submit_drought_contract": {
+                    "critical": True,
+                    "required_downstream": [
+                        "code_improvement_workorder",
+                        "lifecycle_decision_matrix.submit_bucket_attribution",
+                        "threshold_cycle_ev_report",
+                        "runtime_approval_summary",
+                        "postclose_verifier",
+                    ],
+                    "runtime_effect": False,
+                    "allowed_runtime_apply": False,
+                    "broker_order_submit_allowed": False,
+                },
+                "current": {
+                    "session": {
+                        "stage_unique": {
+                            "ai_confirmed": 12,
+                            "budget_pass": 3,
+                            "latency_pass": 1,
+                            "order_bundle_submitted": 0,
+                        },
+                        "ratios": {
+                            "submitted_to_ai_unique_pct": 8.33,
+                            "submitted_to_budget_unique_pct": 33.33,
+                        },
+                        "blocker_top": [],
+                        "upstream_blocker_top": [],
+                        "latency_blocker_top": [],
+                    }
+                },
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    (ldm_dir / f"lifecycle_decision_matrix_{target_date}.json").write_text(
+        json.dumps(
+            {
+                "submit_bucket_attribution": {
+                    "summary": {
+                        "submit_rows": 1,
+                        "quote_freshness_attribution_present": True,
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", automation_dir)
+    monkeypatch.setattr(mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing")
+    monkeypatch.setattr(mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-swing-lab")
+    monkeypatch.setattr(mod, "SWING_STRATEGY_DISCOVERY_EV_DIR", tmp_path / "missing-swing-discovery")
+    monkeypatch.setattr(mod, "SWING_LIFECYCLE_DECISION_MATRIX_DIR", tmp_path / "missing-swing-ldm")
+    monkeypatch.setattr(mod, "SWING_LIFECYCLE_BUCKET_DISCOVERY_DIR", tmp_path / "missing-swing-bucket")
+    monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", tmp_path / "missing-ev")
+    monkeypatch.setattr(mod, "LIFECYCLE_DECISION_MATRIX_DIR", ldm_dir)
+    monkeypatch.setattr(mod, "PIPELINE_EVENT_VERBOSITY_DIR", tmp_path / "missing-verbosity")
+    monkeypatch.setattr(mod, "OBSERVATION_SOURCE_QUALITY_AUDIT_DIR", tmp_path / "missing-observation-audit")
+    monkeypatch.setattr(mod, "CODEBASE_PERFORMANCE_WORKORDER_DIR", tmp_path / "missing-performance")
+    monkeypatch.setattr(mod, "PATTERN_LAB_CURRENTNESS_AUDIT_DIR", tmp_path / "missing-currentness")
+    monkeypatch.setattr(mod, "PATTERN_LAB_AI_REVIEW_DIR", tmp_path / "missing-ai-review")
+    monkeypatch.setattr(mod, "BUY_FUNNEL_SENTINEL_DIR", sentinel_dir)
+    monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_DIR", doc_dir)
+
+    report = mod.build_code_improvement_workorder(target_date, max_orders=1)
+
+    order = next(item for item in report["orders"] if item["order_id"] == "order_entry_submit_drought_auto_resolution")
+    assert order["root_cause_closure_status"] == "root_cause_closed"
+    assert order["implementation_provenance"]["root_cause_closure_status_hint"] == "root_cause_closed"
 
 
 def test_buy_funnel_submit_drought_workorder_uses_matches_when_primary_runtime_ops():

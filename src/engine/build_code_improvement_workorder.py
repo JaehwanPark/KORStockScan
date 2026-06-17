@@ -46,6 +46,13 @@ IMPLEMENTED_STATUSES = {
     "implemented_source_quality_contract_available",
     "implemented_source_quality_contract_waiting_sample",
 }
+ROOT_CAUSE_CLOSURE_STATUSES = {
+    "implementation_done",
+    "artifact_regeneration_required",
+    "handoff_closed_root_cause_open",
+    "root_cause_closed",
+    "needs_followup_workorder",
+}
 TERMINAL_NON_IMPLEMENT_STATUSES = {
     "terminal_design_family_candidate",
     "terminal_deferred_evidence",
@@ -394,6 +401,55 @@ def _unresolved_repeat_counts(reports: list[dict[str, Any]]) -> dict[str, dict[s
     return counts
 
 
+def _structural_repeat_history_counts(reports: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    counts: dict[str, dict[str, Any]] = {}
+    unresolved_decisions = {"attach_existing_family", "design_family_candidate", "defer_evidence"}
+    for report in reports:
+        seen_in_report: set[str] = set()
+        for section in ("orders", "non_selected_orders"):
+            orders = report.get(section) if isinstance(report.get(section), list) else []
+            for order in orders:
+                if not isinstance(order, dict):
+                    continue
+                order_id = str(order.get("order_id") or "").strip()
+                if not order_id or order_id in seen_in_report:
+                    continue
+                decision = str(order.get("decision") or "").strip()
+                status = str(order.get("implementation_status") or "").strip()
+                if decision not in unresolved_decisions:
+                    continue
+                if order.get("runtime_effect") is True:
+                    continue
+                signature = _repeat_unresolved_signature(order)
+                repeat_keys = {order_id}
+                if signature:
+                    repeat_keys.add(signature)
+                for repeat_key in repeat_keys:
+                    if repeat_key in seen_in_report:
+                        continue
+                    seen_in_report.add(repeat_key)
+                    repeat_info = counts.setdefault(
+                        repeat_key,
+                        {
+                            "count": 0,
+                            "implementation_status_counts": {},
+                            "decision_counts": {},
+                            "route_counts": {},
+                        },
+                    )
+                    repeat_info["count"] = int(repeat_info.get("count") or 0) + 1
+                    if status:
+                        status_counts = repeat_info.setdefault("implementation_status_counts", {})
+                        status_counts[status] = int(status_counts.get(status) or 0) + 1
+                    decision_counts = repeat_info.setdefault("decision_counts", {})
+                    decision_counts[decision] = int(decision_counts.get(decision) or 0) + 1
+                    route = str(order.get("route") or "").strip()
+                    if route:
+                        route_counts = repeat_info.setdefault("route_counts", {})
+                        route_counts[route] = int(route_counts.get(route) or 0) + 1
+    return counts
+
+
 def _repeat_info_count(repeat_info: Any) -> int:
     if isinstance(repeat_info, dict):
         return _safe_int(repeat_info.get("count"))
@@ -412,6 +468,236 @@ def _repeat_info_primary_status(repeat_info: Any) -> str | None:
         default=("", 0),
     )
     return status or None
+
+
+def _repeat_info_primary_value(repeat_info: Any, field: str) -> str | None:
+    if not isinstance(repeat_info, dict):
+        return None
+    counts = repeat_info.get(field)
+    if not isinstance(counts, dict) or not counts:
+        return None
+    value, _ = max(
+        ((str(key), _safe_int(value)) for key, value in counts.items() if str(key).strip()),
+        key=lambda pair: pair[1],
+        default=("", 0),
+    )
+    return value or None
+
+
+def _is_keep_visible_non_implement_order(order: dict[str, Any]) -> bool:
+    source_type = str(order.get("source_report_type") or "").strip()
+    route = str(order.get("route") or "").strip()
+    if source_type in {
+        "lifecycle_bucket_discovery_quiet_gap_rollup",
+        "lifecycle_bucket_discovery_source_dimension_rollup",
+    }:
+        return True
+    if route in {"positive_source_only_review", "ai_review_coverage_review", "source_dimension_rollup"}:
+        return True
+    if source_type in {
+        "scalping_pattern_lab_automation",
+        "swing_pattern_lab_automation",
+        "swing_improvement_automation",
+        "pattern_lab_ai_review",
+        "codebase_performance_workorder",
+    } and str(order.get("improvement_type") or "").strip() in {
+        "threshold_family_input",
+        "pattern_lab_observation",
+    }:
+        return True
+    provenance = order.get("implementation_provenance") if isinstance(order.get("implementation_provenance"), dict) else {}
+    return str(provenance.get("recommended_resolution") or "") == "mark_not_applicable_explicitly"
+
+
+def _structural_blocker_signal(order: dict[str, Any]) -> tuple[str, str] | None:
+    if _is_keep_visible_non_implement_order(order):
+        return None
+    order_id = str(order.get("order_id") or "").strip()
+    title = str(order.get("title") or "").strip().lower()
+    next_metric = str(order.get("next_postclose_metric") or "").strip()
+    haystack = " ".join([order_id, title, next_metric]).lower()
+    if "must produce a selected implement_now workorder" in next_metric.lower():
+        return (
+            "submit_drought_handoff_still_requires_actionable_workorder",
+            "implement_now",
+        )
+    if "ratio decreases" in next_metric.lower():
+        return (
+            "source_quality_ratio_not_improving_after_handoff",
+            "implement_now",
+        )
+    if "blocker attribution" in next_metric.lower():
+        return (
+            "downstream_blocker_attribution_still_unclosed",
+            "implement_now",
+        )
+    return None
+
+
+def _escalate_repeated_structural_blockers(
+    classified: list[ClassifiedOrder],
+    *,
+    repeat_counts: dict[str, dict[str, Any]],
+    repeat_floor: int = 3,
+    history_window_days: int = 10,
+) -> tuple[list[ClassifiedOrder], list[str], list[str]]:
+    escalated: list[ClassifiedOrder] = []
+    escalated_ids: list[str] = []
+    longstanding_ids: list[str] = []
+    specific_structural_gap_sources: set[tuple[str, str]] = {
+        (
+            str(item.order.get("source_report_type") or "").strip(),
+            str(item.mapped_family or item.order.get("mapped_family") or item.order.get("threshold_family") or "").strip(),
+        )
+        for item in classified
+        if (
+            str(item.order.get("order_id") or "").strip()
+            and str(item.order.get("improvement_type") or "").strip() in {"instrumentation", "source_quality_gap"}
+            and _structural_blocker_signal(item.order)
+        )
+    }
+    for item in classified:
+        order_id = str(item.order.get("order_id") or "").strip()
+        provenance = (
+            item.order.get("implementation_provenance")
+            if isinstance(item.order.get("implementation_provenance"), dict)
+            else {}
+        )
+        if str(provenance.get("root_cause_closure_status_hint") or "").strip() == "root_cause_closed":
+            escalated.append(item)
+            continue
+        signature = _repeat_unresolved_signature(item.order)
+        repeat_keys = [order_id]
+        if signature:
+            repeat_keys.append(signature)
+        repeat_key_counts = {
+            key: _repeat_info_count(repeat_counts.get(key))
+            for key in repeat_keys
+            if key
+        }
+        repeat_key, history_repeat_count = max(
+            repeat_key_counts.items(),
+            key=lambda pair: pair[1],
+            default=("", 0),
+        )
+        total_repeat_count = history_repeat_count + (1 if order_id else 0)
+        if total_repeat_count < repeat_floor:
+            escalated.append(item)
+            continue
+        review = {
+            "repeat_count": total_repeat_count,
+            "history_window_days": history_window_days,
+            "repeat_key": repeat_key,
+            "repeat_signature": signature,
+            "previous_decision": _repeat_info_primary_value(repeat_counts.get(repeat_key), "decision_counts"),
+            "previous_route": _repeat_info_primary_value(repeat_counts.get(repeat_key), "route_counts"),
+            "previous_implementation_status": _repeat_info_primary_status(repeat_counts.get(repeat_key)),
+            "review_disposition": (
+                "keep_visible_by_design" if _is_keep_visible_non_implement_order(item.order) else "review_required"
+            ),
+        }
+        updated_order = dict(item.order)
+        updated_order["longstanding_non_implement_review"] = review
+        longstanding_ids.append(order_id)
+        if (
+            str(item.order.get("improvement_type") or "").strip() == "lifecycle_contract_gap"
+            and (
+                str(item.order.get("source_report_type") or "").strip(),
+                str(item.mapped_family or item.order.get("mapped_family") or item.order.get("threshold_family") or "").strip(),
+            )
+            in specific_structural_gap_sources
+        ):
+            review["review_disposition"] = "keep_visible_by_design"
+            escalated.append(
+                ClassifiedOrder(
+                    order=updated_order,
+                    decision=item.decision,
+                    reason=item.reason,
+                    mapped_family=item.mapped_family,
+                    route=item.route,
+                    confidence=item.confidence,
+                    automation_reentry=item.automation_reentry,
+                    decision_source=item.decision_source,
+                )
+            )
+            continue
+        if item.decision == "implement_now":
+            escalated.append(
+                ClassifiedOrder(
+                    order=updated_order,
+                    decision=item.decision,
+                    reason=item.reason,
+                    mapped_family=item.mapped_family,
+                    route=item.route,
+                    confidence=item.confidence,
+                    automation_reentry=item.automation_reentry,
+                    decision_source=item.decision_source,
+                )
+            )
+            continue
+        signal = _structural_blocker_signal(item.order)
+        if not signal:
+            escalated.append(
+                ClassifiedOrder(
+                    order=updated_order,
+                    decision=item.decision,
+                    reason=item.reason,
+                    mapped_family=item.mapped_family,
+                    route=item.route,
+                    confidence=item.confidence,
+                    automation_reentry=item.automation_reentry,
+                    decision_source=item.decision_source,
+                )
+            )
+            continue
+        escalation_reason, required_next_route = signal
+        review["review_disposition"] = "repeat_unresolved_structural_blocker"
+        structural_escalation = {
+            "repeat_count": total_repeat_count,
+            "history_window_days": history_window_days,
+            "repeat_key": repeat_key,
+            "repeat_signature": signature,
+            "previous_decision": review["previous_decision"] or item.decision,
+            "previous_route": review["previous_route"] or item.route,
+            "previous_implementation_status": review["previous_implementation_status"]
+            or str(item.order.get("implementation_status") or "").strip()
+            or None,
+            "escalation_reason": escalation_reason,
+            "required_next_route": required_next_route,
+        }
+        provenance = updated_order.get("implementation_provenance")
+        if not isinstance(provenance, dict):
+            provenance = {}
+        updated_order["original_implementation_status"] = (
+            str(item.order.get("implementation_status") or "").strip() or review["previous_implementation_status"]
+        )
+        updated_order["implementation_status"] = "repeat_unresolved_structural_blocker"
+        updated_order["structural_blocker_escalation"] = structural_escalation
+        updated_order["implementation_provenance"] = {
+            **provenance,
+            "structural_blocker_escalation": structural_escalation,
+        }
+        escalated.append(
+            ClassifiedOrder(
+                order=updated_order,
+                decision="implement_now",
+                reason=(
+                    f"longstanding non-implement finding remained unresolved across {total_repeat_count} workorder days; "
+                    "promote it as a structural blocker instead of leaving it as passive evidence"
+                ),
+                mapped_family=item.mapped_family,
+                route="repeat_unresolved_structural_blocker",
+                confidence=item.confidence or "repeat_unresolved_structural_blocker",
+                automation_reentry=(
+                    "After implementation, regenerate the source report, code improvement workorder, "
+                    "threshold EV/runtime summary, and postclose verifier; runtime/order/provider/bot state "
+                    "must remain unchanged."
+                ),
+                decision_source=item.decision_source,
+            )
+        )
+        escalated_ids.append(order_id)
+    return escalated, escalated_ids, longstanding_ids
 
 
 def _escalate_repeated_unresolved_orders(
@@ -821,7 +1107,76 @@ def _terminal_non_implement_status(item: ClassifiedOrder) -> str | None:
     return None
 
 
-def _entry_submit_drought_implementation_marker(contract: dict[str, Any]) -> dict[str, Any]:
+def _root_cause_closure_status_for_order(order: dict[str, Any]) -> str | None:
+    implementation_status = str(order.get("implementation_status") or "").strip()
+    provenance = (
+        order.get("implementation_provenance")
+        if isinstance(order.get("implementation_provenance"), dict)
+        else {}
+    )
+    hinted = str(provenance.get("root_cause_closure_status_hint") or "").strip()
+    if hinted in ROOT_CAUSE_CLOSURE_STATUSES:
+        return hinted
+    if bool(provenance.get("artifact_regeneration_required")):
+        return "artifact_regeneration_required"
+    if implementation_status in {"repeat_unresolved_structural_blocker", "repeat_unresolved_escalated"}:
+        return "needs_followup_workorder"
+    if implementation_status.startswith("open_"):
+        return "needs_followup_workorder"
+    if _is_implemented_status(implementation_status):
+        if (
+            str(provenance.get("blocker_resolution_status") or "").strip() == "open"
+            or bool(provenance.get("remaining_blocker_is_observation_or_policy_closure"))
+            or bool(provenance.get("unresolved_root_cause_present"))
+        ):
+            return "handoff_closed_root_cause_open"
+        sample_status = str(provenance.get("sample_status") or "").strip()
+        if implementation_status in {
+            "implemented_but_hold_sample",
+            "implemented_but_waiting_sample",
+            "implemented_source_quality_contract_waiting_sample",
+        } or sample_status.startswith("waiting_"):
+            return "implementation_done"
+        return "root_cause_closed"
+    if bool(order.get("implementation_candidate")) or str(order.get("decision") or "").strip() == "implement_now":
+        return "needs_followup_workorder"
+    return None
+
+
+def _root_cause_open_top(orders: list[dict[str, Any]], *, limit: int = 10) -> list[dict[str, Any]]:
+    ranked: list[dict[str, Any]] = []
+    for order in orders:
+        status = str(order.get("root_cause_closure_status") or "").strip()
+        if status not in {
+            "artifact_regeneration_required",
+            "handoff_closed_root_cause_open",
+            "needs_followup_workorder",
+        }:
+            continue
+        provenance = (
+            order.get("implementation_provenance")
+            if isinstance(order.get("implementation_provenance"), dict)
+            else {}
+        )
+        ranked.append(
+            {
+                "order_id": order.get("order_id"),
+                "status": status,
+                "source_report_type": order.get("source_report_type"),
+                "threshold_family": order.get("threshold_family"),
+                "implementation_status": order.get("implementation_status"),
+                "root_cause_signal": provenance.get("root_cause_signal"),
+            }
+        )
+    ranked.sort(key=lambda item: (str(item.get("status")), str(item.get("order_id"))))
+    return ranked[:limit]
+
+
+def _entry_submit_drought_implementation_marker(
+    report: dict[str, Any],
+    contract: dict[str, Any],
+    lifecycle_report: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     required = contract.get("required_downstream") if isinstance(contract.get("required_downstream"), list) else []
     if not {
         "code_improvement_workorder",
@@ -831,6 +1186,48 @@ def _entry_submit_drought_implementation_marker(contract: dict[str, Any]) -> dic
         "postclose_verifier",
     }.issubset({str(item) for item in required}):
         return {}
+    classification = report.get("classification") if isinstance(report.get("classification"), dict) else {}
+    root_cause = (
+        classification.get("submit_drought_root_cause")
+        if isinstance(classification.get("submit_drought_root_cause"), dict)
+        else {}
+    )
+    quote_freshness = (
+        root_cause.get("quote_freshness_attribution")
+        if isinstance(root_cause.get("quote_freshness_attribution"), dict)
+        else {}
+    )
+    latency_root_cause_counts = (
+        root_cause.get("latency_root_cause_counts")
+        if isinstance(root_cause.get("latency_root_cause_counts"), dict)
+        else {}
+    )
+    refresh_attempted_count = _safe_int(quote_freshness.get("refresh_attempted_count"), 0)
+    refresh_applied_count = _safe_int(quote_freshness.get("refresh_applied_count"), 0)
+    latency_pass_recovered_count = _safe_int(quote_freshness.get("latency_pass_recovered_count"), 0)
+    current_primary = str(classification.get("primary") or "").strip()
+    ldm_submit_summary = (
+        ((lifecycle_report or {}).get("submit_bucket_attribution") or {}).get("summary")
+        if isinstance(((lifecycle_report or {}).get("submit_bucket_attribution") or {}).get("summary"), dict)
+        else {}
+    )
+    ldm_quote_freshness_present = bool(ldm_submit_summary.get("quote_freshness_attribution_present"))
+    quote_freshness_inconsistent = (
+        (refresh_attempted_count <= 0 and latency_pass_recovered_count > 0)
+        or (refresh_attempted_count <= 0 and refresh_applied_count > 0)
+        or refresh_applied_count > refresh_attempted_count
+    )
+    root_cause_open = (
+        _safe_int(root_cause.get("unknown_latency_reason_count"), 0) > 0
+        or bool(root_cause.get("unknown_latency_workorder_required"))
+        or (refresh_attempted_count > 0 and not ldm_quote_freshness_present)
+    )
+    if quote_freshness_inconsistent:
+        root_cause_closure_status = "artifact_regeneration_required"
+    elif root_cause_open:
+        root_cause_closure_status = "handoff_closed_root_cause_open"
+    else:
+        root_cause_closure_status = "root_cause_closed"
     return {
         "implementation_status": "implemented",
         "implementation_checks": [
@@ -845,6 +1242,15 @@ def _entry_submit_drought_implementation_marker(contract: dict[str, Any]) -> dic
             "source_report_type": "buy_funnel_sentinel",
             "required_downstream": required,
             "weak_contract_matches": contract.get("weak_contract_matches") or [],
+            "root_cause_closure_status_hint": root_cause_closure_status,
+            "root_cause_signal": current_primary or None,
+            "root_cause_counts": latency_root_cause_counts,
+            "quote_freshness_refresh_attempted_count": refresh_attempted_count,
+            "quote_freshness_refresh_applied_count": refresh_applied_count,
+            "quote_freshness_latency_pass_recovered_count": latency_pass_recovered_count,
+            "quote_freshness_attribution_inconsistent": quote_freshness_inconsistent,
+            "ldm_quote_freshness_attribution_present": ldm_quote_freshness_present,
+            "artifact_regeneration_required": quote_freshness_inconsistent,
             "runtime_effect": contract.get("runtime_effect"),
             "allowed_runtime_apply": contract.get("allowed_runtime_apply"),
             "broker_order_submit_allowed": contract.get("broker_order_submit_allowed"),
@@ -1110,7 +1516,7 @@ def _serialize_classified_order(item: ClassifiedOrder) -> dict[str, Any]:
         and str(item.order.get("target_subsystem") or "") == "lifecycle_decision_matrix"
     )
     implementation_status = _terminal_non_implement_status(item) or item.order.get("implementation_status")
-    return {
+    serialized = {
         "order_id": item.order.get("order_id"),
         "title": item.order.get("title"),
         "target_subsystem": item.order.get("target_subsystem"),
@@ -1154,6 +1560,8 @@ def _serialize_classified_order(item: ClassifiedOrder) -> dict[str, Any]:
         "conflict_resolution_acceptance_test": item.order.get("conflict_resolution_acceptance_test"),
         "implementation_provenance": item.order.get("implementation_provenance"),
         "repeat_unresolved_escalation": item.order.get("repeat_unresolved_escalation"),
+        "longstanding_non_implement_review": item.order.get("longstanding_non_implement_review"),
+        "structural_blocker_escalation": item.order.get("structural_blocker_escalation"),
         "parity_contract": item.order.get("parity_contract"),
         "source_bucket_id": item.order.get("source_bucket_id"),
         "conversion_candidate_id": item.order.get("conversion_candidate_id"),
@@ -1170,6 +1578,8 @@ def _serialize_classified_order(item: ClassifiedOrder) -> dict[str, Any]:
         "raw_row_exclusion_context": item.order.get("raw_row_exclusion_context"),
         "terminal_disposition": item.order.get("terminal_disposition"),
     }
+    serialized["root_cause_closure_status"] = _root_cause_closure_status_for_order(serialized)
+    return serialized
 
 
 def _finding_maps(report: dict[str, Any]) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:
@@ -4160,7 +4570,11 @@ def _buy_funnel_sentinel_followup_orders(
         if isinstance(report.get("entry_submit_drought_contract"), dict)
         else {}
     )
-    implementation_marker = _entry_submit_drought_implementation_marker(contract)
+    implementation_marker = _entry_submit_drought_implementation_marker(
+        report,
+        contract,
+        lifecycle_report=lifecycle_report,
+    )
     weak_contract_matches = (
         contract.get("weak_contract_matches") if isinstance(contract.get("weak_contract_matches"), list) else []
     )
@@ -5315,6 +5729,7 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
     orders = deduped_orders
     recent_reports = _recent_workorder_reports(target_date)
     repeat_counts = _unresolved_repeat_counts(recent_reports)
+    structural_repeat_counts = _structural_repeat_history_counts(recent_reports)
     classified = _sort_classified(
         [
             _classify_order(
@@ -5330,6 +5745,10 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
     classified, repeat_escalated_order_ids = _escalate_repeated_unresolved_orders(
         classified,
         repeat_counts=repeat_counts,
+    )
+    classified, structural_blocker_order_ids, longstanding_non_implement_order_ids = _escalate_repeated_structural_blockers(
+        classified,
+        repeat_counts=structural_repeat_counts,
     )
     classified = _sort_classified(classified)
     selected = classified[: max(1, int(max_orders))]
@@ -5424,6 +5843,8 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
     selected_runtime_effect_false_count = 0
     selected_unimplemented_runtime_effect_false_count = 0
     selected_terminal_non_implement_runtime_effect_false_count = 0
+    selected_terminal_non_implement_longstanding_count = 0
+    selected_terminal_non_implement_longstanding_order_ids: list[str] = []
     for item in selected:
         selected_decision_counts[item.decision] = selected_decision_counts.get(item.decision, 0) + 1
         route = str(item.route or item.order.get("route") or item.decision or "unknown")
@@ -5436,6 +5857,10 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
                 selected_terminal_non_implement_route_counts[route] = (
                     selected_terminal_non_implement_route_counts.get(route, 0) + 1
                 )
+                if item.order.get("longstanding_non_implement_review"):
+                    selected_terminal_non_implement_longstanding_count += 1
+                    if item.order.get("order_id"):
+                        selected_terminal_non_implement_longstanding_order_ids.append(str(item.order.get("order_id")))
                 continue
             if item.decision != "attach_existing_family" and not _is_implemented_status(
                 _repeat_unresolved_original_status(item.order)
@@ -5463,6 +5888,17 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
             return None
         return str(path) if Path(path).exists() else None
 
+    serialized_orders = [_serialize_classified_order(item) for item in selected]
+    root_cause_closure_status_counts = dict(
+        sorted(
+            Counter(
+                str(order.get("root_cause_closure_status") or "").strip()
+                for order in serialized_orders
+                if str(order.get("root_cause_closure_status") or "").strip()
+            ).items()
+        )
+    )
+    root_cause_open_top = _root_cause_open_top(serialized_orders)
     report = {
         "schema_version": WORKORDER_SCHEMA_VERSION,
         "date": target_date,
@@ -5583,7 +6019,24 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
             ],
             "repeat_unresolved_escalation_count": len(repeat_escalated_order_ids),
             "repeat_unresolved_escalated_order_ids": repeat_escalated_order_ids,
+            "repeat_unresolved_structural_blocker_count": len(structural_blocker_order_ids),
+            "repeat_unresolved_structural_blocker_order_ids": structural_blocker_order_ids,
             "repeat_unresolved_history_window_days": 10,
+            "root_cause_closure_status_counts": root_cause_closure_status_counts,
+            "implementation_done_count": root_cause_closure_status_counts.get("implementation_done", 0),
+            "artifact_regeneration_required_count": root_cause_closure_status_counts.get(
+                "artifact_regeneration_required", 0
+            ),
+            "handoff_closed_root_cause_open_count": root_cause_closure_status_counts.get(
+                "handoff_closed_root_cause_open", 0
+            ),
+            "root_cause_closed_count": root_cause_closure_status_counts.get("root_cause_closed", 0),
+            "needs_followup_workorder_count": root_cause_closure_status_counts.get(
+                "needs_followup_workorder", 0
+            ),
+            "root_cause_open_top": root_cause_open_top,
+            "selected_terminal_non_implement_longstanding_count": selected_terminal_non_implement_longstanding_count,
+            "selected_terminal_non_implement_longstanding_order_ids": selected_terminal_non_implement_longstanding_order_ids,
             "non_selected_decision_counts": non_selected_counts,
             "gemini_fresh": ((automation.get("ev_report_summary") or {}).get("gemini_fresh")),
             "claude_fresh": ((automation.get("ev_report_summary") or {}).get("claude_fresh")),
@@ -5626,7 +6079,7 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
             "daily_ev_available": bool(ev_report),
             "duplicate_order_warnings": collision_warnings,
         },
-        "orders": [_serialize_classified_order(item) for item in selected],
+        "orders": serialized_orders,
         "non_selected_orders": [_serialize_classified_order(item) for item in non_selected],
         "deferred_or_rejected_count": deferred_or_rejected_count,
         "next_codex_session": {
@@ -5757,6 +6210,17 @@ def render_code_improvement_workorder_markdown(report: dict[str, Any]) -> str:
         f"- selected_implement_now_new_runtime_effect_false_order_ids: `{summary.get('selected_implement_now_new_runtime_effect_false_order_ids')}`",
         f"- repeat_unresolved_escalation_count: `{summary.get('repeat_unresolved_escalation_count')}`",
         f"- repeat_unresolved_escalated_order_ids: `{summary.get('repeat_unresolved_escalated_order_ids')}`",
+        f"- repeat_unresolved_structural_blocker_count: `{summary.get('repeat_unresolved_structural_blocker_count')}`",
+        f"- repeat_unresolved_structural_blocker_order_ids: `{summary.get('repeat_unresolved_structural_blocker_order_ids')}`",
+        f"- root_cause_closure_status_counts: `{summary.get('root_cause_closure_status_counts')}`",
+        f"- implementation_done_count: `{summary.get('implementation_done_count')}`",
+        f"- artifact_regeneration_required_count: `{summary.get('artifact_regeneration_required_count')}`",
+        f"- handoff_closed_root_cause_open_count: `{summary.get('handoff_closed_root_cause_open_count')}`",
+        f"- root_cause_closed_count: `{summary.get('root_cause_closed_count')}`",
+        f"- needs_followup_workorder_count: `{summary.get('needs_followup_workorder_count')}`",
+        f"- root_cause_open_top: `{summary.get('root_cause_open_top')}`",
+        f"- selected_terminal_non_implement_longstanding_count: `{summary.get('selected_terminal_non_implement_longstanding_count')}`",
+        f"- selected_terminal_non_implement_longstanding_order_ids: `{summary.get('selected_terminal_non_implement_longstanding_order_ids')}`",
         f"- non_selected_decision_counts: `{summary.get('non_selected_decision_counts')}`",
         f"- gemini_fresh: `{summary.get('gemini_fresh')}`",
         f"- claude_fresh: `{summary.get('claude_fresh')}`",
@@ -5830,7 +6294,11 @@ def render_code_improvement_workorder_markdown(report: dict[str, Any]) -> str:
                 f"- files_likely_touched: {_format_list(item.get('files_likely_touched'))}",
                 f"- acceptance_tests: {_format_list(item.get('acceptance_tests'))}",
                 f"- implementation_status: `{item.get('implementation_status') or '-'}`",
+                f"- root_cause_closure_status: `{item.get('root_cause_closure_status') or '-'}`",
                 f"- implementation_provenance: `{json.dumps(item.get('implementation_provenance'), ensure_ascii=False, sort_keys=True) if item.get('implementation_provenance') else '-'}`",
+                f"- repeat_unresolved_escalation: `{json.dumps(item.get('repeat_unresolved_escalation'), ensure_ascii=False, sort_keys=True) if item.get('repeat_unresolved_escalation') else '-'}`",
+                f"- longstanding_non_implement_review: `{json.dumps(item.get('longstanding_non_implement_review'), ensure_ascii=False, sort_keys=True) if item.get('longstanding_non_implement_review') else '-'}`",
+                f"- structural_blocker_escalation: `{json.dumps(item.get('structural_blocker_escalation'), ensure_ascii=False, sort_keys=True) if item.get('structural_blocker_escalation') else '-'}`",
                 f"- automation_reentry: {item.get('automation_reentry')}",
                 "",
             ]

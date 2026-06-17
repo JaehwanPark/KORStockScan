@@ -898,6 +898,13 @@ def _remember_guard_block(recent_picks, target, now_ts, reason):
     }
 
 
+def _scanner_source_guard_requires_first_seen_provenance(reason):
+    reason_text = str(reason or "")
+    if reason_text == "value_top_only_repeat_deteriorating_without_strength":
+        return True
+    return False
+
+
 def _scanner_event_fields(target, source_guard=None):
     source_guard = source_guard or {}
     source_signature = source_guard.get("source_signature") or ",".join(_source_signature(target))
@@ -906,6 +913,18 @@ def _scanner_event_fields(target, source_guard=None):
     first_flu = source_guard.get("first_seen_flu_rate")
     current_flu_value, current_flu_metric, current_flu_source = _scanner_flu_metric(target)
     current_flu = source_guard.get("current_flu_rate") or f"{current_flu_value:.2f}"
+    guard_reason = str(source_guard.get("reason") or "")
+    last_promoted_at = source_guard.get("last_promoted_at")
+    first_seen_missing = first_flu in (None, "", "-")
+    last_promoted_missing = last_promoted_at in (None, "", "-")
+    if guard_reason == "late_confirmation_first_seen_probe":
+        source_guard_context = "normal_first_seen_block"
+    elif _scanner_source_guard_requires_first_seen_provenance(guard_reason):
+        source_guard_context = "repeat_guard_with_provenance"
+    elif first_seen_missing or last_promoted_missing:
+        source_guard_context = "first_seen_not_applicable"
+    else:
+        source_guard_context = "repeat_guard_with_provenance"
     return {
         "metric_role": "source_quality_gate",
         "decision_authority": "real_scalping_scanner_source_guard_only",
@@ -933,6 +952,8 @@ def _scanner_event_fields(target, source_guard=None):
         "scanner_filter_reason": source_guard.get("reason") if source_guard.get("blocked") else "",
         "scanner_candidate_role": source_guard.get("candidate_role") or _scanner_candidate_role(target),
         "scanner_block_reason": source_guard.get("reason") if source_guard.get("blocked") else "",
+        "scanner_source_guard_context": source_guard_context,
+        "scanner_source_guard_first_seen_required": source_guard_context == "repeat_guard_with_provenance",
         "scanner_promotion_reason": "" if source_guard.get("blocked") else source_guard.get("reason"),
         "first_seen_price": first_price,
         "current_price": current_price,
@@ -947,6 +968,7 @@ def _scanner_event_fields(target, source_guard=None):
         "flu_delta_since_first_seen": source_guard.get("flu_delta_since_first_seen"),
         "comparable_flu_delta_since_first_seen": source_guard.get("comparable_flu_delta_since_first_seen"),
         "probe_age_sec": source_guard.get("probe_age_sec"),
+        "last_promoted_at": last_promoted_at,
         "rank_jump": _rank_jump(target),
         "spike_rate": _safe_float(target.get("SpikeRate")),
         "priority_score": _safe_float(target.get("PriorityScore")),

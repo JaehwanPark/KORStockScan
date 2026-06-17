@@ -8,32 +8,32 @@
 - risk_regime_threshold_mode: `dynamic_quantile`
 - report_only: `true`
 - runtime_effect: `report_only_no_mutation`
-- as_of: `2026-06-17T09:47:02`
-- latest_event_at: `2026-06-17T09:47:01`
+- as_of: `2026-06-17T16:06:51`
+- latest_event_at: `2026-06-17T15:24:54`
 - reasons: `no panic buying threshold breached`
 
 ## 패닉바잉 지표
 
-- evaluated_symbol_count: `595`
+- evaluated_symbol_count: `1637`
 - panic_buy_active_count: `0`
 - panic_buy_watch_count: `0`
 - allow_tp_override_count: `0`
 - allow_runner_count: `0`
 - max_panic_buy_score: `0.45`
-- avg_confidence: `0.5744`
+- avg_confidence: `0.4996`
 
 ## 소진 지표
 
 - exhaustion_candidate_count: `0`
 - exhaustion_confirmed_count: `0`
 - force_exit_runner_count: `0`
-- max_exhaustion_score: `0.545`
+- max_exhaustion_score: `0.5527`
 
 ## TP Counterfactual
 
 - tp_like_exit_count: `0`
 - real_exit_count: `0`
-- non_real_exit_count: `324`
+- non_real_exit_count: `2342`
 - unproven_exit_count: `0`
 - trailing_winner_count: `0`
 - candidate_context_count: `0`
@@ -43,27 +43,27 @@
 ## Microstructure Detector
 
 - input_universe: `entry_observation_only`
-- input_event_count: `16636`
-- excluded_holding_row_count: `7896`
-- excluded_exit_sell_row_count: `324`
-- missing_orderbook_count: `278`
-- degraded_orderbook_count: `278`
-- missing_trade_aggressor_count: `198`
-- carried_orderbook_snapshot_count: `220`
-- carried_trade_aggressor_snapshot_count: `368`
-- micro_cusum_triggered_symbol_count: `0`
+- input_event_count: `408650`
+- excluded_holding_row_count: `85238`
+- excluded_exit_sell_row_count: `2342`
+- missing_orderbook_count: `1185`
+- degraded_orderbook_count: `1185`
+- missing_trade_aggressor_count: `1008`
+- carried_orderbook_snapshot_count: `1083`
+- carried_trade_aggressor_snapshot_count: `2486`
+- micro_cusum_triggered_symbol_count: `6`
 - micro_consensus_pass_symbol_count: `0`
 - micro_cusum_decision_authority: `source_quality_only`
 
 ## Market Breadth Context
 
 - market_panic_breadth_source_quality_status: `ok`
-- market_panic_breadth_risk_on_advisory: `false`
+- market_panic_breadth_risk_on_advisory: `true`
 - market_panic_breadth_risk_off_advisory: `false`
 - market_panic_breadth_single_market_risk_on_advisory: `false`
 - market_panic_breadth_single_market_risk_off_advisory: `false`
 - market_wide_panic_buy_confirmed: `false`
-- market_panic_buy_interpretation: `normal`
+- market_panic_buy_interpretation: `market_risk_on_only`
 - market_breadth_decision_authority: `source_quality_only`
 
 ## Canary Candidates

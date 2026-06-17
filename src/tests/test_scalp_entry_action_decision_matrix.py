@@ -374,6 +374,62 @@ def test_scalp_entry_adm_normalizes_submitted_snapshot_action():
     )
 
 
+def test_scalp_entry_adm_preserves_submit_refresh_provenance():
+    row = mod._base_row(
+        {
+            "stage": "order_bundle_submitted",
+            "stock_code": "005930",
+            "stock_name": "TEST",
+            "record_id": "R1",
+            "emitted_at": "2026-05-18T09:10:02",
+            "fields": {
+                "actual_order_submitted": "true",
+                "broker_order_submitted": "true",
+                "broker_order_no": "0046858",
+                "entry_submit_revalidation_warning": "stale_context_or_quote",
+                "quote_age_at_submit_ms": "2628",
+                "best_bid_at_submit": "16860",
+                "best_ask_at_submit": "16910",
+                "submitted_order_price": "16830",
+                "latency_state": "SAFE",
+                "latency_danger_reasons": "spread_too_wide",
+                "pre_submit_quote_refresh_enabled": "true",
+                "pre_submit_quote_refresh_applied": "false",
+                "pre_submit_quote_refresh_reason": "observer_quote_stale",
+                "pre_submit_quote_refresh_source": "orderbook_micro_observer",
+                "pre_submit_quote_refresh_quote_age_ms": "1500",
+                "pre_submit_quote_refresh_strategy_id": "KOSPI_ML",
+                "pre_submit_quote_refresh_env_value": "true",
+                "pre_submit_ws_snapshot_refresh_enabled": "true",
+                "pre_submit_ws_snapshot_refresh_applied": "true",
+                "pre_submit_ws_snapshot_refresh_reason": "latest_ws_snapshot_fresh",
+                "pre_submit_ws_snapshot_refresh_source": "ws_manager_latest_data",
+                "pre_submit_ws_snapshot_refresh_age_ms": "12",
+            },
+        }
+    )
+
+    assert row["entry_submit_revalidation_warning"] == "stale_context_or_quote"
+    assert row["quote_age_ms"] == 2628.0
+    assert row["best_bid"] == 16860.0
+    assert row["best_ask"] == 16910.0
+    assert row["resolved_order_price"] == 16830.0
+    assert row["latency_state"] == "SAFE"
+    assert row["latency_reason"] == "spread_too_wide"
+    assert row["pre_submit_quote_refresh_enabled"] is True
+    assert row["pre_submit_quote_refresh_applied"] is False
+    assert row["pre_submit_quote_refresh_reason"] == "observer_quote_stale"
+    assert row["pre_submit_quote_refresh_source"] == "orderbook_micro_observer"
+    assert row["pre_submit_quote_refresh_quote_age_ms"] == 1500.0
+    assert row["pre_submit_quote_refresh_strategy_id"] == "KOSPI_ML"
+    assert row["pre_submit_quote_refresh_env_value"] == "true"
+    assert row["pre_submit_ws_snapshot_refresh_enabled"] is True
+    assert row["pre_submit_ws_snapshot_refresh_applied"] is True
+    assert row["pre_submit_ws_snapshot_refresh_reason"] == "latest_ws_snapshot_fresh"
+    assert row["pre_submit_ws_snapshot_refresh_source"] == "ws_manager_latest_data"
+    assert row["pre_submit_ws_snapshot_refresh_age_ms"] == 12.0
+
+
 def test_scalp_entry_adm_runtime_context_adds_prompt_and_cache_token(tmp_path, monkeypatch):
     report_dir = tmp_path / "report" / "scalp_entry_action_decision_matrix"
     report_dir.mkdir(parents=True)
@@ -1309,3 +1365,63 @@ def test_adm_bucket_lookup_status_prior_bucket_missing_sample():
 def test_adm_bucket_lookup_status_no_payload():
     from src.engine.scalp_entry_adm_runtime import _bucket_lookup_status
     assert _bucket_lookup_status({}, {}) == "bucket_lookup_not_performed"
+
+
+def test_adm_lookup_none_is_classified_for_advisory_only_stage():
+    from src.engine.scalp_entry_action_decision_matrix import _classify_adm_lookup_not_applicable
+
+    rows = [
+        {
+            "stage": "ai_confirmed",
+            "entry_adm_bucket_token": "score50_64|weak_strength_momentum|-|fresh",
+            "entry_adm_bucket_token_recomputed": "score50_64|weak_strength_momentum|-|fresh",
+            "entry_adm_bucket_lookup_status": "",
+        },
+        {
+            "stage": "scalp_entry_action_decision_snapshot",
+            "entry_adm_bucket_token": "score65_74|weak_strength_momentum|-|fresh",
+            "entry_adm_bucket_lookup_status": "",
+        },
+    ]
+
+    _classify_adm_lookup_not_applicable(rows)
+
+    assert rows[0]["entry_adm_bucket_lookup_status"] == "advisory_only_stage_without_prior_lookup"
+    assert rows[0]["entry_adm_bucket_joined_sample"] == 0
+    assert rows[1]["entry_adm_bucket_lookup_status"] == ""
+
+
+def test_adm_lookup_closure_splits_new_bucket_and_producer_context_missing():
+    from src.engine.scalp_entry_action_decision_matrix import _adm_lookup_closure_summary
+
+    rows = [
+        {
+            "stage": "scalp_entry_action_decision_snapshot",
+            "entry_adm_bucket_lookup_status": "new_or_unseen_token_vs_prior_adm",
+            "entry_adm_bucket_token_recomputed": "score70p|strong|-|fresh|quote_based|liquidity_high",
+        },
+        {
+            "stage": "blocked_ai_score",
+            "entry_adm_bucket_lookup_status": "new_or_unseen_token_vs_prior_adm",
+            "entry_adm_bucket_token_recomputed": "score50_64|weak|-|fresh|price_not_available_pre_submit|liquidity_not_available",
+        },
+        {
+            "stage": "ai_confirmed",
+            "entry_adm_bucket_lookup_status": "new_or_unseen_token_vs_prior_adm",
+            "entry_adm_bucket_token_recomputed": "score50_64|weak|-|fresh|quote_based|liquidity_mid",
+        },
+    ]
+
+    summary = _adm_lookup_closure_summary(rows)
+
+    assert summary["closure_status"] == "closed_with_producer_followup"
+    assert summary["followup_required"] is True
+    assert summary["status_counts"] == {
+        "new_bucket_candidate_waiting_prior_rollup": 1,
+        "producer_context_missing": 1,
+        "advisory_or_not_applicable_stage": 1,
+    }
+    assert summary["producer_context_missing_counts"] == {
+        "price_not_available_pre_submit": 1,
+        "liquidity_not_available": 1,
+    }

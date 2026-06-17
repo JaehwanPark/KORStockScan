@@ -680,6 +680,8 @@ code_improvement_workorder_YYYY-MM-DD.md implement_now를 2-pass로 처리해줘
 | `design_family_candidate` | 다음 영업일 POSTCLOSE code-improvement triage | 새 family 설계가 필요한 반복 패턴인지, `allowed_runtime_apply=false`, sample floor, safety guard, env key, rollback guard가 정의됐는지 | `design_backlog_required`, `merge_into_existing_family`, `reject_or_defer` 중 하나 |
 | `defer_evidence` | 다음 영업일 POSTCLOSE code-improvement triage | 새 표본이 추가되어 `implement_now` 또는 `attach_existing_family`로 승격됐는지, 여전히 stale/sample 부족인지 | `promoted`, `continue_defer`, `drop_stale` 중 하나 |
 
+장기 반복 항목은 별도 재판정이 필요하다. `quiet_gap`/`source_dimension_rollup`/explicit `not_applicable` evidence처럼 설계상 계속 visibility만 유지해야 하는 상위 rollup은 `keep_visible_by_design`으로 남긴다. 반대로 `implemented` 또는 terminal non-implement 상태라도 `next_postclose_metric`이 여전히 다음 actionable implement_now 생성, blocker attribution closure, stale/missing ratio 감소 같은 downstream closure를 요구하며 최근 10일 창에서 3회 이상 반복되면 `repeat_unresolved_structural_blocker`로 다시 승격한다. 이 승격은 runtime mutation이 아니라 postclose triage 강화이며, source-only safe scope 구현/검증 대상으로만 surface된다.
+
 이 triage 자체는 runtime 변경을 자동 수행하지 않는다. 결과가 `needs_codex_instrumentation` 또는 `promoted`이고 safe-scope 조건을 통과하더라도 사용자가 Codex 구현을 명시적으로 지시하거나 runner를 수동 opt-in한 뒤 `code_improvement_workorder.orders`의 선택 order로 들어온 경우에만 구현 후보가 된다. `non_selected_orders`에 남은 항목은 같은 cycle에서 실행, 승격, merge, push하지 않고 terminal-disposition evidence로만 닫는다. `attach_existing_family`는 명시적인 `needs_codex_instrumentation` marker가 없으면 `no_code_required`/기존 family 귀속으로 닫고, 다음 threshold-cycle/daily EV 산출물에서 재평가되도록 두며 runtime threshold나 주문 guard를 수동 변경하지 않는다. `design_backlog_required`는 source-only 설계 backlog로 남긴다.
 
 ### 2. 승격 판정

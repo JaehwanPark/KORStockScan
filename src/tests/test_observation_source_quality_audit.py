@@ -906,6 +906,172 @@ def test_observation_source_quality_audit_accepts_scanner_source_guard_contracts
     assert report["status"] == "pass"
 
 
+def test_observation_source_quality_audit_accepts_first_seen_scanner_block_without_repeat_fields(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
+    _write_events(
+        tmp_path,
+        "2026-06-17",
+        [
+            _event(
+                "scalping_scanner_real_source_guard_block",
+                {
+                    "metric_role": "source_quality_gate",
+                    "window_policy": "intraday_operational_guard",
+                    "sample_floor": "not_applicable_runtime_guard",
+                    "primary_decision_metric": "funnel_count",
+                    "runtime_effect": True,
+                    "forbidden_uses": "score_threshold_change,provider_route_change,order_price_change",
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                    "decision_authority": "real_scalping_scanner_source_guard_only",
+                    "source_quality_gate": "scalping_scanner_real_source_guard",
+                    "scanner_real_source_guard_applied": True,
+                    "scanner_real_source_guard_skip_reason": "late_confirmation_first_seen_probe",
+                    "scanner_real_source_guard_block_event_emitted": True,
+                    "source_signature": "PRICE_JUMP_START",
+                    "current_flu_rate": "2.10",
+                    "scanner_source_guard_context": "normal_first_seen_block",
+                    "scanner_source_guard_first_seen_required": False,
+                },
+            )
+        ],
+    )
+
+    report = audit.build_observation_source_quality_audit("2026-06-17")
+
+    contract = report["stage_contracts"]["scalping_scanner_real_source_guard_block"]
+    assert contract["status"] == "pass"
+    assert "first_seen_flu_rate" not in contract["missing_violations"]
+    assert "last_promoted_at" not in contract["missing_violations"]
+
+
+def test_observation_source_quality_audit_requires_repeat_scanner_guard_provenance(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
+    _write_events(
+        tmp_path,
+        "2026-06-17",
+        [
+            _event(
+                "scalping_scanner_real_source_guard_block",
+                {
+                    "metric_role": "source_quality_gate",
+                    "window_policy": "intraday_operational_guard",
+                    "sample_floor": "not_applicable_runtime_guard",
+                    "primary_decision_metric": "funnel_count",
+                    "runtime_effect": True,
+                    "forbidden_uses": "score_threshold_change,provider_route_change,order_price_change",
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                    "decision_authority": "real_scalping_scanner_source_guard_only",
+                    "source_quality_gate": "scalping_scanner_real_source_guard",
+                    "scanner_real_source_guard_applied": True,
+                    "scanner_real_source_guard_skip_reason": (
+                        "value_top_only_repeat_deteriorating_without_strength"
+                    ),
+                    "scanner_real_source_guard_block_event_emitted": True,
+                    "source_signature": "VALUE_TOP",
+                    "current_flu_rate": "0.00",
+                    "scanner_source_guard_context": "repeat_guard_with_provenance",
+                    "scanner_source_guard_first_seen_required": True,
+                },
+            )
+        ],
+    )
+
+    report = audit.build_observation_source_quality_audit("2026-06-17")
+
+    contract = report["stage_contracts"]["scalping_scanner_real_source_guard_block"]
+    assert contract["status"] == "warning"
+    assert contract["conditional_required_fields"] == ["first_seen_flu_rate", "last_promoted_at"]
+    assert contract["missing_violations"]["first_seen_flu_rate"] == 1.0
+    assert contract["missing_violations"]["last_promoted_at"] == 1.0
+
+
+def test_observation_source_quality_audit_requires_repeat_scanner_guard_provenance_from_reason_fallback(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
+    _write_events(
+        tmp_path,
+        "2026-06-17",
+        [
+            _event(
+                "scalping_scanner_real_source_guard_block",
+                {
+                    "metric_role": "source_quality_gate",
+                    "window_policy": "intraday_operational_guard",
+                    "sample_floor": "not_applicable_runtime_guard",
+                    "primary_decision_metric": "funnel_count",
+                    "runtime_effect": True,
+                    "forbidden_uses": "score_threshold_change,provider_route_change,order_price_change",
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                    "decision_authority": "real_scalping_scanner_source_guard_only",
+                    "source_quality_gate": "scalping_scanner_real_source_guard",
+                    "scanner_real_source_guard_applied": True,
+                    "scanner_real_source_guard_skip_reason": (
+                        "value_top_only_repeat_deteriorating_without_strength"
+                    ),
+                    "scanner_real_source_guard_block_event_emitted": True,
+                    "source_signature": "VALUE_TOP",
+                    "current_flu_rate": "0.00",
+                },
+            )
+        ],
+    )
+
+    report = audit.build_observation_source_quality_audit("2026-06-17")
+
+    contract = report["stage_contracts"]["scalping_scanner_real_source_guard_block"]
+    assert contract["status"] == "warning"
+    assert contract["conditional_required_fields"] == ["first_seen_flu_rate", "last_promoted_at"]
+    assert contract["missing_violations"]["first_seen_flu_rate"] == 1.0
+    assert contract["missing_violations"]["last_promoted_at"] == 1.0
+
+
+def test_observation_source_quality_audit_does_not_require_repeat_fields_for_late_confirmation_reason_only(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
+    _write_events(
+        tmp_path,
+        "2026-06-17",
+        [
+            _event(
+                "scalping_scanner_real_source_guard_block",
+                {
+                    "metric_role": "source_quality_gate",
+                    "window_policy": "intraday_operational_guard",
+                    "sample_floor": "not_applicable_runtime_guard",
+                    "primary_decision_metric": "funnel_count",
+                    "runtime_effect": True,
+                    "forbidden_uses": "score_threshold_change,provider_route_change,order_price_change",
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                    "decision_authority": "real_scalping_scanner_source_guard_only",
+                    "source_quality_gate": "scalping_scanner_real_source_guard",
+                    "scanner_real_source_guard_applied": True,
+                    "scanner_real_source_guard_skip_reason": "late_confirmation_probe_waiting",
+                    "scanner_real_source_guard_block_event_emitted": True,
+                    "source_signature": "PRICE_JUMP_START",
+                    "current_flu_rate": "2.00",
+                },
+            )
+        ],
+    )
+
+    report = audit.build_observation_source_quality_audit("2026-06-17")
+
+    contract = report["stage_contracts"]["scalping_scanner_real_source_guard_block"]
+    assert contract["status"] == "pass"
+    assert contract["conditional_required_fields"] == []
+    assert contract["missing_violations"] == {}
+
+
 def test_observation_source_quality_audit_accepts_early_accel_recheck_contracts(
     monkeypatch, tmp_path
 ):

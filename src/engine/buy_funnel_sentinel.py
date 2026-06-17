@@ -51,6 +51,20 @@ PRICE_GUARD_STAGES = {
     "entry_ai_price_canary_fallback",
     "scale_in_price_guard_block",
 }
+POST_LATENCY_SUBMIT_BLOCK_STAGES = {
+    "budget_pass",
+    "pre_submit_price_guard_block",
+    "entry_ai_price_canary_skip_order",
+    "entry_ai_price_canary_fallback",
+    "scale_in_price_guard_block",
+    "order_bundle_submitted",
+    "broker_submit_failed",
+    "buy_order_failed",
+    "submit_order_failed",
+    "entry_armed_expired",
+    "entry_armed_expired_after_wait",
+    "entry_arm_expired",
+}
 BLOCKER_STAGE_PREFIXES = ("blocked_",)
 BLOCKER_STAGES = {
     "latency_block",
@@ -78,6 +92,14 @@ FORBIDDEN_AUTOMATIONS = [
     "live_threshold_runtime_mutation",
     "bot_restart",
 ]
+PRE_SUBMIT_REFRESH_NOOP_REASONS = {
+    "",
+    "not_attempted",
+    "quote_not_stale",
+    "observer_quote_fresh",
+    "latest_ws_snapshot_fresh",
+    "latest_snapshot_fresh",
+}
 
 
 @dataclass(frozen=True)
@@ -439,6 +461,26 @@ def _blocker_label(event: PipelineEvent) -> str:
     return f"{event.stage}:{reason or '-'}"
 
 
+def _post_refresh_downstream_bucket(event: PipelineEvent | None) -> str:
+    if event is None:
+        return "no_downstream_event"
+    stage = event.stage
+    label = _blocker_label(event).lower()
+    if stage == "order_bundle_submitted":
+        return "order_bundle_submitted"
+    if stage in PRICE_GUARD_STAGES or "price" in label or "slippage" in label or "gap" in label:
+        return "price_guard_or_revalidation"
+    if stage in {"entry_armed_expired", "entry_armed_expired_after_wait", "entry_arm_expired"}:
+        return "armed_expired_before_submit"
+    if stage == "budget_pass":
+        return "budget_pass_no_submit_event"
+    if any(token in label for token in ("broker", "account", "order", "cooldown", "budget", "deposit", "cash")):
+        return "broker_account_order_budget_cooldown"
+    if stage.startswith(BLOCKER_STAGE_PREFIXES):
+        return "upstream_block_after_latency_recovery"
+    return f"other:{stage}"
+
+
 def _ratio(numerator: int, denominator: int) -> float:
     return round((numerator / denominator) * 100.0, 1) if denominator else 0.0
 
@@ -542,6 +584,71 @@ def _summarize_events(
     upstream_counter = Counter(_blocker_label(event) for event in upstream_events)
     latency_counter = Counter(_blocker_label(event) for event in latency_blocks)
     price_guard_counter = Counter(_blocker_label(event) for event in price_guard_events)
+    latency_danger_reason_counts = Counter(
+        label
+        for event in latency_blocks
+        for label in _latency_danger_reason_labels(event)
+    )
+    refresh_scope_events = [
+        event
+        for event in lossless_scoped
+        if event.stage in {"latency_block", "latency_pass", "order_bundle_submitted"}
+    ]
+    refresh_attempt_keys = {_attempt_key(event) for event in refresh_scope_events if _event_refresh_attempted(event)}
+    refresh_applied_keys = {_attempt_key(event) for event in refresh_scope_events if _event_refresh_applied(event)}
+    refresh_blocked_after_attempt_keys = {
+        _attempt_key(event)
+        for event in refresh_scope_events
+        if event.stage == "latency_block" and _event_refresh_attempted(event) and not _event_refresh_applied(event)
+    }
+    refresh_latency_pass_count = len(
+        {
+            _attempt_key(event)
+            for event in refresh_scope_events
+            if event.stage == "latency_pass" and _event_refresh_applied(event)
+        }
+    )
+    refresh_latency_pass_keys = {
+        _attempt_key(event)
+        for event in refresh_scope_events
+        if event.stage == "latency_pass" and _event_refresh_applied(event)
+    }
+    refresh_order_bundle_submitted_count = len(
+        {
+            _attempt_key(event)
+            for event in refresh_scope_events
+            if event.stage == "order_bundle_submitted" and _event_refresh_applied(event)
+        }
+    )
+    events_by_key: dict[str, list[PipelineEvent]] = {}
+    for event in lossless_scoped:
+        events_by_key.setdefault(_attempt_key(event), []).append(event)
+    post_refresh_downstream_counter: Counter[str] = Counter()
+    post_refresh_downstream_stage_counter: Counter[str] = Counter()
+    for key in refresh_latency_pass_keys:
+        events_for_key = events_by_key.get(key) or []
+        latency_pass_events = [
+            event
+            for event in events_for_key
+            if event.stage == "latency_pass" and _event_refresh_applied(event)
+        ]
+        if not latency_pass_events:
+            post_refresh_downstream_counter["no_latency_pass_event"] += 1
+            continue
+        first_latency_pass = min(latency_pass_events, key=lambda item: item.emitted_at)
+        next_event = None
+        for event in sorted(events_for_key, key=lambda item: item.emitted_at):
+            if event.emitted_at <= first_latency_pass.emitted_at:
+                continue
+            if event.stage in POST_LATENCY_SUBMIT_BLOCK_STAGES or (
+                _is_blocker_stage(event.stage) and event.stage != "latency_block"
+            ):
+                next_event = event
+                break
+        bucket = _post_refresh_downstream_bucket(next_event)
+        post_refresh_downstream_counter[bucket] += 1
+        if next_event is not None:
+            post_refresh_downstream_stage_counter[next_event.stage] += 1
     ai_unique = stage_unique_counts.get("ai_confirmed", 0)
     budget_unique = stage_unique_counts.get("budget_pass", 0)
     latency_unique = stage_unique_counts.get("latency_pass", 0)
@@ -575,6 +682,11 @@ def _summarize_events(
             {"label": label, "count": count}
             for label, count in latency_counter.most_common(10)
         ],
+        "latency_danger_reason_top": [
+            {"label": label, "count": count}
+            for label, count in latency_danger_reason_counts.most_common(10)
+        ],
+        "latency_danger_reason_counts": dict(sorted(latency_danger_reason_counts.items())),
         "price_guard_top": [
             {"label": label, "count": count}
             for label, count in price_guard_counter.most_common(10)
@@ -582,6 +694,15 @@ def _summarize_events(
         "upstream_block_events": len(upstream_events),
         "latency_state_danger_events": len(latency_blocks),
         "price_guard_events": len(price_guard_events),
+        "quote_freshness_refresh_attempted_count": len(refresh_attempt_keys),
+        "quote_freshness_refresh_applied_count": len(refresh_applied_keys),
+        "quote_freshness_still_latency_blocked_after_refresh_count": len(refresh_blocked_after_attempt_keys),
+        "quote_freshness_refresh_latency_pass_count": refresh_latency_pass_count,
+        "quote_freshness_refresh_order_bundle_submitted_count": refresh_order_bundle_submitted_count,
+        "quote_freshness_recovered_downstream_counts": dict(sorted(post_refresh_downstream_counter.items())),
+        "quote_freshness_recovered_downstream_stage_counts": dict(
+            sorted(post_refresh_downstream_stage_counter.items())
+        ),
         "ratios": {
             "budget_to_ai_unique_pct": _ratio(budget_unique, ai_unique),
             "latency_to_budget_unique_pct": _ratio(latency_unique, budget_unique),
@@ -602,6 +723,193 @@ def _summarize_events(
 def _same_time_on_date(target_date: str, source: datetime) -> datetime:
     base = _parse_target_date(target_date)
     return datetime.combine(base, source.time())
+
+
+def _event_refresh_attempted(event: PipelineEvent) -> bool:
+    for prefix in ("pre_submit_ws_snapshot_refresh", "pre_submit_quote_refresh"):
+        reason = _safe_str(event.fields.get(f"{prefix}_reason")).lower()
+        if _event_refresh_applied(event) or reason not in PRE_SUBMIT_REFRESH_NOOP_REASONS:
+            return True
+    return False
+
+
+def _event_refresh_applied(event: PipelineEvent) -> bool:
+    return (
+        _is_truthy_text(event.fields.get("pre_submit_quote_refresh_applied"))
+        or _is_truthy_text(event.fields.get("pre_submit_ws_snapshot_refresh_applied"))
+    )
+
+
+def _latency_danger_reason_labels(event: PipelineEvent) -> list[str]:
+    raw = _safe_str(event.fields.get("latency_danger_reasons"))
+    labels = [
+        label.strip()
+        for label in raw.replace(";", ",").split(",")
+        if label.strip()
+    ]
+    if _safe_str(event.fields.get("quote_stale")).lower() == "true":
+        labels.append("quote_stale")
+    observer_reason = _safe_str(event.fields.get("orderbook_micro_observer_missing_reason"))
+    if observer_reason and observer_reason not in {"ok", "-", "None"}:
+        labels.append(f"observer_{observer_reason}")
+    refresh_reason = _safe_str(event.fields.get("pre_submit_quote_refresh_reason")).lower()
+    if refresh_reason and refresh_reason not in PRE_SUBMIT_REFRESH_NOOP_REASONS:
+        labels.append(f"pre_submit_quote_refresh_{refresh_reason}")
+    ws_refresh_reason = _safe_str(event.fields.get("pre_submit_ws_snapshot_refresh_reason")).lower()
+    if ws_refresh_reason and ws_refresh_reason not in PRE_SUBMIT_REFRESH_NOOP_REASONS:
+        labels.append(f"pre_submit_ws_snapshot_refresh_{ws_refresh_reason}")
+    return labels or [_blocker_label(event)]
+
+
+def _refresh_reason_bucket(label: str) -> str | None:
+    text = label.lower()
+    if text.startswith("pre_submit_ws_snapshot_refresh_"):
+        reason = text.removeprefix("pre_submit_ws_snapshot_refresh_")
+        if reason in {"latest_ws_snapshot_fresh", "applied"}:
+            return "ws_snapshot_refresh_applied"
+        if "stale" in reason or "older_than_input" in reason:
+            return "ws_snapshot_refresh_failed_stale"
+        if "missing" in reason or "ws_manager_missing" in reason:
+            return "ws_snapshot_refresh_failed_missing"
+        if "invalid" in reason:
+            return "ws_snapshot_refresh_failed_invalid"
+        if "non_scalping" in reason or "disabled" in reason:
+            return "refresh_disabled_or_alias_gap"
+        return f"ws_snapshot_refresh_failed_{reason}"
+    if text.startswith("pre_submit_quote_refresh_"):
+        reason = text.removeprefix("pre_submit_quote_refresh_")
+        if reason in {"observer_quote_fresh", "applied"}:
+            return "observer_quote_refresh_applied"
+        if "stale" in reason:
+            return "observer_quote_refresh_failed_stale"
+        if "missing" in reason:
+            return "observer_quote_refresh_failed_missing"
+        if "invalid" in reason:
+            return "observer_quote_refresh_failed_invalid"
+        if "spread" in reason:
+            return "observer_quote_refresh_failed_spread"
+        if "disabled" in reason:
+            return "refresh_disabled_or_alias_gap"
+        return f"observer_quote_refresh_failed_{reason}"
+    if "refresh" in text and "disabled" in text:
+        return "refresh_disabled_or_alias_gap"
+    return None
+
+
+def _latency_root_cause_bucket(label: str) -> str:
+    text = label.lower()
+    if _refresh_reason_bucket(label) == "refresh_disabled_or_alias_gap":
+        return "observer_unhealthy"
+    if "ws_jitter" in text:
+        return "quote_stale"
+    # `other_danger` is the residual DANGER state after quote_stale/ws_age/
+    # ws_jitter/spread were already ruled out by the live classifier. The
+    # remaining source dimension is order RTT / transport execution health.
+    if "other_danger" in text or "order_rtt" in text or "rtt" in text:
+        return "order_rtt_guard"
+    if "quote_stale" in text or "stale" in text or "ws_age" in text or "quote_age" in text:
+        return "quote_stale"
+    if (
+        "observer_unhealthy" in text
+        or ("observer" in text and any(token in text for token in ("unhealthy", "missing", "invalid")))
+        or ("ws_snapshot" in text and any(token in text for token in ("missing", "invalid")))
+    ):
+        return "observer_unhealthy"
+    if "missing_trade" in text:
+        return "missing_trade"
+    if "spread" in text or "slippage" in text:
+        return "spread_or_slippage_guard"
+    if "price_gap" in text or "gap" in text:
+        return "price_gap_guard"
+    if any(token in text for token in ("broker", "account", "order", "cooldown")):
+        return "broker_account_order_cooldown"
+    return "unknown_latency_reason"
+
+
+def _latency_drought_root_cause_summary(current: dict[str, Any]) -> dict[str, Any]:
+    buckets = Counter()
+    refresh_buckets = Counter()
+    reason_counts = current.get("latency_danger_reason_counts")
+    if isinstance(reason_counts, dict) and reason_counts:
+        label_count_items = reason_counts.items()
+    else:
+        labels = (
+            current.get("latency_danger_reason_top")
+            if isinstance(current.get("latency_danger_reason_top"), list)
+            else current.get("latency_blocker_top")
+        )
+        labels = labels if isinstance(labels, list) else []
+        label_count_items = [
+            (str(item.get("label") or ""), int(item.get("count") or 0))
+            for item in labels
+            if isinstance(item, dict)
+        ]
+    for label, raw_count in label_count_items:
+        count = int(raw_count or 0)
+        refresh_bucket = _refresh_reason_bucket(label)
+        if refresh_bucket:
+            refresh_buckets[refresh_bucket] += count
+        buckets[_latency_root_cause_bucket(label)] += count
+    total = sum(buckets.values())
+    refresh_attempted = int(
+        current.get("quote_freshness_refresh_attempted_count", 0) or sum(refresh_buckets.values())
+    )
+    refresh_applied = int(
+        current.get("quote_freshness_refresh_applied_count", 0)
+        or (
+            refresh_buckets.get("ws_snapshot_refresh_applied", 0)
+            + refresh_buckets.get("observer_quote_refresh_applied", 0)
+        )
+    )
+    recovered_latency_pass = int(current.get("quote_freshness_refresh_latency_pass_count", 0) or 0)
+    submitted_after_refresh = int(current.get("quote_freshness_refresh_order_bundle_submitted_count", 0) or 0)
+    still_blocked_after_refresh = int(
+        current.get("quote_freshness_still_latency_blocked_after_refresh_count", 0)
+        or max(refresh_attempted - refresh_applied, 0)
+    )
+    recovered_downstream_counts = (
+        current.get("quote_freshness_recovered_downstream_counts")
+        if isinstance(current.get("quote_freshness_recovered_downstream_counts"), dict)
+        else {}
+    )
+    recovered_downstream_stage_counts = (
+        current.get("quote_freshness_recovered_downstream_stage_counts")
+        if isinstance(current.get("quote_freshness_recovered_downstream_stage_counts"), dict)
+        else {}
+    )
+    submitted_after_refresh = max(
+        submitted_after_refresh,
+        int(recovered_downstream_counts.get("order_bundle_submitted", 0) or 0),
+    )
+    return {
+        "latency_danger_event_count": int(current.get("latency_state_danger_events", 0) or 0),
+        "latency_root_cause_counts": dict(buckets),
+        "quote_freshness_attribution": {
+            "runtime_effect": False,
+            "decision_authority": "submit_drought_quote_freshness_attribution_only",
+            "forbidden_uses": [
+                "broker_order_submit",
+                "adm_ldm_training_input",
+                "general_threshold_ev_input",
+                "live_auto_promotion",
+            ],
+            "refresh_subreason_counts": dict(refresh_buckets),
+            "refresh_block_subreason_counts": dict(refresh_buckets),
+            "refresh_attempted_count": refresh_attempted,
+            "refresh_applied_count": refresh_applied,
+            "still_latency_blocked_after_refresh_count": still_blocked_after_refresh,
+            "latency_pass_recovered_count": recovered_latency_pass,
+            "order_bundle_submitted_after_refresh_count": submitted_after_refresh,
+            "latency_pass_recovered_downstream_counts": recovered_downstream_counts,
+            "latency_pass_recovered_downstream_stage_counts": recovered_downstream_stage_counts,
+            "post_restart_window_policy": "event_provenance_only",
+        },
+        "unknown_latency_reason_count": buckets.get("unknown_latency_reason", 0),
+        "known_latency_reason_count": total - buckets.get("unknown_latency_reason", 0),
+        "unknown_latency_workorder_required": buckets.get("unknown_latency_reason", 0) > 0,
+        "known_guard_route": "report_only_tuning_candidate",
+        "unknown_guard_route": "implement_now_candidate",
+    }
 
 
 def _classify(current: dict[str, Any], baseline: dict[str, Any] | None, *, as_of: datetime) -> dict[str, Any]:
@@ -675,6 +983,7 @@ def _classify(current: dict[str, Any], baseline: dict[str, Any] | None, *, as_of
             f"submitted/ai={submitted_to_ai:.2f}% < {SUBMIT_TO_AI_CRITICAL_PCT:.2f}% "
             f"or submitted/budget={submitted_to_budget:.2f}% <= {SUBMIT_TO_BUDGET_CRITICAL_PCT:.2f}%"
         )
+    submit_drought_root_cause = _latency_drought_root_cause_summary(current)
 
     primary = "NORMAL"
     if "RUNTIME_OPS" in matches:
@@ -710,6 +1019,8 @@ def _classify(current: dict[str, Any], baseline: dict[str, Any] | None, *, as_of
             "submitted_to_ai_critical_pct": SUBMIT_TO_AI_CRITICAL_PCT,
             "submitted_to_budget_critical_pct": SUBMIT_TO_BUDGET_CRITICAL_PCT,
         },
+        "submit_drought_handoff_state": "handoff_required" if submit_drought_critical else "not_required",
+        "submit_drought_root_cause": submit_drought_root_cause,
         "live_runtime_effect": False,
         "forbidden_automations": FORBIDDEN_AUTOMATIONS,
     }
@@ -985,6 +1296,12 @@ def build_markdown(report: dict[str, Any]) -> str:
     ratios = session["ratios"]
     unique = session["stage_unique"]
     classification = report["classification"]
+    quote_freshness = (
+        (classification.get("submit_drought_root_cause") or {}).get("quote_freshness_attribution")
+        if isinstance(classification.get("submit_drought_root_cause"), dict)
+        else {}
+    )
+    quote_freshness = quote_freshness if isinstance(quote_freshness, dict) else {}
     baseline = report["baseline"]["same_time_summary"]
     baseline_ratios = baseline["ratios"] if baseline else {}
     lines = [
@@ -1024,6 +1341,11 @@ def build_markdown(report: dict[str, Any]) -> str:
         f"- upstream blockers: `{_format_top_blockers(session['upstream_blocker_top'])}`",
         f"- latency blockers: `{_format_top_blockers(session['latency_blocker_top'])}`",
         f"- price guards: `{_format_top_blockers(session['price_guard_top'])}`",
+        f"- quote refresh: `attempted={quote_freshness.get('refresh_attempted_count', 0)}, "
+        f"applied={quote_freshness.get('refresh_applied_count', 0)}, "
+        f"latency_recovered={quote_freshness.get('latency_pass_recovered_count', 0)}, "
+        f"submitted_after_refresh={quote_freshness.get('order_bundle_submitted_after_refresh_count', 0)}`",
+        f"- quote refresh downstream: `{quote_freshness.get('latency_pass_recovered_downstream_counts') or {}}`",
         "",
         "## 금지된 자동변경",
         "",

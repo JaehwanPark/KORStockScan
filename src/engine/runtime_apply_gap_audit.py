@@ -1160,9 +1160,14 @@ def _build_codex_directives(ledger: list[dict[str, Any]], retry_queue: list[dict
                 )
             )
         elif row.get("runtime_hook_state") == "env_mapping_missing":
+            directive_type = (
+                "IMPLEMENT_SCALE_IN_POLICY_CONTRACT"
+                if row.get("stage") == "scale_in"
+                else "IMPLEMENT_RUNTIME_BRIDGE_FOR_ENTRY_BUCKET"
+            )
             directives.append(
                 _directive(
-                    "IMPLEMENT_RUNTIME_BRIDGE_FOR_ENTRY_BUCKET",
+                    directive_type,
                     row,
                     reason="env_mapping_missing",
                     blocking_contract="env_mapping_contract",

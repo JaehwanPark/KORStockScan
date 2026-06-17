@@ -1808,6 +1808,81 @@ def get_value_top_ka10032(token, mrkt_tp="000", limit=60):
     return cleaned_list
 
 
+def get_stock_orderbook_ka10004(token, code):
+    """
+    [ka10004] 주식호가요청.
+
+    Return a normalized REST orderbook snapshot with 10-level ask/bid depth.
+    This is intended as a pre-submit freshness fallback when the websocket
+    snapshot is missing or stale; callers must still enforce age/spread guards.
+    """
+    if not token or not code:
+        return {}
+    url = get_api_url("/api/dostk/mrkcond")
+    payload = {"stk_cd": get_effective_kiwoom_code(str(code))}
+
+    try:
+        results = fetch_kiwoom_api_continuous(
+            url=url,
+            token=token,
+            api_id="ka10004",
+            payload=payload,
+            use_continuous=False,
+        )
+    except Exception as e:
+        log_info(f"⚠️ [ka10004] 주식호가 조회 실패 [{code}]: {e}")
+        return {}
+
+    if not results or not isinstance(results[0], dict):
+        return {}
+    row = results[0]
+
+    asks = []
+    bids = []
+    for level in range(1, 11):
+        if level == 1:
+            ask_price_key = "sel_fpr_bid"
+            ask_qty_key = "sel_fpr_req"
+            bid_price_key = "buy_fpr_bid"
+            bid_qty_key = "buy_fpr_req"
+        else:
+            ask_price_key = f"sel_{level}th_pre_bid"
+            ask_qty_key = f"sel_{level}th_pre_req"
+            bid_price_key = f"buy_{level}th_pre_bid"
+            bid_qty_key = f"buy_{level}th_pre_req"
+        ask_price = _scanner_to_int(row.get(ask_price_key))
+        ask_qty = _scanner_to_int(row.get(ask_qty_key))
+        bid_price = _scanner_to_int(row.get(bid_price_key))
+        bid_qty = _scanner_to_int(row.get(bid_qty_key))
+        if ask_price > 0:
+            asks.append({"price": ask_price, "volume": max(ask_qty, 0)})
+        if bid_price > 0:
+            bids.append({"price": bid_price, "volume": max(bid_qty, 0)})
+
+    best_ask = asks[0]["price"] if asks else 0
+    best_bid = bids[0]["price"] if bids else 0
+    best_ask_qty = asks[0]["volume"] if asks else 0
+    best_bid_qty = bids[0]["volume"] if bids else 0
+    return {
+        "source": "ka10004_rest_orderbook",
+        "stock_code": normalize_stock_code(code),
+        "request_code": payload["stk_cd"],
+        "bid_req_base_tm": str(row.get("bid_req_base_tm") or "").strip(),
+        "curr": best_ask or best_bid,
+        "best_ask": best_ask,
+        "best_bid": best_bid,
+        "best_ask_qty": best_ask_qty,
+        "best_bid_qty": best_bid_qty,
+        "ask_tot": _scanner_to_int(row.get("tot_sel_req")),
+        "bid_tot": _scanner_to_int(row.get("tot_buy_req")),
+        "orderbook": {
+            "asks": asks,
+            "bids": bids,
+        },
+        "raw": row,
+    }
+
+
 def get_bid_balance_surge_ka10021(token, mrkt_tp="000", minutes=3, limit=60):
     """
     [ka10021] 호가잔량급증.

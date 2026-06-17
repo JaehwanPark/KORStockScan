@@ -76,6 +76,9 @@ def test_build_next_stage2_checklist_generates_next_trading_day_and_tasks(monkey
     assert "[PostcloseSourceQualityGateReview0511]" in text
     assert "unknown-token warning" in text
     assert "[CodeImprovementWorkorderReview0511]" in text
+    assert "terminal_non_implement_longstanding" in text
+    assert "repeat_unresolved_structural_blocker" in text
+    assert "keep_visible_by_design" in text
     assert "[AutomationTriggerDecisionSummary0511]" in text
     assert "tuning_performance_control_tower_2026-05-08.json" in text
     assert "codex_daily_workorder_*.md" in text

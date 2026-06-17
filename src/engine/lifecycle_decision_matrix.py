@@ -117,6 +117,18 @@ RUNTIME_FEATURE_KEYS = {
     "latency_state",
     "latency_reason",
     "price_below_bid_bps",
+    "pre_submit_quote_refresh_enabled",
+    "pre_submit_quote_refresh_applied",
+    "pre_submit_quote_refresh_reason",
+    "pre_submit_quote_refresh_source",
+    "pre_submit_quote_refresh_quote_age_ms",
+    "pre_submit_quote_refresh_strategy_id",
+    "pre_submit_quote_refresh_env_value",
+    "pre_submit_ws_snapshot_refresh_enabled",
+    "pre_submit_ws_snapshot_refresh_applied",
+    "pre_submit_ws_snapshot_refresh_reason",
+    "pre_submit_ws_snapshot_refresh_source",
+    "pre_submit_ws_snapshot_refresh_age_ms",
     "time_bucket",
     "time_bucket_provenance",
     "actual_order_submitted",
@@ -325,6 +337,15 @@ SCALP_SIM_SUBMIT_STAGES = {
 }
 
 SCALP_SIM_HOLDING_STAGE = "scalp_sim_holding_started"
+PRE_SUBMIT_REFRESH_NOOP_REASONS = {
+    "",
+    "not_attempted",
+    "quote_not_stale",
+    "observer_quote_fresh",
+    "latest_ws_snapshot_fresh",
+    "latest_snapshot_fresh",
+}
+PRE_SUBMIT_REFRESH_NOT_NEEDED_REASONS = PRE_SUBMIT_REFRESH_NOOP_REASONS - {"", "not_attempted"}
 
 
 def report_paths(target_date: str, *, output_suffix: str | None = None) -> tuple[Path, Path]:
@@ -545,6 +566,41 @@ def _submit_runtime_features(row: dict[str, Any], runtime_features: dict[str, An
     _set_missing_feature(features, "strategy_domain", _present_value(features.get("strategy_domain"), row.get("strategy_domain"), row.get("strategy")) or "scalping")
     _set_missing_feature(features, "source_namespace", _present_value(features.get("source_namespace"), row.get("source_namespace")) or "scalping_entry_submit")
     _set_missing_feature(features, "blocker_namespace", _present_value(features.get("blocker_namespace"), row.get("blocker_namespace")) or "entry_submit")
+    _set_missing_feature(features, "quote_age_ms", _present_value(features.get("quote_age_ms"), row.get("quote_age_ms")))
+    _set_missing_feature(features, "latency_state", _present_value(features.get("latency_state"), row.get("latency_state")))
+    _set_missing_feature(features, "latency_reason", _present_value(features.get("latency_reason"), row.get("latency_reason")))
+    _set_missing_feature(
+        features,
+        "entry_submit_revalidation_warning",
+        _present_value(features.get("entry_submit_revalidation_warning"), row.get("entry_submit_revalidation_warning")),
+    )
+    _set_missing_feature(
+        features,
+        "entry_submit_revalidation_block",
+        _present_value(features.get("entry_submit_revalidation_block"), row.get("entry_submit_revalidation_block")),
+    )
+    _set_missing_feature(features, "best_bid", _present_value(features.get("best_bid"), row.get("best_bid")))
+    _set_missing_feature(features, "best_ask", _present_value(features.get("best_ask"), row.get("best_ask")))
+    _set_missing_feature(
+        features,
+        "resolved_order_price",
+        _present_value(features.get("resolved_order_price"), row.get("resolved_order_price")),
+    )
+    for key in (
+        "pre_submit_quote_refresh_enabled",
+        "pre_submit_quote_refresh_applied",
+        "pre_submit_quote_refresh_reason",
+        "pre_submit_quote_refresh_source",
+        "pre_submit_quote_refresh_quote_age_ms",
+        "pre_submit_quote_refresh_strategy_id",
+        "pre_submit_quote_refresh_env_value",
+        "pre_submit_ws_snapshot_refresh_enabled",
+        "pre_submit_ws_snapshot_refresh_applied",
+        "pre_submit_ws_snapshot_refresh_reason",
+        "pre_submit_ws_snapshot_refresh_source",
+        "pre_submit_ws_snapshot_refresh_age_ms",
+    ):
+        _set_missing_feature(features, key, _present_value(features.get(key), row.get(key)))
     _set_missing_feature(features, "runtime_effect", False)
     _set_missing_feature(features, "allowed_runtime_apply", False)
     return features
@@ -1996,8 +2052,14 @@ SUBMIT_BUCKET_FIELD_MAP = {
     "overbought_bucket": "runtime_features.overbought_guard_reason|runtime_features.sim_pre_submit_overbought_reason|runtime_features.sim_overbought_risk_state|runtime_features.sim_overbought_risk_bucket|runtime_features.overbought_bucket",
     "latency_state": "runtime_features.latency_state",
     "latency_reason": "runtime_features.latency_reason",
+    "pre_submit_refresh_source": "runtime_features.pre_submit_quote_refresh_source|runtime_features.pre_submit_ws_snapshot_refresh_source",
+    "pre_submit_refresh_attempted": "runtime_features.pre_submit_quote_refresh_enabled|runtime_features.pre_submit_ws_snapshot_refresh_enabled|runtime_features.pre_submit_quote_refresh_reason|runtime_features.pre_submit_ws_snapshot_refresh_reason",
+    "pre_submit_refresh_applied": "runtime_features.pre_submit_quote_refresh_applied|runtime_features.pre_submit_ws_snapshot_refresh_applied",
+    "pre_submit_refresh_reason": "runtime_features.pre_submit_quote_refresh_reason|runtime_features.pre_submit_ws_snapshot_refresh_reason",
+    "pre_submit_refresh_age_bucket": "runtime_features.pre_submit_quote_refresh_quote_age_ms|runtime_features.pre_submit_ws_snapshot_refresh_age_ms",
+    "quote_freshness_resolution_state": "runtime_features.pre_submit_quote_refresh_applied|runtime_features.pre_submit_ws_snapshot_refresh_applied|runtime_features.pre_submit_quote_refresh_reason|runtime_features.pre_submit_ws_snapshot_refresh_reason",
     "price_below_bid_bucket": "runtime_features.price_below_bid_bps",
-    "combo_submit_quality": "source_stage|runtime_features.entry_submit_revalidation_warning|runtime_features.entry_submit_revalidation_block|runtime_features.quote_age_ms|runtime_features.would_limit_fill|runtime_features.actual_order_submitted|runtime_features.sim_pre_submit_liquidity_guard_action|runtime_features.sim_pre_submit_liquidity_reason|runtime_features.sim_pre_submit_overbought_guard_action|runtime_features.sim_pre_submit_overbought_reason|runtime_features.latency_state",
+    "combo_submit_quality": "source_stage|runtime_features.entry_submit_revalidation_warning|runtime_features.entry_submit_revalidation_block|runtime_features.quote_age_ms|runtime_features.would_limit_fill|runtime_features.actual_order_submitted|runtime_features.sim_pre_submit_liquidity_guard_action|runtime_features.sim_pre_submit_liquidity_reason|runtime_features.sim_pre_submit_overbought_guard_action|runtime_features.sim_pre_submit_overbought_reason|runtime_features.latency_state|runtime_features.pre_submit_quote_refresh_applied|runtime_features.pre_submit_ws_snapshot_refresh_applied|runtime_features.pre_submit_quote_refresh_reason|runtime_features.pre_submit_ws_snapshot_refresh_reason",
 }
 
 
@@ -2468,6 +2530,122 @@ def _submit_latency_reason(features: dict[str, Any]) -> str:
     return _bucket_value(features.get("latency_reason"), "latency_reason_unknown")
 
 
+def _submit_is_sim_path(features: dict[str, Any], source_stage: str) -> bool:
+    return source_stage in SCALP_SIM_SUBMIT_STAGES or bool(_bucket_value(features.get("sim_record_id"), ""))
+
+
+def _submit_refresh_attempted(features: dict[str, Any], source_stage: str) -> str:
+    if _submit_is_sim_path(features, source_stage):
+        return "sim_submit_path_not_applicable"
+    for prefix in ("pre_submit_ws_snapshot_refresh", "pre_submit_quote_refresh"):
+        reason = _bucket_value(features.get(f"{prefix}_reason"), "").lower()
+        if not _boolish_false(features.get(f"{prefix}_applied")) or reason not in PRE_SUBMIT_REFRESH_NOOP_REASONS:
+            return "refresh_attempted"
+    if any(
+        _bucket_value(features.get(f"{prefix}_reason"), "").lower()
+        in PRE_SUBMIT_REFRESH_NOT_NEEDED_REASONS
+        for prefix in ("pre_submit_ws_snapshot_refresh", "pre_submit_quote_refresh")
+    ):
+        return "refresh_not_attempted_or_not_needed"
+    return "refresh_not_attempted_or_not_instrumented"
+
+
+def _submit_refresh_applied(features: dict[str, Any], source_stage: str) -> str:
+    if _submit_is_sim_path(features, source_stage):
+        return "sim_submit_path_not_applicable"
+    if not _boolish_false(features.get("pre_submit_ws_snapshot_refresh_applied")):
+        return "ws_snapshot_refresh_applied"
+    if not _boolish_false(features.get("pre_submit_quote_refresh_applied")):
+        return "observer_quote_refresh_applied"
+    if _submit_refresh_attempted(features, source_stage) == "refresh_attempted":
+        return "refresh_attempted_not_applied"
+    return "refresh_not_attempted_or_not_instrumented"
+
+
+def _submit_refresh_effective_prefix(features: dict[str, Any]) -> str | None:
+    for prefix in ("pre_submit_ws_snapshot_refresh", "pre_submit_quote_refresh"):
+        if not _boolish_false(features.get(f"{prefix}_applied")):
+            return prefix
+    for prefix in ("pre_submit_ws_snapshot_refresh", "pre_submit_quote_refresh"):
+        reason = _bucket_value(features.get(f"{prefix}_reason"), "").lower()
+        if reason and reason not in PRE_SUBMIT_REFRESH_NOOP_REASONS:
+            return prefix
+    for prefix in ("pre_submit_ws_snapshot_refresh", "pre_submit_quote_refresh"):
+        reason = _bucket_value(features.get(f"{prefix}_reason"), "").lower()
+        if reason and reason != "not_attempted":
+            return prefix
+    return None
+
+
+def _submit_refresh_source(features: dict[str, Any], source_stage: str) -> str:
+    if _submit_is_sim_path(features, source_stage):
+        return "sim_submit_path_not_applicable"
+    prefix = _submit_refresh_effective_prefix(features)
+    if prefix == "pre_submit_ws_snapshot_refresh":
+        reason = _bucket_value(features.get(f"{prefix}_reason"), "").lower()
+        if reason in PRE_SUBMIT_REFRESH_NOOP_REASONS and _boolish_false(features.get(f"{prefix}_applied")):
+            return "refresh_source_not_needed"
+        return _bucket_value(features.get(f"{prefix}_source"), "ws_manager_latest_data")
+    if prefix == "pre_submit_quote_refresh":
+        reason = _bucket_value(features.get(f"{prefix}_reason"), "").lower()
+        if reason in PRE_SUBMIT_REFRESH_NOOP_REASONS and _boolish_false(features.get(f"{prefix}_applied")):
+            return "refresh_source_not_needed"
+        return _bucket_value(features.get(f"{prefix}_source"), "orderbook_micro_observer")
+    return "refresh_source_not_instrumented"
+
+
+def _submit_refresh_reason(features: dict[str, Any], source_stage: str) -> str:
+    if _submit_is_sim_path(features, source_stage):
+        return "sim_submit_path_not_applicable"
+    prefix = _submit_refresh_effective_prefix(features)
+    if prefix == "pre_submit_ws_snapshot_refresh":
+        reason = _bucket_value(features.get(f"{prefix}_reason"), "").lower()
+        if reason in PRE_SUBMIT_REFRESH_NOOP_REASONS and _boolish_false(features.get(f"{prefix}_applied")):
+            return "refresh_not_attempted_or_not_needed"
+        return f"ws_snapshot:{reason}"
+    if prefix == "pre_submit_quote_refresh":
+        reason = _bucket_value(features.get(f"{prefix}_reason"), "").lower()
+        if reason in PRE_SUBMIT_REFRESH_NOOP_REASONS and _boolish_false(features.get(f"{prefix}_applied")):
+            return "refresh_not_attempted_or_not_needed"
+        return f"observer_quote:{reason}"
+    return "refresh_reason_not_instrumented"
+
+
+def _submit_refresh_age_bucket(features: dict[str, Any], source_stage: str) -> str:
+    if _submit_is_sim_path(features, source_stage):
+        return "sim_submit_path_not_applicable"
+    if _submit_refresh_attempted(features, source_stage) == "refresh_not_attempted_or_not_needed":
+        return "refresh_age_not_needed"
+    age = _present_value(
+        features.get("pre_submit_ws_snapshot_refresh_age_ms"),
+        features.get("pre_submit_quote_refresh_quote_age_ms"),
+    )
+    if age is None:
+        return "refresh_age_not_instrumented"
+    return _quote_age_bucket(age).replace("quote_age", "refresh_age")
+
+
+def _submit_quote_freshness_resolution_state(features: dict[str, Any], source_stage: str) -> str:
+    if _submit_is_sim_path(features, source_stage):
+        return "sim_submit_path_not_applicable"
+    applied = _submit_refresh_applied(features, source_stage)
+    if applied in {"ws_snapshot_refresh_applied", "observer_quote_refresh_applied"}:
+        return "refresh_resolved_quote_freshness"
+    attempted = _submit_refresh_attempted(features, source_stage)
+    if attempted == "refresh_not_attempted_or_not_needed":
+        return "refresh_not_attempted_or_not_needed"
+    reason = _submit_refresh_reason(features, source_stage)
+    if "stale" in reason or "older_than_input" in reason:
+        return "refresh_failed_quote_stale"
+    if "missing" in reason or "invalid" in reason:
+        return "refresh_failed_source_unhealthy"
+    if "spread" in reason:
+        return "refresh_failed_spread_guard"
+    if attempted == "refresh_attempted":
+        return "refresh_attempted_unresolved"
+    return "refresh_not_attempted_or_not_instrumented"
+
+
 def _submit_price_below_bid_bucket(value: Any) -> str:
     bps = _safe_float(value, None)
     if bps is None:
@@ -2483,8 +2661,9 @@ def _submit_price_below_bid_bucket(value: Any) -> str:
 
 def _submit_bucket_features(row: dict[str, Any]) -> dict[str, str]:
     features = row.get("runtime_features") if isinstance(row.get("runtime_features"), dict) else {}
+    source_stage = _bucket_value(row.get("source_stage"), "source_unknown")
     return {
-        "submit_source_stage": _bucket_value(row.get("source_stage"), "source_unknown"),
+        "submit_source_stage": source_stage,
         "revalidation_state": _submit_revalidation_state(features),
         "quote_age_bucket": _quote_age_bucket(features.get("quote_age_ms")),
         "price_resolution_bucket": _bucket_value(
@@ -2506,6 +2685,12 @@ def _submit_bucket_features(row: dict[str, Any]) -> dict[str, str]:
         "overbought_bucket": _submit_overbought_bucket(features),
         "latency_state": _submit_latency_state(features),
         "latency_reason": _submit_latency_reason(features),
+        "pre_submit_refresh_source": _submit_refresh_source(features, source_stage),
+        "pre_submit_refresh_attempted": _submit_refresh_attempted(features, source_stage),
+        "pre_submit_refresh_applied": _submit_refresh_applied(features, source_stage),
+        "pre_submit_refresh_reason": _submit_refresh_reason(features, source_stage),
+        "pre_submit_refresh_age_bucket": _submit_refresh_age_bucket(features, source_stage),
+        "quote_freshness_resolution_state": _submit_quote_freshness_resolution_state(features, source_stage),
         "price_below_bid_bucket": _submit_price_below_bid_bucket(features.get("price_below_bid_bps")),
     }
 
@@ -2851,6 +3036,12 @@ def _submit_bucket_attribution(rows: list[dict[str, Any]]) -> dict[str, Any]:
             "overbought_bucket",
             "latency_state",
             "latency_reason",
+            "pre_submit_refresh_source",
+            "pre_submit_refresh_attempted",
+            "pre_submit_refresh_applied",
+            "pre_submit_refresh_reason",
+            "pre_submit_refresh_age_bucket",
+            "quote_freshness_resolution_state",
             "price_below_bid_bucket",
         ):
             bucket_groups[(bucket_type, buckets[bucket_type])].append(row)
@@ -2863,6 +3054,7 @@ def _submit_bucket_attribution(rows: list[dict[str, Any]]) -> dict[str, Any]:
                 f"liquidity_guard={buckets['liquidity_guard_action']}",
                 f"overbought={buckets['overbought_bucket']}",
                 f"latency={buckets['latency_state']}",
+                f"refresh={buckets['quote_freshness_resolution_state']}",
                 f"fill={buckets['would_limit_fill']}",
                 f"submitted={buckets['actual_order_submitted']}",
             ]
@@ -2901,6 +3093,12 @@ def _submit_bucket_attribution(rows: list[dict[str, Any]]) -> dict[str, Any]:
         }
         for item in contract_gaps
     ]
+    quote_freshness_resolution_counts = Counter()
+    pre_submit_refresh_applied_counts = Counter()
+    for row in submit_rows:
+        bucket_values = _submit_bucket_features(row)
+        quote_freshness_resolution_counts[bucket_values["quote_freshness_resolution_state"]] += 1
+        pre_submit_refresh_applied_counts[bucket_values["pre_submit_refresh_applied"]] += 1
     return {
         "metric_role": "submit_funnel_source_quality_gate",
         "decision_authority": "adm_ldm_submit_bucket_attribution_source_only",
@@ -2923,6 +3121,17 @@ def _submit_bucket_attribution(rows: list[dict[str, Any]]) -> dict[str, Any]:
             "contract_gap_count": len(contract_gaps),
             "workorder_count": len(workorders),
             "runtime_candidate_count": 0,
+            "quote_freshness_attribution_present": any(
+                key
+                not in {
+                    "refresh_not_attempted_or_not_instrumented",
+                    "refresh_not_attempted_or_not_needed",
+                    "sim_submit_path_not_applicable",
+                }
+                for key in quote_freshness_resolution_counts
+            ),
+            "quote_freshness_resolution_counts": dict(sorted(quote_freshness_resolution_counts.items())),
+            "pre_submit_refresh_applied_counts": dict(sorted(pre_submit_refresh_applied_counts.items())),
             "real_submitted_row_count": len(real_submitted_rows),
             "missing_broker_order_key_count": len(missing_broker_key_rows),
             "bot_history_broker_order_key_backfill_candidate_count": len(bot_history_backfill),
@@ -4053,20 +4262,29 @@ def _direct_sim_record_flow_zero_diagnostic(
         reason_counts.update(item.get("incomplete_reasons") or [])
     if direct_sim_record_complete_flow_count > 0:
         zero_reason = "direct_sim_record_complete_present"
+        closure_status = "closed"
     elif adm_bridge_complete_flow_count > 0:
         zero_reason = "no_direct_complete_but_adm_bridge_complete"
+        closure_status = "closed_by_adm_bridge_complete"
     elif not direct_flows:
         zero_reason = "identity_namespace_mismatch"
+        closure_status = "producer_followup_required"
     elif reason_counts.get("sim_record_id_only"):
         zero_reason = "producer_missing_sim_record_on_required_stage"
+        closure_status = "producer_followup_required"
     elif any(reason_counts.get(f"missing_{stage}") for stage in LIFECYCLE_FLOW_REQUIRED_STAGES):
         zero_reason = "stage_sequence_missing"
+        closure_status = "producer_followup_required"
     elif reason_counts.get("scale_in_noise_only"):
         zero_reason = "scale_in_noise_denominator"
+        closure_status = "closed_with_denominator_exclusion"
     else:
         zero_reason = "identity_namespace_mismatch"
+        closure_status = "producer_followup_required"
     return {
         "direct_flow_zero_reason": zero_reason,
+        "direct_flow_zero_closure_status": closure_status,
+        "direct_flow_zero_followup_required": closure_status == "producer_followup_required",
         "direct_sim_record_flow_count": len(direct_flows),
         "direct_sim_record_incomplete_flow_count": len(direct_incomplete),
         "direct_sim_record_stage_coverage_counts": dict(stage_coverage_counts),
@@ -4530,6 +4748,10 @@ def _lifecycle_flow_bucket_attribution(rows: list[dict[str, Any]]) -> dict[str, 
             "fallback_complete_flow_count": fallback_complete_flow_count,
             "direct_flow_zero_diagnostic": direct_flow_zero_diagnostic,
             "direct_flow_zero_reason": direct_flow_zero_diagnostic.get("direct_flow_zero_reason"),
+            "direct_flow_zero_closure_status": direct_flow_zero_diagnostic.get("direct_flow_zero_closure_status"),
+            "direct_flow_zero_followup_required": bool(
+                direct_flow_zero_diagnostic.get("direct_flow_zero_followup_required")
+            ),
             "incomplete_flow_count": flow_count - complete_flow_count,
             "fallback_identity_count": sum(1 for item in flows if item.get("identity_quality") == "fallback_incomplete"),
             "identity_missing_count": identity_summary["identity_missing_count"],

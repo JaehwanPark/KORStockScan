@@ -528,9 +528,9 @@ def _build_tasks(
                     f"[code_improvement_workorder_{source_date}.json](/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_{source_date}.json)"
                 ),
                 lines=(
-                    f"판정 기준: selected_order_count={_code_workorder_count(ev_report, code_report)}와 `implement_now`, `attach_existing_family`, `design_family_candidate`, `reject` 분류를 확인한다.",
+                    f"판정 기준: selected_order_count={_code_workorder_count(ev_report, code_report)}와 `implement_now`, `attach_existing_family`, `design_family_candidate`, `reject` 분류를 확인하고, 비-implement 반복 항목이 `terminal_non_implement_longstanding`, `repeat_unresolved_structural_blocker`, `keep_visible_by_design` 중 무엇으로 닫혀야 하는지 분리한다.",
                     "금지: code-improvement workorder를 자동 repo 수정으로 취급하지 않는다. 사용자가 Codex 구현을 지시한 경우에만 실행한다.",
-                    "다음 액션: 구현 필요, 설계 보류, reject, already_implemented 중 하나로 닫는다.",
+                    "다음 액션: `implement_now`, `terminal_non_implement_longstanding`, `repeat_unresolved_structural_blocker`, `keep_visible_by_design`, `already_implemented`, `defer_design`, `reject` 중 하나로 닫는다.",
                 ),
             )
         )

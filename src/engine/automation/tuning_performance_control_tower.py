@@ -355,6 +355,17 @@ def _workorder_summary(code_workorder: dict[str, Any]) -> dict[str, Any]:
         "stage_hook_workorder_discovery_source_order_count": _safe_int(
             summary.get("stage_hook_workorder_discovery_source_order_count")
         ),
+        "root_cause_closure_status_counts": summary.get("root_cause_closure_status_counts")
+        if isinstance(summary.get("root_cause_closure_status_counts"), dict)
+        else {},
+        "implementation_done_count": _safe_int(summary.get("implementation_done_count")),
+        "artifact_regeneration_required_count": _safe_int(summary.get("artifact_regeneration_required_count")),
+        "handoff_closed_root_cause_open_count": _safe_int(summary.get("handoff_closed_root_cause_open_count")),
+        "root_cause_closed_count": _safe_int(summary.get("root_cause_closed_count")),
+        "needs_followup_workorder_count": _safe_int(summary.get("needs_followup_workorder_count")),
+        "root_cause_open_top": summary.get("root_cause_open_top")
+        if isinstance(summary.get("root_cause_open_top"), list)
+        else [],
         "interpretation": "workorder_intake_only_not_automatic_repo_change",
     }
 
@@ -777,6 +788,12 @@ def _postclose_verifier_summary(
         "stale_downstream_links": verifier_report.get("stale_downstream_links")
         if isinstance(verifier_report.get("stale_downstream_links"), list)
         else [],
+        "root_cause_closure_status_counts": verifier_report.get("root_cause_closure_status_counts")
+        if isinstance(verifier_report.get("root_cause_closure_status_counts"), dict)
+        else {},
+        "root_cause_closure_summary": verifier_report.get("root_cause_closure_summary")
+        if isinstance(verifier_report.get("root_cause_closure_summary"), dict)
+        else {},
         "lifecycle_bucket_windows": {
             "status": windows.get("status"),
             "checked": bool(windows.get("checked")),
@@ -1076,6 +1093,12 @@ def _markdown(report: dict[str, Any]) -> str:
         "",
         f"- selected orders `{workorder['selected_order_count']}`, selected decisions "
         f"`{inline_json(workorder['selected_decision_counts'])}`, routes `{inline_json(workorder['selected_route_counts'])}`.",
+        f"- root-cause closure `{inline_json(workorder['root_cause_closure_status_counts'])}`, "
+        f"implementation_done `{workorder['implementation_done_count']}`, "
+        f"artifact_regeneration_required `{workorder['artifact_regeneration_required_count']}`, "
+        f"handoff_closed_root_cause_open `{workorder['handoff_closed_root_cause_open_count']}`, "
+        f"root_cause_closed `{workorder['root_cause_closed_count']}`, "
+        f"needs_followup `{workorder['needs_followup_workorder_count']}`.",
         f"- pattern lab AI review source orders `{workorder['pattern_lab_ai_review_source_order_count']}`, "
         f"pattern lab currentness source orders `{workorder['pattern_lab_currentness_source_order_count']}`.",
         "- 해석: `implement_now`는 자동 repo 수정이 아니라 `runtime_effect=false` intake다. "
@@ -1244,6 +1267,7 @@ def build_tuning_performance_control_tower(target_date: str) -> dict[str, Any]:
             "verifier_status": verifier.get("status"),
             "verifier_handoff_warning_count": len(verifier.get("handoff_warnings") or []),
             "verifier_missing_downstream_link_count": len(verifier.get("missing_downstream_links") or []),
+            "verifier_root_cause_closure_status_counts": verifier.get("root_cause_closure_status_counts") or {},
             "runtime_apply_gap_audit_status": runtime_gap_audit.get("status"),
             "real_conversion_queue_count": conversion_first["real_conversion_queue_count"],
             "positive_ev_runtime_observed_count": conversion_first["positive_ev_runtime_observed_count"],
@@ -1332,6 +1356,16 @@ def build_tuning_performance_control_tower(target_date: str) -> dict[str, Any]:
             "source_artifact_warning_count": len(warnings),
             "ev_warnings": ev["warnings"],
             "ev_warning_count": len(ev["warnings"]),
+            "workorder_root_cause_closure_status_counts": workorder.get("root_cause_closure_status_counts") or {},
+            "workorder_implementation_done_count": workorder.get("implementation_done_count"),
+            "workorder_artifact_regeneration_required_count": workorder.get(
+                "artifact_regeneration_required_count"
+            ),
+            "workorder_handoff_closed_root_cause_open_count": workorder.get(
+                "handoff_closed_root_cause_open_count"
+            ),
+            "workorder_root_cause_closed_count": workorder.get("root_cause_closed_count"),
+            "workorder_needs_followup_workorder_count": workorder.get("needs_followup_workorder_count"),
             "read_this_first": True,
         },
         "ldm_progression": {

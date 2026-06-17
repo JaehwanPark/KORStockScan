@@ -363,9 +363,7 @@ STAGE_CONTRACTS: dict[str, StageContract] = {
             "scanner_real_source_guard_skip_reason",
             "scanner_real_source_guard_block_event_emitted",
             "source_signature",
-            "first_seen_flu_rate",
             "current_flu_rate",
-            "last_promoted_at",
         ),
         decision_authority="real_scalping_scanner_source_guard_only",
     ),
@@ -1178,6 +1176,9 @@ def _row_identity(row: dict[str, Any], *, line_no: int | None = None) -> dict[st
 def _row_contract_violations(stage: str, row: dict[str, Any], contract: StageContract) -> dict[str, list[str]]:
     fields = _normalized_fields_for_contract(stage, row.get("fields") if isinstance(row.get("fields"), dict) else {})
     missing = [field for field in contract.required_fields if not _is_present(fields.get(field))]
+    for field in _conditional_required_fields(stage, fields):
+        if not _is_present(fields.get(field)) and field not in missing:
+            missing.append(field)
     zero = [
         field
         for field in contract.zero_sensitive_fields
@@ -1199,6 +1200,26 @@ def _row_contract_violations(stage: str, row: dict[str, Any], contract: StageCon
         "zero_fields": zero,
         "invalid_fields": invalid,
     }
+
+
+def _conditional_required_fields(stage: str, fields: dict[str, Any]) -> tuple[str, ...]:
+    if stage != "scalping_scanner_real_source_guard_block":
+        return ()
+    if fields.get("scanner_source_guard_first_seen_required") is True:
+        return ("first_seen_flu_rate", "last_promoted_at")
+    if str(fields.get("scanner_source_guard_context") or "") == "repeat_guard_with_provenance":
+        return ("first_seen_flu_rate", "last_promoted_at")
+    reason_candidates = (
+        fields.get("scanner_real_source_guard_skip_reason"),
+        fields.get("scanner_block_reason"),
+        fields.get("scanner_filter_reason"),
+    )
+    if any(
+        str(reason or "") == "value_top_only_repeat_deteriorating_without_strength"
+        for reason in reason_candidates
+    ):
+        return ("first_seen_flu_rate", "last_promoted_at")
+    return ()
 
 
 def _hard_violation_fields_by_stage(contract_result: dict[str, Any]) -> dict[str, dict[str, set[str]]]:
@@ -1484,6 +1505,25 @@ def _evaluate_contracts(rows: list[dict[str, Any]], stage_counts: Counter[str]) 
                 for row in stage_rows
                 if not _is_present(_normalized_fields_for_contract(stage, row["fields"]).get(field))
             )
+        conditional_fields = sorted({
+            field
+            for row in stage_rows
+            for field in _conditional_required_fields(
+                stage,
+                _normalized_fields_for_contract(stage, row["fields"]),
+            )
+        })
+        for field in conditional_fields:
+            missing_counts[field] = sum(
+                1
+                for row in stage_rows
+                if field
+                in _conditional_required_fields(
+                    stage,
+                    _normalized_fields_for_contract(stage, row["fields"]),
+                )
+                and not _is_present(_normalized_fields_for_contract(stage, row["fields"]).get(field))
+            )
         if stage == "soft_stop_whipsaw_confirmation":
             invalid_label_counts["flow_state"] = sum(
                 1
@@ -1547,6 +1587,7 @@ def _evaluate_contracts(rows: list[dict[str, Any]], stage_counts: Counter[str]) 
             "status": status,
             **_stage_time_bounds(stage_rows),
             "required_fields": list(contract.required_fields),
+            "conditional_required_fields": conditional_fields,
             "missing_counts": missing_counts,
             "missing_rates": missing_rates,
             "zero_sensitive_fields": list(contract.zero_sensitive_fields),

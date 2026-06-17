@@ -118,6 +118,55 @@ def test_ka10054_vi_rates_are_split_by_metric(monkeypatch):
     assert row["ViFluRateMetric"] == "vi_open_flu_rate"
 
 
+def test_scanner_event_fields_requires_repeat_guard_provenance_even_when_missing():
+    fields = scalping_scanner._scanner_event_fields(
+        {
+            "Code": "000001",
+            "Name": "테스트",
+            "Price": "1000",
+            "SourceSignature": ["VALUE_TOP"],
+            "FluRate": "0.0",
+        },
+        {
+            "blocked": True,
+            "reason": "value_top_only_repeat_deteriorating_without_strength",
+            "source_signature": "VALUE_TOP",
+            "current_flu_rate": "0.00",
+        },
+    )
+
+    assert fields["scanner_source_guard_context"] == "repeat_guard_with_provenance"
+    assert fields["scanner_source_guard_first_seen_required"] is True
+    assert fields["first_seen_flu_rate"] is None
+    assert fields["last_promoted_at"] is None
+
+
+def test_scanner_event_fields_does_not_require_last_promoted_for_probe_followup():
+    fields = scalping_scanner._scanner_event_fields(
+        {
+            "Code": "000001",
+            "Name": "테스트",
+            "Price": "1000",
+            "SourceSignature": ["PRICE_JUMP_START"],
+            "FluRate": "2.0",
+        },
+        {
+            "blocked": True,
+            "reason": "late_confirmation_probe_waiting",
+            "source_signature": "PRICE_JUMP_START",
+            "first_seen_flu_rate": "1.80",
+            "current_flu_rate": "2.00",
+            "first_price": "990",
+            "current_price": "1000",
+        },
+    )
+
+    assert fields["scanner_source_guard_context"] == "first_seen_not_applicable"
+    assert fields["scanner_source_guard_first_seen_required"] is False
+    assert fields["first_seen_flu_rate"] == "1.80"
+    assert fields["last_promoted_at"] is None
+
+
 def test_ka00198_realtime_rank_start_is_normalized(monkeypatch):
     def fake_fetch(**kwargs):
         assert kwargs["api_id"] == "ka00198"
@@ -247,6 +296,49 @@ def test_ka10021_bid_balance_surge_is_normalized(monkeypatch):
     assert rows[0]["BidSurgeRate"] == 95.5
     assert rows[0]["TotalBuyQty"] == 321000
     assert rows[0]["Source"] == "BID_IMBALANCE_SURGE"
+
+
+def test_ka10004_stock_orderbook_is_normalized(monkeypatch):
+    def fake_fetch(**kwargs):
+        assert kwargs["api_id"] == "ka10004"
+        assert kwargs["url"].endswith("/api/dostk/mrkcond")
+        assert kwargs["payload"]["stk_cd"] == "005930"
+        return [
+            {
+                "bid_req_base_tm": "130501",
+                "sel_fpr_bid": "+72010",
+                "sel_fpr_req": "120",
+                "buy_fpr_bid": "+72000",
+                "buy_fpr_req": "300",
+                "sel_2th_pre_bid": "+72020",
+                "sel_2th_pre_req": "80",
+                "buy_2th_pre_bid": "+71990",
+                "buy_2th_pre_req": "250",
+                "tot_sel_req": "1200",
+                "tot_buy_req": "1800",
+            }
+        ]
+
+    monkeypatch.setattr(kiwoom_utils, "fetch_kiwoom_api_continuous", fake_fetch)
+    monkeypatch.setattr(kiwoom_utils, "get_effective_kiwoom_code", lambda code: code)
+
+    row = kiwoom_utils.get_stock_orderbook_ka10004("TOKEN", "005930")
+
+    assert row["source"] == "ka10004_rest_orderbook"
+    assert row["best_ask"] == 72010
+    assert row["best_bid"] == 72000
+    assert row["best_ask_qty"] == 120
+    assert row["best_bid_qty"] == 300
+    assert row["ask_tot"] == 1200
+    assert row["bid_tot"] == 1800
+    assert row["orderbook"]["asks"][:2] == [
+        {"price": 72010, "volume": 120},
+        {"price": 72020, "volume": 80},
+    ]
+    assert row["orderbook"]["bids"][:2] == [
+        {"price": 72000, "volume": 300},
+        {"price": 71990, "volume": 250},
+    ]
 
 
 def test_vi_triggered_without_primary_source_is_secondary_only_block(monkeypatch):
