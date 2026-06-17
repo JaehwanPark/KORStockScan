@@ -1,87 +1,87 @@
 {
-  "bundle_as_of": "2026-06-15T22:20:26Z",
+  "bundle_as_of": "2026-06-16T22:20:23Z",
   "sp500": {
-    "name": "S&P 500",
-    "value": 7554.29,
-    "prev_value": 7431.46,
-    "change": 122.83,
-    "change_pct": 1.65,
-    "as_of": "2026-06-15T20:00:00Z",
-    "source": "BOE Report"
+    "name": "S&P500",
+    "value": 7511.35,
+    "prev_value": 7554.29,
+    "change": -42.94,
+    "change_pct": -0.57,
+    "as_of": "2026-06-16T20:26:00Z",
+    "source": "Dow Jones Market Data"
   },
   "nasdaq": {
-    "name": "NASDAQ Composite",
-    "value": 26683.94,
-    "prev_value": 25888.84,
-    "change": 795.1,
-    "change_pct": 3.07,
-    "as_of": "2026-06-15T20:00:00Z",
-    "source": "BOE Report"
+    "name": "NASDAQ",
+    "value": 26376.34,
+    "prev_value": 26683.94,
+    "change": -307.6,
+    "change_pct": -1.15,
+    "as_of": "2026-06-16T20:26:00Z",
+    "source": "Dow Jones Market Data"
   },
   "vix": {
     "name": "VIX",
-    "value": 16.79,
-    "prev_value": 17.68,
-    "change": -0.89,
-    "change_pct": -5.03,
-    "as_of": "2026-06-15T20:03:41Z",
-    "source": "RootData"
+    "value": 16.35,
+    "prev_value": 16.2,
+    "change": 0.15,
+    "change_pct": 0.93,
+    "as_of": "2026-06-16T20:00:00Z",
+    "source": "r/FluentInFinance Market Recap"
   },
   "us10y": {
-    "name": "US 10-Year Treasury Yield",
-    "value": 4.46,
-    "prev_value": 4.49,
+    "name": "US10Y",
+    "value": 4.45,
+    "prev_value": 4.48,
     "change": -0.03,
     "change_pct": -0.67,
-    "as_of": "2026-06-15T22:20:26Z",
-    "source": "Trading Economics"
+    "as_of": "2026-06-16T20:00:00Z",
+    "source": "The Capital Breakdown"
   },
   "brent": {
-    "name": "Brent Crude",
-    "value": 83.17,
-    "prev_value": 87.36,
-    "change": -4.19,
-    "change_pct": -4.8,
-    "as_of": "2026-06-15T22:20:26Z",
-    "source": "Los Angeles Times"
+    "name": "BRENT",
+    "value": 78.96,
+    "prev_value": 83.2,
+    "change": -4.24,
+    "change_pct": -5.1,
+    "as_of": "2026-06-16T19:05:00Z",
+    "source": "The Associated Press"
   },
   "headlines": [
     {
-      "title": "Global stocks soar and oil prices drop as U.S., Iran reach tentative deal to end war",
-      "source": "CBC",
-      "published_at": "2026-06-15T16:00:00Z",
-      "url": "https://www.cbc.ca/news/business/global-stocks-soar-oil-prices-drop"
+      "title": "Dow Jones Top Markets Headlines at 1 PM ET: U.S. Stocks Mixed as SpaceX Overtakes Amazon in Market Value [2.2.1]",
+      "source": "Dow Jones Newswires",
+      "published_at": "2026-06-16T17:15:00Z",
+      "url": "https://www.morningstar.com/"
     },
     {
-      "title": "TSX hits new record high as oil prices slide after U.S.-Iran deal",
-      "source": "BOE Report",
-      "published_at": "2026-06-15T18:46:00Z",
-      "url": "https://boereport.com/2026/06/15/tsx-hits-new-record-high-as-oil-prices-slide-after-u-s-iran-deal/"
+      "title": "Oil drops below US$80 per barrel, while tech stocks weigh on a mixed Wall Street",
+      "source": "The Associated Press",
+      "published_at": "2026-06-16T09:56:00Z",
+      "url": "https://www.bnnbloomberg.ca/"
     },
     {
-      "title": "Stocks leap worldwide, and oil prices drop after the US and Iran reach a tentative deal on their war",
-      "source": "Los Angeles Times",
-      "published_at": "2026-06-15T20:21:00Z",
-      "url": "https://www.latimes.com/business/story/2026-06-15/stocks-leap-worldwide-and-oil-prices-drop-after-us-iran-tentative-deal"
+      "title": "Morgan Stanley lowers Brent oil price forecasts after US-Iran peace deal",
+      "source": "Reuters",
+      "published_at": "2026-06-16T02:19:00Z",
+      "url": "https://boereport.com/"
     },
     {
-      "title": "Oil prices drop to cheapest level since early days of Middle East conflict",
-      "source": "GPB",
-      "published_at": "2026-06-15T13:46:00Z",
-      "url": "https://www.gpb.org/news/2026/06/15/oil-prices-drop-to-cheapest-level-since-early-days-of-middle-east-conflict"
+      "title": "Stock market today: Nikkei tops 70K before Japan rate hike",
+      "source": "The Associated Press",
+      "published_at": "2026-06-16T09:56:00Z",
+      "url": "https://www.bnnbloomberg.ca/"
     },
     {
-      "title": "Hopes for an Extended Ceasefire Lift Stocks",
-      "source": "Charles Schwab",
-      "published_at": "2026-06-15T13:20:00Z",
-      "url": "https://www.schwab.com/learn/story/hopes-for-an-extended-ceasefire-lift-stocks"
+      "title": "Nasdaq 100 Falls 2% as Chipmakers Halt Solid Run: Markets Wrap",
+      "source": "Bloomberg",
+      "published_at": "2026-06-16T22:26:00Z",
+      "url": "https://www.swissinfo.ch/"
     }
   ],
   "notes": [
-    "Equities rallied and oil prices fell significantly following the announcement of a tentative peace deal and extended ceasefire between the US and Iran.",
-    "The tentative agreement includes the reopening of the Strait of Hormuz, easing global inflation and energy supply fears.",
-    "S&P 500 closed up roughly 1.65% at 7554.29, while the NASDAQ surged over 3% as risk-on sentiment returned to the markets.",
-    "Brent Crude dropped nearly 5% to the low $83 range on the prospect of resumed crude flows.",
-    "VIX fell over 5% as market volatility expectations cooled on the geopolitical breakthrough."
+    "S&P 500 fell 42.94 points (-0.57%) to close at 7511.35 on June 16, 2026, snapping a three-day winning streak [1.1.2].",
+    "NASDAQ Composite dropped 1.15% to 26376.34 on chipmaker weakness and profit-taking.",
+    "The Dow Jones Industrial Average rose 0.64% to hit another record high as investors rotated into industrial and financial sectors.",
+    "Brent crude slipped below $80 per barrel to settle at $78.96 on optimism surrounding a tentative U.S.-Iran peace deal.",
+    "The Federal Reserve began its first meeting under new Chair Kevin Warsh."
   ]
 }
