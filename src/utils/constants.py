@@ -374,6 +374,12 @@ class TradingConfig:
     EARLY_ACCEL_STRONG_BUNDLE_RECHECK_BUY_MIN_SCORE: int = 75
     EARLY_ACCEL_STRONG_BUNDLE_RECHECK_MIN_PASS_COUNT: int = 2
     EARLY_ACCEL_STRONG_BUNDLE_RECHECK_MAX_PER_SYMBOL: int = 1
+    PRE_SUBMIT_LIQUIDITY_RELIEF_ENABLED: bool = False
+    PRE_SUBMIT_LIQUIDITY_RELIEF_MIN_AI_SCORE: int = 75
+    PRE_SUBMIT_LIQUIDITY_RELIEF_MIN_TICK_ACCEL: float = 1.10
+    PRE_SUBMIT_LIQUIDITY_RELIEF_MIN_BUY_PRESSURE: float = 68.0
+    PRE_SUBMIT_LIQUIDITY_RELIEF_MIN_MICRO_VWAP_BP: float = 0.0
+    PRE_SUBMIT_LIQUIDITY_RELIEF_MAX_PER_SYMBOL: int = 1
     AI_NUMERIC_CONSISTENCY_RECHECK_ENABLED: bool = False
     AI_NUMERIC_CONSISTENCY_RECHECK_MIN_SCORE: int = 60
     AI_NUMERIC_CONSISTENCY_RECHECK_BUY_MIN_SCORE: int = 75
@@ -1424,6 +1430,24 @@ def _build_trading_rules() -> TradingConfig:
     env_early_accel_strong_bundle_recheck_max_per_symbol = _env_int(
         "KORSTOCKSCAN_EARLY_ACCEL_STRONG_BUNDLE_RECHECK_MAX_PER_SYMBOL"
     )
+    env_pre_submit_liquidity_relief_enabled = _env_bool(
+        "KORSTOCKSCAN_PRE_SUBMIT_LIQUIDITY_RELIEF_ENABLED"
+    )
+    env_pre_submit_liquidity_relief_min_ai_score = _env_int(
+        "KORSTOCKSCAN_PRE_SUBMIT_LIQUIDITY_RELIEF_MIN_AI_SCORE"
+    )
+    env_pre_submit_liquidity_relief_min_tick_accel = _env_float(
+        "KORSTOCKSCAN_PRE_SUBMIT_LIQUIDITY_RELIEF_MIN_TICK_ACCEL"
+    )
+    env_pre_submit_liquidity_relief_min_buy_pressure = _env_float(
+        "KORSTOCKSCAN_PRE_SUBMIT_LIQUIDITY_RELIEF_MIN_BUY_PRESSURE"
+    )
+    env_pre_submit_liquidity_relief_min_micro_vwap = _env_float(
+        "KORSTOCKSCAN_PRE_SUBMIT_LIQUIDITY_RELIEF_MIN_MICRO_VWAP_BP"
+    )
+    env_pre_submit_liquidity_relief_max_per_symbol = _env_int(
+        "KORSTOCKSCAN_PRE_SUBMIT_LIQUIDITY_RELIEF_MAX_PER_SYMBOL"
+    )
     env_ai_numeric_consistency_recheck_enabled = _env_bool(
         "KORSTOCKSCAN_AI_NUMERIC_CONSISTENCY_RECHECK_ENABLED"
     )
@@ -1977,6 +2001,24 @@ def _build_trading_rules() -> TradingConfig:
             EARLY_ACCEL_STRONG_BUNDLE_RECHECK_MAX_PER_SYMBOL=env_early_accel_strong_bundle_recheck_max_per_symbol
             if env_early_accel_strong_bundle_recheck_max_per_symbol is not None
             else config.EARLY_ACCEL_STRONG_BUNDLE_RECHECK_MAX_PER_SYMBOL,
+            PRE_SUBMIT_LIQUIDITY_RELIEF_ENABLED=env_pre_submit_liquidity_relief_enabled
+            if env_pre_submit_liquidity_relief_enabled is not None
+            else config.PRE_SUBMIT_LIQUIDITY_RELIEF_ENABLED,
+            PRE_SUBMIT_LIQUIDITY_RELIEF_MIN_AI_SCORE=env_pre_submit_liquidity_relief_min_ai_score
+            if env_pre_submit_liquidity_relief_min_ai_score is not None
+            else config.PRE_SUBMIT_LIQUIDITY_RELIEF_MIN_AI_SCORE,
+            PRE_SUBMIT_LIQUIDITY_RELIEF_MIN_TICK_ACCEL=env_pre_submit_liquidity_relief_min_tick_accel
+            if env_pre_submit_liquidity_relief_min_tick_accel is not None
+            else config.PRE_SUBMIT_LIQUIDITY_RELIEF_MIN_TICK_ACCEL,
+            PRE_SUBMIT_LIQUIDITY_RELIEF_MIN_BUY_PRESSURE=env_pre_submit_liquidity_relief_min_buy_pressure
+            if env_pre_submit_liquidity_relief_min_buy_pressure is not None
+            else config.PRE_SUBMIT_LIQUIDITY_RELIEF_MIN_BUY_PRESSURE,
+            PRE_SUBMIT_LIQUIDITY_RELIEF_MIN_MICRO_VWAP_BP=env_pre_submit_liquidity_relief_min_micro_vwap
+            if env_pre_submit_liquidity_relief_min_micro_vwap is not None
+            else config.PRE_SUBMIT_LIQUIDITY_RELIEF_MIN_MICRO_VWAP_BP,
+            PRE_SUBMIT_LIQUIDITY_RELIEF_MAX_PER_SYMBOL=env_pre_submit_liquidity_relief_max_per_symbol
+            if env_pre_submit_liquidity_relief_max_per_symbol is not None
+            else config.PRE_SUBMIT_LIQUIDITY_RELIEF_MAX_PER_SYMBOL,
             AI_NUMERIC_CONSISTENCY_RECHECK_ENABLED=env_ai_numeric_consistency_recheck_enabled
             if env_ai_numeric_consistency_recheck_enabled is not None
             else config.AI_NUMERIC_CONSISTENCY_RECHECK_ENABLED,

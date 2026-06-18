@@ -3886,6 +3886,198 @@ def test_scalping_pre_ai_soft_gate_allows_ai_and_blocks_low_liquidity_at_submit(
     assert ai.seen_context["liquidity"]["threshold_family"] == "liquidity_pre_submit_guard_p1"
 
 
+def test_pre_submit_liquidity_relief_allows_strong_bundle_submit(monkeypatch):
+    class FixedDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return cls(2026, 6, 18, 13, 55, 0)
+
+    state_handlers.datetime = FixedDateTime
+    state_handlers.TRADING_RULES = replace(
+        CONFIG,
+        SCALP_PRE_AI_SOFT_GATE_ENABLED=True,
+        SCALP_PRE_AI_SOURCE_QUALITY_BLOCK_ENABLED=True,
+        SCALP_LIQUIDITY_PRE_SUBMIT_GUARD_ENABLED=True,
+        PRE_SUBMIT_LIQUIDITY_RELIEF_ENABLED=True,
+        PRE_SUBMIT_LIQUIDITY_RELIEF_MIN_AI_SCORE=75,
+        PRE_SUBMIT_LIQUIDITY_RELIEF_MIN_TICK_ACCEL=1.10,
+        PRE_SUBMIT_LIQUIDITY_RELIEF_MIN_BUY_PRESSURE=68.0,
+        PRE_SUBMIT_LIQUIDITY_RELIEF_MIN_MICRO_VWAP_BP=0.0,
+        PRE_SUBMIT_LIQUIDITY_RELIEF_MAX_PER_SYMBOL=1,
+        SCALP_SIM_PANIC_FORCE_NOOP=True,
+    )
+    state_handlers.COOLDOWNS = {}
+    state_handlers.ALERTED_STOCKS = set()
+    state_handlers.ACTIVE_TARGETS = []
+    state_handlers.HIGHEST_PRICES = {}
+    state_handlers.LAST_AI_CALL_TIMES = {}
+    state_handlers.LAST_LOG_TIMES = {}
+    state_handlers.DB = _DummyDB()
+    state_handlers.KIWOOM_TOKEN = "token"
+
+    class DummyRadar:
+        def get_smart_target_price(self, curr_price, **kwargs):
+            return curr_price, 0.0
+
+    class DummyAI:
+        def analyze_target(self, _name, ws_data, *_args, **_kwargs):
+            return {"action": "BUY", "score": 90, "reason": "strong bundle confirmed"}
+
+    class DummyEventBus:
+        def publish(self, *args, **kwargs):
+            return None
+
+    state_handlers.EVENT_BUS = DummyEventBus()
+    logs = []
+    sent_orders = []
+
+    weak_momentum = {
+        "enabled": True,
+        "allowed": False,
+        "reason": "below_buy_ratio",
+        "position_tag": "SCANNER",
+        "threshold_profile": "default",
+        "base_vpw": 100.0,
+        "current_vpw": 100.0,
+        "vpw_delta": 0.0,
+        "slope_per_sec": 0.0,
+        "window_sec": 8,
+        "elapsed_sec": 8.0,
+        "window_total_value": 100_000,
+        "window_buy_value": 48_000,
+        "window_sell_value": 52_000,
+        "window_buy_ratio": 0.48,
+        "window_exec_buy_ratio": 0.45,
+        "window_net_buy_qty": -2,
+    }
+
+    monkeypatch.setattr(state_handlers, "_log_entry_pipeline", lambda stock, code, stage, **fields: logs.append((stage, fields)))
+    monkeypatch.setattr(state_handlers, "is_buy_side_paused", lambda: False)
+    monkeypatch.setattr(state_handlers, "_publish_buy_signal_submission_notice", lambda *args, **kwargs: None)
+    monkeypatch.setattr(state_handlers, "evaluate_scalping_strength_momentum", lambda ws_data: weak_momentum)
+    monkeypatch.setattr(state_handlers, "arm_big_bite_if_triggered", lambda **kwargs: (False, {}))
+    monkeypatch.setattr(state_handlers, "confirm_big_bite_follow_through", lambda **kwargs: (True, {}))
+    monkeypatch.setattr(state_handlers, "build_tick_data_from_ws", lambda ws_data: {})
+    monkeypatch.setattr(state_handlers.kiwoom_utils, "get_tick_history_ka10003", lambda *args, **kwargs: [{"dir": "BUY", "volume": 1, "strength": 100}])
+    monkeypatch.setattr(state_handlers.kiwoom_utils, "get_minute_candles_ka10080", lambda *args, **kwargs: [{"고가": 10000, "저가": 9900}])
+    monkeypatch.setattr(state_handlers.kiwoom_orders, "get_deposit", lambda *args, **kwargs: 1_000_000)
+    monkeypatch.setattr(
+        state_handlers.kiwoom_orders,
+        "describe_buy_capacity",
+        lambda *args, **kwargs: (100_000, 95_000, 5, 0.95),
+    )
+    monkeypatch.setattr(
+        state_handlers.kiwoom_orders,
+        "send_buy_order",
+        lambda *args, **kwargs: sent_orders.append(args) or {"return_code": "0", "ord_no": "O1"},
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "evaluate_live_buy_entry",
+        lambda **kwargs: {
+            "allowed": True,
+            "mode": "normal",
+            "decision": "ALLOW_NORMAL",
+            "reason": "ok",
+            "latency_state": "SAFE",
+            "orders": [{"tag": "normal", "qty": 1, "price": kwargs.get("signal_price"), "tif": "DAY"}],
+            "signal_price": kwargs.get("signal_price"),
+            "latest_price": kwargs.get("signal_price"),
+            "computed_allowed_slippage": 0,
+            "ws_age_ms": 100,
+            "ws_jitter_ms": 10,
+            "spread_ratio": 0.001,
+            "quote_stale": False,
+            "latency_danger_reasons": "",
+            "order_price": kwargs.get("signal_price"),
+        },
+    )
+
+    stock = {
+        "id": 11,
+        "name": "RELIEF",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "prob": 0.9,
+        "rt_ai_prob": 0.9,
+        "scanner_promotion_reason": "new_price_jump_start_source",
+        "source_signature": "PRICE_JUMP_START,VOLUME_SURGE_POSITIVE",
+    }
+    state_handlers.handle_watching_state(
+        stock=stock,
+        code="555555",
+        ws_data={
+            "curr": 10_000,
+            "v_pw": 100.0,
+            "ask_tot": 100,
+            "bid_tot": 100,
+            "open": 9_950,
+            "fluctuation": 1.0,
+            "tick_acceleration_ratio": 1.25,
+            "curr_vs_micro_vwap_bp": 5.0,
+            "buy_pressure_10t": 72.0,
+            "orderbook": {
+                "asks": [{"price": 10_010, "volume": 100}],
+                "bids": [{"price": 10_000, "volume": 100}],
+            },
+        },
+        admin_id=1,
+        radar=DummyRadar(),
+        ai_engine=DummyAI(),
+    )
+
+    by_stage = {stage: fields for stage, fields in logs}
+    assert "pre_submit_liquidity_relief_evaluated" in by_stage
+    assert "pre_submit_liquidity_relief_allowed" in by_stage
+    assert "pre_submit_liquidity_guard_block" not in by_stage
+    assert "order_bundle_submitted" in by_stage
+    assert sent_orders
+
+
+def test_pre_submit_liquidity_relief_requires_strong_bundle_path(monkeypatch):
+    state_handlers.TRADING_RULES = replace(
+        CONFIG,
+        PRE_SUBMIT_LIQUIDITY_RELIEF_ENABLED=True,
+        PRE_SUBMIT_LIQUIDITY_RELIEF_MIN_AI_SCORE=75,
+        PRE_SUBMIT_LIQUIDITY_RELIEF_MIN_TICK_ACCEL=1.10,
+        PRE_SUBMIT_LIQUIDITY_RELIEF_MIN_BUY_PRESSURE=68.0,
+        PRE_SUBMIT_LIQUIDITY_RELIEF_MIN_MICRO_VWAP_BP=0.0,
+        PRE_SUBMIT_LIQUIDITY_RELIEF_MAX_PER_SYMBOL=1,
+    )
+    stock = {
+        "id": 12,
+        "name": "TOKENONLY",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "scanner_promotion_reason": "late_confirmation_first_seen_probe",
+        "source_signature": "PRICE_JUMP_START,VOLUME_SURGE_POSITIVE",
+    }
+
+    decision = state_handlers._resolve_pre_submit_liquidity_relief(
+        stock,
+        {
+            "quote_stale": False,
+            "tick_acceleration_ratio": 1.25,
+            "curr_vs_micro_vwap_bp": 5.0,
+            "buy_pressure_10t": 72.0,
+        },
+        strategy="SCALPING",
+        ai_score=90,
+        liquidity_value=70_000_000,
+        min_liquidity=350_000_000,
+        latency_gate={"latency_state": "SAFE", "quote_stale": False},
+        guard_fields={},
+        submit_fields={},
+        price_snapshot={},
+        orderbook_fields={},
+        microstructure_fields={},
+        pre_ai_fields={},
+    )
+
+    assert decision["allowed"] is False
+    assert decision["relief_skip_reason"] == "not_strong_bundle_path"
+
+
 def test_scalping_overbought_reaches_ai_but_submit_requires_pullback_or_rebreak(monkeypatch):
     class FixedDateTime(datetime):
         @classmethod

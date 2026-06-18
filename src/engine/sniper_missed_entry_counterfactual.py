@@ -36,6 +36,9 @@ _ATTEMPT_AUXILIARY_STAGES = {
     "early_accel_strong_bundle_recheck_skipped",
     "early_accel_strong_bundle_recheck_failed",
     "early_accel_strong_bundle_recheck_corrected",
+    "pre_submit_liquidity_relief_evaluated",
+    "pre_submit_liquidity_relief_allowed",
+    "pre_submit_liquidity_relief_skipped",
 }
 _BUY_MISSED_MFE_PCT = 0.8
 _BUY_MISSED_CLOSE_PCT = 0.3
@@ -59,6 +62,7 @@ _STAGE_LABELS = {
     "entry_armed_expired": "진입 자격 만료",
     "entry_armed_expired_after_wait": "진입 대기 후 자격 만료",
     "entry_arm_expired": "진입 자격 만료(legacy)",
+    "buy_like_no_submit_terminal": "BUY-like 미제출 종료",
     "scalp_entry_action_decision_snapshot": "AI 판정 스냅샷",
 }
 
@@ -303,6 +307,25 @@ def _snapshot_terminal_class(event: EntryEvent) -> str | None:
     return None
 
 
+def _infer_buy_like_no_submit_reason(attempt_events: list[EntryEvent]) -> str:
+    stages = {event.stage for event in attempt_events}
+    if "latency_block" in stages:
+        return "latency_block"
+    if any(stage.startswith("pre_submit_") and stage.endswith("_block") for stage in stages):
+        return "pre_submit_guard_block"
+    if "blocked_zero_qty" in stages:
+        return "quantity_zero"
+    if "auth_zero_qty" in stages:
+        return "budget_blocked"
+    if {"entry_armed_expired", "entry_armed_expired_after_wait", "entry_arm_expired"} & stages:
+        return "entry_armed_expired"
+    if any(stage in {"blocked_cooldown", "ai_cooldown_blocked"} for stage in stages):
+        return "cooldown_blocked"
+    if any(stage in _ENTRY_ARMED_STAGES for stage in stages):
+        return "broker_submit_not_reached"
+    return "state_transition_missing"
+
+
 def _missed_submit_cohort(candidate: dict) -> str:
     terminal_stage = str(candidate.get("terminal_stage") or "")
     terminal_fields = candidate.get("terminal_fields") if isinstance(candidate.get("terminal_fields"), dict) else {}
@@ -328,6 +351,8 @@ def _missed_submit_cohort(candidate: dict) -> str:
         return "ai_no_buy_clean_reason"
     if terminal_stage == "pre_submit_liquidity_guard_block":
         return "entry_armed_pre_submit_liquidity_block"
+    if terminal_stage == "buy_like_no_submit_terminal":
+        return "buy_like_no_submit_terminal"
     if terminal_stage in {
         "latency_block",
         "entry_submit_revalidation_block",
@@ -414,7 +439,22 @@ def _build_buy_attempts(target_date: str, *, include_submitted: bool = True) -> 
                     None,
                 )
             if terminal_event is None:
-                continue
+                if has_submitted:
+                    continue
+                anchor_for_terminal = buy_events[-1]
+                reason = _infer_buy_like_no_submit_reason(attempt_events)
+                terminal_event = EntryEvent(
+                    emitted_at=anchor_for_terminal.emitted_at,
+                    signal_date=target_date,
+                    name=anchor_for_terminal.name,
+                    code=anchor_for_terminal.code,
+                    stage="buy_like_no_submit_terminal",
+                    record_id=anchor_for_terminal.record_id,
+                    fields={
+                        "no_submit_reason": reason,
+                        "terminal_stage_source": "counterfactual_inferred",
+                    },
+                )
 
             anchor_event = next(
                 (event for event in reversed(attempt_events) if event.stage in _ENTRY_ARMED_STAGES),
@@ -459,6 +499,7 @@ def _build_buy_attempts(target_date: str, *, include_submitted: bool = True) -> 
                     "stage_flow": [event.stage for event in attempt_events],
                     "blocker_counts": dict(blocker_counts),
                     "terminal_fields": dict(terminal_event.fields),
+                    "no_submit_reason": terminal_event.fields.get("no_submit_reason"),
                     "missed_submit_cohort": _missed_submit_cohort(
                         {
                             "terminal_stage": terminal_event.stage,
@@ -877,6 +918,12 @@ def build_missed_entry_counterfactual_report(
             "anchor_stage": str(item.get("anchor_stage") or ""),
             "terminal_stage": str(item.get("terminal_stage") or ""),
             "terminal_stage_label": str(item.get("terminal_stage_label") or ""),
+            "no_submit_reason": str(item.get("no_submit_reason") or ""),
+            "liquidity_relief_skip_reason": str(
+                (item.get("terminal_fields") or {}).get("liquidity_relief_skip_reason")
+                if isinstance(item.get("terminal_fields"), dict)
+                else ""
+            ),
             "signal_time": str(item.get("signal_time") or ""),
             "signal_price": int(_safe_int(item.get("signal_price"), 0)),
             "entry_price_used": int(_safe_int(item.get("entry_price_used"), 0)),

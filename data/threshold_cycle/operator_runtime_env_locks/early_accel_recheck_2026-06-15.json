@@ -17,7 +17,13 @@
     "KORSTOCKSCAN_EARLY_ACCEL_RECHECK_MIN_TICK_ACCEL": "1.10",
     "KORSTOCKSCAN_EARLY_ACCEL_RECHECK_MIN_MICRO_VWAP_BP": "0.0",
     "KORSTOCKSCAN_EARLY_ACCEL_RECHECK_ALLOW_LIQUIDITY_BLOCKED": "true",
-    "KORSTOCKSCAN_EARLY_ACCEL_RECHECK_ALLOW_STRENGTH_BLOCKED": "true"
+    "KORSTOCKSCAN_EARLY_ACCEL_RECHECK_ALLOW_STRENGTH_BLOCKED": "true",
+    "KORSTOCKSCAN_EARLY_ACCEL_STRONG_BUNDLE_RECHECK_ENABLED": "true",
+    "KORSTOCKSCAN_EARLY_ACCEL_STRONG_BUNDLE_RECHECK_MIN_SCORE": "60",
+    "KORSTOCKSCAN_EARLY_ACCEL_STRONG_BUNDLE_RECHECK_MAX_SCORE": "66",
+    "KORSTOCKSCAN_EARLY_ACCEL_STRONG_BUNDLE_RECHECK_BUY_MIN_SCORE": "75",
+    "KORSTOCKSCAN_EARLY_ACCEL_STRONG_BUNDLE_RECHECK_MIN_PASS_COUNT": "2",
+    "KORSTOCKSCAN_EARLY_ACCEL_STRONG_BUNDLE_RECHECK_MAX_PER_SYMBOL": "1"
   },
   "forbidden_uses": [
     "EV",
@@ -39,5 +45,5 @@
     "tuning_override",
     "safety_revert_required"
   ],
-  "notes": "Operator runtime override for additional AI recheck timing only. Does not relax BUY score, price, quantity, provider, broker, or hard-safety gates."
+  "notes": "Operator runtime override for additional AI recheck timing and strong acceleration bundle re-ask only. Does not relax BUY score, price, quantity, provider, broker, or hard-safety gates."
 }

@@ -11502,6 +11502,10 @@ AI_NUMERIC_CONSISTENCY_RECHECK_FORBIDDEN_USES = (
     "EV|rolling|MTD|cumulative_tuning|live_auto_promotion|runtime_apply_bridge|"
     "threshold_mutation|provider_route_change|order_price_change|quantity_cap_change|broker_guard_bypass"
 )
+PRE_SUBMIT_LIQUIDITY_RELIEF_FORBIDDEN_USES = (
+    "EV|rolling|MTD|cumulative_tuning|live_auto_promotion|runtime_apply_bridge|"
+    "threshold_mutation|provider_change|order_price_change|quantity_cap_change|broker_guard_bypass"
+)
 EARLY_ACCEL_RECHECK_PROMOTION_REASONS = frozenset(
     {
         "probe_acceleration_confirmed",
@@ -11561,6 +11565,22 @@ def _early_accel_strong_bundle_recheck_contract_fields() -> dict:
         "runtime_effect": True,
         "allowed_runtime_apply": False,
         "forbidden_uses": AI_NUMERIC_CONSISTENCY_RECHECK_FORBIDDEN_USES,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+    }
+
+
+def _pre_submit_liquidity_relief_contract_fields() -> dict:
+    return {
+        "metric_role": "funnel_count",
+        "decision_authority": "operator_runtime_submit_recheck_only",
+        "source_quality_gate": "pre_submit_liquidity_relief_contract_fields_present",
+        "window_policy": "intraday_operator_runtime_submit_recheck",
+        "sample_floor": "not_applicable_operator_runtime_submit_recheck",
+        "primary_decision_metric": "funnel_count",
+        "runtime_effect": True,
+        "allowed_runtime_apply": False,
+        "forbidden_uses": PRE_SUBMIT_LIQUIDITY_RELIEF_FORBIDDEN_USES,
         "actual_order_submitted": False,
         "broker_order_forbidden": True,
     }
@@ -11870,6 +11890,140 @@ def _log_early_accel_strong_bundle_recheck(stock, code, stage: str, decision: di
         recheck_count=_safe_int(decision.get("recheck_count"), 0),
         quote_stale=bool(decision.get("quote_stale")),
         skip_reason=decision.get("skip_reason") or "unknown",
+    )
+
+
+def _first_safe_float(default: float, *values) -> float:
+    for value in values:
+        parsed = _safe_float(value, None)
+        if parsed is not None:
+            return float(parsed)
+    return float(default)
+
+
+def _resolve_pre_submit_liquidity_relief(
+    stock,
+    ws_data,
+    *,
+    strategy,
+    ai_score,
+    liquidity_value,
+    min_liquidity,
+    latency_gate,
+    guard_fields,
+    submit_fields,
+    price_snapshot,
+    orderbook_fields,
+    microstructure_fields,
+    pre_ai_fields,
+) -> dict:
+    _hydrate_scanner_promotion_runtime_context(stock)
+    payloads = [
+        guard_fields if isinstance(guard_fields, dict) else {},
+        submit_fields if isinstance(submit_fields, dict) else {},
+        price_snapshot if isinstance(price_snapshot, dict) else {},
+        orderbook_fields if isinstance(orderbook_fields, dict) else {},
+        microstructure_fields if isinstance(microstructure_fields, dict) else {},
+        pre_ai_fields if isinstance(pre_ai_fields, dict) else {},
+        ws_data if isinstance(ws_data, dict) else {},
+    ]
+
+    def lookup(*keys: str):
+        for payload in payloads:
+            for key in keys:
+                if key in payload and payload.get(key) not in {None, ""}:
+                    return payload.get(key)
+        return None
+
+    promotion_reason = str((stock or {}).get("scanner_promotion_reason") or "-")
+    source_signature = str((stock or {}).get("source_signature") or "-")
+    tick_accel = _first_safe_float(
+        0.0,
+        lookup("tick_acceleration_ratio", "tick_accel", "tick_acceleration_ratio_raw"),
+        (stock or {}).get("tick_acceleration_ratio") if isinstance(stock, dict) else None,
+    )
+    micro_vwap_bp = _first_safe_float(
+        0.0,
+        lookup("curr_vs_micro_vwap_bp", "micro_vwap_bp"),
+        (stock or {}).get("curr_vs_micro_vwap_bp") if isinstance(stock, dict) else None,
+    )
+    buy_pressure = _first_safe_float(
+        0.0,
+        lookup("buy_pressure_10t", "buy_pressure"),
+        (stock or {}).get("buy_pressure_10t") if isinstance(stock, dict) else None,
+    )
+    recheck_trigger = str((stock or {}).get("ai_call_trigger_reason") or "").strip()
+    strong_bundle_path = (
+        promotion_reason in _early_accel_strong_bundle_allowed_reasons()
+        or recheck_trigger == "early_accel_strong_bundle_recheck"
+        or _safe_int((stock or {}).get("early_accel_strong_bundle_recheck_count"), 0) > 0
+    )
+    relief_count = _safe_int((stock or {}).get("pre_submit_liquidity_relief_count"), 0)
+    quote_stale = bool(
+        (ws_data or {}).get("quote_stale")
+        or (ws_data or {}).get("context_stale")
+        or (latency_gate or {}).get("quote_stale")
+    )
+    latency_state = str((latency_gate or {}).get("latency_state") or "").upper()
+    base = {
+        "liquidity_value": int(_safe_float(liquidity_value, 0.0)),
+        "min_liquidity": int(_safe_float(min_liquidity, 0.0)),
+        "ai_score": f"{_safe_float(ai_score, 0.0):.1f}",
+        "scanner_promotion_reason": promotion_reason,
+        "source_signature": source_signature,
+        "tick_acceleration_ratio": f"{tick_accel:.3f}",
+        "curr_vs_micro_vwap_bp": f"{micro_vwap_bp:.2f}",
+        "buy_pressure_10t": f"{buy_pressure:.2f}",
+        "relief_count": relief_count,
+        "quote_stale": quote_stale,
+        "latency_state": latency_state or "-",
+    }
+
+    if not _rule_bool("PRE_SUBMIT_LIQUIDITY_RELIEF_ENABLED", False):
+        return {"allowed": False, "relief_skip_reason": "disabled", **base}
+    if _rule_bool("ENTRY_STAGE_LIVE_TUNING_SELECTED", False):
+        return {"allowed": False, "relief_skip_reason": "entry_live_tuning_selected", **base}
+    if not isinstance(stock, dict) or not _is_scalp_strategy(strategy):
+        return {"allowed": False, "relief_skip_reason": "scope_not_real_scalping", **base}
+    if _is_scalp_simulated_position(stock, strategy) or _has_sim_probe_provenance(stock):
+        return {"allowed": False, "relief_skip_reason": "sim_or_probe_scope", **base}
+    if quote_stale:
+        return {"allowed": False, "relief_skip_reason": "stale_quote_or_context", **base}
+    if latency_state == "DANGER":
+        return {"allowed": False, "relief_skip_reason": "latency_danger", **base}
+    if _safe_float(ai_score, 0.0) < float(_rule_int("PRE_SUBMIT_LIQUIDITY_RELIEF_MIN_AI_SCORE", 75)):
+        return {"allowed": False, "relief_skip_reason": "ai_score_below_min", **base}
+    if not strong_bundle_path:
+        return {"allowed": False, "relief_skip_reason": "not_strong_bundle_path", **base}
+    if tick_accel < _rule_float("PRE_SUBMIT_LIQUIDITY_RELIEF_MIN_TICK_ACCEL", 1.10):
+        return {"allowed": False, "relief_skip_reason": "tick_accel_below_min", **base}
+    if micro_vwap_bp < _rule_float("PRE_SUBMIT_LIQUIDITY_RELIEF_MIN_MICRO_VWAP_BP", 0.0):
+        return {"allowed": False, "relief_skip_reason": "micro_vwap_below_min", **base}
+    if buy_pressure < _rule_float("PRE_SUBMIT_LIQUIDITY_RELIEF_MIN_BUY_PRESSURE", 68.0):
+        return {"allowed": False, "relief_skip_reason": "buy_pressure_below_min", **base}
+    if relief_count >= max(0, _rule_int("PRE_SUBMIT_LIQUIDITY_RELIEF_MAX_PER_SYMBOL", 1)):
+        return {"allowed": False, "relief_skip_reason": "max_per_symbol_reached", **base}
+    return {"allowed": True, "relief_skip_reason": "allowed", **base}
+
+
+def _log_pre_submit_liquidity_relief(stock, code, stage: str, decision: dict) -> None:
+    _log_entry_pipeline(
+        stock,
+        code,
+        stage,
+        **_pre_submit_liquidity_relief_contract_fields(),
+        liquidity_value=decision.get("liquidity_value") or 0,
+        min_liquidity=decision.get("min_liquidity") or 0,
+        ai_score=decision.get("ai_score") or "0.0",
+        scanner_promotion_reason=decision.get("scanner_promotion_reason") or "-",
+        source_signature=decision.get("source_signature") or "-",
+        tick_acceleration_ratio=decision.get("tick_acceleration_ratio") or "0.000",
+        curr_vs_micro_vwap_bp=decision.get("curr_vs_micro_vwap_bp") or "0.00",
+        buy_pressure_10t=decision.get("buy_pressure_10t") or "0.00",
+        relief_skip_reason=decision.get("relief_skip_reason") or ("allowed" if decision.get("allowed") else "unknown"),
+        relief_count=_safe_int(decision.get("relief_count"), 0),
+        quote_stale=bool(decision.get("quote_stale")),
+        latency_state=decision.get("latency_state") or "-",
     )
 
 
@@ -17224,23 +17378,60 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             real_pre_submit_guard_verdicts.get("min_liquidity"),
             _rule_int("MIN_SCALP_LIQUIDITY", 500_000_000),
         )
-        if not greenfield_active:
+        liquidity_relief_decision = _resolve_pre_submit_liquidity_relief(
+            stock,
+            ws_data,
+            strategy=strategy,
+            ai_score=latency_signal_score,
+            liquidity_value=liquidity_value,
+            min_liquidity=min_liquidity,
+            latency_gate=latency_gate,
+            guard_fields=real_pre_submit_guard_fields,
+            submit_fields=submit_revalidation_fields,
+            price_snapshot=latency_price_snapshot,
+            orderbook_fields=entry_orderbook_micro_fields,
+            microstructure_fields=microstructure_submit_log_fields,
+            pre_ai_fields=pre_ai_gate_submit_log_fields,
+        )
+        if not greenfield_active and _rule_bool("PRE_SUBMIT_LIQUIDITY_RELIEF_ENABLED", False):
+            _log_pre_submit_liquidity_relief(
+                stock,
+                code,
+                "pre_submit_liquidity_relief_evaluated",
+                liquidity_relief_decision,
+            )
+        if not greenfield_active and liquidity_relief_decision.get("allowed"):
+            _mutate_stock_state(
+                stock,
+                set_fields={
+                    "pre_submit_liquidity_relief_count": _safe_int(
+                        stock.get("pre_submit_liquidity_relief_count"), 0
+                    )
+                    + 1,
+                    "pre_submit_liquidity_relief_last_at": time.time(),
+                },
+            )
+            _log_pre_submit_liquidity_relief(
+                stock,
+                code,
+                "pre_submit_liquidity_relief_allowed",
+                liquidity_relief_decision,
+            )
+        elif not greenfield_active:
+            if _rule_bool("PRE_SUBMIT_LIQUIDITY_RELIEF_ENABLED", False):
+                _log_pre_submit_liquidity_relief(
+                    stock,
+                    code,
+                    "pre_submit_liquidity_relief_skipped",
+                    liquidity_relief_decision,
+                )
             log_info(
                 f"[PRE_SUBMIT_LIQUIDITY_GUARD_BLOCK] {stock.get('name')}({code}) "
                 f"liquidity={int(liquidity_value)} min={min_liquidity}"
             )
             clear_signal_reference(stock)
-        _log_entry_pipeline(
-            stock,
-            code,
-            "pre_submit_liquidity_guard_observed_greenfield_prior"
-            if greenfield_active
-            else "pre_submit_liquidity_guard_block",
-            liquidity_value=int(liquidity_value),
-            min_liquidity=min_liquidity,
-            block_reason="below_min_liquidity",
-            greenfield_tunable_prior=bool(greenfield_active),
-            **_merge_entry_pipeline_field_groups(
+        if greenfield_active or not liquidity_relief_decision.get("allowed"):
+            liquidity_guard_fields = _merge_entry_pipeline_field_groups(
                 real_pre_submit_guard_fields,
                 submit_revalidation_fields,
                 latency_price_snapshot,
@@ -17248,9 +17439,24 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 microstructure_submit_log_fields,
                 pre_ai_gate_submit_log_fields,
                 _build_pre_submit_gate_contract_fields("liquidity_pre_submit_guard_p1"),
-            ),
-        )
-        if not greenfield_active:
+            )
+            if not greenfield_active:
+                liquidity_guard_fields["liquidity_relief_skip_reason"] = (
+                    liquidity_relief_decision.get("relief_skip_reason") or "not_evaluated"
+                )
+            _log_entry_pipeline(
+                stock,
+                code,
+                "pre_submit_liquidity_guard_observed_greenfield_prior"
+                if greenfield_active
+                else "pre_submit_liquidity_guard_block",
+                liquidity_value=int(liquidity_value),
+                min_liquidity=min_liquidity,
+                block_reason="below_min_liquidity",
+                greenfield_tunable_prior=bool(greenfield_active),
+                **liquidity_guard_fields,
+            )
+        if not greenfield_active and not liquidity_relief_decision.get("allowed"):
             _emit_scalp_entry_adm_snapshot(
                 stock,
                 code,
@@ -17266,6 +17472,9 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 extra_fields={
                     "liquidity_value": int(liquidity_value),
                     "min_liquidity": min_liquidity,
+                    "liquidity_relief_skip_reason": (
+                        liquidity_relief_decision.get("relief_skip_reason") or "not_evaluated"
+                    ),
                     **real_pre_submit_guard_fields,
                 },
             )

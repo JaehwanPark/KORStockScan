@@ -275,6 +275,7 @@ AGGRESSIVE_ENTRY_PRICE_OVERRIDE_FAMILY = "aggressive_entry_price_override_runtim
 SCALPING_SCANNER_REAL_SOURCE_GUARD_FAMILY = "scalping_scanner_real_source_guard_runtime"
 EARLY_ACCEL_RECHECK_FAMILY = "early_accel_recheck_runtime"
 AI_NUMERIC_CONSISTENCY_RECHECK_FAMILY = "ai_numeric_consistency_recheck_runtime"
+PRE_SUBMIT_LIQUIDITY_RELIEF_FAMILY = "pre_submit_liquidity_relief_runtime"
 WEAK_CONTEXT_LATE_ENTRY_GUARD_FAMILY = "weak_context_late_entry_guard_runtime"
 SCORE65_74_STRONG_MICRO_OVERRIDE_FAMILY = "score65_74_recovery_probe_strong_micro_override_runtime"
 ENTRY_PRICE_LIVE_TUNING_MARKER_ENV = "KORSTOCKSCAN_ENTRY_PRICE_LIVE_TUNING_SELECTED"
@@ -341,6 +342,16 @@ AI_NUMERIC_CONSISTENCY_RECHECK_ENV_KEYS = frozenset(
         "KORSTOCKSCAN_AI_NUMERIC_CONSISTENCY_RECHECK_BUY_MIN_SCORE",
         "KORSTOCKSCAN_AI_NUMERIC_CONSISTENCY_RECHECK_MIN_FEATURE_PASS_COUNT",
         "KORSTOCKSCAN_AI_NUMERIC_CONSISTENCY_RECHECK_MAX_PER_SYMBOL",
+    }
+)
+PRE_SUBMIT_LIQUIDITY_RELIEF_ENV_KEYS = frozenset(
+    {
+        "KORSTOCKSCAN_PRE_SUBMIT_LIQUIDITY_RELIEF_ENABLED",
+        "KORSTOCKSCAN_PRE_SUBMIT_LIQUIDITY_RELIEF_MIN_AI_SCORE",
+        "KORSTOCKSCAN_PRE_SUBMIT_LIQUIDITY_RELIEF_MIN_TICK_ACCEL",
+        "KORSTOCKSCAN_PRE_SUBMIT_LIQUIDITY_RELIEF_MIN_BUY_PRESSURE",
+        "KORSTOCKSCAN_PRE_SUBMIT_LIQUIDITY_RELIEF_MIN_MICRO_VWAP_BP",
+        "KORSTOCKSCAN_PRE_SUBMIT_LIQUIDITY_RELIEF_MAX_PER_SYMBOL",
     }
 )
 WEAK_CONTEXT_LATE_ENTRY_GUARD_ENV_KEYS = frozenset(
@@ -752,6 +763,7 @@ _FAMILY_ENV_KEY_PREFIXES: dict[str, str] = {
     "soft_stop_whipsaw_confirmation": "KORSTOCKSCAN_SCALP_SOFT_STOP_WHIPSAW_CONFIRMATION_",
     "score65_74_recovery_probe": "KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_",
     SCORE65_74_STRONG_MICRO_OVERRIDE_FAMILY: "KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_STRONG_MICRO_",
+    PRE_SUBMIT_LIQUIDITY_RELIEF_FAMILY: "KORSTOCKSCAN_PRE_SUBMIT_LIQUIDITY_RELIEF_",
     "scalp_sim_candidate_window_expansion": "KORSTOCKSCAN_SCALP_SIM_CANDIDATE_WINDOW_",
     "scalp_sim_ai_budget_manager": "KORSTOCKSCAN_SCALP_SIM_AI_",
     "lifecycle_decision_matrix_runtime": "KORSTOCKSCAN_LIFECYCLE_DECISION_MATRIX_",
@@ -1868,8 +1880,14 @@ def _additive_entry_operator_lock_stage_coexist(
     additive_entry_lock_families = {
         SCALPING_SCANNER_REAL_SOURCE_GUARD_FAMILY,
         SCORE65_74_STRONG_MICRO_OVERRIDE_FAMILY,
+        EARLY_ACCEL_RECHECK_FAMILY,
+        AI_NUMERIC_CONSISTENCY_RECHECK_FAMILY,
+        PRE_SUBMIT_LIQUIDITY_RELIEF_FAMILY,
+        WEAK_CONTEXT_LATE_ENTRY_GUARD_FAMILY,
     }
     if family not in additive_entry_lock_families or stage not in selected_by_stage:
+        return False
+    if family not in locks_by_family:
         return False
     previous = selected_by_stage[stage]
     previous_family = str(previous.get("family") or "")
@@ -2067,6 +2085,10 @@ def _entry_price_live_owner_family(*selected_groups: list[dict[str, Any]]) -> st
                 AGGRESSIVE_ENTRY_PRICE_OVERRIDE_FAMILY,
                 SCALPING_SCANNER_REAL_SOURCE_GUARD_FAMILY,
                 SCORE65_74_STRONG_MICRO_OVERRIDE_FAMILY,
+                EARLY_ACCEL_RECHECK_FAMILY,
+                AI_NUMERIC_CONSISTENCY_RECHECK_FAMILY,
+                PRE_SUBMIT_LIQUIDITY_RELIEF_FAMILY,
+                WEAK_CONTEXT_LATE_ENTRY_GUARD_FAMILY,
             }:
                 continue
             if str(item.get("stage") or "") == "entry":
@@ -2084,6 +2106,10 @@ def _entry_live_tuning_owner_family(*selected_groups: list[dict[str, Any]]) -> s
                 AGGRESSIVE_ENTRY_PRICE_OVERRIDE_FAMILY,
                 SCALPING_SCANNER_REAL_SOURCE_GUARD_FAMILY,
                 SCORE65_74_STRONG_MICRO_OVERRIDE_FAMILY,
+                EARLY_ACCEL_RECHECK_FAMILY,
+                AI_NUMERIC_CONSISTENCY_RECHECK_FAMILY,
+                PRE_SUBMIT_LIQUIDITY_RELIEF_FAMILY,
+                WEAK_CONTEXT_LATE_ENTRY_GUARD_FAMILY,
             }:
                 continue
             if str(item.get("stage") or "") != "entry":
@@ -2242,6 +2268,47 @@ def _close_ai_numeric_consistency_recheck_for_live_owner(
     updated_decisions: list[dict[str, Any]] = []
     for decision in decisions:
         if str(decision.get("family") or "") != AI_NUMERIC_CONSISTENCY_RECHECK_FAMILY:
+            updated_decisions.append(decision)
+            continue
+        next_decision = {**decision, "selected": False, "decision_reason": reason, "env_overrides": {}}
+        lock = next_decision.get("operator_runtime_env_lock")
+        if isinstance(lock, dict):
+            close_reasons = list(lock.get("close_reasons") or [])
+            if reason not in close_reasons:
+                close_reasons.append(reason)
+            next_decision["operator_runtime_env_lock"] = {
+                **lock,
+                "applied": False,
+                "close_reasons": close_reasons,
+                "allowed_close": _lock_allows_close(lock, close_reasons),
+            }
+        updated_decisions.append(next_decision)
+    return filtered_selected, updated_decisions, filtered_env
+
+
+def _close_pre_submit_liquidity_relief_for_live_owner(
+    *,
+    selected: list[dict[str, Any]],
+    decisions: list[dict[str, Any]],
+    env_overrides: dict[str, str],
+    owner_family: str,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, str]]:
+    if not owner_family:
+        return selected, decisions, env_overrides
+    reason = f"same_stage_owner_conflict:{owner_family}"
+    filtered_selected = [
+        item
+        for item in selected
+        if str(item.get("family") or "") != PRE_SUBMIT_LIQUIDITY_RELIEF_FAMILY
+    ]
+    filtered_env = {
+        key: value
+        for key, value in env_overrides.items()
+        if str(key) not in PRE_SUBMIT_LIQUIDITY_RELIEF_ENV_KEYS
+    }
+    updated_decisions: list[dict[str, Any]] = []
+    for decision in decisions:
+        if str(decision.get("family") or "") != PRE_SUBMIT_LIQUIDITY_RELIEF_FAMILY:
             updated_decisions.append(decision)
             continue
         next_decision = {**decision, "selected": False, "decision_reason": reason, "env_overrides": {}}
@@ -3241,6 +3308,12 @@ def build_preopen_apply_manifest(
                 owner_family=entry_live_tuning_owner_family,
             )
             selected, decisions, env_overrides = _close_early_accel_recheck_for_live_owner(
+                selected=selected,
+                decisions=decisions,
+                env_overrides=env_overrides,
+                owner_family=entry_live_tuning_owner_family,
+            )
+            selected, decisions, env_overrides = _close_pre_submit_liquidity_relief_for_live_owner(
                 selected=selected,
                 decisions=decisions,
                 env_overrides=env_overrides,

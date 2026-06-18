@@ -201,9 +201,13 @@ def test_postclose_done_controller_repairs_ev_workorder_stale_link_without_full_
     action_names = [item["action"] for item in report["actions"]]
     assert action_names == [
         "refresh_daily_threshold_cycle_report",
-        "refresh_code_improvement_workorder",
         "refresh_threshold_cycle_ev",
+        "refresh_pattern_lab_currentness_audit",
+        "refresh_pattern_lab_propagation_audit",
+        "refresh_code_improvement_workorder",
         "refresh_runtime_approval_summary",
+        "refresh_next_preopen_apply",
+        "refresh_runtime_apply_gap_audit",
         "verify_postclose_chain",
     ]
     assert not any(cmd[:2] == ["bash", "deploy/run_threshold_cycle_postclose.sh"] for cmd in calls)
@@ -1118,6 +1122,84 @@ def test_postclose_done_controller_accepts_next_preopen_handoff_conversion_warni
     assert report["status"] == "done"
     assert report["final_verifier_status"] == "warning"
     assert report["blocked_reasons"] == []
+
+
+def test_postclose_done_controller_accepts_report_only_followup_warnings(
+    monkeypatch,
+    tmp_path,
+):
+    report_dir = tmp_path / "report"
+    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "OUTPUT_DIR", report_dir / "postclose_done_controller")
+    _write_succeeded_status(report_dir)
+    _write_json(
+        report_dir / "threshold_cycle_postclose_verification" / "threshold_cycle_postclose_verification_2026-06-03.json",
+        {
+            "status": "warning",
+            "latest_done_marker": "[DONE] threshold-cycle postclose target_date=2026-06-03",
+            "artifact_status": _passable_artifact_status(),
+            "handoff_warnings": [
+                "ai_watching_score_smoothing_diagnostic_followup_open",
+                "swing_active_arm_priority_runtime_observation_missing",
+            ],
+        },
+    )
+
+    report = mod.build_postclose_done_controller(
+        "2026-06-03",
+        max_attempts=1,
+        allow_wrapper_rerun=True,
+        command_runner=lambda cmd, env=None: 0,
+    )
+
+    assert report["status"] == "done"
+    assert report["final_verifier_status"] == "warning"
+    assert report["blocked_reasons"] == []
+
+
+def test_postclose_done_controller_repairs_active_priority_handoff_by_refreshing_next_preopen_apply(
+    monkeypatch,
+    tmp_path,
+):
+    report_dir = tmp_path / "report"
+    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "OUTPUT_DIR", report_dir / "postclose_done_controller")
+    _write_succeeded_status(report_dir)
+    verification = report_dir / "threshold_cycle_postclose_verification" / "threshold_cycle_postclose_verification_2026-06-03.json"
+    _write_json(
+        verification,
+        {
+            "status": "fail",
+            "handoff_warnings": ["active_sim_priority_handoff_missing"],
+            "active_sim_priority_handoff": {
+                "status": "fail",
+                "missing": ["active_sim_priority_preopen_handoff_missing"],
+            },
+        },
+    )
+    calls = []
+
+    def fake_runner(cmd, env=None):
+        calls.append(cmd)
+        joined = " ".join(cmd)
+        if "verify_threshold_cycle_postclose_chain" in joined and "--allow-pending-done-marker" in cmd:
+            _write_json(verification, _pass_verification())
+        return 0
+
+    report = mod.build_postclose_done_controller(
+        "2026-06-03",
+        max_attempts=2,
+        allow_wrapper_rerun=True,
+        command_runner=fake_runner,
+    )
+
+    joined = "\n".join(" ".join(cmd) for cmd in calls)
+    assert report["status"] == "done"
+    assert "threshold_cycle_preopen_apply" in joined
+    assert "--date 2026-06-04" in joined
+    assert "--source-date 2026-06-03" in joined
+    assert "runtime_apply_gap_audit" in joined
+    assert not any(cmd[:2] == ["bash", "deploy/run_threshold_cycle_postclose.sh"] for cmd in calls)
 
 
 def test_postclose_done_controller_accepts_missing_next_preopen_apply_as_optional(

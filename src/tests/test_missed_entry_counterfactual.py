@@ -296,6 +296,26 @@ def test_missed_entry_counterfactual_splits_ai_and_pre_submit_cohorts(monkeypatc
                 "emitted_at": "2026-06-18T10:12:02",
                 "emitted_date": target_date,
             },
+            {
+                "pipeline": "ENTRY_PIPELINE",
+                "stage": "ai_confirmed",
+                "stock_name": "미제출",
+                "stock_code": "555555",
+                "record_id": 5,
+                "fields": {"action": "BUY", "ai_score": "82"},
+                "emitted_at": "2026-06-18T10:20:01",
+                "emitted_date": target_date,
+            },
+            {
+                "pipeline": "ENTRY_PIPELINE",
+                "stage": "entry_armed",
+                "stock_name": "미제출",
+                "stock_code": "555555",
+                "record_id": 5,
+                "fields": {"target_buy_price": "50000", "ai_score": "82.0"},
+                "emitted_at": "2026-06-18T10:20:02",
+                "emitted_date": target_date,
+            },
         ],
     )
 
@@ -328,6 +348,13 @@ def test_missed_entry_counterfactual_splits_ai_and_pre_submit_cohorts(monkeypatc
             _make_candle("10:16:00", 40140, 40200, 40110, 40180),
             _make_candle("10:17:00", 40180, 40240, 40140, 40200),
         ],
+        "555555": [
+            _make_candle("10:21:00", 50000, 50200, 49900, 50100),
+            _make_candle("10:22:00", 50100, 50300, 50050, 50250),
+            _make_candle("10:23:00", 50250, 50400, 50200, 50300),
+            _make_candle("10:24:00", 50300, 50500, 50280, 50400),
+            _make_candle("10:25:00", 50400, 50600, 50350, 50500),
+        ],
     }
     fake_kiwoom = types.SimpleNamespace(
         get_kiwoom_token=lambda: "dummy",
@@ -344,11 +371,14 @@ def test_missed_entry_counterfactual_splits_ai_and_pre_submit_cohorts(monkeypatc
     assert cohorts["ai_numeric_consistency_recheck_failed"]["evaluated_candidates"] == 1
     assert cohorts["entry_armed_pre_submit_liquidity_block"]["evaluated_candidates"] == 1
     assert cohorts["early_accel_strong_bundle_recheck_skipped"]["evaluated_candidates"] == 1
+    assert cohorts["buy_like_no_submit_terminal"]["evaluated_candidates"] == 1
     rows = {row["stock_code"]: row for row in report["rows"]}
     assert rows["111111"]["missed_submit_cohort"] == "ai_numeric_inconsistency_no_buy"
     assert rows["333333"]["missed_submit_cohort"] == "ai_numeric_consistency_recheck_failed"
     assert rows["222222"]["missed_submit_cohort"] == "entry_armed_pre_submit_liquidity_block"
     assert rows["444444"]["missed_submit_cohort"] == "early_accel_strong_bundle_recheck_skipped"
+    assert rows["555555"]["missed_submit_cohort"] == "buy_like_no_submit_terminal"
+    assert rows["555555"]["no_submit_reason"] == "broker_submit_not_reached"
 
 
 def test_missed_entry_counterfactual_includes_snapshot_wait_or_skip_paths(monkeypatch, tmp_path):

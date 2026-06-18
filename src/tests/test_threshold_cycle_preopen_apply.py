@@ -1678,12 +1678,15 @@ def test_sell_side_open_time_operator_lock_enables_next_preopen(tmp_path, monkey
 
 def test_operator_lock_preserved_when_source_report_missing(tmp_path, monkeypatch):
     report_dir = tmp_path / "report"
+    calibration_dir = report_dir / "threshold_cycle_calibration"
     apply_dir = tmp_path / "apply_plans"
     runtime_dir = tmp_path / "runtime_env"
     lock_dir = tmp_path / "operator_runtime_env_locks"
     latency_dir = tmp_path / "missing_latency_classifier_recommendation"
     lock_dir.mkdir(parents=True)
+    calibration_dir.mkdir(parents=True)
     monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "CALIBRATION_REPORT_DIR", calibration_dir)
     monkeypatch.setattr(mod, "APPLY_PLAN_DIR", apply_dir)
     monkeypatch.setattr(mod, "RUNTIME_ENV_DIR", runtime_dir)
     monkeypatch.setattr(mod, "OPERATOR_RUNTIME_ENV_LOCK_DIR", lock_dir)
@@ -2115,6 +2118,31 @@ def test_score65_74_strong_micro_override_operator_lock_coexists_with_score65(tm
         ),
         encoding="utf-8",
     )
+    (lock_dir / "early_accel_recheck_2026-06-15.json").write_text(
+        json.dumps(
+            {
+                "lock_id": "early_accel_recheck_operator_override_2026-06-15",
+                "enabled": True,
+                "family": "early_accel_recheck_runtime",
+                "stage": "entry",
+                "priority": 905,
+                "active_from_date": "2026-06-15",
+                "explicit_close_required": True,
+                "env_overrides": {
+                    "KORSTOCKSCAN_EARLY_ACCEL_RECHECK_RUNTIME_ENABLED": "true",
+                    "KORSTOCKSCAN_EARLY_ACCEL_STRONG_BUNDLE_RECHECK_ENABLED": "true",
+                    "KORSTOCKSCAN_EARLY_ACCEL_STRONG_BUNDLE_RECHECK_MAX_SCORE": "66",
+                },
+                "allowed_close_reason_keywords": [
+                    "same_stage_owner_conflict",
+                    "live_auto_apply_ready",
+                    "tuning_override",
+                    "safety_revert_required",
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
 
     manifest = mod.build_preopen_apply_manifest(
         "2026-06-15",
@@ -2128,11 +2156,18 @@ def test_score65_74_strong_micro_override_operator_lock_coexists_with_score65(tm
     assert decisions["score65_74_recovery_probe"]["selected"] is True
     strong = decisions["score65_74_recovery_probe_strong_micro_override_runtime"]
     assert strong["selected"] is True
+    early_accel = decisions["early_accel_recheck_runtime"]
+    assert early_accel["selected"] is True
     assert manifest["runtime_env_overrides"]["KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_ENABLED"] == "true"
     assert (
         manifest["runtime_env_overrides"][
             "KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_STRONG_MICRO_OVERRIDE_ENABLED"
         ]
+        == "true"
+    )
+    assert manifest["runtime_env_overrides"]["KORSTOCKSCAN_EARLY_ACCEL_RECHECK_RUNTIME_ENABLED"] == "true"
+    assert (
+        manifest["runtime_env_overrides"]["KORSTOCKSCAN_EARLY_ACCEL_STRONG_BUNDLE_RECHECK_ENABLED"]
         == "true"
     )
 
@@ -2442,6 +2477,67 @@ def test_ai_numeric_consistency_recheck_operator_lock_emits_env(tmp_path, monkey
     assert manifest["runtime_env_overrides"]["KORSTOCKSCAN_AI_NUMERIC_CONSISTENCY_RECHECK_BUY_MIN_SCORE"] == "75"
 
 
+def test_pre_submit_liquidity_relief_operator_lock_emits_env(tmp_path, monkeypatch):
+    report_dir = tmp_path / "report"
+    apply_dir = tmp_path / "apply_plans"
+    runtime_dir = tmp_path / "runtime_env"
+    lock_dir = tmp_path / "operator_runtime_env_locks"
+    latency_dir = tmp_path / "missing_latency_classifier_recommendation"
+    report_dir.mkdir(parents=True)
+    lock_dir.mkdir(parents=True)
+    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "APPLY_PLAN_DIR", apply_dir)
+    monkeypatch.setattr(mod, "RUNTIME_ENV_DIR", runtime_dir)
+    monkeypatch.setattr(mod, "OPERATOR_RUNTIME_ENV_LOCK_DIR", lock_dir)
+    monkeypatch.setattr(mod, "LATENCY_CLASSIFIER_RECOMMENDATION_DIR", latency_dir)
+
+    (report_dir / "threshold_cycle_2026-06-18.json").write_text(
+        json.dumps({"date": "2026-06-18", "calibration_candidates": []}),
+        encoding="utf-8",
+    )
+    (lock_dir / "pre_submit_liquidity_relief_2026-06-18.json").write_text(
+        json.dumps(
+            {
+                "lock_id": "pre_submit_liquidity_relief_operator_override_2026-06-18",
+                "enabled": True,
+                "family": "pre_submit_liquidity_relief_runtime",
+                "stage": "entry",
+                "priority": 907,
+                "active_from_date": "2026-06-18",
+                "explicit_close_required": True,
+                "env_overrides": {
+                    "KORSTOCKSCAN_PRE_SUBMIT_LIQUIDITY_RELIEF_ENABLED": "true",
+                    "KORSTOCKSCAN_PRE_SUBMIT_LIQUIDITY_RELIEF_MIN_AI_SCORE": "75",
+                    "KORSTOCKSCAN_PRE_SUBMIT_LIQUIDITY_RELIEF_MIN_TICK_ACCEL": "1.10",
+                    "KORSTOCKSCAN_PRE_SUBMIT_LIQUIDITY_RELIEF_MIN_BUY_PRESSURE": "68",
+                    "KORSTOCKSCAN_PRE_SUBMIT_LIQUIDITY_RELIEF_MIN_MICRO_VWAP_BP": "0.0",
+                    "KORSTOCKSCAN_PRE_SUBMIT_LIQUIDITY_RELIEF_MAX_PER_SYMBOL": "1",
+                },
+                "allowed_close_reason_keywords": [
+                    "same_stage_owner_conflict",
+                    "live_auto_apply_ready",
+                    "tuning_override",
+                    "safety_revert_required",
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    manifest = mod.build_preopen_apply_manifest(
+        "2026-06-18",
+        source_date="2026-06-18",
+        apply_mode="auto_bounded_live",
+        auto_apply=True,
+        require_ai=False,
+    )
+
+    decisions = {item["family"]: item for item in manifest["auto_apply_decisions"]}
+    assert decisions["pre_submit_liquidity_relief_runtime"]["selected"] is True
+    assert manifest["runtime_env_overrides"]["KORSTOCKSCAN_PRE_SUBMIT_LIQUIDITY_RELIEF_ENABLED"] == "true"
+    assert manifest["runtime_env_overrides"]["KORSTOCKSCAN_PRE_SUBMIT_LIQUIDITY_RELIEF_MIN_BUY_PRESSURE"] == "68"
+
+
 def test_weak_context_late_entry_guard_operator_lock_emits_env(tmp_path, monkeypatch):
     report_dir = tmp_path / "report"
     apply_dir = tmp_path / "apply_plans"
@@ -2502,6 +2598,78 @@ def test_weak_context_late_entry_guard_operator_lock_emits_env(tmp_path, monkeyp
     assert decisions["weak_context_late_entry_guard_runtime"]["selected"] is True
     assert manifest["runtime_env_overrides"]["KORSTOCKSCAN_WEAK_CONTEXT_LATE_ENTRY_GUARD_ENABLED"] == "true"
     assert manifest["runtime_env_overrides"]["KORSTOCKSCAN_WEAK_CONTEXT_LATE_ENTRY_MIN_BLOCK_COUNT"] == "2"
+
+
+def test_weak_context_and_liquidity_relief_operator_locks_coexist(tmp_path, monkeypatch):
+    report_dir = tmp_path / "report"
+    apply_dir = tmp_path / "apply_plans"
+    runtime_dir = tmp_path / "runtime_env"
+    lock_dir = tmp_path / "operator_runtime_env_locks"
+    latency_dir = tmp_path / "missing_latency_classifier_recommendation"
+    report_dir.mkdir(parents=True)
+    lock_dir.mkdir(parents=True)
+    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "APPLY_PLAN_DIR", apply_dir)
+    monkeypatch.setattr(mod, "RUNTIME_ENV_DIR", runtime_dir)
+    monkeypatch.setattr(mod, "OPERATOR_RUNTIME_ENV_LOCK_DIR", lock_dir)
+    monkeypatch.setattr(mod, "LATENCY_CLASSIFIER_RECOMMENDATION_DIR", latency_dir)
+
+    (report_dir / "threshold_cycle_2026-06-18.json").write_text(
+        json.dumps({"date": "2026-06-18", "calibration_candidates": []}),
+        encoding="utf-8",
+    )
+    (lock_dir / "pre_submit_liquidity_relief_2026-06-18.json").write_text(
+        json.dumps(
+            {
+                "lock_id": "pre_submit_liquidity_relief_operator_override_2026-06-18",
+                "enabled": True,
+                "family": "pre_submit_liquidity_relief_runtime",
+                "stage": "entry",
+                "priority": 907,
+                "active_from_date": "2026-06-18",
+                "explicit_close_required": True,
+                "env_overrides": {
+                    "KORSTOCKSCAN_PRE_SUBMIT_LIQUIDITY_RELIEF_ENABLED": "true",
+                    "KORSTOCKSCAN_PRE_SUBMIT_LIQUIDITY_RELIEF_MIN_AI_SCORE": "75",
+                },
+                "allowed_close_reason_keywords": ["same_stage_owner_conflict", "tuning_override"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (lock_dir / "weak_context_late_entry_guard_2026-06-18.json").write_text(
+        json.dumps(
+            {
+                "lock_id": "weak_context_late_entry_guard_operator_override_2026-06-18",
+                "enabled": True,
+                "family": "weak_context_late_entry_guard_runtime",
+                "stage": "entry",
+                "priority": 908,
+                "active_from_date": "2026-06-18",
+                "explicit_close_required": True,
+                "env_overrides": {
+                    "KORSTOCKSCAN_WEAK_CONTEXT_LATE_ENTRY_GUARD_ENABLED": "true",
+                    "KORSTOCKSCAN_WEAK_CONTEXT_LATE_ENTRY_MIN_BLOCK_COUNT": "2",
+                },
+                "allowed_close_reason_keywords": ["same_stage_owner_conflict", "tuning_override"],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    manifest = mod.build_preopen_apply_manifest(
+        "2026-06-18",
+        source_date="2026-06-18",
+        apply_mode="auto_bounded_live",
+        auto_apply=True,
+        require_ai=False,
+    )
+
+    decisions = {item["family"]: item for item in manifest["auto_apply_decisions"]}
+    assert decisions["pre_submit_liquidity_relief_runtime"]["selected"] is True
+    assert decisions["weak_context_late_entry_guard_runtime"]["selected"] is True
+    assert manifest["runtime_env_overrides"]["KORSTOCKSCAN_PRE_SUBMIT_LIQUIDITY_RELIEF_ENABLED"] == "true"
+    assert manifest["runtime_env_overrides"]["KORSTOCKSCAN_WEAK_CONTEXT_LATE_ENTRY_GUARD_ENABLED"] == "true"
 
 
 def test_weak_context_late_entry_guard_operator_lock_closes_for_entry_live_owner(tmp_path, monkeypatch):
@@ -2572,6 +2740,77 @@ def test_weak_context_late_entry_guard_operator_lock_closes_for_entry_live_owner
     assert lock_decision["selected"] is False
     assert lock_decision["decision_reason"] == "same_stage_owner_conflict:future_entry_live_bucket"
     assert "KORSTOCKSCAN_WEAK_CONTEXT_LATE_ENTRY_GUARD_ENABLED" not in manifest["runtime_env_overrides"]
+    assert manifest["runtime_env_overrides"]["KORSTOCKSCAN_ENTRY_STAGE_LIVE_TUNING_SELECTED"] == "true"
+
+
+def test_pre_submit_liquidity_relief_operator_lock_closes_for_entry_live_owner(tmp_path, monkeypatch):
+    report_dir = tmp_path / "report"
+    apply_dir = tmp_path / "apply_plans"
+    runtime_dir = tmp_path / "runtime_env"
+    lock_dir = tmp_path / "operator_runtime_env_locks"
+    latency_dir = tmp_path / "missing_latency_classifier_recommendation"
+    report_dir.mkdir(parents=True)
+    lock_dir.mkdir(parents=True)
+    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "APPLY_PLAN_DIR", apply_dir)
+    monkeypatch.setattr(mod, "RUNTIME_ENV_DIR", runtime_dir)
+    monkeypatch.setattr(mod, "OPERATOR_RUNTIME_ENV_LOCK_DIR", lock_dir)
+    monkeypatch.setattr(mod, "LATENCY_CLASSIFIER_RECOMMENDATION_DIR", latency_dir)
+
+    (report_dir / "threshold_cycle_2026-06-17.json").write_text(
+        json.dumps(
+            {
+                "date": "2026-06-17",
+                "calibration_candidates": [
+                    {
+                        "family": "future_entry_live_bucket",
+                        "stage": "entry",
+                        "priority": 10,
+                        "allowed_runtime_apply": True,
+                        "safety_revert_required": False,
+                        "calibration_state": "adjust_up",
+                        "target_env_keys": ["SCALPING_NORMAL_DEFENSIVE_BPS"],
+                        "current_values": {"normal_defensive_bps": 25},
+                        "recommended_values": {"normal_defensive_bps": 20},
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (lock_dir / "pre_submit_liquidity_relief_2026-06-18.json").write_text(
+        json.dumps(
+            {
+                "lock_id": "pre_submit_liquidity_relief_operator_override_2026-06-18",
+                "enabled": True,
+                "family": "pre_submit_liquidity_relief_runtime",
+                "stage": "entry",
+                "priority": 907,
+                "active_from_date": "2026-06-18",
+                "explicit_close_required": True,
+                "env_overrides": {
+                    "KORSTOCKSCAN_PRE_SUBMIT_LIQUIDITY_RELIEF_ENABLED": "true",
+                },
+                "allowed_close_reason_keywords": ["same_stage_owner_conflict", "tuning_override"],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    manifest = mod.build_preopen_apply_manifest(
+        "2026-06-18",
+        source_date="2026-06-17",
+        apply_mode="auto_bounded_live",
+        auto_apply=True,
+        require_ai=False,
+    )
+
+    decisions = {item["family"]: item for item in manifest["auto_apply_decisions"]}
+    assert decisions["future_entry_live_bucket"]["selected"] is True
+    lock_decision = decisions["pre_submit_liquidity_relief_runtime"]
+    assert lock_decision["selected"] is False
+    assert lock_decision["decision_reason"] == "same_stage_owner_conflict:future_entry_live_bucket"
+    assert "KORSTOCKSCAN_PRE_SUBMIT_LIQUIDITY_RELIEF_ENABLED" not in manifest["runtime_env_overrides"]
     assert manifest["runtime_env_overrides"]["KORSTOCKSCAN_ENTRY_STAGE_LIVE_TUNING_SELECTED"] == "true"
 
 

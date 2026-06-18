@@ -9,7 +9,7 @@ import re
 import subprocess
 import time
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Callable
 
@@ -43,6 +43,8 @@ NON_RECOVERABLE_TERMS = {
 DONE_ACCEPTABLE_WARNING_ISSUES = {
     "active_sim_priority_preopen_handoff_pending",
     "active_or_hypothesis_preopen_handoff_pending",
+    "ai_watching_score_smoothing_diagnostic_followup_open",
+    "swing_active_arm_priority_runtime_observation_missing",
 }
 FULL_WRAPPER_RERUN_LOG_ISSUES = {
     "postclose_start_marker_missing",
@@ -53,6 +55,8 @@ MARKER_RECONCILIATION_LOG_ISSUES = {
 }
 EV_WORKORDER_STALE_ISSUES = {
     "threshold_cycle_ev_stale_before_code_improvement_workorder",
+    "threshold_cycle_ev_stale_before_pattern_lab_currentness_audit",
+    "threshold_cycle_ev_stale_before_pattern_lab_propagation_audit",
 }
 OPTIONAL_MISSING_ARTIFACT_LABELS = {
     "threshold_preopen_apply_next",
@@ -306,6 +310,43 @@ def _build_pending_verify_action(target_date: str) -> RecoveryAction:
     )
 
 
+def _next_calendar_date(target_date: str) -> str:
+    try:
+        return (date.fromisoformat(target_date) + timedelta(days=1)).isoformat()
+    except ValueError:
+        return target_date
+
+
+def _build_next_preopen_apply_action(target_date: str) -> RecoveryAction:
+    next_date = _next_calendar_date(target_date)
+    return RecoveryAction(
+        "refresh_next_preopen_apply",
+        [
+            _python_bin(),
+            "-m",
+            "src.engine.threshold_cycle_preopen_apply",
+            "--date",
+            next_date,
+            "--source-date",
+            target_date,
+            "--source-phase",
+            "postclose",
+            "--apply-mode",
+            "auto_bounded_live",
+            "--auto-apply",
+        ],
+        "refresh next PREOPEN apply plan after postclose sim-auto/catalog artifacts",
+    )
+
+
+def _build_runtime_apply_gap_audit_action(target_date: str) -> RecoveryAction:
+    return RecoveryAction(
+        "refresh_runtime_apply_gap_audit",
+        [_python_bin(), "-m", "src.engine.runtime_apply_gap_audit", "--date", target_date],
+        "runtime apply gap audit refresh after next PREOPEN apply",
+    )
+
+
 def _build_marker_reconciliation_action(target_date: str) -> RecoveryAction:
     return RecoveryAction(
         "marker_reconciliation",
@@ -493,10 +534,35 @@ def _tail_stage_repair_actions(target_date: str, failed_stage: str) -> list[Reco
                 "wrapper tail repair EV refresh after post-conversion workorder",
             ),
             RecoveryAction(
+                "refresh_pattern_lab_currentness_audit",
+                [_python_bin(), "-m", "src.engine.pattern_lab_currentness_audit", "--date", target_date],
+                "wrapper tail repair pattern currentness audit refresh after EV",
+            ),
+            RecoveryAction(
+                "refresh_pattern_lab_propagation_audit",
+                [_python_bin(), "-m", "src.engine.pattern_lab_propagation_audit", "--date", target_date],
+                "wrapper tail repair pattern propagation audit refresh after EV",
+            ),
+            RecoveryAction(
+                "refresh_code_improvement_workorder",
+                [
+                    _python_bin(),
+                    "-m",
+                    "src.engine.build_code_improvement_workorder",
+                    "--date",
+                    target_date,
+                    "--max-orders",
+                    workorder_max_orders,
+                ],
+                "wrapper tail repair workorder refresh after EV consumers",
+            ),
+            RecoveryAction(
                 "refresh_runtime_approval_summary",
                 [_python_bin(), "-m", "src.engine.runtime_approval_summary", "--date", target_date],
-                "wrapper tail repair runtime summary refresh after EV",
+                "wrapper tail repair runtime summary refresh after EV consumers",
             ),
+            _build_next_preopen_apply_action(target_date),
+            _build_runtime_apply_gap_audit_action(target_date),
             _build_pending_verify_action(target_date),
             _build_tail_done_reconciliation_action(target_date),
             _build_verify_action(target_date),
@@ -722,6 +788,27 @@ def _recovery_actions(target_date: str, verification: dict[str, Any], *, allow_w
             ]
         )
         return actions
+    if "active_sim_priority_handoff_missing" in issues:
+        actions.extend(
+            [
+                _build_next_preopen_apply_action(target_date),
+                _build_runtime_apply_gap_audit_action(target_date),
+                _build_pending_verify_action(target_date),
+                _build_tail_done_reconciliation_action(target_date),
+                _build_verify_action(target_date),
+            ]
+        )
+        return actions
+    if "runtime_apply_gap_audit_stale_before_threshold_preopen_apply" in issues:
+        actions.extend(
+            [
+                _build_runtime_apply_gap_audit_action(target_date),
+                _build_pending_verify_action(target_date),
+                _build_tail_done_reconciliation_action(target_date),
+                _build_verify_action(target_date),
+            ]
+        )
+        return actions
     if EV_WORKORDER_STALE_ISSUES & set(issues):
         actions.extend(
             [
@@ -742,32 +829,38 @@ def _recovery_actions(target_date: str, verification: dict[str, Any], *, allow_w
                     "daily report refresh before EV/workorder repair",
                 ),
                 RecoveryAction(
-                    "refresh_code_improvement_workorder",
-                    [_python_bin(), "-m", "src.engine.build_code_improvement_workorder", "--date", target_date],
-                    "workorder lineage repair before consumer refresh",
-                ),
-                RecoveryAction(
                     "refresh_threshold_cycle_ev",
                     [_python_bin(), "-m", "src.engine.threshold_cycle_ev_report", "--date", target_date],
-                    "threshold EV refresh after workorder repair",
+                    "threshold EV source refresh before downstream consumers",
+                ),
+                RecoveryAction(
+                    "refresh_pattern_lab_currentness_audit",
+                    [_python_bin(), "-m", "src.engine.pattern_lab_currentness_audit", "--date", target_date],
+                    "pattern currentness audit refresh after EV",
+                ),
+                RecoveryAction(
+                    "refresh_pattern_lab_propagation_audit",
+                    [_python_bin(), "-m", "src.engine.pattern_lab_propagation_audit", "--date", target_date],
+                    "pattern propagation audit refresh after EV",
+                ),
+                RecoveryAction(
+                    "refresh_code_improvement_workorder",
+                    [_python_bin(), "-m", "src.engine.build_code_improvement_workorder", "--date", target_date],
+                    "workorder lineage repair after EV and pattern consumers",
                 ),
                 RecoveryAction(
                     "refresh_runtime_approval_summary",
                     [_python_bin(), "-m", "src.engine.runtime_approval_summary", "--date", target_date],
-                    "runtime summary refresh after EV repair",
+                    "runtime summary refresh after EV consumer repair",
                 ),
+                _build_next_preopen_apply_action(target_date),
+                _build_runtime_apply_gap_audit_action(target_date),
                 _build_verify_action(target_date),
             ]
         )
         return actions
     if "runtime_apply_gap" in issue_text:
-        actions.append(
-            RecoveryAction(
-                "refresh_runtime_apply_gap_audit",
-                [_python_bin(), "-m", "src.engine.runtime_apply_gap_audit", "--date", target_date],
-                "runtime apply gap audit issue",
-            )
-        )
+        actions.append(_build_runtime_apply_gap_audit_action(target_date))
     if "code_improvement_workorder" in issue_text or not _workorder_path(target_date).exists():
         actions.append(
             RecoveryAction(
