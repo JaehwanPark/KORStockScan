@@ -1272,6 +1272,66 @@ def test_observation_source_quality_audit_accepts_ai_numeric_consistency_recheck
     assert report["status"] == "pass"
 
 
+def test_observation_source_quality_audit_accepts_early_accel_strong_bundle_recheck_contracts(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
+    common_fields = {
+        "metric_role": "funnel_count",
+        "window_policy": "intraday_operator_runtime_retry",
+        "sample_floor": "not_applicable_operator_runtime_retry",
+        "primary_decision_metric": "funnel_count",
+        "runtime_effect": True,
+        "allowed_runtime_apply": False,
+        "forbidden_uses": "EV|rolling|MTD|cumulative_tuning|live_auto_promotion|runtime_apply_bridge",
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "decision_authority": "operator_runtime_decision_recheck_only",
+        "source_quality_gate": "early_accel_strong_bundle_recheck_contract_fields_present",
+        "scanner_promotion_reason": "price_jump_start_acceleration",
+        "source_signature": "PRICE_JUMP_START,VOLUME_SURGE_POSITIVE",
+        "strong_bundle_pass_count": 4,
+        "price_delta_since_first_seen_pct": "0.62",
+        "comparable_flu_delta_since_first_seen": "0.58",
+        "cntr_str_available": True,
+        "cntr_str": "118.0",
+        "tick_acceleration_ratio": "1.220",
+        "curr_vs_micro_vwap_bp": "8.50",
+        "buy_pressure_10t": "71.20",
+        "original_action": "WAIT",
+        "original_score": "62.0",
+        "recheck_action": "BUY",
+        "recheck_score": "76.0",
+        "recheck_count": 1,
+        "quote_stale": False,
+        "skip_reason": "allowed",
+    }
+    _write_events(
+        tmp_path,
+        "2026-06-18",
+        [
+            _event("early_accel_strong_bundle_recheck_evaluated", common_fields),
+            _event("early_accel_strong_bundle_recheck_allowed", common_fields),
+            _event(
+                "early_accel_strong_bundle_recheck_failed",
+                {
+                    **common_fields,
+                    "recheck_action": "WAIT",
+                    "recheck_score": "73.0",
+                    "skip_reason": "recheck_wait_or_buy_below_min_score",
+                },
+            ),
+        ],
+    )
+
+    report = audit.build_observation_source_quality_audit("2026-06-18")
+
+    assert report["stage_contracts"]["early_accel_strong_bundle_recheck_evaluated"]["status"] == "pass"
+    assert report["stage_contracts"]["early_accel_strong_bundle_recheck_allowed"]["status"] == "pass"
+    assert report["stage_contracts"]["early_accel_strong_bundle_recheck_failed"]["status"] == "pass"
+    assert report["status"] == "pass"
+
+
 def test_observation_source_quality_audit_accepts_s15_fast_track_contracts(
     monkeypatch, tmp_path
 ):

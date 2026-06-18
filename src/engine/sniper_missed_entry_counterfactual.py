@@ -20,6 +20,7 @@ _INFERRED_BUY_INTENT_STAGES = _ENTRY_ARMED_STAGES | {"score65_74_recovery_probe_
 _INFERRED_BUY_INTENT_DEDUP_TERMINAL_STAGES = {
     "pre_submit_liquidity_guard_block",
     "pre_submit_overbought_pullback_guard_block",
+    "pre_submit_weak_context_late_entry_guard_block",
 }
 _INFERRED_BUY_INTENT_DEDUP_WINDOW_SEC = 120
 _ATTEMPT_AUXILIARY_STAGES = {
@@ -30,6 +31,11 @@ _ATTEMPT_AUXILIARY_STAGES = {
     "ai_numeric_consistency_recheck_skipped",
     "ai_numeric_consistency_recheck_failed",
     "ai_numeric_consistency_recheck_corrected",
+    "early_accel_strong_bundle_recheck_evaluated",
+    "early_accel_strong_bundle_recheck_allowed",
+    "early_accel_strong_bundle_recheck_skipped",
+    "early_accel_strong_bundle_recheck_failed",
+    "early_accel_strong_bundle_recheck_corrected",
 }
 _BUY_MISSED_MFE_PCT = 0.8
 _BUY_MISSED_CLOSE_PCT = 0.3
@@ -49,6 +55,7 @@ _STAGE_LABELS = {
     "blocked_big_bite_hard_gate": "Big-Bite 차단",
     "blocked_vpw": "정적 체결강도 차단",
     "blocked_strength_momentum": "동적 체결강도 차단",
+    "pre_submit_weak_context_late_entry_guard_block": "약한 문맥 늦은 진입 차단",
     "entry_armed_expired": "진입 자격 만료",
     "entry_armed_expired_after_wait": "진입 대기 후 자격 만료",
     "entry_arm_expired": "진입 자격 만료(legacy)",
@@ -299,10 +306,23 @@ def _snapshot_terminal_class(event: EntryEvent) -> str | None:
 def _missed_submit_cohort(candidate: dict) -> str:
     terminal_stage = str(candidate.get("terminal_stage") or "")
     terminal_fields = candidate.get("terminal_fields") if isinstance(candidate.get("terminal_fields"), dict) else {}
+    stage_flow = {
+        str(stage).strip()
+        for stage in (candidate.get("stage_flow") or [])
+        if str(stage).strip()
+    }
     chosen_action = str(terminal_fields.get("chosen_action") or "").upper()
+    if terminal_stage == "early_accel_strong_bundle_recheck_failed":
+        return "early_accel_strong_bundle_recheck_failed"
     if terminal_stage == "ai_numeric_consistency_recheck_failed":
         return "ai_numeric_consistency_recheck_failed"
     if terminal_stage == "scalp_entry_action_decision_snapshot" and chosen_action == "NO_BUY_AI":
+        if "early_accel_strong_bundle_recheck_corrected" in stage_flow:
+            return "early_accel_strong_bundle_recheck_corrected"
+        if "early_accel_strong_bundle_recheck_failed" in stage_flow:
+            return "early_accel_strong_bundle_recheck_failed"
+        if "early_accel_strong_bundle_recheck_skipped" in stage_flow:
+            return "early_accel_strong_bundle_recheck_skipped"
         if terminal_fields.get("ai_reason_numeric_inconsistency") in {True, "true", "True", "1"}:
             return "ai_numeric_inconsistency_no_buy"
         return "ai_no_buy_clean_reason"
@@ -311,6 +331,7 @@ def _missed_submit_cohort(candidate: dict) -> str:
     if terminal_stage in {
         "latency_block",
         "entry_submit_revalidation_block",
+        "pre_submit_weak_context_late_entry_guard_block",
         "pre_submit_overbought_pullback_guard_block",
         "real_weak_pullback_entry_block",
     }:
@@ -442,6 +463,7 @@ def _build_buy_attempts(target_date: str, *, include_submitted: bool = True) -> 
                         {
                             "terminal_stage": terminal_event.stage,
                             "terminal_fields": dict(terminal_event.fields),
+                            "stage_flow": [event.stage for event in attempt_events],
                         }
                     ),
                 }

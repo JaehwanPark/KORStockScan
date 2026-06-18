@@ -16,12 +16,16 @@ def test_trading_rules_default_latency_canary_thresholds(monkeypatch):
     monkeypatch.delenv("KORSTOCKSCAN_SCALP_LATENCY_GUARD_CANARY_MAX_WS_JITTER_MS", raising=False)
     monkeypatch.delenv("KORSTOCKSCAN_SCALP_LATENCY_GUARD_CANARY_MAX_WS_AGE_MS", raising=False)
     monkeypatch.delenv("KORSTOCKSCAN_SCALP_LATENCY_GUARD_CANARY_MAX_SPREAD_RATIO", raising=False)
+    monkeypatch.delenv("KORSTOCKSCAN_SCALP_LATENCY_SPREAD_RELIEF_BLOCK_UNSTABLE_QUOTE", raising=False)
+    monkeypatch.delenv("KORSTOCKSCAN_SCALP_LATENCY_SPREAD_RELIEF_MIN_PRINT_QUOTE_ALIGNMENT", raising=False)
 
     reloaded = importlib.reload(constants)
 
     assert reloaded.TRADING_RULES.SCALP_LATENCY_GUARD_CANARY_MAX_WS_JITTER_MS == 260
     assert reloaded.TRADING_RULES.SCALP_LATENCY_GUARD_CANARY_MAX_WS_AGE_MS == 450
     assert reloaded.TRADING_RULES.SCALP_LATENCY_GUARD_CANARY_MAX_SPREAD_RATIO == 0.0100
+    assert reloaded.TRADING_RULES.SCALP_LATENCY_SPREAD_RELIEF_BLOCK_UNSTABLE_QUOTE is True
+    assert reloaded.TRADING_RULES.SCALP_LATENCY_SPREAD_RELIEF_MIN_PRINT_QUOTE_ALIGNMENT == 0.90
 
 
 def test_trading_rules_late_entry_price_drift_guard_default_off(monkeypatch):
@@ -40,6 +44,60 @@ def test_trading_rules_late_entry_price_drift_guard_default_off(monkeypatch):
     assert reloaded.TRADING_RULES.SCALP_LATE_ENTRY_PRICE_DRIFT_MIN_TICK_ACCEL == 1.10
     assert reloaded.TRADING_RULES.SCALP_LATE_ENTRY_PRICE_DRIFT_MIN_BUY_PRESSURE == 0.0
     assert reloaded.TRADING_RULES.SCALP_LATE_ENTRY_PRICE_DRIFT_MIN_MICRO_VWAP_BP == 0.0
+
+
+def test_trading_rules_scalping_overnight_gatekeeper_default_off_and_env_override(monkeypatch):
+    monkeypatch.delenv("KORSTOCKSCAN_SCALPING_OVERNIGHT_GATEKEEPER_ENABLED", raising=False)
+
+    reloaded = importlib.reload(constants)
+
+    assert reloaded.TRADING_RULES.SCALPING_OVERNIGHT_GATEKEEPER_ENABLED is False
+
+    monkeypatch.setenv("KORSTOCKSCAN_SCALPING_OVERNIGHT_GATEKEEPER_ENABLED", "true")
+
+    reloaded = importlib.reload(constants)
+
+    assert reloaded.TRADING_RULES.SCALPING_OVERNIGHT_GATEKEEPER_ENABLED is True
+
+
+def test_trading_rules_sell_side_open_time_block_default_off_and_env_override(monkeypatch):
+    monkeypatch.delenv("KORSTOCKSCAN_SELL_SIDE_OPEN_TIME_BLOCK_ENABLED", raising=False)
+    monkeypatch.delenv("KORSTOCKSCAN_SELL_SIDE_OPEN_TIME_BLOCK_UNTIL_HHMM", raising=False)
+    monkeypatch.delenv("KORSTOCKSCAN_SELL_SIDE_OPEN_TIME_BLOCK_SCOPE", raising=False)
+
+    reloaded = importlib.reload(constants)
+
+    assert reloaded.TRADING_RULES.SELL_SIDE_OPEN_TIME_BLOCK_ENABLED is False
+    assert reloaded.TRADING_RULES.SELL_SIDE_OPEN_TIME_BLOCK_UNTIL_HHMM == "09:03"
+    assert reloaded.TRADING_RULES.SELL_SIDE_OPEN_TIME_BLOCK_SCOPE == "discretionary_exit_only"
+
+    monkeypatch.setenv("KORSTOCKSCAN_SELL_SIDE_OPEN_TIME_BLOCK_ENABLED", "true")
+    monkeypatch.setenv("KORSTOCKSCAN_SELL_SIDE_OPEN_TIME_BLOCK_UNTIL_HHMM", "09:05")
+    monkeypatch.setenv("KORSTOCKSCAN_SELL_SIDE_OPEN_TIME_BLOCK_SCOPE", "discretionary_exit_only")
+
+    reloaded = importlib.reload(constants)
+
+    assert reloaded.TRADING_RULES.SELL_SIDE_OPEN_TIME_BLOCK_ENABLED is True
+    assert reloaded.TRADING_RULES.SELL_SIDE_OPEN_TIME_BLOCK_UNTIL_HHMM == "09:05"
+    assert reloaded.TRADING_RULES.SELL_SIDE_OPEN_TIME_BLOCK_SCOPE == "discretionary_exit_only"
+
+
+def test_trading_rules_sell_order_failure_retry_backoff_default_on_and_env_override(monkeypatch):
+    monkeypatch.delenv("KORSTOCKSCAN_SELL_ORDER_FAILURE_RETRY_BACKOFF_ENABLED", raising=False)
+    monkeypatch.delenv("KORSTOCKSCAN_SELL_ORDER_FAILURE_RETRY_BACKOFF_SEC", raising=False)
+
+    reloaded = importlib.reload(constants)
+
+    assert reloaded.TRADING_RULES.SELL_ORDER_FAILURE_RETRY_BACKOFF_ENABLED is True
+    assert reloaded.TRADING_RULES.SELL_ORDER_FAILURE_RETRY_BACKOFF_SEC == 30
+
+    monkeypatch.setenv("KORSTOCKSCAN_SELL_ORDER_FAILURE_RETRY_BACKOFF_ENABLED", "false")
+    monkeypatch.setenv("KORSTOCKSCAN_SELL_ORDER_FAILURE_RETRY_BACKOFF_SEC", "45")
+
+    reloaded = importlib.reload(constants)
+
+    assert reloaded.TRADING_RULES.SELL_ORDER_FAILURE_RETRY_BACKOFF_ENABLED is False
+    assert reloaded.TRADING_RULES.SELL_ORDER_FAILURE_RETRY_BACKOFF_SEC == 45
 
 
 def test_trading_rules_remote_v2_profile_relaxes_latency_canary_jitter(monkeypatch):
@@ -70,6 +128,8 @@ def test_trading_rules_entry_latency_classifier_jitter_env_override(monkeypatch)
     monkeypatch.setenv("KORSTOCKSCAN_SCALP_LATENCY_SUBMIT_RECOVERY_MAX_WS_AGE_MS", "1200")
     monkeypatch.setenv("KORSTOCKSCAN_SCALP_LATENCY_SUBMIT_RECOVERY_MAX_WS_JITTER_MS", "1500")
     monkeypatch.setenv("KORSTOCKSCAN_SCALP_LATENCY_SUBMIT_RECOVERY_MAX_SPREAD_RATIO", "0.01")
+    monkeypatch.setenv("KORSTOCKSCAN_SCALP_LATENCY_SPREAD_RELIEF_BLOCK_UNSTABLE_QUOTE", "false")
+    monkeypatch.setenv("KORSTOCKSCAN_SCALP_LATENCY_SPREAD_RELIEF_MIN_PRINT_QUOTE_ALIGNMENT", "0.95")
 
     reloaded = importlib.reload(constants)
 
@@ -81,6 +141,8 @@ def test_trading_rules_entry_latency_classifier_jitter_env_override(monkeypatch)
     assert reloaded.TRADING_RULES.SCALP_LATENCY_SUBMIT_RECOVERY_MAX_WS_AGE_MS == 1200
     assert reloaded.TRADING_RULES.SCALP_LATENCY_SUBMIT_RECOVERY_MAX_WS_JITTER_MS == 1500
     assert reloaded.TRADING_RULES.SCALP_LATENCY_SUBMIT_RECOVERY_MAX_SPREAD_RATIO == 0.01
+    assert reloaded.TRADING_RULES.SCALP_LATENCY_SPREAD_RELIEF_BLOCK_UNSTABLE_QUOTE is False
+    assert reloaded.TRADING_RULES.SCALP_LATENCY_SPREAD_RELIEF_MIN_PRINT_QUOTE_ALIGNMENT == 0.95
 
 
 def test_trading_rules_scalping_entry_price_percent_bps_env_override(monkeypatch):
@@ -122,6 +184,12 @@ def test_trading_rules_scalping_entry_price_percent_bps_env_override(monkeypatch
     monkeypatch.setenv("KORSTOCKSCAN_EARLY_ACCEL_RECHECK_MIN_MICRO_VWAP_BP", "0.0")
     monkeypatch.setenv("KORSTOCKSCAN_EARLY_ACCEL_RECHECK_ALLOW_LIQUIDITY_BLOCKED", "true")
     monkeypatch.setenv("KORSTOCKSCAN_EARLY_ACCEL_RECHECK_ALLOW_STRENGTH_BLOCKED", "true")
+    monkeypatch.setenv("KORSTOCKSCAN_EARLY_ACCEL_STRONG_BUNDLE_RECHECK_ENABLED", "true")
+    monkeypatch.setenv("KORSTOCKSCAN_EARLY_ACCEL_STRONG_BUNDLE_RECHECK_MIN_SCORE", "60")
+    monkeypatch.setenv("KORSTOCKSCAN_EARLY_ACCEL_STRONG_BUNDLE_RECHECK_MAX_SCORE", "66")
+    monkeypatch.setenv("KORSTOCKSCAN_EARLY_ACCEL_STRONG_BUNDLE_RECHECK_BUY_MIN_SCORE", "75")
+    monkeypatch.setenv("KORSTOCKSCAN_EARLY_ACCEL_STRONG_BUNDLE_RECHECK_MIN_PASS_COUNT", "2")
+    monkeypatch.setenv("KORSTOCKSCAN_EARLY_ACCEL_STRONG_BUNDLE_RECHECK_MAX_PER_SYMBOL", "1")
     monkeypatch.setenv("KORSTOCKSCAN_AI_NUMERIC_CONSISTENCY_RECHECK_ENABLED", "true")
     monkeypatch.setenv("KORSTOCKSCAN_AI_NUMERIC_CONSISTENCY_RECHECK_MIN_SCORE", "60")
     monkeypatch.setenv("KORSTOCKSCAN_AI_NUMERIC_CONSISTENCY_RECHECK_BUY_MIN_SCORE", "75")
@@ -201,6 +269,12 @@ def test_trading_rules_scalping_entry_price_percent_bps_env_override(monkeypatch
     assert reloaded.TRADING_RULES.EARLY_ACCEL_RECHECK_MIN_MICRO_VWAP_BP == 0.0
     assert reloaded.TRADING_RULES.EARLY_ACCEL_RECHECK_ALLOW_LIQUIDITY_BLOCKED is True
     assert reloaded.TRADING_RULES.EARLY_ACCEL_RECHECK_ALLOW_STRENGTH_BLOCKED is True
+    assert reloaded.TRADING_RULES.EARLY_ACCEL_STRONG_BUNDLE_RECHECK_ENABLED is True
+    assert reloaded.TRADING_RULES.EARLY_ACCEL_STRONG_BUNDLE_RECHECK_MIN_SCORE == 60
+    assert reloaded.TRADING_RULES.EARLY_ACCEL_STRONG_BUNDLE_RECHECK_MAX_SCORE == 66
+    assert reloaded.TRADING_RULES.EARLY_ACCEL_STRONG_BUNDLE_RECHECK_BUY_MIN_SCORE == 75
+    assert reloaded.TRADING_RULES.EARLY_ACCEL_STRONG_BUNDLE_RECHECK_MIN_PASS_COUNT == 2
+    assert reloaded.TRADING_RULES.EARLY_ACCEL_STRONG_BUNDLE_RECHECK_MAX_PER_SYMBOL == 1
     assert reloaded.TRADING_RULES.AI_NUMERIC_CONSISTENCY_RECHECK_ENABLED is True
     assert reloaded.TRADING_RULES.AI_NUMERIC_CONSISTENCY_RECHECK_MIN_SCORE == 60
     assert reloaded.TRADING_RULES.AI_NUMERIC_CONSISTENCY_RECHECK_BUY_MIN_SCORE == 75
@@ -255,6 +329,58 @@ def test_trading_rules_score65_74_strong_micro_override_env(monkeypatch):
     assert reloaded.TRADING_RULES.AI_SCORE65_74_RECOVERY_PROBE_STRONG_MICRO_OVERRIDE_ENABLED is True
     assert reloaded.TRADING_RULES.AI_SCORE65_74_RECOVERY_PROBE_STRONG_MICRO_MIN_BUY_PRESSURE == 88.5
     assert reloaded.TRADING_RULES.AI_SCORE65_74_RECOVERY_PROBE_STRONG_MICRO_MIN_MICRO_VWAP_BP == 35.0
+
+
+def test_trading_rules_weak_context_late_entry_and_never_green_defer_env(monkeypatch):
+    monkeypatch.setenv("KORSTOCKSCAN_WEAK_CONTEXT_LATE_ENTRY_GUARD_ENABLED", "true")
+    monkeypatch.setenv("KORSTOCKSCAN_WEAK_CONTEXT_LATE_ENTRY_LOOKBACK_SEC", "900")
+    monkeypatch.setenv("KORSTOCKSCAN_WEAK_CONTEXT_LATE_ENTRY_MIN_BLOCK_COUNT", "2")
+    monkeypatch.setenv("KORSTOCKSCAN_WEAK_CONTEXT_LATE_ENTRY_MIN_TICK_ACCEL", "1.10")
+    monkeypatch.setenv("KORSTOCKSCAN_WEAK_CONTEXT_LATE_ENTRY_MIN_BUY_PRESSURE", "0.0")
+    monkeypatch.setenv("KORSTOCKSCAN_WEAK_CONTEXT_LATE_ENTRY_MIN_MICRO_VWAP_BP", "0.0")
+    monkeypatch.setenv("KORSTOCKSCAN_NEVER_GREEN_DEFER_CLAMP_ENABLED", "true")
+    monkeypatch.setenv("KORSTOCKSCAN_NEVER_GREEN_DEFER_CLAMP_MAX_PEAK_PROFIT_PCT", "0.05")
+    monkeypatch.setenv("KORSTOCKSCAN_NEVER_GREEN_DEFER_CLAMP_MIN_DEFER_COUNT", "2")
+    monkeypatch.setenv("KORSTOCKSCAN_NEVER_GREEN_DEFER_CLAMP_MAX_MICRO_VWAP_BP", "0.0")
+    monkeypatch.setenv("KORSTOCKSCAN_NEVER_GREEN_DEFER_CLAMP_MIN_LOSS_PCT", "0.0")
+
+    reloaded = importlib.reload(constants)
+
+    assert reloaded.TRADING_RULES.WEAK_CONTEXT_LATE_ENTRY_GUARD_ENABLED is True
+    assert reloaded.TRADING_RULES.WEAK_CONTEXT_LATE_ENTRY_LOOKBACK_SEC == 900
+    assert reloaded.TRADING_RULES.WEAK_CONTEXT_LATE_ENTRY_MIN_BLOCK_COUNT == 2
+    assert reloaded.TRADING_RULES.WEAK_CONTEXT_LATE_ENTRY_MIN_TICK_ACCEL == 1.10
+    assert reloaded.TRADING_RULES.WEAK_CONTEXT_LATE_ENTRY_MIN_BUY_PRESSURE == 0.0
+    assert reloaded.TRADING_RULES.WEAK_CONTEXT_LATE_ENTRY_MIN_MICRO_VWAP_BP == 0.0
+    assert reloaded.TRADING_RULES.NEVER_GREEN_DEFER_CLAMP_ENABLED is True
+    assert reloaded.TRADING_RULES.NEVER_GREEN_DEFER_CLAMP_MAX_PEAK_PROFIT_PCT == 0.05
+    assert reloaded.TRADING_RULES.NEVER_GREEN_DEFER_CLAMP_MIN_DEFER_COUNT == 2
+    assert reloaded.TRADING_RULES.NEVER_GREEN_DEFER_CLAMP_MAX_MICRO_VWAP_BP == 0.0
+    assert reloaded.TRADING_RULES.NEVER_GREEN_DEFER_CLAMP_MIN_LOSS_PCT == 0.0
+
+
+def test_trading_rules_real_pyramid_scale_in_quality_guard_env(monkeypatch):
+    monkeypatch.setenv("KORSTOCKSCAN_REAL_PYRAMID_MICRO_CONTEXT_GUARD_ENABLED", "true")
+    monkeypatch.setenv("KORSTOCKSCAN_PENDING_SCALE_IN_REVALIDATION_CANCEL_ENABLED", "true")
+    monkeypatch.setenv("KORSTOCKSCAN_PENDING_SCALE_IN_REVALIDATION_MIN_AI_SCORE", "66")
+    monkeypatch.setenv("KORSTOCKSCAN_PENDING_SCALE_IN_REVALIDATION_MIN_TICK_ACCEL", "1.10")
+    monkeypatch.setenv("KORSTOCKSCAN_PENDING_SCALE_IN_REVALIDATION_MIN_BUY_PRESSURE", "60")
+    monkeypatch.setenv("KORSTOCKSCAN_PENDING_SCALE_IN_REVALIDATION_MIN_MICRO_VWAP_BP", "0.0")
+    monkeypatch.setenv("KORSTOCKSCAN_RECENT_EXIT_CANDIDATE_PYRAMID_BLOCK_ENABLED", "true")
+    monkeypatch.setenv("KORSTOCKSCAN_RECENT_EXIT_CANDIDATE_PYRAMID_BLOCK_SEC", "180")
+    monkeypatch.setenv("KORSTOCKSCAN_SCALE_IN_LIVE_TUNING_SELECTED", "true")
+
+    reloaded = importlib.reload(constants)
+
+    assert reloaded.TRADING_RULES.REAL_PYRAMID_MICRO_CONTEXT_GUARD_ENABLED is True
+    assert reloaded.TRADING_RULES.PENDING_SCALE_IN_REVALIDATION_CANCEL_ENABLED is True
+    assert reloaded.TRADING_RULES.PENDING_SCALE_IN_REVALIDATION_MIN_AI_SCORE == 66
+    assert reloaded.TRADING_RULES.PENDING_SCALE_IN_REVALIDATION_MIN_TICK_ACCEL == 1.10
+    assert reloaded.TRADING_RULES.PENDING_SCALE_IN_REVALIDATION_MIN_BUY_PRESSURE == 60
+    assert reloaded.TRADING_RULES.PENDING_SCALE_IN_REVALIDATION_MIN_MICRO_VWAP_BP == 0.0
+    assert reloaded.TRADING_RULES.RECENT_EXIT_CANDIDATE_PYRAMID_BLOCK_ENABLED is True
+    assert reloaded.TRADING_RULES.RECENT_EXIT_CANDIDATE_PYRAMID_BLOCK_SEC == 180
+    assert reloaded.TRADING_RULES.SCALE_IN_LIVE_TUNING_SELECTED is True
 
 
 def test_trading_rules_real_entry_panic_gap_weight_env_override(monkeypatch):

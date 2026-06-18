@@ -17,6 +17,7 @@ from src.database.models import HoldingAddHistory, RecommendationHistory
 from src.engine import kiwoom_orders
 from src.utils import kiwoom_utils
 from src.utils.constants import DATA_DIR
+from src.utils.jsonl_io import existing_or_gzip_path, iter_jsonl
 from src.utils.logger import log_error, log_info
 from src.utils.pipeline_event_logger import emit_pipeline_event
 from src.engine.sniper_time import (
@@ -179,6 +180,11 @@ SCALPING_ENTRY_BLOCKER_ROLE_REGISTRY = {
         "gate_action": "block",
         "hard_block_allowed": True,
     },
+    "weak_context_late_entry_guard": {
+        "role": "bounded_tunable",
+        "gate_action": "block",
+        "hard_block_allowed": True,
+    },
 }
 COOLDOWNS = None
 ALERTED_STOCKS = None
@@ -187,6 +193,21 @@ ALERTED_STOCKS = None
 _MARCAP_CACHE: dict[str, tuple[int, float]] = {}
 _MARCAP_CACHE_TTL: int = 300  # 5분
 _MARCAP_CACHE_MAX_SIZE: int = 512
+_SCANNER_PROMOTION_CONTEXT_FIELDS = (
+    "scanner_promotion_reason",
+    "source_signature",
+    "price_delta_since_first_seen_pct",
+    "comparable_flu_delta_since_first_seen",
+    "cntr_str_available",
+    "cntr_str",
+)
+_SCANNER_PROMOTION_CONTEXT_CACHE: dict[str, Any] = {
+    "date": "",
+    "path": "",
+    "mtime_ns": 0,
+    "size": 0,
+    "events_by_code": {},
+}
 
 
 def _resolve_zero_qty_cooldown_sec(deposit: int) -> int:
@@ -210,6 +231,129 @@ def _prune_marcap_cache(now_ts: float) -> None:
         if oldest_code is None:
             break
         _MARCAP_CACHE.pop(oldest_code, None)
+
+
+def _scanner_promotion_events_path(target_date: str) -> Path:
+    return DATA_DIR / "pipeline_events" / f"pipeline_events_{target_date}.jsonl"
+
+
+def _parse_iso_epoch(value: Any) -> float:
+    text = str(value or "").strip()
+    if not text:
+        return 0.0
+    try:
+        return float(datetime.fromisoformat(text).timestamp())
+    except Exception:
+        return 0.0
+
+
+def _scanner_promotion_context_present(stock: dict[str, Any] | None) -> bool:
+    if not isinstance(stock, dict):
+        return False
+    if not all(
+        str(stock.get(key) or "").strip()
+        for key in ("scanner_promotion_reason", "source_signature")
+    ):
+        return False
+    for key in ("price_delta_since_first_seen_pct", "comparable_flu_delta_since_first_seen", "cntr_str"):
+        if str(stock.get(key) or "").strip() == "":
+            return False
+    return "cntr_str_available" in stock
+
+
+def _load_scanner_promotion_context_events(target_date: str) -> dict[str, list[dict[str, Any]]]:
+    path = existing_or_gzip_path(_scanner_promotion_events_path(target_date))
+    cache = _SCANNER_PROMOTION_CONTEXT_CACHE
+    if not path.exists():
+        cache.update(
+            {
+                "date": target_date,
+                "path": str(path),
+                "mtime_ns": 0,
+                "size": 0,
+                "events_by_code": {},
+            }
+        )
+        return {}
+    stat = path.stat()
+    if (
+        cache.get("date") == target_date
+        and cache.get("path") == str(path)
+        and int(cache.get("mtime_ns") or 0) == int(getattr(stat, "st_mtime_ns", 0) or 0)
+        and int(cache.get("size") or 0) == int(getattr(stat, "st_size", 0) or 0)
+    ):
+        return cache.get("events_by_code") or {}
+
+    events_by_code: dict[str, list[dict[str, Any]]] = {}
+    for payload in iter_jsonl(path, errors="ignore"):
+        if str(payload.get("stage") or "") != "scalping_scanner_candidate_promoted":
+            continue
+        code = str(payload.get("stock_code") or "").strip()[:6]
+        if not code:
+            continue
+        fields = payload.get("fields") if isinstance(payload.get("fields"), dict) else {}
+        events_by_code.setdefault(code, []).append(
+            {
+                "emitted_epoch": _parse_iso_epoch(payload.get("emitted_at")),
+                "fields": fields,
+            }
+        )
+    for code_rows in events_by_code.values():
+        code_rows.sort(key=lambda item: float(item.get("emitted_epoch") or 0.0))
+    cache.update(
+        {
+            "date": target_date,
+            "path": str(path),
+            "mtime_ns": int(getattr(stat, "st_mtime_ns", 0) or 0),
+            "size": int(getattr(stat, "st_size", 0) or 0),
+            "events_by_code": events_by_code,
+        }
+    )
+    return events_by_code
+
+
+def _hydrate_scanner_promotion_runtime_context(stock: dict[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(stock, dict):
+        return {}
+    if _scanner_promotion_context_present(stock):
+        return {key: stock.get(key) for key in _SCANNER_PROMOTION_CONTEXT_FIELDS}
+
+    code = str(stock.get("code") or stock.get("stock_code") or "").strip()[:6]
+    if not code:
+        return {}
+    target_date = str(stock.get("date") or datetime.now().date().isoformat())
+    events_by_code = _load_scanner_promotion_context_events(target_date)
+    code_rows = list(events_by_code.get(code) or [])
+    if not code_rows:
+        return {}
+
+    anchor_epoch = _safe_float(stock.get("entry_armed_at_epoch"), 0.0)
+    selected = None
+    if anchor_epoch > 0:
+        eligible = [row for row in code_rows if float(row.get("emitted_epoch") or 0.0) <= anchor_epoch + 5.0]
+        if eligible:
+            selected = min(
+                eligible,
+                key=lambda row: abs(float(row.get("emitted_epoch") or 0.0) - anchor_epoch),
+            )
+    if selected is None:
+        selected = code_rows[-1]
+
+    fields = selected.get("fields") if isinstance(selected.get("fields"), dict) else {}
+    hydrated = {
+        "scanner_promotion_reason": str(fields.get("scanner_promotion_reason") or "").strip(),
+        "source_signature": str(fields.get("source_signature") or "").strip(),
+        "price_delta_since_first_seen_pct": str(fields.get("price_delta_since_first_seen_pct") or "0.00").strip(),
+        "comparable_flu_delta_since_first_seen": str(
+            fields.get("comparable_flu_delta_since_first_seen") or "0.00"
+        ).strip(),
+        "cntr_str_available": _truthy_field(fields.get("cntr_str_available")),
+        "cntr_str": str(fields.get("cntr_str") or "0.0").strip(),
+    }
+    if hydrated["scanner_promotion_reason"] and hydrated["source_signature"]:
+        stock.update(hydrated)
+        return hydrated
+    return {}
 
 
 def _extract_sellable_qty_from_error(err_msg: str):
@@ -236,6 +380,14 @@ SEND_EXIT_BEST_IOC = None
 DUAL_PERSONA_ENGINE = None
 BIG_BITE_STATE = {}
 _SAME_SYMBOL_SOFT_STOP_TS: dict[str, float] = {}
+_SCALP_SAME_SYMBOL_LOSS_REENTRY_COOLDOWNS: dict[str, dict] = {}
+_SCALP_LOSS_REENTRY_EVENT_CACHE: dict[str, Any] = {
+    "date": "",
+    "path": "",
+    "mtime_ns": 0,
+    "size": 0,
+    "rows_by_code": {},
+}
 _HOLDING_FLOW_OVERRIDE_EXIT_RULES = {
     "scalp_soft_stop_pct",
     "scalp_ai_momentum_decay",
@@ -2575,6 +2727,50 @@ def _is_greenfield_hard_safety_exit(exit_rule: str | None, sell_reason_type: str
             "loss_cut",
         )
     )
+
+
+def _is_sell_side_open_time_safety_exit(
+    exit_rule: str | None,
+    sell_reason_type: str | None = None,
+) -> bool:
+    if _is_greenfield_hard_safety_exit(exit_rule, sell_reason_type):
+        return True
+    combined = " ".join(str(value or "") for value in (exit_rule, sell_reason_type)).strip().lower()
+    if not combined:
+        return False
+    return any(
+        marker in combined
+        for marker in (
+            "panic",
+            "liquidity",
+            "broken",
+            "overnight",
+            "safety",
+            "protect",
+            "emergency",
+        )
+    )
+
+
+def _sell_side_open_time_block_fields(
+    *,
+    strategy: str | None,
+    sell_reason_type: str | None,
+    exit_rule: str | None,
+) -> dict:
+    fields = kiwoom_orders.get_sell_side_open_time_block_fields(
+        reason_type=sell_reason_type,
+        strategy=strategy,
+    )
+    if _is_sell_side_open_time_safety_exit(exit_rule, sell_reason_type):
+        fields["sell_time_block_applied"] = False
+        fields["sell_time_block_passthrough_reason"] = "safety_exit_passthrough"
+    elif fields.get("sell_time_block_passthrough_reason") == "scope_unknown_passthrough":
+        fields["sell_time_block_scope_unknown_passthrough"] = True
+    else:
+        fields["sell_time_block_scope_unknown_passthrough"] = False
+    fields.pop("sell_reason_type", None)
+    return fields
 
 
 def _prune_swing_same_symbol_loss_reentry_cooldowns(now_ts: float | None = None) -> None:
@@ -7057,7 +7253,9 @@ def _resolve_same_symbol_loss_reentry_cooldown_sec(exit_rule: str | None, profit
     if not _is_non_positive_numeric(profit_rate):
         return 0
     loss_exit_rules = {
+        "scalp_hard_stop_pct",
         "scalp_soft_stop_pct",
+        "scalp_preset_hard_stop_pct",
         "protect_trailing_stop",
         "scalp_bad_entry_refined_canary",
         "reversal_add_post_eval_fail",
@@ -7065,6 +7263,168 @@ def _resolve_same_symbol_loss_reentry_cooldown_sec(exit_rule: str | None, profit
     if str(exit_rule or "").strip() not in loss_exit_rules:
         return 0
     return max(0, _rule_int("SCALP_SAME_SYMBOL_LOSS_REENTRY_COOLDOWN_SEC", 3600))
+
+
+def _prune_scalp_same_symbol_loss_reentry_cooldowns(now_ts: float | None = None) -> None:
+    now_value = float(now_ts or time.time())
+    expired = [
+        code
+        for code, row in _SCALP_SAME_SYMBOL_LOSS_REENTRY_COOLDOWNS.items()
+        if float((row or {}).get("expires_at", 0) or 0) <= now_value
+    ]
+    for code in expired:
+        _SCALP_SAME_SYMBOL_LOSS_REENTRY_COOLDOWNS.pop(code, None)
+
+
+def _record_scalp_same_symbol_loss_reentry_cooldown(
+    code: str,
+    *,
+    stock: dict | None,
+    exit_rule: str | None,
+    profit_rate,
+    now_ts: float | None,
+    cooldown_sec: int,
+) -> dict:
+    norm_code = str(code or "").strip()
+    now_value = float(now_ts or time.time())
+    cooldown_value = max(0, int(cooldown_sec or 0))
+    row = {
+        "code": norm_code,
+        "stock_name": (stock or {}).get("name") or (stock or {}).get("stock_name") or "-",
+        "marked_at": now_value,
+        "expires_at": now_value + cooldown_value,
+        "cooldown_sec": cooldown_value,
+        "exit_rule": str(exit_rule or "-"),
+        "profit_rate": _safe_float(profit_rate, 0.0),
+    }
+    if norm_code and cooldown_value > 0:
+        _prune_scalp_same_symbol_loss_reentry_cooldowns(now_value)
+        _SCALP_SAME_SYMBOL_LOSS_REENTRY_COOLDOWNS[norm_code] = row
+    return row
+
+
+def _load_scalp_loss_reentry_cooldown_events(target_date: str) -> dict[str, list[dict]]:
+    path = existing_or_gzip_path(DATA_DIR / "pipeline_events" / f"pipeline_events_{target_date}.jsonl")
+    cache = _SCALP_LOSS_REENTRY_EVENT_CACHE
+    if not path.exists():
+        cache.update({"date": target_date, "path": str(path), "mtime_ns": 0, "size": 0, "rows_by_code": {}})
+        return {}
+    stat = path.stat()
+    if (
+        cache.get("date") == target_date
+        and cache.get("path") == str(path)
+        and int(cache.get("mtime_ns") or 0) == int(getattr(stat, "st_mtime_ns", 0) or 0)
+        and int(cache.get("size") or 0) == int(getattr(stat, "st_size", 0) or 0)
+    ):
+        return cache.get("rows_by_code") or {}
+
+    rows_by_code: dict[str, list[dict]] = {}
+    for payload in iter_jsonl(path, errors="ignore"):
+        if str(payload.get("stage") or "") != "same_symbol_loss_reentry_cooldown":
+            continue
+        fields = payload.get("fields") if isinstance(payload.get("fields"), dict) else {}
+        code = str(payload.get("stock_code") or fields.get("stock_code") or "").strip()[:6]
+        if not code:
+            continue
+        marked_at = _parse_iso_epoch(payload.get("emitted_at"))
+        cooldown_sec = _safe_int(fields.get("cooldown_sec"), 0)
+        if marked_at <= 0 or cooldown_sec <= 0:
+            continue
+        rows_by_code.setdefault(code, []).append(
+            {
+                "code": code,
+                "stock_name": payload.get("stock_name") or fields.get("stock_name") or "-",
+                "marked_at": marked_at,
+                "expires_at": marked_at + cooldown_sec,
+                "cooldown_sec": cooldown_sec,
+                "exit_rule": str(fields.get("exit_rule") or "-"),
+                "profit_rate": _safe_float(fields.get("profit_rate"), 0.0),
+            }
+        )
+    for rows in rows_by_code.values():
+        rows.sort(key=lambda row: float(row.get("marked_at") or 0.0))
+    cache.update(
+        {
+            "date": target_date,
+            "path": str(path),
+            "mtime_ns": int(getattr(stat, "st_mtime_ns", 0) or 0),
+            "size": int(getattr(stat, "st_size", 0) or 0),
+            "rows_by_code": rows_by_code,
+        }
+    )
+    return rows_by_code
+
+
+def _hydrate_scalp_loss_reentry_cooldown_from_events(code: str, now_ts: float) -> dict:
+    norm_code = str(code or "").strip()[:6]
+    if not norm_code:
+        return {}
+    target_date = datetime.fromtimestamp(float(now_ts or time.time())).date().isoformat()
+    rows_by_code = _load_scalp_loss_reentry_cooldown_events(target_date)
+    active_rows = [
+        row
+        for row in rows_by_code.get(norm_code, [])
+        if float(row.get("expires_at", 0) or 0) > now_ts
+    ]
+    if not active_rows:
+        return {}
+    row = dict(active_rows[-1])
+    _SCALP_SAME_SYMBOL_LOSS_REENTRY_COOLDOWNS[norm_code] = row
+    return row
+
+
+def evaluate_scalp_same_symbol_loss_reentry_guard(code: str, now_ts: float | None = None) -> dict:
+    enabled = _rule_bool("SCALP_SAME_SYMBOL_LOSS_REENTRY_COOLDOWN_ENABLED", True)
+    now_value = float(now_ts or time.time())
+    base = {
+        "guard_family": "scalp_same_symbol_loss_reentry_guard",
+        "enabled": enabled,
+        "allowed": True,
+        "reason": "pass",
+        "cooldown_remaining_sec": 0,
+    }
+    if not enabled:
+        base["reason"] = "disabled"
+        return base
+    norm_code = str(code or "").strip()
+    if not norm_code:
+        base["reason"] = "missing_code"
+        return base
+    _prune_scalp_same_symbol_loss_reentry_cooldowns(now_value)
+    row = _SCALP_SAME_SYMBOL_LOSS_REENTRY_COOLDOWNS.get(norm_code) or {}
+    if not row:
+        row = _hydrate_scalp_loss_reentry_cooldown_from_events(norm_code, now_value)
+    expires_at = float(row.get("expires_at", 0) or 0)
+    if expires_at <= now_value:
+        return base
+    remaining = max(1, int(expires_at - now_value))
+    base.update(
+        {
+            "allowed": False,
+            "reason": "same_symbol_loss_reentry_cooldown",
+            "cooldown_remaining_sec": remaining,
+            "cooldown_sec": int(row.get("cooldown_sec", 0) or 0),
+            "cooldown_marked_at": float(row.get("marked_at", 0) or 0),
+            "cooldown_expires_at": expires_at,
+            "last_exit_rule": row.get("exit_rule") or "-",
+            "last_exit_profit_rate": row.get("profit_rate"),
+        }
+    )
+    return base
+
+
+def _scalp_loss_reentry_guard_log_fields(decision: dict | None) -> dict:
+    decision = decision or {}
+    return {
+        "guard_family": decision.get("guard_family") or "scalp_same_symbol_loss_reentry_guard",
+        "guard_reason": decision.get("reason") or "-",
+        "cooldown_remaining_sec": decision.get("cooldown_remaining_sec", 0),
+        "cooldown_sec": decision.get("cooldown_sec", 0),
+        "cooldown_marked_at": decision.get("cooldown_marked_at", "-"),
+        "cooldown_expires_at": decision.get("cooldown_expires_at", "-"),
+        "last_exit_rule": decision.get("last_exit_rule", "-"),
+        "last_exit_profit_rate": decision.get("last_exit_profit_rate", "-"),
+    }
 
 
 def _resolve_exit_decision_source(
@@ -7120,6 +7480,160 @@ def _mark_same_symbol_soft_stop(code: str, *, now_ts: float) -> None:
     _SAME_SYMBOL_SOFT_STOP_TS[code] = now_ts
 
 
+def _scale_in_quality_runtime_skipped() -> bool:
+    return _rule_bool("SCALE_IN_LIVE_TUNING_SELECTED", False) or _rule_bool(
+        "HOLDING_EXIT_LIVE_TUNING_SELECTED", False
+    )
+
+
+def _mark_recent_exit_candidate(
+    stock: dict | None,
+    *,
+    exit_rule: str | None,
+    now_ts: float,
+    source_stage: str,
+) -> None:
+    if not isinstance(stock, dict):
+        return
+    rule = str(exit_rule or "").strip()
+    if rule not in {"protect_trailing_stop", "scalp_trailing_take_profit", "holding_flow_override_defer_exit"}:
+        return
+    _mutate_stock_state(
+        stock,
+        set_fields={
+            "recent_scale_in_exit_candidate_rule": rule,
+            "recent_scale_in_exit_candidate_stage": source_stage,
+            "recent_scale_in_exit_candidate_ts": float(now_ts or time.time()),
+        },
+    )
+
+
+def _recent_exit_candidate_pyramid_block_context(
+    stock: dict | None,
+    *,
+    strategy: str | None,
+    add_type: str | None,
+    now_ts: float,
+) -> dict | None:
+    if _scale_in_quality_runtime_skipped():
+        return None
+    if not _rule_bool("RECENT_EXIT_CANDIDATE_PYRAMID_BLOCK_ENABLED", False):
+        return None
+    if not _is_scalp_strategy(strategy) or str(add_type or "").upper() != "PYRAMID":
+        return None
+    if _is_scalp_simulated_position(stock, strategy) or _has_sim_probe_provenance(stock):
+        return None
+    candidate_ts = _safe_float((stock or {}).get("recent_scale_in_exit_candidate_ts"), 0.0)
+    if candidate_ts <= 0:
+        return None
+    block_sec = max(1, _rule_int("RECENT_EXIT_CANDIDATE_PYRAMID_BLOCK_SEC", 180))
+    elapsed_sec = max(0, int(float(now_ts or time.time()) - candidate_ts))
+    if elapsed_sec > block_sec:
+        return None
+    exit_rule = str((stock or {}).get("recent_scale_in_exit_candidate_rule") or "-").strip() or "-"
+    return {
+        "blocked": True,
+        "exit_rule": exit_rule,
+        "source_stage": str((stock or {}).get("recent_scale_in_exit_candidate_stage") or "-") or "-",
+        "elapsed_sec": elapsed_sec,
+        "block_sec": block_sec,
+        "reason": f"recent_exit_candidate:{exit_rule}",
+    }
+
+
+def _pending_scale_in_revalidation_context(
+    stock: dict | None,
+    *,
+    strategy: str | None,
+    current_ai_score: float,
+) -> dict | None:
+    if _scale_in_quality_runtime_skipped():
+        return None
+    if not _rule_bool("PENDING_SCALE_IN_REVALIDATION_CANCEL_ENABLED", False):
+        return None
+    if not _is_scalp_strategy(strategy):
+        return None
+    if _is_scalp_simulated_position(stock, strategy) or _has_sim_probe_provenance(stock):
+        return None
+    if not bool((stock or {}).get("pending_add_order")):
+        return None
+    if str((stock or {}).get("pending_add_type") or "").upper() != "PYRAMID":
+        return None
+    features, has_features = _normalize_soft_stop_expert_features(stock or {})
+    micro_vwap_bp = _safe_float(features.get("curr_vs_micro_vwap_bp"), 0.0) if has_features else 0.0
+    buy_pressure = _safe_float(features.get("buy_pressure_10t"), 0.0) if has_features else 0.0
+    tick_accel = _safe_float(features.get("tick_acceleration_ratio"), 0.0) if has_features else 0.0
+    ai_limit = _rule_int("PENDING_SCALE_IN_REVALIDATION_MIN_AI_SCORE", 66)
+    min_tick_accel = _rule_float("PENDING_SCALE_IN_REVALIDATION_MIN_TICK_ACCEL", 1.10)
+    min_buy_pressure = _rule_float("PENDING_SCALE_IN_REVALIDATION_MIN_BUY_PRESSURE", 60.0)
+    min_micro_vwap_bp = _rule_float("PENDING_SCALE_IN_REVALIDATION_MIN_MICRO_VWAP_BP", 0.0)
+    matrix_action = str((stock or {}).get("holding_exit_matrix_original_action") or "").strip().upper()
+    reasons: list[str] = []
+    if matrix_action == "EXIT":
+        reasons.append("holding_exit_matrix_exit")
+    if float(current_ai_score or 0.0) <= float(ai_limit):
+        reasons.append("holding_ai_score_deteriorated")
+    if micro_vwap_bp < min_micro_vwap_bp:
+        reasons.append("micro_vwap_negative")
+    if buy_pressure < min_buy_pressure:
+        reasons.append("buy_pressure_deteriorated")
+    if tick_accel < min_tick_accel:
+        reasons.append("tick_acceleration_deteriorated")
+    if not reasons:
+        return None
+    return {
+        "blocked": True,
+        "reason": "|".join(reasons),
+        "holding_exit_matrix_original_action": matrix_action or "-",
+        "current_ai_score": float(current_ai_score or 0.0),
+        "curr_vs_micro_vwap_bp": micro_vwap_bp,
+        "buy_pressure_10t": buy_pressure,
+        "tick_acceleration_ratio": tick_accel,
+    }
+
+
+def _real_pyramid_micro_context_guard_context(
+    stock: dict | None,
+    *,
+    code: str,
+    strategy: str | None,
+    add_type: str | None,
+    curr_price: int,
+) -> dict | None:
+    if _scale_in_quality_runtime_skipped():
+        return None
+    if not _rule_bool("REAL_PYRAMID_MICRO_CONTEXT_GUARD_ENABLED", False):
+        return None
+    if not _is_scalp_strategy(strategy) or str(add_type or "").upper() != "PYRAMID":
+        return None
+    if _is_scalp_simulated_position(stock, strategy) or _has_sim_probe_provenance(stock):
+        return None
+    micro = _build_live_orderbook_micro_context(code, curr_price=curr_price)
+    fields = _build_orderbook_micro_log_fields(micro)
+    state = str(fields.get("orderbook_micro_state") or "missing").strip().lower()
+    snapshot_age_ms = fields.get("orderbook_micro_snapshot_age_ms")
+    observer_healthy = fields.get("orderbook_micro_observer_healthy")
+    snapshot_stale = snapshot_age_ms not in {"-", "not_evaluated", None, ""} and _safe_int(snapshot_age_ms, 0) > max(
+        1, _rule_int("OFI_AI_SMOOTHING_STALE_THRESHOLD_MS", 700)
+    )
+    reason = ""
+    if fields.get("orderbook_micro_reason") == "micro_context_missing":
+        reason = "micro_context_missing"
+    elif observer_healthy is not True:
+        reason = "orderbook_micro_observer_unhealthy"
+    elif state in {"missing", "insufficient"}:
+        reason = f"orderbook_micro_state_{state}"
+    elif snapshot_stale:
+        reason = "orderbook_micro_snapshot_stale"
+    if not reason:
+        return None
+    return {
+        "blocked": True,
+        "reason": reason,
+        "log_fields": fields,
+    }
+
+
 def _remember_exit_context(
     *,
     stock: dict,
@@ -7149,6 +7663,12 @@ def _remember_exit_context(
     cooldown_enabled = _rule_bool("SCALP_SOFT_STOP_SAME_SYMBOL_COOLDOWN_SHADOW_ENABLED", False)
     stock["last_exit_same_symbol_soft_stop_cooldown_would_block"] = bool(
         str(exit_rule or "").strip() == "scalp_soft_stop_pct" and cooldown_enabled and cooldown_sec > 0
+    )
+    _mark_recent_exit_candidate(
+        stock,
+        exit_rule=exit_rule,
+        now_ts=time.time(),
+        source_stage="exit_signal",
     )
 
 
@@ -7364,6 +7884,57 @@ def _has_active_sell_order_pending(stock: dict) -> bool:
         or bool(str(stock.get("sell_ord_no", "") or "").strip())
         or bool(str(stock.get("pending_sell_msg", "") or "").strip())
     )
+
+
+def _sell_order_failure_retry_backoff_context(stock: dict | None, now_ts: float) -> dict | None:
+    if not isinstance(stock, dict):
+        return None
+    if not _rule_bool("SELL_ORDER_FAILURE_RETRY_BACKOFF_ENABLED", True):
+        return None
+    until_ts = _safe_float(stock.get("sell_order_retry_backoff_until_ts"), 0.0)
+    if until_ts <= float(now_ts or time.time()):
+        return None
+    return {
+        "retry_backoff_remaining_sec": max(1, int(until_ts - float(now_ts or time.time()))),
+        "retry_backoff_sec": _safe_int(stock.get("sell_order_retry_backoff_sec"), 0),
+        "sell_order_failure_count": _safe_int(stock.get("sell_order_failure_count"), 0),
+        "last_sell_order_error": str(stock.get("last_sell_order_error") or "-"),
+        "last_sell_order_failed_at": _safe_float(stock.get("last_sell_order_failed_at"), 0.0),
+    }
+
+
+def _mark_sell_order_failure_retry_backoff(stock: dict | None, *, error: str, now_ts: float) -> dict:
+    if not isinstance(stock, dict) or not _rule_bool("SELL_ORDER_FAILURE_RETRY_BACKOFF_ENABLED", True):
+        return {
+            "retry_backoff_applied": False,
+            "retry_backoff_sec": 0,
+            "retry_backoff_until_ts": 0.0,
+            "sell_order_failure_count": 0,
+        }
+    backoff_sec = max(1, _rule_int("SELL_ORDER_FAILURE_RETRY_BACKOFF_SEC", 30))
+    last_failed_at = _safe_float(stock.get("last_sell_order_failed_at"), 0.0)
+    previous_count = _safe_int(stock.get("sell_order_failure_count"), 0)
+    failure_count = previous_count + 1 if float(now_ts or time.time()) - last_failed_at <= 300 else 1
+    until_ts = float(now_ts or time.time()) + backoff_sec
+    fields = {
+        "retry_backoff_applied": True,
+        "retry_backoff_sec": backoff_sec,
+        "retry_backoff_until_ts": until_ts,
+        "sell_order_failure_count": failure_count,
+        "last_sell_order_error": str(error or "unknown"),
+        "last_sell_order_failed_at": float(now_ts or time.time()),
+    }
+    _mutate_stock_state(
+        stock,
+        set_fields={
+            "sell_order_retry_backoff_until_ts": until_ts,
+            "sell_order_retry_backoff_sec": backoff_sec,
+            "sell_order_failure_count": failure_count,
+            "last_sell_order_error": str(error or "unknown"),
+            "last_sell_order_failed_at": float(now_ts or time.time()),
+        },
+    )
+    return fields
 
 
 def _build_bad_entry_refined_decision(
@@ -8466,6 +9037,32 @@ def _dispatch_scalp_preset_exit(
         )
         return
 
+    sell_time_block_fields = _sell_side_open_time_block_fields(
+        strategy=strategy,
+        sell_reason_type=sell_reason_type,
+        exit_rule=exit_rule,
+    )
+    if bool(sell_time_block_fields.get("sell_time_block_applied")):
+        _log_holding_pipeline(
+            stock,
+            code,
+            "sell_order_blocked_open_time",
+            sell_reason_type=sell_reason_type,
+            exit_rule=exit_rule or "-",
+            exit_decision_source=exit_decision_source,
+            qty=expected_qty,
+            profit_rate=f"{profit_rate:+.2f}",
+            actual_order_submitted=False,
+            broker_order_forbidden=True,
+            runtime_effect=True,
+            **sell_time_block_fields,
+        )
+        log_info(
+            f"[SELL_TIME_BLOCK] {stock.get('name', code)} {sell_reason_type} "
+            f"SELL blocked before open-time cutoff."
+        )
+        return
+
     try:
         if target_id:
             with DB.get_session() as session:
@@ -8508,6 +9105,7 @@ def _dispatch_scalp_preset_exit(
             ord_no=ord_no or "-",
             order_type=set_fields.get("exit_order_type") or stock.get("exit_order_type") or "-",
             profit_rate=f"{profit_rate:+.2f}",
+            **sell_time_block_fields,
         )
 
     _mutate_stock_state(
@@ -9608,6 +10206,83 @@ def _evaluate_late_entry_price_drift_guard(
         return {"blocked": True, "reason": fields["late_entry_price_drift_guard_reason"], "fields": fields}
     fields["late_entry_price_drift_guard_reason"] = "micro_reconfirmed_after_soft_drift"
     return {"blocked": False, "reason": fields["late_entry_price_drift_guard_reason"], "fields": fields}
+
+
+def _evaluate_weak_context_late_entry_guard(
+    *,
+    strategy: str,
+    stock: dict,
+    now_ts: float,
+    latency_gate: dict,
+    late_drift_guard: dict,
+) -> dict:
+    fields = {
+        "weak_context_late_entry_guard_enabled": bool(_rule_bool("WEAK_CONTEXT_LATE_ENTRY_GUARD_ENABLED", False)),
+        "weak_context_late_entry_guard_blocked": False,
+        "weak_context_guard_reason": "disabled",
+        "trade_quality_signature_version": "trade_quality_signature_v1",
+        "entry_fill_quality_signature": "weak_context_late_entry_v1",
+    }
+    if not fields["weak_context_late_entry_guard_enabled"]:
+        return {"blocked": False, "reason": fields["weak_context_guard_reason"], "fields": fields}
+    if not _is_scalp_strategy(strategy):
+        fields["weak_context_guard_reason"] = "not_scalping"
+        return {"blocked": False, "reason": fields["weak_context_guard_reason"], "fields": fields}
+    if _rule_bool("ENTRY_STAGE_LIVE_TUNING_SELECTED", False):
+        fields["weak_context_guard_reason"] = "entry_live_tuning_selected"
+        return {"blocked": False, "reason": fields["weak_context_guard_reason"], "fields": fields}
+    if _is_scalp_simulated_position(stock, strategy) or _has_sim_probe_provenance(stock):
+        fields["weak_context_guard_reason"] = "sim_or_probe_scope"
+        return {"blocked": False, "reason": fields["weak_context_guard_reason"], "fields": fields}
+
+    recent_counts = _recent_trade_quality_block_counts(stock, now_ts=now_ts)
+    min_block_count = max(1, _rule_int("WEAK_CONTEXT_LATE_ENTRY_MIN_BLOCK_COUNT", 2))
+    tick_accel = _safe_float(latency_gate.get("tick_acceleration_ratio"), 0.0)
+    buy_pressure = _safe_float(latency_gate.get("buy_pressure_10t"), 0.0)
+    micro_vwap_bp = _safe_float(latency_gate.get("curr_vs_micro_vwap_bp"), 0.0)
+
+    weak_reasons: list[str] = []
+    if micro_vwap_bp < _rule_float("WEAK_CONTEXT_LATE_ENTRY_MIN_MICRO_VWAP_BP", 0.0):
+        weak_reasons.append("micro_vwap_negative")
+    if buy_pressure <= _rule_float("WEAK_CONTEXT_LATE_ENTRY_MIN_BUY_PRESSURE", 0.0):
+        weak_reasons.append("buy_pressure_non_positive")
+    if tick_accel < _rule_float("WEAK_CONTEXT_LATE_ENTRY_MIN_TICK_ACCEL", 1.10):
+        weak_reasons.append("tick_accel_below_min")
+    late_drift_fields = late_drift_guard.get("fields") if isinstance(late_drift_guard, dict) else {}
+    late_drift_fields = late_drift_fields if isinstance(late_drift_fields, dict) else {}
+    has_drift_context = bool(
+        late_drift_fields.get("late_entry_latency_relevant")
+        and _safe_float(late_drift_fields.get("late_entry_price_drift_bps"), 0.0)
+        >= float(_rule_int("SCALP_LATE_ENTRY_PRICE_DRIFT_SOFT_BPS", 35))
+    )
+    if has_drift_context:
+        weak_reasons.append("late_entry_drift_context")
+
+    fields.update(
+        {
+            "recent_blocked_strength_count": _safe_int(recent_counts.get("blocked_strength_momentum"), 0),
+            "recent_blocked_vpw_count": _safe_int(recent_counts.get("blocked_vpw"), 0),
+            "recent_blocked_overbought_count": _safe_int(recent_counts.get("blocked_overbought"), 0),
+            "pre_entry_block_signature": recent_counts.get("signature") or "-",
+            "weak_context_guard_lookback_sec": _safe_int(recent_counts.get("lookback_sec"), 0),
+            "weak_context_guard_min_block_count": min_block_count,
+            "weak_context_guard_tick_accel": f"{tick_accel:.3f}",
+            "weak_context_guard_buy_pressure_10t": f"{buy_pressure:.2f}",
+            "weak_context_guard_curr_vs_micro_vwap_bp": f"{micro_vwap_bp:.2f}",
+            "weak_context_guard_has_drift_context": has_drift_context,
+        }
+    )
+
+    if recent_counts.get("total_count", 0) < min_block_count:
+        fields["weak_context_guard_reason"] = "insufficient_recent_block_history"
+        return {"blocked": False, "reason": fields["weak_context_guard_reason"], "fields": fields}
+    if not weak_reasons:
+        fields["weak_context_guard_reason"] = "current_submit_context_not_weak"
+        return {"blocked": False, "reason": fields["weak_context_guard_reason"], "fields": fields}
+
+    fields["weak_context_late_entry_guard_blocked"] = True
+    fields["weak_context_guard_reason"] = "|".join(weak_reasons)
+    return {"blocked": True, "reason": fields["weak_context_guard_reason"], "fields": fields}
 
 
 def _truthy_field(value) -> bool:
@@ -10875,12 +11550,38 @@ def _ai_numeric_consistency_recheck_contract_fields() -> dict:
     }
 
 
+def _early_accel_strong_bundle_recheck_contract_fields() -> dict:
+    return {
+        "metric_role": "funnel_count",
+        "decision_authority": "operator_runtime_decision_recheck_only",
+        "source_quality_gate": "early_accel_strong_bundle_recheck_contract_fields_present",
+        "window_policy": "intraday_operator_runtime_retry",
+        "sample_floor": "not_applicable_operator_runtime_retry",
+        "primary_decision_metric": "funnel_count",
+        "runtime_effect": True,
+        "allowed_runtime_apply": False,
+        "forbidden_uses": AI_NUMERIC_CONSISTENCY_RECHECK_FORBIDDEN_USES,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+    }
+
+
 def _early_accel_recheck_attempt_exclusion_fields(ai_call_trigger_reason: str | None) -> dict:
     if str(ai_call_trigger_reason or "").strip() != "early_accel_recheck":
         return {}
     return {
         "ai_call_trigger_reason": "early_accel_recheck",
         "tuning_authority_excluded_reason": "early_accel_recheck_operator_retry",
+        "allowed_runtime_apply": False,
+    }
+
+
+def _early_accel_strong_bundle_recheck_attempt_exclusion_fields(ai_call_trigger_reason: str | None) -> dict:
+    if str(ai_call_trigger_reason or "").strip() != "early_accel_strong_bundle_recheck":
+        return {}
+    return {
+        "ai_call_trigger_reason": "early_accel_strong_bundle_recheck",
+        "tuning_authority_excluded_reason": "early_accel_strong_bundle_recheck_operator_retry",
         "allowed_runtime_apply": False,
     }
 
@@ -10898,6 +11599,7 @@ def _ai_numeric_consistency_recheck_attempt_exclusion_fields(ai_call_trigger_rea
 def _entry_runtime_retry_exclusion_fields(ai_call_trigger_reason: str | None) -> dict:
     return _merge_entry_pipeline_field_groups(
         _early_accel_recheck_attempt_exclusion_fields(ai_call_trigger_reason),
+        _early_accel_strong_bundle_recheck_attempt_exclusion_fields(ai_call_trigger_reason),
         _ai_numeric_consistency_recheck_attempt_exclusion_fields(ai_call_trigger_reason),
     )
 
@@ -10951,6 +11653,7 @@ def _resolve_early_accel_recheck(
     pos_tag,
     current_ai_score,
 ) -> dict:
+    _hydrate_scanner_promotion_runtime_context(stock)
     features = _early_accel_recheck_feature_values(ws_data)
     promotion_price = _safe_int((stock or {}).get("buy_price"), 0)
     current_price = _safe_int((ws_data or {}).get("curr"), 0)
@@ -11032,6 +11735,141 @@ def _log_early_accel_recheck(stock, code, stage: str, decision: dict) -> None:
         tick_accel=decision.get("tick_accel") or "0.000",
         micro_vwap_bp=decision.get("micro_vwap_bp") or "0.00",
         quote_stale=bool(decision.get("quote_stale")),
+    )
+
+
+def _early_accel_strong_bundle_allowed_reasons() -> tuple[str, ...]:
+    return (
+        "price_jump_start_acceleration",
+        "new_price_jump_start_source",
+        "new_volume_surge_positive_source",
+        "probe_acceleration_confirmed",
+    )
+
+
+def _resolve_early_accel_strong_bundle_recheck(
+    stock,
+    ws_data,
+    *,
+    strategy,
+    ai_decision,
+    ai_score,
+) -> dict:
+    _hydrate_scanner_promotion_runtime_context(stock)
+    payload = ai_decision if isinstance(ai_decision, dict) else {}
+    action = str(payload.get("action") or "").strip().upper()
+    promotion_reason = str((stock or {}).get("scanner_promotion_reason") or "scanner_runtime_watch")
+    source_signature_text = str((stock or {}).get("source_signature") or "")
+    source_signature_set = {token.strip() for token in source_signature_text.split(",") if token.strip()}
+    price_delta = _safe_float((stock or {}).get("price_delta_since_first_seen_pct"), 0.0)
+    comparable_flu_delta = _safe_float((stock or {}).get("comparable_flu_delta_since_first_seen"), 0.0)
+    cntr_str_available = _truthy_field((stock or {}).get("cntr_str_available"))
+    cntr_str = _safe_float((stock or {}).get("cntr_str"), 0.0)
+    tick_accel = _safe_float(
+        payload.get(
+            "tick_acceleration_ratio",
+            (ws_data or {}).get("tick_acceleration_ratio", (ws_data or {}).get("tick_acceleration_ratio_raw")),
+        ),
+        0.0,
+    )
+    micro_vwap_bp = _safe_float(
+        payload.get("curr_vs_micro_vwap_bp", (ws_data or {}).get("curr_vs_micro_vwap_bp")),
+        0.0,
+    )
+    buy_pressure_10t = _safe_float(
+        payload.get("buy_pressure_10t", (ws_data or {}).get("buy_pressure_10t")),
+        0.0,
+    )
+    quote_stale = bool((ws_data or {}).get("quote_stale") or (ws_data or {}).get("context_stale"))
+    source_quality_block = bool(_early_accel_recheck_pre_ai_context_flags(stock).get("source_quality_block"))
+    recheck_count = _safe_int((stock or {}).get("early_accel_strong_bundle_recheck_count"), 0)
+    pass_count = sum(
+        (
+            "PRICE_JUMP_START" in source_signature_set,
+            "VOLUME_SURGE_POSITIVE" in source_signature_set,
+            price_delta >= 0.50,
+            comparable_flu_delta >= 0.50,
+            cntr_str_available and cntr_str >= 110.0,
+            tick_accel >= 1.10,
+            micro_vwap_bp > 0.0,
+            buy_pressure_10t >= 68.0,
+        )
+    )
+    base = {
+        "scanner_promotion_reason": promotion_reason,
+        "source_signature": source_signature_text or "-",
+        "strong_bundle_pass_count": int(pass_count),
+        "price_delta_since_first_seen_pct": f"{price_delta:.2f}",
+        "comparable_flu_delta_since_first_seen": f"{comparable_flu_delta:.2f}",
+        "cntr_str_available": bool(cntr_str_available),
+        "cntr_str": f"{cntr_str:.1f}",
+        "tick_acceleration_ratio": f"{tick_accel:.3f}",
+        "curr_vs_micro_vwap_bp": f"{micro_vwap_bp:.2f}",
+        "buy_pressure_10t": f"{buy_pressure_10t:.2f}",
+        "original_action": action or "WAIT",
+        "original_score": f"{_safe_float(ai_score, 0.0):.1f}",
+        "recheck_action": "-",
+        "recheck_score": "-",
+        "quote_stale": quote_stale,
+        "recheck_count": recheck_count,
+    }
+
+    if not _rule_bool("EARLY_ACCEL_STRONG_BUNDLE_RECHECK_ENABLED", False):
+        return {"allowed": False, "skip_reason": "disabled", **base}
+    if _rule_bool("ENTRY_STAGE_LIVE_TUNING_SELECTED", False):
+        return {"allowed": False, "skip_reason": "entry_live_tuning_selected", **base}
+    if not isinstance(stock, dict) or not _is_scalp_strategy(strategy):
+        return {"allowed": False, "skip_reason": "scope_not_real_scalping", **base}
+    if str((stock or {}).get("position_tag") or "").upper() != "SCANNER":
+        return {"allowed": False, "skip_reason": "position_tag_not_scanner", **base}
+    if _is_scalp_simulated_position(stock, strategy) or _has_sim_probe_provenance(stock):
+        return {"allowed": False, "skip_reason": "sim_or_probe_scope", **base}
+    if action != "WAIT":
+        return {"allowed": False, "skip_reason": "original_action_not_wait", **base}
+    min_score = max(0, _rule_int("EARLY_ACCEL_STRONG_BUNDLE_RECHECK_MIN_SCORE", 60))
+    max_score = max(min_score, _rule_int("EARLY_ACCEL_STRONG_BUNDLE_RECHECK_MAX_SCORE", 66))
+    numeric_score = _safe_float(ai_score, 0.0)
+    if numeric_score < float(min_score):
+        return {"allowed": False, "skip_reason": "score_below_min", **base}
+    if numeric_score > float(max_score):
+        return {"allowed": False, "skip_reason": "score_above_max", **base}
+    if promotion_reason not in _early_accel_strong_bundle_allowed_reasons():
+        return {"allowed": False, "skip_reason": "scanner_promotion_reason_not_supported", **base}
+    if quote_stale:
+        return {"allowed": False, "skip_reason": "stale_quote_or_context", **base}
+    if source_quality_block:
+        return {"allowed": False, "skip_reason": "source_quality_hard_block", **base}
+    if recheck_count >= max(0, _rule_int("EARLY_ACCEL_STRONG_BUNDLE_RECHECK_MAX_PER_SYMBOL", 1)):
+        return {"allowed": False, "skip_reason": "max_recheck_count_reached", **base}
+    min_pass_count = max(1, _rule_int("EARLY_ACCEL_STRONG_BUNDLE_RECHECK_MIN_PASS_COUNT", 2))
+    if pass_count < min_pass_count:
+        return {"allowed": False, "skip_reason": "strong_bundle_below_min_pass_count", **base}
+    return {"allowed": True, "skip_reason": "allowed", **base}
+
+
+def _log_early_accel_strong_bundle_recheck(stock, code, stage: str, decision: dict) -> None:
+    _log_entry_pipeline(
+        stock,
+        code,
+        stage,
+        **_early_accel_strong_bundle_recheck_contract_fields(),
+        scanner_promotion_reason=decision.get("scanner_promotion_reason") or "-",
+        source_signature=decision.get("source_signature") or "-",
+        strong_bundle_pass_count=_safe_int(decision.get("strong_bundle_pass_count"), 0),
+        price_delta_since_first_seen_pct=decision.get("price_delta_since_first_seen_pct") or "0.00",
+        comparable_flu_delta_since_first_seen=decision.get("comparable_flu_delta_since_first_seen") or "0.00",
+        cntr_str_available=bool(decision.get("cntr_str_available")),
+        cntr_str=decision.get("cntr_str") or "0.0",
+        tick_acceleration_ratio=decision.get("tick_acceleration_ratio") or "0.000",
+        curr_vs_micro_vwap_bp=decision.get("curr_vs_micro_vwap_bp") or "0.00",
+        buy_pressure_10t=decision.get("buy_pressure_10t") or "0.00",
+        original_action=decision.get("original_action") or "WAIT",
+        original_score=decision.get("original_score") or "0.0",
+        recheck_action=decision.get("recheck_action") or "-",
+        recheck_score=decision.get("recheck_score") or "-",
+        recheck_count=_safe_int(decision.get("recheck_count"), 0),
+        quote_stale=bool(decision.get("quote_stale")),
+        skip_reason=decision.get("skip_reason") or "unknown",
     )
 
 
@@ -11698,6 +12536,12 @@ def _build_pre_submit_gate_contract_fields(threshold_family: str, *, gate_action
     }
 
 
+TRADE_QUALITY_RUNTIME_FORBIDDEN_USES = (
+    "EV|rolling|MTD|cumulative_tuning|live_auto_promotion|runtime_apply_bridge|"
+    "threshold_mutation|provider_change|order_price_change|quantity_cap_change|broker_guard_bypass"
+)
+
+
 def _reset_scalp_pre_ai_gate_context(stock: dict | None, ws_data: dict | None) -> None:
     if isinstance(ws_data, dict):
         ws_data["scalp_pre_ai_gate_context"] = {}
@@ -11710,6 +12554,62 @@ def _reset_scalp_pre_ai_gate_context(stock: dict | None, ws_data: dict | None) -
             "entry_liquidity_risk_state",
         ],
     )
+
+
+def _append_trade_quality_block_history(
+    stock: dict | None,
+    *,
+    stage: str,
+    now_ts: float | None = None,
+    risk_state: str | None = None,
+) -> None:
+    if not isinstance(stock, dict):
+        return
+    event_stage = str(stage or "").strip()
+    if not event_stage:
+        return
+    ts = float(now_ts or time.time())
+    history = list(stock.get("trade_quality_block_history") or [])
+    history.append(
+        {
+            "stage": event_stage,
+            "ts": ts,
+            "risk_state": str(risk_state or "").strip() or "-",
+        }
+    )
+    cutoff = ts - max(900.0, float(_rule_int("WEAK_CONTEXT_LATE_ENTRY_LOOKBACK_SEC", 900)))
+    trimmed = [
+        item
+        for item in history[-32:]
+        if isinstance(item, dict) and _safe_float(item.get("ts"), 0.0) >= cutoff
+    ]
+    _mutate_stock_state(stock, set_fields={"trade_quality_block_history": trimmed})
+
+
+def _recent_trade_quality_block_counts(stock: dict | None, *, now_ts: float | None = None) -> dict:
+    ts = float(now_ts or time.time())
+    lookback_sec = max(1, _rule_int("WEAK_CONTEXT_LATE_ENTRY_LOOKBACK_SEC", 900))
+    cutoff = ts - float(lookback_sec)
+    history = list((stock or {}).get("trade_quality_block_history") or [])
+    counts = {
+        "blocked_strength_momentum": 0,
+        "blocked_vpw": 0,
+        "blocked_overbought": 0,
+    }
+    matched: list[str] = []
+    for item in history:
+        if not isinstance(item, dict) or _safe_float(item.get("ts"), 0.0) < cutoff:
+            continue
+        stage = str(item.get("stage") or "").strip()
+        if stage in counts:
+            counts[stage] += 1
+            matched.append(stage)
+    return {
+        **counts,
+        "lookback_sec": lookback_sec,
+        "total_count": sum(counts.values()),
+        "signature": "|".join(matched[-6:]) if matched else "-",
+    }
 
 
 def _register_scalp_pre_ai_gate_context(stock: dict | None, ws_data: dict | None, gate_key: str, context: dict) -> dict:
@@ -12159,6 +13059,8 @@ def _clear_holding_flow_override_candidate(stock: dict, code: str, *, reason: st
             "holding_flow_override_last_score",
             "holding_flow_override_last_reason",
             "holding_flow_override_next_review_sec",
+            "holding_flow_override_defer_count",
+            "holding_flow_override_last_defer_micro_vwap_bp",
         ),
     )
     _log_holding_pipeline(
@@ -12248,6 +13150,8 @@ def _evaluate_holding_flow_override(
                 "holding_flow_override_started_at": now_ts,
                 "holding_flow_override_candidate_profit": profit_rate,
                 "holding_flow_override_exit_rule": exit_rule,
+                "holding_flow_override_defer_count": 0,
+                "holding_flow_override_last_defer_micro_vwap_bp": None,
             },
         )
 
@@ -12290,6 +13194,81 @@ def _evaluate_holding_flow_override(
             worsen_pct=f"{worsen_pct:.2f}",
             profit_rate=f"{profit_rate:+.2f}",
             candidate_profit=f"{candidate_profit:+.2f}",
+        )
+        return True
+
+    def _never_green_defer_clamp(
+        defer_reason: str,
+        flow_action: str,
+        flow_state: str,
+        flow_score: int,
+        *,
+        projected_defer_count: int | None = None,
+        current_micro_vwap_bp: float | None = None,
+    ) -> bool:
+        if not _rule_bool("NEVER_GREEN_DEFER_CLAMP_ENABLED", False):
+            return False
+        if _rule_bool("HOLDING_EXIT_LIVE_TUNING_SELECTED", False):
+            return False
+        if not _is_scalp_strategy(strategy):
+            return False
+        if _is_scalp_simulated_position(stock, strategy) or _has_sim_probe_provenance(stock):
+            return False
+        max_peak_profit_pct = _rule_float("NEVER_GREEN_DEFER_CLAMP_MAX_PEAK_PROFIT_PCT", 0.05)
+        min_defer_count = max(1, _rule_int("NEVER_GREEN_DEFER_CLAMP_MIN_DEFER_COUNT", 2))
+        max_micro_vwap_bp = _rule_float("NEVER_GREEN_DEFER_CLAMP_MAX_MICRO_VWAP_BP", 0.0)
+        min_loss_pct = _rule_float("NEVER_GREEN_DEFER_CLAMP_MIN_LOSS_PCT", 0.0)
+        features, has_features = _normalize_soft_stop_expert_features(stock)
+        curr_vs_micro_vwap_bp = (
+            float(current_micro_vwap_bp)
+            if current_micro_vwap_bp is not None
+            else (_safe_float(features.get("curr_vs_micro_vwap_bp"), 0.0) if has_features else 0.0)
+        )
+        prev_micro_vwap_bp = _safe_float(stock.get("holding_flow_override_last_defer_micro_vwap_bp"), curr_vs_micro_vwap_bp)
+        defer_count = (
+            int(projected_defer_count)
+            if projected_defer_count is not None
+            else _safe_int(stock.get("holding_flow_override_defer_count"), 0)
+        )
+        deteriorating = has_features and curr_vs_micro_vwap_bp < prev_micro_vwap_bp - 1e-9
+        recovery_missing = (not has_features) or curr_vs_micro_vwap_bp <= max_micro_vwap_bp
+        if peak_profit > max_peak_profit_pct or profit_rate >= min_loss_pct:
+            return False
+        if defer_count < min_defer_count:
+            return False
+        if not (curr_vs_micro_vwap_bp < max_micro_vwap_bp or deteriorating):
+            return False
+        _log_holding_pipeline(
+            stock,
+            code,
+            "holding_flow_override_clamped_never_green_loss",
+            exit_rule=exit_rule,
+            original_sell_reason_type=sell_reason_type,
+            flow_action=flow_action,
+            flow_state=flow_state,
+            flow_score=flow_score,
+            defer_reason=defer_reason,
+            never_green_position=True,
+            holding_flow_override_defer_count=defer_count,
+            defer_micro_vwap_deteriorating=bool(deteriorating),
+            defer_recovery_evidence_missing=bool(recovery_missing),
+            defer_quality_signature="never_green_loss_defer_clamp_v1",
+            trade_quality_signature_version="trade_quality_signature_v1",
+            curr_vs_micro_vwap_bp=f"{curr_vs_micro_vwap_bp:.2f}",
+            previous_defer_micro_vwap_bp=f"{prev_micro_vwap_bp:.2f}",
+            peak_profit=f"{peak_profit:+.2f}",
+            profit_rate=f"{profit_rate:+.2f}",
+            runtime_effect=True,
+            allowed_runtime_apply=False,
+            decision_authority="real_scalping_holding_defer_clamp",
+            threshold_family="never_green_defer_clamp_runtime",
+            runtime_family_candidate="never_green_defer_clamp_runtime",
+            gate_layer="holding_flow_override_defer",
+            gate_action="clamp_defer_and_resume_exit",
+            source_quality_gate="never_green_defer_clamp_contract",
+            forbidden_uses=TRADE_QUALITY_RUNTIME_FORBIDDEN_USES,
+            actual_order_submitted=False,
+            broker_order_forbidden=True,
         )
         return True
 
@@ -12345,6 +13324,25 @@ def _evaluate_holding_flow_override(
                     confirm_reason="ofi_stable_bearish_interval",
                 )
                 return True
+        features, has_features = _normalize_soft_stop_expert_features(stock)
+        curr_vs_micro_vwap_bp = _safe_float(features.get("curr_vs_micro_vwap_bp"), 0.0) if has_features else None
+        next_defer_count = _safe_int(stock.get("holding_flow_override_defer_count"), 0) + 1
+        if _never_green_defer_clamp(
+            "review_interval_hold",
+            last_review_action,
+            normalize_flow_state_label(stock.get("holding_flow_override_last_flow_state", "-")),
+            _safe_int(stock.get("holding_flow_override_last_score"), 0),
+            projected_defer_count=next_defer_count,
+            current_micro_vwap_bp=curr_vs_micro_vwap_bp,
+        ):
+            return True
+        _mutate_stock_state(
+            stock,
+            set_fields={
+                "holding_flow_override_defer_count": next_defer_count,
+                "holding_flow_override_last_defer_micro_vwap_bp": curr_vs_micro_vwap_bp,
+            },
+        )
         _log_holding_pipeline(
             stock,
             code,
@@ -12364,6 +13362,8 @@ def _evaluate_holding_flow_override(
             min_review_sec=min_review_sec,
             max_review_sec=max_review_sec,
             price_trigger_pct=f"{price_trigger_pct:.2f}",
+            holding_flow_override_defer_count=next_defer_count,
+            curr_vs_micro_vwap_bp=f"{curr_vs_micro_vwap_bp:.2f}" if curr_vs_micro_vwap_bp is not None else "-",
             **_build_observation_contract_fields("ops_volume_diagnostic"),
             **(
                 _build_swing_micro_log_fields(
@@ -12373,6 +13373,12 @@ def _evaluate_holding_flow_override(
                 if _is_swing_orderbook_micro_context_enabled(strategy)
                 else {}
             ),
+        )
+        _mark_recent_exit_candidate(
+            stock,
+            exit_rule="holding_flow_override_defer_exit",
+            now_ts=now_ts,
+            source_stage="holding_flow_override_defer_exit",
         )
         _emit_stat_action_decision_snapshot(
             stock=stock,
@@ -12562,6 +13568,25 @@ def _evaluate_holding_flow_override(
             _rule_float("HOLDING_FLOW_OFI_BEARISH_CONFIRM_WORSEN_PCT", 0.30),
         )
         if flow_action == "EXIT" and ofi_state.regime == OFI_STABLE_BULLISH:
+            features, has_features = _normalize_soft_stop_expert_features(stock)
+            curr_vs_micro_vwap_bp = _safe_float(features.get("curr_vs_micro_vwap_bp"), 0.0) if has_features else None
+            next_defer_count = _safe_int(stock.get("holding_flow_override_defer_count"), 0) + 1
+            if _never_green_defer_clamp(
+                "ofi_stable_bullish_debounce",
+                "EXIT",
+                flow_state,
+                _safe_int(flow_result.get("score"), 0),
+                projected_defer_count=next_defer_count,
+                current_micro_vwap_bp=curr_vs_micro_vwap_bp,
+            ):
+                return True
+            _mutate_stock_state(
+                stock,
+                set_fields={
+                    "holding_flow_override_defer_count": next_defer_count,
+                    "holding_flow_override_last_defer_micro_vwap_bp": curr_vs_micro_vwap_bp,
+                },
+            )
             _log_holding_pipeline(
                 stock,
                 code,
@@ -12596,8 +13621,16 @@ def _evaluate_holding_flow_override(
                 worsen_pct=f"{worsen_pct:.2f}",
                 elapsed_sec=elapsed_sec,
                 defer_reason="ofi_stable_bullish_debounce",
+                holding_flow_override_defer_count=next_defer_count,
+                curr_vs_micro_vwap_bp=f"{curr_vs_micro_vwap_bp:.2f}" if curr_vs_micro_vwap_bp is not None else "-",
                 **_build_observation_contract_fields("ops_volume_diagnostic"),
                 **swing_exit_micro_fields,
+            )
+            _mark_recent_exit_candidate(
+                stock,
+                exit_rule="holding_flow_override_defer_exit",
+                now_ts=now_ts,
+                source_stage="holding_flow_override_defer_exit",
             )
             _emit_stat_action_decision_snapshot(
                 stock=stock,
@@ -12678,6 +13711,25 @@ def _evaluate_holding_flow_override(
         )
         return True
 
+    features, has_features = _normalize_soft_stop_expert_features(stock)
+    curr_vs_micro_vwap_bp = _safe_float(features.get("curr_vs_micro_vwap_bp"), 0.0) if has_features else None
+    next_defer_count = _safe_int(stock.get("holding_flow_override_defer_count"), 0) + 1
+    if _never_green_defer_clamp(
+        flow_result.get("reason", "-"),
+        flow_action,
+        flow_state,
+        _safe_int(flow_result.get("score"), 0),
+        projected_defer_count=next_defer_count,
+        current_micro_vwap_bp=curr_vs_micro_vwap_bp,
+    ):
+        return True
+    _mutate_stock_state(
+        stock,
+        set_fields={
+            "holding_flow_override_defer_count": next_defer_count,
+            "holding_flow_override_last_defer_micro_vwap_bp": curr_vs_micro_vwap_bp,
+        },
+    )
     _log_holding_pipeline(
         stock,
         code,
@@ -12693,8 +13745,16 @@ def _evaluate_holding_flow_override(
         candidate_profit=f"{candidate_profit:+.2f}",
         worsen_pct=f"{worsen_pct:.2f}",
         elapsed_sec=elapsed_sec,
+        holding_flow_override_defer_count=next_defer_count,
+        curr_vs_micro_vwap_bp=f"{curr_vs_micro_vwap_bp:.2f}" if curr_vs_micro_vwap_bp is not None else "-",
         **_build_observation_contract_fields("ops_volume_diagnostic"),
         **swing_exit_micro_fields,
+    )
+    _mark_recent_exit_candidate(
+        stock,
+        exit_rule="holding_flow_override_defer_exit",
+        now_ts=now_ts,
+        source_stage="holding_flow_override_defer_exit",
     )
     _emit_stat_action_decision_snapshot(
         stock=stock,
@@ -13362,6 +14422,11 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                         ),
                     ),
                 )
+                _append_trade_quality_block_history(
+                    stock,
+                    stage="blocked_overbought",
+                    risk_state=overbought_context.get("risk_state"),
+                )
                 if not _rule_bool("SCALP_PRE_AI_SOFT_GATE_ENABLED", True):
                     return False
 
@@ -13501,6 +14566,11 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                                 overlap_snapshot=overlap_snapshot,
                             ),
                         )
+                        _append_trade_quality_block_history(
+                            stock,
+                            stage="blocked_strength_momentum",
+                            risk_state=strength_context.get("risk_state"),
+                        )
                         if source_quality_block_reason or (not observe_only and not _rule_bool("SCALP_PRE_AI_SOFT_GATE_ENABLED", True)):
                             return False
 
@@ -13581,6 +14651,11 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                                 blocked_stage="blocked_vpw",
                                 overlap_snapshot=overlap_snapshot,
                             ),
+                        )
+                        _append_trade_quality_block_history(
+                            stock,
+                            stage="blocked_vpw",
+                            risk_state=vpw_context.get("risk_state"),
                         )
                         if not _rule_bool("SCALP_PRE_AI_SOFT_GATE_ENABLED", True):
                             return False
@@ -14073,6 +15148,181 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                                     code,
                                     "ai_numeric_consistency_recheck_skipped",
                                     ai_numeric_consistency_recheck,
+                                )
+                            early_accel_strong_bundle_recheck = _resolve_early_accel_strong_bundle_recheck(
+                                stock,
+                                ws_data,
+                                strategy=strategy,
+                                ai_decision=ai_decision,
+                                ai_score=ai_score,
+                            )
+                            early_accel_strong_bundle_in_scope = bool(
+                                early_accel_strong_bundle_recheck.get("skip_reason")
+                                not in {
+                                    "disabled",
+                                    "scope_not_real_scalping",
+                                    "position_tag_not_scanner",
+                                    "sim_or_probe_scope",
+                                    "original_action_not_wait",
+                                    "score_below_min",
+                                    "score_above_max",
+                                    "scanner_promotion_reason_not_supported",
+                                }
+                            )
+                            if early_accel_strong_bundle_in_scope:
+                                _log_early_accel_strong_bundle_recheck(
+                                    stock,
+                                    code,
+                                    "early_accel_strong_bundle_recheck_evaluated",
+                                    early_accel_strong_bundle_recheck,
+                                )
+                            if early_accel_strong_bundle_recheck.get("allowed"):
+                                _log_early_accel_strong_bundle_recheck(
+                                    stock,
+                                    code,
+                                    "early_accel_strong_bundle_recheck_allowed",
+                                    early_accel_strong_bundle_recheck,
+                                )
+                                recheck_attempt_count = _safe_int(
+                                    stock.get("early_accel_strong_bundle_recheck_count"),
+                                    0,
+                                ) + 1
+                                _mutate_stock_state(
+                                    stock,
+                                    set_fields={
+                                        "early_accel_strong_bundle_recheck_count": recheck_attempt_count,
+                                        "early_accel_strong_bundle_recheck_last_at": now_ts,
+                                    },
+                                )
+                                recheck_decision = ai_engine.analyze_target(
+                                    stock['name'],
+                                    ws_data,
+                                    recent_ticks,
+                                    recent_candles,
+                                    prompt_profile="watching",
+                                    cache_profile="early_accel_strong_bundle_recheck",
+                                    metadata_extra={
+                                        "record_id": stock.get("id"),
+                                        "sim_record_id": stock.get("sim_record_id"),
+                                        "sim_parent_record_id": stock.get("sim_parent_record_id"),
+                                        "entry_adm_candidate_id": stock.get("entry_adm_candidate_id"),
+                                        "source_event_stage": "early_accel_strong_bundle_recheck",
+                                        "ai_call_trigger_reason": "early_accel_strong_bundle_recheck",
+                                        "early_accel_strong_bundle_recheck": "true",
+                                        "early_accel_strong_bundle_recheck_original_action": action,
+                                        "early_accel_strong_bundle_recheck_original_score": f"{float(ai_score or 0.0):.1f}",
+                                        "early_accel_strong_bundle_recheck_original_reason_excerpt": str(reason or "")[:120],
+                                        "early_accel_strong_bundle_recheck_scanner_promotion_reason": str(
+                                            stock.get("scanner_promotion_reason") or "-"
+                                        ),
+                                        "early_accel_strong_bundle_recheck_source_signature": str(
+                                            stock.get("source_signature") or "-"
+                                        ),
+                                        "early_accel_strong_bundle_recheck_price_delta_since_first_seen_pct": (
+                                            early_accel_strong_bundle_recheck.get("price_delta_since_first_seen_pct") or "0.00"
+                                        ),
+                                        "early_accel_strong_bundle_recheck_comparable_flu_delta_since_first_seen": (
+                                            early_accel_strong_bundle_recheck.get(
+                                                "comparable_flu_delta_since_first_seen"
+                                            )
+                                            or "0.00"
+                                        ),
+                                        "early_accel_strong_bundle_recheck_cntr_str_available": str(
+                                            bool(early_accel_strong_bundle_recheck.get("cntr_str_available"))
+                                        ).lower(),
+                                        "early_accel_strong_bundle_recheck_cntr_str": (
+                                            early_accel_strong_bundle_recheck.get("cntr_str") or "0.0"
+                                        ),
+                                        "early_accel_strong_bundle_recheck_tick_acceleration_ratio": (
+                                            early_accel_strong_bundle_recheck.get("tick_acceleration_ratio") or "0.000"
+                                        ),
+                                        "early_accel_strong_bundle_recheck_curr_vs_micro_vwap_bp": (
+                                            early_accel_strong_bundle_recheck.get("curr_vs_micro_vwap_bp") or "0.00"
+                                        ),
+                                        "early_accel_strong_bundle_recheck_buy_pressure_10t": (
+                                            early_accel_strong_bundle_recheck.get("buy_pressure_10t") or "0.00"
+                                        ),
+                                    },
+                                )
+                                recheck_action = str((recheck_decision or {}).get("action") or "WAIT").upper()
+                                recheck_score = _safe_float((recheck_decision or {}).get("score"), 50.0)
+                                recheck_buy_min_score = float(
+                                    max(
+                                        0,
+                                        _rule_int("EARLY_ACCEL_STRONG_BUNDLE_RECHECK_BUY_MIN_SCORE", 75),
+                                    )
+                                )
+                                if recheck_action == "BUY" and recheck_score < recheck_buy_min_score:
+                                    recheck_decision = dict(recheck_decision or {})
+                                    recheck_action = "WAIT"
+                                    recheck_score = min(recheck_score, recheck_buy_min_score - 1.0)
+                                    base_reason = str(recheck_decision.get("reason") or "").strip()
+                                    below_min_reason = (
+                                        f"early_accel_strong_bundle_recheck_buy_score_below_min:{int(recheck_buy_min_score)}"
+                                    )
+                                    recheck_decision["action"] = recheck_action
+                                    recheck_decision["score"] = recheck_score
+                                    recheck_decision["reason"] = (
+                                        f"{base_reason} | {below_min_reason}" if base_reason else below_min_reason
+                                    )
+                                if recheck_action != "BUY":
+                                    recheck_score = min(recheck_score, recheck_buy_min_score - 1.0)
+                                    recheck_decision = dict(recheck_decision or {})
+                                    recheck_decision["score"] = recheck_score
+                                early_accel_recheck_reason = (
+                                    str((recheck_decision or {}).get("reason") or "")[:120] or "-"
+                                )
+                                early_accel_strong_bundle_recheck.update(
+                                    {
+                                        "recheck_action": recheck_action,
+                                        "recheck_score": f"{recheck_score:.1f}",
+                                        "recheck_count": recheck_attempt_count,
+                                    }
+                                )
+                                if recheck_action == "BUY" and recheck_score >= recheck_buy_min_score:
+                                    _log_early_accel_strong_bundle_recheck(
+                                        stock,
+                                        code,
+                                        "early_accel_strong_bundle_recheck_corrected",
+                                        early_accel_strong_bundle_recheck,
+                                    )
+                                    _mutate_stock_state(
+                                        stock,
+                                        set_fields={
+                                            "last_watching_ai_action": recheck_action,
+                                            "last_watching_ai_score": recheck_score,
+                                            "last_watching_ai_score_raw": recheck_score,
+                                            "last_watching_ai_reason": str(
+                                                recheck_decision.get("reason") or early_accel_recheck_reason or ""
+                                            )[:240],
+                                            "last_watching_ai_confirmed_at": now_ts,
+                                            "last_watching_ai_source_quality_fields": _build_tick_source_quality_log_fields(
+                                                recheck_decision
+                                            ),
+                                        },
+                                    )
+                                    ai_call_trigger_reason = "early_accel_strong_bundle_recheck"
+                                    ai_decision = dict(recheck_decision or {})
+                                    action = recheck_action
+                                    ai_score = recheck_score
+                                    raw_ai_score = recheck_score
+                                    reason = str(ai_decision.get("reason") or reason or "")
+                                else:
+                                    early_accel_strong_bundle_recheck["skip_reason"] = (
+                                        "recheck_wait_or_buy_below_min_score"
+                                    )
+                                    _log_early_accel_strong_bundle_recheck(
+                                        stock,
+                                        code,
+                                        "early_accel_strong_bundle_recheck_failed",
+                                        early_accel_strong_bundle_recheck,
+                                    )
+                            elif early_accel_strong_bundle_in_scope:
+                                _log_early_accel_strong_bundle_recheck(
+                                    stock,
+                                    code,
+                                    "early_accel_strong_bundle_recheck_skipped",
+                                    early_accel_strong_bundle_recheck,
                                 )
                             score65_74_probe_decision = _score65_74_recovery_probe_decision(
                                 ai_decision,
@@ -15395,6 +16645,49 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         **_build_observation_contract_fields("funnel_count"),
     )
 
+    if strategy == "SCALPING":
+        scalp_reentry_guard = evaluate_scalp_same_symbol_loss_reentry_guard(code, now_ts)
+        if not scalp_reentry_guard.get("allowed", True):
+            remaining = max(1, _safe_int(scalp_reentry_guard.get("cooldown_remaining_sec"), 1))
+            with ENTRY_LOCK:
+                cooldowns[code] = max(_safe_float(cooldowns.get(code), 0.0), now_ts + remaining)
+                alerted_stocks.discard(code)
+            clear_signal_reference(stock)
+            log_info(
+                f"[SCALP_REENTRY_GUARD_BLOCK] {stock.get('name')}({code}) "
+                f"reason={scalp_reentry_guard.get('reason')} remaining={remaining}s"
+            )
+            _log_entry_pipeline(
+                stock,
+                code,
+                "scalp_same_symbol_loss_reentry_pre_submit_blocked",
+                strategy=strategy,
+                deposit=deposit,
+                ratio=f"{ratio:.4f}",
+                target_budget=target_budget,
+                safe_budget=safe_budget,
+                safety_ratio=f"{used_safety_ratio:.4f}",
+                qty=real_buy_qty,
+                metric_role="safety_veto",
+                decision_authority="scalp_same_symbol_loss_reentry_guard",
+                window_policy="same_day_intraday_runtime_state",
+                sample_floor="not_applicable_safety_veto",
+                primary_decision_metric="cooldown_remaining_sec",
+                source_quality_gate="scalp_same_symbol_loss_reentry_guard_contract_fields_present",
+                runtime_effect=True,
+                actual_order_submitted=False,
+                broker_order_forbidden=True,
+                allowed_runtime_apply=False,
+                forbidden_uses=(
+                    "EV/rolling/MTD/cumulative_tuning/live_auto_promotion/"
+                    "runtime_apply_bridge/threshold_mutation/provider_change/"
+                    "order_price_change/quantity_cap_change/broker_guard_bypass"
+                ),
+                source_stage="pre_submit",
+                **_scalp_loss_reentry_guard_log_fields(scalp_reentry_guard),
+            )
+            return False
+
     if _is_swing_strategy(strategy):
         guard_decision = evaluate_swing_same_symbol_loss_reentry_guard(
             code,
@@ -16259,6 +17552,52 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 f"price={price} target={(late_drift_guard.get('fields') or {}).get('late_entry_reference_target_price')} "
                 f"drift_bps={(late_drift_guard.get('fields') or {}).get('late_entry_price_drift_bps')} "
                 f"reason={late_drift_guard.get('reason')}"
+            )
+            continue
+        weak_context_guard = _evaluate_weak_context_late_entry_guard(
+            strategy=strategy,
+            stock=stock,
+            now_ts=now_ts,
+            latency_gate=latency_gate,
+            late_drift_guard=late_drift_guard,
+        )
+        if weak_context_guard.get("blocked"):
+            _log_entry_pipeline(
+                stock,
+                code,
+                "pre_submit_weak_context_late_entry_guard_block",
+                tag=request["tag"],
+                qty=qty,
+                price=price,
+                order_type=request["order_type_code"],
+                tif=request["tif"],
+                actual_order_submitted=False,
+                broker_order_forbidden=True,
+                **_merge_entry_pipeline_field_groups(
+                    real_pre_submit_guard_fields,
+                    price_snapshot,
+                    late_drift_guard.get("fields") or {},
+                    weak_context_guard.get("fields") or {},
+                    microstructure_submit_log_fields,
+                    _panic_gap_weight_log_fields(latency_gate),
+                    {
+                        **_build_pre_submit_gate_contract_fields(
+                            "weak_context_late_entry_guard_runtime",
+                            gate_action="pre_submit_quality_guard_block",
+                        ),
+                        "decision_authority": "real_scalping_submit_quality_guard",
+                        "runtime_effect": True,
+                        "source_quality_gate": "weak_context_late_entry_guard_contract",
+                        "forbidden_uses": TRADE_QUALITY_RUNTIME_FORBIDDEN_USES,
+                    },
+                ),
+            )
+            log_info(
+                f"[WEAK_CONTEXT_LATE_ENTRY_GUARD_BLOCK] {stock.get('name')}({code}) "
+                f"reason={weak_context_guard.get('reason')} "
+                f"strength={_safe_int((weak_context_guard.get('fields') or {}).get('recent_blocked_strength_count'), 0)} "
+                f"vpw={_safe_int((weak_context_guard.get('fields') or {}).get('recent_blocked_vpw_count'), 0)} "
+                f"overbought={_safe_int((weak_context_guard.get('fields') or {}).get('recent_blocked_overbought_count'), 0)}"
             )
             continue
         if _is_pre_submit_price_guard_block(strategy, price, best_bid_at_submit):
@@ -17931,6 +19270,42 @@ def handle_watching_state(stock, code, ws_data, admin_id, *, now_ts=None, now_dt
     MAX_SURGE = MAX_SCALP_SURGE_PCT
     MAX_INTRADAY_SURGE = MAX_INTRADAY_SURGE
     MIN_LIQUIDITY = MIN_SCALP_LIQUIDITY
+    if strategy == 'SCALPING':
+        scalp_reentry_guard = evaluate_scalp_same_symbol_loss_reentry_guard(code, now_ts)
+        if not scalp_reentry_guard.get("allowed", True):
+            remaining = max(1, _safe_int(scalp_reentry_guard.get("cooldown_remaining_sec"), 1))
+            with ENTRY_LOCK:
+                cooldowns[code] = max(_safe_float(cooldowns.get(code), 0.0), now_ts + remaining)
+                alerted_stocks.discard(code)
+            logged_key = (
+                f"{int(float(scalp_reentry_guard.get('cooldown_marked_at') or 0))}:"
+                f"{int(float(scalp_reentry_guard.get('cooldown_expires_at') or 0))}"
+            )
+            if stock.get("_scalp_loss_reentry_guard_logged_key") != logged_key:
+                stock["_scalp_loss_reentry_guard_logged_key"] = logged_key
+                _log_entry_pipeline(
+                    stock,
+                    code,
+                    "scalp_same_symbol_loss_reentry_blocked",
+                    metric_role="safety_veto",
+                    decision_authority="scalp_same_symbol_loss_reentry_guard",
+                    window_policy="same_day_intraday_runtime_state",
+                    sample_floor="not_applicable_safety_veto",
+                    primary_decision_metric="cooldown_remaining_sec",
+                    source_quality_gate="scalp_same_symbol_loss_reentry_guard_contract_fields_present",
+                    runtime_effect=True,
+                    actual_order_submitted=False,
+                    broker_order_forbidden=True,
+                    allowed_runtime_apply=False,
+                    forbidden_uses=(
+                        "EV/rolling/MTD/cumulative_tuning/live_auto_promotion/"
+                        "runtime_apply_bridge/threshold_mutation/provider_change/"
+                        "order_price_change/quantity_cap_change/broker_guard_bypass"
+                    ),
+                    source_stage="watching_pre_ai",
+                    **_scalp_loss_reentry_guard_log_fields(scalp_reentry_guard),
+                )
+            return
     if code in cooldowns and now_ts < cooldowns[code]:
         _emit_same_symbol_soft_stop_cooldown_shadow(
             stock=stock,
@@ -20308,6 +21683,69 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
             )
             return
 
+        sell_time_block_fields = _sell_side_open_time_block_fields(
+            strategy=strategy,
+            sell_reason_type=sell_reason_type,
+            exit_rule=exit_rule or stock.get("last_exit_rule"),
+        )
+        if bool(sell_time_block_fields.get("sell_time_block_applied")):
+            _log_holding_pipeline(
+                stock,
+                code,
+                "sell_order_blocked_open_time",
+                sell_reason_type=sell_reason_type,
+                exit_rule=exit_rule or stock.get("last_exit_rule") or "-",
+                exit_decision_source=stock.get("last_exit_decision_source") or "MANUAL",
+                qty=buy_qty,
+                profit_rate=f"{profit_rate:+.2f}",
+                actual_order_submitted=False,
+                broker_order_forbidden=True,
+                runtime_effect=True,
+                **sell_time_block_fields,
+            )
+            log_info(
+                f"[SELL_TIME_BLOCK] {stock.get('name', code)} {sell_reason_type} "
+                f"SELL blocked before open-time cutoff."
+            )
+            return
+
+        sell_retry_backoff = _sell_order_failure_retry_backoff_context(stock, now_ts)
+        if sell_retry_backoff:
+            log_key = (
+                f"{int(_safe_float(sell_retry_backoff.get('last_sell_order_failed_at'), 0.0))}:"
+                f"{int(_safe_int(sell_retry_backoff.get('retry_backoff_sec'), 0))}:"
+                f"{exit_rule or stock.get('last_exit_rule') or '-'}"
+            )
+            if stock.get("_sell_order_retry_backoff_logged_key") != log_key:
+                _log_holding_pipeline(
+                    stock,
+                    code,
+                    "sell_order_retry_backoff_active",
+                    sell_reason_type=sell_reason_type,
+                    exit_rule=exit_rule or stock.get("last_exit_rule") or "-",
+                    exit_decision_source=stock.get("last_exit_decision_source") or "MANUAL",
+                    qty=buy_qty,
+                    profit_rate=f"{profit_rate:+.2f}",
+                    metric_role="broker_reject_burst_suppression",
+                    decision_authority="sell_order_failure_retry_backoff_runtime_guard",
+                    window_policy="intraday_real_order_retry_backoff",
+                    sample_floor="not_applicable_runtime_safety_guard",
+                    primary_decision_metric="retry_backoff_remaining_sec",
+                    source_quality_gate="sell_order_retry_backoff_contract_fields_present",
+                    runtime_effect=True,
+                    allowed_runtime_apply=False,
+                    forbidden_uses=(
+                        "EV|rolling|MTD|cumulative_tuning|live_auto_promotion|runtime_apply_bridge|"
+                        "threshold_mutation|provider_change|order_price_change|quantity_cap_change|"
+                        "broker_guard_bypass"
+                    ),
+                    actual_order_submitted=False,
+                    broker_order_forbidden=True,
+                    **sell_retry_backoff,
+                )
+                stock["_sell_order_retry_backoff_logged_key"] = log_key
+            return
+
         try:
             with DB.get_session() as session:
                 session.query(RecommendationHistory).filter_by(id=target_id).update({"status": "SELL_ORDERED"})
@@ -20328,6 +21766,11 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
             token=KIWOOM_TOKEN,
             ws_data=ws_data,
             reason_type=sell_reason_type,
+            strategy=strategy,
+            bypass_open_time_block=_is_sell_side_open_time_safety_exit(
+                exit_rule or stock.get("last_exit_rule"),
+                sell_reason_type,
+            ),
         )
 
         ord_no = ''
@@ -20347,10 +21790,16 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
             set_fields = {
                 'pending_sell_msg': msg,
                 'sell_order_time': now_ts,
+                'sell_order_retry_backoff_until_ts': 0.0,
+                'sell_order_retry_backoff_sec': 0,
+                'sell_order_failure_count': 0,
+                'last_sell_order_error': '',
+                'last_sell_order_failed_at': 0.0,
             }
             if ord_no:
                 set_fields['sell_odno'] = ord_no
             _mutate_stock_state(stock, set_fields=set_fields)
+            stock.pop("_sell_order_retry_backoff_logged_key", None)
             _log_holding_pipeline(
                 stock,
                 code,
@@ -20362,6 +21811,7 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                 ord_no=ord_no or "-",
                 order_type=stock.get("exit_order_type") or "-",
                 profit_rate=f"{profit_rate:+.2f}",
+                **sell_time_block_fields,
             )
             _publish_greenfield_stage_notice(
                 stock,
@@ -20397,12 +21847,24 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                     cooldowns[code] = now_ts + cooldown_sec
                     alerted_stocks.discard(code)
                 if loss_reentry_cooldown_sec > base_cooldown_sec:
+                    _record_scalp_same_symbol_loss_reentry_cooldown(
+                        code,
+                        stock=stock,
+                        exit_rule=exit_rule or stock.get("last_exit_rule"),
+                        profit_rate=profit_rate,
+                        now_ts=now_ts,
+                        cooldown_sec=loss_reentry_cooldown_sec,
+                    )
                     _log_entry_pipeline(
                         stock,
                         code,
                         "same_symbol_loss_reentry_cooldown",
                         metric_role="safety_veto",
                         decision_authority="same_symbol_loss_reentry_guard_observation_only",
+                        window_policy="same_day_intraday_runtime_state",
+                        sample_floor="not_applicable_safety_veto",
+                        primary_decision_metric="cooldown_sec",
+                        source_quality_gate="same_symbol_loss_reentry_cooldown_contract_fields_present",
                         runtime_effect=False,
                         forbidden_uses=(
                             "runtime_threshold_apply/provider_route_change/bot_restart/"
@@ -20444,6 +21906,19 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                 else:
                     log_error(f"🚨 [{stock['name']}] 일시적 매도 실패! HOLDING으로 원상복구.")
                 new_status = 'HOLDING'
+                retry_backoff_fields = _mark_sell_order_failure_retry_backoff(
+                    stock,
+                    error=err_msg or "unknown",
+                    now_ts=now_ts,
+                )
+                stock.pop("_sell_order_retry_backoff_logged_key", None)
+            if new_status == 'COMPLETED':
+                retry_backoff_fields = {
+                    "retry_backoff_applied": False,
+                    "retry_backoff_sec": 0,
+                    "retry_backoff_until_ts": 0.0,
+                    "sell_order_failure_count": 0,
+                }
 
             _mutate_stock_state(stock, set_fields={'status': new_status})
             _log_holding_pipeline(
@@ -20457,6 +21932,7 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                 error=err_msg or "unknown",
                 sellable_qty=sellable_qty if sellable_qty is not None else "-",
                 profit_rate=f"{profit_rate:+.2f}",
+                **retry_backoff_fields,
             )
 
             try:
@@ -20473,6 +21949,40 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
     # --------------------------------------------------------
     # [추가매수 레이어] SELL 신호가 없을 때만 진입
     # --------------------------------------------------------
+    pending_scale_in_revalidation = _pending_scale_in_revalidation_context(
+        stock,
+        strategy=strategy,
+        current_ai_score=current_ai_score,
+    )
+    if pending_scale_in_revalidation:
+        reconcile = _cancel_or_reconcile_pending_add(stock, reason="pending_scale_in_revalidation")
+        _log_holding_pipeline(
+            stock,
+            code,
+            "pending_scale_in_revalidation_cancelled"
+            if reconcile.get("cleared")
+            else "pending_scale_in_revalidation_cancel_uncertain",
+            threshold_family="real_pyramid_scale_in_quality_guard_runtime",
+            runtime_family_candidate="real_pyramid_scale_in_quality_guard_runtime",
+            decision_authority="real_scalping_scale_in_quality_guard_runtime_only",
+            runtime_effect=True,
+            allowed_runtime_apply=False,
+            source_quality_gate="real_pyramid_scale_in_quality_guard_contract",
+            forbidden_uses=TRADE_QUALITY_RUNTIME_FORBIDDEN_USES,
+            actual_order_submitted=False,
+            broker_order_forbidden=True,
+            scale_in_guard_reason=pending_scale_in_revalidation.get("reason"),
+            holding_exit_matrix_original_action=pending_scale_in_revalidation.get(
+                "holding_exit_matrix_original_action"
+            ),
+            current_ai_score=f"{_safe_float(pending_scale_in_revalidation.get('current_ai_score'), 0.0):.1f}",
+            curr_vs_micro_vwap_bp=f"{_safe_float(pending_scale_in_revalidation.get('curr_vs_micro_vwap_bp'), 0.0):.2f}",
+            buy_pressure_10t=f"{_safe_float(pending_scale_in_revalidation.get('buy_pressure_10t'), 0.0):.2f}",
+            tick_acceleration_ratio=f"{_safe_float(pending_scale_in_revalidation.get('tick_acceleration_ratio'), 0.0):.2f}",
+            trade_quality_signature_version="scale_in_quality_v1",
+        )
+        if reconcile.get("cleared"):
+            return
     gate = can_consider_scale_in(
         stock=stock,
         code=code,
@@ -20494,6 +22004,54 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
             held_sec=held_sec,
         )
         if scale_in_action:
+            recent_exit_candidate_block = _recent_exit_candidate_pyramid_block_context(
+                stock,
+                strategy=strategy,
+                add_type=scale_in_action.get("add_type"),
+                now_ts=now_ts,
+            )
+            if recent_exit_candidate_block:
+                _log_holding_pipeline(
+                    stock,
+                    code,
+                    "scale_in_pyramid_recent_exit_candidate_block",
+                    threshold_family="real_pyramid_scale_in_quality_guard_runtime",
+                    runtime_family_candidate="real_pyramid_scale_in_quality_guard_runtime",
+                    decision_authority="real_scalping_scale_in_quality_guard_runtime_only",
+                    runtime_effect=True,
+                    allowed_runtime_apply=False,
+                    source_quality_gate="real_pyramid_scale_in_quality_guard_contract",
+                    forbidden_uses=TRADE_QUALITY_RUNTIME_FORBIDDEN_USES,
+                    actual_order_submitted=False,
+                    broker_order_forbidden=True,
+                    add_type=scale_in_action.get("add_type"),
+                    scale_in_guard_reason=recent_exit_candidate_block.get("reason"),
+                    recent_exit_rule=recent_exit_candidate_block.get("exit_rule"),
+                    recent_exit_source_stage=recent_exit_candidate_block.get("source_stage"),
+                    recent_exit_elapsed_sec=recent_exit_candidate_block.get("elapsed_sec"),
+                    recent_exit_block_sec=recent_exit_candidate_block.get("block_sec"),
+                    trade_quality_signature_version="scale_in_quality_v1",
+                )
+                _emit_stat_action_decision_snapshot(
+                    stock=stock,
+                    code=code,
+                    strategy=strategy,
+                    ws_data=ws_data,
+                    chosen_action="hold_wait",
+                    eligible_actions=["hold_wait"],
+                    rejected_actions=[f"{str(scale_in_action.get('add_type') or '').lower()}_wait:recent_exit_candidate"],
+                    profit_rate=profit_rate,
+                    peak_profit=peak_profit,
+                    current_ai_score=current_ai_score,
+                    held_sec=held_sec,
+                    curr_price=curr_p,
+                    buy_price=buy_p,
+                    scale_in_gate=gate,
+                    scale_in_action=scale_in_action,
+                    reason="recent_exit_candidate_pyramid_block",
+                    force=True,
+                )
+                return
             chosen_add_type = str(scale_in_action.get("add_type") or "").upper()
             chosen_action = "avg_down_wait" if chosen_add_type == "AVG_DOWN" else "pyramid_wait"
             _emit_stat_action_decision_snapshot(
@@ -22040,6 +23598,38 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
             resolved_price=resolved_price,
             add_trigger=action.get("reason"),
             **_greenfield_block_fields(scale_in_greenfield_decision),
+        )
+        return None
+
+    real_pyramid_micro_guard = _real_pyramid_micro_context_guard_context(
+        stock,
+        code=code,
+        strategy=strategy,
+        add_type=add_type,
+        curr_price=curr_price,
+    )
+    if real_pyramid_micro_guard:
+        _log_holding_pipeline(
+            stock,
+            code,
+            "scale_in_pyramid_micro_context_guard_block",
+            threshold_family="real_pyramid_scale_in_quality_guard_runtime",
+            runtime_family_candidate="real_pyramid_scale_in_quality_guard_runtime",
+            decision_authority="real_scalping_scale_in_quality_guard_runtime_only",
+            runtime_effect=True,
+            allowed_runtime_apply=False,
+            source_quality_gate="real_pyramid_scale_in_quality_guard_contract",
+            forbidden_uses=TRADE_QUALITY_RUNTIME_FORBIDDEN_USES,
+            actual_order_submitted=False,
+            broker_order_forbidden=True,
+            add_type=add_type,
+            scale_in_guard_reason=real_pyramid_micro_guard.get("reason"),
+            trade_quality_signature_version="scale_in_quality_v1",
+            **(real_pyramid_micro_guard.get("log_fields") or {}),
+        )
+        log_info(
+            f"[ADD_BLOCKED] {stock.get('name')}({code}) reason=scale_in_pyramid_micro_context_guard "
+            f"{real_pyramid_micro_guard.get('reason')}"
         )
         return None
 

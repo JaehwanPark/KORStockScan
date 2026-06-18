@@ -1424,6 +1424,88 @@ class GPTSniperEngine:
             return f"{formatted_data}\n\n{correction_note}"
         return formatted_data
 
+    def _append_early_accel_strong_bundle_recheck_context(self, formatted_data, *, metadata_extra):
+        if not isinstance(metadata_extra, dict):
+            return formatted_data
+        if str(metadata_extra.get("early_accel_strong_bundle_recheck") or "").strip().lower() not in {
+            "1",
+            "true",
+            "yes",
+            "y",
+        }:
+            return formatted_data
+        original_reason = str(
+            metadata_extra.get("early_accel_strong_bundle_recheck_original_reason_excerpt") or "-"
+        )[:160]
+        promotion_reason = str(
+            metadata_extra.get("early_accel_strong_bundle_recheck_scanner_promotion_reason") or "-"
+        )[:120]
+        source_signature = str(
+            metadata_extra.get("early_accel_strong_bundle_recheck_source_signature") or "-"
+        )[:160]
+        price_delta = str(
+            metadata_extra.get("early_accel_strong_bundle_recheck_price_delta_since_first_seen_pct") or "0.00"
+        )[:32]
+        comparable_flu_delta = str(
+            metadata_extra.get("early_accel_strong_bundle_recheck_comparable_flu_delta_since_first_seen") or "0.00"
+        )[:32]
+        cntr_str_available = str(
+            metadata_extra.get("early_accel_strong_bundle_recheck_cntr_str_available") or "false"
+        )[:8]
+        cntr_str = str(metadata_extra.get("early_accel_strong_bundle_recheck_cntr_str") or "0.0")[:32]
+        tick_accel = str(
+            metadata_extra.get("early_accel_strong_bundle_recheck_tick_acceleration_ratio") or "0.000"
+        )[:32]
+        micro_vwap_bp = str(
+            metadata_extra.get("early_accel_strong_bundle_recheck_curr_vs_micro_vwap_bp") or "0.00"
+        )[:32]
+        buy_pressure_10t = str(
+            metadata_extra.get("early_accel_strong_bundle_recheck_buy_pressure_10t") or "0.00"
+        )[:32]
+        correction_note = (
+            "[Early acceleration strong-bundle recheck]\n"
+            f"- prior_reason_excerpt: {original_reason}\n"
+            f"- scanner_promotion_reason: {promotion_reason}\n"
+            f"- source_signature: {source_signature}\n"
+            f"- price_delta_since_first_seen_pct: {price_delta}\n"
+            f"- comparable_flu_delta_since_first_seen: {comparable_flu_delta}\n"
+            f"- cntr_str_available: {cntr_str_available}\n"
+            f"- cntr_str: {cntr_str}\n"
+            f"- tick_acceleration_ratio: {tick_accel}\n"
+            f"- curr_vs_micro_vwap_bp: {micro_vwap_bp}\n"
+            f"- buy_pressure_10t: {buy_pressure_10t}\n"
+            "- Re-evaluate using the same feature packet only.\n"
+            "- This is not a score-threshold relaxation. BUY is allowed only if the same packet supports it.\n"
+            "- If the corrected decision is still WAIT, explain using the missing conditions only.\n"
+        )
+        if isinstance(formatted_data, str):
+            stripped = formatted_data.strip()
+            if stripped.startswith("{") and stripped.endswith("}"):
+                try:
+                    payload = json.loads(stripped)
+                except Exception:
+                    payload = None
+                if isinstance(payload, dict):
+                    payload["early_accel_strong_bundle_recheck_context"] = {
+                        "prior_reason_excerpt": original_reason,
+                        "scanner_promotion_reason": promotion_reason,
+                        "source_signature": source_signature,
+                        "price_delta_since_first_seen_pct": price_delta,
+                        "comparable_flu_delta_since_first_seen": comparable_flu_delta,
+                        "cntr_str_available": cntr_str_available,
+                        "cntr_str": cntr_str,
+                        "tick_acceleration_ratio": tick_accel,
+                        "curr_vs_micro_vwap_bp": micro_vwap_bp,
+                        "buy_pressure_10t": buy_pressure_10t,
+                        "instruction": (
+                            "Re-evaluate using the same feature packet only. "
+                            "BUY is allowed only if the same packet supports it without relaxing the score gate."
+                        ),
+                    }
+                    return json.dumps(payload, ensure_ascii=False, separators=(",", ":"), default=str)
+            return f"{formatted_data}\n\n{correction_note}"
+        return formatted_data
+
     # ==========================================
     # JSON 파싱
     # ==========================================
@@ -3457,6 +3539,10 @@ class GPTSniperEngine:
                     if lifecycle_ai_runtime and lifecycle_ai_runtime.get("prompt_context"):
                         formatted_data = f"{formatted_data}\n\n{lifecycle_ai_runtime['prompt_context']}"
                 formatted_data = self._append_numeric_consistency_recheck_context(
+                    formatted_data,
+                    metadata_extra=metadata_extra,
+                )
+                formatted_data = self._append_early_accel_strong_bundle_recheck_context(
                     formatted_data,
                     metadata_extra=metadata_extra,
                 )

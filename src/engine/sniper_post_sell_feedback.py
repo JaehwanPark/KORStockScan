@@ -352,6 +352,16 @@ def record_post_sell_candidate(
             ),
             "evaluation_mode": "post_sell_minute_forward",
         }
+        for optional_key in (
+            "no_scale_in_counterfactual_profit_pct",
+            "scale_in_incremental_realized_delta_pct",
+            "pre_add_avg_price",
+            "post_add_avg_price",
+            "pre_add_qty",
+            "post_add_qty",
+        ):
+            if stock.get(optional_key) not in (None, "", "-", "None", "none", "null"):
+                payload[optional_key] = stock.get(optional_key)
         payload.update(
             _build_high_ai_hard_stop_conflict_fields(
                 exit_rule=resolved_exit_rule,

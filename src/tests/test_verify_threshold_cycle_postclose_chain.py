@@ -29,6 +29,26 @@ def test_source_quality_hard_block_status_fails_runtime_candidate_without_handof
     assert status["workorder_handoff_present"] is False
 
 
+def test_watching_score_smoothing_diagnostic_status_warns_for_auto_followup():
+    status = mod._watching_score_smoothing_diagnostic_status(
+        {
+            "transition_guard": {
+                "status": "auto_followup_required",
+                "eligible": False,
+                "applied_candidate_status": "auto_followup_required",
+                "auto_followup_required_criteria": [
+                    "projected_buy_source_quality_adjusted_ev_pct",
+                ],
+            },
+            "automation_chain": {"automatic_generation": True},
+        }
+    )
+
+    assert status["status"] == "warning"
+    assert status["automatic_generation"] is True
+    assert status["root_cause_closure_status"] == "report_only_followup_open"
+
+
 def test_source_quality_hard_block_status_detects_bridge_selected_alias_without_handoff():
     preflight = {
         "status": "warning",

@@ -1,0 +1,62 @@
+{
+  "lock_id": "sell_side_open_time_block_operator_override_2026-06-19",
+  "enabled": true,
+  "family": "sell_side_open_time_block_runtime",
+  "stage": "exit_submit_time_guard",
+  "priority": 906,
+  "active_from_date": "2026-06-19",
+  "target_date": "2026-06-19",
+  "explicit_close_required": true,
+  "applied_at": "2026-06-18T15:10:00+09:00",
+  "requested_by": "user_operator_override",
+  "runtime_effect": true,
+  "decision_authority": "operator_runtime_override",
+  "scope": {
+    "strategy": "SCALPING",
+    "real_sell_submit_time_guard_only": true,
+    "discretionary_exit_only": true,
+    "sim_probe_unchanged": true,
+    "swing_dry_run_unchanged": true,
+    "provider_route_unchanged": true,
+    "score_threshold_unchanged": true,
+    "order_price_unchanged": true,
+    "quantity_cap_unchanged": true,
+    "broker_guard_unchanged": true,
+    "hard_protect_emergency_panic_liquidity_sell_unchanged": true
+  },
+  "env_overrides": {
+    "KORSTOCKSCAN_SELL_SIDE_OPEN_TIME_BLOCK_ENABLED": "true",
+    "KORSTOCKSCAN_SELL_SIDE_OPEN_TIME_BLOCK_UNTIL_HHMM": "09:03",
+    "KORSTOCKSCAN_SELL_SIDE_OPEN_TIME_BLOCK_SCOPE": "discretionary_exit_only"
+  },
+  "allowed_close_reason_keywords": [
+    "explicit_operator_close",
+    "safety_revert_required",
+    "order_provenance_breach",
+    "broker_guard_breach",
+    "same_stage_owner_conflict"
+  ],
+  "forbidden_uses": [
+    "provider_route_change",
+    "score_threshold_mutation",
+    "order_price_change",
+    "quantity_cap_release",
+    "broker_guard_bypass",
+    "hard_safety_bypass",
+    "sim_probe_authority_change",
+    "threshold_cycle_live_auto_evidence"
+  ],
+  "rollback_guard": {
+    "disable_key": "KORSTOCKSCAN_SELL_SIDE_OPEN_TIME_BLOCK_ENABLED=false",
+    "explicit_operator_close_required": true,
+    "revert_scope": "real SCALPING discretionary SELL submit time block before configured cutoff",
+    "broker_guard_unchanged": true,
+    "hard_safety_unchanged": true,
+    "provider_route_unchanged": true
+  },
+  "source_evidence": {
+    "reason": "User requested enabling the real SCALPING sell-side open-time block for the next PREOPEN.",
+    "checklist_owner": "docs/checklists/2026-06-18-stage2-todo-checklist.md#SellSideOpenTimeBlockPreopen0619",
+    "user_instruction": "다음장전에 ON 이 되도록 해줘"
+  }
+}

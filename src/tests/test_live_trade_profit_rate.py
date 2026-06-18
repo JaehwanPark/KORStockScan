@@ -219,6 +219,80 @@ def test_sell_receipt_persists_net_profit_rate(monkeypatch):
     assert "-0.13%" in payload["message"]
 
 
+def test_sell_receipt_propagates_scale_in_counterfactual_diagnostics(monkeypatch):
+    record = type(
+        "Record",
+        (),
+        {
+            "buy_price": 100000.0,
+            "buy_qty": 20,
+            "status": "SELL_ORDERED",
+            "sell_price": 0,
+            "sell_time": None,
+            "profit_rate": 0.0,
+        },
+    )()
+
+    receipts.DB = _ReceiptDB(record)
+    receipts.event_bus = _Bus()
+    logged = {}
+    post_sell_calls = []
+
+    def _capture_log(*args, **kwargs):
+        logged["args"] = args
+        logged["kwargs"] = kwargs
+
+    def _capture_post_sell(**kwargs):
+        post_sell_calls.append(kwargs)
+        return {"post_sell_id": "TEST"}
+
+    monkeypatch.setattr(receipts, "_log_holding_pipeline", _capture_log)
+    monkeypatch.setattr(receipts, "record_post_sell_candidate", _capture_post_sell)
+
+    receipt_snapshot = {
+        "code": "123456",
+        "name": "TEST",
+        "msg_audience": "ADMIN_ONLY",
+        "pre_add_avg_price": 97000.0,
+        "post_add_avg_price": 100000.0,
+        "pre_add_qty": 10,
+        "post_add_qty": 20,
+        "last_exit_rule": "protect_trailing_stop",
+    }
+
+    receipts._update_db_for_sell(
+        7,
+        100100,
+        datetime(2026, 4, 7, 9, 0, 0),
+        receipt_snapshot,
+        "SCALPING",
+        False,
+    )
+
+    assert receipt_snapshot["no_scale_in_counterfactual_profit_pct"] == calculate_net_profit_rate(97000.0, 100100)
+    assert receipt_snapshot["scale_in_incremental_realized_delta_pct"] == round(
+        record.profit_rate - receipt_snapshot["no_scale_in_counterfactual_profit_pct"],
+        4,
+    )
+    assert logged["kwargs"]["no_scale_in_counterfactual_profit_pct"] == receipt_snapshot[
+        "no_scale_in_counterfactual_profit_pct"
+    ]
+    assert logged["kwargs"]["scale_in_incremental_realized_delta_pct"] == receipt_snapshot[
+        "scale_in_incremental_realized_delta_pct"
+    ]
+    assert logged["kwargs"]["pre_add_avg_price"] == 97000.0
+    assert logged["kwargs"]["post_add_avg_price"] == 100000.0
+    assert logged["kwargs"]["pre_add_qty"] == 10
+    assert logged["kwargs"]["post_add_qty"] == 20
+    assert len(post_sell_calls) == 1
+    assert post_sell_calls[0]["stock"]["no_scale_in_counterfactual_profit_pct"] == receipt_snapshot[
+        "no_scale_in_counterfactual_profit_pct"
+    ]
+    assert post_sell_calls[0]["stock"]["scale_in_incremental_realized_delta_pct"] == receipt_snapshot[
+        "scale_in_incremental_realized_delta_pct"
+    ]
+
+
 def test_periodic_account_sync_uses_net_profit_rate_for_missing_sell_receipt(monkeypatch):
     record = type(
         "Record",

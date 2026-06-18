@@ -269,6 +269,33 @@ def test_missed_entry_counterfactual_splits_ai_and_pre_submit_cohorts(monkeypatc
                 "emitted_at": "2026-06-18T10:05:03",
                 "emitted_date": target_date,
             },
+            {
+                "pipeline": "ENTRY_PIPELINE",
+                "stage": "scalp_entry_action_decision_snapshot",
+                "stock_name": "강가속재질의",
+                "stock_code": "444444",
+                "record_id": 4,
+                "fields": {
+                    "chosen_action": "NO_BUY_AI",
+                    "ai_score": "64.0",
+                },
+                "emitted_at": "2026-06-18T10:12:01",
+                "emitted_date": target_date,
+            },
+            {
+                "pipeline": "ENTRY_PIPELINE",
+                "stage": "early_accel_strong_bundle_recheck_skipped",
+                "stock_name": "강가속재질의",
+                "stock_code": "444444",
+                "record_id": 4,
+                "fields": {
+                    "original_action": "WAIT",
+                    "original_score": "64.0",
+                    "skip_reason": "strong_bundle_below_min_pass_count",
+                },
+                "emitted_at": "2026-06-18T10:12:02",
+                "emitted_date": target_date,
+            },
         ],
     )
 
@@ -294,6 +321,13 @@ def test_missed_entry_counterfactual_splits_ai_and_pre_submit_cohorts(monkeypatc
             _make_candle("10:12:00", 30120, 30190, 30080, 30140),
             _make_candle("10:13:00", 30140, 30200, 30100, 30160),
         ],
+        "444444": [
+            _make_candle("10:13:00", 40000, 40120, 39900, 40080),
+            _make_candle("10:14:00", 40080, 40150, 40020, 40100),
+            _make_candle("10:15:00", 40100, 40180, 40070, 40140),
+            _make_candle("10:16:00", 40140, 40200, 40110, 40180),
+            _make_candle("10:17:00", 40180, 40240, 40140, 40200),
+        ],
     }
     fake_kiwoom = types.SimpleNamespace(
         get_kiwoom_token=lambda: "dummy",
@@ -309,10 +343,12 @@ def test_missed_entry_counterfactual_splits_ai_and_pre_submit_cohorts(monkeypatc
     assert cohorts["ai_numeric_inconsistency_no_buy"]["evaluated_candidates"] == 1
     assert cohorts["ai_numeric_consistency_recheck_failed"]["evaluated_candidates"] == 1
     assert cohorts["entry_armed_pre_submit_liquidity_block"]["evaluated_candidates"] == 1
+    assert cohorts["early_accel_strong_bundle_recheck_skipped"]["evaluated_candidates"] == 1
     rows = {row["stock_code"]: row for row in report["rows"]}
     assert rows["111111"]["missed_submit_cohort"] == "ai_numeric_inconsistency_no_buy"
     assert rows["333333"]["missed_submit_cohort"] == "ai_numeric_consistency_recheck_failed"
     assert rows["222222"]["missed_submit_cohort"] == "entry_armed_pre_submit_liquidity_block"
+    assert rows["444444"]["missed_submit_cohort"] == "early_accel_strong_bundle_recheck_skipped"
 
 
 def test_missed_entry_counterfactual_includes_snapshot_wait_or_skip_paths(monkeypatch, tmp_path):

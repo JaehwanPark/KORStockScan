@@ -195,7 +195,7 @@ def test_diagnostic_artifact_is_explicitly_non_authoritative(tmp_path):
 
     report = build_diagnostic_artifact("2026-06-12", data_root=tmp_path, write=True)
 
-    assert report["decision_authority"] == "report_only_no_automation_chain_authority"
+    assert report["decision_authority"] == "report_only_postclose_automation_chain"
     assert report["runtime_effect"] is False
     assert "threshold_cycle_input" in report["forbidden_uses"]
     assert report["transition_guard"]["eligible"] is False
@@ -272,7 +272,7 @@ def test_external_evidence_cannot_override_transition_criteria(tmp_path):
     assert report["transition_guard"]["status"] == "await_required_evidence"
     assert report["guard_evidence_source"] == "three_session_postclose_review"
     assert report["guard_evidence_accepted"] is True
-    assert "buy_wait_flip_rate_reduction_pct" in report["transition_guard"]["manual_review_required_criteria"]
+    assert "projected_buy_source_quality_adjusted_ev_pct" in report["transition_guard"]["auto_followup_required_criteria"]
 
     assert any(item["status"] != "pass" for item in report["transition_guard"]["criteria"].values())
 
@@ -280,9 +280,22 @@ def test_external_evidence_cannot_override_transition_criteria(tmp_path):
 def _write_guard_artifacts(root, session_dates):
     artifacts = []
     for target_date in session_dates:
-        for role in ("post_sell", "source_quality", "postclose_verification"):
-            path = root / f"{role}_{target_date}.json"
-            path.write_text(json.dumps({"target_date": target_date, "role": role}), encoding="utf-8")
+        report_root = root / "report"
+        mapping = {
+            "post_sell": report_root / "monitor_snapshots" / f"post_sell_feedback_{target_date}.json",
+            "source_quality": report_root / "observation_source_quality_audit" / f"observation_source_quality_audit_{target_date}.json",
+            "postclose_verification": report_root
+            / "threshold_cycle_postclose_verification"
+            / f"threshold_cycle_postclose_verification_{target_date}.json",
+        }
+        payloads = {
+            "post_sell": {"target_date": target_date, "role": "post_sell"},
+            "source_quality": {"status": "pass", "summary": {"tuning_input_allowed": True}},
+            "postclose_verification": {"status": "pass"},
+        }
+        for role, path in mapping.items():
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(payloads[role]), encoding="utf-8")
             artifacts.append(
                 {
                     "path": str(path),
@@ -386,10 +399,9 @@ def test_diagnostic_aggregates_verified_three_session_projection_metrics(tmp_pat
     assert report["metrics"]["sequence_3plus_count"] == 50
     assert report["transition_guard"]["automatic_criteria_passed"] is True
     assert report["transition_guard"]["eligible"] is False
-    assert report["transition_guard"]["applied_candidate_status"] == "manual_review_required"
-    assert report["transition_guard"]["status"] == "manual_postclose_review_required"
+    assert report["transition_guard"]["applied_candidate_status"] == "auto_followup_required"
+    assert report["transition_guard"]["status"] == "auto_followup_required"
     assert all(item["exists"] and item["sha256"] for item in report["input_artifact_checks"])
-
 
 def test_diagnostic_manual_review_names_only_cannot_close_applied_candidate(tmp_path):
     session_dates = ["2026-06-15", "2026-06-16", "2026-06-17"]
@@ -420,7 +432,7 @@ def test_diagnostic_manual_review_names_only_cannot_close_applied_candidate(tmp_
     assert report["transition_guard"]["automatic_criteria_passed"] is True
     assert report["transition_guard"]["manual_review_passed"] is False
     assert report["transition_guard"]["eligible"] is False
-    assert report["transition_guard"]["applied_candidate_status"] == "manual_review_required"
+    assert report["transition_guard"]["applied_candidate_status"] == "auto_followup_required"
 
 
 def test_diagnostic_manual_review_can_close_applied_candidate_after_auto_metrics_pass(tmp_path):

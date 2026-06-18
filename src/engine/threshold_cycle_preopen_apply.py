@@ -187,6 +187,12 @@ TARGET_ENV_VALUE_KEYS = {
     "EARLY_ACCEL_RECHECK_MIN_MICRO_VWAP_BP": "min_micro_vwap_bp",
     "EARLY_ACCEL_RECHECK_ALLOW_LIQUIDITY_BLOCKED": "allow_liquidity_blocked",
     "EARLY_ACCEL_RECHECK_ALLOW_STRENGTH_BLOCKED": "allow_strength_blocked",
+    "EARLY_ACCEL_STRONG_BUNDLE_RECHECK_ENABLED": "strong_bundle_recheck_enabled",
+    "EARLY_ACCEL_STRONG_BUNDLE_RECHECK_MIN_SCORE": "strong_bundle_recheck_min_score",
+    "EARLY_ACCEL_STRONG_BUNDLE_RECHECK_MAX_SCORE": "strong_bundle_recheck_max_score",
+    "EARLY_ACCEL_STRONG_BUNDLE_RECHECK_BUY_MIN_SCORE": "strong_bundle_recheck_buy_min_score",
+    "EARLY_ACCEL_STRONG_BUNDLE_RECHECK_MIN_PASS_COUNT": "strong_bundle_recheck_min_pass_count",
+    "EARLY_ACCEL_STRONG_BUNDLE_RECHECK_MAX_PER_SYMBOL": "strong_bundle_recheck_max_per_symbol",
     "AI_NUMERIC_CONSISTENCY_RECHECK_ENABLED": "enabled",
     "AI_NUMERIC_CONSISTENCY_RECHECK_MIN_SCORE": "min_score",
     "AI_NUMERIC_CONSISTENCY_RECHECK_BUY_MIN_SCORE": "buy_min_score",
@@ -269,12 +275,16 @@ AGGRESSIVE_ENTRY_PRICE_OVERRIDE_FAMILY = "aggressive_entry_price_override_runtim
 SCALPING_SCANNER_REAL_SOURCE_GUARD_FAMILY = "scalping_scanner_real_source_guard_runtime"
 EARLY_ACCEL_RECHECK_FAMILY = "early_accel_recheck_runtime"
 AI_NUMERIC_CONSISTENCY_RECHECK_FAMILY = "ai_numeric_consistency_recheck_runtime"
+WEAK_CONTEXT_LATE_ENTRY_GUARD_FAMILY = "weak_context_late_entry_guard_runtime"
 SCORE65_74_STRONG_MICRO_OVERRIDE_FAMILY = "score65_74_recovery_probe_strong_micro_override_runtime"
 ENTRY_PRICE_LIVE_TUNING_MARKER_ENV = "KORSTOCKSCAN_ENTRY_PRICE_LIVE_TUNING_SELECTED"
 ENTRY_STAGE_LIVE_TUNING_MARKER_ENV = "KORSTOCKSCAN_ENTRY_STAGE_LIVE_TUNING_SELECTED"
+REAL_PYRAMID_SCALE_IN_QUALITY_GUARD_FAMILY = "real_pyramid_scale_in_quality_guard_runtime"
+SCALE_IN_LIVE_TUNING_MARKER_ENV = "KORSTOCKSCAN_SCALE_IN_LIVE_TUNING_SELECTED"
 SOFT_STOP_DYNAMIC_GRACE_FAMILY = "soft_stop_dynamic_grace_runtime"
 PRESET_TP_SOFT_STOP_FAMILY = "preset_tp_soft_stop_runtime"
 PROFIT_STAGNATION_EXIT_FAMILY = "profit_stagnation_exit_runtime"
+NEVER_GREEN_DEFER_CLAMP_FAMILY = "never_green_defer_clamp_runtime"
 HOLDING_EXIT_LIVE_TUNING_MARKER_ENV = "KORSTOCKSCAN_HOLDING_EXIT_LIVE_TUNING_SELECTED"
 PRESET_TP_EXIT_LIVE_TUNING_MARKER_ENV = "KORSTOCKSCAN_PRESET_TP_EXIT_LIVE_TUNING_SELECTED"
 SCALPING_SCANNER_REAL_SOURCE_GUARD_ENV_KEYS = frozenset(
@@ -316,6 +326,12 @@ EARLY_ACCEL_RECHECK_ENV_KEYS = frozenset(
         "KORSTOCKSCAN_EARLY_ACCEL_RECHECK_MIN_MICRO_VWAP_BP",
         "KORSTOCKSCAN_EARLY_ACCEL_RECHECK_ALLOW_LIQUIDITY_BLOCKED",
         "KORSTOCKSCAN_EARLY_ACCEL_RECHECK_ALLOW_STRENGTH_BLOCKED",
+        "KORSTOCKSCAN_EARLY_ACCEL_STRONG_BUNDLE_RECHECK_ENABLED",
+        "KORSTOCKSCAN_EARLY_ACCEL_STRONG_BUNDLE_RECHECK_MIN_SCORE",
+        "KORSTOCKSCAN_EARLY_ACCEL_STRONG_BUNDLE_RECHECK_MAX_SCORE",
+        "KORSTOCKSCAN_EARLY_ACCEL_STRONG_BUNDLE_RECHECK_BUY_MIN_SCORE",
+        "KORSTOCKSCAN_EARLY_ACCEL_STRONG_BUNDLE_RECHECK_MIN_PASS_COUNT",
+        "KORSTOCKSCAN_EARLY_ACCEL_STRONG_BUNDLE_RECHECK_MAX_PER_SYMBOL",
     }
 )
 AI_NUMERIC_CONSISTENCY_RECHECK_ENV_KEYS = frozenset(
@@ -325,6 +341,28 @@ AI_NUMERIC_CONSISTENCY_RECHECK_ENV_KEYS = frozenset(
         "KORSTOCKSCAN_AI_NUMERIC_CONSISTENCY_RECHECK_BUY_MIN_SCORE",
         "KORSTOCKSCAN_AI_NUMERIC_CONSISTENCY_RECHECK_MIN_FEATURE_PASS_COUNT",
         "KORSTOCKSCAN_AI_NUMERIC_CONSISTENCY_RECHECK_MAX_PER_SYMBOL",
+    }
+)
+WEAK_CONTEXT_LATE_ENTRY_GUARD_ENV_KEYS = frozenset(
+    {
+        "KORSTOCKSCAN_WEAK_CONTEXT_LATE_ENTRY_GUARD_ENABLED",
+        "KORSTOCKSCAN_WEAK_CONTEXT_LATE_ENTRY_LOOKBACK_SEC",
+        "KORSTOCKSCAN_WEAK_CONTEXT_LATE_ENTRY_MIN_BLOCK_COUNT",
+        "KORSTOCKSCAN_WEAK_CONTEXT_LATE_ENTRY_MIN_TICK_ACCEL",
+        "KORSTOCKSCAN_WEAK_CONTEXT_LATE_ENTRY_MIN_BUY_PRESSURE",
+        "KORSTOCKSCAN_WEAK_CONTEXT_LATE_ENTRY_MIN_MICRO_VWAP_BP",
+    }
+)
+REAL_PYRAMID_SCALE_IN_QUALITY_GUARD_ENV_KEYS = frozenset(
+    {
+        "KORSTOCKSCAN_REAL_PYRAMID_MICRO_CONTEXT_GUARD_ENABLED",
+        "KORSTOCKSCAN_PENDING_SCALE_IN_REVALIDATION_CANCEL_ENABLED",
+        "KORSTOCKSCAN_PENDING_SCALE_IN_REVALIDATION_MIN_AI_SCORE",
+        "KORSTOCKSCAN_PENDING_SCALE_IN_REVALIDATION_MIN_TICK_ACCEL",
+        "KORSTOCKSCAN_PENDING_SCALE_IN_REVALIDATION_MIN_BUY_PRESSURE",
+        "KORSTOCKSCAN_PENDING_SCALE_IN_REVALIDATION_MIN_MICRO_VWAP_BP",
+        "KORSTOCKSCAN_RECENT_EXIT_CANDIDATE_PYRAMID_BLOCK_ENABLED",
+        "KORSTOCKSCAN_RECENT_EXIT_CANDIDATE_PYRAMID_BLOCK_SEC",
     }
 )
 AGGRESSIVE_ENTRY_PRICE_OVERRIDE_ENV_KEYS = frozenset(
@@ -339,6 +377,15 @@ AGGRESSIVE_ENTRY_PRICE_OVERRIDE_ENV_KEYS = frozenset(
         "KORSTOCKSCAN_SCALP_REFERENCE_TARGET_MISSED_UPSIDE_TARGET_MODE",
         "KORSTOCKSCAN_SCALP_REFERENCE_TARGET_MISSED_UPSIDE_NEUTRAL_BID_MINUS_TICKS",
         "KORSTOCKSCAN_SCALP_REFERENCE_TARGET_MISSED_UPSIDE_BULLISH_BID_MINUS_TICKS",
+    }
+)
+NEVER_GREEN_DEFER_CLAMP_ENV_KEYS = frozenset(
+    {
+        "KORSTOCKSCAN_NEVER_GREEN_DEFER_CLAMP_ENABLED",
+        "KORSTOCKSCAN_NEVER_GREEN_DEFER_CLAMP_MAX_PEAK_PROFIT_PCT",
+        "KORSTOCKSCAN_NEVER_GREEN_DEFER_CLAMP_MIN_DEFER_COUNT",
+        "KORSTOCKSCAN_NEVER_GREEN_DEFER_CLAMP_MAX_MICRO_VWAP_BP",
+        "KORSTOCKSCAN_NEVER_GREEN_DEFER_CLAMP_MIN_LOSS_PCT",
     }
 )
 SOFT_STOP_DYNAMIC_GRACE_ENV_KEYS = frozenset(
@@ -2213,16 +2260,71 @@ def _close_ai_numeric_consistency_recheck_for_live_owner(
     return filtered_selected, updated_decisions, filtered_env
 
 
+def _close_weak_context_late_entry_guard_for_live_owner(
+    *,
+    selected: list[dict[str, Any]],
+    decisions: list[dict[str, Any]],
+    env_overrides: dict[str, str],
+    owner_family: str,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, str]]:
+    if not owner_family:
+        return selected, decisions, env_overrides
+    reason = f"same_stage_owner_conflict:{owner_family}"
+    filtered_selected = [
+        item
+        for item in selected
+        if str(item.get("family") or "") != WEAK_CONTEXT_LATE_ENTRY_GUARD_FAMILY
+    ]
+    filtered_env = {
+        key: value
+        for key, value in env_overrides.items()
+        if str(key) not in WEAK_CONTEXT_LATE_ENTRY_GUARD_ENV_KEYS
+    }
+    updated_decisions: list[dict[str, Any]] = []
+    for decision in decisions:
+        if str(decision.get("family") or "") != WEAK_CONTEXT_LATE_ENTRY_GUARD_FAMILY:
+            updated_decisions.append(decision)
+            continue
+        next_decision = {**decision, "selected": False, "decision_reason": reason, "env_overrides": {}}
+        lock = next_decision.get("operator_runtime_env_lock")
+        if isinstance(lock, dict):
+            close_reasons = list(lock.get("close_reasons") or [])
+            if reason not in close_reasons:
+                close_reasons.append(reason)
+            next_decision["operator_runtime_env_lock"] = {
+                **lock,
+                "applied": False,
+                "close_reasons": close_reasons,
+                "allowed_close": _lock_allows_close(lock, close_reasons),
+            }
+        updated_decisions.append(next_decision)
+    return filtered_selected, updated_decisions, filtered_env
+
+
 def _holding_exit_live_owner_family(*selected_groups: list[dict[str, Any]]) -> str:
     for group in selected_groups:
         for item in group or []:
             if not isinstance(item, dict):
                 continue
             family = str(item.get("family") or "")
-            if family in {SOFT_STOP_DYNAMIC_GRACE_FAMILY, PRESET_TP_SOFT_STOP_FAMILY}:
+            if family in {SOFT_STOP_DYNAMIC_GRACE_FAMILY, PRESET_TP_SOFT_STOP_FAMILY, NEVER_GREEN_DEFER_CLAMP_FAMILY}:
                 continue
             stage = str(item.get("stage") or "")
             if stage in {"holding_exit", "holding", "exit"}:
+                return family
+    return ""
+
+
+def _scale_in_live_owner_family(*selected_groups: list[dict[str, Any]]) -> str:
+    for group in selected_groups:
+        for item in group or []:
+            if not isinstance(item, dict):
+                continue
+            family = str(item.get("family") or "")
+            if family == REAL_PYRAMID_SCALE_IN_QUALITY_GUARD_FAMILY:
+                continue
+            stage = str(item.get("stage") or "")
+            if stage == "scale_in":
                 return family
     return ""
 
@@ -2277,6 +2379,88 @@ def _close_aggressive_entry_price_override_for_live_owner(
                 "applied": False,
                 "close_reasons": close_reasons,
                 "allowed_close": True,
+            }
+        updated_decisions.append(next_decision)
+    return filtered_selected, updated_decisions, filtered_env
+
+
+def _close_never_green_defer_clamp_for_live_owner(
+    *,
+    selected: list[dict[str, Any]],
+    decisions: list[dict[str, Any]],
+    env_overrides: dict[str, str],
+    owner_family: str,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, str]]:
+    if not owner_family:
+        return selected, decisions, env_overrides
+    reason = f"same_stage_owner_conflict:{owner_family}"
+    filtered_selected = [
+        item
+        for item in selected
+        if str(item.get("family") or "") != NEVER_GREEN_DEFER_CLAMP_FAMILY
+    ]
+    filtered_env = {
+        key: value
+        for key, value in env_overrides.items()
+        if str(key) not in NEVER_GREEN_DEFER_CLAMP_ENV_KEYS
+    }
+    updated_decisions: list[dict[str, Any]] = []
+    for decision in decisions:
+        if str(decision.get("family") or "") != NEVER_GREEN_DEFER_CLAMP_FAMILY:
+            updated_decisions.append(decision)
+            continue
+        next_decision = {**decision, "selected": False, "decision_reason": reason, "env_overrides": {}}
+        lock = next_decision.get("operator_runtime_env_lock")
+        if isinstance(lock, dict):
+            close_reasons = list(lock.get("close_reasons") or [])
+            if reason not in close_reasons:
+                close_reasons.append(reason)
+            next_decision["operator_runtime_env_lock"] = {
+                **lock,
+                "applied": False,
+                "close_reasons": close_reasons,
+                "allowed_close": _lock_allows_close(lock, close_reasons),
+            }
+        updated_decisions.append(next_decision)
+    return filtered_selected, updated_decisions, filtered_env
+
+
+def _close_real_pyramid_scale_in_quality_guard_for_live_owner(
+    *,
+    selected: list[dict[str, Any]],
+    decisions: list[dict[str, Any]],
+    env_overrides: dict[str, str],
+    owner_family: str,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, str]]:
+    if not owner_family:
+        return selected, decisions, env_overrides
+    reason = f"same_stage_owner_conflict:{owner_family}"
+    filtered_selected = [
+        item
+        for item in selected
+        if str(item.get("family") or "") != REAL_PYRAMID_SCALE_IN_QUALITY_GUARD_FAMILY
+    ]
+    filtered_env = {
+        key: value
+        for key, value in env_overrides.items()
+        if str(key) not in REAL_PYRAMID_SCALE_IN_QUALITY_GUARD_ENV_KEYS
+    }
+    updated_decisions: list[dict[str, Any]] = []
+    for decision in decisions:
+        if str(decision.get("family") or "") != REAL_PYRAMID_SCALE_IN_QUALITY_GUARD_FAMILY:
+            updated_decisions.append(decision)
+            continue
+        next_decision = {**decision, "selected": False, "decision_reason": reason, "env_overrides": {}}
+        lock = next_decision.get("operator_runtime_env_lock")
+        if isinstance(lock, dict):
+            close_reasons = list(lock.get("close_reasons") or [])
+            if reason not in close_reasons:
+                close_reasons.append(reason)
+            next_decision["operator_runtime_env_lock"] = {
+                **lock,
+                "applied": False,
+                "close_reasons": close_reasons,
+                "allowed_close": _lock_allows_close(lock, close_reasons),
             }
         updated_decisions.append(next_decision)
     return filtered_selected, updated_decisions, filtered_env
@@ -2861,14 +3045,41 @@ def build_preopen_apply_manifest(
     target_date = str(target_date).strip()
     source_path = _report_path_for_date(source_date, source_phase=source_phase) if source_date else _latest_report_before(target_date)
     if source_path is None or not source_path.exists():
+        auto_apply_requested = bool(auto_apply) or apply_mode in AUTO_APPLY_MODES
+        operator_runtime_env_locks = _load_operator_runtime_env_locks(source_date, target_date)
+        selected, decisions, env_overrides = ([], [], {})
+        if auto_apply_requested and operator_runtime_env_locks:
+            selected, decisions, env_overrides = _select_auto_apply_candidates(
+                [],
+                ai_review={},
+                require_ai=False,
+                target_date=target_date,
+                include_families=include_families,
+                operator_locks=operator_runtime_env_locks,
+            )
+        runtime_change = bool(auto_apply_requested and env_overrides)
         manifest = {
             "target_date": target_date,
-            "status": "missing_source_report",
+            "status": (
+                "operator_runtime_env_lock_ready_missing_source_report"
+                if runtime_change
+                else "missing_source_report"
+            ),
             "apply_mode": apply_mode,
-            "runtime_change": False,
+            "runtime_change": runtime_change,
+            "runtime_change_reason": (
+                "source report missing; explicit operator runtime env locks preserved"
+                if runtime_change
+                else "source report missing"
+            ),
             "source_report": None,
             "candidates": [],
             "calibration_candidates": [],
+            "auto_apply_selected": selected,
+            "auto_apply_decisions": decisions,
+            "operator_runtime_env_locks": operator_runtime_env_locks,
+            "runtime_env_file": str(runtime_env_path(target_date)) if auto_apply_requested else None,
+            "runtime_env_overrides": env_overrides,
             "generated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
         }
     else:
@@ -3003,6 +3214,10 @@ def build_preopen_apply_manifest(
                 selected,
                 runtime_bridge_selected,
             )
+            scale_in_live_owner_family = _scale_in_live_owner_family(
+                selected,
+                runtime_bridge_selected,
+            )
             preset_tp_exit_live_owner_family = _preset_tp_exit_live_owner_family(
                 selected,
                 runtime_bridge_selected,
@@ -3031,11 +3246,29 @@ def build_preopen_apply_manifest(
                 env_overrides=env_overrides,
                 owner_family=entry_live_tuning_owner_family,
             )
+            selected, decisions, env_overrides = _close_weak_context_late_entry_guard_for_live_owner(
+                selected=selected,
+                decisions=decisions,
+                env_overrides=env_overrides,
+                owner_family=entry_live_tuning_owner_family,
+            )
             selected, decisions, env_overrides = _close_ai_numeric_consistency_recheck_for_live_owner(
                 selected=selected,
                 decisions=decisions,
                 env_overrides=env_overrides,
                 owner_family=entry_live_tuning_owner_family,
+            )
+            selected, decisions, env_overrides = _close_real_pyramid_scale_in_quality_guard_for_live_owner(
+                selected=selected,
+                decisions=decisions,
+                env_overrides=env_overrides,
+                owner_family=scale_in_live_owner_family,
+            )
+            selected, decisions, env_overrides = _close_never_green_defer_clamp_for_live_owner(
+                selected=selected,
+                decisions=decisions,
+                env_overrides=env_overrides,
+                owner_family=holding_exit_live_owner_family,
             )
             selected, decisions, env_overrides = _close_soft_stop_dynamic_grace_for_live_owner(
                 selected=selected,
@@ -3071,6 +3304,8 @@ def build_preopen_apply_manifest(
                 env_overrides[ENTRY_PRICE_LIVE_TUNING_MARKER_ENV] = "true"
             if entry_live_tuning_owner_family:
                 env_overrides[ENTRY_STAGE_LIVE_TUNING_MARKER_ENV] = "true"
+            if scale_in_live_owner_family:
+                env_overrides[SCALE_IN_LIVE_TUNING_MARKER_ENV] = "true"
             if holding_exit_live_owner_family:
                 env_overrides[HOLDING_EXIT_LIVE_TUNING_MARKER_ENV] = "true"
             if preset_tp_exit_live_owner_family:

@@ -691,6 +691,7 @@ def _should_apply_latency_guard_canary(
 
 def _should_apply_latency_spread_relief_canary(
     *,
+    code: str,
     strategy_id: str,
     position_tag: str,
     signal_strength: float,
@@ -740,6 +741,18 @@ def _should_apply_latency_spread_relief_canary(
     )
     if _to_float(getattr(latency_status, "spread_ratio", 0.0), 0.0) > max_spread_ratio:
         return False, "spread_relief_limit_exceeded"
+
+    if bool(getattr(TRADING_RULES, "SCALP_LATENCY_SPREAD_RELIEF_BLOCK_UNSTABLE_QUOTE", True)):
+        stability = ORDERBOOK_STABILITY_OBSERVER.snapshot(code) if code else {}
+        if bool(stability.get("unstable_quote_observed")):
+            return False, "unstable_quote_observed"
+        if "print_quote_alignment" in stability:
+            min_alignment = _to_float(
+                getattr(TRADING_RULES, "SCALP_LATENCY_SPREAD_RELIEF_MIN_PRINT_QUOTE_ALIGNMENT", 0.90),
+                0.90,
+            )
+            if min_alignment > 0 and _to_float(stability.get("print_quote_alignment"), 1.0) < min_alignment:
+                return False, "print_quote_alignment_too_low"
 
     allowed_slippage = _ENTRY_POLICY._allowed_slippage(
         signal_price=signal_price,
@@ -1538,6 +1551,7 @@ def evaluate_live_buy_entry(
     )
     if policy.decision == EntryDecision.REJECT_DANGER and effective_decision == EntryDecision.REJECT_DANGER:
         spread_relief_ok, spread_relief_reason = _should_apply_latency_spread_relief_canary(
+            code=code,
             strategy_id=strategy_id,
             position_tag=spread_relief_tag,
             signal_strength=float(signal_strength or 0.0),
@@ -1559,7 +1573,11 @@ def evaluate_live_buy_entry(
                 f"danger_reasons={latency_danger_reasons}"
             )
         else:
-            if not latency_canary_reason or latency_canary_reason == "disabled":
+            if (
+                not latency_canary_reason
+                or latency_canary_reason == "disabled"
+                or (latency_canary_reason == "danger_hard_safety_block" and spread_relief_reason != "disabled")
+            ):
                 latency_canary_reason = spread_relief_reason
 
     if policy.decision == EntryDecision.REJECT_DANGER and not danger_relief_forbidden and effective_decision == EntryDecision.REJECT_DANGER:

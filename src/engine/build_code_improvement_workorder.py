@@ -28,6 +28,7 @@ HOLDING_EXIT_DECISION_MATRIX_DIR = REPORT_DIR / "holding_exit_decision_matrix"
 LIFECYCLE_DECISION_MATRIX_DIR = REPORT_DIR / "lifecycle_decision_matrix"
 PIPELINE_EVENT_VERBOSITY_DIR = REPORT_DIR / "pipeline_event_verbosity"
 OBSERVATION_SOURCE_QUALITY_AUDIT_DIR = REPORT_DIR / "observation_source_quality_audit"
+AI_WATCHING_SCORE_SMOOTHING_DIAGNOSTIC_DIR = REPORT_DIR / "ai_watching_score_smoothing_diagnostic"
 CODEBASE_PERFORMANCE_WORKORDER_DIR = REPORT_DIR / "codebase_performance_workorder"
 PATTERN_LAB_CURRENTNESS_AUDIT_DIR = REPORT_DIR / "pattern_lab_currentness_audit"
 BUY_FUNNEL_SENTINEL_DIR = REPORT_DIR / "buy_funnel_sentinel"
@@ -3514,6 +3515,10 @@ def _observation_source_quality_audit_path(target_date: str) -> Path:
     return OBSERVATION_SOURCE_QUALITY_AUDIT_DIR / f"observation_source_quality_audit_{target_date}.json"
 
 
+def _ai_watching_score_smoothing_diagnostic_path(target_date: str) -> Path:
+    return AI_WATCHING_SCORE_SMOOTHING_DIAGNOSTIC_DIR / f"ai_watching_score_smoothing_diagnostic_{target_date}.json"
+
+
 def _codebase_performance_report_path(target_date: str) -> Path:
     return CODEBASE_PERFORMANCE_WORKORDER_DIR / f"codebase_performance_workorder_{target_date}.json"
 
@@ -5501,6 +5506,7 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
         observation_source_quality_path,
         isolated_source_mode=isolated_source_mode,
     )
+    watching_score_smoothing_diagnostic_path = _ai_watching_score_smoothing_diagnostic_path(target_date)
     codebase_performance_path = _codebase_performance_report_path(target_date)
     codebase_performance = _load_source_json(codebase_performance_path, isolated_source_mode=isolated_source_mode)
     pattern_lab_currentness_path = pattern_lab_currentness_audit_report_path(target_date)
@@ -5542,6 +5548,7 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
         "lifecycle_bucket_discovery": lifecycle_bucket_discovery_path,
         "pipeline_event_verbosity": pipeline_event_verbosity_path,
         "observation_source_quality_audit": observation_source_quality_path,
+        "ai_watching_score_smoothing_diagnostic": watching_score_smoothing_diagnostic_path,
         "codebase_performance_workorder": codebase_performance_path,
         "pattern_lab_currentness_audit": pattern_lab_currentness_path,
         "pattern_lab_ai_review": pattern_lab_ai_review_path,
@@ -5919,6 +5926,7 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
             "scalp_entry_action_decision_matrix": source_ref("scalp_entry_action_decision_matrix"),
             "pipeline_event_verbosity": source_ref("pipeline_event_verbosity"),
             "observation_source_quality_audit": source_ref("observation_source_quality_audit"),
+            "ai_watching_score_smoothing_diagnostic": source_ref("ai_watching_score_smoothing_diagnostic"),
             "codebase_performance_workorder": source_ref("codebase_performance_workorder"),
             "pattern_lab_currentness_audit": source_ref("pattern_lab_currentness_audit"),
             "pattern_lab_ai_review": source_ref("pattern_lab_ai_review"),
@@ -6133,6 +6141,7 @@ def render_code_improvement_workorder_markdown(report: dict[str, Any]) -> str:
         f"- threshold_cycle_calibration: `{source.get('threshold_cycle_calibration') or '-'}`",
         f"- pipeline_event_verbosity: `{source.get('pipeline_event_verbosity') or '-'}`",
         f"- observation_source_quality_audit: `{source.get('observation_source_quality_audit') or '-'}`",
+        f"- ai_watching_score_smoothing_diagnostic: `{source.get('ai_watching_score_smoothing_diagnostic') or '-'}`",
         f"- codebase_performance_workorder: `{source.get('codebase_performance_workorder') or '-'}`",
         f"- pattern_lab_currentness_audit: `{source.get('pattern_lab_currentness_audit') or '-'}`",
         f"- pattern_lab_ai_review: `{source.get('pattern_lab_ai_review') or '-'}`",

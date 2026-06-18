@@ -23,6 +23,7 @@ from src.engine.sniper_state_handlers import (
     _should_run_score65_74_recovery_probe,
     _should_run_main_buy_recovery_canary,
     _resolve_early_accel_recheck,
+    _resolve_early_accel_strong_bundle_recheck,
     _resolve_ai_numeric_consistency_recheck,
     _resolve_gatekeeper_fast_reuse_sec,
     _resolve_holding_ai_fast_reuse_sec,
@@ -289,6 +290,61 @@ def test_early_accel_recheck_blocks_stale_or_falling_context(monkeypatch):
     assert late_only["skip_reason"] == "scanner_promotion_reason_not_early_accel"
 
 
+def test_early_accel_recheck_hydrates_scanner_promotion_reason_from_pipeline_event(monkeypatch):
+    rules = replace(
+        TRADING_RULES,
+        EARLY_ACCEL_RECHECK_RUNTIME_ENABLED=True,
+        EARLY_ACCEL_RECHECK_MAX_COUNT=2,
+        EARLY_ACCEL_RECHECK_MIN_INTERVAL_SEC=20,
+        EARLY_ACCEL_RECHECK_MAX_AGE_SEC=180,
+        EARLY_ACCEL_RECHECK_MIN_TICK_ACCEL=1.10,
+        EARLY_ACCEL_RECHECK_MIN_MICRO_VWAP_BP=0.0,
+    )
+    monkeypatch.setattr(handlers, "TRADING_RULES", rules)
+    monkeypatch.setattr(
+        handlers,
+        "_load_scanner_promotion_context_events",
+        lambda _target_date: {
+            "111111": [
+                {
+                    "emitted_epoch": 100.0,
+                    "fields": {
+                        "scanner_promotion_reason": "probe_acceleration_confirmed",
+                        "source_signature": "PRICE_JUMP_START,VOLUME_SURGE_POSITIVE",
+                        "price_delta_since_first_seen_pct": "0.55",
+                        "comparable_flu_delta_since_first_seen": "0.62",
+                        "cntr_str_available": "true",
+                        "cntr_str": "118.0",
+                    },
+                }
+            ]
+        },
+    )
+    stock = {
+        "code": "111111",
+        "date": "2026-06-18",
+        "position_tag": "SCANNER",
+        "buy_price": 12280,
+        "entry_armed_at_epoch": 100.0,
+        "early_accel_recheck_count": 0,
+    }
+
+    result = _resolve_early_accel_recheck(
+        stock,
+        {"curr": 12430, "tick_acceleration_ratio": 1.25, "curr_vs_micro_vwap_bp": 12.0, "quote_stale": False},
+        now_ts=130.0,
+        last_ai_time=105.0,
+        cooldown_sec=90,
+        strategy="SCALPING",
+        pos_tag="SCANNER",
+        current_ai_score=64.0,
+    )
+
+    assert result["allowed"] is True
+    assert result["scanner_promotion_reason"] == "probe_acceleration_confirmed"
+    assert stock["source_signature"] == "PRICE_JUMP_START,VOLUME_SURGE_POSITIVE"
+
+
 def test_entry_adm_snapshot_records_feature_parity_and_numeric_consistency(monkeypatch):
     logs = []
 
@@ -541,6 +597,220 @@ def test_ai_numeric_consistency_recheck_blocks_sim_and_stale_scope(monkeypatch):
     assert sim["allowed"] is False
     assert sim["skip_reason"] == "sim_or_probe_scope"
 
+
+def test_early_accel_strong_bundle_recheck_allows_strong_scanner_bundle(monkeypatch):
+    rules = replace(
+        TRADING_RULES,
+        EARLY_ACCEL_STRONG_BUNDLE_RECHECK_ENABLED=True,
+        EARLY_ACCEL_STRONG_BUNDLE_RECHECK_MIN_SCORE=60,
+        EARLY_ACCEL_STRONG_BUNDLE_RECHECK_MAX_SCORE=66,
+        EARLY_ACCEL_STRONG_BUNDLE_RECHECK_BUY_MIN_SCORE=75,
+        EARLY_ACCEL_STRONG_BUNDLE_RECHECK_MIN_PASS_COUNT=2,
+        EARLY_ACCEL_STRONG_BUNDLE_RECHECK_MAX_PER_SYMBOL=1,
+    )
+    monkeypatch.setattr(handlers, "TRADING_RULES", rules)
+    stock = {
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "scanner_promotion_reason": "price_jump_start_acceleration",
+        "source_signature": "PRICE_JUMP_START,VOLUME_SURGE_POSITIVE",
+        "price_delta_since_first_seen_pct": "0.62",
+        "comparable_flu_delta_since_first_seen": "0.71",
+        "cntr_str_available": True,
+        "cntr_str": 118.0,
+        "early_accel_strong_bundle_recheck_count": 0,
+    }
+    decision = {
+        "action": "WAIT",
+        "score": 62,
+        "tick_acceleration_ratio": 1.18,
+        "curr_vs_micro_vwap_bp": 7.5,
+        "buy_pressure_10t": 70.0,
+    }
+
+    result = _resolve_early_accel_strong_bundle_recheck(
+        stock,
+        {"quote_stale": False, "context_stale": False},
+        strategy="SCALPING",
+        ai_decision=decision,
+        ai_score=62.0,
+    )
+
+    assert result["allowed"] is True
+    assert result["strong_bundle_pass_count"] >= 2
+    assert result["skip_reason"] == "allowed"
+
+
+def test_early_accel_strong_bundle_recheck_skips_weak_or_out_of_band_candidates(monkeypatch):
+    rules = replace(
+        TRADING_RULES,
+        EARLY_ACCEL_STRONG_BUNDLE_RECHECK_ENABLED=True,
+        EARLY_ACCEL_STRONG_BUNDLE_RECHECK_MIN_SCORE=60,
+        EARLY_ACCEL_STRONG_BUNDLE_RECHECK_MAX_SCORE=66,
+        EARLY_ACCEL_STRONG_BUNDLE_RECHECK_MIN_PASS_COUNT=2,
+        EARLY_ACCEL_STRONG_BUNDLE_RECHECK_MAX_PER_SYMBOL=1,
+    )
+    monkeypatch.setattr(handlers, "TRADING_RULES", rules)
+    weak_stock = {
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "scanner_promotion_reason": "new_price_jump_start_source",
+        "source_signature": "PRICE_JUMP_START",
+        "price_delta_since_first_seen_pct": "0.10",
+        "comparable_flu_delta_since_first_seen": "0.10",
+        "cntr_str_available": False,
+        "cntr_str": 0.0,
+        "early_accel_strong_bundle_recheck_count": 0,
+    }
+    weak_decision = {
+        "action": "WAIT",
+        "score": 62,
+        "tick_acceleration_ratio": 0.95,
+        "curr_vs_micro_vwap_bp": -1.0,
+        "buy_pressure_10t": 50.0,
+    }
+    weak = _resolve_early_accel_strong_bundle_recheck(
+        weak_stock,
+        {"quote_stale": False, "context_stale": False},
+        strategy="SCALPING",
+        ai_decision=weak_decision,
+        ai_score=62.0,
+    )
+    assert weak["allowed"] is False
+    assert weak["skip_reason"] == "strong_bundle_below_min_pass_count"
+
+    low_score = _resolve_early_accel_strong_bundle_recheck(
+        weak_stock,
+        {"quote_stale": False, "context_stale": False},
+        strategy="SCALPING",
+        ai_decision={**weak_decision, "score": 58},
+        ai_score=58.0,
+    )
+    assert low_score["allowed"] is False
+    assert low_score["skip_reason"] == "score_below_min"
+
+    high_score = _resolve_early_accel_strong_bundle_recheck(
+        weak_stock,
+        {"quote_stale": False, "context_stale": False},
+        strategy="SCALPING",
+        ai_decision={**weak_decision, "score": 67},
+        ai_score=67.0,
+    )
+    assert high_score["allowed"] is False
+    assert high_score["skip_reason"] == "score_above_max"
+
+
+def test_early_accel_strong_bundle_recheck_skips_scope_and_safety_blocks(monkeypatch):
+    rules = replace(TRADING_RULES, EARLY_ACCEL_STRONG_BUNDLE_RECHECK_ENABLED=True)
+    monkeypatch.setattr(handlers, "TRADING_RULES", rules)
+    decision = {
+        "action": "WAIT",
+        "score": 62,
+        "tick_acceleration_ratio": 1.20,
+        "curr_vs_micro_vwap_bp": 4.0,
+        "buy_pressure_10t": 70.0,
+    }
+    stock = {
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "scanner_promotion_reason": "probe_acceleration_confirmed",
+        "source_signature": "PRICE_JUMP_START,VOLUME_SURGE_POSITIVE",
+        "price_delta_since_first_seen_pct": "0.60",
+        "comparable_flu_delta_since_first_seen": "0.60",
+        "cntr_str_available": True,
+        "cntr_str": 120.0,
+        "scalp_pre_ai_gate_context": {"source_quality": {"gate_action": "source_quality_block"}},
+    }
+
+    stale = _resolve_early_accel_strong_bundle_recheck(
+        stock,
+        {"quote_stale": True},
+        strategy="SCALPING",
+        ai_decision=decision,
+        ai_score=62.0,
+    )
+    assert stale["allowed"] is False
+    assert stale["skip_reason"] == "stale_quote_or_context"
+
+    source_quality = _resolve_early_accel_strong_bundle_recheck(
+        stock,
+        {"quote_stale": False},
+        strategy="SCALPING",
+        ai_decision=decision,
+        ai_score=62.0,
+    )
+    assert source_quality["allowed"] is False
+    assert source_quality["skip_reason"] == "source_quality_hard_block"
+
+    sim = _resolve_early_accel_strong_bundle_recheck(
+        {**stock, "scalp_live_simulator": True, "broker_order_forbidden": True},
+        {"quote_stale": False},
+        strategy="SCALPING",
+        ai_decision=decision,
+        ai_score=62.0,
+    )
+    assert sim["allowed"] is False
+    assert sim["skip_reason"] == "sim_or_probe_scope"
+
+
+def test_early_accel_strong_bundle_recheck_hydrates_scanner_bundle_from_pipeline_event(monkeypatch):
+    rules = replace(
+        TRADING_RULES,
+        EARLY_ACCEL_STRONG_BUNDLE_RECHECK_ENABLED=True,
+        EARLY_ACCEL_STRONG_BUNDLE_RECHECK_MIN_SCORE=60,
+        EARLY_ACCEL_STRONG_BUNDLE_RECHECK_MAX_SCORE=66,
+        EARLY_ACCEL_STRONG_BUNDLE_RECHECK_BUY_MIN_SCORE=75,
+        EARLY_ACCEL_STRONG_BUNDLE_RECHECK_MIN_PASS_COUNT=2,
+        EARLY_ACCEL_STRONG_BUNDLE_RECHECK_MAX_PER_SYMBOL=1,
+    )
+    monkeypatch.setattr(handlers, "TRADING_RULES", rules)
+    monkeypatch.setattr(
+        handlers,
+        "_load_scanner_promotion_context_events",
+        lambda _target_date: {
+            "222222": [
+                {
+                    "emitted_epoch": 100.0,
+                    "fields": {
+                        "scanner_promotion_reason": "price_jump_start_acceleration",
+                        "source_signature": "PRICE_JUMP_START,VOLUME_SURGE_POSITIVE",
+                        "price_delta_since_first_seen_pct": "0.62",
+                        "comparable_flu_delta_since_first_seen": "0.71",
+                        "cntr_str_available": "true",
+                        "cntr_str": "118.0",
+                    },
+                }
+            ]
+        },
+    )
+    stock = {
+        "code": "222222",
+        "date": "2026-06-18",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "entry_armed_at_epoch": 100.0,
+        "early_accel_strong_bundle_recheck_count": 0,
+    }
+    decision = {
+        "action": "WAIT",
+        "score": 62,
+        "tick_acceleration_ratio": 1.18,
+        "curr_vs_micro_vwap_bp": 7.5,
+        "buy_pressure_10t": 70.0,
+    }
+
+    result = _resolve_early_accel_strong_bundle_recheck(
+        stock,
+        {"quote_stale": False, "context_stale": False},
+        strategy="SCALPING",
+        ai_decision=decision,
+        ai_score=62.0,
+    )
+
+    assert result["allowed"] is True
+    assert result["scanner_promotion_reason"] == "price_jump_start_acceleration"
+    assert result["strong_bundle_pass_count"] >= 2
+    assert stock["price_delta_since_first_seen_pct"] == "0.62"
 
 def test_scalping_entry_blocker_role_registry_marks_score6574_micro_as_runtime_gate():
     assert SCALPING_ENTRY_BLOCKER_ROLE_REGISTRY["blocked_gap_from_scan"]["role"] == "baseline_prior_feature"

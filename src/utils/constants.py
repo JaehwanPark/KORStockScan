@@ -60,6 +60,15 @@ class TradingConfig:
     SCALPING_PYRAMID_MIN_AI_SCORE: int = 70  # PYRAMID 허용 AI 최소점수
     SCALPING_PYRAMID_MIN_BUY_PRESSURE: float = 60.0  # PYRAMID 허용 매수압 최소값
     SCALPING_PYRAMID_MIN_TICK_ACCEL: float = 0.5  # PYRAMID 허용 틱 가속 최소값
+    REAL_PYRAMID_MICRO_CONTEXT_GUARD_ENABLED: bool = False  # real SCALPING PYRAMID micro context guard; PREOPEN env only
+    PENDING_SCALE_IN_REVALIDATION_CANCEL_ENABLED: bool = False  # real pending PYRAMID revalidation cancel; PREOPEN env only
+    PENDING_SCALE_IN_REVALIDATION_MIN_AI_SCORE: int = 66
+    PENDING_SCALE_IN_REVALIDATION_MIN_TICK_ACCEL: float = 1.10
+    PENDING_SCALE_IN_REVALIDATION_MIN_BUY_PRESSURE: float = 60.0
+    PENDING_SCALE_IN_REVALIDATION_MIN_MICRO_VWAP_BP: float = 0.0
+    RECENT_EXIT_CANDIDATE_PYRAMID_BLOCK_ENABLED: bool = False  # real PYRAMID block after recent exit candidate; PREOPEN env only
+    RECENT_EXIT_CANDIDATE_PYRAMID_BLOCK_SEC: int = 180
+    SCALE_IN_LIVE_TUNING_SELECTED: bool = False
     STAT_ACTION_DECISION_SNAPSHOT_ENABLED: bool = True  # 행동가중치용 HOLDING decision snapshot observe-only
     STAT_ACTION_DECISION_SNAPSHOT_MIN_INTERVAL_SEC: int = 30  # IO guard: 종목별 snapshot 최소 간격
 
@@ -75,6 +84,8 @@ class TradingConfig:
     SCALP_SAME_SYMBOL_LOSS_REENTRY_COOLDOWN_SEC: int = 3600  # soft/protect/refined 손실 후 60분 재진입 금지
     SCALP_SOFT_STOP_SAME_SYMBOL_COOLDOWN_SHADOW_ENABLED: bool = False  # live loss reentry cooldown 전환 후 shadow 기본 OFF
     SCALP_SOFT_STOP_SAME_SYMBOL_COOLDOWN_SHADOW_SEC: int = 600  # historical/replay 전용 기준
+    SELL_ORDER_FAILURE_RETRY_BACKOFF_ENABLED: bool = True  # broker reject burst 방지용 sell retry backoff
+    SELL_ORDER_FAILURE_RETRY_BACKOFF_SEC: int = 30
 
     # ==========================================
     # 3.3 추가매수(스윙) 설정
@@ -177,6 +188,9 @@ class TradingConfig:
     SCALPING_MIN_ONE_SHARE_FLOOR_ENABLED: bool = True  # 비중 예산 초과 시 주문가능금액 내 최소 1주 허용
     BUY_SIDE_TIME_BLOCK_ENABLED: bool = True  # 신규 매수/추가매수 브로커 제출 시간 차단
     BUY_SIDE_TIME_BLOCK_UNTIL_HHMM: str = "09:10"  # KST 기준, 이 시각 전 BUY 제출 차단
+    SELL_SIDE_OPEN_TIME_BLOCK_ENABLED: bool = False  # real SCALPING discretionary SELL 장초반 제출 차단
+    SELL_SIDE_OPEN_TIME_BLOCK_UNTIL_HHMM: str = "09:03"  # KST 기준, 이 시각 전 SELL 제출 차단
+    SELL_SIDE_OPEN_TIME_BLOCK_SCOPE: str = "discretionary_exit_only"
 
     # 💡 [신규 추가] 스윙 AI 동적 비중 조절용 (Min~Max)
     INVEST_RATIO_KOSDAQ_MIN: float = 0.05  # 코스닥 AI 점수 60점일 때 (5%)
@@ -269,6 +283,11 @@ class TradingConfig:
     SCALP_SOFT_STOP_DYNAMIC_GRACE_MIN_AI_SCORE: int = 65
     SCALP_SOFT_STOP_DYNAMIC_GRACE_EMERGENCY_PCT: float = -2.8
     SCALP_SOFT_STOP_DYNAMIC_GRACE_MAX_WORSEN_PCT: float = 0.30
+    NEVER_GREEN_DEFER_CLAMP_ENABLED: bool = False  # real SCALPING holding-flow defer clamp; PREOPEN env only
+    NEVER_GREEN_DEFER_CLAMP_MAX_PEAK_PROFIT_PCT: float = 0.05
+    NEVER_GREEN_DEFER_CLAMP_MIN_DEFER_COUNT: int = 2
+    NEVER_GREEN_DEFER_CLAMP_MAX_MICRO_VWAP_BP: float = 0.0
+    NEVER_GREEN_DEFER_CLAMP_MIN_LOSS_PCT: float = 0.0
     HOLDING_EXIT_LIVE_TUNING_SELECTED: bool = False
     SCALP_SOFT_STOP_THESIS_TICK_ACCEL_MIN: float = 0.60
     SCALP_SOFT_STOP_THESIS_MICRO_VWAP_BP_MIN: float = -20.0
@@ -311,6 +330,12 @@ class TradingConfig:
     SCALP_LATE_ENTRY_PRICE_DRIFT_MIN_TICK_ACCEL: float = 1.10
     SCALP_LATE_ENTRY_PRICE_DRIFT_MIN_BUY_PRESSURE: float = 0.0
     SCALP_LATE_ENTRY_PRICE_DRIFT_MIN_MICRO_VWAP_BP: float = 0.0
+    WEAK_CONTEXT_LATE_ENTRY_GUARD_ENABLED: bool = False  # real SCALPING weak-context late-entry submit block; PREOPEN env only
+    WEAK_CONTEXT_LATE_ENTRY_LOOKBACK_SEC: int = 900
+    WEAK_CONTEXT_LATE_ENTRY_MIN_BLOCK_COUNT: int = 2
+    WEAK_CONTEXT_LATE_ENTRY_MIN_TICK_ACCEL: float = 1.10
+    WEAK_CONTEXT_LATE_ENTRY_MIN_BUY_PRESSURE: float = 0.0
+    WEAK_CONTEXT_LATE_ENTRY_MIN_MICRO_VWAP_BP: float = 0.0
     SCALPING_NORMAL_DEFENSIVE_TICKS: int = 1  # 일반 SCALPING 실주문 기본 방어 제출가 tick offset
     SCALPING_NORMAL_DEFENSIVE_BPS: int = 25  # percent_bps 모드 일반 방어 제출가 bp (0.25%)
     SCALPING_CONDITIONAL_STRONG_DEFENSIVE_BPS: int = 10  # percent_bps 모드 강세 조건 방어 제출가 bp (0.1%)
@@ -343,6 +368,12 @@ class TradingConfig:
     EARLY_ACCEL_RECHECK_MIN_MICRO_VWAP_BP: float = 0.0
     EARLY_ACCEL_RECHECK_ALLOW_LIQUIDITY_BLOCKED: bool = True
     EARLY_ACCEL_RECHECK_ALLOW_STRENGTH_BLOCKED: bool = True
+    EARLY_ACCEL_STRONG_BUNDLE_RECHECK_ENABLED: bool = False
+    EARLY_ACCEL_STRONG_BUNDLE_RECHECK_MIN_SCORE: int = 60
+    EARLY_ACCEL_STRONG_BUNDLE_RECHECK_MAX_SCORE: int = 66
+    EARLY_ACCEL_STRONG_BUNDLE_RECHECK_BUY_MIN_SCORE: int = 75
+    EARLY_ACCEL_STRONG_BUNDLE_RECHECK_MIN_PASS_COUNT: int = 2
+    EARLY_ACCEL_STRONG_BUNDLE_RECHECK_MAX_PER_SYMBOL: int = 1
     AI_NUMERIC_CONSISTENCY_RECHECK_ENABLED: bool = False
     AI_NUMERIC_CONSISTENCY_RECHECK_MIN_SCORE: int = 60
     AI_NUMERIC_CONSISTENCY_RECHECK_BUY_MIN_SCORE: int = 75
@@ -454,6 +485,8 @@ class TradingConfig:
     SCALP_LATENCY_SPREAD_RELIEF_MIN_SIGNAL_SCORE: float = 85.0  # spread relief 최소 AI 점수
     SCALP_LATENCY_SPREAD_RELIEF_EFFECTIVE_MIN_SIGNAL_SCORE_FLOOR: float = 85.0
     SCALP_LATENCY_SPREAD_RELIEF_MAX_SPREAD_RATIO: float = 0.0120  # spread relief 최대 허용 spread_ratio
+    SCALP_LATENCY_SPREAD_RELIEF_BLOCK_UNSTABLE_QUOTE: bool = True
+    SCALP_LATENCY_SPREAD_RELIEF_MIN_PRINT_QUOTE_ALIGNMENT: float = 0.90
     SCALP_LATENCY_WS_JITTER_RELIEF_CANARY_ENABLED: bool = False  # 2026-04-27 15:00 미개선 종료: ws_jitter-only residual live 축 OFF
     SCALP_LATENCY_WS_JITTER_RELIEF_TAGS: tuple = ("SCANNER", "VWAP_RECLAIM", "OPEN_RECLAIM")  # ws_jitter relief 적용 태그
     SCALP_LATENCY_WS_JITTER_RELIEF_MIN_SIGNAL_SCORE: float = 85.0  # ws_jitter relief 최소 AI 점수
@@ -751,6 +784,7 @@ class TradingConfig:
     HOLDING_EXIT_MATRIX_PYRAMID_MIN_PROFIT_PCT: float = 0.80
     HOLDING_EXIT_MATRIX_PYRAMID_MIN_AI_SCORE: int = 75
     HOLDING_EXIT_MATRIX_PYRAMID_MAX_DRAWDOWN_FROM_PEAK_PCT: float = 0.35
+    SCALPING_OVERNIGHT_GATEKEEPER_ENABLED: bool = False  # real-only overnight 판정/청산 기본 OFF, runtime env로만 ON
     HOLDING_FLOW_OVERRIDE_ENABLED: bool = True  # 운영 override: 단일 보유/청산 점수 대신 흐름 판단으로 최종 청산
     HOLDING_FLOW_OVERRIDE_WORSEN_PCT: float = 0.80  # 최초 후보 대비 추가 악화 허용폭(%p)
     HOLDING_FLOW_OVERRIDE_MAX_DEFER_SEC: int = 90  # flow HOLD/TRIM 보류 최대 시간
@@ -910,6 +944,12 @@ def _build_trading_rules() -> TradingConfig:
     env_spread_relief_tags = _env_csv_tuple("KORSTOCKSCAN_SCALP_LATENCY_SPREAD_RELIEF_TAGS")
     env_spread_relief_min_signal = _env_float("KORSTOCKSCAN_SCALP_LATENCY_SPREAD_RELIEF_MIN_SIGNAL_SCORE")
     env_spread_relief_max_spread = _env_float("KORSTOCKSCAN_SCALP_LATENCY_SPREAD_RELIEF_MAX_SPREAD_RATIO")
+    env_spread_relief_block_unstable = _env_bool(
+        "KORSTOCKSCAN_SCALP_LATENCY_SPREAD_RELIEF_BLOCK_UNSTABLE_QUOTE"
+    )
+    env_spread_relief_min_print_alignment = _env_float(
+        "KORSTOCKSCAN_SCALP_LATENCY_SPREAD_RELIEF_MIN_PRINT_QUOTE_ALIGNMENT"
+    )
     env_mechanical_momentum_enabled = _env_bool(
         "KORSTOCKSCAN_SCALP_LATENCY_MECHANICAL_MOMENTUM_RELIEF_CANARY_ENABLED"
     )
@@ -954,6 +994,8 @@ def _build_trading_rules() -> TradingConfig:
         or env_spread_relief_tags is not None
         or env_spread_relief_min_signal is not None
         or env_spread_relief_max_spread is not None
+        or env_spread_relief_block_unstable is not None
+        or env_spread_relief_min_print_alignment is not None
         or env_mechanical_momentum_enabled is not None
         or env_mechanical_momentum_tags is not None
         or env_mechanical_momentum_max_signal is not None
@@ -1022,6 +1064,12 @@ def _build_trading_rules() -> TradingConfig:
             SCALP_LATENCY_SPREAD_RELIEF_MAX_SPREAD_RATIO=env_spread_relief_max_spread
             if env_spread_relief_max_spread is not None
             else config.SCALP_LATENCY_SPREAD_RELIEF_MAX_SPREAD_RATIO,
+            SCALP_LATENCY_SPREAD_RELIEF_BLOCK_UNSTABLE_QUOTE=env_spread_relief_block_unstable
+            if env_spread_relief_block_unstable is not None
+            else config.SCALP_LATENCY_SPREAD_RELIEF_BLOCK_UNSTABLE_QUOTE,
+            SCALP_LATENCY_SPREAD_RELIEF_MIN_PRINT_QUOTE_ALIGNMENT=env_spread_relief_min_print_alignment
+            if env_spread_relief_min_print_alignment is not None
+            else config.SCALP_LATENCY_SPREAD_RELIEF_MIN_PRINT_QUOTE_ALIGNMENT,
             SCALP_LATENCY_MECHANICAL_MOMENTUM_RELIEF_CANARY_ENABLED=env_mechanical_momentum_enabled
             if env_mechanical_momentum_enabled is not None
             else config.SCALP_LATENCY_MECHANICAL_MOMENTUM_RELIEF_CANARY_ENABLED,
@@ -1274,6 +1322,24 @@ def _build_trading_rules() -> TradingConfig:
     env_late_entry_price_drift_min_micro_vwap = _env_float(
         "KORSTOCKSCAN_SCALP_LATE_ENTRY_PRICE_DRIFT_MIN_MICRO_VWAP_BP"
     )
+    env_weak_context_late_entry_guard_enabled = _env_bool(
+        "KORSTOCKSCAN_WEAK_CONTEXT_LATE_ENTRY_GUARD_ENABLED"
+    )
+    env_weak_context_late_entry_lookback_sec = _env_int(
+        "KORSTOCKSCAN_WEAK_CONTEXT_LATE_ENTRY_LOOKBACK_SEC"
+    )
+    env_weak_context_late_entry_min_block_count = _env_int(
+        "KORSTOCKSCAN_WEAK_CONTEXT_LATE_ENTRY_MIN_BLOCK_COUNT"
+    )
+    env_weak_context_late_entry_min_tick_accel = _env_float(
+        "KORSTOCKSCAN_WEAK_CONTEXT_LATE_ENTRY_MIN_TICK_ACCEL"
+    )
+    env_weak_context_late_entry_min_buy_pressure = _env_float(
+        "KORSTOCKSCAN_WEAK_CONTEXT_LATE_ENTRY_MIN_BUY_PRESSURE"
+    )
+    env_weak_context_late_entry_min_micro_vwap = _env_float(
+        "KORSTOCKSCAN_WEAK_CONTEXT_LATE_ENTRY_MIN_MICRO_VWAP_BP"
+    )
     env_scalping_normal_defensive_ticks = _env_int("KORSTOCKSCAN_SCALPING_NORMAL_DEFENSIVE_TICKS")
     env_scalping_normal_defensive_bps = _env_int("KORSTOCKSCAN_SCALPING_NORMAL_DEFENSIVE_BPS")
     env_scalping_conditional_strong_defensive_bps = _env_int("KORSTOCKSCAN_SCALPING_CONDITIONAL_STRONG_DEFENSIVE_BPS")
@@ -1339,6 +1405,24 @@ def _build_trading_rules() -> TradingConfig:
     )
     env_early_accel_recheck_allow_strength = _env_bool(
         "KORSTOCKSCAN_EARLY_ACCEL_RECHECK_ALLOW_STRENGTH_BLOCKED"
+    )
+    env_early_accel_strong_bundle_recheck_enabled = _env_bool(
+        "KORSTOCKSCAN_EARLY_ACCEL_STRONG_BUNDLE_RECHECK_ENABLED"
+    )
+    env_early_accel_strong_bundle_recheck_min_score = _env_int(
+        "KORSTOCKSCAN_EARLY_ACCEL_STRONG_BUNDLE_RECHECK_MIN_SCORE"
+    )
+    env_early_accel_strong_bundle_recheck_max_score = _env_int(
+        "KORSTOCKSCAN_EARLY_ACCEL_STRONG_BUNDLE_RECHECK_MAX_SCORE"
+    )
+    env_early_accel_strong_bundle_recheck_buy_min_score = _env_int(
+        "KORSTOCKSCAN_EARLY_ACCEL_STRONG_BUNDLE_RECHECK_BUY_MIN_SCORE"
+    )
+    env_early_accel_strong_bundle_recheck_min_pass_count = _env_int(
+        "KORSTOCKSCAN_EARLY_ACCEL_STRONG_BUNDLE_RECHECK_MIN_PASS_COUNT"
+    )
+    env_early_accel_strong_bundle_recheck_max_per_symbol = _env_int(
+        "KORSTOCKSCAN_EARLY_ACCEL_STRONG_BUNDLE_RECHECK_MAX_PER_SYMBOL"
     )
     env_ai_numeric_consistency_recheck_enabled = _env_bool(
         "KORSTOCKSCAN_AI_NUMERIC_CONSISTENCY_RECHECK_ENABLED"
@@ -1476,6 +1560,19 @@ def _build_trading_rules() -> TradingConfig:
     env_soft_stop_dynamic_grace_max_worsen = _env_float(
         "KORSTOCKSCAN_SCALP_SOFT_STOP_DYNAMIC_GRACE_MAX_WORSEN_PCT"
     )
+    env_never_green_defer_clamp_enabled = _env_bool("KORSTOCKSCAN_NEVER_GREEN_DEFER_CLAMP_ENABLED")
+    env_never_green_defer_clamp_max_peak_profit_pct = _env_float(
+        "KORSTOCKSCAN_NEVER_GREEN_DEFER_CLAMP_MAX_PEAK_PROFIT_PCT"
+    )
+    env_never_green_defer_clamp_min_defer_count = _env_int(
+        "KORSTOCKSCAN_NEVER_GREEN_DEFER_CLAMP_MIN_DEFER_COUNT"
+    )
+    env_never_green_defer_clamp_max_micro_vwap_bp = _env_float(
+        "KORSTOCKSCAN_NEVER_GREEN_DEFER_CLAMP_MAX_MICRO_VWAP_BP"
+    )
+    env_never_green_defer_clamp_min_loss_pct = _env_float(
+        "KORSTOCKSCAN_NEVER_GREEN_DEFER_CLAMP_MIN_LOSS_PCT"
+    )
     env_holding_exit_live_tuning_selected = _env_bool("KORSTOCKSCAN_HOLDING_EXIT_LIVE_TUNING_SELECTED")
     env_preset_tp_soft_stop_enabled = _env_bool("KORSTOCKSCAN_SCALP_PRESET_TP_SOFT_STOP_OVERRIDE_ENABLED")
     env_preset_tp_soft_stop_trigger = _env_float("KORSTOCKSCAN_SCALP_PRESET_TP_SOFT_STOP_TRIGGER_PCT")
@@ -1523,6 +1620,18 @@ def _build_trading_rules() -> TradingConfig:
         or env_partial_fill_min_preset is not None
         or env_pre_submit_price_guard_enabled is not None
         or env_pre_submit_max_below_bid_bps is not None
+        or env_late_entry_price_drift_guard_enabled is not None
+        or env_late_entry_price_drift_hard_bps is not None
+        or env_late_entry_price_drift_soft_bps is not None
+        or env_late_entry_price_drift_min_tick_accel is not None
+        or env_late_entry_price_drift_min_buy_pressure is not None
+        or env_late_entry_price_drift_min_micro_vwap is not None
+        or env_weak_context_late_entry_guard_enabled is not None
+        or env_weak_context_late_entry_lookback_sec is not None
+        or env_weak_context_late_entry_min_block_count is not None
+        or env_weak_context_late_entry_min_tick_accel is not None
+        or env_weak_context_late_entry_min_buy_pressure is not None
+        or env_weak_context_late_entry_min_micro_vwap is not None
         or env_scalping_normal_defensive_ticks is not None
         or env_scalping_normal_defensive_bps is not None
         or env_scalping_conditional_strong_defensive_bps is not None
@@ -1622,6 +1731,11 @@ def _build_trading_rules() -> TradingConfig:
         or env_soft_stop_dynamic_grace_min_ai is not None
         or env_soft_stop_dynamic_grace_emergency is not None
         or env_soft_stop_dynamic_grace_max_worsen is not None
+        or env_never_green_defer_clamp_enabled is not None
+        or env_never_green_defer_clamp_max_peak_profit_pct is not None
+        or env_never_green_defer_clamp_min_defer_count is not None
+        or env_never_green_defer_clamp_max_micro_vwap_bp is not None
+        or env_never_green_defer_clamp_min_loss_pct is not None
         or env_holding_exit_live_tuning_selected is not None
         or env_preset_tp_soft_stop_enabled is not None
         or env_preset_tp_soft_stop_trigger is not None
@@ -1731,6 +1845,24 @@ def _build_trading_rules() -> TradingConfig:
             SCALP_LATE_ENTRY_PRICE_DRIFT_MIN_MICRO_VWAP_BP=env_late_entry_price_drift_min_micro_vwap
             if env_late_entry_price_drift_min_micro_vwap is not None
             else config.SCALP_LATE_ENTRY_PRICE_DRIFT_MIN_MICRO_VWAP_BP,
+            WEAK_CONTEXT_LATE_ENTRY_GUARD_ENABLED=env_weak_context_late_entry_guard_enabled
+            if env_weak_context_late_entry_guard_enabled is not None
+            else config.WEAK_CONTEXT_LATE_ENTRY_GUARD_ENABLED,
+            WEAK_CONTEXT_LATE_ENTRY_LOOKBACK_SEC=env_weak_context_late_entry_lookback_sec
+            if env_weak_context_late_entry_lookback_sec is not None
+            else config.WEAK_CONTEXT_LATE_ENTRY_LOOKBACK_SEC,
+            WEAK_CONTEXT_LATE_ENTRY_MIN_BLOCK_COUNT=env_weak_context_late_entry_min_block_count
+            if env_weak_context_late_entry_min_block_count is not None
+            else config.WEAK_CONTEXT_LATE_ENTRY_MIN_BLOCK_COUNT,
+            WEAK_CONTEXT_LATE_ENTRY_MIN_TICK_ACCEL=env_weak_context_late_entry_min_tick_accel
+            if env_weak_context_late_entry_min_tick_accel is not None
+            else config.WEAK_CONTEXT_LATE_ENTRY_MIN_TICK_ACCEL,
+            WEAK_CONTEXT_LATE_ENTRY_MIN_BUY_PRESSURE=env_weak_context_late_entry_min_buy_pressure
+            if env_weak_context_late_entry_min_buy_pressure is not None
+            else config.WEAK_CONTEXT_LATE_ENTRY_MIN_BUY_PRESSURE,
+            WEAK_CONTEXT_LATE_ENTRY_MIN_MICRO_VWAP_BP=env_weak_context_late_entry_min_micro_vwap
+            if env_weak_context_late_entry_min_micro_vwap is not None
+            else config.WEAK_CONTEXT_LATE_ENTRY_MIN_MICRO_VWAP_BP,
             SCALPING_NORMAL_DEFENSIVE_TICKS=env_scalping_normal_defensive_ticks
             if env_scalping_normal_defensive_ticks is not None
             else config.SCALPING_NORMAL_DEFENSIVE_TICKS,
@@ -1827,6 +1959,24 @@ def _build_trading_rules() -> TradingConfig:
             EARLY_ACCEL_RECHECK_ALLOW_STRENGTH_BLOCKED=env_early_accel_recheck_allow_strength
             if env_early_accel_recheck_allow_strength is not None
             else config.EARLY_ACCEL_RECHECK_ALLOW_STRENGTH_BLOCKED,
+            EARLY_ACCEL_STRONG_BUNDLE_RECHECK_ENABLED=env_early_accel_strong_bundle_recheck_enabled
+            if env_early_accel_strong_bundle_recheck_enabled is not None
+            else config.EARLY_ACCEL_STRONG_BUNDLE_RECHECK_ENABLED,
+            EARLY_ACCEL_STRONG_BUNDLE_RECHECK_MIN_SCORE=env_early_accel_strong_bundle_recheck_min_score
+            if env_early_accel_strong_bundle_recheck_min_score is not None
+            else config.EARLY_ACCEL_STRONG_BUNDLE_RECHECK_MIN_SCORE,
+            EARLY_ACCEL_STRONG_BUNDLE_RECHECK_MAX_SCORE=env_early_accel_strong_bundle_recheck_max_score
+            if env_early_accel_strong_bundle_recheck_max_score is not None
+            else config.EARLY_ACCEL_STRONG_BUNDLE_RECHECK_MAX_SCORE,
+            EARLY_ACCEL_STRONG_BUNDLE_RECHECK_BUY_MIN_SCORE=env_early_accel_strong_bundle_recheck_buy_min_score
+            if env_early_accel_strong_bundle_recheck_buy_min_score is not None
+            else config.EARLY_ACCEL_STRONG_BUNDLE_RECHECK_BUY_MIN_SCORE,
+            EARLY_ACCEL_STRONG_BUNDLE_RECHECK_MIN_PASS_COUNT=env_early_accel_strong_bundle_recheck_min_pass_count
+            if env_early_accel_strong_bundle_recheck_min_pass_count is not None
+            else config.EARLY_ACCEL_STRONG_BUNDLE_RECHECK_MIN_PASS_COUNT,
+            EARLY_ACCEL_STRONG_BUNDLE_RECHECK_MAX_PER_SYMBOL=env_early_accel_strong_bundle_recheck_max_per_symbol
+            if env_early_accel_strong_bundle_recheck_max_per_symbol is not None
+            else config.EARLY_ACCEL_STRONG_BUNDLE_RECHECK_MAX_PER_SYMBOL,
             AI_NUMERIC_CONSISTENCY_RECHECK_ENABLED=env_ai_numeric_consistency_recheck_enabled
             if env_ai_numeric_consistency_recheck_enabled is not None
             else config.AI_NUMERIC_CONSISTENCY_RECHECK_ENABLED,
@@ -2073,6 +2223,21 @@ def _build_trading_rules() -> TradingConfig:
             SCALP_SOFT_STOP_DYNAMIC_GRACE_MAX_WORSEN_PCT=env_soft_stop_dynamic_grace_max_worsen
             if env_soft_stop_dynamic_grace_max_worsen is not None
             else config.SCALP_SOFT_STOP_DYNAMIC_GRACE_MAX_WORSEN_PCT,
+            NEVER_GREEN_DEFER_CLAMP_ENABLED=env_never_green_defer_clamp_enabled
+            if env_never_green_defer_clamp_enabled is not None
+            else config.NEVER_GREEN_DEFER_CLAMP_ENABLED,
+            NEVER_GREEN_DEFER_CLAMP_MAX_PEAK_PROFIT_PCT=env_never_green_defer_clamp_max_peak_profit_pct
+            if env_never_green_defer_clamp_max_peak_profit_pct is not None
+            else config.NEVER_GREEN_DEFER_CLAMP_MAX_PEAK_PROFIT_PCT,
+            NEVER_GREEN_DEFER_CLAMP_MIN_DEFER_COUNT=env_never_green_defer_clamp_min_defer_count
+            if env_never_green_defer_clamp_min_defer_count is not None
+            else config.NEVER_GREEN_DEFER_CLAMP_MIN_DEFER_COUNT,
+            NEVER_GREEN_DEFER_CLAMP_MAX_MICRO_VWAP_BP=env_never_green_defer_clamp_max_micro_vwap_bp
+            if env_never_green_defer_clamp_max_micro_vwap_bp is not None
+            else config.NEVER_GREEN_DEFER_CLAMP_MAX_MICRO_VWAP_BP,
+            NEVER_GREEN_DEFER_CLAMP_MIN_LOSS_PCT=env_never_green_defer_clamp_min_loss_pct
+            if env_never_green_defer_clamp_min_loss_pct is not None
+            else config.NEVER_GREEN_DEFER_CLAMP_MIN_LOSS_PCT,
             HOLDING_EXIT_LIVE_TUNING_SELECTED=env_holding_exit_live_tuning_selected
             if env_holding_exit_live_tuning_selected is not None
             else config.HOLDING_EXIT_LIVE_TUNING_SELECTED,
@@ -2355,6 +2520,15 @@ def _build_trading_rules() -> TradingConfig:
     )
     env_buy_side_time_block_enabled = _env_bool("KORSTOCKSCAN_BUY_SIDE_TIME_BLOCK_ENABLED")
     env_buy_side_time_block_until = _env_str("KORSTOCKSCAN_BUY_SIDE_TIME_BLOCK_UNTIL_HHMM")
+    env_sell_side_open_time_block_enabled = _env_bool(
+        "KORSTOCKSCAN_SELL_SIDE_OPEN_TIME_BLOCK_ENABLED"
+    )
+    env_sell_side_open_time_block_until = _env_str(
+        "KORSTOCKSCAN_SELL_SIDE_OPEN_TIME_BLOCK_UNTIL_HHMM"
+    )
+    env_sell_side_open_time_block_scope = _env_str(
+        "KORSTOCKSCAN_SELL_SIDE_OPEN_TIME_BLOCK_SCOPE"
+    )
     env_scale_in_price_resolver_enabled = _env_bool(
         "KORSTOCKSCAN_SCALPING_SCALE_IN_PRICE_RESOLVER_ENABLED"
     )
@@ -2371,6 +2545,31 @@ def _build_trading_rules() -> TradingConfig:
     env_pyramid_min_ai_score = _env_int("KORSTOCKSCAN_SCALPING_PYRAMID_MIN_AI_SCORE")
     env_pyramid_min_buy_pressure = _env_float("KORSTOCKSCAN_SCALPING_PYRAMID_MIN_BUY_PRESSURE")
     env_pyramid_min_tick_accel = _env_float("KORSTOCKSCAN_SCALPING_PYRAMID_MIN_TICK_ACCEL")
+    env_real_pyramid_micro_context_guard_enabled = _env_bool(
+        "KORSTOCKSCAN_REAL_PYRAMID_MICRO_CONTEXT_GUARD_ENABLED"
+    )
+    env_pending_scale_in_revalidation_cancel_enabled = _env_bool(
+        "KORSTOCKSCAN_PENDING_SCALE_IN_REVALIDATION_CANCEL_ENABLED"
+    )
+    env_pending_scale_in_revalidation_min_ai_score = _env_int(
+        "KORSTOCKSCAN_PENDING_SCALE_IN_REVALIDATION_MIN_AI_SCORE"
+    )
+    env_pending_scale_in_revalidation_min_tick_accel = _env_float(
+        "KORSTOCKSCAN_PENDING_SCALE_IN_REVALIDATION_MIN_TICK_ACCEL"
+    )
+    env_pending_scale_in_revalidation_min_buy_pressure = _env_float(
+        "KORSTOCKSCAN_PENDING_SCALE_IN_REVALIDATION_MIN_BUY_PRESSURE"
+    )
+    env_pending_scale_in_revalidation_min_micro_vwap_bp = _env_float(
+        "KORSTOCKSCAN_PENDING_SCALE_IN_REVALIDATION_MIN_MICRO_VWAP_BP"
+    )
+    env_recent_exit_candidate_pyramid_block_enabled = _env_bool(
+        "KORSTOCKSCAN_RECENT_EXIT_CANDIDATE_PYRAMID_BLOCK_ENABLED"
+    )
+    env_recent_exit_candidate_pyramid_block_sec = _env_int(
+        "KORSTOCKSCAN_RECENT_EXIT_CANDIDATE_PYRAMID_BLOCK_SEC"
+    )
+    env_scale_in_live_tuning_selected = _env_bool("KORSTOCKSCAN_SCALE_IN_LIVE_TUNING_SELECTED")
     env_scalping_pyramid_zero_qty_stage1_enabled = _env_bool(
         "KORSTOCKSCAN_SCALPING_PYRAMID_ZERO_QTY_STAGE1_ENABLED"
     )
@@ -2379,6 +2578,12 @@ def _build_trading_rules() -> TradingConfig:
     )
     env_same_symbol_loss_reentry_cooldown_sec = _env_int(
         "KORSTOCKSCAN_SCALP_SAME_SYMBOL_LOSS_REENTRY_COOLDOWN_SEC"
+    )
+    env_sell_order_failure_retry_backoff_enabled = _env_bool(
+        "KORSTOCKSCAN_SELL_ORDER_FAILURE_RETRY_BACKOFF_ENABLED"
+    )
+    env_sell_order_failure_retry_backoff_sec = _env_int(
+        "KORSTOCKSCAN_SELL_ORDER_FAILURE_RETRY_BACKOFF_SEC"
     )
     if (
         env_scalping_enable_pyramid is not None
@@ -2447,6 +2652,9 @@ def _build_trading_rules() -> TradingConfig:
         or env_stat_action_snapshot_min_interval is not None
         or env_buy_side_time_block_enabled is not None
         or env_buy_side_time_block_until is not None
+        or env_sell_side_open_time_block_enabled is not None
+        or env_sell_side_open_time_block_until is not None
+        or env_sell_side_open_time_block_scope is not None
         or env_scale_in_price_resolver_enabled is not None
         or env_scale_in_dynamic_qty_enabled is not None
         or env_scale_in_max_spread_bps is not None
@@ -2456,9 +2664,20 @@ def _build_trading_rules() -> TradingConfig:
         or env_pyramid_min_ai_score is not None
         or env_pyramid_min_buy_pressure is not None
         or env_pyramid_min_tick_accel is not None
+        or env_real_pyramid_micro_context_guard_enabled is not None
+        or env_pending_scale_in_revalidation_cancel_enabled is not None
+        or env_pending_scale_in_revalidation_min_ai_score is not None
+        or env_pending_scale_in_revalidation_min_tick_accel is not None
+        or env_pending_scale_in_revalidation_min_buy_pressure is not None
+        or env_pending_scale_in_revalidation_min_micro_vwap_bp is not None
+        or env_recent_exit_candidate_pyramid_block_enabled is not None
+        or env_recent_exit_candidate_pyramid_block_sec is not None
+        or env_scale_in_live_tuning_selected is not None
         or env_scalping_pyramid_zero_qty_stage1_enabled is not None
         or env_same_symbol_loss_reentry_cooldown_enabled is not None
         or env_same_symbol_loss_reentry_cooldown_sec is not None
+        or env_sell_order_failure_retry_backoff_enabled is not None
+        or env_sell_order_failure_retry_backoff_sec is not None
     ):
         config = replace(
             config,
@@ -2729,6 +2948,15 @@ def _build_trading_rules() -> TradingConfig:
             BUY_SIDE_TIME_BLOCK_UNTIL_HHMM=env_buy_side_time_block_until
             if env_buy_side_time_block_until is not None
             else config.BUY_SIDE_TIME_BLOCK_UNTIL_HHMM,
+            SELL_SIDE_OPEN_TIME_BLOCK_ENABLED=env_sell_side_open_time_block_enabled
+            if env_sell_side_open_time_block_enabled is not None
+            else config.SELL_SIDE_OPEN_TIME_BLOCK_ENABLED,
+            SELL_SIDE_OPEN_TIME_BLOCK_UNTIL_HHMM=env_sell_side_open_time_block_until
+            if env_sell_side_open_time_block_until is not None
+            else config.SELL_SIDE_OPEN_TIME_BLOCK_UNTIL_HHMM,
+            SELL_SIDE_OPEN_TIME_BLOCK_SCOPE=env_sell_side_open_time_block_scope
+            if env_sell_side_open_time_block_scope is not None
+            else config.SELL_SIDE_OPEN_TIME_BLOCK_SCOPE,
             SCALPING_SCALE_IN_PRICE_RESOLVER_ENABLED=env_scale_in_price_resolver_enabled
             if env_scale_in_price_resolver_enabled is not None
             else config.SCALPING_SCALE_IN_PRICE_RESOLVER_ENABLED,
@@ -2759,6 +2987,33 @@ def _build_trading_rules() -> TradingConfig:
             SCALPING_PYRAMID_MIN_TICK_ACCEL=env_pyramid_min_tick_accel
             if env_pyramid_min_tick_accel is not None
             else config.SCALPING_PYRAMID_MIN_TICK_ACCEL,
+            REAL_PYRAMID_MICRO_CONTEXT_GUARD_ENABLED=env_real_pyramid_micro_context_guard_enabled
+            if env_real_pyramid_micro_context_guard_enabled is not None
+            else config.REAL_PYRAMID_MICRO_CONTEXT_GUARD_ENABLED,
+            PENDING_SCALE_IN_REVALIDATION_CANCEL_ENABLED=env_pending_scale_in_revalidation_cancel_enabled
+            if env_pending_scale_in_revalidation_cancel_enabled is not None
+            else config.PENDING_SCALE_IN_REVALIDATION_CANCEL_ENABLED,
+            PENDING_SCALE_IN_REVALIDATION_MIN_AI_SCORE=env_pending_scale_in_revalidation_min_ai_score
+            if env_pending_scale_in_revalidation_min_ai_score is not None
+            else config.PENDING_SCALE_IN_REVALIDATION_MIN_AI_SCORE,
+            PENDING_SCALE_IN_REVALIDATION_MIN_TICK_ACCEL=env_pending_scale_in_revalidation_min_tick_accel
+            if env_pending_scale_in_revalidation_min_tick_accel is not None
+            else config.PENDING_SCALE_IN_REVALIDATION_MIN_TICK_ACCEL,
+            PENDING_SCALE_IN_REVALIDATION_MIN_BUY_PRESSURE=env_pending_scale_in_revalidation_min_buy_pressure
+            if env_pending_scale_in_revalidation_min_buy_pressure is not None
+            else config.PENDING_SCALE_IN_REVALIDATION_MIN_BUY_PRESSURE,
+            PENDING_SCALE_IN_REVALIDATION_MIN_MICRO_VWAP_BP=env_pending_scale_in_revalidation_min_micro_vwap_bp
+            if env_pending_scale_in_revalidation_min_micro_vwap_bp is not None
+            else config.PENDING_SCALE_IN_REVALIDATION_MIN_MICRO_VWAP_BP,
+            RECENT_EXIT_CANDIDATE_PYRAMID_BLOCK_ENABLED=env_recent_exit_candidate_pyramid_block_enabled
+            if env_recent_exit_candidate_pyramid_block_enabled is not None
+            else config.RECENT_EXIT_CANDIDATE_PYRAMID_BLOCK_ENABLED,
+            RECENT_EXIT_CANDIDATE_PYRAMID_BLOCK_SEC=env_recent_exit_candidate_pyramid_block_sec
+            if env_recent_exit_candidate_pyramid_block_sec is not None
+            else config.RECENT_EXIT_CANDIDATE_PYRAMID_BLOCK_SEC,
+            SCALE_IN_LIVE_TUNING_SELECTED=env_scale_in_live_tuning_selected
+            if env_scale_in_live_tuning_selected is not None
+            else config.SCALE_IN_LIVE_TUNING_SELECTED,
             SCALPING_PYRAMID_ZERO_QTY_STAGE1_ENABLED=env_scalping_pyramid_zero_qty_stage1_enabled
             if env_scalping_pyramid_zero_qty_stage1_enabled is not None
             else config.SCALPING_PYRAMID_ZERO_QTY_STAGE1_ENABLED,
@@ -2768,6 +3023,12 @@ def _build_trading_rules() -> TradingConfig:
             SCALP_SAME_SYMBOL_LOSS_REENTRY_COOLDOWN_SEC=env_same_symbol_loss_reentry_cooldown_sec
             if env_same_symbol_loss_reentry_cooldown_sec is not None
             else config.SCALP_SAME_SYMBOL_LOSS_REENTRY_COOLDOWN_SEC,
+            SELL_ORDER_FAILURE_RETRY_BACKOFF_ENABLED=env_sell_order_failure_retry_backoff_enabled
+            if env_sell_order_failure_retry_backoff_enabled is not None
+            else config.SELL_ORDER_FAILURE_RETRY_BACKOFF_ENABLED,
+            SELL_ORDER_FAILURE_RETRY_BACKOFF_SEC=env_sell_order_failure_retry_backoff_sec
+            if env_sell_order_failure_retry_backoff_sec is not None
+            else config.SELL_ORDER_FAILURE_RETRY_BACKOFF_SEC,
         )
 
     env_openai_json_deterministic = _env_bool("KORSTOCKSCAN_OPENAI_JSON_DETERMINISTIC_CONFIG_ENABLED")
@@ -2957,6 +3218,7 @@ def _build_trading_rules() -> TradingConfig:
     env_holding_exit_matrix_pyramid_max_drawdown = _env_float(
         "KORSTOCKSCAN_HOLDING_EXIT_MATRIX_PYRAMID_MAX_DRAWDOWN_FROM_PEAK_PCT"
     )
+    env_scalping_overnight_gatekeeper_enabled = _env_bool("KORSTOCKSCAN_SCALPING_OVERNIGHT_GATEKEEPER_ENABLED")
     env_holding_flow_override_enabled = _env_bool("KORSTOCKSCAN_HOLDING_FLOW_OVERRIDE_ENABLED")
     env_holding_flow_worsen = _env_float("KORSTOCKSCAN_HOLDING_FLOW_OVERRIDE_WORSEN_PCT")
     env_holding_flow_max_defer = _env_int("KORSTOCKSCAN_HOLDING_FLOW_OVERRIDE_MAX_DEFER_SEC")
@@ -3013,6 +3275,7 @@ def _build_trading_rules() -> TradingConfig:
         or env_holding_exit_matrix_pyramid_min_profit is not None
         or env_holding_exit_matrix_pyramid_min_ai is not None
         or env_holding_exit_matrix_pyramid_max_drawdown is not None
+        or env_scalping_overnight_gatekeeper_enabled is not None
         or env_holding_flow_override_enabled is not None
         or env_holding_flow_worsen is not None
         or env_holding_flow_max_defer is not None
@@ -3145,6 +3408,9 @@ def _build_trading_rules() -> TradingConfig:
             HOLDING_EXIT_MATRIX_PYRAMID_MAX_DRAWDOWN_FROM_PEAK_PCT=env_holding_exit_matrix_pyramid_max_drawdown
             if env_holding_exit_matrix_pyramid_max_drawdown is not None
             else config.HOLDING_EXIT_MATRIX_PYRAMID_MAX_DRAWDOWN_FROM_PEAK_PCT,
+            SCALPING_OVERNIGHT_GATEKEEPER_ENABLED=env_scalping_overnight_gatekeeper_enabled
+            if env_scalping_overnight_gatekeeper_enabled is not None
+            else config.SCALPING_OVERNIGHT_GATEKEEPER_ENABLED,
             HOLDING_FLOW_OVERRIDE_ENABLED=env_holding_flow_override_enabled
             if env_holding_flow_override_enabled is not None
             else config.HOLDING_FLOW_OVERRIDE_ENABLED,

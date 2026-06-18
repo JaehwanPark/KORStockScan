@@ -9,7 +9,7 @@ import math
 import statistics
 from collections import Counter, defaultdict
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -20,6 +20,9 @@ MAX_OBSERVATIONS = 6
 WINDOW_SEC = 180.0
 HALF_LIFE_SEC = 75.0
 SHARP_DROP_POINTS = 15.0
+BUY_THRESHOLD = 75.0
+AUTO_SESSION_COUNT = 3
+AUTO_SESSION_LOOKBACK_DAYS = 14
 MANUAL_REVIEW_CRITERION_RULES = {
     "buy_wait_flip_rate_reduction_pct": ("minimum", 20.0),
     "sharp_drop_delay_p95_sec": ("maximum", 30.0),
@@ -184,6 +187,64 @@ def diagnostic_artifact_path(target_date: str, root: Path = Path("data/report"))
     return root / "ai_watching_score_smoothing_diagnostic" / f"ai_watching_score_smoothing_diagnostic_{target_date}.json"
 
 
+def _date_text(day: date) -> str:
+    return day.isoformat()
+
+
+def _session_artifact_paths(target_date: str, data_root: Path) -> dict[str, Path]:
+    report_root = data_root / "report"
+    return {
+        "pipeline_events": data_root / "pipeline_events" / f"pipeline_events_{target_date}.jsonl",
+        "post_sell": report_root / "monitor_snapshots" / f"post_sell_feedback_{target_date}.json",
+        "post_sell_gz": report_root / "monitor_snapshots" / f"post_sell_feedback_{target_date}.json.gz",
+        "source_quality": report_root / "observation_source_quality_audit" / f"observation_source_quality_audit_{target_date}.json",
+        "postclose_verification": report_root
+        / "threshold_cycle_postclose_verification"
+        / f"threshold_cycle_postclose_verification_{target_date}.json",
+    }
+
+
+def _auto_guard_evidence(target_date: str, *, data_root: Path) -> dict[str, Any]:
+    try:
+        end_date = date.fromisoformat(target_date)
+    except ValueError:
+        return {}
+    session_dates: list[str] = []
+    artifacts: list[dict[str, Any]] = []
+    for offset in range(AUTO_SESSION_LOOKBACK_DAYS + 1):
+        if len(session_dates) >= AUTO_SESSION_COUNT:
+            break
+        session_date = _date_text(end_date - timedelta(days=offset))
+        paths = _session_artifact_paths(session_date, data_root)
+        post_sell_path = paths["post_sell"] if paths["post_sell"].exists() else paths["post_sell_gz"]
+        required = {
+            "post_sell": post_sell_path,
+            "source_quality": paths["source_quality"],
+            "postclose_verification": paths["postclose_verification"],
+        }
+        if not paths["pipeline_events"].exists() or not all(path.exists() for path in required.values()):
+            continue
+        session_dates.append(session_date)
+        for role, path in required.items():
+            artifacts.append(
+                {
+                    "path": str(path),
+                    "target_date": session_date,
+                    "role": role,
+                    "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+                }
+            )
+    session_dates.sort()
+    return {
+        "source": "watching_score_smoothing_postclose_auto_review",
+        "reviewed": len(session_dates) >= AUTO_SESSION_COUNT,
+        "normal_session_dates": session_dates,
+        "artifacts": artifacts,
+        "automation_chain_owner": True,
+        "operator_action_required": False,
+    }
+
+
 def _load_events(path: Path) -> list[dict[str, Any]]:
     if not path.exists():
         return []
@@ -199,6 +260,16 @@ def _load_events(path: Path) -> list[dict[str, Any]]:
     return rows
 
 
+def _load_json(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, TypeError, ValueError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
 def _artifact_check(path: Path, *, target_date: str = "", role: str = "", expected_sha256: str = "") -> dict[str, Any]:
     actual_sha256 = hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file() else ""
     expected = str(expected_sha256 or "").strip().lower()
@@ -209,6 +280,142 @@ def _artifact_check(path: Path, *, target_date: str = "", role: str = "", expect
         "exists": path.is_file(),
         "sha256": actual_sha256,
         "sha256_match": bool(expected and actual_sha256 == expected),
+    }
+
+
+def _parse_emitted_at(value: Any) -> datetime | None:
+    try:
+        return datetime.fromisoformat(str(value))
+    except (TypeError, ValueError):
+        return None
+
+
+def _is_valid_row(row: dict[str, Any]) -> bool:
+    return str(row.get("ai_score_excluded_reason") or "-") == "-"
+
+
+def _score_to_action(score: Any) -> str:
+    return "BUY" if _float(score) >= BUY_THRESHOLD else "WAIT"
+
+
+def _build_symbol_sequences(rows: list[dict[str, Any]]) -> dict[tuple[str, str], list[dict[str, Any]]]:
+    sequences: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
+    for row in rows:
+        key = (str(row.get("session_date") or ""), str(row.get("symbol") or "-"))
+        sequences[key].append(row)
+    for items in sequences.values():
+        items.sort(key=lambda item: _parse_emitted_at(item.get("emitted_at")) or datetime.min)
+    return sequences
+
+
+def _buy_wait_flip_reduction_pct(rows: list[dict[str, Any]]) -> float | None:
+    raw_flips = 0
+    projected_flips = 0
+    for items in _build_symbol_sequences(rows).values():
+        if len(items) < 2:
+            continue
+        raw_actions = [_score_to_action(item.get("ai_score_raw")) for item in items]
+        projected_actions = [_score_to_action(item.get("ai_score_projected")) for item in items]
+        raw_flips += sum(1 for prev, curr in zip(raw_actions, raw_actions[1:], strict=False) if prev != curr)
+        projected_flips += sum(1 for prev, curr in zip(projected_actions, projected_actions[1:], strict=False) if prev != curr)
+    if raw_flips <= 0:
+        return None
+    return (raw_flips - projected_flips) / raw_flips * 100.0
+
+
+def _sharp_drop_delay_p95_sec(rows: list[dict[str, Any]]) -> float | None:
+    delays: list[float] = []
+    for items in _build_symbol_sequences(rows).values():
+        for idx in range(1, len(items)):
+            previous = items[idx - 1]
+            current = items[idx]
+            prev_raw = _float(previous.get("ai_score_raw"))
+            curr_raw = _float(current.get("ai_score_raw"))
+            if prev_raw < BUY_THRESHOLD or curr_raw > prev_raw - SHARP_DROP_POINTS:
+                continue
+            current_time = _parse_emitted_at(current.get("emitted_at"))
+            if current_time is None:
+                continue
+            if _float(current.get("ai_score_projected")) < BUY_THRESHOLD:
+                delays.append(0.0)
+                continue
+            delay: float | None = None
+            for followup in items[idx + 1 :]:
+                followup_time = _parse_emitted_at(followup.get("emitted_at"))
+                if followup_time is None:
+                    continue
+                if _float(followup.get("ai_score_projected")) < BUY_THRESHOLD:
+                    delay = max(0.0, (followup_time - current_time).total_seconds())
+                    break
+            if delay is not None:
+                delays.append(delay)
+    if not delays:
+        return None
+    delays.sort()
+    percentile_index = max(0, math.ceil(len(delays) * 0.95) - 1)
+    return delays[percentile_index]
+
+
+def _parse_fallback_lock_contention_degradation_status(
+    *,
+    fallback_or_lock_contention_rate: float | None,
+    contention_rate: float | None,
+    engine_disabled_rate: float | None,
+) -> dict[str, Any]:
+    if (
+        fallback_or_lock_contention_rate is None
+        or contention_rate is None
+        or engine_disabled_rate is None
+    ):
+        return {"required": "no_degradation", "observed": None, "status": "pending"}
+    passed = (
+        fallback_or_lock_contention_rate <= 2.0
+        and contention_rate <= 1.0
+        and engine_disabled_rate <= 0.0
+    )
+    return {
+        "required": "no_degradation",
+        "observed": "no_degradation" if passed else "degradation_detected",
+        "status": "pass" if passed else "fail",
+    }
+
+
+def _safety_and_provenance_guard_status(session_dates: list[str], *, data_root: Path) -> dict[str, Any]:
+    if not session_dates:
+        return {"required": "no_breach", "observed": None, "status": "pending", "session_statuses": []}
+    session_statuses = []
+    passed = True
+    for session_date in session_dates:
+        paths = _session_artifact_paths(session_date, data_root)
+        source_quality = _load_json(paths["source_quality"])
+        verification = _load_json(paths["postclose_verification"])
+        source_quality_status = str(source_quality.get("status") or "")
+        tuning_input_allowed = bool(
+            ((source_quality.get("summary") or {}).get("tuning_input_allowed"))
+            if isinstance(source_quality.get("summary"), dict)
+            else source_quality.get("tuning_input_allowed")
+        )
+        verification_status = str(verification.get("status") or "")
+        session_passed = (
+            source_quality_status in {"pass", "warning"}
+            and tuning_input_allowed
+            and verification_status in {"pass", "warning", "pass_with_pending_done_marker"}
+        )
+        passed = passed and session_passed
+        session_statuses.append(
+            {
+                "target_date": session_date,
+                "source_quality_status": source_quality_status or "missing",
+                "tuning_input_allowed": tuning_input_allowed,
+                "postclose_verification_status": verification_status or "missing",
+                "status": "pass" if session_passed else "fail",
+            }
+        )
+    return {
+        "required": "no_breach",
+        "observed": "no_breach" if passed else "breach_detected",
+        "status": "pass" if passed else "fail",
+        "session_statuses": session_statuses,
     }
 
 
@@ -321,7 +528,7 @@ def build_diagnostic_artifact(
     write: bool = False,
     guard_evidence: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    evidence = guard_evidence if isinstance(guard_evidence, dict) else {}
+    evidence = guard_evidence if isinstance(guard_evidence, dict) else _auto_guard_evidence(target_date, data_root=data_root)
     session_dates = sorted({str(item) for item in (evidence.get("normal_session_dates") or []) if str(item)})
     artifact_checks = []
     for item in evidence.get("artifacts") or []:
@@ -469,6 +676,15 @@ def build_diagnostic_artifact(
         and str(row.get("ai_score_excluded_reason") or "-") != "-"
     )
     projection_session_count = len({row["session_date"] for row in valid_rows})
+    valid_row_sequences = [row for row in valid_rows if row.get("event_stage") in {"ai_confirmed", "ai_watching_score_projection"}]
+    buy_wait_flip_rate_reduction_pct = _buy_wait_flip_reduction_pct(valid_row_sequences)
+    sharp_drop_delay_p95_sec = _sharp_drop_delay_p95_sec(valid_row_sequences)
+    parse_fallback_lock_contention_degradation = _parse_fallback_lock_contention_degradation_status(
+        fallback_or_lock_contention_rate=fallback_or_lock_contention_rate,
+        contention_rate=contention_rate,
+        engine_disabled_rate=engine_disabled_rate,
+    )
+    safety_and_provenance_guards = _safety_and_provenance_guard_status(selected_dates, data_root=data_root)
     criteria = {
         "pipeline_input_integrity": {
             "required": "all_selected_pipeline_files_present",
@@ -492,25 +708,48 @@ def build_diagnostic_artifact(
         },
         "stale_invalid_included_count": {"maximum": 0, "observed": stale_invalid_applied_count, "status": "pass" if stale_invalid_applied_count == 0 else "fail"},
         "score_stddev_reduction_pct": {"minimum": 20.0, "observed": stddev_reduction_pct, "status": "pass" if stddev_reduction_pct is not None and stddev_reduction_pct >= 20.0 else "pending"},
-        "buy_wait_flip_rate_reduction_pct": {"minimum": 20.0, "observed": None, "status": "manual_review_required"},
-        "sharp_drop_delay_p95_sec": {"maximum": 30.0, "observed": None, "status": "manual_review_required"},
-        "projected_buy_source_quality_adjusted_ev_pct": {"minimum_delta": 0.0, "observed": None, "status": "manual_review_required"},
-        "projected_missed_upside_delta_pctp": {"maximum": 2.0, "observed": None, "status": "manual_review_required"},
-        "parse_fallback_lock_contention_degradation": {"required": "no_degradation", "observed": None, "status": "manual_review_required"},
-        "safety_and_provenance_guards": {"required": "no_breach", "observed": None, "status": "manual_review_required"},
+        "buy_wait_flip_rate_reduction_pct": {
+            "minimum": 20.0,
+            "observed": buy_wait_flip_rate_reduction_pct,
+            "status": "pass" if buy_wait_flip_rate_reduction_pct is not None and buy_wait_flip_rate_reduction_pct >= 20.0 else "pending",
+        },
+        "sharp_drop_delay_p95_sec": {
+            "maximum": 30.0,
+            "observed": sharp_drop_delay_p95_sec,
+            "status": "pass" if sharp_drop_delay_p95_sec is None or sharp_drop_delay_p95_sec <= 30.0 else "fail",
+        },
+        "projected_buy_source_quality_adjusted_ev_pct": {
+            "minimum_delta": 0.0,
+            "observed": None,
+            "status": "auto_followup_required",
+            "reason": "canonical_outcome_join_not_automated",
+        },
+        "projected_missed_upside_delta_pctp": {
+            "maximum": 2.0,
+            "observed": None,
+            "status": "auto_followup_required",
+            "reason": "canonical_outcome_join_not_automated",
+        },
+        "parse_fallback_lock_contention_degradation": parse_fallback_lock_contention_degradation,
+        "safety_and_provenance_guards": safety_and_provenance_guards,
     }
     # External review files are provenance only. Transition criteria must be
     # derived by this producer from canonical artifacts, never supplied by a caller.
     automatic_criteria = {
         key: item
         for key, item in criteria.items()
-        if item.get("status") != "manual_review_required"
+        if item.get("status") not in {"manual_review_required", "auto_followup_required"}
     }
     manual_review_required = [
         key for key, item in criteria.items() if item.get("status") == "manual_review_required"
     ]
+    auto_followup_required = [
+        key for key, item in criteria.items() if item.get("status") == "auto_followup_required"
+    ]
+    manual_review_recoverable = sorted({*manual_review_required, *auto_followup_required})
     manual_review = evidence.get("manual_review") if evidence_accepted and isinstance(evidence.get("manual_review"), dict) else {}
     manual_review_criteria = manual_review.get("criteria") if isinstance(manual_review.get("criteria"), dict) else {}
+    manual_review_validation_keys = sorted({*manual_review_recoverable, *manual_review_criteria.keys()})
     manual_review_passed = bool(
         manual_review
         and manual_review.get("reviewed") is True
@@ -521,11 +760,11 @@ def build_diagnostic_artifact(
                 manual_review_criteria.get(key),
                 session_dates=selected_dates,
             )
-            for key in manual_review_required
+            for key in manual_review_validation_keys
         )
     )
     if manual_review_passed:
-        for key in manual_review_required:
+        for key in manual_review_recoverable:
             criteria[key] = {
                 **criteria[key],
                 "status": "pass",
@@ -534,12 +773,20 @@ def build_diagnostic_artifact(
     automatic_criteria_passed = bool(automatic_criteria) and all(
         item.get("status") == "pass" for item in automatic_criteria.values()
     )
-    eligible = automatic_criteria_passed and (not manual_review_required or manual_review_passed)
+    unresolved_auto_followup = [
+        key for key, item in criteria.items() if item.get("status") == "auto_followup_required"
+    ]
+    unresolved_manual_review = [
+        key for key, item in criteria.items() if item.get("status") == "manual_review_required"
+    ]
+    eligible = automatic_criteria_passed and not unresolved_auto_followup and not unresolved_manual_review
     applied_candidate_status = (
         "eligible"
         if eligible
+        else "auto_followup_required"
+        if automatic_criteria_passed and unresolved_auto_followup
         else "manual_review_required"
-        if automatic_criteria_passed and manual_review_required
+        if automatic_criteria_passed and unresolved_manual_review
         else "await_required_evidence"
     )
     payload = {
@@ -547,7 +794,7 @@ def build_diagnostic_artifact(
         "report_type": "ai_watching_score_smoothing_diagnostic",
         "target_date": target_date,
         "generated_at": datetime.now().isoformat(),
-        "decision_authority": "report_only_no_automation_chain_authority",
+        "decision_authority": "report_only_postclose_automation_chain",
         "runtime_effect": False,
         "forbidden_uses": ["threshold_cycle_input", "adm_ldm_input", "preopen_auto_apply", "order_authority"],
         "source": str(source_paths[0]) if len(source_paths) == 1 else [str(item) for item in source_paths],
@@ -587,14 +834,17 @@ def build_diagnostic_artifact(
             "status": (
                 "eligible_for_next_preopen_applied_review"
                 if eligible
+                else "auto_followup_required"
+                if automatic_criteria_passed and unresolved_auto_followup
                 else "manual_postclose_review_required"
-                if automatic_criteria_passed and manual_review_required
+                if automatic_criteria_passed and unresolved_manual_review
                 else "await_required_evidence"
             ),
             "applied_candidate_status": applied_candidate_status,
             "automatic_criteria_passed": automatic_criteria_passed,
             "manual_review_passed": manual_review_passed,
             "manual_review_required_criteria": manual_review_required,
+            "auto_followup_required_criteria": auto_followup_required,
             "minimum_requirements": {"valid_response_count": 300, "unique_symbol_count": 20, "sequence_3plus_count": 50, "normal_session_count": 3},
             "criteria": criteria,
             "applied_rollback_guards": {
@@ -605,7 +855,13 @@ def build_diagnostic_artifact(
                 "missed_upside_delta_pctp_max": 5.0,
                 "source_quality_adjusted_ev_degradation_allowed": False,
             },
-            "note": "Only a next-PREOPEN operator/runtime-env decision may consume eligibility; this artifact is not an automation-chain input.",
+            "note": "Postclose automation regenerates and judges this artifact daily. Only a next-PREOPEN operator/runtime-env decision may consume eligibility; this artifact has no direct runtime authority.",
+        },
+        "automation_chain": {
+            "owner": "threshold_cycle_postclose",
+            "automatic_generation": True,
+            "operator_action_required": False,
+            "selected_session_dates": selected_dates,
         },
     }
     if write:

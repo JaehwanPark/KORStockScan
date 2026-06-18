@@ -47,6 +47,24 @@ def _active_state_lock():
     """ACTIVE_TARGETS/ordno/pending state mutation에 사용할 소유 락을 반환한다."""
     return _STATE_LOCK or RECEIPT_LOCK
 
+
+def _safe_float(value: Any, default: float = 0.0) -> float:
+    try:
+        if value in (None, "", "-", "None", "none", "null"):
+            return float(default)
+        return float(value)
+    except Exception:
+        return float(default)
+
+
+def _safe_int(value: Any, default: int = 0) -> int:
+    try:
+        if value in (None, "", "-", "None", "none", "null"):
+            return int(default)
+        return int(float(value))
+    except Exception:
+        return int(default)
+
 _BUY_RECEIPT_SNAPSHOT_KEYS = (
     "buy_execution_notified",
     "buy_price",
@@ -74,8 +92,14 @@ _SELL_RECEIPT_SNAPSHOT_KEYS = (
     "last_exit_soft_stop_threshold_pct",
     "msg_audience",
     "name",
+    "no_scale_in_counterfactual_profit_pct",
     "pending_sell_msg",
+    "post_add_avg_price",
+    "post_add_qty",
+    "pre_add_avg_price",
+    "pre_add_qty",
     "scalp_live_simulator",
+    "scale_in_incremental_realized_delta_pct",
     "simulation_book",
     "simulation_owner",
     "swing_live_order_dry_run",
@@ -90,7 +114,11 @@ _ADD_RECEIPT_SNAPSHOT_KEYS = (
     "hard_stop_price",
     "msg_audience",
     "name",
+    "post_add_avg_price",
+    "post_add_qty",
     "pyramid_count",
+    "pre_add_avg_price",
+    "pre_add_qty",
     "scale_in_locked",
     "scalp_live_simulator",
     "simulation_book",
@@ -1028,6 +1056,18 @@ def _update_db_for_sell(target_id, exec_price, now, receipt_snapshot, strategy, 
             else:
                 profit_rate = 0.0
                 log_error(f"⚠️ [수익률 계산 불가] ID {target_id}의 매수가(buy_price)가 누락되어 수익률을 0%로 처리합니다.")
+            pre_add_avg_price = _safe_float(receipt_snapshot.get("pre_add_avg_price"), 0.0)
+            pre_add_qty = _safe_int(receipt_snapshot.get("pre_add_qty"), 0)
+            if pre_add_avg_price > 0 and pre_add_qty > 0:
+                no_scale_in_counterfactual_profit_pct = calculate_net_profit_rate(pre_add_avg_price, exec_price)
+                receipt_snapshot["no_scale_in_counterfactual_profit_pct"] = round(
+                    float(no_scale_in_counterfactual_profit_pct),
+                    4,
+                )
+                receipt_snapshot["scale_in_incremental_realized_delta_pct"] = round(
+                    float(profit_rate) - float(no_scale_in_counterfactual_profit_pct),
+                    4,
+                )
 
             record.status = 'COMPLETED'
             record.sell_price = exec_price
@@ -1057,6 +1097,17 @@ def _update_db_for_sell(target_id, exec_price, now, receipt_snapshot, strategy, 
                 exit_decision_source=receipt_snapshot.get('last_exit_decision_source') or 'MANUAL',
                 revive=bool(is_scalp_revive),
                 strategy=strategy,
+                no_scale_in_counterfactual_profit_pct=receipt_snapshot.get("no_scale_in_counterfactual_profit_pct", "-"),
+                scale_in_incremental_realized_delta_pct=receipt_snapshot.get("scale_in_incremental_realized_delta_pct", "-"),
+                pre_add_avg_price=receipt_snapshot.get("pre_add_avg_price", "-"),
+                post_add_avg_price=receipt_snapshot.get("post_add_avg_price", "-"),
+                pre_add_qty=receipt_snapshot.get("pre_add_qty", "-"),
+                post_add_qty=receipt_snapshot.get("post_add_qty", "-"),
+                allowed_runtime_apply=False,
+                forbidden_uses=(
+                    "EV|rolling|MTD|live_auto_promotion|runtime_apply_bridge|threshold_mutation|"
+                    "provider_change|order_price_change|quantity_cap_change|broker_guard_bypass"
+                ),
             )
             try:
                 record_post_sell_candidate(
@@ -1111,6 +1162,10 @@ def _handle_add_buy_execution(
     target_stock['status'] = 'HOLDING'
     target_stock['buy_price'] = new_avg
     target_stock['buy_qty'] = new_qty
+    target_stock['pre_add_avg_price'] = round(float(old_price or 0.0), 4)
+    target_stock['post_add_avg_price'] = round(float(new_avg or 0.0), 4)
+    target_stock['pre_add_qty'] = int(old_qty or 0)
+    target_stock['post_add_qty'] = int(new_qty or 0)
     target_stock['last_add_type'] = add_type
     target_stock['last_add_at'] = now
     target_stock['last_add_time'] = time.time()

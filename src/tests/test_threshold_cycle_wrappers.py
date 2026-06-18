@@ -171,6 +171,7 @@ def test_postclose_wrapper_runs_threshold_ev_before_and_after_workorder():
     verbosity_idx = script.index("src.engine.pipeline_event_verbosity_report")
     observation_audit_idx = script.index("src.engine.observation_source_quality_audit", verbosity_idx)
     perf_source_idx = script.index("src.engine.codebase_performance_workorder_report")
+    watching_smoothing_idx = script.index("src.engine.scalping.watching_score_smoothing")
     time_window_idx = script.index("src.engine.automation.time_window_regime_counterfactual")
     producer_gap_source_idx = script.index("src.engine.automation.producer_gap_source_bundle")
     producer_gap_idx = script.index("src.engine.automation.producer_gap_discovery")
@@ -200,6 +201,7 @@ def test_postclose_wrapper_runs_threshold_ev_before_and_after_workorder():
         < bridge_idx
         < verbosity_idx
         < observation_audit_idx
+        < watching_smoothing_idx
         < perf_source_idx
         < time_window_idx
         < producer_gap_source_idx
@@ -220,6 +222,7 @@ def test_postclose_wrapper_runs_threshold_ev_before_and_after_workorder():
     )
     assert 'RUN_PATTERN_LAB_PROPAGATION_AUDIT="${THRESHOLD_CYCLE_RUN_PATTERN_LAB_PROPAGATION_AUDIT:-true}"' in script
     assert 'RUN_TIME_WINDOW_REGIME_COUNTERFACTUAL="${THRESHOLD_CYCLE_RUN_TIME_WINDOW_REGIME_COUNTERFACTUAL:-true}"' in script
+    assert 'RUN_AI_WATCHING_SCORE_SMOOTHING_DIAGNOSTIC="${THRESHOLD_CYCLE_RUN_AI_WATCHING_SCORE_SMOOTHING_DIAGNOSTIC:-true}"' in script
     assert 'RUN_PRODUCER_GAP_DISCOVERY="${THRESHOLD_CYCLE_RUN_PRODUCER_GAP_DISCOVERY:-true}"' in script
     assert 'RUN_STAGE_HOOK_WORKORDER_DISCOVERY="${THRESHOLD_CYCLE_RUN_STAGE_HOOK_WORKORDER_DISCOVERY:-true}"' in script
     assert 'RUN_STAGE_HOOK_RUNTIME_SCAFFOLD="${THRESHOLD_CYCLE_RUN_STAGE_HOOK_RUNTIME_SCAFFOLD:-true}"' in script
@@ -241,6 +244,7 @@ def test_postclose_wrapper_runs_threshold_ev_before_and_after_workorder():
     assert "swing_lifecycle_matrix=$RUN_SWING_LIFECYCLE_MATRIX" in script
     assert "swing_lifecycle_bucket_discovery=$RUN_SWING_LIFECYCLE_BUCKET_DISCOVERY" in script
     assert "microstructure_reaction_context=$RUN_MICROSTRUCTURE_REACTION_CONTEXT" in script
+    assert "ai_watching_score_smoothing_diagnostic=$RUN_AI_WATCHING_SCORE_SMOOTHING_DIAGNOSTIC" in script
     assert "optional microstructure_reaction_context failed" in script
     assert "optional microstructure_reaction_context artifact wait failed" in script
 
@@ -326,6 +330,7 @@ def test_postclose_wrapper_waits_for_prerequisite_artifacts_before_downstream_st
     assert '"$PROJECT_DIR/data/report/stage_hook_workorder_discovery/stage_hook_workorder_discovery_${TARGET_DATE}.json"' in script
     assert '"$PROJECT_DIR/data/report/stage_hook_runtime_scaffold/stage_hook_runtime_scaffold_${TARGET_DATE}.json"' in script
     assert '"$PROJECT_DIR/data/report/pattern_lab_propagation_audit/pattern_lab_propagation_audit_${TARGET_DATE}.json"' in script
+    assert '"$PROJECT_DIR/data/report/ai_watching_score_smoothing_diagnostic/ai_watching_score_smoothing_diagnostic_${TARGET_DATE}.json"' in script
     assert '"$PROJECT_DIR/data/report/scalp_entry_action_decision_matrix/scalp_entry_action_decision_matrix_${TARGET_DATE}.json"' in script
     assert '"$PROJECT_DIR/data/report/lifecycle_decision_matrix/lifecycle_decision_matrix_${TARGET_DATE}.json"' in script
     assert '"$PROJECT_DIR/data/report/lifecycle_bucket_discovery/lifecycle_bucket_discovery_${TARGET_DATE}.json"' in script

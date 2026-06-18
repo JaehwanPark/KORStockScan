@@ -169,6 +169,18 @@ def _step_specs(target_date: str) -> list[StepSpec]:
                 *_pair("observation_source_quality_audit", "observation_source_quality_audit", target_date),
             ),
         ),
+        "ai_watching_score_smoothing_diagnostic": (
+            (
+                _artifact(
+                    "ai_watching_score_smoothing_diagnostic",
+                    f"ai_watching_score_smoothing_diagnostic_{target_date}.json",
+                ),
+            ),
+            (
+                "data/pipeline_events",
+                *_pair("observation_source_quality_audit", "observation_source_quality_audit", target_date),
+            ),
+        ),
         "codebase_performance_workorder": (
             _pair("codebase_performance_workorder", "codebase_performance_workorder", target_date),
             ("src", "deploy"),

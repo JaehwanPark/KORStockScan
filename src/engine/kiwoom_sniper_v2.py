@@ -1433,7 +1433,14 @@ def run_sniper(is_test_mode=False):
             today_key = now.date().isoformat()
             last_eod_done = getattr(run_sniper, 'scalping_eod_done_date', None)
             last_eod_try = getattr(run_sniper, 'last_scalping_eod_try', 0)
-            if now_t >= TIME_SCALPING_OVERNIGHT_DECISION and last_eod_done != today_key:
+            overnight_gatekeeper_enabled = bool(
+                getattr(TRADING_RULES, "SCALPING_OVERNIGHT_GATEKEEPER_ENABLED", False)
+            )
+            if (
+                overnight_gatekeeper_enabled
+                and now_t >= TIME_SCALPING_OVERNIGHT_DECISION
+                and last_eod_done != today_key
+            ):
                 if now_ts - last_eod_try >= 60:
                     run_sniper.last_scalping_eod_try = now_ts
                     if run_scalping_overnight_gatekeeper(ai_engine=ai_engine):
@@ -1441,6 +1448,8 @@ def run_sniper(is_test_mode=False):
                         last_eod_done = today_key
 
             eod_ai_holding_fallback = (
+                overnight_gatekeeper_enabled
+                and
                 now_t >= TIME_SCALPING_OVERNIGHT_DECISION
                 and (last_eod_done == today_key or last_eod_try > 0)
             )

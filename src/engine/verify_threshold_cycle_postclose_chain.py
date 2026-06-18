@@ -176,6 +176,44 @@ def _source_quality_hard_block_status(
     }
 
 
+def _watching_score_smoothing_diagnostic_status(report: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(report, dict) or not report:
+        return {
+            "status": "missing",
+            "automatic_generation": False,
+            "eligible": False,
+            "transition_status": "missing_artifact",
+            "root_cause_closure_status": "artifact_missing",
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+        }
+    transition_guard = report.get("transition_guard") if isinstance(report.get("transition_guard"), dict) else {}
+    automation_chain = report.get("automation_chain") if isinstance(report.get("automation_chain"), dict) else {}
+    transition_status = str(transition_guard.get("status") or "unknown")
+    eligible = bool(transition_guard.get("eligible"))
+    if eligible:
+        status = "pass"
+        closure_status = "eligible_for_next_preopen_review"
+    elif transition_status in {"auto_followup_required", "manual_postclose_review_required", "await_required_evidence"}:
+        status = "warning"
+        closure_status = "report_only_followup_open"
+    else:
+        status = "warning"
+        closure_status = "unknown_transition_state"
+    return {
+        "status": status,
+        "automatic_generation": bool(automation_chain.get("automatic_generation")),
+        "eligible": eligible,
+        "transition_status": transition_status,
+        "applied_candidate_status": transition_guard.get("applied_candidate_status"),
+        "auto_followup_required_criteria": transition_guard.get("auto_followup_required_criteria") or [],
+        "manual_review_required_criteria": transition_guard.get("manual_review_required_criteria") or [],
+        "root_cause_closure_status": closure_status,
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+    }
+
+
 def _raw_row_exclusion_handoff_status(
     preflight: dict[str, Any],
     *,
@@ -473,6 +511,9 @@ def _artifact_paths(target_date: str) -> dict[str, Path]:
         "observation_source_quality_audit": REPORT_DIR
         / "observation_source_quality_audit"
         / f"observation_source_quality_audit_{target_date}.json",
+        "ai_watching_score_smoothing_diagnostic": REPORT_DIR
+        / "ai_watching_score_smoothing_diagnostic"
+        / f"ai_watching_score_smoothing_diagnostic_{target_date}.json",
         "runtime_approval_summary": REPORT_DIR / "runtime_approval_summary" / f"runtime_approval_summary_{target_date}.json",
         "runtime_apply_gap_audit": REPORT_DIR
         / "runtime_apply_gap_audit"
@@ -3214,6 +3255,7 @@ def build_threshold_cycle_postclose_verification(
     ev_report = _load_json(paths["threshold_cycle_ev"])
     workorder = _load_json(paths["code_improvement_workorder"])
     observation_source_quality_audit = _load_json(paths["observation_source_quality_audit"])
+    watching_score_smoothing_diagnostic = _load_json(paths["ai_watching_score_smoothing_diagnostic"])
     runtime_summary = _load_json(paths["runtime_approval_summary"])
     runtime_apply_gap_audit = _load_json(paths["runtime_apply_gap_audit"])
     key_lineage_ledger = _load_json(paths["key_lineage_ledger"])
@@ -3293,6 +3335,11 @@ def build_threshold_cycle_postclose_verification(
         observation_source_quality_audit,
         workorder=workorder,
     )
+    watching_score_smoothing_status = _watching_score_smoothing_diagnostic_status(
+        watching_score_smoothing_diagnostic
+    )
+    if watching_score_smoothing_status.get("status") == "warning":
+        handoff_warnings.append("ai_watching_score_smoothing_diagnostic_followup_open")
     if raw_row_exclusion_handoff.get("status") == "fail":
         log_issues.append("raw_row_exclusion_workorder_handoff_missing")
     entry_bucket_handoff = _entry_bucket_handoff_status(ldm_report, ev_report, runtime_summary, workorder)
@@ -3618,6 +3665,12 @@ def build_threshold_cycle_postclose_verification(
         required_execution_flags = (*required_execution_flags, "runtime_apply_gap_audit")
     if (
         done_line
+        and "ai_watching_score_smoothing_diagnostic" in execution_flags
+        and "ai_watching_score_smoothing_diagnostic" not in missing_execution_flags
+    ):
+        required_execution_flags = (*required_execution_flags, "ai_watching_score_smoothing_diagnostic")
+    if (
+        done_line
         and "ldm_hypothesis_parent_refinement" in execution_flags
         and "ldm_hypothesis_parent_refinement" not in missing_execution_flags
     ):
@@ -3684,6 +3737,8 @@ def build_threshold_cycle_postclose_verification(
         disabled_artifact_labels.add("swing_lifecycle_bucket_discovery")
     if "pattern_lab_ai_review" not in execution_flags:
         disabled_artifact_labels.add("pattern_lab_ai_review")
+    if "ai_watching_score_smoothing_diagnostic" not in execution_flags:
+        disabled_artifact_labels.add("ai_watching_score_smoothing_diagnostic")
     if "time_window_regime_counterfactual" not in execution_flags:
         disabled_artifact_labels.add("time_window_regime_counterfactual")
     if "producer_gap_discovery" not in execution_flags:
@@ -4208,6 +4263,7 @@ def build_threshold_cycle_postclose_verification(
         "clean_baseline_analytics_residue": clean_baseline_analytics_residue,
         "source_quality_hard_block": source_quality_hard_block,
         "raw_row_exclusion_handoff": raw_row_exclusion_handoff,
+        "ai_watching_score_smoothing_diagnostic": watching_score_smoothing_status,
         "ai_correction": ai_correction,
         "scalp_sim_overnight_source_quality": scalp_sim_overnight_quality,
         "entry_bucket_handoff": entry_bucket_handoff,

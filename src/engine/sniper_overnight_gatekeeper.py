@@ -115,6 +115,10 @@ def _eod_label() -> str:
     return raw[:5] if len(raw) >= 5 else "15:10"
 
 
+def _overnight_gatekeeper_enabled() -> bool:
+    return bool(getattr(TRADING_RULES, "SCALPING_OVERNIGHT_GATEKEEPER_ENABLED", False))
+
+
 def _find_active_target_by_code(code):
     code = str(code).strip()[:6]
     for item in ACTIVE_TARGETS:
@@ -568,6 +572,12 @@ def run_scalping_overnight_gatekeeper(ai_engine=None):
     """Run the preclose scalping overnight / sell-today gatekeeper once."""
     global KIWOOM_TOKEN, DB, WS_MANAGER, event_bus, ACTIVE_TARGETS
 
+    if not _overnight_gatekeeper_enabled():
+        log_info(
+            f"ℹ️ [{_eod_label()} EOD] 실 runtime 오버나이트 gatekeeper 비활성화: "
+            "KORSTOCKSCAN_SCALPING_OVERNIGHT_GATEKEEPER_ENABLED=false"
+        )
+        return False
     if ai_engine is None:
         log_info(f"⚠️ [{_eod_label()} EOD] AI 엔진이 없어 오버나이트 판정을 건너뜁니다.")
         return False

@@ -1091,12 +1091,112 @@ def test_latency_spread_relief_canary_requires_spread_only_danger(monkeypatch):
         signal_strength=90.0,
     )
 
-    _assert_danger_hard_safety_block(
-        result,
-        danger_reasons=("ws_age_too_high", "spread_too_wide"),
-    )
+    assert result["decision"] == "REJECT_DANGER"
+    assert result["latency_canary_applied"] is False
+    assert result["latency_canary_reason"] == "spread_only_required"
     assert "ws_age_too_high" in result["latency_danger_reasons"]
     assert "spread_too_wide" in result["latency_danger_reasons"]
+
+
+def test_latency_spread_relief_canary_blocks_unstable_quote(monkeypatch):
+    monkeypatch.setattr(
+        entry_latency_module,
+        "TRADING_RULES",
+        replace(
+            CONFIG,
+            SCALP_LATENCY_QUOTE_FRESH_COMPOSITE_CANARY_ENABLED=False,
+            SCALP_LATENCY_SIGNAL_QUALITY_QUOTE_COMPOSITE_CANARY_ENABLED=False,
+            SCALP_LATENCY_SPREAD_RELIEF_CANARY_ENABLED=True,
+            SCALP_LATENCY_WS_JITTER_RELIEF_CANARY_ENABLED=False,
+            SCALP_LATENCY_OTHER_DANGER_RELIEF_CANARY_ENABLED=False,
+            SCALP_LATENCY_SPREAD_RELIEF_TAGS=("SCANNER",),
+            SCALP_LATENCY_SPREAD_RELIEF_MIN_SIGNAL_SCORE=85.0,
+            SCALP_LATENCY_SPREAD_RELIEF_MAX_SPREAD_RATIO=0.0130,
+            SCALP_LATENCY_SPREAD_RELIEF_BLOCK_UNSTABLE_QUOTE=True,
+            SCALP_LATENCY_SPREAD_RELIEF_MIN_PRINT_QUOTE_ALIGNMENT=0.90,
+        ),
+    )
+    monkeypatch.setattr(
+        entry_latency_module.ORDERBOOK_STABILITY_OBSERVER,
+        "snapshot",
+        lambda code: {
+            "unstable_quote_observed": True,
+            "unstable_reasons": "print_quote_alignment",
+            "print_quote_alignment": 0.82716,
+        },
+    )
+
+    result = evaluate_live_buy_entry(
+        stock={"name": "TEST", "position_tag": "SCANNER"},
+        code="123456_spread_relief_unstable_quote",
+        ws_data={
+            "curr": 10_020,
+            "last_ws_update_ts": datetime.now(UTC).timestamp(),
+            "orderbook": {
+                "asks": [{"price": 10_140, "volume": 100}],
+                "bids": [{"price": 10_020, "volume": 100}],
+            },
+        },
+        strategy_id="SCALPING",
+        planned_qty=2,
+        signal_price=10_000,
+        signal_strength=90.0,
+    )
+
+    assert result["decision"] == "REJECT_DANGER"
+    assert result["latency_canary_applied"] is False
+    assert result["latency_canary_reason"] == "unstable_quote_observed"
+    assert result["latency_danger_reasons"] == "spread_too_wide"
+
+
+def test_latency_spread_relief_canary_blocks_low_print_quote_alignment(monkeypatch):
+    monkeypatch.setattr(
+        entry_latency_module,
+        "TRADING_RULES",
+        replace(
+            CONFIG,
+            SCALP_LATENCY_QUOTE_FRESH_COMPOSITE_CANARY_ENABLED=False,
+            SCALP_LATENCY_SIGNAL_QUALITY_QUOTE_COMPOSITE_CANARY_ENABLED=False,
+            SCALP_LATENCY_SPREAD_RELIEF_CANARY_ENABLED=True,
+            SCALP_LATENCY_WS_JITTER_RELIEF_CANARY_ENABLED=False,
+            SCALP_LATENCY_OTHER_DANGER_RELIEF_CANARY_ENABLED=False,
+            SCALP_LATENCY_SPREAD_RELIEF_TAGS=("SCANNER",),
+            SCALP_LATENCY_SPREAD_RELIEF_MIN_SIGNAL_SCORE=85.0,
+            SCALP_LATENCY_SPREAD_RELIEF_MAX_SPREAD_RATIO=0.0130,
+            SCALP_LATENCY_SPREAD_RELIEF_BLOCK_UNSTABLE_QUOTE=True,
+            SCALP_LATENCY_SPREAD_RELIEF_MIN_PRINT_QUOTE_ALIGNMENT=0.90,
+        ),
+    )
+    monkeypatch.setattr(
+        entry_latency_module.ORDERBOOK_STABILITY_OBSERVER,
+        "snapshot",
+        lambda code: {
+            "unstable_quote_observed": False,
+            "print_quote_alignment": 0.82716,
+        },
+    )
+
+    result = evaluate_live_buy_entry(
+        stock={"name": "TEST", "position_tag": "SCANNER"},
+        code="123456_spread_relief_low_print_alignment",
+        ws_data={
+            "curr": 10_020,
+            "last_ws_update_ts": datetime.now(UTC).timestamp(),
+            "orderbook": {
+                "asks": [{"price": 10_140, "volume": 100}],
+                "bids": [{"price": 10_020, "volume": 100}],
+            },
+        },
+        strategy_id="SCALPING",
+        planned_qty=2,
+        signal_price=10_000,
+        signal_strength=90.0,
+    )
+
+    assert result["decision"] == "REJECT_DANGER"
+    assert result["latency_canary_applied"] is False
+    assert result["latency_canary_reason"] == "print_quote_alignment_too_low"
+    assert result["latency_danger_reasons"] == "spread_too_wide"
 
 
 def test_latency_ws_jitter_relief_canary_overrides_reject_danger_to_normal(monkeypatch):

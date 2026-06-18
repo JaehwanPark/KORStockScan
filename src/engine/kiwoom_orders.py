@@ -709,6 +709,100 @@ def get_buy_side_time_block_label() -> str:
     )
 
 
+def _sell_side_open_time_block_cutoff():
+    raw_cutoff = str(
+        getattr(TRADING_RULES, "SELL_SIDE_OPEN_TIME_BLOCK_UNTIL_HHMM", "09:03") or ""
+    ).strip()
+    try:
+        hour_text, minute_text = raw_cutoff.split(":", 1)
+        return datetime_time(hour=int(hour_text), minute=int(minute_text))
+    except Exception:
+        return datetime_time(hour=9, minute=3)
+
+
+def _sell_side_open_time_scope() -> str:
+    return str(
+        getattr(TRADING_RULES, "SELL_SIDE_OPEN_TIME_BLOCK_SCOPE", "discretionary_exit_only")
+        or "discretionary_exit_only"
+    ).strip() or "discretionary_exit_only"
+
+
+def _sell_side_open_time_strategy_allowed(strategy=None) -> bool:
+    strategy_key = str(strategy or "").strip().upper()
+    return strategy_key in {"SCALPING", "SCALP"}
+
+
+def sell_side_open_time_passthrough_reason(reason_type=None) -> str:
+    reason_key = str(reason_type or "").strip().upper()
+    if not reason_key:
+        return "scope_unknown_passthrough"
+    safety_markers = (
+        "LOSS",
+        "CLOSE",
+        "HARD",
+        "STOP",
+        "EMERGENCY",
+        "PROTECT",
+        "PANIC",
+        "LIQUIDITY",
+        "BROKEN",
+        "OVERNIGHT",
+        "SAFETY",
+    )
+    if any(marker in reason_key for marker in safety_markers):
+        return f"safety_reason_{reason_key.lower()}"
+    return ""
+
+
+def is_sell_side_open_time_blocked(now=None, reason_type=None, strategy=None) -> bool:
+    if not bool(getattr(TRADING_RULES, "SELL_SIDE_OPEN_TIME_BLOCK_ENABLED", False)):
+        return False
+    if not _sell_side_open_time_strategy_allowed(strategy):
+        return False
+    if sell_side_open_time_passthrough_reason(reason_type):
+        return False
+    current = now or datetime.now(KST)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=KST)
+    current_kst = current.astimezone(KST)
+    return current_kst.time() < _sell_side_open_time_block_cutoff()
+
+
+def get_sell_side_open_time_block_label() -> str:
+    cutoff = _sell_side_open_time_block_cutoff()
+    return (
+        "real SCALPING 장초반 discretionary 매도 시간 차단 "
+        f"(KST {cutoff.strftime('%H:%M')} 전)"
+    )
+
+
+def get_sell_side_open_time_block_fields(now=None, reason_type=None, strategy=None) -> dict:
+    cutoff = _sell_side_open_time_block_cutoff()
+    passthrough_reason = sell_side_open_time_passthrough_reason(reason_type)
+    current = now or datetime.now(KST)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=KST)
+    current_kst = current.astimezone(KST)
+    enabled = bool(getattr(TRADING_RULES, "SELL_SIDE_OPEN_TIME_BLOCK_ENABLED", False))
+    strategy_allowed = _sell_side_open_time_strategy_allowed(strategy)
+    before_cutoff = current_kst.time() < cutoff
+    applied = bool(enabled and strategy_allowed and not passthrough_reason and before_cutoff)
+    return {
+        "runtime_family": "sell_side_open_time_block_runtime",
+        "policy_version": "sell_side_open_time_block_v1",
+        "sell_time_block_enabled": enabled,
+        "sell_time_block_until_hhmm": cutoff.strftime("%H:%M"),
+        "sell_time_block_scope": _sell_side_open_time_scope(),
+        "sell_reason_type": str(reason_type or ""),
+        "sell_time_block_checked": True,
+        "sell_time_block_strategy": str(strategy or ""),
+        "sell_time_block_strategy_allowed": strategy_allowed,
+        "sell_time_block_before_cutoff": before_cutoff,
+        "sell_time_block_applied": applied,
+        "sell_time_block_passthrough_reason": passthrough_reason or "-",
+    }
+
+
 def send_buy_order_market(code, qty, token, order_type="6", price=0, tif=None):
     """
     [kt10000] 매수 주문 - return_code 대응 수정 및 지정가(00) 기능 추가
@@ -806,13 +900,41 @@ def send_buy_order(code, qty, price, order_type_code, token, order_type_desc=Non
         tif=tif,
     )
 
-def send_sell_order_market(code, qty, token, order_type="3", price=0):
+def send_sell_order_market(
+    code,
+    qty,
+    token,
+    order_type="3",
+    price=0,
+    *,
+    reason_type=None,
+    strategy=None,
+    bypass_open_time_block=False,
+):
     """
     [kt10001] 주식 매도 주문 (시장가/지정가/최유리지정가 통합 지원)
     """
     if qty <= 0: return None
 
     clean_code = str(code)[:6]
+    if not bypass_open_time_block and is_sell_side_open_time_blocked(
+        reason_type=reason_type,
+        strategy=strategy,
+    ):
+        label = get_sell_side_open_time_block_label()
+        fields = get_sell_side_open_time_block_fields(
+            reason_type=reason_type,
+            strategy=strategy,
+        )
+        log_info(f"[SELL_TIME_BLOCK] sell order blocked 종목:{clean_code}, 상태:{label}")
+        return {
+            "rt_cd": "SELL_TIME_BLOCKED",
+            "return_code": "SELL_TIME_BLOCKED",
+            "return_msg": label,
+            "ord_no": "",
+            "sell_time_block_fields": fields,
+        }
+
     url = kiwoom_utils.get_api_url("/api/dostk/ordr")
     headers = {
         'Content-Type': 'application/json;charset=UTF-8',
@@ -922,7 +1044,15 @@ def send_cancel_order(code, orig_ord_no, token, qty=0):
 # ==========================================
 # 3. 🚀 스마트 하이브리드 주문 (Sniper 엔진에서 호출)
 # ==========================================
-def send_smart_sell_order(code, qty, token, ws_data, reason_type):
+def send_smart_sell_order(
+    code,
+    qty,
+    token,
+    ws_data,
+    reason_type,
+    strategy=None,
+    bypass_open_time_block=False,
+):
     """
      [v14.0] 슬리피지 방어를 위한 스마트 매도 로직 (사유 기반 동적 시장가 전환)
     - LOSS, CLOSE: 긴급 탈출 -> 시장가(3)
@@ -938,7 +1068,15 @@ def send_smart_sell_order(code, qty, token, ws_data, reason_type):
         
         if not bids:
             print(f"⚠️ [{code}] 호가 데이터가 없어 시장가(3)로 전환합니다.")
-            return send_sell_order_market(code, qty, token, order_type="3")
+            return send_sell_order_market(
+                code,
+                qty,
+                token,
+                order_type="3",
+                reason_type=reason_type,
+                strategy=strategy,
+                bypass_open_time_block=bypass_open_time_block,
+            )
 
         # 매수 1호가 정보 (bids[0] 이 가장 높은 매수 호가)
         bid_1_p = bids[0].get('price', 0)
@@ -946,19 +1084,43 @@ def send_smart_sell_order(code, qty, token, ws_data, reason_type):
         
     except (IndexError, KeyError, TypeError) as e:
         log_error(f"❌ [{code}] 호가 데이터 파싱 실패: {e}")
-        return send_sell_order_market(code, qty, token, order_type="3")
+        return send_sell_order_market(
+            code,
+            qty,
+            token,
+            order_type="3",
+            reason_type=reason_type,
+            strategy=strategy,
+            bypass_open_time_block=bypass_open_time_block,
+        )
 
     # 2. 매매 성격(reason_type)에 따른 주문 분기
     # 🚨 긴급 탈출(LOSS, CLOSE) : 절대 지정가 쓰지 않음. 시장가(3) 즉시 던짐.
     if reason_type in ['LOSS', 'CLOSE']:
         print(f"🚨 [긴급매도] {code}: 시장가(3) 매도 (사유: {reason_type}, 수량: {qty})")
-        return send_sell_order_market(code, qty, token, order_type="3")
+        return send_sell_order_market(
+            code,
+            qty,
+            token,
+            order_type="3",
+            reason_type=reason_type,
+            strategy=strategy,
+            bypass_open_time_block=bypass_open_time_block,
+        )
 
     # 💰 익절(PROFIT): 슬리피지 방어 가동
     # ⚠️ 모멘텀 급감, 트레일링 스탑 (MOMENTUM_DECAY, TRAILING) : 최유리지정가(6)로 시장가에 가깝게 즉시 체결 유도
     elif reason_type in ['MOMENTUM_DECAY', 'TRAILING']:
         print(f"⚠️ [시장가성 매도] {code}: 최유리지정가(6) 매도 (사유: {reason_type}, 수량: {qty})")
-        return send_sell_order_market(code, qty, token, order_type="6")
+        return send_sell_order_market(
+            code,
+            qty,
+            token,
+            order_type="6",
+            reason_type=reason_type,
+            strategy=strategy,
+            bypass_open_time_block=bypass_open_time_block,
+        )
 
     # 💰 일반 익절, 타임아웃 (PROFIT, TIMEOUT) : 지정가(00) 우선 시도, 안 되면 최유리지정가(6) (8:2 비율 중 2의 영역)
 
@@ -966,12 +1128,29 @@ def send_smart_sell_order(code, qty, token, ws_data, reason_type):
         # 매수 1호가 잔량이 내 물량보다 넉넉한지 확인 (2배 여유)
         if bid_1_p > 0 and bid_1_q >= qty * 2.0:
             print(f"💰 [스마트익절] {code}: 1호가({bid_1_p:,}원) 지정가 매도 (사유: {reason_type}, 호가잔량: {bid_1_q}주)")
-            return send_sell_order_market(code, qty, token, order_type="00", price=bid_1_p)
+            return send_sell_order_market(
+                code,
+                qty,
+                token,
+                order_type="00",
+                price=bid_1_p,
+                reason_type=reason_type,
+                strategy=strategy,
+                bypass_open_time_block=bypass_open_time_block,
+            )
         
         else:
             # 1호가 잔량이 부족하면 '최유리지정가(6)'로 던져서 슬리피지 최소화
             print(f"⚠️ [슬리피지방어] {code}: 1호가 잔량 부족. 최유리지정가(6) 매도")
-            return send_sell_order_market(code, qty, token, order_type="6")
+            return send_sell_order_market(
+                code,
+                qty,
+                token,
+                order_type="6",
+                reason_type=reason_type,
+                strategy=strategy,
+                bypass_open_time_block=bypass_open_time_block,
+            )
 
 def reserve_buy_order_ai(code, ai_target_price, deposit, token, ratio=0.05):
     """
