@@ -305,6 +305,12 @@ class TradingConfig:
     SCALP_PARTIAL_FILL_MIN_RATIO_PRESET_TP: float = 0.00  # SCALP_PRESET_TP 예외(적용 제외)
     SCALPING_PRE_SUBMIT_PRICE_GUARD_ENABLED: bool = True  # submitted 전 비정상 저가 지정가 차단
     SCALPING_PRE_SUBMIT_MAX_BELOW_BID_BPS: int = 80  # best_bid 대비 허용 하향 괴리(bp)
+    SCALP_LATE_ENTRY_PRICE_DRIFT_GUARD_ENABLED: bool = False  # operator env로만 ON
+    SCALP_LATE_ENTRY_PRICE_DRIFT_HARD_BPS: int = 50
+    SCALP_LATE_ENTRY_PRICE_DRIFT_SOFT_BPS: int = 35
+    SCALP_LATE_ENTRY_PRICE_DRIFT_MIN_TICK_ACCEL: float = 1.10
+    SCALP_LATE_ENTRY_PRICE_DRIFT_MIN_BUY_PRESSURE: float = 0.0
+    SCALP_LATE_ENTRY_PRICE_DRIFT_MIN_MICRO_VWAP_BP: float = 0.0
     SCALPING_NORMAL_DEFENSIVE_TICKS: int = 1  # 일반 SCALPING 실주문 기본 방어 제출가 tick offset
     SCALPING_NORMAL_DEFENSIVE_BPS: int = 25  # percent_bps 모드 일반 방어 제출가 bp (0.25%)
     SCALPING_CONDITIONAL_STRONG_DEFENSIVE_BPS: int = 10  # percent_bps 모드 강세 조건 방어 제출가 bp (0.1%)
@@ -325,6 +331,10 @@ class TradingConfig:
     SCALP_SCANNER_PROBE_MAX_SEC: int = 300
     SCALP_SCANNER_PROBE_MIN_PRICE_DELTA_PCT: float = 0.15
     SCALP_SCANNER_PROBE_MIN_FLU_DELTA_PCT: float = 0.30
+    SCALP_SCANNER_PRIORITY_TIERING_ENABLED: bool = False
+    SCALP_SCANNER_PRIORITY_DEMOTE_REALTIME_RANK_ONLY: bool = True
+    SCALP_SCANNER_PRIORITY_DEMOTE_BID_IMBALANCE_ONLY: bool = True
+    SCALP_SCANNER_DEMOTE_OPEN_PRICE_JUMP_WITHOUT_VOLUME: bool = False
     EARLY_ACCEL_RECHECK_RUNTIME_ENABLED: bool = False
     EARLY_ACCEL_RECHECK_MAX_COUNT: int = 2
     EARLY_ACCEL_RECHECK_MIN_INTERVAL_SEC: int = 20
@@ -333,6 +343,11 @@ class TradingConfig:
     EARLY_ACCEL_RECHECK_MIN_MICRO_VWAP_BP: float = 0.0
     EARLY_ACCEL_RECHECK_ALLOW_LIQUIDITY_BLOCKED: bool = True
     EARLY_ACCEL_RECHECK_ALLOW_STRENGTH_BLOCKED: bool = True
+    AI_NUMERIC_CONSISTENCY_RECHECK_ENABLED: bool = False
+    AI_NUMERIC_CONSISTENCY_RECHECK_MIN_SCORE: int = 60
+    AI_NUMERIC_CONSISTENCY_RECHECK_BUY_MIN_SCORE: int = 75
+    AI_NUMERIC_CONSISTENCY_RECHECK_MIN_FEATURE_PASS_COUNT: int = 3
+    AI_NUMERIC_CONSISTENCY_RECHECK_MAX_PER_SYMBOL: int = 1
     SCALP_CONDITION_UNMATCH_GUARD_ENABLED: bool = False  # real SCALPING 조건검색 unmatched-only churn guard는 PREOPEN env로만 ON
     SCALP_CONDITION_UNMATCH_GUARD_TAGS: tuple = ("VWAP_RECLAIM", "DRYUP_SQUEEZE", "PRECLOSE")
     SCALP_AGGRESSIVE_ENTRY_PRICE_OVERRIDE_ENABLED: bool = False  # real SCALPING missed-upside 가격 override는 PREOPEN env로만 ON
@@ -1245,6 +1260,20 @@ def _build_trading_rules() -> TradingConfig:
     env_partial_fill_min_preset = _env_float("KORSTOCKSCAN_SCALP_PARTIAL_FILL_MIN_RATIO_PRESET_TP")
     env_pre_submit_price_guard_enabled = _env_bool("KORSTOCKSCAN_SCALPING_PRE_SUBMIT_PRICE_GUARD_ENABLED")
     env_pre_submit_max_below_bid_bps = _env_int("KORSTOCKSCAN_SCALPING_PRE_SUBMIT_MAX_BELOW_BID_BPS")
+    env_late_entry_price_drift_guard_enabled = _env_bool(
+        "KORSTOCKSCAN_SCALP_LATE_ENTRY_PRICE_DRIFT_GUARD_ENABLED"
+    )
+    env_late_entry_price_drift_hard_bps = _env_int("KORSTOCKSCAN_SCALP_LATE_ENTRY_PRICE_DRIFT_HARD_BPS")
+    env_late_entry_price_drift_soft_bps = _env_int("KORSTOCKSCAN_SCALP_LATE_ENTRY_PRICE_DRIFT_SOFT_BPS")
+    env_late_entry_price_drift_min_tick_accel = _env_float(
+        "KORSTOCKSCAN_SCALP_LATE_ENTRY_PRICE_DRIFT_MIN_TICK_ACCEL"
+    )
+    env_late_entry_price_drift_min_buy_pressure = _env_float(
+        "KORSTOCKSCAN_SCALP_LATE_ENTRY_PRICE_DRIFT_MIN_BUY_PRESSURE"
+    )
+    env_late_entry_price_drift_min_micro_vwap = _env_float(
+        "KORSTOCKSCAN_SCALP_LATE_ENTRY_PRICE_DRIFT_MIN_MICRO_VWAP_BP"
+    )
     env_scalping_normal_defensive_ticks = _env_int("KORSTOCKSCAN_SCALPING_NORMAL_DEFENSIVE_TICKS")
     env_scalping_normal_defensive_bps = _env_int("KORSTOCKSCAN_SCALPING_NORMAL_DEFENSIVE_BPS")
     env_scalping_conditional_strong_defensive_bps = _env_int("KORSTOCKSCAN_SCALPING_CONDITIONAL_STRONG_DEFENSIVE_BPS")
@@ -1287,6 +1316,18 @@ def _build_trading_rules() -> TradingConfig:
     env_scalp_scanner_probe_min_flu_delta_pct = _env_float(
         "KORSTOCKSCAN_SCALP_SCANNER_PROBE_MIN_FLU_DELTA_PCT"
     )
+    env_scalp_scanner_priority_tiering_enabled = _env_bool(
+        "KORSTOCKSCAN_SCALP_SCANNER_PRIORITY_TIERING_ENABLED"
+    )
+    env_scalp_scanner_priority_demote_realtime_rank_only = _env_bool(
+        "KORSTOCKSCAN_SCALP_SCANNER_PRIORITY_DEMOTE_REALTIME_RANK_ONLY"
+    )
+    env_scalp_scanner_priority_demote_bid_imbalance_only = _env_bool(
+        "KORSTOCKSCAN_SCALP_SCANNER_PRIORITY_DEMOTE_BID_IMBALANCE_ONLY"
+    )
+    env_scalp_scanner_demote_open_price_jump_without_volume = _env_bool(
+        "KORSTOCKSCAN_SCALP_SCANNER_DEMOTE_OPEN_PRICE_JUMP_WITHOUT_VOLUME"
+    )
     env_early_accel_recheck_enabled = _env_bool("KORSTOCKSCAN_EARLY_ACCEL_RECHECK_RUNTIME_ENABLED")
     env_early_accel_recheck_max_count = _env_int("KORSTOCKSCAN_EARLY_ACCEL_RECHECK_MAX_COUNT")
     env_early_accel_recheck_min_interval = _env_int("KORSTOCKSCAN_EARLY_ACCEL_RECHECK_MIN_INTERVAL_SEC")
@@ -1298,6 +1339,21 @@ def _build_trading_rules() -> TradingConfig:
     )
     env_early_accel_recheck_allow_strength = _env_bool(
         "KORSTOCKSCAN_EARLY_ACCEL_RECHECK_ALLOW_STRENGTH_BLOCKED"
+    )
+    env_ai_numeric_consistency_recheck_enabled = _env_bool(
+        "KORSTOCKSCAN_AI_NUMERIC_CONSISTENCY_RECHECK_ENABLED"
+    )
+    env_ai_numeric_consistency_recheck_min_score = _env_int(
+        "KORSTOCKSCAN_AI_NUMERIC_CONSISTENCY_RECHECK_MIN_SCORE"
+    )
+    env_ai_numeric_consistency_recheck_buy_min_score = _env_int(
+        "KORSTOCKSCAN_AI_NUMERIC_CONSISTENCY_RECHECK_BUY_MIN_SCORE"
+    )
+    env_ai_numeric_consistency_recheck_min_feature_pass_count = _env_int(
+        "KORSTOCKSCAN_AI_NUMERIC_CONSISTENCY_RECHECK_MIN_FEATURE_PASS_COUNT"
+    )
+    env_ai_numeric_consistency_recheck_max_per_symbol = _env_int(
+        "KORSTOCKSCAN_AI_NUMERIC_CONSISTENCY_RECHECK_MAX_PER_SYMBOL"
     )
     env_scalp_condition_unmatch_guard_enabled = _env_bool(
         "KORSTOCKSCAN_SCALP_CONDITION_UNMATCH_GUARD_ENABLED"
@@ -1657,6 +1713,24 @@ def _build_trading_rules() -> TradingConfig:
             SCALPING_PRE_SUBMIT_MAX_BELOW_BID_BPS=env_pre_submit_max_below_bid_bps
             if env_pre_submit_max_below_bid_bps is not None
             else config.SCALPING_PRE_SUBMIT_MAX_BELOW_BID_BPS,
+            SCALP_LATE_ENTRY_PRICE_DRIFT_GUARD_ENABLED=env_late_entry_price_drift_guard_enabled
+            if env_late_entry_price_drift_guard_enabled is not None
+            else config.SCALP_LATE_ENTRY_PRICE_DRIFT_GUARD_ENABLED,
+            SCALP_LATE_ENTRY_PRICE_DRIFT_HARD_BPS=env_late_entry_price_drift_hard_bps
+            if env_late_entry_price_drift_hard_bps is not None
+            else config.SCALP_LATE_ENTRY_PRICE_DRIFT_HARD_BPS,
+            SCALP_LATE_ENTRY_PRICE_DRIFT_SOFT_BPS=env_late_entry_price_drift_soft_bps
+            if env_late_entry_price_drift_soft_bps is not None
+            else config.SCALP_LATE_ENTRY_PRICE_DRIFT_SOFT_BPS,
+            SCALP_LATE_ENTRY_PRICE_DRIFT_MIN_TICK_ACCEL=env_late_entry_price_drift_min_tick_accel
+            if env_late_entry_price_drift_min_tick_accel is not None
+            else config.SCALP_LATE_ENTRY_PRICE_DRIFT_MIN_TICK_ACCEL,
+            SCALP_LATE_ENTRY_PRICE_DRIFT_MIN_BUY_PRESSURE=env_late_entry_price_drift_min_buy_pressure
+            if env_late_entry_price_drift_min_buy_pressure is not None
+            else config.SCALP_LATE_ENTRY_PRICE_DRIFT_MIN_BUY_PRESSURE,
+            SCALP_LATE_ENTRY_PRICE_DRIFT_MIN_MICRO_VWAP_BP=env_late_entry_price_drift_min_micro_vwap
+            if env_late_entry_price_drift_min_micro_vwap is not None
+            else config.SCALP_LATE_ENTRY_PRICE_DRIFT_MIN_MICRO_VWAP_BP,
             SCALPING_NORMAL_DEFENSIVE_TICKS=env_scalping_normal_defensive_ticks
             if env_scalping_normal_defensive_ticks is not None
             else config.SCALPING_NORMAL_DEFENSIVE_TICKS,
@@ -1717,6 +1791,18 @@ def _build_trading_rules() -> TradingConfig:
             SCALP_SCANNER_PROBE_MIN_FLU_DELTA_PCT=env_scalp_scanner_probe_min_flu_delta_pct
             if env_scalp_scanner_probe_min_flu_delta_pct is not None
             else config.SCALP_SCANNER_PROBE_MIN_FLU_DELTA_PCT,
+            SCALP_SCANNER_PRIORITY_TIERING_ENABLED=env_scalp_scanner_priority_tiering_enabled
+            if env_scalp_scanner_priority_tiering_enabled is not None
+            else config.SCALP_SCANNER_PRIORITY_TIERING_ENABLED,
+            SCALP_SCANNER_PRIORITY_DEMOTE_REALTIME_RANK_ONLY=env_scalp_scanner_priority_demote_realtime_rank_only
+            if env_scalp_scanner_priority_demote_realtime_rank_only is not None
+            else config.SCALP_SCANNER_PRIORITY_DEMOTE_REALTIME_RANK_ONLY,
+            SCALP_SCANNER_PRIORITY_DEMOTE_BID_IMBALANCE_ONLY=env_scalp_scanner_priority_demote_bid_imbalance_only
+            if env_scalp_scanner_priority_demote_bid_imbalance_only is not None
+            else config.SCALP_SCANNER_PRIORITY_DEMOTE_BID_IMBALANCE_ONLY,
+            SCALP_SCANNER_DEMOTE_OPEN_PRICE_JUMP_WITHOUT_VOLUME=env_scalp_scanner_demote_open_price_jump_without_volume
+            if env_scalp_scanner_demote_open_price_jump_without_volume is not None
+            else config.SCALP_SCANNER_DEMOTE_OPEN_PRICE_JUMP_WITHOUT_VOLUME,
             EARLY_ACCEL_RECHECK_RUNTIME_ENABLED=env_early_accel_recheck_enabled
             if env_early_accel_recheck_enabled is not None
             else config.EARLY_ACCEL_RECHECK_RUNTIME_ENABLED,
@@ -1741,6 +1827,21 @@ def _build_trading_rules() -> TradingConfig:
             EARLY_ACCEL_RECHECK_ALLOW_STRENGTH_BLOCKED=env_early_accel_recheck_allow_strength
             if env_early_accel_recheck_allow_strength is not None
             else config.EARLY_ACCEL_RECHECK_ALLOW_STRENGTH_BLOCKED,
+            AI_NUMERIC_CONSISTENCY_RECHECK_ENABLED=env_ai_numeric_consistency_recheck_enabled
+            if env_ai_numeric_consistency_recheck_enabled is not None
+            else config.AI_NUMERIC_CONSISTENCY_RECHECK_ENABLED,
+            AI_NUMERIC_CONSISTENCY_RECHECK_MIN_SCORE=env_ai_numeric_consistency_recheck_min_score
+            if env_ai_numeric_consistency_recheck_min_score is not None
+            else config.AI_NUMERIC_CONSISTENCY_RECHECK_MIN_SCORE,
+            AI_NUMERIC_CONSISTENCY_RECHECK_BUY_MIN_SCORE=env_ai_numeric_consistency_recheck_buy_min_score
+            if env_ai_numeric_consistency_recheck_buy_min_score is not None
+            else config.AI_NUMERIC_CONSISTENCY_RECHECK_BUY_MIN_SCORE,
+            AI_NUMERIC_CONSISTENCY_RECHECK_MIN_FEATURE_PASS_COUNT=env_ai_numeric_consistency_recheck_min_feature_pass_count
+            if env_ai_numeric_consistency_recheck_min_feature_pass_count is not None
+            else config.AI_NUMERIC_CONSISTENCY_RECHECK_MIN_FEATURE_PASS_COUNT,
+            AI_NUMERIC_CONSISTENCY_RECHECK_MAX_PER_SYMBOL=env_ai_numeric_consistency_recheck_max_per_symbol
+            if env_ai_numeric_consistency_recheck_max_per_symbol is not None
+            else config.AI_NUMERIC_CONSISTENCY_RECHECK_MAX_PER_SYMBOL,
             SCALP_CONDITION_UNMATCH_GUARD_ENABLED=env_scalp_condition_unmatch_guard_enabled
             if env_scalp_condition_unmatch_guard_enabled is not None
             else config.SCALP_CONDITION_UNMATCH_GUARD_ENABLED,

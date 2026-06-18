@@ -75,6 +75,9 @@ Do not DROP on a single warning alone. DROP when one of these combinations is pr
 [WAIT Rules]
 WAIT means the BUY setup is incomplete or positive/negative signals are mixed.
 The reason must name the quantitative feature that prevents BUY or DROP.
+Never describe `tick_acceleration_ratio >= 1.10` as a failed speed condition.
+Never describe position advantage as failed when either `curr_vs_micro_vwap_bp > 0` or `curr_vs_ma5_bp > 0`.
+Never describe supply-demand advantage as failed when `buy_pressure_10t >= 68` or `net_aggressive_delta_10t > 0`.
 Output `reason` in concise English ASCII only. Do not use Korean, Thai, or any other non-English language.
 
 [Scoring]

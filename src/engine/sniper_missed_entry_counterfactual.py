@@ -16,9 +16,20 @@ from src.utils.logger import log_error
 
 MISSED_ENTRY_COUNTERFACTUAL_SCHEMA_VERSION = 2
 _ENTRY_ARMED_STAGES = {"entry_armed", "entry_armed_resume"}
+_INFERRED_BUY_INTENT_STAGES = _ENTRY_ARMED_STAGES | {"score65_74_recovery_probe_entry_unlocked"}
+_INFERRED_BUY_INTENT_DEDUP_TERMINAL_STAGES = {
+    "pre_submit_liquidity_guard_block",
+    "pre_submit_overbought_pullback_guard_block",
+}
+_INFERRED_BUY_INTENT_DEDUP_WINDOW_SEC = 120
 _ATTEMPT_AUXILIARY_STAGES = {
     "dual_persona_shadow",
     "dual_persona_shadow_error",
+    "ai_numeric_consistency_recheck_evaluated",
+    "ai_numeric_consistency_recheck_allowed",
+    "ai_numeric_consistency_recheck_skipped",
+    "ai_numeric_consistency_recheck_failed",
+    "ai_numeric_consistency_recheck_corrected",
 }
 _BUY_MISSED_MFE_PCT = 0.8
 _BUY_MISSED_CLOSE_PCT = 0.3
@@ -41,6 +52,7 @@ _STAGE_LABELS = {
     "entry_armed_expired": "진입 자격 만료",
     "entry_armed_expired_after_wait": "진입 대기 후 자격 만료",
     "entry_arm_expired": "진입 자격 만료(legacy)",
+    "scalp_entry_action_decision_snapshot": "AI 판정 스냅샷",
 }
 
 
@@ -248,6 +260,102 @@ def _build_candidates(target_date: str) -> list[dict]:
     return _build_buy_attempts(target_date, include_submitted=False)
 
 
+def _buy_intent_events(attempt_events: list[EntryEvent]) -> tuple[list[EntryEvent], str]:
+    explicit_buy_events = [
+        event for event in attempt_events
+        if event.stage == "ai_confirmed" and str(event.fields.get("action") or "").upper() == "BUY"
+    ]
+    if explicit_buy_events:
+        return explicit_buy_events, "explicit_ai_buy"
+
+    inferred_buy_events = [
+        event for event in attempt_events if event.stage in _INFERRED_BUY_INTENT_STAGES
+    ]
+    if inferred_buy_events:
+        return inferred_buy_events, "inferred_entry_armed_path"
+    snapshot_decision_events = [
+        event
+        for event in attempt_events
+        if event.stage == "scalp_entry_action_decision_snapshot"
+        and str(event.fields.get("chosen_action") or "").upper()
+        in {"NO_BUY_AI", "WAIT_REQUOTE", "SKIP_STALE", "SKIP_PRE_SUBMIT_SAFETY", "SKIP_SOURCE_QUALITY"}
+    ]
+    if snapshot_decision_events:
+        return snapshot_decision_events, "snapshot_decision_path"
+    return [], "missing_buy_intent"
+
+
+def _snapshot_terminal_class(event: EntryEvent) -> str | None:
+    if event.stage != "scalp_entry_action_decision_snapshot":
+        return None
+    chosen_action = str(event.fields.get("chosen_action") or "").upper()
+    if chosen_action == "NO_BUY_AI":
+        return "blocked"
+    if chosen_action in {"WAIT_REQUOTE", "SKIP_STALE", "SKIP_PRE_SUBMIT_SAFETY", "SKIP_SOURCE_QUALITY"}:
+        return "waiting"
+    return None
+
+
+def _missed_submit_cohort(candidate: dict) -> str:
+    terminal_stage = str(candidate.get("terminal_stage") or "")
+    terminal_fields = candidate.get("terminal_fields") if isinstance(candidate.get("terminal_fields"), dict) else {}
+    chosen_action = str(terminal_fields.get("chosen_action") or "").upper()
+    if terminal_stage == "ai_numeric_consistency_recheck_failed":
+        return "ai_numeric_consistency_recheck_failed"
+    if terminal_stage == "scalp_entry_action_decision_snapshot" and chosen_action == "NO_BUY_AI":
+        if terminal_fields.get("ai_reason_numeric_inconsistency") in {True, "true", "True", "1"}:
+            return "ai_numeric_inconsistency_no_buy"
+        return "ai_no_buy_clean_reason"
+    if terminal_stage == "pre_submit_liquidity_guard_block":
+        return "entry_armed_pre_submit_liquidity_block"
+    if terminal_stage in {
+        "latency_block",
+        "entry_submit_revalidation_block",
+        "pre_submit_overbought_pullback_guard_block",
+        "real_weak_pullback_entry_block",
+    }:
+        return "entry_armed_latency_or_safety_block"
+    if chosen_action in {"WAIT_REQUOTE", "SKIP_STALE", "SKIP_PRE_SUBMIT_SAFETY", "SKIP_SOURCE_QUALITY"}:
+        return "entry_armed_latency_or_safety_block"
+    return terminal_stage or "uncategorized"
+
+
+def _dedupe_inferred_pre_submit_attempts(candidates: list[dict]) -> list[dict]:
+    deduped: list[dict] = []
+    last_seen: dict[tuple[str, str, str], datetime] = {}
+    for candidate in candidates:
+        terminal_stage = str(candidate.get("terminal_stage") or "")
+        buy_intent_source = str(candidate.get("buy_intent_source") or "")
+        if (
+            buy_intent_source != "inferred_entry_armed_path"
+            or terminal_stage not in _INFERRED_BUY_INTENT_DEDUP_TERMINAL_STAGES
+        ):
+            deduped.append(candidate)
+            continue
+
+        signal_dt = _parse_event_dt(
+            f"{candidate.get('signal_date')} {candidate.get('signal_time')}"
+        )
+        if signal_dt is None:
+            deduped.append(candidate)
+            continue
+
+        key = (
+            str(candidate.get("stock_code") or ""),
+            str(candidate.get("record_id") or ""),
+            terminal_stage,
+        )
+        previous_dt = last_seen.get(key)
+        if previous_dt is not None:
+            elapsed_sec = (signal_dt - previous_dt).total_seconds()
+            if 0 <= elapsed_sec <= _INFERRED_BUY_INTENT_DEDUP_WINDOW_SEC:
+                continue
+
+        last_seen[key] = signal_dt
+        deduped.append(candidate)
+    return deduped
+
+
 def _build_buy_attempts(target_date: str, *, include_submitted: bool = True) -> list[dict]:
     events = _load_entry_events(target_date)
     by_stock: dict[tuple[str, str], list[EntryEvent]] = defaultdict(list)
@@ -263,10 +371,7 @@ def _build_buy_attempts(target_date: str, *, include_submitted: bool = True) -> 
             if has_submitted and not include_submitted:
                 continue
 
-            buy_events = [
-                event for event in attempt_events
-                if event.stage == "ai_confirmed" and str(event.fields.get("action") or "").upper() == "BUY"
-            ]
+            buy_events, buy_intent_source = _buy_intent_events(attempt_events)
             if not buy_events:
                 continue
 
@@ -278,6 +383,15 @@ def _build_buy_attempts(target_date: str, *, include_submitted: bool = True) -> 
                 ),
                 None,
             )
+            if terminal_event is None:
+                terminal_event = next(
+                    (
+                        event
+                        for event in reversed(attempt_events)
+                        if _snapshot_terminal_class(event) in ({"blocked", "waiting", "submitted"} if include_submitted else {"blocked", "waiting"})
+                    ),
+                    None,
+                )
             if terminal_event is None:
                 continue
 
@@ -320,12 +434,19 @@ def _build_buy_attempts(target_date: str, *, include_submitted: bool = True) -> 
                     "budget_passed": bool(budget_event is not None),
                     "entry_armed": any(event.stage in _ENTRY_ARMED_STAGES for event in attempt_events),
                     "buy_signal_count": len(buy_events),
+                    "buy_intent_source": buy_intent_source,
                     "stage_flow": [event.stage for event in attempt_events],
                     "blocker_counts": dict(blocker_counts),
                     "terminal_fields": dict(terminal_event.fields),
+                    "missed_submit_cohort": _missed_submit_cohort(
+                        {
+                            "terminal_stage": terminal_event.stage,
+                            "terminal_fields": dict(terminal_event.fields),
+                        }
+                    ),
                 }
             )
-    return candidates
+    return _dedupe_inferred_pre_submit_attempts(candidates)
 
 
 def _resolve_anchor_price(signal_price: float, relevant: list[tuple[datetime, dict]]) -> float:
@@ -476,6 +597,34 @@ def _build_blocker_outcome_metrics(items: list[dict]) -> dict:
     return metrics
 
 
+def _build_cohort_outcome_metrics(items: list[dict]) -> dict:
+    buckets: dict[str, list[dict]] = defaultdict(list)
+    for item in items:
+        buckets[str(item.get("missed_submit_cohort") or "uncategorized")].append(item)
+
+    metrics: dict[str, dict] = {}
+    for cohort, rows in sorted(buckets.items()):
+        total = len(rows)
+        missed = sum(1 for row in rows if str(row.get("outcome") or "") == "MISSED_WINNER")
+        avoided = sum(1 for row in rows if str(row.get("outcome") or "") == "AVOIDED_LOSER")
+        metrics[cohort] = {
+            "cohort": cohort,
+            "evaluated_candidates": total,
+            "missed_winner_rate": _ratio(missed, total),
+            "avoided_loser_rate": _ratio(avoided, total),
+            "avg_close_10m_pct": _avg(
+                [_safe_float((row.get("metrics_10m") or {}).get("close_ret_pct"), 0.0) for row in rows]
+            ),
+            "avg_mfe_10m_pct": _avg(
+                [_safe_float((row.get("metrics_10m") or {}).get("mfe_pct"), 0.0) for row in rows]
+            ),
+            "avg_mae_10m_pct": _avg(
+                [_safe_float((row.get("metrics_10m") or {}).get("mae_pct"), 0.0) for row in rows]
+            ),
+        }
+    return metrics
+
+
 def missed_entry_counterfactual_summary_to_dict(summary: MissedEntryCounterfactualSummary) -> dict:
     return {
         "date": summary.date,
@@ -520,6 +669,7 @@ def build_missed_entry_counterfactual_report(
                 "avg_mae_10m_pct": 0.0,
                 "estimated_counterfactual_pnl_10m_krw_sum": 0,
                 "blocker_outcome_metrics": {},
+                "cohort_outcome_metrics": {},
             },
             "buy_signal_universe": {
                 "metrics": {
@@ -673,6 +823,7 @@ def build_missed_entry_counterfactual_report(
     for item in evaluations:
         reason_buckets[str(item.get("terminal_stage") or "-")].append(item)
     blocker_outcome_metrics = _build_blocker_outcome_metrics(evaluations)
+    cohort_outcome_metrics = _build_cohort_outcome_metrics(evaluations)
     reason_breakdown = []
     for stage, items in sorted(reason_buckets.items(), key=lambda pair: len(pair[1]), reverse=True):
         trades = len(items)
@@ -699,6 +850,7 @@ def build_missed_entry_counterfactual_report(
             "stock_code": str(item.get("stock_code") or ""),
             "stock_name": str(item.get("stock_name") or ""),
             "attempt_status": str(item.get("attempt_status") or ""),
+            "buy_intent_source": str(item.get("buy_intent_source") or ""),
             "record_id": item.get("record_id"),
             "anchor_stage": str(item.get("anchor_stage") or ""),
             "terminal_stage": str(item.get("terminal_stage") or ""),
@@ -710,6 +862,8 @@ def build_missed_entry_counterfactual_report(
             "counterfactual_qty": int(_safe_int(item.get("counterfactual_qty"), 0)),
             "counterfactual_qty_source": str(item.get("counterfactual_qty_source") or ""),
             "virtual_budget_krw": int(_safe_int(item.get("virtual_budget_krw"), 0)),
+            "counterfactual_ratio": round(_safe_float(item.get("counterfactual_ratio"), 0.0), 4),
+            "counterfactual_safe_budget": int(_safe_int(item.get("counterfactual_safe_budget"), 0)),
             "counterfactual_notional_krw": int(_safe_int(item.get("counterfactual_notional_krw"), 0)),
             "ai_score": round(_safe_float(item.get("ai_score"), 0.0), 1),
             "price_source": str(item.get("price_source") or "minute_candle_proxy"),
@@ -720,6 +874,7 @@ def build_missed_entry_counterfactual_report(
             "mfe_10m_pct": round(_safe_float(metrics_10m.get("mfe_pct"), 0.0), 3),
             "mae_10m_pct": round(_safe_float(metrics_10m.get("mae_pct"), 0.0), 3),
             "estimated_counterfactual_pnl_10m_krw": int(_safe_int(item.get("estimated_counterfactual_pnl_10m_krw"), 0)),
+            "missed_submit_cohort": str(item.get("missed_submit_cohort") or ""),
         }
 
     return {
@@ -739,6 +894,7 @@ def build_missed_entry_counterfactual_report(
             "avg_mae_10m_pct": float(avg_mae_10m),
             "estimated_counterfactual_pnl_10m_krw_sum": int(estimated_pnl_sum),
             "blocker_outcome_metrics": blocker_outcome_metrics,
+            "cohort_outcome_metrics": cohort_outcome_metrics,
         },
         "buy_signal_universe": {
             "metrics": {

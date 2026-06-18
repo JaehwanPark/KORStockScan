@@ -1245,6 +1245,185 @@ class GPTSniperEngine:
             result["reason"] = f"{result.get('reason', '')} | remote_buy_guard(risk={risk_flags})"
         return result
 
+    def _annotate_entry_numeric_consistency(self, result, *, prompt_type, feature_packet):
+        if prompt_type not in {"scalping_entry", "scalping_shared"}:
+            return result
+        payload = dict(result or {}) if isinstance(result, dict) else {}
+        reason = str(payload.get("reason") or "").strip()
+        if not reason:
+            return payload
+        lowered = reason.lower()
+        contradiction = False
+        inconsistency_field = ""
+        inconsistency_reason = ""
+        detected_value = None
+
+        def _feature_float(key, default=0.0):
+            try:
+                return float((feature_packet or {}).get(key, default) or default)
+            except Exception:
+                return float(default or 0.0)
+
+        accel = _feature_float("tick_acceleration_ratio", 0.0)
+        if "tick_acceleration_ratio" in lowered and accel >= 1.10:
+            if re.search(r"tick_acceleration_ratio[^|]{0,100}<\s*1\.1", lowered):
+                contradiction = True
+            if re.search(r"tick_acceleration_ratio[^|]{0,100}(?:fails|not enough|not met|insufficient)", lowered):
+                contradiction = True
+            if re.search(r"tick_acceleration_ratio[^|]{0,100}not\s*>?=\s*1\.1", lowered):
+                contradiction = True
+            if contradiction:
+                inconsistency_field = "tick_acceleration_ratio"
+                inconsistency_reason = "tick_acceleration_pass_described_as_fail"
+                detected_value = round(accel, 3)
+
+        micro_vwap_bp = _feature_float("curr_vs_micro_vwap_bp", 0.0)
+        ma5_bp = _feature_float("curr_vs_ma5_bp", 0.0)
+        micro_vwap_pass = micro_vwap_bp > 0.0
+        ma5_pass = ma5_bp > 0.0
+        position_pass = micro_vwap_pass or ma5_pass
+        position_both_pass = micro_vwap_bp > 0.0 and ma5_bp > 0.0
+        if not contradiction and position_pass and (
+            "position" in lowered
+            or "curr_vs_micro_vwap_bp" in lowered
+            or "curr_vs_ma5_bp" in lowered
+        ):
+            position_fail_phrase = position_both_pass and (
+                "position disadvantage" in lowered
+                or "position deficit" in lowered
+                or "position advantage not present" in lowered
+            )
+            both_positive_but_negated = position_both_pass and (
+                "not both positive" in lowered
+            )
+            explicit_micro_contradiction = micro_vwap_pass and "curr_vs_micro_vwap_bp <= 0" in lowered
+            explicit_ma5_contradiction = ma5_pass and "curr_vs_ma5_bp <= 0" in lowered
+            if position_fail_phrase or both_positive_but_negated:
+                contradiction = True
+                inconsistency_field = "position_advantage"
+                inconsistency_reason = "position_pass_described_as_fail"
+                detected_value = {
+                    "curr_vs_micro_vwap_bp": round(micro_vwap_bp, 3),
+                    "curr_vs_ma5_bp": round(ma5_bp, 3),
+                }
+            elif explicit_micro_contradiction or explicit_ma5_contradiction:
+                contradiction = True
+                inconsistency_field = "position_advantage"
+                inconsistency_reason = "position_value_described_with_wrong_sign"
+                detected_value = {
+                    "curr_vs_micro_vwap_bp": round(micro_vwap_bp, 3),
+                    "curr_vs_ma5_bp": round(ma5_bp, 3),
+                }
+
+        buy_pressure = _feature_float("buy_pressure_10t", 50.0)
+        net_aggressive_delta = _feature_float("net_aggressive_delta_10t", 0.0)
+        supply_pass = buy_pressure >= 68.0 or net_aggressive_delta > 0.0
+        if not contradiction and supply_pass and (
+            "buy_pressure_10t" in lowered
+            or "buy pressure" in lowered
+            or "supply-demand" in lowered
+            or "supply demand" in lowered
+            or "net_aggressive_delta_10t" in lowered
+        ):
+            supply_fail_phrase = (
+                "buy_pressure_10t < 68" in lowered
+                or "buy_pressure_10t low" in lowered
+                or "supply-demand advantage not" in lowered
+                or "supply demand advantage not" in lowered
+            )
+            if "insufficient buy pressure" in lowered and "or speed" not in lowered:
+                supply_fail_phrase = True
+            if supply_fail_phrase:
+                contradiction = True
+                inconsistency_field = "supply_demand_advantage"
+                inconsistency_reason = "supply_demand_pass_described_as_fail"
+                detected_value = {
+                    "buy_pressure_10t": round(buy_pressure, 3),
+                    "net_aggressive_delta_10t": round(net_aggressive_delta, 3),
+                }
+
+        action = str(payload.get("action") or "").upper()
+        try:
+            score = float(payload.get("score", payload.get("ai_score", 0.0)) or 0.0)
+        except Exception:
+            score = 0.0
+        if not contradiction and action != "BUY":
+            feature_pass_count = int(position_pass) + int(accel >= 1.10) + int(supply_pass)
+            if feature_pass_count >= 3 and score >= 70.0 and (
+                "insufficient buy" in lowered
+                or "prevents buy" in lowered
+                or "buy setup is incomplete" in lowered
+                or "buy signals" in lowered
+            ):
+                contradiction = True
+                inconsistency_field = "entry_feature_bundle"
+                inconsistency_reason = "three_core_features_pass_described_as_no_buy"
+                detected_value = {
+                    "score": round(score, 3),
+                    "tick_acceleration_ratio": round(accel, 3),
+                    "buy_pressure_10t": round(buy_pressure, 3),
+                    "curr_vs_micro_vwap_bp": round(micro_vwap_bp, 3),
+                    "curr_vs_ma5_bp": round(ma5_bp, 3),
+                }
+
+        if not contradiction:
+            return payload
+        payload["ai_reason_numeric_inconsistency"] = True
+        payload["ai_reason_feature_inconsistency"] = True
+        payload["ai_reason_numeric_inconsistency_field"] = inconsistency_field or "entry_feature_bundle"
+        payload["ai_reason_numeric_inconsistency_reason"] = (
+            inconsistency_reason or "entry_feature_pass_described_as_fail"
+        )
+        payload["ai_reason_numeric_inconsistency_detected_value"] = detected_value
+        payload["ai_reason_numeric_inconsistency_excerpt"] = reason[:120]
+        return payload
+
+    def _append_numeric_consistency_recheck_context(self, formatted_data, *, metadata_extra):
+        if not isinstance(metadata_extra, dict):
+            return formatted_data
+        if str(metadata_extra.get("ai_numeric_consistency_recheck") or "").strip().lower() not in {
+            "1",
+            "true",
+            "yes",
+            "y",
+        }:
+            return formatted_data
+        original_reason = str(metadata_extra.get("ai_numeric_consistency_recheck_original_reason_excerpt") or "-")[:160]
+        inconsistency_field = str(metadata_extra.get("ai_numeric_consistency_recheck_inconsistency_field") or "-")[:80]
+        inconsistency_reason = str(metadata_extra.get("ai_numeric_consistency_recheck_inconsistency_reason") or "-")[:120]
+        detected_value = str(metadata_extra.get("ai_numeric_consistency_recheck_detected_value") or "-")[:240]
+        correction_note = (
+            "[Numeric consistency recheck]\n"
+            f"- prior_reason_excerpt: {original_reason}\n"
+            f"- contradiction_field: {inconsistency_field}\n"
+            f"- contradiction_reason: {inconsistency_reason}\n"
+            f"- detected_value: {detected_value}\n"
+            "- Re-evaluate using the same feature packet only.\n"
+            "- If the corrected decision is still WAIT, explain using non-contradictory missing conditions only.\n"
+            "- Do not describe a passing quantitative feature as failed.\n"
+        )
+        if isinstance(formatted_data, str):
+            stripped = formatted_data.strip()
+            if stripped.startswith("{") and stripped.endswith("}"):
+                try:
+                    payload = json.loads(stripped)
+                except Exception:
+                    payload = None
+                if isinstance(payload, dict):
+                    payload["numeric_consistency_recheck_context"] = {
+                        "prior_reason_excerpt": original_reason,
+                        "contradiction_field": inconsistency_field,
+                        "contradiction_reason": inconsistency_reason,
+                        "detected_value": detected_value,
+                        "instruction": (
+                            "Re-evaluate using the same feature packet only. "
+                            "If the corrected decision is still WAIT, explain using non-contradictory missing conditions only."
+                        ),
+                    }
+                    return json.dumps(payload, ensure_ascii=False, separators=(",", ":"), default=str)
+            return f"{formatted_data}\n\n{correction_note}"
+        return formatted_data
+
     # ==========================================
     # JSON 파싱
     # ==========================================
@@ -3277,6 +3456,10 @@ class GPTSniperEngine:
                         formatted_data = f"{formatted_data}\n\n{entry_adm_runtime['prompt_context']}"
                     if lifecycle_ai_runtime and lifecycle_ai_runtime.get("prompt_context"):
                         formatted_data = f"{formatted_data}\n\n{lifecycle_ai_runtime['prompt_context']}"
+                formatted_data = self._append_numeric_consistency_recheck_context(
+                    formatted_data,
+                    metadata_extra=metadata_extra,
+                )
                 target_model = self._get_tier1_model()
                 feature_audit_fields = build_scalping_feature_audit_fields(feature_packet)
                 input_contract_fields = self._resolve_ai_input_contract_fields(
@@ -3322,6 +3505,11 @@ class GPTSniperEngine:
                 )
                 result = self._normalize_scalping_action_schema(result, prompt_type=prompt_type)
                 result.update(feature_audit_fields)
+                result = self._annotate_entry_numeric_consistency(
+                    result,
+                    prompt_type=prompt_type,
+                    feature_packet=feature_packet,
+                )
                 result["ai_model"] = target_model
 
             result = _merge_runtime_fields(result)

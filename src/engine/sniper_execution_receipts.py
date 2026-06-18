@@ -129,6 +129,8 @@ _SELL_REVIVE_RESET_KEYS = (
     "entry_fill_amount",
     "entry_bundle_id",
     "requested_buy_qty",
+    "_entry_receipt_filled_by_order_no",
+    "_entry_receipt_requested_by_order_no",
     "buy_execution_notified",
     "trailing_stop_price",
     "hard_stop_price",
@@ -142,11 +144,16 @@ _SELL_COMPLETE_RESET_KEYS = (
     "entry_fill_amount",
     "entry_bundle_id",
     "requested_buy_qty",
+    "_entry_receipt_filled_by_order_no",
+    "_entry_receipt_requested_by_order_no",
     "buy_execution_notified",
     "trailing_stop_price",
     "hard_stop_price",
     "protect_profit_pct",
 )
+_ENTRY_RECEIPT_FILLED_BY_ORDER_KEY = "_entry_receipt_filled_by_order_no"
+_ENTRY_RECEIPT_REQUESTED_BY_ORDER_KEY = "_entry_receipt_requested_by_order_no"
+_ENTRY_RECEIPT_NO_ORDER_KEY = "__entry_without_order_no__"
 
 
 def bind_execution_dependencies(
@@ -219,6 +226,96 @@ def _receipt_audience(snapshot: dict[str, Any] | None) -> str:
     if simulated:
         return "ADMIN_ONLY"
     return str(snapshot.get("msg_audience") or "ADMIN_ONLY")
+
+
+def _entry_receipt_order_key(order_no: str) -> str:
+    normalized = str(order_no or "").strip()
+    return normalized or _ENTRY_RECEIPT_NO_ORDER_KEY
+
+
+def _entry_receipt_int_map(target_stock: dict[str, Any], key: str) -> dict[str, int]:
+    raw_map = target_stock.get(key)
+    if not isinstance(raw_map, dict):
+        raw_map = {}
+        target_stock[key] = raw_map
+    normalized: dict[str, int] = {}
+    for raw_key, raw_value in raw_map.items():
+        normalized[str(raw_key)] = int(raw_value or 0)
+    if normalized is not raw_map:
+        target_stock[key] = normalized
+    return normalized
+
+
+def _resolve_entry_effective_fill_qty(
+    *,
+    target_stock: dict[str, Any],
+    code: str,
+    order_no: str,
+    exec_qty: int,
+) -> tuple[int, int, int]:
+    """Return the entry fill delta that may be applied to runtime truth.
+
+    Kiwoom execution notices can repeat a final fill or report cumulative
+    quantities for the same order number. Entry orders with a known requested
+    quantity must therefore be capped by remaining leg quantity before mutating
+    buy_qty/avg price. The per-order ledger intentionally survives terminal
+    entry-order grace so delayed duplicate receipts do not inflate position size.
+    """
+
+    order_key = _entry_receipt_order_key(order_no)
+    requested_by_order = _entry_receipt_int_map(target_stock, _ENTRY_RECEIPT_REQUESTED_BY_ORDER_KEY)
+    filled_by_order = _entry_receipt_int_map(target_stock, _ENTRY_RECEIPT_FILLED_BY_ORDER_KEY)
+
+    pending_order = None
+    for order in target_stock.get("pending_entry_orders") or []:
+        if str(order.get("ord_no", "") or "").strip() == str(order_no or "").strip():
+            pending_order = order
+            break
+
+    requested_qty = int(requested_by_order.get(order_key, 0) or 0)
+    if pending_order is not None:
+        requested_qty = max(requested_qty, int(pending_order.get("qty", 0) or 0))
+    if requested_qty <= 0:
+        requested_qty = int(
+            target_stock.get("entry_requested_qty", target_stock.get("requested_buy_qty", 0)) or 0
+        )
+
+    already_filled = int(filled_by_order.get(order_key, 0) or 0)
+    if pending_order is not None:
+        already_filled = max(already_filled, int(pending_order.get("filled_qty", 0) or 0))
+
+    if requested_qty > 0:
+        requested_by_order[order_key] = requested_qty
+        remaining_qty = max(0, requested_qty - already_filled)
+        if remaining_qty <= 0:
+            log_info(
+                f"[ENTRY_FILL_IGNORED] {target_stock.get('name')}({code}) "
+                f"ord_no={order_no or '-'} raw_fill_qty={exec_qty} "
+                f"already_filled={already_filled}/{requested_qty} reason=duplicate_or_cumulative_receipt"
+            )
+            if pending_order is not None:
+                pending_order["filled_qty"] = already_filled
+                pending_order["status"] = "FILLED"
+            return 0, requested_qty, already_filled
+
+        effective_qty = min(int(exec_qty or 0), remaining_qty)
+        if effective_qty < int(exec_qty or 0):
+            log_info(
+                f"[ENTRY_FILL_CAPPED] {target_stock.get('name')}({code}) "
+                f"ord_no={order_no or '-'} raw_fill_qty={exec_qty} "
+                f"effective_fill_qty={effective_qty} already_filled={already_filled}/{requested_qty} "
+                "reason=cumulative_or_over_requested_receipt"
+            )
+    else:
+        effective_qty = int(exec_qty or 0)
+
+    new_filled = already_filled + effective_qty
+    filled_by_order[order_key] = new_filled
+    if pending_order is not None:
+        pending_order["filled_qty"] = new_filled
+        pending_order["status"] = "FILLED" if requested_qty > 0 and new_filled >= requested_qty else "PARTIAL"
+        pending_order["last_effective_fill_qty"] = effective_qty
+    return effective_qty, requested_qty, new_filled
 
 
 def _clear_runtime_keys(target_stock: dict[str, Any], keys: tuple[str, ...]) -> None:
@@ -1126,13 +1223,25 @@ def _handle_entry_buy_execution(
     exec_qty: int,
     now: datetime,
 ) -> None:
+    effective_exec_qty, order_requested_qty, order_filled_qty = _resolve_entry_effective_fill_qty(
+        target_stock=target_stock,
+        code=code,
+        order_no=order_no,
+        exec_qty=exec_qty,
+    )
+    if effective_exec_qty <= 0:
+        return
+
     old_qty = int(target_stock.get('buy_qty') or 0)
     old_price = float(target_stock.get('buy_price') or 0)
     if old_qty <= 0:
         _clear_split_entry_shadow_state(target_stock)
-    new_qty = old_qty + exec_qty
+    new_qty = old_qty + effective_exec_qty
     if old_qty > 0:
-        new_avg = _avg_from_totals((old_price * old_qty) + (exec_price * exec_qty), old_qty + exec_qty)
+        new_avg = _avg_from_totals(
+            (old_price * old_qty) + (exec_price * effective_exec_qty),
+            old_qty + effective_exec_qty,
+        )
     else:
         new_avg = exec_price
     entry_mode = str(target_stock.get('entry_mode', 'normal') or 'normal')
@@ -1142,18 +1251,14 @@ def _handle_entry_buy_execution(
         for pending_order in pending_entry_orders:
             if str(pending_order.get('ord_no', '') or '').strip() != order_no:
                 continue
-            pending_order['filled_qty'] = int(pending_order.get('filled_qty', 0) or 0) + exec_qty
             requested_qty = int(pending_order.get('qty', 0) or 0)
-            if requested_qty > 0 and pending_order['filled_qty'] >= requested_qty:
-                pending_order['status'] = 'FILLED'
-            else:
-                pending_order['status'] = 'PARTIAL'
             pending_order['last_fill_price'] = exec_price
             pending_order['last_fill_at'] = time.time()
             log_info(
                 f"[ENTRY_FILL] {target_stock.get('name')}({code}) "
                 f"tag={pending_order.get('tag')} ord_no={order_no} "
-                f"fill_qty={exec_qty} filled={pending_order.get('filled_qty')}/{requested_qty} "
+                f"fill_qty={effective_exec_qty} raw_fill_qty={exec_qty} "
+                f"filled={pending_order.get('filled_qty')}/{requested_qty} "
                 f"fill_price={exec_price}"
             )
             break
@@ -1161,8 +1266,8 @@ def _handle_entry_buy_execution(
     target_stock['status'] = 'HOLDING'
     target_stock['buy_price'] = new_avg
     target_stock['buy_qty'] = new_qty
-    target_stock['entry_filled_qty'] = int(target_stock.get('entry_filled_qty', 0) or 0) + exec_qty
-    target_stock['entry_fill_amount'] = int(target_stock.get('entry_fill_amount', 0) or 0) + (exec_price * exec_qty)
+    target_stock['entry_filled_qty'] = int(target_stock.get('entry_filled_qty', 0) or 0) + effective_exec_qty
+    target_stock['entry_fill_amount'] = int(target_stock.get('entry_fill_amount', 0) or 0) + (exec_price * effective_exec_qty)
     target_stock['buy_time'] = now
     if not target_stock.get('holding_started_at'):
         target_stock['holding_started_at'] = now
@@ -1298,7 +1403,10 @@ def _handle_entry_buy_execution(
         code,
         target_id,
         'position_rebased_after_fill',
-        fill_qty=int(exec_qty or 0),
+        fill_qty=int(effective_exec_qty or 0),
+        raw_fill_qty=int(exec_qty or 0),
+        order_requested_qty=int(order_requested_qty or 0),
+        order_filled_qty=int(order_filled_qty or 0),
         cum_filled_qty=int(cum_filled_qty or 0),
         requested_qty=int(requested_entry_qty or 0),
         remaining_qty=int(remaining_qty or 0),
@@ -1357,7 +1465,10 @@ def _handle_entry_buy_execution(
         buy_price=f"{float(new_avg or 0):.2f}",
         buy_qty=int(new_qty or 0),
         fill_price=int(exec_price or 0),
-        fill_qty=int(exec_qty or 0),
+        fill_qty=int(effective_exec_qty or 0),
+        raw_fill_qty=int(exec_qty or 0),
+        order_requested_qty=int(order_requested_qty or 0),
+        order_filled_qty=int(order_filled_qty or 0),
         entry_mode=entry_mode,
     )
 

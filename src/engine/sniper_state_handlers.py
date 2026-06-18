@@ -174,6 +174,11 @@ SCALPING_ENTRY_BLOCKER_ROLE_REGISTRY = {
         "gate_action": "block",
         "hard_block_allowed": True,
     },
+    "late_entry_price_drift_guard": {
+        "role": "hard_safety_submit_quality",
+        "gate_action": "block",
+        "hard_block_allowed": True,
+    },
 }
 COOLDOWNS = None
 ALERTED_STOCKS = None
@@ -6597,6 +6602,7 @@ def _emit_scalp_entry_adm_snapshot(
         "primary_decision_metric": "source_quality_adjusted_ev_pct",
         "source_quality_gate": "entry pipeline event + post-sell sim evaluation join when available",
         "runtime_effect": False,
+        "allowed_runtime_apply": False,
         "actual_order_submitted": bool(actual_order_submitted),
         "broker_order_forbidden": bool(broker_order_forbidden),
         "forbidden_uses": "threshold mutation,order guard mutation,provider change,bot restart,broker order submit",
@@ -6607,6 +6613,39 @@ def _emit_scalp_entry_adm_snapshot(
             for key, value in payload.items():
                 if key not in fields and value is not None:
                     fields[key] = value
+    fields = _ensure_ai_source_quality_fields(
+        fields,
+        stock,
+        not_evaluated_reason="snapshot_pre_contract_backfill",
+    )
+    parity_keys = (
+        "tick_acceleration_ratio",
+        "tick_acceleration_ratio_raw",
+        "tick_accel_source",
+        "recent_5tick_seconds",
+        "prev_5tick_seconds",
+        "tick_accel_effective_recent_5tick_seconds",
+        "buy_pressure_10t",
+        "curr_vs_micro_vwap_bp",
+        "curr_vs_ma5_bp",
+    )
+    source_quality_fields = stock.get("last_watching_ai_source_quality_fields")
+    source_quality_fields = source_quality_fields if isinstance(source_quality_fields, dict) else {}
+    for key in parity_keys:
+        value = fields.get(key)
+        if value in (None, "", "-", "None", "none"):
+            fallback = source_quality_fields.get(key)
+            if fallback not in (None, "", "-", "None", "none"):
+                fields[key] = fallback
+    for key in parity_keys:
+        fields.setdefault(key, "-")
+    if fields.get("ai_reason_numeric_inconsistency") is True:
+        fields["source_quality_gate"] = "ai_numeric_consistency_review_required"
+        fields["allowed_runtime_apply"] = False
+        fields["forbidden_uses"] = (
+            "EV/live-auto/runtime-apply/threshold mutation/order guard mutation/"
+            "provider change/bot_restart/broker order submit"
+        )
     _log_entry_pipeline(stock, code, "scalp_entry_action_decision_snapshot", source_stage=stage, **fields)
 
 
@@ -9417,6 +9456,160 @@ def _is_pre_submit_price_guard_block(strategy, price, best_bid):
     return _compute_price_below_bid_bps(price, best_bid) > threshold_bps
 
 
+def _compute_price_above_reference_bps(price, reference_price) -> float:
+    price = _safe_float(price, 0.0)
+    reference_price = _safe_float(reference_price, 0.0)
+    if price <= 0 or reference_price <= 0 or price <= reference_price:
+        return 0.0
+    return ((price - reference_price) / reference_price) * 10000.0
+
+
+def _first_float_field(*sources, key: str, aliases=(), default=0.0) -> float:
+    for source in sources:
+        if not isinstance(source, dict):
+            continue
+        for candidate_key in (key, *aliases):
+            value = source.get(candidate_key)
+            if value in (None, ""):
+                continue
+            return _safe_float(value, default)
+    return _safe_float(default, 0.0)
+
+
+def _latency_price_drift_guard_relevant(latency_gate: dict | None) -> bool:
+    fields = latency_gate if isinstance(latency_gate, dict) else {}
+    state = str(fields.get("latency_state") or "").strip().upper()
+    if state in {"DANGER", "CAUTION"}:
+        return True
+    danger_reasons = str(
+        fields.get("latency_danger_reasons")
+        or fields.get("danger_reasons")
+        or fields.get("reason")
+        or ""
+    ).strip()
+    if danger_reasons and danger_reasons not in {"-", "ok", "normal"}:
+        return True
+    return bool(fields.get("latency_canary_applied"))
+
+
+def _evaluate_late_entry_price_drift_guard(
+    *,
+    strategy,
+    stock,
+    price,
+    latency_gate,
+    price_snapshot=None,
+    pre_submit_fields=None,
+    microstructure_fields=None,
+    orderbook_fields=None,
+) -> dict:
+    if str(strategy or "").upper() not in {"SCALPING", "SCALP"}:
+        return {"blocked": False, "reason": "non_scalping"}
+    if not _rule_bool("SCALP_LATE_ENTRY_PRICE_DRIFT_GUARD_ENABLED", False):
+        return {"blocked": False, "reason": "disabled"}
+    if _is_any_simulated_position(stock, strategy) or _is_swing_live_order_dry_run(strategy):
+        return {"blocked": False, "reason": "sim_or_dry_run"}
+
+    latency_fields = latency_gate if isinstance(latency_gate, dict) else {}
+    reference_price = _coerce_int_value(
+        latency_fields.get("target_buy_price")
+        or latency_fields.get("reference_target_price")
+        or (stock or {}).get("target_buy_price")
+    )
+    submitted_price = _coerce_int_value(price)
+    drift_bps = _compute_price_above_reference_bps(submitted_price, reference_price)
+    hard_bps = _rule_float("SCALP_LATE_ENTRY_PRICE_DRIFT_HARD_BPS", 50.0)
+    soft_bps = _rule_float("SCALP_LATE_ENTRY_PRICE_DRIFT_SOFT_BPS", 35.0)
+    min_tick = _rule_float("SCALP_LATE_ENTRY_PRICE_DRIFT_MIN_TICK_ACCEL", 1.10)
+    min_buy_pressure = _rule_float("SCALP_LATE_ENTRY_PRICE_DRIFT_MIN_BUY_PRESSURE", 0.0)
+    min_micro_vwap = _rule_float("SCALP_LATE_ENTRY_PRICE_DRIFT_MIN_MICRO_VWAP_BP", 0.0)
+
+    buy_pressure = _first_float_field(
+        latency_fields,
+        pre_submit_fields,
+        microstructure_fields,
+        orderbook_fields,
+        stock or {},
+        key="buy_pressure_10t",
+        aliases=("buy_pressure", "buy_pressure_ratio"),
+        default=0.0,
+    )
+    tick_accel = _first_float_field(
+        latency_fields,
+        pre_submit_fields,
+        microstructure_fields,
+        orderbook_fields,
+        stock or {},
+        key="tick_acceleration_ratio",
+        aliases=("tick_accel", "tick_acceleration"),
+        default=0.0,
+    )
+    micro_vwap_bp = _first_float_field(
+        latency_fields,
+        pre_submit_fields,
+        microstructure_fields,
+        orderbook_fields,
+        stock or {},
+        key="curr_vs_micro_vwap_bp",
+        aliases=("micro_vwap_bp",),
+        default=0.0,
+    )
+    positive_count = int(buy_pressure >= min_buy_pressure) + int(tick_accel >= min_tick) + int(
+        micro_vwap_bp >= min_micro_vwap
+    )
+    micro_reconfirmed = positive_count >= 2
+    latency_relevant = _latency_price_drift_guard_relevant(latency_fields)
+
+    fields = {
+        "late_entry_price_drift_guard_enabled": True,
+        "late_entry_price_drift_guard_blocked": False,
+        "late_entry_price_drift_guard_reason": "pass",
+        "late_entry_price_drift_bps": round(drift_bps, 3),
+        "late_entry_price_drift_hard_bps": hard_bps,
+        "late_entry_price_drift_soft_bps": soft_bps,
+        "late_entry_reference_target_price": reference_price,
+        "late_entry_submitted_order_price": submitted_price,
+        "late_entry_latency_relevant": latency_relevant,
+        "late_entry_micro_reconfirmed": micro_reconfirmed,
+        "late_entry_micro_positive_count": positive_count,
+        "late_entry_min_tick_accel": min_tick,
+        "late_entry_min_buy_pressure": min_buy_pressure,
+        "late_entry_min_micro_vwap_bp": min_micro_vwap,
+        "late_entry_fresh_buy_pressure_10t": buy_pressure,
+        "late_entry_fresh_tick_acceleration_ratio": tick_accel,
+        "late_entry_fresh_micro_vwap_bp": micro_vwap_bp,
+        "latency_state": str(latency_fields.get("latency_state") or ""),
+        "latency_danger_reasons": str(
+            latency_fields.get("latency_danger_reasons")
+            or latency_fields.get("danger_reasons")
+            or ""
+        ),
+    }
+    if price_snapshot:
+        fields["late_entry_best_bid_at_submit"] = price_snapshot.get("best_bid_at_submit")
+        fields["late_entry_best_ask_at_submit"] = price_snapshot.get("best_ask_at_submit")
+
+    if reference_price <= 0 or submitted_price <= 0:
+        fields["late_entry_price_drift_guard_reason"] = "missing_reference_or_price"
+        return {"blocked": False, "reason": fields["late_entry_price_drift_guard_reason"], "fields": fields}
+    if drift_bps < soft_bps:
+        fields["late_entry_price_drift_guard_reason"] = "below_soft_drift"
+        return {"blocked": False, "reason": fields["late_entry_price_drift_guard_reason"], "fields": fields}
+    if not latency_relevant:
+        fields["late_entry_price_drift_guard_reason"] = "no_latency_drift_context"
+        return {"blocked": False, "reason": fields["late_entry_price_drift_guard_reason"], "fields": fields}
+    if drift_bps >= hard_bps:
+        fields["late_entry_price_drift_guard_blocked"] = True
+        fields["late_entry_price_drift_guard_reason"] = "hard_price_drift_after_latency"
+        return {"blocked": True, "reason": fields["late_entry_price_drift_guard_reason"], "fields": fields}
+    if not micro_reconfirmed:
+        fields["late_entry_price_drift_guard_blocked"] = True
+        fields["late_entry_price_drift_guard_reason"] = "soft_price_drift_without_micro_reconfirmation"
+        return {"blocked": True, "reason": fields["late_entry_price_drift_guard_reason"], "fields": fields}
+    fields["late_entry_price_drift_guard_reason"] = "micro_reconfirmed_after_soft_drift"
+    return {"blocked": False, "reason": fields["late_entry_price_drift_guard_reason"], "fields": fields}
+
+
 def _truthy_field(value) -> bool:
     if isinstance(value, bool):
         return value
@@ -10630,12 +10823,18 @@ EARLY_ACCEL_RECHECK_FORBIDDEN_USES = (
     "EV|rolling|MTD|cumulative_tuning|live_auto_promotion|runtime_apply_bridge|"
     "threshold_mutation|provider_route_change|order_price_change|quantity_cap_change"
 )
+AI_NUMERIC_CONSISTENCY_RECHECK_FORBIDDEN_USES = (
+    "EV|rolling|MTD|cumulative_tuning|live_auto_promotion|runtime_apply_bridge|"
+    "threshold_mutation|provider_route_change|order_price_change|quantity_cap_change|broker_guard_bypass"
+)
 EARLY_ACCEL_RECHECK_PROMOTION_REASONS = frozenset(
     {
         "probe_acceleration_confirmed",
         "early_discovery_source_present",
         "new_vi_triggered_source",
         "new_supernova_source",
+        "price_jump_start_acceleration",
+        "price_jump_multisource_confirmation",
         "rank_jump_acceleration",
         "spike_rate_acceleration",
         "priority_score_acceleration",
@@ -10660,6 +10859,22 @@ def _early_accel_recheck_contract_fields() -> dict:
     }
 
 
+def _ai_numeric_consistency_recheck_contract_fields() -> dict:
+    return {
+        "metric_role": "funnel_count",
+        "decision_authority": "operator_runtime_decision_recheck_only",
+        "source_quality_gate": "ai_numeric_consistency_recheck_contract_fields_present",
+        "window_policy": "intraday_operator_runtime_retry",
+        "sample_floor": "not_applicable_operator_runtime_retry",
+        "primary_decision_metric": "funnel_count",
+        "runtime_effect": True,
+        "allowed_runtime_apply": False,
+        "forbidden_uses": AI_NUMERIC_CONSISTENCY_RECHECK_FORBIDDEN_USES,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+    }
+
+
 def _early_accel_recheck_attempt_exclusion_fields(ai_call_trigger_reason: str | None) -> dict:
     if str(ai_call_trigger_reason or "").strip() != "early_accel_recheck":
         return {}
@@ -10668,6 +10883,23 @@ def _early_accel_recheck_attempt_exclusion_fields(ai_call_trigger_reason: str | 
         "tuning_authority_excluded_reason": "early_accel_recheck_operator_retry",
         "allowed_runtime_apply": False,
     }
+
+
+def _ai_numeric_consistency_recheck_attempt_exclusion_fields(ai_call_trigger_reason: str | None) -> dict:
+    if str(ai_call_trigger_reason or "").strip() != "ai_numeric_consistency_recheck":
+        return {}
+    return {
+        "ai_call_trigger_reason": "ai_numeric_consistency_recheck",
+        "tuning_authority_excluded_reason": "ai_numeric_consistency_recheck_operator_retry",
+        "allowed_runtime_apply": False,
+    }
+
+
+def _entry_runtime_retry_exclusion_fields(ai_call_trigger_reason: str | None) -> dict:
+    return _merge_entry_pipeline_field_groups(
+        _early_accel_recheck_attempt_exclusion_fields(ai_call_trigger_reason),
+        _ai_numeric_consistency_recheck_attempt_exclusion_fields(ai_call_trigger_reason),
+    )
 
 
 def _early_accel_recheck_feature_values(ws_data: dict | None) -> dict:
@@ -10799,6 +11031,105 @@ def _log_early_accel_recheck(stock, code, stage: str, decision: dict) -> None:
         skip_reason=decision.get("skip_reason") or ("allowed" if decision.get("allowed") else "unknown"),
         tick_accel=decision.get("tick_accel") or "0.000",
         micro_vwap_bp=decision.get("micro_vwap_bp") or "0.00",
+        quote_stale=bool(decision.get("quote_stale")),
+    )
+
+
+def _resolve_ai_numeric_consistency_recheck(
+    stock,
+    ws_data,
+    *,
+    now_ts,
+    strategy,
+    ai_decision,
+    ai_score,
+) -> dict:
+    payload = ai_decision if isinstance(ai_decision, dict) else {}
+    action = str(payload.get("action") or "").strip().upper()
+    inconsistency = bool(payload.get("ai_reason_numeric_inconsistency"))
+    position_pass = (
+        _safe_float(payload.get("curr_vs_micro_vwap_bp"), 0.0) > 0.0
+        or _safe_float(payload.get("curr_vs_ma5_bp"), 0.0) > 0.0
+    )
+    speed_pass = _safe_float(payload.get("tick_acceleration_ratio"), 0.0) >= 1.10
+    supply_pass = (
+        _safe_float(payload.get("buy_pressure_10t"), 0.0) >= 68.0
+        or _safe_float(payload.get("net_aggressive_delta_10t"), 0.0) > 0.0
+    )
+    feature_pass_count = int(position_pass) + int(speed_pass) + int(supply_pass)
+    recheck_count = _safe_int((stock or {}).get("ai_numeric_consistency_recheck_count"), 0)
+    stale_quote = bool((ws_data or {}).get("quote_stale") or (ws_data or {}).get("context_stale"))
+    source_quality_block = bool(_early_accel_recheck_pre_ai_context_flags(stock).get("source_quality_block"))
+
+    base = {
+        "original_action": action or "WAIT",
+        "original_score": f"{_safe_float(ai_score, 0.0):.1f}",
+        "original_reason_excerpt": str(payload.get("reason") or "")[:120] or "-",
+        "inconsistency_field": str(payload.get("ai_reason_numeric_inconsistency_field") or "-"),
+        "inconsistency_reason": str(payload.get("ai_reason_numeric_inconsistency_reason") or "-"),
+        "detected_value": payload.get("ai_reason_numeric_inconsistency_detected_value"),
+        "position_pass": bool(position_pass),
+        "speed_pass": bool(speed_pass),
+        "supply_pass": bool(supply_pass),
+        "feature_pass_count": feature_pass_count,
+        "recheck_count": recheck_count,
+        "quote_stale": stale_quote,
+        "recheck_action": "-",
+        "recheck_score": "-",
+        "recheck_reason_excerpt": "-",
+    }
+
+    if not _rule_bool("AI_NUMERIC_CONSISTENCY_RECHECK_ENABLED", False):
+        return {"allowed": False, "skip_reason": "disabled", **base}
+    if _rule_bool("ENTRY_STAGE_LIVE_TUNING_SELECTED", False):
+        return {"allowed": False, "skip_reason": "entry_live_tuning_selected", **base}
+    if not isinstance(stock, dict) or not _is_scalp_strategy(strategy):
+        return {"allowed": False, "skip_reason": "scope_not_real_scalping", **base}
+    if _is_scalp_simulated_position(stock, strategy) or _has_sim_probe_provenance(stock):
+        return {"allowed": False, "skip_reason": "sim_or_probe_scope", **base}
+    if action != "WAIT":
+        return {"allowed": False, "skip_reason": "original_action_not_wait", **base}
+    if not inconsistency:
+        return {"allowed": False, "skip_reason": "no_numeric_inconsistency", **base}
+    score_floor = max(0, _rule_int("AI_NUMERIC_CONSISTENCY_RECHECK_MIN_SCORE", 60))
+    if _safe_float(ai_score, 0.0) < float(score_floor):
+        return {"allowed": False, "skip_reason": "score_below_min", **base}
+    if _safe_float(ai_score, 0.0) > 74.0:
+        return {"allowed": False, "skip_reason": "score_above_wait_band", **base}
+    if stale_quote:
+        return {"allowed": False, "skip_reason": "stale_quote_or_context", **base}
+    if source_quality_block:
+        return {"allowed": False, "skip_reason": "source_quality_hard_block", **base}
+    if recheck_count >= max(0, _rule_int("AI_NUMERIC_CONSISTENCY_RECHECK_MAX_PER_SYMBOL", 1)):
+        return {"allowed": False, "skip_reason": "max_recheck_count_reached", **base}
+    if feature_pass_count >= max(1, _rule_int("AI_NUMERIC_CONSISTENCY_RECHECK_MIN_FEATURE_PASS_COUNT", 3)) and _safe_float(ai_score, 0.0) >= 70.0:
+        return {"allowed": True, "skip_reason": "allowed", **base}
+    if feature_pass_count >= 2 and 65.0 <= _safe_float(ai_score, 0.0) <= 74.0:
+        return {"allowed": False, "skip_reason": "strong_micro_override_candidate_only", **base}
+    return {"allowed": False, "skip_reason": "feature_bundle_below_recheck_floor", **base}
+
+
+def _log_ai_numeric_consistency_recheck(stock, code, stage: str, decision: dict) -> None:
+    _log_entry_pipeline(
+        stock,
+        code,
+        stage,
+        **_ai_numeric_consistency_recheck_contract_fields(),
+        original_action=decision.get("original_action") or "WAIT",
+        original_score=decision.get("original_score") or "0.0",
+        original_reason_excerpt=decision.get("original_reason_excerpt") or "-",
+        inconsistency_field=decision.get("inconsistency_field") or "-",
+        inconsistency_reason=decision.get("inconsistency_reason") or "-",
+        detected_value=decision.get("detected_value"),
+        position_pass=bool(decision.get("position_pass")),
+        speed_pass=bool(decision.get("speed_pass")),
+        supply_pass=bool(decision.get("supply_pass")),
+        feature_pass_count=_safe_int(decision.get("feature_pass_count"), 0),
+        recheck_count=_safe_int(decision.get("recheck_count"), 0),
+        recheck_action=decision.get("recheck_action") or "-",
+        recheck_score=decision.get("recheck_score") or "-",
+        recheck_reason_excerpt=decision.get("recheck_reason_excerpt") or "-",
+        skip_reason=decision.get("skip_reason") or "unknown",
         quote_stale=bool(decision.get("quote_stale")),
     )
 
@@ -11062,6 +11393,18 @@ def _build_ai_ops_log_fields(
         out["entry_adm_runtime_bias_applied"] = bool(payload.get("entry_adm_runtime_bias_applied"))
     if "ai_reason_language_violation" in payload:
         out["ai_reason_language_violation"] = bool(payload.get("ai_reason_language_violation"))
+    ai_reason_numeric_inconsistency = _truthy_field(payload.get("ai_reason_numeric_inconsistency"))
+    if "ai_reason_numeric_inconsistency" in payload:
+        out["ai_reason_numeric_inconsistency"] = ai_reason_numeric_inconsistency
+    if "ai_reason_feature_inconsistency" in payload:
+        out["ai_reason_feature_inconsistency"] = _truthy_field(payload.get("ai_reason_feature_inconsistency"))
+    for field_name in (
+        "ai_reason_numeric_inconsistency_field",
+        "ai_reason_numeric_inconsistency_reason",
+        "ai_reason_numeric_inconsistency_excerpt",
+    ):
+        if field_name in payload:
+            out[field_name] = str(payload.get(field_name, "-") or "-")
     if "ai_score_smoothing_applied" in payload:
         out["ai_score_smoothing_applied"] = bool(payload.get("ai_score_smoothing_applied"))
     if "ai_score_buy_guard_blocked" in payload:
@@ -11072,11 +11415,19 @@ def _build_ai_ops_log_fields(
         "ai_score_valid_observation_count",
         "ai_score_dispersion",
         "ai_action_consistency",
+        "ai_reason_numeric_inconsistency_detected_value",
     ):
         if field_name in payload:
             out[field_name] = payload.get(field_name)
     if payload.get("scalp_feature_packet_version"):
         out["scalp_feature_packet_version"] = str(payload.get("scalp_feature_packet_version"))
+    if ai_reason_numeric_inconsistency:
+        out["source_quality_gate"] = "ai_numeric_consistency_review_required"
+        out["allowed_runtime_apply"] = False
+        out["forbidden_uses"] = (
+            "EV/live-auto/runtime-apply/threshold mutation/order guard mutation/"
+            "provider change/bot_restart/broker order submit"
+        )
     for field_name in (
         "tick_acceleration_ratio_sent",
         "same_price_buy_absorption_sent",
@@ -11092,8 +11443,6 @@ def _build_ai_ops_log_fields(
         "tick_window_sample_count",
         "tick_latest_age_ms",
         "tick_window_span_sec",
-        "tick_accel_effective_recent_5tick_seconds",
-        "tick_acceleration_ratio_raw",
         "quote_age_ms",
         "microstructure_reaction_ask_sweep_score",
         "microstructure_reaction_post_sweep_hold_score",
@@ -11105,6 +11454,22 @@ def _build_ai_ops_log_fields(
             raw_value = payload.get(field_name)
             try:
                 out[field_name] = int(float(raw_value))
+            except Exception:
+                out[field_name] = str(raw_value or "-")
+    for field_name in (
+        "tick_accel_effective_recent_5tick_seconds",
+        "tick_acceleration_ratio_raw",
+        "recent_5tick_seconds",
+        "prev_5tick_seconds",
+        "tick_acceleration_ratio",
+        "buy_pressure_10t",
+        "curr_vs_micro_vwap_bp",
+        "curr_vs_ma5_bp",
+    ):
+        if field_name in payload:
+            raw_value = payload.get(field_name)
+            try:
+                out[field_name] = f"{float(raw_value):.3f}"
             except Exception:
                 out[field_name] = str(raw_value or "-")
     for field_name in (
@@ -11175,6 +11540,14 @@ def _build_ai_input_not_evaluated_fields(reason: str) -> dict:
         "tick_accel_source": "not_evaluated",
         "tick_context_quality": "not_evaluated",
         "quote_age_source": "not_evaluated",
+        "tick_acceleration_ratio": "-",
+        "tick_acceleration_ratio_raw": "-",
+        "recent_5tick_seconds": "-",
+        "prev_5tick_seconds": "-",
+        "tick_accel_effective_recent_5tick_seconds": "-",
+        "buy_pressure_10t": "-",
+        "curr_vs_micro_vwap_bp": "-",
+        "curr_vs_ma5_bp": "-",
         **microstructure_context,
     }
 
@@ -11184,7 +11557,8 @@ def _ensure_ai_source_quality_fields(fields: dict, stock: dict | None, *, not_ev
     if "tick_source_quality_fields_sent" not in out and isinstance(stock, dict):
         out.update(dict(stock.get("last_watching_ai_source_quality_fields") or {}))
     if "tick_source_quality_fields_sent" not in out:
-        out.update(_build_ai_input_not_evaluated_fields(not_evaluated_reason))
+        for key, value in _build_ai_input_not_evaluated_fields(not_evaluated_reason).items():
+            out.setdefault(key, value)
     elif "ai_input_source_quality_status" not in out:
         out["ai_input_source_quality_status"] = "evaluated"
         out["ai_input_source_quality_reason"] = str(out.get("tick_context_quality") or "tick_audit_present")
@@ -11243,6 +11617,12 @@ def _build_tick_source_quality_log_fields(feature_probe):
     for field_name in (
         "tick_accel_effective_recent_5tick_seconds",
         "tick_acceleration_ratio_raw",
+        "recent_5tick_seconds",
+        "prev_5tick_seconds",
+        "tick_acceleration_ratio",
+        "buy_pressure_10t",
+        "curr_vs_micro_vwap_bp",
+        "curr_vs_ma5_bp",
     ):
         if field_name in payload:
             raw_value = payload.get(field_name)
@@ -12412,7 +12792,7 @@ def _log_wait65_79_ev_candidate(
         latency_state=latency_state,
         ai_call_trigger_reason=ai_call_trigger_reason or "-",
         tuning_authority_excluded_reason=(
-            _early_accel_recheck_attempt_exclusion_fields(ai_call_trigger_reason).get(
+            _entry_runtime_retry_exclusion_fields(ai_call_trigger_reason).get(
                 "tuning_authority_excluded_reason",
                 "-",
             )
@@ -12810,15 +13190,17 @@ def _block_ai_score_50_buy_hold_override_if_needed(
         cooldown_sec=cooldown_time,
         blocked_reason="ai_score_50_buy_hold_override",
         ai_score_50_buy_hold_override=True,
-        **_build_ai_overlap_log_fields(
-            stock=stock,
-            ai_score=current_ai_score,
-            momentum_tag=stock.get("entry_momentum_tag"),
-            threshold_profile=stock.get("entry_threshold_profile"),
-            overbought_blocked=False,
-            blocked_stage="blocked_ai_score",
+        **_merge_entry_pipeline_field_groups(
+            _build_ai_overlap_log_fields(
+                stock=stock,
+                ai_score=current_ai_score,
+                momentum_tag=stock.get("entry_momentum_tag"),
+                threshold_profile=stock.get("entry_threshold_profile"),
+                overbought_blocked=False,
+                blocked_stage="blocked_ai_score",
+            ),
+            ai_ops_fields,
         ),
-        **ai_ops_fields,
     )
     return True
 
@@ -12967,15 +13349,17 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                     cap_bucket=scalp_limits.get('bucket_label'),
                     risk_state=overbought_context.get("risk_state"),
                     risk_bucket=overbought_context.get("risk_bucket"),
-                    **_build_ai_input_not_evaluated_fields("pre_ai_overbought_gate"),
-                    **_build_ai_overlap_log_fields(
-                        stock=stock,
-                        ai_score=current_ai_score,
-                        momentum_tag=stock.get("entry_momentum_tag"),
-                        threshold_profile=stock.get("entry_threshold_profile"),
-                        overbought_blocked=True,
-                        blocked_stage="blocked_overbought",
-                        overlap_snapshot=overlap_snapshot,
+                    **_merge_entry_pipeline_field_groups(
+                        _build_ai_input_not_evaluated_fields("pre_ai_overbought_gate"),
+                        _build_ai_overlap_log_fields(
+                            stock=stock,
+                            ai_score=current_ai_score,
+                            momentum_tag=stock.get("entry_momentum_tag"),
+                            threshold_profile=stock.get("entry_threshold_profile"),
+                            overbought_blocked=True,
+                            blocked_stage="blocked_overbought",
+                            overlap_snapshot=overlap_snapshot,
+                        ),
                     ),
                 )
                 if not _rule_bool("SCALP_PRE_AI_SOFT_GATE_ENABLED", True):
@@ -13501,7 +13885,7 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                                 vip_target=is_vip_target,
                                 **{
                                     "ai_call_trigger_reason": ai_call_trigger_reason or "-",
-                                    **_early_accel_recheck_attempt_exclusion_fields(ai_call_trigger_reason),
+                                    **_entry_runtime_retry_exclusion_fields(ai_call_trigger_reason),
                                 },
                                 buy_pressure=f"{float(feature_probe.get('buy_pressure', 0.0) or 0.0):.2f}",
                                 tick_accel=f"{float(feature_probe.get('tick_accel', 0.0) or 0.0):.3f}",
@@ -13509,22 +13893,24 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                                 large_sell_print_detected=bool(feature_probe.get("large_sell_print", False)),
                                 latency_state=latency_state,
                                 **_scalp_pre_ai_gate_context_log_fields(stock.get("scalp_pre_ai_gate_context")),
-                                **_build_ai_overlap_log_fields(
-                                    stock=stock,
-                                    ai_score=ai_score,
-                                    momentum_tag=stock.get("entry_momentum_tag"),
-                                    threshold_profile=stock.get("entry_threshold_profile"),
-                                    overbought_blocked=False,
-                                    blocked_stage="-",
-                                    overlap_snapshot=overlap_snapshot,
-                                ),
-                                **_build_ai_ops_log_fields(
-                                    ai_decision,
-                                    ai_score_raw=raw_ai_score,
-                                    ai_score_after_bonus=ai_score,
-                                    entry_score_threshold=75,
-                                    big_bite_bonus_applied=False,
-                                    ai_cooldown_blocked=False,
+                                **_merge_entry_pipeline_field_groups(
+                                    _build_ai_overlap_log_fields(
+                                        stock=stock,
+                                        ai_score=ai_score,
+                                        momentum_tag=stock.get("entry_momentum_tag"),
+                                        threshold_profile=stock.get("entry_threshold_profile"),
+                                        overbought_blocked=False,
+                                        blocked_stage="-",
+                                        overlap_snapshot=overlap_snapshot,
+                                    ),
+                                    _build_ai_ops_log_fields(
+                                        ai_decision,
+                                        ai_score_raw=raw_ai_score,
+                                        ai_score_after_bonus=ai_score,
+                                        entry_score_threshold=75,
+                                        big_bite_bonus_applied=False,
+                                        ai_cooldown_blocked=False,
+                                    ),
                                 ),
                             )
                             _emit_scalp_entry_adm_snapshot(
@@ -13536,7 +13922,7 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                                 chosen_action="BUY_NOW" if str(action or "").upper() == "BUY" and _safe_float(ai_score, 0.0) >= 75 else "NO_BUY_AI",
                                 actual_order_submitted=False,
                                 broker_order_forbidden=True,
-                                extra_fields=_early_accel_recheck_attempt_exclusion_fields(ai_call_trigger_reason),
+                                extra_fields=_entry_runtime_retry_exclusion_fields(ai_call_trigger_reason),
                             )
                             if _is_wait65_79_candidate(action, ai_score):
                                 _log_wait65_79_ev_candidate(
@@ -13548,6 +13934,145 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                                     ws_data=ws_data,
                                     feature_probe=feature_probe,
                                     ai_call_trigger_reason=ai_call_trigger_reason,
+                                )
+                            ai_numeric_consistency_recheck = _resolve_ai_numeric_consistency_recheck(
+                                stock,
+                                ws_data,
+                                now_ts=now_ts,
+                                strategy=strategy,
+                                ai_decision=ai_decision,
+                                ai_score=ai_score,
+                            )
+                            ai_numeric_consistency_in_scope = bool(
+                                ai_numeric_consistency_recheck.get("skip_reason") != "no_numeric_inconsistency"
+                            )
+                            if ai_numeric_consistency_in_scope:
+                                _log_ai_numeric_consistency_recheck(
+                                    stock,
+                                    code,
+                                    "ai_numeric_consistency_recheck_evaluated",
+                                    ai_numeric_consistency_recheck,
+                                )
+                            if ai_numeric_consistency_recheck.get("allowed"):
+                                _log_ai_numeric_consistency_recheck(
+                                    stock,
+                                    code,
+                                    "ai_numeric_consistency_recheck_allowed",
+                                    ai_numeric_consistency_recheck,
+                                )
+                                recheck_attempt_count = _safe_int(
+                                    stock.get("ai_numeric_consistency_recheck_count"),
+                                    0,
+                                ) + 1
+                                _mutate_stock_state(
+                                    stock,
+                                    set_fields={
+                                        "ai_numeric_consistency_recheck_count": recheck_attempt_count,
+                                        "ai_numeric_consistency_recheck_last_at": now_ts,
+                                    },
+                                )
+                                recheck_decision = ai_engine.analyze_target(
+                                    stock['name'],
+                                    ws_data,
+                                    recent_ticks,
+                                    recent_candles,
+                                    prompt_profile="watching",
+                                    cache_profile="numeric_consistency_recheck",
+                                    metadata_extra={
+                                        "record_id": stock.get("id"),
+                                        "sim_record_id": stock.get("sim_record_id"),
+                                        "sim_parent_record_id": stock.get("sim_parent_record_id"),
+                                        "entry_adm_candidate_id": stock.get("entry_adm_candidate_id"),
+                                        "source_event_stage": "ai_numeric_consistency_recheck",
+                                        "ai_call_trigger_reason": "ai_numeric_consistency_recheck",
+                                        "ai_numeric_consistency_recheck": "true",
+                                        "ai_numeric_consistency_recheck_original_action": action,
+                                        "ai_numeric_consistency_recheck_original_score": f"{float(ai_score or 0.0):.1f}",
+                                        "ai_numeric_consistency_recheck_original_reason_excerpt": str(reason or "")[:120],
+                                        "ai_numeric_consistency_recheck_inconsistency_field": str(
+                                            ai_decision.get("ai_reason_numeric_inconsistency_field") or "-"
+                                        ),
+                                        "ai_numeric_consistency_recheck_inconsistency_reason": str(
+                                            ai_decision.get("ai_reason_numeric_inconsistency_reason") or "-"
+                                        ),
+                                        "ai_numeric_consistency_recheck_detected_value": json.dumps(
+                                            ai_decision.get("ai_reason_numeric_inconsistency_detected_value"),
+                                            ensure_ascii=False,
+                                            default=str,
+                                        )[:240],
+                                    },
+                                )
+                                recheck_action = str((recheck_decision or {}).get("action") or "WAIT").upper()
+                                recheck_score = _safe_float((recheck_decision or {}).get("score"), 50.0)
+                                recheck_buy_min_score = float(
+                                    max(0, _rule_int("AI_NUMERIC_CONSISTENCY_RECHECK_BUY_MIN_SCORE", 75))
+                                )
+                                if recheck_action == "BUY" and recheck_score < recheck_buy_min_score:
+                                    recheck_decision = dict(recheck_decision or {})
+                                    recheck_action = "WAIT"
+                                    recheck_score = min(recheck_score, recheck_buy_min_score - 1.0)
+                                    base_reason = str(recheck_decision.get("reason") or "").strip()
+                                    below_min_reason = (
+                                        f"numeric_consistency_recheck_buy_score_below_min:{int(recheck_buy_min_score)}"
+                                    )
+                                    recheck_decision["action"] = recheck_action
+                                    recheck_decision["score"] = recheck_score
+                                    recheck_decision["reason"] = (
+                                        f"{base_reason} | {below_min_reason}" if base_reason else below_min_reason
+                                    )
+                                if recheck_action != "BUY":
+                                    recheck_score = min(recheck_score, 74.0)
+                                    recheck_decision = dict(recheck_decision or {})
+                                    recheck_decision["score"] = recheck_score
+                                recheck_reason = str((recheck_decision or {}).get("reason") or "")[:120] or "-"
+                                ai_numeric_consistency_recheck.update(
+                                    {
+                                        "recheck_action": recheck_action,
+                                        "recheck_score": f"{recheck_score:.1f}",
+                                        "recheck_reason_excerpt": recheck_reason,
+                                        "recheck_count": recheck_attempt_count,
+                                    }
+                                )
+                                if bool((recheck_decision or {}).get("ai_reason_numeric_inconsistency")):
+                                    ai_numeric_consistency_recheck["skip_reason"] = "recheck_still_contradictory"
+                                    _log_ai_numeric_consistency_recheck(
+                                        stock,
+                                        code,
+                                        "ai_numeric_consistency_recheck_failed",
+                                        ai_numeric_consistency_recheck,
+                                    )
+                                else:
+                                    _log_ai_numeric_consistency_recheck(
+                                        stock,
+                                        code,
+                                        "ai_numeric_consistency_recheck_corrected",
+                                        ai_numeric_consistency_recheck,
+                                    )
+                                    _mutate_stock_state(
+                                        stock,
+                                        set_fields={
+                                            "last_watching_ai_action": recheck_action,
+                                            "last_watching_ai_score": recheck_score,
+                                            "last_watching_ai_score_raw": recheck_score,
+                                            "last_watching_ai_reason": str(recheck_decision.get("reason") or recheck_reason or "")[:240],
+                                            "last_watching_ai_confirmed_at": now_ts,
+                                            "last_watching_ai_source_quality_fields": _build_tick_source_quality_log_fields(
+                                                recheck_decision
+                                            ),
+                                        },
+                                    )
+                                    ai_call_trigger_reason = "ai_numeric_consistency_recheck"
+                                    ai_decision = dict(recheck_decision or {})
+                                    action = recheck_action
+                                    ai_score = recheck_score
+                                    raw_ai_score = recheck_score
+                                    reason = str(ai_decision.get("reason") or reason or "")
+                            elif ai_numeric_consistency_in_scope:
+                                _log_ai_numeric_consistency_recheck(
+                                    stock,
+                                    code,
+                                    "ai_numeric_consistency_recheck_skipped",
+                                    ai_numeric_consistency_recheck,
                                 )
                             score65_74_probe_decision = _score65_74_recovery_probe_decision(
                                 ai_decision,
@@ -13965,21 +14490,23 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                         "ai_cooldown_blocked",
                         cooldown_elapsed_sec=int(time_elapsed),
                         cooldown_threshold_sec=config["AI_WATCHING_COOLDOWN"],
-                        **_build_ai_input_not_evaluated_fields("watching_ai_cooldown_active"),
-                        **_build_ai_ops_log_fields(
-                            {
-                                "ai_parse_ok": False,
-                                "ai_parse_fail": False,
-                                "ai_fallback_score_50": False,
-                                "ai_response_ms": 0,
-                                "ai_prompt_type": "scalping_watch_cooldown_blocked",
-                                "ai_result_source": "watching_cooldown",
-                            },
-                            ai_score_raw=current_ai_score,
-                            ai_score_after_bonus=current_ai_score,
-                            entry_score_threshold=75,
-                            big_bite_bonus_applied=bool(boost_applied_value),
-                            ai_cooldown_blocked=True,
+                        **_merge_entry_pipeline_field_groups(
+                            _build_ai_input_not_evaluated_fields("watching_ai_cooldown_active"),
+                            _build_ai_ops_log_fields(
+                                {
+                                    "ai_parse_ok": False,
+                                    "ai_parse_fail": False,
+                                    "ai_fallback_score_50": False,
+                                    "ai_response_ms": 0,
+                                    "ai_prompt_type": "scalping_watch_cooldown_blocked",
+                                    "ai_result_source": "watching_cooldown",
+                                },
+                                ai_score_raw=current_ai_score,
+                                ai_score_after_bonus=current_ai_score,
+                                entry_score_threshold=75,
+                                big_bite_bonus_applied=bool(boost_applied_value),
+                                ai_cooldown_blocked=True,
+                            ),
                         ),
                     )
 
@@ -14052,7 +14579,17 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                                 score65_74_reuse_decision.get("score65_74_recovery_probe_current_price", "-")
                             ),
                         )
-                if current_ai_score < 75 and current_ai_score != 50 and not wait6579_probe_entry_unlocked:
+                current_ai_action = str(
+                    (ai_decision or {}).get("action")
+                    or stock.get("last_watching_ai_action")
+                    or "WAIT"
+                ).upper()
+                explicit_buy_action = current_ai_action == "BUY"
+                if (
+                    (current_ai_score < 75 or not explicit_buy_action)
+                    and current_ai_score != 50
+                    and not wait6579_probe_entry_unlocked
+                ):
                     cooldown_time = config["AI_WAIT_DROP_COOLDOWN"]
                     with ENTRY_LOCK:
                         cooldowns[code] = now_ts + cooldown_time
@@ -14075,19 +14612,21 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                         "blocked_ai_score",
                         threshold=75,
                         cooldown_sec=cooldown_time,
-                        **{
-                            "ai_call_trigger_reason": ai_call_trigger_reason or "-",
-                            **_early_accel_recheck_attempt_exclusion_fields(ai_call_trigger_reason),
-                        },
-                        **_build_ai_overlap_log_fields(
-                            stock=stock,
-                            ai_score=current_ai_score,
-                            momentum_tag=stock.get("entry_momentum_tag"),
-                            threshold_profile=stock.get("entry_threshold_profile"),
-                            overbought_blocked=False,
-                            blocked_stage="blocked_ai_score",
+                        **_merge_entry_pipeline_field_groups(
+                            {
+                                "ai_call_trigger_reason": ai_call_trigger_reason or "-",
+                                **_entry_runtime_retry_exclusion_fields(ai_call_trigger_reason),
+                            },
+                            _build_ai_overlap_log_fields(
+                                stock=stock,
+                                ai_score=current_ai_score,
+                                momentum_tag=stock.get("entry_momentum_tag"),
+                                threshold_profile=stock.get("entry_threshold_profile"),
+                                overbought_blocked=False,
+                                blocked_stage="blocked_ai_score",
+                            ),
+                            ai_ops_fields,
                         ),
-                        **ai_ops_fields,
                     )
                     _emit_scalp_entry_adm_snapshot(
                         stock,
@@ -14098,7 +14637,7 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                         chosen_action="NO_BUY_AI",
                         actual_order_submitted=False,
                         broker_order_forbidden=True,
-                        extra_fields=_early_accel_recheck_attempt_exclusion_fields(ai_call_trigger_reason),
+                        extra_fields=_entry_runtime_retry_exclusion_fields(ai_call_trigger_reason),
                     )
                     _maybe_arm_scalp_sim_candidate_window(
                         stock=stock,
@@ -15675,6 +16214,53 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             latency_gate, request_price=price, curr_price=curr_price,
             best_bid=best_bid_at_submit, best_ask=best_ask_at_submit,
         )
+        late_drift_guard = _evaluate_late_entry_price_drift_guard(
+            strategy=strategy,
+            stock=stock,
+            price=price,
+            latency_gate=latency_gate,
+            price_snapshot=price_snapshot,
+            pre_submit_fields=real_pre_submit_guard_fields,
+            microstructure_fields=microstructure_submit_log_fields,
+            orderbook_fields=entry_orderbook_micro_fields,
+        )
+        if late_drift_guard.get("blocked"):
+            _log_entry_pipeline(
+                stock,
+                code,
+                "pre_submit_late_entry_price_drift_guard_block",
+                tag=request["tag"],
+                qty=qty,
+                price=price,
+                order_type=request["order_type_code"],
+                tif=request["tif"],
+                actual_order_submitted=False,
+                broker_order_forbidden=True,
+                **_merge_entry_pipeline_field_groups(
+                    real_pre_submit_guard_fields,
+                    price_snapshot,
+                    late_drift_guard.get("fields") or {},
+                    microstructure_submit_log_fields,
+                    _panic_gap_weight_log_fields(latency_gate),
+                    {
+                        "threshold_family": "late_entry_price_drift_guard",
+                        "source_quality_gate": "late_entry_price_drift_guard_contract",
+                        "decision_authority": "real_scalping_submit_quality_guard",
+                        "forbidden_uses": (
+                            "EV|rolling|MTD|cumulative_tuning|live_auto_promotion|"
+                            "threshold_mutation|order_price_change|order_price_resolver_change|"
+                            "provider_route_change|quantity_cap_change|broker_guard_bypass"
+                        ),
+                    },
+                ),
+            )
+            log_info(
+                f"[LATE_ENTRY_PRICE_DRIFT_GUARD_BLOCK] {stock.get('name')}({code}) "
+                f"price={price} target={(late_drift_guard.get('fields') or {}).get('late_entry_reference_target_price')} "
+                f"drift_bps={(late_drift_guard.get('fields') or {}).get('late_entry_price_drift_bps')} "
+                f"reason={late_drift_guard.get('reason')}"
+            )
+            continue
         if _is_pre_submit_price_guard_block(strategy, price, best_bid_at_submit):
             max_below_bid_bps = int(_rule('SCALPING_PRE_SUBMIT_MAX_BELOW_BID_BPS', 80) or 80)
             _log_entry_pipeline(
@@ -15903,7 +16489,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
     primary_broker_order_no = broker_order_numbers[0] if broker_order_numbers else ""
     submit_attempt_id = f"{code}:{int(now_ts * 1000)}:{primary_broker_order_no or len(successful_orders)}"
     ai_call_trigger_reason_at_submit = str(stock.get("last_watching_ai_call_trigger_reason") or "-").strip() or "-"
-    early_accel_recheck_submit_exclusion_fields = _early_accel_recheck_attempt_exclusion_fields(
+    entry_runtime_retry_submit_exclusion_fields = _entry_runtime_retry_exclusion_fields(
         ai_call_trigger_reason_at_submit
     )
     _publish_buy_signal_submission_notice(
@@ -15955,7 +16541,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         submit_attempt_id=submit_attempt_id,
         **{
             "ai_call_trigger_reason": ai_call_trigger_reason_at_submit,
-            **early_accel_recheck_submit_exclusion_fields,
+            **entry_runtime_retry_submit_exclusion_fields,
         },
         **_merge_entry_pipeline_field_groups(
             pre_ai_gate_submit_log_fields,
@@ -15991,7 +16577,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             "order_response_ord_no": primary_broker_order_no,
             "submit_attempt_id": submit_attempt_id,
             "ai_call_trigger_reason": ai_call_trigger_reason_at_submit,
-            **early_accel_recheck_submit_exclusion_fields,
+            **entry_runtime_retry_submit_exclusion_fields,
             **real_pre_submit_guard_fields,
         },
     )

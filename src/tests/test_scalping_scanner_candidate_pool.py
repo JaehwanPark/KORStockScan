@@ -49,6 +49,775 @@ def test_resolve_scan_interval_matches_intraday_schedule():
     assert scalping_scanner._resolve_scan_interval_sec(time(15, 0)) == 90
 
 
+def test_scanner_priority_tiering_sorts_acceleration_before_plain_price_jump(monkeypatch):
+    monkeypatch.setattr(
+        scalping_scanner,
+        "TRADING_RULES",
+        SimpleNamespace(
+            SCALP_SCANNER_PRIORITY_TIERING_ENABLED=True,
+            SCALP_SCANNER_PRIORITY_DEMOTE_REALTIME_RANK_ONLY=True,
+            SCALP_SCANNER_PRIORITY_DEMOTE_BID_IMBALANCE_ONLY=True,
+            SCALP_SCANNER_ACCEL_MIN_RANK_JUMP=10,
+            SCALP_SCANNER_ACCEL_MIN_SPIKE_RATE=80.0,
+            SCALP_SCANNER_ACCEL_MIN_PRIORITY_SCORE=80.0,
+            SCALP_SCANNER_ACCEL_MIN_CNTR_STR=110.0,
+        ),
+    )
+    candidates = {
+        "000001": {
+            "Code": "000001",
+            "Name": "PLAIN",
+            "Price": 10000,
+            "Source": "PRICE_JUMP_START",
+            "SourceSet": {"PRICE_JUMP_START"},
+            "PriceJumpFluRate": 2.0,
+            "JumpRate": 0.1,
+            "SpikeRate": 0.0,
+            "PriorityScore": 0.0,
+            "CntrStr": 0.0,
+            "CntrStrAvailable": False,
+            "RankNow": 0,
+            "RankPrev": 0,
+        },
+        "000002": {
+            "Code": "000002",
+            "Name": "ACCEL",
+            "Price": 10000,
+            "Source": "PRICE_JUMP_START",
+            "SourceSet": {"PRICE_JUMP_START"},
+            "PriceJumpFluRate": 1.0,
+            "JumpRate": 0.5,
+            "SpikeRate": 0.0,
+            "PriorityScore": 0.0,
+            "CntrStr": 0.0,
+            "CntrStrAvailable": False,
+            "RankNow": 0,
+            "RankPrev": 0,
+        },
+    }
+
+    ranked = scalping_scanner.rank_candidates(candidates)
+
+    assert [item["Code"] for item in ranked] == ["000002", "000001"]
+    assert scalping_scanner._scanner_priority_profile(ranked[0])["scanner_priority_tier"] == (
+        "tier_a_acceleration_confirmed"
+    )
+    assert scalping_scanner._scanner_priority_profile(ranked[1])["scanner_priority_tier"] == (
+        "tier_b_price_jump_candidate"
+    )
+
+
+def test_scanner_priority_tiering_blocks_rank_only_first_seen(monkeypatch):
+    emitted = []
+    monkeypatch.setattr(kiwoom_utils, "is_valid_stock", lambda *args, **kwargs: True)
+    monkeypatch.setattr(
+        scalping_scanner,
+        "emit_pipeline_event",
+        lambda pipeline, name, code, stage, *, record_id=None, fields=None: emitted.append(
+            {"stage": stage, "fields": fields or {}}
+        ),
+    )
+    monkeypatch.setattr(
+        scalping_scanner,
+        "TRADING_RULES",
+        SimpleNamespace(
+            SCALP_SCANNER_REAL_SOURCE_GUARD_ENABLED=True,
+            SCALP_SCANNER_REAL_SOURCE_GUARD_BLOCK_LATE_FIRST_SEEN=True,
+            SCALP_SCANNER_REAL_SOURCE_GUARD_BLOCK_VALUE_TOP_ONLY=True,
+            SCALP_SCANNER_REAL_SOURCE_GUARD_MAX_DECLINE_PCT=0.0,
+            SCALP_SCANNER_PRIORITY_TIERING_ENABLED=True,
+            SCALP_SCANNER_PRIORITY_DEMOTE_REALTIME_RANK_ONLY=True,
+            SCALP_SCANNER_PRIORITY_DEMOTE_BID_IMBALANCE_ONLY=True,
+            SCALP_SCANNER_ACCEL_MIN_RANK_JUMP=10,
+            SCALP_SCANNER_ACCEL_MIN_SPIKE_RATE=80.0,
+            SCALP_SCANNER_ACCEL_MIN_PRIORITY_SCORE=80.0,
+            SCALP_SCANNER_ACCEL_MIN_CNTR_STR=110.0,
+            SCALP_SCANNER_PROBE_MIN_SEC=30,
+            SCALP_SCANNER_PROBE_MAX_SEC=300,
+            SCALP_SCANNER_PROBE_MIN_PRICE_DELTA_PCT=0.15,
+            SCALP_SCANNER_PROBE_MIN_FLU_DELTA_PCT=0.30,
+        ),
+    )
+
+    codes, _ = scalping_scanner.promote_candidates(
+        _DB(),
+        _EventBus(),
+        [
+            {
+                "Code": "000003",
+                "Name": "RANKONLY",
+                "Price": 10000,
+                "Source": "REALTIME_RANK_START",
+                "SourceSet": {"REALTIME_RANK_START"},
+                "RealtimeRankFluRate": 3.0,
+                "RankNow": 5,
+                "RankPrev": 6,
+                "PriorityScore": 0.0,
+                "SpikeRate": 0.0,
+                "CntrStr": 0.0,
+                "CntrStrAvailable": False,
+            }
+        ],
+        {},
+        max_new_codes=12,
+        reentry_cooldown_sec=1500,
+        token="TOKEN",
+        now_ts=1000.0,
+    )
+
+    assert codes == []
+    guard_events = [event for event in emitted if event["stage"] == "scalping_scanner_real_source_guard_block"]
+    assert guard_events
+    fields = guard_events[-1]["fields"]
+    assert fields["scanner_priority_tier"] == "tier_d_late_rank_only"
+    assert fields["scanner_real_source_guard_skip_reason"] == "late_confirmation_first_seen_probe"
+
+
+def test_scanner_priority_tiering_allows_rank_jump_acceleration(monkeypatch):
+    emitted = []
+    monkeypatch.setattr(kiwoom_utils, "is_valid_stock", lambda *args, **kwargs: True)
+    monkeypatch.setattr(
+        scalping_scanner,
+        "emit_pipeline_event",
+        lambda pipeline, name, code, stage, *, record_id=None, fields=None: emitted.append(
+            {"stage": stage, "fields": fields or {}}
+        ),
+    )
+    monkeypatch.setattr(
+        scalping_scanner,
+        "TRADING_RULES",
+        SimpleNamespace(
+            SCALP_SCANNER_REAL_SOURCE_GUARD_ENABLED=True,
+            SCALP_SCANNER_REAL_SOURCE_GUARD_BLOCK_LATE_FIRST_SEEN=True,
+            SCALP_SCANNER_REAL_SOURCE_GUARD_BLOCK_VALUE_TOP_ONLY=True,
+            SCALP_SCANNER_REAL_SOURCE_GUARD_MAX_DECLINE_PCT=0.0,
+            SCALP_SCANNER_PRIORITY_TIERING_ENABLED=True,
+            SCALP_SCANNER_PRIORITY_DEMOTE_REALTIME_RANK_ONLY=True,
+            SCALP_SCANNER_PRIORITY_DEMOTE_BID_IMBALANCE_ONLY=True,
+            SCALP_SCANNER_ACCEL_MIN_RANK_JUMP=10,
+            SCALP_SCANNER_ACCEL_MIN_SPIKE_RATE=80.0,
+            SCALP_SCANNER_ACCEL_MIN_PRIORITY_SCORE=80.0,
+            SCALP_SCANNER_ACCEL_MIN_CNTR_STR=110.0,
+        ),
+    )
+
+    codes, _ = scalping_scanner.promote_candidates(
+        _DB(),
+        _EventBus(),
+        [
+            {
+                "Code": "000033",
+                "Name": "RANKJUMP",
+                "Price": 10000,
+                "Source": "REALTIME_RANK_START",
+                "SourceSet": {"REALTIME_RANK_START"},
+                "RealtimeRankFluRate": 3.0,
+                "RankNow": 3,
+                "RankPrev": 30,
+                "PriorityScore": 0.0,
+                "SpikeRate": 0.0,
+                "CntrStr": 0.0,
+                "CntrStrAvailable": False,
+            }
+        ],
+        {},
+        max_new_codes=12,
+        reentry_cooldown_sec=1500,
+        token="TOKEN",
+        now_ts=1000.0,
+    )
+
+    assert codes == ["000033"]
+    promoted = [event for event in emitted if event["stage"] == "scalping_scanner_candidate_promoted"][-1]
+    assert promoted["fields"]["scanner_priority_tier"] == "tier_a_acceleration_confirmed"
+    assert promoted["fields"]["scanner_priority_reason"] == "rank_jump_acceleration"
+    assert promoted["fields"]["scanner_promotion_reason"] == "rank_jump_acceleration"
+
+
+def test_scanner_priority_tiering_blocks_bid_imbalance_only(monkeypatch):
+    emitted = []
+    monkeypatch.setattr(kiwoom_utils, "is_valid_stock", lambda *args, **kwargs: True)
+    monkeypatch.setattr(
+        scalping_scanner,
+        "emit_pipeline_event",
+        lambda pipeline, name, code, stage, *, record_id=None, fields=None: emitted.append(
+            {"stage": stage, "fields": fields or {}}
+        ),
+    )
+    monkeypatch.setattr(
+        scalping_scanner,
+        "TRADING_RULES",
+        SimpleNamespace(
+            SCALP_SCANNER_REAL_SOURCE_GUARD_ENABLED=True,
+            SCALP_SCANNER_PRIORITY_TIERING_ENABLED=True,
+            SCALP_SCANNER_PRIORITY_DEMOTE_REALTIME_RANK_ONLY=True,
+            SCALP_SCANNER_PRIORITY_DEMOTE_BID_IMBALANCE_ONLY=True,
+            SCALP_SCANNER_ACCEL_MIN_RANK_JUMP=10,
+            SCALP_SCANNER_ACCEL_MIN_SPIKE_RATE=80.0,
+            SCALP_SCANNER_ACCEL_MIN_PRIORITY_SCORE=80.0,
+            SCALP_SCANNER_ACCEL_MIN_CNTR_STR=110.0,
+        ),
+    )
+
+    codes, _ = scalping_scanner.promote_candidates(
+        _DB(),
+        _EventBus(),
+        [
+            {
+                "Code": "000004",
+                "Name": "BIDONLY",
+                "Price": 10000,
+                "Source": "BID_IMBALANCE_SURGE",
+                "SourceSet": {"BID_IMBALANCE_SURGE"},
+                "BidImbalanceFluRate": 2.0,
+                "BidSurgeRate": 20.0,
+                "RankNow": 0,
+                "RankPrev": 0,
+                "PriorityScore": 0.0,
+                "SpikeRate": 0.0,
+                "CntrStr": 0.0,
+                "CntrStrAvailable": False,
+            }
+        ],
+        {},
+        max_new_codes=12,
+        reentry_cooldown_sec=1500,
+        token="TOKEN",
+        now_ts=1000.0,
+    )
+
+    assert codes == []
+    fields = [event for event in emitted if event["stage"] == "scalping_scanner_real_source_guard_block"][-1][
+        "fields"
+    ]
+    assert fields["scanner_priority_tier"] == "tier_z_source_only"
+    assert fields["scanner_real_source_guard_skip_reason"] == "scanner_priority_source_only"
+
+
+def test_scanner_priority_tiering_keeps_plain_price_jump_promotable(monkeypatch):
+    emitted = []
+    monkeypatch.setattr(kiwoom_utils, "is_valid_stock", lambda *args, **kwargs: True)
+    monkeypatch.setattr(
+        scalping_scanner,
+        "emit_pipeline_event",
+        lambda pipeline, name, code, stage, *, record_id=None, fields=None: emitted.append(
+            {"stage": stage, "fields": fields or {}}
+        ),
+    )
+    monkeypatch.setattr(
+        scalping_scanner,
+        "TRADING_RULES",
+        SimpleNamespace(
+            SCALP_SCANNER_REAL_SOURCE_GUARD_ENABLED=True,
+            SCALP_SCANNER_PRIORITY_TIERING_ENABLED=True,
+            SCALP_SCANNER_PRIORITY_DEMOTE_REALTIME_RANK_ONLY=True,
+            SCALP_SCANNER_PRIORITY_DEMOTE_BID_IMBALANCE_ONLY=True,
+            SCALP_SCANNER_ACCEL_MIN_RANK_JUMP=10,
+            SCALP_SCANNER_ACCEL_MIN_SPIKE_RATE=80.0,
+            SCALP_SCANNER_ACCEL_MIN_PRIORITY_SCORE=80.0,
+            SCALP_SCANNER_ACCEL_MIN_CNTR_STR=110.0,
+        ),
+    )
+
+    codes, _ = scalping_scanner.promote_candidates(
+        _DB(),
+        _EventBus(),
+        [
+            {
+                "Code": "000005",
+                "Name": "PRICEJUMP",
+                "Price": 10000,
+                "Source": "PRICE_JUMP_START",
+                "SourceSet": {"PRICE_JUMP_START"},
+                "PriceJumpFluRate": 2.0,
+                "JumpRate": 0.1,
+                "RankNow": 0,
+                "RankPrev": 0,
+                "PriorityScore": 0.0,
+                "SpikeRate": 0.0,
+                "CntrStr": 0.0,
+                "CntrStrAvailable": False,
+            }
+        ],
+        {},
+        max_new_codes=12,
+        reentry_cooldown_sec=1500,
+        token="TOKEN",
+        now_ts=1000.0,
+    )
+
+    assert codes == ["000005"]
+    promoted = [event for event in emitted if event["stage"] == "scalping_scanner_candidate_promoted"][-1]
+    assert promoted["fields"]["scanner_priority_tier"] == "tier_b_price_jump_candidate"
+
+
+def test_scanner_priority_tiering_marks_price_jump_multisource_as_tier_a(monkeypatch):
+    monkeypatch.setattr(
+        scalping_scanner,
+        "TRADING_RULES",
+        SimpleNamespace(
+            SCALP_SCANNER_PRIORITY_TIERING_ENABLED=True,
+            SCALP_SCANNER_PRIORITY_DEMOTE_REALTIME_RANK_ONLY=True,
+            SCALP_SCANNER_PRIORITY_DEMOTE_BID_IMBALANCE_ONLY=True,
+            SCALP_SCANNER_ACCEL_MIN_RANK_JUMP=10,
+            SCALP_SCANNER_ACCEL_MIN_SPIKE_RATE=80.0,
+            SCALP_SCANNER_ACCEL_MIN_PRIORITY_SCORE=80.0,
+            SCALP_SCANNER_ACCEL_MIN_CNTR_STR=110.0,
+        ),
+    )
+    profile = scalping_scanner._scanner_priority_profile(
+        {
+            "Code": "000006",
+            "Name": "MULTI",
+            "Price": 10000,
+            "Source": "PRICE_JUMP_START",
+            "SourceSet": {"PRICE_JUMP_START", "REALTIME_RANK_START", "VALUE_TOP", "VOLUME_SURGE_POSITIVE"},
+            "PriceJumpFluRate": 2.0,
+            "RealtimeRankFluRate": 2.0,
+            "VolumeSurgeFluRate": 2.0,
+            "JumpRate": 0.1,
+            "RankNow": 0,
+            "RankPrev": 0,
+            "PriorityScore": 0.0,
+            "SpikeRate": 0.0,
+            "CntrStr": 0.0,
+            "CntrStrAvailable": False,
+        }
+    )
+
+    assert profile["scanner_priority_tier"] == "tier_a_acceleration_confirmed"
+    assert profile["scanner_priority_reason"] == "price_jump_multisource_confirmation"
+
+
+def test_scanner_demotes_open_price_jump_without_volume(monkeypatch):
+    emitted = []
+    monkeypatch.setattr(kiwoom_utils, "is_valid_stock", lambda *args, **kwargs: True)
+    monkeypatch.setattr(
+        scalping_scanner,
+        "emit_pipeline_event",
+        lambda pipeline, name, code, stage, *, record_id=None, fields=None: emitted.append(
+            {"stage": stage, "fields": fields or {}}
+        ),
+    )
+    monkeypatch.setattr(
+        scalping_scanner,
+        "TRADING_RULES",
+        SimpleNamespace(
+            SCALP_SCANNER_REAL_SOURCE_GUARD_ENABLED=True,
+            SCALP_SCANNER_REAL_SOURCE_GUARD_BLOCK_LATE_FIRST_SEEN=True,
+            SCALP_SCANNER_REAL_SOURCE_GUARD_BLOCK_VALUE_TOP_ONLY=True,
+            SCALP_SCANNER_REAL_SOURCE_GUARD_MAX_DECLINE_PCT=0.0,
+            SCALP_SCANNER_PRIORITY_TIERING_ENABLED=True,
+            SCALP_SCANNER_PRIORITY_DEMOTE_REALTIME_RANK_ONLY=True,
+            SCALP_SCANNER_PRIORITY_DEMOTE_BID_IMBALANCE_ONLY=True,
+            SCALP_SCANNER_DEMOTE_OPEN_PRICE_JUMP_WITHOUT_VOLUME=True,
+            SCALP_SCANNER_ACCEL_MIN_RANK_JUMP=10,
+            SCALP_SCANNER_ACCEL_MIN_SPIKE_RATE=80.0,
+            SCALP_SCANNER_ACCEL_MIN_PRIORITY_SCORE=80.0,
+            SCALP_SCANNER_ACCEL_MIN_CNTR_STR=110.0,
+            SCALP_SCANNER_PROBE_MIN_SEC=30,
+            SCALP_SCANNER_PROBE_MAX_SEC=300,
+            SCALP_SCANNER_PROBE_MIN_PRICE_DELTA_PCT=0.15,
+            SCALP_SCANNER_PROBE_MIN_FLU_DELTA_PCT=0.30,
+        ),
+    )
+
+    codes, recent = scalping_scanner.promote_candidates(
+        _DB(),
+        _EventBus(),
+        [
+            {
+                "Code": "000066",
+                "Name": "OPENPRICE",
+                "Price": 10000,
+                "Source": "PRICE_JUMP_START",
+                "SourceSet": {"OPEN_TOP", "PRICE_JUMP_START"},
+                "OpenFluRate": 4.0,
+                "PriceJumpFluRate": 4.0,
+                "JumpRate": 8.0,
+                "RankNow": 0,
+                "RankPrev": 0,
+                "PriorityScore": 0.0,
+                "SpikeRate": 0.0,
+                "CntrStr": 150.0,
+                "CntrStrAvailable": True,
+            }
+        ],
+        {},
+        max_new_codes=12,
+        reentry_cooldown_sec=1500,
+        token="TOKEN",
+        now_ts=1000.0,
+    )
+
+    assert codes == []
+    assert recent["000066"]["scanner_probe_state"] == "first_seen_probe"
+    fields = [event for event in emitted if event["stage"] == "scalping_scanner_real_source_guard_block"][-1][
+        "fields"
+    ]
+    assert fields["scanner_priority_tier"] == "tier_b_price_jump_candidate"
+    assert fields["scanner_priority_reason"] == "open_price_jump_without_volume_demoted"
+    assert fields["scanner_real_source_guard_skip_reason"] == "open_price_jump_requires_volume_or_followthrough"
+    assert fields["scanner_source_guard_context"] == "normal_first_seen_block"
+
+
+def test_scanner_keeps_open_price_jump_with_volume_promotable(monkeypatch):
+    monkeypatch.setattr(
+        scalping_scanner,
+        "TRADING_RULES",
+        SimpleNamespace(
+            SCALP_SCANNER_PRIORITY_TIERING_ENABLED=True,
+            SCALP_SCANNER_PRIORITY_DEMOTE_REALTIME_RANK_ONLY=True,
+            SCALP_SCANNER_PRIORITY_DEMOTE_BID_IMBALANCE_ONLY=True,
+            SCALP_SCANNER_DEMOTE_OPEN_PRICE_JUMP_WITHOUT_VOLUME=True,
+            SCALP_SCANNER_ACCEL_MIN_RANK_JUMP=10,
+            SCALP_SCANNER_ACCEL_MIN_SPIKE_RATE=80.0,
+            SCALP_SCANNER_ACCEL_MIN_PRIORITY_SCORE=80.0,
+            SCALP_SCANNER_ACCEL_MIN_CNTR_STR=110.0,
+        ),
+    )
+
+    profile = scalping_scanner._scanner_priority_profile(
+        {
+            "Code": "000067",
+            "Name": "OPENPRICEVOL",
+            "Price": 10000,
+            "Source": "PRICE_JUMP_START",
+            "SourceSet": {"OPEN_TOP", "PRICE_JUMP_START", "VOLUME_SURGE_POSITIVE"},
+            "OpenFluRate": 4.0,
+            "PriceJumpFluRate": 4.0,
+            "VolumeSurgeFluRate": 4.0,
+            "JumpRate": 0.1,
+            "RankNow": 0,
+            "RankPrev": 0,
+            "PriorityScore": 0.0,
+            "SpikeRate": 0.0,
+            "CntrStr": 0.0,
+            "CntrStrAvailable": False,
+        }
+    )
+
+    assert profile["scanner_priority_tier"] == "tier_a_acceleration_confirmed"
+    assert profile["scanner_priority_reason"] == "price_jump_multisource_confirmation"
+
+
+def test_scanner_promotes_demoted_open_price_jump_on_probe_followthrough(monkeypatch):
+    emitted = []
+    monkeypatch.setattr(kiwoom_utils, "is_valid_stock", lambda *args, **kwargs: True)
+    monkeypatch.setattr(
+        scalping_scanner,
+        "emit_pipeline_event",
+        lambda pipeline, name, code, stage, *, record_id=None, fields=None: emitted.append(
+            {"stage": stage, "fields": fields or {}}
+        ),
+    )
+    monkeypatch.setattr(
+        scalping_scanner,
+        "TRADING_RULES",
+        SimpleNamespace(
+            SCALP_SCANNER_REAL_SOURCE_GUARD_ENABLED=True,
+            SCALP_SCANNER_REAL_SOURCE_GUARD_BLOCK_LATE_FIRST_SEEN=True,
+            SCALP_SCANNER_REAL_SOURCE_GUARD_BLOCK_VALUE_TOP_ONLY=True,
+            SCALP_SCANNER_REAL_SOURCE_GUARD_MAX_DECLINE_PCT=0.0,
+            SCALP_SCANNER_PRIORITY_TIERING_ENABLED=True,
+            SCALP_SCANNER_PRIORITY_DEMOTE_REALTIME_RANK_ONLY=True,
+            SCALP_SCANNER_PRIORITY_DEMOTE_BID_IMBALANCE_ONLY=True,
+            SCALP_SCANNER_DEMOTE_OPEN_PRICE_JUMP_WITHOUT_VOLUME=True,
+            SCALP_SCANNER_ACCEL_MIN_RANK_JUMP=10,
+            SCALP_SCANNER_ACCEL_MIN_SPIKE_RATE=80.0,
+            SCALP_SCANNER_ACCEL_MIN_PRIORITY_SCORE=80.0,
+            SCALP_SCANNER_ACCEL_MIN_CNTR_STR=110.0,
+            SCALP_SCANNER_PROBE_MIN_SEC=30,
+            SCALP_SCANNER_PROBE_MAX_SEC=300,
+            SCALP_SCANNER_PROBE_MIN_PRICE_DELTA_PCT=0.15,
+            SCALP_SCANNER_PROBE_MIN_FLU_DELTA_PCT=0.30,
+        ),
+    )
+    recent = {
+        "000068": {
+            "scanner_probe_state": "first_seen_probe",
+            "first_seen_at": 1000.0,
+            "first_price": 10000,
+            "first_flu_rate": 4.0,
+            "first_flu_rate_metric": "price_jump_flu_rate",
+            "first_flu_rate_source": "PRICE_JUMP_START",
+            "last_source_signature": ["OPEN_TOP", "PRICE_JUMP_START"],
+        }
+    }
+
+    codes, _ = scalping_scanner.promote_candidates(
+        _DB(),
+        _EventBus(),
+        [
+            {
+                "Code": "000068",
+                "Name": "OPENPRICEFOLLOW",
+                "Price": 10020,
+                "Source": "PRICE_JUMP_START",
+                "SourceSet": {"OPEN_TOP", "PRICE_JUMP_START"},
+                "OpenFluRate": 4.4,
+                "PriceJumpFluRate": 4.4,
+                "JumpRate": 2.0,
+                "RankNow": 0,
+                "RankPrev": 0,
+                "PriorityScore": 0.0,
+                "SpikeRate": 0.0,
+                "CntrStr": 90.0,
+                "CntrStrAvailable": True,
+            }
+        ],
+        recent,
+        max_new_codes=12,
+        reentry_cooldown_sec=1500,
+        token="TOKEN",
+        now_ts=1045.0,
+    )
+
+    assert codes == ["000068"]
+    promoted = [event for event in emitted if event["stage"] == "scalping_scanner_candidate_promoted"][-1]
+    assert promoted["fields"]["scanner_promotion_reason"] == "probe_acceleration_confirmed"
+    assert promoted["fields"]["price_delta_since_first_seen_pct"] == "0.20"
+
+
+def test_scanner_promotes_demoted_open_price_jump_when_volume_attaches(monkeypatch):
+    emitted = []
+    monkeypatch.setattr(kiwoom_utils, "is_valid_stock", lambda *args, **kwargs: True)
+    monkeypatch.setattr(
+        scalping_scanner,
+        "emit_pipeline_event",
+        lambda pipeline, name, code, stage, *, record_id=None, fields=None: emitted.append(
+            {"stage": stage, "fields": fields or {}}
+        ),
+    )
+    monkeypatch.setattr(
+        scalping_scanner,
+        "TRADING_RULES",
+        SimpleNamespace(
+            SCALP_SCANNER_REAL_SOURCE_GUARD_ENABLED=True,
+            SCALP_SCANNER_REAL_SOURCE_GUARD_BLOCK_LATE_FIRST_SEEN=True,
+            SCALP_SCANNER_REAL_SOURCE_GUARD_BLOCK_VALUE_TOP_ONLY=True,
+            SCALP_SCANNER_REAL_SOURCE_GUARD_MAX_DECLINE_PCT=0.0,
+            SCALP_SCANNER_PRIORITY_TIERING_ENABLED=True,
+            SCALP_SCANNER_PRIORITY_DEMOTE_REALTIME_RANK_ONLY=True,
+            SCALP_SCANNER_PRIORITY_DEMOTE_BID_IMBALANCE_ONLY=True,
+            SCALP_SCANNER_DEMOTE_OPEN_PRICE_JUMP_WITHOUT_VOLUME=True,
+            SCALP_SCANNER_ACCEL_MIN_RANK_JUMP=10,
+            SCALP_SCANNER_ACCEL_MIN_SPIKE_RATE=80.0,
+            SCALP_SCANNER_ACCEL_MIN_PRIORITY_SCORE=80.0,
+            SCALP_SCANNER_ACCEL_MIN_CNTR_STR=110.0,
+            SCALP_SCANNER_PROBE_MIN_SEC=30,
+            SCALP_SCANNER_PROBE_MAX_SEC=300,
+            SCALP_SCANNER_PROBE_MIN_PRICE_DELTA_PCT=0.15,
+            SCALP_SCANNER_PROBE_MIN_FLU_DELTA_PCT=0.30,
+        ),
+    )
+    recent = {
+        "000070": {
+            "scanner_probe_state": "first_seen_probe",
+            "first_seen_at": 1000.0,
+            "first_price": 10000,
+            "first_flu_rate": 4.0,
+            "first_flu_rate_metric": "price_jump_flu_rate",
+            "first_flu_rate_source": "PRICE_JUMP_START",
+            "last_source_signature": ["OPEN_TOP", "PRICE_JUMP_START"],
+        }
+    }
+
+    codes, _ = scalping_scanner.promote_candidates(
+        _DB(),
+        _EventBus(),
+        [
+            {
+                "Code": "000070",
+                "Name": "OPENPRICEVOLFOLLOW",
+                "Price": 10000,
+                "Source": "PRICE_JUMP_START",
+                "SourceSet": {"OPEN_TOP", "PRICE_JUMP_START", "VOLUME_SURGE_POSITIVE"},
+                "OpenFluRate": 4.0,
+                "PriceJumpFluRate": 4.0,
+                "VolumeSurgeFluRate": 4.0,
+                "JumpRate": 0.1,
+                "RankNow": 0,
+                "RankPrev": 0,
+                "PriorityScore": 0.0,
+                "SpikeRate": 0.0,
+                "CntrStr": 90.0,
+                "CntrStrAvailable": True,
+            }
+        ],
+        recent,
+        max_new_codes=12,
+        reentry_cooldown_sec=1500,
+        token="TOKEN",
+        now_ts=1045.0,
+    )
+
+    assert codes == ["000070"]
+    promoted = [event for event in emitted if event["stage"] == "scalping_scanner_candidate_promoted"][-1]
+    assert promoted["fields"]["scanner_promotion_reason"] == "open_price_jump_volume_confirmed"
+
+
+def test_scanner_blocks_demoted_open_price_jump_volume_attach_when_price_declines(monkeypatch):
+    emitted = []
+    monkeypatch.setattr(kiwoom_utils, "is_valid_stock", lambda *args, **kwargs: True)
+    monkeypatch.setattr(
+        scalping_scanner,
+        "emit_pipeline_event",
+        lambda pipeline, name, code, stage, *, record_id=None, fields=None: emitted.append(
+            {"stage": stage, "fields": fields or {}}
+        ),
+    )
+    monkeypatch.setattr(
+        scalping_scanner,
+        "TRADING_RULES",
+        SimpleNamespace(
+            SCALP_SCANNER_REAL_SOURCE_GUARD_ENABLED=True,
+            SCALP_SCANNER_REAL_SOURCE_GUARD_BLOCK_LATE_FIRST_SEEN=True,
+            SCALP_SCANNER_REAL_SOURCE_GUARD_BLOCK_VALUE_TOP_ONLY=True,
+            SCALP_SCANNER_REAL_SOURCE_GUARD_MAX_DECLINE_PCT=0.0,
+            SCALP_SCANNER_PRIORITY_TIERING_ENABLED=True,
+            SCALP_SCANNER_PRIORITY_DEMOTE_REALTIME_RANK_ONLY=True,
+            SCALP_SCANNER_PRIORITY_DEMOTE_BID_IMBALANCE_ONLY=True,
+            SCALP_SCANNER_DEMOTE_OPEN_PRICE_JUMP_WITHOUT_VOLUME=True,
+            SCALP_SCANNER_ACCEL_MIN_RANK_JUMP=10,
+            SCALP_SCANNER_ACCEL_MIN_SPIKE_RATE=80.0,
+            SCALP_SCANNER_ACCEL_MIN_PRIORITY_SCORE=80.0,
+            SCALP_SCANNER_ACCEL_MIN_CNTR_STR=110.0,
+            SCALP_SCANNER_PROBE_MIN_SEC=30,
+            SCALP_SCANNER_PROBE_MAX_SEC=300,
+            SCALP_SCANNER_PROBE_MIN_PRICE_DELTA_PCT=0.15,
+            SCALP_SCANNER_PROBE_MIN_FLU_DELTA_PCT=0.30,
+        ),
+    )
+    recent = {
+        "000071": {
+            "scanner_probe_state": "first_seen_probe",
+            "first_seen_at": 1000.0,
+            "first_price": 10000,
+            "first_flu_rate": 4.0,
+            "first_flu_rate_metric": "price_jump_flu_rate",
+            "first_flu_rate_source": "PRICE_JUMP_START",
+            "last_source_signature": ["OPEN_TOP", "PRICE_JUMP_START"],
+        }
+    }
+
+    codes, _ = scalping_scanner.promote_candidates(
+        _DB(),
+        _EventBus(),
+        [
+            {
+                "Code": "000071",
+                "Name": "OPENPRICEVOLDECLINE",
+                "Price": 9990,
+                "Source": "PRICE_JUMP_START",
+                "SourceSet": {"OPEN_TOP", "PRICE_JUMP_START", "VOLUME_SURGE_POSITIVE"},
+                "OpenFluRate": 4.0,
+                "PriceJumpFluRate": 4.0,
+                "VolumeSurgeFluRate": 4.0,
+                "JumpRate": 0.1,
+                "RankNow": 0,
+                "RankPrev": 0,
+                "PriorityScore": 0.0,
+                "SpikeRate": 0.0,
+                "CntrStr": 90.0,
+                "CntrStrAvailable": True,
+            }
+        ],
+        recent,
+        max_new_codes=12,
+        reentry_cooldown_sec=1500,
+        token="TOKEN",
+        now_ts=1045.0,
+    )
+
+    assert codes == []
+    fields = [event for event in emitted if event["stage"] == "scalping_scanner_real_source_guard_block"][-1][
+        "fields"
+    ]
+    assert fields["scanner_real_source_guard_skip_reason"] == "late_confirmation_price_declined"
+    assert fields["price_delta_since_first_seen_pct"] == "-0.10"
+
+
+def test_scanner_blocks_demoted_open_price_jump_when_probe_declines(monkeypatch):
+    emitted = []
+    monkeypatch.setattr(kiwoom_utils, "is_valid_stock", lambda *args, **kwargs: True)
+    monkeypatch.setattr(
+        scalping_scanner,
+        "emit_pipeline_event",
+        lambda pipeline, name, code, stage, *, record_id=None, fields=None: emitted.append(
+            {"stage": stage, "fields": fields or {}}
+        ),
+    )
+    monkeypatch.setattr(
+        scalping_scanner,
+        "TRADING_RULES",
+        SimpleNamespace(
+            SCALP_SCANNER_REAL_SOURCE_GUARD_ENABLED=True,
+            SCALP_SCANNER_REAL_SOURCE_GUARD_BLOCK_LATE_FIRST_SEEN=True,
+            SCALP_SCANNER_REAL_SOURCE_GUARD_BLOCK_VALUE_TOP_ONLY=True,
+            SCALP_SCANNER_REAL_SOURCE_GUARD_MAX_DECLINE_PCT=0.0,
+            SCALP_SCANNER_PRIORITY_TIERING_ENABLED=True,
+            SCALP_SCANNER_PRIORITY_DEMOTE_REALTIME_RANK_ONLY=True,
+            SCALP_SCANNER_PRIORITY_DEMOTE_BID_IMBALANCE_ONLY=True,
+            SCALP_SCANNER_DEMOTE_OPEN_PRICE_JUMP_WITHOUT_VOLUME=True,
+            SCALP_SCANNER_ACCEL_MIN_RANK_JUMP=10,
+            SCALP_SCANNER_ACCEL_MIN_SPIKE_RATE=80.0,
+            SCALP_SCANNER_ACCEL_MIN_PRIORITY_SCORE=80.0,
+            SCALP_SCANNER_ACCEL_MIN_CNTR_STR=110.0,
+            SCALP_SCANNER_PROBE_MIN_SEC=30,
+            SCALP_SCANNER_PROBE_MAX_SEC=300,
+            SCALP_SCANNER_PROBE_MIN_PRICE_DELTA_PCT=0.15,
+            SCALP_SCANNER_PROBE_MIN_FLU_DELTA_PCT=0.30,
+        ),
+    )
+    recent = {
+        "000069": {
+            "scanner_probe_state": "first_seen_probe",
+            "first_seen_at": 1000.0,
+            "first_price": 10000,
+            "first_flu_rate": 4.0,
+            "first_flu_rate_metric": "price_jump_flu_rate",
+            "first_flu_rate_source": "PRICE_JUMP_START",
+            "last_source_signature": ["OPEN_TOP", "PRICE_JUMP_START"],
+        }
+    }
+
+    codes, _ = scalping_scanner.promote_candidates(
+        _DB(),
+        _EventBus(),
+        [
+            {
+                "Code": "000069",
+                "Name": "OPENPRICEDECLINE",
+                "Price": 9990,
+                "Source": "PRICE_JUMP_START",
+                "SourceSet": {"OPEN_TOP", "PRICE_JUMP_START"},
+                "OpenFluRate": 4.4,
+                "PriceJumpFluRate": 4.4,
+                "JumpRate": 2.0,
+                "RankNow": 0,
+                "RankPrev": 0,
+                "PriorityScore": 0.0,
+                "SpikeRate": 0.0,
+                "CntrStr": 90.0,
+                "CntrStrAvailable": True,
+            }
+        ],
+        recent,
+        max_new_codes=12,
+        reentry_cooldown_sec=1500,
+        token="TOKEN",
+        now_ts=1045.0,
+    )
+
+    assert codes == []
+    fields = [event for event in emitted if event["stage"] == "scalping_scanner_real_source_guard_block"][-1][
+        "fields"
+    ]
+    assert fields["scanner_real_source_guard_skip_reason"] == "late_confirmation_price_declined"
+    assert fields["price_delta_since_first_seen_pct"] == "-0.10"
+
+
 def test_ka10028_open_pric_pre_is_preserved_as_rate(monkeypatch):
     def fake_fetch(**kwargs):
         assert kwargs["api_id"] == "ka10028"

@@ -117,6 +117,173 @@ def test_build_scalping_feature_audit_fields_marks_sent_flags():
     assert fields["microstructure_reaction_ask_sweep_score"] >= 0
 
 
+def test_entry_reason_consistency_flags_position_pass_described_as_fail():
+    engine = object.__new__(GPTSniperEngine)
+    result = {
+        "action": "WAIT",
+        "score": 62,
+        "reason": (
+            "Position advantage not both positive; curr_vs_micro_vwap_bp > 0 and "
+            "curr_vs_ma5_bp > 0 are true but BUY is incomplete"
+        ),
+    }
+    feature_packet = {
+        "tick_acceleration_ratio": 2.5,
+        "buy_pressure_10t": 98.65,
+        "curr_vs_micro_vwap_bp": 6.13,
+        "curr_vs_ma5_bp": 4.9,
+    }
+
+    annotated = engine._annotate_entry_numeric_consistency(
+        result,
+        prompt_type="scalping_entry",
+        feature_packet=feature_packet,
+    )
+
+    assert annotated["ai_reason_numeric_inconsistency"] is True
+    assert annotated["ai_reason_feature_inconsistency"] is True
+    assert annotated["ai_reason_numeric_inconsistency_field"] == "position_advantage"
+    assert annotated["ai_reason_numeric_inconsistency_reason"] == "position_pass_described_as_fail"
+
+
+def test_entry_reason_consistency_does_not_flag_position_positive_but_other_gates_weak():
+    engine = object.__new__(GPTSniperEngine)
+    result = {
+        "action": "WAIT",
+        "score": 62,
+        "reason": (
+            "Position advantage present: curr_vs_micro_vwap_bp > 0 and curr_vs_ma5_bp > 0, "
+            "but speed and supply-demand are not confirming"
+        ),
+    }
+    feature_packet = {
+        "tick_acceleration_ratio": 0.8,
+        "buy_pressure_10t": 42.0,
+        "curr_vs_micro_vwap_bp": 6.13,
+        "curr_vs_ma5_bp": 4.9,
+    }
+
+    annotated = engine._annotate_entry_numeric_consistency(
+        result,
+        prompt_type="scalping_entry",
+        feature_packet=feature_packet,
+    )
+
+    assert "ai_reason_numeric_inconsistency" not in annotated
+    assert "ai_reason_feature_inconsistency" not in annotated
+
+
+def test_entry_reason_consistency_does_not_flag_not_clearly_positive_when_context_is_mixed():
+    engine = object.__new__(GPTSniperEngine)
+    result = {
+        "action": "WAIT",
+        "score": 62,
+        "reason": (
+            "Position advantage not clearly positive: curr_vs_micro_vwap_bp > 0 "
+            "and curr_vs_ma5_bp > 0 both positive, but speed and supply are mixed"
+        ),
+    }
+    feature_packet = {
+        "tick_acceleration_ratio": 0.8,
+        "buy_pressure_10t": 42.0,
+        "curr_vs_micro_vwap_bp": 75.96,
+        "curr_vs_ma5_bp": 55.23,
+    }
+
+    annotated = engine._annotate_entry_numeric_consistency(
+        result,
+        prompt_type="scalping_entry",
+        feature_packet=feature_packet,
+    )
+
+    assert "ai_reason_numeric_inconsistency" not in annotated
+    assert "ai_reason_feature_inconsistency" not in annotated
+
+
+def test_entry_reason_consistency_flags_explicit_wrong_position_sign():
+    engine = object.__new__(GPTSniperEngine)
+    result = {
+        "action": "WAIT",
+        "score": 62,
+        "reason": "Position disadvantage: curr_vs_micro_vwap_bp <= 0 and curr_vs_ma5_bp <= 0",
+    }
+    feature_packet = {
+        "tick_acceleration_ratio": 0.8,
+        "buy_pressure_10t": 42.0,
+        "curr_vs_micro_vwap_bp": 6.13,
+        "curr_vs_ma5_bp": 4.9,
+    }
+
+    annotated = engine._annotate_entry_numeric_consistency(
+        result,
+        prompt_type="scalping_entry",
+        feature_packet=feature_packet,
+    )
+
+    assert annotated["ai_reason_numeric_inconsistency"] is True
+    assert annotated["ai_reason_numeric_inconsistency_field"] == "position_advantage"
+    assert (
+        annotated["ai_reason_numeric_inconsistency_reason"]
+        == "position_pass_described_as_fail"
+    )
+
+
+def test_entry_reason_consistency_flags_supply_pass_described_as_fail():
+    engine = object.__new__(GPTSniperEngine)
+    result = {
+        "action": "WAIT",
+        "score": 62,
+        "reason": "insufficient buy pressure: buy_pressure_10t < 68 prevents BUY",
+    }
+    feature_packet = {
+        "tick_acceleration_ratio": 0.9,
+        "buy_pressure_10t": 85.2,
+        "curr_vs_micro_vwap_bp": 89.61,
+        "curr_vs_ma5_bp": 119.84,
+    }
+
+    annotated = engine._annotate_entry_numeric_consistency(
+        result,
+        prompt_type="scalping_entry",
+        feature_packet=feature_packet,
+    )
+
+    assert annotated["ai_reason_numeric_inconsistency"] is True
+    assert annotated["ai_reason_numeric_inconsistency_field"] == "supply_demand_advantage"
+    assert annotated["ai_reason_numeric_inconsistency_reason"] == "supply_demand_pass_described_as_fail"
+
+
+def test_entry_reason_consistency_flags_three_core_features_pass_no_buy():
+    engine = object.__new__(GPTSniperEngine)
+    result = {
+        "action": "WAIT",
+        "score": 74,
+        "reason": (
+            "Position advantage met and Speed advantage present, but insufficient BUY signals "
+            "keep WAIT"
+        ),
+    }
+    feature_packet = {
+        "tick_acceleration_ratio": 5.5,
+        "buy_pressure_10t": 86.41,
+        "curr_vs_micro_vwap_bp": 56.68,
+        "curr_vs_ma5_bp": 58.52,
+    }
+
+    annotated = engine._annotate_entry_numeric_consistency(
+        result,
+        prompt_type="scalping_entry",
+        feature_packet=feature_packet,
+    )
+
+    assert annotated["ai_reason_numeric_inconsistency"] is True
+    assert annotated["ai_reason_numeric_inconsistency_field"] == "entry_feature_bundle"
+    assert (
+        annotated["ai_reason_numeric_inconsistency_reason"]
+        == "three_core_features_pass_described_as_no_buy"
+    )
+
+
 def test_extract_scalping_feature_packet_missing_microstructure_context_is_neutral():
     packet = extract_scalping_feature_packet(
         {"curr": 10100},
@@ -181,6 +348,10 @@ def test_extract_scalping_feature_packet_treats_same_second_ticks_as_burst():
     assert packet["tick_acceleration_ratio"] > 1.0
     assert packet["tick_acceleration_ratio_raw"] == 0.0
     assert packet["tick_context_quality"] == "fresh_computed"
+
+    fields = build_scalping_feature_audit_fields(packet)
+    assert fields["tick_acceleration_ratio"] == packet["tick_acceleration_ratio"]
+    assert fields["tick_acceleration_ratio_raw"] == 0.0
 
 
 def test_openai_market_packet_includes_quant_feature_section():

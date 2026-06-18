@@ -317,3 +317,70 @@ def test_swing_improvement_automation_surfaces_downstream_contract_gap_orders():
         assert order["implementation_status"] == "implemented"
         assert order["implementation_provenance"]["source_contract"] == "swing_lifecycle_contract_gap_v1"
         assert order["implementation_provenance"]["runtime_effect"] is False
+
+
+def test_swing_improvement_automation_marks_ofi_qi_instrumentation_implemented():
+    audit = {
+        "date": "2026-05-22",
+        "model_selection": {},
+        "recommendation_csv": {},
+        "db_lifecycle": {},
+        "recommendation_db_load": {},
+        "lifecycle_events": {
+            "raw_counts": {},
+            "unique_record_counts": {},
+            "group_unique_counts": {"entry": 2},
+            "ofi_qi_summary": {
+                "stale_missing_count": 1,
+                "stale_missing_ratio": 0.5,
+                "stale_missing_unique_record_count": 1,
+                "stale_missing_reason_counts": {"micro_missing": 1},
+                "stale_missing_reason_combination_counts": {"micro_missing": 1},
+                "stale_missing_reason_combination_unique_record_counts": {"micro_missing": 1},
+                "stale_missing_group_counts": {"entry": 1},
+                "stale_missing_group_unique_record_counts": {"entry": 1},
+                "stale_missing_reason_counts_by_group": {"entry": {"micro_missing": 1}},
+                "stale_missing_reason_unique_record_counts_by_group": {"entry": {"micro_missing": 1}},
+                "observer_unhealthy_overlap": {
+                    "observer_unhealthy_total": 0,
+                    "observer_unhealthy_with_other_reason": 0,
+                    "observer_unhealthy_only": 0,
+                },
+                "orderbook_micro_reason_counts_by_group": {"entry": {"micro_context_missing": 1}},
+                "observer_missing_reason_counts_by_group": {"entry": {"UNKNOWN": 1}},
+                "source_quality_status_counts_by_group": {"entry": {"source_quality_blocker": 1}},
+                "ws_quote_source_counts_by_group": {"entry": {"missing": 1}},
+                "ws_quote_stale_counts_by_group": {"entry": {"not_available_no_quote_age": 1}},
+                "stale_missing_examples": [{"record_id": "r1"}],
+                "entry_micro_state_counts": {"insufficient": 1, "bullish": 1},
+                "scale_in_micro_state_counts": {},
+                "exit_micro_state_counts": {},
+            },
+            "scale_in_observation": {},
+            "ai_contract_metrics": {},
+        },
+        "swing_entry_bottleneck": {
+            "primary": "SWING_ENTRY_BOTTLENECK_OBSERVE",
+            "matches": [],
+        },
+        "swing_lifecycle_contract_gaps": {"gap_count": 0, "gaps": []},
+        "observation_axis_summary": {},
+        "simulation_opportunity": {},
+    }
+
+    report = mod.build_swing_improvement_automation_report(audit)
+    order = next(
+        item
+        for item in report["code_improvement_orders"]
+        if item["order_id"] == "order_swing_ofi_qi_stale_or_missing_context"
+    )
+
+    assert order["implementation_status"] == "implemented"
+    assert order["implementation_provenance"]["source_contract"] == "swing_orderbook_micro_context_v2"
+    assert order["implementation_provenance"]["group"] == "entry"
+    assert order["implementation_provenance"]["root_cause_closure_status_hint"] == "root_cause_closed"
+    assert order["implementation_provenance"]["runtime_effect"] is False
+    assert (
+        order["implementation_provenance"]["root_cause_dimensions"]["orderbook_micro_reason_counts_by_group"]
+        == {"micro_context_missing": 1}
+    )

@@ -233,6 +233,9 @@ def _is_early_accel_recheck_retry_event(event: dict[str, Any]) -> bool:
         str(fields.get("ai_call_trigger_reason") or "") == "early_accel_recheck"
         or str(fields.get("tuning_authority_excluded_reason") or "")
         == "early_accel_recheck_operator_retry"
+        or str(fields.get("ai_call_trigger_reason") or "") == "ai_numeric_consistency_recheck"
+        or str(fields.get("tuning_authority_excluded_reason") or "")
+        == "ai_numeric_consistency_recheck_operator_retry"
     )
 
 
@@ -618,7 +621,10 @@ def _base_row(event: dict[str, Any]) -> dict[str, Any]:
         "pre_submit_ws_snapshot_refresh_reason": _nonempty(fields.get("pre_submit_ws_snapshot_refresh_reason")),
         "pre_submit_ws_snapshot_refresh_source": _nonempty(fields.get("pre_submit_ws_snapshot_refresh_source")),
         "pre_submit_ws_snapshot_refresh_age_ms": _safe_float(fields.get("pre_submit_ws_snapshot_refresh_age_ms"), None),
+        "source_quality_gate": _nonempty(fields.get("source_quality_gate")),
+        "allowed_runtime_apply": _safe_bool(fields.get("allowed_runtime_apply")),
         "source_quality_block_reason": _nonempty(fields.get("source_quality_block_reason") or fields.get("ai_input_source_quality_reason")),
+        "ai_reason_numeric_inconsistency": _safe_bool(fields.get("ai_reason_numeric_inconsistency")),
         "gate_action": _nonempty(fields.get("gate_action")),
         "entry_adm_prompt_applied": _safe_bool(fields.get("entry_adm_prompt_applied")),
         "entry_adm_version": _nonempty(fields.get("entry_adm_version")),
@@ -906,6 +912,12 @@ def _bucket_summary(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
             }
         )
     return sorted(summaries, key=lambda item: (-_safe_int(item.get("sample_count")), item.get("bucket_token") or ""))[:50]
+
+
+def _is_numeric_consistency_excluded_row(row: dict[str, Any]) -> bool:
+    if bool(row.get("ai_reason_numeric_inconsistency")):
+        return True
+    return str(row.get("source_quality_gate") or "").strip() == "ai_numeric_consistency_review_required"
 
 
 def _parse_event_ts(value: Any) -> datetime | None:
@@ -1244,10 +1256,13 @@ def build_scalp_entry_action_decision_matrix_report(target_date: str) -> dict[st
     runtime_effect_counts = Counter(str(row.get("entry_adm_runtime_effect") or "-") for row in rows)
     forced_action_counts = Counter(str(row.get("entry_adm_forced_action") or "-") for row in rows)
     unknown_summary = _unknown_bucket_summary(rows)
+    numeric_consistency_rows = [row for row in rows if _is_numeric_consistency_excluded_row(row)]
+    aggregate_rows = [row for row in rows if not _is_numeric_consistency_excluded_row(row)]
+    aggregate_joined_sample = sum(1 for row in aggregate_rows if row.get("outcome_joined"))
     warnings = []
-    if joined_sample < SAMPLE_FLOOR:
+    if aggregate_joined_sample < SAMPLE_FLOOR:
         warnings.append("joined_sample_below_sample_floor")
-    action_summary = _action_summary(rows)
+    action_summary = _action_summary(aggregate_rows)
     action_summary_actions = {str(item.get("action") or "") for item in action_summary if isinstance(item, dict)}
     missing_action_summary_rows = [action for action in ACTION_ORDER if action not in action_summary_actions]
     if missing_action_summary_rows:
@@ -1260,6 +1275,8 @@ def build_scalp_entry_action_decision_matrix_report(target_date: str) -> dict[st
         warnings.append("prior_bucket_present_but_runtime_sample_missing")
     if rows and prompt_applied == 0:
         warnings.append("prompt_context_not_loaded")
+    if numeric_consistency_rows:
+        warnings.append("ai_numeric_consistency_rows_excluded_from_aggregates")
     status = "pass" if not warnings else "warning"
     report = {
         "schema_version": REPORT_SCHEMA_VERSION,
@@ -1288,7 +1305,8 @@ def build_scalp_entry_action_decision_matrix_report(target_date: str) -> dict[st
         "bucket_dimensions": list(ENTRY_ADM_BUCKET_DIMENSIONS),
         "summary": {
             "total_candidates": len(rows),
-            "joined_sample": joined_sample,
+            "joined_sample": aggregate_joined_sample,
+            "joined_sample_all_rows": joined_sample,
             "sample_floor": SAMPLE_FLOOR,
             "prompt_applied_count": prompt_applied,
             "runtime_bias_applied_count": runtime_bias_applied,
@@ -1302,6 +1320,9 @@ def build_scalp_entry_action_decision_matrix_report(target_date: str) -> dict[st
             "raw_action_counts": dict(raw_action_counts),
             "action_normalized_count": sum(action_normalization_counts.values()),
             "action_normalization_counts": dict(action_normalization_counts),
+            "aggregate_total_candidates": len(aggregate_rows),
+            "aggregate_joined_sample": aggregate_joined_sample,
+            "numeric_consistency_excluded_count": len(numeric_consistency_rows),
             "missing_actions": missing_actions,
             "zero_sample_actions": zero_sample_actions,
             "missing_action_summary_rows": missing_action_summary_rows,
@@ -1322,7 +1343,7 @@ def build_scalp_entry_action_decision_matrix_report(target_date: str) -> dict[st
             "post_sell_evaluation": eval_summary,
         },
         "action_summary": action_summary,
-        "bucket_summary": _bucket_summary(rows),
+        "bucket_summary": _bucket_summary(aggregate_rows),
         "rows": rows,
         "examples": rows[:50],
         "sources": {

@@ -23,6 +23,7 @@ from src.engine.sniper_state_handlers import (
     _should_run_score65_74_recovery_probe,
     _should_run_main_buy_recovery_canary,
     _resolve_early_accel_recheck,
+    _resolve_ai_numeric_consistency_recheck,
     _resolve_gatekeeper_fast_reuse_sec,
     _resolve_holding_ai_fast_reuse_sec,
     _resolve_watching_state_change_refresh,
@@ -189,6 +190,46 @@ def test_early_accel_recheck_allows_scanner_cooldown_retry(monkeypatch):
     assert result["current_price"] == 12430
 
 
+def test_early_accel_recheck_allows_scanner_price_jump_tier_a_reasons(monkeypatch):
+    rules = replace(
+        TRADING_RULES,
+        EARLY_ACCEL_RECHECK_RUNTIME_ENABLED=True,
+        EARLY_ACCEL_RECHECK_MAX_COUNT=2,
+        EARLY_ACCEL_RECHECK_MIN_INTERVAL_SEC=20,
+        EARLY_ACCEL_RECHECK_MAX_AGE_SEC=180,
+        EARLY_ACCEL_RECHECK_MIN_TICK_ACCEL=1.10,
+        EARLY_ACCEL_RECHECK_MIN_MICRO_VWAP_BP=0.0,
+    )
+    monkeypatch.setattr(handlers, "TRADING_RULES", rules)
+    ws_data = {
+        "curr": 12430,
+        "tick_acceleration_ratio": 1.25,
+        "curr_vs_micro_vwap_bp": 12.0,
+        "quote_stale": False,
+    }
+
+    for promotion_reason in ("price_jump_start_acceleration", "price_jump_multisource_confirmation"):
+        result = _resolve_early_accel_recheck(
+            {
+                "position_tag": "SCANNER",
+                "scanner_promotion_reason": promotion_reason,
+                "buy_price": 12280,
+                "entry_armed_at_epoch": 100.0,
+                "early_accel_recheck_count": 0,
+            },
+            ws_data,
+            now_ts=130.0,
+            last_ai_time=105.0,
+            cooldown_sec=90,
+            strategy="SCALPING",
+            pos_tag="SCANNER",
+            current_ai_score=64.0,
+        )
+
+        assert result["allowed"] is True
+        assert result["scanner_promotion_reason"] == promotion_reason
+
+
 def test_early_accel_recheck_blocks_stale_or_falling_context(monkeypatch):
     rules = replace(TRADING_RULES, EARLY_ACCEL_RECHECK_RUNTIME_ENABLED=True)
     monkeypatch.setattr(handlers, "TRADING_RULES", rules)
@@ -248,6 +289,99 @@ def test_early_accel_recheck_blocks_stale_or_falling_context(monkeypatch):
     assert late_only["skip_reason"] == "scanner_promotion_reason_not_early_accel"
 
 
+def test_entry_adm_snapshot_records_feature_parity_and_numeric_consistency(monkeypatch):
+    logs = []
+
+    monkeypatch.setattr(
+        handlers,
+        "_log_entry_pipeline",
+        lambda stock, code, stage, **fields: logs.append((stage, fields)),
+    )
+
+    stock = {
+        "id": 7,
+        "name": "TEST",
+        "strategy": "SCALPING",
+        "scalp_pre_ai_gate_context": {},
+        "last_watching_ai_source_quality_fields": {
+            "tick_acceleration_ratio": "24.000",
+            "tick_acceleration_ratio_raw": "0.000",
+            "tick_accel_source": "same_second_burst_10ticks",
+            "recent_5tick_seconds": "0.000",
+            "prev_5tick_seconds": "24.000",
+            "tick_accel_effective_recent_5tick_seconds": "1.000",
+            "buy_pressure_10t": "71.200",
+            "curr_vs_micro_vwap_bp": "11.400",
+            "curr_vs_ma5_bp": "9.800",
+        },
+    }
+    handlers._emit_scalp_entry_adm_snapshot(
+        stock,
+        "123456",
+        "ai_confirmed",
+        ai_decision={
+            "action": "WAIT",
+            "score": 62,
+            "reason": "Speed advantage not strong enough: tick_acceleration_ratio = 24.0 fails < 1.10",
+            "ai_reason_numeric_inconsistency": True,
+            "ai_reason_numeric_inconsistency_field": "tick_acceleration_ratio",
+            "ai_reason_numeric_inconsistency_reason": "tick_acceleration_pass_described_as_fail",
+            "ai_reason_numeric_inconsistency_detected_value": 24.0,
+            "ai_reason_numeric_inconsistency_excerpt": "tick_acceleration_ratio = 24.0 fails < 1.10",
+        },
+        chosen_action="NO_BUY_AI",
+        actual_order_submitted=False,
+        broker_order_forbidden=True,
+    )
+
+    stage, fields = logs[0]
+    assert stage == "scalp_entry_action_decision_snapshot"
+    assert fields["tick_acceleration_ratio"] == "24.000"
+    assert fields["tick_acceleration_ratio_raw"] == "0.000"
+    assert fields["tick_accel_source"] == "same_second_burst_10ticks"
+    assert fields["buy_pressure_10t"] == "71.200"
+    assert fields["curr_vs_micro_vwap_bp"] == "11.400"
+    assert fields["curr_vs_ma5_bp"] == "9.800"
+    assert fields["ai_reason_numeric_inconsistency"] is True
+    assert fields["source_quality_gate"] == "ai_numeric_consistency_review_required"
+    assert fields["allowed_runtime_apply"] is False
+    assert "runtime-apply" in fields["forbidden_uses"]
+
+
+def test_ai_ops_log_fields_preserve_tick_acceleration_ratio_raw_precision():
+    fields = handlers._build_ai_ops_log_fields(
+        {
+            "tick_acceleration_ratio_raw": "1.875",
+            "tick_acceleration_ratio": "2.000",
+            "recent_5tick_seconds": "1.250",
+            "prev_5tick_seconds": "2.500",
+            "tick_accel_effective_recent_5tick_seconds": "1.250",
+        }
+    )
+
+    assert fields["tick_acceleration_ratio_raw"] == "1.875"
+    assert fields["tick_acceleration_ratio"] == "2.000"
+
+
+def test_ai_ops_log_fields_mark_numeric_inconsistency_as_no_runtime_authority():
+    fields = handlers._build_ai_ops_log_fields(
+        {
+            "ai_reason_numeric_inconsistency": "true",
+            "ai_reason_feature_inconsistency": "true",
+            "ai_reason_numeric_inconsistency_field": "tick_acceleration_ratio",
+            "ai_reason_numeric_inconsistency_reason": "tick_acceleration_pass_described_as_fail",
+            "ai_reason_numeric_inconsistency_excerpt": "tick_acceleration_ratio = 24.0 fails < 1.10",
+        }
+    )
+
+    assert fields["ai_reason_numeric_inconsistency"] is True
+    assert fields["ai_reason_feature_inconsistency"] is True
+    assert fields["source_quality_gate"] == "ai_numeric_consistency_review_required"
+    assert fields["allowed_runtime_apply"] is False
+    assert "runtime-apply" in fields["forbidden_uses"]
+    assert "broker order submit" in fields["forbidden_uses"]
+
+
 def test_early_accel_recheck_blocks_scope_and_limits(monkeypatch):
     rules = replace(
         TRADING_RULES,
@@ -288,6 +422,124 @@ def test_early_accel_recheck_blocks_scope_and_limits(monkeypatch):
     )
     assert max_count["allowed"] is False
     assert max_count["skip_reason"] == "max_recheck_count_reached"
+
+
+def test_ai_numeric_consistency_recheck_allows_real_scalping_feature_bundle(monkeypatch):
+    rules = replace(
+        TRADING_RULES,
+        AI_NUMERIC_CONSISTENCY_RECHECK_ENABLED=True,
+        AI_NUMERIC_CONSISTENCY_RECHECK_MIN_SCORE=60,
+        AI_NUMERIC_CONSISTENCY_RECHECK_BUY_MIN_SCORE=75,
+        AI_NUMERIC_CONSISTENCY_RECHECK_MIN_FEATURE_PASS_COUNT=3,
+        AI_NUMERIC_CONSISTENCY_RECHECK_MAX_PER_SYMBOL=1,
+    )
+    monkeypatch.setattr(handlers, "TRADING_RULES", rules)
+    stock = {"strategy": "SCALPING", "ai_numeric_consistency_recheck_count": 0}
+    decision = {
+        "action": "WAIT",
+        "score": 72,
+        "reason": "tick_acceleration_ratio >= 1.10 but described as failed",
+        "ai_reason_numeric_inconsistency": True,
+        "ai_reason_numeric_inconsistency_field": "tick_acceleration_ratio",
+        "ai_reason_numeric_inconsistency_reason": "tick_acceleration_pass_described_as_fail",
+        "tick_acceleration_ratio": 1.25,
+        "buy_pressure_10t": 71.0,
+        "net_aggressive_delta_10t": 1200.0,
+        "curr_vs_micro_vwap_bp": 8.0,
+        "curr_vs_ma5_bp": 4.0,
+    }
+
+    result = _resolve_ai_numeric_consistency_recheck(
+        stock,
+        {"quote_stale": False, "context_stale": False},
+        now_ts=100.0,
+        strategy="SCALPING",
+        ai_decision=decision,
+        ai_score=72.0,
+    )
+
+    assert result["allowed"] is True
+    assert result["feature_pass_count"] == 3
+    assert result["skip_reason"] == "allowed"
+
+
+def test_ai_numeric_consistency_recheck_records_two_feature_candidate_only(monkeypatch):
+    rules = replace(
+        TRADING_RULES,
+        AI_NUMERIC_CONSISTENCY_RECHECK_ENABLED=True,
+        AI_NUMERIC_CONSISTENCY_RECHECK_MIN_SCORE=60,
+        AI_NUMERIC_CONSISTENCY_RECHECK_MIN_FEATURE_PASS_COUNT=3,
+        AI_NUMERIC_CONSISTENCY_RECHECK_MAX_PER_SYMBOL=1,
+    )
+    monkeypatch.setattr(handlers, "TRADING_RULES", rules)
+    decision = {
+        "action": "WAIT",
+        "score": 68,
+        "reason": "position and supply pass but stated as absent",
+        "ai_reason_numeric_inconsistency": True,
+        "ai_reason_numeric_inconsistency_field": "position_advantage",
+        "ai_reason_numeric_inconsistency_reason": "position_pass_described_as_fail",
+        "tick_acceleration_ratio": 0.95,
+        "buy_pressure_10t": 75.0,
+        "net_aggressive_delta_10t": 500.0,
+        "curr_vs_micro_vwap_bp": 6.0,
+        "curr_vs_ma5_bp": -1.0,
+    }
+
+    result = _resolve_ai_numeric_consistency_recheck(
+        {"strategy": "SCALPING"},
+        {"quote_stale": False},
+        now_ts=100.0,
+        strategy="SCALPING",
+        ai_decision=decision,
+        ai_score=68.0,
+    )
+
+    assert result["allowed"] is False
+    assert result["feature_pass_count"] == 2
+    assert result["skip_reason"] == "strong_micro_override_candidate_only"
+
+
+def test_ai_numeric_consistency_recheck_blocks_sim_and_stale_scope(monkeypatch):
+    rules = replace(TRADING_RULES, AI_NUMERIC_CONSISTENCY_RECHECK_ENABLED=True)
+    monkeypatch.setattr(handlers, "TRADING_RULES", rules)
+    decision = {
+        "action": "WAIT",
+        "score": 72,
+        "reason": "speed fail despite pass",
+        "ai_reason_numeric_inconsistency": True,
+        "tick_acceleration_ratio": 1.25,
+        "buy_pressure_10t": 71.0,
+        "net_aggressive_delta_10t": 1200.0,
+        "curr_vs_micro_vwap_bp": 8.0,
+        "curr_vs_ma5_bp": 4.0,
+    }
+
+    stale = _resolve_ai_numeric_consistency_recheck(
+        {"strategy": "SCALPING"},
+        {"quote_stale": True},
+        now_ts=100.0,
+        strategy="SCALPING",
+        ai_decision=decision,
+        ai_score=72.0,
+    )
+    assert stale["allowed"] is False
+    assert stale["skip_reason"] == "stale_quote_or_context"
+
+    sim = _resolve_ai_numeric_consistency_recheck(
+        {
+            "strategy": "SCALPING",
+            "scalp_live_simulator": True,
+            "broker_order_forbidden": True,
+        },
+        {"quote_stale": False},
+        now_ts=100.0,
+        strategy="SCALPING",
+        ai_decision=decision,
+        ai_score=72.0,
+    )
+    assert sim["allowed"] is False
+    assert sim["skip_reason"] == "sim_or_probe_scope"
 
 
 def test_scalping_entry_blocker_role_registry_marks_score6574_micro_as_runtime_gate():

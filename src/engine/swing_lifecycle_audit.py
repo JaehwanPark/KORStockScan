@@ -1916,8 +1916,118 @@ def _ofi_qi_source_quality_for_group(ofi_qi: dict[str, Any], group: str) -> dict
         "invalid_reason_combination_counts": reason_combination_counts,
         "invalid_reason_combination_unique_record_counts": reason_combination_unique,
         "observer_unhealthy_overlap": ofi_qi.get("observer_unhealthy_overlap") or {},
+        "invalid_reason_counts_by_group": (
+            ((ofi_qi.get("stale_missing_reason_counts_by_group") or {}).get(group)) or {}
+        ),
+        "invalid_reason_unique_record_counts_by_group": (
+            ((ofi_qi.get("stale_missing_reason_unique_record_counts_by_group") or {}).get(group))
+            or {}
+        ),
+        "orderbook_micro_reason_counts_by_group": (
+            ((ofi_qi.get("orderbook_micro_reason_counts_by_group") or {}).get(group)) or {}
+        ),
+        "observer_missing_reason_counts_by_group": (
+            ((ofi_qi.get("observer_missing_reason_counts_by_group") or {}).get(group)) or {}
+        ),
+        "source_quality_status_counts_by_group": (
+            ((ofi_qi.get("source_quality_status_counts_by_group") or {}).get(group)) or {}
+        ),
+        "ws_quote_source_counts_by_group": (
+            ((ofi_qi.get("ws_quote_source_counts_by_group") or {}).get(group)) or {}
+        ),
+        "ws_quote_stale_counts_by_group": (
+            ((ofi_qi.get("ws_quote_stale_counts_by_group") or {}).get(group)) or {}
+        ),
         "source_quality_blockers": blockers,
     }
+
+
+def _ofi_qi_instrumentation_provenance(
+    *,
+    order_id: str,
+    ofi_qi: dict[str, Any],
+    group: str,
+) -> tuple[str | None, dict[str, Any] | None]:
+    if order_id != "order_swing_ofi_qi_stale_or_missing_context":
+        return None, None
+    required_metric_keys = (
+        "stale_missing_reason_counts_by_group",
+        "stale_missing_reason_unique_record_counts_by_group",
+        "orderbook_micro_reason_counts_by_group",
+        "observer_missing_reason_counts_by_group",
+        "source_quality_status_counts_by_group",
+        "ws_quote_source_counts_by_group",
+        "ws_quote_stale_counts_by_group",
+        "stale_missing_examples",
+    )
+    present = {key: key in ofi_qi for key in required_metric_keys}
+    source_quality = _ofi_qi_source_quality_for_group(ofi_qi, group)
+    implementation_ok = all(present.values())
+    implementation_checks = [
+        {
+            "name": "ofi_qi_group_root_cause_metric_contract",
+            "status": "pass" if implementation_ok else "fail",
+            "required_keys": list(required_metric_keys),
+            "missing_keys": [key for key, exists in present.items() if not exists],
+            "group": group,
+        },
+        {
+            "name": "ofi_qi_group_source_quality_breakdown",
+            "status": "pass",
+            "group": group,
+            "invalid_micro_context_unique_record_count": source_quality.get(
+                "invalid_micro_context_unique_record_count"
+            ),
+            "valid_micro_context_count": source_quality.get("valid_micro_context_count"),
+            "source_quality_blockers": source_quality.get("source_quality_blockers") or [],
+        },
+        {
+            "name": "runtime_authority_contract",
+            "status": "pass",
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+        },
+    ]
+    provenance = {
+        "owner": "swing_improvement_automation",
+        "implemented_scope": "instrumentation_report_provenance_only",
+        "source_contract": "swing_orderbook_micro_context_v2",
+        "group": group,
+        "root_cause_closure_status_hint": "root_cause_closed" if implementation_ok else "needs_followup_workorder",
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "source_quality": source_quality,
+        "root_cause_dimensions": {
+            "stale_missing_reason_counts_by_group": (
+                ((ofi_qi.get("stale_missing_reason_counts_by_group") or {}).get(group)) or {}
+            ),
+            "stale_missing_reason_unique_record_counts_by_group": (
+                ((ofi_qi.get("stale_missing_reason_unique_record_counts_by_group") or {}).get(group))
+                or {}
+            ),
+            "orderbook_micro_reason_counts_by_group": (
+                ((ofi_qi.get("orderbook_micro_reason_counts_by_group") or {}).get(group)) or {}
+            ),
+            "observer_missing_reason_counts_by_group": (
+                ((ofi_qi.get("observer_missing_reason_counts_by_group") or {}).get(group)) or {}
+            ),
+            "source_quality_status_counts_by_group": (
+                ((ofi_qi.get("source_quality_status_counts_by_group") or {}).get(group)) or {}
+            ),
+            "ws_quote_source_counts_by_group": (
+                ((ofi_qi.get("ws_quote_source_counts_by_group") or {}).get(group)) or {}
+            ),
+            "ws_quote_stale_counts_by_group": (
+                ((ofi_qi.get("ws_quote_stale_counts_by_group") or {}).get(group)) or {}
+            ),
+        },
+        "implementation_checks": implementation_checks,
+    }
+    return ("implemented" if implementation_ok else "instrumentation_gap"), provenance
 
 
 def _clamp_float(value: float, lower: float = 0.0, upper: float = 1.0) -> float:
@@ -3241,6 +3351,12 @@ def build_swing_improvement_automation_report(
             )
 
     if int(ofi_qi.get("stale_missing_count") or 0) > 0:
+        order_id = "order_swing_ofi_qi_stale_or_missing_context"
+        implementation_status, implementation_provenance = _ofi_qi_instrumentation_provenance(
+            order_id=order_id,
+            ofi_qi=ofi_qi,
+            group="entry",
+        )
         findings.append(
             {
                 "finding_id": "swing_ofi_qi_stale_or_missing_context",
@@ -3254,7 +3370,7 @@ def build_swing_improvement_automation_report(
         )
         orders.append(
             _order(
-                order_id="order_swing_ofi_qi_stale_or_missing_context",
+                order_id=order_id,
                 title="swing OFI/QI stale or missing context",
                 lifecycle_stage="entry",
                 target_subsystem="swing_orderbook_micro_context",
@@ -3281,6 +3397,8 @@ def build_swing_improvement_automation_report(
                     f"entry_source_quality={entry_ofi_qi_quality}",
                 ],
                 improvement_type="instrumentation",
+                implementation_status=implementation_status,
+                implementation_provenance=implementation_provenance,
             )
         )
 
@@ -3652,9 +3770,16 @@ def render_swing_lifecycle_audit_markdown(report: dict[str, Any]) -> str:
             f"- stale_missing_reason_counts: `{ofi_qi.get('stale_missing_reason_counts', {})}`",
             f"- stale_missing_reason_combination_counts: `{ofi_qi.get('stale_missing_reason_combination_counts', {})}`",
             f"- stale_missing_reason_combination_unique_record_counts: `{ofi_qi.get('stale_missing_reason_combination_unique_record_counts', {})}`",
+            f"- stale_missing_reason_counts_by_group: `{ofi_qi.get('stale_missing_reason_counts_by_group', {})}`",
+            f"- stale_missing_reason_unique_record_counts_by_group: `{ofi_qi.get('stale_missing_reason_unique_record_counts_by_group', {})}`",
             f"- stale_missing_group_counts: `{ofi_qi.get('stale_missing_group_counts', {})}`",
             f"- stale_missing_group_unique_record_counts: `{ofi_qi.get('stale_missing_group_unique_record_counts', {})}`",
             f"- observer_unhealthy_overlap: `{ofi_qi.get('observer_unhealthy_overlap', {})}`",
+            f"- orderbook_micro_reason_counts_by_group: `{ofi_qi.get('orderbook_micro_reason_counts_by_group', {})}`",
+            f"- observer_missing_reason_counts_by_group: `{ofi_qi.get('observer_missing_reason_counts_by_group', {})}`",
+            f"- source_quality_status_counts_by_group: `{ofi_qi.get('source_quality_status_counts_by_group', {})}`",
+            f"- ws_quote_source_counts_by_group: `{ofi_qi.get('ws_quote_source_counts_by_group', {})}`",
+            f"- ws_quote_stale_counts_by_group: `{ofi_qi.get('ws_quote_stale_counts_by_group', {})}`",
             f"- entry_micro_state_counts: `{ofi_qi.get('entry_micro_state_counts', {})}`",
             f"- scale_in_micro_state_counts: `{ofi_qi.get('scale_in_micro_state_counts', {})}`",
             f"- exit_micro_state_counts: `{ofi_qi.get('exit_micro_state_counts', {})}`",

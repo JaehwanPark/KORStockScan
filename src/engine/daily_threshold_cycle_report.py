@@ -4453,6 +4453,9 @@ def _build_score65_74_recovery_probe_family(events: list[dict]) -> dict:
             str(fields.get("ai_call_trigger_reason") or "") == "early_accel_recheck"
             or str(fields.get("tuning_authority_excluded_reason") or "")
             == "early_accel_recheck_operator_retry"
+            or str(fields.get("ai_call_trigger_reason") or "") == "ai_numeric_consistency_recheck"
+            or str(fields.get("tuning_authority_excluded_reason") or "")
+            == "ai_numeric_consistency_recheck_operator_retry"
         )
 
     wait_candidates = [

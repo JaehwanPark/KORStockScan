@@ -3986,6 +3986,67 @@ def test_build_code_improvement_workorder_treats_implemented_report_order_as_exi
     assert order["implementation_provenance"]["decision_authority"] == "source_quality_only"
 
 
+def test_build_code_improvement_workorder_attaches_swing_improvement_implemented_ofi_qi_order(
+    tmp_path, monkeypatch
+):
+    swing_dir = tmp_path / "swing"
+    report_dir = tmp_path / "report"
+    doc_dir = tmp_path / "docs"
+    swing_dir.mkdir()
+    report_dir.mkdir()
+    doc_dir.mkdir()
+    (swing_dir / "swing_improvement_automation_2026-05-15.json").write_text(
+        json.dumps(
+            {
+                "date": "2026-05-15",
+                "code_improvement_orders": [
+                    {
+                        "order_id": "order_swing_ofi_qi_stale_or_missing_context",
+                        "title": "swing OFI/QI stale or missing context",
+                        "source_report_type": "swing_improvement_automation",
+                        "route": "existing_family",
+                        "mapped_family": "swing_entry_ofi_qi_execution_quality",
+                        "implementation_status": "implemented",
+                        "implementation_provenance": {
+                            "owner": "swing_improvement_automation",
+                            "source_contract": "swing_orderbook_micro_context_v2",
+                            "group": "entry",
+                            "runtime_effect": False,
+                            "allowed_runtime_apply": False,
+                        },
+                        "runtime_effect": False,
+                        "allowed_runtime_apply": False,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-pattern")
+    monkeypatch.setattr(mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", swing_dir)
+    monkeypatch.setattr(mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-swing-lab")
+    monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", tmp_path / "missing-ev")
+    monkeypatch.setattr(mod, "PIPELINE_EVENT_VERBOSITY_DIR", tmp_path / "missing-verbosity")
+    monkeypatch.setattr(mod, "OBSERVATION_SOURCE_QUALITY_AUDIT_DIR", tmp_path / "missing-audit")
+    monkeypatch.setattr(mod, "CODEBASE_PERFORMANCE_WORKORDER_DIR", tmp_path / "missing-performance")
+    monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_DIR", doc_dir)
+
+    report = mod.build_code_improvement_workorder("2026-05-15", max_orders=5)
+
+    order = next(
+        item
+        for item in report["orders"]
+        if item["order_id"] == "order_swing_ofi_qi_stale_or_missing_context"
+    )
+    assert order["decision"] == "attach_existing_family"
+    assert order["route"] == "existing_family"
+    assert order["implementation_candidate"] is False
+    assert order["implementation_status"] == "implemented"
+    assert order["implementation_provenance"]["source_contract"] == "swing_orderbook_micro_context_v2"
+    assert order["root_cause_closure_status"] == "root_cause_closed"
+
+
 def test_build_code_improvement_workorder_attaches_lifecycle_ai_context_instrumentation(
     tmp_path, monkeypatch
 ):

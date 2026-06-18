@@ -1799,6 +1799,10 @@ def test_scalping_scanner_real_source_guard_operator_lock_applies(tmp_path, monk
                     "KORSTOCKSCAN_SCALP_SCANNER_PROBE_MAX_SEC": "300",
                     "KORSTOCKSCAN_SCALP_SCANNER_PROBE_MIN_PRICE_DELTA_PCT": "0.15",
                     "KORSTOCKSCAN_SCALP_SCANNER_PROBE_MIN_FLU_DELTA_PCT": "0.30",
+                    "KORSTOCKSCAN_SCALP_SCANNER_PRIORITY_TIERING_ENABLED": "true",
+                    "KORSTOCKSCAN_SCALP_SCANNER_PRIORITY_DEMOTE_REALTIME_RANK_ONLY": "true",
+                    "KORSTOCKSCAN_SCALP_SCANNER_PRIORITY_DEMOTE_BID_IMBALANCE_ONLY": "true",
+                    "KORSTOCKSCAN_SCALP_SCANNER_DEMOTE_OPEN_PRICE_JUMP_WITHOUT_VOLUME": "true",
                     "KORSTOCKSCAN_SCALP_CONDITION_UNMATCH_GUARD_ENABLED": "true",
                     "KORSTOCKSCAN_SCALP_CONDITION_UNMATCH_GUARD_TAGS": "VWAP_RECLAIM,DRYUP_SQUEEZE,PRECLOSE",
                 },
@@ -1837,6 +1841,19 @@ def test_scalping_scanner_real_source_guard_operator_lock_applies(tmp_path, monk
     )
     assert manifest["runtime_env_overrides"]["KORSTOCKSCAN_SCALP_SCANNER_ACCEL_MIN_RANK_JUMP"] == "10"
     assert manifest["runtime_env_overrides"]["KORSTOCKSCAN_SCALP_SCANNER_PROBE_MAX_SEC"] == "300"
+    assert manifest["runtime_env_overrides"]["KORSTOCKSCAN_SCALP_SCANNER_PRIORITY_TIERING_ENABLED"] == "true"
+    assert (
+        manifest["runtime_env_overrides"]["KORSTOCKSCAN_SCALP_SCANNER_PRIORITY_DEMOTE_REALTIME_RANK_ONLY"]
+        == "true"
+    )
+    assert (
+        manifest["runtime_env_overrides"]["KORSTOCKSCAN_SCALP_SCANNER_PRIORITY_DEMOTE_BID_IMBALANCE_ONLY"]
+        == "true"
+    )
+    assert (
+        manifest["runtime_env_overrides"]["KORSTOCKSCAN_SCALP_SCANNER_DEMOTE_OPEN_PRICE_JUMP_WITHOUT_VOLUME"]
+        == "true"
+    )
     assert manifest["runtime_env_overrides"]["KORSTOCKSCAN_SCALP_CONDITION_UNMATCH_GUARD_ENABLED"] == "true"
 
 
@@ -2243,6 +2260,136 @@ def test_early_accel_recheck_operator_lock_closes_for_entry_live_owner(tmp_path,
     assert "KORSTOCKSCAN_EARLY_ACCEL_RECHECK_RUNTIME_ENABLED" not in manifest["runtime_env_overrides"]
 
 
+def test_ai_numeric_consistency_recheck_operator_lock_emits_env(tmp_path, monkeypatch):
+    report_dir = tmp_path / "report"
+    apply_dir = tmp_path / "apply_plans"
+    runtime_dir = tmp_path / "runtime_env"
+    lock_dir = tmp_path / "operator_runtime_env_locks"
+    latency_dir = tmp_path / "missing_latency_classifier_recommendation"
+    report_dir.mkdir(parents=True)
+    lock_dir.mkdir(parents=True)
+    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "APPLY_PLAN_DIR", apply_dir)
+    monkeypatch.setattr(mod, "RUNTIME_ENV_DIR", runtime_dir)
+    monkeypatch.setattr(mod, "OPERATOR_RUNTIME_ENV_LOCK_DIR", lock_dir)
+    monkeypatch.setattr(mod, "LATENCY_CLASSIFIER_RECOMMENDATION_DIR", latency_dir)
+
+    (report_dir / "threshold_cycle_2026-06-18.json").write_text(
+        json.dumps({"date": "2026-06-18", "calibration_candidates": []}),
+        encoding="utf-8",
+    )
+    (lock_dir / "ai_numeric_consistency_recheck_2026-06-18.json").write_text(
+        json.dumps(
+            {
+                "lock_id": "ai_numeric_consistency_recheck_operator_override_2026-06-18",
+                "enabled": True,
+                "family": "ai_numeric_consistency_recheck_runtime",
+                "stage": "entry",
+                "priority": 906,
+                "active_from_date": "2026-06-18",
+                "explicit_close_required": True,
+                "env_overrides": {
+                    "KORSTOCKSCAN_AI_NUMERIC_CONSISTENCY_RECHECK_ENABLED": "true",
+                    "KORSTOCKSCAN_AI_NUMERIC_CONSISTENCY_RECHECK_MIN_SCORE": "60",
+                    "KORSTOCKSCAN_AI_NUMERIC_CONSISTENCY_RECHECK_BUY_MIN_SCORE": "75",
+                    "KORSTOCKSCAN_AI_NUMERIC_CONSISTENCY_RECHECK_MIN_FEATURE_PASS_COUNT": "3",
+                    "KORSTOCKSCAN_AI_NUMERIC_CONSISTENCY_RECHECK_MAX_PER_SYMBOL": "1",
+                },
+                "allowed_close_reason_keywords": [
+                    "same_stage_owner_conflict",
+                    "live_auto_apply_ready",
+                    "tuning_override",
+                    "safety_revert_required",
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    manifest = mod.build_preopen_apply_manifest(
+        "2026-06-18",
+        source_date="2026-06-18",
+        apply_mode="auto_bounded_live",
+        auto_apply=True,
+        require_ai=False,
+    )
+
+    decisions = {item["family"]: item for item in manifest["auto_apply_decisions"]}
+    assert decisions["ai_numeric_consistency_recheck_runtime"]["selected"] is True
+    assert manifest["runtime_env_overrides"]["KORSTOCKSCAN_AI_NUMERIC_CONSISTENCY_RECHECK_ENABLED"] == "true"
+    assert manifest["runtime_env_overrides"]["KORSTOCKSCAN_AI_NUMERIC_CONSISTENCY_RECHECK_BUY_MIN_SCORE"] == "75"
+
+
+def test_ai_numeric_consistency_recheck_operator_lock_closes_for_entry_live_owner(tmp_path, monkeypatch):
+    report_dir = tmp_path / "report"
+    apply_dir = tmp_path / "apply_plans"
+    runtime_dir = tmp_path / "runtime_env"
+    lock_dir = tmp_path / "operator_runtime_env_locks"
+    latency_dir = tmp_path / "missing_latency_classifier_recommendation"
+    report_dir.mkdir(parents=True)
+    lock_dir.mkdir(parents=True)
+    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "APPLY_PLAN_DIR", apply_dir)
+    monkeypatch.setattr(mod, "RUNTIME_ENV_DIR", runtime_dir)
+    monkeypatch.setattr(mod, "OPERATOR_RUNTIME_ENV_LOCK_DIR", lock_dir)
+    monkeypatch.setattr(mod, "LATENCY_CLASSIFIER_RECOMMENDATION_DIR", latency_dir)
+
+    (report_dir / "threshold_cycle_2026-06-17.json").write_text(
+        json.dumps(
+            {
+                "date": "2026-06-17",
+                "calibration_candidates": [
+                    {
+                        "family": "future_entry_live_bucket",
+                        "stage": "entry",
+                        "priority": 10,
+                        "allowed_runtime_apply": True,
+                        "safety_revert_required": False,
+                        "calibration_state": "adjust_up",
+                        "target_env_keys": ["SCALPING_NORMAL_DEFENSIVE_BPS"],
+                        "current_values": {"normal_defensive_bps": 50},
+                        "recommended_values": {"normal_defensive_bps": 45},
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (lock_dir / "ai_numeric_consistency_recheck_2026-06-18.json").write_text(
+        json.dumps(
+            {
+                "lock_id": "ai_numeric_consistency_recheck_operator_override_2026-06-18",
+                "enabled": True,
+                "family": "ai_numeric_consistency_recheck_runtime",
+                "stage": "entry",
+                "priority": 906,
+                "active_from_date": "2026-06-18",
+                "explicit_close_required": True,
+                "env_overrides": {
+                    "KORSTOCKSCAN_AI_NUMERIC_CONSISTENCY_RECHECK_ENABLED": "true",
+                },
+                "allowed_close_reason_keywords": ["same_stage_owner_conflict", "tuning_override"],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    manifest = mod.build_preopen_apply_manifest(
+        "2026-06-18",
+        source_date="2026-06-17",
+        apply_mode="auto_bounded_live",
+        auto_apply=True,
+        require_ai=False,
+    )
+
+    decisions = {item["family"]: item for item in manifest["auto_apply_decisions"]}
+    assert decisions["future_entry_live_bucket"]["selected"] is True
+    lock_decision = decisions["ai_numeric_consistency_recheck_runtime"]
+    assert lock_decision["selected"] is False
+    assert lock_decision["decision_reason"] == "same_stage_owner_conflict:future_entry_live_bucket"
+    assert "KORSTOCKSCAN_AI_NUMERIC_CONSISTENCY_RECHECK_ENABLED" not in manifest["runtime_env_overrides"]
+
+
 def test_scalping_scanner_real_source_guard_closes_for_same_stage_live_owner(tmp_path, monkeypatch):
     report_dir = tmp_path / "report"
     apply_dir = tmp_path / "apply_plans"
@@ -2292,6 +2439,7 @@ def test_scalping_scanner_real_source_guard_closes_for_same_stage_live_owner(tmp
                     "KORSTOCKSCAN_SCALP_SCANNER_REAL_SOURCE_GUARD_ENABLED": "true",
                     "KORSTOCKSCAN_SCALP_SCANNER_REAL_SOURCE_GUARD_BLOCK_LATE_FIRST_SEEN": "true",
                     "KORSTOCKSCAN_SCALP_SCANNER_ACCEL_MIN_RANK_JUMP": "10",
+                    "KORSTOCKSCAN_SCALP_SCANNER_PRIORITY_TIERING_ENABLED": "true",
                 },
                 "allowed_close_reason_keywords": ["same_stage_owner_conflict", "tuning_override"],
             }
@@ -2318,6 +2466,7 @@ def test_scalping_scanner_real_source_guard_closes_for_same_stage_live_owner(tmp
         not in manifest["runtime_env_overrides"]
     )
     assert "KORSTOCKSCAN_SCALP_SCANNER_ACCEL_MIN_RANK_JUMP" not in manifest["runtime_env_overrides"]
+    assert "KORSTOCKSCAN_SCALP_SCANNER_PRIORITY_TIERING_ENABLED" not in manifest["runtime_env_overrides"]
 
 
 def test_aggressive_entry_price_operator_lock_closes_for_dynamic_entry_price_resolver(tmp_path, monkeypatch):

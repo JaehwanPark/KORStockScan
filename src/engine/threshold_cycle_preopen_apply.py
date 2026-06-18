@@ -175,6 +175,10 @@ TARGET_ENV_VALUE_KEYS = {
     "SCALP_SCANNER_PROBE_MAX_SEC": "probe_max_sec",
     "SCALP_SCANNER_PROBE_MIN_PRICE_DELTA_PCT": "probe_min_price_delta_pct",
     "SCALP_SCANNER_PROBE_MIN_FLU_DELTA_PCT": "probe_min_flu_delta_pct",
+    "SCALP_SCANNER_PRIORITY_TIERING_ENABLED": "priority_tiering_enabled",
+    "SCALP_SCANNER_PRIORITY_DEMOTE_REALTIME_RANK_ONLY": "priority_demote_realtime_rank_only",
+    "SCALP_SCANNER_PRIORITY_DEMOTE_BID_IMBALANCE_ONLY": "priority_demote_bid_imbalance_only",
+    "SCALP_SCANNER_DEMOTE_OPEN_PRICE_JUMP_WITHOUT_VOLUME": "demote_open_price_jump_without_volume",
     "EARLY_ACCEL_RECHECK_RUNTIME_ENABLED": "enabled",
     "EARLY_ACCEL_RECHECK_MAX_COUNT": "max_count",
     "EARLY_ACCEL_RECHECK_MIN_INTERVAL_SEC": "min_interval_sec",
@@ -183,6 +187,11 @@ TARGET_ENV_VALUE_KEYS = {
     "EARLY_ACCEL_RECHECK_MIN_MICRO_VWAP_BP": "min_micro_vwap_bp",
     "EARLY_ACCEL_RECHECK_ALLOW_LIQUIDITY_BLOCKED": "allow_liquidity_blocked",
     "EARLY_ACCEL_RECHECK_ALLOW_STRENGTH_BLOCKED": "allow_strength_blocked",
+    "AI_NUMERIC_CONSISTENCY_RECHECK_ENABLED": "enabled",
+    "AI_NUMERIC_CONSISTENCY_RECHECK_MIN_SCORE": "min_score",
+    "AI_NUMERIC_CONSISTENCY_RECHECK_BUY_MIN_SCORE": "buy_min_score",
+    "AI_NUMERIC_CONSISTENCY_RECHECK_MIN_FEATURE_PASS_COUNT": "min_feature_pass_count",
+    "AI_NUMERIC_CONSISTENCY_RECHECK_MAX_PER_SYMBOL": "max_per_symbol",
     "SCALP_CONDITION_UNMATCH_GUARD_ENABLED": "condition_unmatch_guard_enabled",
     "SCALP_CONDITION_UNMATCH_GUARD_TAGS": "condition_unmatch_guard_tags",
     "SCALP_DEFENSIVE_MISSED_UPSIDE_MIN_ORIGINAL_BPS": "min_original_bps",
@@ -259,6 +268,7 @@ TARGET_ENV_VALUE_KEYS = {
 AGGRESSIVE_ENTRY_PRICE_OVERRIDE_FAMILY = "aggressive_entry_price_override_runtime"
 SCALPING_SCANNER_REAL_SOURCE_GUARD_FAMILY = "scalping_scanner_real_source_guard_runtime"
 EARLY_ACCEL_RECHECK_FAMILY = "early_accel_recheck_runtime"
+AI_NUMERIC_CONSISTENCY_RECHECK_FAMILY = "ai_numeric_consistency_recheck_runtime"
 SCORE65_74_STRONG_MICRO_OVERRIDE_FAMILY = "score65_74_recovery_probe_strong_micro_override_runtime"
 ENTRY_PRICE_LIVE_TUNING_MARKER_ENV = "KORSTOCKSCAN_ENTRY_PRICE_LIVE_TUNING_SELECTED"
 ENTRY_STAGE_LIVE_TUNING_MARKER_ENV = "KORSTOCKSCAN_ENTRY_STAGE_LIVE_TUNING_SELECTED"
@@ -281,6 +291,10 @@ SCALPING_SCANNER_REAL_SOURCE_GUARD_ENV_KEYS = frozenset(
         "KORSTOCKSCAN_SCALP_SCANNER_PROBE_MAX_SEC",
         "KORSTOCKSCAN_SCALP_SCANNER_PROBE_MIN_PRICE_DELTA_PCT",
         "KORSTOCKSCAN_SCALP_SCANNER_PROBE_MIN_FLU_DELTA_PCT",
+        "KORSTOCKSCAN_SCALP_SCANNER_PRIORITY_TIERING_ENABLED",
+        "KORSTOCKSCAN_SCALP_SCANNER_PRIORITY_DEMOTE_REALTIME_RANK_ONLY",
+        "KORSTOCKSCAN_SCALP_SCANNER_PRIORITY_DEMOTE_BID_IMBALANCE_ONLY",
+        "KORSTOCKSCAN_SCALP_SCANNER_DEMOTE_OPEN_PRICE_JUMP_WITHOUT_VOLUME",
         "KORSTOCKSCAN_SCALP_CONDITION_UNMATCH_GUARD_ENABLED",
         "KORSTOCKSCAN_SCALP_CONDITION_UNMATCH_GUARD_TAGS",
     }
@@ -302,6 +316,15 @@ EARLY_ACCEL_RECHECK_ENV_KEYS = frozenset(
         "KORSTOCKSCAN_EARLY_ACCEL_RECHECK_MIN_MICRO_VWAP_BP",
         "KORSTOCKSCAN_EARLY_ACCEL_RECHECK_ALLOW_LIQUIDITY_BLOCKED",
         "KORSTOCKSCAN_EARLY_ACCEL_RECHECK_ALLOW_STRENGTH_BLOCKED",
+    }
+)
+AI_NUMERIC_CONSISTENCY_RECHECK_ENV_KEYS = frozenset(
+    {
+        "KORSTOCKSCAN_AI_NUMERIC_CONSISTENCY_RECHECK_ENABLED",
+        "KORSTOCKSCAN_AI_NUMERIC_CONSISTENCY_RECHECK_MIN_SCORE",
+        "KORSTOCKSCAN_AI_NUMERIC_CONSISTENCY_RECHECK_BUY_MIN_SCORE",
+        "KORSTOCKSCAN_AI_NUMERIC_CONSISTENCY_RECHECK_MIN_FEATURE_PASS_COUNT",
+        "KORSTOCKSCAN_AI_NUMERIC_CONSISTENCY_RECHECK_MAX_PER_SYMBOL",
     }
 )
 AGGRESSIVE_ENTRY_PRICE_OVERRIDE_ENV_KEYS = frozenset(
@@ -2149,6 +2172,47 @@ def _close_early_accel_recheck_for_live_owner(
     return filtered_selected, updated_decisions, filtered_env
 
 
+def _close_ai_numeric_consistency_recheck_for_live_owner(
+    *,
+    selected: list[dict[str, Any]],
+    decisions: list[dict[str, Any]],
+    env_overrides: dict[str, str],
+    owner_family: str,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, str]]:
+    if not owner_family:
+        return selected, decisions, env_overrides
+    reason = f"same_stage_owner_conflict:{owner_family}"
+    filtered_selected = [
+        item
+        for item in selected
+        if str(item.get("family") or "") != AI_NUMERIC_CONSISTENCY_RECHECK_FAMILY
+    ]
+    filtered_env = {
+        key: value
+        for key, value in env_overrides.items()
+        if str(key) not in AI_NUMERIC_CONSISTENCY_RECHECK_ENV_KEYS
+    }
+    updated_decisions: list[dict[str, Any]] = []
+    for decision in decisions:
+        if str(decision.get("family") or "") != AI_NUMERIC_CONSISTENCY_RECHECK_FAMILY:
+            updated_decisions.append(decision)
+            continue
+        next_decision = {**decision, "selected": False, "decision_reason": reason, "env_overrides": {}}
+        lock = next_decision.get("operator_runtime_env_lock")
+        if isinstance(lock, dict):
+            close_reasons = list(lock.get("close_reasons") or [])
+            if reason not in close_reasons:
+                close_reasons.append(reason)
+            next_decision["operator_runtime_env_lock"] = {
+                **lock,
+                "applied": False,
+                "close_reasons": close_reasons,
+                "allowed_close": _lock_allows_close(lock, close_reasons),
+            }
+        updated_decisions.append(next_decision)
+    return filtered_selected, updated_decisions, filtered_env
+
+
 def _holding_exit_live_owner_family(*selected_groups: list[dict[str, Any]]) -> str:
     for group in selected_groups:
         for item in group or []:
@@ -2962,6 +3026,12 @@ def build_preopen_apply_manifest(
                 owner_family=entry_live_tuning_owner_family,
             )
             selected, decisions, env_overrides = _close_early_accel_recheck_for_live_owner(
+                selected=selected,
+                decisions=decisions,
+                env_overrides=env_overrides,
+                owner_family=entry_live_tuning_owner_family,
+            )
+            selected, decisions, env_overrides = _close_ai_numeric_consistency_recheck_for_live_owner(
                 selected=selected,
                 decisions=decisions,
                 env_overrides=env_overrides,

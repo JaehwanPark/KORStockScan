@@ -98,11 +98,20 @@ def summarize_ofi_qi_events(events: Iterable[dict]) -> dict:
     advice_by_group: dict[str, Counter] = defaultdict(Counter)
     exit_smoothing_actions = Counter()
     stale_missing_reasons = Counter()
+    stale_missing_reasons_by_group: dict[str, Counter] = defaultdict(Counter)
+    stale_missing_reason_records_by_group: dict[str, dict[str, set[str]]] = defaultdict(
+        lambda: defaultdict(set)
+    )
     stale_missing_reason_combinations = Counter()
     stale_missing_reason_combination_records: dict[str, set[str]] = defaultdict(set)
     stale_missing_groups = Counter()
     stale_missing_group_records: dict[str, set[str]] = defaultdict(set)
     stale_missing_stages = Counter()
+    orderbook_micro_reasons_by_group: dict[str, Counter] = defaultdict(Counter)
+    observer_missing_reasons_by_group: dict[str, Counter] = defaultdict(Counter)
+    source_quality_status_by_group: dict[str, Counter] = defaultdict(Counter)
+    ws_quote_source_by_group: dict[str, Counter] = defaultdict(Counter)
+    ws_quote_stale_by_group: dict[str, Counter] = defaultdict(Counter)
     stale_missing_examples: list[dict] = []
     stale_missing_records: set[str] = set()
     observer_unhealthy_total = 0
@@ -121,13 +130,24 @@ def summarize_ofi_qi_events(events: Iterable[dict]) -> dict:
         group = _micro_group(stage)
         state, advice, reason_flags = _micro_summary_item(fields)
         missing = any(reason_flags.values())
+        orderbook_micro_reason = str(fields.get("orderbook_micro_reason") or "UNKNOWN")
+        observer_missing_reason = str(fields.get("orderbook_micro_observer_missing_reason") or "UNKNOWN")
+        source_quality_status = str(fields.get("swing_micro_source_quality_status") or "UNKNOWN")
+        ws_quote_source = str(fields.get("swing_micro_ws_quote_source") or "UNKNOWN")
+        ws_quote_stale = str(fields.get("swing_micro_ws_quote_stale") or "UNKNOWN")
         state_by_group[group][state] += 1
         advice_by_group[group][advice] += 1
+        orderbook_micro_reasons_by_group[group][orderbook_micro_reason] += 1
+        observer_missing_reasons_by_group[group][observer_missing_reason] += 1
+        source_quality_status_by_group[group][source_quality_status] += 1
+        ws_quote_source_by_group[group][ws_quote_source] += 1
+        ws_quote_stale_by_group[group][ws_quote_stale] += 1
         sample_count += 1
         stale_missing_count += int(missing)
         for reason, active in reason_flags.items():
             if active:
                 stale_missing_reasons[reason] += 1
+                stale_missing_reasons_by_group[group][reason] += 1
         if missing:
             active_reasons = [reason for reason, active in reason_flags.items() if active]
             combination = "+".join(active_reasons) if active_reasons else "unknown"
@@ -137,6 +157,8 @@ def summarize_ofi_qi_events(events: Iterable[dict]) -> dict:
                 stale_missing_records.add(record_id)
                 stale_missing_reason_combination_records[combination].add(record_id)
                 stale_missing_group_records[group].add(record_id)
+                for reason in active_reasons:
+                    stale_missing_reason_records_by_group[group][reason].add(record_id)
             stale_missing_groups[group] += 1
             stale_missing_stages[stage] += 1
             if reason_flags.get("observer_unhealthy"):
@@ -156,6 +178,11 @@ def summarize_ofi_qi_events(events: Iterable[dict]) -> dict:
                         "reasons": active_reasons,
                         "orderbook_micro_state": state,
                         "swing_micro_advice": advice,
+                        "orderbook_micro_reason": orderbook_micro_reason,
+                        "observer_missing_reason": observer_missing_reason,
+                        "source_quality_status": source_quality_status,
+                        "ws_quote_source": ws_quote_source,
+                        "ws_quote_stale": ws_quote_stale,
                     }
                 )
         if stage == "holding_flow_ofi_smoothing_applied":
@@ -181,12 +208,34 @@ def summarize_ofi_qi_events(events: Iterable[dict]) -> dict:
             key: len(values) for key, values in stale_missing_group_records.items()
         },
         "stale_missing_stage_counts": dict(stale_missing_stages),
+        "stale_missing_reason_counts_by_group": {
+            group: dict(counts) for group, counts in stale_missing_reasons_by_group.items()
+        },
+        "stale_missing_reason_unique_record_counts_by_group": {
+            group: {reason: len(records) for reason, records in reason_records.items()}
+            for group, reason_records in stale_missing_reason_records_by_group.items()
+        },
         "observer_unhealthy_overlap": {
             "observer_unhealthy_total": int(observer_unhealthy_total),
             "observer_unhealthy_with_other_reason": int(observer_unhealthy_with_other),
             "observer_unhealthy_only": int(observer_unhealthy_only),
         },
         "stale_missing_examples": stale_missing_examples,
+        "orderbook_micro_reason_counts_by_group": {
+            group: dict(counts) for group, counts in orderbook_micro_reasons_by_group.items()
+        },
+        "observer_missing_reason_counts_by_group": {
+            group: dict(counts) for group, counts in observer_missing_reasons_by_group.items()
+        },
+        "source_quality_status_counts_by_group": {
+            group: dict(counts) for group, counts in source_quality_status_by_group.items()
+        },
+        "ws_quote_source_counts_by_group": {
+            group: dict(counts) for group, counts in ws_quote_source_by_group.items()
+        },
+        "ws_quote_stale_counts_by_group": {
+            group: dict(counts) for group, counts in ws_quote_stale_by_group.items()
+        },
         "entry_micro_state_counts": dict(state_by_group["entry"]),
         "scale_in_micro_state_counts": dict(state_by_group["scale_in"]),
         "exit_micro_state_counts": dict(state_by_group["exit"]),

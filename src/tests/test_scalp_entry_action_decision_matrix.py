@@ -253,6 +253,64 @@ def test_scalp_entry_adm_report_aggregates_actions_and_joins_outcomes(tmp_path, 
     assert (report_dir / "scalp_entry_action_decision_matrix_2026-05-18.json").exists()
 
 
+def test_scalp_entry_adm_report_excludes_numeric_inconsistency_rows_from_aggregates(tmp_path, monkeypatch):
+    pipeline_dir = tmp_path / "pipeline_events"
+    threshold_dir = tmp_path / "threshold_cycle"
+    snapshot_dir = threshold_dir / "snapshots"
+    post_sell_dir = tmp_path / "post_sell"
+    report_dir = tmp_path / "report" / "scalp_entry_action_decision_matrix"
+    monkeypatch.setattr(mod, "PIPELINE_EVENT_DIR", pipeline_dir)
+    monkeypatch.setattr(mod, "THRESHOLD_EVENT_DIR", threshold_dir)
+    monkeypatch.setattr(mod, "THRESHOLD_SNAPSHOT_DIR", snapshot_dir)
+    monkeypatch.setattr(mod, "POST_SELL_DIR", post_sell_dir)
+    monkeypatch.setattr(mod, "ADM_REPORT_DIR", report_dir)
+
+    _write_jsonl(
+        pipeline_dir / "pipeline_events_2026-05-18.jsonl",
+        [
+            {
+                "stage": "scalp_entry_action_decision_snapshot",
+                "stock_code": "111111",
+                "record_id": "R1",
+                "emitted_at": "2026-05-18T09:10:00",
+                "emitted_date": "2026-05-18",
+                "fields": {
+                    "candidate_id": "ADM-NUMERIC",
+                    "chosen_action": "NO_BUY_AI",
+                    "ai_reason_numeric_inconsistency": True,
+                    "source_quality_gate": "ai_numeric_consistency_review_required",
+                },
+            },
+            {
+                "stage": "scalp_entry_action_decision_snapshot",
+                "stock_code": "222222",
+                "record_id": "R2",
+                "emitted_at": "2026-05-18T09:11:00",
+                "emitted_date": "2026-05-18",
+                "fields": {
+                    "candidate_id": "ADM-CLEAN",
+                    "chosen_action": "NO_BUY_AI",
+                    "source_stage": "ai_confirmed",
+                },
+            },
+        ],
+    )
+    _write_jsonl(post_sell_dir / "sim_post_sell_evaluations_2026-05-18.jsonl", [])
+
+    report = mod.build_scalp_entry_action_decision_matrix_report("2026-05-18")
+
+    assert report["summary"]["total_candidates"] == 2
+    assert report["summary"]["aggregate_total_candidates"] == 1
+    assert report["summary"]["joined_sample"] == 0
+    assert report["summary"]["joined_sample_all_rows"] == 0
+    assert report["summary"]["aggregate_joined_sample"] == 0
+    assert report["summary"]["numeric_consistency_excluded_count"] == 1
+    assert "ai_numeric_consistency_rows_excluded_from_aggregates" in report["warnings"]
+    assert "joined_sample_below_sample_floor" in report["warnings"]
+    no_buy = next(item for item in report["action_summary"] if item["action"] == "NO_BUY_AI")
+    assert no_buy["sample_count"] == 1
+
+
 def test_scalp_entry_adm_loads_gzip_sim_evaluations(tmp_path, monkeypatch):
     post_sell_dir = tmp_path / "post_sell"
     monkeypatch.setattr(mod, "POST_SELL_DIR", post_sell_dir)

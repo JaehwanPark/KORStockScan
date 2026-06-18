@@ -122,6 +122,34 @@ AI_OVERLAP_FIELDS = (
     "intraday_range_pct",
 )
 
+ENTRY_ADM_SNAPSHOT_FIELDS = (
+    "candidate_id",
+    "entry_adm_candidate_id",
+    "ai_score",
+    "ai_action",
+    "chosen_action",
+    "eligible_actions",
+    "rejected_actions",
+    "source_stage",
+    "metric_role",
+    "decision_authority",
+    "source_quality_gate",
+    "runtime_effect",
+    "allowed_runtime_apply",
+    "actual_order_submitted",
+    "broker_order_forbidden",
+    "forbidden_uses",
+    "tick_acceleration_ratio",
+    "tick_acceleration_ratio_raw",
+    "tick_accel_source",
+    "recent_5tick_seconds",
+    "prev_5tick_seconds",
+    "tick_accel_effective_recent_5tick_seconds",
+    "buy_pressure_10t",
+    "curr_vs_micro_vwap_bp",
+    "curr_vs_ma5_bp",
+)
+
 SIM_PROVENANCE_FIELDS = (
     "actual_order_submitted",
     "broker_order_forbidden",
@@ -323,6 +351,10 @@ SIM_SUBMIT_GUARD_STAGE_ACTIONS = {
 
 
 STAGE_CONTRACTS: dict[str, StageContract] = {
+    "scalp_entry_action_decision_snapshot": StageContract(
+        required_fields=(*AI_SOURCE_FIELDS, *ENTRY_ADM_SNAPSHOT_FIELDS),
+        max_missing_rate=0.10,
+    ),
     "ai_confirmed": StageContract(
         required_fields=(*AI_SOURCE_FIELDS, *AI_OVERLAP_FIELDS),
         zero_sensitive_fields=("intraday_range_pct",),
@@ -417,6 +449,116 @@ STAGE_CONTRACTS: dict[str, StageContract] = {
             "quote_stale",
         ),
         decision_authority="operator_runtime_observation_retry_only",
+    ),
+    "ai_numeric_consistency_recheck_evaluated": StageContract(
+        required_fields=(
+            *REAL_EXECUTION_DIAGNOSTIC_FIELDS,
+            "allowed_runtime_apply",
+            "original_action",
+            "original_score",
+            "original_reason_excerpt",
+            "inconsistency_field",
+            "inconsistency_reason",
+            "position_pass",
+            "speed_pass",
+            "supply_pass",
+            "feature_pass_count",
+            "recheck_count",
+            "recheck_action",
+            "recheck_score",
+            "recheck_reason_excerpt",
+            "skip_reason",
+            "quote_stale",
+        ),
+        decision_authority="operator_runtime_decision_recheck_only",
+    ),
+    "ai_numeric_consistency_recheck_allowed": StageContract(
+        required_fields=(
+            *REAL_EXECUTION_DIAGNOSTIC_FIELDS,
+            "allowed_runtime_apply",
+            "original_action",
+            "original_score",
+            "original_reason_excerpt",
+            "inconsistency_field",
+            "inconsistency_reason",
+            "position_pass",
+            "speed_pass",
+            "supply_pass",
+            "feature_pass_count",
+            "recheck_count",
+            "recheck_action",
+            "recheck_score",
+            "recheck_reason_excerpt",
+            "skip_reason",
+            "quote_stale",
+        ),
+        decision_authority="operator_runtime_decision_recheck_only",
+    ),
+    "ai_numeric_consistency_recheck_skipped": StageContract(
+        required_fields=(
+            *REAL_EXECUTION_DIAGNOSTIC_FIELDS,
+            "allowed_runtime_apply",
+            "original_action",
+            "original_score",
+            "original_reason_excerpt",
+            "inconsistency_field",
+            "inconsistency_reason",
+            "position_pass",
+            "speed_pass",
+            "supply_pass",
+            "feature_pass_count",
+            "recheck_count",
+            "recheck_action",
+            "recheck_score",
+            "recheck_reason_excerpt",
+            "skip_reason",
+            "quote_stale",
+        ),
+        decision_authority="operator_runtime_decision_recheck_only",
+    ),
+    "ai_numeric_consistency_recheck_failed": StageContract(
+        required_fields=(
+            *REAL_EXECUTION_DIAGNOSTIC_FIELDS,
+            "allowed_runtime_apply",
+            "original_action",
+            "original_score",
+            "original_reason_excerpt",
+            "inconsistency_field",
+            "inconsistency_reason",
+            "position_pass",
+            "speed_pass",
+            "supply_pass",
+            "feature_pass_count",
+            "recheck_count",
+            "recheck_action",
+            "recheck_score",
+            "recheck_reason_excerpt",
+            "skip_reason",
+            "quote_stale",
+        ),
+        decision_authority="operator_runtime_decision_recheck_only",
+    ),
+    "ai_numeric_consistency_recheck_corrected": StageContract(
+        required_fields=(
+            *REAL_EXECUTION_DIAGNOSTIC_FIELDS,
+            "allowed_runtime_apply",
+            "original_action",
+            "original_score",
+            "original_reason_excerpt",
+            "inconsistency_field",
+            "inconsistency_reason",
+            "position_pass",
+            "speed_pass",
+            "supply_pass",
+            "feature_pass_count",
+            "recheck_count",
+            "recheck_action",
+            "recheck_score",
+            "recheck_reason_excerpt",
+            "skip_reason",
+            "quote_stale",
+        ),
+        decision_authority="operator_runtime_decision_recheck_only",
     ),
     "condition_unmatch_guard": StageContract(
         required_fields=(
@@ -1606,12 +1748,14 @@ def _evaluate_contracts(rows: list[dict[str, Any]], stage_counts: Counter[str]) 
 
     high_volume_no_source_fields: list[dict[str, Any]] = []
     unknown_token_findings: list[dict[str, Any]] = []
+    numeric_consistency_findings: list[dict[str, Any]] = []
     invalid_label_findings: dict[str, dict[str, Any]] = {}
     field_presence: dict[str, Counter[str]] = defaultdict(Counter)
     unknown_counts: dict[str, Counter[str]] = defaultdict(Counter)
     reviewed_unknown_counts: dict[str, Counter[str]] = defaultdict(Counter)
     unknown_examples: dict[tuple[str, str], list[str]] = defaultdict(list)
     reviewed_unknown_examples: dict[tuple[str, str], list[str]] = defaultdict(list)
+    numeric_consistency_by_stage: dict[str, list[dict[str, Any]]] = defaultdict(list)
     example_keys: dict[str, list[str]] = {}
     for row in rows:
         stage = _stage_name(row)
@@ -1647,6 +1791,15 @@ def _evaluate_contracts(rows: list[dict[str, Any]], stage_counts: Counter[str]) 
             finding["count"] += 1
             if len(finding["examples"]) < 5:
                 finding["examples"].append(str(normalized.get("invalid_gatekeeper_action_label")))
+        if normalized.get("ai_reason_numeric_inconsistency") is True:
+            numeric_consistency_by_stage[stage].append(
+                {
+                    "field": str(normalized.get("ai_reason_numeric_inconsistency_field") or "tick_acceleration_ratio"),
+                    "reason": str(normalized.get("ai_reason_numeric_inconsistency_reason") or "-"),
+                    "excerpt": str(normalized.get("ai_reason_numeric_inconsistency_excerpt") or "")[:240],
+                    "detected_value": normalized.get("ai_reason_numeric_inconsistency_detected_value"),
+                }
+            )
         example_keys.setdefault(stage, list(fields.keys())[:30])
         for key, value in normalized.items():
             if _source_like_field(key) and _is_present(value):
@@ -1744,6 +1897,23 @@ def _evaluate_contracts(rows: list[dict[str, Any]], stage_counts: Counter[str]) 
                     "forbidden_uses": "runtime_threshold_apply/order_submit/provider_route_change/bot_restart",
                 }
             )
+    for stage, rows_with_issue in sorted(numeric_consistency_by_stage.items(), key=lambda item: (-stage_counts[item[0]], item[0])):
+        if not rows_with_issue:
+            continue
+        numeric_consistency_findings.append(
+            {
+                "stage": stage,
+                "event_count": stage_counts.get(stage, 0),
+                "finding_count": len(rows_with_issue),
+                "rate": round(len(rows_with_issue) / max(1, stage_counts.get(stage, 0)), 4),
+                "routing": "source_quality_review_numeric_consistency",
+                "decision_authority": "source_quality_only",
+                "runtime_effect": False,
+                "allowed_runtime_apply": False,
+                "forbidden_uses": "EV/live-auto/runtime-apply/threshold mutation/order guard mutation/provider_route_change/bot_restart",
+                "examples": rows_with_issue[:5],
+            }
+        )
     return {
         "stage_contracts": results,
         "warning_stages": warnings,
@@ -1751,6 +1921,7 @@ def _evaluate_contracts(rows: list[dict[str, Any]], stage_counts: Counter[str]) 
         "high_volume_no_source_fields": high_volume_no_source_fields,
         "unknown_token_findings": unknown_token_findings,
         "reviewed_unknown_token_findings": reviewed_unknown_token_findings,
+        "numeric_consistency_findings": numeric_consistency_findings,
         "field_presence_top": {
             stage: dict(counter.most_common(20))
             for stage, counter in sorted(field_presence.items(), key=lambda item: (-stage_counts[item[0]], item[0]))
@@ -1831,11 +2002,15 @@ def _hard_gate_summary(contract_result: dict[str, Any]) -> dict[str, Any]:
         "hard_blocking_contract_gaps": gaps,
         "tuning_input_allowed": not gaps,
         "blocked_reason": "blocked_contract_gap" if gaps else None,
-        "review_warning_count": len(contract_result.get("unknown_token_findings") or []),
+        "review_warning_count": len(contract_result.get("unknown_token_findings") or []) + len(contract_result.get("numeric_consistency_findings") or []),
         "reviewed_unknown_token_stage_count": len(contract_result.get("reviewed_unknown_token_findings") or []),
         "review_warning_stages": [
             item.get("stage")
             for item in contract_result.get("unknown_token_findings") or []
+            if isinstance(item, dict) and item.get("stage")
+        ] + [
+            item.get("stage")
+            for item in contract_result.get("numeric_consistency_findings") or []
             if isinstance(item, dict) and item.get("stage")
         ],
     }
@@ -1858,6 +2033,7 @@ def build_observation_source_quality_audit(target_date: str) -> dict[str, Any]:
             contract_result["warning_stages"]
             or contract_result["high_volume_no_source_fields"]
             or contract_result["unknown_token_findings"]
+            or contract_result.get("numeric_consistency_findings")
         )
         else "pass"
     )
@@ -1888,6 +2064,7 @@ def build_observation_source_quality_audit(target_date: str) -> dict[str, Any]:
             "warning_stage_count": len(contract_result["warning_stages"]),
             "high_volume_no_source_field_stage_count": len(contract_result["high_volume_no_source_fields"]),
             "unknown_token_stage_count": len(contract_result["unknown_token_findings"]),
+            "numeric_consistency_stage_count": len(contract_result.get("numeric_consistency_findings") or []),
             "reviewed_unknown_token_stage_count": len(contract_result.get("reviewed_unknown_token_findings") or []),
             "hard_blocking_excluded_row_count": len(row_exclusions),
             "tuning_input_policy": "exclude_defective_rows_not_full_day_raw",

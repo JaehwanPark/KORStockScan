@@ -27,9 +27,9 @@
 - stage_hook_workorder_discovery: `/home/ubuntu/KORStockScan/data/report/stage_hook_workorder_discovery/stage_hook_workorder_discovery_2026-06-17.json`
 - stage_hook_runtime_scaffold: `/home/ubuntu/KORStockScan/data/report/stage_hook_runtime_scaffold/stage_hook_runtime_scaffold_2026-06-17.json`
 - buy_funnel_sentinel: `/home/ubuntu/KORStockScan/data/report/buy_funnel_sentinel/buy_funnel_sentinel_2026-06-17.json`
-- generated_at: `2026-06-17T19:07:44+09:00`
-- generation_id: `2026-06-17-5a2bb3b52d66`
-- source_hash: `5a2bb3b52d66071354ee3b3b49cb4d7fb50d00824d7f80fe92d3905479f3a0e2`
+- generated_at: `2026-06-17T21:34:44+09:00`
+- generation_id: `2026-06-17-6b62bab2af31`
+- source_hash: `6b62bab2af3121b24102f6d79e4d6eda10530c53e922012d039c741d471ce0fc`
 
 ## 운영 원칙
 
@@ -51,10 +51,10 @@
 ## Snapshot Lineage
 
 - previous_exists: `True`
-- previous_generation_id: `2026-06-17-510e92f2689c`
-- previous_source_hash: `510e92f2689c2bc32bbb0abf0a8295b1e2f266e7b7b2a0042407985c9e933c15`
+- previous_generation_id: `2026-06-17-bbe1a16e16c8`
+- previous_source_hash: `bbe1a16e16c810d76a51503a2f52557df73bc94eb22c9ec637fcf43fef9d0b51`
 - new_order_ids: `[]`
-- removed_order_ids: `['order_pattern_lab_ai_review_lifecycle_bucket_discovery_contract_drift', 'order_pattern_lab_ai_review_missing_code_improvement_workorder', 'order_pattern_lab_ai_review_missing_threshold_cycle_ev', 'order_pattern_lab_ai_review_swing_lifecycle_bucket_discovery_code_patch_required', 'order_pattern_lab_ai_review_swing_strategy_discovery_pending_quotes']`
+- removed_order_ids: `['order_swing_ofi_qi_stale_or_missing_context']`
 - decision_changed_order_ids: `[]`
 
 ## Summary
@@ -80,35 +80,35 @@
 - entry_submit_drought_selected: `True`
 - entry_submit_drought_handoff_missing: `False`
 - panic_lifecycle_source_order_count: `2`
-- selected_order_count: `117`
-- non_selected_order_count: `35`
-- source_decision_counts: `{'implement_now': 1, 'attach_existing_family': 135, 'design_family_candidate': 5, 'defer_evidence': 8, 'reject': 3}`
-- selected_decision_counts: `{'implement_now': 1, 'attach_existing_family': 116}`
-- selected_route_counts: `{'repeat_unresolved_structural_blocker': 1, 'existing_family': 114, 'positive_source_only_review': 1, 'source_dimension_rollup': 1}`
-- selected_implement_now_route_count: `1`
-- selected_runtime_effect_false_count: `117`
-- selected_unimplemented_runtime_effect_false_count: `1`
-- selected_unimplemented_route_counts: `{'repeat_unresolved_structural_blocker': 1}`
+- selected_order_count: `116`
+- non_selected_order_count: `36`
+- source_decision_counts: `{'attach_existing_family': 136, 'design_family_candidate': 5, 'defer_evidence': 8, 'reject': 3}`
+- selected_decision_counts: `{'attach_existing_family': 116}`
+- selected_route_counts: `{'existing_family': 114, 'positive_source_only_review': 1, 'source_dimension_rollup': 1}`
+- selected_implement_now_route_count: `0`
+- selected_runtime_effect_false_count: `116`
+- selected_unimplemented_runtime_effect_false_count: `0`
+- selected_unimplemented_route_counts: `{}`
 - selected_terminal_non_implement_runtime_effect_false_count: `3`
 - selected_terminal_non_implement_route_counts: `{'existing_family': 1, 'positive_source_only_review': 1, 'source_dimension_rollup': 1}`
 - selected_implement_now_existing_implementation_count: `0`
 - selected_implement_now_existing_implementation_order_ids: `[]`
-- selected_implement_now_new_runtime_effect_false_count: `1`
-- selected_implement_now_new_runtime_effect_false_order_ids: `['order_swing_ofi_qi_stale_or_missing_context']`
+- selected_implement_now_new_runtime_effect_false_count: `0`
+- selected_implement_now_new_runtime_effect_false_order_ids: `[]`
 - repeat_unresolved_escalation_count: `0`
 - repeat_unresolved_escalated_order_ids: `[]`
-- repeat_unresolved_structural_blocker_count: `1`
-- repeat_unresolved_structural_blocker_order_ids: `['order_swing_ofi_qi_stale_or_missing_context']`
-- root_cause_closure_status_counts: `{'handoff_closed_root_cause_open': 20, 'implementation_done': 1, 'needs_followup_workorder': 1, 'root_cause_closed': 92}`
+- repeat_unresolved_structural_blocker_count: `0`
+- repeat_unresolved_structural_blocker_order_ids: `[]`
+- root_cause_closure_status_counts: `{'handoff_closed_root_cause_open': 20, 'implementation_done': 1, 'root_cause_closed': 92}`
 - implementation_done_count: `1`
 - artifact_regeneration_required_count: `0`
 - handoff_closed_root_cause_open_count: `20`
 - root_cause_closed_count: `92`
-- needs_followup_workorder_count: `1`
+- needs_followup_workorder_count: `0`
 - root_cause_open_top: `[{'order_id': 'order_conversion_lane_key_lineage_active_arm_0c383886ae3c8de3', 'status': 'handoff_closed_root_cause_open', 'source_report_type': 'conversion_lane', 'threshold_family': 'sim_to_real_conversion_lane', 'implementation_status': 'implemented', 'root_cause_signal': None}, {'order_id': 'order_conversion_lane_key_lineage_active_arm_78c1ca03d11c256b', 'status': 'handoff_closed_root_cause_open', 'source_report_type': 'conversion_lane', 'threshold_family': 'sim_to_real_conversion_lane', 'implementation_status': 'implemented', 'root_cause_signal': None}, {'order_id': 'order_conversion_lane_key_lineage_active_arm_7bc3260124b31b77', 'status': 'handoff_closed_root_cause_open', 'source_report_type': 'conversion_lane', 'threshold_family': 'sim_to_real_conversion_lane', 'implementation_status': 'implemented', 'root_cause_signal': None}, {'order_id': 'order_conversion_lane_key_lineage_active_arm_d09163dbcf8e6037', 'status': 'handoff_closed_root_cause_open', 'source_report_type': 'conversion_lane', 'threshold_family': 'sim_to_real_conversion_lane', 'implementation_status': 'implemented', 'root_cause_signal': None}, {'order_id': 'order_conversion_lane_key_lineage_active_arm_da294c8705564eaf', 'status': 'handoff_closed_root_cause_open', 'source_report_type': 'conversion_lane', 'threshold_family': 'sim_to_real_conversion_lane', 'implementation_status': 'implemented', 'root_cause_signal': None}, {'order_id': 'order_conversion_lane_key_lineage_active_seed_0629ba2d0f4dd524', 'status': 'handoff_closed_root_cause_open', 'source_report_type': 'conversion_lane', 'threshold_family': 'sim_to_real_conversion_lane', 'implementation_status': 'implemented', 'root_cause_signal': None}, {'order_id': 'order_conversion_lane_key_lineage_active_seed_06fce89fd3a136e6', 'status': 'handoff_closed_root_cause_open', 'source_report_type': 'conversion_lane', 'threshold_family': 'sim_to_real_conversion_lane', 'implementation_status': 'implemented', 'root_cause_signal': None}, {'order_id': 'order_conversion_lane_key_lineage_active_seed_07677c2e78c144df', 'status': 'handoff_closed_root_cause_open', 'source_report_type': 'conversion_lane', 'threshold_family': 'sim_to_real_conversion_lane', 'implementation_status': 'implemented', 'root_cause_signal': None}, {'order_id': 'order_conversion_lane_key_lineage_active_seed_0a9736d86332c717', 'status': 'handoff_closed_root_cause_open', 'source_report_type': 'conversion_lane', 'threshold_family': 'sim_to_real_conversion_lane', 'implementation_status': 'implemented', 'root_cause_signal': None}, {'order_id': 'order_conversion_lane_key_lineage_active_seed_0cae3a2115d07d28', 'status': 'handoff_closed_root_cause_open', 'source_report_type': 'conversion_lane', 'threshold_family': 'sim_to_real_conversion_lane', 'implementation_status': 'implemented', 'root_cause_signal': None}]`
 - selected_terminal_non_implement_longstanding_count: `3`
 - selected_terminal_non_implement_longstanding_order_ids: `['order_lifecycle_exit_bucket_combo_exit_result_source_scalp_sim_overnight_sell_today_rule_scalp_sim_overnight_sell_tod_ff77f4c9', 'order_lifecycle_quiet_gap_positive_source_only_rollup', 'order_lifecycle_source_dimension_gap_rollup']`
-- non_selected_decision_counts: `{'attach_existing_family': 19, 'design_family_candidate': 5, 'defer_evidence': 8, 'reject': 3}`
+- non_selected_decision_counts: `{'attach_existing_family': 20, 'design_family_candidate': 5, 'defer_evidence': 8, 'reject': 3}`
 - gemini_fresh: `False`
 - claude_fresh: `True`
 - swing_lifecycle_audit_available: `True`
@@ -205,45 +205,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 
 ## Implementation Orders
 
-### 1. `order_swing_ofi_qi_stale_or_missing_context`
-
-- title: swing OFI/QI stale or missing context
-- decision: `implement_now`
-- decision_reason: longstanding non-implement finding remained unresolved across 8 workorder days; promote it as a structural blocker instead of leaving it as passive evidence
-- source_report_type: `swing_improvement_automation`
-- lifecycle_stage: `entry`
-- target_subsystem: `swing_orderbook_micro_context`
-- route: `repeat_unresolved_structural_blocker`
-- mapped_family: `swing_entry_ofi_qi_execution_quality`
-- threshold_family: `swing_entry_ofi_qi_execution_quality`
-- improvement_type: `instrumentation`
-- confidence: `consensus`
-- priority: `4`
-- runtime_effect: `False`
-- strategy_effect: `False`
-- data_quality_effect: `False`
-- tuning_axis_effect: `False`
-- expected_ev_effect: stale_missing_ratio decreases while submitted/simulated entry quality remains attributable.
-- evidence: `stale_missing_count=12670`, `stale_missing_ratio=0.1407`, `stale_missing_unique_record_count=13`, `stale_missing_reason_counts={'micro_missing': 12670, 'micro_not_ready': 12312, 'state_insufficient': 12312, 'observer_unhealthy': 4}`, `stale_missing_reason_combination_counts={'micro_missing+micro_not_ready+state_insufficient': 12308, 'micro_missing': 358, 'micro_missing+observer_unhealthy+micro_not_ready+state_insufficient': 4}`, `stale_missing_reason_combination_unique_record_counts={'micro_missing+micro_not_ready+state_insufficient': 13, 'micro_missing+observer_unhealthy+micro_not_ready+state_insufficient': 1}`, `observer_unhealthy_overlap={'observer_unhealthy_total': 4, 'observer_unhealthy_with_other_reason': 4, 'observer_unhealthy_only': 0}`, `scale_in_source_quality={'group': 'scale_in', 'sample_count': 76, 'valid_micro_context_count': 69, 'invalid_micro_context_count': 7, 'invalid_micro_context_unique_record_count': 1, 'invalid_reason_combination_counts': {'micro_missing+micro_not_ready+state_insufficient': 12308, 'micro_missing': 358, 'micro_missing+observer_unhealthy+micro_not_ready+state_insufficient': 4}, 'invalid_reason_combination_unique_record_counts': {'micro_missing+micro_not_ready+state_insufficient': 13, 'micro_missing+observer_unhealthy+micro_not_ready+state_insufficient': 1}, 'observer_unhealthy_overlap': {'observer_unhealthy_total': 4, 'observer_unhealthy_with_other_reason': 4, 'observer_unhealthy_only': 0}, 'source_quality_blockers': ['scale_in_ofi_qi_invalid_micro_context']}`, `entry_source_quality={'group': 'entry', 'sample_count': 89572, 'valid_micro_context_count': 77278, 'invalid_micro_context_count': 12294, 'invalid_micro_context_unique_record_count': 13, 'invalid_reason_combination_counts': {'micro_missing+micro_not_ready+state_insufficient': 12308, 'micro_missing': 358, 'micro_missing+observer_unhealthy+micro_not_ready+state_insufficient': 4}, 'invalid_reason_combination_unique_record_counts': {'micro_missing+micro_not_ready+state_insufficient': 13, 'micro_missing+observer_unhealthy+micro_not_ready+state_insufficient': 1}, 'observer_unhealthy_overlap': {'observer_unhealthy_total': 4, 'observer_unhealthy_with_other_reason': 4, 'observer_unhealthy_only': 0}, 'source_quality_blockers': ['entry_ofi_qi_invalid_micro_context']}`
-- parity_contract: -
-- next_postclose_metric: stale_missing_ratio decreases while submitted/simulated entry quality remains attributable.
-- files_likely_touched: `src/engine/sniper_state_handlers.py`, `src/engine/orderbook_stability.py`, `src/engine/swing_lifecycle_audit.py`
-- acceptance_tests: `pytest orderbook stability tests`, `pytest swing lifecycle audit tests`
-- implementation_status: `repeat_unresolved_structural_blocker`
-- root_cause_closure_status: `needs_followup_workorder`
-- implementation_provenance: `{"structural_blocker_escalation": {"escalation_reason": "source_quality_ratio_not_improving_after_handoff", "history_window_days": 10, "previous_decision": "attach_existing_family", "previous_implementation_status": "terminal_existing_family_evidence", "previous_route": "existing_family", "repeat_count": 8, "repeat_key": "order_swing_ofi_qi_stale_or_missing_context", "repeat_signature": "sig:swing_improvement_automation|swing_orderbook_micro_context|entry|instrumentation|swing_entry_ofi_qi_execution_quality|swing_ofi_qi_stale_or_missing_context", "required_next_route": "implement_now"}}`
-- repeat_unresolved_escalation: `-`
-- longstanding_non_implement_review: `{"history_window_days": 10, "previous_decision": "attach_existing_family", "previous_implementation_status": "terminal_existing_family_evidence", "previous_route": "existing_family", "repeat_count": 8, "repeat_key": "order_swing_ofi_qi_stale_or_missing_context", "repeat_signature": "sig:swing_improvement_automation|swing_orderbook_micro_context|entry|instrumentation|swing_entry_ofi_qi_execution_quality|swing_ofi_qi_stale_or_missing_context", "review_disposition": "repeat_unresolved_structural_blocker"}`
-- structural_blocker_escalation: `{"escalation_reason": "source_quality_ratio_not_improving_after_handoff", "history_window_days": 10, "previous_decision": "attach_existing_family", "previous_implementation_status": "terminal_existing_family_evidence", "previous_route": "existing_family", "repeat_count": 8, "repeat_key": "order_swing_ofi_qi_stale_or_missing_context", "repeat_signature": "sig:swing_improvement_automation|swing_orderbook_micro_context|entry|instrumentation|swing_entry_ofi_qi_execution_quality|swing_ofi_qi_stale_or_missing_context", "required_next_route": "implement_now"}`
-- automation_reentry: After implementation, regenerate the source report, code improvement workorder, threshold EV/runtime summary, and postclose verifier; runtime/order/provider/bot state must remain unchanged.
-
-실행 기준:
-
-- instrumentation/provenance/report source 보강을 우선 구현한다.
-- runtime 판단값을 직접 바꾸지 않는다.
-- 다음 postclose report에서 source freshness, warning 감소, sample count가 확인되어야 한다.
-
-### 2. `order_entry_submit_drought_auto_resolution`
+### 1. `order_entry_submit_drought_auto_resolution`
 
 - title: Entry submit drought automatic resolution handoff
 - decision: `attach_existing_family`
@@ -281,7 +243,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 3. `order_entry_broker_receipt_contract_gap_review`
+### 2. `order_entry_broker_receipt_contract_gap_review`
 
 - title: Entry broker receipt contract gap review
 - decision: `attach_existing_family`
@@ -319,7 +281,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 4. `order_entry_fill_quality_contract_gap_review`
+### 3. `order_entry_fill_quality_contract_gap_review`
 
 - title: Entry fill quality contract gap review
 - decision: `attach_existing_family`
@@ -357,7 +319,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 5. `order_entry_post_submit_contract_gap_review`
+### 4. `order_entry_post_submit_contract_gap_review`
 
 - title: Entry post-submit contract gap review
 - decision: `attach_existing_family`
@@ -395,7 +357,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 6. `order_entry_source_taxonomy_contract_gap_review`
+### 5. `order_entry_source_taxonomy_contract_gap_review`
 
 - title: Entry source taxonomy contract gap review
 - decision: `attach_existing_family`
@@ -433,7 +395,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 7. `order_entry_telegram_post_submit_contract_gap_review`
+### 6. `order_entry_telegram_post_submit_contract_gap_review`
 
 - title: Entry Telegram post-submit contract gap review
 - decision: `attach_existing_family`
@@ -471,7 +433,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 8. `order_latency_canary_tag_완화_1축_canary_승인`
+### 7. `order_latency_canary_tag_완화_1축_canary_승인`
 
 - title: latency canary tag 완화 1축 canary 승인
 - decision: `attach_existing_family`
@@ -509,7 +471,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 9. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_10_lifecycle_flow_combo_lifecycle_flow_entry_entry_missing_submit_submit_c_15cc1740`
+### 8. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_10_lifecycle_flow_combo_lifecycle_flow_entry_entry_missing_submit_submit_c_15cc1740`
 
 - title: LDM lifecycle flow bucket follow-up: lifecycle_flow:combo_lifecycle_flow:entry_entry_missing_submit_submit_combo_submit_quality_s:b22dfc875d
 - decision: `attach_existing_family`
@@ -547,7 +509,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 10. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_11_lifecycle_flow_combo_lifecycle_flow_entry_entry_missing_submit_submit_c_15cc1740`
+### 9. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_11_lifecycle_flow_combo_lifecycle_flow_entry_entry_missing_submit_submit_c_15cc1740`
 
 - title: LDM lifecycle flow bucket follow-up: lifecycle_flow:combo_lifecycle_flow:entry_entry_missing_submit_submit_combo_submit_quality_s:b22dfc875d
 - decision: `attach_existing_family`
@@ -585,7 +547,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 11. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_12_lifecycle_flow_combo_lifecycle_flow_entry_entry_missing_submit_submit_c_90f8527b`
+### 10. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_12_lifecycle_flow_combo_lifecycle_flow_entry_entry_missing_submit_submit_c_90f8527b`
 
 - title: LDM lifecycle flow bucket follow-up: lifecycle_flow:combo_lifecycle_flow:entry_entry_missing_submit_submit_combo_submit_quality_s:85dd6827b8
 - decision: `attach_existing_family`
@@ -623,7 +585,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 12. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_13_lifecycle_flow_combo_lifecycle_flow_entry_entry_missing_submit_submit_c_15cc1740`
+### 11. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_13_lifecycle_flow_combo_lifecycle_flow_entry_entry_missing_submit_submit_c_15cc1740`
 
 - title: LDM lifecycle flow bucket follow-up: lifecycle_flow:combo_lifecycle_flow:entry_entry_missing_submit_submit_combo_submit_quality_s:b22dfc875d
 - decision: `attach_existing_family`
@@ -661,7 +623,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 13. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_14_lifecycle_flow_combo_lifecycle_flow_entry_entry_missing_submit_submit_c_15cc1740`
+### 12. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_14_lifecycle_flow_combo_lifecycle_flow_entry_entry_missing_submit_submit_c_15cc1740`
 
 - title: LDM lifecycle flow bucket follow-up: lifecycle_flow:combo_lifecycle_flow:entry_entry_missing_submit_submit_combo_submit_quality_s:b22dfc875d
 - decision: `attach_existing_family`
@@ -699,7 +661,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 14. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_15_lifecycle_flow_combo_lifecycle_flow_entry_entry_missing_submit_submit_c_15cc1740`
+### 13. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_15_lifecycle_flow_combo_lifecycle_flow_entry_entry_missing_submit_submit_c_15cc1740`
 
 - title: LDM lifecycle flow bucket follow-up: lifecycle_flow:combo_lifecycle_flow:entry_entry_missing_submit_submit_combo_submit_quality_s:b22dfc875d
 - decision: `attach_existing_family`
@@ -737,7 +699,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 15. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_16_lifecycle_flow_combo_lifecycle_flow_entry_entry_missing_submit_submit_c_15cc1740`
+### 14. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_16_lifecycle_flow_combo_lifecycle_flow_entry_entry_missing_submit_submit_c_15cc1740`
 
 - title: LDM lifecycle flow bucket follow-up: lifecycle_flow:combo_lifecycle_flow:entry_entry_missing_submit_submit_combo_submit_quality_s:b22dfc875d
 - decision: `attach_existing_family`
@@ -775,7 +737,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 16. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_17_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_b5237a42`
+### 15. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_17_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_b5237a42`
 
 - title: LDM lifecycle flow bucket follow-up: lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_lt60_source_blo:70a865069d
 - decision: `attach_existing_family`
@@ -813,7 +775,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 17. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_18_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_b5237a42`
+### 16. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_18_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_b5237a42`
 
 - title: LDM lifecycle flow bucket follow-up: lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_lt60_source_blo:70a865069d
 - decision: `attach_existing_family`
@@ -851,7 +813,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 18. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_19_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_b5237a42`
+### 17. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_19_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_b5237a42`
 
 - title: LDM lifecycle flow bucket follow-up: lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_lt60_source_blo:70a865069d
 - decision: `attach_existing_family`
@@ -889,7 +851,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 19. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_1_lifecycle_flow_combo_lifecycle_flow_entry_entry_missing_submit_submit_c_15cc1740`
+### 18. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_1_lifecycle_flow_combo_lifecycle_flow_entry_entry_missing_submit_submit_c_15cc1740`
 
 - title: LDM lifecycle flow bucket follow-up: lifecycle_flow:combo_lifecycle_flow:entry_entry_missing_submit_submit_combo_submit_quality_s:b22dfc875d
 - decision: `attach_existing_family`
@@ -927,7 +889,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 20. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_20_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_b5237a42`
+### 19. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_20_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_b5237a42`
 
 - title: LDM lifecycle flow bucket follow-up: lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_lt60_source_blo:70a865069d
 - decision: `attach_existing_family`
@@ -965,7 +927,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 21. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_2_lifecycle_flow_combo_lifecycle_flow_entry_entry_missing_submit_submit_c_15cc1740`
+### 20. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_2_lifecycle_flow_combo_lifecycle_flow_entry_entry_missing_submit_submit_c_15cc1740`
 
 - title: LDM lifecycle flow bucket follow-up: lifecycle_flow:combo_lifecycle_flow:entry_entry_missing_submit_submit_combo_submit_quality_s:b22dfc875d
 - decision: `attach_existing_family`
@@ -1003,7 +965,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 22. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_3_lifecycle_flow_combo_lifecycle_flow_entry_entry_missing_submit_submit_c_15cc1740`
+### 21. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_3_lifecycle_flow_combo_lifecycle_flow_entry_entry_missing_submit_submit_c_15cc1740`
 
 - title: LDM lifecycle flow bucket follow-up: lifecycle_flow:combo_lifecycle_flow:entry_entry_missing_submit_submit_combo_submit_quality_s:b22dfc875d
 - decision: `attach_existing_family`
@@ -1041,7 +1003,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 23. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_4_lifecycle_flow_combo_lifecycle_flow_entry_entry_missing_submit_submit_c_15cc1740`
+### 22. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_4_lifecycle_flow_combo_lifecycle_flow_entry_entry_missing_submit_submit_c_15cc1740`
 
 - title: LDM lifecycle flow bucket follow-up: lifecycle_flow:combo_lifecycle_flow:entry_entry_missing_submit_submit_combo_submit_quality_s:b22dfc875d
 - decision: `attach_existing_family`
@@ -1079,7 +1041,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 24. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_5_lifecycle_flow_combo_lifecycle_flow_entry_entry_missing_submit_submit_c_15cc1740`
+### 23. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_5_lifecycle_flow_combo_lifecycle_flow_entry_entry_missing_submit_submit_c_15cc1740`
 
 - title: LDM lifecycle flow bucket follow-up: lifecycle_flow:combo_lifecycle_flow:entry_entry_missing_submit_submit_combo_submit_quality_s:b22dfc875d
 - decision: `attach_existing_family`
@@ -1117,7 +1079,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 25. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_6_lifecycle_flow_combo_lifecycle_flow_entry_entry_missing_submit_submit_c_15cc1740`
+### 24. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_6_lifecycle_flow_combo_lifecycle_flow_entry_entry_missing_submit_submit_c_15cc1740`
 
 - title: LDM lifecycle flow bucket follow-up: lifecycle_flow:combo_lifecycle_flow:entry_entry_missing_submit_submit_combo_submit_quality_s:b22dfc875d
 - decision: `attach_existing_family`
@@ -1155,7 +1117,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 26. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_7_lifecycle_flow_combo_lifecycle_flow_entry_entry_missing_submit_submit_c_15cc1740`
+### 25. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_7_lifecycle_flow_combo_lifecycle_flow_entry_entry_missing_submit_submit_c_15cc1740`
 
 - title: LDM lifecycle flow bucket follow-up: lifecycle_flow:combo_lifecycle_flow:entry_entry_missing_submit_submit_combo_submit_quality_s:b22dfc875d
 - decision: `attach_existing_family`
@@ -1193,7 +1155,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 27. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_8_lifecycle_flow_combo_lifecycle_flow_entry_entry_missing_submit_submit_c_15cc1740`
+### 26. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_8_lifecycle_flow_combo_lifecycle_flow_entry_entry_missing_submit_submit_c_15cc1740`
 
 - title: LDM lifecycle flow bucket follow-up: lifecycle_flow:combo_lifecycle_flow:entry_entry_missing_submit_submit_combo_submit_quality_s:b22dfc875d
 - decision: `attach_existing_family`
@@ -1231,7 +1193,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 28. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_9_lifecycle_flow_combo_lifecycle_flow_entry_entry_missing_submit_submit_c_15cc1740`
+### 27. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_9_lifecycle_flow_combo_lifecycle_flow_entry_entry_missing_submit_submit_c_15cc1740`
 
 - title: LDM lifecycle flow bucket follow-up: lifecycle_flow:combo_lifecycle_flow:entry_entry_missing_submit_submit_combo_submit_quality_s:b22dfc875d
 - decision: `attach_existing_family`
@@ -1269,7 +1231,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 29. `order_stage_hook_workorder_discovery_stage_hook_holding_flow_runner_debounce_guard`
+### 28. `order_stage_hook_workorder_discovery_stage_hook_holding_flow_runner_debounce_guard`
 
 - title: Implement stage hook: holding_flow_runner_debounce_guard
 - decision: `attach_existing_family`
@@ -1322,7 +1284,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 30. `order_stage_hook_workorder_discovery_stage_hook_plateau_breakdown_exit_arbitration_probe`
+### 29. `order_stage_hook_workorder_discovery_stage_hook_plateau_breakdown_exit_arbitration_probe`
 
 - title: Implement stage hook: plateau_breakdown_exit_arbitration_probe
 - decision: `attach_existing_family`
@@ -1375,7 +1337,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 31. `order_lifecycle_entry_bucket_exit_rule_exit_unknown`
+### 30. `order_lifecycle_entry_bucket_exit_rule_exit_unknown`
 
 - title: LDM entry bucket attribution follow-up: exit_rule=exit_unknown
 - decision: `attach_existing_family`
@@ -1413,7 +1375,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 32. `order_lifecycle_exit_bucket_combo_exit_result_source_scalp_sim_overnight_sell_today_rule_scalp_sim_overnight_sell_tod_ff77f4c9`
+### 31. `order_lifecycle_exit_bucket_combo_exit_result_source_scalp_sim_overnight_sell_today_rule_scalp_sim_overnight_sell_tod_ff77f4c9`
 
 - title: LDM exit bucket source-quality follow-up: combo_exit_result=source=scalp_sim_overnight_sell_today|rule=scalp_sim_overnight_sell_today|outcome=outcome_unknown|profit=profit_neg070_neg010
 - decision: `attach_existing_family`
@@ -1451,7 +1413,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 33. `order_lifecycle_exit_bucket_combo_exit_result_source_scalp_sim_partial_sell_order_assumed_filled_rule_scalp_sim_panic_823fe278`
+### 32. `order_lifecycle_exit_bucket_combo_exit_result_source_scalp_sim_partial_sell_order_assumed_filled_rule_scalp_sim_panic_823fe278`
 
 - title: LDM exit bucket source-quality follow-up: combo_exit_result=source=scalp_sim_partial_sell_order_assumed_filled|rule=scalp_sim_panic_lifecycle_partial_exit|outcome=outcome_not_applicable_partial_exit|profit=profit_lt_neg070
 - decision: `attach_existing_family`
@@ -1489,7 +1451,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 34. `order_lifecycle_exit_bucket_combo_exit_result_source_sim_post_sell_evaluation_rule_scalp_hard_stop_pct_outcome_good_e_d8c33947`
+### 33. `order_lifecycle_exit_bucket_combo_exit_result_source_sim_post_sell_evaluation_rule_scalp_hard_stop_pct_outcome_good_e_d8c33947`
 
 - title: LDM exit bucket source-quality follow-up: combo_exit_result=source=sim_post_sell_evaluation|rule=scalp_hard_stop_pct|outcome=GOOD_EXIT|profit=profit_lt_neg070
 - decision: `attach_existing_family`
@@ -1527,7 +1489,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 35. `order_lifecycle_exit_bucket_combo_exit_result_source_sim_post_sell_evaluation_rule_scalp_hard_stop_pct_outcome_missed_30bb5c8f`
+### 34. `order_lifecycle_exit_bucket_combo_exit_result_source_sim_post_sell_evaluation_rule_scalp_hard_stop_pct_outcome_missed_30bb5c8f`
 
 - title: LDM exit bucket source-quality follow-up: combo_exit_result=source=sim_post_sell_evaluation|rule=scalp_hard_stop_pct|outcome=MISSED_UPSIDE|profit=profit_lt_neg070
 - decision: `attach_existing_family`
@@ -1565,7 +1527,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 36. `order_lifecycle_exit_bucket_combo_exit_result_source_sim_post_sell_evaluation_rule_scalp_hard_stop_pct_outcome_neutra_d5168c3c`
+### 35. `order_lifecycle_exit_bucket_combo_exit_result_source_sim_post_sell_evaluation_rule_scalp_hard_stop_pct_outcome_neutra_d5168c3c`
 
 - title: LDM exit bucket source-quality follow-up: combo_exit_result=source=sim_post_sell_evaluation|rule=scalp_hard_stop_pct|outcome=NEUTRAL|profit=profit_lt_neg070
 - decision: `attach_existing_family`
@@ -1603,7 +1565,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 37. `order_lifecycle_exit_bucket_combo_exit_result_source_sim_post_sell_evaluation_rule_scalp_soft_stop_pct_outcome_good_e_71b132b9`
+### 36. `order_lifecycle_exit_bucket_combo_exit_result_source_sim_post_sell_evaluation_rule_scalp_soft_stop_pct_outcome_good_e_71b132b9`
 
 - title: LDM exit bucket source-quality follow-up: combo_exit_result=source=sim_post_sell_evaluation|rule=scalp_soft_stop_pct|outcome=GOOD_EXIT|profit=profit_lt_neg070
 - decision: `attach_existing_family`
@@ -1641,7 +1603,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 38. `order_lifecycle_exit_bucket_combo_exit_result_source_sim_post_sell_evaluation_rule_scalp_soft_stop_pct_outcome_missed_bb293be8`
+### 37. `order_lifecycle_exit_bucket_combo_exit_result_source_sim_post_sell_evaluation_rule_scalp_soft_stop_pct_outcome_missed_bb293be8`
 
 - title: LDM exit bucket source-quality follow-up: combo_exit_result=source=sim_post_sell_evaluation|rule=scalp_soft_stop_pct|outcome=MISSED_UPSIDE|profit=profit_lt_neg070
 - decision: `attach_existing_family`
@@ -1679,7 +1641,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 39. `order_lifecycle_exit_bucket_combo_exit_result_source_sim_post_sell_evaluation_rule_scalp_soft_stop_pct_outcome_neutra_d73738ba`
+### 38. `order_lifecycle_exit_bucket_combo_exit_result_source_sim_post_sell_evaluation_rule_scalp_soft_stop_pct_outcome_neutra_d73738ba`
 
 - title: LDM exit bucket source-quality follow-up: combo_exit_result=source=sim_post_sell_evaluation|rule=scalp_soft_stop_pct|outcome=NEUTRAL|profit=profit_lt_neg070
 - decision: `attach_existing_family`
@@ -1717,7 +1679,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 40. `order_lifecycle_exit_bucket_combo_exit_result_source_sim_post_sell_evaluation_rule_scalp_trailing_take_profit_outcome_17b509a7`
+### 39. `order_lifecycle_exit_bucket_combo_exit_result_source_sim_post_sell_evaluation_rule_scalp_trailing_take_profit_outcome_17b509a7`
 
 - title: LDM exit bucket source-quality follow-up: combo_exit_result=source=sim_post_sell_evaluation|rule=scalp_trailing_take_profit|outcome=GOOD_EXIT|profit=profit_pos150_pos300
 - decision: `attach_existing_family`
@@ -1755,7 +1717,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 41. `order_lifecycle_exit_bucket_combo_exit_result_source_sim_post_sell_evaluation_rule_scalp_trailing_take_profit_outcome_eb03513e`
+### 40. `order_lifecycle_exit_bucket_combo_exit_result_source_sim_post_sell_evaluation_rule_scalp_trailing_take_profit_outcome_eb03513e`
 
 - title: LDM exit bucket source-quality follow-up: combo_exit_result=source=sim_post_sell_evaluation|rule=scalp_trailing_take_profit|outcome=MISSED_UPSIDE|profit=profit_pos080_pos150
 - decision: `attach_existing_family`
@@ -1793,7 +1755,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 42. `order_lifecycle_holding_bucket_combo_holding_flow_source_scalp_sim_holding_started_action_holding_action_not_applicable_a_50644c4a`
+### 41. `order_lifecycle_holding_bucket_combo_holding_flow_source_scalp_sim_holding_started_action_holding_action_not_applicable_a_50644c4a`
 
 - title: LDM holding bucket source-quality follow-up: combo_holding_flow=source=scalp_sim_holding_started|action=holding_action_not_applicable_at_start|profit=profit_pos150_pos300_plus|held=held_not_applicable_at_start
 - decision: `attach_existing_family`
@@ -1831,7 +1793,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 43. `order_lifecycle_holding_bucket_combo_holding_flow_source_scalp_sim_holding_started_action_holding_action_not_applicable_a_828a0f68`
+### 42. `order_lifecycle_holding_bucket_combo_holding_flow_source_scalp_sim_holding_started_action_holding_action_not_applicable_a_828a0f68`
 
 - title: LDM holding bucket source-quality follow-up: combo_holding_flow=source=scalp_sim_holding_started|action=holding_action_not_applicable_at_start|profit=profit_pos080_pos150|held=held_not_applicable_at_start
 - decision: `attach_existing_family`
@@ -1869,7 +1831,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 44. `order_lifecycle_holding_bucket_combo_holding_flow_source_scalp_sim_holding_started_action_holding_action_not_applicable_a_9af5260c`
+### 43. `order_lifecycle_holding_bucket_combo_holding_flow_source_scalp_sim_holding_started_action_holding_action_not_applicable_a_9af5260c`
 
 - title: LDM holding bucket source-quality follow-up: combo_holding_flow=source=scalp_sim_holding_started|action=holding_action_not_applicable_at_start|profit=profit_neg070_neg010|held=held_not_applicable_at_start
 - decision: `attach_existing_family`
@@ -1907,7 +1869,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 45. `order_lifecycle_holding_bucket_combo_holding_flow_source_scalp_sim_holding_started_action_holding_action_not_applicable_a_f7731cc4`
+### 44. `order_lifecycle_holding_bucket_combo_holding_flow_source_scalp_sim_holding_started_action_holding_action_not_applicable_a_f7731cc4`
 
 - title: LDM holding bucket source-quality follow-up: combo_holding_flow=source=scalp_sim_holding_started|action=holding_action_not_applicable_at_start|profit=profit_pos150_pos300|held=held_not_applicable_at_start
 - decision: `attach_existing_family`
@@ -1945,7 +1907,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 46. `order_lifecycle_holding_bucket_combo_holding_flow_source_scalp_sim_holding_started_action_holding_action_not_applicable_a_fc555278`
+### 45. `order_lifecycle_holding_bucket_combo_holding_flow_source_scalp_sim_holding_started_action_holding_action_not_applicable_a_fc555278`
 
 - title: LDM holding bucket source-quality follow-up: combo_holding_flow=source=scalp_sim_holding_started|action=holding_action_not_applicable_at_start|profit=profit_lt_neg070|held=held_not_applicable_at_start
 - decision: `attach_existing_family`
@@ -1983,7 +1945,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 47. `order_lifecycle_holding_bucket_combo_holding_flow_source_scalp_sim_holding_started_action_wait_profit_profit_lt_neg070_he_ed505a3f`
+### 46. `order_lifecycle_holding_bucket_combo_holding_flow_source_scalp_sim_holding_started_action_wait_profit_profit_lt_neg070_he_ed505a3f`
 
 - title: LDM holding bucket source-quality follow-up: combo_holding_flow=source=scalp_sim_holding_started|action=WAIT|profit=profit_lt_neg070|held=held_not_applicable_at_start
 - decision: `attach_existing_family`
@@ -2021,7 +1983,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 48. `order_lifecycle_holding_bucket_combo_holding_flow_source_scalp_sim_holding_started_action_wait_profit_profit_neg070_neg01_7ffc2d26`
+### 47. `order_lifecycle_holding_bucket_combo_holding_flow_source_scalp_sim_holding_started_action_wait_profit_profit_neg070_neg01_7ffc2d26`
 
 - title: LDM holding bucket source-quality follow-up: combo_holding_flow=source=scalp_sim_holding_started|action=WAIT|profit=profit_neg070_neg010|held=held_not_applicable_at_start
 - decision: `attach_existing_family`
@@ -2059,7 +2021,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 49. `order_lifecycle_holding_bucket_combo_holding_flow_source_scalp_sim_holding_started_action_wait_profit_profit_pos080_pos15_aaaecaaf`
+### 48. `order_lifecycle_holding_bucket_combo_holding_flow_source_scalp_sim_holding_started_action_wait_profit_profit_pos080_pos15_aaaecaaf`
 
 - title: LDM holding bucket source-quality follow-up: combo_holding_flow=source=scalp_sim_holding_started|action=WAIT|profit=profit_pos080_pos150|held=held_not_applicable_at_start
 - decision: `attach_existing_family`
@@ -2097,7 +2059,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 50. `order_lifecycle_holding_bucket_combo_holding_flow_source_scalp_sim_holding_started_action_wait_profit_profit_pos150_pos30_562da131`
+### 49. `order_lifecycle_holding_bucket_combo_holding_flow_source_scalp_sim_holding_started_action_wait_profit_profit_pos150_pos30_562da131`
 
 - title: LDM holding bucket source-quality follow-up: combo_holding_flow=source=scalp_sim_holding_started|action=WAIT|profit=profit_pos150_pos300_plus|held=held_not_applicable_at_start
 - decision: `attach_existing_family`
@@ -2135,7 +2097,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 51. `order_lifecycle_holding_bucket_combo_holding_flow_source_scalp_sim_holding_started_action_wait_profit_profit_pos150_pos30_6f3188b0`
+### 50. `order_lifecycle_holding_bucket_combo_holding_flow_source_scalp_sim_holding_started_action_wait_profit_profit_pos150_pos30_6f3188b0`
 
 - title: LDM holding bucket source-quality follow-up: combo_holding_flow=source=scalp_sim_holding_started|action=WAIT|profit=profit_pos150_pos300|held=held_not_applicable_at_start
 - decision: `attach_existing_family`
@@ -2173,7 +2135,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 52. `order_swing_ldm_selection_discovery_arm_attribution_breakout_confirm_entry_confidence_weighted_trailing_after_mfe_banking_and_saving`
+### 51. `order_swing_ldm_selection_discovery_arm_attribution_breakout_confirm_entry_confidence_weighted_trailing_after_mfe_banking_and_saving`
 
 - title: Swing LDM source field follow-up: breakout_confirm_entry|confidence_weighted|trailing_after_mfe|Banking and Savings Institutions|은행|DIAGNOSTIC
 - decision: `attach_existing_family`
@@ -2211,7 +2173,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 53. `order_swing_ldm_selection_discovery_arm_attribution_breakout_confirm_entry_confidence_weighted_trailing_after_mfe_building_construct`
+### 52. `order_swing_ldm_selection_discovery_arm_attribution_breakout_confirm_entry_confidence_weighted_trailing_after_mfe_building_construct`
 
 - title: Swing LDM source field follow-up: breakout_confirm_entry|confidence_weighted|trailing_after_mfe|Building Construction|건설_국내주택,건설_해외건설|DIAGNOSTIC
 - decision: `attach_existing_family`
@@ -2249,7 +2211,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 54. `order_swing_ldm_selection_discovery_arm_attribution_breakout_confirm_entry_confidence_weighted_trailing_after_mfe_building_of_ships_`
+### 53. `order_swing_ldm_selection_discovery_arm_attribution_breakout_confirm_entry_confidence_weighted_trailing_after_mfe_building_of_ships_`
 
 - title: Swing LDM source field follow-up: breakout_confirm_entry|confidence_weighted|trailing_after_mfe|Building of Ships and Boats|-|DIAGNOSTIC
 - decision: `attach_existing_family`
@@ -2287,7 +2249,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 55. `order_swing_ldm_selection_discovery_arm_attribution_breakout_confirm_entry_confidence_weighted_trailing_after_mfe_insurance_보험_손해보험_`
+### 54. `order_swing_ldm_selection_discovery_arm_attribution_breakout_confirm_entry_confidence_weighted_trailing_after_mfe_insurance_보험_손해보험_`
 
 - title: Swing LDM source field follow-up: breakout_confirm_entry|confidence_weighted|trailing_after_mfe|Insurance|보험_손해보험|DIAGNOSTIC
 - decision: `attach_existing_family`
@@ -2325,7 +2287,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 56. `order_swing_ldm_selection_discovery_arm_attribution_breakout_confirm_entry_confidence_weighted_trailing_after_mfe_manufacture_of_bas`
+### 55. `order_swing_ldm_selection_discovery_arm_attribution_breakout_confirm_entry_confidence_weighted_trailing_after_mfe_manufacture_of_bas`
 
 - title: Swing LDM source field follow-up: breakout_confirm_entry|confidence_weighted|trailing_after_mfe|Manufacture of Basic Chemicals|-|DIAGNOSTIC
 - decision: `attach_existing_family`
@@ -2363,7 +2325,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 57. `order_swing_ldm_selection_discovery_arm_attribution_breakout_confirm_entry_confidence_weighted_trailing_after_mfe_manufacture_of_ele`
+### 56. `order_swing_ldm_selection_discovery_arm_attribution_breakout_confirm_entry_confidence_weighted_trailing_after_mfe_manufacture_of_ele`
 
 - title: Swing LDM source field follow-up: breakout_confirm_entry|confidence_weighted|trailing_after_mfe|Manufacture of Electronic Components|-|DIAGNOSTIC
 - decision: `attach_existing_family`
@@ -2401,7 +2363,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 58. `order_swing_ldm_selection_discovery_arm_attribution_breakout_confirm_entry_confidence_weighted_trailing_after_mfe_manufacture_of_gen`
+### 57. `order_swing_ldm_selection_discovery_arm_attribution_breakout_confirm_entry_confidence_weighted_trailing_after_mfe_manufacture_of_gen`
 
 - title: Swing LDM source field follow-up: breakout_confirm_entry|confidence_weighted|trailing_after_mfe|Manufacture of General Purpose Machinery|-|DIAGNOSTIC
 - decision: `attach_existing_family`
@@ -2439,7 +2401,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 59. `order_swing_ldm_selection_discovery_arm_attribution_breakout_confirm_entry_confidence_weighted_trailing_after_mfe_manufacture_of_par`
+### 58. `order_swing_ldm_selection_discovery_arm_attribution_breakout_confirm_entry_confidence_weighted_trailing_after_mfe_manufacture_of_par`
 
 - title: Swing LDM source field follow-up: breakout_confirm_entry|confidence_weighted|trailing_after_mfe|Manufacture of Parts and Accessories for Motor Vehicles(New Products)|-|DIAGNOSTIC
 - decision: `attach_existing_family`
@@ -2477,7 +2439,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 60. `order_swing_ldm_selection_discovery_arm_attribution_breakout_confirm_entry_confidence_weighted_trailing_after_mfe_other_financial_in`
+### 59. `order_swing_ldm_selection_discovery_arm_attribution_breakout_confirm_entry_confidence_weighted_trailing_after_mfe_other_financial_in`
 
 - title: Swing LDM source field follow-up: breakout_confirm_entry|confidence_weighted|trailing_after_mfe|Other Financial Intermediation|-|DIAGNOSTIC
 - decision: `attach_existing_family`
@@ -2515,7 +2477,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 61. `order_swing_ldm_selection_discovery_arm_attribution_breakout_confirm_entry_confidence_weighted_trailing_after_mfe_passenger_air_tran`
+### 60. `order_swing_ldm_selection_discovery_arm_attribution_breakout_confirm_entry_confidence_weighted_trailing_after_mfe_passenger_air_tran`
 
 - title: Swing LDM source field follow-up: breakout_confirm_entry|confidence_weighted|trailing_after_mfe|Passenger Air Transport|-|DIAGNOSTIC
 - decision: `attach_existing_family`
@@ -2553,7 +2515,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 62. `order_swing_ldm_selection_discovery_arm_attribution_breakout_confirm_entry_confidence_weighted_trailing_after_mfe_real_estate_activi`
+### 61. `order_swing_ldm_selection_discovery_arm_attribution_breakout_confirm_entry_confidence_weighted_trailing_after_mfe_real_estate_activi`
 
 - title: Swing LDM source field follow-up: breakout_confirm_entry|confidence_weighted|trailing_after_mfe|Real Estate Activities with Own or Leased Property|-|DIAGNOSTIC
 - decision: `attach_existing_family`
@@ -2591,7 +2553,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 63. `order_swing_ldm_selection_discovery_arm_attribution_breakout_confirm_entry_confidence_weighted_trailing_after_mfe_sea_and_coastal_wa`
+### 62. `order_swing_ldm_selection_discovery_arm_attribution_breakout_confirm_entry_confidence_weighted_trailing_after_mfe_sea_and_coastal_wa`
 
 - title: Swing LDM source field follow-up: breakout_confirm_entry|confidence_weighted|trailing_after_mfe|Sea and Coastal Water Transport|운송_해운|DIAGNOSTIC
 - decision: `attach_existing_family`
@@ -2629,7 +2591,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 64. `order_swing_ldm_selection_discovery_arm_attribution_breakout_confirm_entry_confidence_weighted_trailing_after_mfe_trust_and_collecti`
+### 63. `order_swing_ldm_selection_discovery_arm_attribution_breakout_confirm_entry_confidence_weighted_trailing_after_mfe_trust_and_collecti`
 
 - title: Swing LDM source field follow-up: breakout_confirm_entry|confidence_weighted|trailing_after_mfe|Trust and collective Investment Businesses|-|DIAGNOSTIC
 - decision: `attach_existing_family`
@@ -2667,7 +2629,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 65. `order_swing_ldm_selection_discovery_arm_attribution_breakout_confirm_entry_risk_capped_mae_stop_time_stop_banking_and_savings_instit`
+### 64. `order_swing_ldm_selection_discovery_arm_attribution_breakout_confirm_entry_risk_capped_mae_stop_time_stop_banking_and_savings_instit`
 
 - title: Swing LDM source field follow-up: breakout_confirm_entry|risk_capped|mae_stop_time_stop|Banking and Savings Institutions|은행|DIAGNOSTIC
 - decision: `attach_existing_family`
@@ -2705,7 +2667,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 66. `order_swing_ldm_selection_discovery_arm_attribution_breakout_confirm_entry_risk_capped_mae_stop_time_stop_manufacture_of_electronic_`
+### 65. `order_swing_ldm_selection_discovery_arm_attribution_breakout_confirm_entry_risk_capped_mae_stop_time_stop_manufacture_of_electronic_`
 
 - title: Swing LDM source field follow-up: breakout_confirm_entry|risk_capped|mae_stop_time_stop|Manufacture of Electronic Components|-|DIAGNOSTIC
 - decision: `attach_existing_family`
@@ -2743,7 +2705,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 67. `order_swing_ldm_selection_discovery_arm_attribution_breakout_confirm_entry_risk_capped_mae_stop_time_stop_other_financial_intermedia`
+### 66. `order_swing_ldm_selection_discovery_arm_attribution_breakout_confirm_entry_risk_capped_mae_stop_time_stop_other_financial_intermedia`
 
 - title: Swing LDM source field follow-up: breakout_confirm_entry|risk_capped|mae_stop_time_stop|Other Financial Intermediation|-|DIAGNOSTIC
 - decision: `attach_existing_family`
@@ -2781,7 +2743,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 68. `order_swing_ldm_selection_discovery_arm_attribution_breakout_confirm_entry_risk_capped_mae_stop_time_stop_real_estate_activities_wit`
+### 67. `order_swing_ldm_selection_discovery_arm_attribution_breakout_confirm_entry_risk_capped_mae_stop_time_stop_real_estate_activities_wit`
 
 - title: Swing LDM source field follow-up: breakout_confirm_entry|risk_capped|mae_stop_time_stop|Real Estate Activities with Own or Leased Property|-|DIAGNOSTIC
 - decision: `attach_existing_family`
@@ -2819,7 +2781,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 69. `order_swing_ldm_selection_discovery_arm_attribution_breakout_confirm_entry_risk_capped_mae_stop_time_stop_sea_and_coastal_water_tran`
+### 68. `order_swing_ldm_selection_discovery_arm_attribution_breakout_confirm_entry_risk_capped_mae_stop_time_stop_sea_and_coastal_water_tran`
 
 - title: Swing LDM source field follow-up: breakout_confirm_entry|risk_capped|mae_stop_time_stop|Sea and Coastal Water Transport|운송_해운|DIAGNOSTIC
 - decision: `attach_existing_family`
@@ -2857,7 +2819,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 70. `order_swing_ldm_selection_discovery_arm_attribution_pullback_limit_entry_risk_capped_mae_stop_time_stop_real_estate_activities_with_`
+### 69. `order_swing_ldm_selection_discovery_arm_attribution_pullback_limit_entry_risk_capped_mae_stop_time_stop_real_estate_activities_with_`
 
 - title: Swing LDM source field follow-up: pullback_limit_entry|risk_capped|mae_stop_time_stop|Real Estate Activities with Own or Leased Property|-|DIAGNOSTIC
 - decision: `attach_existing_family`
@@ -2895,7 +2857,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 71. `order_swing_lifecycle_bucket_discovery_swing_bucket_selection_discovery_arm_attribution_breakout_confirm_entry_confiden`
+### 70. `order_swing_lifecycle_bucket_discovery_swing_bucket_selection_discovery_arm_attribution_breakout_confirm_entry_confiden`
 
 - title: Swing lifecycle bucket discovery handoff follow-up: swing_bucket_selection_discovery_arm_attribution_breakout_confirm_entry_confidence_weighted_trailing_after_mfe_manuf_b99781db765f
 - decision: `attach_existing_family`
@@ -2933,7 +2895,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 72. `order_swing_lifecycle_bucket_discovery_swing_bucket_selection_discovery_arm_attribution_breakout_confirm_entry_risk_cap`
+### 71. `order_swing_lifecycle_bucket_discovery_swing_bucket_selection_discovery_arm_attribution_breakout_confirm_entry_risk_cap`
 
 - title: Swing lifecycle bucket discovery handoff follow-up: swing_bucket_selection_discovery_arm_attribution_breakout_confirm_entry_risk_capped_mae_stop_time_stop_manufacture_o_d1ec8c1ded70
 - decision: `attach_existing_family`
@@ -2971,7 +2933,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 73. `order_swing_lifecycle_bucket_discovery_swing_bucket_selection_discovery_arm_attribution_pullback_limit_entry_risk_cappe`
+### 72. `order_swing_lifecycle_bucket_discovery_swing_bucket_selection_discovery_arm_attribution_pullback_limit_entry_risk_cappe`
 
 - title: Swing lifecycle bucket discovery handoff follow-up: swing_bucket_selection_discovery_arm_attribution_pullback_limit_entry_risk_capped_mae_stop_time_stop_real_estate_act_6b163bac0453
 - decision: `attach_existing_family`
@@ -3009,7 +2971,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 74. `order_swing_lifecycle_bucket_discovery_swing_ldm_selection_discovery_arm_attribution_breakout_confirm_entry_confidence_`
+### 73. `order_swing_lifecycle_bucket_discovery_swing_ldm_selection_discovery_arm_attribution_breakout_confirm_entry_confidence_`
 
 - title: Swing lifecycle bucket discovery handoff follow-up: swing_ldm_selection_discovery_arm_attribution_breakout_confirm_entry_confidence_weighted_trailing_after_mfe_manufacture_of_bas
 - decision: `attach_existing_family`
@@ -3047,7 +3009,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 75. `order_swing_lifecycle_bucket_discovery_swing_ldm_selection_discovery_arm_attribution_breakout_confirm_entry_risk_capped`
+### 74. `order_swing_lifecycle_bucket_discovery_swing_ldm_selection_discovery_arm_attribution_breakout_confirm_entry_risk_capped`
 
 - title: Swing lifecycle bucket discovery handoff follow-up: swing_ldm_selection_discovery_arm_attribution_breakout_confirm_entry_risk_capped_mae_stop_time_stop_manufacture_of_electronic_
 - decision: `attach_existing_family`
@@ -3085,7 +3047,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 76. `order_swing_lifecycle_bucket_discovery_swing_ldm_selection_discovery_arm_attribution_pullback_limit_entry_risk_capped_m`
+### 75. `order_swing_lifecycle_bucket_discovery_swing_ldm_selection_discovery_arm_attribution_pullback_limit_entry_risk_capped_m`
 
 - title: Swing lifecycle bucket discovery handoff follow-up: swing_ldm_selection_discovery_arm_attribution_pullback_limit_entry_risk_capped_mae_stop_time_stop_real_estate_activities_with_
 - decision: `attach_existing_family`
@@ -3123,7 +3085,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 77. `order_lifecycle_quiet_gap_parent_conflict_rollup`
+### 76. `order_lifecycle_quiet_gap_parent_conflict_rollup`
 
 - title: Lifecycle quiet gap parent conflict/exclusion review
 - decision: `attach_existing_family`
@@ -3161,7 +3123,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 78. `order_lifecycle_quiet_gap_positive_source_only_rollup`
+### 77. `order_lifecycle_quiet_gap_positive_source_only_rollup`
 
 - title: Lifecycle quiet gap positive source-only review
 - decision: `attach_existing_family`
@@ -3199,7 +3161,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 79. `order_lifecycle_source_dimension_gap_rollup`
+### 78. `order_lifecycle_source_dimension_gap_rollup`
 
 - title: None
 - decision: `attach_existing_family`
@@ -3237,7 +3199,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 80. `order_lifecycle_overnight_bucket_confidence_band_confidence_070p`
+### 79. `order_lifecycle_overnight_bucket_confidence_band_confidence_070p`
 
 - title: LDM overnight bucket attribution follow-up: confidence_band=confidence_070p
 - decision: `attach_existing_family`
@@ -3275,7 +3237,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 81. `order_lifecycle_overnight_bucket_held_bucket_held_600_1800s_plus`
+### 80. `order_lifecycle_overnight_bucket_held_bucket_held_600_1800s_plus`
 
 - title: LDM overnight bucket attribution follow-up: held_bucket=held_600_1800s_plus
 - decision: `attach_existing_family`
@@ -3313,7 +3275,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 82. `order_lifecycle_overnight_bucket_overnight_action_sell_today`
+### 81. `order_lifecycle_overnight_bucket_overnight_action_sell_today`
 
 - title: LDM overnight bucket attribution follow-up: overnight_action=SELL_TODAY
 - decision: `attach_existing_family`
@@ -3351,7 +3313,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 83. `order_lifecycle_overnight_bucket_overnight_status_sell_today`
+### 82. `order_lifecycle_overnight_bucket_overnight_status_sell_today`
 
 - title: LDM overnight bucket attribution follow-up: overnight_status=SELL_TODAY
 - decision: `attach_existing_family`
@@ -3389,7 +3351,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 84. `order_lifecycle_overnight_bucket_peak_profit_band_peak_lt_zero`
+### 83. `order_lifecycle_overnight_bucket_peak_profit_band_peak_lt_zero`
 
 - title: LDM overnight bucket attribution follow-up: peak_profit_band=peak_lt_zero
 - decision: `attach_existing_family`
@@ -3427,7 +3389,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 85. `order_lifecycle_overnight_bucket_price_source_holding_price_samples_last`
+### 84. `order_lifecycle_overnight_bucket_price_source_holding_price_samples_last`
 
 - title: LDM overnight bucket attribution follow-up: price_source=holding_price_samples_last
 - decision: `attach_existing_family`
@@ -3465,7 +3427,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 86. `order_lifecycle_overnight_bucket_source_quality_gate_overnight_decision_coverage`
+### 85. `order_lifecycle_overnight_bucket_source_quality_gate_overnight_decision_coverage`
 
 - title: LDM overnight bucket attribution follow-up: source_quality_gate=overnight_decision_coverage
 - decision: `attach_existing_family`
@@ -3503,7 +3465,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 87. `order_lifecycle_overnight_bucket_source_stage_scalp_sim_overnight_sell_today`
+### 86. `order_lifecycle_overnight_bucket_source_stage_scalp_sim_overnight_sell_today`
 
 - title: LDM overnight bucket attribution follow-up: source_stage=scalp_sim_overnight_sell_today
 - decision: `attach_existing_family`
@@ -3541,7 +3503,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 88. `order_lifecycle_overnight_bucket_stage_exit`
+### 87. `order_lifecycle_overnight_bucket_stage_exit`
 
 - title: LDM overnight bucket attribution follow-up: stage=exit
 - decision: `attach_existing_family`
@@ -3579,7 +3541,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 89. `order_lifecycle_entry_bucket_chosen_action_wait_requote`
+### 88. `order_lifecycle_entry_bucket_chosen_action_wait_requote`
 
 - title: LDM entry bucket attribution follow-up: chosen_action=WAIT_REQUOTE
 - decision: `attach_existing_family`
@@ -3617,7 +3579,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 90. `order_lifecycle_entry_bucket_combo_entry_spot_score_score_60_62_source_scalp_entry_action_decision_snapshot_stale_fresh_liquid`
+### 89. `order_lifecycle_entry_bucket_combo_entry_spot_score_score_60_62_source_scalp_entry_action_decision_snapshot_stale_fresh_liquid`
 
 - title: LDM entry bucket attribution follow-up: combo_entry_spot=score=score_60_62|source=scalp_entry_action_decision_snapshot|stale=fresh|liquidity=liquidity_high|overbought=overbought_normal|time=time_0900_1000
 - decision: `attach_existing_family`
@@ -3655,7 +3617,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 91. `order_lifecycle_entry_bucket_combo_entry_spot_score_score_63_65_source_wait6579_ev_cohort_stale_fresh_or_unflagged_liquidity_l`
+### 90. `order_lifecycle_entry_bucket_combo_entry_spot_score_score_63_65_source_wait6579_ev_cohort_stale_fresh_or_unflagged_liquidity_l`
 
 - title: LDM entry bucket attribution follow-up: combo_entry_spot=score=score_63_65|source=wait6579_ev_cohort|stale=fresh_or_unflagged|liquidity=liquidity_high|overbought=overbought_normal|time=time_1000_1200
 - decision: `attach_existing_family`
@@ -3693,7 +3655,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 92. `order_lifecycle_entry_bucket_combo_entry_spot_score_score_66_69_source_wait6579_ev_cohort_stale_fresh_or_unflagged_liquidity_l`
+### 91. `order_lifecycle_entry_bucket_combo_entry_spot_score_score_66_69_source_wait6579_ev_cohort_stale_fresh_or_unflagged_liquidity_l`
 
 - title: LDM entry bucket attribution follow-up: combo_entry_spot=score=score_66_69|source=wait6579_ev_cohort|stale=fresh_or_unflagged|liquidity=liquidity_high|overbought=overbought_normal|time=time_1000_1200
 - decision: `attach_existing_family`
@@ -3731,7 +3693,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 93. `order_lifecycle_entry_bucket_combo_entry_spot_score_score_70p_source_wait6579_ev_cohort_stale_fresh_or_unflagged_liquidity_liq`
+### 92. `order_lifecycle_entry_bucket_combo_entry_spot_score_score_70p_source_wait6579_ev_cohort_stale_fresh_or_unflagged_liquidity_liq`
 
 - title: LDM entry bucket attribution follow-up: combo_entry_spot=score=score_70p|source=wait6579_ev_cohort|stale=fresh_or_unflagged|liquidity=liquidity_high|overbought=overbought_normal|time=time_1000_1200
 - decision: `attach_existing_family`
@@ -3769,7 +3731,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 94. `order_lifecycle_entry_bucket_liquidity_bucket_liquidity_high`
+### 93. `order_lifecycle_entry_bucket_liquidity_bucket_liquidity_high`
 
 - title: LDM entry bucket attribution follow-up: liquidity_bucket=liquidity_high
 - decision: `attach_existing_family`
@@ -3807,7 +3769,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 95. `order_lifecycle_entry_bucket_overbought_bucket_overbought_normal`
+### 94. `order_lifecycle_entry_bucket_overbought_bucket_overbought_normal`
 
 - title: LDM entry bucket attribution follow-up: overbought_bucket=overbought_normal
 - decision: `attach_existing_family`
@@ -3845,7 +3807,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 96. `order_lifecycle_entry_bucket_score_band_score_66_69`
+### 95. `order_lifecycle_entry_bucket_score_band_score_66_69`
 
 - title: LDM entry bucket attribution follow-up: score_band=score_66_69
 - decision: `attach_existing_family`
@@ -3883,7 +3845,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 97. `order_lifecycle_entry_bucket_score_band_score_70p`
+### 96. `order_lifecycle_entry_bucket_score_band_score_70p`
 
 - title: LDM entry bucket attribution follow-up: score_band=score_70p
 - decision: `attach_existing_family`
@@ -3921,7 +3883,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 98. `order_conversion_lane_key_lineage_active_arm_0c383886ae3c8de3`
+### 97. `order_conversion_lane_key_lineage_active_arm_0c383886ae3c8de3`
 
 - title: Conversion lane blocker follow-up: key_lineage active_arm_0c383886ae3c8de3
 - decision: `attach_existing_family`
@@ -3959,7 +3921,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 99. `order_conversion_lane_key_lineage_active_arm_78c1ca03d11c256b`
+### 98. `order_conversion_lane_key_lineage_active_arm_78c1ca03d11c256b`
 
 - title: Conversion lane blocker follow-up: key_lineage active_arm_78c1ca03d11c256b
 - decision: `attach_existing_family`
@@ -3997,7 +3959,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 100. `order_conversion_lane_key_lineage_active_arm_7bc3260124b31b77`
+### 99. `order_conversion_lane_key_lineage_active_arm_7bc3260124b31b77`
 
 - title: Conversion lane blocker follow-up: key_lineage active_arm_7bc3260124b31b77
 - decision: `attach_existing_family`
@@ -4035,7 +3997,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 101. `order_conversion_lane_key_lineage_active_arm_d09163dbcf8e6037`
+### 100. `order_conversion_lane_key_lineage_active_arm_d09163dbcf8e6037`
 
 - title: Conversion lane blocker follow-up: key_lineage active_arm_d09163dbcf8e6037
 - decision: `attach_existing_family`
@@ -4073,7 +4035,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 102. `order_conversion_lane_key_lineage_active_arm_da294c8705564eaf`
+### 101. `order_conversion_lane_key_lineage_active_arm_da294c8705564eaf`
 
 - title: Conversion lane blocker follow-up: key_lineage active_arm_da294c8705564eaf
 - decision: `attach_existing_family`
@@ -4111,7 +4073,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 103. `order_conversion_lane_key_lineage_active_seed_0629ba2d0f4dd524`
+### 102. `order_conversion_lane_key_lineage_active_seed_0629ba2d0f4dd524`
 
 - title: Conversion lane blocker follow-up: key_lineage active_seed_0629ba2d0f4dd524
 - decision: `attach_existing_family`
@@ -4149,7 +4111,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 104. `order_conversion_lane_key_lineage_active_seed_06fce89fd3a136e6`
+### 103. `order_conversion_lane_key_lineage_active_seed_06fce89fd3a136e6`
 
 - title: Conversion lane blocker follow-up: key_lineage active_seed_06fce89fd3a136e6
 - decision: `attach_existing_family`
@@ -4187,7 +4149,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 105. `order_conversion_lane_key_lineage_active_seed_07677c2e78c144df`
+### 104. `order_conversion_lane_key_lineage_active_seed_07677c2e78c144df`
 
 - title: Conversion lane blocker follow-up: key_lineage active_seed_07677c2e78c144df
 - decision: `attach_existing_family`
@@ -4225,7 +4187,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 106. `order_conversion_lane_key_lineage_active_seed_0a9736d86332c717`
+### 105. `order_conversion_lane_key_lineage_active_seed_0a9736d86332c717`
 
 - title: Conversion lane blocker follow-up: key_lineage active_seed_0a9736d86332c717
 - decision: `attach_existing_family`
@@ -4263,7 +4225,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 107. `order_conversion_lane_key_lineage_active_seed_0cae3a2115d07d28`
+### 106. `order_conversion_lane_key_lineage_active_seed_0cae3a2115d07d28`
 
 - title: Conversion lane blocker follow-up: key_lineage active_seed_0cae3a2115d07d28
 - decision: `attach_existing_family`
@@ -4301,7 +4263,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 108. `order_conversion_lane_key_lineage_active_seed_102cfe8a5ee6ec9b`
+### 107. `order_conversion_lane_key_lineage_active_seed_102cfe8a5ee6ec9b`
 
 - title: Conversion lane blocker follow-up: key_lineage active_seed_102cfe8a5ee6ec9b
 - decision: `attach_existing_family`
@@ -4339,7 +4301,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 109. `order_conversion_lane_key_lineage_active_seed_1096e7d8ada1ee8a`
+### 108. `order_conversion_lane_key_lineage_active_seed_1096e7d8ada1ee8a`
 
 - title: Conversion lane blocker follow-up: key_lineage active_seed_1096e7d8ada1ee8a
 - decision: `attach_existing_family`
@@ -4377,7 +4339,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 110. `order_conversion_lane_key_lineage_active_seed_109a6ab7807c9624`
+### 109. `order_conversion_lane_key_lineage_active_seed_109a6ab7807c9624`
 
 - title: Conversion lane blocker follow-up: key_lineage active_seed_109a6ab7807c9624
 - decision: `attach_existing_family`
@@ -4415,7 +4377,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 111. `order_conversion_lane_key_lineage_active_seed_117652d76d63ff34`
+### 110. `order_conversion_lane_key_lineage_active_seed_117652d76d63ff34`
 
 - title: Conversion lane blocker follow-up: key_lineage active_seed_117652d76d63ff34
 - decision: `attach_existing_family`
@@ -4453,7 +4415,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 112. `order_conversion_lane_key_lineage_active_seed_120deebc97eec625`
+### 111. `order_conversion_lane_key_lineage_active_seed_120deebc97eec625`
 
 - title: Conversion lane blocker follow-up: key_lineage active_seed_120deebc97eec625
 - decision: `attach_existing_family`
@@ -4491,7 +4453,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 113. `order_conversion_lane_key_lineage_active_seed_1307cd5fa2e96df9`
+### 112. `order_conversion_lane_key_lineage_active_seed_1307cd5fa2e96df9`
 
 - title: Conversion lane blocker follow-up: key_lineage active_seed_1307cd5fa2e96df9
 - decision: `attach_existing_family`
@@ -4529,7 +4491,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 114. `order_conversion_lane_key_lineage_active_seed_1c230a4bff6aa0e4`
+### 113. `order_conversion_lane_key_lineage_active_seed_1c230a4bff6aa0e4`
 
 - title: Conversion lane blocker follow-up: key_lineage active_seed_1c230a4bff6aa0e4
 - decision: `attach_existing_family`
@@ -4567,7 +4529,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 115. `order_conversion_lane_key_lineage_active_seed_1c60438d887840e3`
+### 114. `order_conversion_lane_key_lineage_active_seed_1c60438d887840e3`
 
 - title: Conversion lane blocker follow-up: key_lineage active_seed_1c60438d887840e3
 - decision: `attach_existing_family`
@@ -4605,7 +4567,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 116. `order_conversion_lane_key_lineage_active_seed_1fc6245cf630af1c`
+### 115. `order_conversion_lane_key_lineage_active_seed_1fc6245cf630af1c`
 
 - title: Conversion lane blocker follow-up: key_lineage active_seed_1fc6245cf630af1c
 - decision: `attach_existing_family`
@@ -4643,7 +4605,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 117. `order_conversion_lane_key_lineage_active_seed_24a139dfb60cb311`
+### 116. `order_conversion_lane_key_lineage_active_seed_24a139dfb60cb311`
 
 - title: Conversion lane blocker follow-up: key_lineage active_seed_24a139dfb60cb311
 - decision: `attach_existing_family`
@@ -4797,7 +4759,21 @@ Stage hook candidate:
 - files_likely_touched: `src/engine/swing_lifecycle_audit.py`, `src/engine/ai_prompt_contracts.py`, `src/engine/ai_engine_openai.py`
 - acceptance_tests: `pytest swing lifecycle audit tests`
 
-### N9. `order_swing_scale_in_contract_gap_review`
+### N9. `order_swing_ofi_qi_stale_or_missing_context`
+
+- title: swing OFI/QI stale or missing context
+- decision: `attach_existing_family`
+- decision_reason: instrumentation/report/provenance implementation status is implemented; keep the order as existing-family source evidence instead of re-implementing
+- source_report_type: `swing_improvement_automation`
+- lifecycle_stage: `entry`
+- target_subsystem: `swing_orderbook_micro_context`
+- runtime_effect: `False`
+- allowed_runtime_apply: `False`
+- implementation_status: `implemented`
+- files_likely_touched: `src/engine/sniper_state_handlers.py`, `src/engine/orderbook_stability.py`, `src/engine/swing_lifecycle_audit.py`
+- acceptance_tests: `pytest orderbook stability tests`, `pytest swing lifecycle audit tests`
+
+### N10. `order_swing_scale_in_contract_gap_review`
 
 - title: swing scale-in contract gap review
 - decision: `attach_existing_family`
@@ -4811,7 +4787,7 @@ Stage hook candidate:
 - files_likely_touched: `src/engine/swing_lifecycle_audit.py`, `src/engine/sniper_scale_in.py`
 - acceptance_tests: `pytest swing lifecycle audit tests`
 
-### N10. `order_perf_swing_simulation_iteration`
+### N11. `order_perf_swing_simulation_iteration`
 
 - title: Swing simulation iteration and quote grouping
 - decision: `attach_existing_family`
@@ -4825,7 +4801,7 @@ Stage hook candidate:
 - files_likely_touched: `src/engine/swing_daily_simulation_report.py`
 - acceptance_tests: `pytest src/tests/test_swing_model_selection_funnel_repair.py`, `swing simulation JSON parity on injected sources`
 
-### N11. `order_swing_discovery_label_contract_gap_review`
+### N12. `order_swing_discovery_label_contract_gap_review`
 
 - title: swing discovery label contract gap review
 - decision: `attach_existing_family`
@@ -4839,7 +4815,7 @@ Stage hook candidate:
 - files_likely_touched: `src/engine/swing_strategy_discovery_label_builder.py`, `src/engine/swing_strategy_discovery_ev_report.py`
 - acceptance_tests: `pytest swing lifecycle audit tests`
 
-### N12. `order_swing_scale_in_ofi_qi_bearish_risk_review`
+### N13. `order_swing_scale_in_ofi_qi_bearish_risk_review`
 
 - title: swing scale-in OFI/QI bearish risk review
 - decision: `attach_existing_family`
@@ -4853,7 +4829,7 @@ Stage hook candidate:
 - files_likely_touched: `src/engine/sniper_state_handlers.py`, `src/engine/swing_lifecycle_audit.py`
 - acceptance_tests: `pytest sniper scale-in tests`, `pytest swing lifecycle audit tests`
 
-### N13. `order_panic_sell_defense_lifecycle_transition_pack`
+### N14. `order_panic_sell_defense_lifecycle_transition_pack`
 
 - title: panic sell defense lifecycle transition pack
 - decision: `attach_existing_family`
@@ -4867,7 +4843,7 @@ Stage hook candidate:
 - files_likely_touched: `src/engine/panic_sell_defense_report.py`, `src/engine/daily_threshold_cycle_report.py`, `src/engine/runtime_approval_summary.py`, `docs/plan-korStockScanPerformanceOptimization.rebase.md`
 - acceptance_tests: `pytest panic sell defense/report lifecycle tests`, `pytest src/tests/test_build_code_improvement_workorder.py src/tests/test_runtime_approval_summary.py`
 
-### N14. `order_perf_monitor_snapshot_stream_tail`
+### N15. `order_perf_monitor_snapshot_stream_tail`
 
 - title: Monitor snapshot runtime streaming tail read
 - decision: `attach_existing_family`
@@ -4881,7 +4857,7 @@ Stage hook candidate:
 - files_likely_touched: `src/engine/monitor_snapshot_runtime.py`
 - acceptance_tests: `pytest src/tests/test_log_archive_service.py`, `last valid JSON line parity`
 
-### N15. `order_swing_exit_ofi_qi_smoothing_distribution`
+### N16. `order_swing_exit_ofi_qi_smoothing_distribution`
 
 - title: swing exit OFI/QI smoothing distribution
 - decision: `attach_existing_family`
@@ -4895,7 +4871,7 @@ Stage hook candidate:
 - files_likely_touched: `src/engine/sniper_state_handlers.py`, `src/engine/swing_lifecycle_audit.py`
 - acceptance_tests: `pytest OFI smoothing tests`, `pytest swing lifecycle audit tests`
 
-### N16. `order_swing_strategy_discovery_source_quality_followup`
+### N17. `order_swing_strategy_discovery_source_quality_followup`
 
 - title: swing strategy discovery label/source quality follow-up
 - decision: `attach_existing_family`
@@ -4909,7 +4885,7 @@ Stage hook candidate:
 - files_likely_touched: `src/engine/swing_strategy_discovery_label_builder.py`, `src/engine/swing_strategy_discovery_ev_report.py`, `src/engine/swing_sector_theme_source.py`
 - acceptance_tests: `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_swing_strategy_discovery_label_builder.py src/tests/test_swing_strategy_discovery_ev_report.py src/tests/test_swing_sector_theme_source.py`
 
-### N17. `order_panic_buying_source_quality_market_breadth_micro_coverage`
+### N18. `order_panic_buying_source_quality_market_breadth_micro_coverage`
 
 - title: panic buying source-quality market breadth and micro coverage
 - decision: `attach_existing_family`
@@ -4923,7 +4899,7 @@ Stage hook candidate:
 - files_likely_touched: `src/engine/panic_buying_report.py`, `src/engine/daily_threshold_cycle_report.py`, `src/engine/runtime_approval_summary.py`, `docs/plan-korStockScanPerformanceOptimization.rebase.md`, `docs/code-improvement-workorders/panic_buying_regime_mode_v2_2026-05-14.md`
 - acceptance_tests: `pytest src/tests/test_panic_buying_report.py`, `pytest src/tests/test_build_code_improvement_workorder.py src/tests/test_runtime_approval_summary.py`
 
-### N18. `order_perf_final_ensemble_records`
+### N19. `order_perf_final_ensemble_records`
 
 - title: Final ensemble scanner records conversion without iterrows
 - decision: `attach_existing_family`
@@ -4937,7 +4913,7 @@ Stage hook candidate:
 - files_likely_touched: `src/scanners/final_ensemble_scanner.py`
 - acceptance_tests: `pytest src/tests/test_swing_model_selection_funnel_repair.py`, `V2 CSV pick list parity`
 
-### N19. `order_swing_strategy_discovery_avoid_bucket_review`
+### N20. `order_swing_strategy_discovery_avoid_bucket_review`
 
 - title: swing strategy discovery avoid bucket report enrichment
 - decision: `attach_existing_family`
@@ -4951,7 +4927,7 @@ Stage hook candidate:
 - files_likely_touched: `src/engine/swing_strategy_discovery_ev_report.py`, `docs/swing-strategy-discovery-sim-v1.md`
 - acceptance_tests: `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_swing_strategy_discovery_ev_report.py src/tests/test_build_code_improvement_workorder.py`
 
-### N20. `order_swing_pattern_lab_deepseek_entry_no_submissions`
+### N21. `order_swing_pattern_lab_deepseek_entry_no_submissions`
 
 - title: All selected candidates failed to reach order submission
 - decision: `design_family_candidate`
@@ -4965,7 +4941,7 @@ Stage hook candidate:
 - files_likely_touched: `src/engine/swing_lifecycle_audit.py`, `src/engine/swing_selection_funnel_report.py`, `src/model/common_v2.py`
 - acceptance_tests: `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_swing_model_selection_funnel_repair.py`, `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_deepseek_swing_pattern_lab.py`
 
-### N21. `order_no_acute_observability_alert`
+### N22. `order_no_acute_observability_alert`
 
 - title: No acute observability alert
 - decision: `design_family_candidate`
@@ -4979,7 +4955,7 @@ Stage hook candidate:
 - files_likely_touched: `src/engine/daily_threshold_cycle_report.py`
 - acceptance_tests: `pytest relevant report/threshold tests`, `runtime_effect remains false until a separate implementation order is completed`, `daily EV report includes the order summary`
 
-### N22. `order_liquidity_gate_miss_ev_recovery`
+### N23. `order_liquidity_gate_miss_ev_recovery`
 
 - title: liquidity gate miss EV recovery
 - decision: `design_family_candidate`
@@ -4993,7 +4969,7 @@ Stage hook candidate:
 - files_likely_touched: `src/engine/daily_threshold_cycle_report.py`, `src/engine/sniper_state_handlers.py`
 - acceptance_tests: `pytest relevant report/threshold tests`, `runtime_effect remains false until a separate implementation order is completed`, `daily EV report includes the order summary`
 
-### N23. `order_swing_ai_contract_structured_output_eval`
+### N24. `order_swing_ai_contract_structured_output_eval`
 
 - title: swing AI contract structured output eval
 - decision: `design_family_candidate`
@@ -5007,7 +4983,7 @@ Stage hook candidate:
 - files_likely_touched: `src/engine/ai_prompt_contracts.py`, `src/engine/ai_engine_openai.py`, `src/engine/ai_response_contracts.py`
 - acceptance_tests: `pytest OpenAI transport/schema tests`, `pytest swing lifecycle audit tests`
 
-### N24. `order_overbought_gate_miss_ev_recovery`
+### N25. `order_overbought_gate_miss_ev_recovery`
 
 - title: overbought gate miss EV recovery
 - decision: `design_family_candidate`
@@ -5021,7 +4997,7 @@ Stage hook candidate:
 - files_likely_touched: `src/engine/daily_threshold_cycle_report.py`, `src/engine/sniper_state_handlers.py`
 - acceptance_tests: `pytest relevant report/threshold tests`, `runtime_effect remains false until a separate implementation order is completed`, `daily EV report includes the order summary`
 
-### N25. `order_ai_threshold_miss_ev_recovery`
+### N26. `order_ai_threshold_miss_ev_recovery`
 
 - title: AI threshold miss EV recovery
 - decision: `defer_evidence`
@@ -5035,7 +5011,7 @@ Stage hook candidate:
 - files_likely_touched: `src/engine/daily_threshold_cycle_report.py`, `src/engine/sniper_missed_entry_counterfactual.py`
 - acceptance_tests: `pytest relevant report/threshold tests`, `runtime_effect remains false until a separate implementation order is completed`, `daily EV report includes the order summary`
 
-### N26. `order_swing_pattern_lab_deepseek_ofi_qi_smoothing_review`
+### N27. `order_swing_pattern_lab_deepseek_ofi_qi_smoothing_review`
 
 - title: OFI/QI exit smoothing action distribution
 - decision: `defer_evidence`
@@ -5049,7 +5025,7 @@ Stage hook candidate:
 - files_likely_touched: `src/engine/swing_lifecycle_audit.py`, `src/engine/swing_selection_funnel_report.py`, `src/model/common_v2.py`
 - acceptance_tests: `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_swing_model_selection_funnel_repair.py`, `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_deepseek_swing_pattern_lab.py`
 
-### N27. `order_partial_only_표류_전용_timeout_report_only`
+### N28. `order_partial_only_표류_전용_timeout_report_only`
 
 - title: partial-only 표류 전용 timeout report-only
 - decision: `defer_evidence`
@@ -5063,7 +5039,7 @@ Stage hook candidate:
 - files_likely_touched: `src/engine/daily_threshold_cycle_report.py`, `src/engine/sniper_state_handlers.py`
 - acceptance_tests: `pytest relevant report/threshold tests`, `runtime_effect remains false until a separate implementation order is completed`, `daily EV report includes the order summary`
 
-### N28. `order_split_entry_rebase_수량_정합성_report_only_감사`
+### N29. `order_split_entry_rebase_수량_정합성_report_only_감사`
 
 - title: split-entry rebase 수량 정합성 report-only 감사
 - decision: `defer_evidence`
@@ -5077,7 +5053,7 @@ Stage hook candidate:
 - files_likely_touched: `src/engine/daily_threshold_cycle_report.py`, `src/engine/sniper_state_handlers.py`
 - acceptance_tests: `pytest relevant report/threshold tests`, `runtime_effect remains false until a separate implementation order is completed`, `daily EV report includes the order summary`
 
-### N29. `order_동일_종목_split_entry_soft_stop_재진입_cooldown_report_only`
+### N30. `order_동일_종목_split_entry_soft_stop_재진입_cooldown_report_only`
 
 - title: 동일 종목 split-entry soft-stop 재진입 cooldown report-only
 - decision: `defer_evidence`
@@ -5091,7 +5067,7 @@ Stage hook candidate:
 - files_likely_touched: `src/engine/daily_threshold_cycle_report.py`, `src/engine/sniper_state_handlers.py`
 - acceptance_tests: `pytest relevant report/threshold tests`, `runtime_effect remains false until a separate implementation order is completed`, `daily EV report includes the order summary`
 
-### N30. `order_perf_kiwoom_orders_http_session_review`
+### N31. `order_perf_kiwoom_orders_http_session_review`
 
 - title: Kiwoom orders HTTP session reuse manual review
 - decision: `defer_evidence`
@@ -5105,7 +5081,7 @@ Stage hook candidate:
 - files_likely_touched: `src/engine/kiwoom_orders.py`
 - acceptance_tests: `pytest src/tests/test_kiwoom_orders.py src/tests/test_sniper_scale_in.py`
 
-### N31. `order_perf_config_cache_scope_review`
+### N32. `order_perf_config_cache_scope_review`
 
 - title: Config cache scope review
 - decision: `defer_evidence`
@@ -5119,7 +5095,7 @@ Stage hook candidate:
 - files_likely_touched: `src/utils/constants.py`, `src/utils/kiwoom_utils.py`
 - acceptance_tests: `pytest config/import smoke tests`
 
-### N32. `order_perf_dashboard_db_pool_review`
+### N33. `order_perf_dashboard_db_pool_review`
 
 - title: Legacy dashboard DB connection pool review
 - decision: `defer_evidence`
@@ -5133,7 +5109,7 @@ Stage hook candidate:
 - files_likely_touched: `src/engine/dashboard_data_repository.py`
 - acceptance_tests: `pytest src/tests/test_dashboard_data_repository.py`
 
-### N33. `order_partial_fallback_확대_직후_즉시_재평가_report_only`
+### N34. `order_partial_fallback_확대_직후_즉시_재평가_report_only`
 
 - title: partial → fallback 확대 직후 즉시 재평가 report-only
 - decision: `reject`
@@ -5147,7 +5123,7 @@ Stage hook candidate:
 - files_likely_touched: `src/engine/daily_threshold_cycle_report.py`, `src/engine/sniper_state_handlers.py`
 - acceptance_tests: `pytest relevant report/threshold tests`, `runtime_effect remains false until a separate implementation order is completed`, `daily EV report includes the order summary`
 
-### N34. `order_perf_kiwoom_ws_tick_parse_fastpath`
+### N35. `order_perf_kiwoom_ws_tick_parse_fastpath`
 
 - title: Kiwoom websocket tick parsing fast path
 - decision: `reject`
@@ -5161,7 +5137,7 @@ Stage hook candidate:
 - files_likely_touched: `src/engine/kiwoom_websocket.py`
 - acceptance_tests: `pytest websocket parsing/data-quality tests`
 
-### N35. `order_perf_raw_event_suppression_out_of_scope`
+### N36. `order_perf_raw_event_suppression_out_of_scope`
 
 - title: Raw pipeline event suppression out of scope
 - decision: `reject`

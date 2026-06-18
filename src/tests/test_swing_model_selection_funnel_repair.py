@@ -258,10 +258,51 @@ def test_swing_funnel_report_separates_raw_and_unique_event_counts():
     }
     assert summary["ofi_qi_summary"]["stale_missing_group_counts"] == {"exit": 1}
     assert summary["ofi_qi_summary"]["stale_missing_group_unique_record_counts"] == {"exit": 1}
+    assert summary["ofi_qi_summary"]["stale_missing_reason_counts_by_group"] == {
+        "exit": {
+            "micro_missing": 1,
+            "observer_unhealthy": 1,
+            "micro_not_ready": 1,
+            "state_insufficient": 1,
+        }
+    }
+    assert summary["ofi_qi_summary"]["stale_missing_reason_unique_record_counts_by_group"] == {
+        "exit": {
+            "micro_missing": 1,
+            "observer_unhealthy": 1,
+            "micro_not_ready": 1,
+            "state_insufficient": 1,
+        }
+    }
     assert summary["ofi_qi_summary"]["observer_unhealthy_overlap"] == {
         "observer_unhealthy_total": 1,
         "observer_unhealthy_with_other_reason": 1,
         "observer_unhealthy_only": 0,
+    }
+    assert summary["ofi_qi_summary"]["orderbook_micro_reason_counts_by_group"] == {
+        "entry": {"UNKNOWN": 1},
+        "scale_in": {"UNKNOWN": 1},
+        "exit": {"UNKNOWN": 1},
+    }
+    assert summary["ofi_qi_summary"]["observer_missing_reason_counts_by_group"] == {
+        "entry": {"UNKNOWN": 1},
+        "scale_in": {"UNKNOWN": 1},
+        "exit": {"UNKNOWN": 1},
+    }
+    assert summary["ofi_qi_summary"]["source_quality_status_counts_by_group"] == {
+        "entry": {"UNKNOWN": 1},
+        "scale_in": {"UNKNOWN": 1},
+        "exit": {"UNKNOWN": 1},
+    }
+    assert summary["ofi_qi_summary"]["ws_quote_source_counts_by_group"] == {
+        "entry": {"UNKNOWN": 1},
+        "scale_in": {"UNKNOWN": 1},
+        "exit": {"UNKNOWN": 1},
+    }
+    assert summary["ofi_qi_summary"]["ws_quote_stale_counts_by_group"] == {
+        "entry": {"UNKNOWN": 1},
+        "scale_in": {"UNKNOWN": 1},
+        "exit": {"UNKNOWN": 1},
     }
     assert summary["ofi_qi_summary"]["stale_missing_examples"][0]["record_id"] == "4"
 

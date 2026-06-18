@@ -67,9 +67,16 @@
 - stale_missing_reason_counts: `{'micro_missing': 12670, 'micro_not_ready': 12312, 'state_insufficient': 12312, 'observer_unhealthy': 4}`
 - stale_missing_reason_combination_counts: `{'micro_missing+micro_not_ready+state_insufficient': 12308, 'micro_missing': 358, 'micro_missing+observer_unhealthy+micro_not_ready+state_insufficient': 4}`
 - stale_missing_reason_combination_unique_record_counts: `{'micro_missing+micro_not_ready+state_insufficient': 13, 'micro_missing+observer_unhealthy+micro_not_ready+state_insufficient': 1}`
+- stale_missing_reason_counts_by_group: `{'entry': {'micro_missing': 12294, 'micro_not_ready': 12294, 'state_insufficient': 12294, 'observer_unhealthy': 4}, 'exit': {'micro_missing': 369, 'micro_not_ready': 11, 'state_insufficient': 11}, 'scale_in': {'micro_missing': 7, 'micro_not_ready': 7, 'state_insufficient': 7}}`
+- stale_missing_reason_unique_record_counts_by_group: `{'entry': {'micro_missing': 13, 'micro_not_ready': 13, 'state_insufficient': 13, 'observer_unhealthy': 1}, 'scale_in': {'micro_missing': 1, 'micro_not_ready': 1, 'state_insufficient': 1}}`
 - stale_missing_group_counts: `{'entry': 12294, 'exit': 369, 'scale_in': 7}`
 - stale_missing_group_unique_record_counts: `{'entry': 13, 'scale_in': 1}`
 - observer_unhealthy_overlap: `{'observer_unhealthy_total': 4, 'observer_unhealthy_with_other_reason': 4, 'observer_unhealthy_only': 0}`
+- orderbook_micro_reason_counts_by_group: `{'entry': {'ready': 77278, 'insufficient_samples': 12290, 'missing_best_qty': 4}, 'exit': {'ready': 364, 'insufficient_samples': 11}, 'scale_in': {'ready': 69, 'insufficient_samples': 7}}`
+- observer_missing_reason_counts_by_group: `{'entry': {'ok': 89568, 'missing_quote_and_trade': 4}, 'exit': {'ok': 375}, 'scale_in': {'ok': 76}}`
+- source_quality_status_counts_by_group: `{'entry': {'ok': 77278, 'source_quality_blocker': 12294}, 'exit': {'UNKNOWN': 369, 'ok': 6}, 'scale_in': {'ok': 69, 'source_quality_blocker': 7}}`
+- ws_quote_source_counts_by_group: `{'entry': {'missing': 89572}, 'exit': {'UNKNOWN': 369, 'missing': 6}, 'scale_in': {'last_ws_update_ts': 76}}`
+- ws_quote_stale_counts_by_group: `{'entry': {'not_available_no_quote_age': 89572}, 'exit': {'UNKNOWN': 369, 'not_available_no_quote_age': 6}, 'scale_in': {'True': 30, 'False': 46}}`
 - entry_micro_state_counts: `{'neutral': 72604, 'bullish': 2645, 'insufficient': 12294, 'bearish': 2029}`
 - scale_in_micro_state_counts: `{'neutral': 63, 'bearish': 5, 'insufficient': 7, 'bullish': 1}`
 - exit_micro_state_counts: `{'neutral': 342, 'bearish': 13, 'insufficient': 11, 'bullish': 9}`

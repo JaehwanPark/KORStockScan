@@ -158,20 +158,47 @@ def test_observation_source_quality_audit_warns_on_high_rate_unknown_tokens(monk
         tmp_path,
         "2026-05-15",
         [
-            _event(
-                "scalp_entry_action_decision_snapshot",
-                {
-                    "entry_adm_score_bucket": "score_unknown",
-                    "entry_adm_stale_bucket": "stale_unknown",
-                    "entry_adm_overbought_bucket": "overbought_unknown",
-                    "entry_adm_liquidity_bucket": "liquidity_high",
-                    "metric_role": "action_decision_matrix",
-                    "decision_authority": "entry_advisory_prompt_context_only",
-                    "runtime_effect": False,
-                    "forbidden_uses": "runtime_threshold_apply/order_submit/provider_route_change/bot_restart",
-                },
-                record_id=idx,
-            )
+                _event(
+                    "scalp_entry_action_decision_snapshot",
+                    {
+                        "candidate_id": f"ADM-{idx}",
+                        "entry_adm_candidate_id": f"ADM-{idx}",
+                        "ai_score": "62.0",
+                        "ai_action": "WAIT",
+                        "chosen_action": "NO_BUY_AI",
+                        "eligible_actions": "NO_BUY_AI",
+                        "rejected_actions": "BUY_NOW",
+                        "source_stage": "ai_confirmed",
+                        "entry_adm_score_bucket": "score_unknown",
+                        "entry_adm_stale_bucket": "stale_unknown",
+                        "entry_adm_overbought_bucket": "overbought_unknown",
+                        "entry_adm_liquidity_bucket": "liquidity_high",
+                        "metric_role": "action_decision_matrix",
+                        "decision_authority": "entry_advisory_prompt_context_only",
+                        "source_quality_gate": "entry pipeline event + post-sell sim evaluation join when available",
+                        "runtime_effect": False,
+                        "allowed_runtime_apply": False,
+                        "actual_order_submitted": False,
+                        "broker_order_forbidden": True,
+                        "forbidden_uses": "runtime_threshold_apply/order_submit/provider_route_change/bot_restart",
+                        "tick_source_quality_fields_sent": True,
+                        "tick_accel_source": "computed_10ticks",
+                        "tick_context_quality": "fresh_computed",
+                        "quote_age_source": "last_ws_update_ts",
+                        "tick_acceleration_ratio": "1.250",
+                        "tick_acceleration_ratio_raw": "1.250",
+                        "recent_5tick_seconds": "2.000",
+                        "prev_5tick_seconds": "2.500",
+                        "tick_accel_effective_recent_5tick_seconds": "2.000",
+                        "buy_pressure_10t": "70.000",
+                        "curr_vs_micro_vwap_bp": "8.000",
+                        "curr_vs_ma5_bp": "5.000",
+                        "latest_strength": "120.0",
+                        "distance_from_day_high_pct": "-0.50",
+                        "intraday_range_pct": "2.10",
+                    },
+                    record_id=idx,
+                )
             for idx in range(60)
         ],
     )
@@ -190,6 +217,68 @@ def test_observation_source_quality_audit_warns_on_high_rate_unknown_tokens(monk
     assert report["summary"]["review_warning_count"] == 1
     assert report["summary"]["hard_blocking_contract_gap_count"] == 0
     assert finding["runtime_effect"] is False
+
+
+def test_observation_source_quality_audit_surfaces_ai_numeric_consistency_findings(monkeypatch, tmp_path):
+    monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
+    _write_events(
+        tmp_path,
+        "2026-06-18",
+        [
+            _event(
+                "scalp_entry_action_decision_snapshot",
+                {
+                    "candidate_id": "ADM-123456-1",
+                    "entry_adm_candidate_id": "ADM-123456-1",
+                    "ai_score": "62.0",
+                    "ai_action": "WAIT",
+                    "chosen_action": "NO_BUY_AI",
+                    "eligible_actions": "NO_BUY_AI",
+                    "rejected_actions": "BUY_NOW",
+                    "source_stage": "ai_confirmed",
+                    "metric_role": "action_decision_matrix",
+                    "decision_authority": "entry_advisory_prompt_context_only",
+                    "source_quality_gate": "ai_numeric_consistency_review_required",
+                    "runtime_effect": False,
+                    "allowed_runtime_apply": False,
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                    "forbidden_uses": "EV/live-auto/runtime-apply/threshold mutation",
+                    "tick_source_quality_fields_sent": True,
+                    "tick_accel_source": "same_second_burst_10ticks",
+                    "tick_context_quality": "fresh_computed",
+                    "quote_age_source": "last_ws_update_ts",
+                    "tick_acceleration_ratio": "24.000",
+                    "tick_acceleration_ratio_raw": "0.000",
+                    "recent_5tick_seconds": "0.000",
+                    "prev_5tick_seconds": "24.000",
+                    "tick_accel_effective_recent_5tick_seconds": "1.000",
+                    "buy_pressure_10t": "71.200",
+                    "curr_vs_micro_vwap_bp": "11.400",
+                    "curr_vs_ma5_bp": "9.800",
+                    "latest_strength": "130.0",
+                    "distance_from_day_high_pct": "-0.40",
+                    "intraday_range_pct": "2.10",
+                    "ai_reason_numeric_inconsistency": True,
+                    "ai_reason_numeric_inconsistency_field": "tick_acceleration_ratio",
+                    "ai_reason_numeric_inconsistency_reason": "tick_acceleration_pass_described_as_fail",
+                    "ai_reason_numeric_inconsistency_detected_value": "24.0",
+                    "ai_reason_numeric_inconsistency_excerpt": "tick_acceleration_ratio = 24.0 fails < 1.10",
+                },
+                record_id=1,
+            )
+        ],
+    )
+
+    report = audit.build_observation_source_quality_audit("2026-06-18")
+
+    assert report["status"] == "warning"
+    assert report["summary"]["numeric_consistency_stage_count"] == 1
+    assert report["summary"]["review_warning_count"] == 1
+    finding = report["numeric_consistency_findings"][0]
+    assert finding["stage"] == "scalp_entry_action_decision_snapshot"
+    assert finding["allowed_runtime_apply"] is False
+    assert finding["examples"][0]["field"] == "tick_acceleration_ratio"
 
 
 def test_observation_source_quality_audit_warns_on_any_unknown_token_field(monkeypatch, tmp_path):
@@ -1121,6 +1210,65 @@ def test_observation_source_quality_audit_accepts_early_accel_recheck_contracts(
     assert report["stage_contracts"]["early_accel_recheck_evaluated"]["status"] == "pass"
     assert report["stage_contracts"]["early_accel_recheck_ai_call_allowed"]["status"] == "pass"
     assert report["stage_contracts"]["early_accel_recheck_skipped"]["status"] == "pass"
+    assert report["status"] == "pass"
+
+
+def test_observation_source_quality_audit_accepts_ai_numeric_consistency_recheck_contracts(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
+    common_fields = {
+        "metric_role": "funnel_count",
+        "window_policy": "intraday_operator_runtime_retry",
+        "sample_floor": "not_applicable_operator_runtime_retry",
+        "primary_decision_metric": "funnel_count",
+        "runtime_effect": True,
+        "allowed_runtime_apply": False,
+        "forbidden_uses": "EV|rolling|MTD|cumulative_tuning|live_auto_promotion|runtime_apply_bridge",
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "decision_authority": "operator_runtime_decision_recheck_only",
+        "source_quality_gate": "ai_numeric_consistency_recheck_contract_fields_present",
+        "original_action": "WAIT",
+        "original_score": "72.0",
+        "original_reason_excerpt": "tick_acceleration_ratio described as failed",
+        "inconsistency_field": "tick_acceleration_ratio",
+        "inconsistency_reason": "tick_acceleration_pass_described_as_fail",
+        "position_pass": True,
+        "speed_pass": True,
+        "supply_pass": True,
+        "feature_pass_count": 3,
+        "recheck_count": 0,
+        "recheck_action": "BUY",
+        "recheck_score": "78.0",
+        "recheck_reason_excerpt": "speed and supply confirmed",
+        "skip_reason": "allowed",
+        "quote_stale": False,
+    }
+    _write_events(
+        tmp_path,
+        "2026-06-18",
+        [
+            _event("ai_numeric_consistency_recheck_evaluated", common_fields),
+            _event("ai_numeric_consistency_recheck_allowed", common_fields),
+            _event(
+                "ai_numeric_consistency_recheck_failed",
+                {
+                    **common_fields,
+                    "recheck_action": "WAIT",
+                    "recheck_score": "70.0",
+                    "recheck_reason_excerpt": "still contradictory",
+                    "skip_reason": "recheck_still_contradictory",
+                },
+            ),
+        ],
+    )
+
+    report = audit.build_observation_source_quality_audit("2026-06-18")
+
+    assert report["stage_contracts"]["ai_numeric_consistency_recheck_evaluated"]["status"] == "pass"
+    assert report["stage_contracts"]["ai_numeric_consistency_recheck_allowed"]["status"] == "pass"
+    assert report["stage_contracts"]["ai_numeric_consistency_recheck_failed"]["status"] == "pass"
     assert report["status"] == "pass"
 
 

@@ -23,6 +23,7 @@ from src.utils.constants import TRADING_RULES
 from src.utils.pipeline_event_logger import emit_pipeline_event
 
 SCANNER_RISING_START_SOURCE_FAMILY = "scalping_scanner_rising_start_source_v1"
+SCANNER_PROMOTION_POLICY_VERSION = "scanner_priority_v2_20260617_evidence"
 PRIMARY_RISING_START_SOURCES = {
     "REALTIME_RANK_START",
     "PRICE_JUMP_START",
@@ -223,6 +224,16 @@ def _rank_jump(target):
 
 def _scanner_candidate_role(target):
     source_set = set(_source_signature(target))
+    if bool(getattr(TRADING_RULES, "SCALP_SCANNER_PRIORITY_TIERING_ENABLED", False)):
+        if source_set == {"BID_IMBALANCE_SURGE"} and bool(
+            getattr(TRADING_RULES, "SCALP_SCANNER_PRIORITY_DEMOTE_BID_IMBALANCE_ONLY", True)
+        ):
+            return "source_only"
+        late_rank_sources = {"REALTIME_RANK_START", "VALUE_TOP", "OPEN_TOP"}
+        if source_set and source_set.issubset(late_rank_sources) and bool(
+            getattr(TRADING_RULES, "SCALP_SCANNER_PRIORITY_DEMOTE_REALTIME_RANK_ONLY", True)
+        ):
+            return "late_confirmation"
     if source_set & PRIMARY_RISING_START_SOURCES:
         return "early_discovery"
     if source_set == {"VALUE_TOP"}:
@@ -280,6 +291,118 @@ def _rising_start_score(target):
         + trade_value_score
         + source_count_score
     )
+
+
+def _scanner_priority_profile(target, previous=None):
+    source_set = set(_source_signature(target))
+    acceleration_reason = _acceleration_reason(target, previous)
+    rank_jump = _rank_jump(target)
+    spike_rate = _safe_float(target.get("SpikeRate"))
+    jump_rate = _safe_float(target.get("JumpRate"))
+    priority_score = _safe_float(target.get("PriorityScore"))
+    cntr_str = _safe_float(target.get("CntrStr"))
+    cntr_available = bool(target.get("CntrStrAvailable", False))
+    min_rank_jump = int(getattr(TRADING_RULES, "SCALP_SCANNER_ACCEL_MIN_RANK_JUMP", 10) or 10)
+    min_spike = float(getattr(TRADING_RULES, "SCALP_SCANNER_ACCEL_MIN_SPIKE_RATE", 80.0) or 80.0)
+    min_priority = float(getattr(TRADING_RULES, "SCALP_SCANNER_ACCEL_MIN_PRIORITY_SCORE", 80.0) or 80.0)
+    min_cntr = float(getattr(TRADING_RULES, "SCALP_SCANNER_ACCEL_MIN_CNTR_STR", 110.0) or 110.0)
+    demote_bid_only = bool(getattr(TRADING_RULES, "SCALP_SCANNER_PRIORITY_DEMOTE_BID_IMBALANCE_ONLY", True))
+    demote_open_price_jump_without_volume = bool(
+        getattr(TRADING_RULES, "SCALP_SCANNER_DEMOTE_OPEN_PRICE_JUMP_WITHOUT_VOLUME", False)
+    )
+    open_price_jump_without_volume = (
+        "OPEN_TOP" in source_set
+        and "PRICE_JUMP_START" in source_set
+        and "VOLUME_SURGE_POSITIVE" not in source_set
+    )
+
+    strong_accel = acceleration_reason in {
+        "price_jump_start_acceleration",
+        "rank_jump_acceleration",
+        "spike_rate_acceleration",
+        "priority_score_acceleration",
+        "execution_strength_acceleration",
+    }
+    strong_accel = strong_accel or rank_jump >= min_rank_jump
+    strong_accel = strong_accel or spike_rate >= min_spike
+    strong_accel = strong_accel or jump_rate >= max(0.3, min_spike / 200.0)
+    strong_accel = strong_accel or priority_score >= min_priority
+    strong_accel = strong_accel or (cntr_available and cntr_str >= min_cntr)
+    price_jump_confirmed = "PRICE_JUMP_START" in source_set and bool(
+        source_set & {"REALTIME_RANK_START", "VOLUME_SURGE_POSITIVE"}
+    )
+
+    if source_set == {"BID_IMBALANCE_SURGE"} and demote_bid_only:
+        tier = "tier_z_source_only"
+        reason = "bid_imbalance_only_source_only"
+        base_score = 0.0
+        demoted_reason = "bid_imbalance_only_without_price_or_volume_confirmation"
+    elif open_price_jump_without_volume and demote_open_price_jump_without_volume:
+        tier = "tier_b_price_jump_candidate"
+        reason = "open_price_jump_without_volume_demoted"
+        base_score = 3000.0
+        demoted_reason = "open_price_jump_requires_volume_or_followthrough"
+    elif "PRICE_JUMP_START" in source_set and (strong_accel or price_jump_confirmed):
+        tier = "tier_a_acceleration_confirmed"
+        if jump_rate >= max(0.3, min_spike / 200.0):
+            reason = "price_jump_start_acceleration"
+        elif price_jump_confirmed:
+            reason = "price_jump_multisource_confirmation"
+        elif rank_jump >= min_rank_jump:
+            reason = "rank_jump_acceleration"
+        elif spike_rate >= min_spike:
+            reason = "spike_rate_acceleration"
+        elif priority_score >= min_priority:
+            reason = "priority_score_acceleration"
+        elif cntr_available and cntr_str >= min_cntr:
+            reason = "execution_strength_acceleration"
+        else:
+            reason = acceleration_reason or "price_jump_multisource_confirmation"
+        base_score = 4000.0
+        demoted_reason = ""
+    elif "PRICE_JUMP_START" in source_set:
+        tier = "tier_b_price_jump_candidate"
+        reason = acceleration_reason or "price_jump_source_present"
+        base_score = 3000.0
+        demoted_reason = ""
+    elif "VOLUME_SURGE_POSITIVE" in source_set:
+        tier = "tier_c_volume_confirmation"
+        reason = acceleration_reason or "volume_surge_positive_source_present"
+        base_score = 2200.0
+        demoted_reason = ""
+    elif strong_accel:
+        tier = "tier_a_acceleration_confirmed"
+        if rank_jump >= min_rank_jump:
+            reason = "rank_jump_acceleration"
+        elif spike_rate >= min_spike:
+            reason = "spike_rate_acceleration"
+        elif priority_score >= min_priority:
+            reason = "priority_score_acceleration"
+        elif cntr_available and cntr_str >= min_cntr:
+            reason = "execution_strength_acceleration"
+        else:
+            reason = acceleration_reason or "general_acceleration_confirmed"
+        base_score = 4000.0
+        demoted_reason = ""
+    elif source_set and source_set.issubset({"REALTIME_RANK_START", "VALUE_TOP", "OPEN_TOP"}):
+        tier = "tier_d_late_rank_only"
+        reason = "late_rank_or_liquidity_only_source"
+        base_score = 1000.0
+        demoted_reason = "late_rank_only_requires_acceleration_confirmation"
+    else:
+        tier = "tier_d_late_rank_only"
+        reason = acceleration_reason or "secondary_source_requires_confirmation"
+        base_score = 1000.0
+        demoted_reason = "secondary_source_requires_acceleration_confirmation"
+
+    score = base_score + _freshness_score(target)
+    return {
+        "scanner_priority_tier": tier,
+        "scanner_priority_score": score,
+        "scanner_priority_reason": reason,
+        "scanner_demoted_reason": demoted_reason,
+        "scanner_promotion_policy_version": SCANNER_PROMOTION_POLICY_VERSION,
+    }
 
 
 def _price_delta_pct(first_price, current_price):
@@ -579,6 +702,23 @@ def build_candidate_pool(
 
 
 def rank_candidates(candidate_pool):
+    if bool(getattr(TRADING_RULES, "SCALP_SCANNER_PRIORITY_TIERING_ENABLED", False)):
+        tier_rank = {
+            "tier_a_acceleration_confirmed": 0,
+            "tier_b_price_jump_candidate": 1,
+            "tier_c_volume_confirmation": 2,
+            "tier_d_late_rank_only": 3,
+            "tier_z_source_only": 9,
+        }
+        return sorted(
+            candidate_pool.values(),
+            key=lambda item: (
+                tier_rank.get(_scanner_priority_profile(item).get("scanner_priority_tier"), 8),
+                -_scanner_priority_profile(item).get("scanner_priority_score", 0.0),
+                _source_priority(item.get("Source")),
+                -_safe_float(item.get("FluRate")),
+            ),
+        )
     return sorted(
         candidate_pool.values(),
         key=lambda item: (
@@ -655,6 +795,34 @@ def _scanner_real_source_guard_decision(target, recent_picks, now_ts):
     previous = (recent_picks or {}).get(target.get("Code")) or {}
     candidate_role = _scanner_candidate_role(target)
     acceleration_reason = _acceleration_reason(target, previous)
+    priority_profile = _scanner_priority_profile(target, previous)
+    priority_tiering_enabled = bool(getattr(TRADING_RULES, "SCALP_SCANNER_PRIORITY_TIERING_ENABLED", False))
+    open_price_jump_without_volume_demoted = (
+        priority_tiering_enabled
+        and priority_profile.get("scanner_priority_reason") == "open_price_jump_without_volume_demoted"
+    )
+    previous_sources = set(previous.get("last_source_signature") or [])
+    open_price_jump_volume_followup_confirmed = (
+        priority_tiering_enabled
+        and "OPEN_TOP" in previous_sources
+        and "PRICE_JUMP_START" in previous_sources
+        and "VOLUME_SURGE_POSITIVE" not in previous_sources
+        and "OPEN_TOP" in source_set
+        and "PRICE_JUMP_START" in source_set
+        and "VOLUME_SURGE_POSITIVE" in source_set
+    )
+    if priority_tiering_enabled and priority_profile.get("scanner_priority_tier") == "tier_d_late_rank_only":
+        candidate_role = "late_confirmation"
+        if acceleration_reason in {"new_realtime_rank_start_source"}:
+            acceleration_reason = ""
+    if open_price_jump_without_volume_demoted:
+        candidate_role = "late_confirmation"
+        acceleration_reason = ""
+    if priority_tiering_enabled and priority_profile.get("scanner_priority_tier") == "tier_z_source_only":
+        candidate_role = "source_only"
+        acceleration_reason = ""
+    if priority_tiering_enabled and priority_profile.get("scanner_priority_tier") == "tier_a_acceleration_confirmed":
+        acceleration_reason = str(priority_profile.get("scanner_priority_reason") or acceleration_reason)
     first_price = _safe_positive_int(previous.get("first_price"))
     current_price = _safe_positive_int(target.get("Price"))
     current_flu, current_flu_metric, current_flu_source = _scanner_flu_metric(target)
@@ -688,7 +856,40 @@ def _scanner_real_source_guard_decision(target, recent_picks, now_ts):
         "flu_delta_since_first_seen": f"{flu_delta:.2f}",
         "comparable_flu_delta_since_first_seen": f"{comparable_flu_delta:.2f}",
         "last_promoted_at": str(previous.get("last_promoted_at") or "-"),
+        **priority_profile,
     }
+    first_seen_at = float(previous.get("first_seen_at", 0.0) or 0.0)
+    probe_age = max(0.0, now_ts - first_seen_at) if first_seen_at > 0 else 0.0
+    price_declined = first_price > 0 and current_price > 0 and current_price < first_price
+    if previous:
+        observed_context["probe_age_sec"] = f"{probe_age:.1f}"
+
+    if priority_tiering_enabled and priority_profile.get("scanner_priority_tier") == "tier_z_source_only":
+        return {
+            "blocked": True,
+            "reason": "scanner_priority_source_only",
+            "candidate_role": candidate_role,
+            "source_signature": ",".join(source_signature),
+            **observed_context,
+        }
+
+    if open_price_jump_volume_followup_confirmed:
+        if price_declined:
+            return {
+                "blocked": True,
+                "reason": "late_confirmation_price_declined",
+                "candidate_role": candidate_role,
+                "source_signature": ",".join(source_signature),
+                **observed_context,
+            }
+        return {
+            "blocked": False,
+            "reason": "open_price_jump_volume_confirmed",
+            "candidate_role": candidate_role,
+            "acceleration_reason": "open_price_jump_volume_confirmed",
+            "source_signature": ",".join(source_signature),
+            **observed_context,
+        }
 
     if candidate_role == "early_discovery":
         return {
@@ -725,11 +926,17 @@ def _scanner_real_source_guard_decision(target, recent_picks, now_ts):
     min_flu_delta = float(getattr(TRADING_RULES, "SCALP_SCANNER_PROBE_MIN_FLU_DELTA_PCT", 0.30) or 0.30)
 
     if not previous:
+        first_seen_reason = (
+            "open_price_jump_requires_volume_or_followthrough"
+            if open_price_jump_without_volume_demoted
+            else "late_confirmation_first_seen_probe"
+        )
         return {
             "blocked": True,
-            "reason": "late_confirmation_first_seen_probe",
+            "reason": first_seen_reason,
             "candidate_role": candidate_role,
             "source_signature": ",".join(source_signature),
+            **priority_profile,
             "first_seen_flu_rate": f"{current_flu:.2f}",
             "current_flu_rate": f"{current_flu:.2f}",
             "first_flu_rate_metric": current_flu_metric,
@@ -746,10 +953,6 @@ def _scanner_real_source_guard_decision(target, recent_picks, now_ts):
             "last_promoted_at": "-",
         }
 
-    first_seen_at = float(previous.get("first_seen_at", 0.0) or 0.0)
-    probe_age = max(0.0, now_ts - first_seen_at) if first_seen_at > 0 else 0.0
-    observed_context["probe_age_sec"] = f"{probe_age:.1f}"
-    price_declined = first_price > 0 and current_price > 0 and current_price < first_price
     probe_confirmed = (
         min_probe_sec <= probe_age <= max_probe_sec
         and not price_declined
@@ -858,6 +1061,7 @@ def _remember_pick(recent_picks, target, now_ts):
         "last_flu_rate_source": current_flu_source,
         "last_price": _safe_positive_int(target.get("Price")),
         "scanner_probe_state": "promoted",
+        **_scanner_priority_profile(target, previous),
     }
 
 
@@ -895,6 +1099,7 @@ def _remember_guard_block(recent_picks, target, now_ts, reason):
         "last_price": _safe_positive_int(target.get("Price")),
         "scanner_probe_state": "first_seen_probe",
         "last_observed_at": now_ts,
+        **_scanner_priority_profile(target, previous),
     }
 
 
@@ -913,11 +1118,12 @@ def _scanner_event_fields(target, source_guard=None):
     first_flu = source_guard.get("first_seen_flu_rate")
     current_flu_value, current_flu_metric, current_flu_source = _scanner_flu_metric(target)
     current_flu = source_guard.get("current_flu_rate") or f"{current_flu_value:.2f}"
+    priority_profile = _scanner_priority_profile(target)
     guard_reason = str(source_guard.get("reason") or "")
     last_promoted_at = source_guard.get("last_promoted_at")
     first_seen_missing = first_flu in (None, "", "-")
     last_promoted_missing = last_promoted_at in (None, "", "-")
-    if guard_reason == "late_confirmation_first_seen_probe":
+    if guard_reason in {"late_confirmation_first_seen_probe", "open_price_jump_requires_volume_or_followthrough"}:
         source_guard_context = "normal_first_seen_block"
     elif _scanner_source_guard_requires_first_seen_provenance(guard_reason):
         source_guard_context = "repeat_guard_with_provenance"
@@ -955,6 +1161,19 @@ def _scanner_event_fields(target, source_guard=None):
         "scanner_source_guard_context": source_guard_context,
         "scanner_source_guard_first_seen_required": source_guard_context == "repeat_guard_with_provenance",
         "scanner_promotion_reason": "" if source_guard.get("blocked") else source_guard.get("reason"),
+        "scanner_priority_tier": source_guard.get("scanner_priority_tier")
+        or priority_profile.get("scanner_priority_tier"),
+        "scanner_priority_score": _safe_float(
+            source_guard.get("scanner_priority_score")
+            if source_guard.get("scanner_priority_score") is not None
+            else priority_profile.get("scanner_priority_score")
+        ),
+        "scanner_priority_reason": source_guard.get("scanner_priority_reason")
+        or priority_profile.get("scanner_priority_reason"),
+        "scanner_demoted_reason": source_guard.get("scanner_demoted_reason")
+        or priority_profile.get("scanner_demoted_reason"),
+        "scanner_promotion_policy_version": source_guard.get("scanner_promotion_policy_version")
+        or priority_profile.get("scanner_promotion_policy_version"),
         "first_seen_price": first_price,
         "current_price": current_price,
         "price_delta_since_first_seen_pct": source_guard.get("price_delta_since_first_seen_pct"),

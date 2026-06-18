@@ -195,6 +195,9 @@ def _is_early_accel_recheck_retry_fields(fields: dict[str, Any]) -> bool:
         _safe_str(fields.get("ai_call_trigger_reason")) == "early_accel_recheck"
         or _safe_str(fields.get("tuning_authority_excluded_reason"))
         == "early_accel_recheck_operator_retry"
+        or _safe_str(fields.get("ai_call_trigger_reason")) == "ai_numeric_consistency_recheck"
+        or _safe_str(fields.get("tuning_authority_excluded_reason"))
+        == "ai_numeric_consistency_recheck_operator_retry"
     )
 
 
