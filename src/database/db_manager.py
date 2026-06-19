@@ -166,6 +166,13 @@ class DBManager:
             return
 
         index_statements = [
+            # daily_stock_quotes
+            "CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_dsq_stock_code_quote_date_desc ON daily_stock_quotes (stock_code, quote_date DESC);",
+            # recommendation_history
+            "CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_rh_status ON recommendation_history (status);",
+            "CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_rh_status_rec_date ON recommendation_history (status, rec_date DESC);",
+            "CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_rh_rec_date_stock_strategy_status ON recommendation_history (rec_date, stock_code, strategy, status, id DESC);",
+            "CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_rh_reusable_watching_lookup ON recommendation_history (rec_date, stock_code, strategy, id DESC) WHERE status IN ('WATCHING', 'EXPIRED') AND buy_time IS NULL AND COALESCE(buy_qty, 0) = 0;",
             # trade_performance_facts
             "CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_tpf_rec_date ON trade_performance_facts (rec_date);",
             "CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_tpf_rec_date_status ON trade_performance_facts (rec_date, status);",
@@ -198,6 +205,8 @@ class DBManager:
             return
         try:
             with self.engine.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
+                conn.execute(text("ANALYZE daily_stock_quotes;"))
+                conn.execute(text("ANALYZE recommendation_history;"))
                 conn.execute(text("ANALYZE trade_performance_facts;"))
                 conn.execute(text("ANALYZE strategy_position_performance_daily;"))
         except Exception as e:
@@ -467,6 +476,7 @@ class DBManager:
                         buy_price, buy_qty, buy_time, sell_price, sell_time, profit_rate,
                         add_count, avg_down_count, pyramid_count, last_add_type, last_add_at,
                         scale_in_locked, hard_stop_price, trailing_stop_price,
+                        entry_armed_at_epoch,
                         (
                             SELECT dsq.marcap
                             FROM daily_stock_quotes dsq
@@ -574,6 +584,7 @@ class DBManager:
                 t['scale_in_locked'] = _safe_bool(t.get('scale_in_locked'), default=False)
                 t['hard_stop_price'] = _safe_float(t.get('hard_stop_price'))
                 t['trailing_stop_price'] = _safe_float(t.get('trailing_stop_price'))
+                t['entry_armed_at_epoch'] = _safe_float(t.get('entry_armed_at_epoch'))
 
             return targets
             

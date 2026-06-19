@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any
 
 import psycopg2
-from psycopg2.extras import Json
+from psycopg2.extras import Json, execute_values
 from psycopg2.sql import SQL, Identifier
 
 from src.utils.constants import DATA_DIR, POSTGRES_URL
@@ -141,9 +141,8 @@ def upsert_pipeline_event_rows(target_date: str, rows: list[dict]) -> int:
     try:
         conn = get_db_connection()
         with conn.cursor() as cur:
+            values = []
             for row in rows:
-                # raw_payload_json이 이미 모든 필드를 포함하고 있음.
-                # 필요한 컬럼 추출
                 event_date = row.get("emitted_date") or target_date
                 pipeline = row.get("pipeline", "")
                 stock_code = row.get("stock_code", "")
@@ -153,20 +152,35 @@ def upsert_pipeline_event_rows(target_date: str, rows: list[dict]) -> int:
                     continue
                 record_id = row.get("record_id")
                 fields = row.get("fields", {})
-                # 유니크 키 충돌 시 무시 (ON CONFLICT DO NOTHING)
-                cur.execute("""
+                values.append(
+                    (
+                        event_date,
+                        pipeline,
+                        stock_code,
+                        stage,
+                        emitted_at,
+                        record_id,
+                        Json(fields),
+                        Json(row),
+                    )
+                )
+            if values:
+                inserted_rows = execute_values(
+                    cur,
+                    """
                     INSERT INTO dashboard_pipeline_events
                         (event_date, pipeline, stock_code, stage, emitted_at,
                          record_id, fields_json, raw_payload_json)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    VALUES %s
                     ON CONFLICT (event_date, pipeline, stock_code, stage, emitted_at, record_id)
                     DO NOTHING
+                    RETURNING 1
                     """,
-                    (event_date, pipeline, stock_code, stage, emitted_at,
-                     record_id, Json(fields), Json(row))
+                    values,
+                    page_size=min(1000, len(values)),
+                    fetch=True,
                 )
-                if cur.rowcount > 0:
-                    inserted += 1
+                inserted = len(inserted_rows or [])
         conn.commit()
     except Exception as e:
         logger.error("Failed to upsert pipeline events: %s", e)

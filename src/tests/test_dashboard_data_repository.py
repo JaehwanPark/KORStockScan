@@ -297,5 +297,45 @@ def test_load_pipeline_events_today_file_prefer(monkeypatch, tmp_path):
     assert result[0]["event"] == "file"
 
 
+def test_upsert_pipeline_event_rows_uses_bulk_execute_values(monkeypatch):
+    monkeypatch.setenv("KORSTOCKSCAN_ENABLE_LEGACY_DASHBOARD_DB", "1")
+    monkeypatch.setattr("src.engine.dashboard_data_repository.ensure_tables", lambda: None)
+    conn = MagicMock()
+    cursor = MagicMock()
+    conn.cursor.return_value.__enter__.return_value = cursor
+    monkeypatch.setattr("src.engine.dashboard_data_repository.get_db_connection", lambda: conn)
+    execute_mock = MagicMock(return_value=[(1,), (1,)])
+    monkeypatch.setattr("src.engine.dashboard_data_repository.execute_values", execute_mock)
+
+    inserted = upsert_pipeline_event_rows(
+        "2026-04-20",
+        [
+            {
+                "emitted_date": "2026-04-20",
+                "pipeline": "ENTRY_PIPELINE",
+                "stock_code": "005930",
+                "stage": "order_leg_sent",
+                "emitted_at": "2026-04-20T10:00:00+09:00",
+                "record_id": 1,
+                "fields": {"status": "ok"},
+            },
+            {
+                "emitted_date": "2026-04-20",
+                "pipeline": "ENTRY_PIPELINE",
+                "stock_code": "000660",
+                "stage": "order_leg_sent",
+                "emitted_at": "2026-04-20T10:01:00+09:00",
+                "record_id": 2,
+                "fields": {"status": "ok"},
+            },
+        ],
+    )
+
+    assert inserted == 2
+    execute_mock.assert_called_once()
+    assert len(execute_mock.call_args.args[2]) == 2
+    conn.commit.assert_called_once()
+
+
 if __name__ == '__main__':
     pytest.main([__file__, '-v'])

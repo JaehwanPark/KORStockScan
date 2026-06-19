@@ -303,6 +303,39 @@ def test_schema_report_and_persistence_are_idempotent(tmp_path, monkeypatch):
         assert session.query(SwingStrategyDiscoveryArm).count() == 6 * len(mod.ARM_SET)
 
 
+def test_fetch_quote_features_passes_sql_lookback_limit(monkeypatch):
+    captured = {}
+
+    def fake_read_sql(query, engine, params=None):
+        captured["sql"] = str(query)
+        captured["params"] = dict(params or {})
+        return pd.DataFrame(
+            [
+                {
+                    "quote_date": "2026-05-20",
+                    "stock_code": "005930",
+                    "stock_name": "삼성전자",
+                    "open_price": 1,
+                    "high_price": 2,
+                    "low_price": 1,
+                    "close_price": 2,
+                    "volume": 10,
+                    "marcap": 100,
+                    "daily_return": 1.0,
+                }
+            ]
+        )
+
+    monkeypatch.setattr(mod, "create_engine", lambda db_url: object())
+    monkeypatch.setattr(mod.pd, "read_sql", fake_read_sql)
+
+    result = mod.fetch_quote_features(["005930"], db_url="sqlite://", lookback=7)
+
+    assert "ROW_NUMBER() OVER" in captured["sql"]
+    assert captured["params"]["lookback"] == 7
+    assert result["005930"]["stock_name"] == "삼성전자"
+
+
 def test_partial_sector_theme_missing_stays_source_quality_summary(monkeypatch):
     monkeypatch.setattr(mod, "load_safe_pool_rows", lambda target_date: _source_rows(3))
     monkeypatch.setattr(mod, "load_block_reason_map", lambda target_date: {})

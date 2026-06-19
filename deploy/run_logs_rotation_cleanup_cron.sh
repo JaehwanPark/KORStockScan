@@ -8,11 +8,13 @@ RETENTION_DAYS="${1:-${LOG_ROTATION_ARCHIVE_RETENTION_DAYS:-30}}"
 TARGET_DATE="${TARGET_DATE:-$(TZ=Asia/Seoul date +%F)}"
 ACTIVE_LOG_MAX_BYTES="${LOG_ROTATION_ACTIVE_MAX_BYTES:-${KORSTOCKSCAN_LOG_ROTATE_MAX_BYTES:-20971520}}"
 ACTIVE_LOG_BACKUP_COUNT="${LOG_ROTATION_BACKUP_COUNT:-5}"
+ACTIVE_LOG_COMPRESS_MIN_INDEX="${LOG_ROTATION_COMPRESS_MIN_INDEX:-2}"
 ACTIVE_LOG_RETENTION_DAYS="${LOG_ROTATION_ACTIVE_RETENTION_DAYS:-14}"
 SYSTEM_METRIC_RETENTION_DAYS="${SYSTEM_METRIC_RETENTION_DAYS:-3}"
 DATA_MAINTENANCE_ENABLED="${DATA_MAINTENANCE_ENABLED:-true}"
 TMP_MAINTENANCE_RETENTION_DAYS="${TMP_MAINTENANCE_RETENTION_DAYS:-2}"
 REFRACTOR_DRY_RUN_RETENTION_DAYS="${REFRACTOR_DRY_RUN_RETENTION_DAYS:-7}"
+RAW_ROW_EXCLUSION_BACKUP_RETENTION_DAYS="${RAW_ROW_EXCLUSION_BACKUP_RETENTION_DAYS:-7}"
 PYTHON_BIN="${PYTHON_BIN:-$PROJECT_DIR/.venv/bin/python}"
 if [[ ! -x "$PYTHON_BIN" ]]; then
   PYTHON_BIN="python3"
@@ -28,6 +30,10 @@ if [[ ! "$ACTIVE_LOG_MAX_BYTES" =~ ^[0-9]+$ ]]; then
 fi
 if [[ ! "$ACTIVE_LOG_BACKUP_COUNT" =~ ^[0-9]+$ || "$ACTIVE_LOG_BACKUP_COUNT" -lt 1 ]]; then
   echo "[LOG_CLEANUP_ERROR] active log backup count must be positive integer: $ACTIVE_LOG_BACKUP_COUNT"
+  exit 2
+fi
+if [[ ! "$ACTIVE_LOG_COMPRESS_MIN_INDEX" =~ ^[0-9]+$ || "$ACTIVE_LOG_COMPRESS_MIN_INDEX" -lt 2 ]]; then
+  echo "[LOG_CLEANUP_ERROR] active log compress min index must be integer >= 2: $ACTIVE_LOG_COMPRESS_MIN_INDEX"
   exit 2
 fi
 if [[ ! "$ACTIVE_LOG_RETENTION_DAYS" =~ ^[0-9]+$ ]]; then
@@ -46,10 +52,14 @@ if [[ ! "$REFRACTOR_DRY_RUN_RETENTION_DAYS" =~ ^[0-9]+$ ]]; then
   echo "[LOG_CLEANUP_ERROR] refactor dry-run retention days must be integer: $REFRACTOR_DRY_RUN_RETENTION_DAYS"
   exit 2
 fi
+if [[ ! "$RAW_ROW_EXCLUSION_BACKUP_RETENTION_DAYS" =~ ^[0-9]+$ ]]; then
+  echo "[LOG_CLEANUP_ERROR] raw_row_exclusion backup retention days must be integer: $RAW_ROW_EXCLUSION_BACKUP_RETENTION_DAYS"
+  exit 2
+fi
 
 mkdir -p "$LOG_DIR"
 started_at="$(TZ=Asia/Seoul date +%FT%T%z)"
-echo "[START] log_rotation_cleanup target_date=${TARGET_DATE} archive_retention_days=${RETENTION_DAYS} active_log_retention_days=${ACTIVE_LOG_RETENTION_DAYS} system_metric_retention_days=${SYSTEM_METRIC_RETENTION_DAYS} active_log_max_bytes=${ACTIVE_LOG_MAX_BYTES} active_log_backup_count=${ACTIVE_LOG_BACKUP_COUNT} data_maintenance_enabled=${DATA_MAINTENANCE_ENABLED} started_at=${started_at}"
+echo "[START] log_rotation_cleanup target_date=${TARGET_DATE} archive_retention_days=${RETENTION_DAYS} active_log_retention_days=${ACTIVE_LOG_RETENTION_DAYS} active_log_compress_min_index=${ACTIVE_LOG_COMPRESS_MIN_INDEX} system_metric_retention_days=${SYSTEM_METRIC_RETENTION_DAYS} raw_row_exclusion_backup_retention_days=${RAW_ROW_EXCLUSION_BACKUP_RETENTION_DAYS} active_log_max_bytes=${ACTIVE_LOG_MAX_BYTES} active_log_backup_count=${ACTIVE_LOG_BACKUP_COUNT} data_maintenance_enabled=${DATA_MAINTENANCE_ENABLED} started_at=${started_at}"
 trap 'failed_at="$(TZ=Asia/Seoul date +%FT%T%z)"; echo "[FAIL] log_rotation_cleanup target_date=${TARGET_DATE} failed_at=${failed_at}"' ERR
 
 archive_log_find_args=(
@@ -67,6 +77,48 @@ cache_deleted_count=0
 sentinel_compressed_count=0
 snapshot_compressed_count=0
 raw_row_exclusion_deleted_count=0
+raw_row_exclusion_backup_deleted_count=0
+compressed_archive_count=0
+archive_pruned_to_backup_limit_count=0
+
+shift_log_backup_slot() {
+  local base_path="$1"
+  local from_idx="$2"
+  local to_idx="$3"
+  local from_plain="${base_path}.${from_idx}"
+  local from_gz="${from_plain}.gz"
+  local to_plain="${base_path}.${to_idx}"
+  local to_gz="${to_plain}.gz"
+
+  rm -f "$to_plain" "$to_gz"
+  if [[ -f "$from_gz" ]]; then
+    mv -f "$from_gz" "$to_gz"
+    return 0
+  fi
+  if [[ -f "$from_plain" ]]; then
+    mv -f "$from_plain" "$to_plain"
+  fi
+}
+
+prune_log_backup_slots_beyond_limit() {
+  local base_path="$1"
+  local entry_path
+  local entry_index
+
+  while IFS= read -r -d '' entry_path; do
+    entry_index="${entry_path##*.log.}"
+    entry_index="${entry_index%.gz}"
+    if [[ ! "$entry_index" =~ ^[0-9]+$ || "$entry_index" -le "$ACTIVE_LOG_BACKUP_COUNT" ]]; then
+      continue
+    fi
+    rm -f "$entry_path"
+    archive_pruned_to_backup_limit_count=$((archive_pruned_to_backup_limit_count + 1))
+  done < <(
+    find "$LOG_DIR" -maxdepth 1 -type f \
+      \( -name "$(basename "$base_path").[0-9]*" -o -name "$(basename "$base_path").[0-9]*.gz" \) \
+      -print0 | sort -z
+  )
+}
 
 rotate_active_log_if_needed() {
   local log_path="$1"
@@ -86,13 +138,12 @@ rotate_active_log_if_needed() {
   if [[ "$ACTIVE_LOG_BACKUP_COUNT" -gt 1 ]]; then
     for ((idx=ACTIVE_LOG_BACKUP_COUNT; idx>=2; idx--)); do
       prev=$((idx - 1))
-      if [[ -f "${log_path}.${prev}" ]]; then
-        mv -f "${log_path}.${prev}" "${log_path}.${idx}"
-      fi
+      shift_log_backup_slot "$log_path" "$prev" "$idx"
     done
   fi
   mv -f "$log_path" "${log_path}.1"
   : > "$log_path"
+  prune_log_backup_slots_beyond_limit "$log_path"
   echo "[LOG_ROTATE] active_log=$(basename "$log_path") size_bytes=${size_bytes} rotated_to=$(basename "$log_path").1"
 }
 
@@ -122,6 +173,19 @@ done < <(
     -name 'buy_pause_guard.log' \
   \) | sort
 )
+
+if [[ "$ACTIVE_LOG_BACKUP_COUNT" -ge "$ACTIVE_LOG_COMPRESS_MIN_INDEX" ]]; then
+  while IFS= read -r -d '' archive_path; do
+    archive_index="${archive_path##*.}"
+    if [[ ! "$archive_index" =~ ^[0-9]+$ || "$archive_index" -lt "$ACTIVE_LOG_COMPRESS_MIN_INDEX" ]]; then
+      continue
+    fi
+    gzip -f -9 "$archive_path"
+    compressed_archive_count=$((compressed_archive_count + 1))
+  done < <(
+    find "$LOG_DIR" -maxdepth 1 -type f -name '*.log.[0-9]*' -print0 | sort -z
+  )
+fi
 
 prune_system_metric_samples() {
   local sample_path="$LOG_DIR/system_metric_samples.jsonl"
@@ -254,6 +318,36 @@ run_data_maintenance() {
         raw_row_exclusion_deleted_count=$((raw_row_exclusion_deleted_count + 1))
       done
     done < <(find "$exclusion_dir" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | sed -E 's/^([0-9]{4}-[0-9]{2}-[0-9]{2})_.*/\1/' | sort -u)
+
+    while IFS= read -r -d '' backup_path; do
+      local manifest_path
+      manifest_path="$(dirname "$backup_path")/manifest.json"
+      rm -f "$backup_path"
+      if [[ -f "$manifest_path" ]]; then
+        "$PYTHON_BIN" - "$manifest_path" "$backup_path" <<'PY'
+import json
+import sys
+from datetime import datetime
+from pathlib import Path
+
+manifest_path = Path(sys.argv[1])
+backup_path = sys.argv[2]
+try:
+    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+except Exception:
+    sys.exit(0)
+if isinstance(payload, dict) and payload.get("backup_path") == backup_path:
+    payload["backup_path"] = None
+    payload["backup_retention_expired"] = True
+    payload["backup_deleted_at"] = datetime.now().astimezone().isoformat(timespec="seconds")
+    manifest_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+PY
+      fi
+      raw_row_exclusion_backup_deleted_count=$((raw_row_exclusion_backup_deleted_count + 1))
+    done < <(
+      find "$exclusion_dir" -mindepth 2 -maxdepth 2 -type f -name 'pipeline_events_*.jsonl.gz' \
+        -mtime "+$RAW_ROW_EXCLUSION_BACKUP_RETENTION_DAYS" -print0 | sort -z
+    )
   fi
 }
 
@@ -275,6 +369,6 @@ deleted_count="$(find "${archive_log_find_args[@]}" -mtime "+$RETENTION_DAYS" -p
 after_count="$(find "${archive_log_find_args[@]}" | wc -l | tr -d ' ')"
 after_size="$(du -sh "$LOG_DIR" | awk '{print $1}')"
 
-echo "[LOG_CLEANUP] archive_retention_days=$RETENTION_DAYS active_log_retention_days=$ACTIVE_LOG_RETENTION_DAYS system_metric_retention_days=$SYSTEM_METRIC_RETENTION_DAYS active_rotated=$rotated_active_count active_deleted=$active_deleted_count archive_deleted=$deleted_count archive_before=$before_count archive_after=$after_count size_before=$before_size size_after=$after_size system_metric_retained=$system_metric_retained system_metric_pruned=$system_metric_pruned system_metric_size_before=$system_metric_before_size system_metric_size_after=$system_metric_after_size data_maintenance_enabled=$DATA_MAINTENANCE_ENABLED tmp_deleted=$tmp_deleted_count cache_deleted=$cache_deleted_count sentinel_compressed=$sentinel_compressed_count snapshot_compressed=$snapshot_compressed_count raw_row_exclusion_deleted=$raw_row_exclusion_deleted_count"
+echo "[LOG_CLEANUP] archive_retention_days=$RETENTION_DAYS active_log_retention_days=$ACTIVE_LOG_RETENTION_DAYS active_log_compress_min_index=$ACTIVE_LOG_COMPRESS_MIN_INDEX system_metric_retention_days=$SYSTEM_METRIC_RETENTION_DAYS raw_row_exclusion_backup_retention_days=$RAW_ROW_EXCLUSION_BACKUP_RETENTION_DAYS active_rotated=$rotated_active_count active_deleted=$active_deleted_count archive_deleted=$deleted_count archive_compressed=$compressed_archive_count archive_pruned_to_backup_limit=$archive_pruned_to_backup_limit_count archive_before=$before_count archive_after=$after_count size_before=$before_size size_after=$after_size system_metric_retained=$system_metric_retained system_metric_pruned=$system_metric_pruned system_metric_size_before=$system_metric_before_size system_metric_size_after=$system_metric_after_size data_maintenance_enabled=$DATA_MAINTENANCE_ENABLED tmp_deleted=$tmp_deleted_count cache_deleted=$cache_deleted_count sentinel_compressed=$sentinel_compressed_count snapshot_compressed=$snapshot_compressed_count raw_row_exclusion_deleted=$raw_row_exclusion_deleted_count raw_row_exclusion_backup_deleted=$raw_row_exclusion_backup_deleted_count"
 finished_at="$(TZ=Asia/Seoul date +%FT%T%z)"
-echo "[DONE] log_rotation_cleanup target_date=${TARGET_DATE} archive_retention_days=${RETENTION_DAYS} active_log_retention_days=${ACTIVE_LOG_RETENTION_DAYS} system_metric_retention_days=${SYSTEM_METRIC_RETENTION_DAYS} active_rotated=${rotated_active_count} active_deleted=${active_deleted_count} archive_deleted=${deleted_count} system_metric_pruned=${system_metric_pruned} data_maintenance_enabled=${DATA_MAINTENANCE_ENABLED} tmp_deleted=${tmp_deleted_count} cache_deleted=${cache_deleted_count} sentinel_compressed=${sentinel_compressed_count} snapshot_compressed=${snapshot_compressed_count} raw_row_exclusion_deleted=${raw_row_exclusion_deleted_count} finished_at=${finished_at}"
+echo "[DONE] log_rotation_cleanup target_date=${TARGET_DATE} archive_retention_days=${RETENTION_DAYS} active_log_retention_days=${ACTIVE_LOG_RETENTION_DAYS} active_log_compress_min_index=${ACTIVE_LOG_COMPRESS_MIN_INDEX} system_metric_retention_days=${SYSTEM_METRIC_RETENTION_DAYS} raw_row_exclusion_backup_retention_days=${RAW_ROW_EXCLUSION_BACKUP_RETENTION_DAYS} active_rotated=${rotated_active_count} active_deleted=${active_deleted_count} archive_deleted=${deleted_count} archive_compressed=${compressed_archive_count} archive_pruned_to_backup_limit=${archive_pruned_to_backup_limit_count} system_metric_pruned=${system_metric_pruned} data_maintenance_enabled=${DATA_MAINTENANCE_ENABLED} tmp_deleted=${tmp_deleted_count} cache_deleted=${cache_deleted_count} sentinel_compressed=${sentinel_compressed_count} snapshot_compressed=${snapshot_compressed_count} raw_row_exclusion_deleted=${raw_row_exclusion_deleted_count} raw_row_exclusion_backup_deleted=${raw_row_exclusion_backup_deleted_count} finished_at=${finished_at}"

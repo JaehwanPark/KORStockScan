@@ -1,3 +1,4 @@
+import gzip
 import json
 import subprocess
 from pathlib import Path
@@ -1683,7 +1684,12 @@ def test_observation_source_quality_write_excludes_bad_rows_instead_of_blocking_
         "source_probe_id",
         "source_record_id",
     ]
-    assert Path(payload["backup_path"]).exists()
+    backup_path = Path(payload["backup_path"])
+    assert backup_path.exists()
+    assert backup_path.suffix == ".gz"
+    with gzip.open(backup_path, "rt", encoding="utf-8") as handle:
+        backup_rows = [json.loads(line) for line in handle if line.strip()]
+    assert [row["record_id"] for row in backup_rows] == [1, 2]
 
 
 def test_observation_source_quality_raw_row_exclusion_summary_is_stage_generic(monkeypatch, tmp_path):
@@ -1826,6 +1832,98 @@ def test_observation_source_quality_does_not_exclude_rows_when_contract_passes_t
     assert report["summary"]["raw_row_exclusion_applied"] is False
     assert report["summary"]["hard_blocking_excluded_row_count"] == 0
     assert len(rows) == 2
+
+
+def test_observation_source_quality_accepts_scalping_scanner_watching_runtime_skip(monkeypatch, tmp_path):
+    monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
+    _write_events(
+        tmp_path,
+        "2026-06-19",
+        [
+            _event(
+                "scalping_scanner_watching_runtime_skip",
+                {
+                    "metric_role": "funnel_count",
+                    "decision_authority": "real_scalping_scanner_runtime_watchlist_observation_only",
+                    "window_policy": "intraday_runtime_watchlist",
+                    "sample_floor": "not_applicable_runtime_observation",
+                    "primary_decision_metric": "skip_reason",
+                    "source_quality_gate": "scalping_scanner_watching_runtime_skip_contract",
+                    "source_quality_route": "runtime_watchlist_skip_observation_only",
+                    "runtime_effect": False,
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                    "forbidden_uses": (
+                        "score_threshold_change,provider_route_change,order_price_change,"
+                        "quantity_or_cap_change,broker_guard_change,real_execution_quality_approval"
+                    ),
+                    "skip_reason": "ws_snapshot_missing_or_zero",
+                    "scanner_promotion_id": "SCANPROM-000037-1000000",
+                    "scanner_promotion_emitted_epoch": "1000.000",
+                    "source_signature": "PRICE_JUMP_START",
+                    "target_status": "WATCHING",
+                    "target_strategy": "SCALPING",
+                    "target_position_tag": "SCANNER",
+                    "runtime_record_id": 77,
+                    "entry_armed_at_epoch": 1000.0,
+                    "ws_curr": "not_applicable_ws_curr",
+                },
+            )
+        ],
+    )
+
+    report = audit.write_report("2026-06-19")
+
+    contract = report["stage_contracts"]["scalping_scanner_watching_runtime_skip"]
+    assert contract["status"] == "pass"
+    assert report["summary"]["hard_blocking_contract_gap_count"] == 0
+    assert report["summary"]["tuning_input_allowed"] is True
+
+
+def test_observation_source_quality_accepts_scanner_skip_without_promotion_id_when_armed(monkeypatch, tmp_path):
+    monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
+    _write_events(
+        tmp_path,
+        "2026-06-19",
+        [
+            _event(
+                "scalping_scanner_watching_runtime_skip",
+                {
+                    "metric_role": "funnel_count",
+                    "decision_authority": "real_scalping_scanner_runtime_watchlist_observation_only",
+                    "window_policy": "intraday_runtime_watchlist",
+                    "sample_floor": "not_applicable_runtime_observation",
+                    "primary_decision_metric": "skip_reason",
+                    "source_quality_gate": "scalping_scanner_watching_runtime_skip_contract",
+                    "source_quality_route": "runtime_watchlist_skip_observation_only",
+                    "runtime_effect": False,
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                    "forbidden_uses": (
+                        "score_threshold_change,provider_route_change,order_price_change,"
+                        "quantity_or_cap_change,broker_guard_change,real_execution_quality_approval"
+                    ),
+                    "skip_reason": "ws_snapshot_missing_or_zero",
+                    "scanner_promotion_id": "not_applicable_scanner_promotion_id",
+                    "scanner_promotion_emitted_epoch": "not_applicable_scanner_promotion_emitted_epoch",
+                    "source_signature": "not_applicable_source_signature",
+                    "target_status": "WATCHING",
+                    "target_strategy": "SCALPING",
+                    "target_position_tag": "SCANNER",
+                    "runtime_record_id": 78,
+                    "entry_armed_at_epoch": 1000.0,
+                    "ws_curr": "not_applicable_ws_curr",
+                },
+            )
+        ],
+    )
+
+    report = audit.write_report("2026-06-19")
+
+    contract = report["stage_contracts"]["scalping_scanner_watching_runtime_skip"]
+    assert contract["status"] == "pass"
+    assert report["summary"]["hard_blocking_contract_gap_count"] == 0
+    assert report["summary"]["tuning_input_allowed"] is True
 
 
 def test_observation_source_quality_audit_accepts_swing_loss_reentry_fallback_source(monkeypatch, tmp_path):

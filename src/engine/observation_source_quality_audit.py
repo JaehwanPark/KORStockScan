@@ -433,6 +433,23 @@ STAGE_CONTRACTS: dict[str, StageContract] = {
         ),
         decision_authority="real_scalping_scanner_runtime_watchlist_handoff_only",
     ),
+    "scalping_scanner_watching_runtime_skip": StageContract(
+        required_fields=(
+            *REAL_EXECUTION_DIAGNOSTIC_FIELDS,
+            "skip_reason",
+            "scanner_promotion_id",
+            "scanner_promotion_emitted_epoch",
+            "source_signature",
+            "target_status",
+            "target_strategy",
+            "target_position_tag",
+            "runtime_record_id",
+            "entry_armed_at_epoch",
+            "ws_curr",
+            "source_quality_route",
+        ),
+        decision_authority="real_scalping_scanner_runtime_watchlist_observation_only",
+    ),
     "early_accel_recheck_evaluated": StageContract(
         required_fields=(
             *REAL_EXECUTION_DIAGNOSTIC_FIELDS,
@@ -2673,7 +2690,7 @@ def _raw_row_exclusion_paths(target_date: str, run_id: str | None = None) -> tup
     report_dir = DATA_DIR / "source_quality" / RAW_ROW_EXCLUSION_DIRNAME / f"{target_date}_{run_id}"
     return (
         report_dir / "manifest.json",
-        report_dir / f"pipeline_events_{target_date}.jsonl",
+        report_dir / f"pipeline_events_{target_date}.jsonl.gz",
     )
 
 
@@ -2693,7 +2710,8 @@ def _exclude_hard_blocking_rows_from_raw(target_date: str, report: dict[str, Any
         return None
     manifest_path, backup_path = _raw_row_exclusion_paths(target_date)
     manifest_path.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(raw_path, backup_path)
+    with raw_path.open("rb") as source, gzip.open(backup_path, "wb", compresslevel=9) as target:
+        shutil.copyfileobj(source, target)
     exclusions_by_line = {
         int(item.get("line_no")): item
         for item in exclusions

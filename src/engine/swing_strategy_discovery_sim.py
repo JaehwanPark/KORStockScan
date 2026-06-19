@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 import pandas as pd
-from sqlalchemy import bindparam, create_engine, text
+from sqlalchemy import bindparam, create_engine, text, tuple_
 from sqlalchemy.orm import sessionmaker
 
 from src.database.models import (
@@ -381,16 +381,38 @@ def fetch_quote_features(codes: Iterable[str], *, db_url: str = POSTGRES_URL, lo
         return {}
     engine = create_engine(db_url)
     query = text("""
+        WITH ranked_quotes AS (
+            SELECT
+                quote_date,
+                stock_code,
+                stock_name,
+                open_price,
+                high_price,
+                low_price,
+                close_price,
+                volume,
+                marcap,
+                daily_return,
+                ROW_NUMBER() OVER (
+                    PARTITION BY stock_code
+                    ORDER BY quote_date DESC
+                ) AS rn
+            FROM daily_stock_quotes
+            WHERE stock_code IN :codes
+        )
         SELECT quote_date, stock_code, stock_name, open_price, high_price, low_price, close_price,
                volume, marcap, daily_return
-        FROM daily_stock_quotes
-        WHERE stock_code IN :codes
+        FROM ranked_quotes
+        WHERE rn <= :lookback
         ORDER BY stock_code ASC, quote_date DESC
-    """).bindparams(bindparam("codes", expanding=True))
+    """).bindparams(bindparam("codes", expanding=True), bindparam("lookback"))
     try:
-        df = pd.read_sql(query, engine, params={"codes": codes})
+        df = pd.read_sql(query, engine, params={"codes": codes, "lookback": max(1, int(lookback))})
     except Exception:
         return {}
+    finally:
+        if hasattr(engine, "dispose"):
+            engine.dispose()
     if df.empty:
         return {}
     df["stock_code"] = df["stock_code"].map(_norm_code)
@@ -757,86 +779,141 @@ def persist_discovery_rows(candidates: list[dict[str, Any]], arms: list[dict[str
     engine = create_engine(db_url)
     Session = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
     candidate_ids: dict[str, int] = {}
-    with Session.begin() as session:
-        for row in candidates:
-            existing = (
-                session.query(SwingStrategyDiscoveryCandidate)
-                .filter_by(
-                    source_date=pd.to_datetime(row["source_date"]).date(),
-                    stock_code=row["stock_code"],
-                    policy_version=row["policy_version"],
+    try:
+        with Session.begin() as session:
+            candidate_lookup_keys = [
+                (
+                    pd.to_datetime(row["source_date"]).date(),
+                    row["stock_code"],
+                    row["policy_version"],
                 )
-                .first()
+                for row in candidates
+            ]
+            existing_candidates = (
+                session.query(SwingStrategyDiscoveryCandidate)
+                .filter(
+                    tuple_(
+                        SwingStrategyDiscoveryCandidate.source_date,
+                        SwingStrategyDiscoveryCandidate.stock_code,
+                        SwingStrategyDiscoveryCandidate.policy_version,
+                    ).in_(candidate_lookup_keys)
+                )
+                .all()
+                if candidate_lookup_keys
+                else []
             )
-            payload = {
-                "source_date": pd.to_datetime(row["source_date"]).date(),
-                "stock_code": row["stock_code"],
-                "stock_name": row["stock_name"],
-                "policy_version": row["policy_version"],
-                "selection_arm": row["selection_arm"],
-                "diversity_bucket": row["diversity_bucket"],
-                "position_tag": row["position_tag"],
-                "block_reason": row["block_reason"],
-                "volatility_bucket": row["volatility_bucket"],
-                "sector": row["sector"],
-                "industry": row["industry"],
-                "theme_tags": row["theme_tags"],
-                "legacy_model_prob": row["legacy_model_prob"],
-                "legacy_model_rank": row["legacy_model_rank"],
-                "legacy_selection_mode": row["legacy_selection_mode"],
-                "legacy_pick_type": row["legacy_pick_type"],
-                "legacy_meta_score": row["legacy_meta_score"],
-                "legacy_hybrid_mean": row["legacy_hybrid_mean"],
-                "lifecycle_exploration_score": row["lifecycle_exploration_score"],
-                "source_features": _json_text(row["source_features"]),
-                "decision_authority": DECISION_AUTHORITY,
-                "actual_order_submitted": False,
-                "broker_order_forbidden": True,
-                "runtime_effect": False,
-                "updated_at": datetime.now(),
+            existing_candidate_map = {
+                (item.source_date, item.stock_code, item.policy_version): item
+                for item in existing_candidates
             }
-            if existing is None:
-                existing = SwingStrategyDiscoveryCandidate(**payload)
-                session.add(existing)
-                session.flush()
-            else:
-                for key, value in payload.items():
-                    setattr(existing, key, value)
-            candidate_ids[row["candidate_key"]] = int(existing.id)
+            for row in candidates:
+                lookup_key = (
+                    pd.to_datetime(row["source_date"]).date(),
+                    row["stock_code"],
+                    row["policy_version"],
+                )
+                existing = existing_candidate_map.get(lookup_key)
+                payload = {
+                    "source_date": lookup_key[0],
+                    "stock_code": row["stock_code"],
+                    "stock_name": row["stock_name"],
+                    "policy_version": row["policy_version"],
+                    "selection_arm": row["selection_arm"],
+                    "diversity_bucket": row["diversity_bucket"],
+                    "position_tag": row["position_tag"],
+                    "block_reason": row["block_reason"],
+                    "volatility_bucket": row["volatility_bucket"],
+                    "sector": row["sector"],
+                    "industry": row["industry"],
+                    "theme_tags": row["theme_tags"],
+                    "legacy_model_prob": row["legacy_model_prob"],
+                    "legacy_model_rank": row["legacy_model_rank"],
+                    "legacy_selection_mode": row["legacy_selection_mode"],
+                    "legacy_pick_type": row["legacy_pick_type"],
+                    "legacy_meta_score": row["legacy_meta_score"],
+                    "legacy_hybrid_mean": row["legacy_hybrid_mean"],
+                    "lifecycle_exploration_score": row["lifecycle_exploration_score"],
+                    "source_features": _json_text(row["source_features"]),
+                    "decision_authority": DECISION_AUTHORITY,
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                    "runtime_effect": False,
+                    "updated_at": datetime.now(),
+                }
+                if existing is None:
+                    existing = SwingStrategyDiscoveryCandidate(**payload)
+                    session.add(existing)
+                    existing_candidate_map[lookup_key] = existing
+                else:
+                    for key, value in payload.items():
+                        setattr(existing, key, value)
+            session.flush()
+            for row in candidates:
+                lookup_key = (
+                    pd.to_datetime(row["source_date"]).date(),
+                    row["stock_code"],
+                    row["policy_version"],
+                )
+                candidate_ids[row["candidate_key"]] = int(existing_candidate_map[lookup_key].id)
 
-        for row in arms:
-            candidate_id = candidate_ids.get(row["candidate_key"])
-            if not candidate_id:
-                continue
-            existing = (
+            arm_lookup_keys = [
+                (
+                    candidate_ids[row["candidate_key"]],
+                    row["arm_id"],
+                    row["policy_version"],
+                )
+                for row in arms
+                if row["candidate_key"] in candidate_ids
+            ]
+            existing_arms = (
                 session.query(SwingStrategyDiscoveryArm)
-                .filter_by(candidate_id=candidate_id, arm_id=row["arm_id"], policy_version=row["policy_version"])
-                .first()
+                .filter(
+                    tuple_(
+                        SwingStrategyDiscoveryArm.candidate_id,
+                        SwingStrategyDiscoveryArm.arm_id,
+                        SwingStrategyDiscoveryArm.policy_version,
+                    ).in_(arm_lookup_keys)
+                )
+                .all()
+                if arm_lookup_keys
+                else []
             )
-            payload = {
-                "candidate_id": candidate_id,
-                "source_date": pd.to_datetime(row["source_date"]).date(),
-                "stock_code": row["stock_code"],
-                "policy_version": row["policy_version"],
-                "arm_id": row["arm_id"],
-                "entry_policy": row["entry_policy"],
-                "sizing_policy": row["sizing_policy"],
-                "exit_policy": row["exit_policy"],
-                "status": row["status"],
-                "virtual_entry_price": row["virtual_entry_price"],
-                "virtual_qty": row["virtual_qty"],
-                "virtual_notional_krw": row["virtual_notional_krw"],
-                "arm_features": _json_text(row["arm_features"]),
-                "actual_order_submitted": False,
-                "broker_order_forbidden": True,
-                "runtime_effect": False,
-                "updated_at": datetime.now(),
+            existing_arm_map = {
+                (item.candidate_id, item.arm_id, item.policy_version): item
+                for item in existing_arms
             }
-            if existing is None:
-                session.add(SwingStrategyDiscoveryArm(**payload))
-            else:
-                for key, value in payload.items():
-                    setattr(existing, key, value)
+            for row in arms:
+                candidate_id = candidate_ids.get(row["candidate_key"])
+                if not candidate_id:
+                    continue
+                existing = existing_arm_map.get((candidate_id, row["arm_id"], row["policy_version"]))
+                payload = {
+                    "candidate_id": candidate_id,
+                    "source_date": pd.to_datetime(row["source_date"]).date(),
+                    "stock_code": row["stock_code"],
+                    "policy_version": row["policy_version"],
+                    "arm_id": row["arm_id"],
+                    "entry_policy": row["entry_policy"],
+                    "sizing_policy": row["sizing_policy"],
+                    "exit_policy": row["exit_policy"],
+                    "status": row["status"],
+                    "virtual_entry_price": row["virtual_entry_price"],
+                    "virtual_qty": row["virtual_qty"],
+                    "virtual_notional_krw": row["virtual_notional_krw"],
+                    "arm_features": _json_text(row["arm_features"]),
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                    "runtime_effect": False,
+                    "updated_at": datetime.now(),
+                }
+                if existing is None:
+                    session.add(SwingStrategyDiscoveryArm(**payload))
+                else:
+                    for key, value in payload.items():
+                        setattr(existing, key, value)
+    finally:
+        if hasattr(engine, "dispose"):
+            engine.dispose()
     return {"candidate_rows": len(candidates), "arm_rows": len(arms)}
 
 
