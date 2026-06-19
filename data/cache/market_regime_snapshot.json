@@ -1,20 +1,20 @@
 {
-  "timestamp": "2026-06-19T12:37:19.705465",
+  "timestamp": "2026-06-19T13:42:20.800547",
   "vix_close": 16.399999618530273,
   "vix_ma3": 17.083333333333332,
   "vix_peak_passed": true,
   "vix_two_day_down": false,
   "vix_extreme": false,
-  "wti_close": 75.52999877929688,
-  "wti_rsi": 29.942080458546613,
-  "wti_macd": -5.136783288570626,
-  "wti_macd_signal": -3.522913007884067,
+  "wti_close": 75.4800033569336,
+  "wti_rsi": 30.388589855315487,
+  "wti_macd": -5.362368732722004,
+  "wti_macd_signal": -3.8756217713064993,
   "wti_dead_cross": false,
-  "wti_from_recent_high_pct": -21.81159423151422,
+  "wti_from_recent_high_pct": -21.86334932794589,
   "oil_reversal": true,
   "oil_pullback_relief": true,
-  "fng_value": 37.5142857142857,
-  "fng_prev": 37.5142857142857,
+  "fng_value": 37.2571428571429,
+  "fng_prev": 37.2571428571429,
   "fng_description": "fear",
   "fng_extreme_fear": false,
   "fng_recovery": false,
@@ -25,11 +25,11 @@
   "swing_recovery_gate_label": "PARTIAL",
   "recovery_gate_reason": "recovery_signal_partial",
   "oil_only_recovery_prior": false,
-  "market_regime_continuous_score": 62.5057,
+  "market_regime_continuous_score": 62.4029,
   "market_regime_continuous_label": "NEUTRAL",
   "market_regime_component_scores": {
     "vix_level": 23.6,
-    "fear_greed_level": 5.0057,
+    "fear_greed_level": 4.9029,
     "domestic_breadth": 20.7,
     "oil_relief": 10.0,
     "local_model": 3.2
@@ -44,8 +44,8 @@
   ],
   "debug": {
     "oil_rsi_turned": false,
-    "fng_curr": 37.5142857142857,
-    "fng_prev": 37.5142857142857,
+    "fng_curr": 37.2571428571429,
+    "fng_prev": 37.2571428571429,
     "score_threshold": 70,
     "component_scores": {
       "vix": 25,
@@ -70,7 +70,7 @@
       },
       "component_scores": {
         "vix_level": 23.6,
-        "fear_greed_level": 5.0057,
+        "fear_greed_level": 4.9029,
         "domestic_breadth": 20.7,
         "oil_relief": 10.0,
         "local_model": 3.2
@@ -97,5 +97,5 @@
     "local_breadth_signal": "none"
   },
   "cached_session_date": "2026-06-19",
-  "cached_at": "2026-06-19T12:37:19.716490+09:00"
+  "cached_at": "2026-06-19T13:42:20.811473+09:00"
 }

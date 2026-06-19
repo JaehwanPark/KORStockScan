@@ -289,31 +289,9 @@ def _get_engine():
 
 ---
 
-### #10. psycopg2 커넥션 풀링 부재 — `dashboard_data_repository.py`
+### #10. 완료: legacy dashboard DB upsert path 제거
 
-| 항목 | 내용 |
-|------|------|
-| **파일** | `src/engine/dashboard_data_repository.py:39-41,128-154` |
-| **패턴** | `get_db_connection()` 호출마다 `psycopg2.connect(POSTGRES_URL)` + 행단위 개별 `cur.execute()` INSERT |
-| **문제** | 매 호출 TCP 연결 새생성 + SSL 협상. 명시적 커넥션 풀 없음. 행단위 INSERT는 batch INSERT 대비 수십 배 느림 |
-| **영향** | **MEDIUM** — dashboard data upsert path |
-| **개선** | `psycopg2.pool.SimpleConnectionPool` + `executemany()` |
-
-```python
-# Before
-conn = psycopg2.connect(POSTGRES_URL)
-for row in rows:
-    cur.execute("INSERT INTO ... VALUES (...)", row)
-conn.commit()
-
-# After
-from psycopg2.pool import SimpleConnectionPool
-_pool = SimpleConnectionPool(1, 5, POSTGRES_URL)
-conn = _pool.getconn()
-cur.executemany("INSERT INTO ... VALUES (%s, %s, ...)", rows)
-conn.commit()
-_pool.putconn(conn)
-```
+`dashboard_data_repository.py`의 legacy PostgreSQL raw dashboard 저장 경로는 제거됐다. 현재 dashboard/API canonical source는 `data/report/monitor_snapshots/*.json*`, `data/pipeline_events/*.jsonl*`, Parquet, DuckDB다.
 
 ---
 

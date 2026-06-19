@@ -147,7 +147,7 @@ def _arm_s15_candidate(code, name, cnd_name, ttl_sec=180):
 def _unarm_s15_candidate(code):
     with FAST_LOCK:
         FAST_SCALP_POOL.pop(code, None)
-    _delete_armed_candidate_from_db(code)
+    _delete_armed_candidate_from_database(code)
 
 
 def _save_armed_candidate_to_db(code, name, cnd_name, armed_at, expires_at):
@@ -189,7 +189,7 @@ def _save_armed_candidate_to_db(code, name, cnd_name, armed_at, expires_at):
             session.add(record)
 
 
-def _delete_armed_candidate_from_db(code):
+def _delete_armed_candidate_from_database(code):
     today = datetime.now().date()
     if DB is None:
         return
@@ -201,7 +201,7 @@ def _delete_armed_candidate_from_db(code):
         ).delete()
 
 
-def _restore_armed_candidates_from_db():
+def _restore_armed_candidates_from_database():
     """봇 재시작 시 DB에 저장된 S15_CANDID 후보들을 FAST_SCALP_POOL에 복원합니다."""
     today = datetime.now().date()
     now = _now_ts()

@@ -2,31 +2,31 @@
 
 ## 판정
 
-- primary: `RUNTIME_OPS`
-- secondary: `HOLD_DEFER_DANGER, AI_HOLDING_OPS, SOFT_STOP_WHIPSAW, TRAILING_EARLY_EXIT`
+- primary: `HOLD_DEFER_DANGER`
+- secondary: `AI_HOLDING_OPS, SOFT_STOP_WHIPSAW, TRAILING_EARLY_EXIT`
 - report_only: `true`
 - live_runtime_effect: `false`
-- operator_action_required: `true`
-- followup_route: `holding_runtime_ops_playbook`
-- followup_owner: `operator_review`
+- operator_action_required: `false`
+- followup_route: `holding_flow_defer_cost_review`
+- followup_owner: `postclose_threshold_cycle`
 - runtime_effect: `report_only_no_mutation`
 
 ## 근거
 
-- as_of: `2026-06-19T12:40:02`
-- exit_signal unique: `60`
+- as_of: `2026-06-19T13:40:03`
+- exit_signal unique: `63`
 - sell_order_sent unique: `1`
 - sell_completed unique: `1`
 - real exit/sell_sent/sell_completed: `0` / `0` / `0`
-- non-real exit/sell_sent/sell_completed: `60` / `1` / `1`
-- sell_sent/exit_signal: `1.7%`
+- non-real exit/sell_sent/sell_completed: `63` / `1` / `1`
+- sell_sent/exit_signal: `1.6%`
 - real sell_sent/exit_signal: `0.0%`
-- non-real sell_sent/exit_signal: `1.7%`
-- flow defer events: `114`
+- non-real sell_sent/exit_signal: `1.6%`
+- flow defer events: `117`
 - AI holding cache MISS: `100.0%`
 - soft_stop rebound above sell 10m: `88.5%`
 - trailing missed-upside: `35.3%`
-- top reasons: `AI보유감시:cache_miss=664, flow유예:scalp_trailing_take_profit=81, 청산신호:scalp_trailing_take_profit=66, soft_stop_grace=56, flow유예:scalp_soft_stop_pct=33`
+- top reasons: `AI보유감시:cache_miss=679, flow유예:scalp_trailing_take_profit=81, 청산신호:scalp_trailing_take_profit=66, soft_stop_grace=60, flow유예:scalp_soft_stop_pct=36`
 
 ## 금지된 자동변경
 
@@ -38,4 +38,4 @@
 
 ## 권고 액션
 
-- Check holding pipeline event freshness; restart only after explicit approval.
+- Review holding_flow_override defer examples and worsen floor evidence.

@@ -165,8 +165,8 @@
   - 선행 완료: `coverage_summary.json` 기준 `missing_in_parquet=[]`, DuckDB 직접 조회 `pipeline_events=2,857,648 rows`.
 - [x] `[DataArch0422] legacy DB raw 테이블 제거 및 운영혼선 차단 확인` (`Due: 2026-04-22`, `Slot: POSTCLOSE`, `TimeWindow: 18:10~18:30`, `Track: Plan`) (`실행: 2026-04-21 07:48 KST`)
   - Source: [workorder-gemini-tuning-monitoring-log-architecture-refactor.md](/home/ubuntu/KORStockScan/docs/archive/legacy-workorders/workorder-gemini-tuning-monitoring-log-architecture-refactor.md)
-  - 판정 기준: `dashboard_pipeline_events/dashboard_monitor_snapshots` 등 제거 대상 drop 완료, 메타 테이블만 유지, 제거 후 리포트 정상 동작 확인
-  - 선행 완료: legacy raw 테이블 dry-run 기준 존재하지 않음. `KORSTOCKSCAN_ENABLE_LEGACY_DASHBOARD_DB` opt-in 없이는 재생성/쓰기 차단.
+  - 판정 기준: legacy dashboard raw DB 테이블 drop 완료, 메타 테이블만 유지, 제거 후 리포트 정상 동작 확인
+  - 선행 완료: legacy raw 테이블 dry-run 기준 존재하지 않음. 재생성/쓰기 차단.
 - [x] `[DataArch0422] 중복/불필요 cron 정리` (`Due: 2026-04-22`, `Slot: POSTCLOSE`, `TimeWindow: 18:20~18:30`, `Track: Plan`) (`실행: 2026-04-21 07:52 KST`)
   - 판정 기준: `TUNING_MONITORING_POSTCLOSE`와 중복되는 금요일 분석랩 cron 제거, 오래된 1회성 주석/중복 주석 정리, 유지 대상 운영 cron 확인
   - 선행 완료: `PATTERN_LAB_CLAUDE_FRI_POSTCLOSE`, `PATTERN_LAB_GEMINI_FRI_POSTCLOSE` 제거 및 `deploy/install_pattern_lab_cron.sh` cleanup shim 전환.

@@ -23,6 +23,7 @@ from src.engine.sniper_state_handlers import (
     _should_publish_watching_buy_analysis_telegram,
     _should_run_score65_74_recovery_probe,
     _should_run_main_buy_recovery_canary,
+    _should_first_ai_wait_for_big_bite,
     _resolve_early_accel_recheck,
     _resolve_early_accel_strong_bundle_recheck,
     _resolve_ai_numeric_consistency_recheck,
@@ -355,6 +356,7 @@ def test_scanner_rising_strength_override_allows_exact_bid_imbalance_price_jump_
         "scanner_promotion_reason": "price_jump_start_acceleration",
         "source_signature": " bid_imbalance_surge , price_jump_start ",
         "price_delta_since_first_seen_pct": "1.53",
+        "entry_armed_at_epoch": 100.0,
     }
 
     result = _resolve_scanner_rising_strength_momentum_override(
@@ -366,6 +368,7 @@ def test_scanner_rising_strength_override_allows_exact_bid_imbalance_price_jump_
     assert result["override_reason"] == "scanner_rising_bid_imbalance_strength_ai_recheck"
     assert result["price_delta_since_first_seen_pct"] == "1.53"
     assert result["scanner_context_source"] == "stock_state"
+    assert result["scanner_context_emitted_epoch"] == "100.000"
 
 
 def test_scanner_rising_strength_override_uses_latest_qualifying_event_when_stock_context_is_overwritten(monkeypatch):
@@ -1454,6 +1457,98 @@ def test_log_entry_pipeline_refreshes_stale_scanner_promotion_id(monkeypatch):
     assert fields["price_delta_since_first_seen_pct"] == "1.45"
 
 
+def test_emit_scanner_watching_runtime_skip_fills_contract_fields(monkeypatch):
+    emitted = []
+    monkeypatch.setattr(
+        handlers,
+        "emit_pipeline_event",
+        lambda pipeline, name, code, stage, *, record_id=None, fields=None: emitted.append(
+            {"stage": stage, "record_id": record_id, "fields": fields or {}}
+        ),
+    )
+    stock = {
+        "id": 77,
+        "name": "PROMOTED",
+        "code": "000037",
+        "status": "WATCHING",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "added_time": 900.0,
+        "entry_armed_at_epoch": 1000.0,
+        "scanner_promotion_id": "SCANPROM-000037-1000000",
+        "scanner_promotion_emitted_epoch": "1000.000",
+        "scanner_promotion_reason": "price_jump_start_acceleration",
+        "source_signature": "PRICE_JUMP_START",
+        "price_delta_since_first_seen_pct": "1.20",
+    }
+
+    emitted_result = handlers.emit_scanner_watching_runtime_skip(
+        stock,
+        "000037",
+        skip_reason="ws_snapshot_missing_or_zero",
+        now_ts=1100.0,
+        ws_data={},
+        ws_manager_available=True,
+    )
+
+    assert emitted_result is True
+    assert emitted[-1]["stage"] == "scalping_scanner_watching_runtime_skip"
+    fields = emitted[-1]["fields"]
+    assert fields["metric_role"] == "funnel_count"
+    assert fields["decision_authority"] == "real_scalping_scanner_runtime_watchlist_observation_only"
+    assert fields["source_quality_route"] == "runtime_watchlist_skip_observation_only"
+    assert fields["runtime_effect"] is False
+    assert fields["actual_order_submitted"] is False
+    assert fields["broker_order_forbidden"] is True
+    assert fields["skip_reason"] == "ws_snapshot_missing_or_zero"
+    assert fields["scanner_promotion_id"] == "SCANPROM-000037-1000000"
+    assert fields["target_status"] == "WATCHING"
+    assert fields["target_strategy"] == "SCALPING"
+    assert fields["target_position_tag"] == "SCANNER"
+    assert fields["runtime_record_id"] == 77
+    assert fields["entry_armed_at_epoch"] == 1000.0
+    assert fields["ws_curr"] == "not_applicable_ws_curr"
+    assert fields["ws_manager_available"] is True
+
+
+def test_emit_scanner_watching_runtime_skip_throttles_same_reason(monkeypatch):
+    emitted = []
+    monkeypatch.setattr(
+        handlers,
+        "emit_pipeline_event",
+        lambda pipeline, name, code, stage, *, record_id=None, fields=None: emitted.append(
+            {"stage": stage, "fields": fields or {}}
+        ),
+    )
+    stock = {
+        "id": 78,
+        "name": "PROMOTED",
+        "status": "WATCHING",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "entry_armed_at_epoch": 1000.0,
+    }
+
+    first = handlers.emit_scanner_watching_runtime_skip(
+        stock,
+        "000038",
+        skip_reason="entry_cooldown_active",
+        now_ts=1100.0,
+        ws_data={"curr": 12000},
+    )
+    second = handlers.emit_scanner_watching_runtime_skip(
+        stock,
+        "000038",
+        skip_reason="entry_cooldown_active",
+        now_ts=1110.0,
+        ws_data={"curr": 12000},
+    )
+
+    assert first is True
+    assert second is False
+    assert len(emitted) == 1
+
+
 def test_log_ai_confirmed_terminal_no_budget_emits_contract_fields(monkeypatch):
     emitted = []
     monkeypatch.setattr(
@@ -1490,6 +1585,33 @@ def test_log_ai_confirmed_terminal_no_budget_emits_contract_fields(monkeypatch):
     assert fields["source_stage"] == "first_ai_wait"
     assert fields["ai_score"] == "78.0"
     assert fields["ai_action"] == "BUY"
+
+
+def test_first_ai_big_bite_wait_does_not_block_strong_buy():
+    assert _should_first_ai_wait_for_big_bite(
+        {"action": "BUY", "score": 82},
+        82,
+        big_bite_confirmed=False,
+        entry_score_threshold=75,
+    ) is False
+    assert _should_first_ai_wait_for_big_bite(
+        {"action": "WAIT", "score": 74},
+        74,
+        big_bite_confirmed=False,
+        entry_score_threshold=75,
+    ) is True
+    assert _should_first_ai_wait_for_big_bite(
+        {"action": "BUY", "score": 74},
+        74,
+        big_bite_confirmed=False,
+        entry_score_threshold=75,
+    ) is True
+    assert _should_first_ai_wait_for_big_bite(
+        {"action": "WAIT", "score": 62},
+        62,
+        big_bite_confirmed=True,
+        entry_score_threshold=75,
+    ) is False
 
 
 def test_build_ai_overlap_log_fields_includes_momentum_and_profile():

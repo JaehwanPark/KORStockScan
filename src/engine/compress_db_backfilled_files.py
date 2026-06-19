@@ -9,7 +9,6 @@ import os
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
-from src.engine.dashboard_data_repository import get_db_connection
 from src.utils.constants import DATA_DIR
 
 
@@ -59,57 +58,9 @@ def _kind_and_date_from_snapshot_file(path: Path) -> tuple[str, date] | None:
     return kind, maybe_date
 
 
-def _table_exists(conn, table_name: str) -> bool:
-    with conn.cursor() as cur:
-        cur.execute(
-            """
-            SELECT EXISTS (
-                SELECT 1
-                FROM information_schema.tables
-                WHERE table_name = %s
-            )
-            """,
-            (table_name,),
-        )
-        return bool(cur.fetchone()[0])
-
-
 def _parquet_partition_exists(dataset: str, target_date: date) -> bool:
     partition_dir = ANALYTICS_PARQUET_DIR / dataset / f"date={target_date.isoformat()}"
     return partition_dir.exists() and any(partition_dir.glob("*.parquet"))
-
-
-def _db_has_pipeline_events(conn, target_date: date) -> bool:
-    if not _table_exists(conn, "dashboard_pipeline_events"):
-        return False
-    with conn.cursor() as cur:
-        cur.execute(
-            """
-            SELECT 1
-            FROM dashboard_pipeline_events
-            WHERE event_date = %s
-            LIMIT 1
-            """,
-            (target_date.isoformat(),),
-        )
-        return cur.fetchone() is not None
-
-
-def _db_has_snapshot(conn, kind: str, target_date: date) -> bool:
-    if not _table_exists(conn, "dashboard_monitor_snapshots"):
-        return False
-    with conn.cursor() as cur:
-        cur.execute(
-            """
-            SELECT 1
-            FROM dashboard_monitor_snapshots
-            WHERE snapshot_kind = %s
-              AND target_date = %s
-            LIMIT 1
-            """,
-            (kind, target_date.isoformat()),
-        )
-        return cur.fetchone() is not None
 
 
 def _snapshot_manifest_verifies(kind: str, target_date: date) -> bool:
@@ -167,72 +118,64 @@ def run(*, retention_days: int, today: date, dry_run: bool) -> dict:
         "errors": [],
     }
 
-    conn = get_db_connection()
-    try:
-        # pipeline_events_*.jsonl only (already compressed .gz excluded)
-        for path in sorted(PIPELINE_EVENTS_DIR.glob("pipeline_events_*.jsonl")):
-            target_date = _date_from_pipeline_file(path)
-            if target_date is None or target_date > cutoff:
+    # pipeline_events_*.jsonl only (already compressed .gz excluded)
+    for path in sorted(PIPELINE_EVENTS_DIR.glob("pipeline_events_*.jsonl")):
+        target_date = _date_from_pipeline_file(path)
+        if target_date is None or target_date > cutoff:
+            continue
+        stats["pipeline"]["scanned"] += 1
+        try:
+            verified = _parquet_partition_exists("pipeline_events", target_date)
+            if not verified:
+                stats["skipped_unverified"] += 1
                 continue
-            stats["pipeline"]["scanned"] += 1
-            try:
-                verified = _parquet_partition_exists("pipeline_events", target_date)
-                if not verified:
-                    verified = _db_has_pipeline_events(conn, target_date)
-                if not verified:
-                    stats["skipped_unverified"] += 1
-                    continue
-                stats["pipeline"]["verified"] += 1
-                compressed, saved = _gzip_file(path, dry_run=dry_run)
-                if compressed:
-                    stats["pipeline"]["compressed"] += 1
-                    stats["pipeline"]["saved_bytes"] += saved
-            except Exception as exc:
-                stats["errors"].append(f"pipeline:{path.name}:{exc}")
+            stats["pipeline"]["verified"] += 1
+            compressed, saved = _gzip_file(path, dry_run=dry_run)
+            if compressed:
+                stats["pipeline"]["compressed"] += 1
+                stats["pipeline"]["saved_bytes"] += saved
+        except Exception as exc:
+            stats["errors"].append(f"pipeline:{path.name}:{exc}")
 
-        # monitor snapshot *.json only (already compressed .gz excluded)
-        for path in sorted(MONITOR_SNAPSHOT_DIR.glob("*_*.json")):
-            parsed = _kind_and_date_from_snapshot_file(path)
-            if parsed is None:
+    # monitor snapshot *.json only (already compressed .gz excluded)
+    for path in sorted(MONITOR_SNAPSHOT_DIR.glob("*_*.json")):
+        parsed = _kind_and_date_from_snapshot_file(path)
+        if parsed is None:
+            continue
+        kind, target_date = parsed
+        if target_date > cutoff:
+            continue
+        stats["snapshots"]["scanned"] += 1
+        try:
+            verified = _snapshot_manifest_verifies(kind, target_date)
+            if not verified:
+                stats["skipped_unverified"] += 1
                 continue
-            kind, target_date = parsed
-            if target_date > cutoff:
-                continue
-            stats["snapshots"]["scanned"] += 1
-            try:
-                verified = _snapshot_manifest_verifies(kind, target_date)
-                if not verified:
-                    verified = _db_has_snapshot(conn, kind, target_date)
-                if not verified:
-                    stats["skipped_unverified"] += 1
-                    continue
-                stats["snapshots"]["verified"] += 1
-                compressed, saved = _gzip_file(path, dry_run=dry_run)
-                if compressed:
-                    stats["snapshots"]["compressed"] += 1
-                    stats["snapshots"]["saved_bytes"] += saved
-            except Exception as exc:
-                stats["errors"].append(f"snapshot:{path.name}:{exc}")
+            stats["snapshots"]["verified"] += 1
+            compressed, saved = _gzip_file(path, dry_run=dry_run)
+            if compressed:
+                stats["snapshots"]["compressed"] += 1
+                stats["snapshots"]["saved_bytes"] += saved
+        except Exception as exc:
+            stats["errors"].append(f"snapshot:{path.name}:{exc}")
 
-        # threshold-cycle immutable source snapshots (already compressed .gz excluded)
-        for path in sorted(THRESHOLD_SNAPSHOT_DIR.glob("pipeline_events_*.jsonl")):
-            target_date = _date_from_threshold_snapshot_file(path)
-            if target_date is None or target_date > cutoff:
+    # threshold-cycle immutable source snapshots (already compressed .gz excluded)
+    for path in sorted(THRESHOLD_SNAPSHOT_DIR.glob("pipeline_events_*.jsonl")):
+        target_date = _date_from_threshold_snapshot_file(path)
+        if target_date is None or target_date > cutoff:
+            continue
+        stats["threshold_snapshots"]["scanned"] += 1
+        try:
+            if not _threshold_backfill_exists(target_date):
+                stats["skipped_unverified"] += 1
                 continue
-            stats["threshold_snapshots"]["scanned"] += 1
-            try:
-                if not _threshold_backfill_exists(target_date):
-                    stats["skipped_unverified"] += 1
-                    continue
-                stats["threshold_snapshots"]["verified"] += 1
-                compressed, saved = _gzip_file(path, dry_run=dry_run)
-                if compressed:
-                    stats["threshold_snapshots"]["compressed"] += 1
-                    stats["threshold_snapshots"]["saved_bytes"] += saved
-            except Exception as exc:
-                stats["errors"].append(f"threshold_snapshot:{path.name}:{exc}")
-    finally:
-        conn.close()
+            stats["threshold_snapshots"]["verified"] += 1
+            compressed, saved = _gzip_file(path, dry_run=dry_run)
+            if compressed:
+                stats["threshold_snapshots"]["compressed"] += 1
+                stats["threshold_snapshots"]["saved_bytes"] += saved
+        except Exception as exc:
+            stats["errors"].append(f"threshold_snapshot:{path.name}:{exc}")
     return stats
 
 
@@ -248,7 +191,7 @@ def _format_bytes(num: int) -> str:
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Compress dashboard raw files only when matching DB records exist and file is D+N old.",
+        description="Compress dashboard raw files only after canonical file/parquet verification and D+N age.",
     )
     parser.add_argument("--days", type=int, default=1, help="Compress files with date <= today - days (default: 1)")
     parser.add_argument("--date", dest="today", default=None, help="Override today date (YYYY-MM-DD)")

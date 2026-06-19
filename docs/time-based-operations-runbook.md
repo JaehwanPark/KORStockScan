@@ -388,13 +388,13 @@ POSTCLOSE 최상위 감리는 `Tuning Chain Control State`(튜닝 체인 관제 
 
 ## 19:50 데이터 갱신 확인 절차
 
-`update_kospi.py`는 매매 runtime과 분리된 EOD 데이터 체인이다. DB 적재, dashboard upload, swing recommendation, swing daily reports가 한 status JSON 안에 step별로 남는다.
+`update_kospi.py`는 매매 runtime과 분리된 EOD 데이터 체인이다. DB 적재, swing recommendation, swing daily reports가 한 status JSON 안에 step별로 남는다.
 
 1. `logs/update_kospi.log`에서 당일 `[START] update_kospi target_date=YYYY-MM-DD`와 `[DONE]` 또는 `[FAIL]` marker를 확인한다.
 2. `data/runtime/update_kospi_status/update_kospi_YYYY-MM-DD.json`의 `status`, `failed_steps`, `warning_steps`, `recovered_steps`, `db_state.latest_quote_date`, `db_state.rows_on_latest_date`를 확인한다.
-3. `status=completed_with_warnings`는 DB 장애와 동일하지 않다. `failed_steps`가 `recommend_daily_v2`, `upload_today_dashboard_files`, `swing_daily_reports` 중 어디인지 분리한다.
+3. `status=completed_with_warnings`는 DB 장애와 동일하지 않다. `failed_steps`가 `recommend_daily_v2`, `swing_daily_reports` 중 어디인지 분리한다.
 4. `recommend_daily_v2` 실패는 `data/daily_recommendations_v2.csv` 갱신 여부와 traceback을 같이 본다. 추천 모델 subprocess는 repo root `cwd`와 직접 실행 sys.path bootstrap을 요구한다.
-5. `log_scanner`가 `_error.log` 안의 INFO성 `DB 일괄 삽입 성공`/`DB 업로드 완료`를 DB 장애로 해석하지 않도록, 실제 ERROR/traceback 후보 라인과 status JSON을 우선 본다.
+5. `log_scanner`가 `_error.log` 안의 INFO성 `DB 일괄 삽입 성공`을 DB 장애로 해석하지 않도록, 실제 ERROR/traceback 후보 라인과 status JSON을 우선 본다.
 6. `update_kospi` 실행은 보통 20~40분 걸릴 수 있다. detector window end 전 `START-only`는 `in_progress`로 본다.
 
 표준 확인 명령:

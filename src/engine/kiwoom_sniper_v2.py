@@ -71,7 +71,7 @@ from src.engine.sniper_s15_fast_track import (
     _now_ts,
     _arm_s15_candidate,
     _unarm_s15_candidate,
-    _restore_armed_candidates_from_db,
+    _restore_armed_candidates_from_database,
     _is_s15_armed,
     _is_s15_reentry_blocked,
     _block_s15_reentry,
@@ -895,6 +895,37 @@ def _resolve_scanner_runtime_record_id(payload, code, strategy):
         return None
 
 
+def _is_scanner_runtime_target(target):
+    strategy = normalize_strategy((target or {}).get("strategy"))
+    position_tag = normalize_position_tag(strategy, (target or {}).get("position_tag"))
+    return strategy == "SCALPING" and position_tag == "SCANNER"
+
+
+def _runtime_added_time_for_target(target, now_ts=None):
+    """Preserve scanner promotion recency across restarts and DB poll rehydration."""
+    now_ts = time.time() if now_ts is None else now_ts
+    target = target or {}
+    if _is_scanner_runtime_target(target):
+        armed_ts = _safe_float(target.get("entry_armed_at_epoch"), 0.0)
+        if armed_ts > 0:
+            return armed_ts
+    return _safe_float(target.get("added_time"), now_ts) or now_ts
+
+
+def _is_scalping_fifo_target(target):
+    target = target or {}
+    strategy = normalize_strategy(target.get("strategy"))
+    position_tag = normalize_position_tag(strategy, target.get("position_tag"))
+    return strategy == "SCALPING" and position_tag not in {"VCP_CANDID", "VCP_SHOOTING", "VCP_NEXT"}
+
+
+def _scalping_fifo_candidates(watching_stocks, now_ts):
+    return sorted(
+        [t for t in watching_stocks if _is_scalping_fifo_target(t)],
+        key=lambda x: _runtime_added_time_for_target(x, now_ts=now_ts),
+    )
+
+
 def handle_scalping_scanner_promoted_target(payload):
     """Attach scanner-promoted WATCHING records to the live loop without changing buy thresholds."""
     global ACTIVE_TARGETS
@@ -1012,7 +1043,7 @@ def attach_db_poll_target_if_missing(db_target, targets, now_ts):
     ):
         return False
 
-    dt["added_time"] = now_ts
+    dt["added_time"] = _runtime_added_time_for_target(dt, now_ts=now_ts)
     targets.append(dt)
     event_bus.publish("COMMAND_WS_REG", {"codes": [code]})
 
@@ -1027,11 +1058,11 @@ def attach_db_poll_target_if_missing(db_target, targets, now_ts):
                 "status": dt.get("status") or "WATCHING",
                 "position_tag": dt["position_tag"],
                 "buy_price": dt.get("buy_price"),
-                "added_time": now_ts,
-                "entry_armed_at_epoch": dt.get("entry_armed_at_epoch") or now_ts,
+                "added_time": dt["added_time"],
+                "entry_armed_at_epoch": dt.get("entry_armed_at_epoch") or dt["added_time"],
             },
             outcome="db_poll_attached",
-            reason="eventbus_attach_missing_recovered_from_db_poll",
+            reason="eventbus_attach_missing_recovered_from_database_poll",
             target=dt,
         )
     return True
@@ -1473,14 +1504,15 @@ def run_sniper(is_test_mode=False):
     sniper_state_handlers.sanitize_pending_add_states(ACTIVE_TARGETS)
     bind_execution_dependencies(active_targets=ACTIVE_TARGETS)
     bind_overnight_dependencies(active_targets=ACTIVE_TARGETS)
-    _restore_armed_candidates_from_db()
+    _restore_armed_candidates_from_database()
     # ==========================================
     # 💡 [추가 1] 봇 시작 시 불러온 종목들의 진입 시간 기록
     # ==========================================
+    boot_ts = time.time()
     for t in ACTIVE_TARGETS:
-        t['added_time'] = time.time()
         t['strategy'] = normalize_strategy(t.get('strategy'))
         t['position_tag'] = normalize_position_tag(t['strategy'], t.get('position_tag'))
+        t['added_time'] = _runtime_added_time_for_target(t, now_ts=boot_ts)
     _restore_holding_runtime_state(ACTIVE_TARGETS)
     sniper_state_handlers.sync_scalp_simulator_targets_from_state(ACTIVE_TARGETS)
     try:
@@ -1572,20 +1604,17 @@ def run_sniper(is_test_mode=False):
                 expired_ids = []
                 expired_names = []
 
-                watching_stocks.sort(key=lambda x: x.get('added_time', 0))
+                watching_stocks.sort(key=lambda x: _runtime_added_time_for_target(x, now_ts=now_ts))
+                scalp_fifo_targets = _scalping_fifo_candidates(watching_stocks, now_ts)
 
-                for t in watching_stocks:
-                    if t.get('strategy') in ['SCALPING', 'SCALP']:
-                        if t.get('position_tag') in ['VCP_CANDID', 'VCP_SHOOTING', 'VCP_NEXT']:
-                            continue
-                        if now_ts - t.get('added_time', now_ts) > 7200:
-                            expired_ids.append(t['id'])
-                            expired_names.append(t['name'])
+                for t in scalp_fifo_targets:
+                    if now_ts - _runtime_added_time_for_target(t, now_ts=now_ts) > 7200:
+                        expired_ids.append(t['id'])
+                        expired_names.append(t['name'])
 
                 scalp_remaining = [
-                    t for t in watching_stocks
-                    if t.get('strategy') in ['SCALPING', 'SCALP'] and t['id'] not in expired_ids
-                    and t.get('position_tag') not in ['VCP_CANDID', 'VCP_SHOOTING', 'VCP_NEXT']
+                    t for t in scalp_fifo_targets
+                    if t['id'] not in expired_ids
                 ]
                 if len(scalp_remaining) > 40:
                     overflow = len(scalp_remaining) - 40
@@ -1694,6 +1723,15 @@ def run_sniper(is_test_mode=False):
 
                 ws_data = WS_MANAGER.get_latest_data(code) if WS_MANAGER else {}
                 if not ws_data or ws_data.get('curr', 0) == 0:
+                    if status == 'WATCHING':
+                        sniper_state_handlers.emit_scanner_watching_runtime_skip(
+                            stock,
+                            code,
+                            skip_reason="ws_snapshot_missing_or_zero",
+                            now_ts=now_ts,
+                            ws_data=ws_data,
+                            ws_manager_available=bool(WS_MANAGER),
+                        )
                     continue
 
                 if sniper_state_handlers._is_scalp_simulator_target(stock) and status == sniper_state_handlers.SCALP_SIM_PENDING_STATUS:

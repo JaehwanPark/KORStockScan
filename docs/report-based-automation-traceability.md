@@ -270,7 +270,7 @@ scale-in 핸드오프도 fail-closed다. LDM 후보가 있으면 `threshold_cycl
 
 `codebase_performance_workorder_report`는 `docs/codebase-performance-bottleneck-analysis.md`의 성능개선 후보를 자동화체인 source artifact로 승격한다. accepted 후보는 Codex workorder runner safe scope에서 자동 구현 후보가 될 수 있지만 모든 후보는 `runtime_effect=false`, `strategy_effect=false`, `data_quality_effect=false`, `tuning_axis_effect=false`와 parity contract를 가져야 한다.
 
-이 artifact의 금지선은 `runtime_threshold_mutation`, `provider_route_change`, `broker_order_guard_change`, `bot_restart`, `tuning_axis_change`, `source_quality_policy_change`, `raw_forensic_stream_suppression`이다. `kiwoom_orders` transport 재사용, config cache, legacy dashboard DB pool, WS tick parsing, raw suppression처럼 runtime/data-quality semantics가 바뀔 수 있는 후보는 accepted로 승격하지 않고 deferred/rejected로 남긴다.
+이 artifact의 금지선은 `runtime_threshold_mutation`, `provider_route_change`, `broker_order_guard_change`, `bot_restart`, `tuning_axis_change`, `source_quality_policy_change`, `raw_forensic_stream_suppression`이다. `kiwoom_orders` transport 재사용, config cache, WS tick parsing, raw suppression처럼 runtime/data-quality semantics가 바뀔 수 있는 후보는 accepted로 승격하지 않고 deferred/rejected로 남긴다. Legacy dashboard DB pool 후보는 DB 경로 제거로 더 이상 생성하지 않는다.
 
 ## 2.6 Metric Decision Contract
 
@@ -451,7 +451,7 @@ Swing micro source-quality는 `swing_micro_ws_quote_source=missing`을 micro 계
 - IPO listing-day autorun status는 YAML-gated 실주문 실행 감사용이다. 결과를 threshold-cycle calibration, daily EV, scalping/swing runtime threshold 입력으로 자동 소비하지 않는다.
 - `runtime_approval_summary`는 read-only 요약 artifact다. `runtime_mutation_allowed=false`일 때는 flow 조정, 주문 차단, threshold mutation 권한이 없다.
 - 같은 날짜 workorder 재생성 여부를 `mtime`만으로 판정하지 않는다. `generation_id/source_hash/lineage` diff가 source of truth다.
-- `update_kospi_status.completed_with_warnings`는 DB 적재 실패와 동일하지 않다. `failed_steps`를 확인해 `recommend_daily_v2`, dashboard upload, swing daily reports 같은 후행 step 실패를 분리한다.
+- `update_kospi_status.completed_with_warnings`는 DB 적재 실패와 동일하지 않다. `failed_steps`를 확인해 `recommend_daily_v2`, swing daily reports 같은 후행 step 실패를 분리한다. Legacy dashboard DB upload step은 제거됐고 파일/Parquet/DuckDB가 canonical source다.
 - `_error.log` 파일명만 보고 모든 `DB` 문자열을 DB 장애로 분류하지 않는다. `log_scanner`는 ERROR/CRITICAL/traceback/exception/에러/오류/실패 후보 라인만 incident 후보로 본다. `MEMORY_ERROR`는 실제 memory/OOM signature만 인정하고 `kiwoom_*` logger 이름 내부의 `oom` 같은 부분 문자열은 메모리 장애로 분류하지 않는다.
 - `win_rate`, `simple_sum_profit_pct`, `active_unrealized`, `combined_diagnostic`, `counterfactual_only` 지표는 단독으로 runtime apply, 실주문 전환, threshold 완화/강화 승인 근거가 될 수 없다.
 - `metric_role`, `decision_authority`, `window_policy`가 없는 새 관찰지표는 threshold candidate가 아니라 instrumentation/source-quality backlog로만 본다.

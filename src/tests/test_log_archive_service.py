@@ -23,9 +23,6 @@ def test_monitor_snapshot_roundtrip(tmp_path, monkeypatch):
     assert path == snapshot_dir / "trade_review_2026-04-06.json"
     loaded = service.load_monitor_snapshot("trade_review", "2026-04-06")
     assert loaded is not None
-    # DB migration adds meta.source field
-    if "meta" in loaded:
-        del loaded["meta"]
     assert loaded == payload
 
 

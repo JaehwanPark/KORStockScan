@@ -7,22 +7,17 @@ import os
 import threading
 import atexit
 import hashlib
-import time
 from datetime import datetime
 from pathlib import Path
 
 from src.utils.constants import DATA_DIR, TRADING_RULES
 from src.utils.logger import log_error, log_info
 from src.utils.threshold_cycle_registry import threshold_family_for_stage
-from src.engine.dashboard_data_repository import upsert_pipeline_event_rows
 from src.engine.pipeline_event_summary import ProducerSummaryCompactor
 
 
 _WRITE_LOCK = threading.RLock()
 _PRODUCER_COMPACTOR: ProducerSummaryCompactor | None = None
-_DB_WRITE_LOCK = threading.RLock()
-_DB_UPSERT_BUFFER: dict[str, list[dict]] = {}
-_DB_UPSERT_FIRST_TS: dict[str, float] = {}
 
 _TEXT_INFO_STAGE_KEYWORDS = (
     "order_submitted",
@@ -192,58 +187,10 @@ def _get_producer_compactor() -> ProducerSummaryCompactor | None:
     return _PRODUCER_COMPACTOR
 
 
-def _db_batch_size() -> int:
-    value = os.getenv(
-        "PIPELINE_EVENT_DB_BATCH_SIZE",
-        str(getattr(TRADING_RULES, "PIPELINE_EVENT_DB_BATCH_SIZE", 32) or 32),
-    )
-    try:
-        return max(1, int(value))
-    except (TypeError, ValueError):
-        return 32
-
-
-def _db_flush_sec() -> float:
-    value = os.getenv(
-        "PIPELINE_EVENT_DB_FLUSH_SEC",
-        str(getattr(TRADING_RULES, "PIPELINE_EVENT_DB_FLUSH_SEC", 2.0) or 2.0),
-    )
-    try:
-        return max(0.0, float(value))
-    except (TypeError, ValueError):
-        return 2.0
-
-
 def flush_pipeline_event_producer_summary(target_date: str | None = None) -> dict:
     if _PRODUCER_COMPACTOR is None:
         return {"enabled": False, "status": "disabled", "flushed_rows": 0}
     return _PRODUCER_COMPACTOR.flush(target_date=target_date)
-
-
-def flush_pipeline_event_db_buffer(target_date: str | None = None) -> dict:
-    if target_date is None:
-        with _DB_WRITE_LOCK:
-            pending_dates = sorted(_DB_UPSERT_BUFFER.keys())
-    else:
-        pending_dates = [str(target_date)]
-
-    flushed_rows = 0
-    flushed_batches = 0
-    for day_key in pending_dates:
-        with _DB_WRITE_LOCK:
-            rows = list(_DB_UPSERT_BUFFER.pop(day_key, []))
-            _DB_UPSERT_FIRST_TS.pop(day_key, None)
-        if not rows:
-            continue
-        upsert_pipeline_event_rows(day_key, rows)
-        flushed_rows += len(rows)
-        flushed_batches += 1
-    return {
-        "enabled": True,
-        "status": "flushed" if flushed_batches else "idle",
-        "flushed_rows": flushed_rows,
-        "flushed_batches": flushed_batches,
-    }
 
 
 def _flush_producer_summary_at_exit() -> None:
@@ -254,16 +201,6 @@ def _flush_producer_summary_at_exit() -> None:
 
 
 atexit.register(_flush_producer_summary_at_exit)
-
-
-def _flush_db_buffer_at_exit() -> None:
-    try:
-        flush_pipeline_event_db_buffer()
-    except Exception as exc:
-        log_error(f"[PIPELINE_EVENT] DB buffer atexit flush failed: {exc}")
-
-
-atexit.register(_flush_db_buffer_at_exit)
 
 
 def sanitize_pipeline_field(value) -> str:
@@ -374,27 +311,6 @@ def _append_jsonl(path: Path, line: str) -> None:
         handle.write(line)
 
 
-def _queue_db_upsert(target_date: str, row: dict) -> None:
-    now_ts = time.monotonic()
-    rows_to_flush: list[dict] | None = None
-    with _DB_WRITE_LOCK:
-        buffer = _DB_UPSERT_BUFFER.setdefault(target_date, [])
-        buffer.append(row)
-        _DB_UPSERT_FIRST_TS.setdefault(target_date, now_ts)
-        first_ts = _DB_UPSERT_FIRST_TS.get(target_date, now_ts)
-        should_flush = len(buffer) >= _db_batch_size()
-        if not should_flush and _db_flush_sec() <= 0:
-            should_flush = True
-        if not should_flush and (now_ts - first_ts) >= _db_flush_sec():
-            should_flush = True
-        if should_flush:
-            rows_to_flush = list(buffer)
-            _DB_UPSERT_BUFFER.pop(target_date, None)
-            _DB_UPSERT_FIRST_TS.pop(target_date, None)
-    if rows_to_flush:
-        upsert_pipeline_event_rows(target_date, rows_to_flush)
-
-
 def emit_pipeline_event(
     pipeline: str,
     name: str,
@@ -474,11 +390,5 @@ def emit_pipeline_event(
                 _append_jsonl(_threshold_cycle_event_path(event_payload["emitted_date"]), compact_line)
     except Exception as exc:
         log_error(f"[PIPELINE_EVENT] structured append failed: {exc}")
-
-    try:
-        if not compaction_result.get("suppress_raw"):
-            _queue_db_upsert(event_payload["emitted_date"], event_payload)
-    except Exception as exc:
-        log_error(f"[PIPELINE_EVENT] DB upsert failed: {exc}")
 
     return event_payload

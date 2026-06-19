@@ -6,8 +6,6 @@ from src.utils import pipeline_event_logger as logger_mod
 
 def _reset_logger_state(monkeypatch):
     monkeypatch.setattr(logger_mod, "_PRODUCER_COMPACTOR", None)
-    monkeypatch.setattr(logger_mod, "_DB_UPSERT_BUFFER", {})
-    monkeypatch.setattr(logger_mod, "_DB_UPSERT_FIRST_TS", {})
 
 
 def test_emit_pipeline_event_writes_text_and_jsonl(monkeypatch, tmp_path):
@@ -228,9 +226,6 @@ def test_emit_pipeline_event_shadow_compaction_keeps_raw_and_writes_producer_sum
         ),
     )
     monkeypatch.setattr(logger_mod, "log_info", lambda msg, send_telegram=False: None)
-    upserts = []
-    monkeypatch.setattr(logger_mod, "upsert_pipeline_event_rows", lambda target_date, rows: upserts.append((target_date, rows)))
-
     payload = logger_mod.emit_pipeline_event(
         "ENTRY_PIPELINE",
         "테스트종목",
@@ -239,13 +234,12 @@ def test_emit_pipeline_event_shadow_compaction_keeps_raw_and_writes_producer_sum
         record_id=77,
         fields={"reason": "below_strength_base", "buy_ratio": "0.42"},
     )
-    logger_mod.flush_pipeline_event_db_buffer(payload["emitted_date"])
     logger_mod.flush_pipeline_event_producer_summary(payload["emitted_date"])
 
     raw_path = tmp_path / "pipeline_events" / f"pipeline_events_{payload['emitted_date']}.jsonl"
     raw_rows = [json.loads(line) for line in raw_path.read_text(encoding="utf-8").splitlines() if line.strip()]
     assert len(raw_rows) == 1
-    assert upserts and upserts[0][1][0]["stage"] == "blocked_strength_momentum"
+    assert raw_rows[0]["stage"] == "blocked_strength_momentum"
     summary_path = tmp_path / "pipeline_event_summaries" / f"pipeline_event_producer_summary_{payload['emitted_date']}.jsonl"
     summary_rows = [json.loads(line) for line in summary_path.read_text(encoding="utf-8").splitlines() if line.strip()]
     assert summary_rows and summary_rows[0]["event_count"] == 1
@@ -272,8 +266,6 @@ def test_emit_pipeline_event_default_compaction_is_shadow_report_only(monkeypatc
         ),
     )
     monkeypatch.setattr(logger_mod, "log_info", lambda msg, send_telegram=False: None)
-    monkeypatch.setattr(logger_mod, "upsert_pipeline_event_rows", lambda target_date, rows: None)
-
     payload = logger_mod.emit_pipeline_event(
         "ENTRY_PIPELINE",
         "테스트종목",
@@ -311,9 +303,6 @@ def test_emit_pipeline_event_suppress_mode_preserves_lossless_allowlist(monkeypa
         ),
     )
     monkeypatch.setattr(logger_mod, "log_info", lambda msg, send_telegram=False: None)
-    upserts = []
-    monkeypatch.setattr(logger_mod, "upsert_pipeline_event_rows", lambda target_date, rows: upserts.append((target_date, rows)))
-
     suppressed = logger_mod.emit_pipeline_event(
         "ENTRY_PIPELINE",
         "테스트종목",
@@ -330,14 +319,11 @@ def test_emit_pipeline_event_suppress_mode_preserves_lossless_allowlist(monkeypa
         record_id=2,
         fields={"reason": "near_day_high", "actual_order_submitted": "true"},
     )
-    logger_mod.flush_pipeline_event_db_buffer(preserved["emitted_date"])
     logger_mod.flush_pipeline_event_producer_summary(preserved["emitted_date"])
 
     raw_path = tmp_path / "pipeline_events" / f"pipeline_events_{preserved['emitted_date']}.jsonl"
     raw_rows = [json.loads(line) for line in raw_path.read_text(encoding="utf-8").splitlines() if line.strip()]
     assert [row["record_id"] for row in raw_rows] == [2]
-    assert len(upserts) == 1
-    assert upserts[0][1][0]["record_id"] == 2
     summary_path = tmp_path / "pipeline_event_summaries" / f"pipeline_event_producer_summary_{preserved['emitted_date']}.jsonl"
     summary_rows = [json.loads(line) for line in summary_path.read_text(encoding="utf-8").splitlines() if line.strip()]
     assert sum(int(row["event_count"]) for row in summary_rows) == 2
@@ -346,49 +332,6 @@ def test_emit_pipeline_event_suppress_mode_preserves_lossless_allowlist(monkeypa
     assert manifest["raw_suppression_enabled"] is True
     assert manifest["suppressed_count"] == 1
     assert manifest["lossless_preserved_count"] == 1
-
-
-def test_emit_pipeline_event_batches_db_upserts_until_flush(monkeypatch, tmp_path):
-    monkeypatch.setattr(logger_mod, "DATA_DIR", tmp_path)
-    _reset_logger_state(monkeypatch)
-    monkeypatch.delenv("PIPELINE_EVENT_HIGH_VOLUME_COMPACTION_MODE", raising=False)
-    monkeypatch.setenv("PIPELINE_EVENT_DB_BATCH_SIZE", "10")
-    monkeypatch.setenv("PIPELINE_EVENT_DB_FLUSH_SEC", "999")
-    monkeypatch.setattr(
-        logger_mod,
-        "TRADING_RULES",
-        SimpleNamespace(
-            PIPELINE_EVENT_JSONL_ENABLED=True,
-            PIPELINE_EVENT_SCHEMA_VERSION=3,
-            PIPELINE_EVENT_TEXT_INFO_LOG_ENABLED=False,
-        ),
-    )
-    monkeypatch.setattr(logger_mod, "log_info", lambda msg, send_telegram=False: None)
-    upserts = []
-    monkeypatch.setattr(logger_mod, "upsert_pipeline_event_rows", lambda target_date, rows: upserts.append((target_date, rows)))
-
-    payload = logger_mod.emit_pipeline_event(
-        "ENTRY_PIPELINE",
-        "테스트종목",
-        "123456",
-        "blocked_overbought",
-        record_id=1,
-        fields={"reason": "near_day_high"},
-    )
-    logger_mod.emit_pipeline_event(
-        "ENTRY_PIPELINE",
-        "테스트종목",
-        "123456",
-        "blocked_overbought",
-        record_id=2,
-        fields={"reason": "near_day_high"},
-    )
-
-    assert upserts == []
-    flush_result = logger_mod.flush_pipeline_event_db_buffer(payload["emitted_date"])
-    assert flush_result["flushed_rows"] == 2
-    assert len(upserts) == 1
-    assert [row["record_id"] for row in upserts[0][1]] == [1, 2]
 
 
 def test_emit_pipeline_event_compacts_submit_stage_threshold_stream(monkeypatch, tmp_path):

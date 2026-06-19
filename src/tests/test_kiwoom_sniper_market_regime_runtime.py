@@ -280,6 +280,64 @@ def test_scalping_scanner_promoted_target_hydrates_missing_record_id(monkeypatch
     assert published == [("COMMAND_WS_REG", {"codes": ["005930"]})]
 
 
+def test_runtime_added_time_uses_scanner_entry_armed_epoch():
+    target = {
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "added_time": 2000.0,
+        "entry_armed_at_epoch": 1234.5,
+    }
+
+    assert kiwoom_sniper_v2._runtime_added_time_for_target(target, now_ts=3000.0) == 1234.5
+
+
+def test_runtime_added_time_keeps_non_scanner_added_time():
+    target = {
+        "strategy": "SCALPING",
+        "position_tag": "SCALP_BASE",
+        "added_time": 2000.0,
+        "entry_armed_at_epoch": 1234.5,
+    }
+
+    assert kiwoom_sniper_v2._runtime_added_time_for_target(target, now_ts=3000.0) == 2000.0
+
+
+def test_scalping_fifo_candidates_preserve_scanner_entry_armed_order():
+    watching = [
+        {
+            "id": 1,
+            "strategy": "SCALPING",
+            "position_tag": "SCANNER",
+            "added_time": 3000.0,
+            "entry_armed_at_epoch": 900.0,
+        },
+        {
+            "id": 2,
+            "strategy": "SCALPING",
+            "position_tag": "SCANNER",
+            "added_time": 1000.0,
+            "entry_armed_at_epoch": 2500.0,
+        },
+        {
+            "id": 3,
+            "strategy": "SCALPING",
+            "position_tag": "VCP_CANDID",
+            "added_time": 100.0,
+            "entry_armed_at_epoch": 100.0,
+        },
+        {
+            "id": 4,
+            "strategy": "KOSPI_ML",
+            "position_tag": "BASE",
+            "added_time": 10.0,
+        },
+    ]
+
+    ordered = kiwoom_sniper_v2._scalping_fifo_candidates(watching, now_ts=4000.0)
+
+    assert [target["id"] for target in ordered] == [1, 2]
+
+
 def test_db_poll_scanner_target_attach_logs_recovery(monkeypatch):
     emitted = []
     published = []
@@ -318,8 +376,48 @@ def test_db_poll_scanner_target_attach_logs_recovery(monkeypatch):
     assert published == [("COMMAND_WS_REG", {"codes": ["005930"]})]
     assert emitted[-1]["stage"] == "scalping_scanner_runtime_target_attach"
     assert emitted[-1]["fields"]["runtime_target_attach_outcome"] == "db_poll_attached"
-    assert emitted[-1]["fields"]["runtime_target_attach_reason"] == "eventbus_attach_missing_recovered_from_db_poll"
+    assert emitted[-1]["fields"]["runtime_target_attach_reason"] == "eventbus_attach_missing_recovered_from_database_poll"
     assert emitted[-1]["fields"]["runtime_record_id"] == 99
+
+
+def test_db_poll_scanner_target_preserves_entry_armed_recency(monkeypatch):
+    emitted = []
+    published = []
+    targets = []
+    monkeypatch.setattr(
+        kiwoom_sniper_v2,
+        "emit_pipeline_event",
+        lambda pipeline, name, code, stage, *, record_id=None, fields=None: emitted.append(
+            {"stage": stage, "code": code, "fields": fields or {}}
+        ),
+    )
+    monkeypatch.setattr(
+        kiwoom_sniper_v2,
+        "event_bus",
+        SimpleNamespace(publish=lambda name, payload: published.append((name, payload))),
+    )
+
+    attached = kiwoom_sniper_v2.attach_db_poll_target_if_missing(
+        {
+            "id": 101,
+            "code": "005930",
+            "name": "SAMSUNG",
+            "strategy": "SCALPING",
+            "status": "WATCHING",
+            "position_tag": "SCANNER",
+            "buy_price": 70000,
+            "type": "SCALP",
+            "entry_armed_at_epoch": 1001.0,
+        },
+        targets,
+        now_ts=2002.0,
+    )
+
+    assert attached is True
+    assert targets[0]["id"] == 101
+    assert targets[0]["added_time"] == 1001.0
+    assert emitted[-1]["fields"]["runtime_target_attach_outcome"] == "db_poll_attached"
+    assert emitted[-1]["fields"]["runtime_record_id"] == 101
 
 
 def test_db_poll_target_attach_skips_existing_real_target(monkeypatch):

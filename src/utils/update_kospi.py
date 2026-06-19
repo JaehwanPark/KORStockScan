@@ -29,7 +29,6 @@ from src.core.event_bus import EventBus
 
 # 💡 [핵심 교정] 텔레그램 매니저를 초대해야 수신기가 EventBus에 정상 등록됩니다!
 import src.notify.telegram_manager as telegram_manager
-from src.engine.dashboard_data_repository import upload_today_dashboard_files
 
 # ==========================================
 # 1. 경로 및 로깅 설정
@@ -660,15 +659,6 @@ def run_update_kospi_chain() -> dict:
         status_path = _write_update_kospi_status(payload)
         logger.error(f"[FAIL] update_kospi target_date={target_date} finished_at={payload['finished_at']} status_path={status_path}")
         raise
-
-    logger.info("📊 당일 대시보드 파일 DB 업로드 시작...")
-    try:
-        stats = upload_today_dashboard_files()
-        logger.info(f"✅ 대시보드 파일 DB 업로드 완료: pipeline_events={stats['pipeline_events']['inserted']}, monitor_snapshots={stats['monitor_snapshots']['inserted']}")
-        steps.append(_step('upload_today_dashboard_files', 'completed', stats=stats))
-    except Exception as e:
-        logger.error(f"❌ 대시보드 파일 DB 업로드 실패 (무시하고 진행): {e}")
-        steps.append(_step('upload_today_dashboard_files', 'failed', error=str(e)))
 
     logger.info("🚀 추천 모델(recommend_daily_v2.py)을 이어서 실행합니다...")
     try:

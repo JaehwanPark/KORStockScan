@@ -6726,6 +6726,90 @@ def _log_entry_pipeline(stock, code, stage, **fields):
     )
 
 
+def _is_scanner_watching_runtime_observation_target(stock) -> bool:
+    if not isinstance(stock, dict):
+        return False
+    strategy = normalize_strategy(stock.get("strategy"))
+    pos_tag = normalize_position_tag(strategy, stock.get("position_tag"))
+    if strategy != "SCALPING" or pos_tag != "SCANNER":
+        return False
+    return bool(
+        stock.get("scanner_promotion_id")
+        or stock.get("scanner_promotion_reason")
+        or stock.get("entry_armed_at_epoch")
+    )
+
+
+def _scanner_watching_runtime_skip_fields(stock, *, skip_reason: str, now_ts: float, ws_data=None, **extra) -> dict[str, Any]:
+    ws_data = ws_data if isinstance(ws_data, dict) else {}
+    scanner_fields = _scanner_promotion_correlation_fields(stock)
+    return {
+        "scanner_promotion_id": scanner_fields.get("scanner_promotion_id")
+        or "not_applicable_scanner_promotion_id",
+        "scanner_promotion_emitted_epoch": scanner_fields.get("scanner_promotion_emitted_epoch")
+        or "not_applicable_scanner_promotion_emitted_epoch",
+        "scanner_promotion_reason": scanner_fields.get("scanner_promotion_reason")
+        or "not_applicable_scanner_promotion_reason",
+        "source_signature": scanner_fields.get("source_signature") or "not_applicable_source_signature",
+        "price_delta_since_first_seen_pct": scanner_fields.get("price_delta_since_first_seen_pct")
+        or "not_applicable_price_delta_since_first_seen_pct",
+        "metric_role": "funnel_count",
+        "decision_authority": "real_scalping_scanner_runtime_watchlist_observation_only",
+        "window_policy": "intraday_runtime_watchlist",
+        "sample_floor": "not_applicable_runtime_observation",
+        "primary_decision_metric": "skip_reason",
+        "source_quality_gate": "scalping_scanner_watching_runtime_skip_contract",
+        "source_quality_route": "runtime_watchlist_skip_observation_only",
+        "runtime_effect": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "forbidden_uses": (
+            "score_threshold_change,provider_route_change,order_price_change,"
+            "quantity_or_cap_change,broker_guard_change,real_execution_quality_approval"
+        ),
+        "skip_reason": skip_reason,
+        "target_status": stock.get("status") or "not_applicable_target_status",
+        "target_strategy": normalize_strategy(stock.get("strategy")),
+        "target_position_tag": normalize_position_tag(normalize_strategy(stock.get("strategy")), stock.get("position_tag")),
+        "runtime_record_id": stock.get("id") or "not_applicable_runtime_record_id",
+        "entry_armed_at_epoch": stock.get("entry_armed_at_epoch") or "not_applicable_entry_armed_at_epoch",
+        "added_time": stock.get("added_time") or "not_applicable_added_time",
+        "ws_curr": ws_data.get("curr") if ws_data.get("curr") not in (None, "") else "not_applicable_ws_curr",
+        "observed_epoch": f"{float(now_ts):.3f}",
+        **extra,
+    }
+
+
+def emit_scanner_watching_runtime_skip(stock, code, *, skip_reason: str, now_ts: float | None = None, ws_data=None, throttle_sec: int = 30, **extra) -> bool:
+    """Log scanner WATCHING skip causes that otherwise hide before downstream gates."""
+    if not _is_scanner_watching_runtime_observation_target(stock):
+        return False
+    now_value = time.time() if now_ts is None else float(now_ts)
+    throttle = max(0, int(throttle_sec or 0))
+    key = str(skip_reason or "unknown_skip")
+    logged = stock.setdefault("_scanner_watching_runtime_skip_logged", {})
+    if not isinstance(logged, dict):
+        logged = {}
+        stock["_scanner_watching_runtime_skip_logged"] = logged
+    last_logged = _safe_float(logged.get(key), 0.0)
+    if throttle > 0 and now_value - last_logged < throttle:
+        return False
+    logged[key] = now_value
+    _log_entry_pipeline(
+        stock,
+        code,
+        "scalping_scanner_watching_runtime_skip",
+        **_scanner_watching_runtime_skip_fields(
+            stock,
+            skip_reason=key,
+            now_ts=now_value,
+            ws_data=ws_data,
+            **extra,
+        ),
+    )
+    return True
+
+
 def _scanner_promotion_correlation_fields(stock) -> dict[str, Any]:
     if not isinstance(stock, dict):
         return {}
@@ -6787,6 +6871,20 @@ def _log_ai_confirmed_terminal_no_budget(
         entry_score_threshold=f"{float(entry_score_threshold):.1f}",
         **(extra_fields or {}),
     )
+
+
+def _should_first_ai_wait_for_big_bite(
+    ai_decision=None,
+    ai_score=None,
+    *,
+    big_bite_confirmed: bool = False,
+    entry_score_threshold: float = 75.0,
+) -> bool:
+    if big_bite_confirmed:
+        return False
+    action = str((ai_decision or {}).get("action") or "").upper()
+    score_value = _safe_float(ai_score if ai_score is not None else (ai_decision or {}).get("score"), 0.0)
+    return not (action == "BUY" and score_value >= float(entry_score_threshold))
 
 
 def _log_swing_entry_policy_evaluated(stock, code, *, strategy, source_stage, **policy_inputs):
@@ -13109,6 +13207,13 @@ def _scanner_rising_strength_context_from_fields(fields: dict | None, *, min_del
 def _find_scanner_rising_strength_context(stock, *, min_delta: float) -> dict:
     current = _scanner_rising_strength_context_from_fields(stock if isinstance(stock, dict) else {}, min_delta=min_delta)
     current["scanner_context_source"] = "stock_state"
+    if isinstance(stock, dict):
+        current_epoch = _safe_float(
+            stock.get("scanner_promotion_emitted_epoch") or stock.get("entry_armed_at_epoch"),
+            0.0,
+        )
+        if current_epoch > 0.0:
+            current["scanner_context_emitted_epoch"] = f"{current_epoch:.3f}"
     if current.get("allowed"):
         return current
     if not isinstance(stock, dict):
@@ -13148,7 +13253,8 @@ def _resolve_scanner_rising_strength_momentum_override(stock, result: dict | Non
         "price_delta_since_first_seen_pct": scanner_context.get("price_delta_since_first_seen_pct") or "0.00",
         "min_price_delta_pct": f"{min_delta:.2f}",
         "scanner_context_source": scanner_context.get("scanner_context_source") or "stock_state",
-        "scanner_context_emitted_epoch": scanner_context.get("scanner_context_emitted_epoch") or "-",
+        "scanner_context_emitted_epoch": scanner_context.get("scanner_context_emitted_epoch")
+        or "not_applicable_scanner_context_emitted_epoch",
     }
 
     if not _rule_bool("SCANNER_RISING_STRENGTH_PRE_AI_OVERRIDE_ENABLED", True):
@@ -16284,7 +16390,12 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                         return False
 
                     if ai_call_executed and last_ai_time == 0:
-                        if not big_bite_confirmed:
+                        if _should_first_ai_wait_for_big_bite(
+                            ai_decision,
+                            current_ai_score,
+                            big_bite_confirmed=big_bite_confirmed,
+                            entry_score_threshold=75,
+                        ):
                             _log_entry_pipeline(
                                 stock,
                                 code,
@@ -16555,6 +16666,14 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                         budget_cap_krw=int(_rule("AI_WAIT6579_PROBE_CANARY_MAX_BUDGET_KRW", 0) or 0),
                     )
 
+                first_ai_big_bite_wait_bypassed = bool(
+                    ai_call_executed
+                    and last_ai_time == 0
+                    and not big_bite_confirmed
+                    and explicit_buy_action
+                    and current_ai_score >= 75
+                )
+
                 final_target_buy_price, final_used_drop_pct = radar.get_smart_target_price(
                     curr_price,
                     v_pw=current_vpw,
@@ -16582,7 +16701,15 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                     chosen_action="BUY_NOW",
                     actual_order_submitted=False,
                     broker_order_forbidden=False,
-                    extra_fields={"target_buy_price": final_target_buy_price},
+                    extra_fields={
+                        "target_buy_price": final_target_buy_price,
+                        "first_ai_big_bite_wait_bypassed": first_ai_big_bite_wait_bypassed,
+                        "first_ai_big_bite_bypass_reason": (
+                            "strong_ai_buy_score_met"
+                            if first_ai_big_bite_wait_bypassed
+                            else "not_applicable"
+                        ),
+                    },
                 )
                 is_trigger = True
                 if big_bite_confirmed:
@@ -19951,6 +20078,14 @@ def handle_watching_state(stock, code, ws_data, admin_id, *, now_ts=None, now_dt
                 f"{stock.get('name')}({code}) state={get_pause_state_label()}"
             )
             _mutate_stock_state(stock, set_fields={'last_pause_block_log_ts': now_ts})
+        emit_scanner_watching_runtime_skip(
+            stock,
+            code,
+            skip_reason="buy_side_paused",
+            now_ts=now_ts,
+            ws_data=ws_data,
+            pause_state=get_pause_state_label(),
+        )
         return
 
     MAX_SCALP_SURGE_PCT = _rule_float('MAX_SCALP_SURGE_PCT', 20.0)
@@ -19992,6 +20127,14 @@ def handle_watching_state(stock, code, ws_data, admin_id, *, now_ts=None, now_dt
         strategy_start = TIME_09_05
 
     if now_t < strategy_start:
+        emit_scanner_watching_runtime_skip(
+            stock,
+            code,
+            skip_reason="before_strategy_start",
+            now_ts=now_ts,
+            ws_data=ws_data,
+            strategy_start=strategy_start.isoformat(),
+        )
         return
 
     MAX_SURGE = MAX_SCALP_SURGE_PCT
@@ -20040,16 +20183,46 @@ def handle_watching_state(stock, code, ws_data, admin_id, *, now_ts=None, now_dt
             now_ts=now_ts,
             runtime_remaining_sec=max(0, int(cooldowns[code] - now_ts)),
         )
+        emit_scanner_watching_runtime_skip(
+            stock,
+            code,
+            skip_reason="entry_cooldown_active",
+            now_ts=now_ts,
+            ws_data=ws_data,
+            cooldown_remaining_sec=max(0, int(cooldowns[code] - now_ts)),
+        )
         return
 
     if strategy == 'SCALPING' and now_t >= TIME_SCALPING_NEW_BUY_CUTOFF:
+        emit_scanner_watching_runtime_skip(
+            stock,
+            code,
+            skip_reason="scalping_new_buy_cutoff",
+            now_ts=now_ts,
+            ws_data=ws_data,
+            cutoff_time=TIME_SCALPING_NEW_BUY_CUTOFF.isoformat(),
+        )
         return
 
     if code in alerted_stocks:
+        emit_scanner_watching_runtime_skip(
+            stock,
+            code,
+            skip_reason="already_alerted_stock",
+            now_ts=now_ts,
+            ws_data=ws_data,
+        )
         return
 
     curr_price = _safe_int(ws_data.get('curr'), 0)
     if curr_price <= 0:
+        emit_scanner_watching_runtime_skip(
+            stock,
+            code,
+            skip_reason="invalid_ws_curr_in_handler",
+            now_ts=now_ts,
+            ws_data=ws_data,
+        )
         return
     _maybe_emit_entry_ai_price_skip_followup(stock, code, curr_price=curr_price, now_ts=now_ts)
 

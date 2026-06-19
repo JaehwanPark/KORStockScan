@@ -59,7 +59,7 @@ ON 가능한 시점은 다음 조건이 모두 닫힌 뒤다.
 | `full` | `trade_review`, `performance_tuning`, `wait6579_ev_cohort`, `post_sell_feedback`, `missed_entry_counterfactual`, `holding_exit_observation`, `monitor_snapshot_manifest` |
 | `intraday_light` | `trade_review`, `performance_tuning`, `wait6579_ev_cohort`, `monitor_snapshot_manifest` |
 
-저장 경로는 `data/report/monitor_snapshots/{kind}_YYYY-MM-DD.json`이며 오래된 파일은 `.json.gz`로 압축될 수 있다. 이 계열은 API/dashboard/snapshot용 canonical JSON이며, 현재 설계상 전부 Markdown을 생성하지는 않는다.
+저장 경로는 `data/report/monitor_snapshots/{kind}_YYYY-MM-DD.json`이며 오래된 파일은 `.json.gz`로 압축될 수 있다. 이 계열은 API/dashboard/snapshot용 canonical JSON이며, legacy `dashboard_*` DB 테이블은 제거되어 현재 운영 소스가 아니다.
 
 ## 정기 JSON/JSONL 산출물
 

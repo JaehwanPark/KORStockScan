@@ -240,18 +240,6 @@ def _deferred_candidates() -> list[dict[str, Any]]:
             state="deferred",
             defer_reason="runtime config reload semantics are not yet bounded",
         ),
-        _base_candidate(
-            item_id="order_perf_dashboard_db_pool_review",
-            title="Legacy dashboard DB connection pool review",
-            risk_tier="medium",
-            target_subsystem="dashboard_legacy_db",
-            files_likely_touched=["src/engine/dashboard_data_repository.py"],
-            acceptance_tests=["pytest src/tests/test_dashboard_data_repository.py"],
-            parity_contract="legacy opt-in behavior, connection close semantics, and inserted row count exact match",
-            priority=22,
-            state="deferred",
-            defer_reason="legacy DB write is opt-in and pool lifetime risk needs separate review",
-        ),
     ]
 
 
