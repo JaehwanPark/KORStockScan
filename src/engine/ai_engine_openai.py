@@ -141,6 +141,17 @@ OPENAI_RESPONSES_WS_ENDPOINTS = {
     "analyze_target_shadow_prompt",
     "entry_price",
 }
+OPENAI_METADATA_MAX_PROPERTIES = 16
+OPENAI_METADATA_KEY_MAX_LENGTH = 64
+OPENAI_METADATA_PRIORITY_KEYS = (
+    "request_id",
+    "endpoint_name",
+    "schema_name",
+    "symbol",
+    "cache_key",
+    "invalid_prompt_retry",
+    "original_endpoint_name",
+)
 OPENAI_RESPONSE_SCHEMA_REGISTRY = AI_RESPONSE_SCHEMA_REGISTRY
 OPENAI_PROMPT_CONTRACT_MARKER = "OPENAI_PROMPT_CONTRACT_V1"
 OPENAI_PROMPT_CONTRACT_HEADER = f"""
@@ -732,6 +743,7 @@ class GPTSniperEngine:
             for key, value in metadata_extra.items():
                 if value not in (None, ""):
                     metadata[str(key)] = str(value)
+        metadata = self._sanitize_openai_metadata(metadata, context_name=context_name)
         prompt = self._wrap_openai_prompt_contract(
             prompt,
             require_json=bool(require_json),
@@ -759,6 +771,63 @@ class GPTSniperEngine:
             ),
             metadata=metadata,
         )
+
+    def _shorten_openai_metadata_key(self, key: str) -> str:
+        normalized = str(key or "metadata_key")
+        if len(normalized) <= OPENAI_METADATA_KEY_MAX_LENGTH:
+            return normalized
+        digest = hashlib.sha1(normalized.encode("utf-8")).hexdigest()[:12]
+        prefix_len = OPENAI_METADATA_KEY_MAX_LENGTH - len(digest) - 1
+        return f"{normalized[:prefix_len]}_{digest}"
+
+    def _sanitize_openai_metadata(self, metadata, *, context_name="Unknown"):
+        if not isinstance(metadata, dict):
+            return {}
+        normalized: dict[str, str] = {}
+        renamed_keys: list[tuple[str, str]] = []
+        for key, value in metadata.items():
+            if value in (None, ""):
+                continue
+            original_key = str(key)
+            safe_key = self._shorten_openai_metadata_key(original_key)
+            if safe_key in normalized and safe_key != original_key:
+                dedupe_digest = hashlib.sha1(original_key.encode("utf-8")).hexdigest()[:8]
+                prefix_len = OPENAI_METADATA_KEY_MAX_LENGTH - len(dedupe_digest) - 1
+                safe_key = f"{safe_key[:prefix_len]}_{dedupe_digest}"
+            if safe_key != original_key:
+                renamed_keys.append((original_key, safe_key))
+            normalized[safe_key] = str(value)
+        if len(normalized) <= OPENAI_METADATA_MAX_PROPERTIES:
+            if renamed_keys:
+                sample = ",".join(f"{src}->{dst}" for src, dst in renamed_keys[:4])
+                log_info(
+                    f"⚠️ [OpenAI metadata normalized] {context_name}: "
+                    f"renamed={len(renamed_keys)} sample={sample}"
+                )
+            return normalized
+
+        kept_keys: list[str] = []
+        for key in OPENAI_METADATA_PRIORITY_KEYS:
+            if key in normalized and key not in kept_keys:
+                kept_keys.append(key)
+        for key in normalized:
+            if key not in kept_keys:
+                kept_keys.append(key)
+
+        selected_keys = kept_keys[:OPENAI_METADATA_MAX_PROPERTIES]
+        trimmed = {key: normalized[key] for key in selected_keys}
+        dropped_keys = [key for key in normalized if key not in trimmed]
+        log_info(
+            f"⚠️ [OpenAI metadata trimmed] {context_name}: "
+            f"{len(normalized)} -> {len(trimmed)} properties; dropped={','.join(dropped_keys[:8])}"
+        )
+        if renamed_keys:
+            sample = ",".join(f"{src}->{dst}" for src, dst in renamed_keys[:4])
+            log_info(
+                f"⚠️ [OpenAI metadata normalized] {context_name}: "
+                f"renamed={len(renamed_keys)} sample={sample}"
+            )
+        return trimmed
 
     def _wrap_openai_prompt_contract(self, prompt, *, require_json, schema_name=None, endpoint_name="generic"):
         base_prompt = str(prompt or "").strip()
@@ -1437,6 +1506,12 @@ class GPTSniperEngine:
         original_reason = str(
             metadata_extra.get("early_accel_strong_bundle_recheck_original_reason_excerpt") or "-"
         )[:160]
+        original_action = str(
+            metadata_extra.get("early_accel_strong_bundle_recheck_original_action") or "-"
+        )[:32]
+        original_score = str(
+            metadata_extra.get("early_accel_strong_bundle_recheck_original_score") or "0.0"
+        )[:32]
         promotion_reason = str(
             metadata_extra.get("early_accel_strong_bundle_recheck_scanner_promotion_reason") or "-"
         )[:120]
@@ -1464,6 +1539,8 @@ class GPTSniperEngine:
         )[:32]
         correction_note = (
             "[Early acceleration strong-bundle recheck]\n"
+            f"- original_action: {original_action}\n"
+            f"- original_score: {original_score}\n"
             f"- prior_reason_excerpt: {original_reason}\n"
             f"- scanner_promotion_reason: {promotion_reason}\n"
             f"- source_signature: {source_signature}\n"
@@ -1487,6 +1564,8 @@ class GPTSniperEngine:
                     payload = None
                 if isinstance(payload, dict):
                     payload["early_accel_strong_bundle_recheck_context"] = {
+                        "original_action": original_action,
+                        "original_score": original_score,
                         "prior_reason_excerpt": original_reason,
                         "scanner_promotion_reason": promotion_reason,
                         "source_signature": source_signature,
@@ -1606,6 +1685,7 @@ class GPTSniperEngine:
         metadata = dict(request.metadata or {})
         metadata["invalid_prompt_retry"] = "true"
         metadata["original_endpoint_name"] = str(request.endpoint_name or "generic")
+        metadata = self._sanitize_openai_metadata(metadata, context_name=request.context_name)
         return replace(
             request,
             prompt=self._wrap_openai_prompt_contract(

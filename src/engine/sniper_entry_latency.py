@@ -702,7 +702,7 @@ def _should_apply_latency_spread_relief_canary(
 ) -> tuple[bool, str]:
     if not bool(getattr(TRADING_RULES, "SCALP_LATENCY_SPREAD_RELIEF_CANARY_ENABLED", False)):
         return False, "disabled"
-    if str(strategy_id or "").upper() != "SCALPING":
+    if str(strategy_id or "").upper() not in {"SCALPING", "SCALP"}:
         return False, "non_scalping"
     if getattr(latency_status, "quote_stale", False):
         return False, "quote_stale"
@@ -1661,6 +1661,8 @@ def evaluate_live_buy_entry(
         "policy_reason": policy.reason,
         "effective_decision": effective_decision.value,
         "effective_reason": effective_reason,
+        "latency_strategy_id": str(strategy_id or ""),
+        "latency_position_tag": str(stock.get("position_tag") or ""),
         "threshold_family": "latency_classifier_runtime_profile",
         "latency_state": latency.state.value,
         "latest_price": latest_price,

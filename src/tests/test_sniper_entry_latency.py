@@ -87,6 +87,103 @@ def test_latency_entry_config_uses_runtime_classifier_overrides(monkeypatch):
     assert config.max_spread_ratio_for_caution == 0.01
 
 
+def test_scanner_promotion_context_hydrates_missing_recheck_anchor(monkeypatch):
+    monkeypatch.setattr(
+        state_handlers,
+        "_load_scanner_promotion_context_events",
+        lambda target_date: {
+            "123456": [
+                {
+                    "emitted_epoch": 1_781_830_800.0,
+                    "fields": {
+                        "scanner_promotion_reason": "price_jump_start_acceleration",
+                        "source_signature": "PRICE_JUMP_START,VOLUME_SURGE_POSITIVE",
+                        "price_delta_since_first_seen_pct": "1.25",
+                        "comparable_flu_delta_since_first_seen": "1.10",
+                        "cntr_str_available": True,
+                        "cntr_str": "123.4",
+                        "current_price_observed": "23500",
+                    },
+                }
+            ]
+        },
+    )
+    stock = {
+        "code": "123456",
+        "date": "2026-06-19",
+        "scanner_promotion_reason": "price_jump_start_acceleration",
+        "source_signature": "PRICE_JUMP_START,VOLUME_SURGE_POSITIVE",
+        "price_delta_since_first_seen_pct": "1.25",
+        "comparable_flu_delta_since_first_seen": "1.10",
+        "cntr_str_available": True,
+        "cntr_str": "123.4",
+    }
+
+    hydrated = state_handlers._hydrate_scanner_promotion_runtime_context(stock)
+
+    assert hydrated["buy_price"] == 23_500
+    assert hydrated["entry_armed_at_epoch"] == 1_781_830_800.0
+    assert stock["buy_price"] == 23_500
+    assert stock["entry_armed_at_epoch"] == 1_781_830_800.0
+
+
+def test_early_accel_strong_bundle_pre_recheck_fields_are_contract_values(monkeypatch):
+    monkeypatch.setattr(state_handlers, "_rule_bool", lambda key, default=False: False)
+    decision = state_handlers._resolve_early_accel_strong_bundle_recheck(
+        {
+            "position_tag": "SCANNER",
+            "scanner_promotion_reason": "price_jump_start_acceleration",
+            "source_signature": "PRICE_JUMP_START,VOLUME_SURGE_POSITIVE",
+        },
+        {},
+        strategy="SCALPING",
+        ai_decision={"action": "WAIT"},
+        ai_score=62,
+    )
+
+    assert decision["allowed"] is False
+    assert decision["skip_reason"] == "disabled"
+    assert decision["recheck_action"] == "not_evaluated"
+    assert decision["recheck_score"] == "not_evaluated"
+
+
+def test_early_accel_strong_bundle_recheck_failure_class_is_canonical():
+    assert state_handlers._early_accel_strong_bundle_recheck_failure_class("DROP") == "drop_action"
+    assert (
+        state_handlers._early_accel_strong_bundle_recheck_failure_class("WAIT")
+        == "wait_below_min_score"
+    )
+    assert (
+        state_handlers._early_accel_strong_bundle_recheck_failure_class("BUY")
+        == "buy_score_below_min"
+    )
+    assert (
+        state_handlers._early_accel_strong_bundle_recheck_failure_class("UNKNOWN")
+        == "non_buy_action"
+    )
+
+
+def test_ai_numeric_consistency_pre_recheck_fields_are_contract_values(monkeypatch):
+    monkeypatch.setattr(state_handlers, "_rule_bool", lambda key, default=False: False)
+    decision = state_handlers._resolve_ai_numeric_consistency_recheck(
+        {"position_tag": "SCANNER"},
+        {},
+        now_ts=1_781_830_800.0,
+        strategy="SCALPING",
+        ai_decision={"action": "WAIT"},
+        ai_score=62,
+    )
+
+    assert decision["allowed"] is False
+    assert decision["skip_reason"] == "disabled"
+    assert decision["inconsistency_field"] == "not_applicable"
+    assert decision["inconsistency_reason"] == "not_applicable"
+    assert decision["detected_value"] == "not_evaluated"
+    assert decision["recheck_action"] == "not_evaluated"
+    assert decision["recheck_score"] == "not_evaluated"
+    assert decision["recheck_reason_excerpt"] == "not_evaluated"
+
+
 def test_latency_entry_runtime_override_uses_more_conservative_defensive_ticks(monkeypatch):
     monkeypatch.setattr(
         entry_latency_module,
@@ -970,6 +1067,47 @@ def test_latency_spread_relief_canary_overrides_reject_danger_to_normal(monkeypa
     assert result["latency_canary_applied"] is True
     assert result["latency_canary_reason"] == "spread_relief_canary_applied"
     assert result["latency_danger_reasons"] == "spread_too_wide"
+    assert result["latency_strategy_id"] == "SCALPING"
+    assert result["latency_position_tag"] == "SCANNER"
+
+
+def test_latency_spread_relief_canary_accepts_scalp_strategy_alias(monkeypatch):
+    monkeypatch.setattr(
+        entry_latency_module,
+        "TRADING_RULES",
+        replace(
+            CONFIG,
+            SCALP_LATENCY_QUOTE_FRESH_COMPOSITE_CANARY_ENABLED=False,
+            SCALP_LATENCY_SIGNAL_QUALITY_QUOTE_COMPOSITE_CANARY_ENABLED=False,
+            SCALP_LATENCY_SPREAD_RELIEF_CANARY_ENABLED=True,
+            SCALP_LATENCY_WS_JITTER_RELIEF_CANARY_ENABLED=False,
+            SCALP_LATENCY_OTHER_DANGER_RELIEF_CANARY_ENABLED=False,
+            SCALP_LATENCY_SPREAD_RELIEF_TAGS=("SCANNER",),
+            SCALP_LATENCY_SPREAD_RELIEF_MIN_SIGNAL_SCORE=85.0,
+            SCALP_LATENCY_SPREAD_RELIEF_MAX_SPREAD_RATIO=0.0120,
+        ),
+    )
+
+    result = evaluate_live_buy_entry(
+        stock={"name": "TEST", "position_tag": "SCANNER"},
+        code="123456_spread_relief_scalp_alias",
+        ws_data={
+            "curr": 10_020,
+            "last_ws_update_ts": datetime.now(UTC).timestamp(),
+            "orderbook": {
+                "asks": [{"price": 10_130, "volume": 100}],
+                "bids": [{"price": 10_020, "volume": 100}],
+            },
+        },
+        strategy_id="SCALP",
+        planned_qty=2,
+        signal_price=10_000,
+        signal_strength=90.0,
+    )
+
+    assert result["decision"] == "ALLOW_NORMAL"
+    assert result["latency_canary_reason"] == "spread_relief_canary_applied"
+    assert result["latency_strategy_id"] == "SCALP"
 
 
 def test_latency_spread_relief_canary_uses_entry_momentum_tag_when_position_tag_missing(monkeypatch):

@@ -286,10 +286,23 @@ def test_worsen_floor_stops_defer_and_allows_original_exit(monkeypatch):
 
     assert proceed is True
     assert ai.calls == []
-    assert any(
-        stage == "holding_flow_override_force_exit" and fields.get("force_reason") == "worsen_floor"
+    force_exit = next(
+        fields
         for stage, fields in logs
+        if stage == "holding_flow_override_force_exit" and fields.get("force_reason") == "worsen_floor"
     )
+    assert force_exit["metric_role"] == "safety_veto"
+    assert force_exit["decision_authority"] == "holding_flow_override_safety_exit_guard"
+    assert force_exit["window_policy"] == "same_day_intraday_events"
+    assert force_exit["sample_floor"] == 1
+    assert force_exit["primary_decision_metric"] == "source_quality_gate"
+    assert force_exit["source_quality_gate"] == "holding_flow_override_force_exit_contract_fields_present"
+    assert force_exit["runtime_effect"] is True
+    assert force_exit["allowed_runtime_apply"] is False
+    assert force_exit["actual_order_submitted"] is False
+    assert force_exit["threshold_family"] == "holding_flow_override"
+    assert force_exit["runtime_family_candidate"] == "holding_flow_override"
+    assert "runtime_apply_bridge" in force_exit["forbidden_uses"]
 
 
 def test_holding_flow_state_change_review_bypasses_interval_once_enabled(monkeypatch):

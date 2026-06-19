@@ -9,6 +9,7 @@ from src.engine.sniper_state_handlers import (
     _build_ai_overlap_log_fields,
     _build_ai_ops_log_fields,
     _build_observation_contract_fields,
+    _merge_entry_pipeline_field_groups,
     _score65_74_recovery_probe_block_contract_fields,
     _ensure_ai_source_quality_fields,
     _build_gatekeeper_fast_signature,
@@ -27,7 +28,10 @@ from src.engine.sniper_state_handlers import (
     _resolve_ai_numeric_consistency_recheck,
     _resolve_gatekeeper_fast_reuse_sec,
     _resolve_holding_ai_fast_reuse_sec,
+    _resolve_scanner_rising_strength_momentum_override,
     _resolve_watching_state_change_refresh,
+    _log_entry_pipeline,
+    _log_ai_confirmed_terminal_no_budget,
 )
 from src.utils.constants import TRADING_RULES
 
@@ -343,6 +347,123 @@ def test_early_accel_recheck_hydrates_scanner_promotion_reason_from_pipeline_eve
     assert result["allowed"] is True
     assert result["scanner_promotion_reason"] == "probe_acceleration_confirmed"
     assert stock["source_signature"] == "PRICE_JUMP_START,VOLUME_SURGE_POSITIVE"
+
+
+def test_scanner_rising_strength_override_allows_exact_bid_imbalance_price_jump_case():
+    stock = {
+        "position_tag": "SCANNER",
+        "scanner_promotion_reason": "price_jump_start_acceleration",
+        "source_signature": " bid_imbalance_surge , price_jump_start ",
+        "price_delta_since_first_seen_pct": "1.53",
+    }
+
+    result = _resolve_scanner_rising_strength_momentum_override(
+        stock,
+        {"allowed": False, "reason": "below_strength_base"},
+    )
+
+    assert result["allowed"] is True
+    assert result["override_reason"] == "scanner_rising_bid_imbalance_strength_ai_recheck"
+    assert result["price_delta_since_first_seen_pct"] == "1.53"
+    assert result["scanner_context_source"] == "stock_state"
+
+
+def test_scanner_rising_strength_override_uses_latest_qualifying_event_when_stock_context_is_overwritten(monkeypatch):
+    monkeypatch.setattr(
+        handlers,
+        "_load_scanner_promotion_context_events",
+        lambda _target_date: {
+            "014950": [
+                {
+                    "emitted_epoch": 100.0,
+                    "fields": {
+                        "scanner_promotion_reason": "price_jump_start_acceleration",
+                        "source_signature": "BID_IMBALANCE_SURGE,PRICE_JUMP_START",
+                        "price_delta_since_first_seen_pct": "1.53",
+                    },
+                },
+                {
+                    "emitted_epoch": 130.0,
+                    "fields": {
+                        "scanner_promotion_reason": "price_jump_start_acceleration",
+                        "source_signature": "PRICE_JUMP_START",
+                        "price_delta_since_first_seen_pct": "0.00",
+                    },
+                },
+            ]
+        },
+    )
+    stock = {
+        "code": "014950",
+        "date": "2026-06-19",
+        "position_tag": "SCANNER",
+        "scanner_promotion_reason": "price_jump_start_acceleration",
+        "source_signature": "PRICE_JUMP_START",
+        "price_delta_since_first_seen_pct": "0.00",
+        "buy_price": 6700,
+        "entry_armed_at_epoch": 130.0,
+        "comparable_flu_delta_since_first_seen": "0.00",
+        "cntr_str_available": False,
+        "cntr_str": "0.0",
+    }
+
+    result = _resolve_scanner_rising_strength_momentum_override(
+        stock,
+        {"allowed": False, "reason": "below_strength_base"},
+    )
+
+    assert result["allowed"] is True
+    assert result["scanner_context_source"] == "promotion_event_fallback"
+    assert result["scanner_context_emitted_epoch"] == "100.000"
+    assert result["price_delta_since_first_seen_pct"] == "1.53"
+
+
+def test_scanner_rising_strength_override_requires_bid_imbalance_price_jump_and_delta():
+    base_stock = {
+        "position_tag": "SCANNER",
+        "scanner_promotion_reason": "price_jump_start_acceleration",
+        "source_signature": "PRICE_JUMP_START",
+        "price_delta_since_first_seen_pct": "1.53",
+    }
+    momentum_gate = {"allowed": False, "reason": "below_strength_base"}
+
+    missing_bid_imbalance = _resolve_scanner_rising_strength_momentum_override(
+        dict(base_stock),
+        momentum_gate,
+    )
+    assert missing_bid_imbalance["allowed"] is False
+    assert missing_bid_imbalance["skip_reason"] == "source_signature_not_bid_imbalance_price_jump"
+
+    too_small_delta = _resolve_scanner_rising_strength_momentum_override(
+        {**base_stock, "source_signature": "BID_IMBALANCE_SURGE,PRICE_JUMP_START", "price_delta_since_first_seen_pct": "0.99"},
+        momentum_gate,
+    )
+    assert too_small_delta["allowed"] is False
+    assert too_small_delta["skip_reason"] == "price_delta_below_min"
+
+    different_reason = _resolve_scanner_rising_strength_momentum_override(
+        {**base_stock, "source_signature": "BID_IMBALANCE_SURGE,PRICE_JUMP_START"},
+        {"allowed": False, "reason": "insufficient_history"},
+    )
+    assert different_reason["allowed"] is False
+    assert different_reason["skip_reason"] == "reason_not_below_strength_base"
+
+
+def test_scanner_rising_strength_override_respects_disable_flag(monkeypatch):
+    rules = replace(TRADING_RULES, SCANNER_RISING_STRENGTH_PRE_AI_OVERRIDE_ENABLED=False)
+    monkeypatch.setattr(handlers, "TRADING_RULES", rules)
+    result = _resolve_scanner_rising_strength_momentum_override(
+        {
+            "position_tag": "SCANNER",
+            "scanner_promotion_reason": "price_jump_start_acceleration",
+            "source_signature": "BID_IMBALANCE_SURGE,PRICE_JUMP_START",
+            "price_delta_since_first_seen_pct": "1.53",
+        },
+        {"allowed": False, "reason": "below_strength_base"},
+    )
+
+    assert result["allowed"] is False
+    assert result["skip_reason"] == "disabled"
 
 
 def test_entry_adm_snapshot_records_feature_parity_and_numeric_consistency(monkeypatch):
@@ -1079,6 +1200,71 @@ def test_ai_source_quality_fields_marks_not_evaluated_without_snapshot():
     assert fields["tick_accel_source"] == "not_evaluated"
     assert fields["tick_context_quality"] == "not_evaluated"
     assert fields["quote_age_source"] == "not_evaluated"
+    assert "buy_pressure_10t" not in fields
+
+
+def test_not_evaluated_ai_source_fields_do_not_override_overlap_fields():
+    stock = {
+        "last_ai_overlap_snapshot": {
+            "latest_strength": 123.0,
+            "buy_pressure_10t": 71.2,
+            "distance_from_day_high_pct": -0.5,
+            "intraday_range_pct": 2.1,
+            "overlap_context_source_quality": "fresh_range_context",
+        }
+    }
+
+    fields = _merge_entry_pipeline_field_groups(
+        _build_ai_overlap_log_fields(
+            stock=stock,
+            ai_score=62,
+            blocked_stage="blocked_ai_score",
+        ),
+        _ensure_ai_source_quality_fields(
+            {},
+            stock,
+            not_evaluated_reason="blocked_ai_score_no_tick_audit",
+        ),
+    )
+
+    assert fields["buy_pressure_10t"] == "71.20"
+    assert fields["latest_strength"] == "123.0"
+    assert fields["tick_source_quality_fields_sent"] is False
+
+
+def test_stale_not_evaluated_ai_source_fields_do_not_override_overlap_fields():
+    stock = {
+        "last_ai_overlap_snapshot": {
+            "latest_strength": 123.0,
+            "buy_pressure_10t": 71.2,
+            "distance_from_day_high_pct": -0.5,
+            "intraday_range_pct": 2.1,
+            "overlap_context_source_quality": "fresh_range_context",
+        },
+        "last_watching_ai_source_quality_fields": {
+            "tick_source_quality_fields_sent": True,
+            "tick_accel_source": "not_evaluated",
+            "tick_context_quality": "not_evaluated",
+            "quote_age_source": "not_evaluated",
+            "buy_pressure_10t": "-",
+        },
+    }
+
+    fields = _merge_entry_pipeline_field_groups(
+        _build_ai_overlap_log_fields(
+            stock=stock,
+            ai_score=62,
+            blocked_stage="blocked_ai_score",
+        ),
+        _ensure_ai_source_quality_fields(
+            {},
+            stock,
+            not_evaluated_reason="blocked_ai_score_no_tick_audit",
+        ),
+    )
+
+    assert fields["buy_pressure_10t"] == "71.20"
+    assert fields["tick_source_quality_fields_sent"] is True
 
 
 def test_ai_source_quality_fields_inherits_previous_snapshot():
@@ -1106,6 +1292,134 @@ def test_observation_contract_fields_are_source_quality_only():
     assert fields["decision_authority"] == "source_quality_only"
     assert fields["runtime_effect"] is False
     assert "runtime_threshold_apply" in fields["forbidden_uses"]
+
+
+def test_log_entry_pipeline_carries_scanner_promotion_correlation(monkeypatch):
+    emitted = []
+    monkeypatch.setattr(
+        handlers,
+        "emit_pipeline_event",
+        lambda pipeline, name, code, stage, *, record_id=None, fields=None: emitted.append(
+            {
+                "pipeline": pipeline,
+                "name": name,
+                "code": code,
+                "stage": stage,
+                "record_id": record_id,
+                "fields": fields or {},
+            }
+        ),
+    )
+    stock = {
+        "id": 42,
+        "name": "PROMOTED",
+        "position_tag": "SCANNER",
+        "scanner_promotion_id": "SCANPROM-000033-1000000",
+        "scanner_promotion_emitted_epoch": "1000.000",
+        "scanner_promotion_reason": "rank_jump_acceleration",
+        "source_signature": "REALTIME_RANK_START",
+        "price_delta_since_first_seen_pct": "1.25",
+    }
+
+    _log_entry_pipeline(stock, "000033", "blocked_strength_momentum", original_reason="below_strength_base")
+
+    fields = emitted[-1]["fields"]
+    assert emitted[-1]["record_id"] == 42
+    assert fields["scanner_promotion_id"] == "SCANPROM-000033-1000000"
+    assert fields["scanner_promotion_reason"] == "rank_jump_acceleration"
+    assert fields["source_signature"] == "REALTIME_RANK_START"
+    assert fields["original_reason"] == "below_strength_base"
+
+
+def test_log_entry_pipeline_hydrates_missing_scanner_promotion_id(monkeypatch):
+    emitted = []
+    monkeypatch.setattr(
+        handlers,
+        "emit_pipeline_event",
+        lambda pipeline, name, code, stage, *, record_id=None, fields=None: emitted.append(
+            {"stage": stage, "fields": fields or {}}
+        ),
+    )
+    monkeypatch.setattr(
+        handlers,
+        "_load_scanner_promotion_context_events",
+        lambda _target_date: {
+            "000034": [
+                {
+                    "emitted_epoch": 1000.0,
+                    "fields": {
+                        "scanner_promotion_id": "SCANPROM-000034-1000000",
+                        "scanner_promotion_emitted_epoch": "1000.000",
+                        "scanner_promotion_reason": "price_jump_start_acceleration",
+                        "source_signature": "BID_IMBALANCE_SURGE,PRICE_JUMP_START",
+                        "price_delta_since_first_seen_pct": "1.25",
+                        "comparable_flu_delta_since_first_seen": "1.30",
+                        "cntr_str_available": True,
+                        "cntr_str": "121.0",
+                    },
+                }
+            ]
+        },
+    )
+    stock = {
+        "id": 43,
+        "name": "PROMOTED",
+        "code": "000034",
+        "date": "2026-06-19",
+        "position_tag": "SCANNER",
+        "buy_price": 12000,
+        "entry_armed_at_epoch": 1000.0,
+        "scanner_promotion_reason": "price_jump_start_acceleration",
+        "source_signature": "BID_IMBALANCE_SURGE,PRICE_JUMP_START",
+        "price_delta_since_first_seen_pct": "1.25",
+        "comparable_flu_delta_since_first_seen": "1.30",
+        "cntr_str_available": True,
+        "cntr_str": "121.0",
+    }
+
+    _log_entry_pipeline(stock, "000034", "blocked_strength_momentum")
+
+    fields = emitted[-1]["fields"]
+    assert fields["scanner_promotion_id"] == "SCANPROM-000034-1000000"
+    assert fields["scanner_promotion_emitted_epoch"] == "1000.000"
+
+
+def test_log_ai_confirmed_terminal_no_budget_emits_contract_fields(monkeypatch):
+    emitted = []
+    monkeypatch.setattr(
+        handlers,
+        "emit_pipeline_event",
+        lambda pipeline, name, code, stage, *, record_id=None, fields=None: emitted.append(
+            {"stage": stage, "fields": fields or {}}
+        ),
+    )
+    stock = {
+        "id": 44,
+        "name": "AIWAIT",
+        "last_watching_ai_action": "WAIT",
+    }
+
+    _log_ai_confirmed_terminal_no_budget(
+        stock,
+        "000035",
+        terminal_reason="first_ai_wait_big_bite_not_confirmed",
+        source_stage="first_ai_wait",
+        ai_decision={"action": "BUY", "score": 78},
+        ai_score=78,
+    )
+
+    assert emitted[-1]["stage"] == "ai_confirmed_terminal_no_budget"
+    fields = emitted[-1]["fields"]
+    assert fields["decision_authority"] == "ai_confirmed_terminal_attribution_only"
+    assert fields["primary_decision_metric"] == "funnel_count"
+    assert fields["source_quality_gate"] == "terminal_reason_contract_fields_present"
+    assert fields["actual_order_submitted"] is False
+    assert fields["broker_order_forbidden"] is True
+    assert fields["allowed_runtime_apply"] is False
+    assert fields["terminal_reason"] == "first_ai_wait_big_bite_not_confirmed"
+    assert fields["source_stage"] == "first_ai_wait"
+    assert fields["ai_score"] == "78.0"
+    assert fields["ai_action"] == "BUY"
 
 
 def test_build_ai_overlap_log_fields_includes_momentum_and_profile():

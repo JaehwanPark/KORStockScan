@@ -232,6 +232,8 @@ class TradingConfig:
     SCALP_PRE_AI_MAX_WS_AGE_SEC: float = 3.0  # pre-AI source-quality stale 판단 기준
     SCALP_PRE_AI_EXTREME_SELL_BUY_RATIO_MAX: float = 0.35  # 극단 매도우위 risk source block 기준
     SCALP_PRE_AI_EXTREME_SELL_EXEC_BUY_RATIO_MAX: float = 0.35
+    SCANNER_RISING_STRENGTH_PRE_AI_OVERRIDE_ENABLED: bool = True  # scanner rising multi-source 후보 AI 재판정 override
+    SCANNER_RISING_STRENGTH_OVERRIDE_MIN_DELTA_PCT: float = 1.0
     SCALP_OVERBOUGHT_PULLBACK_GUARD_ENABLED: bool = True  # overbought 후보는 AI 후 submit 직전 pullback/rebreak 확인
     SCALP_OVERBOUGHT_PULLBACK_MIN_DISTANCE_PCT: float = -0.35
     SCALP_OVERBOUGHT_REBREAK_MIN_STRENGTH: float = 120.0
@@ -1301,6 +1303,12 @@ def _build_trading_rules() -> TradingConfig:
     env_pre_ai_extreme_sell_exec_buy_ratio = _env_float(
         "KORSTOCKSCAN_SCALP_PRE_AI_EXTREME_SELL_EXEC_BUY_RATIO_MAX"
     )
+    env_scanner_rising_strength_override_enabled = _env_bool(
+        "KORSTOCKSCAN_SCANNER_RISING_STRENGTH_PRE_AI_OVERRIDE_ENABLED"
+    )
+    env_scanner_rising_strength_override_min_delta = _env_float(
+        "KORSTOCKSCAN_SCANNER_RISING_STRENGTH_OVERRIDE_MIN_DELTA_PCT"
+    )
     env_overbought_pullback_guard_enabled = _env_bool("KORSTOCKSCAN_SCALP_OVERBOUGHT_PULLBACK_GUARD_ENABLED")
     env_overbought_pullback_min_distance = _env_float("KORSTOCKSCAN_SCALP_OVERBOUGHT_PULLBACK_MIN_DISTANCE_PCT")
     env_overbought_rebreak_min_strength = _env_float("KORSTOCKSCAN_SCALP_OVERBOUGHT_REBREAK_MIN_STRENGTH")
@@ -1818,6 +1826,12 @@ def _build_trading_rules() -> TradingConfig:
             SCALP_PRE_AI_EXTREME_SELL_EXEC_BUY_RATIO_MAX=env_pre_ai_extreme_sell_exec_buy_ratio
             if env_pre_ai_extreme_sell_exec_buy_ratio is not None
             else config.SCALP_PRE_AI_EXTREME_SELL_EXEC_BUY_RATIO_MAX,
+            SCANNER_RISING_STRENGTH_PRE_AI_OVERRIDE_ENABLED=env_scanner_rising_strength_override_enabled
+            if env_scanner_rising_strength_override_enabled is not None
+            else config.SCANNER_RISING_STRENGTH_PRE_AI_OVERRIDE_ENABLED,
+            SCANNER_RISING_STRENGTH_OVERRIDE_MIN_DELTA_PCT=env_scanner_rising_strength_override_min_delta
+            if env_scanner_rising_strength_override_min_delta is not None
+            else config.SCANNER_RISING_STRENGTH_OVERRIDE_MIN_DELTA_PCT,
             SCALP_OVERBOUGHT_PULLBACK_GUARD_ENABLED=env_overbought_pullback_guard_enabled
             if env_overbought_pullback_guard_enabled is not None
             else config.SCALP_OVERBOUGHT_PULLBACK_GUARD_ENABLED,

@@ -1161,6 +1161,8 @@ def _scanner_event_fields(target, source_guard=None):
         "scanner_source_guard_context": source_guard_context,
         "scanner_source_guard_first_seen_required": source_guard_context == "repeat_guard_with_provenance",
         "scanner_promotion_reason": "" if source_guard.get("blocked") else source_guard.get("reason"),
+        "scanner_promotion_id": source_guard.get("scanner_promotion_id") or "",
+        "scanner_promotion_emitted_epoch": source_guard.get("scanner_promotion_emitted_epoch") or "",
         "scanner_priority_tier": source_guard.get("scanner_priority_tier")
         or priority_profile.get("scanner_priority_tier"),
         "scanner_priority_score": _safe_float(
@@ -1328,6 +1330,11 @@ def promote_candidates(db, event_bus, ranked_targets, recent_picks, *, max_new_c
             continue
 
         if bool(getattr(TRADING_RULES, "SCALP_SCANNER_REAL_SOURCE_GUARD_ENABLED", False)):
+            source_guard = {
+                **source_guard,
+                "scanner_promotion_id": f"SCANPROM-{code}-{int(float(now_ts or 0.0) * 1000)}",
+                "scanner_promotion_emitted_epoch": f"{float(now_ts or 0.0):.3f}",
+            }
             _log_scanner_candidate_event("scalping_scanner_candidate_promoted", target, source_guard)
         _remember_pick(recent_picks, target, now_ts)
         new_codes_found.append(code)

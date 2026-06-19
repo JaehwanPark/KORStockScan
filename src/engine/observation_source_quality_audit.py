@@ -272,6 +272,12 @@ LATENCY_SUBMIT_FIELDS = (
     "latest_price",
     "latency_canary_applied",
     "latency_canary_reason",
+    "latency_strategy_id",
+    "latency_position_tag",
+    "latency_spread_relief_tag",
+    "latency_spread_relief_signal_score",
+    "latency_spread_relief_configured_min_signal_score",
+    "latency_spread_relief_effective_min_signal_score",
     "threshold_family",
     "runtime_effect",
     "actual_order_submitted",
@@ -366,6 +372,20 @@ STAGE_CONTRACTS: dict[str, StageContract] = {
         zero_sensitive_fields=("distance_from_day_high_pct", "intraday_range_pct"),
         max_missing_rate=0.10,
         max_zero_rate=0.10,
+    ),
+    "ai_confirmed_terminal_no_budget": StageContract(
+        required_fields=(
+            *DIAGNOSTIC_CONTRACT_FIELDS,
+            "actual_order_submitted",
+            "broker_order_forbidden",
+            "allowed_runtime_apply",
+            "terminal_reason",
+            "source_stage",
+            "ai_score",
+            "ai_action",
+            "entry_score_threshold",
+        ),
+        decision_authority="ai_confirmed_terminal_attribution_only",
     ),
     "wait65_79_ev_candidate": StageContract(
         required_fields=AI_SOURCE_FIELDS,
@@ -578,6 +598,8 @@ STAGE_CONTRACTS: dict[str, StageContract] = {
             "original_score",
             "recheck_action",
             "recheck_score",
+            "recheck_reason_excerpt",
+            "recheck_failure_class",
             "recheck_count",
             "quote_stale",
             "skip_reason",
@@ -602,6 +624,8 @@ STAGE_CONTRACTS: dict[str, StageContract] = {
             "original_score",
             "recheck_action",
             "recheck_score",
+            "recheck_reason_excerpt",
+            "recheck_failure_class",
             "recheck_count",
             "quote_stale",
             "skip_reason",
@@ -626,6 +650,8 @@ STAGE_CONTRACTS: dict[str, StageContract] = {
             "original_score",
             "recheck_action",
             "recheck_score",
+            "recheck_reason_excerpt",
+            "recheck_failure_class",
             "recheck_count",
             "quote_stale",
             "skip_reason",
@@ -650,6 +676,8 @@ STAGE_CONTRACTS: dict[str, StageContract] = {
             "original_score",
             "recheck_action",
             "recheck_score",
+            "recheck_reason_excerpt",
+            "recheck_failure_class",
             "recheck_count",
             "quote_stale",
             "skip_reason",
@@ -674,6 +702,8 @@ STAGE_CONTRACTS: dict[str, StageContract] = {
             "original_score",
             "recheck_action",
             "recheck_score",
+            "recheck_reason_excerpt",
+            "recheck_failure_class",
             "recheck_count",
             "quote_stale",
             "skip_reason",
@@ -788,6 +818,37 @@ STAGE_CONTRACTS: dict[str, StageContract] = {
         zero_sensitive_fields=("intraday_range_pct",),
         max_zero_rate=0.10,
     ),
+    "strength_momentum_scanner_rising_override": StageContract(
+        required_fields=(
+            *AI_OVERLAP_FIELDS,
+            *PRE_AI_RISK_CONTEXT_FIELDS,
+            "broker_order_forbidden",
+            "override_reason",
+            "original_reason",
+            "scanner_promotion_reason",
+            "source_signature",
+            "scanner_context_source",
+            "scanner_context_emitted_epoch",
+            "price_delta_since_first_seen_pct",
+            "min_price_delta_pct",
+        ),
+        zero_sensitive_fields=("intraday_range_pct",),
+        max_zero_rate=0.10,
+        decision_authority="operator_runtime_ai_recheck_override_only",
+    ),
+    "dynamic_vpw_override_pass": StageContract(
+        required_fields=(
+            *PRE_AI_RISK_CONTEXT_FIELDS,
+            "broker_order_forbidden",
+            "current_vpw",
+            "threshold",
+            "dynamic_reason",
+            "dynamic_delta",
+            "dynamic_buy_value",
+            "dynamic_exec_buy_ratio",
+            "dynamic_net_buy_qty",
+        ),
+    ),
     "blocked_vpw": StageContract(
         required_fields=(*AI_OVERLAP_FIELDS, *PRE_AI_RISK_CONTEXT_FIELDS),
         zero_sensitive_fields=("distance_from_day_high_pct", "intraday_range_pct"),
@@ -814,6 +875,28 @@ STAGE_CONTRACTS: dict[str, StageContract] = {
     "latency_pass": StageContract(
         required_fields=LATENCY_SUBMIT_FIELDS,
         decision_authority="source_quality_only_known_pre_fix_gap",
+    ),
+    "holding_flow_override_force_exit": StageContract(
+        required_fields=(
+            "metric_role",
+            "decision_authority",
+            "window_policy",
+            "sample_floor",
+            "primary_decision_metric",
+            "source_quality_gate",
+            "runtime_effect",
+            "allowed_runtime_apply",
+            "forbidden_uses",
+            "actual_order_submitted",
+            "broker_order_forbidden",
+            "threshold_family",
+            "runtime_family_candidate",
+            "force_reason",
+            "exit_rule",
+            "profit_rate",
+        ),
+        decision_authority="holding_flow_override_safety_exit_guard",
+        forbidden_uses="EV/rolling/MTD/cumulative_tuning/live_auto_promotion/runtime_apply_bridge/threshold_mutation/provider_change/order_price_change/quantity_cap_change/broker_guard_bypass",
     ),
     "order_bundle_submitted": StageContract(
         required_fields=(*LATENCY_SUBMIT_FIELDS, *ENTRY_SUBMIT_SOURCE_CONTRACT_FIELDS),
@@ -1254,6 +1337,15 @@ def _normalized_fields_for_contract(stage: str, fields: dict[str, Any]) -> dict[
                 normalized[field] = "unknown_pre_contract"
         if not _is_present(normalized.get("latency_canary_reason")):
             normalized["latency_canary_reason"] = "not_applicable_or_pre_contract"
+        normalized.setdefault("latency_strategy_id", "unknown_pre_contract")
+        normalized.setdefault("latency_position_tag", "unknown_pre_contract")
+        normalized.setdefault("latency_spread_relief_tag", "unknown_pre_contract")
+        normalized.setdefault("latency_spread_relief_signal_score", "unknown_pre_contract")
+        normalized.setdefault("latency_spread_relief_configured_min_signal_score", "unknown_pre_contract")
+        normalized.setdefault("latency_spread_relief_effective_min_signal_score", "unknown_pre_contract")
+    if stage.startswith("early_accel_strong_bundle_recheck_"):
+        normalized.setdefault("recheck_reason_excerpt", "not_evaluated_pre_contract")
+        normalized.setdefault("recheck_failure_class", "not_evaluated_pre_contract")
     if stage == "order_bundle_submitted":
         submitted = str(
             normalized.get("actual_order_submitted")

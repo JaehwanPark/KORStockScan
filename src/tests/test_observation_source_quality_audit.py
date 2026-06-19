@@ -93,6 +93,43 @@ def test_observation_source_quality_audit_flags_missing_ai_fields(monkeypatch, t
     assert report["summary"]["blocked_reason"] == "blocked_contract_gap"
 
 
+def test_ai_confirmed_terminal_no_budget_contract_passes(monkeypatch, tmp_path):
+    monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
+    _write_events(
+        tmp_path,
+        "2026-05-15",
+        [
+            _event(
+                "ai_confirmed_terminal_no_budget",
+                {
+                    "metric_role": "funnel_count",
+                    "decision_authority": "ai_confirmed_terminal_attribution_only",
+                    "window_policy": "same_day_intraday_events",
+                    "sample_floor": 1,
+                    "primary_decision_metric": "funnel_count",
+                    "source_quality_gate": "terminal_reason_contract_fields_present",
+                    "runtime_effect": False,
+                    "forbidden_uses": "runtime_threshold_apply/order_submit/provider_route_change/bot_restart",
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                    "allowed_runtime_apply": False,
+                    "terminal_reason": "blocked_ai_score_below_buy_score_threshold",
+                    "source_stage": "blocked_ai_score",
+                    "ai_score": "71.0",
+                    "ai_action": "WAIT",
+                    "entry_score_threshold": "75.0",
+                },
+            ),
+        ],
+    )
+
+    report = audit.build_observation_source_quality_audit("2026-05-15")
+
+    contract = report["stage_contracts"]["ai_confirmed_terminal_no_budget"]
+    assert contract["status"] == "pass"
+    assert report["summary"]["hard_blocking_contract_gap_count"] == 0
+
+
 def test_observation_source_quality_audit_detects_high_volume_contract_gap(monkeypatch, tmp_path):
     monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
     _write_events(
@@ -1302,6 +1339,8 @@ def test_observation_source_quality_audit_accepts_early_accel_strong_bundle_rech
         "original_score": "62.0",
         "recheck_action": "BUY",
         "recheck_score": "76.0",
+        "recheck_reason_excerpt": "strong bundle confirmed",
+        "recheck_failure_class": "not_applicable",
         "recheck_count": 1,
         "quote_stale": False,
         "skip_reason": "allowed",
@@ -1318,6 +1357,8 @@ def test_observation_source_quality_audit_accepts_early_accel_strong_bundle_rech
                     **common_fields,
                     "recheck_action": "WAIT",
                     "recheck_score": "73.0",
+                    "recheck_reason_excerpt": "wait for confirmation",
+                    "recheck_failure_class": "wait_below_min_score",
                     "skip_reason": "recheck_wait_or_buy_below_min_score",
                 },
             ),

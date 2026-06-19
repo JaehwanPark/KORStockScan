@@ -232,6 +232,8 @@ def test_scanner_priority_tiering_allows_rank_jump_acceleration(monkeypatch):
     assert promoted["fields"]["scanner_priority_tier"] == "tier_a_acceleration_confirmed"
     assert promoted["fields"]["scanner_priority_reason"] == "rank_jump_acceleration"
     assert promoted["fields"]["scanner_promotion_reason"] == "rank_jump_acceleration"
+    assert promoted["fields"]["scanner_promotion_id"] == "SCANPROM-000033-1000000"
+    assert promoted["fields"]["scanner_promotion_emitted_epoch"] == "1000.000"
 
 
 def test_scanner_priority_tiering_blocks_bid_imbalance_only(monkeypatch):

@@ -1643,6 +1643,94 @@ def test_openai_request_payload_omits_previous_response_id_by_default():
     assert payload["metadata"]["request_id"] == request.request_id
 
 
+def test_openai_request_metadata_is_trimmed_to_provider_limit():
+    engine = _build_engine()
+
+    metadata_extra = {f"extra_{idx:02d}": str(idx) for idx in range(20)}
+    request = engine._build_openai_response_request(
+        prompt="PROMPT",
+        user_input="payload",
+        require_json=True,
+        context_name="metadata-trim",
+        model_name="gpt-fast",
+        temperature=0.0,
+        schema_name="entry_v1",
+        endpoint_name="analyze_target",
+        symbol="005930",
+        cache_key="abc",
+        metadata_extra=metadata_extra,
+    )
+    metadata = request.build_provider_payload(use_schema_registry=False)["metadata"]
+
+    assert len(metadata) == openai_module.OPENAI_METADATA_MAX_PROPERTIES
+    assert metadata["request_id"] == request.request_id
+    assert metadata["endpoint_name"] == "analyze_target"
+    assert metadata["schema_name"] == "entry_v1"
+    assert metadata["symbol"] == "005930"
+    assert metadata["cache_key"] == "abc"
+    assert "extra_00" in metadata
+    assert "extra_10" in metadata
+    assert "extra_11" not in metadata
+
+
+def test_openai_request_metadata_normalizes_long_property_names():
+    engine = _build_engine()
+
+    metadata_extra = {
+        "early_accel_strong_bundle_recheck_price_delta_since_first_seen_pct": "0.52",
+    }
+    request = engine._build_openai_response_request(
+        prompt="PROMPT",
+        user_input="payload",
+        require_json=True,
+        context_name="metadata-long-key",
+        model_name="gpt-fast",
+        temperature=0.0,
+        schema_name="entry_v1",
+        endpoint_name="analyze_target",
+        symbol="005930",
+        cache_key="abc",
+        metadata_extra=metadata_extra,
+    )
+    metadata = request.build_provider_payload(use_schema_registry=False)["metadata"]
+
+    assert all(len(key) <= openai_module.OPENAI_METADATA_KEY_MAX_LENGTH for key in metadata)
+    normalized_long_keys = [key for key in metadata if key.startswith("early_accel_strong_bundle_recheck_price_delta_since_")]
+    assert len(normalized_long_keys) == 1
+    assert metadata[normalized_long_keys[0]] == "0.52"
+
+
+def test_early_accel_strong_bundle_recheck_metadata_context_is_in_prompt_payload():
+    engine = _build_engine()
+
+    formatted = engine._append_early_accel_strong_bundle_recheck_context(
+        '{"input_schema":"entry_screen_compact_v1","features":{"buy_pressure_10t":71.2}}',
+        metadata_extra={
+            "early_accel_strong_bundle_recheck": "true",
+            "early_accel_strong_bundle_recheck_original_action": "WAIT",
+            "early_accel_strong_bundle_recheck_original_score": "72.0",
+            "early_accel_strong_bundle_recheck_original_reason_excerpt": "momentum confirmation missing",
+            "early_accel_strong_bundle_recheck_scanner_promotion_reason": "strong_bundle",
+            "early_accel_strong_bundle_recheck_source_signature": "sig-a",
+            "early_accel_strong_bundle_recheck_price_delta_since_first_seen_pct": "0.52",
+            "early_accel_strong_bundle_recheck_comparable_flu_delta_since_first_seen": "1.40",
+            "early_accel_strong_bundle_recheck_cntr_str_available": "true",
+            "early_accel_strong_bundle_recheck_cntr_str": "131.5",
+            "early_accel_strong_bundle_recheck_tick_acceleration_ratio": "2.3",
+            "early_accel_strong_bundle_recheck_curr_vs_micro_vwap_bp": "8.1",
+            "early_accel_strong_bundle_recheck_buy_pressure_10t": "73.4",
+        },
+    )
+    payload = json.loads(formatted)
+    context = payload["early_accel_strong_bundle_recheck_context"]
+
+    assert context["original_action"] == "WAIT"
+    assert context["original_score"] == "72.0"
+    assert context["price_delta_since_first_seen_pct"] == "0.52"
+    assert context["tick_acceleration_ratio"] == "2.3"
+    assert context["buy_pressure_10t"] == "73.4"
+
+
 def test_openai_analyze_target_timeout_rejects_buy_side_when_enabled(monkeypatch):
     engine = _build_engine()
 
