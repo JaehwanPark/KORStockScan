@@ -229,6 +229,7 @@ class TradingConfig:
     SCALP_DYNAMIC_VPW_OBSERVE_ONLY: bool = False  # False면 동적 체결강도 게이트를 실전 진입에 적용
     SCALP_PRE_AI_SOFT_GATE_ENABLED: bool = True  # pre-AI mechanical gate는 기본 risk context로 낮춘다
     SCALP_PRE_AI_SOURCE_QUALITY_BLOCK_ENABLED: bool = True  # stale/insufficient/extreme sell source는 AI 전 차단
+    SCALP_PRE_AI_WS_SNAPSHOT_REFRESH_ENABLED: bool = True  # stale pre-AI snapshot은 최신 WS cache로 1회 재확인
     SCALP_PRE_AI_MAX_WS_AGE_SEC: float = 3.0  # pre-AI source-quality stale 판단 기준
     SCALP_PRE_AI_EXTREME_SELL_BUY_RATIO_MAX: float = 0.35  # 극단 매도우위 risk source block 기준
     SCALP_PRE_AI_EXTREME_SELL_EXEC_BUY_RATIO_MAX: float = 0.35
@@ -1298,6 +1299,9 @@ def _build_trading_rules() -> TradingConfig:
         env_dynamic_strength_exec_buy_ratio_tol = _env_float("KORSTOCKSCAN_SCALP_DYNAMIC_STRENGTH_CANARY_EXEC_BUY_RATIO_TOL")
     env_pre_ai_soft_gate_enabled = _env_bool("KORSTOCKSCAN_SCALP_PRE_AI_SOFT_GATE_ENABLED")
     env_pre_ai_source_quality_block_enabled = _env_bool("KORSTOCKSCAN_SCALP_PRE_AI_SOURCE_QUALITY_BLOCK_ENABLED")
+    env_pre_ai_ws_snapshot_refresh_enabled = _env_bool(
+        "KORSTOCKSCAN_SCALP_PRE_AI_WS_SNAPSHOT_REFRESH_ENABLED"
+    )
     env_pre_ai_max_ws_age_sec = _env_float("KORSTOCKSCAN_SCALP_PRE_AI_MAX_WS_AGE_SEC")
     env_pre_ai_extreme_sell_buy_ratio = _env_float("KORSTOCKSCAN_SCALP_PRE_AI_EXTREME_SELL_BUY_RATIO_MAX")
     env_pre_ai_extreme_sell_exec_buy_ratio = _env_float(
@@ -1817,6 +1821,9 @@ def _build_trading_rules() -> TradingConfig:
             SCALP_PRE_AI_SOURCE_QUALITY_BLOCK_ENABLED=env_pre_ai_source_quality_block_enabled
             if env_pre_ai_source_quality_block_enabled is not None
             else config.SCALP_PRE_AI_SOURCE_QUALITY_BLOCK_ENABLED,
+            SCALP_PRE_AI_WS_SNAPSHOT_REFRESH_ENABLED=env_pre_ai_ws_snapshot_refresh_enabled
+            if env_pre_ai_ws_snapshot_refresh_enabled is not None
+            else config.SCALP_PRE_AI_WS_SNAPSHOT_REFRESH_ENABLED,
             SCALP_PRE_AI_MAX_WS_AGE_SEC=env_pre_ai_max_ws_age_sec
             if env_pre_ai_max_ws_age_sec is not None
             else config.SCALP_PRE_AI_MAX_WS_AGE_SEC,

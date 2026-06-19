@@ -317,11 +317,15 @@ def _load_scanner_promotion_context_events(target_date: str) -> dict[str, list[d
 def _hydrate_scanner_promotion_runtime_context(stock: dict[str, Any] | None) -> dict[str, Any]:
     if not isinstance(stock, dict):
         return {}
+    anchor_epoch = _safe_float(stock.get("entry_armed_at_epoch"), 0.0)
+    existing_promotion_epoch = _safe_float(stock.get("scanner_promotion_emitted_epoch"), 0.0)
     if (
         _scanner_promotion_context_present(stock)
         and _safe_int(stock.get("buy_price"), 0) > 0
-        and _safe_float(stock.get("entry_armed_at_epoch"), 0.0) > 0.0
+        and anchor_epoch > 0.0
         and str(stock.get("scanner_promotion_id") or "").strip()
+        and existing_promotion_epoch > 0.0
+        and abs(existing_promotion_epoch - anchor_epoch) <= 5.0
     ):
         return {key: stock.get(key) for key in _SCANNER_PROMOTION_CONTEXT_FIELDS}
 
@@ -334,7 +338,6 @@ def _hydrate_scanner_promotion_runtime_context(stock: dict[str, Any] | None) -> 
     if not code_rows:
         return {}
 
-    anchor_epoch = _safe_float(stock.get("entry_armed_at_epoch"), 0.0)
     selected = None
     if anchor_epoch > 0:
         eligible = [row for row in code_rows if float(row.get("emitted_epoch") or 0.0) <= anchor_epoch + 5.0]
@@ -6726,7 +6729,14 @@ def _log_entry_pipeline(stock, code, stage, **fields):
 def _scanner_promotion_correlation_fields(stock) -> dict[str, Any]:
     if not isinstance(stock, dict):
         return {}
-    if not stock.get("scanner_promotion_id") and str(stock.get("position_tag") or "").upper() == "SCANNER":
+    anchor_epoch = _safe_float(stock.get("entry_armed_at_epoch"), 0.0)
+    promotion_epoch = _safe_float(stock.get("scanner_promotion_emitted_epoch"), 0.0)
+    needs_refresh = not stock.get("scanner_promotion_id") or (
+        anchor_epoch > 0.0
+        and promotion_epoch > 0.0
+        and abs(anchor_epoch - promotion_epoch) > 5.0
+    )
+    if needs_refresh and str(stock.get("position_tag") or "").upper() == "SCANNER":
         _hydrate_scanner_promotion_runtime_context(stock)
     fields: dict[str, Any] = {}
     for key in (
@@ -9253,6 +9263,21 @@ def _pre_submit_refresh_real_ws_snapshot(code: str, ws_data: dict | None, strate
         fields["pre_submit_ws_snapshot_refresh_reason"] = "disabled"
         return base, fields
     fields["pre_submit_ws_snapshot_refresh_enabled"] = True
+    max_age_ms = _safe_int(
+        os.getenv("KORSTOCKSCAN_SCALP_PRE_SUBMIT_QUOTE_REFRESH_MAX_AGE_MS"),
+        _safe_int(getattr(TRADING_RULES, "SCALP_PRE_SUBMIT_QUOTE_REFRESH_MAX_AGE_MS", 700), 700),
+    )
+    base_best_ask, base_best_bid = _get_best_levels_from_ws(base)
+    base_price = _safe_int(base.get("curr"), 0)
+    base_ts = _safe_float(base.get("last_ws_update_ts"), 0.0)
+    base_age_ms = None if base_ts <= 0 else max(0.0, (time.time() - base_ts) * 1000.0)
+    if base_price > 0 and base_best_bid > 0 and base_best_ask > base_best_bid:
+        if base_age_ms is None:
+            fields["pre_submit_ws_snapshot_refresh_reason"] = "input_snapshot_timestamp_missing"
+            return base, fields
+        if base_age_ms <= max_age_ms:
+            fields["pre_submit_ws_snapshot_refresh_reason"] = "input_snapshot_fresh"
+            return base, fields
     manager = WS_MANAGER
     if manager is None or not hasattr(manager, "get_latest_data"):
         fields["pre_submit_ws_snapshot_refresh_reason"] = "ws_manager_missing"
@@ -9279,10 +9304,6 @@ def _pre_submit_refresh_real_ws_snapshot(code: str, ws_data: dict | None, strate
             "pre_submit_ws_snapshot_refresh_latest_price": latest_price,
         }
     )
-    max_age_ms = _safe_int(
-        os.getenv("KORSTOCKSCAN_SCALP_PRE_SUBMIT_QUOTE_REFRESH_MAX_AGE_MS"),
-        _safe_int(getattr(TRADING_RULES, "SCALP_PRE_SUBMIT_QUOTE_REFRESH_MAX_AGE_MS", 700), 700),
-    )
     if latest_price <= 0:
         fields["pre_submit_ws_snapshot_refresh_reason"] = "latest_price_missing"
         return base, fields
@@ -9295,7 +9316,6 @@ def _pre_submit_refresh_real_ws_snapshot(code: str, ws_data: dict | None, strate
     if age_ms > max_age_ms:
         fields["pre_submit_ws_snapshot_refresh_reason"] = "latest_snapshot_stale"
         return base, fields
-    base_ts = _safe_float(base.get("last_ws_update_ts"), 0.0)
     if base_ts > 0 and latest_ts < base_ts:
         fields["pre_submit_ws_snapshot_refresh_reason"] = "latest_snapshot_older_than_input"
         return base, fields
@@ -9425,6 +9445,14 @@ def _pre_submit_refresh_rest_orderbook_snapshot(
     fields["pre_submit_rest_orderbook_refresh_reason"] = "rest_orderbook_fresh"
     refreshed.update(fields)
     return refreshed, fields
+
+
+def _pre_submit_input_snapshot_has_usable_quote(ws_data: dict | None) -> bool:
+    data = dict(ws_data or {})
+    if _safe_int(data.get("curr"), 0) <= 0:
+        return False
+    best_ask, best_bid = _get_best_levels_from_ws(data)
+    return best_bid > 0 and best_ask > best_bid
 
 
 def _pre_submit_ws_snapshot_refresh_log_fields(source: dict | None) -> dict:
@@ -11297,6 +11325,89 @@ def _get_ws_snapshot_age_sec(ws_data):
         return None
 
 
+def _pre_ai_refresh_strength_momentum_ws_snapshot(code: str, ws_data: dict | None, strategy: str) -> tuple[dict, dict]:
+    """Refresh pre-AI strength input from the latest WS cache without changing thresholds."""
+    base = dict(ws_data or {})
+    fields = {
+        "pre_ai_ws_snapshot_refresh_enabled": False,
+        "pre_ai_ws_snapshot_refresh_applied": False,
+        "pre_ai_ws_snapshot_refresh_reason": "not_attempted",
+        "pre_ai_ws_snapshot_refresh_source": "ws_manager_latest_data",
+        "pre_ai_ws_snapshot_refresh_input_age_ms": None,
+        "pre_ai_ws_snapshot_refresh_age_ms": None,
+        "pre_ai_ws_snapshot_refresh_latest_price": _safe_int(base.get("curr"), 0),
+        "pre_ai_ws_snapshot_refresh_history_count": 0,
+    }
+    if str(strategy or "").upper() not in {"SCALPING", "SCALP", "KOSPI_ML"}:
+        fields["pre_ai_ws_snapshot_refresh_reason"] = "non_scalping"
+        return base, fields
+    if not _rule_bool("SCALP_PRE_AI_WS_SNAPSHOT_REFRESH_ENABLED", True):
+        fields["pre_ai_ws_snapshot_refresh_reason"] = "disabled"
+        return base, fields
+
+    fields["pre_ai_ws_snapshot_refresh_enabled"] = True
+    base_age = _get_ws_snapshot_age_sec(base)
+    max_age_sec = _rule_float("SCALP_PRE_AI_MAX_WS_AGE_SEC", 3.0)
+    near_stale_buffer_sec = min(0.5, max(0.0, max_age_sec * 0.2))
+    if base_age is not None:
+        fields["pre_ai_ws_snapshot_refresh_input_age_ms"] = round(base_age * 1000.0, 3)
+    if base_age is None:
+        fields["pre_ai_ws_snapshot_refresh_reason"] = "input_timestamp_missing"
+    elif base_age < max(0.0, max_age_sec - near_stale_buffer_sec):
+        fields["pre_ai_ws_snapshot_refresh_reason"] = "input_snapshot_fresh"
+        return base, fields
+    else:
+        fields["pre_ai_ws_snapshot_refresh_reason"] = "input_snapshot_near_stale"
+
+    manager = WS_MANAGER
+    if manager is None or not hasattr(manager, "get_latest_data"):
+        fields["pre_ai_ws_snapshot_refresh_reason"] = "ws_manager_missing"
+        return base, fields
+    try:
+        latest = manager.get_latest_data(code) or {}
+    except Exception as exc:
+        fields["pre_ai_ws_snapshot_refresh_reason"] = "ws_manager_error"
+        fields["pre_ai_ws_snapshot_refresh_error"] = str(exc)[:120]
+        return base, fields
+    if not isinstance(latest, dict) or not latest:
+        fields["pre_ai_ws_snapshot_refresh_reason"] = "latest_snapshot_missing"
+        return base, fields
+
+    latest_ts = _safe_float(latest.get("last_ws_update_ts"), 0.0)
+    base_ts = _safe_float(base.get("last_ws_update_ts"), 0.0)
+    latest_age = None if latest_ts <= 0 else max(0.0, (time.time() - latest_ts) * 1000.0)
+    history = latest.get("strength_momentum_history") or []
+    history_count = len(history) if hasattr(history, "__len__") else 0
+    fields.update(
+        {
+            "pre_ai_ws_snapshot_refresh_age_ms": None if latest_age is None else round(latest_age, 3),
+            "pre_ai_ws_snapshot_refresh_latest_price": _safe_int(latest.get("curr"), 0),
+            "pre_ai_ws_snapshot_refresh_history_count": int(history_count or 0),
+        }
+    )
+    if latest_ts <= 0:
+        fields["pre_ai_ws_snapshot_refresh_reason"] = "latest_timestamp_missing"
+        return base, fields
+    if base_ts > 0 and latest_ts < base_ts:
+        fields["pre_ai_ws_snapshot_refresh_reason"] = "latest_snapshot_older_than_input"
+        return base, fields
+    if latest_age is None or latest_age > max_age_sec * 1000.0:
+        fields["pre_ai_ws_snapshot_refresh_reason"] = "latest_snapshot_stale"
+        return base, fields
+    if _safe_int(latest.get("curr"), 0) <= 0:
+        fields["pre_ai_ws_snapshot_refresh_reason"] = "latest_price_missing"
+        return base, fields
+    if history_count <= 0:
+        fields["pre_ai_ws_snapshot_refresh_reason"] = "latest_strength_history_missing"
+        return base, fields
+
+    refreshed = dict(latest)
+    fields["pre_ai_ws_snapshot_refresh_applied"] = True
+    fields["pre_ai_ws_snapshot_refresh_reason"] = "latest_ws_snapshot_fresh"
+    refreshed.update(fields)
+    return refreshed, fields
+
+
 def _resolve_reference_age_sec(primary_ts, *, fallback_ts=None, now_ts=None):
     def _coerce_ts(value):
         if value in (None, "", 0, "0", "None"):
@@ -12939,8 +13050,22 @@ def _strength_momentum_source_quality_block_reason(ws_data: dict | None, result:
     reason = str(result.get("reason") or "").strip().lower()
     if reason == "insufficient_history":
         return "insufficient_history"
-    quote_age_sec = _get_ws_snapshot_age_sec(ws_data or {})
     max_ws_age_sec = _rule_float("SCALP_PRE_AI_MAX_WS_AGE_SEC", 3.0)
+    evaluation_age_ms = None
+    if _boolish_true(result.get("pre_ai_ws_snapshot_refresh_applied")):
+        evaluation_age_ms = result.get("pre_ai_ws_snapshot_refresh_age_ms")
+    elif str(result.get("pre_ai_ws_snapshot_refresh_reason") or "") == "input_snapshot_fresh":
+        evaluation_age_ms = result.get("pre_ai_ws_snapshot_refresh_input_age_ms")
+    if evaluation_age_ms not in (None, "", "-"):
+        try:
+            if float(evaluation_age_ms) <= max_ws_age_sec * 1000.0:
+                quote_age_sec = None
+            else:
+                quote_age_sec = float(evaluation_age_ms) / 1000.0
+        except Exception:
+            quote_age_sec = _get_ws_snapshot_age_sec(ws_data or {})
+    else:
+        quote_age_sec = _get_ws_snapshot_age_sec(ws_data or {})
     if quote_age_sec is not None and quote_age_sec > max_ws_age_sec:
         return "stale_ws_snapshot"
     buy_ratio = _safe_float(result.get("window_buy_ratio"), 0.0)
@@ -14888,9 +15013,18 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                     return False
 
                 observe_only = bool(_rule("SCALP_DYNAMIC_VPW_OBSERVE_ONLY", True))
+                ws_data, pre_ai_ws_refresh_fields = _pre_ai_refresh_strength_momentum_ws_snapshot(
+                    code,
+                    ws_data,
+                    strategy,
+                )
+                if pre_ai_ws_refresh_fields.get("pre_ai_ws_snapshot_refresh_applied"):
+                    curr_price = _safe_int(ws_data.get("curr"), curr_price) or curr_price
+                    current_vpw = _safe_float(ws_data.get("v_pw"), current_vpw)
                 momentum_ws_data = dict(ws_data or {})
                 momentum_ws_data["_position_tag"] = pos_tag
                 momentum_gate = evaluate_scalping_strength_momentum(momentum_ws_data)
+                momentum_gate.update(pre_ai_ws_refresh_fields)
                 _mutate_stock_state(
                     stock,
                     set_fields={
@@ -14960,6 +15094,7 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                                 buy_ratio=f"{float(momentum_gate.get('window_buy_ratio', 0.0) or 0.0):.2f}",
                                 exec_buy_ratio=f"{float(momentum_gate.get('window_exec_buy_ratio', 0.0) or 0.0):.2f}",
                                 net_buy_qty=int(momentum_gate.get("window_net_buy_qty", 0) or 0),
+                                **pre_ai_ws_refresh_fields,
                                 **_build_ai_overlap_log_fields(
                                     stock=stock,
                                     ai_score=current_ai_score,
@@ -15011,6 +15146,7 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                                 buy_ratio=f"{float(momentum_gate.get('window_buy_ratio', 0.0) or 0.0):.2f}",
                                 exec_buy_ratio=f"{float(momentum_gate.get('window_exec_buy_ratio', 0.0) or 0.0):.2f}",
                                 net_buy_qty=int(momentum_gate.get("window_net_buy_qty", 0) or 0),
+                                **pre_ai_ws_refresh_fields,
                                 **_build_ai_overlap_log_fields(
                                     stock=stock,
                                     ai_score=current_ai_score,
@@ -15074,6 +15210,7 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                                 dynamic_net_buy_qty=int(momentum_gate.get("window_net_buy_qty", 0) or 0),
                                 dynamic_profile=momentum_gate.get("threshold_profile"),
                                 scanner_rising_override=scanner_rising_strength_override,
+                                **pre_ai_ws_refresh_fields,
                             )
                             shadow_candidate = None
                     if not (
@@ -17254,7 +17391,10 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
     latency_signal_score = latency_signal_strength * 100.0
     ws_data, pre_submit_ws_snapshot_refresh = _pre_submit_refresh_real_ws_snapshot(code, ws_data, strategy)
     pre_submit_rest_orderbook_refresh = {}
-    if not pre_submit_ws_snapshot_refresh.get("pre_submit_ws_snapshot_refresh_applied"):
+    if (
+        not pre_submit_ws_snapshot_refresh.get("pre_submit_ws_snapshot_refresh_applied")
+        and not _pre_submit_input_snapshot_has_usable_quote(ws_data)
+    ):
         ws_data, pre_submit_rest_orderbook_refresh = _pre_submit_refresh_rest_orderbook_snapshot(
             code,
             ws_data,
@@ -18798,6 +18938,14 @@ def _log_strength_momentum_observation(stock, code, result):
         canary_applied=bool(result.get("canary_applied")),
         canary_reason=result.get("canary_reason"),
         canary_origin_reason=result.get("canary_origin_reason"),
+        pre_ai_ws_snapshot_refresh_enabled=bool(result.get("pre_ai_ws_snapshot_refresh_enabled")),
+        pre_ai_ws_snapshot_refresh_applied=bool(result.get("pre_ai_ws_snapshot_refresh_applied")),
+        pre_ai_ws_snapshot_refresh_reason=result.get("pre_ai_ws_snapshot_refresh_reason"),
+        pre_ai_ws_snapshot_refresh_source=result.get("pre_ai_ws_snapshot_refresh_source"),
+        pre_ai_ws_snapshot_refresh_input_age_ms=result.get("pre_ai_ws_snapshot_refresh_input_age_ms"),
+        pre_ai_ws_snapshot_refresh_age_ms=result.get("pre_ai_ws_snapshot_refresh_age_ms"),
+        pre_ai_ws_snapshot_refresh_latest_price=int(result.get("pre_ai_ws_snapshot_refresh_latest_price", 0) or 0),
+        pre_ai_ws_snapshot_refresh_history_count=int(result.get("pre_ai_ws_snapshot_refresh_history_count", 0) or 0),
     )
 
 

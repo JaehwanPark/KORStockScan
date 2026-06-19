@@ -649,6 +649,170 @@ def test_real_pre_submit_ws_snapshot_refresh_uses_fresh_ws_manager_snapshot(monk
     assert refreshed["pre_submit_ws_snapshot_refresh_latest_price"] == 10_020
 
 
+def test_real_pre_submit_ws_snapshot_refresh_keeps_valid_input_when_timestamp_missing(monkeypatch):
+    class FakeWsManager:
+        def get_latest_data(self, code):
+            raise AssertionError("WS manager should not be consulted for a valid input snapshot")
+
+    monkeypatch.setattr(state_handlers, "WS_MANAGER", FakeWsManager())
+    valid_input = {
+        "curr": 10_000,
+        "orderbook": {
+            "asks": [{"price": 10_010, "volume": 100}],
+            "bids": [{"price": 10_000, "volume": 100}],
+        },
+    }
+
+    refreshed, fields = state_handlers._pre_submit_refresh_real_ws_snapshot(
+        "123456",
+        valid_input,
+        "SCALPING",
+    )
+
+    assert refreshed == valid_input
+    assert fields["pre_submit_ws_snapshot_refresh_enabled"] is True
+    assert fields["pre_submit_ws_snapshot_refresh_applied"] is False
+    assert fields["pre_submit_ws_snapshot_refresh_reason"] == "input_snapshot_timestamp_missing"
+
+
+def test_pre_ai_strength_ws_snapshot_refresh_uses_fresh_ws_manager_history(monkeypatch):
+    now = time.time()
+
+    class FakeWsManager:
+        def get_latest_data(self, code):
+            assert code == "123456"
+            return {
+                "curr": 10_020,
+                "v_pw": 121.0,
+                "last_ws_update_ts": time.time(),
+                "strength_momentum_history": [
+                    {"ts": now - 8.0, "v_pw": 100.0, "tick_value": 1000},
+                    {"ts": now, "v_pw": 121.0, "tick_value": 2000},
+                ],
+            }
+
+    monkeypatch.setattr(state_handlers, "WS_MANAGER", FakeWsManager())
+    refreshed, fields = state_handlers._pre_ai_refresh_strength_momentum_ws_snapshot(
+        "123456",
+        {
+            "curr": 10_000,
+            "v_pw": 99.0,
+            "last_ws_update_ts": time.time() - 5.0,
+            "strength_momentum_history": [],
+        },
+        "SCALPING",
+    )
+
+    assert fields["pre_ai_ws_snapshot_refresh_enabled"] is True
+    assert fields["pre_ai_ws_snapshot_refresh_applied"] is True
+    assert fields["pre_ai_ws_snapshot_refresh_reason"] == "latest_ws_snapshot_fresh"
+    assert fields["pre_ai_ws_snapshot_refresh_history_count"] == 2
+    assert refreshed["curr"] == 10_020
+    assert refreshed["v_pw"] == 121.0
+
+
+def test_pre_ai_strength_ws_snapshot_refresh_rechecks_near_stale_input(monkeypatch):
+    class FakeWsManager:
+        def get_latest_data(self, code):
+            return {
+                "curr": 10_030,
+                "v_pw": 122.0,
+                "last_ws_update_ts": time.time(),
+                "strength_momentum_history": [{"ts": time.time(), "v_pw": 122.0}],
+            }
+
+    monkeypatch.setattr(state_handlers, "WS_MANAGER", FakeWsManager())
+    refreshed, fields = state_handlers._pre_ai_refresh_strength_momentum_ws_snapshot(
+        "123456",
+        {
+            "curr": 10_000,
+            "v_pw": 99.0,
+            "last_ws_update_ts": time.time() - 2.8,
+            "strength_momentum_history": [{"ts": time.time() - 2.8, "v_pw": 99.0}],
+        },
+        "SCALPING",
+    )
+
+    assert fields["pre_ai_ws_snapshot_refresh_applied"] is True
+    assert fields["pre_ai_ws_snapshot_refresh_reason"] == "latest_ws_snapshot_fresh"
+    assert fields["pre_ai_ws_snapshot_refresh_input_age_ms"] >= 2500
+    assert refreshed["curr"] == 10_030
+
+
+def test_pre_ai_strength_ws_snapshot_refresh_keeps_stale_latest_blocked(monkeypatch):
+    class FakeWsManager:
+        def get_latest_data(self, code):
+            return {
+                "curr": 10_020,
+                "v_pw": 121.0,
+                "last_ws_update_ts": time.time() - 10.0,
+                "strength_momentum_history": [{"ts": time.time() - 10.0, "v_pw": 121.0}],
+            }
+
+    monkeypatch.setattr(state_handlers, "WS_MANAGER", FakeWsManager())
+    original = {
+        "curr": 10_000,
+        "v_pw": 99.0,
+        "last_ws_update_ts": time.time() - 15.0,
+    }
+    refreshed, fields = state_handlers._pre_ai_refresh_strength_momentum_ws_snapshot(
+        "123456",
+        original,
+        "SCALPING",
+    )
+
+    assert fields["pre_ai_ws_snapshot_refresh_enabled"] is True
+    assert fields["pre_ai_ws_snapshot_refresh_applied"] is False
+    assert fields["pre_ai_ws_snapshot_refresh_reason"] == "latest_snapshot_stale"
+    assert refreshed["curr"] == original["curr"]
+
+
+def test_strength_source_quality_uses_refreshed_snapshot_age(monkeypatch):
+    monkeypatch.setattr(
+        state_handlers,
+        "TRADING_RULES",
+        replace(CONFIG, SCALP_PRE_AI_MAX_WS_AGE_SEC=3.0),
+    )
+    ws_data = {"last_ws_update_ts": time.time() - 6.0}
+    result = {
+        "reason": "below_strength_base",
+        "window_buy_ratio": 0.80,
+        "window_exec_buy_ratio": 0.80,
+        "window_net_buy_qty": 10,
+        "window_total_value": 1000,
+        "pre_ai_ws_snapshot_refresh_applied": True,
+        "pre_ai_ws_snapshot_refresh_age_ms": 120.0,
+    }
+
+    assert state_handlers._strength_momentum_source_quality_block_reason(ws_data, result) == ""
+
+
+def test_strength_source_quality_keeps_stale_refresh_blocked(monkeypatch):
+    monkeypatch.setattr(
+        state_handlers,
+        "TRADING_RULES",
+        replace(CONFIG, SCALP_PRE_AI_MAX_WS_AGE_SEC=3.0),
+    )
+    result = {
+        "reason": "below_strength_base",
+        "window_buy_ratio": 0.80,
+        "window_exec_buy_ratio": 0.80,
+        "window_net_buy_qty": 10,
+        "window_total_value": 1000,
+        "pre_ai_ws_snapshot_refresh_applied": False,
+        "pre_ai_ws_snapshot_refresh_reason": "latest_snapshot_stale",
+        "pre_ai_ws_snapshot_refresh_age_ms": 5000.0,
+    }
+
+    assert (
+        state_handlers._strength_momentum_source_quality_block_reason(
+            {"last_ws_update_ts": time.time() - 5.0},
+            result,
+        )
+        == "stale_ws_snapshot"
+    )
+
+
 def test_real_pre_submit_ws_snapshot_refresh_accepts_flat_best_levels(monkeypatch):
     class FakeWsManager:
         def get_latest_data(self, code):

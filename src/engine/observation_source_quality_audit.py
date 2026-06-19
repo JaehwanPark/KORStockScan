@@ -419,6 +419,20 @@ STAGE_CONTRACTS: dict[str, StageContract] = {
         ),
         decision_authority="real_scalping_scanner_source_guard_only",
     ),
+    "scalping_scanner_runtime_target_attach": StageContract(
+        required_fields=(
+            *REAL_EXECUTION_DIAGNOSTIC_FIELDS,
+            "runtime_target_attach_outcome",
+            "runtime_target_attach_reason",
+            "scanner_promotion_id",
+            "scanner_promotion_emitted_epoch",
+            "source_signature",
+            "target_status",
+            "target_strategy",
+            "target_position_tag",
+        ),
+        decision_authority="real_scalping_scanner_runtime_watchlist_handoff_only",
+    ),
     "early_accel_recheck_evaluated": StageContract(
         required_fields=(
             *REAL_EXECUTION_DIAGNOSTIC_FIELDS,

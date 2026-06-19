@@ -4250,6 +4250,114 @@ def test_scalping_pre_ai_source_quality_block_keeps_insufficient_history_closed(
     assert "ai_confirmed" not in by_stage
 
 
+def test_scalping_pre_ai_refresh_prevents_stale_strength_block(monkeypatch):
+    class FixedDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return cls(2026, 5, 18, 14, 5, 0)
+
+    monkeypatch.setattr(state_handlers, "datetime", FixedDateTime)
+    monkeypatch.setattr(
+        state_handlers,
+        "TRADING_RULES",
+        replace(
+            CONFIG,
+            SCALP_PRE_AI_SOFT_GATE_ENABLED=False,
+            SCALP_PRE_AI_SOURCE_QUALITY_BLOCK_ENABLED=True,
+            SCALP_PRE_AI_WS_SNAPSHOT_REFRESH_ENABLED=True,
+        ),
+    )
+    state_handlers.COOLDOWNS = {}
+    state_handlers.ALERTED_STOCKS = set()
+    state_handlers.ACTIVE_TARGETS = []
+    state_handlers.HIGHEST_PRICES = {}
+    state_handlers.LAST_AI_CALL_TIMES = {}
+    state_handlers.LAST_LOG_TIMES = {}
+    state_handlers.DB = _DummyDB()
+
+    class DummyRadar:
+        def get_smart_target_price(self, curr_price, **kwargs):
+            return curr_price, 0.0
+
+    class FakeWsManager:
+        def get_latest_data(self, code):
+            assert code == "789789"
+            now_ts = time.time()
+            return {
+                "curr": 10_050,
+                "v_pw": 99.0,
+                "last_ws_update_ts": now_ts,
+                "ask_tot": 50_000,
+                "bid_tot": 50_000,
+                "open": 9_900,
+                "fluctuation": 1.0,
+                "orderbook": {"asks": [{"price": 10_060}], "bids": [{"price": 10_050}]},
+                "strength_momentum_history": [
+                    {
+                        "ts": now_ts - 8.0,
+                        "v_pw": 98.0,
+                        "tick_value": 1000,
+                        "buy_tick_value": 800,
+                        "sell_tick_value": 200,
+                        "buy_qty": 10,
+                        "sell_qty": 2,
+                        "buy_exec_qty_cum": 10,
+                        "sell_exec_qty_cum": 2,
+                        "buy_ratio": 80.0,
+                    },
+                    {
+                        "ts": now_ts,
+                        "v_pw": 99.0,
+                        "tick_value": 1000,
+                        "buy_tick_value": 800,
+                        "sell_tick_value": 200,
+                        "buy_qty": 20,
+                        "sell_qty": 4,
+                        "buy_exec_qty_cum": 20,
+                        "sell_exec_qty_cum": 4,
+                        "buy_ratio": 80.0,
+                    },
+                ],
+            }
+
+    logs = []
+    monkeypatch.setattr(state_handlers, "WS_MANAGER", FakeWsManager())
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_entry_pipeline",
+        lambda stock, code, stage, **fields: logs.append((stage, fields)),
+    )
+    monkeypatch.setattr(state_handlers, "arm_big_bite_if_triggered", lambda **kwargs: (False, {}))
+    monkeypatch.setattr(state_handlers, "confirm_big_bite_follow_through", lambda **kwargs: (True, {}))
+    monkeypatch.setattr(state_handlers, "build_tick_data_from_ws", lambda ws_data: {})
+
+    stock = {"id": 12, "name": "STALE", "strategy": "SCALPING", "position_tag": "SCANNER", "prob": 0.9, "rt_ai_prob": 0.9}
+    state_handlers.handle_watching_state(
+        stock=stock,
+        code="789789",
+        ws_data={
+            "curr": 10_000,
+            "v_pw": 98.0,
+            "last_ws_update_ts": time.time() - 8.0,
+            "ask_tot": 50_000,
+            "bid_tot": 50_000,
+            "open": 9_900,
+            "fluctuation": 1.0,
+            "orderbook": {"asks": [{"price": 10_010}], "bids": [{"price": 10_000}]},
+            "strength_momentum_history": [],
+        },
+        admin_id=1,
+        radar=DummyRadar(),
+        ai_engine=None,
+    )
+
+    by_stage = {stage: fields for stage, fields in logs}
+    assert by_stage["blocked_strength_momentum"]["source_quality_block_reason"] == "-"
+    assert by_stage["blocked_strength_momentum"]["pre_ai_ws_snapshot_refresh_applied"] is True
+    assert by_stage["blocked_strength_momentum"]["pre_ai_ws_snapshot_refresh_reason"] == "latest_ws_snapshot_fresh"
+    assert by_stage["blocked_strength_momentum"]["gate_action"] == "risk_context_only"
+
+
 def test_scalping_entry_timeout_uses_strategy_profile_not_target_price(monkeypatch):
     monkeypatch.setattr(
         state_handlers,

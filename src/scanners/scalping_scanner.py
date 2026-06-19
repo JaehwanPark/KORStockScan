@@ -1228,9 +1228,37 @@ def _log_scanner_real_source_guard_block(target, source_guard, now_ts):
     )
 
 
+def _scanner_runtime_target_payload(target, source_guard, record_id=None, *, now_ts=None):
+    fields = _scanner_event_fields(target, source_guard)
+    return {
+        "record_id": record_id,
+        "code": str(target.get("Code") or "").strip()[:6],
+        "name": str(target.get("Name") or ""),
+        "strategy": "SCALPING",
+        "trade_type": "SCALP",
+        "status": "WATCHING",
+        "position_tag": "SCANNER",
+        "buy_price": _safe_positive_int(target.get("Price")),
+        "added_time": float(now_ts or time.time()),
+        "entry_armed_at_epoch": float(now_ts or time.time()),
+        "scanner_promotion_id": fields.get("scanner_promotion_id") or "",
+        "scanner_promotion_reason": fields.get("scanner_promotion_reason") or "",
+        "scanner_promotion_emitted_epoch": fields.get("scanner_promotion_emitted_epoch") or "",
+        "source_signature": fields.get("source_signature") or "",
+        "current_price_observed": fields.get("current_price_observed"),
+        "price_delta_since_first_seen_pct": fields.get("price_delta_since_first_seen_pct"),
+        "scanner_source_family": fields.get("scanner_source_family"),
+        "scanner_source_role": fields.get("scanner_source_role"),
+        "runtime_effect": True,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+    }
+
+
 def promote_candidates(db, event_bus, ranked_targets, recent_picks, *, max_new_codes, reentry_cooldown_sec, token=None, now_ts=None):
     now_ts = time.time() if now_ts is None else now_ts
     new_codes_found = []
+    promoted_target_payloads = []
     recent_picks = _filter_picks_within_cooldown(recent_picks, now_ts, reentry_cooldown_sec)
 
     for target in ranked_targets:
@@ -1325,25 +1353,35 @@ def promote_candidates(db, event_bus, ranked_targets, recent_picks, *, max_new_c
                         entry_armed_at_epoch=now_ts,
                     )
                     session.add(new_record)
+                    record = new_record
+
+                if hasattr(session, "flush"):
+                    session.flush()
+                record_id = getattr(record, "id", None)
         except Exception as e:
             log_error(f"⚠️ DB 저장 실패 ({code}): {e}")
             continue
 
+        source_guard = {
+            **source_guard,
+            "scanner_promotion_id": f"SCANPROM-{code}-{int(float(now_ts or 0.0) * 1000)}",
+            "scanner_promotion_emitted_epoch": f"{float(now_ts or 0.0):.3f}",
+        }
         if bool(getattr(TRADING_RULES, "SCALP_SCANNER_REAL_SOURCE_GUARD_ENABLED", False)):
-            source_guard = {
-                **source_guard,
-                "scanner_promotion_id": f"SCANPROM-{code}-{int(float(now_ts or 0.0) * 1000)}",
-                "scanner_promotion_emitted_epoch": f"{float(now_ts or 0.0):.3f}",
-            }
             _log_scanner_candidate_event("scalping_scanner_candidate_promoted", target, source_guard)
         _remember_pick(recent_picks, target, now_ts)
         new_codes_found.append(code)
+        promoted_target_payloads.append(
+            _scanner_runtime_target_payload(target, source_guard, record_id=record_id, now_ts=now_ts)
+        )
 
         if len(new_codes_found) >= max_new_codes:
             break
 
     if new_codes_found:
         event_bus.publish("COMMAND_WS_REG", {"codes": new_codes_found})
+        for payload in promoted_target_payloads:
+            event_bus.publish("SCALPING_SCANNER_PROMOTED_TARGET", payload)
         print(f"📡 웹소켓 감시 등록 요청 완료: {len(new_codes_found)} 종목")
 
     return new_codes_found, recent_picks

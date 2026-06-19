@@ -40,6 +40,10 @@ class _EventBus:
         self.events.append((name, payload))
 
 
+def _event_payloads(event_bus, name):
+    return [payload for event_name, payload in event_bus.events if event_name == name]
+
+
 def test_resolve_scan_interval_matches_intraday_schedule():
     assert scalping_scanner._resolve_scan_interval_sec(time(9, 5)) == 90
     assert scalping_scanner._resolve_scan_interval_sec(time(10, 29)) == 90
@@ -1435,7 +1439,12 @@ def test_promote_candidates_blocks_identical_recent_pick(monkeypatch):
 
     assert first_codes == ["005930"]
     assert second_codes == []
-    assert event_bus.events == [("COMMAND_WS_REG", {"codes": ["005930"]})]
+    assert _event_payloads(event_bus, "COMMAND_WS_REG") == [{"codes": ["005930"]}]
+    promoted_payloads = _event_payloads(event_bus, "SCALPING_SCANNER_PROMOTED_TARGET")
+    assert len(promoted_payloads) == 1
+    assert promoted_payloads[0]["code"] == "005930"
+    assert promoted_payloads[0]["status"] == "WATCHING"
+    assert promoted_payloads[0]["actual_order_submitted"] is False
     assert len(db.records) == 1
 
 
@@ -1477,7 +1486,8 @@ def test_promote_candidates_allows_value_top_reentry(monkeypatch):
     )
 
     assert codes == ["005930"]
-    assert event_bus.events == [("COMMAND_WS_REG", {"codes": ["005930"]})]
+    assert _event_payloads(event_bus, "COMMAND_WS_REG") == [{"codes": ["005930"]}]
+    assert _event_payloads(event_bus, "SCALPING_SCANNER_PROMOTED_TARGET")[0]["code"] == "005930"
 
 
 def test_real_source_guard_blocks_deteriorating_value_top_only_without_strength(monkeypatch, capsys):
@@ -2273,7 +2283,11 @@ def test_real_source_guard_promotes_immediate_acceleration_sources(monkeypatch):
     )
 
     assert codes == ["000101", "000102"]
-    assert event_bus.events == [("COMMAND_WS_REG", {"codes": ["000101", "000102"]})]
+    assert _event_payloads(event_bus, "COMMAND_WS_REG") == [{"codes": ["000101", "000102"]}]
+    assert [p["code"] for p in _event_payloads(event_bus, "SCALPING_SCANNER_PROMOTED_TARGET")] == [
+        "000101",
+        "000102",
+    ]
 
 
 def test_real_source_guard_blocks_vi_value_without_primary_source(monkeypatch):
@@ -2432,7 +2446,12 @@ def test_run_scalper_iteration_keeps_ws_payload_and_max_new_codes(monkeypatch):
     )
 
     assert codes == ["000000", "000001", "000002"]
-    assert event_bus.events == [("COMMAND_WS_REG", {"codes": ["000000", "000001", "000002"]})]
+    assert _event_payloads(event_bus, "COMMAND_WS_REG") == [{"codes": ["000000", "000001", "000002"]}]
+    assert [p["code"] for p in _event_payloads(event_bus, "SCALPING_SCANNER_PROMOTED_TARGET")] == [
+        "000000",
+        "000001",
+        "000002",
+    ]
     assert len(db.records) == 3
 
 
@@ -2480,7 +2499,8 @@ def test_run_scalper_iteration_continues_when_one_source_fails(monkeypatch):
     )
 
     assert codes == ["005930"]
-    assert event_bus.events == [("COMMAND_WS_REG", {"codes": ["005930"]})]
+    assert _event_payloads(event_bus, "COMMAND_WS_REG") == [{"codes": ["005930"]}]
+    assert _event_payloads(event_bus, "SCALPING_SCANNER_PROMOTED_TARGET")[0]["code"] == "005930"
 
 
 def test_new_kiwoom_source_helpers_return_empty_list_on_fetch_failure(monkeypatch):

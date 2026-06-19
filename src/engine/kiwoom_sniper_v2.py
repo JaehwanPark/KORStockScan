@@ -42,6 +42,7 @@ import traceback
 from src.utils import kiwoom_utils
 from src.utils.logger import log_error, log_info
 from src.utils.constants import RESTART_FLAG_PATH, TRADING_RULES
+from src.utils.pipeline_event_logger import emit_pipeline_event
 from src.database.db_manager import DBManager
 from src.core.event_bus import EventBus
 from src.database.models import RecommendationHistory
@@ -825,6 +826,217 @@ def _safe_float(value, default=0.0):
         return default
 
 
+def _scanner_runtime_target_event_fields(payload, *, outcome, reason, target=None):
+    payload = payload or {}
+    target = target or {}
+    return {
+        "metric_role": "runtime_handoff_observation",
+        "decision_authority": "real_scalping_scanner_runtime_watchlist_handoff_only",
+        "source_quality_gate": "scalping_scanner_runtime_target_attach_contract",
+        "window_policy": "intraday_runtime_handoff",
+        "sample_floor": "not_applicable_runtime_handoff",
+        "primary_decision_metric": "funnel_count",
+        "forbidden_uses": (
+            "score_threshold_change,provider_route_change,order_price_change,"
+            "quantity_or_cap_change,broker_guard_change,real_execution_quality_approval"
+        ),
+        "runtime_effect": True,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "runtime_target_attach_outcome": outcome,
+        "runtime_target_attach_reason": reason,
+        "runtime_record_id": payload.get("record_id") or target.get("id") or "not_applicable_runtime_record_id",
+        "scanner_promotion_id": payload.get("scanner_promotion_id") or "not_applicable_scanner_promotion_id",
+        "scanner_promotion_reason": payload.get("scanner_promotion_reason") or "not_applicable_scanner_promotion_reason",
+        "scanner_promotion_emitted_epoch": payload.get("scanner_promotion_emitted_epoch")
+        or "not_applicable_scanner_promotion_emitted_epoch",
+        "source_signature": payload.get("source_signature") or "not_applicable_source_signature",
+        "scanner_source_family": payload.get("scanner_source_family") or "",
+        "scanner_source_role": payload.get("scanner_source_role") or "",
+        "current_price_observed": payload.get("current_price_observed") or payload.get("buy_price") or "",
+        "price_delta_since_first_seen_pct": payload.get("price_delta_since_first_seen_pct") or "",
+        "target_status": target.get("status") or payload.get("status") or "not_applicable_target_status",
+        "target_strategy": target.get("strategy") or payload.get("strategy") or "not_applicable_target_strategy",
+        "target_position_tag": target.get("position_tag") or payload.get("position_tag") or "not_applicable_target_position_tag",
+    }
+
+
+def _log_scanner_runtime_target_attach(payload, *, outcome, reason, target=None):
+    payload = payload or {}
+    target = target or {}
+    code = str(payload.get("code") or target.get("code") or "").strip()[:6]
+    emit_pipeline_event(
+        "ENTRY_PIPELINE",
+        str(payload.get("name") or target.get("name") or "-"),
+        code,
+        "scalping_scanner_runtime_target_attach",
+        fields=_scanner_runtime_target_event_fields(payload, outcome=outcome, reason=reason, target=target),
+    )
+
+
+def _resolve_scanner_runtime_record_id(payload, code, strategy):
+    record_id = payload.get("record_id")
+    if record_id not in (None, ""):
+        return record_id
+    if DB is None or not hasattr(DB, "find_reusable_watching_record"):
+        return None
+
+    try:
+        with DB.get_session() as session:
+            record = DB.find_reusable_watching_record(
+                session,
+                rec_date=datetime.now().date(),
+                stock_code=code,
+                strategy=strategy,
+            )
+            return getattr(record, "id", None) if record is not None else None
+    except Exception as exc:
+        log_error(f"[SCALPING_SCANNER_PROMOTED_TARGET] record id fallback failed ({code}): {exc}")
+        return None
+
+
+def handle_scalping_scanner_promoted_target(payload):
+    """Attach scanner-promoted WATCHING records to the live loop without changing buy thresholds."""
+    global ACTIVE_TARGETS
+
+    payload = payload or {}
+    code = str(payload.get("code") or "").strip()[:6]
+    if not code:
+        _log_scanner_runtime_target_attach(payload, outcome="skipped", reason="missing_code")
+        return False
+
+    strategy = normalize_strategy(payload.get("strategy") or "SCALPING")
+    if strategy != "SCALPING":
+        _log_scanner_runtime_target_attach(payload, outcome="skipped", reason="non_scalping_strategy")
+        return False
+
+    now_ts = _safe_float(payload.get("added_time"), time.time())
+    buy_price = _safe_int(payload.get("buy_price") or payload.get("current_price_observed"), 0)
+    position_tag = normalize_position_tag(strategy, payload.get("position_tag") or "SCANNER")
+    record_id = _resolve_scanner_runtime_record_id(payload, code, strategy)
+
+    with _state_lock:
+        existing = None
+        for target in ACTIVE_TARGETS:
+            if str(target.get("code") or "").strip()[:6] == code and normalize_strategy(target.get("strategy")) == strategy:
+                existing = target
+                break
+
+        if existing is not None:
+            status = str(existing.get("status") or "").upper()
+            if status == "WATCHING":
+                existing.update(
+                    {
+                        "id": record_id or existing.get("id"),
+                        "name": payload.get("name") or existing.get("name"),
+                        "buy_price": buy_price or existing.get("buy_price"),
+                        "added_time": now_ts,
+                        "entry_armed_at_epoch": _safe_float(
+                            payload.get("entry_armed_at_epoch"),
+                            existing.get("entry_armed_at_epoch") or now_ts,
+                        ),
+                        "position_tag": position_tag,
+                        "scanner_promotion_id": payload.get("scanner_promotion_id") or existing.get("scanner_promotion_id"),
+                        "scanner_promotion_reason": payload.get("scanner_promotion_reason")
+                        or existing.get("scanner_promotion_reason"),
+                        "scanner_promotion_emitted_epoch": payload.get("scanner_promotion_emitted_epoch")
+                        or existing.get("scanner_promotion_emitted_epoch"),
+                        "source_signature": payload.get("source_signature") or existing.get("source_signature"),
+                    }
+                )
+                if buy_price > 0 and not existing.get("marcap"):
+                    existing["marcap"] = _resolve_stock_marcap(existing, code)
+                _log_scanner_runtime_target_attach(
+                    payload,
+                    outcome="refreshed",
+                    reason="existing_watching_refreshed",
+                    target=existing,
+                )
+                event_bus.publish("COMMAND_WS_REG", {"codes": [code]})
+                return True
+
+            if status not in {"COMPLETED", "EXPIRED"}:
+                _log_scanner_runtime_target_attach(
+                    payload,
+                    outcome="skipped",
+                    reason="same_symbol_active_order_or_holding",
+                    target=existing,
+                )
+                return False
+
+        new_target = {
+            "id": record_id,
+            "code": code,
+            "name": payload.get("name") or code,
+            "strategy": strategy,
+            "status": "WATCHING",
+            "type": payload.get("trade_type") or "SCALP",
+            "buy_price": buy_price,
+            "added_time": now_ts,
+            "entry_armed_at_epoch": _safe_float(payload.get("entry_armed_at_epoch"), now_ts),
+            "position_tag": position_tag,
+            "scanner_promotion_id": payload.get("scanner_promotion_id") or "",
+            "scanner_promotion_reason": payload.get("scanner_promotion_reason") or "",
+            "scanner_promotion_emitted_epoch": payload.get("scanner_promotion_emitted_epoch") or "",
+            "source_signature": payload.get("source_signature") or "",
+        }
+        new_target["marcap"] = _resolve_stock_marcap(new_target, code)
+        ACTIVE_TARGETS.append(new_target)
+
+    event_bus.publish("COMMAND_WS_REG", {"codes": [code]})
+    _log_scanner_runtime_target_attach(
+        payload,
+        outcome="attached",
+        reason="new_watching_target_attached",
+        target=new_target,
+    )
+    log_info(f"[SCALPING_SCANNER_PROMOTED_TARGET] attached {code} to ACTIVE_TARGETS")
+    return True
+
+
+def attach_db_poll_target_if_missing(db_target, targets, now_ts):
+    """Merge DB WATCHING/HOLDING polling results, logging scanner event-bus recovery."""
+    dt = dict(db_target or {})
+    dt["strategy"] = normalize_strategy(dt.get("strategy"))
+    dt["position_tag"] = normalize_position_tag(dt["strategy"], dt.get("position_tag"))
+    code = str(dt.get("code", "")).strip()[:6]
+    if not code:
+        return False
+
+    identity = target_identity(code, dt["strategy"])
+    if any(
+        target_identity(t.get("code", ""), t.get("strategy", "")) == identity
+        and not sniper_state_handlers._is_scalp_simulator_target(t)
+        and not sniper_state_handlers._is_swing_intraday_probe_target(t)
+        for t in targets
+    ):
+        return False
+
+    dt["added_time"] = now_ts
+    targets.append(dt)
+    event_bus.publish("COMMAND_WS_REG", {"codes": [code]})
+
+    if dt["strategy"] == "SCALPING" and dt["position_tag"] == "SCANNER":
+        _log_scanner_runtime_target_attach(
+            {
+                "record_id": dt.get("id"),
+                "code": code,
+                "name": dt.get("name") or code,
+                "strategy": dt["strategy"],
+                "trade_type": dt.get("type") or "SCALP",
+                "status": dt.get("status") or "WATCHING",
+                "position_tag": dt["position_tag"],
+                "buy_price": dt.get("buy_price"),
+                "added_time": now_ts,
+                "entry_armed_at_epoch": dt.get("entry_armed_at_epoch") or now_ts,
+            },
+            outcome="db_poll_attached",
+            reason="eventbus_attach_missing_recovered_from_db_poll",
+            target=dt,
+        )
+    return True
+
+
 def _restore_holding_runtime_state(targets):
     """Rehydrate HOLDING runtime fields so restart can resume with minimal drift."""
     restored = 0
@@ -1155,6 +1367,7 @@ def run_sniper(is_test_mode=False):
         event_bus.subscribe('ORDER_EXECUTED', handle_real_execution)
         event_bus.subscribe('CONDITION_MATCHED', handle_condition_matched)
         event_bus.subscribe('CONDITION_UNMATCHED', handle_condition_unmatched)
+        event_bus.subscribe('SCALPING_SCANNER_PROMOTED_TARGET', handle_scalping_scanner_promoted_target)
 
         def on_trading_paused(payload):
             payload = payload or {}
@@ -1347,19 +1560,7 @@ def run_sniper(is_test_mode=False):
             if now_ts - last_db_poll_time > 5:
                 db_targets = DB.get_active_targets() or []
                 for dt in db_targets:
-                    dt['strategy'] = normalize_strategy(dt.get('strategy'))
-                    dt['position_tag'] = normalize_position_tag(dt['strategy'], dt.get('position_tag'))
-                    code = str(dt.get('code', '')).strip()[:6]
-                    identity = target_identity(code, dt['strategy'])
-                    if not any(
-                        target_identity(t.get('code', ''), t.get('strategy', '')) == identity
-                        and not sniper_state_handlers._is_scalp_simulator_target(t)
-                        and not sniper_state_handlers._is_swing_intraday_probe_target(t)
-                        for t in targets
-                    ):
-                        dt['added_time'] = now_ts
-                        targets.append(dt)
-                        event_bus.publish("COMMAND_WS_REG", {"codes": [code]})
+                    attach_db_poll_target_if_missing(dt, targets, now_ts)
                 last_db_poll_time = now_ts
             _db_elapsed_ms = (time.perf_counter() - _t0_db) * 1000
 

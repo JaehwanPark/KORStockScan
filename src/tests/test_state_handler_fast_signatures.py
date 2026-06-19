@@ -1384,6 +1384,76 @@ def test_log_entry_pipeline_hydrates_missing_scanner_promotion_id(monkeypatch):
     assert fields["scanner_promotion_emitted_epoch"] == "1000.000"
 
 
+def test_log_entry_pipeline_refreshes_stale_scanner_promotion_id(monkeypatch):
+    emitted = []
+    monkeypatch.setattr(
+        handlers,
+        "emit_pipeline_event",
+        lambda pipeline, name, code, stage, *, record_id=None, fields=None: emitted.append(
+            {"stage": stage, "fields": fields or {}}
+        ),
+    )
+    monkeypatch.setattr(
+        handlers,
+        "_load_scanner_promotion_context_events",
+        lambda _target_date: {
+            "000036": [
+                {
+                    "emitted_epoch": 900.0,
+                    "fields": {
+                        "scanner_promotion_id": "SCANPROM-000036-900000",
+                        "scanner_promotion_emitted_epoch": "900.000",
+                        "scanner_promotion_reason": "old_price_jump",
+                        "source_signature": "PRICE_JUMP_START",
+                        "price_delta_since_first_seen_pct": "0.25",
+                        "comparable_flu_delta_since_first_seen": "0.25",
+                        "cntr_str_available": True,
+                        "cntr_str": "110.0",
+                    },
+                },
+                {
+                    "emitted_epoch": 1000.0,
+                    "fields": {
+                        "scanner_promotion_id": "SCANPROM-000036-1000000",
+                        "scanner_promotion_emitted_epoch": "1000.000",
+                        "scanner_promotion_reason": "price_jump_start_acceleration",
+                        "source_signature": "OPEN_TOP,PRICE_JUMP_START",
+                        "price_delta_since_first_seen_pct": "1.45",
+                        "comparable_flu_delta_since_first_seen": "1.50",
+                        "cntr_str_available": True,
+                        "cntr_str": "122.0",
+                    },
+                },
+            ]
+        },
+    )
+    stock = {
+        "id": 45,
+        "name": "REPROMOTED",
+        "code": "000036",
+        "date": "2026-06-19",
+        "position_tag": "SCANNER",
+        "buy_price": 12500,
+        "entry_armed_at_epoch": 1000.0,
+        "scanner_promotion_id": "SCANPROM-000036-900000",
+        "scanner_promotion_emitted_epoch": "900.000",
+        "scanner_promotion_reason": "old_price_jump",
+        "source_signature": "PRICE_JUMP_START",
+        "price_delta_since_first_seen_pct": "0.25",
+        "comparable_flu_delta_since_first_seen": "0.25",
+        "cntr_str_available": True,
+        "cntr_str": "110.0",
+    }
+
+    _log_entry_pipeline(stock, "000036", "blocked_strength_momentum")
+
+    fields = emitted[-1]["fields"]
+    assert fields["scanner_promotion_id"] == "SCANPROM-000036-1000000"
+    assert fields["scanner_promotion_emitted_epoch"] == "1000.000"
+    assert fields["source_signature"] == "OPEN_TOP,PRICE_JUMP_START"
+    assert fields["price_delta_since_first_seen_pct"] == "1.45"
+
+
 def test_log_ai_confirmed_terminal_no_budget_emits_contract_fields(monkeypatch):
     emitted = []
     monkeypatch.setattr(
