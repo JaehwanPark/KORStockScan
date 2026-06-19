@@ -801,6 +801,8 @@ def _refresh_reason_bucket(label: str) -> str | None:
 
 def _latency_root_cause_bucket(label: str) -> str:
     text = label.lower()
+    if "input_snapshot_fresh" in text:
+        return "quote_freshness_input_snapshot_noop"
     if _refresh_reason_bucket(label) == "refresh_disabled_or_alias_gap":
         return "observer_unhealthy"
     if "ws_jitter" in text:

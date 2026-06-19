@@ -2,16 +2,16 @@
 
 ## 판정
 
-- panic_state: `NORMAL`
-- panic_regime_mode: `NORMAL`
-- risk_regime_gate_state: `normal`
+- panic_state: `RECOVERY_WATCH`
+- panic_regime_mode: `STABILIZING`
+- risk_regime_gate_state: `watch`
 - risk_regime_threshold_mode: `insufficient_sample`
 - panic_confirmation_policy: `portfolio stop-loss clusters are evidence; PANIC_DETECTED requires market or microstructure confirmation`
 - report_only: `true`
 - runtime_effect: `report_only_no_mutation`
-- as_of: `2026-06-19T15:28:06`
-- latest_event_at: `2026-06-19T15:28:05`
-- reasons: `panic thresholds not breached`
+- as_of: `2026-06-19T16:33:15`
+- latest_event_at: `2026-06-19T15:45:01`
+- reasons: `live market panic breadth risk_off advisory; market breadth risk-off watch without panic confirmation`
 
 ## 패닉 지표
 
@@ -55,35 +55,36 @@
 - recovery_confirmed_count: `0`
 - missing_orderbook_count: `1672`
 - degraded_orderbook_count: `1672`
-- max_panic_score: `0.45`
+- max_panic_score: `0.3671`
 - max_recovery_score: `0.5793`
-- micro_cusum_triggered_symbol_count: `0`
+- micro_cusum_triggered_symbol_count: `2`
 - micro_consensus_pass_symbol_count: `0`
 - micro_cusum_decision_authority: `source_quality_only`
 
 ## Microstructure Market Context
 
 - market_risk_state: `NEUTRAL`
-- market_panic_breadth_as_of: `2026-06-19T15:28:01`
+- market_panic_breadth_as_of: `2026-06-19T16:33:10`
 - market_panic_breadth_source_quality_status: `ok`
-- market_panic_breadth_risk_off_advisory: `false`
-- market_panic_breadth_single_market_risk_off_advisory: `true`
+- market_panic_breadth_risk_off_advisory: `true`
+- market_panic_breadth_single_market_risk_off_advisory: `false`
 - evaluated_symbol_count: `2071`
 - risk_off_advisory_ratio_pct: `0`
 - confirmed_micro_risk_off_advisory: `false`
-- confirmed_risk_off_advisory: `false`
+- confirmed_risk_off_advisory: `true`
 - portfolio_local_risk_off_only: `false`
 - source_quality_gate: `microstructure risk_off requires market RISK_OFF or broad evaluated-symbol confirmation`
-- reasons: ``
+- reasons: `market_panic_breadth_risk_off`
 
 ## 방어 액션
 
 - `hard_protect_emergency_delay_forbidden`: `enforced` / runtime_effect=`false`
 - `live_threshold_mutation_forbidden`: `enforced` / runtime_effect=`false`
+- `recovery_probe_review`: `candidate_only` / runtime_effect=`false`
 
 ## Canary Candidates
 
-- `panic_entry_freeze_guard`: `inactive_no_panic`, allowed_runtime_apply=`false`
+- `panic_entry_freeze_guard`: `report_only_candidate`, allowed_runtime_apply=`false`
 - `panic_stop_confirmation`: `hold_no_eligible_exit`, allowed_runtime_apply=`false`
 - `panic_rebound_probe`: `hold_until_recovery_confirmed`, allowed_runtime_apply=`false`
 - `panic_attribution_pack`: `active_report_only`, allowed_runtime_apply=`false`

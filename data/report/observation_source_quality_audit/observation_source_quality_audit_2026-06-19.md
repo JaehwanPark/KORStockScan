@@ -1,7 +1,7 @@
 # Observation Source Quality Audit - 2026-06-19
 
 - status: `pass`
-- event_count: `78280`
+- event_count: `78448`
 - tuning_input_policy: `exclude_defective_rows_not_full_day_raw`
 - hard_blocking_excluded_row_count: `0`
 - tuning_input_allowed: `True`

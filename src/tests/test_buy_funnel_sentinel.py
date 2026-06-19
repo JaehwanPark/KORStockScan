@@ -577,6 +577,41 @@ def test_fresh_ws_snapshot_reason_does_not_pollute_latency_danger_breakdown(monk
     assert root_cause["quote_freshness_attribution"]["refresh_attempted_count"] == 0
 
 
+def test_input_snapshot_fresh_reason_is_report_provenance_not_unknown_workorder(monkeypatch, tmp_path):
+    monkeypatch.setattr(sentinel, "DATA_DIR", tmp_path)
+    rows = []
+    for idx in range(5):
+        rows.append(_event("2026-05-06", f"10:0{idx}:00", "ai_confirmed", record_id=idx))
+        rows.append(_event("2026-05-06", f"10:0{idx}:10", "budget_pass", record_id=idx))
+        rows.append(
+            _event(
+                "2026-05-06",
+                f"10:0{idx}:20",
+                "latency_block",
+                record_id=idx,
+                fields={
+                    "reason": "latency_state_danger",
+                    "pre_submit_ws_snapshot_refresh_enabled": True,
+                    "pre_submit_ws_snapshot_refresh_applied": False,
+                    "pre_submit_ws_snapshot_refresh_reason": "input_snapshot_fresh",
+                },
+            )
+        )
+    _write_events(tmp_path, "2026-05-06", rows)
+
+    report = sentinel.build_buy_funnel_sentinel_report(
+        "2026-05-06",
+        as_of=sentinel._parse_as_of("2026-05-06", "10:10:00"),
+    )
+
+    root_cause = report["classification"]["submit_drought_root_cause"]
+    assert root_cause["latency_root_cause_counts"] == {
+        "quote_freshness_input_snapshot_noop": 5
+    }
+    assert root_cause["unknown_latency_reason_count"] == 0
+    assert root_cause["unknown_latency_workorder_required"] is False
+
+
 def test_latency_drought_root_cause_uses_full_reason_counts_not_only_top10():
     current = {
         "latency_state_danger_events": 13,

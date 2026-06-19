@@ -44,6 +44,15 @@ SCALE_IN_PYRAMID_BUCKET_TYPE = "arm"
 SCALE_IN_PYRAMID_BUCKET_KEY = "PYRAMID"
 SCALE_IN_AVG_DOWN_BUCKET_TYPE = "arm"
 SCALE_IN_AVG_DOWN_BUCKET_KEY = "AVG_DOWN"
+SCALE_IN_SOURCE_ONLY_EXCLUSION_REASON = "paired_add_lifecycle_replay_or_final_label_missing"
+SCALE_IN_REOPEN_CONDITIONS = [
+    "paired_add_lifecycle_replay_implemented",
+    "final_scale_in_labels_available",
+    "incremental_notional_ev_pct_non_null",
+    "source_quality_gate_pass",
+    "target_env_keys_mapped",
+    "hard_broker_stale_quantity_cooldown_provider_cap_guards_preserved",
+]
 ENTRY_BRIDGE_METADATA_STATE = "entry_only_bridge_metadata"
 ENTRY_BRIDGE_METADATA_REASON = "entry_only_bridge_metadata_not_live_candidate"
 ARCHIVED_RUNTIME_APPLY_BRIDGE_FAMILIES: set[str] = set()
@@ -1075,6 +1084,29 @@ def _scale_source(bucket: dict[str, Any], *, role: str) -> dict[str, Any]:
     }
 
 
+def _scale_source_link(target_date: str, source_buckets: list[dict[str, Any]]) -> dict[str, Any]:
+    source_bucket_keys = [str(item.get("bucket_key") or "").strip() for item in source_buckets]
+    return {
+        "source_artifact": "lifecycle_decision_matrix",
+        "source_section": "scale_in_bucket_attribution",
+        "source_date": target_date,
+        "family": SCALE_IN_BRIDGE_FAMILY,
+        "threshold_version": f"{SCALE_IN_BRIDGE_FAMILY}:{target_date}",
+        "source_bucket_keys": [key for key in source_bucket_keys if key],
+        "source_buckets": [
+            {
+                "bucket_type": item.get("bucket_type"),
+                "bucket_key": item.get("bucket_key"),
+                "role": item.get("role"),
+                "scale_in_ev_coverage_state": item.get("scale_in_ev_coverage_state"),
+                "runtime_authority_ready": item.get("runtime_authority_ready"),
+                "runtime_authority_block_reason": item.get("runtime_authority_block_reason"),
+            }
+            for item in source_buckets
+        ],
+    }
+
+
 def _scale_candidate_legacy_blocked(
     *,
     target_date: str,
@@ -1106,6 +1138,7 @@ def _scale_candidate_legacy_blocked(
         if has_v2_observation
         else "blocked_legacy_v1_label_missing_incremental_ev"
     )
+    source_bucket_keys = [str(item.get("bucket_key") or "").strip() for item in source_buckets]
     return {
         "candidate_id": f"{SCALE_IN_BRIDGE_FAMILY}:{target_date}",
         "family": SCALE_IN_BRIDGE_FAMILY,
@@ -1143,8 +1176,14 @@ def _scale_candidate_legacy_blocked(
             "reversal_add_min_buy_pressure": 55.0,
             "reversal_add_min_tick_accel": 0.95,
         },
-        "source_bucket_keys": [str(item.get("bucket_key") or "") for item in source_buckets],
+        "source_bucket_keys": [key for key in source_bucket_keys if key],
         "source_buckets": source_buckets,
+        "source_link": _scale_source_link(target_date, source_buckets),
+        "explicit_runtime_exclusion": True,
+        "runtime_exclusion_reason": SCALE_IN_SOURCE_ONLY_EXCLUSION_REASON,
+        "bridge_exclusion_reason": SCALE_IN_SOURCE_ONLY_EXCLUSION_REASON,
+        "reopen_conditions": SCALE_IN_REOPEN_CONDITIONS,
+        "next_review_stage": "next_postclose_runtime_apply_gap_audit",
         "observe_only_reference_buckets": [],
         "rolling_confirmation": (
             {

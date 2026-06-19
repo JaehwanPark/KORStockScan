@@ -25,7 +25,7 @@
 - budget/ai unique: `19.1%` (baseline `46.3`)
 - submitted/ai unique: `0.0%` (baseline `8.7`)
 - critical submit thresholds: `submitted/ai < 20.0%` or `submitted/budget <= 10.0%` (floors: ai>=20, budget>=3)
-- top blockers: `blocked_strength_momentum:below_window_buy_value=840, latency_block:latency_state_danger=801, blocked_strength_momentum:below_strength_base=749, blocked_vpw:-=511, first_ai_wait:-=471`
+- top blockers: `blocked_strength_momentum:below_window_buy_value=840, latency_block:latency_state_danger=801, blocked_strength_momentum:below_strength_base=749, first_ai_wait:-=471, blocked_strength_momentum:below_buy_ratio=253`
 - swing blockers: `blocked_swing_score_vpw:-=613, blocked_swing_gap:-=126`
 - upstream blockers: `first_ai_wait:-=471, blocked_ai_score:ai_score_50_buy_hold_override=150, blocked_ai_score:score_62.0=134, wait65_79_ev_candidate:score_74.0=44, blocked_ai_score:score_60.0=18`
 - latency blockers: `latency_block:latency_state_danger=801`
@@ -50,5 +50,5 @@
 ## Window Summary
 
 - `5m`: ai=0, budget=19, latency=5, submitted=0, top=`latency_block:latency_state_danger=14, blocked_gatekeeper_reject:전량 회피=1, blocked_gatekeeper_reject:눌림 대기=1`, swing=`blocked_swing_score_vpw:-=17`, upstream=`-`
-- `10m`: ai=5, budget=19, latency=5, submitted=0, top=`latency_block:latency_state_danger=14, first_ai_wait:-=5, blocked_vpw:-=4`, swing=`blocked_swing_score_vpw:-=17`, upstream=`first_ai_wait:-=5, wait65_79_ev_candidate:score_74.0=1, wait65_79_ev_candidate:score_67.0=1`
-- `30m`: ai=20, budget=19, latency=5, submitted=0, top=`blocked_vpw:-=27, blocked_strength_momentum:below_strength_base=26, first_ai_wait:-=19`, swing=`blocked_swing_score_vpw:-=17`, upstream=`first_ai_wait:-=19, blocked_ai_score:ai_score_50_buy_hold_override=11, blocked_ai_score:score_62.0=1`
+- `10m`: ai=5, budget=19, latency=5, submitted=0, top=`latency_block:latency_state_danger=14, first_ai_wait:-=5, blocked_gap_from_scan:-=4`, swing=`blocked_swing_score_vpw:-=17`, upstream=`first_ai_wait:-=5, wait65_79_ev_candidate:score_74.0=1, wait65_79_ev_candidate:score_67.0=1`
+- `30m`: ai=20, budget=19, latency=5, submitted=0, top=`blocked_strength_momentum:below_strength_base=26, first_ai_wait:-=19, blocked_strength_momentum:below_window_buy_value=16`, swing=`blocked_swing_score_vpw:-=17`, upstream=`first_ai_wait:-=19, blocked_ai_score:ai_score_50_buy_hold_override=11, blocked_ai_score:score_62.0=1`

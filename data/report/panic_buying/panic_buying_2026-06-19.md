@@ -8,8 +8,8 @@
 - risk_regime_threshold_mode: `dynamic_quantile`
 - report_only: `true`
 - runtime_effect: `report_only_no_mutation`
-- as_of: `2026-06-19T15:29:06`
-- latest_event_at: `2026-06-19T15:29:03`
+- as_of: `2026-06-19T16:33:24`
+- latest_event_at: `2026-06-19T15:45:01`
 - reasons: `no panic buying threshold breached`
 
 ## 패닉바잉 지표
@@ -43,7 +43,7 @@
 ## Microstructure Detector
 
 - input_universe: `entry_observation_only`
-- input_event_count: `69146`
+- input_event_count: `68717`
 - excluded_holding_row_count: `9474`
 - excluded_exit_sell_row_count: `628`
 - missing_orderbook_count: `1672`
@@ -51,17 +51,17 @@
 - missing_trade_aggressor_count: `1559`
 - carried_orderbook_snapshot_count: `490`
 - carried_trade_aggressor_snapshot_count: `933`
-- micro_cusum_triggered_symbol_count: `1`
-- micro_consensus_pass_symbol_count: `0`
+- micro_cusum_triggered_symbol_count: `0`
+- micro_consensus_pass_symbol_count: `1`
 - micro_cusum_decision_authority: `source_quality_only`
 
 ## Market Breadth Context
 
 - market_panic_breadth_source_quality_status: `ok`
 - market_panic_breadth_risk_on_advisory: `false`
-- market_panic_breadth_risk_off_advisory: `false`
+- market_panic_breadth_risk_off_advisory: `true`
 - market_panic_breadth_single_market_risk_on_advisory: `false`
-- market_panic_breadth_single_market_risk_off_advisory: `true`
+- market_panic_breadth_single_market_risk_off_advisory: `false`
 - market_wide_panic_buy_confirmed: `false`
 - market_panic_buy_interpretation: `normal`
 - market_breadth_decision_authority: `source_quality_only`

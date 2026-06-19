@@ -80,6 +80,8 @@ _OPTIONAL_ARTIFACT_LABELS = {
 _AI_EXEMPT_RUNTIME_FAMILIES = {
     "latency_classifier_runtime_profile",
 }
+SCALE_IN_POLICY_FAMILY = "scale_in_bucket_runtime_policy_v1"
+SCALE_IN_POLICY_EXCLUSION_REASON = "paired_add_lifecycle_replay_or_final_label_missing"
 ENTRY_SUBMIT_DROUGHT_REQUIRED_ORDER_IDS = [
     "order_entry_submit_drought_auto_resolution",
     "order_entry_post_submit_contract_gap_review",
@@ -2809,6 +2811,114 @@ def _scale_in_bucket_handoff_status(
     }
 
 
+def _scale_in_policy_contract_status(
+    *,
+    scale_in_source_present: bool,
+    bridge_report: dict[str, Any],
+    runtime_apply_gap_audit: dict[str, Any],
+) -> dict[str, Any]:
+    bridge_candidates = bridge_report.get("candidates") if isinstance(bridge_report.get("candidates"), list) else []
+    bridge_candidate = next(
+        (
+            item
+            for item in bridge_candidates
+            if isinstance(item, dict) and str(item.get("family") or "") == SCALE_IN_POLICY_FAMILY
+        ),
+        {},
+    )
+    ledger = (
+        runtime_apply_gap_audit.get("candidate_route_ledger")
+        if isinstance(runtime_apply_gap_audit.get("candidate_route_ledger"), list)
+        else []
+    )
+    candidate_id = str(bridge_candidate.get("candidate_id") or "")
+    ledger_row = next(
+        (
+            item
+            for item in ledger
+            if isinstance(item, dict)
+            and (
+                (candidate_id and str(item.get("candidate_id") or "") == candidate_id)
+                or str(item.get("family") or "") == SCALE_IN_POLICY_FAMILY
+            )
+        ),
+        {},
+    )
+
+    missing: list[str] = []
+    bridge_state = str(bridge_candidate.get("bridge_candidate_state") or "")
+    allowed_runtime_apply = bridge_candidate.get("allowed_runtime_apply")
+    live_auto_apply = bridge_candidate.get("live_auto_apply")
+    target_env_keys = bridge_candidate.get("target_env_keys") if isinstance(bridge_candidate.get("target_env_keys"), list) else []
+    source_link = bridge_candidate.get("source_link") if isinstance(bridge_candidate.get("source_link"), dict) else {}
+    reopen_conditions = (
+        bridge_candidate.get("reopen_conditions") if isinstance(bridge_candidate.get("reopen_conditions"), list) else []
+    )
+    source_bucket_keys = [
+        str(value).strip()
+        for value in (source_link.get("source_bucket_keys") if isinstance(source_link.get("source_bucket_keys"), list) else [])
+        if str(value).strip()
+    ]
+    runtime_exclusion_reason = str(bridge_candidate.get("runtime_exclusion_reason") or "").strip()
+    source_only_blocked = (
+        bool(bridge_candidate)
+        and allowed_runtime_apply is False
+        and live_auto_apply is False
+        and not target_env_keys
+    )
+
+    if scale_in_source_present and not bridge_candidate:
+        missing.append("scale_in_policy_bridge_candidate_missing")
+    if source_only_blocked:
+        if bridge_candidate.get("explicit_runtime_exclusion") is not True:
+            missing.append("scale_in_policy_explicit_exclusion_missing")
+        if runtime_exclusion_reason != SCALE_IN_POLICY_EXCLUSION_REASON:
+            missing.append("scale_in_policy_exclusion_reason_missing")
+        if str(source_link.get("source_section") or "") != "scale_in_bucket_attribution" or not source_bucket_keys:
+            missing.append("scale_in_policy_source_link_missing")
+        if not reopen_conditions:
+            missing.append("scale_in_policy_reopen_conditions_missing")
+        if not ledger_row:
+            missing.append("scale_in_policy_runtime_gap_ledger_missing")
+        elif (
+            ledger_row.get("explicit_runtime_exclusion") is not True
+            or str(ledger_row.get("runtime_exclusion_reason") or "") != SCALE_IN_POLICY_EXCLUSION_REASON
+            or str(ledger_row.get("final_disposition") or "") != "source_only_explicit_exclusion"
+        ):
+            missing.append("scale_in_policy_runtime_gap_contract_not_closed")
+    elif bridge_candidate and bridge_state != "live_auto_apply_ready":
+        missing.append("scale_in_policy_unknown_bridge_state")
+
+    if missing:
+        status = "fail"
+        interpretation = "Scale-in policy contract is not closed with source link, exclusion reason, and reopen trigger."
+    elif source_only_blocked:
+        status = "pass"
+        interpretation = "Scale-in policy contract closed as source-only; runtime remains disabled and reopen trigger is preserved."
+    elif bridge_candidate:
+        status = "pass"
+        interpretation = "Scale-in policy candidate is runtime-eligible and must be handled by normal bridge/preopen guards."
+    else:
+        status = "pass"
+        interpretation = "No scale-in source or policy candidate is present."
+    return {
+        "status": status,
+        "candidate_id": candidate_id or None,
+        "bridge_state": bridge_state or None,
+        "source_only_blocked": source_only_blocked,
+        "runtime_effect": False,
+        "allowed_runtime_apply": allowed_runtime_apply if bridge_candidate else False,
+        "target_env_keys": target_env_keys,
+        "runtime_exclusion_reason": runtime_exclusion_reason or None,
+        "source_link_present": bool(source_link),
+        "source_bucket_keys": source_bucket_keys,
+        "reopen_conditions": reopen_conditions,
+        "runtime_gap_final_disposition": ledger_row.get("final_disposition") if ledger_row else None,
+        "missing": missing,
+        "interpretation": interpretation,
+    }
+
+
 def _overnight_bucket_handoff_status(
     ldm_report: dict[str, Any],
     ev_report: dict[str, Any],
@@ -3419,6 +3529,13 @@ def build_threshold_cycle_postclose_verification(
     scale_in_bucket_handoff = _scale_in_bucket_handoff_status(ldm_report, ev_report, runtime_summary, workorder)
     if isinstance(scale_in_attribution, dict) and scale_in_bucket_handoff.get("status") == "fail":
         log_issues.append("ldm_scale_in_bucket_handoff_missing")
+    scale_in_policy_contract = _scale_in_policy_contract_status(
+        scale_in_source_present=scale_in_source_present,
+        bridge_report=bridge_report,
+        runtime_apply_gap_audit=runtime_apply_gap_audit,
+    )
+    if scale_in_source_present and scale_in_policy_contract.get("status") == "fail":
+        log_issues.append("scale_in_policy_contract_missing")
     overnight_attribution = ldm_report.get("overnight_bucket_attribution")
     overnight_source_present = _has_overnight_source(ldm_report)
     if overnight_source_present and not isinstance(overnight_attribution, dict):
@@ -3849,6 +3966,8 @@ def build_threshold_cycle_postclose_verification(
             runtime_apply_gap_audit_issues.append("runtime_apply_gap_audit_stale_before_runtime_apply_bridge")
         if preopen_apply_next and _consumer_stale(runtime_apply_gap_audit, preopen_apply_next):
             runtime_apply_gap_audit_issues.append("runtime_apply_gap_audit_stale_before_threshold_preopen_apply")
+        if scale_in_source_present and scale_in_policy_contract.get("status") == "fail":
+            runtime_apply_gap_audit_issues.append("scale_in_policy_contract_missing")
     key_lineage_summary = (
         key_lineage_ledger.get("summary") if isinstance(key_lineage_ledger.get("summary"), dict) else {}
     )
@@ -3870,32 +3989,32 @@ def build_threshold_cycle_postclose_verification(
     )
     stale_downstream_links: list[str] = []
     if "daily_ev" not in disabled_stage_flags:
-        if downstream_links.get("threshold_cycle_ev_sources_workorder") and _consumer_stale(workorder, ev_report):
+        if downstream_links.get("threshold_cycle_ev_sources_workorder") and _consumer_stale(ev_report, workorder):
             stale_downstream_links.append("threshold_cycle_ev_stale_before_code_improvement_workorder")
         if (
             "pattern_lab_currentness_audit" not in disabled_stage_flags
             and downstream_links.get("threshold_cycle_ev_sources_pattern_lab_currentness_audit")
-            and _consumer_stale(currentness_audit, ev_report)
+            and _consumer_stale(ev_report, currentness_audit)
         ):
             stale_downstream_links.append("threshold_cycle_ev_stale_before_pattern_lab_currentness_audit")
         if (
             "pattern_lab_ai_review" in execution_flags
             and "pattern_lab_ai_review" not in disabled_stage_flags
             and downstream_links.get("threshold_cycle_ev_sources_pattern_lab_ai_review")
-            and _consumer_stale(pattern_lab_ai_review, ev_report)
+            and _consumer_stale(ev_report, pattern_lab_ai_review)
         ):
             stale_downstream_links.append("threshold_cycle_ev_stale_before_pattern_lab_ai_review")
         if (
             "producer_gap_discovery" in execution_flags
             and "producer_gap_discovery" not in disabled_stage_flags
             and downstream_links.get("threshold_cycle_ev_sources_producer_gap_discovery")
-            and _consumer_stale(producer_gap_discovery, ev_report)
+            and _consumer_stale(ev_report, producer_gap_discovery)
         ):
             stale_downstream_links.append("threshold_cycle_ev_stale_before_producer_gap_discovery")
         if (
             "pattern_lab_propagation_audit" not in disabled_stage_flags
             and downstream_links.get("threshold_cycle_ev_sources_pattern_lab_propagation_audit")
-            and _consumer_stale(propagation_audit, ev_report)
+            and _consumer_stale(ev_report, propagation_audit)
         ):
             stale_downstream_links.append("threshold_cycle_ev_stale_before_pattern_lab_propagation_audit")
     if "runtime_approval_summary" not in disabled_stage_flags:
@@ -4277,6 +4396,7 @@ def build_threshold_cycle_postclose_verification(
         "exit_source_present": exit_source_present,
         "buy_funnel_submit_drought_handoff": buy_funnel_submit_drought_handoff,
         "scale_in_bucket_handoff": scale_in_bucket_handoff,
+        "scale_in_policy_contract": scale_in_policy_contract,
         "scale_in_bucket_attribution_present": isinstance(scale_in_attribution, dict),
         "scale_in_source_present": scale_in_source_present,
         "overnight_bucket_handoff": overnight_bucket_handoff,
@@ -4322,6 +4442,7 @@ def _render_markdown(report: dict[str, Any]) -> str:
         else {}
     )
     scale_in_bucket = report.get("scale_in_bucket_handoff") if isinstance(report.get("scale_in_bucket_handoff"), dict) else {}
+    scale_in_policy = report.get("scale_in_policy_contract") if isinstance(report.get("scale_in_policy_contract"), dict) else {}
     overnight_bucket = report.get("overnight_bucket_handoff") if isinstance(report.get("overnight_bucket_handoff"), dict) else {}
     lifecycle_flow_bucket = (
         report.get("lifecycle_flow_bucket_handoff")
@@ -4495,6 +4616,9 @@ def _render_markdown(report: dict[str, Any]) -> str:
         f"- missing_runtime_summary_candidate_ids: `{scale_in_bucket.get('missing_runtime_summary_candidate_ids') or []}`",
         f"- missing_workorder_order_ids: `{scale_in_bucket.get('missing_workorder_order_ids') or []}`",
         f"- interpretation: `{scale_in_bucket.get('interpretation') or '-'}`",
+        f"- policy_contract_status: `{scale_in_policy.get('status') or '-'}`",
+        f"- policy_contract_missing: `{scale_in_policy.get('missing') or []}`",
+        f"- policy_contract_interpretation: `{scale_in_policy.get('interpretation') or '-'}`",
         "",
         "## Overnight Bucket Handoff",
         f"- attribution_present: `{report.get('overnight_bucket_attribution_present')}`",

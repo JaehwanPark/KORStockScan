@@ -172,6 +172,64 @@ def test_runtime_apply_bridge_gates_scale_in_arms_independently(tmp_path, monkey
     assert "REVERSAL_ADD_MIN_AI_SCORE" not in scale["target_env_keys"]
 
 
+def test_runtime_apply_bridge_scale_in_blocked_candidate_has_source_only_contract(tmp_path, monkeypatch):
+    ldm_dir = tmp_path / "ldm"
+    report_dir = tmp_path / "bridge"
+    ldm_dir.mkdir()
+    monkeypatch.setattr(mod, "LDM_REPORT_DIR", ldm_dir)
+    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+    discovery_path = tmp_path / "discovery" / "lifecycle_bucket_discovery_2026-06-12.json"
+    monkeypatch.setattr(mod, "discovery_report_path", lambda target_date: discovery_path)
+    _write_discovery(discovery_path, live=False)
+    ldm_path = ldm_dir / "lifecycle_decision_matrix_2026-06-12.json"
+    ldm_path.write_text(
+        json.dumps(
+            {
+                "date": "2026-06-12",
+                "scale_in_bucket_attribution": {
+                    "scale_in_ev_label_version": "incremental_counterfactual_v2",
+                    "buckets": [
+                        {
+                            "bucket_type": "arm",
+                            "bucket_key": "PYRAMID",
+                            "joined_sample": 11,
+                            "source_quality_gate": "hold_sample",
+                            "recommended_route": "hold_sample",
+                            "scale_in_ev_coverage_state": "legacy_only",
+                            "runtime_authority_ready": False,
+                            "runtime_authority_block_reason": "paired_add_lifecycle_replay_or_final_label_missing",
+                        },
+                        {
+                            "bucket_type": "arm",
+                            "bucket_key": "AVG_DOWN",
+                            "joined_sample": 22,
+                            "source_quality_gate": "hold_sample",
+                            "recommended_route": "hold_sample",
+                            "scale_in_ev_coverage_state": "legacy_only",
+                            "runtime_authority_ready": False,
+                            "runtime_authority_block_reason": "paired_add_lifecycle_replay_or_final_label_missing",
+                        },
+                    ],
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    report = mod.build_runtime_apply_bridge_report("2026-06-12")
+    scale = {item["family"]: item for item in report["candidates"]}[mod.SCALE_IN_BRIDGE_FAMILY]
+
+    assert scale["bridge_candidate_state"] == "blocked_incremental_ev_runtime_authority"
+    assert scale["allowed_runtime_apply"] is False
+    assert scale["runtime_effect"] is False
+    assert scale["target_env_keys"] == []
+    assert scale["explicit_runtime_exclusion"] is True
+    assert scale["runtime_exclusion_reason"] == "paired_add_lifecycle_replay_or_final_label_missing"
+    assert scale["source_link"]["source_section"] == "scale_in_bucket_attribution"
+    assert scale["source_link"]["source_bucket_keys"] == ["PYRAMID", "AVG_DOWN"]
+    assert "target_env_keys_mapped" in scale["reopen_conditions"]
+
+
 def test_scale_in_rolling_confirmation_excludes_treatment_only_history():
     current = {
         "bucket_type": "arm",

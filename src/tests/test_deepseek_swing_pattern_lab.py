@@ -1109,6 +1109,66 @@ def test_swing_pattern_lab_automation_marks_ofi_qi_instrumentation_implemented(t
     assert blocked["decision_authority"] == "swing_pattern_lab_analysis_workorder_source_only"
 
 
+def test_swing_pattern_lab_automation_marks_scale_in_events_observed_implemented(tmp_path, monkeypatch):
+    from src.engine import swing_pattern_lab_automation as mod
+
+    lab_dir = tmp_path / "analysis" / "deepseek_swing_pattern_lab"
+    outputs_dir = lab_dir / "outputs"
+    outputs_dir.mkdir(parents=True)
+    report_dir = tmp_path / "data" / "report"
+    monkeypatch.setattr(mod, "DEEPSEEK_SWING_LAB_DIR", lab_dir)
+    monkeypatch.setattr(mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", report_dir / "swing_pattern_lab_automation")
+
+    (outputs_dir / "run_manifest.json").write_text(
+        json.dumps({"analysis_window": {"start": "2026-05-08", "end": "2026-05-08"}}),
+        encoding="utf-8",
+    )
+    (outputs_dir / "swing_pattern_analysis_result.json").write_text(
+        json.dumps(
+            {
+                "stage_findings": [],
+                "code_improvement_orders": [
+                    {
+                        "order_id": "order_swing_pattern_lab_deepseek_scale_in_events_observed",
+                        "title": "Scale-in events observed for swing positions",
+                        "route": "attach_existing_family",
+                        "mapped_family": "swing_scale_in_ofi_qi_confirmation",
+                        "runtime_effect": False,
+                        "evidence": [{"scale_in_events": 7}],
+                        "next_postclose_metric": "swing_scale_in_quality_score",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (outputs_dir / "data_quality_report.json").write_text(
+        json.dumps({"warnings": []}),
+        encoding="utf-8",
+    )
+    (outputs_dir / "deepseek_payload_summary.json").write_text(
+        json.dumps({"total_cases": 4}),
+        encoding="utf-8",
+    )
+
+    report = mod.build_swing_pattern_lab_automation_report("2026-05-08")
+    order = report["code_improvement_orders"][0]
+
+    assert order["implementation_status"] == "implemented"
+    assert order["implementation_provenance"]["source_contract"] == (
+        "swing_pattern_lab_scale_in_events_source_metric_v1"
+    )
+    assert (
+        order["implementation_provenance"]["implemented_scope"]
+        == "swing_scale_in_events_observed_source_metric_provenance"
+    )
+    assert order["implementation_provenance"]["source_metric_snapshot"]["scale_in_events"] == 7
+    assert order["implementation_provenance"]["runtime_effect"] is False
+    assert order["implementation_provenance"]["allowed_runtime_apply"] is False
+    assert order["implementation_provenance"]["actual_order_submitted"] is False
+    assert order["implementation_checks"][0]["status"] == "pass"
+
+
 def test_deepseek_payload_feedback_selector_uses_daily_clean_baseline_artifacts(monkeypatch, tmp_path):
     report_dir = tmp_path / "data" / "report"
     ldm_dir = report_dir / "swing_lifecycle_decision_matrix"

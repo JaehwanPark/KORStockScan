@@ -2982,6 +2982,31 @@ def _order(
     return order
 
 
+def _existing_family_source_metric_provenance(
+    audit_report: dict[str, Any],
+    *,
+    family: str,
+    implemented_scope: str,
+    source_contract: str,
+    source_fields: list[str],
+) -> tuple[str, dict[str, Any]]:
+    snapshot = _family_metric_snapshot(audit_report, family)
+    sample_count = _safe_int(snapshot.get("sample_count"), 0)
+    implementation_status = "implemented" if sample_count > 0 else "instrumentation_gap"
+    return implementation_status, {
+        "implemented_scope": implemented_scope,
+        "scope": implemented_scope,
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "decision_authority": "swing_improvement_automation_source_only",
+        "source_contract": source_contract,
+        "source_fields": source_fields,
+        "source_metric_snapshot": snapshot,
+    }
+
+
 def build_swing_improvement_automation_report(
     audit_report: dict[str, Any],
     threshold_ai_review: dict[str, Any] | None = None,
@@ -3193,6 +3218,18 @@ def build_swing_improvement_automation_report(
 
     gatekeeper_reject_unique = int(unique.get("blocked_gatekeeper_reject", 0) or 0)
     if gatekeeper_reject_unique > 0:
+        implementation_status, implementation_provenance = _existing_family_source_metric_provenance(
+            audit_report,
+            family="swing_gatekeeper_accept_reject",
+            implemented_scope="swing_gatekeeper_accept_reject_source_metric_provenance",
+            source_contract="swing_gatekeeper_accept_reject_source_metric_v1",
+            source_fields=[
+                "blocked_gatekeeper_reject",
+                "gatekeeper_actions",
+                "evidence_quality_counts",
+                "swing_probe_entry_candidate",
+            ],
+        )
         findings.append(
             {
                 "finding_id": "swing_gatekeeper_reject_threshold_review",
@@ -3222,6 +3259,8 @@ def build_swing_improvement_automation_report(
                 acceptance_tests=["pytest swing lifecycle audit tests", "pytest state handler fast signatures"],
                 evidence=[f"blocked_gatekeeper_reject_unique={gatekeeper_reject_unique}"],
                 improvement_type="threshold_family_input",
+                implementation_status=implementation_status,
+                implementation_provenance=implementation_provenance,
             )
         )
 
@@ -3229,6 +3268,19 @@ def build_swing_improvement_automation_report(
         raw.get("market_regime_prior_observed", 0) or 0
     )
     if market_regime_prior_raw > 0:
+        implementation_status, implementation_provenance = _existing_family_source_metric_provenance(
+            audit_report,
+            family="swing_market_regime_sensitivity",
+            implemented_scope="swing_market_regime_sensitivity_source_metric_provenance",
+            source_contract="swing_market_regime_sensitivity_source_metric_v1",
+            source_fields=[
+                "market_regime_block",
+                "market_regime_prior_observed",
+                "market_regime_pass",
+                "evidence_quality_counts",
+                "simulation_opportunity",
+            ],
+        )
         findings.append(
             {
                 "finding_id": "swing_market_regime_sensitivity_review",
@@ -3258,6 +3310,8 @@ def build_swing_improvement_automation_report(
                     f"market_regime_prior_observed_raw={raw.get('market_regime_prior_observed')}",
                 ],
                 improvement_type="threshold_family_input",
+                implementation_status=implementation_status,
+                implementation_provenance=implementation_provenance,
             )
         )
 
@@ -3540,6 +3594,17 @@ def build_swing_improvement_automation_report(
 
     exit_smoothing_count = int(sum((ofi_qi.get("exit_smoothing_action_counts") or {}).values()))
     if exit_smoothing_count > 0:
+        implementation_status, implementation_provenance = _existing_family_source_metric_provenance(
+            audit_report,
+            family="swing_exit_ofi_qi_smoothing",
+            implemented_scope="swing_exit_ofi_qi_smoothing_distribution_source_metric_provenance",
+            source_contract="swing_exit_ofi_qi_smoothing_source_metric_v1",
+            source_fields=[
+                "exit_smoothing_action_counts",
+                "exit_micro_state_counts",
+                "exit_micro_advice_counts",
+            ],
+        )
         findings.append(
             {
                 "finding_id": "swing_exit_ofi_qi_smoothing_distribution",
@@ -3566,6 +3631,8 @@ def build_swing_improvement_automation_report(
                 acceptance_tests=["pytest OFI smoothing tests", "pytest swing lifecycle audit tests"],
                 evidence=[f"exit_smoothing_action_counts={ofi_qi.get('exit_smoothing_action_counts')}"],
                 improvement_type="threshold_family_input",
+                implementation_status=implementation_status,
+                implementation_provenance=implementation_provenance,
             )
         )
 

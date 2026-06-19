@@ -384,3 +384,62 @@ def test_swing_improvement_automation_marks_ofi_qi_instrumentation_implemented()
         order["implementation_provenance"]["root_cause_dimensions"]["orderbook_micro_reason_counts_by_group"]
         == {"micro_context_missing": 1}
     )
+
+
+def test_swing_improvement_automation_marks_existing_family_metric_orders_implemented():
+    audit = {
+        "date": "2026-05-22",
+        "model_selection": {},
+        "recommendation_csv": {},
+        "db_lifecycle": {},
+        "recommendation_db_load": {},
+        "lifecycle_events": {
+            "raw_counts": {
+                "blocked_gatekeeper_reject": 4,
+                "market_regime_block": 2,
+                "market_regime_prior_observed": 1,
+                "market_regime_pass": 3,
+            },
+            "unique_record_counts": {
+                "blocked_gatekeeper_reject": 2,
+                "market_regime_block": 1,
+                "market_regime_prior_observed": 1,
+                "market_regime_pass": 1,
+                "swing_probe_entry_candidate": 1,
+            },
+            "group_unique_counts": {},
+            "gatekeeper_actions": {"PULLBACK_WAIT": 2},
+            "evidence_quality_counts": {"valid": 3},
+            "ofi_qi_summary": {
+                "exit_smoothing_action_counts": {"NO_CHANGE": 2, "DEBOUNCE_EXIT": 1},
+                "exit_micro_state_counts": {"neutral": 3},
+                "exit_micro_advice_counts": {"NO_CHANGE": 2},
+            },
+        },
+        "swing_entry_bottleneck": {
+            "primary": "SWING_ENTRY_BOTTLENECK_OBSERVE",
+            "matches": [],
+        },
+        "swing_lifecycle_contract_gaps": {"gap_count": 0, "gaps": []},
+        "observation_axis_summary": {},
+        "simulation_opportunity": {},
+    }
+
+    report = mod.build_swing_improvement_automation_report(audit)
+    orders = {item["order_id"]: item for item in report["code_improvement_orders"]}
+
+    expected = {
+        "order_swing_gatekeeper_reject_threshold_review": "swing_gatekeeper_accept_reject_source_metric_v1",
+        "order_swing_market_regime_sensitivity_review": "swing_market_regime_sensitivity_source_metric_v1",
+        "order_swing_exit_ofi_qi_smoothing_distribution": "swing_exit_ofi_qi_smoothing_source_metric_v1",
+    }
+    for order_id, source_contract in expected.items():
+        order = orders[order_id]
+        assert order["implementation_status"] == "implemented"
+        assert order["implementation_provenance"]["implemented_scope"]
+        assert order["implementation_provenance"]["source_contract"] == source_contract
+        assert order["implementation_provenance"]["runtime_effect"] is False
+        assert order["implementation_provenance"]["allowed_runtime_apply"] is False
+        assert order["implementation_provenance"]["actual_order_submitted"] is False
+        assert order["implementation_provenance"]["broker_order_forbidden"] is True
+        assert order["implementation_provenance"]["source_metric_snapshot"]["sample_count"] > 0

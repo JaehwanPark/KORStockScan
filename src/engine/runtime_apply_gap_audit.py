@@ -60,6 +60,8 @@ CORE_ARTIFACT_LABELS = (
     "code_improvement_workorder",
 )
 SOURCE_DIMENSION_ACTIONABLE_RESOLUTIONS = {"emit_or_backfill_source_field", "resolve_unknown_source_dimensions"}
+SCALE_IN_POLICY_FAMILY = "scale_in_bucket_runtime_policy_v1"
+SCALE_IN_POLICY_EXCLUSION_REASON = "paired_add_lifecycle_replay_or_final_label_missing"
 
 
 def runtime_apply_gap_audit_report_path(target_date: str) -> Path:
@@ -312,6 +314,41 @@ def _explicit_runtime_exclusion_reason(item: dict[str, Any]) -> str:
     ):
         return "greenfield_policy_not_emitted_no_complete_lifecycle_flow"
     return ""
+
+
+def _scale_in_policy_exclusion_contract_state(item: dict[str, Any]) -> str:
+    family = str(item.get("family") or "").strip()
+    stage = str(item.get("stage") or item.get("lifecycle_stage") or "").strip()
+    if family != SCALE_IN_POLICY_FAMILY or stage != "scale_in":
+        return "not_applicable"
+    if str(item.get("bridge_candidate_state") or "") == "live_auto_apply_ready":
+        return "future_ready_reopen_required"
+    reason = _explicit_runtime_exclusion_reason(item)
+    if reason != SCALE_IN_POLICY_EXCLUSION_REASON:
+        return "missing_exclusion_reason"
+    source_link = item.get("source_link") if isinstance(item.get("source_link"), dict) else {}
+    reopen_conditions = item.get("reopen_conditions") if isinstance(item.get("reopen_conditions"), list) else []
+    source_bucket_keys = [
+        str(value).strip()
+        for value in (source_link.get("source_bucket_keys") if isinstance(source_link.get("source_bucket_keys"), list) else [])
+        if str(value).strip()
+    ]
+    if str(source_link.get("source_section") or "") != "scale_in_bucket_attribution":
+        return "missing_source_link"
+    if not source_bucket_keys:
+        return "missing_source_bucket_link"
+    if not reopen_conditions:
+        return "missing_reopen_conditions"
+    if item.get("allowed_runtime_apply") is not False or item.get("runtime_effect") is not False:
+        return "runtime_authority_not_blocked"
+    if item.get("target_env_keys"):
+        return "env_mapping_present_on_source_only_block"
+    return "pass"
+
+
+def _valid_scale_in_policy_exclusion(item: dict[str, Any]) -> bool:
+    state = _scale_in_policy_exclusion_contract_state(item)
+    return state == "pass"
 
 
 def _swing_source_only_handoff(item: dict[str, Any]) -> tuple[str, str]:
@@ -782,6 +819,9 @@ def _ledger_from_bridge(
         failure_state = "pass"
         failure_reason = ""
         exclusion_reason = _explicit_runtime_exclusion_reason(item)
+        scale_in_policy_contract_state = _scale_in_policy_exclusion_contract_state(item)
+        if family == SCALE_IN_POLICY_FAMILY and not _valid_scale_in_policy_exclusion(item):
+            exclusion_reason = ""
         retryable = False
         retry_reason = ""
         retry_owner = ""
@@ -814,6 +854,15 @@ def _ledger_from_bridge(
             failure_state = "blocked_source_quality"
             failure_reason = "source_quality_gate_not_pass"
             disposition = "source_quality_blocker"
+        if scale_in_policy_contract_state == "pass" and exclusion_reason:
+            failure_state = "pass"
+            failure_reason = ""
+            disposition = "source_only_explicit_exclusion"
+            retryable = False
+            retry_reason = ""
+            retry_owner = ""
+            next_retry_stage = ""
+            retry_deadline = ""
         greenfield_policy_issue = _greenfield_policy_issue(item)
         greenfield_policy_state = "not_applicable"
         if family == GREENFIELD_REAL_ENV_FAMILY:
@@ -870,6 +919,9 @@ def _ledger_from_bridge(
                 "target_env_keys": item.get("target_env_keys") if isinstance(item.get("target_env_keys"), list) else [],
                 "explicit_runtime_exclusion": bool(exclusion_reason),
                 "runtime_exclusion_reason": exclusion_reason,
+                "source_link": item.get("source_link") if isinstance(item.get("source_link"), dict) else {},
+                "reopen_conditions": item.get("reopen_conditions") if isinstance(item.get("reopen_conditions"), list) else [],
+                "scale_in_policy_contract_state": scale_in_policy_contract_state,
                 "evidence_grade": item.get("evidence_grade"),
                 "transition_target": item.get("transition_target"),
                 "missing_runtime_source_fields": item.get("missing_runtime_source_fields")

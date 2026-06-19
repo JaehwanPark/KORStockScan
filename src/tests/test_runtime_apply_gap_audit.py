@@ -969,6 +969,169 @@ def test_scale_in_env_mapping_gap_emits_scale_in_contract_directive(tmp_path, mo
     )
 
 
+def test_scale_in_policy_source_only_contract_closes_without_directive(tmp_path, monkeypatch):
+    report_dir = _patch_dirs(tmp_path, monkeypatch)
+    _write_core_artifacts(report_dir)
+    candidate_id = "scale_in_bucket_runtime_policy_v1:2026-05-22"
+    _write_json(
+        report_dir / "runtime_apply_bridge" / "runtime_apply_bridge_2026-05-22.json",
+        {
+            "candidates": [
+                {
+                    "candidate_id": candidate_id,
+                    "family": "scale_in_bucket_runtime_policy_v1",
+                    "stage": "scale_in",
+                    "bridge_candidate_state": "blocked_incremental_ev_runtime_authority",
+                    "source_quality_gate": "pass",
+                    "allowed_runtime_apply": False,
+                    "runtime_effect": False,
+                    "live_auto_apply": False,
+                    "target_env_keys": [],
+                    "explicit_runtime_exclusion": True,
+                    "runtime_exclusion_reason": "paired_add_lifecycle_replay_or_final_label_missing",
+                    "source_link": {
+                        "source_section": "scale_in_bucket_attribution",
+                        "source_bucket_keys": ["PYRAMID", "AVG_DOWN"],
+                    },
+                    "reopen_conditions": [
+                        "paired_add_lifecycle_replay_implemented",
+                        "final_scale_in_labels_available",
+                    ],
+                }
+            ]
+        },
+    )
+
+    report = mod.build_runtime_apply_gap_audit("2026-05-22", ai_review_provider="none")
+
+    row = next(item for item in report["candidate_route_ledger"] if item["candidate_id"] == candidate_id)
+    assert row["final_disposition"] == "source_only_explicit_exclusion"
+    assert row["failure_state"] == "pass"
+    assert row["runtime_hook_state"] == "not_applicable_source_only"
+    assert row["scale_in_policy_contract_state"] == "pass"
+    assert not any(item["candidate_id"] == candidate_id for item in report["codex_workorder_directives"])
+
+
+def test_scale_in_policy_bare_exclusion_still_emits_contract_directive(tmp_path, monkeypatch):
+    report_dir = _patch_dirs(tmp_path, monkeypatch)
+    _write_core_artifacts(report_dir)
+    candidate_id = "scale_in_bucket_runtime_policy_v1:2026-05-22"
+    _write_json(
+        report_dir / "runtime_apply_bridge" / "runtime_apply_bridge_2026-05-22.json",
+        {
+            "candidates": [
+                {
+                    "candidate_id": candidate_id,
+                    "family": "scale_in_bucket_runtime_policy_v1",
+                    "stage": "scale_in",
+                    "bridge_candidate_state": "runtime_blocked_contract_gap",
+                    "source_quality_gate": "pass",
+                    "allowed_runtime_apply": False,
+                    "runtime_effect": False,
+                    "target_env_keys": [],
+                    "explicit_runtime_exclusion": True,
+                    "runtime_exclusion_reason": "paired_add_lifecycle_replay_or_final_label_missing",
+                }
+            ]
+        },
+    )
+
+    report = mod.build_runtime_apply_gap_audit("2026-05-22", ai_review_provider="none")
+
+    row = next(item for item in report["candidate_route_ledger"] if item["candidate_id"] == candidate_id)
+    assert row["explicit_runtime_exclusion"] is False
+    assert row["scale_in_policy_contract_state"] == "missing_source_link"
+    assert any(
+        item["candidate_id"] == candidate_id
+        and item["directive_type"] == "IMPLEMENT_SCALE_IN_POLICY_CONTRACT"
+        for item in report["codex_workorder_directives"]
+    )
+
+
+def test_scale_in_policy_blank_source_bucket_key_still_emits_contract_directive(tmp_path, monkeypatch):
+    report_dir = _patch_dirs(tmp_path, monkeypatch)
+    _write_core_artifacts(report_dir)
+    candidate_id = "scale_in_bucket_runtime_policy_v1:2026-05-22"
+    _write_json(
+        report_dir / "runtime_apply_bridge" / "runtime_apply_bridge_2026-05-22.json",
+        {
+            "candidates": [
+                {
+                    "candidate_id": candidate_id,
+                    "family": "scale_in_bucket_runtime_policy_v1",
+                    "stage": "scale_in",
+                    "bridge_candidate_state": "runtime_blocked_contract_gap",
+                    "source_quality_gate": "pass",
+                    "allowed_runtime_apply": False,
+                    "runtime_effect": False,
+                    "target_env_keys": [],
+                    "explicit_runtime_exclusion": True,
+                    "runtime_exclusion_reason": "paired_add_lifecycle_replay_or_final_label_missing",
+                    "source_link": {
+                        "source_section": "scale_in_bucket_attribution",
+                        "source_bucket_keys": ["", "  "],
+                    },
+                    "reopen_conditions": ["paired_add_lifecycle_replay_implemented"],
+                }
+            ]
+        },
+    )
+
+    report = mod.build_runtime_apply_gap_audit("2026-05-22", ai_review_provider="none")
+
+    row = next(item for item in report["candidate_route_ledger"] if item["candidate_id"] == candidate_id)
+    assert row["explicit_runtime_exclusion"] is False
+    assert row["scale_in_policy_contract_state"] == "missing_source_bucket_link"
+    assert any(
+        item["candidate_id"] == candidate_id
+        and item["directive_type"] == "IMPLEMENT_SCALE_IN_POLICY_CONTRACT"
+        for item in report["codex_workorder_directives"]
+    )
+
+
+def test_scale_in_policy_live_ready_exclusion_does_not_hide_env_mapping_gap(tmp_path, monkeypatch):
+    report_dir = _patch_dirs(tmp_path, monkeypatch)
+    _write_core_artifacts(report_dir)
+    candidate_id = "scale_in_bucket_runtime_policy_v1:2026-05-22"
+    _write_json(
+        report_dir / "runtime_apply_bridge" / "runtime_apply_bridge_2026-05-22.json",
+        {
+            "candidates": [
+                {
+                    "candidate_id": candidate_id,
+                    "family": "scale_in_bucket_runtime_policy_v1",
+                    "stage": "scale_in",
+                    "bridge_candidate_state": "live_auto_apply_ready",
+                    "source_quality_gate": "pass",
+                    "allowed_runtime_apply": True,
+                    "runtime_effect": False,
+                    "target_env_keys": [],
+                    "explicit_runtime_exclusion": True,
+                    "runtime_exclusion_reason": "paired_add_lifecycle_replay_or_final_label_missing",
+                    "source_link": {
+                        "source_section": "scale_in_bucket_attribution",
+                        "source_bucket_keys": ["PYRAMID"],
+                    },
+                    "reopen_conditions": ["paired_add_lifecycle_replay_implemented"],
+                }
+            ]
+        },
+    )
+
+    report = mod.build_runtime_apply_gap_audit("2026-05-22", ai_review_provider="none")
+
+    row = next(item for item in report["candidate_route_ledger"] if item["candidate_id"] == candidate_id)
+    assert row["explicit_runtime_exclusion"] is False
+    assert row["scale_in_policy_contract_state"] == "future_ready_reopen_required"
+    assert row["runtime_hook_state"] == "env_mapping_missing"
+    assert any(
+        item["candidate_id"] == candidate_id
+        and item["directive_type"] == "IMPLEMENT_SCALE_IN_POLICY_CONTRACT"
+        and item["blocking_contract"] == "env_mapping_contract"
+        for item in report["codex_workorder_directives"]
+    )
+
+
 def test_bridge_counterfactual_source_field_gap_does_not_emit_runtime_directive(tmp_path, monkeypatch):
     report_dir = _patch_dirs(tmp_path, monkeypatch)
     _write_core_artifacts(report_dir)

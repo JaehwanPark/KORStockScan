@@ -505,9 +505,33 @@ def _is_keep_visible_non_implement_order(order: dict[str, Any]) -> bool:
         "threshold_family_input",
         "pattern_lab_observation",
     }:
-        return True
+        return not _has_actionable_implementation_hints(order)
     provenance = order.get("implementation_provenance") if isinstance(order.get("implementation_provenance"), dict) else {}
     return str(provenance.get("recommended_resolution") or "") == "mark_not_applicable_explicitly"
+
+
+def _has_actionable_implementation_hints(order: dict[str, Any]) -> bool:
+    files = order.get("files_likely_touched") if isinstance(order.get("files_likely_touched"), list) else []
+    tests = order.get("acceptance_tests") if isinstance(order.get("acceptance_tests"), list) else []
+    return any(str(item).strip() for item in [*files, *tests])
+
+
+def _is_actionable_existing_family_recheck(order: dict[str, Any]) -> bool:
+    source_type = str(order.get("source_report_type") or "").strip()
+    if source_type not in {
+        "scalping_pattern_lab_automation",
+        "swing_pattern_lab_automation",
+        "swing_improvement_automation",
+    }:
+        return False
+    if str(order.get("improvement_type") or "").strip() not in {
+        "threshold_family_input",
+        "pattern_lab_observation",
+    }:
+        return False
+    if not _has_actionable_implementation_hints(order):
+        return False
+    return not _is_implemented_status(order.get("implementation_status"))
 
 
 def _structural_blocker_signal(order: dict[str, Any]) -> tuple[str, str] | None:
@@ -594,10 +618,31 @@ def _escalate_repeated_structural_blockers(
             "previous_route": _repeat_info_primary_value(repeat_counts.get(repeat_key), "route_counts"),
             "previous_implementation_status": _repeat_info_primary_status(repeat_counts.get(repeat_key)),
             "review_disposition": (
+                "implemented_with_provenance"
+                if _is_implemented_status(item.order.get("implementation_status"))
+                else
                 "keep_visible_by_design" if _is_keep_visible_non_implement_order(item.order) else "review_required"
             ),
         }
         updated_order = dict(item.order)
+        if _is_actionable_existing_family_recheck(item.order):
+            review["review_disposition"] = "actionable_existing_family_recheck"
+            review["recommended_handling"] = (
+                "create a specific source-metric/provenance workorder if the source gap remains, "
+                "or mark implementation_status=implemented with implementation_provenance if already closed"
+            )
+            updated_order["longstanding_non_implement_action"] = {
+                "action_required": True,
+                "recommended_route": "specific_source_metric_or_provenance_recheck",
+                "runtime_effect": False,
+                "allowed_runtime_apply": False,
+                "forbidden_uses": [
+                    "broker_order_submit",
+                    "intraday_threshold_mutation",
+                    "provider_route_change",
+                    "bot_restart_trigger",
+                ],
+            }
         updated_order["longstanding_non_implement_review"] = review
         longstanding_ids.append(order_id)
         if (
@@ -1562,6 +1607,7 @@ def _serialize_classified_order(item: ClassifiedOrder) -> dict[str, Any]:
         "implementation_provenance": item.order.get("implementation_provenance"),
         "repeat_unresolved_escalation": item.order.get("repeat_unresolved_escalation"),
         "longstanding_non_implement_review": item.order.get("longstanding_non_implement_review"),
+        "longstanding_non_implement_action": item.order.get("longstanding_non_implement_action"),
         "structural_blocker_escalation": item.order.get("structural_blocker_escalation"),
         "parity_contract": item.order.get("parity_contract"),
         "source_bucket_id": item.order.get("source_bucket_id"),
@@ -5852,6 +5898,8 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
     selected_terminal_non_implement_runtime_effect_false_count = 0
     selected_terminal_non_implement_longstanding_count = 0
     selected_terminal_non_implement_longstanding_order_ids: list[str] = []
+    selected_longstanding_non_implement_disposition_counts: dict[str, int] = {}
+    selected_longstanding_non_implement_action_required_order_ids: list[str] = []
     for item in selected:
         selected_decision_counts[item.decision] = selected_decision_counts.get(item.decision, 0) + 1
         route = str(item.route or item.order.get("route") or item.decision or "unknown")
@@ -5868,6 +5916,17 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
                     selected_terminal_non_implement_longstanding_count += 1
                     if item.order.get("order_id"):
                         selected_terminal_non_implement_longstanding_order_ids.append(str(item.order.get("order_id")))
+                    review = item.order.get("longstanding_non_implement_review")
+                    if isinstance(review, dict):
+                        disposition = str(review.get("review_disposition") or "unknown")
+                        selected_longstanding_non_implement_disposition_counts[disposition] = (
+                            selected_longstanding_non_implement_disposition_counts.get(disposition, 0) + 1
+                        )
+                    action = item.order.get("longstanding_non_implement_action")
+                    if isinstance(action, dict) and action.get("action_required") and item.order.get("order_id"):
+                        selected_longstanding_non_implement_action_required_order_ids.append(
+                            str(item.order.get("order_id"))
+                        )
                 continue
             if item.decision != "attach_existing_family" and not _is_implemented_status(
                 _repeat_unresolved_original_status(item.order)
@@ -6045,6 +6104,12 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
             "root_cause_open_top": root_cause_open_top,
             "selected_terminal_non_implement_longstanding_count": selected_terminal_non_implement_longstanding_count,
             "selected_terminal_non_implement_longstanding_order_ids": selected_terminal_non_implement_longstanding_order_ids,
+            "selected_longstanding_non_implement_disposition_counts": (
+                selected_longstanding_non_implement_disposition_counts
+            ),
+            "selected_longstanding_non_implement_action_required_order_ids": (
+                selected_longstanding_non_implement_action_required_order_ids
+            ),
             "non_selected_decision_counts": non_selected_counts,
             "gemini_fresh": ((automation.get("ev_report_summary") or {}).get("gemini_fresh")),
             "claude_fresh": ((automation.get("ev_report_summary") or {}).get("claude_fresh")),
@@ -6230,6 +6295,8 @@ def render_code_improvement_workorder_markdown(report: dict[str, Any]) -> str:
         f"- root_cause_open_top: `{summary.get('root_cause_open_top')}`",
         f"- selected_terminal_non_implement_longstanding_count: `{summary.get('selected_terminal_non_implement_longstanding_count')}`",
         f"- selected_terminal_non_implement_longstanding_order_ids: `{summary.get('selected_terminal_non_implement_longstanding_order_ids')}`",
+        f"- selected_longstanding_non_implement_disposition_counts: `{summary.get('selected_longstanding_non_implement_disposition_counts')}`",
+        f"- selected_longstanding_non_implement_action_required_order_ids: `{summary.get('selected_longstanding_non_implement_action_required_order_ids')}`",
         f"- non_selected_decision_counts: `{summary.get('non_selected_decision_counts')}`",
         f"- gemini_fresh: `{summary.get('gemini_fresh')}`",
         f"- claude_fresh: `{summary.get('claude_fresh')}`",
@@ -6307,6 +6374,7 @@ def render_code_improvement_workorder_markdown(report: dict[str, Any]) -> str:
                 f"- implementation_provenance: `{json.dumps(item.get('implementation_provenance'), ensure_ascii=False, sort_keys=True) if item.get('implementation_provenance') else '-'}`",
                 f"- repeat_unresolved_escalation: `{json.dumps(item.get('repeat_unresolved_escalation'), ensure_ascii=False, sort_keys=True) if item.get('repeat_unresolved_escalation') else '-'}`",
                 f"- longstanding_non_implement_review: `{json.dumps(item.get('longstanding_non_implement_review'), ensure_ascii=False, sort_keys=True) if item.get('longstanding_non_implement_review') else '-'}`",
+                f"- longstanding_non_implement_action: `{json.dumps(item.get('longstanding_non_implement_action'), ensure_ascii=False, sort_keys=True) if item.get('longstanding_non_implement_action') else '-'}`",
                 f"- structural_blocker_escalation: `{json.dumps(item.get('structural_blocker_escalation'), ensure_ascii=False, sort_keys=True) if item.get('structural_blocker_escalation') else '-'}`",
                 f"- automation_reentry: {item.get('automation_reentry')}",
                 "",

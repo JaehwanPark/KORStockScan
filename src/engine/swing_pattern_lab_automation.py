@@ -320,6 +320,44 @@ def _ofi_qi_instrumentation_provenance(
     source_quality_blocked_families: list[dict[str, Any]],
 ) -> dict[str, Any]:
     order_id = str(order.get("order_id") or "")
+    if order_id == "order_swing_pattern_lab_deepseek_scale_in_events_observed":
+        scale_in_events = 0
+        for item in order.get("evidence") or []:
+            if isinstance(item, dict):
+                scale_in_events += _safe_int(item.get("scale_in_events"), 0)
+        return {
+            "implementation_status": "implemented" if scale_in_events > 0 else "instrumentation_gap",
+            "implementation_checks": [
+                {
+                    "name": "scale_in_events_metric_present",
+                    "status": "pass" if scale_in_events > 0 else "fail",
+                    "scale_in_events": scale_in_events,
+                },
+                {
+                    "name": "runtime_authority_contract",
+                    "status": "pass",
+                    "runtime_effect": False,
+                    "allowed_runtime_apply": False,
+                    "decision_authority": DECISION_AUTHORITY,
+                },
+            ],
+            "implementation_provenance": {
+                "owner": "swing_pattern_lab_automation",
+                "implemented_scope": "swing_scale_in_events_observed_source_metric_provenance",
+                "runtime_effect": False,
+                "allowed_runtime_apply": False,
+                "actual_order_submitted": False,
+                "broker_order_forbidden": True,
+                "decision_authority": DECISION_AUTHORITY,
+                "source_contract": "swing_pattern_lab_scale_in_events_source_metric_v1",
+                "source_fields": ["scale_in_events", "swing_scale_in_quality_score"],
+                "source_metric_snapshot": {
+                    "scale_in_events": scale_in_events,
+                    "next_postclose_metric": order.get("next_postclose_metric") or "swing_scale_in_quality_score",
+                    "mapped_family": order.get("mapped_family") or order.get("threshold_family"),
+                },
+            },
+        }
     if order_id != "order_swing_pattern_lab_deepseek_ofi_qi_stale_missing":
         return {}
 
