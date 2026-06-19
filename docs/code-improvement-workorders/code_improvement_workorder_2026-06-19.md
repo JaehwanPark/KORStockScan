@@ -28,9 +28,9 @@
 - stage_hook_workorder_discovery: `/home/ubuntu/KORStockScan/data/report/stage_hook_workorder_discovery/stage_hook_workorder_discovery_2026-06-19.json`
 - stage_hook_runtime_scaffold: `/home/ubuntu/KORStockScan/data/report/stage_hook_runtime_scaffold/stage_hook_runtime_scaffold_2026-06-19.json`
 - buy_funnel_sentinel: `/home/ubuntu/KORStockScan/data/report/buy_funnel_sentinel/buy_funnel_sentinel_2026-06-19.json`
-- generated_at: `2026-06-19T17:32:37+09:00`
-- generation_id: `2026-06-19-9f28021286b9`
-- source_hash: `9f28021286b91bef056950f5d72965cd194920ca75743afcd5c90e4eca3e64ae`
+- generated_at: `2026-06-19T20:58:07+09:00`
+- generation_id: `2026-06-19-3507fddd7b3a`
+- source_hash: `3507fddd7b3ad02a7f8b4928083f6442529eadddb656f48f825f8e4afa66c597`
 
 ## 운영 원칙
 
@@ -52,10 +52,10 @@
 ## Snapshot Lineage
 
 - previous_exists: `True`
-- previous_generation_id: `2026-06-19-4f41be7efa3b`
-- previous_source_hash: `4f41be7efa3b0940424759b5ce06b5552a20506a803a84e9cb6d22243a0dc05d`
+- previous_generation_id: `2026-06-19-9f28021286b9`
+- previous_source_hash: `9f28021286b91bef056950f5d72965cd194920ca75743afcd5c90e4eca3e64ae`
 - new_order_ids: `[]`
-- removed_order_ids: `[]`
+- removed_order_ids: `['order_latency_guard_miss_ev_recovery', 'order_panic_buying_source_quality_market_breadth_micro_coverage', 'order_panic_sell_defense_lifecycle_transition_pack', 'order_perf_buy_funnel_json_scan', 'order_perf_daily_report_bulk_history', 'order_perf_daily_report_engine_singleton', 'order_perf_final_ensemble_records', 'order_perf_monitor_snapshot_stream_tail', 'order_perf_recommend_update_vectorization', 'order_perf_swing_simulation_iteration', 'order_swing_discovery_label_contract_gap_review', 'order_swing_exit_ofi_qi_smoothing_distribution', 'order_swing_gatekeeper_reject_threshold_review', 'order_swing_holding_exit_contract_gap_review', 'order_swing_market_regime_sensitivity_review', 'order_swing_ofi_qi_stale_or_missing_context', 'order_swing_pattern_lab_deepseek_scale_in_events_observed', 'order_swing_scale_in_contract_gap_review', 'order_swing_strategy_discovery_avoid_bucket_review', 'order_swing_strategy_discovery_source_quality_followup']`
 - decision_changed_order_ids: `[]`
 
 ## Summary
@@ -81,13 +81,13 @@
 - entry_submit_drought_selected: `True`
 - entry_submit_drought_handoff_missing: `False`
 - panic_lifecycle_source_order_count: `2`
-- selected_order_count: `145`
-- non_selected_order_count: `15`
+- selected_order_count: `125`
+- non_selected_order_count: `35`
 - source_decision_counts: `{'attach_existing_family': 145, 'design_family_candidate': 5, 'defer_evidence': 7, 'reject': 3}`
-- selected_decision_counts: `{'attach_existing_family': 145}`
-- selected_route_counts: `{'existing_family': 134, 'performance_optimization_order': 7, 'ai_review_coverage_review': 1, 'positive_source_only_review': 1, 'source_dimension_rollup': 1, 'pattern_lab_ai_review_handoff_evidence': 1}`
+- selected_decision_counts: `{'attach_existing_family': 125}`
+- selected_route_counts: `{'existing_family': 121, 'ai_review_coverage_review': 1, 'positive_source_only_review': 1, 'source_dimension_rollup': 1, 'pattern_lab_ai_review_handoff_evidence': 1}`
 - selected_implement_now_route_count: `0`
-- selected_runtime_effect_false_count: `145`
+- selected_runtime_effect_false_count: `125`
 - selected_unimplemented_runtime_effect_false_count: `0`
 - selected_unimplemented_route_counts: `{}`
 - selected_terminal_non_implement_runtime_effect_false_count: `7`
@@ -100,18 +100,18 @@
 - repeat_unresolved_escalated_order_ids: `[]`
 - repeat_unresolved_structural_blocker_count: `0`
 - repeat_unresolved_structural_blocker_order_ids: `[]`
-- root_cause_closure_status_counts: `{'handoff_closed_root_cause_open': 20, 'implementation_done': 8, 'root_cause_closed': 110}`
-- implementation_done_count: `8`
+- root_cause_closure_status_counts: `{'handoff_closed_root_cause_open': 20, 'implementation_done': 5, 'root_cause_closed': 93}`
+- implementation_done_count: `5`
 - artifact_regeneration_required_count: `0`
 - handoff_closed_root_cause_open_count: `20`
-- root_cause_closed_count: `110`
+- root_cause_closed_count: `93`
 - needs_followup_workorder_count: `0`
 - root_cause_open_top: `[{'order_id': 'order_conversion_lane_key_lineage_active_arm_0a62bc62bd31f5bb', 'status': 'handoff_closed_root_cause_open', 'source_report_type': 'conversion_lane', 'threshold_family': 'sim_to_real_conversion_lane', 'implementation_status': 'implemented', 'root_cause_signal': None}, {'order_id': 'order_conversion_lane_key_lineage_active_arm_0c383886ae3c8de3', 'status': 'handoff_closed_root_cause_open', 'source_report_type': 'conversion_lane', 'threshold_family': 'sim_to_real_conversion_lane', 'implementation_status': 'implemented', 'root_cause_signal': None}, {'order_id': 'order_conversion_lane_key_lineage_active_arm_518e85a70ac730e3', 'status': 'handoff_closed_root_cause_open', 'source_report_type': 'conversion_lane', 'threshold_family': 'sim_to_real_conversion_lane', 'implementation_status': 'implemented', 'root_cause_signal': None}, {'order_id': 'order_conversion_lane_key_lineage_active_arm_5ed5448f4e3ccb60', 'status': 'handoff_closed_root_cause_open', 'source_report_type': 'conversion_lane', 'threshold_family': 'sim_to_real_conversion_lane', 'implementation_status': 'implemented', 'root_cause_signal': None}, {'order_id': 'order_conversion_lane_key_lineage_active_arm_82f4bc68bb168a83', 'status': 'handoff_closed_root_cause_open', 'source_report_type': 'conversion_lane', 'threshold_family': 'sim_to_real_conversion_lane', 'implementation_status': 'implemented', 'root_cause_signal': None}, {'order_id': 'order_conversion_lane_key_lineage_active_arm_d09163dbcf8e6037', 'status': 'handoff_closed_root_cause_open', 'source_report_type': 'conversion_lane', 'threshold_family': 'sim_to_real_conversion_lane', 'implementation_status': 'implemented', 'root_cause_signal': None}, {'order_id': 'order_conversion_lane_key_lineage_active_arm_da294c8705564eaf', 'status': 'handoff_closed_root_cause_open', 'source_report_type': 'conversion_lane', 'threshold_family': 'sim_to_real_conversion_lane', 'implementation_status': 'implemented', 'root_cause_signal': None}, {'order_id': 'order_conversion_lane_key_lineage_active_seed_0629ba2d0f4dd524', 'status': 'handoff_closed_root_cause_open', 'source_report_type': 'conversion_lane', 'threshold_family': 'sim_to_real_conversion_lane', 'implementation_status': 'implemented', 'root_cause_signal': None}, {'order_id': 'order_conversion_lane_key_lineage_active_seed_06fce89fd3a136e6', 'status': 'handoff_closed_root_cause_open', 'source_report_type': 'conversion_lane', 'threshold_family': 'sim_to_real_conversion_lane', 'implementation_status': 'implemented', 'root_cause_signal': None}, {'order_id': 'order_conversion_lane_key_lineage_active_seed_0747f150d4c2eab8', 'status': 'handoff_closed_root_cause_open', 'source_report_type': 'conversion_lane', 'threshold_family': 'sim_to_real_conversion_lane', 'implementation_status': 'implemented', 'root_cause_signal': None}]`
 - selected_terminal_non_implement_longstanding_count: `6`
 - selected_terminal_non_implement_longstanding_order_ids: `['order_lifecycle_exit_bucket_combo_exit_result_source_scalp_sim_overnight_sell_today_rule_scalp_sim_overnight_sell_tod_bbc83b24', 'order_lifecycle_exit_bucket_combo_exit_result_source_scalp_sim_overnight_sell_today_rule_scalp_sim_overnight_sell_tod_d982edbd', 'order_lifecycle_exit_bucket_combo_exit_result_source_scalp_sim_overnight_sell_today_rule_scalp_sim_overnight_sell_tod_ff77f4c9', 'order_lifecycle_quiet_gap_ai_review_coverage_rollup', 'order_lifecycle_quiet_gap_positive_source_only_rollup', 'order_lifecycle_source_dimension_gap_rollup']`
 - selected_longstanding_non_implement_disposition_counts: `{'keep_visible_by_design': 6}`
 - selected_longstanding_non_implement_action_required_order_ids: `[]`
-- non_selected_decision_counts: `{'design_family_candidate': 5, 'defer_evidence': 7, 'reject': 3}`
+- non_selected_decision_counts: `{'attach_existing_family': 20, 'design_family_candidate': 5, 'defer_evidence': 7, 'reject': 3}`
 - gemini_fresh: `False`
 - claude_fresh: `True`
 - swing_lifecycle_audit_available: `True`
@@ -1256,85 +1256,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 28. `order_perf_buy_funnel_json_scan`
-
-- title: BUY funnel sentinel field scan without repeated json.dumps
-- decision: `attach_existing_family`
-- decision_reason: report-only performance implementation is already present in code; keep the order as provenance and validate through regenerated reports/tests instead of re-implementing
-- source_report_type: `codebase_performance_workorder`
-- lifecycle_stage: `ops_performance`
-- target_subsystem: `buy_funnel_sentinel`
-- route: `performance_optimization_order`
-- mapped_family: `ops_performance_report_only_implemented`
-- threshold_family: `ops_performance_report_only_implemented`
-- improvement_type: `-`
-- confidence: `consensus`
-- priority: `1`
-- runtime_effect: `False`
-- strategy_effect: `False`
-- data_quality_effect: `False`
-- tuning_axis_effect: `False`
-- expected_ev_effect: none_direct_ops_cpu_io_reduction_only
-- evidence: `source_doc_hash=ffb2c2b9d6b8bf251d4f5665f1ea4ead0f680864428241fdcd6119d57f20722f`, `candidate_state=accepted`, `implementation_status=implemented`, `risk_tier=low`, `runtime_effect=false`, `strategy_effect=false`, `data_quality_effect=false`, `tuning_axis_effect=false`, `parity_contract=classification, blocker counts, unique submitted count, actual_order_submitted split, source-quality/provenance fields exact match`
-- parity_contract: classification, blocker counts, unique submitted count, actual_order_submitted split, source-quality/provenance fields exact match
-- next_postclose_metric: same report/output parity with lower runtime or CPU/IO overhead
-- files_likely_touched: `src/engine/buy_funnel_sentinel.py`
-- acceptance_tests: `pytest src/tests/test_buy_funnel_sentinel.py`, `BUY Sentinel classification parity on same raw/cache input`
-- implementation_status: `implemented`
-- root_cause_closure_status: `root_cause_closed`
-- implementation_provenance: `-`
-- repeat_unresolved_escalation: `-`
-- longstanding_non_implement_review: `{"history_window_days": 10, "previous_decision": "attach_existing_family", "previous_implementation_status": "implemented", "previous_route": "performance_optimization_order", "repeat_count": 9, "repeat_key": "order_perf_buy_funnel_json_scan", "repeat_signature": "sig:codebase_performance_workorder|buy_funnel_sentinel|ops_performance|||buy_funnel_sentinel_field_scan_without_repeated_json_dumps", "review_disposition": "implemented_with_provenance"}`
-- longstanding_non_implement_action: `-`
-- structural_blocker_escalation: `-`
-- automation_reentry: Next postclose codebase performance source report must keep implementation_status=implemented and parity tests green.
-
-실행 기준:
-
-- 기존 threshold family의 source metric/provenance를 보강한다.
-- 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
-- family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
-
-### 29. `order_latency_guard_miss_ev_recovery`
-
-- title: latency guard miss EV recovery
-- decision: `attach_existing_family`
-- decision_reason: instrumentation/provenance contract is already implemented; keep as report source for the existing family
-- source_report_type: `scalping_pattern_lab_automation`
-- lifecycle_stage: `-`
-- target_subsystem: `runtime_instrumentation`
-- route: `existing_family`
-- mapped_family: `dynamic_entry_price_resolver`
-- threshold_family: `dynamic_entry_price_resolver`
-- improvement_type: `latency_guard_miss_ev_recovery`
-- confidence: `solo`
-- priority: `2`
-- runtime_effect: `False`
-- strategy_effect: `False`
-- data_quality_effect: `False`
-- tuning_axis_effect: `False`
-- expected_ev_effect: Improve EV attribution and prepare bounded calibration input.
-- evidence: `{'total_blocked': 136175, 'block_ratio': 99.9, 'days': 12}`
-- parity_contract: -
-- next_postclose_metric: -
-- files_likely_touched: `src/engine/sniper_performance_tuning_report.py`, `src/engine/daily_threshold_cycle_report.py`
-- acceptance_tests: `pytest relevant report/threshold tests`, `runtime_effect remains false until a separate implementation order is completed`, `daily EV report includes the order summary`
-- implementation_status: `implemented_but_waiting_sample`
-- root_cause_closure_status: `implementation_done`
-- implementation_provenance: `{"allowed_runtime_apply": false, "decision_authority": "pattern_lab_analysis_workorder_source_only", "finding_id": "latency_guard_miss_ev_recovery", "implementation_type": "pattern_lab_report_only_instrumentation", "runtime_effect": false, "source_report_type": "scalping_pattern_lab_automation", "target_subsystem": "runtime_instrumentation"}`
-- repeat_unresolved_escalation: `-`
-- longstanding_non_implement_review: `{"history_window_days": 10, "previous_decision": "attach_existing_family", "previous_implementation_status": "implemented_but_waiting_sample", "previous_route": "existing_family", "repeat_count": 9, "repeat_key": "order_latency_guard_miss_ev_recovery", "repeat_signature": "sig:scalping_pattern_lab_automation|runtime_instrumentation||latency_guard_miss_ev_recovery||latency_guard_miss_ev_recovery", "review_disposition": "implemented_with_provenance"}`
-- longstanding_non_implement_action: `-`
-- structural_blocker_escalation: `-`
-- automation_reentry: Next postclose calibration consumes the implemented report/provenance fields; no runtime mutation.
-
-실행 기준:
-
-- 기존 threshold family의 source metric/provenance를 보강한다.
-- 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
-- family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
-
-### 30. `order_lifecycle_entry_bucket_exit_rule_exit_unknown`
+### 28. `order_lifecycle_entry_bucket_exit_rule_exit_unknown`
 
 - title: LDM entry bucket attribution follow-up: exit_rule=exit_unknown
 - decision: `attach_existing_family`
@@ -1373,7 +1295,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 31. `order_lifecycle_exit_bucket_combo_exit_result_source_scalp_sim_overnight_sell_today_rule_scalp_sim_overnight_sell_tod_bbc83b24`
+### 29. `order_lifecycle_exit_bucket_combo_exit_result_source_scalp_sim_overnight_sell_today_rule_scalp_sim_overnight_sell_tod_bbc83b24`
 
 - title: LDM exit bucket source-quality follow-up: combo_exit_result=source=scalp_sim_overnight_sell_today|rule=scalp_sim_overnight_sell_today|outcome=outcome_unknown|profit=profit_pos150_pos300
 - decision: `attach_existing_family`
@@ -1412,7 +1334,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 32. `order_lifecycle_exit_bucket_combo_exit_result_source_scalp_sim_overnight_sell_today_rule_scalp_sim_overnight_sell_tod_d982edbd`
+### 30. `order_lifecycle_exit_bucket_combo_exit_result_source_scalp_sim_overnight_sell_today_rule_scalp_sim_overnight_sell_tod_d982edbd`
 
 - title: LDM exit bucket source-quality follow-up: combo_exit_result=source=scalp_sim_overnight_sell_today|rule=scalp_sim_overnight_sell_today|outcome=outcome_unknown|profit=profit_lt_neg070
 - decision: `attach_existing_family`
@@ -1451,7 +1373,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 33. `order_lifecycle_exit_bucket_combo_exit_result_source_scalp_sim_overnight_sell_today_rule_scalp_sim_overnight_sell_tod_ff77f4c9`
+### 31. `order_lifecycle_exit_bucket_combo_exit_result_source_scalp_sim_overnight_sell_today_rule_scalp_sim_overnight_sell_tod_ff77f4c9`
 
 - title: LDM exit bucket source-quality follow-up: combo_exit_result=source=scalp_sim_overnight_sell_today|rule=scalp_sim_overnight_sell_today|outcome=outcome_unknown|profit=profit_neg070_neg010
 - decision: `attach_existing_family`
@@ -1490,7 +1412,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 34. `order_lifecycle_exit_bucket_combo_exit_result_source_scalp_sim_partial_sell_order_assumed_filled_rule_scalp_sim_panic_73281913`
+### 32. `order_lifecycle_exit_bucket_combo_exit_result_source_scalp_sim_partial_sell_order_assumed_filled_rule_scalp_sim_panic_73281913`
 
 - title: LDM exit bucket source-quality follow-up: combo_exit_result=source=scalp_sim_partial_sell_order_assumed_filled|rule=scalp_sim_panic_lifecycle_partial_exit|outcome=outcome_not_applicable_partial_exit|profit=profit_neg070_neg010
 - decision: `attach_existing_family`
@@ -1529,7 +1451,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 35. `order_lifecycle_exit_bucket_combo_exit_result_source_scalp_sim_partial_sell_order_assumed_filled_rule_scalp_sim_panic_823fe278`
+### 33. `order_lifecycle_exit_bucket_combo_exit_result_source_scalp_sim_partial_sell_order_assumed_filled_rule_scalp_sim_panic_823fe278`
 
 - title: LDM exit bucket source-quality follow-up: combo_exit_result=source=scalp_sim_partial_sell_order_assumed_filled|rule=scalp_sim_panic_lifecycle_partial_exit|outcome=outcome_not_applicable_partial_exit|profit=profit_lt_neg070
 - decision: `attach_existing_family`
@@ -1568,7 +1490,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 36. `order_lifecycle_exit_bucket_combo_exit_result_source_sim_post_sell_evaluation_rule_scalp_hard_stop_pct_outcome_good_e_d8c33947`
+### 34. `order_lifecycle_exit_bucket_combo_exit_result_source_sim_post_sell_evaluation_rule_scalp_hard_stop_pct_outcome_good_e_d8c33947`
 
 - title: LDM exit bucket source-quality follow-up: combo_exit_result=source=sim_post_sell_evaluation|rule=scalp_hard_stop_pct|outcome=GOOD_EXIT|profit=profit_lt_neg070
 - decision: `attach_existing_family`
@@ -1607,7 +1529,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 37. `order_lifecycle_exit_bucket_combo_exit_result_source_sim_post_sell_evaluation_rule_scalp_hard_stop_pct_outcome_missed_30bb5c8f`
+### 35. `order_lifecycle_exit_bucket_combo_exit_result_source_sim_post_sell_evaluation_rule_scalp_hard_stop_pct_outcome_missed_30bb5c8f`
 
 - title: LDM exit bucket source-quality follow-up: combo_exit_result=source=sim_post_sell_evaluation|rule=scalp_hard_stop_pct|outcome=MISSED_UPSIDE|profit=profit_lt_neg070
 - decision: `attach_existing_family`
@@ -1646,7 +1568,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 38. `order_lifecycle_exit_bucket_combo_exit_result_source_sim_post_sell_evaluation_rule_scalp_hard_stop_pct_outcome_neutra_d5168c3c`
+### 36. `order_lifecycle_exit_bucket_combo_exit_result_source_sim_post_sell_evaluation_rule_scalp_hard_stop_pct_outcome_neutra_d5168c3c`
 
 - title: LDM exit bucket source-quality follow-up: combo_exit_result=source=sim_post_sell_evaluation|rule=scalp_hard_stop_pct|outcome=NEUTRAL|profit=profit_lt_neg070
 - decision: `attach_existing_family`
@@ -1685,7 +1607,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 39. `order_lifecycle_exit_bucket_combo_exit_result_source_sim_post_sell_evaluation_rule_scalp_soft_stop_pct_outcome_good_e_71b132b9`
+### 37. `order_lifecycle_exit_bucket_combo_exit_result_source_sim_post_sell_evaluation_rule_scalp_soft_stop_pct_outcome_good_e_71b132b9`
 
 - title: LDM exit bucket source-quality follow-up: combo_exit_result=source=sim_post_sell_evaluation|rule=scalp_soft_stop_pct|outcome=GOOD_EXIT|profit=profit_lt_neg070
 - decision: `attach_existing_family`
@@ -1724,7 +1646,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 40. `order_lifecycle_exit_bucket_combo_exit_result_source_sim_post_sell_evaluation_rule_scalp_soft_stop_pct_outcome_neutra_d73738ba`
+### 38. `order_lifecycle_exit_bucket_combo_exit_result_source_sim_post_sell_evaluation_rule_scalp_soft_stop_pct_outcome_neutra_d73738ba`
 
 - title: LDM exit bucket source-quality follow-up: combo_exit_result=source=sim_post_sell_evaluation|rule=scalp_soft_stop_pct|outcome=NEUTRAL|profit=profit_lt_neg070
 - decision: `attach_existing_family`
@@ -1763,7 +1685,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 41. `order_lifecycle_holding_bucket_combo_holding_flow_source_scalp_sim_holding_started_action_buy_profit_profit_lt_neg070_hel_575c586d`
+### 39. `order_lifecycle_holding_bucket_combo_holding_flow_source_scalp_sim_holding_started_action_buy_profit_profit_lt_neg070_hel_575c586d`
 
 - title: LDM holding bucket source-quality follow-up: combo_holding_flow=source=scalp_sim_holding_started|action=BUY|profit=profit_lt_neg070|held=held_not_applicable_at_start
 - decision: `attach_existing_family`
@@ -1802,7 +1724,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 42. `order_lifecycle_holding_bucket_combo_holding_flow_source_scalp_sim_holding_started_action_holding_action_not_applicable_a_fc555278`
+### 40. `order_lifecycle_holding_bucket_combo_holding_flow_source_scalp_sim_holding_started_action_holding_action_not_applicable_a_fc555278`
 
 - title: LDM holding bucket source-quality follow-up: combo_holding_flow=source=scalp_sim_holding_started|action=holding_action_not_applicable_at_start|profit=profit_lt_neg070|held=held_not_applicable_at_start
 - decision: `attach_existing_family`
@@ -1841,7 +1763,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 43. `order_lifecycle_holding_bucket_combo_holding_flow_source_scalp_sim_holding_started_action_wait_profit_profit_lt_neg070_he_ed505a3f`
+### 41. `order_lifecycle_holding_bucket_combo_holding_flow_source_scalp_sim_holding_started_action_wait_profit_profit_lt_neg070_he_ed505a3f`
 
 - title: LDM holding bucket source-quality follow-up: combo_holding_flow=source=scalp_sim_holding_started|action=WAIT|profit=profit_lt_neg070|held=held_not_applicable_at_start
 - decision: `attach_existing_family`
@@ -1880,7 +1802,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 44. `order_lifecycle_holding_bucket_combo_holding_flow_source_scalp_sim_holding_started_action_wait_profit_profit_neg070_neg01_7ffc2d26`
+### 42. `order_lifecycle_holding_bucket_combo_holding_flow_source_scalp_sim_holding_started_action_wait_profit_profit_neg070_neg01_7ffc2d26`
 
 - title: LDM holding bucket source-quality follow-up: combo_holding_flow=source=scalp_sim_holding_started|action=WAIT|profit=profit_neg070_neg010|held=held_not_applicable_at_start
 - decision: `attach_existing_family`
@@ -1919,7 +1841,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 45. `order_lifecycle_holding_bucket_combo_holding_flow_source_scalp_sim_holding_started_action_wait_profit_profit_pos150_pos30_562da131`
+### 43. `order_lifecycle_holding_bucket_combo_holding_flow_source_scalp_sim_holding_started_action_wait_profit_profit_pos150_pos30_562da131`
 
 - title: LDM holding bucket source-quality follow-up: combo_holding_flow=source=scalp_sim_holding_started|action=WAIT|profit=profit_pos150_pos300_plus|held=held_not_applicable_at_start
 - decision: `attach_existing_family`
@@ -1958,7 +1880,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 46. `order_lifecycle_holding_bucket_combo_holding_flow_source_scalp_sim_holding_started_action_wait_profit_profit_pos150_pos30_6f3188b0`
+### 44. `order_lifecycle_holding_bucket_combo_holding_flow_source_scalp_sim_holding_started_action_wait_profit_profit_pos150_pos30_6f3188b0`
 
 - title: LDM holding bucket source-quality follow-up: combo_holding_flow=source=scalp_sim_holding_started|action=WAIT|profit=profit_pos150_pos300|held=held_not_applicable_at_start
 - decision: `attach_existing_family`
@@ -1997,7 +1919,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 47. `order_lifecycle_holding_bucket_held_bucket_held_not_applicable_at_start_508784a3`
+### 45. `order_lifecycle_holding_bucket_held_bucket_held_not_applicable_at_start_508784a3`
 
 - title: LDM holding bucket source-quality follow-up: held_bucket=held_not_applicable_at_start
 - decision: `attach_existing_family`
@@ -2036,7 +1958,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 48. `order_lifecycle_holding_bucket_holding_action_buy_6bb45f37`
+### 46. `order_lifecycle_holding_bucket_holding_action_buy_6bb45f37`
 
 - title: LDM holding bucket source-quality follow-up: holding_action=BUY
 - decision: `attach_existing_family`
@@ -2075,7 +1997,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 49. `order_lifecycle_holding_bucket_holding_action_holding_action_not_applicable_at_start_c20ec935`
+### 47. `order_lifecycle_holding_bucket_holding_action_holding_action_not_applicable_at_start_c20ec935`
 
 - title: LDM holding bucket source-quality follow-up: holding_action=holding_action_not_applicable_at_start
 - decision: `attach_existing_family`
@@ -2114,7 +2036,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 50. `order_lifecycle_holding_bucket_holding_action_wait_c26d74df`
+### 48. `order_lifecycle_holding_bucket_holding_action_wait_c26d74df`
 
 - title: LDM holding bucket source-quality follow-up: holding_action=WAIT
 - decision: `attach_existing_family`
@@ -2153,46 +2075,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 51. `order_perf_daily_report_bulk_history`
-
-- title: Daily report market snapshot bulk history query
-- decision: `attach_existing_family`
-- decision_reason: report-only performance implementation is already present in code; keep the order as provenance and validate through regenerated reports/tests instead of re-implementing
-- source_report_type: `codebase_performance_workorder`
-- lifecycle_stage: `ops_performance`
-- target_subsystem: `daily_report`
-- route: `performance_optimization_order`
-- mapped_family: `ops_performance_report_only_implemented`
-- threshold_family: `ops_performance_report_only_implemented`
-- improvement_type: `-`
-- confidence: `consensus`
-- priority: `2`
-- runtime_effect: `False`
-- strategy_effect: `False`
-- data_quality_effect: `False`
-- tuning_axis_effect: `False`
-- expected_ev_effect: none_direct_ops_cpu_io_reduction_only
-- evidence: `source_doc_hash=ffb2c2b9d6b8bf251d4f5665f1ea4ead0f680864428241fdcd6119d57f20722f`, `candidate_state=accepted`, `implementation_status=implemented`, `risk_tier=medium`, `runtime_effect=false`, `strategy_effect=false`, `data_quality_effect=false`, `tuning_axis_effect=false`, `parity_contract=per-stock history window, feature columns, model input row count, and report JSON exact match`
-- parity_contract: per-stock history window, feature columns, model input row count, and report JSON exact match
-- next_postclose_metric: same report/output parity with lower runtime or CPU/IO overhead
-- files_likely_touched: `src/engine/daily_report_service.py`
-- acceptance_tests: `pytest src/tests/test_daily_report_service.py src/tests/test_daily_report.py`, `daily report output parity on injected DB/model fixture`
-- implementation_status: `implemented`
-- root_cause_closure_status: `root_cause_closed`
-- implementation_provenance: `-`
-- repeat_unresolved_escalation: `-`
-- longstanding_non_implement_review: `{"history_window_days": 10, "previous_decision": "attach_existing_family", "previous_implementation_status": "implemented", "previous_route": "performance_optimization_order", "repeat_count": 9, "repeat_key": "order_perf_daily_report_bulk_history", "repeat_signature": "sig:codebase_performance_workorder|daily_report|ops_performance|||daily_report_market_snapshot_bulk_history_query", "review_disposition": "implemented_with_provenance"}`
-- longstanding_non_implement_action: `-`
-- structural_blocker_escalation: `-`
-- automation_reentry: Next postclose codebase performance source report must keep implementation_status=implemented and parity tests green.
-
-실행 기준:
-
-- 기존 threshold family의 source metric/provenance를 보강한다.
-- 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
-- family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
-
-### 52. `order_swing_ldm_holding_exit_holding_exit_bucket_attribution_mfe_deep_neg_missing_held_missing_kospi_regime_stop_loss`
+### 49. `order_swing_ldm_holding_exit_holding_exit_bucket_attribution_mfe_deep_neg_missing_held_missing_kospi_regime_stop_loss`
 
 - title: Swing LDM source field follow-up: mfe_deep_neg|missing|held_missing|kospi_regime_stop_loss|-|-|-|-|-
 - decision: `attach_existing_family`
@@ -2231,7 +2114,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 53. `order_swing_ldm_holding_exit_holding_exit_bucket_attribution_mfe_neg_missing_30m_2h_kospi_regime_stop_loss`
+### 50. `order_swing_ldm_holding_exit_holding_exit_bucket_attribution_mfe_neg_missing_30m_2h_kospi_regime_stop_loss`
 
 - title: Swing LDM source field follow-up: mfe_neg|missing|30m_2h|kospi_regime_stop_loss|-|-|-|-|-
 - decision: `attach_existing_family`
@@ -2270,7 +2153,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 54. `order_swing_ldm_holding_exit_holding_exit_bucket_attribution_mfe_neg_missing_ge_1d_kospi_regime_stop_loss`
+### 51. `order_swing_ldm_holding_exit_holding_exit_bucket_attribution_mfe_neg_missing_ge_1d_kospi_regime_stop_loss`
 
 - title: Swing LDM source field follow-up: mfe_neg|missing|ge_1d|kospi_regime_stop_loss|-|-|-|-|-
 - decision: `attach_existing_family`
@@ -2309,7 +2192,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 55. `order_swing_ldm_holding_exit_holding_exit_bucket_attribution_mfe_neg_missing_held_missing_kospi_regime_stop_loss`
+### 52. `order_swing_ldm_holding_exit_holding_exit_bucket_attribution_mfe_neg_missing_held_missing_kospi_regime_stop_loss`
 
 - title: Swing LDM source field follow-up: mfe_neg|missing|held_missing|kospi_regime_stop_loss|-|-|-|-|-
 - decision: `attach_existing_family`
@@ -2348,7 +2231,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 56. `order_swing_ldm_selection_discovery_arm_attribution_breakout_confirm_entry_confidence_weighted_trailing_after_mfe_banking_and_saving`
+### 53. `order_swing_ldm_selection_discovery_arm_attribution_breakout_confirm_entry_confidence_weighted_trailing_after_mfe_banking_and_saving`
 
 - title: Swing LDM source field follow-up: breakout_confirm_entry|confidence_weighted|trailing_after_mfe|Banking and Savings Institutions|은행|DIAGNOSTIC
 - decision: `attach_existing_family`
@@ -2387,7 +2270,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 57. `order_swing_ldm_selection_discovery_arm_attribution_breakout_confirm_entry_confidence_weighted_trailing_after_mfe_building_construct`
+### 54. `order_swing_ldm_selection_discovery_arm_attribution_breakout_confirm_entry_confidence_weighted_trailing_after_mfe_building_construct`
 
 - title: Swing LDM source field follow-up: breakout_confirm_entry|confidence_weighted|trailing_after_mfe|Building Construction|건설_국내주택,건설_해외건설|DIAGNOSTIC
 - decision: `attach_existing_family`
@@ -2426,7 +2309,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 58. `order_swing_ldm_selection_discovery_arm_attribution_breakout_confirm_entry_confidence_weighted_trailing_after_mfe_manufacture_of_ele`
+### 55. `order_swing_ldm_selection_discovery_arm_attribution_breakout_confirm_entry_confidence_weighted_trailing_after_mfe_manufacture_of_ele`
 
 - title: Swing LDM source field follow-up: breakout_confirm_entry|confidence_weighted|trailing_after_mfe|Manufacture of Electronic Components|-|DIAGNOSTIC
 - decision: `attach_existing_family`
@@ -2465,7 +2348,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 59. `order_swing_ldm_selection_discovery_arm_attribution_breakout_confirm_entry_confidence_weighted_trailing_after_mfe_manufacture_of_ins`
+### 56. `order_swing_ldm_selection_discovery_arm_attribution_breakout_confirm_entry_confidence_weighted_trailing_after_mfe_manufacture_of_ins`
 
 - title: Swing LDM source field follow-up: breakout_confirm_entry|confidence_weighted|trailing_after_mfe|Manufacture of Instruments and Appliances for Measuring, Checking, Testing, Navigating, controlling and Other Purposes, Except Optical Instruments|-|DIAGNOSTIC
 - decision: `attach_existing_family`
@@ -2504,7 +2387,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 60. `order_swing_ldm_selection_discovery_arm_attribution_breakout_confirm_entry_confidence_weighted_trailing_after_mfe_manufacture_of_sem`
+### 57. `order_swing_ldm_selection_discovery_arm_attribution_breakout_confirm_entry_confidence_weighted_trailing_after_mfe_manufacture_of_sem`
 
 - title: Swing LDM source field follow-up: breakout_confirm_entry|confidence_weighted|trailing_after_mfe|Manufacture of Semiconductor|-|DIAGNOSTIC
 - decision: `attach_existing_family`
@@ -2543,7 +2426,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 61. `order_swing_ldm_selection_discovery_arm_attribution_breakout_confirm_entry_confidence_weighted_trailing_after_mfe_other_financial_in`
+### 58. `order_swing_ldm_selection_discovery_arm_attribution_breakout_confirm_entry_confidence_weighted_trailing_after_mfe_other_financial_in`
 
 - title: Swing LDM source field follow-up: breakout_confirm_entry|confidence_weighted|trailing_after_mfe|Other Financial Intermediation|NaN|DIAGNOSTIC
 - decision: `attach_existing_family`
@@ -2582,7 +2465,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 62. `order_swing_ldm_selection_discovery_arm_attribution_breakout_confirm_entry_confidence_weighted_trailing_after_mfe_passenger_air_tran`
+### 59. `order_swing_ldm_selection_discovery_arm_attribution_breakout_confirm_entry_confidence_weighted_trailing_after_mfe_passenger_air_tran`
 
 - title: Swing LDM source field follow-up: breakout_confirm_entry|confidence_weighted|trailing_after_mfe|Passenger Air Transport|-|DIAGNOSTIC
 - decision: `attach_existing_family`
@@ -2621,7 +2504,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 63. `order_swing_ldm_selection_discovery_arm_attribution_breakout_confirm_entry_confidence_weighted_trailing_after_mfe_real_estate_activi`
+### 60. `order_swing_ldm_selection_discovery_arm_attribution_breakout_confirm_entry_confidence_weighted_trailing_after_mfe_real_estate_activi`
 
 - title: Swing LDM source field follow-up: breakout_confirm_entry|confidence_weighted|trailing_after_mfe|Real Estate Activities with Own or Leased Property|-|DIAGNOSTIC
 - decision: `attach_existing_family`
@@ -2660,7 +2543,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 64. `order_swing_ldm_selection_discovery_arm_attribution_breakout_confirm_entry_confidence_weighted_trailing_after_mfe_sea_and_coastal_wa`
+### 61. `order_swing_ldm_selection_discovery_arm_attribution_breakout_confirm_entry_confidence_weighted_trailing_after_mfe_sea_and_coastal_wa`
 
 - title: Swing LDM source field follow-up: breakout_confirm_entry|confidence_weighted|trailing_after_mfe|Sea and Coastal Water Transport|운송_해운|DIAGNOSTIC
 - decision: `attach_existing_family`
@@ -2699,7 +2582,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 65. `order_swing_ldm_selection_discovery_arm_attribution_breakout_confirm_entry_risk_capped_mae_stop_time_stop_banking_and_savings_instit`
+### 62. `order_swing_ldm_selection_discovery_arm_attribution_breakout_confirm_entry_risk_capped_mae_stop_time_stop_banking_and_savings_instit`
 
 - title: Swing LDM source field follow-up: breakout_confirm_entry|risk_capped|mae_stop_time_stop|Banking and Savings Institutions|은행|DIAGNOSTIC
 - decision: `attach_existing_family`
@@ -2738,7 +2621,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 66. `order_swing_ldm_selection_discovery_arm_attribution_breakout_confirm_entry_risk_capped_mae_stop_time_stop_manufacture_of_electronic_`
+### 63. `order_swing_ldm_selection_discovery_arm_attribution_breakout_confirm_entry_risk_capped_mae_stop_time_stop_manufacture_of_electronic_`
 
 - title: Swing LDM source field follow-up: breakout_confirm_entry|risk_capped|mae_stop_time_stop|Manufacture of Electronic Components|-|DIAGNOSTIC
 - decision: `attach_existing_family`
@@ -2777,7 +2660,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 67. `order_swing_ldm_selection_discovery_arm_attribution_breakout_confirm_entry_risk_capped_mae_stop_time_stop_other_financial_intermedia`
+### 64. `order_swing_ldm_selection_discovery_arm_attribution_breakout_confirm_entry_risk_capped_mae_stop_time_stop_other_financial_intermedia`
 
 - title: Swing LDM source field follow-up: breakout_confirm_entry|risk_capped|mae_stop_time_stop|Other Financial Intermediation|-|DIAGNOSTIC
 - decision: `attach_existing_family`
@@ -2816,7 +2699,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 68. `order_swing_ldm_selection_discovery_arm_attribution_breakout_confirm_entry_risk_capped_mae_stop_time_stop_real_estate_activities_wit`
+### 65. `order_swing_ldm_selection_discovery_arm_attribution_breakout_confirm_entry_risk_capped_mae_stop_time_stop_real_estate_activities_wit`
 
 - title: Swing LDM source field follow-up: breakout_confirm_entry|risk_capped|mae_stop_time_stop|Real Estate Activities with Own or Leased Property|-|DIAGNOSTIC
 - decision: `attach_existing_family`
@@ -2855,7 +2738,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 69. `order_swing_ldm_selection_discovery_arm_attribution_next_open_entry_equal_notional_fixed_5d_manufacture_of_basic_chemicals_diagnosti`
+### 66. `order_swing_ldm_selection_discovery_arm_attribution_next_open_entry_equal_notional_fixed_5d_manufacture_of_basic_chemicals_diagnosti`
 
 - title: Swing LDM source field follow-up: next_open_entry|equal_notional|fixed_5d|Manufacture of Basic Chemicals|-|DIAGNOSTIC
 - decision: `attach_existing_family`
@@ -2894,7 +2777,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 70. `order_swing_ldm_selection_discovery_arm_attribution_next_open_entry_equal_notional_fixed_5d_manufacture_of_electronic_components_dia`
+### 67. `order_swing_ldm_selection_discovery_arm_attribution_next_open_entry_equal_notional_fixed_5d_manufacture_of_electronic_components_dia`
 
 - title: Swing LDM source field follow-up: next_open_entry|equal_notional|fixed_5d|Manufacture of Electronic Components|-|DIAGNOSTIC
 - decision: `attach_existing_family`
@@ -2933,7 +2816,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 71. `order_swing_ldm_selection_discovery_arm_attribution_next_open_entry_equal_notional_fixed_5d_manufacture_of_medicaments_diagnostic`
+### 68. `order_swing_ldm_selection_discovery_arm_attribution_next_open_entry_equal_notional_fixed_5d_manufacture_of_medicaments_diagnostic`
 
 - title: Swing LDM source field follow-up: next_open_entry|equal_notional|fixed_5d|Manufacture of Medicaments|-|DIAGNOSTIC
 - decision: `attach_existing_family`
@@ -2972,7 +2855,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 72. `order_swing_ldm_selection_discovery_arm_attribution_next_open_entry_equal_notional_fixed_5d_other_financial_intermediation_diagnosti`
+### 69. `order_swing_ldm_selection_discovery_arm_attribution_next_open_entry_equal_notional_fixed_5d_other_financial_intermediation_diagnosti`
 
 - title: Swing LDM source field follow-up: next_open_entry|equal_notional|fixed_5d|Other Financial Intermediation|-|DIAGNOSTIC
 - decision: `attach_existing_family`
@@ -3011,7 +2894,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 73. `order_swing_ldm_selection_discovery_arm_attribution_next_open_entry_equal_notional_fixed_5d_other_financial_intermediation_nan_diagn`
+### 70. `order_swing_ldm_selection_discovery_arm_attribution_next_open_entry_equal_notional_fixed_5d_other_financial_intermediation_nan_diagn`
 
 - title: Swing LDM source field follow-up: next_open_entry|equal_notional|fixed_5d|Other Financial Intermediation|NaN|DIAGNOSTIC
 - decision: `attach_existing_family`
@@ -3050,7 +2933,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 74. `order_swing_ldm_selection_discovery_arm_attribution_next_open_entry_equal_notional_fixed_5d_other_financial_intermediation_은행_diagno`
+### 71. `order_swing_ldm_selection_discovery_arm_attribution_next_open_entry_equal_notional_fixed_5d_other_financial_intermediation_은행_diagno`
 
 - title: Swing LDM source field follow-up: next_open_entry|equal_notional|fixed_5d|Other Financial Intermediation|은행|DIAGNOSTIC
 - decision: `attach_existing_family`
@@ -3089,7 +2972,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 75. `order_swing_ldm_selection_discovery_arm_attribution_next_open_entry_equal_notional_fixed_5d_real_estate_activities_with_own_or_lease`
+### 72. `order_swing_ldm_selection_discovery_arm_attribution_next_open_entry_equal_notional_fixed_5d_real_estate_activities_with_own_or_lease`
 
 - title: Swing LDM source field follow-up: next_open_entry|equal_notional|fixed_5d|Real Estate Activities with Own or Leased Property|-|DIAGNOSTIC
 - decision: `attach_existing_family`
@@ -3128,7 +3011,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 76. `order_swing_ldm_selection_discovery_arm_attribution_pullback_limit_entry_risk_capped_mae_stop_time_stop_other_specialized_wholesale_`
+### 73. `order_swing_ldm_selection_discovery_arm_attribution_pullback_limit_entry_risk_capped_mae_stop_time_stop_other_specialized_wholesale_`
 
 - title: Swing LDM source field follow-up: pullback_limit_entry|risk_capped|mae_stop_time_stop|Other Specialized Wholesale|자원개발 E&P|DIAGNOSTIC
 - decision: `attach_existing_family`
@@ -3167,7 +3050,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 77. `order_swing_ldm_selection_discovery_arm_attribution_pullback_limit_entry_risk_capped_mae_stop_time_stop_sea_and_coastal_water_transp`
+### 74. `order_swing_ldm_selection_discovery_arm_attribution_pullback_limit_entry_risk_capped_mae_stop_time_stop_sea_and_coastal_water_transp`
 
 - title: Swing LDM source field follow-up: pullback_limit_entry|risk_capped|mae_stop_time_stop|Sea and Coastal Water Transport|운송_해운|DIAGNOSTIC
 - decision: `attach_existing_family`
@@ -3206,7 +3089,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 78. `order_swing_lifecycle_bucket_discovery_swing_bucket_selection_discovery_arm_attribution_breakout_confirm_entry_confiden`
+### 75. `order_swing_lifecycle_bucket_discovery_swing_bucket_selection_discovery_arm_attribution_breakout_confirm_entry_confiden`
 
 - title: Swing lifecycle bucket discovery handoff follow-up: swing_bucket_selection_discovery_arm_attribution_breakout_confirm_entry_confidence_weighted_trailing_after_mfe_banki_8fbf0e91f50c
 - decision: `attach_existing_family`
@@ -3245,7 +3128,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 79. `order_swing_lifecycle_bucket_discovery_swing_bucket_selection_discovery_arm_attribution_breakout_confirm_entry_risk_cap`
+### 76. `order_swing_lifecycle_bucket_discovery_swing_bucket_selection_discovery_arm_attribution_breakout_confirm_entry_risk_cap`
 
 - title: Swing lifecycle bucket discovery handoff follow-up: swing_bucket_selection_discovery_arm_attribution_breakout_confirm_entry_risk_capped_mae_stop_time_stop_manufacture_o_d1ec8c1ded70
 - decision: `attach_existing_family`
@@ -3284,7 +3167,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 80. `order_swing_lifecycle_bucket_discovery_swing_bucket_selection_discovery_arm_attribution_next_open_entry_equal_notional_`
+### 77. `order_swing_lifecycle_bucket_discovery_swing_bucket_selection_discovery_arm_attribution_next_open_entry_equal_notional_`
 
 - title: Swing lifecycle bucket discovery handoff follow-up: swing_bucket_selection_discovery_arm_attribution_next_open_entry_equal_notional_fixed_5d_manufacture_of_electronic_c_5a1e662aabbb
 - decision: `attach_existing_family`
@@ -3323,7 +3206,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 81. `order_swing_lifecycle_bucket_discovery_swing_bucket_selection_discovery_arm_attribution_pullback_limit_entry_risk_cappe`
+### 78. `order_swing_lifecycle_bucket_discovery_swing_bucket_selection_discovery_arm_attribution_pullback_limit_entry_risk_cappe`
 
 - title: Swing lifecycle bucket discovery handoff follow-up: swing_bucket_selection_discovery_arm_attribution_pullback_limit_entry_risk_capped_mae_stop_time_stop_other_specializ_6ef9b71fe584
 - decision: `attach_existing_family`
@@ -3362,7 +3245,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 82. `order_swing_lifecycle_bucket_discovery_swing_ldm_selection_discovery_arm_attribution_breakout_confirm_entry_confidence_`
+### 79. `order_swing_lifecycle_bucket_discovery_swing_ldm_selection_discovery_arm_attribution_breakout_confirm_entry_confidence_`
 
 - title: Swing lifecycle bucket discovery handoff follow-up: swing_ldm_selection_discovery_arm_attribution_breakout_confirm_entry_confidence_weighted_trailing_after_mfe_banking_and_saving
 - decision: `attach_existing_family`
@@ -3401,7 +3284,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 83. `order_swing_lifecycle_bucket_discovery_swing_ldm_selection_discovery_arm_attribution_breakout_confirm_entry_risk_capped`
+### 80. `order_swing_lifecycle_bucket_discovery_swing_ldm_selection_discovery_arm_attribution_breakout_confirm_entry_risk_capped`
 
 - title: Swing lifecycle bucket discovery handoff follow-up: swing_ldm_selection_discovery_arm_attribution_breakout_confirm_entry_risk_capped_mae_stop_time_stop_manufacture_of_electronic_
 - decision: `attach_existing_family`
@@ -3440,7 +3323,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 84. `order_swing_lifecycle_bucket_discovery_swing_ldm_selection_discovery_arm_attribution_next_open_entry_equal_notional_fix`
+### 81. `order_swing_lifecycle_bucket_discovery_swing_ldm_selection_discovery_arm_attribution_next_open_entry_equal_notional_fix`
 
 - title: Swing lifecycle bucket discovery handoff follow-up: swing_ldm_selection_discovery_arm_attribution_next_open_entry_equal_notional_fixed_5d_manufacture_of_electronic_components_dia
 - decision: `attach_existing_family`
@@ -3479,7 +3362,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 85. `order_swing_lifecycle_bucket_discovery_swing_ldm_selection_discovery_arm_attribution_pullback_limit_entry_risk_capped_m`
+### 82. `order_swing_lifecycle_bucket_discovery_swing_ldm_selection_discovery_arm_attribution_pullback_limit_entry_risk_capped_m`
 
 - title: Swing lifecycle bucket discovery handoff follow-up: swing_ldm_selection_discovery_arm_attribution_pullback_limit_entry_risk_capped_mae_stop_time_stop_other_specialized_wholesale_
 - decision: `attach_existing_family`
@@ -3518,7 +3401,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 86. `order_lifecycle_quiet_gap_ai_review_coverage_rollup`
+### 83. `order_lifecycle_quiet_gap_ai_review_coverage_rollup`
 
 - title: Lifecycle quiet gap AI review coverage review
 - decision: `attach_existing_family`
@@ -3557,7 +3440,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 87. `order_lifecycle_quiet_gap_parent_conflict_rollup`
+### 84. `order_lifecycle_quiet_gap_parent_conflict_rollup`
 
 - title: Lifecycle quiet gap parent conflict/exclusion review
 - decision: `attach_existing_family`
@@ -3596,7 +3479,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 88. `order_lifecycle_quiet_gap_positive_source_only_rollup`
+### 85. `order_lifecycle_quiet_gap_positive_source_only_rollup`
 
 - title: Lifecycle quiet gap positive source-only review
 - decision: `attach_existing_family`
@@ -3635,7 +3518,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 89. `order_lifecycle_source_dimension_gap_rollup`
+### 86. `order_lifecycle_source_dimension_gap_rollup`
 
 - title: None
 - decision: `attach_existing_family`
@@ -3674,124 +3557,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 90. `order_perf_daily_report_engine_singleton`
-
-- title: Daily report SQLAlchemy engine singleton
-- decision: `attach_existing_family`
-- decision_reason: report-only performance implementation is already present in code; keep the order as provenance and validate through regenerated reports/tests instead of re-implementing
-- source_report_type: `codebase_performance_workorder`
-- lifecycle_stage: `ops_performance`
-- target_subsystem: `daily_report`
-- route: `performance_optimization_order`
-- mapped_family: `ops_performance_report_only_implemented`
-- threshold_family: `ops_performance_report_only_implemented`
-- improvement_type: `-`
-- confidence: `consensus`
-- priority: `3`
-- runtime_effect: `False`
-- strategy_effect: `False`
-- data_quality_effect: `False`
-- tuning_axis_effect: `False`
-- expected_ev_effect: none_direct_ops_cpu_io_reduction_only
-- evidence: `source_doc_hash=ffb2c2b9d6b8bf251d4f5665f1ea4ead0f680864428241fdcd6119d57f20722f`, `candidate_state=accepted`, `implementation_status=implemented`, `risk_tier=low`, `runtime_effect=false`, `strategy_effect=false`, `data_quality_effect=false`, `tuning_axis_effect=false`, `parity_contract=query result and rendered daily report exact match`
-- parity_contract: query result and rendered daily report exact match
-- next_postclose_metric: same report/output parity with lower runtime or CPU/IO overhead
-- files_likely_touched: `src/engine/daily_report_service.py`
-- acceptance_tests: `pytest src/tests/test_daily_report_service.py src/tests/test_daily_report.py`, `engine creation count regression test`
-- implementation_status: `implemented`
-- root_cause_closure_status: `root_cause_closed`
-- implementation_provenance: `-`
-- repeat_unresolved_escalation: `-`
-- longstanding_non_implement_review: `{"history_window_days": 10, "previous_decision": "attach_existing_family", "previous_implementation_status": "implemented", "previous_route": "performance_optimization_order", "repeat_count": 9, "repeat_key": "order_perf_daily_report_engine_singleton", "repeat_signature": "sig:codebase_performance_workorder|daily_report|ops_performance|||daily_report_sqlalchemy_engine_singleton", "review_disposition": "implemented_with_provenance"}`
-- longstanding_non_implement_action: `-`
-- structural_blocker_escalation: `-`
-- automation_reentry: Next postclose codebase performance source report must keep implementation_status=implemented and parity tests green.
-
-실행 기준:
-
-- 기존 threshold family의 source metric/provenance를 보강한다.
-- 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
-- family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
-
-### 91. `order_swing_gatekeeper_reject_threshold_review`
-
-- title: swing gatekeeper reject threshold review
-- decision: `attach_existing_family`
-- decision_reason: instrumentation/report/provenance implementation status is implemented; keep the order as existing-family source evidence instead of re-implementing
-- source_report_type: `swing_improvement_automation`
-- lifecycle_stage: `entry`
-- target_subsystem: `swing_entry`
-- route: `existing_family`
-- mapped_family: `swing_gatekeeper_accept_reject`
-- threshold_family: `swing_gatekeeper_accept_reject`
-- improvement_type: `threshold_family_input`
-- confidence: `consensus`
-- priority: `3`
-- runtime_effect: `False`
-- strategy_effect: `False`
-- data_quality_effect: `False`
-- tuning_axis_effect: `False`
-- expected_ev_effect: gatekeeper reject/pass, submitted/simulated, and post-entry outcomes are attributable by family.
-- evidence: `blocked_gatekeeper_reject_unique=14`
-- parity_contract: -
-- next_postclose_metric: gatekeeper reject/pass, submitted/simulated, and post-entry outcomes are attributable by family.
-- files_likely_touched: `src/engine/sniper_state_handlers.py`, `src/engine/swing_lifecycle_audit.py`
-- acceptance_tests: `pytest swing lifecycle audit tests`, `pytest state handler fast signatures`
-- implementation_status: `implemented`
-- root_cause_closure_status: `root_cause_closed`
-- implementation_provenance: `{"actual_order_submitted": false, "allowed_runtime_apply": false, "broker_order_forbidden": true, "decision_authority": "swing_improvement_automation_source_only", "implemented_scope": "swing_gatekeeper_accept_reject_source_metric_provenance", "runtime_effect": false, "scope": "swing_gatekeeper_accept_reject_source_metric_provenance", "source_contract": "swing_gatekeeper_accept_reject_source_metric_v1", "source_fields": ["blocked_gatekeeper_reject", "gatekeeper_actions", "evidence_quality_counts", "swing_probe_entry_candidate"], "source_metric_snapshot": {"blocked_gatekeeper_reject": 332, "evidence_quality_counts": {"None": 28, "blocked_stage_intraday_probe": 81, "counterfactual_after_gap": 10, "probe_capacity_observation": 1194, "risk_off_prior_intraday_probe": 33}, "gatekeeper_actions": {"눌림 대기": 132, "전량 회피": 226}, "sample_count": 23}}`
-- repeat_unresolved_escalation: `-`
-- longstanding_non_implement_review: `{"history_window_days": 10, "previous_decision": "attach_existing_family", "previous_implementation_status": "terminal_existing_family_evidence", "previous_route": "existing_family", "repeat_count": 9, "repeat_key": "order_swing_gatekeeper_reject_threshold_review", "repeat_signature": "sig:swing_improvement_automation|swing_entry|entry|threshold_family_input|swing_gatekeeper_accept_reject|swing_gatekeeper_reject_threshold_review", "review_disposition": "implemented_with_provenance"}`
-- longstanding_non_implement_action: `-`
-- structural_blocker_escalation: `-`
-- automation_reentry: Next postclose workorder should preserve implementation_status=implemented and use the source metrics as provenance only.
-
-실행 기준:
-
-- 기존 threshold family의 source metric/provenance를 보강한다.
-- 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
-- family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
-
-### 92. `order_swing_pattern_lab_deepseek_scale_in_events_observed`
-
-- title: Scale-in events observed for swing positions
-- decision: `attach_existing_family`
-- decision_reason: instrumentation/report/provenance implementation status is implemented; keep the order as existing-family source evidence instead of re-implementing
-- source_report_type: `swing_pattern_lab_automation`
-- lifecycle_stage: `scale_in`
-- target_subsystem: `swing_scale_in`
-- route: `existing_family`
-- mapped_family: `swing_scale_in_ofi_qi_confirmation`
-- threshold_family: `swing_scale_in_ofi_qi_confirmation`
-- improvement_type: `pattern_lab_observation`
-- confidence: `consensus`
-- priority: `3`
-- runtime_effect: `False`
-- strategy_effect: `False`
-- data_quality_effect: `False`
-- tuning_axis_effect: `False`
-- expected_ev_effect: Evaluate PYRAMID/AVG_DOWN outcome quality with OFI/QI confirmation.
-- evidence: `{'scale_in_events': 16}`
-- parity_contract: -
-- next_postclose_metric: swing_scale_in_quality_score
-- files_likely_touched: `src/engine/swing_lifecycle_audit.py`, `src/engine/swing_selection_funnel_report.py`, `src/model/common_v2.py`
-- acceptance_tests: `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_swing_model_selection_funnel_repair.py`, `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_deepseek_swing_pattern_lab.py`
-- implementation_status: `implemented`
-- root_cause_closure_status: `root_cause_closed`
-- implementation_provenance: `{"actual_order_submitted": false, "allowed_runtime_apply": false, "broker_order_forbidden": true, "decision_authority": "swing_pattern_lab_analysis_workorder_source_only", "implemented_scope": "swing_scale_in_events_observed_source_metric_provenance", "owner": "swing_pattern_lab_automation", "runtime_effect": false, "source_contract": "swing_pattern_lab_scale_in_events_source_metric_v1", "source_fields": ["scale_in_events", "swing_scale_in_quality_score"], "source_metric_snapshot": {"mapped_family": "swing_scale_in_ofi_qi_confirmation", "next_postclose_metric": "swing_scale_in_quality_score", "scale_in_events": 16}}`
-- repeat_unresolved_escalation: `-`
-- longstanding_non_implement_review: `{"history_window_days": 10, "previous_decision": "attach_existing_family", "previous_implementation_status": "terminal_existing_family_evidence", "previous_route": "attach_existing_family", "repeat_count": 9, "repeat_key": "order_swing_pattern_lab_deepseek_scale_in_events_observed", "repeat_signature": "sig:swing_pattern_lab_automation|swing_scale_in|scale_in|pattern_lab_observation|swing_scale_in_ofi_qi_confirmation|scale_in_events_observed_for_swing_positions", "review_disposition": "implemented_with_provenance"}`
-- longstanding_non_implement_action: `-`
-- structural_blocker_escalation: `-`
-- automation_reentry: Next postclose workorder should preserve implementation_status=implemented and use the source metrics as provenance only.
-
-실행 기준:
-
-- 기존 threshold family의 source metric/provenance를 보강한다.
-- 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
-- family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
-
-### 93. `order_lifecycle_overnight_bucket_combo_overnight_decision_action_sell_today_status_sell_today_confidence_confidence_070p_profit_profit_lt_`
+### 87. `order_lifecycle_overnight_bucket_combo_overnight_decision_action_sell_today_status_sell_today_confidence_confidence_070p_profit_profit_lt_`
 
 - title: LDM overnight bucket attribution follow-up: combo_overnight_decision=action=SELL_TODAY|status=SELL_TODAY|confidence=confidence_070p|profit=profit_lt_neg070
 - decision: `attach_existing_family`
@@ -3830,7 +3596,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 94. `order_lifecycle_overnight_bucket_confidence_band_confidence_070p`
+### 88. `order_lifecycle_overnight_bucket_confidence_band_confidence_070p`
 
 - title: LDM overnight bucket attribution follow-up: confidence_band=confidence_070p
 - decision: `attach_existing_family`
@@ -3869,7 +3635,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 95. `order_lifecycle_overnight_bucket_held_bucket_held_600_1800s_plus`
+### 89. `order_lifecycle_overnight_bucket_held_bucket_held_600_1800s_plus`
 
 - title: LDM overnight bucket attribution follow-up: held_bucket=held_600_1800s_plus
 - decision: `attach_existing_family`
@@ -3908,7 +3674,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 96. `order_lifecycle_overnight_bucket_overnight_action_sell_today`
+### 90. `order_lifecycle_overnight_bucket_overnight_action_sell_today`
 
 - title: LDM overnight bucket attribution follow-up: overnight_action=SELL_TODAY
 - decision: `attach_existing_family`
@@ -3947,7 +3713,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 97. `order_lifecycle_overnight_bucket_overnight_status_sell_today`
+### 91. `order_lifecycle_overnight_bucket_overnight_status_sell_today`
 
 - title: LDM overnight bucket attribution follow-up: overnight_status=SELL_TODAY
 - decision: `attach_existing_family`
@@ -3986,7 +3752,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 98. `order_lifecycle_overnight_bucket_peak_profit_band_peak_lt_zero`
+### 92. `order_lifecycle_overnight_bucket_peak_profit_band_peak_lt_zero`
 
 - title: LDM overnight bucket attribution follow-up: peak_profit_band=peak_lt_zero
 - decision: `attach_existing_family`
@@ -4025,7 +3791,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 99. `order_lifecycle_overnight_bucket_price_source_holding_price_samples_last`
+### 93. `order_lifecycle_overnight_bucket_price_source_holding_price_samples_last`
 
 - title: LDM overnight bucket attribution follow-up: price_source=holding_price_samples_last
 - decision: `attach_existing_family`
@@ -4064,7 +3830,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 100. `order_lifecycle_overnight_bucket_profit_band_profit_lt_neg070`
+### 94. `order_lifecycle_overnight_bucket_profit_band_profit_lt_neg070`
 
 - title: LDM overnight bucket attribution follow-up: profit_band=profit_lt_neg070
 - decision: `attach_existing_family`
@@ -4103,7 +3869,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 101. `order_lifecycle_overnight_bucket_source_quality_gate_overnight_decision_coverage`
+### 95. `order_lifecycle_overnight_bucket_source_quality_gate_overnight_decision_coverage`
 
 - title: LDM overnight bucket attribution follow-up: source_quality_gate=overnight_decision_coverage
 - decision: `attach_existing_family`
@@ -4142,7 +3908,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 102. `order_lifecycle_overnight_bucket_source_stage_scalp_sim_overnight_sell_today`
+### 96. `order_lifecycle_overnight_bucket_source_stage_scalp_sim_overnight_sell_today`
 
 - title: LDM overnight bucket attribution follow-up: source_stage=scalp_sim_overnight_sell_today
 - decision: `attach_existing_family`
@@ -4181,202 +3947,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 103. `order_perf_recommend_update_vectorization`
-
-- title: Recommendation and update_kospi vectorized membership checks
-- decision: `attach_existing_family`
-- decision_reason: report-only performance implementation is already present in code; keep the order as provenance and validate through regenerated reports/tests instead of re-implementing
-- source_report_type: `codebase_performance_workorder`
-- lifecycle_stage: `ops_performance`
-- target_subsystem: `swing_daily_recommendation`
-- route: `performance_optimization_order`
-- mapped_family: `ops_performance_report_only_implemented`
-- threshold_family: `ops_performance_report_only_implemented`
-- improvement_type: `-`
-- confidence: `consensus`
-- priority: `4`
-- runtime_effect: `False`
-- strategy_effect: `False`
-- data_quality_effect: `False`
-- tuning_axis_effect: `False`
-- expected_ev_effect: none_direct_ops_cpu_io_reduction_only
-- evidence: `source_doc_hash=ffb2c2b9d6b8bf251d4f5665f1ea4ead0f680864428241fdcd6119d57f20722f`, `candidate_state=accepted`, `implementation_status=implemented`, `risk_tier=low`, `runtime_effect=false`, `strategy_effect=false`, `data_quality_effect=false`, `tuning_axis_effect=false`, `parity_contract=selected keys, diagnostics rows, CSV row order, and update_kospi inserted-row set exact match`
-- parity_contract: selected keys, diagnostics rows, CSV row order, and update_kospi inserted-row set exact match
-- next_postclose_metric: same report/output parity with lower runtime or CPU/IO overhead
-- files_likely_touched: `src/model/recommend_daily_v2.py`, `src/utils/update_kospi.py`
-- acceptance_tests: `pytest src/tests/test_swing_retrain_automation.py src/tests/test_swing_feature_ssot.py`, `recommendation CSV and diagnostics parity`
-- implementation_status: `implemented`
-- root_cause_closure_status: `root_cause_closed`
-- implementation_provenance: `-`
-- repeat_unresolved_escalation: `-`
-- longstanding_non_implement_review: `{"history_window_days": 10, "previous_decision": "attach_existing_family", "previous_implementation_status": "implemented", "previous_route": "performance_optimization_order", "repeat_count": 9, "repeat_key": "order_perf_recommend_update_vectorization", "repeat_signature": "sig:codebase_performance_workorder|swing_daily_recommendation|ops_performance|||recommendation_and_update_kospi_vectorized_membership_checks", "review_disposition": "implemented_with_provenance"}`
-- longstanding_non_implement_action: `-`
-- structural_blocker_escalation: `-`
-- automation_reentry: Next postclose codebase performance source report must keep implementation_status=implemented and parity tests green.
-
-실행 기준:
-
-- 기존 threshold family의 source metric/provenance를 보강한다.
-- 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
-- family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
-
-### 104. `order_swing_holding_exit_contract_gap_review`
-
-- title: swing holding/exit contract gap review
-- decision: `attach_existing_family`
-- decision_reason: instrumentation/report/provenance implementation status is implemented; keep the order as existing-family source evidence instead of re-implementing
-- source_report_type: `swing_improvement_automation`
-- lifecycle_stage: `holding_exit`
-- target_subsystem: `swing_holding_exit`
-- route: `existing_family`
-- mapped_family: `swing_exit_ofi_qi_smoothing`
-- threshold_family: `swing_exit_ofi_qi_smoothing`
-- improvement_type: `lifecycle_contract_gap`
-- confidence: `consensus`
-- priority: `4`
-- runtime_effect: `False`
-- strategy_effect: `False`
-- data_quality_effect: `False`
-- tuning_axis_effect: `False`
-- expected_ev_effect: holding/exit source-quality and structured contract gaps are visible without changing sell logic.
-- evidence: `gap_id=SWING_HOLDING_EXIT_CONTRACT_GAP`, `next_route=code_improvement_workorder`, `reason=holding/exit source quality or prompt/schema contract is not strong enough for runtime use`, `evidence={'stale_missing_ratio': 0.0689, 'holding_exit_unique': 72, 'scalping_prompt_reuse_issue': True, 'ai_parse_fail_count': 0}`, `runtime_effect=false`, `allowed_runtime_apply=false`
-- parity_contract: -
-- next_postclose_metric: holding/exit source-quality and structured contract gaps are visible without changing sell logic.
-- files_likely_touched: `src/engine/swing_lifecycle_audit.py`, `src/engine/ai_prompt_contracts.py`, `src/engine/ai_engine_openai.py`
-- acceptance_tests: `pytest swing lifecycle audit tests`
-- implementation_status: `implemented`
-- root_cause_closure_status: `root_cause_closed`
-- implementation_provenance: `{"actual_order_submitted": false, "allowed_runtime_apply": false, "broker_order_forbidden": true, "runtime_effect": false, "scope": "swing_holding_exit_contract_gap_source_only_review", "source_contract": "swing_lifecycle_contract_gap_v1", "source_fields": ["gap_id", "lifecycle_stage", "next_route", "reason", "evidence"]}`
-- repeat_unresolved_escalation: `-`
-- longstanding_non_implement_review: `{"history_window_days": 10, "previous_decision": "attach_existing_family", "previous_implementation_status": "implemented", "previous_route": "existing_family", "repeat_count": 9, "repeat_key": "order_swing_holding_exit_contract_gap_review", "repeat_signature": "sig:swing_improvement_automation|swing_holding_exit|holding_exit|lifecycle_contract_gap|swing_exit_ofi_qi_smoothing|swing_holding_exit_contract_gap_review", "review_disposition": "implemented_with_provenance"}`
-- longstanding_non_implement_action: `-`
-- structural_blocker_escalation: `-`
-- automation_reentry: Next postclose workorder should preserve implementation_status=implemented and use the source metrics as provenance only.
-
-실행 기준:
-
-- 기존 threshold family의 source metric/provenance를 보강한다.
-- 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
-- family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
-
-### 105. `order_swing_market_regime_sensitivity_review`
-
-- title: swing market regime sensitivity review
-- decision: `attach_existing_family`
-- decision_reason: instrumentation/report/provenance implementation status is implemented; keep the order as existing-family source evidence instead of re-implementing
-- source_report_type: `swing_improvement_automation`
-- lifecycle_stage: `entry`
-- target_subsystem: `swing_entry`
-- route: `existing_family`
-- mapped_family: `swing_market_regime_sensitivity`
-- threshold_family: `swing_market_regime_sensitivity`
-- improvement_type: `threshold_family_input`
-- confidence: `consensus`
-- priority: `4`
-- runtime_effect: `False`
-- strategy_effect: `False`
-- data_quality_effect: `False`
-- tuning_axis_effect: `False`
-- expected_ev_effect: market_regime confirmed-block/prior/pass and missed-entry outcome are visible in the next audit.
-- evidence: `market_regime_block_raw=104`, `market_regime_prior_observed_raw=910`
-- parity_contract: -
-- next_postclose_metric: market_regime confirmed-block/prior/pass and missed-entry outcome are visible in the next audit.
-- files_likely_touched: `src/engine/sniper_state_handlers.py`, `src/engine/swing_lifecycle_audit.py`
-- acceptance_tests: `pytest swing lifecycle audit tests`
-- implementation_status: `implemented`
-- root_cause_closure_status: `root_cause_closed`
-- implementation_provenance: `{"actual_order_submitted": false, "allowed_runtime_apply": false, "broker_order_forbidden": true, "decision_authority": "swing_improvement_automation_source_only", "implemented_scope": "swing_market_regime_sensitivity_source_metric_provenance", "runtime_effect": false, "scope": "swing_market_regime_sensitivity_source_metric_provenance", "source_contract": "swing_market_regime_sensitivity_source_metric_v1", "source_fields": ["market_regime_block", "market_regime_prior_observed", "market_regime_pass", "evidence_quality_counts", "simulation_opportunity"], "source_metric_snapshot": {"evidence_quality_counts": {"None": 28, "blocked_stage_intraday_probe": 81, "counterfactual_after_gap": 10, "probe_capacity_observation": 1194, "risk_off_prior_intraday_probe": 33}, "market_regime_block": 104, "market_regime_pass": 0, "market_regime_prior_observed": 910, "sample_count": 48, "simulation_opportunity": {"avg_net_ret": null, "closed_count": 0, "flat_count": 0, "loser_count": 0, "net_ret_sum": 0.0, "pending_or_blocked_count": 20, "rows": 20, "status_counts": {"PENDING_ENTRY": 20}, "winner_count": 0}}}`
-- repeat_unresolved_escalation: `-`
-- longstanding_non_implement_review: `{"history_window_days": 10, "previous_decision": "attach_existing_family", "previous_implementation_status": "terminal_existing_family_evidence", "previous_route": "existing_family", "repeat_count": 8, "repeat_key": "order_swing_market_regime_sensitivity_review", "repeat_signature": "sig:swing_improvement_automation|swing_entry|entry|threshold_family_input|swing_market_regime_sensitivity|swing_market_regime_sensitivity_review", "review_disposition": "implemented_with_provenance"}`
-- longstanding_non_implement_action: `-`
-- structural_blocker_escalation: `-`
-- automation_reentry: Next postclose workorder should preserve implementation_status=implemented and use the source metrics as provenance only.
-
-실행 기준:
-
-- 기존 threshold family의 source metric/provenance를 보강한다.
-- 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
-- family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
-
-### 106. `order_swing_ofi_qi_stale_or_missing_context`
-
-- title: swing OFI/QI stale or missing context
-- decision: `attach_existing_family`
-- decision_reason: instrumentation/report/provenance implementation status is implemented; keep the order as existing-family source evidence instead of re-implementing
-- source_report_type: `swing_improvement_automation`
-- lifecycle_stage: `entry`
-- target_subsystem: `swing_orderbook_micro_context`
-- route: `existing_family`
-- mapped_family: `swing_entry_ofi_qi_execution_quality`
-- threshold_family: `swing_entry_ofi_qi_execution_quality`
-- improvement_type: `instrumentation`
-- confidence: `consensus`
-- priority: `4`
-- runtime_effect: `False`
-- strategy_effect: `False`
-- data_quality_effect: `False`
-- tuning_axis_effect: `False`
-- expected_ev_effect: stale_missing_ratio decreases while submitted/simulated entry quality remains attributable.
-- evidence: `stale_missing_count=168`, `stale_missing_ratio=0.0689`, `stale_missing_unique_record_count=21`, `stale_missing_reason_counts={'micro_missing': 168, 'micro_not_ready': 100, 'state_insufficient': 100}`, `stale_missing_reason_combination_counts={'micro_missing': 68, 'micro_missing+micro_not_ready+state_insufficient': 100}`, `stale_missing_reason_combination_unique_record_counts={'micro_missing': 1, 'micro_missing+micro_not_ready+state_insufficient': 20}`, `observer_unhealthy_overlap={'observer_unhealthy_total': 0, 'observer_unhealthy_with_other_reason': 0, 'observer_unhealthy_only': 0}`, `scale_in_source_quality={'group': 'scale_in', 'sample_count': 61, 'valid_micro_context_count': 61, 'invalid_micro_context_count': 0, 'invalid_micro_context_unique_record_count': 0, 'invalid_reason_combination_counts': {'micro_missing': 68, 'micro_missing+micro_not_ready+state_insufficient': 100}, 'invalid_reason_combination_unique_record_counts': {'micro_missing': 1, 'micro_missing+micro_not_ready+state_insufficient': 20}, 'observer_unhealthy_overlap': {'observer_unhealthy_total': 0, 'observer_unhealthy_with_other_reason': 0, 'observer_unhealthy_only': 0}, 'invalid_reason_counts_by_group': {}, 'invalid_reason_unique_record_counts_by_group': {}, 'orderbook_micro_reason_counts_by_group': {'ready': 61}, 'observer_missing_reason_counts_by_group': {'ok': 61}, 'source_quality_status_counts_by_group': {'ok': 61}, 'ws_quote_source_counts_by_group': {'last_ws_update_ts': 61}, 'ws_quote_stale_counts_by_group': {'False': 49, 'True': 12}, 'source_quality_blockers': []}`, `entry_source_quality={'group': 'entry', 'sample_count': 2295, 'valid_micro_context_count': 2195, 'invalid_micro_context_count': 100, 'invalid_micro_context_unique_record_count': 20, 'invalid_reason_combination_counts': {'micro_missing': 68, 'micro_missing+micro_not_ready+state_insufficient': 100}, 'invalid_reason_combination_unique_record_counts': {'micro_missing': 1, 'micro_missing+micro_not_ready+state_insufficient': 20}, 'observer_unhealthy_overlap': {'observer_unhealthy_total': 0, 'observer_unhealthy_with_other_reason': 0, 'observer_unhealthy_only': 0}, 'invalid_reason_counts_by_group': {'micro_missing': 100, 'micro_not_ready': 100, 'state_insufficient': 100}, 'invalid_reason_unique_record_counts_by_group': {'micro_missing': 20, 'micro_not_ready': 20, 'state_insufficient': 20}, 'orderbook_micro_reason_counts_by_group': {'ready': 2195, 'insufficient_samples': 100}, 'observer_missing_reason_counts_by_group': {'ok': 2295}, 'source_quality_status_counts_by_group': {'ok': 2195, 'source_quality_blocker': 100}, 'ws_quote_source_counts_by_group': {'missing': 2295}, 'ws_quote_stale_counts_by_group': {'not_available_no_quote_age': 2295}, 'source_quality_blockers': ['entry_ofi_qi_invalid_micro_context']}`
-- parity_contract: -
-- next_postclose_metric: stale_missing_ratio decreases while submitted/simulated entry quality remains attributable.
-- files_likely_touched: `src/engine/sniper_state_handlers.py`, `src/engine/orderbook_stability.py`, `src/engine/swing_lifecycle_audit.py`
-- acceptance_tests: `pytest orderbook stability tests`, `pytest swing lifecycle audit tests`
-- implementation_status: `implemented`
-- root_cause_closure_status: `root_cause_closed`
-- implementation_provenance: `{"actual_order_submitted": false, "allowed_runtime_apply": false, "broker_order_forbidden": true, "group": "entry", "implementation_checks": [{"group": "entry", "missing_keys": [], "name": "ofi_qi_group_root_cause_metric_contract", "required_keys": ["stale_missing_reason_counts_by_group", "stale_missing_reason_unique_record_counts_by_group", "orderbook_micro_reason_counts_by_group", "observer_missing_reason_counts_by_group", "source_quality_status_counts_by_group", "ws_quote_source_counts_by_group", "ws_quote_stale_counts_by_group", "stale_missing_examples"], "status": "pass"}, {"group": "entry", "invalid_micro_context_unique_record_count": 20, "name": "ofi_qi_group_source_quality_breakdown", "source_quality_blockers": ["entry_ofi_qi_invalid_micro_context"], "status": "pass", "valid_micro_context_count": 2195}, {"actual_order_submitted": false, "allowed_runtime_apply": false, "broker_order_forbidden": true, "name": "runtime_authority_contract", "runtime_effect": false, "status": "pass"}], "implemented_scope": "instrumentation_report_provenance_only", "owner": "swing_improvement_automation", "root_cause_closure_status_hint": "root_cause_closed", "root_cause_dimensions": {"observer_missing_reason_counts_by_group": {"ok": 2295}, "orderbook_micro_reason_counts_by_group": {"insufficient_samples": 100, "ready": 2195}, "source_quality_status_counts_by_group": {"ok": 2195, "source_quality_blocker": 100}, "stale_missing_reason_counts_by_group": {"micro_missing": 100, "micro_not_ready": 100, "state_insufficient": 100}, "stale_missing_reason_unique_record_counts_by_group": {"micro_missing": 20, "micro_not_ready": 20, "state_insufficient": 20}, "ws_quote_source_counts_by_group": {"missing": 2295}, "ws_quote_stale_counts_by_group": {"not_available_no_quote_age": 2295}}, "runtime_effect": false, "source_contract": "swing_orderbook_micro_context_v2", "source_quality": {"group": "entry", "invalid_micro_context_count": 100, "invalid_micro_context_unique_record_count": 20, "invalid_reason_combination_counts": {"micro_missing": 68, "micro_missing+micro_not_ready+state_insufficient": 100}, "invalid_reason_combination_unique_record_counts": {"micro_missing": 1, "micro_missing+micro_not_ready+state_insufficient": 20}, "invalid_reason_counts_by_group": {"micro_missing": 100, "micro_not_ready": 100, "state_insufficient": 100}, "invalid_reason_unique_record_counts_by_group": {"micro_missing": 20, "micro_not_ready": 20, "state_insufficient": 20}, "observer_missing_reason_counts_by_group": {"ok": 2295}, "observer_unhealthy_overlap": {"observer_unhealthy_only": 0, "observer_unhealthy_total": 0, "observer_unhealthy_with_other_reason": 0}, "orderbook_micro_reason_counts_by_group": {"insufficient_samples": 100, "ready": 2195}, "sample_count": 2295, "source_quality_blockers": ["entry_ofi_qi_invalid_micro_context"], "source_quality_status_counts_by_group": {"ok": 2195, "source_quality_blocker": 100}, "valid_micro_context_count": 2195, "ws_quote_source_counts_by_group": {"missing": 2295}, "ws_quote_stale_counts_by_group": {"not_available_no_quote_age": 2295}}}`
-- repeat_unresolved_escalation: `-`
-- longstanding_non_implement_review: `-`
-- longstanding_non_implement_action: `-`
-- structural_blocker_escalation: `-`
-- automation_reentry: Next postclose workorder should preserve implementation_status=implemented and use the source metrics as provenance only.
-
-실행 기준:
-
-- 기존 threshold family의 source metric/provenance를 보강한다.
-- 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
-- family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
-
-### 107. `order_swing_scale_in_contract_gap_review`
-
-- title: swing scale-in contract gap review
-- decision: `attach_existing_family`
-- decision_reason: instrumentation/report/provenance implementation status is implemented; keep the order as existing-family source evidence instead of re-implementing
-- source_report_type: `swing_improvement_automation`
-- lifecycle_stage: `scale_in`
-- target_subsystem: `swing_scale_in`
-- route: `existing_family`
-- mapped_family: `swing_scale_in_ofi_qi_confirmation`
-- threshold_family: `swing_scale_in_ofi_qi_confirmation`
-- improvement_type: `lifecycle_contract_gap`
-- confidence: `consensus`
-- priority: `4`
-- runtime_effect: `False`
-- strategy_effect: `False`
-- data_quality_effect: `False`
-- tuning_axis_effect: `False`
-- expected_ev_effect: scale-in post-add outcome coverage and AI contract readiness are tracked as source-only evidence.
-- evidence: `gap_id=SWING_SCALE_IN_CONTRACT_GAP`, `next_route=code_improvement_workorder`, `reason=scale-in AVG_DOWN/PYRAMID outcome and dedicated AI contract are not fully closed`, `evidence={'scale_in_unique': 16, 'post_add_outcomes': {'pending_followup': 34}, 'scale_in_ai_contract_missing': True}`, `runtime_effect=false`, `allowed_runtime_apply=false`
-- parity_contract: -
-- next_postclose_metric: scale-in post-add outcome coverage and AI contract readiness are tracked as source-only evidence.
-- files_likely_touched: `src/engine/swing_lifecycle_audit.py`, `src/engine/sniper_scale_in.py`
-- acceptance_tests: `pytest swing lifecycle audit tests`
-- implementation_status: `implemented`
-- root_cause_closure_status: `root_cause_closed`
-- implementation_provenance: `{"actual_order_submitted": false, "allowed_runtime_apply": false, "broker_order_forbidden": true, "runtime_effect": false, "scope": "swing_scale_in_contract_gap_source_only_review", "source_contract": "swing_lifecycle_contract_gap_v1", "source_fields": ["gap_id", "lifecycle_stage", "next_route", "reason", "evidence"]}`
-- repeat_unresolved_escalation: `-`
-- longstanding_non_implement_review: `{"history_window_days": 10, "previous_decision": "attach_existing_family", "previous_implementation_status": "implemented", "previous_route": "existing_family", "repeat_count": 9, "repeat_key": "order_swing_scale_in_contract_gap_review", "repeat_signature": "sig:swing_improvement_automation|swing_scale_in|scale_in|lifecycle_contract_gap|swing_scale_in_ofi_qi_confirmation|swing_scale_in_contract_gap_review", "review_disposition": "implemented_with_provenance"}`
-- longstanding_non_implement_action: `-`
-- structural_blocker_escalation: `-`
-- automation_reentry: Next postclose workorder should preserve implementation_status=implemented and use the source metrics as provenance only.
-
-실행 기준:
-
-- 기존 threshold family의 source metric/provenance를 보강한다.
-- 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
-- family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
-
-### 108. `order_lifecycle_entry_bucket_chosen_action_no_buy_ai`
+### 97. `order_lifecycle_entry_bucket_chosen_action_no_buy_ai`
 
 - title: LDM entry bucket attribution follow-up: chosen_action=NO_BUY_AI
 - decision: `attach_existing_family`
@@ -4415,7 +3986,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 109. `order_lifecycle_entry_bucket_chosen_action_wait_requote`
+### 98. `order_lifecycle_entry_bucket_chosen_action_wait_requote`
 
 - title: LDM entry bucket attribution follow-up: chosen_action=WAIT_REQUOTE
 - decision: `attach_existing_family`
@@ -4454,7 +4025,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 110. `order_lifecycle_entry_bucket_combo_entry_spot_score_score_60_62_source_scalp_entry_action_decision_snapshot_stale_fresh_liquid`
+### 99. `order_lifecycle_entry_bucket_combo_entry_spot_score_score_60_62_source_scalp_entry_action_decision_snapshot_stale_fresh_liquid`
 
 - title: LDM entry bucket attribution follow-up: combo_entry_spot=score=score_60_62|source=scalp_entry_action_decision_snapshot|stale=fresh|liquidity=liquidity_high|overbought=overbought_normal|time=time_0900_1000
 - decision: `attach_existing_family`
@@ -4493,7 +4064,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 111. `order_lifecycle_entry_bucket_combo_entry_spot_score_score_70p_source_wait6579_ev_cohort_stale_fresh_or_unflagged_liquidity_liq`
+### 100. `order_lifecycle_entry_bucket_combo_entry_spot_score_score_70p_source_wait6579_ev_cohort_stale_fresh_or_unflagged_liquidity_liq`
 
 - title: LDM entry bucket attribution follow-up: combo_entry_spot=score=score_70p|source=wait6579_ev_cohort|stale=fresh_or_unflagged|liquidity=liquidity_high|overbought=overbought_normal|time=time_0900_1000
 - decision: `attach_existing_family`
@@ -4532,7 +4103,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 112. `order_lifecycle_entry_bucket_exit_rule_scalp_hard_stop_pct`
+### 101. `order_lifecycle_entry_bucket_exit_rule_scalp_hard_stop_pct`
 
 - title: LDM entry bucket attribution follow-up: exit_rule=scalp_hard_stop_pct
 - decision: `attach_existing_family`
@@ -4571,7 +4142,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 113. `order_lifecycle_entry_bucket_liquidity_bucket_liquidity_high`
+### 102. `order_lifecycle_entry_bucket_liquidity_bucket_liquidity_high`
 
 - title: LDM entry bucket attribution follow-up: liquidity_bucket=liquidity_high
 - decision: `attach_existing_family`
@@ -4610,7 +4181,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 114. `order_lifecycle_entry_bucket_overbought_bucket_overbought_normal`
+### 103. `order_lifecycle_entry_bucket_overbought_bucket_overbought_normal`
 
 - title: LDM entry bucket attribution follow-up: overbought_bucket=overbought_normal
 - decision: `attach_existing_family`
@@ -4649,7 +4220,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 115. `order_lifecycle_entry_bucket_score_band_score_70p`
+### 104. `order_lifecycle_entry_bucket_score_band_score_70p`
 
 - title: LDM entry bucket attribution follow-up: score_band=score_70p
 - decision: `attach_existing_family`
@@ -4688,358 +4259,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 116. `order_perf_swing_simulation_iteration`
-
-- title: Swing simulation iteration and quote grouping
-- decision: `attach_existing_family`
-- decision_reason: report-only performance implementation is already present in code; keep the order as provenance and validate through regenerated reports/tests instead of re-implementing
-- source_report_type: `codebase_performance_workorder`
-- lifecycle_stage: `ops_performance`
-- target_subsystem: `swing_daily_simulation`
-- route: `performance_optimization_order`
-- mapped_family: `ops_performance_report_only_implemented`
-- threshold_family: `ops_performance_report_only_implemented`
-- improvement_type: `-`
-- confidence: `consensus`
-- priority: `5`
-- runtime_effect: `False`
-- strategy_effect: `False`
-- data_quality_effect: `False`
-- tuning_axis_effect: `False`
-- expected_ev_effect: none_direct_ops_cpu_io_reduction_only
-- evidence: `source_doc_hash=ffb2c2b9d6b8bf251d4f5665f1ea4ead0f680864428241fdcd6119d57f20722f`, `candidate_state=accepted`, `implementation_status=implemented`, `risk_tier=medium`, `runtime_effect=false`, `strategy_effect=false`, `data_quality_effect=false`, `tuning_axis_effect=false`, `parity_contract=selection funnel, lifecycle arms, gate counterfactuals, and runtime funnel summary exact match`
-- parity_contract: selection funnel, lifecycle arms, gate counterfactuals, and runtime funnel summary exact match
-- next_postclose_metric: same report/output parity with lower runtime or CPU/IO overhead
-- files_likely_touched: `src/engine/swing_daily_simulation_report.py`
-- acceptance_tests: `pytest src/tests/test_swing_model_selection_funnel_repair.py`, `swing simulation JSON parity on injected sources`
-- implementation_status: `implemented`
-- root_cause_closure_status: `root_cause_closed`
-- implementation_provenance: `-`
-- repeat_unresolved_escalation: `-`
-- longstanding_non_implement_review: `{"history_window_days": 10, "previous_decision": "attach_existing_family", "previous_implementation_status": "implemented", "previous_route": "performance_optimization_order", "repeat_count": 9, "repeat_key": "order_perf_swing_simulation_iteration", "repeat_signature": "sig:codebase_performance_workorder|swing_daily_simulation|ops_performance|||swing_simulation_iteration_and_quote_grouping", "review_disposition": "implemented_with_provenance"}`
-- longstanding_non_implement_action: `-`
-- structural_blocker_escalation: `-`
-- automation_reentry: Next postclose codebase performance source report must keep implementation_status=implemented and parity tests green.
-
-실행 기준:
-
-- 기존 threshold family의 source metric/provenance를 보강한다.
-- 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
-- family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
-
-### 117. `order_swing_discovery_label_contract_gap_review`
-
-- title: swing discovery label contract gap review
-- decision: `attach_existing_family`
-- decision_reason: instrumentation/report/provenance implementation status is implemented; keep the order as existing-family source evidence instead of re-implementing
-- source_report_type: `swing_improvement_automation`
-- lifecycle_stage: `selection`
-- target_subsystem: `swing_strategy_discovery`
-- route: `existing_family`
-- mapped_family: `-`
-- threshold_family: `-`
-- improvement_type: `lifecycle_contract_gap`
-- confidence: `consensus`
-- priority: `5`
-- runtime_effect: `False`
-- strategy_effect: `False`
-- data_quality_effect: `False`
-- tuning_axis_effect: `False`
-- expected_ev_effect: discovery label maturity and pending quote coverage are visible before EV interpretation.
-- evidence: `gap_id=SWING_DISCOVERY_LABEL_CONTRACT_GAP`, `next_route=source_quality_workorder`, `reason=discovery labels are still pending or below source-quality floor`, `evidence={'pending_future_quote_count': 0, 'sample_state': 'hold_sample', 'closed_count': 0}`, `runtime_effect=false`, `allowed_runtime_apply=false`
-- parity_contract: -
-- next_postclose_metric: discovery label maturity and pending quote coverage are visible before EV interpretation.
-- files_likely_touched: `src/engine/swing_strategy_discovery_label_builder.py`, `src/engine/swing_strategy_discovery_ev_report.py`
-- acceptance_tests: `pytest swing lifecycle audit tests`
-- implementation_status: `implemented`
-- root_cause_closure_status: `root_cause_closed`
-- implementation_provenance: `{"actual_order_submitted": false, "allowed_runtime_apply": false, "broker_order_forbidden": true, "runtime_effect": false, "scope": "swing_discovery_label_contract_gap_source_only_review", "source_contract": "swing_lifecycle_contract_gap_v1", "source_fields": ["gap_id", "lifecycle_stage", "next_route", "reason", "evidence"]}`
-- repeat_unresolved_escalation: `-`
-- longstanding_non_implement_review: `{"history_window_days": 10, "previous_decision": "attach_existing_family", "previous_implementation_status": "implemented", "previous_route": "existing_family", "repeat_count": 9, "repeat_key": "order_swing_discovery_label_contract_gap_review", "repeat_signature": "sig:swing_improvement_automation|swing_strategy_discovery|selection|lifecycle_contract_gap||swing_discovery_label_contract_gap_review", "review_disposition": "implemented_with_provenance"}`
-- longstanding_non_implement_action: `-`
-- structural_blocker_escalation: `-`
-- automation_reentry: Next postclose workorder should preserve implementation_status=implemented and use the source metrics as provenance only.
-
-실행 기준:
-
-- 기존 threshold family의 source metric/provenance를 보강한다.
-- 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
-- family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
-
-### 118. `order_panic_sell_defense_lifecycle_transition_pack`
-
-- title: panic sell defense lifecycle transition pack
-- decision: `attach_existing_family`
-- decision_reason: instrumentation/report/provenance implementation status is implemented_but_waiting_sample; keep the order as existing-family source evidence instead of re-implementing
-- source_report_type: `threshold_cycle_calibration_source_bundle`
-- lifecycle_stage: `holding_exit`
-- target_subsystem: `panic_sell_defense`
-- route: `existing_family`
-- mapped_family: `panic_sell_defense`
-- threshold_family: `panic_sell_defense`
-- improvement_type: `runtime_transition_design`
-- confidence: `consensus`
-- priority: `6`
-- runtime_effect: `False`
-- strategy_effect: `False`
-- data_quality_effect: `False`
-- tuning_axis_effect: `False`
-- expected_ev_effect: Use panic-sell simulation and post-sell rebound evidence to propose threshold/guard changes, then request explicit live-runtime approval without mutating exits automatically.
-- evidence: `panic_state=RECOVERY_WATCH`, `panic_regime_mode=STABILIZING`, `stop_loss_exit_count=0`, `confirmation_eligible_exit_count=0`, `active_sim_probe_positions=10`, `post_sell_rebound_above_sell_10_20m_pct=0.0`, `microstructure_market_risk_state=NEUTRAL`, `microstructure_confirmed_risk_off_advisory=True`, `microstructure_portfolio_local_risk_off_only=False`, `market_breadth_followup_candidate=False`, `source_quality_blockers=[]`, `candidate_status={'panic_entry_freeze_guard': 'report_only_candidate', 'panic_stop_confirmation': 'hold_no_eligible_exit', 'panic_rebound_probe': 'hold_until_recovery_confirmed', 'panic_attribution_pack': 'active_report_only'}`, `allowed_runtime_apply=false`
-- parity_contract: -
-- next_postclose_metric: panic_sell_defense should expose simulation EV, rollback guard, approval artifact status, market/breadth confirmation, and candidate-specific threshold recommendations before any runtime transition.
-- files_likely_touched: `src/engine/panic_sell_defense_report.py`, `src/engine/daily_threshold_cycle_report.py`, `src/engine/runtime_approval_summary.py`, `docs/plan-korStockScanPerformanceOptimization.rebase.md`
-- acceptance_tests: `pytest panic sell defense/report lifecycle tests`, `pytest src/tests/test_build_code_improvement_workorder.py src/tests/test_runtime_approval_summary.py`
-- implementation_status: `implemented_but_waiting_sample`
-- root_cause_closure_status: `implementation_done`
-- implementation_provenance: `{"allowed_runtime_apply": false, "decision_authority": "report_only_source_bundle", "implementation_type": "panic_lifecycle_report_only_source_bundle", "panic_regime_mode": "STABILIZING", "panic_state": "RECOVERY_WATCH", "runtime_effect": false, "source_metric_key": "panic_sell_defense", "source_quality_blockers": [], "source_report_type": "threshold_cycle_calibration_source_bundle"}`
-- repeat_unresolved_escalation: `-`
-- longstanding_non_implement_review: `{"history_window_days": 10, "previous_decision": "attach_existing_family", "previous_implementation_status": "implemented_but_waiting_sample", "previous_route": "existing_family", "repeat_count": 9, "repeat_key": "order_panic_sell_defense_lifecycle_transition_pack", "repeat_signature": "sig:threshold_cycle_calibration_source_bundle|panic_sell_defense|holding_exit|runtime_transition_design|panic_sell_defense|panic_sell_defense_lifecycle_transition_pack", "review_disposition": "implemented_with_provenance"}`
-- longstanding_non_implement_action: `-`
-- structural_blocker_escalation: `-`
-- automation_reentry: Next postclose workorder should preserve implementation_status=implemented_but_waiting_sample and use the source metrics as provenance only.
-
-실행 기준:
-
-- 기존 threshold family의 source metric/provenance를 보강한다.
-- 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
-- family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
-
-### 119. `order_perf_monitor_snapshot_stream_tail`
-
-- title: Monitor snapshot runtime streaming tail read
-- decision: `attach_existing_family`
-- decision_reason: report-only performance implementation is already present in code; keep the order as provenance and validate through regenerated reports/tests instead of re-implementing
-- source_report_type: `codebase_performance_workorder`
-- lifecycle_stage: `ops_performance`
-- target_subsystem: `monitor_snapshot`
-- route: `performance_optimization_order`
-- mapped_family: `ops_performance_report_only_implemented`
-- threshold_family: `ops_performance_report_only_implemented`
-- improvement_type: `-`
-- confidence: `consensus`
-- priority: `6`
-- runtime_effect: `False`
-- strategy_effect: `False`
-- data_quality_effect: `False`
-- tuning_axis_effect: `False`
-- expected_ev_effect: none_direct_ops_cpu_io_reduction_only
-- evidence: `source_doc_hash=ffb2c2b9d6b8bf251d4f5665f1ea4ead0f680864428241fdcd6119d57f20722f`, `candidate_state=accepted`, `implementation_status=implemented`, `risk_tier=low`, `runtime_effect=false`, `strategy_effect=false`, `data_quality_effect=false`, `tuning_axis_effect=false`, `parity_contract=latest parsed snapshot payload and missing/malformed fallback behavior exact match`
-- parity_contract: latest parsed snapshot payload and missing/malformed fallback behavior exact match
-- next_postclose_metric: same report/output parity with lower runtime or CPU/IO overhead
-- files_likely_touched: `src/engine/monitor_snapshot_runtime.py`
-- acceptance_tests: `pytest src/tests/test_log_archive_service.py`, `last valid JSON line parity`
-- implementation_status: `implemented`
-- root_cause_closure_status: `root_cause_closed`
-- implementation_provenance: `-`
-- repeat_unresolved_escalation: `-`
-- longstanding_non_implement_review: `{"history_window_days": 10, "previous_decision": "attach_existing_family", "previous_implementation_status": "implemented", "previous_route": "performance_optimization_order", "repeat_count": 9, "repeat_key": "order_perf_monitor_snapshot_stream_tail", "repeat_signature": "sig:codebase_performance_workorder|monitor_snapshot|ops_performance|||monitor_snapshot_runtime_streaming_tail_read", "review_disposition": "implemented_with_provenance"}`
-- longstanding_non_implement_action: `-`
-- structural_blocker_escalation: `-`
-- automation_reentry: Next postclose codebase performance source report must keep implementation_status=implemented and parity tests green.
-
-실행 기준:
-
-- 기존 threshold family의 source metric/provenance를 보강한다.
-- 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
-- family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
-
-### 120. `order_swing_exit_ofi_qi_smoothing_distribution`
-
-- title: swing exit OFI/QI smoothing distribution
-- decision: `attach_existing_family`
-- decision_reason: instrumentation/report/provenance implementation status is implemented; keep the order as existing-family source evidence instead of re-implementing
-- source_report_type: `swing_improvement_automation`
-- lifecycle_stage: `holding_exit`
-- target_subsystem: `swing_holding_exit`
-- route: `existing_family`
-- mapped_family: `swing_exit_ofi_qi_smoothing`
-- threshold_family: `swing_exit_ofi_qi_smoothing`
-- improvement_type: `threshold_family_input`
-- confidence: `consensus`
-- priority: `6`
-- runtime_effect: `False`
-- strategy_effect: `False`
-- data_quality_effect: `False`
-- tuning_axis_effect: `False`
-- expected_ev_effect: exit smoothing action distribution and post-exit attribution are visible after close.
-- evidence: `exit_smoothing_action_counts={'NO_CHANGE': 68}`
-- parity_contract: -
-- next_postclose_metric: exit smoothing action distribution and post-exit attribution are visible after close.
-- files_likely_touched: `src/engine/sniper_state_handlers.py`, `src/engine/swing_lifecycle_audit.py`
-- acceptance_tests: `pytest OFI smoothing tests`, `pytest swing lifecycle audit tests`
-- implementation_status: `implemented`
-- root_cause_closure_status: `root_cause_closed`
-- implementation_provenance: `{"actual_order_submitted": false, "allowed_runtime_apply": false, "broker_order_forbidden": true, "decision_authority": "swing_improvement_automation_source_only", "implemented_scope": "swing_exit_ofi_qi_smoothing_distribution_source_metric_provenance", "runtime_effect": false, "scope": "swing_exit_ofi_qi_smoothing_distribution_source_metric_provenance", "source_contract": "swing_exit_ofi_qi_smoothing_source_metric_v1", "source_fields": ["exit_smoothing_action_counts", "exit_micro_state_counts", "exit_micro_advice_counts"], "source_metric_snapshot": {"exit_micro_advice_counts": {"MISSING": 68, "RISK_BEARISH": 1, "WAIT_FOR_PULLBACK": 13}, "exit_micro_state_counts": {"bearish": 5, "bullish": 4, "neutral": 73}, "exit_smoothing_action_counts": {"NO_CHANGE": 68}, "sample_count": 68}}`
-- repeat_unresolved_escalation: `-`
-- longstanding_non_implement_review: `{"history_window_days": 10, "previous_decision": "attach_existing_family", "previous_implementation_status": "terminal_existing_family_evidence", "previous_route": "existing_family", "repeat_count": 9, "repeat_key": "order_swing_exit_ofi_qi_smoothing_distribution", "repeat_signature": "sig:swing_improvement_automation|swing_holding_exit|holding_exit|threshold_family_input|swing_exit_ofi_qi_smoothing|swing_exit_ofi_qi_smoothing_distribution", "review_disposition": "implemented_with_provenance"}`
-- longstanding_non_implement_action: `-`
-- structural_blocker_escalation: `-`
-- automation_reentry: Next postclose workorder should preserve implementation_status=implemented and use the source metrics as provenance only.
-
-실행 기준:
-
-- 기존 threshold family의 source metric/provenance를 보강한다.
-- 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
-- family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
-
-### 121. `order_swing_strategy_discovery_source_quality_followup`
-
-- title: swing strategy discovery label/source quality follow-up
-- decision: `attach_existing_family`
-- decision_reason: instrumentation/report/provenance implementation status is implemented; keep the order as existing-family source evidence instead of re-implementing
-- source_report_type: `swing_strategy_discovery_ev`
-- lifecycle_stage: `source_quality`
-- target_subsystem: `swing_strategy_discovery_sim`
-- route: `existing_family`
-- mapped_family: `-`
-- threshold_family: `-`
-- improvement_type: `source_quality_instrumentation`
-- confidence: `consensus`
-- priority: `6`
-- runtime_effect: `False`
-- strategy_effect: `False`
-- data_quality_effect: `False`
-- tuning_axis_effect: `False`
-- expected_ev_effect: Improve discovery label coverage and source attribution before any swing strategy policy promotion is discussed.
-- evidence: `labeled_sample_count=535`, `pending_future_quote_count=4128`, `warnings=['pending_future_quotes', 'clean_tuning_baseline_swing_discovery_lookback_filtered']`, `maturity_status_counts={'pending_future_quotes': 4128, 'matured_no_entry': 1997, 'matured_labeled': 535}`, `decision_authority=swing_sim_exploration_only`, `allowed_runtime_apply=false`
-- parity_contract: -
-- next_postclose_metric: swing_strategy_discovery_ev should reduce pending_future_quotes where matured and keep source-only authority.
-- files_likely_touched: `src/engine/swing_strategy_discovery_label_builder.py`, `src/engine/swing_strategy_discovery_ev_report.py`, `src/engine/swing_sector_theme_source.py`
-- acceptance_tests: `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_swing_strategy_discovery_label_builder.py src/tests/test_swing_strategy_discovery_ev_report.py src/tests/test_swing_sector_theme_source.py`
-- implementation_status: `implemented`
-- root_cause_closure_status: `root_cause_closed`
-- implementation_provenance: `{"allowed_runtime_apply": false, "decision_authority": "swing_sim_exploration_only", "order_id": "order_swing_strategy_discovery_source_quality_followup", "runtime_effect": false, "scope": "source_quality_instrumentation_only"}`
-- repeat_unresolved_escalation: `-`
-- longstanding_non_implement_review: `{"history_window_days": 10, "previous_decision": "attach_existing_family", "previous_implementation_status": "implemented", "previous_route": "existing_family", "repeat_count": 9, "repeat_key": "order_swing_strategy_discovery_source_quality_followup", "repeat_signature": "sig:swing_strategy_discovery_ev|swing_strategy_discovery_sim|source_quality|source_quality_instrumentation||swing_strategy_discovery_label_source_quality_follow_up", "review_disposition": "implemented_with_provenance"}`
-- longstanding_non_implement_action: `-`
-- structural_blocker_escalation: `-`
-- automation_reentry: Next postclose workorder should preserve implementation_status=implemented and use the source metrics as provenance only.
-
-실행 기준:
-
-- 기존 threshold family의 source metric/provenance를 보강한다.
-- 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
-- family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
-
-### 122. `order_panic_buying_source_quality_market_breadth_micro_coverage`
-
-- title: panic buying source-quality market breadth and micro coverage
-- decision: `attach_existing_family`
-- decision_reason: instrumentation/report/provenance implementation status is implemented_source_quality_contract_waiting_sample; keep the order as existing-family source evidence instead of re-implementing
-- source_report_type: `threshold_cycle_calibration_source_bundle`
-- lifecycle_stage: `source_quality`
-- target_subsystem: `panic_buying`
-- route: `existing_family`
-- mapped_family: `-`
-- threshold_family: `-`
-- improvement_type: `source_quality_instrumentation`
-- confidence: `consensus`
-- priority: `7`
-- runtime_effect: `False`
-- strategy_effect: `False`
-- data_quality_effect: `False`
-- tuning_axis_effect: `False`
-- expected_ev_effect: Route market breadth and micro coverage gaps as source-quality blockers before any panic-buying runtime candidate.
-- evidence: `panic_buy_state=NORMAL`, `panic_buy_regime_mode=NORMAL`, `risk_regime_gate_state=normal`, `risk_regime_threshold_mode=dynamic_quantile`, `confirmed_evidence_count=2`, `panic_buy_active_count=0`, `exhaustion_confirmed_count=0`, `tp_counterfactual_count=0`, `tp_like_exit_count=0`, `trailing_winner_count=0`, `market_wide_panic_buy_confirmed=False`, `market_breadth_risk_on_advisory=False`, `missing_orderbook_count=1672`, `missing_trade_aggressor_count=1559`, `source_quality_blockers=['panic_buy_orderbook_collector_coverage_gap']`, `candidate_status={'panic_buy_runner_tp_canary': 'hold_until_confirmed_panic_buy_with_tp_context'}`, `allowed_runtime_apply=false`
-- parity_contract: -
-- next_postclose_metric: panic_buying source-quality blockers must be resolved or explicitly carried before runner TP approval is reviewed.
-- files_likely_touched: `src/engine/panic_buying_report.py`, `src/engine/daily_threshold_cycle_report.py`, `src/engine/runtime_approval_summary.py`, `docs/plan-korStockScanPerformanceOptimization.rebase.md`, `docs/code-improvement-workorders/panic_buying_regime_mode_v2_2026-05-14.md`
-- acceptance_tests: `pytest src/tests/test_panic_buying_report.py`, `pytest src/tests/test_build_code_improvement_workorder.py src/tests/test_runtime_approval_summary.py`
-- implementation_status: `implemented_source_quality_contract_waiting_sample`
-- root_cause_closure_status: `implementation_done`
-- implementation_provenance: `{"allowed_runtime_apply": false, "decision_authority": "report_only_source_bundle", "implementation_type": "panic_lifecycle_report_only_source_bundle", "panic_buy_regime_mode": "NORMAL", "panic_buy_state": "NORMAL", "runtime_effect": false, "source_metric_key": "panic_buying", "source_quality_blockers": ["panic_buy_orderbook_collector_coverage_gap"], "source_report_type": "threshold_cycle_calibration_source_bundle"}`
-- repeat_unresolved_escalation: `-`
-- longstanding_non_implement_review: `{"history_window_days": 10, "previous_decision": "attach_existing_family", "previous_implementation_status": "implemented_source_quality_contract_waiting_sample", "previous_route": "existing_family", "repeat_count": 9, "repeat_key": "order_panic_buying_source_quality_market_breadth_micro_coverage", "repeat_signature": "sig:threshold_cycle_calibration_source_bundle|panic_buying|source_quality|source_quality_instrumentation||panic_buying_source_quality_market_breadth_and_micro_coverage", "review_disposition": "implemented_with_provenance"}`
-- longstanding_non_implement_action: `-`
-- structural_blocker_escalation: `-`
-- automation_reentry: Next postclose workorder should preserve implementation_status=implemented_source_quality_contract_waiting_sample and use the source metrics as provenance only.
-
-실행 기준:
-
-- 기존 threshold family의 source metric/provenance를 보강한다.
-- 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
-- family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
-
-### 123. `order_perf_final_ensemble_records`
-
-- title: Final ensemble scanner records conversion without iterrows
-- decision: `attach_existing_family`
-- decision_reason: report-only performance implementation is already present in code; keep the order as provenance and validate through regenerated reports/tests instead of re-implementing
-- source_report_type: `codebase_performance_workorder`
-- lifecycle_stage: `ops_performance`
-- target_subsystem: `final_ensemble_scanner`
-- route: `performance_optimization_order`
-- mapped_family: `ops_performance_report_only_implemented`
-- threshold_family: `ops_performance_report_only_implemented`
-- improvement_type: `-`
-- confidence: `consensus`
-- priority: `7`
-- runtime_effect: `False`
-- strategy_effect: `False`
-- data_quality_effect: `False`
-- tuning_axis_effect: `False`
-- expected_ev_effect: none_direct_ops_cpu_io_reduction_only
-- evidence: `source_doc_hash=ffb2c2b9d6b8bf251d4f5665f1ea4ead0f680864428241fdcd6119d57f20722f`, `candidate_state=accepted`, `implementation_status=implemented`, `risk_tier=low`, `runtime_effect=false`, `strategy_effect=false`, `data_quality_effect=false`, `tuning_axis_effect=false`, `parity_contract=Code/Name record list, selection count, and diagnostics output exact match`
-- parity_contract: Code/Name record list, selection count, and diagnostics output exact match
-- next_postclose_metric: same report/output parity with lower runtime or CPU/IO overhead
-- files_likely_touched: `src/scanners/final_ensemble_scanner.py`
-- acceptance_tests: `pytest src/tests/test_swing_model_selection_funnel_repair.py`, `V2 CSV pick list parity`
-- implementation_status: `implemented`
-- root_cause_closure_status: `root_cause_closed`
-- implementation_provenance: `-`
-- repeat_unresolved_escalation: `-`
-- longstanding_non_implement_review: `{"history_window_days": 10, "previous_decision": "attach_existing_family", "previous_implementation_status": "implemented", "previous_route": "performance_optimization_order", "repeat_count": 9, "repeat_key": "order_perf_final_ensemble_records", "repeat_signature": "sig:codebase_performance_workorder|final_ensemble_scanner|ops_performance|||final_ensemble_scanner_records_conversion_without_iterrows", "review_disposition": "implemented_with_provenance"}`
-- longstanding_non_implement_action: `-`
-- structural_blocker_escalation: `-`
-- automation_reentry: Next postclose codebase performance source report must keep implementation_status=implemented and parity tests green.
-
-실행 기준:
-
-- 기존 threshold family의 source metric/provenance를 보강한다.
-- 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
-- family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
-
-### 124. `order_swing_strategy_discovery_avoid_bucket_review`
-
-- title: swing strategy discovery avoid bucket report enrichment
-- decision: `attach_existing_family`
-- decision_reason: instrumentation/report/provenance implementation status is implemented; keep the order as existing-family source evidence instead of re-implementing
-- source_report_type: `swing_strategy_discovery_ev`
-- lifecycle_stage: `selection`
-- target_subsystem: `swing_strategy_discovery_sim`
-- route: `existing_family`
-- mapped_family: `-`
-- threshold_family: `-`
-- improvement_type: `analysis_report_provenance`
-- confidence: `consensus`
-- priority: `7`
-- runtime_effect: `False`
-- strategy_effect: `False`
-- data_quality_effect: `False`
-- tuning_axis_effect: `False`
-- expected_ev_effect: Expose avoid buckets as analysis guidance only; do not mutate swing runtime or recommendation_history.
-- evidence: `avoid_bucket_count=16`, `top_surviving_arm=arm05_breakout_conf_trailing`, `runtime_effect=false`
-- parity_contract: -
-- next_postclose_metric: avoid_buckets should include axis/key/sample/EV/downside with enough sample floor to guide later design.
-- files_likely_touched: `src/engine/swing_strategy_discovery_ev_report.py`, `docs/swing-strategy-discovery-sim-v1.md`
-- acceptance_tests: `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_swing_strategy_discovery_ev_report.py src/tests/test_build_code_improvement_workorder.py`
-- implementation_status: `implemented`
-- root_cause_closure_status: `root_cause_closed`
-- implementation_provenance: `{"avoid_bucket_contract_fields": ["axis", "sample_count", "source_quality_adjusted_ev_pct", "downside_p10_pct"], "avoid_bucket_count": 16}`
-- repeat_unresolved_escalation: `-`
-- longstanding_non_implement_review: `{"history_window_days": 10, "previous_decision": "attach_existing_family", "previous_implementation_status": "implemented", "previous_route": "existing_family", "repeat_count": 9, "repeat_key": "order_swing_strategy_discovery_avoid_bucket_review", "repeat_signature": "sig:swing_strategy_discovery_ev|swing_strategy_discovery_sim|selection|analysis_report_provenance||swing_strategy_discovery_avoid_bucket_report_enrichment", "review_disposition": "implemented_with_provenance"}`
-- longstanding_non_implement_action: `-`
-- structural_blocker_escalation: `-`
-- automation_reentry: Next postclose workorder should preserve implementation_status=implemented and use the source metrics as provenance only.
-
-실행 기준:
-
-- 기존 threshold family의 source metric/provenance를 보강한다.
-- 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
-- family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
-
-### 125. `order_pattern_lab_ai_review_lifecycle_bucket_discovery_drift`
+### 105. `order_pattern_lab_ai_review_lifecycle_bucket_discovery_drift`
 
 - title: Pattern Lab AI review follow-up: lifecycle_bucket_discovery_drift
 - decision: `attach_existing_family`
@@ -5078,7 +4298,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 126. `order_conversion_lane_key_lineage_active_arm_0a62bc62bd31f5bb`
+### 106. `order_conversion_lane_key_lineage_active_arm_0a62bc62bd31f5bb`
 
 - title: Conversion lane blocker follow-up: key_lineage active_arm_0a62bc62bd31f5bb
 - decision: `attach_existing_family`
@@ -5117,7 +4337,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 127. `order_conversion_lane_key_lineage_active_arm_0c383886ae3c8de3`
+### 107. `order_conversion_lane_key_lineage_active_arm_0c383886ae3c8de3`
 
 - title: Conversion lane blocker follow-up: key_lineage active_arm_0c383886ae3c8de3
 - decision: `attach_existing_family`
@@ -5156,7 +4376,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 128. `order_conversion_lane_key_lineage_active_arm_518e85a70ac730e3`
+### 108. `order_conversion_lane_key_lineage_active_arm_518e85a70ac730e3`
 
 - title: Conversion lane blocker follow-up: key_lineage active_arm_518e85a70ac730e3
 - decision: `attach_existing_family`
@@ -5195,7 +4415,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 129. `order_conversion_lane_key_lineage_active_arm_5ed5448f4e3ccb60`
+### 109. `order_conversion_lane_key_lineage_active_arm_5ed5448f4e3ccb60`
 
 - title: Conversion lane blocker follow-up: key_lineage active_arm_5ed5448f4e3ccb60
 - decision: `attach_existing_family`
@@ -5234,7 +4454,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 130. `order_conversion_lane_key_lineage_active_arm_82f4bc68bb168a83`
+### 110. `order_conversion_lane_key_lineage_active_arm_82f4bc68bb168a83`
 
 - title: Conversion lane blocker follow-up: key_lineage active_arm_82f4bc68bb168a83
 - decision: `attach_existing_family`
@@ -5273,7 +4493,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 131. `order_conversion_lane_key_lineage_active_arm_d09163dbcf8e6037`
+### 111. `order_conversion_lane_key_lineage_active_arm_d09163dbcf8e6037`
 
 - title: Conversion lane blocker follow-up: key_lineage active_arm_d09163dbcf8e6037
 - decision: `attach_existing_family`
@@ -5312,7 +4532,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 132. `order_conversion_lane_key_lineage_active_arm_da294c8705564eaf`
+### 112. `order_conversion_lane_key_lineage_active_arm_da294c8705564eaf`
 
 - title: Conversion lane blocker follow-up: key_lineage active_arm_da294c8705564eaf
 - decision: `attach_existing_family`
@@ -5351,7 +4571,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 133. `order_conversion_lane_key_lineage_active_seed_0629ba2d0f4dd524`
+### 113. `order_conversion_lane_key_lineage_active_seed_0629ba2d0f4dd524`
 
 - title: Conversion lane blocker follow-up: key_lineage active_seed_0629ba2d0f4dd524
 - decision: `attach_existing_family`
@@ -5390,7 +4610,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 134. `order_conversion_lane_key_lineage_active_seed_06fce89fd3a136e6`
+### 114. `order_conversion_lane_key_lineage_active_seed_06fce89fd3a136e6`
 
 - title: Conversion lane blocker follow-up: key_lineage active_seed_06fce89fd3a136e6
 - decision: `attach_existing_family`
@@ -5429,7 +4649,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 135. `order_conversion_lane_key_lineage_active_seed_0747f150d4c2eab8`
+### 115. `order_conversion_lane_key_lineage_active_seed_0747f150d4c2eab8`
 
 - title: Conversion lane blocker follow-up: key_lineage active_seed_0747f150d4c2eab8
 - decision: `attach_existing_family`
@@ -5468,7 +4688,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 136. `order_conversion_lane_key_lineage_active_seed_07677c2e78c144df`
+### 116. `order_conversion_lane_key_lineage_active_seed_07677c2e78c144df`
 
 - title: Conversion lane blocker follow-up: key_lineage active_seed_07677c2e78c144df
 - decision: `attach_existing_family`
@@ -5507,7 +4727,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 137. `order_conversion_lane_key_lineage_active_seed_0a9736d86332c717`
+### 117. `order_conversion_lane_key_lineage_active_seed_0a9736d86332c717`
 
 - title: Conversion lane blocker follow-up: key_lineage active_seed_0a9736d86332c717
 - decision: `attach_existing_family`
@@ -5546,7 +4766,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 138. `order_conversion_lane_key_lineage_active_seed_0cae3a2115d07d28`
+### 118. `order_conversion_lane_key_lineage_active_seed_0cae3a2115d07d28`
 
 - title: Conversion lane blocker follow-up: key_lineage active_seed_0cae3a2115d07d28
 - decision: `attach_existing_family`
@@ -5585,7 +4805,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 139. `order_conversion_lane_key_lineage_active_seed_102cfe8a5ee6ec9b`
+### 119. `order_conversion_lane_key_lineage_active_seed_102cfe8a5ee6ec9b`
 
 - title: Conversion lane blocker follow-up: key_lineage active_seed_102cfe8a5ee6ec9b
 - decision: `attach_existing_family`
@@ -5624,7 +4844,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 140. `order_conversion_lane_key_lineage_active_seed_1096e7d8ada1ee8a`
+### 120. `order_conversion_lane_key_lineage_active_seed_1096e7d8ada1ee8a`
 
 - title: Conversion lane blocker follow-up: key_lineage active_seed_1096e7d8ada1ee8a
 - decision: `attach_existing_family`
@@ -5663,7 +4883,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 141. `order_conversion_lane_key_lineage_active_seed_109a6ab7807c9624`
+### 121. `order_conversion_lane_key_lineage_active_seed_109a6ab7807c9624`
 
 - title: Conversion lane blocker follow-up: key_lineage active_seed_109a6ab7807c9624
 - decision: `attach_existing_family`
@@ -5702,7 +4922,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 142. `order_conversion_lane_key_lineage_active_seed_117652d76d63ff34`
+### 122. `order_conversion_lane_key_lineage_active_seed_117652d76d63ff34`
 
 - title: Conversion lane blocker follow-up: key_lineage active_seed_117652d76d63ff34
 - decision: `attach_existing_family`
@@ -5741,7 +4961,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 143. `order_conversion_lane_key_lineage_active_seed_120deebc97eec625`
+### 123. `order_conversion_lane_key_lineage_active_seed_120deebc97eec625`
 
 - title: Conversion lane blocker follow-up: key_lineage active_seed_120deebc97eec625
 - decision: `attach_existing_family`
@@ -5780,7 +5000,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 144. `order_conversion_lane_key_lineage_active_seed_1307cd5fa2e96df9`
+### 124. `order_conversion_lane_key_lineage_active_seed_1307cd5fa2e96df9`
 
 - title: Conversion lane blocker follow-up: key_lineage active_seed_1307cd5fa2e96df9
 - decision: `attach_existing_family`
@@ -5819,7 +5039,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 145. `order_conversion_lane_key_lineage_active_seed_15409408ea5eaf12`
+### 125. `order_conversion_lane_key_lineage_active_seed_15409408ea5eaf12`
 
 - title: Conversion lane blocker follow-up: key_lineage active_seed_15409408ea5eaf12
 - decision: `attach_existing_family`
@@ -5862,7 +5082,287 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 
 아래 항목은 source order로 분류됐지만 selected implementation order에는 포함되지 않았다. 재작업 지시 시 `decision`, `decision_reason`, `runtime_effect`를 먼저 재판정한다.
 
-### N1. `order_swing_pattern_lab_deepseek_entry_no_submissions`
+### N1. `order_perf_buy_funnel_json_scan`
+
+- title: BUY funnel sentinel field scan without repeated json.dumps
+- decision: `attach_existing_family`
+- decision_reason: report-only performance implementation is already present in code; keep the order as provenance and validate through regenerated reports/tests instead of re-implementing
+- source_report_type: `codebase_performance_workorder`
+- lifecycle_stage: `ops_performance`
+- target_subsystem: `buy_funnel_sentinel`
+- runtime_effect: `False`
+- allowed_runtime_apply: `False`
+- implementation_status: `implemented`
+- files_likely_touched: `src/engine/buy_funnel_sentinel.py`
+- acceptance_tests: `pytest src/tests/test_buy_funnel_sentinel.py`, `BUY Sentinel classification parity on same raw/cache input`
+
+### N2. `order_latency_guard_miss_ev_recovery`
+
+- title: latency guard miss EV recovery
+- decision: `attach_existing_family`
+- decision_reason: instrumentation/provenance contract is already implemented; keep as report source for the existing family
+- source_report_type: `scalping_pattern_lab_automation`
+- lifecycle_stage: `-`
+- target_subsystem: `runtime_instrumentation`
+- runtime_effect: `False`
+- allowed_runtime_apply: `False`
+- implementation_status: `implemented_but_waiting_sample`
+- files_likely_touched: `src/engine/sniper_performance_tuning_report.py`, `src/engine/daily_threshold_cycle_report.py`
+- acceptance_tests: `pytest relevant report/threshold tests`, `runtime_effect remains false until a separate implementation order is completed`, `daily EV report includes the order summary`
+
+### N3. `order_perf_daily_report_bulk_history`
+
+- title: Daily report market snapshot bulk history query
+- decision: `attach_existing_family`
+- decision_reason: report-only performance implementation is already present in code; keep the order as provenance and validate through regenerated reports/tests instead of re-implementing
+- source_report_type: `codebase_performance_workorder`
+- lifecycle_stage: `ops_performance`
+- target_subsystem: `daily_report`
+- runtime_effect: `False`
+- allowed_runtime_apply: `False`
+- implementation_status: `implemented`
+- files_likely_touched: `src/engine/daily_report_service.py`
+- acceptance_tests: `pytest src/tests/test_daily_report_service.py src/tests/test_daily_report.py`, `daily report output parity on injected DB/model fixture`
+
+### N4. `order_perf_daily_report_engine_singleton`
+
+- title: Daily report SQLAlchemy engine singleton
+- decision: `attach_existing_family`
+- decision_reason: report-only performance implementation is already present in code; keep the order as provenance and validate through regenerated reports/tests instead of re-implementing
+- source_report_type: `codebase_performance_workorder`
+- lifecycle_stage: `ops_performance`
+- target_subsystem: `daily_report`
+- runtime_effect: `False`
+- allowed_runtime_apply: `False`
+- implementation_status: `implemented`
+- files_likely_touched: `src/engine/daily_report_service.py`
+- acceptance_tests: `pytest src/tests/test_daily_report_service.py src/tests/test_daily_report.py`, `engine creation count regression test`
+
+### N5. `order_swing_gatekeeper_reject_threshold_review`
+
+- title: swing gatekeeper reject threshold review
+- decision: `attach_existing_family`
+- decision_reason: instrumentation/report/provenance implementation status is implemented; keep the order as existing-family source evidence instead of re-implementing
+- source_report_type: `swing_improvement_automation`
+- lifecycle_stage: `entry`
+- target_subsystem: `swing_entry`
+- runtime_effect: `False`
+- allowed_runtime_apply: `False`
+- implementation_status: `implemented`
+- files_likely_touched: `src/engine/sniper_state_handlers.py`, `src/engine/swing_lifecycle_audit.py`
+- acceptance_tests: `pytest swing lifecycle audit tests`, `pytest state handler fast signatures`
+
+### N6. `order_swing_pattern_lab_deepseek_scale_in_events_observed`
+
+- title: Scale-in events observed for swing positions
+- decision: `attach_existing_family`
+- decision_reason: instrumentation/report/provenance implementation status is implemented; keep the order as existing-family source evidence instead of re-implementing
+- source_report_type: `swing_pattern_lab_automation`
+- lifecycle_stage: `scale_in`
+- target_subsystem: `swing_scale_in`
+- runtime_effect: `False`
+- allowed_runtime_apply: `False`
+- implementation_status: `implemented`
+- files_likely_touched: `src/engine/swing_lifecycle_audit.py`, `src/engine/swing_selection_funnel_report.py`, `src/model/common_v2.py`
+- acceptance_tests: `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_swing_model_selection_funnel_repair.py`, `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_deepseek_swing_pattern_lab.py`
+
+### N7. `order_perf_recommend_update_vectorization`
+
+- title: Recommendation and update_kospi vectorized membership checks
+- decision: `attach_existing_family`
+- decision_reason: report-only performance implementation is already present in code; keep the order as provenance and validate through regenerated reports/tests instead of re-implementing
+- source_report_type: `codebase_performance_workorder`
+- lifecycle_stage: `ops_performance`
+- target_subsystem: `swing_daily_recommendation`
+- runtime_effect: `False`
+- allowed_runtime_apply: `False`
+- implementation_status: `implemented`
+- files_likely_touched: `src/model/recommend_daily_v2.py`, `src/utils/update_kospi.py`
+- acceptance_tests: `pytest src/tests/test_swing_retrain_automation.py src/tests/test_swing_feature_ssot.py`, `recommendation CSV and diagnostics parity`
+
+### N8. `order_swing_holding_exit_contract_gap_review`
+
+- title: swing holding/exit contract gap review
+- decision: `attach_existing_family`
+- decision_reason: instrumentation/report/provenance implementation status is implemented; keep the order as existing-family source evidence instead of re-implementing
+- source_report_type: `swing_improvement_automation`
+- lifecycle_stage: `holding_exit`
+- target_subsystem: `swing_holding_exit`
+- runtime_effect: `False`
+- allowed_runtime_apply: `False`
+- implementation_status: `implemented`
+- files_likely_touched: `src/engine/swing_lifecycle_audit.py`, `src/engine/ai_prompt_contracts.py`, `src/engine/ai_engine_openai.py`
+- acceptance_tests: `pytest swing lifecycle audit tests`
+
+### N9. `order_swing_market_regime_sensitivity_review`
+
+- title: swing market regime sensitivity review
+- decision: `attach_existing_family`
+- decision_reason: instrumentation/report/provenance implementation status is implemented; keep the order as existing-family source evidence instead of re-implementing
+- source_report_type: `swing_improvement_automation`
+- lifecycle_stage: `entry`
+- target_subsystem: `swing_entry`
+- runtime_effect: `False`
+- allowed_runtime_apply: `False`
+- implementation_status: `implemented`
+- files_likely_touched: `src/engine/sniper_state_handlers.py`, `src/engine/swing_lifecycle_audit.py`
+- acceptance_tests: `pytest swing lifecycle audit tests`
+
+### N10. `order_swing_ofi_qi_stale_or_missing_context`
+
+- title: swing OFI/QI stale or missing context
+- decision: `attach_existing_family`
+- decision_reason: instrumentation/report/provenance implementation status is implemented; keep the order as existing-family source evidence instead of re-implementing
+- source_report_type: `swing_improvement_automation`
+- lifecycle_stage: `entry`
+- target_subsystem: `swing_orderbook_micro_context`
+- runtime_effect: `False`
+- allowed_runtime_apply: `False`
+- implementation_status: `implemented`
+- files_likely_touched: `src/engine/sniper_state_handlers.py`, `src/engine/orderbook_stability.py`, `src/engine/swing_lifecycle_audit.py`
+- acceptance_tests: `pytest orderbook stability tests`, `pytest swing lifecycle audit tests`
+
+### N11. `order_swing_scale_in_contract_gap_review`
+
+- title: swing scale-in contract gap review
+- decision: `attach_existing_family`
+- decision_reason: instrumentation/report/provenance implementation status is implemented; keep the order as existing-family source evidence instead of re-implementing
+- source_report_type: `swing_improvement_automation`
+- lifecycle_stage: `scale_in`
+- target_subsystem: `swing_scale_in`
+- runtime_effect: `False`
+- allowed_runtime_apply: `False`
+- implementation_status: `implemented`
+- files_likely_touched: `src/engine/swing_lifecycle_audit.py`, `src/engine/sniper_scale_in.py`
+- acceptance_tests: `pytest swing lifecycle audit tests`
+
+### N12. `order_perf_swing_simulation_iteration`
+
+- title: Swing simulation iteration and quote grouping
+- decision: `attach_existing_family`
+- decision_reason: report-only performance implementation is already present in code; keep the order as provenance and validate through regenerated reports/tests instead of re-implementing
+- source_report_type: `codebase_performance_workorder`
+- lifecycle_stage: `ops_performance`
+- target_subsystem: `swing_daily_simulation`
+- runtime_effect: `False`
+- allowed_runtime_apply: `False`
+- implementation_status: `implemented`
+- files_likely_touched: `src/engine/swing_daily_simulation_report.py`
+- acceptance_tests: `pytest src/tests/test_swing_model_selection_funnel_repair.py`, `swing simulation JSON parity on injected sources`
+
+### N13. `order_swing_discovery_label_contract_gap_review`
+
+- title: swing discovery label contract gap review
+- decision: `attach_existing_family`
+- decision_reason: instrumentation/report/provenance implementation status is implemented; keep the order as existing-family source evidence instead of re-implementing
+- source_report_type: `swing_improvement_automation`
+- lifecycle_stage: `selection`
+- target_subsystem: `swing_strategy_discovery`
+- runtime_effect: `False`
+- allowed_runtime_apply: `False`
+- implementation_status: `implemented`
+- files_likely_touched: `src/engine/swing_strategy_discovery_label_builder.py`, `src/engine/swing_strategy_discovery_ev_report.py`
+- acceptance_tests: `pytest swing lifecycle audit tests`
+
+### N14. `order_panic_sell_defense_lifecycle_transition_pack`
+
+- title: panic sell defense lifecycle transition pack
+- decision: `attach_existing_family`
+- decision_reason: instrumentation/report/provenance implementation status is implemented_but_waiting_sample; keep the order as existing-family source evidence instead of re-implementing
+- source_report_type: `threshold_cycle_calibration_source_bundle`
+- lifecycle_stage: `holding_exit`
+- target_subsystem: `panic_sell_defense`
+- runtime_effect: `False`
+- allowed_runtime_apply: `False`
+- implementation_status: `implemented_but_waiting_sample`
+- files_likely_touched: `src/engine/panic_sell_defense_report.py`, `src/engine/daily_threshold_cycle_report.py`, `src/engine/runtime_approval_summary.py`, `docs/plan-korStockScanPerformanceOptimization.rebase.md`
+- acceptance_tests: `pytest panic sell defense/report lifecycle tests`, `pytest src/tests/test_build_code_improvement_workorder.py src/tests/test_runtime_approval_summary.py`
+
+### N15. `order_perf_monitor_snapshot_stream_tail`
+
+- title: Monitor snapshot runtime streaming tail read
+- decision: `attach_existing_family`
+- decision_reason: report-only performance implementation is already present in code; keep the order as provenance and validate through regenerated reports/tests instead of re-implementing
+- source_report_type: `codebase_performance_workorder`
+- lifecycle_stage: `ops_performance`
+- target_subsystem: `monitor_snapshot`
+- runtime_effect: `False`
+- allowed_runtime_apply: `False`
+- implementation_status: `implemented`
+- files_likely_touched: `src/engine/monitor_snapshot_runtime.py`
+- acceptance_tests: `pytest src/tests/test_log_archive_service.py`, `last valid JSON line parity`
+
+### N16. `order_swing_exit_ofi_qi_smoothing_distribution`
+
+- title: swing exit OFI/QI smoothing distribution
+- decision: `attach_existing_family`
+- decision_reason: instrumentation/report/provenance implementation status is implemented; keep the order as existing-family source evidence instead of re-implementing
+- source_report_type: `swing_improvement_automation`
+- lifecycle_stage: `holding_exit`
+- target_subsystem: `swing_holding_exit`
+- runtime_effect: `False`
+- allowed_runtime_apply: `False`
+- implementation_status: `implemented`
+- files_likely_touched: `src/engine/sniper_state_handlers.py`, `src/engine/swing_lifecycle_audit.py`
+- acceptance_tests: `pytest OFI smoothing tests`, `pytest swing lifecycle audit tests`
+
+### N17. `order_swing_strategy_discovery_source_quality_followup`
+
+- title: swing strategy discovery label/source quality follow-up
+- decision: `attach_existing_family`
+- decision_reason: instrumentation/report/provenance implementation status is implemented; keep the order as existing-family source evidence instead of re-implementing
+- source_report_type: `swing_strategy_discovery_ev`
+- lifecycle_stage: `source_quality`
+- target_subsystem: `swing_strategy_discovery_sim`
+- runtime_effect: `False`
+- allowed_runtime_apply: `False`
+- implementation_status: `implemented`
+- files_likely_touched: `src/engine/swing_strategy_discovery_label_builder.py`, `src/engine/swing_strategy_discovery_ev_report.py`, `src/engine/swing_sector_theme_source.py`
+- acceptance_tests: `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_swing_strategy_discovery_label_builder.py src/tests/test_swing_strategy_discovery_ev_report.py src/tests/test_swing_sector_theme_source.py`
+
+### N18. `order_panic_buying_source_quality_market_breadth_micro_coverage`
+
+- title: panic buying source-quality market breadth and micro coverage
+- decision: `attach_existing_family`
+- decision_reason: instrumentation/report/provenance implementation status is implemented_source_quality_contract_waiting_sample; keep the order as existing-family source evidence instead of re-implementing
+- source_report_type: `threshold_cycle_calibration_source_bundle`
+- lifecycle_stage: `source_quality`
+- target_subsystem: `panic_buying`
+- runtime_effect: `False`
+- allowed_runtime_apply: `False`
+- implementation_status: `implemented_source_quality_contract_waiting_sample`
+- files_likely_touched: `src/engine/panic_buying_report.py`, `src/engine/daily_threshold_cycle_report.py`, `src/engine/runtime_approval_summary.py`, `docs/plan-korStockScanPerformanceOptimization.rebase.md`, `docs/code-improvement-workorders/panic_buying_regime_mode_v2_2026-05-14.md`
+- acceptance_tests: `pytest src/tests/test_panic_buying_report.py`, `pytest src/tests/test_build_code_improvement_workorder.py src/tests/test_runtime_approval_summary.py`
+
+### N19. `order_perf_final_ensemble_records`
+
+- title: Final ensemble scanner records conversion without iterrows
+- decision: `attach_existing_family`
+- decision_reason: report-only performance implementation is already present in code; keep the order as provenance and validate through regenerated reports/tests instead of re-implementing
+- source_report_type: `codebase_performance_workorder`
+- lifecycle_stage: `ops_performance`
+- target_subsystem: `final_ensemble_scanner`
+- runtime_effect: `False`
+- allowed_runtime_apply: `False`
+- implementation_status: `implemented`
+- files_likely_touched: `src/scanners/final_ensemble_scanner.py`
+- acceptance_tests: `pytest src/tests/test_swing_model_selection_funnel_repair.py`, `V2 CSV pick list parity`
+
+### N20. `order_swing_strategy_discovery_avoid_bucket_review`
+
+- title: swing strategy discovery avoid bucket report enrichment
+- decision: `attach_existing_family`
+- decision_reason: instrumentation/report/provenance implementation status is implemented; keep the order as existing-family source evidence instead of re-implementing
+- source_report_type: `swing_strategy_discovery_ev`
+- lifecycle_stage: `selection`
+- target_subsystem: `swing_strategy_discovery_sim`
+- runtime_effect: `False`
+- allowed_runtime_apply: `False`
+- implementation_status: `implemented`
+- files_likely_touched: `src/engine/swing_strategy_discovery_ev_report.py`, `docs/swing-strategy-discovery-sim-v1.md`
+- acceptance_tests: `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_swing_strategy_discovery_ev_report.py src/tests/test_build_code_improvement_workorder.py`
+
+### N21. `order_swing_pattern_lab_deepseek_entry_no_submissions`
 
 - title: All selected candidates failed to reach order submission
 - decision: `design_family_candidate`
@@ -5876,7 +5376,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - files_likely_touched: `src/engine/swing_lifecycle_audit.py`, `src/engine/swing_selection_funnel_report.py`, `src/model/common_v2.py`
 - acceptance_tests: `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_swing_model_selection_funnel_repair.py`, `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_deepseek_swing_pattern_lab.py`
 
-### N2. `order_budget_pass_without_submit`
+### N22. `order_budget_pass_without_submit`
 
 - title: Budget pass without submit
 - decision: `design_family_candidate`
@@ -5890,7 +5390,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - files_likely_touched: `src/engine/daily_threshold_cycle_report.py`
 - acceptance_tests: `pytest relevant report/threshold tests`, `runtime_effect remains false until a separate implementation order is completed`, `daily EV report includes the order summary`
 
-### N3. `order_liquidity_gate_miss_ev_recovery`
+### N23. `order_liquidity_gate_miss_ev_recovery`
 
 - title: liquidity gate miss EV recovery
 - decision: `design_family_candidate`
@@ -5904,7 +5404,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - files_likely_touched: `src/engine/daily_threshold_cycle_report.py`, `src/engine/sniper_state_handlers.py`
 - acceptance_tests: `pytest relevant report/threshold tests`, `runtime_effect remains false until a separate implementation order is completed`, `daily EV report includes the order summary`
 
-### N4. `order_swing_ai_contract_structured_output_eval`
+### N24. `order_swing_ai_contract_structured_output_eval`
 
 - title: swing AI contract structured output eval
 - decision: `design_family_candidate`
@@ -5918,7 +5418,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - files_likely_touched: `src/engine/ai_prompt_contracts.py`, `src/engine/ai_engine_openai.py`, `src/engine/ai_response_contracts.py`
 - acceptance_tests: `pytest OpenAI transport/schema tests`, `pytest swing lifecycle audit tests`
 
-### N5. `order_overbought_gate_miss_ev_recovery`
+### N25. `order_overbought_gate_miss_ev_recovery`
 
 - title: overbought gate miss EV recovery
 - decision: `design_family_candidate`
@@ -5932,7 +5432,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - files_likely_touched: `src/engine/daily_threshold_cycle_report.py`, `src/engine/sniper_state_handlers.py`
 - acceptance_tests: `pytest relevant report/threshold tests`, `runtime_effect remains false until a separate implementation order is completed`, `daily EV report includes the order summary`
 
-### N6. `order_ai_threshold_miss_ev_recovery`
+### N26. `order_ai_threshold_miss_ev_recovery`
 
 - title: AI threshold miss EV recovery
 - decision: `defer_evidence`
@@ -5946,7 +5446,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - files_likely_touched: `src/engine/daily_threshold_cycle_report.py`, `src/engine/sniper_missed_entry_counterfactual.py`
 - acceptance_tests: `pytest relevant report/threshold tests`, `runtime_effect remains false until a separate implementation order is completed`, `daily EV report includes the order summary`
 
-### N7. `order_swing_pattern_lab_deepseek_ofi_qi_smoothing_review`
+### N27. `order_swing_pattern_lab_deepseek_ofi_qi_smoothing_review`
 
 - title: OFI/QI exit smoothing action distribution
 - decision: `defer_evidence`
@@ -5960,7 +5460,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - files_likely_touched: `src/engine/swing_lifecycle_audit.py`, `src/engine/swing_selection_funnel_report.py`, `src/model/common_v2.py`
 - acceptance_tests: `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_swing_model_selection_funnel_repair.py`, `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_deepseek_swing_pattern_lab.py`
 
-### N8. `order_partial_only_표류_전용_timeout_report_only`
+### N28. `order_partial_only_표류_전용_timeout_report_only`
 
 - title: partial-only 표류 전용 timeout report-only
 - decision: `defer_evidence`
@@ -5974,7 +5474,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - files_likely_touched: `src/engine/daily_threshold_cycle_report.py`, `src/engine/sniper_state_handlers.py`
 - acceptance_tests: `pytest relevant report/threshold tests`, `runtime_effect remains false until a separate implementation order is completed`, `daily EV report includes the order summary`
 
-### N9. `order_split_entry_rebase_수량_정합성_report_only_감사`
+### N29. `order_split_entry_rebase_수량_정합성_report_only_감사`
 
 - title: split-entry rebase 수량 정합성 report-only 감사
 - decision: `defer_evidence`
@@ -5988,7 +5488,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - files_likely_touched: `src/engine/daily_threshold_cycle_report.py`, `src/engine/sniper_state_handlers.py`
 - acceptance_tests: `pytest relevant report/threshold tests`, `runtime_effect remains false until a separate implementation order is completed`, `daily EV report includes the order summary`
 
-### N10. `order_동일_종목_split_entry_soft_stop_재진입_cooldown_report_only`
+### N30. `order_동일_종목_split_entry_soft_stop_재진입_cooldown_report_only`
 
 - title: 동일 종목 split-entry soft-stop 재진입 cooldown report-only
 - decision: `defer_evidence`
@@ -6002,7 +5502,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - files_likely_touched: `src/engine/daily_threshold_cycle_report.py`, `src/engine/sniper_state_handlers.py`
 - acceptance_tests: `pytest relevant report/threshold tests`, `runtime_effect remains false until a separate implementation order is completed`, `daily EV report includes the order summary`
 
-### N11. `order_perf_kiwoom_orders_http_session_review`
+### N31. `order_perf_kiwoom_orders_http_session_review`
 
 - title: Kiwoom orders HTTP session reuse manual review
 - decision: `defer_evidence`
@@ -6016,7 +5516,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - files_likely_touched: `src/engine/kiwoom_orders.py`
 - acceptance_tests: `pytest src/tests/test_kiwoom_orders.py src/tests/test_sniper_scale_in.py`
 
-### N12. `order_perf_config_cache_scope_review`
+### N32. `order_perf_config_cache_scope_review`
 
 - title: Config cache scope review
 - decision: `defer_evidence`
@@ -6030,7 +5530,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - files_likely_touched: `src/utils/constants.py`, `src/utils/kiwoom_utils.py`
 - acceptance_tests: `pytest config/import smoke tests`
 
-### N13. `order_partial_fallback_확대_직후_즉시_재평가_report_only`
+### N33. `order_partial_fallback_확대_직후_즉시_재평가_report_only`
 
 - title: partial → fallback 확대 직후 즉시 재평가 report-only
 - decision: `reject`
@@ -6044,7 +5544,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - files_likely_touched: `src/engine/daily_threshold_cycle_report.py`, `src/engine/sniper_state_handlers.py`
 - acceptance_tests: `pytest relevant report/threshold tests`, `runtime_effect remains false until a separate implementation order is completed`, `daily EV report includes the order summary`
 
-### N14. `order_perf_kiwoom_ws_tick_parse_fastpath`
+### N34. `order_perf_kiwoom_ws_tick_parse_fastpath`
 
 - title: Kiwoom websocket tick parsing fast path
 - decision: `reject`
@@ -6058,7 +5558,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - files_likely_touched: `src/engine/kiwoom_websocket.py`
 - acceptance_tests: `pytest websocket parsing/data-quality tests`
 
-### N15. `order_perf_raw_event_suppression_out_of_scope`
+### N35. `order_perf_raw_event_suppression_out_of_scope`
 
 - title: Raw pipeline event suppression out of scope
 - decision: `reject`

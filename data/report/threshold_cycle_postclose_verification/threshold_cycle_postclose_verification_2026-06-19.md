@@ -147,13 +147,16 @@
 
 ## LDM Hypothesis Parent Refinement
 - status: `pass`
-- input/consumed: `0` / `0`
-- closure_counts: `{}`
+- input/consumed: `3` / `3`
+- derived input/consumed: `3` / `3`
+- derived_contract_drift_recompute_consumed: `True`
+- closure_counts: `{'new_parent_candidate_created': 1, 'rare_observation_only_budget_capped': 2}`
 - missing: `[]`
 - warnings: `[]`
+- contract_drift: `{'candidate_feature_event_count': 1723, 'recomputable_match_count': 1723, 'recomputable_hypothesis_ids': ['ldm_hypothesis_00d0b765311ad7aa', 'ldm_hypothesis_711caa66c89b3f51', 'ldm_hypothesis_e04e4d815fd8d0f9'], 'runtime_matched_event_count': 0}`
 - diagnosis_missing_warning_input_ids: `[]`
 - diagnosis_missing_fail_input_ids: `[]`
-- diagnosed_repeated_input_ids: `[]`
+- diagnosed_repeated_input_ids: `['ldm_refinement_6c7edc416c7279ba', 'ldm_refinement_1e1f31ad8abaffd1', 'ldm_refinement_1d39f32fcdbc5e3d']`
 - runtime_authority_violation_input_ids: `[]`
 
 ## Active Sim Priority Handoff
@@ -161,7 +164,7 @@
 - active_seed_ids: `['active_seed_03c539e6527cdda2', 'active_seed_120deebc97eec625', 'active_seed_136f942c5ddd1131', 'active_seed_306f0733aa5e1369', 'active_seed_62704d5ee63d94c3', 'active_seed_7cf1c198fc1e5246', 'active_seed_a0e7fe5858bd147e', 'active_seed_b99a2dea7aac2a83', 'active_seed_e0791b824b3ee4ba', 'active_seed_f2db9775052c4d8d']`
 - observed_seed_ids: `['active_seed_03c539e6527cdda2', 'active_seed_136f942c5ddd1131']`
 - missing: `[]`
-- warnings: `['active_sim_priority_preopen_handoff_pending']`
+- warnings: `['swing_active_arm_priority_runtime_observation_missing']`
 - match_absence_diagnosis: `not_applicable`
 - match_absence_reason: `active_priority_observed_or_no_active_priority`
 - candidate_prefix_count: `1723`
@@ -205,15 +208,15 @@
 - interpretation: `stage hook implementation-ready orders propagated to code improvement workorder`
 
 ## Bottom Rebound Sim Handoff
-- status: `not_applicable`
-- included: `False`
-- source_rows: `0`
-- selected_candidate_count: `0`
-- arm_count: `0`
-- persisted_candidate_count: `0`
-- persisted_arm_count: `0`
+- status: `pass`
+- included: `True`
+- source_rows: `40`
+- selected_candidate_count: `35`
+- arm_count: `105`
+- persisted_candidate_count: `35`
+- persisted_arm_count: `105`
 - missing: `[]`
-- interpretation: `bottom_rebound source was absent or blocked; safe-pool-only swing sim path applies`
+- interpretation: `bottom_rebound source candidates were selected, armed, and persisted for label/EV handoff`
 
 ## Runtime Gap Provenance
 - active_gap_count: `0`
@@ -221,11 +224,11 @@
 - gap_affected_handoff_count: `0`
 
 ## Workorder Snapshot
-- generation_id: `2026-06-19-9f28021286b9`
-- source_hash: `9f28021286b91bef056950f5d72965cd194920ca75743afcd5c90e4eca3e64ae`
+- generation_id: `2026-06-19-3507fddd7b3a`
+- source_hash: `3507fddd7b3ad02a7f8b4928083f6442529eadddb656f48f825f8e4afa66c597`
 - snapshot_status: `source_changed_with_lineage`
-- previous_generation_id: `2026-06-19-4f41be7efa3b`
-- previous_source_hash: `4f41be7efa3b0940424759b5ce06b5552a20506a803a84e9cb6d22243a0dc05d`
+- previous_generation_id: `2026-06-19-9f28021286b9`
+- previous_source_hash: `9f28021286b91bef056950f5d72965cd194920ca75743afcd5c90e4eca3e64ae`
 - new_order_ids: `[]`
-- removed_order_ids: `[]`
+- removed_order_ids: `['order_latency_guard_miss_ev_recovery', 'order_panic_buying_source_quality_market_breadth_micro_coverage', 'order_panic_sell_defense_lifecycle_transition_pack', 'order_perf_buy_funnel_json_scan', 'order_perf_daily_report_bulk_history', 'order_perf_daily_report_engine_singleton', 'order_perf_final_ensemble_records', 'order_perf_monitor_snapshot_stream_tail', 'order_perf_recommend_update_vectorization', 'order_perf_swing_simulation_iteration', 'order_swing_discovery_label_contract_gap_review', 'order_swing_exit_ofi_qi_smoothing_distribution', 'order_swing_gatekeeper_reject_threshold_review', 'order_swing_holding_exit_contract_gap_review', 'order_swing_market_regime_sensitivity_review', 'order_swing_ofi_qi_stale_or_missing_context', 'order_swing_pattern_lab_deepseek_scale_in_events_observed', 'order_swing_scale_in_contract_gap_review', 'order_swing_strategy_discovery_avoid_bucket_review', 'order_swing_strategy_discovery_source_quality_followup']`
 - decision_changed_order_ids: `[]`

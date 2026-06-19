@@ -242,6 +242,78 @@ def test_ldm_refinement_pressure_is_consumed_without_hypothesis_seed_fragmentati
     assert seeds[0]["ldm_refinement_pressure_summary"]["input_count"] == 1
 
 
+def test_ldm_refinement_pressure_preserves_derived_contract_drift_provenance(tmp_path, monkeypatch):
+    refinement_dir = tmp_path / "ldm_refinement"
+    refinement_dir.mkdir()
+    monkeypatch.setattr(mod, "LDM_REFINEMENT_REPORT_DIR", refinement_dir)
+    refinement_dir.joinpath("ldm_hypothesis_parent_refinement_2026-06-01.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "ldm_hypothesis_parent_refinement_v1",
+                "consumer": "lifecycle_bucket_discovery",
+                "date": "2026-06-01",
+                "runtime_effect": False,
+                "allowed_runtime_apply": False,
+                "actual_order_submitted": False,
+                "broker_order_forbidden": True,
+                "refinement_inputs": [
+                    {
+                        "refinement_input_id": "ref_input_derived",
+                        "soft_hypothesis_id": "ldm_hypothesis_derived",
+                        "classification": "parent_support",
+                        "source_parent_bucket_ids": ["parent_positive"],
+                        "match_count": 7,
+                        "runtime_match_count": 0,
+                        "derived_match_count": 7,
+                        "source_match_origin": "derived_contract_drift_recompute",
+                        "derived_from_contract_drift": True,
+                        "raw_event_mutated": False,
+                        "refinement_pressure_score": 2.5,
+                        "runtime_effect": False,
+                        "allowed_runtime_apply": False,
+                        "actual_order_submitted": False,
+                        "broker_order_forbidden": True,
+                        "consumption_required": True,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    report = {
+        "date": "2026-06-01",
+        "parent_bucket_summaries": [
+            {
+                "source_parent_bucket_id": "parent_positive",
+                "parent_source_quality_adjusted_ev_pct": 2.5,
+                "complete_flow_count": 2,
+                "parent_joined_sample": 2,
+                "parent_granularity_floor_passed": True,
+                "dimension_filters": {
+                    "entry_score_parent": "score_watch_recovery",
+                    "entry_source_parent": "entry_source_blocked_ai_score",
+                },
+            }
+        ],
+    }
+    summary = {}
+
+    mod._apply_ldm_refinement_pressure(report, summary)
+
+    ledger_entry = report["ldm_refinement_pressure_consumption"]["entries"][0]
+    parent_pressure = report["parent_bucket_summaries"][0]["ldm_refinement_pressure"][0]
+    assert ledger_entry["source_match_origin"] == "derived_contract_drift_recompute"
+    assert ledger_entry["derived_from_contract_drift"] is True
+    assert ledger_entry["raw_event_mutated"] is False
+    assert ledger_entry["runtime_effect"] is False
+    assert ledger_entry["allowed_runtime_apply"] is False
+    assert ledger_entry["actual_order_submitted"] is False
+    assert ledger_entry["broker_order_forbidden"] is True
+    assert parent_pressure["derived_from_contract_drift"] is True
+    assert parent_pressure["runtime_effect"] is False
+    assert parent_pressure["allowed_runtime_apply"] is False
+
+
 def test_ldm_refinement_pressure_uses_target_date_for_rolling_output_key(tmp_path, monkeypatch):
     refinement_dir = tmp_path / "ldm_refinement"
     refinement_dir.mkdir()

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import gzip
 import hashlib
 import json
 import math
@@ -2291,21 +2292,26 @@ def _bottom_rebound_sim_handoff_status(sim_report: dict[str, Any]) -> dict[str, 
 
 def _iter_pipeline_event_fields(target_date: str):
     path = PROJECT_ROOT / "data" / "pipeline_events" / f"pipeline_events_{target_date}.jsonl"
-    try:
-        with path.open("r", encoding="utf-8") as fh:
-            for line in fh:
-                if not line.strip():
-                    continue
-                try:
-                    item = json.loads(line)
-                except Exception:
-                    continue
-                if not isinstance(item, dict):
-                    continue
-                fields = item.get("fields") if isinstance(item.get("fields"), dict) else item
-                yield fields
-    except Exception:
-        return
+    paths = [path] if path.exists() else [path.with_suffix(path.suffix + ".gz")]
+    for event_path in paths:
+        if not event_path.exists():
+            continue
+        try:
+            opener = gzip.open if event_path.suffix == ".gz" else open
+            with opener(event_path, "rt", encoding="utf-8", errors="replace") as fh:
+                for line in fh:
+                    if not line.strip():
+                        continue
+                    try:
+                        item = json.loads(line)
+                    except Exception:
+                        continue
+                    if not isinstance(item, dict):
+                        continue
+                    fields = item.get("fields") if isinstance(item.get("fields"), dict) else item
+                    yield fields
+        except Exception:
+            continue
 
 
 def _load_json_string_mapping(value: Any) -> dict[str, Any]:
@@ -2318,6 +2324,97 @@ def _load_json_string_mapping(value: Any) -> dict[str, Any]:
     except Exception:
         return {}
     return payload if isinstance(payload, dict) else {}
+
+
+_LDM_HYPOTHESIS_RUNTIME_REQUIREMENT_FIELDS = {"entry_score_parent", "entry_source_parent", "submit_quality_parent"}
+
+
+def _ldm_hypothesis_matches_requirements(candidate: dict[str, Any], requirements: Any) -> bool:
+    if not isinstance(requirements, list) or not requirements:
+        return False
+    for requirement in requirements:
+        if not isinstance(requirement, dict):
+            return False
+        field = str(requirement.get("field") or "").strip()
+        op = str(requirement.get("op") or "eq").strip()
+        value = str(requirement.get("value") or "").strip()
+        candidate_value = str(candidate.get(field) or "").strip()
+        if field not in _LDM_HYPOTHESIS_RUNTIME_REQUIREMENT_FIELDS or not value:
+            return False
+        if op in {"eq", "bin_eq"}:
+            if candidate_value != value:
+                return False
+        else:
+            return False
+    return True
+
+
+def _ldm_hypothesis_contract_runtime_compatible(hypothesis: dict[str, Any]) -> bool:
+    if not isinstance(hypothesis, dict):
+        return False
+    if hypothesis.get("runtime_effect") is not False:
+        return False
+    if hypothesis.get("allowed_runtime_apply") is not False:
+        return False
+    if hypothesis.get("actual_order_submitted") is not False:
+        return False
+    if hypothesis.get("broker_order_forbidden") is not True:
+        return False
+    forbidden = set(hypothesis.get("forbidden_uses") or [])
+    required = {
+        "buy_sell_hold_live_rule",
+        "threshold_apply",
+        "provider_route_change",
+        "bot_restart",
+        "broker_order",
+        "hard_safety_bypass",
+    }
+    if not required.issubset(forbidden):
+        return False
+    if not forbidden.intersection({"sizing_formula_runtime_apply_without_guard", "position_cap_release"}):
+        return False
+    return isinstance(hypothesis.get("observable_requirements"), list) and bool(hypothesis.get("observable_requirements"))
+
+
+def _ldm_hypothesis_contract_drift_status(target_date: str, scalp_catalog: dict[str, Any]) -> dict[str, Any]:
+    plan = (
+        scalp_catalog.get("hypothesis_observation_plan")
+        if isinstance(scalp_catalog.get("hypothesis_observation_plan"), dict)
+        else {}
+    )
+    hypotheses = [item for item in (plan.get("hypotheses") or []) if isinstance(item, dict)]
+    compatible_hypotheses = [item for item in hypotheses if _ldm_hypothesis_contract_runtime_compatible(item)]
+    if str(plan.get("schema_version") or "") != "ldm_hypothesis_observation_plan_v1" or not compatible_hypotheses:
+        return {
+            "candidate_feature_event_count": 0,
+            "recomputable_match_count": 0,
+            "recomputable_hypothesis_ids": [],
+            "runtime_matched_event_count": 0,
+        }
+    candidate_event_count = 0
+    recomputable_match_count = 0
+    runtime_matched_count = 0
+    matched_ids: set[str] = set()
+    for fields in _iter_pipeline_event_fields(target_date):
+        candidate = _load_json_string_mapping(fields.get("ldm_hypothesis_candidate_features"))
+        if not candidate:
+            continue
+        candidate_event_count += 1
+        if str(fields.get("ldm_hypothesis_matched") or "").strip().lower() == "true":
+            runtime_matched_count += 1
+        for hypothesis in compatible_hypotheses:
+            if _ldm_hypothesis_matches_requirements(candidate, hypothesis.get("observable_requirements")):
+                recomputable_match_count += 1
+                hypothesis_id = str(hypothesis.get("soft_hypothesis_id") or hypothesis.get("ldm_hypothesis_id") or "")
+                if hypothesis_id:
+                    matched_ids.add(hypothesis_id)
+                break
+    return {
+        "candidate_feature_event_count": candidate_event_count,
+        "recomputable_match_count": recomputable_match_count,
+        "recomputable_hypothesis_ids": sorted(matched_ids),
+        "runtime_matched_event_count": runtime_matched_count,
+    }
 
 
 def _active_sim_priority_handoff_status(
@@ -2600,15 +2697,22 @@ def _ldm_refinement_consumption_status(
     refinement: dict[str, Any],
     discovery: dict[str, Any],
     *,
+    target_date: str = "",
+    scalp_catalog: dict[str, Any] | None = None,
     disabled: bool = False,
 ) -> dict[str, Any]:
     inputs = [item for item in (refinement.get("refinement_inputs") or []) if isinstance(item, dict)]
+    drift = _ldm_hypothesis_contract_drift_status(target_date, scalp_catalog or {}) if target_date else {}
     if disabled:
         return {
             "status": "disabled",
             "input_count": len(inputs),
             "consumed_count": 0,
+            "contract_drift": drift,
             "closure_counts": {},
+            "derived_refinement_input_count": 0,
+            "derived_refinement_consumed_count": 0,
+            "derived_contract_drift_recompute_consumed": False,
             "missing": [],
             "warnings": [],
             "unconsumed_refinement_input_ids": [],
@@ -2628,7 +2732,11 @@ def _ldm_refinement_consumption_status(
             "status": "not_applicable",
             "input_count": 0,
             "consumed_count": 0,
+            "contract_drift": drift,
             "closure_counts": {},
+            "derived_refinement_input_count": 0,
+            "derived_refinement_consumed_count": 0,
+            "derived_contract_drift_recompute_consumed": False,
             "missing": [],
             "warnings": [],
             "unconsumed_refinement_input_ids": [],
@@ -2650,6 +2758,14 @@ def _ldm_refinement_consumption_status(
     entries = [item for item in (ledger.get("entries") or []) if isinstance(item, dict)]
     missing: list[str] = []
     warnings: list[str] = []
+    derived_input_count = sum(1 for item in inputs if item.get("derived_from_contract_drift") is True)
+    derived_consumed_count = sum(1 for item in entries if item.get("derived_from_contract_drift") is True)
+    if (
+        not inputs
+        and _safe_int(drift.get("recomputable_match_count")) > 0
+        and _safe_int(drift.get("runtime_matched_event_count")) == 0
+    ):
+        warnings.append("ldm_hypothesis_contract_drift")
     if inputs and not ledger:
         missing.append("ldm_refinement_consumption_ledger_missing")
     if ledger and str(ledger.get("status") or "") == "fail":
@@ -2728,7 +2844,11 @@ def _ldm_refinement_consumption_status(
         "status": status,
         "input_count": len(inputs),
         "consumed_count": len(entries),
+        "contract_drift": drift,
         "closure_counts": ledger.get("closure_counts") or {},
+        "derived_refinement_input_count": derived_input_count,
+        "derived_refinement_consumed_count": derived_consumed_count,
+        "derived_contract_drift_recompute_consumed": bool(derived_input_count and derived_consumed_count >= derived_input_count),
         "missing": list(dict.fromkeys(missing)),
         "warnings": list(dict.fromkeys(warnings)),
         "unconsumed_refinement_input_ids": unconsumed_ids,
@@ -3627,6 +3747,8 @@ def build_threshold_cycle_postclose_verification(
     ldm_refinement_consumption = _ldm_refinement_consumption_status(
         ldm_refinement_report,
         discovery_report,
+        target_date=target_date,
+        scalp_catalog=scalp_sim_policy_catalog,
         disabled=preliminary_execution_flags.get("ldm_hypothesis_parent_refinement") is False,
     )
     if ldm_refinement_consumption.get("status") == "fail":
@@ -4646,9 +4768,12 @@ def _render_markdown(report: dict[str, Any]) -> str:
         "## LDM Hypothesis Parent Refinement",
         f"- status: `{ldm_refinement.get('status') or '-'}`",
         f"- input/consumed: `{ldm_refinement.get('input_count') or 0}` / `{ldm_refinement.get('consumed_count') or 0}`",
+        f"- derived input/consumed: `{ldm_refinement.get('derived_refinement_input_count') or 0}` / `{ldm_refinement.get('derived_refinement_consumed_count') or 0}`",
+        f"- derived_contract_drift_recompute_consumed: `{ldm_refinement.get('derived_contract_drift_recompute_consumed')}`",
         f"- closure_counts: `{ldm_refinement.get('closure_counts') or {}}`",
         f"- missing: `{ldm_refinement.get('missing') or []}`",
         f"- warnings: `{ldm_refinement.get('warnings') or []}`",
+        f"- contract_drift: `{ldm_refinement.get('contract_drift') or {}}`",
         f"- diagnosis_missing_warning_input_ids: `{ldm_refinement.get('diagnosis_missing_warning_input_ids') or []}`",
         f"- diagnosis_missing_fail_input_ids: `{ldm_refinement.get('diagnosis_missing_fail_input_ids') or []}`",
         f"- diagnosed_repeated_input_ids: `{ldm_refinement.get('diagnosed_repeated_input_ids') or []}`",

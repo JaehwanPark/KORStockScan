@@ -1626,6 +1626,14 @@ def test_scalp_sim_candidate_window_active_seed_uses_reserved_sim_quota(monkeypa
     assert armed["actual_order_submitted"] is False
     assert armed["broker_order_forbidden"] is True
 
+    followup_source = dict(sim_target)
+    followup_source.pop("scalp_sim_candidate_window_expansion", None)
+    followup_fields = state_handlers._scalp_sim_candidate_window_context_fields(followup_source)
+    assert followup_fields["scalp_sim_active_priority_seed_matched"] is True
+    assert followup_fields["active_seed_id"] == "active_seed_test"
+    assert followup_fields["source_parent_bucket_id"] == "parent_positive"
+    assert followup_fields["would_real_submit"] is False
+
 
 def test_scalp_sim_active_seed_targeted_quota_blocks_after_per_seed_limit(monkeypatch, tmp_path):
     logs = []
@@ -2320,6 +2328,58 @@ def test_scalp_sim_candidate_window_hypothesis_uses_sim_only_reserved_quota(monk
     assert armed["ldm_hypothesis_matched"] is True
     assert armed["ldm_hypothesis_id"] == "ldm_hypothesis_test"
     assert armed["quota_policy"] == "ldm_hypothesis_observation_plan_v1"
+
+
+def test_scalp_sim_policy_loader_accepts_legacy_ldm_hypothesis_forbidden_use_alias(monkeypatch, tmp_path):
+    catalog_path = tmp_path / "scalp_sim_policy_catalog_2026-06-01.json"
+    catalog_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "scalp_sim_policy_catalog_v1",
+                "policies": [],
+                "active_sim_priority_seeds": [],
+                "hypothesis_observation_plan": {
+                    "schema_version": "ldm_hypothesis_observation_plan_v1",
+                    "hypotheses": [
+                        {
+                            "soft_hypothesis_id": "ldm_hypothesis_legacy_alias",
+                            "rank": 1,
+                            "observable_requirements": [
+                                {"field": "entry_score_parent", "op": "eq", "value": "score_watch_recovery"},
+                                {"field": "entry_source_parent", "op": "eq", "value": "entry_source_wait6579"},
+                            ],
+                            "runtime_effect": False,
+                            "allowed_runtime_apply": False,
+                            "actual_order_submitted": False,
+                            "broker_order_forbidden": True,
+                            "forbidden_uses": [
+                                "buy_sell_hold_live_rule",
+                                "threshold_apply",
+                                "provider_route_change",
+                                "bot_restart",
+                                "position_cap_release",
+                                "broker_order",
+                                "hard_safety_bypass",
+                            ],
+                        }
+                    ],
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    rules = replace(
+        CONFIG,
+        SCALP_SIM_AUTO_POLICY_ENABLED=True,
+        SCALP_SIM_AUTO_POLICY_FILE=str(catalog_path),
+        SCALP_SIM_AUTO_POLICY_VERSION="scalp_sim_auto_approval:2026-06-01",
+    )
+    monkeypatch.setattr(state_handlers, "TRADING_RULES", rules)
+
+    cache = state_handlers._load_scalp_sim_auto_policy_cache()
+
+    assert cache["hypothesis_count"] == 1
+    assert cache["hypotheses"][0]["soft_hypothesis_id"] == "ldm_hypothesis_legacy_alias"
 
 
 def test_scalp_sim_policy_loader_rejects_invalid_hypothesis_contract(monkeypatch, tmp_path):

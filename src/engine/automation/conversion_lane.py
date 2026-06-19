@@ -844,8 +844,16 @@ def build_conversion_lane(target_date: str) -> dict[str, Any]:
             "active_seed_candidate_without_seed_id_reason_counts"
         )
         or {},
+        "active_seed_candidate_without_seed_id_detail_counts": (key_ledger.get("summary") or {}).get(
+            "active_seed_candidate_without_seed_id_detail_counts"
+        )
+        or {},
         "active_seed_candidate_missing_parent_seed_lookup_key_counts": (key_ledger.get("summary") or {}).get(
             "active_seed_candidate_missing_parent_seed_lookup_key_counts"
+        )
+        or {},
+        "active_seed_candidate_missing_parent_seed_stage_counts": (key_ledger.get("summary") or {}).get(
+            "active_seed_candidate_missing_parent_seed_stage_counts"
         )
         or {},
         "active_seed_candidate_lineage_closure_status": (key_ledger.get("summary") or {}).get(
@@ -952,6 +960,8 @@ def _render_markdown(report: dict[str, Any]) -> str:
         f"followup_unmatched=`{summary.get('active_seed_candidate_followup_unmatched_event_count', 0)}` "
         f"eligible_without_seed_id=`{summary.get('active_seed_candidate_without_seed_id_event_count', 0)}` "
         f"without_seed_reasons=`{summary.get('active_seed_candidate_without_seed_id_reason_counts') or {}}` "
+        f"without_seed_details=`{summary.get('active_seed_candidate_without_seed_id_detail_counts') or {}}` "
+        f"missing_parent_stages=`{summary.get('active_seed_candidate_missing_parent_seed_stage_counts') or {}}` "
         f"raw_without_seed_id=`{summary.get('active_seed_candidate_raw_without_seed_id_event_count', 0)}` "
         f"eligible_followup_without_seed_id=`{summary.get('active_seed_candidate_followup_without_seed_id_event_count', 0)}` "
         f"raw_followup_without_seed_id=`{summary.get('active_seed_candidate_raw_followup_without_seed_id_event_count', 0)}`",

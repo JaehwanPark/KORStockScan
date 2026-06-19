@@ -13,6 +13,8 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Iterable
 
+from src.utils.jsonl_io import existing_or_gzip_path, read_jsonl
+
 
 POLICY_VERSION = "watching_score_smoothing_v1"
 VALID_MODES = frozenset({"off", "report_only", "applied"})
@@ -194,7 +196,7 @@ def _date_text(day: date) -> str:
 def _session_artifact_paths(target_date: str, data_root: Path) -> dict[str, Path]:
     report_root = data_root / "report"
     return {
-        "pipeline_events": data_root / "pipeline_events" / f"pipeline_events_{target_date}.jsonl",
+        "pipeline_events": existing_or_gzip_path(data_root / "pipeline_events" / f"pipeline_events_{target_date}.jsonl"),
         "post_sell": report_root / "monitor_snapshots" / f"post_sell_feedback_{target_date}.json",
         "post_sell_gz": report_root / "monitor_snapshots" / f"post_sell_feedback_{target_date}.json.gz",
         "source_quality": report_root / "observation_source_quality_audit" / f"observation_source_quality_audit_{target_date}.json",
@@ -246,17 +248,10 @@ def _auto_guard_evidence(target_date: str, *, data_root: Path) -> dict[str, Any]
 
 
 def _load_events(path: Path) -> list[dict[str, Any]]:
-    if not path.exists():
-        return []
     rows = []
-    with path.open("r", encoding="utf-8") as handle:
-        for line in handle:
-            try:
-                row = json.loads(line)
-            except (TypeError, ValueError):
-                continue
-            if row.get("stage") in {"ai_confirmed", "ai_watching_score_projection"}:
-                rows.append(row)
+    for row in read_jsonl(path):
+        if row.get("stage") in {"ai_confirmed", "ai_watching_score_projection"}:
+            rows.append(row)
     return rows
 
 
@@ -559,7 +554,10 @@ def build_diagnostic_artifact(
         and all(required_roles.issubset(roles_by_date.get(session_date, set())) for session_date in session_dates)
     )
     selected_dates = session_dates if evidence_accepted else [target_date]
-    source_paths = [data_root / "pipeline_events" / f"pipeline_events_{item}.jsonl" for item in selected_dates]
+    source_paths = [
+        existing_or_gzip_path(data_root / "pipeline_events" / f"pipeline_events_{item}.jsonl")
+        for item in selected_dates
+    ]
     input_artifact_checks = [
         _artifact_check(path, target_date=session_date, role="pipeline_events")
         for session_date, path in zip(selected_dates, source_paths, strict=False)

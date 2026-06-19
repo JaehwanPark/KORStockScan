@@ -481,6 +481,9 @@ _LDM_HYPOTHESIS_FORBIDDEN_USES = {
     "broker_order",
     "hard_safety_bypass",
 }
+_LDM_HYPOTHESIS_FORBIDDEN_USE_ALIASES = {
+    "sizing_formula_runtime_apply_without_guard": {"position_cap_release"},
+}
 _SWING_PROBE_DAILY_CREATED: dict[str, int] = {}
 _SWING_PROBE_DISCARD_LOG_TS: dict[tuple[str, str, str, str], float] = {}
 _SWING_SAME_SYMBOL_LOSS_REENTRY_COOLDOWNS: dict[str, dict] = {}
@@ -773,7 +776,11 @@ def _scalp_hypothesis_contract_valid(hypothesis: dict) -> bool:
     if hypothesis.get("broker_order_forbidden") is not True:
         return False
     forbidden = set(hypothesis.get("forbidden_uses") or [])
-    if not _LDM_HYPOTHESIS_FORBIDDEN_USES.issubset(forbidden):
+    for required in _LDM_HYPOTHESIS_FORBIDDEN_USES:
+        aliases = _LDM_HYPOTHESIS_FORBIDDEN_USE_ALIASES.get(required, set())
+        if required not in forbidden and not aliases.intersection(forbidden):
+            return False
+    if not forbidden.intersection({"sizing_formula_runtime_apply_without_guard", "position_cap_release"}):
         return False
     requirements = hypothesis.get("observable_requirements")
     if not isinstance(requirements, list) or not requirements:
@@ -3623,52 +3630,65 @@ def _is_scalp_sim_candidate_window_reserve_source(source_stage: str) -> bool:
     return "panic" in normalized or "euphoria" in normalized
 
 
+_SCALP_SIM_CANDIDATE_WINDOW_CONTEXT_KEYS = (
+    "scalp_sim_candidate_window_expansion",
+    "scalp_sim_candidate_window_source_stage",
+    "scalp_sim_candidate_window_blocked_reason",
+    "scalp_sim_candidate_window_original_action",
+    "scalp_sim_candidate_window_original_score",
+    "scalp_sim_candidate_window_original_reason",
+    "scalp_sim_candidate_window_date",
+    "scalp_sim_candidate_window_time_bucket",
+    "scalp_sim_candidate_window_quota_policy",
+)
+
+_SCALP_SIM_ACTIVE_SEED_CONTEXT_KEYS = (
+    "scalp_sim_active_priority_seed_matched",
+    "active_seed_id",
+    "source_parent_bucket_id",
+    "active_seed_status",
+    "active_seed_match_source",
+    "active_seed_observable_prefix",
+    "active_seed_candidate_observable_prefix",
+    "active_seed_match_eligible",
+    "active_seed_match_exclusion_reason",
+    "active_seed_match_blocked_reason",
+    "active_seed_quota_policy_version",
+    "active_seed_daily_total_share_pct",
+    "active_seed_daily_total_limit",
+    "active_seed_daily_total_created",
+    "active_seed_daily_per_seed_limit",
+    "active_seed_daily_created",
+    "active_seed_sample_goal_per_bucket",
+    "active_seed_quota_scope",
+    "entry_source_parent_contract_state",
+    "entry_source_parent_contract_reason",
+    "entry_source_parent_alias_version",
+    "entry_source_parent_consume_data",
+    "entry_source_parent_runtime_effect_allowed",
+    "active_seed_priority_tier",
+    "quota_policy",
+)
+
+_SCALP_SIM_HYPOTHESIS_CONTEXT_KEYS = (
+    "ldm_hypothesis_matched",
+    "ldm_hypothesis_id",
+    "ldm_hypothesis_rank",
+    "ldm_hypothesis_ev_pct",
+    "ldm_hypothesis_sample_weight",
+    "ldm_hypothesis_budget_policy",
+    "ldm_hypothesis_candidate_features",
+)
+
+
 def _scalp_sim_candidate_window_context_fields(source: dict | None) -> dict:
     bucket_policy_fields = _scalp_sim_bucket_policy_fields(source)
-    if not isinstance(source, dict) or not bool(source.get("scalp_sim_candidate_window_expansion")):
+    if not isinstance(source, dict):
         return bucket_policy_fields
     keys = (
-        "scalp_sim_candidate_window_expansion",
-        "scalp_sim_candidate_window_source_stage",
-        "scalp_sim_candidate_window_blocked_reason",
-        "scalp_sim_candidate_window_original_action",
-        "scalp_sim_candidate_window_original_score",
-        "scalp_sim_candidate_window_original_reason",
-        "scalp_sim_candidate_window_date",
-        "scalp_sim_candidate_window_time_bucket",
-        "scalp_sim_candidate_window_quota_policy",
-        "scalp_sim_active_priority_seed_matched",
-        "active_seed_id",
-        "source_parent_bucket_id",
-        "active_seed_status",
-        "active_seed_match_source",
-        "active_seed_observable_prefix",
-        "active_seed_candidate_observable_prefix",
-        "active_seed_match_eligible",
-        "active_seed_match_exclusion_reason",
-        "active_seed_match_blocked_reason",
-        "active_seed_quota_policy_version",
-        "active_seed_daily_total_share_pct",
-        "active_seed_daily_total_limit",
-        "active_seed_daily_total_created",
-        "active_seed_daily_per_seed_limit",
-        "active_seed_daily_created",
-        "active_seed_sample_goal_per_bucket",
-        "active_seed_quota_scope",
-        "entry_source_parent_contract_state",
-        "entry_source_parent_contract_reason",
-        "entry_source_parent_alias_version",
-        "entry_source_parent_consume_data",
-        "entry_source_parent_runtime_effect_allowed",
-        "active_seed_priority_tier",
-        "ldm_hypothesis_matched",
-        "ldm_hypothesis_id",
-        "ldm_hypothesis_rank",
-        "ldm_hypothesis_ev_pct",
-        "ldm_hypothesis_sample_weight",
-        "ldm_hypothesis_budget_policy",
-        "ldm_hypothesis_candidate_features",
-        "quota_policy",
+        *_SCALP_SIM_CANDIDATE_WINDOW_CONTEXT_KEYS,
+        *_SCALP_SIM_ACTIVE_SEED_CONTEXT_KEYS,
+        *_SCALP_SIM_HYPOTHESIS_CONTEXT_KEYS,
     )
     fields = {key: source.get(key) for key in keys if source.get(key) not in (None, "")}
     source_stage = str(fields.get("scalp_sim_candidate_window_source_stage") or "").strip()
@@ -3695,11 +3715,8 @@ def _scalp_sim_candidate_window_context_fields(source: dict | None) -> dict:
                 fields=fields,
             )
         )
-    fields.update(
-        {
-            "would_real_submit": False,
-        }
-    )
+    if fields:
+        fields["would_real_submit"] = False
     fields.update(bucket_policy_fields)
     return fields
 

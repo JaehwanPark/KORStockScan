@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import gzip
 import json
 import hashlib
 from types import SimpleNamespace
@@ -205,6 +206,34 @@ def test_diagnostic_artifact_is_explicitly_non_authoritative(tmp_path):
     assert report["metrics"]["primary_observation_count"] == 1
     assert report["metrics"]["valid_response_count"] == 1
     assert (tmp_path / "report" / "ai_watching_score_smoothing_diagnostic" / "ai_watching_score_smoothing_diagnostic_2026-06-12.json").exists()
+
+
+def test_diagnostic_reads_gzip_pipeline_events(tmp_path):
+    pipeline_dir = tmp_path / "pipeline_events"
+    pipeline_dir.mkdir()
+    with gzip.open(pipeline_dir / "pipeline_events_2026-06-12.jsonl.gz", "wt", encoding="utf-8") as handle:
+        handle.write(
+            json.dumps(
+                {
+                    "stage": "ai_confirmed",
+                    "stock_code": "005930",
+                    "emitted_at": "2026-06-12T09:10:00",
+                    "fields": {
+                        "ai_score_policy_version": "watching_score_smoothing_v1",
+                        "ai_score_raw": 80,
+                        "ai_score_projected": 75,
+                        "ai_score_excluded_reason": "-",
+                    },
+                }
+            )
+            + "\n"
+        )
+
+    report = build_diagnostic_artifact("2026-06-12", data_root=tmp_path)
+
+    assert report["metrics"]["regular_observed_count"] == 1
+    assert report["transition_guard"]["criteria"]["pipeline_input_integrity"]["status"] == "pass"
+    assert report["input_artifact_checks"][0]["path"].endswith(".jsonl.gz")
 
 
 def test_diagnostic_detects_invalid_response_in_applied_mode(tmp_path):

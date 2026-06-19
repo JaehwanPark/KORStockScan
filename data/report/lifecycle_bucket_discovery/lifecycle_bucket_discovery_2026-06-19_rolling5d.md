@@ -11,7 +11,7 @@
 - absorbed/source_quality_blocker: `480` / `0`
 - lifecycle_flow_parent_granularity: `target_pass` level=`L1_broad` parents=`40` target=`30-60`
 - lifecycle_flow_absorbed_children: child=`465` sample=`82308` conflict_parents=`16`
-- ldm_refinement_pressure: input=`0` consumed=`0` closures=`{}`
+- ldm_refinement_pressure: input=`3` consumed=`3` closures=`{'new_parent_candidate_created': 1, 'rare_observation_only_budget_capped': 2}`
 - sim_auto_approved_count: `7`
 - lifecycle_flow_sim_probe_candidate_count: `37`
 - source_dimension_gap_count: `156` / actionable_unknown_gap_count: `0`
@@ -49,15 +49,15 @@
 - ai_tier2_proposal_count: `2`
 - comparative_review_count: `2`
 - audit_status: `pass`
-- audit_issues: `[]`
+- audit_issues: `['Review schema cannot encode lifecycle_flow_sim_probe_candidate exactly; mapped to sim_auto_approved for review-only output.', 'Current AI Tier2 proposal was unavailable in source and should not be treated as a substantive reject.']`
 - audit_reason: `sharded review aggregate`
 
 ### AI Review Shards
-- `live_contract_review` status=`skipped_empty` candidates=`0` omitted=`0` context_chars=`31188`
-- `lifecycle_flow_review` status=`parsed` candidates=`1` omitted=`199` context_chars=`37766`
-- `sim_policy_review` status=`parsed` candidates=`1` omitted=`7` context_chars=`37729`
-- `gap_workorder_review` status=`skipped_empty` candidates=`0` omitted=`0` context_chars=`31164`
-- `taxonomy_discovery_review` status=`skipped_empty` candidates=`0` omitted=`0` context_chars=`31160`
+- `live_contract_review` status=`skipped_empty` candidates=`0` omitted=`0` context_chars=`31248`
+- `lifecycle_flow_review` status=`parsed` candidates=`1` omitted=`199` context_chars=`37826`
+- `sim_policy_review` status=`parsed` candidates=`1` omitted=`7` context_chars=`37789`
+- `gap_workorder_review` status=`skipped_empty` candidates=`0` omitted=`0` context_chars=`31224`
+- `taxonomy_discovery_review` status=`skipped_empty` candidates=`0` omitted=`0` context_chars=`31220`
 
 - `lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_blocked_ai_score_stale_fresh_liquidity_liq` stage=`lifecycle_flow` state=`source_only_keep_collecting` action=`relax_or_recover` relation=`existing_bucket_refinement` canonical=`lifecycle_flow:combo_lifecycle_flow:entry=score_watch_recovery|submit=submit_observed|holding=holding_observed|scale_in=scale_in_observed|exit=exit_observed` joined=`2` ev=`1.0117` ai_final=`-` taxonomy=`absorb_as_dimension`
 - `lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_blocked_ai_score_stale_fresh_liquidity_liq` stage=`lifecycle_flow` state=`source_only_keep_collecting` action=`relax_or_recover` relation=`existing_bucket_refinement` canonical=`lifecycle_flow:combo_lifecycle_flow:entry=score_watch_recovery|submit=submit_observed|holding=holding_observed|scale_in=scale_in_observed|exit=exit_observed` joined=`2` ev=`1.6819` ai_final=`-` taxonomy=`absorb_as_dimension`

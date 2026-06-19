@@ -142,6 +142,36 @@ def _active_seed_without_seed_reason(*, stage: str, matched: str, candidate_pref
     return "taxonomy_pending_source"
 
 
+def _active_seed_without_seed_detail(
+    *,
+    stage: str,
+    matched: str,
+    candidate_prefix: str,
+    fields: dict[str, Any],
+) -> str:
+    if matched == "true":
+        return "producer_missing_seed_id"
+    if stage and stage != "scalp_sim_entry_armed":
+        return "parent_seed_id_not_propagated_to_followup"
+    source = str(fields.get("active_seed_match_source") or "").strip()
+    exclusion = str(
+        fields.get("active_seed_match_exclusion_reason")
+        or fields.get("active_seed_match_blocked_reason")
+        or ""
+    ).strip()
+    if stage == "scalp_sim_entry_armed":
+        if "taxonomy" in exclusion or "taxonomy" in source:
+            return "taxonomy_pending_or_natural_no_match"
+        if source in {"no_match", "inactive_seed_blocked"} or (
+            "entry_source_parent" in candidate_prefix or "entry_score_parent" in candidate_prefix
+        ):
+            return "taxonomy_pending_or_natural_no_match"
+        return "new_entry_seed_id_missing_unclassified"
+    if "entry_source_parent" in candidate_prefix or "entry_score_parent" in candidate_prefix:
+        return "taxonomy_pending_or_natural_no_match"
+    return "taxonomy_pending_source"
+
+
 def _runtime_apply_path(target_date: str) -> Path:
     exact = APPLY_PLAN_DIR / f"threshold_apply_{target_date}.json"
     if exact.exists():
@@ -343,7 +373,9 @@ def _event_field_values(target_date: str, tracked_values: dict[str, set[str]] | 
         "active_seed_candidate_not_match_eligible_event_count": 0,
         "active_seed_candidate_not_match_eligible_reason_counts": {},
         "active_seed_candidate_without_seed_id_reason_counts": {},
+        "active_seed_candidate_without_seed_id_detail_counts": {},
         "active_seed_candidate_missing_parent_seed_lookup_key_counts": {},
+        "active_seed_candidate_missing_parent_seed_stage_counts": {},
         "active_seed_candidate_followup_stage_counts": {},
         "panic_scale_in_event_count": 0,
         "panic_scale_in_unique_sim_record_count": 0,
@@ -446,6 +478,14 @@ def _event_field_values(target_date: str, tracked_values: dict[str, set[str]] | 
                             )
                             reason_counts = policy_diag["active_seed_candidate_without_seed_id_reason_counts"]
                             reason_counts[reason] = reason_counts.get(reason, 0) + 1
+                            detail = _active_seed_without_seed_detail(
+                                stage=stage,
+                                matched=matched,
+                                candidate_prefix=candidate_prefix,
+                                fields=fields,
+                            )
+                            detail_counts = policy_diag["active_seed_candidate_without_seed_id_detail_counts"]
+                            detail_counts[detail] = detail_counts.get(detail, 0) + 1
                             if stage != "scalp_sim_entry_armed":
                                 policy_diag["active_seed_candidate_followup_without_seed_id_event_count"] += 1
                                 if reason == "followup_missing_parent_seed_id":
@@ -454,6 +494,10 @@ def _event_field_values(target_date: str, tracked_values: dict[str, set[str]] | 
                                         "active_seed_candidate_missing_parent_seed_lookup_key_counts"
                                     ]
                                     lookup_counts[lookup_key] = lookup_counts.get(lookup_key, 0) + 1
+                                    stage_counts = policy_diag[
+                                        "active_seed_candidate_missing_parent_seed_stage_counts"
+                                    ]
+                                    stage_counts[stage or "unknown"] = stage_counts.get(stage or "unknown", 0) + 1
                 if stage == "scalp_sim_panic_scale_in_blocked":
                     policy_diag["panic_scale_in_event_count"] += 1
                     sim_record_id = str(
@@ -1405,8 +1449,16 @@ def build_key_lineage_ledger(target_date: str) -> dict[str, Any]:
                 "active_seed_candidate_without_seed_id_reason_counts"
             )
             or {},
+            "active_seed_candidate_without_seed_id_detail_counts": active_policy_observation.get(
+                "active_seed_candidate_without_seed_id_detail_counts"
+            )
+            or {},
             "active_seed_candidate_missing_parent_seed_lookup_key_counts": active_policy_observation.get(
                 "active_seed_candidate_missing_parent_seed_lookup_key_counts"
+            )
+            or {},
+            "active_seed_candidate_missing_parent_seed_stage_counts": active_policy_observation.get(
+                "active_seed_candidate_missing_parent_seed_stage_counts"
             )
             or {},
             "active_seed_candidate_lineage_closure_status": (
@@ -1563,6 +1615,8 @@ def _render_markdown(report: dict[str, Any]) -> str:
         f"new_entry_unmatched=`{summary.get('active_seed_candidate_new_entry_unmatched_event_count', 0)}` "
         f"followup_unmatched=`{summary.get('active_seed_candidate_followup_unmatched_event_count', 0)}` "
         f"eligible_without_seed_id=`{summary.get('active_seed_candidate_without_seed_id_event_count', 0)}` "
+        f"without_seed_details=`{summary.get('active_seed_candidate_without_seed_id_detail_counts') or {}}` "
+        f"missing_parent_stages=`{summary.get('active_seed_candidate_missing_parent_seed_stage_counts') or {}}` "
         f"raw_without_seed_id=`{summary.get('active_seed_candidate_raw_without_seed_id_event_count', 0)}` "
         f"eligible_followup_without_seed_id=`{summary.get('active_seed_candidate_followup_without_seed_id_event_count', 0)}` "
         f"raw_followup_without_seed_id=`{summary.get('active_seed_candidate_raw_followup_without_seed_id_event_count', 0)}`",

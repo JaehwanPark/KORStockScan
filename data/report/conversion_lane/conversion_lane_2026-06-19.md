@@ -1,7 +1,7 @@
 # Conversion Lane - 2026-06-19
 
 ## Decision
-- conversion candidates: `695`
+- conversion candidates: `689`
 - real conversion queue: `0`
 - positive EV runtime observed: `0`
 - positive EV not due until next PREOPEN: `211`
@@ -11,11 +11,11 @@
 - positive EV sample-floor unknown floor: `159`
 - positive EV sample-floor related total: `162`
 - positive EV sample-floor provenance: scope=`conversion_candidates` window=`mixed_source_windows` window_counts=`{'same_day_source_bundle_plus_rolling_threshold_cycle_consumer': 3, 'source_report_window': 159}` basis=`candidate_sample_vs_required_sample`
-- active sim policy windows: events=`1828` zero_count=`0` positive_count=`1828` id_without_count=`0` zero_count_effect_excluded=`False`
+- active sim policy windows: events=`0` zero_count=`0` positive_count=`0` id_without_count=`0` zero_count_effect_excluded=`False`
 - active sim taxonomy contracts: pending=`9` counts=`{'canonical': 75, 'new_axis_pending_taxonomy': 9, 'unknown': 17}`
-- active seed candidate validation: total=`1723` eligible=`1723` not_match_eligible=`0` not_match_eligible_reasons=`{}` new_entry=`105` followup=`1618` matched=`1318` matched_true_without_seed_id=`0` unmatched=`405` new_entry_unmatched=`21` followup_unmatched=`384` eligible_without_seed_id=`405` without_seed_reasons=`{'followup_missing_parent_seed_id': 384, 'new_entry_without_seed_id': 21}` raw_without_seed_id=`405` eligible_followup_without_seed_id=`384` raw_followup_without_seed_id=`384`
-- panic scale-in no-match: events=`727` unique_sim_records=`82` missing_sim_record_id=`0` repeated_followup=`645` status_counts=`{'matched': 183, 'no_match': 727}` source_stage_counts=`{'blocked_ai_score': 56, 'first_ai_wait': 671}`
-- conversion candidate strategy scope: scalp=`59` swing=`635` unscoped=`1`
+- active seed candidate validation: total=`0` eligible=`0` not_match_eligible=`0` not_match_eligible_reasons=`{}` new_entry=`0` followup=`0` matched=`0` matched_true_without_seed_id=`0` unmatched=`0` new_entry_unmatched=`0` followup_unmatched=`0` eligible_without_seed_id=`0` without_seed_reasons=`{}` without_seed_details=`{}` missing_parent_stages=`{}` raw_without_seed_id=`0` eligible_followup_without_seed_id=`0` raw_followup_without_seed_id=`0`
+- panic scale-in no-match: events=`0` unique_sim_records=`0` missing_sim_record_id=`0` repeated_followup=`0` status_counts=`{}` source_stage_counts=`{}`
+- conversion candidate strategy scope: scalp=`53` swing=`635` unscoped=`1`
 - bounded real canary requestable: `0`
 - top blocker ranked: `sample_floor`; top blocker by count: `sample_floor`
 - top LDM bucket blocker: `sample_floor`

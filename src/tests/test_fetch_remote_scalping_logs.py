@@ -35,6 +35,7 @@ def test_build_optional_snapshot_paths():
         f"{remote_root}/data/report/monitor_snapshots/trade_review_{target_date}.json",
         f"{remote_root}/data/report/monitor_snapshots/post_sell_feedback_{target_date}.json",
         f"{remote_root}/data/report/monitor_snapshots/performance_tuning_{target_date}.json",
+        f"{remote_root}/data/report/monitor_snapshots/add_blocked_lock_{target_date}.json",
     ]
     assert paths == expected
 
@@ -50,6 +51,7 @@ def test_build_remote_tar_command():
     # Ensure each path is quoted and appears in the array
     for path in paths:
         assert path in cmd
+    assert '$source.gz' in cmd
 
 
 def test_build_remote_tar_command_with_optional_snapshots():
@@ -60,6 +62,7 @@ def test_build_remote_tar_command_with_optional_snapshots():
     assert "tmpdir=$(mktemp -d)" in cmd
     assert "cp -p" in cmd
     assert 'tar -czf - .' in cmd
+    assert '$source.gz' in cmd
 
 
 @patch("src.engine.fetch_remote_scalping_logs.subprocess.run")

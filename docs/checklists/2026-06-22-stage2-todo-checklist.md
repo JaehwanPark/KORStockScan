@@ -31,6 +31,12 @@
   - 금지: blocked family, approval artifact missing, same-stage owner conflict를 수동 env override로 우회하지 않는다.
   - 다음 액션: `applied_guard_passed_env`, `blocked_no_env`, `partial_apply_with_blocked_families`, `failed_preopen_wrapper`, `not_yet_due` 중 하나로 닫는다.
 
+- [ ] `[ActiveSeedLineageHandoff0622] active seed parent id 전파 및 PREOPEN handoff 확인` (`Due: 2026-06-22`, `Slot: PREOPEN`, `TimeWindow: 08:55~09:00`, `Track: ScalpingLogic`)
+  - Source: [key_lineage_ledger_2026-06-19.json](/home/ubuntu/KORStockScan/data/report/key_lineage_ledger/key_lineage_ledger_2026-06-19.json), [conversion_lane_2026-06-19.json](/home/ubuntu/KORStockScan/data/report/conversion_lane/conversion_lane_2026-06-19.json), [threshold_cycle_postclose_verification_2026-06-19.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_postclose_verification/threshold_cycle_postclose_verification_2026-06-19.json), [threshold_apply_2026-06-22.json](/home/ubuntu/KORStockScan/data/threshold_cycle/apply_plans/threshold_apply_2026-06-22.json)
+  - 판정 기준: 2026-06-19 postclose active seed catalog의 active seed ids가 2026-06-22 PREOPEN apply/runtime env manifest의 `active_sim_priority_seed_ids`로 소비됐는지 확인하고, 신규 intraday follow-up 이벤트에서 `active_seed_id`/`source_parent_bucket_id`가 유지되는지 확인한다.
+  - 금지: active seed lineage 보완을 실주문, provider, cap, threshold, bot 변경 근거로 쓰지 않는다. 2026-06-19 raw event의 `unmatched 405`를 수동 소급 보정하지 않는다.
+  - 다음 액션: `handoff_pass_lineage_preserved`, `handoff_pending_no_preopen_artifact`, `handoff_missing_fail`, `followup_parent_seed_missing_workorder`, `new_entry_taxonomy_or_natural_no_match_keep_collecting` 중 하나로 닫는다.
+
 ## 장중 체크리스트 (09:05~15:20)
 
 - [ ] `[RuntimeEnvIntradayObserve0622] 전일 selected runtime family 장중 provenance 및 rollback guard 확인` (`Due: 2026-06-22`, `Slot: INTRADAY`, `TimeWindow: 09:05~09:20`, `Track: RuntimeStability`)

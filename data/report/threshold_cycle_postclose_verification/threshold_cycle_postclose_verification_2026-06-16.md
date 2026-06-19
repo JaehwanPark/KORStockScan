@@ -1,12 +1,12 @@
 # Threshold Cycle Postclose Verification - 2026-06-16
 
-- status: `warning`
+- status: `fail`
 - latest_start_marker: `[START] threshold-cycle postclose target_date=2026-06-16 max_iterations=80 started_at=2026-06-16T15:45:01+0900`
 - latest_done_marker: `[DONE] threshold-cycle postclose target_date=2026-06-16 recovery_action=tail_repair_done_reconciliation full_wrapper_rerun=false finished_at=2026-06-16T16:50:22+0900`
-- predecessor_status: `pass`
+- predecessor_status: `fail`
 - predecessor_wait_count: `0`
 - predecessor_timeout_count: `0`
-- log_issues: `[]`
+- log_issues: `['active_sim_priority_handoff_missing', 'scale_in_policy_contract_missing']`
 
 ## Execution Profile
 - profile_status: `full_profile`
@@ -16,14 +16,14 @@
 - missing_required_artifacts: `[]`
 - missing_downstream_links: `[]`
 - stale_downstream_links: `[]`
-- runtime_apply_gap_issues: `[]`
+- runtime_apply_gap_issues: `['runtime_apply_gap_audit_stale_before_threshold_preopen_apply', 'scale_in_policy_contract_missing']`
 
 ## Warning Follow-Up Summary
 - status: `warning`
 - runtime_effect: `False`
 - allowed_runtime_apply: `False`
 - P1 `submit_drought` 판정: `pass_handoff_closed`
-  - 근거: `{'status': 'pass', 'critical': True, 'primary': 'SUBMIT_DROUGHT_CRITICAL', 'matches': ['PRICE_GUARD_DROUGHT', 'LATENCY_DROUGHT', 'UPSTREAM_AI_THRESHOLD', 'SUBMIT_DROUGHT_CRITICAL'], 'missing': [], 'ldm_submit_real_submitted_row_count': 3, 'ldm_submit_missing_broker_order_key_count': 0, 'ldm_submit_missing_broker_order_key_rate': 0.0, 'ldm_submit_post_submit_provenance_join_gap': False, 'ldm_submit_post_submit_provenance_join_gap_raw': False, 'ldm_submit_bot_history_backfill_candidate_count': 0, 'ldm_submit_bot_history_backfill_full_coverage': False, 'ldm_submit_bot_history_exact_mapping_count': 0, 'ldm_submit_bot_history_exact_mapping_full_coverage': False, 'ldm_submit_post_submit_provenance_join_resolution': 'no_gap_broker_order_key_present_or_no_missing_rows'}`
+  - 근거: `{'status': 'pass', 'handoff_status': 'pass', 'root_cause_closure_status': 'closed', 'root_cause_open_reasons': [], 'artifact_regeneration_required': False, 'critical': True, 'primary': 'SUBMIT_DROUGHT_CRITICAL', 'matches': ['PRICE_GUARD_DROUGHT', 'LATENCY_DROUGHT', 'UPSTREAM_AI_THRESHOLD', 'SUBMIT_DROUGHT_CRITICAL'], 'missing': [], 'quote_freshness_attribution_inconsistent': False, 'submit_drought_refresh_attempted_count': 0, 'submit_drought_refresh_applied_count': 0, 'submit_drought_latency_pass_recovered_count': 0, 'submit_drought_unknown_latency_reason_count': 0, 'ldm_submit_real_submitted_row_count': 3, 'ldm_submit_missing_broker_order_key_count': 0, 'ldm_submit_missing_broker_order_key_rate': 0.0, 'ldm_submit_post_submit_provenance_join_gap': False, 'ldm_submit_post_submit_provenance_join_gap_raw': False, 'ldm_submit_bot_history_backfill_candidate_count': 0, 'ldm_submit_bot_history_backfill_full_coverage': False, 'ldm_submit_bot_history_exact_mapping_count': 0, 'ldm_submit_bot_history_exact_mapping_full_coverage': False, 'ldm_submit_post_submit_provenance_join_resolution': 'no_gap_broker_order_key_present_or_no_missing_rows'}`
   - 다음 액션: `No new implementation from this warning pass; continue postclose attribution and submit blocker tracking.`
 - P2 `scalp_entry_adm_unknown_bucket_source_quality_gap` 판정: `pass_no_unknown_bucket_warning`
   - 근거: `{'status': 'pass', 'warnings': [], 'affected_rows': 23, 'affected_rate': 0.0201, 'dimension_counts': {'risk_context_bucket': 23, 'price_resolution_bucket': 20}, 'unknown_root_cause_counts': {'risk_context_bucket:post_submit_or_exit_not_required': 23, 'price_resolution_bucket:post_submit_or_exit_not_required': 20}, 'stage_counts': {'blocked_ai_score': 203, 'latency_block': 20, 'latency_pass': 1, 'scalp_sim_pre_submit_liquidity_guard_would_block': 88, 'pre_submit_liquidity_guard_block': 11, 'scalp_sim_pre_submit_overbought_guard_would_block': 2, 'order_bundle_submitted': 3, 'scalp_sim_sell_order_assumed_filled': 20}, 'recommended_route': 'classified_not_applicable_no_workorder', 'not_available_route': 'field_legitimately_unavailable_no_workorder', 'lookup_status_counts': {'matched_prior_bucket': 918, 'new_or_unseen_token_vs_prior_adm': 227}}`
@@ -87,7 +87,7 @@
 ## AI Correction
 - status: `pass`
 - ai_status: `parsed`
-- provider_status: `{'provider': 'openai', 'status': 'success', 'new_provider_call': True, 'key_name': 'OPENAI_API_KEY', 'attempt_index': 1, 'model_index': 1, 'configured_key_count': 2, 'attempted_key_count': 1, 'attempted_keys': 1, 'attempted_key_names': ['OPENAI_API_KEY'], 'configured_model_count': 3, 'attempted_model_count': 1, 'attempted_models': ['gpt-5.5'], 'configured_models': ['gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini'], 'model': 'gpt-5.5', 'schema_name': 'threshold_ai_correction_v1', 'reasoning_effort': 'high', 'prompt_chars': 105259, 'input_context_chars': 103939, 'input_context_hash': '941515290cb332676b02e3bad34e3dd52149c609dca71f6884e8d8696669714a', 'elapsed_ms': 137073, 'output_chars': 11203, 'input_tokens': 30356, 'output_tokens': 7830, 'total_tokens': 38186, 'estimated_cost': None, 'estimated_cost_usd': None, 'cost_estimate_status': 'missing_price_contract'}`
+- provider_status: `{'provider': 'openai', 'status': 'success', 'new_provider_call': True, 'key_name': 'OPENAI_API_KEY', 'attempt_index': 1, 'model_index': 1, 'configured_key_count': 2, 'attempted_key_count': 1, 'attempted_keys': 1, 'attempted_key_names': ['OPENAI_API_KEY'], 'configured_model_count': 3, 'attempted_model_count': 1, 'attempted_models': ['gpt-5.5'], 'configured_models': ['gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini'], 'model': 'gpt-5.5', 'schema_name': 'threshold_ai_correction_v1', 'reasoning_effort': 'high', 'prompt_chars': 105767, 'input_context_chars': 104447, 'input_context_hash': '3f32de9dcf7b9f24ab8beadc2b3324af158671b81eeef7a07213937bbf44ded9', 'elapsed_ms': 155587, 'output_chars': 13472, 'input_tokens': 30437, 'output_tokens': 8128, 'total_tokens': 38565, 'estimated_cost': None, 'estimated_cost_usd': None, 'cost_estimate_status': 'missing_price_contract'}`
 - blocking_runtime_candidate_families: `['bad_entry_refined_canary', 'holding_exit_decision_matrix_advisory', 'holding_flow_ofi_smoothing', 'lifecycle_decision_matrix_runtime', 'protect_trailing_smoothing', 'score65_74_recovery_probe', 'soft_stop_whipsaw_confirmation']`
 - parse_warnings: `[]`
 - interpretation: `AI correction parsed successfully`
@@ -118,6 +118,9 @@
 - missing_runtime_summary_candidate_ids: `[]`
 - missing_workorder_order_ids: `[]`
 - interpretation: `LDM scale-in bucket candidates and workorders propagated to threshold EV, runtime summary, and code workorder.`
+- policy_contract_status: `fail`
+- policy_contract_missing: `['scale_in_policy_explicit_exclusion_missing', 'scale_in_policy_exclusion_reason_missing', 'scale_in_policy_source_link_missing', 'scale_in_policy_reopen_conditions_missing', 'scale_in_policy_runtime_gap_contract_not_closed']`
+- policy_contract_interpretation: `Scale-in policy contract is not closed with source link, exclusion reason, and reopen trigger.`
 
 ## Overnight Bucket Handoff
 - attribution_present: `True`
@@ -144,23 +147,26 @@
 
 ## LDM Hypothesis Parent Refinement
 - status: `pass`
-- input/consumed: `0` / `0`
-- closure_counts: `{}`
+- input/consumed: `4` / `4`
+- derived input/consumed: `4` / `4`
+- derived_contract_drift_recompute_consumed: `True`
+- closure_counts: `{'new_parent_candidate_created': 2, 'rare_observation_only_budget_capped': 2}`
 - missing: `[]`
 - warnings: `[]`
+- contract_drift: `{'candidate_feature_event_count': 3567, 'recomputable_match_count': 3567, 'recomputable_hypothesis_ids': ['ldm_hypothesis_00d0b765311ad7aa', 'ldm_hypothesis_711caa66c89b3f51', 'ldm_hypothesis_92dfecb5a05caa64', 'ldm_hypothesis_e04e4d815fd8d0f9'], 'runtime_matched_event_count': 0}`
 - diagnosis_missing_warning_input_ids: `[]`
 - diagnosis_missing_fail_input_ids: `[]`
-- diagnosed_repeated_input_ids: `[]`
+- diagnosed_repeated_input_ids: `['ldm_refinement_c31972141e831c1c', 'ldm_refinement_e7027055c25b76de', 'ldm_refinement_44a6d1dafc5209ea', 'ldm_refinement_b72b151c863bdfae']`
 - runtime_authority_violation_input_ids: `[]`
 
 ## Active Sim Priority Handoff
-- status: `warning`
+- status: `fail`
 - active_seed_ids: `['active_seed_03c539e6527cdda2', 'active_seed_08846c77940cfa3e', 'active_seed_136f942c5ddd1131', 'active_seed_5fbf3e3baf24631e']`
 - observed_seed_ids: `['active_seed_03c539e6527cdda2', 'active_seed_0747f150d4c2eab8', 'active_seed_136f942c5ddd1131', 'active_seed_5a2bc352f93a2417']`
-- missing: `[]`
-- warnings: `['active_sim_priority_preopen_handoff_pending']`
-- match_absence_diagnosis: `not_applicable`
-- match_absence_reason: `active_priority_observed_or_no_active_priority`
+- missing: `['active_sim_priority_producer_catalog_key_mismatch']`
+- warnings: `['swing_active_arm_priority_runtime_observation_missing']`
+- match_absence_diagnosis: `catalog_or_preopen_handoff_gap`
+- match_absence_reason: `active_sim_priority_producer_catalog_key_mismatch`
 - candidate_prefix_count: `3567`
 - top_candidate_prefixes: `[('{"entry_score_parent": "score_watch_recovery", "entry_source_parent": "entry_source_blocked_ai_score"}', 2166), ('{"entry_score_parent": "score_watch_recovery", "entry_source_parent": "entry_source_wait6579"}', 753), ('{"entry_score_parent": "score_mid_recovery", "entry_source_parent": "entry_source_blocked_ai_score"}', 550), ('{"entry_score_parent": "score_high_confirmation", "entry_source_parent": "entry_source_wait6579"}', 64), ('{"entry_score_parent": "score_mid_recovery", "entry_source_parent": "entry_source_wait6579"}', 34)]`
 
@@ -202,15 +208,15 @@
 - interpretation: `stage hook implementation-ready orders propagated to code improvement workorder`
 
 ## Bottom Rebound Sim Handoff
-- status: `not_applicable`
-- included: `False`
-- source_rows: `0`
-- selected_candidate_count: `0`
-- arm_count: `0`
-- persisted_candidate_count: `0`
-- persisted_arm_count: `0`
+- status: `pass`
+- included: `True`
+- source_rows: `40`
+- selected_candidate_count: `32`
+- arm_count: `96`
+- persisted_candidate_count: `32`
+- persisted_arm_count: `96`
 - missing: `[]`
-- interpretation: `bottom_rebound source was absent or blocked; safe-pool-only swing sim path applies`
+- interpretation: `bottom_rebound source candidates were selected, armed, and persisted for label/EV handoff`
 
 ## Runtime Gap Provenance
 - active_gap_count: `0`

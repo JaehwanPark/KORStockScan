@@ -1,12 +1,12 @@
 # Threshold Cycle Postclose Verification - 2026-06-18
 
-- status: `warning`
+- status: `fail`
 - latest_start_marker: `[START] threshold-cycle postclose target_date=2026-06-18 max_iterations=80 started_at=2026-06-18T15:45:01+0900`
 - latest_done_marker: `[DONE] threshold-cycle postclose target_date=2026-06-18 recovery_action=tail_repair_done_reconciliation full_wrapper_rerun=false finished_at=2026-06-18T16:47:08+0900`
-- predecessor_status: `pass`
+- predecessor_status: `fail`
 - predecessor_wait_count: `0`
 - predecessor_timeout_count: `0`
-- log_issues: `[]`
+- log_issues: `['active_sim_priority_handoff_missing', 'scale_in_policy_contract_missing']`
 
 ## Execution Profile
 - profile_status: `full_profile`
@@ -15,8 +15,8 @@
 - interpretation: `latest DONE marker was produced by controller recovery action `tail_repair_done_reconciliation`; execution flags are not asserted by this marker`
 - missing_required_artifacts: `[]`
 - missing_downstream_links: `[]`
-- stale_downstream_links: `[]`
-- runtime_apply_gap_issues: `[]`
+- stale_downstream_links: `['threshold_cycle_ev_stale_before_code_improvement_workorder', 'threshold_cycle_ev_stale_before_pattern_lab_currentness_audit', 'threshold_cycle_ev_stale_before_pattern_lab_propagation_audit']`
+- runtime_apply_gap_issues: `['runtime_apply_gap_audit_stale_before_threshold_preopen_apply', 'scale_in_policy_contract_missing']`
 
 ## Warning Follow-Up Summary
 - status: `warning`
@@ -118,6 +118,9 @@
 - missing_runtime_summary_candidate_ids: `[]`
 - missing_workorder_order_ids: `[]`
 - interpretation: `LDM scale-in bucket candidates and workorders propagated to threshold EV, runtime summary, and code workorder.`
+- policy_contract_status: `fail`
+- policy_contract_missing: `['scale_in_policy_explicit_exclusion_missing', 'scale_in_policy_exclusion_reason_missing', 'scale_in_policy_source_link_missing', 'scale_in_policy_reopen_conditions_missing', 'scale_in_policy_runtime_gap_contract_not_closed']`
+- policy_contract_interpretation: `Scale-in policy contract is not closed with source link, exclusion reason, and reopen trigger.`
 
 ## Overnight Bucket Handoff
 - attribution_present: `True`
@@ -144,23 +147,26 @@
 
 ## LDM Hypothesis Parent Refinement
 - status: `pass`
-- input/consumed: `0` / `0`
-- closure_counts: `{}`
+- input/consumed: `4` / `4`
+- derived input/consumed: `4` / `4`
+- derived_contract_drift_recompute_consumed: `True`
+- closure_counts: `{'rare_observation_only_budget_capped': 4}`
 - missing: `[]`
 - warnings: `[]`
+- contract_drift: `{'candidate_feature_event_count': 10449, 'recomputable_match_count': 10449, 'recomputable_hypothesis_ids': ['ldm_hypothesis_00d0b765311ad7aa', 'ldm_hypothesis_711caa66c89b3f51', 'ldm_hypothesis_92dfecb5a05caa64', 'ldm_hypothesis_e04e4d815fd8d0f9'], 'runtime_matched_event_count': 0}`
 - diagnosis_missing_warning_input_ids: `[]`
 - diagnosis_missing_fail_input_ids: `[]`
-- diagnosed_repeated_input_ids: `[]`
+- diagnosed_repeated_input_ids: `['ldm_refinement_d7138f56101e4dbb', 'ldm_refinement_26ad5b4482cbfed4', 'ldm_refinement_6d1c1803e741e4c3', 'ldm_refinement_a6cb30eeb6159375']`
 - runtime_authority_violation_input_ids: `[]`
 
 ## Active Sim Priority Handoff
-- status: `warning`
+- status: `fail`
 - active_seed_ids: `['active_seed_03c539e6527cdda2', 'active_seed_136f942c5ddd1131', 'active_seed_a0e7fe5858bd147e']`
 - observed_seed_ids: `['active_seed_03c539e6527cdda2', 'active_seed_136f942c5ddd1131', 'active_seed_29d916f232e7c84e', 'active_seed_ad35e7e1820c948b']`
-- missing: `[]`
+- missing: `['active_sim_priority_producer_catalog_key_mismatch']`
 - warnings: `['swing_active_arm_priority_runtime_observation_missing']`
-- match_absence_diagnosis: `not_applicable`
-- match_absence_reason: `active_priority_observed_or_no_active_priority`
+- match_absence_diagnosis: `catalog_or_preopen_handoff_gap`
+- match_absence_reason: `active_sim_priority_producer_catalog_key_mismatch`
 - candidate_prefix_count: `10449`
 - top_candidate_prefixes: `[('{"entry_score_parent": "score_watch_recovery", "entry_source_parent": "entry_source_wait6579"}', 5008), ('{"entry_score_parent": "score_watch_recovery", "entry_source_parent": "entry_source_blocked_ai_score"}', 2868), ('{"entry_score_parent": "score_mid_recovery", "entry_source_parent": "entry_source_wait6579"}', 1732), ('{"entry_score_parent": "score_mid_recovery", "entry_source_parent": "entry_source_blocked_ai_score"}', 407), ('{"entry_score_parent": "score_high_confirmation", "entry_source_parent": "entry_source_wait6579"}', 359)]`
 
@@ -202,15 +208,15 @@
 - interpretation: `stage hook implementation-ready orders propagated to code improvement workorder`
 
 ## Bottom Rebound Sim Handoff
-- status: `not_applicable`
-- included: `False`
-- source_rows: `0`
-- selected_candidate_count: `0`
-- arm_count: `0`
-- persisted_candidate_count: `0`
-- persisted_arm_count: `0`
+- status: `pass`
+- included: `True`
+- source_rows: `40`
+- selected_candidate_count: `35`
+- arm_count: `105`
+- persisted_candidate_count: `35`
+- persisted_arm_count: `105`
 - missing: `[]`
-- interpretation: `bottom_rebound source was absent or blocked; safe-pool-only swing sim path applies`
+- interpretation: `bottom_rebound source candidates were selected, armed, and persisted for label/EV handoff`
 
 ## Runtime Gap Provenance
 - active_gap_count: `0`

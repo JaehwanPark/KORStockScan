@@ -3,36 +3,36 @@
 ## 판정
 - status: `pass`
 - source_contract_status: `warning` / changes: `25`
-- ai_two_pass_review: `partial` / model: `sharded` / tier: `tier2`
-- ai_review_shards: `3` / `5` parsed, reviewed_candidates=`3`
+- ai_two_pass_review: `parsed` / model: `sharded` / tier: `tier2`
+- ai_review_shards: `4` / `5` parsed, reviewed_candidates=`4`
 - surfaced_candidate_count: `168`
 - canonical/legacy buckets: `142` / `483`
-- dual_proposals: deterministic=`500` ai=`41` hybrid_selected=`0`
+- dual_proposals: deterministic=`500` ai=`41` hybrid_selected=`41`
 - absorbed/source_quality_blocker: `371` / `0`
 - lifecycle_flow_parent_granularity: `target_pass` level=`L1_broad` parents=`32` target=`30-60`
 - lifecycle_flow_absorbed_children: child=`155` sample=`22104` conflict_parents=`8`
-- ldm_refinement_pressure: input=`0` consumed=`0` closures=`{}`
+- ldm_refinement_pressure: input=`4` consumed=`4` closures=`{'new_parent_candidate_created': 1, 'parent_refinement_candidate_created': 1, 'rare_observation_only_budget_capped': 2}`
 - sim_auto_approved_count: `7`
 - lifecycle_flow_sim_probe_candidate_count: `15`
 - source_dimension_gap_count: `61` / actionable_unknown_gap_count: `0`
-- quiet_gap_count: `429` / sim_live_connected: `14`
+- quiet_gap_count: `430` / sim_live_connected: `14`
 - live_auto_apply_ready_count: `0`
 - human_intervention_required: `False`
-- warnings: `['source_contract_drift_warning', 'ai_review_metric_contract_missing:source_contract:source_added:institutional_flow_context:source_key_institutional_flow_context', 'ai_review_evidence_authority_violation:source_contract:source_added:institutional_flow_context:source_key_institutional_flow_context', 'taxonomy_discovery_review:ai_review_metric_contract_missing:source_contract:source_added:institutional_flow_context:source_key_institutional_flow_context', 'taxonomy_discovery_review:ai_review_evidence_authority_violation:source_contract:source_added:institutional_flow_context:source_key_institutional_flow_context']`
+- warnings: `['source_contract_drift_warning']`
 
 ## 판정 (Conflict Resolution)
 - parent_conflict_resolution_count: `8`
 - sim_eligible_after_resolution: `0`
 - resolution_states: `{'resolution_blocked_source_quality': 2, 'resolution_complete': 3, 'resolution_blocked_thin_sample': 3}`
 
-- conflict_parent=`lifecycle_flow:combo_lifecycle_flow:entry_score_parent=score_mid_recovery|submit` state=`resolution_blocked_source_quality` tag=`source-quality 때문에 판정 불가` ev_before=`1.930376` ev_after=`1.930376` children=`10` sq_gap=`10` strategy_reversal=`0` exclude=`0` collecting=`0` positive_thin=`0` sim_eligible=`False` live_blockers=`['source_quality_gap_children']` 
-- conflict_parent=`lifecycle_flow:combo_lifecycle_flow:entry_score_parent=score_unobserved|submit_q` state=`resolution_blocked_source_quality` tag=`source-quality 때문에 판정 불가` ev_before=`-0.816266` ev_after=`-0.816266` children=`12` sq_gap=`12` strategy_reversal=`0` exclude=`0` collecting=`0` positive_thin=`0` sim_eligible=`False` live_blockers=`['source_quality_gap_children', 'parent_ev_not_positive']` 
-- conflict_parent=`lifecycle_flow:combo_lifecycle_flow:entry_score_parent=score_watch_recovery|subm` state=`resolution_complete` tag=`resolution_complete` ev_before=`-1.310032` ev_after=`-1.310032` children=`25` sq_gap=`0` strategy_reversal=`0` exclude=`0` collecting=`0` positive_thin=`7` sim_eligible=`False` live_blockers=`['parent_ev_not_positive']` 
-- conflict_parent=`lifecycle_flow:combo_lifecycle_flow:entry_score_parent=score_watch_recovery|subm` state=`resolution_complete` tag=`resolution_complete` ev_before=`-0.137724` ev_after=`-0.137724` children=`16` sq_gap=`0` strategy_reversal=`0` exclude=`0` collecting=`0` positive_thin=`5` sim_eligible=`False` live_blockers=`['parent_ev_not_positive']` 
-- conflict_parent=`lifecycle_flow:combo_lifecycle_flow:entry_score_parent=score_unobserved|submit_q` state=`resolution_complete` tag=`resolution_complete` ev_before=`-0.800579` ev_after=`-0.800579` children=`12` sq_gap=`0` strategy_reversal=`0` exclude=`0` collecting=`0` positive_thin=`5` sim_eligible=`False` live_blockers=`['parent_ev_not_positive']` 
-- conflict_parent=`lifecycle_flow:combo_lifecycle_flow:entry_score_parent=score_watch_recovery|subm` state=`resolution_blocked_thin_sample` tag=`sample 부족 keep collecting` ev_before=`0.024567` ev_after=`0.024567` children=`5` sq_gap=`0` strategy_reversal=`0` exclude=`0` collecting=`2` positive_thin=`0` sim_eligible=`False` live_blockers=`['sample_below_live_floor']` 
-- conflict_parent=`lifecycle_flow:combo_lifecycle_flow:entry_score_parent=score_mid_recovery|submit` state=`resolution_blocked_thin_sample` tag=`sample 부족 keep collecting` ev_before=`-0.65865` ev_after=`-0.65865` children=`4` sq_gap=`0` strategy_reversal=`0` exclude=`0` collecting=`0` positive_thin=`1` sim_eligible=`False` live_blockers=`['parent_ev_not_positive', 'sample_below_live_floor']` 
-- conflict_parent=`lifecycle_flow:combo_lifecycle_flow:entry_score_parent=score_watch_recovery|subm` state=`resolution_blocked_thin_sample` tag=`sample 부족 keep collecting` ev_before=`0.799867` ev_after=`0.799867` children=`3` sq_gap=`0` strategy_reversal=`0` exclude=`0` collecting=`1` positive_thin=`0` sim_eligible=`False` live_blockers=`['sample_below_live_floor']` 
+- conflict_parent=`lifecycle_flow:combo_lifecycle_flow:entry_score_parent=score_mid_recovery|submit` state=`resolution_blocked_source_quality` tag=`source-quality 때문에 판정 불가` ev_before=`1.930376` ev_after=`1.930376` children=`10` sq_gap=`10` strategy_reversal=`0` exclude=`0` collecting=`0` positive_thin=`0` sim_eligible=`False` live_blockers=`['source_quality_gap_children']`
+- conflict_parent=`lifecycle_flow:combo_lifecycle_flow:entry_score_parent=score_unobserved|submit_q` state=`resolution_blocked_source_quality` tag=`source-quality 때문에 판정 불가` ev_before=`-0.816266` ev_after=`-0.816266` children=`12` sq_gap=`12` strategy_reversal=`0` exclude=`0` collecting=`0` positive_thin=`0` sim_eligible=`False` live_blockers=`['source_quality_gap_children', 'parent_ev_not_positive']`
+- conflict_parent=`lifecycle_flow:combo_lifecycle_flow:entry_score_parent=score_watch_recovery|subm` state=`resolution_complete` tag=`resolution_complete` ev_before=`-1.310032` ev_after=`-1.310032` children=`25` sq_gap=`0` strategy_reversal=`0` exclude=`0` collecting=`0` positive_thin=`7` sim_eligible=`False` live_blockers=`['parent_ev_not_positive']`
+- conflict_parent=`lifecycle_flow:combo_lifecycle_flow:entry_score_parent=score_watch_recovery|subm` state=`resolution_complete` tag=`resolution_complete` ev_before=`-0.137724` ev_after=`-0.137724` children=`16` sq_gap=`0` strategy_reversal=`0` exclude=`0` collecting=`0` positive_thin=`5` sim_eligible=`False` live_blockers=`['parent_ev_not_positive']`
+- conflict_parent=`lifecycle_flow:combo_lifecycle_flow:entry_score_parent=score_unobserved|submit_q` state=`resolution_complete` tag=`resolution_complete` ev_before=`-0.800579` ev_after=`-0.800579` children=`12` sq_gap=`0` strategy_reversal=`0` exclude=`0` collecting=`0` positive_thin=`5` sim_eligible=`False` live_blockers=`['parent_ev_not_positive']`
+- conflict_parent=`lifecycle_flow:combo_lifecycle_flow:entry_score_parent=score_watch_recovery|subm` state=`resolution_blocked_thin_sample` tag=`sample 부족 keep collecting` ev_before=`0.024567` ev_after=`0.024567` children=`5` sq_gap=`0` strategy_reversal=`0` exclude=`0` collecting=`2` positive_thin=`0` sim_eligible=`False` live_blockers=`['sample_below_live_floor']`
+- conflict_parent=`lifecycle_flow:combo_lifecycle_flow:entry_score_parent=score_mid_recovery|submit` state=`resolution_blocked_thin_sample` tag=`sample 부족 keep collecting` ev_before=`-0.65865` ev_after=`-0.65865` children=`4` sq_gap=`0` strategy_reversal=`0` exclude=`0` collecting=`0` positive_thin=`1` sim_eligible=`False` live_blockers=`['parent_ev_not_positive', 'sample_below_live_floor']`
+- conflict_parent=`lifecycle_flow:combo_lifecycle_flow:entry_score_parent=score_watch_recovery|subm` state=`resolution_blocked_thin_sample` tag=`sample 부족 keep collecting` ev_before=`0.799867` ev_after=`0.799867` children=`3` sq_gap=`0` strategy_reversal=`0` exclude=`0` collecting=`1` positive_thin=`0` sim_eligible=`False` live_blockers=`['sample_below_live_floor']`
 
 ## 근거
 
@@ -51,19 +51,19 @@
 - `source_added` severity=`warning` subject=`wait6579` detail=`{'source_key': 'wait6579'}`
 
 ### AI Two-Pass Review
-- interpretation_count: `3`
-- ai_tier2_proposal_count: `3`
-- comparative_review_count: `3`
+- interpretation_count: `4`
+- ai_tier2_proposal_count: `4`
+- comparative_review_count: `4`
 - audit_status: `pass`
-- audit_issues: `[]`
+- audit_issues: `['Current embedded AI Tier2 proposal says reject/not_provided, which is inconsistent with the candidate being a stable existing bucket.', 'No explicit source-quality or runtime gap justifies rejection or downgrade.', 'Deterministic keep_bucket is consistent with authority and evidence policy.']`
 - audit_reason: `sharded review aggregate`
 
 ### AI Review Shards
-- `live_contract_review` status=`skipped_empty` candidates=`0` omitted=`0` context_chars=`36853`
-- `lifecycle_flow_review` status=`parsed` candidates=`1` omitted=`154` context_chars=`43431`
-- `sim_policy_review` status=`parsed` candidates=`1` omitted=`34` context_chars=`40355`
-- `gap_workorder_review` status=`parsed` candidates=`1` omitted=`17` context_chars=`40387`
-- `taxonomy_discovery_review` status=`parse_rejected` candidates=`1` omitted=`16` context_chars=`40570`
+- `live_contract_review` status=`skipped_empty` candidates=`0` omitted=`0` context_chars=`36971`
+- `lifecycle_flow_review` status=`parsed` candidates=`1` omitted=`154` context_chars=`43549`
+- `sim_policy_review` status=`parsed` candidates=`1` omitted=`34` context_chars=`40473`
+- `gap_workorder_review` status=`parsed` candidates=`1` omitted=`17` context_chars=`40505`
+- `taxonomy_discovery_review` status=`parsed` candidates=`1` omitted=`16` context_chars=`40688`
 
 - `lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_blocked_ai_score_stale_fresh_liquidity_liq` stage=`lifecycle_flow` state=`source_only_keep_collecting` action=`relax_or_recover` relation=`existing_bucket_refinement` canonical=`lifecycle_flow:combo_lifecycle_flow:entry=score_watch_recovery|submit=submit_observed|holding=holding_observed|scale_in=scale_in_observed|exit=exit_observed` joined=`1` ev=`1.9619` ai_final=`-` taxonomy=`absorb_as_dimension`
 - `lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_blocked_ai_score_stale_stale_block_liquidi` stage=`lifecycle_flow` state=`source_only_keep_collecting` action=`relax_or_recover` relation=`existing_bucket_refinement` canonical=`lifecycle_flow:combo_lifecycle_flow:entry=score_watch_recovery|submit=submit_observed|holding=holding_observed|scale_in=scale_in_observed|exit=exit_observed` joined=`1` ev=`2.2855` ai_final=`-` taxonomy=`absorb_as_dimension`

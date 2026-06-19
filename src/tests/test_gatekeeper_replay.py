@@ -9,6 +9,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import gzip
 import json
 import sys
 from datetime import datetime
@@ -23,6 +24,7 @@ from src.engine.sniper_gatekeeper_replay import (
     load_gatekeeper_snapshots,
     rerun_gatekeeper_snapshot,
 )
+import src.engine.sniper_gatekeeper_replay as replay_mod
 from src.engine.sniper_config import CONF
 
 
@@ -61,6 +63,19 @@ def _rerun_snapshot(item: dict) -> str:
             str(result.get("report") or ""),
         ]
     )
+
+
+def test_load_gatekeeper_snapshots_reads_gzip(monkeypatch, tmp_path):
+    data_dir = tmp_path / "data"
+    snapshot_dir = data_dir / "gatekeeper"
+    snapshot_dir.mkdir(parents=True)
+    with gzip.open(snapshot_dir / "gatekeeper_snapshots_2026-06-12.jsonl.gz", "wt", encoding="utf-8") as handle:
+        handle.write(json.dumps({"stock_code": "005930", "signal_time": "09:10:00"}) + "\n")
+    monkeypatch.setattr(replay_mod, "DATA_DIR", data_dir)
+
+    rows = load_gatekeeper_snapshots("2026-06-12")
+
+    assert rows == [{"stock_code": "005930", "signal_time": "09:10:00"}]
 
 
 def main():

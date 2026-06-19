@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import gzip
 import hashlib
 import json
 import math
@@ -34,6 +35,11 @@ class HypothesisAggregate:
     hypothesis_id: str
     plan_hypothesis: dict[str, Any] = field(default_factory=dict)
     match_count: int = 0
+    runtime_match_count: int = 0
+    derived_match_count: int = 0
+    raw_ldm_hypothesis_matched: Counter[str] = field(default_factory=Counter)
+    raw_ldm_hypothesis_id_present: Counter[str] = field(default_factory=Counter)
+    source_event_files: Counter[str] = field(default_factory=Counter)
     source_parent_bucket_ids: Counter[str] = field(default_factory=Counter)
     stock_codes: Counter[str] = field(default_factory=Counter)
     stages: Counter[str] = field(default_factory=Counter)
@@ -118,22 +124,162 @@ def _pipeline_event_path(target_date: str) -> Path:
     return PIPELINE_EVENTS_DIR / f"pipeline_events_{target_date}.jsonl"
 
 
-def _iter_pipeline_event_fields(target_date: str):
+def _pipeline_event_paths(target_date: str) -> list[Path]:
     path = _pipeline_event_path(target_date)
-    try:
-        handle = path.open("r", encoding="utf-8", errors="replace")
-    except OSError:
-        return
-    with handle:
-        for line in handle:
-            if not line.strip():
-                continue
-            try:
-                payload = json.loads(line)
-            except Exception:
-                continue
-            fields = payload.get("fields") if isinstance(payload.get("fields"), dict) else {}
-            yield payload, fields
+    paths: list[Path] = []
+    if path.exists():
+        paths.append(path)
+    gzip_path = path.with_suffix(path.suffix + ".gz")
+    if gzip_path.exists():
+        paths.append(gzip_path)
+    return paths
+
+
+def _open_pipeline_event_path(path: Path):
+    if path.suffix == ".gz":
+        return gzip.open(path, "rt", encoding="utf-8", errors="replace")
+    return path.open("r", encoding="utf-8", errors="replace")
+
+
+def _iter_pipeline_event_records(target_date: str):
+    for path in _pipeline_event_paths(target_date):
+        try:
+            handle = _open_pipeline_event_path(path)
+        except OSError:
+            continue
+        with handle:
+            for line in handle:
+                if not line.strip():
+                    continue
+                try:
+                    payload = json.loads(line)
+                except Exception:
+                    continue
+                if not isinstance(payload, dict):
+                    continue
+                fields = payload.get("fields") if isinstance(payload.get("fields"), dict) else {}
+                yield payload, fields, path
+
+
+def _iter_pipeline_event_fields(target_date: str):
+    for payload, fields, _path in _iter_pipeline_event_records(target_date):
+        yield payload, fields
+
+
+_LDM_HYPOTHESIS_RUNTIME_REQUIREMENT_FIELDS = {"entry_score_parent", "entry_source_parent", "submit_quality_parent"}
+
+
+def _hypothesis_runtime_contract_compatible(hypothesis: dict[str, Any]) -> bool:
+    if not isinstance(hypothesis, dict):
+        return False
+    if hypothesis.get("runtime_effect") is not False:
+        return False
+    if hypothesis.get("allowed_runtime_apply") is not False:
+        return False
+    if hypothesis.get("actual_order_submitted") is not False:
+        return False
+    if hypothesis.get("broker_order_forbidden") is not True:
+        return False
+    forbidden = set(hypothesis.get("forbidden_uses") or [])
+    required = {
+        "buy_sell_hold_live_rule",
+        "threshold_apply",
+        "provider_route_change",
+        "bot_restart",
+        "broker_order",
+        "hard_safety_bypass",
+    }
+    if not required.issubset(forbidden):
+        return False
+    if not forbidden.intersection({"sizing_formula_runtime_apply_without_guard", "position_cap_release"}):
+        return False
+    return isinstance(hypothesis.get("observable_requirements"), list) and bool(hypothesis.get("observable_requirements"))
+
+
+def _hypothesis_matches_requirements(candidate: dict[str, Any], requirements: Any) -> bool:
+    if not isinstance(candidate, dict) or not isinstance(requirements, list) or not requirements:
+        return False
+    for requirement in requirements:
+        if not isinstance(requirement, dict):
+            return False
+        field_name = str(requirement.get("field") or "").strip()
+        op = str(requirement.get("op") or "eq").strip()
+        expected = str(requirement.get("value") or "").strip()
+        actual = str(candidate.get(field_name) or "").strip()
+        if field_name not in _LDM_HYPOTHESIS_RUNTIME_REQUIREMENT_FIELDS or not expected:
+            return False
+        if op in {"eq", "bin_eq"}:
+            if actual != expected:
+                return False
+        else:
+            return False
+    return True
+
+
+def _derived_hypothesis_id_for_features(
+    candidate_features: dict[str, Any],
+    hypotheses: dict[str, dict[str, Any]],
+) -> str:
+    for hypothesis_id, hypothesis in hypotheses.items():
+        if not _hypothesis_runtime_contract_compatible(hypothesis):
+            continue
+        if _hypothesis_matches_requirements(candidate_features, hypothesis.get("observable_requirements")):
+            return hypothesis_id
+    return ""
+
+
+def _add_match_to_aggregate(
+    *,
+    aggregate: HypothesisAggregate,
+    payload: dict[str, Any],
+    fields: dict[str, Any],
+    source_path: Path,
+    candidate_features: dict[str, Any],
+    source_origin: str,
+) -> None:
+    aggregate.match_count += 1
+    aggregate.source_event_files[str(source_path)] += 1
+    if source_origin == "runtime_matched":
+        aggregate.runtime_match_count += 1
+    else:
+        aggregate.derived_match_count += 1
+    raw_matched = "true" if _truthy(fields.get("ldm_hypothesis_matched")) else "false"
+    aggregate.raw_ldm_hypothesis_matched[raw_matched] += 1
+    raw_id_present = "true" if str(fields.get("ldm_hypothesis_id") or "").strip() else "false"
+    aggregate.raw_ldm_hypothesis_id_present[raw_id_present] += 1
+    parent_id = str(fields.get("source_parent_bucket_id") or fields.get("canonical_parent_bucket") or "").strip()
+    if parent_id:
+        aggregate.source_parent_bucket_ids[parent_id] += 1
+    stock_code = str(payload.get("stock_code") or "").strip()
+    if stock_code:
+        aggregate.stock_codes[stock_code] += 1
+    stage = str(payload.get("stage") or "").strip()
+    if stage:
+        aggregate.stages[stage] += 1
+    if candidate_features:
+        aggregate.candidate_features.update(candidate_features)
+    requirements = aggregate.plan_hypothesis.get("observable_requirements")
+    if not isinstance(requirements, list):
+        requirements = []
+    aggregate.observable_signatures[_observable_signature(candidate_features, requirements)] += 1
+    source_quality = str(fields.get("source_quality_status") or fields.get("source_quality") or "").lower()
+    if "block" in source_quality or "fail" in source_quality:
+        aggregate.source_quality_blocked_count += 1
+    actual_order_value = fields.get("actual_order_submitted")
+    broker_forbidden_value = fields.get("broker_order_forbidden")
+    authority_contract_missing = actual_order_value in (None, "", "-") or broker_forbidden_value in (None, "", "-")
+    if source_origin == "runtime_matched":
+        authority_violation = authority_contract_missing or _truthy(actual_order_value) or not _truthy(broker_forbidden_value)
+    else:
+        authority_violation = (not authority_contract_missing) and (
+            _truthy(actual_order_value) or not _truthy(broker_forbidden_value)
+        )
+    if authority_violation:
+        aggregate.forbidden_contract_violation_count += 1
+        aggregate.source_quality_blocked_count += 1
+    profit = _safe_float(fields.get("profit_rate"), None)
+    if profit is not None:
+        aggregate.profit_values.append(profit)
 
 
 def _observable_signature(features: dict[str, Any], requirements: list[dict[str, Any]] | None = None) -> str:
@@ -510,6 +656,18 @@ def _pressure_item(
             plan.get("observable_requirements") if isinstance(plan.get("observable_requirements"), list) else [],
         ),
         "match_count": aggregate.match_count,
+        "runtime_match_count": aggregate.runtime_match_count,
+        "derived_match_count": aggregate.derived_match_count,
+        "source_match_origin": "mixed_runtime_and_derived"
+        if aggregate.runtime_match_count and aggregate.derived_match_count
+        else "derived_contract_drift_recompute"
+        if aggregate.derived_match_count
+        else "runtime_matched",
+        "derived_from_contract_drift": aggregate.derived_match_count > 0,
+        "raw_event_mutated": False,
+        "raw_ldm_hypothesis_matched": dict(sorted(aggregate.raw_ldm_hypothesis_matched.items())),
+        "raw_ldm_hypothesis_id_present": dict(sorted(aggregate.raw_ldm_hypothesis_id_present.items())),
+        "source_event_files": dict(sorted(aggregate.source_event_files.items())),
         "positive_count": positive_count,
         "negative_count": negative_count,
         "source_quality_blocked_count": aggregate.source_quality_blocked_count,
@@ -566,48 +724,46 @@ def build_refinement_report(target_date: str) -> dict[str, Any]:
     lifecycle_report = _latest_lifecycle_bucket_report(target_date)
     parent_by_id, parent_rows = _parent_lookup(lifecycle_report)
     aggregates: dict[str, HypothesisAggregate] = {}
-    for payload, fields in _iter_pipeline_event_fields(target_date) or []:
-        if not _truthy(fields.get("ldm_hypothesis_matched")):
-            continue
-        hypothesis_id = str(fields.get("ldm_hypothesis_id") or "").strip()
-        if not hypothesis_id:
-            continue
+    runtime_match_count = 0
+    derived_match_count = 0
+    candidate_feature_event_count = 0
+    source_event_files: Counter[str] = Counter()
+    for payload, fields, source_path in _iter_pipeline_event_records(target_date) or []:
+        source_event_files[str(source_path)] += 1
+        candidate_features = _parse_json_mapping(fields.get("ldm_hypothesis_candidate_features"))
+        if candidate_features:
+            candidate_feature_event_count += 1
+        raw_runtime_matched = _truthy(fields.get("ldm_hypothesis_matched"))
+        source_origin = "runtime_matched"
+        if raw_runtime_matched:
+            hypothesis_id = str(fields.get("ldm_hypothesis_id") or "").strip()
+            if not hypothesis_id:
+                continue
+            runtime_match_count += 1
+        else:
+            if not candidate_features:
+                continue
+            hypothesis_id = _derived_hypothesis_id_for_features(candidate_features, hypotheses)
+            if not hypothesis_id:
+                continue
+            source_origin = "derived_contract_drift_recompute"
+            derived_match_count += 1
+
         aggregate = aggregates.setdefault(
             hypothesis_id,
             HypothesisAggregate(hypothesis_id=hypothesis_id, plan_hypothesis=hypotheses.get(hypothesis_id, {})),
         )
-        aggregate.match_count += 1
         if hypothesis_id not in hypotheses:
             aggregate.plan_hypothesis_missing_count += 1
             aggregate.source_quality_blocked_count += 1
-        parent_id = str(fields.get("source_parent_bucket_id") or fields.get("canonical_parent_bucket") or "").strip()
-        if parent_id:
-            aggregate.source_parent_bucket_ids[parent_id] += 1
-        stock_code = str(payload.get("stock_code") or "").strip()
-        if stock_code:
-            aggregate.stock_codes[stock_code] += 1
-        stage = str(payload.get("stage") or "").strip()
-        if stage:
-            aggregate.stages[stage] += 1
-        candidate_features = _parse_json_mapping(fields.get("ldm_hypothesis_candidate_features"))
-        if candidate_features:
-            aggregate.candidate_features.update(candidate_features)
-        requirements = aggregate.plan_hypothesis.get("observable_requirements")
-        if not isinstance(requirements, list):
-            requirements = []
-        aggregate.observable_signatures[_observable_signature(candidate_features, requirements)] += 1
-        source_quality = str(fields.get("source_quality_status") or fields.get("source_quality") or "").lower()
-        if "block" in source_quality or "fail" in source_quality:
-            aggregate.source_quality_blocked_count += 1
-        actual_order_value = fields.get("actual_order_submitted")
-        broker_forbidden_value = fields.get("broker_order_forbidden")
-        authority_contract_missing = actual_order_value in (None, "", "-") or broker_forbidden_value in (None, "", "-")
-        if authority_contract_missing or _truthy(actual_order_value) or not _truthy(broker_forbidden_value):
-            aggregate.forbidden_contract_violation_count += 1
-            aggregate.source_quality_blocked_count += 1
-        profit = _safe_float(fields.get("profit_rate"), None)
-        if profit is not None:
-            aggregate.profit_values.append(profit)
+        _add_match_to_aggregate(
+            aggregate=aggregate,
+            payload=payload,
+            fields=fields,
+            source_path=source_path,
+            candidate_features=candidate_features,
+            source_origin=source_origin,
+        )
 
     refinement_inputs: list[dict[str, Any]] = []
     for aggregate in aggregates.values():
@@ -644,6 +800,7 @@ def build_refinement_report(target_date: str) -> dict[str, Any]:
         "forbidden_uses": list(FORBIDDEN_USES),
         "source_artifacts": {
             "pipeline_events": str(_pipeline_event_path(target_date)),
+            "pipeline_event_files": sorted(source_event_files),
             "observation_plan": str(latest_observation_plan_path(target_date)),
             "previous_lifecycle_bucket_discovery": str(
                 LIFECYCLE_BUCKET_DIR / f"lifecycle_bucket_discovery_{lifecycle_report.get('date')}.json"
@@ -653,8 +810,14 @@ def build_refinement_report(target_date: str) -> dict[str, Any]:
         },
         "summary": {
             "hypothesis_match_count": sum(item.match_count for item in aggregates.values()),
+            "runtime_hypothesis_match_count": runtime_match_count,
+            "derived_hypothesis_match_count": derived_match_count,
+            "candidate_feature_event_count": candidate_feature_event_count,
             "matched_hypothesis_count": len(aggregates),
             "refinement_input_count": len(refinement_inputs),
+            "derived_refinement_input_count": sum(1 for item in refinement_inputs if item.get("derived_from_contract_drift")),
+            "source_event_files": sorted(source_event_files),
+            "raw_event_mutated": False,
             "classification_counts": dict(sorted(class_counts.items())),
             "plan_hypothesis_count": len(hypotheses),
         },
@@ -683,6 +846,10 @@ def render_markdown(report: dict[str, Any]) -> str:
         "",
         "## Summary",
         f"- hypothesis_match_count: `{summary.get('hypothesis_match_count')}`",
+        f"- runtime_hypothesis_match_count: `{summary.get('runtime_hypothesis_match_count')}`",
+        f"- derived_hypothesis_match_count: `{summary.get('derived_hypothesis_match_count')}`",
+        f"- derived_refinement_input_count: `{summary.get('derived_refinement_input_count')}`",
+        f"- raw_event_mutated: `{summary.get('raw_event_mutated')}`",
         f"- matched_hypothesis_count: `{summary.get('matched_hypothesis_count')}`",
         f"- refinement_input_count: `{summary.get('refinement_input_count')}`",
         f"- classification_counts: `{summary.get('classification_counts') or {}}`",
@@ -694,7 +861,7 @@ def render_markdown(report: dict[str, Any]) -> str:
             f"- `{item.get('refinement_input_id')}` hypothesis=`{item.get('soft_hypothesis_id')}` "
             f"classification=`{item.get('classification')}` gap=`{item.get('gap_reason') or '-'}` "
             f"parents=`{item.get('source_parent_bucket_ids') or []}` matches=`{item.get('match_count')}` "
-            f"pressure=`{item.get('refinement_pressure_score')}`"
+            f"origin=`{item.get('source_match_origin')}` pressure=`{item.get('refinement_pressure_score')}`"
         )
     return "\n".join(lines) + "\n"
 

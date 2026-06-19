@@ -42,11 +42,15 @@ def _build_remote_tar_command(paths: list[str]) -> str:
         'trap "rm -rf \\"$tmpdir\\"" EXIT; '
         f"files=({quoted_paths}); "
         'for f in "${files[@]}"; do '
-        '  if [ ! -f "$f" ]; then '
+        '  source="$f"; '
+        '  if [ ! -f "$source" ] && [[ "$source" == *.jsonl ]] && [ -f "$source.gz" ]; then '
+        '    source="$source.gz"; '
+        "  fi; "
+        '  if [ ! -f "$source" ]; then '
         '    echo "missing_remote_file:$f" >&2; '
         "    exit 2; "
         "  fi; "
-        '  cp -p "$f" "$tmpdir/"; '
+        '  cp -p "$source" "$tmpdir/"; '
         "done; "
         'cd "$tmpdir" && tar -czf - .; '
     )
@@ -65,15 +69,23 @@ def _build_remote_tar_command_with_optional_snapshots(
         f"required=({required}); "
         f"optional=({optional}); "
         'for f in "${required[@]}"; do '
-        '  if [ ! -f "$f" ]; then '
+        '  source="$f"; '
+        '  if [ ! -f "$source" ] && [[ "$source" == *.jsonl ]] && [ -f "$source.gz" ]; then '
+        '    source="$source.gz"; '
+        "  fi; "
+        '  if [ ! -f "$source" ]; then '
         '    echo "missing_remote_file:$f" >&2; '
         "    exit 2; "
         "  fi; "
-        '  cp -p "$f" "$tmpdir/"; '
+        '  cp -p "$source" "$tmpdir/"; '
         "done; "
         'for f in "${optional[@]}"; do '
-        '  if [ -f "$f" ]; then '
-        '    cp -p "$f" "$tmpdir/"; '
+        '  source="$f"; '
+        '  if [ ! -f "$source" ] && [[ "$source" == *.jsonl ]] && [ -f "$source.gz" ]; then '
+        '    source="$source.gz"; '
+        "  fi; "
+        '  if [ -f "$source" ]; then '
+        '    cp -p "$source" "$tmpdir/"; '
         "  fi; "
         "done; "
         'if [ -z "$(ls -A $tmpdir)" ]; then exit 3; fi; cd "$tmpdir" && tar -czf - .; '

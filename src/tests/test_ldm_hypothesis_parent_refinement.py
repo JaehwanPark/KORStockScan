@@ -1,3 +1,4 @@
+import gzip
 import json
 
 from src.engine.automation import ldm_hypothesis_discovery
@@ -39,6 +40,26 @@ def _event(hypothesis_id, score, source, *, profit=0.5, quality="pass", parent_i
         "event_type": "pipeline_event",
         "pipeline": "ENTRY_PIPELINE",
         "stage": "scalp_sim_entry_armed",
+        "stock_code": "000001",
+        "fields": fields,
+    }
+
+
+def _candidate_event(score, source, *, matched="False", hypothesis_id="", profit=0.5):
+    fields = {
+        "ldm_hypothesis_matched": matched,
+        "ldm_hypothesis_candidate_features": json.dumps(
+            {"entry_score_parent": score, "entry_source_parent": source}
+        ),
+        "source_quality_status": "pass",
+        "profit_rate": str(profit),
+    }
+    if hypothesis_id:
+        fields["ldm_hypothesis_id"] = hypothesis_id
+    return {
+        "event_type": "pipeline_event",
+        "pipeline": "ENTRY_PIPELINE",
+        "stage": "blocked_ai_score",
         "stock_code": "000001",
         "fields": fields,
     }
@@ -115,6 +136,178 @@ def test_parent_refinement_classifies_support_conflict_gap_and_source_quality(tm
     assert all(item["consumption_required"] is True for item in report["refinement_inputs"])
     assert all(item["runtime_effect"] is False for item in report["refinement_inputs"])
     assert all(item["allowed_runtime_apply"] is False for item in report["refinement_inputs"])
+
+
+def test_parent_refinement_reads_gzip_and_derives_contract_drift_recompute(tmp_path, monkeypatch):
+    report_dir = tmp_path / "report"
+    pipeline_dir = tmp_path / "pipeline"
+    plan_dir = tmp_path / "plans"
+    lifecycle_dir = tmp_path / "lifecycle"
+    for path in (report_dir, pipeline_dir, plan_dir, lifecycle_dir):
+        path.mkdir(parents=True)
+    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "PIPELINE_EVENTS_DIR", pipeline_dir)
+    monkeypatch.setattr(mod, "LDM_PLAN_DIR", plan_dir)
+    monkeypatch.setattr(mod, "LIFECYCLE_BUCKET_DIR", lifecycle_dir)
+
+    plan_dir.joinpath("ldm_hypothesis_observation_plan_2026-06-15.json").write_text(
+        json.dumps(
+            {
+                "schema_version": mod.OBSERVATION_PLAN_SCHEMA_VERSION,
+                "hypotheses": [_plan("h_derived", "score_watch_recovery", "entry_source_wait6579", 1.2)],
+            }
+        ),
+        encoding="utf-8",
+    )
+    lifecycle_dir.joinpath("lifecycle_bucket_discovery_2026-06-14.json").write_text(
+        json.dumps(
+            {
+                "date": "2026-06-14",
+                "parent_bucket_summaries": [
+                    {
+                        "source_parent_bucket_id": "parent_wait6579",
+                        "parent_source_quality_adjusted_ev_pct": 0.8,
+                        "dimension_filters": {
+                            "entry_score_parent": "score_watch_recovery",
+                            "entry_source_parent": "entry_source_wait6579",
+                        },
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    event = _candidate_event("score_watch_recovery", "entry_source_wait6579")
+    gzip_path = pipeline_dir / "pipeline_events_2026-06-15.jsonl.gz"
+    with gzip.open(gzip_path, "wt", encoding="utf-8") as fh:
+        fh.write(json.dumps(event) + "\n")
+
+    report = mod.build_refinement_report("2026-06-15")
+
+    assert report["summary"]["hypothesis_match_count"] == 1
+    assert report["summary"]["runtime_hypothesis_match_count"] == 0
+    assert report["summary"]["derived_hypothesis_match_count"] == 1
+    assert report["summary"]["derived_refinement_input_count"] == 1
+    assert report["summary"]["raw_event_mutated"] is False
+    item = report["refinement_inputs"][0]
+    assert item["soft_hypothesis_id"] == "h_derived"
+    assert item["source_match_origin"] == "derived_contract_drift_recompute"
+    assert item["derived_from_contract_drift"] is True
+    assert item["raw_event_mutated"] is False
+    assert item["runtime_match_count"] == 0
+    assert item["derived_match_count"] == 1
+    assert item["raw_ldm_hypothesis_matched"] == {"false": 1}
+    assert item["raw_ldm_hypothesis_id_present"] == {"false": 1}
+    assert item["classification"] == "parent_support"
+    assert item["runtime_effect"] is False
+    assert item["allowed_runtime_apply"] is False
+    assert item["actual_order_submitted"] is False
+    assert item["broker_order_forbidden"] is True
+    assert str(gzip_path) in item["source_event_files"]
+
+
+def test_parent_refinement_reads_jsonl_and_gzip_when_both_exist(tmp_path, monkeypatch):
+    report_dir = tmp_path / "report"
+    pipeline_dir = tmp_path / "pipeline"
+    plan_dir = tmp_path / "plans"
+    lifecycle_dir = tmp_path / "lifecycle"
+    for path in (report_dir, pipeline_dir, plan_dir, lifecycle_dir):
+        path.mkdir(parents=True)
+    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "PIPELINE_EVENTS_DIR", pipeline_dir)
+    monkeypatch.setattr(mod, "LDM_PLAN_DIR", plan_dir)
+    monkeypatch.setattr(mod, "LIFECYCLE_BUCKET_DIR", lifecycle_dir)
+
+    plan_dir.joinpath("ldm_hypothesis_observation_plan_2026-06-15.json").write_text(
+        json.dumps(
+            {
+                "schema_version": mod.OBSERVATION_PLAN_SCHEMA_VERSION,
+                "hypotheses": [_plan("h_mixed_files", "score_watch_recovery", "entry_source_wait6579", 1.2)],
+            }
+        ),
+        encoding="utf-8",
+    )
+    lifecycle_dir.joinpath("lifecycle_bucket_discovery_2026-06-14.json").write_text(
+        json.dumps({"date": "2026-06-14", "parent_bucket_summaries": []}),
+        encoding="utf-8",
+    )
+    jsonl_path = pipeline_dir / "pipeline_events_2026-06-15.jsonl"
+    gzip_path = pipeline_dir / "pipeline_events_2026-06-15.jsonl.gz"
+    jsonl_path.write_text(
+        json.dumps(_event("h_mixed_files", "score_watch_recovery", "entry_source_wait6579")) + "\n",
+        encoding="utf-8",
+    )
+    with gzip.open(gzip_path, "wt", encoding="utf-8") as fh:
+        fh.write(json.dumps(_candidate_event("score_watch_recovery", "entry_source_wait6579")) + "\n")
+
+    report = mod.build_refinement_report("2026-06-15")
+    item = report["refinement_inputs"][0]
+
+    assert report["summary"]["runtime_hypothesis_match_count"] == 1
+    assert report["summary"]["derived_hypothesis_match_count"] == 1
+    assert report["summary"]["hypothesis_match_count"] == 2
+    assert item["source_match_origin"] == "mixed_runtime_and_derived"
+    assert item["runtime_match_count"] == 1
+    assert item["derived_match_count"] == 1
+    assert set(item["source_event_files"]) == {str(jsonl_path), str(gzip_path)}
+
+
+def test_parent_refinement_keeps_runtime_origin_for_true_match(tmp_path, monkeypatch):
+    report_dir = tmp_path / "report"
+    pipeline_dir = tmp_path / "pipeline"
+    plan_dir = tmp_path / "plans"
+    lifecycle_dir = tmp_path / "lifecycle"
+    for path in (report_dir, pipeline_dir, plan_dir, lifecycle_dir):
+        path.mkdir(parents=True)
+    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "PIPELINE_EVENTS_DIR", pipeline_dir)
+    monkeypatch.setattr(mod, "LDM_PLAN_DIR", plan_dir)
+    monkeypatch.setattr(mod, "LIFECYCLE_BUCKET_DIR", lifecycle_dir)
+
+    plan_dir.joinpath("ldm_hypothesis_observation_plan_2026-06-02.json").write_text(
+        json.dumps({"schema_version": mod.OBSERVATION_PLAN_SCHEMA_VERSION, "hypotheses": [_plan("h_runtime", "S1", "SRC1", 1.2)]}),
+        encoding="utf-8",
+    )
+    pipeline_dir.joinpath("pipeline_events_2026-06-02.jsonl").write_text(
+        json.dumps(_event("h_runtime", "S1", "SRC1")) + "\n",
+        encoding="utf-8",
+    )
+
+    report = mod.build_refinement_report("2026-06-02")
+    item = report["refinement_inputs"][0]
+
+    assert item["source_match_origin"] == "runtime_matched"
+    assert item["derived_from_contract_drift"] is False
+    assert item["runtime_match_count"] == 1
+    assert item["derived_match_count"] == 0
+
+
+def test_parent_refinement_does_not_derive_without_matching_candidate_features(tmp_path, monkeypatch):
+    report_dir = tmp_path / "report"
+    pipeline_dir = tmp_path / "pipeline"
+    plan_dir = tmp_path / "plans"
+    lifecycle_dir = tmp_path / "lifecycle"
+    for path in (report_dir, pipeline_dir, plan_dir, lifecycle_dir):
+        path.mkdir(parents=True)
+    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "PIPELINE_EVENTS_DIR", pipeline_dir)
+    monkeypatch.setattr(mod, "LDM_PLAN_DIR", plan_dir)
+    monkeypatch.setattr(mod, "LIFECYCLE_BUCKET_DIR", lifecycle_dir)
+
+    plan_dir.joinpath("ldm_hypothesis_observation_plan_2026-06-15.json").write_text(
+        json.dumps({"schema_version": mod.OBSERVATION_PLAN_SCHEMA_VERSION, "hypotheses": [_plan("h_derived", "S1", "SRC1", 1.2)]}),
+        encoding="utf-8",
+    )
+    pipeline_dir.joinpath("pipeline_events_2026-06-15.jsonl").write_text(
+        json.dumps(_candidate_event("S2", "SRC2")) + "\n",
+        encoding="utf-8",
+    )
+
+    report = mod.build_refinement_report("2026-06-15")
+
+    assert report["summary"]["candidate_feature_event_count"] == 1
+    assert report["summary"]["derived_hypothesis_match_count"] == 0
+    assert report["refinement_inputs"] == []
 
 
 def test_parent_refinement_surfaces_forbidden_runtime_authority_violation(tmp_path, monkeypatch):

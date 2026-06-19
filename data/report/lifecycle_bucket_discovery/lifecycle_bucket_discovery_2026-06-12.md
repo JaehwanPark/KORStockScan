@@ -3,22 +3,22 @@
 ## 판정
 - status: `pass`
 - source_contract_status: `warning` / changes: `16`
-- ai_two_pass_review: `disabled` / model: `-` / tier: `tier2`
-- ai_review_shards: `0` / `5` parsed, reviewed_candidates=`0`
+- ai_two_pass_review: `parsed` / model: `sharded` / tier: `tier2`
+- ai_review_shards: `4` / `5` parsed, reviewed_candidates=`4`
 - surfaced_candidate_count: `151`
 - canonical/legacy buckets: `146` / `481`
-- dual_proposals: deterministic=`500` ai=`0` hybrid_selected=`0`
+- dual_proposals: deterministic=`500` ai=`18` hybrid_selected=`18`
 - absorbed/source_quality_blocker: `368` / `0`
 - lifecycle_flow_parent_granularity: `target_pass` level=`L2_default` parents=`59` target=`30-60`
 - lifecycle_flow_absorbed_children: child=`141` sample=`16902` conflict_parents=`10`
-- ldm_refinement_pressure: input=`0` consumed=`0` closures=`{}`
+- ldm_refinement_pressure: input=`3` consumed=`3` closures=`{'new_parent_candidate_created': 1, 'rare_observation_only_budget_capped': 2}`
 - sim_auto_approved_count: `0`
 - lifecycle_flow_sim_probe_candidate_count: `5`
 - source_dimension_gap_count: `68` / actionable_unknown_gap_count: `0`
-- quiet_gap_count: `394` / sim_live_connected: `5`
+- quiet_gap_count: `395` / sim_live_connected: `5`
 - live_auto_apply_ready_count: `0`
 - human_intervention_required: `False`
-- warnings: `['source_contract_drift_warning', 'ai_review_provider_disabled', 'lifecycle_flow_review:ai_review_provider_disabled', 'ai_review_provider_disabled', 'sim_policy_review:ai_review_provider_disabled', 'ai_review_provider_disabled', 'gap_workorder_review:ai_review_provider_disabled', 'ai_review_provider_disabled', 'taxonomy_discovery_review:ai_review_provider_disabled']`
+- warnings: `['source_contract_drift_warning']`
 
 ## 판정 (Conflict Resolution)
 - parent_conflict_resolution_count: `10`
@@ -53,19 +53,19 @@
 - `source_added` severity=`warning` subject=`wait6579` detail=`{'source_key': 'wait6579'}`
 
 ### AI Two-Pass Review
-- interpretation_count: `0`
-- ai_tier2_proposal_count: `0`
-- comparative_review_count: `0`
+- interpretation_count: `4`
+- ai_tier2_proposal_count: `4`
+- comparative_review_count: `4`
 - audit_status: `pass`
 - audit_issues: `[]`
 - audit_reason: `sharded review aggregate`
 
 ### AI Review Shards
-- `live_contract_review` status=`skipped_empty` candidates=`0` omitted=`0` context_chars=`33593`
-- `lifecycle_flow_review` status=`disabled` candidates=`1` omitted=`140` context_chars=`40161`
-- `sim_policy_review` status=`disabled` candidates=`1` omitted=`30` context_chars=`37096`
-- `gap_workorder_review` status=`disabled` candidates=`1` omitted=`15` context_chars=`37127`
-- `taxonomy_discovery_review` status=`disabled` candidates=`1` omitted=`14` context_chars=`37310`
+- `live_contract_review` status=`skipped_empty` candidates=`0` omitted=`0` context_chars=`33772`
+- `lifecycle_flow_review` status=`parsed` candidates=`1` omitted=`140` context_chars=`40340`
+- `sim_policy_review` status=`parsed` candidates=`1` omitted=`30` context_chars=`37275`
+- `gap_workorder_review` status=`parsed` candidates=`1` omitted=`15` context_chars=`37306`
+- `taxonomy_discovery_review` status=`parsed` candidates=`1` omitted=`14` context_chars=`37489`
 
 - `lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_scalp_entry_action_decision_snapshot_stale` stage=`lifecycle_flow` state=`source_only_keep_collecting` action=`relax_or_recover` relation=`existing_bucket_refinement` canonical=`lifecycle_flow:combo_lifecycle_flow:entry=score_watch_recovery|submit=submit_observed|holding=holding_observed|scale_in=scale_in_observed|exit=exit_observed` joined=`2` ev=`1.4204` ai_final=`-` taxonomy=`absorb_as_dimension`
 - `lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_scalp_entry_action_decision_snapshot_stale` stage=`lifecycle_flow` state=`source_only_keep_collecting` action=`relax_or_recover` relation=`existing_bucket_refinement` canonical=`lifecycle_flow:combo_lifecycle_flow:entry=score_watch_recovery|submit=submit_observed|holding=holding_observed|scale_in=scale_in_observed|exit=exit_observed` joined=`1` ev=`1.2647` ai_final=`-` taxonomy=`absorb_as_dimension`

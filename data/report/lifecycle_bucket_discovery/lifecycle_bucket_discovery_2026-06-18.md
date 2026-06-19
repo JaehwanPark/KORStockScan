@@ -11,7 +11,7 @@
 - absorbed/source_quality_blocker: `357` / `0`
 - lifecycle_flow_parent_granularity: `too_broad` level=`L1_broad` parents=`25` target=`30-60`
 - lifecycle_flow_absorbed_children: child=`161` sample=`19567` conflict_parents=`8`
-- ldm_refinement_pressure: input=`0` consumed=`0` closures=`{}`
+- ldm_refinement_pressure: input=`4` consumed=`4` closures=`{'rare_observation_only_budget_capped': 4}`
 - sim_auto_approved_count: `7`
 - lifecycle_flow_sim_probe_candidate_count: `11`
 - source_dimension_gap_count: `86` / actionable_unknown_gap_count: `0`
@@ -25,14 +25,14 @@
 - sim_eligible_after_resolution: `0`
 - resolution_states: `{'resolution_blocked_source_quality': 3, 'resolution_complete': 2, 'resolution_blocked_thin_sample': 3}`
 
-- conflict_parent=`lifecycle_flow:combo_lifecycle_flow:entry_score_parent=score_unobserved|submit_q` state=`resolution_blocked_source_quality` tag=`source-quality 때문에 판정 불가` ev_before=`-0.865826` ev_after=`-0.865826` children=`12` sq_gap=`12` strategy_reversal=`0` exclude=`0` collecting=`0` positive_thin=`0` sim_eligible=`False` live_blockers=`['source_quality_gap_children', 'parent_ev_not_positive']` 
-- conflict_parent=`lifecycle_flow:combo_lifecycle_flow:entry_score_parent=score_mid_recovery|submit` state=`resolution_blocked_source_quality` tag=`source-quality 때문에 판정 불가` ev_before=`2.520516` ev_after=`2.520516` children=`11` sq_gap=`11` strategy_reversal=`0` exclude=`0` collecting=`0` positive_thin=`0` sim_eligible=`False` live_blockers=`['source_quality_gap_children']` 
-- conflict_parent=`lifecycle_flow:combo_lifecycle_flow:entry_score_parent=score_watch_recovery|subm` state=`resolution_complete` tag=`resolution_complete` ev_before=`-0.802622` ev_after=`-0.802622` children=`22` sq_gap=`0` strategy_reversal=`0` exclude=`0` collecting=`0` positive_thin=`8` sim_eligible=`False` live_blockers=`['parent_ev_not_positive']` 
-- conflict_parent=`lifecycle_flow:combo_lifecycle_flow:entry_score_parent=score_watch_recovery|subm` state=`resolution_complete` tag=`resolution_complete` ev_before=`-0.13434` ev_after=`-0.13434` children=`15` sq_gap=`0` strategy_reversal=`0` exclude=`0` collecting=`0` positive_thin=`5` sim_eligible=`False` live_blockers=`['parent_ev_not_positive']` 
-- conflict_parent=`lifecycle_flow:combo_lifecycle_flow:entry_score_parent=score_unobserved|submit_q` state=`resolution_blocked_source_quality` tag=`source-quality 때문에 판정 불가` ev_before=`-1.497586` ev_after=`-1.497586` children=`7` sq_gap=`1` strategy_reversal=`0` exclude=`0` collecting=`0` positive_thin=`0` sim_eligible=`False` live_blockers=`['source_quality_gap_children', 'parent_ev_not_positive', 'sample_below_live_floor']` 
-- conflict_parent=`lifecycle_flow:combo_lifecycle_flow:entry_score_parent=score_unobserved|submit_q` state=`resolution_blocked_thin_sample` tag=`sample 부족 keep collecting` ev_before=`-0.4642` ev_after=`-0.4642` children=`4` sq_gap=`0` strategy_reversal=`0` exclude=`0` collecting=`0` positive_thin=`2` sim_eligible=`False` live_blockers=`['parent_ev_not_positive', 'sample_below_live_floor']` 
-- conflict_parent=`lifecycle_flow:combo_lifecycle_flow:entry_score_parent=score_mid_recovery|submit` state=`resolution_blocked_thin_sample` tag=`sample 부족 keep collecting` ev_before=`-2.0804` ev_after=`-2.0804` children=`3` sq_gap=`0` strategy_reversal=`0` exclude=`0` collecting=`0` positive_thin=`1` sim_eligible=`False` live_blockers=`['parent_ev_not_positive', 'sample_below_live_floor']` 
-- conflict_parent=`lifecycle_flow:combo_lifecycle_flow:entry_score_parent=score_watch_recovery|subm` state=`resolution_blocked_thin_sample` tag=`sample 부족 keep collecting` ev_before=`0.162067` ev_after=`0.162067` children=`3` sq_gap=`0` strategy_reversal=`0` exclude=`0` collecting=`2` positive_thin=`0` sim_eligible=`False` live_blockers=`['sample_below_live_floor']` 
+- conflict_parent=`lifecycle_flow:combo_lifecycle_flow:entry_score_parent=score_unobserved|submit_q` state=`resolution_blocked_source_quality` tag=`source-quality 때문에 판정 불가` ev_before=`-0.865826` ev_after=`-0.865826` children=`12` sq_gap=`12` strategy_reversal=`0` exclude=`0` collecting=`0` positive_thin=`0` sim_eligible=`False` live_blockers=`['source_quality_gap_children', 'parent_ev_not_positive']`
+- conflict_parent=`lifecycle_flow:combo_lifecycle_flow:entry_score_parent=score_mid_recovery|submit` state=`resolution_blocked_source_quality` tag=`source-quality 때문에 판정 불가` ev_before=`2.520516` ev_after=`2.520516` children=`11` sq_gap=`11` strategy_reversal=`0` exclude=`0` collecting=`0` positive_thin=`0` sim_eligible=`False` live_blockers=`['source_quality_gap_children']`
+- conflict_parent=`lifecycle_flow:combo_lifecycle_flow:entry_score_parent=score_watch_recovery|subm` state=`resolution_complete` tag=`resolution_complete` ev_before=`-0.802622` ev_after=`-0.802622` children=`22` sq_gap=`0` strategy_reversal=`0` exclude=`0` collecting=`0` positive_thin=`8` sim_eligible=`False` live_blockers=`['parent_ev_not_positive']`
+- conflict_parent=`lifecycle_flow:combo_lifecycle_flow:entry_score_parent=score_watch_recovery|subm` state=`resolution_complete` tag=`resolution_complete` ev_before=`-0.13434` ev_after=`-0.13434` children=`15` sq_gap=`0` strategy_reversal=`0` exclude=`0` collecting=`0` positive_thin=`5` sim_eligible=`False` live_blockers=`['parent_ev_not_positive']`
+- conflict_parent=`lifecycle_flow:combo_lifecycle_flow:entry_score_parent=score_unobserved|submit_q` state=`resolution_blocked_source_quality` tag=`source-quality 때문에 판정 불가` ev_before=`-1.497586` ev_after=`-1.497586` children=`7` sq_gap=`1` strategy_reversal=`0` exclude=`0` collecting=`0` positive_thin=`0` sim_eligible=`False` live_blockers=`['source_quality_gap_children', 'parent_ev_not_positive', 'sample_below_live_floor']`
+- conflict_parent=`lifecycle_flow:combo_lifecycle_flow:entry_score_parent=score_unobserved|submit_q` state=`resolution_blocked_thin_sample` tag=`sample 부족 keep collecting` ev_before=`-0.4642` ev_after=`-0.4642` children=`4` sq_gap=`0` strategy_reversal=`0` exclude=`0` collecting=`0` positive_thin=`2` sim_eligible=`False` live_blockers=`['parent_ev_not_positive', 'sample_below_live_floor']`
+- conflict_parent=`lifecycle_flow:combo_lifecycle_flow:entry_score_parent=score_mid_recovery|submit` state=`resolution_blocked_thin_sample` tag=`sample 부족 keep collecting` ev_before=`-2.0804` ev_after=`-2.0804` children=`3` sq_gap=`0` strategy_reversal=`0` exclude=`0` collecting=`0` positive_thin=`1` sim_eligible=`False` live_blockers=`['parent_ev_not_positive', 'sample_below_live_floor']`
+- conflict_parent=`lifecycle_flow:combo_lifecycle_flow:entry_score_parent=score_watch_recovery|subm` state=`resolution_blocked_thin_sample` tag=`sample 부족 keep collecting` ev_before=`0.162067` ev_after=`0.162067` children=`3` sq_gap=`0` strategy_reversal=`0` exclude=`0` collecting=`2` positive_thin=`0` sim_eligible=`False` live_blockers=`['sample_below_live_floor']`
 
 ## 근거
 
@@ -55,15 +55,15 @@
 - ai_tier2_proposal_count: `4`
 - comparative_review_count: `4`
 - audit_status: `pass`
-- audit_issues: `['Current AI Tier2 placeholder reject is not a valid review outcome for this drift case.', 'Deterministic keep_bucket preserves tracking but does not fully express taxonomy-gap semantics.']`
+- audit_issues: `['Current AI Tier2 placeholder reject is unsupported by candidate evidence and taxonomy', 'Comparison should not treat missing AI proposal as substantive rejection']`
 - audit_reason: `sharded review aggregate`
 
 ### AI Review Shards
-- `live_contract_review` status=`skipped_empty` candidates=`0` omitted=`0` context_chars=`34056`
-- `lifecycle_flow_review` status=`parsed` candidates=`1` omitted=`160` context_chars=`40634`
-- `sim_policy_review` status=`parsed` candidates=`1` omitted=`27` context_chars=`37559`
-- `gap_workorder_review` status=`parsed` candidates=`1` omitted=`11` context_chars=`37590`
-- `taxonomy_discovery_review` status=`parsed` candidates=`1` omitted=`10` context_chars=`37773`
+- `live_contract_review` status=`skipped_empty` candidates=`0` omitted=`0` context_chars=`34098`
+- `lifecycle_flow_review` status=`parsed` candidates=`1` omitted=`160` context_chars=`40676`
+- `sim_policy_review` status=`parsed` candidates=`1` omitted=`27` context_chars=`37601`
+- `gap_workorder_review` status=`parsed` candidates=`1` omitted=`11` context_chars=`37632`
+- `taxonomy_discovery_review` status=`parsed` candidates=`1` omitted=`10` context_chars=`37815`
 
 - `lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_blocked_ai_score_stale_fresh_liquidity_liq` stage=`lifecycle_flow` state=`source_only_keep_collecting` action=`relax_or_recover` relation=`existing_bucket_refinement` canonical=`lifecycle_flow:combo_lifecycle_flow:entry=score_watch_recovery|submit=submit_observed|holding=holding_observed|scale_in=scale_in_observed|exit=exit_observed` joined=`2` ev=`1.6819` ai_final=`-` taxonomy=`absorb_as_dimension`
 - `lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_blocked_ai_score_stale_fresh_liquidity_liq` stage=`lifecycle_flow` state=`source_only_keep_collecting` action=`relax_or_recover` relation=`existing_bucket_refinement` canonical=`lifecycle_flow:combo_lifecycle_flow:entry=score_watch_recovery|submit=submit_observed|holding=holding_observed|scale_in=scale_in_observed|exit=exit_observed` joined=`1` ev=`4.7751` ai_final=`-` taxonomy=`absorb_as_dimension`

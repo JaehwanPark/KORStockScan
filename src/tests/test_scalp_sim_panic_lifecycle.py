@@ -483,9 +483,18 @@ def test_entry_and_scale_in_are_blocked_for_sim_only_panic(monkeypatch, _state):
     sim_stock = _sim_position(qty=10)
     sim_stock.update(
         {
-            "scalp_sim_candidate_window_expansion": True,
             "scalp_sim_candidate_window_source_stage": "blocked_ai_score",
             "scalp_sim_candidate_window_blocked_reason": "regression_duplicate_authority",
+            "scalp_sim_active_priority_seed_matched": True,
+            "active_seed_id": "active_seed_panic",
+            "source_parent_bucket_id": "parent_positive_panic",
+            "active_seed_candidate_observable_prefix": json.dumps(
+                {
+                    "entry_score_parent": "score_watch_recovery",
+                    "entry_source_parent": "entry_source_blocked_ai_score",
+                },
+                sort_keys=True,
+            ),
         }
     )
     result = state_handlers._evaluate_scale_in_signal(
@@ -504,8 +513,10 @@ def test_entry_and_scale_in_are_blocked_for_sim_only_panic(monkeypatch, _state):
     assert any(stage == "scalp_sim_panic_scale_in_blocked" for stage, _ in _state)
     scale_event = next(fields for stage, fields in _state if stage == "scalp_sim_panic_scale_in_blocked")
     assert scale_event["decision_authority"] == "sim_observation_only"
-    assert scale_event["scalp_sim_candidate_window_expansion"] is True
     assert scale_event["scalp_sim_candidate_window_blocked_reason"] == "regression_duplicate_authority"
+    assert scale_event["scalp_sim_active_priority_seed_matched"] is True
+    assert scale_event["active_seed_id"] == "active_seed_panic"
+    assert scale_event["source_parent_bucket_id"] == "parent_positive_panic"
     event = next(fields for stage, fields in _state if stage == "scalp_sim_panic_entry_blocked")
     assert event["source_family"] == "panic_lifecycle_actuator"
     assert event["family_type"] == "sim_lifecycle_source"

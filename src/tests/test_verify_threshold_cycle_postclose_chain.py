@@ -1,3 +1,4 @@
+import gzip
 import json
 import os
 from datetime import datetime
@@ -2184,6 +2185,47 @@ def test_active_sim_priority_pending_preopen_does_not_require_runtime_observatio
     assert "swing_active_arm_priority_runtime_observation_missing" not in status["warnings"]
 
 
+def test_active_sim_priority_handoff_fails_when_preopen_apply_omits_active_seed(monkeypatch):
+    monkeypatch.setattr(mod, "_iter_pipeline_event_fields", lambda target_date: [])
+
+    status = mod._active_sim_priority_handoff_status(
+        target_date="2026-06-22",
+        discovery={},
+        scalp_catalog={
+            "schema_version": "scalp_sim_policy_catalog_v1",
+            "active_sim_priority_seeds": [
+                {
+                    "active_seed_id": "active_seed_missing_from_preopen",
+                    "source_parent_bucket_id": "parent_positive",
+                    "status": "active",
+                    "observable_prefix": {
+                        "entry_score_parent": "score_watch_recovery",
+                        "entry_source_parent": "entry_source_blocked_ai_score",
+                    },
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                    "runtime_effect": False,
+                }
+            ],
+        },
+        swing_catalog={},
+        preopen_apply={
+            "selected": [
+                {
+                    "family": "scalp_sim_auto_approval",
+                    "selected": True,
+                    "active_sim_priority_seed_ids": [],
+                }
+            ]
+        },
+        swing_sim_report={},
+    )
+
+    assert status["status"] == "fail"
+    assert "active_sim_priority_preopen_handoff_missing" in status["missing"]
+    assert "active_sim_priority_preopen_handoff_pending" not in status["warnings"]
+
+
 def test_active_sim_priority_zero_match_prioritizes_posterior_dimension_diagnosis(monkeypatch):
     monkeypatch.setattr(
         mod,
@@ -2259,6 +2301,250 @@ def test_ldm_refinement_consumption_fails_when_lifecycle_ledger_missing():
 
     assert status["status"] == "fail"
     assert "ldm_refinement_consumption_ledger_missing" in status["missing"]
+
+
+def test_ldm_refinement_consumption_warns_when_hypothesis_contract_drift_suppresses_matches(monkeypatch):
+    monkeypatch.setattr(
+        mod,
+        "_iter_pipeline_event_fields",
+        lambda target_date: iter(
+            [
+                {
+                    "ldm_hypothesis_matched": "False",
+                    "ldm_hypothesis_candidate_features": json.dumps(
+                        {
+                            "entry_score_parent": "score_watch_recovery",
+                            "entry_source_parent": "entry_source_wait6579",
+                            "submit_quality_parent": "submit_revalidation_ok",
+                        }
+                    ),
+                }
+            ]
+        ),
+    )
+
+    status = mod._ldm_refinement_consumption_status(
+        {"refinement_inputs": []},
+        {},
+        target_date="2026-06-19",
+        scalp_catalog={
+            "schema_version": "scalp_sim_policy_catalog_v1",
+            "hypothesis_observation_plan": {
+                "schema_version": "ldm_hypothesis_observation_plan_v1",
+                "hypotheses": [
+                    {
+                        "soft_hypothesis_id": "ldm_hypothesis_legacy",
+                        "observable_requirements": [
+                            {"field": "entry_score_parent", "op": "eq", "value": "score_watch_recovery"},
+                            {"field": "entry_source_parent", "op": "eq", "value": "entry_source_wait6579"},
+                            {"field": "submit_quality_parent", "op": "eq", "value": "submit_revalidation_ok"},
+                        ],
+                        "runtime_effect": False,
+                        "allowed_runtime_apply": False,
+                        "actual_order_submitted": False,
+                        "broker_order_forbidden": True,
+                        "forbidden_uses": [
+                            "buy_sell_hold_live_rule",
+                            "threshold_apply",
+                            "provider_route_change",
+                            "bot_restart",
+                            "position_cap_release",
+                            "broker_order",
+                            "hard_safety_bypass",
+                        ],
+                    }
+                ],
+            },
+        },
+    )
+
+    assert status["status"] == "warning"
+    assert "ldm_hypothesis_contract_drift" in status["warnings"]
+    assert status["contract_drift"]["recomputable_match_count"] == 1
+    assert status["contract_drift"]["runtime_matched_event_count"] == 0
+    assert status["contract_drift"]["recomputable_hypothesis_ids"] == ["ldm_hypothesis_legacy"]
+
+
+def test_ldm_contract_drift_reads_gzip_pipeline_events(tmp_path, monkeypatch):
+    root = tmp_path
+    event_dir = root / "data" / "pipeline_events"
+    event_dir.mkdir(parents=True)
+    with gzip.open(event_dir / "pipeline_events_2026-06-15.jsonl.gz", "wt", encoding="utf-8") as fh:
+        fh.write(
+            json.dumps(
+                {
+                    "fields": {
+                        "ldm_hypothesis_matched": "False",
+                        "ldm_hypothesis_candidate_features": json.dumps(
+                            {
+                                "entry_score_parent": "score_watch_recovery",
+                                "entry_source_parent": "entry_source_wait6579",
+                            }
+                        ),
+                    }
+                }
+            )
+            + "\n"
+        )
+    monkeypatch.setattr(mod, "PROJECT_ROOT", root)
+
+    drift = mod._ldm_hypothesis_contract_drift_status(
+        "2026-06-15",
+        {
+            "hypothesis_observation_plan": {
+                "schema_version": "ldm_hypothesis_observation_plan_v1",
+                "hypotheses": [
+                    {
+                        "soft_hypothesis_id": "ldm_hypothesis_legacy",
+                        "observable_requirements": [
+                            {"field": "entry_score_parent", "op": "eq", "value": "score_watch_recovery"},
+                            {"field": "entry_source_parent", "op": "eq", "value": "entry_source_wait6579"},
+                        ],
+                        "runtime_effect": False,
+                        "allowed_runtime_apply": False,
+                        "actual_order_submitted": False,
+                        "broker_order_forbidden": True,
+                        "forbidden_uses": [
+                            "buy_sell_hold_live_rule",
+                            "threshold_apply",
+                            "provider_route_change",
+                            "bot_restart",
+                            "position_cap_release",
+                            "broker_order",
+                            "hard_safety_bypass",
+                        ],
+                    }
+                ],
+            }
+        },
+    )
+
+    assert drift["candidate_feature_event_count"] == 1
+    assert drift["recomputable_match_count"] == 1
+    assert drift["runtime_matched_event_count"] == 0
+
+
+def test_ldm_refinement_consumption_accepts_derived_contract_drift_recompute(monkeypatch):
+    monkeypatch.setattr(
+        mod,
+        "_iter_pipeline_event_fields",
+        lambda target_date: iter(
+            [
+                {
+                    "ldm_hypothesis_matched": "False",
+                    "ldm_hypothesis_candidate_features": json.dumps(
+                        {
+                            "entry_score_parent": "score_watch_recovery",
+                            "entry_source_parent": "entry_source_wait6579",
+                        }
+                    ),
+                }
+            ]
+        ),
+    )
+
+    status = mod._ldm_refinement_consumption_status(
+        {
+            "refinement_inputs": [
+                {
+                    "refinement_input_id": "ref_input_derived",
+                    "soft_hypothesis_id": "ldm_hypothesis_legacy",
+                    "classification": "parent_support",
+                    "match_count": 1,
+                    "derived_from_contract_drift": True,
+                }
+            ]
+        },
+        {
+            "ldm_refinement_pressure_consumption": {
+                "status": "pass",
+                "input_count": 1,
+                "consumed_count": 1,
+                "entries": [
+                    {
+                        "refinement_input_id": "ref_input_derived",
+                        "closure_status": "absorbed_into_existing_parent",
+                        "derived_from_contract_drift": True,
+                    }
+                ],
+            }
+        },
+        target_date="2026-06-19",
+        scalp_catalog={
+            "hypothesis_observation_plan": {
+                "schema_version": "ldm_hypothesis_observation_plan_v1",
+                "hypotheses": [
+                    {
+                        "soft_hypothesis_id": "ldm_hypothesis_legacy",
+                        "observable_requirements": [
+                            {"field": "entry_score_parent", "op": "eq", "value": "score_watch_recovery"},
+                            {"field": "entry_source_parent", "op": "eq", "value": "entry_source_wait6579"},
+                        ],
+                        "runtime_effect": False,
+                        "allowed_runtime_apply": False,
+                        "actual_order_submitted": False,
+                        "broker_order_forbidden": True,
+                        "forbidden_uses": [
+                            "buy_sell_hold_live_rule",
+                            "threshold_apply",
+                            "provider_route_change",
+                            "bot_restart",
+                            "position_cap_release",
+                            "broker_order",
+                            "hard_safety_bypass",
+                        ],
+                    }
+                ],
+            }
+        },
+    )
+
+    assert status["status"] == "pass"
+    assert "ldm_hypothesis_contract_drift" not in status["warnings"]
+    assert status["derived_refinement_input_count"] == 1
+    assert status["derived_refinement_consumed_count"] == 1
+    assert status["derived_contract_drift_recompute_consumed"] is True
+
+
+def test_ldm_refinement_consumption_keeps_noop_pass_without_hypothesis_candidate(monkeypatch):
+    monkeypatch.setattr(mod, "_iter_pipeline_event_fields", lambda target_date: iter([]))
+
+    status = mod._ldm_refinement_consumption_status(
+        {"refinement_inputs": []},
+        {},
+        target_date="2026-06-19",
+        scalp_catalog={
+            "schema_version": "scalp_sim_policy_catalog_v1",
+            "hypothesis_observation_plan": {
+                "schema_version": "ldm_hypothesis_observation_plan_v1",
+                "hypotheses": [
+                    {
+                        "soft_hypothesis_id": "ldm_hypothesis_no_candidate",
+                        "observable_requirements": [
+                            {"field": "entry_score_parent", "op": "eq", "value": "score_watch_recovery"},
+                        ],
+                        "runtime_effect": False,
+                        "allowed_runtime_apply": False,
+                        "actual_order_submitted": False,
+                        "broker_order_forbidden": True,
+                        "forbidden_uses": [
+                            "buy_sell_hold_live_rule",
+                            "threshold_apply",
+                            "provider_route_change",
+                            "bot_restart",
+                            "sizing_formula_runtime_apply_without_guard",
+                            "broker_order",
+                            "hard_safety_bypass",
+                        ],
+                    }
+                ],
+            },
+        },
+    )
+
+    assert status["status"] == "pass"
+    assert status["warnings"] == []
+    assert status["contract_drift"]["candidate_feature_event_count"] == 0
 
 
 def test_ldm_refinement_consumption_fails_when_lifecycle_ledger_failed():

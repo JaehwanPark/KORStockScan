@@ -4841,7 +4841,24 @@ def test_scalp_sim_auto_approval_writes_sim_policy_env(tmp_path, monkeypatch):
     monkeypatch.setattr(discovery_mod, "REPORT_DIR", lifecycle_report_dir)
     catalog_path = policy_dir / "scalp_sim_policy_catalog_2026-05-26.json"
     lifecycle_catalog_path = lifecycle_catalog_dir / "lifecycle_bucket_catalog_2026-05-26.json"
-    catalog_path.write_text(json.dumps(_scalp_sim_policy_catalog_payload()), encoding="utf-8")
+    catalog_path.write_text(
+        json.dumps(
+            _scalp_sim_policy_catalog_payload(
+                active_sim_priority_seeds=[
+                    {
+                        "active_seed_id": "active_seed_preopen",
+                        "source_parent_bucket_id": "parent_positive",
+                        "status": "active",
+                        "observable_prefix": {
+                            "entry_score_parent": "score_watch_recovery",
+                            "entry_source_parent": "entry_source_blocked_ai_score",
+                        },
+                    }
+                ]
+            )
+        ),
+        encoding="utf-8",
+    )
     lifecycle_catalog_path.write_text(json.dumps({"schema_version": "lifecycle_bucket_catalog_v1"}), encoding="utf-8")
     (lifecycle_sim_dir / "lifecycle_bucket_sim_auto_approval_2026-05-26.json").write_text(
         json.dumps(
@@ -4912,6 +4929,9 @@ def test_scalp_sim_auto_approval_writes_sim_policy_env(tmp_path, monkeypatch):
     )
     assert manifest["runtime_env_overrides"]["KORSTOCKSCAN_SCALP_SIM_SCALE_IN_WINDOW_EXPANSION_ENABLED"] == "true"
     assert manifest["scalp_sim_auto_approval"]["selected"][0]["family"] == "scalp_sim_auto_approval"
+    assert manifest["scalp_sim_auto_approval"]["selected"][0]["active_sim_priority_seed_ids"] == [
+        "active_seed_preopen"
+    ]
     assert manifest["scalp_sim_scale_in_window_approval"]["selected"] == []
     assert (
         manifest["lifecycle_bucket_discovery"]["selected"][0]["family"]

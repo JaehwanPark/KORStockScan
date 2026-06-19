@@ -418,6 +418,79 @@ def test_key_lineage_event_io_guard_skips_oversized_lines(monkeypatch, tmp_path)
     assert report["summary"]["event_io_guard"]["oversized_line_skipped_count"] == 1
 
 
+def test_active_seed_candidate_without_seed_details_split_new_entry_and_followup(monkeypatch, tmp_path):
+    _patch_dirs(monkeypatch, tmp_path)
+    target = "2026-06-04"
+    prefix = {
+        "entry_score_parent": "score_watch_recovery",
+        "entry_source_parent": "entry_source_blocked_ai_score",
+    }
+    _write(tmp_path / "report" / "lifecycle_bucket_discovery" / f"lifecycle_bucket_discovery_{target}.json", {})
+    _write(
+        tmp_path / "threshold_cycle" / "scalp_sim_policies" / f"scalp_sim_policy_catalog_{target}.json",
+        {"active_sim_priority_seeds": [{"active_seed_id": "seed_a", "status": "active"}]},
+    )
+    _write(tmp_path / "threshold_cycle" / "swing_sim_policies" / f"swing_sim_policy_catalog_{target}.json", {})
+    event_path = tmp_path / "pipeline_events" / f"pipeline_events_{target}.jsonl"
+    event_path.parent.mkdir(parents=True, exist_ok=True)
+    event_path.write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "stage": "scalp_sim_entry_armed",
+                        "fields": {
+                            "active_seed_candidate_observable_prefix": json.dumps(prefix, sort_keys=True),
+                            "scalp_sim_active_priority_seed_matched": False,
+                            "active_seed_match_source": "no_match",
+                        },
+                    }
+                ),
+                json.dumps(
+                    {
+                        "stage": "scalp_sim_holding_started",
+                        "fields": {
+                            "active_seed_candidate_observable_prefix": json.dumps(prefix, sort_keys=True),
+                            "scalp_sim_active_priority_seed_matched": False,
+                            "active_seed_match_source": "no_match",
+                        },
+                    }
+                ),
+                json.dumps(
+                    {
+                        "stage": "scalp_sim_holding_started",
+                        "fields": {
+                            "active_seed_candidate_observable_prefix": json.dumps(prefix, sort_keys=True),
+                            "scalp_sim_active_priority_seed_matched": True,
+                            "active_seed_id": "seed_a",
+                        },
+                    }
+                ),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    report = ledger.build_key_lineage_ledger(target)
+    summary = report["summary"]
+
+    assert summary["active_seed_candidate_event_count"] == 3
+    assert summary["active_seed_candidate_followup_event_count"] == 2
+    assert summary["active_seed_candidate_followup_without_seed_id_event_count"] == 1
+    assert summary["active_seed_candidate_without_seed_id_reason_counts"] == {
+        "followup_missing_parent_seed_id": 1,
+        "new_entry_without_seed_id": 1,
+    }
+    assert summary["active_seed_candidate_without_seed_id_detail_counts"] == {
+        "parent_seed_id_not_propagated_to_followup": 1,
+        "taxonomy_pending_or_natural_no_match": 1,
+    }
+    assert summary["active_seed_candidate_missing_parent_seed_stage_counts"] == {
+        "scalp_sim_holding_started": 1
+    }
+
+
 def test_runtime_lineage_uses_target_apply_catalog_not_next_catalog(monkeypatch, tmp_path):
     _patch_dirs(monkeypatch, tmp_path)
     target = "2026-06-04"

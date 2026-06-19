@@ -2,7 +2,7 @@
 
 ## Summary
 - status: `warning`
-- warning_count: `8`
+- warning_count: `10`
 - source_quality: status=`pass` allowed=`True`
 - samples real/sim: `13` / `771`
 - live_auto_ready_count: `0`
@@ -21,8 +21,8 @@
 - full_fill_completed_avg_profit_rate: `0.0`%
 
 ## Entry Funnel
-- budget_pass_to_submitted: `0` / `765` (`0.0`%)
-- latency pass/block: `89` / `660`
+- budget_pass_to_submitted: `0` / `0` (`0.0`%)
+- latency pass/block: `0` / `0`
 - latency submit routing: `latency_classifier_runtime_semantics_gap`
 - latency recommended action: `reject` (`recovery_count=0 below floor=86`)
 - latency profile generation: `{'mode': 'grid_quantile_search', 'profile_count': 360, 'age_cap_ms': 1500, 'jitter_cap_ms': 1500, 'spread_cap_ratio': 0.012, 'counterfactual_sample_floor': 3, 'recovery_event_floor_ratio': 0.1}`
@@ -33,9 +33,9 @@
 - full/partial fill: `0` / `0`
 
 ## Holding Exit
-- holding_reviews: `619`
-- exit_signals: `118`
-- holding_review_ms_p95: `2849.0`
+- holding_reviews: `0`
+- exit_signals: `0`
+- holding_review_ms_p95: `0.0`
 
 ## Scalp Simulator
 - authority: `equal_weight` / fill_policy: `signal_inclusive_best_ask_v1`
@@ -50,11 +50,11 @@
 - post_sell_mfe_mae_10m: mfe=`2.039`% / mae=`-2.3839`% / close=`0.4006`%
 
 ## Missed Probe Counterfactual
-- book: `scalp_score65_74_probe_counterfactual` / role: `missed_buy_probe_counterfactual`
-- total/score65_74: `50` / `6`
-- avg_expected_ev: `2.342`% / score65_74_avg_expected_ev: `0.8293`%
-- actual_order_submitted: `False` / broker_order_forbidden: `True`
-- authority: `missed_probe_ev_only_not_broker_execution`
+- book: `-` / role: `-`
+- total/score65_74: `None` / `None`
+- avg_expected_ev: `None`% / score65_74_avg_expected_ev: `None`%
+- actual_order_submitted: `None` / broker_order_forbidden: `None`
+- authority: `-`
 
 ## Scalp Entry ADM
 - artifact: `/home/ubuntu/KORStockScan/data/report/scalp_entry_action_decision_matrix/scalp_entry_action_decision_matrix_2026-06-19.json`
@@ -186,7 +186,7 @@
 ## Code Improvement Workorder
 - artifact: `/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-06-19.json`
 - markdown: `/home/ubuntu/KORStockScan/docs/code-improvement-workorders/code_improvement_workorder_2026-06-19.md`
-- selected_order_count: `145`
+- selected_order_count: `125`
 - decision_counts: `{'attach_existing_family': 145, 'design_family_candidate': 5, 'defer_evidence': 7, 'reject': 3}`
 
 ## Approval Requests
@@ -220,6 +220,8 @@
 - `position_sizing_dynamic_formula`: `hold_sample` sample=`30/30`
 
 ## Warnings
+- `trade_review_missing`
+- `performance_tuning_missing`
 - `scalp_entry_adm:ai_numeric_consistency_rows_excluded_from_aggregates`
 - `lifecycle_bucket_discovery:source_contract_drift_warning`
 - `lifecycle_bucket_discovery:source_contract_drift_warning`
