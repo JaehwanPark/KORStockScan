@@ -1549,6 +1549,242 @@ def test_emit_scanner_watching_runtime_skip_throttles_same_reason(monkeypatch):
     assert len(emitted) == 1
 
 
+def test_emit_scanner_runtime_queue_lag_fills_contract_fields(monkeypatch):
+    emitted = []
+    monkeypatch.setattr(
+        handlers,
+        "emit_pipeline_event",
+        lambda pipeline, name, code, stage, *, record_id=None, fields=None: emitted.append(
+            {"stage": stage, "record_id": record_id, "fields": fields or {}}
+        ),
+    )
+    stock = {
+        "id": 79,
+        "name": "PROMOTED",
+        "code": "000039",
+        "status": "WATCHING",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "added_time": 990.0,
+        "entry_armed_at_epoch": 1000.0,
+        "scanner_promotion_id": "SCANPROM-000039-1000000",
+        "scanner_promotion_emitted_epoch": "1000.000",
+        "scanner_promotion_reason": "price_jump_start_acceleration",
+        "source_signature": "PRICE_JUMP_START",
+    }
+
+    emitted_result = handlers.emit_scanner_runtime_queue_lag(
+        stock,
+        "000039",
+        now_ts=1012.345,
+        queue_rank=2,
+        scanner_queue_rank=1,
+        watching_count=72,
+        scanner_watching_count=52,
+        real_holding_count=3,
+        non_real_holding_count=28,
+        pre_scanner_runtime_count=5,
+        loop_started_epoch=1010.000,
+    )
+
+    assert emitted_result is True
+    assert emitted[-1]["stage"] == "scalping_scanner_runtime_queue_lag"
+    fields = emitted[-1]["fields"]
+    assert fields["metric_role"] == "funnel_count"
+    assert fields["decision_authority"] == "real_scalping_scanner_runtime_watchlist_observation_only"
+    assert fields["source_quality_gate"] == "scalping_scanner_runtime_queue_lag_contract"
+    assert fields["source_quality_route"] == "runtime_watchlist_queue_lag_observation_only"
+    assert fields["runtime_effect"] is False
+    assert fields["actual_order_submitted"] is False
+    assert fields["broker_order_forbidden"] is True
+    assert fields["queue_rank"] == 2
+    assert fields["scanner_queue_rank"] == 1
+    assert fields["watching_count"] == 72
+    assert fields["scanner_watching_count"] == 52
+    assert fields["real_holding_count"] == 3
+    assert fields["non_real_holding_count"] == 28
+    assert fields["pre_scanner_runtime_count"] == 5
+    assert fields["queue_lag_sec"] == 12.345
+    assert fields["anchor_to_loop_sec"] == 10.0
+    assert fields["loop_to_emit_sec"] == 2.345
+    assert fields["pre_emit_delay_sec"] == 2.345
+    assert fields["loop_started_epoch"] == "1010.000"
+    assert fields["queue_emit_epoch"] == "1012.345"
+    assert fields["runtime_record_id"] == 79
+    assert fields["entry_armed_at_epoch"] == 1000.0
+
+
+def test_emit_scanner_runtime_queue_lag_throttles(monkeypatch):
+    emitted = []
+    monkeypatch.setattr(
+        handlers,
+        "emit_pipeline_event",
+        lambda pipeline, name, code, stage, *, record_id=None, fields=None: emitted.append(
+            {"stage": stage, "fields": fields or {}}
+        ),
+    )
+    stock = {
+        "id": 80,
+        "name": "PROMOTED",
+        "code": "000040",
+        "status": "WATCHING",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "entry_armed_at_epoch": 1000.0,
+    }
+
+    assert handlers.emit_scanner_runtime_queue_lag(stock, "000040", now_ts=1010.0) is True
+    assert handlers.emit_scanner_runtime_queue_lag(stock, "000040", now_ts=1015.0) is False
+    assert len(emitted) == 1
+
+
+def test_emit_scanner_fast_precheck_and_heavy_eval_lag_are_order_forbidden(monkeypatch):
+    emitted = []
+    monkeypatch.setattr(handlers.time, "time", lambda: 1012.0)
+    monkeypatch.setattr(
+        handlers,
+        "emit_pipeline_event",
+        lambda pipeline, name, code, stage, *, record_id=None, fields=None: emitted.append(
+            {"stage": stage, "fields": fields or {}}
+        ),
+    )
+    stock = {
+        "id": 81,
+        "name": "FAST",
+        "code": "000081",
+        "status": "WATCHING",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "added_time": 990.0,
+        "entry_armed_at_epoch": 1000.0,
+        "scanner_promotion_id": "SCANPROM-000081-1000000",
+        "scanner_promotion_emitted_epoch": "1000.000",
+        "source_signature": "PRICE_JUMP_START",
+    }
+    ws_data = {"curr": 1200, "last_ws_update_ts": 1011.9}
+
+    assert handlers.emit_scanner_fast_precheck(
+        stock,
+        "000081",
+        now_ts=1012.0,
+        ws_data=ws_data,
+        queue_rank=2,
+        scanner_queue_rank=1,
+        watching_count=10,
+        scanner_watching_count=3,
+        throttle_sec=0,
+    )
+    assert handlers.emit_scanner_heavy_eval_lag(
+        stock,
+        "000081",
+        now_ts=1012.2,
+        queue_enter_epoch=1012.0,
+        throttle_sec=0,
+    )
+
+    fast = emitted[-2]["fields"]
+    heavy = emitted[-1]["fields"]
+    assert emitted[-2]["stage"] == "scalping_scanner_fast_precheck"
+    assert fast["fast_precheck_result"] == "eligible_for_heavy_entry_eval"
+    assert fast["runtime_effect"] is False
+    assert fast["actual_order_submitted"] is False
+    assert fast["broker_order_forbidden"] is True
+    assert fast["heavy_queue_enter_epoch"] == "1012.000"
+    assert emitted[-1]["stage"] == "scalping_scanner_heavy_eval_lag"
+    assert heavy["heavy_queue_wait_sec"] == 0.2
+    assert heavy["runtime_effect"] is False
+    assert heavy["actual_order_submitted"] is False
+    assert heavy["broker_order_forbidden"] is True
+
+
+def test_pre_ai_blocked_gate_quality_fields_include_freshness_and_stability(monkeypatch):
+    monkeypatch.setattr(handlers.time, "time", lambda: 1010.0)
+    ws_data = {
+        "curr": 1200,
+        "last_ws_update_ts": 1009.5,
+        "strength_momentum_history": [
+            {"ts": 1004.0, "v_pw": 100.0},
+            {"ts": 1008.0, "v_pw": 104.0},
+            {"ts": 1009.0, "v_pw": 105.0},
+        ],
+    }
+    fields = handlers._pre_ai_blocked_gate_quality_fields(
+        gate_name="vpw",
+        ws_data=ws_data,
+        gate_result={"window_sec": 5},
+        refresh_fields={
+            "pre_ai_ws_snapshot_refresh_applied": True,
+            "pre_ai_ws_snapshot_refresh_reason": "latest_ws_snapshot_fresh",
+            "pre_ai_ws_snapshot_refresh_source": "ws_manager_latest_data",
+            "pre_ai_ws_snapshot_refresh_age_ms": 300.0,
+        },
+    )
+
+    assert fields["quote_age_ms"] == 500.0
+    assert fields["tick_latest_age_ms"] == 1000.0
+    assert fields["tick_sample_count"] == 3
+    assert fields["tick_window_sample_count"] == 3
+    assert fields["tick_window_span_sec"] == 5.0
+    assert fields["snapshot_source"] == "ws_manager_latest_data"
+    assert fields["refresh_applied"] is True
+    assert fields["refresh_reason"] == "latest_ws_snapshot_fresh"
+    assert fields["refresh_age_ms"] == 300.0
+    assert fields["stability_window_result"] == "window_available"
+    assert fields["stability_sample_count"] == 3
+
+
+def test_pre_ai_liquidity_quality_marks_missing_orderbook(monkeypatch):
+    monkeypatch.setattr(handlers.time, "time", lambda: 1010.0)
+    fields = handlers._pre_ai_blocked_gate_quality_fields(
+        gate_name="liquidity",
+        ws_data={"curr": 1200, "last_ws_update_ts": 1009.0},
+        liquidity_totals_present=False,
+    )
+
+    assert fields["quote_age_ms"] == 1000.0
+    assert fields["tick_latest_age_ms"] == "not_available_tick_latest_age_ms"
+    assert fields["refresh_applied"] is False
+    assert fields["refresh_reason"] == "not_attempted_no_refresh_fields"
+    assert fields["stability_window_result"] == "missing_orderbook_snapshot"
+    assert fields["stability_window_reason"] == "ask_bid_totals_missing"
+
+
+def test_scanner_fast_precheck_marks_stale_snapshot_not_queued(monkeypatch):
+    emitted = []
+    monkeypatch.setattr(handlers.time, "time", lambda: 1012.0)
+    monkeypatch.setattr(
+        handlers,
+        "emit_pipeline_event",
+        lambda pipeline, name, code, stage, *, record_id=None, fields=None: emitted.append(
+            {"stage": stage, "fields": fields or {}}
+        ),
+    )
+    stock = {
+        "id": 82,
+        "name": "STALE",
+        "status": "WATCHING",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "entry_armed_at_epoch": 1000.0,
+        "scanner_promotion_id": "SCANPROM-000082-1000000",
+    }
+
+    assert handlers.emit_scanner_fast_precheck(
+        stock,
+        "000082",
+        now_ts=1012.0,
+        ws_data={"curr": 1200, "last_ws_update_ts": 1000.0},
+        throttle_sec=0,
+    )
+
+    fields = emitted[-1]["fields"]
+    assert fields["fast_precheck_result"] == "stability_pending"
+    assert fields["fast_precheck_reason"] == "stale_ws_snapshot"
+    assert fields["heavy_queue_enter_epoch"] == "not_queued"
+    assert stock["_scanner_fast_precheck_result"] == "stability_pending"
+    assert "_scanner_heavy_queue_enter_epoch" not in stock
+
+
 def test_log_ai_confirmed_terminal_no_budget_emits_contract_fields(monkeypatch):
     emitted = []
     monkeypatch.setattr(

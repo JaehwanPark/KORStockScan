@@ -1926,6 +1926,134 @@ def test_observation_source_quality_accepts_scanner_skip_without_promotion_id_wh
     assert report["summary"]["tuning_input_allowed"] is True
 
 
+def test_observation_source_quality_accepts_scalping_scanner_runtime_queue_lag(monkeypatch, tmp_path):
+    monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
+    _write_events(
+        tmp_path,
+        "2026-06-19",
+        [
+            _event(
+                "scalping_scanner_runtime_queue_lag",
+                {
+                    "metric_role": "funnel_count",
+                    "decision_authority": "real_scalping_scanner_runtime_watchlist_observation_only",
+                    "window_policy": "intraday_runtime_watchlist",
+                    "sample_floor": "not_applicable_runtime_observation",
+                    "primary_decision_metric": "queue_lag_sec",
+                    "source_quality_gate": "scalping_scanner_runtime_queue_lag_contract",
+                    "source_quality_route": "runtime_watchlist_queue_lag_observation_only",
+                    "runtime_effect": False,
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                    "forbidden_uses": (
+                        "score_threshold_change,provider_route_change,order_price_change,"
+                        "quantity_or_cap_change,broker_guard_change,real_execution_quality_approval"
+                    ),
+                    "queue_rank": 2,
+                    "scanner_queue_rank": 1,
+                    "watching_count": 72,
+                    "scanner_watching_count": 52,
+                    "real_holding_count": 3,
+                    "non_real_holding_count": 28,
+                    "pre_scanner_runtime_count": 5,
+                    "queue_lag_sec": 12.345,
+                    "anchor_to_loop_sec": 10.0,
+                    "loop_to_emit_sec": 2.345,
+                    "pre_emit_delay_sec": 2.345,
+                    "loop_started_epoch": "1010.000",
+                    "queue_emit_epoch": "1012.345",
+                    "scanner_promotion_id": "SCANPROM-000039-1000000",
+                    "scanner_promotion_emitted_epoch": "1000.000",
+                    "source_signature": "PRICE_JUMP_START",
+                    "target_status": "WATCHING",
+                    "target_strategy": "SCALPING",
+                    "target_position_tag": "SCANNER",
+                    "runtime_record_id": 79,
+                    "entry_armed_at_epoch": 1000.0,
+                    "added_time": 990.0,
+                },
+            )
+        ],
+    )
+
+    report = audit.write_report("2026-06-19")
+
+    contract = report["stage_contracts"]["scalping_scanner_runtime_queue_lag"]
+    assert contract["status"] == "pass"
+    assert report["summary"]["hard_blocking_contract_gap_count"] == 0
+    assert report["summary"]["tuning_input_allowed"] is True
+
+
+def test_observation_source_quality_accepts_scanner_fast_precheck_and_heavy_eval_lag(monkeypatch, tmp_path):
+    monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
+    base_contract = {
+        "metric_role": "funnel_count",
+        "window_policy": "intraday_runtime_watchlist",
+        "sample_floor": "not_applicable_runtime_observation",
+        "runtime_effect": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "forbidden_uses": (
+            "score_threshold_change,provider_route_change,order_price_change,"
+            "quantity_or_cap_change,broker_guard_change,real_execution_quality_approval"
+        ),
+        "scanner_promotion_id": "SCANPROM-000081-1000000",
+        "scanner_promotion_emitted_epoch": "1000.000",
+        "source_signature": "PRICE_JUMP_START",
+        "target_status": "WATCHING",
+        "target_strategy": "SCALPING",
+        "target_position_tag": "SCANNER",
+        "runtime_record_id": 81,
+    }
+    _write_events(
+        tmp_path,
+        "2026-06-19",
+        [
+            _event(
+                "scalping_scanner_fast_precheck",
+                {
+                    **base_contract,
+                    "decision_authority": "real_scalping_scanner_fast_precheck_observation_only",
+                    "primary_decision_metric": "fast_precheck_lag_sec",
+                    "source_quality_gate": "scalping_scanner_fast_precheck_contract",
+                    "source_quality_route": "runtime_watchlist_fast_precheck_observation_only",
+                    "fast_precheck_result": "eligible_for_heavy_entry_eval",
+                    "fast_precheck_reason": "fast_precheck_pass",
+                    "fast_precheck_seen_epoch": "1012.000",
+                    "fast_precheck_lag_sec": 12.0,
+                    "heavy_queue_enter_epoch": "1012.000",
+                    "queue_rank": 2,
+                    "scanner_queue_rank": 1,
+                    "watching_count": 10,
+                    "scanner_watching_count": 3,
+                    "quote_age_ms": 100.0,
+                    "snapshot_source": "ws_manager_latest_data",
+                },
+            ),
+            _event(
+                "scalping_scanner_heavy_eval_lag",
+                {
+                    **base_contract,
+                    "decision_authority": "real_scalping_scanner_heavy_eval_observation_only",
+                    "primary_decision_metric": "heavy_queue_wait_sec",
+                    "source_quality_gate": "scalping_scanner_heavy_eval_lag_contract",
+                    "source_quality_route": "runtime_watchlist_heavy_eval_lag_observation_only",
+                    "heavy_queue_enter_epoch": "1012.000",
+                    "heavy_eval_started_epoch": "1012.200",
+                    "heavy_queue_wait_sec": 0.2,
+                },
+            ),
+        ],
+    )
+
+    report = audit.write_report("2026-06-19")
+
+    assert report["stage_contracts"]["scalping_scanner_fast_precheck"]["status"] == "pass"
+    assert report["stage_contracts"]["scalping_scanner_heavy_eval_lag"]["status"] == "pass"
+    assert report["summary"]["hard_blocking_contract_gap_count"] == 0
+    assert report["summary"]["tuning_input_allowed"] is True
+
+
 def test_observation_source_quality_audit_accepts_swing_loss_reentry_fallback_source(monkeypatch, tmp_path):
     monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
     fallback_id = "swing_dry_run:2026-06-04:KOSPI_ML:004710:exit:1780556300"
@@ -2275,6 +2403,39 @@ def test_observation_source_quality_audit_routes_probe_state_persisted_by_contra
 
 def test_observation_source_quality_audit_accepts_pre_ai_and_pre_submit_gate_contracts(monkeypatch, tmp_path):
     monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
+    gate_quality = {
+        "quote_age_ms": 500.0,
+        "tick_latest_age_ms": 1000.0,
+        "tick_sample_count": 3,
+        "tick_window_sample_count": 3,
+        "tick_window_span_sec": 5.0,
+        "sample_count": 3,
+        "window_span_sec": 5.0,
+        "snapshot_source": "ws_manager_latest_data",
+        "refresh_applied": True,
+        "refresh_reason": "latest_ws_snapshot_fresh",
+        "refresh_age_ms": 300.0,
+        "stability_window_result": "window_available",
+        "stability_window_reason": "window_samples_present",
+        "stability_sample_count": 3,
+        "blocked_gate_quality_stage": "liquidity",
+    }
+    overlap = {
+        "latest_strength": "105.0",
+        "buy_pressure_10t": "0.600",
+        "distance_from_day_high_pct": "0.50",
+        "intraday_range_pct": "2.00",
+    }
+    risk_context = {
+        "metric_role": "risk_context",
+        "decision_authority": "source_quality_only",
+        "runtime_effect": False,
+        "forbidden_uses": "runtime_threshold_apply/order_submit/provider_route_change/bot_restart",
+        "threshold_family": "liquidity_pre_submit_guard_p1",
+        "gate_action": "risk_context_only",
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+    }
     _write_events(
         tmp_path,
         "2026-05-18",
@@ -2282,16 +2443,31 @@ def test_observation_source_quality_audit_accepts_pre_ai_and_pre_submit_gate_con
             _event(
                 "blocked_liquidity",
                 {
-                    "metric_role": "risk_context",
-                    "decision_authority": "source_quality_only",
-                    "runtime_effect": False,
-                    "forbidden_uses": "runtime_threshold_apply/order_submit/provider_route_change/bot_restart",
-                    "threshold_family": "liquidity_pre_submit_guard_p1",
-                    "gate_action": "risk_context_only",
-                    "allowed_runtime_apply": False,
-                    "actual_order_submitted": False,
+                    **risk_context,
+                    **gate_quality,
                     "liquidity_value": 100_000_000,
                     "min_liquidity": 500_000_000,
+                    "ask_tot": 10_000,
+                    "bid_tot": 12_000,
+                    "liquidity_orderbook_source_quality": "valid_orderbook_totals",
+                },
+            ),
+            _event(
+                "blocked_vpw",
+                {
+                    **risk_context,
+                    **overlap,
+                    **{**gate_quality, "blocked_gate_quality_stage": "vpw"},
+                    "threshold_family": "strength_momentum_soft_gate_p1",
+                },
+            ),
+            _event(
+                "blocked_overbought",
+                {
+                    **risk_context,
+                    **overlap,
+                    **{**gate_quality, "blocked_gate_quality_stage": "overbought"},
+                    "threshold_family": "overbought_pullback_guard_p1",
                 },
             ),
             _event(
@@ -2316,6 +2492,8 @@ def test_observation_source_quality_audit_accepts_pre_ai_and_pre_submit_gate_con
     report = audit.build_observation_source_quality_audit("2026-05-18")
 
     assert report["stage_contracts"]["blocked_liquidity"]["status"] == "pass"
+    assert report["stage_contracts"]["blocked_vpw"]["status"] == "pass"
+    assert report["stage_contracts"]["blocked_overbought"]["status"] == "pass"
     assert report["stage_contracts"]["pre_submit_liquidity_guard_block"]["status"] == "pass"
 
 

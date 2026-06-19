@@ -829,6 +829,9 @@ def _safe_float(value, default=0.0):
 def _scanner_runtime_target_event_fields(payload, *, outcome, reason, target=None):
     payload = payload or {}
     target = target or {}
+    existing = payload.get("existing_target")
+    if not isinstance(existing, dict):
+        existing = {}
     return {
         "metric_role": "runtime_handoff_observation",
         "decision_authority": "real_scalping_scanner_runtime_watchlist_handoff_only",
@@ -858,6 +861,15 @@ def _scanner_runtime_target_event_fields(payload, *, outcome, reason, target=Non
         "target_status": target.get("status") or payload.get("status") or "not_applicable_target_status",
         "target_strategy": target.get("strategy") or payload.get("strategy") or "not_applicable_target_strategy",
         "target_position_tag": target.get("position_tag") or payload.get("position_tag") or "not_applicable_target_position_tag",
+        "existing_status": existing.get("status") or "not_applicable_existing_status",
+        "existing_strategy": existing.get("strategy") or "not_applicable_existing_strategy",
+        "existing_position_tag": existing.get("position_tag") or "not_applicable_existing_position_tag",
+        "existing_runtime_record_id": existing.get("id") or "not_applicable_existing_runtime_record_id",
+        "existing_actual_order_submitted": (
+            existing.get("actual_order_submitted")
+            if existing.get("actual_order_submitted") is not None
+            else "not_applicable_existing_actual_order_submitted"
+        ),
     }
 
 
@@ -901,6 +913,36 @@ def _is_scanner_runtime_target(target):
     return strategy == "SCALPING" and position_tag == "SCANNER"
 
 
+def _is_scanner_watching_target(target):
+    target = target or {}
+    return _is_scanner_runtime_target(target) and str(target.get("status") or "").upper() == "WATCHING"
+
+
+def _is_real_holding_target(target):
+    target = target or {}
+    if str(target.get("status") or "").upper() != "HOLDING":
+        return False
+    return not _is_runtime_simulation_target(target) and not _is_runtime_probe_target(target)
+
+
+def _scanner_queue_added_time(target, now_ts=None):
+    now_ts = time.time() if now_ts is None else now_ts
+    target = target or {}
+    armed_ts = _safe_float(target.get("entry_armed_at_epoch"), 0.0)
+    if armed_ts > 0:
+        return armed_ts
+    return _safe_float(target.get("added_time"), now_ts) or now_ts
+
+
+def _scanner_promotion_anchor_time(payload, default_ts):
+    payload = payload or {}
+    for key in ("entry_armed_at_epoch", "scanner_promotion_emitted_epoch", "added_time"):
+        value = _safe_float(payload.get(key), 0.0)
+        if value > 0:
+            return value
+    return default_ts
+
+
 def _runtime_added_time_for_target(target, now_ts=None):
     """Preserve scanner promotion recency across restarts and DB poll rehydration."""
     now_ts = time.time() if now_ts is None else now_ts
@@ -926,6 +968,161 @@ def _scalping_fifo_candidates(watching_stocks, now_ts):
     )
 
 
+def _runtime_iteration_targets(targets, now_ts):
+    """Prioritize recently scanner-promoted WATCHING rows without mutating ACTIVE_TARGETS."""
+    indexed = list(enumerate(targets or []))
+
+    def _priority(item):
+        original_index, target = item
+        status = str((target or {}).get("status") or "").upper()
+        if status in {"BUY_ORDERED", "SELL_ORDERED"}:
+            status_rank = 0
+            recency_key = 0.0
+        elif _is_real_holding_target(target):
+            status_rank = 1
+            recency_key = 0.0
+        elif _is_scanner_watching_target(target):
+            status_rank = 2
+            recency_key = -_scanner_queue_added_time(target, now_ts=now_ts)
+        elif status == "HOLDING":
+            status_rank = 3
+            recency_key = 0.0
+        elif status == "WATCHING":
+            status_rank = 4
+            recency_key = _runtime_added_time_for_target(target, now_ts=now_ts)
+        else:
+            status_rank = 5
+            recency_key = 0.0
+        return (status_rank, recency_key, original_index)
+
+    return [target for _, target in sorted(indexed, key=_priority)]
+
+
+def _runtime_queue_context(targets, now_ts):
+    iteration_targets = _runtime_iteration_targets(targets, now_ts=now_ts)
+    watching = [t for t in iteration_targets if str((t or {}).get("status") or "").upper() == "WATCHING"]
+    scanner_watching = [t for t in watching if _is_scanner_watching_target(t)]
+    real_holding = [t for t in iteration_targets if _is_real_holding_target(t)]
+    non_real_holding = [
+        t
+        for t in iteration_targets
+        if str((t or {}).get("status") or "").upper() == "HOLDING" and not _is_real_holding_target(t)
+    ]
+    queue_rank_by_obj = {id(target): idx + 1 for idx, target in enumerate(iteration_targets)}
+    scanner_rank_by_obj = {id(target): idx + 1 for idx, target in enumerate(scanner_watching)}
+    first_scanner_index = next(
+        (idx for idx, target in enumerate(iteration_targets) if _is_scanner_watching_target(target)),
+        len(iteration_targets),
+    )
+    return {
+        "iteration_targets": iteration_targets,
+        "queue_rank_by_obj": queue_rank_by_obj,
+        "scanner_rank_by_obj": scanner_rank_by_obj,
+        "watching_count": len(watching),
+        "scanner_watching_count": len(scanner_watching),
+        "real_holding_count": len(real_holding),
+        "non_real_holding_count": len(non_real_holding),
+        "pre_scanner_runtime_count": first_scanner_index,
+        "loop_started_epoch": now_ts,
+    }
+
+
+def _is_non_real_same_symbol_observation(target):
+    target = target or {}
+    status = str(target.get("status") or "").upper()
+    if status in {"BUY_ORDERED", "SELL_ORDERED"}:
+        return False
+    return _is_runtime_simulation_target(target) or _is_runtime_probe_target(target)
+
+
+def _same_symbol_active_conflict_reason(target):
+    target = target or {}
+    status = str(target.get("status") or "").upper()
+    if status in {"COMPLETED", "EXPIRED"}:
+        return ""
+    if _is_non_real_same_symbol_observation(target):
+        return ""
+    if status in {"BUY_ORDERED", "SELL_ORDERED"}:
+        return "same_symbol_active_order_or_holding"
+    if status == "HOLDING":
+        return "same_symbol_active_order_or_holding"
+    return "same_symbol_active_runtime_target"
+
+
+def _parse_quote_price(value):
+    text = str(value or "").strip().replace(",", "")
+    if not text:
+        return 0
+    try:
+        return abs(int(float(text.replace("+", ""))))
+    except Exception:
+        return 0
+
+
+def _fetch_rest_quote_snapshot_for_ws_gap(code, now_ts):
+    if not KIWOOM_TOKEN:
+        return {}
+    try:
+        url = kiwoom_utils.get_api_url("/api/dostk/stkinfo")
+        rows = kiwoom_utils.fetch_kiwoom_api_continuous(
+            url,
+            KIWOOM_TOKEN,
+            "ka10001",
+            {"stk_cd": code},
+            max_retries=1,
+            use_continuous=False,
+        )
+    except Exception as exc:
+        log_error(f"[SCANNER_WS_RECOVERY] quote fallback failed ({code}): {exc}")
+        return {}
+    if not rows:
+        return {}
+    row = rows[0] if isinstance(rows[0], dict) else {}
+    curr = 0
+    for key in ("cur_prc", "curr_price", "price", "stck_prpr", "trade_price"):
+        curr = _parse_quote_price(row.get(key))
+        if curr > 0:
+            break
+    if curr <= 0:
+        return {}
+    return {
+        "curr": curr,
+        "ws_snapshot_recovery_source": "ka10001_rest_quote_fallback",
+        "ws_snapshot_recovery_epoch": now_ts,
+        "ws_snapshot_recovery_runtime_effect": False,
+    }
+
+
+def _recover_missing_ws_snapshot(stock, code, now_ts, ws_data):
+    event_bus.publish("COMMAND_WS_REG", {"codes": [code], "source": "scanner_watching_ws_snapshot_recovery"})
+    state = stock.setdefault("_scanner_ws_snapshot_recovery", {})
+    if not isinstance(state, dict):
+        state = {}
+        stock["_scanner_ws_snapshot_recovery"] = state
+    miss_count = int(state.get("miss_count") or 0) + 1
+    last_fallback_ts = _safe_float(state.get("last_fallback_ts"), 0.0)
+    state["miss_count"] = miss_count
+    state["last_ws_reg_ts"] = now_ts
+
+    recovery_fields = {
+        "ws_recovery_action": "ws_reg_reissued",
+        "ws_recovery_miss_count": miss_count,
+        "ws_recovery_outcome": "ws_reg_reissued_waiting_snapshot",
+    }
+    if miss_count >= 2 and now_ts - last_fallback_ts >= 10:
+        state["last_fallback_ts"] = now_ts
+        fallback = _fetch_rest_quote_snapshot_for_ws_gap(code, now_ts)
+        if fallback:
+            state["last_fallback_outcome"] = "rest_quote_applied"
+            recovery_fields["ws_recovery_action"] = "ws_reg_reissued_rest_quote_fallback"
+            recovery_fields["ws_recovery_outcome"] = "rest_quote_applied"
+            return fallback, recovery_fields
+        state["last_fallback_outcome"] = "rest_quote_unavailable"
+        recovery_fields["ws_recovery_action"] = "ws_reg_reissued_rest_quote_fallback"
+        recovery_fields["ws_recovery_outcome"] = "rest_quote_unavailable"
+    return ws_data or {}, recovery_fields
+
+
 def handle_scalping_scanner_promoted_target(payload):
     """Attach scanner-promoted WATCHING records to the live loop without changing buy thresholds."""
     global ACTIVE_TARGETS
@@ -942,6 +1139,7 @@ def handle_scalping_scanner_promoted_target(payload):
         return False
 
     now_ts = _safe_float(payload.get("added_time"), time.time())
+    promotion_anchor_ts = _scanner_promotion_anchor_time(payload, now_ts)
     buy_price = _safe_int(payload.get("buy_price") or payload.get("current_price_observed"), 0)
     position_tag = normalize_position_tag(strategy, payload.get("position_tag") or "SCANNER")
     record_id = _resolve_scanner_runtime_record_id(payload, code, strategy)
@@ -962,10 +1160,7 @@ def handle_scalping_scanner_promoted_target(payload):
                         "name": payload.get("name") or existing.get("name"),
                         "buy_price": buy_price or existing.get("buy_price"),
                         "added_time": now_ts,
-                        "entry_armed_at_epoch": _safe_float(
-                            payload.get("entry_armed_at_epoch"),
-                            existing.get("entry_armed_at_epoch") or now_ts,
-                        ),
+                        "entry_armed_at_epoch": promotion_anchor_ts,
                         "position_tag": position_tag,
                         "scanner_promotion_id": payload.get("scanner_promotion_id") or existing.get("scanner_promotion_id"),
                         "scanner_promotion_reason": payload.get("scanner_promotion_reason")
@@ -986,11 +1181,12 @@ def handle_scalping_scanner_promoted_target(payload):
                 event_bus.publish("COMMAND_WS_REG", {"codes": [code]})
                 return True
 
-            if status not in {"COMPLETED", "EXPIRED"}:
+            conflict_reason = _same_symbol_active_conflict_reason(existing)
+            if conflict_reason:
                 _log_scanner_runtime_target_attach(
-                    payload,
+                    {**payload, "existing_target": dict(existing)},
                     outcome="skipped",
-                    reason="same_symbol_active_order_or_holding",
+                    reason=conflict_reason,
                     target=existing,
                 )
                 return False
@@ -1004,7 +1200,7 @@ def handle_scalping_scanner_promoted_target(payload):
             "type": payload.get("trade_type") or "SCALP",
             "buy_price": buy_price,
             "added_time": now_ts,
-            "entry_armed_at_epoch": _safe_float(payload.get("entry_armed_at_epoch"), now_ts),
+            "entry_armed_at_epoch": promotion_anchor_ts,
             "position_tag": position_tag,
             "scanner_promotion_id": payload.get("scanner_promotion_id") or "",
             "scanner_promotion_reason": payload.get("scanner_promotion_reason") or "",
@@ -1035,13 +1231,11 @@ def attach_db_poll_target_if_missing(db_target, targets, now_ts):
         return False
 
     identity = target_identity(code, dt["strategy"])
-    if any(
-        target_identity(t.get("code", ""), t.get("strategy", "")) == identity
-        and not sniper_state_handlers._is_scalp_simulator_target(t)
-        and not sniper_state_handlers._is_swing_intraday_probe_target(t)
-        for t in targets
-    ):
-        return False
+    for target in targets:
+        if target_identity(target.get("code", ""), target.get("strategy", "")) != identity:
+            continue
+        if _same_symbol_active_conflict_reason(target):
+            return False
 
     dt["added_time"] = _runtime_added_time_for_target(dt, now_ts=now_ts)
     targets.append(dt)
@@ -1709,7 +1903,8 @@ def run_sniper(is_test_mode=False):
             # 상태 라우팅
             # ✅ 주문대기 상태는 ws_data 없이도 먼저 처리
             # =====================================================
-            for stock in targets[:]:
+            queue_context = _runtime_queue_context(targets, now_ts=now_ts)
+            for stock in queue_context["iteration_targets"]:
                 code = str(stock.get('code', '')).strip()[:6]
                 status = stock.get('status')
 
@@ -1724,15 +1919,35 @@ def run_sniper(is_test_mode=False):
                 ws_data = WS_MANAGER.get_latest_data(code) if WS_MANAGER else {}
                 if not ws_data or ws_data.get('curr', 0) == 0:
                     if status == 'WATCHING':
-                        sniper_state_handlers.emit_scanner_watching_runtime_skip(
-                            stock,
-                            code,
-                            skip_reason="ws_snapshot_missing_or_zero",
-                            now_ts=now_ts,
-                            ws_data=ws_data,
-                            ws_manager_available=bool(WS_MANAGER),
+                        ws_data, recovery_fields = (
+                            _recover_missing_ws_snapshot(stock, code, now_ts, ws_data)
+                            if _is_scanner_watching_target(stock)
+                            else (ws_data, {})
                         )
-                    continue
+                        if recovery_fields.get("ws_recovery_outcome") == "rest_quote_applied":
+                            sniper_state_handlers.emit_scanner_watching_runtime_skip(
+                                stock,
+                                code,
+                                skip_reason="ws_snapshot_missing_or_zero_recovered",
+                                now_ts=now_ts,
+                                ws_data=ws_data,
+                                ws_manager_available=bool(WS_MANAGER),
+                                throttle_sec=0,
+                                **recovery_fields,
+                            )
+                        if not ws_data or ws_data.get('curr', 0) == 0:
+                            sniper_state_handlers.emit_scanner_watching_runtime_skip(
+                                stock,
+                                code,
+                                skip_reason="ws_snapshot_missing_or_zero",
+                                now_ts=now_ts,
+                                ws_data=ws_data,
+                                ws_manager_available=bool(WS_MANAGER),
+                                **recovery_fields,
+                            )
+                            continue
+                    else:
+                        continue
 
                 if sniper_state_handlers._is_scalp_simulator_target(stock) and status == sniper_state_handlers.SCALP_SIM_PENDING_STATUS:
                     sniper_state_handlers.handle_scalp_simulator_pending_entry(
@@ -1744,6 +1959,38 @@ def run_sniper(is_test_mode=False):
                     continue
 
                 if status == 'WATCHING':
+                    if _is_scanner_watching_target(stock):
+                        heavy_queue_enter_epoch = time.time()
+                        sniper_state_handlers.emit_scanner_fast_precheck(
+                            stock,
+                            code,
+                            now_ts=heavy_queue_enter_epoch,
+                            ws_data=ws_data,
+                            queue_rank=queue_context["queue_rank_by_obj"].get(id(stock), 0),
+                            scanner_queue_rank=queue_context["scanner_rank_by_obj"].get(id(stock), 0),
+                            watching_count=queue_context["watching_count"],
+                            scanner_watching_count=queue_context["scanner_watching_count"],
+                        )
+                        sniper_state_handlers.emit_scanner_runtime_queue_lag(
+                            stock,
+                            code,
+                            now_ts=heavy_queue_enter_epoch,
+                            queue_rank=queue_context["queue_rank_by_obj"].get(id(stock), 0),
+                            scanner_queue_rank=queue_context["scanner_rank_by_obj"].get(id(stock), 0),
+                            watching_count=queue_context["watching_count"],
+                            scanner_watching_count=queue_context["scanner_watching_count"],
+                            real_holding_count=queue_context["real_holding_count"],
+                            non_real_holding_count=queue_context["non_real_holding_count"],
+                            pre_scanner_runtime_count=queue_context["pre_scanner_runtime_count"],
+                            loop_started_epoch=queue_context["loop_started_epoch"],
+                        )
+                        if stock.get("_scanner_fast_precheck_result") == "eligible_for_heavy_entry_eval":
+                            sniper_state_handlers.emit_scanner_heavy_eval_lag(
+                                stock,
+                                code,
+                                now_ts=time.time(),
+                                queue_enter_epoch=heavy_queue_enter_epoch,
+                            )
                     handle_watching_state(
                         stock,
                         code,

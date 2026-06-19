@@ -1,16 +1,16 @@
 {
-  "timestamp": "2026-06-19T13:42:20.800547",
+  "timestamp": "2026-06-19T15:37:04.552323",
   "vix_close": 16.399999618530273,
   "vix_ma3": 17.083333333333332,
   "vix_peak_passed": true,
   "vix_two_day_down": false,
   "vix_extreme": false,
-  "wti_close": 75.4800033569336,
-  "wti_rsi": 30.388589855315487,
-  "wti_macd": -5.362368732722004,
-  "wti_macd_signal": -3.8756217713064993,
+  "wti_close": 76.37000274658203,
+  "wti_rsi": 31.18807145983388,
+  "wti_macd": -5.291371630413877,
+  "wti_macd_signal": -3.8614223508448737,
   "wti_dead_cross": false,
-  "wti_from_recent_high_pct": -21.86334932794589,
+  "wti_from_recent_high_pct": -20.942024893466883,
   "oil_reversal": true,
   "oil_pullback_relief": true,
   "fng_value": 37.2571428571429,
@@ -97,5 +97,5 @@
     "local_breadth_signal": "none"
   },
   "cached_session_date": "2026-06-19",
-  "cached_at": "2026-06-19T13:42:20.811473+09:00"
+  "cached_at": "2026-06-19T15:37:04.570176+09:00"
 }

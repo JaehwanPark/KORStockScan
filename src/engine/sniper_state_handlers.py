@@ -6810,6 +6810,295 @@ def emit_scanner_watching_runtime_skip(stock, code, *, skip_reason: str, now_ts:
     return True
 
 
+def _scanner_runtime_queue_lag_fields(
+    stock,
+    *,
+    now_ts: float,
+    queue_rank: int,
+    scanner_queue_rank: int,
+    watching_count: int,
+    scanner_watching_count: int,
+    real_holding_count: int,
+    non_real_holding_count: int,
+    pre_scanner_runtime_count: int,
+    loop_started_epoch: float,
+) -> dict[str, Any]:
+    scanner_fields = _scanner_promotion_correlation_fields(stock)
+    added_time = _safe_float(stock.get("added_time"), 0.0)
+    armed_time = _safe_float(stock.get("entry_armed_at_epoch"), 0.0)
+    anchor_time = armed_time or added_time
+    emit_epoch = float(now_ts)
+    loop_epoch = _safe_float(loop_started_epoch, emit_epoch) or emit_epoch
+    queue_lag_sec = max(0.0, emit_epoch - anchor_time) if anchor_time > 0 else 0.0
+    anchor_to_loop_sec = max(0.0, loop_epoch - anchor_time) if anchor_time > 0 else 0.0
+    loop_to_emit_sec = max(0.0, emit_epoch - loop_epoch)
+    return {
+        "scanner_promotion_id": scanner_fields.get("scanner_promotion_id")
+        or "not_applicable_scanner_promotion_id",
+        "scanner_promotion_emitted_epoch": scanner_fields.get("scanner_promotion_emitted_epoch")
+        or "not_applicable_scanner_promotion_emitted_epoch",
+        "scanner_promotion_reason": scanner_fields.get("scanner_promotion_reason")
+        or "not_applicable_scanner_promotion_reason",
+        "source_signature": scanner_fields.get("source_signature") or "not_applicable_source_signature",
+        "metric_role": "funnel_count",
+        "decision_authority": "real_scalping_scanner_runtime_watchlist_observation_only",
+        "window_policy": "intraday_runtime_watchlist",
+        "sample_floor": "not_applicable_runtime_observation",
+        "primary_decision_metric": "queue_lag_sec",
+        "source_quality_gate": "scalping_scanner_runtime_queue_lag_contract",
+        "source_quality_route": "runtime_watchlist_queue_lag_observation_only",
+        "runtime_effect": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "forbidden_uses": (
+            "score_threshold_change,provider_route_change,order_price_change,"
+            "quantity_or_cap_change,broker_guard_change,real_execution_quality_approval"
+        ),
+        "queue_rank": int(queue_rank or 0),
+        "scanner_queue_rank": int(scanner_queue_rank or 0),
+        "watching_count": int(watching_count or 0),
+        "scanner_watching_count": int(scanner_watching_count or 0),
+        "real_holding_count": int(real_holding_count or 0),
+        "non_real_holding_count": int(non_real_holding_count or 0),
+        "pre_scanner_runtime_count": int(pre_scanner_runtime_count or 0),
+        "queue_lag_sec": round(queue_lag_sec, 3),
+        "anchor_to_loop_sec": round(anchor_to_loop_sec, 3),
+        "loop_to_emit_sec": round(loop_to_emit_sec, 3),
+        "pre_emit_delay_sec": round(loop_to_emit_sec, 3),
+        "loop_started_epoch": f"{loop_epoch:.3f}",
+        "queue_emit_epoch": f"{emit_epoch:.3f}",
+        "target_status": stock.get("status") or "not_applicable_target_status",
+        "target_strategy": normalize_strategy(stock.get("strategy")),
+        "target_position_tag": normalize_position_tag(normalize_strategy(stock.get("strategy")), stock.get("position_tag")),
+        "runtime_record_id": stock.get("id") or "not_applicable_runtime_record_id",
+        "entry_armed_at_epoch": stock.get("entry_armed_at_epoch") or "not_applicable_entry_armed_at_epoch",
+        "added_time": stock.get("added_time") or "not_applicable_added_time",
+        "observed_epoch": f"{float(now_ts):.3f}",
+    }
+
+
+def emit_scanner_runtime_queue_lag(
+    stock,
+    code,
+    *,
+    now_ts: float | None = None,
+    queue_rank: int = 0,
+    scanner_queue_rank: int = 0,
+    watching_count: int = 0,
+    scanner_watching_count: int = 0,
+    real_holding_count: int = 0,
+    non_real_holding_count: int = 0,
+    pre_scanner_runtime_count: int = 0,
+    loop_started_epoch: float | None = None,
+    throttle_sec: int = 10,
+) -> bool:
+    """Log scanner WATCHING runtime queue lag before downstream handling."""
+    if not _is_scanner_watching_runtime_observation_target(stock):
+        return False
+    now_value = time.time() if now_ts is None else float(now_ts)
+    throttle = max(0, int(throttle_sec or 0))
+    last_logged = _safe_float(stock.get("_scanner_runtime_queue_lag_logged_at"), 0.0)
+    if throttle > 0 and now_value - last_logged < throttle:
+        return False
+    stock["_scanner_runtime_queue_lag_logged_at"] = now_value
+    _log_entry_pipeline(
+        stock,
+        code,
+        "scalping_scanner_runtime_queue_lag",
+        **_scanner_runtime_queue_lag_fields(
+            stock,
+            now_ts=now_value,
+            queue_rank=queue_rank,
+            scanner_queue_rank=scanner_queue_rank,
+            watching_count=watching_count,
+            scanner_watching_count=scanner_watching_count,
+            real_holding_count=real_holding_count,
+            non_real_holding_count=non_real_holding_count,
+            pre_scanner_runtime_count=pre_scanner_runtime_count,
+            loop_started_epoch=now_value if loop_started_epoch is None else float(loop_started_epoch),
+        ),
+    )
+    return True
+
+
+def _scanner_fast_precheck_fields(
+    stock,
+    *,
+    now_ts: float,
+    ws_data=None,
+    queue_rank: int = 0,
+    scanner_queue_rank: int = 0,
+    watching_count: int = 0,
+    scanner_watching_count: int = 0,
+) -> dict[str, Any]:
+    ws_data = ws_data if isinstance(ws_data, dict) else {}
+    scanner_fields = _scanner_promotion_correlation_fields(stock)
+    added_time = _safe_float((stock or {}).get("added_time"), 0.0)
+    armed_time = _safe_float((stock or {}).get("entry_armed_at_epoch"), 0.0)
+    anchor_time = armed_time or added_time
+    quote_age_sec = _get_ws_snapshot_age_sec(ws_data)
+    curr = _safe_int(ws_data.get("curr"), 0)
+    if curr <= 0:
+        result = "source_quality_blocked"
+        reason = "missing_or_zero_curr"
+    elif quote_age_sec is not None and quote_age_sec > _rule_float("SCALP_PRE_AI_MAX_WS_AGE_SEC", 3.0):
+        result = "stability_pending"
+        reason = "stale_ws_snapshot"
+    else:
+        result = "eligible_for_heavy_entry_eval"
+        reason = "fast_precheck_pass"
+    return {
+        "scanner_promotion_id": scanner_fields.get("scanner_promotion_id")
+        or "not_applicable_scanner_promotion_id",
+        "scanner_promotion_emitted_epoch": scanner_fields.get("scanner_promotion_emitted_epoch")
+        or "not_applicable_scanner_promotion_emitted_epoch",
+        "scanner_promotion_reason": scanner_fields.get("scanner_promotion_reason")
+        or "not_applicable_scanner_promotion_reason",
+        "source_signature": scanner_fields.get("source_signature") or "not_applicable_source_signature",
+        "metric_role": "funnel_count",
+        "decision_authority": "real_scalping_scanner_fast_precheck_observation_only",
+        "window_policy": "intraday_runtime_watchlist",
+        "sample_floor": "not_applicable_runtime_observation",
+        "primary_decision_metric": "fast_precheck_lag_sec",
+        "source_quality_gate": "scalping_scanner_fast_precheck_contract",
+        "source_quality_route": "runtime_watchlist_fast_precheck_observation_only",
+        "runtime_effect": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "forbidden_uses": (
+            "score_threshold_change,provider_route_change,order_price_change,"
+            "quantity_or_cap_change,broker_guard_change,real_execution_quality_approval"
+        ),
+        "fast_precheck_result": result,
+        "fast_precheck_reason": reason,
+        "fast_precheck_seen_epoch": f"{float(now_ts):.3f}",
+        "fast_precheck_lag_sec": round(max(0.0, float(now_ts) - anchor_time), 3) if anchor_time > 0 else 0.0,
+        "heavy_queue_enter_epoch": f"{float(now_ts):.3f}" if result == "eligible_for_heavy_entry_eval" else "not_queued",
+        "queue_rank": int(queue_rank or 0),
+        "scanner_queue_rank": int(scanner_queue_rank or 0),
+        "watching_count": int(watching_count or 0),
+        "scanner_watching_count": int(scanner_watching_count or 0),
+        "quote_age_ms": (
+            round(float(quote_age_sec) * 1000.0, 3)
+            if quote_age_sec is not None
+            else "not_available_quote_age_ms"
+        ),
+        "snapshot_source": "ws_manager_latest_data" if ws_data else "missing_ws_snapshot",
+        "target_status": (stock or {}).get("status") or "not_applicable_target_status",
+        "target_strategy": normalize_strategy((stock or {}).get("strategy")),
+        "target_position_tag": normalize_position_tag(
+            normalize_strategy((stock or {}).get("strategy")),
+            (stock or {}).get("position_tag"),
+        ),
+        "runtime_record_id": (stock or {}).get("id") or "not_applicable_runtime_record_id",
+        "entry_armed_at_epoch": (stock or {}).get("entry_armed_at_epoch") or "not_applicable_entry_armed_at_epoch",
+        "added_time": (stock or {}).get("added_time") or "not_applicable_added_time",
+    }
+
+
+def emit_scanner_fast_precheck(
+    stock,
+    code,
+    *,
+    now_ts: float | None = None,
+    ws_data=None,
+    queue_rank: int = 0,
+    scanner_queue_rank: int = 0,
+    watching_count: int = 0,
+    scanner_watching_count: int = 0,
+    throttle_sec: int = 5,
+) -> bool:
+    """Emit an order-forbidden scanner precheck before the heavy WATCHING handler."""
+    if not _is_scanner_watching_runtime_observation_target(stock):
+        return False
+    now_value = time.time() if now_ts is None else float(now_ts)
+    throttle = max(0, int(throttle_sec or 0))
+    last_logged = _safe_float(stock.get("_scanner_fast_precheck_logged_at"), 0.0)
+    if throttle > 0 and now_value - last_logged < throttle:
+        return False
+    stock["_scanner_fast_precheck_logged_at"] = now_value
+    fields = _scanner_fast_precheck_fields(
+        stock,
+        now_ts=now_value,
+        ws_data=ws_data,
+        queue_rank=queue_rank,
+        scanner_queue_rank=scanner_queue_rank,
+        watching_count=watching_count,
+        scanner_watching_count=scanner_watching_count,
+    )
+    if fields.get("fast_precheck_result") == "eligible_for_heavy_entry_eval":
+        stock["_scanner_heavy_queue_enter_epoch"] = now_value
+    stock["_scanner_fast_precheck_result"] = fields.get("fast_precheck_result")
+    stock["_scanner_fast_precheck_reason"] = fields.get("fast_precheck_reason")
+    _log_entry_pipeline(stock, code, "scalping_scanner_fast_precheck", **fields)
+    return True
+
+
+def _scanner_heavy_eval_lag_fields(stock, *, now_ts: float, queue_enter_epoch: float | None = None) -> dict[str, Any]:
+    scanner_fields = _scanner_promotion_correlation_fields(stock)
+    enter_epoch = _safe_float(queue_enter_epoch, 0.0) or _safe_float(
+        (stock or {}).get("_scanner_heavy_queue_enter_epoch"),
+        float(now_ts),
+    )
+    return {
+        "scanner_promotion_id": scanner_fields.get("scanner_promotion_id")
+        or "not_applicable_scanner_promotion_id",
+        "scanner_promotion_emitted_epoch": scanner_fields.get("scanner_promotion_emitted_epoch")
+        or "not_applicable_scanner_promotion_emitted_epoch",
+        "source_signature": scanner_fields.get("source_signature") or "not_applicable_source_signature",
+        "metric_role": "funnel_count",
+        "decision_authority": "real_scalping_scanner_heavy_eval_observation_only",
+        "window_policy": "intraday_runtime_watchlist",
+        "sample_floor": "not_applicable_runtime_observation",
+        "primary_decision_metric": "heavy_queue_wait_sec",
+        "source_quality_gate": "scalping_scanner_heavy_eval_lag_contract",
+        "source_quality_route": "runtime_watchlist_heavy_eval_lag_observation_only",
+        "runtime_effect": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "forbidden_uses": (
+            "score_threshold_change,provider_route_change,order_price_change,"
+            "quantity_or_cap_change,broker_guard_change,real_execution_quality_approval"
+        ),
+        "heavy_queue_enter_epoch": f"{float(enter_epoch):.3f}",
+        "heavy_eval_started_epoch": f"{float(now_ts):.3f}",
+        "heavy_queue_wait_sec": round(max(0.0, float(now_ts) - float(enter_epoch)), 3),
+        "target_status": (stock or {}).get("status") or "not_applicable_target_status",
+        "target_strategy": normalize_strategy((stock or {}).get("strategy")),
+        "target_position_tag": normalize_position_tag(
+            normalize_strategy((stock or {}).get("strategy")),
+            (stock or {}).get("position_tag"),
+        ),
+        "runtime_record_id": (stock or {}).get("id") or "not_applicable_runtime_record_id",
+    }
+
+
+def emit_scanner_heavy_eval_lag(
+    stock,
+    code,
+    *,
+    now_ts: float | None = None,
+    queue_enter_epoch: float | None = None,
+    throttle_sec: int = 5,
+) -> bool:
+    """Log the delay between fast precheck eligibility and heavy WATCHING evaluation."""
+    if not _is_scanner_watching_runtime_observation_target(stock):
+        return False
+    now_value = time.time() if now_ts is None else float(now_ts)
+    throttle = max(0, int(throttle_sec or 0))
+    last_logged = _safe_float(stock.get("_scanner_heavy_eval_lag_logged_at"), 0.0)
+    if throttle > 0 and now_value - last_logged < throttle:
+        return False
+    stock["_scanner_heavy_eval_lag_logged_at"] = now_value
+    _log_entry_pipeline(
+        stock,
+        code,
+        "scalping_scanner_heavy_eval_lag",
+        **_scanner_heavy_eval_lag_fields(stock, now_ts=now_value, queue_enter_epoch=queue_enter_epoch),
+    )
+    return True
+
+
 def _scanner_promotion_correlation_fields(stock) -> dict[str, Any]:
     if not isinstance(stock, dict):
         return {}
@@ -11506,6 +11795,114 @@ def _pre_ai_refresh_strength_momentum_ws_snapshot(code: str, ws_data: dict | Non
     return refreshed, fields
 
 
+def _history_tick_window_fields(ws_data: dict | None, gate_result: dict | None = None) -> dict[str, Any]:
+    ws_data = ws_data if isinstance(ws_data, dict) else {}
+    gate_result = gate_result if isinstance(gate_result, dict) else {}
+    history = ws_data.get("strength_momentum_history") or []
+    normalized_ts: list[float] = []
+    if isinstance(history, list):
+        for item in history:
+            if not isinstance(item, dict):
+                continue
+            ts = _safe_float(item.get("ts"), 0.0)
+            if ts > 0:
+                normalized_ts.append(ts)
+    normalized_ts.sort()
+    sample_count = len(normalized_ts)
+    latest_ts = normalized_ts[-1] if normalized_ts else 0.0
+    window_sec = _safe_float(gate_result.get("window_sec"), _rule_float("SCALP_VPW_WINDOW_SECONDS", 5.0))
+    if latest_ts > 0:
+        window_start = latest_ts - max(0.0, window_sec)
+        window_ts = [ts for ts in normalized_ts if ts >= window_start]
+    else:
+        window_ts = []
+    window_sample_count = len(window_ts)
+    if window_ts:
+        window_span = max(0.0, window_ts[-1] - window_ts[0])
+    else:
+        window_span = 0.0
+    latest_age_ms: Any
+    if latest_ts > 0:
+        latest_age_ms = round(max(0.0, time.time() - latest_ts) * 1000.0, 3)
+    else:
+        latest_age_ms = "not_available_tick_latest_age_ms"
+    return {
+        "tick_sample_count": sample_count,
+        "tick_window_sample_count": window_sample_count,
+        "tick_latest_age_ms": latest_age_ms,
+        "tick_window_span_sec": round(window_span, 3),
+        "sample_count": sample_count,
+        "window_span_sec": round(window_span, 3),
+    }
+
+
+def _pre_ai_blocked_gate_quality_fields(
+    *,
+    gate_name: str,
+    ws_data: dict | None,
+    gate_result: dict | None = None,
+    refresh_fields: dict | None = None,
+    liquidity_totals_present: bool | None = None,
+) -> dict[str, Any]:
+    """Self-contained freshness/stability provenance for pre-AI blocked gates."""
+    ws_data = ws_data if isinstance(ws_data, dict) else {}
+    gate_result = gate_result if isinstance(gate_result, dict) else {}
+    refresh_fields = refresh_fields if isinstance(refresh_fields, dict) else {}
+    tick_fields = _history_tick_window_fields(ws_data, gate_result)
+    quote_age_sec = _get_ws_snapshot_age_sec(ws_data)
+    quote_age_ms: Any
+    if quote_age_sec is None:
+        quote_age_ms = "not_available_quote_age_ms"
+    else:
+        quote_age_ms = round(max(0.0, quote_age_sec) * 1000.0, 3)
+
+    refresh_applied = bool(refresh_fields.get("pre_ai_ws_snapshot_refresh_applied"))
+    refresh_reason = str(
+        refresh_fields.get("pre_ai_ws_snapshot_refresh_reason")
+        or ("not_attempted_no_refresh_fields" if not refresh_fields else "not_available_refresh_reason")
+    )
+    refresh_age_ms = refresh_fields.get("pre_ai_ws_snapshot_refresh_age_ms")
+    if refresh_age_ms in (None, "", "-"):
+        refresh_age_ms = refresh_fields.get("pre_ai_ws_snapshot_refresh_input_age_ms")
+    if refresh_age_ms in (None, "", "-"):
+        refresh_age_ms = "not_available_refresh_age_ms"
+    snapshot_source = str(
+        refresh_fields.get("pre_ai_ws_snapshot_refresh_source")
+        or ("ws_snapshot_input" if ws_data else "missing_ws_snapshot")
+    )
+    sample_count = _safe_int(tick_fields.get("tick_sample_count"), 0)
+    window_sample_count = _safe_int(tick_fields.get("tick_window_sample_count"), 0)
+    window_span = _safe_float(tick_fields.get("tick_window_span_sec"), 0.0)
+    gate_key = str(gate_name or "").strip() or "unknown_gate"
+    if gate_key == "liquidity" and liquidity_totals_present is False:
+        stability_result = "missing_orderbook_snapshot"
+        stability_reason = "ask_bid_totals_missing"
+    elif sample_count <= 0:
+        stability_result = "not_available"
+        stability_reason = "strength_momentum_history_missing"
+    elif window_sample_count <= 1:
+        stability_result = "single_snapshot_only"
+        stability_reason = "insufficient_window_samples"
+    elif window_span <= 0:
+        stability_result = "single_timestamp_window"
+        stability_reason = "window_span_zero"
+    else:
+        stability_result = "window_available"
+        stability_reason = "window_samples_present"
+    return {
+        **tick_fields,
+        "quote_age_ms": quote_age_ms,
+        "snapshot_source": snapshot_source,
+        "refresh_applied": refresh_applied,
+        "refresh_reason": refresh_reason,
+        "refresh_age_ms": refresh_age_ms,
+        "stability_window_result": stability_result,
+        "stability_window_reason": stability_reason,
+        "stability_sample_count": window_sample_count,
+        "blocked_gate_quality_stage": gate_key,
+    }
+
+
 def _resolve_reference_age_sec(primary_ts, *, fallback_ts=None, now_ts=None):
     def _coerce_ts(value):
         if value in (None, "", 0, "0", "None"):
@@ -15022,6 +15419,12 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                     cap_bucket=scalp_limits.get('bucket_label'),
                     risk_state=overbought_context.get("risk_state"),
                     risk_bucket=overbought_context.get("risk_bucket"),
+                    curr_price=int(curr_price),
+                    open_price=f"{open_price:.2f}",
+                    **_pre_ai_blocked_gate_quality_fields(
+                        gate_name="overbought",
+                        ws_data=ws_data,
+                    ),
                     **_merge_entry_pipeline_field_groups(
                         _build_ai_input_not_evaluated_fields("pre_ai_overbought_gate"),
                         _build_ai_overlap_log_fields(
@@ -15357,6 +15760,12 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                             dynamic_exec_buy_ratio=f"{float(momentum_gate.get('window_exec_buy_ratio', 0.0) or 0.0):.2f}",
                             dynamic_net_buy_qty=int(momentum_gate.get("window_net_buy_qty", 0) or 0),
                             shadow_recorded=bool(shadow_candidate),
+                            **_pre_ai_blocked_gate_quality_fields(
+                                gate_name="vpw",
+                                ws_data=ws_data,
+                                gate_result=momentum_gate,
+                                refresh_fields=pre_ai_ws_refresh_fields,
+                            ),
                             **_build_ai_overlap_log_fields(
                                 stock=stock,
                                 ai_score=current_ai_score,
@@ -15400,9 +15809,19 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                         ),
                         liquidity_value=int(liquidity_value),
                         min_liquidity=min_liquidity,
+                        ask_tot=ask_tot,
+                        bid_tot=bid_tot,
+                        liquidity_orderbook_source_quality=runtime.get("scalp_liquidity_source_quality"),
                         marcap=marcap,
                         cap_bucket=scalp_limits.get('bucket_label'),
                         risk_state=liquidity_context.get("risk_state"),
+                        **_pre_ai_blocked_gate_quality_fields(
+                            gate_name="liquidity",
+                            ws_data=ws_data,
+                            gate_result=momentum_gate,
+                            refresh_fields=pre_ai_ws_refresh_fields,
+                            liquidity_totals_present=liquidity_totals_present,
+                        ),
                         **_build_ai_input_not_evaluated_fields("pre_ai_liquidity_gate"),
                     )
                     if not _rule_bool("SCALP_PRE_AI_SOFT_GATE_ENABLED", True):

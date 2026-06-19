@@ -186,6 +186,63 @@ def test_scalping_scanner_promoted_target_does_not_override_holding(monkeypatch)
     assert published == []
     assert emitted[-1]["fields"]["runtime_target_attach_outcome"] == "skipped"
     assert emitted[-1]["fields"]["runtime_target_attach_reason"] == "same_symbol_active_order_or_holding"
+    assert emitted[-1]["fields"]["existing_status"] == "HOLDING"
+    assert emitted[-1]["fields"]["existing_actual_order_submitted"] == "not_applicable_existing_actual_order_submitted"
+
+
+def test_scalping_scanner_promoted_target_ignores_non_real_same_symbol_observation(monkeypatch):
+    emitted = []
+    published = []
+    monkeypatch.setattr(
+        kiwoom_sniper_v2,
+        "ACTIVE_TARGETS",
+        [
+            {
+                "id": 11,
+                "code": "005930",
+                "name": "SIM",
+                "strategy": "SCALPING",
+                "status": "HOLDING",
+                "position_tag": "SIM",
+                "actual_order_submitted": False,
+                "simulation_owner": "scalp_ai_buy_all",
+            }
+        ],
+    )
+    monkeypatch.setattr(kiwoom_sniper_v2, "_resolve_stock_marcap", lambda stock, code: 0)
+    monkeypatch.setattr(
+        kiwoom_sniper_v2,
+        "emit_pipeline_event",
+        lambda pipeline, name, code, stage, *, record_id=None, fields=None: emitted.append(
+            {"stage": stage, "fields": fields or {}}
+        ),
+    )
+    monkeypatch.setattr(
+        kiwoom_sniper_v2,
+        "event_bus",
+        SimpleNamespace(publish=lambda name, payload: published.append((name, payload))),
+    )
+
+    attached = kiwoom_sniper_v2.handle_scalping_scanner_promoted_target(
+        {
+            "record_id": 78,
+            "code": "005930",
+            "name": "SAMSUNG",
+            "strategy": "SCALPING",
+            "position_tag": "SCANNER",
+            "buy_price": 70000,
+            "added_time": 1000.0,
+            "scanner_promotion_id": "SCANPROM-005930-1000001",
+            "scanner_promotion_emitted_epoch": "1000.001",
+            "source_signature": "PRICE_JUMP_START",
+        }
+    )
+
+    assert attached is True
+    assert len(kiwoom_sniper_v2.ACTIVE_TARGETS) == 2
+    assert kiwoom_sniper_v2.ACTIVE_TARGETS[-1]["status"] == "WATCHING"
+    assert published == [("COMMAND_WS_REG", {"codes": ["005930"]})]
+    assert emitted[-1]["fields"]["runtime_target_attach_outcome"] == "attached"
 
 
 def test_scalping_scanner_promoted_target_refreshes_existing_watching_and_ws(monkeypatch):
@@ -238,6 +295,61 @@ def test_scalping_scanner_promoted_target_refreshes_existing_watching_and_ws(mon
     assert kiwoom_sniper_v2.ACTIVE_TARGETS[0]["id"] == 77
     assert kiwoom_sniper_v2.ACTIVE_TARGETS[0]["name"] == "NEW"
     assert kiwoom_sniper_v2.ACTIVE_TARGETS[0]["buy_price"] == 70000
+    assert kiwoom_sniper_v2.ACTIVE_TARGETS[0]["entry_armed_at_epoch"] == 1001.0
+    assert published == [("COMMAND_WS_REG", {"codes": ["005930"]})]
+    assert emitted[-1]["fields"]["runtime_target_attach_outcome"] == "refreshed"
+
+
+def test_scalping_scanner_promoted_target_refreshes_recency_from_promotion_epoch(monkeypatch):
+    emitted = []
+    published = []
+    monkeypatch.setattr(
+        kiwoom_sniper_v2,
+        "ACTIVE_TARGETS",
+        [
+            {
+                "id": 10,
+                "code": "005930",
+                "name": "OLD",
+                "strategy": "SCALPING",
+                "status": "WATCHING",
+                "position_tag": "SCANNER",
+                "buy_price": 69000,
+                "entry_armed_at_epoch": 900.0,
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        kiwoom_sniper_v2,
+        "emit_pipeline_event",
+        lambda pipeline, name, code, stage, *, record_id=None, fields=None: emitted.append(
+            {"stage": stage, "fields": fields or {}}
+        ),
+    )
+    monkeypatch.setattr(
+        kiwoom_sniper_v2,
+        "event_bus",
+        SimpleNamespace(publish=lambda name, payload: published.append((name, payload))),
+    )
+
+    refreshed = kiwoom_sniper_v2.handle_scalping_scanner_promoted_target(
+        {
+            "record_id": 77,
+            "code": "005930",
+            "name": "NEW",
+            "strategy": "SCALPING",
+            "position_tag": "SCANNER",
+            "buy_price": 70000,
+            "added_time": 1001.0,
+            "scanner_promotion_id": "SCANPROM-005930-1200000",
+            "scanner_promotion_emitted_epoch": "1200.000",
+            "source_signature": "PRICE_JUMP_START",
+        }
+    )
+
+    assert refreshed is True
+    assert kiwoom_sniper_v2.ACTIVE_TARGETS[0]["entry_armed_at_epoch"] == 1200.0
+    assert kiwoom_sniper_v2._runtime_iteration_targets(kiwoom_sniper_v2.ACTIVE_TARGETS, now_ts=1205.0)[0]["id"] == 77
     assert published == [("COMMAND_WS_REG", {"codes": ["005930"]})]
     assert emitted[-1]["fields"]["runtime_target_attach_outcome"] == "refreshed"
 
@@ -336,6 +448,93 @@ def test_scalping_fifo_candidates_preserve_scanner_entry_armed_order():
     ordered = kiwoom_sniper_v2._scalping_fifo_candidates(watching, now_ts=4000.0)
 
     assert [target["id"] for target in ordered] == [1, 2]
+
+
+def test_runtime_iteration_targets_prioritizes_recent_scanner_without_mutating_targets():
+    targets = [
+        {"id": "holding", "code": "000004", "status": "HOLDING", "strategy": "SCALPING"},
+        {"id": "old", "code": "000001", "status": "WATCHING", "strategy": "SCALPING", "position_tag": "SCANNER", "entry_armed_at_epoch": 1000.0},
+        {"id": "base", "code": "000003", "status": "WATCHING", "strategy": "SCALPING", "position_tag": "SCALP_BASE", "added_time": 900.0},
+        {"id": "new", "code": "000002", "status": "WATCHING", "strategy": "SCALPING", "position_tag": "SCANNER", "entry_armed_at_epoch": 1200.0},
+        {"id": "ordered", "code": "000005", "status": "BUY_ORDERED", "strategy": "SCALPING"},
+    ]
+
+    ordered = kiwoom_sniper_v2._runtime_iteration_targets(targets, now_ts=1300.0)
+
+    assert [target["id"] for target in ordered] == ["ordered", "holding", "new", "old", "base"]
+    assert [target["id"] for target in targets] == ["holding", "old", "base", "new", "ordered"]
+
+
+def test_runtime_iteration_targets_moves_non_real_holding_behind_scanner():
+    targets = [
+        {"id": "sim_holding", "code": "000010", "status": "HOLDING", "strategy": "SCALPING", "simulation_owner": "scalp_ai_buy_all", "actual_order_submitted": False},
+        {"id": "probe_holding", "code": "000011", "status": "HOLDING", "strategy": "SWING", "swing_intraday_probe": True},
+        {"id": "real_holding", "code": "000012", "status": "HOLDING", "strategy": "SCALPING", "actual_order_submitted": True},
+        {"id": "scanner", "code": "000013", "status": "WATCHING", "strategy": "SCALPING", "position_tag": "SCANNER", "entry_armed_at_epoch": 1200.0},
+        {"id": "ordered", "code": "000014", "status": "SELL_ORDERED", "strategy": "SCALPING"},
+    ]
+
+    ordered = kiwoom_sniper_v2._runtime_iteration_targets(targets, now_ts=1300.0)
+    context = kiwoom_sniper_v2._runtime_queue_context(targets, now_ts=1300.0)
+
+    assert [target["id"] for target in ordered] == ["ordered", "real_holding", "scanner", "sim_holding", "probe_holding"]
+    assert [target["id"] for target in targets] == ["sim_holding", "probe_holding", "real_holding", "scanner", "ordered"]
+    assert context["real_holding_count"] == 1
+    assert context["non_real_holding_count"] == 2
+    assert context["pre_scanner_runtime_count"] == 2
+
+
+def test_runtime_iteration_targets_uses_added_time_when_scanner_armed_epoch_missing():
+    targets = [
+        {"id": "old", "code": "000001", "status": "WATCHING", "strategy": "SCALPING", "position_tag": "SCANNER", "added_time": 1000.0},
+        {"id": "new", "code": "000002", "status": "WATCHING", "strategy": "SCALPING", "position_tag": "SCANNER", "added_time": 1200.0},
+    ]
+
+    ordered = kiwoom_sniper_v2._runtime_iteration_targets(targets, now_ts=1300.0)
+
+    assert [target["id"] for target in ordered] == ["new", "old"]
+
+
+def test_recover_missing_ws_snapshot_reissues_ws_reg_before_fallback(monkeypatch):
+    published = []
+    monkeypatch.setattr(
+        kiwoom_sniper_v2,
+        "event_bus",
+        SimpleNamespace(publish=lambda name, payload: published.append((name, payload))),
+    )
+    monkeypatch.setattr(kiwoom_sniper_v2, "_fetch_rest_quote_snapshot_for_ws_gap", lambda *args, **kwargs: {})
+    stock = {}
+
+    ws_data, fields = kiwoom_sniper_v2._recover_missing_ws_snapshot(stock, "005930", 1000.0, {})
+
+    assert ws_data == {}
+    assert published == [("COMMAND_WS_REG", {"codes": ["005930"], "source": "scanner_watching_ws_snapshot_recovery"})]
+    assert fields["ws_recovery_outcome"] == "ws_reg_reissued_waiting_snapshot"
+    assert stock["_scanner_ws_snapshot_recovery"]["miss_count"] == 1
+
+
+def test_recover_missing_ws_snapshot_applies_rest_quote_once_after_repeated_miss(monkeypatch):
+    published = []
+    calls = []
+    monkeypatch.setattr(
+        kiwoom_sniper_v2,
+        "event_bus",
+        SimpleNamespace(publish=lambda name, payload: published.append((name, payload))),
+    )
+    monkeypatch.setattr(
+        kiwoom_sniper_v2,
+        "_fetch_rest_quote_snapshot_for_ws_gap",
+        lambda code, now_ts: calls.append((code, now_ts)) or {"curr": 70000, "ws_snapshot_recovery_source": "ka10001_rest_quote_fallback"},
+    )
+    stock = {"_scanner_ws_snapshot_recovery": {"miss_count": 1, "last_fallback_ts": 900.0}}
+
+    ws_data, fields = kiwoom_sniper_v2._recover_missing_ws_snapshot(stock, "005930", 1000.0, {})
+
+    assert ws_data["curr"] == 70000
+    assert fields["ws_recovery_action"] == "ws_reg_reissued_rest_quote_fallback"
+    assert fields["ws_recovery_outcome"] == "rest_quote_applied"
+    assert calls == [("005930", 1000.0)]
+    assert len(published) == 1
 
 
 def test_db_poll_scanner_target_attach_logs_recovery(monkeypatch):
