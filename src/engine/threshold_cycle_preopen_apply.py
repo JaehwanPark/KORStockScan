@@ -3000,6 +3000,8 @@ def _write_runtime_env(target_date: str, manifest: dict[str, Any], env_overrides
     runtime_env_manifest_path(target_date).write_text(
         json.dumps(
             {
+                "schema_version": 1,
+                "report_type": "threshold_runtime_env",
                 "target_date": target_date,
                 "source_date": manifest.get("source_date"),
                 "source_report": manifest.get("source_report"),

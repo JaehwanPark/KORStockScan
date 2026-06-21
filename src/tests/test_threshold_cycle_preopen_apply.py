@@ -44,6 +44,7 @@ def test_entry_cancel_wait_is_written_to_runtime_selected_families(tmp_path, mon
     mod._write_runtime_env("2026-06-15", manifest, env)
     runtime_manifest = json.loads(mod.runtime_env_manifest_path("2026-06-15").read_text(encoding="utf-8"))
     assert "entry_cancel_wait_runtime" in runtime_manifest["selected_families"]
+    assert runtime_manifest["report_type"] == "threshold_runtime_env"
     assert runtime_manifest["env_overrides"]["KORSTOCKSCAN_ENTRY_CANCEL_WAIT_ATTRIBUTION_ENABLED"] == "true"
 from src.engine import lifecycle_bucket_discovery as discovery_mod
 from src.engine.scalping import scalp_sim_auto_approval_control_tower as scalp_sim_auto_mod

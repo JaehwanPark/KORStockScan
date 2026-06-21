@@ -1,4 +1,7 @@
 from pathlib import Path
+import json
+import os
+import subprocess
 
 
 def test_postclose_wrapper_runs_pattern_labs_before_automation_and_ev_report():
@@ -514,3 +517,193 @@ def test_preopen_wrapper_uses_lock_to_avoid_duplicate_bootstrap_run():
     assert "threshold_cycle_preopen.lock" in script
     assert "flock -n 9" in script
     assert "threshold-cycle preopen already running" in script
+
+
+def test_gcp_preopen_push_wrapper_contract_is_fail_closed_and_artifact_only():
+    script = Path("deploy/run_push_gcp_preopen_artifacts.sh").read_text(encoding="utf-8")
+
+    assert "GCP_PUSH_HOST" in script
+    assert "GCP_PUSH_USER" in script
+    assert "GCP_PUSH_PROJECT_DIR" in script
+    assert "GCP_PUSH_SSH_KEY" in script
+    assert "GCP_PUSH_PORT" in script
+    assert 'preopen_status.get("status") != "succeeded"' in script
+    assert 'runtime_manifest.get("report_type") != "threshold_runtime_env"' in script
+    assert "threshold_apply_${TARGET_DATE}.json" in script
+    assert "threshold_runtime_env_${TARGET_DATE}.env" in script
+    assert "threshold_runtime_env_${TARGET_DATE}.json" in script
+    assert "threshold_runtime_env_verify_${TARGET_DATE}.json" in script
+    assert "threshold_cycle_remote/apply_plans" in script
+    assert "threshold_cycle_remote/runtime_env" in script
+    assert ".tmp.aws_push_${TARGET_DATE}_$$" in script
+    assert "mv -f --" in script
+    assert "src.engine.threshold_cycle_preopen_apply" not in script
+    assert "operator_runtime_env_locks" not in script
+    assert "KORSTOCKSCAN_GREENFIELD_REAL_ENV_AUTHORITY" not in script
+
+
+def test_gcp_preopen_push_cron_installs_one_post_preopen_entry():
+    script = Path("deploy/install_gcp_preopen_push_cron.sh").read_text(encoding="utf-8")
+
+    assert "GCP_PREOPEN_ARTIFACT_PUSH" in script
+    assert 'GCP_PUSH_HOST="${GCP_PUSH_HOST:-songstockscan.ddns.net}"' in script
+    assert 'GCP_PUSH_USER="${GCP_PUSH_USER:-windy80xyt}"' in script
+    assert 'GCP_PUSH_PROJECT_DIR="${GCP_PUSH_PROJECT_DIR:-/home/windy80xyt/KORStockScan}"' in script
+    assert "37 7 * * 1-5" in script
+    assert "35 7 * * 1-5" not in script
+    assert "GCP_PUSH_HOST=$GCP_PUSH_HOST GCP_PUSH_USER=$GCP_PUSH_USER GCP_PUSH_PROJECT_DIR=$GCP_PUSH_PROJECT_DIR" in script
+    assert "deploy/run_push_gcp_preopen_artifacts.sh" in script
+    assert "!/GCP_PREOPEN_ARTIFACT_PUSH/" in script
+    assert script.count("GCP_PREOPEN_ARTIFACT_PUSH") == 2
+
+
+def test_gcp_preopen_push_wrapper_smoke_with_stubbed_ssh_and_scp(tmp_path):
+    project = tmp_path / "project"
+    date = "2026-06-20"
+    preopen_dir = project / "data/report/threshold_cycle_preopen_status"
+    apply_dir = project / "data/threshold_cycle/apply_plans"
+    runtime_dir = project / "data/threshold_cycle/runtime_env"
+    bin_dir = tmp_path / "bin"
+    log_path = tmp_path / "transport.log"
+    preopen_dir.mkdir(parents=True)
+    apply_dir.mkdir(parents=True)
+    runtime_dir.mkdir(parents=True)
+    bin_dir.mkdir()
+
+    (preopen_dir / f"threshold_cycle_preopen_{date}.status.json").write_text(
+        json.dumps({"target_date": date, "status": "succeeded"}),
+        encoding="utf-8",
+    )
+    (apply_dir / f"threshold_apply_{date}.json").write_text(
+        json.dumps({"target_date": date}),
+        encoding="utf-8",
+    )
+    (runtime_dir / f"threshold_runtime_env_{date}.env").write_text("export A=1\n", encoding="utf-8")
+    (runtime_dir / f"threshold_runtime_env_{date}.json").write_text(
+        json.dumps({"target_date": date, "report_type": "threshold_runtime_env"}),
+        encoding="utf-8",
+    )
+    (runtime_dir / f"threshold_runtime_env_verify_{date}.json").write_text(
+        json.dumps({"target_date": date, "status": "pass"}),
+        encoding="utf-8",
+    )
+
+    (bin_dir / "ssh").write_text(
+        "#!/usr/bin/env bash\n"
+        f"printf 'ssh %s\\n' \"$*\" >> {log_path}\n"
+        "exit 0\n",
+        encoding="utf-8",
+    )
+    (bin_dir / "scp").write_text(
+        "#!/usr/bin/env bash\n"
+        f"printf 'scp %s\\n' \"$*\" >> {log_path}\n"
+        "exit 0\n",
+        encoding="utf-8",
+    )
+    os.chmod(bin_dir / "ssh", 0o755)
+    os.chmod(bin_dir / "scp", 0o755)
+
+    env = {
+        **os.environ,
+        "PROJECT_DIR": str(project),
+        "VENV_PY": "python3",
+        "PATH": f"{bin_dir}:{os.environ['PATH']}",
+        "GCP_PUSH_HOST": "gcp.example",
+        "GCP_PUSH_USER": "ubuntu",
+        "GCP_PUSH_PROJECT_DIR": "/srv/KORStockScan",
+    }
+    result = subprocess.run(
+        ["bash", "deploy/run_push_gcp_preopen_artifacts.sh", date],
+        cwd=Path.cwd(),
+        env=env,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stdout
+    assert "[DONE] gcp-preopen-artifact-push" in result.stdout
+    log_text = log_path.read_text(encoding="utf-8")
+    assert "mkdir -p -- '/srv/KORStockScan/data/threshold_cycle_remote/apply_plans' '/srv/KORStockScan/data/threshold_cycle_remote/runtime_env'" in log_text
+    assert log_text.count("scp ") == 4
+    assert log_text.count("mv -f --") == 4
+    assert f"threshold_apply_{date}.json.tmp.aws_push_{date}_" in log_text
+    status = json.loads((project / f"data/report/gcp_preopen_push_status/gcp_preopen_push_{date}.status.json").read_text(encoding="utf-8"))
+    assert status["status"] == "succeeded"
+    assert len(status["pushed_files"]) == 4
+
+
+def test_gcp_preopen_push_wrapper_fails_on_missing_or_bad_preopen_status(tmp_path):
+    project = tmp_path / "project"
+    date = "2026-06-20"
+    apply_dir = project / "data/threshold_cycle/apply_plans"
+    runtime_dir = project / "data/threshold_cycle/runtime_env"
+    apply_dir.mkdir(parents=True)
+    runtime_dir.mkdir(parents=True)
+    (apply_dir / f"threshold_apply_{date}.json").write_text(json.dumps({"target_date": date}), encoding="utf-8")
+    (runtime_dir / f"threshold_runtime_env_{date}.env").write_text("export A=1\n", encoding="utf-8")
+    (runtime_dir / f"threshold_runtime_env_{date}.json").write_text(
+        json.dumps({"target_date": date, "report_type": "threshold_runtime_env"}),
+        encoding="utf-8",
+    )
+
+    env = {
+        **os.environ,
+        "PROJECT_DIR": str(project),
+        "VENV_PY": "python3",
+        "GCP_PUSH_HOST": "gcp.example",
+        "GCP_PUSH_USER": "ubuntu",
+        "GCP_PUSH_PROJECT_DIR": "/srv/KORStockScan",
+    }
+    result = subprocess.run(
+        ["bash", "deploy/run_push_gcp_preopen_artifacts.sh", date],
+        cwd=Path.cwd(),
+        env=env,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "[FAIL] gcp-preopen-artifact-push" in result.stdout
+    assert "missing_local_artifact" in result.stdout
+
+    preopen_dir = project / "data/report/threshold_cycle_preopen_status"
+    preopen_dir.mkdir(parents=True)
+    (preopen_dir / f"threshold_cycle_preopen_{date}.status.json").write_text(
+        json.dumps({"target_date": date, "status": "failed"}),
+        encoding="utf-8",
+    )
+    result = subprocess.run(
+        ["bash", "deploy/run_push_gcp_preopen_artifacts.sh", date],
+        cwd=Path.cwd(),
+        env=env,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "[FAIL] gcp-preopen-artifact-push" in result.stdout
+    assert "preopen_status_not_succeeded:failed" in result.stdout
+
+
+def test_gcp_preopen_push_wrapper_fails_on_missing_ssh_config_before_transport(tmp_path):
+    project = tmp_path / "project"
+    date = "2026-06-20"
+    env = {**os.environ, "PROJECT_DIR": str(project), "VENV_PY": "python3"}
+    result = subprocess.run(
+        ["bash", "deploy/run_push_gcp_preopen_artifacts.sh", date],
+        cwd=Path.cwd(),
+        env=env,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "missing_env:GCP_PUSH_HOST" in result.stdout

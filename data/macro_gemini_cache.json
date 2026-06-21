@@ -1,85 +1,84 @@
 {
-  "bundle_as_of": "2026-06-17T22:20:23Z",
+  "bundle_as_of": "2026-06-21T22:20:18Z",
   "sp500": {
     "name": "S&P 500",
-    "value": 7420.1,
-    "prev_value": 7511.35,
-    "change": -91.25,
-    "change_pct": -1.21,
-    "as_of": "2026-06-17T20:28:00Z",
-    "source": "Morningstar / Dow Jones Market Data"
+    "value": 7500.58,
+    "prev_value": 7420.1,
+    "change": 80.48,
+    "change_pct": 1.08,
+    "as_of": "2026-06-19T20:00:00Z",
+    "source": "The Sunday Guardian"
   },
   "nasdaq": {
-    "name": "NASDAQ Composite",
-    "value": 26021.66,
-    "prev_value": 26376.35,
-    "change": -354.69,
-    "change_pct": -1.34,
-    "as_of": "2026-06-17T20:28:00Z",
-    "source": "Morningstar / Dow Jones Market Data"
+    "name": "NASDAQ",
+    "value": 26517.93,
+    "prev_value": 26021.65,
+    "change": 496.28,
+    "change_pct": 1.91,
+    "as_of": "2026-06-19T20:00:00Z",
+    "source": "The Sunday Guardian"
   },
   "vix": {
     "name": "VIX",
-    "value": 16.64,
-    "prev_value": 16.41,
-    "change": 0.23,
-    "change_pct": 1.4,
-    "as_of": "2026-06-17T20:00:00Z",
-    "source": "CBOE / Google Finance"
+    "value": 16.78,
+    "prev_value": null,
+    "change": null,
+    "change_pct": null,
+    "as_of": "2026-06-19T20:00:00Z",
+    "source": "StreetStats"
   },
   "us10y": {
-    "name": "US 10-Year Treasury Yield",
-    "value": 4.49,
-    "prev_value": 4.42,
-    "change": 0.07,
-    "change_pct": 1.58,
-    "as_of": "2026-06-17T20:00:00Z",
-    "source": "Reuters / Investing.com"
+    "name": "US 10Y Treasury Yield",
+    "value": 4.455,
+    "prev_value": 4.447,
+    "change": 0.008,
+    "change_pct": 0.18,
+    "as_of": "2026-06-19T20:00:00Z",
+    "source": "Bankrate"
   },
   "brent": {
     "name": "Brent Crude",
-    "value": 79.55,
-    "prev_value": 78.96,
-    "change": 0.59,
-    "change_pct": 0.75,
-    "as_of": "2026-06-17T19:16:00Z",
-    "source": "Morningstar / Dow Jones Market Data"
+    "value": 79.85,
+    "prev_value": 79.55,
+    "change": 0.3,
+    "change_pct": 0.38,
+    "as_of": "2026-06-19T20:00:00Z",
+    "source": "Angel One"
   },
   "headlines": [
     {
-      "title": "Fed holds steady in Warsh's debut; analysts see hawkish shift",
+      "title": "Regional envoys push for swift progress in US-Iran talks",
+      "source": "Al Arabiya",
+      "published_at": "2026-06-21T16:59:00Z",
+      "url": ""
+    },
+    {
+      "title": "Crude Oil Prices Rise After US Warning on Israel-Hezbollah Ceasefire",
+      "source": "Angel One",
+      "published_at": "2026-06-19T17:09:00Z",
+      "url": ""
+    },
+    {
+      "title": "Brent physical, paper prices slip further as Hormuz flows rise, traders say",
       "source": "Reuters",
-      "published_at": "2026-06-17T18:36:00Z",
-      "url": "https://www.reuters.com"
+      "published_at": "2026-06-19T07:15:00Z",
+      "url": ""
     },
     {
-      "title": "U.S. stocks sink on worries about a possible hike to interest rates this year by the Federal Reserve",
-      "source": "Associated Press",
-      "published_at": "2026-06-17T21:10:00Z",
-      "url": "https://apnews.com"
+      "title": "US and Iran deal to end war allows Tehran to sell oil and fuel",
+      "source": "AFP",
+      "published_at": "2026-06-16T00:00:00Z",
+      "url": ""
     },
     {
-      "title": "Trump's Iran Agreement Draws More Alarm Than Relief From GOP",
-      "source": "TIME",
-      "published_at": "2026-06-17T20:50:00Z",
-      "url": "https://time.com"
-    },
-    {
-      "title": "Crude Stabilizes After Sharp Selloff",
-      "source": "Bloomberg",
-      "published_at": "2026-06-17T21:02:00Z",
-      "url": "https://www.bloomberg.com"
-    },
-    {
-      "title": "Trump says will discuss with Gulf nations Iran's ballistic missiles, terrorist proxies",
-      "source": "Arab News",
-      "published_at": "2026-06-17T16:36:00Z",
-      "url": "https://www.arabnews.com"
+      "title": "Mortgage Rates Hold Steady Today",
+      "source": "Bankrate",
+      "published_at": "2026-06-19T00:00:00Z",
+      "url": ""
     }
   ],
   "notes": [
-    "Market data reflects the close of US trading on June 17, 2026.",
-    "Federal Reserve kept interest rates steady under new Chairman Kevin Warsh but signaled a potential rate hike later in 2026, leading to a late-session selloff.",
-    "Brent crude rebounded slightly after a multi-day selloff spurred by the US-Iran interim peace deal."
+    "U.S. stock and bond markets were closed or scheduled for irregular hours on June 19, 2026, in observance of the Juneteenth holiday.",
+    "US-Iran and Israel-Hezbollah diplomatic developments remain key drivers for global crude oil markets."
   ]
 }
