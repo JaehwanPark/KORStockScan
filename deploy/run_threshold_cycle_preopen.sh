@@ -11,6 +11,7 @@ AUTO_APPLY="${THRESHOLD_CYCLE_AUTO_APPLY:-true}"
 REQUIRE_AI="${THRESHOLD_CYCLE_AUTO_APPLY_REQUIRE_AI:-true}"
 STATUS_DIR="$PROJECT_DIR/data/report/threshold_cycle_preopen_status"
 STATUS_FILE="$STATUS_DIR/threshold_cycle_preopen_${TARGET_DATE}.status.json"
+MANIFEST_CAPTURE_FILE="$STATUS_DIR/threshold_cycle_preopen_${TARGET_DATE}.manifest.json"
 
 mkdir -p "$PROJECT_DIR/logs" "$STATUS_DIR"
 
@@ -66,6 +67,37 @@ path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf
 PY
 }
 
+handle_preopen_apply_result() {
+  local manifest_file="$1"
+  local exit_code="$2"
+  "$VENV_PY" - "$manifest_file" "$exit_code" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+manifest_path = Path(sys.argv[1])
+exit_code = int(sys.argv[2])
+if not manifest_path.exists():
+    raise SystemExit(exit_code)
+
+manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+status = str(manifest.get("status") or "")
+runtime_change = bool(manifest.get("runtime_change"))
+runtime_env_file = manifest.get("runtime_env_file")
+runtime_env_ready = bool(runtime_env_file and Path(runtime_env_file).exists())
+
+if (
+    exit_code == 2
+    and status == "operator_runtime_env_lock_ready_missing_source_report"
+    and runtime_change
+    and runtime_env_ready
+):
+    raise SystemExit(0)
+
+raise SystemExit(exit_code)
+PY
+}
+
 trap 'rc=$?; write_preopen_status failed command_failed "$rc" 1 || true; exit "$rc"' ERR
 write_preopen_status running started 0 0
 LOCK_FILE="$PROJECT_DIR/logs/threshold_cycle_preopen.lock"
@@ -92,7 +124,32 @@ if [ "$REQUIRE_AI" = "false" ] || [ "$REQUIRE_AI" = "0" ]; then
   args+=(--allow-deterministic-without-ai)
 fi
 
-PYTHONPATH=. "$VENV_PY" -m src.engine.threshold_cycle_preopen_apply "${args[@]}"
+manifest_output="$(
+  set +e
+  PYTHONPATH=. "$VENV_PY" -m src.engine.threshold_cycle_preopen_apply "${args[@]}"
+  echo "__THRESHOLD_PREOPEN_EXIT_CODE__:$?"
+)"
+manifest_exit_code="$(printf '%s\n' "$manifest_output" | awk -F: '/__THRESHOLD_PREOPEN_EXIT_CODE__:/ {print $2}' | tail -n1)"
+manifest_json="$(printf '%s\n' "$manifest_output" | sed '/__THRESHOLD_PREOPEN_EXIT_CODE__:/d')"
+printf '%s\n' "$manifest_json"
+printf '%s\n' "$manifest_json" > "$MANIFEST_CAPTURE_FILE"
+handle_preopen_apply_result "$MANIFEST_CAPTURE_FILE" "${manifest_exit_code:-1}"
 finished_at="$(TZ=Asia/Seoul date +%FT%T%z)"
-write_preopen_status succeeded completed 0 1
+preopen_reason="completed"
+if "$VENV_PY" - "$MANIFEST_CAPTURE_FILE" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+manifest = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+raise SystemExit(
+    0
+    if str(manifest.get("status") or "") == "operator_runtime_env_lock_ready_missing_source_report"
+    else 1
+)
+PY
+then
+  preopen_reason="operator_runtime_env_lock_preserved_missing_source_report"
+fi
+write_preopen_status succeeded "$preopen_reason" 0 1
 echo "[DONE] threshold-cycle preopen target_date=$TARGET_DATE finished_at=$finished_at"

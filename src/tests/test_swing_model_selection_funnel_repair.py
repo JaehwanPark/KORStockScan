@@ -32,7 +32,10 @@ from src.engine.swing_lifecycle_audit import (
 )
 from src.model import common_v2
 from src.model.common_v2 import daily_selection_stats, select_daily_candidates
-from src.scanners.final_ensemble_scanner import classify_v2_csv_pick
+from src.scanners.final_ensemble_scanner import (
+    classify_v2_csv_pick,
+    split_realtime_recommendations,
+)
 from src.utils.constants import TRADING_RULES as CONFIG
 
 
@@ -156,6 +159,28 @@ def test_scanner_skips_fallback_diagnostic_rows():
 
     assert classified["should_save"] is False
     assert classified["position_tag"] == "EMPTY"
+
+
+def test_scanner_keeps_all_main_and_caps_only_runner_candidates():
+    all_results = [
+        {"Code": "000001", "Prob": 0.91},
+        {"Code": "000002", "Prob": 0.88},
+        {"Code": "000003", "Prob": 0.83},
+        {"Code": "000004", "Prob": 0.79},
+        {"Code": "000005", "Prob": 0.78},
+        {"Code": "000006", "Prob": 0.77},
+        {"Code": "000007", "Prob": 0.76},
+    ]
+
+    main_picks, runner_ups = split_realtime_recommendations(
+        all_results,
+        prob_main_pick=0.80,
+        prob_runner_pick=0.70,
+        runner_limit=3,
+    )
+
+    assert [row["Code"] for row in main_picks] == ["000001", "000002", "000003"]
+    assert [row["Code"] for row in runner_ups] == ["000004", "000005", "000006"]
 
 
 def test_swing_funnel_report_separates_raw_and_unique_event_counts():

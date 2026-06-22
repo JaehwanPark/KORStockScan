@@ -110,6 +110,21 @@ def classify_v2_csv_pick(row):
         'selection_mode': selection_mode,
     }
 
+
+def split_realtime_recommendations(all_results, *, prob_main_pick, prob_runner_pick, runner_limit=3):
+    """Keep every MAIN candidate and cap only RUNNER candidates."""
+    main_picks = sorted(
+        [r for r in all_results if r['Prob'] >= prob_main_pick],
+        key=lambda x: x['Prob'],
+        reverse=True,
+    )
+    runner_ups = sorted(
+        [r for r in all_results if prob_runner_pick <= r['Prob'] < prob_main_pick],
+        key=lambda x: x['Prob'],
+        reverse=True,
+    )[:runner_limit]
+    return main_picks, runner_ups
+
 # --- [1. 성과 복기 엔진] ---
 def get_performance_report(db):
     """전일 추천 종목의 성과를 계산하여 반환합니다. (DB 스키마 변경 완벽 대응)"""
@@ -412,8 +427,12 @@ def run_integrated_scanner():
         event_bus.publish("TELEGRAM_ADMIN_NOTIFY", {"text": debug_msg})
 
         # --- 기존 실시간 추천 종목 분류 및 DB 저장 ---
-        main_picks = sorted([r for r in all_results if r['Prob'] >= TRADING_RULES.PROB_MAIN_PICK], key=lambda x: x['Prob'], reverse=True)[:3]
-        runner_ups = sorted([r for r in all_results if TRADING_RULES.PROB_RUNNER_PICK <= r['Prob'] < TRADING_RULES.PROB_MAIN_PICK], key=lambda x: x['Prob'], reverse=True)[:50]
+        main_picks, runner_ups = split_realtime_recommendations(
+            all_results,
+            prob_main_pick=TRADING_RULES.PROB_MAIN_PICK,
+            prob_runner_pick=TRADING_RULES.PROB_RUNNER_PICK,
+            runner_limit=3,
+        )
 
         for r in main_picks:
             db.save_recommendation(today, r['Code'], r['Name'], r['Price'], 'MAIN', r['Position'], prob=r['Prob'])

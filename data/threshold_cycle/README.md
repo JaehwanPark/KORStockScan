@@ -20,6 +20,8 @@ report 기반 자동화의 전체 추적성은 [report-based-automation-traceabi
 
 cron completion detector는 wrapper log의 terminal marker를 source of truth로 본다. Threshold cycle postclose wrapper는 같은 `target_date`를 포함해 `[START]`, `[DONE]`, `[FAIL]` marker를 남겨야 하며, 완료 marker는 `[DONE] threshold-cycle postclose target_date=YYYY-MM-DD`다. artifact가 생성됐지만 marker가 없으면 threshold/runtime 실패가 아니라 wrapper/log 계약 결함으로 분류하고 marker 계약을 먼저 보강한다. `2026-05-22`부터 `12:05` intraday calibration cron은 제거됐고, intraday phase artifact는 명시 수동 forensic/legacy override가 있을 때만 생성한다.
 
+GCP follower/one-shot 서버는 AWS-generated PREOPEN artifact를 `deploy/run_push_gcp_preopen_artifacts.sh`로 `data/threshold_cycle_remote/` staging tree에만 받는다. 이 push는 artifact transport-only contract이며 live runtime 경로를 직접 덮지 않는다. follower에서 봇이 기다리는 경로는 계속 `data/threshold_cycle/runtime_env/threshold_runtime_env_YYYY-MM-DD.env`이므로, `src/run_bot.sh`는 live env가 없을 때 `deploy/promote_gcp_preopen_artifacts.sh`를 먼저 호출해 staging apply plan/runtime env/runtime manifest를 live 경로로 승격한 뒤 source한다. staging artifact가 없거나 검증에 실패하면 follower도 local PREOPEN bootstrap/대기 경로로만 진행하며, `threshold_cycle_remote`만 존재하는 상태를 runtime applied로 간주하지 않는다.
+
 `artifact_freshness`는 `.json` artifact가 존재하더라도 generic JSON parse 검증을 먼저 수행한다. 깨진 JSON은 one-shot fresh로 통과하지 않으며, critical artifact는 fail로 닫는다. `threshold_cycle_preopen_status`와 `threshold_cycle_postclose_status`는 `status=succeeded`만 pass로 보며, lock skip/running/failed는 조용한 성공이 아니라 status artifact warning/fail 입력으로 남긴다.
 
 ## 현재 적용 정책
@@ -30,7 +32,7 @@ cron completion detector는 wrapper log의 terminal marker를 source of truth로
 - 목표 미달은 rollback이 아니라 다음 manifest의 `calibration_state=adjust_up|adjust_down|hold|hold_sample|hold_no_edge|freeze`로 처리한다.
 - sample 부족은 live 전면 금지가 아니라 `cap 축소`, `hold_sample`, `max_step_per_day 축소` 중 하나로 처리한다.
 - `safety_revert_required=true`는 hard/protect/emergency stop 지연, 주문 실패, receipt/provenance 손상, same-stage owner 충돌, severe loss guard 초과에만 쓴다.
-- 실제 env 반영은 다음 장전 1회 bounded apply로 자동 수행한다. 코드 hot mutation은 하지 않고, `src/run_bot.sh`가 당일 `runtime_env/threshold_runtime_env_YYYY-MM-DD.env`를 기동 시 source한다.
+- 실제 env 반영은 다음 장전 1회 bounded apply로 자동 수행한다. 코드 hot mutation은 하지 않고, `src/run_bot.sh`가 당일 `runtime_env/threshold_runtime_env_YYYY-MM-DD.env`를 기동 시 source한다. GCP follower는 push된 `threshold_cycle_remote/runtime_env/*.env`를 직접 source하지 않고 bridge 승격 후 같은 live 경로를 사용한다.
 - scheduled calibration artifact는 매일 장후 1회 생성한다. 장중 intraday phase는 명시 수동 forensic/legacy override가 있을 때만 실행하며, canonical postclose threshold report를 덮어쓰지 않고 next-preopen apply 필수 단계가 아니다.
 - postclose 제출물은 `threshold_cycle_ev_YYYY-MM-DD.{json,md}` daily EV 리포트로 통일한다. 스윙은 예외적으로 `swing_runtime_approval`의 dry-run pre-final/final approval 요청을 daily EV와 preopen apply manifest에 노출한다. 일반 swing dry-run runtime 요청은 parsed AI Tier2 + deterministic guard가 닫힌 `dry_run_auto_apply_ready`일 때 approval artifact 없이 env를 쓸 수 있으며, Tier2 실패는 fail-closed다. Phase0 real-canary artifacts/requests are legacy and do not create env overrides.
 - `lifecycle_decision_matrix_runtime`은 ADM 확장 umbrella family다. 기본 OFF이며 selected될 때만 다음 PREOPEN env에 policy file/version/promote cap을 쓴다. hard safety와 broker/account/order guard는 항상 우선한다.
@@ -52,6 +54,7 @@ cron completion detector는 wrapper log의 terminal marker를 source of truth로
 | `apply_plans/threshold_apply_YYYY-MM-DD.json` | 장전 apply plan artifact |
 | `runtime_env/threshold_runtime_env_YYYY-MM-DD.env` | 봇 기동 시 source되는 bounded runtime env override |
 | `runtime_env/threshold_runtime_env_YYYY-MM-DD.json` | runtime env override와 selected family provenance |
+| `../threshold_cycle_remote/runtime_env/threshold_runtime_env_YYYY-MM-DD.{env,json}` | AWS preopen push가 GCP follower staging tree에 복사한 runtime env artifact. follower bot은 이 staging 경로를 직접 source하지 않고 `deploy/promote_gcp_preopen_artifacts.sh`가 live `runtime_env/`로 승격한 뒤 소비한다 |
 | `data/report/threshold_cycle_YYYY-MM-DD.json` | 장후 canonical threshold report |
 | `data/report/report_YYYY-MM-DD.json` | daily market report. `market_regime_continuous_score`, label, component scores, legacy gate score를 threshold-cycle source bundle과 ADM/LDM risk context에 제공 |
 | `data/report/statistical_action_weight/statistical_action_weight_YYYY-MM-DD.{json,md}` | action weight 파생 artifact |

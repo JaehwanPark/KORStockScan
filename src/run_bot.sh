@@ -14,6 +14,13 @@ wait_for_threshold_runtime_env() {
     if [ "$THRESHOLD_RUNTIME_ENV_REQUIRED" != "true" ] && [ "$THRESHOLD_RUNTIME_ENV_REQUIRED" != "1" ]; then
         return 0
     fi
+    if [ ! -f "$env_path" ]; then
+        echo "🧭 threshold runtime env 원격 staging 승격 시도: $env_path"
+        (
+            cd ..
+            ./deploy/promote_gcp_preopen_artifacts.sh "$(TZ=Asia/Seoul date +%F)" || true
+        )
+    fi
     if [ ! -f "$env_path" ] && { [ "$THRESHOLD_RUNTIME_ENV_BOOTSTRAP" = "true" ] || [ "$THRESHOLD_RUNTIME_ENV_BOOTSTRAP" = "1" ]; }; then
         echo "🧭 threshold runtime env 생성 시도: $env_path"
         (
