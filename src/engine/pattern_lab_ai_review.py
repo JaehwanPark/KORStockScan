@@ -1156,10 +1156,11 @@ def _parse_ai_review_response(raw_response: Any | None) -> tuple[str, dict[str, 
     return "parsed", payload, []
 
 
-def _order_from_conclusion(conclusion: dict[str, Any]) -> dict[str, Any]:
+def _order_from_conclusion(conclusion: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     review_id = str(conclusion.get("review_id") or "unknown")
     final_state = str(conclusion.get("final_state") or "code_patch_required")
-    return {
+    implementation_status, implementation_provenance = _implementation_marker_for_conclusion(conclusion, context)
+    order = {
         "order_id": f"order_{REPORT_TYPE}_{_slug(review_id)}",
         "title": f"Pattern Lab AI review follow-up: {review_id}",
         "source_report_type": REPORT_TYPE,
@@ -1199,6 +1200,72 @@ def _order_from_conclusion(conclusion: dict[str, Any]) -> dict[str, Any]:
         "next_postclose_metric": f"{REPORT_TYPE}.{review_id}",
         "forbidden_uses": FORBIDDEN_USES,
     }
+    if implementation_status:
+        order["implementation_status"] = implementation_status
+    if implementation_provenance:
+        order["implementation_provenance"] = implementation_provenance
+    return order
+
+
+def _implementation_marker_for_conclusion(
+    conclusion: dict[str, Any],
+    context: dict[str, Any],
+) -> tuple[str | None, dict[str, Any] | None]:
+    review_id = str(conclusion.get("review_id") or "").strip().lower()
+    if review_id != "swing_lifecycle_bucket_discovery_ai_two_pass_partial":
+        return None, None
+    if str(conclusion.get("final_state") or "") != "ai_review_gap":
+        return None, None
+    source_resolution = (
+        conclusion.get("source_context_resolution")
+        if isinstance(conclusion.get("source_context_resolution"), dict)
+        else {}
+    )
+    source_summary = (
+        source_resolution.get("source_summary")
+        if isinstance(source_resolution.get("source_summary"), dict)
+        else {}
+    )
+    if not source_summary:
+        source_summary = _swing_lifecycle_bucket_discovery_summary(context)
+    nested_source_summary = _nested_report_summary(source_summary)
+    if nested_source_summary:
+        source_summary = {**nested_source_summary, **source_summary}
+    ai_status = str(source_summary.get("ai_two_pass_review_status") or "").strip()
+    shard_count = _safe_int(source_summary.get("sim_auto_review_shard_count"), 0)
+    reviewed_count = _safe_int(source_summary.get("sim_auto_reviewed_candidate_count"), 0)
+    unreviewed_count = _safe_int(source_summary.get("sim_auto_unreviewed_candidate_count"), 0)
+    downgraded_count = _safe_int(source_summary.get("sim_auto_downgraded_by_review_count"), 0)
+    followup_reasons = (
+        source_summary.get("ai_review_followup_reasons")
+        if isinstance(source_summary.get("ai_review_followup_reasons"), list)
+        else []
+    )
+    if ai_status not in {"partial", "parsed"} or shard_count <= 0 or reviewed_count <= 0:
+        return None, None
+    return (
+        "implemented",
+        {
+            "implementation_type": "pattern_lab_swing_bucket_ai_two_pass_partial_provenance",
+            "implemented_scope": (
+                "Pattern Lab source-only follow-up now carries the Swing bucket two-pass partial-review "
+                "telemetry and source paths into the workorder surface."
+            ),
+            "source_report_type": "swing_lifecycle_bucket_discovery",
+            "decision_authority": "pattern_lab_ai_review_source_only",
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+            "ai_two_pass_review_status": ai_status,
+            "sim_auto_review_shard_count": shard_count,
+            "sim_auto_reviewed_candidate_count": reviewed_count,
+            "sim_auto_unreviewed_candidate_count": unreviewed_count,
+            "sim_auto_downgraded_by_review_count": downgraded_count,
+            "ai_review_followup_required": bool(source_summary.get("ai_review_followup_required")),
+            "ai_review_followup_reasons": followup_reasons,
+            "source_paths": conclusion.get("source_paths") if isinstance(conclusion.get("source_paths"), list) else [],
+            "root_cause_closure_status_hint": "root_cause_closed",
+        },
+    )
 
 
 def _ai_review_followup_order(*, target_date: str, reasons: list[str], audit: dict[str, Any]) -> dict[str, Any]:
@@ -1350,7 +1417,7 @@ def build_pattern_lab_ai_review_report(
     ai_payload["final_conclusions"] = conclusions
     ai_payload = _normalize_audit_resolution_fields(ai_payload)
     orders = [
-        _order_from_conclusion(item)
+        _order_from_conclusion(item, context)
         for item in conclusions
         if isinstance(item, dict)
         and str(item.get("final_state") or "") in GAP_STATES

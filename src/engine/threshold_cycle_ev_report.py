@@ -1369,6 +1369,18 @@ def _swing_lifecycle_bucket_discovery_summary(target_date: str) -> tuple[dict[st
             ),
             "state_counts": summary.get("state_counts") if isinstance(summary.get("state_counts"), dict) else {},
             "stage_counts": summary.get("stage_counts") if isinstance(summary.get("stage_counts"), dict) else {},
+            "code_improvement_workorder_ids": [
+                str(item) for item in (summary.get("code_improvement_workorder_ids") or []) if str(item)
+            ],
+            "implemented_code_improvement_workorder_ids": [
+                str(item) for item in (summary.get("implemented_code_improvement_workorder_ids") or []) if str(item)
+            ],
+            "pending_code_improvement_workorder_ids": [
+                str(item) for item in (summary.get("pending_code_improvement_workorder_ids") or []) if str(item)
+            ],
+            "ai_review_followup_workorder_ids": [
+                str(item) for item in (summary.get("ai_review_followup_workorder_ids") or []) if str(item)
+            ],
             "surfaced_candidate_ids": [
                 str(item) for item in (payload.get("surfaced_candidate_ids") or []) if str(item)
             ],

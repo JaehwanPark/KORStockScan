@@ -1126,6 +1126,14 @@ def _lifecycle_bucket_windows_status(
         if isinstance(runtime_summary.get("lifecycle_bucket_windows"), dict)
         else {}
     )
+    promotion_window = str(
+        runtime_windows.get("promotion_window") or ev_windows.get("promotion_window") or "mtd"
+    ).strip() or "mtd"
+    confirmation_windows_raw = runtime_windows.get("confirmation_windows") or ev_windows.get("confirmation_windows")
+    if isinstance(confirmation_windows_raw, list) and confirmation_windows_raw:
+        confirmation_windows = [str(item).strip() for item in confirmation_windows_raw if str(item).strip()]
+    else:
+        confirmation_windows = ["rolling5d", "rolling10d"]
     artifact_present = any(paths[f"lifecycle_bucket_discovery_{suffix}"].exists() for suffix in ("rolling5d", "rolling10d", "mtd"))
     should_check = marker_enabled or bool(ev_windows) or bool(runtime_windows) or artifact_present
     if not should_check:
@@ -1134,6 +1142,7 @@ def _lifecycle_bucket_windows_status(
     missing: list[str] = []
     warnings: list[str] = []
     windows: dict[str, dict[str, Any]] = {}
+    confirmation_target_pass_count = 0
     for suffix in ("rolling5d", "rolling10d", "mtd"):
         ldm_path = paths[f"lifecycle_decision_matrix_{suffix}"]
         discovery_path = paths[f"lifecycle_bucket_discovery_{suffix}"]
@@ -1152,11 +1161,19 @@ def _lifecycle_bucket_windows_status(
             "source_contract_status": source_contract_status or None,
             "parent_granularity_status": parent_granularity_status or None,
             "parent_bucket_count": _safe_int(summary.get("parent_bucket_count")),
+            "window_role": "promotion_confirmation" if suffix == promotion_window else "rolling_confirmation",
         }
         if source_contract_status != "pass":
             missing.append(f"lifecycle_bucket_discovery_{suffix}_source_contract_not_pass")
-        if parent_granularity_status != "target_pass":
+        if parent_granularity_status == "target_pass" and suffix in confirmation_windows:
+            confirmation_target_pass_count += 1
+        if parent_granularity_status != "target_pass" and suffix == promotion_window:
             missing.append(f"lifecycle_bucket_discovery_{suffix}_parent_granularity_not_target")
+        elif parent_granularity_status != "target_pass" and suffix in confirmation_windows:
+            warnings.append(f"lifecycle_bucket_discovery_{suffix}_parent_granularity_not_target")
+
+    if confirmation_windows and confirmation_target_pass_count == 0:
+        missing.append("lifecycle_bucket_confirmation_windows_not_target")
 
     bridge_summary = bridge_report.get("summary") if isinstance(bridge_report.get("summary"), dict) else {}
     live_ready_count = _safe_int(bridge_summary.get("live_auto_apply_ready_count"))

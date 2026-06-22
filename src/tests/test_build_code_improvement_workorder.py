@@ -2414,6 +2414,30 @@ def test_swing_lifecycle_bucket_discovery_provider_unavailable_ai_review_is_hold
     assert classified.route == "existing_family"
 
 
+def test_swing_lifecycle_bucket_discovery_ai_review_rollup_order_carries_implemented_provenance():
+    report = {
+        "summary": {
+            "sim_auto_review_shard_count": 2,
+            "sim_auto_reviewed_candidate_count": 14,
+            "sim_auto_unreviewed_candidate_count": 20,
+            "sim_auto_downgraded_by_review_count": 20,
+            "ai_review_blocker_state": "sim_policy_followup_required",
+            "ai_review_followup_required": True,
+            "ai_review_followup_reasons": ["audit_status_missing"],
+        },
+        "surfaced_candidates": [],
+        "code_improvement_workorders": [],
+    }
+
+    orders = mod._swing_lifecycle_bucket_discovery_followup_orders(report)
+    order = next(item for item in orders if item["order_id"] == "order_swing_lifecycle_bucket_discovery_ai_review_rollup")
+
+    assert order["implementation_status"] == "implemented"
+    assert order["implementation_provenance"]["implementation_type"] == "swing_bucket_ai_review_shard_rollup"
+    assert order["implementation_provenance"]["sim_auto_reviewed_candidate_count"] == 14
+    assert order["implementation_provenance"]["root_cause_closure_status_hint"] == "root_cause_closed"
+
+
 def test_build_code_improvement_workorder_consumes_pattern_lab_currentness_audit(tmp_path, monkeypatch):
     automation_dir = tmp_path / "automation"
     currentness_dir = tmp_path / "currentness"

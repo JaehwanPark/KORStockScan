@@ -591,6 +591,24 @@ def test_bucket_discovery_sim_policy_audit_correction_blocks_sim_as_followup_not
         item["workorder_id"] == "swing_lifecycle_bucket_discovery_ai_review_followup"
         for item in report["code_improvement_workorders"]
     )
+    followup = next(
+        item
+        for item in report["code_improvement_workorders"]
+        if item["workorder_id"] == "swing_lifecycle_bucket_discovery_ai_review_followup"
+    )
+    assert followup["implementation_status"] == "implemented"
+    assert followup["implementation_provenance"]["implementation_type"] == (
+        "swing_bucket_ai_review_followup_handoff"
+    )
+    assert followup["implementation_provenance"]["required_downstream"] == [
+        "threshold_cycle_ev_report",
+        "runtime_approval_summary",
+        "code_improvement_workorder",
+        "postclose_verifier",
+    ]
+    assert report["summary"]["ai_review_followup_workorder_ids"] == [
+        "swing_lifecycle_bucket_discovery_ai_review_followup"
+    ]
 
 
 def test_bucket_discovery_non_sim_shard_missing_does_not_block_parsed_sim_policy(tmp_path, monkeypatch):

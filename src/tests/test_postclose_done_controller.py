@@ -610,6 +610,14 @@ def test_postclose_done_controller_tail_repair_uses_workorder_max_orders_env(mon
     )
 
 
+def test_tail_stage_repair_actions_refresh_final_ev_after_workorder():
+    actions = mod._tail_stage_repair_actions("2026-06-03", "key_lineage_ledger")
+    action_names = [item.action for item in actions]
+
+    assert action_names.index("refresh_code_improvement_workorder") < action_names.index("refresh_threshold_cycle_ev")
+    assert action_names.index("refresh_threshold_cycle_ev") < action_names.index("refresh_runtime_approval_summary")
+
+
 def test_postclose_done_controller_tail_repair_requires_artifact_status_before_done_reconciliation(
     monkeypatch,
     tmp_path,
@@ -1140,7 +1148,12 @@ def test_postclose_done_controller_accepts_report_only_followup_warnings(
             "artifact_status": _passable_artifact_status(),
             "handoff_warnings": [
                 "ai_watching_score_smoothing_diagnostic_followup_open",
+                "lifecycle_bucket_discovery_rolling5d_parent_granularity_not_target",
                 "swing_active_arm_priority_runtime_observation_missing",
+                "swing_lifecycle_bucket_discovery:ai_two_pass_review_followup_required_source_only",
+                "swing_lifecycle_bucket_discovery:ai_two_pass_review_followup_sim_auto_blocked",
+                "swing_lifecycle_bucket_discovery:ai_two_pass_review_partial_fail_closed",
+                "swing_lifecycle_bucket_discovery:ai_two_pass_review_partial_source_only",
             ],
         },
     )

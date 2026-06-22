@@ -380,6 +380,10 @@ def test_runtime_approval_summary_surfaces_swing_bucket_ai_followup_separately()
             "ai_review_followup_required": True,
             "ai_review_followup_reasons": ["audit_status=correction_required"],
             "sim_auto_blocked_by_ai_review_followup": True,
+            "code_improvement_workorder_ids": ["swing_lifecycle_bucket_discovery_ai_review_followup"],
+            "implemented_code_improvement_workorder_ids": ["swing_lifecycle_bucket_discovery_ai_review_followup"],
+            "pending_code_improvement_workorder_ids": [],
+            "ai_review_followup_workorder_ids": ["swing_lifecycle_bucket_discovery_ai_review_followup"],
             "warnings": ["swing_lifecycle_bucket_discovery:ai_review_followup_required"],
         }
     }
@@ -390,6 +394,8 @@ def test_runtime_approval_summary_surfaces_swing_bucket_ai_followup_separately()
     assert summary["ai_fail_closed"] is False
     assert summary["ai_review_followup_required"] is True
     assert summary["sim_auto_blocked_by_ai_review_followup"] is True
+    assert summary["code_improvement_workorder_ids"] == ["swing_lifecycle_bucket_discovery_ai_review_followup"]
+    assert summary["ai_review_followup_workorder_ids"] == ["swing_lifecycle_bucket_discovery_ai_review_followup"]
     assert "ai_review_followup_required" in summary["warnings"]
     assert "ai_review_followup_sim_auto_blocked" in summary["warnings"]
     assert not any("fail_closed" in warning for warning in summary["warnings"])

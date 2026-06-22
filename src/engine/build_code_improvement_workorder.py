@@ -5423,6 +5423,7 @@ def _swing_lifecycle_bucket_discovery_followup_orders(report: dict[str, Any]) ->
             and not bool(summary.get("ai_review_followup_required"))
             and not ai_review_followup_reasons
         )
+        implementation_status = "implemented_but_waiting_sample" if provider_unavailable_hold else "implemented"
         orders.append(
             {
                 "order_id": "order_swing_lifecycle_bucket_discovery_ai_review_rollup",
@@ -5450,7 +5451,26 @@ def _swing_lifecycle_bucket_discovery_followup_orders(report: dict[str, Any]) ->
                     "decision_authority=swing_ldm_bucket_discovery_sim_auto",
                     "allowed_runtime_apply=false",
                 ],
-                "implementation_status": "implemented_but_waiting_sample" if provider_unavailable_hold else None,
+                "implementation_status": implementation_status,
+                "implementation_provenance": {
+                    "implementation_type": "swing_bucket_ai_review_shard_rollup",
+                    "implemented_scope": (
+                        "Swing bucket discovery preserves reviewed, unreviewed, and downgraded sim-auto shard "
+                        "counts as source-only provenance for downstream workorders."
+                    ),
+                    "source_report_type": "swing_lifecycle_bucket_discovery",
+                    "decision_authority": "swing_ldm_bucket_discovery_sim_auto",
+                    "runtime_effect": False,
+                    "allowed_runtime_apply": False,
+                    "ai_review_blocker_state": summary.get("ai_review_blocker_state"),
+                    "ai_review_followup_required": bool(summary.get("ai_review_followup_required")),
+                    "ai_review_followup_reasons": ai_review_followup_reasons,
+                    "sim_auto_review_shard_count": _safe_int(summary.get("sim_auto_review_shard_count"), 0),
+                    "sim_auto_reviewed_candidate_count": _safe_int(summary.get("sim_auto_reviewed_candidate_count"), 0),
+                    "sim_auto_unreviewed_candidate_count": unreviewed_count,
+                    "sim_auto_downgraded_by_review_count": downgraded_count,
+                    "root_cause_closure_status_hint": "root_cause_closed",
+                },
                 "next_postclose_metric": "Partial AI review failures should create source-only downgrade evidence without hiding parsed shard candidates.",
                 "files_likely_touched": [
                     "src/engine/swing_lifecycle_bucket_discovery.py",

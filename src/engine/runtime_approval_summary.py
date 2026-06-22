@@ -1941,6 +1941,18 @@ def _swing_lifecycle_bucket_discovery_summary(ev_report: dict[str, Any]) -> dict
         "automation_handoff_gap_count": _safe_int(payload.get("automation_handoff_gap_count"), 0),
         "swing_entry_bottleneck_primary": payload.get("swing_entry_bottleneck_primary"),
         "swing_entry_bottleneck_candidate_present": bool(payload.get("swing_entry_bottleneck_candidate_present")),
+        "code_improvement_workorder_ids": [
+            str(item) for item in (payload.get("code_improvement_workorder_ids") or []) if str(item)
+        ],
+        "implemented_code_improvement_workorder_ids": [
+            str(item) for item in (payload.get("implemented_code_improvement_workorder_ids") or []) if str(item)
+        ],
+        "pending_code_improvement_workorder_ids": [
+            str(item) for item in (payload.get("pending_code_improvement_workorder_ids") or []) if str(item)
+        ],
+        "ai_review_followup_workorder_ids": [
+            str(item) for item in (payload.get("ai_review_followup_workorder_ids") or []) if str(item)
+        ],
         "surfaced_candidate_ids": payload.get("surfaced_candidate_ids") if isinstance(payload.get("surfaced_candidate_ids"), list) else [],
         "state_interpretation": "sim-only candidates are auto-approved and surfaced to the next PREOPEN swing sim policy input.",
         "warnings": warnings,

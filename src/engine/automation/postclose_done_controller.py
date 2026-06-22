@@ -44,7 +44,12 @@ DONE_ACCEPTABLE_WARNING_ISSUES = {
     "active_sim_priority_preopen_handoff_pending",
     "active_or_hypothesis_preopen_handoff_pending",
     "ai_watching_score_smoothing_diagnostic_followup_open",
+    "lifecycle_bucket_discovery_rolling5d_parent_granularity_not_target",
     "swing_active_arm_priority_runtime_observation_missing",
+    "swing_lifecycle_bucket_discovery:ai_two_pass_review_followup_required_source_only",
+    "swing_lifecycle_bucket_discovery:ai_two_pass_review_followup_sim_auto_blocked",
+    "swing_lifecycle_bucket_discovery:ai_two_pass_review_partial_fail_closed",
+    "swing_lifecycle_bucket_discovery:ai_two_pass_review_partial_source_only",
 }
 FULL_WRAPPER_RERUN_LOG_ISSUES = {
     "postclose_start_marker_missing",
@@ -529,19 +534,14 @@ def _tail_stage_repair_actions(target_date: str, failed_stage: str) -> list[Reco
     actions.extend(
         [
             RecoveryAction(
-                "refresh_threshold_cycle_ev",
-                [_python_bin(), "-m", "src.engine.threshold_cycle_ev_report", "--date", target_date],
-                "wrapper tail repair EV refresh after post-conversion workorder",
-            ),
-            RecoveryAction(
                 "refresh_pattern_lab_currentness_audit",
                 [_python_bin(), "-m", "src.engine.pattern_lab_currentness_audit", "--date", target_date],
-                "wrapper tail repair pattern currentness audit refresh after EV",
+                "wrapper tail repair pattern currentness audit refresh before final EV",
             ),
             RecoveryAction(
                 "refresh_pattern_lab_propagation_audit",
                 [_python_bin(), "-m", "src.engine.pattern_lab_propagation_audit", "--date", target_date],
-                "wrapper tail repair pattern propagation audit refresh after EV",
+                "wrapper tail repair pattern propagation audit refresh before final EV",
             ),
             RecoveryAction(
                 "refresh_code_improvement_workorder",
@@ -554,7 +554,12 @@ def _tail_stage_repair_actions(target_date: str, failed_stage: str) -> list[Reco
                     "--max-orders",
                     workorder_max_orders,
                 ],
-                "wrapper tail repair workorder refresh after EV consumers",
+                "wrapper tail repair workorder refresh before final EV",
+            ),
+            RecoveryAction(
+                "refresh_threshold_cycle_ev",
+                [_python_bin(), "-m", "src.engine.threshold_cycle_ev_report", "--date", target_date],
+                "wrapper tail repair EV refresh after upstream audits and workorder",
             ),
             RecoveryAction(
                 "refresh_runtime_approval_summary",

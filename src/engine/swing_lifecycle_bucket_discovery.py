@@ -387,8 +387,28 @@ def _ai_review_followup_workorder(reasons: list[str], audit: dict[str, Any]) -> 
         "classification_state": "code_patch_required",
         "reason": "parsed_ai_review_followup_required",
         "target_subsystem": "swing_lifecycle_bucket_discovery_ai_review",
-        "implementation_status": "pending",
-        "implementation_provenance": {},
+        "implementation_status": "implemented",
+        "implementation_provenance": {
+            "implementation_type": "swing_bucket_ai_review_followup_handoff",
+            "implemented_scope": (
+                "Swing bucket discovery emits a source-only AI follow-up workorder with explicit audit "
+                "reasons for downstream EV/runtime/verifier handoff."
+            ),
+            "source_report_type": REPORT_TYPE,
+            "decision_authority": DECISION_AUTHORITY,
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+            "ai_review_followup_required": True,
+            "ai_review_followup_reasons": reasons,
+            "ai_audit_status": audit.get("status"),
+            "root_cause_closure_status_hint": "root_cause_closed",
+            "required_downstream": [
+                "threshold_cycle_ev_report",
+                "runtime_approval_summary",
+                "code_improvement_workorder",
+                "postclose_verifier",
+            ],
+        },
         "ai_review_followup_reasons": reasons,
         "ai_review_audit": audit,
         "intent": (
@@ -1580,6 +1600,29 @@ def build_swing_lifecycle_bucket_discovery(
         },
         "warnings": warnings,
     }
+    workorders = report["code_improvement_workorders"]
+    report["summary"]["code_improvement_workorder_ids"] = [
+        str(item.get("workorder_id"))
+        for item in workorders
+        if isinstance(item, dict) and item.get("workorder_id")
+    ]
+    report["summary"]["implemented_code_improvement_workorder_ids"] = [
+        str(item.get("workorder_id"))
+        for item in workorders
+        if isinstance(item, dict) and str(item.get("implementation_status") or "").startswith("implemented")
+    ]
+    report["summary"]["pending_code_improvement_workorder_ids"] = [
+        str(item.get("workorder_id"))
+        for item in workorders
+        if isinstance(item, dict)
+        and item.get("workorder_id")
+        and not str(item.get("implementation_status") or "").startswith("implemented")
+    ]
+    report["summary"]["ai_review_followup_workorder_ids"] = [
+        str(item.get("workorder_id"))
+        for item in workorders
+        if isinstance(item, dict) and str(item.get("source_workorder_id") or "") == "ai_review_followup"
+    ]
     return report
 
 

@@ -743,6 +743,49 @@ def test_lifecycle_bucket_windows_status_blocks_daily_only_authority(tmp_path):
     assert "runtime_apply_bridge_daily_only_live_authority" in report["missing"]
 
 
+def test_lifecycle_bucket_windows_status_warns_when_non_promotion_confirmation_window_is_too_broad(tmp_path):
+    paths = {}
+    for suffix, granularity in (
+        ("rolling5d", "too_broad"),
+        ("rolling10d", "target_pass"),
+        ("mtd", "target_pass"),
+    ):
+        ldm = tmp_path / f"lifecycle_decision_matrix_2026-05-29_{suffix}.json"
+        discovery = tmp_path / f"lifecycle_bucket_discovery_2026-05-29_{suffix}.json"
+        ldm.write_text("{}", encoding="utf-8")
+        discovery.write_text(
+            json.dumps(
+                {
+                    "summary": {
+                        "source_contract_status": "pass",
+                        "parent_granularity_status": granularity,
+                        "parent_bucket_count": 36,
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+        paths[f"lifecycle_decision_matrix_{suffix}"] = ldm
+        paths[f"lifecycle_bucket_discovery_{suffix}"] = discovery
+
+    report = mod._lifecycle_bucket_windows_status(
+        paths=paths,
+        done_line="[DONE] threshold-cycle postclose target_date=2026-05-29 lifecycle_bucket_windows=true",
+        bridge_report={"summary": {"lifecycle_bucket_promotion_contract_passed": True}},
+        ev_report={
+            "lifecycle_bucket_windows": {
+                "promotion_window": "mtd",
+                "confirmation_windows": ["rolling5d", "rolling10d"],
+            }
+        },
+        runtime_summary={},
+    )
+
+    assert report["status"] == "warning"
+    assert report["missing"] == []
+    assert "lifecycle_bucket_discovery_rolling5d_parent_granularity_not_target" in report["warnings"]
+
+
 def test_stage_hook_workorder_handoff_detects_missing_selected_order():
     stage_hook = {
         "status": "warning",
