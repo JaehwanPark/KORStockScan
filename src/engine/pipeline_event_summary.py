@@ -151,6 +151,18 @@ def field_first(fields: dict[str, str], names: tuple[str, ...]) -> str:
 
 
 def default_reason_label(stage: str, fields: dict[str, str]) -> str:
+    if stage == "ai_confirmed_terminal_no_budget":
+        terminal_reason = _first_field(
+            fields,
+            ("terminal_reason", "reason", "block_reason", "blocked_reason", "source_stage"),
+        )
+        if terminal_reason:
+            return f"ai_terminal:{terminal_reason}"
+        action = _first_field(fields, ("ai_action", "action", "decision"))
+        score = _first_field(fields, ("ai_score", "score", "current_ai_score"))
+        if action or score:
+            return f"ai_terminal:{action or 'unknown'}_score_{score or '-'}"
+        return "ai_terminal:unknown_terminal_reason"
     if stage == "blocked_ai_score":
         score = _first_field(fields, ("score", "ai_score", "current_ai_score"))
         reason = _first_field(fields, ("reason", "block_reason", "blocked_reason", "decision"))

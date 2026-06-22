@@ -97,6 +97,70 @@ def test_upstream_ai_threshold_classification_uses_previous_day_baseline(monkeyp
     assert "blocked_ai_score:ai_score_50_buy_hold_override" in blocker_labels
 
 
+def test_ai_confirmed_terminal_no_budget_is_split_by_terminal_reason(monkeypatch, tmp_path):
+    monkeypatch.setattr(sentinel, "DATA_DIR", tmp_path)
+    rows = []
+    for idx in range(10):
+        rows.append(_event("2026-05-06", f"10:{idx:02d}:00", "ai_confirmed", record_id=idx))
+    for idx in range(3):
+        rows.append(
+            _event(
+                "2026-05-06",
+                f"10:{idx:02d}:10",
+                "ai_confirmed_terminal_no_budget",
+                record_id=100 + idx,
+                fields={
+                    "terminal_reason": "first_ai_wait_big_bite_not_confirmed",
+                    "source_stage": "first_ai_wait",
+                    "ai_action": "WAIT",
+                    "ai_score": "63.0",
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                },
+            )
+        )
+    for idx in range(2):
+        rows.append(
+            _event(
+                "2026-05-06",
+                f"10:{idx:02d}:20",
+                "ai_confirmed_terminal_no_budget",
+                record_id=200 + idx,
+                fields={
+                    "terminal_reason": "blocked_ai_score_below_buy_score_threshold",
+                    "source_stage": "blocked_ai_score",
+                    "ai_action": "WAIT",
+                    "ai_score": "62.0",
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                },
+            )
+        )
+    _write_events(tmp_path, "2026-05-06", rows)
+
+    report = sentinel.build_buy_funnel_sentinel_report(
+        "2026-05-06",
+        as_of=sentinel._parse_as_of("2026-05-06", "10:10:00"),
+        use_cache=True,
+        use_summary=True,
+    )
+
+    terminal_reasons = {
+        item["label"]: item["count"]
+        for item in report["current"]["session"]["ai_terminal_reason_top"]
+    }
+    blockers = {
+        item["label"]: item["count"]
+        for item in report["current"]["session"]["blocker_top"]
+    }
+    assert terminal_reasons["ai_terminal:first_ai_wait_big_bite_not_confirmed"] == 3
+    assert terminal_reasons["ai_terminal:blocked_ai_score_below_buy_score_threshold"] == 2
+    assert "ai_terminal:first_ai_wait_big_bite_not_confirmed" not in blockers
+    assert "ai_confirmed_terminal_no_budget:-" not in blockers
+    assert report["current"]["session"]["stage_events"]["ai_confirmed_terminal_no_budget"] == 5
+    assert report["event_load"]["cache_schema_version"] == sentinel.LOSSLESS_EVENT_CACHE_SCHEMA_VERSION
+
+
 def test_latency_drought_when_budget_pass_exists_but_no_submitted(monkeypatch, tmp_path):
     monkeypatch.setattr(sentinel, "DATA_DIR", tmp_path)
     rows = []

@@ -1780,7 +1780,28 @@ def test_observation_source_quality_raw_row_exclusion_marks_market_halt_overlap(
         "gate_action": "source_quality_block",
         "allowed_runtime_apply": False,
         "actual_order_submitted": False,
+        "broker_order_forbidden": True,
         "reason": "insufficient_history",
+        "quote_age_ms": 500.0,
+        "tick_latest_age_ms": 1000.0,
+        "tick_sample_count": 3,
+        "tick_window_sample_count": 3,
+        "tick_window_span_sec": 5.0,
+        "sample_count": 3,
+        "window_span_sec": 5.0,
+        "snapshot_source": "ws_snapshot_input",
+        "refresh_applied": False,
+        "refresh_reason": "not_attempted_no_refresh_fields",
+        "refresh_age_ms": "not_available_refresh_age_ms",
+        "stability_window_result": "window_available",
+        "stability_window_reason": "window_samples_present",
+        "stability_sample_count": 3,
+        "blocked_gate_quality_stage": "strength_momentum",
+        "window_buy_value": 0,
+        "window_buy_ratio": "0.00",
+        "window_exec_buy_ratio": "0.00",
+        "window_net_buy_qty": 0,
+        "strength_momentum_reason": "insufficient_history",
     }
     for idx in range(10):
         row = _event("blocked_strength_momentum", dict(base_fields), record_id=idx + 1)
@@ -2435,6 +2456,7 @@ def test_observation_source_quality_audit_accepts_pre_ai_and_pre_submit_gate_con
         "gate_action": "risk_context_only",
         "allowed_runtime_apply": False,
         "actual_order_submitted": False,
+        "broker_order_forbidden": True,
     }
     _write_events(
         tmp_path,
@@ -2450,6 +2472,39 @@ def test_observation_source_quality_audit_accepts_pre_ai_and_pre_submit_gate_con
                     "ask_tot": 10_000,
                     "bid_tot": 12_000,
                     "liquidity_orderbook_source_quality": "valid_orderbook_totals",
+                },
+            ),
+            _event(
+                "blocked_strength_momentum",
+                {
+                    **risk_context,
+                    **overlap,
+                    **{**gate_quality, "blocked_gate_quality_stage": "strength_momentum"},
+                    "threshold_family": "strength_momentum_soft_gate_p1",
+                    "window_buy_value": 100_000_000,
+                    "window_buy_ratio": "55.00",
+                    "window_exec_buy_ratio": "52.00",
+                    "window_net_buy_qty": 1000,
+                    "strength_momentum_reason": "below_window_buy_value",
+                },
+            ),
+            _event(
+                "strength_momentum_stability_recheck_pending",
+                {
+                    **risk_context,
+                    **{**gate_quality, "blocked_gate_quality_stage": "strength_momentum"},
+                    "threshold_family": "strength_momentum_soft_gate_p1",
+                    "gate_action": "stability_recheck_pending",
+                    "window_buy_value": 0,
+                    "window_buy_ratio": "0.00",
+                    "window_exec_buy_ratio": "0.00",
+                    "window_net_buy_qty": 0,
+                    "strength_momentum_reason": "insufficient_history",
+                    "recheck_reason": "transient_strength_window_unstable",
+                    "recheck_after_epoch": "1002.000",
+                    "recheck_delay_sec": 2,
+                    "recheck_attempt_count": 1,
+                    "recheck_max_attempts": 1,
                 },
             ),
             _event(
@@ -2492,9 +2547,76 @@ def test_observation_source_quality_audit_accepts_pre_ai_and_pre_submit_gate_con
     report = audit.build_observation_source_quality_audit("2026-05-18")
 
     assert report["stage_contracts"]["blocked_liquidity"]["status"] == "pass"
+    assert report["stage_contracts"]["blocked_strength_momentum"]["status"] == "pass"
+    assert report["stage_contracts"]["strength_momentum_stability_recheck_pending"]["status"] == "pass"
     assert report["stage_contracts"]["blocked_vpw"]["status"] == "pass"
     assert report["stage_contracts"]["blocked_overbought"]["status"] == "pass"
     assert report["stage_contracts"]["pre_submit_liquidity_guard_block"]["status"] == "pass"
+
+
+def test_observation_source_quality_audit_fails_pre_ai_broker_authority_contract(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
+    gate_quality = {
+        "quote_age_ms": 500.0,
+        "tick_latest_age_ms": 1000.0,
+        "tick_sample_count": 3,
+        "tick_window_sample_count": 3,
+        "tick_window_span_sec": 5.0,
+        "sample_count": 3,
+        "window_span_sec": 5.0,
+        "snapshot_source": "ws_snapshot_input",
+        "refresh_applied": False,
+        "refresh_reason": "not_attempted_no_refresh_fields",
+        "refresh_age_ms": "not_available_refresh_age_ms",
+        "stability_window_result": "window_available",
+        "stability_window_reason": "window_samples_present",
+        "stability_sample_count": 3,
+        "blocked_gate_quality_stage": "strength_momentum",
+    }
+    _write_events(
+        tmp_path,
+        "2026-05-18",
+        [
+            _event(
+                "blocked_strength_momentum",
+                {
+                    "metric_role": "risk_context",
+                    "decision_authority": "source_quality_only",
+                    "runtime_effect": False,
+                    "forbidden_uses": "runtime_threshold_apply/order_submit/provider_route_change/bot_restart",
+                    "threshold_family": "strength_momentum_soft_gate_p1",
+                    "gate_action": "risk_context_only",
+                    "allowed_runtime_apply": False,
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": False,
+                    "latest_strength": "105.0",
+                    "buy_pressure_10t": "0.600",
+                    "distance_from_day_high_pct": "0.50",
+                    "intraday_range_pct": "2.00",
+                    "window_buy_value": 100_000_000,
+                    "window_buy_ratio": "55.00",
+                    "window_exec_buy_ratio": "52.00",
+                    "window_net_buy_qty": 1000,
+                    "strength_momentum_reason": "below_window_buy_value",
+                    **gate_quality,
+                },
+            )
+        ],
+    )
+
+    pre_exclusion = audit.build_observation_source_quality_audit("2026-05-18")
+    contract = pre_exclusion["stage_contracts"]["blocked_strength_momentum"]
+
+    assert contract["status"] == "fail"
+    assert contract["invalid_label_violations"] == {
+        "pre_ai_broker_order_forbidden_contract": 1.0
+    }
+
+    report = audit.write_report("2026-05-18")
+    assert report["summary"]["raw_row_exclusion_applied"] is True
+    assert report["summary"]["tuning_input_allowed"] is True
 
 
 def test_observation_source_quality_audit_accepts_scalp_sim_stage_contracts(monkeypatch, tmp_path):

@@ -45,6 +45,9 @@ UPSTREAM_BLOCK_STAGES = {
     "wait65_79_ev_candidate",
     "first_ai_wait",
 }
+AI_TERMINAL_ATTRIBUTION_STAGES = {
+    "ai_confirmed_terminal_no_budget",
+}
 PRICE_GUARD_STAGES = {
     "pre_submit_price_guard_block",
     "entry_ai_price_canary_skip_order",
@@ -82,8 +85,8 @@ SUBMIT_DROUGHT_MIN_BUDGET_UNIQUE = 3
 SUBMIT_TO_AI_CRITICAL_PCT = 20.0
 SUBMIT_TO_BUDGET_CRITICAL_PCT = 10.0
 REPORT_DIRNAME = "buy_funnel_sentinel"
-EVENT_CACHE_SCHEMA_VERSION = 3
-LOSSLESS_EVENT_CACHE_SCHEMA_VERSION = 5
+EVENT_CACHE_SCHEMA_VERSION = 4
+LOSSLESS_EVENT_CACHE_SCHEMA_VERSION = 6
 EVENT_CACHE_NAME = "buy_funnel_sentinel_events"
 FORBIDDEN_AUTOMATIONS = [
     "score_threshold_relaxation",
@@ -231,6 +234,7 @@ def _payload_to_cache_row(
     if not (
         stage in ENTRY_STAGES
         or stage in HOLDING_STAGES
+        or stage in AI_TERMINAL_ATTRIBUTION_STAGES
         or stage in BLOCKER_STAGES
         or stage in UPSTREAM_BLOCK_STAGES
         or stage in PRICE_GUARD_STAGES
@@ -464,6 +468,21 @@ def _blocker_label(event: PipelineEvent) -> str:
     return f"{event.stage}:{reason or '-'}"
 
 
+def _ai_terminal_reason_label(event: PipelineEvent) -> str:
+    fields = event.fields
+    terminal_reason = _field_first(
+        fields,
+        ("terminal_reason", "reason", "block_reason", "blocked_reason", "source_stage"),
+    )
+    if terminal_reason:
+        return f"ai_terminal:{terminal_reason}"
+    action = _field_first(fields, ("ai_action", "action", "decision"))
+    score = _field_first(fields, ("ai_score", "score", "current_ai_score"))
+    if action or score:
+        return f"ai_terminal:{action or 'unknown'}_score_{score or '-'}"
+    return "ai_terminal:unknown_terminal_reason"
+
+
 def _post_refresh_downstream_bucket(event: PipelineEvent | None) -> str:
     if event is None:
         return "no_downstream_event"
@@ -587,6 +606,11 @@ def _summarize_events(
     upstream_counter = Counter(_blocker_label(event) for event in upstream_events)
     latency_counter = Counter(_blocker_label(event) for event in latency_blocks)
     price_guard_counter = Counter(_blocker_label(event) for event in price_guard_events)
+    ai_terminal_reason_counter = Counter(
+        _ai_terminal_reason_label(event)
+        for event in lossless_scoped
+        if event.stage in AI_TERMINAL_ATTRIBUTION_STAGES
+    )
     latency_danger_reason_counts = Counter(
         label
         for event in latency_blocks
@@ -693,6 +717,10 @@ def _summarize_events(
         "price_guard_top": [
             {"label": label, "count": count}
             for label, count in price_guard_counter.most_common(10)
+        ],
+        "ai_terminal_reason_top": [
+            {"label": label, "count": count}
+            for label, count in ai_terminal_reason_counter.most_common(10)
         ],
         "upstream_block_events": len(upstream_events),
         "latency_state_danger_events": len(latency_blocks),
@@ -1344,6 +1372,7 @@ def build_markdown(report: dict[str, Any]) -> str:
         f"- top blockers: `{_format_top_blockers(session['blocker_top'])}`",
         f"- swing blockers: `{_format_top_blockers(session.get('swing_blocker_top') or [])}`",
         f"- upstream blockers: `{_format_top_blockers(session['upstream_blocker_top'])}`",
+        f"- AI terminal reasons: `{_format_top_blockers(session.get('ai_terminal_reason_top') or [])}`",
         f"- latency blockers: `{_format_top_blockers(session['latency_blocker_top'])}`",
         f"- price guards: `{_format_top_blockers(session['price_guard_top'])}`",
         f"- quote refresh: `attempted={quote_freshness.get('refresh_attempted_count', 0)}, "
@@ -1368,7 +1397,8 @@ def build_markdown(report: dict[str, Any]) -> str:
             f"submitted={stage_unique.get('order_bundle_submitted', 0)}, "
             f"top=`{_format_top_blockers(summary['blocker_top'], limit=3)}`, "
             f"swing=`{_format_top_blockers(summary.get('swing_blocker_top') or [], limit=3)}`, "
-            f"upstream=`{_format_top_blockers(summary['upstream_blocker_top'], limit=3)}`"
+            f"upstream=`{_format_top_blockers(summary['upstream_blocker_top'], limit=3)}`, "
+            f"ai_terminal=`{_format_top_blockers(summary.get('ai_terminal_reason_top') or [], limit=3)}`"
         )
     lines.append("")
     return "\n".join(lines)

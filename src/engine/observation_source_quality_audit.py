@@ -246,6 +246,7 @@ PRE_AI_RISK_CONTEXT_FIELDS = (
     "gate_action",
     "allowed_runtime_apply",
     "actual_order_submitted",
+    "broker_order_forbidden",
 )
 
 PRE_SUBMIT_GUARD_FIELDS = (
@@ -932,9 +933,35 @@ STAGE_CONTRACTS: dict[str, StageContract] = {
         decision_authority="real_scalping_scanner_heavy_eval_observation_only",
     ),
     "blocked_strength_momentum": StageContract(
-        required_fields=(*AI_OVERLAP_FIELDS, *PRE_AI_RISK_CONTEXT_FIELDS),
+        required_fields=(
+            *AI_OVERLAP_FIELDS,
+            *PRE_AI_RISK_CONTEXT_FIELDS,
+            *PRE_AI_BLOCKED_GATE_QUALITY_FIELDS,
+            "window_buy_value",
+            "window_buy_ratio",
+            "window_exec_buy_ratio",
+            "window_net_buy_qty",
+            "strength_momentum_reason",
+        ),
         zero_sensitive_fields=("intraday_range_pct",),
         max_zero_rate=0.10,
+    ),
+    "strength_momentum_stability_recheck_pending": StageContract(
+        required_fields=(
+            *PRE_AI_RISK_CONTEXT_FIELDS,
+            *PRE_AI_BLOCKED_GATE_QUALITY_FIELDS,
+            "window_buy_value",
+            "window_buy_ratio",
+            "window_exec_buy_ratio",
+            "window_net_buy_qty",
+            "strength_momentum_reason",
+            "recheck_reason",
+            "recheck_after_epoch",
+            "recheck_delay_sec",
+            "recheck_attempt_count",
+            "recheck_max_attempts",
+        ),
+        decision_authority="source_quality_only",
     ),
     "strength_momentum_scanner_rising_override": StageContract(
         required_fields=(
@@ -1675,6 +1702,20 @@ def _row_contract_violations(stage: str, row: dict[str, Any], contract: StageCon
             for key, violated in _sim_submit_guard_contract_violations(stage, fields).items()
             if violated
         )
+    if contract.required_fields == () or not set(PRE_AI_RISK_CONTEXT_FIELDS).issubset(
+        set(contract.required_fields)
+    ):
+        return {
+            "missing_fields": missing,
+            "zero_fields": zero,
+            "invalid_fields": invalid,
+        }
+    if not _contract_bool(fields.get("actual_order_submitted"), False):
+        invalid.append("pre_ai_actual_order_submitted_contract")
+    if not _contract_bool(fields.get("broker_order_forbidden"), True):
+        invalid.append("pre_ai_broker_order_forbidden_contract")
+    if not _contract_bool(fields.get("allowed_runtime_apply"), False):
+        invalid.append("pre_ai_allowed_runtime_apply_contract")
     return {
         "missing_fields": missing,
         "zero_fields": zero,
@@ -1709,7 +1750,7 @@ def _hard_violation_fields_by_stage(contract_result: dict[str, Any]) -> dict[str
             continue
         missing = set((result.get("missing_violations") or {}).keys())
         zero = set((result.get("zero_violations") or {}).keys())
-        invalid = set((result.get("invalid_violations") or {}).keys())
+        invalid = set((result.get("invalid_label_violations") or {}).keys())
         if missing or zero or invalid:
             fields_by_stage[str(stage)] = {
                 "missing_fields": missing,
@@ -2035,6 +2076,18 @@ def _evaluate_contracts(rows: list[dict[str, Any]], stage_counts: Counter[str]) 
                         stage,
                         _normalized_fields_for_contract(stage, row["fields"]),
                     ).get(violation_key)
+                )
+        if set(PRE_AI_RISK_CONTEXT_FIELDS).issubset(set(contract.required_fields)):
+            for violation_key in (
+                "pre_ai_actual_order_submitted_contract",
+                "pre_ai_broker_order_forbidden_contract",
+                "pre_ai_allowed_runtime_apply_contract",
+            ):
+                invalid_label_counts[violation_key] = sum(
+                    1
+                    for row in stage_rows
+                    if violation_key
+                    in _row_contract_violations(stage, row, contract).get("invalid_fields", [])
                 )
         for field in contract.zero_sensitive_fields:
             zero_counts[field] = sum(
