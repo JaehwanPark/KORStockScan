@@ -1,7 +1,7 @@
 # Observation Source Quality Audit - 2026-06-22
 
 - status: `pass`
-- event_count: `81409`
+- event_count: `82700`
 - tuning_input_policy: `exclude_defective_rows_not_full_day_raw`
 - hard_blocking_excluded_row_count: `0`
 - tuning_input_allowed: `True`
@@ -39,16 +39,16 @@
 ## Top Stages
 - `scalping_scanner_candidate_observed`: `14535`
 - `scalping_scanner_real_source_guard_block`: `14533`
-- `scalping_scanner_fast_precheck`: `4838`
-- `scalping_scanner_runtime_queue_lag`: `4762`
-- `scalping_scanner_watching_runtime_skip`: `3670`
+- `scalping_scanner_fast_precheck`: `5119`
+- `scalping_scanner_runtime_queue_lag`: `4997`
+- `scalping_scanner_watching_runtime_skip`: `3957`
 - `scalping_scanner_candidate_promoted`: `2273`
 - `bad_entry_refined_candidate`: `2037`
-- `scalping_scanner_runtime_target_attach`: `1957`
+- `scalping_scanner_runtime_target_attach`: `1971`
 - `stat_action_decision_snapshot`: `1696`
-- `scalping_scanner_heavy_eval_lag`: `1614`
+- `scalping_scanner_heavy_eval_lag`: `1656`
 - `strength_momentum_observed`: `1586`
-- `swing_probe_discarded`: `1328`
+- `swing_probe_discarded`: `1413`
 - `ai_holding_fast_reuse_band`: `1261`
 - `ai_holding_reuse_bypass`: `1261`
 - `scalp_sim_ai_holding_live_call`: `1097`
@@ -56,4 +56,4 @@
 - `reversal_add_blocked_reason`: `1039`
 - `scalp_entry_action_decision_snapshot`: `984`
 - `scalp_sim_panic_scale_in_blocked`: `871`
-- `budget_pass`: `809`
+- `budget_pass`: `851`

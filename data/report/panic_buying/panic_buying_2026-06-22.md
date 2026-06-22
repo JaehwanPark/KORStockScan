@@ -8,8 +8,8 @@
 - risk_regime_threshold_mode: `dynamic_quantile`
 - report_only: `true`
 - runtime_effect: `report_only_no_mutation`
-- as_of: `2026-06-22T15:23:06`
-- latest_event_at: `2026-06-22T15:23:05`
+- as_of: `2026-06-22T15:50:27`
+- latest_event_at: `2026-06-22T15:44:46`
 - reasons: `no panic buying threshold breached`
 
 ## 패닉바잉 지표
@@ -33,7 +33,7 @@
 
 - tp_like_exit_count: `0`
 - real_exit_count: `0`
-- non_real_exit_count: `650`
+- non_real_exit_count: `652`
 - unproven_exit_count: `0`
 - trailing_winner_count: `0`
 - candidate_context_count: `0`
@@ -43,9 +43,9 @@
 ## Microstructure Detector
 
 - input_universe: `entry_observation_only`
-- input_event_count: `67047`
-- excluded_holding_row_count: `14469`
-- excluded_exit_sell_row_count: `650`
+- input_event_count: `67958`
+- excluded_holding_row_count: `14471`
+- excluded_exit_sell_row_count: `652`
 - missing_orderbook_count: `1370`
 - degraded_orderbook_count: `1370`
 - missing_trade_aggressor_count: `1245`
