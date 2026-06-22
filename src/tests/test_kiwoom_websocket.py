@@ -91,3 +91,48 @@ def test_send_reg_subscribes_foreign_broker_and_program_types():
     reg_types = [entry["type"][0] for entry in payload["data"]]
     assert "0F" in reg_types
     assert "0w" in reg_types
+
+
+def test_send_reg_uses_exchange_aware_items_for_nxt(monkeypatch):
+    manager = KiwoomWSManager("test-token")
+    fake_ws = _FakeWS([])
+    manager.websocket = fake_ws
+    manager._session_ready.set()
+
+    monkeypatch.setattr(
+        "src.utils.kiwoom_utils.get_effective_kiwoom_code",
+        lambda code: f"{code}_AL" if code == "039490" else code,
+    )
+
+    asyncio.run(manager._send_reg(["039490"]))
+
+    payload = json.loads(fake_ws.sent[0])
+    assert payload["data"][0]["item"] == ["039490_AL"]
+    assert manager.subscribed_codes == {"039490"}
+
+
+def test_real_payload_with_exchange_suffix_updates_canonical_snapshot():
+    manager = KiwoomWSManager("test-token")
+    manager.subscribed_codes.add("039490")
+
+    asyncio.run(
+        manager._handle_message(
+            json.dumps(
+                {
+                    "trnm": "REAL",
+                    "data": [
+                        {
+                            "type": "0B",
+                            "item": "039490_AL",
+                            "values": {"10": "10000", "15": "+1", "228": "101.5"},
+                        }
+                    ],
+                }
+            )
+        )
+    )
+
+    assert "039490" in manager.realtime_data
+    assert "039490_AL" not in manager.realtime_data
+    assert manager.realtime_data["039490"]["curr"] == 10000
+    assert manager.realtime_data["039490"]["received_types"] == {"0B"}

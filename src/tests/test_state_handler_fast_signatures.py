@@ -425,6 +425,45 @@ def test_scanner_rising_strength_override_allows_exact_bid_imbalance_price_jump_
     assert result["scanner_context_emitted_epoch"] == "100.000"
 
 
+def test_scanner_rising_strength_override_allows_window_buy_value_recheck_case():
+    stock = {
+        "position_tag": "SCANNER",
+        "scanner_promotion_reason": "price_jump_start_acceleration",
+        "source_signature": "BID_IMBALANCE_SURGE,PRICE_JUMP_START,VOLUME_SURGE_POSITIVE",
+        "price_delta_since_first_seen_pct": "1.08",
+        "entry_armed_at_epoch": 100.0,
+    }
+
+    result = _resolve_scanner_rising_strength_momentum_override(
+        stock,
+        {"allowed": False, "reason": "below_window_buy_value"},
+    )
+
+    assert result["allowed"] is True
+    assert result["override_reason"] == "scanner_rising_bid_imbalance_strength_ai_recheck"
+    assert result["original_reason"] == "below_window_buy_value"
+    assert result["price_delta_since_first_seen_pct"] == "1.08"
+
+
+def test_scanner_rising_strength_override_allows_window_buy_value_without_bid_imbalance():
+    stock = {
+        "position_tag": "SCANNER",
+        "scanner_promotion_reason": "price_jump_start_acceleration",
+        "source_signature": "PRICE_JUMP_START,REALTIME_RANK_START,VOLUME_SURGE_POSITIVE",
+        "price_delta_since_first_seen_pct": "1.08",
+        "entry_armed_at_epoch": 100.0,
+    }
+
+    result = _resolve_scanner_rising_strength_momentum_override(
+        stock,
+        {"allowed": False, "reason": "below_window_buy_value"},
+    )
+
+    assert result["allowed"] is True
+    assert result["original_reason"] == "below_window_buy_value"
+    assert result["source_signature"] == "PRICE_JUMP_START,REALTIME_RANK_START,VOLUME_SURGE_POSITIVE"
+
+
 def test_scanner_rising_strength_override_uses_latest_qualifying_event_when_stock_context_is_overwritten(monkeypatch):
     monkeypatch.setattr(
         handlers,
@@ -491,6 +530,13 @@ def test_scanner_rising_strength_override_requires_bid_imbalance_price_jump_and_
     assert missing_bid_imbalance["allowed"] is False
     assert missing_bid_imbalance["skip_reason"] == "source_signature_not_bid_imbalance_price_jump"
 
+    missing_volume_for_window_reason = _resolve_scanner_rising_strength_momentum_override(
+        dict(base_stock),
+        {"allowed": False, "reason": "below_window_buy_value"},
+    )
+    assert missing_volume_for_window_reason["allowed"] is False
+    assert missing_volume_for_window_reason["skip_reason"] == "source_signature_not_price_volume_multisource"
+
     too_small_delta = _resolve_scanner_rising_strength_momentum_override(
         {**base_stock, "source_signature": "BID_IMBALANCE_SURGE,PRICE_JUMP_START", "price_delta_since_first_seen_pct": "0.99"},
         momentum_gate,
@@ -503,7 +549,7 @@ def test_scanner_rising_strength_override_requires_bid_imbalance_price_jump_and_
         {"allowed": False, "reason": "insufficient_history"},
     )
     assert different_reason["allowed"] is False
-    assert different_reason["skip_reason"] == "reason_not_below_strength_base"
+    assert different_reason["skip_reason"] == "reason_not_scanner_rising_recheckable"
 
 
 def test_scanner_rising_strength_override_respects_disable_flag(monkeypatch):
@@ -1761,6 +1807,44 @@ def test_log_entry_pipeline_refreshes_stale_scanner_promotion_id(monkeypatch):
     assert fields["price_delta_since_first_seen_pct"] == "1.45"
 
 
+def test_log_entry_pipeline_marks_scanner_terminal_block_freshness(monkeypatch):
+    monkeypatch.setattr(
+        handlers,
+        "emit_pipeline_event",
+        lambda *args, **kwargs: None,
+    )
+    fresh_stock = {
+        "id": 80,
+        "name": "PROMOTED",
+        "status": "WATCHING",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "entry_armed_at_epoch": 1000.0,
+    }
+    stale_stock = dict(fresh_stock, id=81)
+
+    _log_entry_pipeline(
+        fresh_stock,
+        "000080",
+        "blocked_vpw",
+        quote_age_ms=120.0,
+        tick_latest_age_ms=300.0,
+        snapshot_source="ws_snapshot_input",
+    )
+    _log_entry_pipeline(
+        stale_stock,
+        "000081",
+        "blocked_vpw",
+        quote_age_ms=120.0,
+        tick_latest_age_ms=300.0,
+        quote_stale=True,
+        snapshot_source="ws_snapshot_input",
+    )
+
+    assert fresh_stock["_scanner_watch_last_terminal_block"]["fresh_input_confirmed"] is True
+    assert stale_stock["_scanner_watch_last_terminal_block"]["fresh_input_confirmed"] is False
+
+
 def test_emit_scanner_watching_runtime_skip_fills_contract_fields(monkeypatch):
     emitted = []
     monkeypatch.setattr(
@@ -1813,6 +1897,45 @@ def test_emit_scanner_watching_runtime_skip_fills_contract_fields(monkeypatch):
     assert fields["entry_armed_at_epoch"] == 1000.0
     assert fields["ws_curr"] == "not_applicable_ws_curr"
     assert fields["ws_manager_available"] is True
+
+
+def test_emit_scanner_watching_runtime_skip_resets_terminal_eviction_memory(monkeypatch):
+    monkeypatch.setattr(
+        handlers,
+        "emit_pipeline_event",
+        lambda *args, **kwargs: None,
+    )
+    stock = {
+        "id": 79,
+        "name": "PROMOTED",
+        "status": "WATCHING",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "entry_armed_at_epoch": 1000.0,
+        "_scanner_watch_last_terminal_block": {"stage": "blocked_vpw"},
+        "_scanner_watch_eviction_terminal_stage": "blocked_vpw",
+        "_scanner_watch_eviction_terminal_reason": "below_vpw",
+        "_scanner_watch_eviction_terminal_count": 1,
+        "_scanner_watch_eviction_last_terminal_observed_epoch": 1000.0,
+    }
+
+    emitted = handlers.emit_scanner_watching_runtime_skip(
+        stock,
+        "000039",
+        skip_reason="entry_cooldown_active",
+        now_ts=1100.0,
+        ws_data={"curr": 12000},
+        throttle_sec=0,
+    )
+
+    assert emitted is True
+    assert "_scanner_watch_last_terminal_block" not in stock
+    assert "_scanner_watch_eviction_terminal_stage" not in stock
+    assert "_scanner_watch_eviction_terminal_reason" not in stock
+    assert "_scanner_watch_eviction_terminal_count" not in stock
+    assert "_scanner_watch_eviction_last_terminal_observed_epoch" not in stock
+    assert stock["_scanner_watch_last_pool_block"]["reason"] == "entry_cooldown_active"
+    assert stock["_scanner_watch_last_pool_block"]["observed_epoch"] == 1100.0
 
 
 def test_emit_scanner_watching_runtime_skip_throttles_same_reason(monkeypatch):
@@ -2001,6 +2124,31 @@ def test_emit_scanner_fast_precheck_and_heavy_eval_lag_are_order_forbidden(monke
     assert heavy["broker_order_forbidden"] is True
 
 
+def test_scanner_terminal_block_insufficient_history_is_not_fresh_for_eviction():
+    assert (
+        handlers._scanner_terminal_block_fresh_input_confirmed(
+            {
+                "reason": "insufficient_history",
+                "quote_age_ms": 100,
+                "tick_latest_age_ms": 100,
+                "snapshot_source": "ws_snapshot",
+            }
+        )
+        is False
+    )
+    assert (
+        handlers._scanner_terminal_block_fresh_input_confirmed(
+            {
+                "source_quality_block_reason": "single_snapshot_only",
+                "quote_age_ms": 100,
+                "tick_latest_age_ms": 100,
+                "snapshot_source": "ws_snapshot",
+            }
+        )
+        is False
+    )
+
+
 def test_pre_ai_blocked_gate_quality_fields_include_freshness_and_stability(monkeypatch):
     monkeypatch.setattr(handlers.time, "time", lambda: 1010.0)
     ws_data = {
@@ -2132,6 +2280,11 @@ def test_log_ai_confirmed_terminal_no_budget_emits_contract_fields(monkeypatch):
         "id": 44,
         "name": "AIWAIT",
         "last_watching_ai_action": "WAIT",
+        "last_watching_ai_source_quality_fields": {
+            "tick_source_quality_fields_sent": True,
+            "tick_context_quality": "fresh_computed",
+            "quote_age_source": "last_ws_update_ts",
+        },
     }
 
     _log_ai_confirmed_terminal_no_budget(
@@ -2155,6 +2308,9 @@ def test_log_ai_confirmed_terminal_no_budget_emits_contract_fields(monkeypatch):
     assert fields["source_stage"] == "first_ai_wait"
     assert fields["ai_score"] == "78.0"
     assert fields["ai_action"] == "BUY"
+    assert fields["tick_source_quality_fields_sent"] is True
+    assert fields["tick_context_quality"] == "fresh_computed"
+    assert fields["quote_age_source"] == "last_ws_update_ts"
 
 
 def test_first_ai_big_bite_wait_does_not_block_strong_buy():
@@ -2378,6 +2534,148 @@ def test_score65_74_recovery_probe_enforces_micro_context_hard_gate(monkeypatch)
         None,
         feature_probe=weak_micro_feature_probe,
     ) is False
+
+
+def test_score65_74_recovery_probe_allows_scanner_quote_stale_only_with_refresh_guard(monkeypatch):
+    rules = replace(
+        TRADING_RULES,
+        AI_SCORE65_74_RECOVERY_PROBE_ENABLED=True,
+        AI_SCORE65_74_RECOVERY_PROBE_MIN_SCORE=60,
+        AI_SCORE65_74_RECOVERY_PROBE_MAX_SCORE=74,
+        AI_SCORE65_74_RECOVERY_PROBE_MIN_BUY_PRESSURE=65.0,
+        AI_SCORE65_74_RECOVERY_PROBE_MIN_TICK_ACCEL=1.2,
+        AI_SCORE65_74_RECOVERY_PROBE_MIN_MICRO_VWAP_BP=0.0,
+        AI_SCORE65_74_RECOVERY_PROBE_ALLOW_QUOTE_STALE_WITH_PRE_SUBMIT_REFRESH=True,
+        AI_SCORE65_74_RECOVERY_PROBE_MAX_QUOTE_STALE_AGE_MS=7000,
+    )
+    monkeypatch.setattr("src.engine.sniper_state_handlers.TRADING_RULES", rules)
+    monkeypatch.setenv("KORSTOCKSCAN_SCALP_PRE_SUBMIT_QUOTE_REFRESH_ENABLED", "true")
+    feature_probe = {
+        "buy_pressure": 83.0,
+        "tick_accel": 1.55,
+        "micro_vwap_bp": 12.0,
+        "tick_context_stale": False,
+        "tick_context_quality": "fresh_computed",
+        "tick_accel_source": "computed_10ticks",
+        "quote_stale": True,
+        "quote_age_ms": 2500,
+    }
+
+    decision = _score65_74_recovery_probe_decision(
+        {"action": "WAIT", "reason": "position and speed advantage"},
+        74,
+        {"latency_state": "OK"},
+        [],
+        [],
+        None,
+        feature_probe=feature_probe,
+        stock={
+            "strategy": "SCALPING",
+            "position_tag": "SCANNER",
+            "status": "WATCHING",
+            "scanner_promotion_reason": "price_jump_multisource_confirmation",
+            "source_signature": "PRICE_JUMP_START,REALTIME_RANK_START,VOLUME_SURGE_POSITIVE",
+        },
+    )
+
+    assert decision["allowed"] is True
+    assert decision["score65_74_recovery_probe_quote_stale_relief_applied"] is True
+    assert decision["score65_74_recovery_probe_quote_stale_relief_reason"] == (
+        "quote_stale_only_pre_submit_refresh_required"
+    )
+
+
+def test_score65_74_recovery_probe_quote_stale_relief_stays_scanner_real_only(monkeypatch):
+    rules = replace(
+        TRADING_RULES,
+        AI_SCORE65_74_RECOVERY_PROBE_ENABLED=True,
+        AI_SCORE65_74_RECOVERY_PROBE_MIN_SCORE=60,
+        AI_SCORE65_74_RECOVERY_PROBE_MAX_SCORE=74,
+        AI_SCORE65_74_RECOVERY_PROBE_MIN_BUY_PRESSURE=65.0,
+        AI_SCORE65_74_RECOVERY_PROBE_MIN_TICK_ACCEL=1.2,
+        AI_SCORE65_74_RECOVERY_PROBE_MIN_MICRO_VWAP_BP=0.0,
+        AI_SCORE65_74_RECOVERY_PROBE_ALLOW_QUOTE_STALE_WITH_PRE_SUBMIT_REFRESH=True,
+    )
+    monkeypatch.setattr("src.engine.sniper_state_handlers.TRADING_RULES", rules)
+    feature_probe = {
+        "buy_pressure": 83.0,
+        "tick_accel": 1.55,
+        "micro_vwap_bp": 12.0,
+        "tick_context_stale": False,
+        "quote_stale": True,
+        "quote_age_ms": 2500,
+    }
+
+    decision = _score65_74_recovery_probe_decision(
+        {"action": "WAIT", "reason": "position and speed advantage"},
+        74,
+        {"latency_state": "OK"},
+        [],
+        [],
+        None,
+        feature_probe=feature_probe,
+        stock={"strategy": "SCALPING", "position_tag": "VWAP_RECLAIM", "status": "WATCHING"},
+    )
+
+    assert decision["allowed"] is False
+    assert decision["score65_74_recovery_probe_skip_reason"] == "source_quality_hard_block"
+    assert decision["score65_74_recovery_probe_quote_stale_relief_reason"] == (
+        "scope_not_real_scanner_rising_watching"
+    )
+
+
+def test_score65_74_recovery_probe_scanner_rising_micro_vwap_relief_is_narrow(monkeypatch):
+    rules = replace(
+        TRADING_RULES,
+        AI_SCORE65_74_RECOVERY_PROBE_ENABLED=True,
+        AI_SCORE65_74_RECOVERY_PROBE_MIN_SCORE=60,
+        AI_SCORE65_74_RECOVERY_PROBE_MAX_SCORE=74,
+        AI_SCORE65_74_RECOVERY_PROBE_MIN_BUY_PRESSURE=65.0,
+        AI_SCORE65_74_RECOVERY_PROBE_MIN_TICK_ACCEL=1.2,
+        AI_SCORE65_74_RECOVERY_PROBE_MIN_MICRO_VWAP_BP=0.0,
+        AI_SCORE65_74_RECOVERY_PROBE_SCANNER_RISING_MICRO_VWAP_RELIEF_ENABLED=True,
+        AI_SCORE65_74_RECOVERY_PROBE_SCANNER_RISING_MIN_MICRO_VWAP_BP=0.0,
+    )
+    monkeypatch.setattr("src.engine.sniper_state_handlers.TRADING_RULES", rules)
+    feature_probe = {
+        "buy_pressure": 83.0,
+        "tick_accel": 1.55,
+        "micro_vwap_bp": 2.0,
+        "tick_context_stale": False,
+        "quote_stale": False,
+    }
+
+    scanner_decision = _score65_74_recovery_probe_decision(
+        {"action": "WAIT", "reason": "position and speed advantage"},
+        74,
+        {"latency_state": "OK"},
+        [],
+        [],
+        None,
+        feature_probe=feature_probe,
+        stock={
+            "strategy": "SCALPING",
+            "position_tag": "SCANNER",
+            "status": "WATCHING",
+            "scanner_promotion_reason": "price_jump_multisource_confirmation",
+            "source_signature": "PRICE_JUMP_START,REALTIME_RANK_START,VOLUME_SURGE_POSITIVE",
+        },
+    )
+    non_scanner_decision = _score65_74_recovery_probe_decision(
+        {"action": "WAIT", "reason": "position and speed advantage"},
+        74,
+        {"latency_state": "OK"},
+        [],
+        [],
+        None,
+        feature_probe=feature_probe,
+        stock={"strategy": "SCALPING", "position_tag": "VWAP_RECLAIM", "status": "WATCHING"},
+    )
+
+    assert scanner_decision["allowed"] is True
+    assert scanner_decision["score65_74_recovery_probe_scanner_rising_micro_relief_applied"] is True
+    assert non_scanner_decision["allowed"] is False
+    assert non_scanner_decision["score65_74_recovery_probe_skip_reason"] == "micro_vwap_below_min"
 
 
 def test_score65_74_recovery_probe_strong_micro_override_relaxes_tick_only_veto(monkeypatch):

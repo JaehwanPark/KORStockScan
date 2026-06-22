@@ -590,6 +590,16 @@ def _latency_danger_reasons(latency_status) -> list[str]:
     return reasons
 
 
+def _danger_latency_relief_runtime_enabled() -> bool:
+    return any(
+        bool(getattr(TRADING_RULES, attr, False))
+        for attr in (
+            "SCALP_LATENCY_OTHER_DANGER_RELIEF_CANARY_ENABLED",
+            "SCALP_LATENCY_SPREAD_RELIEF_CANARY_ENABLED",
+        )
+    )
+
+
 def _should_apply_latency_submit_recovery_canary(
     *,
     strategy_id: str,
@@ -1215,6 +1225,7 @@ def _should_apply_latency_ws_jitter_relief_canary(
 
 def _should_apply_latency_other_danger_relief_canary(
     *,
+    code: str,
     strategy_id: str,
     position_tag: str,
     signal_strength: float,
@@ -1264,6 +1275,18 @@ def _should_apply_latency_other_danger_relief_canary(
     )
     if _to_float(getattr(latency_status, "spread_ratio", 0.0), 0.0) > max_spread_ratio:
         return False, "spread_limit_exceeded"
+
+    if bool(getattr(TRADING_RULES, "SCALP_LATENCY_OTHER_DANGER_RELIEF_BLOCK_UNSTABLE_QUOTE", True)):
+        stability = ORDERBOOK_STABILITY_OBSERVER.snapshot(code) if code else {}
+        if bool(stability.get("unstable_quote_observed")):
+            return False, "unstable_quote_observed"
+        if "print_quote_alignment" in stability:
+            min_alignment = _to_float(
+                getattr(TRADING_RULES, "SCALP_LATENCY_OTHER_DANGER_RELIEF_MIN_PRINT_QUOTE_ALIGNMENT", 0.90),
+                0.90,
+            )
+            if min_alignment > 0 and _to_float(stability.get("print_quote_alignment"), 1.0) < min_alignment:
+                return False, "print_quote_alignment_too_low"
 
     allowed_slippage = _ENTRY_POLICY._allowed_slippage(
         signal_price=signal_price,
@@ -1414,8 +1437,10 @@ def evaluate_live_buy_entry(
     latency_canary_applied = False
     latency_canary_reason = ""
     latency_danger_reasons = ",".join(_latency_danger_reasons(latency))
-    danger_relief_forbidden = policy.decision == EntryDecision.REJECT_DANGER
-    if danger_relief_forbidden:
+    danger_relief_forbidden = (
+        policy.decision == EntryDecision.REJECT_DANGER and not _danger_latency_relief_runtime_enabled()
+    )
+    if policy.decision == EntryDecision.REJECT_DANGER:
         latency_canary_reason = "danger_hard_safety_block"
     if policy.decision == EntryDecision.REJECT_MARKET_CONDITION and policy.reason == "latency_fallback_deprecated":
         recovery_ok, recovery_reason = _should_apply_latency_submit_recovery_canary(
@@ -1493,6 +1518,7 @@ def evaluate_live_buy_entry(
 
     if policy.decision == EntryDecision.REJECT_DANGER and not danger_relief_forbidden and effective_decision == EntryDecision.REJECT_DANGER:
         other_danger_relief_ok, other_danger_relief_reason = _should_apply_latency_other_danger_relief_canary(
+            code=code,
             strategy_id=strategy_id,
             position_tag=str(stock.get("position_tag") or ""),
             signal_strength=float(signal_strength or 0.0),
@@ -1549,7 +1575,7 @@ def evaluate_live_buy_entry(
         or stock.get("momentum_tag")
         or ""
     )
-    if policy.decision == EntryDecision.REJECT_DANGER and effective_decision == EntryDecision.REJECT_DANGER:
+    if policy.decision == EntryDecision.REJECT_DANGER and not danger_relief_forbidden and effective_decision == EntryDecision.REJECT_DANGER:
         spread_relief_ok, spread_relief_reason = _should_apply_latency_spread_relief_canary(
             code=code,
             strategy_id=strategy_id,

@@ -106,7 +106,24 @@ class KiwoomWSManager:
 
     @staticmethod
     def _normalize_code(code):
-        return str(code or '').strip()[:6]
+        raw = str(code or '').strip().upper().replace('.0', '')
+        for suffix in ('_AL', '_NX'):
+            if raw.endswith(suffix):
+                raw = raw[:-3]
+                break
+        if raw.startswith('A') and len(raw) >= 7:
+            raw = raw[1:]
+        digits = ''.join(ch for ch in raw if ch.isdigit())
+        return digits[-6:].zfill(6) if digits else raw[:6]
+
+    @staticmethod
+    def _explicit_ws_item(raw_code, canonical_code):
+        raw = str(raw_code or '').strip().upper().replace('.0', '')
+        if raw.endswith('_AL'):
+            return f"{canonical_code}_AL"
+        if raw.endswith('_NX'):
+            return f"{canonical_code}_NX"
+        return None
 
     def _parse_order_execution_notice(self, values):
         status = str(values.get('913', '')).strip()
@@ -149,6 +166,38 @@ class KiwoomWSManager:
         if invalid:
             print(f"⚠️ [WS] 실시간 등록 제외 코드: {invalid}")
         return normalized
+
+    def _resolve_ws_register_items(self, codes):
+        """Return canonical subscription codes and Kiwoom exchange-aware REG items."""
+        normalized_codes = self._normalize_subscribe_codes(codes)
+        if not normalized_codes:
+            return [], []
+
+        explicit_by_code = {}
+        for raw_code in codes or []:
+            canonical = self._normalize_code(raw_code)
+            if canonical in normalized_codes:
+                explicit = self._explicit_ws_item(raw_code, canonical)
+                if explicit:
+                    explicit_by_code[canonical] = explicit
+
+        register_items = []
+        try:
+            from src.utils import kiwoom_utils
+
+            for code in normalized_codes:
+                register_items.append(
+                    explicit_by_code.get(code)
+                    or kiwoom_utils.get_effective_kiwoom_code(code)
+                )
+        except Exception as exc:
+            log_error(f"🚨 [WS] 거래소별 실시간 등록 코드 변환 실패. 6자리 코드로 폴백합니다: {exc}")
+            register_items = [
+                explicit_by_code.get(code) or code
+                for code in normalized_codes
+            ]
+
+        return normalized_codes, register_items
 
     @staticmethod
     def _parse_condition_list_rows(data_list):
@@ -814,7 +863,8 @@ class KiwoomWSManager:
                     # ===================================================
                     # [트랙 B] 실시간 주가/호가 데이터 처리
                     # ===================================================
-                    item_code = d.get('item', '')
+                    raw_item_code = d.get('item', '')
+                    item_code = self._normalize_code(raw_item_code)
                     if item_code and real_type != '00':
                         if item_code not in self.subscribed_codes:
                             continue
@@ -1019,7 +1069,7 @@ class KiwoomWSManager:
 
     async def _send_reg(self, codes):
         try:
-            normalized_codes = self._normalize_subscribe_codes(codes)
+            normalized_codes, register_items = self._resolve_ws_register_items(codes)
             if not normalized_codes:
                 print("⚠️ [WS] 등록 가능한 유효 종목코드가 없어 REG 전송을 생략합니다.")
                 return
@@ -1036,20 +1086,26 @@ class KiwoomWSManager:
 
             if self.websocket and self._session_ready.is_set():
                 batch_size = int(getattr(TRADING_RULES, 'WS_REG_BATCH_SIZE', 20) or 20)
-                total_batches = (len(normalized_codes) + batch_size - 1) // batch_size
-                print(f"📝 [WS] 종목 등록(REG) 전송 시도: {normalized_codes} (batch_size={batch_size})")
-                for batch_index, batch_codes in enumerate(self._chunked(normalized_codes, batch_size), start=1):
+                registration_pairs = list(zip(normalized_codes, register_items))
+                total_batches = (len(registration_pairs) + batch_size - 1) // batch_size
+                print(
+                    f"📝 [WS] 종목 등록(REG) 전송 시도: {normalized_codes} "
+                    f"(items={register_items}, batch_size={batch_size})"
+                )
+                for batch_index, batch_pairs in enumerate(self._chunked(registration_pairs, batch_size), start=1):
                     if self._stop_event.is_set() or not self.websocket:
                         return
+                    batch_codes = [code for code, _ in batch_pairs]
+                    batch_items = [item for _, item in batch_pairs]
                     reg_packet = {
                         'trnm': 'REG',
                         'grp_no': '1',
                         'refresh': '1',
                         'data': [
-                            {'item': batch_codes, 'type': ['0B']},
-                            {'item': batch_codes, 'type': ['0D']},
-                            {'item': batch_codes, 'type': ['0w']},
-                            {'item': batch_codes, 'type': ['0F']}
+                            {'item': batch_items, 'type': ['0B']},
+                            {'item': batch_items, 'type': ['0D']},
+                            {'item': batch_items, 'type': ['0w']},
+                            {'item': batch_items, 'type': ['0F']}
                         ]
                     }
                     await self.websocket.send(json.dumps(reg_packet))

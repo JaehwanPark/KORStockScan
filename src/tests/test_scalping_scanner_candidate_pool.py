@@ -53,6 +53,76 @@ def test_resolve_scan_interval_matches_intraday_schedule():
     assert scalping_scanner._resolve_scan_interval_sec(time(15, 0)) == 90
 
 
+def test_promote_candidates_skips_when_active_scanner_cap_reached(monkeypatch):
+    monkeypatch.setenv("KORSTOCKSCAN_SCALPING_WATCHING_MAX_ACTIVE", "1")
+    db = _DB()
+    db.records.append(
+        SimpleNamespace(
+            status="WATCHING",
+            strategy="SCALPING",
+            position_tag="SCANNER",
+            buy_time=None,
+            buy_qty=0,
+        )
+    )
+    event_bus = _EventBus()
+
+    codes, recent = scalping_scanner.promote_candidates(
+        db,
+        event_bus,
+        [{"Code": "000001", "Name": "CAPPED", "Price": 10000, "Source": "PRICE_JUMP_START"}],
+        {},
+        max_new_codes=12,
+        reentry_cooldown_sec=1500,
+        token="TOKEN",
+        now_ts=1000.0,
+    )
+
+    assert codes == []
+    assert recent == {}
+    assert event_bus.events == []
+    assert len(db.records) == 1
+
+
+def test_promote_candidates_limits_new_codes_to_remaining_active_slots(monkeypatch):
+    monkeypatch.setenv("KORSTOCKSCAN_SCALPING_WATCHING_MAX_ACTIVE", "2")
+    monkeypatch.setattr(kiwoom_utils, "is_valid_stock", lambda *args, **kwargs: True)
+    monkeypatch.setattr(scalping_scanner, "_scanner_candidate_pre_filter_reason", lambda target: "")
+    monkeypatch.setattr(scalping_scanner, "_should_promote_candidate", lambda *args, **kwargs: True)
+    monkeypatch.setattr(scalping_scanner, "_scanner_real_source_guard_decision", lambda *args, **kwargs: {"blocked": False})
+    db = _DB()
+    db.records.append(
+        SimpleNamespace(
+            status="WATCHING",
+            strategy="SCALPING",
+            position_tag="SCANNER",
+            buy_time=None,
+            buy_qty=0,
+        )
+    )
+    event_bus = _EventBus()
+
+    ranked_targets = [
+        {"Code": "000001", "Name": "FIRST", "Price": 10000, "Source": "PRICE_JUMP_START"},
+        {"Code": "000002", "Name": "SECOND", "Price": 11000, "Source": "PRICE_JUMP_START"},
+    ]
+    codes, _ = scalping_scanner.promote_candidates(
+        db,
+        event_bus,
+        ranked_targets,
+        {},
+        max_new_codes=12,
+        reentry_cooldown_sec=1500,
+        token="TOKEN",
+        now_ts=1000.0,
+    )
+
+    assert codes == ["000001"]
+    assert _event_payloads(event_bus, "COMMAND_WS_REG") == [{"codes": ["000001"]}]
+    assert len(_event_payloads(event_bus, "SCALPING_SCANNER_PROMOTED_TARGET")) == 1
+    assert len(db.records) == 2
+
+
 def test_scanner_priority_tiering_sorts_acceleration_before_plain_price_jump(monkeypatch):
     monkeypatch.setattr(
         scalping_scanner,

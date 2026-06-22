@@ -131,6 +131,8 @@ class TradingConfig:
     SCALP_SIM_CANDIDATE_WINDOW_MAX_SCORE: int = 100
     SCALP_SIM_CANDIDATE_WINDOW_MAX_OPEN: int = 20
     SCALP_SIM_CANDIDATE_WINDOW_MAX_DAILY: int = 240
+    SCALP_SIM_CANDIDATE_WINDOW_RUNTIME_MAX_OPEN_CAP: int = 8
+    SCALP_SIM_CANDIDATE_WINDOW_RUNTIME_MAX_DAILY_CAP: int = 80
     SCALP_SIM_CANDIDATE_WINDOW_BLOCKED_AI_SCORE_MAX_SHARE_PCT: int = 60
     SCALP_SIM_CANDIDATE_WINDOW_FIRST_AI_WAIT_MIN_SHARE_PCT: int = 30
     SCALP_SIM_CANDIDATE_WINDOW_TIME_BUCKET_POLICY: str = (
@@ -508,6 +510,8 @@ class TradingConfig:
     SCALP_LATENCY_OTHER_DANGER_RELIEF_MAX_WS_AGE_MS: int = 400  # other_danger relief 최대 ws_age
     SCALP_LATENCY_OTHER_DANGER_RELIEF_MAX_WS_JITTER_MS: int = 80  # other_danger relief 최대 허용 ws_jitter
     SCALP_LATENCY_OTHER_DANGER_RELIEF_MAX_SPREAD_RATIO: float = 0.0080  # other_danger relief 최대 허용 spread_ratio
+    SCALP_LATENCY_OTHER_DANGER_RELIEF_BLOCK_UNSTABLE_QUOTE: bool = True
+    SCALP_LATENCY_OTHER_DANGER_RELIEF_MIN_PRINT_QUOTE_ALIGNMENT: float = 0.90
     SCALP_DYNAMIC_STRENGTH_RELIEF_ENABLED: bool = True  # dynamic strength 근소 미달 조건부 완화
     SCALP_DYNAMIC_STRENGTH_RELIEF_TAGS: tuple = ("SCANNER", "VWAP_RECLAIM", "OPEN_RECLAIM")  # dynamic relief 적용 태그
     SCALP_DYNAMIC_STRENGTH_RELIEF_ALLOWED_REASONS: tuple = (
@@ -626,7 +630,8 @@ class TradingConfig:
     MARKET_OPEN_TIME: str = "09:00:00"
     SCALPING_EARLIEST_BUY_TIME: str = "09:03:00"
     SWING_EARLIEST_BUY_TIME: str = "09:05:00"
-    SCALPING_NEW_BUY_CUTOFF: str = "15:00:00"
+    SCALPING_BUY_WINDOWS: str = "08:05:00-08:40:00,09:05:00-15:00:00,16:00:00-19:45:00"
+    SCALPING_NEW_BUY_CUTOFF: str = "19:45:00"
     SCALPING_OVERNIGHT_DECISION_TIME: str = "15:10:00"
     MARKET_CLOSE_TIME: str = "15:30:00"
     SYSTEM_SHUTDOWN_TIME: str = "20:00:00"
@@ -670,6 +675,10 @@ class TradingConfig:
     AI_SCORE65_74_RECOVERY_PROBE_STRONG_MICRO_OVERRIDE_ENABLED: bool = False
     AI_SCORE65_74_RECOVERY_PROBE_STRONG_MICRO_MIN_BUY_PRESSURE: float = 85.0
     AI_SCORE65_74_RECOVERY_PROBE_STRONG_MICRO_MIN_MICRO_VWAP_BP: float = 30.0
+    AI_SCORE65_74_RECOVERY_PROBE_ALLOW_QUOTE_STALE_WITH_PRE_SUBMIT_REFRESH: bool = False
+    AI_SCORE65_74_RECOVERY_PROBE_MAX_QUOTE_STALE_AGE_MS: int = 7000
+    AI_SCORE65_74_RECOVERY_PROBE_SCANNER_RISING_MICRO_VWAP_RELIEF_ENABLED: bool = False
+    AI_SCORE65_74_RECOVERY_PROBE_SCANNER_RISING_MIN_MICRO_VWAP_BP: float = 0.0
     AI_SCORE65_74_RECOVERY_PROBE_THRESHOLD_VERSION: str = "runtime_default"
     AI_SCORE65_74_RECOVERY_PROBE_CALIBRATION_STATE: str = "runtime_default"
     SCALPING_PROMPT_SPLIT_ENABLED: bool = True  # WATCHING/HOLDING 프롬프트 분리 on/off 롤백 토글
@@ -959,6 +968,28 @@ def _build_trading_rules() -> TradingConfig:
     env_spread_relief_min_print_alignment = _env_float(
         "KORSTOCKSCAN_SCALP_LATENCY_SPREAD_RELIEF_MIN_PRINT_QUOTE_ALIGNMENT"
     )
+    env_other_danger_relief_enabled = _env_bool(
+        "KORSTOCKSCAN_SCALP_LATENCY_OTHER_DANGER_RELIEF_CANARY_ENABLED"
+    )
+    env_other_danger_relief_tags = _env_csv_tuple("KORSTOCKSCAN_SCALP_LATENCY_OTHER_DANGER_RELIEF_TAGS")
+    env_other_danger_relief_min_signal = _env_float(
+        "KORSTOCKSCAN_SCALP_LATENCY_OTHER_DANGER_RELIEF_MIN_SIGNAL_SCORE"
+    )
+    env_other_danger_relief_max_ws_age = _env_int(
+        "KORSTOCKSCAN_SCALP_LATENCY_OTHER_DANGER_RELIEF_MAX_WS_AGE_MS"
+    )
+    env_other_danger_relief_max_ws_jitter = _env_int(
+        "KORSTOCKSCAN_SCALP_LATENCY_OTHER_DANGER_RELIEF_MAX_WS_JITTER_MS"
+    )
+    env_other_danger_relief_max_spread = _env_float(
+        "KORSTOCKSCAN_SCALP_LATENCY_OTHER_DANGER_RELIEF_MAX_SPREAD_RATIO"
+    )
+    env_other_danger_relief_block_unstable = _env_bool(
+        "KORSTOCKSCAN_SCALP_LATENCY_OTHER_DANGER_RELIEF_BLOCK_UNSTABLE_QUOTE"
+    )
+    env_other_danger_relief_min_print_alignment = _env_float(
+        "KORSTOCKSCAN_SCALP_LATENCY_OTHER_DANGER_RELIEF_MIN_PRINT_QUOTE_ALIGNMENT"
+    )
     env_mechanical_momentum_enabled = _env_bool(
         "KORSTOCKSCAN_SCALP_LATENCY_MECHANICAL_MOMENTUM_RELIEF_CANARY_ENABLED"
     )
@@ -1005,6 +1036,14 @@ def _build_trading_rules() -> TradingConfig:
         or env_spread_relief_max_spread is not None
         or env_spread_relief_block_unstable is not None
         or env_spread_relief_min_print_alignment is not None
+        or env_other_danger_relief_enabled is not None
+        or env_other_danger_relief_tags is not None
+        or env_other_danger_relief_min_signal is not None
+        or env_other_danger_relief_max_ws_age is not None
+        or env_other_danger_relief_max_ws_jitter is not None
+        or env_other_danger_relief_max_spread is not None
+        or env_other_danger_relief_block_unstable is not None
+        or env_other_danger_relief_min_print_alignment is not None
         or env_mechanical_momentum_enabled is not None
         or env_mechanical_momentum_tags is not None
         or env_mechanical_momentum_max_signal is not None
@@ -1079,6 +1118,30 @@ def _build_trading_rules() -> TradingConfig:
             SCALP_LATENCY_SPREAD_RELIEF_MIN_PRINT_QUOTE_ALIGNMENT=env_spread_relief_min_print_alignment
             if env_spread_relief_min_print_alignment is not None
             else config.SCALP_LATENCY_SPREAD_RELIEF_MIN_PRINT_QUOTE_ALIGNMENT,
+            SCALP_LATENCY_OTHER_DANGER_RELIEF_CANARY_ENABLED=env_other_danger_relief_enabled
+            if env_other_danger_relief_enabled is not None
+            else config.SCALP_LATENCY_OTHER_DANGER_RELIEF_CANARY_ENABLED,
+            SCALP_LATENCY_OTHER_DANGER_RELIEF_TAGS=env_other_danger_relief_tags
+            if env_other_danger_relief_tags is not None
+            else config.SCALP_LATENCY_OTHER_DANGER_RELIEF_TAGS,
+            SCALP_LATENCY_OTHER_DANGER_RELIEF_MIN_SIGNAL_SCORE=env_other_danger_relief_min_signal
+            if env_other_danger_relief_min_signal is not None
+            else config.SCALP_LATENCY_OTHER_DANGER_RELIEF_MIN_SIGNAL_SCORE,
+            SCALP_LATENCY_OTHER_DANGER_RELIEF_MAX_WS_AGE_MS=env_other_danger_relief_max_ws_age
+            if env_other_danger_relief_max_ws_age is not None
+            else config.SCALP_LATENCY_OTHER_DANGER_RELIEF_MAX_WS_AGE_MS,
+            SCALP_LATENCY_OTHER_DANGER_RELIEF_MAX_WS_JITTER_MS=env_other_danger_relief_max_ws_jitter
+            if env_other_danger_relief_max_ws_jitter is not None
+            else config.SCALP_LATENCY_OTHER_DANGER_RELIEF_MAX_WS_JITTER_MS,
+            SCALP_LATENCY_OTHER_DANGER_RELIEF_MAX_SPREAD_RATIO=env_other_danger_relief_max_spread
+            if env_other_danger_relief_max_spread is not None
+            else config.SCALP_LATENCY_OTHER_DANGER_RELIEF_MAX_SPREAD_RATIO,
+            SCALP_LATENCY_OTHER_DANGER_RELIEF_BLOCK_UNSTABLE_QUOTE=env_other_danger_relief_block_unstable
+            if env_other_danger_relief_block_unstable is not None
+            else config.SCALP_LATENCY_OTHER_DANGER_RELIEF_BLOCK_UNSTABLE_QUOTE,
+            SCALP_LATENCY_OTHER_DANGER_RELIEF_MIN_PRINT_QUOTE_ALIGNMENT=env_other_danger_relief_min_print_alignment
+            if env_other_danger_relief_min_print_alignment is not None
+            else config.SCALP_LATENCY_OTHER_DANGER_RELIEF_MIN_PRINT_QUOTE_ALIGNMENT,
             SCALP_LATENCY_MECHANICAL_MOMENTUM_RELIEF_CANARY_ENABLED=env_mechanical_momentum_enabled
             if env_mechanical_momentum_enabled is not None
             else config.SCALP_LATENCY_MECHANICAL_MOMENTUM_RELIEF_CANARY_ENABLED,
@@ -1131,6 +1194,18 @@ def _build_trading_rules() -> TradingConfig:
     env_score6574_probe_strong_micro_min_vwap_bp = _env_float(
         "KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_STRONG_MICRO_MIN_MICRO_VWAP_BP"
     )
+    env_score6574_probe_allow_quote_stale_refresh = _env_bool(
+        "KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_ALLOW_QUOTE_STALE_WITH_PRE_SUBMIT_REFRESH"
+    )
+    env_score6574_probe_max_quote_stale_age = _env_int(
+        "KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_MAX_QUOTE_STALE_AGE_MS"
+    )
+    env_score6574_probe_scanner_rising_micro_relief = _env_bool(
+        "KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_SCANNER_RISING_MICRO_VWAP_RELIEF_ENABLED"
+    )
+    env_score6574_probe_scanner_rising_min_micro = _env_float(
+        "KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_SCANNER_RISING_MIN_MICRO_VWAP_BP"
+    )
     env_score6574_probe_threshold_version = _env_str("KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_THRESHOLD_VERSION")
     env_score6574_probe_calibration_state = _env_str("KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_CALIBRATION_STATE")
     env_scalping_prompt_split_enabled = _env_bool("KORSTOCKSCAN_SCALPING_PROMPT_SPLIT_ENABLED")
@@ -1166,6 +1241,10 @@ def _build_trading_rules() -> TradingConfig:
         or env_score6574_probe_strong_micro_override_enabled is not None
         or env_score6574_probe_strong_micro_min_pressure is not None
         or env_score6574_probe_strong_micro_min_vwap_bp is not None
+        or env_score6574_probe_allow_quote_stale_refresh is not None
+        or env_score6574_probe_max_quote_stale_age is not None
+        or env_score6574_probe_scanner_rising_micro_relief is not None
+        or env_score6574_probe_scanner_rising_min_micro is not None
         or env_score6574_probe_threshold_version is not None
         or env_score6574_probe_calibration_state is not None
         or env_scalping_prompt_split_enabled is not None
@@ -1241,6 +1320,18 @@ def _build_trading_rules() -> TradingConfig:
             AI_SCORE65_74_RECOVERY_PROBE_STRONG_MICRO_MIN_MICRO_VWAP_BP=env_score6574_probe_strong_micro_min_vwap_bp
             if env_score6574_probe_strong_micro_min_vwap_bp is not None
             else config.AI_SCORE65_74_RECOVERY_PROBE_STRONG_MICRO_MIN_MICRO_VWAP_BP,
+            AI_SCORE65_74_RECOVERY_PROBE_ALLOW_QUOTE_STALE_WITH_PRE_SUBMIT_REFRESH=env_score6574_probe_allow_quote_stale_refresh
+            if env_score6574_probe_allow_quote_stale_refresh is not None
+            else config.AI_SCORE65_74_RECOVERY_PROBE_ALLOW_QUOTE_STALE_WITH_PRE_SUBMIT_REFRESH,
+            AI_SCORE65_74_RECOVERY_PROBE_MAX_QUOTE_STALE_AGE_MS=env_score6574_probe_max_quote_stale_age
+            if env_score6574_probe_max_quote_stale_age is not None
+            else config.AI_SCORE65_74_RECOVERY_PROBE_MAX_QUOTE_STALE_AGE_MS,
+            AI_SCORE65_74_RECOVERY_PROBE_SCANNER_RISING_MICRO_VWAP_RELIEF_ENABLED=env_score6574_probe_scanner_rising_micro_relief
+            if env_score6574_probe_scanner_rising_micro_relief is not None
+            else config.AI_SCORE65_74_RECOVERY_PROBE_SCANNER_RISING_MICRO_VWAP_RELIEF_ENABLED,
+            AI_SCORE65_74_RECOVERY_PROBE_SCANNER_RISING_MIN_MICRO_VWAP_BP=env_score6574_probe_scanner_rising_min_micro
+            if env_score6574_probe_scanner_rising_min_micro is not None
+            else config.AI_SCORE65_74_RECOVERY_PROBE_SCANNER_RISING_MIN_MICRO_VWAP_BP,
             AI_SCORE65_74_RECOVERY_PROBE_THRESHOLD_VERSION=env_score6574_probe_threshold_version
             if env_score6574_probe_threshold_version is not None
             else config.AI_SCORE65_74_RECOVERY_PROBE_THRESHOLD_VERSION,
@@ -2437,6 +2528,12 @@ def _build_trading_rules() -> TradingConfig:
     env_scalp_sim_candidate_window_max_daily = _env_int(
         "KORSTOCKSCAN_SCALP_SIM_CANDIDATE_WINDOW_MAX_DAILY"
     )
+    env_scalp_sim_candidate_window_runtime_max_open_cap = _env_int(
+        "KORSTOCKSCAN_SCALP_SIM_CANDIDATE_WINDOW_RUNTIME_MAX_OPEN_CAP"
+    )
+    env_scalp_sim_candidate_window_runtime_max_daily_cap = _env_int(
+        "KORSTOCKSCAN_SCALP_SIM_CANDIDATE_WINDOW_RUNTIME_MAX_DAILY_CAP"
+    )
     env_scalp_sim_candidate_window_blocked_ai_max_share = _env_int(
         "KORSTOCKSCAN_SCALP_SIM_CANDIDATE_WINDOW_BLOCKED_AI_SCORE_MAX_SHARE_PCT"
     )
@@ -2648,6 +2745,8 @@ def _build_trading_rules() -> TradingConfig:
     env_sell_order_failure_retry_backoff_sec = _env_int(
         "KORSTOCKSCAN_SELL_ORDER_FAILURE_RETRY_BACKOFF_SEC"
     )
+    env_scalping_buy_windows = _env_str("KORSTOCKSCAN_SCALPING_BUY_WINDOWS")
+    env_scalping_new_buy_cutoff = _env_str("KORSTOCKSCAN_SCALPING_NEW_BUY_CUTOFF")
     if (
         env_scalping_enable_pyramid is not None
         or env_invest_ratio_scalping_min is not None
@@ -2741,6 +2840,8 @@ def _build_trading_rules() -> TradingConfig:
         or env_same_symbol_loss_reentry_cooldown_sec is not None
         or env_sell_order_failure_retry_backoff_enabled is not None
         or env_sell_order_failure_retry_backoff_sec is not None
+        or env_scalping_buy_windows is not None
+        or env_scalping_new_buy_cutoff is not None
     ):
         config = replace(
             config,
@@ -2858,6 +2959,12 @@ def _build_trading_rules() -> TradingConfig:
             SCALP_SIM_CANDIDATE_WINDOW_MAX_DAILY=env_scalp_sim_candidate_window_max_daily
             if env_scalp_sim_candidate_window_max_daily is not None
             else config.SCALP_SIM_CANDIDATE_WINDOW_MAX_DAILY,
+            SCALP_SIM_CANDIDATE_WINDOW_RUNTIME_MAX_OPEN_CAP=env_scalp_sim_candidate_window_runtime_max_open_cap
+            if env_scalp_sim_candidate_window_runtime_max_open_cap is not None
+            else config.SCALP_SIM_CANDIDATE_WINDOW_RUNTIME_MAX_OPEN_CAP,
+            SCALP_SIM_CANDIDATE_WINDOW_RUNTIME_MAX_DAILY_CAP=env_scalp_sim_candidate_window_runtime_max_daily_cap
+            if env_scalp_sim_candidate_window_runtime_max_daily_cap is not None
+            else config.SCALP_SIM_CANDIDATE_WINDOW_RUNTIME_MAX_DAILY_CAP,
             SCALP_SIM_CANDIDATE_WINDOW_BLOCKED_AI_SCORE_MAX_SHARE_PCT=env_scalp_sim_candidate_window_blocked_ai_max_share
             if env_scalp_sim_candidate_window_blocked_ai_max_share is not None
             else config.SCALP_SIM_CANDIDATE_WINDOW_BLOCKED_AI_SCORE_MAX_SHARE_PCT,
@@ -3092,6 +3199,12 @@ def _build_trading_rules() -> TradingConfig:
             SELL_ORDER_FAILURE_RETRY_BACKOFF_SEC=env_sell_order_failure_retry_backoff_sec
             if env_sell_order_failure_retry_backoff_sec is not None
             else config.SELL_ORDER_FAILURE_RETRY_BACKOFF_SEC,
+            SCALPING_BUY_WINDOWS=env_scalping_buy_windows
+            if env_scalping_buy_windows is not None
+            else config.SCALPING_BUY_WINDOWS,
+            SCALPING_NEW_BUY_CUTOFF=env_scalping_new_buy_cutoff
+            if env_scalping_new_buy_cutoff is not None
+            else config.SCALPING_NEW_BUY_CUTOFF,
         )
 
     env_openai_json_deterministic = _env_bool("KORSTOCKSCAN_OPENAI_JSON_DETERMINISTIC_CONFIG_ENABLED")

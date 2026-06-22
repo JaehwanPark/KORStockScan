@@ -1,4 +1,5 @@
 import importlib
+from datetime import time
 
 import pytest
 
@@ -18,6 +19,11 @@ def test_trading_rules_default_latency_canary_thresholds(monkeypatch):
     monkeypatch.delenv("KORSTOCKSCAN_SCALP_LATENCY_GUARD_CANARY_MAX_SPREAD_RATIO", raising=False)
     monkeypatch.delenv("KORSTOCKSCAN_SCALP_LATENCY_SPREAD_RELIEF_BLOCK_UNSTABLE_QUOTE", raising=False)
     monkeypatch.delenv("KORSTOCKSCAN_SCALP_LATENCY_SPREAD_RELIEF_MIN_PRINT_QUOTE_ALIGNMENT", raising=False)
+    monkeypatch.delenv("KORSTOCKSCAN_SCALP_LATENCY_OTHER_DANGER_RELIEF_CANARY_ENABLED", raising=False)
+    monkeypatch.delenv("KORSTOCKSCAN_SCALP_LATENCY_OTHER_DANGER_RELIEF_MIN_SIGNAL_SCORE", raising=False)
+    monkeypatch.delenv("KORSTOCKSCAN_SCALP_LATENCY_OTHER_DANGER_RELIEF_MAX_SPREAD_RATIO", raising=False)
+    monkeypatch.delenv("KORSTOCKSCAN_SCALP_LATENCY_OTHER_DANGER_RELIEF_BLOCK_UNSTABLE_QUOTE", raising=False)
+    monkeypatch.delenv("KORSTOCKSCAN_SCALP_LATENCY_OTHER_DANGER_RELIEF_MIN_PRINT_QUOTE_ALIGNMENT", raising=False)
 
     reloaded = importlib.reload(constants)
 
@@ -26,6 +32,60 @@ def test_trading_rules_default_latency_canary_thresholds(monkeypatch):
     assert reloaded.TRADING_RULES.SCALP_LATENCY_GUARD_CANARY_MAX_SPREAD_RATIO == 0.0100
     assert reloaded.TRADING_RULES.SCALP_LATENCY_SPREAD_RELIEF_BLOCK_UNSTABLE_QUOTE is True
     assert reloaded.TRADING_RULES.SCALP_LATENCY_SPREAD_RELIEF_MIN_PRINT_QUOTE_ALIGNMENT == 0.90
+    assert reloaded.TRADING_RULES.SCALP_LATENCY_OTHER_DANGER_RELIEF_CANARY_ENABLED is False
+    assert reloaded.TRADING_RULES.SCALP_LATENCY_OTHER_DANGER_RELIEF_MIN_SIGNAL_SCORE == 85.0
+    assert reloaded.TRADING_RULES.SCALP_LATENCY_OTHER_DANGER_RELIEF_MAX_SPREAD_RATIO == 0.0080
+    assert reloaded.TRADING_RULES.SCALP_LATENCY_OTHER_DANGER_RELIEF_BLOCK_UNSTABLE_QUOTE is True
+    assert reloaded.TRADING_RULES.SCALP_LATENCY_OTHER_DANGER_RELIEF_MIN_PRINT_QUOTE_ALIGNMENT == 0.90
+
+
+def test_scalping_new_buy_cutoff_defaults_to_nxt_close(monkeypatch):
+    monkeypatch.delenv("KORSTOCKSCAN_SCALPING_BUY_WINDOWS", raising=False)
+    monkeypatch.delenv("KORSTOCKSCAN_SCALPING_NEW_BUY_CUTOFF", raising=False)
+    reloaded = importlib.reload(constants)
+    from src.engine import sniper_time
+
+    reloaded_time = importlib.reload(sniper_time)
+
+    assert reloaded.TRADING_RULES.SCALPING_BUY_WINDOWS == (
+        "08:05:00-08:40:00,09:05:00-15:00:00,16:00:00-19:45:00"
+    )
+    assert reloaded_time.describe_scalping_buy_windows() == (
+        "08:05:00-08:40:00,09:05:00-15:00:00,16:00:00-19:45:00"
+    )
+    assert reloaded.TRADING_RULES.SCALPING_NEW_BUY_CUTOFF == "19:45:00"
+    assert reloaded_time.TIME_SCALPING_NEW_BUY_CUTOFF == time(19, 45)
+    assert reloaded_time.is_scalping_buy_time_allowed(time(8, 5)) is True
+    assert reloaded_time.is_scalping_buy_time_allowed(time(8, 40)) is True
+    assert reloaded_time.is_scalping_buy_time_allowed(time(9, 5)) is True
+    assert reloaded_time.is_scalping_buy_time_allowed(time(15, 0)) is True
+    assert reloaded_time.is_scalping_buy_time_allowed(time(16, 0)) is True
+    assert reloaded_time.is_scalping_buy_time_allowed(time(19, 45)) is True
+    assert reloaded_time.is_scalping_buy_time_allowed(time(8, 4, 59)) is False
+    assert reloaded_time.is_scalping_buy_time_allowed(time(8, 41)) is False
+    assert reloaded_time.is_scalping_buy_time_allowed(time(15, 0, 1)) is False
+    assert reloaded_time.is_scalping_buy_time_allowed(time(15, 59, 59)) is False
+    assert reloaded_time.is_scalping_buy_time_allowed(time(19, 45, 1)) is False
+
+
+def test_scalping_new_buy_cutoff_supports_runtime_env_override(monkeypatch):
+    monkeypatch.setenv("KORSTOCKSCAN_SCALPING_BUY_WINDOWS", "08:10:00-08:20:00,17:00:00-19:30:00")
+    monkeypatch.setenv("KORSTOCKSCAN_SCALPING_NEW_BUY_CUTOFF", "19:30:00")
+
+    reloaded = importlib.reload(constants)
+    from src.engine import sniper_time
+
+    reloaded_time = importlib.reload(sniper_time)
+
+    assert reloaded.TRADING_RULES.SCALPING_BUY_WINDOWS == "08:10:00-08:20:00,17:00:00-19:30:00"
+    assert reloaded_time.describe_scalping_buy_windows() == "08:10:00-08:20:00,17:00:00-19:30:00"
+    assert reloaded.TRADING_RULES.SCALPING_NEW_BUY_CUTOFF == "19:30:00"
+    assert reloaded_time.TIME_SCALPING_NEW_BUY_CUTOFF == time(19, 30)
+    assert reloaded_time.is_scalping_buy_time_allowed(time(8, 9, 59)) is False
+    assert reloaded_time.is_scalping_buy_time_allowed(time(8, 10)) is True
+    assert reloaded_time.is_scalping_buy_time_allowed(time(16, 59, 59)) is False
+    assert reloaded_time.is_scalping_buy_time_allowed(time(17, 0)) is True
+    assert reloaded_time.is_scalping_buy_time_allowed(time(19, 30, 1)) is False
 
 
 def test_trading_rules_late_entry_price_drift_guard_default_off(monkeypatch):
@@ -130,6 +190,14 @@ def test_trading_rules_entry_latency_classifier_jitter_env_override(monkeypatch)
     monkeypatch.setenv("KORSTOCKSCAN_SCALP_LATENCY_SUBMIT_RECOVERY_MAX_SPREAD_RATIO", "0.01")
     monkeypatch.setenv("KORSTOCKSCAN_SCALP_LATENCY_SPREAD_RELIEF_BLOCK_UNSTABLE_QUOTE", "false")
     monkeypatch.setenv("KORSTOCKSCAN_SCALP_LATENCY_SPREAD_RELIEF_MIN_PRINT_QUOTE_ALIGNMENT", "0.95")
+    monkeypatch.setenv("KORSTOCKSCAN_SCALP_LATENCY_OTHER_DANGER_RELIEF_CANARY_ENABLED", "true")
+    monkeypatch.setenv("KORSTOCKSCAN_SCALP_LATENCY_OTHER_DANGER_RELIEF_TAGS", "SCANNER,OPEN_RECLAIM")
+    monkeypatch.setenv("KORSTOCKSCAN_SCALP_LATENCY_OTHER_DANGER_RELIEF_MIN_SIGNAL_SCORE", "74")
+    monkeypatch.setenv("KORSTOCKSCAN_SCALP_LATENCY_OTHER_DANGER_RELIEF_MAX_WS_AGE_MS", "420")
+    monkeypatch.setenv("KORSTOCKSCAN_SCALP_LATENCY_OTHER_DANGER_RELIEF_MAX_WS_JITTER_MS", "90")
+    monkeypatch.setenv("KORSTOCKSCAN_SCALP_LATENCY_OTHER_DANGER_RELIEF_MAX_SPREAD_RATIO", "0.010")
+    monkeypatch.setenv("KORSTOCKSCAN_SCALP_LATENCY_OTHER_DANGER_RELIEF_BLOCK_UNSTABLE_QUOTE", "true")
+    monkeypatch.setenv("KORSTOCKSCAN_SCALP_LATENCY_OTHER_DANGER_RELIEF_MIN_PRINT_QUOTE_ALIGNMENT", "0.92")
 
     reloaded = importlib.reload(constants)
 
@@ -143,6 +211,14 @@ def test_trading_rules_entry_latency_classifier_jitter_env_override(monkeypatch)
     assert reloaded.TRADING_RULES.SCALP_LATENCY_SUBMIT_RECOVERY_MAX_SPREAD_RATIO == 0.01
     assert reloaded.TRADING_RULES.SCALP_LATENCY_SPREAD_RELIEF_BLOCK_UNSTABLE_QUOTE is False
     assert reloaded.TRADING_RULES.SCALP_LATENCY_SPREAD_RELIEF_MIN_PRINT_QUOTE_ALIGNMENT == 0.95
+    assert reloaded.TRADING_RULES.SCALP_LATENCY_OTHER_DANGER_RELIEF_CANARY_ENABLED is True
+    assert reloaded.TRADING_RULES.SCALP_LATENCY_OTHER_DANGER_RELIEF_TAGS == ("SCANNER", "OPEN_RECLAIM")
+    assert reloaded.TRADING_RULES.SCALP_LATENCY_OTHER_DANGER_RELIEF_MIN_SIGNAL_SCORE == 74
+    assert reloaded.TRADING_RULES.SCALP_LATENCY_OTHER_DANGER_RELIEF_MAX_WS_AGE_MS == 420
+    assert reloaded.TRADING_RULES.SCALP_LATENCY_OTHER_DANGER_RELIEF_MAX_WS_JITTER_MS == 90
+    assert reloaded.TRADING_RULES.SCALP_LATENCY_OTHER_DANGER_RELIEF_MAX_SPREAD_RATIO == 0.010
+    assert reloaded.TRADING_RULES.SCALP_LATENCY_OTHER_DANGER_RELIEF_BLOCK_UNSTABLE_QUOTE is True
+    assert reloaded.TRADING_RULES.SCALP_LATENCY_OTHER_DANGER_RELIEF_MIN_PRINT_QUOTE_ALIGNMENT == 0.92
 
 
 def test_trading_rules_scalping_entry_price_percent_bps_env_override(monkeypatch):
@@ -512,6 +588,8 @@ def test_trading_rules_ai_cadence_defaults_are_rate_limited(monkeypatch):
 def test_trading_rules_scalp_sim_candidate_window_defaults_and_env_override(monkeypatch):
     for key in (
         "KORSTOCKSCAN_SCALP_SIM_CANDIDATE_WINDOW_MAX_DAILY",
+        "KORSTOCKSCAN_SCALP_SIM_CANDIDATE_WINDOW_RUNTIME_MAX_OPEN_CAP",
+        "KORSTOCKSCAN_SCALP_SIM_CANDIDATE_WINDOW_RUNTIME_MAX_DAILY_CAP",
         "KORSTOCKSCAN_SCALP_SIM_CANDIDATE_WINDOW_TIME_BUCKET_POLICY",
     ):
         monkeypatch.delenv(key, raising=False)
@@ -519,11 +597,15 @@ def test_trading_rules_scalp_sim_candidate_window_defaults_and_env_override(monk
     reloaded = importlib.reload(constants)
 
     assert reloaded.TRADING_RULES.SCALP_SIM_CANDIDATE_WINDOW_MAX_DAILY == 240
+    assert reloaded.TRADING_RULES.SCALP_SIM_CANDIDATE_WINDOW_RUNTIME_MAX_OPEN_CAP == 8
+    assert reloaded.TRADING_RULES.SCALP_SIM_CANDIDATE_WINDOW_RUNTIME_MAX_DAILY_CAP == 80
     assert reloaded.TRADING_RULES.SCALP_SIM_CANDIDATE_WINDOW_TIME_BUCKET_POLICY == (
         "09:00-10:00=84,10:00-12:00=48,12:00-14:00=60,14:00-15:30=48"
     )
 
     monkeypatch.setenv("KORSTOCKSCAN_SCALP_SIM_CANDIDATE_WINDOW_MAX_DAILY", "320")
+    monkeypatch.setenv("KORSTOCKSCAN_SCALP_SIM_CANDIDATE_WINDOW_RUNTIME_MAX_OPEN_CAP", "12")
+    monkeypatch.setenv("KORSTOCKSCAN_SCALP_SIM_CANDIDATE_WINDOW_RUNTIME_MAX_DAILY_CAP", "120")
     monkeypatch.setenv(
         "KORSTOCKSCAN_SCALP_SIM_CANDIDATE_WINDOW_TIME_BUCKET_POLICY",
         "09:00-10:00=100,10:00-15:30=220",
@@ -531,6 +613,8 @@ def test_trading_rules_scalp_sim_candidate_window_defaults_and_env_override(monk
     reloaded = importlib.reload(constants)
 
     assert reloaded.TRADING_RULES.SCALP_SIM_CANDIDATE_WINDOW_MAX_DAILY == 320
+    assert reloaded.TRADING_RULES.SCALP_SIM_CANDIDATE_WINDOW_RUNTIME_MAX_OPEN_CAP == 12
+    assert reloaded.TRADING_RULES.SCALP_SIM_CANDIDATE_WINDOW_RUNTIME_MAX_DAILY_CAP == 120
     assert reloaded.TRADING_RULES.SCALP_SIM_CANDIDATE_WINDOW_TIME_BUCKET_POLICY == (
         "09:00-10:00=100,10:00-15:30=220"
     )

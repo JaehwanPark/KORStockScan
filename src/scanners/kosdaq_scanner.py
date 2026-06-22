@@ -13,8 +13,8 @@ AI 앙상블 모델을 통해 승률이 높은 타점만 선별해내는 '정밀
    대신 EventBus를 통해 "TELEGRAM_BROADCAST" 이벤트를 쏘아, 알림 계층(Telegram Manager)에 역할을 위임합니다.
    (네트워크 지연으로 인해 스캐너 루프가 멈추는 현상 완벽 차단)
 3. 눈(감시)의 연동:
-   타겟 발굴 즉시 "COMMAND_WS_REG" 이벤트를 발행하여, 
-   웹소켓 모듈이 1초의 딜레이도 없이 해당 종목의 실시간 틱 데이터 추적을 시작하도록 파이프라인을 구축했습니다.
+   KOSDAQ RUNNER 후보는 기본적으로 report-only이며 감시 DB/웹소켓 등록 대상이 아닙니다.
+   별도 watchlist 정책이 열린 경우에만 "COMMAND_WS_REG" 이벤트를 발행합니다.
 """
 import sys
 from pathlib import Path
@@ -78,6 +78,11 @@ def build_kosdaq_candidate_map(raw_targets, supernova_targets):
     return all_candidate_codes
 
 
+def filter_kosdaq_watchlist_picks(kosdaq_picks):
+    """KOSDAQ RUNNER candidates are report-only and must not enter WATCHING."""
+    return []
+
+
 # ==========================================
 # 🧠 KOSDAQ 하이브리드 AI 스캐너 엔진
 # ==========================================
@@ -96,8 +101,8 @@ def run_kosdaq_scanner(is_test_mode=False):
     # 환경 설정 및 토큰
     while True:
         now = datetime.now()
-        # 💡 [핵심 3] 테스트 모드일 때는 09:05 ~ 19:15 시간 제한을 무시하고 즉시 실행합니다!
-        is_market_open = datetime.strptime("09:05:00", "%H:%M:%S").time() <= now.time() <= datetime.strptime("19:15:00", "%H:%M:%S").time()
+        # 💡 [핵심 3] 테스트 모드일 때는 09:05 ~ 19:45 시간 제한을 무시하고 즉시 실행합니다!
+        is_market_open = datetime.strptime("09:05:00", "%H:%M:%S").time() <= now.time() <= datetime.strptime("19:45:00", "%H:%M:%S").time()
         
         if not is_test_mode and not is_market_open:
             print("🌙 [KOSDAQ] 대기 중...")
@@ -207,49 +212,53 @@ def run_kosdaq_scanner(is_test_mode=False):
 
             time.sleep(0.3) # API 제한 방어
 
-        # 🚀 4. DB 저장 및 이벤트 브로드캐스트 (ORM & EventBus)
+        # 🚀 4. 리포트 브로드캐스트. RUNNER는 감시 DB/WS 대상에서 제외한다.
         if kosdaq_picks:
+            report_picks = list(kosdaq_picks)
+            watchlist_picks = filter_kosdaq_watchlist_picks(kosdaq_picks)
             new_picks = []
             # 💡 [핵심] Date 객체로 변환하여 저장하는 것이 안전합니다.
             today_date = datetime.now().date() 
             
-            try:
-                with db.get_session() as session:
-                    for r in kosdaq_picks:
-                        # 💡 [교정] 모델 규격에 맞게 필터 조건 수정 (rec_date, stock_code)
-                        record = session.query(RecommendationHistory).filter_by(
-                            rec_date=today_date, 
-                            stock_code=r['Code']
-                        ).first()
+            if watchlist_picks:
+                try:
+                    with db.get_session() as session:
+                        for r in watchlist_picks:
+                            # 💡 [교정] 모델 규격에 맞게 필터 조건 수정 (rec_date, stock_code)
+                            record = session.query(RecommendationHistory).filter_by(
+                                rec_date=today_date,
+                                stock_code=r['Code']
+                            ).first()
 
-                        if not record:
-                            # 💡 [교정] 모든 속성명을 실제 모델 클래스의 필드명과 일치시킵니다.
-                            new_record = RecommendationHistory(
-                                rec_date=today_date,       #
-                                stock_code=r['Code'],      #
-                                stock_name=r['Name'],      #
-                                trade_type='RUNNER',         # (기존 type에서 변경)
-                                buy_price=r['Price'], 
-                                position_tag=r['Position'], 
-                                prob=r['Prob'], 
-                                strategy='KOSDAQ_ML', 
-                                status='WATCHING'
-                            )
-                            session.add(new_record)
-                            new_picks.append(r)
-                # (with 블록 종료 시 자동 commit)
-            except Exception as e:
-                log_error(f"DB 저장 에러: {e}")
+                            if not record:
+                                # 💡 [교정] 모든 속성명을 실제 모델 클래스의 필드명과 일치시킵니다.
+                                new_record = RecommendationHistory(
+                                    rec_date=today_date,       #
+                                    stock_code=r['Code'],      #
+                                    stock_name=r['Name'],      #
+                                    trade_type='RUNNER',         # report-only policy keeps this path disabled
+                                    buy_price=r['Price'],
+                                    position_tag=r['Position'],
+                                    prob=r['Prob'],
+                                    strategy='KOSDAQ_ML',
+                                    status='WATCHING'
+                                )
+                                session.add(new_record)
+                                new_picks.append(r)
+                    # (with 블록 종료 시 자동 commit)
+                except Exception as e:
+                    log_error(f"DB 저장 에러: {e}")
 
             # 💡 [핵심] EventBus를 통해 텔레그램 매니저에게 알림 쏘기 (비동기)
-            if new_picks:
+            if report_picks:
                 event_bus.publish("TELEGRAM_BROADCAST", {
                     "type": "KOSDAQ_REPORT",
-                    "picks": new_picks
+                    "picks": report_picks
                 })
                 
                 # 웹소켓 감시망에도 등록하여 실시간 타점 추적 시작!
-                event_bus.publish("COMMAND_WS_REG", {"codes": new_codes_found})
+                if new_picks:
+                    event_bus.publish("COMMAND_WS_REG", {"codes": [r['Code'] for r in new_picks]})
 
         print(f"✅ [{now.strftime('%H:%M:%S')}] KOSDAQ 스캔 완료. 30분 대기...")
         time.sleep(1800)

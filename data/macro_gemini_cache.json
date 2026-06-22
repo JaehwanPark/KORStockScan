@@ -1,84 +1,80 @@
 {
-  "bundle_as_of": "2026-06-21T22:20:18Z",
+  "bundle_as_of": "2026-06-22T22:20:18Z",
   "sp500": {
     "name": "S&P 500",
-    "value": 7500.58,
-    "prev_value": 7420.1,
-    "change": 80.48,
-    "change_pct": 1.08,
-    "as_of": "2026-06-19T20:00:00Z",
-    "source": "The Sunday Guardian"
+    "value": 7472.79,
+    "prev_value": 7500.58,
+    "change": -27.79,
+    "change_pct": -0.37,
+    "as_of": "2026-06-22T20:32:00Z",
+    "source": "Morningstar / Dow Jones Market Data"
   },
   "nasdaq": {
     "name": "NASDAQ",
-    "value": 26517.93,
-    "prev_value": 26021.65,
-    "change": 496.28,
-    "change_pct": 1.91,
-    "as_of": "2026-06-19T20:00:00Z",
-    "source": "The Sunday Guardian"
+    "value": 26166.6,
+    "prev_value": 26517.93,
+    "change": -351.33,
+    "change_pct": -1.32,
+    "as_of": "2026-06-22T20:32:00Z",
+    "source": "Morningstar / Dow Jones Market Data"
   },
   "vix": {
     "name": "VIX",
-    "value": 16.78,
-    "prev_value": null,
-    "change": null,
-    "change_pct": null,
-    "as_of": "2026-06-19T20:00:00Z",
-    "source": "StreetStats"
+    "value": 17.38,
+    "prev_value": 16.78,
+    "change": 0.6,
+    "change_pct": 3.58,
+    "as_of": "2026-06-22T19:41:00Z",
+    "source": "Cboe Global Markets"
   },
   "us10y": {
-    "name": "US 10Y Treasury Yield",
-    "value": 4.455,
-    "prev_value": 4.447,
-    "change": 0.008,
-    "change_pct": 0.18,
-    "as_of": "2026-06-19T20:00:00Z",
-    "source": "Bankrate"
+    "name": "US10Y",
+    "value": 4.507,
+    "prev_value": 4.451,
+    "change": 0.056,
+    "change_pct": 1.26,
+    "as_of": "2026-06-22T19:44:00Z",
+    "source": "Morningstar / Dow Jones Newswires"
   },
   "brent": {
-    "name": "Brent Crude",
-    "value": 79.85,
-    "prev_value": 79.55,
-    "change": 0.3,
-    "change_pct": 0.38,
-    "as_of": "2026-06-19T20:00:00Z",
-    "source": "Angel One"
+    "name": "BRENT",
+    "value": 77.52,
+    "prev_value": 80.08,
+    "change": -2.56,
+    "change_pct": -3.2,
+    "as_of": "2026-06-22T21:50:00Z",
+    "source": "Los Angeles Times"
   },
   "headlines": [
     {
-      "title": "Regional envoys push for swift progress in US-Iran talks",
-      "source": "Al Arabiya",
-      "published_at": "2026-06-21T16:59:00Z",
-      "url": ""
+      "title": "U.S. stocks drift after oil prices ease and Big Tech stocks fall",
+      "source": "Los Angeles Times",
+      "published_at": "2026-06-22T21:50:00Z",
+      "url": "https://www.latimes.com/"
     },
     {
-      "title": "Crude Oil Prices Rise After US Warning on Israel-Hezbollah Ceasefire",
-      "source": "Angel One",
-      "published_at": "2026-06-19T17:09:00Z",
-      "url": ""
+      "title": "Stock Market Today, June 22: Alphabet Slips on Key Departure and Defensive Blue Chips Gain",
+      "source": "The Motley Fool",
+      "published_at": "2026-06-22T22:07:00Z",
+      "url": "https://www.fool.com/"
     },
     {
-      "title": "Brent physical, paper prices slip further as Hormuz flows rise, traders say",
-      "source": "Reuters",
-      "published_at": "2026-06-19T07:15:00Z",
-      "url": ""
+      "title": "10-Year Treasury Yield Rises to 4.507% — Data Talk",
+      "source": "Morningstar",
+      "published_at": "2026-06-22T19:44:00Z",
+      "url": "https://www.morningstar.com/"
     },
     {
-      "title": "US and Iran deal to end war allows Tehran to sell oil and fuel",
-      "source": "AFP",
-      "published_at": "2026-06-16T00:00:00Z",
-      "url": ""
-    },
-    {
-      "title": "Mortgage Rates Hold Steady Today",
-      "source": "Bankrate",
-      "published_at": "2026-06-19T00:00:00Z",
-      "url": ""
+      "title": "Nasdaq-100 & S&P 500 Rebalance: June 22, 2026 Changes",
+      "source": "Stock Titan",
+      "published_at": "2026-06-22T13:00:00Z",
+      "url": "https://www.stocktitan.net/"
     }
   ],
   "notes": [
-    "U.S. stock and bond markets were closed or scheduled for irregular hours on June 19, 2026, in observance of the Juneteenth holiday.",
-    "US-Iran and Israel-Hezbollah diplomatic developments remain key drivers for global crude oil markets."
+    "U.S. equities experienced a mixed close on Monday, June 22, 2026. A broad selloff in mega-cap technology stocks weighed heavily on the Nasdaq and S&P 500, while the Dow added gains due to strength in defensive blue chips.",
+    "Brent crude oil prices declined 3.2% amid diplomatic progress and peace talk optimism between the U.S. and Iran, potentially averting disruptions in the Strait of Hormuz.",
+    "The 10-year Treasury yield climbed to 4.507% as markets monitored inflation metrics following recent oil price surges.",
+    "The Nasdaq-100 and S&P 500 quarterly rebalances took effect, ushering major AI and infrastructure players like CoreWeave and Astera Labs into the indices."
   ]
 }

@@ -312,12 +312,19 @@ def test_scalping_scanner_promoted_target_refresh_resets_eval_state(monkeypatch)
             "scanner_promotion_emitted_epoch": "2000.000",
             "source_signature": "PRICE_JUMP_START",
             "current_price_observed": 20500,
+            "price_delta_since_first_seen_pct": "2.35",
+            "comparable_flu_delta_since_first_seen": "1.10",
+            "cntr_str_available": "True",
+            "cntr_str": "145.5",
         }
     )
 
     assert refreshed is True
     assert existing["entry_armed_at_epoch"] == 2000.0
     assert existing["scanner_promotion_id"] == "SCANPROM-011930-2000000"
+    assert existing["price_delta_since_first_seen_pct"] == "2.35"
+    assert existing["comparable_flu_delta_since_first_seen"] == "1.10"
+    assert existing["cntr_str"] == "145.5"
     for key in (
         "_scanner_last_full_eval_epoch",
         "_scanner_fast_precheck_logged_at",
@@ -336,6 +343,35 @@ def test_scalping_scanner_promoted_target_refresh_resets_eval_state(monkeypatch)
     assert [target["id"] for target in ordered] == [77, 88]
     assert emitted[-1]["fields"]["runtime_target_attach_outcome"] == "refreshed"
     assert published == [("COMMAND_WS_REG", {"codes": ["011930"]})]
+
+
+def test_scanner_pipeline_stock_snapshot_preserves_positive_promotion_context():
+    snapshot = kiwoom_sniper_v2._scanner_pipeline_stock_snapshot(
+        {
+            "id": 77,
+            "name": "POSITIVE",
+            "strategy": "SCALPING",
+            "position_tag": "SCANNER",
+            "scanner_promotion_id": "SCANPROM-011930-2000000",
+            "scanner_promotion_reason": "price_jump_start_acceleration",
+            "scanner_promotion_emitted_epoch": "2000.000",
+            "source_signature": "PRICE_JUMP_START,VOLUME_SURGE_POSITIVE",
+            "entry_armed_at_epoch": 2000.0,
+            "added_time": 2000.0,
+            "current_price_observed": 20500,
+            "price_delta_since_first_seen_pct": "2.35",
+            "comparable_flu_delta_since_first_seen": "1.10",
+            "cntr_str_available": "True",
+            "cntr_str": "145.5",
+            "_scanner_fast_precheck_result": "eligible_for_heavy_entry_eval",
+        }
+    )
+
+    assert snapshot["price_delta_since_first_seen_pct"] == "2.35"
+    assert snapshot["comparable_flu_delta_since_first_seen"] == "1.10"
+    assert snapshot["current_price_observed"] == 20500
+    assert snapshot["cntr_str"] == "145.5"
+    assert "_scanner_fast_precheck_result" not in snapshot
 
 
 def test_scalping_scanner_promoted_target_does_not_override_holding(monkeypatch):
@@ -935,6 +971,17 @@ def test_scanner_full_eval_max_per_loop_env(monkeypatch):
     assert kiwoom_sniper_v2._scanner_full_eval_max_per_loop() == 1
 
 
+def test_scalping_fifo_max_active_env(monkeypatch):
+    monkeypatch.delenv("KORSTOCKSCAN_SCALPING_WATCHING_MAX_ACTIVE", raising=False)
+    assert kiwoom_sniper_v2._scalping_fifo_max_active() == 24
+
+    monkeypatch.setenv("KORSTOCKSCAN_SCALPING_WATCHING_MAX_ACTIVE", "12")
+    assert kiwoom_sniper_v2._scalping_fifo_max_active() == 12
+
+    monkeypatch.setenv("KORSTOCKSCAN_SCALPING_WATCHING_MAX_ACTIVE", "0")
+    assert kiwoom_sniper_v2._scalping_fifo_max_active() == 1
+
+
 def test_runtime_scanner_ws_snapshot_cache_uses_bulk_lookup(monkeypatch):
     calls = []
 
@@ -1015,8 +1062,8 @@ def test_scanner_full_eval_effective_limit_expands_for_backlog(monkeypatch):
     monkeypatch.delenv("KORSTOCKSCAN_SCANNER_FULL_EVAL_BACKLOG_EXTRA_PER_LOOP", raising=False)
 
     assert kiwoom_sniper_v2._scanner_full_eval_effective_limit({"scanner_watching_count": 8}) == 8
-    assert kiwoom_sniper_v2._scanner_full_eval_effective_limit({"scanner_watching_count": 20}) == 20
-    assert kiwoom_sniper_v2._scanner_full_eval_effective_limit({"scanner_watching_count": 40}) == 32
+    assert kiwoom_sniper_v2._scanner_full_eval_effective_limit({"scanner_watching_count": 20}) == 12
+    assert kiwoom_sniper_v2._scanner_full_eval_effective_limit({"scanner_watching_count": 40}) == 12
 
     monkeypatch.setenv("KORSTOCKSCAN_SCANNER_FULL_EVAL_BACKLOG_EXTRA_PER_LOOP", "0")
     assert kiwoom_sniper_v2._scanner_full_eval_effective_limit({"scanner_watching_count": 40}) == 8
@@ -1176,7 +1223,376 @@ def test_recover_missing_ws_snapshot_reissues_ws_reg_before_fallback(monkeypatch
     assert ws_data == {}
     assert published == [("COMMAND_WS_REG", {"codes": ["005930"], "source": "scanner_watching_ws_snapshot_recovery"})]
     assert fields["ws_recovery_outcome"] == "ws_reg_reissued_waiting_snapshot"
-    assert stock["_scanner_ws_snapshot_recovery"]["miss_count"] == 1
+
+
+def _scanner_watch_stock(**overrides):
+    stock = {
+        "id": 77,
+        "code": "123456",
+        "name": "TEST",
+        "status": "WATCHING",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "buy_qty": 0,
+        "buy_time": None,
+        "entry_armed_at_epoch": 1000.0,
+        "scanner_promotion_id": "SCANPROM-123456-1000",
+    }
+    stock.update(overrides)
+    return stock
+
+
+def test_scanner_watch_terminal_blocker_requires_two_fresh_repeats():
+    stock = _scanner_watch_stock()
+    stock["_scanner_watch_last_terminal_block"] = {
+        "stage": "blocked_strength_momentum",
+        "reason": "below_window_buy_value",
+        "fresh_input_confirmed": True,
+        "observed_epoch": 1100.0,
+    }
+
+    first = kiwoom_sniper_v2._scanner_watch_eviction_decision_from_terminal(stock, now_ts=1100.0)
+    stock["_scanner_watch_last_terminal_block"] = {
+        "stage": "blocked_strength_momentum",
+        "reason": "below_window_buy_value",
+        "fresh_input_confirmed": True,
+        "observed_epoch": 1110.0,
+    }
+    second = kiwoom_sniper_v2._scanner_watch_eviction_decision_from_terminal(stock, now_ts=1110.0)
+
+    assert first["should_evict"] is False
+    assert first["eviction_attempt_count"] == 1
+    assert second["should_evict"] is True
+    assert second["eviction_attempt_count"] == 2
+    assert second["terminal_stage"] == "blocked_strength_momentum"
+
+
+def test_scanner_watch_terminal_blocker_does_not_double_count_same_observation():
+    stock = _scanner_watch_stock()
+    stock["_scanner_watch_last_terminal_block"] = {
+        "stage": "blocked_vpw",
+        "reason": "below_vpw",
+        "fresh_input_confirmed": True,
+        "observed_epoch": 1100.0,
+    }
+
+    first = kiwoom_sniper_v2._scanner_watch_eviction_decision_from_terminal(stock, now_ts=1100.0)
+    second = kiwoom_sniper_v2._scanner_watch_eviction_decision_from_terminal(stock, now_ts=1101.0)
+
+    assert first["eviction_attempt_count"] == 1
+    assert second["should_evict"] is False
+    assert second["eviction_attempt_count"] == 1
+
+
+def test_scanner_watch_fresh_terminal_resets_source_quality_eviction_counter():
+    stock = _scanner_watch_stock(
+        _scanner_watch_eviction_stale_first_seen_epoch=1000.0,
+        _scanner_watch_eviction_stale_count=2,
+    )
+    stock["_scanner_watch_last_terminal_block"] = {
+        "stage": "blocked_strength_momentum",
+        "reason": "below_window_buy_value",
+        "fresh_input_confirmed": True,
+        "observed_epoch": 1100.0,
+    }
+
+    decision = kiwoom_sniper_v2._scanner_watch_eviction_decision_from_terminal(stock, now_ts=1100.0)
+
+    assert decision["should_evict"] is False
+    assert "_scanner_watch_eviction_stale_count" not in stock
+    assert "_scanner_watch_eviction_stale_first_seen_epoch" not in stock
+
+
+def test_scanner_watch_terminal_eviction_rejects_real_order_or_holding_rows():
+    for stock in (
+        _scanner_watch_stock(status="BUY_ORDERED"),
+        _scanner_watch_stock(status="SELL_ORDERED"),
+        _scanner_watch_stock(status="HOLDING"),
+        _scanner_watch_stock(buy_qty=1),
+        _scanner_watch_stock(buy_time="2026-06-22 09:10:00"),
+    ):
+        stock["_scanner_watch_last_terminal_block"] = {
+            "stage": "blocked_vpw",
+            "reason": "below_vpw",
+            "fresh_input_confirmed": True,
+        }
+        decision = kiwoom_sniper_v2._scanner_watch_eviction_decision_from_terminal(stock, now_ts=1100.0)
+        assert decision["should_evict"] is False
+
+
+def test_scanner_watch_stale_eviction_requires_three_attempts_and_age():
+    stock = _scanner_watch_stock()
+    first = kiwoom_sniper_v2._scanner_watch_eviction_decision_from_stale(
+        stock,
+        now_ts=1000.0,
+        stale_reason="ws_snapshot_missing_or_zero",
+        recovery_fields={"ws_recovery_outcome": "ws_reg_reissued_waiting_snapshot"},
+    )
+    second = kiwoom_sniper_v2._scanner_watch_eviction_decision_from_stale(
+        stock,
+        now_ts=1050.0,
+        stale_reason="ws_snapshot_missing_or_zero",
+        recovery_fields={"ws_recovery_outcome": "rest_quote_unavailable"},
+    )
+    third = kiwoom_sniper_v2._scanner_watch_eviction_decision_from_stale(
+        stock,
+        now_ts=1091.0,
+        stale_reason="ws_snapshot_missing_or_zero",
+        recovery_fields={"ws_recovery_outcome": "rest_quote_unavailable"},
+    )
+
+    assert first["should_evict"] is False
+    assert second["should_evict"] is False
+    assert third["should_evict"] is True
+    assert third["eviction_attempt_count"] == 3
+    assert third["stale_age_sec"] == 91.0
+
+
+def test_scanner_watch_insufficient_history_eviction_requires_three_attempts_and_age():
+    stock = _scanner_watch_stock()
+    for observed_epoch in (1000.0, 1050.0, 1091.0):
+        stock["_scanner_watch_last_terminal_block"] = {
+            "stage": "blocked_strength_momentum",
+            "reason": "insufficient_history",
+            "fresh_input_confirmed": False,
+            "observed_epoch": observed_epoch,
+        }
+        decision = kiwoom_sniper_v2._scanner_watch_eviction_decision_from_terminal(
+            stock,
+            now_ts=observed_epoch,
+        )
+        assert decision["should_evict"] is False
+        last_decision = kiwoom_sniper_v2._scanner_watch_eviction_decision_from_stale(
+            stock,
+            now_ts=observed_epoch,
+            stale_reason="insufficient_history",
+            recovery_fields={"ws_recovery_outcome": "source_quality_unresolved_no_ws_recovery"},
+        )
+
+    assert last_decision["should_evict"] is True
+    assert last_decision["eviction_reason"] == "source_quality_unresolved"
+    assert last_decision["terminal_stage"] == "not_applicable_terminal_stage"
+    assert last_decision["terminal_reason"] == "insufficient_history"
+    assert last_decision["fresh_input_confirmed"] is False
+    assert last_decision["eviction_attempt_count"] == 3
+    assert last_decision["stale_age_sec"] == 91.0
+
+
+def test_scanner_watch_cooldown_pool_block_requires_repeat_and_remaining_time():
+    short = _scanner_watch_stock(
+        _scanner_watch_last_pool_block={
+            "reason": "entry_cooldown_active",
+            "observed_epoch": 1000.0,
+            "cooldown_remaining_sec": 59,
+        }
+    )
+    short_decision = kiwoom_sniper_v2._scanner_watch_eviction_decision_from_pool_block(
+        short,
+        now_ts=1000.0,
+    )
+    assert short_decision["should_evict"] is False
+    assert short_decision["eviction_attempt_count"] == 0
+
+    stock = _scanner_watch_stock()
+    stock["_scanner_watch_last_pool_block"] = {
+        "reason": "entry_cooldown_active",
+        "observed_epoch": 1000.0,
+        "cooldown_remaining_sec": 120,
+    }
+    first = kiwoom_sniper_v2._scanner_watch_eviction_decision_from_pool_block(stock, now_ts=1000.0)
+    stock["_scanner_watch_last_pool_block"] = {
+        "reason": "entry_cooldown_active",
+        "observed_epoch": 1031.0,
+        "cooldown_remaining_sec": 89,
+    }
+    second = kiwoom_sniper_v2._scanner_watch_eviction_decision_from_pool_block(stock, now_ts=1031.0)
+
+    assert first["should_evict"] is False
+    assert first["eviction_attempt_count"] == 1
+    assert second["should_evict"] is True
+    assert second["eviction_reason"] == "safety_cooldown_pool_blocked"
+    assert second["terminal_reason"] == "entry_cooldown_active"
+    assert second["cooldown_remaining_sec"] == 89
+
+
+def test_scanner_watch_after_full_eval_routes_cooldown_pool_block_to_eviction(monkeypatch):
+    stock = _scanner_watch_stock(
+        _scanner_watch_last_pool_block={
+            "reason": "entry_cooldown_active",
+            "observed_epoch": 1031.0,
+            "cooldown_remaining_sec": 89,
+        },
+        _scanner_watch_eviction_pool_block_reason="entry_cooldown_active",
+        _scanner_watch_eviction_pool_block_count=1,
+        _scanner_watch_eviction_last_pool_block_observed_epoch=1000.0,
+    )
+    captured = {}
+
+    def fake_expire(target, code, targets, *, decision, emit_event_fn=None):
+        captured["decision"] = decision
+        return True
+
+    monkeypatch.setattr(kiwoom_sniper_v2, "_expire_scanner_watch_target", fake_expire)
+
+    expired = kiwoom_sniper_v2._maybe_expire_scanner_watch_after_full_eval(
+        stock,
+        "123456",
+        [stock],
+        now_ts=1031.0,
+    )
+
+    assert expired is True
+    assert captured["decision"]["eviction_reason"] == "safety_cooldown_pool_blocked"
+    assert captured["decision"]["terminal_reason"] == "entry_cooldown_active"
+
+
+def test_scanner_watch_after_full_eval_routes_nonfresh_insufficient_history_to_source_quality_eviction(monkeypatch):
+    stock = _scanner_watch_stock()
+    stock["_scanner_watch_last_terminal_block"] = {
+        "stage": "blocked_strength_momentum",
+        "reason": "insufficient_history",
+        "fresh_input_confirmed": False,
+        "observed_epoch": 1091.0,
+    }
+    stock["_scanner_watch_eviction_stale_first_seen_epoch"] = 1000.0
+    stock["_scanner_watch_eviction_stale_count"] = 2
+    captured = {}
+
+    def fake_expire(target, code, targets, *, decision, emit_event_fn=None):
+        captured["decision"] = decision
+        return True
+
+    monkeypatch.setattr(kiwoom_sniper_v2, "_expire_scanner_watch_target", fake_expire)
+
+    expired = kiwoom_sniper_v2._maybe_expire_scanner_watch_after_full_eval(
+        stock,
+        "123456",
+        [stock],
+        now_ts=1091.0,
+    )
+
+    assert expired is True
+    assert captured["decision"]["eviction_reason"] == "source_quality_unresolved"
+    assert captured["decision"]["terminal_reason"] == "insufficient_history"
+
+
+def test_scanner_watch_stale_recovery_resets_eviction_counter():
+    stock = _scanner_watch_stock()
+    kiwoom_sniper_v2._scanner_watch_eviction_decision_from_stale(
+        stock,
+        now_ts=1000.0,
+        stale_reason="stale_ws_snapshot",
+        recovery_fields={"ws_recovery_outcome": "ws_reg_reissued_waiting_snapshot"},
+    )
+
+    recovered = kiwoom_sniper_v2._scanner_watch_eviction_decision_from_stale(
+        stock,
+        now_ts=1010.0,
+        stale_reason="stale_ws_snapshot",
+        recovery_fields={"ws_recovery_outcome": "rest_quote_applied"},
+    )
+
+    assert recovered["should_evict"] is False
+    assert "_scanner_watch_eviction_stale_count" not in stock
+    assert "_scanner_watch_eviction_stale_first_seen_epoch" not in stock
+
+
+def test_scanner_watch_budget_deferred_is_not_eviction_reason():
+    stock = _scanner_watch_stock()
+    decision = kiwoom_sniper_v2._scanner_watch_eviction_decision_from_stale(
+        stock,
+        now_ts=1000.0,
+        stale_reason="scanner_full_eval_loop_budget_deferred",
+        recovery_fields={"ws_recovery_outcome": "not_applicable_ws_recovery_outcome"},
+    )
+
+    assert decision["should_evict"] is False
+    assert decision["eviction_attempt_count"] == 0
+
+
+def test_expire_scanner_watch_target_updates_db_and_memory_by_record_id(monkeypatch):
+    class FakeQuery:
+        def __init__(self):
+            self.updated = False
+
+        def filter(self, *conditions):
+            self.conditions = conditions
+            return self
+
+        def update(self, values, synchronize_session=False):
+            self.updated = values == {"status": "EXPIRED"} and synchronize_session is False
+            return 1
+
+    class FakeSession:
+        def __init__(self):
+            self.query_obj = FakeQuery()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def query(self, model):
+            self.model = model
+            return self.query_obj
+
+    class FakeDB:
+        def __init__(self):
+            self.session = FakeSession()
+
+        def get_session(self):
+            return self.session
+
+    fake_db = FakeDB()
+    monkeypatch.setattr(kiwoom_sniper_v2, "DB", fake_db)
+    stock = _scanner_watch_stock()
+    emitted = []
+    decision = {
+        "eviction_reason": "terminal_blocker_repeated",
+        "eviction_attempt_count": 2,
+        "terminal_stage": "blocked_vpw",
+        "terminal_reason": "below_vpw",
+        "fresh_input_confirmed": True,
+        "stale_first_seen_epoch": "not_applicable_stale_first_seen_epoch",
+        "stale_age_sec": "not_applicable_stale_age_sec",
+        "ws_recovery_outcome": "not_applicable_ws_recovery_outcome",
+        "observed_epoch": "1100.000",
+    }
+
+    expired = kiwoom_sniper_v2._expire_scanner_watch_target(
+        stock,
+        "123456",
+        [stock],
+        decision=decision,
+        emit_event_fn=lambda *args: emitted.append(args),
+    )
+
+    assert expired is True
+    assert fake_db.session.query_obj.updated is True
+    assert stock["status"] == "EXPIRED"
+    assert emitted[-1][2] == "scalping_scanner_watch_eviction"
+    assert emitted[-1][3]["target_status"] == "WATCHING"
+    assert emitted[-1][3]["actual_order_submitted"] is False
+    assert emitted[-1][3]["broker_order_forbidden"] is True
+
+
+def test_expire_scanner_watch_target_rejects_bought_rows_before_db(monkeypatch):
+    class FailingDB:
+        def get_session(self):
+            raise AssertionError("DB should not be touched for bought rows")
+
+    monkeypatch.setattr(kiwoom_sniper_v2, "DB", FailingDB())
+    stock = _scanner_watch_stock(buy_qty=1)
+    expired = kiwoom_sniper_v2._expire_scanner_watch_target(
+        stock,
+        "123456",
+        [stock],
+        decision={"eviction_reason": "terminal_blocker_repeated"},
+    )
+
+    assert expired is False
+    assert stock["status"] == "WATCHING"
 
 
 def test_recover_missing_ws_snapshot_applies_rest_quote_once_after_repeated_miss(monkeypatch):

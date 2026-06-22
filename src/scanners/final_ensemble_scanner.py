@@ -7,7 +7,8 @@
 💡 핵심 기능 명세 (Feature Spec):
 -run_integrated_scanner() - 장 마감/장전 배치 작업:
    1. 코스피 시총/거래량 상위 150~200개 종목을 대상으로 AI 콰트로 앙상블(XGB/LGBM) 예측 수행.
-   2. 지수 상대강도(RS), 단기 정배열, 수급(스마트 머니) 필터를 거쳐 'MAIN', 'RUNNER' 추천 종목을 DB에 적재.
+   2. 지수 상대강도(RS), 단기 정배열, 수급(스마트 머니) 필터를 거쳐 'MAIN' 추천 종목만 DB 감시 대상으로 적재한다.
+      'RUNNER'는 기본적으로 감시 대상에서 제외하며, 필요한 경우 report-only 목록으로만 분리한다.
    3. OpenAI 등 LLM 경로에 장전 브리핑 데이터(Context)를 제공.
 
 💡 아키텍처 설계 사상 (Decoupling & Event-Driven):
@@ -111,13 +112,15 @@ def classify_v2_csv_pick(row):
     }
 
 
-def split_realtime_recommendations(all_results, *, prob_main_pick, prob_runner_pick, runner_limit=3):
-    """Keep every MAIN candidate and cap only RUNNER candidates."""
+def split_realtime_recommendations(all_results, *, prob_main_pick, prob_runner_pick, runner_limit=0):
+    """Keep every MAIN candidate and optionally include RUNNER candidates."""
     main_picks = sorted(
         [r for r in all_results if r['Prob'] >= prob_main_pick],
         key=lambda x: x['Prob'],
         reverse=True,
     )
+    if runner_limit <= 0:
+        return main_picks, []
     runner_ups = sorted(
         [r for r in all_results if prob_runner_pick <= r['Prob'] < prob_main_pick],
         key=lambda x: x['Prob'],
@@ -374,8 +377,11 @@ def run_integrated_scanner():
                     pick_type = classified['pick_type']
                     position_tag = classified['position_tag']
                     star_icon = classified['star_icon']
+                    if pick_type == 'RUNNER':
+                        csv_skipped_count += 1
+                        continue
 
-                    # 1. DB 우선 적재 (MAIN 또는 RUNNER 동적 할당)
+                    # 1. DB 우선 적재 (MAIN only; RUNNER is intentionally excluded from WATCHING)
                     db.save_recommendation(
                         date=today,
                         code=csv_code,
@@ -431,13 +437,11 @@ def run_integrated_scanner():
             all_results,
             prob_main_pick=TRADING_RULES.PROB_MAIN_PICK,
             prob_runner_pick=TRADING_RULES.PROB_RUNNER_PICK,
-            runner_limit=3,
+            runner_limit=0,
         )
 
         for r in main_picks:
             db.save_recommendation(today, r['Code'], r['Name'], r['Price'], 'MAIN', r['Position'], prob=r['Prob'])
-        for r in runner_ups:
-            db.save_recommendation(today, r['Code'], r['Name'], r['Price'], 'RUNNER', r['Position'], prob=r['Prob'])
 
         # 💡 [핵심] 아침 브리핑(START_OF_DAY_REPORT)을 위해 CSV 종목을 실시간 MAIN 종목 맨 앞에 병합
         main_picks = csv_picks + main_picks

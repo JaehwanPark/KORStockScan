@@ -155,6 +155,52 @@ def test_scalp_simulator_arms_and_fills_without_real_buy_order(monkeypatch):
     assert armed_event["runtime_effect"] == "simulated_entry_armed_only"
 
 
+def test_scalp_sim_candidate_window_runtime_cap_clamps_policy_width(monkeypatch):
+    monkeypatch.setattr(
+        state_handlers,
+        "TRADING_RULES",
+        replace(
+            state_handlers.TRADING_RULES,
+            SCALP_SIM_CANDIDATE_WINDOW_MAX_OPEN=20,
+            SCALP_SIM_CANDIDATE_WINDOW_MAX_DAILY=240,
+            SCALP_SIM_CANDIDATE_WINDOW_RUNTIME_MAX_OPEN_CAP=8,
+            SCALP_SIM_CANDIDATE_WINDOW_RUNTIME_MAX_DAILY_CAP=80,
+        ),
+    )
+
+    assert state_handlers._scalp_sim_runtime_capped_limit(
+        "SCALP_SIM_CANDIDATE_WINDOW_MAX_OPEN",
+        20,
+        "SCALP_SIM_CANDIDATE_WINDOW_RUNTIME_MAX_OPEN_CAP",
+        8,
+    ) == (8, 20, 8)
+    assert state_handlers._scalp_sim_runtime_capped_limit(
+        "SCALP_SIM_CANDIDATE_WINDOW_MAX_DAILY",
+        240,
+        "SCALP_SIM_CANDIDATE_WINDOW_RUNTIME_MAX_DAILY_CAP",
+        80,
+    ) == (80, 240, 80)
+
+
+def test_scalp_sim_candidate_window_runtime_cap_zero_preserves_configured_width(monkeypatch):
+    monkeypatch.setattr(
+        state_handlers,
+        "TRADING_RULES",
+        replace(
+            state_handlers.TRADING_RULES,
+            SCALP_SIM_CANDIDATE_WINDOW_MAX_OPEN=20,
+            SCALP_SIM_CANDIDATE_WINDOW_RUNTIME_MAX_OPEN_CAP=0,
+        ),
+    )
+
+    assert state_handlers._scalp_sim_runtime_capped_limit(
+        "SCALP_SIM_CANDIDATE_WINDOW_MAX_OPEN",
+        20,
+        "SCALP_SIM_CANDIDATE_WINDOW_RUNTIME_MAX_OPEN_CAP",
+        8,
+    ) == (20, 20, 0)
+
+
 def test_scalp_simulator_attaches_matched_lifecycle_bucket_provenance(monkeypatch, tmp_path):
     source_bucket_id = "lifecycle_flow:combo_lifecycle_flow:entry_score_70p:abc123"
     bucket_id = "lifecycle_flow:combo_lifecycle_flow:entry_score_70p"

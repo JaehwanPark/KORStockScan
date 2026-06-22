@@ -469,6 +469,27 @@ STAGE_CONTRACTS: dict[str, StageContract] = {
         ),
         decision_authority="real_scalping_scanner_runtime_watchlist_observation_only",
     ),
+    "scalping_scanner_watch_eviction": StageContract(
+        required_fields=(
+            *REAL_EXECUTION_DIAGNOSTIC_FIELDS,
+            "eviction_reason",
+            "eviction_policy_version",
+            "eviction_attempt_count",
+            "terminal_stage",
+            "terminal_reason",
+            "fresh_input_confirmed",
+            "stale_first_seen_epoch",
+            "stale_age_sec",
+            "ws_recovery_outcome",
+            "runtime_record_id",
+            "stock_code",
+            "target_status",
+            "target_strategy",
+            "target_position_tag",
+            "source_quality_route",
+        ),
+        decision_authority="real_scalping_scanner_watch_eviction_pool_management_only",
+    ),
     "scalping_scanner_runtime_queue_lag": StageContract(
         required_fields=(
             *REAL_EXECUTION_DIAGNOSTIC_FIELDS,

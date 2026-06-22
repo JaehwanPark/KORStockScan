@@ -24,3 +24,11 @@ def test_build_kosdaq_candidate_map_normalizes_codes_and_skips_empty_rows():
     assert candidates["005930"]["spike_rate"] == 31.5
     assert candidates["000660"]["source"] == "SUPERNOVA"
     assert candidates["000660"]["Code"] == "000660"
+
+
+def test_kosdaq_runner_picks_are_report_only_not_watchlist():
+    picks = [
+        {"Code": "123456", "Name": "테스트", "Prob": 0.72, "Position": "MIDDLE"},
+    ]
+
+    assert kosdaq_scanner.filter_kosdaq_watchlist_picks(picks) == []

@@ -21,12 +21,13 @@ from src.utils.jsonl_io import existing_or_gzip_path, iter_jsonl
 from src.utils.logger import log_error, log_info
 from src.utils.pipeline_event_logger import emit_pipeline_event
 from src.engine.sniper_time import (
-    TIME_09_00,
-    TIME_09_03,
     TIME_09_05,
     TIME_15_30,
     TIME_SCALPING_OVERNIGHT_DECISION,
     TIME_SCALPING_NEW_BUY_CUTOFF,
+    describe_scalping_buy_windows,
+    is_scalping_buy_time_allowed,
+    scalping_buy_time_block_reason,
 )
 from src.engine.sniper_condition_handlers_big_bite import (
     build_tick_data_from_ws,
@@ -1604,6 +1605,22 @@ def _scalp_live_simulator_fill_policy() -> str:
 
 def _is_scalp_sim_candidate_window_expansion_enabled() -> bool:
     return _rule_bool("SCALP_SIM_CANDIDATE_WINDOW_EXPANSION_ENABLED", False)
+
+
+def _scalp_sim_runtime_capped_limit(
+    rule_key: str,
+    default_value: int,
+    cap_rule_key: str,
+    cap_default: int,
+) -> tuple[int, int, int]:
+    configured = max(0, _rule_int(rule_key, default_value))
+    try:
+        cap = max(0, int(_rule(cap_rule_key, cap_default)))
+    except (TypeError, ValueError):
+        cap = max(0, int(cap_default))
+    if configured <= 0 or cap <= 0:
+        return configured, configured, cap
+    return min(configured, cap), configured, cap
 
 
 def _is_scalp_simulator_target(stock: dict | None) -> bool:
@@ -4530,7 +4547,12 @@ def _maybe_arm_scalp_sim_candidate_window(
         return False
     now_ts = _safe_float((runtime or {}).get("now_ts"), time.time())
     day_key = _scalp_sim_candidate_window_daily_key(now_ts)
-    max_open = max(0, _rule_int("SCALP_SIM_CANDIDATE_WINDOW_MAX_OPEN", 20))
+    max_open, configured_max_open, runtime_max_open_cap = _scalp_sim_runtime_capped_limit(
+        "SCALP_SIM_CANDIDATE_WINDOW_MAX_OPEN",
+        20,
+        "SCALP_SIM_CANDIDATE_WINDOW_RUNTIME_MAX_OPEN_CAP",
+        8,
+    )
     open_count = len(_scalp_simulator_active_targets())
     if max_open > 0 and open_count >= max_open:
         _log_entry_pipeline(
@@ -4545,6 +4567,8 @@ def _maybe_arm_scalp_sim_candidate_window(
                 ai_score=f"{score_value:.1f}",
                 open_count=open_count,
                 max_open=max_open,
+                configured_max_open=configured_max_open,
+                runtime_max_open_cap=runtime_max_open_cap,
                 runtime_effect="sim_observation_skipped",
                 decision_authority="sim_observation_only",
             ),
@@ -4556,7 +4580,12 @@ def _maybe_arm_scalp_sim_candidate_window(
         if str((target or {}).get("scalp_sim_candidate_window_date") or "") == day_key
     )
     created_today = max(int(_SCALP_SIM_CANDIDATE_WINDOW_DAILY_CREATED.get(day_key, 0) or 0), restored_today)
-    max_daily = max(0, _rule_int("SCALP_SIM_CANDIDATE_WINDOW_MAX_DAILY", 240))
+    max_daily, configured_max_daily, runtime_max_daily_cap = _scalp_sim_runtime_capped_limit(
+        "SCALP_SIM_CANDIDATE_WINDOW_MAX_DAILY",
+        240,
+        "SCALP_SIM_CANDIDATE_WINDOW_RUNTIME_MAX_DAILY_CAP",
+        80,
+    )
     if max_daily > 0 and created_today >= max_daily:
         _log_entry_pipeline(
             stock,
@@ -4570,6 +4599,8 @@ def _maybe_arm_scalp_sim_candidate_window(
                 ai_score=f"{score_value:.1f}",
                 created_today=created_today,
                 max_daily=max_daily,
+                configured_max_daily=configured_max_daily,
+                runtime_max_daily_cap=runtime_max_daily_cap,
                 runtime_effect="sim_observation_skipped",
                 decision_authority="sim_observation_only",
             ),
@@ -6727,12 +6758,130 @@ def _publish_greenfield_stage_notice(
         logger(stock, code, "greenfield_stage_telegram_failed", error=str(exc), **fields)
 
 
+SCANNER_WATCH_EVICTION_TERMINAL_STAGES = {
+    "blocked_strength_momentum",
+    "blocked_vpw",
+    "blocked_liquidity",
+    "blocked_overbought",
+    "blocked_ai_score",
+    "ai_confirmed_terminal_no_budget",
+}
+SCANNER_WATCH_EVICTION_NON_TERMINAL_SKIP_REASONS = {
+    "scanner_full_eval_loop_budget_deferred",
+    "entry_cooldown_active",
+    "strength_momentum_stability_recheck_waiting",
+}
+SCANNER_WATCH_EVICTION_POOL_BLOCK_SKIP_REASONS = {
+    "entry_cooldown_active",
+}
+
+
+def _scanner_terminal_block_fresh_input_confirmed(fields):
+    fields = fields if isinstance(fields, dict) else {}
+    for key in (
+        "reason",
+        "source_quality_block_reason",
+        "risk_state",
+        "stability_window_result",
+        "stability_window_reason",
+    ):
+        text = str(fields.get(key) or "").strip().lower()
+        if text in {
+            "insufficient_history",
+            "not_available",
+            "not_evaluated",
+            "single_snapshot_only",
+            "missing_orderbook_snapshot",
+        }:
+            return False
+        if "insufficient_history" in text or "not_available" in text or "single_snapshot_only" in text:
+            return False
+    for key in (
+        "quote_stale",
+        "tick_context_stale",
+        "price_context_stale",
+        "price_context_stale_at_submit",
+        "quote_stale_at_submit",
+    ):
+        value = fields.get(key)
+        if value is True or str(value).strip().lower() in {"true", "1", "yes", "stale"}:
+            return False
+    has_fresh_indicator = False
+    for key in ("quote_age_ms", "tick_latest_age_ms"):
+        value = fields.get(key)
+        if value is None:
+            continue
+        text = str(value).strip().lower()
+        if not text or text.startswith("not_available") or text.startswith("missing"):
+            return False
+        has_fresh_indicator = True
+    for key in ("quote_age_source", "tick_context_quality"):
+        value = fields.get(key)
+        if value is None:
+            continue
+        text = str(value).strip().lower()
+        if not text or "stale" in text or text.startswith("not_available") or text.startswith("missing"):
+            return False
+        has_fresh_indicator = True
+    snapshot_source = str(fields.get("snapshot_source") or "").strip().lower()
+    if snapshot_source in {"missing_ws_snapshot", "missing_orderbook_snapshot"}:
+        return False
+    return has_fresh_indicator
+
+
+def _remember_scanner_terminal_block(stock, stage, fields):
+    if not isinstance(stock, dict) or stage not in SCANNER_WATCH_EVICTION_TERMINAL_STAGES:
+        return
+    if not _is_scanner_watching_runtime_observation_target(stock):
+        return
+    reason = (
+        fields.get("terminal_reason")
+        or fields.get("strength_momentum_reason")
+        or fields.get("reason")
+        or fields.get("blocked_reason")
+        or stage
+    )
+    stock["_scanner_watch_last_terminal_block"] = {
+        "stage": str(stage),
+        "reason": str(reason or stage),
+        "observed_epoch": time.time(),
+        "fresh_input_confirmed": _scanner_terminal_block_fresh_input_confirmed(fields),
+    }
+
+
+def _reset_scanner_terminal_eviction_memory(stock):
+    if not isinstance(stock, dict):
+        return
+    for key in (
+        "_scanner_watch_last_terminal_block",
+        "_scanner_watch_eviction_terminal_stage",
+        "_scanner_watch_eviction_terminal_reason",
+        "_scanner_watch_eviction_terminal_count",
+        "_scanner_watch_eviction_last_terminal_observed_epoch",
+    ):
+        stock.pop(key, None)
+
+
+def _remember_scanner_pool_block(stock, skip_reason, fields, *, now_ts):
+    if not isinstance(stock, dict) or not _is_scanner_watching_runtime_observation_target(stock):
+        return
+    reason = str(skip_reason or "")
+    if reason not in SCANNER_WATCH_EVICTION_POOL_BLOCK_SKIP_REASONS:
+        return
+    stock["_scanner_watch_last_pool_block"] = {
+        "reason": reason,
+        "observed_epoch": float(now_ts),
+        "cooldown_remaining_sec": fields.get("cooldown_remaining_sec", "not_applicable_cooldown_remaining_sec"),
+    }
+
+
 def _log_entry_pipeline(stock, code, stage, **fields):
     record_id = stock.get("id") if isinstance(stock, dict) else None
     merged_fields = {
         **_scanner_promotion_correlation_fields(stock),
         **fields,
     }
+    _remember_scanner_terminal_block(stock, stage, merged_fields)
     emit_pipeline_event(
         "ENTRY_PIPELINE",
         stock.get("name"),
@@ -6804,6 +6953,9 @@ def emit_scanner_watching_runtime_skip(stock, code, *, skip_reason: str, now_ts:
     now_value = time.time() if now_ts is None else float(now_ts)
     throttle = max(0, int(throttle_sec or 0))
     key = str(skip_reason or "unknown_skip")
+    if key in SCANNER_WATCH_EVICTION_NON_TERMINAL_SKIP_REASONS:
+        _reset_scanner_terminal_eviction_memory(stock)
+    _remember_scanner_pool_block(stock, key, extra, now_ts=now_value)
     logged = stock.setdefault("_scanner_watching_runtime_skip_logged", {})
     if not isinstance(logged, dict):
         logged = {}
@@ -7162,6 +7314,11 @@ def _log_ai_confirmed_terminal_no_budget(
         "primary_decision_metric": "funnel_count",
         "source_quality_gate": "terminal_reason_contract_fields_present",
     }
+    contract_fields = _ensure_ai_source_quality_fields(
+        contract_fields,
+        stock if isinstance(stock, dict) else None,
+        not_evaluated_reason="ai_confirmed_terminal_no_budget_source_quality_missing",
+    )
     _log_entry_pipeline(
         stock,
         code,
@@ -13788,7 +13945,12 @@ def _scanner_rising_source_signature_set(source_signature: str | None) -> set[st
     return {token.strip().upper() for token in str(source_signature or "").split(",") if token.strip()}
 
 
-def _scanner_rising_strength_context_from_fields(fields: dict | None, *, min_delta: float) -> dict:
+def _scanner_rising_strength_context_from_fields(
+    fields: dict | None,
+    *,
+    min_delta: float,
+    require_bid_imbalance: bool = True,
+) -> dict:
     fields = fields if isinstance(fields, dict) else {}
     promotion_reason = str(fields.get("scanner_promotion_reason") or "").strip()
     source_signature_text = str(fields.get("source_signature") or "").strip()
@@ -13799,17 +13961,34 @@ def _scanner_rising_strength_context_from_fields(fields: dict | None, *, min_del
         "source_signature": source_signature_text or "-",
         "price_delta_since_first_seen_pct": f"{price_delta:.2f}",
     }
-    if promotion_reason != "price_jump_start_acceleration":
+    allowed_reasons = {"price_jump_start_acceleration"}
+    if not require_bid_imbalance:
+        allowed_reasons.add("price_jump_multisource_confirmation")
+    if promotion_reason not in allowed_reasons:
         return {"allowed": False, "skip_reason": "promotion_reason_not_price_jump_start", **base}
-    if not {"PRICE_JUMP_START", "BID_IMBALANCE_SURGE"}.issubset(source_signature_set):
+    if require_bid_imbalance and not {"PRICE_JUMP_START", "BID_IMBALANCE_SURGE"}.issubset(source_signature_set):
         return {"allowed": False, "skip_reason": "source_signature_not_bid_imbalance_price_jump", **base}
+    if not require_bid_imbalance:
+        has_price_volume = {"PRICE_JUMP_START", "VOLUME_SURGE_POSITIVE"}.issubset(source_signature_set)
+        has_rank_or_value = bool(source_signature_set & {"BID_IMBALANCE_SURGE", "REALTIME_RANK_START", "VALUE_TOP"})
+        if not (has_price_volume and has_rank_or_value):
+            return {"allowed": False, "skip_reason": "source_signature_not_price_volume_multisource", **base}
     if price_delta < min_delta:
         return {"allowed": False, "skip_reason": "price_delta_below_min", **base}
     return {"allowed": True, "skip_reason": "allowed", **base}
 
 
-def _find_scanner_rising_strength_context(stock, *, min_delta: float) -> dict:
-    current = _scanner_rising_strength_context_from_fields(stock if isinstance(stock, dict) else {}, min_delta=min_delta)
+def _find_scanner_rising_strength_context(
+    stock,
+    *,
+    min_delta: float,
+    require_bid_imbalance: bool = True,
+) -> dict:
+    current = _scanner_rising_strength_context_from_fields(
+        stock if isinstance(stock, dict) else {},
+        min_delta=min_delta,
+        require_bid_imbalance=require_bid_imbalance,
+    )
     current["scanner_context_source"] = "stock_state"
     if isinstance(stock, dict):
         current_epoch = _safe_float(
@@ -13831,7 +14010,11 @@ def _find_scanner_rising_strength_context(stock, *, min_delta: float) -> dict:
     candidates = []
     for row in events_by_code.get(code) or []:
         fields = row.get("fields") if isinstance(row.get("fields"), dict) else {}
-        candidate = _scanner_rising_strength_context_from_fields(fields, min_delta=min_delta)
+        candidate = _scanner_rising_strength_context_from_fields(
+            fields,
+            min_delta=min_delta,
+            require_bid_imbalance=require_bid_imbalance,
+        )
         if not candidate.get("allowed"):
             continue
         candidate["scanner_context_source"] = "promotion_event_fallback"
@@ -13847,7 +14030,12 @@ def _resolve_scanner_rising_strength_momentum_override(stock, result: dict | Non
     payload = result if isinstance(result, dict) else {}
     reason = str(payload.get("reason") or "").strip()
     min_delta = _rule_float("SCANNER_RISING_STRENGTH_OVERRIDE_MIN_DELTA_PCT", 1.0)
-    scanner_context = _find_scanner_rising_strength_context(stock, min_delta=min_delta)
+    require_bid_imbalance = reason != "below_window_buy_value"
+    scanner_context = _find_scanner_rising_strength_context(
+        stock,
+        min_delta=min_delta,
+        require_bid_imbalance=require_bid_imbalance,
+    )
     override_reason = "scanner_rising_bid_imbalance_strength_ai_recheck"
     base = {
         "override_reason": override_reason,
@@ -13865,8 +14053,9 @@ def _resolve_scanner_rising_strength_momentum_override(stock, result: dict | Non
         return {"allowed": False, "skip_reason": "disabled", **base}
     if str((stock or {}).get("position_tag") or "").upper() != "SCANNER":
         return {"allowed": False, "skip_reason": "position_tag_not_scanner", **base}
-    if reason != "below_strength_base":
-        return {"allowed": False, "skip_reason": "reason_not_below_strength_base", **base}
+    recheckable_reasons = {"below_strength_base", "below_window_buy_value"}
+    if reason not in recheckable_reasons:
+        return {"allowed": False, "skip_reason": "reason_not_scanner_rising_recheckable", **base}
     if not scanner_context.get("allowed"):
         return {"allowed": False, "skip_reason": scanner_context.get("skip_reason") or "scanner_context_not_qualified", **base}
     return {"allowed": True, "skip_reason": "allowed", **base}
@@ -15027,6 +15216,107 @@ def _buy_recovery_probe_source_quality_hard_block(probe: dict) -> bool:
     return bool(probe.get("tick_context_stale") is True or probe.get("quote_stale") is True)
 
 
+def _is_real_scanner_rising_watching_target(stock: dict | None) -> bool:
+    stock = stock if isinstance(stock, dict) else {}
+    strategy = str(stock.get("strategy") or stock.get("target_strategy") or "").upper()
+    position_tag = str(stock.get("position_tag") or stock.get("target_position_tag") or "").upper()
+    status = str(stock.get("status") or stock.get("target_status") or "").upper()
+    if strategy != "SCALPING" or position_tag != "SCANNER":
+        return False
+    if status and status != "WATCHING":
+        return False
+    if bool(stock.get("simulated_order") or stock.get("is_sim") or stock.get("is_probe")):
+        return False
+    if _safe_int(stock.get("buy_qty"), 0) > 0 or stock.get("buy_time"):
+        return False
+    promotion_reason = str(stock.get("scanner_promotion_reason") or "").strip()
+    if promotion_reason not in {"price_jump_start_acceleration", "price_jump_multisource_confirmation"}:
+        return False
+    source_signature = _scanner_rising_source_signature_set(stock.get("source_signature"))
+    if "PRICE_JUMP_START" not in source_signature:
+        return False
+    return bool(source_signature & {"BID_IMBALANCE_SURGE", "REALTIME_RANK_START", "VALUE_TOP", "VOLUME_SURGE_POSITIVE"})
+
+
+def _quote_stale_score65_74_probe_relief_allowed(stock: dict | None, probe: dict | None) -> tuple[bool, dict]:
+    probe = probe if isinstance(probe, dict) else {}
+    max_quote_age_ms = _rule_int("AI_SCORE65_74_RECOVERY_PROBE_MAX_QUOTE_STALE_AGE_MS", 7000)
+    quote_age_ms = _safe_float(probe.get("quote_age_ms"), -1.0)
+    pre_submit_refresh_env = os.getenv("KORSTOCKSCAN_SCALP_PRE_SUBMIT_QUOTE_REFRESH_ENABLED")
+    pre_submit_refresh_enabled = (
+        pre_submit_refresh_env is None
+        or str(pre_submit_refresh_env).strip().lower() in {"1", "true", "yes", "y", "on"}
+    )
+    fields = {
+        "score65_74_recovery_probe_quote_stale_relief_enabled": _rule_bool(
+            "AI_SCORE65_74_RECOVERY_PROBE_ALLOW_QUOTE_STALE_WITH_PRE_SUBMIT_REFRESH",
+            False,
+        ),
+        "score65_74_recovery_probe_quote_stale_relief_applied": False,
+        "score65_74_recovery_probe_quote_stale_relief_reason": "not_evaluated",
+        "score65_74_recovery_probe_max_quote_stale_age_ms": max_quote_age_ms,
+        "score65_74_recovery_probe_pre_submit_refresh_enabled": pre_submit_refresh_enabled,
+    }
+    if not fields["score65_74_recovery_probe_quote_stale_relief_enabled"]:
+        fields["score65_74_recovery_probe_quote_stale_relief_reason"] = "disabled"
+        return False, fields
+    if not _is_real_scanner_rising_watching_target(stock):
+        fields["score65_74_recovery_probe_quote_stale_relief_reason"] = "scope_not_real_scanner_rising_watching"
+        return False, fields
+    if probe.get("tick_context_stale") is True:
+        fields["score65_74_recovery_probe_quote_stale_relief_reason"] = "tick_context_stale"
+        return False, fields
+    if probe.get("quote_stale") is not True:
+        fields["score65_74_recovery_probe_quote_stale_relief_reason"] = "quote_not_stale"
+        return False, fields
+    if quote_age_ms < 0:
+        fields["score65_74_recovery_probe_quote_stale_relief_reason"] = "quote_age_missing"
+        return False, fields
+    if quote_age_ms > max_quote_age_ms:
+        fields["score65_74_recovery_probe_quote_stale_relief_reason"] = "quote_age_above_max"
+        return False, fields
+    if not pre_submit_refresh_enabled:
+        fields["score65_74_recovery_probe_quote_stale_relief_reason"] = "pre_submit_refresh_disabled"
+        return False, fields
+    fields["score65_74_recovery_probe_quote_stale_relief_applied"] = True
+    fields["score65_74_recovery_probe_quote_stale_relief_reason"] = "quote_stale_only_pre_submit_refresh_required"
+    return True, fields
+
+
+def _score65_74_scanner_rising_micro_vwap_relief_allowed(
+    stock: dict | None,
+    guard: dict | None,
+) -> tuple[bool, dict]:
+    guard = guard if isinstance(guard, dict) else {}
+    min_micro_vwap_bp = _rule_float("AI_SCORE65_74_RECOVERY_PROBE_SCANNER_RISING_MIN_MICRO_VWAP_BP", 0.0)
+    micro_vwap_bp = _safe_float(guard.get("micro_vwap_bp"), 0.0)
+    skip_reason = str(guard.get("score65_74_recovery_probe_skip_reason") or "")
+    fields = {
+        "score65_74_recovery_probe_scanner_rising_micro_relief_enabled": _rule_bool(
+            "AI_SCORE65_74_RECOVERY_PROBE_SCANNER_RISING_MICRO_VWAP_RELIEF_ENABLED",
+            False,
+        ),
+        "score65_74_recovery_probe_scanner_rising_micro_relief_applied": False,
+        "score65_74_recovery_probe_scanner_rising_micro_relief_reason": "not_evaluated",
+        "score65_74_recovery_probe_scanner_rising_min_micro_vwap_bp": min_micro_vwap_bp,
+    }
+    if not fields["score65_74_recovery_probe_scanner_rising_micro_relief_enabled"]:
+        fields["score65_74_recovery_probe_scanner_rising_micro_relief_reason"] = "disabled"
+        return False, fields
+    if not _is_real_scanner_rising_watching_target(stock):
+        fields["score65_74_recovery_probe_scanner_rising_micro_relief_reason"] = "scope_not_real_scanner_rising_watching"
+        return False, fields
+    if skip_reason != "micro_vwap_below_min":
+        fields["score65_74_recovery_probe_scanner_rising_micro_relief_reason"] = "skip_reason_not_micro_vwap_only"
+        return False, fields
+    if micro_vwap_bp < min_micro_vwap_bp:
+        fields["score65_74_recovery_probe_scanner_rising_micro_relief_reason"] = "micro_vwap_below_scanner_floor"
+        return False, fields
+    fields["score65_74_recovery_probe_scanner_rising_micro_relief_applied"] = True
+    fields["score65_74_recovery_probe_scanner_rising_micro_relief_reason"] = "scanner_rising_micro_floor_relief"
+    return True, fields
+
+
 def _is_wait65_79_candidate(action, ai_score) -> bool:
     if str(action or "WAIT").upper() == "BUY":
         return False
@@ -15344,23 +15634,34 @@ def _score65_74_recovery_probe_decision(
     if not isinstance(probe, dict):
         return {"allowed": False, "evaluated": True, "score65_74_recovery_probe_skip_reason": "feature_probe_missing"}
     if _buy_recovery_probe_source_quality_hard_block(probe):
-        return {
-            **_score65_74_recovery_probe_micro_guard(probe),
-            "allowed": False,
-            "evaluated": True,
-            "score65_74_recovery_probe_skip_reason": "source_quality_hard_block",
-        }
+        quote_stale_relief_allowed, quote_stale_relief_fields = _quote_stale_score65_74_probe_relief_allowed(
+            stock,
+            probe,
+        )
+        if quote_stale_relief_allowed:
+            probe = dict(probe)
+            probe["quote_stale"] = False
+        else:
+            return {
+                **_score65_74_recovery_probe_micro_guard(probe),
+                **quote_stale_relief_fields,
+                "allowed": False,
+                "evaluated": True,
+                "score65_74_recovery_probe_skip_reason": "source_quality_hard_block",
+            }
+    else:
+        quote_stale_relief_fields = {}
     negative_reason = _score65_74_recovery_probe_wait_negative_reason(ai_decision)
     if negative_reason:
         return {
             **_score65_74_recovery_probe_micro_guard(probe),
+            **quote_stale_relief_fields,
             "allowed": False,
             "evaluated": True,
             "score65_74_recovery_probe_skip_reason": (
                 f"ai_wait_negative_reason_veto:{negative_reason}"
             ),
         }
-
     guard = _score65_74_recovery_probe_repeat_guard(
         stock,
         code,
@@ -15368,6 +15669,20 @@ def _score65_74_recovery_probe_decision(
         probe,
         now_ts=now_ts,
     )
+    micro_relief_allowed, micro_relief_fields = _score65_74_scanner_rising_micro_vwap_relief_allowed(
+        stock,
+        guard,
+    )
+    if micro_relief_allowed:
+        guard = {
+            **guard,
+            "allowed": True,
+            "score65_74_recovery_probe_skip_reason": "",
+        }
+    if quote_stale_relief_fields:
+        guard = {**guard, **quote_stale_relief_fields}
+    if micro_relief_fields:
+        guard = {**guard, **micro_relief_fields}
     return {**guard, "evaluated": True, "allowed": bool(guard.get("allowed"))}
 
 
@@ -15835,9 +16150,9 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                         overlap_snapshot = _extract_ai_overlap_snapshot(ws_data=ws_data)
                         _mutate_stock_state(stock, set_fields={'last_ai_overlap_snapshot': overlap_snapshot})
                         scanner_rising_override = (
-                            {"allowed": False, "skip_reason": "source_quality_hard_block"}
-                            if source_quality_block_reason
-                            else _resolve_scanner_rising_strength_momentum_override(stock, momentum_gate)
+                            _resolve_scanner_rising_strength_momentum_override(stock, momentum_gate)
+                            if source_quality_block_reason in {"", "extreme_sell_dominant"}
+                            else {"allowed": False, "skip_reason": "source_quality_hard_block"}
                         )
                         if scanner_rising_override.get("allowed"):
                             strength_context = _register_scalp_pre_ai_gate_context(
@@ -16858,6 +17173,30 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                                             False,
                                         )
                                     ),
+                                    score65_74_recovery_probe_quote_stale_relief_applied=bool(
+                                        score65_74_probe_decision.get(
+                                            "score65_74_recovery_probe_quote_stale_relief_applied",
+                                            False,
+                                        )
+                                    ),
+                                    score65_74_recovery_probe_quote_stale_relief_reason=(
+                                        score65_74_probe_decision.get(
+                                            "score65_74_recovery_probe_quote_stale_relief_reason",
+                                            "-",
+                                        )
+                                    ),
+                                    score65_74_recovery_probe_scanner_rising_micro_relief_applied=bool(
+                                        score65_74_probe_decision.get(
+                                            "score65_74_recovery_probe_scanner_rising_micro_relief_applied",
+                                            False,
+                                        )
+                                    ),
+                                    score65_74_recovery_probe_scanner_rising_micro_relief_reason=(
+                                        score65_74_probe_decision.get(
+                                            "score65_74_recovery_probe_scanner_rising_micro_relief_reason",
+                                            "-",
+                                        )
+                                    ),
                                     latency_state=str((ws_data or {}).get("latency_state", "") or "").strip().upper() or "-",
                                     **_build_tick_source_quality_log_fields(feature_probe),
                                     qty_cap=0,
@@ -16924,6 +17263,30 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                                         score65_74_probe_decision.get(
                                             "score65_74_recovery_probe_strong_micro_source_quality_ok",
                                             False,
+                                        )
+                                    ),
+                                    score65_74_recovery_probe_quote_stale_relief_applied=bool(
+                                        score65_74_probe_decision.get(
+                                            "score65_74_recovery_probe_quote_stale_relief_applied",
+                                            False,
+                                        )
+                                    ),
+                                    score65_74_recovery_probe_quote_stale_relief_reason=(
+                                        score65_74_probe_decision.get(
+                                            "score65_74_recovery_probe_quote_stale_relief_reason",
+                                            "-",
+                                        )
+                                    ),
+                                    score65_74_recovery_probe_scanner_rising_micro_relief_applied=bool(
+                                        score65_74_probe_decision.get(
+                                            "score65_74_recovery_probe_scanner_rising_micro_relief_applied",
+                                            False,
+                                        )
+                                    ),
+                                    score65_74_recovery_probe_scanner_rising_micro_relief_reason=(
+                                        score65_74_probe_decision.get(
+                                            "score65_74_recovery_probe_scanner_rising_micro_relief_reason",
+                                            "-",
                                         )
                                     ),
                                     same_symbol_recovery_probe_cooldown_until=(
@@ -20842,20 +21205,29 @@ def handle_watching_state(stock, code, ws_data, admin_id, *, now_ts=None, now_dt
     pos_tag = normalize_position_tag(strategy, stock.get('position_tag'))
 
     if strategy == 'SCALPING':
-        strategy_start = TIME_09_00 if pos_tag == 'VCP_NEXT' else TIME_09_03
+        if not is_scalping_buy_time_allowed(now_t):
+            emit_scanner_watching_runtime_skip(
+                stock,
+                code,
+                skip_reason=scalping_buy_time_block_reason(now_t),
+                now_ts=now_ts,
+                ws_data=ws_data,
+                scalping_buy_windows=describe_scalping_buy_windows(),
+                cutoff_time=TIME_SCALPING_NEW_BUY_CUTOFF.isoformat(),
+            )
+            return
     else:
         strategy_start = TIME_09_05
-
-    if now_t < strategy_start:
-        emit_scanner_watching_runtime_skip(
-            stock,
-            code,
-            skip_reason="before_strategy_start",
-            now_ts=now_ts,
-            ws_data=ws_data,
-            strategy_start=strategy_start.isoformat(),
-        )
-        return
+        if now_t < strategy_start:
+            emit_scanner_watching_runtime_skip(
+                stock,
+                code,
+                skip_reason="before_strategy_start",
+                now_ts=now_ts,
+                ws_data=ws_data,
+                strategy_start=strategy_start.isoformat(),
+            )
+            return
 
     MAX_SURGE = MAX_SCALP_SURGE_PCT
     MAX_INTRADAY_SURGE = MAX_INTRADAY_SURGE
@@ -20910,17 +21282,6 @@ def handle_watching_state(stock, code, ws_data, admin_id, *, now_ts=None, now_dt
             now_ts=now_ts,
             ws_data=ws_data,
             cooldown_remaining_sec=max(0, int(cooldowns[code] - now_ts)),
-        )
-        return
-
-    if strategy == 'SCALPING' and now_t >= TIME_SCALPING_NEW_BUY_CUTOFF:
-        emit_scanner_watching_runtime_skip(
-            stock,
-            code,
-            skip_reason="scalping_new_buy_cutoff",
-            now_ts=now_ts,
-            ws_data=ws_data,
-            cutoff_time=TIME_SCALPING_NEW_BUY_CUTOFF.isoformat(),
         )
         return
 
@@ -24008,25 +24369,23 @@ def can_consider_scale_in(
     else:
         return {"allowed": False, "reason": "unknown_strategy"}
 
-    # 장 마감 근접 시 추가매수 금지
     now = datetime.now()
-    try:
-        close_str = _rule("MARKET_CLOSE_TIME", "15:30:00")
-        close_t = datetime.strptime(close_str, "%H:%M:%S").time()
-        close_dt = datetime.combine(now.date(), close_t) - timedelta(minutes=5)
-        if now >= close_dt:
-            return {"allowed": False, "reason": "near_market_close"}
-    except Exception as exc:
-        log_error(f"[SCALE_IN_GUARD] MARKET_CLOSE_TIME parse 실패: {close_str if isinstance(close_str, str) else 'invalid'} ({exc})")
+    if raw_strategy == 'SCALPING' and not is_scalping_buy_time_allowed(now):
+        reason = scalping_buy_time_block_reason(now)
+        if reason == "scalping_new_buy_cutoff":
+            return {"allowed": False, "reason": "scalping_cutoff"}
+        return {"allowed": False, "reason": "scalping_buy_window_blocked"}
 
-    if raw_strategy == 'SCALPING':
+    # Swing scale-in still follows the regular-market close guard. Scalping uses SCALPING_BUY_WINDOWS above.
+    if raw_strategy != 'SCALPING':
         try:
-            cutoff_str = _rule("SCALPING_NEW_BUY_CUTOFF", "15:00:00")
-            cutoff_t = datetime.strptime(cutoff_str, "%H:%M:%S").time()
-            if now.time() >= cutoff_t:
-                return {"allowed": False, "reason": "scalping_cutoff"}
+            close_str = _rule("MARKET_CLOSE_TIME", "15:30:00")
+            close_t = datetime.strptime(close_str, "%H:%M:%S").time()
+            close_dt = datetime.combine(now.date(), close_t) - timedelta(minutes=5)
+            if now >= close_dt:
+                return {"allowed": False, "reason": "near_market_close"}
         except Exception as exc:
-            log_error(f"[SCALE_IN_GUARD] SCALPING_NEW_BUY_CUTOFF parse 실패: {cutoff_str if isinstance(cutoff_str, str) else 'invalid'} ({exc})")
+            log_error(f"[SCALE_IN_GUARD] MARKET_CLOSE_TIME parse 실패: {close_str if isinstance(close_str, str) else 'invalid'} ({exc})")
 
     if not skip_add_judgment_lock:
         _mutate_stock_state(stock, set_fields={'last_scale_in_check_ts': time.time()})

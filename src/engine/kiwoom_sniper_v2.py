@@ -54,18 +54,17 @@ from src.engine.sniper_time import (
     _rule_time,
     _in_time_window,
     TIME_07_00,
-    TIME_09_00,
-    TIME_09_03,
     TIME_09_05,
     TIME_09_10,
     TIME_10_30,
     TIME_11_00,
-    TIME_SCALPING_NEW_BUY_CUTOFF,
     TIME_SCALPING_OVERNIGHT_DECISION,
     TIME_MARKET_CLOSE,
     TIME_15_30,
     TIME_20_00,
     TIME_23_59,
+    describe_scalping_buy_windows,
+    is_scalping_buy_time_allowed,
 )
 from src.engine.sniper_s15_fast_track import (
     bind_s15_dependencies,
@@ -218,6 +217,21 @@ _SCANNER_REST_QUOTE_FALLBACK_POSITIVE_RESERVE_CALLS = 1
 _SCANNER_REST_QUOTE_FALLBACK_FAILURE_COOLDOWN_SEC = 30.0
 _SCANNER_REST_QUOTE_FALLBACK_STATE = {"call_epochs": [], "cooldown_until": 0.0}
 _SCANNER_REST_QUOTE_FALLBACK_LOCK = threading.Lock()
+SCANNER_WATCH_EVICTION_POLICY_VERSION = "scalping_scanner_watch_eviction_v3"
+SCANNER_WATCH_EVICTION_TERMINAL_MIN_COUNT = 2
+SCANNER_WATCH_EVICTION_STALE_MIN_COUNT = 3
+SCANNER_WATCH_EVICTION_STALE_MIN_AGE_SEC = 90.0
+SCANNER_WATCH_EVICTION_COOLDOWN_MIN_COUNT = 2
+SCANNER_WATCH_EVICTION_COOLDOWN_MIN_REMAINING_SEC = 60
+SCANNER_WATCH_EVICTION_SOURCE_QUALITY_REASONS = {
+    "insufficient_history",
+}
+SCANNER_WATCH_EVICTION_STALE_REASONS = {
+    "stale_ws_snapshot",
+    "ws_snapshot_missing_or_zero",
+    "scanner_fast_precheck_stability_pending",
+    *SCANNER_WATCH_EVICTION_SOURCE_QUALITY_REASONS,
+}
 
 
 def _run_account_sync_with_cleanup():
@@ -739,12 +753,12 @@ def check_watching_conditions(stock, code, ws_data, admin_id, radar=None, ai_eng
     
     # 시간 조건
     if strategy == 'SCALPING':
-        strategy_start = TIME_09_00 if pos_tag == 'VCP_NEXT' else TIME_09_03
+        if not is_scalping_buy_time_allowed(now_t):
+            return f"SCALPING 매매 시간대 아님 (현재 {now_t}, 허용 {describe_scalping_buy_windows()})"
     else:
         strategy_start = TIME_09_05
-    
-    if now_t < strategy_start:
-        return f"시간 조건 불충족 (현재 {now_t}, 시작 {strategy_start})"
+        if now_t < strategy_start:
+            return f"시간 조건 불충족 (현재 {now_t}, 시작 {strategy_start})"
     
     MAX_SURGE = getattr(TRADING_RULES, 'MAX_SCALP_SURGE_PCT', 20.0)
     MAX_INTRADAY_SURGE = getattr(TRADING_RULES, 'MAX_INTRADAY_SURGE', 15.0)
@@ -752,9 +766,6 @@ def check_watching_conditions(stock, code, ws_data, admin_id, radar=None, ai_eng
     
     if code in cooldowns and time.time() < cooldowns[code]:
         return f"쿨다운 중 (만료 시간 {cooldowns[code]})"
-    
-    if strategy == 'SCALPING' and now_t >= TIME_15_30:
-        return "SCALPING 15:30 이후 제외"
     
     if code in alerted_stocks:
         return "이미 alerted_stocks에 포함됨"
@@ -1016,6 +1027,326 @@ def _is_scanner_watching_target(target):
     return _is_scanner_runtime_target(target) and str(target.get("status") or "").upper() == "WATCHING"
 
 
+def _is_scanner_watch_eviction_candidate(target):
+    target = target or {}
+    if not _is_scanner_watching_target(target):
+        return False
+    if target.get("buy_time") not in (None, "", 0):
+        return False
+    if _safe_int(target.get("buy_qty"), 0) != 0:
+        return False
+    if not target.get("id"):
+        return False
+    return True
+
+
+def _scanner_watch_reset_terminal_eviction_state(target):
+    if not isinstance(target, dict):
+        return
+    target.pop("_scanner_watch_eviction_terminal_stage", None)
+    target.pop("_scanner_watch_eviction_terminal_reason", None)
+    target.pop("_scanner_watch_eviction_terminal_count", None)
+    target.pop("_scanner_watch_eviction_last_terminal_observed_epoch", None)
+
+
+def _scanner_watch_reset_stale_eviction_state(target):
+    if not isinstance(target, dict):
+        return
+    target.pop("_scanner_watch_eviction_stale_first_seen_epoch", None)
+    target.pop("_scanner_watch_eviction_stale_count", None)
+
+
+def _scanner_watch_reset_pool_block_eviction_state(target):
+    if not isinstance(target, dict):
+        return
+    target.pop("_scanner_watch_eviction_pool_block_reason", None)
+    target.pop("_scanner_watch_eviction_pool_block_count", None)
+    target.pop("_scanner_watch_eviction_last_pool_block_observed_epoch", None)
+
+
+def _scanner_watch_eviction_decision_from_terminal(target, *, now_ts):
+    if not _is_scanner_watch_eviction_candidate(target):
+        return {"should_evict": False, "eviction_attempt_count": 0}
+    block = target.get("_scanner_watch_last_terminal_block")
+    if not isinstance(block, dict):
+        return {"should_evict": False, "eviction_attempt_count": 0}
+    stage = str(block.get("stage") or "")
+    if stage not in sniper_state_handlers.SCANNER_WATCH_EVICTION_TERMINAL_STAGES:
+        return {"should_evict": False, "eviction_attempt_count": 0}
+    reason = str(block.get("reason") or stage)
+    fresh_input_confirmed = bool(block.get("fresh_input_confirmed"))
+    if not fresh_input_confirmed:
+        _scanner_watch_reset_terminal_eviction_state(target)
+        return {"should_evict": False, "eviction_attempt_count": 0}
+    _scanner_watch_reset_stale_eviction_state(target)
+    block_epoch = _safe_float(block.get("observed_epoch"), 0.0)
+    last_block_epoch = _safe_float(target.get("_scanner_watch_eviction_last_terminal_observed_epoch"), 0.0)
+    if block_epoch > 0 and block_epoch == last_block_epoch:
+        return {
+            "should_evict": False,
+            "eviction_attempt_count": _safe_int(target.get("_scanner_watch_eviction_terminal_count"), 0),
+        }
+    prev_stage = str(target.get("_scanner_watch_eviction_terminal_stage") or "")
+    prev_reason = str(target.get("_scanner_watch_eviction_terminal_reason") or "")
+    attempt_count = _safe_int(target.get("_scanner_watch_eviction_terminal_count"), 0)
+    if prev_stage == stage and prev_reason == reason:
+        attempt_count += 1
+    else:
+        attempt_count = 1
+    target["_scanner_watch_eviction_terminal_stage"] = stage
+    target["_scanner_watch_eviction_terminal_reason"] = reason
+    target["_scanner_watch_eviction_terminal_count"] = attempt_count
+    if block_epoch > 0:
+        target["_scanner_watch_eviction_last_terminal_observed_epoch"] = block_epoch
+    return {
+        "should_evict": attempt_count >= SCANNER_WATCH_EVICTION_TERMINAL_MIN_COUNT,
+        "eviction_reason": "terminal_blocker_repeated",
+        "eviction_attempt_count": attempt_count,
+        "terminal_stage": stage,
+        "terminal_reason": reason,
+        "fresh_input_confirmed": True,
+        "stale_first_seen_epoch": "not_applicable_stale_first_seen_epoch",
+        "stale_age_sec": "not_applicable_stale_age_sec",
+        "ws_recovery_outcome": "not_applicable_ws_recovery_outcome",
+        "observed_epoch": f"{float(now_ts):.3f}",
+    }
+
+
+def _scanner_watch_eviction_decision_from_stale(target, *, now_ts, stale_reason, recovery_fields=None):
+    if not _is_scanner_watch_eviction_candidate(target):
+        return {"should_evict": False, "eviction_attempt_count": 0}
+    reason = str(stale_reason or "")
+    if reason not in SCANNER_WATCH_EVICTION_STALE_REASONS:
+        return {"should_evict": False, "eviction_attempt_count": 0}
+    recovery_fields = recovery_fields if isinstance(recovery_fields, dict) else {}
+    is_source_quality_unresolved = reason in SCANNER_WATCH_EVICTION_SOURCE_QUALITY_REASONS
+    recovery_outcome = str(
+        recovery_fields.get("ws_recovery_outcome")
+        or (
+            "source_quality_unresolved_no_ws_recovery"
+            if is_source_quality_unresolved
+            else "not_applicable_ws_recovery_outcome"
+        )
+    )
+    if recovery_outcome == "rest_quote_applied":
+        _scanner_watch_reset_stale_eviction_state(target)
+        return {"should_evict": False, "eviction_attempt_count": 0}
+    first_seen = _safe_float(target.get("_scanner_watch_eviction_stale_first_seen_epoch"), 0.0)
+    if first_seen <= 0:
+        first_seen = float(now_ts)
+    attempt_count = _safe_int(target.get("_scanner_watch_eviction_stale_count"), 0) + 1
+    target["_scanner_watch_eviction_stale_first_seen_epoch"] = first_seen
+    target["_scanner_watch_eviction_stale_count"] = attempt_count
+    stale_age_sec = max(0.0, float(now_ts) - first_seen)
+    return {
+        "should_evict": (
+            attempt_count >= SCANNER_WATCH_EVICTION_STALE_MIN_COUNT
+            and stale_age_sec >= SCANNER_WATCH_EVICTION_STALE_MIN_AGE_SEC
+            and recovery_outcome != "rest_quote_applied"
+        ),
+        "eviction_reason": (
+            "source_quality_unresolved"
+            if is_source_quality_unresolved
+            else "stale_recovery_failed"
+        ),
+        "eviction_attempt_count": attempt_count,
+        "terminal_stage": "not_applicable_terminal_stage",
+        "terminal_reason": reason,
+        "fresh_input_confirmed": False,
+        "stale_first_seen_epoch": f"{first_seen:.3f}",
+        "stale_age_sec": round(stale_age_sec, 3),
+        "ws_recovery_outcome": recovery_outcome,
+        "observed_epoch": f"{float(now_ts):.3f}",
+    }
+
+
+def _scanner_watch_eviction_decision_from_pool_block(target, *, now_ts):
+    if not _is_scanner_watch_eviction_candidate(target):
+        return {"should_evict": False, "eviction_attempt_count": 0}
+    block = target.get("_scanner_watch_last_pool_block")
+    if not isinstance(block, dict):
+        return {"should_evict": False, "eviction_attempt_count": 0}
+    reason = str(block.get("reason") or "")
+    if reason != "entry_cooldown_active":
+        return {"should_evict": False, "eviction_attempt_count": 0}
+    cooldown_remaining_sec = _safe_int(block.get("cooldown_remaining_sec"), 0)
+    if cooldown_remaining_sec < SCANNER_WATCH_EVICTION_COOLDOWN_MIN_REMAINING_SEC:
+        _scanner_watch_reset_pool_block_eviction_state(target)
+        return {"should_evict": False, "eviction_attempt_count": 0}
+    block_epoch = _safe_float(block.get("observed_epoch"), 0.0)
+    last_block_epoch = _safe_float(target.get("_scanner_watch_eviction_last_pool_block_observed_epoch"), 0.0)
+    if block_epoch > 0 and block_epoch == last_block_epoch:
+        return {
+            "should_evict": False,
+            "eviction_attempt_count": _safe_int(target.get("_scanner_watch_eviction_pool_block_count"), 0),
+        }
+    prev_reason = str(target.get("_scanner_watch_eviction_pool_block_reason") or "")
+    attempt_count = _safe_int(target.get("_scanner_watch_eviction_pool_block_count"), 0)
+    attempt_count = attempt_count + 1 if prev_reason == reason else 1
+    target["_scanner_watch_eviction_pool_block_reason"] = reason
+    target["_scanner_watch_eviction_pool_block_count"] = attempt_count
+    if block_epoch > 0:
+        target["_scanner_watch_eviction_last_pool_block_observed_epoch"] = block_epoch
+    return {
+        "should_evict": attempt_count >= SCANNER_WATCH_EVICTION_COOLDOWN_MIN_COUNT,
+        "eviction_reason": "safety_cooldown_pool_blocked",
+        "eviction_attempt_count": attempt_count,
+        "terminal_stage": "not_applicable_terminal_stage",
+        "terminal_reason": reason,
+        "fresh_input_confirmed": False,
+        "stale_first_seen_epoch": "not_applicable_stale_first_seen_epoch",
+        "stale_age_sec": "not_applicable_stale_age_sec",
+        "ws_recovery_outcome": "not_applicable_ws_recovery_outcome",
+        "cooldown_remaining_sec": cooldown_remaining_sec,
+        "observed_epoch": f"{float(now_ts):.3f}",
+    }
+
+
+def _scanner_watch_eviction_event_fields(target, *, decision):
+    target = target or {}
+    return {
+        "metric_role": "runtime_watchlist_pool_management",
+        "decision_authority": "real_scalping_scanner_watch_eviction_pool_management_only",
+        "window_policy": "intraday_runtime_watchlist",
+        "sample_floor": "not_applicable_runtime_pool_management",
+        "primary_decision_metric": "eviction_reason",
+        "source_quality_gate": "scalping_scanner_watch_eviction_contract",
+        "source_quality_route": "runtime_watchlist_eviction_pool_management_only",
+        "forbidden_uses": (
+            "score_threshold_change,provider_route_change,order_price_change,"
+            "quantity_or_cap_change,broker_guard_change,real_execution_quality_approval"
+        ),
+        "runtime_effect": True,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "eviction_reason": decision.get("eviction_reason") or "not_applicable_eviction_reason",
+        "eviction_policy_version": SCANNER_WATCH_EVICTION_POLICY_VERSION,
+        "eviction_attempt_count": decision.get("eviction_attempt_count", 0),
+        "terminal_stage": decision.get("terminal_stage") or "not_applicable_terminal_stage",
+        "terminal_reason": decision.get("terminal_reason") or "not_applicable_terminal_reason",
+        "fresh_input_confirmed": bool(decision.get("fresh_input_confirmed")),
+        "stale_first_seen_epoch": decision.get("stale_first_seen_epoch") or "not_applicable_stale_first_seen_epoch",
+        "stale_age_sec": decision.get("stale_age_sec") or "not_applicable_stale_age_sec",
+        "ws_recovery_outcome": decision.get("ws_recovery_outcome") or "not_applicable_ws_recovery_outcome",
+        "cooldown_remaining_sec": decision.get("cooldown_remaining_sec", "not_applicable_cooldown_remaining_sec"),
+        "runtime_record_id": target.get("id") or "not_applicable_runtime_record_id",
+        "stock_code": str(target.get("code") or "").strip()[:6] or "not_applicable_stock_code",
+        "target_status": target.get("status") or "not_applicable_target_status",
+        "target_strategy": normalize_strategy(target.get("strategy")),
+        "target_position_tag": normalize_position_tag(normalize_strategy(target.get("strategy")), target.get("position_tag")),
+        "observed_epoch": decision.get("observed_epoch") or f"{time.time():.3f}",
+    }
+
+
+def _expire_scanner_watch_target(target, code, targets, *, decision, emit_event_fn=None):
+    if not _is_scanner_watch_eviction_candidate(target):
+        return False
+    record_id = target.get("id")
+    norm_code = str(code or target.get("code") or "").strip()[:6]
+    fields = _scanner_watch_eviction_event_fields(target, decision=decision)
+    updated = 0
+    try:
+        with DB.get_session() as session:
+            updated = session.query(RecommendationHistory).filter(
+                RecommendationHistory.id == record_id,
+                RecommendationHistory.stock_code == norm_code,
+                RecommendationHistory.status == "WATCHING",
+                RecommendationHistory.strategy == "SCALPING",
+                RecommendationHistory.position_tag == "SCANNER",
+                RecommendationHistory.buy_time.is_(None),
+                RecommendationHistory.buy_qty == 0,
+            ).update({"status": "EXPIRED"}, synchronize_session=False)
+    except Exception as exc:
+        log_error(f"🚨 [SCANNER_WATCH_EVICTION] DB update failed ({norm_code}, id={record_id}): {exc}")
+        return False
+    if updated <= 0:
+        return False
+    for item in targets:
+        if item.get("id") == record_id and str(item.get("code") or "").strip()[:6] == norm_code:
+            item["status"] = "EXPIRED"
+    if emit_event_fn:
+        emit_event_fn(target, norm_code, "scalping_scanner_watch_eviction", fields)
+    else:
+        sniper_state_handlers._log_entry_pipeline(target, norm_code, "scalping_scanner_watch_eviction", **fields)
+    return True
+
+
+def _maybe_expire_scanner_watch_for_terminal(target, code, targets, *, now_ts, emit_event_fn=None):
+    decision = _scanner_watch_eviction_decision_from_terminal(target, now_ts=now_ts)
+    if not decision.get("should_evict"):
+        return False
+    return _expire_scanner_watch_target(target, code, targets, decision=decision, emit_event_fn=emit_event_fn)
+
+
+def _maybe_expire_scanner_watch_for_stale(target, code, targets, *, now_ts, stale_reason, recovery_fields=None, emit_event_fn=None):
+    decision = _scanner_watch_eviction_decision_from_stale(
+        target,
+        now_ts=now_ts,
+        stale_reason=stale_reason,
+        recovery_fields=recovery_fields,
+    )
+    if not decision.get("should_evict"):
+        return False
+    return _expire_scanner_watch_target(target, code, targets, decision=decision, emit_event_fn=emit_event_fn)
+
+
+def _maybe_expire_scanner_watch_for_pool_block(target, code, targets, *, now_ts, emit_event_fn=None):
+    decision = _scanner_watch_eviction_decision_from_pool_block(target, now_ts=now_ts)
+    if not decision.get("should_evict"):
+        return False
+    return _expire_scanner_watch_target(target, code, targets, decision=decision, emit_event_fn=emit_event_fn)
+
+
+def _scanner_watch_nonfresh_source_quality_reason(target):
+    block = (target or {}).get("_scanner_watch_last_terminal_block")
+    if not isinstance(block, dict):
+        return ""
+    stage = str(block.get("stage") or "")
+    if stage not in sniper_state_handlers.SCANNER_WATCH_EVICTION_TERMINAL_STAGES:
+        return ""
+    if bool(block.get("fresh_input_confirmed")):
+        return ""
+    reason = str(block.get("reason") or "")
+    return reason if reason in SCANNER_WATCH_EVICTION_SOURCE_QUALITY_REASONS else ""
+
+
+def _maybe_expire_scanner_watch_after_full_eval(target, code, targets, *, now_ts, emit_event_fn=None):
+    if _maybe_expire_scanner_watch_for_terminal(
+        target,
+        code,
+        targets,
+        now_ts=now_ts,
+        emit_event_fn=emit_event_fn,
+    ):
+        return True
+    source_quality_reason = _scanner_watch_nonfresh_source_quality_reason(target)
+    if not source_quality_reason:
+        return _maybe_expire_scanner_watch_for_pool_block(
+            target,
+            code,
+            targets,
+            now_ts=now_ts,
+            emit_event_fn=emit_event_fn,
+        )
+    if _maybe_expire_scanner_watch_for_stale(
+        target,
+        code,
+        targets,
+        now_ts=now_ts,
+        stale_reason=source_quality_reason,
+        recovery_fields={"ws_recovery_outcome": "source_quality_unresolved_no_ws_recovery"},
+        emit_event_fn=emit_event_fn,
+    ):
+        return True
+    return _maybe_expire_scanner_watch_for_pool_block(
+        target,
+        code,
+        targets,
+        now_ts=now_ts,
+        emit_event_fn=emit_event_fn,
+    )
+
+
 def _is_real_holding_target(target):
     target = target or {}
     if str(target.get("status") or "").upper() != "HOLDING":
@@ -1075,9 +1406,9 @@ def _scanner_full_eval_max_per_loop():
 def _scanner_full_eval_backlog_extra_per_loop():
     raw = os.getenv("KORSTOCKSCAN_SCANNER_FULL_EVAL_BACKLOG_EXTRA_PER_LOOP", "")
     try:
-        value = int(str(raw).strip()) if str(raw).strip() else 24
+        value = int(str(raw).strip()) if str(raw).strip() else 4
     except Exception:
-        value = 24
+        value = 4
     return max(0, min(value, 40))
 
 
@@ -1147,6 +1478,15 @@ def _scalping_fifo_candidates(watching_stocks, now_ts):
         [t for t in watching_stocks if _is_scalping_fifo_target(t)],
         key=lambda x: _runtime_added_time_for_target(x, now_ts=now_ts),
     )
+
+
+def _scalping_fifo_max_active():
+    raw = os.getenv("KORSTOCKSCAN_SCALPING_WATCHING_MAX_ACTIVE", "")
+    try:
+        value = int(str(raw).strip()) if str(raw).strip() else 24
+    except Exception:
+        value = 24
+    return max(1, min(value, 80))
 
 
 def _scalping_fifo_overflow_candidates(scalp_fifo_targets, now_ts):
@@ -1475,6 +1815,31 @@ def _scanner_runtime_context_updates(payload):
         if value not in (None, ""):
             updates[key] = value
     return updates
+
+
+def _scanner_pipeline_stock_snapshot(stock_value):
+    if not isinstance(stock_value, dict):
+        return {}
+    return {
+        key: stock_value.get(key)
+        for key in (
+            "id",
+            "name",
+            "strategy",
+            "position_tag",
+            "scanner_promotion_id",
+            "scanner_promotion_reason",
+            "scanner_promotion_emitted_epoch",
+            "source_signature",
+            "entry_armed_at_epoch",
+            "added_time",
+            "current_price_observed",
+            "price_delta_since_first_seen_pct",
+            "comparable_flu_delta_since_first_seen",
+            "cntr_str_available",
+            "cntr_str",
+        )
+    }
 
 
 def handle_scalping_scanner_promoted_target(payload):
@@ -2239,8 +2604,9 @@ def run_sniper(is_test_mode=False):
                     t for t in scalp_fifo_targets
                     if t['id'] not in expired_ids
                 ]
-                if len(scalp_remaining) > 40:
-                    overflow = len(scalp_remaining) - 40
+                scalp_max_active = _scalping_fifo_max_active()
+                if len(scalp_remaining) > scalp_max_active:
+                    overflow = len(scalp_remaining) - scalp_max_active
                     for t in _scalping_fifo_overflow_candidates(scalp_remaining, now_ts)[:overflow]:
                         expired_ids.append(t['id'])
                         expired_names.append(t['name'])
@@ -2346,25 +2712,6 @@ def run_sniper(is_test_mode=False):
             deferred_scanner_skip_events = []
             scanner_precheck_seen = False
             scanner_heavy_eval_flushed = False
-
-            def _scanner_pipeline_stock_snapshot(stock_value):
-                if not isinstance(stock_value, dict):
-                    return {}
-                return {
-                    key: stock_value.get(key)
-                    for key in (
-                        "id",
-                        "name",
-                        "strategy",
-                        "position_tag",
-                        "scanner_promotion_id",
-                        "scanner_promotion_reason",
-                        "scanner_promotion_emitted_epoch",
-                        "source_signature",
-                        "entry_armed_at_epoch",
-                        "added_time",
-                    )
-                }
 
             def _defer_scanner_entry_pipeline_log(stock_value, code_value, stage, fields):
                 deferred_scanner_pipeline_events.append(
@@ -2568,6 +2915,13 @@ def run_sniper(is_test_mode=False):
                     )
                     if _is_scanner_watching_target(delayed_stock):
                         delayed_stock["_scanner_last_full_eval_epoch"] = time.time()
+                        _maybe_expire_scanner_watch_after_full_eval(
+                            delayed_stock,
+                            delayed_code,
+                            targets,
+                            now_ts=time.time(),
+                            emit_event_fn=_defer_scanner_entry_pipeline_log,
+                        )
 
             for stock in queue_context["iteration_targets"]:
                 code = str(stock.get('code', '')).strip()[:6]
@@ -2609,6 +2963,7 @@ def run_sniper(is_test_mode=False):
                         if _is_scanner_watching_target(stock):
                             _queue_scanner_ws_reg(code, "scanner_watching_ws_snapshot_recovery")
                         if recovery_fields.get("ws_recovery_outcome") == "rest_quote_applied":
+                            _scanner_watch_reset_stale_eviction_state(stock)
                             _defer_scanner_watching_runtime_skip(
                                 stock,
                                 code,
@@ -2628,6 +2983,15 @@ def run_sniper(is_test_mode=False):
                                 ws_data=ws_data,
                                 ws_manager_available=bool(WS_MANAGER),
                                 **recovery_fields,
+                            )
+                            _maybe_expire_scanner_watch_for_stale(
+                                stock,
+                                code,
+                                targets,
+                                now_ts=now_ts,
+                                stale_reason="ws_snapshot_missing_or_zero",
+                                recovery_fields=recovery_fields,
+                                emit_event_fn=_defer_scanner_entry_pipeline_log,
                             )
                             continue
                     else:
@@ -2684,6 +3048,7 @@ def run_sniper(is_test_mode=False):
                             )
                             _queue_scanner_ws_reg(code, "scanner_fast_precheck_stale_ws_recovery")
                             if recovery_fields.get("ws_recovery_outcome") == "rest_quote_applied":
+                                _scanner_watch_reset_stale_eviction_state(stock)
                                 _defer_scanner_watching_runtime_skip(
                                     stock,
                                     code,
@@ -2755,8 +3120,19 @@ def run_sniper(is_test_mode=False):
                                     "not_applicable_ws_recovery_miss_count",
                                 ),
                             )
+                            if fast_precheck_reason == "stale_ws_snapshot":
+                                _maybe_expire_scanner_watch_for_stale(
+                                    stock,
+                                    code,
+                                    targets,
+                                    now_ts=heavy_queue_enter_epoch,
+                                    stale_reason=fast_precheck_reason,
+                                    recovery_fields=recovery_fields,
+                                    emit_event_fn=_defer_scanner_entry_pipeline_log,
+                                )
                             continue
                         if _scanner_strength_recheck_waiting(stock, now_ts=heavy_queue_enter_epoch):
+                            _scanner_watch_reset_terminal_eviction_state(stock)
                             recheck_after_epoch = _safe_float(
                                 stock.get("entry_strength_momentum_recheck_after_epoch"),
                                 0.0,
@@ -2782,6 +3158,7 @@ def run_sniper(is_test_mode=False):
                             )
                             continue
                         if scanner_full_eval_count >= scanner_full_eval_limit:
+                            _scanner_watch_reset_terminal_eviction_state(stock)
                             _defer_scanner_watching_runtime_skip(
                                 stock,
                                 code,
@@ -2815,6 +3192,13 @@ def run_sniper(is_test_mode=False):
                     )
                     if _is_scanner_watching_target(stock):
                         stock["_scanner_last_full_eval_epoch"] = time.time()
+                        _maybe_expire_scanner_watch_after_full_eval(
+                            stock,
+                            code,
+                            targets,
+                            now_ts=time.time(),
+                            emit_event_fn=_defer_scanner_entry_pipeline_log,
+                        )
                 elif status == 'HOLDING':
                     holding_ai_engine = None if eod_ai_holding_fallback else ai_engine
                     handle_holding_state(

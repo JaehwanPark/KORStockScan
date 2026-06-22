@@ -161,7 +161,7 @@ def test_scanner_skips_fallback_diagnostic_rows():
     assert classified["position_tag"] == "EMPTY"
 
 
-def test_scanner_keeps_all_main_and_caps_only_runner_candidates():
+def test_scanner_keeps_all_main_and_excludes_runner_candidates_by_default():
     all_results = [
         {"Code": "000001", "Prob": 0.91},
         {"Code": "000002", "Prob": 0.88},
@@ -176,11 +176,29 @@ def test_scanner_keeps_all_main_and_caps_only_runner_candidates():
         all_results,
         prob_main_pick=0.80,
         prob_runner_pick=0.70,
-        runner_limit=3,
     )
 
     assert [row["Code"] for row in main_picks] == ["000001", "000002", "000003"]
-    assert [row["Code"] for row in runner_ups] == ["000004", "000005", "000006"]
+    assert runner_ups == []
+
+
+def test_scanner_can_optionally_cap_runner_candidates_for_report_only_use():
+    all_results = [
+        {"Code": "000001", "Prob": 0.91},
+        {"Code": "000002", "Prob": 0.79},
+        {"Code": "000003", "Prob": 0.78},
+        {"Code": "000004", "Prob": 0.77},
+    ]
+
+    main_picks, runner_ups = split_realtime_recommendations(
+        all_results,
+        prob_main_pick=0.80,
+        prob_runner_pick=0.70,
+        runner_limit=2,
+    )
+
+    assert [row["Code"] for row in main_picks] == ["000001"]
+    assert [row["Code"] for row in runner_ups] == ["000002", "000003"]
 
 
 def test_swing_funnel_report_separates_raw_and_unique_event_counts():

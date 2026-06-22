@@ -1947,6 +1947,91 @@ def test_observation_source_quality_accepts_scanner_skip_without_promotion_id_wh
     assert report["summary"]["tuning_input_allowed"] is True
 
 
+def test_observation_source_quality_accepts_scalping_scanner_watch_eviction(monkeypatch, tmp_path):
+    monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
+    _write_events(
+        tmp_path,
+        "2026-06-22",
+        [
+            _event(
+                "scalping_scanner_watch_eviction",
+                {
+                    "metric_role": "runtime_watchlist_pool_management",
+                    "decision_authority": "real_scalping_scanner_watch_eviction_pool_management_only",
+                    "window_policy": "intraday_runtime_watchlist",
+                    "sample_floor": "not_applicable_runtime_pool_management",
+                    "primary_decision_metric": "eviction_reason",
+                    "source_quality_gate": "scalping_scanner_watch_eviction_contract",
+                    "source_quality_route": "runtime_watchlist_eviction_pool_management_only",
+                    "runtime_effect": True,
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                    "forbidden_uses": (
+                        "score_threshold_change,provider_route_change,order_price_change,"
+                        "quantity_or_cap_change,broker_guard_change,real_execution_quality_approval"
+                    ),
+                    "eviction_reason": "terminal_blocker_repeated",
+                    "eviction_policy_version": "scalping_scanner_watch_eviction_v3",
+                    "eviction_attempt_count": 2,
+                    "terminal_stage": "blocked_strength_momentum",
+                    "terminal_reason": "below_window_buy_value",
+                    "fresh_input_confirmed": True,
+                    "stale_first_seen_epoch": "not_applicable_stale_first_seen_epoch",
+                    "stale_age_sec": "not_applicable_stale_age_sec",
+                    "ws_recovery_outcome": "not_applicable_ws_recovery_outcome",
+                    "cooldown_remaining_sec": "not_applicable_cooldown_remaining_sec",
+                    "runtime_record_id": 77,
+                    "stock_code": "123456",
+                    "target_status": "WATCHING",
+                    "target_strategy": "SCALPING",
+                    "target_position_tag": "SCANNER",
+                },
+            ),
+            _event(
+                "scalping_scanner_watch_eviction",
+                {
+                    "metric_role": "runtime_watchlist_pool_management",
+                    "decision_authority": "real_scalping_scanner_watch_eviction_pool_management_only",
+                    "window_policy": "intraday_runtime_watchlist",
+                    "sample_floor": "not_applicable_runtime_pool_management",
+                    "primary_decision_metric": "eviction_reason",
+                    "source_quality_gate": "scalping_scanner_watch_eviction_contract",
+                    "source_quality_route": "runtime_watchlist_eviction_pool_management_only",
+                    "runtime_effect": True,
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                    "forbidden_uses": (
+                        "score_threshold_change,provider_route_change,order_price_change,"
+                        "quantity_or_cap_change,broker_guard_change,real_execution_quality_approval"
+                    ),
+                    "eviction_reason": "source_quality_unresolved",
+                    "eviction_policy_version": "scalping_scanner_watch_eviction_v3",
+                    "eviction_attempt_count": 3,
+                    "terminal_stage": "not_applicable_terminal_stage",
+                    "terminal_reason": "insufficient_history",
+                    "fresh_input_confirmed": False,
+                    "stale_first_seen_epoch": "1792650000.000",
+                    "stale_age_sec": 91.0,
+                    "ws_recovery_outcome": "source_quality_unresolved_no_ws_recovery",
+                    "cooldown_remaining_sec": "not_applicable_cooldown_remaining_sec",
+                    "runtime_record_id": 78,
+                    "stock_code": "654321",
+                    "target_status": "WATCHING",
+                    "target_strategy": "SCALPING",
+                    "target_position_tag": "SCANNER",
+                },
+            ),
+        ],
+    )
+
+    report = audit.write_report("2026-06-22")
+
+    contract = report["stage_contracts"]["scalping_scanner_watch_eviction"]
+    assert contract["status"] == "pass"
+    assert report["summary"]["hard_blocking_contract_gap_count"] == 0
+    assert report["summary"]["tuning_input_allowed"] is True
+
+
 def test_observation_source_quality_accepts_scalping_scanner_runtime_queue_lag(monkeypatch, tmp_path):
     monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
     _write_events(

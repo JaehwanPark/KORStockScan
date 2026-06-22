@@ -1,5 +1,6 @@
 import sys
 from pathlib import Path
+import os
 
 # ==========================================
 # 🚀 [핵심 1] 단독 실행을 위한 루트 경로 탐지
@@ -33,13 +34,80 @@ PRIMARY_RISING_START_SOURCES = {
 
 
 def _resolve_scan_interval_sec(now_time):
-    """장 초반/후반에는 더 자주 돌리고, 점심 구간은 약간 완화합니다."""
+    """장 초반/후반에는 더 자주 돌리고, 점심/NXT 구간은 약간 완화합니다."""
     hhmm = now_time.hour * 100 + now_time.minute
     if 905 <= hhmm < 1030:
         return 90
     if 1400 <= hhmm <= 1500:
         return 90
     return 120
+
+
+def _parse_scan_time_env(env_name, default_value):
+    raw_value = os.getenv(env_name, default_value)
+    try:
+        return datetime.strptime(str(raw_value), "%H:%M:%S").time()
+    except (TypeError, ValueError):
+        log_error(f"⚠️ {env_name} 값이 잘못되어 기본값을 사용합니다: {raw_value} -> {default_value}")
+        return datetime.strptime(default_value, "%H:%M:%S").time()
+
+
+def _resolve_scanner_discovery_window():
+    """Scanner source discovery window only; downstream BUY cutoff remains separate."""
+    market_open = _parse_scan_time_env(
+        "KORSTOCKSCAN_SCALP_SCANNER_DISCOVERY_OPEN_TIME",
+        "08:00:00",
+    )
+    market_close = _parse_scan_time_env(
+        "KORSTOCKSCAN_SCALP_SCANNER_DISCOVERY_CLOSE_TIME",
+        "19:45:00",
+    )
+    return market_open, market_close
+
+
+def _is_scanner_discovery_time(now_time):
+    market_open, market_close = _resolve_scanner_discovery_window()
+    return market_open <= now_time <= market_close
+
+
+def _scalping_watching_max_active():
+    raw = os.getenv("KORSTOCKSCAN_SCALPING_WATCHING_MAX_ACTIVE", "")
+    try:
+        value = int(str(raw).strip()) if str(raw).strip() else 24
+    except (TypeError, ValueError):
+        value = 24
+    return max(1, min(value, 80))
+
+
+def _active_scanner_watching_count(db):
+    try:
+        with db.get_session() as session:
+            if hasattr(session, "query"):
+                return (
+                    session.query(RecommendationHistory)
+                    .filter(
+                        RecommendationHistory.rec_date == datetime.now().date(),
+                        RecommendationHistory.status == "WATCHING",
+                        RecommendationHistory.strategy == "SCALPING",
+                        RecommendationHistory.position_tag == "SCANNER",
+                        RecommendationHistory.buy_time.is_(None),
+                        RecommendationHistory.buy_qty == 0,
+                    )
+                    .count()
+                )
+            records = getattr(session, "records", [])
+            return sum(
+                1
+                for record in records
+                if getattr(record, "status", None) == "WATCHING"
+                and getattr(record, "strategy", None) == "SCALPING"
+                and getattr(record, "position_tag", None) == "SCANNER"
+                and getattr(record, "buy_time", None) is None
+                and int(getattr(record, "buy_qty", 0) or 0) == 0
+            )
+    except Exception as exc:
+        log_error(f"⚠️ [SCALPING 스캐너] active WATCHING 수량 확인 실패: {exc}")
+        return 0
 
 
 def _source_priority(source):
@@ -1260,6 +1328,15 @@ def promote_candidates(db, event_bus, ranked_targets, recent_picks, *, max_new_c
     new_codes_found = []
     promoted_target_payloads = []
     recent_picks = _filter_picks_within_cooldown(recent_picks, now_ts, reentry_cooldown_sec)
+    max_active = _scalping_watching_max_active()
+    active_count = _active_scanner_watching_count(db)
+    remaining_slots = min(max(0, int(max_new_codes or 0)), max(0, max_active - active_count))
+    if remaining_slots <= 0:
+        print(
+            "🧯 [SCALPING 스캐너 cap] 신규 후보 등록 생략 "
+            f"active={active_count} max_active={max_active} max_new_codes={max_new_codes}"
+        )
+        return [], recent_picks
 
     for target in ranked_targets:
         code = target["Code"]
@@ -1375,7 +1452,7 @@ def promote_candidates(db, event_bus, ranked_targets, recent_picks, *, max_new_c
             _scanner_runtime_target_payload(target, source_guard, record_id=record_id, now_ts=now_ts)
         )
 
-        if len(new_codes_found) >= max_new_codes:
+        if len(new_codes_found) >= remaining_slots:
             break
 
     if new_codes_found:
@@ -1527,13 +1604,15 @@ def run_scalper(is_test_mode=False):
         from src.engine.error_detectors.process_health import write_heartbeat as _sc_whb
         _sc_whb("scalping_scanner")
 
-        # 장 운영 시간 체크 (09:05 ~ 15:00) - 장 초반 감시 5분 후부터 장 마감 1시간 전까지 가동
-        market_open = datetime.strptime("09:05:00", "%H:%M:%S").time()
-        market_close = datetime.strptime("15:00:00", "%H:%M:%S").time()
-        
-        if not is_test_mode and not (market_open <= now_time <= market_close):
+        # 신규 후보 발굴 시간은 NXT 데이터 수집까지 열되, 실제 BUY submit cutoff는
+        # downstream guard가 별도로 유지한다.
+        if not is_test_mode and not _is_scanner_discovery_time(now_time):
             if time.time() - last_closed_msg_time > 3600:
-                print("🌙 신규 스캘핑 후보 스캔 시간이 아닙니다. 보유/청산 감시는 계속됩니다.")
+                market_open, market_close = _resolve_scanner_discovery_window()
+                print(
+                    "🌙 신규 스캘핑 후보 발굴 시간이 아닙니다. "
+                    f"(window={market_open}~{market_close}) 보유/청산 감시는 계속됩니다."
+                )
                 last_closed_msg_time = time.time()
             time.sleep(60)
             continue
