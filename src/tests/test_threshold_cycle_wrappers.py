@@ -81,11 +81,11 @@ def test_postclose_done_controller_wrapper_runs_controller_and_skips_codex_runne
     assert controller_idx < codex_idx
 
 
-def test_postclose_done_controller_cron_installs_1605_once():
+def test_postclose_done_controller_cron_installs_2140_once():
     script = Path("deploy/install_postclose_done_controller_cron.sh").read_text(encoding="utf-8")
 
     assert "POSTCLOSE_DONE_CONTROLLER" in script
-    assert "5 16 * * 1-5" in script
+    assert "40 21 * * 1-5" in script
     assert "deploy/run_postclose_done_controller.sh" in script
 
 
@@ -510,6 +510,10 @@ def test_run_bot_waits_for_threshold_runtime_env_before_launching_bot():
     assert "./deploy/run_threshold_cycle_preopen.sh" in script
     assert "threshold runtime env 미생성으로 봇 기동 중단" in script
     assert script.index('wait_for_threshold_runtime_env "$THRESHOLD_RUNTIME_ENV"') < script.index("../.venv/bin/python bot_main.py")
+    assert "operator_runtime_overrides.env" in script
+    assert script.index('OPERATOR_RUNTIME_OVERRIDES="../data/threshold_cycle/runtime_env/operator_runtime_overrides.env"') > script.index('. "$THRESHOLD_RUNTIME_ENV"')
+    assert script.index('. "$OPERATOR_RUNTIME_OVERRIDES"') < script.index("../.venv/bin/python bot_main.py")
+    assert script.index('BOT_CPU_AFFINITY="${KORSTOCKSCAN_BOT_CPU_AFFINITY:-$DEFAULT_BOT_CPU_AFFINITY}"') > script.index('. "$OPERATOR_RUNTIME_OVERRIDES"')
 
 
 def test_preopen_wrapper_uses_lock_to_avoid_duplicate_bootstrap_run():
@@ -708,26 +712,36 @@ def test_gcp_preopen_push_wrapper_smoke_with_stubbed_ssh_and_scp(tmp_path):
     assert "[DONE] gcp-preopen-artifact-push" in result.stdout
     log_text = log_path.read_text(encoding="utf-8")
     assert "mkdir -p -- '/srv/KORStockScan/data/threshold_cycle_remote/apply_plans' '/srv/KORStockScan/data/threshold_cycle_remote/runtime_env'" in log_text
-    assert log_text.count("scp ") == 4
-    assert log_text.count("mv -f --") == 4
+    assert "mkdir -p -- '/srv/KORStockScan/data/threshold_cycle_remote/report/threshold_cycle_preopen_status'" in log_text
+    assert log_text.count("scp ") == 5
+    assert log_text.count("mv -f --") == 5
+    assert f"threshold_cycle_preopen_{date}.status.json.tmp.aws_push_{date}_" in log_text
     assert f"threshold_apply_{date}.json.tmp.aws_push_{date}_" in log_text
     status = json.loads((project / f"data/report/gcp_preopen_push_status/gcp_preopen_push_{date}.status.json").read_text(encoding="utf-8"))
     assert status["status"] == "succeeded"
-    assert len(status["pushed_files"]) == 4
+    assert len(status["pushed_files"]) == 5
 
 
 def test_gcp_preopen_bridge_promotes_staging_artifacts_to_live_runtime_dir(tmp_path):
     project = tmp_path / "project"
     date = "2026-06-20"
+    staging_preopen_dir = project / "data/threshold_cycle_remote/report/threshold_cycle_preopen_status"
     staging_apply_dir = project / "data/threshold_cycle_remote/apply_plans"
     staging_runtime_dir = project / "data/threshold_cycle_remote/runtime_env"
     live_apply_dir = project / "data/threshold_cycle/apply_plans"
     live_runtime_dir = project / "data/threshold_cycle/runtime_env"
+    live_preopen_dir = project / "data/report/threshold_cycle_preopen_status"
+    staging_preopen_dir.mkdir(parents=True)
     staging_apply_dir.mkdir(parents=True)
     staging_runtime_dir.mkdir(parents=True)
     live_apply_dir.mkdir(parents=True)
     live_runtime_dir.mkdir(parents=True)
+    live_preopen_dir.mkdir(parents=True)
 
+    (staging_preopen_dir / f"threshold_cycle_preopen_{date}.status.json").write_text(
+        json.dumps({"target_date": date, "status": "succeeded"}),
+        encoding="utf-8",
+    )
     (staging_apply_dir / f"threshold_apply_{date}.json").write_text(
         json.dumps({"target_date": date, "runtime_env_file": f"/tmp/threshold_runtime_env_{date}.env"}),
         encoding="utf-8",
@@ -759,13 +773,14 @@ def test_gcp_preopen_bridge_promotes_staging_artifacts_to_live_runtime_dir(tmp_p
 
     assert result.returncode == 0, result.stdout
     assert "[DONE] gcp-preopen-bridge" in result.stdout
+    assert (live_preopen_dir / f"threshold_cycle_preopen_{date}.status.json").exists()
     assert (live_apply_dir / f"threshold_apply_{date}.json").exists()
     assert (live_runtime_dir / f"threshold_runtime_env_{date}.env").read_text(encoding="utf-8") == "export A=1\n"
     assert (live_runtime_dir / f"threshold_runtime_env_{date}.json").exists()
     assert (live_runtime_dir / f"threshold_runtime_env_verify_{date}.json").exists()
     status = json.loads((project / f"data/report/gcp_preopen_bridge_status/gcp_preopen_bridge_{date}.status.json").read_text(encoding="utf-8"))
     assert status["status"] == "succeeded"
-    assert len(status["promoted_files"]) == 4
+    assert len(status["promoted_files"]) == 5
 
 
 def test_gcp_preopen_bridge_skips_when_staging_artifacts_are_missing(tmp_path):
@@ -791,6 +806,44 @@ def test_gcp_preopen_bridge_skips_when_staging_artifacts_are_missing(tmp_path):
     status = json.loads((project / f"data/report/gcp_preopen_bridge_status/gcp_preopen_bridge_{date}.status.json").read_text(encoding="utf-8"))
     assert status["status"] == "skipped"
     assert status["reason"] == "no_staging_artifacts"
+
+
+def test_gcp_preopen_bridge_fails_when_staging_preopen_status_is_missing(tmp_path):
+    project = tmp_path / "project"
+    date = "2026-06-20"
+    staging_apply_dir = project / "data/threshold_cycle_remote/apply_plans"
+    staging_runtime_dir = project / "data/threshold_cycle_remote/runtime_env"
+    staging_apply_dir.mkdir(parents=True)
+    staging_runtime_dir.mkdir(parents=True)
+
+    (staging_apply_dir / f"threshold_apply_{date}.json").write_text(
+        json.dumps({"target_date": date}),
+        encoding="utf-8",
+    )
+    (staging_runtime_dir / f"threshold_runtime_env_{date}.env").write_text("export A=1\n", encoding="utf-8")
+    (staging_runtime_dir / f"threshold_runtime_env_{date}.json").write_text(
+        json.dumps({"target_date": date, "report_type": "threshold_runtime_env"}),
+        encoding="utf-8",
+    )
+
+    env = {
+        **os.environ,
+        "PROJECT_DIR": str(project),
+        "VENV_PY": "python3",
+    }
+    result = subprocess.run(
+        ["bash", "deploy/promote_gcp_preopen_artifacts.sh", date],
+        cwd=Path.cwd(),
+        env=env,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "[FAIL] gcp-preopen-bridge" in result.stdout
+    assert "missing_staging_artifact" in result.stdout
 
 
 def test_gcp_preopen_push_wrapper_fails_on_missing_or_bad_preopen_status(tmp_path):

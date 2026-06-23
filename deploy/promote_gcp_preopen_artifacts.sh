@@ -10,20 +10,24 @@ STATUS_FILE="$STATUS_DIR/gcp_preopen_bridge_${TARGET_DATE}.status.json"
 
 STAGING_ROOT="$PROJECT_DIR/data/threshold_cycle_remote"
 LIVE_ROOT="$PROJECT_DIR/data/threshold_cycle"
+STAGING_REPORT_ROOT="$STAGING_ROOT/report"
+LIVE_REPORT_ROOT="$PROJECT_DIR/data/report"
 
 STAGING_APPLY_FILE="$STAGING_ROOT/apply_plans/threshold_apply_${TARGET_DATE}.json"
 STAGING_RUNTIME_ENV_FILE="$STAGING_ROOT/runtime_env/threshold_runtime_env_${TARGET_DATE}.env"
 STAGING_RUNTIME_ENV_MANIFEST_FILE="$STAGING_ROOT/runtime_env/threshold_runtime_env_${TARGET_DATE}.json"
 STAGING_RUNTIME_ENV_VERIFY_FILE="$STAGING_ROOT/runtime_env/threshold_runtime_env_verify_${TARGET_DATE}.json"
+STAGING_PREOPEN_STATUS_FILE="$STAGING_REPORT_ROOT/threshold_cycle_preopen_status/threshold_cycle_preopen_${TARGET_DATE}.status.json"
 
 LIVE_APPLY_FILE="$LIVE_ROOT/apply_plans/threshold_apply_${TARGET_DATE}.json"
 LIVE_RUNTIME_ENV_FILE="$LIVE_ROOT/runtime_env/threshold_runtime_env_${TARGET_DATE}.env"
 LIVE_RUNTIME_ENV_MANIFEST_FILE="$LIVE_ROOT/runtime_env/threshold_runtime_env_${TARGET_DATE}.json"
 LIVE_RUNTIME_ENV_VERIFY_FILE="$LIVE_ROOT/runtime_env/threshold_runtime_env_verify_${TARGET_DATE}.json"
+LIVE_PREOPEN_STATUS_FILE="$LIVE_REPORT_ROOT/threshold_cycle_preopen_status/threshold_cycle_preopen_${TARGET_DATE}.status.json"
 
 PROMOTED_FILES=()
 
-mkdir -p "$STATUS_DIR" "$LIVE_ROOT/apply_plans" "$LIVE_ROOT/runtime_env"
+mkdir -p "$STATUS_DIR" "$LIVE_ROOT/apply_plans" "$LIVE_ROOT/runtime_env" "$LIVE_REPORT_ROOT/threshold_cycle_preopen_status"
 
 write_bridge_status() {
   local status="$1"
@@ -72,6 +76,7 @@ write_bridge_status running started 0
 
 validate_staging_artifacts() {
   "$VENV_PY" - "$TARGET_DATE" \
+    "$STAGING_PREOPEN_STATUS_FILE" \
     "$STAGING_APPLY_FILE" \
     "$STAGING_RUNTIME_ENV_FILE" \
     "$STAGING_RUNTIME_ENV_MANIFEST_FILE" <<'PY'
@@ -80,13 +85,20 @@ import sys
 from pathlib import Path
 
 target_date = sys.argv[1]
-apply_plan_path = Path(sys.argv[2])
-runtime_env_path = Path(sys.argv[3])
-runtime_manifest_path = Path(sys.argv[4])
+preopen_status_path = Path(sys.argv[2])
+apply_plan_path = Path(sys.argv[3])
+runtime_env_path = Path(sys.argv[4])
+runtime_manifest_path = Path(sys.argv[5])
 
-for path in [apply_plan_path, runtime_env_path, runtime_manifest_path]:
+for path in [preopen_status_path, apply_plan_path, runtime_env_path, runtime_manifest_path]:
     if not path.exists():
         raise SystemExit(f"missing_staging_artifact:{path}")
+
+preopen_status = json.loads(preopen_status_path.read_text(encoding="utf-8"))
+if preopen_status.get("target_date") != target_date:
+    raise SystemExit("staging_preopen_status_target_date_mismatch")
+if preopen_status.get("status") != "succeeded":
+    raise SystemExit(f"staging_preopen_status_not_succeeded:{preopen_status.get('status')}")
 
 apply_plan = json.loads(apply_plan_path.read_text(encoding="utf-8"))
 if apply_plan.get("target_date") != target_date:
@@ -100,7 +112,7 @@ if runtime_manifest.get("report_type") != "threshold_runtime_env":
 PY
 }
 
-if [ ! -f "$STAGING_RUNTIME_ENV_FILE" ] && [ ! -f "$STAGING_APPLY_FILE" ] && [ ! -f "$STAGING_RUNTIME_ENV_MANIFEST_FILE" ]; then
+if [ ! -f "$STAGING_RUNTIME_ENV_FILE" ] && [ ! -f "$STAGING_APPLY_FILE" ] && [ ! -f "$STAGING_RUNTIME_ENV_MANIFEST_FILE" ] && [ ! -f "$STAGING_PREOPEN_STATUS_FILE" ]; then
   echo "[SKIP] gcp-preopen-bridge target_date=$TARGET_DATE reason=no_staging_artifacts"
   write_bridge_status skipped no_staging_artifacts 0
   exit 0
@@ -119,6 +131,7 @@ promote_file() {
   PROMOTED_FILES+=("$dst")
 }
 
+promote_file "$STAGING_PREOPEN_STATUS_FILE" "$LIVE_PREOPEN_STATUS_FILE"
 promote_file "$STAGING_APPLY_FILE" "$LIVE_APPLY_FILE"
 promote_file "$STAGING_RUNTIME_ENV_FILE" "$LIVE_RUNTIME_ENV_FILE"
 promote_file "$STAGING_RUNTIME_ENV_MANIFEST_FILE" "$LIVE_RUNTIME_ENV_MANIFEST_FILE"

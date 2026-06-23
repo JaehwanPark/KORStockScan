@@ -8,7 +8,10 @@ from typing import Any
 
 
 ENTRY_LOCK = threading.RLock()
-TERMINAL_ENTRY_GRACE_SECONDS = 180.0
+# Kiwoom can report a fill several minutes after the local cancel/reconcile path
+# has terminalized the entry order. Keep the order-no bridge long enough for that
+# delayed broker receipt to update DB/Telegram/holding state.
+TERMINAL_ENTRY_GRACE_SECONDS = 900.0
 TERMINAL_ENTRY_ORDERS: dict[str, dict[str, Any]] = {}
 
 

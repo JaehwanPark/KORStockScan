@@ -31,6 +31,11 @@ def _kst_time_tuple() -> tuple[int, int]:
     return now_kst.hour, now_kst.minute
 
 
+def _disabled_job_ids() -> set[str]:
+    raw = os.environ.get("KORSTOCKSCAN_DISABLED_CRON_JOBS", "")
+    return {item.strip() for item in raw.split(",") if item.strip()}
+
+
 CRON_JOB_REGISTRY: list[dict[str, Any]] = [
     {
         "id": "final_ensemble_scanner",
@@ -44,6 +49,7 @@ CRON_JOB_REGISTRY: list[dict[str, Any]] = [
     {
         "id": "threshold_cycle_preopen",
         "log": "logs/threshold_cycle_preopen_cron.log",
+        "status_artifact": "data/report/threshold_cycle_preopen_status/threshold_cycle_preopen_{date}.status.json",
         "window_start": (7, 35),
         "window_end": (7, 50),
         "mode": "once",
@@ -132,8 +138,8 @@ CRON_JOB_REGISTRY: list[dict[str, Any]] = [
     {
         "id": "swing_live_dry_run",
         "log": "logs/swing_live_dry_run_cron.log",
-        "window_start": (15, 45),
-        "window_end": (16, 5),
+        "window_start": (20, 15),
+        "window_end": (20, 35),
         "mode": "once",
         "critical": False,
         "trading_day_only": True,
@@ -142,8 +148,8 @@ CRON_JOB_REGISTRY: list[dict[str, Any]] = [
         "id": "threshold_cycle_postclose",
         "log": "logs/threshold_cycle_postclose_cron.log",
         "status_artifact": "data/report/threshold_cycle_postclose_status/threshold_cycle_postclose_{date}.status.json",
-        "window_start": (16, 10),
-        "window_end": (17, 0),
+        "window_start": (20, 10),
+        "window_end": (21, 40),
         "mode": "once",
         "critical": True,
         "trading_day_only": True,
@@ -152,8 +158,8 @@ CRON_JOB_REGISTRY: list[dict[str, Any]] = [
         "id": "postclose_done_controller",
         "log": "logs/postclose_done_controller_cron.log",
         "status_artifact": "data/report/postclose_done_controller/postclose_done_controller_{date}.json",
-        "window_start": (16, 5),
-        "window_end": (20, 5),
+        "window_start": (21, 40),
+        "window_end": (22, 10),
         "mode": "once",
         "critical": True,
         "trading_day_only": True,
@@ -161,8 +167,8 @@ CRON_JOB_REGISTRY: list[dict[str, Any]] = [
     {
         "id": "swing_model_retrain_postclose",
         "log": "logs/swing_model_retrain_cron.log",
-        "window_start": (17, 30),
-        "window_end": (18, 30),
+        "window_start": (21, 55),
+        "window_end": (22, 20),
         "mode": "once",
         "critical": False,
         "trading_day_only": True,
@@ -171,8 +177,8 @@ CRON_JOB_REGISTRY: list[dict[str, Any]] = [
         "id": "tuning_monitoring_postclose",
         "log": "logs/tuning_monitoring_postclose_cron.log",
         "status_artifact": "data/report/tuning_monitoring/status/tuning_monitoring_postclose_{date}.json",
-        "window_start": (20, 5),
-        "window_end": (20, 45),
+        "window_start": (22, 15),
+        "window_end": (22, 45),
         "mode": "once",
         "critical": False,
         "trading_day_only": True,
@@ -180,24 +186,24 @@ CRON_JOB_REGISTRY: list[dict[str, Any]] = [
     {
         "id": "update_kospi",
         "log": "logs/update_kospi.log",
-        "window_start": (20, 10),
-        "window_end": (20, 50),
+        "window_start": (23, 5),
+        "window_end": (23, 55),
         "mode": "once",
         "critical": False,
     },
     {
         "id": "dashboard_db_archive",
         "log": "logs/dashboard_db_archive_cron.log",
-        "window_start": (23, 10),
-        "window_end": (23, 20),
+        "window_start": (22, 30),
+        "window_end": (22, 40),
         "mode": "once",
         "critical": False,
     },
     {
         "id": "log_rotation_cleanup",
         "log": "logs/log_rotation_cleanup_cron.log",
-        "window_start": (23, 20),
-        "window_end": (23, 30),
+        "window_start": (22, 40),
+        "window_end": (22, 50),
         "mode": "once",
         "critical": False,
     },
@@ -249,6 +255,11 @@ class CronCompletionDetector(BaseDetector):
             log_path = PROJECT_ROOT / job["log"]
             jid = job["id"]
             critical = job.get("critical", False)
+            today_str = _today_kst()
+            artifact_status = self._status_artifact_terminal(job, today_str)
+            if jid in _disabled_job_ids():
+                details[f"{jid}_status"] = "disabled_by_env"
+                continue
             if job.get("trading_day_only", False) and not trading_day:
                 details[f"{jid}_status"] = "skip_non_trading_day"
                 continue
@@ -269,6 +280,13 @@ class CronCompletionDetector(BaseDetector):
                 continue
 
             if not log_path.exists():
+                if job.get("mode", "once") == "once" and artifact_status == "done":
+                    details[f"{jid}_status"] = "pass"
+                    details[f"{jid}_status_artifact_terminal"] = artifact_status
+                    details[f"{jid}_pass_note"] = "status artifact terminal success"
+                    continue
+                if artifact_status:
+                    details[f"{jid}_status_artifact_terminal"] = artifact_status
                 if critical and past_window_end:
                     issues.append(f"{jid}: log file missing after window end")
                     details[f"{jid}_status"] = "fail"
@@ -280,13 +298,11 @@ class CronCompletionDetector(BaseDetector):
                 continue
 
             recent_lines = self._read_tail(log_path, self.MARKER_TAIL_LINES)
-            today_str = _today_kst()
             today_lines = self._filter_today_lines(recent_lines, today_str)
             has_matching_date = bool(today_lines)
             has_done = bool(_DONE_MARKER.search(today_lines)) if has_matching_date else False
             has_start = bool(_START_MARKER.search(today_lines)) if has_matching_date else False
             has_error = bool(_ERROR_MARKER.search(today_lines)) if has_matching_date else bool(_ERROR_MARKER.search(recent_lines))
-            artifact_status = self._status_artifact_terminal(job, today_str)
             if artifact_status:
                 details[f"{jid}_status_artifact_terminal"] = artifact_status
 

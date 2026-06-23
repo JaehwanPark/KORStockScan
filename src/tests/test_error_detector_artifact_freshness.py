@@ -229,7 +229,7 @@ class TestArtifactFreshnessDetector:
         today = now.strftime("%Y-%m-%d")
         controller_log = tmp_path / "postclose_done_controller_cron.log"
         controller_log.write_text(
-            f"[START] postclose_done_controller target_date={today} started_at={today}T16:05:01+0900\n",
+            f"[START] postclose_done_controller target_date={today} started_at={today}T21:40:01+0900\n",
             encoding="utf-8",
         )
         artifact = {
@@ -535,9 +535,9 @@ class TestArtifactFreshnessDetector:
 
         assert registry["swing_live_dry_run_status"]["json_status_field"] == "status"
         assert "succeeded" in registry["swing_live_dry_run_status"]["json_ok_values"]
-        assert registry["swing_live_dry_run_status"]["window_start"] == (15, 45)
-        assert registry["swing_lifecycle_audit_report"]["window_start"] == (16, 10)
-        assert registry["swing_runtime_approval_report"]["window_start"] == (16, 10)
+        assert registry["swing_live_dry_run_status"]["window_start"] == (20, 15)
+        assert registry["swing_lifecycle_audit_report"]["window_start"] == (20, 10)
+        assert registry["swing_runtime_approval_report"]["window_start"] == (20, 10)
         assert registry["swing_daily_simulation_status"]["json_status_field"] == "status"
         assert registry["swing_daily_simulation_status"]["one_shot"] is True
         assert "swing_daily_simulation_{date}.json" in registry["swing_daily_simulation_report"]["path_template"]

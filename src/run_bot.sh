@@ -6,7 +6,7 @@ THRESHOLD_RUNTIME_ENV_BOOTSTRAP="${KORSTOCKSCAN_THRESHOLD_RUNTIME_ENV_BOOTSTRAP:
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=../deploy/cpu_affinity_profile.sh
 . "$PROJECT_DIR/deploy/cpu_affinity_profile.sh"
-BOT_CPU_AFFINITY="${KORSTOCKSCAN_BOT_CPU_AFFINITY:-$(korstockscan_default_cpu_affinity bot)}"
+DEFAULT_BOT_CPU_AFFINITY="$(korstockscan_default_cpu_affinity bot)"
 
 wait_for_threshold_runtime_env() {
     local env_path="$1"
@@ -118,8 +118,17 @@ while true; do
         . "$THRESHOLD_RUNTIME_ENV"
         set +a
     fi
+    OPERATOR_RUNTIME_OVERRIDES="../data/threshold_cycle/runtime_env/operator_runtime_overrides.env"
+    if [ -f "$OPERATOR_RUNTIME_OVERRIDES" ]; then
+        echo "📌 operator runtime override 적용: $OPERATOR_RUNTIME_OVERRIDES"
+        set -a
+        # shellcheck source=/dev/null
+        . "$OPERATOR_RUNTIME_OVERRIDES"
+        set +a
+    fi
 
     # 봇 실행 (경로나 파일명은 환경에 맞게 수정)
+    BOT_CPU_AFFINITY="${KORSTOCKSCAN_BOT_CPU_AFFINITY:-$DEFAULT_BOT_CPU_AFFINITY}"
     cmd=(../.venv/bin/python bot_main.py)
     if command -v taskset >/dev/null 2>&1 && [ -n "$BOT_CPU_AFFINITY" ] && [ "$(korstockscan_nproc)" -gt 1 ]; then
         cmd=(taskset -c "$BOT_CPU_AFFINITY" "${cmd[@]}")

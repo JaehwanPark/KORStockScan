@@ -217,6 +217,7 @@ _SCANNER_REST_QUOTE_FALLBACK_POSITIVE_RESERVE_CALLS = 1
 _SCANNER_REST_QUOTE_FALLBACK_FAILURE_COOLDOWN_SEC = 30.0
 _SCANNER_REST_QUOTE_FALLBACK_STATE = {"call_epochs": [], "cooldown_until": 0.0}
 _SCANNER_REST_QUOTE_FALLBACK_LOCK = threading.Lock()
+_SCANNER_REST_QUOTE_FALLBACK_DEFER_SEC = 5.0
 SCANNER_WATCH_EVICTION_POLICY_VERSION = "scalping_scanner_watch_eviction_v3"
 SCANNER_WATCH_EVICTION_TERMINAL_MIN_COUNT = 2
 SCANNER_WATCH_EVICTION_STALE_MIN_COUNT = 3
@@ -377,6 +378,37 @@ def _scanner_identity_guard(payload, code: str, buy_price: int) -> tuple[bool, d
             return False, fields
 
     return True, fields
+
+
+def _expire_scanner_identity_mismatch_record(payload, code: str, reason: str) -> bool:
+    payload = payload or {}
+    record_id = payload.get("record_id") or payload.get("id")
+    norm_code = str(code or payload.get("code") or "").strip()[:6]
+    if not record_id or not norm_code:
+        return False
+    try:
+        with DB.get_session() as session:
+            updated = session.query(RecommendationHistory).filter(
+                RecommendationHistory.id == record_id,
+                RecommendationHistory.stock_code == norm_code,
+                RecommendationHistory.status == "WATCHING",
+                RecommendationHistory.strategy == "SCALPING",
+                RecommendationHistory.position_tag == "SCANNER",
+                RecommendationHistory.buy_time.is_(None),
+                RecommendationHistory.buy_qty == 0,
+            ).update({"status": "EXPIRED"}, synchronize_session=False)
+        if updated:
+            log_info(
+                f"[SCANNER_IDENTITY_GUARD] expired mismatched scanner WATCHING "
+                f"record id={record_id} code={norm_code} reason={reason}"
+            )
+        return bool(updated)
+    except Exception as exc:
+        log_error(
+            f"[SCANNER_IDENTITY_GUARD] failed to expire mismatched scanner WATCHING "
+            f"record id={record_id} code={norm_code} reason={reason}: {exc}"
+        )
+        return False
 
 
 def _set_ai_engine_from_analysis(engine):
@@ -929,6 +961,43 @@ def _safe_float(value, default=0.0):
         return default
 
 
+def _env_bool(name, default=False):
+    raw = os.getenv(name, "")
+    text = str(raw).strip().lower()
+    if not text:
+        return bool(default)
+    if text in {"1", "true", "yes", "y", "on"}:
+        return True
+    if text in {"0", "false", "no", "n", "off"}:
+        return False
+    return bool(default)
+
+
+def _scanner_ws_reg_recovery_throttle_allows(last_emit_ts, source, code, now_ts, *, min_interval_sec=10.0):
+    norm_code = str(code or "").strip()[:6]
+    if not norm_code:
+        return False
+    source_key = str(source or "scanner_watching_ws_snapshot_recovery")
+    try:
+        code_min_interval_sec = float(
+            os.getenv("KORSTOCKSCAN_SCANNER_WS_REG_RECOVERY_CODE_TTL_SEC", "20") or 20.0
+        )
+    except Exception:
+        code_min_interval_sec = 20.0
+    code_min_interval_sec = max(0.0, min(120.0, code_min_interval_sec))
+    code_throttle_key = ("__all_recovery_sources__", norm_code)
+    code_last_ts = float((last_emit_ts or {}).get(code_throttle_key) or 0.0)
+    if code_min_interval_sec > 0 and float(now_ts) - code_last_ts < code_min_interval_sec:
+        return False
+    throttle_key = (source_key, norm_code)
+    last_ts = float((last_emit_ts or {}).get(throttle_key) or 0.0)
+    if float(now_ts) - last_ts < float(min_interval_sec):
+        return False
+    last_emit_ts[code_throttle_key] = float(now_ts)
+    last_emit_ts[throttle_key] = float(now_ts)
+    return True
+
+
 def _scanner_runtime_target_event_fields(payload, *, outcome, reason, target=None):
     payload = payload or {}
     target = target or {}
@@ -979,6 +1048,7 @@ def _scanner_runtime_target_event_fields(payload, *, outcome, reason, target=Non
         "scanner_identity_db_name": payload.get("scanner_identity_db_name", "not_evaluated"),
         "scanner_identity_ws_curr": payload.get("scanner_identity_ws_curr", "not_evaluated"),
         "scanner_identity_price_ratio": payload.get("scanner_identity_price_ratio", "not_evaluated"),
+        "scanner_identity_mismatch_expired": payload.get("scanner_identity_mismatch_expired", False),
     }
 
 
@@ -1131,6 +1201,34 @@ def _scanner_watch_eviction_decision_from_stale(target, *, now_ts, stale_reason,
     if recovery_outcome == "rest_quote_applied":
         _scanner_watch_reset_stale_eviction_state(target)
         return {"should_evict": False, "eviction_attempt_count": 0}
+    if (
+        _scanner_rising_ws_gap_priority_recovery_enabled()
+        and _scanner_is_rising_entry_relief_candidate(target)
+    ):
+        _scanner_set_rising_recheck(
+            target,
+            kind="ws_gap_priority",
+            after_epoch=float(now_ts) + 5.0,
+            reason="ws_gap_recovery_deferred_priority",
+        )
+        return {
+            "should_evict": False,
+            "eviction_reason": "ws_gap_recovery_deferred_priority",
+            "eviction_attempt_count": _safe_int(target.get("_scanner_watch_eviction_stale_count"), 0),
+            "terminal_stage": "not_applicable_terminal_stage",
+            "terminal_reason": reason,
+            "fresh_input_confirmed": False,
+            "stale_first_seen_epoch": "not_applicable_stale_first_seen_epoch",
+            "stale_age_sec": "not_applicable_stale_age_sec",
+            "ws_recovery_outcome": recovery_outcome,
+            "ws_gap_recovery_deferred_priority": True,
+            "ws_subscription_repair_required": bool(recovery_fields.get("ws_subscription_repair_required")),
+            "rising_entry_relief_eligible": True,
+            "rising_entry_relief_reason": "ws_gap_recovery_deferred_priority",
+            "scanner_positive_delta_pct": round(_scanner_positive_delta_value(target), 4),
+            "scanner_full_eval_budget_source": "not_applicable_ws_gap",
+            "observed_epoch": f"{float(now_ts):.3f}",
+        }
     first_seen = _safe_float(target.get("_scanner_watch_eviction_stale_first_seen_epoch"), 0.0)
     if first_seen <= 0:
         first_seen = float(now_ts)
@@ -1173,6 +1271,34 @@ def _scanner_watch_eviction_decision_from_pool_block(target, *, now_ts):
     if cooldown_remaining_sec < SCANNER_WATCH_EVICTION_COOLDOWN_MIN_REMAINING_SEC:
         _scanner_watch_reset_pool_block_eviction_state(target)
         return {"should_evict": False, "eviction_attempt_count": 0}
+    if (
+        _scanner_rising_cooldown_eviction_relief_enabled()
+        and _scanner_is_rising_entry_relief_candidate(target)
+    ):
+        _scanner_set_rising_recheck(
+            target,
+            kind="cooldown",
+            after_epoch=float(now_ts) + float(cooldown_remaining_sec),
+            reason="cooldown_recheck_pending",
+        )
+        _scanner_watch_reset_pool_block_eviction_state(target)
+        return {
+            "should_evict": False,
+            "eviction_reason": "cooldown_recheck_pending",
+            "eviction_attempt_count": 0,
+            "terminal_stage": "not_applicable_terminal_stage",
+            "terminal_reason": reason,
+            "fresh_input_confirmed": False,
+            "stale_first_seen_epoch": "not_applicable_stale_first_seen_epoch",
+            "stale_age_sec": "not_applicable_stale_age_sec",
+            "ws_recovery_outcome": "not_applicable_ws_recovery_outcome",
+            "cooldown_remaining_sec": cooldown_remaining_sec,
+            "rising_entry_relief_eligible": True,
+            "rising_entry_relief_reason": "cooldown_recheck_pending",
+            "scanner_positive_delta_pct": round(_scanner_positive_delta_value(target), 4),
+            "scanner_full_eval_budget_source": "not_applicable_cooldown",
+            "observed_epoch": f"{float(now_ts):.3f}",
+        }
     block_epoch = _safe_float(block.get("observed_epoch"), 0.0)
     last_block_epoch = _safe_float(target.get("_scanner_watch_eviction_last_pool_block_observed_epoch"), 0.0)
     if block_epoch > 0 and block_epoch == last_block_epoch:
@@ -1369,11 +1495,103 @@ def _scanner_last_full_eval_epoch(target):
 
 def _scanner_positive_delta_value(target):
     target = target or {}
-    return max(
+    delta = max(
         0.0,
         _safe_float(target.get("price_delta_since_first_seen_pct"), 0.0),
         _safe_float(target.get("comparable_flu_delta_since_first_seen"), 0.0),
     )
+    if delta >= _scanner_rising_entry_min_delta_pct():
+        return delta
+    try:
+        fallback_context = sniper_state_handlers._find_scanner_rising_strength_context(
+            target,
+            min_delta=_scanner_rising_entry_min_delta_pct(),
+            require_bid_imbalance=False,
+        )
+    except Exception:
+        fallback_context = {}
+    if not (fallback_context or {}).get("allowed"):
+        return delta
+    fallback_delta = _safe_float(fallback_context.get("price_delta_since_first_seen_pct"), 0.0)
+    if fallback_delta > delta and isinstance(target, dict):
+        target["price_delta_since_first_seen_pct"] = f"{fallback_delta:.2f}"
+        target.setdefault("scanner_promotion_reason", fallback_context.get("scanner_promotion_reason") or "")
+        target.setdefault("source_signature", fallback_context.get("source_signature") or "")
+        target["_scanner_rising_context_source"] = fallback_context.get("scanner_context_source") or "promotion_event_fallback"
+        target["_scanner_rising_context_emitted_epoch"] = (
+            fallback_context.get("scanner_context_emitted_epoch")
+            or "not_applicable_scanner_context_emitted_epoch"
+        )
+    return max(delta, fallback_delta)
+
+
+def _scanner_rising_entry_min_delta_pct():
+    raw = os.getenv("KORSTOCKSCAN_SCANNER_RISING_FULL_EVAL_MIN_DELTA_PCT", "")
+    try:
+        value = float(str(raw).strip()) if str(raw).strip() else 0.5
+    except Exception:
+        value = 0.5
+    return max(0.0, min(value, 20.0))
+
+
+def _scanner_is_rising_entry_relief_candidate(target):
+    if not _is_scanner_watching_target(target):
+        return False
+    sniper_state_handlers._hydrate_scanner_promotion_runtime_context(target)
+    return _scanner_positive_delta_value(target) >= _scanner_rising_entry_min_delta_pct()
+
+
+def _scanner_rising_full_eval_extra_per_loop():
+    raw = os.getenv("KORSTOCKSCAN_SCANNER_RISING_FULL_EVAL_EXTRA_PER_LOOP", "")
+    try:
+        value = int(str(raw).strip()) if str(raw).strip() else 0
+    except Exception:
+        value = 0
+    return max(0, min(value, 40))
+
+
+def _scanner_rising_cooldown_eviction_relief_enabled():
+    return _env_bool("KORSTOCKSCAN_SCANNER_RISING_COOLDOWN_EVICTION_RELIEF_ENABLED", False)
+
+
+def _scanner_rising_cutoff_recheck_enabled():
+    return _env_bool("KORSTOCKSCAN_SCANNER_RISING_CUTOFF_RECHECK_ENABLED", False)
+
+
+def _scanner_rising_ws_gap_priority_recovery_enabled():
+    return _env_bool("KORSTOCKSCAN_SCANNER_RISING_WS_GAP_PRIORITY_RECOVERY_ENABLED", False)
+
+
+def _scanner_rising_recheck_pending(target, now_ts=None):
+    target = target or {}
+    after_epoch = max(
+        _safe_float(target.get("_scanner_rising_cooldown_recheck_after_epoch"), 0.0),
+        _safe_float(target.get("_scanner_rising_cutoff_recheck_after_epoch"), 0.0),
+        _safe_float(target.get("_scanner_rising_ws_gap_priority_recheck_after_epoch"), 0.0),
+    )
+    if after_epoch <= 0.0:
+        return False
+    now_ts = time.time() if now_ts is None else now_ts
+    return after_epoch <= float(now_ts)
+
+
+def _scanner_rising_entry_relief_fields(target, *, reason, budget_source="standard"):
+    delta = _scanner_positive_delta_value(target)
+    eligible = _scanner_is_rising_entry_relief_candidate(target)
+    return {
+        "rising_entry_relief_eligible": eligible,
+        "rising_entry_relief_reason": str(reason or "not_applicable_rising_entry_relief"),
+        "scanner_positive_delta_pct": round(float(delta), 4),
+        "scanner_full_eval_budget_source": str(budget_source or "standard"),
+    }
+
+
+def _scanner_set_rising_recheck(target, *, kind, after_epoch, reason):
+    if not isinstance(target, dict):
+        return
+    key = f"_scanner_rising_{kind}_recheck_after_epoch"
+    target[key] = float(after_epoch)
+    target["_scanner_rising_recheck_reason"] = str(reason or kind)
 
 
 def _scanner_strength_recheck_pending(target, now_ts=None):
@@ -1437,8 +1655,17 @@ def _reset_scanner_runtime_eval_state(target):
         "_scanner_fast_precheck_result",
         "_scanner_fast_precheck_reason",
         "_scanner_watching_runtime_skip_logged",
+        "_scanner_rising_cooldown_recheck_after_epoch",
+        "_scanner_rising_cutoff_recheck_after_epoch",
+        "_scanner_rising_ws_gap_priority_recheck_after_epoch",
+        "_scanner_rising_recheck_reason",
+        "_scanner_rising_entry_relief_eligible",
+        "_scanner_rising_entry_relief_reason",
+        "_scanner_positive_delta_pct",
+        "_scanner_full_eval_budget_source",
         "entry_strength_momentum_recheck_pending",
         "entry_strength_momentum_recheck_reason",
+        "entry_strength_momentum_recheck_source_quality_block_reason",
         "entry_strength_momentum_recheck_count",
         "entry_strength_momentum_recheck_after_epoch",
         "entry_strength_momentum_recheck_requested_at",
@@ -1490,19 +1717,20 @@ def _scalping_fifo_max_active():
 
 
 def _scalping_fifo_overflow_candidates(scalp_fifo_targets, now_ts):
-    """Prefer expiring non-scanner rows before unevaluated scanner promotions."""
+    """Prefer expiring non-scanner and non-rising scanner rows before rising scanner promotions."""
 
     def _overflow_rank(target):
         if not _is_scanner_watching_target(target):
             return (0, _runtime_added_time_for_target(target, now_ts=now_ts))
         last_full_eval = _scanner_last_full_eval_epoch(target)
+        rising = _scanner_positive_delta_value(target) >= _scanner_rising_entry_min_delta_pct()
+        if not rising:
+            if last_full_eval > 0:
+                return (1, last_full_eval, _runtime_added_time_for_target(target, now_ts=now_ts))
+            return (2, _runtime_added_time_for_target(target, now_ts=now_ts))
         if last_full_eval > 0:
-            return (1, last_full_eval, _runtime_added_time_for_target(target, now_ts=now_ts))
-        return (
-            2,
-            0 if _scanner_positive_delta_value(target) <= 0 else 1,
-            _runtime_added_time_for_target(target, now_ts=now_ts),
-        )
+            return (3, last_full_eval, _runtime_added_time_for_target(target, now_ts=now_ts))
+        return (4, _runtime_added_time_for_target(target, now_ts=now_ts))
 
     return sorted(list(scalp_fifo_targets or []), key=_overflow_rank)
 
@@ -1524,9 +1752,10 @@ def _runtime_iteration_targets(targets, now_ts):
             status_rank = 2
             last_full_eval = _scanner_last_full_eval_epoch(target)
             pending_recheck = _scanner_strength_recheck_pending(target, now_ts=now_ts)
+            rising_recheck = _scanner_rising_recheck_pending(target, now_ts=now_ts)
             positive_delta = _scanner_positive_delta_value(target)
             recency_key = (
-                0 if pending_recheck else 1,
+                0 if pending_recheck or rising_recheck else 1,
                 0 if last_full_eval <= 0 else 1,
                 -positive_delta,
                 -_scanner_queue_added_time(target, now_ts=now_ts) if last_full_eval <= 0 else last_full_eval,
@@ -1591,6 +1820,11 @@ def _runtime_scanner_ws_snapshot_cache(iteration_targets):
             seen.add(code)
     if not codes:
         return {}
+    try:
+        lock_wait_ms = float(os.getenv("KORSTOCKSCAN_SCANNER_WS_CACHE_LOCK_WAIT_MS", "25") or 25.0)
+    except Exception:
+        lock_wait_ms = 25.0
+    lock_wait_sec = max(0.0, min(0.2, lock_wait_ms / 1000.0))
     manager_lock = getattr(manager, "lock", None)
     realtime_data = getattr(manager, "realtime_data", None)
     snapshot_target = getattr(manager, "_snapshot_target", None)
@@ -1603,7 +1837,7 @@ def _runtime_scanner_ws_snapshot_cache(iteration_targets):
     ):
         acquired = False
         try:
-            acquired = manager_lock.acquire(blocking=False)
+            acquired = manager_lock.acquire(timeout=lock_wait_sec)
             if not acquired:
                 return {code: {} for code in codes}
             snapshots = {}
@@ -1686,6 +1920,237 @@ def _scanner_rest_quote_fallback_rate_limit(now_ts, *, priority=False):
         return True, "rest_quote_allowed"
 
 
+def _scanner_rest_quote_fallback_max_per_loop():
+    raw = os.getenv("KORSTOCKSCAN_SCANNER_REST_QUOTE_FALLBACK_MAX_PER_LOOP", "")
+    try:
+        value = int(str(raw).strip()) if str(raw).strip() else 1
+    except Exception:
+        value = 1
+    return max(0, min(value, 5))
+
+
+def _scanner_rest_quote_fallback_defer_sec():
+    raw = os.getenv("KORSTOCKSCAN_SCANNER_REST_QUOTE_FALLBACK_DEFER_SEC", "")
+    try:
+        value = float(str(raw).strip()) if str(raw).strip() else _SCANNER_REST_QUOTE_FALLBACK_DEFER_SEC
+    except Exception:
+        value = _SCANNER_REST_QUOTE_FALLBACK_DEFER_SEC
+    return max(1.0, min(value, 30.0))
+
+
+def _scanner_ws_repair_cycle_wait_sec():
+    raw = os.getenv("KORSTOCKSCAN_SCANNER_WS_REPAIR_CYCLE_WAIT_SEC", "")
+    try:
+        value = float(str(raw).strip()) if str(raw).strip() else 20.0
+    except Exception:
+        value = 20.0
+    return max(5.0, min(value, 120.0))
+
+
+def _scanner_ws_repair_cycle_persistent_sec():
+    raw = os.getenv("KORSTOCKSCAN_SCANNER_WS_REPAIR_CYCLE_PERSISTENT_SEC", "")
+    try:
+        value = float(str(raw).strip()) if str(raw).strip() else 60.0
+    except Exception:
+        value = 60.0
+    return max(10.0, min(value, 300.0))
+
+
+def _scanner_ws_persistent_repair_min_interval_sec():
+    raw = os.getenv("KORSTOCKSCAN_SCANNER_WS_PERSISTENT_REPAIR_MIN_INTERVAL_SEC", "")
+    try:
+        value = float(str(raw).strip()) if str(raw).strip() else 60.0
+    except Exception:
+        value = 60.0
+    return max(20.0, min(value, 300.0))
+
+
+def _scanner_ws_subscription_recheck_fresh_sec():
+    raw = os.getenv("KORSTOCKSCAN_SCANNER_WS_SUBSCRIPTION_RECHECK_FRESH_SEC", "")
+    try:
+        value = float(str(raw).strip()) if str(raw).strip() else 30.0
+    except Exception:
+        value = 30.0
+    return max(3.0, min(value, 120.0))
+
+
+def _scanner_normalize_ws_snapshot_for_entry_eval(snapshot, *, now_ts):
+    normalized = dict(snapshot or {}) if isinstance(snapshot, dict) else {}
+    fields = {
+        "ws_subscription_recheck_entry_timestamp_normalized": False,
+        "ws_subscription_recheck_entry_timestamp_source": "last_ws_update_ts",
+        "ws_subscription_recheck_entry_input_age_sec": "not_available_ws_age_sec",
+        "ws_subscription_recheck_entry_normalized_age_sec": "not_available_ws_age_sec",
+    }
+    if not normalized:
+        fields["ws_subscription_recheck_entry_timestamp_source"] = "missing_snapshot"
+        return normalized, fields
+    if _safe_int(normalized.get("curr"), 0) <= 0:
+        fields["ws_subscription_recheck_entry_timestamp_source"] = "missing_or_zero_curr"
+        return normalized, fields
+
+    base_ts = _safe_float(normalized.get("last_ws_update_ts"), 0.0)
+    if base_ts > 0:
+        fields["ws_subscription_recheck_entry_input_age_sec"] = round(
+            max(0.0, float(now_ts) - base_ts),
+            3,
+        )
+        fields["ws_subscription_recheck_entry_normalized_age_sec"] = round(
+            max(0.0, float(now_ts) - base_ts),
+            3,
+        )
+    existing_source = str(normalized.get("entry_eval_last_ws_update_ts_normalized_from") or "").strip()
+    if existing_source:
+        fields["ws_subscription_recheck_entry_timestamp_normalized"] = True
+        fields["ws_subscription_recheck_entry_timestamp_source"] = existing_source
+        return normalized, fields
+    candidates: list[tuple[str, float]] = []
+    type_ts = normalized.get("last_realtime_type_ts")
+    if isinstance(type_ts, dict):
+        tick_ts = _safe_float(type_ts.get("0B"), 0.0)
+        if tick_ts > 0:
+            candidates.append(("last_realtime_type_ts_0B", tick_ts))
+    last_trade = normalized.get("last_trade_tick")
+    if isinstance(last_trade, dict):
+        trade_ts = _safe_float(last_trade.get("ts"), 0.0)
+        if trade_ts > 0:
+            candidates.append(("last_trade_tick", trade_ts))
+    history = normalized.get("strength_momentum_history") or []
+    try:
+        latest_history = history[-1] if history else None
+    except Exception:
+        latest_history = None
+    if isinstance(latest_history, dict):
+        history_ts = _safe_float(latest_history.get("ts"), 0.0)
+        if history_ts > 0:
+            candidates.append(("strength_momentum_history", history_ts))
+
+    if not candidates:
+        return normalized, fields
+    source, candidate_ts = max(candidates, key=lambda item: item[1])
+    if candidate_ts <= 0 or candidate_ts > float(now_ts) + 1.0:
+        return normalized, fields
+    if base_ts > 0 and candidate_ts <= base_ts:
+        return normalized, fields
+
+    normalized["last_ws_update_ts"] = candidate_ts
+    normalized["entry_eval_last_ws_update_ts_normalized_from"] = source
+    fields["ws_subscription_recheck_entry_timestamp_normalized"] = True
+    fields["ws_subscription_recheck_entry_timestamp_source"] = source
+    fields["ws_subscription_recheck_entry_normalized_age_sec"] = round(
+        max(0.0, float(now_ts) - candidate_ts),
+        3,
+    )
+    return normalized, fields
+
+
+def _scanner_ws_subscription_recheck_snapshot_and_fields(manager, code, ws_data, *, now_ts):
+    norm_code = str(code or "").strip()[:6]
+    snapshot = dict(ws_data or {}) if isinstance(ws_data, dict) else {}
+    subscribed = False
+    manager_available = manager is not None
+    if manager is not None:
+        try:
+            subscribed = norm_code in set(getattr(manager, "subscribed_codes", set()) or set())
+        except Exception:
+            subscribed = False
+        if hasattr(manager, "get_latest_data"):
+            try:
+                latest_snapshot = manager.get_latest_data(norm_code) or {}
+            except Exception:
+                latest_snapshot = {}
+            latest_snapshot = dict(latest_snapshot or {}) if isinstance(latest_snapshot, dict) else {}
+            latest_snapshot, _latest_entry_timestamp_fields = _scanner_normalize_ws_snapshot_for_entry_eval(
+                latest_snapshot,
+                now_ts=now_ts,
+            )
+            latest_ts = _safe_float(latest_snapshot.get("last_ws_update_ts"), 0.0)
+            snapshot_ts = _safe_float(snapshot.get("last_ws_update_ts"), 0.0)
+            latest_curr = _safe_int(latest_snapshot.get("curr"), 0)
+            snapshot_curr = _safe_int(snapshot.get("curr"), 0)
+            if latest_snapshot and (snapshot_curr <= 0 or latest_curr > 0 and latest_ts >= snapshot_ts):
+                snapshot = latest_snapshot
+    snapshot, entry_timestamp_fields = _scanner_normalize_ws_snapshot_for_entry_eval(
+        snapshot,
+        now_ts=now_ts,
+    )
+    curr = _safe_int(snapshot.get("curr"), 0)
+    last_ts = _safe_float(snapshot.get("last_ws_update_ts"), 0.0)
+    age_sec = max(0.0, float(now_ts) - last_ts) if last_ts > 0 else None
+    received = snapshot.get("received_types") or []
+    try:
+        received_types = sorted(str(item) for item in received if str(item).strip())
+    except Exception:
+        received_types = []
+    snapshot_present = bool(snapshot)
+    fresh_sec = _scanner_ws_subscription_recheck_fresh_sec()
+    fresh_curr = curr > 0 and (age_sec is None or age_sec <= fresh_sec)
+    repair_needed = not (subscribed and fresh_curr)
+    fields = {
+        "ws_subscription_recheck_status": (
+            "subscribed_fresh_snapshot"
+            if subscribed and fresh_curr
+            else "subscribed_snapshot_stale_or_missing"
+            if subscribed
+            else "not_subscribed"
+        ),
+        "ws_subscription_recheck_manager_available": bool(manager_available),
+        "ws_subscription_recheck_subscribed": bool(subscribed),
+        "ws_subscription_recheck_snapshot_present": bool(snapshot_present),
+        "ws_subscription_recheck_curr": curr if curr > 0 else "not_applicable_ws_curr",
+        "ws_subscription_recheck_age_sec": (
+            round(age_sec, 3) if age_sec is not None else "not_available_ws_age_sec"
+        ),
+        "ws_subscription_recheck_fresh_sec": round(fresh_sec, 3),
+        "ws_subscription_recheck_received_types": ",".join(received_types) if received_types else "-",
+        "ws_subscription_repair_needed": bool(repair_needed),
+        **entry_timestamp_fields,
+    }
+    return snapshot, fields
+
+
+def _scanner_ws_subscription_recheck_fields(manager, code, ws_data, *, now_ts):
+    _snapshot, fields = _scanner_ws_subscription_recheck_snapshot_and_fields(
+        manager,
+        code,
+        ws_data,
+        now_ts=now_ts,
+    )
+    return fields
+
+
+def _scanner_rest_quote_fallback_due(stock, now_ts, *, allow_early_rest_fallback):
+    if not allow_early_rest_fallback:
+        return False
+    state = (stock or {}).get("_scanner_ws_snapshot_recovery")
+    state = state if isinstance(state, dict) else {}
+    next_after_ts = _safe_float(state.get("next_fallback_after_ts"), 0.0)
+    if next_after_ts > 0 and float(now_ts) < next_after_ts:
+        return False
+    last_fallback_ts = _safe_float(state.get("last_fallback_ts"), 0.0)
+    return float(now_ts) - last_fallback_ts >= 10
+
+
+def _scanner_rest_quote_mark_deferred(stock, now_ts, *, reason, defer_sec=None):
+    state = stock.setdefault("_scanner_ws_snapshot_recovery", {}) if isinstance(stock, dict) else {}
+    if not isinstance(state, dict):
+        state = {}
+        if isinstance(stock, dict):
+            stock["_scanner_ws_snapshot_recovery"] = state
+    delay = _scanner_rest_quote_fallback_defer_sec() if defer_sec is None else max(1.0, float(defer_sec))
+    next_after_ts = float(now_ts) + delay
+    state["last_fallback_outcome"] = str(reason or "rest_quote_deferred")
+    state["next_fallback_after_ts"] = next_after_ts
+    return {
+        "ws_recovery_action": "ws_reg_reissued_rest_quote_fallback",
+        "ws_recovery_outcome": str(reason or "rest_quote_deferred"),
+        "ws_gap_recovery_deferred_priority": True,
+        "rest_quote_fallback_deferred_reason": str(reason or "rest_quote_deferred"),
+        "rest_quote_fallback_next_after_epoch": f"{next_after_ts:.3f}",
+        "rest_quote_fallback_defer_sec": round(delay, 3),
+    }
+
+
 def _scanner_rest_quote_fallback_note_result(now_ts, *, applied, transport_error=False):
     if applied or not transport_error:
         return
@@ -1740,14 +2205,15 @@ def _fetch_rest_quote_snapshot_for_ws_gap(code, now_ts):
 
 def _scanner_ws_gap_early_rest_fallback_allowed(stock):
     """Allow quote-only REST recovery earlier for scanner rows already proving upside."""
+    return _scanner_rest_quote_fallback_allowed_for_ws_gap(stock)
+
+
+def _scanner_rest_quote_fallback_allowed_for_ws_gap(stock):
+    if not _scanner_rising_ws_gap_priority_recovery_enabled():
+        return False
     if not _is_scanner_watching_target(stock):
         return False
-    sniper_state_handlers._hydrate_scanner_promotion_runtime_context(stock)
-    price_delta = _safe_float((stock or {}).get("price_delta_since_first_seen_pct"), 0.0)
-    comparable_delta = _safe_float((stock or {}).get("comparable_flu_delta_since_first_seen"), 0.0)
-    if price_delta > 0.0 or comparable_delta > 0.0:
-        return True
-    return False
+    return _scanner_is_rising_entry_relief_candidate(stock)
 
 
 def _recover_missing_ws_snapshot(
@@ -1759,33 +2225,115 @@ def _recover_missing_ws_snapshot(
     ws_reg_source="scanner_watching_ws_snapshot_recovery",
     publish_ws_reg=True,
     allow_early_rest_fallback=False,
+    rest_quote_deferred_reason="",
+    cycle_state_store=None,
 ):
-    if publish_ws_reg:
-        event_bus.publish("COMMAND_WS_REG", {"codes": [code], "source": ws_reg_source})
-    state = stock.setdefault("_scanner_ws_snapshot_recovery", {})
-    if not isinstance(state, dict):
-        state = {}
-        stock["_scanner_ws_snapshot_recovery"] = state
+    norm_code = str(code or "").strip()[:6]
+    if isinstance(cycle_state_store, dict) and norm_code:
+        state = cycle_state_store.setdefault(norm_code, {})
+        if not isinstance(state, dict):
+            state = {}
+            cycle_state_store[norm_code] = state
+        if isinstance(stock, dict):
+            stock["_scanner_ws_snapshot_recovery"] = state
+    else:
+        state = stock.setdefault("_scanner_ws_snapshot_recovery", {})
+        if not isinstance(state, dict):
+            state = {}
+            stock["_scanner_ws_snapshot_recovery"] = state
+    cycle_id = str(state.get("repair_cycle_id") or "").strip()
+    if not cycle_id:
+        cycle_id = f"{str(code or '').strip()[:6]}:{int(float(now_ts) * 1000)}"
+        state["repair_cycle_id"] = cycle_id
+        state["repair_cycle_started_ts"] = float(now_ts)
+    cycle_started_ts = _safe_float(state.get("repair_cycle_started_ts"), float(now_ts))
+    cycle_wait_sec = _scanner_ws_repair_cycle_wait_sec()
+    persistent_sec = _scanner_ws_repair_cycle_persistent_sec()
+    last_ws_reg_ts = _safe_float(state.get("last_ws_reg_ts"), 0.0)
+    persistent_gap = float(now_ts) - cycle_started_ts >= persistent_sec
+    cycle_reg_allowed = (not persistent_gap) and (
+        last_ws_reg_ts <= 0 or float(now_ts) - last_ws_reg_ts >= cycle_wait_sec
+    )
+    cycle_state = "ws_reg_reissued_waiting_snapshot" if cycle_reg_allowed else "ws_repair_cycle_waiting_snapshot"
+    if persistent_gap:
+        cycle_state = "persistent_ws_gap"
+    if cycle_reg_allowed:
+        state["last_ws_reg_ts"] = float(now_ts)
+        state["repair_cycle_attempt_count"] = _safe_int(state.get("repair_cycle_attempt_count"), 0) + 1
+        if publish_ws_reg:
+            event_bus.publish("COMMAND_WS_REG", {"codes": [code], "source": ws_reg_source})
     miss_count = int(state.get("miss_count") or 0) + 1
     last_fallback_ts = _safe_float(state.get("last_fallback_ts"), 0.0)
     state["miss_count"] = miss_count
-    state["last_ws_reg_ts"] = now_ts
 
     recovery_fields = {
-        "ws_recovery_action": "ws_reg_reissued",
+        "ws_recovery_action": "ws_reg_reissued" if cycle_reg_allowed else "ws_repair_cycle_wait",
         "ws_recovery_miss_count": miss_count,
-        "ws_recovery_outcome": "ws_reg_reissued_waiting_snapshot",
+        "ws_recovery_outcome": cycle_state,
+        "ws_subscription_repair_required": cycle_state == "persistent_ws_gap",
+        "rest_quote_fallback_eligible": bool(allow_early_rest_fallback),
+        "ws_repair_cycle_id": cycle_id,
+        "ws_repair_cycle_state": cycle_state,
+        "ws_repair_cycle_attempt_count": _safe_int(state.get("repair_cycle_attempt_count"), 0),
+        "ws_repair_cycle_wait_sec": round(cycle_wait_sec, 3),
+        "ws_repair_cycle_age_sec": round(max(0.0, float(now_ts) - cycle_started_ts), 3),
+        "ws_repair_cycle_reg_allowed": bool(cycle_reg_allowed),
+        "ws_repair_cycle_suppressed_duplicate_reg": not bool(cycle_reg_allowed),
+        "ws_repair_batch_required": bool(persistent_gap),
+        "ws_repair_cycle_next_reg_after_epoch": (
+            f"{float(last_ws_reg_ts + cycle_wait_sec):.3f}"
+            if last_ws_reg_ts > 0 and not cycle_reg_allowed
+            else "not_applicable_next_reg_after_epoch"
+        ),
     }
-    fallback_due = miss_count >= 2 or bool(allow_early_rest_fallback)
+    fallback_due = _scanner_rest_quote_fallback_due(
+        stock,
+        now_ts,
+        allow_early_rest_fallback=bool(allow_early_rest_fallback),
+    )
     if fallback_due and now_ts - last_fallback_ts >= 10:
+        if rest_quote_deferred_reason:
+            recovery_fields.update(
+                _scanner_rest_quote_mark_deferred(
+                    stock,
+                    now_ts,
+                    reason=rest_quote_deferred_reason,
+                )
+            )
+            _scanner_set_rising_recheck(
+                stock,
+                kind="ws_gap_priority",
+                after_epoch=_safe_float(recovery_fields.get("rest_quote_fallback_next_after_epoch"), now_ts + 5),
+                reason="ws_gap_recovery_deferred_priority",
+            )
+            if miss_count >= 3:
+                recovery_fields["ws_subscription_repair_required"] = True
+            return ws_data or {}, recovery_fields
         allowed, rate_reason = _scanner_rest_quote_fallback_rate_limit(
             now_ts,
-            priority=bool(allow_early_rest_fallback),
+            priority=True,
         )
         if not allowed:
-            state["last_fallback_outcome"] = rate_reason
-            recovery_fields["ws_recovery_action"] = "ws_reg_reissued_rest_quote_fallback"
-            recovery_fields["ws_recovery_outcome"] = rate_reason
+            recovery_fields.update(
+                _scanner_rest_quote_mark_deferred(
+                    stock,
+                    now_ts,
+                    reason=rate_reason,
+                    defer_sec=max(10.0, _scanner_rest_quote_fallback_defer_sec()),
+                )
+            )
+            if bool(allow_early_rest_fallback):
+                _scanner_set_rising_recheck(
+                    stock,
+                    kind="ws_gap_priority",
+                    after_epoch=_safe_float(
+                        recovery_fields.get("rest_quote_fallback_next_after_epoch"),
+                        now_ts + 10,
+                    ),
+                    reason="ws_gap_recovery_deferred_priority",
+                )
+            if miss_count >= 3:
+                recovery_fields["ws_subscription_repair_required"] = True
             return ws_data or {}, recovery_fields
         state["last_fallback_ts"] = now_ts
         fallback = _fetch_rest_quote_snapshot_for_ws_gap(code, now_ts)
@@ -1798,6 +2346,10 @@ def _recover_missing_ws_snapshot(
         state["last_fallback_outcome"] = "rest_quote_unavailable"
         recovery_fields["ws_recovery_action"] = "ws_reg_reissued_rest_quote_fallback"
         recovery_fields["ws_recovery_outcome"] = "rest_quote_unavailable"
+    if miss_count >= 3:
+        recovery_fields["ws_subscription_repair_required"] = True
+    if recovery_fields.get("ws_subscription_repair_required") and cycle_state != "persistent_ws_gap":
+        recovery_fields.setdefault("persistent_ws_gap_pending_cycle", True)
     return ws_data or {}, recovery_fields
 
 
@@ -1838,6 +2390,14 @@ def _scanner_pipeline_stock_snapshot(stock_value):
             "comparable_flu_delta_since_first_seen",
             "cntr_str_available",
             "cntr_str",
+            "_scanner_rising_entry_relief_eligible",
+            "_scanner_rising_entry_relief_reason",
+            "_scanner_positive_delta_pct",
+            "_scanner_full_eval_budget_source",
+            "_scanner_rising_cooldown_recheck_after_epoch",
+            "_scanner_rising_cutoff_recheck_after_epoch",
+            "_scanner_rising_ws_gap_priority_recheck_after_epoch",
+            "_scanner_rising_recheck_reason",
         )
     }
 
@@ -1866,10 +2426,12 @@ def handle_scalping_scanner_promoted_target(payload):
     identity_ok, identity_fields = _scanner_identity_guard(payload, code, buy_price)
     payload_for_log = {**payload, **identity_fields}
     if not identity_ok:
+        identity_reason = identity_fields.get("scanner_identity_guard_reason") or "scanner_identity_mismatch"
+        expired = _expire_scanner_identity_mismatch_record(payload_for_log, code, identity_reason)
         _log_scanner_runtime_target_attach(
-            payload_for_log,
+            {**payload_for_log, "scanner_identity_mismatch_expired": expired},
             outcome="skipped",
-            reason=identity_fields.get("scanner_identity_guard_reason") or "scanner_identity_mismatch",
+            reason=identity_reason,
         )
         return False
 
@@ -1990,10 +2552,12 @@ def attach_db_poll_target_if_missing(db_target, targets, now_ts):
         )
         identity_payload = {**identity_payload, **identity_fields}
         if not identity_ok:
+            identity_reason = identity_fields.get("scanner_identity_guard_reason") or "scanner_identity_mismatch"
+            expired = _expire_scanner_identity_mismatch_record(identity_payload, code, identity_reason)
             _log_scanner_runtime_target_attach(
-                identity_payload,
+                {**identity_payload, "scanner_identity_mismatch_expired": expired},
                 outcome="skipped",
-                reason=identity_fields.get("scanner_identity_guard_reason") or "scanner_identity_mismatch",
+                reason=identity_reason,
                 target=dt,
             )
             return False
@@ -2044,10 +2608,12 @@ def _filter_invalid_scanner_identity_targets(targets):
                 _safe_int((target or {}).get("buy_price"), 0),
             )
             if not identity_ok:
+                identity_reason = identity_fields.get("scanner_identity_guard_reason") or "scanner_identity_mismatch"
+                expired = _expire_scanner_identity_mismatch_record(payload, code, identity_reason)
                 _log_scanner_runtime_target_attach(
-                    {**payload, **identity_fields},
+                    {**payload, **identity_fields, "scanner_identity_mismatch_expired": expired},
                     outcome="skipped",
-                    reason=identity_fields.get("scanner_identity_guard_reason") or "scanner_identity_mismatch",
+                    reason=identity_reason,
                     target=target,
                 )
                 continue
@@ -2532,6 +3098,8 @@ def run_sniper(is_test_mode=False):
         event_bus.publish("COMMAND_WS_REG", {"codes": target_codes})
 
     last_msg_min = -1
+    scanner_ws_reg_last_emit_ts: dict[tuple[str, str], float] = {}
+    scanner_ws_repair_cycle_state_by_code: dict[str, dict] = {}
 
     try:
         while True:
@@ -2548,7 +3116,7 @@ def run_sniper(is_test_mode=False):
             if RESTART_FLAG_PATH.exists():
                 print("🔄 [우아한 종료] 재시작 깃발을 확인했습니다. 시스템을 안전하게 정지합니다.")
                 event_bus.publish('TELEGRAM_BROADCAST', {'message': "🛑 스나이퍼 엔진이 하던 작업을 마치고 우아하게 재시작됩니다."})
-                RESTART_FLAG_PATH.unlink()
+                RESTART_FLAG_PATH.unlink(missing_ok=True)
                 _sn_whb("sniper_engine", alive=False)
                 break
 
@@ -2699,19 +3267,35 @@ def run_sniper(is_test_mode=False):
             # ✅ 주문대기 상태는 ws_data 없이도 먼저 처리
             # =====================================================
             queue_context = _runtime_queue_context(targets, now_ts=now_ts)
+            active_scanner_watch_codes = {
+                str(t.get('code', '')).strip()[:6]
+                for t in targets
+                if _is_scanner_watching_target(t)
+            }
+            for stale_code in list(scanner_ws_repair_cycle_state_by_code.keys()):
+                if stale_code not in active_scanner_watch_codes:
+                    scanner_ws_repair_cycle_state_by_code.pop(stale_code, None)
             scanner_ws_snapshot_cache = _runtime_scanner_ws_snapshot_cache(queue_context["iteration_targets"])
             scanner_full_eval_count = 0
+            scanner_rising_full_eval_relief_count = 0
             scanner_full_eval_base_limit = _scanner_full_eval_max_per_loop()
             scanner_full_eval_limit = _scanner_full_eval_effective_limit(
                 queue_context,
                 base_limit=scanner_full_eval_base_limit,
             )
+            scanner_rising_full_eval_extra_limit = min(
+                _scanner_rising_full_eval_extra_per_loop(),
+                max(0, 40 - scanner_full_eval_limit),
+            )
             delayed_scanner_heavy_eval = []
             pending_scanner_ws_reg: dict[str, set[str]] = {}
+            pending_scanner_ws_persistent_repair: dict[str, set[str]] = {}
             deferred_scanner_pipeline_events = []
             deferred_scanner_skip_events = []
             scanner_precheck_seen = False
             scanner_heavy_eval_flushed = False
+            scanner_rest_quote_fallback_loop_limit = _scanner_rest_quote_fallback_max_per_loop()
+            scanner_rest_quote_fallback_loop_count = 0
 
             def _defer_scanner_entry_pipeline_log(stock_value, code_value, stage, fields):
                 deferred_scanner_pipeline_events.append(
@@ -2874,18 +3458,133 @@ def run_sniper(is_test_mode=False):
                 if not norm_code:
                     return
                 source_key = str(source or "scanner_watching_ws_snapshot_recovery")
+                if not _scanner_ws_reg_recovery_throttle_allows(
+                    scanner_ws_reg_last_emit_ts,
+                    source_key,
+                    norm_code,
+                    time.time(),
+                ):
+                    return
                 pending_scanner_ws_reg.setdefault(source_key, set()).add(norm_code)
 
+            def _queue_scanner_ws_persistent_repair(stock_value, code_value, ws_snapshot, recovery_fields):
+                fields = dict(recovery_fields or {})
+                if not fields.get("ws_repair_batch_required"):
+                    return {}
+                norm_code = str(code_value or "").strip()[:6]
+                if not norm_code:
+                    return {"ws_repair_batch_queued": False, "ws_repair_batch_reason": "missing_code"}
+                now_value = time.time()
+                recheck_snapshot, recheck_fields = _scanner_ws_subscription_recheck_snapshot_and_fields(
+                    WS_MANAGER,
+                    norm_code,
+                    ws_snapshot,
+                    now_ts=now_value,
+                )
+                repair_state = (
+                    stock_value.setdefault("_scanner_ws_persistent_repair", {})
+                    if isinstance(stock_value, dict)
+                    else {}
+                )
+                if not isinstance(repair_state, dict):
+                    repair_state = {}
+                    if isinstance(stock_value, dict):
+                        stock_value["_scanner_ws_persistent_repair"] = repair_state
+                cycle_id = str(fields.get("ws_repair_cycle_id") or "")
+                min_interval_sec = _scanner_ws_persistent_repair_min_interval_sec()
+                last_batch_ts = _safe_float(repair_state.get("last_repair_batch_ts"), 0.0)
+                last_cycle_id = str(repair_state.get("last_repair_cycle_id") or "")
+                if not recheck_fields.get("ws_subscription_repair_needed", True):
+                    repair_state["last_repair_outcome"] = "snapshot_arrived_after_subscription_recheck"
+                    return {
+                        **recheck_fields,
+                        "_ws_subscription_recheck_snapshot": recheck_snapshot,
+                        "ws_repair_batch_queued": False,
+                        "ws_repair_batch_reason": "snapshot_arrived_after_subscription_recheck",
+                        "ws_recovery_outcome": "ws_snapshot_arrived_after_subscription_recheck",
+                    }
+                if (
+                    last_cycle_id == cycle_id
+                    and last_batch_ts > 0
+                    and now_value - last_batch_ts < min_interval_sec
+                ):
+                    next_after = last_batch_ts + min_interval_sec
+                    repair_state["last_repair_outcome"] = "persistent_repair_batch_deferred"
+                    return {
+                        **recheck_fields,
+                        "ws_repair_batch_queued": False,
+                        "ws_repair_batch_reason": "persistent_repair_batch_interval_active",
+                        "ws_repair_batch_next_after_epoch": f"{next_after:.3f}",
+                        "ws_repair_batch_min_interval_sec": round(min_interval_sec, 3),
+                    }
+                source_key = "scanner_persistent_ws_gap_recovery"
+                pending_scanner_ws_persistent_repair.setdefault(source_key, set()).add(norm_code)
+                repair_state["last_repair_batch_ts"] = now_value
+                repair_state["last_repair_cycle_id"] = cycle_id
+                repair_state["last_repair_outcome"] = "persistent_repair_batch_queued"
+                repair_state["last_subscription_recheck_status"] = recheck_fields.get(
+                    "ws_subscription_recheck_status"
+                )
+                return {
+                    **recheck_fields,
+                    "ws_repair_batch_queued": True,
+                    "ws_repair_batch_reason": "persistent_ws_gap_repair_batch_queued",
+                    "ws_repair_batch_source": source_key,
+                    "ws_repair_batch_force": True,
+                    "ws_repair_batch_min_interval_sec": round(min_interval_sec, 3),
+                }
+
+            def _scanner_rest_quote_recovery_options(stock_value, recovery_now_ts):
+                nonlocal scanner_rest_quote_fallback_loop_count
+                allowed = _scanner_rest_quote_fallback_allowed_for_ws_gap(stock_value)
+                deferred_reason = ""
+                if _scanner_rest_quote_fallback_due(
+                    stock_value,
+                    recovery_now_ts,
+                    allow_early_rest_fallback=allowed,
+                ):
+                    if scanner_rest_quote_fallback_loop_count >= scanner_rest_quote_fallback_loop_limit:
+                        deferred_reason = "rest_quote_loop_budget_deferred"
+                    else:
+                        scanner_rest_quote_fallback_loop_count += 1
+                return allowed, deferred_reason
+
+            def _apply_subscription_recheck_snapshot_if_ready(ws_snapshot, recovery_fields, *, phase):
+                fields = dict(recovery_fields or {})
+                recheck_snapshot = fields.pop("_ws_subscription_recheck_snapshot", None)
+                if (
+                    fields.get("ws_recovery_outcome")
+                    != "ws_snapshot_arrived_after_subscription_recheck"
+                    or not isinstance(recheck_snapshot, dict)
+                    or _safe_int(recheck_snapshot.get("curr"), 0) <= 0
+                ):
+                    return ws_snapshot, fields, False
+                fields["ws_subscription_recheck_snapshot_applied"] = True
+                fields["ws_subscription_recheck_snapshot_apply_phase"] = str(phase or "unknown")
+                return recheck_snapshot, fields, True
+
             def _flush_pending_scanner_ws_reg():
-                if not pending_scanner_ws_reg:
-                    return
-                for source_key, code_set in list(pending_scanner_ws_reg.items()):
-                    if code_set:
-                        event_bus.publish(
-                            "COMMAND_WS_REG",
-                            {"codes": sorted(code_set), "source": source_key},
-                        )
-                pending_scanner_ws_reg.clear()
+                if pending_scanner_ws_reg:
+                    for source_key, code_set in list(pending_scanner_ws_reg.items()):
+                        if code_set:
+                            event_bus.publish(
+                                "COMMAND_WS_REG",
+                                {"codes": sorted(code_set), "source": source_key},
+                            )
+                    pending_scanner_ws_reg.clear()
+                if pending_scanner_ws_persistent_repair:
+                    for source_key, code_set in list(pending_scanner_ws_persistent_repair.items()):
+                        if code_set:
+                            event_bus.publish(
+                                "COMMAND_WS_REG",
+                                {
+                                    "codes": sorted(code_set),
+                                    "source": source_key,
+                                    "force": True,
+                                    "repair_cycle": "persistent_ws_gap",
+                                },
+                            )
+                    pending_scanner_ws_persistent_repair.clear()
 
             def _flush_delayed_scanner_heavy_eval():
                 nonlocal scanner_heavy_eval_flushed
@@ -2948,6 +3647,12 @@ def run_sniper(is_test_mode=False):
                     ws_data = WS_MANAGER.get_latest_data(code) if WS_MANAGER else {}
                 if not ws_data or ws_data.get('curr', 0) == 0:
                     if status == 'WATCHING':
+                        recheck_snapshot_applied = False
+                        rest_quote_allowed, rest_quote_deferred_reason = (
+                            _scanner_rest_quote_recovery_options(stock, now_ts)
+                            if _is_scanner_watching_target(stock)
+                            else (False, "")
+                        )
                         ws_data, recovery_fields = (
                             _recover_missing_ws_snapshot(
                                 stock,
@@ -2955,14 +3660,49 @@ def run_sniper(is_test_mode=False):
                                 now_ts,
                                 ws_data,
                                 publish_ws_reg=False,
-                                allow_early_rest_fallback=_scanner_ws_gap_early_rest_fallback_allowed(stock),
+                                allow_early_rest_fallback=rest_quote_allowed,
+                                rest_quote_deferred_reason=rest_quote_deferred_reason,
+                                cycle_state_store=scanner_ws_repair_cycle_state_by_code,
                             )
                             if _is_scanner_watching_target(stock)
                             else (ws_data, {})
                         )
                         if _is_scanner_watching_target(stock):
-                            _queue_scanner_ws_reg(code, "scanner_watching_ws_snapshot_recovery")
+                            if recovery_fields.get("ws_repair_batch_required"):
+                                recovery_fields.update(
+                                    _queue_scanner_ws_persistent_repair(
+                                        stock,
+                                        code,
+                                        ws_data,
+                                        recovery_fields,
+                                    )
+                                )
+                            elif recovery_fields.get("ws_repair_cycle_reg_allowed", True):
+                                _queue_scanner_ws_reg(code, "scanner_watching_ws_snapshot_recovery")
+                            ws_data, recovery_fields, recheck_snapshot_applied = (
+                                _apply_subscription_recheck_snapshot_if_ready(
+                                    ws_data,
+                                    recovery_fields,
+                                    phase="watching_missing_or_zero",
+                                )
+                            )
                         if recovery_fields.get("ws_recovery_outcome") == "rest_quote_applied":
+                            _scanner_watch_reset_stale_eviction_state(stock)
+                            _defer_scanner_watching_runtime_skip(
+                                stock,
+                                code,
+                                skip_reason="ws_snapshot_missing_or_zero_recovered",
+                                now_ts=now_ts,
+                                ws_data=ws_data,
+                                ws_manager_available=bool(WS_MANAGER),
+                                throttle_sec=0,
+                                **recovery_fields,
+                            )
+                        elif (
+                            recovery_fields.get("ws_recovery_outcome")
+                            == "ws_snapshot_arrived_after_subscription_recheck"
+                            and recheck_snapshot_applied
+                        ):
                             _scanner_watch_reset_stale_eviction_state(stock)
                             _defer_scanner_watching_runtime_skip(
                                 stock,
@@ -2995,6 +3735,18 @@ def run_sniper(is_test_mode=False):
                             )
                             continue
                     else:
+                        if status == 'HOLDING':
+                            handle_holding_state(
+                                stock,
+                                code,
+                                ws_data or {},
+                                admin_id,
+                                current_market_regime,
+                                radar=radar,
+                                ai_engine=ai_engine,
+                                now_ts=now_ts,
+                                now_dt=now,
+                            )
                         continue
 
                 if sniper_state_handlers._is_scalp_simulator_target(stock) and status == sniper_state_handlers.SCALP_SIM_PENDING_STATUS:
@@ -3010,6 +3762,16 @@ def run_sniper(is_test_mode=False):
                     if _is_scanner_watching_target(stock):
                         scanner_precheck_seen = True
                         heavy_queue_enter_epoch = time.time()
+                        stock.update(
+                            {
+                                f"_scanner_{key}": value
+                                for key, value in _scanner_rising_entry_relief_fields(
+                                    stock,
+                                    reason="precheck_observation",
+                                    budget_source="standard",
+                                ).items()
+                            }
+                        )
                         _defer_emit_scanner_fast_precheck(
                             stock,
                             code,
@@ -3037,6 +3799,10 @@ def run_sniper(is_test_mode=False):
                         fast_precheck_reason = str(stock.get("_scanner_fast_precheck_reason") or "")
                         recovery_fields = {}
                         if fast_precheck_result != "eligible_for_heavy_entry_eval" and fast_precheck_reason == "stale_ws_snapshot":
+                            rest_quote_allowed, rest_quote_deferred_reason = _scanner_rest_quote_recovery_options(
+                                stock,
+                                heavy_queue_enter_epoch,
+                            )
                             ws_data, recovery_fields = _recover_missing_ws_snapshot(
                                 stock,
                                 code,
@@ -3044,15 +3810,41 @@ def run_sniper(is_test_mode=False):
                                 ws_data,
                                 ws_reg_source="scanner_fast_precheck_stale_ws_recovery",
                                 publish_ws_reg=False,
-                                allow_early_rest_fallback=_scanner_ws_gap_early_rest_fallback_allowed(stock),
+                                allow_early_rest_fallback=rest_quote_allowed,
+                                rest_quote_deferred_reason=rest_quote_deferred_reason,
+                                cycle_state_store=scanner_ws_repair_cycle_state_by_code,
                             )
-                            _queue_scanner_ws_reg(code, "scanner_fast_precheck_stale_ws_recovery")
-                            if recovery_fields.get("ws_recovery_outcome") == "rest_quote_applied":
+                            if recovery_fields.get("ws_repair_batch_required"):
+                                recovery_fields.update(
+                                    _queue_scanner_ws_persistent_repair(
+                                        stock,
+                                        code,
+                                        ws_data,
+                                        recovery_fields,
+                                    )
+                                )
+                            elif recovery_fields.get("ws_repair_cycle_reg_allowed", True):
+                                _queue_scanner_ws_reg(code, "scanner_fast_precheck_stale_ws_recovery")
+                            ws_data, recovery_fields, recheck_snapshot_applied = (
+                                _apply_subscription_recheck_snapshot_if_ready(
+                                    ws_data,
+                                    recovery_fields,
+                                    phase="fast_precheck",
+                                )
+                            )
+                            if recovery_fields.get("ws_recovery_outcome") in {
+                                "rest_quote_applied",
+                                "ws_snapshot_arrived_after_subscription_recheck",
+                            }:
                                 _scanner_watch_reset_stale_eviction_state(stock)
                                 _defer_scanner_watching_runtime_skip(
                                     stock,
                                     code,
-                                    skip_reason="scanner_fast_precheck_stale_ws_recovered",
+                                    skip_reason=(
+                                        "scanner_fast_precheck_subscription_recheck_snapshot_applied"
+                                        if recheck_snapshot_applied
+                                        else "scanner_fast_precheck_stale_ws_recovered"
+                                    ),
                                     now_ts=heavy_queue_enter_epoch,
                                     ws_data=ws_data,
                                     ws_manager_available=bool(WS_MANAGER),
@@ -3086,6 +3878,38 @@ def run_sniper(is_test_mode=False):
                                 if fast_precheck_result == "source_quality_blocked"
                                 else "scanner_fast_precheck_not_eligible"
                             )
+                            skip_recovery_fields = dict(recovery_fields or {})
+                            skip_recovery_fields.setdefault(
+                                "ws_recovery_action",
+                                (
+                                    "ws_reg_reissued"
+                                    if fast_precheck_reason == "stale_ws_snapshot"
+                                    else "not_applicable_ws_recovery_action"
+                                ),
+                            )
+                            skip_recovery_fields.setdefault(
+                                "ws_recovery_outcome",
+                                (
+                                    "ws_reg_reissued_waiting_snapshot"
+                                    if fast_precheck_reason == "stale_ws_snapshot"
+                                    else "not_applicable_ws_recovery_outcome"
+                                ),
+                            )
+                            skip_recovery_fields.setdefault(
+                                "ws_recovery_miss_count",
+                                "not_applicable_ws_recovery_miss_count",
+                            )
+                            if (
+                                skip_recovery_fields.get("ws_subscription_recheck_snapshot_applied")
+                                and fast_precheck_reason == "stale_ws_snapshot"
+                            ):
+                                skip_recovery_fields["subscription_alive_but_entry_stale"] = True
+                                skip_recovery_fields[
+                                    "entry_freshness_after_subscription_recheck"
+                                ] = "stale_ws_snapshot"
+                                skip_recovery_fields[
+                                    "entry_evaluable_fresh_after_subscription_recheck"
+                                ] = False
                             _defer_scanner_watching_runtime_skip(
                                 stock,
                                 code,
@@ -3099,26 +3923,7 @@ def run_sniper(is_test_mode=False):
                                 scanner_watching_count=queue_context["scanner_watching_count"],
                                 fast_precheck_result=fast_precheck_result or "-",
                                 fast_precheck_reason=fast_precheck_reason or "-",
-                                ws_recovery_action=recovery_fields.get(
-                                    "ws_recovery_action",
-                                    (
-                                        "ws_reg_reissued"
-                                        if fast_precheck_reason == "stale_ws_snapshot"
-                                        else "not_applicable_ws_recovery_action"
-                                    ),
-                                ),
-                                ws_recovery_outcome=recovery_fields.get(
-                                    "ws_recovery_outcome",
-                                    (
-                                        "ws_reg_reissued_waiting_snapshot"
-                                        if fast_precheck_reason == "stale_ws_snapshot"
-                                        else "not_applicable_ws_recovery_outcome"
-                                    ),
-                                ),
-                                ws_recovery_miss_count=recovery_fields.get(
-                                    "ws_recovery_miss_count",
-                                    "not_applicable_ws_recovery_miss_count",
-                                ),
+                                **skip_recovery_fields,
                             )
                             if fast_precheck_reason == "stale_ws_snapshot":
                                 _maybe_expire_scanner_watch_for_stale(
@@ -3157,7 +3962,45 @@ def run_sniper(is_test_mode=False):
                                 recheck_reason=stock.get("entry_strength_momentum_recheck_reason") or "-",
                             )
                             continue
+                        budget_source = "standard"
                         if scanner_full_eval_count >= scanner_full_eval_limit:
+                            relief_allowed = (
+                                scanner_rising_full_eval_relief_count
+                                < scanner_rising_full_eval_extra_limit
+                                and _scanner_is_rising_entry_relief_candidate(stock)
+                            )
+                            if relief_allowed:
+                                budget_source = "rising_full_eval_relief"
+                                scanner_rising_full_eval_relief_count += 1
+                                stock.update(
+                                    {
+                                        f"_scanner_{key}": value
+                                        for key, value in _scanner_rising_entry_relief_fields(
+                                            stock,
+                                            reason="rising_full_eval_relief_applied",
+                                            budget_source=budget_source,
+                                        ).items()
+                                    }
+                                )
+                            else:
+                                relief_reason = (
+                                    "rising_full_eval_relief_budget_exhausted"
+                                    if _scanner_is_rising_entry_relief_candidate(stock)
+                                    else "not_rising_entry_relief_candidate"
+                                )
+                                if scanner_rising_full_eval_extra_limit <= 0:
+                                    relief_reason = "rising_full_eval_relief_disabled"
+                                stock.update(
+                                    {
+                                        f"_scanner_{key}": value
+                                        for key, value in _scanner_rising_entry_relief_fields(
+                                            stock,
+                                            reason=relief_reason,
+                                            budget_source="deferred_no_relief",
+                                        ).items()
+                                    }
+                                )
+                        if scanner_full_eval_count >= scanner_full_eval_limit and budget_source != "rising_full_eval_relief":
                             _scanner_watch_reset_terminal_eviction_state(stock)
                             _defer_scanner_watching_runtime_skip(
                                 stock,
@@ -3173,6 +4016,8 @@ def run_sniper(is_test_mode=False):
                                 scanner_full_eval_base_limit=scanner_full_eval_base_limit,
                                 scanner_full_eval_limit=scanner_full_eval_limit,
                                 scanner_full_eval_count=scanner_full_eval_count,
+                                scanner_rising_full_eval_extra_limit=scanner_rising_full_eval_extra_limit,
+                                scanner_rising_full_eval_relief_count=scanner_rising_full_eval_relief_count,
                             )
                             continue
                         scanner_full_eval_count += 1
@@ -3192,6 +4037,15 @@ def run_sniper(is_test_mode=False):
                     )
                     if _is_scanner_watching_target(stock):
                         stock["_scanner_last_full_eval_epoch"] = time.time()
+                        if (
+                            bool(stock.get("entry_strength_momentum_recheck_pending"))
+                            and _scanner_is_rising_entry_relief_candidate(stock)
+                            and str(
+                                stock.get("entry_strength_momentum_recheck_source_quality_block_reason") or ""
+                            ).strip().lower()
+                            == "stale_ws_snapshot"
+                        ):
+                            _queue_scanner_ws_reg(code, "scanner_strength_recheck_stale_ws_recovery")
                         _maybe_expire_scanner_watch_after_full_eval(
                             stock,
                             code,

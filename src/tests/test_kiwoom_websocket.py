@@ -1,8 +1,10 @@
 import asyncio
 import json
+from types import SimpleNamespace
 
 import pytest
 
+import src.engine.kiwoom_websocket as kiwoom_websocket
 from src.engine.kiwoom_websocket import KiwoomWSManager
 
 
@@ -109,6 +111,86 @@ def test_send_reg_uses_exchange_aware_items_for_nxt(monkeypatch):
     payload = json.loads(fake_ws.sent[0])
     assert payload["data"][0]["item"] == ["039490_AL"]
     assert manager.subscribed_codes == {"039490"}
+
+
+def test_send_reg_adds_sor_fallback_when_effective_code_is_raw(monkeypatch):
+    manager = KiwoomWSManager("test-token")
+    fake_ws = _FakeWS([])
+    manager.websocket = fake_ws
+    manager._session_ready.set()
+
+    monkeypatch.setattr(
+        "src.utils.kiwoom_utils.get_effective_kiwoom_code",
+        lambda code: code,
+    )
+
+    asyncio.run(manager._send_reg(["240810"]))
+
+    payload = json.loads(fake_ws.sent[0])
+    assert payload["data"][0]["item"] == ["240810", "240810_AL"]
+    assert manager.subscribed_codes == {"240810"}
+
+
+def test_send_reg_uses_append_refresh_after_first_batch(monkeypatch):
+    manager = KiwoomWSManager("test-token")
+    fake_ws = _FakeWS([])
+    manager.websocket = fake_ws
+    manager._session_ready.set()
+
+    monkeypatch.setattr(kiwoom_websocket, "TRADING_RULES", SimpleNamespace(WS_REG_BATCH_SIZE=2))
+    monkeypatch.setattr("src.utils.kiwoom_utils.get_effective_kiwoom_code", lambda code: code)
+
+    asyncio.run(manager._send_reg(["000001", "000002", "000003", "000004", "000005"]))
+
+    payloads = [json.loads(payload) for payload in fake_ws.sent]
+    assert [payload["refresh"] for payload in payloads] == ["1", "0", "0"]
+    assert [payload["data"][0]["item"] for payload in payloads] == [
+        ["000001", "000001_AL", "000002", "000002_AL"],
+        ["000003", "000003_AL", "000004", "000004_AL"],
+        ["000005", "000005_AL"],
+    ]
+    assert manager.subscribed_codes == {"000001", "000002", "000003", "000004", "000005"}
+
+
+def test_send_reg_incremental_mode_does_not_replace_existing_group(monkeypatch):
+    manager = KiwoomWSManager("test-token")
+    fake_ws = _FakeWS([])
+    manager.websocket = fake_ws
+    manager._session_ready.set()
+
+    monkeypatch.setattr(kiwoom_websocket, "TRADING_RULES", SimpleNamespace(WS_REG_BATCH_SIZE=2))
+    monkeypatch.setattr("src.utils.kiwoom_utils.get_effective_kiwoom_code", lambda code: code)
+
+    asyncio.run(
+        manager._send_reg(
+            ["000003", "000004", "000005"],
+            replace_existing=False,
+        )
+    )
+
+    payloads = [json.loads(payload) for payload in fake_ws.sent]
+    assert [payload["refresh"] for payload in payloads] == ["0", "0"]
+    assert [payload["data"][0]["item"] for payload in payloads] == [
+        ["000003", "000003_AL", "000004", "000004_AL"],
+        ["000005", "000005_AL"],
+    ]
+    assert manager.subscribed_codes == {"000003", "000004", "000005"}
+
+
+def test_command_ws_reg_recovery_forces_resubscribe(monkeypatch):
+    manager = KiwoomWSManager("test-token")
+    calls = []
+
+    def fake_execute(codes, *, force=False):
+        calls.append((codes, force))
+
+    monkeypatch.setattr(manager, "execute_subscribe", fake_execute)
+
+    manager._handle_reg_event(
+        {"codes": ["240810"], "source": "scanner_watching_ws_snapshot_recovery"}
+    )
+
+    assert calls == [(["240810"], True)]
 
 
 def test_real_payload_with_exchange_suffix_updates_canonical_snapshot():

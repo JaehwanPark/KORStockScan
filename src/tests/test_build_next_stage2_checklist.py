@@ -397,7 +397,7 @@ def test_build_next_stage2_checklist_preserves_unknown_tasks_inside_auto_block(m
                 "  - Source: [manual.md](/home/ubuntu/KORStockScan/docs/manual.md)",
                 "  - 판정 기준: 지우면 안 된다.",
                 "",
-                "## 장후 체크리스트 (16:30~18:55)",
+                "## 장후 체크리스트 (21:40~23:05)",
                 "",
                 "- [ ] `[CustomPostclose0526] 자동 블록 안 장후 보강 항목` (`Due: 2026-05-26`, `Slot: POSTCLOSE`, `TimeWindow: 18:00~18:10`, `Track: Plan`)",
                 "  - Source: [manual.md](/home/ubuntu/KORStockScan/docs/manual.md)",

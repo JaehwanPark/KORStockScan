@@ -21,6 +21,7 @@ from src.utils.jsonl_io import existing_or_gzip_path, iter_jsonl
 from src.utils.logger import log_error, log_info
 from src.utils.pipeline_event_logger import emit_pipeline_event
 from src.engine.sniper_time import (
+    SCALPING_BUY_WINDOWS,
     TIME_09_05,
     TIME_15_30,
     TIME_SCALPING_OVERNIGHT_DECISION,
@@ -6792,9 +6793,15 @@ def _scanner_terminal_block_fresh_input_confirmed(fields):
             "not_evaluated",
             "single_snapshot_only",
             "missing_orderbook_snapshot",
+            "stale_ws_snapshot",
         }:
             return False
-        if "insufficient_history" in text or "not_available" in text or "single_snapshot_only" in text:
+        if (
+            "insufficient_history" in text
+            or "not_available" in text
+            or "single_snapshot_only" in text
+            or "stale_ws_snapshot" in text
+        ):
             return False
     for key in (
         "quote_stale",
@@ -6906,6 +6913,196 @@ def _is_scanner_watching_runtime_observation_target(stock) -> bool:
     )
 
 
+def _env_bool(name: str, default: bool = False) -> bool:
+    raw = os.getenv(name, "")
+    text = str(raw).strip().lower()
+    if not text:
+        return bool(default)
+    if text in {"1", "true", "yes", "y", "on"}:
+        return True
+    if text in {"0", "false", "no", "n", "off"}:
+        return False
+    return bool(default)
+
+
+def _env_int(name: str, default: int) -> int:
+    raw = os.getenv(name, "")
+    text = str(raw).strip()
+    if not text:
+        return int(default)
+    try:
+        return int(text)
+    except Exception:
+        return int(default)
+
+
+def _scanner_rising_entry_min_delta_pct() -> float:
+    raw = os.getenv("KORSTOCKSCAN_SCANNER_RISING_FULL_EVAL_MIN_DELTA_PCT", "")
+    try:
+        value = float(str(raw).strip()) if str(raw).strip() else 0.5
+    except Exception:
+        value = 0.5
+    return max(0.0, min(value, 20.0))
+
+
+def _scanner_positive_delta_pct(stock) -> float:
+    stock = stock or {}
+    _hydrate_scanner_promotion_runtime_context(stock)
+    return max(
+        0.0,
+        _safe_float(stock.get("price_delta_since_first_seen_pct"), 0.0),
+        _safe_float(stock.get("comparable_flu_delta_since_first_seen"), 0.0),
+    )
+
+
+def _scanner_rising_entry_relief_eligible(stock) -> bool:
+    if not _is_scanner_watching_runtime_observation_target(stock):
+        return False
+    return _scanner_positive_delta_pct(stock) >= _scanner_rising_entry_min_delta_pct()
+
+
+def _scanner_rising_cooldown_eviction_relief_enabled() -> bool:
+    return _env_bool("KORSTOCKSCAN_SCANNER_RISING_COOLDOWN_EVICTION_RELIEF_ENABLED", False)
+
+
+def _scanner_rising_cutoff_recheck_enabled() -> bool:
+    return _env_bool("KORSTOCKSCAN_SCANNER_RISING_CUTOFF_RECHECK_ENABLED", False)
+
+
+def _scanner_active_rising_recheck_reason(stock, *, now_ts: float | None = None) -> str | None:
+    stock = stock or {}
+    now_value = time.time() if now_ts is None else float(now_ts)
+    recheck_keys = (
+        ("_scanner_rising_cooldown_recheck_after_epoch", "cooldown_recheck_pending"),
+        ("_scanner_rising_cutoff_recheck_after_epoch", "next_buy_window_recheck_pending"),
+        ("_scanner_rising_ws_gap_priority_recheck_after_epoch", "ws_gap_recovery_deferred_priority"),
+    )
+    for epoch_key, default_reason in recheck_keys:
+        recheck_epoch = _safe_float(stock.get(epoch_key), 0.0)
+        if recheck_epoch > now_value:
+            return default_reason
+    return None
+
+
+def _scanner_active_full_eval_budget_source(stock, *, now_ts: float | None = None) -> str | None:
+    reason = _scanner_active_rising_recheck_reason(stock, now_ts=now_ts)
+    if not reason:
+        return None
+    if reason == "cooldown_recheck_pending":
+        return "not_applicable_cooldown"
+    if reason == "next_buy_window_recheck_pending":
+        return "not_applicable_cutoff"
+    if reason == "ws_gap_recovery_deferred_priority":
+        return "not_applicable_ws_gap"
+    return stock.get("_scanner_full_eval_budget_source")
+
+
+def _scanner_rising_relief_observation_fields(
+    stock,
+    *,
+    reason: str | None = None,
+    budget_source: str | None = None,
+    now_ts: float | None = None,
+) -> dict[str, Any]:
+    stock = stock or {}
+    active_recheck_reason = _scanner_active_rising_recheck_reason(stock, now_ts=now_ts)
+    active_budget_source = _scanner_active_full_eval_budget_source(stock, now_ts=now_ts)
+    return {
+        "rising_entry_relief_eligible": bool(_scanner_rising_entry_relief_eligible(stock)),
+        "rising_entry_relief_reason": reason
+        or active_recheck_reason
+        or "not_applicable_rising_entry_relief",
+        "scanner_positive_delta_pct": round(_scanner_positive_delta_pct(stock), 4),
+        "scanner_full_eval_budget_source": budget_source
+        or active_budget_source
+        or "not_applicable_full_eval_budget_source",
+    }
+
+
+def _ws_realtime_type_freshness_fields(ws_data: dict | None, *, now_ts: float | None = None) -> dict[str, Any]:
+    ws_data = ws_data if isinstance(ws_data, dict) else {}
+    now_value = time.time() if now_ts is None else float(now_ts)
+
+    def _age_ms(ts_value):
+        ts = _safe_float(ts_value, 0.0)
+        if ts <= 0:
+            return "not_available_realtime_type_age_ms"
+        return round(max(0.0, now_value - ts) * 1000.0, 3)
+
+    received = ws_data.get("received_types") or []
+    try:
+        received_types = sorted(str(item) for item in received if str(item).strip())
+    except Exception:
+        received_types = []
+    type_ts = ws_data.get("last_realtime_type_ts")
+    type_ts = type_ts if isinstance(type_ts, dict) else {}
+    history = ws_data.get("strength_momentum_history") or []
+    history_count = len(history) if hasattr(history, "__len__") else 0
+    latest_history_ts = 0.0
+    if history_count > 0:
+        try:
+            latest = history[-1]
+            latest_history_ts = _safe_float((latest or {}).get("ts"), 0.0) if isinstance(latest, dict) else 0.0
+        except Exception:
+            latest_history_ts = 0.0
+    last_trade = ws_data.get("last_trade_tick")
+    last_trade_ts = _safe_float((last_trade or {}).get("ts"), 0.0) if isinstance(last_trade, dict) else 0.0
+    return {
+        "ws_received_types": ",".join(received_types) if received_types else "-",
+        "ws_received_type_count": len(received_types),
+        "ws_last_0b_age_ms": _age_ms(type_ts.get("0B") or last_trade_ts),
+        "ws_last_0d_age_ms": _age_ms(type_ts.get("0D")),
+        "ws_last_0w_age_ms": _age_ms(type_ts.get("0w")),
+        "ws_last_0f_age_ms": _age_ms(type_ts.get("0F")),
+        "ws_last_strength_history_age_ms": _age_ms(latest_history_ts),
+        "ws_strength_history_count": int(history_count or 0),
+    }
+
+
+def _numeric_realtime_type_age_ms(value) -> float | None:
+    if value in (None, "", "-", "not_available_realtime_type_age_ms"):
+        return None
+    try:
+        return float(value)
+    except Exception:
+        return None
+
+
+def _ws_trade_tick_quiet_reason(ws_data: dict | None, *, max_ws_age_ms: float, now_ts: float | None = None) -> str:
+    fields = _ws_realtime_type_freshness_fields(ws_data, now_ts=now_ts)
+    if _safe_int(fields.get("ws_received_type_count"), 0) <= 0:
+        return ""
+    quiet_alive_max_ms = max(
+        max_ws_age_ms,
+        _rule_float("SCANNER_TRADE_TICK_QUIET_NON_TRADE_WS_FRESH_SEC", 10.0) * 1000.0,
+    )
+    non_trade_ages = [
+        _numeric_realtime_type_age_ms(fields.get("ws_last_0d_age_ms")),
+        _numeric_realtime_type_age_ms(fields.get("ws_last_0w_age_ms")),
+        _numeric_realtime_type_age_ms(fields.get("ws_last_0f_age_ms")),
+    ]
+    non_trade_fresh = any(age is not None and age <= quiet_alive_max_ms for age in non_trade_ages)
+    if not non_trade_fresh:
+        return ""
+    tick_age_ms = _numeric_realtime_type_age_ms(fields.get("ws_last_0b_age_ms"))
+    history_age_ms = _numeric_realtime_type_age_ms(fields.get("ws_last_strength_history_age_ms"))
+    trade_tick_stale = tick_age_ms is None or tick_age_ms > max_ws_age_ms
+    history_stale = history_age_ms is None or history_age_ms > max_ws_age_ms
+    if trade_tick_stale and history_stale:
+        return "trade_tick_quiet"
+    return ""
+
+
+def _next_scalping_buy_window_recheck_epoch(now_dt) -> float | None:
+    if now_dt is None:
+        return None
+    now_t = now_dt.time()
+    for start, _end in sorted(SCALPING_BUY_WINDOWS, key=lambda window: window[0]):
+        if now_t < start:
+            return datetime.combine(now_dt.date(), start).timestamp()
+    return None
+
+
 def _scanner_watching_runtime_skip_fields(stock, *, skip_reason: str, now_ts: float, ws_data=None, **extra) -> dict[str, Any]:
     ws_data = ws_data if isinstance(ws_data, dict) else {}
     scanner_fields = _scanner_promotion_correlation_fields(stock)
@@ -6942,6 +7139,8 @@ def _scanner_watching_runtime_skip_fields(stock, *, skip_reason: str, now_ts: fl
         "added_time": stock.get("added_time") or "not_applicable_added_time",
         "ws_curr": ws_data.get("curr") if ws_data.get("curr") not in (None, "") else "not_applicable_ws_curr",
         "observed_epoch": f"{float(now_ts):.3f}",
+        **_ws_realtime_type_freshness_fields(ws_data, now_ts=now_ts),
+        **_scanner_rising_relief_observation_fields(stock, now_ts=now_ts),
         **extra,
     }
 
@@ -7043,6 +7242,7 @@ def _scanner_runtime_queue_lag_fields(
         "entry_armed_at_epoch": stock.get("entry_armed_at_epoch") or "not_applicable_entry_armed_at_epoch",
         "added_time": stock.get("added_time") or "not_applicable_added_time",
         "observed_epoch": f"{float(now_ts):.3f}",
+        **_scanner_rising_relief_observation_fields(stock),
     }
 
 
@@ -7153,6 +7353,7 @@ def _scanner_fast_precheck_fields(
             else "not_available_quote_age_ms"
         ),
         "snapshot_source": "ws_manager_latest_data" if ws_data else "missing_ws_snapshot",
+        **_ws_realtime_type_freshness_fields(ws_data, now_ts=now_ts),
         "target_status": (stock or {}).get("status") or "not_applicable_target_status",
         "target_strategy": normalize_strategy((stock or {}).get("strategy")),
         "target_position_tag": normalize_position_tag(
@@ -7162,6 +7363,7 @@ def _scanner_fast_precheck_fields(
         "runtime_record_id": (stock or {}).get("id") or "not_applicable_runtime_record_id",
         "entry_armed_at_epoch": (stock or {}).get("entry_armed_at_epoch") or "not_applicable_entry_armed_at_epoch",
         "added_time": (stock or {}).get("added_time") or "not_applicable_added_time",
+        **_scanner_rising_relief_observation_fields(stock),
     }
 
 
@@ -7239,6 +7441,7 @@ def _scanner_heavy_eval_lag_fields(stock, *, now_ts: float, queue_enter_epoch: f
             (stock or {}).get("position_tag"),
         ),
         "runtime_record_id": (stock or {}).get("id") or "not_applicable_runtime_record_id",
+        **_scanner_rising_relief_observation_fields(stock),
     }
 
 
@@ -11891,6 +12094,180 @@ def _get_ws_snapshot_age_sec(ws_data):
         return None
 
 
+def _parse_rest_quote_price(value):
+    text = str(value or "").strip().replace(",", "").replace("+", "")
+    if not text:
+        return 0
+    try:
+        return abs(int(float(text)))
+    except Exception:
+        return 0
+
+
+def _fetch_holding_rest_quote_snapshot(code, now_ts):
+    if not KIWOOM_TOKEN:
+        return {}
+    try:
+        url = kiwoom_utils.get_api_url("/api/dostk/stkinfo")
+        rows = kiwoom_utils.fetch_kiwoom_api_continuous(
+            url,
+            KIWOOM_TOKEN,
+            "ka10001",
+            {"stk_cd": code},
+            max_retries=1,
+            use_continuous=False,
+        )
+    except Exception as exc:
+        log_error(f"[HOLDING_WS_FRESHNESS] quote fallback failed ({code}): {exc}")
+        return {}
+    if not rows:
+        return {}
+    row = rows[0] if isinstance(rows[0], dict) else {}
+    curr = 0
+    for key in ("cur_prc", "curr_price", "price", "stck_prpr", "trade_price"):
+        curr = _parse_rest_quote_price(row.get(key))
+        if curr > 0:
+            break
+    if curr <= 0:
+        return {}
+    return {
+        "curr": curr,
+        "last_ws_update_ts": float(now_ts),
+        "quote_stale": False,
+        "quote_age_ms": 0,
+        "quote_age_source": "ka10001_rest_quote_fallback",
+        "ws_snapshot_recovery_source": "holding_ka10001_rest_quote_fallback",
+        "ws_snapshot_recovery_epoch": float(now_ts),
+        "ws_snapshot_recovery_runtime_effect": True,
+    }
+
+
+def _holding_exit_ws_max_age_sec():
+    return max(1.0, _rule_float("HOLDING_EXIT_MAX_WS_AGE_SEC", 15.0))
+
+
+def _holding_rest_quote_fallback_min_interval_sec():
+    return max(3.0, _rule_float("HOLDING_EXIT_REST_QUOTE_FALLBACK_MIN_INTERVAL_SEC", 10.0))
+
+
+def _holding_ws_repair_min_interval_sec():
+    return max(20.0, _rule_float("HOLDING_EXIT_WS_REPAIR_MIN_INTERVAL_SEC", 60.0))
+
+
+def _maybe_publish_holding_ws_repair(state, code, fields, *, now_ts):
+    min_interval_sec = _holding_ws_repair_min_interval_sec()
+    last_reg_ts = _safe_float((state or {}).get("last_ws_repair_reg_ts"), 0.0)
+    next_after = last_reg_ts + min_interval_sec
+    fields["holding_ws_repair_min_interval_sec"] = round(min_interval_sec, 3)
+    if last_reg_ts > 0 and float(now_ts) < next_after:
+        fields["holding_ws_reg_reissued"] = False
+        fields["holding_ws_repair_cycle_state"] = "holding_ws_repair_interval_active"
+        fields["holding_ws_repair_next_after_epoch"] = f"{next_after:.3f}"
+        return
+    if EVENT_BUS is None:
+        fields["holding_ws_reg_reissued"] = False
+        fields["holding_ws_repair_cycle_state"] = "holding_ws_repair_event_bus_unavailable"
+        return
+    try:
+        EVENT_BUS.publish(
+            "COMMAND_WS_REG",
+            {
+                "codes": [code],
+                "source": "holding_ws_freshness_repair",
+                "force": True,
+                "repair_cycle": "holding_ws_stale_or_missing",
+            },
+        )
+        if isinstance(state, dict):
+            state["last_ws_repair_reg_ts"] = float(now_ts)
+        fields["holding_ws_reg_reissued"] = True
+        fields["holding_ws_repair_cycle_state"] = "holding_ws_repair_reg_reissued"
+    except Exception as exc:
+        fields["holding_ws_reg_reissued"] = False
+        fields["holding_ws_repair_cycle_state"] = "holding_ws_repair_reg_error"
+        fields["holding_ws_reg_error"] = str(exc)[:120]
+
+
+def _holding_ws_freshness_recover_or_block(stock, code, ws_data, *, now_ts):
+    if _has_sim_probe_provenance(stock):
+        return ws_data or {}, False, {}
+    if normalize_strategy((stock or {}).get("strategy")) != "SCALPING":
+        return ws_data or {}, False, {}
+    ws_data = dict(ws_data or {})
+    curr_price = _safe_int(ws_data.get("curr"), 0)
+    age_sec = _get_ws_snapshot_age_sec(ws_data)
+    max_age_sec = _holding_exit_ws_max_age_sec()
+    quote_stale = _boolish_true(ws_data.get("quote_stale"))
+    block_reason = ""
+    if curr_price <= 0:
+        block_reason = "holding_ws_curr_missing_or_zero"
+    elif quote_stale:
+        block_reason = "holding_ws_quote_stale"
+    elif age_sec is not None and age_sec > max_age_sec:
+        block_reason = "holding_ws_snapshot_stale"
+    if not block_reason:
+        return ws_data, False, {}
+
+    state = stock.setdefault("_holding_ws_freshness_recovery", {}) if isinstance(stock, dict) else {}
+    if not isinstance(state, dict):
+        state = {}
+        if isinstance(stock, dict):
+            stock["_holding_ws_freshness_recovery"] = state
+    miss_count = _safe_int(state.get("miss_count"), 0) + 1
+    state["miss_count"] = miss_count
+    state["last_block_reason"] = block_reason
+    fields = {
+        "metric_role": "holding_exit_source_quality_guard",
+        "decision_authority": "hard_safety_price_freshness_guard",
+        "window_policy": "intraday_runtime_latest_quote",
+        "sample_floor": "not_applicable_runtime_guard",
+        "primary_decision_metric": "quote_age_sec",
+        "source_quality_gate": "fresh_holding_quote_required_before_exit_decision",
+        "forbidden_uses": "threshold_mutation|provider_change|order_guard_bypass|stale_price_exit_submit",
+        "runtime_effect": True,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "holding_ws_freshness_block_reason": block_reason,
+        "holding_ws_curr_price": curr_price,
+        "holding_ws_quote_stale": quote_stale,
+        "holding_ws_age_sec": "-" if age_sec is None else round(age_sec, 3),
+        "holding_ws_max_age_sec": round(max_age_sec, 3),
+        "holding_ws_recovery_miss_count": miss_count,
+        **_ws_realtime_type_freshness_fields(ws_data, now_ts=now_ts),
+    }
+
+    last_rest_ts = _safe_float(state.get("last_rest_quote_ts"), 0.0)
+    rest_due = float(now_ts) - last_rest_ts >= _holding_rest_quote_fallback_min_interval_sec()
+    if rest_due:
+        state["last_rest_quote_ts"] = float(now_ts)
+        fallback = _fetch_holding_rest_quote_snapshot(code, now_ts)
+        if fallback:
+            recovered = dict(ws_data)
+            recovered.update(fallback)
+            recovered.pop("orderbook", None)
+            recovered["holding_rest_quote_only_recovery"] = True
+            fields.update(
+                {
+                    "holding_ws_recovery_action": "rest_quote_applied",
+                    "holding_ws_recovery_outcome": "rest_quote_applied",
+                    "holding_ws_recovered_curr": _safe_int(fallback.get("curr"), 0),
+                    "holding_rest_quote_only_recovery": True,
+                }
+            )
+            _maybe_publish_holding_ws_repair(state, code, fields, now_ts=now_ts)
+            _log_holding_pipeline(stock, code, "holding_ws_freshness_recovered", **fields)
+            return recovered, False, fields
+        fields["holding_ws_recovery_action"] = "rest_quote_unavailable"
+        fields["holding_ws_recovery_outcome"] = "rest_quote_unavailable"
+    else:
+        fields["holding_ws_recovery_action"] = "rest_quote_deferred"
+        fields["holding_ws_recovery_outcome"] = "rest_quote_deferred"
+        fields["holding_rest_quote_next_after_epoch"] = f"{last_rest_ts + _holding_rest_quote_fallback_min_interval_sec():.3f}"
+
+    _maybe_publish_holding_ws_repair(state, code, fields, now_ts=now_ts)
+    return ws_data, True, fields
+
+
 def _pre_ai_refresh_strength_momentum_ws_snapshot(code: str, ws_data: dict | None, strategy: str) -> tuple[dict, dict]:
     """Refresh pre-AI strength input from the latest WS cache without changing thresholds."""
     base = dict(ws_data or {})
@@ -12073,6 +12450,9 @@ def _pre_ai_blocked_gate_quality_fields(
         refresh_age_ms = refresh_fields.get("pre_ai_ws_snapshot_refresh_input_age_ms")
     if refresh_age_ms in (None, "", "-"):
         refresh_age_ms = "not_available_refresh_age_ms"
+    refresh_history_count = refresh_fields.get("pre_ai_ws_snapshot_refresh_history_count")
+    if refresh_history_count in (None, "", "-"):
+        refresh_history_count = "not_available_refresh_history_count"
     snapshot_source = str(
         refresh_fields.get("pre_ai_ws_snapshot_refresh_source")
         or ("ws_snapshot_input" if ws_data else "missing_ws_snapshot")
@@ -12103,6 +12483,8 @@ def _pre_ai_blocked_gate_quality_fields(
         "refresh_applied": refresh_applied,
         "refresh_reason": refresh_reason,
         "refresh_age_ms": refresh_age_ms,
+        "refresh_history_count": refresh_history_count,
+        **_ws_realtime_type_freshness_fields(ws_data, now_ts=time.time()),
         "stability_window_result": stability_result,
         "stability_window_reason": stability_reason,
         "stability_sample_count": window_sample_count,
@@ -12832,7 +13214,19 @@ def _resolve_pre_submit_liquidity_relief(
     pre_ai_fields,
 ) -> dict:
     _hydrate_scanner_promotion_runtime_context(stock)
-    payloads = [
+    now_ts = time.time()
+    last_ai_feature_probe = (stock or {}).get("last_watching_ai_feature_probe") if isinstance(stock, dict) else {}
+    last_ai_feature_probe = last_ai_feature_probe if isinstance(last_ai_feature_probe, dict) else {}
+    last_ai_feature_age_sec = max(
+        0.0,
+        now_ts - _safe_float((stock or {}).get("last_watching_ai_feature_probe_at"), 0.0),
+    )
+    recent_ai_feature_probe = (
+        last_ai_feature_probe
+        if last_ai_feature_probe and last_ai_feature_age_sec <= 60.0
+        else {}
+    )
+    current_payloads = [
         guard_fields if isinstance(guard_fields, dict) else {},
         submit_fields if isinstance(submit_fields, dict) else {},
         price_snapshot if isinstance(price_snapshot, dict) else {},
@@ -12841,31 +13235,36 @@ def _resolve_pre_submit_liquidity_relief(
         pre_ai_fields if isinstance(pre_ai_fields, dict) else {},
         ws_data if isinstance(ws_data, dict) else {},
     ]
-
-    def lookup(*keys: str):
-        for payload in payloads:
+    def lookup_feature(*keys: str):
+        zero_candidate = None
+        for payload in current_payloads:
             for key in keys:
-                if key in payload and payload.get(key) not in {None, ""}:
-                    return payload.get(key)
-        return None
+                if key not in payload or payload.get(key) in {None, ""}:
+                    continue
+                parsed = _safe_float(payload.get(key), None)
+                if parsed is None:
+                    continue
+                if abs(parsed) > 1e-9:
+                    return parsed, "current_submit_snapshot"
+                if zero_candidate is None:
+                    zero_candidate = parsed
+        for key in keys:
+            if key not in recent_ai_feature_probe or recent_ai_feature_probe.get(key) in {None, ""}:
+                continue
+            parsed = _safe_float(recent_ai_feature_probe.get(key), None)
+            if parsed is not None:
+                return parsed, "recent_ai_feature_probe"
+        return (zero_candidate if zero_candidate is not None else 0.0), (
+            "current_submit_snapshot_zero" if zero_candidate is not None else "missing_feature_default"
+        )
 
     promotion_reason = str((stock or {}).get("scanner_promotion_reason") or "-")
     source_signature = str((stock or {}).get("source_signature") or "-")
-    tick_accel = _first_safe_float(
-        0.0,
-        lookup("tick_acceleration_ratio", "tick_accel", "tick_acceleration_ratio_raw"),
-        (stock or {}).get("tick_acceleration_ratio") if isinstance(stock, dict) else None,
+    tick_accel, tick_accel_source = lookup_feature(
+        "tick_acceleration_ratio", "tick_accel", "tick_acceleration_ratio_raw"
     )
-    micro_vwap_bp = _first_safe_float(
-        0.0,
-        lookup("curr_vs_micro_vwap_bp", "micro_vwap_bp"),
-        (stock or {}).get("curr_vs_micro_vwap_bp") if isinstance(stock, dict) else None,
-    )
-    buy_pressure = _first_safe_float(
-        0.0,
-        lookup("buy_pressure_10t", "buy_pressure"),
-        (stock or {}).get("buy_pressure_10t") if isinstance(stock, dict) else None,
-    )
+    micro_vwap_bp, micro_vwap_source = lookup_feature("curr_vs_micro_vwap_bp", "micro_vwap_bp")
+    buy_pressure, buy_pressure_source = lookup_feature("buy_pressure_10t", "buy_pressure")
     recheck_trigger = str((stock or {}).get("ai_call_trigger_reason") or "").strip()
     strong_bundle_path = (
         promotion_reason in _early_accel_strong_bundle_allowed_reasons()
@@ -12888,6 +13287,12 @@ def _resolve_pre_submit_liquidity_relief(
         "tick_acceleration_ratio": f"{tick_accel:.3f}",
         "curr_vs_micro_vwap_bp": f"{micro_vwap_bp:.2f}",
         "buy_pressure_10t": f"{buy_pressure:.2f}",
+        "tick_acceleration_ratio_source": tick_accel_source,
+        "curr_vs_micro_vwap_bp_source": micro_vwap_source,
+        "buy_pressure_10t_source": buy_pressure_source,
+        "last_watching_ai_feature_probe_age_sec": f"{last_ai_feature_age_sec:.1f}"
+        if recent_ai_feature_probe
+        else "not_available",
         "relief_count": relief_count,
         "quote_stale": quote_stale,
         "latency_state": latency_state or "-",
@@ -12934,6 +13339,12 @@ def _log_pre_submit_liquidity_relief(stock, code, stage: str, decision: dict) ->
         tick_acceleration_ratio=decision.get("tick_acceleration_ratio") or "0.000",
         curr_vs_micro_vwap_bp=decision.get("curr_vs_micro_vwap_bp") or "0.00",
         buy_pressure_10t=decision.get("buy_pressure_10t") or "0.00",
+        tick_acceleration_ratio_source=decision.get("tick_acceleration_ratio_source") or "-",
+        curr_vs_micro_vwap_bp_source=decision.get("curr_vs_micro_vwap_bp_source") or "-",
+        buy_pressure_10t_source=decision.get("buy_pressure_10t_source") or "-",
+        last_watching_ai_feature_probe_age_sec=(
+            decision.get("last_watching_ai_feature_probe_age_sec") or "not_available"
+        ),
         relief_skip_reason=decision.get("relief_skip_reason") or ("allowed" if decision.get("allowed") else "unknown"),
         relief_count=_safe_int(decision.get("relief_count"), 0),
         quote_stale=bool(decision.get("quote_stale")),
@@ -13781,6 +14192,12 @@ def _strength_momentum_source_quality_block_reason(ws_data: dict | None, result:
     tick_latest_age_ms = tick_fields.get("tick_latest_age_ms")
     try:
         if tick_latest_age_ms not in (None, "", "-") and float(tick_latest_age_ms) > max_ws_age_ms:
+            quiet_reason = _ws_trade_tick_quiet_reason(
+                ws_data,
+                max_ws_age_ms=max_ws_age_ms,
+            )
+            if quiet_reason:
+                return quiet_reason
             return "stale_ws_snapshot"
     except Exception:
         pass
@@ -13862,6 +14279,21 @@ def _strength_momentum_stability_recheck_decision(
         base["reason"] = "reason_not_transient"
         return base
     source_reason = str(source_quality_block_reason or "").strip().lower()
+    scanner_rising_relief = bool(_scanner_rising_entry_relief_eligible(stock))
+    tick_quiet_source = source_reason == "trade_tick_quiet"
+    if scanner_rising_relief and (
+        reason == "insufficient_history" or source_reason in {"stale_ws_snapshot", "trade_tick_quiet"}
+    ):
+        base["recheck_max_attempts"] = max(
+            _safe_int(base.get("recheck_max_attempts"), 0),
+            max(
+                1,
+                _env_int(
+                    "KORSTOCKSCAN_SCANNER_RISING_STRENGTH_HISTORY_RECHECK_MAX_ATTEMPTS",
+                    30,
+                ),
+            ),
+        )
     max_ws_age_ms = max(0.0, _rule_float("SCALP_PRE_AI_MAX_WS_AGE_SEC", 3.0) * 1000.0)
     tick_age_ms = _numeric_or_none(fields.get("tick_latest_age_ms"))
     quote_age_ms = _numeric_or_none(fields.get("quote_age_ms"))
@@ -13876,7 +14308,7 @@ def _strength_momentum_stability_recheck_decision(
         )
     )
     source_quality_recheckable = (
-        source_reason == "stale_ws_snapshot"
+        source_reason in {"stale_ws_snapshot", "trade_tick_quiet"}
         and quote_fresh
         and tick_age_ms is not None
         and tick_age_ms > max_ws_age_ms
@@ -13893,7 +14325,7 @@ def _strength_momentum_stability_recheck_decision(
             }
         )
         return base
-    max_attempts = base["recheck_max_attempts"]
+    max_attempts = _safe_int(base.get("recheck_max_attempts"), 0)
     attempt_count = _safe_int(stock.get("entry_strength_momentum_recheck_count"), 0)
     if attempt_count >= max_attempts:
         base["reason"] = "max_attempts_reached"
@@ -13908,12 +14340,35 @@ def _strength_momentum_stability_recheck_decision(
     min_samples = max(1, _rule_int("SCANNER_STRENGTH_MOMENTUM_STABILITY_RECHECK_MIN_WINDOW_SAMPLES", 3))
     min_span_sec = max(0.0, _rule_float("SCANNER_STRENGTH_MOMENTUM_STABILITY_RECHECK_MIN_WINDOW_SPAN_SEC", 2.0))
     delay_sec = max(0, _rule_int("SCANNER_STRENGTH_MOMENTUM_STABILITY_RECHECK_DELAY_SEC", 2))
+    if scanner_rising_relief and reason == "insufficient_history":
+        delay_sec = max(
+            1,
+            _env_int(
+                "KORSTOCKSCAN_SCANNER_RISING_STRENGTH_HISTORY_RECHECK_DELAY_SEC",
+                delay_sec,
+            ),
+        )
     after_epoch = now_value + float(delay_sec)
+    if scanner_rising_relief and reason == "insufficient_history":
+        base.update(
+            {
+                "pending": True,
+                "reason": "rising_strength_history_recheck_pending",
+                "recheck_after_epoch": f"{after_epoch:.3f}",
+                "recheck_delay_sec": delay_sec,
+                "recheck_attempt_count": attempt_count + 1,
+            }
+        )
+        return base
     if source_quality_recheckable:
         base.update(
             {
                 "pending": True,
-                "reason": "stale_strength_tick_window_recheck",
+                "reason": (
+                    "trade_tick_quiet_recheck_pending"
+                    if tick_quiet_source
+                    else "stale_strength_tick_window_recheck"
+                ),
                 "recheck_after_epoch": f"{after_epoch:.3f}",
                 "recheck_delay_sec": delay_sec,
                 "recheck_attempt_count": attempt_count + 1,
@@ -16089,6 +16544,8 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                                 set_fields={
                                     "entry_strength_momentum_recheck_pending": True,
                                     "entry_strength_momentum_recheck_reason": momentum_gate.get("reason") or "-",
+                                    "entry_strength_momentum_recheck_source_quality_block_reason": source_quality_block_reason
+                                    or "-",
                                     "entry_strength_momentum_recheck_count": recheck_count,
                                     "entry_strength_momentum_recheck_after_epoch": recheck_after,
                                     "entry_strength_momentum_recheck_requested_at": now_ts,
@@ -16145,6 +16602,7 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                             pop_fields=[
                                 "entry_strength_momentum_recheck_after_epoch",
                                 "entry_strength_momentum_recheck_requested_at",
+                                "entry_strength_momentum_recheck_source_quality_block_reason",
                             ],
                         )
                         overlap_snapshot = _extract_ai_overlap_snapshot(ws_data=ws_data)
@@ -16288,6 +16746,7 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                             pop_fields=[
                                 "entry_strength_momentum_recheck_after_epoch",
                                 "entry_strength_momentum_recheck_requested_at",
+                                "entry_strength_momentum_recheck_source_quality_block_reason",
                             ],
                         )
 
@@ -16669,6 +17128,15 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                             state_signature = _build_watching_refresh_signature(ws_data, feature_probe)
                             state_fields = {
                                 'last_ai_overlap_snapshot': overlap_snapshot,
+                                'last_watching_ai_feature_probe': {
+                                    "buy_pressure": feature_probe.get("buy_pressure", 0.0),
+                                    "buy_pressure_10t": feature_probe.get("buy_pressure", 0.0),
+                                    "tick_accel": feature_probe.get("tick_accel", 0.0),
+                                    "tick_acceleration_ratio": feature_probe.get("tick_accel", 0.0),
+                                    "micro_vwap_bp": feature_probe.get("micro_vwap_bp", 0.0),
+                                    "curr_vs_micro_vwap_bp": feature_probe.get("micro_vwap_bp", 0.0),
+                                },
+                                'last_watching_ai_feature_probe_at': now_ts,
                                 'last_watching_ai_state_signature': state_signature,
                                 'last_watching_ai_feature_signature': _build_watching_state_change_signature(ws_data, feature_probe),
                                 'last_watching_ai_call_trigger_reason': ai_call_trigger_reason,
@@ -18775,10 +19243,18 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             ),
             pre_submit_quote_refresh_spread_ratio=latency_gate.get('pre_submit_quote_refresh_spread_ratio'),
             **_pre_submit_ws_snapshot_refresh_log_fields(latency_gate),
-            **_build_ai_overlap_log_fields(
-                stock=stock, ai_score=latency_signal_score, momentum_tag=stock.get("entry_momentum_tag"),
-                threshold_profile=stock.get("entry_threshold_profile"), overbought_blocked=False,
-                blocked_stage="latency_block",
+            **_merge_entry_pipeline_field_groups(
+                _build_ai_overlap_log_fields(
+                    stock=stock, ai_score=latency_signal_score, momentum_tag=stock.get("entry_momentum_tag"),
+                    threshold_profile=stock.get("entry_threshold_profile"), overbought_blocked=False,
+                    blocked_stage="latency_block",
+                ),
+                entry_orderbook_micro_fields,
+                {
+                    "latency_block_feature_source": (
+                        "entry_orderbook_micro_fields" if entry_orderbook_micro_fields else "ai_overlap_snapshot"
+                    )
+                },
             ),
             **swing_entry_micro_fields,
         )
@@ -19000,10 +19476,16 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             latency_price_snapshot,
             entry_orderbook_micro_fields,
             _panic_gap_weight_log_fields(latency_gate),
-        ),
-        **_build_ai_overlap_log_fields(
-            stock=stock, ai_score=latency_signal_score, momentum_tag=stock.get("entry_momentum_tag"),
-            threshold_profile=stock.get("entry_threshold_profile"), overbought_blocked=False, blocked_stage="-",
+            _build_ai_overlap_log_fields(
+                stock=stock, ai_score=latency_signal_score, momentum_tag=stock.get("entry_momentum_tag"),
+                threshold_profile=stock.get("entry_threshold_profile"), overbought_blocked=False, blocked_stage="-",
+            ),
+            entry_orderbook_micro_fields,
+            {
+                "latency_pass_feature_source": (
+                    "entry_orderbook_micro_fields" if entry_orderbook_micro_fields else "ai_overlap_snapshot"
+                )
+            },
         ),
         **swing_entry_micro_fields,
     )
@@ -21206,14 +21688,31 @@ def handle_watching_state(stock, code, ws_data, admin_id, *, now_ts=None, now_dt
 
     if strategy == 'SCALPING':
         if not is_scalping_buy_time_allowed(now_t):
+            block_reason = scalping_buy_time_block_reason(now_t)
+            next_window_epoch = _next_scalping_buy_window_recheck_epoch(now_dt)
+            recheck_pending = (
+                _scanner_rising_cutoff_recheck_enabled()
+                and _scanner_rising_entry_relief_eligible(stock)
+                and next_window_epoch is not None
+            )
+            if recheck_pending:
+                stock["_scanner_rising_cutoff_recheck_after_epoch"] = float(next_window_epoch)
+                stock["_scanner_rising_entry_relief_reason"] = "next_buy_window_recheck_pending"
+                stock["_scanner_full_eval_budget_source"] = "not_applicable_cutoff"
             emit_scanner_watching_runtime_skip(
                 stock,
                 code,
-                skip_reason=scalping_buy_time_block_reason(now_t),
+                skip_reason=block_reason,
                 now_ts=now_ts,
                 ws_data=ws_data,
                 scalping_buy_windows=describe_scalping_buy_windows(),
                 cutoff_time=TIME_SCALPING_NEW_BUY_CUTOFF.isoformat(),
+                next_buy_window_recheck_pending=recheck_pending,
+                next_buy_window_recheck_epoch=(
+                    f"{float(next_window_epoch):.3f}"
+                    if next_window_epoch is not None
+                    else "not_applicable_next_buy_window_recheck_epoch"
+                ),
             )
             return
     else:
@@ -21269,11 +21768,20 @@ def handle_watching_state(stock, code, ws_data, admin_id, *, now_ts=None, now_dt
                 )
             return
     if code in cooldowns and now_ts < cooldowns[code]:
+        cooldown_remaining_sec = max(0, int(cooldowns[code] - now_ts))
+        cooldown_recheck_pending = (
+            _scanner_rising_cooldown_eviction_relief_enabled()
+            and _scanner_rising_entry_relief_eligible(stock)
+        )
+        if cooldown_recheck_pending:
+            stock["_scanner_rising_cooldown_recheck_after_epoch"] = float(cooldowns[code])
+            stock["_scanner_rising_entry_relief_reason"] = "cooldown_recheck_pending"
+            stock["_scanner_full_eval_budget_source"] = "not_applicable_cooldown"
         _emit_same_symbol_soft_stop_cooldown_shadow(
             stock=stock,
             code=code,
             now_ts=now_ts,
-            runtime_remaining_sec=max(0, int(cooldowns[code] - now_ts)),
+            runtime_remaining_sec=cooldown_remaining_sec,
         )
         emit_scanner_watching_runtime_skip(
             stock,
@@ -21281,7 +21789,13 @@ def handle_watching_state(stock, code, ws_data, admin_id, *, now_ts=None, now_dt
             skip_reason="entry_cooldown_active",
             now_ts=now_ts,
             ws_data=ws_data,
-            cooldown_remaining_sec=max(0, int(cooldowns[code] - now_ts)),
+            cooldown_remaining_sec=cooldown_remaining_sec,
+            cooldown_recheck_pending=cooldown_recheck_pending,
+            cooldown_recheck_after_epoch=(
+                f"{float(cooldowns[code]):.3f}"
+                if cooldown_recheck_pending
+                else "not_applicable_cooldown_recheck_after_epoch"
+            ),
         )
         return
 
@@ -21400,6 +21914,21 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
     buy_p = _safe_float(stock.get('buy_price'), 0.0)
     _observe_entry_cancel_wait_counterfactuals(stock, code, now_ts=now_ts, curr_price=curr_p)
     _reconcile_pending_entry_orders(stock, code, strategy)
+    ws_data, holding_ws_blocked, holding_ws_fields = _holding_ws_freshness_recover_or_block(
+        stock,
+        code,
+        ws_data,
+        now_ts=now_ts,
+    )
+    curr_p = _safe_int(ws_data.get('curr'), 0)
+    if holding_ws_blocked:
+        _log_holding_pipeline(
+            stock,
+            code,
+            "holding_ws_freshness_blocked",
+            **holding_ws_fields,
+        )
+        return
     if curr_p <= 0 or buy_p <= 0:
         return
     _append_holding_price_sample(stock, now_ts=now_ts, curr_price=curr_p)

@@ -4078,6 +4078,114 @@ def test_pre_submit_liquidity_relief_requires_strong_bundle_path(monkeypatch):
     assert decision["relief_skip_reason"] == "not_strong_bundle_path"
 
 
+def test_pre_submit_liquidity_relief_uses_recent_ai_feature_probe_when_submit_features_zero(monkeypatch):
+    state_handlers.TRADING_RULES = replace(
+        CONFIG,
+        PRE_SUBMIT_LIQUIDITY_RELIEF_ENABLED=True,
+        PRE_SUBMIT_LIQUIDITY_RELIEF_MIN_AI_SCORE=75,
+        PRE_SUBMIT_LIQUIDITY_RELIEF_MIN_TICK_ACCEL=1.10,
+        PRE_SUBMIT_LIQUIDITY_RELIEF_MIN_BUY_PRESSURE=68.0,
+        PRE_SUBMIT_LIQUIDITY_RELIEF_MIN_MICRO_VWAP_BP=0.0,
+        PRE_SUBMIT_LIQUIDITY_RELIEF_MAX_PER_SYMBOL=1,
+    )
+    now = 1782183120.0
+    monkeypatch.setattr(state_handlers.time, "time", lambda: now)
+    stock = {
+        "id": 13,
+        "name": "RECENTFEATURE",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "scanner_promotion_reason": "price_jump_start_acceleration",
+        "source_signature": "PRICE_JUMP_START,VOLUME_SURGE_POSITIVE",
+        "last_watching_ai_feature_probe": {
+            "tick_acceleration_ratio": 1.667,
+            "curr_vs_micro_vwap_bp": 13.46,
+            "buy_pressure_10t": 72.73,
+        },
+        "last_watching_ai_feature_probe_at": now - 8.0,
+    }
+
+    decision = state_handlers._resolve_pre_submit_liquidity_relief(
+        stock,
+        {
+            "quote_stale": False,
+            "tick_acceleration_ratio": 0.0,
+            "curr_vs_micro_vwap_bp": 0.0,
+            "buy_pressure_10t": 0.0,
+        },
+        strategy="SCALPING",
+        ai_score=78,
+        liquidity_value=262_537_770,
+        min_liquidity=350_000_000,
+        latency_gate={"latency_state": "SAFE", "quote_stale": False},
+        guard_fields={},
+        submit_fields={},
+        price_snapshot={},
+        orderbook_fields={},
+        microstructure_fields={},
+        pre_ai_fields={},
+    )
+
+    assert decision["allowed"] is True
+    assert decision["relief_skip_reason"] == "allowed"
+    assert decision["tick_acceleration_ratio_source"] == "recent_ai_feature_probe"
+    assert decision["curr_vs_micro_vwap_bp_source"] == "recent_ai_feature_probe"
+    assert decision["buy_pressure_10t_source"] == "recent_ai_feature_probe"
+
+
+def test_pre_submit_liquidity_relief_ignores_stale_ai_feature_probe(monkeypatch):
+    state_handlers.TRADING_RULES = replace(
+        CONFIG,
+        PRE_SUBMIT_LIQUIDITY_RELIEF_ENABLED=True,
+        PRE_SUBMIT_LIQUIDITY_RELIEF_MIN_AI_SCORE=75,
+        PRE_SUBMIT_LIQUIDITY_RELIEF_MIN_TICK_ACCEL=1.10,
+        PRE_SUBMIT_LIQUIDITY_RELIEF_MIN_BUY_PRESSURE=68.0,
+        PRE_SUBMIT_LIQUIDITY_RELIEF_MIN_MICRO_VWAP_BP=0.0,
+        PRE_SUBMIT_LIQUIDITY_RELIEF_MAX_PER_SYMBOL=1,
+    )
+    now = 1782183120.0
+    monkeypatch.setattr(state_handlers.time, "time", lambda: now)
+    stock = {
+        "id": 14,
+        "name": "STALEFEATURE",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "scanner_promotion_reason": "price_jump_start_acceleration",
+        "source_signature": "PRICE_JUMP_START,VOLUME_SURGE_POSITIVE",
+        "last_watching_ai_feature_probe": {
+            "tick_acceleration_ratio": 1.667,
+            "curr_vs_micro_vwap_bp": 13.46,
+            "buy_pressure_10t": 72.73,
+        },
+        "last_watching_ai_feature_probe_at": now - 90.0,
+    }
+
+    decision = state_handlers._resolve_pre_submit_liquidity_relief(
+        stock,
+        {
+            "quote_stale": False,
+            "tick_acceleration_ratio": 0.0,
+            "curr_vs_micro_vwap_bp": 0.0,
+            "buy_pressure_10t": 0.0,
+        },
+        strategy="SCALPING",
+        ai_score=78,
+        liquidity_value=262_537_770,
+        min_liquidity=350_000_000,
+        latency_gate={"latency_state": "SAFE", "quote_stale": False},
+        guard_fields={},
+        submit_fields={},
+        price_snapshot={},
+        orderbook_fields={},
+        microstructure_fields={},
+        pre_ai_fields={},
+    )
+
+    assert decision["allowed"] is False
+    assert decision["relief_skip_reason"] == "tick_accel_below_min"
+    assert decision["tick_acceleration_ratio_source"] == "current_submit_snapshot_zero"
+
+
 def test_scalping_overbought_reaches_ai_but_submit_requires_pullback_or_rebreak(monkeypatch):
     class FixedDateTime(datetime):
         @classmethod
@@ -6041,6 +6149,7 @@ def test_late_fill_after_cancel_matches_terminal_entry_order(monkeypatch):
     receipts.DB = _DummyDB()
     receipts.KIWOOM_TOKEN = "token"
     entry_state.TERMINAL_ENTRY_ORDERS.clear()
+    fake_now = {"value": 1_000.0}
 
     class DummyThread:
         def __init__(self, target=None, args=(), daemon=None):
@@ -6055,6 +6164,7 @@ def test_late_fill_after_cancel_matches_terminal_entry_order(monkeypatch):
     monkeypatch.setattr(receipts, "_update_db_for_buy", lambda *args, **kwargs: None)
     monkeypatch.setattr(receipts.kiwoom_utils, "get_target_price_up", lambda price, pct: 10150)
     monkeypatch.setattr(kiwoom_orders, "send_sell_order_market", lambda *args, **kwargs: {"ord_no": "TP1"})
+    monkeypatch.setattr(entry_state.time, "time", lambda: fake_now["value"])
     monkeypatch.setattr(
         state_handlers.kiwoom_orders,
         "send_cancel_order",
@@ -6083,10 +6193,37 @@ def test_late_fill_after_cancel_matches_terminal_entry_order(monkeypatch):
     assert stock.get("pending_entry_orders") is None
     assert entry_state.get_terminal_entry_order("O2") is not None
 
+    fake_now["value"] = 1_300.0
     receipts.handle_real_execution({"code": "123456", "type": "BUY", "order_no": "O2", "price": 9990, "qty": 2})
 
     assert stock["buy_qty"] == 2
     assert stock["status"] == "HOLDING"
+
+
+def test_terminal_entry_order_grace_covers_broker_cancel_fill_race():
+    entry_state.TERMINAL_ENTRY_ORDERS.clear()
+
+    stock = {
+        "id": 1,
+        "code": "123456",
+        "name": "TEST",
+        "status": "BUY_ORDERED",
+        "strategy": "SCALPING",
+        "entry_mode": "normal",
+        "entry_bundle_id": "B1",
+        "pending_entry_orders": [
+            {"tag": "normal", "qty": 3, "ord_no": "O1", "status": "CANCELLED", "filled_qty": 0},
+        ],
+    }
+
+    entry_state.move_orders_to_terminal(
+        stock,
+        reason="pending_entry_meta_cleared",
+        now_ts=1_000.0,
+    )
+
+    assert entry_state.get_terminal_entry_order("O1", now_ts=1_300.0) is not None
+    assert entry_state.get_terminal_entry_order("O1", now_ts=1_901.0) is None
 
 
 def test_order_notice_backfills_missing_entry_order_number(monkeypatch):
@@ -8790,6 +8927,187 @@ def test_scalp_soft_stop_dynamic_grace_blocks_on_any_source_quality_hard_gap(mon
     assert not dynamic_logs
     assert dynamic_exit_logs
     assert dynamic_exit_logs[-1]["soft_stop_dynamic_grace_skip_reason"] == "source_or_quote_stale"
+
+
+def test_holding_stale_ws_blocks_exit_and_requests_repair(monkeypatch):
+    state_handlers.TRADING_RULES = _dynamic_soft_stop_grace_config()
+    pipeline_logs, exit_calls = _install_soft_stop_expert_test_doubles(monkeypatch)
+    published = []
+    monkeypatch.setattr(
+        state_handlers,
+        "EVENT_BUS",
+        SimpleNamespace(publish=lambda name, payload: published.append((name, payload))),
+    )
+    monkeypatch.setattr(state_handlers, "KIWOOM_TOKEN", None)
+    stock = _dynamic_soft_stop_stock()
+
+    state_handlers.handle_holding_state(
+        stock=stock,
+        code="123456",
+        ws_data={
+            "curr": 9810,
+            "quote_stale": True,
+            "last_ws_update_ts": state_handlers.time.time() - 120,
+            "orderbook": {"bids": [{"price": 9810, "volume": 1000}]},
+        },
+        admin_id=1,
+        market_regime="BULL",
+        radar=None,
+        ai_engine=None,
+    )
+
+    blocked_logs = [fields for stage, fields in pipeline_logs if stage == "holding_ws_freshness_blocked"]
+    assert stock["status"] == "HOLDING"
+    assert blocked_logs
+    assert blocked_logs[-1]["holding_ws_freshness_block_reason"] == "holding_ws_quote_stale"
+    assert blocked_logs[-1]["holding_ws_reg_reissued"] is True
+    assert blocked_logs[-1]["holding_ws_repair_cycle_state"] == "holding_ws_repair_reg_reissued"
+    assert not exit_calls
+    assert published == [
+        (
+            "COMMAND_WS_REG",
+            {
+                "codes": ["123456"],
+                "source": "holding_ws_freshness_repair",
+                "force": True,
+                "repair_cycle": "holding_ws_stale_or_missing",
+            },
+        )
+    ]
+
+
+def test_holding_zero_ws_curr_blocks_exit_and_requests_repair(monkeypatch):
+    state_handlers.TRADING_RULES = _dynamic_soft_stop_grace_config()
+    pipeline_logs, exit_calls = _install_soft_stop_expert_test_doubles(monkeypatch)
+    published = []
+    monkeypatch.setattr(
+        state_handlers,
+        "EVENT_BUS",
+        SimpleNamespace(publish=lambda name, payload: published.append((name, payload))),
+    )
+    monkeypatch.setattr(state_handlers, "KIWOOM_TOKEN", None)
+    stock = _dynamic_soft_stop_stock()
+
+    state_handlers.handle_holding_state(
+        stock=stock,
+        code="123456",
+        ws_data={"curr": 0, "last_ws_update_ts": state_handlers.time.time() - 120},
+        admin_id=1,
+        market_regime="BULL",
+        radar=None,
+        ai_engine=None,
+    )
+
+    blocked_logs = [fields for stage, fields in pipeline_logs if stage == "holding_ws_freshness_blocked"]
+    assert stock["status"] == "HOLDING"
+    assert blocked_logs
+    assert blocked_logs[-1]["holding_ws_freshness_block_reason"] == "holding_ws_curr_missing_or_zero"
+    assert not exit_calls
+    assert published == [
+        (
+            "COMMAND_WS_REG",
+            {
+                "codes": ["123456"],
+                "source": "holding_ws_freshness_repair",
+                "force": True,
+                "repair_cycle": "holding_ws_stale_or_missing",
+            },
+        )
+    ]
+
+
+def test_holding_stale_ws_rest_quote_recovery_allows_exit_evaluation(monkeypatch):
+    state_handlers.TRADING_RULES = _dynamic_soft_stop_grace_config()
+    pipeline_logs, exit_calls = _install_soft_stop_expert_test_doubles(monkeypatch)
+    published = []
+    monkeypatch.setattr(
+        state_handlers,
+        "EVENT_BUS",
+        SimpleNamespace(publish=lambda name, payload: published.append((name, payload))),
+    )
+    monkeypatch.setattr(state_handlers, "KIWOOM_TOKEN", "token")
+    monkeypatch.setattr(state_handlers.kiwoom_utils, "get_api_url", lambda path: f"https://example.test{path}")
+    monkeypatch.setattr(
+        state_handlers.kiwoom_utils,
+        "fetch_kiwoom_api_continuous",
+        lambda *args, **kwargs: [{"cur_prc": "9,810"}],
+    )
+    stock = _dynamic_soft_stop_stock()
+
+    state_handlers.handle_holding_state(
+        stock=stock,
+        code="123456",
+        ws_data={
+            "curr": 9810,
+            "quote_stale": True,
+            "last_ws_update_ts": state_handlers.time.time() - 120,
+            "orderbook": {"bids": [{"price": 9810, "volume": 1000}]},
+        },
+        admin_id=1,
+        market_regime="BULL",
+        radar=None,
+        ai_engine=None,
+    )
+
+    recovered_logs = [fields for stage, fields in pipeline_logs if stage == "holding_ws_freshness_recovered"]
+    dynamic_logs = [fields for stage, fields in pipeline_logs if stage == "soft_stop_dynamic_grace"]
+    assert recovered_logs
+    assert recovered_logs[-1]["holding_ws_recovery_outcome"] == "rest_quote_applied"
+    assert recovered_logs[-1]["holding_rest_quote_only_recovery"] is True
+    assert recovered_logs[-1]["holding_ws_reg_reissued"] is True
+    assert recovered_logs[-1]["holding_ws_repair_cycle_state"] == "holding_ws_repair_reg_reissued"
+    assert published == [
+        (
+            "COMMAND_WS_REG",
+            {
+                "codes": ["123456"],
+                "source": "holding_ws_freshness_repair",
+                "force": True,
+                "repair_cycle": "holding_ws_stale_or_missing",
+            },
+        )
+    ]
+    assert dynamic_logs
+    assert not exit_calls
+
+
+def test_holding_ws_repair_is_throttled_after_recent_reissue(monkeypatch):
+    state_handlers.TRADING_RULES = _dynamic_soft_stop_grace_config()
+    pipeline_logs, exit_calls = _install_soft_stop_expert_test_doubles(monkeypatch)
+    published = []
+    monkeypatch.setattr(
+        state_handlers,
+        "EVENT_BUS",
+        SimpleNamespace(publish=lambda name, payload: published.append((name, payload))),
+    )
+    monkeypatch.setattr(state_handlers, "KIWOOM_TOKEN", None)
+    stock = _dynamic_soft_stop_stock()
+    stock["_holding_ws_freshness_recovery"] = {
+        "last_ws_repair_reg_ts": state_handlers.time.time() - 5,
+    }
+
+    state_handlers.handle_holding_state(
+        stock=stock,
+        code="123456",
+        ws_data={
+            "curr": 9810,
+            "quote_stale": True,
+            "last_ws_update_ts": state_handlers.time.time() - 120,
+            "orderbook": {"bids": [{"price": 9810, "volume": 1000}]},
+        },
+        admin_id=1,
+        market_regime="BULL",
+        radar=None,
+        ai_engine=None,
+    )
+
+    blocked_logs = [fields for stage, fields in pipeline_logs if stage == "holding_ws_freshness_blocked"]
+    assert stock["status"] == "HOLDING"
+    assert blocked_logs
+    assert blocked_logs[-1]["holding_ws_reg_reissued"] is False
+    assert blocked_logs[-1]["holding_ws_repair_cycle_state"] == "holding_ws_repair_interval_active"
+    assert not published
+    assert not exit_calls
 
 
 def test_never_green_defer_clamp_clamps_loss_position_after_repeated_defer(monkeypatch):

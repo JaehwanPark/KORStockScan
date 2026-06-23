@@ -33,6 +33,8 @@ from src.engine.sniper_state_handlers import (
     _resolve_gatekeeper_fast_reuse_sec,
     _resolve_holding_ai_fast_reuse_sec,
     _resolve_scanner_rising_strength_momentum_override,
+    _pre_ai_blocked_gate_quality_fields,
+    _scanner_terminal_block_fresh_input_confirmed,
     _strength_momentum_source_quality_block_reason,
     _strength_momentum_stability_recheck_decision,
     _resolve_watching_state_change_refresh,
@@ -595,6 +597,84 @@ def test_strength_momentum_stability_recheck_defers_unstable_scanner_window(monk
     assert result["recheck_attempt_count"] == 1
 
 
+def test_strength_momentum_stability_recheck_extends_history_wait_for_rising_scanner(monkeypatch):
+    rules = SimpleNamespace(
+        SCANNER_STRENGTH_MOMENTUM_STABILITY_RECHECK_ENABLED=True,
+        SCANNER_STRENGTH_MOMENTUM_STABILITY_RECHECK_MAX_ATTEMPTS=1,
+        SCANNER_STRENGTH_MOMENTUM_STABILITY_RECHECK_DELAY_SEC=2,
+    )
+    monkeypatch.setattr(handlers, "TRADING_RULES", rules)
+    monkeypatch.setenv("KORSTOCKSCAN_SCANNER_RISING_STRENGTH_HISTORY_RECHECK_MAX_ATTEMPTS", "7")
+    monkeypatch.setenv("KORSTOCKSCAN_SCANNER_RISING_STRENGTH_HISTORY_RECHECK_DELAY_SEC", "3")
+
+    result = _strength_momentum_stability_recheck_decision(
+        {
+            "strategy": "SCALPING",
+            "position_tag": "SCANNER",
+            "entry_armed_at_epoch": 90.0,
+            "price_delta_since_first_seen_pct": "1.25",
+        },
+        {},
+        {"reason": "insufficient_history"},
+        {
+            "stability_window_result": "not_available",
+            "tick_window_sample_count": 0,
+            "tick_window_span_sec": 0.0,
+            "refresh_reason": "latest_snapshot_stale",
+            "refresh_history_count": 120,
+        },
+        source_quality_block_reason="insufficient_history",
+        now_ts=100.0,
+    )
+
+    assert result["pending"] is True
+    assert result["reason"] == "rising_strength_history_recheck_pending"
+    assert result["recheck_max_attempts"] == 7
+    assert result["recheck_after_epoch"] == "103.000"
+    assert result["recheck_attempt_count"] == 1
+
+
+def test_strength_momentum_stability_recheck_keeps_non_rising_history_attempt_limit(monkeypatch):
+    rules = SimpleNamespace(
+        SCANNER_STRENGTH_MOMENTUM_STABILITY_RECHECK_ENABLED=True,
+        SCANNER_STRENGTH_MOMENTUM_STABILITY_RECHECK_MAX_ATTEMPTS=1,
+        SCANNER_STRENGTH_MOMENTUM_STABILITY_RECHECK_DELAY_SEC=2,
+    )
+    monkeypatch.setattr(handlers, "TRADING_RULES", rules)
+    monkeypatch.setenv("KORSTOCKSCAN_SCANNER_RISING_STRENGTH_HISTORY_RECHECK_MAX_ATTEMPTS", "7")
+
+    result = _strength_momentum_stability_recheck_decision(
+        {
+            "strategy": "SCALPING",
+            "position_tag": "SCANNER",
+            "entry_armed_at_epoch": 90.0,
+            "price_delta_since_first_seen_pct": "0.00",
+            "entry_strength_momentum_recheck_count": 1,
+        },
+        {},
+        {"reason": "insufficient_history"},
+        {"stability_window_result": "not_available"},
+        source_quality_block_reason="insufficient_history",
+        now_ts=100.0,
+    )
+
+    assert result["pending"] is False
+    assert result["reason"] == "max_attempts_reached"
+    assert result["recheck_max_attempts"] == 1
+
+
+def test_pre_ai_blocked_gate_quality_reports_refresh_history_count():
+    fields = _pre_ai_blocked_gate_quality_fields(
+        gate_name="strength_momentum",
+        ws_data={},
+        gate_result={"window_sec": 5},
+        refresh_fields={"pre_ai_ws_snapshot_refresh_history_count": 120},
+    )
+
+    assert fields["refresh_history_count"] == 120
+    assert fields["stability_window_result"] == "not_available"
+
+
 def test_strength_momentum_stability_recheck_keeps_stable_window_actionable(monkeypatch):
     rules = SimpleNamespace(
         SCANNER_STRENGTH_MOMENTUM_STABILITY_RECHECK_ENABLED=True,
@@ -667,6 +747,62 @@ def test_strength_momentum_stability_recheck_defers_fresh_quote_stale_tick_windo
     assert result["recheck_attempt_count"] == 1
 
 
+def test_strength_momentum_stability_recheck_extends_stale_tick_wait_for_rising_scanner(monkeypatch):
+    rules = SimpleNamespace(
+        SCALP_PRE_AI_MAX_WS_AGE_SEC=3.0,
+        SCANNER_STRENGTH_MOMENTUM_STABILITY_RECHECK_ENABLED=True,
+        SCANNER_STRENGTH_MOMENTUM_STABILITY_RECHECK_MAX_ATTEMPTS=1,
+        SCANNER_STRENGTH_MOMENTUM_STABILITY_RECHECK_DELAY_SEC=2,
+        SCANNER_STRENGTH_MOMENTUM_STABILITY_RECHECK_MIN_WINDOW_SAMPLES=3,
+        SCANNER_STRENGTH_MOMENTUM_STABILITY_RECHECK_MIN_WINDOW_SPAN_SEC=2.0,
+    )
+    monkeypatch.setattr(handlers, "TRADING_RULES", rules)
+    monkeypatch.setenv("KORSTOCKSCAN_SCANNER_RISING_STRENGTH_HISTORY_RECHECK_MAX_ATTEMPTS", "5")
+
+    result = _strength_momentum_stability_recheck_decision(
+        {
+            "strategy": "SCALPING",
+            "position_tag": "SCANNER",
+            "entry_armed_at_epoch": 90.0,
+            "price_delta_since_first_seen_pct": "1.50",
+            "entry_strength_momentum_recheck_count": 1,
+        },
+        {},
+        {"reason": "below_window_buy_value"},
+        {
+            "quote_age_ms": 900.0,
+            "tick_latest_age_ms": 4500.0,
+            "tick_window_sample_count": 4,
+            "tick_window_span_sec": 4.0,
+            "refresh_age_ms": 900.0,
+            "refresh_reason": "latest_ws_snapshot_fresh",
+            "stability_window_result": "window_available",
+        },
+        source_quality_block_reason="stale_ws_snapshot",
+        now_ts=100.0,
+    )
+
+    assert result["pending"] is True
+    assert result["reason"] == "stale_strength_tick_window_recheck"
+    assert result["recheck_max_attempts"] == 5
+    assert result["recheck_attempt_count"] == 2
+
+
+def test_scanner_terminal_block_stale_source_quality_is_not_fresh_input():
+    assert (
+        _scanner_terminal_block_fresh_input_confirmed(
+            {
+                "reason": "below_window_buy_value",
+                "source_quality_block_reason": "stale_ws_snapshot",
+                "quote_age_ms": 900.0,
+                "tick_latest_age_ms": 4500.0,
+                "stability_window_result": "window_available",
+            }
+        )
+        is False
+    )
+
+
 def test_strength_momentum_source_quality_blocks_stale_tick_window(monkeypatch):
     rules = SimpleNamespace(
         SCALP_PRE_AI_SOURCE_QUALITY_BLOCK_ENABLED=True,
@@ -690,6 +826,32 @@ def test_strength_momentum_source_quality_blocks_stale_tick_window(monkeypatch):
     assert reason == "stale_ws_snapshot"
 
 
+def test_strength_momentum_source_quality_splits_trade_tick_quiet_from_ws_stale(monkeypatch):
+    rules = SimpleNamespace(
+        SCALP_PRE_AI_SOURCE_QUALITY_BLOCK_ENABLED=True,
+        SCALP_PRE_AI_MAX_WS_AGE_SEC=3.0,
+        SCANNER_TRADE_TICK_QUIET_NON_TRADE_WS_FRESH_SEC=10.0,
+    )
+    monkeypatch.setattr(handlers, "TRADING_RULES", rules)
+    monkeypatch.setattr(handlers.time, "time", lambda: 100.0)
+
+    reason = _strength_momentum_source_quality_block_reason(
+        {
+            "last_ws_update_ts": 99.8,
+            "received_types": {"0B", "0D"},
+            "last_realtime_type_ts": {"0B": 95.0, "0D": 99.7},
+            "strength_momentum_history": [{"ts": 95.0}],
+        },
+        {
+            "reason": "below_window_buy_value",
+            "pre_ai_ws_snapshot_refresh_reason": "input_snapshot_fresh",
+            "pre_ai_ws_snapshot_refresh_input_age_ms": 200.0,
+        },
+    )
+
+    assert reason == "trade_tick_quiet"
+
+
 def test_strength_momentum_source_quality_keeps_fresh_insufficient_history_recheckable(monkeypatch):
     rules = SimpleNamespace(
         SCALP_PRE_AI_SOURCE_QUALITY_BLOCK_ENABLED=True,
@@ -711,6 +873,39 @@ def test_strength_momentum_source_quality_keeps_fresh_insufficient_history_reche
     )
 
     assert reason == "insufficient_history"
+
+
+def test_strength_momentum_stability_recheck_keeps_trade_tick_quiet_without_ws_recovery(monkeypatch):
+    rules = SimpleNamespace(
+        SCANNER_STRENGTH_MOMENTUM_STABILITY_RECHECK_ENABLED=True,
+        SCANNER_STRENGTH_MOMENTUM_STABILITY_RECHECK_REASONS="below_window_buy_value",
+        SCANNER_STRENGTH_MOMENTUM_STABILITY_RECHECK_MAX_ATTEMPTS=1,
+        SCANNER_STRENGTH_MOMENTUM_STABILITY_RECHECK_DELAY_SEC=2,
+        SCALP_PRE_AI_MAX_WS_AGE_SEC=3.0,
+    )
+    monkeypatch.setattr(handlers, "TRADING_RULES", rules)
+
+    result = _strength_momentum_stability_recheck_decision(
+        {
+            "status": "WATCHING",
+            "strategy": "SCALPING",
+            "position_tag": "SCANNER",
+            "entry_armed_at_epoch": 90.0,
+            "price_delta_since_first_seen_pct": 0.6,
+        },
+        {},
+        {"reason": "below_window_buy_value"},
+        {
+            "quote_age_ms": 200.0,
+            "tick_latest_age_ms": 5000.0,
+            "refresh_reason": "input_snapshot_fresh",
+        },
+        source_quality_block_reason="trade_tick_quiet",
+        now_ts=100.0,
+    )
+
+    assert result["pending"] is True
+    assert result["reason"] == "trade_tick_quiet_recheck_pending"
 
 
 def test_strength_momentum_source_quality_does_not_block_fresh_base_on_refresh_failure(monkeypatch):
@@ -1897,6 +2092,157 @@ def test_emit_scanner_watching_runtime_skip_fills_contract_fields(monkeypatch):
     assert fields["entry_armed_at_epoch"] == 1000.0
     assert fields["ws_curr"] == "not_applicable_ws_curr"
     assert fields["ws_manager_available"] is True
+    assert fields["rising_entry_relief_eligible"] is True
+    assert fields["scanner_positive_delta_pct"] == 1.2
+    assert fields["scanner_full_eval_budget_source"] == "not_applicable_full_eval_budget_source"
+
+
+def test_emit_scanner_watching_runtime_skip_reports_ws_type_freshness(monkeypatch):
+    emitted = []
+    monkeypatch.setattr(
+        handlers,
+        "emit_pipeline_event",
+        lambda pipeline, name, code, stage, *, record_id=None, fields=None: emitted.append(fields or {}),
+    )
+    stock = {
+        "id": 78,
+        "name": "PROMOTED",
+        "code": "000078",
+        "status": "WATCHING",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "entry_armed_at_epoch": 1000.0,
+        "price_delta_since_first_seen_pct": "1.20",
+    }
+
+    assert handlers.emit_scanner_watching_runtime_skip(
+        stock,
+        "000078",
+        skip_reason="scanner_fast_precheck_stability_pending",
+        now_ts=1100.0,
+        ws_data={
+            "curr": 1200,
+            "received_types": {"0B", "0D"},
+            "last_realtime_type_ts": {"0B": 1099.0, "0D": 1090.0},
+            "strength_momentum_history": [{"ts": 1099.5}],
+        },
+        throttle_sec=0,
+    )
+
+    fields = emitted[-1]
+    assert fields["ws_received_types"] == "0B,0D"
+    assert fields["ws_received_type_count"] == 2
+    assert fields["ws_last_0b_age_ms"] == 1000.0
+    assert fields["ws_last_0d_age_ms"] == 10000.0
+    assert fields["ws_last_strength_history_age_ms"] == 500.0
+    assert fields["ws_strength_history_count"] == 1
+
+
+def test_emit_scanner_watching_runtime_skip_ignores_expired_cutoff_relief_state(monkeypatch):
+    emitted = []
+    monkeypatch.setattr(
+        handlers,
+        "emit_pipeline_event",
+        lambda pipeline, name, code, stage, *, record_id=None, fields=None: emitted.append(fields or {}),
+    )
+    stock = {
+        "id": 79,
+        "name": "PROMOTED",
+        "code": "000079",
+        "status": "WATCHING",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "entry_armed_at_epoch": 1000.0,
+        "price_delta_since_first_seen_pct": "1.20",
+        "_scanner_rising_cutoff_recheck_after_epoch": 1050.0,
+        "_scanner_rising_entry_relief_reason": "next_buy_window_recheck_pending",
+        "_scanner_full_eval_budget_source": "not_applicable_cutoff",
+    }
+
+    assert handlers.emit_scanner_watching_runtime_skip(
+        stock,
+        "000079",
+        skip_reason="ws_snapshot_missing_or_zero",
+        now_ts=1100.0,
+        ws_data={},
+        throttle_sec=0,
+    )
+
+    fields = emitted[-1]
+    assert fields["rising_entry_relief_eligible"] is True
+    assert fields["rising_entry_relief_reason"] == "not_applicable_rising_entry_relief"
+    assert fields["scanner_full_eval_budget_source"] == "not_applicable_full_eval_budget_source"
+
+
+def test_emit_scanner_watching_runtime_skip_keeps_active_cutoff_relief_state(monkeypatch):
+    emitted = []
+    monkeypatch.setattr(
+        handlers,
+        "emit_pipeline_event",
+        lambda pipeline, name, code, stage, *, record_id=None, fields=None: emitted.append(fields or {}),
+    )
+    stock = {
+        "id": 80,
+        "name": "PROMOTED",
+        "code": "000080",
+        "status": "WATCHING",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "entry_armed_at_epoch": 1000.0,
+        "price_delta_since_first_seen_pct": "1.20",
+        "_scanner_rising_cutoff_recheck_after_epoch": 1150.0,
+        "_scanner_rising_entry_relief_reason": "next_buy_window_recheck_pending",
+        "_scanner_full_eval_budget_source": "not_applicable_cutoff",
+    }
+
+    assert handlers.emit_scanner_watching_runtime_skip(
+        stock,
+        "000080",
+        skip_reason="outside_scalping_buy_window",
+        now_ts=1100.0,
+        ws_data={},
+        throttle_sec=0,
+    )
+
+    fields = emitted[-1]
+    assert fields["rising_entry_relief_reason"] == "next_buy_window_recheck_pending"
+    assert fields["scanner_full_eval_budget_source"] == "not_applicable_cutoff"
+
+
+def test_emit_scanner_watching_runtime_skip_uses_active_epoch_reason_over_stale_state(monkeypatch):
+    emitted = []
+    monkeypatch.setattr(
+        handlers,
+        "emit_pipeline_event",
+        lambda pipeline, name, code, stage, *, record_id=None, fields=None: emitted.append(fields or {}),
+    )
+    stock = {
+        "id": 81,
+        "name": "PROMOTED",
+        "code": "000081",
+        "status": "WATCHING",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "entry_armed_at_epoch": 1000.0,
+        "price_delta_since_first_seen_pct": "1.20",
+        "_scanner_rising_cooldown_recheck_after_epoch": 1150.0,
+        "_scanner_rising_cutoff_recheck_after_epoch": 1050.0,
+        "_scanner_rising_entry_relief_reason": "next_buy_window_recheck_pending",
+        "_scanner_full_eval_budget_source": "not_applicable_cutoff",
+    }
+
+    assert handlers.emit_scanner_watching_runtime_skip(
+        stock,
+        "000081",
+        skip_reason="entry_cooldown_active",
+        now_ts=1100.0,
+        ws_data={},
+        throttle_sec=0,
+    )
+
+    fields = emitted[-1]
+    assert fields["rising_entry_relief_reason"] == "cooldown_recheck_pending"
+    assert fields["scanner_full_eval_budget_source"] == "not_applicable_cooldown"
 
 
 def test_emit_scanner_watching_runtime_skip_resets_terminal_eviction_memory(monkeypatch):
@@ -2117,11 +2463,13 @@ def test_emit_scanner_fast_precheck_and_heavy_eval_lag_are_order_forbidden(monke
     assert fast["actual_order_submitted"] is False
     assert fast["broker_order_forbidden"] is True
     assert fast["heavy_queue_enter_epoch"] == "1012.000"
+    assert fast["rising_entry_relief_eligible"] is False
     assert emitted[-1]["stage"] == "scalping_scanner_heavy_eval_lag"
     assert heavy["heavy_queue_wait_sec"] == 0.2
     assert heavy["runtime_effect"] is False
     assert heavy["actual_order_submitted"] is False
     assert heavy["broker_order_forbidden"] is True
+    assert heavy["scanner_full_eval_budget_source"] == "not_applicable_full_eval_budget_source"
 
 
 def test_scanner_terminal_block_insufficient_history_is_not_fresh_for_eviction():
@@ -2263,8 +2611,53 @@ def test_scanner_fast_precheck_marks_stale_snapshot_not_queued(monkeypatch):
     assert fields["fast_precheck_result"] == "stability_pending"
     assert fields["fast_precheck_reason"] == "stale_ws_snapshot"
     assert fields["heavy_queue_enter_epoch"] == "not_queued"
+    assert fields["ws_received_types"] == "-"
+    assert fields["ws_last_0b_age_ms"] == "not_available_realtime_type_age_ms"
     assert stock["_scanner_fast_precheck_result"] == "stability_pending"
     assert "_scanner_heavy_queue_enter_epoch" not in stock
+
+
+def test_scanner_fast_precheck_reports_ws_type_freshness(monkeypatch):
+    emitted = []
+    monkeypatch.setattr(handlers.time, "time", lambda: 1012.0)
+    monkeypatch.setattr(
+        handlers,
+        "emit_pipeline_event",
+        lambda pipeline, name, code, stage, *, record_id=None, fields=None: emitted.append(
+            {"stage": stage, "fields": fields or {}}
+        ),
+    )
+    stock = {
+        "id": 83,
+        "name": "FRESH_TYPES",
+        "status": "WATCHING",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "entry_armed_at_epoch": 1000.0,
+    }
+
+    assert handlers.emit_scanner_fast_precheck(
+        stock,
+        "000083",
+        now_ts=1012.0,
+        ws_data={
+            "curr": 1200,
+            "last_ws_update_ts": 1011.5,
+            "received_types": {"0B", "0D", "0w"},
+            "last_realtime_type_ts": {"0B": 1011.4, "0D": 1000.0, "0w": 1011.0},
+            "strength_momentum_history": [{"ts": 1011.8}],
+        },
+        throttle_sec=0,
+    )
+
+    fields = emitted[-1]["fields"]
+    assert fields["fast_precheck_result"] == "eligible_for_heavy_entry_eval"
+    assert fields["ws_received_types"] == "0B,0D,0w"
+    assert fields["ws_last_0b_age_ms"] == 600.0
+    assert fields["ws_last_0d_age_ms"] == 12000.0
+    assert fields["ws_last_0w_age_ms"] == 1000.0
+    assert fields["ws_last_strength_history_age_ms"] == 200.0
+    assert fields["ws_strength_history_count"] == 1
 
 
 def test_log_ai_confirmed_terminal_no_budget_emits_contract_fields(monkeypatch):

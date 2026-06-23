@@ -13,7 +13,7 @@ mv "$TMP_CRON.filtered" "$TMP_CRON"
 
 cat >> "$TMP_CRON" <<EOF
 # swing live order dry-run report
-45 15 * * 1-5 $RUNNER \$(TZ=Asia/Seoul date +\\%F) >> $PROJECT_DIR/logs/swing_live_dry_run_cron.log 2>&1 # SWING_LIVE_DRY_RUN_POSTCLOSE
+15 20 * * 1-5 $RUNNER \$(TZ=Asia/Seoul date +\\%F) >> $PROJECT_DIR/logs/swing_live_dry_run_cron.log 2>&1 # SWING_LIVE_DRY_RUN_POSTCLOSE
 EOF
 
 crontab "$TMP_CRON"

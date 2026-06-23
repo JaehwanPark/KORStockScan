@@ -1358,6 +1358,50 @@ def test_latency_spread_relief_canary_enforces_effective_min_signal_floor(monkey
     assert result["latency_spread_relief_tag"] == "SCANNER"
 
 
+def test_latency_spread_relief_canary_uses_effective_min_signal_floor_override(monkeypatch):
+    monkeypatch.setattr(
+        entry_latency_module,
+        "TRADING_RULES",
+        replace(
+            CONFIG,
+            SCALP_LATENCY_QUOTE_FRESH_COMPOSITE_CANARY_ENABLED=False,
+            SCALP_LATENCY_SIGNAL_QUALITY_QUOTE_COMPOSITE_CANARY_ENABLED=False,
+            SCALP_LATENCY_SPREAD_RELIEF_CANARY_ENABLED=True,
+            SCALP_LATENCY_WS_JITTER_RELIEF_CANARY_ENABLED=False,
+            SCALP_LATENCY_OTHER_DANGER_RELIEF_CANARY_ENABLED=False,
+            SCALP_LATENCY_SPREAD_RELIEF_TAGS=("SCANNER",),
+            SCALP_LATENCY_SPREAD_RELIEF_MIN_SIGNAL_SCORE=60.0,
+            SCALP_LATENCY_SPREAD_RELIEF_EFFECTIVE_MIN_SIGNAL_SCORE_FLOOR=75.0,
+            SCALP_LATENCY_SPREAD_RELIEF_MAX_SPREAD_RATIO=0.0150,
+        ),
+    )
+
+    result = evaluate_live_buy_entry(
+        stock={"name": "TEST", "position_tag": "SCANNER"},
+        code="123456_spread_relief_floor_override",
+        ws_data={
+            "curr": 10_020,
+            "last_ws_update_ts": datetime.now(UTC).timestamp(),
+            "orderbook": {
+                "asks": [{"price": 10_130, "volume": 100}],
+                "bids": [{"price": 10_020, "volume": 100}],
+            },
+        },
+        strategy_id="SCALPING",
+        planned_qty=2,
+        signal_price=10_000,
+        signal_strength=78.0,
+    )
+
+    assert result["decision"] == "ALLOW_NORMAL"
+    assert result["reason"] == "latency_spread_relief_normal_override"
+    assert result["latency_canary_applied"] is True
+    assert result["latency_canary_reason"] == "spread_relief_canary_applied"
+    assert result["latency_spread_relief_signal_score"] == 78.0
+    assert result["latency_spread_relief_configured_min_signal_score"] == 60.0
+    assert result["latency_spread_relief_effective_min_signal_score"] == 75.0
+
+
 def test_latency_spread_relief_canary_requires_spread_only_danger(monkeypatch):
     monkeypatch.setattr(
         entry_latency_module,

@@ -385,14 +385,14 @@ def test_infer_time_window_preserves_explicit_preopen_and_postclose_ranges():
         due_date="2026-05-11",
     )
     postclose = BacklogTask(
-        title="장후 점검 (Due: 2026-05-11, Slot: POSTCLOSE, TimeWindow: 15:45~20:55)",
+        title="장후 점검 (Due: 2026-05-11, Slot: POSTCLOSE, TimeWindow: 20:10~23:10)",
         source="x",
         section="체크",
         track="RunbookOps",
         due_date="2026-05-11",
     )
     assert _infer_time_window(preopen, slot_label="PREOPEN", default_duration_min=30) == "08:00~09:00"
-    assert _infer_time_window(postclose, slot_label="POSTCLOSE", default_duration_min=30) == "15:45~20:55"
+    assert _infer_time_window(postclose, slot_label="POSTCLOSE", default_duration_min=30) == "20:10~23:10"
 
 
 def test_infer_time_window_uses_slot_default_when_missing():
@@ -447,7 +447,7 @@ def test_parse_runbook_operational_tasks_emit_project_calendar_queue(monkeypatch
     assert "Slot: INTRADAY" in tasks[1].title
     assert "TimeWindow: 09:05~15:30" in tasks[1].title
     assert "Slot: POSTCLOSE" in tasks[2].title
-    assert "TimeWindow: 15:45~20:55" in tasks[2].title
+    assert "TimeWindow: 20:10~23:10" in tasks[2].title
 
 
 def test_parse_runbook_operational_tasks_skips_completed_preopen(monkeypatch, tmp_path):

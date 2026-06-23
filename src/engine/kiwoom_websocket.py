@@ -5,7 +5,7 @@ import json
 import threading
 import time
 import copy
-from collections import deque
+from collections import OrderedDict, deque
 from queue import Queue, Empty
 from datetime import datetime
 
@@ -186,16 +186,25 @@ class KiwoomWSManager:
             from src.utils import kiwoom_utils
 
             for code in normalized_codes:
-                register_items.append(
-                    explicit_by_code.get(code)
-                    or kiwoom_utils.get_effective_kiwoom_code(code)
-                )
+                explicit = explicit_by_code.get(code)
+                if explicit:
+                    register_items.append(explicit)
+                    continue
+
+                effective = kiwoom_utils.get_effective_kiwoom_code(code)
+                items = [effective]
+                if not str(effective or '').upper().endswith('_AL'):
+                    items.append(f"{code}_AL")
+                register_items.extend(OrderedDict.fromkeys(items))
         except Exception as exc:
             log_error(f"🚨 [WS] 거래소별 실시간 등록 코드 변환 실패. 6자리 코드로 폴백합니다: {exc}")
-            register_items = [
-                explicit_by_code.get(code) or code
-                for code in normalized_codes
-            ]
+            register_items = []
+            for code in normalized_codes:
+                explicit = explicit_by_code.get(code)
+                if explicit:
+                    register_items.append(explicit)
+                else:
+                    register_items.extend((code, f"{code}_AL"))
 
         return normalized_codes, register_items
 
@@ -299,6 +308,7 @@ class KiwoomWSManager:
                 'market_session_remaining': self.market_session_remaining,
                 'received_types': set(),
                 'last_ws_update_ts': 0.0,
+                'last_realtime_type_ts': {},
                 'last_prog_update_ts': 0.0,
                 'last_foreign_broker_update_ts': 0.0,
                 'program_history': deque(maxlen=120),
@@ -1024,7 +1034,11 @@ class KiwoomWSManager:
                                 target['last_foreign_broker_update_ts'] = time.time()
                             
                             target['received_types'].add(real_type)
-                            target['last_ws_update_ts'] = time.time()
+                            now_update_ts = time.time()
+                            target['last_ws_update_ts'] = now_update_ts
+                            type_ts = target.setdefault('last_realtime_type_ts', {})
+                            if isinstance(type_ts, dict):
+                                type_ts[real_type] = now_update_ts
                             target['time'] = datetime.now().strftime('%H:%M:%S')
 
                             if not target.get('_first_tick_logged') and self._is_ws_ready(target, require_trade=False):
@@ -1067,7 +1081,7 @@ class KiwoomWSManager:
         self._tick_dispatch_thread.start()
         self._ws_thread.start()
 
-    async def _send_reg(self, codes):
+    async def _send_reg(self, codes, *, replace_existing=True):
         try:
             normalized_codes, register_items = self._resolve_ws_register_items(codes)
             if not normalized_codes:
@@ -1085,22 +1099,25 @@ class KiwoomWSManager:
                 return
 
             if self.websocket and self._session_ready.is_set():
-                batch_size = int(getattr(TRADING_RULES, 'WS_REG_BATCH_SIZE', 20) or 20)
-                registration_pairs = list(zip(normalized_codes, register_items))
-                total_batches = (len(registration_pairs) + batch_size - 1) // batch_size
+                batch_size = min(int(getattr(TRADING_RULES, 'WS_REG_BATCH_SIZE', 20) or 20), 50)
+                total_batches = (len(normalized_codes) + batch_size - 1) // batch_size
                 print(
                     f"📝 [WS] 종목 등록(REG) 전송 시도: {normalized_codes} "
                     f"(items={register_items}, batch_size={batch_size})"
                 )
-                for batch_index, batch_pairs in enumerate(self._chunked(registration_pairs, batch_size), start=1):
+                for batch_index, batch_codes in enumerate(self._chunked(normalized_codes, batch_size), start=1):
                     if self._stop_event.is_set() or not self.websocket:
                         return
-                    batch_codes = [code for code, _ in batch_pairs]
-                    batch_items = [item for _, item in batch_pairs]
+                    batch_code_set = set(batch_codes)
+                    batch_items = [
+                        item
+                        for item in register_items
+                        if self._normalize_code(item) in batch_code_set
+                    ]
                     reg_packet = {
                         'trnm': 'REG',
                         'grp_no': '1',
-                        'refresh': '1',
+                        'refresh': '1' if replace_existing and batch_index == 1 else '0',
                         'data': [
                             {'item': batch_items, 'type': ['0B']},
                             {'item': batch_items, 'type': ['0D']},
@@ -1123,17 +1140,21 @@ class KiwoomWSManager:
             log_error(f"🚨 [WS] _send_reg 에러 발생: {e}")
             print(f"🚨 [WS] _send_reg 내부 치명적 에러 발생: {e}")
 
-    def execute_subscribe(self, codes):
+    def execute_subscribe(self, codes, *, force=False):
         if not codes: return
         if isinstance(codes, str): codes = [codes]
         if self._stop_event.is_set() or not self._started:
             return
 
         normalized_codes = self._normalize_subscribe_codes(codes)
-        new_targets = [c for c in normalized_codes if c not in self.subscribed_codes]
+        new_targets = normalized_codes if force else [c for c in normalized_codes if c not in self.subscribed_codes]
 
         if new_targets and self.loop and self.loop.is_running() and not self._stop_event.is_set():
-            future = asyncio.run_coroutine_threadsafe(self._send_reg(new_targets), self.loop)
+            replace_existing = not bool(self.subscribed_codes)
+            future = asyncio.run_coroutine_threadsafe(
+                self._send_reg(new_targets, replace_existing=replace_existing),
+                self.loop,
+            )
             with self._pending_future_lock:
                 self._pending_loop_futures.add(future)
 
@@ -1173,7 +1194,9 @@ class KiwoomWSManager:
         if self._stop_event.is_set():
             return
         codes = payload.get("codes", [])
-        self.execute_subscribe(codes) 
+        source = str(payload.get("source") or "")
+        force = bool(payload.get("force")) or "recovery" in source
+        self.execute_subscribe(codes, force=force)
 
     def _handle_unreg_event(self, payload):
         if self._stop_event.is_set():

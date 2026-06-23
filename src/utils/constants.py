@@ -857,7 +857,7 @@ class TradingConfig:
     ERROR_DETECTOR_PROCESS_RESTART_GRACE_SEC: int = 30
     ERROR_DETECTOR_BOT_EXPECTED_RUNTIME_WINDOW_ENABLED: bool = True
     ERROR_DETECTOR_BOT_EXPECTED_START_HHMM: str = "07:40"
-    ERROR_DETECTOR_BOT_EXPECTED_END_HHMM: str = "22:55"
+    ERROR_DETECTOR_BOT_EXPECTED_END_HHMM: str = "20:10"
     ERROR_DETECTOR_BOT_STARTUP_GRACE_SEC: int = 180
     ERROR_DETECTOR_POSTCLOSE_BOT_ISOLATION_MAX_AGE_SEC: int = 28800
     ERROR_DETECTOR_LOG_BURST_THRESHOLD: int = 4
@@ -961,6 +961,9 @@ def _build_trading_rules() -> TradingConfig:
     env_spread_relief_enabled = _env_bool("KORSTOCKSCAN_SCALP_LATENCY_SPREAD_RELIEF_CANARY_ENABLED")
     env_spread_relief_tags = _env_csv_tuple("KORSTOCKSCAN_SCALP_LATENCY_SPREAD_RELIEF_TAGS")
     env_spread_relief_min_signal = _env_float("KORSTOCKSCAN_SCALP_LATENCY_SPREAD_RELIEF_MIN_SIGNAL_SCORE")
+    env_spread_relief_effective_min_signal_floor = _env_float(
+        "KORSTOCKSCAN_SCALP_LATENCY_SPREAD_RELIEF_EFFECTIVE_MIN_SIGNAL_SCORE_FLOOR"
+    )
     env_spread_relief_max_spread = _env_float("KORSTOCKSCAN_SCALP_LATENCY_SPREAD_RELIEF_MAX_SPREAD_RATIO")
     env_spread_relief_block_unstable = _env_bool(
         "KORSTOCKSCAN_SCALP_LATENCY_SPREAD_RELIEF_BLOCK_UNSTABLE_QUOTE"
@@ -1109,6 +1112,9 @@ def _build_trading_rules() -> TradingConfig:
             SCALP_LATENCY_SPREAD_RELIEF_MIN_SIGNAL_SCORE=env_spread_relief_min_signal
             if env_spread_relief_min_signal is not None
             else config.SCALP_LATENCY_SPREAD_RELIEF_MIN_SIGNAL_SCORE,
+            SCALP_LATENCY_SPREAD_RELIEF_EFFECTIVE_MIN_SIGNAL_SCORE_FLOOR=env_spread_relief_effective_min_signal_floor
+            if env_spread_relief_effective_min_signal_floor is not None
+            else config.SCALP_LATENCY_SPREAD_RELIEF_EFFECTIVE_MIN_SIGNAL_SCORE_FLOOR,
             SCALP_LATENCY_SPREAD_RELIEF_MAX_SPREAD_RATIO=env_spread_relief_max_spread
             if env_spread_relief_max_spread is not None
             else config.SCALP_LATENCY_SPREAD_RELIEF_MAX_SPREAD_RATIO,

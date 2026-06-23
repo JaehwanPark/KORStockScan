@@ -88,6 +88,7 @@ fi
 REMOTE_DESTINATION="${GCP_PUSH_USER}@${GCP_PUSH_HOST}:${GCP_PUSH_PROJECT_DIR}/data/threshold_cycle_remote"
 REMOTE_APPLY_DIR="$GCP_PUSH_PROJECT_DIR/data/threshold_cycle_remote/apply_plans"
 REMOTE_RUNTIME_DIR="$GCP_PUSH_PROJECT_DIR/data/threshold_cycle_remote/runtime_env"
+REMOTE_REPORT_PREOPEN_STATUS_DIR="$GCP_PUSH_PROJECT_DIR/data/threshold_cycle_remote/report/threshold_cycle_preopen_status"
 
 remote_quote() {
   if [[ "$1" == *"'"* ]]; then
@@ -135,11 +136,13 @@ if ! validation_output="$(validate_local_artifacts 2>&1)"; then
 fi
 
 LOCAL_FILES=(
+  "$PREOPEN_STATUS_FILE"
   "$APPLY_PLAN_FILE"
   "$RUNTIME_ENV_FILE"
   "$RUNTIME_ENV_MANIFEST_FILE"
 )
 REMOTE_FILES=(
+  "$REMOTE_REPORT_PREOPEN_STATUS_DIR/threshold_cycle_preopen_${TARGET_DATE}.status.json"
   "$REMOTE_APPLY_DIR/threshold_apply_${TARGET_DATE}.json"
   "$REMOTE_RUNTIME_DIR/threshold_runtime_env_${TARGET_DATE}.env"
   "$REMOTE_RUNTIME_DIR/threshold_runtime_env_${TARGET_DATE}.json"
@@ -162,6 +165,7 @@ fi
 
 SSH_TARGET="${GCP_PUSH_USER}@${GCP_PUSH_HOST}"
 ssh "${SSH_OPTS[@]}" "$SSH_TARGET" "mkdir -p -- $(remote_quote "$REMOTE_APPLY_DIR") $(remote_quote "$REMOTE_RUNTIME_DIR")"
+ssh "${SSH_OPTS[@]}" "$SSH_TARGET" "mkdir -p -- $(remote_quote "$REMOTE_REPORT_PREOPEN_STATUS_DIR")"
 
 for idx in "${!LOCAL_FILES[@]}"; do
   local_file="${LOCAL_FILES[$idx]}"
