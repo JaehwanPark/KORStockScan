@@ -20,7 +20,6 @@ import time
 import signal
 import threading
 import logging
-import html  # 💡 상단에 임포트 추가
 from logging.handlers import TimedRotatingFileHandler
 from datetime import datetime
 
@@ -96,71 +95,6 @@ def install_dual_logger():
     sys.stdout = logger
     sys.stderr = logger
     return logger
-
-# ==========================================
-# ⏰ 스케줄러 (배치 작업) 함수
-# ==========================================
-def broadcast_today_picks_job():
-    """아침 08:50 오늘의 추천 종목 브로드캐스트 (안전한 HTML 처리 버전)"""
-    try:
-        from src.database.models import RecommendationHistory
-        db_manager = DBManager()
-        event_bus = EventBus()
-        today = _today_string()
-        
-        with db_manager.get_session() as session:
-            picks = session.query(RecommendationHistory).filter_by(rec_date=today).all()
-
-            if not picks:
-                print(f"ℹ️ [{today}] 추천 종목 데이터가 없어 브로드캐스트를 건너뜁니다.")
-                return
-
-            msg = f"🌅 <b>[{today}] AI KOSPI 종목추천 리포트</b>\n"
-            msg += "━━━━━━━━━━━━━━━━━━\n"
-
-            main_picks = [p for p in picks if getattr(p, 'trade_type', '') == 'MAIN']
-            runner_picks = [p for p in picks if getattr(p, 'trade_type', '') == 'RUNNER']
-            scalp_picks = [p for p in picks if getattr(p, 'trade_type', '') == 'SCALP' or getattr(p, 'strategy', '') == 'SCALPING']
-
-            if main_picks:
-                msg += "🔥 <b>[AI 확신 종목]</b>\n"
-                for p in main_picks:
-                    # 💡 [방어] 종목명에 혹시 모를 특수문자(<, >)가 있을 수 있으므로 escape 처리
-                    safe_name = html.escape(p.stock_name)
-                    msg += f"• <b>{safe_name}</b> (<code>{p.stock_code}</code>)\n"
-                msg += "\n"
-
-            if runner_picks:
-                msg += "🥈 <b>[AI 관심 종목 TOP 10]</b>\n"
-                for p in runner_picks[:10]:
-                    safe_name = html.escape(p.stock_name)
-                    msg += f"• <b>{safe_name}</b> (<code>{p.stock_code}</code>)\n"
-                msg += "\n"
-                
-            if scalp_picks:
-                msg += "⚡ <b>[초단타(SCALP) 포착 대기열]</b>\n"
-                for p in scalp_picks[:10]:
-                    safe_name = html.escape(p.stock_name)
-                    msg += f"• <b>{safe_name}</b> (<code>{p.stock_code}</code>)\n"
-
-        # 📢 텔레그램 모듈 직접 호출 파괴 -> EventBus 송출
-        event_bus.publish('TELEGRAM_BROADCAST', {'message': msg, 'audience': 'VIP_ALL', 'parse_mode': 'HTML'})
-
-    except Exception as e:
-        from src.utils.logger import log_error
-        # 💡 [핵심] 에러 메시지에 포함된 < > 등 특수문자를 안전하게 변환
-        safe_error = html.escape(str(e))
-        
-        log_error(f"아침 브로드캐스트 실패: {e}")
-        
-        # 💡 관리자에게 보낼 때 <code> 태그를 입히면 더 보기 좋습니다.
-        error_report = f"❌ <b>아침 브로드캐스트 실패</b>\n<code>{safe_error}</code>"
-        
-        EventBus().publish('TELEGRAM_BROADCAST', {
-            'message': error_report, 
-            'audience': 'ADMIN_ONLY',
-            'parse_mode': 'HTML'
-        })
 
 # 💡 글로벌 위기 감지 무한 루프
 def crisis_monitor_loop():
@@ -396,7 +330,6 @@ if __name__ == '__main__':
     print("🛡️ 메인 관제탑 루프 진입 (스케줄링 및 무중단 감시 시작)...")
     
     # 💡 [아키텍처 포인트 4] 메인 쓰레드는 오직 시스템 스케줄링과 예외 종료 감시만 수행합니다.
-    morning_report_sent = False
     daily_report_sent = False
     monitor_archive_sent = False
 
@@ -408,14 +341,8 @@ if __name__ == '__main__':
             if heartbeat_counter % 5 == 0:
                 write_heartbeat("main_loop")
             
-            # [스케줄러 1] 아침 08:50 종목 브로드캐스트 (딱 한 번만 실행되도록 플래그 사용)
-            if now.hour == 8 and now.minute == 50 and not morning_report_sent:
-                broadcast_today_picks_job()
-                morning_report_sent = True
-            
-            # 자정이 지나면 내일 아침 리포트를 위해 플래그 초기화
+            # 자정이 지나면 당일 스케줄러 플래그를 초기화
             if now.hour == 0 and now.minute == 1:
-                morning_report_sent = False
                 daily_report_sent = False
                 monitor_archive_sent = False
 
