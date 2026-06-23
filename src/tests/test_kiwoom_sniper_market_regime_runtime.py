@@ -2080,6 +2080,14 @@ def test_scanner_rest_quote_rate_limit_uses_bounded_operator_override(monkeypatc
     kiwoom_sniper_v2._reset_scanner_rest_quote_fallback_rate_limit_for_tests()
 
 
+def test_scanner_rest_quote_loop_limit_allows_bounded_intraday_recovery_override(monkeypatch):
+    monkeypatch.setenv("KORSTOCKSCAN_SCANNER_REST_QUOTE_FALLBACK_MAX_PER_LOOP", "8")
+    assert kiwoom_sniper_v2._scanner_rest_quote_fallback_max_per_loop() == 8
+
+    monkeypatch.setenv("KORSTOCKSCAN_SCANNER_REST_QUOTE_FALLBACK_MAX_PER_LOOP", "99")
+    assert kiwoom_sniper_v2._scanner_rest_quote_fallback_max_per_loop() == 10
+
+
 def test_non_rising_ws_misses_do_not_consume_positive_rest_quote_slot(monkeypatch):
     kiwoom_sniper_v2._reset_scanner_rest_quote_fallback_rate_limit_for_tests()
     monkeypatch.setenv("KORSTOCKSCAN_SCANNER_RISING_WS_GAP_PRIORITY_RECOVERY_ENABLED", "true")

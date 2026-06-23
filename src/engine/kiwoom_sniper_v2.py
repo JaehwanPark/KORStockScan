@@ -1944,7 +1944,7 @@ def _scanner_rest_quote_fallback_max_per_loop():
         value = int(str(raw).strip()) if str(raw).strip() else 1
     except Exception:
         value = 1
-    return max(0, min(value, 5))
+    return max(0, min(value, 10))
 
 
 def _scanner_rest_quote_fallback_defer_sec():
