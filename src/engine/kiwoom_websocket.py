@@ -65,6 +65,8 @@ class KiwoomWSManager:
         self._last_dashboard_snapshot_at = 0.0
         self._dashboard_snapshot_write_inflight = False
         self._recent_reg_request_ts = {}
+        self._alternate_route_request_ts = {}
+        self._persistent_repair_request_ts = {}
         self._registered_items_by_code = {}
         
         # 전역 EventBus 인스턴스 획득 및 외부 명령 수신기 장착
@@ -170,11 +172,16 @@ class KiwoomWSManager:
             print(f"⚠️ [WS] 실시간 등록 제외 코드: {invalid}")
         return normalized
 
-    def _resolve_ws_register_items(self, codes, *, include_alternate_route=False):
+    def _resolve_ws_register_items(self, codes, *, include_alternate_route=False, alternate_route_codes=None):
         """Return canonical subscription codes and Kiwoom exchange-aware REG items."""
         normalized_codes = self._normalize_subscribe_codes(codes)
         if not normalized_codes:
             return [], []
+        alternate_route_code_set = (
+            set(normalized_codes)
+            if alternate_route_codes is None
+            else set(alternate_route_codes)
+        )
 
         explicit_by_code = {}
         for raw_code in codes or []:
@@ -196,7 +203,11 @@ class KiwoomWSManager:
 
                 effective = kiwoom_utils.get_effective_kiwoom_code(code)
                 items = [effective]
-                if include_alternate_route and not str(effective or '').upper().endswith('_AL'):
+                if (
+                    include_alternate_route
+                    and code in alternate_route_code_set
+                    and not str(effective or '').upper().endswith('_AL')
+                ):
                     items.append(f"{code}_AL")
                 register_items.extend(OrderedDict.fromkeys(items))
         except Exception as exc:
@@ -208,7 +219,7 @@ class KiwoomWSManager:
                     register_items.append(explicit)
                 else:
                     register_items.append(code)
-                    if include_alternate_route:
+                    if include_alternate_route and code in alternate_route_code_set:
                         register_items.append(f"{code}_AL")
 
         return normalized_codes, register_items
@@ -303,6 +314,106 @@ class KiwoomWSManager:
                     skipped.append(code)
                     continue
                 self._recent_reg_request_ts[code] = now_ts
+                allowed.append(code)
+        return allowed, skipped
+
+    @staticmethod
+    def _alternate_route_max_codes():
+        raw = os.getenv("KORSTOCKSCAN_WS_ALTERNATE_ROUTE_MAX_CODES", "")
+        try:
+            value = int(str(raw).strip()) if str(raw).strip() else 2
+        except Exception:
+            value = 2
+        return max(0, min(value, 20))
+
+    @staticmethod
+    def _alternate_route_ttl_sec():
+        raw = os.getenv("KORSTOCKSCAN_WS_ALTERNATE_ROUTE_TTL_SEC", "")
+        try:
+            value = float(str(raw).strip()) if str(raw).strip() else 180.0
+        except Exception:
+            value = 180.0
+        return max(0.0, min(value, 1800.0))
+
+    def _filter_alternate_route_targets(self, codes):
+        normalized_codes = self._normalize_subscribe_codes(codes)
+        if not normalized_codes:
+            return [], []
+        max_codes = self._alternate_route_max_codes()
+        if max_codes <= 0:
+            return [], normalized_codes
+        ttl_sec = self._alternate_route_ttl_sec()
+        now_ts = time.time()
+        allowed = []
+        skipped = []
+        with self.lock:
+            if ttl_sec > 0:
+                stale_codes = [
+                    code
+                    for code, last_ts in self._alternate_route_request_ts.items()
+                    if now_ts - float(last_ts or 0.0) >= ttl_sec
+                ]
+                for code in stale_codes:
+                    self._alternate_route_request_ts.pop(code, None)
+            for code in normalized_codes:
+                last_ts = float(self._alternate_route_request_ts.get(code) or 0.0)
+                if ttl_sec > 0 and last_ts > 0 and now_ts - last_ts < ttl_sec:
+                    skipped.append(code)
+                    continue
+                if len(allowed) >= max_codes:
+                    skipped.append(code)
+                    continue
+                self._alternate_route_request_ts[code] = now_ts
+                allowed.append(code)
+        return allowed, skipped
+
+    @staticmethod
+    def _persistent_repair_max_codes():
+        raw = os.getenv("KORSTOCKSCAN_WS_PERSISTENT_REPAIR_MAX_CODES", "")
+        try:
+            value = int(str(raw).strip()) if str(raw).strip() else 4
+        except Exception:
+            value = 4
+        return max(0, min(value, 20))
+
+    @staticmethod
+    def _persistent_repair_ttl_sec():
+        raw = os.getenv("KORSTOCKSCAN_WS_PERSISTENT_REPAIR_TTL_SEC", "")
+        try:
+            value = float(str(raw).strip()) if str(raw).strip() else 90.0
+        except Exception:
+            value = 90.0
+        return max(0.0, min(value, 1800.0))
+
+    def _filter_persistent_repair_targets(self, codes):
+        normalized_codes = self._normalize_subscribe_codes(codes)
+        if not normalized_codes:
+            return [], []
+        max_codes = self._persistent_repair_max_codes()
+        if max_codes <= 0:
+            return [], normalized_codes
+        ttl_sec = self._persistent_repair_ttl_sec()
+        now_ts = time.time()
+        allowed = []
+        skipped = []
+        with self.lock:
+            if ttl_sec > 0:
+                stale_codes = [
+                    code
+                    for code, last_ts in self._persistent_repair_request_ts.items()
+                    if now_ts - float(last_ts or 0.0) >= ttl_sec
+                ]
+                for code in stale_codes:
+                    self._persistent_repair_request_ts.pop(code, None)
+            for code in normalized_codes:
+                last_ts = float(self._persistent_repair_request_ts.get(code) or 0.0)
+                if ttl_sec > 0 and last_ts > 0 and now_ts - last_ts < ttl_sec:
+                    skipped.append(code)
+                    continue
+                if len(allowed) >= max_codes:
+                    skipped.append(code)
+                    continue
+                self._persistent_repair_request_ts[code] = now_ts
                 allowed.append(code)
         return allowed, skipped
 
@@ -1186,12 +1297,14 @@ class KiwoomWSManager:
         replace_existing=True,
         enforce_item_budget=False,
         include_alternate_route=False,
+        alternate_route_codes=None,
         source="",
     ):
         try:
             normalized_codes, register_items = self._resolve_ws_register_items(
                 codes,
                 include_alternate_route=include_alternate_route,
+                alternate_route_codes=alternate_route_codes,
             )
             if not normalized_codes:
                 print("⚠️ [WS] 등록 가능한 유효 종목코드가 없어 REG 전송을 생략합니다.")
@@ -1304,17 +1417,40 @@ class KiwoomWSManager:
             replace_existing = not bool(self.subscribed_codes)
             source_key = str(source or "").lower()
             repair_cycle_key = str(repair_cycle or "").lower()
-            enforce_item_budget = True
-            include_alternate_route = (
+            persistent_repair = (
                 "persistent" in source_key
                 or repair_cycle_key == "persistent_ws_gap"
             )
+            if persistent_repair:
+                new_targets, repair_skipped = self._filter_persistent_repair_targets(new_targets)
+                if repair_skipped:
+                    print(
+                        "🧯 [WS] persistent repair 등록 제한: "
+                        f"allowed={new_targets} skipped={repair_skipped} "
+                        f"max_codes={self._persistent_repair_max_codes()} "
+                        f"ttl_sec={self._persistent_repair_ttl_sec():.1f}"
+                    )
+                if not new_targets:
+                    return
+            enforce_item_budget = True
+            include_alternate_route = persistent_repair
+            alternate_route_codes = None
+            if include_alternate_route:
+                alternate_route_codes, alternate_skipped = self._filter_alternate_route_targets(new_targets)
+                if alternate_skipped:
+                    print(
+                        "🧯 [WS] alternate route 등록 제한: "
+                        f"allowed={alternate_route_codes} skipped={alternate_skipped} "
+                        f"max_codes={self._alternate_route_max_codes()} "
+                        f"ttl_sec={self._alternate_route_ttl_sec():.1f}"
+                    )
             future = asyncio.run_coroutine_threadsafe(
                 self._send_reg(
                     new_targets,
                     replace_existing=replace_existing,
                     enforce_item_budget=enforce_item_budget,
                     include_alternate_route=include_alternate_route,
+                    alternate_route_codes=alternate_route_codes,
                     source=source,
                 ),
                 self.loop,

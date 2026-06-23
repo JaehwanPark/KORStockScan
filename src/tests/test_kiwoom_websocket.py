@@ -317,6 +317,84 @@ def test_recent_reg_filter_allows_after_ttl(monkeypatch):
     assert manager._filter_recent_reg_targets(["240810"], force=False) == (["240810"], [])
 
 
+def test_alternate_route_filter_limits_codes_per_batch(monkeypatch):
+    manager = KiwoomWSManager("test-token")
+    monkeypatch.setenv("KORSTOCKSCAN_WS_ALTERNATE_ROUTE_MAX_CODES", "2")
+    monkeypatch.setenv("KORSTOCKSCAN_WS_ALTERNATE_ROUTE_TTL_SEC", "180")
+    monkeypatch.setattr(kiwoom_websocket.time, "time", lambda: 1000.0)
+
+    allowed, skipped = manager._filter_alternate_route_targets(["000001", "000002", "000003"])
+
+    assert allowed == ["000001", "000002"]
+    assert skipped == ["000003"]
+
+
+def test_alternate_route_filter_throttles_recent_codes(monkeypatch):
+    manager = KiwoomWSManager("test-token")
+    monkeypatch.setenv("KORSTOCKSCAN_WS_ALTERNATE_ROUTE_MAX_CODES", "2")
+    monkeypatch.setenv("KORSTOCKSCAN_WS_ALTERNATE_ROUTE_TTL_SEC", "180")
+    now = {"value": 1000.0}
+    monkeypatch.setattr(kiwoom_websocket.time, "time", lambda: now["value"])
+
+    assert manager._filter_alternate_route_targets(["000001", "000002"]) == (["000001", "000002"], [])
+    assert manager._filter_alternate_route_targets(["000001", "000003"]) == (["000003"], ["000001"])
+    now["value"] = 1181.0
+    assert manager._filter_alternate_route_targets(["000001"]) == (["000001"], [])
+
+
+def test_send_reg_applies_alternate_only_to_allowed_codes(monkeypatch):
+    manager = KiwoomWSManager("test-token")
+    fake_ws = _FakeWS([])
+    manager.websocket = fake_ws
+    manager._session_ready.set()
+
+    monkeypatch.setattr("src.utils.kiwoom_utils.get_effective_kiwoom_code", lambda code: code)
+
+    asyncio.run(
+        manager._send_reg(
+            ["000001", "000002", "000003"],
+            include_alternate_route=True,
+            alternate_route_codes=["000001", "000002"],
+        )
+    )
+
+    payload = json.loads(fake_ws.sent[0])
+    assert payload["data"][0]["item"] == [
+        "000001",
+        "000001_AL",
+        "000002",
+        "000002_AL",
+        "000003",
+    ]
+
+
+def test_persistent_repair_filter_limits_codes_per_batch(monkeypatch):
+    manager = KiwoomWSManager("test-token")
+    monkeypatch.setenv("KORSTOCKSCAN_WS_PERSISTENT_REPAIR_MAX_CODES", "3")
+    monkeypatch.setenv("KORSTOCKSCAN_WS_PERSISTENT_REPAIR_TTL_SEC", "90")
+    monkeypatch.setattr(kiwoom_websocket.time, "time", lambda: 1000.0)
+
+    allowed, skipped = manager._filter_persistent_repair_targets(
+        ["000001", "000002", "000003", "000004", "000005"]
+    )
+
+    assert allowed == ["000001", "000002", "000003"]
+    assert skipped == ["000004", "000005"]
+
+
+def test_persistent_repair_filter_throttles_recent_codes(monkeypatch):
+    manager = KiwoomWSManager("test-token")
+    monkeypatch.setenv("KORSTOCKSCAN_WS_PERSISTENT_REPAIR_MAX_CODES", "3")
+    monkeypatch.setenv("KORSTOCKSCAN_WS_PERSISTENT_REPAIR_TTL_SEC", "90")
+    now = {"value": 1000.0}
+    monkeypatch.setattr(kiwoom_websocket.time, "time", lambda: now["value"])
+
+    assert manager._filter_persistent_repair_targets(["000001", "000002"]) == (["000001", "000002"], [])
+    assert manager._filter_persistent_repair_targets(["000001", "000003"]) == (["000003"], ["000001"])
+    now["value"] = 1091.0
+    assert manager._filter_persistent_repair_targets(["000001"]) == (["000001"], [])
+
+
 def test_real_payload_with_exchange_suffix_updates_canonical_snapshot():
     manager = KiwoomWSManager("test-token")
     manager.subscribed_codes.add("039490")
