@@ -44,7 +44,12 @@ from src.utils import kiwoom_utils
 from src.utils.logger import log_error, log_info
 from src.utils.constants import RESTART_FLAG_PATH, TRADING_RULES
 from src.utils.pipeline_event_logger import emit_pipeline_event
-from src.database.db_manager import DBManager
+from src.database.db_manager import (
+    DBManager,
+    SWING_REAL_WATCHING_ENABLED_ENV,
+    is_swing_real_watching_enabled,
+    is_swing_real_watching_strategy,
+)
 from src.core.event_bus import EventBus
 from src.database.models import RecommendationHistory
 from src.engine.trade_profit import calculate_net_profit_rate
@@ -965,6 +970,32 @@ def _safe_float(value, default=0.0):
         return numeric
     except Exception:
         return default
+
+
+def _is_disabled_swing_watching_target(target) -> bool:
+    status = str((target or {}).get("status") or "").upper()
+    if status != "WATCHING":
+        return False
+    return (
+        is_swing_real_watching_strategy((target or {}).get("strategy"))
+        and not is_swing_real_watching_enabled()
+    )
+
+
+def _filter_disabled_swing_watching_targets(targets):
+    kept = []
+    skipped = 0
+    for target in targets or []:
+        if _is_disabled_swing_watching_target(target):
+            skipped += 1
+            continue
+        kept.append(target)
+    if skipped:
+        log_info(
+            f"[SWING_REAL_WATCHING_DISABLED] filtered {skipped} boot WATCHING targets "
+            f"env={SWING_REAL_WATCHING_ENABLED_ENV}"
+        )
+    return kept
 
 
 def _env_bool(name, default=False):
@@ -1986,6 +2017,8 @@ def _initial_ws_registration_groups(targets, now_ts=None):
         status = str((target or {}).get("status") or "").upper()
         if status in {"COMPLETED", "EXPIRED"}:
             continue
+        if _is_disabled_swing_watching_target(target):
+            continue
         code = str((target or {}).get("code") or "").strip()[:6]
         if not code:
             continue
@@ -2017,7 +2050,11 @@ def _initial_ws_registration_groups(targets, now_ts=None):
 
 def _runtime_iteration_targets(targets, now_ts):
     """Prioritize recently scanner-promoted WATCHING rows without mutating ACTIVE_TARGETS."""
-    indexed = list(enumerate(targets or []))
+    indexed = [
+        (idx, target)
+        for idx, target in enumerate(targets or [])
+        if not _is_disabled_swing_watching_target(target)
+    ]
 
     def _priority(item):
         original_index, target = item
@@ -2827,6 +2864,12 @@ def attach_db_poll_target_if_missing(db_target, targets, now_ts):
     code = str(dt.get("code", "")).strip()[:6]
     if not code:
         return False
+    if _is_disabled_swing_watching_target(dt):
+        log_info(
+            f"[SWING_REAL_WATCHING_DISABLED] skip DB poll attach "
+            f"{code} strategy={dt['strategy']} env={SWING_REAL_WATCHING_ENABLED_ENV}"
+        )
+        return False
 
     identity = target_identity(code, dt["strategy"])
     for target in targets:
@@ -3374,6 +3417,7 @@ def run_sniper(is_test_mode=False):
         t['strategy'] = normalize_strategy(t.get('strategy'))
         t['position_tag'] = normalize_position_tag(t['strategy'], t.get('position_tag'))
         t['added_time'] = _runtime_added_time_for_target(t, now_ts=boot_ts)
+    ACTIVE_TARGETS[:] = _filter_disabled_swing_watching_targets(ACTIVE_TARGETS)
     ACTIVE_TARGETS[:] = _filter_invalid_scanner_identity_targets(ACTIVE_TARGETS)
     _restore_holding_runtime_state(ACTIVE_TARGETS)
     sniper_state_handlers.sync_scalp_simulator_targets_from_state(ACTIVE_TARGETS)

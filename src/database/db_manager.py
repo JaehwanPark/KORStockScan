@@ -1,6 +1,7 @@
 # src/database/db_manager.py
 import pandas as pd
 import math
+import os
 import src.utils.constants as const
 from datetime import datetime
 from datetime import timedelta
@@ -28,7 +29,20 @@ from src.engine.sniper_position_tags import (
     normalize_position_tag,
     normalize_strategy,
 )
-from src.utils.logger import log_error
+from src.utils.logger import log_error, log_info
+
+SWING_REAL_WATCHING_ENABLED_ENV = "KORSTOCKSCAN_SWING_REAL_WATCHING_ENABLED"
+SWING_REAL_WATCHING_STRATEGIES = {"KOSPI_ML", "KOSDAQ_ML", "MAIN", "SWING"}
+
+
+def is_swing_real_watching_enabled() -> bool:
+    """Real swing WATCHING is operator-opt-in only."""
+    raw = str(os.getenv(SWING_REAL_WATCHING_ENABLED_ENV, "") or "").strip().lower()
+    return raw in {"1", "true", "t", "yes", "y", "on"}
+
+
+def is_swing_real_watching_strategy(strategy: str | None) -> bool:
+    return normalize_strategy(strategy) in SWING_REAL_WATCHING_STRATEGIES
 
 class DBManager:
     """
@@ -319,6 +333,12 @@ class DBManager:
                 strategy = 'KOSPI_ML'
         strategy = normalize_strategy(strategy)
         position = normalize_position_tag(strategy, position)
+        if is_swing_real_watching_strategy(strategy) and not is_swing_real_watching_enabled():
+            log_info(
+                f"[SWING_REAL_WATCHING_DISABLED] skip WATCHING save "
+                f"code={code} strategy={strategy} env={SWING_REAL_WATCHING_ENABLED_ENV}"
+            )
+            return
 
         with self.get_session() as session:
             record = self.find_reusable_watching_record(
@@ -505,6 +525,20 @@ class DBManager:
                 lambda row: normalize_position_tag(row.get('strategy'), row.get('position_tag')),
                 axis=1,
             )
+            if not is_swing_real_watching_enabled():
+                swing_watching = (
+                    df['status'].astype(str).str.upper().eq('WATCHING')
+                    & df['strategy'].astype(str).str.upper().isin(SWING_REAL_WATCHING_STRATEGIES)
+                )
+                if swing_watching.any():
+                    skipped = int(swing_watching.sum())
+                    log_info(
+                        f"[SWING_REAL_WATCHING_DISABLED] filtered {skipped} active WATCHING rows "
+                        f"env={SWING_REAL_WATCHING_ENABLED_ENV}"
+                    )
+                    df = df[~swing_watching]
+                    if df.empty:
+                        return []
 
             # 💡 [핵심 교정 2] 상태값(status) 우선순위 강제 지정 (알파벳 정렬 버그 차단)
             # 가장 중요한 상태(HOLDING)부터 먼저 오도록 랭킹을 매깁니다.
@@ -589,7 +623,6 @@ class DBManager:
             return targets
             
         except Exception as e:
-            from src.utils.logger import log_error
             print(f"감시 대상 로드 에러: {e}")
             log_error(f"감시 대상 로드 에러: {e}")
             return []

@@ -14,6 +14,7 @@ from datetime import datetime
 from src.utils.logger import log_error
 from src.core.event_bus import EventBus
 from src.utils.constants import CONFIG_PATH, DEV_PATH, TRADING_RULES
+from src.database.db_manager import is_swing_real_watching_enabled
 from src.engine.bd_fbuy_accum_pre_scanner import write_ws_snapshot
 from src.engine.monitoring.market_halt_windows import append_market_session_event
 from src.trading.entry.orderbook_stability_observer import ORDERBOOK_STABILITY_OBSERVER
@@ -905,7 +906,7 @@ class KiwoomWSManager:
                 target_seqs = []
 
                 # 💡 HTS에서 만든 시간대별 모든 식을 다 찾습니다! (이름은 HTS 저장명에 맞게 추가하세요)
-                target_keywords = [
+                scalp_condition_keywords = [
                     "scalp_candid_aggressive_01", # 09:00 ~ 09:30 초단타 후보군 (공격형)
                     "scalp_candid_normal_01", # 09:00 ~ 09:30 초단타 후보군 (일반형)
                     "scalp_open_reclaim_01", # 09:03 ~ 09:20 시초 회복형 스캘핑
@@ -916,14 +917,19 @@ class KiwoomWSManager:
                     "scalp_underpress_01",  # 09:40 ~ 13:00 스캘핑 약세군 (수동)
                     "scalp_shooting_01",   # 09:40 ~ 13:30 스캘핑 슈팅스타 (공격형)
                     "scalp_afternoon_01",  # 13:00 ~ 15:30 장중진입_오후재점화
-                    "kospi_short_swing_01", # 💡 [신규] 14:30 ~ 15:30 종가/다음날 단기 스윙
-                    "kospi_midterm_swing_01", # 💡 [신규] 14:30 ~ 15:30 종가/다음날 중기 스윙
                     "vcp_candid_01",       # 💡 [VCP 1단계] 15:30 ~ VCP 예비 후보 (다음날용)
                     "vcp_shooting_01",     # 💡 [VCP 2단계] 09:00 ~ 15:00 VCP 당일 슈팅
                     "vcp_shooting_next_01", # 💡 [VCP 3단계] 15:30 ~ VCP 다음날 시초가 예약 매수
-                    "s15_scan_base_01",     # 💡 [S15 1단계] 09:02 ~ 10:30 S15 예비 후보 
-                    "s15_trigger_break_01" # 💡 [S15 2단계] 09:05 ~ 11:00 S15 트리거 브레이크 
+                    "s15_scan_base_01",     # 💡 [S15 1단계] 09:02 ~ 10:30 S15 예비 후보
+                    "s15_trigger_break_01" # 💡 [S15 2단계] 09:05 ~ 11:00 S15 트리거 브레이크
                 ]
+                swing_condition_keywords = [
+                    "kospi_short_swing_01", # 💡 [신규] 14:30 ~ 15:30 종가/다음날 단기 스윙
+                    "kospi_midterm_swing_01", # 💡 [신규] 14:30 ~ 15:30 종가/다음날 중기 스윙
+                ]
+                target_keywords = list(scalp_condition_keywords)
+                if is_swing_real_watching_enabled():
+                    target_keywords.extend(swing_condition_keywords)
                 # 🚨 주의: 다중 검색식을 찾을 때는 여기서 break를 쓰면 안 됩니다!
 
                 if parsed_rows:

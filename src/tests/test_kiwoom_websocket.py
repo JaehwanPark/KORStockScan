@@ -58,6 +58,69 @@ def test_await_login_ack_raises_on_login_failure():
         asyncio.run(manager._await_login_ack(fake_ws, timeout_sec=1.0))
 
 
+def test_condition_list_skips_swing_conditions_by_default(monkeypatch):
+    monkeypatch.delenv("KORSTOCKSCAN_SWING_REAL_WATCHING_ENABLED", raising=False)
+
+    async def no_sleep(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(kiwoom_websocket.asyncio, "sleep", no_sleep)
+    manager = KiwoomWSManager("test-token")
+    fake_ws = _FakeWS([])
+    manager.websocket = fake_ws
+
+    asyncio.run(
+        manager._handle_message(
+            json.dumps(
+                {
+                    "trnm": "CNSRLST",
+                    "data": [
+                        {"seq": "1", "name": "scalp_candid_normal_01"},
+                        {"seq": "6", "name": "kospi_short_swing_01"},
+                    ],
+                }
+            )
+        )
+    )
+
+    sent = [json.loads(payload) for payload in fake_ws.sent]
+    assert [payload["seq"] for payload in sent] == ["1"]
+    assert manager.condition_dict == {"1": "scalp_candid_normal_01"}
+
+
+def test_condition_list_allows_swing_conditions_when_explicitly_enabled(monkeypatch):
+    monkeypatch.setenv("KORSTOCKSCAN_SWING_REAL_WATCHING_ENABLED", "true")
+
+    async def no_sleep(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(kiwoom_websocket.asyncio, "sleep", no_sleep)
+    manager = KiwoomWSManager("test-token")
+    fake_ws = _FakeWS([])
+    manager.websocket = fake_ws
+
+    asyncio.run(
+        manager._handle_message(
+            json.dumps(
+                {
+                    "trnm": "CNSRLST",
+                    "data": [
+                        {"seq": "1", "name": "scalp_candid_normal_01"},
+                        {"seq": "6", "name": "kospi_short_swing_01"},
+                    ],
+                }
+            )
+        )
+    )
+
+    sent = [json.loads(payload) for payload in fake_ws.sent]
+    assert [payload["seq"] for payload in sent] == ["1", "6"]
+    assert manager.condition_dict == {
+        "1": "scalp_candid_normal_01",
+        "6": "kospi_short_swing_01",
+    }
+
+
 @pytest.mark.parametrize(
     "code,message,expected",
     [

@@ -33,7 +33,11 @@ from datetime import datetime
 # 💡 Level 1 & 2 공통 모듈 임포트
 from src.utils import kiwoom_utils
 from src.utils.logger import log_error, log_info
-from src.database.db_manager import DBManager
+from src.database.db_manager import (
+    DBManager,
+    SWING_REAL_WATCHING_ENABLED_ENV,
+    is_swing_real_watching_enabled,
+)
 from src.database.models import RecommendationHistory
 from src.core.event_bus import EventBus
 from src.utils.constants import TRADING_RULES
@@ -216,6 +220,12 @@ def run_kosdaq_scanner(is_test_mode=False):
         if kosdaq_picks:
             report_picks = list(kosdaq_picks)
             watchlist_picks = filter_kosdaq_watchlist_picks(kosdaq_picks)
+            if watchlist_picks and not is_swing_real_watching_enabled():
+                log_info(
+                    f"[SWING_REAL_WATCHING_DISABLED] skip KOSDAQ watchlist WATCHING "
+                    f"count={len(watchlist_picks)} env={SWING_REAL_WATCHING_ENABLED_ENV}"
+                )
+                watchlist_picks = []
             new_picks = []
             # 💡 [핵심] Date 객체로 변환하여 저장하는 것이 안전합니다.
             today_date = datetime.now().date() 

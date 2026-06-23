@@ -1180,6 +1180,7 @@ def test_scalping_fifo_max_active_env(monkeypatch):
 
 
 def test_initial_ws_registration_groups_caps_scanner_hot_tier(monkeypatch):
+    monkeypatch.setenv("KORSTOCKSCAN_SWING_REAL_WATCHING_ENABLED", "true")
     monkeypatch.setenv("KORSTOCKSCAN_SCALPING_WATCHING_MAX_ACTIVE", "2")
     targets = [
         {"id": "hold", "code": "000001", "status": "HOLDING", "strategy": "SCALPING", "position_tag": "SCALP_BASE"},
@@ -1217,6 +1218,26 @@ def test_initial_ws_registration_groups_caps_scanner_hot_tier(monkeypatch):
 
     assert priority_codes == ["000001", "000002"]
     assert scanner_codes == ["100002", "100003"]
+
+
+def test_swing_watching_default_off_excludes_ws_and_runtime(monkeypatch):
+    monkeypatch.delenv("KORSTOCKSCAN_SWING_REAL_WATCHING_ENABLED", raising=False)
+    targets = [
+        {"id": "swing", "code": "000002", "status": "WATCHING", "strategy": "KOSPI_ML", "position_tag": "META_V2"},
+        {"id": "kosdaq", "code": "000003", "status": "WATCHING", "strategy": "KOSDAQ_ML", "position_tag": "RUNNER"},
+        {"id": "hold", "code": "000001", "status": "HOLDING", "strategy": "KOSPI_ML", "position_tag": "META_V2"},
+        {"id": "scanner", "code": "100001", "status": "WATCHING", "strategy": "SCALPING", "position_tag": "SCANNER"},
+    ]
+
+    priority_codes, scanner_codes = kiwoom_sniper_v2._initial_ws_registration_groups(targets, now_ts=1100.0)
+    iteration_codes = [
+        target["code"]
+        for target in kiwoom_sniper_v2._runtime_iteration_targets(targets, now_ts=1100.0)
+    ]
+
+    assert priority_codes == ["000001"]
+    assert scanner_codes == ["100001"]
+    assert iteration_codes == ["000001", "100001"]
 
 
 def test_runtime_scanner_ws_snapshot_cache_uses_bulk_lookup(monkeypatch):
