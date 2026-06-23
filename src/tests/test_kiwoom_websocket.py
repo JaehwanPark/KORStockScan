@@ -58,7 +58,20 @@ def test_await_login_ack_raises_on_login_failure():
         asyncio.run(manager._await_login_ack(fake_ws, timeout_sec=1.0))
 
 
-def test_condition_list_skips_swing_conditions_by_default(monkeypatch):
+def test_post_login_bootstrap_skips_condition_list_by_default(monkeypatch):
+    monkeypatch.delenv("KORSTOCKSCAN_WS_CONDITION_SEARCH_ENABLED", raising=False)
+    manager = KiwoomWSManager("test-token")
+    fake_ws = _FakeWS([])
+    manager.websocket = fake_ws
+
+    asyncio.run(manager._send_post_login_bootstrap())
+
+    sent = [json.loads(payload) for payload in fake_ws.sent]
+    assert not any(payload.get("trnm") == "CNSRLST" for payload in sent)
+
+
+def test_condition_list_ignored_by_default(monkeypatch):
+    monkeypatch.delenv("KORSTOCKSCAN_WS_CONDITION_SEARCH_ENABLED", raising=False)
     monkeypatch.delenv("KORSTOCKSCAN_SWING_REAL_WATCHING_ENABLED", raising=False)
 
     async def no_sleep(*args, **kwargs):
@@ -83,12 +96,12 @@ def test_condition_list_skips_swing_conditions_by_default(monkeypatch):
         )
     )
 
-    sent = [json.loads(payload) for payload in fake_ws.sent]
-    assert [payload["seq"] for payload in sent] == ["1"]
-    assert manager.condition_dict == {"1": "scalp_candid_normal_01"}
+    assert fake_ws.sent == []
+    assert manager.condition_dict == {}
 
 
-def test_condition_list_allows_swing_conditions_when_explicitly_enabled(monkeypatch):
+def test_condition_list_allows_conditions_when_explicitly_enabled(monkeypatch):
+    monkeypatch.setenv("KORSTOCKSCAN_WS_CONDITION_SEARCH_ENABLED", "true")
     monkeypatch.setenv("KORSTOCKSCAN_SWING_REAL_WATCHING_ENABLED", "true")
 
     async def no_sleep(*args, **kwargs):
@@ -119,6 +132,31 @@ def test_condition_list_allows_swing_conditions_when_explicitly_enabled(monkeypa
         "1": "scalp_candid_normal_01",
         "6": "kospi_short_swing_01",
     }
+
+
+def test_condition_realtime_events_ignored_by_default(monkeypatch):
+    monkeypatch.delenv("KORSTOCKSCAN_WS_CONDITION_SEARCH_ENABLED", raising=False)
+    manager = KiwoomWSManager("test-token")
+    manager.condition_dict = {"1": "scalp_candid_normal_01"}
+
+    asyncio.run(
+        manager._handle_message(
+            json.dumps(
+                {
+                    "trnm": "REAL",
+                    "data": [
+                        {
+                            "type": "02",
+                            "name": "조건검색",
+                            "values": {"841": "1", "9001": "A005930", "843": "I"},
+                        }
+                    ],
+                }
+            )
+        )
+    )
+
+    assert manager._state_event_queue.empty()
 
 
 @pytest.mark.parametrize(

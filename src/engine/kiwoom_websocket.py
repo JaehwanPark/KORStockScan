@@ -35,7 +35,16 @@ def _load_system_config():
     except Exception as e:
         log_error(f"🚨 설정 로드 실패: {e}")
         return {}
-    
+
+
+WS_CONDITION_SEARCH_ENABLED_ENV = "KORSTOCKSCAN_WS_CONDITION_SEARCH_ENABLED"
+
+
+def is_ws_condition_search_enabled() -> bool:
+    raw = str(os.getenv(WS_CONDITION_SEARCH_ENABLED_ENV, "") or "").strip().lower()
+    return raw in {"1", "true", "t", "yes", "y", "on"}
+
+
 class KiwoomWSManager:
     def __init__(self, token):
         # 💡 [우아한 아키텍처] 하드코딩 파괴! 설정 파일에서 URI를 동적으로 읽어옵니다.
@@ -758,8 +767,15 @@ class KiwoomWSManager:
         if not self.websocket:
             return
 
-        print("🔍 [WS] HTS 조건검색식 목록(CNSRLST)을 요청합니다.")
-        await self.websocket.send(json.dumps({'trnm': 'CNSRLST'}))
+        if is_ws_condition_search_enabled():
+            print("🔍 [WS] HTS 조건검색식 목록(CNSRLST)을 요청합니다.")
+            await self.websocket.send(json.dumps({'trnm': 'CNSRLST'}))
+        else:
+            self.condition_dict.clear()
+            print(
+                "[WS_CONDITION_SEARCH_DISABLED] HTS 조건검색식 목록 요청 생략 "
+                f"env={WS_CONDITION_SEARCH_ENABLED_ENV}"
+            )
 
         if self.is_reconnected:
             print("🔄 [WS] 웹소켓 재접속 감지! EventBus에 상태 동기화 이벤트를 발행합니다.")
@@ -900,6 +916,13 @@ class KiwoomWSManager:
             # 🚀 [추가 2] 조건검색식 목록 응답 수신 (ka10171)
             # =========================================================
             if trnm == 'CNSRLST':
+                if not is_ws_condition_search_enabled():
+                    self.condition_dict.clear()
+                    print(
+                        "[WS_CONDITION_SEARCH_DISABLED] CNSRLST 응답 무시 "
+                        f"env={WS_CONDITION_SEARCH_ENABLED_ENV}"
+                    )
+                    return
                 data_list = msg_dict.get('data', [])
                 parsed_rows = self._parse_condition_list_rows(data_list)
                 self.condition_dict.clear()
@@ -973,6 +996,12 @@ class KiwoomWSManager:
             # 🚀 [추가 3] 조건검색 최초 편입 목록 (ka10173)
             # =========================================================
             if trnm == 'CNSRREQ':
+                if not is_ws_condition_search_enabled():
+                    print(
+                        "[WS_CONDITION_SEARCH_DISABLED] CNSRREQ 편입 목록 무시 "
+                        f"env={WS_CONDITION_SEARCH_ENABLED_ENV}"
+                    )
+                    return
                 # 💡 [핵심 방어] 키움 서버가 null(None)을 주더라도 안전하게 빈 리스트([])로 바꿔치기합니다!
                 c_data = msg_dict.get('data') or []
                 seq = str(msg_dict.get('seq', '')).strip()
@@ -999,6 +1028,8 @@ class KiwoomWSManager:
                     
                     # 🚀 실시간 조건검색 편입/이탈 통보 가로채기 (02)
                     if real_type == '02' or d.get('name') == '조건검색':
+                        if not is_ws_condition_search_enabled():
+                            continue
                         seq = str(values.get('841', '')).strip() # 💡 일련번호 추출
                         code = str(values.get('9001', '')).replace('A', '').strip()
                         insert_type = str(values.get('843', '')).strip() 
