@@ -1832,6 +1832,32 @@ def test_scanner_rising_stale_ws_gap_defers_eviction_for_priority_recovery(monke
     assert stock["_scanner_rising_ws_gap_priority_recheck_after_epoch"] == 2005.0
 
 
+def test_scanner_rising_stale_ws_gap_priority_expires_after_standard_stale_guard(monkeypatch):
+    monkeypatch.setenv("KORSTOCKSCAN_SCANNER_RISING_WS_GAP_PRIORITY_RECOVERY_ENABLED", "true")
+    stock = {
+        "id": 90,
+        "code": "010690",
+        "status": "WATCHING",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "price_delta_since_first_seen_pct": "0.80",
+        "_scanner_watch_eviction_stale_first_seen_epoch": 2000.0,
+        "_scanner_watch_eviction_stale_count": 2,
+    }
+
+    decision = kiwoom_sniper_v2._scanner_watch_eviction_decision_from_stale(
+        stock,
+        now_ts=2091.0,
+        stale_reason="stale_ws_snapshot",
+        recovery_fields={"ws_recovery_outcome": "ws_reg_reissued_waiting_snapshot"},
+    )
+
+    assert decision["should_evict"] is True
+    assert decision["eviction_reason"] == "stale_recovery_failed"
+    assert decision["eviction_attempt_count"] == 3
+    assert decision["stale_age_sec"] == 91.0
+
+
 def test_scanner_rising_insufficient_history_evicts_after_buy_window(monkeypatch):
     monkeypatch.setenv("KORSTOCKSCAN_SCANNER_RISING_WS_GAP_PRIORITY_RECOVERY_ENABLED", "true")
     monkeypatch.setattr(

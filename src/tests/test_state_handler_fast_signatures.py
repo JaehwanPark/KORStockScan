@@ -2660,6 +2660,49 @@ def test_scanner_fast_precheck_reports_ws_type_freshness(monkeypatch):
     assert fields["ws_strength_history_count"] == 1
 
 
+def test_scanner_fast_precheck_allows_rising_candidate_with_fresh_realtime_type(monkeypatch):
+    emitted = []
+    monkeypatch.setattr(handlers.time, "time", lambda: 1012.0)
+    monkeypatch.setattr(
+        handlers,
+        "emit_pipeline_event",
+        lambda pipeline, name, code, stage, *, record_id=None, fields=None: emitted.append(
+            {"stage": stage, "fields": fields or {}}
+        ),
+    )
+    stock = {
+        "id": 84,
+        "name": "RISING",
+        "status": "WATCHING",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "entry_armed_at_epoch": 1000.0,
+        "price_delta_since_first_seen_pct": "1.20",
+    }
+
+    assert handlers.emit_scanner_fast_precheck(
+        stock,
+        "000084",
+        now_ts=1012.0,
+        ws_data={
+            "curr": 1200,
+            "last_ws_update_ts": 1000.0,
+            "received_types": {"0B"},
+            "last_realtime_type_ts": {"0B": 1011.4},
+            "strength_momentum_history": [{"ts": 1011.8}],
+        },
+        throttle_sec=0,
+    )
+
+    fields = emitted[-1]["fields"]
+    assert fields["fast_precheck_result"] == "eligible_for_heavy_entry_eval"
+    assert fields["fast_precheck_reason"] == "rising_realtime_type_fresh_quote_timestamp_stale"
+    assert fields["fast_precheck_realtime_relief_applied"] is True
+    assert fields["fast_precheck_realtime_relief_scope"] == "rising_entry_relief_only"
+    assert fields["heavy_queue_enter_epoch"] == "1012.000"
+    assert stock["_scanner_fast_precheck_result"] == "eligible_for_heavy_entry_eval"
+
+
 def test_log_ai_confirmed_terminal_no_budget_emits_contract_fields(monkeypatch):
     emitted = []
     monkeypatch.setattr(

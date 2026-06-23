@@ -7361,15 +7361,43 @@ def _scanner_fast_precheck_fields(
     anchor_time = armed_time or added_time
     quote_age_sec = _get_ws_snapshot_age_sec(ws_data)
     curr = _safe_int(ws_data.get("curr"), 0)
+    max_age_sec = _rule_float("SCALP_PRE_AI_MAX_WS_AGE_SEC", 3.0)
+    realtime_type_ts = ws_data.get("last_realtime_type_ts")
+    realtime_type_ts = realtime_type_ts if isinstance(realtime_type_ts, dict) else {}
+    last_0b_age_sec = None
+    last_0b_ts = _safe_float(realtime_type_ts.get("0B"), 0.0)
+    if last_0b_ts > 0:
+        last_0b_age_sec = max(0.0, float(now_ts) - last_0b_ts)
+    history = ws_data.get("strength_momentum_history") or []
+    latest_history_ts = 0.0
+    if isinstance(history, list):
+        for item in reversed(history):
+            if isinstance(item, dict):
+                latest_history_ts = _safe_float(item.get("ts") or item.get("timestamp"), 0.0)
+                if latest_history_ts > 0:
+                    break
+    latest_history_age_sec = None
+    if latest_history_ts > 0:
+        latest_history_age_sec = max(0.0, float(now_ts) - latest_history_ts)
+    fresh_realtime_evidence = (
+        (last_0b_age_sec is not None and last_0b_age_sec <= max_age_sec)
+        or (latest_history_age_sec is not None and latest_history_age_sec <= max_age_sec)
+    )
+    rising_realtime_relief = (
+        quote_age_sec is not None
+        and quote_age_sec > max_age_sec
+        and fresh_realtime_evidence
+        and _scanner_rising_entry_relief_eligible(stock)
+    )
     if curr <= 0:
         result = "source_quality_blocked"
         reason = "missing_or_zero_curr"
-    elif quote_age_sec is not None and quote_age_sec > _rule_float("SCALP_PRE_AI_MAX_WS_AGE_SEC", 3.0):
+    elif quote_age_sec is not None and quote_age_sec > max_age_sec and not rising_realtime_relief:
         result = "stability_pending"
         reason = "stale_ws_snapshot"
     else:
         result = "eligible_for_heavy_entry_eval"
-        reason = "fast_precheck_pass"
+        reason = "rising_realtime_type_fresh_quote_timestamp_stale" if rising_realtime_relief else "fast_precheck_pass"
     return {
         "scanner_promotion_id": scanner_fields.get("scanner_promotion_id")
         or "not_applicable_scanner_promotion_id",
@@ -7394,6 +7422,10 @@ def _scanner_fast_precheck_fields(
         ),
         "fast_precheck_result": result,
         "fast_precheck_reason": reason,
+        "fast_precheck_realtime_relief_applied": bool(rising_realtime_relief),
+        "fast_precheck_realtime_relief_scope": (
+            "rising_entry_relief_only" if rising_realtime_relief else "not_applicable"
+        ),
         "fast_precheck_seen_epoch": f"{float(now_ts):.3f}",
         "fast_precheck_lag_sec": round(max(0.0, float(now_ts) - anchor_time), 3) if anchor_time > 0 else 0.0,
         "heavy_queue_enter_epoch": f"{float(now_ts):.3f}" if result == "eligible_for_heavy_entry_eval" else "not_queued",
@@ -12346,6 +12378,9 @@ def _pre_ai_refresh_strength_momentum_ws_snapshot(code: str, ws_data: dict | Non
     base_age = _get_ws_snapshot_age_sec(base)
     max_age_sec = _rule_float("SCALP_PRE_AI_MAX_WS_AGE_SEC", 3.0)
     near_stale_buffer_sec = min(0.5, max(0.0, max_age_sec * 0.2))
+    base_history = base.get("strength_momentum_history") or []
+    base_history_count = len(base_history) if hasattr(base_history, "__len__") else 0
+    fields["pre_ai_ws_snapshot_refresh_history_count"] = int(base_history_count or 0)
     if base_age is not None:
         fields["pre_ai_ws_snapshot_refresh_input_age_ms"] = round(base_age * 1000.0, 3)
     if base_age is None:

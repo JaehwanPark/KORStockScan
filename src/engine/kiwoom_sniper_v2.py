@@ -1332,6 +1332,10 @@ def _scanner_watch_eviction_decision_from_stale(target, *, now_ts, stale_reason,
         not after_buy_window_source_quality_expired
         and _scanner_rising_ws_gap_priority_recovery_enabled()
         and _scanner_is_rising_entry_relief_candidate(target)
+        and not (
+            attempt_count >= SCANNER_WATCH_EVICTION_STALE_MIN_COUNT
+            and stale_age_sec >= SCANNER_WATCH_EVICTION_STALE_MIN_AGE_SEC
+        )
     ):
         _scanner_set_rising_recheck(
             target,

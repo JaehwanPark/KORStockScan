@@ -711,6 +711,37 @@ def test_pre_ai_strength_ws_snapshot_refresh_uses_fresh_ws_manager_history(monke
     assert refreshed["v_pw"] == 121.0
 
 
+def test_pre_ai_strength_ws_snapshot_refresh_keeps_fresh_input_history_count(monkeypatch):
+    now = time.time()
+    monkeypatch.setattr(state_handlers, "WS_MANAGER", None)
+    monkeypatch.setattr(
+        state_handlers,
+        "TRADING_RULES",
+        replace(CONFIG, SCALP_PRE_AI_MAX_WS_AGE_SEC=3.0),
+    )
+    original = {
+        "curr": 10_000,
+        "v_pw": 119.0,
+        "last_ws_update_ts": now - 0.2,
+        "strength_momentum_history": [
+            {"ts": now - 0.4, "v_pw": 117.0},
+            {"ts": now - 0.2, "v_pw": 119.0},
+        ],
+    }
+
+    refreshed, fields = state_handlers._pre_ai_refresh_strength_momentum_ws_snapshot(
+        "123456",
+        original,
+        "SCALPING",
+    )
+
+    assert fields["pre_ai_ws_snapshot_refresh_enabled"] is True
+    assert fields["pre_ai_ws_snapshot_refresh_applied"] is False
+    assert fields["pre_ai_ws_snapshot_refresh_reason"] == "input_snapshot_fresh"
+    assert fields["pre_ai_ws_snapshot_refresh_history_count"] == 2
+    assert refreshed == original
+
+
 def test_pre_ai_strength_ws_snapshot_refresh_rechecks_near_stale_input(monkeypatch):
     class FakeWsManager:
         def get_latest_data(self, code):
