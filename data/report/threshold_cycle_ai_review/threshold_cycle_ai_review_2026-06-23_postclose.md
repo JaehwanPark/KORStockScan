@@ -1,0 +1,30 @@
+# Threshold Cycle AI Correction - 2026-06-23 postclose
+
+- AI status: `parsed`
+- Authority: proposal-only; deterministic calibration guard is the source of truth.
+- Runtime change: `false`
+- Input context chars: `78246`
+- Input context hash: `4f046ba8c24cc7ba0b2468769376894e2a66ff50be333038b1fd7f4aacb3f1e5`
+- Provider status: `openai / success`
+- Usage: input_tokens=`30602`, output_tokens=`9860`, total_tokens=`40462`, elapsed_ms=`86870`
+- Cost: estimated_cost_usd=`None`, status=`missing_price_contract`
+
+| family | ai_state | route | proposal | guard | reason |
+| --- | --- | --- | --- | --- | --- |
+| soft_stop_whipsaw_confirmation | correction_proposed | threshold_candidate | state=hold, value=60, window=rolling_10d | accepted=True, effective_state=hold, effective_value=60, runtime_change=False | "holding_exit_observation_rebound_above_sell_10m_rate": "88.5" and "holding_exit_observation_whipsaw_signal": true conflict with lowering "current_value": 60 to "recommended_value": 20; with "post_sell_soft_stop_total": 0.0, joined post-sell confirmation is still missing for a loosen proposal. |
+| holding_flow_ofi_smoothing | caution | incident | state=hold, value=90, window=daily_intraday | accepted=True, effective_state=hold, effective_value=90, runtime_change=False | "sentinel_primary": "HOLD_DEFER_DANGER", "holding_flow_override_exit_confirmed": 1, and "max_defer_worsen_pct": 0.8 support no relax; keep observe-only hold. |
+| protect_trailing_smoothing | correction_proposed | threshold_candidate | state=freeze, value=20, window=rolling_10d | accepted=True, effective_state=freeze, effective_value=20, runtime_change=False | "eligible_for_live_review": false and "qualifying_cohort_count": 0 do not support moving from "current_value": 20 to "recommended_value": 18. |
+| trailing_continuation | agree | threshold_candidate | state=freeze, value=0.4, window=rolling_10d | accepted=True, effective_state=freeze, effective_value=0.4, runtime_change=False | Existing "freeze" matches "eligible_for_live_review": false, "qualifying_cohort_count": 0, and stated "GOOD_EXIT 훼손 리스크". |
+| market_regime_continuous_thresholds | agree | instrumentation_gap | state=hold_sample, value=65, window=rolling_10d | accepted=True, effective_state=hold_sample, effective_value=65, runtime_change=False | Context-only source already shows "allowed_runtime_apply": false and source_quality status "hold_sample" from valid_market_regime_days 8/10. |
+| pre_submit_price_guard | insufficient_context | - | state=-, value=-, window=- | accepted=False, effective_state=hold, effective_value=True, runtime_change=False | ai_proposal_missing_for_family |
+| dynamic_entry_price_resolver | caution | instrumentation_gap | state=hold_sample, value=1, window=daily_intraday | accepted=True, effective_state=hold_sample, effective_value=1, runtime_change=False | "coverage_gap_type": "counterfactual_join_gap" with "counterfactual_join_gap_count": 953 means candidate ranking is not attribution-complete enough for a bounded change. |
+| entry_price_execution_quality | insufficient_context | - | state=-, value=-, window=- | accepted=False, effective_state=hold, effective_value=report_only, runtime_change=False | ai_proposal_missing_for_family |
+| score65_74_recovery_probe | correction_proposed | incident | state=freeze, value=False, window=rolling_5d | accepted=True, effective_state=freeze, effective_value=False, runtime_change=False | "sentinel_primary": "SUBMIT_DROUGHT_CRITICAL", "threshold_relaxation_approved": false, and repeated "PRICE_GUARD_DROUGHT", "LATENCY_DROUGHT", "UPSTREAM_AI_THRESHOLD" indicate upstream confounding; zero entries are not isolated threshold evidence. |
+| strength_momentum_soft_gate_p1 | insufficient_context | - | state=-, value=-, window=- | accepted=False, effective_state=hold, effective_value=False, runtime_change=False | ai_proposal_missing_for_family |
+| overbought_pullback_guard_p1 | insufficient_context | - | state=-, value=-, window=- | accepted=False, effective_state=hold, effective_value=False, runtime_change=False | ai_proposal_missing_for_family |
+| liquidity_pre_submit_guard_p1 | insufficient_context | - | state=-, value=-, window=- | accepted=False, effective_state=hold, effective_value=False, runtime_change=False | ai_proposal_missing_for_family |
+| bad_entry_refined_canary | correction_proposed | threshold_candidate | state=freeze, value=False, window=rolling_10d | accepted=True, effective_state=freeze, effective_value=False, runtime_change=False | Large candidate volume is not matched by realized proof: "bad_entry_block_observed": 1.0, "sell_completed": 1.0, bad_entry signal_type_counts only "candidate_signal_only": 1, and rolling preview shows refined_exit 0. |
+| holding_exit_decision_matrix_advisory | correction_proposed | instrumentation_gap | state=hold_sample, value=False, window=cumulative | accepted=True, effective_state=hold_sample, effective_value=False, runtime_change=False | All 12 are "no_clear_edge": "matrix_non_clear_edge": 0, "matrix_no_clear_edge": 12, with "counterfactual_ready_count": 0 and "counterfactual_gap_count": 12. |
+| lifecycle_decision_matrix_runtime | correction_proposed | threshold_candidate | state=freeze, value=False, window=rolling_5d | accepted=True, effective_state=freeze, effective_value=False, runtime_change=False | Umbrella enable is premature because "promote_ready_count": 0 and runtime approval items still show "allowed_runtime_apply": false with "approval_required": true. |
+| scale_in_price_guard | insufficient_context | - | state=-, value=-, window=- | accepted=False, effective_state=hold, effective_value=60, runtime_change=False | ai_proposal_missing_for_family |
+| position_sizing_dynamic_formula | agree | instrumentation_gap | state=hold_sample, value=linear_10_30_current, window=rolling_10d | accepted=True, effective_state=hold_sample, effective_value=linear_10_30_current, runtime_change=False | Real denominator sample is still below floor: "sample_count": 12 vs "sample_floor": 30; keep candidate grid only. |

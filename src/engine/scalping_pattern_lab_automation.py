@@ -367,6 +367,122 @@ def _auto_family_candidates(findings: list[dict[str, Any]]) -> list[dict[str, An
     return candidates
 
 
+def _source_only_order_provenance(order: dict[str, Any]) -> dict[str, Any]:
+    order_id = str(order.get("order_id") or "").strip()
+    evidence = order.get("evidence") if isinstance(order.get("evidence"), dict) else {}
+    if not evidence:
+        evidence_list = order.get("evidence") if isinstance(order.get("evidence"), list) else []
+        evidence = evidence_list[0] if evidence_list and isinstance(evidence_list[0], dict) else {}
+    mapped_family = order.get("mapped_family") or order.get("threshold_family")
+
+    quantitative_contracts = {
+        "order_ai_threshold_miss_ev_recovery": {
+            "implemented_scope": "score65_74_recovery_probe_source_metric_provenance",
+            "source_contract": "scalping_ai_threshold_miss_source_metric_v1",
+            "source_fields": ["total_blocked", "block_ratio", "days"],
+            "required_keys": ["total_blocked", "block_ratio", "days"],
+            "status": "implemented",
+        },
+    }
+    report_only_contracts = {
+        "order_partial_only_표류_전용_timeout_report_only": {
+            "implemented_scope": "bad_entry_refined_partial_only_timeout_report_contract",
+            "source_contract": "bad_entry_refined_partial_only_timeout_report_contract_v1",
+        },
+        "order_split_entry_rebase_수량_정합성_report_only_감사": {
+            "implemented_scope": "bad_entry_refined_rebase_integrity_report_contract",
+            "source_contract": "bad_entry_refined_rebase_integrity_report_contract_v1",
+        },
+        "order_동일_종목_split_entry_soft_stop_재진입_cooldown_report_only": {
+            "implemented_scope": "soft_stop_whipsaw_same_symbol_reentry_report_contract",
+            "source_contract": "soft_stop_whipsaw_same_symbol_reentry_report_contract_v1",
+        },
+    }
+    if order_id in quantitative_contracts:
+        spec = quantitative_contracts[order_id]
+        present = {key: key in evidence for key in spec["required_keys"]}
+        implementation_ok = all(present.values())
+        return {
+            "implementation_status": spec["status"] if implementation_ok else "instrumentation_gap",
+            "implementation_checks": [
+                {
+                    "name": "source_metric_contract",
+                    "status": "pass" if implementation_ok else "fail",
+                    "required_keys": spec["required_keys"],
+                    "missing_keys": [key for key, exists in present.items() if not exists],
+                },
+                {
+                    "name": "runtime_authority_contract",
+                    "status": "pass",
+                    "runtime_effect": False,
+                    "allowed_runtime_apply": False,
+                    "decision_authority": DECISION_AUTHORITY,
+                },
+            ],
+            "implementation_provenance": {
+                "implementation_type": "pattern_lab_existing_family_source_metric",
+                "implemented_scope": spec["implemented_scope"],
+                "runtime_effect": False,
+                "allowed_runtime_apply": False,
+                "decision_authority": DECISION_AUTHORITY,
+                "source_report_type": "scalping_pattern_lab_automation",
+                "source_contract": spec["source_contract"],
+                "source_fields": spec["source_fields"],
+                "source_metric_snapshot": {
+                    **evidence,
+                    "mapped_family": mapped_family,
+                },
+            },
+        }
+    if order_id in report_only_contracts:
+        spec = report_only_contracts[order_id]
+        required_keys = ["expected_effect", "risk", "required_sample", "metric", "apply_stage"]
+        present = {key: bool(str(evidence.get(key) or "").strip()) for key in required_keys}
+        apply_stage_ok = str(evidence.get("apply_stage") or "").strip() == "report_only_observation"
+        implementation_ok = all(present.values()) and apply_stage_ok
+        return {
+            "implementation_status": (
+                "implemented_but_waiting_sample" if implementation_ok else "instrumentation_gap"
+            ),
+            "implementation_checks": [
+                {
+                    "name": "report_only_contract_fields",
+                    "status": "pass" if all(present.values()) else "fail",
+                    "required_keys": required_keys,
+                    "missing_keys": [key for key, exists in present.items() if not exists],
+                },
+                {
+                    "name": "report_only_apply_stage",
+                    "status": "pass" if apply_stage_ok else "fail",
+                    "apply_stage": evidence.get("apply_stage"),
+                },
+                {
+                    "name": "runtime_authority_contract",
+                    "status": "pass",
+                    "runtime_effect": False,
+                    "allowed_runtime_apply": False,
+                    "decision_authority": DECISION_AUTHORITY,
+                },
+            ],
+            "implementation_provenance": {
+                "implementation_type": "pattern_lab_report_only_observation_contract",
+                "implemented_scope": spec["implemented_scope"],
+                "runtime_effect": False,
+                "allowed_runtime_apply": False,
+                "decision_authority": DECISION_AUTHORITY,
+                "source_report_type": "scalping_pattern_lab_automation",
+                "source_contract": spec["source_contract"],
+                "source_fields": required_keys,
+                "sample_status": "contract_defined_waiting_sample",
+                "source_metric_snapshot": {
+                    **evidence,
+                    "mapped_family": mapped_family,
+                },
+            },
+        }
+    return {}
+
+
 def _code_improvement_orders(findings: list[dict[str, Any]], solo_findings: list[dict[str, Any]]) -> list[dict[str, Any]]:
     source = list(findings) + list(solo_findings)
     orders: list[dict[str, Any]] = []
@@ -433,6 +549,14 @@ def _code_improvement_orders(findings: list[dict[str, Any]], solo_findings: list
                 "forbidden_uses": FORBIDDEN_USES,
                 "priority": priority,
                 **instrumentation_status,
+                **_source_only_order_provenance(
+                    {
+                        "order_id": order_id,
+                        "threshold_family": finding.get("mapped_family"),
+                        "mapped_family": finding.get("mapped_family"),
+                        "evidence": finding.get("evidence"),
+                    }
+                ),
             }
         )
     return orders

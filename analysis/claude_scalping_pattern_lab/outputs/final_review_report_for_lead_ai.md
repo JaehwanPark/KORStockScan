@@ -1,7 +1,7 @@
 # 스캘핑 패턴 분석 최종 리뷰 보고서 (for Lead AI)
 
-생성일: 2026-06-22 16:10:02
-분석 기간: 2026-06-04 ~ 2026-06-22
+생성일: 2026-06-23 20:47:04
+분석 기간: 2026-06-04 ~ 2026-06-23
 
 ---
 
@@ -11,13 +11,13 @@
 
 | 코호트 | 거래수 | 승률 | 손익 중앙값 | 기여손익 합 | 표본충분 |
 |---|---:|---:|---:|---:|---|
-| full_fill | 47 | 42.6% | -1.380% | -20.140% | ✓ |
+| full_fill | 48 | 43.8% | -1.155% | -19.020% | ✓ |
 | split-entry | 3 | 0.0% | -2.110% | -6.250% | ⚠️부족 |
 
 ### 1-4. 튜닝 관찰축 요약
 
-- `WAIT65~79 total_candidates=42`, `recovery_check=0`, `promoted=0`, `submitted=0`
-- `blocked_ai_score_share=26.2%`, `gatekeeper_eval_ms_p95=4548ms`, `budget_pass_to_submitted_rate=0.1%`
+- `WAIT65~79 total_candidates=23`, `recovery_check=0`, `promoted=0`, `submitted=0`
+- `blocked_ai_score_share=39.1%`, `gatekeeper_eval_ms_p95=4306ms`, `budget_pass_to_submitted_rate=0.2%`
 
 - `No acute observability alert`: 중립 — 주요 관찰축에서 즉시 경고할 단일 병목이 두드러지지 않는다.
 
@@ -56,16 +56,16 @@
 ### 1-4. 기회비용 회수 후보 Top 5
 
 **#1** — `AI threshold miss`
-- 차단 건수 합계: 263784건 | 차단 비율: 100.0% | 관찰 일수: 13일
+- 차단 건수 합계: 266607건 | 차단 비율: 100.0% | 관찰 일수: 14일
 
 **#2** — `latency guard miss`
-- 차단 건수 합계: 137002건 | 차단 비율: 99.9% | 관찰 일수: 13일
+- 차단 건수 합계: 137955건 | 차단 비율: 99.9% | 관찰 일수: 14일
 
 **#3** — `overbought gate miss`
-- 차단 건수 합계: 14769건 | 차단 비율: 99.2% | 관찰 일수: 13일
+- 차단 건수 합계: 14861건 | 차단 비율: 99.2% | 관찰 일수: 14일
 
 **#4** — `liquidity gate miss`
-- 차단 건수 합계: 0건 | 차단 비율: 0.0% | 관찰 일수: 13일
+- 차단 건수 합계: 0건 | 차단 비율: 0.0% | 관찰 일수: 14일
 
 ---
 
@@ -75,7 +75,7 @@
 
 - rebase_integrity_flag: 16건
 - partial_then_expand_flag: 11건
-- same_symbol_repeat_flag: 984건
+- same_symbol_repeat_flag: 989건
 - same_ts_multi_rebase_flag: 8건
 
 ### 2-2. 전역 손절 강화 비권고 이유

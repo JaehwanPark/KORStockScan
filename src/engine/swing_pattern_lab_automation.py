@@ -320,9 +320,10 @@ def _ofi_qi_instrumentation_provenance(
     source_quality_blocked_families: list[dict[str, Any]],
 ) -> dict[str, Any]:
     order_id = str(order.get("order_id") or "")
+    evidence = order.get("evidence") if isinstance(order.get("evidence"), list) else []
     if order_id == "order_swing_pattern_lab_deepseek_scale_in_events_observed":
         scale_in_events = 0
-        for item in order.get("evidence") or []:
+        for item in evidence:
             if isinstance(item, dict):
                 scale_in_events += _safe_int(item.get("scale_in_events"), 0)
         return {
@@ -355,6 +356,89 @@ def _ofi_qi_instrumentation_provenance(
                     "scale_in_events": scale_in_events,
                     "next_postclose_metric": order.get("next_postclose_metric") or "swing_scale_in_quality_score",
                     "mapped_family": order.get("mapped_family") or order.get("threshold_family"),
+                },
+            },
+        }
+    if order_id == "order_swing_pattern_lab_deepseek_entry_no_submissions":
+        snapshot = evidence[0] if evidence and isinstance(evidence[0], dict) else {}
+        required_keys = [
+            "selected_count",
+            "submitted_count",
+            "blocked_gatekeeper_selection",
+            "blocked_gap_selection",
+            "blocked_market_selection",
+        ]
+        present = {key: key in snapshot for key in required_keys}
+        implementation_ok = all(present.values())
+        return {
+            "implementation_status": "implemented" if implementation_ok else "instrumentation_gap",
+            "implementation_checks": [
+                {
+                    "name": "entry_submission_gap_metric_contract",
+                    "status": "pass" if implementation_ok else "fail",
+                    "required_keys": required_keys,
+                    "missing_keys": [key for key, exists in present.items() if not exists],
+                },
+                {
+                    "name": "runtime_authority_contract",
+                    "status": "pass",
+                    "runtime_effect": False,
+                    "allowed_runtime_apply": False,
+                    "decision_authority": DECISION_AUTHORITY,
+                },
+            ],
+            "implementation_provenance": {
+                "owner": "swing_pattern_lab_automation",
+                "implemented_scope": "swing_entry_submission_gap_source_metric_provenance",
+                "runtime_effect": False,
+                "allowed_runtime_apply": False,
+                "actual_order_submitted": False,
+                "broker_order_forbidden": True,
+                "decision_authority": DECISION_AUTHORITY,
+                "source_contract": "swing_pattern_lab_entry_submission_gap_source_metric_v1",
+                "source_fields": required_keys,
+                "source_metric_snapshot": {
+                    **snapshot,
+                    "next_postclose_metric": order.get("next_postclose_metric") or "swing_entry_quality_score",
+                },
+            },
+        }
+    if order_id == "order_swing_pattern_lab_deepseek_ofi_qi_smoothing_review":
+        snapshot = evidence[0] if evidence and isinstance(evidence[0], dict) else {}
+        actions = snapshot.get("smoothing_actions") if isinstance(snapshot.get("smoothing_actions"), dict) else {}
+        total_actions = sum(_safe_int(value, 0) for value in actions.values())
+        implementation_ok = bool(actions) and total_actions > 0
+        return {
+            "implementation_status": "implemented" if implementation_ok else "instrumentation_gap",
+            "implementation_checks": [
+                {
+                    "name": "ofi_qi_smoothing_distribution_metric",
+                    "status": "pass" if implementation_ok else "fail",
+                    "smoothing_action_keys": sorted(actions.keys()),
+                    "total_actions": total_actions,
+                },
+                {
+                    "name": "runtime_authority_contract",
+                    "status": "pass",
+                    "runtime_effect": False,
+                    "allowed_runtime_apply": False,
+                    "decision_authority": DECISION_AUTHORITY,
+                },
+            ],
+            "implementation_provenance": {
+                "owner": "swing_pattern_lab_automation",
+                "implemented_scope": "swing_ofi_qi_smoothing_distribution_source_metric_provenance",
+                "runtime_effect": False,
+                "allowed_runtime_apply": False,
+                "actual_order_submitted": False,
+                "broker_order_forbidden": True,
+                "decision_authority": DECISION_AUTHORITY,
+                "source_contract": "swing_pattern_lab_ofi_qi_smoothing_distribution_source_metric_v1",
+                "source_fields": ["smoothing_actions"],
+                "source_metric_snapshot": {
+                    **snapshot,
+                    "next_postclose_metric": order.get("next_postclose_metric") or "swing_ofi_qi_quality_score",
+                    "source_quality_blocked_family_count": len(source_quality_blocked_families),
                 },
             },
         }

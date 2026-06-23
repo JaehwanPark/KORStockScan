@@ -84,3 +84,75 @@ def test_pattern_lab_automation_routes_stale_lab_to_rejected_and_solo_order(tmp_
     assert report["consensus_findings"] == []
     assert report["solo_findings"] == []
     assert report["code_improvement_orders"] == []
+
+
+def test_pattern_lab_automation_marks_source_only_existing_family_orders_closed(tmp_path, monkeypatch):
+    claude_dir = _write_lab_outputs(
+        tmp_path,
+        "claude",
+        backlog=[
+            {
+                "title": "split-entry rebase 수량 정합성 report-only 감사",
+                "기대효과": "정합성 개선",
+                "리스크": "왜곡 위험",
+                "필요표본": "20건 이상",
+                "검증지표": "cum_filled_qty > requested_qty 비율",
+                "적용단계": "report_only_observation",
+            },
+            {
+                "title": "동일 종목 split-entry soft-stop 재진입 cooldown report-only",
+                "기대효과": "손실 누수 차단",
+                "리스크": "missed upside 추적 필요",
+                "필요표본": "10건 이상",
+                "검증지표": "same-symbol repeat soft stop 건수",
+                "적용단계": "report_only_observation",
+            },
+            {
+                "title": "partial-only 표류 전용 timeout report-only",
+                "기대효과": "partial-only timeout 조기 정리",
+                "리스크": "오분류 가능",
+                "필요표본": "20건 이상",
+                "검증지표": "partial-only held_sec 중앙값",
+                "적용단계": "report_only_observation",
+            },
+        ],
+        opportunities=[
+            {
+                "blocker": "AI threshold miss",
+                "total_blocked": 17,
+                "block_ratio": 55.5,
+                "days": 4,
+            }
+        ],
+    )
+    monkeypatch.setattr(mod, "CLAUDE_LAB_DIR", claude_dir)
+    monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", tmp_path / "report")
+
+    report = mod.build_scalping_pattern_lab_automation_report("2026-05-08")
+    orders = {item["order_id"]: item for item in report["code_improvement_orders"]}
+
+    assert orders["order_ai_threshold_miss_ev_recovery"]["implementation_status"] == "implemented"
+    assert (
+        orders["order_ai_threshold_miss_ev_recovery"]["implementation_provenance"]["source_contract"]
+        == "scalping_ai_threshold_miss_source_metric_v1"
+    )
+    assert (
+        orders["order_partial_only_표류_전용_timeout_report_only"]["implementation_status"]
+        == "implemented_but_waiting_sample"
+    )
+    assert (
+        orders["order_split_entry_rebase_수량_정합성_report_only_감사"]["implementation_status"]
+        == "implemented_but_waiting_sample"
+    )
+    assert (
+        orders["order_동일_종목_split_entry_soft_stop_재진입_cooldown_report_only"]["implementation_status"]
+        == "implemented_but_waiting_sample"
+    )
+    for order_id in (
+        "order_partial_only_표류_전용_timeout_report_only",
+        "order_split_entry_rebase_수량_정합성_report_only_감사",
+        "order_동일_종목_split_entry_soft_stop_재진입_cooldown_report_only",
+    ):
+        order = orders[order_id]
+        assert order["implementation_provenance"]["sample_status"] == "contract_defined_waiting_sample"
+        assert order["implementation_provenance"]["runtime_effect"] is False

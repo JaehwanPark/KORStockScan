@@ -3558,6 +3558,19 @@ def build_swing_improvement_automation_report(
 
     scale_risk_count = int((ofi_qi.get("scale_in_micro_advice_counts") or {}).get("RISK_BEARISH", 0) or 0)
     if scale_risk_count > 0:
+        implementation_status, implementation_provenance = _existing_family_source_metric_provenance(
+            audit_report,
+            family="swing_scale_in_ofi_qi_confirmation",
+            implemented_scope="swing_scale_in_ofi_qi_confirmation_source_metric_provenance",
+            source_contract="swing_scale_in_ofi_qi_confirmation_source_metric_v1",
+            source_fields=[
+                "scale_in_micro_state_counts",
+                "scale_in_micro_advice_counts",
+                "swing_micro_support",
+                "swing_micro_risk",
+                "swing_micro_recovery_support_observed",
+            ],
+        )
         findings.append(
             {
                 "finding_id": "swing_scale_in_ofi_qi_bearish_risk",
@@ -3589,6 +3602,8 @@ def build_swing_improvement_automation_report(
                     f"source_quality_blockers={scale_in_ofi_qi_quality.get('source_quality_blockers')}",
                 ],
                 improvement_type="lifecycle_logic_observation",
+                implementation_status=implementation_status,
+                implementation_provenance=implementation_provenance,
             )
         )
 

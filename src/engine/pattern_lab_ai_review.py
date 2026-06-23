@@ -1212,7 +1212,10 @@ def _implementation_marker_for_conclusion(
     context: dict[str, Any],
 ) -> tuple[str | None, dict[str, Any] | None]:
     review_id = str(conclusion.get("review_id") or "").strip().lower()
-    if review_id != "swing_lifecycle_bucket_discovery_ai_two_pass_partial":
+    if review_id not in {
+        "swing_lifecycle_bucket_discovery_ai_two_pass_partial",
+        "swing_ai_two_pass_review_incomplete",
+    }:
         return None, None
     if str(conclusion.get("final_state") or "") != "ai_review_gap":
         return None, None
@@ -1246,7 +1249,11 @@ def _implementation_marker_for_conclusion(
     return (
         "implemented",
         {
-            "implementation_type": "pattern_lab_swing_bucket_ai_two_pass_partial_provenance",
+            "implementation_type": (
+                "pattern_lab_swing_ai_two_pass_followup_provenance"
+                if review_id == "swing_ai_two_pass_review_incomplete"
+                else "pattern_lab_swing_bucket_ai_two_pass_partial_provenance"
+            ),
             "implemented_scope": (
                 "Pattern Lab source-only follow-up now carries the Swing bucket two-pass partial-review "
                 "telemetry and source paths into the workorder surface."

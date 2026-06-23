@@ -2,21 +2,21 @@
 
 ## 판정
 
-- 분석 기간: `2026-06-22` ~ `2026-06-22`
+- 분석 기간: `2026-06-23` ~ `2026-06-23`
 - trade_rows: `0`
-- lifecycle_event_rows: `67`
+- lifecycle_event_rows: `49`
 - completed_valid_profit_rows: `0`
-- ofi_qi_rows: `1873`
+- ofi_qi_rows: `4427`
 - total_findings: `5`
-- code_improvement_orders: `3`
+- code_improvement_orders: `4`
 - runtime_change: `False`
 
 ## 분류 요약
 
-- implement_now: `0`
+- implement_now: `1`
 - attach_existing_family: `2`
 - design_family_candidate: `1`
-- defer_evidence: `2`
+- defer_evidence: `1`
 - reject: `0`
 
 ## Stage별 분석
@@ -62,7 +62,7 @@
 
 - title: OFI/QI stale/missing quality review
 - lifecycle_stage: `ofi_qi`
-- route: `defer_evidence`
+- route: `implement_now`
 - mapped_family: `swing_entry_ofi_qi_execution_quality`
 - confidence: `consensus`
 - runtime_effect: `False`
@@ -106,7 +106,20 @@
 - expected_ev_effect: Evaluate PYRAMID/AVG_DOWN outcome quality with OFI/QI confirmation.
 - files_likely_touched: `src/engine/swing_lifecycle_audit.py`, `src/engine/swing_selection_funnel_report.py`, `src/model/common_v2.py`
 
-### 3. `order_swing_pattern_lab_deepseek_ofi_qi_smoothing_review`
+### 3. `order_swing_pattern_lab_deepseek_ofi_qi_stale_missing`
+
+- title: OFI/QI stale/missing quality review
+- lifecycle_stage: `ofi_qi`
+- target_subsystem: `swing_micro_context`
+- route: `implement_now`
+- mapped_family: `swing_entry_ofi_qi_execution_quality`
+- threshold_family: `swing_entry_ofi_qi_execution_quality`
+- runtime_effect: `False`
+- allowed_runtime_apply: `False`
+- expected_ev_effect: If stale ratio > 0.3, consider instrumentation/observer enhancement.
+- files_likely_touched: `src/engine/swing_lifecycle_audit.py`, `src/engine/swing_selection_funnel_report.py`, `src/model/common_v2.py`
+
+### 4. `order_swing_pattern_lab_deepseek_ofi_qi_smoothing_review`
 
 - title: OFI/QI exit smoothing action distribution
 - lifecycle_stage: `ofi_qi`
@@ -121,4 +134,4 @@
 
 ## Data Quality Warnings
 
-- none
+- OFI/QI stale/missing ratio: 0.8304 (3676/4427); reasons: micro_missing=3675, observer_unhealthy=216, micro_not_ready=3676, state_insufficient=3676

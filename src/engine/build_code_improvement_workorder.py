@@ -67,6 +67,9 @@ KNOWN_FIXED_UNKNOWN_TOKEN_FIELDS = {
     "lifecycle_bucket_entry_bucket_key",
     "lifecycle_bucket_entry_bucket_id",
     "lifecycle_bucket_bucket_id",
+    "entry_adm_cache_token",
+    "entry_adm_bucket_token",
+    "entry_adm_price_resolution_bucket",
     "pre_submit_liquidity_value",
     "overbought_guard_reason",
     "pre_submit_overbought_reason",
@@ -527,6 +530,7 @@ def _is_actionable_existing_family_recheck(order: dict[str, Any]) -> bool:
     if str(order.get("improvement_type") or "").strip() not in {
         "threshold_family_input",
         "pattern_lab_observation",
+        "lifecycle_logic_observation",
     }:
         return False
     if not _has_actionable_implementation_hints(order):
@@ -5898,6 +5902,13 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
         if order.get("order_id")
         and order.get("improvement_type") == "source_quality_raw_row_exclusion_producer_gap"
     )
+    required_handoff_order_ids.update(
+        str(item.order.get("order_id"))
+        for item in classified
+        if item.order.get("order_id")
+        and isinstance(item.order.get("longstanding_non_implement_action"), dict)
+        and item.order["longstanding_non_implement_action"].get("action_required")
+    )
     selected_order_ids = {str(item.order.get("order_id")) for item in selected if item.order.get("order_id")}
     for item in classified:
         order_id = str(item.order.get("order_id") or "")
@@ -5906,6 +5917,16 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
             selected_order_ids.add(order_id)
     selected_identity = {id(item) for item in selected}
     non_selected = [item for item in classified if id(item) not in selected_identity]
+    forced_action_required = [
+        item
+        for item in non_selected
+        if isinstance(item.order.get("longstanding_non_implement_action"), dict)
+        and item.order["longstanding_non_implement_action"].get("action_required")
+    ]
+    if forced_action_required:
+        selected.extend(forced_action_required)
+        selected_identity = {id(item) for item in selected}
+        non_selected = [item for item in classified if id(item) not in selected_identity]
     counts: dict[str, int] = {}
     for item in classified:
         counts[item.decision] = counts.get(item.decision, 0) + 1
@@ -5954,8 +5975,21 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
                 selected_unimplemented_runtime_effect_false_count += 1
                 selected_unimplemented_route_counts[route] = selected_unimplemented_route_counts.get(route, 0) + 1
     non_selected_counts: dict[str, int] = {}
+    non_selected_longstanding_non_implement_disposition_counts: dict[str, int] = {}
+    non_selected_longstanding_non_implement_action_required_order_ids: list[str] = []
     for item in non_selected:
         non_selected_counts[item.decision] = non_selected_counts.get(item.decision, 0) + 1
+        review = item.order.get("longstanding_non_implement_review")
+        if isinstance(review, dict):
+            disposition = str(review.get("review_disposition") or "unknown")
+            non_selected_longstanding_non_implement_disposition_counts[disposition] = (
+                non_selected_longstanding_non_implement_disposition_counts.get(disposition, 0) + 1
+            )
+        action = item.order.get("longstanding_non_implement_action")
+        if isinstance(action, dict) and action.get("action_required") and item.order.get("order_id"):
+            non_selected_longstanding_non_implement_action_required_order_ids.append(
+                str(item.order.get("order_id"))
+            )
     already_implemented_source_handoff_count = sum(
         1
         for item in selected
@@ -6131,6 +6165,12 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
                 selected_longstanding_non_implement_action_required_order_ids
             ),
             "non_selected_decision_counts": non_selected_counts,
+            "non_selected_longstanding_non_implement_disposition_counts": (
+                non_selected_longstanding_non_implement_disposition_counts
+            ),
+            "non_selected_longstanding_non_implement_action_required_order_ids": (
+                non_selected_longstanding_non_implement_action_required_order_ids
+            ),
             "gemini_fresh": ((automation.get("ev_report_summary") or {}).get("gemini_fresh")),
             "claude_fresh": ((automation.get("ev_report_summary") or {}).get("claude_fresh")),
             "swing_lifecycle_audit_available": bool(swing_automation),
@@ -6318,6 +6358,8 @@ def render_code_improvement_workorder_markdown(report: dict[str, Any]) -> str:
         f"- selected_longstanding_non_implement_disposition_counts: `{summary.get('selected_longstanding_non_implement_disposition_counts')}`",
         f"- selected_longstanding_non_implement_action_required_order_ids: `{summary.get('selected_longstanding_non_implement_action_required_order_ids')}`",
         f"- non_selected_decision_counts: `{summary.get('non_selected_decision_counts')}`",
+        f"- non_selected_longstanding_non_implement_disposition_counts: `{summary.get('non_selected_longstanding_non_implement_disposition_counts')}`",
+        f"- non_selected_longstanding_non_implement_action_required_order_ids: `{summary.get('non_selected_longstanding_non_implement_action_required_order_ids')}`",
         f"- gemini_fresh: `{summary.get('gemini_fresh')}`",
         f"- claude_fresh: `{summary.get('claude_fresh')}`",
         f"- swing_lifecycle_audit_available: `{summary.get('swing_lifecycle_audit_available')}`",
@@ -6513,6 +6555,8 @@ def render_code_improvement_workorder_markdown(report: dict[str, Any]) -> str:
                     f"- runtime_effect: `{item.get('runtime_effect')}`",
                     f"- allowed_runtime_apply: `{item.get('allowed_runtime_apply')}`",
                     f"- implementation_status: `{item.get('implementation_status') or '-'}`",
+                    f"- longstanding_non_implement_review: `{json.dumps(item.get('longstanding_non_implement_review'), ensure_ascii=False, sort_keys=True) if item.get('longstanding_non_implement_review') else '-'}`",
+                    f"- longstanding_non_implement_action: `{json.dumps(item.get('longstanding_non_implement_action'), ensure_ascii=False, sort_keys=True) if item.get('longstanding_non_implement_action') else '-'}`",
                     f"- files_likely_touched: {_format_list(item.get('files_likely_touched'))}",
                     f"- acceptance_tests: {_format_list(item.get('acceptance_tests'))}",
                     "",

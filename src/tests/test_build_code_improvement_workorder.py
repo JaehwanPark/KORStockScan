@@ -1500,6 +1500,151 @@ def test_build_code_improvement_workorder_marks_longstanding_actionable_existing
     assert "specific_source_metric_or_provenance_recheck" in markdown
 
 
+def test_build_code_improvement_workorder_marks_lifecycle_logic_observation_as_actionable_existing_family_recheck(
+    tmp_path,
+    monkeypatch,
+):
+    automation_dir = tmp_path / "automation"
+    report_dir = tmp_path / "report"
+    doc_dir = tmp_path / "docs"
+    automation_dir.mkdir()
+    report_dir.mkdir()
+    doc_dir.mkdir()
+    current_order = {
+        "order_id": "order_swing_scale_in_logic_review",
+        "title": "Swing scale-in logic review",
+        "source_report_type": "swing_improvement_automation",
+        "target_subsystem": "swing_scale_in",
+        "lifecycle_stage": "scale_in",
+        "improvement_type": "lifecycle_logic_observation",
+        "route": "existing_family",
+        "mapped_family": "swing_scale_in_ofi_qi_confirmation",
+        "threshold_family": "swing_scale_in_ofi_qi_confirmation",
+        "files_likely_touched": ["src/engine/swing_lifecycle_audit.py"],
+        "acceptance_tests": ["pytest swing lifecycle audit tests"],
+        "priority": 1,
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+    }
+    (automation_dir / "swing_improvement_automation_2026-06-10.json").write_text(
+        json.dumps({"date": "2026-06-10", "code_improvement_orders": [current_order]}),
+        encoding="utf-8",
+    )
+    for previous_date in ("2026-06-09", "2026-06-08"):
+        (report_dir / f"code_improvement_workorder_{previous_date}.json").write_text(
+            json.dumps(
+                {
+                    "date": previous_date,
+                    "orders": [
+                        {
+                            **current_order,
+                            "decision": "attach_existing_family",
+                            "implementation_status": "terminal_existing_family_evidence",
+                        }
+                    ],
+                    "non_selected_orders": [],
+                }
+            ),
+            encoding="utf-8",
+        )
+    monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-scalp")
+    monkeypatch.setattr(mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", automation_dir)
+    monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", tmp_path / "missing-ev")
+    monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_DIR", doc_dir)
+
+    report = mod.build_code_improvement_workorder("2026-06-10", max_orders=10)
+
+    order = next(item for item in report["orders"] if item["order_id"] == "order_swing_scale_in_logic_review")
+    assert order["longstanding_non_implement_review"]["review_disposition"] == (
+        "actionable_existing_family_recheck"
+    )
+    assert order["longstanding_non_implement_action"]["action_required"] is True
+
+
+def test_build_code_improvement_workorder_force_selects_longstanding_action_required_orders(
+    tmp_path,
+    monkeypatch,
+):
+    automation_dir = tmp_path / "automation"
+    report_dir = tmp_path / "report"
+    doc_dir = tmp_path / "docs"
+    automation_dir.mkdir()
+    report_dir.mkdir()
+    doc_dir.mkdir()
+    selected_order = {
+        "order_id": "order_selected_existing_family",
+        "title": "Selected existing family",
+        "source_report_type": "scalping_pattern_lab_automation",
+        "target_subsystem": "entry_funnel",
+        "improvement_type": "threshold_family_input",
+        "route": "existing_family",
+        "mapped_family": "buy_score_threshold",
+        "threshold_family": "buy_score_threshold",
+        "files_likely_touched": ["src/engine/daily_threshold_cycle_report.py"],
+        "acceptance_tests": ["pytest threshold tests"],
+        "priority": 1,
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "implementation_status": "implemented",
+    }
+    current_order = {
+        "order_id": "order_non_selected_actionable_recheck",
+        "title": "Non-selected actionable recheck",
+        "source_report_type": "scalping_pattern_lab_automation",
+        "target_subsystem": "entry_funnel",
+        "improvement_type": "threshold_family_input",
+        "route": "existing_family",
+        "mapped_family": "buy_score_threshold",
+        "threshold_family": "buy_score_threshold",
+        "files_likely_touched": ["src/engine/daily_threshold_cycle_report.py"],
+        "acceptance_tests": ["pytest threshold tests"],
+        "priority": 99,
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+    }
+    (automation_dir / "scalping_pattern_lab_automation_2026-06-10.json").write_text(
+        json.dumps({"date": "2026-06-10", "code_improvement_orders": [selected_order, current_order]}),
+        encoding="utf-8",
+    )
+    for previous_date in ("2026-06-09", "2026-06-08"):
+        (report_dir / f"code_improvement_workorder_{previous_date}.json").write_text(
+            json.dumps(
+                {
+                    "date": previous_date,
+                    "orders": [
+                        {
+                            **selected_order,
+                            "decision": "attach_existing_family",
+                        },
+                        {
+                            **current_order,
+                            "decision": "defer_evidence",
+                            "implementation_status": "terminal_deferred_evidence",
+                        }
+                    ],
+                    "non_selected_orders": [],
+                }
+            ),
+            encoding="utf-8",
+        )
+    monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", automation_dir)
+    monkeypatch.setattr(mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing")
+    monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", tmp_path / "missing-ev")
+    monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_DIR", doc_dir)
+
+    report = mod.build_code_improvement_workorder("2026-06-10", max_orders=1)
+
+    assert report["summary"]["selected_longstanding_non_implement_action_required_order_ids"] == [
+        "order_non_selected_actionable_recheck"
+    ]
+    assert report["summary"]["non_selected_longstanding_non_implement_action_required_order_ids"] == []
+    markdown = mod.render_code_improvement_workorder_markdown(report)
+    assert "selected_longstanding_non_implement_action_required_order_ids" in markdown
+    assert "order_non_selected_actionable_recheck" in markdown
+
+
 def test_build_code_improvement_workorder_does_not_mark_currently_implemented_as_longstanding_non_implement(
     tmp_path,
     monkeypatch,

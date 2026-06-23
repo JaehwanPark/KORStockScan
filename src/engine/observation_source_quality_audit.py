@@ -1435,8 +1435,34 @@ def _reviewed_unknown_reason_for_stage_field(
             and _field_text("sim_parent_record_id") not in {"", "-", "unknown_pre_contract"}
         )
 
+    def _is_reviewed_entry_adm_bucket_provenance() -> bool:
+        if stage not in {"scalp_entry_action_decision_snapshot", "ai_confirmed"}:
+            return False
+        if _field_text("entry_adm_status") == "":
+            return False
+        if _field_text("entry_adm_version") == "":
+            return False
+        if _field_text("entry_adm_application_mode") == "":
+            return False
+        if _field_text("entry_adm_loaded_from") == "":
+            return False
+        bucket_token = _field_text("entry_adm_bucket_token")
+        cache_token = _field_text("entry_adm_cache_token")
+        price_bucket = _field_text("entry_adm_price_resolution_bucket")
+        if "|" not in bucket_token:
+            return False
+        if not cache_token.startswith("entry_adm:"):
+            return False
+        return price_bucket == "price_unknown" and "price_unknown" in bucket_token and "price_unknown" in cache_token
+
     if not _unknown_token_present(value):
         return None
+    if str(key or "") in {
+        "entry_adm_cache_token",
+        "entry_adm_bucket_token",
+        "entry_adm_price_resolution_bucket",
+    } and _is_reviewed_entry_adm_bucket_provenance():
+        return "reviewed_entry_adm_bucket_provenance_recorded"
     if str(key or "") == "sim_pre_submit_liquidity_guard_action" and str(value or "").upper() == "WOULD_UNKNOWN":
         if _is_reviewed_sim_liquidity_not_available():
             return "reviewed_sim_liquidity_not_available"

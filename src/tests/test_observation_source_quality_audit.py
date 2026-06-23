@@ -257,6 +257,83 @@ def test_observation_source_quality_audit_warns_on_high_rate_unknown_tokens(monk
     assert finding["runtime_effect"] is False
 
 
+def test_observation_source_quality_audit_reviews_entry_adm_price_unknown_provenance(monkeypatch, tmp_path):
+    monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
+    _write_events(
+        tmp_path,
+        "2026-05-15",
+        [
+            _event(
+                "scalp_entry_action_decision_snapshot",
+                {
+                    "candidate_id": "ADM-1",
+                    "entry_adm_candidate_id": "ADM-1",
+                    "entry_adm_status": "advisory_prompt_applied",
+                    "entry_adm_version": "scalp_entry_adm_v1_2026-05-14",
+                    "entry_adm_source_date": "2026-05-14",
+                    "entry_adm_application_mode": "operator_override_advisory_prompt",
+                    "entry_adm_loaded_from": "/tmp/scalp_entry_action_decision_matrix_2026-05-14.json",
+                    "entry_adm_cache_token": (
+                        "entry_adm:scalp_entry_adm_v1_2026-05-14:"
+                        "score50_64|neutral_strength_momentum|-|stale_high|price_unknown|"
+                        "liquidity_high|overbought_ok|time_0900_1000"
+                    ),
+                    "entry_adm_bucket_token": (
+                        "score50_64|neutral_strength_momentum|-|stale_high|price_unknown|"
+                        "liquidity_high|overbought_ok|time_0900_1000"
+                    ),
+                    "entry_adm_price_resolution_bucket": "price_unknown",
+                    "entry_adm_score_bucket": "score50_64",
+                    "entry_adm_risk_context_bucket": "neutral_strength_momentum",
+                    "entry_adm_stale_bucket": "stale_high",
+                    "entry_adm_liquidity_bucket": "liquidity_high",
+                    "entry_adm_overbought_bucket": "overbought_ok",
+                    "entry_adm_time_bucket": "time_0900_1000",
+                    "metric_role": "action_decision_matrix",
+                    "decision_authority": "entry_advisory_prompt_context_only",
+                    "source_quality_gate": "entry pipeline event + post-sell sim evaluation join when available",
+                    "runtime_effect": False,
+                    "allowed_runtime_apply": False,
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                    "forbidden_uses": "runtime_threshold_apply/order_submit/provider_route_change/bot_restart",
+                    "tick_source_quality_fields_sent": True,
+                    "tick_accel_source": "computed_10ticks",
+                    "tick_context_quality": "fresh_computed",
+                    "quote_age_source": "last_ws_update_ts",
+                    "tick_acceleration_ratio": "1.250",
+                    "tick_acceleration_ratio_raw": "1.250",
+                    "recent_5tick_seconds": "2.000",
+                    "prev_5tick_seconds": "2.500",
+                    "tick_accel_effective_recent_5tick_seconds": "2.000",
+                    "buy_pressure_10t": "70.000",
+                    "curr_vs_micro_vwap_bp": "8.000",
+                    "curr_vs_ma5_bp": "5.000",
+                    "latest_strength": "120.0",
+                    "distance_from_day_high_pct": "-0.50",
+                    "intraday_range_pct": "2.10",
+                },
+            )
+        ],
+    )
+
+    report = audit.build_observation_source_quality_audit("2026-05-15")
+
+    assert report["unknown_token_findings"] == []
+    reviewed = next(
+        item
+        for item in report["reviewed_unknown_token_findings"]
+        if item["stage"] == "scalp_entry_action_decision_snapshot"
+    )
+    fields = {item["field"]: item for item in reviewed["fields"]}
+    assert fields["entry_adm_cache_token"]["reviewed_reason"] == "reviewed_entry_adm_bucket_provenance_recorded"
+    assert fields["entry_adm_bucket_token"]["reviewed_reason"] == "reviewed_entry_adm_bucket_provenance_recorded"
+    assert (
+        fields["entry_adm_price_resolution_bucket"]["reviewed_reason"]
+        == "reviewed_entry_adm_bucket_provenance_recorded"
+    )
+
+
 def test_observation_source_quality_audit_surfaces_ai_numeric_consistency_findings(monkeypatch, tmp_path):
     monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
     _write_events(

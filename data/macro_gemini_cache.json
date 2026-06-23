@@ -1,80 +1,83 @@
 {
-  "bundle_as_of": "2026-06-22T22:20:18Z",
+  "bundle_as_of": "2026-06-23T22:20:11Z",
   "sp500": {
-    "name": "S&P 500",
-    "value": 7472.79,
-    "prev_value": 7500.58,
-    "change": -27.79,
-    "change_pct": -0.37,
-    "as_of": "2026-06-22T20:32:00Z",
-    "source": "Morningstar / Dow Jones Market Data"
+    "name": "S&P500",
+    "value": 7365.46,
+    "prev_value": 7472.79,
+    "change": -107.33,
+    "change_pct": -1.44,
+    "as_of": "2026-06-23T20:41:00Z",
+    "source": "Morningstar / AP News"
   },
   "nasdaq": {
     "name": "NASDAQ",
-    "value": 26166.6,
-    "prev_value": 26517.93,
-    "change": -351.33,
-    "change_pct": -1.32,
-    "as_of": "2026-06-22T20:32:00Z",
-    "source": "Morningstar / Dow Jones Market Data"
+    "value": 25587.04,
+    "prev_value": 26166.6,
+    "change": -579.56,
+    "change_pct": -2.21,
+    "as_of": "2026-06-23T20:41:00Z",
+    "source": "Morningstar / AP News"
   },
   "vix": {
     "name": "VIX",
-    "value": 17.38,
-    "prev_value": 16.78,
-    "change": 0.6,
-    "change_pct": 3.58,
-    "as_of": "2026-06-22T19:41:00Z",
+    "value": 19.01,
+    "prev_value": 17.28,
+    "change": 1.73,
+    "change_pct": 10.01,
+    "as_of": "2026-06-23T20:28:00Z",
     "source": "Cboe Global Markets"
   },
   "us10y": {
     "name": "US10Y",
-    "value": 4.507,
-    "prev_value": 4.451,
-    "change": 0.056,
-    "change_pct": 1.26,
-    "as_of": "2026-06-22T19:44:00Z",
-    "source": "Morningstar / Dow Jones Newswires"
+    "value": 4.493,
+    "prev_value": 4.506,
+    "change": -0.013,
+    "change_pct": null,
+    "as_of": "2026-06-23T19:59:00Z",
+    "source": "Tradeweb / Dow Jones Newswires"
   },
   "brent": {
     "name": "BRENT",
-    "value": 77.52,
-    "prev_value": 80.08,
-    "change": -2.56,
-    "change_pct": -3.2,
-    "as_of": "2026-06-22T21:50:00Z",
-    "source": "Los Angeles Times"
+    "value": 77.08,
+    "prev_value": 77.9,
+    "change": -0.82,
+    "change_pct": -1.05,
+    "as_of": "2026-06-23T19:17:00Z",
+    "source": "Morningstar / Dow Jones Newswires"
   },
   "headlines": [
     {
-      "title": "U.S. stocks drift after oil prices ease and Big Tech stocks fall",
-      "source": "Los Angeles Times",
-      "published_at": "2026-06-22T21:50:00Z",
-      "url": "https://www.latimes.com/"
+      "title": "Senate approves war powers resolution rebuking Trump over Iran conflict",
+      "source": "MPR News",
+      "published_at": "2026-06-23T19:22:00Z",
+      "url": "https://www.mprnews.org"
     },
     {
-      "title": "Stock Market Today, June 22: Alphabet Slips on Key Departure and Defensive Blue Chips Gain",
-      "source": "The Motley Fool",
-      "published_at": "2026-06-22T22:07:00Z",
-      "url": "https://www.fool.com/"
+      "title": "West Asia war LIVE updates: India welcomes U.S.-Iran peace MoU, says Hormuz opening will boost energy supplies",
+      "source": "The Hindu",
+      "published_at": "2026-06-23T22:20:00Z",
+      "url": "https://www.thehindu.com"
     },
     {
-      "title": "10-Year Treasury Yield Rises to 4.507% — Data Talk",
-      "source": "Morningstar",
-      "published_at": "2026-06-22T19:44:00Z",
-      "url": "https://www.morningstar.com/"
+      "title": "Trump Approval Drops After Iran War, Reuters/Ipsos Poll Finds",
+      "source": "Global Banking & Finance Review",
+      "published_at": "2026-06-23T18:00:00Z",
+      "url": "https://www.globalbankingandfinance.com"
     },
     {
-      "title": "Nasdaq-100 & S&P 500 Rebalance: June 22, 2026 Changes",
-      "source": "Stock Titan",
-      "published_at": "2026-06-22T13:00:00Z",
-      "url": "https://www.stocktitan.net/"
+      "title": "Stock Market Today: Nasdaq, S&P 500 fall as BoFA rate hike note, Asian market tumble sends semis sinking",
+      "source": "TheStreet",
+      "published_at": "2026-06-23T20:00:00Z",
+      "url": "https://www.thestreet.com"
+    },
+    {
+      "title": "Oil Prices Continue to Fall on Hopes for Iran Deal",
+      "source": "Transport Topics",
+      "published_at": "2026-06-23T12:08:00Z",
+      "url": "https://www.ttnews.com"
     }
   ],
   "notes": [
-    "U.S. equities experienced a mixed close on Monday, June 22, 2026. A broad selloff in mega-cap technology stocks weighed heavily on the Nasdaq and S&P 500, while the Dow added gains due to strength in defensive blue chips.",
-    "Brent crude oil prices declined 3.2% amid diplomatic progress and peace talk optimism between the U.S. and Iran, potentially averting disruptions in the Strait of Hormuz.",
-    "The 10-year Treasury yield climbed to 4.507% as markets monitored inflation metrics following recent oil price surges.",
-    "The Nasdaq-100 and S&P 500 quarterly rebalances took effect, ushering major AI and infrastructure players like CoreWeave and Astera Labs into the indices."
+    "Data collected from final US trading session close and reliable aftermarket estimates."
   ]
 }

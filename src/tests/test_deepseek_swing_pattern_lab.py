@@ -1169,6 +1169,125 @@ def test_swing_pattern_lab_automation_marks_scale_in_events_observed_implemented
     assert order["implementation_checks"][0]["status"] == "pass"
 
 
+def test_swing_pattern_lab_automation_marks_entry_submission_gap_implemented(tmp_path, monkeypatch):
+    from src.engine import swing_pattern_lab_automation as mod
+
+    lab_dir = tmp_path / "analysis" / "deepseek_swing_pattern_lab"
+    outputs_dir = lab_dir / "outputs"
+    outputs_dir.mkdir(parents=True)
+    report_dir = tmp_path / "data" / "report"
+    monkeypatch.setattr(mod, "DEEPSEEK_SWING_LAB_DIR", lab_dir)
+    monkeypatch.setattr(mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", report_dir / "swing_pattern_lab_automation")
+
+    (outputs_dir / "run_manifest.json").write_text(
+        json.dumps({"analysis_window": {"start": "2026-05-08", "end": "2026-05-08"}}),
+        encoding="utf-8",
+    )
+    (outputs_dir / "swing_pattern_analysis_result.json").write_text(
+        json.dumps(
+            {
+                "stage_findings": [],
+                "code_improvement_orders": [
+                    {
+                        "order_id": "order_swing_pattern_lab_deepseek_entry_no_submissions",
+                        "title": "All selected candidates failed to reach order submission",
+                        "route": "design_family_candidate",
+                        "runtime_effect": False,
+                        "evidence": [
+                            {
+                                "selected_count": 3,
+                                "submitted_count": 0,
+                                "blocked_gatekeeper_selection": 0,
+                                "blocked_gap_selection": 0,
+                                "blocked_market_selection": 0,
+                            }
+                        ],
+                        "next_postclose_metric": "swing_entry_quality_score",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (outputs_dir / "data_quality_report.json").write_text(
+        json.dumps({"warnings": []}),
+        encoding="utf-8",
+    )
+    (outputs_dir / "deepseek_payload_summary.json").write_text(
+        json.dumps({"total_cases": 4}),
+        encoding="utf-8",
+    )
+
+    report = mod.build_swing_pattern_lab_automation_report("2026-05-08")
+    order = report["code_improvement_orders"][0]
+
+    assert order["implementation_status"] == "implemented"
+    assert (
+        order["implementation_provenance"]["source_contract"]
+        == "swing_pattern_lab_entry_submission_gap_source_metric_v1"
+    )
+    assert (
+        order["implementation_provenance"]["implemented_scope"]
+        == "swing_entry_submission_gap_source_metric_provenance"
+    )
+    assert order["implementation_provenance"]["source_metric_snapshot"]["selected_count"] == 3
+    assert order["implementation_provenance"]["runtime_effect"] is False
+
+
+def test_swing_pattern_lab_automation_marks_ofi_qi_smoothing_review_implemented(tmp_path, monkeypatch):
+    from src.engine import swing_pattern_lab_automation as mod
+
+    lab_dir = tmp_path / "analysis" / "deepseek_swing_pattern_lab"
+    outputs_dir = lab_dir / "outputs"
+    outputs_dir.mkdir(parents=True)
+    report_dir = tmp_path / "data" / "report"
+    monkeypatch.setattr(mod, "DEEPSEEK_SWING_LAB_DIR", lab_dir)
+    monkeypatch.setattr(mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", report_dir / "swing_pattern_lab_automation")
+
+    (outputs_dir / "run_manifest.json").write_text(
+        json.dumps({"analysis_window": {"start": "2026-05-08", "end": "2026-05-08"}}),
+        encoding="utf-8",
+    )
+    (outputs_dir / "swing_pattern_analysis_result.json").write_text(
+        json.dumps(
+            {
+                "stage_findings": [],
+                "code_improvement_orders": [
+                    {
+                        "order_id": "order_swing_pattern_lab_deepseek_ofi_qi_smoothing_review",
+                        "title": "OFI/QI exit smoothing action distribution",
+                        "route": "attach_existing_family",
+                        "mapped_family": "swing_exit_ofi_qi_smoothing",
+                        "runtime_effect": False,
+                        "evidence": [{"smoothing_actions": {"NO_CHANGE": 9, "CONFIRM_EXIT": 2}}],
+                        "next_postclose_metric": "swing_ofi_qi_quality_score",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (outputs_dir / "data_quality_report.json").write_text(
+        json.dumps({"warnings": [], "ofi_qi_quality": {}}),
+        encoding="utf-8",
+    )
+    (outputs_dir / "deepseek_payload_summary.json").write_text(
+        json.dumps({"total_cases": 4}),
+        encoding="utf-8",
+    )
+
+    report = mod.build_swing_pattern_lab_automation_report("2026-05-08")
+    order = report["code_improvement_orders"][0]
+
+    assert order["implementation_status"] == "implemented"
+    assert (
+        order["implementation_provenance"]["source_contract"]
+        == "swing_pattern_lab_ofi_qi_smoothing_distribution_source_metric_v1"
+    )
+    assert order["implementation_provenance"]["source_metric_snapshot"]["smoothing_actions"]["CONFIRM_EXIT"] == 2
+    assert order["implementation_provenance"]["runtime_effect"] is False
+
+
 def test_deepseek_payload_feedback_selector_uses_daily_clean_baseline_artifacts(monkeypatch, tmp_path):
     report_dir = tmp_path / "data" / "report"
     ldm_dir = report_dir / "swing_lifecycle_decision_matrix"

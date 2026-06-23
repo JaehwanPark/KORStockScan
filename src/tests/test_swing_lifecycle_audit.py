@@ -411,6 +411,8 @@ def test_swing_improvement_automation_marks_existing_family_metric_orders_implem
             "gatekeeper_actions": {"PULLBACK_WAIT": 2},
             "evidence_quality_counts": {"valid": 3},
             "ofi_qi_summary": {
+                "scale_in_micro_state_counts": {"bearish": 1},
+                "scale_in_micro_advice_counts": {"RISK_BEARISH": 1},
                 "exit_smoothing_action_counts": {"NO_CHANGE": 2, "DEBOUNCE_EXIT": 1},
                 "exit_micro_state_counts": {"neutral": 3},
                 "exit_micro_advice_counts": {"NO_CHANGE": 2},
@@ -431,6 +433,7 @@ def test_swing_improvement_automation_marks_existing_family_metric_orders_implem
     expected = {
         "order_swing_gatekeeper_reject_threshold_review": "swing_gatekeeper_accept_reject_source_metric_v1",
         "order_swing_market_regime_sensitivity_review": "swing_market_regime_sensitivity_source_metric_v1",
+        "order_swing_scale_in_ofi_qi_bearish_risk_review": "swing_scale_in_ofi_qi_confirmation_source_metric_v1",
         "order_swing_exit_ofi_qi_smoothing_distribution": "swing_exit_ofi_qi_smoothing_source_metric_v1",
     }
     for order_id, source_contract in expected.items():
