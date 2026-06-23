@@ -1909,15 +1909,33 @@ def _scanner_rest_quote_fallback_rate_limit(now_ts, *, priority=False):
             for epoch in (state.get("call_epochs") or [])
             if _safe_float(epoch, 0.0) >= window_start
         ]
-        limit = _SCANNER_REST_QUOTE_FALLBACK_MAX_CALLS
+        limit = _scanner_rest_quote_fallback_max_calls_per_window()
         if priority:
-            limit += _SCANNER_REST_QUOTE_FALLBACK_POSITIVE_RESERVE_CALLS
+            limit += _scanner_rest_quote_fallback_positive_reserve_calls()
         if len(call_epochs) >= limit:
             state["call_epochs"] = call_epochs
             return False, "rest_quote_rate_limited"
         call_epochs.append(now_ts)
         state["call_epochs"] = call_epochs
         return True, "rest_quote_allowed"
+
+
+def _scanner_rest_quote_fallback_max_calls_per_window():
+    raw = os.getenv("KORSTOCKSCAN_SCANNER_REST_QUOTE_FALLBACK_MAX_CALLS_PER_WINDOW", "")
+    try:
+        value = int(str(raw).strip()) if str(raw).strip() else _SCANNER_REST_QUOTE_FALLBACK_MAX_CALLS
+    except Exception:
+        value = _SCANNER_REST_QUOTE_FALLBACK_MAX_CALLS
+    return max(0, min(value, 8))
+
+
+def _scanner_rest_quote_fallback_positive_reserve_calls():
+    raw = os.getenv("KORSTOCKSCAN_SCANNER_REST_QUOTE_FALLBACK_POSITIVE_RESERVE_CALLS", "")
+    try:
+        value = int(str(raw).strip()) if str(raw).strip() else _SCANNER_REST_QUOTE_FALLBACK_POSITIVE_RESERVE_CALLS
+    except Exception:
+        value = _SCANNER_REST_QUOTE_FALLBACK_POSITIVE_RESERVE_CALLS
+    return max(0, min(value, 4))
 
 
 def _scanner_rest_quote_fallback_max_per_loop():

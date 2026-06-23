@@ -193,6 +193,45 @@ def test_command_ws_reg_recovery_forces_resubscribe(monkeypatch):
     assert calls == [(["240810"], True)]
 
 
+def test_recent_reg_filter_skips_non_force_duplicates(monkeypatch):
+    manager = KiwoomWSManager("test-token")
+    monkeypatch.setenv("KORSTOCKSCAN_WS_REG_RECENT_TTL_SEC", "20")
+    monkeypatch.setattr(kiwoom_websocket.time, "time", lambda: 1000.0)
+
+    allowed, skipped = manager._filter_recent_reg_targets(["240810", "039490"], force=False)
+    assert allowed == ["240810", "039490"]
+    assert skipped == []
+
+    allowed, skipped = manager._filter_recent_reg_targets(["240810", "039490"], force=False)
+    assert allowed == []
+    assert skipped == ["240810", "039490"]
+
+
+def test_recent_reg_filter_allows_force_duplicates(monkeypatch):
+    manager = KiwoomWSManager("test-token")
+    monkeypatch.setenv("KORSTOCKSCAN_WS_REG_RECENT_TTL_SEC", "20")
+    monkeypatch.setattr(kiwoom_websocket.time, "time", lambda: 1000.0)
+
+    allowed, skipped = manager._filter_recent_reg_targets(["240810"], force=False)
+    assert allowed == ["240810"]
+    assert skipped == []
+
+    allowed, skipped = manager._filter_recent_reg_targets(["240810"], force=True)
+    assert allowed == ["240810"]
+    assert skipped == []
+
+
+def test_recent_reg_filter_allows_after_ttl(monkeypatch):
+    manager = KiwoomWSManager("test-token")
+    monkeypatch.setenv("KORSTOCKSCAN_WS_REG_RECENT_TTL_SEC", "20")
+    now = {"value": 1000.0}
+    monkeypatch.setattr(kiwoom_websocket.time, "time", lambda: now["value"])
+
+    assert manager._filter_recent_reg_targets(["240810"], force=False) == (["240810"], [])
+    now["value"] = 1021.0
+    assert manager._filter_recent_reg_targets(["240810"], force=False) == (["240810"], [])
+
+
 def test_real_payload_with_exchange_suffix_updates_canonical_snapshot():
     manager = KiwoomWSManager("test-token")
     manager.subscribed_codes.add("039490")

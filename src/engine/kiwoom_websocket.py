@@ -5,6 +5,7 @@ import json
 import threading
 import time
 import copy
+import os
 from collections import OrderedDict, deque
 from queue import Queue, Empty
 from datetime import datetime
@@ -63,6 +64,7 @@ class KiwoomWSManager:
         self._last_token_refresh_at = 0.0
         self._last_dashboard_snapshot_at = 0.0
         self._dashboard_snapshot_write_inflight = False
+        self._recent_reg_request_ts = {}
         
         # 전역 EventBus 인스턴스 획득 및 외부 명령 수신기 장착
         self.event_bus = EventBus()
@@ -207,6 +209,42 @@ class KiwoomWSManager:
                     register_items.extend((code, f"{code}_AL"))
 
         return normalized_codes, register_items
+
+    @staticmethod
+    def _recent_reg_ttl_sec():
+        raw = os.getenv("KORSTOCKSCAN_WS_REG_RECENT_TTL_SEC", "")
+        try:
+            value = float(str(raw).strip()) if str(raw).strip() else 20.0
+        except Exception:
+            value = 20.0
+        return max(0.0, min(value, 120.0))
+
+    def _filter_recent_reg_targets(self, codes, *, force=False):
+        normalized_codes = self._normalize_subscribe_codes(codes)
+        if force or not normalized_codes:
+            return normalized_codes, []
+        ttl_sec = self._recent_reg_ttl_sec()
+        if ttl_sec <= 0:
+            return normalized_codes, []
+        now_ts = time.time()
+        allowed = []
+        skipped = []
+        with self.lock:
+            stale_codes = [
+                code
+                for code, last_ts in self._recent_reg_request_ts.items()
+                if now_ts - float(last_ts or 0.0) >= ttl_sec
+            ]
+            for code in stale_codes:
+                self._recent_reg_request_ts.pop(code, None)
+            for code in normalized_codes:
+                last_ts = float(self._recent_reg_request_ts.get(code) or 0.0)
+                if last_ts > 0 and now_ts - last_ts < ttl_sec:
+                    skipped.append(code)
+                    continue
+                self._recent_reg_request_ts[code] = now_ts
+                allowed.append(code)
+        return allowed, skipped
 
     @staticmethod
     def _parse_condition_list_rows(data_list):
@@ -1148,8 +1186,16 @@ class KiwoomWSManager:
 
         normalized_codes = self._normalize_subscribe_codes(codes)
         new_targets = normalized_codes if force else [c for c in normalized_codes if c not in self.subscribed_codes]
+        send_ready = bool(self.loop and self.loop.is_running() and not self._stop_event.is_set())
+        if send_ready:
+            new_targets, skipped_recent = self._filter_recent_reg_targets(new_targets, force=force)
+            if skipped_recent:
+                print(
+                    "⏳ [WS] 최근 REG 중복 생략: "
+                    f"codes={skipped_recent} ttl_sec={self._recent_reg_ttl_sec():.1f}"
+                )
 
-        if new_targets and self.loop and self.loop.is_running() and not self._stop_event.is_set():
+        if new_targets and send_ready:
             replace_existing = not bool(self.subscribed_codes)
             future = asyncio.run_coroutine_threadsafe(
                 self._send_reg(new_targets, replace_existing=replace_existing),
@@ -1188,6 +1234,7 @@ class KiwoomWSManager:
         self.subscribed_codes.difference_update(normalized_codes)
         with self.lock:
             for code in normalized_codes:
+                self._recent_reg_request_ts.pop(code, None)
                 self.realtime_data.pop(code, None)
     
     def _handle_reg_event(self, payload):

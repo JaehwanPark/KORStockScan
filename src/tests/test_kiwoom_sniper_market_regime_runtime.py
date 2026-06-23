@@ -2065,6 +2065,21 @@ def test_recover_missing_ws_snapshot_rate_limits_rest_quote_burst(monkeypatch):
     kiwoom_sniper_v2._reset_scanner_rest_quote_fallback_rate_limit_for_tests()
 
 
+def test_scanner_rest_quote_rate_limit_uses_bounded_operator_override(monkeypatch):
+    kiwoom_sniper_v2._reset_scanner_rest_quote_fallback_rate_limit_for_tests()
+    monkeypatch.setenv("KORSTOCKSCAN_SCANNER_REST_QUOTE_FALLBACK_MAX_CALLS_PER_WINDOW", "4")
+    monkeypatch.setenv("KORSTOCKSCAN_SCANNER_REST_QUOTE_FALLBACK_POSITIVE_RESERVE_CALLS", "2")
+
+    outcomes = [
+        kiwoom_sniper_v2._scanner_rest_quote_fallback_rate_limit(1000.0 + idx, priority=True)
+        for idx in range(7)
+    ]
+
+    assert outcomes[:6] == [(True, "rest_quote_allowed")] * 6
+    assert outcomes[6] == (False, "rest_quote_rate_limited")
+    kiwoom_sniper_v2._reset_scanner_rest_quote_fallback_rate_limit_for_tests()
+
+
 def test_non_rising_ws_misses_do_not_consume_positive_rest_quote_slot(monkeypatch):
     kiwoom_sniper_v2._reset_scanner_rest_quote_fallback_rate_limit_for_tests()
     monkeypatch.setenv("KORSTOCKSCAN_SCANNER_RISING_WS_GAP_PRIORITY_RECOVERY_ENABLED", "true")
