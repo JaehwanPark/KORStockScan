@@ -1811,6 +1811,107 @@ def test_scanner_rising_stale_ws_gap_defers_eviction_for_priority_recovery(monke
     assert stock["_scanner_rising_ws_gap_priority_recheck_after_epoch"] == 2005.0
 
 
+def test_scanner_rising_insufficient_history_evicts_after_buy_window(monkeypatch):
+    monkeypatch.setenv("KORSTOCKSCAN_SCANNER_RISING_WS_GAP_PRIORITY_RECOVERY_ENABLED", "true")
+    monkeypatch.setattr(
+        kiwoom_sniper_v2,
+        "scalping_buy_time_block_reason",
+        lambda _now_t: "scalping_new_buy_cutoff",
+    )
+    stock = {
+        "id": 90,
+        "code": "095500",
+        "status": "WATCHING",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "price_delta_since_first_seen_pct": "7.12",
+    }
+
+    first = kiwoom_sniper_v2._scanner_watch_eviction_decision_from_stale(
+        stock,
+        now_ts=2000.0,
+        stale_reason="insufficient_history",
+        recovery_fields={"ws_recovery_outcome": "source_quality_unresolved_no_ws_recovery"},
+    )
+    second = kiwoom_sniper_v2._scanner_watch_eviction_decision_from_stale(
+        stock,
+        now_ts=2061.0,
+        stale_reason="insufficient_history",
+        recovery_fields={"ws_recovery_outcome": "source_quality_unresolved_no_ws_recovery"},
+    )
+
+    assert first["should_evict"] is False
+    assert first["eviction_reason"] == "ws_gap_recovery_deferred_priority"
+    assert second["should_evict"] is True
+    assert second["eviction_reason"] == "source_quality_unresolved_after_buy_window"
+    assert second["terminal_reason"] == "insufficient_history"
+    assert second["eviction_attempt_count"] == 2
+    assert second["stale_age_sec"] == 61.0
+    assert second["after_buy_window_source_quality_expired"] is True
+
+
+def test_scanner_rising_insufficient_history_keeps_priority_recheck_before_cutoff(monkeypatch):
+    monkeypatch.setenv("KORSTOCKSCAN_SCANNER_RISING_WS_GAP_PRIORITY_RECOVERY_ENABLED", "true")
+    monkeypatch.setattr(
+        kiwoom_sniper_v2,
+        "scalping_buy_time_block_reason",
+        lambda _now_t: "outside_scalping_buy_window",
+    )
+    stock = {
+        "id": 91,
+        "code": "372320",
+        "status": "WATCHING",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "price_delta_since_first_seen_pct": "3.82",
+        "_scanner_watch_eviction_stale_first_seen_epoch": 2000.0,
+        "_scanner_watch_eviction_stale_count": 1,
+    }
+
+    decision = kiwoom_sniper_v2._scanner_watch_eviction_decision_from_stale(
+        stock,
+        now_ts=2061.0,
+        stale_reason="insufficient_history",
+        recovery_fields={"ws_recovery_outcome": "source_quality_unresolved_no_ws_recovery"},
+    )
+
+    assert decision["should_evict"] is False
+    assert decision["eviction_reason"] == "ws_gap_recovery_deferred_priority"
+    assert decision["ws_gap_recovery_deferred_priority"] is True
+    assert stock["_scanner_watch_eviction_stale_count"] == 2
+
+
+def test_scanner_rising_insufficient_history_evicts_after_operator_start_time(monkeypatch):
+    monkeypatch.setenv("KORSTOCKSCAN_SCANNER_RISING_WS_GAP_PRIORITY_RECOVERY_ENABLED", "true")
+    monkeypatch.setenv("KORSTOCKSCAN_SCANNER_AFTER_BUY_WINDOW_SOURCE_QUALITY_EVICTION_START_TIME", "00:00:00")
+    monkeypatch.setattr(
+        kiwoom_sniper_v2,
+        "scalping_buy_time_block_reason",
+        lambda _now_t: "outside_scalping_buy_window",
+    )
+    stock = {
+        "id": 92,
+        "code": "095500",
+        "status": "WATCHING",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "price_delta_since_first_seen_pct": "7.12",
+        "_scanner_watch_eviction_stale_first_seen_epoch": 2000.0,
+        "_scanner_watch_eviction_stale_count": 1,
+    }
+
+    decision = kiwoom_sniper_v2._scanner_watch_eviction_decision_from_stale(
+        stock,
+        now_ts=2061.0,
+        stale_reason="insufficient_history",
+        recovery_fields={"ws_recovery_outcome": "source_quality_unresolved_no_ws_recovery"},
+    )
+
+    assert decision["should_evict"] is True
+    assert decision["eviction_reason"] == "source_quality_unresolved_after_buy_window"
+    assert decision["after_buy_window_source_quality_expired"] is True
+
+
 def test_scanner_watch_after_full_eval_routes_nonfresh_insufficient_history_to_source_quality_eviction(monkeypatch):
     stock = _scanner_watch_stock()
     stock["_scanner_watch_last_terminal_block"] = {

@@ -65,6 +65,7 @@ from src.engine.sniper_time import (
     TIME_23_59,
     describe_scalping_buy_windows,
     is_scalping_buy_time_allowed,
+    scalping_buy_time_block_reason,
 )
 from src.engine.sniper_s15_fast_track import (
     bind_s15_dependencies,
@@ -227,6 +228,8 @@ SCANNER_WATCH_EVICTION_COOLDOWN_MIN_REMAINING_SEC = 60
 SCANNER_WATCH_EVICTION_NO_TRADE_GRACE_SEC = 90.0
 SCANNER_WATCH_EVICTION_NO_TRADE_MIN_COUNT = 2
 SCANNER_WATCH_EVICTION_NO_TRADE_MAX_PER_LOOP = 4
+SCANNER_WATCH_EVICTION_AFTER_BUY_WINDOW_MIN_COUNT = 2
+SCANNER_WATCH_EVICTION_AFTER_BUY_WINDOW_MIN_AGE_SEC = 60.0
 SCANNER_WATCH_EVICTION_SOURCE_QUALITY_REASONS = {
     "insufficient_history",
 }
@@ -1007,6 +1010,44 @@ def _scanner_no_trade_eviction_max_per_loop():
     return max(0, min(value, 20))
 
 
+def _scanner_after_buy_window_source_quality_eviction_enabled():
+    return _env_bool("KORSTOCKSCAN_SCANNER_AFTER_BUY_WINDOW_SOURCE_QUALITY_EVICTION_ENABLED", True)
+
+
+def _scanner_after_buy_window_source_quality_eviction_min_count():
+    raw = os.getenv("KORSTOCKSCAN_SCANNER_AFTER_BUY_WINDOW_SOURCE_QUALITY_EVICTION_MIN_COUNT", "")
+    try:
+        value = int(str(raw).strip()) if str(raw).strip() else SCANNER_WATCH_EVICTION_AFTER_BUY_WINDOW_MIN_COUNT
+    except Exception:
+        value = SCANNER_WATCH_EVICTION_AFTER_BUY_WINDOW_MIN_COUNT
+    return max(1, min(value, 20))
+
+
+def _scanner_after_buy_window_source_quality_eviction_min_age_sec():
+    raw = os.getenv("KORSTOCKSCAN_SCANNER_AFTER_BUY_WINDOW_SOURCE_QUALITY_EVICTION_MIN_AGE_SEC", "")
+    try:
+        value = float(str(raw).strip()) if str(raw).strip() else SCANNER_WATCH_EVICTION_AFTER_BUY_WINDOW_MIN_AGE_SEC
+    except Exception:
+        value = SCANNER_WATCH_EVICTION_AFTER_BUY_WINDOW_MIN_AGE_SEC
+    return max(10.0, min(value, 900.0))
+
+
+def _scanner_scalping_buy_window_closed(now_ts):
+    try:
+        now_t = datetime.fromtimestamp(float(now_ts)).time()
+    except Exception:
+        now_t = datetime.now().time()
+    override_raw = os.getenv("KORSTOCKSCAN_SCANNER_AFTER_BUY_WINDOW_SOURCE_QUALITY_EVICTION_START_TIME", "")
+    if str(override_raw).strip():
+        try:
+            override_start = datetime.strptime(str(override_raw).strip(), "%H:%M:%S").time()
+            if now_t >= override_start:
+                return True
+        except Exception:
+            pass
+    return scalping_buy_time_block_reason(now_t) == "scalping_new_buy_cutoff"
+
+
 def _scanner_ws_reg_recovery_throttle_allows(last_emit_ts, source, code, now_ts, *, min_interval_sec=10.0):
     norm_code = str(code or "").strip()[:6]
     if not norm_code:
@@ -1235,8 +1276,30 @@ def _scanner_watch_eviction_decision_from_stale(target, *, now_ts, stale_reason,
     if recovery_outcome == "rest_quote_applied":
         _scanner_watch_reset_stale_eviction_state(target)
         return {"should_evict": False, "eviction_attempt_count": 0}
+    first_seen = _safe_float(target.get("_scanner_watch_eviction_stale_first_seen_epoch"), 0.0)
+    if first_seen <= 0:
+        first_seen = float(now_ts)
+    attempt_count = _safe_int(target.get("_scanner_watch_eviction_stale_count"), 0) + 1
+    stale_age_sec = max(0.0, float(now_ts) - first_seen)
+    after_buy_window_source_quality_expired = (
+        is_source_quality_unresolved
+        and _scanner_after_buy_window_source_quality_eviction_enabled()
+        and _scanner_scalping_buy_window_closed(now_ts)
+        and attempt_count >= _scanner_after_buy_window_source_quality_eviction_min_count()
+        and stale_age_sec >= _scanner_after_buy_window_source_quality_eviction_min_age_sec()
+    )
+    if is_source_quality_unresolved:
+        target["_scanner_watch_eviction_stale_first_seen_epoch"] = first_seen
+        target["_scanner_watch_eviction_stale_count"] = attempt_count
+    if after_buy_window_source_quality_expired:
+        eviction_reason = "source_quality_unresolved_after_buy_window"
+    elif is_source_quality_unresolved:
+        eviction_reason = "source_quality_unresolved"
+    else:
+        eviction_reason = "stale_recovery_failed"
     if (
-        _scanner_rising_ws_gap_priority_recovery_enabled()
+        not after_buy_window_source_quality_expired
+        and _scanner_rising_ws_gap_priority_recovery_enabled()
         and _scanner_is_rising_entry_relief_candidate(target)
     ):
         _scanner_set_rising_recheck(
@@ -1263,23 +1326,19 @@ def _scanner_watch_eviction_decision_from_stale(target, *, now_ts, stale_reason,
             "scanner_full_eval_budget_source": "not_applicable_ws_gap",
             "observed_epoch": f"{float(now_ts):.3f}",
         }
-    first_seen = _safe_float(target.get("_scanner_watch_eviction_stale_first_seen_epoch"), 0.0)
-    if first_seen <= 0:
-        first_seen = float(now_ts)
-    attempt_count = _safe_int(target.get("_scanner_watch_eviction_stale_count"), 0) + 1
     target["_scanner_watch_eviction_stale_first_seen_epoch"] = first_seen
     target["_scanner_watch_eviction_stale_count"] = attempt_count
-    stale_age_sec = max(0.0, float(now_ts) - first_seen)
     return {
         "should_evict": (
-            attempt_count >= SCANNER_WATCH_EVICTION_STALE_MIN_COUNT
-            and stale_age_sec >= SCANNER_WATCH_EVICTION_STALE_MIN_AGE_SEC
-            and recovery_outcome != "rest_quote_applied"
+            after_buy_window_source_quality_expired
+            or (
+                attempt_count >= SCANNER_WATCH_EVICTION_STALE_MIN_COUNT
+                and stale_age_sec >= SCANNER_WATCH_EVICTION_STALE_MIN_AGE_SEC
+                and recovery_outcome != "rest_quote_applied"
+            )
         ),
         "eviction_reason": (
-            "source_quality_unresolved"
-            if is_source_quality_unresolved
-            else "stale_recovery_failed"
+            eviction_reason
         ),
         "eviction_attempt_count": attempt_count,
         "terminal_stage": "not_applicable_terminal_stage",
@@ -1288,6 +1347,7 @@ def _scanner_watch_eviction_decision_from_stale(target, *, now_ts, stale_reason,
         "stale_first_seen_epoch": f"{first_seen:.3f}",
         "stale_age_sec": round(stale_age_sec, 3),
         "ws_recovery_outcome": recovery_outcome,
+        "after_buy_window_source_quality_expired": after_buy_window_source_quality_expired,
         "observed_epoch": f"{float(now_ts):.3f}",
     }
 

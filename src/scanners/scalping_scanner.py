@@ -79,6 +79,106 @@ def _scalping_watching_max_active():
     return max(1, min(value, 80))
 
 
+def _scanner_after_buy_window_cap_release_enabled():
+    raw = os.getenv("KORSTOCKSCAN_SCANNER_AFTER_BUY_WINDOW_CAP_RELEASE_ENABLED", "")
+    text = str(raw).strip().lower()
+    if not text:
+        return True
+    return text in {"1", "true", "yes", "y", "on"}
+
+
+def _scanner_after_buy_window_cap_release_start_time():
+    raw = (
+        os.getenv("KORSTOCKSCAN_SCANNER_AFTER_BUY_WINDOW_CAP_RELEASE_START_TIME", "")
+        or os.getenv("KORSTOCKSCAN_SCANNER_AFTER_BUY_WINDOW_SOURCE_QUALITY_EVICTION_START_TIME", "")
+    )
+    if not str(raw).strip():
+        return None
+    try:
+        return datetime.strptime(str(raw).strip(), "%H:%M:%S").time()
+    except (TypeError, ValueError):
+        log_error(f"⚠️ KORSTOCKSCAN_SCANNER_AFTER_BUY_WINDOW_CAP_RELEASE_START_TIME 값이 잘못되었습니다: {raw}")
+        return None
+
+
+def _scanner_after_buy_window_cap_release_min_age_sec():
+    raw = os.getenv("KORSTOCKSCAN_SCANNER_AFTER_BUY_WINDOW_CAP_RELEASE_MIN_AGE_SEC", "")
+    try:
+        value = float(str(raw).strip()) if str(raw).strip() else 60.0
+    except (TypeError, ValueError):
+        value = 60.0
+    return max(10.0, min(value, 900.0))
+
+
+def _scanner_after_buy_window_cap_release_max_per_loop():
+    raw = os.getenv("KORSTOCKSCAN_SCANNER_AFTER_BUY_WINDOW_CAP_RELEASE_MAX_PER_LOOP", "")
+    try:
+        value = int(str(raw).strip()) if str(raw).strip() else 4
+    except (TypeError, ValueError):
+        value = 4
+    return max(0, min(value, 20))
+
+
+def _expire_after_buy_window_scanner_watching(db, now_ts):
+    if not _scanner_after_buy_window_cap_release_enabled():
+        return 0
+    start_time = _scanner_after_buy_window_cap_release_start_time()
+    if start_time is None or datetime.fromtimestamp(float(now_ts)).time() < start_time:
+        return 0
+    max_per_loop = _scanner_after_buy_window_cap_release_max_per_loop()
+    if max_per_loop <= 0:
+        return 0
+    min_age_sec = _scanner_after_buy_window_cap_release_min_age_sec()
+    expired_codes = []
+    try:
+        with db.get_session() as session:
+            if hasattr(session, "query"):
+                records = (
+                    session.query(RecommendationHistory)
+                    .filter(
+                        RecommendationHistory.rec_date == datetime.now().date(),
+                        RecommendationHistory.status == "WATCHING",
+                        RecommendationHistory.strategy == "SCALPING",
+                        RecommendationHistory.position_tag == "SCANNER",
+                        RecommendationHistory.buy_time.is_(None),
+                        RecommendationHistory.buy_qty == 0,
+                    )
+                    .all()
+                )
+            else:
+                records = list(getattr(session, "records", []))
+            candidates = []
+            for record in records:
+                if getattr(record, "status", None) != "WATCHING":
+                    continue
+                if getattr(record, "strategy", None) != "SCALPING":
+                    continue
+                if getattr(record, "position_tag", None) != "SCANNER":
+                    continue
+                if getattr(record, "buy_time", None) is not None:
+                    continue
+                if int(getattr(record, "buy_qty", 0) or 0) != 0:
+                    continue
+                armed_ts = _safe_float(getattr(record, "entry_armed_at_epoch", 0.0), 0.0)
+                age_sec = max(0.0, float(now_ts) - armed_ts) if armed_ts > 0 else min_age_sec
+                if age_sec < min_age_sec:
+                    continue
+                candidates.append((armed_ts or 0.0, record))
+            for _armed_ts, record in sorted(candidates, key=lambda item: item[0])[:max_per_loop]:
+                record.status = "EXPIRED"
+                expired_codes.append(str(getattr(record, "stock_code", "") or "").strip()[:6])
+    except Exception as exc:
+        log_error(f"⚠️ [SCALPING 스캐너] after-window cap release 실패: {exc}")
+        return 0
+    if expired_codes:
+        log_info(
+            "[SCALPING_SCANNER_AFTER_WINDOW_CAP_RELEASE] "
+            f"expired={len(expired_codes)} codes={','.join(code for code in expired_codes if code)} "
+            f"start_time={start_time.isoformat()} min_age_sec={min_age_sec} max_per_loop={max_per_loop}"
+        )
+    return len(expired_codes)
+
+
 def _active_scanner_watching_count(db):
     try:
         with db.get_session() as session:
@@ -1329,6 +1429,7 @@ def promote_candidates(db, event_bus, ranked_targets, recent_picks, *, max_new_c
     promoted_target_payloads = []
     recent_picks = _filter_picks_within_cooldown(recent_picks, now_ts, reentry_cooldown_sec)
     max_active = _scalping_watching_max_active()
+    _expire_after_buy_window_scanner_watching(db, now_ts)
     active_count = _active_scanner_watching_count(db)
     remaining_slots = min(max(0, int(max_new_codes or 0)), max(0, max_active - active_count))
     if remaining_slots <= 0:
