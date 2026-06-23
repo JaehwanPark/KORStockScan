@@ -118,7 +118,9 @@ def test_promote_candidates_limits_new_codes_to_remaining_active_slots(monkeypat
     )
 
     assert codes == ["000001"]
-    assert _event_payloads(event_bus, "COMMAND_WS_REG") == [{"codes": ["000001"]}]
+    assert _event_payloads(event_bus, "COMMAND_WS_REG") == [
+        {"codes": ["000001"], "source": "scalping_scanner_promote"}
+    ]
     assert len(_event_payloads(event_bus, "SCALPING_SCANNER_PROMOTED_TARGET")) == 1
     assert len(db.records) == 2
 
@@ -1509,7 +1511,9 @@ def test_promote_candidates_blocks_identical_recent_pick(monkeypatch):
 
     assert first_codes == ["005930"]
     assert second_codes == []
-    assert _event_payloads(event_bus, "COMMAND_WS_REG") == [{"codes": ["005930"]}]
+    assert _event_payloads(event_bus, "COMMAND_WS_REG") == [
+        {"codes": ["005930"], "source": "scalping_scanner_promote"}
+    ]
     promoted_payloads = _event_payloads(event_bus, "SCALPING_SCANNER_PROMOTED_TARGET")
     assert len(promoted_payloads) == 1
     assert promoted_payloads[0]["code"] == "005930"
@@ -1556,7 +1560,9 @@ def test_promote_candidates_allows_value_top_reentry(monkeypatch):
     )
 
     assert codes == ["005930"]
-    assert _event_payloads(event_bus, "COMMAND_WS_REG") == [{"codes": ["005930"]}]
+    assert _event_payloads(event_bus, "COMMAND_WS_REG") == [
+        {"codes": ["005930"], "source": "scalping_scanner_promote"}
+    ]
     assert _event_payloads(event_bus, "SCALPING_SCANNER_PROMOTED_TARGET")[0]["code"] == "005930"
 
 
@@ -2353,7 +2359,9 @@ def test_real_source_guard_promotes_immediate_acceleration_sources(monkeypatch):
     )
 
     assert codes == ["000101", "000102"]
-    assert _event_payloads(event_bus, "COMMAND_WS_REG") == [{"codes": ["000101", "000102"]}]
+    assert _event_payloads(event_bus, "COMMAND_WS_REG") == [
+        {"codes": ["000101", "000102"], "source": "scalping_scanner_promote"}
+    ]
     assert [p["code"] for p in _event_payloads(event_bus, "SCALPING_SCANNER_PROMOTED_TARGET")] == [
         "000101",
         "000102",
@@ -2516,7 +2524,9 @@ def test_run_scalper_iteration_keeps_ws_payload_and_max_new_codes(monkeypatch):
     )
 
     assert codes == ["000000", "000001", "000002"]
-    assert _event_payloads(event_bus, "COMMAND_WS_REG") == [{"codes": ["000000", "000001", "000002"]}]
+    assert _event_payloads(event_bus, "COMMAND_WS_REG") == [
+        {"codes": ["000000", "000001", "000002"], "source": "scalping_scanner_promote"}
+    ]
     assert [p["code"] for p in _event_payloads(event_bus, "SCALPING_SCANNER_PROMOTED_TARGET")] == [
         "000000",
         "000001",
@@ -2569,7 +2579,9 @@ def test_run_scalper_iteration_continues_when_one_source_fails(monkeypatch):
     )
 
     assert codes == ["005930"]
-    assert _event_payloads(event_bus, "COMMAND_WS_REG") == [{"codes": ["005930"]}]
+    assert _event_payloads(event_bus, "COMMAND_WS_REG") == [
+        {"codes": ["005930"], "source": "scalping_scanner_promote"}
+    ]
     assert _event_payloads(event_bus, "SCALPING_SCANNER_PROMOTED_TARGET")[0]["code"] == "005930"
 
 

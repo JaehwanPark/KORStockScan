@@ -155,6 +155,130 @@ def test_scalp_simulator_arms_and_fills_without_real_buy_order(monkeypatch):
     assert armed_event["runtime_effect"] == "simulated_entry_armed_only"
 
 
+def test_scalp_live_simulator_respects_max_open_cap(monkeypatch):
+    logs = []
+    monkeypatch.setattr(
+        state_handlers,
+        "TRADING_RULES",
+        replace(state_handlers.TRADING_RULES, SCALP_LIVE_SIMULATOR_MAX_OPEN=1),
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_entry_pipeline",
+        lambda stock, code, stage, **fields: logs.append((stage, fields)),
+    )
+    state_handlers.ACTIVE_TARGETS.append(
+        {
+            "code": "111111",
+            "strategy": "SCALPING",
+            "status": "HOLDING",
+            "scalp_live_simulator": True,
+            "simulation_book": "scalp_ai_buy_all",
+            "actual_order_submitted": False,
+        }
+    )
+    stock = {
+        "id": 102,
+        "name": "TEST2",
+        "code": "222222",
+        "strategy": "SCALPING",
+        "position_tag": "SCALP_BASE",
+        "target_buy_price": 10_000,
+    }
+    runtime = {
+        "strategy": "SCALPING",
+        "is_trigger": True,
+        "now_ts": 1_000.0,
+        "current_ai_score": 82.0,
+    }
+
+    armed = state_handlers.maybe_arm_scalp_live_simulator_from_buy_signal(
+        stock,
+        "222222",
+        {"curr": 10_000},
+        runtime,
+    )
+
+    assert armed is False
+    assert len(state_handlers.ACTIVE_TARGETS) == 1
+    assert state_handlers.EVENT_BUS.published == []
+    assert logs[-1][0] == "scalp_live_simulator_discarded"
+    assert logs[-1][1]["discard_reason"] == "max_open_reached"
+    assert logs[-1][1]["open_count"] == 1
+    assert logs[-1][1]["max_open"] == 1
+
+
+def test_scalp_live_simulator_restore_respects_max_open_cap(monkeypatch):
+    monkeypatch.setattr(
+        state_handlers,
+        "TRADING_RULES",
+        replace(state_handlers.TRADING_RULES, SCALP_LIVE_SIMULATOR_MAX_OPEN=4),
+    )
+    payload = {
+        "schema_version": 1,
+        "active_positions": [
+            {
+                "code": f"11111{idx}",
+                "name": f"SIM{idx}",
+                "status": "HOLDING",
+                "strategy": "SCALPING",
+                "sim_record_id": f"SIM-{idx}",
+                "scalp_live_simulator": True,
+                "simulation_book": "scalp_ai_buy_all",
+                "actual_order_submitted": False,
+            }
+            for idx in range(7)
+        ],
+    }
+    state_handlers.SCALP_SIM_STATE_PATH.write_text(json.dumps(payload), encoding="utf-8")
+
+    restored = state_handlers.restore_scalp_simulator_targets(state_handlers.ACTIVE_TARGETS)
+
+    assert restored == 4
+    assert len(state_handlers._scalp_simulator_active_targets()) == 4
+    assert [target["sim_record_id"] for target in state_handlers.ACTIVE_TARGETS] == [
+        "SIM-0",
+        "SIM-1",
+        "SIM-2",
+        "SIM-3",
+    ]
+
+
+def test_scalp_live_simulator_sync_removes_state_rows_beyond_max_open(monkeypatch):
+    monkeypatch.setattr(
+        state_handlers,
+        "TRADING_RULES",
+        replace(state_handlers.TRADING_RULES, SCALP_LIVE_SIMULATOR_MAX_OPEN=4),
+    )
+    state_handlers.ACTIVE_TARGETS.extend(
+        {
+            "code": f"11111{idx}",
+            "name": f"SIM{idx}",
+            "status": "HOLDING",
+            "strategy": "SCALPING",
+            "sim_record_id": f"SIM-{idx}",
+            "scalp_live_simulator": True,
+            "simulation_book": "scalp_ai_buy_all",
+            "actual_order_submitted": False,
+        }
+        for idx in range(7)
+    )
+    payload = {"schema_version": 1, "active_positions": [dict(row) for row in state_handlers.ACTIVE_TARGETS]}
+    state_handlers.SCALP_SIM_STATE_PATH.write_text(json.dumps(payload), encoding="utf-8")
+
+    result = state_handlers.sync_scalp_simulator_targets_from_state(state_handlers.ACTIVE_TARGETS)
+
+    assert result["removed"] == 3
+    assert result["restored"] == 0
+    assert len(state_handlers._scalp_simulator_active_targets()) == 4
+    assert [target["sim_record_id"] for target in state_handlers.ACTIVE_TARGETS] == [
+        "SIM-0",
+        "SIM-1",
+        "SIM-2",
+        "SIM-3",
+    ]
+
+
 def test_scalp_sim_candidate_window_runtime_cap_clamps_policy_width(monkeypatch):
     monkeypatch.setattr(
         state_handlers,

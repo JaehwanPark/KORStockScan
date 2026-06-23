@@ -65,6 +65,7 @@ class KiwoomWSManager:
         self._last_dashboard_snapshot_at = 0.0
         self._dashboard_snapshot_write_inflight = False
         self._recent_reg_request_ts = {}
+        self._registered_items_by_code = {}
         
         # 전역 EventBus 인스턴스 획득 및 외부 명령 수신기 장착
         self.event_bus = EventBus()
@@ -169,7 +170,7 @@ class KiwoomWSManager:
             print(f"⚠️ [WS] 실시간 등록 제외 코드: {invalid}")
         return normalized
 
-    def _resolve_ws_register_items(self, codes):
+    def _resolve_ws_register_items(self, codes, *, include_alternate_route=False):
         """Return canonical subscription codes and Kiwoom exchange-aware REG items."""
         normalized_codes = self._normalize_subscribe_codes(codes)
         if not normalized_codes:
@@ -195,7 +196,7 @@ class KiwoomWSManager:
 
                 effective = kiwoom_utils.get_effective_kiwoom_code(code)
                 items = [effective]
-                if not str(effective or '').upper().endswith('_AL'):
+                if include_alternate_route and not str(effective or '').upper().endswith('_AL'):
                     items.append(f"{code}_AL")
                 register_items.extend(OrderedDict.fromkeys(items))
         except Exception as exc:
@@ -206,9 +207,68 @@ class KiwoomWSManager:
                 if explicit:
                     register_items.append(explicit)
                 else:
-                    register_items.extend((code, f"{code}_AL"))
+                    register_items.append(code)
+                    if include_alternate_route:
+                        register_items.append(f"{code}_AL")
 
         return normalized_codes, register_items
+
+    @staticmethod
+    def _max_registered_item_count():
+        raw = os.getenv("KORSTOCKSCAN_WS_MAX_REG_ITEMS", "")
+        try:
+            value = int(str(raw).strip()) if str(raw).strip() else 24
+        except Exception:
+            value = 24
+        if value <= 0:
+            return 0
+        return max(1, min(value, 200))
+
+    def _items_by_code(self, normalized_codes, register_items):
+        items_by_code = {}
+        for code in normalized_codes or []:
+            seen = OrderedDict()
+            for item in register_items or []:
+                if self._normalize_code(item) == code:
+                    seen[str(item)] = None
+            items_by_code[code] = list(seen.keys())
+        return items_by_code
+
+    def _apply_registered_item_budget(self, normalized_codes, register_items, *, enforce=False):
+        if not enforce:
+            return normalized_codes, register_items, []
+        max_items = self._max_registered_item_count()
+        if max_items <= 0:
+            return normalized_codes, register_items, []
+
+        items_by_code = self._items_by_code(normalized_codes, register_items)
+        allowed_codes = []
+        allowed_items = []
+        skipped_codes = []
+
+        with self.lock:
+            planned_item_count = sum(
+                len(tuple(items or ()))
+                for items in self._registered_items_by_code.values()
+            )
+            for code in normalized_codes or []:
+                candidate_items = tuple(items_by_code.get(code) or ())
+                if not candidate_items:
+                    continue
+                existing_items = tuple(self._registered_items_by_code.get(code) or ())
+                delta_items = [item for item in candidate_items if item not in existing_items]
+                if code not in self.subscribed_codes:
+                    required_delta = len(candidate_items)
+                else:
+                    required_delta = len(delta_items)
+                if required_delta > 0 and planned_item_count + required_delta > max_items:
+                    skipped_codes.append(code)
+                    continue
+                planned_item_count += max(0, required_delta)
+                allowed_codes.append(code)
+                allowed_items.extend(candidate_items)
+
+        return allowed_codes, list(OrderedDict.fromkeys(allowed_items)), skipped_codes
 
     @staticmethod
     def _recent_reg_ttl_sec():
@@ -221,7 +281,7 @@ class KiwoomWSManager:
 
     def _filter_recent_reg_targets(self, codes, *, force=False):
         normalized_codes = self._normalize_subscribe_codes(codes)
-        if force or not normalized_codes:
+        if not normalized_codes:
             return normalized_codes, []
         ttl_sec = self._recent_reg_ttl_sec()
         if ttl_sec <= 0:
@@ -1119,12 +1179,52 @@ class KiwoomWSManager:
         self._tick_dispatch_thread.start()
         self._ws_thread.start()
 
-    async def _send_reg(self, codes, *, replace_existing=True):
+    async def _send_reg(
+        self,
+        codes,
+        *,
+        replace_existing=True,
+        enforce_item_budget=False,
+        include_alternate_route=False,
+        source="",
+    ):
         try:
-            normalized_codes, register_items = self._resolve_ws_register_items(codes)
+            normalized_codes, register_items = self._resolve_ws_register_items(
+                codes,
+                include_alternate_route=include_alternate_route,
+            )
             if not normalized_codes:
                 print("⚠️ [WS] 등록 가능한 유효 종목코드가 없어 REG 전송을 생략합니다.")
                 return
+            normalized_codes, register_items, budget_skipped_codes = self._apply_registered_item_budget(
+                normalized_codes,
+                register_items,
+                enforce=enforce_item_budget,
+            )
+            if budget_skipped_codes:
+                print(
+                    "🧯 [WS] REG item budget 초과로 종목 등록 생략: "
+                    f"skipped={budget_skipped_codes} "
+                    f"max_items={self._max_registered_item_count()}"
+                )
+                try:
+                    self.event_bus.publish(
+                        "WS_REG_BUDGET_SKIPPED",
+                        {
+                            "codes": budget_skipped_codes,
+                            "source": source,
+                            "max_items": self._max_registered_item_count(),
+                            "registered_item_count": sum(
+                                len(tuple(items or ()))
+                                for items in self._registered_items_by_code.values()
+                            ),
+                        },
+                    )
+                except Exception as exc:
+                    log_error(f"[WS] REG budget skip event publish failed: {exc}")
+            if not normalized_codes:
+                return
+            register_items_by_code = self._items_by_code(normalized_codes, register_items)
 
             for _ in range(100):
                 if self._stop_event.is_set():
@@ -1141,7 +1241,7 @@ class KiwoomWSManager:
                 total_batches = (len(normalized_codes) + batch_size - 1) // batch_size
                 print(
                     f"📝 [WS] 종목 등록(REG) 전송 시도: {normalized_codes} "
-                    f"(items={register_items}, batch_size={batch_size})"
+                    f"(items={register_items}, batch_size={batch_size}, alternate={include_alternate_route})"
                 )
                 for batch_index, batch_codes in enumerate(self._chunked(normalized_codes, batch_size), start=1):
                     if self._stop_event.is_set() or not self.websocket:
@@ -1164,7 +1264,12 @@ class KiwoomWSManager:
                         ]
                     }
                     await self.websocket.send(json.dumps(reg_packet))
-                    self.subscribed_codes.update(batch_codes)
+                    with self.lock:
+                        self.subscribed_codes.update(batch_codes)
+                        for code in batch_codes:
+                            self._registered_items_by_code[code] = tuple(
+                                register_items_by_code.get(code) or ()
+                            )
                     print(
                         "📡 [WS] 종목 등록 패킷 전송 완료(실수신 대기): "
                         f"batch={batch_index}/{total_batches} codes={batch_codes}"
@@ -1178,7 +1283,7 @@ class KiwoomWSManager:
             log_error(f"🚨 [WS] _send_reg 에러 발생: {e}")
             print(f"🚨 [WS] _send_reg 내부 치명적 에러 발생: {e}")
 
-    def execute_subscribe(self, codes, *, force=False):
+    def execute_subscribe(self, codes, *, force=False, source="", repair_cycle=""):
         if not codes: return
         if isinstance(codes, str): codes = [codes]
         if self._stop_event.is_set() or not self._started:
@@ -1197,8 +1302,21 @@ class KiwoomWSManager:
 
         if new_targets and send_ready:
             replace_existing = not bool(self.subscribed_codes)
+            source_key = str(source or "").lower()
+            repair_cycle_key = str(repair_cycle or "").lower()
+            enforce_item_budget = True
+            include_alternate_route = (
+                "persistent" in source_key
+                or repair_cycle_key == "persistent_ws_gap"
+            )
             future = asyncio.run_coroutine_threadsafe(
-                self._send_reg(new_targets, replace_existing=replace_existing),
+                self._send_reg(
+                    new_targets,
+                    replace_existing=replace_existing,
+                    enforce_item_budget=enforce_item_budget,
+                    include_alternate_route=include_alternate_route,
+                    source=source,
+                ),
                 self.loop,
             )
             with self._pending_future_lock:
@@ -1235,6 +1353,7 @@ class KiwoomWSManager:
         with self.lock:
             for code in normalized_codes:
                 self._recent_reg_request_ts.pop(code, None)
+                self._registered_items_by_code.pop(code, None)
                 self.realtime_data.pop(code, None)
     
     def _handle_reg_event(self, payload):
@@ -1242,8 +1361,9 @@ class KiwoomWSManager:
             return
         codes = payload.get("codes", [])
         source = str(payload.get("source") or "")
+        repair_cycle = str(payload.get("repair_cycle") or "")
         force = bool(payload.get("force")) or "recovery" in source
-        self.execute_subscribe(codes, force=force)
+        self.execute_subscribe(codes, force=force, source=source, repair_cycle=repair_cycle)
 
     def _handle_unreg_event(self, payload):
         if self._stop_event.is_set():

@@ -218,12 +218,15 @@ _SCANNER_REST_QUOTE_FALLBACK_FAILURE_COOLDOWN_SEC = 30.0
 _SCANNER_REST_QUOTE_FALLBACK_STATE = {"call_epochs": [], "cooldown_until": 0.0}
 _SCANNER_REST_QUOTE_FALLBACK_LOCK = threading.Lock()
 _SCANNER_REST_QUOTE_FALLBACK_DEFER_SEC = 5.0
-SCANNER_WATCH_EVICTION_POLICY_VERSION = "scalping_scanner_watch_eviction_v3"
+SCANNER_WATCH_EVICTION_POLICY_VERSION = "scalping_scanner_watch_eviction_v4"
 SCANNER_WATCH_EVICTION_TERMINAL_MIN_COUNT = 2
 SCANNER_WATCH_EVICTION_STALE_MIN_COUNT = 3
 SCANNER_WATCH_EVICTION_STALE_MIN_AGE_SEC = 90.0
 SCANNER_WATCH_EVICTION_COOLDOWN_MIN_COUNT = 2
 SCANNER_WATCH_EVICTION_COOLDOWN_MIN_REMAINING_SEC = 60
+SCANNER_WATCH_EVICTION_NO_TRADE_GRACE_SEC = 90.0
+SCANNER_WATCH_EVICTION_NO_TRADE_MIN_COUNT = 2
+SCANNER_WATCH_EVICTION_NO_TRADE_MAX_PER_LOOP = 4
 SCANNER_WATCH_EVICTION_SOURCE_QUALITY_REASONS = {
     "insufficient_history",
 }
@@ -973,6 +976,37 @@ def _env_bool(name, default=False):
     return bool(default)
 
 
+def _scanner_no_trade_eviction_enabled():
+    return _env_bool("KORSTOCKSCAN_SCANNER_NO_TRADE_EVICTION_ENABLED", True)
+
+
+def _scanner_no_trade_eviction_grace_sec():
+    raw = os.getenv("KORSTOCKSCAN_SCANNER_NO_TRADE_EVICTION_GRACE_SEC", "")
+    try:
+        value = float(str(raw).strip()) if str(raw).strip() else SCANNER_WATCH_EVICTION_NO_TRADE_GRACE_SEC
+    except Exception:
+        value = SCANNER_WATCH_EVICTION_NO_TRADE_GRACE_SEC
+    return max(30.0, min(value, 900.0))
+
+
+def _scanner_no_trade_eviction_min_count():
+    raw = os.getenv("KORSTOCKSCAN_SCANNER_NO_TRADE_EVICTION_MIN_COUNT", "")
+    try:
+        value = int(str(raw).strip()) if str(raw).strip() else SCANNER_WATCH_EVICTION_NO_TRADE_MIN_COUNT
+    except Exception:
+        value = SCANNER_WATCH_EVICTION_NO_TRADE_MIN_COUNT
+    return max(1, min(value, 20))
+
+
+def _scanner_no_trade_eviction_max_per_loop():
+    raw = os.getenv("KORSTOCKSCAN_SCANNER_NO_TRADE_EVICTION_MAX_PER_LOOP", "")
+    try:
+        value = int(str(raw).strip()) if str(raw).strip() else SCANNER_WATCH_EVICTION_NO_TRADE_MAX_PER_LOOP
+    except Exception:
+        value = SCANNER_WATCH_EVICTION_NO_TRADE_MAX_PER_LOOP
+    return max(0, min(value, 20))
+
+
 def _scanner_ws_reg_recovery_throttle_allows(last_emit_ts, source, code, now_ts, *, min_interval_sec=10.0):
     norm_code = str(code or "").strip()[:6]
     if not norm_code:
@@ -1258,6 +1292,92 @@ def _scanner_watch_eviction_decision_from_stale(target, *, now_ts, stale_reason,
     }
 
 
+def _scanner_watch_eviction_decision_from_no_trade(target, ws_data, *, now_ts):
+    if not _scanner_no_trade_eviction_enabled():
+        return {"should_evict": False, "eviction_attempt_count": 0}
+    if not _is_scanner_watch_eviction_candidate(target):
+        return {"should_evict": False, "eviction_attempt_count": 0}
+
+    received = (ws_data or {}).get("received_types") or []
+    try:
+        received_types = sorted(str(item) for item in received if str(item).strip())
+    except Exception:
+        received_types = []
+    if not received_types:
+        target.pop("_scanner_watch_no_trade_count", None)
+        target.pop("_scanner_watch_no_trade_first_observed_epoch", None)
+        target.pop("_scanner_watch_no_trade_last_observed_epoch", None)
+        return {
+            "should_evict": False,
+            "eviction_attempt_count": 0,
+            "eviction_reason": "scanner_no_trade_waiting_realtime_type",
+            "ws_recovery_outcome": "not_applicable_ws_recovery_outcome",
+        }
+    if "0B" in received_types:
+        target.pop("_scanner_watch_no_trade_count", None)
+        target.pop("_scanner_watch_no_trade_first_observed_epoch", None)
+        target.pop("_scanner_watch_no_trade_last_observed_epoch", None)
+        return {"should_evict": False, "eviction_attempt_count": 0}
+
+    watch_age_sec = max(0.0, float(now_ts) - _runtime_added_time_for_target(target, now_ts=now_ts))
+    grace_sec = _scanner_no_trade_eviction_grace_sec()
+    if watch_age_sec < grace_sec:
+        target.pop("_scanner_watch_no_trade_count", None)
+        target.pop("_scanner_watch_no_trade_first_observed_epoch", None)
+        target.pop("_scanner_watch_no_trade_last_observed_epoch", None)
+        return {
+            "should_evict": False,
+            "eviction_attempt_count": 0,
+            "eviction_reason": "scanner_no_trade_grace_active",
+            "no_trade_watch_age_sec": round(watch_age_sec, 3),
+            "no_trade_grace_sec": round(grace_sec, 3),
+            "ws_recovery_outcome": "not_applicable_ws_recovery_outcome",
+        }
+
+    last_observed = _safe_float(target.get("_scanner_watch_no_trade_last_observed_epoch"), 0.0)
+    if last_observed > 0 and float(now_ts) - last_observed < 5.0:
+        return {
+            "should_evict": False,
+            "eviction_attempt_count": _safe_int(target.get("_scanner_watch_no_trade_count"), 0),
+            "eviction_reason": "scanner_no_trade_confirmation_throttled",
+            "no_trade_watch_age_sec": round(watch_age_sec, 3),
+            "no_trade_grace_sec": round(grace_sec, 3),
+            "ws_recovery_outcome": "not_applicable_ws_recovery_outcome",
+        }
+
+    first_observed = _safe_float(target.get("_scanner_watch_no_trade_first_observed_epoch"), 0.0)
+    if first_observed <= 0:
+        first_observed = float(now_ts)
+    attempt_count = _safe_int(target.get("_scanner_watch_no_trade_count"), 0) + 1
+    target["_scanner_watch_no_trade_first_observed_epoch"] = first_observed
+    target["_scanner_watch_no_trade_last_observed_epoch"] = float(now_ts)
+    target["_scanner_watch_no_trade_count"] = attempt_count
+
+    last_ws_update_ts = _safe_float((ws_data or {}).get("last_ws_update_ts"), 0.0)
+    return {
+        "should_evict": attempt_count >= _scanner_no_trade_eviction_min_count(),
+        "eviction_reason": "scanner_no_trade_hot_slot_rotation",
+        "eviction_attempt_count": attempt_count,
+        "terminal_stage": "not_applicable_terminal_stage",
+        "terminal_reason": "no_0b_after_grace",
+        "fresh_input_confirmed": False,
+        "stale_first_seen_epoch": "not_applicable_stale_first_seen_epoch",
+        "stale_age_sec": "not_applicable_stale_age_sec",
+        "ws_recovery_outcome": "not_applicable_ws_recovery_outcome",
+        "no_trade_first_observed_epoch": f"{first_observed:.3f}",
+        "no_trade_watch_age_sec": round(watch_age_sec, 3),
+        "no_trade_grace_sec": round(grace_sec, 3),
+        "no_trade_min_count": _scanner_no_trade_eviction_min_count(),
+        "no_trade_received_types": ",".join(received_types) if received_types else "-",
+        "no_trade_last_ws_age_sec": (
+            round(max(0.0, float(now_ts) - last_ws_update_ts), 3)
+            if last_ws_update_ts > 0
+            else "not_available"
+        ),
+        "observed_epoch": f"{float(now_ts):.3f}",
+    }
+
+
 def _scanner_watch_eviction_decision_from_pool_block(target, *, now_ts):
     if not _is_scanner_watch_eviction_candidate(target):
         return {"should_evict": False, "eviction_attempt_count": 0}
@@ -1354,6 +1474,18 @@ def _scanner_watch_eviction_event_fields(target, *, decision):
         "stale_first_seen_epoch": decision.get("stale_first_seen_epoch") or "not_applicable_stale_first_seen_epoch",
         "stale_age_sec": decision.get("stale_age_sec") or "not_applicable_stale_age_sec",
         "ws_recovery_outcome": decision.get("ws_recovery_outcome") or "not_applicable_ws_recovery_outcome",
+        "no_trade_first_observed_epoch": decision.get("no_trade_first_observed_epoch")
+        or "not_applicable_no_trade_first_observed_epoch",
+        "no_trade_watch_age_sec": decision.get("no_trade_watch_age_sec")
+        or "not_applicable_no_trade_watch_age_sec",
+        "no_trade_grace_sec": decision.get("no_trade_grace_sec")
+        or "not_applicable_no_trade_grace_sec",
+        "no_trade_min_count": decision.get("no_trade_min_count")
+        or "not_applicable_no_trade_min_count",
+        "no_trade_received_types": decision.get("no_trade_received_types")
+        or "not_applicable_no_trade_received_types",
+        "no_trade_last_ws_age_sec": decision.get("no_trade_last_ws_age_sec")
+        or "not_applicable_no_trade_last_ws_age_sec",
         "cooldown_remaining_sec": decision.get("cooldown_remaining_sec", "not_applicable_cooldown_remaining_sec"),
         "runtime_record_id": target.get("id") or "not_applicable_runtime_record_id",
         "stock_code": str(target.get("code") or "").strip()[:6] or "not_applicable_stock_code",
@@ -1421,6 +1553,51 @@ def _maybe_expire_scanner_watch_for_pool_block(target, code, targets, *, now_ts,
     if not decision.get("should_evict"):
         return False
     return _expire_scanner_watch_target(target, code, targets, decision=decision, emit_event_fn=emit_event_fn)
+
+
+def _maybe_expire_scanner_watch_for_no_trade(target, code, targets, ws_data, *, now_ts, emit_event_fn=None):
+    decision = _scanner_watch_eviction_decision_from_no_trade(target, ws_data, now_ts=now_ts)
+    if not decision.get("should_evict"):
+        return False
+    return _expire_scanner_watch_target(target, code, targets, decision=decision, emit_event_fn=emit_event_fn)
+
+
+def handle_ws_reg_budget_skipped(payload):
+    payload = payload or {}
+    skipped_codes = {
+        str(code or "").strip()[:6]
+        for code in (payload.get("codes") or [])
+        if str(code or "").strip()
+    }
+    if not skipped_codes:
+        return False
+    now_ts = time.time()
+    expired = []
+    for target in list(ACTIVE_TARGETS or []):
+        code = str((target or {}).get("code") or "").strip()[:6]
+        if code not in skipped_codes or not _is_scanner_watching_target(target):
+            continue
+        decision = {
+            "should_evict": True,
+            "eviction_reason": "scanner_ws_budget_skipped_hot_slot_rotation",
+            "eviction_attempt_count": 1,
+            "terminal_stage": "ws_register_budget",
+            "terminal_reason": "ws_item_budget_exhausted",
+            "fresh_input_confirmed": False,
+            "stale_first_seen_epoch": "not_applicable_stale_first_seen_epoch",
+            "stale_age_sec": "not_applicable_stale_age_sec",
+            "ws_recovery_outcome": "ws_reg_budget_skipped",
+            "observed_epoch": f"{now_ts:.3f}",
+        }
+        if _expire_scanner_watch_target(target, code, ACTIVE_TARGETS, decision=decision):
+            expired.append(code)
+    if expired:
+        log_info(
+            "[WS_REG_BUDGET_SKIPPED] expired scanner hot-slot targets "
+            f"codes={','.join(sorted(set(expired)))} "
+            f"max_items={payload.get('max_items', 'unknown')}"
+        )
+    return bool(expired)
 
 
 def _scanner_watch_nonfresh_source_quality_reason(target):
@@ -1733,6 +1910,49 @@ def _scalping_fifo_overflow_candidates(scalp_fifo_targets, now_ts):
         return (4, _runtime_added_time_for_target(target, now_ts=now_ts))
 
     return sorted(list(scalp_fifo_targets or []), key=_overflow_rank)
+
+
+def _initial_ws_registration_groups(targets, now_ts=None):
+    now_ts = time.time() if now_ts is None else now_ts
+    priority_codes = []
+    scanner_targets = []
+    seen_priority = set()
+
+    def _target_key(target):
+        target = target or {}
+        return target.get("id") or str(target.get("code") or "").strip()[:6]
+
+    for target in targets or []:
+        status = str((target or {}).get("status") or "").upper()
+        if status in {"COMPLETED", "EXPIRED"}:
+            continue
+        code = str((target or {}).get("code") or "").strip()[:6]
+        if not code:
+            continue
+        if _is_scanner_watching_target(target):
+            scanner_targets.append(target)
+            continue
+        if code not in seen_priority:
+            priority_codes.append(code)
+            seen_priority.add(code)
+
+    scanner_limit = _scalping_fifo_max_active()
+    overflow = max(0, len(scanner_targets) - scanner_limit)
+    overflow_ids = {
+        _target_key(item)
+        for item in _scalping_fifo_overflow_candidates(scanner_targets, now_ts)[:overflow]
+    }
+    scanner_codes = []
+    seen_scanner = set()
+    for target in scanner_targets:
+        if _target_key(target) in overflow_ids:
+            continue
+        code = str(target.get("code") or "").strip()[:6]
+        if code and code not in seen_scanner:
+            scanner_codes.append(code)
+            seen_scanner.add(code)
+
+    return priority_codes, scanner_codes
 
 
 def _runtime_iteration_targets(targets, now_ts):
@@ -2489,7 +2709,10 @@ def handle_scalping_scanner_promoted_target(payload):
                     reason="existing_watching_refreshed",
                     target=existing,
                 )
-                event_bus.publish("COMMAND_WS_REG", {"codes": [code]})
+                event_bus.publish(
+                    "COMMAND_WS_REG",
+                    {"codes": [code], "source": "scanner_runtime_target_refresh"},
+                )
                 return True
 
             conflict_reason = _same_symbol_active_conflict_reason(existing)
@@ -2522,7 +2745,10 @@ def handle_scalping_scanner_promoted_target(payload):
         new_target["marcap"] = _resolve_stock_marcap(new_target, code)
         ACTIVE_TARGETS.append(new_target)
 
-    event_bus.publish("COMMAND_WS_REG", {"codes": [code]})
+    event_bus.publish(
+        "COMMAND_WS_REG",
+        {"codes": [code], "source": "scanner_runtime_target_attach"},
+    )
     _log_scanner_runtime_target_attach(
         payload_for_log,
         outcome="attached",
@@ -2583,7 +2809,10 @@ def attach_db_poll_target_if_missing(db_target, targets, now_ts):
         identity_payload = None
 
     targets.append(dt)
-    event_bus.publish("COMMAND_WS_REG", {"codes": [code]})
+    reg_payload = {"codes": [code]}
+    if dt["strategy"] == "SCALPING" and dt["position_tag"] == "SCANNER":
+        reg_payload["source"] = "scanner_db_poll_attach"
+    event_bus.publish("COMMAND_WS_REG", reg_payload)
 
     if dt["strategy"] == "SCALPING" and dt["position_tag"] == "SCANNER":
         _log_scanner_runtime_target_attach(
@@ -2970,6 +3199,7 @@ def run_sniper(is_test_mode=False):
         event_bus.subscribe('CONDITION_MATCHED', handle_condition_matched)
         event_bus.subscribe('CONDITION_UNMATCHED', handle_condition_unmatched)
         event_bus.subscribe('SCALPING_SCANNER_PROMOTED_TARGET', handle_scalping_scanner_promoted_target)
+        event_bus.subscribe('WS_REG_BUDGET_SKIPPED', handle_ws_reg_budget_skipped)
 
         def on_trading_paused(payload):
             payload = payload or {}
@@ -3111,9 +3341,17 @@ def run_sniper(is_test_mode=False):
     if is_buy_side_paused():
         log_info("[TRADING_PAUSED] engine booted with 신규 매수 및 추가매수 중단 상태 active")
 
-    target_codes = [t['code'] for t in targets]
-    if target_codes:
-        event_bus.publish("COMMAND_WS_REG", {"codes": target_codes})
+    priority_codes, scanner_boot_codes = _initial_ws_registration_groups(targets, now_ts=time.time())
+    if priority_codes:
+        event_bus.publish(
+            "COMMAND_WS_REG",
+            {"codes": priority_codes, "source": "sniper_boot_priority_ws_budget"},
+        )
+    if scanner_boot_codes:
+        event_bus.publish(
+            "COMMAND_WS_REG",
+            {"codes": scanner_boot_codes, "source": "scanner_boot_hot_ws_budget"},
+        )
 
     last_msg_min = -1
     scanner_ws_reg_last_emit_ts: dict[tuple[str, str], float] = {}
@@ -3314,6 +3552,8 @@ def run_sniper(is_test_mode=False):
             scanner_heavy_eval_flushed = False
             scanner_rest_quote_fallback_loop_limit = _scanner_rest_quote_fallback_max_per_loop()
             scanner_rest_quote_fallback_loop_count = 0
+            scanner_no_trade_eviction_loop_limit = _scanner_no_trade_eviction_max_per_loop()
+            scanner_no_trade_eviction_loop_count = 0
 
             def _defer_scanner_entry_pipeline_log(stock_value, code_value, stage, fields):
                 deferred_scanner_pipeline_events.append(
@@ -3567,6 +3807,15 @@ def run_sniper(is_test_mode=False):
                         scanner_rest_quote_fallback_loop_count += 1
                 return allowed, deferred_reason
 
+            def _scanner_no_trade_hot_slot_eviction_allowed():
+                nonlocal scanner_no_trade_eviction_loop_count
+                if scanner_no_trade_eviction_loop_limit <= 0:
+                    return False
+                if scanner_no_trade_eviction_loop_count >= scanner_no_trade_eviction_loop_limit:
+                    return False
+                scanner_no_trade_eviction_loop_count += 1
+                return True
+
             def _apply_subscription_recheck_snapshot_if_ready(ws_snapshot, recovery_fields, *, phase):
                 fields = dict(recovery_fields or {})
                 recheck_snapshot = fields.pop("_ws_subscription_recheck_snapshot", None)
@@ -3766,6 +4015,22 @@ def run_sniper(is_test_mode=False):
                                 now_dt=now,
                             )
                         continue
+
+                if _is_scanner_watching_target(stock):
+                    no_trade_decision = _scanner_watch_eviction_decision_from_no_trade(
+                        stock,
+                        ws_data,
+                        now_ts=now_ts,
+                    )
+                    if no_trade_decision.get("should_evict") and _scanner_no_trade_hot_slot_eviction_allowed():
+                        if _expire_scanner_watch_target(
+                            stock,
+                            code,
+                            targets,
+                            decision=no_trade_decision,
+                            emit_event_fn=_defer_scanner_entry_pipeline_log,
+                        ):
+                            continue
 
                 if sniper_state_handlers._is_scalp_simulator_target(stock) and status == sniper_state_handlers.SCALP_SIM_PENDING_STATUS:
                     sniper_state_handlers.handle_scalp_simulator_pending_entry(

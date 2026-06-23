@@ -113,7 +113,7 @@ def test_send_reg_uses_exchange_aware_items_for_nxt(monkeypatch):
     assert manager.subscribed_codes == {"039490"}
 
 
-def test_send_reg_adds_sor_fallback_when_effective_code_is_raw(monkeypatch):
+def test_send_reg_uses_single_effective_route_by_default(monkeypatch):
     manager = KiwoomWSManager("test-token")
     fake_ws = _FakeWS([])
     manager.websocket = fake_ws
@@ -127,8 +127,72 @@ def test_send_reg_adds_sor_fallback_when_effective_code_is_raw(monkeypatch):
     asyncio.run(manager._send_reg(["240810"]))
 
     payload = json.loads(fake_ws.sent[0])
+    assert payload["data"][0]["item"] == ["240810"]
+    assert manager.subscribed_codes == {"240810"}
+
+
+def test_send_reg_adds_alternate_route_for_persistent_repair(monkeypatch):
+    manager = KiwoomWSManager("test-token")
+    fake_ws = _FakeWS([])
+    manager.websocket = fake_ws
+    manager._session_ready.set()
+
+    monkeypatch.setattr(
+        "src.utils.kiwoom_utils.get_effective_kiwoom_code",
+        lambda code: code,
+    )
+
+    asyncio.run(manager._send_reg(["240810"], include_alternate_route=True))
+
+    payload = json.loads(fake_ws.sent[0])
     assert payload["data"][0]["item"] == ["240810", "240810_AL"]
     assert manager.subscribed_codes == {"240810"}
+
+
+def test_send_reg_respects_registered_item_budget(monkeypatch):
+    manager = KiwoomWSManager("test-token")
+    fake_ws = _FakeWS([])
+    published = []
+    manager.websocket = fake_ws
+    manager._session_ready.set()
+    manager.event_bus = SimpleNamespace(publish=lambda name, payload: published.append((name, payload)))
+
+    monkeypatch.setenv("KORSTOCKSCAN_WS_MAX_REG_ITEMS", "1")
+    monkeypatch.setattr("src.utils.kiwoom_utils.get_effective_kiwoom_code", lambda code: code)
+
+    asyncio.run(manager._send_reg(["000001", "000002"], enforce_item_budget=True))
+
+    payload = json.loads(fake_ws.sent[0])
+    assert payload["data"][0]["item"] == ["000001"]
+    assert manager.subscribed_codes == {"000001"}
+    assert manager._registered_items_by_code == {"000001": ("000001",)}
+    assert published == [
+        (
+            "WS_REG_BUDGET_SKIPPED",
+            {
+                "codes": ["000002"],
+                "source": "",
+                "max_items": 1,
+                "registered_item_count": 0,
+            },
+        )
+    ]
+
+
+def test_execute_unsubscribe_removes_registered_item_budget_state(monkeypatch):
+    manager = KiwoomWSManager("test-token")
+    fake_ws = _FakeWS([])
+    manager.websocket = fake_ws
+    manager._session_ready.set()
+
+    monkeypatch.setattr("src.utils.kiwoom_utils.get_effective_kiwoom_code", lambda code: code)
+
+    asyncio.run(manager._send_reg(["000001"]))
+    manager.execute_unsubscribe(["000001"])
+
+    assert manager.subscribed_codes == set()
+    assert manager._registered_items_by_code == {}
+    assert "000001" not in manager.realtime_data
 
 
 def test_send_reg_uses_append_refresh_after_first_batch(monkeypatch):
@@ -145,9 +209,9 @@ def test_send_reg_uses_append_refresh_after_first_batch(monkeypatch):
     payloads = [json.loads(payload) for payload in fake_ws.sent]
     assert [payload["refresh"] for payload in payloads] == ["1", "0", "0"]
     assert [payload["data"][0]["item"] for payload in payloads] == [
-        ["000001", "000001_AL", "000002", "000002_AL"],
-        ["000003", "000003_AL", "000004", "000004_AL"],
-        ["000005", "000005_AL"],
+        ["000001", "000002"],
+        ["000003", "000004"],
+        ["000005"],
     ]
     assert manager.subscribed_codes == {"000001", "000002", "000003", "000004", "000005"}
 
@@ -171,8 +235,8 @@ def test_send_reg_incremental_mode_does_not_replace_existing_group(monkeypatch):
     payloads = [json.loads(payload) for payload in fake_ws.sent]
     assert [payload["refresh"] for payload in payloads] == ["0", "0"]
     assert [payload["data"][0]["item"] for payload in payloads] == [
-        ["000003", "000003_AL", "000004", "000004_AL"],
-        ["000005", "000005_AL"],
+        ["000003", "000004"],
+        ["000005"],
     ]
     assert manager.subscribed_codes == {"000003", "000004", "000005"}
 
@@ -181,8 +245,8 @@ def test_command_ws_reg_recovery_forces_resubscribe(monkeypatch):
     manager = KiwoomWSManager("test-token")
     calls = []
 
-    def fake_execute(codes, *, force=False):
-        calls.append((codes, force))
+    def fake_execute(codes, *, force=False, source="", repair_cycle=""):
+        calls.append((codes, force, source, repair_cycle))
 
     monkeypatch.setattr(manager, "execute_subscribe", fake_execute)
 
@@ -190,7 +254,28 @@ def test_command_ws_reg_recovery_forces_resubscribe(monkeypatch):
         {"codes": ["240810"], "source": "scanner_watching_ws_snapshot_recovery"}
     )
 
-    assert calls == [(["240810"], True)]
+    assert calls == [(["240810"], True, "scanner_watching_ws_snapshot_recovery", "")]
+
+
+def test_command_ws_reg_persistent_repair_passes_repair_cycle(monkeypatch):
+    manager = KiwoomWSManager("test-token")
+    calls = []
+
+    def fake_execute(codes, *, force=False, source="", repair_cycle=""):
+        calls.append((codes, force, source, repair_cycle))
+
+    monkeypatch.setattr(manager, "execute_subscribe", fake_execute)
+
+    manager._handle_reg_event(
+        {
+            "codes": ["240810"],
+            "source": "scanner_persistent_ws_gap_recovery",
+            "force": True,
+            "repair_cycle": "persistent_ws_gap",
+        }
+    )
+
+    assert calls == [(["240810"], True, "scanner_persistent_ws_gap_recovery", "persistent_ws_gap")]
 
 
 def test_recent_reg_filter_skips_non_force_duplicates(monkeypatch):
@@ -207,7 +292,7 @@ def test_recent_reg_filter_skips_non_force_duplicates(monkeypatch):
     assert skipped == ["240810", "039490"]
 
 
-def test_recent_reg_filter_allows_force_duplicates(monkeypatch):
+def test_recent_reg_filter_throttles_force_duplicates(monkeypatch):
     manager = KiwoomWSManager("test-token")
     monkeypatch.setenv("KORSTOCKSCAN_WS_REG_RECENT_TTL_SEC", "20")
     monkeypatch.setattr(kiwoom_websocket.time, "time", lambda: 1000.0)
@@ -217,8 +302,8 @@ def test_recent_reg_filter_allows_force_duplicates(monkeypatch):
     assert skipped == []
 
     allowed, skipped = manager._filter_recent_reg_targets(["240810"], force=True)
-    assert allowed == ["240810"]
-    assert skipped == []
+    assert allowed == []
+    assert skipped == ["240810"]
 
 
 def test_recent_reg_filter_allows_after_ttl(monkeypatch):

@@ -2086,6 +2086,17 @@ def _scalp_simulator_active_targets(targets=None) -> list[dict]:
     ]
 
 
+def _scalp_live_simulator_max_open() -> int:
+    return max(0, _rule_int("SCALP_LIVE_SIMULATOR_MAX_OPEN", 0))
+
+
+def _cap_scalp_simulator_rows(rows: list[dict]) -> tuple[list[dict], int]:
+    max_open = _scalp_live_simulator_max_open()
+    if max_open <= 0 or len(rows) <= max_open:
+        return rows, 0
+    return rows[:max_open], len(rows) - max_open
+
+
 def _scalp_sim_state_mtime_ns() -> int | None:
     try:
         return SCALP_SIM_STATE_PATH.stat().st_mtime_ns if SCALP_SIM_STATE_PATH.exists() else None
@@ -2141,10 +2152,16 @@ def persist_scalp_simulator_state(targets=None) -> None:
                             "[SCALP_SIM_STATE] reconciled external state before persist "
                             f"removed={sync_result.get('removed')} restored={sync_result.get('restored')}"
                         )
-                active_positions = [
+                active_positions, capped = _cap_scalp_simulator_rows([
                     _json_safe_value(dict(target))
                     for target in _scalp_simulator_active_targets(target_list)
-                ]
+                ])
+                if capped:
+                    log_info(
+                        "[SCALP_SIM_STATE] capped persisted simulator targets "
+                        f"active={len(active_positions)} skipped={capped} "
+                        f"max_open={_scalp_live_simulator_max_open()}"
+                    )
                 payload = {
                     "schema_version": 1,
                     "simulation_book": SCALP_SIMULATION_BOOK,
@@ -2176,13 +2193,19 @@ def restore_scalp_simulator_targets(targets=None) -> int:
     if not isinstance(rows, list):
         return 0
     restored = 0
+    max_open = _scalp_live_simulator_max_open()
     existing_ids = {
         str((t or {}).get("sim_record_id") or "").strip()
         for t in target_list
         if _is_scalp_simulator_target(t)
     }
+    open_count = len(_scalp_simulator_active_targets(target_list))
+    cap_skipped = 0
     for row in rows:
         if not isinstance(row, dict) or not _active_runtime_status(row):
+            continue
+        if max_open > 0 and open_count >= max_open:
+            cap_skipped += 1
             continue
         sim_id = str(row.get("sim_record_id") or "").strip()
         if sim_id and sim_id in existing_ids:
@@ -2229,8 +2252,12 @@ def restore_scalp_simulator_targets(targets=None) -> int:
         if sim_id:
             existing_ids.add(sim_id)
         restored += 1
-    if restored:
-        log_info(f"[SCALP_SIM_STATE] restored active simulator targets={restored}")
+        open_count += 1
+    if restored or cap_skipped:
+        log_info(
+            f"[SCALP_SIM_STATE] restored active simulator targets={restored} "
+            f"cap_skipped={cap_skipped} max_open={max_open}"
+        )
     return restored
 
 
@@ -2246,12 +2273,20 @@ def sync_scalp_simulator_targets_from_state(targets=None) -> dict:
             payload = json.loads(SCALP_SIM_STATE_PATH.read_text(encoding="utf-8"))
             rows = payload.get("active_positions") if isinstance(payload, dict) else []
             if isinstance(rows, list):
+                active_rows, capped = _cap_scalp_simulator_rows([
+                    row for row in rows if isinstance(row, dict) and _active_runtime_status(row)
+                ])
                 active_ids = {
                     str((row or {}).get("sim_record_id") or "").strip()
-                    for row in rows
-                    if isinstance(row, dict) and _active_runtime_status(row)
+                    for row in active_rows
                 }
                 active_ids.discard("")
+                if capped:
+                    log_info(
+                        "[SCALP_SIM_STATE] capped state sync active ids "
+                        f"active={len(active_ids)} skipped={capped} "
+                        f"max_open={_scalp_live_simulator_max_open()}"
+                    )
         except Exception as exc:
             log_error(f"[SCALP_SIM_STATE] sync read failed: {exc}")
             return {"removed": 0, "restored": 0, "state_exists": state_exists, "error": str(exc)}
@@ -5101,6 +5136,25 @@ def maybe_arm_scalp_live_simulator_from_buy_signal(
                 sim_parent_record_id=stock.get("id"),
                 ai_score=f"{current_ai_score:.1f}",
                 runtime_effect="sim_observation_skipped",
+            ),
+        )
+        return False
+    max_open = max(0, _rule_int("SCALP_LIVE_SIMULATOR_MAX_OPEN", 0))
+    open_count = len(_scalp_simulator_active_targets())
+    if max_open > 0 and open_count >= max_open:
+        _log_entry_pipeline(
+            stock,
+            code,
+            "scalp_live_simulator_discarded",
+            **_scalp_sim_event_fields(
+                threshold_family="entry_mechanical_momentum",
+                sim_parent_record_id=stock.get("id"),
+                ai_score=f"{current_ai_score:.1f}",
+                discard_reason="max_open_reached",
+                open_count=open_count,
+                max_open=max_open,
+                runtime_effect="sim_observation_skipped",
+                decision_authority="sim_observation_only",
             ),
         )
         return False

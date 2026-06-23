@@ -1456,7 +1456,10 @@ def promote_candidates(db, event_bus, ranked_targets, recent_picks, *, max_new_c
             break
 
     if new_codes_found:
-        event_bus.publish("COMMAND_WS_REG", {"codes": new_codes_found})
+        event_bus.publish(
+            "COMMAND_WS_REG",
+            {"codes": new_codes_found, "source": "scalping_scanner_promote"},
+        )
         for payload in promoted_target_payloads:
             event_bus.publish("SCALPING_SCANNER_PROMOTED_TARGET", payload)
         print(f"📡 웹소켓 감시 등록 요청 완료: {len(new_codes_found)} 종목")

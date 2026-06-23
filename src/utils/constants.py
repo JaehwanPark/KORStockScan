@@ -122,6 +122,7 @@ class TradingConfig:
     SCALP_LIVE_SIMULATOR_OWNER: str = "ScalpAiBuyAllLiveSimulator0511"
     SCALP_LIVE_SIMULATOR_FILL_POLICY: str = "signal_inclusive_best_ask_v1"
     SCALP_LIVE_SIMULATOR_QTY: int = 0  # 0 이하는 SIM_VIRTUAL_BUDGET_KRW 기준 실주문 동적수량 산식 사용
+    SCALP_LIVE_SIMULATOR_MAX_OPEN: int = 0  # 0 이하는 전체 scalp live simulator open cap 없음
     SCALP_LIVE_SIMULATOR_ENTRY_TIMEOUT_SEC: int = 90  # deprecated: BUY signal inclusion no longer expires on quote touch
     SCALP_SIM_AUTO_POLICY_ENABLED: bool = False
     SCALP_SIM_AUTO_POLICY_FILE: str = ""
@@ -2516,6 +2517,7 @@ def _build_trading_rules() -> TradingConfig:
     env_scalp_live_simulator_owner = _env_str("KORSTOCKSCAN_SCALP_LIVE_SIMULATOR_OWNER")
     env_scalp_live_simulator_fill_policy = _env_str("KORSTOCKSCAN_SCALP_LIVE_SIMULATOR_FILL_POLICY")
     env_scalp_live_simulator_qty = _env_int("KORSTOCKSCAN_SCALP_LIVE_SIMULATOR_QTY")
+    env_scalp_live_simulator_max_open = _env_int("KORSTOCKSCAN_SCALP_LIVE_SIMULATOR_MAX_OPEN")
     env_scalp_sim_auto_policy_enabled = _env_bool("KORSTOCKSCAN_SCALP_SIM_AUTO_POLICY_ENABLED")
     env_scalp_sim_auto_policy_file = _env_str("KORSTOCKSCAN_SCALP_SIM_AUTO_POLICY_FILE")
     env_scalp_sim_auto_policy_version = _env_str("KORSTOCKSCAN_SCALP_SIM_AUTO_POLICY_VERSION")
@@ -2941,6 +2943,9 @@ def _build_trading_rules() -> TradingConfig:
             SCALP_LIVE_SIMULATOR_QTY=env_scalp_live_simulator_qty
             if env_scalp_live_simulator_qty is not None
             else config.SCALP_LIVE_SIMULATOR_QTY,
+            SCALP_LIVE_SIMULATOR_MAX_OPEN=env_scalp_live_simulator_max_open
+            if env_scalp_live_simulator_max_open is not None
+            else config.SCALP_LIVE_SIMULATOR_MAX_OPEN,
             SCALP_SIM_AUTO_POLICY_ENABLED=env_scalp_sim_auto_policy_enabled
             if env_scalp_sim_auto_policy_enabled is not None
             else config.SCALP_SIM_AUTO_POLICY_ENABLED,

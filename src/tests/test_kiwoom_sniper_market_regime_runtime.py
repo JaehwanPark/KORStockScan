@@ -219,7 +219,9 @@ def test_scalping_scanner_promoted_target_attaches_active_watching(monkeypatch):
             "marcap": 123456789,
         }
     ]
-    assert published == [("COMMAND_WS_REG", {"codes": ["005930"]})]
+    assert published == [
+        ("COMMAND_WS_REG", {"codes": ["005930"], "source": "scanner_runtime_target_attach"})
+    ]
     assert emitted[-1]["stage"] == "scalping_scanner_runtime_target_attach"
     assert emitted[-1]["fields"]["runtime_target_attach_outcome"] == "attached"
     assert emitted[-1]["fields"]["actual_order_submitted"] is False
@@ -427,7 +429,9 @@ def test_scalping_scanner_promoted_target_refresh_resets_eval_state(monkeypatch)
     )
     assert [target["id"] for target in ordered] == [77, 88]
     assert emitted[-1]["fields"]["runtime_target_attach_outcome"] == "refreshed"
-    assert published == [("COMMAND_WS_REG", {"codes": ["011930"]})]
+    assert published == [
+        ("COMMAND_WS_REG", {"codes": ["011930"], "source": "scanner_runtime_target_refresh"})
+    ]
 
 
 def test_scanner_pipeline_stock_snapshot_preserves_positive_promotion_context():
@@ -556,7 +560,9 @@ def test_scalping_scanner_promoted_target_ignores_non_real_same_symbol_observati
     assert attached is True
     assert len(kiwoom_sniper_v2.ACTIVE_TARGETS) == 2
     assert kiwoom_sniper_v2.ACTIVE_TARGETS[-1]["status"] == "WATCHING"
-    assert published == [("COMMAND_WS_REG", {"codes": ["005930"]})]
+    assert published == [
+        ("COMMAND_WS_REG", {"codes": ["005930"], "source": "scanner_runtime_target_attach"})
+    ]
     assert emitted[-1]["fields"]["runtime_target_attach_outcome"] == "attached"
 
 
@@ -611,7 +617,9 @@ def test_scalping_scanner_promoted_target_refreshes_existing_watching_and_ws(mon
     assert kiwoom_sniper_v2.ACTIVE_TARGETS[0]["name"] == "NEW"
     assert kiwoom_sniper_v2.ACTIVE_TARGETS[0]["buy_price"] == 70000
     assert kiwoom_sniper_v2.ACTIVE_TARGETS[0]["entry_armed_at_epoch"] == 1001.0
-    assert published == [("COMMAND_WS_REG", {"codes": ["005930"]})]
+    assert published == [
+        ("COMMAND_WS_REG", {"codes": ["005930"], "source": "scanner_runtime_target_refresh"})
+    ]
     assert emitted[-1]["fields"]["runtime_target_attach_outcome"] == "refreshed"
 
 
@@ -665,7 +673,9 @@ def test_scalping_scanner_promoted_target_refreshes_recency_from_promotion_epoch
     assert refreshed is True
     assert kiwoom_sniper_v2.ACTIVE_TARGETS[0]["entry_armed_at_epoch"] == 1200.0
     assert kiwoom_sniper_v2._runtime_iteration_targets(kiwoom_sniper_v2.ACTIVE_TARGETS, now_ts=1205.0)[0]["id"] == 77
-    assert published == [("COMMAND_WS_REG", {"codes": ["005930"]})]
+    assert published == [
+        ("COMMAND_WS_REG", {"codes": ["005930"], "source": "scanner_runtime_target_refresh"})
+    ]
     assert emitted[-1]["fields"]["runtime_target_attach_outcome"] == "refreshed"
 
 
@@ -704,7 +714,9 @@ def test_scalping_scanner_promoted_target_hydrates_missing_record_id(monkeypatch
     assert attached is True
     assert kiwoom_sniper_v2.ACTIVE_TARGETS[0]["id"] == 88
     assert emitted[-1]["fields"]["runtime_record_id"] == 88
-    assert published == [("COMMAND_WS_REG", {"codes": ["005930"]})]
+    assert published == [
+        ("COMMAND_WS_REG", {"codes": ["005930"], "source": "scanner_runtime_target_attach"})
+    ]
 
 
 def test_runtime_added_time_uses_scanner_entry_armed_epoch():
@@ -1165,6 +1177,46 @@ def test_scalping_fifo_max_active_env(monkeypatch):
 
     monkeypatch.setenv("KORSTOCKSCAN_SCALPING_WATCHING_MAX_ACTIVE", "0")
     assert kiwoom_sniper_v2._scalping_fifo_max_active() == 1
+
+
+def test_initial_ws_registration_groups_caps_scanner_hot_tier(monkeypatch):
+    monkeypatch.setenv("KORSTOCKSCAN_SCALPING_WATCHING_MAX_ACTIVE", "2")
+    targets = [
+        {"id": "hold", "code": "000001", "status": "HOLDING", "strategy": "SCALPING", "position_tag": "SCALP_BASE"},
+        {"id": "base", "code": "000002", "status": "WATCHING", "strategy": "KOSPI_ML", "position_tag": "META_V2"},
+        {
+            "id": "scanner_old_eval",
+            "code": "100001",
+            "status": "WATCHING",
+            "strategy": "SCALPING",
+            "position_tag": "SCANNER",
+            "entry_armed_at_epoch": 1000.0,
+            "_scanner_last_full_eval_epoch": 1010.0,
+        },
+        {
+            "id": "scanner_keep_fresh",
+            "code": "100002",
+            "status": "WATCHING",
+            "strategy": "SCALPING",
+            "position_tag": "SCANNER",
+            "entry_armed_at_epoch": 1020.0,
+        },
+        {
+            "id": "scanner_keep_rising",
+            "code": "100003",
+            "status": "WATCHING",
+            "strategy": "SCALPING",
+            "position_tag": "SCANNER",
+            "entry_armed_at_epoch": 1030.0,
+            "price_delta_since_first_seen_pct": "2.5",
+        },
+        {"id": "expired", "code": "999999", "status": "EXPIRED", "strategy": "SCALPING", "position_tag": "SCANNER"},
+    ]
+
+    priority_codes, scanner_codes = kiwoom_sniper_v2._initial_ws_registration_groups(targets, now_ts=1100.0)
+
+    assert priority_codes == ["000001", "000002"]
+    assert scanner_codes == ["100002", "100003"]
 
 
 def test_runtime_scanner_ws_snapshot_cache_uses_bulk_lookup(monkeypatch):
@@ -2576,6 +2628,151 @@ def test_subscription_recheck_snapshot_is_applied_before_fast_precheck_retry():
     assert retry_idx < residual_idx
 
 
+def test_scanner_no_trade_eviction_requires_grace_and_repeated_confirmation(monkeypatch):
+    monkeypatch.setenv("KORSTOCKSCAN_SCANNER_NO_TRADE_EVICTION_ENABLED", "true")
+    monkeypatch.setenv("KORSTOCKSCAN_SCANNER_NO_TRADE_EVICTION_GRACE_SEC", "60")
+    monkeypatch.setenv("KORSTOCKSCAN_SCANNER_NO_TRADE_EVICTION_MIN_COUNT", "2")
+    target = {
+        "id": 77,
+        "code": "005930",
+        "status": "WATCHING",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "buy_qty": 0,
+        "buy_time": None,
+        "entry_armed_at_epoch": 1000.0,
+    }
+    ws_data = {
+        "received_types": {"0D", "0w"},
+        "last_ws_update_ts": 1058.0,
+    }
+
+    decision = kiwoom_sniper_v2._scanner_watch_eviction_decision_from_no_trade(
+        target,
+        ws_data,
+        now_ts=1059.0,
+    )
+    assert decision["should_evict"] is False
+    assert decision["eviction_reason"] == "scanner_no_trade_grace_active"
+
+    first_confirm = kiwoom_sniper_v2._scanner_watch_eviction_decision_from_no_trade(
+        target,
+        ws_data,
+        now_ts=1061.0,
+    )
+    assert first_confirm["should_evict"] is False
+    assert first_confirm["eviction_attempt_count"] == 1
+
+    second_confirm = kiwoom_sniper_v2._scanner_watch_eviction_decision_from_no_trade(
+        target,
+        ws_data,
+        now_ts=1067.0,
+    )
+    assert second_confirm["should_evict"] is True
+    assert second_confirm["eviction_reason"] == "scanner_no_trade_hot_slot_rotation"
+    assert second_confirm["terminal_reason"] == "no_0b_after_grace"
+    assert second_confirm["no_trade_received_types"] == "0D,0w"
+
+
+def test_scanner_no_trade_eviction_resets_when_0b_arrives(monkeypatch):
+    monkeypatch.setenv("KORSTOCKSCAN_SCANNER_NO_TRADE_EVICTION_GRACE_SEC", "60")
+    target = {
+        "id": 77,
+        "code": "005930",
+        "status": "WATCHING",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "buy_qty": 0,
+        "buy_time": None,
+        "entry_armed_at_epoch": 1000.0,
+        "_scanner_watch_no_trade_count": 3,
+        "_scanner_watch_no_trade_first_observed_epoch": 1061.0,
+        "_scanner_watch_no_trade_last_observed_epoch": 1067.0,
+    }
+
+    decision = kiwoom_sniper_v2._scanner_watch_eviction_decision_from_no_trade(
+        target,
+        {"received_types": {"0B", "0D"}, "last_ws_update_ts": 1070.0},
+        now_ts=1070.0,
+    )
+
+    assert decision["should_evict"] is False
+    assert "_scanner_watch_no_trade_count" not in target
+    assert "_scanner_watch_no_trade_first_observed_epoch" not in target
+    assert "_scanner_watch_no_trade_last_observed_epoch" not in target
+
+
+def test_scanner_no_trade_eviction_waits_for_realtime_type(monkeypatch):
+    monkeypatch.setenv("KORSTOCKSCAN_SCANNER_NO_TRADE_EVICTION_GRACE_SEC", "60")
+    target = {
+        "id": 77,
+        "code": "005930",
+        "status": "WATCHING",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "buy_qty": 0,
+        "buy_time": None,
+        "entry_armed_at_epoch": 1000.0,
+        "_scanner_watch_no_trade_count": 2,
+    }
+
+    decision = kiwoom_sniper_v2._scanner_watch_eviction_decision_from_no_trade(
+        target,
+        {"curr": 70000, "ws_snapshot_recovery_source": "ka10001_rest_quote_fallback"},
+        now_ts=1100.0,
+    )
+
+    assert decision["should_evict"] is False
+    assert decision["eviction_reason"] == "scanner_no_trade_waiting_realtime_type"
+    assert "_scanner_watch_no_trade_count" not in target
+
+
+def test_ws_reg_budget_skipped_expires_scanner_hot_slot(monkeypatch):
+    emitted = []
+    active = [
+        {
+            "id": 77,
+            "code": "005930",
+            "status": "WATCHING",
+            "strategy": "SCALPING",
+            "position_tag": "SCANNER",
+            "buy_qty": 0,
+            "buy_time": None,
+        },
+        {
+            "id": 88,
+            "code": "000660",
+            "status": "HOLDING",
+            "strategy": "SCALPING",
+            "position_tag": "SCALP_BASE",
+            "buy_qty": 1,
+        },
+    ]
+    fake_db = _ExpireDB()
+    monkeypatch.setattr(kiwoom_sniper_v2, "ACTIVE_TARGETS", active)
+    monkeypatch.setattr(kiwoom_sniper_v2, "DB", fake_db)
+    monkeypatch.setattr(
+        kiwoom_sniper_v2.sniper_state_handlers,
+        "_log_entry_pipeline",
+        lambda target, code, stage, **fields: emitted.append(
+            {"target": target, "code": code, "stage": stage, "fields": fields}
+        ),
+    )
+
+    expired = kiwoom_sniper_v2.handle_ws_reg_budget_skipped(
+        {"codes": ["005930", "000660"], "source": "scalping_scanner_promote", "max_items": 24}
+    )
+
+    assert expired is True
+    assert active[0]["status"] == "EXPIRED"
+    assert active[1]["status"] == "HOLDING"
+    assert fake_db.calls == [({"status": "EXPIRED"}, False)]
+    assert emitted[-1]["stage"] == "scalping_scanner_watch_eviction"
+    assert emitted[-1]["fields"]["eviction_reason"] == "scanner_ws_budget_skipped_hot_slot_rotation"
+    assert emitted[-1]["fields"]["terminal_reason"] == "ws_item_budget_exhausted"
+    assert emitted[-1]["fields"]["ws_recovery_outcome"] == "ws_reg_budget_skipped"
+
+
 def test_db_poll_scanner_target_attach_logs_recovery(monkeypatch):
     emitted = []
     published = []
@@ -2611,7 +2808,9 @@ def test_db_poll_scanner_target_attach_logs_recovery(monkeypatch):
     assert attached is True
     assert targets[0]["id"] == 99
     assert targets[0]["added_time"] == 1002.0
-    assert published == [("COMMAND_WS_REG", {"codes": ["005930"]})]
+    assert published == [
+        ("COMMAND_WS_REG", {"codes": ["005930"], "source": "scanner_db_poll_attach"})
+    ]
     assert emitted[-1]["stage"] == "scalping_scanner_runtime_target_attach"
     assert emitted[-1]["fields"]["runtime_target_attach_outcome"] == "db_poll_attached"
     assert emitted[-1]["fields"]["runtime_target_attach_reason"] == "eventbus_attach_missing_recovered_from_database_poll"
