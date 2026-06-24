@@ -2221,6 +2221,28 @@ def _scalping_fifo_max_active():
     return _scalping_dynamic_watch_cap_effective(base_cap)
 
 
+def _scalping_attach_capacity_allows(new_target, now_ts):
+    if not _is_scalping_fifo_target(new_target):
+        return True
+    scanner_limit = _scalping_fifo_max_active()
+    watching_targets = [
+        target
+        for target in ACTIVE_TARGETS
+        if str((target or {}).get("status") or "").upper() == "WATCHING"
+        and _is_scalping_fifo_target(target)
+    ]
+    if len(watching_targets) < scanner_limit:
+        return True
+
+    candidate = dict(new_target or {})
+    candidate["_scanner_attach_capacity_candidate"] = True
+    overflow = _scalping_fifo_overflow_candidates(
+        [*watching_targets, candidate],
+        now_ts,
+    )[: max(0, len(watching_targets) + 1 - scanner_limit)]
+    return not any(item.get("_scanner_attach_capacity_candidate") for item in overflow)
+
+
 def _update_scalping_dynamic_watch_cap(loop_elapsed_ms, *, now_ts=None, buy_time_allowed=True):
     if not _scalping_dynamic_watch_cap_enabled():
         return _scalping_fifo_base_max_active()
@@ -3313,6 +3335,29 @@ def handle_scalping_scanner_promoted_target(payload):
             "source_signature": payload.get("source_signature") or "",
             **scanner_context_updates,
         }
+        if not _scalping_attach_capacity_allows(new_target, now_ts):
+            _log_scanner_runtime_target_attach(
+                {
+                    **payload_for_log,
+                    "scanner_attach_capacity_cap": _scalping_fifo_max_active(),
+                    "scanner_attach_capacity_watching_count": len(
+                        [
+                            target
+                            for target in ACTIVE_TARGETS
+                            if str((target or {}).get("status") or "").upper() == "WATCHING"
+                            and _is_scalping_fifo_target(target)
+                        ]
+                    ),
+                },
+                outcome="skipped",
+                reason="scalping_dynamic_watch_cap_capacity",
+                target=new_target,
+            )
+            log_info(
+                f"[SCALPING_SCANNER_PROMOTED_TARGET] skipped {code} "
+                f"reason=scalping_dynamic_watch_cap_capacity cap={_scalping_fifo_max_active()}"
+            )
+            return False
         new_target["marcap"] = _resolve_stock_marcap(new_target, code)
         ACTIVE_TARGETS.append(new_target)
 
