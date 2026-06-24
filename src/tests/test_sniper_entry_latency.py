@@ -711,6 +711,48 @@ def test_pre_ai_strength_ws_snapshot_refresh_uses_fresh_ws_manager_history(monke
     assert refreshed["v_pw"] == 121.0
 
 
+def test_pre_ai_strength_ws_snapshot_refresh_normalizes_latest_tick_timestamp(monkeypatch):
+    now = time.time()
+
+    class FakeWsManager:
+        def get_latest_data(self, code):
+            assert code == "123456"
+            return {
+                "curr": 10_020,
+                "v_pw": 121.0,
+                "last_ws_update_ts": now - 8.0,
+                "last_realtime_type_ts": {"0B": now - 0.2},
+                "strength_momentum_history": [
+                    {"ts": now - 8.0, "v_pw": 100.0, "tick_value": 1000},
+                    {"ts": now - 0.2, "v_pw": 121.0, "tick_value": 2000},
+                ],
+            }
+
+    monkeypatch.setattr(state_handlers, "WS_MANAGER", FakeWsManager())
+    monkeypatch.setattr(
+        state_handlers,
+        "TRADING_RULES",
+        replace(CONFIG, SCALP_PRE_AI_MAX_WS_AGE_SEC=3.0),
+    )
+
+    refreshed, fields = state_handlers._pre_ai_refresh_strength_momentum_ws_snapshot(
+        "123456",
+        {
+            "curr": 10_000,
+            "v_pw": 99.0,
+            "last_ws_update_ts": now - 10.0,
+            "strength_momentum_history": [],
+        },
+        "SCALPING",
+    )
+
+    assert fields["pre_ai_ws_snapshot_refresh_applied"] is True
+    assert fields["pre_ai_ws_snapshot_refresh_reason"] == "latest_ws_snapshot_fresh"
+    assert fields["pre_ai_ws_snapshot_refresh_latest_timestamp_normalized_from"] == "last_realtime_type_ts_0B"
+    assert fields["pre_ai_ws_snapshot_refresh_age_ms"] < 1000
+    assert refreshed["pre_ai_last_ws_update_ts_normalized_from"] == "last_realtime_type_ts_0B"
+
+
 def test_pre_ai_strength_ws_snapshot_refresh_keeps_fresh_input_history_count(monkeypatch):
     now = time.time()
     monkeypatch.setattr(state_handlers, "WS_MANAGER", None)

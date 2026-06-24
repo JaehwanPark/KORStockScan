@@ -1056,7 +1056,7 @@ def send_smart_sell_order(
     """
      [v14.0] 슬리피지 방어를 위한 스마트 매도 로직 (사유 기반 동적 시장가 전환)
     - LOSS, CLOSE: 긴급 탈출 -> 시장가(3)
-    - MOMENTUM_DECAY, TRAILING: 빠른 익절 보장 -> 최유리지정가(6)
+    - MOMENTUM_DECAY, TRAILING, LIMIT_UP: 빠른 익절 보장 -> 최유리지정가(6)
     - 기타(PROFIT, TIMEOUT): 1호가 잔량 확인 후 지정가(00) 우선 시도
     """
     if qty <= 0: return None
@@ -1110,7 +1110,7 @@ def send_smart_sell_order(
 
     # 💰 익절(PROFIT): 슬리피지 방어 가동
     # ⚠️ 모멘텀 급감, 트레일링 스탑 (MOMENTUM_DECAY, TRAILING) : 최유리지정가(6)로 시장가에 가깝게 즉시 체결 유도
-    elif reason_type in ['MOMENTUM_DECAY', 'TRAILING']:
+    elif reason_type in ['MOMENTUM_DECAY', 'TRAILING', 'LIMIT_UP']:
         print(f"⚠️ [시장가성 매도] {code}: 최유리지정가(6) 매도 (사유: {reason_type}, 수량: {qty})")
         return send_sell_order_market(
             code,

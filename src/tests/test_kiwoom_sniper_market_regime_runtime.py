@@ -434,6 +434,83 @@ def test_scalping_scanner_promoted_target_refresh_resets_eval_state(monkeypatch)
     ]
 
 
+def test_scalping_scanner_promoted_target_refresh_preserves_higher_positive_delta(monkeypatch):
+    emitted = []
+    published = []
+    existing = {
+        "id": 77,
+        "code": "397030",
+        "name": "에이프릴바이오",
+        "strategy": "SCALPING",
+        "status": "WATCHING",
+        "position_tag": "SCANNER",
+        "entry_armed_at_epoch": 1000.0,
+        "added_time": 1000.0,
+        "scanner_promotion_id": "SCANPROM-397030-1000000",
+        "scanner_promotion_reason": "price_jump_start_acceleration",
+        "scanner_promotion_emitted_epoch": "1000.000",
+        "source_signature": "PRICE_JUMP_START,VOLUME_SURGE_POSITIVE",
+        "price_delta_since_first_seen_pct": "7.72",
+        "comparable_flu_delta_since_first_seen": "7.72",
+        "cntr_str": "181.0",
+    }
+    monkeypatch.setattr(kiwoom_sniper_v2, "ACTIVE_TARGETS", [existing])
+    monkeypatch.setattr(kiwoom_sniper_v2, "_resolve_stock_marcap", lambda stock, code: 123456789)
+    monkeypatch.setattr(
+        kiwoom_sniper_v2,
+        "emit_pipeline_event",
+        lambda pipeline, name, code, stage, *, record_id=None, fields=None: emitted.append(
+            {"stage": stage, "fields": fields or {}}
+        ),
+    )
+    monkeypatch.setattr(
+        kiwoom_sniper_v2,
+        "event_bus",
+        SimpleNamespace(publish=lambda name, payload: published.append((name, payload))),
+    )
+
+    refreshed = kiwoom_sniper_v2.handle_scalping_scanner_promoted_target(
+        {
+            "record_id": 77,
+            "code": "397030",
+            "name": "에이프릴바이오",
+            "strategy": "SCALPING",
+            "status": "WATCHING",
+            "position_tag": "SCANNER",
+            "buy_price": 15500,
+            "added_time": 2000.0,
+            "entry_armed_at_epoch": 2000.0,
+            "scanner_promotion_id": "SCANPROM-397030-2000000",
+            "scanner_promotion_reason": "price_jump_start_acceleration",
+            "scanner_promotion_emitted_epoch": "2000.000",
+            "source_signature": "PRICE_JUMP_START",
+            "current_price_observed": 15500,
+            "price_delta_since_first_seen_pct": "0.00",
+            "comparable_flu_delta_since_first_seen": "0.00",
+            "cntr_str_available": "True",
+            "cntr_str": "190.0",
+        }
+    )
+
+    assert refreshed is True
+    assert existing["price_delta_since_first_seen_pct"] == "7.72"
+    assert existing["comparable_flu_delta_since_first_seen"] == "7.72"
+    assert existing["entry_armed_at_epoch"] == 1000.0
+    assert existing["added_time"] == 1000.0
+    assert existing["scanner_promotion_id"] == "SCANPROM-397030-1000000"
+    assert existing["scanner_promotion_emitted_epoch"] == "1000.000"
+    assert existing["source_signature"] == "PRICE_JUMP_START,VOLUME_SURGE_POSITIVE"
+    assert existing["cntr_str"] == "190.0"
+    assert emitted[-1]["fields"]["price_delta_since_first_seen_pct"] == "7.72"
+    assert emitted[-1]["fields"]["scanner_promotion_id"] == "SCANPROM-397030-1000000"
+    assert emitted[-1]["fields"]["scanner_positive_delta_context_preserved"] is True
+    assert emitted[-1]["fields"]["scanner_positive_delta_context_previous_pct"] == "7.72"
+    assert emitted[-1]["fields"]["scanner_positive_delta_context_incoming_pct"] == "0.00"
+    assert published == [
+        ("COMMAND_WS_REG", {"codes": ["397030"], "source": "scanner_runtime_target_refresh"})
+    ]
+
+
 def test_scanner_pipeline_stock_snapshot_preserves_positive_promotion_context():
     snapshot = kiwoom_sniper_v2._scanner_pipeline_stock_snapshot(
         {
@@ -3015,6 +3092,69 @@ def test_scanner_no_trade_eviction_requires_grace_and_repeated_confirmation(monk
     assert second_confirm["eviction_reason"] == "scanner_no_trade_hot_slot_rotation"
     assert second_confirm["terminal_reason"] == "no_0b_after_grace"
     assert second_confirm["no_trade_received_types"] == "0D,0w"
+
+
+def test_scanner_stale_eviction_counts_old_rest_quote_with_stale_ws(monkeypatch):
+    monkeypatch.setenv("KORSTOCKSCAN_SCANNER_REST_QUOTE_STALE_EVICTION_MAX_WATCH_AGE_SEC", "300")
+    target = {
+        "id": 77,
+        "code": "005930",
+        "status": "WATCHING",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "buy_qty": 0,
+        "buy_time": None,
+        "entry_armed_at_epoch": 1000.0,
+        "_scanner_watch_eviction_stale_first_seen_epoch": 1000.0,
+        "_scanner_watch_eviction_stale_count": 2,
+    }
+
+    decision = kiwoom_sniper_v2._scanner_watch_eviction_decision_from_stale(
+        target,
+        now_ts=1400.0,
+        stale_reason="stale_ws_snapshot",
+        recovery_fields={
+            "ws_recovery_outcome": "rest_quote_applied",
+            "ws_subscription_repair_needed": True,
+            "ws_subscription_recheck_status": "subscribed_snapshot_stale_or_missing",
+        },
+    )
+
+    assert decision["should_evict"] is True
+    assert decision["eviction_reason"] == "stale_recovery_failed"
+    assert decision["eviction_attempt_count"] == 3
+    assert decision["ws_recovery_outcome"] == "rest_quote_applied_ws_still_stale"
+
+
+def test_scanner_stale_eviction_resets_recent_rest_quote_recovery(monkeypatch):
+    monkeypatch.setenv("KORSTOCKSCAN_SCANNER_REST_QUOTE_STALE_EVICTION_MAX_WATCH_AGE_SEC", "300")
+    target = {
+        "id": 77,
+        "code": "005930",
+        "status": "WATCHING",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "buy_qty": 0,
+        "buy_time": None,
+        "entry_armed_at_epoch": 1300.0,
+        "_scanner_watch_eviction_stale_first_seen_epoch": 1300.0,
+        "_scanner_watch_eviction_stale_count": 2,
+    }
+
+    decision = kiwoom_sniper_v2._scanner_watch_eviction_decision_from_stale(
+        target,
+        now_ts=1400.0,
+        stale_reason="stale_ws_snapshot",
+        recovery_fields={
+            "ws_recovery_outcome": "rest_quote_applied",
+            "ws_subscription_repair_needed": True,
+            "ws_subscription_recheck_status": "subscribed_snapshot_stale_or_missing",
+        },
+    )
+
+    assert decision["should_evict"] is False
+    assert decision["eviction_attempt_count"] == 0
+    assert "_scanner_watch_eviction_stale_count" not in target
 
 
 def test_scanner_no_trade_eviction_resets_when_0b_arrives(monkeypatch):

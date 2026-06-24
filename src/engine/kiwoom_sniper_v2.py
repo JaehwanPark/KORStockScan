@@ -245,6 +245,8 @@ SCANNER_WATCH_EVICTION_SOURCE_QUALITY_REASONS = {
     "insufficient_history",
 }
 SCANNER_WATCH_EVICTION_STALE_REASONS = {
+    "rest_quote_without_realtime_strength",
+    "subscription_recheck_without_realtime_strength",
     "stale_ws_snapshot",
     "ws_snapshot_missing_or_zero",
     "scanner_fast_precheck_stability_pending",
@@ -1020,6 +1022,15 @@ def _scanner_no_trade_eviction_enabled():
     return _env_bool("KORSTOCKSCAN_SCANNER_NO_TRADE_EVICTION_ENABLED", True)
 
 
+def _scanner_rest_quote_stale_eviction_max_watch_age_sec():
+    raw = os.getenv("KORSTOCKSCAN_SCANNER_REST_QUOTE_STALE_EVICTION_MAX_WATCH_AGE_SEC", "")
+    try:
+        value = float(str(raw).strip()) if str(raw).strip() else 300.0
+    except Exception:
+        value = 300.0
+    return max(60.0, min(value, 1800.0))
+
+
 def _scanner_no_trade_eviction_grace_sec():
     raw = os.getenv("KORSTOCKSCAN_SCANNER_NO_TRADE_EVICTION_GRACE_SEC", "")
     try:
@@ -1161,6 +1172,17 @@ def _scanner_runtime_target_event_fields(payload, *, outcome, reason, target=Non
         "scanner_identity_ws_curr": payload.get("scanner_identity_ws_curr", "not_evaluated"),
         "scanner_identity_price_ratio": payload.get("scanner_identity_price_ratio", "not_evaluated"),
         "scanner_identity_mismatch_expired": payload.get("scanner_identity_mismatch_expired", False),
+        "scanner_positive_delta_context_preserved": bool(
+            payload.get("scanner_positive_delta_context_preserved", False)
+        ),
+        "scanner_positive_delta_context_previous_pct": payload.get(
+            "scanner_positive_delta_context_previous_pct",
+            "not_applicable_positive_delta_context_previous_pct",
+        ),
+        "scanner_positive_delta_context_incoming_pct": payload.get(
+            "scanner_positive_delta_context_incoming_pct",
+            "not_applicable_positive_delta_context_incoming_pct",
+        ),
     }
 
 
@@ -1354,6 +1376,10 @@ def _scanner_watch_eviction_decision_from_terminal(target, *, now_ts):
     if not fresh_input_confirmed:
         _scanner_watch_reset_terminal_eviction_state(target)
         return {"should_evict": False, "eviction_attempt_count": 0}
+    had_stale_source_quality_state = (
+        _safe_float(target.get("_scanner_watch_eviction_stale_first_seen_epoch"), 0.0) > 0
+        or _safe_int(target.get("_scanner_watch_eviction_stale_count"), 0) > 0
+    )
     _scanner_watch_reset_stale_eviction_state(target)
     block_epoch = _safe_float(block.get("observed_epoch"), 0.0)
     last_block_epoch = _safe_float(target.get("_scanner_watch_eviction_last_terminal_observed_epoch"), 0.0)
@@ -1375,6 +1401,19 @@ def _scanner_watch_eviction_decision_from_terminal(target, *, now_ts):
     if block_epoch > 0:
         target["_scanner_watch_eviction_last_terminal_observed_epoch"] = block_epoch
     hardgate_prefilter = stage in SCANNER_WATCH_EVICTION_PREFILTER_HARDGATE_STAGES
+    if had_stale_source_quality_state and hardgate_prefilter and attempt_count == 1:
+        return {
+            "should_evict": False,
+            "eviction_reason": "fresh_terminal_after_source_quality_reset",
+            "eviction_attempt_count": attempt_count,
+            "terminal_stage": stage,
+            "terminal_reason": reason,
+            "fresh_input_confirmed": True,
+            "stale_first_seen_epoch": "not_applicable_stale_first_seen_epoch",
+            "stale_age_sec": "not_applicable_stale_age_sec",
+            "ws_recovery_outcome": "not_applicable_ws_recovery_outcome",
+            "observed_epoch": f"{float(now_ts):.3f}",
+        }
     return {
         "should_evict": hardgate_prefilter or attempt_count >= SCANNER_WATCH_EVICTION_TERMINAL_MIN_COUNT,
         "eviction_reason": "scanner_hardgate_prefilter" if hardgate_prefilter else "terminal_blocker_repeated",
@@ -1405,12 +1444,29 @@ def _scanner_watch_eviction_decision_from_stale(target, *, now_ts, stale_reason,
             else "not_applicable_ws_recovery_outcome"
         )
     )
-    if recovery_outcome == "rest_quote_applied":
+    subscription_repair_needed = bool(recovery_fields.get("ws_subscription_repair_needed"))
+    subscription_recheck_status = str(recovery_fields.get("ws_subscription_recheck_status") or "")
+    watch_age_sec = max(0.0, float(now_ts) - _runtime_added_time_for_target(target, now_ts=now_ts))
+    rest_quote_still_ws_stale = (
+        recovery_outcome == "rest_quote_applied"
+        and (
+            subscription_repair_needed
+            or subscription_recheck_status in {"subscribed_snapshot_stale_or_missing", "missing_or_not_subscribed"}
+        )
+        and watch_age_sec >= _scanner_rest_quote_stale_eviction_max_watch_age_sec()
+    )
+    if recovery_outcome == "rest_quote_applied" and not rest_quote_still_ws_stale:
         _scanner_watch_reset_stale_eviction_state(target)
         return {"should_evict": False, "eviction_attempt_count": 0}
+    if rest_quote_still_ws_stale:
+        recovery_outcome = "rest_quote_applied_ws_still_stale"
     first_seen = _safe_float(target.get("_scanner_watch_eviction_stale_first_seen_epoch"), 0.0)
     if first_seen <= 0:
-        first_seen = float(now_ts)
+        first_seen = (
+            _runtime_added_time_for_target(target, now_ts=now_ts)
+            if rest_quote_still_ws_stale
+            else float(now_ts)
+        )
     attempt_count = _safe_int(target.get("_scanner_watch_eviction_stale_count"), 0) + 1
     stale_age_sec = max(0.0, float(now_ts) - first_seen)
     after_buy_window_source_quality_expired = (
@@ -1910,8 +1966,12 @@ def _scanner_rising_entry_min_delta_pct():
 def _scanner_is_rising_entry_relief_candidate(target):
     if not _is_scanner_watching_target(target):
         return False
+    existing_delta = _scanner_positive_delta_value(target)
     sniper_state_handlers._hydrate_scanner_promotion_runtime_context(target)
-    return _scanner_positive_delta_value(target) >= _scanner_rising_entry_min_delta_pct()
+    hydrated_delta = _scanner_positive_delta_value(target)
+    if existing_delta > hydrated_delta and isinstance(target, dict):
+        target["price_delta_since_first_seen_pct"] = f"{existing_delta:.2f}"
+    return max(existing_delta, hydrated_delta) >= _scanner_rising_entry_min_delta_pct()
 
 
 def _scanner_rising_full_eval_extra_per_loop():
@@ -2921,6 +2981,32 @@ def _scanner_runtime_context_updates(payload):
     return updates
 
 
+def _scanner_merge_context_preserving_positive_delta(existing, updates):
+    updates = dict(updates or {})
+    if not isinstance(existing, dict):
+        return updates, {}
+    delta_keys = ("price_delta_since_first_seen_pct", "comparable_flu_delta_since_first_seen")
+    if not any(key in updates for key in delta_keys):
+        return updates, {}
+
+    existing_delta = max(_safe_float(existing.get(key), 0.0) for key in delta_keys)
+    incoming_delta = max(_safe_float(updates.get(key), 0.0) for key in delta_keys)
+    if existing_delta <= 0.0 or existing_delta <= incoming_delta:
+        return updates, {}
+
+    for key in delta_keys:
+        existing_value = existing.get(key)
+        if existing_value in (None, ""):
+            continue
+        if _safe_float(existing_value, 0.0) > _safe_float(updates.get(key), 0.0):
+            updates[key] = existing_value
+    return updates, {
+        "scanner_positive_delta_context_preserved": True,
+        "scanner_positive_delta_context_previous_pct": f"{existing_delta:.2f}",
+        "scanner_positive_delta_context_incoming_pct": f"{incoming_delta:.2f}",
+    }
+
+
 def _scanner_pipeline_stock_snapshot(stock_value):
     if not isinstance(stock_value, dict):
         return {}
@@ -2997,28 +3083,73 @@ def handle_scalping_scanner_promoted_target(payload):
         if existing is not None:
             status = str(existing.get("status") or "").upper()
             if status == "WATCHING":
+                refresh_context_updates, refresh_context_fields = (
+                    _scanner_merge_context_preserving_positive_delta(existing, scanner_context_updates)
+                )
+                positive_context_preserved = bool(
+                    refresh_context_fields.get("scanner_positive_delta_context_preserved")
+                )
+                refresh_added_time = (
+                    existing.get("added_time")
+                    if positive_context_preserved and existing.get("added_time") not in (None, "")
+                    else now_ts
+                )
+                refresh_anchor_ts = (
+                    existing.get("entry_armed_at_epoch")
+                    if positive_context_preserved and existing.get("entry_armed_at_epoch") not in (None, "")
+                    else promotion_anchor_ts
+                )
+                refresh_promotion_id = (
+                    existing.get("scanner_promotion_id")
+                    if positive_context_preserved and existing.get("scanner_promotion_id")
+                    else payload.get("scanner_promotion_id") or existing.get("scanner_promotion_id")
+                )
+                refresh_promotion_reason = (
+                    existing.get("scanner_promotion_reason")
+                    if positive_context_preserved and existing.get("scanner_promotion_reason")
+                    else payload.get("scanner_promotion_reason") or existing.get("scanner_promotion_reason")
+                )
+                refresh_promotion_epoch = (
+                    existing.get("scanner_promotion_emitted_epoch")
+                    if positive_context_preserved and existing.get("scanner_promotion_emitted_epoch")
+                    else payload.get("scanner_promotion_emitted_epoch")
+                    or existing.get("scanner_promotion_emitted_epoch")
+                )
+                refresh_source_signature = (
+                    existing.get("source_signature")
+                    if positive_context_preserved and existing.get("source_signature")
+                    else payload.get("source_signature") or existing.get("source_signature")
+                )
                 existing.update(
                     {
                         "id": record_id or existing.get("id"),
                         "name": payload.get("name") or existing.get("name"),
                         "buy_price": buy_price or existing.get("buy_price"),
-                        "added_time": now_ts,
-                        "entry_armed_at_epoch": promotion_anchor_ts,
+                        "added_time": refresh_added_time,
+                        "entry_armed_at_epoch": refresh_anchor_ts,
                         "position_tag": position_tag,
-                        "scanner_promotion_id": payload.get("scanner_promotion_id") or existing.get("scanner_promotion_id"),
-                        "scanner_promotion_reason": payload.get("scanner_promotion_reason")
-                        or existing.get("scanner_promotion_reason"),
-                        "scanner_promotion_emitted_epoch": payload.get("scanner_promotion_emitted_epoch")
-                        or existing.get("scanner_promotion_emitted_epoch"),
-                        "source_signature": payload.get("source_signature") or existing.get("source_signature"),
-                        **scanner_context_updates,
+                        "scanner_promotion_id": refresh_promotion_id,
+                        "scanner_promotion_reason": refresh_promotion_reason,
+                        "scanner_promotion_emitted_epoch": refresh_promotion_epoch,
+                        "source_signature": refresh_source_signature,
+                        **refresh_context_updates,
                     }
                 )
                 _reset_scanner_runtime_eval_state(existing)
                 if buy_price > 0 and not existing.get("marcap"):
                     existing["marcap"] = _resolve_stock_marcap(existing, code)
                 _log_scanner_runtime_target_attach(
-                    payload_for_log,
+                    {
+                        **payload_for_log,
+                        **refresh_context_updates,
+                        **refresh_context_fields,
+                        "added_time": refresh_added_time,
+                        "entry_armed_at_epoch": refresh_anchor_ts,
+                        "scanner_promotion_id": refresh_promotion_id,
+                        "scanner_promotion_reason": refresh_promotion_reason,
+                        "scanner_promotion_emitted_epoch": refresh_promotion_epoch,
+                        "source_signature": refresh_source_signature,
+                    },
                     outcome="refreshed",
                     reason="existing_watching_refreshed",
                     target=existing,
@@ -4446,7 +4577,10 @@ def run_sniper(is_test_mode=False):
                         fast_precheck_result = str(stock.get("_scanner_fast_precheck_result") or "")
                         fast_precheck_reason = str(stock.get("_scanner_fast_precheck_reason") or "")
                         recovery_fields = {}
-                        if fast_precheck_result != "eligible_for_heavy_entry_eval" and fast_precheck_reason == "stale_ws_snapshot":
+                        fast_precheck_stale_like = (
+                            fast_precheck_reason in SCANNER_WATCH_EVICTION_STALE_REASONS
+                        )
+                        if fast_precheck_result != "eligible_for_heavy_entry_eval" and fast_precheck_stale_like:
                             rest_quote_allowed, rest_quote_deferred_reason = _scanner_rest_quote_recovery_options(
                                 stock,
                                 heavy_queue_enter_epoch,
@@ -4531,7 +4665,7 @@ def run_sniper(is_test_mode=False):
                                 "ws_recovery_action",
                                 (
                                     "ws_reg_reissued"
-                                    if fast_precheck_reason == "stale_ws_snapshot"
+                                    if fast_precheck_stale_like
                                     else "not_applicable_ws_recovery_action"
                                 ),
                             )
@@ -4539,7 +4673,7 @@ def run_sniper(is_test_mode=False):
                                 "ws_recovery_outcome",
                                 (
                                     "ws_reg_reissued_waiting_snapshot"
-                                    if fast_precheck_reason == "stale_ws_snapshot"
+                                    if fast_precheck_stale_like
                                     else "not_applicable_ws_recovery_outcome"
                                 ),
                             )
@@ -4549,12 +4683,12 @@ def run_sniper(is_test_mode=False):
                             )
                             if (
                                 skip_recovery_fields.get("ws_subscription_recheck_snapshot_applied")
-                                and fast_precheck_reason == "stale_ws_snapshot"
+                                and fast_precheck_stale_like
                             ):
                                 skip_recovery_fields["subscription_alive_but_entry_stale"] = True
                                 skip_recovery_fields[
                                     "entry_freshness_after_subscription_recheck"
-                                ] = "stale_ws_snapshot"
+                                ] = fast_precheck_reason
                                 skip_recovery_fields[
                                     "entry_evaluable_fresh_after_subscription_recheck"
                                 ] = False
@@ -4573,7 +4707,7 @@ def run_sniper(is_test_mode=False):
                                 fast_precheck_reason=fast_precheck_reason or "-",
                                 **skip_recovery_fields,
                             )
-                            if fast_precheck_reason == "stale_ws_snapshot":
+                            if fast_precheck_stale_like:
                                 _maybe_expire_scanner_watch_for_stale(
                                     stock,
                                     code,

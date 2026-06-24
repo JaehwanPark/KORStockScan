@@ -14,6 +14,12 @@ _SCALE_IN_RULES = {
         "floor_rule": "REVERSAL_ADD_MIN_QTY_FLOOR_ENABLED",
         "floor_default": True,
     },
+    ("SCALPING", "AVG_DOWN", "late_loss_avg_down_retry"): {
+        "ratio_rule": "REVERSAL_ADD_SIZE_RATIO",
+        "default_ratio": 0.33,
+        "floor_rule": "REVERSAL_ADD_MIN_QTY_FLOOR_ENABLED",
+        "floor_default": True,
+    },
     ("SCALPING", "AVG_DOWN", "default"): {
         "ratio": _DEFAULT_SCALE_IN_RATIO,
     },
@@ -429,6 +435,8 @@ def resolve_scale_in_order_price(stock, ws_data, action, *, strategy=None, curr_
     raw_strategy = (strategy or stock.get("strategy") or "").upper()
     normalized_strategy = "SCALPING" if raw_strategy in {"SCALPING", "SCALP"} else raw_strategy
     add_type = (action.get("add_type") or "").upper()
+    add_reason = str(action.get("reason") or "")
+    late_loss_retry = add_reason == "late_loss_avg_down_retry"
     curr_price = _safe_int(curr_price if curr_price is not None else ws_data.get("curr"), 0)
 
     result = {
@@ -501,7 +509,10 @@ def resolve_scale_in_order_price(stock, ws_data, action, *, strategy=None, curr_
     if add_type == "AVG_DOWN":
         min_micro_vwap = float(getattr(TRADING_RULES, "REVERSAL_ADD_VWAP_BP_MIN", -5.0) or -5.0)
         result["min_micro_vwap_bps"] = min_micro_vwap
-        if micro_vwap_bp < min_micro_vwap:
+        result["late_loss_avg_down_retry_micro_vwap_bypass"] = bool(
+            late_loss_retry and micro_vwap_bp < min_micro_vwap
+        )
+        if micro_vwap_bp < min_micro_vwap and not late_loss_retry:
             result["reason"] = f"micro_vwap_bp<{min_micro_vwap:.1f}"
             return result
 
@@ -566,7 +577,11 @@ def _resolve_scale_in_ratio(raw_strategy, add_type, add_reason):
 
 
 def _resolve_scale_in_rule(raw_strategy, add_type, add_reason):
-    normalized_reason = add_reason if add_reason == "reversal_add_ok" else "default"
+    normalized_reason = (
+        add_reason
+        if add_reason in {"reversal_add_ok", "late_loss_avg_down_retry"}
+        else "default"
+    )
     if raw_strategy == "SCALPING":
         key = (raw_strategy, add_type, normalized_reason)
         if key in _SCALE_IN_RULES:
@@ -813,7 +828,7 @@ def describe_dynamic_scale_in_qty(
             return details
         would_qty = max(1, int(scalp_budget_qty or legacy.get("template_qty", 0) or legacy.get("qty", 0) or 0))
     elif add_type == "AVG_DOWN":
-        if add_reason != "reversal_add_ok":
+        if add_reason not in {"reversal_add_ok", "late_loss_avg_down_retry"}:
             details.update({"would_qty": 0, "effective_qty": 0, "qty": 0, "qty_reason": "reversal_probe_missing"})
             return details
         hard_stop_price = _safe_float(stock.get("hard_stop_price"), 0.0)

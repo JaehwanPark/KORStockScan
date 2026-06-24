@@ -218,6 +218,33 @@ def test_get_deposit_refreshes_after_loop_cache_ttl(monkeypatch):
     assert responses == []
 
 
+def test_send_smart_sell_order_limit_up_uses_marketable_best_order(monkeypatch):
+    calls = []
+
+    def fake_send_sell_order_market(*args, **kwargs):
+        calls.append({"args": args, **kwargs})
+        return {"return_code": "0", "ord_no": "S1"}
+
+    monkeypatch.setattr(kiwoom_orders, "send_sell_order_market", fake_send_sell_order_market)
+
+    result = kiwoom_orders.send_smart_sell_order(
+        code="123456",
+        qty=10,
+        token="TOKEN",
+        ws_data={"orderbook": {"bids": [{"price": 13000, "volume": 1000}]}},
+        reason_type="LIMIT_UP",
+        strategy="SCALPING",
+        bypass_open_time_block=True,
+    )
+
+    assert result["return_code"] == "0"
+    assert calls
+    assert calls[-1]["args"] == ("123456", 10, "TOKEN")
+    assert calls[-1]["order_type"] == "6"
+    assert calls[-1]["reason_type"] == "LIMIT_UP"
+    assert calls[-1]["bypass_open_time_block"] is True
+
+
 def test_get_deposit_loop_cache_can_be_disabled_by_string_config(monkeypatch):
     class DummyResponse:
         status_code = 200

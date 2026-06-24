@@ -25,17 +25,29 @@
 
 ## 장전 체크리스트 (08:45~09:00)
 
-- [ ] `[SwingPreFinalAutoAndFinalApprovalPreopen0624] 스윙 pre-final auto state 및 final approval artifact 확인` (`Due: 2026-06-24`, `Slot: PREOPEN`, `TimeWindow: 08:45~08:50`, `Track: RuntimeStability`)
+- [x] `[SwingPreFinalAutoAndFinalApprovalPreopen0624] 스윙 pre-final auto state 및 final approval artifact 확인` (`Due: 2026-06-24`, `Slot: PREOPEN`, `TimeWindow: 08:45~08:50`, `Track: RuntimeStability`)
   - Source: [swing_runtime_approval_2026-06-23.json](/home/ubuntu/KORStockScan/data/report/swing_runtime_approval/swing_runtime_approval_2026-06-23.json), [threshold_cycle_ev_2026-06-23.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-06-23.json)
   - 판정 기준: pre-final은 parsed AI Tier2 auto state가 있어야 하고, final-stage는 사용자 승인 artifact가 있어야 한다.
   - 금지: 스윙 full-live 전환, cap release, provider/bot 변경, hard-safety 완화를 pre-final auto state로 처리하지 않는다.
   - 다음 액션: `pre_final_auto_selected`, `final_approval_artifact_present`, `blocked_by_policy` 중 하나로 닫는다.
+  - 판정: `pre_final_auto_selected`
+  - 근거: [swing_runtime_approval_2026-06-23.json](/home/ubuntu/KORStockScan/data/report/swing_runtime_approval/swing_runtime_approval_2026-06-23.json) `approval_requests`에 `swing_model_floor`, `swing_market_regime_sensitivity` 2건이 있고 둘 다 `auto_approval_state=ai_tier2_auto_approved`, `auto_promotion_contract.state=dry_run_auto_apply_ready`, `approval_artifact_required=false`, `approval_runtime_scope=swing_dry_run_env_only`로 닫혔다. [threshold_apply_2026-06-24.json](/home/ubuntu/KORStockScan/data/threshold_cycle/apply_plans/threshold_apply_2026-06-24.json)도 `swing_runtime_approval.requested=2`, `approved=2`, `selected=1`, `approval_artifact=null`이며 full-live final approval artifact 요구는 없다. 다만 실제 bot PID `10567`의 `/proc/10567/environ`에는 `KORSTOCKSCAN_SWING_SIM_AUTO_POLICY_ENABLED=false`가 로드돼 있고, 이는 [operator_runtime_overrides.env](/home/ubuntu/KORStockScan/data/threshold_cycle/runtime_env/operator_runtime_overrides.env)에서 같은 key를 `false`로 덮어쓴 결과라 pre-final auto selected 상태가 그대로 runtime에 유지되지는 않는다.
+  - 다음 액션: 스윙은 오늘도 dry-run/pre-final 범위로만 취급하고 full-live 전환은 열지 않는다. 장중에는 [RuntimeEnvIntradayObserve0624](/home/ubuntu/KORStockScan/docs/checklists/2026-06-24-stage2-todo-checklist.md:47)에서 operator override로 인한 swing sim auto policy 비활성 상태를 provenance와 함께 재확인한다.
 
-- [ ] `[ThresholdEnvAutoApplyPreopen0624] threshold env 자동 apply 산출물 및 사용자 개입 여부 확인` (`Due: 2026-06-24`, `Slot: PREOPEN`, `TimeWindow: 08:50~08:55`, `Track: RuntimeStability`)
+- [x] `[ThresholdEnvAutoApplyPreopen0624] threshold env 자동 apply 산출물 및 사용자 개입 여부 확인` (`Due: 2026-06-24`, `Slot: PREOPEN`, `TimeWindow: 08:50~08:55`, `Track: RuntimeStability`)
   - Source: [threshold_cycle_ev_2026-06-23.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-06-23.json), [threshold_cycle_preopen_apply.py](/home/ubuntu/KORStockScan/src/engine/threshold_cycle_preopen_apply.py), [run_bot.sh](/home/ubuntu/KORStockScan/src/run_bot.sh)
   - 판정 기준: 전일 postclose EV와 당일 apply plan/runtime env를 확인하고 `auto_bounded_live` guard 통과분만 runtime env로 인정한다.
   - 금지: blocked family, approval artifact missing, same-stage owner conflict를 수동 env override로 우회하지 않는다.
   - 다음 액션: `applied_guard_passed_env`, `blocked_no_env`, `partial_apply_with_blocked_families`, `failed_preopen_wrapper`, `not_yet_due` 중 하나로 닫는다.
+  - 판정: `applied_guard_passed_env`
+  - 근거: [threshold_cycle_preopen_2026-06-24.status.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_preopen_status/threshold_cycle_preopen_2026-06-24.status.json)이 `status=succeeded`, `reason=completed`, `apply_plan_exists=true`, `runtime_env_exists=true`, `runtime_env_manifest_exists=true`, `updated_at=2026-06-24T07:35:01+09:00`로 닫혔다. [threshold_runtime_env_2026-06-24.json](/home/ubuntu/KORStockScan/data/threshold_cycle/runtime_env/threshold_runtime_env_2026-06-24.json)은 selected family 22개와 `runtime_apply_bridge_family=null`, `operator_runtime_env_lock=null`을 기록하고, [threshold_runtime_env_verify_2026-06-24.json](/home/ubuntu/KORStockScan/data/threshold_cycle/runtime_env/threshold_runtime_env_verify_2026-06-24.json)은 `status=pass`, `passed=true`, `pid_passed=true`, `missing_family_count=0`이다. 실제 bot PID `10567`는 env 생성 시각 이후인 `07:44`에 기동됐고 `/proc/10567/environ`에서 `KORSTOCKSCAN_THRESHOLD_RUNTIME_APPLY_DATE=2026-06-24`, `KORSTOCKSCAN_LIFECYCLE_DECISION_MATRIX_ENABLED=true`, `KORSTOCKSCAN_LIFECYCLE_BUCKET_DISCOVERY_ENABLED=true`, `KORSTOCKSCAN_SCALP_SIM_AI_BUDGET_ENABLED=true`, `KORSTOCKSCAN_SCALP_SIM_AUTO_POLICY_ENABLED=true`, `KORSTOCKSCAN_SWING_LIVE_ORDER_DRY_RUN_ENABLED=true`가 확인됐다. 다만 [operator_runtime_overrides.env](/home/ubuntu/KORStockScan/data/threshold_cycle/runtime_env/operator_runtime_overrides.env)이 env source 뒤에 적용되면서 `KORSTOCKSCAN_SWING_SIM_AUTO_POLICY_ENABLED=false`로 일부 후속 개입이 있었다.
+  - 다음 액션: threshold preopen apply 산출물 자체는 정상으로 유지하되, 장중 관찰에서는 runtime env manifest와 실제 `/proc/<pid>/environ` 차이를 분리 기록한다. bridge family와 blocked-by-policy 후보는 수동 env override로 열지 않고 장후 `HumanInterventionSummary0624`에서 다시 분류한다.
+
+- [x] `[PreopenAutomationHealthCheck20260624] 장전 자동화체인 상태 확인` (`Due: 2026-06-24`, `Slot: PREOPEN`, `TimeWindow: 08:00~09:00`, `Track: RunbookOps`)
+  - Source: [time-based-operations-runbook.md](/home/ubuntu/KORStockScan/docs/time-based-operations-runbook.md:297), [threshold_cycle_preopen_2026-06-24.status.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_preopen_status/threshold_cycle_preopen_2026-06-24.status.json), [threshold_apply_2026-06-24.json](/home/ubuntu/KORStockScan/data/threshold_cycle/apply_plans/threshold_apply_2026-06-24.json), [threshold_runtime_env_2026-06-24.json](/home/ubuntu/KORStockScan/data/threshold_cycle/runtime_env/threshold_runtime_env_2026-06-24.json), [threshold_runtime_env_verify_2026-06-24.json](/home/ubuntu/KORStockScan/data/threshold_cycle/runtime_env/threshold_runtime_env_verify_2026-06-24.json), [ensemble_scanner.log](/home/ubuntu/KORStockScan/logs/ensemble_scanner.log), [threshold_cycle_preopen_cron.log](/home/ubuntu/KORStockScan/logs/threshold_cycle_preopen_cron.log), [bot_history.log](/home/ubuntu/KORStockScan/logs/bot_history.log:1), [daily_recommendations_v2.csv](/home/ubuntu/KORStockScan/data/daily_recommendations_v2.csv), [daily_recommendations_v2_diagnostics.json](/home/ubuntu/KORStockScan/data/daily_recommendations_v2_diagnostics.json), [operator_runtime_overrides.env](/home/ubuntu/KORStockScan/data/threshold_cycle/runtime_env/operator_runtime_overrides.env)
+  - 판정: `warning`
+  - 근거: runbook 장전 확인 절차 기준으로 preopen wrapper와 scanner freshness는 통과했다. [threshold_cycle_preopen_cron.log](/home/ubuntu/KORStockScan/logs/threshold_cycle_preopen_cron.log)에 `[DONE] threshold-cycle preopen target_date=2026-06-24 finished_at=2026-06-24T07:35:01+0900`가 있고, [ensemble_scanner.log](/home/ubuntu/KORStockScan/logs/ensemble_scanner.log)에도 `[DONE] final_ensemble_scanner target_date=2026-06-24 finished_at=2026-06-24T07:20:52+0900`가 남아 있다. [daily_recommendations_v2_diagnostics.json](/home/ubuntu/KORStockScan/data/daily_recommendations_v2_diagnostics.json)은 `latest_date=2026-06-23`, `selected_count=2`, `selection_mode=SELECTED`, `fallback_written_to_recommendations=false`이고, [daily_recommendations_v2.csv](/home/ubuntu/KORStockScan/data/daily_recommendations_v2.csv)에는 `2026-06-23` 추천 2건이 존재한다. [threshold_runtime_env_verify_2026-06-24.json](/home/ubuntu/KORStockScan/data/threshold_cycle/runtime_env/threshold_runtime_env_verify_2026-06-24.json) `status=pass`와 `bash deploy/run_error_detection.sh full` 결과 `summary_severity=pass`도 확보됐다. 다만 [run_bot.sh](/home/ubuntu/KORStockScan/src/run_bot.sh)가 daily runtime env source 뒤에 [operator_runtime_overrides.env](/home/ubuntu/KORStockScan/data/threshold_cycle/runtime_env/operator_runtime_overrides.env)를 다시 로드하고, 실제 `/proc/10567/environ`에서는 runtime env artifact의 `KORSTOCKSCAN_SWING_SIM_AUTO_POLICY_ENABLED=true`가 `false`로 바뀌어 있다. 즉 자동화체인 자체는 정상이나 PREOPEN artifact와 실제 프로세스 env가 일부 분기돼 `pass`로 닫기 어렵다.
+  - 다음 액션: 같은 날짜 PREOPEN backlog는 재실행하지 않는다. 장중 [RuntimeEnvIntradayObserve0624](/home/ubuntu/KORStockScan/docs/checklists/2026-06-24-stage2-todo-checklist.md:47)에서 operator override가 남긴 실제 runtime provenance 차이를 추적하고, 장후 `HumanInterventionSummary0624`에는 자동 apply 성공과 별도 operator override 개입을 분리 기록한다.
 
 ## 장중 체크리스트 (09:05~15:20)
 
@@ -104,3 +116,18 @@
 ```bash
 PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTHONPATH=. .venv/bin/python -m src.engine.sync_github_project_calendar
 ```
+
+<!-- AUTO_SERVER_COMPARISON_START -->
+### 본서버 vs songstockscan 자동 비교 (`2026-06-24 15:47:17`)
+
+- 기준: `profit-derived metrics are excluded by default because fallback-normalized values such as NULL -> 0 can distort comparison`
+- 상세 리포트: `data/report/server_comparison/server_comparison_2026-06-24.md`
+- `Trade Review`: status=`remote_error`, differing_safe_metrics=`0`
+  - safe 기준 차이 없음
+- `Performance Tuning`: status=`remote_error`, differing_safe_metrics=`0`
+  - safe 기준 차이 없음
+- `Post Sell Feedback`: status=`remote_error`, differing_safe_metrics=`0`
+  - safe 기준 차이 없음
+- `Entry Pipeline Flow`: status=`remote_error`, differing_safe_metrics=`0`
+  - safe 기준 차이 없음
+<!-- AUTO_SERVER_COMPARISON_END -->

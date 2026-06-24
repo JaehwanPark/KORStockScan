@@ -242,6 +242,7 @@ class TradingConfig:
     SCALP_OVERBOUGHT_PULLBACK_MIN_DISTANCE_PCT: float = -0.35
     SCALP_OVERBOUGHT_REBREAK_MIN_STRENGTH: float = 120.0
     SCALP_OVERBOUGHT_REBREAK_MIN_BUY_PRESSURE: float = 60.0
+    SCALPING_ENTRY_CAUTION_OVERBOUGHT_STALE_SUBMIT_BLOCK_ENABLED: bool = True
     SCALP_LIQUIDITY_PRE_SUBMIT_GUARD_ENABLED: bool = True  # liquidity는 AI 전 관찰, 주문 직전 hard guard 유지
     SCALP_ENTRY_ARM_TTL_SEC: int = 20  # 스캘핑 자격 게이트 통과 후 재평가 없이 주문 단계로 유지할 시간
     WS_REG_BATCH_SIZE: int = 20  # 웹소켓 REG 패킷당 종목 등록 개수
@@ -305,6 +306,19 @@ class TradingConfig:
     SCALP_PROFIT_STAGNATION_MAX_PROFIT_MOVE_PCT: float = 0.15
     SCALP_PROFIT_STAGNATION_MAX_PEAK_IMPROVE_PCT: float = 0.10
     SCALP_PROFIT_STAGNATION_MIN_AI_SCORE: int = 45
+    SCALP_MFE_PROTECT_EXIT_ENABLED: bool = True  # real SCALPING positive-MFE giveback protection
+    SCALP_MFE_PROTECT_MIN_PEAK_PCT: float = 0.60
+    SCALP_MFE_PROTECT_TRIGGER_PROFIT_PCT: float = 0.10
+    SCALP_MFE_PROTECT_MIN_GIVEBACK_PCT: float = 0.55
+    SCALP_MFE_PROTECT_MIN_HOLD_SEC: int = 30
+    SCALP_MFE_PROTECT_MAX_AI_SCORE: int = 74
+    SCALP_LATE_LOSS_AVG_DOWN_ENABLED: bool = True  # real SCALPING final loss-sell intercept
+    SCALP_LATE_LOSS_AVG_DOWN_MIN_PEAK_PCT: float = 0.60
+    SCALP_LATE_LOSS_AVG_DOWN_MIN_GIVEBACK_PCT: float = 0.55
+    SCALP_LATE_LOSS_AVG_DOWN_MIN_ABS_LOSS_PCT: float = 1.50
+    SCALP_LATE_LOSS_AVG_DOWN_MIN_HOLD_SEC: int = 30
+    SCALP_LATE_LOSS_AVG_DOWN_MIN_AI_SCORE: int = 60
+    SCALP_LATE_LOSS_AVG_DOWN_MAX_PER_POSITION: int = 1
     SCALP_PRESET_HARD_STOP_PCT: float = -0.7  # SCALP_PRESET_TP 기본 손절선
     SCALP_PRESET_HARD_STOP_GRACE_SEC: int = 0  # SCALP_PRESET_TP 공통 유예시간(초)
     SCALP_PRESET_HARD_STOP_EMERGENCY_PCT: float = -1.2  # 유예 중에도 강제 청산하는 비상 손절선
@@ -1537,6 +1551,9 @@ def _build_trading_rules() -> TradingConfig:
     env_overbought_pullback_min_distance = _env_float("KORSTOCKSCAN_SCALP_OVERBOUGHT_PULLBACK_MIN_DISTANCE_PCT")
     env_overbought_rebreak_min_strength = _env_float("KORSTOCKSCAN_SCALP_OVERBOUGHT_REBREAK_MIN_STRENGTH")
     env_overbought_rebreak_min_buy_pressure = _env_float("KORSTOCKSCAN_SCALP_OVERBOUGHT_REBREAK_MIN_BUY_PRESSURE")
+    env_caution_overbought_stale_submit_block_enabled = _env_bool(
+        "KORSTOCKSCAN_SCALPING_ENTRY_CAUTION_OVERBOUGHT_STALE_SUBMIT_BLOCK_ENABLED"
+    )
     env_liquidity_pre_submit_guard_enabled = _env_bool("KORSTOCKSCAN_SCALP_LIQUIDITY_PRE_SUBMIT_GUARD_ENABLED")
     env_partial_fill_enabled = _env_bool("KORSTOCKSCAN_SCALP_PARTIAL_FILL_RATIO_GUARD_ENABLED")
     if env_partial_fill_enabled is None:
@@ -1846,6 +1863,19 @@ def _build_trading_rules() -> TradingConfig:
     env_profit_stagnation_max_move = _env_float("KORSTOCKSCAN_SCALP_PROFIT_STAGNATION_MAX_PROFIT_MOVE_PCT")
     env_profit_stagnation_max_peak = _env_float("KORSTOCKSCAN_SCALP_PROFIT_STAGNATION_MAX_PEAK_IMPROVE_PCT")
     env_profit_stagnation_min_ai = _env_int("KORSTOCKSCAN_SCALP_PROFIT_STAGNATION_MIN_AI_SCORE")
+    env_mfe_protect_enabled = _env_bool("KORSTOCKSCAN_SCALP_MFE_PROTECT_EXIT_ENABLED")
+    env_mfe_protect_min_peak = _env_float("KORSTOCKSCAN_SCALP_MFE_PROTECT_MIN_PEAK_PCT")
+    env_mfe_protect_trigger_profit = _env_float("KORSTOCKSCAN_SCALP_MFE_PROTECT_TRIGGER_PROFIT_PCT")
+    env_mfe_protect_min_giveback = _env_float("KORSTOCKSCAN_SCALP_MFE_PROTECT_MIN_GIVEBACK_PCT")
+    env_mfe_protect_min_hold = _env_int("KORSTOCKSCAN_SCALP_MFE_PROTECT_MIN_HOLD_SEC")
+    env_mfe_protect_max_ai = _env_int("KORSTOCKSCAN_SCALP_MFE_PROTECT_MAX_AI_SCORE")
+    env_late_loss_avg_down_enabled = _env_bool("KORSTOCKSCAN_SCALP_LATE_LOSS_AVG_DOWN_ENABLED")
+    env_late_loss_avg_down_min_peak = _env_float("KORSTOCKSCAN_SCALP_LATE_LOSS_AVG_DOWN_MIN_PEAK_PCT")
+    env_late_loss_avg_down_min_giveback = _env_float("KORSTOCKSCAN_SCALP_LATE_LOSS_AVG_DOWN_MIN_GIVEBACK_PCT")
+    env_late_loss_avg_down_min_abs_loss = _env_float("KORSTOCKSCAN_SCALP_LATE_LOSS_AVG_DOWN_MIN_ABS_LOSS_PCT")
+    env_late_loss_avg_down_min_hold = _env_int("KORSTOCKSCAN_SCALP_LATE_LOSS_AVG_DOWN_MIN_HOLD_SEC")
+    env_late_loss_avg_down_min_ai = _env_int("KORSTOCKSCAN_SCALP_LATE_LOSS_AVG_DOWN_MIN_AI_SCORE")
+    env_late_loss_avg_down_max_per_position = _env_int("KORSTOCKSCAN_SCALP_LATE_LOSS_AVG_DOWN_MAX_PER_POSITION")
     env_protect_trailing_smooth_enabled = _env_bool("KORSTOCKSCAN_SCALP_PROTECT_TRAILING_SMOOTH_ENABLED")
     env_protect_trailing_smooth_window = _env_int("KORSTOCKSCAN_SCALP_PROTECT_TRAILING_SMOOTH_WINDOW_SEC")
     env_protect_trailing_smooth_min_span = _env_int("KORSTOCKSCAN_SCALP_PROTECT_TRAILING_SMOOTH_MIN_SPAN_SEC")
@@ -2007,6 +2037,19 @@ def _build_trading_rules() -> TradingConfig:
         or env_profit_stagnation_max_move is not None
         or env_profit_stagnation_max_peak is not None
         or env_profit_stagnation_min_ai is not None
+        or env_mfe_protect_enabled is not None
+        or env_mfe_protect_min_peak is not None
+        or env_mfe_protect_trigger_profit is not None
+        or env_mfe_protect_min_giveback is not None
+        or env_mfe_protect_min_hold is not None
+        or env_mfe_protect_max_ai is not None
+        or env_late_loss_avg_down_enabled is not None
+        or env_late_loss_avg_down_min_peak is not None
+        or env_late_loss_avg_down_min_giveback is not None
+        or env_late_loss_avg_down_min_abs_loss is not None
+        or env_late_loss_avg_down_min_hold is not None
+        or env_late_loss_avg_down_min_ai is not None
+        or env_late_loss_avg_down_max_per_position is not None
         or env_protect_trailing_smooth_enabled is not None
         or env_protect_trailing_smooth_window is not None
         or env_protect_trailing_smooth_min_span is not None
@@ -2071,6 +2114,9 @@ def _build_trading_rules() -> TradingConfig:
             SCALP_OVERBOUGHT_REBREAK_MIN_BUY_PRESSURE=env_overbought_rebreak_min_buy_pressure
             if env_overbought_rebreak_min_buy_pressure is not None
             else config.SCALP_OVERBOUGHT_REBREAK_MIN_BUY_PRESSURE,
+            SCALPING_ENTRY_CAUTION_OVERBOUGHT_STALE_SUBMIT_BLOCK_ENABLED=env_caution_overbought_stale_submit_block_enabled
+            if env_caution_overbought_stale_submit_block_enabled is not None
+            else config.SCALPING_ENTRY_CAUTION_OVERBOUGHT_STALE_SUBMIT_BLOCK_ENABLED,
             SCALP_LIQUIDITY_PRE_SUBMIT_GUARD_ENABLED=env_liquidity_pre_submit_guard_enabled
             if env_liquidity_pre_submit_guard_enabled is not None
             else config.SCALP_LIQUIDITY_PRE_SUBMIT_GUARD_ENABLED,
@@ -2566,6 +2612,45 @@ def _build_trading_rules() -> TradingConfig:
             SCALP_PROFIT_STAGNATION_MIN_AI_SCORE=env_profit_stagnation_min_ai
             if env_profit_stagnation_min_ai is not None
             else config.SCALP_PROFIT_STAGNATION_MIN_AI_SCORE,
+            SCALP_MFE_PROTECT_EXIT_ENABLED=env_mfe_protect_enabled
+            if env_mfe_protect_enabled is not None
+            else config.SCALP_MFE_PROTECT_EXIT_ENABLED,
+            SCALP_MFE_PROTECT_MIN_PEAK_PCT=env_mfe_protect_min_peak
+            if env_mfe_protect_min_peak is not None
+            else config.SCALP_MFE_PROTECT_MIN_PEAK_PCT,
+            SCALP_MFE_PROTECT_TRIGGER_PROFIT_PCT=env_mfe_protect_trigger_profit
+            if env_mfe_protect_trigger_profit is not None
+            else config.SCALP_MFE_PROTECT_TRIGGER_PROFIT_PCT,
+            SCALP_MFE_PROTECT_MIN_GIVEBACK_PCT=env_mfe_protect_min_giveback
+            if env_mfe_protect_min_giveback is not None
+            else config.SCALP_MFE_PROTECT_MIN_GIVEBACK_PCT,
+            SCALP_MFE_PROTECT_MIN_HOLD_SEC=env_mfe_protect_min_hold
+            if env_mfe_protect_min_hold is not None
+            else config.SCALP_MFE_PROTECT_MIN_HOLD_SEC,
+            SCALP_MFE_PROTECT_MAX_AI_SCORE=env_mfe_protect_max_ai
+            if env_mfe_protect_max_ai is not None
+            else config.SCALP_MFE_PROTECT_MAX_AI_SCORE,
+            SCALP_LATE_LOSS_AVG_DOWN_ENABLED=env_late_loss_avg_down_enabled
+            if env_late_loss_avg_down_enabled is not None
+            else config.SCALP_LATE_LOSS_AVG_DOWN_ENABLED,
+            SCALP_LATE_LOSS_AVG_DOWN_MIN_PEAK_PCT=env_late_loss_avg_down_min_peak
+            if env_late_loss_avg_down_min_peak is not None
+            else config.SCALP_LATE_LOSS_AVG_DOWN_MIN_PEAK_PCT,
+            SCALP_LATE_LOSS_AVG_DOWN_MIN_GIVEBACK_PCT=env_late_loss_avg_down_min_giveback
+            if env_late_loss_avg_down_min_giveback is not None
+            else config.SCALP_LATE_LOSS_AVG_DOWN_MIN_GIVEBACK_PCT,
+            SCALP_LATE_LOSS_AVG_DOWN_MIN_ABS_LOSS_PCT=env_late_loss_avg_down_min_abs_loss
+            if env_late_loss_avg_down_min_abs_loss is not None
+            else config.SCALP_LATE_LOSS_AVG_DOWN_MIN_ABS_LOSS_PCT,
+            SCALP_LATE_LOSS_AVG_DOWN_MIN_HOLD_SEC=env_late_loss_avg_down_min_hold
+            if env_late_loss_avg_down_min_hold is not None
+            else config.SCALP_LATE_LOSS_AVG_DOWN_MIN_HOLD_SEC,
+            SCALP_LATE_LOSS_AVG_DOWN_MIN_AI_SCORE=env_late_loss_avg_down_min_ai
+            if env_late_loss_avg_down_min_ai is not None
+            else config.SCALP_LATE_LOSS_AVG_DOWN_MIN_AI_SCORE,
+            SCALP_LATE_LOSS_AVG_DOWN_MAX_PER_POSITION=env_late_loss_avg_down_max_per_position
+            if env_late_loss_avg_down_max_per_position is not None
+            else config.SCALP_LATE_LOSS_AVG_DOWN_MAX_PER_POSITION,
             SCALP_PROTECT_TRAILING_SMOOTH_ENABLED=env_protect_trailing_smooth_enabled
             if env_protect_trailing_smooth_enabled is not None
             else config.SCALP_PROTECT_TRAILING_SMOOTH_ENABLED,
@@ -3787,6 +3872,9 @@ def _build_trading_rules() -> TradingConfig:
 
     env_ed_enabled = _env_bool("KORSTOCKSCAN_ERROR_DETECTOR_ENABLED")
     env_ed_daemon_interval = _env_int("KORSTOCKSCAN_ERROR_DETECTOR_DAEMON_INTERVAL_SEC")
+    env_ed_process_main_loop_timeout = _env_int(
+        "KORSTOCKSCAN_ERROR_DETECTOR_PROCESS_MAIN_LOOP_TIMEOUT_SEC"
+    )
     env_ed_process_restart_grace = _env_int("KORSTOCKSCAN_ERROR_DETECTOR_PROCESS_RESTART_GRACE_SEC")
     env_ed_bot_window_enabled = _env_bool("KORSTOCKSCAN_ERROR_DETECTOR_BOT_EXPECTED_RUNTIME_WINDOW_ENABLED")
     env_ed_bot_window_start = _env_str("KORSTOCKSCAN_ERROR_DETECTOR_BOT_EXPECTED_START_HHMM")
@@ -3803,6 +3891,7 @@ def _build_trading_rules() -> TradingConfig:
     if (
         env_ed_enabled is not None
         or env_ed_daemon_interval is not None
+        or env_ed_process_main_loop_timeout is not None
         or env_ed_process_restart_grace is not None
         or env_ed_bot_window_enabled is not None
         or env_ed_bot_window_start is not None
@@ -3823,6 +3912,9 @@ def _build_trading_rules() -> TradingConfig:
             ERROR_DETECTOR_DAEMON_INTERVAL_SEC=env_ed_daemon_interval
             if env_ed_daemon_interval is not None
             else config.ERROR_DETECTOR_DAEMON_INTERVAL_SEC,
+            ERROR_DETECTOR_PROCESS_MAIN_LOOP_TIMEOUT_SEC=env_ed_process_main_loop_timeout
+            if env_ed_process_main_loop_timeout is not None
+            else config.ERROR_DETECTOR_PROCESS_MAIN_LOOP_TIMEOUT_SEC,
             ERROR_DETECTOR_PROCESS_RESTART_GRACE_SEC=env_ed_process_restart_grace
             if env_ed_process_restart_grace is not None
             else config.ERROR_DETECTOR_PROCESS_RESTART_GRACE_SEC,
