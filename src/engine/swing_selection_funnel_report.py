@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from collections import Counter, defaultdict
 from datetime import date, datetime
 from pathlib import Path
@@ -22,6 +23,7 @@ from src.utils.jsonl_io import read_jsonl
 
 
 SWING_STRATEGIES = {"KOSPI_ML", "KOSDAQ_ML", "MAIN"}
+SWING_REAL_WATCHING_ENABLED_ENV = "KORSTOCKSCAN_SWING_REAL_WATCHING_ENABLED"
 SWING_EVENT_STAGES = {
     "blocked_swing_gap",
     "blocked_swing_score_vpw",
@@ -465,6 +467,14 @@ def summarize_recommendation_db_load_gap(
     db_rows = int(db_recommendations.get("db_rows") or 0)
     db_error = diagnostic_summary.get("db_load_error")
     selection_modes = recommendation_csv.get("selection_modes") or {}
+    swing_real_watching_enabled = str(os.getenv(SWING_REAL_WATCHING_ENABLED_ENV, "") or "").strip().lower() in {
+        "1",
+        "true",
+        "t",
+        "yes",
+        "y",
+        "on",
+    }
 
     if db_error:
         reason = "db_load_error"
@@ -476,15 +486,35 @@ def summarize_recommendation_db_load_gap(
         str(mode).upper() in {"SELECTED", "META_V2", "META_FALLBACK"} for mode in selection_modes
     ):
         reason = "diagnostic_only_recommendation_rows"
+    elif not swing_real_watching_enabled:
+        reason = "swing_real_watching_disabled_by_policy"
     else:
         reason = "csv_rows_positive_db_rows_zero"
+    csv_db_divergence = bool(csv_rows > 0 and db_rows <= 0)
+    db_load_gap = bool(csv_db_divergence and reason not in {"swing_real_watching_disabled_by_policy"})
 
     return {
         "csv_rows": csv_rows,
         "db_rows": db_rows,
-        "db_load_gap": bool(csv_rows > 0 and db_rows <= 0),
+        "db_load_gap": db_load_gap,
+        "csv_db_divergence": csv_db_divergence,
+        "db_load_gap_classification": (
+            "db_load_error"
+            if reason == "db_load_error"
+            else "policy_disabled_source_only"
+            if reason == "swing_real_watching_disabled_by_policy"
+            else "db_ingestion_gap"
+            if db_load_gap
+            else "no_gap"
+        ),
         "db_load_skip_reason": reason,
         "db_load_error": str(db_error) if db_error else None,
+        "db_load_policy": {
+            "swing_real_watching_enabled": swing_real_watching_enabled,
+            "env": SWING_REAL_WATCHING_ENABLED_ENV,
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+        },
         "selection_modes": selection_modes,
     }
 

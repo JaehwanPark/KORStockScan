@@ -1,7 +1,7 @@
 # 스캘핑 패턴 분석 최종 리뷰 보고서 (for Lead AI)
 
-생성일: 2026-06-23 20:47:04
-분석 기간: 2026-06-04 ~ 2026-06-23
+생성일: 2026-06-24 20:27:18
+분석 기간: 2026-06-04 ~ 2026-06-24
 
 ---
 
@@ -11,26 +11,26 @@
 
 | 코호트 | 거래수 | 승률 | 손익 중앙값 | 기여손익 합 | 표본충분 |
 |---|---:|---:|---:|---:|---|
-| full_fill | 48 | 43.8% | -1.155% | -19.020% | ✓ |
-| split-entry | 3 | 0.0% | -2.110% | -6.250% | ⚠️부족 |
+| full_fill | 51 | 41.2% | -1.540% | -26.860% | ✓ |
+| split-entry | 4 | 25.0% | -2.035% | -3.110% | ⚠️부족 |
 
 ### 1-4. 튜닝 관찰축 요약
 
-- `WAIT65~79 total_candidates=23`, `recovery_check=0`, `promoted=0`, `submitted=0`
-- `blocked_ai_score_share=39.1%`, `gatekeeper_eval_ms_p95=4306ms`, `budget_pass_to_submitted_rate=0.2%`
+- `WAIT65~79 total_candidates=77`, `recovery_check=0`, `promoted=0`, `submitted=2`
+- `blocked_ai_score_share=41.6%`, `gatekeeper_eval_ms_p95=0ms`, `budget_pass_to_submitted_rate=8.1%`
 
 - `No acute observability alert`: 중립 — 주요 관찰축에서 즉시 경고할 단일 병목이 두드러지지 않는다.
 
 ### 1-2. 손실 패턴 Top 5
 
 **#1** — 코호트: `full_fill` / 청산규칙: `scalp_soft_stop_pct`
-- 빈도: 16건 | 손익 중앙값: -1.925% | 기여손익: -31.780%
-- 보유시간 중앙값: 1594.0초
+- 빈도: 18건 | 손익 중앙값: -2.000% | 기여손익: -36.400%
+- 보유시간 중앙값: 1636.0초
 - 선행 조건: 없음
 
 **#2** — 코호트: `full_fill` / 청산규칙: `scalp_hard_stop_pct`
-- 빈도: 6건 | 손익 중앙값: -2.610% | 기여손익: -16.180%
-- 보유시간 중앙값: 732.5초
+- 빈도: 7건 | 손익 중앙값: -2.670% | 기여손익: -19.400%
+- 보유시간 중앙값: 671.0초
 - 선행 조건: 없음
 
 **#3** — 코호트: `split-entry` / 청산규칙: `scalp_soft_stop_pct`
@@ -53,19 +53,22 @@
 **#1** — 코호트: `full_fill` / 청산규칙: `scalp_trailing_take_profit` / 진입모드: `normal`
 - 빈도: 16건 | 손익 중앙값: +1.255% | 기여손익: +25.280%
 
+**#2** — 코호트: `split-entry` / 청산규칙: `scalp_trailing_take_profit` / 진입모드: `normal`
+- 빈도: 1건 | 손익 중앙값: +3.140% | 기여손익: +3.140%
+
 ### 1-4. 기회비용 회수 후보 Top 5
 
 **#1** — `AI threshold miss`
-- 차단 건수 합계: 266607건 | 차단 비율: 100.0% | 관찰 일수: 14일
+- 차단 건수 합계: 269402건 | 차단 비율: 100.0% | 관찰 일수: 15일
 
 **#2** — `latency guard miss`
-- 차단 건수 합계: 137955건 | 차단 비율: 99.9% | 관찰 일수: 14일
+- 차단 건수 합계: 138035건 | 차단 비율: 99.9% | 관찰 일수: 15일
 
 **#3** — `overbought gate miss`
-- 차단 건수 합계: 14861건 | 차단 비율: 99.2% | 관찰 일수: 14일
+- 차단 건수 합계: 15185건 | 차단 비율: 99.1% | 관찰 일수: 15일
 
 **#4** — `liquidity gate miss`
-- 차단 건수 합계: 0건 | 차단 비율: 0.0% | 관찰 일수: 14일
+- 차단 건수 합계: 0건 | 차단 비율: 0.0% | 관찰 일수: 15일
 
 ---
 
@@ -74,9 +77,9 @@
 ### 2-1. split-entry 코호트 핵심 위험
 
 - rebase_integrity_flag: 16건
-- partial_then_expand_flag: 11건
-- same_symbol_repeat_flag: 989건
-- same_ts_multi_rebase_flag: 8건
+- partial_then_expand_flag: 12건
+- same_symbol_repeat_flag: 1068건
+- same_ts_multi_rebase_flag: 9건
 
 ### 2-2. 전역 손절 강화 비권고 이유
 

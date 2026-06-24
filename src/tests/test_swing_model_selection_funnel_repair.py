@@ -2507,7 +2507,8 @@ def test_swing_lifecycle_audit_tracks_full_funnel_and_observation_axes():
     json.dumps(report, ensure_ascii=False)
 
 
-def test_swing_lifecycle_audit_reports_db_gap_and_report_only_zero_sample_reason():
+def test_swing_lifecycle_audit_reports_policy_disabled_db_divergence_and_report_only_zero_sample_reason(monkeypatch):
+    monkeypatch.delenv("KORSTOCKSCAN_SWING_REAL_WATCHING_ENABLED", raising=False)
     report = build_swing_lifecycle_audit_report(
         "2026-05-08",
         recommendation_rows=[
@@ -2533,18 +2534,45 @@ def test_swing_lifecycle_audit_reports_db_gap_and_report_only_zero_sample_reason
     automation = build_swing_improvement_automation_report(report)
     orders = {order["order_id"]: order for order in automation["code_improvement_orders"]}
 
-    assert report["recommendation_db_load"]["db_load_gap"] is True
-    assert report["recommendation_db_load"]["db_load_skip_reason"] == "csv_rows_positive_db_rows_zero"
+    assert report["recommendation_db_load"]["db_load_gap"] is False
+    assert report["recommendation_db_load"]["csv_db_divergence"] is True
+    assert report["recommendation_db_load"]["db_load_skip_reason"] == "swing_real_watching_disabled_by_policy"
+    assert report["recommendation_db_load"]["db_load_gap_classification"] == "policy_disabled_source_only"
     assert report["recommendation_db_load"]["db_load_missing_rows"] == 1
-    assert report["recommendation_db_load"]["db_load_next_action"] == "investigate_recommendation_history_write_path"
+    assert report["recommendation_db_load"]["db_load_next_action"] == "continue_daily_lifecycle_audit"
     assert "swing_gap_market_budget_price_qty" in report["observation_axis_coverage"]["missing_required_fields_by_axis"]
     assert report["lifecycle_events"]["scale_in_observation"]["zero_sample_reason"] == "no_candidate"
+    assert "order_swing_recommendation_db_load_gap" not in orders
+    assert "zero_sample_reason=no_candidate" in orders["order_swing_scale_in_avg_down_pyramid_observation"]["evidence"]
+    assert automation["ev_report_summary"]["db_load_gap"] is False
+    assert automation["ev_report_summary"]["scale_in_zero_sample_reason"] == "no_candidate"
+
+
+def test_swing_lifecycle_audit_reports_actionable_db_gap_when_real_watching_enabled(monkeypatch):
+    monkeypatch.setenv("KORSTOCKSCAN_SWING_REAL_WATCHING_ENABLED", "true")
+    report = build_swing_lifecycle_audit_report(
+        "2026-05-08",
+        recommendation_rows=[
+            {
+                "selection_mode": "SELECTED",
+                "position_tag": "META_V2",
+                "hybrid_mean": 0.37,
+                "meta_score": 0.02,
+            }
+        ],
+        diagnostic_summary={"selected_count": 1},
+        db_rows=[],
+        event_rows=[],
+    )
+    automation = build_swing_improvement_automation_report(report)
+    orders = {order["order_id"]: order for order in automation["code_improvement_orders"]}
+
+    assert report["recommendation_db_load"]["db_load_gap"] is True
+    assert report["recommendation_db_load"]["db_load_skip_reason"] == "csv_rows_positive_db_rows_zero"
+    assert report["recommendation_db_load"]["db_load_gap_classification"] == "db_ingestion_gap"
     assert orders["order_swing_recommendation_db_load_gap"]["runtime_effect"] is False
     assert orders["order_swing_recommendation_db_load_gap"]["allowed_runtime_apply"] is False
     assert "db_load_skip_reason=csv_rows_positive_db_rows_zero" in orders["order_swing_recommendation_db_load_gap"]["evidence"]
-    assert "zero_sample_reason=no_candidate" in orders["order_swing_scale_in_avg_down_pyramid_observation"]["evidence"]
-    assert automation["ev_report_summary"]["db_load_gap"] is True
-    assert automation["ev_report_summary"]["scale_in_zero_sample_reason"] == "no_candidate"
 
 
 def test_swing_lifecycle_db_load_accepts_missing_optional_sell_qty(tmp_path):

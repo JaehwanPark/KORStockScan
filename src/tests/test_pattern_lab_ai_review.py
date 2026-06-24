@@ -1010,6 +1010,176 @@ def test_pattern_lab_ai_review_resolves_threshold_ev_incomplete_with_classified_
     assert conclusion["source_context_resolution"]["status"] == "resolved_by_classified_threshold_ev_source_only_warnings"
 
 
+def test_pattern_lab_ai_review_resolves_current_source_only_warning_set(tmp_path, monkeypatch):
+    report_dir = tmp_path / "data" / "report"
+    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+    _write_json(
+        report_dir / "pattern_lab_currentness_audit" / "pattern_lab_currentness_audit_2026-05-15.json",
+        {
+            "status": "pass",
+            "summary": {
+                "consumed_feedback_source_count": 8,
+                "missing_feedback_source_count": 0,
+            },
+            "checks": [
+                {"check_id": "pattern_lab_ai_review_contract", "status": "pass"},
+            ],
+        },
+    )
+    _write_json(
+        report_dir / "scalping_pattern_lab_automation" / "scalping_pattern_lab_automation_2026-05-15.json",
+        {
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+        },
+    )
+    _write_json(
+        report_dir / "lifecycle_decision_matrix" / "lifecycle_decision_matrix_2026-05-15.json",
+        {"status": "pass", "runtime_effect": False, "allowed_runtime_apply": False},
+    )
+    _write_json(
+        report_dir / "lifecycle_bucket_discovery" / "lifecycle_bucket_discovery_2026-05-15.json",
+        {
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+            "warnings": ["source_contract_drift_warning"],
+            "summary": {"source_contract_status": "warning", "status": "pass", "code_patch_required_count": 0},
+        },
+    )
+    _write_json(
+        report_dir / "swing_strategy_discovery_ev" / "swing_strategy_discovery_ev_2026-05-15.json",
+        {
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+            "warnings": ["pending_future_quotes", "clean_tuning_baseline_swing_discovery_lookback_filtered"],
+        },
+    )
+    _write_json(
+        report_dir / "swing_lifecycle_decision_matrix" / "swing_lifecycle_decision_matrix_2026-05-15.json",
+        {
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+            "warnings": [
+                "swing_intraday_live_equiv_probe_missing",
+                "pending_future_quotes",
+                "clean_tuning_baseline_swing_discovery_lookback_filtered",
+            ],
+        },
+    )
+    _write_json(
+        report_dir / "swing_lifecycle_bucket_discovery" / "swing_lifecycle_bucket_discovery_2026-05-15.json",
+        {
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+            "summary": {
+                "source_contract_status": "pass",
+                "code_patch_required_count": 2,
+                "implemented_code_improvement_workorder_ids": ["a", "b"],
+                "pending_code_improvement_workorder_ids": [],
+            },
+        },
+    )
+    _write_json(
+        report_dir / "threshold_cycle_ev" / "threshold_cycle_ev_2026-05-15.json",
+        {
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+            "warnings": [
+                "scalp_entry_adm:ai_numeric_consistency_rows_excluded_from_aggregates",
+                "lifecycle_bucket_discovery:source_contract_drift_warning",
+                "swing_strategy_discovery:pending_future_quotes",
+                "swing_strategy_discovery:clean_tuning_baseline_swing_discovery_lookback_filtered",
+                "swing_lifecycle_decision_matrix:swing_intraday_live_equiv_probe_missing",
+                "swing_lifecycle_decision_matrix:pending_future_quotes",
+                "swing_lifecycle_decision_matrix:clean_tuning_baseline_swing_discovery_lookback_filtered",
+                "pattern_lab_ai_review_warning",
+                "pattern_lab_ai_review_ai_review_followup_required",
+                "pattern_lab_propagation_audit_warning",
+            ],
+        },
+    )
+    _write_json(
+        report_dir / "code_improvement_workorder" / "code_improvement_workorder_2026-05-15.json",
+        {"status": "pass", "runtime_effect": False, "allowed_runtime_apply": False, "orders": []},
+    )
+    raw_response = {
+        "schema_version": 1,
+        "interpretation": {"review_items": [], "source_feedback_status": "warning"},
+        "audit": {
+            "status": "correction_required",
+            "issues": ["source_quality_gap:5", "ai_review_gap:1"],
+            "forbidden_use_violations": [],
+        },
+        "final_conclusions": [
+            {
+                "review_id": "ai_two_pass_review_incomplete",
+                "domain": "scalping",
+                "final_state": "ai_review_gap",
+                "final_decision": "block_runtime_use",
+                "reason": "AI two-pass review is incomplete.",
+            },
+            {
+                "review_id": "source-quality",
+                "domain": "scalping",
+                "final_state": "source_quality_gap",
+                "final_decision": "block_runtime_use",
+                "reason": "The warning status in the scalping entry admission metric indicates a data quality problem.",
+            },
+            {
+                "review_id": "source-quality",
+                "domain": "scalping",
+                "final_state": "automation_handoff_gap",
+                "final_decision": "block_runtime_use",
+                "reason": "The source contract drift in lifecycle_bucket_discovery is a source-quality issue.",
+            },
+            {
+                "review_id": "swing_strategy_discovery_pending_future_quotes",
+                "domain": "swing",
+                "final_state": "source_quality_gap",
+                "final_decision": "block_runtime_use",
+                "reason": "pending future quotes.",
+            },
+            {
+                "review_id": "swing_lifecycle_decision_matrix_warnings",
+                "domain": "swing",
+                "final_state": "source_quality_gap",
+                "final_decision": "block_runtime_use",
+                "reason": "The pending future quotes and missing intraday live probe are instrumentation gaps.",
+            },
+            {
+                "review_id": "missing_code_improvement_workorder",
+                "domain": "swing",
+                "final_state": "automation_handoff_gap",
+                "final_decision": "block_runtime_use",
+                "reason": "Gap in code improvement workorder handoff.",
+            },
+            {
+                "review_id": "ai_review_followup_2026_06_24",
+                "domain": "scalping",
+                "final_state": "ai_review_gap",
+                "final_decision": "block_runtime_use",
+                "reason": "AI review follow-up required per code_improvement_workorder warnings.",
+            },
+            {
+                "review_id": "automation_handoff_gap",
+                "domain": "swing",
+                "final_state": "automation_handoff_gap",
+                "final_decision": "block_runtime_use",
+                "reason": "49 code patches are required in swing lifecycle bucket discovery before automation can proceed.",
+            },
+        ],
+    }
+
+    report = mod.build_pattern_lab_ai_review_report("2026-05-15", provider="openai", ai_raw_response=raw_response)
+
+    assert report["status"] == "pass"
+    assert report["summary"]["audit_status"] == "pass"
+    assert report["code_improvement_orders"] == []
+    assert {item["final_state"] for item in report["ai_two_pass_review"]["final_conclusions"]} == {
+        "source_only_keep_collecting"
+    }
+
+
 def test_pattern_lab_ai_review_keeps_threshold_ev_incomplete_on_unclassified_warning(tmp_path, monkeypatch):
     report_dir = tmp_path / "data" / "report"
     monkeypatch.setattr(mod, "REPORT_DIR", report_dir)

@@ -1,83 +1,85 @@
 {
-  "bundle_as_of": "2026-06-23T22:20:11Z",
+  "bundle_as_of": "2026-06-24T22:20:12Z",
   "sp500": {
-    "name": "S&P500",
-    "value": 7365.46,
-    "prev_value": 7472.79,
-    "change": -107.33,
-    "change_pct": -1.44,
-    "as_of": "2026-06-23T20:41:00Z",
-    "source": "Morningstar / AP News"
+    "name": "S&P 500",
+    "value": 7358.22,
+    "prev_value": 7365.46,
+    "change": -7.24,
+    "change_pct": -0.1,
+    "as_of": "2026-06-24T20:00:00Z",
+    "source": "Dow Jones Market Data / Associated Press"
   },
   "nasdaq": {
-    "name": "NASDAQ",
-    "value": 25587.04,
-    "prev_value": 26166.6,
-    "change": -579.56,
-    "change_pct": -2.21,
-    "as_of": "2026-06-23T20:41:00Z",
-    "source": "Morningstar / AP News"
+    "name": "NASDAQ Composite",
+    "value": 25476.64,
+    "prev_value": 25587.04,
+    "change": -110.4,
+    "change_pct": -0.43,
+    "as_of": "2026-06-24T20:00:00Z",
+    "source": "Dow Jones Market Data / Associated Press"
   },
   "vix": {
     "name": "VIX",
-    "value": 19.01,
-    "prev_value": 17.28,
-    "change": 1.73,
-    "change_pct": 10.01,
-    "as_of": "2026-06-23T20:28:00Z",
-    "source": "Cboe Global Markets"
+    "value": 19.32,
+    "prev_value": 19.49,
+    "change": -0.17,
+    "change_pct": -0.87,
+    "as_of": "2026-06-24T14:02:00Z",
+    "source": "Cboe"
   },
   "us10y": {
-    "name": "US10Y",
-    "value": 4.493,
+    "name": "US 10Y Treasury Yield",
+    "value": 4.406,
     "prev_value": 4.506,
-    "change": -0.013,
+    "change": -0.1,
     "change_pct": null,
-    "as_of": "2026-06-23T19:59:00Z",
-    "source": "Tradeweb / Dow Jones Newswires"
+    "as_of": "2026-06-24T22:20:12Z",
+    "source": "A1 Trading / Trading Economics"
   },
   "brent": {
-    "name": "BRENT",
-    "value": 77.08,
-    "prev_value": 77.9,
-    "change": -0.82,
-    "change_pct": -1.05,
-    "as_of": "2026-06-23T19:17:00Z",
-    "source": "Morningstar / Dow Jones Newswires"
+    "name": "Brent Crude",
+    "value": 73.05,
+    "prev_value": 77.08,
+    "change": -4.03,
+    "change_pct": -5.23,
+    "as_of": "2026-06-24T22:20:12Z",
+    "source": "Trading Economics"
   },
   "headlines": [
     {
-      "title": "Senate approves war powers resolution rebuking Trump over Iran conflict",
-      "source": "MPR News",
-      "published_at": "2026-06-23T19:22:00Z",
-      "url": "https://www.mprnews.org"
+      "title": "Trump slams Senate's war powers vote on Iran as 'meaningless'",
+      "source": "Fox News",
+      "published_at": "2026-06-24T20:20:00Z",
+      "url": "https://www.foxnews.com"
     },
     {
-      "title": "West Asia war LIVE updates: India welcomes U.S.-Iran peace MoU, says Hormuz opening will boost energy supplies",
-      "source": "The Hindu",
-      "published_at": "2026-06-23T22:20:00Z",
-      "url": "https://www.thehindu.com"
+      "title": "White House asks U.S. Congress for $87.6B, mostly to pay off Iran war",
+      "source": "CP24",
+      "published_at": "2026-06-24T21:42:00Z",
+      "url": "https://www.cp24.com"
     },
     {
-      "title": "Trump Approval Drops After Iran War, Reuters/Ipsos Poll Finds",
-      "source": "Global Banking & Finance Review",
-      "published_at": "2026-06-23T18:00:00Z",
-      "url": "https://www.globalbankingandfinance.com"
+      "title": "Trump signals he may pull out of trade agreement with Mexico and Canada",
+      "source": "KERA News",
+      "published_at": "2026-06-24T15:20:00Z",
+      "url": "https://www.keranews.org"
     },
     {
-      "title": "Stock Market Today: Nasdaq, S&P 500 fall as BoFA rate hike note, Asian market tumble sends semis sinking",
-      "source": "TheStreet",
-      "published_at": "2026-06-23T20:00:00Z",
-      "url": "https://www.thestreet.com"
+      "title": "U.S. airline stocks rise as oil retreats to pre-Iran war levels",
+      "source": "Reuters / BNN Bloomberg",
+      "published_at": "2026-06-24T18:04:00Z",
+      "url": "https://www.bnnbloomberg.ca"
     },
     {
-      "title": "Oil Prices Continue to Fall on Hopes for Iran Deal",
-      "source": "Transport Topics",
-      "published_at": "2026-06-23T12:08:00Z",
-      "url": "https://www.ttnews.com"
+      "title": "JP Morgan lowers Brent crude price forecast for second-half 2026",
+      "source": "Reuters",
+      "published_at": "2026-06-24T15:01:00Z",
+      "url": "https://www.reuters.com"
     }
   ],
   "notes": [
-    "Data collected from final US trading session close and reliable aftermarket estimates."
+    "U.S. equities closed mixed with S&P 500 and Nasdaq down modestly amid a tech sell-off, despite broader market participation.",
+    "Brent crude saw a significant drop towards $73/bbl as Middle East risk premiums continued to unwind following the U.S.-Iran agreement.",
+    "The US 10-year Treasury yield dropped to 4.406%, breaking key technical levels due to fading energy-driven inflation expectations."
   ]
 }

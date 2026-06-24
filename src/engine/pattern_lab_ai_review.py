@@ -123,6 +123,9 @@ def _source_paths(target_date: str) -> dict[str, Path]:
         "swing_strategy_discovery_ev": REPORT_DIR
         / "swing_strategy_discovery_ev"
         / f"swing_strategy_discovery_ev_{target_date}.json",
+        "pattern_lab_propagation_audit": REPORT_DIR
+        / "pattern_lab_propagation_audit"
+        / f"pattern_lab_propagation_audit_{target_date}.json",
     }
 
 
@@ -333,13 +336,18 @@ def _is_resolved_pattern_lab_code_improvement_pending_source_only_gap(
 
 
 _CLASSIFIED_THRESHOLD_EV_WARNING_PREFIXES = {
+    "scalp_entry_adm:ai_numeric_consistency_rows_excluded_from_aggregates",
     "lifecycle_bucket_discovery:source_contract_drift_warning",
     "swing_strategy_discovery:pending_future_quotes",
+    "swing_strategy_discovery:clean_tuning_baseline_swing_discovery_lookback_filtered",
+    "swing_lifecycle_decision_matrix:swing_intraday_live_equiv_probe_missing",
     "swing_lifecycle_decision_matrix:pending_future_quotes",
+    "swing_lifecycle_decision_matrix:clean_tuning_baseline_swing_discovery_lookback_filtered",
     "swing_lifecycle_bucket_discovery:ai_two_pass_review_missing_fail_closed",
     "swing_lifecycle_bucket_discovery:ai_two_pass_review_fail_closed_sim_auto_blocked",
     "pattern_lab_ai_review_warning",
     "pattern_lab_ai_review_ai_review_followup_required",
+    "pattern_lab_propagation_audit_warning",
 }
 
 
@@ -376,12 +384,23 @@ def _classified_source_only_warning_present(context: dict[str, Any], warning: st
 
 
 def _is_resolved_classified_source_quality_warning_gap(item: dict[str, Any], context: dict[str, Any]) -> bool:
-    if str(item.get("final_state") or "") != "source_quality_gap":
+    final_state = str(item.get("final_state") or "")
+    reason = str(item.get("reason") or "").lower()
+    lifecycle_drift_context = "lifecycle_bucket_discovery" in reason and (
+        "source_contract_drift" in reason or "source contract drift" in reason
+    )
+    swing_bucket_implemented_context = (
+        ("swing_lifecycle_bucket_discovery" in reason or "swing lifecycle bucket discovery" in reason)
+        and ("code_patch_required" in reason or "code patch" in reason)
+    )
+    if final_state != "source_quality_gap" and not (
+        final_state == "automation_handoff_gap" and (swing_bucket_implemented_context or lifecycle_drift_context)
+    ):
         return False
     if str(item.get("final_decision") or "") == "keep":
         return False
     review_id = str(item.get("review_id") or "").strip().lower()
-    if review_id == "lifecycle_bucket_discovery_source_contract_drift":
+    if review_id == "lifecycle_bucket_discovery_source_contract_drift" or lifecycle_drift_context:
         source = _source_summary(context, "lifecycle_bucket_discovery")
         summary = _nested_report_summary(source)
         return (
@@ -394,7 +413,9 @@ def _is_resolved_classified_source_quality_warning_gap(item: dict[str, Any], con
                 "lifecycle_bucket_discovery:source_contract_drift_warning",
             )
         )
-    if review_id == "swing_strategy_discovery_pending_future_quotes":
+    if review_id == "swing_strategy_discovery_pending_future_quotes" or (
+        "swing_strategy_discovery" in reason and "pending_future_quotes" in reason
+    ):
         source = _source_summary(context, "swing_strategy_discovery_ev")
         return (
             source.get("runtime_effect") is False
@@ -404,6 +425,59 @@ def _is_resolved_classified_source_quality_warning_gap(item: dict[str, Any], con
                 context,
                 "swing_strategy_discovery:pending_future_quotes",
             )
+        )
+    if review_id == "scalping_scalp_entry_adm_status_warning" or (
+        "scalp_entry_adm_status" in reason or "scalp entry adm" in reason
+        or "scalping entry admission" in reason
+        or "entry admission metric" in reason
+    ):
+        source = _source_summary(context, "scalping_pattern_lab_automation")
+        return (
+            source.get("runtime_effect") is False
+            and source.get("allowed_runtime_apply") is False
+            and _classified_source_only_warning_present(
+                context,
+                "scalp_entry_adm:ai_numeric_consistency_rows_excluded_from_aggregates",
+            )
+            and _threshold_ev_warnings_are_classified_source_only(context)
+        )
+    if review_id == "swing_lifecycle_decision_matrix_warnings" or (
+        "swing_lifecycle_decision_matrix" in reason
+        and ("pending_future_quotes" in reason or "swing_intraday_live_equiv_probe_missing" in reason)
+    ) or (
+        ("pending future quotes" in reason or "pending_future_quotes" in reason)
+        and ("intraday live probe" in reason or "swing_intraday_live_equiv_probe_missing" in reason)
+    ):
+        source = _source_summary(context, "swing_lifecycle_decision_matrix")
+        source_warnings = {str(item) for item in source.get("warnings", [])}
+        return (
+            source.get("runtime_effect") is False
+            and source.get("allowed_runtime_apply") is not True
+            and bool(source_warnings)
+            and source_warnings.issubset(
+                {
+                    "swing_intraday_live_equiv_probe_missing",
+                    "pending_future_quotes",
+                    "clean_tuning_baseline_swing_discovery_lookback_filtered",
+                }
+            )
+            and _threshold_ev_warnings_are_classified_source_only(context)
+        )
+    if review_id == "swing_bucket_discovery_code_patch_required" or swing_bucket_implemented_context:
+        source = _source_summary(context, "swing_lifecycle_bucket_discovery")
+        summary = _nested_report_summary(source)
+        code_patch_required = _safe_int(summary.get("code_patch_required_count"))
+        implemented = summary.get("implemented_code_improvement_workorder_ids")
+        pending = summary.get("pending_code_improvement_workorder_ids")
+        implemented_count = len(implemented) if isinstance(implemented, list) else 0
+        pending_count = len(pending) if isinstance(pending, list) else 0
+        return (
+            source.get("runtime_effect") is False
+            and source.get("allowed_runtime_apply") is False
+            and summary.get("source_contract_status") == "pass"
+            and code_patch_required > 0
+            and implemented_count >= code_patch_required
+            and pending_count == 0
         )
     return False
 
@@ -622,10 +696,11 @@ def _is_resolved_feedback_source_missing_gap(item: dict[str, Any], context: dict
         return False
     review_id = str(item.get("review_id") or "").strip().lower()
     reason = str(item.get("reason") or "").lower()
+    normalized_reason = reason.replace(" ", "_")
     matched_labels = [
         label
         for label in _FEEDBACK_SOURCE_REVIEW_IDS
-        if review_id == label or label in reason
+        if review_id == label or label in reason or label in normalized_reason
     ]
     if not matched_labels:
         return False
@@ -659,7 +734,11 @@ def _is_resolved_code_improvement_workorder_self_review_gap(item: dict[str, Any]
     if str(item.get("final_decision") or "") == "keep":
         return False
     review_id = str(item.get("review_id") or "").strip().lower()
-    if review_id not in {"code_improvement_workorder", "code_improvement_workorder_ai_review_gap"}:
+    reason = str(item.get("reason") or "").lower()
+    code_workorder_reason = "code_improvement_workorder" in reason or "code improvement workorder" in reason
+    if review_id not in {"code_improvement_workorder", "code_improvement_workorder_ai_review_gap"} and not (
+        review_id.startswith("ai_review_followup") and code_workorder_reason
+    ):
         return False
     if not _feedback_handoff_closed(context):
         return False
