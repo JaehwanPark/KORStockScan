@@ -227,6 +227,10 @@ _SCANNER_REST_QUOTE_FALLBACK_LOCK = threading.Lock()
 _SCANNER_REST_QUOTE_FALLBACK_DEFER_SEC = 5.0
 SCANNER_WATCH_EVICTION_POLICY_VERSION = "scalping_scanner_watch_eviction_v4"
 SCANNER_WATCH_EVICTION_TERMINAL_MIN_COUNT = 2
+SCANNER_WATCH_EVICTION_PREFILTER_HARDGATE_STAGES = {
+    "blocked_strength_momentum",
+    "blocked_liquidity",
+}
 SCANNER_WATCH_EVICTION_STALE_MIN_COUNT = 3
 SCANNER_WATCH_EVICTION_STALE_MIN_AGE_SEC = 90.0
 SCANNER_WATCH_EVICTION_COOLDOWN_MIN_COUNT = 2
@@ -1370,9 +1374,10 @@ def _scanner_watch_eviction_decision_from_terminal(target, *, now_ts):
     target["_scanner_watch_eviction_terminal_count"] = attempt_count
     if block_epoch > 0:
         target["_scanner_watch_eviction_last_terminal_observed_epoch"] = block_epoch
+    hardgate_prefilter = stage in SCANNER_WATCH_EVICTION_PREFILTER_HARDGATE_STAGES
     return {
-        "should_evict": attempt_count >= SCANNER_WATCH_EVICTION_TERMINAL_MIN_COUNT,
-        "eviction_reason": "terminal_blocker_repeated",
+        "should_evict": hardgate_prefilter or attempt_count >= SCANNER_WATCH_EVICTION_TERMINAL_MIN_COUNT,
+        "eviction_reason": "scanner_hardgate_prefilter" if hardgate_prefilter else "terminal_blocker_repeated",
         "eviction_attempt_count": attempt_count,
         "terminal_stage": stage,
         "terminal_reason": reason,
@@ -4175,6 +4180,17 @@ def run_sniper(is_test_mode=False):
                     or _safe_int(recheck_snapshot.get("curr"), 0) <= 0
                 ):
                     return ws_snapshot, fields, False
+                recheck_snapshot = dict(recheck_snapshot)
+                recheck_age_sec = _safe_float(fields.get("ws_subscription_recheck_age_sec"), 999999.0)
+                recheck_fresh_sec = _safe_float(fields.get("ws_subscription_recheck_fresh_sec"), 0.0)
+                if (
+                    str(fields.get("ws_subscription_recheck_status") or "") == "subscribed_fresh_snapshot"
+                    and recheck_fresh_sec > 0
+                    and recheck_age_sec <= recheck_fresh_sec
+                ):
+                    recheck_snapshot["scanner_subscription_recheck_entry_relief"] = True
+                    recheck_snapshot["scanner_subscription_recheck_age_sec"] = round(recheck_age_sec, 3)
+                    recheck_snapshot["scanner_subscription_recheck_fresh_sec"] = round(recheck_fresh_sec, 3)
                 fields["ws_subscription_recheck_snapshot_applied"] = True
                 fields["ws_subscription_recheck_snapshot_apply_phase"] = str(phase or "unknown")
                 return recheck_snapshot, fields, True

@@ -910,6 +910,21 @@ def test_latency_gate_observer_unhealthy_detection():
     assert state_handlers._latency_gate_observer_unhealthy({}) is False
 
 
+def test_latency_gate_stale_quote_rest_recheck_detection():
+    assert state_handlers._latency_gate_needs_stale_quote_rest_recheck(
+        {"latency_state": "DANGER", "quote_stale": True, "latency_danger_reasons": "quote_stale,ws_age_too_high"}
+    ) is True
+    assert state_handlers._latency_gate_needs_stale_quote_rest_recheck(
+        {"latency_state": "DANGER", "latency_danger_reasons": "ws_age_too_high"}
+    ) is True
+    assert state_handlers._latency_gate_needs_stale_quote_rest_recheck(
+        {"latency_state": "CAUTION", "quote_stale": True, "latency_danger_reasons": "quote_stale"}
+    ) is False
+    assert state_handlers._latency_gate_needs_stale_quote_rest_recheck(
+        {"latency_state": "DANGER", "latency_danger_reasons": "spread_too_wide"}
+    ) is False
+
+
 def test_real_pre_submit_rest_orderbook_refresh_uses_ka10004_fresh_snapshot(monkeypatch):
     now_hhmmss = datetime.now().strftime("%H%M%S")
 

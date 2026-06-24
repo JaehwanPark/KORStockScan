@@ -1681,19 +1681,19 @@ def _scanner_watch_stock(**overrides):
     return stock
 
 
-def test_scanner_watch_terminal_blocker_requires_two_fresh_repeats():
+def test_scanner_watch_ai_terminal_blocker_requires_two_fresh_repeats():
     stock = _scanner_watch_stock()
     stock["_scanner_watch_last_terminal_block"] = {
-        "stage": "blocked_strength_momentum",
-        "reason": "below_window_buy_value",
+        "stage": "blocked_ai_score",
+        "reason": "below_ai_score",
         "fresh_input_confirmed": True,
         "observed_epoch": 1100.0,
     }
 
     first = kiwoom_sniper_v2._scanner_watch_eviction_decision_from_terminal(stock, now_ts=1100.0)
     stock["_scanner_watch_last_terminal_block"] = {
-        "stage": "blocked_strength_momentum",
-        "reason": "below_window_buy_value",
+        "stage": "blocked_ai_score",
+        "reason": "below_ai_score",
         "fresh_input_confirmed": True,
         "observed_epoch": 1110.0,
     }
@@ -1703,7 +1703,28 @@ def test_scanner_watch_terminal_blocker_requires_two_fresh_repeats():
     assert first["eviction_attempt_count"] == 1
     assert second["should_evict"] is True
     assert second["eviction_attempt_count"] == 2
-    assert second["terminal_stage"] == "blocked_strength_momentum"
+    assert second["terminal_stage"] == "blocked_ai_score"
+
+
+def test_scanner_watch_strength_and_liquidity_hardgates_evict_after_one_fresh_block():
+    for stage, reason in (
+        ("blocked_strength_momentum", "below_window_buy_value"),
+        ("blocked_liquidity", "below_min_liquidity"),
+    ):
+        stock = _scanner_watch_stock()
+        stock["_scanner_watch_last_terminal_block"] = {
+            "stage": stage,
+            "reason": reason,
+            "fresh_input_confirmed": True,
+            "observed_epoch": 1100.0,
+        }
+
+        decision = kiwoom_sniper_v2._scanner_watch_eviction_decision_from_terminal(stock, now_ts=1100.0)
+
+        assert decision["should_evict"] is True
+        assert decision["eviction_attempt_count"] == 1
+        assert decision["eviction_reason"] == "scanner_hardgate_prefilter"
+        assert decision["terminal_stage"] == stage
 
 
 def test_scanner_watch_terminal_blocker_does_not_double_count_same_observation():

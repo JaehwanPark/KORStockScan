@@ -7389,15 +7389,42 @@ def _scanner_fast_precheck_fields(
         and fresh_realtime_evidence
         and _scanner_rising_entry_relief_eligible(stock)
     )
+    subscription_recheck_age_sec = _safe_float(
+        ws_data.get("scanner_subscription_recheck_age_sec"),
+        999999.0,
+    )
+    subscription_recheck_fresh_sec = _safe_float(
+        ws_data.get("scanner_subscription_recheck_fresh_sec"),
+        0.0,
+    )
+    rising_subscription_recheck_relief = (
+        quote_age_sec is not None
+        and quote_age_sec > max_age_sec
+        and bool(ws_data.get("scanner_subscription_recheck_entry_relief"))
+        and subscription_recheck_fresh_sec > 0
+        and subscription_recheck_age_sec <= subscription_recheck_fresh_sec
+        and _scanner_rising_entry_relief_eligible(stock)
+    )
     if curr <= 0:
         result = "source_quality_blocked"
         reason = "missing_or_zero_curr"
-    elif quote_age_sec is not None and quote_age_sec > max_age_sec and not rising_realtime_relief:
+    elif (
+        quote_age_sec is not None
+        and quote_age_sec > max_age_sec
+        and not rising_realtime_relief
+        and not rising_subscription_recheck_relief
+    ):
         result = "stability_pending"
         reason = "stale_ws_snapshot"
     else:
         result = "eligible_for_heavy_entry_eval"
-        reason = "rising_realtime_type_fresh_quote_timestamp_stale" if rising_realtime_relief else "fast_precheck_pass"
+        reason = (
+            "rising_realtime_type_fresh_quote_timestamp_stale"
+            if rising_realtime_relief
+            else "rising_subscription_recheck_fresh_quote_timestamp_stale"
+            if rising_subscription_recheck_relief
+            else "fast_precheck_pass"
+        )
     return {
         "scanner_promotion_id": scanner_fields.get("scanner_promotion_id")
         or "not_applicable_scanner_promotion_id",
@@ -7423,8 +7450,21 @@ def _scanner_fast_precheck_fields(
         "fast_precheck_result": result,
         "fast_precheck_reason": reason,
         "fast_precheck_realtime_relief_applied": bool(rising_realtime_relief),
+        "fast_precheck_subscription_recheck_relief_applied": bool(rising_subscription_recheck_relief),
+        "fast_precheck_subscription_recheck_age_sec": (
+            round(subscription_recheck_age_sec, 3)
+            if subscription_recheck_age_sec < 999999.0
+            else "not_applicable_subscription_recheck_age_sec"
+        ),
+        "fast_precheck_subscription_recheck_fresh_sec": (
+            round(subscription_recheck_fresh_sec, 3)
+            if subscription_recheck_fresh_sec > 0
+            else "not_applicable_subscription_recheck_fresh_sec"
+        ),
         "fast_precheck_realtime_relief_scope": (
-            "rising_entry_relief_only" if rising_realtime_relief else "not_applicable"
+            "rising_entry_relief_only"
+            if (rising_realtime_relief or rising_subscription_recheck_relief)
+            else "not_applicable"
         ),
         "fast_precheck_seen_epoch": f"{float(now_ts):.3f}",
         "fast_precheck_lag_sec": round(max(0.0, float(now_ts) - anchor_time), 3) if anchor_time > 0 else 0.0,
@@ -10362,6 +10402,19 @@ def _latency_gate_observer_unhealthy(latency_gate: dict | None) -> bool:
         return False
     reason = str(snapshot.get("observer_missing_reason") or "").strip().lower()
     return reason not in {"", "ok", "none"}
+
+
+def _latency_gate_needs_stale_quote_rest_recheck(latency_gate: dict | None) -> bool:
+    if not isinstance(latency_gate, dict):
+        return False
+    if str(latency_gate.get("latency_state") or "").upper() != "DANGER":
+        return False
+    danger_reasons = str(latency_gate.get("latency_danger_reasons") or "").lower()
+    return (
+        bool(latency_gate.get("quote_stale"))
+        or "quote_stale" in danger_reasons
+        or "ws_age_too_high" in danger_reasons
+    )
 
 
 def _compute_price_below_bid_bps(price, best_bid):
@@ -19142,6 +19195,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
     latency_signal_score = latency_signal_strength * 100.0
     ws_data, pre_submit_ws_snapshot_refresh = _pre_submit_refresh_real_ws_snapshot(code, ws_data, strategy)
     pre_submit_rest_orderbook_refresh = {}
+    rest_refresh_attempted = False
     if (
         not pre_submit_ws_snapshot_refresh.get("pre_submit_ws_snapshot_refresh_applied")
         and not _pre_submit_input_snapshot_has_usable_quote(ws_data)
@@ -19151,6 +19205,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             ws_data,
             strategy,
         )
+        rest_refresh_attempted = True
     if pre_submit_ws_snapshot_refresh.get("pre_submit_ws_snapshot_refresh_applied"):
         curr_price = _safe_int(ws_data.get("curr"), curr_price)
         if strategy == 'SCALPING':
@@ -19201,9 +19256,33 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             )
         latency_gate.update(observer_recheck_fields)
     if (
+        _latency_gate_needs_stale_quote_rest_recheck(latency_gate)
+        and not bool(latency_gate.get("pre_submit_ws_snapshot_refresh_applied"))
+        and not bool(latency_gate.get("pre_submit_rest_orderbook_refresh_applied"))
+    ):
+        refreshed_ws_data, rest_recheck_fields = _pre_submit_refresh_rest_orderbook_snapshot(code, ws_data, strategy)
+        rest_refresh_attempted = True
+        if rest_recheck_fields.get("pre_submit_rest_orderbook_refresh_applied"):
+            ws_data = refreshed_ws_data
+            curr_price = _safe_int(ws_data.get("curr"), curr_price)
+            if strategy == 'SCALPING':
+                final_price = int(float(stock.get('target_buy_price', curr_price) or curr_price))
+            latency_gate = evaluate_live_buy_entry(
+                stock=stock,
+                code=code,
+                ws_data=ws_data,
+                strategy_id=strategy,
+                planned_qty=real_buy_qty,
+                signal_price=curr_price,
+                signal_strength=latency_signal_strength,
+                target_buy_price=final_price if strategy == 'SCALPING' else 0,
+            )
+        latency_gate.update(rest_recheck_fields)
+    if (
         _latency_gate_observer_unhealthy(latency_gate)
         and not bool(latency_gate.get("pre_submit_ws_snapshot_refresh_applied"))
         and not bool(latency_gate.get("pre_submit_rest_orderbook_refresh_applied"))
+        and not rest_refresh_attempted
     ):
         refreshed_ws_data, rest_recheck_fields = _pre_submit_refresh_rest_orderbook_snapshot(code, ws_data, strategy)
         if rest_recheck_fields.get("pre_submit_rest_orderbook_refresh_applied"):
