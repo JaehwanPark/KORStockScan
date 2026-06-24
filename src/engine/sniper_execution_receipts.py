@@ -751,6 +751,37 @@ def _find_execution_target(code, exec_type, order_no):
     return None
 
 
+def _execution_ignore_context(code: str, exec_type: str, order_no: str) -> str:
+    normalized_order_no = str(order_no or '').strip()
+    matching_code_targets = [
+        stock for stock in ACTIVE_TARGETS
+        if str((stock or {}).get('code', '')).strip()[:6] == code
+    ]
+    target_summaries = []
+    for stock in matching_code_targets[:5]:
+        pending_orders = stock.get('pending_entry_orders') or []
+        pending_ord_nos = [
+            str(order.get('ord_no', '') or '').strip() or '-'
+            for order in pending_orders[:3]
+        ]
+        target_summaries.append(
+            "{status}:odno={odno}:sell_odno={sell_odno}:pending={pending}".format(
+                status=str(stock.get('status', '') or '-'),
+                odno=str(stock.get('odno', '') or '-'),
+                sell_odno=str(stock.get('sell_odno', '') or '-'),
+                pending="|".join(pending_ord_nos) if pending_ord_nos else '-',
+            )
+        )
+    terminal_present = False
+    if exec_type == 'BUY' and normalized_order_no:
+        terminal_present = get_terminal_entry_order(normalized_order_no) is not None
+    return (
+        f"active_code_targets={len(matching_code_targets)} "
+        f"target_context={';'.join(target_summaries) if target_summaries else '-'} "
+        f"terminal_entry_bridge={terminal_present}"
+    )
+
+
 def _find_order_notice_target(code, exec_type, order_no):
     target = _find_execution_target(code, exec_type, order_no)
     if target:
@@ -1598,7 +1629,11 @@ def handle_real_execution(exec_data):
     with _active_state_lock():
         target_stock = _find_execution_target(code, exec_type, order_no)
         if not target_stock:
-            log_info(f"[EXEC_IGNORED] no matching active order. code={code}, type={exec_type}, order_no={order_no}")
+            ignore_context = _execution_ignore_context(code, exec_type, order_no)
+            log_info(
+                f"[EXEC_IGNORED] no matching active order. code={code}, "
+                f"type={exec_type}, order_no={order_no} {ignore_context}"
+            )
             return
 
         target_id = target_stock.get('id')

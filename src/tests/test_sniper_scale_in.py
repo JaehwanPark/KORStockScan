@@ -6650,6 +6650,24 @@ def test_terminal_entry_order_grace_covers_broker_cancel_fill_race():
     assert entry_state.get_terminal_entry_order("O1", now_ts=1_901.0) is None
 
 
+def test_execution_ignore_context_includes_active_target_and_terminal_bridge():
+    receipts.ACTIVE_TARGETS = [
+        {
+            "code": "123456",
+            "status": "WATCHING",
+            "odno": "",
+            "pending_entry_orders": [],
+        }
+    ]
+    entry_state.TERMINAL_ENTRY_ORDERS.clear()
+
+    context = receipts._execution_ignore_context("123456", "BUY", "O1")
+
+    assert "active_code_targets=1" in context
+    assert "WATCHING:odno=-" in context
+    assert "terminal_entry_bridge=False" in context
+
+
 def test_order_notice_backfills_missing_entry_order_number(monkeypatch):
     receipts.ACTIVE_TARGETS = []
     receipts.highest_prices = {}

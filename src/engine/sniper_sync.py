@@ -311,6 +311,54 @@ def _ensure_runtime_target(record, *, buy_qty=None, buy_price=None):
     return target
 
 
+def _broker_recovery_audience(target):
+    target = target or {}
+    simulated = (
+        bool(target.get("swing_live_order_dry_run"))
+        or bool(target.get("scalp_live_simulator"))
+        or bool(target.get("simulation_book"))
+        or bool(target.get("simulation_owner"))
+        or target.get("actual_order_submitted") is False
+    )
+    if simulated:
+        return "ADMIN_ONLY"
+    return str(target.get("msg_audience") or "ADMIN_ONLY")
+
+
+def _publish_broker_recovered_buy_message(
+    target,
+    *,
+    qty,
+    buy_price,
+    order_no,
+    execution_verified,
+):
+    if EVENT_BUS is None or target is None:
+        return False
+    if target.get("broker_recover_buy_notified"):
+        return False
+
+    name = str(target.get("name") or target.get("code") or "UNKNOWN")
+    order_line = f"\n주문번호: `{order_no}`" if order_no else ""
+    verify_line = "체결/주문조회 확인" if execution_verified else "잔고조회 확인"
+    msg = (
+        f"🛒 **[{name}]** 매수 체결 확인 (브로커 복구)\n"
+        f"평균 체결가: `{float(buy_price):,.0f}원`\n"
+        f"체결수량: `{int(qty)}주`"
+        f"{order_line}\n확인 경로: `{verify_line}`"
+    )
+    EVENT_BUS.publish(
+        "TELEGRAM_BROADCAST",
+        {
+            "message": msg,
+            "audience": _broker_recovery_audience(target),
+            "parse_mode": "Markdown",
+        },
+    )
+    target["broker_recover_buy_notified"] = True
+    return True
+
+
 def _recover_missing_broker_holdings(session, real_codes):
     recovered = 0
     today = datetime.now().date()
@@ -450,7 +498,15 @@ def _recover_missing_broker_holdings(session, real_codes):
             f"legacy={legacy_recovered}, exec_verified={bool(execution_match or order_ref_match)}, "
             f"order_ref_verified={bool(order_ref_match)})"
         )
-        _ensure_runtime_target(record, buy_qty=real_qty, buy_price=real_buy_uv)
+        target = _ensure_runtime_target(record, buy_qty=real_qty, buy_price=real_buy_uv)
+        if not legacy_recovered:
+            _publish_broker_recovered_buy_message(
+                target,
+                qty=real_qty,
+                buy_price=real_buy_uv,
+                order_no=str((order_ref_match or {}).get("ord_no", "") or "").strip(),
+                execution_verified=bool(execution_match or order_ref_match),
+            )
         if HIGHEST_PRICES is not None and real_buy_uv > 0:
             HIGHEST_PRICES.setdefault(code, real_buy_uv)
         tracked_codes.add(code)

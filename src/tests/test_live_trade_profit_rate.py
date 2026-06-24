@@ -332,7 +332,7 @@ def test_periodic_account_sync_recovers_broker_only_holding_from_watching_record
         (),
         {
             "id": 2205,
-            "rec_date": datetime(2026, 4, 15).date(),
+            "rec_date": datetime.now().date(),
             "stock_code": "189300",
             "stock_name": "인텔리안테크",
             "status": "WATCHING",
@@ -374,6 +374,13 @@ def test_periodic_account_sync_recovers_broker_only_holding_from_watching_record
     assert sniper_sync.ACTIVE_TARGETS[0]["code"] == "189300"
     assert sniper_sync.ACTIVE_TARGETS[0]["status"] == "HOLDING"
     assert sniper_sync.ACTIVE_TARGETS[0]["buy_qty"] == 7
+    telegram_events = [
+        payload
+        for topic, payload in sniper_sync.EVENT_BUS.events
+        if topic == "TELEGRAM_BROADCAST"
+    ]
+    assert any("매수 체결 확인 (브로커 복구)" in event["message"] for event in telegram_events)
+    assert any("잔고조회 확인" in event["message"] for event in telegram_events)
 
 
 def test_periodic_account_sync_marks_legacy_broker_recovered_holding(monkeypatch):
@@ -428,6 +435,11 @@ def test_periodic_account_sync_marks_legacy_broker_recovered_holding(monkeypatch
     assert sniper_sync.ACTIVE_TARGETS[0]["broker_recovered"] is True
     assert sniper_sync.ACTIVE_TARGETS[0]["broker_recovered_legacy"] is True
     assert sniper_sync.ACTIVE_TARGETS[0]["broker_recovered_execution_verified"] is True
+    assert not any(
+        topic == "TELEGRAM_BROADCAST"
+        and "매수 체결 확인 (브로커 복구)" in payload["message"]
+        for topic, payload in sniper_sync.EVENT_BUS.events
+    )
 
 
 def test_periodic_account_sync_recovers_order_ref_when_kt00008_empty(monkeypatch):
@@ -436,7 +448,7 @@ def test_periodic_account_sync_recovers_order_ref_when_kt00008_empty(monkeypatch
         (),
         {
             "id": 160,
-            "rec_date": datetime(2026, 4, 10).date(),
+            "rec_date": datetime.now().date(),
             "stock_code": "189300",
             "stock_name": "인텔리안테크",
             "status": "WATCHING",
@@ -492,6 +504,13 @@ def test_periodic_account_sync_recovers_order_ref_when_kt00008_empty(monkeypatch
     assert legacy_watch.status == "HOLDING"
     assert sniper_sync.ACTIVE_TARGETS[0]["broker_recovered_execution_verified"] is True
     assert sniper_sync.ACTIVE_TARGETS[0]["odno"] == "0412345"
+    telegram_events = [
+        payload
+        for topic, payload in sniper_sync.EVENT_BUS.events
+        if topic == "TELEGRAM_BROADCAST"
+    ]
+    assert any("주문번호: `0412345`" in event["message"] for event in telegram_events)
+    assert any("체결/주문조회 확인" in event["message"] for event in telegram_events)
 
 
 def test_sync_balance_with_db_requests_restart_on_auth_failure(tmp_path, monkeypatch):
