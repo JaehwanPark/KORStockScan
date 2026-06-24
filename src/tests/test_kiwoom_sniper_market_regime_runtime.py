@@ -996,6 +996,106 @@ def test_runtime_iteration_targets_prioritizes_due_rising_recheck():
     assert [target["id"] for target in ordered] == ["due_recheck", "evaluated_positive"]
 
 
+def test_runtime_iteration_targets_delays_cooldown_waiting_scanner_behind_fresh_candidate():
+    targets = [
+        {
+            "id": "cooldown_waiting",
+            "code": "000001",
+            "status": "WATCHING",
+            "strategy": "SCALPING",
+            "position_tag": "SCANNER",
+            "entry_armed_at_epoch": 1500.0,
+            "_scanner_rising_cooldown_recheck_after_epoch": 1660.0,
+            "price_delta_since_first_seen_pct": "5.00",
+        },
+        {
+            "id": "fresh_candidate",
+            "code": "000002",
+            "status": "WATCHING",
+            "strategy": "SCALPING",
+            "position_tag": "SCANNER",
+            "entry_armed_at_epoch": 1400.0,
+            "price_delta_since_first_seen_pct": "1.20",
+        },
+    ]
+
+    ordered = kiwoom_sniper_v2._runtime_iteration_targets(targets, now_ts=1600.0)
+
+    assert [target["id"] for target in ordered] == ["fresh_candidate", "cooldown_waiting"]
+
+
+def test_runtime_iteration_targets_promotes_cooldown_recheck_when_due():
+    targets = [
+        {
+            "id": "cooldown_due",
+            "code": "000001",
+            "status": "WATCHING",
+            "strategy": "SCALPING",
+            "position_tag": "SCANNER",
+            "entry_armed_at_epoch": 1500.0,
+            "_scanner_rising_cooldown_recheck_after_epoch": 1599.0,
+            "price_delta_since_first_seen_pct": "0.80",
+        },
+        {
+            "id": "fresh_candidate",
+            "code": "000002",
+            "status": "WATCHING",
+            "strategy": "SCALPING",
+            "position_tag": "SCANNER",
+            "entry_armed_at_epoch": 1400.0,
+            "price_delta_since_first_seen_pct": "1.20",
+        },
+    ]
+
+    ordered = kiwoom_sniper_v2._runtime_iteration_targets(targets, now_ts=1600.0)
+
+    assert [target["id"] for target in ordered] == ["cooldown_due", "fresh_candidate"]
+
+
+def test_scanner_promotion_latency_trace_fields_measure_ws_and_heavy_latency():
+    target = {
+        "id": 77,
+        "code": "123456",
+        "name": "TEST",
+        "status": "WATCHING",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "entry_armed_at_epoch": 1000.0,
+        "scanner_promotion_id": "SCANPROM-123456-1000",
+        "scanner_promotion_emitted_epoch": "1000.000",
+        "source_signature": "REALTIME_RANK_START",
+        "_scanner_fast_precheck_result": "eligible_for_heavy_entry_eval",
+        "_scanner_fast_precheck_reason": "fast_precheck_pass",
+    }
+    ws_data = {
+        "curr": 10000,
+        "last_realtime_type_ts": {"0B": 1002.5},
+        "strength_momentum_history": [{"ts": 1003.0}],
+    }
+
+    fields = kiwoom_sniper_v2._scanner_promotion_latency_trace_fields(
+        target,
+        ws_data,
+        now_ts=1005.0,
+        trace_phase="fast_precheck",
+        fast_precheck_fields={
+            "fast_precheck_result": "eligible_for_heavy_entry_eval",
+            "fast_precheck_reason": "fast_precheck_pass",
+        },
+        heavy_queue_enter_epoch=1004.0,
+    )
+
+    assert fields["decision_authority"] == "real_scalping_scanner_latency_observation_only"
+    assert fields["actual_order_submitted"] is False
+    assert fields["broker_order_forbidden"] is True
+    assert fields["promotion_to_trace_sec"] == 5.0
+    assert fields["promotion_to_last_0b_sec"] == 2.5
+    assert fields["last_0b_to_trace_sec"] == 2.5
+    assert fields["promotion_to_strength_history_sec"] == 3.0
+    assert fields["heavy_queue_enter_epoch"] == "1004.000"
+    assert fields["fast_precheck_result"] == "eligible_for_heavy_entry_eval"
+
+
 def test_scanner_positive_delta_uses_promotion_fallback_when_stock_delta_is_zero(monkeypatch):
     def fake_find_context(stock, *, min_delta, require_bid_imbalance):
         assert min_delta == 0.5
@@ -2106,6 +2206,80 @@ def test_expire_scanner_watch_target_rejects_bought_rows_before_db(monkeypatch):
 
     assert expired is False
     assert stock["status"] == "WATCHING"
+
+
+def test_krx_open_watchlist_reset_expires_only_unbought_watching_rows(monkeypatch):
+    fake_db = _ExpireDB()
+    monkeypatch.setattr(kiwoom_sniper_v2, "DB", fake_db)
+    emitted = []
+    pre_open_epoch = kiwoom_sniper_v2.datetime(2026, 6, 24, 8, 50, 0).timestamp()
+    targets = [
+        _scanner_watch_stock(id=101, code="111111", name="PREOPEN1"),
+        _scanner_watch_stock(id=102, code="222222", name="HELD", status="HOLDING", buy_qty=1),
+        _scanner_watch_stock(id=103, code="333333", name="ORDERED", status="BUY_ORDERED"),
+        _scanner_watch_stock(id=104, code="444444", name="BOUGHT_WATCH", buy_qty=1),
+        _scanner_watch_stock(
+            id=105,
+            code="555555",
+            name="SWING",
+            strategy="KOSDAQ_ML",
+            position_tag="SWING",
+            added_time=pre_open_epoch,
+        ),
+    ]
+
+    reset_codes = kiwoom_sniper_v2._reset_krx_open_watch_targets(
+        targets,
+        now_dt=kiwoom_sniper_v2.datetime(2026, 6, 24, 9, 0, 1),
+        emit_event_fn=lambda *args: emitted.append(args),
+    )
+
+    assert reset_codes == ["111111", "555555"]
+    assert targets[0]["status"] == "EXPIRED"
+    assert targets[1]["status"] == "HOLDING"
+    assert targets[2]["status"] == "BUY_ORDERED"
+    assert targets[3]["status"] == "WATCHING"
+    assert targets[4]["status"] == "EXPIRED"
+    assert fake_db.calls == [({"status": "EXPIRED"}, False)]
+    assert [event[2] for event in emitted] == ["krx_open_watchlist_reset", "krx_open_watchlist_reset"]
+    assert emitted[0][3]["reset_reason"] == "krx_open_reprice_watchlist_reset"
+    assert emitted[0][3]["actual_order_submitted"] is False
+    assert emitted[0][3]["broker_order_forbidden"] is True
+
+
+def test_krx_open_watchlist_reset_waits_until_market_open(monkeypatch):
+    fake_db = _ExpireDB()
+    monkeypatch.setattr(kiwoom_sniper_v2, "DB", fake_db)
+    stock = _scanner_watch_stock(id=106, code="666666")
+
+    reset_codes = kiwoom_sniper_v2._reset_krx_open_watch_targets(
+        [stock],
+        now_dt=kiwoom_sniper_v2.datetime(2026, 6, 24, 8, 59, 59),
+    )
+
+    assert reset_codes == []
+    assert stock["status"] == "WATCHING"
+    assert fake_db.calls == []
+
+
+def test_krx_open_watchlist_reset_keeps_post_open_scanner_targets(monkeypatch):
+    fake_db = _ExpireDB()
+    monkeypatch.setattr(kiwoom_sniper_v2, "DB", fake_db)
+    now_dt = kiwoom_sniper_v2.datetime(2026, 6, 24, 9, 3, 0)
+    post_open_epoch = kiwoom_sniper_v2.datetime(2026, 6, 24, 9, 1, 0).timestamp()
+    stock = _scanner_watch_stock(
+        id=107,
+        code="777777",
+        added_time=post_open_epoch,
+        entry_armed_at_epoch=post_open_epoch,
+        scanner_promotion_emitted_epoch=str(post_open_epoch),
+    )
+
+    reset_codes = kiwoom_sniper_v2._reset_krx_open_watch_targets([stock], now_dt=now_dt)
+
+    assert reset_codes == []
+    assert stock["status"] == "WATCHING"
+    assert fake_db.calls == []
 
 
 def test_recover_missing_ws_snapshot_skips_rest_quote_for_non_rising_repeated_miss(monkeypatch):

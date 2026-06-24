@@ -59,6 +59,7 @@ from src.engine.sniper_time import (
     _rule_time,
     _in_time_window,
     TIME_07_00,
+    TIME_09_00,
     TIME_09_05,
     TIME_09_10,
     TIME_10_30,
@@ -235,6 +236,7 @@ SCANNER_WATCH_EVICTION_NO_TRADE_MIN_COUNT = 2
 SCANNER_WATCH_EVICTION_NO_TRADE_MAX_PER_LOOP = 4
 SCANNER_WATCH_EVICTION_AFTER_BUY_WINDOW_MIN_COUNT = 2
 SCANNER_WATCH_EVICTION_AFTER_BUY_WINDOW_MIN_AGE_SEC = 60.0
+KRX_OPEN_WATCHLIST_RESET_POLICY_VERSION = "krx_open_watchlist_reset_v1"
 SCANNER_WATCH_EVICTION_SOURCE_QUALITY_REASONS = {
     "insufficient_history",
 }
@@ -1216,6 +1218,100 @@ def _is_scanner_watch_eviction_candidate(target):
     return True
 
 
+def _krx_open_epoch_for(now_dt):
+    now_dt = now_dt or datetime.now()
+    return datetime.combine(now_dt.date(), TIME_09_00).timestamp()
+
+
+def _is_krx_open_watchlist_reset_candidate(target, *, now_dt=None):
+    target = target or {}
+    if str(target.get("status") or "").upper() != "WATCHING":
+        return False
+    if target.get("buy_time") not in (None, "", 0):
+        return False
+    if _safe_int(target.get("buy_qty"), 0) != 0:
+        return False
+    if not target.get("id"):
+        return False
+    now_dt = now_dt or datetime.now()
+    open_epoch = _krx_open_epoch_for(now_dt)
+    anchor_epoch = _runtime_added_time_for_target(target, now_ts=now_dt.timestamp())
+    return anchor_epoch < open_epoch
+
+
+def _krx_open_watchlist_reset_fields(target, *, now_dt):
+    strategy = normalize_strategy((target or {}).get("strategy"))
+    return {
+        "metric_role": "runtime_watchlist_pool_management",
+        "decision_authority": "krx_open_watchlist_reset_pool_management_only",
+        "window_policy": "krx_open_once_per_trading_day",
+        "sample_floor": "not_applicable_runtime_pool_management",
+        "primary_decision_metric": "krx_open_reprice_watchlist_reset",
+        "source_quality_gate": "krx_open_watchlist_reset_contract",
+        "source_quality_route": "runtime_watchlist_reset_pool_management_only",
+        "forbidden_uses": (
+            "score_threshold_change,provider_route_change,order_price_change,"
+            "quantity_or_cap_change,broker_guard_change,real_execution_quality_approval"
+        ),
+        "runtime_effect": True,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "reset_policy_version": KRX_OPEN_WATCHLIST_RESET_POLICY_VERSION,
+        "reset_reason": "krx_open_reprice_watchlist_reset",
+        "reset_scope": "watching_without_position_or_order",
+        "runtime_record_id": (target or {}).get("id") or "not_applicable_runtime_record_id",
+        "stock_code": str((target or {}).get("code") or "").strip()[:6] or "not_applicable_stock_code",
+        "target_status": (target or {}).get("status") or "not_applicable_target_status",
+        "target_strategy": strategy,
+        "target_position_tag": normalize_position_tag(strategy, (target or {}).get("position_tag")),
+        "observed_at": (now_dt or datetime.now()).isoformat(),
+    }
+
+
+def _reset_krx_open_watch_targets(targets, *, now_dt=None, emit_event_fn=None):
+    now_dt = now_dt or datetime.now()
+    if now_dt.time() < TIME_09_00:
+        return []
+    reset_targets = [
+        target for target in list(targets or [])
+        if _is_krx_open_watchlist_reset_candidate(target, now_dt=now_dt)
+    ]
+    if not reset_targets:
+        return []
+    reset_ids = [target.get("id") for target in reset_targets if target.get("id")]
+    updated = 0
+    try:
+        with DB.get_session() as session:
+            updated = session.query(RecommendationHistory).filter(
+                RecommendationHistory.id.in_(reset_ids),
+                RecommendationHistory.status == "WATCHING",
+                RecommendationHistory.buy_time.is_(None),
+                RecommendationHistory.buy_qty == 0,
+            ).update({"status": "EXPIRED"}, synchronize_session=False)
+    except Exception as exc:
+        log_error(f"🚨 [KRX_OPEN_WATCHLIST_RESET] DB update failed: {exc}")
+        return []
+    if updated <= 0:
+        return []
+    updated_ids = set(reset_ids)
+    reset_codes = []
+    for target in targets or []:
+        if target.get("id") not in updated_ids:
+            continue
+        if not _is_krx_open_watchlist_reset_candidate(target, now_dt=now_dt):
+            continue
+        fields = _krx_open_watchlist_reset_fields(target, now_dt=now_dt)
+        target["status"] = "EXPIRED"
+        code = str(target.get("code") or "").strip()[:6]
+        if code:
+            reset_codes.append(code)
+        if emit_event_fn:
+            emit_event_fn(target, code, "krx_open_watchlist_reset", fields)
+        else:
+            sniper_state_handlers._log_entry_pipeline(target, code, "krx_open_watchlist_reset", **fields)
+    return reset_codes
+
+
 def _scanner_watch_reset_terminal_eviction_state(target):
     if not isinstance(target, dict):
         return
@@ -1884,6 +1980,13 @@ def _scanner_strength_recheck_waiting(target, now_ts=None):
     return after_epoch > float(now_ts)
 
 
+def _scanner_cooldown_recheck_waiting(target, now_ts=None):
+    target = target or {}
+    after_epoch = _safe_float(target.get("_scanner_rising_cooldown_recheck_after_epoch"), 0.0)
+    now_ts = time.time() if now_ts is None else now_ts
+    return after_epoch > float(now_ts)
+
+
 def _scanner_full_eval_max_per_loop():
     raw = os.getenv("KORSTOCKSCAN_SCANNER_FULL_EVAL_MAX_PER_LOOP", "")
     try:
@@ -2074,9 +2177,10 @@ def _runtime_iteration_targets(targets, now_ts):
             last_full_eval = _scanner_last_full_eval_epoch(target)
             pending_recheck = _scanner_strength_recheck_pending(target, now_ts=now_ts)
             rising_recheck = _scanner_rising_recheck_pending(target, now_ts=now_ts)
+            cooldown_waiting = _scanner_cooldown_recheck_waiting(target, now_ts=now_ts)
             positive_delta = _scanner_positive_delta_value(target)
             recency_key = (
-                0 if pending_recheck or rising_recheck else 1,
+                2 if cooldown_waiting else (0 if pending_recheck or rising_recheck else 1),
                 0 if last_full_eval <= 0 else 1,
                 -positive_delta,
                 -_scanner_queue_added_time(target, now_ts=now_ts) if last_full_eval <= 0 else last_full_eval,
@@ -2122,6 +2226,110 @@ def _runtime_queue_context(targets, now_ts):
         "non_real_holding_count": len(non_real_holding),
         "pre_scanner_runtime_count": first_scanner_index,
         "loop_started_epoch": now_ts,
+    }
+
+
+def _scanner_latency_anchor_epoch(target, default_ts):
+    target = target or {}
+    for key in ("entry_armed_at_epoch", "scanner_promotion_emitted_epoch", "added_time"):
+        value = _safe_float(target.get(key), 0.0)
+        if value > 0:
+            return value
+    return float(default_ts)
+
+
+def _scanner_latency_ws_type_epoch(ws_data, type_name):
+    type_ts = (ws_data or {}).get("last_realtime_type_ts")
+    if not isinstance(type_ts, dict):
+        return 0.0
+    return _safe_float(type_ts.get(type_name), 0.0)
+
+
+def _scanner_promotion_latency_trace_fields(
+    target,
+    ws_data,
+    *,
+    now_ts,
+    trace_phase,
+    fast_precheck_fields=None,
+    heavy_queue_enter_epoch=None,
+):
+    target = target or {}
+    ws_data = ws_data if isinstance(ws_data, dict) else {}
+    fast_precheck_fields = fast_precheck_fields if isinstance(fast_precheck_fields, dict) else {}
+    anchor_epoch = _scanner_latency_anchor_epoch(target, now_ts)
+    last_0b_epoch = _scanner_latency_ws_type_epoch(ws_data, "0B")
+    last_history_epoch = 0.0
+    history = ws_data.get("strength_momentum_history")
+    if isinstance(history, list):
+        for item in reversed(history):
+            if isinstance(item, dict):
+                last_history_epoch = _safe_float(item.get("ts") or item.get("timestamp"), 0.0)
+                if last_history_epoch > 0:
+                    break
+    heavy_enter = _safe_float(
+        heavy_queue_enter_epoch,
+        _safe_float(target.get("_scanner_heavy_queue_enter_epoch"), 0.0),
+    )
+    strategy = normalize_strategy(target.get("strategy"))
+    return {
+        "metric_role": "funnel_count",
+        "decision_authority": "real_scalping_scanner_latency_observation_only",
+        "window_policy": "same_day_intraday_light",
+        "sample_floor": "not_applicable_runtime_observation",
+        "primary_decision_metric": "promotion_to_trace_sec",
+        "source_quality_gate": "scalping_scanner_promotion_latency_trace_contract",
+        "source_quality_route": "runtime_scanner_latency_trace_observation_only",
+        "runtime_effect": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "forbidden_uses": (
+            "score_threshold_change,provider_route_change,order_price_change,"
+            "quantity_or_cap_change,broker_guard_change,real_execution_quality_approval"
+        ),
+        "trace_phase": str(trace_phase or "unknown_trace_phase"),
+        "scanner_promotion_id": target.get("scanner_promotion_id") or "not_applicable_scanner_promotion_id",
+        "scanner_promotion_emitted_epoch": target.get("scanner_promotion_emitted_epoch")
+        or "not_applicable_scanner_promotion_emitted_epoch",
+        "source_signature": target.get("source_signature") or "not_applicable_source_signature",
+        "runtime_record_id": target.get("id") or "not_applicable_runtime_record_id",
+        "stock_code": str(target.get("code") or "").strip()[:6] or "not_applicable_stock_code",
+        "target_status": target.get("status") or "not_applicable_target_status",
+        "target_strategy": strategy,
+        "target_position_tag": normalize_position_tag(strategy, target.get("position_tag")),
+        "promotion_anchor_epoch": f"{float(anchor_epoch):.3f}",
+        "trace_observed_epoch": f"{float(now_ts):.3f}",
+        "promotion_to_trace_sec": round(max(0.0, float(now_ts) - float(anchor_epoch)), 3),
+        "promotion_to_last_0b_sec": (
+            round(max(0.0, last_0b_epoch - anchor_epoch), 3)
+            if last_0b_epoch > 0 and last_0b_epoch >= anchor_epoch
+            else "not_available_promotion_to_last_0b_sec"
+        ),
+        "last_0b_to_trace_sec": (
+            round(max(0.0, float(now_ts) - last_0b_epoch), 3)
+            if last_0b_epoch > 0
+            else "not_available_last_0b_to_trace_sec"
+        ),
+        "promotion_to_strength_history_sec": (
+            round(max(0.0, last_history_epoch - anchor_epoch), 3)
+            if last_history_epoch > 0 and last_history_epoch >= anchor_epoch
+            else "not_available_promotion_to_strength_history_sec"
+        ),
+        "strength_history_to_trace_sec": (
+            round(max(0.0, float(now_ts) - last_history_epoch), 3)
+            if last_history_epoch > 0
+            else "not_available_strength_history_to_trace_sec"
+        ),
+        "heavy_queue_enter_epoch": (
+            f"{float(heavy_enter):.3f}" if heavy_enter > 0 else "not_available_heavy_queue_enter_epoch"
+        ),
+        "fast_precheck_result": fast_precheck_fields.get("fast_precheck_result")
+        or target.get("_scanner_fast_precheck_result")
+        or "not_available_fast_precheck_result",
+        "fast_precheck_reason": fast_precheck_fields.get("fast_precheck_reason")
+        or target.get("_scanner_fast_precheck_reason")
+        or "not_available_fast_precheck_reason",
+        "ws_curr": ws_data.get("curr") if ws_data.get("curr") not in (None, "") else "not_applicable_ws_curr",
     }
 
 
@@ -3484,6 +3692,16 @@ def run_sniper(is_test_mode=False):
                 _sn_whb("sniper_engine", alive=False)
                 break
 
+            today_key = now.date().isoformat()
+            if now_t >= TIME_09_00 and getattr(run_sniper, "krx_open_watchlist_reset_date", None) != today_key:
+                reset_codes = _reset_krx_open_watch_targets(targets, now_dt=now)
+                run_sniper.krx_open_watchlist_reset_date = today_key
+                if reset_codes:
+                    log_info(
+                        "[KRX_OPEN_WATCHLIST_RESET] expired pre-open WATCHING targets "
+                        f"count={len(reset_codes)} codes={','.join(sorted(set(reset_codes)))}"
+                    )
+
             scalp_sim_sync = sniper_state_handlers.sync_scalp_simulator_targets_if_state_changed(
                 targets,
                 last_mtime=getattr(run_sniper, 'last_scalp_sim_state_mtime', None),
@@ -3581,7 +3799,6 @@ def run_sniper(is_test_mode=False):
             # =====================================================
             # Preclose SCALPING overnight decision (DB 기준, 무조건 1회 작동)
             # =====================================================
-            today_key = now.date().isoformat()
             last_eod_done = getattr(run_sniper, 'scalping_eod_done_date', None)
             last_eod_try = getattr(run_sniper, 'last_scalping_eod_try', 0)
             overnight_gatekeeper_enabled = bool(
@@ -3725,6 +3942,18 @@ def run_sniper(is_test_mode=False):
                 _defer_scanner_entry_pipeline_log(
                     stock_value,
                     code_value,
+                    "scalping_scanner_promotion_latency_trace",
+                    _scanner_promotion_latency_trace_fields(
+                        stock_value,
+                        ws_snapshot,
+                        now_ts=float(now_value),
+                        trace_phase="fast_precheck",
+                        fast_precheck_fields=fields,
+                    ),
+                )
+                _defer_scanner_entry_pipeline_log(
+                    stock_value,
+                    code_value,
                     "scalping_scanner_fast_precheck",
                     fields,
                 )
@@ -3791,6 +4020,18 @@ def run_sniper(is_test_mode=False):
                     stock_value,
                     now_ts=float(now_value),
                     queue_enter_epoch=queue_enter_epoch,
+                )
+                _defer_scanner_entry_pipeline_log(
+                    stock_value,
+                    code_value,
+                    "scalping_scanner_promotion_latency_trace",
+                    _scanner_promotion_latency_trace_fields(
+                        stock_value,
+                        {},
+                        now_ts=float(now_value),
+                        trace_phase="heavy_eval",
+                        heavy_queue_enter_epoch=queue_enter_epoch,
+                    ),
                 )
                 _defer_scanner_entry_pipeline_log(
                     stock_value,

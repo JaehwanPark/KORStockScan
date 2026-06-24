@@ -2109,6 +2109,106 @@ def test_observation_source_quality_accepts_scalping_scanner_watch_eviction(monk
     assert report["summary"]["tuning_input_allowed"] is True
 
 
+def test_observation_source_quality_accepts_krx_open_watchlist_reset(monkeypatch, tmp_path):
+    monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
+    _write_events(
+        tmp_path,
+        "2026-06-24",
+        [
+            _event(
+                "krx_open_watchlist_reset",
+                {
+                    "metric_role": "runtime_watchlist_pool_management",
+                    "decision_authority": "krx_open_watchlist_reset_pool_management_only",
+                    "window_policy": "krx_open_once_per_trading_day",
+                    "sample_floor": "not_applicable_runtime_pool_management",
+                    "primary_decision_metric": "krx_open_reprice_watchlist_reset",
+                    "source_quality_gate": "krx_open_watchlist_reset_contract",
+                    "source_quality_route": "runtime_watchlist_reset_pool_management_only",
+                    "runtime_effect": True,
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                    "forbidden_uses": (
+                        "score_threshold_change,provider_route_change,order_price_change,"
+                        "quantity_or_cap_change,broker_guard_change,real_execution_quality_approval"
+                    ),
+                    "reset_policy_version": "krx_open_watchlist_reset_v1",
+                    "reset_reason": "krx_open_reprice_watchlist_reset",
+                    "reset_scope": "watching_without_position_or_order",
+                    "runtime_record_id": 77,
+                    "stock_code": "123456",
+                    "target_status": "WATCHING",
+                    "target_strategy": "SCALPING",
+                    "target_position_tag": "SCANNER",
+                },
+            )
+        ],
+    )
+
+    report = audit.write_report("2026-06-24")
+
+    contract = report["stage_contracts"]["krx_open_watchlist_reset"]
+    assert contract["status"] == "pass"
+    assert report["summary"]["hard_blocking_contract_gap_count"] == 0
+    assert report["summary"]["tuning_input_allowed"] is True
+
+
+def test_observation_source_quality_accepts_scanner_promotion_latency_trace(monkeypatch, tmp_path):
+    monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
+    _write_events(
+        tmp_path,
+        "2026-06-24",
+        [
+            _event(
+                "scalping_scanner_promotion_latency_trace",
+                {
+                    "metric_role": "funnel_count",
+                    "decision_authority": "real_scalping_scanner_latency_observation_only",
+                    "window_policy": "same_day_intraday_light",
+                    "sample_floor": "not_applicable_runtime_observation",
+                    "primary_decision_metric": "promotion_to_trace_sec",
+                    "source_quality_gate": "scalping_scanner_promotion_latency_trace_contract",
+                    "source_quality_route": "runtime_scanner_latency_trace_observation_only",
+                    "runtime_effect": False,
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                    "forbidden_uses": (
+                        "score_threshold_change,provider_route_change,order_price_change,"
+                        "quantity_or_cap_change,broker_guard_change,real_execution_quality_approval"
+                    ),
+                    "trace_phase": "fast_precheck",
+                    "scanner_promotion_id": "SCANPROM-123456-1000",
+                    "scanner_promotion_emitted_epoch": "1000.000",
+                    "source_signature": "REALTIME_RANK_START",
+                    "runtime_record_id": 77,
+                    "stock_code": "123456",
+                    "target_status": "WATCHING",
+                    "target_strategy": "SCALPING",
+                    "target_position_tag": "SCANNER",
+                    "promotion_anchor_epoch": "1000.000",
+                    "trace_observed_epoch": "1005.000",
+                    "promotion_to_trace_sec": 5.0,
+                    "promotion_to_last_0b_sec": 2.5,
+                    "last_0b_to_trace_sec": 2.5,
+                    "promotion_to_strength_history_sec": 3.0,
+                    "strength_history_to_trace_sec": 2.0,
+                    "heavy_queue_enter_epoch": "1004.000",
+                    "fast_precheck_result": "eligible_for_heavy_entry_eval",
+                    "fast_precheck_reason": "fast_precheck_pass",
+                    "ws_curr": 10000,
+                },
+            )
+        ],
+    )
+
+    report = audit.write_report("2026-06-24")
+
+    contract = report["stage_contracts"]["scalping_scanner_promotion_latency_trace"]
+    assert contract["status"] == "pass"
+    assert report["summary"]["hard_blocking_contract_gap_count"] == 0
+    assert report["summary"]["tuning_input_allowed"] is True
+
+
 def test_observation_source_quality_accepts_scalping_scanner_runtime_queue_lag(monkeypatch, tmp_path):
     monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
     _write_events(
