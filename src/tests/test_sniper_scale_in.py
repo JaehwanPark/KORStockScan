@@ -5830,11 +5830,12 @@ def test_get_best_levels_from_ws_uses_top_of_book_levels():
 
 def test_pending_entry_cancel_logs_receipt_provenance(monkeypatch):
     logs = []
+    cancel_calls = []
     monkeypatch.setattr(state_handlers, "_log_entry_pipeline", lambda stock, code, stage, **fields: logs.append((stage, fields)))
     monkeypatch.setattr(
         state_handlers.kiwoom_orders,
         "send_cancel_order",
-        lambda **kwargs: {"return_code": "0", "ord_no": "C1", "return_msg": "정상"},
+        lambda **kwargs: cancel_calls.append(kwargs) or {"return_code": "0", "ord_no": "C1", "return_msg": "정상"},
     )
     stock = {
         "id": 1,
@@ -5846,6 +5847,7 @@ def test_pending_entry_cancel_logs_receipt_provenance(monkeypatch):
                 "filled_qty": 0,
                 "price": 91900,
                 "ord_no": "O1",
+                "order_type": "00",
                 "status": "OPEN",
                 "sent_at": time.time() - 31,
                 "entry_order_lifecycle": "passive_probe",
@@ -5861,8 +5863,10 @@ def test_pending_entry_cancel_logs_receipt_provenance(monkeypatch):
     stages = {stage: fields for stage, fields in logs}
     assert stages["entry_order_cancel_requested"]["orig_ord_no"] == "O1"
     assert stages["entry_order_cancel_requested"]["entry_order_lifecycle"] == "passive_probe"
+    assert stages["entry_order_cancel_requested"]["dmst_stex_tp"] == "KRX"
     assert stages["entry_order_cancel_confirmed"]["cancel_ord_no"] == "C1"
     assert stages["entry_order_cancel_confirmed"]["submitted_price"] == 91900
+    assert cancel_calls[-1]["dmst_stex_tp"] == "KRX"
 
 
 def test_pending_entry_cancel_already_resolved_sets_recovery_probe_cooldown(monkeypatch):

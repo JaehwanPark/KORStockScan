@@ -245,6 +245,36 @@ def test_send_smart_sell_order_limit_up_uses_marketable_best_order(monkeypatch):
     assert calls[-1]["bypass_open_time_block"] is True
 
 
+def test_send_cancel_order_uses_requested_exchange(monkeypatch):
+    captured = {}
+
+    class DummyResponse:
+        status_code = 200
+
+        def json(self):
+            return {"return_code": "0", "ord_no": "C1", "cncl_qty": "전량"}
+
+    monkeypatch.setattr(kiwoom_orders.kiwoom_utils, "get_api_url", lambda path: f"https://example.test{path}")
+
+    def fake_post(url, headers, json, timeout):
+        captured["payload"] = json
+        return DummyResponse()
+
+    monkeypatch.setattr(kiwoom_orders.requests, "post", fake_post)
+
+    result = kiwoom_orders.send_cancel_order(
+        code="034020",
+        orig_ord_no="0062482",
+        token="TOKEN",
+        qty=0,
+        dmst_stex_tp="KRX",
+    )
+
+    assert result["return_code"] == "0"
+    assert captured["payload"]["dmst_stex_tp"] == "KRX"
+    assert captured["payload"]["orig_ord_no"] == "0062482"
+
+
 def test_get_deposit_loop_cache_can_be_disabled_by_string_config(monkeypatch):
     class DummyResponse:
         status_code = 200

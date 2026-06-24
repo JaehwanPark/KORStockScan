@@ -997,7 +997,14 @@ def send_sell_order_market(
         EventBus().publish("TELEGRAM_ADMIN_NOTIFY", {"text": msg})
         return None
 
-def send_cancel_order(code, orig_ord_no, token, qty=0):
+def _normalize_dmst_stex_tp(value, *, default="SOR"):
+    normalized = str(value or default or "SOR").strip().upper()
+    if normalized in {"KRX", "NXT", "SOR"}:
+        return normalized
+    return str(default or "SOR").strip().upper() or "SOR"
+
+
+def send_cancel_order(code, orig_ord_no, token, qty=0, dmst_stex_tp=None):
     """
     [kt10003] 주식 취소 주문 - 미체결 물량 취소
     :param qty: 취소 수량. 기본값 0 (0 입력 시 미체결 잔량 전부 취소)
@@ -1014,7 +1021,7 @@ def send_cancel_order(code, orig_ord_no, token, qty=0):
     }
 
     payload = {
-        "dmst_stex_tp": "SOR",  # 국내거래소구분
+        "dmst_stex_tp": _normalize_dmst_stex_tp(dmst_stex_tp),  # 국내거래소구분
         "orig_ord_no": str(orig_ord_no),  # 원주문번호
         "stk_cd": clean_code,  # 종목코드
         "cncl_qty": str(qty)  # 🚀 '0'이면 남은 물량 싹 다 취소!

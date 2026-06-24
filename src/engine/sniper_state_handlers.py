@@ -21139,6 +21139,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         successful_orders.append({
             'tag': request['tag'], 'qty': qty, 'price': price, 'ord_no': ord_no, 'tif': request['tif'],
             'order_type': request['order_type_code'], 'status': 'OPEN', 'filled_qty': 0, 'sent_at': order_sent_ts,
+            'dmst_stex_tp': 'KRX' if str(request['order_type_code']) == '00' else 'SOR',
             'entry_order_lifecycle': submit_revalidation_fields.get('entry_order_lifecycle', 'standard'),
             'entry_passive_probe_applied': bool(submit_revalidation_fields.get('entry_passive_probe_applied')),
             'best_bid_at_submit': price_snapshot.get('best_bid_at_submit'),
@@ -21868,6 +21869,14 @@ def _cancel_pending_entry_orders(stock, code, *, force=False):
                 "price_decision_context_age_ms": order.get('price_decision_context_age_ms', "-"),
                 "quote_age_at_submit_ms": order.get('quote_age_at_submit_ms', "-"),
             }
+            cancel_dmst_stex_tp = str(
+                order.get('dmst_stex_tp')
+                or order.get('domestic_exchange_type')
+                or ("KRX" if str(order.get('order_type') or "") == "00" else "SOR")
+            ).strip().upper()
+            if cancel_dmst_stex_tp not in {"KRX", "NXT", "SOR"}:
+                cancel_dmst_stex_tp = "SOR"
+            cancel_fields["dmst_stex_tp"] = cancel_dmst_stex_tp
             wait_result = (stock or {}).get('entry_cancel_wait_attribution_result')
             if isinstance(wait_result, dict):
                 timeout_sec = _resolve_buy_order_timeout_sec(stock, stock.get('strategy'))
@@ -21885,7 +21894,13 @@ def _cancel_pending_entry_orders(stock, code, *, force=False):
                 cancel_fields["is_report_only"] = str(wait_result.get("is_report_only", "true")).lower()
                 cancel_fields["actual_timeout_sec"] = str(timeout_sec)
             _log_entry_pipeline(stock, code, "entry_order_cancel_requested", **cancel_fields)
-            res = kiwoom_orders.send_cancel_order(code=code, orig_ord_no=ord_no, token=KIWOOM_TOKEN, qty=0)
+            res = kiwoom_orders.send_cancel_order(
+                code=code,
+                orig_ord_no=ord_no,
+                token=KIWOOM_TOKEN,
+                qty=0,
+                dmst_stex_tp=cancel_dmst_stex_tp,
+            )
             is_success = False
             err_msg = str(res)
             cancel_ord_no = ""
