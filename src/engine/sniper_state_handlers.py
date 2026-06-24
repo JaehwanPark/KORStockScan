@@ -13461,6 +13461,12 @@ def _resolve_pre_submit_liquidity_relief(
         or (latency_gate or {}).get("quote_stale")
     )
     latency_state = str((latency_gate or {}).get("latency_state") or "").upper()
+    latency_effective_decision = str(
+        (latency_gate or {}).get("effective_decision")
+        or (latency_gate or {}).get("decision")
+        or ""
+    ).upper()
+    latency_effectively_allowed = latency_effective_decision.startswith("ALLOW")
     base = {
         "liquidity_value": int(_safe_float(liquidity_value, 0.0)),
         "min_liquidity": int(_safe_float(min_liquidity, 0.0)),
@@ -13479,6 +13485,8 @@ def _resolve_pre_submit_liquidity_relief(
         "relief_count": relief_count,
         "quote_stale": quote_stale,
         "latency_state": latency_state or "-",
+        "latency_effective_decision": latency_effective_decision or "-",
+        "latency_canary_applied": _boolish_true((latency_gate or {}).get("latency_canary_applied")),
     }
 
     if not _rule_bool("PRE_SUBMIT_LIQUIDITY_RELIEF_ENABLED", False):
@@ -13491,7 +13499,7 @@ def _resolve_pre_submit_liquidity_relief(
         return {"allowed": False, "relief_skip_reason": "sim_or_probe_scope", **base}
     if quote_stale:
         return {"allowed": False, "relief_skip_reason": "stale_quote_or_context", **base}
-    if latency_state == "DANGER":
+    if latency_state == "DANGER" and not latency_effectively_allowed:
         return {"allowed": False, "relief_skip_reason": "latency_danger", **base}
     if _safe_float(ai_score, 0.0) < float(_rule_int("PRE_SUBMIT_LIQUIDITY_RELIEF_MIN_AI_SCORE", 75)):
         return {"allowed": False, "relief_skip_reason": "ai_score_below_min", **base}
@@ -13532,6 +13540,8 @@ def _log_pre_submit_liquidity_relief(stock, code, stage: str, decision: dict) ->
         relief_count=_safe_int(decision.get("relief_count"), 0),
         quote_stale=bool(decision.get("quote_stale")),
         latency_state=decision.get("latency_state") or "-",
+        latency_effective_decision=decision.get("latency_effective_decision") or "-",
+        latency_canary_applied=bool(decision.get("latency_canary_applied")),
     )
 
 

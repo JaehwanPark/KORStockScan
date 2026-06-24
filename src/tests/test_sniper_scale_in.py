@@ -4407,6 +4407,101 @@ def test_pre_submit_liquidity_relief_requires_strong_bundle_path(monkeypatch):
     assert decision["relief_skip_reason"] == "not_strong_bundle_path"
 
 
+def test_pre_submit_liquidity_relief_accepts_latency_canary_allowed_danger(monkeypatch):
+    state_handlers.TRADING_RULES = replace(
+        CONFIG,
+        PRE_SUBMIT_LIQUIDITY_RELIEF_ENABLED=True,
+        PRE_SUBMIT_LIQUIDITY_RELIEF_MIN_AI_SCORE=75,
+        PRE_SUBMIT_LIQUIDITY_RELIEF_MIN_TICK_ACCEL=1.00,
+        PRE_SUBMIT_LIQUIDITY_RELIEF_MIN_BUY_PRESSURE=68.0,
+        PRE_SUBMIT_LIQUIDITY_RELIEF_MIN_MICRO_VWAP_BP=0.0,
+        PRE_SUBMIT_LIQUIDITY_RELIEF_MAX_PER_SYMBOL=1,
+    )
+    stock = {
+        "id": 13,
+        "name": "LATENCY_CANARY_RELIEF",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "scanner_promotion_reason": "price_jump_start_acceleration",
+        "source_signature": "PRICE_JUMP_START,VOLUME_SURGE_POSITIVE",
+    }
+
+    decision = state_handlers._resolve_pre_submit_liquidity_relief(
+        stock,
+        {
+            "quote_stale": False,
+            "tick_acceleration_ratio": 1.0,
+            "curr_vs_micro_vwap_bp": 13.0,
+            "buy_pressure_10t": 86.0,
+        },
+        strategy="SCALPING",
+        ai_score=82,
+        liquidity_value=180_000_000,
+        min_liquidity=350_000_000,
+        latency_gate={
+            "latency_state": "DANGER",
+            "effective_decision": "ALLOW_NORMAL",
+            "latency_canary_applied": "True",
+            "quote_stale": False,
+        },
+        guard_fields={},
+        submit_fields={},
+        price_snapshot={},
+        orderbook_fields={},
+        microstructure_fields={},
+        pre_ai_fields={},
+    )
+
+    assert decision["allowed"] is True
+    assert decision["relief_skip_reason"] == "allowed"
+    assert decision["latency_effective_decision"] == "ALLOW_NORMAL"
+    assert decision["latency_canary_applied"] is True
+
+
+def test_pre_submit_liquidity_relief_still_blocks_raw_latency_danger(monkeypatch):
+    state_handlers.TRADING_RULES = replace(
+        CONFIG,
+        PRE_SUBMIT_LIQUIDITY_RELIEF_ENABLED=True,
+        PRE_SUBMIT_LIQUIDITY_RELIEF_MIN_AI_SCORE=75,
+        PRE_SUBMIT_LIQUIDITY_RELIEF_MIN_TICK_ACCEL=1.00,
+        PRE_SUBMIT_LIQUIDITY_RELIEF_MIN_BUY_PRESSURE=68.0,
+        PRE_SUBMIT_LIQUIDITY_RELIEF_MIN_MICRO_VWAP_BP=0.0,
+        PRE_SUBMIT_LIQUIDITY_RELIEF_MAX_PER_SYMBOL=1,
+    )
+    stock = {
+        "id": 14,
+        "name": "RAW_DANGER_RELIEF",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "scanner_promotion_reason": "price_jump_start_acceleration",
+        "source_signature": "PRICE_JUMP_START,VOLUME_SURGE_POSITIVE",
+    }
+
+    decision = state_handlers._resolve_pre_submit_liquidity_relief(
+        stock,
+        {
+            "quote_stale": False,
+            "tick_acceleration_ratio": 1.0,
+            "curr_vs_micro_vwap_bp": 13.0,
+            "buy_pressure_10t": 86.0,
+        },
+        strategy="SCALPING",
+        ai_score=82,
+        liquidity_value=180_000_000,
+        min_liquidity=350_000_000,
+        latency_gate={"latency_state": "DANGER", "quote_stale": False},
+        guard_fields={},
+        submit_fields={},
+        price_snapshot={},
+        orderbook_fields={},
+        microstructure_fields={},
+        pre_ai_fields={},
+    )
+
+    assert decision["allowed"] is False
+    assert decision["relief_skip_reason"] == "latency_danger"
+
+
 def test_pre_submit_liquidity_relief_uses_recent_ai_feature_probe_when_submit_features_zero(monkeypatch):
     state_handlers.TRADING_RULES = replace(
         CONFIG,
