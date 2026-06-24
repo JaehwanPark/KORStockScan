@@ -611,6 +611,7 @@ def test_trading_rules_profit_stagnation_exit_env_override(monkeypatch):
 def test_trading_rules_ai_cadence_defaults_are_rate_limited(monkeypatch):
     for key in (
         "KORSTOCKSCAN_AI_WATCHING_COOLDOWN",
+        "KORSTOCKSCAN_AI_WAIT_DROP_COOLDOWN",
         "KORSTOCKSCAN_AI_HOLDING_MIN_COOLDOWN",
         "KORSTOCKSCAN_AI_HOLDING_MAX_COOLDOWN",
         "KORSTOCKSCAN_AI_HOLDING_CRITICAL_MIN_COOLDOWN",
@@ -623,6 +624,7 @@ def test_trading_rules_ai_cadence_defaults_are_rate_limited(monkeypatch):
     reloaded = importlib.reload(constants)
 
     assert reloaded.TRADING_RULES.AI_WATCHING_COOLDOWN == 90
+    assert reloaded.TRADING_RULES.AI_WAIT_DROP_COOLDOWN == 300
     assert reloaded.TRADING_RULES.AI_WATCHING_STATE_CHANGE_REFRESH_ENABLED is False
     assert reloaded.TRADING_RULES.AI_WATCHING_SCORE_SMOOTHING_MODE == "off"
     assert reloaded.TRADING_RULES.AI_HOLDING_MIN_COOLDOWN == 45
@@ -711,6 +713,7 @@ def test_trading_rules_runtime_shadow_defaults_are_off(monkeypatch):
 
 def test_trading_rules_ai_cadence_env_override(monkeypatch):
     monkeypatch.setenv("KORSTOCKSCAN_AI_WATCHING_COOLDOWN", "120")
+    monkeypatch.setenv("KORSTOCKSCAN_AI_WAIT_DROP_COOLDOWN", "180")
     monkeypatch.setenv("KORSTOCKSCAN_AI_HOLDING_MIN_COOLDOWN", "60")
     monkeypatch.setenv("KORSTOCKSCAN_AI_HOLDING_MAX_COOLDOWN", "240")
     monkeypatch.setenv("KORSTOCKSCAN_AI_HOLDING_CRITICAL_MIN_COOLDOWN", "30")
@@ -723,6 +726,7 @@ def test_trading_rules_ai_cadence_env_override(monkeypatch):
     reloaded = importlib.reload(constants)
 
     assert reloaded.TRADING_RULES.AI_WATCHING_COOLDOWN == 120
+    assert reloaded.TRADING_RULES.AI_WAIT_DROP_COOLDOWN == 180
     assert reloaded.TRADING_RULES.AI_WATCHING_STATE_CHANGE_REFRESH_ENABLED is True
     assert reloaded.TRADING_RULES.AI_WATCHING_SCORE_SMOOTHING_MODE == "report_only"
     assert reloaded.TRADING_RULES.AI_WATCHING_STATE_CHANGE_BUY_PRESSURE_DELTA == 12.5

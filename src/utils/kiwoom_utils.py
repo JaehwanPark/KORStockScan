@@ -2674,8 +2674,9 @@ def is_valid_stock(code, name, token=None, current_price=0):
     # 2. 이름 기반 필터링 (KODEX 포함 제외 목록)
     # ==========================================
     invalid_keywords = [
-        '스팩', 'ETF', 'ETN', 'TIGER', 'KBSTAR', 'KODEX', 
-        'KINDEX', 'ARIRANG', 'KOSEF', '리츠', 'HANARO'
+        '스팩', 'ETF', 'ETN', 'TIGER', 'KBSTAR', 'KODEX',
+        'KINDEX', 'ARIRANG', 'KOSEF', '리츠', 'HANARO',
+        'SOL ', 'ACE ', 'RISE ', 'PLUS ', 'TIMEFOLIO', 'KIWOOM ',
     ]
     
     for keyword in invalid_keywords:

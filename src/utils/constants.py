@@ -1298,6 +1298,7 @@ def _build_trading_rules() -> TradingConfig:
     env_score6574_probe_calibration_state = _env_str("KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_CALIBRATION_STATE")
     env_scalping_prompt_split_enabled = _env_bool("KORSTOCKSCAN_SCALPING_PROMPT_SPLIT_ENABLED")
     env_ai_watching_cooldown = _env_int("KORSTOCKSCAN_AI_WATCHING_COOLDOWN")
+    env_ai_wait_drop_cooldown = _env_int("KORSTOCKSCAN_AI_WAIT_DROP_COOLDOWN")
     env_ai_watching_state_change_refresh = _env_bool("KORSTOCKSCAN_AI_WATCHING_STATE_CHANGE_REFRESH_ENABLED")
     env_ai_watching_score_smoothing_mode = _env_str("KORSTOCKSCAN_AI_WATCHING_SCORE_SMOOTHING_MODE")
     env_ai_watching_state_change_buy_pressure_delta = _env_float(
@@ -1337,6 +1338,7 @@ def _build_trading_rules() -> TradingConfig:
         or env_score6574_probe_calibration_state is not None
         or env_scalping_prompt_split_enabled is not None
         or env_ai_watching_cooldown is not None
+        or env_ai_wait_drop_cooldown is not None
         or env_ai_watching_state_change_refresh is not None
         or env_ai_watching_score_smoothing_mode is not None
         or env_ai_watching_state_change_buy_pressure_delta is not None
@@ -1432,6 +1434,9 @@ def _build_trading_rules() -> TradingConfig:
             AI_WATCHING_COOLDOWN=env_ai_watching_cooldown
             if env_ai_watching_cooldown is not None
             else config.AI_WATCHING_COOLDOWN,
+            AI_WAIT_DROP_COOLDOWN=env_ai_wait_drop_cooldown
+            if env_ai_wait_drop_cooldown is not None
+            else config.AI_WAIT_DROP_COOLDOWN,
             AI_WATCHING_STATE_CHANGE_REFRESH_ENABLED=env_ai_watching_state_change_refresh
             if env_ai_watching_state_change_refresh is not None
             else config.AI_WATCHING_STATE_CHANGE_REFRESH_ENABLED,

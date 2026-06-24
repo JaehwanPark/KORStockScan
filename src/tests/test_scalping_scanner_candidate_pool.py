@@ -53,6 +53,19 @@ def test_resolve_scan_interval_matches_intraday_schedule():
     assert scalping_scanner._resolve_scan_interval_sec(time(15, 0)) == 60
 
 
+def test_is_valid_stock_blocks_fund_prefix_products():
+    blocked_names = [
+        "SOL AI반도체TOP2플러스",
+        "RISE 삼성전자SK하이닉스채권혼합50",
+        "PLUS 삼성전자선물단일종목인버스2X",
+        "ACE 삼성전자단일종목레버리지",
+        "KIWOOM 200선물인버스2X",
+    ]
+
+    for idx, name in enumerate(blocked_names):
+        assert kiwoom_utils.is_valid_stock(f"00{idx:04d}", name, current_price=10000) is False
+
+
 def test_promote_candidates_skips_when_active_scanner_cap_reached(monkeypatch):
     monkeypatch.setenv("KORSTOCKSCAN_SCALPING_WATCHING_MAX_ACTIVE", "1")
     db = _DB()
