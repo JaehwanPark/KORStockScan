@@ -982,6 +982,24 @@ def _build_trading_rules() -> TradingConfig:
     env_spread_relief_min_print_alignment = _env_float(
         "KORSTOCKSCAN_SCALP_LATENCY_SPREAD_RELIEF_MIN_PRINT_QUOTE_ALIGNMENT"
     )
+    env_quote_fresh_composite_enabled = _env_bool(
+        "KORSTOCKSCAN_SCALP_LATENCY_QUOTE_FRESH_COMPOSITE_CANARY_ENABLED"
+    )
+    env_quote_fresh_composite_tags = _env_csv_tuple(
+        "KORSTOCKSCAN_SCALP_LATENCY_QUOTE_FRESH_COMPOSITE_TAGS"
+    )
+    env_quote_fresh_composite_min_signal = _env_float(
+        "KORSTOCKSCAN_SCALP_LATENCY_QUOTE_FRESH_COMPOSITE_MIN_SIGNAL_SCORE"
+    )
+    env_quote_fresh_composite_max_ws_age = _env_int(
+        "KORSTOCKSCAN_SCALP_LATENCY_QUOTE_FRESH_COMPOSITE_MAX_WS_AGE_MS"
+    )
+    env_quote_fresh_composite_max_ws_jitter = _env_int(
+        "KORSTOCKSCAN_SCALP_LATENCY_QUOTE_FRESH_COMPOSITE_MAX_WS_JITTER_MS"
+    )
+    env_quote_fresh_composite_max_spread = _env_float(
+        "KORSTOCKSCAN_SCALP_LATENCY_QUOTE_FRESH_COMPOSITE_MAX_SPREAD_RATIO"
+    )
     env_wide_spread_passive_requote_enabled = _env_bool(
         "KORSTOCKSCAN_SCALP_LATENCY_WIDE_SPREAD_PASSIVE_REQUOTE_ENABLED"
     )
@@ -1176,6 +1194,24 @@ def _build_trading_rules() -> TradingConfig:
             SCALP_LATENCY_SPREAD_RELIEF_MIN_PRINT_QUOTE_ALIGNMENT=env_spread_relief_min_print_alignment
             if env_spread_relief_min_print_alignment is not None
             else config.SCALP_LATENCY_SPREAD_RELIEF_MIN_PRINT_QUOTE_ALIGNMENT,
+            SCALP_LATENCY_QUOTE_FRESH_COMPOSITE_CANARY_ENABLED=env_quote_fresh_composite_enabled
+            if env_quote_fresh_composite_enabled is not None
+            else config.SCALP_LATENCY_QUOTE_FRESH_COMPOSITE_CANARY_ENABLED,
+            SCALP_LATENCY_QUOTE_FRESH_COMPOSITE_TAGS=env_quote_fresh_composite_tags
+            if env_quote_fresh_composite_tags is not None
+            else config.SCALP_LATENCY_QUOTE_FRESH_COMPOSITE_TAGS,
+            SCALP_LATENCY_QUOTE_FRESH_COMPOSITE_MIN_SIGNAL_SCORE=env_quote_fresh_composite_min_signal
+            if env_quote_fresh_composite_min_signal is not None
+            else config.SCALP_LATENCY_QUOTE_FRESH_COMPOSITE_MIN_SIGNAL_SCORE,
+            SCALP_LATENCY_QUOTE_FRESH_COMPOSITE_MAX_WS_AGE_MS=env_quote_fresh_composite_max_ws_age
+            if env_quote_fresh_composite_max_ws_age is not None
+            else config.SCALP_LATENCY_QUOTE_FRESH_COMPOSITE_MAX_WS_AGE_MS,
+            SCALP_LATENCY_QUOTE_FRESH_COMPOSITE_MAX_WS_JITTER_MS=env_quote_fresh_composite_max_ws_jitter
+            if env_quote_fresh_composite_max_ws_jitter is not None
+            else config.SCALP_LATENCY_QUOTE_FRESH_COMPOSITE_MAX_WS_JITTER_MS,
+            SCALP_LATENCY_QUOTE_FRESH_COMPOSITE_MAX_SPREAD_RATIO=env_quote_fresh_composite_max_spread
+            if env_quote_fresh_composite_max_spread is not None
+            else config.SCALP_LATENCY_QUOTE_FRESH_COMPOSITE_MAX_SPREAD_RATIO,
             SCALP_LATENCY_WIDE_SPREAD_PASSIVE_REQUOTE_ENABLED=env_wide_spread_passive_requote_enabled
             if env_wide_spread_passive_requote_enabled is not None
             else config.SCALP_LATENCY_WIDE_SPREAD_PASSIVE_REQUOTE_ENABLED,
