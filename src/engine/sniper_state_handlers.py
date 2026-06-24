@@ -20273,9 +20273,10 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             )
             continue
         ord_no = _extract_broker_order_no(res)
+        order_sent_ts = time.time()
         successful_orders.append({
             'tag': request['tag'], 'qty': qty, 'price': price, 'ord_no': ord_no, 'tif': request['tif'],
-            'order_type': request['order_type_code'], 'status': 'OPEN', 'filled_qty': 0, 'sent_at': now_ts,
+            'order_type': request['order_type_code'], 'status': 'OPEN', 'filled_qty': 0, 'sent_at': order_sent_ts,
             'entry_order_lifecycle': submit_revalidation_fields.get('entry_order_lifecycle', 'standard'),
             'entry_passive_probe_applied': bool(submit_revalidation_fields.get('entry_passive_probe_applied')),
             'best_bid_at_submit': price_snapshot.get('best_bid_at_submit'),
