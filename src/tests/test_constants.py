@@ -57,6 +57,24 @@ def test_trading_rules_default_latency_canary_thresholds(monkeypatch):
     assert reloaded.TRADING_RULES.SCALP_LATENCY_OTHER_DANGER_RELIEF_MIN_PRINT_QUOTE_ALIGNMENT == 0.90
 
 
+def test_reversal_add_runtime_env_overrides(monkeypatch):
+    monkeypatch.setenv("KORSTOCKSCAN_REVERSAL_ADD_PNL_MIN", "-0.8")
+    monkeypatch.setenv("KORSTOCKSCAN_REVERSAL_ADD_PNL_MAX", "-0.12")
+    monkeypatch.setenv("KORSTOCKSCAN_REVERSAL_ADD_MIN_HOLD_SEC", "30")
+    monkeypatch.setenv("KORSTOCKSCAN_REVERSAL_ADD_MAX_HOLD_SEC", "480")
+    monkeypatch.setenv("KORSTOCKSCAN_REVERSAL_ADD_MIN_AI_RECOVERY_DELTA", "10")
+    monkeypatch.setenv("KORSTOCKSCAN_REVERSAL_ADD_VWAP_BP_MIN", "5")
+
+    reloaded = importlib.reload(constants)
+
+    assert reloaded.TRADING_RULES.REVERSAL_ADD_PNL_MIN == -0.8
+    assert reloaded.TRADING_RULES.REVERSAL_ADD_PNL_MAX == -0.12
+    assert reloaded.TRADING_RULES.REVERSAL_ADD_MIN_HOLD_SEC == 30
+    assert reloaded.TRADING_RULES.REVERSAL_ADD_MAX_HOLD_SEC == 480
+    assert reloaded.TRADING_RULES.REVERSAL_ADD_MIN_AI_RECOVERY_DELTA == 10
+    assert reloaded.TRADING_RULES.REVERSAL_ADD_VWAP_BP_MIN == 5
+
+
 def test_scalping_new_buy_cutoff_defaults_to_nxt_close(monkeypatch):
     monkeypatch.delenv("KORSTOCKSCAN_SCALPING_BUY_WINDOWS", raising=False)
     monkeypatch.delenv("KORSTOCKSCAN_SCALPING_NEW_BUY_CUTOFF", raising=False)

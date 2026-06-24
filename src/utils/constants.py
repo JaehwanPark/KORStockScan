@@ -1803,9 +1803,15 @@ def _build_trading_rules() -> TradingConfig:
     env_real_entry_panic_buy_active_reduce_bps = _env_int("KORSTOCKSCAN_REAL_ENTRY_PANIC_BUY_ACTIVE_REDUCE_BPS")
     env_real_entry_panic_buy_exhaustion_extra_bps = _env_int("KORSTOCKSCAN_REAL_ENTRY_PANIC_BUY_EXHAUSTION_EXTRA_BPS")
     env_reversal_add_enabled = _env_bool("KORSTOCKSCAN_REVERSAL_ADD_ENABLED")
+    env_reversal_add_pnl_min = _env_float("KORSTOCKSCAN_REVERSAL_ADD_PNL_MIN")
+    env_reversal_add_pnl_max = _env_float("KORSTOCKSCAN_REVERSAL_ADD_PNL_MAX")
+    env_reversal_add_min_hold_sec = _env_int("KORSTOCKSCAN_REVERSAL_ADD_MIN_HOLD_SEC")
+    env_reversal_add_max_hold_sec = _env_int("KORSTOCKSCAN_REVERSAL_ADD_MAX_HOLD_SEC")
     env_reversal_add_min_ai_score = _env_int("KORSTOCKSCAN_REVERSAL_ADD_MIN_AI_SCORE")
+    env_reversal_add_min_ai_recovery_delta = _env_int("KORSTOCKSCAN_REVERSAL_ADD_MIN_AI_RECOVERY_DELTA")
     env_reversal_add_min_buy_pressure = _env_float("KORSTOCKSCAN_REVERSAL_ADD_MIN_BUY_PRESSURE")
     env_reversal_add_min_tick_accel = _env_float("KORSTOCKSCAN_REVERSAL_ADD_MIN_TICK_ACCEL")
+    env_reversal_add_vwap_bp_min = _env_float("KORSTOCKSCAN_REVERSAL_ADD_VWAP_BP_MIN")
     env_reversal_add_size_ratio = _env_float("KORSTOCKSCAN_REVERSAL_ADD_SIZE_RATIO")
     env_reversal_add_min_qty_floor_enabled = _env_bool("KORSTOCKSCAN_REVERSAL_ADD_MIN_QTY_FLOOR_ENABLED")
     env_bad_entry_observe_enabled = _env_bool("KORSTOCKSCAN_SCALP_BAD_ENTRY_BLOCK_OBSERVE_ENABLED")
@@ -1991,9 +1997,15 @@ def _build_trading_rules() -> TradingConfig:
         or env_real_entry_panic_buy_active_reduce_bps is not None
         or env_real_entry_panic_buy_exhaustion_extra_bps is not None
         or env_reversal_add_enabled is not None
+        or env_reversal_add_pnl_min is not None
+        or env_reversal_add_pnl_max is not None
+        or env_reversal_add_min_hold_sec is not None
+        or env_reversal_add_max_hold_sec is not None
         or env_reversal_add_min_ai_score is not None
+        or env_reversal_add_min_ai_recovery_delta is not None
         or env_reversal_add_min_buy_pressure is not None
         or env_reversal_add_min_tick_accel is not None
+        or env_reversal_add_vwap_bp_min is not None
         or env_reversal_add_size_ratio is not None
         or env_reversal_add_min_qty_floor_enabled is not None
         or env_bad_entry_observe_enabled is not None
@@ -2474,15 +2486,33 @@ def _build_trading_rules() -> TradingConfig:
             REVERSAL_ADD_ENABLED=env_reversal_add_enabled
             if env_reversal_add_enabled is not None
             else config.REVERSAL_ADD_ENABLED,
+            REVERSAL_ADD_PNL_MIN=env_reversal_add_pnl_min
+            if env_reversal_add_pnl_min is not None
+            else config.REVERSAL_ADD_PNL_MIN,
+            REVERSAL_ADD_PNL_MAX=env_reversal_add_pnl_max
+            if env_reversal_add_pnl_max is not None
+            else config.REVERSAL_ADD_PNL_MAX,
+            REVERSAL_ADD_MIN_HOLD_SEC=env_reversal_add_min_hold_sec
+            if env_reversal_add_min_hold_sec is not None
+            else config.REVERSAL_ADD_MIN_HOLD_SEC,
+            REVERSAL_ADD_MAX_HOLD_SEC=env_reversal_add_max_hold_sec
+            if env_reversal_add_max_hold_sec is not None
+            else config.REVERSAL_ADD_MAX_HOLD_SEC,
             REVERSAL_ADD_MIN_AI_SCORE=env_reversal_add_min_ai_score
             if env_reversal_add_min_ai_score is not None
             else config.REVERSAL_ADD_MIN_AI_SCORE,
+            REVERSAL_ADD_MIN_AI_RECOVERY_DELTA=env_reversal_add_min_ai_recovery_delta
+            if env_reversal_add_min_ai_recovery_delta is not None
+            else config.REVERSAL_ADD_MIN_AI_RECOVERY_DELTA,
             REVERSAL_ADD_MIN_BUY_PRESSURE=env_reversal_add_min_buy_pressure
             if env_reversal_add_min_buy_pressure is not None
             else config.REVERSAL_ADD_MIN_BUY_PRESSURE,
             REVERSAL_ADD_MIN_TICK_ACCEL=env_reversal_add_min_tick_accel
             if env_reversal_add_min_tick_accel is not None
             else config.REVERSAL_ADD_MIN_TICK_ACCEL,
+            REVERSAL_ADD_VWAP_BP_MIN=env_reversal_add_vwap_bp_min
+            if env_reversal_add_vwap_bp_min is not None
+            else config.REVERSAL_ADD_VWAP_BP_MIN,
             REVERSAL_ADD_SIZE_RATIO=env_reversal_add_size_ratio
             if env_reversal_add_size_ratio is not None
             else config.REVERSAL_ADD_SIZE_RATIO,
