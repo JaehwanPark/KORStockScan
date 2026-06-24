@@ -25669,6 +25669,35 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
         )
     else:
         swing_scale_micro_fields = _build_orderbook_micro_log_fields(None)
+    scale_in_quote_refresh_fields = {}
+    if strategy == "SCALPING" and not simulated_position:
+        ws_data, pre_submit_ws_snapshot_refresh = _pre_submit_refresh_real_ws_snapshot(
+            code,
+            ws_data,
+            strategy,
+        )
+        scale_in_quote_refresh_fields.update(
+            _pre_submit_ws_snapshot_refresh_log_fields(pre_submit_ws_snapshot_refresh)
+        )
+        if not _pre_submit_input_snapshot_has_usable_quote(ws_data):
+            ws_data, pre_submit_rest_orderbook_refresh = _pre_submit_refresh_rest_orderbook_snapshot(
+                code,
+                ws_data,
+                strategy,
+            )
+            rest_refresh_log_fields = _pre_submit_ws_snapshot_refresh_log_fields(
+                pre_submit_rest_orderbook_refresh
+            )
+            scale_in_quote_refresh_fields.update(
+                {
+                    key: value
+                    for key, value in rest_refresh_log_fields.items()
+                    if key.startswith("pre_submit_rest_orderbook_refresh_")
+                }
+            )
+        refreshed_curr_price = _safe_int(ws_data.get('curr'), curr_price)
+        if refreshed_curr_price > 0:
+            curr_price = refreshed_curr_price
     price_resolution = resolve_scale_in_order_price(
         stock=stock,
         ws_data=ws_data,
@@ -25699,6 +25728,7 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
             scale_in_candidate_funnel_state=(
                 "price_guard_blocked" if sim_window_observation else None
             ),
+            **scale_in_quote_refresh_fields,
             **sim_funnel_fields,
             **swing_scale_micro_fields,
         )
@@ -25769,6 +25799,7 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
                 "qty_guard_blocked" if sim_window_observation else None
             ),
             **scale_in_qty_budget_fields,
+            **scale_in_quote_refresh_fields,
             **sim_budget_fields,
             **sim_funnel_fields,
             **swing_scale_micro_fields,
@@ -25814,6 +25845,7 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
         effective_qty=effective_qty,
         qty_reason=qty_reason,
         **scale_in_qty_budget_fields,
+        **scale_in_quote_refresh_fields,
         **sim_budget_fields,
         **swing_scale_micro_fields,
     )
@@ -25829,6 +25861,7 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
         resolved_price=resolved_price,
         price_source=price_resolution.get("price_source"),
         add_type=add_type,
+        **scale_in_quote_refresh_fields,
         **swing_scale_micro_fields,
     )
 

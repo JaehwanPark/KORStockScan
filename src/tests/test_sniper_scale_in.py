@@ -1016,6 +1016,83 @@ def test_execute_scalping_pyramid_sends_resolved_best_bid_with_percent_budget_qt
     assert any(stage == "scale_in_price_p2_observe" for stage, _ in logs)
 
 
+def test_execute_scalping_pyramid_refreshes_rest_orderbook_when_quote_missing(monkeypatch):
+    rules = replace(CONFIG, MAX_POSITION_PCT=1.0)
+    monkeypatch.setattr(state_handlers, "TRADING_RULES", rules)
+    monkeypatch.setattr(scale_in, "TRADING_RULES", rules)
+    monkeypatch.setattr(state_handlers, "WS_MANAGER", None)
+    state_handlers.KIWOOM_TOKEN = "test"
+
+    sent_orders = []
+    history = []
+    logs = []
+    monkeypatch.setattr(state_handlers.kiwoom_orders, "get_deposit", lambda *args, **kwargs: 10_000_000)
+    monkeypatch.setattr(
+        state_handlers.kiwoom_orders,
+        "send_buy_order",
+        lambda *args, **kwargs: sent_orders.append(args) or {"return_code": "0", "ord_no": "P-REST"},
+    )
+    monkeypatch.setattr(
+        state_handlers.kiwoom_utils,
+        "get_stock_orderbook_ka10004",
+        lambda token, code: {
+            "curr": 10_000,
+            "best_bid": 9_990,
+            "best_ask": 10_000,
+            "best_bid_qty": 100,
+            "best_ask_qty": 80,
+            "bid_req_base_tm": "100000",
+        },
+    )
+    monkeypatch.setattr(state_handlers, "_parse_hhmmss_age_ms", lambda *args, **kwargs: 100.0)
+    monkeypatch.setattr(
+        state_handlers,
+        "record_add_history_event",
+        lambda *args, **kwargs: history.append(kwargs) or True,
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_holding_pipeline",
+        lambda stock, code, stage, **fields: logs.append((stage, fields)),
+    )
+
+    stock = {
+        "id": 1,
+        "name": "TEST",
+        "strategy": "SCALPING",
+        "buy_qty": 10,
+        "last_reversal_features": {
+            "buy_pressure_10t": 75.0,
+            "tick_acceleration_ratio": 0.8,
+            "large_sell_print_detected": False,
+            "curr_vs_micro_vwap_bp": 10.0,
+        },
+    }
+    action = {
+        "add_type": "PYRAMID",
+        "reason": "scalping_pyramid_ok",
+        "current_ai_score": 75,
+        "profit_rate": 2.0,
+        "peak_profit": 2.1,
+    }
+
+    state_handlers.execute_scale_in_order(
+        stock=stock,
+        code="123456",
+        ws_data={"curr": 10_000},
+        action=action,
+        admin_id=1,
+    )
+
+    assert sent_orders == [("123456", 237, 9_990, "00")]
+    assert history[0]["request_price"] == 9_990
+    resolved = [fields for stage, fields in logs if stage == "scale_in_price_resolved"][0]
+    assert resolved["pre_submit_ws_snapshot_refresh_reason"] == "ws_manager_missing"
+    assert resolved["pre_submit_rest_orderbook_refresh_applied"] is True
+    assert resolved["pre_submit_rest_orderbook_refresh_reason"] == "rest_orderbook_fresh"
+    assert not any(stage == "scale_in_price_guard_block" for stage, _ in logs)
+
+
 def test_execute_scalping_pyramid_blocks_when_real_micro_context_missing(monkeypatch):
     rules = replace(CONFIG, REAL_PYRAMID_MICRO_CONTEXT_GUARD_ENABLED=True, MAX_POSITION_PCT=1.0)
     monkeypatch.setattr(state_handlers, "TRADING_RULES", rules)
