@@ -184,6 +184,7 @@ def test_pending_order_reprices_once(monkeypatch):
     }
     events = []
     calls = {"cancel": 0, "buy": 0}
+    cancel_calls = []
 
     monkeypatch.setattr(handlers.time, "time", lambda: now)
     monkeypatch.setattr(
@@ -202,7 +203,11 @@ def test_pending_order_reprices_once(monkeypatch):
     monkeypatch.setattr(
         handlers.kiwoom_orders,
         "send_cancel_order",
-        lambda **kwargs: calls.__setitem__("cancel", calls["cancel"] + 1) or {"return_code": "0", "ord_no": "0033622"},
+        lambda **kwargs: (
+            cancel_calls.append(kwargs)
+            or calls.__setitem__("cancel", calls["cancel"] + 1)
+            or {"return_code": "0", "ord_no": "0033622"}
+        ),
     )
     monkeypatch.setattr(
         handlers.kiwoom_orders,
@@ -214,7 +219,9 @@ def test_pending_order_reprices_once(monkeypatch):
 
     assert result == "submitted"
     assert calls == {"cancel": 1, "buy": 1}
+    assert cancel_calls[-1]["dmst_stex_tp"] == "KRX"
     assert stock["pending_entry_orders"][0]["ord_no"] == "0034000"
+    assert stock["pending_entry_orders"][0]["dmst_stex_tp"] == "KRX"
     assert stock["pending_entry_orders"][0]["entry_reprice_parent_ord_no"] == "0033470"
     assert stock["entry_reprice_child_ord_no"] == "0034000"
     assert "entry_reprice_resubmit_submitted" in [stage for stage, _ in events]

@@ -22295,6 +22295,9 @@ def _maybe_reprice_pending_entry_order(stock, code, strategy, *, timeout_sec=Non
 
     parent_order_no = str(order.get("ord_no") or "").strip()
     qty = max(0, _coerce_int_value(order.get("qty")) - _coerce_int_value(order.get("filled_qty")))
+    cancel_dmst_stex_tp = str(order.get("dmst_stex_tp") or "").strip().upper()
+    if cancel_dmst_stex_tp not in {"KRX", "NXT", "SOR"}:
+        cancel_dmst_stex_tp = "KRX" if str(order.get("order_type") or order.get("order_type_code")) == "00" else "SOR"
     request_fields = {
         **decision.as_log_fields(),
         "actual_order_submitted": False,
@@ -22302,9 +22305,16 @@ def _maybe_reprice_pending_entry_order(stock, code, strategy, *, timeout_sec=Non
         "runtime_effect": True,
         "parent_order_no": parent_order_no,
         "qty": qty,
+        "dmst_stex_tp": cancel_dmst_stex_tp,
     }
     _log_entry_pipeline(stock, code, "entry_reprice_cancel_requested", **request_fields)
-    cancel_res = kiwoom_orders.send_cancel_order(code=code, orig_ord_no=parent_order_no, token=KIWOOM_TOKEN, qty=0)
+    cancel_res = kiwoom_orders.send_cancel_order(
+        code=code,
+        orig_ord_no=parent_order_no,
+        token=KIWOOM_TOKEN,
+        qty=0,
+        dmst_stex_tp=cancel_dmst_stex_tp,
+    )
     cancel_ok, cancel_msg, cancel_ord_no = _cancel_response_success(cancel_res)
     if not cancel_ok:
         with ENTRY_LOCK:
@@ -22385,6 +22395,7 @@ def _maybe_reprice_pending_entry_order(stock, code, strategy, *, timeout_sec=Non
         "order_type": "00",
         "status": "OPEN",
         "filled_qty": 0,
+        "dmst_stex_tp": "KRX",
         "sent_at": time.time(),
         "entry_order_lifecycle": "repriced_after_submit",
         "entry_passive_probe_applied": bool(order.get("entry_passive_probe_applied")),
