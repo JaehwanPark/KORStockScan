@@ -37,10 +37,10 @@ def _resolve_scan_interval_sec(now_time):
     """장 초반/후반에는 더 자주 돌리고, 점심/NXT 구간은 약간 완화합니다."""
     hhmm = now_time.hour * 100 + now_time.minute
     if 905 <= hhmm < 1030:
-        return 90
+        return 60
     if 1400 <= hhmm <= 1500:
-        return 90
-    return 120
+        return 60
+    return 90
 
 
 def _parse_scan_time_env(env_name, default_value):
@@ -1676,7 +1676,7 @@ def run_scalper(is_test_mode=False):
     3. DB 저장: 발굴된 종목을 SQLAlchemy ORM을 사용하여 안전하게 Upsert(삽입/업데이트) 합니다.
     4. 이벤트 발행: 'COMMAND_WS_REG' 이벤트를 EventBus에 쏘아, 웹소켓 모듈이 해당 종목의 실시간 틱 데이터 감시를 즉각 시작하도록 지시합니다.
     """
-    print("⚡ [SCALPING 스캐너] 초단타 감시 엔진 가동 (장초반/후반 90초, 그 외 120초 주기)...")
+    print("⚡ [SCALPING 스캐너] 초단타 감시 엔진 가동 (장초반/후반 60초, 그 외 90초 주기)...")
     db = DBManager()
     event_bus = EventBus() # 💡 전역 싱글톤 이벤트 버스
     

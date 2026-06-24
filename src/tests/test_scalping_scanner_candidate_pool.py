@@ -45,12 +45,12 @@ def _event_payloads(event_bus, name):
 
 
 def test_resolve_scan_interval_matches_intraday_schedule():
-    assert scalping_scanner._resolve_scan_interval_sec(time(9, 5)) == 90
-    assert scalping_scanner._resolve_scan_interval_sec(time(10, 29)) == 90
-    assert scalping_scanner._resolve_scan_interval_sec(time(10, 30)) == 120
-    assert scalping_scanner._resolve_scan_interval_sec(time(13, 59)) == 120
-    assert scalping_scanner._resolve_scan_interval_sec(time(14, 0)) == 90
-    assert scalping_scanner._resolve_scan_interval_sec(time(15, 0)) == 90
+    assert scalping_scanner._resolve_scan_interval_sec(time(9, 5)) == 60
+    assert scalping_scanner._resolve_scan_interval_sec(time(10, 29)) == 60
+    assert scalping_scanner._resolve_scan_interval_sec(time(10, 30)) == 90
+    assert scalping_scanner._resolve_scan_interval_sec(time(13, 59)) == 90
+    assert scalping_scanner._resolve_scan_interval_sec(time(14, 0)) == 60
+    assert scalping_scanner._resolve_scan_interval_sec(time(15, 0)) == 60
 
 
 def test_promote_candidates_skips_when_active_scanner_cap_reached(monkeypatch):
