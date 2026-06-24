@@ -3456,6 +3456,169 @@ def test_ai_numeric_consistency_recheck_buy_below_min_score_does_not_arm_entry(m
     assert "numeric_consistency_recheck_buy_score_below_min:75" in stock["last_watching_ai_reason"]
 
 
+def test_score65_74_recovery_probe_bypasses_first_ai_big_bite_wait(monkeypatch):
+    from src.utils.constants import TRADING_RULES as CONFIG
+
+    class FixedDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return cls(2026, 6, 24, 12, 17, 54)
+
+    state_handlers.datetime = FixedDateTime
+    state_handlers.TRADING_RULES = replace(
+        CONFIG,
+        SCALE_IN_REQUIRE_HISTORY_TABLE=False,
+        AI_SCORE65_74_RECOVERY_PROBE_ENABLED=True,
+    )
+    state_handlers.COOLDOWNS = {}
+    state_handlers.ALERTED_STOCKS = set()
+    state_handlers.HIGHEST_PRICES = {}
+    state_handlers.LAST_AI_CALL_TIMES = {}
+    state_handlers.LAST_LOG_TIMES = {}
+    state_handlers.DB = _DummyDB()
+    state_handlers.KIWOOM_TOKEN = "token"
+
+    class DummyRadar:
+        def get_smart_target_price(self, curr_price, **kwargs):
+            return curr_price, 0.0
+
+    class DummyAI:
+        def analyze_target(self, *args, **kwargs):
+            return {
+                "action": "WAIT",
+                "score": 74,
+                "reason": "strong micro recovery probe",
+                "buy_pressure_10t": 88.14,
+                "curr_vs_micro_vwap_bp": 74.95,
+                "tick_acceleration_ratio": 0.0,
+                "quote_stale": False,
+            }
+
+    class DummyEventBus:
+        def publish(self, *args, **kwargs):
+            return None
+
+    state_handlers.EVENT_BUS = DummyEventBus()
+    logs = []
+    sent_orders = []
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_entry_pipeline",
+        lambda stock, code, stage, **fields: logs.append((stage, fields)),
+    )
+    monkeypatch.setattr(state_handlers, "is_buy_side_paused", lambda: False)
+    monkeypatch.setattr(state_handlers, "_publish_buy_signal_submission_notice", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        state_handlers,
+        "evaluate_scalping_strength_momentum",
+        lambda ws_data: {"enabled": True, "allowed": True, "reason": "ok"},
+    )
+    monkeypatch.setattr(state_handlers, "arm_big_bite_if_triggered", lambda **kwargs: (False, {}))
+    monkeypatch.setattr(state_handlers, "confirm_big_bite_follow_through", lambda **kwargs: (False, {}))
+    monkeypatch.setattr(state_handlers, "build_tick_data_from_ws", lambda ws_data: {})
+    monkeypatch.setattr(state_handlers.kiwoom_utils, "get_tick_history_ka10003", lambda *args, **kwargs: [1])
+    monkeypatch.setattr(state_handlers.kiwoom_utils, "get_minute_candles_ka10080", lambda *args, **kwargs: [1])
+    monkeypatch.setattr(
+        state_handlers,
+        "_score65_74_recovery_probe_decision",
+        lambda *args, **kwargs: {
+            "allowed": True,
+            "evaluated": True,
+            "buy_pressure": 88.14,
+            "tick_accel": 0.0,
+            "micro_vwap_bp": 74.95,
+            "score65_74_recovery_probe_min_buy_pressure": 70.0,
+            "score65_74_recovery_probe_min_tick_accel": 1.1,
+            "score65_74_recovery_probe_min_micro_vwap_bp": 0.0,
+            "score65_74_recovery_probe_configured_min_micro_vwap_bp": 0.0,
+            "score65_74_recovery_probe_effective_micro_vwap_floor_bp": 0.0,
+            "score65_74_recovery_probe_strong_micro_override_enabled": True,
+            "score65_74_recovery_probe_strong_micro_override_applied": True,
+            "score65_74_recovery_probe_strong_micro_source_quality_ok": True,
+        },
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_score65_74_recovery_probe_reuse_guard",
+        lambda *args, **kwargs: {
+            "allowed": True,
+            "buy_pressure": 88.14,
+            "tick_accel": 0.0,
+            "micro_vwap_bp": 74.95,
+        },
+    )
+    monkeypatch.setattr(state_handlers.kiwoom_orders, "get_deposit", lambda *args, **kwargs: 1_000_000)
+    monkeypatch.setattr(
+        state_handlers.kiwoom_orders,
+        "describe_buy_capacity",
+        lambda *args, **kwargs: (250_000, 240_000, 5, 0.96),
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "evaluate_live_buy_entry",
+        lambda **kwargs: {
+            "allowed": True,
+            "mode": "normal",
+            "decision": "ALLOW_NORMAL",
+            "reason": "ok",
+            "latency_state": "SAFE",
+            "orders": [{"tag": "normal", "qty": 5, "price": 10_020, "order_type": "LIMIT", "tif": "DAY"}],
+            "target_buy_price": 10_020,
+            "signal_price": 10_020,
+            "latest_price": 10_020,
+            "computed_allowed_slippage": 0,
+            "ws_age_ms": 120,
+            "ws_jitter_ms": 20,
+            "spread_ratio": 0.002,
+            "quote_stale": False,
+            "latency_danger_reasons": "",
+            "latency_canary_applied": False,
+            "latency_canary_reason": "-",
+            "entry_price_guard": "normal",
+            "order_price": 10_020,
+        },
+    )
+    monkeypatch.setattr(
+        state_handlers.kiwoom_orders,
+        "send_buy_order",
+        lambda *args, **kwargs: sent_orders.append((args, kwargs)) or {"return_code": "0", "ord_no": "O1"},
+    )
+
+    stock = {
+        "id": 356680,
+        "name": "엑스게이트",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "prob": 0.9,
+        "rt_ai_prob": 0.9,
+    }
+    state_handlers.handle_watching_state(
+        stock=stock,
+        code="356680",
+        ws_data={
+            "curr": 10_020,
+            "v_pw": 120.0,
+            "ask_tot": 20_000,
+            "bid_tot": 20_000,
+            "open": 10_000,
+            "fluctuation": 0.5,
+            "orderbook": {
+                "asks": [{"price": 10_030, "volume": 100}],
+                "bids": [{"price": 10_020, "volume": 100}],
+            },
+        },
+        admin_id=1,
+        radar=DummyRadar(),
+        ai_engine=DummyAI(),
+    )
+
+    stages = [stage for stage, _fields in logs]
+    assert "score65_74_recovery_probe" in stages
+    assert "first_ai_wait" not in stages
+    assert "score65_74_recovery_probe_entry_unlocked" in stages
+    assert sent_orders
+
+
 def test_watching_state_blocks_deep_below_bid_pre_submit_price(monkeypatch):
     from src.utils.constants import TRADING_RULES as CONFIG
 
@@ -3762,6 +3925,95 @@ def test_weak_context_late_entry_guard_blocks_when_recent_block_history_and_weak
     assert result["fields"]["recent_blocked_strength_count"] == 1
     assert result["fields"]["recent_blocked_vpw_count"] == 1
     assert "micro_vwap_negative" in result["reason"]
+
+
+def test_weak_context_late_entry_guard_uses_late_drift_micro_fallback(monkeypatch):
+    from src.utils.constants import TRADING_RULES as CONFIG
+
+    state_handlers.TRADING_RULES = replace(
+        CONFIG,
+        WEAK_CONTEXT_LATE_ENTRY_GUARD_ENABLED=True,
+        WEAK_CONTEXT_LATE_ENTRY_LOOKBACK_SEC=900,
+        WEAK_CONTEXT_LATE_ENTRY_MIN_BLOCK_COUNT=2,
+        WEAK_CONTEXT_LATE_ENTRY_MIN_TICK_ACCEL=1.10,
+        WEAK_CONTEXT_LATE_ENTRY_MIN_BUY_PRESSURE=0.0,
+        WEAK_CONTEXT_LATE_ENTRY_MIN_MICRO_VWAP_BP=0.0,
+    )
+    now_ts = state_handlers.time.time()
+    stock = {
+        "name": "소룩스",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "trade_quality_block_history": [
+            {"stage": "blocked_strength_momentum", "ts": now_ts - 120, "risk_state": "weak_momentum_context"},
+            {"stage": "blocked_strength_momentum", "ts": now_ts - 30, "risk_state": "weak_momentum_context"},
+        ],
+    }
+
+    result = state_handlers._evaluate_weak_context_late_entry_guard(
+        strategy="SCALPING",
+        stock=stock,
+        now_ts=now_ts,
+        latency_gate={},
+        late_drift_guard={
+            "blocked": False,
+            "fields": {
+                "late_entry_latency_relevant": False,
+                "late_entry_fresh_buy_pressure_10t": "68.31",
+                "late_entry_fresh_tick_acceleration_ratio": "1.00",
+                "late_entry_fresh_micro_vwap_bp": "41.48",
+            },
+        },
+    )
+
+    assert result["blocked"] is False
+    assert result["reason"] == "current_submit_context_not_weak"
+    assert result["fields"]["weak_context_guard_buy_pressure_10t"] == "68.31"
+    assert result["fields"]["weak_context_guard_tick_accel"] == "1.000"
+    assert result["fields"]["weak_context_guard_weak_signal_count"] == 1
+
+
+def test_weak_context_late_entry_guard_uses_ai_source_quality_fallback(monkeypatch):
+    from src.utils.constants import TRADING_RULES as CONFIG
+
+    state_handlers.TRADING_RULES = replace(
+        CONFIG,
+        WEAK_CONTEXT_LATE_ENTRY_GUARD_ENABLED=True,
+        WEAK_CONTEXT_LATE_ENTRY_LOOKBACK_SEC=900,
+        WEAK_CONTEXT_LATE_ENTRY_MIN_BLOCK_COUNT=2,
+        WEAK_CONTEXT_LATE_ENTRY_MIN_TICK_ACCEL=1.10,
+        WEAK_CONTEXT_LATE_ENTRY_MIN_BUY_PRESSURE=0.0,
+        WEAK_CONTEXT_LATE_ENTRY_MIN_MICRO_VWAP_BP=0.0,
+    )
+    now_ts = state_handlers.time.time()
+    stock = {
+        "name": "소룩스",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "last_watching_ai_source_quality_fields": {
+            "buy_pressure_10t": "68.31",
+            "tick_acceleration_ratio": "1.00",
+            "curr_vs_micro_vwap_bp": "41.48",
+        },
+        "trade_quality_block_history": [
+            {"stage": "blocked_strength_momentum", "ts": now_ts - 120, "risk_state": "weak_momentum_context"},
+            {"stage": "blocked_strength_momentum", "ts": now_ts - 30, "risk_state": "weak_momentum_context"},
+        ],
+    }
+
+    result = state_handlers._evaluate_weak_context_late_entry_guard(
+        strategy="SCALPING",
+        stock=stock,
+        now_ts=now_ts,
+        latency_gate={},
+        late_drift_guard={"blocked": False, "reason": "disabled"},
+    )
+
+    assert result["blocked"] is False
+    assert result["reason"] == "current_submit_context_not_weak"
+    assert result["fields"]["weak_context_guard_buy_pressure_10t"] == "68.31"
+    assert result["fields"]["weak_context_guard_curr_vs_micro_vwap_bp"] == "41.48"
+    assert result["fields"]["weak_context_guard_weak_signal_count"] == 1
 
 
 def test_weak_context_late_entry_guard_does_not_block_with_insufficient_history(monkeypatch):

@@ -11237,6 +11237,9 @@ def _evaluate_weak_context_late_entry_guard(
     now_ts: float,
     latency_gate: dict,
     late_drift_guard: dict,
+    pre_submit_fields: dict | None = None,
+    microstructure_fields: dict | None = None,
+    orderbook_fields: dict | None = None,
 ) -> dict:
     fields = {
         "weak_context_late_entry_guard_enabled": bool(_rule_bool("WEAK_CONTEXT_LATE_ENTRY_GUARD_ENABLED", False)),
@@ -11259,9 +11262,46 @@ def _evaluate_weak_context_late_entry_guard(
 
     recent_counts = _recent_trade_quality_block_counts(stock, now_ts=now_ts)
     min_block_count = max(1, _rule_int("WEAK_CONTEXT_LATE_ENTRY_MIN_BLOCK_COUNT", 2))
-    tick_accel = _safe_float(latency_gate.get("tick_acceleration_ratio"), 0.0)
-    buy_pressure = _safe_float(latency_gate.get("buy_pressure_10t"), 0.0)
-    micro_vwap_bp = _safe_float(latency_gate.get("curr_vs_micro_vwap_bp"), 0.0)
+    late_drift_fields = late_drift_guard.get("fields") if isinstance(late_drift_guard, dict) else {}
+    late_drift_fields = late_drift_fields if isinstance(late_drift_fields, dict) else {}
+    source_quality_fields = (stock or {}).get("last_watching_ai_source_quality_fields")
+    source_quality_fields = source_quality_fields if isinstance(source_quality_fields, dict) else {}
+    tick_accel = _first_float_field(
+        latency_gate,
+        pre_submit_fields,
+        microstructure_fields,
+        orderbook_fields,
+        late_drift_fields,
+        source_quality_fields,
+        stock or {},
+        key="tick_acceleration_ratio",
+        aliases=("tick_accel", "tick_acceleration", "late_entry_fresh_tick_acceleration_ratio"),
+        default=0.0,
+    )
+    buy_pressure = _first_float_field(
+        latency_gate,
+        pre_submit_fields,
+        microstructure_fields,
+        orderbook_fields,
+        late_drift_fields,
+        source_quality_fields,
+        stock or {},
+        key="buy_pressure_10t",
+        aliases=("buy_pressure", "buy_pressure_ratio", "late_entry_fresh_buy_pressure_10t"),
+        default=0.0,
+    )
+    micro_vwap_bp = _first_float_field(
+        latency_gate,
+        pre_submit_fields,
+        microstructure_fields,
+        orderbook_fields,
+        late_drift_fields,
+        source_quality_fields,
+        stock or {},
+        key="curr_vs_micro_vwap_bp",
+        aliases=("micro_vwap_bp", "late_entry_fresh_micro_vwap_bp"),
+        default=0.0,
+    )
 
     weak_reasons: list[str] = []
     if micro_vwap_bp < _rule_float("WEAK_CONTEXT_LATE_ENTRY_MIN_MICRO_VWAP_BP", 0.0):
@@ -11270,8 +11310,6 @@ def _evaluate_weak_context_late_entry_guard(
         weak_reasons.append("buy_pressure_non_positive")
     if tick_accel < _rule_float("WEAK_CONTEXT_LATE_ENTRY_MIN_TICK_ACCEL", 1.10):
         weak_reasons.append("tick_accel_below_min")
-    late_drift_fields = late_drift_guard.get("fields") if isinstance(late_drift_guard, dict) else {}
-    late_drift_fields = late_drift_fields if isinstance(late_drift_fields, dict) else {}
     has_drift_context = bool(
         late_drift_fields.get("late_entry_latency_relevant")
         and _safe_float(late_drift_fields.get("late_entry_price_drift_bps"), 0.0)
@@ -11279,6 +11317,8 @@ def _evaluate_weak_context_late_entry_guard(
     )
     if has_drift_context:
         weak_reasons.append("late_entry_drift_context")
+    weak_signal_count = len([reason for reason in weak_reasons if reason != "late_entry_drift_context"])
+    current_context_weak = has_drift_context or weak_signal_count >= 2
 
     fields.update(
         {
@@ -11292,13 +11332,14 @@ def _evaluate_weak_context_late_entry_guard(
             "weak_context_guard_buy_pressure_10t": f"{buy_pressure:.2f}",
             "weak_context_guard_curr_vs_micro_vwap_bp": f"{micro_vwap_bp:.2f}",
             "weak_context_guard_has_drift_context": has_drift_context,
+            "weak_context_guard_weak_signal_count": weak_signal_count,
         }
     )
 
     if recent_counts.get("total_count", 0) < min_block_count:
         fields["weak_context_guard_reason"] = "insufficient_recent_block_history"
         return {"blocked": False, "reason": fields["weak_context_guard_reason"], "fields": fields}
-    if not weak_reasons:
+    if not current_context_weak:
         fields["weak_context_guard_reason"] = "current_submit_context_not_weak"
         return {"blocked": False, "reason": fields["weak_context_guard_reason"], "fields": fields}
 
@@ -16332,6 +16373,76 @@ def _is_score65_74_recovery_probe_entry_unlocked(stock) -> bool:
     return bool(unlock.get("unlocked")) and unlock.get("source") == "score65_74_recovery_probe"
 
 
+def _validate_wait6579_probe_entry_unlock(stock, code, ws_data, *, now_ts: float, current_ai_score: float) -> tuple[dict, bool]:
+    unlock = _resolve_wait6579_probe_entry_unlock(stock)
+    unlocked = bool(unlock.get("unlocked"))
+    if unlocked and unlock.get("source") == "score65_74_recovery_probe":
+        score65_74_reuse_decision = _score65_74_recovery_probe_reuse_guard(
+            stock,
+            code,
+            ws_data,
+            now_ts=now_ts,
+        )
+        if not score65_74_reuse_decision.get("allowed"):
+            unlocked = False
+            _mutate_stock_state(
+                stock,
+                pop_fields=[
+                    "wait6579_probe_canary_armed",
+                    "wait6579_probe_canary_source",
+                    "wait6579_probe_canary_score",
+                ],
+            )
+            _log_entry_pipeline(
+                stock,
+                code,
+                "score65_74_recovery_probe_blocked",
+                **_score65_74_recovery_probe_block_contract_fields(),
+                applied=False,
+                decision_source="BUY_SCORE65_74_RECOVERY_PROBE",
+                threshold_family="score65_74_recovery_probe",
+                score65_74_recovery_probe_skip_reason=(
+                    score65_74_reuse_decision.get("score65_74_recovery_probe_skip_reason")
+                    or "reused_unlock_guard_blocked"
+                ),
+                ai_score=f"{current_ai_score:.1f}",
+                buy_pressure=f"{float(score65_74_reuse_decision.get('buy_pressure') or 0.0):.2f}",
+                tick_accel=f"{float(score65_74_reuse_decision.get('tick_accel') or 0.0):.3f}",
+                micro_vwap_bp=f"{float(score65_74_reuse_decision.get('micro_vwap_bp') or 0.0):.2f}",
+                score65_74_recovery_probe_min_buy_pressure=(
+                    f"{float(score65_74_reuse_decision.get('score65_74_recovery_probe_min_buy_pressure') or 0.0):.2f}"
+                ),
+                score65_74_recovery_probe_min_tick_accel=(
+                    f"{float(score65_74_reuse_decision.get('score65_74_recovery_probe_min_tick_accel') or 0.0):.3f}"
+                ),
+                score65_74_recovery_probe_min_micro_vwap_bp=(
+                    f"{float(score65_74_reuse_decision.get('score65_74_recovery_probe_min_micro_vwap_bp') or 0.0):.2f}"
+                ),
+                score65_74_recovery_probe_configured_min_micro_vwap_bp=(
+                    f"{float(score65_74_reuse_decision.get('score65_74_recovery_probe_configured_min_micro_vwap_bp') or 0.0):.2f}"
+                ),
+                score65_74_recovery_probe_effective_micro_vwap_floor_bp=(
+                    f"{float(score65_74_reuse_decision.get('score65_74_recovery_probe_effective_micro_vwap_floor_bp') or 0.0):.2f}"
+                ),
+                same_symbol_recovery_probe_cooldown_until=(
+                    score65_74_reuse_decision.get("same_symbol_recovery_probe_cooldown_until", "-")
+                ),
+                same_symbol_recovery_probe_cooldown_remaining_sec=(
+                    score65_74_reuse_decision.get(
+                        "same_symbol_recovery_probe_cooldown_remaining_sec",
+                        "-",
+                    )
+                ),
+                score65_74_recovery_probe_anchor_price=(
+                    score65_74_reuse_decision.get("score65_74_recovery_probe_anchor_price", "-")
+                ),
+                score65_74_recovery_probe_current_price=(
+                    score65_74_reuse_decision.get("score65_74_recovery_probe_current_price", "-")
+                ),
+            )
+    return unlock, unlocked
+
+
 def _should_apply_ai_score_50_buy_hold_override(ai_score, ai_decision=None) -> bool:
     if not _rule_bool("AI_SCORE_50_BUY_HOLD_OVERRIDE_ENABLED", True):
         return False
@@ -17132,6 +17243,8 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                     else "cooldown_active"
                 )
                 ai_call_executed = False
+                wait6579_probe_entry_unlock = {"unlocked": False, "source": "", "event_stage": ""}
+                wait6579_probe_entry_unlocked = False
 
                 if is_vip_target and last_ai_time == 0:
                     log_info(f"⏳ [{stock['name']}] 첫 AI 분석을 시작합니다... (기계적 매수 일시 보류)")
@@ -18066,12 +18179,25 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                     ):
                         return False
 
+                    wait6579_probe_entry_unlock, wait6579_probe_entry_unlocked = (
+                        _validate_wait6579_probe_entry_unlock(
+                            stock,
+                            code,
+                            ws_data,
+                            now_ts=now_ts,
+                            current_ai_score=current_ai_score,
+                        )
+                    )
+
                     if ai_call_executed and last_ai_time == 0:
-                        if _should_first_ai_wait_for_big_bite(
-                            ai_decision,
-                            current_ai_score,
-                            big_bite_confirmed=big_bite_confirmed,
-                            entry_score_threshold=75,
+                        if (
+                            not wait6579_probe_entry_unlocked
+                            and _should_first_ai_wait_for_big_bite(
+                                ai_decision,
+                                current_ai_score,
+                                big_bite_confirmed=big_bite_confirmed,
+                                entry_score_threshold=75,
+                            )
                         ):
                             _log_entry_pipeline(
                                 stock,
@@ -18176,75 +18302,17 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                         ),
                     )
 
-                wait6579_probe_entry_unlock = _resolve_wait6579_probe_entry_unlock(stock)
-                wait6579_probe_entry_unlocked = bool(wait6579_probe_entry_unlock.get("unlocked"))
-                if (
-                    wait6579_probe_entry_unlocked
-                    and wait6579_probe_entry_unlock.get("source") == "score65_74_recovery_probe"
-                ):
-                    score65_74_reuse_decision = _score65_74_recovery_probe_reuse_guard(
-                        stock,
-                        code,
-                        ws_data,
-                        now_ts=now_ts,
-                    )
-                    if not score65_74_reuse_decision.get("allowed"):
-                        wait6579_probe_entry_unlocked = False
-                        _mutate_stock_state(
-                            stock,
-                            pop_fields=[
-                                "wait6579_probe_canary_armed",
-                                "wait6579_probe_canary_source",
-                                "wait6579_probe_canary_score",
-                            ],
-                        )
-                        _log_entry_pipeline(
+                if not wait6579_probe_entry_unlock.get("source"):
+                    wait6579_probe_entry_unlock, wait6579_probe_entry_unlocked = (
+                        _validate_wait6579_probe_entry_unlock(
                             stock,
                             code,
-                            "score65_74_recovery_probe_blocked",
-                            **_score65_74_recovery_probe_block_contract_fields(),
-                            applied=False,
-                            decision_source="BUY_SCORE65_74_RECOVERY_PROBE",
-                            threshold_family="score65_74_recovery_probe",
-                            score65_74_recovery_probe_skip_reason=(
-                                score65_74_reuse_decision.get("score65_74_recovery_probe_skip_reason")
-                                or "reused_unlock_guard_blocked"
-                            ),
-                            ai_score=f"{current_ai_score:.1f}",
-                            buy_pressure=f"{float(score65_74_reuse_decision.get('buy_pressure') or 0.0):.2f}",
-                            tick_accel=f"{float(score65_74_reuse_decision.get('tick_accel') or 0.0):.3f}",
-                            micro_vwap_bp=f"{float(score65_74_reuse_decision.get('micro_vwap_bp') or 0.0):.2f}",
-                            score65_74_recovery_probe_min_buy_pressure=(
-                                f"{float(score65_74_reuse_decision.get('score65_74_recovery_probe_min_buy_pressure') or 0.0):.2f}"
-                            ),
-                            score65_74_recovery_probe_min_tick_accel=(
-                                f"{float(score65_74_reuse_decision.get('score65_74_recovery_probe_min_tick_accel') or 0.0):.3f}"
-                            ),
-                            score65_74_recovery_probe_min_micro_vwap_bp=(
-                                f"{float(score65_74_reuse_decision.get('score65_74_recovery_probe_min_micro_vwap_bp') or 0.0):.2f}"
-                            ),
-                            score65_74_recovery_probe_configured_min_micro_vwap_bp=(
-                                f"{float(score65_74_reuse_decision.get('score65_74_recovery_probe_configured_min_micro_vwap_bp') or 0.0):.2f}"
-                            ),
-                            score65_74_recovery_probe_effective_micro_vwap_floor_bp=(
-                                f"{float(score65_74_reuse_decision.get('score65_74_recovery_probe_effective_micro_vwap_floor_bp') or 0.0):.2f}"
-                            ),
-                            same_symbol_recovery_probe_cooldown_until=(
-                                score65_74_reuse_decision.get("same_symbol_recovery_probe_cooldown_until", "-")
-                            ),
-                            same_symbol_recovery_probe_cooldown_remaining_sec=(
-                                score65_74_reuse_decision.get(
-                                    "same_symbol_recovery_probe_cooldown_remaining_sec",
-                                    "-",
-                                )
-                            ),
-                            score65_74_recovery_probe_anchor_price=(
-                                score65_74_reuse_decision.get("score65_74_recovery_probe_anchor_price", "-")
-                            ),
-                            score65_74_recovery_probe_current_price=(
-                                score65_74_reuse_decision.get("score65_74_recovery_probe_current_price", "-")
-                            ),
+                            ws_data,
+                            now_ts=now_ts,
+                            current_ai_score=current_ai_score,
                         )
+                    )
+
                 current_ai_action = str(
                     (ai_decision or {}).get("action")
                     or stock.get("last_watching_ai_action")
@@ -20127,6 +20195,9 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             now_ts=now_ts,
             latency_gate=latency_gate,
             late_drift_guard=late_drift_guard,
+            pre_submit_fields=real_pre_submit_guard_fields,
+            microstructure_fields=microstructure_submit_log_fields,
+            orderbook_fields=entry_orderbook_micro_fields,
         )
         if weak_context_guard.get("blocked"):
             _log_entry_pipeline(
