@@ -1404,6 +1404,112 @@ def test_latency_spread_relief_canary_enforces_effective_min_signal_floor(monkey
     assert result["latency_spread_relief_tag"] == "SCANNER"
 
 
+def test_latency_wide_spread_passive_requote_allows_scanner_target_price(monkeypatch):
+    monkeypatch.setattr(
+        entry_latency_module,
+        "TRADING_RULES",
+        replace(
+            CONFIG,
+            SCALP_LATENCY_QUOTE_FRESH_COMPOSITE_CANARY_ENABLED=False,
+            SCALP_LATENCY_SIGNAL_QUALITY_QUOTE_COMPOSITE_CANARY_ENABLED=False,
+            SCALP_LATENCY_SPREAD_RELIEF_CANARY_ENABLED=True,
+            SCALP_LATENCY_SPREAD_RELIEF_TAGS=("SCANNER",),
+            SCALP_LATENCY_SPREAD_RELIEF_MIN_SIGNAL_SCORE=60.0,
+            SCALP_LATENCY_SPREAD_RELIEF_EFFECTIVE_MIN_SIGNAL_SCORE_FLOOR=85.0,
+            SCALP_LATENCY_SPREAD_RELIEF_MAX_SPREAD_RATIO=0.0150,
+            SCALP_LATENCY_WIDE_SPREAD_PASSIVE_REQUOTE_ENABLED=True,
+            SCALP_LATENCY_WIDE_SPREAD_PASSIVE_REQUOTE_TAGS=("SCANNER",),
+            SCALP_LATENCY_WIDE_SPREAD_PASSIVE_REQUOTE_MIN_SIGNAL_SCORE=78.0,
+            SCALP_LATENCY_WIDE_SPREAD_PASSIVE_REQUOTE_MIN_BUY_PRESSURE=78.0,
+            SCALP_LATENCY_WIDE_SPREAD_PASSIVE_REQUOTE_MAX_SPREAD_RATIO=0.0130,
+            SCALP_LATENCY_WIDE_SPREAD_PASSIVE_REQUOTE_MIN_OFI_NORM=0.0,
+            SCALP_LATENCY_WS_JITTER_RELIEF_CANARY_ENABLED=False,
+            SCALP_LATENCY_OTHER_DANGER_RELIEF_CANARY_ENABLED=False,
+        ),
+    )
+
+    entry_latency_module.ORDERBOOK_STABILITY_OBSERVER.reset()
+    entry_latency_module.ORDERBOOK_STABILITY_OBSERVER.record_quote(
+        "290690_passive_requote",
+        best_bid=5_440,
+        best_ask=5_500,
+        ts=time.time(),
+    )
+    result = evaluate_live_buy_entry(
+        stock={"name": "SORUX", "position_tag": "SCANNER"},
+        code="290690_passive_requote",
+        ws_data={
+            "curr": 5_460,
+            "last_ws_update_ts": datetime.now(UTC).timestamp(),
+            "buy_ratio": 83.0,
+            "ofi_norm": 1.249,
+            "orderbook": {
+                "asks": [{"price": 5_500, "volume": 100}],
+                "bids": [{"price": 5_440, "volume": 100}],
+            },
+        },
+        strategy_id="SCALPING",
+        planned_qty=2,
+        signal_price=5_460,
+        signal_strength=78.0,
+        target_buy_price=5_410,
+    )
+
+    assert result["decision"] == "ALLOW_NORMAL"
+    assert result["reason"] == "latency_wide_spread_passive_requote_normal_override"
+    assert result["latency_canary_applied"] is True
+    assert result["latency_canary_reason"] == "wide_spread_passive_requote_applied"
+    assert result["latency_wide_spread_passive_requote_applied"] is True
+    assert result["entry_price_guard"] == "latency_wide_spread_passive_requote_defensive"
+    assert result["price_resolution_reason"] == "reference_target_cap"
+    assert result["order_price"] == 5_410
+    assert result["latency_danger_reasons"] == "spread_too_wide"
+
+
+def test_latency_wide_spread_passive_requote_blocks_low_buy_pressure(monkeypatch):
+    monkeypatch.setattr(
+        entry_latency_module,
+        "TRADING_RULES",
+        replace(
+            CONFIG,
+            SCALP_LATENCY_QUOTE_FRESH_COMPOSITE_CANARY_ENABLED=False,
+            SCALP_LATENCY_SIGNAL_QUALITY_QUOTE_COMPOSITE_CANARY_ENABLED=False,
+            SCALP_LATENCY_SPREAD_RELIEF_CANARY_ENABLED=False,
+            SCALP_LATENCY_WIDE_SPREAD_PASSIVE_REQUOTE_ENABLED=True,
+            SCALP_LATENCY_WIDE_SPREAD_PASSIVE_REQUOTE_TAGS=("SCANNER",),
+            SCALP_LATENCY_WIDE_SPREAD_PASSIVE_REQUOTE_MIN_SIGNAL_SCORE=78.0,
+            SCALP_LATENCY_WIDE_SPREAD_PASSIVE_REQUOTE_MIN_BUY_PRESSURE=78.0,
+            SCALP_LATENCY_WIDE_SPREAD_PASSIVE_REQUOTE_MAX_SPREAD_RATIO=0.0130,
+            SCALP_LATENCY_WS_JITTER_RELIEF_CANARY_ENABLED=False,
+            SCALP_LATENCY_OTHER_DANGER_RELIEF_CANARY_ENABLED=False,
+        ),
+    )
+
+    result = evaluate_live_buy_entry(
+        stock={"name": "TEST", "position_tag": "SCANNER"},
+        code="123456_passive_requote_low_pressure",
+        ws_data={
+            "curr": 5_460,
+            "last_ws_update_ts": datetime.now(UTC).timestamp(),
+            "buy_ratio": 55.0,
+            "orderbook": {
+                "asks": [{"price": 5_500, "volume": 100}],
+                "bids": [{"price": 5_440, "volume": 100}],
+            },
+        },
+        strategy_id="SCALPING",
+        planned_qty=2,
+        signal_price=5_460,
+        signal_strength=78.0,
+        target_buy_price=5_410,
+    )
+
+    assert result["decision"] == "REJECT_DANGER"
+    assert result["latency_wide_spread_passive_requote_applied"] is False
+    assert result["latency_wide_spread_passive_requote_reason"] == "low_buy_pressure"
+    assert result["latency_danger_reasons"] == "spread_too_wide"
+
+
 def test_latency_spread_relief_canary_uses_effective_min_signal_floor_override(monkeypatch):
     monkeypatch.setattr(
         entry_latency_module,

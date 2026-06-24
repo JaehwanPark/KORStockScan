@@ -499,6 +499,16 @@ class TradingConfig:
     SCALP_LATENCY_SPREAD_RELIEF_MAX_SPREAD_RATIO: float = 0.0120  # spread relief 최대 허용 spread_ratio
     SCALP_LATENCY_SPREAD_RELIEF_BLOCK_UNSTABLE_QUOTE: bool = True
     SCALP_LATENCY_SPREAD_RELIEF_MIN_PRINT_QUOTE_ALIGNMENT: float = 0.90
+    SCALP_LATENCY_WIDE_SPREAD_PASSIVE_REQUOTE_ENABLED: bool = False
+    SCALP_LATENCY_WIDE_SPREAD_PASSIVE_REQUOTE_TAGS: tuple = ("SCANNER", "VWAP_RECLAIM", "OPEN_RECLAIM")
+    SCALP_LATENCY_WIDE_SPREAD_PASSIVE_REQUOTE_MIN_SIGNAL_SCORE: float = 78.0
+    SCALP_LATENCY_WIDE_SPREAD_PASSIVE_REQUOTE_MIN_BUY_PRESSURE: float = 78.0
+    SCALP_LATENCY_WIDE_SPREAD_PASSIVE_REQUOTE_MIN_STRENGTH: float = 0.0
+    SCALP_LATENCY_WIDE_SPREAD_PASSIVE_REQUOTE_MAX_WS_AGE_MS: int = 700
+    SCALP_LATENCY_WIDE_SPREAD_PASSIVE_REQUOTE_MAX_WS_JITTER_MS: int = 500
+    SCALP_LATENCY_WIDE_SPREAD_PASSIVE_REQUOTE_MAX_SPREAD_RATIO: float = 0.0130
+    SCALP_LATENCY_WIDE_SPREAD_PASSIVE_REQUOTE_BLOCK_UNSTABLE_QUOTE: bool = True
+    SCALP_LATENCY_WIDE_SPREAD_PASSIVE_REQUOTE_MIN_OFI_NORM: float = 0.0
     SCALP_LATENCY_WS_JITTER_RELIEF_CANARY_ENABLED: bool = False  # 2026-04-27 15:00 미개선 종료: ws_jitter-only residual live 축 OFF
     SCALP_LATENCY_WS_JITTER_RELIEF_TAGS: tuple = ("SCANNER", "VWAP_RECLAIM", "OPEN_RECLAIM")  # ws_jitter relief 적용 태그
     SCALP_LATENCY_WS_JITTER_RELIEF_MIN_SIGNAL_SCORE: float = 85.0  # ws_jitter relief 최소 AI 점수
@@ -972,6 +982,36 @@ def _build_trading_rules() -> TradingConfig:
     env_spread_relief_min_print_alignment = _env_float(
         "KORSTOCKSCAN_SCALP_LATENCY_SPREAD_RELIEF_MIN_PRINT_QUOTE_ALIGNMENT"
     )
+    env_wide_spread_passive_requote_enabled = _env_bool(
+        "KORSTOCKSCAN_SCALP_LATENCY_WIDE_SPREAD_PASSIVE_REQUOTE_ENABLED"
+    )
+    env_wide_spread_passive_requote_tags = _env_csv_tuple(
+        "KORSTOCKSCAN_SCALP_LATENCY_WIDE_SPREAD_PASSIVE_REQUOTE_TAGS"
+    )
+    env_wide_spread_passive_requote_min_signal = _env_float(
+        "KORSTOCKSCAN_SCALP_LATENCY_WIDE_SPREAD_PASSIVE_REQUOTE_MIN_SIGNAL_SCORE"
+    )
+    env_wide_spread_passive_requote_min_buy_pressure = _env_float(
+        "KORSTOCKSCAN_SCALP_LATENCY_WIDE_SPREAD_PASSIVE_REQUOTE_MIN_BUY_PRESSURE"
+    )
+    env_wide_spread_passive_requote_min_strength = _env_float(
+        "KORSTOCKSCAN_SCALP_LATENCY_WIDE_SPREAD_PASSIVE_REQUOTE_MIN_STRENGTH"
+    )
+    env_wide_spread_passive_requote_max_ws_age = _env_int(
+        "KORSTOCKSCAN_SCALP_LATENCY_WIDE_SPREAD_PASSIVE_REQUOTE_MAX_WS_AGE_MS"
+    )
+    env_wide_spread_passive_requote_max_ws_jitter = _env_int(
+        "KORSTOCKSCAN_SCALP_LATENCY_WIDE_SPREAD_PASSIVE_REQUOTE_MAX_WS_JITTER_MS"
+    )
+    env_wide_spread_passive_requote_max_spread = _env_float(
+        "KORSTOCKSCAN_SCALP_LATENCY_WIDE_SPREAD_PASSIVE_REQUOTE_MAX_SPREAD_RATIO"
+    )
+    env_wide_spread_passive_requote_block_unstable = _env_bool(
+        "KORSTOCKSCAN_SCALP_LATENCY_WIDE_SPREAD_PASSIVE_REQUOTE_BLOCK_UNSTABLE_QUOTE"
+    )
+    env_wide_spread_passive_requote_min_ofi = _env_float(
+        "KORSTOCKSCAN_SCALP_LATENCY_WIDE_SPREAD_PASSIVE_REQUOTE_MIN_OFI_NORM"
+    )
     env_other_danger_relief_enabled = _env_bool(
         "KORSTOCKSCAN_SCALP_LATENCY_OTHER_DANGER_RELIEF_CANARY_ENABLED"
     )
@@ -1037,9 +1077,20 @@ def _build_trading_rules() -> TradingConfig:
         or env_spread_relief_enabled is not None
         or env_spread_relief_tags is not None
         or env_spread_relief_min_signal is not None
+        or env_spread_relief_effective_min_signal_floor is not None
         or env_spread_relief_max_spread is not None
         or env_spread_relief_block_unstable is not None
         or env_spread_relief_min_print_alignment is not None
+        or env_wide_spread_passive_requote_enabled is not None
+        or env_wide_spread_passive_requote_tags is not None
+        or env_wide_spread_passive_requote_min_signal is not None
+        or env_wide_spread_passive_requote_min_buy_pressure is not None
+        or env_wide_spread_passive_requote_min_strength is not None
+        or env_wide_spread_passive_requote_max_ws_age is not None
+        or env_wide_spread_passive_requote_max_ws_jitter is not None
+        or env_wide_spread_passive_requote_max_spread is not None
+        or env_wide_spread_passive_requote_block_unstable is not None
+        or env_wide_spread_passive_requote_min_ofi is not None
         or env_other_danger_relief_enabled is not None
         or env_other_danger_relief_tags is not None
         or env_other_danger_relief_min_signal is not None
@@ -1125,6 +1176,36 @@ def _build_trading_rules() -> TradingConfig:
             SCALP_LATENCY_SPREAD_RELIEF_MIN_PRINT_QUOTE_ALIGNMENT=env_spread_relief_min_print_alignment
             if env_spread_relief_min_print_alignment is not None
             else config.SCALP_LATENCY_SPREAD_RELIEF_MIN_PRINT_QUOTE_ALIGNMENT,
+            SCALP_LATENCY_WIDE_SPREAD_PASSIVE_REQUOTE_ENABLED=env_wide_spread_passive_requote_enabled
+            if env_wide_spread_passive_requote_enabled is not None
+            else config.SCALP_LATENCY_WIDE_SPREAD_PASSIVE_REQUOTE_ENABLED,
+            SCALP_LATENCY_WIDE_SPREAD_PASSIVE_REQUOTE_TAGS=env_wide_spread_passive_requote_tags
+            if env_wide_spread_passive_requote_tags is not None
+            else config.SCALP_LATENCY_WIDE_SPREAD_PASSIVE_REQUOTE_TAGS,
+            SCALP_LATENCY_WIDE_SPREAD_PASSIVE_REQUOTE_MIN_SIGNAL_SCORE=env_wide_spread_passive_requote_min_signal
+            if env_wide_spread_passive_requote_min_signal is not None
+            else config.SCALP_LATENCY_WIDE_SPREAD_PASSIVE_REQUOTE_MIN_SIGNAL_SCORE,
+            SCALP_LATENCY_WIDE_SPREAD_PASSIVE_REQUOTE_MIN_BUY_PRESSURE=env_wide_spread_passive_requote_min_buy_pressure
+            if env_wide_spread_passive_requote_min_buy_pressure is not None
+            else config.SCALP_LATENCY_WIDE_SPREAD_PASSIVE_REQUOTE_MIN_BUY_PRESSURE,
+            SCALP_LATENCY_WIDE_SPREAD_PASSIVE_REQUOTE_MIN_STRENGTH=env_wide_spread_passive_requote_min_strength
+            if env_wide_spread_passive_requote_min_strength is not None
+            else config.SCALP_LATENCY_WIDE_SPREAD_PASSIVE_REQUOTE_MIN_STRENGTH,
+            SCALP_LATENCY_WIDE_SPREAD_PASSIVE_REQUOTE_MAX_WS_AGE_MS=env_wide_spread_passive_requote_max_ws_age
+            if env_wide_spread_passive_requote_max_ws_age is not None
+            else config.SCALP_LATENCY_WIDE_SPREAD_PASSIVE_REQUOTE_MAX_WS_AGE_MS,
+            SCALP_LATENCY_WIDE_SPREAD_PASSIVE_REQUOTE_MAX_WS_JITTER_MS=env_wide_spread_passive_requote_max_ws_jitter
+            if env_wide_spread_passive_requote_max_ws_jitter is not None
+            else config.SCALP_LATENCY_WIDE_SPREAD_PASSIVE_REQUOTE_MAX_WS_JITTER_MS,
+            SCALP_LATENCY_WIDE_SPREAD_PASSIVE_REQUOTE_MAX_SPREAD_RATIO=env_wide_spread_passive_requote_max_spread
+            if env_wide_spread_passive_requote_max_spread is not None
+            else config.SCALP_LATENCY_WIDE_SPREAD_PASSIVE_REQUOTE_MAX_SPREAD_RATIO,
+            SCALP_LATENCY_WIDE_SPREAD_PASSIVE_REQUOTE_BLOCK_UNSTABLE_QUOTE=env_wide_spread_passive_requote_block_unstable
+            if env_wide_spread_passive_requote_block_unstable is not None
+            else config.SCALP_LATENCY_WIDE_SPREAD_PASSIVE_REQUOTE_BLOCK_UNSTABLE_QUOTE,
+            SCALP_LATENCY_WIDE_SPREAD_PASSIVE_REQUOTE_MIN_OFI_NORM=env_wide_spread_passive_requote_min_ofi
+            if env_wide_spread_passive_requote_min_ofi is not None
+            else config.SCALP_LATENCY_WIDE_SPREAD_PASSIVE_REQUOTE_MIN_OFI_NORM,
             SCALP_LATENCY_OTHER_DANGER_RELIEF_CANARY_ENABLED=env_other_danger_relief_enabled
             if env_other_danger_relief_enabled is not None
             else config.SCALP_LATENCY_OTHER_DANGER_RELIEF_CANARY_ENABLED,

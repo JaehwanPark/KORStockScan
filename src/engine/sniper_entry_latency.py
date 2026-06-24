@@ -596,6 +596,7 @@ def _danger_latency_relief_runtime_enabled() -> bool:
         for attr in (
             "SCALP_LATENCY_OTHER_DANGER_RELIEF_CANARY_ENABLED",
             "SCALP_LATENCY_SPREAD_RELIEF_CANARY_ENABLED",
+            "SCALP_LATENCY_WIDE_SPREAD_PASSIVE_REQUOTE_ENABLED",
         )
     )
 
@@ -774,6 +775,128 @@ def _should_apply_latency_spread_relief_canary(
         return False, "normal_slippage_exceeded"
 
     return True, "spread_relief_canary_applied"
+
+
+def _should_apply_latency_wide_spread_passive_requote(
+    *,
+    code: str,
+    strategy_id: str,
+    position_tag: str,
+    signal_strength: float,
+    latest_strength: float,
+    buy_pressure_10t: float,
+    latency_status,
+    signal_price: int,
+    latest_price: int,
+    best_bid: int,
+    best_ask: int,
+    ws_data: dict[str, Any] | None,
+    danger_reasons: list[str] | None = None,
+) -> tuple[bool, str, dict[str, Any]]:
+    diagnostics: dict[str, Any] = {}
+    if not bool(getattr(TRADING_RULES, "SCALP_LATENCY_WIDE_SPREAD_PASSIVE_REQUOTE_ENABLED", False)):
+        return False, "disabled", diagnostics
+    if str(strategy_id or "").upper() not in {"SCALPING", "SCALP"}:
+        return False, "non_scalping", diagnostics
+    if getattr(latency_status, "quote_stale", False):
+        return False, "quote_stale", diagnostics
+
+    normalized_reasons = _normalized_reason_set(danger_reasons or _latency_danger_reasons(latency_status))
+    if normalized_reasons != {"spread_too_wide"}:
+        return False, "spread_only_required", diagnostics
+
+    allow_tags = {
+        str(tag).strip().upper()
+        for tag in (
+            getattr(TRADING_RULES, "SCALP_LATENCY_WIDE_SPREAD_PASSIVE_REQUOTE_TAGS", ()) or ()
+        )
+        if str(tag).strip()
+    }
+    normalized_tag = str(position_tag or "").strip().upper()
+    if allow_tags and normalized_tag not in allow_tags:
+        return False, "tag_not_allowed", diagnostics
+
+    signal_score = _normalize_signal_score(signal_strength)
+    min_signal = _to_float(
+        getattr(TRADING_RULES, "SCALP_LATENCY_WIDE_SPREAD_PASSIVE_REQUOTE_MIN_SIGNAL_SCORE", 78.0),
+        78.0,
+    )
+    if signal_score < min_signal:
+        return False, "low_signal", diagnostics
+
+    min_buy_pressure = _to_float(
+        getattr(TRADING_RULES, "SCALP_LATENCY_WIDE_SPREAD_PASSIVE_REQUOTE_MIN_BUY_PRESSURE", 78.0),
+        78.0,
+    )
+    if _to_float(buy_pressure_10t, 0.0) < min_buy_pressure:
+        return False, "low_buy_pressure", diagnostics
+
+    min_strength = _to_float(
+        getattr(TRADING_RULES, "SCALP_LATENCY_WIDE_SPREAD_PASSIVE_REQUOTE_MIN_STRENGTH", 0.0),
+        0.0,
+    )
+    if min_strength > 0 and _to_float(latest_strength, 0.0) < min_strength:
+        return False, "low_strength", diagnostics
+
+    max_ws_age_ms = int(
+        getattr(TRADING_RULES, "SCALP_LATENCY_WIDE_SPREAD_PASSIVE_REQUOTE_MAX_WS_AGE_MS", 700)
+        or 700
+    )
+    if int(getattr(latency_status, "ws_age_ms", 0) or 0) > max_ws_age_ms:
+        return False, "ws_age_limit_exceeded", diagnostics
+
+    max_ws_jitter_ms = int(
+        getattr(TRADING_RULES, "SCALP_LATENCY_WIDE_SPREAD_PASSIVE_REQUOTE_MAX_WS_JITTER_MS", 500)
+        or 500
+    )
+    if int(getattr(latency_status, "ws_jitter_ms", 0) or 0) > max_ws_jitter_ms:
+        return False, "ws_jitter_limit_exceeded", diagnostics
+
+    max_spread_ratio = _to_float(
+        getattr(TRADING_RULES, "SCALP_LATENCY_WIDE_SPREAD_PASSIVE_REQUOTE_MAX_SPREAD_RATIO", 0.0130),
+        0.0130,
+    )
+    if _to_float(getattr(latency_status, "spread_ratio", 0.0), 0.0) > max_spread_ratio:
+        return False, "spread_limit_exceeded", diagnostics
+
+    if int(best_bid or 0) <= 0 or int(best_ask or 0) <= int(best_bid or 0):
+        return False, "invalid_quote", diagnostics
+
+    micro_context = _conditional_real_1tick_context(ws_data, best_ask=best_ask, best_bid=best_bid)
+    min_ofi = _to_float(
+        getattr(TRADING_RULES, "SCALP_LATENCY_WIDE_SPREAD_PASSIVE_REQUOTE_MIN_OFI_NORM", 0.0),
+        0.0,
+    )
+    ofi_norm = micro_context.get("ofi_norm")
+    if min_ofi > 0 and (ofi_norm is None or _to_float(ofi_norm, 0.0) < min_ofi):
+        return False, "low_ofi", micro_context
+
+    if bool(getattr(TRADING_RULES, "SCALP_LATENCY_WIDE_SPREAD_PASSIVE_REQUOTE_BLOCK_UNSTABLE_QUOTE", True)):
+        stability = ORDERBOOK_STABILITY_OBSERVER.snapshot(code) if code else {}
+        diagnostics.update(stability)
+        if bool(stability.get("unstable_quote_observed")):
+            return False, "unstable_quote_observed", diagnostics
+
+    allowed_slippage = _ENTRY_POLICY._allowed_slippage(
+        signal_price=signal_price,
+        latest_price=latest_price,
+        tick_limit=_CONFIG.normal_allowed_slippage_ticks,
+        pct_limit=_CONFIG.normal_allowed_slippage_pct,
+    )
+    if not _ENTRY_POLICY._slippage_ok(signal_price, latest_price, allowed_slippage, "BUY"):
+        return False, "normal_slippage_exceeded", diagnostics
+
+    diagnostics.update(micro_context)
+    diagnostics.update(
+        {
+            "signal_score": round(float(signal_score), 3),
+            "min_signal_score": round(float(min_signal), 3),
+            "buy_pressure": round(float(_to_float(buy_pressure_10t, 0.0)), 3),
+            "min_buy_pressure": round(float(min_buy_pressure), 3),
+            "max_spread_ratio": round(float(max_spread_ratio), 6),
+        }
+    )
+    return True, "wide_spread_passive_requote_applied", diagnostics
 
 
 def _latency_spread_relief_signal_score_floors() -> tuple[float, float]:
@@ -1436,6 +1559,9 @@ def evaluate_live_buy_entry(
     effective_reason = policy.reason
     latency_canary_applied = False
     latency_canary_reason = ""
+    latency_wide_spread_passive_requote_applied = False
+    latency_wide_spread_passive_requote_reason = ""
+    latency_wide_spread_passive_requote_context: dict[str, Any] = {}
     latency_danger_reasons = ",".join(_latency_danger_reasons(latency))
     danger_relief_forbidden = (
         policy.decision == EntryDecision.REJECT_DANGER and not _danger_latency_relief_runtime_enabled()
@@ -1607,6 +1733,48 @@ def evaluate_live_buy_entry(
                 latency_canary_reason = spread_relief_reason
 
     if policy.decision == EntryDecision.REJECT_DANGER and not danger_relief_forbidden and effective_decision == EntryDecision.REJECT_DANGER:
+        passive_requote_ok, passive_requote_reason, passive_requote_context = (
+            _should_apply_latency_wide_spread_passive_requote(
+                code=code,
+                strategy_id=strategy_id,
+                position_tag=spread_relief_tag,
+                signal_strength=float(signal_strength or 0.0),
+                latest_strength=_to_float((ws_data or {}).get("v_pw", stock.get("latest_strength", 0.0)), 0.0),
+                buy_pressure_10t=_to_float((ws_data or {}).get("buy_ratio", stock.get("buy_pressure_10t", 0.0)), 0.0),
+                latency_status=latency,
+                signal_price=frozen_price,
+                latest_price=latest_price,
+                best_bid=best_bid,
+                best_ask=best_ask,
+                ws_data=ws_data,
+                danger_reasons=latency_danger_reasons.split(","),
+            )
+        )
+        latency_wide_spread_passive_requote_reason = passive_requote_reason
+        latency_wide_spread_passive_requote_context = passive_requote_context
+        if passive_requote_ok:
+            latency_canary_applied = True
+            latency_canary_reason = passive_requote_reason
+            latency_wide_spread_passive_requote_applied = True
+            effective_decision = EntryDecision.ALLOW_NORMAL
+            effective_reason = "latency_wide_spread_passive_requote_normal_override"
+            log_info(
+                f"[LATENCY_WIDE_SPREAD_PASSIVE_REQUOTE] {stock.get('name')}({code}) "
+                f"tag={spread_relief_tag} signal_score={_normalize_signal_score(signal_strength):.1f} "
+                f"buy_pressure={_to_float((ws_data or {}).get('buy_ratio', stock.get('buy_pressure_10t', 0.0)), 0.0):.1f} "
+                f"ws_age_ms={latency.ws_age_ms} ws_jitter_ms={latency.ws_jitter_ms} "
+                f"spread_ratio={latency.spread_ratio:.6f} best_bid={best_bid} best_ask={best_ask} "
+                f"danger_reasons={latency_danger_reasons}"
+            )
+        else:
+            if (
+                not latency_canary_reason
+                or latency_canary_reason == "disabled"
+                or (latency_canary_reason == "danger_hard_safety_block" and passive_requote_reason != "disabled")
+            ):
+                latency_canary_reason = passive_requote_reason
+
+    if policy.decision == EntryDecision.REJECT_DANGER and not danger_relief_forbidden and effective_decision == EntryDecision.REJECT_DANGER:
         canary_ok, canary_reason = _should_apply_latency_guard_canary(
             strategy_id=strategy_id,
             position_tag=str(stock.get("position_tag") or ""),
@@ -1731,6 +1899,9 @@ def evaluate_live_buy_entry(
         "latency_spread_relief_configured_min_signal_score": round(spread_relief_configured_min_signal, 3),
         "latency_spread_relief_effective_min_signal_score": round(spread_relief_effective_min_signal, 3),
         "latency_spread_relief_tag": spread_relief_tag,
+        "latency_wide_spread_passive_requote_applied": latency_wide_spread_passive_requote_applied,
+        "latency_wide_spread_passive_requote_reason": latency_wide_spread_passive_requote_reason,
+        "latency_wide_spread_passive_requote_context": latency_wide_spread_passive_requote_context,
         **pre_submit_quote_refresh,
         "orderbook_stability": ORDERBOOK_STABILITY_OBSERVER.snapshot(code),
     }
@@ -1790,9 +1961,25 @@ def evaluate_live_buy_entry(
                     defensive_ticks=defensive_ticks,
                 )
                 order_price = int(defensive_order.price)
-                entry_price_guard = "latency_danger_override_defensive"
+                entry_price_guard = (
+                    "latency_wide_spread_passive_requote_defensive"
+                    if latency_wide_spread_passive_requote_applied
+                    else "latency_danger_override_defensive"
+                )
                 applied_bps = 0
-                gap_profile.update(profile="latency_override", bps=0, reason="latency_override_keeps_defensive")
+                gap_profile.update(
+                    profile=(
+                        "wide_spread_passive_requote"
+                        if latency_wide_spread_passive_requote_applied
+                        else "latency_override"
+                    ),
+                    bps=0,
+                    reason=(
+                        "wide_spread_passive_requote_keeps_defensive"
+                        if latency_wide_spread_passive_requote_applied
+                        else "latency_override_keeps_defensive"
+                    ),
+                )
             else:
                 defensive_price = move_price_down_by_bps(latest_price, applied_bps, floor_ticks=1)
                 aggressive_override = _reference_target_cap_missed_upside_aggressive_entry_override(
@@ -1990,7 +2177,9 @@ def evaluate_live_buy_entry(
             else _normal_defensive_ticks_for_strategy(strategy_id)
         )
         entry_price_guard = (
-            "latency_danger_override_defensive"
+            "latency_wide_spread_passive_requote_defensive"
+            if is_latency_override and latency_wide_spread_passive_requote_applied
+            else "latency_danger_override_defensive"
             if is_latency_override
             else "normal_defensive"
         )
