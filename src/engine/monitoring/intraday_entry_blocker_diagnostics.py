@@ -431,12 +431,19 @@ def _scale_in_diagnostics(rows: list[dict[str, Any]]) -> dict[str, Any]:
     blocked_rows: list[dict[str, Any]] = []
     executed_rows: list[dict[str, Any]] = []
     for row in relevant:
-        executed = row.get("stage") == "scale_in_executed" or str(_field(row, "scale_in_executed") or "").lower() == "true"
+        stage = str(row.get("stage") or "")
+        stage_lower = stage.lower()
+        executed = stage == "scale_in_executed" or str(_field(row, "scale_in_executed") or "").lower() == "true"
         allowed = str(_field(row, "scale_in_gate_allowed") or "").strip().lower()
         reason = str(_field(row, "scale_in_blocker_reason") or _field(row, "scale_in_gate_reason") or _field(row, "reason") or "")
         action = str(_field(row, "scale_in_action_type") or _field(row, "scale_in_arm") or _field(row, "chosen_action") or "-")
         action_counter[action] += 1
-        if not executed and (allowed == "false" or "blocked" in str(row.get("stage") or "").lower() or reason):
+        blocked_stage = "blocked" in stage_lower or stage in {
+            "scale_in_price_guard_block",
+            "scale_in_qty_block",
+            "scale_in_order_unfilled",
+        }
+        if not executed and (allowed == "false" or blocked_stage):
             blocker_counter[reason or str(row.get("stage") or "-")] += 1
             blocked_rows.append(row)
         if executed:
