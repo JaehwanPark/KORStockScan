@@ -34,6 +34,26 @@ QUEUE_STAGES = {
     "scalping_scanner_runtime_queue_lag",
 }
 
+ENTRY_PRICE_STAGES = {
+    "entry_ai_price_canary_applied",
+    "entry_ai_price_canary_fallback",
+    "entry_ai_price_canary_skip_order",
+    "entry_submit_revalidation_warning",
+    "entry_submit_revalidation_block",
+    "pre_submit_price_guard_block",
+    "entry_order_cancel_requested",
+    "entry_order_cancel_confirmed",
+    "entry_order_cancel_failed",
+}
+
+SCALE_IN_STAGES = {
+    "scale_in_price_resolved",
+    "scale_in_price_guard_block",
+    "scale_in_p2_observe",
+    "scale_in_executed",
+    "stat_action_decision_snapshot",
+}
+
 RELIEF_BLOCKER_REASONS = {
     "scanner_full_eval_loop_budget_deferred",
     "entry_cooldown_active",
@@ -319,6 +339,210 @@ def _event_time(row: dict[str, Any]) -> str:
     return str(row.get("emitted_at") or "")
 
 
+def _top_counter(counter: Counter[Any], *, limit: int = 10, key_name: str = "key") -> list[dict[str, Any]]:
+    return [{key_name: key, "count": count} for key, count in counter.most_common(limit)]
+
+
+def _real_rows(rows: list[dict[str, Any]], *, since: str | None = None) -> list[dict[str, Any]]:
+    selected = []
+    for row in rows:
+        if since and _event_time(row) < since:
+            continue
+        if _exclude_from_real_entry_analysis(row):
+            continue
+        selected.append(row)
+    return selected
+
+
+def _entry_price_diagnostics(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    entry_rows = [row for row in rows if row.get("pipeline") == ENTRY_PIPELINE]
+    relevant = []
+    for row in entry_rows:
+        stage = str(row.get("stage") or "")
+        fields = row.get("fields") if isinstance(row.get("fields"), dict) else {}
+        if stage in ENTRY_PRICE_STAGES or any(
+            key in fields
+            for key in (
+                "entry_price_guard",
+                "entry_submit_revalidation",
+                "price_below_bid_bps",
+                "submitted_order_price",
+                "entry_order_lifecycle",
+            )
+        ):
+            relevant.append(row)
+
+    stage_counts = Counter(str(row.get("stage") or "") for row in relevant)
+    guard_counts = Counter(str(_field(row, "entry_price_guard") or "-") for row in relevant)
+    resolution_counts = Counter(str(_field(row, "resolution_reason") or "-") for row in relevant)
+    block_rows = [
+        row
+        for row in relevant
+        if str(row.get("stage") or "") in {"entry_ai_price_canary_skip_order", "entry_submit_revalidation_block", "pre_submit_price_guard_block"}
+        or str(row.get("stage") or "").startswith("entry_order_cancel_")
+        or str(_field(row, "entry_submit_revalidation_block") or "").lower() == "true"
+        or str(_field(row, "price_context_stale_at_submit") or "").lower() == "true"
+        or str(_field(row, "quote_stale_at_submit") or "").lower() == "true"
+    ]
+    return {
+        "event_count": len(relevant),
+        "block_or_unfilled_count": len(block_rows),
+        "stage_counts": _top_counter(stage_counts, key_name="stage"),
+        "guard_counts": _top_counter(guard_counts, key_name="entry_price_guard"),
+        "resolution_counts": _top_counter(resolution_counts, key_name="resolution_reason"),
+        "recent_issues": [
+            {
+                "emitted_at": _event_time(row),
+                "stock_code": row.get("stock_code") or "",
+                "stock_name": row.get("stock_name") or "",
+                "stage": row.get("stage") or "",
+                "reason": _blocker_reason(row),
+                "entry_price_guard": _field(row, "entry_price_guard", ""),
+                "resolution_reason": _field(row, "resolution_reason", ""),
+                "price_below_bid_bps": _safe_float(_field(row, "price_below_bid_bps")),
+                "submitted_order_price": _safe_float(_field(row, "submitted_order_price")),
+                "best_bid_at_submit": _safe_float(_field(row, "best_bid_at_submit")),
+                "quote_age_at_submit_ms": _safe_float(_field(row, "quote_age_at_submit_ms")),
+                "entry_submit_revalidation": _field(row, "entry_submit_revalidation", ""),
+                "entry_submit_revalidation_warning": _field(row, "entry_submit_revalidation_warning", ""),
+                "ai_entry_price_canary_action": _field(row, "ai_entry_price_canary_action", ""),
+                "pre_submit_liquidity_guard_action": _field(row, "pre_submit_liquidity_guard_action", ""),
+                "pre_submit_liquidity_reason": _field(row, "pre_submit_liquidity_reason", ""),
+            }
+            for row in block_rows[-12:]
+        ],
+        "decision_authority": "diagnostic_only_no_order_guard_bypass",
+        "runtime_effect": False,
+    }
+
+
+def _scale_in_diagnostics(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    holding_rows = [row for row in rows if row.get("pipeline") == "HOLDING_PIPELINE"]
+    relevant = []
+    for row in holding_rows:
+        stage = str(row.get("stage") or "")
+        fields = row.get("fields") if isinstance(row.get("fields"), dict) else {}
+        text = " ".join([stage, *(str(key) for key in fields), *(str(value) for value in fields.values())]).lower()
+        if stage in SCALE_IN_STAGES or "scale_in" in text or "avg_down" in text or "pyramid" in text:
+            relevant.append(row)
+
+    blocker_counter: Counter[str] = Counter()
+    action_counter: Counter[str] = Counter()
+    blocked_rows: list[dict[str, Any]] = []
+    executed_rows: list[dict[str, Any]] = []
+    for row in relevant:
+        executed = row.get("stage") == "scale_in_executed" or str(_field(row, "scale_in_executed") or "").lower() == "true"
+        allowed = str(_field(row, "scale_in_gate_allowed") or "").strip().lower()
+        reason = str(_field(row, "scale_in_blocker_reason") or _field(row, "scale_in_gate_reason") or _field(row, "reason") or "")
+        action = str(_field(row, "scale_in_action_type") or _field(row, "scale_in_arm") or _field(row, "chosen_action") or "-")
+        action_counter[action] += 1
+        if not executed and (allowed == "false" or "blocked" in str(row.get("stage") or "").lower() or reason):
+            blocker_counter[reason or str(row.get("stage") or "-")] += 1
+            blocked_rows.append(row)
+        if executed:
+            executed_rows.append(row)
+
+    return {
+        "event_count": len(relevant),
+        "blocked_count": len(blocked_rows),
+        "executed_count": len(executed_rows),
+        "blocker_reason_counts": _top_counter(blocker_counter, key_name="reason"),
+        "action_counts": _top_counter(action_counter, key_name="action"),
+        "recent_blockers": [
+            {
+                "emitted_at": _event_time(row),
+                "stock_code": row.get("stock_code") or "",
+                "stock_name": row.get("stock_name") or "",
+                "stage": row.get("stage") or "",
+                "profit_rate": _safe_float(_field(row, "profit_rate")),
+                "peak_profit": _safe_float(_field(row, "peak_profit")),
+                "current_ai_score": _safe_float(_field(row, "current_ai_score") or _field(row, "ai_score")),
+                "scale_in_gate_allowed": _field(row, "scale_in_gate_allowed", ""),
+                "scale_in_gate_reason": _field(row, "scale_in_gate_reason", ""),
+                "scale_in_blocker_reason": _field(row, "scale_in_blocker_reason", ""),
+                "scale_in_action_type": _field(row, "scale_in_action_type", ""),
+                "distance_to_buy_bps": _safe_float(_field(row, "distance_to_buy_bps")),
+            }
+            for row in blocked_rows[-12:]
+        ],
+        "decision_authority": "diagnostic_only_no_scale_in_authority_change",
+        "runtime_effect": False,
+    }
+
+
+def _post_sell_path(post_sell_dir: Path, kind: str, target_date: str) -> Path:
+    plain = post_sell_dir / f"{kind}_{target_date}.jsonl"
+    if plain.exists():
+        return plain
+    gz_path = plain.with_suffix(plain.suffix + ".gz")
+    return gz_path if gz_path.exists() else plain
+
+
+def _sell_flow(row: dict[str, Any]) -> str:
+    profit = _safe_float(row.get("profit_rate"))
+    exit_rule = str(row.get("exit_rule") or "").lower()
+    reason = str(row.get("sell_reason_type") or "").lower()
+    if (profit is not None and profit < 0) or "loss" in reason or "stop" in exit_rule:
+        return "stop_loss_flow"
+    if (profit is not None and profit > 0) or any(token in exit_rule for token in ("profit", "trailing", "target")):
+        return "take_profit_flow"
+    return "other_sell_flow"
+
+
+def _post_sell_flow_diagnostics(*, target_date: str, post_sell_dir: Path) -> dict[str, Any]:
+    candidates = _read_jsonl(_post_sell_path(post_sell_dir, "post_sell_candidates", target_date))
+    evaluations = _read_jsonl(_post_sell_path(post_sell_dir, "post_sell_evaluations", target_date))
+    outcome_counter = Counter(str(row.get("outcome") or "-") for row in evaluations)
+    flow_counter = Counter(_sell_flow(row) for row in evaluations)
+    missed_rows = [row for row in evaluations if str(row.get("outcome") or "") == "MISSED_UPSIDE"]
+    bad_entry_rows = [
+        row
+        for row in evaluations
+        if (_safe_float(row.get("profit_rate"), 0.0) or 0.0) < 0
+        and (_safe_float((row.get("metrics_10m") or {}).get("mfe_vs_buy_pct"), -999.0) or -999.0) <= 0
+    ]
+    return {
+        "candidate_count": len(candidates),
+        "evaluated_count": len(evaluations),
+        "outcome_counts": _top_counter(outcome_counter, key_name="outcome"),
+        "sell_flow_counts": _top_counter(flow_counter, key_name="flow"),
+        "missed_upside_count": len(missed_rows),
+        "bad_entry_after_sell_count": len(bad_entry_rows),
+        "top_missed_upside": [
+            {
+                "stock_code": row.get("stock_code") or "",
+                "stock_name": row.get("stock_name") or "",
+                "sell_time": row.get("sell_time") or "",
+                "flow": _sell_flow(row),
+                "profit_rate": _safe_float(row.get("profit_rate")),
+                "exit_rule": row.get("exit_rule") or "",
+                "mfe_10m_pct": _safe_float((row.get("metrics_10m") or {}).get("mfe_pct")),
+                "mfe_vs_buy_10m_pct": _safe_float((row.get("metrics_10m") or {}).get("mfe_vs_buy_pct")),
+                "ai_score_at_exit": _safe_float(row.get("ai_score_at_exit") or row.get("current_ai_score")),
+            }
+            for row in sorted(
+                missed_rows,
+                key=lambda item: _safe_float((item.get("metrics_10m") or {}).get("mfe_pct"), -999.0) or -999.0,
+                reverse=True,
+            )[:12]
+        ],
+        "bad_entry_examples": [
+            {
+                "stock_code": row.get("stock_code") or "",
+                "stock_name": row.get("stock_name") or "",
+                "sell_time": row.get("sell_time") or "",
+                "profit_rate": _safe_float(row.get("profit_rate")),
+                "exit_rule": row.get("exit_rule") or "",
+                "mfe_vs_buy_10m_pct": _safe_float((row.get("metrics_10m") or {}).get("mfe_vs_buy_pct")),
+                "ai_score_at_exit": _safe_float(row.get("ai_score_at_exit") or row.get("current_ai_score")),
+            }
+            for row in bad_entry_rows[:12]
+        ],
+        "decision_authority": "post_sell_diagnostic_only_no_exit_or_threshold_mutation",
+        "runtime_effect": False,
+    }
+
+
 def _summarize_code(
     code: str,
     rows: list[dict[str, Any]],
@@ -442,6 +666,7 @@ def build_report(
     *,
     target_date: str,
     pipeline_path: Path,
+    post_sell_dir: Path | None = None,
     generated_at: str | None = None,
     since: str | None = None,
     rising_threshold_pct: float = 0.5,
@@ -452,6 +677,7 @@ def build_report(
     rows = all_rows
     if since:
         rows = [row for row in rows if _event_time(row) >= since]
+    real_rows = _real_rows(all_rows, since=since)
     grouped = _entry_events(rows)
     real_entry_event_count = sum(len(events) for events in grouped.values())
     summaries = [
@@ -530,8 +756,58 @@ def build_report(
                     "stale_submit_bypass",
                     "real_order_approval",
                 ],
-            }
+            },
+            "entry_price_execution": {
+                "metric_role": "execution_quality_real_only",
+                "decision_authority": "diagnostic_only",
+                "window_policy": "same_day_intraday_light",
+                "sample_floor": "none_intraday_diagnostic",
+                "primary_decision_metric": False,
+                "source_quality_gate": "fresh_entry_pipeline_event_and_price_context_fields",
+                "forbidden_uses": [
+                    "entry_price_relaxation_without_operator_override",
+                    "stale_submit_bypass",
+                    "broker_guard_bypass",
+                    "real_order_approval",
+                ],
+            },
+            "scale_in_diagnostics": {
+                "metric_role": "funnel_count",
+                "decision_authority": "diagnostic_only",
+                "window_policy": "same_day_intraday_light",
+                "sample_floor": "none_intraday_diagnostic",
+                "primary_decision_metric": False,
+                "source_quality_gate": "holding_pipeline_scale_in_fields_present",
+                "forbidden_uses": [
+                    "scale_in_guard_bypass",
+                    "quantity_cap_release",
+                    "hard_safety_relaxation",
+                    "broker_guard_bypass",
+                ],
+            },
+            "post_sell_flow_diagnostics": {
+                "metric_role": "exit_post_sell_dimension",
+                "decision_authority": "diagnostic_only",
+                "window_policy": "same_day_post_sell_forward_window",
+                "sample_floor": "rolling_window_required_before_any_runtime_change",
+                "primary_decision_metric": "sim_post_decision_mfe_10m_pct",
+                "source_quality_gate": "post_sell_candidate_plus_evaluation_join",
+                "forbidden_uses": [
+                    "intraday_exit_threshold_mutation",
+                    "automatic_exit_deferral",
+                    "hard_stop_relaxation",
+                    "broker_guard_bypass",
+                    "provider_route_change",
+                    "bot_restart_trigger",
+                ],
+            },
         },
+        "entry_price_execution": _entry_price_diagnostics(real_rows),
+        "scale_in_diagnostics": _scale_in_diagnostics(real_rows),
+        "post_sell_flow_diagnostics": _post_sell_flow_diagnostics(
+            target_date=target_date,
+            post_sell_dir=post_sell_dir or PROJECT_ROOT / "data" / "post_sell",
+        ),
         "summary": {
             "entry_event_count": real_entry_event_count,
             "promoted_symbol_count": len(summaries),
@@ -606,6 +882,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Build intraday entry blocker diagnostics from pipeline events.")
     parser.add_argument("--target-date", default=datetime.now().strftime("%Y-%m-%d"))
     parser.add_argument("--pipeline-path", type=Path)
+    parser.add_argument("--post-sell-dir", type=Path)
     parser.add_argument("--output", type=Path)
     parser.add_argument("--since", help="Only include events with emitted_at at or after this ISO timestamp.")
     parser.add_argument("--print-summary", action="store_true")
@@ -613,7 +890,12 @@ def main(argv: list[str] | None = None) -> int:
 
     pipeline_path = args.pipeline_path or _default_pipeline_path(args.target_date)
     output_path = args.output or _default_output_path(args.target_date)
-    report = build_report(target_date=args.target_date, pipeline_path=pipeline_path, since=args.since)
+    report = build_report(
+        target_date=args.target_date,
+        pipeline_path=pipeline_path,
+        post_sell_dir=args.post_sell_dir,
+        since=args.since,
+    )
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     if args.print_summary:

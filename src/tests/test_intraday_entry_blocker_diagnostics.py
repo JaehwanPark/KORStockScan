@@ -354,3 +354,108 @@ def test_default_pipeline_path_prefers_gzip_when_plain_missing(monkeypatch, tmp_
     )
 
     assert _default_pipeline_path("2026-06-22") == gz_path
+
+
+def test_build_report_adds_entry_price_scale_in_and_post_sell_diagnostics(tmp_path):
+    path = tmp_path / "pipeline_events_2026-06-23.jsonl"
+    rows = [
+        _event("000001", "A", "scalping_scanner_candidate_promoted", {"price_delta_since_first_seen_pct": "1.20"}),
+        _event(
+            "000001",
+            "A",
+            "pre_submit_price_guard_block",
+            {
+                "price_delta_since_first_seen_pct": "1.20",
+                "entry_price_guard": "defensive_order_price",
+                "resolution_reason": "defensive_order_price",
+                "price_below_bid_bps": "95",
+                "submitted_order_price": "9900",
+                "best_bid_at_submit": "10000",
+                "quote_age_at_submit_ms": "450",
+                "pre_submit_liquidity_guard_action": "PASS",
+            },
+        ),
+        {
+            "pipeline": "HOLDING_PIPELINE",
+            "stock_code": "000002",
+            "stock_name": "B",
+            "stage": "stat_action_decision_snapshot",
+            "fields": {
+                "profit_rate": "-1.2",
+                "peak_profit": "0.2",
+                "current_ai_score": "73",
+                "scale_in_gate_allowed": "False",
+                "scale_in_gate_reason": "scalping_buy_window_blocked",
+                "scale_in_blocker_reason": "scalping_buy_window_blocked",
+                "scale_in_action_type": "AVG_DOWN",
+                "distance_to_buy_bps": "-120",
+            },
+            "emitted_at": "2026-06-23T09:10:00",
+        },
+    ]
+    path.write_text("\n".join(json.dumps(row, ensure_ascii=False) for row in rows), encoding="utf-8")
+
+    post_sell_dir = tmp_path / "post_sell"
+    post_sell_dir.mkdir()
+    (post_sell_dir / "post_sell_candidates_2026-06-23.jsonl").write_text(
+        json.dumps({"post_sell_id": "p1"}, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+    (post_sell_dir / "post_sell_evaluations_2026-06-23.jsonl").write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "post_sell_id": "p1",
+                        "stock_code": "000003",
+                        "stock_name": "C",
+                        "sell_time": "09:20:00",
+                        "profit_rate": "1.5",
+                        "exit_rule": "scalp_trailing_take_profit",
+                        "outcome": "MISSED_UPSIDE",
+                        "metrics_10m": {"mfe_pct": "3.2", "mfe_vs_buy_pct": "4.4"},
+                        "ai_score_at_exit": "71",
+                    },
+                    ensure_ascii=False,
+                ),
+                json.dumps(
+                    {
+                        "post_sell_id": "p2",
+                        "stock_code": "000004",
+                        "stock_name": "D",
+                        "sell_time": "09:25:00",
+                        "profit_rate": "-2.1",
+                        "exit_rule": "scalp_soft_stop_pct",
+                        "outcome": "GOOD_EXIT",
+                        "metrics_10m": {"mfe_pct": "0.1", "mfe_vs_buy_pct": "-1.0"},
+                        "ai_score_at_exit": "55",
+                    },
+                    ensure_ascii=False,
+                ),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    report = build_report(
+        target_date="2026-06-23",
+        pipeline_path=path,
+        post_sell_dir=post_sell_dir,
+        generated_at="fixed",
+    )
+
+    assert report["entry_price_execution"]["block_or_unfilled_count"] == 1
+    assert report["entry_price_execution"]["recent_issues"][0]["price_below_bid_bps"] == 95.0
+    assert report["scale_in_diagnostics"]["blocked_count"] == 1
+    assert report["scale_in_diagnostics"]["blocker_reason_counts"][0] == {
+        "reason": "scalping_buy_window_blocked",
+        "count": 1,
+    }
+    post_sell = report["post_sell_flow_diagnostics"]
+    assert post_sell["candidate_count"] == 1
+    assert post_sell["evaluated_count"] == 2
+    assert post_sell["missed_upside_count"] == 1
+    assert post_sell["bad_entry_after_sell_count"] == 1
+    assert post_sell["top_missed_upside"][0]["flow"] == "take_profit_flow"
+    assert post_sell["bad_entry_examples"][0]["stock_code"] == "000004"
