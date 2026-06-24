@@ -406,6 +406,68 @@ def test_pending_order_quote_stale_remains_retryable(monkeypatch):
     assert "entry_reprice_evaluated" not in stock["pending_entry_orders"][0]
 
 
+def test_pending_order_refreshes_stale_observer_quote_from_ws(monkeypatch):
+    import src.engine.sniper_state_handlers as handlers
+
+    now = 1000.0
+    stock = {
+        "name": "테스트",
+        "strategy": "SCALPING",
+        "latest_price": 39900,
+        "pending_entry_orders": [{**_base_order(sent_at=now - 16.0), "tif": "DAY"}],
+    }
+    events = []
+    calls = {"cancel": 0, "buy": 0}
+
+    class FakeWsManager:
+        @staticmethod
+        def get_latest_data(code):
+            return {
+                "curr": 39900,
+                "best_bid": 39855,
+                "best_ask": 39915,
+                "last_ws_update_ts": now - 0.12,
+                "orderbook": {
+                    "asks": [{"price": 39915}],
+                    "bids": [{"price": 39855}],
+                },
+            }
+
+    monkeypatch.setattr(handlers.time, "time", lambda: now)
+    monkeypatch.setattr(handlers, "WS_MANAGER", FakeWsManager())
+    monkeypatch.setattr(
+        handlers.ORDERBOOK_STABILITY_OBSERVER,
+        "snapshot",
+        lambda code, now=None: {
+            "best_bid": 39855,
+            "best_ask": 39915,
+            "observer_healthy": True,
+            "observer_missing_reason": "ok",
+            "unstable_quote_observed": False,
+            "observer_last_quote_age_ms": 4300.0,
+            "orderbook_micro": {"micro_state": "neutral"},
+        },
+    )
+    monkeypatch.setattr(handlers, "_log_entry_pipeline", lambda stock, code, stage, **fields: events.append((stage, fields)))
+    monkeypatch.setattr(
+        handlers.kiwoom_orders,
+        "send_cancel_order",
+        lambda **kwargs: calls.__setitem__("cancel", calls["cancel"] + 1) or {"return_code": "0", "ord_no": "0033622"},
+    )
+    monkeypatch.setattr(
+        handlers.kiwoom_orders,
+        "send_buy_order",
+        lambda *args, **kwargs: calls.__setitem__("buy", calls["buy"] + 1) or {"return_code": "0", "ord_no": "0034000"},
+    )
+
+    assert handlers._maybe_reprice_pending_entry_order(stock, "466920", "SCALPING", timeout_sec=60) == "submitted"
+    assert calls == {"cancel": 1, "buy": 1}
+    evaluated = [fields for stage, fields in events if stage == "entry_reprice_after_submit_evaluated"][0]
+    assert evaluated["entry_reprice_quote_refresh_applied"] is True
+    assert evaluated["entry_reprice_quote_refresh_source"] == "ws_manager_latest_data"
+    assert float(evaluated["quote_age_ms"]) == 120.0
+
+
 def test_pending_order_multi_leg_blocks_without_cancel(monkeypatch):
     import src.engine.sniper_state_handlers as handlers
 

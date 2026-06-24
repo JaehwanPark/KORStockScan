@@ -21194,6 +21194,101 @@ def _entry_reprice_latency_state_from_snapshot(snapshot: dict) -> str:
     return "SAFE"
 
 
+def _entry_reprice_quote_refresh_log_fields(ws_fields: dict | None, rest_fields: dict | None) -> dict:
+    ws_fields = ws_fields or {}
+    rest_fields = rest_fields or {}
+    applied_source = "none"
+    applied_age_ms = None
+    applied_bid = 0
+    applied_ask = 0
+    applied_price = 0
+    reason = str(ws_fields.get("pre_submit_ws_snapshot_refresh_reason") or "not_attempted")
+    if bool(ws_fields.get("pre_submit_ws_snapshot_refresh_applied")):
+        applied_source = "ws_manager_latest_data"
+        applied_age_ms = ws_fields.get("pre_submit_ws_snapshot_refresh_age_ms")
+        applied_bid = _coerce_int_value(ws_fields.get("pre_submit_ws_snapshot_refresh_best_bid"))
+        applied_ask = _coerce_int_value(ws_fields.get("pre_submit_ws_snapshot_refresh_best_ask"))
+        applied_price = _coerce_int_value(ws_fields.get("pre_submit_ws_snapshot_refresh_latest_price"))
+        reason = "latest_ws_snapshot_fresh"
+    elif bool(rest_fields.get("pre_submit_rest_orderbook_refresh_applied")):
+        applied_source = "ka10004_rest_orderbook"
+        applied_age_ms = rest_fields.get("pre_submit_rest_orderbook_refresh_age_ms")
+        applied_bid = _coerce_int_value(rest_fields.get("pre_submit_rest_orderbook_refresh_best_bid"))
+        applied_ask = _coerce_int_value(rest_fields.get("pre_submit_rest_orderbook_refresh_best_ask"))
+        applied_price = _coerce_int_value(rest_fields.get("pre_submit_rest_orderbook_refresh_latest_price"))
+        reason = "rest_orderbook_fresh"
+    elif rest_fields:
+        reason = str(rest_fields.get("pre_submit_rest_orderbook_refresh_reason") or reason)
+
+    return {
+        "entry_reprice_quote_refresh_enabled": bool(
+            ws_fields.get("pre_submit_ws_snapshot_refresh_enabled")
+            or rest_fields.get("pre_submit_rest_orderbook_refresh_enabled")
+        ),
+        "entry_reprice_quote_refresh_applied": applied_source != "none",
+        "entry_reprice_quote_refresh_source": applied_source,
+        "entry_reprice_quote_refresh_reason": reason,
+        "entry_reprice_quote_refresh_age_ms": applied_age_ms,
+        "entry_reprice_quote_refresh_best_bid": applied_bid,
+        "entry_reprice_quote_refresh_best_ask": applied_ask,
+        "entry_reprice_quote_refresh_latest_price": applied_price,
+    }
+
+
+def _entry_reprice_refresh_snapshot(code: str, snapshot: dict, stock: dict, order: dict, strategy: str, now_ts: float) -> tuple[dict, dict]:
+    """Refresh reprice quote input without relaxing the downstream safety gate."""
+    base_snapshot = dict(snapshot or {})
+    best_bid = _coerce_int_value(base_snapshot.get("best_bid"))
+    best_ask = _coerce_int_value(base_snapshot.get("best_ask"))
+    current_price = _coerce_int_value(
+        base_snapshot.get("last_trade_price")
+        or stock.get("latest_price")
+        or order.get("latest_price_at_submit")
+        or best_bid
+        or best_ask
+    )
+    quote_age_ms = base_snapshot.get("observer_last_quote_age_ms")
+    quote_age_float = _safe_float(quote_age_ms, -1.0)
+    last_ws_update_ts = now_ts - (quote_age_float / 1000.0) if quote_age_float >= 0 else 0.0
+    ws_data = {
+        "curr": current_price,
+        "best_bid": best_bid,
+        "best_ask": best_ask,
+        "last_ws_update_ts": last_ws_update_ts,
+        "orderbook": {
+            "asks": [{"price": best_ask}] if best_ask > 0 else [],
+            "bids": [{"price": best_bid}] if best_bid > 0 else [],
+        },
+    }
+    refreshed_ws, ws_fields = _pre_submit_refresh_real_ws_snapshot(code, ws_data, strategy)
+    refreshed_data = refreshed_ws
+    rest_fields = {}
+    if not bool(ws_fields.get("pre_submit_ws_snapshot_refresh_applied")):
+        refreshed_data, rest_fields = _pre_submit_refresh_rest_orderbook_snapshot(code, refreshed_ws, strategy)
+
+    fields = _entry_reprice_quote_refresh_log_fields(ws_fields, rest_fields)
+    if not bool(fields.get("entry_reprice_quote_refresh_applied")):
+        return base_snapshot, fields
+
+    refreshed_best_ask, refreshed_best_bid = _get_best_levels_from_ws(refreshed_data)
+    refreshed_price = _safe_int(refreshed_data.get("curr"), 0)
+    refreshed_age_ms = fields.get("entry_reprice_quote_refresh_age_ms")
+    refreshed_snapshot = dict(base_snapshot)
+    refreshed_snapshot.update(
+        {
+            "best_bid": refreshed_best_bid,
+            "best_ask": refreshed_best_ask,
+            "last_trade_price": refreshed_price,
+            "observer_healthy": True,
+            "observer_missing_reason": "ok",
+            "unstable_quote_observed": False,
+            "observer_last_quote_age_ms": refreshed_age_ms,
+            "entry_reprice_quote_refresh_source": fields.get("entry_reprice_quote_refresh_source"),
+        }
+    )
+    return refreshed_snapshot, fields
+
+
 def _reset_entry_reprice_after_failed_resubmit(stock, code):
     _mutate_stock_state(
         stock,
@@ -21263,6 +21358,7 @@ def _maybe_reprice_pending_entry_order(stock, code, strategy, *, timeout_sec=Non
     snapshot = ORDERBOOK_STABILITY_OBSERVER.snapshot(code, now=now_ts)
     if not isinstance(snapshot, dict):
         snapshot = {}
+    snapshot, quote_refresh_fields = _entry_reprice_refresh_snapshot(code, snapshot, stock, order, strategy, now_ts)
     best_bid = _coerce_int_value(snapshot.get("best_bid"))
     best_ask = _coerce_int_value(snapshot.get("best_ask"))
     current_price = _coerce_int_value(
@@ -21296,6 +21392,7 @@ def _maybe_reprice_pending_entry_order(stock, code, strategy, *, timeout_sec=Non
     )
     evaluated_fields = {
         **decision.as_log_fields(),
+        **quote_refresh_fields,
         "actual_order_submitted": False,
         "broker_order_forbidden": False,
         "runtime_effect": False,
