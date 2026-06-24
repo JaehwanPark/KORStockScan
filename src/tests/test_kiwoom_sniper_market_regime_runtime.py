@@ -1346,7 +1346,9 @@ def test_scanner_rising_full_eval_relief_defaults_off_and_uses_env(monkeypatch):
 
 
 def test_scalping_fifo_max_active_env(monkeypatch):
+    kiwoom_sniper_v2._reset_scalping_dynamic_watch_cap_state()
     monkeypatch.delenv("KORSTOCKSCAN_SCALPING_WATCHING_MAX_ACTIVE", raising=False)
+    monkeypatch.delenv("KORSTOCKSCAN_SCALPING_WATCHING_DYNAMIC_CAP_ENABLED", raising=False)
     assert kiwoom_sniper_v2._scalping_fifo_max_active() == 24
 
     monkeypatch.setenv("KORSTOCKSCAN_SCALPING_WATCHING_MAX_ACTIVE", "12")
@@ -1354,6 +1356,54 @@ def test_scalping_fifo_max_active_env(monkeypatch):
 
     monkeypatch.setenv("KORSTOCKSCAN_SCALPING_WATCHING_MAX_ACTIVE", "0")
     assert kiwoom_sniper_v2._scalping_fifo_max_active() == 1
+    kiwoom_sniper_v2._reset_scalping_dynamic_watch_cap_state()
+
+
+def test_scalping_dynamic_watch_cap_reduces_without_restart(monkeypatch):
+    kiwoom_sniper_v2._reset_scalping_dynamic_watch_cap_state()
+    monkeypatch.setenv("KORSTOCKSCAN_SCALPING_WATCHING_MAX_ACTIVE", "24")
+    monkeypatch.setenv("KORSTOCKSCAN_SCALPING_WATCHING_DYNAMIC_CAP_ENABLED", "true")
+    monkeypatch.setenv("KORSTOCKSCAN_SCALPING_WATCHING_DYNAMIC_MIN_ACTIVE", "18")
+    monkeypatch.setenv("KORSTOCKSCAN_SCALPING_WATCHING_DYNAMIC_PRESSURE_MS", "12000")
+    monkeypatch.setenv("KORSTOCKSCAN_SCALPING_WATCHING_DYNAMIC_COOLDOWN_SEC", "0")
+
+    effective = kiwoom_sniper_v2._update_scalping_dynamic_watch_cap(
+        19000.0,
+        now_ts=1000.0,
+        buy_time_allowed=True,
+    )
+
+    assert effective == 22
+    assert kiwoom_sniper_v2._scalping_fifo_max_active() == 22
+    kiwoom_sniper_v2._reset_scalping_dynamic_watch_cap_state()
+
+
+def test_scalping_dynamic_watch_cap_recovers_gradually(monkeypatch):
+    kiwoom_sniper_v2._reset_scalping_dynamic_watch_cap_state()
+    monkeypatch.setenv("KORSTOCKSCAN_SCALPING_WATCHING_MAX_ACTIVE", "24")
+    monkeypatch.setenv("KORSTOCKSCAN_SCALPING_WATCHING_DYNAMIC_CAP_ENABLED", "true")
+    monkeypatch.setenv("KORSTOCKSCAN_SCALPING_WATCHING_DYNAMIC_MIN_ACTIVE", "18")
+    monkeypatch.setenv("KORSTOCKSCAN_SCALPING_WATCHING_DYNAMIC_PRESSURE_MS", "12000")
+    monkeypatch.setenv("KORSTOCKSCAN_SCALPING_WATCHING_DYNAMIC_RELIEF_MS", "7000")
+    monkeypatch.setenv("KORSTOCKSCAN_SCALPING_WATCHING_DYNAMIC_COOLDOWN_SEC", "0")
+    monkeypatch.setenv("KORSTOCKSCAN_SCALPING_WATCHING_DYNAMIC_RECOVERY_STREAK", "3")
+
+    assert kiwoom_sniper_v2._update_scalping_dynamic_watch_cap(19000.0, now_ts=1000.0, buy_time_allowed=True) == 22
+    assert kiwoom_sniper_v2._update_scalping_dynamic_watch_cap(6000.0, now_ts=1001.0, buy_time_allowed=True) == 22
+    assert kiwoom_sniper_v2._update_scalping_dynamic_watch_cap(6000.0, now_ts=1002.0, buy_time_allowed=True) == 22
+    assert kiwoom_sniper_v2._update_scalping_dynamic_watch_cap(6000.0, now_ts=1003.0, buy_time_allowed=True) == 23
+
+    kiwoom_sniper_v2._reset_scalping_dynamic_watch_cap_state()
+
+
+def test_scalping_dynamic_watch_cap_disabled_keeps_base(monkeypatch):
+    kiwoom_sniper_v2._reset_scalping_dynamic_watch_cap_state()
+    monkeypatch.setenv("KORSTOCKSCAN_SCALPING_WATCHING_MAX_ACTIVE", "24")
+    monkeypatch.setenv("KORSTOCKSCAN_SCALPING_WATCHING_DYNAMIC_CAP_ENABLED", "false")
+
+    assert kiwoom_sniper_v2._update_scalping_dynamic_watch_cap(30000.0, now_ts=1000.0, buy_time_allowed=True) == 24
+    assert kiwoom_sniper_v2._scalping_fifo_max_active() == 24
+    kiwoom_sniper_v2._reset_scalping_dynamic_watch_cap_state()
 
 
 def test_initial_ws_registration_groups_caps_scanner_hot_tier(monkeypatch):

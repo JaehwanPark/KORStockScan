@@ -225,6 +225,12 @@ _SCANNER_REST_QUOTE_FALLBACK_FAILURE_COOLDOWN_SEC = 30.0
 _SCANNER_REST_QUOTE_FALLBACK_STATE = {"call_epochs": [], "cooldown_until": 0.0}
 _SCANNER_REST_QUOTE_FALLBACK_LOCK = threading.Lock()
 _SCANNER_REST_QUOTE_FALLBACK_DEFER_SEC = 5.0
+_SCALPING_DYNAMIC_WATCH_CAP_STATE = {
+    "effective_cap": None,
+    "last_adjust_ts": 0.0,
+    "pressure_streak": 0,
+    "relief_streak": 0,
+}
 SCANNER_WATCH_EVICTION_POLICY_VERSION = "scalping_scanner_watch_eviction_v4"
 SCANNER_WATCH_EVICTION_TERMINAL_MIN_COUNT = 2
 SCANNER_WATCH_EVICTION_PREFILTER_HARDGATE_STAGES = {
@@ -2147,13 +2153,133 @@ def _scalping_fifo_candidates(watching_stocks, now_ts):
     )
 
 
-def _scalping_fifo_max_active():
+def _scalping_fifo_base_max_active():
     raw = os.getenv("KORSTOCKSCAN_SCALPING_WATCHING_MAX_ACTIVE", "")
     try:
         value = int(str(raw).strip()) if str(raw).strip() else 24
     except Exception:
         value = 24
     return max(1, min(value, 80))
+
+
+def _scalping_dynamic_watch_cap_enabled():
+    return _env_bool("KORSTOCKSCAN_SCALPING_WATCHING_DYNAMIC_CAP_ENABLED", True)
+
+
+def _scalping_dynamic_watch_cap_min(base_cap):
+    raw = os.getenv("KORSTOCKSCAN_SCALPING_WATCHING_DYNAMIC_MIN_ACTIVE", "16")
+    value = _safe_int(raw, 16)
+    return max(1, min(base_cap, value))
+
+
+def _scalping_dynamic_watch_cap_pressure_ms():
+    return max(1000.0, _safe_float(os.getenv("KORSTOCKSCAN_SCALPING_WATCHING_DYNAMIC_PRESSURE_MS", "12000"), 12000.0))
+
+
+def _scalping_dynamic_watch_cap_relief_ms():
+    return max(1000.0, _safe_float(os.getenv("KORSTOCKSCAN_SCALPING_WATCHING_DYNAMIC_RELIEF_MS", "7000"), 7000.0))
+
+
+def _scalping_dynamic_watch_cap_cooldown_sec():
+    return max(0.0, _safe_float(os.getenv("KORSTOCKSCAN_SCALPING_WATCHING_DYNAMIC_COOLDOWN_SEC", "60"), 60.0))
+
+
+def _scalping_dynamic_watch_cap_recovery_streak():
+    return max(1, _safe_int(os.getenv("KORSTOCKSCAN_SCALPING_WATCHING_DYNAMIC_RECOVERY_STREAK", "3"), 3))
+
+
+def _scalping_dynamic_watch_cap_step(loop_elapsed_ms, pressure_ms):
+    if loop_elapsed_ms >= pressure_ms * 2.0:
+        return 3
+    if loop_elapsed_ms >= pressure_ms * 1.5:
+        return 2
+    return 1
+
+
+def _reset_scalping_dynamic_watch_cap_state():
+    _SCALPING_DYNAMIC_WATCH_CAP_STATE.update(
+        {
+            "effective_cap": None,
+            "last_adjust_ts": 0.0,
+            "pressure_streak": 0,
+            "relief_streak": 0,
+        }
+    )
+
+
+def _scalping_dynamic_watch_cap_effective(base_cap):
+    if not _scalping_dynamic_watch_cap_enabled():
+        return base_cap
+    effective_cap = _safe_int(_SCALPING_DYNAMIC_WATCH_CAP_STATE.get("effective_cap"), 0)
+    if effective_cap <= 0:
+        return base_cap
+    return max(1, min(base_cap, effective_cap))
+
+
+def _scalping_fifo_max_active():
+    base_cap = _scalping_fifo_base_max_active()
+    return _scalping_dynamic_watch_cap_effective(base_cap)
+
+
+def _update_scalping_dynamic_watch_cap(loop_elapsed_ms, *, now_ts=None, buy_time_allowed=True):
+    if not _scalping_dynamic_watch_cap_enabled():
+        return _scalping_fifo_base_max_active()
+
+    base_cap = _scalping_fifo_base_max_active()
+    if not buy_time_allowed:
+        _SCALPING_DYNAMIC_WATCH_CAP_STATE["pressure_streak"] = 0
+        _SCALPING_DYNAMIC_WATCH_CAP_STATE["relief_streak"] = 0
+        return _scalping_dynamic_watch_cap_effective(base_cap)
+
+    now_ts = time.time() if now_ts is None else now_ts
+    pressure_ms = _scalping_dynamic_watch_cap_pressure_ms()
+    relief_ms = min(_scalping_dynamic_watch_cap_relief_ms(), pressure_ms)
+    cooldown_sec = _scalping_dynamic_watch_cap_cooldown_sec()
+    current_cap = _scalping_dynamic_watch_cap_effective(base_cap)
+    min_cap = _scalping_dynamic_watch_cap_min(base_cap)
+    last_adjust_ts = _safe_float(_SCALPING_DYNAMIC_WATCH_CAP_STATE.get("last_adjust_ts"), 0.0)
+    can_adjust = (now_ts - last_adjust_ts) >= cooldown_sec
+
+    if loop_elapsed_ms >= pressure_ms:
+        _SCALPING_DYNAMIC_WATCH_CAP_STATE["pressure_streak"] = (
+            _safe_int(_SCALPING_DYNAMIC_WATCH_CAP_STATE.get("pressure_streak"), 0) + 1
+        )
+        _SCALPING_DYNAMIC_WATCH_CAP_STATE["relief_streak"] = 0
+        if can_adjust and current_cap > min_cap:
+            next_cap = max(min_cap, current_cap - _scalping_dynamic_watch_cap_step(loop_elapsed_ms, pressure_ms))
+            if next_cap != current_cap:
+                _SCALPING_DYNAMIC_WATCH_CAP_STATE["effective_cap"] = next_cap
+                _SCALPING_DYNAMIC_WATCH_CAP_STATE["last_adjust_ts"] = now_ts
+                log_info(
+                    f"[SCALPING_DYNAMIC_WATCH_CAP] action=reduce "
+                    f"loop_elapsed_ms={loop_elapsed_ms:.1f} "
+                    f"base_cap={base_cap} effective_cap={next_cap} min_cap={min_cap}"
+                )
+            return _scalping_dynamic_watch_cap_effective(base_cap)
+        return current_cap
+
+    if loop_elapsed_ms <= relief_ms:
+        _SCALPING_DYNAMIC_WATCH_CAP_STATE["pressure_streak"] = 0
+        _SCALPING_DYNAMIC_WATCH_CAP_STATE["relief_streak"] = (
+            _safe_int(_SCALPING_DYNAMIC_WATCH_CAP_STATE.get("relief_streak"), 0) + 1
+        )
+        relief_streak = _safe_int(_SCALPING_DYNAMIC_WATCH_CAP_STATE.get("relief_streak"), 0)
+        if can_adjust and current_cap < base_cap and relief_streak >= _scalping_dynamic_watch_cap_recovery_streak():
+            next_cap = min(base_cap, current_cap + 1)
+            _SCALPING_DYNAMIC_WATCH_CAP_STATE["effective_cap"] = None if next_cap >= base_cap else next_cap
+            _SCALPING_DYNAMIC_WATCH_CAP_STATE["last_adjust_ts"] = now_ts
+            _SCALPING_DYNAMIC_WATCH_CAP_STATE["relief_streak"] = 0
+            log_info(
+                f"[SCALPING_DYNAMIC_WATCH_CAP] action=recover "
+                f"loop_elapsed_ms={loop_elapsed_ms:.1f} "
+                f"base_cap={base_cap} effective_cap={next_cap}"
+            )
+            return _scalping_dynamic_watch_cap_effective(base_cap)
+        return current_cap
+
+    _SCALPING_DYNAMIC_WATCH_CAP_STATE["pressure_streak"] = 0
+    _SCALPING_DYNAMIC_WATCH_CAP_STATE["relief_streak"] = 0
+    return current_cap
 
 
 def _scalping_fifo_overflow_candidates(scalp_fifo_targets, now_ts):
@@ -4865,6 +4991,11 @@ def run_sniper(is_test_mode=False):
             _target_count = len(targets)
             _watching_count = len([t for t in targets if t.get('status') == 'WATCHING'])
             _holding_count = len([t for t in targets if t.get('status') == 'HOLDING'])
+            _update_scalping_dynamic_watch_cap(
+                _loop_elapsed_ms,
+                now_ts=now_ts,
+                buy_time_allowed=is_scalping_buy_time_allowed(now),
+            )
             global _LOOP_METRICS_LAST_LOG_TS
             if now_ts - _LOOP_METRICS_LAST_LOG_TS >= 60:
                 log_info(
