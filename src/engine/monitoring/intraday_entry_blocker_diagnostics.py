@@ -28,6 +28,18 @@ BLOCKER_STAGES = {
     "scalping_scanner_watching_runtime_skip",
 }
 
+RECOVERY_OBSERVATION_REASONS = {
+    "scanner_fast_precheck_subscription_recheck_snapshot_applied",
+    "scanner_fast_precheck_stale_ws_recovered",
+    "ws_snapshot_missing_or_zero_recovered",
+}
+
+BUY_WINDOW_PAUSE_REASONS = {
+    "before_strategy_start",
+    "outside_scalping_buy_window",
+    "scalping_new_buy_cutoff",
+}
+
 QUEUE_STAGES = {
     "scalping_scanner_fast_precheck",
     "scalping_scanner_heavy_eval_lag",
@@ -294,8 +306,14 @@ def _zero_strength_history_source_quality(rows: list[dict[str, Any]]) -> dict[st
     }
 
 
+def _is_blocker_row(row: dict[str, Any]) -> bool:
+    if row.get("stage") not in BLOCKER_STAGES:
+        return False
+    return _blocker_reason(row) not in RECOVERY_OBSERVATION_REASONS | BUY_WINDOW_PAUSE_REASONS
+
+
 def _dominant_blocker(rows: list[dict[str, Any]]) -> dict[str, Any]:
-    blocker_rows = [row for row in rows if row.get("stage") in BLOCKER_STAGES]
+    blocker_rows = [row for row in rows if _is_blocker_row(row)]
     if not blocker_rows:
         return {"stage": "", "reason": "", "count": 0}
     counts = Counter((row.get("stage") or "", _blocker_reason(row)) for row in blocker_rows)
@@ -305,7 +323,7 @@ def _dominant_blocker(rows: list[dict[str, Any]]) -> dict[str, Any]:
 
 def _latest_blocker(rows: list[dict[str, Any]]) -> dict[str, Any]:
     for row in reversed(rows):
-        if row.get("stage") in BLOCKER_STAGES:
+        if _is_blocker_row(row):
             return {
                 "emitted_at": _event_time(row),
                 "stage": row.get("stage") or "",
@@ -564,7 +582,7 @@ def _summarize_code(
     real_submit_rows = [
         row for row in rows if str(_field(row, "actual_order_submitted")).lower() == REAL_SUBMIT_TRUE
     ]
-    blocker_rows = [row for row in rows if row.get("stage") in BLOCKER_STAGES]
+    blocker_rows = [row for row in rows if _is_blocker_row(row)]
     queue_counts = {stage: stage_counts.get(stage, 0) for stage in QUEUE_STAGES if stage_counts.get(stage, 0)}
     latest_ai = ai_rows[-1] if ai_rows else {}
     return {

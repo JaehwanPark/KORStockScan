@@ -145,6 +145,54 @@ def test_build_report_splits_low_ai_pressure_by_eval_freshness(tmp_path):
     assert report["rising_missed_buy"][0]["low_ai_or_negative_pressure_eval_quality"] == expected
 
 
+def test_build_report_excludes_recovery_observations_from_blockers(tmp_path):
+    path = tmp_path / "pipeline_events_2026-06-23.jsonl"
+    rows = [
+        _event("000001", "A", "scalping_scanner_candidate_promoted", {"price_delta_since_first_seen_pct": "1.20"}),
+        _event(
+            "000001",
+            "A",
+            "scalping_scanner_watching_runtime_skip",
+            {
+                "price_delta_since_first_seen_pct": "1.20",
+                "skip_reason": "scanner_fast_precheck_subscription_recheck_snapshot_applied",
+                "ws_strength_history_count": "0",
+            },
+        ),
+        _event(
+            "000001",
+            "A",
+            "scalping_scanner_watching_runtime_skip",
+            {
+                "price_delta_since_first_seen_pct": "1.20",
+                "skip_reason": "before_strategy_start",
+            },
+        ),
+        _event(
+            "000001",
+            "A",
+            "blocked_strength_momentum",
+            {
+                "price_delta_since_first_seen_pct": "1.20",
+                "reason": "below_strength_base",
+                "ws_strength_history_count": "12",
+            },
+        ),
+    ]
+    path.write_text("\n".join(json.dumps(row, ensure_ascii=False) for row in rows), encoding="utf-8")
+
+    report = build_report(target_date="2026-06-23", pipeline_path=path, generated_at="fixed")
+
+    item = report["rising_missed_buy"][0]
+    assert item["blocker_count"] == 1
+    assert item["dominant_blocker"] == {
+        "stage": "blocked_strength_momentum",
+        "reason": "below_strength_base",
+        "count": 1,
+    }
+    assert item["latest_blocker"]["reason"] == "below_strength_base"
+
+
 def test_build_report_surfaces_repeated_zero_strength_history_workorder(tmp_path):
     path = tmp_path / "pipeline_events_2026-06-23.jsonl"
     rows = [
