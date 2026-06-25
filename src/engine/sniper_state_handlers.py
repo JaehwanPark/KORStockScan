@@ -26235,8 +26235,8 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                             "runtime_threshold_apply/provider_route_change/bot_restart/"
                             "sizing_formula_runtime_apply_without_guard"
                         ),
-                        actual_order_submitted=True,
-                        broker_order_forbidden=False,
+                        actual_order_submitted=False,
+                        broker_order_forbidden=True,
                         source_stage="sell_order_sent",
                         guard_family="same_symbol_loss_reentry_guard",
                         exit_rule=exit_rule or stock.get("last_exit_rule") or "-",

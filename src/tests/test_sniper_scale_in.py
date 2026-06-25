@@ -12002,6 +12002,69 @@ def test_scalp_same_symbol_loss_reentry_guard_hydrates_from_pipeline_events(tmp_
         state_handlers.TRADING_RULES = original_rules
 
 
+def test_same_symbol_loss_reentry_cooldown_marker_is_not_order_submit(monkeypatch):
+    state_handlers.TRADING_RULES = replace(
+        CONFIG,
+        SCALE_IN_REQUIRE_HISTORY_TABLE=False,
+        SCALP_SAME_SYMBOL_LOSS_REENTRY_COOLDOWN_ENABLED=True,
+        SCALP_SAME_SYMBOL_LOSS_REENTRY_COOLDOWN_SEC=3600,
+    )
+    state_handlers.COOLDOWNS = {}
+    state_handlers.ALERTED_STOCKS = set()
+    state_handlers.HIGHEST_PRICES = {"123456": 10_000}
+    state_handlers.LAST_AI_CALL_TIMES = {}
+    state_handlers.LAST_LOG_TIMES = {}
+    state_handlers.DB = _DummyDB()
+    state_handlers.KIWOOM_TOKEN = "token"
+
+    entry_logs = []
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_entry_pipeline",
+        lambda stock, code, stage, **fields: entry_logs.append((stage, fields)),
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "can_consider_scale_in",
+        lambda *args, **kwargs: {"allowed": False, "reason": "test_no_add"},
+    )
+    monkeypatch.setattr(
+        state_handlers.kiwoom_orders,
+        "send_smart_sell_order",
+        lambda **kwargs: {"return_code": "0", "ord_no": "SLOSS"},
+    )
+
+    stock = {
+        "id": 1,
+        "code": "123456",
+        "name": "TEST",
+        "status": "HOLDING",
+        "strategy": "SCALPING",
+        "buy_price": 10_000,
+        "buy_qty": 1,
+        "rt_ai_prob": 0.50,
+    }
+
+    state_handlers.handle_holding_state(
+        stock=stock,
+        code="123456",
+        ws_data={"curr": 9_400, "orderbook": {"bids": [{"price": 9_400, "volume": 100}]}},
+        admin_id=1,
+        market_regime="BULL",
+        now_ts=1_000.0,
+        now_dt=datetime(2026, 6, 26, 8, 25, 0),
+        radar=None,
+        ai_engine=None,
+    )
+
+    cooldown_logs = [
+        fields for stage, fields in entry_logs if stage == "same_symbol_loss_reentry_cooldown"
+    ]
+    assert cooldown_logs
+    assert cooldown_logs[-1]["actual_order_submitted"] is False
+    assert cooldown_logs[-1]["broker_order_forbidden"] is True
+
+
 def test_scalp_profit_stagnation_time_exit_triggers_for_real_position(monkeypatch):
     state_handlers.TRADING_RULES = replace(
         CONFIG,
