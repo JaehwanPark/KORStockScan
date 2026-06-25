@@ -45,62 +45,89 @@
 
 ## 장중 체크리스트 (09:05~15:20)
 
-- [ ] `[RuntimeEnvIntradayObserve0625] 전일 selected runtime family 장중 provenance 및 rollback guard 확인` (`Due: 2026-06-25`, `Slot: INTRADAY`, `TimeWindow: 09:05~09:20`, `Track: RuntimeStability`)
+- [x] `[RuntimeEnvIntradayObserve0625] 전일 selected runtime family 장중 provenance 및 rollback guard 확인` (`Due: 2026-06-25`, `Slot: INTRADAY`, `TimeWindow: 09:05~09:20`, `Track: RuntimeStability`)
   - Source: [threshold_cycle_ev_2026-06-24.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-06-24.json), [threshold_apply_2026-06-25.json](/home/ubuntu/KORStockScan/data/threshold_cycle/apply_plans/threshold_apply_2026-06-25.json), [threshold_runtime_env_2026-06-25.json](/home/ubuntu/KORStockScan/data/threshold_cycle/runtime_env/threshold_runtime_env_2026-06-25.json), [threshold_runtime_env_verify_2026-06-25.json](/home/ubuntu/KORStockScan/data/threshold_cycle/runtime_env/threshold_runtime_env_verify_2026-06-25.json)
   - 판정 기준: selected_families=soft_stop_whipsaw_confirmation, score65_74_recovery_probe, scalping_scanner_real_source_guard_runtime, score65_74_recovery_probe_strong_micro_override_runtime, entry_price_gap_profile_runtime, profit_stagnation_exit_runtime, latency_spread_relief_real_operator_override, scalp_sim_candidate_window_expansion, scalp_sim_ai_budget_manager, ai_watching_score_smoothing_report_only, weak_pullback_entry_block_runtime, early_accel_recheck_runtime, real_pyramid_scale_in_quality_guard_runtime, sell_side_open_time_block_runtime, pre_submit_liquidity_relief_runtime, weak_context_late_entry_guard_runtime, scalp_sim_auto_approval, lifecycle_bucket_discovery_sim_auto_approval, swing_sim_auto_approval, entry_cancel_wait_runtime가 runtime event provenance에 찍히는지 확인한다. 실제 PID env에서 operator override가 manifest 값을 덮어쓴 key는 별도 provenance로 분리한다.
   - 금지: 장중 관찰 결과로 runtime threshold mutation을 수행하지 않는다.
   - 운영 메모: 관측복구 전용 scanner REST fallback/WS repair/recheck freshness override는 hot reload 대상이다. source freshness 복구에만 사용하고 score/threshold, provider, 주문가, broker/quantity/stale-submit guard 변경 근거로 쓰지 않는다.
   - 다음 액션: provenance present/missing, rollback guard breach 여부를 분리 기록한다.
+  - 판정: `provenance_partial_current_pid_unavailable`
+  - 근거: [threshold_runtime_env_verify_2026-06-25.json](/home/ubuntu/KORStockScan/data/threshold_cycle/runtime_env/threshold_runtime_env_verify_2026-06-25.json)이 `status=pass`, `passed=true`, `missing_family_count=0`, `selected_families` 20개를 확인했다. 다만 20:19 KST 기준 `bot_main.py`/`run_bot.sh`/`tmux bot` 프로세스가 없어 현재 PID env 재확인은 불가하다. 장중 이전 관측에서는 최신 코드 재기동 전 PID가 manifest 일부를 구버전 env로 물고 있었으므로, 내일 재기동 후 PID env 재확인을 별도 운영 확인으로 분리한다.
+  - 다음 액션: 내일 재기동 직후 `KORSTOCKSCAN_EARLY_ACCEL_STRONG_BUNDLE_RECHECK_MAX_SCORE=74`, `KORSTOCKSCAN_PRE_SUBMIT_LIQUIDITY_RELIEF_ENABLED=true`, `KORSTOCKSCAN_SCALP_LATE_LOSS_AVG_DOWN_ENABLED` 값을 PID env에서 확인한다. 오늘 체크리스트 기준으로는 runtime threshold mutation 없이 관찰만 닫는다.
 
-- [ ] `[SimProbeIntradayCoverage0625] sim/probe 관찰축 actual_order_submitted=false 및 source-quality 확인` (`Due: 2026-06-25`, `Slot: INTRADAY`, `TimeWindow: 09:35~09:50`, `Track: ScalpingLogic`)
+- [x] `[SimProbeIntradayCoverage0625] sim/probe 관찰축 actual_order_submitted=false 및 source-quality 확인` (`Due: 2026-06-25`, `Slot: INTRADAY`, `TimeWindow: 09:35~09:50`, `Track: ScalpingLogic`)
   - Source: [threshold_cycle_ev_2026-06-24.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-06-24.json)
   - 판정 기준: sim/probe 표본이 real execution과 분리되고 `actual_order_submitted=false` provenance가 유지되는지 확인한다.
   - 금지: sim/probe EV를 broker execution 품질이나 실주문 전환 근거로 단독 사용하지 않는다.
   - 다음 액션: source-quality split, active state 복원, open/closed count를 같이 기록한다.
+  - 판정: `source_quality_split_preserved`
+  - 근거: [scalp_sim_auto_approval_2026-06-25.json](/home/ubuntu/KORStockScan/data/threshold_cycle/sim_auto_approvals/scalp_sim_auto_approval_2026-06-25.json)과 [scalp_sim_policy_catalog_2026-06-25.json](/home/ubuntu/KORStockScan/data/threshold_cycle/scalp_sim_policies/scalp_sim_policy_catalog_2026-06-25.json)이 모두 `runtime_effect=false`, `allowed_runtime_apply=false`, `actual_order_submitted=false`, `broker_order_forbidden=true`다. [scale_in_incremental_counterfactual_2026-06-25.json](/home/ubuntu/KORStockScan/data/report/scale_in_incremental_counterfactual/scale_in_incremental_counterfactual_2026-06-25.json)은 `counterfactual_event_count=4`, `filled_count=0`, `unfilled_count=4`, horizon complete sample `0`으로 실주문 authority와 분리된다.
+  - 다음 액션: sim/probe EV는 계속 source/provenance로만 사용하고, real execution 품질이나 실주문 전환 근거로 단독 사용하지 않는다.
 
-- [ ] `[IntradaySourceQualityGateCheck0625] 장중 raw source-quality 결손/unknown 조기 경보 및 튜닝 입력 차단 준비 확인` (`Due: 2026-06-25`, `Slot: INTRADAY`, `TimeWindow: 14:20~14:35`, `Track: RuntimeStability`)
+- [x] `[IntradaySourceQualityGateCheck0625] 장중 raw source-quality 결손/unknown 조기 경보 및 튜닝 입력 차단 준비 확인` (`Due: 2026-06-25`, `Slot: INTRADAY`, `TimeWindow: 14:20~14:35`, `Track: RuntimeStability`)
   - Source: [pipeline_events_2026-06-25.jsonl](/home/ubuntu/KORStockScan/data/pipeline_events/pipeline_events_2026-06-25.jsonl), [threshold_events_2026-06-25.jsonl](/home/ubuntu/KORStockScan/data/threshold_cycle/threshold_events_2026-06-25.jsonl), [observation_source_quality_audit_2026-06-25.json](/home/ubuntu/KORStockScan/data/report/observation_source_quality_audit/observation_source_quality_audit_2026-06-25.json), [observation_source_quality_audit.py](/home/ubuntu/KORStockScan/src/engine/observation_source_quality_audit.py)
   - 판정 기준: 장중 `PYTHONPATH=. .venv/bin/python -m src.engine.observation_source_quality_audit --target-date 2026-06-25 --write` 재감사를 실행하거나 최신 산출물을 확인해 `hard_blocking_contract_gap_count`, `hard_blocking_excluded_row_count`, `tuning_input_allowed`, `raw_row_exclusion_applied`, `unknown_token_stage_count`, `review_warning_count`를 기록한다.
   - 금지: hard contract gap 또는 unknown-token warning을 답변에만 남기지 않는다. 결손 row/window는 튜닝 입력 제외 또는 workorder handoff 대상으로 고정하고, broker/order/provider/cap/bot/threshold 변경 근거로 사용하지 않는다.
   - 다음 액션: `source_quality_clean_intraday`, `defective_rows_excluded`, `hard_block_requires_producer_fix`, `unknown_warning_workorder_required`, `audit_missing_or_stale` 중 하나로 닫는다. hard gap/unknown warning이 있으면 장후 `PostcloseSourceQualityGateReview`와 `CodeImprovementWorkorderReview`에서 누락 없이 재확인한다.
+  - 판정: `source_quality_clean_intraday`
+  - 근거: [observation_source_quality_audit_2026-06-25.json](/home/ubuntu/KORStockScan/data/report/observation_source_quality_audit/observation_source_quality_audit_2026-06-25.json)은 `status=pass`, `event_count=188307`, `hard_blocking_contract_gap_count=0`, `hard_blocking_excluded_row_count=0`, `unknown_token_stage_count=0`, `review_warning_count=0`, `tuning_input_allowed=true`, `raw_row_exclusion_applied=false`다.
+  - 다음 액션: source-quality hard block은 없으므로 EV/리포트 소비를 허용하되, postclose verifier의 누락 산출물은 별도 후속 항목에서 처리한다.
 
 ## 장후 체크리스트 (21:40~23:05)
 
-- [ ] `[PostcloseSourceQualityGateReview0625] 장후 source-quality gate 결과 및 튜닝 입력 허용/제외 확인` (`Due: 2026-06-25`, `Slot: POSTCLOSE`, `TimeWindow: 16:25~16:35`, `Track: RuntimeStability`)
+- [x] `[PostcloseSourceQualityGateReview0625] 장후 source-quality gate 결과 및 튜닝 입력 허용/제외 확인` (`Due: 2026-06-25`, `Slot: POSTCLOSE`, `TimeWindow: 16:25~16:35`, `Track: RuntimeStability`)
   - Source: [observation_source_quality_audit_2026-06-25.json](/home/ubuntu/KORStockScan/data/report/observation_source_quality_audit/observation_source_quality_audit_2026-06-25.json), [threshold_cycle_ev_2026-06-25.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-06-25.json), [code_improvement_workorder_2026-06-25.json](/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-06-25.json), [threshold_cycle_postclose_verification_2026-06-25.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_postclose_verification/threshold_cycle_postclose_verification_2026-06-25.json)
   - 판정 기준: postclose EV/report 소비 전후 `observation_source_quality_audit`의 hard block, row exclusion, clean baseline, unknown-token review warning을 확인한다. `hard_blocking_contract_gap_count>0`이면 결손 row/window 제외 또는 `source_quality_blocked` 산출 여부를 확인하고, `unknown_token_stage_count>0`이면 source-quality producer-fix workorder가 생성됐는지 확인한다.
   - 금지: source-quality preflight missing/stale, row exclusion 실패, hard block candidate 생성, unknown-token workorder handoff 누락을 정상 postclose 완료로 처리하지 않는다. sim/combined EV, live-auto promotion, runtime approval, LDM, threshold apply candidate에 결손 row/window가 섞이면 fail로 닫는다.
   - 다음 액션: `source_quality_gate_pass`, `defective_rows_excluded_and_ev_allowed`, `source_quality_blocked`, `unknown_warning_workorder_created`, `handoff_missing_fix_automation_first` 중 하나로 닫는다.
+  - 판정: `source_quality_gate_pass`
+  - 근거: [threshold_cycle_ev_2026-06-25.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-06-25.json)의 `source_quality_preflight_gate.status=pass`, `tuning_input_allowed=true`, `hard_blocking_contract_gap_count=0`이고, [observation_source_quality_audit_2026-06-25.json](/home/ubuntu/KORStockScan/data/report/observation_source_quality_audit/observation_source_quality_audit_2026-06-25.json)도 동일하게 pass다. [threshold_cycle_postclose_verification_2026-06-25.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_postclose_verification/threshold_cycle_postclose_verification_2026-06-25.json)은 생성됐지만 `status=fail`이며 원인은 source-quality가 아니라 `runtime_approval_summary`, `pattern_lab_currentness_audit`, `pattern_lab_propagation_audit`, `swing_daily_simulation`, `swing_lifecycle_audit`, `next_stage2_checklist` 누락이다.
+  - 다음 액션: source-quality gate는 통과로 닫고, postclose chain 누락 산출물은 `AutomationTriggerDecisionSummary0625`의 `source_missing_run_required` 후속으로 남긴다.
 
-- [ ] `[ThresholdDailyEVReport0625] daily EV real/sim/combined split 및 자동 반영 결과 확인` (`Due: 2026-06-25`, `Slot: POSTCLOSE`, `TimeWindow: 16:30~16:45`, `Track: RuntimeStability`)
+- [x] `[ThresholdDailyEVReport0625] daily EV real/sim/combined split 및 자동 반영 결과 확인` (`Due: 2026-06-25`, `Slot: POSTCLOSE`, `TimeWindow: 16:30~16:45`, `Track: RuntimeStability`)
   - Source: [threshold_cycle_ev_2026-06-24.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-06-24.json)
   - 판정 기준: threshold cycle EV를 보고 `live_auto_apply_ready`, `sim_auto_approved`, post-apply attribution, EV authority를 분리해 확인한다.
   - 금지: sim/combined EV만으로 broker execution 품질이나 live 전환을 확정하지 않는다.
   - 다음 액션: 다음 장전 apply 입력으로 쓸 수 있는 항목과 hold_sample/freeze 항목을 분리한다.
+  - 판정: `hold_sample`
+  - 근거: [threshold_cycle_ev_2026-06-25.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-06-25.json)은 `summary.status=warning`, `primary_verdict=hold_sample`, `real_sample=2`, `sim_sample=0`, `live_auto_ready_count=0`, `runtime_effect=false`다. `daily_ev_summary`는 completed `2`, win/loss `1/1`, `avg_profit_rate_pct=-1.35`, `realized_pnl_krw=-54146`이다. Entry funnel은 `SUBMIT_DROUGHT_CRITICAL`이며 selected handoff가 생성됐다.
+  - 다음 액션: 오늘 daily EV는 live-auto 적용 근거가 아니라 hold-sample/submit-drought 후속 분석 근거로만 사용한다.
 
-- [ ] `[HumanInterventionSummary0625] 자동화체인 사용자 개입 요구사항 분류 및 누락 확인` (`Due: 2026-06-25`, `Slot: POSTCLOSE`, `TimeWindow: 17:00~17:15`, `Track: RuntimeStability`)
+- [x] `[HumanInterventionSummary0625] 자동화체인 사용자 개입 요구사항 분류 및 누락 확인` (`Due: 2026-06-25`, `Slot: POSTCLOSE`, `TimeWindow: 17:00~17:15`, `Track: RuntimeStability`)
   - Source: [threshold_cycle_ev_2026-06-24.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-06-24.json), [time-based-operations-runbook.md](/home/ubuntu/KORStockScan/docs/time-based-operations-runbook.md)
   - 판정 기준: 개입사항을 `approval_artifact_required|created|missing|blocked_by_policy|observe_only`, `Codex 구현 필요`, `수동 동기화 필요`, `관찰만`으로 분류한다.
   - 금지: approval request만 보고 env 파일을 직접 수정하지 않고, 자동화 산출물에 있는 요청을 답변에만 남기고 checklist/Project 대상에서 누락하지 않는다.
   - 다음 액션: approval request가 있으면 `approval_id`, 후보/대상, artifact path, 승인 여부, 다음 PREOPEN 적용 확인 항목을 남긴다. 누락된 항목이 있으면 다음 영업일 checklist에 parser-friendly checkbox로 추가한다.
+  - 판정: `observe_only`
+  - 근거: [runtime_apply_bridge_2026-06-25.json](/home/ubuntu/KORStockScan/data/report/runtime_apply_bridge/runtime_apply_bridge_2026-06-25.json)은 `candidate_count=2`, `ready_for_approval_count=0`, `live_auto_apply_ready_count=0`, `approval_required_count=0`, `human_approval_required=false`, `runtime_mutation_performed=false`다. [threshold_cycle_ev_2026-06-25.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-06-25.json)도 `approval_requests=[]`다.
+  - 다음 액션: 오늘 추가 approval artifact나 수동 env apply는 만들지 않는다. Project/Calendar 동기화는 문서 수정 후 표준 명령을 사용자가 수동 실행한다.
 
-- [ ] `[CodeImprovementWorkorderReview0625] code improvement workorder 구현 필요 여부 및 Codex 지시 대상 확인` (`Due: 2026-06-25`, `Slot: POSTCLOSE`, `TimeWindow: 22:05~22:20`, `Track: ScalpingLogic`)
+- [x] `[CodeImprovementWorkorderReview0625] code improvement workorder 구현 필요 여부 및 Codex 지시 대상 확인` (`Due: 2026-06-25`, `Slot: POSTCLOSE`, `TimeWindow: 22:05~22:20`, `Track: ScalpingLogic`)
   - Source: [code_improvement_workorder_2026-06-24.md](/home/ubuntu/KORStockScan/docs/code-improvement-workorders/code_improvement_workorder_2026-06-24.md), [code_improvement_workorder_2026-06-24.json](/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-06-24.json)
   - 판정 기준: selected_order_count=119와 `implement_now`, `attach_existing_family`, `design_family_candidate`, `reject` 분류를 확인하고, 비-implement 반복 항목이 `terminal_non_implement_longstanding`, `repeat_unresolved_structural_blocker`, `keep_visible_by_design` 중 무엇으로 닫혀야 하는지 분리한다.
   - 금지: code-improvement workorder를 자동 repo 수정으로 취급하지 않는다. 사용자가 Codex 구현을 지시한 경우에만 실행한다.
   - 다음 액션: `implement_now`, `terminal_non_implement_longstanding`, `repeat_unresolved_structural_blocker`, `keep_visible_by_design`, `already_implemented`, `defer_design`, `reject` 중 하나로 닫는다.
+  - 판정: `repeat_unresolved_structural_blocker`
+  - 근거: [code_improvement_workorder_2026-06-25.json](/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-06-25.json)은 `selected_order_count=60`, `decision_counts={'implement_now': 1, 'attach_existing_family': 59}`, `repeat_unresolved_structural_blocker_count=1`이다. 단일 implement_now는 `order_entry_submit_drought_auto_resolution`이며 `SUBMIT_DROUGHT_CRITICAL` handoff가 반복 구조적 blocker로 승격됐다. 나머지는 existing-family/source evidence로 유지된다.
+  - 다음 액션: 오늘 이 항목은 자동 repo 수정으로 실행하지 않는다. 사용자가 별도 Codex 구현을 지시하면 `order_entry_submit_drought_auto_resolution`을 우선 대상으로 삼고 review gate를 통과시킨다.
 
-- [ ] `[LifecycleQuietGapReview0625] lifecycle quiet gap rollup 자동 표면화 및 처리 확인` (`Due: 2026-06-25`, `Slot: POSTCLOSE`, `TimeWindow: 22:35~22:50`, `Track: ScalpingLogic`)
+- [x] `[LifecycleQuietGapReview0625] lifecycle quiet gap rollup 자동 표면화 및 처리 확인` (`Due: 2026-06-25`, `Slot: POSTCLOSE`, `TimeWindow: 22:35~22:50`, `Track: ScalpingLogic`)
   - Source: [runtime_apply_gap_audit_2026-06-24.json](/home/ubuntu/KORStockScan/data/report/runtime_apply_gap_audit/runtime_apply_gap_audit_2026-06-24.json), [runtime_apply_gap_audit_2026-06-24.md](/home/ubuntu/KORStockScan/data/report/runtime_apply_gap_audit/runtime_apply_gap_audit_2026-06-24.md)
   - 판정 기준: quiet gap summary의 quiet_gap_count=`407`, rollup_required_count=`407`, sim_live_connected_quiet_gap_count=`0`, observation_source_quality_warning_count=`0`, quiet_gap_type_counts=`{'absorbed_into_parent_policy': 2, 'ai_review_parsed_low_coverage': 1, 'exclusion_dimension_candidate': 4, 'parent_conflict_child': 6, 'positive_source_only_keep_collecting': 404}`를 확인하고 parent conflict/exclusion, positive source-only, source-quality warning, AI coverage 누락을 닫는다.
   - 금지: quiet gap을 threshold/env/provider/order/bot 변경 근거로 사용하지 않는다.
   - 다음 액션: `rollup_only`, `implement_now`, `already_covered_by_parent_policy`, `defer_until_more_sample`, `reject_not_applicable` 중 하나로 닫는다.
+  - 판정: `rollup_only`
+  - 근거: [lifecycle_bucket_discovery_2026-06-25.json](/home/ubuntu/KORStockScan/data/report/lifecycle_bucket_discovery/lifecycle_bucket_discovery_2026-06-25.json)은 `status=pass`, `candidate_count=500`, `sim_auto_approved_count=5`, `active_sim_priority_active_seed_count=2`, `live_auto_apply_ready_count=0`, `human_intervention_required=false`다. `source_contract_status=warning`과 `source_contract_drift_warning`은 표시됐지만 runtime apply나 live authority로 승격되지 않았다. [runtime_apply_bridge_2026-06-25.json](/home/ubuntu/KORStockScan/data/report/runtime_apply_bridge/runtime_apply_bridge_2026-06-25.json)도 live-auto ready `0`이다.
+  - 다음 액션: quiet gap은 parent/source rollup으로만 유지한다. threshold/env/provider/order/bot 변경 근거로 사용하지 않는다.
 
-- [ ] `[AutomationTriggerDecisionSummary0625] 자동화체인 trigger decision run/skip 요약 및 wrapper marker 대조 확인` (`Due: 2026-06-25`, `Slot: POSTCLOSE`, `TimeWindow: 22:50~23:05`, `Track: RuntimeStability`)
+- [x] `[AutomationTriggerDecisionSummary0625] 자동화체인 trigger decision run/skip 요약 및 wrapper marker 대조 확인` (`Due: 2026-06-25`, `Slot: POSTCLOSE`, `TimeWindow: 22:50~23:05`, `Track: RuntimeStability`)
   - Source: [automation_chain_trigger_decision_2026-06-24.json](/home/ubuntu/KORStockScan/data/report/automation_chain_trigger_decision/automation_chain_trigger_decision_2026-06-24.json), [run_threshold_cycle_postclose.sh](/home/ubuntu/KORStockScan/deploy/run_threshold_cycle_postclose.sh)
   - 판정 기준: trigger decision summary의 total_steps=`16`, run_count=`16`, skip_count=`0`, source_missing_count=`7`, force_override_count=`0`, run_steps_sample=`lifecycle_window_rolling5d, lifecycle_window_rolling10d, lifecycle_window_mtd, scalp_sim_ai_deferred_review, pattern_lab_currentness_audit`, skip_steps_sample=`-`, top_reasons=`output_missing_or_unreadable:15, source_missing_or_unreadable:7, upstream_drift_signal:7, upstream_artifact_newer:1`를 확인하고 wrapper 로그의 `[SKIP] threshold-cycle postclose ... trigger_decision=skip` marker와 대조한다.
   - 금지: trigger decision을 PREOPEN apply, final verifier, broker/order/provider/cap/bot/threshold, hard-safety/source-quality fail-closed 경계 변경 근거로 사용하지 않는다.
   - 다음 액션: `trigger_contract_pass`, `unexpected_all_run`, `skip_marker_missing`, `source_missing_run_required`, `force_override_detected`, `needs_followup_patch` 중 하나로 닫는다.
+  - 판정: `source_missing_run_required`
+  - 근거: [automation_chain_trigger_decision_2026-06-25.json](/home/ubuntu/KORStockScan/data/report/automation_chain_trigger_decision/automation_chain_trigger_decision_2026-06-25.json)은 `total_steps=16`, `run_count=16`, `skip_count=0`, `source_missing_count=7`, `force_override_count=0`이다. [threshold_cycle_postclose_verification_2026-06-25.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_postclose_verification/threshold_cycle_postclose_verification_2026-06-25.json)은 `status=fail`이고 missing required artifacts가 `runtime_approval_summary`, `pattern_lab_currentness_audit`, `pattern_lab_propagation_audit`, `swing_daily_simulation`, `swing_lifecycle_audit`, `next_stage2_checklist`다.
+  - 다음 액션: source missing 항목은 다음 postclose chain 재실행/보강 대상으로 남긴다. 이 trigger decision 결과로 PREOPEN apply, broker/order/provider/cap/bot/threshold, hard-safety/source-quality fail-closed 경계를 변경하지 않는다.
 
 <!-- AUTO_NEXT_STAGE2_CHECKLIST_END -->
 
