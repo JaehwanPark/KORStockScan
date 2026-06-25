@@ -1862,7 +1862,8 @@ def test_scanner_heavy_eval_stale_recheck_repairs_before_handler():
     source = inspect.getsource(kiwoom_sniper_v2.run_sniper)
     flush_def_idx = source.index("def _flush_delayed_scanner_heavy_eval")
     recheck_idx = source.index("_scanner_ws_subscription_recheck_snapshot_and_fields(", flush_def_idx)
-    stale_idx = source.index('recheck_fields.get("ws_subscription_repair_needed")', recheck_idx)
+    fresh_idx = source.index("_scanner_heavy_eval_recheck_fresh_sec()", recheck_idx)
+    stale_idx = source.index("heavy_recheck_repair_needed = bool(", fresh_idx)
     recover_idx = source.index("scanner_heavy_eval_stale_ws_recovery", stale_idx)
     skip_idx = source.index('skip_reason="scanner_heavy_eval_stale_snapshot_recheck"', recover_idx)
     continue_idx = source.index("continue", skip_idx)
@@ -1871,7 +1872,7 @@ def test_scanner_heavy_eval_stale_recheck_repairs_before_handler():
         continue_idx,
     )
 
-    assert recheck_idx < stale_idx < recover_idx < skip_idx < continue_idx < handle_idx
+    assert recheck_idx < fresh_idx < stale_idx < recover_idx < skip_idx < continue_idx < handle_idx
 
 
 def test_scanner_strength_recheck_waiting_skips_before_full_eval_budget():
@@ -3324,6 +3325,17 @@ def test_scanner_ws_repair_cycle_defaults_are_aggressive_but_bounded(monkeypatch
     monkeypatch.setenv("KORSTOCKSCAN_SCANNER_WS_REPAIR_CYCLE_PERSISTENT_SEC", "5")
     assert kiwoom_sniper_v2._scanner_ws_repair_cycle_wait_sec() == 5.0
     assert kiwoom_sniper_v2._scanner_ws_repair_cycle_persistent_sec() == 10.0
+
+
+def test_scanner_heavy_eval_recheck_fresh_sec_defaults_to_pre_ai_freshness(monkeypatch):
+    monkeypatch.delenv("KORSTOCKSCAN_SCANNER_HEAVY_EVAL_RECHECK_FRESH_SEC", raising=False)
+    assert kiwoom_sniper_v2._scanner_heavy_eval_recheck_fresh_sec() == 3.0
+
+    monkeypatch.setenv("KORSTOCKSCAN_SCANNER_HEAVY_EVAL_RECHECK_FRESH_SEC", "0.5")
+    assert kiwoom_sniper_v2._scanner_heavy_eval_recheck_fresh_sec() == 1.0
+
+    monkeypatch.setenv("KORSTOCKSCAN_SCANNER_HEAVY_EVAL_RECHECK_FRESH_SEC", "60")
+    assert kiwoom_sniper_v2._scanner_heavy_eval_recheck_fresh_sec() == 20.0
 
 
 def test_persistent_ws_gap_uses_dedicated_repair_batch_queue():

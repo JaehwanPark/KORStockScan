@@ -2734,6 +2734,15 @@ def _scanner_ws_subscription_recheck_fresh_sec():
     return max(3.0, min(value, 120.0))
 
 
+def _scanner_heavy_eval_recheck_fresh_sec():
+    raw = os.getenv("KORSTOCKSCAN_SCANNER_HEAVY_EVAL_RECHECK_FRESH_SEC", "")
+    try:
+        value = float(str(raw).strip()) if str(raw).strip() else 3.0
+    except Exception:
+        value = 3.0
+    return max(1.0, min(value, 20.0))
+
+
 def _scanner_normalize_ws_snapshot_for_entry_eval(snapshot, *, now_ts):
     normalized = dict(snapshot or {}) if isinstance(snapshot, dict) else {}
     fields = {
@@ -4603,7 +4612,25 @@ def run_sniper(is_test_mode=False):
                             delayed_ws_data,
                             now_ts=time.time(),
                         )
-                        if recheck_fields.get("ws_subscription_repair_needed"):
+                        heavy_recheck_age_sec = _safe_float(
+                            recheck_fields.get("ws_subscription_recheck_age_sec"),
+                            999999.0,
+                        )
+                        heavy_recheck_fresh_sec = _scanner_heavy_eval_recheck_fresh_sec()
+                        heavy_recheck_repair_needed = bool(
+                            recheck_fields.get("ws_subscription_repair_needed")
+                        ) or heavy_recheck_age_sec > heavy_recheck_fresh_sec
+                        if heavy_recheck_repair_needed:
+                            recheck_fields["scanner_heavy_eval_recheck_fresh_sec"] = round(
+                                heavy_recheck_fresh_sec,
+                                3,
+                            )
+                            recheck_fields["scanner_heavy_eval_recheck_age_sec"] = (
+                                round(heavy_recheck_age_sec, 3)
+                                if heavy_recheck_age_sec < 999999.0
+                                else "not_available_ws_age_sec"
+                            )
+                            recheck_fields["scanner_heavy_eval_recheck_repair_needed"] = True
                             rest_quote_allowed, rest_quote_deferred_reason = _scanner_rest_quote_recovery_options(
                                 delayed_stock,
                                 time.time(),
