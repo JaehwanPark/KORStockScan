@@ -2719,10 +2719,10 @@ def _scanner_ws_repair_cycle_persistent_sec():
 def _scanner_ws_persistent_repair_min_interval_sec():
     raw = os.getenv("KORSTOCKSCAN_SCANNER_WS_PERSISTENT_REPAIR_MIN_INTERVAL_SEC", "")
     try:
-        value = float(str(raw).strip()) if str(raw).strip() else 60.0
+        value = float(str(raw).strip()) if str(raw).strip() else 20.0
     except Exception:
-        value = 60.0
-    return max(20.0, min(value, 300.0))
+        value = 20.0
+    return max(5.0, min(value, 300.0))
 
 
 def _scanner_ws_subscription_recheck_fresh_sec():

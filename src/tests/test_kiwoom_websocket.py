@@ -483,6 +483,30 @@ def test_persistent_repair_filter_limits_codes_per_batch(monkeypatch):
     assert skipped == ["000004", "000005"]
 
 
+def test_persistent_repair_defaults_refresh_stale_scanner_sources_quickly(monkeypatch):
+    manager = KiwoomWSManager("test-token")
+    monkeypatch.delenv("KORSTOCKSCAN_WS_PERSISTENT_REPAIR_MAX_CODES", raising=False)
+    monkeypatch.delenv("KORSTOCKSCAN_WS_PERSISTENT_REPAIR_TTL_SEC", raising=False)
+    now = {"value": 1000.0}
+    monkeypatch.setattr(kiwoom_websocket.time, "time", lambda: now["value"])
+
+    assert manager._persistent_repair_max_codes() == 8
+    assert manager._persistent_repair_ttl_sec() == 30.0
+    assert manager._filter_persistent_repair_targets(["000001"]) == (["000001"], [])
+    assert manager._filter_persistent_repair_targets(["000001"]) == ([], ["000001"])
+    now["value"] = 1030.0
+
+    assert manager._filter_persistent_repair_targets(["000001"]) == (["000001"], [])
+
+
+def test_alternate_route_defaults_cover_more_repair_candidates(monkeypatch):
+    monkeypatch.delenv("KORSTOCKSCAN_WS_ALTERNATE_ROUTE_MAX_CODES", raising=False)
+    monkeypatch.delenv("KORSTOCKSCAN_WS_ALTERNATE_ROUTE_TTL_SEC", raising=False)
+
+    assert KiwoomWSManager._alternate_route_max_codes() == 6
+    assert KiwoomWSManager._alternate_route_ttl_sec() == 45.0
+
+
 def test_persistent_repair_filter_throttles_recent_codes(monkeypatch):
     manager = KiwoomWSManager("test-token")
     monkeypatch.setenv("KORSTOCKSCAN_WS_PERSISTENT_REPAIR_MAX_CODES", "3")

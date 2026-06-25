@@ -3271,6 +3271,17 @@ def test_scanner_ws_subscription_recheck_requires_repair_when_snapshot_stale(mon
     assert fields["ws_subscription_recheck_received_types"] == "0B,0D"
 
 
+def test_scanner_ws_persistent_repair_min_interval_allows_aggressive_source_refresh(monkeypatch):
+    monkeypatch.delenv("KORSTOCKSCAN_SCANNER_WS_PERSISTENT_REPAIR_MIN_INTERVAL_SEC", raising=False)
+    assert kiwoom_sniper_v2._scanner_ws_persistent_repair_min_interval_sec() == 20.0
+
+    monkeypatch.setenv("KORSTOCKSCAN_SCANNER_WS_PERSISTENT_REPAIR_MIN_INTERVAL_SEC", "8")
+    assert kiwoom_sniper_v2._scanner_ws_persistent_repair_min_interval_sec() == 8.0
+
+    monkeypatch.setenv("KORSTOCKSCAN_SCANNER_WS_PERSISTENT_REPAIR_MIN_INTERVAL_SEC", "1")
+    assert kiwoom_sniper_v2._scanner_ws_persistent_repair_min_interval_sec() == 5.0
+
+
 def test_persistent_ws_gap_uses_dedicated_repair_batch_queue():
     source = inspect.getsource(kiwoom_sniper_v2.run_sniper)
     queue_def_idx = source.index("pending_scanner_ws_persistent_repair")

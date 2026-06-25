@@ -331,18 +331,18 @@ class KiwoomWSManager:
     def _alternate_route_max_codes():
         raw = os.getenv("KORSTOCKSCAN_WS_ALTERNATE_ROUTE_MAX_CODES", "")
         try:
-            value = int(str(raw).strip()) if str(raw).strip() else 2
+            value = int(str(raw).strip()) if str(raw).strip() else 6
         except Exception:
-            value = 2
+            value = 6
         return max(0, min(value, 20))
 
     @staticmethod
     def _alternate_route_ttl_sec():
         raw = os.getenv("KORSTOCKSCAN_WS_ALTERNATE_ROUTE_TTL_SEC", "")
         try:
-            value = float(str(raw).strip()) if str(raw).strip() else 180.0
+            value = float(str(raw).strip()) if str(raw).strip() else 45.0
         except Exception:
-            value = 180.0
+            value = 45.0
         return max(0.0, min(value, 1800.0))
 
     def _filter_alternate_route_targets(self, codes):
@@ -381,18 +381,18 @@ class KiwoomWSManager:
     def _persistent_repair_max_codes():
         raw = os.getenv("KORSTOCKSCAN_WS_PERSISTENT_REPAIR_MAX_CODES", "")
         try:
-            value = int(str(raw).strip()) if str(raw).strip() else 4
+            value = int(str(raw).strip()) if str(raw).strip() else 8
         except Exception:
-            value = 4
+            value = 8
         return max(0, min(value, 20))
 
     @staticmethod
     def _persistent_repair_ttl_sec():
         raw = os.getenv("KORSTOCKSCAN_WS_PERSISTENT_REPAIR_TTL_SEC", "")
         try:
-            value = float(str(raw).strip()) if str(raw).strip() else 90.0
+            value = float(str(raw).strip()) if str(raw).strip() else 30.0
         except Exception:
-            value = 90.0
+            value = 30.0
         return max(0.0, min(value, 1800.0))
 
     def _filter_persistent_repair_targets(self, codes):
