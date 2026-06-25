@@ -2829,7 +2829,7 @@ def _scanner_rest_quote_fallback_max_per_loop():
         value = int(str(raw).strip()) if str(raw).strip() else 6
     except Exception:
         value = 6
-    return max(0, min(value, 10))
+    return max(0, min(value, 16))
 
 
 def _scanner_rest_quote_fallback_dynamic_max_extra_calls():

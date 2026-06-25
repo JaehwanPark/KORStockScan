@@ -2839,7 +2839,7 @@ def test_scanner_rest_quote_loop_limit_allows_bounded_intraday_recovery_override
     assert kiwoom_sniper_v2._scanner_rest_quote_fallback_max_per_loop() == 8
 
     monkeypatch.setenv("KORSTOCKSCAN_SCANNER_REST_QUOTE_FALLBACK_MAX_PER_LOOP", "99")
-    assert kiwoom_sniper_v2._scanner_rest_quote_fallback_max_per_loop() == 10
+    assert kiwoom_sniper_v2._scanner_rest_quote_fallback_max_per_loop() == 16
 
 
 def test_scanner_rest_quote_budget_hot_reloads_operator_override_file(tmp_path, monkeypatch):
