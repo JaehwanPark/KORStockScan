@@ -772,8 +772,60 @@ def test_build_report_prioritizes_stale_observation_before_ai_threshold(tmp_path
     priorities = report["root_cause_priorities"]
     assert priorities[0]["issue"] == "scanner_strength_history_or_stale_eval"
     assert priorities[0]["decision"] == "fix_observation_freshness_before_threshold_tuning"
+    assert priorities[0]["evidence"]["top_unresolved_stale_eval_symbols"][0]["stock_code"] == "000001"
     assert priorities[1]["issue"] == "ai_wait_or_baseline_prior_score_block"
     assert "broad_buy_score_relaxation" in priorities[1]["forbidden_uses"]
+
+
+def test_build_report_does_not_prioritize_recovered_stale_low_ai_eval(tmp_path):
+    path = tmp_path / "pipeline_events_2026-06-23.jsonl"
+    rows = [
+        _event("000001", "A", "scalping_scanner_candidate_promoted", {"price_delta_since_first_seen_pct": "2.40"}),
+        _event(
+            "000001",
+            "A",
+            "blocked_ai_score",
+            {
+                "price_delta_since_first_seen_pct": "2.40",
+                "reason": "score_62.0",
+                "ai_score": "62",
+                "quote_age_ms": "9000",
+            },
+        ),
+        _event(
+            "000001",
+            "A",
+            "scalping_scanner_fast_precheck",
+            {
+                "price_delta_since_first_seen_pct": "2.40",
+                "fast_precheck_result": "eligible_for_heavy_entry_eval",
+                "fast_precheck_reason": "fast_precheck_pass",
+                "quote_age_ms": "300",
+            },
+        ),
+        _event(
+            "000001",
+            "A",
+            "blocked_ai_score",
+            {
+                "price_delta_since_first_seen_pct": "2.40",
+                "reason": "score_62.0",
+                "ai_score": "62",
+                "quote_age_ms": "300",
+            },
+        ),
+    ]
+    path.write_text("\n".join(json.dumps(row, ensure_ascii=False) for row in rows), encoding="utf-8")
+
+    report = build_report(target_date="2026-06-23", pipeline_path=path, generated_at="fixed")
+
+    item = report["rising_missed_buy"][0]
+    assert item["low_ai_or_negative_pressure_eval_quality"]["stale_or_delayed_eval"] == 1
+    assert item["unresolved_stale_low_ai_or_pressure_eval_count"] == 0
+    assert all(
+        item["issue"] != "scanner_strength_history_or_stale_eval"
+        for item in report["root_cause_priorities"]
+    )
 
 
 def test_loop_window_helpers():

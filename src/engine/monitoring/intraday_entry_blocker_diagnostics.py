@@ -284,6 +284,20 @@ def _low_ai_pressure_quality_counts(rows: list[dict[str, Any]]) -> dict[str, int
     return counts
 
 
+def _unresolved_stale_low_ai_pressure_count(rows: list[dict[str, Any]]) -> int:
+    stale_indexes = [
+        idx
+        for idx, row in enumerate(rows)
+        if _low_ai_or_negative_pressure(row) and _event_has_stale_or_delayed_context(row)
+    ]
+    if not stale_indexes:
+        return 0
+    latest_stale_idx = stale_indexes[-1]
+    if any(_is_downstream_progress_after_stale_source(row) for row in rows[latest_stale_idx + 1 :]):
+        return 0
+    return len(stale_indexes)
+
+
 def _strength_history_count(row: dict[str, Any]) -> int | None:
     for key in STRENGTH_HISTORY_COUNT_KEYS:
         value = _safe_float(_field(row, key))
@@ -711,6 +725,7 @@ def _summarize_code(
         "latest_blocker": _latest_blocker(rows),
         "queue_observation_counts": queue_counts,
         "low_ai_or_negative_pressure_eval_quality": _low_ai_pressure_quality_counts(rows),
+        "unresolved_stale_low_ai_or_pressure_eval_count": _unresolved_stale_low_ai_pressure_count(rows),
         "zero_strength_history_source_quality": _zero_strength_history_source_quality(rows),
         "scanner_full_eval_budget_deferred": {
             "count": len(budget_deferred_rows),
@@ -779,6 +794,29 @@ def _rollup_low_ai_pressure_quality(items: list[dict[str, Any]]) -> dict[str, in
         "stale_or_delayed_eval": int(counter.get("stale_or_delayed_eval", 0)),
         "unknown_eval_quality": int(counter.get("unknown_eval_quality", 0)),
     }
+
+
+def _rollup_unresolved_stale_low_ai_pressure_count(items: list[dict[str, Any]]) -> int:
+    return sum(int(item.get("unresolved_stale_low_ai_or_pressure_eval_count") or 0) for item in items)
+
+
+def _unresolved_stale_low_ai_pressure_symbols(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    symbols = []
+    for item in items:
+        count = int(item.get("unresolved_stale_low_ai_or_pressure_eval_count") or 0)
+        if count <= 0:
+            continue
+        latest = item.get("latest_blocker") if isinstance(item.get("latest_blocker"), dict) else {}
+        symbols.append(
+            {
+                "stock_code": item.get("stock_code") or "",
+                "stock_name": item.get("stock_name") or "",
+                "event_count": count,
+                "latest_stage": latest.get("stage") or "",
+                "latest_reason": latest.get("reason") or "",
+            }
+        )
+    return sorted(symbols, key=lambda item: int(item.get("event_count") or 0), reverse=True)
 
 
 def _scanner_full_eval_budget_diagnostics(items: list[dict[str, Any]]) -> dict[str, Any]:
@@ -878,7 +916,9 @@ def _root_cause_priorities(
 
     zero_history = _zero_strength_history_workorders(rising_missed)
     stale_eval_count = _rollup_low_ai_pressure_quality(rising_missed).get("stale_or_delayed_eval", 0)
-    if zero_history or stale_eval_count:
+    unresolved_stale_eval_count = _rollup_unresolved_stale_low_ai_pressure_count(rising_missed)
+    unresolved_stale_eval_symbols = _unresolved_stale_low_ai_pressure_symbols(rising_missed)
+    if zero_history or unresolved_stale_eval_count:
         priorities.append(
             {
                 "priority": 1,
@@ -888,6 +928,7 @@ def _root_cause_priorities(
                     "rising_missed_symbols": len(rising_missed),
                     "repeated_zero_strength_history_symbols": len(zero_history),
                     "stale_or_delayed_low_ai_or_pressure_events": stale_eval_count,
+                    "unresolved_stale_or_delayed_low_ai_or_pressure_events": unresolved_stale_eval_count,
                     "top_symbols": [
                         {
                             "stock_code": item.get("stock_code") or "",
@@ -897,6 +938,7 @@ def _root_cause_priorities(
                         }
                         for item in zero_history[:8]
                     ],
+                    "top_unresolved_stale_eval_symbols": unresolved_stale_eval_symbols[:8],
                 },
                 "next_action": "inspect_ws_strength_momentum_history_and_subscription_recheck_flow",
                 "runtime_effect": False,
