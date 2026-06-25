@@ -10561,6 +10561,61 @@ def test_holding_stale_ws_rest_quote_recovery_allows_exit_evaluation(monkeypatch
     assert not exit_calls
 
 
+def test_holding_recent_ws_blocks_divergent_rest_quote_recovery(monkeypatch):
+    state_handlers.TRADING_RULES = _dynamic_soft_stop_grace_config()
+    pipeline_logs, exit_calls = _install_soft_stop_expert_test_doubles(monkeypatch)
+    published = []
+    monkeypatch.setattr(
+        state_handlers,
+        "EVENT_BUS",
+        SimpleNamespace(publish=lambda name, payload: published.append((name, payload))),
+    )
+    monkeypatch.setattr(state_handlers, "KIWOOM_TOKEN", "token")
+    monkeypatch.setattr(state_handlers.kiwoom_utils, "get_api_url", lambda path: f"https://example.test{path}")
+    monkeypatch.setattr(
+        state_handlers.kiwoom_utils,
+        "fetch_kiwoom_api_continuous",
+        lambda *args, **kwargs: [{"cur_prc": "8,800"}],
+    )
+    now_ts = state_handlers.time.time()
+    stock = _dynamic_soft_stop_stock()
+
+    state_handlers.handle_holding_state(
+        stock=stock,
+        code="123456",
+        ws_data={
+            "curr": 9810,
+            "last_ws_update_ts": now_ts - 16,
+            "orderbook": {"bids": [{"price": 9810, "volume": 1000}]},
+        },
+        admin_id=1,
+        market_regime="BULL",
+        now_ts=now_ts,
+        radar=None,
+        ai_engine=None,
+    )
+
+    blocked_logs = [
+        fields for stage, fields in pipeline_logs if stage == "holding_rest_quote_divergence_blocked"
+    ]
+    assert stock["status"] == "HOLDING"
+    assert blocked_logs
+    assert blocked_logs[-1]["holding_ws_recovered_curr"] == 8800
+    assert blocked_logs[-1]["holding_ws_recovery_outcome"] == "rest_quote_divergence_blocked"
+    assert not exit_calls
+    assert published == [
+        (
+            "COMMAND_WS_REG",
+            {
+                "codes": ["123456"],
+                "source": "holding_ws_freshness_repair",
+                "force": True,
+                "repair_cycle": "holding_ws_stale_or_missing",
+            },
+        )
+    ]
+
+
 def test_holding_ws_repair_is_throttled_after_recent_reissue(monkeypatch):
     state_handlers.TRADING_RULES = _dynamic_soft_stop_grace_config()
     pipeline_logs, exit_calls = _install_soft_stop_expert_test_doubles(monkeypatch)

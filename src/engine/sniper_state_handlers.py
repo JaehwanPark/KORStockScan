@@ -13110,6 +13110,43 @@ def _holding_ws_freshness_recover_or_block(stock, code, ws_data, *, now_ts):
         state["last_rest_quote_ts"] = float(now_ts)
         fallback = _fetch_holding_rest_quote_snapshot(code, now_ts)
         if fallback:
+            fallback_curr = _safe_int(fallback.get("curr"), 0)
+            divergence_max_pct = max(
+                0.0,
+                _rule_float("HOLDING_REST_QUOTE_RECOVERY_MAX_WS_DIVERGENCE_PCT", 5.0),
+            )
+            recent_age_limit = max_age_sec * max(
+                1.0,
+                _rule_float("HOLDING_REST_QUOTE_RECOVERY_RECENT_WS_AGE_MULTIPLIER", 2.0),
+            )
+            divergence_pct = (
+                abs(float(fallback_curr) - float(curr_price)) / float(curr_price) * 100.0
+                if curr_price > 0 and fallback_curr > 0
+                else 0.0
+            )
+            ws_recent_enough = age_sec is not None and age_sec <= recent_age_limit
+            if (
+                curr_price > 0
+                and fallback_curr > 0
+                and ws_recent_enough
+                and divergence_pct > divergence_max_pct
+            ):
+                fields.update(
+                    {
+                        "holding_ws_recovery_action": "rest_quote_divergence_blocked",
+                        "holding_ws_recovery_outcome": "rest_quote_divergence_blocked",
+                        "holding_ws_recovered_curr": fallback_curr,
+                        "holding_rest_quote_divergence_pct": round(divergence_pct, 3),
+                        "holding_rest_quote_divergence_max_pct": round(divergence_max_pct, 3),
+                        "holding_rest_quote_recent_ws_age_limit_sec": round(recent_age_limit, 3),
+                    }
+                )
+                _maybe_publish_holding_ws_repair(state, code, fields, now_ts=now_ts)
+                if isinstance(stock, dict):
+                    stock.pop("holding_rest_quote_only_recovery", None)
+                    stock.pop("holding_rest_quote_only_recovered_at", None)
+                _log_holding_pipeline(stock, code, "holding_rest_quote_divergence_blocked", **fields)
+                return ws_data, True, fields
             recovered = dict(ws_data)
             recovered.update(fallback)
             recovered.pop("orderbook", None)
@@ -13121,7 +13158,7 @@ def _holding_ws_freshness_recover_or_block(stock, code, ws_data, *, now_ts):
                 {
                     "holding_ws_recovery_action": "rest_quote_applied",
                     "holding_ws_recovery_outcome": "rest_quote_applied",
-                    "holding_ws_recovered_curr": _safe_int(fallback.get("curr"), 0),
+                    "holding_ws_recovered_curr": fallback_curr,
                     "holding_rest_quote_only_recovery": True,
                 }
             )
