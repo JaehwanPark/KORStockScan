@@ -828,6 +828,47 @@ def test_build_report_does_not_prioritize_recovered_stale_low_ai_eval(tmp_path):
     )
 
 
+def test_build_report_does_not_prioritize_stale_low_ai_after_heavy_eval_repair(tmp_path):
+    path = tmp_path / "pipeline_events_2026-06-23.jsonl"
+    rows = [
+        _event("000001", "A", "scalping_scanner_candidate_promoted", {"price_delta_since_first_seen_pct": "2.40"}),
+        _event(
+            "000001",
+            "A",
+            "ai_confirmed_terminal_no_budget",
+            {
+                "price_delta_since_first_seen_pct": "2.40",
+                "reason": "blocked_ai_score_below_buy_score_threshold",
+                "ai_score": "62",
+                "quote_age_ms": "8200",
+            },
+        ),
+        _event(
+            "000001",
+            "A",
+            "scalping_scanner_watching_runtime_skip",
+            {
+                "price_delta_since_first_seen_pct": "2.40",
+                "skip_reason": "scanner_heavy_eval_stale_snapshot_recheck",
+                "quote_age_ms": "8400",
+                "scanner_heavy_eval_recheck_age_sec": "8.4",
+                "scanner_heavy_eval_recheck_fresh_sec": "3.0",
+            },
+        ),
+    ]
+    path.write_text("\n".join(json.dumps(row, ensure_ascii=False) for row in rows), encoding="utf-8")
+
+    report = build_report(target_date="2026-06-23", pipeline_path=path, generated_at="fixed")
+
+    item = report["rising_missed_buy"][0]
+    assert item["low_ai_or_negative_pressure_eval_quality"]["stale_or_delayed_eval"] == 1
+    assert item["unresolved_stale_low_ai_or_pressure_eval_count"] == 0
+    assert all(
+        item["issue"] != "scanner_strength_history_or_stale_eval"
+        for item in report["root_cause_priorities"]
+    )
+
+
 def test_loop_window_helpers():
     buy_start = _parse_hhmm("09:00")
     buy_end = _parse_hhmm("15:20")

@@ -32,6 +32,7 @@ BLOCKER_STAGES = {
 RECOVERY_OBSERVATION_REASONS = {
     "scanner_fast_precheck_subscription_recheck_snapshot_applied",
     "scanner_fast_precheck_stale_ws_recovered",
+    "scanner_heavy_eval_stale_snapshot_recheck",
     "ws_snapshot_missing_or_zero_recovered",
 }
 
@@ -293,7 +294,10 @@ def _unresolved_stale_low_ai_pressure_count(rows: list[dict[str, Any]]) -> int:
     if not stale_indexes:
         return 0
     latest_stale_idx = stale_indexes[-1]
-    if any(_is_downstream_progress_after_stale_source(row) for row in rows[latest_stale_idx + 1 :]):
+    if any(
+        _is_downstream_progress_after_stale_source(row) or _event_is_recovery_observation(row)
+        for row in rows[latest_stale_idx + 1 :]
+    ):
         return 0
     return len(stale_indexes)
 
