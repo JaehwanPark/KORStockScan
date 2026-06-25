@@ -28,6 +28,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.append(str(PROJECT_ROOT))
 	
 import os
+import shlex
 import socket
 import time
 from datetime import datetime
@@ -225,6 +226,23 @@ _SCANNER_REST_QUOTE_FALLBACK_FAILURE_COOLDOWN_SEC = 30.0
 _SCANNER_REST_QUOTE_FALLBACK_STATE = {"call_epochs": [], "cooldown_until": 0.0}
 _SCANNER_REST_QUOTE_FALLBACK_LOCK = threading.Lock()
 _SCANNER_REST_QUOTE_FALLBACK_DEFER_SEC = 5.0
+_SCANNER_HOT_RUNTIME_OVERRIDE_KEYS = frozenset(
+    {
+        "KORSTOCKSCAN_SCANNER_REST_QUOTE_FALLBACK_MAX_CALLS_PER_WINDOW",
+        "KORSTOCKSCAN_SCANNER_REST_QUOTE_FALLBACK_POSITIVE_RESERVE_CALLS",
+        "KORSTOCKSCAN_SCANNER_REST_QUOTE_FALLBACK_MAX_PER_LOOP",
+    }
+)
+_SCANNER_OPERATOR_RUNTIME_OVERRIDE_PATH = (
+    PROJECT_ROOT / "data" / "threshold_cycle" / "runtime_env" / "operator_runtime_overrides.env"
+)
+_SCANNER_HOT_RUNTIME_OVERRIDE_REFRESH_SEC = 5.0
+_SCANNER_HOT_RUNTIME_OVERRIDES = {
+    "mtime_ns": None,
+    "values": {},
+    "next_check_ts": 0.0,
+}
+_SCANNER_HOT_RUNTIME_OVERRIDES_LOCK = threading.Lock()
 _SCALPING_DYNAMIC_WATCH_CAP_STATE = {
     "effective_cap": None,
     "last_adjust_ts": 0.0,
@@ -1022,6 +1040,65 @@ def _env_bool(name, default=False):
     if text in {"0", "false", "no", "n", "off"}:
         return False
     return bool(default)
+
+
+def _parse_scanner_hot_runtime_override_file(path):
+    values = {}
+    try:
+        lines = Path(path).read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return values
+    for raw_line in lines:
+        line = str(raw_line or "").strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("export "):
+            line = line[len("export ") :].strip()
+        if "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        key = key.strip()
+        if key not in _SCANNER_HOT_RUNTIME_OVERRIDE_KEYS:
+            continue
+        value = value.strip()
+        try:
+            parts = shlex.split(value, comments=False, posix=True)
+            parsed_value = parts[0] if parts else ""
+        except ValueError:
+            parsed_value = value.strip("\"'")
+        values[key] = str(parsed_value).strip()
+    return values
+
+
+def _scanner_hot_runtime_override_value(name, now_ts=None):
+    key = str(name or "").strip()
+    if key not in _SCANNER_HOT_RUNTIME_OVERRIDE_KEYS:
+        return None
+    now_value = time.time() if now_ts is None else float(now_ts)
+    with _SCANNER_HOT_RUNTIME_OVERRIDES_LOCK:
+        cache = _SCANNER_HOT_RUNTIME_OVERRIDES
+        if now_value < _safe_float(cache.get("next_check_ts"), 0.0):
+            return (cache.get("values") or {}).get(key)
+        cache["next_check_ts"] = now_value + _SCANNER_HOT_RUNTIME_OVERRIDE_REFRESH_SEC
+        path = _SCANNER_OPERATOR_RUNTIME_OVERRIDE_PATH
+        try:
+            stat = Path(path).stat()
+            mtime_ns = int(getattr(stat, "st_mtime_ns", 0) or 0)
+        except OSError:
+            cache["mtime_ns"] = None
+            cache["values"] = {}
+            return None
+        if cache.get("mtime_ns") != mtime_ns:
+            cache["values"] = _parse_scanner_hot_runtime_override_file(path)
+            cache["mtime_ns"] = mtime_ns
+        return (cache.get("values") or {}).get(key)
+
+
+def _scanner_hot_or_env_value(name):
+    hot_value = _scanner_hot_runtime_override_value(name)
+    if hot_value not in (None, ""):
+        return hot_value
+    return os.getenv(name, "")
 
 
 def _scanner_no_trade_eviction_enabled():
@@ -2663,7 +2740,7 @@ def _scanner_rest_quote_fallback_rate_limit(now_ts, *, priority=False):
 
 
 def _scanner_rest_quote_fallback_max_calls_per_window():
-    raw = os.getenv("KORSTOCKSCAN_SCANNER_REST_QUOTE_FALLBACK_MAX_CALLS_PER_WINDOW", "")
+    raw = _scanner_hot_or_env_value("KORSTOCKSCAN_SCANNER_REST_QUOTE_FALLBACK_MAX_CALLS_PER_WINDOW")
     try:
         value = int(str(raw).strip()) if str(raw).strip() else _SCANNER_REST_QUOTE_FALLBACK_MAX_CALLS
     except Exception:
@@ -2672,7 +2749,7 @@ def _scanner_rest_quote_fallback_max_calls_per_window():
 
 
 def _scanner_rest_quote_fallback_positive_reserve_calls():
-    raw = os.getenv("KORSTOCKSCAN_SCANNER_REST_QUOTE_FALLBACK_POSITIVE_RESERVE_CALLS", "")
+    raw = _scanner_hot_or_env_value("KORSTOCKSCAN_SCANNER_REST_QUOTE_FALLBACK_POSITIVE_RESERVE_CALLS")
     try:
         value = int(str(raw).strip()) if str(raw).strip() else _SCANNER_REST_QUOTE_FALLBACK_POSITIVE_RESERVE_CALLS
     except Exception:
@@ -2681,7 +2758,7 @@ def _scanner_rest_quote_fallback_positive_reserve_calls():
 
 
 def _scanner_rest_quote_fallback_max_per_loop():
-    raw = os.getenv("KORSTOCKSCAN_SCANNER_REST_QUOTE_FALLBACK_MAX_PER_LOOP", "")
+    raw = _scanner_hot_or_env_value("KORSTOCKSCAN_SCANNER_REST_QUOTE_FALLBACK_MAX_PER_LOOP")
     try:
         value = int(str(raw).strip()) if str(raw).strip() else 6
     except Exception:

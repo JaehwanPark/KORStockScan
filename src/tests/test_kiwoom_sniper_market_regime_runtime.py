@@ -1,4 +1,5 @@
 import inspect
+import os
 import threading
 import time
 from types import SimpleNamespace
@@ -59,6 +60,13 @@ class _ExpireDB:
 
     def get_session(self):
         return _ExpireSession(self.calls)
+
+
+def _reset_scanner_hot_override_cache():
+    with kiwoom_sniper_v2._SCANNER_HOT_RUNTIME_OVERRIDES_LOCK:
+        kiwoom_sniper_v2._SCANNER_HOT_RUNTIME_OVERRIDES.update(
+            {"mtime_ns": None, "values": {}, "next_check_ts": 0.0}
+        )
 
 
 def test_current_market_regime_code_returns_regime_code(monkeypatch):
@@ -2749,8 +2757,14 @@ def test_recover_missing_ws_snapshot_rate_limits_rest_quote_burst(monkeypatch):
     kiwoom_sniper_v2._reset_scanner_rest_quote_fallback_rate_limit_for_tests()
 
 
-def test_scanner_rest_quote_rate_limit_uses_bounded_operator_override(monkeypatch):
+def test_scanner_rest_quote_rate_limit_uses_bounded_operator_override(tmp_path, monkeypatch):
     kiwoom_sniper_v2._reset_scanner_rest_quote_fallback_rate_limit_for_tests()
+    monkeypatch.setattr(
+        kiwoom_sniper_v2,
+        "_SCANNER_OPERATOR_RUNTIME_OVERRIDE_PATH",
+        tmp_path / "missing_operator_runtime_overrides.env",
+    )
+    _reset_scanner_hot_override_cache()
     monkeypatch.setenv("KORSTOCKSCAN_SCANNER_REST_QUOTE_FALLBACK_MAX_CALLS_PER_WINDOW", "4")
     monkeypatch.setenv("KORSTOCKSCAN_SCANNER_REST_QUOTE_FALLBACK_POSITIVE_RESERVE_CALLS", "2")
 
@@ -2764,7 +2778,13 @@ def test_scanner_rest_quote_rate_limit_uses_bounded_operator_override(monkeypatc
     kiwoom_sniper_v2._reset_scanner_rest_quote_fallback_rate_limit_for_tests()
 
 
-def test_scanner_rest_quote_loop_limit_allows_bounded_intraday_recovery_override(monkeypatch):
+def test_scanner_rest_quote_loop_limit_allows_bounded_intraday_recovery_override(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        kiwoom_sniper_v2,
+        "_SCANNER_OPERATOR_RUNTIME_OVERRIDE_PATH",
+        tmp_path / "missing_operator_runtime_overrides.env",
+    )
+    _reset_scanner_hot_override_cache()
     monkeypatch.delenv("KORSTOCKSCAN_SCANNER_REST_QUOTE_FALLBACK_MAX_PER_LOOP", raising=False)
     assert kiwoom_sniper_v2._scanner_rest_quote_fallback_max_per_loop() == 6
 
@@ -2773,6 +2793,41 @@ def test_scanner_rest_quote_loop_limit_allows_bounded_intraday_recovery_override
 
     monkeypatch.setenv("KORSTOCKSCAN_SCANNER_REST_QUOTE_FALLBACK_MAX_PER_LOOP", "99")
     assert kiwoom_sniper_v2._scanner_rest_quote_fallback_max_per_loop() == 10
+
+
+def test_scanner_rest_quote_budget_hot_reloads_operator_override_file(tmp_path, monkeypatch):
+    override_path = tmp_path / "operator_runtime_overrides.env"
+    monkeypatch.setattr(kiwoom_sniper_v2, "_SCANNER_OPERATOR_RUNTIME_OVERRIDE_PATH", override_path)
+    monkeypatch.setattr(kiwoom_sniper_v2, "_SCANNER_HOT_RUNTIME_OVERRIDE_REFRESH_SEC", 0.0)
+    monkeypatch.delenv("KORSTOCKSCAN_SCANNER_REST_QUOTE_FALLBACK_MAX_PER_LOOP", raising=False)
+    _reset_scanner_hot_override_cache()
+
+    override_path.write_text(
+        "\n".join(
+            [
+                "export KORSTOCKSCAN_SCANNER_REST_QUOTE_FALLBACK_MAX_PER_LOOP=7",
+                "export KORSTOCKSCAN_BUY_SCORE_THRESHOLD=1",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    os.utime(override_path, ns=(1_000_000_000, 1_000_000_000))
+
+    assert kiwoom_sniper_v2._scanner_rest_quote_fallback_max_per_loop() == 7
+    assert (
+        kiwoom_sniper_v2._scanner_hot_runtime_override_value("KORSTOCKSCAN_BUY_SCORE_THRESHOLD")
+        is None
+    )
+
+    override_path.write_text(
+        "export KORSTOCKSCAN_SCANNER_REST_QUOTE_FALLBACK_MAX_PER_LOOP=4\n",
+        encoding="utf-8",
+    )
+    os.utime(override_path, ns=(2_000_000_000, 2_000_000_000))
+
+    assert kiwoom_sniper_v2._scanner_rest_quote_fallback_max_per_loop() == 4
+    _reset_scanner_hot_override_cache()
 
 
 def test_non_rising_ws_misses_do_not_consume_positive_rest_quote_slot(monkeypatch):
