@@ -412,8 +412,8 @@ def evaluate_scalping_reversal_add(stock, profit_rate, current_ai_score, held_se
         _check_reversal_add_pnl_range(profit_rate),
         _check_reversal_add_hold_sec(held_sec),
         _check_reversal_add_low_floor(stock, profit_rate),
-        _check_reversal_add_ai_recovery(stock, current_ai_score),
         _check_reversal_add_supply(stock),
+        _check_reversal_add_ai_recovery(stock, current_ai_score),
     ):
         if reason:
             result["reason"] = reason

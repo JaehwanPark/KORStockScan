@@ -11240,6 +11240,29 @@ def test_reversal_add_tc5_supply_conditions_not_met():
         scale_in.TRADING_RULES = CONFIG
 
 
+def test_reversal_add_reports_supply_before_ai_when_both_fail():
+    stock = _reversal_add_stock({
+        "reversal_add_ai_bottom": 50,
+        "reversal_add_ai_history": [50, 52, 55, 53],
+        "last_reversal_features": {
+            "buy_pressure_10t": 40.0,
+            "tick_acceleration_ratio": 1.10,
+            "large_sell_print_detected": False,
+            "curr_vs_micro_vwap_bp": -10.0,
+        },
+    })
+    from src.utils.constants import TRADING_RULES as CONFIG
+    scale_in.TRADING_RULES = _reversal_add_rules()
+    try:
+        result = scale_in.evaluate_scalping_reversal_add(stock, profit_rate=-0.25, current_ai_score=64, held_sec=50)
+        assert result["should_add"] is False
+        assert result["reason"] == "supply_conditions_not_met(2/4)"
+        assert result["probe"]["ai_recover_ok"] is False
+        assert result["probe"]["supply_ok"] is False
+    finally:
+        scale_in.TRADING_RULES = CONFIG
+
+
 # TC-6: 정상 조건 모두 충족 → 트리거
 def test_reversal_add_tc6_all_conditions_met():
     stock = _reversal_add_stock({
