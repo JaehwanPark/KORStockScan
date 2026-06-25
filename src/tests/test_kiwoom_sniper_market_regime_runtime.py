@@ -3282,6 +3282,19 @@ def test_scanner_ws_persistent_repair_min_interval_allows_aggressive_source_refr
     assert kiwoom_sniper_v2._scanner_ws_persistent_repair_min_interval_sec() == 5.0
 
 
+def test_scanner_ws_repair_cycle_defaults_are_aggressive_but_bounded(monkeypatch):
+    monkeypatch.delenv("KORSTOCKSCAN_SCANNER_WS_REPAIR_CYCLE_WAIT_SEC", raising=False)
+    monkeypatch.delenv("KORSTOCKSCAN_SCANNER_WS_REPAIR_CYCLE_PERSISTENT_SEC", raising=False)
+
+    assert kiwoom_sniper_v2._scanner_ws_repair_cycle_wait_sec() == 10.0
+    assert kiwoom_sniper_v2._scanner_ws_repair_cycle_persistent_sec() == 30.0
+
+    monkeypatch.setenv("KORSTOCKSCAN_SCANNER_WS_REPAIR_CYCLE_WAIT_SEC", "1")
+    monkeypatch.setenv("KORSTOCKSCAN_SCANNER_WS_REPAIR_CYCLE_PERSISTENT_SEC", "5")
+    assert kiwoom_sniper_v2._scanner_ws_repair_cycle_wait_sec() == 5.0
+    assert kiwoom_sniper_v2._scanner_ws_repair_cycle_persistent_sec() == 10.0
+
+
 def test_persistent_ws_gap_uses_dedicated_repair_batch_queue():
     source = inspect.getsource(kiwoom_sniper_v2.run_sniper)
     queue_def_idx = source.index("pending_scanner_ws_persistent_repair")

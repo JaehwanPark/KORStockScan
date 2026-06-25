@@ -2701,18 +2701,18 @@ def _scanner_rest_quote_fallback_defer_sec():
 def _scanner_ws_repair_cycle_wait_sec():
     raw = os.getenv("KORSTOCKSCAN_SCANNER_WS_REPAIR_CYCLE_WAIT_SEC", "")
     try:
-        value = float(str(raw).strip()) if str(raw).strip() else 20.0
+        value = float(str(raw).strip()) if str(raw).strip() else 10.0
     except Exception:
-        value = 20.0
+        value = 10.0
     return max(5.0, min(value, 120.0))
 
 
 def _scanner_ws_repair_cycle_persistent_sec():
     raw = os.getenv("KORSTOCKSCAN_SCANNER_WS_REPAIR_CYCLE_PERSISTENT_SEC", "")
     try:
-        value = float(str(raw).strip()) if str(raw).strip() else 60.0
+        value = float(str(raw).strip()) if str(raw).strip() else 30.0
     except Exception:
-        value = 60.0
+        value = 30.0
     return max(10.0, min(value, 300.0))
 
 
