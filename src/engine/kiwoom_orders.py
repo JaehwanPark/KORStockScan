@@ -682,6 +682,38 @@ def _resolve_buy_order_type(order_type, price=0, tif=None):
     return str(order_type), requested_price
 
 
+def _pre0830_sor_market_sell_remap_required(order_type, now=None) -> bool:
+    if str(order_type) != "3":
+        return False
+    current = now or datetime.now(KST)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=KST)
+    current_kst = current.astimezone(KST)
+    return current_kst.time() < datetime_time(hour=8, minute=30)
+
+
+def _resolve_sell_order_type(order_type, price=0, *, now=None):
+    normalized_type = str(order_type)
+    normalized_price = int(price or 0)
+    if _pre0830_sor_market_sell_remap_required(normalized_type, now=now):
+        log_info(
+            "[PRE0830_SELL_MARKET_REMAP] SOR market sell is unavailable before 08:30; "
+            "using best-limit style sell order type 6"
+        )
+        return "6", 0
+    return normalized_type, normalized_price
+
+
+def _is_sor_market_sell_time_reject(data) -> bool:
+    msg = str(data.get("return_msg") or data.get("err_msg") or "")
+    code = str(data.get("return_code") or data.get("rt_cd") or "")
+    return (
+        "571034" in code
+        or "571034" in msg
+        or "SOR 시장가 주문은 08:30 이후" in msg
+    )
+
+
 def _buy_time_block_cutoff():
     raw_cutoff = str(getattr(TRADING_RULES, "BUY_SIDE_TIME_BLOCK_UNTIL_HHMM", "09:10") or "").strip()
     try:
@@ -691,6 +723,52 @@ def _buy_time_block_cutoff():
         return datetime_time(hour=9, minute=10)
 
 
+def _parse_hhmmss_time(raw_value):
+    raw_text = str(raw_value or "").strip()
+    parts = raw_text.split(":")
+    try:
+        if len(parts) == 2:
+            hour_text, minute_text = parts
+            second_text = "0"
+        elif len(parts) == 3:
+            hour_text, minute_text, second_text = parts
+        else:
+            return None
+        return datetime_time(
+            hour=int(hour_text),
+            minute=int(minute_text),
+            second=int(second_text),
+        )
+    except Exception:
+        return None
+
+
+def _scalping_buy_windows():
+    raw_windows = str(getattr(TRADING_RULES, "SCALPING_BUY_WINDOWS", "") or "").strip()
+    windows = []
+    for token in raw_windows.split(","):
+        token = token.strip()
+        if not token or "-" not in token:
+            continue
+        start_raw, end_raw = token.split("-", 1)
+        start = _parse_hhmmss_time(start_raw)
+        end = _parse_hhmmss_time(end_raw)
+        if start is None or end is None:
+            continue
+        windows.append((start, end))
+    return tuple(windows)
+
+
+def _time_in_window(now_t, start, end) -> bool:
+    if start <= end:
+        return start <= now_t <= end
+    return now_t >= start or now_t <= end
+
+
+def _inside_scalping_buy_window(now_t) -> bool:
+    return any(_time_in_window(now_t, start, end) for start, end in _scalping_buy_windows())
+
+
 def is_buy_side_time_blocked(now=None) -> bool:
     if not bool(getattr(TRADING_RULES, "BUY_SIDE_TIME_BLOCK_ENABLED", True)):
         return False
@@ -698,7 +776,10 @@ def is_buy_side_time_blocked(now=None) -> bool:
     if current.tzinfo is None:
         current = current.replace(tzinfo=KST)
     current_kst = current.astimezone(KST)
-    return current_kst.time() < _buy_time_block_cutoff()
+    current_time = current_kst.time()
+    if current_time < _buy_time_block_cutoff() and _inside_scalping_buy_window(current_time):
+        return False
+    return current_time < _buy_time_block_cutoff()
 
 
 def get_buy_side_time_block_label() -> str:
@@ -944,11 +1025,13 @@ def send_sell_order_market(
         'api-id': 'kt10001'
     }
 
+    normalized_type, normalized_price = _resolve_sell_order_type(order_type, price=price)
+
     # 💡 [핵심] 지정가("00") 매도일 경우 단가를 호가단위로 정규화합니다.
     ord_price_str = ""
-    if str(order_type) == "00" and price > 0:
+    if str(normalized_type) == "00" and normalized_price > 0:
         try:
-            raw_price = int(price)
+            raw_price = int(normalized_price)
             tick = int(kiwoom_utils.get_tick_size(raw_price))
             normalized_price = int((raw_price // tick) * tick) if tick > 0 else raw_price
             if normalized_price <= 0:
@@ -966,7 +1049,7 @@ def send_sell_order_market(
         "stk_cd": clean_code,
         "ord_qty": str(qty),
         "ord_uv": ord_price_str,
-        "trde_tp": str(order_type),
+        "trde_tp": str(normalized_type),
         "cond_uv": ""
     }
 
@@ -978,6 +1061,24 @@ def send_sell_order_market(
         if res.status_code == 200 and is_success:
             return data
         else:
+            if str(payload.get("trde_tp")) == "3" and _is_sor_market_sell_time_reject(data):
+                retry_payload = dict(payload)
+                retry_payload["trde_tp"] = "6"
+                retry_payload["ord_uv"] = ""
+                log_info(
+                    f"[SELL_MARKET_RETRY_AS_BEST] {clean_code} SOR market sell rejected; "
+                    "retrying with order type 6"
+                )
+                retry_res, retry_data = _post_kiwoom_with_auth_retry(
+                    url, headers, retry_payload, 'kt10001', timeout=5
+                )
+                retry_success = (
+                    str(retry_data.get('rt_cd', '')) == '0'
+                    or str(retry_data.get('return_code', '')) == '0'
+                )
+                if retry_res.status_code == 200 and retry_success:
+                    return retry_data
+                data = retry_data
             err_msg = data.get('return_msg') or data.get('err_msg') or '상세 사유 없음'
             err_code = data.get('return_code', data.get('rt_cd', ''))
             

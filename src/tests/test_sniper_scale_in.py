@@ -2749,12 +2749,35 @@ def test_buy_side_time_block_allows_from_0910(monkeypatch):
     monkeypatch.setattr(
         kiwoom_orders,
         "TRADING_RULES",
-        replace(CONFIG, BUY_SIDE_TIME_BLOCK_ENABLED=True, BUY_SIDE_TIME_BLOCK_UNTIL_HHMM="09:10"),
+        replace(
+            CONFIG,
+            BUY_SIDE_TIME_BLOCK_ENABLED=True,
+            BUY_SIDE_TIME_BLOCK_UNTIL_HHMM="09:10",
+            SCALPING_BUY_WINDOWS="09:10:00-15:20:00",
+        ),
     )
     today = datetime.now().date()
 
     assert kiwoom_orders.is_buy_side_time_blocked(datetime.combine(today, dt_time(9, 9, 59)))
     assert not kiwoom_orders.is_buy_side_time_blocked(datetime.combine(today, dt_time(9, 10, 0)))
+
+
+def test_buy_side_time_block_respects_scalping_morning_buy_window(monkeypatch):
+    monkeypatch.setattr(
+        kiwoom_orders,
+        "TRADING_RULES",
+        replace(
+            CONFIG,
+            BUY_SIDE_TIME_BLOCK_ENABLED=True,
+            BUY_SIDE_TIME_BLOCK_UNTIL_HHMM="09:10",
+            SCALPING_BUY_WINDOWS="08:03:00-08:40:00,09:03:00-15:20:00",
+        ),
+    )
+    today = datetime.now().date()
+
+    assert not kiwoom_orders.is_buy_side_time_blocked(datetime.combine(today, dt_time(8, 10, 0)))
+    assert not kiwoom_orders.is_buy_side_time_blocked(datetime.combine(today, dt_time(8, 40, 0)))
+    assert kiwoom_orders.is_buy_side_time_blocked(datetime.combine(today, dt_time(8, 41, 0)))
 
 
 def test_sell_side_open_time_block_defaults_off(monkeypatch):
@@ -2866,6 +2889,78 @@ def test_send_sell_order_market_safety_reason_passes_sell_time_block(monkeypatch
     assert result["rt_cd"] == "0"
     assert result["ord_no"] == "S123"
     assert captured["payload"]["stk_cd"] == "123456"
+
+
+def test_send_sell_order_market_remaps_pre0830_sor_market_sell(monkeypatch):
+    class FixedDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return cls(2026, 6, 26, 8, 14, 0, tzinfo=tz)
+
+    captured = {}
+
+    class DummyResponse:
+        status_code = 200
+
+    def fake_post(url, headers, payload, api_id, timeout=5):
+        captured["payload"] = payload
+        return DummyResponse(), {"rt_cd": "0", "ord_no": "S0830"}
+
+    monkeypatch.setattr(kiwoom_orders, "datetime", FixedDateTime)
+    monkeypatch.setattr(kiwoom_orders.kiwoom_utils, "get_api_url", lambda path: f"https://example.test{path}")
+    monkeypatch.setattr(kiwoom_orders, "_post_kiwoom_with_auth_retry", fake_post)
+
+    result = kiwoom_orders.send_sell_order_market(
+        "123456",
+        1,
+        "token",
+        order_type="3",
+        reason_type="LOSS",
+        strategy="SCALPING",
+    )
+
+    assert result["ord_no"] == "S0830"
+    assert captured["payload"]["trde_tp"] == "6"
+    assert captured["payload"]["ord_uv"] == ""
+
+
+def test_send_sell_order_market_retries_sor_market_time_reject_as_best(monkeypatch):
+    class FixedDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return cls(2026, 6, 26, 9, 10, 0, tzinfo=tz)
+
+    calls = []
+
+    class DummyResponse:
+        status_code = 200
+
+    def fake_post(url, headers, payload, api_id, timeout=5):
+        calls.append(payload)
+        if len(calls) == 1:
+            return DummyResponse(), {
+                "rt_cd": "20",
+                "return_code": "20",
+                "return_msg": "[2000](571034:SOR 시장가 주문은 08:30 이후 가능합니다. 주문유형 변경 바랍니다.)",
+            }
+        return DummyResponse(), {"rt_cd": "0", "ord_no": "SRETRY"}
+
+    monkeypatch.setattr(kiwoom_orders, "datetime", FixedDateTime)
+    monkeypatch.setattr(kiwoom_orders.kiwoom_utils, "get_api_url", lambda path: f"https://example.test{path}")
+    monkeypatch.setattr(kiwoom_orders, "_post_kiwoom_with_auth_retry", fake_post)
+
+    result = kiwoom_orders.send_sell_order_market(
+        "123456",
+        1,
+        "token",
+        order_type="3",
+        reason_type="LOSS",
+        strategy="SCALPING",
+    )
+
+    assert result["ord_no"] == "SRETRY"
+    assert [payload["trde_tp"] for payload in calls] == ["3", "6"]
+    assert calls[1]["ord_uv"] == ""
 
 
 def test_send_buy_order_market_allows_order_after_resume(monkeypatch):
