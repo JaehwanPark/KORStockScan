@@ -536,6 +536,23 @@ def test_build_report_adds_entry_price_scale_in_and_post_sell_diagnostics(tmp_pa
             },
             "emitted_at": "2026-06-23T09:11:00",
         },
+        {
+            "pipeline": "HOLDING_PIPELINE",
+            "stock_code": "000005",
+            "stock_name": "E",
+            "stage": "stat_action_decision_snapshot",
+            "fields": {
+                "profit_rate": "0.1",
+                "peak_profit": "0.8",
+                "current_ai_score": "72",
+                "scale_in_gate_allowed": "False",
+                "scale_in_gate_reason": "-",
+                "scale_in_blocker_reason": "MFE protect exit",
+                "scale_in_action_type": "-",
+                "distance_to_buy_bps": "30",
+            },
+            "emitted_at": "2026-06-23T09:12:00",
+        },
     ]
     path.write_text("\n".join(json.dumps(row, ensure_ascii=False) for row in rows), encoding="utf-8")
 

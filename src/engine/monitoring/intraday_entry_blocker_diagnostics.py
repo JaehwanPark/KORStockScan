@@ -67,6 +67,20 @@ SCALE_IN_STAGES = {
     "stat_action_decision_snapshot",
 }
 
+SCALE_IN_REASON_TOKENS = {
+    "scale_in",
+    "avg_down",
+    "pyramid",
+    "profit_not_enough",
+    "pnl_out_of_range",
+    "add_judgment",
+    "hold_sec_out_of_range",
+    "low_broken",
+    "ai_not_recovering",
+    "spread_bps",
+    "flow_hold",
+}
+
 RELIEF_BLOCKER_REASONS = {
     "scanner_full_eval_loop_budget_deferred",
     "entry_cooldown_active",
@@ -458,8 +472,22 @@ def _scale_in_diagnostics(rows: list[dict[str, Any]]) -> dict[str, Any]:
     for row in holding_rows:
         stage = str(row.get("stage") or "")
         fields = row.get("fields") if isinstance(row.get("fields"), dict) else {}
-        text = " ".join([stage, *(str(key) for key in fields), *(str(value) for value in fields.values())]).lower()
-        if stage in SCALE_IN_STAGES or "scale_in" in text or "avg_down" in text or "pyramid" in text:
+        value_text = " ".join([stage, *(str(value) for value in fields.values())]).lower()
+        if stage == "stat_action_decision_snapshot":
+            action = str(
+                _field(row, "scale_in_action_type")
+                or _field(row, "scale_in_arm")
+                or _field(row, "chosen_action")
+                or ""
+            ).strip()
+            reason_text = " ".join(
+                str(_field(row, key) or "")
+                for key in ("scale_in_blocker_reason", "scale_in_gate_reason", "reason")
+            ).lower()
+            if (action and action != "-") or any(token in reason_text for token in SCALE_IN_REASON_TOKENS):
+                relevant.append(row)
+            continue
+        if stage in SCALE_IN_STAGES or any(token in value_text for token in SCALE_IN_REASON_TOKENS):
             relevant.append(row)
 
     blocker_counter: Counter[str] = Counter()
