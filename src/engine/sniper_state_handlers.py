@@ -8817,6 +8817,55 @@ def _load_scalp_loss_reentry_cooldown_events(target_date: str) -> dict[str, list
     return rows_by_code
 
 
+def _scalp_loss_reentry_cooldown_invalidated_by_sell_completed(
+    code: str,
+    row: dict,
+    now_ts: float,
+) -> dict:
+    norm_code = str(code or "").strip()[:6]
+    marked_at = _safe_float((row or {}).get("marked_at"), 0.0)
+    if not norm_code or marked_at <= 0:
+        return {"invalidated": False, "reason": "missing_code_or_marked_at"}
+    target_date = datetime.fromtimestamp(float(now_ts or time.time())).date().isoformat()
+    path = existing_or_gzip_path(DATA_DIR / "pipeline_events" / f"pipeline_events_{target_date}.jsonl")
+    if not path.exists():
+        return {"invalidated": False, "reason": "pipeline_events_missing"}
+    exit_rule = str((row or {}).get("exit_rule") or "-")
+    for payload in iter_jsonl(path, errors="ignore"):
+        if str(payload.get("stage") or "") != "sell_completed":
+            continue
+        fields = payload.get("fields") if isinstance(payload.get("fields"), dict) else {}
+        payload_code = str(payload.get("stock_code") or fields.get("stock_code") or "").strip()[:6]
+        if payload_code != norm_code:
+            continue
+        completed_at = _parse_iso_epoch(payload.get("emitted_at"))
+        if completed_at < marked_at:
+            continue
+        realized_profit = _safe_float(fields.get("profit_rate"), 0.0)
+        realized_exit_rule = str(fields.get("exit_rule") or exit_rule or "-")
+        invalidate_min_profit = _rule_float(
+            "SCALP_SAME_SYMBOL_LOSS_REENTRY_REALIZED_INVALIDATE_MIN_PROFIT_PCT",
+            -0.5,
+        )
+        estimated_profit = _safe_float((row or {}).get("profit_rate"), 0.0)
+        realized_not_material_loss = realized_profit >= invalidate_min_profit
+        estimated_material_loss = estimated_profit < invalidate_min_profit
+        if (
+            _resolve_same_symbol_loss_reentry_cooldown_sec(realized_exit_rule, realized_profit) <= 0
+            or (realized_not_material_loss and estimated_material_loss)
+        ):
+            return {
+                "invalidated": True,
+                "reason": "sell_completed_realized_profit_not_loss_cooldown",
+                "realized_profit_rate": realized_profit,
+                "realized_exit_rule": realized_exit_rule,
+                "estimated_profit_rate": estimated_profit,
+                "invalidate_min_profit_pct": invalidate_min_profit,
+                "sell_completed_at": completed_at,
+            }
+    return {"invalidated": False, "reason": "no_invalidating_sell_completed"}
+
+
 def _hydrate_scalp_loss_reentry_cooldown_from_events(code: str, now_ts: float) -> dict:
     norm_code = str(code or "").strip()[:6]
     if not norm_code:
@@ -8831,6 +8880,11 @@ def _hydrate_scalp_loss_reentry_cooldown_from_events(code: str, now_ts: float) -
     if not active_rows:
         return {}
     row = dict(active_rows[-1])
+    invalidation = _scalp_loss_reentry_cooldown_invalidated_by_sell_completed(norm_code, row, now_ts)
+    if invalidation.get("invalidated"):
+        row["invalidated_by_sell_completed"] = True
+        row["invalidation_reason"] = invalidation.get("reason")
+        return {}
     _SCALP_SAME_SYMBOL_LOSS_REENTRY_COOLDOWNS[norm_code] = row
     return row
 
@@ -8856,6 +8910,9 @@ def evaluate_scalp_same_symbol_loss_reentry_guard(code: str, now_ts: float | Non
     row = _SCALP_SAME_SYMBOL_LOSS_REENTRY_COOLDOWNS.get(norm_code) or {}
     if not row:
         row = _hydrate_scalp_loss_reentry_cooldown_from_events(norm_code, now_value)
+    elif _scalp_loss_reentry_cooldown_invalidated_by_sell_completed(norm_code, row, now_value).get("invalidated"):
+        _SCALP_SAME_SYMBOL_LOSS_REENTRY_COOLDOWNS.pop(norm_code, None)
+        return {**base, "reason": "cooldown_invalidated_by_realized_sell_profit"}
     expires_at = float(row.get("expires_at", 0) or 0)
     if expires_at <= now_value:
         return base

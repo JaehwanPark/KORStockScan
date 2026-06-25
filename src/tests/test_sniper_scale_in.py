@@ -12120,6 +12120,65 @@ def test_same_symbol_loss_reentry_cooldown_marker_is_not_order_submit(monkeypatc
     assert cooldown_logs[-1]["broker_order_forbidden"] is True
 
 
+def test_scalp_loss_reentry_cooldown_invalidated_by_realized_sell_profit(tmp_path, monkeypatch):
+    original_rules = state_handlers.TRADING_RULES
+    try:
+        state_handlers.TRADING_RULES = replace(
+            CONFIG,
+            SCALP_SAME_SYMBOL_LOSS_REENTRY_COOLDOWN_ENABLED=True,
+            SCALP_SAME_SYMBOL_LOSS_REENTRY_COOLDOWN_SEC=3600,
+        )
+        state_handlers._SCALP_SAME_SYMBOL_LOSS_REENTRY_COOLDOWNS.clear()
+        state_handlers._SCALP_LOSS_REENTRY_EVENT_CACHE.update(
+            {"date": "", "path": "", "mtime_ns": 0, "size": 0, "rows_by_code": {}}
+        )
+        monkeypatch.setattr(state_handlers, "DATA_DIR", tmp_path)
+        event_dir = tmp_path / "pipeline_events"
+        event_dir.mkdir(parents=True)
+        event_path = event_dir / "pipeline_events_2026-06-26.jsonl"
+        rows = [
+            {
+                "stage": "same_symbol_loss_reentry_cooldown",
+                "stock_code": "376900",
+                "stock_name": "로킷헬스케어",
+                "emitted_at": "2026-06-26T08:20:39+09:00",
+                "fields": {
+                    "cooldown_sec": 3600,
+                    "exit_rule": "scalp_hard_stop_pct",
+                    "profit_rate": "-11.81",
+                },
+            },
+            {
+                "stage": "sell_completed",
+                "stock_code": "376900",
+                "stock_name": "로킷헬스케어",
+                "emitted_at": "2026-06-26T08:20:40+09:00",
+                "fields": {
+                    "exit_rule": "scalp_hard_stop_pct",
+                    "profit_rate": "-0.12",
+                    "sell_price": "45300",
+                },
+            },
+        ]
+        event_path.write_text(
+            "\n".join(json.dumps(row, ensure_ascii=False) for row in rows) + "\n",
+            encoding="utf-8",
+        )
+        now_ts = datetime.fromisoformat("2026-06-26T08:35:00+09:00").timestamp()
+
+        decision = state_handlers.evaluate_scalp_same_symbol_loss_reentry_guard("376900", now_ts)
+
+        assert decision["allowed"] is True
+        assert decision["reason"] == "pass"
+        assert "376900" not in state_handlers._SCALP_SAME_SYMBOL_LOSS_REENTRY_COOLDOWNS
+    finally:
+        state_handlers._SCALP_SAME_SYMBOL_LOSS_REENTRY_COOLDOWNS.clear()
+        state_handlers._SCALP_LOSS_REENTRY_EVENT_CACHE.update(
+            {"date": "", "path": "", "mtime_ns": 0, "size": 0, "rows_by_code": {}}
+        )
+        state_handlers.TRADING_RULES = original_rules
+
+
 def test_scalp_profit_stagnation_time_exit_triggers_for_real_position(monkeypatch):
     state_handlers.TRADING_RULES = replace(
         CONFIG,
