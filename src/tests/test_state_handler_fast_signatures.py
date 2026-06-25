@@ -1401,6 +1401,46 @@ def test_early_accel_strong_bundle_recheck_allows_strong_scanner_bundle(monkeypa
     assert result["skip_reason"] == "allowed"
 
 
+def test_early_accel_strong_bundle_recheck_default_includes_score_67_74(monkeypatch):
+    rules = replace(
+        TRADING_RULES,
+        EARLY_ACCEL_STRONG_BUNDLE_RECHECK_ENABLED=True,
+        EARLY_ACCEL_STRONG_BUNDLE_RECHECK_MIN_SCORE=60,
+        EARLY_ACCEL_STRONG_BUNDLE_RECHECK_MIN_PASS_COUNT=2,
+        EARLY_ACCEL_STRONG_BUNDLE_RECHECK_MAX_PER_SYMBOL=1,
+    )
+    monkeypatch.setattr(handlers, "TRADING_RULES", rules)
+    stock = {
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "scanner_promotion_reason": "late_confirmation_first_seen_probe",
+        "source_signature": "PRICE_JUMP_START,VOLUME_SURGE_POSITIVE",
+        "price_delta_since_first_seen_pct": "0.70",
+        "comparable_flu_delta_since_first_seen": "0.82",
+        "cntr_str_available": True,
+        "cntr_str": 121.0,
+        "early_accel_strong_bundle_recheck_count": 0,
+    }
+    decision = {
+        "action": "WAIT",
+        "score": 72,
+        "tick_acceleration_ratio": 1.18,
+        "curr_vs_micro_vwap_bp": 7.5,
+        "buy_pressure_10t": 70.0,
+    }
+
+    result = _resolve_early_accel_strong_bundle_recheck(
+        stock,
+        {"quote_stale": False, "context_stale": False},
+        strategy="SCALPING",
+        ai_decision=decision,
+        ai_score=72.0,
+    )
+
+    assert result["allowed"] is True
+    assert result["skip_reason"] == "allowed"
+
+
 def test_early_accel_strong_bundle_recheck_skips_weak_or_out_of_band_candidates(monkeypatch):
     rules = replace(
         TRADING_RULES,

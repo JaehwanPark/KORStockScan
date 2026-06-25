@@ -7,10 +7,13 @@ from src.engine.scalping import entry_hurdle_backtest as mod
 def test_entry_hurdle_backtest_classifies_overblocking_from_existing_artifacts(tmp_path, monkeypatch):
     buy_dir = tmp_path / "buy_funnel_sentinel"
     missed_dir = tmp_path / "monitor_snapshots"
+    pipeline_dir = tmp_path / "pipeline_events"
     buy_dir.mkdir(parents=True)
     missed_dir.mkdir(parents=True)
+    pipeline_dir.mkdir(parents=True)
     monkeypatch.setattr(mod, "BUY_FUNNEL_DIR", buy_dir)
     monkeypatch.setattr(mod, "MISSED_ENTRY_DIRS", [missed_dir])
+    monkeypatch.setattr(mod, "PIPELINE_EVENTS_DIR", pipeline_dir)
 
     (buy_dir / "buy_funnel_sentinel_2026-06-05.json").write_text(
         json.dumps(
@@ -91,6 +94,63 @@ def test_entry_hurdle_backtest_classifies_overblocking_from_existing_artifacts(t
                 }
             )
         )
+    (pipeline_dir / "pipeline_events_2026-06-05.jsonl").write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "stage": "pre_submit_liquidity_guard_block",
+                        "stock_code": "123456",
+                        "record_id": "1",
+                        "emitted_at": "2026-06-05T10:00:00+09:00",
+                        "fields": {
+                            "ai_score": "82.0",
+                            "source_signature": "PRICE_JUMP_START,VOLUME_SURGE_POSITIVE",
+                            "curr_vs_micro_vwap_bp": "43.69",
+                            "buy_pressure_10t": "93.69",
+                            "quote_stale_at_submit": "False",
+                            "price_context_stale_at_submit": "False",
+                            "pre_submit_overbought_guard_action": "PASS",
+                            "entry_submit_revalidation_warning": "",
+                            "liquidity_relief_skip_reason": "tick_accel_below_min",
+                        },
+                    }
+                ),
+                json.dumps(
+                    {
+                        "stage": "blocked_ai_score",
+                        "stock_code": "234567",
+                        "record_id": "2",
+                        "emitted_at": "2026-06-05T10:01:00+09:00",
+                        "fields": {
+                            "ai_score": "72.0",
+                            "source_signature": "PRICE_JUMP_START,VOLUME_SURGE_POSITIVE",
+                            "curr_vs_micro_vwap_bp": "7.5",
+                            "quote_stale": "False",
+                            "tick_context_stale": "False",
+                        },
+                    }
+                ),
+                json.dumps(
+                    {
+                        "stage": "blocked_ai_score",
+                        "stock_code": "345678",
+                        "record_id": "3",
+                        "emitted_at": "2026-06-05T10:02:00+09:00",
+                        "fields": {
+                            "ai_score": "72.0",
+                            "source_signature": "PRICE_JUMP_START,VOLUME_SURGE_POSITIVE",
+                            "curr_vs_micro_vwap_bp": "7.5",
+                            "quote_stale": "True",
+                            "tick_context_stale": "False",
+                        },
+                    }
+                ),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
 
     report = mod.build_report("2026-06-05", start_date="2026-06-05", end_date="2026-06-07")
 
@@ -120,4 +180,14 @@ def test_entry_hurdle_backtest_classifies_overblocking_from_existing_artifacts(t
         "audit_late_entry_price_drift_guard_context",
     ]
     assert all(item["runtime_effect"] is False for item in diagnostics["recommended_next_actions"])
+    policy_backtest = report["summary"]["implemented_policy_backtest"]
+    assert policy_backtest["runtime_effect"] is False
+    assert "entry price reprice" in policy_backtest["forbidden_uses"]
+    assert policy_backtest["liquidity_signature_micro_pressure_relief"]["eligible_attempts"] == 1
+    assert policy_backtest["ai_score_67_74_strong_bundle_recheck"]["eligible_recheck_attempts"] == 1
+    assert policy_backtest["ai_score_67_74_strong_bundle_recheck"]["excluded_reasons"] == {
+        "stale_quote_or_tick_context": 1
+    }
+    assert policy_backtest["total"]["eligible_attempts"] == 2
+    assert policy_backtest["total"]["conservative_estimated_order_submit_success"] == 0
     assert not report["missing_artifacts"]

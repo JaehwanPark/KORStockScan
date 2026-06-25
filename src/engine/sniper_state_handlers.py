@@ -14004,6 +14004,19 @@ def _early_accel_strong_bundle_allowed_reasons() -> tuple[str, ...]:
     )
 
 
+def _source_signature_tokens(source_signature: str | None) -> set[str]:
+    return {
+        token.strip().upper()
+        for token in str(source_signature or "").replace("|", ",").split(",")
+        if token.strip()
+    }
+
+
+def _source_signature_strong_bundle_pass(source_signature: str | None) -> bool:
+    tokens = _source_signature_tokens(source_signature)
+    return {"PRICE_JUMP_START", "VOLUME_SURGE_POSITIVE"}.issubset(tokens)
+
+
 def _resolve_early_accel_strong_bundle_recheck(
     stock,
     ws_data,
@@ -14017,7 +14030,7 @@ def _resolve_early_accel_strong_bundle_recheck(
     action = str(payload.get("action") or "").strip().upper()
     promotion_reason = str((stock or {}).get("scanner_promotion_reason") or "scanner_runtime_watch")
     source_signature_text = str((stock or {}).get("source_signature") or "")
-    source_signature_set = {token.strip() for token in source_signature_text.split(",") if token.strip()}
+    source_signature_set = _source_signature_tokens(source_signature_text)
     price_delta = _safe_float((stock or {}).get("price_delta_since_first_seen_pct"), 0.0)
     comparable_flu_delta = _safe_float((stock or {}).get("comparable_flu_delta_since_first_seen"), 0.0)
     cntr_str_available = _truthy_field((stock or {}).get("cntr_str_available"))
@@ -14092,7 +14105,10 @@ def _resolve_early_accel_strong_bundle_recheck(
         return {"allowed": False, "skip_reason": "score_below_min", **base}
     if numeric_score > float(max_score):
         return {"allowed": False, "skip_reason": "score_above_max", **base}
-    if promotion_reason not in _early_accel_strong_bundle_allowed_reasons():
+    if (
+        promotion_reason not in _early_accel_strong_bundle_allowed_reasons()
+        and not _source_signature_strong_bundle_pass(source_signature_text)
+    ):
         return {"allowed": False, "skip_reason": "scanner_promotion_reason_not_supported", **base}
     if quote_stale:
         return {"allowed": False, "skip_reason": "stale_quote_or_context", **base}
@@ -14222,10 +14238,20 @@ def _resolve_pre_submit_liquidity_relief(
     micro_vwap_bp, micro_vwap_source = lookup_feature("curr_vs_micro_vwap_bp", "micro_vwap_bp")
     buy_pressure, buy_pressure_source = lookup_feature("buy_pressure_10t", "buy_pressure")
     recheck_trigger = str((stock or {}).get("ai_call_trigger_reason") or "").strip()
+    source_signature_tokens = _source_signature_tokens(source_signature)
+    signature_strong_bundle = _source_signature_strong_bundle_pass(source_signature)
+    signature_micro_pressure_path = (
+        signature_strong_bundle
+        and micro_vwap_bp
+        >= _rule_float("PRE_SUBMIT_LIQUIDITY_RELIEF_SIGNATURE_MIN_MICRO_VWAP_BP", 25.0)
+        and buy_pressure
+        >= _rule_float("PRE_SUBMIT_LIQUIDITY_RELIEF_SIGNATURE_MIN_BUY_PRESSURE", 80.0)
+    )
     strong_bundle_path = (
         promotion_reason in _early_accel_strong_bundle_allowed_reasons()
         or recheck_trigger == "early_accel_strong_bundle_recheck"
         or _safe_int((stock or {}).get("early_accel_strong_bundle_recheck_count"), 0) > 0
+        or signature_micro_pressure_path
     )
     relief_count = _safe_int((stock or {}).get("pre_submit_liquidity_relief_count"), 0)
     quote_stale = bool(
@@ -14249,6 +14275,9 @@ def _resolve_pre_submit_liquidity_relief(
         "tick_acceleration_ratio": f"{tick_accel:.3f}",
         "curr_vs_micro_vwap_bp": f"{micro_vwap_bp:.2f}",
         "buy_pressure_10t": f"{buy_pressure:.2f}",
+        "source_signature_strong_bundle": signature_strong_bundle,
+        "source_signature_token_count": len(source_signature_tokens),
+        "signature_micro_pressure_path": signature_micro_pressure_path,
         "tick_acceleration_ratio_source": tick_accel_source,
         "curr_vs_micro_vwap_bp_source": micro_vwap_source,
         "buy_pressure_10t_source": buy_pressure_source,
@@ -14280,7 +14309,10 @@ def _resolve_pre_submit_liquidity_relief(
         return {"allowed": False, "relief_skip_reason": "ai_score_below_min", **base}
     if not strong_bundle_path:
         return {"allowed": False, "relief_skip_reason": "not_strong_bundle_path", **base}
-    if tick_accel < _rule_float("PRE_SUBMIT_LIQUIDITY_RELIEF_MIN_TICK_ACCEL", 1.10):
+    if (
+        tick_accel < _rule_float("PRE_SUBMIT_LIQUIDITY_RELIEF_MIN_TICK_ACCEL", 1.10)
+        and not signature_micro_pressure_path
+    ):
         return {"allowed": False, "relief_skip_reason": "tick_accel_below_min", **base}
     if micro_vwap_bp < _rule_float("PRE_SUBMIT_LIQUIDITY_RELIEF_MIN_MICRO_VWAP_BP", 0.0):
         return {"allowed": False, "relief_skip_reason": "micro_vwap_below_min", **base}
@@ -14305,6 +14337,9 @@ def _log_pre_submit_liquidity_relief(stock, code, stage: str, decision: dict) ->
         tick_acceleration_ratio=decision.get("tick_acceleration_ratio") or "0.000",
         curr_vs_micro_vwap_bp=decision.get("curr_vs_micro_vwap_bp") or "0.00",
         buy_pressure_10t=decision.get("buy_pressure_10t") or "0.00",
+        source_signature_strong_bundle=bool(decision.get("source_signature_strong_bundle")),
+        source_signature_token_count=_safe_int(decision.get("source_signature_token_count"), 0),
+        signature_micro_pressure_path=bool(decision.get("signature_micro_pressure_path")),
         tick_acceleration_ratio_source=decision.get("tick_acceleration_ratio_source") or "-",
         curr_vs_micro_vwap_bp_source=decision.get("curr_vs_micro_vwap_bp_source") or "-",
         buy_pressure_10t_source=decision.get("buy_pressure_10t_source") or "-",

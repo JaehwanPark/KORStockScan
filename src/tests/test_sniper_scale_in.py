@@ -4706,7 +4706,7 @@ def test_pre_submit_liquidity_relief_requires_strong_bundle_path(monkeypatch):
         "strategy": "SCALPING",
         "position_tag": "SCANNER",
         "scanner_promotion_reason": "late_confirmation_first_seen_probe",
-        "source_signature": "PRICE_JUMP_START,VOLUME_SURGE_POSITIVE",
+        "source_signature": "PRICE_JUMP_START",
     }
 
     decision = state_handlers._resolve_pre_submit_liquidity_relief(
@@ -4732,6 +4732,52 @@ def test_pre_submit_liquidity_relief_requires_strong_bundle_path(monkeypatch):
 
     assert decision["allowed"] is False
     assert decision["relief_skip_reason"] == "not_strong_bundle_path"
+
+
+def test_pre_submit_liquidity_relief_allows_signature_micro_pressure_path_when_tick_accel_missing(monkeypatch):
+    state_handlers.TRADING_RULES = replace(
+        CONFIG,
+        PRE_SUBMIT_LIQUIDITY_RELIEF_ENABLED=True,
+        PRE_SUBMIT_LIQUIDITY_RELIEF_MIN_AI_SCORE=75,
+        PRE_SUBMIT_LIQUIDITY_RELIEF_MIN_TICK_ACCEL=1.10,
+        PRE_SUBMIT_LIQUIDITY_RELIEF_MIN_BUY_PRESSURE=68.0,
+        PRE_SUBMIT_LIQUIDITY_RELIEF_MIN_MICRO_VWAP_BP=0.0,
+        PRE_SUBMIT_LIQUIDITY_RELIEF_MAX_PER_SYMBOL=1,
+    )
+    stock = {
+        "id": 120,
+        "name": "SIGPRESSURE",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "scanner_promotion_reason": "late_confirmation_first_seen_probe",
+        "source_signature": "OPEN_TOP,PRICE_JUMP_START,VOLUME_SURGE_POSITIVE",
+    }
+
+    decision = state_handlers._resolve_pre_submit_liquidity_relief(
+        stock,
+        {
+            "quote_stale": False,
+            "tick_acceleration_ratio": 0.0,
+            "curr_vs_micro_vwap_bp": 43.69,
+            "buy_pressure_10t": 93.69,
+        },
+        strategy="SCALPING",
+        ai_score=82,
+        liquidity_value=59_808_000,
+        min_liquidity=350_000_000,
+        latency_gate={"latency_state": "CAUTION", "effective_decision": "ALLOW_NORMAL", "quote_stale": False},
+        guard_fields={},
+        submit_fields={},
+        price_snapshot={},
+        orderbook_fields={},
+        microstructure_fields={},
+        pre_ai_fields={},
+    )
+
+    assert decision["allowed"] is True
+    assert decision["relief_skip_reason"] == "allowed"
+    assert decision["signature_micro_pressure_path"] is True
+    assert decision["source_signature_strong_bundle"] is True
 
 
 def test_pre_submit_liquidity_relief_blocks_latency_canary_allowed_danger(monkeypatch):

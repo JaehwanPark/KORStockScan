@@ -22,6 +22,7 @@ REPORT_TYPE = "entry_hurdle_backtest"
 SCHEMA_VERSION = 1
 REPORT_DIR = DATA_DIR / "report" / REPORT_TYPE
 BUY_FUNNEL_DIR = DATA_DIR / "report" / "buy_funnel_sentinel"
+PIPELINE_EVENTS_DIR = DATA_DIR / "pipeline_events"
 MISSED_ENTRY_DIRS = [
     DATA_DIR / "report" / "monitor_snapshots",
     DATA_DIR / "report" / "missed_entry_counterfactual",
@@ -93,6 +94,30 @@ def _missed_entry_path(target_date: str) -> Path:
     return existing_or_gzip_path(MISSED_ENTRY_DIRS[0] / f"missed_entry_counterfactual_{target_date}.json")
 
 
+def _pipeline_events_path(target_date: str) -> Path:
+    return existing_or_gzip_path(PIPELINE_EVENTS_DIR / f"pipeline_events_{target_date}.jsonl")
+
+
+def _iter_jsonl(path: Path, *, required_substrings: tuple[str, ...] = ()):
+    actual_path = existing_or_gzip_path(path)
+    if not actual_path.exists():
+        return
+    try:
+        with open_text_auto(actual_path) as handle:
+            for line in handle:
+                line = line.strip()
+                if not line:
+                    continue
+                if required_substrings and not any(marker in line for marker in required_substrings):
+                    continue
+                try:
+                    yield json.loads(line)
+                except Exception:
+                    continue
+    except Exception:
+        return
+
+
 def _session_summary(report: dict[str, Any]) -> dict[str, Any]:
     session = report.get("session_summary")
     if isinstance(session, dict):
@@ -162,6 +187,39 @@ def _counter_to_plain(counter: Counter[str]) -> dict[str, int]:
     return {str(key): _safe_int(value, 0) for key, value in sorted(counter.items()) if _safe_int(value, 0) > 0}
 
 
+def _truthy(value: Any) -> bool:
+    return str(value).strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def _source_signature_tokens(source_signature: Any) -> set[str]:
+    return {
+        token.strip().upper()
+        for token in str(source_signature or "").replace("|", ",").split(",")
+        if token.strip()
+    }
+
+
+def _signature_strong_bundle(source_signature: Any) -> bool:
+    return {"PRICE_JUMP_START", "VOLUME_SURGE_POSITIVE"}.issubset(_source_signature_tokens(source_signature))
+
+
+def _signature_micro_pressure_path(fields: dict[str, Any]) -> bool:
+    return (
+        _signature_strong_bundle(fields.get("source_signature"))
+        and _safe_float(fields.get("curr_vs_micro_vwap_bp"), 0.0) >= 25.0
+        and _safe_float(fields.get("buy_pressure_10t"), 0.0) >= 80.0
+    )
+
+
+def _event_key(event: dict[str, Any]) -> tuple[str, str, str, str]:
+    return (
+        str(event.get("stock_code") or ""),
+        str(event.get("record_id") or ""),
+        str(event.get("stage") or ""),
+        str(event.get("emitted_at") or ""),
+    )
+
+
 def _top_overblocking(summary: dict[str, dict[str, Any]], keys: set[str]) -> dict[str, Any] | None:
     rows = []
     for key in keys:
@@ -183,6 +241,152 @@ def _top_overblocking(summary: dict[str, dict[str, Any]], keys: set[str]) -> dic
     )
     key, row = rows[0]
     return {"blocker": key, **row}
+
+
+def _build_implemented_policy_backtest(
+    *,
+    source_dates: list[str],
+    stage_totals: Counter[str],
+    blocker_summary: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    liquidity_attempts: set[tuple[str, str, str, str]] = set()
+    liquidity_symbols: set[str] = set()
+    liquidity_skip_reasons: Counter[str] = Counter()
+    liquidity_excluded: Counter[str] = Counter()
+    ai_recheck_attempts: set[tuple[str, str, str, str]] = set()
+    ai_recheck_symbols: set[str] = set()
+    ai_recheck_excluded: Counter[str] = Counter()
+    latest_liquidity_relief_by_record: dict[tuple[str, str], dict[str, Any]] = {}
+
+    for source_date in source_dates:
+        for event in _iter_jsonl(
+            _pipeline_events_path(source_date),
+            required_substrings=(
+                '"stage":"pre_submit_liquidity_guard_block"',
+                '"stage": "pre_submit_liquidity_guard_block"',
+                '"stage":"pre_submit_liquidity_relief_skipped"',
+                '"stage": "pre_submit_liquidity_relief_skipped"',
+                '"stage":"blocked_ai_score"',
+                '"stage": "blocked_ai_score"',
+                '"stage":"first_ai_wait"',
+                '"stage": "first_ai_wait"',
+            ),
+        ) or ():
+            if not isinstance(event, dict):
+                continue
+            stage = str(event.get("stage") or "")
+            fields = event.get("fields") if isinstance(event.get("fields"), dict) else {}
+            code = str(event.get("stock_code") or "")
+            record_key = (code, str(event.get("record_id") or ""))
+            if stage == "pre_submit_liquidity_relief_skipped":
+                latest_liquidity_relief_by_record[record_key] = fields
+                continue
+            if stage == "pre_submit_liquidity_guard_block":
+                relief_fields = latest_liquidity_relief_by_record.get(record_key, {})
+                merged_fields = {**relief_fields, **fields}
+                if _truthy(merged_fields.get("quote_stale_at_submit")) or _truthy(
+                    merged_fields.get("price_context_stale_at_submit")
+                ):
+                    liquidity_excluded["stale_quote_or_context"] += 1
+                    continue
+                if str(merged_fields.get("pre_submit_overbought_guard_action") or "").upper() not in {"", "PASS"}:
+                    liquidity_excluded["overbought_guard_not_pass"] += 1
+                    continue
+                if str(merged_fields.get("entry_submit_revalidation_warning") or "").strip():
+                    liquidity_excluded["submit_revalidation_warning"] += 1
+                    continue
+                if str(merged_fields.get("latency_state") or "").upper() == "DANGER":
+                    liquidity_excluded["latency_danger"] += 1
+                    continue
+                if (
+                    merged_fields.get("ai_score") not in {None, "", "null", "none", "-"}
+                    and _safe_float(merged_fields.get("ai_score"), 0.0) < 75.0
+                ):
+                    liquidity_excluded["ai_score_below_submit_min"] += 1
+                    continue
+                if not _signature_micro_pressure_path(merged_fields):
+                    liquidity_excluded["signature_micro_pressure_not_met"] += 1
+                    continue
+                liquidity_attempts.add(_event_key(event))
+                if code:
+                    liquidity_symbols.add(code)
+                liquidity_skip_reasons[str(merged_fields.get("liquidity_relief_skip_reason") or "-")] += 1
+                continue
+
+            if stage in {"blocked_ai_score", "first_ai_wait"}:
+                score = _safe_float(fields.get("ai_score"), 0.0)
+                if score < 67.0 or score > 74.0:
+                    ai_recheck_excluded["score_outside_67_74"] += 1
+                    continue
+                if _truthy(fields.get("quote_stale")) or _truthy(fields.get("tick_context_stale")):
+                    ai_recheck_excluded["stale_quote_or_tick_context"] += 1
+                    continue
+                if not _signature_strong_bundle(fields.get("source_signature")):
+                    ai_recheck_excluded["source_signature_not_strong_bundle"] += 1
+                    continue
+                if _safe_float(fields.get("curr_vs_micro_vwap_bp"), 0.0) < 0.0:
+                    ai_recheck_excluded["micro_vwap_negative"] += 1
+                    continue
+                ai_recheck_attempts.add(_event_key(event))
+                if code:
+                    ai_recheck_symbols.add(code)
+
+    submitted_unique = _safe_int(stage_totals.get("order_bundle_submitted"), 0)
+    budget_unique = _safe_int(stage_totals.get("budget_pass"), 0)
+    conservative_submit_rate = submitted_unique / budget_unique if budget_unique else 0.0
+    blocked_ai = blocker_summary.get("blocked_ai_score") if isinstance(blocker_summary.get("blocked_ai_score"), dict) else {}
+    ai_missed_rate = _safe_float(blocked_ai.get("missed_winner_rate"), 0.0) / 100.0
+    liquidity_count = len(liquidity_attempts)
+    ai_recheck_count = len(ai_recheck_attempts)
+    liquidity_conservative = round(liquidity_count * conservative_submit_rate)
+    ai_recheck_conservative = round(ai_recheck_count * conservative_submit_rate * max(ai_missed_rate, 0.0))
+    return {
+        "metric_role": "funnel_count",
+        "decision_authority": "implemented_entry_logic_counterfactual_report_only",
+        "window_policy": "clean_baseline_existing_pipeline_events",
+        "sample_floor": "event_level_reconstruction_available_rows_only",
+        "primary_decision_metric": "estimated_order_bundle_submitted_count",
+        "source_quality_gate": "clean_baseline_allowed_existing_pipeline_events",
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted_provenance_preserved": True,
+        "forbidden_uses": FORBIDDEN_USES,
+        "implemented_policy_version": "entry_submit_recovery_v2_no_reprice_no_risk_expansion",
+        "policy_changes_backtested": [
+            "pre_submit_liquidity_signature_micro_pressure_relief",
+            "early_accel_strong_bundle_recheck_score_67_74",
+        ],
+        "liquidity_signature_micro_pressure_relief": {
+            "eligible_attempts": liquidity_count,
+            "unique_symbols": len(liquidity_symbols),
+            "conservative_estimated_order_submit_success": liquidity_conservative,
+            "upper_bound_order_submit_path_reentry": liquidity_count,
+            "eligible_prior_skip_reasons": _counter_to_plain(liquidity_skip_reasons),
+            "excluded_reasons": _counter_to_plain(liquidity_excluded),
+        },
+        "ai_score_67_74_strong_bundle_recheck": {
+            "eligible_recheck_attempts": ai_recheck_count,
+            "unique_symbols": len(ai_recheck_symbols),
+            "blocked_ai_score_missed_winner_rate_used": round(ai_missed_rate * 100.0, 2),
+            "conservative_estimated_order_submit_success": ai_recheck_conservative,
+            "upper_bound_recheck_attempts": ai_recheck_count,
+            "excluded_reasons": _counter_to_plain(ai_recheck_excluded),
+        },
+        "total": {
+            "eligible_attempts": liquidity_count + ai_recheck_count,
+            "unique_symbols_upper_bound": len(liquidity_symbols | ai_recheck_symbols),
+            "conservative_estimated_order_submit_success": liquidity_conservative + ai_recheck_conservative,
+            "upper_bound_order_submit_path_reentry": liquidity_count + ai_recheck_count,
+            "baseline_order_bundle_submitted": submitted_unique,
+            "baseline_budget_pass": budget_unique,
+            "baseline_submitted_to_budget_rate_pct": round(conservative_submit_rate * 100.0, 2),
+        },
+        "estimation_limits": [
+            "second_ai_recheck_response_is_not_replayed",
+            "broker_acceptance_is_not_replayed",
+            "downstream_hard_guards_remain_excluded_or_unmodified",
+        ],
+    }
 
 
 def _next_action_diagnostics(
@@ -463,6 +667,11 @@ def build_report(
         quote_totals=quote_totals,
         window_policy=f"{start}_to_{end}",
     )
+    implemented_policy_backtest = _build_implemented_policy_backtest(
+        source_dates=source_dates,
+        stage_totals=stage_totals,
+        blocker_summary=blocker_summary,
+    )
     return {
         "schema_version": SCHEMA_VERSION,
         "report_type": REPORT_TYPE,
@@ -488,6 +697,7 @@ def build_report(
             "blocker_tradeoff": blocker_summary,
             "cohort_tradeoff": cohort_summary,
             "next_action_diagnostics": next_action_diagnostics,
+            "implemented_policy_backtest": implemented_policy_backtest,
         },
         "date_rows": date_rows,
     }
@@ -509,8 +719,44 @@ def build_markdown(report: dict[str, Any]) -> str:
         f"- submitted/budget unique: `{summary.get('submitted_to_budget_unique_pct', 0.0)}%`",
         f"- missing_artifacts: `{len(report.get('missing_artifacts') or [])}`",
         "",
-        "## Recommended Next Actions",
+        "## Implemented Policy Backtest",
     ]
+    policy_backtest = (
+        summary.get("implemented_policy_backtest")
+        if isinstance(summary.get("implemented_policy_backtest"), dict)
+        else {}
+    )
+    total = policy_backtest.get("total") if isinstance(policy_backtest.get("total"), dict) else {}
+    liquidity_backtest = (
+        policy_backtest.get("liquidity_signature_micro_pressure_relief")
+        if isinstance(policy_backtest.get("liquidity_signature_micro_pressure_relief"), dict)
+        else {}
+    )
+    ai_recheck_backtest = (
+        policy_backtest.get("ai_score_67_74_strong_bundle_recheck")
+        if isinstance(policy_backtest.get("ai_score_67_74_strong_bundle_recheck"), dict)
+        else {}
+    )
+    lines.extend(
+        [
+            f"- eligible attempts: `{total.get('eligible_attempts', 0)}`",
+            f"- unique symbols upper bound: `{total.get('unique_symbols_upper_bound', 0)}`",
+            f"- conservative estimated submit success: `{total.get('conservative_estimated_order_submit_success', 0)}`",
+            f"- upper bound submit-path reentry: `{total.get('upper_bound_order_submit_path_reentry', 0)}`",
+            f"- liquidity relief eligible/success: "
+            f"`{liquidity_backtest.get('eligible_attempts', 0)}`/"
+            f"`{liquidity_backtest.get('conservative_estimated_order_submit_success', 0)}`",
+            f"- AI 67-74 recheck eligible/success: "
+            f"`{ai_recheck_backtest.get('eligible_recheck_attempts', 0)}`/"
+            f"`{ai_recheck_backtest.get('conservative_estimated_order_submit_success', 0)}`",
+            "",
+        ]
+    )
+    lines.extend(
+        [
+            "## Recommended Next Actions",
+        ]
+    )
     diagnostics = summary.get("next_action_diagnostics") if isinstance(summary.get("next_action_diagnostics"), dict) else {}
     for item in diagnostics.get("recommended_next_actions") or []:
         lines.append(

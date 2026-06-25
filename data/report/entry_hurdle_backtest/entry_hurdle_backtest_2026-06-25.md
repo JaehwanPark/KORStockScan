@@ -6,6 +6,14 @@
 - submitted/budget unique: `12.9%`
 - missing_artifacts: `0`
 
+## Implemented Policy Backtest
+- eligible attempts: `122`
+- unique symbols upper bound: `62`
+- conservative estimated submit success: `11`
+- upper bound submit-path reentry: `122`
+- liquidity relief eligible/success: `6`/`1`
+- AI 67-74 recheck eligible/success: `116`/`10`
+
 ## Recommended Next Actions
 - `trace_latency_refresh_recovered_downstream_blocker`: priority=1, decision=instrumentation_or_guard_overlap_candidate, reason=quote refresh recovered latency pass but did not always reach broker submit
 - `review_pre_submit_liquidity_relief_scope`: priority=2, decision=bounded_report_only_policy_candidate, reason=liquidity blocker has missed-winner skew in existing counterfactual data
