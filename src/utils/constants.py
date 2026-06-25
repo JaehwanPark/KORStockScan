@@ -1334,6 +1334,9 @@ def _build_trading_rules() -> TradingConfig:
     env_score6574_probe_min_pressure = _env_float("KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_MIN_BUY_PRESSURE")
     env_score6574_probe_min_accel = _env_float("KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_MIN_TICK_ACCEL")
     env_score6574_probe_min_vwap_bp = _env_float("KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_MIN_MICRO_VWAP_BP")
+    env_score6574_probe_effective_min_vwap_floor_bp = _env_float(
+        "KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_EFFECTIVE_MIN_MICRO_VWAP_FLOOR_BP"
+    )
     env_score6574_probe_strong_micro_override_enabled = _env_bool(
         "KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_STRONG_MICRO_OVERRIDE_ENABLED"
     )
@@ -1391,6 +1394,7 @@ def _build_trading_rules() -> TradingConfig:
         or env_score6574_probe_min_pressure is not None
         or env_score6574_probe_min_accel is not None
         or env_score6574_probe_min_vwap_bp is not None
+        or env_score6574_probe_effective_min_vwap_floor_bp is not None
         or env_score6574_probe_strong_micro_override_enabled is not None
         or env_score6574_probe_strong_micro_min_pressure is not None
         or env_score6574_probe_strong_micro_min_vwap_bp is not None
@@ -1465,6 +1469,9 @@ def _build_trading_rules() -> TradingConfig:
             AI_SCORE65_74_RECOVERY_PROBE_MIN_MICRO_VWAP_BP=env_score6574_probe_min_vwap_bp
             if env_score6574_probe_min_vwap_bp is not None
             else config.AI_SCORE65_74_RECOVERY_PROBE_MIN_MICRO_VWAP_BP,
+            AI_SCORE65_74_RECOVERY_PROBE_EFFECTIVE_MIN_MICRO_VWAP_FLOOR_BP=env_score6574_probe_effective_min_vwap_floor_bp
+            if env_score6574_probe_effective_min_vwap_floor_bp is not None
+            else config.AI_SCORE65_74_RECOVERY_PROBE_EFFECTIVE_MIN_MICRO_VWAP_FLOOR_BP,
             AI_SCORE65_74_RECOVERY_PROBE_STRONG_MICRO_OVERRIDE_ENABLED=env_score6574_probe_strong_micro_override_enabled
             if env_score6574_probe_strong_micro_override_enabled is not None
             else config.AI_SCORE65_74_RECOVERY_PROBE_STRONG_MICRO_OVERRIDE_ENABLED,
