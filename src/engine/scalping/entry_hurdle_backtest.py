@@ -213,10 +213,10 @@ def _signature_micro_pressure_path(fields: dict[str, Any]) -> bool:
 
 def _event_key(event: dict[str, Any]) -> tuple[str, str, str, str]:
     return (
+        str(event.get("emitted_date") or ""),
         str(event.get("stock_code") or ""),
         str(event.get("record_id") or ""),
         str(event.get("stage") or ""),
-        str(event.get("emitted_at") or ""),
     )
 
 
@@ -307,16 +307,18 @@ def _build_implemented_policy_backtest(
                 if not _signature_micro_pressure_path(merged_fields):
                     liquidity_excluded["signature_micro_pressure_not_met"] += 1
                     continue
-                liquidity_attempts.add(_event_key(event))
-                if code:
-                    liquidity_symbols.add(code)
-                liquidity_skip_reasons[str(merged_fields.get("liquidity_relief_skip_reason") or "-")] += 1
+                candidate_key = _event_key(event)
+                if candidate_key not in liquidity_attempts:
+                    liquidity_attempts.add(candidate_key)
+                    if code:
+                        liquidity_symbols.add(code)
+                    liquidity_skip_reasons[str(merged_fields.get("liquidity_relief_skip_reason") or "-")] += 1
                 continue
 
             if stage in {"blocked_ai_score", "first_ai_wait"}:
                 score = _safe_float(fields.get("ai_score"), 0.0)
-                if score < 67.0 or score > 74.0:
-                    ai_recheck_excluded["score_outside_67_74"] += 1
+                if score < 60.0 or score > 74.0:
+                    ai_recheck_excluded["score_outside_60_74"] += 1
                     continue
                 if _truthy(fields.get("quote_stale")) or _truthy(fields.get("tick_context_stale")):
                     ai_recheck_excluded["stale_quote_or_tick_context"] += 1
@@ -354,7 +356,7 @@ def _build_implemented_policy_backtest(
         "implemented_policy_version": "entry_submit_recovery_v2_no_reprice_no_risk_expansion",
         "policy_changes_backtested": [
             "pre_submit_liquidity_signature_micro_pressure_relief",
-            "early_accel_strong_bundle_recheck_score_67_74",
+            "early_accel_strong_bundle_recheck_score_60_74",
         ],
         "liquidity_signature_micro_pressure_relief": {
             "eligible_attempts": liquidity_count,
@@ -364,7 +366,7 @@ def _build_implemented_policy_backtest(
             "eligible_prior_skip_reasons": _counter_to_plain(liquidity_skip_reasons),
             "excluded_reasons": _counter_to_plain(liquidity_excluded),
         },
-        "ai_score_67_74_strong_bundle_recheck": {
+        "ai_score_60_74_strong_bundle_recheck": {
             "eligible_recheck_attempts": ai_recheck_count,
             "unique_symbols": len(ai_recheck_symbols),
             "blocked_ai_score_missed_winner_rate_used": round(ai_missed_rate * 100.0, 2),
@@ -733,8 +735,8 @@ def build_markdown(report: dict[str, Any]) -> str:
         else {}
     )
     ai_recheck_backtest = (
-        policy_backtest.get("ai_score_67_74_strong_bundle_recheck")
-        if isinstance(policy_backtest.get("ai_score_67_74_strong_bundle_recheck"), dict)
+        policy_backtest.get("ai_score_60_74_strong_bundle_recheck")
+        if isinstance(policy_backtest.get("ai_score_60_74_strong_bundle_recheck"), dict)
         else {}
     )
     lines.extend(
@@ -746,7 +748,7 @@ def build_markdown(report: dict[str, Any]) -> str:
             f"- liquidity relief eligible/success: "
             f"`{liquidity_backtest.get('eligible_attempts', 0)}`/"
             f"`{liquidity_backtest.get('conservative_estimated_order_submit_success', 0)}`",
-            f"- AI 67-74 recheck eligible/success: "
+            f"- AI 60-74 recheck eligible/success: "
             f"`{ai_recheck_backtest.get('eligible_recheck_attempts', 0)}`/"
             f"`{ai_recheck_backtest.get('conservative_estimated_order_submit_success', 0)}`",
             "",

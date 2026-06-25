@@ -184,8 +184,8 @@ def test_entry_hurdle_backtest_classifies_overblocking_from_existing_artifacts(t
     assert policy_backtest["runtime_effect"] is False
     assert "entry price reprice" in policy_backtest["forbidden_uses"]
     assert policy_backtest["liquidity_signature_micro_pressure_relief"]["eligible_attempts"] == 1
-    assert policy_backtest["ai_score_67_74_strong_bundle_recheck"]["eligible_recheck_attempts"] == 1
-    assert policy_backtest["ai_score_67_74_strong_bundle_recheck"]["excluded_reasons"] == {
+    assert policy_backtest["ai_score_60_74_strong_bundle_recheck"]["eligible_recheck_attempts"] == 1
+    assert policy_backtest["ai_score_60_74_strong_bundle_recheck"]["excluded_reasons"] == {
         "stale_quote_or_tick_context": 1
     }
     assert policy_backtest["total"]["eligible_attempts"] == 2
