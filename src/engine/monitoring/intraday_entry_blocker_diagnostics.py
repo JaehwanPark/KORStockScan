@@ -218,6 +218,8 @@ def _event_max_age_ms(row: dict[str, Any]) -> float | None:
 
 
 def _event_has_stale_or_delayed_context(row: dict[str, Any]) -> bool:
+    if _event_is_recovery_observation(row):
+        return False
     reason = _blocker_reason(row).lower()
     stage = str(row.get("stage") or "").lower()
     fields = row.get("fields") if isinstance(row.get("fields"), dict) else {}
@@ -243,6 +245,10 @@ def _event_has_stale_or_delayed_context(row: dict[str, Any]) -> bool:
 def _event_is_fresh_context(row: dict[str, Any]) -> bool:
     max_age_ms = _event_max_age_ms(row)
     return max_age_ms is not None and max_age_ms <= ENTRY_FRESH_MAX_AGE_MS and not _event_has_stale_or_delayed_context(row)
+
+
+def _event_is_recovery_observation(row: dict[str, Any]) -> bool:
+    return _blocker_reason(row) in RECOVERY_OBSERVATION_REASONS
 
 
 def _low_ai_or_negative_pressure(row: dict[str, Any]) -> bool:
@@ -287,6 +293,8 @@ def _strength_history_count(row: dict[str, Any]) -> int | None:
 
 
 def _is_zero_strength_history_source_quality_event(row: dict[str, Any]) -> bool:
+    if _event_is_recovery_observation(row):
+        return False
     history_count = _strength_history_count(row)
     if history_count is None or history_count > 0:
         return False

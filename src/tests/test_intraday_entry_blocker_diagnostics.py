@@ -210,6 +210,45 @@ def test_build_report_excludes_recovery_observations_from_blockers(tmp_path):
         "count": 1,
     }
     assert item["latest_blocker"]["reason"] == "below_strength_base"
+    assert report["summary"]["repeated_zero_strength_history_workorder_count"] == 0
+    assert report["source_quality_workorders"]["rising_missed_repeated_zero_strength_history"] == []
+
+
+def test_build_report_treats_recovered_stale_ws_as_recovered_not_stale_eval(tmp_path):
+    path = tmp_path / "pipeline_events_2026-06-23.jsonl"
+    rows = [
+        _event("000001", "A", "scalping_scanner_candidate_promoted", {"price_delta_since_first_seen_pct": "1.20"}),
+        _event(
+            "000001",
+            "A",
+            "blocked_ai_score",
+            {
+                "price_delta_since_first_seen_pct": "1.20",
+                "ai_score": "60",
+                "quote_age_ms": "1200",
+                "skip_reason": "scanner_fast_precheck_stale_ws_recovered",
+                "ws_strength_history_count": "0",
+            },
+        ),
+        _event(
+            "000001",
+            "A",
+            "scalping_scanner_watching_runtime_skip",
+            {
+                "price_delta_since_first_seen_pct": "1.20",
+                "skip_reason": "scanner_fast_precheck_stale_ws_recovered",
+                "ws_strength_history_count": "0",
+            },
+        ),
+    ]
+    path.write_text("\n".join(json.dumps(row, ensure_ascii=False) for row in rows), encoding="utf-8")
+
+    report = build_report(target_date="2026-06-23", pipeline_path=path, generated_at="fixed")
+
+    expected = {"fresh_eval": 1, "stale_or_delayed_eval": 0, "unknown_eval_quality": 0}
+    assert report["summary"]["rising_missed_low_ai_or_negative_pressure_eval_quality"] == expected
+    assert report["summary"]["rising_missed_repeated_zero_strength_history_workorder_count"] == 0
+    assert report["source_quality_workorders"]["rising_missed_repeated_zero_strength_history"] == []
 
 
 def test_build_report_surfaces_repeated_zero_strength_history_workorder(tmp_path):
