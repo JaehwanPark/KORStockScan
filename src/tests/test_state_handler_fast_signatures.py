@@ -2966,6 +2966,49 @@ def test_scanner_fast_precheck_allows_high_delta_rest_quote_recovery(monkeypatch
     assert stock["_scanner_fast_precheck_result"] == "eligible_for_heavy_entry_eval"
 
 
+def test_scanner_fast_precheck_allows_configured_high_delta_stale_ws_relief(monkeypatch):
+    emitted = []
+    monkeypatch.setenv("KORSTOCKSCAN_SCANNER_RISING_STALE_WS_FULL_EVAL_RELIEF_ENABLED", "true")
+    monkeypatch.setenv("KORSTOCKSCAN_SCANNER_RISING_STALE_WS_FULL_EVAL_MIN_DELTA_PCT", "1.0")
+    monkeypatch.setattr(handlers.time, "time", lambda: 1012.0)
+    monkeypatch.setattr(
+        handlers,
+        "emit_pipeline_event",
+        lambda pipeline, name, code, stage, *, record_id=None, fields=None: emitted.append(
+            {"stage": stage, "fields": fields or {}}
+        ),
+    )
+    stock = {
+        "id": 851,
+        "name": "RISING_STALE_WS",
+        "status": "WATCHING",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "entry_armed_at_epoch": 1000.0,
+        "price_delta_since_first_seen_pct": "3.40",
+    }
+
+    assert handlers.emit_scanner_fast_precheck(
+        stock,
+        "000851",
+        now_ts=1012.0,
+        ws_data={
+            "curr": 1200,
+            "last_ws_update_ts": 1000.0,
+            "ws_snapshot_recovery_source": "ws_manager_latest_data",
+        },
+        throttle_sec=0,
+    )
+
+    fields = emitted[-1]["fields"]
+    assert fields["fast_precheck_result"] == "eligible_for_heavy_entry_eval"
+    assert fields["fast_precheck_reason"] == "rising_stale_ws_snapshot_full_eval_relief"
+    assert fields["fast_precheck_stale_ws_relief_applied"] is True
+    assert fields["fast_precheck_realtime_relief_scope"] == "rising_entry_relief_only"
+    assert fields["heavy_queue_enter_epoch"] == "1012.000"
+    assert stock["_scanner_fast_precheck_result"] == "eligible_for_heavy_entry_eval"
+
+
 def test_scanner_fast_precheck_allows_subscription_recheck_with_fresh_realtime_strength(monkeypatch):
     emitted = []
     monkeypatch.setattr(handlers.time, "time", lambda: 1012.0)

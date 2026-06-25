@@ -7215,6 +7215,19 @@ def _scanner_rising_rest_quote_full_eval_min_delta_pct() -> float:
     return max(0.0, min(value, 20.0))
 
 
+def _scanner_rising_stale_ws_full_eval_relief_enabled() -> bool:
+    return _env_bool("KORSTOCKSCAN_SCANNER_RISING_STALE_WS_FULL_EVAL_RELIEF_ENABLED", False)
+
+
+def _scanner_rising_stale_ws_full_eval_min_delta_pct() -> float:
+    raw = os.getenv("KORSTOCKSCAN_SCANNER_RISING_STALE_WS_FULL_EVAL_MIN_DELTA_PCT", "")
+    try:
+        value = float(str(raw).strip()) if str(raw).strip() else 3.0
+    except Exception:
+        value = 3.0
+    return max(0.0, min(value, 20.0))
+
+
 def _scanner_rising_cooldown_eviction_relief_enabled() -> bool:
     return _env_bool("KORSTOCKSCAN_SCANNER_RISING_COOLDOWN_EVICTION_RELIEF_ENABLED", False)
 
@@ -7631,6 +7644,16 @@ def _scanner_fast_precheck_fields(
         and _scanner_rising_entry_relief_eligible(stock)
         and _scanner_positive_delta_pct(stock) >= _scanner_rising_rest_quote_full_eval_min_delta_pct()
     )
+    rising_stale_ws_relief = (
+        quote_age_sec is not None
+        and quote_age_sec > max_age_sec
+        and not rising_realtime_relief
+        and not rising_subscription_recheck_relief
+        and not rest_quote_only_recovery
+        and _scanner_rising_stale_ws_full_eval_relief_enabled()
+        and _scanner_rising_entry_relief_eligible(stock)
+        and _scanner_positive_delta_pct(stock) >= _scanner_rising_stale_ws_full_eval_min_delta_pct()
+    )
     if curr <= 0:
         result = "source_quality_blocked"
         reason = "missing_or_zero_curr"
@@ -7642,6 +7665,7 @@ def _scanner_fast_precheck_fields(
         and quote_age_sec > max_age_sec
         and not rising_realtime_relief
         and not rising_subscription_recheck_relief
+        and not rising_stale_ws_relief
     ):
         result = "stability_pending"
         reason = (
@@ -7658,6 +7682,8 @@ def _scanner_fast_precheck_fields(
             if rising_subscription_recheck_relief
             else "rising_rest_quote_recovery_without_realtime_strength"
             if rising_rest_quote_relief
+            else "rising_stale_ws_snapshot_full_eval_relief"
+            if rising_stale_ws_relief
             else "fast_precheck_pass"
         )
     return {
@@ -7694,6 +7720,12 @@ def _scanner_fast_precheck_fields(
             if rising_rest_quote_relief
             else "not_applicable_rest_quote_relief_min_delta_pct"
         ),
+        "fast_precheck_stale_ws_relief_applied": bool(rising_stale_ws_relief),
+        "fast_precheck_stale_ws_relief_min_delta_pct": (
+            round(_scanner_rising_stale_ws_full_eval_min_delta_pct(), 4)
+            if rising_stale_ws_relief
+            else "not_applicable_stale_ws_relief_min_delta_pct"
+        ),
         "fast_precheck_subscription_recheck_age_sec": (
             round(subscription_recheck_age_sec, 3)
             if subscription_recheck_age_sec < 999999.0
@@ -7710,6 +7742,7 @@ def _scanner_fast_precheck_fields(
                 rising_realtime_relief
                 or rising_subscription_recheck_curr_relief
                 or rising_rest_quote_relief
+                or rising_stale_ws_relief
             )
             else "not_applicable"
         ),
