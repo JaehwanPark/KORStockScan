@@ -4603,6 +4603,47 @@ def run_sniper(is_test_mode=False):
                             delayed_ws_data,
                             now_ts=time.time(),
                         )
+                        if recheck_fields.get("ws_subscription_repair_needed"):
+                            rest_quote_allowed, rest_quote_deferred_reason = _scanner_rest_quote_recovery_options(
+                                delayed_stock,
+                                time.time(),
+                            )
+                            _recovered_ws_data, recovery_fields = _recover_missing_ws_snapshot(
+                                delayed_stock,
+                                delayed_code,
+                                time.time(),
+                                recheck_snapshot or delayed_ws_data,
+                                ws_reg_source="scanner_heavy_eval_stale_ws_recovery",
+                                publish_ws_reg=False,
+                                allow_early_rest_fallback=rest_quote_allowed,
+                                rest_quote_deferred_reason=rest_quote_deferred_reason,
+                                cycle_state_store=scanner_ws_repair_cycle_state_by_code,
+                            )
+                            if recovery_fields.get("ws_repair_batch_required"):
+                                recovery_fields.update(
+                                    _queue_scanner_ws_persistent_repair(
+                                        delayed_stock,
+                                        delayed_code,
+                                        recheck_snapshot or delayed_ws_data,
+                                        recovery_fields,
+                                    )
+                                )
+                            elif recovery_fields.get("ws_repair_cycle_reg_allowed", True):
+                                _queue_scanner_ws_reg(
+                                    delayed_code,
+                                    "scanner_heavy_eval_stale_ws_recovery",
+                                )
+                            _defer_scanner_watching_runtime_skip(
+                                delayed_stock,
+                                delayed_code,
+                                skip_reason="scanner_heavy_eval_stale_snapshot_recheck",
+                                now_ts=time.time(),
+                                ws_data=recheck_snapshot or delayed_ws_data,
+                                ws_manager_available=bool(WS_MANAGER),
+                                **recheck_fields,
+                                **recovery_fields,
+                            )
+                            continue
                         if (
                             not recheck_fields.get("ws_subscription_repair_needed", True)
                             and _safe_int(recheck_snapshot.get("curr"), 0) > 0

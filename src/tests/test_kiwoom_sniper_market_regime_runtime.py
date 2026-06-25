@@ -1858,6 +1858,22 @@ def test_scanner_heavy_eval_refreshes_ws_snapshot_before_handler():
     assert flush_def_idx < eval_ws_idx < recheck_idx < assign_idx < handle_idx < eval_arg_idx
 
 
+def test_scanner_heavy_eval_stale_recheck_repairs_before_handler():
+    source = inspect.getsource(kiwoom_sniper_v2.run_sniper)
+    flush_def_idx = source.index("def _flush_delayed_scanner_heavy_eval")
+    recheck_idx = source.index("_scanner_ws_subscription_recheck_snapshot_and_fields(", flush_def_idx)
+    stale_idx = source.index('recheck_fields.get("ws_subscription_repair_needed")', recheck_idx)
+    recover_idx = source.index("scanner_heavy_eval_stale_ws_recovery", stale_idx)
+    skip_idx = source.index('skip_reason="scanner_heavy_eval_stale_snapshot_recheck"', recover_idx)
+    continue_idx = source.index("continue", skip_idx)
+    handle_idx = source.index(
+        "handle_watching_state(\n                        delayed_stock",
+        continue_idx,
+    )
+
+    assert recheck_idx < stale_idx < recover_idx < skip_idx < continue_idx < handle_idx
+
+
 def test_scanner_strength_recheck_waiting_skips_before_full_eval_budget():
     source = inspect.getsource(kiwoom_sniper_v2.run_sniper)
     waiting_idx = source.index("if _scanner_strength_recheck_waiting(stock")
