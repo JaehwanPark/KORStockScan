@@ -1,7 +1,14 @@
 import json
 import gzip
+from datetime import datetime
 
-from src.engine.monitoring.intraday_entry_blocker_diagnostics import build_report, _default_pipeline_path
+from src.engine.monitoring.intraday_entry_blocker_diagnostics import (
+    build_report,
+    _default_pipeline_path,
+    _loop_should_stop,
+    _parse_hhmm,
+    _within_time_window,
+)
 
 
 def _event(code, name, stage, fields, emitted_at="2026-06-23T08:00:00"):
@@ -299,6 +306,66 @@ def test_build_report_excludes_sim_and_keeps_falling_real_submit(tmp_path):
     assert report["summary"]["excluded_analysis_scope"] == "sim_and_swing_events"
 
 
+def test_build_report_excludes_sim_price_rows_from_real_entry_price_diagnostics(tmp_path):
+    path = tmp_path / "pipeline_events_2026-06-23.jsonl"
+    rows = [
+        _event("000001", "A", "scalping_scanner_candidate_promoted", {"price_delta_since_first_seen_pct": "1.00"}),
+        _event(
+            "000001",
+            "A",
+            "scalp_entry_action_decision_snapshot",
+            {
+                "reason": "scalp_live_simulator",
+                "submitted_order_price": "0",
+                "best_bid_at_submit": "10000",
+                "entry_submit_revalidation_warning": "stale_context_or_quote",
+            },
+        ),
+        _event(
+            "000001",
+            "A",
+            "scalp_entry_action_decision_snapshot",
+            {
+                "simulation_book": "scalp_ai_buy_all",
+                "submitted_order_price": "0",
+                "best_bid_at_submit": "10000",
+                "entry_submit_revalidation_warning": "stale_context_or_quote",
+            },
+        ),
+    ]
+    path.write_text("\n".join(json.dumps(row, ensure_ascii=False) for row in rows), encoding="utf-8")
+
+    report = build_report(target_date="2026-06-23", pipeline_path=path, generated_at="fixed")
+
+    assert report["entry_price_execution"]["event_count"] == 0
+    assert report["entry_price_execution"]["candidate_failure_count"] == 0
+    assert not any(item["issue"] == "entry_price_or_submit_price_guard_block" for item in report["root_cause_priorities"])
+
+
+def test_build_report_prioritizes_real_entry_price_candidate_failures(tmp_path):
+    path = tmp_path / "pipeline_events_2026-06-23.jsonl"
+    rows = [
+        _event("000001", "A", "scalping_scanner_candidate_promoted", {"price_delta_since_first_seen_pct": "1.00"}),
+        _event(
+            "000001",
+            "A",
+            "entry_ai_price_canary_fallback",
+            {"reason": "invalid_price", "action": "IMPROVE_LIMIT"},
+        ),
+    ]
+    path.write_text("\n".join(json.dumps(row, ensure_ascii=False) for row in rows), encoding="utf-8")
+
+    report = build_report(target_date="2026-06-23", pipeline_path=path, generated_at="fixed")
+
+    assert report["entry_price_execution"]["candidate_failure_count"] == 1
+    assert report["entry_price_execution"]["candidate_failure_reason_counts"] == [
+        {"reason": "invalid_price", "count": 1}
+    ]
+    priority = next(item for item in report["root_cause_priorities"] if item["issue"] == "entry_price_or_submit_price_guard_block")
+    assert priority["evidence"]["candidate_failure_count"] == 1
+    assert "stale_submit_bypass" in priority["forbidden_uses"]
+
+
 def test_build_report_since_filters_out_older_real_submit(tmp_path):
     path = tmp_path / "pipeline_events_2026-06-23.jsonl"
     rows = [
@@ -511,6 +578,7 @@ def test_build_report_adds_entry_price_scale_in_and_post_sell_diagnostics(tmp_pa
     )
 
     assert report["entry_price_execution"]["block_or_unfilled_count"] == 1
+    assert report["entry_price_execution"]["candidate_failure_count"] == 0
     assert report["entry_price_execution"]["recent_issues"][0]["price_below_bid_bps"] == 95.0
     assert report["scale_in_diagnostics"]["blocked_count"] == 1
     assert report["scale_in_diagnostics"]["blocker_reason_counts"][0] == {
@@ -524,3 +592,60 @@ def test_build_report_adds_entry_price_scale_in_and_post_sell_diagnostics(tmp_pa
     assert post_sell["bad_entry_after_sell_count"] == 1
     assert post_sell["top_missed_upside"][0]["flow"] == "take_profit_flow"
     assert post_sell["bad_entry_examples"][0]["stock_code"] == "000004"
+    priorities = report["root_cause_priorities"]
+    assert [item["issue"] for item in priorities] == [
+        "entry_price_or_submit_price_guard_block",
+        "scale_in_blocked",
+        "post_sell_missed_upside_or_bad_entry",
+    ]
+    assert priorities[0]["runtime_effect"] is False
+    assert "stale_submit_bypass" in priorities[0]["forbidden_uses"]
+
+
+def test_build_report_prioritizes_stale_observation_before_ai_threshold(tmp_path):
+    path = tmp_path / "pipeline_events_2026-06-23.jsonl"
+    rows = [
+        _event("000001", "A", "scalping_scanner_candidate_promoted", {"price_delta_since_first_seen_pct": "2.40"}),
+        _event(
+            "000001",
+            "A",
+            "scalping_scanner_watching_runtime_skip",
+            {
+                "price_delta_since_first_seen_pct": "2.40",
+                "skip_reason": "scanner_fast_precheck_stability_pending",
+                "ws_strength_history_count": "0",
+                "quote_age_ms": "9000",
+            },
+        ),
+        _event(
+            "000001",
+            "A",
+            "blocked_ai_score",
+            {
+                "price_delta_since_first_seen_pct": "2.40",
+                "reason": "score_62.0",
+                "ai_score": "62",
+                "quote_age_ms": "9000",
+            },
+        ),
+    ]
+    path.write_text("\n".join(json.dumps(row, ensure_ascii=False) for row in rows), encoding="utf-8")
+
+    report = build_report(target_date="2026-06-23", pipeline_path=path, generated_at="fixed")
+
+    priorities = report["root_cause_priorities"]
+    assert priorities[0]["issue"] == "scanner_strength_history_or_stale_eval"
+    assert priorities[0]["decision"] == "fix_observation_freshness_before_threshold_tuning"
+    assert priorities[1]["issue"] == "ai_wait_or_baseline_prior_score_block"
+    assert "broad_buy_score_relaxation" in priorities[1]["forbidden_uses"]
+
+
+def test_loop_window_helpers():
+    buy_start = _parse_hhmm("09:00")
+    buy_end = _parse_hhmm("15:20")
+
+    assert _within_time_window(datetime(2026, 6, 25, 9, 0), start=buy_start, end=buy_end)
+    assert _within_time_window(datetime(2026, 6, 25, 15, 20), start=buy_start, end=buy_end)
+    assert not _within_time_window(datetime(2026, 6, 25, 15, 21), start=buy_start, end=buy_end)
+    assert not _loop_should_stop(datetime(2026, 6, 25, 19, 0), until=_parse_hhmm("19:00"))
+    assert _loop_should_stop(datetime(2026, 6, 25, 19, 0, 1), until=_parse_hhmm("19:00"))

@@ -3,8 +3,9 @@ from __future__ import annotations
 import argparse
 import gzip
 import json
+import time
 from collections import Counter, defaultdict
-from datetime import datetime
+from datetime import datetime, time as dt_time
 from pathlib import Path
 from typing import Any
 
@@ -79,6 +80,8 @@ LOW_AI_SCORE_CUTOFF = 65.0
 NEGATIVE_BUY_PRESSURE_CUTOFF = 0.0
 ENTRY_FRESH_MAX_AGE_MS = 3000.0
 ZERO_HISTORY_WORKORDER_MIN_EVENTS = 2
+DEFAULT_BUY_WINDOW_START = dt_time(9, 0)
+DEFAULT_BUY_WINDOW_END = dt_time(15, 20)
 
 STRENGTH_HISTORY_COUNT_KEYS = (
     "ws_strength_history_count",
@@ -127,6 +130,10 @@ def _exclude_from_real_entry_analysis(row: dict[str, Any]) -> bool:
     if stage.startswith("scalp_sim_") or stage.startswith("swing_"):
         return True
     if str(fields.get("simulated_order") or "").strip().lower() == "true":
+        return True
+    if any(fields.get(key) not in (None, "") for key in ("simulation_book", "simulation_owner", "sim_record_id")):
+        return True
+    if str(fields.get("reason") or "").strip() == "scalp_live_simulator":
         return True
     authority = str(fields.get("decision_authority") or "").lower()
     return "sim_" in authority or "swing_" in authority
@@ -402,9 +409,20 @@ def _entry_price_diagnostics(rows: list[dict[str, Any]]) -> dict[str, Any]:
         or str(_field(row, "price_context_stale_at_submit") or "").lower() == "true"
         or str(_field(row, "quote_stale_at_submit") or "").lower() == "true"
     ]
+    candidate_failure_rows = [
+        row
+        for row in relevant
+        if str(row.get("stage") or "") == "entry_ai_price_canary_fallback"
+    ]
+    candidate_failure_reason_counts = Counter(_blocker_reason(row) or "-" for row in candidate_failure_rows)
     return {
         "event_count": len(relevant),
         "block_or_unfilled_count": len(block_rows),
+        "candidate_failure_count": len(candidate_failure_rows),
+        "candidate_failure_reason_counts": _top_counter(
+            candidate_failure_reason_counts,
+            key_name="reason",
+        ),
         "stage_counts": _top_counter(stage_counts, key_name="stage"),
         "guard_counts": _top_counter(guard_counts, key_name="entry_price_guard"),
         "resolution_counts": _top_counter(resolution_counts, key_name="resolution_reason"),
@@ -687,6 +705,194 @@ def _zero_strength_history_workorders(items: list[dict[str, Any]]) -> list[dict[
     return sorted(workorders, key=lambda item: item["event_count"], reverse=True)
 
 
+def _root_cause_priorities(
+    *,
+    rising_missed: list[dict[str, Any]],
+    falling_submitted: list[dict[str, Any]],
+    summaries: list[dict[str, Any]],
+    entry_price: dict[str, Any],
+    scale_in: dict[str, Any],
+    post_sell: dict[str, Any],
+) -> list[dict[str, Any]]:
+    priorities: list[dict[str, Any]] = []
+
+    zero_history = _zero_strength_history_workorders(rising_missed)
+    stale_eval_count = _rollup_low_ai_pressure_quality(rising_missed).get("stale_or_delayed_eval", 0)
+    if zero_history or stale_eval_count:
+        priorities.append(
+            {
+                "priority": 1,
+                "issue": "scanner_strength_history_or_stale_eval",
+                "decision": "fix_observation_freshness_before_threshold_tuning",
+                "evidence": {
+                    "rising_missed_symbols": len(rising_missed),
+                    "repeated_zero_strength_history_symbols": len(zero_history),
+                    "stale_or_delayed_low_ai_or_pressure_events": stale_eval_count,
+                    "top_symbols": [
+                        {
+                            "stock_code": item.get("stock_code") or "",
+                            "stock_name": item.get("stock_name") or "",
+                            "event_count": item.get("event_count") or 0,
+                            "latest_reason": item.get("latest_reason") or "",
+                        }
+                        for item in zero_history[:8]
+                    ],
+                },
+                "next_action": "inspect_ws_strength_momentum_history_and_subscription_recheck_flow",
+                "runtime_effect": False,
+                "forbidden_uses": [
+                    "buy_score_relaxation",
+                    "strength_threshold_relaxation",
+                    "stale_submit_bypass",
+                    "broker_guard_bypass",
+                ],
+            }
+        )
+
+    ai_wait = 0
+    for item in rising_missed:
+        for blocker in item.get("recent_blockers") or []:
+            if blocker.get("stage") in {"blocked_ai_score", "ai_confirmed_terminal_no_budget", "first_ai_wait"}:
+                ai_wait += 1
+    if ai_wait:
+        priorities.append(
+            {
+                "priority": 2,
+                "issue": "ai_wait_or_baseline_prior_score_block",
+                "decision": "do_not_relax_score_without_fresh_positive_context_and_rolling_confirmation",
+                "evidence": {
+                    "recent_ai_wait_blockers": ai_wait,
+                    "rising_missed_symbols": len(rising_missed),
+                    "top_symbols": [
+                        {
+                            "stock_code": item.get("stock_code") or "",
+                            "stock_name": item.get("stock_name") or "",
+                            "latest_ai_score": item.get("latest_ai_score"),
+                            "latest_entry_score_threshold": item.get("latest_entry_score_threshold"),
+                            "latest_blocker": item.get("latest_blocker") or {},
+                        }
+                        for item in rising_missed[:8]
+                    ],
+                },
+                "next_action": "separate_fresh_low_score_wait_from_stale_or_negative_pressure_wait",
+                "runtime_effect": False,
+                "forbidden_uses": [
+                    "intraday_threshold_mutation",
+                    "broad_buy_score_relaxation",
+                    "real_order_approval",
+                ],
+            }
+        )
+
+    price_block_count = int(entry_price.get("block_or_unfilled_count") or 0)
+    price_candidate_failure_count = int(entry_price.get("candidate_failure_count") or 0)
+    if price_block_count or price_candidate_failure_count:
+        priorities.append(
+            {
+                "priority": 3,
+                "issue": "entry_price_or_submit_price_guard_block",
+                "decision": "review_price_resolution_quality_without_stale_submit_bypass",
+                "evidence": {
+                    "block_or_unfilled_count": price_block_count,
+                    "candidate_failure_count": price_candidate_failure_count,
+                    "candidate_failure_reason_counts": entry_price.get("candidate_failure_reason_counts") or [],
+                    "stage_counts": entry_price.get("stage_counts") or [],
+                    "recent_issues": entry_price.get("recent_issues") or [],
+                },
+                "next_action": "inspect_invalid_price_and_pre_submit_guard_rows_before_order_price_changes",
+                "runtime_effect": False,
+                "forbidden_uses": [
+                    "stale_submit_bypass",
+                    "broker_guard_bypass",
+                    "intraday_order_price_relaxation_without_operator_override",
+                ],
+            }
+        )
+
+    scale_block_count = int(scale_in.get("blocked_count") or 0)
+    if scale_block_count:
+        priorities.append(
+            {
+                "priority": 4,
+                "issue": "scale_in_blocked",
+                "decision": "preserve_scale_in_safety_and_find_blocker_class",
+                "evidence": {
+                    "blocked_count": scale_block_count,
+                    "executed_count": int(scale_in.get("executed_count") or 0),
+                    "blocker_reason_counts": scale_in.get("blocker_reason_counts") or [],
+                    "recent_blockers": scale_in.get("recent_blockers") or [],
+                },
+                "next_action": "separate_price_guard_qty_guard_and_window_guard_before_scale_in_change",
+                "runtime_effect": False,
+                "forbidden_uses": [
+                    "scale_in_guard_bypass",
+                    "quantity_cap_release",
+                    "hard_safety_relaxation",
+                    "broker_guard_bypass",
+                ],
+            }
+        )
+
+    if falling_submitted:
+        priorities.append(
+            {
+                "priority": 5,
+                "issue": "falling_promoted_real_submit",
+                "decision": "minimize_bad_entry_before_any_entry_relief",
+                "evidence": {
+                    "falling_real_submitted_count": len(falling_submitted),
+                    "examples": falling_submitted[:8],
+                },
+                "next_action": "trace_submit_stage_and_entry_context_for_each_falling_submit",
+                "runtime_effect": False,
+                "forbidden_uses": [
+                    "entry_relief_that_increases_falling_submit_risk",
+                    "broker_guard_bypass",
+                ],
+            }
+        )
+
+    if int(post_sell.get("missed_upside_count") or 0) or int(post_sell.get("bad_entry_after_sell_count") or 0):
+        priorities.append(
+            {
+                "priority": 6,
+                "issue": "post_sell_missed_upside_or_bad_entry",
+                "decision": "use_as_exit_entry_diagnostic_not_intraday_exit_mutation",
+                "evidence": {
+                    "missed_upside_count": int(post_sell.get("missed_upside_count") or 0),
+                    "bad_entry_after_sell_count": int(post_sell.get("bad_entry_after_sell_count") or 0),
+                    "top_missed_upside": post_sell.get("top_missed_upside") or [],
+                    "bad_entry_examples": post_sell.get("bad_entry_examples") or [],
+                },
+                "next_action": "split_stop_loss_and_take_profit_flows_after_post_sell_window_matures",
+                "runtime_effect": False,
+                "forbidden_uses": [
+                    "intraday_exit_threshold_mutation",
+                    "hard_stop_relaxation",
+                    "automatic_exit_deferral",
+                ],
+            }
+        )
+
+    if not priorities and summaries:
+        priorities.append(
+            {
+                "priority": 1,
+                "issue": "no_major_actionable_root_cause_in_current_window",
+                "decision": "continue_observation",
+                "evidence": {
+                    "promoted_symbol_count": len(summaries),
+                    "rising_missed_symbols": len(rising_missed),
+                    "falling_real_submitted_count": len(falling_submitted),
+                },
+                "next_action": "rerun_next_interval",
+                "runtime_effect": False,
+                "forbidden_uses": ["runtime_mutation_without_new_evidence"],
+            }
+        )
+    return priorities
+
+
 def build_report(
     *,
     target_date: str,
@@ -737,6 +943,12 @@ def build_report(
         for blocker in item["recent_blockers"]:
             if blocker["stage"]:
                 blocker_counter[(blocker["stage"], blocker["reason"])] += 1
+    entry_price = _entry_price_diagnostics(real_rows)
+    scale_in = _scale_in_diagnostics(real_rows)
+    post_sell = _post_sell_flow_diagnostics(
+        target_date=target_date,
+        post_sell_dir=post_sell_dir or PROJECT_ROOT / "data" / "post_sell",
+    )
     return {
         "schema_version": 1,
         "report_type": "intraday_entry_blocker_diagnostics",
@@ -827,12 +1039,9 @@ def build_report(
                 ],
             },
         },
-        "entry_price_execution": _entry_price_diagnostics(real_rows),
-        "scale_in_diagnostics": _scale_in_diagnostics(real_rows),
-        "post_sell_flow_diagnostics": _post_sell_flow_diagnostics(
-            target_date=target_date,
-            post_sell_dir=post_sell_dir or PROJECT_ROOT / "data" / "post_sell",
-        ),
+        "entry_price_execution": entry_price,
+        "scale_in_diagnostics": scale_in,
+        "post_sell_flow_diagnostics": post_sell,
         "summary": {
             "entry_event_count": real_entry_event_count,
             "promoted_symbol_count": len(summaries),
@@ -859,6 +1068,14 @@ def build_report(
                 rising_missed
             ),
         },
+        "root_cause_priorities": _root_cause_priorities(
+            rising_missed=rising_missed,
+            falling_submitted=falling_submitted,
+            summaries=summaries,
+            entry_price=entry_price,
+            scale_in=scale_in,
+            post_sell=post_sell,
+        ),
         "blocker_rollup": [
             {"stage": stage, "reason": reason, "count": count}
             for (stage, reason), count in blocker_counter.most_common()
@@ -903,16 +1120,21 @@ def _default_output_path(target_date: str) -> Path:
     )
 
 
-def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Build intraday entry blocker diagnostics from pipeline events.")
-    parser.add_argument("--target-date", default=datetime.now().strftime("%Y-%m-%d"))
-    parser.add_argument("--pipeline-path", type=Path)
-    parser.add_argument("--post-sell-dir", type=Path)
-    parser.add_argument("--output", type=Path)
-    parser.add_argument("--since", help="Only include events with emitted_at at or after this ISO timestamp.")
-    parser.add_argument("--print-summary", action="store_true")
-    args = parser.parse_args(argv)
+def _parse_hhmm(value: str) -> dt_time:
+    hour_text, minute_text = str(value).strip().split(":", 1)
+    return dt_time(int(hour_text), int(minute_text))
 
+
+def _within_time_window(now_value: datetime, *, start: dt_time, end: dt_time) -> bool:
+    current = now_value.time()
+    return start <= current <= end
+
+
+def _loop_should_stop(now_value: datetime, *, until: dt_time | None) -> bool:
+    return until is not None and now_value.time() > until
+
+
+def _build_write_report(args: argparse.Namespace) -> dict[str, Any]:
     pipeline_path = args.pipeline_path or _default_pipeline_path(args.target_date)
     output_path = args.output or _default_output_path(args.target_date)
     report = build_report(
@@ -923,8 +1145,64 @@ def main(argv: list[str] | None = None) -> int:
     )
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    if args.print_summary:
-        print(json.dumps({"output": str(output_path), **report["summary"]}, ensure_ascii=False, sort_keys=True))
+    return {
+        "output": str(output_path),
+        **report["summary"],
+        "root_cause_priorities": report.get("root_cause_priorities", []),
+    }
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="Build intraday entry blocker diagnostics from pipeline events.")
+    parser.add_argument("--target-date", default=datetime.now().strftime("%Y-%m-%d"))
+    parser.add_argument("--pipeline-path", type=Path)
+    parser.add_argument("--post-sell-dir", type=Path)
+    parser.add_argument("--output", type=Path)
+    parser.add_argument("--since", help="Only include events with emitted_at at or after this ISO timestamp.")
+    parser.add_argument("--print-summary", action="store_true")
+    parser.add_argument("--loop", action="store_true", help="Repeat report generation until --until.")
+    parser.add_argument("--interval-sec", type=int, default=180)
+    parser.add_argument("--until", help="Stop after local HH:MM, for example 19:00.")
+    parser.add_argument("--buy-window-only", action="store_true")
+    parser.add_argument("--buy-window-start", default="09:00")
+    parser.add_argument("--buy-window-end", default="15:20")
+    args = parser.parse_args(argv)
+
+    until = _parse_hhmm(args.until) if args.until else None
+    buy_start = _parse_hhmm(args.buy_window_start) if args.buy_window_start else DEFAULT_BUY_WINDOW_START
+    buy_end = _parse_hhmm(args.buy_window_end) if args.buy_window_end else DEFAULT_BUY_WINDOW_END
+    interval_sec = max(1, int(args.interval_sec or 180))
+
+    while True:
+        now_value = datetime.now()
+        if _loop_should_stop(now_value, until=until):
+            if args.print_summary:
+                print(
+                    json.dumps(
+                        {"status": "stopped_after_until", "now": now_value.isoformat(timespec="seconds")},
+                        ensure_ascii=False,
+                        sort_keys=True,
+                    ),
+                    flush=True,
+                )
+            break
+        if args.buy_window_only and not _within_time_window(now_value, start=buy_start, end=buy_end):
+            if args.print_summary:
+                print(
+                    json.dumps(
+                        {"status": "paused_outside_buy_window", "now": now_value.isoformat(timespec="seconds")},
+                        ensure_ascii=False,
+                        sort_keys=True,
+                    ),
+                    flush=True,
+                )
+        else:
+            summary = _build_write_report(args)
+            if args.print_summary:
+                print(json.dumps(summary, ensure_ascii=False, sort_keys=True), flush=True)
+        if not args.loop:
+            break
+        time.sleep(interval_sec)
     return 0
 
 
