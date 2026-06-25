@@ -12312,6 +12312,22 @@ def _apply_entry_ai_price_canary(
         best_ask=best_ask,
     )
     micro_log_fields = _build_orderbook_micro_log_fields(price_ctx.get("orderbook_micro"))
+    planned_order_price = 0
+    try:
+        if planned_orders and isinstance(planned_orders[0], dict):
+            planned_order_price = _coerce_int_value(planned_orders[0].get("price"))
+    except Exception:
+        planned_order_price = 0
+    invalid_price_context_fields = {
+        "current_price": current_price,
+        "reference_price": reference_price,
+        "defensive_order_price": defensive_price,
+        "resolved_order_price": resolved_price,
+        "best_bid": _coerce_int_value(best_bid),
+        "best_ask": _coerce_int_value(best_ask),
+        "planned_order_count": len(planned_orders or []),
+        "planned_order_price": planned_order_price,
+    }
 
     try:
         tick_limit = int(_rule("SCALPING_ENTRY_AI_PRICE_TICK_LIMIT", 20) or 20)
@@ -12525,14 +12541,18 @@ def _apply_entry_ai_price_canary(
     if candidate_price <= 0:
         _log_entry_pipeline(
             stock, code, "entry_ai_price_canary_fallback", reason="invalid_price", action=action,
-            **openai_transport_fields, **micro_log_fields
+            **invalid_price_context_fields, **openai_transport_fields, **micro_log_fields
         )
         return planned_orders, False
+    unclamped_candidate_price = candidate_price
     candidate_price = clamp_price_to_tick(candidate_price)
     if candidate_price <= 0:
         _log_entry_pipeline(
             stock, code, "entry_ai_price_canary_fallback", reason="invalid_price", action=action,
-            **openai_transport_fields, **micro_log_fields
+            unclamped_candidate_price=unclamped_candidate_price,
+            **invalid_price_context_fields,
+            **openai_transport_fields,
+            **micro_log_fields,
         )
         return planned_orders, False
     if best_ask > 0 and candidate_price > best_ask:
