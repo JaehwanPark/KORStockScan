@@ -70,6 +70,7 @@ _OPTIONAL_ARTIFACT_LABELS = {
     "lifecycle_bucket_discovery_rolling10d",
     "lifecycle_decision_matrix_mtd",
     "lifecycle_bucket_discovery_mtd",
+    "threshold_preopen_apply_current",
     "threshold_preopen_apply_next",
     "scalp_sim_policy_catalog",
     "swing_sim_policy_catalog",
@@ -526,6 +527,11 @@ def _artifact_paths(target_date: str) -> dict[str, Path]:
         "runtime_apply_bridge": REPORT_DIR
         / "runtime_apply_bridge"
         / f"runtime_apply_bridge_{target_date}.json",
+        "threshold_preopen_apply_current": PROJECT_ROOT
+        / "data"
+        / "threshold_cycle"
+        / "apply_plans"
+        / f"threshold_apply_{target_date}.json",
         "threshold_preopen_apply_next": PROJECT_ROOT
         / "data"
         / "threshold_cycle"
@@ -2544,20 +2550,22 @@ def _active_sim_priority_handoff_status(
             missing.append("active_sim_priority_preopen_handoff_missing")
         if active_swing_policy_ids and "swing_sim_auto_approval" not in selected_families:
             missing.append("swing_active_arm_priority_preopen_handoff_missing")
+        elif active_swing_policy_ids and not preopen_swing_policy_ids:
+            warnings.append("active_sim_priority_preopen_handoff_pending")
         elif active_swing_policy_ids and not active_swing_policy_ids.issubset(preopen_swing_policy_ids):
-            missing.append("swing_active_arm_priority_preopen_handoff_missing")
+            warnings.append("swing_active_arm_priority_preopen_handoff_pending")
     elif active_seed_ids or active_swing_policy_ids:
         warnings.append("active_sim_priority_preopen_handoff_pending")
 
     def truthy(value: Any) -> bool:
         return value is True or str(value).strip().lower() in {"true", "1", "yes"}
 
-    referenced_scalp_catalog_cache: dict[str, tuple[set[str], set[str]]] = {}
+    referenced_scalp_catalog_cache: dict[str, tuple[set[str], set[str], dict[str, set[str]]]] = {}
 
-    def referenced_scalp_catalog_seed_sets(path_value: Any) -> tuple[set[str], set[str]]:
+    def referenced_scalp_catalog_seed_sets(path_value: Any) -> tuple[set[str], set[str], dict[str, set[str]]]:
         path_text = str(path_value or "").strip()
         if not path_text:
-            return set(), set()
+            return set(), set(), {}
         if path_text in referenced_scalp_catalog_cache:
             return referenced_scalp_catalog_cache[path_text]
         path = Path(path_text)
@@ -2571,7 +2579,16 @@ def _active_sim_priority_handoff_status(
         ]
         all_ids = {str(item.get("active_seed_id")) for item in seeds}
         active_ids = {str(item.get("active_seed_id")) for item in seeds if str(item.get("status") or "") == "active"}
-        referenced_scalp_catalog_cache[path_text] = (all_ids, all_ids - active_ids)
+        active_ids_by_prefix: dict[str, set[str]] = {}
+        for item in seeds:
+            if str(item.get("status") or "") != "active":
+                continue
+            prefix = item.get("observable_prefix") if isinstance(item.get("observable_prefix"), dict) else {}
+            prefix_key = json.dumps(prefix, ensure_ascii=True, sort_keys=True) if prefix else ""
+            seed_id = str(item.get("active_seed_id") or "").strip()
+            if prefix_key and seed_id:
+                active_ids_by_prefix.setdefault(prefix_key, set()).add(seed_id)
+        referenced_scalp_catalog_cache[path_text] = (all_ids, all_ids - active_ids, active_ids_by_prefix)
         return referenced_scalp_catalog_cache[path_text]
 
     candidate_prefix_counts: dict[str, int] = {}
@@ -2580,6 +2597,7 @@ def _active_sim_priority_handoff_status(
     observed_swing_policy_ids: set[str] = set()
     inactive_consumed: set[str] = set()
     unknown_consumed: set[str] = set()
+    stale_alias_consumed: set[str] = set()
     for fields in _iter_pipeline_event_fields(target_date):
         prefix_raw = str(fields.get("active_seed_candidate_observable_prefix") or "").strip()
         if prefix_raw:
@@ -2593,19 +2611,35 @@ def _active_sim_priority_handoff_status(
         seed_id = str(fields.get("active_seed_id") or "").strip()
         if seed_id:
             observed_seed_ids.add(seed_id)
-            runtime_catalog_ids, runtime_inactive_ids = referenced_scalp_catalog_seed_sets(
+            runtime_catalog_ids, runtime_inactive_ids, runtime_active_ids_by_prefix = referenced_scalp_catalog_seed_sets(
                 fields.get("scalp_sim_auto_policy_file")
             )
             if seed_id in runtime_catalog_ids:
                 referenced_runtime_seed_ids.add(seed_id)
+            elif seed_id in preopen_seed_ids:
+                referenced_runtime_seed_ids.add(seed_id)
+            prefix_raw = str(fields.get("active_seed_candidate_observable_prefix") or "").strip()
+            prefix_mapping = _load_json_string_mapping(prefix_raw) if prefix_raw else {}
+            runtime_prefix_key = (
+                json.dumps(prefix_mapping, ensure_ascii=True, sort_keys=True)
+                if isinstance(prefix_mapping, dict) and prefix_mapping
+                else prefix_raw
+            )
+            same_prefix_active_ids = runtime_active_ids_by_prefix.get(runtime_prefix_key, set())
             # Runtime events must be validated against the policy file that was
             # actually loaded by that runtime.  The postclose catalog for
             # target_date can legitimately move yesterday's active seeds to
             # cooldown/retired for the next PREOPEN; that transition must not
             # retroactively mark today's runtime observations as inactive.
-            if seed_id in runtime_inactive_ids or (not runtime_catalog_ids and seed_id in inactive_seed_ids):
+            if seed_id in runtime_inactive_ids and same_prefix_active_ids:
+                stale_alias_consumed.add(seed_id)
+            elif seed_id in runtime_inactive_ids or (
+                not runtime_catalog_ids
+                and seed_id not in preopen_seed_ids
+                and seed_id in inactive_seed_ids
+            ):
                 inactive_consumed.add(seed_id)
-            elif seed_id not in catalog_seed_ids and seed_id not in runtime_catalog_ids:
+            elif seed_id not in catalog_seed_ids and seed_id not in runtime_catalog_ids and seed_id not in preopen_seed_ids:
                 unknown_consumed.add(seed_id)
             if truthy(fields.get("actual_order_submitted")) or not truthy(fields.get("broker_order_forbidden")):
                 missing.append("active_sim_priority_runtime_forbidden_contract_violation")
@@ -2623,6 +2657,8 @@ def _active_sim_priority_handoff_status(
         missing.append("active_sim_priority_unknown_key_observed")
     if inactive_consumed:
         missing.append("active_sim_priority_inactive_key_consumed")
+    if stale_alias_consumed:
+        warnings.append("active_sim_priority_stale_seed_alias_consumed")
     active_seed_runtime_expected = bool(active_seed_ids and active_seed_ids.issubset(preopen_seed_ids))
     active_swing_runtime_expected = bool(
         active_swing_policy_ids and active_swing_policy_ids.issubset(preopen_swing_policy_ids)
@@ -2695,6 +2731,7 @@ def _active_sim_priority_handoff_status(
         "observed_seed_ids": sorted(observed_seed_ids),
         "referenced_runtime_seed_ids": sorted(referenced_runtime_seed_ids),
         "inactive_consumed_ids": sorted(inactive_consumed),
+        "stale_alias_consumed_ids": sorted(stale_alias_consumed),
         "unknown_consumed_ids": sorted(unknown_consumed),
         "swing_priority_policy_ids": sorted(swing_policy_ids),
         "active_swing_priority_policy_ids": sorted(active_swing_policy_ids),
@@ -3508,7 +3545,9 @@ def build_threshold_cycle_postclose_verification(
     key_lineage_ledger = _load_json(paths["key_lineage_ledger"])
     conversion_lane = _load_json(paths["conversion_lane"])
     bridge_report = _load_json(paths["runtime_apply_bridge"])
+    preopen_apply_current = _load_json(paths["threshold_preopen_apply_current"])
     preopen_apply_next = _load_json(paths["threshold_preopen_apply_next"])
+    active_priority_preopen_apply = preopen_apply_current or preopen_apply_next
     scalp_sim_policy_catalog = _load_json(paths["scalp_sim_policy_catalog"])
     swing_sim_policy_catalog = _load_json(paths["swing_sim_policy_catalog"])
     buy_funnel_report = _load_json(paths["buy_funnel_sentinel"])
@@ -3754,7 +3793,7 @@ def build_threshold_cycle_postclose_verification(
         discovery=discovery_report,
         scalp_catalog=scalp_sim_policy_catalog,
         swing_catalog=swing_sim_policy_catalog,
-        preopen_apply=preopen_apply_next,
+        preopen_apply=active_priority_preopen_apply,
         swing_sim_report=swing_strategy_discovery_sim,
     )
     if active_sim_priority_handoff.get("status") == "fail":
@@ -4503,6 +4542,7 @@ def build_threshold_cycle_postclose_verification(
             "codex_directive_count": len(runtime_apply_gap_audit.get("codex_workorder_directives") or []),
             "runtime_apply_bridge_generated_at": bridge_report.get("generated_at"),
             "threshold_preopen_apply_next_generated_at": preopen_apply_next.get("generated_at"),
+            "threshold_preopen_apply_current_generated_at": preopen_apply_current.get("generated_at"),
         },
         "conversion_kpi": {
             "status": conversion_kpi_status,

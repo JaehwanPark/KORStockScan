@@ -1,20 +1,20 @@
 # Threshold Cycle Postclose Verification - 2026-06-25
 
-- status: `fail`
-- latest_start_marker: `[START] threshold-cycle postclose target_date=2026-06-25 max_iterations=80 started_at=2026-06-25T20:10:01+0900`
-- latest_done_marker: `-`
-- predecessor_status: `fail`
+- status: `warning`
+- latest_start_marker: `[START] threshold-cycle postclose target_date=2026-06-25 max_iterations=80 started_at=2026-06-25T21:23:47+0900`
+- latest_done_marker: `[DONE] threshold-cycle postclose target_date=2026-06-25 ai_correction_provider=openai panic_sell_defense=true panic_buying=true market_panic_breadth=true scalp_sim_ai_deferred_review=true pipeline_event_verbosity=true observation_source_quality_audit=true ai_watching_score_smoothing_diagnostic=true codebase_performance_workorder=true pattern_lab_currentness_audit=true pattern_lab_ai_review=true time_window_regime_counterfactual=true producer_gap_discovery=true stage_hook_workorder_discovery=true stage_hook_runtime_scaffold=true pattern_lab_propagation_audit=true scalp_sim_overnight=true scalp_entry_adm=true institutional_flow_context=true microstructure_reaction_context=true lifecycle_decision_matrix=true lifecycle_ai_context=true ldm_hypothesis_parent_refinement=true lifecycle_bucket_discovery=true lifecycle_bucket_windows=true lifecycle_bucket_window_list=rolling5d,rolling10d,mtd lifecycle_bucket_promotion_window=mtd force_lifecycle_bucket_windows=false force_deep_audits=false force_workorder_branch=false runtime_apply_bridge=true scalp_sim_auto_approval_control_tower=true latency_classifier_recommendation=true tuning_performance_control_tower=true swing_lifecycle=true swing_strategy_discovery=true swing_lifecycle_matrix=true swing_lifecycle_bucket_discovery=true swing_ai_review_provider=openai swing_lifecycle_bucket_discovery_ai_provider=openai pattern_lab_ai_review_provider=openai producer_gap_discovery_ai_provider=openai stage_hook_workorder_discovery_ai_provider=openai pattern_labs=true deepseek_swing_lab=true code_improvement_workorder=true daily_ev=true runtime_approval_summary=true runtime_apply_gap_audit=true key_lineage_ledger=true conversion_lane=true next_stage2_checklist=true finished_at=2026-06-25T21:50:05+0900`
+- predecessor_status: `pass`
 - predecessor_wait_count: `0`
 - predecessor_timeout_count: `0`
-- log_issues: `['active_sim_priority_handoff_missing', 'ldm_entry_bucket_handoff_missing', 'ldm_exit_bucket_handoff_missing', 'ldm_holding_bucket_handoff_missing', 'lifecycle_bucket_discovery_handoff_missing', 'scale_in_policy_contract_missing']`
+- log_issues: `[]`
 
 ## Execution Profile
-- profile_status: `pending_done_marker`
+- profile_status: `full_profile`
 - disabled_stage_flags: `[]`
 - missing_required_flags: `[]`
-- interpretation: `wrapper-internal verification passed required artifacts; final DONE marker is checked by a later health check`
-- missing_required_artifacts: `['runtime_approval_summary', 'pattern_lab_currentness_audit', 'pattern_lab_propagation_audit', 'swing_daily_simulation', 'swing_lifecycle_audit', 'next_stage2_checklist']`
-- missing_downstream_links: `['runtime_approval_summary_sources_ev', 'threshold_cycle_ev_sources_pattern_lab_currentness_audit', 'threshold_cycle_ev_sources_pattern_lab_propagation_audit', 'runtime_approval_summary_sources_scalp_entry_action_decision_matrix', 'runtime_approval_summary_sources_lifecycle_decision_matrix', 'runtime_approval_summary_sources_pattern_lab_propagation_audit']`
+- interpretation: `latest DONE marker used full/default stage profile`
+- missing_required_artifacts: `[]`
+- missing_downstream_links: `[]`
 - stale_downstream_links: `[]`
 - runtime_apply_gap_issues: `[]`
 
@@ -22,29 +22,29 @@
 - status: `warning`
 - runtime_effect: `False`
 - allowed_runtime_apply: `False`
-- P1 `submit_drought` 판정: `needs_followup`
-  - 근거: `{'status': 'warning', 'handoff_status': 'pass', 'root_cause_closure_status': 'open', 'root_cause_open_reasons': ['unknown_latency_reason_present', 'unknown_latency_workorder_required', 'ldm_submit_quote_freshness_attribution_missing'], 'artifact_regeneration_required': False, 'critical': True, 'primary': 'SUBMIT_DROUGHT_CRITICAL', 'matches': ['PRICE_GUARD_DROUGHT', 'LATENCY_DROUGHT', 'UPSTREAM_AI_THRESHOLD', 'SUBMIT_DROUGHT_CRITICAL'], 'missing': ['ldm_submit_quote_freshness_attribution_missing', 'runtime_approval_summary_buy_funnel_sentinel_missing', 'runtime_approval_summary_entry_submit_drought_handoff_missing'], 'quote_freshness_attribution_inconsistent': False, 'submit_drought_refresh_attempted_count': 14, 'submit_drought_refresh_applied_count': 12, 'submit_drought_latency_pass_recovered_count': 6, 'submit_drought_unknown_latency_reason_count': 4, 'ldm_submit_real_submitted_row_count': 5, 'ldm_submit_missing_broker_order_key_count': 0, 'ldm_submit_missing_broker_order_key_rate': 0.0, 'ldm_submit_post_submit_provenance_join_gap': False, 'ldm_submit_post_submit_provenance_join_gap_raw': False, 'ldm_submit_bot_history_backfill_candidate_count': 0, 'ldm_submit_bot_history_backfill_full_coverage': False, 'ldm_submit_bot_history_exact_mapping_count': 0, 'ldm_submit_bot_history_exact_mapping_full_coverage': False, 'ldm_submit_post_submit_provenance_join_resolution': 'no_gap_broker_order_key_present_or_no_missing_rows'}`
-  - 다음 액션: `Restore missing workorder/LDM/EV/runtime-summary submit drought handoff.`
+- P1 `submit_drought` 판정: `pass_handoff_closed`
+  - 근거: `{'status': 'pass', 'handoff_status': 'pass', 'root_cause_closure_status': 'closed', 'root_cause_open_reasons': [], 'artifact_regeneration_required': False, 'critical': True, 'primary': 'SUBMIT_DROUGHT_CRITICAL', 'matches': ['PRICE_GUARD_DROUGHT', 'LATENCY_DROUGHT', 'UPSTREAM_AI_THRESHOLD', 'SUBMIT_DROUGHT_CRITICAL'], 'missing': [], 'quote_freshness_attribution_inconsistent': False, 'submit_drought_refresh_attempted_count': 20, 'submit_drought_refresh_applied_count': 16, 'submit_drought_latency_pass_recovered_count': 10, 'submit_drought_unknown_latency_reason_count': 0, 'ldm_submit_real_submitted_row_count': 5, 'ldm_submit_missing_broker_order_key_count': 0, 'ldm_submit_missing_broker_order_key_rate': 0.0, 'ldm_submit_post_submit_provenance_join_gap': False, 'ldm_submit_post_submit_provenance_join_gap_raw': False, 'ldm_submit_bot_history_backfill_candidate_count': 0, 'ldm_submit_bot_history_backfill_full_coverage': False, 'ldm_submit_bot_history_exact_mapping_count': 0, 'ldm_submit_bot_history_exact_mapping_full_coverage': False, 'ldm_submit_post_submit_provenance_join_resolution': 'no_gap_broker_order_key_present_or_no_missing_rows'}`
+  - 다음 액션: `No new implementation from this warning pass; continue postclose attribution and submit blocker tracking.`
 - P2 `scalp_entry_adm_unknown_bucket_source_quality_gap` 판정: `pass_no_unknown_bucket_warning`
   - 근거: `{'status': 'warning', 'warnings': ['ai_numeric_consistency_rows_excluded_from_aggregates'], 'affected_rows': 12, 'affected_rate': 0.0214, 'dimension_counts': {'risk_context_bucket': 12, 'price_resolution_bucket': 4}, 'unknown_root_cause_counts': {'risk_context_bucket:post_submit_or_exit_not_required': 12, 'price_resolution_bucket:post_submit_or_exit_not_required': 4}, 'stage_counts': {'scalp_sim_sell_order_assumed_filled': 7, 'blocked_ai_score': 53, 'scalp_sim_pre_submit_liquidity_guard_would_block': 29, 'pre_submit_liquidity_guard_block': 3, 'scalp_sim_pre_submit_overbought_guard_would_block': 1, 'order_bundle_submitted': 5}, 'recommended_route': 'classified_not_applicable_no_workorder', 'not_available_route': 'field_legitimately_unavailable_no_workorder', 'lookup_status_counts': {'new_or_unseen_token_vs_prior_adm': 99, 'matched_prior_bucket': 462}}`
   - 다음 액션: `Prioritize source score emission for score_bucket unknown rows, then risk_context/price_resolution source fields; keep not_available buckets as explicit non-workorder context unless they become required source fields.`
 - P3 `pattern_lab_warning` 판정: `pass_no_current_handoff_workorder`
-  - 근거: `{'currentness_status': '', 'currentness_fail_count': 0, 'ai_review_status': '', 'ai_review_workorder_count': 0, 'ai_review_warnings': []}`
+  - 근거: `{'currentness_status': 'pass', 'currentness_fail_count': 0, 'ai_review_status': 'pass', 'ai_review_workorder_count': 0, 'ai_review_warnings': []}`
   - 다음 액션: `No new pattern-lab implement_now item; keep pattern lab warning as source-only monitoring unless fresh currentness or AI review emits a concrete workorder.`
 - P4 `live_auto_ready_zero_breakdown` 판정: `warning_explained_no_live_auto_ready`
-  - 근거: `{'live_auto_apply_ready_count': 0, 'state_counts': {'source_only_keep_collecting': 480, 'lifecycle_flow_sim_probe_candidate': 5, 'sim_auto_approved': 5, 'entry_only_sim_auto_approved': 9, 'entry_only_source_candidate': 1}, 'source_bucket_kind_counts': {'taxonomy_provenance_gap': 50, 'source_only_observation': 430, 'lifecycle_flow_sim_probe_policy': 5, 'sim_auto_policy': 5, 'entry_only_sim_policy': 9, 'entry_only_source_candidate': 1}, 'runtime_gap_categories': {}, 'source_contract_status': 'warning', 'source_contract_change_count': 12, 'ai_two_pass_review_status': 'parsed', 'positive_edge_source_quality_pass_count': 0, 'bridge_blocker_ledger_count': 0, 'runtime_uptake_rate_pct': None, 'handoff_warnings': ['lifecycle_bucket_discovery_source_contract_warning', 'source_contract_drift_warning']}`
+  - 근거: `{'live_auto_apply_ready_count': 0, 'state_counts': {'source_only_keep_collecting': 480, 'lifecycle_flow_sim_probe_candidate': 5, 'sim_auto_approved': 5, 'entry_only_sim_auto_approved': 9, 'entry_only_source_candidate': 1}, 'source_bucket_kind_counts': {'taxonomy_provenance_gap': 50, 'source_only_observation': 430, 'lifecycle_flow_sim_probe_policy': 5, 'sim_auto_policy': 5, 'entry_only_sim_policy': 9, 'entry_only_source_candidate': 1}, 'runtime_gap_categories': {'code_patch_required': 11, 'runtime_blocked_contract_gap': 26, 'sim_auto_approved': 25, 'source_only_explicit_exclusion': 2, 'source_only_keep_collecting': 151, 'source_quality_blocker': 468, 'tier2_fail_closed_source_only': 12}, 'source_contract_status': 'warning', 'source_contract_change_count': 12, 'ai_two_pass_review_status': 'parsed', 'positive_edge_source_quality_pass_count': 45, 'bridge_blocker_ledger_count': 200, 'runtime_uptake_rate_pct': 0.0, 'handoff_warnings': ['lifecycle_bucket_discovery_source_contract_warning', 'source_contract_drift_warning']}`
   - 다음 액션: `Keep complete lifecycle promotion as the owner; close source-contract drift, source-quality blockers, and runtime_blocked_contract_gap buckets before expecting live-auto candidates.`
 
 ## Runtime Apply Gap Audit
-- status: `missing`
+- status: `pass`
 - retry_queue_count: `0`
 - codex_directive_count: `0`
-- summary: `{}`
+- summary: `{'actionable_unknown_gap_count': 0, 'ai_review_retry_pending': False, 'ai_review_status': 'parsed', 'bridge_blocker_ledger_count': 200, 'candidate_count': 695, 'codex_directive_count': 0, 'conversion_blocker_rank_count': 200, 'critical_failure_count': 0, 'derived_review_category_counts': {'code_patch_required': 11, 'runtime_blocked_contract_gap': 26, 'sim_auto_approved': 25, 'source_only_explicit_exclusion': 2, 'source_only_keep_collecting': 151, 'source_quality_blocker': 468, 'tier2_fail_closed_source_only': 12}, 'positive_edge_source_quality_pass_count': 45, 'quiet_gap_codex_directive_count': 0, 'quiet_gap_count': 411, 'quiet_gap_rollup_count': 411, 'retry_queue_count': 0, 'runtime_uptake_rate_pct': 0.0, 'source_dimension_gap_count': 50, 'status': 'pass'}`
 
 ## BUY Funnel Submit Drought Handoff
-- status: `warning`
+- status: `pass`
 - critical: `True`
-- missing: `['ldm_submit_quote_freshness_attribution_missing', 'runtime_approval_summary_buy_funnel_sentinel_missing', 'runtime_approval_summary_entry_submit_drought_handoff_missing']`
+- missing: `[]`
 
 ## Submit Bucket Handoff
 - status: `pass`
@@ -52,32 +52,32 @@
 - missing: `[]`
 
 ## Holding Bucket Handoff
-- status: `fail`
+- status: `pass`
 - attribution_present: `True`
 - source_present: `True`
 - runtime_candidate_count: `0`
-- bucket_count ev/runtime/expected: `29` / `-1` / `29`
-- workorder_count ev/runtime/expected: `10` / `-1` / `10`
-- missing: `['runtime_approval_summary_holding_bucket_count_missing', 'runtime_approval_summary_holding_bucket_workorder_count_missing', 'runtime_approval_summary_holding_bucket_workorders_missing']`
+- bucket_count ev/runtime/expected: `29` / `29` / `29`
+- workorder_count ev/runtime/expected: `10` / `10` / `10`
+- missing: `[]`
 
 ## Exit Bucket Handoff
-- status: `fail`
+- status: `pass`
 - attribution_present: `True`
 - source_present: `True`
 - runtime_candidate_count: `0`
-- bucket_count ev/runtime/expected: `48` / `-1` / `48`
-- workorder_count ev/runtime/expected: `10` / `-1` / `10`
-- missing: `['runtime_approval_summary_exit_bucket_count_missing', 'runtime_approval_summary_exit_bucket_workorder_count_missing', 'runtime_approval_summary_exit_bucket_workorders_missing']`
+- bucket_count ev/runtime/expected: `48` / `48` / `48`
+- workorder_count ev/runtime/expected: `10` / `10` / `10`
+- missing: `[]`
 
 ## Lifecycle Flow Bucket Handoff
 - status: `pass`
 - attribution_present: `True`
-- flow_count: `5583`
+- flow_count: `5527`
 - complete_flow_count: `30`
 - direct_sim_record_complete_flow_count: `0`
 - adm_bridge_complete_flow_count: `30`
 - fallback_complete_flow_count: `0`
-- incomplete_flow_count: `5553`
+- incomplete_flow_count: `5497`
 - complete_flow_rate: `0.0054`
 - join_contract_blocked: `False`
 - bundle_ev_tuning_state: `ready_for_bundle_ev_tuning`
@@ -85,12 +85,12 @@
 - missing: `[]`
 
 ## AI Correction
-- status: `missing`
-- ai_status: `missing`
-- provider_status: `-`
-- blocking_runtime_candidate_families: `[]`
+- status: `pass`
+- ai_status: `parsed`
+- provider_status: `{'provider': 'openai', 'status': 'success', 'new_provider_call': True, 'key_name': 'OPENAI_API_KEY', 'attempt_index': 1, 'model_index': 1, 'configured_key_count': 2, 'attempted_key_count': 1, 'attempted_keys': 1, 'attempted_key_names': ['OPENAI_API_KEY'], 'configured_model_count': 3, 'attempted_model_count': 1, 'attempted_models': ['gpt-5.5'], 'configured_models': ['gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini'], 'model': 'gpt-5.5', 'schema_name': 'threshold_ai_correction_v1', 'reasoning_effort': 'high', 'prompt_chars': 105993, 'input_context_chars': 104673, 'input_context_hash': '70d2c75cbf9ab99d0e33fc68c6e1eda45da3954912a27b2a8e5635e00ba3d53f', 'elapsed_ms': 88339, 'output_chars': 11833, 'input_tokens': 30564, 'output_tokens': 7408, 'total_tokens': 37972, 'estimated_cost': None, 'estimated_cost_usd': None, 'cost_estimate_status': 'missing_price_contract'}`
+- blocking_runtime_candidate_families: `['bad_entry_refined_canary', 'holding_exit_decision_matrix_advisory', 'lifecycle_decision_matrix_runtime', 'protect_trailing_smoothing', 'score65_74_recovery_probe', 'soft_stop_whipsaw_confirmation']`
 - parse_warnings: `[]`
-- interpretation: `AI correction artifact missing or unreadable`
+- interpretation: `AI correction parsed successfully`
 
 ## Scalp Sim Overnight
 - status: `pass`
@@ -102,12 +102,12 @@
 - interpretation: `scalp sim overnight preclose decisions covered active sim positions`
 
 ## Entry Bucket Handoff
-- status: `fail`
-- expected_candidate_ids: `['entry_bucket_10', 'entry_bucket_12', 'entry_bucket_13', 'entry_bucket_14', 'entry_bucket_17', 'entry_bucket_5', 'entry_bucket_6', 'entry_bucket_7', 'entry_bucket_8', 'entry_bucket_9']`
+- status: `pass`
+- expected_candidate_ids: `['entry_bucket_3', 'entry_bucket_4', 'entry_bucket_5', 'entry_bucket_6', 'entry_bucket_9']`
 - missing_ev_candidate_ids: `[]`
-- missing_runtime_summary_candidate_ids: `['entry_bucket_10', 'entry_bucket_12', 'entry_bucket_13', 'entry_bucket_14', 'entry_bucket_17', 'entry_bucket_5', 'entry_bucket_6', 'entry_bucket_7', 'entry_bucket_8', 'entry_bucket_9']`
+- missing_runtime_summary_candidate_ids: `[]`
 - missing_workorder_order_ids: `[]`
-- interpretation: `LDM entry bucket output was generated but one or more downstream consumers dropped it.`
+- interpretation: `LDM entry bucket candidates and workorders propagated to threshold EV, runtime summary, and code workorder.`
 
 ## Scale-In Bucket Handoff
 - attribution_present: `True`
@@ -118,9 +118,9 @@
 - missing_runtime_summary_candidate_ids: `[]`
 - missing_workorder_order_ids: `[]`
 - interpretation: `LDM scale-in bucket candidates and workorders propagated to threshold EV, runtime summary, and code workorder.`
-- policy_contract_status: `fail`
-- policy_contract_missing: `['scale_in_policy_runtime_gap_ledger_missing']`
-- policy_contract_interpretation: `Scale-in policy contract is not closed with source link, exclusion reason, and reopen trigger.`
+- policy_contract_status: `pass`
+- policy_contract_missing: `[]`
+- policy_contract_interpretation: `Scale-in policy contract closed as source-only; runtime remains disabled and reopen trigger is preserved.`
 
 ## Overnight Bucket Handoff
 - attribution_present: `True`
@@ -133,17 +133,17 @@
 - interpretation: `LDM overnight bucket candidates and workorders propagated to threshold EV, runtime summary, and code workorder.`
 
 ## Lifecycle Bucket Discovery Handoff
-- status: `fail`
+- status: `pass`
 - source_contract_status: `warning`
 - ai_two_pass_review_status: `parsed`
 - expected_candidate_ids: `['entry:chosen_action:no_buy_ai', 'entry:chosen_action:wait_requote', 'entry:exit_rule:exit_unknown', 'entry:exit_rule:scalp_soft_stop_pct', 'entry:liquidity_bucket:liquidity_high', 'entry:overbought_bucket:overbought_normal', 'entry:overbought_bucket:overbought_watch', 'entry:score_band:score_66_69', 'entry:score_band:score_70p', 'entry:source_stage:scalp_entry_action_decision_snapshot', 'entry:source_stage:wait6579_ev_cohort', 'entry:stale_bucket:fresh_or_unflagged', 'entry:strength_bucket:strong_strength_momentum', 'entry:strength_bucket:weak_strength_momentum', 'entry:time_bucket:time_1200_1400', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_ai_confirmed_stale_fresh_liquidity_liquidi', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_ai_confirmed_stale_fresh_liquidity_liquidi', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_ai_confirmed_stale_stale_high_liquidity_li', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_blocked_ai_score_stale_stale_block_liquidi', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_scalp_entry_action_decision_snapshot_stale', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_scalp_entry_action_decision_snapshot_stale', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_scalp_entry_action_decision_snapshot_stale', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_scalp_entry_action_decision_snapshot_stale', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_scalp_entry_action_decision_snapshot_stale', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_scalp_entry_action_decision_snapshot_stale', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_scalp_entry_action_decision_snapshot_stale', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_scalp_entry_action_decision_snapshot_stale', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_scalp_entry_action_decision_snapshot_stale', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_scalp_entry_action_decision_snapshot_stale', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_scalp_entry_action_decision_snapshot_stale', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_scalp_entry_action_decision_snapshot_stale', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_scalp_entry_action_decision_snapshot_stale', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_scalp_entry_action_decision_snapshot_stale', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_scalp_entry_action_decision_snapshot_stale', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_scalp_entry_action_decision_snapshot_stale', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_scalp_entry_action_decision_snapshot_stale', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_scalp_entry_action_decision_snapshot_stale', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_scalp_entry_action_decision_snapshot_stale', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_scalp_entry_action_decision_snapshot_stale', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_scalp_entry_action_decision_snapshot_stale', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_scalp_sim_panic_bottoming_entry_allowed_st', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_scalp_sim_panic_level1_entry_observed_stal', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_63_65_source_ai_confirmed_stale_fresh_liquidity_liquidi', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_63_65_source_ai_confirmed_stale_stale_high_liquidity_li', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_63_65_source_blocked_ai_score_stale_fresh_liquidity_liq', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_63_65_source_scalp_entry_action_decision_snapshot_stale', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_63_65_source_scalp_entry_action_decision_snapshot_stale', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_63_65_source_scalp_entry_action_decision_snapshot_stale', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_63_65_source_scalp_entry_action_decision_snapshot_stale', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_63_65_source_scalp_sim_panic_level1_entry_observed_stal', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_63_65_source_wait6579_ev_cohort_stale_fresh_or_unflagge', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_66_69_source_scalp_entry_action_decision_snapshot_stale', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_66_69_source_scalp_entry_action_decision_snapshot_stale', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_66_69_source_scalp_sim_panic_level1_entry_observed_stal', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_66_69_source_wait6579_ev_cohort_stale_fresh_or_unflagge', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_70p_source_ai_confirmed_stale_stale_high_liquidity_liqu', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_70p_source_scalp_entry_action_decision_snapshot_stale_f', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_70p_source_scalp_entry_action_decision_snapshot_stale_f', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_70p_source_scalp_entry_action_decision_snapshot_stale_f', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_70p_source_scalp_entry_action_decision_snapshot_stale_s', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_70p_source_scalp_entry_action_decision_snapshot_stale_s', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_70p_source_scalp_entry_action_decision_snapshot_stale_s', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_70p_source_scalp_sim_panic_level1_entry_observed_stale_', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_70p_source_wait6579_ev_cohort_stale_fresh_or_unflagged_', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_lt60_source_ai_confirmed_stale_stale_high_liquidity_liq', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_lt60_source_blocked_ai_score_stale_stale_block_liquidit', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_lt60_source_blocked_ai_score_stale_stale_not_available_', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_lt60_source_blocked_ai_score_stale_stale_not_available_', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_lt60_source_blocked_ai_score_stale_stale_not_available_', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_lt60_source_blocked_ai_score_stale_stale_not_available_', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_lt60_source_blocked_ai_score_stale_stale_not_available_', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_lt60_source_scalp_entry_action_decision_snapshot_stale_', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_lt60_source_scalp_entry_action_decision_snapshot_stale_', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_lt60_source_scalp_sim_panic_level1_entry_observed_stale', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_missing_submit_submit_missing_holding_holding_combo_holding_flow_source_scalp_sim_ov', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_missing_submit_submit_missing_holding_holding_combo_holding_flow_source_scalp_sim_ov', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_missing_submit_submit_missing_holding_holding_combo_holding_flow_source_scalp_sim_ov', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_missing_submit_submit_missing_holding_holding_missing_scale_in_scale_in_arm_avg_down', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_missing_submit_submit_missing_holding_holding_missing_scale_in_scale_in_arm_avg_down', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_missing_submit_submit_missing_holding_holding_missing_scale_in_scale_in_arm_pyramid_', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_missing_submit_submit_missing_holding_holding_missing_scale_in_scale_in_arm_pyramid_', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_missing_submit_submit_missing_holding_holding_missing_scale_in_scale_in_none_exit_ex', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_missing_submit_submit_missing_holding_holding_missing_scale_in_scale_in_none_exit_ex', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_missing_submit_submit_missing_holding_holding_missing_scale_in_scale_in_none_exit_ex', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_missing_submit_submit_missing_holding_holding_missing_scale_in_scale_in_none_exit_ex', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_missing_submit_submit_missing_holding_holding_missing_scale_in_scale_in_none_exit_ex']`
 - live_auto_apply_families: `[]`
 - missing_bridge_families: `[]`
-- missing_runtime_summary_candidate_ids: `['entry:chosen_action:no_buy_ai', 'entry:chosen_action:wait_requote', 'entry:exit_rule:exit_unknown', 'entry:exit_rule:scalp_soft_stop_pct', 'entry:liquidity_bucket:liquidity_high', 'entry:overbought_bucket:overbought_normal', 'entry:overbought_bucket:overbought_watch', 'entry:score_band:score_66_69', 'entry:score_band:score_70p', 'entry:source_stage:scalp_entry_action_decision_snapshot', 'entry:source_stage:wait6579_ev_cohort', 'entry:stale_bucket:fresh_or_unflagged', 'entry:strength_bucket:strong_strength_momentum', 'entry:strength_bucket:weak_strength_momentum', 'entry:time_bucket:time_1200_1400', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_ai_confirmed_stale_fresh_liquidity_liquidi', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_ai_confirmed_stale_fresh_liquidity_liquidi', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_ai_confirmed_stale_stale_high_liquidity_li', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_blocked_ai_score_stale_stale_block_liquidi', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_scalp_entry_action_decision_snapshot_stale', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_scalp_entry_action_decision_snapshot_stale', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_scalp_entry_action_decision_snapshot_stale', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_scalp_entry_action_decision_snapshot_stale', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_scalp_entry_action_decision_snapshot_stale', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_scalp_entry_action_decision_snapshot_stale', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_scalp_entry_action_decision_snapshot_stale', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_scalp_entry_action_decision_snapshot_stale', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_scalp_entry_action_decision_snapshot_stale', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_scalp_entry_action_decision_snapshot_stale', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_scalp_entry_action_decision_snapshot_stale', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_scalp_entry_action_decision_snapshot_stale', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_scalp_entry_action_decision_snapshot_stale', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_scalp_entry_action_decision_snapshot_stale', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_scalp_entry_action_decision_snapshot_stale', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_scalp_entry_action_decision_snapshot_stale', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_scalp_entry_action_decision_snapshot_stale', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_scalp_entry_action_decision_snapshot_stale', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_scalp_entry_action_decision_snapshot_stale', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_scalp_entry_action_decision_snapshot_stale', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_scalp_entry_action_decision_snapshot_stale', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_scalp_sim_panic_bottoming_entry_allowed_st', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_scalp_sim_panic_level1_entry_observed_stal', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_63_65_source_ai_confirmed_stale_fresh_liquidity_liquidi', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_63_65_source_ai_confirmed_stale_stale_high_liquidity_li', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_63_65_source_blocked_ai_score_stale_fresh_liquidity_liq', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_63_65_source_scalp_entry_action_decision_snapshot_stale', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_63_65_source_scalp_entry_action_decision_snapshot_stale', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_63_65_source_scalp_entry_action_decision_snapshot_stale', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_63_65_source_scalp_entry_action_decision_snapshot_stale', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_63_65_source_scalp_sim_panic_level1_entry_observed_stal', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_63_65_source_wait6579_ev_cohort_stale_fresh_or_unflagge', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_66_69_source_scalp_entry_action_decision_snapshot_stale', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_66_69_source_scalp_entry_action_decision_snapshot_stale', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_66_69_source_scalp_sim_panic_level1_entry_observed_stal', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_66_69_source_wait6579_ev_cohort_stale_fresh_or_unflagge', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_70p_source_ai_confirmed_stale_stale_high_liquidity_liqu', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_70p_source_scalp_entry_action_decision_snapshot_stale_f', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_70p_source_scalp_entry_action_decision_snapshot_stale_f', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_70p_source_scalp_entry_action_decision_snapshot_stale_f', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_70p_source_scalp_entry_action_decision_snapshot_stale_s', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_70p_source_scalp_entry_action_decision_snapshot_stale_s', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_70p_source_scalp_entry_action_decision_snapshot_stale_s', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_70p_source_scalp_sim_panic_level1_entry_observed_stale_', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_70p_source_wait6579_ev_cohort_stale_fresh_or_unflagged_', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_lt60_source_ai_confirmed_stale_stale_high_liquidity_liq', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_lt60_source_blocked_ai_score_stale_stale_block_liquidit', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_lt60_source_blocked_ai_score_stale_stale_not_available_', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_lt60_source_blocked_ai_score_stale_stale_not_available_', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_lt60_source_blocked_ai_score_stale_stale_not_available_', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_lt60_source_blocked_ai_score_stale_stale_not_available_', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_lt60_source_blocked_ai_score_stale_stale_not_available_', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_lt60_source_scalp_entry_action_decision_snapshot_stale_', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_lt60_source_scalp_entry_action_decision_snapshot_stale_', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_lt60_source_scalp_sim_panic_level1_entry_observed_stale', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_missing_submit_submit_missing_holding_holding_combo_holding_flow_source_scalp_sim_ov', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_missing_submit_submit_missing_holding_holding_combo_holding_flow_source_scalp_sim_ov', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_missing_submit_submit_missing_holding_holding_combo_holding_flow_source_scalp_sim_ov', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_missing_submit_submit_missing_holding_holding_missing_scale_in_scale_in_arm_avg_down', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_missing_submit_submit_missing_holding_holding_missing_scale_in_scale_in_arm_avg_down', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_missing_submit_submit_missing_holding_holding_missing_scale_in_scale_in_arm_pyramid_', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_missing_submit_submit_missing_holding_holding_missing_scale_in_scale_in_arm_pyramid_', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_missing_submit_submit_missing_holding_holding_missing_scale_in_scale_in_none_exit_ex', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_missing_submit_submit_missing_holding_holding_missing_scale_in_scale_in_none_exit_ex', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_missing_submit_submit_missing_holding_holding_missing_scale_in_scale_in_none_exit_ex', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_missing_submit_submit_missing_holding_holding_missing_scale_in_scale_in_none_exit_ex', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_missing_submit_submit_missing_holding_holding_missing_scale_in_scale_in_none_exit_ex']`
+- missing_runtime_summary_candidate_ids: `[]`
 - workorder_needed_bucket_ids: `[]`
 - ai_post_apply_followup_bucket_ids: `[]`
 - warnings: `['lifecycle_bucket_discovery_source_contract_warning', 'source_contract_drift_warning']`
-- interpretation: `lifecycle bucket discovery produced surfaced candidates that downstream consumers dropped`
+- interpretation: `lifecycle bucket discovery candidates propagated to bridge/runtime summary/workorder`
 
 ## LDM Hypothesis Parent Refinement
 - status: `pass`
@@ -160,13 +160,13 @@
 - runtime_authority_violation_input_ids: `[]`
 
 ## Active Sim Priority Handoff
-- status: `fail`
+- status: `warning`
 - active_seed_ids: `['active_seed_7cf1c198fc1e5246', 'active_seed_b99a2dea7aac2a83']`
 - observed_seed_ids: `['active_seed_03c539e6527cdda2', 'active_seed_7cf1c198fc1e5246', 'active_seed_b99a2dea7aac2a83']`
-- missing: `['active_sim_priority_inactive_key_consumed']`
-- warnings: `['active_sim_priority_preopen_handoff_pending']`
-- match_absence_diagnosis: `inactive_or_unknown_key_consumed`
-- match_absence_reason: `active_sim_priority_inactive_key_consumed`
+- missing: `[]`
+- warnings: `['swing_active_arm_priority_preopen_handoff_pending', 'active_sim_priority_stale_seed_alias_consumed']`
+- match_absence_diagnosis: `not_applicable`
+- match_absence_reason: `active_priority_observed_or_no_active_priority`
 - candidate_prefix_count: `1956`
 - top_candidate_prefixes: `[('{"entry_score_parent": "score_watch_recovery", "entry_source_parent": "entry_source_wait6579"}', 1011), ('{"entry_score_parent": "score_watch_recovery", "entry_source_parent": "entry_source_blocked_ai_score"}', 624), ('{"entry_score_parent": "score_mid_recovery", "entry_source_parent": "entry_source_wait6579"}', 252), ('{"entry_score_parent": "score_mid_recovery", "entry_source_parent": "entry_source_blocked_ai_score"}', 69)]`
 
@@ -178,45 +178,45 @@
 - warnings: `[]`
 
 ## Swing Lifecycle Handoff
-- status: `missing`
-- expected_candidate_ids: `[]`
+- status: `pass`
+- expected_candidate_ids: `['swing_ldm_lifecycle_flow_combo_swing_lifecycle_flow_entry_swing_entry_entry_bucket_attribution_swing_strategy_discovery_s_17be04825a', 'swing_ldm_lifecycle_flow_combo_swing_lifecycle_flow_entry_swing_entry_entry_bucket_attribution_swing_strategy_discovery_s_1b4afcfd76', 'swing_ldm_lifecycle_flow_combo_swing_lifecycle_flow_entry_swing_entry_entry_bucket_attribution_swing_strategy_discovery_s_1d2a773521', 'swing_ldm_lifecycle_flow_combo_swing_lifecycle_flow_entry_swing_entry_entry_bucket_attribution_swing_strategy_discovery_s_27b1d91917', 'swing_ldm_lifecycle_flow_combo_swing_lifecycle_flow_entry_swing_entry_entry_bucket_attribution_swing_strategy_discovery_s_4171503214', 'swing_ldm_lifecycle_flow_combo_swing_lifecycle_flow_entry_swing_entry_entry_bucket_attribution_swing_strategy_discovery_s_435fd1c339', 'swing_ldm_lifecycle_flow_combo_swing_lifecycle_flow_entry_swing_entry_entry_bucket_attribution_swing_strategy_discovery_s_53dd26ec9c', 'swing_ldm_lifecycle_flow_combo_swing_lifecycle_flow_entry_swing_entry_entry_bucket_attribution_swing_strategy_discovery_s_56e6380928', 'swing_ldm_lifecycle_flow_combo_swing_lifecycle_flow_entry_swing_entry_entry_bucket_attribution_swing_strategy_discovery_s_5ea568a2cc', 'swing_ldm_lifecycle_flow_combo_swing_lifecycle_flow_entry_swing_entry_entry_bucket_attribution_swing_strategy_discovery_s_674bdde6e3', 'swing_ldm_lifecycle_flow_combo_swing_lifecycle_flow_entry_swing_entry_entry_bucket_attribution_swing_strategy_discovery_s_7d92990310', 'swing_ldm_lifecycle_flow_combo_swing_lifecycle_flow_entry_swing_entry_entry_bucket_attribution_swing_strategy_discovery_s_9a16bc8153', 'swing_ldm_lifecycle_flow_combo_swing_lifecycle_flow_entry_swing_entry_entry_bucket_attribution_swing_strategy_discovery_s_ac21ef8125', 'swing_ldm_lifecycle_flow_combo_swing_lifecycle_flow_entry_swing_entry_entry_bucket_attribution_swing_strategy_discovery_s_adae86bbd6', 'swing_ldm_lifecycle_flow_combo_swing_lifecycle_flow_entry_swing_entry_entry_bucket_attribution_swing_strategy_discovery_s_b0984ff4fa', 'swing_ldm_lifecycle_flow_combo_swing_lifecycle_flow_entry_swing_entry_entry_bucket_attribution_swing_strategy_discovery_s_c515f99b98', 'swing_ldm_lifecycle_flow_combo_swing_lifecycle_flow_entry_swing_entry_entry_bucket_attribution_swing_strategy_discovery_s_d27ece90a1', 'swing_ldm_lifecycle_flow_combo_swing_lifecycle_flow_entry_swing_entry_entry_bucket_attribution_swing_strategy_discovery_s_d766d7a8b3', 'swing_ldm_lifecycle_flow_combo_swing_lifecycle_flow_entry_swing_entry_entry_bucket_attribution_swing_strategy_discovery_s_da5b17ed0a', 'swing_ldm_lifecycle_flow_combo_swing_lifecycle_flow_entry_swing_entry_entry_bucket_attribution_swing_strategy_discovery_s_dbcdc8c839']`
 - missing_ev_candidate_ids: `[]`
 - missing_runtime_summary_candidate_ids: `[]`
 - missing_workorder_order_ids: `[]`
 - daily_simulation_consumed: `False`
-- ai_two_pass_review_status: `-`
+- ai_two_pass_review_status: `parsed`
 - warnings: `[]`
-- interpretation: `Swing LDM report missing`
+- interpretation: `Swing LDM candidates/workorders propagated through EV, runtime summary, workorder, and verifier.`
 
 ## Producer Gap Discovery Handoff
-- status: `missing`
-- ai_two_pass_review_status: `missing`
-- audit_status: `-`
+- status: `pass`
+- ai_two_pass_review_status: `parsed`
+- audit_status: `pass`
 - expected_workorder_order_ids: `[]`
 - missing_workorder_order_ids: `[]`
 - missing: `[]`
-- interpretation: `producer_gap_discovery artifact missing`
+- interpretation: `producer gap high-priority orders propagated to code improvement workorder with parsed AI review`
 
 ## Stage Hook Workorder Handoff
-- status: `missing`
-- ai_two_pass_review_status: `missing`
-- audit_status: `-`
+- status: `pass`
+- ai_two_pass_review_status: `parsed`
+- audit_status: `pass`
 - expected_workorder_order_ids: `[]`
 - missing_workorder_order_ids: `[]`
 - unconsumed_hook_candidate_ids: `[]`
 - missing: `[]`
-- interpretation: `stage_hook_workorder_discovery artifact missing`
+- interpretation: `stage hook implementation-ready orders propagated to code improvement workorder`
 
 ## Bottom Rebound Sim Handoff
-- status: `missing`
+- status: `not_applicable`
 - included: `False`
 - source_rows: `0`
 - selected_candidate_count: `0`
 - arm_count: `0`
 - persisted_candidate_count: `0`
 - persisted_arm_count: `0`
-- missing: `['swing_strategy_discovery_sim_missing']`
-- interpretation: `swing_strategy_discovery_sim artifact missing`
+- missing: `[]`
+- interpretation: `bottom_rebound source was absent or blocked; safe-pool-only swing sim path applies`
 
 ## Runtime Gap Provenance
 - active_gap_count: `0`
@@ -224,11 +224,11 @@
 - gap_affected_handoff_count: `0`
 
 ## Workorder Snapshot
-- generation_id: `2026-06-25-0cfd8429982c`
-- source_hash: `0cfd8429982c49d5de9b46e51f11628781313d3348cf3c907ddb0fb852872896`
-- snapshot_status: `first_generation`
-- previous_generation_id: `-`
-- previous_source_hash: `-`
-- new_order_ids: `['order_entry_broker_receipt_contract_gap_review', 'order_entry_fill_quality_contract_gap_review', 'order_entry_post_submit_contract_gap_review', 'order_entry_source_taxonomy_contract_gap_review', 'order_entry_submit_drought_auto_resolution', 'order_entry_telegram_post_submit_contract_gap_review', 'order_lifecycle_entry_bucket_chosen_action_no_buy_ai', 'order_lifecycle_entry_bucket_chosen_action_wait_requote', 'order_lifecycle_entry_bucket_exit_rule_exit_unknown', 'order_lifecycle_entry_bucket_exit_rule_scalp_soft_stop_pct', 'order_lifecycle_entry_bucket_liquidity_bucket_liquidity_high', 'order_lifecycle_entry_bucket_overbought_bucket_overbought_normal', 'order_lifecycle_entry_bucket_overbought_bucket_overbought_watch', 'order_lifecycle_entry_bucket_score_band_score_60_62', 'order_lifecycle_entry_bucket_score_band_score_66_69', 'order_lifecycle_entry_bucket_score_band_score_70p', 'order_lifecycle_exit_bucket_combo_exit_result_source_scalp_sim_overnight_sell_today_rule_scalp_sim_overnight_sell_tod_d982edbd', 'order_lifecycle_exit_bucket_combo_exit_result_source_scalp_sim_partial_sell_order_assumed_filled_rule_scalp_sim_panic_73281913', 'order_lifecycle_exit_bucket_combo_exit_result_source_scalp_sim_partial_sell_order_assumed_filled_rule_scalp_sim_panic_823fe278', 'order_lifecycle_exit_bucket_combo_exit_result_source_sim_post_sell_evaluation_rule_daily_limit_up_immediate_exit_outc_960ea129', 'order_lifecycle_exit_bucket_combo_exit_result_source_sim_post_sell_evaluation_rule_scalp_hard_stop_pct_outcome_good_e_d8c33947', 'order_lifecycle_exit_bucket_combo_exit_result_source_sim_post_sell_evaluation_rule_scalp_hard_stop_pct_outcome_missed_30bb5c8f', 'order_lifecycle_exit_bucket_combo_exit_result_source_sim_post_sell_evaluation_rule_scalp_hard_stop_pct_outcome_neutra_d5168c3c', 'order_lifecycle_exit_bucket_combo_exit_result_source_sim_post_sell_evaluation_rule_scalp_soft_stop_pct_outcome_good_e_71b132b9', 'order_lifecycle_exit_bucket_combo_exit_result_source_sim_post_sell_evaluation_rule_scalp_soft_stop_pct_outcome_missed_bb293be8', 'order_lifecycle_exit_bucket_combo_exit_result_source_sim_post_sell_evaluation_rule_scalp_soft_stop_pct_outcome_neutra_d73738ba', 'order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_10_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_fabcf0d3', 'order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_11_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_b5237a42', 'order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_12_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_c0394ca1', 'order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_13_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_b5237a42', 'order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_14_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_25002a6e', 'order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_15_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_c0394ca1', 'order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_16_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_b5237a42', 'order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_17_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_c0394ca1', 'order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_18_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_e48e520c', 'order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_19_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_b5237a42', 'order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_1_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_b5237a42', 'order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_20_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_c0394ca1', 'order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_2_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_b5237a42', 'order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_3_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_5e11e397', 'order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_4_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_c0394ca1', 'order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_5_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_c0394ca1', 'order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_6_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_c0394ca1', 'order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_7_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_b5237a42', 'order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_8_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_cd847d1b', 'order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_9_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_fabcf0d3', 'order_lifecycle_holding_bucket_combo_holding_flow_source_scalp_sim_holding_started_action_holding_action_not_applicable_a_fc555278', 'order_lifecycle_holding_bucket_combo_holding_flow_source_scalp_sim_holding_started_action_wait_profit_profit_lt_neg070_he_ed505a3f', 'order_lifecycle_holding_bucket_combo_holding_flow_source_scalp_sim_holding_started_action_wait_profit_profit_neg070_neg01_7ffc2d26', 'order_lifecycle_holding_bucket_combo_holding_flow_source_scalp_sim_holding_started_action_wait_profit_profit_pos080_pos15_aaaecaaf', 'order_lifecycle_holding_bucket_combo_holding_flow_source_scalp_sim_holding_started_action_wait_profit_profit_pos150_pos30_6f3188b0', 'order_lifecycle_holding_bucket_held_bucket_held_not_applicable_at_start_508784a3', 'order_lifecycle_holding_bucket_holding_action_holding_action_not_applicable_at_start_c20ec935', 'order_lifecycle_holding_bucket_holding_action_wait_c26d74df', 'order_lifecycle_holding_bucket_holding_source_stage_scalp_sim_holding_started_78913f30', 'order_lifecycle_holding_bucket_profit_band_profit_lt_neg070_711f1b3f', 'order_lifecycle_quiet_gap_ai_review_coverage_rollup', 'order_lifecycle_quiet_gap_parent_conflict_rollup', 'order_lifecycle_quiet_gap_positive_source_only_rollup', 'order_lifecycle_source_dimension_gap_rollup']`
-- removed_order_ids: `[]`
-- decision_changed_order_ids: `[]`
+- generation_id: `2026-06-25-495782da76f5`
+- source_hash: `495782da76f5c6b65312a359eab8423faaac3c5317858056b1a7225268be6751`
+- snapshot_status: `source_changed_with_lineage`
+- previous_generation_id: `2026-06-25-a97ba4f9e888`
+- previous_source_hash: `a97ba4f9e888f8ab8f592369bf051ef769264e290a8ad65be7cdafc7379e7f1b`
+- new_order_ids: `['order_lifecycle_entry_bucket_source_stage_scalp_entry_action_decision_snapshot', 'order_lifecycle_entry_bucket_stale_bucket_fresh', 'order_lifecycle_entry_bucket_stale_bucket_stale_high', 'order_lifecycle_entry_bucket_strength_bucket_weak_strength_momentum', 'order_lifecycle_entry_bucket_time_bucket_time_1200_1400']`
+- removed_order_ids: `['order_lifecycle_entry_bucket_chosen_action_wait_requote', 'order_lifecycle_entry_bucket_exit_rule_exit_unknown', 'order_lifecycle_entry_bucket_overbought_bucket_overbought_watch', 'order_lifecycle_entry_bucket_score_band_score_66_69', 'order_lifecycle_entry_bucket_score_band_score_70p']`
+- decision_changed_order_ids: `['order_entry_submit_drought_auto_resolution']`

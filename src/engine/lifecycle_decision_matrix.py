@@ -41,6 +41,7 @@ from src.engine.lifecycle.scale_in_incremental_counterfactual import (
 
 
 MATRIX_DIR = REPORT_DIR / "lifecycle_decision_matrix"
+BUY_FUNNEL_SENTINEL_DIR = REPORT_DIR / "buy_funnel_sentinel"
 POST_SELL_DIR = Path(__file__).resolve().parents[2] / "data" / "post_sell"
 MONITOR_SNAPSHOT_DIR = REPORT_DIR / "monitor_snapshots"
 PIPELINE_EVENTS_DIR = Path(__file__).resolve().parents[2] / "data" / "pipeline_events"
@@ -378,6 +379,63 @@ def _read_json_dict(path: Path) -> dict[str, Any]:
     except Exception:
         return {}
     return payload if isinstance(payload, dict) else {}
+
+
+def _load_buy_funnel_quote_freshness_attribution(target_date: str) -> dict[str, Any]:
+    report = _read_json_dict(BUY_FUNNEL_SENTINEL_DIR / f"buy_funnel_sentinel_{target_date}.json")
+    classification = report.get("classification") if isinstance(report.get("classification"), dict) else {}
+    root_cause = (
+        classification.get("submit_drought_root_cause")
+        if isinstance(classification.get("submit_drought_root_cause"), dict)
+        else {}
+    )
+    quote_freshness = (
+        root_cause.get("quote_freshness_attribution")
+        if isinstance(root_cause.get("quote_freshness_attribution"), dict)
+        else {}
+    )
+    if not quote_freshness:
+        return {}
+    return {
+        "source_report_type": "buy_funnel_sentinel",
+        "decision_authority": "submit_drought_quote_freshness_attribution_only",
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "forbidden_uses": quote_freshness.get("forbidden_uses")
+        or [
+            "broker_order_submit",
+            "adm_ldm_training_input",
+            "general_threshold_ev_input",
+            "live_auto_promotion",
+        ],
+        "refresh_attempted_count": _safe_int(quote_freshness.get("refresh_attempted_count"), 0),
+        "refresh_applied_count": _safe_int(quote_freshness.get("refresh_applied_count"), 0),
+        "still_latency_blocked_after_refresh_count": _safe_int(
+            quote_freshness.get("still_latency_blocked_after_refresh_count"),
+            0,
+        ),
+        "latency_pass_recovered_count": _safe_int(quote_freshness.get("latency_pass_recovered_count"), 0),
+        "order_bundle_submitted_after_refresh_count": _safe_int(
+            quote_freshness.get("order_bundle_submitted_after_refresh_count"),
+            0,
+        ),
+        "refresh_subreason_counts": (
+            quote_freshness.get("refresh_subreason_counts")
+            if isinstance(quote_freshness.get("refresh_subreason_counts"), dict)
+            else {}
+        ),
+        "refresh_block_subreason_counts": (
+            quote_freshness.get("refresh_block_subreason_counts")
+            if isinstance(quote_freshness.get("refresh_block_subreason_counts"), dict)
+            else {}
+        ),
+        "latency_pass_recovered_downstream_counts": (
+            quote_freshness.get("latency_pass_recovered_downstream_counts")
+            if isinstance(quote_freshness.get("latency_pass_recovered_downstream_counts"), dict)
+            else {}
+        ),
+        "post_restart_window_policy": quote_freshness.get("post_restart_window_policy"),
+    }
 
 
 def _safe_float(value: Any, default: float | None = 0.0) -> float | None:
@@ -2990,7 +3048,11 @@ def _normalized_submit_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return normalized
 
 
-def _submit_bucket_attribution(rows: list[dict[str, Any]]) -> dict[str, Any]:
+def _submit_bucket_attribution(
+    rows: list[dict[str, Any]],
+    *,
+    sentinel_quote_freshness_attribution: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     submit_rows = _normalized_submit_rows([row for row in rows if str(row.get("stage") or "") == "submit"])
     real_submitted_rows: list[dict[str, Any]] = []
     missing_broker_key_rows: list[dict[str, Any]] = []
@@ -3099,6 +3161,24 @@ def _submit_bucket_attribution(rows: list[dict[str, Any]]) -> dict[str, Any]:
         bucket_values = _submit_bucket_features(row)
         quote_freshness_resolution_counts[bucket_values["quote_freshness_resolution_state"]] += 1
         pre_submit_refresh_applied_counts[bucket_values["pre_submit_refresh_applied"]] += 1
+    sentinel_quote_freshness_attribution = (
+        sentinel_quote_freshness_attribution
+        if isinstance(sentinel_quote_freshness_attribution, dict)
+        else {}
+    )
+    sentinel_quote_freshness_present = _safe_int(
+        sentinel_quote_freshness_attribution.get("refresh_attempted_count"),
+        0,
+    ) > 0
+    row_quote_freshness_present = any(
+        key
+        not in {
+            "refresh_not_attempted_or_not_instrumented",
+            "refresh_not_attempted_or_not_needed",
+            "sim_submit_path_not_applicable",
+        }
+        for key in quote_freshness_resolution_counts
+    )
     return {
         "metric_role": "submit_funnel_source_quality_gate",
         "decision_authority": "adm_ldm_submit_bucket_attribution_source_only",
@@ -3121,15 +3201,12 @@ def _submit_bucket_attribution(rows: list[dict[str, Any]]) -> dict[str, Any]:
             "contract_gap_count": len(contract_gaps),
             "workorder_count": len(workorders),
             "runtime_candidate_count": 0,
-            "quote_freshness_attribution_present": any(
-                key
-                not in {
-                    "refresh_not_attempted_or_not_instrumented",
-                    "refresh_not_attempted_or_not_needed",
-                    "sim_submit_path_not_applicable",
-                }
-                for key in quote_freshness_resolution_counts
+            "quote_freshness_attribution_present": (
+                row_quote_freshness_present or sentinel_quote_freshness_present
             ),
+            "row_quote_freshness_attribution_present": row_quote_freshness_present,
+            "sentinel_quote_freshness_attribution_present": sentinel_quote_freshness_present,
+            "sentinel_quote_freshness_attribution": sentinel_quote_freshness_attribution,
             "quote_freshness_resolution_counts": dict(sorted(quote_freshness_resolution_counts.items())),
             "pre_submit_refresh_applied_counts": dict(sorted(pre_submit_refresh_applied_counts.items())),
             "real_submitted_row_count": len(real_submitted_rows),
@@ -5362,7 +5439,10 @@ def build_lifecycle_decision_matrix_report(
     if all(entry.get("source_quality_gate") != "pass" for entry in policy_entries):
         warnings.append("all_stage_policy_entries_below_sample_floor")
     entry_bucket_attribution = _entry_bucket_attribution(rows)
-    submit_bucket_attribution = _submit_bucket_attribution(rows)
+    submit_bucket_attribution = _submit_bucket_attribution(
+        rows,
+        sentinel_quote_freshness_attribution=_load_buy_funnel_quote_freshness_attribution(target_date),
+    )
     holding_bucket_attribution = _holding_bucket_attribution(rows)
     exit_bucket_attribution = _exit_bucket_attribution(rows)
     scale_in_bucket_attribution = _scale_in_bucket_attribution(rows)

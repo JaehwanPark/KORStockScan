@@ -1252,6 +1252,16 @@ def _entry_submit_drought_implementation_marker(
         if isinstance(root_cause.get("latency_root_cause_counts"), dict)
         else {}
     )
+    observation_breakdown = (
+        contract.get("observation_breakdown")
+        if isinstance(contract.get("observation_breakdown"), dict)
+        else {}
+    )
+    observation_axes = (
+        observation_breakdown.get("axes")
+        if isinstance(observation_breakdown.get("axes"), dict)
+        else {}
+    )
     refresh_attempted_count = _safe_int(quote_freshness.get("refresh_attempted_count"), 0)
     refresh_applied_count = _safe_int(quote_freshness.get("refresh_applied_count"), 0)
     latency_pass_recovered_count = _safe_int(quote_freshness.get("latency_pass_recovered_count"), 0)
@@ -1292,6 +1302,15 @@ def _entry_submit_drought_implementation_marker(
             "source_report_type": "buy_funnel_sentinel",
             "required_downstream": required,
             "weak_contract_matches": contract.get("weak_contract_matches") or [],
+            "observation_breakdown": observation_breakdown,
+            "observation_axis_status": {
+                str(axis): (
+                    axis_payload.get("status")
+                    if isinstance(axis_payload, dict)
+                    else None
+                )
+                for axis, axis_payload in observation_axes.items()
+            },
             "root_cause_closure_status_hint": root_cause_closure_status,
             "root_cause_signal": current_primary or None,
             "root_cause_counts": latency_root_cause_counts,

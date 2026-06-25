@@ -41,10 +41,12 @@ NON_RECOVERABLE_TERMS = {
     "package_missing",
 }
 DONE_ACCEPTABLE_WARNING_ISSUES = {
+    "active_sim_priority_stale_seed_alias_consumed",
     "active_sim_priority_preopen_handoff_pending",
     "active_or_hypothesis_preopen_handoff_pending",
     "ai_watching_score_smoothing_diagnostic_followup_open",
     "lifecycle_bucket_discovery_rolling5d_parent_granularity_not_target",
+    "swing_active_arm_priority_preopen_handoff_pending",
     "swing_active_arm_priority_runtime_observation_missing",
     "swing_lifecycle_bucket_discovery:ai_two_pass_review_followup_required_source_only",
     "swing_lifecycle_bucket_discovery:ai_two_pass_review_followup_sim_auto_blocked",

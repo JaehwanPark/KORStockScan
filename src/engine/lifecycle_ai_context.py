@@ -248,7 +248,12 @@ def build_lifecycle_ai_context_report(target_date: str, *, provider: str | None 
     policy_entries = _policy_by_stage(lifecycle)
     attribution_by_stage = _load_stage_attribution(target_date)
     matrix_version = str(lifecycle.get("matrix_version") or "")
-    provider_name = str(provider or "none").strip().lower()
+    raw_provider_name = str(provider or "").strip().lower()
+    provider_name = (
+        "deterministic_source_only"
+        if raw_provider_name in {"", "none", "deterministic"}
+        else raw_provider_name
+    )
     stage_contexts: list[dict[str, Any]] = []
     for stage in STAGES:
         policy = policy_entries.get(stage, {})
@@ -294,7 +299,9 @@ def build_lifecycle_ai_context_report(target_date: str, *, provider: str | None 
         warnings.append("lifecycle_ai_context_attribution_missing_or_empty")
     provider_status = {
         "provider": provider_name,
-        "status": "deterministic_fallback" if provider_name in {"", "none", "deterministic"} else "not_called_v1",
+        "status": "deterministic_fallback"
+        if provider_name == "deterministic_source_only"
+        else "not_called_v1",
         "schema_name": "lifecycle_ai_context_v1",
         "fallback_used": True,
     }
@@ -721,7 +728,7 @@ def main() -> None:
         choices=("context", "attribution", "both"),
         default="both",
     )
-    parser.add_argument("--provider", default="none")
+    parser.add_argument("--provider", default="deterministic_source_only")
     parser.add_argument("--replay-budget", type=int, default=REPLAY_BUDGET)
     args = parser.parse_args()
     if args.mode in {"attribution", "both"}:

@@ -4100,6 +4100,15 @@ def _scalp_sim_candidate_window_context_fields(source: dict | None) -> dict:
         or str(fields.get("scalp_sim_active_priority_seed_matched") or "").strip().lower() != "true"
         or (bool(prefix_entry_parent) and prefix_entry_parent != expected_entry_parent)
     )
+    if not should_refresh_active_seed and str(fields.get("active_seed_id") or "").strip():
+        cache = _load_scalp_sim_auto_policy_cache()
+        active_seed_ids = {
+            str(seed.get("active_seed_id") or "").strip()
+            for seed in (cache.get("active_seeds") or [])
+            if isinstance(seed, dict) and str(seed.get("active_seed_id") or "").strip()
+        }
+        if active_seed_ids and str(fields.get("active_seed_id") or "").strip() not in active_seed_ids:
+            should_refresh_active_seed = True
     if source_stage and score_value is not None and should_refresh_active_seed:
         fields.update(
             _scalp_active_seed_match_fields(

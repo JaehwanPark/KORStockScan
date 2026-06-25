@@ -103,6 +103,14 @@ PRE_SUBMIT_REFRESH_NOOP_REASONS = {
     "latest_ws_snapshot_fresh",
     "latest_snapshot_fresh",
 }
+SUBMIT_DROUGHT_OBSERVATION_AXIS_ORDER = (
+    "UPSTREAM_GATE",
+    "BUDGET_PASS_COLLAPSE",
+    "LATENCY_PRE_SUBMIT",
+    "BROKER_RECEIPT",
+    "SIM_REAL_AUTHORITY",
+    "SOURCE_TAXONOMY_LEAKAGE",
+)
 
 
 @dataclass(frozen=True)
@@ -798,6 +806,8 @@ def _refresh_reason_bucket(label: str) -> str | None:
         reason = text.removeprefix("pre_submit_ws_snapshot_refresh_")
         if reason in {"latest_ws_snapshot_fresh", "applied"}:
             return "ws_snapshot_refresh_applied"
+        if reason in {"none", "null", "nan"}:
+            return "ws_snapshot_refresh_failed_missing"
         if "stale" in reason or "older_than_input" in reason:
             return "ws_snapshot_refresh_failed_stale"
         if "missing" in reason or "ws_manager_missing" in reason:
@@ -811,6 +821,8 @@ def _refresh_reason_bucket(label: str) -> str | None:
         reason = text.removeprefix("pre_submit_quote_refresh_")
         if reason in {"observer_quote_fresh", "applied"}:
             return "observer_quote_refresh_applied"
+        if reason in {"none", "null", "nan"}:
+            return "observer_quote_refresh_failed_missing"
         if "stale" in reason:
             return "observer_quote_refresh_failed_stale"
         if "missing" in reason:
@@ -831,8 +843,15 @@ def _latency_root_cause_bucket(label: str) -> str:
     text = label.lower()
     if "input_snapshot_fresh" in text:
         return "quote_freshness_input_snapshot_noop"
-    if _refresh_reason_bucket(label) == "refresh_disabled_or_alias_gap":
+    refresh_bucket = _refresh_reason_bucket(label)
+    if refresh_bucket == "refresh_disabled_or_alias_gap":
         return "observer_unhealthy"
+    if refresh_bucket and any(token in refresh_bucket for token in ("missing", "invalid")):
+        return "observer_unhealthy"
+    if refresh_bucket and "stale" in refresh_bucket:
+        return "quote_stale"
+    if refresh_bucket and "spread" in refresh_bucket:
+        return "spread_or_slippage_guard"
     if "ws_jitter" in text:
         return "quote_stale"
     # `other_danger` is the residual DANGER state after quote_stale/ws_age/
@@ -1179,6 +1198,21 @@ def _entry_submit_drought_contract(
         weak_contract_matches.append("PRICE_REVALIDATION")
     if taxonomy_leakage:
         weak_contract_matches.append("SOURCE_TAXONOMY_LEAKAGE")
+    weak_contract_matches = sorted(set(weak_contract_matches))
+    root_cause = (
+        classification.get("submit_drought_root_cause")
+        if isinstance(classification.get("submit_drought_root_cause"), dict)
+        else {}
+    )
+    observation_breakdown = _entry_submit_drought_observation_breakdown(
+        matches=matches,
+        session_summary=session_summary,
+        root_cause=root_cause,
+        taxonomy_leakage_labels=[
+            label for label in blocker_labels if label.startswith("blocked_swing_")
+        ],
+        weak_contract_matches=weak_contract_matches,
+    )
     return {
         "primary": classification.get("primary"),
         "matches": matches,
@@ -1207,7 +1241,8 @@ def _entry_submit_drought_contract(
             "latency_to_budget_unique_pct": ratios.get("latency_to_budget_unique_pct"),
         },
         "thresholds": classification.get("submit_drought_thresholds") or {},
-        "weak_contract_matches": sorted(set(weak_contract_matches)),
+        "weak_contract_matches": weak_contract_matches,
+        "observation_breakdown": observation_breakdown,
         "source_taxonomy_leakage": taxonomy_leakage,
         "forbidden_uses": [
             "intraday_threshold_mutation",
@@ -1215,6 +1250,115 @@ def _entry_submit_drought_contract(
             "provider_route_change",
             "bot_restart_trigger",
             "telegram_pre_submit_buy_alert",
+        ],
+    }
+
+
+def _entry_submit_drought_observation_breakdown(
+    *,
+    matches: list[Any],
+    session_summary: dict[str, Any],
+    root_cause: dict[str, Any],
+    taxonomy_leakage_labels: list[str],
+    weak_contract_matches: list[str],
+) -> dict[str, Any]:
+    unique = session_summary.get("stage_unique") if isinstance(session_summary.get("stage_unique"), dict) else {}
+    ratios = session_summary.get("ratios") if isinstance(session_summary.get("ratios"), dict) else {}
+    ai_unique = int(unique.get("ai_confirmed", 0) or 0)
+    budget_unique = int(unique.get("budget_pass", 0) or 0)
+    latency_unique = int(unique.get("latency_pass", 0) or 0)
+    submitted_unique = int(unique.get("order_bundle_submitted", 0) or 0)
+    latency_root_cause_counts = (
+        root_cause.get("latency_root_cause_counts")
+        if isinstance(root_cause.get("latency_root_cause_counts"), dict)
+        else {}
+    )
+    quote_freshness = (
+        root_cause.get("quote_freshness_attribution")
+        if isinstance(root_cause.get("quote_freshness_attribution"), dict)
+        else {}
+    )
+    upstream_blockers = session_summary.get("upstream_blocker_top")
+    latency_blockers = session_summary.get("latency_blocker_top")
+    blocker_top = session_summary.get("blocker_top")
+
+    axes = {
+        "UPSTREAM_GATE": {
+            "status": "observed" if "UPSTREAM_GATE" in weak_contract_matches else "no_current_signal",
+            "observed_count": int(session_summary.get("upstream_block_events", 0) or 0),
+            "evidence": {
+                "upstream_blocker_top": upstream_blockers if isinstance(upstream_blockers, list) else [],
+                "budget_to_ai_unique_pct": ratios.get("budget_to_ai_unique_pct"),
+            },
+            "next_repair_action": "split upstream AI terminal and score gate reasons before threshold interpretation",
+        },
+        "BUDGET_PASS_COLLAPSE": {
+            "status": "observed" if "BUDGET_PASS_COLLAPSE" in weak_contract_matches else "no_current_signal",
+            "observed_count": max(ai_unique - budget_unique, 0),
+            "evidence": {
+                "ai_confirmed_unique": ai_unique,
+                "budget_pass_unique": budget_unique,
+                "budget_to_ai_unique_pct": ratios.get("budget_to_ai_unique_pct"),
+            },
+            "next_repair_action": "preserve budget pass collapse as source attribution before EV approval",
+        },
+        "LATENCY_PRE_SUBMIT": {
+            "status": "observed" if "LATENCY_PRE_SUBMIT" in weak_contract_matches else "no_current_signal",
+            "observed_count": int(session_summary.get("latency_state_danger_events", 0) or 0),
+            "evidence": {
+                "latency_blocker_top": latency_blockers if isinstance(latency_blockers, list) else [],
+                "latency_root_cause_counts": latency_root_cause_counts,
+                "unknown_latency_reason_count": int(root_cause.get("unknown_latency_reason_count", 0) or 0),
+                "unknown_latency_workorder_required": bool(
+                    root_cause.get("unknown_latency_workorder_required")
+                ),
+                "quote_freshness_attribution": quote_freshness,
+            },
+            "next_repair_action": "close unknown latency labels or route quote freshness gaps to LDM attribution",
+        },
+        "BROKER_RECEIPT": {
+            "status": "observed" if "BROKER_RECEIPT" in weak_contract_matches else "no_current_signal",
+            "observed_count": max(latency_unique - submitted_unique, 0),
+            "evidence": {
+                "latency_pass_unique": latency_unique,
+                "order_bundle_submitted_unique": submitted_unique,
+                "submitted_to_budget_unique_pct": ratios.get("submitted_to_budget_unique_pct"),
+            },
+            "next_repair_action": "join post-submit broker receipt and fill provenance when submitted samples exist",
+        },
+        "SIM_REAL_AUTHORITY": {
+            "status": "observed" if "SIM_REAL_AUTHORITY" in weak_contract_matches else "no_current_signal",
+            "observed_count": 1 if "SUBMIT_DROUGHT_CRITICAL" in {str(item) for item in matches} else 0,
+            "evidence": {
+                "actual_order_submitted_authority": "not_granted_by_report",
+                "broker_order_submit_allowed": False,
+            },
+            "next_repair_action": "keep attribution source-only until explicit runtime approval artifact exists",
+        },
+        "SOURCE_TAXONOMY_LEAKAGE": {
+            "status": "observed" if taxonomy_leakage_labels else "no_current_signal",
+            "observed_count": len(taxonomy_leakage_labels),
+            "evidence": {
+                "taxonomy_leakage_labels": taxonomy_leakage_labels,
+                "blocker_top": blocker_top if isinstance(blocker_top, list) else [],
+            },
+            "next_repair_action": "separate swing/source taxonomy from entry-submit blocker labels",
+        },
+    }
+    return {
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "broker_order_submit_allowed": False,
+        "decision_authority": "submit_drought_attribution_only",
+        "axis_order": list(SUBMIT_DROUGHT_OBSERVATION_AXIS_ORDER),
+        "axes": {axis: axes[axis] for axis in SUBMIT_DROUGHT_OBSERVATION_AXIS_ORDER},
+        "forbidden_uses": [
+            "broker_order_submit",
+            "runtime_apply_candidate",
+            "intraday_threshold_mutation",
+            "provider_route_change",
+            "bot_restart_trigger",
+            "live_auto_promotion",
         ],
     }
 

@@ -824,6 +824,48 @@ def test_lifecycle_submit_bucket_attribution_adds_quote_freshness_dimensions():
     assert ("quote_freshness_resolution_state", "sim_submit_path_not_applicable") in bucket_pairs
 
 
+def test_lifecycle_submit_bucket_attribution_consumes_sentinel_quote_freshness_summary():
+    rows = [
+        {
+            "stage": "submit",
+            "source_stage": "order_bundle_submitted",
+            "runtime_features": {
+                "actual_order_submitted": True,
+                "broker_order_no": "0012345",
+            },
+            "labels": {},
+            "stage_ev_composite_pct": None,
+        }
+    ]
+
+    attribution = mod._submit_bucket_attribution(
+        rows,
+        sentinel_quote_freshness_attribution={
+            "source_report_type": "buy_funnel_sentinel",
+            "decision_authority": "submit_drought_quote_freshness_attribution_only",
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+            "refresh_attempted_count": 4,
+            "refresh_applied_count": 2,
+            "latency_pass_recovered_count": 1,
+            "refresh_subreason_counts": {"ws_snapshot_refresh_failed_stale": 4},
+            "forbidden_uses": ["broker_order_submit", "live_auto_promotion"],
+        },
+    )
+
+    summary = attribution["summary"]
+    assert summary["row_quote_freshness_attribution_present"] is False
+    assert summary["sentinel_quote_freshness_attribution_present"] is True
+    assert summary["quote_freshness_attribution_present"] is True
+    assert (
+        summary["sentinel_quote_freshness_attribution"]["decision_authority"]
+        == "submit_drought_quote_freshness_attribution_only"
+    )
+    assert summary["sentinel_quote_freshness_attribution"]["runtime_effect"] is False
+    assert summary["sentinel_quote_freshness_attribution"]["allowed_runtime_apply"] is False
+    assert "broker_order_submit" in summary["sentinel_quote_freshness_attribution"]["forbidden_uses"]
+
+
 def test_submit_runtime_features_backfills_real_submit_refresh_fields_from_row():
     features = mod._submit_runtime_features(
         {

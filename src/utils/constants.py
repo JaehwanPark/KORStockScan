@@ -663,9 +663,9 @@ class TradingConfig:
     # 🕒 거래 시간 제어값 (KRX 거래시간 확대 대응)
     # ==========================================
     MARKET_OPEN_TIME: str = "09:00:00"
-    SCALPING_EARLIEST_BUY_TIME: str = "09:03:00"
+    SCALPING_EARLIEST_BUY_TIME: str = "09:01:00"
     SWING_EARLIEST_BUY_TIME: str = "09:05:00"
-    SCALPING_BUY_WINDOWS: str = "08:03:00-08:40:00,09:03:00-15:00:00,16:00:00-19:45:00"
+    SCALPING_BUY_WINDOWS: str = "08:01:00-08:40:00,09:01:00-15:00:00,16:00:00-19:45:00"
     SCALPING_NEW_BUY_CUTOFF: str = "19:45:00"
     SCALPING_OVERNIGHT_DECISION_TIME: str = "15:10:00"
     MARKET_CLOSE_TIME: str = "15:30:00"

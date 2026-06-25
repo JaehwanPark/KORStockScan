@@ -84,20 +84,20 @@ def test_scalping_new_buy_cutoff_defaults_to_nxt_close(monkeypatch):
     reloaded_time = importlib.reload(sniper_time)
 
     assert reloaded.TRADING_RULES.SCALPING_BUY_WINDOWS == (
-        "08:03:00-08:40:00,09:03:00-15:00:00,16:00:00-19:45:00"
+        "08:01:00-08:40:00,09:01:00-15:00:00,16:00:00-19:45:00"
     )
     assert reloaded_time.describe_scalping_buy_windows() == (
-        "08:03:00-08:40:00,09:03:00-15:00:00,16:00:00-19:45:00"
+        "08:01:00-08:40:00,09:01:00-15:00:00,16:00:00-19:45:00"
     )
     assert reloaded.TRADING_RULES.SCALPING_NEW_BUY_CUTOFF == "19:45:00"
     assert reloaded_time.TIME_SCALPING_NEW_BUY_CUTOFF == time(19, 45)
-    assert reloaded_time.is_scalping_buy_time_allowed(time(8, 3)) is True
+    assert reloaded_time.is_scalping_buy_time_allowed(time(8, 1)) is True
     assert reloaded_time.is_scalping_buy_time_allowed(time(8, 40)) is True
-    assert reloaded_time.is_scalping_buy_time_allowed(time(9, 3)) is True
+    assert reloaded_time.is_scalping_buy_time_allowed(time(9, 1)) is True
     assert reloaded_time.is_scalping_buy_time_allowed(time(15, 0)) is True
     assert reloaded_time.is_scalping_buy_time_allowed(time(16, 0)) is True
     assert reloaded_time.is_scalping_buy_time_allowed(time(19, 45)) is True
-    assert reloaded_time.is_scalping_buy_time_allowed(time(8, 2, 59)) is False
+    assert reloaded_time.is_scalping_buy_time_allowed(time(8, 0, 59)) is False
     assert reloaded_time.is_scalping_buy_time_allowed(time(8, 41)) is False
     assert reloaded_time.is_scalping_buy_time_allowed(time(15, 0, 1)) is False
     assert reloaded_time.is_scalping_buy_time_allowed(time(15, 59, 59)) is False
@@ -124,7 +124,7 @@ def test_scalping_new_buy_cutoff_supports_runtime_env_override(monkeypatch):
     assert reloaded_time.is_scalping_buy_time_allowed(time(19, 30, 1)) is False
 
 
-def test_scalping_buy_windows_invalid_env_falls_back_to_0903(monkeypatch):
+def test_scalping_buy_windows_invalid_env_falls_back_to_default(monkeypatch):
     monkeypatch.setenv("KORSTOCKSCAN_SCALPING_BUY_WINDOWS", "invalid-window")
 
     importlib.reload(constants)
@@ -133,10 +133,10 @@ def test_scalping_buy_windows_invalid_env_falls_back_to_0903(monkeypatch):
     reloaded_time = importlib.reload(sniper_time)
 
     assert reloaded_time.describe_scalping_buy_windows() == (
-        "08:03:00-08:40:00,09:03:00-15:00:00,16:00:00-19:45:00"
+        "08:01:00-08:40:00,09:01:00-15:00:00,16:00:00-19:45:00"
     )
-    assert reloaded_time.is_scalping_buy_time_allowed(time(9, 2, 59)) is False
-    assert reloaded_time.is_scalping_buy_time_allowed(time(9, 3, 0)) is True
+    assert reloaded_time.is_scalping_buy_time_allowed(time(9, 0, 59)) is False
+    assert reloaded_time.is_scalping_buy_time_allowed(time(9, 1, 0)) is True
 
 
 def test_trading_rules_late_entry_price_drift_guard_default_off(monkeypatch):

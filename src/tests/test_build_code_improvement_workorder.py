@@ -3252,6 +3252,35 @@ def test_build_code_improvement_workorder_marks_submit_drought_artifact_regenera
                     "runtime_effect": False,
                     "allowed_runtime_apply": False,
                     "broker_order_submit_allowed": False,
+                    "observation_breakdown": {
+                        "runtime_effect": False,
+                        "allowed_runtime_apply": False,
+                        "broker_order_submit_allowed": False,
+                        "decision_authority": "submit_drought_attribution_only",
+                        "axis_order": [
+                            "UPSTREAM_GATE",
+                            "BUDGET_PASS_COLLAPSE",
+                            "LATENCY_PRE_SUBMIT",
+                            "BROKER_RECEIPT",
+                            "SIM_REAL_AUTHORITY",
+                            "SOURCE_TAXONOMY_LEAKAGE",
+                        ],
+                        "axes": {
+                            "LATENCY_PRE_SUBMIT": {
+                                "status": "observed",
+                                "observed_count": 9,
+                            },
+                            "BROKER_RECEIPT": {
+                                "status": "observed",
+                                "observed_count": 1,
+                            },
+                        },
+                        "forbidden_uses": [
+                            "broker_order_submit",
+                            "runtime_apply_candidate",
+                            "provider_route_change",
+                        ],
+                    },
                 },
                 "current": {
                     "session": {
@@ -3351,6 +3380,35 @@ def test_build_code_improvement_workorder_closes_submit_drought_when_root_cause_
                     "runtime_effect": False,
                     "allowed_runtime_apply": False,
                     "broker_order_submit_allowed": False,
+                    "observation_breakdown": {
+                        "runtime_effect": False,
+                        "allowed_runtime_apply": False,
+                        "broker_order_submit_allowed": False,
+                        "decision_authority": "submit_drought_attribution_only",
+                        "axis_order": [
+                            "UPSTREAM_GATE",
+                            "BUDGET_PASS_COLLAPSE",
+                            "LATENCY_PRE_SUBMIT",
+                            "BROKER_RECEIPT",
+                            "SIM_REAL_AUTHORITY",
+                            "SOURCE_TAXONOMY_LEAKAGE",
+                        ],
+                        "axes": {
+                            "LATENCY_PRE_SUBMIT": {
+                                "status": "observed",
+                                "observed_count": 9,
+                            },
+                            "BROKER_RECEIPT": {
+                                "status": "observed",
+                                "observed_count": 1,
+                            },
+                        },
+                        "forbidden_uses": [
+                            "broker_order_submit",
+                            "runtime_apply_candidate",
+                            "provider_route_change",
+                        ],
+                    },
                 },
                 "current": {
                     "session": {
@@ -3409,6 +3467,14 @@ def test_build_code_improvement_workorder_closes_submit_drought_when_root_cause_
     order = next(item for item in report["orders"] if item["order_id"] == "order_entry_submit_drought_auto_resolution")
     assert order["root_cause_closure_status"] == "root_cause_closed"
     assert order["implementation_provenance"]["root_cause_closure_status_hint"] == "root_cause_closed"
+    assert (
+        order["implementation_provenance"]["observation_breakdown"]["decision_authority"]
+        == "submit_drought_attribution_only"
+    )
+    assert order["implementation_provenance"]["observation_axis_status"] == {
+        "BROKER_RECEIPT": "observed",
+        "LATENCY_PRE_SUBMIT": "observed",
+    }
 
 
 def test_buy_funnel_submit_drought_workorder_uses_matches_when_primary_runtime_ops():

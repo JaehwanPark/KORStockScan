@@ -1,85 +1,83 @@
 {
-  "bundle_as_of": "2026-06-24T22:20:12Z",
+  "bundle_as_of": "2026-06-25T22:20:11Z",
   "sp500": {
     "name": "S&P 500",
-    "value": 7358.22,
-    "prev_value": 7365.46,
-    "change": -7.24,
-    "change_pct": -0.1,
-    "as_of": "2026-06-24T20:00:00Z",
-    "source": "Dow Jones Market Data / Associated Press"
+    "value": 7357.49,
+    "prev_value": 7358.22,
+    "change": -0.73,
+    "change_pct": -0.01,
+    "as_of": "2026-06-25T20:00:00Z",
+    "source": "Google Finance"
   },
   "nasdaq": {
     "name": "NASDAQ Composite",
-    "value": 25476.64,
-    "prev_value": 25587.04,
-    "change": -110.4,
-    "change_pct": -0.43,
-    "as_of": "2026-06-24T20:00:00Z",
-    "source": "Dow Jones Market Data / Associated Press"
+    "value": 25358.6,
+    "prev_value": 25476.63,
+    "change": -118.03,
+    "change_pct": -0.46,
+    "as_of": "2026-06-25T20:00:00Z",
+    "source": "Google Finance"
   },
   "vix": {
     "name": "VIX",
-    "value": 19.32,
-    "prev_value": 19.49,
-    "change": -0.17,
-    "change_pct": -0.87,
-    "as_of": "2026-06-24T14:02:00Z",
-    "source": "Cboe"
+    "value": 18.89,
+    "prev_value": 18.63,
+    "change": 0.26,
+    "change_pct": 1.4,
+    "as_of": "2026-06-25T20:15:00Z",
+    "source": "Google Finance"
   },
   "us10y": {
-    "name": "US 10Y Treasury Yield",
-    "value": 4.406,
-    "prev_value": 4.506,
-    "change": -0.1,
+    "name": "US 10-Year Treasury Yield",
+    "value": 4.38,
+    "prev_value": 4.39,
+    "change": -0.01,
     "change_pct": null,
-    "as_of": "2026-06-24T22:20:12Z",
-    "source": "A1 Trading / Trading Economics"
+    "as_of": "2026-06-25T22:20:11Z",
+    "source": "Seeking Alpha"
   },
   "brent": {
     "name": "Brent Crude",
-    "value": 73.05,
-    "prev_value": 77.08,
-    "change": -4.03,
-    "change_pct": -5.23,
-    "as_of": "2026-06-24T22:20:12Z",
-    "source": "Trading Economics"
+    "value": 75.36,
+    "prev_value": 73.88,
+    "change": 1.48,
+    "change_pct": 2.0,
+    "as_of": "2026-06-25T22:20:11Z",
+    "source": "Associated Press"
   },
   "headlines": [
     {
-      "title": "Trump slams Senate's war powers vote on Iran as 'meaningless'",
-      "source": "Fox News",
-      "published_at": "2026-06-24T20:20:00Z",
-      "url": "https://www.foxnews.com"
+      "title": "Oil price falls to pre-Iran war levels as more tankers exit strait of Hormuz",
+      "source": "The Guardian",
+      "published_at": "2026-06-25T11:41:00Z",
+      "url": "https://www.theguardian.com"
     },
     {
-      "title": "White House asks U.S. Congress for $87.6B, mostly to pay off Iran war",
-      "source": "CP24",
-      "published_at": "2026-06-24T21:42:00Z",
-      "url": "https://www.cp24.com"
+      "title": "White House seeks extra funds for Iran war as part of $87.6bn request",
+      "source": "The Guardian",
+      "published_at": "2026-06-25T13:03:00Z",
+      "url": "https://www.theguardian.com"
     },
     {
-      "title": "Trump signals he may pull out of trade agreement with Mexico and Canada",
-      "source": "KERA News",
-      "published_at": "2026-06-24T15:20:00Z",
-      "url": "https://www.keranews.org"
-    },
-    {
-      "title": "U.S. airline stocks rise as oil retreats to pre-Iran war levels",
-      "source": "Reuters / BNN Bloomberg",
-      "published_at": "2026-06-24T18:04:00Z",
+      "title": "'It has to be a real deal': PM Carney says ahead of trade talks with Trump",
+      "source": "BNN Bloomberg",
+      "published_at": "2026-06-25T14:50:00Z",
       "url": "https://www.bnnbloomberg.ca"
     },
     {
-      "title": "JP Morgan lowers Brent crude price forecast for second-half 2026",
-      "source": "Reuters",
-      "published_at": "2026-06-24T15:01:00Z",
-      "url": "https://www.reuters.com"
+      "title": "Wall Street drifts in mixed trading after Micron soars and Apple drops",
+      "source": "Associated Press",
+      "published_at": "2026-06-25T11:07:00Z",
+      "url": "https://apnews.com"
+    },
+    {
+      "title": "CBP Confirms June 29, 2026 IEEPA Tariff Refund Process Phase 2 Launch",
+      "source": "SmarTrade",
+      "published_at": "2026-06-25T00:00:00Z",
+      "url": "https://www.smartrade.com"
     }
   ],
   "notes": [
-    "U.S. equities closed mixed with S&P 500 and Nasdaq down modestly amid a tech sell-off, despite broader market participation.",
-    "Brent crude saw a significant drop towards $73/bbl as Middle East risk premiums continued to unwind following the U.S.-Iran agreement.",
-    "The US 10-year Treasury yield dropped to 4.406%, breaking key technical levels due to fading energy-driven inflation expectations."
+    "U.S. indices closed mixed as Apple weighed heavily on the S&P 500 following broad product price hikes, offsetting a significant rally in Micron Technology. Brent crude reclaimed $75 levels amid shifting sentiment, despite general market observation of increased safe transit through the Strait of Hormuz."
   ]
 }

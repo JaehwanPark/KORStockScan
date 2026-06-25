@@ -2096,6 +2096,164 @@ def test_active_sim_priority_uses_runtime_catalog_before_current_postclose_statu
     assert status["referenced_runtime_seed_ids"] == ["active_seed_runtime"]
 
 
+def test_active_sim_priority_uses_preopen_ids_before_current_postclose_status(monkeypatch):
+    monkeypatch.setattr(
+        mod,
+        "_iter_pipeline_event_fields",
+        lambda target_date: [
+            {
+                "active_seed_id": "active_seed_preopen",
+                "actual_order_submitted": False,
+                "broker_order_forbidden": True,
+            }
+        ],
+    )
+
+    status = mod._active_sim_priority_handoff_status(
+        target_date="2026-06-25",
+        discovery={},
+        scalp_catalog={
+            "schema_version": "scalp_sim_policy_catalog_v1",
+            "active_sim_priority_seeds": [
+                {
+                    "active_seed_id": "active_seed_preopen",
+                    "source_parent_bucket_id": "parent_runtime",
+                    "status": "cooldown",
+                    "observable_prefix": {
+                        "entry_score_parent": "score_mid_recovery",
+                        "entry_source_parent": "entry_source_blocked_ai_score",
+                    },
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                    "runtime_effect": False,
+                }
+            ],
+        },
+        swing_catalog={},
+        preopen_apply={
+            "selected": [
+                {
+                    "family": "scalp_sim_auto_approval",
+                    "selected": True,
+                    "active_sim_priority_seed_ids": ["active_seed_preopen"],
+                }
+            ]
+        },
+        swing_sim_report={},
+    )
+
+    assert "active_sim_priority_inactive_key_consumed" not in status["missing"]
+    assert status["inactive_consumed_ids"] == []
+    assert status["referenced_runtime_seed_ids"] == ["active_seed_preopen"]
+
+
+def test_active_sim_priority_warns_stale_seed_alias_when_same_prefix_active_exists(monkeypatch, tmp_path):
+    runtime_catalog = tmp_path / "scalp_sim_policy_catalog_2026-06-24.json"
+    runtime_catalog.write_text(
+        json.dumps(
+            {
+                "schema_version": "scalp_sim_policy_catalog_v1",
+                "active_sim_priority_seeds": [
+                    {
+                        "active_seed_id": "active_seed_current",
+                        "source_parent_bucket_id": "parent_current",
+                        "status": "active",
+                        "observable_prefix": {
+                            "entry_score_parent": "score_watch_recovery",
+                            "entry_source_parent": "entry_source_wait6579",
+                        },
+                        "actual_order_submitted": False,
+                        "broker_order_forbidden": True,
+                        "runtime_effect": False,
+                    },
+                    {
+                        "active_seed_id": "active_seed_stale",
+                        "source_parent_bucket_id": "parent_old",
+                        "status": "cooldown",
+                        "observable_prefix": {
+                            "entry_score_parent": "score_watch_recovery",
+                            "entry_source_parent": "entry_source_wait6579",
+                        },
+                        "actual_order_submitted": False,
+                        "broker_order_forbidden": True,
+                        "runtime_effect": False,
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        mod,
+        "_iter_pipeline_event_fields",
+        lambda target_date: [
+            {
+                "active_seed_id": "active_seed_stale",
+                "scalp_sim_active_priority_seed_matched": True,
+                "active_seed_candidate_observable_prefix": json.dumps(
+                    {
+                        "entry_score_parent": "score_watch_recovery",
+                        "entry_source_parent": "entry_source_wait6579",
+                    },
+                    sort_keys=True,
+                ),
+                "actual_order_submitted": False,
+                "broker_order_forbidden": True,
+                "scalp_sim_auto_policy_file": str(runtime_catalog),
+            }
+        ],
+    )
+
+    status = mod._active_sim_priority_handoff_status(
+        target_date="2026-06-25",
+        discovery={},
+        scalp_catalog={
+            "schema_version": "scalp_sim_policy_catalog_v1",
+            "active_sim_priority_seeds": [
+                {
+                    "active_seed_id": "active_seed_current",
+                    "source_parent_bucket_id": "parent_current",
+                    "status": "active",
+                    "observable_prefix": {
+                        "entry_score_parent": "score_watch_recovery",
+                        "entry_source_parent": "entry_source_wait6579",
+                    },
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                    "runtime_effect": False,
+                },
+                {
+                    "active_seed_id": "active_seed_stale",
+                    "source_parent_bucket_id": "parent_old",
+                    "status": "cooldown",
+                    "observable_prefix": {
+                        "entry_score_parent": "score_watch_recovery",
+                        "entry_source_parent": "entry_source_wait6579",
+                    },
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                    "runtime_effect": False,
+                },
+            ],
+        },
+        swing_catalog={},
+        preopen_apply={
+            "selected": [
+                {
+                    "family": "scalp_sim_auto_approval",
+                    "selected": True,
+                    "active_sim_priority_seed_ids": ["active_seed_current"],
+                }
+            ]
+        },
+        swing_sim_report={},
+    )
+
+    assert "active_sim_priority_inactive_key_consumed" not in status["missing"]
+    assert "active_sim_priority_stale_seed_alias_consumed" in status["warnings"]
+    assert status["stale_alias_consumed_ids"] == ["active_seed_stale"]
+
+
 def test_active_sim_priority_handoff_fails_unknown_runtime_key_when_catalog_empty(monkeypatch):
     monkeypatch.setattr(
         mod,

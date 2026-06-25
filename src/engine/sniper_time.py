@@ -4,7 +4,7 @@ from datetime import datetime, time as dt_time
 
 from src.utils.constants import TRADING_RULES
 
-DEFAULT_SCALPING_BUY_WINDOWS = "08:03:00-08:40:00,09:03:00-15:00:00,16:00:00-19:45:00"
+DEFAULT_SCALPING_BUY_WINDOWS = "08:01:00-08:40:00,09:01:00-15:00:00,16:00:00-19:45:00"
 
 
 def _rule_time(rule_name, default_value):
@@ -42,7 +42,7 @@ def _rule_time_windows(rule_name, default_value):
                 return tuple(windows)
         except Exception:
             continue
-    return ((_parse_time_value("09:03:00"), _parse_time_value("15:00:00")),)
+    return ((_parse_time_value("09:01:00"), _parse_time_value("15:00:00")),)
 
 
 def _coerce_time(value):
@@ -78,7 +78,7 @@ def scalping_buy_time_block_reason(now_value=None):
 
 TIME_07_00 = _rule_time("PREMARKET_START_TIME", "07:00:00")
 TIME_09_00 = _rule_time("MARKET_OPEN_TIME", "09:00:00")
-TIME_09_03 = _rule_time("SCALPING_EARLIEST_BUY_TIME", "09:03:00")
+TIME_09_03 = _rule_time("SCALPING_EARLIEST_BUY_TIME", "09:01:00")
 TIME_09_05 = _rule_time("SWING_EARLIEST_BUY_TIME", "09:05:00")
 TIME_09_10 = _rule_time("MORNING_BATCH_END_TIME", "09:10:00")
 TIME_10_30 = _rule_time("MORNING_SCALPING_END_TIME", "10:30:00")

@@ -194,6 +194,30 @@ def test_latency_drought_when_budget_pass_exists_but_no_submitted(monkeypatch, t
     assert "code_improvement_workorder" in contract["required_downstream"]
     assert "lifecycle_decision_matrix.submit_bucket_attribution" in contract["required_downstream"]
     assert "BROKER_RECEIPT" in contract["weak_contract_matches"]
+    breakdown = contract["observation_breakdown"]
+    assert breakdown["decision_authority"] == "submit_drought_attribution_only"
+    assert breakdown["runtime_effect"] is False
+    assert breakdown["allowed_runtime_apply"] is False
+    assert breakdown["broker_order_submit_allowed"] is False
+    assert breakdown["axis_order"] == [
+        "UPSTREAM_GATE",
+        "BUDGET_PASS_COLLAPSE",
+        "LATENCY_PRE_SUBMIT",
+        "BROKER_RECEIPT",
+        "SIM_REAL_AUTHORITY",
+        "SOURCE_TAXONOMY_LEAKAGE",
+    ]
+    assert set(breakdown["axes"]) == set(breakdown["axis_order"])
+    assert breakdown["axes"]["LATENCY_PRE_SUBMIT"]["status"] == "observed"
+    assert breakdown["axes"]["LATENCY_PRE_SUBMIT"]["observed_count"] == 5
+    assert (
+        breakdown["axes"]["LATENCY_PRE_SUBMIT"]["evidence"]["unknown_latency_reason_count"]
+        == 5
+    )
+    assert breakdown["axes"]["BROKER_RECEIPT"]["status"] == "observed"
+    assert breakdown["axes"]["SIM_REAL_AUTHORITY"]["status"] == "observed"
+    assert "broker_order_submit" in breakdown["forbidden_uses"]
+    assert "provider_route_change" in breakdown["forbidden_uses"]
     root_cause = report["classification"]["submit_drought_root_cause"]
     assert root_cause["latency_root_cause_counts"]["unknown_latency_reason"] == 5
     assert root_cause["unknown_latency_workorder_required"] is True
@@ -363,6 +387,42 @@ def test_latency_drought_splits_pre_submit_ws_snapshot_stale(monkeypatch, tmp_pa
     assert root_cause["latency_root_cause_counts"]["quote_stale"] == 5
     assert root_cause["quote_freshness_attribution"]["refresh_subreason_counts"][
         "ws_snapshot_refresh_failed_stale"
+    ] == 5
+    assert root_cause["unknown_latency_reason_count"] == 0
+    assert root_cause["unknown_latency_workorder_required"] is False
+
+
+def test_latency_drought_splits_pre_submit_ws_snapshot_none_as_missing(monkeypatch, tmp_path):
+    monkeypatch.setattr(sentinel, "DATA_DIR", tmp_path)
+    rows = []
+    for idx in range(5):
+        rows.append(_event("2026-05-06", f"10:0{idx}:00", "ai_confirmed", record_id=idx))
+        rows.append(_event("2026-05-06", f"10:0{idx}:10", "budget_pass", record_id=idx))
+        rows.append(
+            _event(
+                "2026-05-06",
+                f"10:0{idx}:20",
+                "latency_block",
+                record_id=idx,
+                fields={
+                    "reason": "latency_state_danger",
+                    "pre_submit_ws_snapshot_refresh_enabled": True,
+                    "pre_submit_ws_snapshot_refresh_applied": False,
+                    "pre_submit_ws_snapshot_refresh_reason": "None",
+                },
+            )
+        )
+    _write_events(tmp_path, "2026-05-06", rows)
+
+    report = sentinel.build_buy_funnel_sentinel_report(
+        "2026-05-06",
+        as_of=sentinel._parse_as_of("2026-05-06", "10:10:00"),
+    )
+
+    root_cause = report["classification"]["submit_drought_root_cause"]
+    assert root_cause["latency_root_cause_counts"]["observer_unhealthy"] == 5
+    assert root_cause["quote_freshness_attribution"]["refresh_subreason_counts"][
+        "ws_snapshot_refresh_failed_missing"
     ] == 5
     assert root_cause["unknown_latency_reason_count"] == 0
     assert root_cause["unknown_latency_workorder_required"] is False

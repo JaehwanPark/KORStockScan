@@ -1147,8 +1147,10 @@ def test_postclose_done_controller_accepts_report_only_followup_warnings(
             "latest_done_marker": "[DONE] threshold-cycle postclose target_date=2026-06-03",
             "artifact_status": _passable_artifact_status(),
             "handoff_warnings": [
+                "active_sim_priority_stale_seed_alias_consumed",
                 "ai_watching_score_smoothing_diagnostic_followup_open",
                 "lifecycle_bucket_discovery_rolling5d_parent_granularity_not_target",
+                "swing_active_arm_priority_preopen_handoff_pending",
                 "swing_active_arm_priority_runtime_observation_missing",
                 "swing_lifecycle_bucket_discovery:ai_two_pass_review_followup_required_source_only",
                 "swing_lifecycle_bucket_discovery:ai_two_pass_review_followup_sim_auto_blocked",

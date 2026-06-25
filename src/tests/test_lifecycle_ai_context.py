@@ -56,6 +56,8 @@ def test_lifecycle_ai_context_builds_stage_contexts_with_forbidden_uses(tmp_path
     assert report["stage_contexts"][0]["prompt_injection_allowed"] is True
     assert report["stage_contexts"][0]["context_contribution_score"] == 0.5
     assert "real_order_gate" in report["stage_contexts"][0]["forbidden_uses"]
+    assert report["provider_status"]["provider"] == "deterministic_source_only"
+    assert report["provider_status"]["status"] == "deterministic_fallback"
 
 
 def test_lifecycle_ai_context_attribution_counts_runtime_provenance(tmp_path, monkeypatch):
