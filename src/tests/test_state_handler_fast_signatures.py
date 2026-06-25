@@ -1008,6 +1008,45 @@ def test_strength_momentum_stability_recheck_keeps_trade_tick_quiet_without_ws_r
     assert result["reason"] == "trade_tick_quiet_recheck_pending"
 
 
+def test_strength_momentum_stability_recheck_keeps_rising_base_quiet_window(monkeypatch):
+    rules = SimpleNamespace(
+        SCANNER_STRENGTH_MOMENTUM_STABILITY_RECHECK_ENABLED=True,
+        SCANNER_STRENGTH_MOMENTUM_STABILITY_RECHECK_REASONS="below_window_buy_value",
+        SCANNER_STRENGTH_MOMENTUM_STABILITY_RECHECK_MAX_ATTEMPTS=1,
+        SCANNER_STRENGTH_MOMENTUM_STABILITY_RECHECK_DELAY_SEC=2,
+        SCALP_PRE_AI_MAX_WS_AGE_SEC=3.0,
+    )
+    monkeypatch.setattr(handlers, "TRADING_RULES", rules)
+    monkeypatch.setenv("KORSTOCKSCAN_SCANNER_RISING_STRENGTH_HISTORY_RECHECK_MAX_ATTEMPTS", "5")
+
+    result = _strength_momentum_stability_recheck_decision(
+        {
+            "status": "WATCHING",
+            "strategy": "SCALPING",
+            "position_tag": "SCANNER",
+            "entry_armed_at_epoch": 90.0,
+            "price_delta_since_first_seen_pct": 16.48,
+        },
+        {},
+        {"reason": "below_strength_base"},
+        {
+            "quote_age_ms": 75.0,
+            "tick_latest_age_ms": 3671.0,
+            "refresh_age_ms": 70.0,
+            "refresh_reason": "latest_ws_snapshot_fresh",
+            "stability_window_result": "window_available",
+            "tick_window_sample_count": 16,
+            "tick_window_span_sec": 7.8,
+        },
+        source_quality_block_reason="trade_tick_quiet",
+        now_ts=100.0,
+    )
+
+    assert result["pending"] is True
+    assert result["reason"] == "trade_tick_quiet_recheck_pending"
+    assert result["recheck_max_attempts"] == 5
+
+
 def test_strength_momentum_source_quality_does_not_block_fresh_base_on_refresh_failure(monkeypatch):
     rules = SimpleNamespace(
         SCALP_PRE_AI_SOURCE_QUALITY_BLOCK_ENABLED=True,

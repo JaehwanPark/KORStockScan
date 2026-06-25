@@ -15005,12 +15005,17 @@ def _strength_momentum_stability_recheck_decision(
         ).split(",")
         if item.strip()
     }
-    if reason not in transient_reasons:
-        base["reason"] = "reason_not_transient"
-        return base
     source_reason = str(source_quality_block_reason or "").strip().lower()
     scanner_rising_relief = bool(_scanner_rising_entry_relief_eligible(stock))
     tick_quiet_source = source_reason == "trade_tick_quiet"
+    rising_trade_quiet_base_recheck = (
+        scanner_rising_relief
+        and tick_quiet_source
+        and reason == "below_strength_base"
+    )
+    if reason not in transient_reasons and not rising_trade_quiet_base_recheck:
+        base["reason"] = "reason_not_transient"
+        return base
     if scanner_rising_relief and (
         reason == "insufficient_history" or source_reason in {"stale_ws_snapshot", "trade_tick_quiet"}
     ):
