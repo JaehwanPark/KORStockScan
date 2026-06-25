@@ -2070,9 +2070,9 @@ def _scanner_is_rising_entry_relief_candidate(target):
 def _scanner_rising_full_eval_extra_per_loop():
     raw = os.getenv("KORSTOCKSCAN_SCANNER_RISING_FULL_EVAL_EXTRA_PER_LOOP", "")
     try:
-        value = int(str(raw).strip()) if str(raw).strip() else 0
+        value = int(str(raw).strip()) if str(raw).strip() else 8
     except Exception:
-        value = 0
+        value = 8
     return max(0, min(value, 40))
 
 

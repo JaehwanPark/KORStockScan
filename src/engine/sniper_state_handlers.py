@@ -7202,6 +7202,19 @@ def _scanner_rising_entry_relief_eligible(stock) -> bool:
     return _scanner_positive_delta_pct(stock) >= _scanner_rising_entry_min_delta_pct()
 
 
+def _scanner_rising_rest_quote_full_eval_relief_enabled() -> bool:
+    return _env_bool("KORSTOCKSCAN_SCANNER_RISING_REST_QUOTE_FULL_EVAL_RELIEF_ENABLED", True)
+
+
+def _scanner_rising_rest_quote_full_eval_min_delta_pct() -> float:
+    raw = os.getenv("KORSTOCKSCAN_SCANNER_RISING_REST_QUOTE_FULL_EVAL_MIN_DELTA_PCT", "")
+    try:
+        value = float(str(raw).strip()) if str(raw).strip() else 3.0
+    except Exception:
+        value = 3.0
+    return max(0.0, min(value, 20.0))
+
+
 def _scanner_rising_cooldown_eviction_relief_enabled() -> bool:
     return _env_bool("KORSTOCKSCAN_SCANNER_RISING_COOLDOWN_EVICTION_RELIEF_ENABLED", False)
 
@@ -7612,10 +7625,16 @@ def _scanner_fast_precheck_fields(
         and not fresh_realtime_evidence
         and not subscription_recheck_fresh_realtime_evidence
     )
+    rising_rest_quote_relief = (
+        rest_quote_only_recovery
+        and _scanner_rising_rest_quote_full_eval_relief_enabled()
+        and _scanner_rising_entry_relief_eligible(stock)
+        and _scanner_positive_delta_pct(stock) >= _scanner_rising_rest_quote_full_eval_min_delta_pct()
+    )
     if curr <= 0:
         result = "source_quality_blocked"
         reason = "missing_or_zero_curr"
-    elif rest_quote_only_recovery:
+    elif rest_quote_only_recovery and not rising_rest_quote_relief:
         result = "stability_pending"
         reason = "rest_quote_without_realtime_strength"
     elif (
@@ -7637,6 +7656,8 @@ def _scanner_fast_precheck_fields(
             if rising_realtime_relief
             else "rising_subscription_recheck_fresh_realtime_evidence"
             if rising_subscription_recheck_relief
+            else "rising_rest_quote_recovery_without_realtime_strength"
+            if rising_rest_quote_relief
             else "fast_precheck_pass"
         )
     return {
@@ -7667,6 +7688,12 @@ def _scanner_fast_precheck_fields(
         "fast_precheck_subscription_recheck_relief_applied": bool(
             rising_subscription_recheck_curr_relief
         ),
+        "fast_precheck_rest_quote_relief_applied": bool(rising_rest_quote_relief),
+        "fast_precheck_rest_quote_relief_min_delta_pct": (
+            round(_scanner_rising_rest_quote_full_eval_min_delta_pct(), 4)
+            if rising_rest_quote_relief
+            else "not_applicable_rest_quote_relief_min_delta_pct"
+        ),
         "fast_precheck_subscription_recheck_age_sec": (
             round(subscription_recheck_age_sec, 3)
             if subscription_recheck_age_sec < 999999.0
@@ -7679,7 +7706,11 @@ def _scanner_fast_precheck_fields(
         ),
         "fast_precheck_realtime_relief_scope": (
             "rising_entry_relief_only"
-            if (rising_realtime_relief or rising_subscription_recheck_curr_relief)
+            if (
+                rising_realtime_relief
+                or rising_subscription_recheck_curr_relief
+                or rising_rest_quote_relief
+            )
             else "not_applicable"
         ),
         "fast_precheck_seen_epoch": f"{float(now_ts):.3f}",
@@ -16441,12 +16472,21 @@ def _is_real_scanner_rising_watching_target(stock: dict | None) -> bool:
     if _safe_int(stock.get("buy_qty"), 0) > 0 or stock.get("buy_time"):
         return False
     promotion_reason = str(stock.get("scanner_promotion_reason") or "").strip()
-    if promotion_reason not in {"price_jump_start_acceleration", "price_jump_multisource_confirmation"}:
+    allowed_reasons = {
+        "price_jump_start_acceleration",
+        "price_jump_multisource_confirmation",
+        "new_realtime_rank_start_source",
+        "rank_jump_acceleration",
+    }
+    if promotion_reason not in allowed_reasons:
         return False
     source_signature = _scanner_rising_source_signature_set(stock.get("source_signature"))
-    if "PRICE_JUMP_START" not in source_signature:
+    if "PRICE_JUMP_START" in source_signature:
+        return bool(source_signature & {"BID_IMBALANCE_SURGE", "REALTIME_RANK_START", "VALUE_TOP", "VOLUME_SURGE_POSITIVE"})
+    if not (source_signature & {"REALTIME_RANK_START", "VALUE_TOP"}):
         return False
-    return bool(source_signature & {"BID_IMBALANCE_SURGE", "REALTIME_RANK_START", "VALUE_TOP", "VOLUME_SURGE_POSITIVE"})
+    min_rank_delta = _rule_float("AI_SCORE65_74_RECOVERY_PROBE_RANK_RISING_MIN_DELTA_PCT", 1.0)
+    return _safe_float(stock.get("price_delta_since_first_seen_pct"), 0.0) >= min_rank_delta
 
 
 def _quote_stale_score65_74_probe_relief_allowed(stock: dict | None, probe: dict | None) -> tuple[bool, dict]:

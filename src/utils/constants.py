@@ -712,6 +712,7 @@ class TradingConfig:
     AI_SCORE65_74_RECOVERY_PROBE_STRONG_MICRO_MIN_MICRO_VWAP_BP: float = 30.0
     AI_SCORE65_74_RECOVERY_PROBE_ALLOW_QUOTE_STALE_WITH_PRE_SUBMIT_REFRESH: bool = False
     AI_SCORE65_74_RECOVERY_PROBE_MAX_QUOTE_STALE_AGE_MS: int = 7000
+    AI_SCORE65_74_RECOVERY_PROBE_RANK_RISING_MIN_DELTA_PCT: float = 1.0
     AI_SCORE65_74_RECOVERY_PROBE_SCANNER_RISING_MICRO_VWAP_RELIEF_ENABLED: bool = False
     AI_SCORE65_74_RECOVERY_PROBE_SCANNER_RISING_MIN_MICRO_VWAP_BP: float = 0.0
     AI_SCORE65_74_RECOVERY_PROBE_THRESHOLD_VERSION: str = "runtime_default"
@@ -1348,6 +1349,9 @@ def _build_trading_rules() -> TradingConfig:
     env_score6574_probe_max_quote_stale_age = _env_int(
         "KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_MAX_QUOTE_STALE_AGE_MS"
     )
+    env_score6574_probe_rank_rising_min_delta = _env_float(
+        "KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_RANK_RISING_MIN_DELTA_PCT"
+    )
     env_score6574_probe_scanner_rising_micro_relief = _env_bool(
         "KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_SCANNER_RISING_MICRO_VWAP_RELIEF_ENABLED"
     )
@@ -1476,6 +1480,9 @@ def _build_trading_rules() -> TradingConfig:
             AI_SCORE65_74_RECOVERY_PROBE_MAX_QUOTE_STALE_AGE_MS=env_score6574_probe_max_quote_stale_age
             if env_score6574_probe_max_quote_stale_age is not None
             else config.AI_SCORE65_74_RECOVERY_PROBE_MAX_QUOTE_STALE_AGE_MS,
+            AI_SCORE65_74_RECOVERY_PROBE_RANK_RISING_MIN_DELTA_PCT=env_score6574_probe_rank_rising_min_delta
+            if env_score6574_probe_rank_rising_min_delta is not None
+            else config.AI_SCORE65_74_RECOVERY_PROBE_RANK_RISING_MIN_DELTA_PCT,
             AI_SCORE65_74_RECOVERY_PROBE_SCANNER_RISING_MICRO_VWAP_RELIEF_ENABLED=env_score6574_probe_scanner_rising_micro_relief
             if env_score6574_probe_scanner_rising_micro_relief is not None
             else config.AI_SCORE65_74_RECOVERY_PROBE_SCANNER_RISING_MICRO_VWAP_RELIEF_ENABLED,

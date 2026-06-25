@@ -496,12 +496,14 @@ def test_trading_rules_score65_74_strong_micro_override_env(monkeypatch):
     monkeypatch.setenv("KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_STRONG_MICRO_OVERRIDE_ENABLED", "true")
     monkeypatch.setenv("KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_STRONG_MICRO_MIN_BUY_PRESSURE", "88.5")
     monkeypatch.setenv("KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_STRONG_MICRO_MIN_MICRO_VWAP_BP", "35.0")
+    monkeypatch.setenv("KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_RANK_RISING_MIN_DELTA_PCT", "1.25")
 
     reloaded = importlib.reload(constants)
 
     assert reloaded.TRADING_RULES.AI_SCORE65_74_RECOVERY_PROBE_STRONG_MICRO_OVERRIDE_ENABLED is True
     assert reloaded.TRADING_RULES.AI_SCORE65_74_RECOVERY_PROBE_STRONG_MICRO_MIN_BUY_PRESSURE == 88.5
     assert reloaded.TRADING_RULES.AI_SCORE65_74_RECOVERY_PROBE_STRONG_MICRO_MIN_MICRO_VWAP_BP == 35.0
+    assert reloaded.TRADING_RULES.AI_SCORE65_74_RECOVERY_PROBE_RANK_RISING_MIN_DELTA_PCT == 1.25
 
 
 def test_trading_rules_weak_context_late_entry_and_never_green_defer_env(monkeypatch):

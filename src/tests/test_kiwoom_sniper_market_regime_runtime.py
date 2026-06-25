@@ -1462,9 +1462,9 @@ def test_scanner_full_eval_max_per_loop_env(monkeypatch):
     assert kiwoom_sniper_v2._scanner_full_eval_max_per_loop() == 1
 
 
-def test_scanner_rising_full_eval_relief_defaults_off_and_uses_env(monkeypatch):
+def test_scanner_rising_full_eval_relief_defaults_to_aggressive_budget_and_uses_env(monkeypatch):
     monkeypatch.delenv("KORSTOCKSCAN_SCANNER_RISING_FULL_EVAL_EXTRA_PER_LOOP", raising=False)
-    assert kiwoom_sniper_v2._scanner_rising_full_eval_extra_per_loop() == 0
+    assert kiwoom_sniper_v2._scanner_rising_full_eval_extra_per_loop() == 8
 
     monkeypatch.setenv("KORSTOCKSCAN_SCANNER_RISING_FULL_EVAL_EXTRA_PER_LOOP", "4")
     assert kiwoom_sniper_v2._scanner_rising_full_eval_extra_per_loop() == 4

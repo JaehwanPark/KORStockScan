@@ -2758,6 +2758,7 @@ def test_scanner_fast_precheck_marks_stale_snapshot_not_queued(monkeypatch):
 
 def test_scanner_fast_precheck_holds_rest_quote_only_recovery_until_realtime_strength(monkeypatch):
     emitted = []
+    monkeypatch.setenv("KORSTOCKSCAN_SCANNER_RISING_REST_QUOTE_FULL_EVAL_RELIEF_ENABLED", "false")
     monkeypatch.setattr(handlers.time, "time", lambda: 1012.0)
     monkeypatch.setattr(
         handlers,
@@ -2922,6 +2923,47 @@ def test_scanner_fast_precheck_holds_subscription_recheck_until_realtime_strengt
     assert fields["fast_precheck_subscription_recheck_relief_applied"] is True
     assert fields["fast_precheck_realtime_relief_scope"] == "rising_entry_relief_only"
     assert fields["heavy_queue_enter_epoch"] == "not_queued"
+
+
+def test_scanner_fast_precheck_allows_high_delta_rest_quote_recovery(monkeypatch):
+    emitted = []
+    monkeypatch.setattr(handlers.time, "time", lambda: 1012.0)
+    monkeypatch.setattr(
+        handlers,
+        "emit_pipeline_event",
+        lambda pipeline, name, code, stage, *, record_id=None, fields=None: emitted.append(
+            {"stage": stage, "fields": fields or {}}
+        ),
+    )
+    stock = {
+        "id": 850,
+        "name": "RISING_REST_QUOTE",
+        "status": "WATCHING",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "entry_armed_at_epoch": 1000.0,
+        "price_delta_since_first_seen_pct": "5.20",
+    }
+
+    assert handlers.emit_scanner_fast_precheck(
+        stock,
+        "000850",
+        now_ts=1012.0,
+        ws_data={
+            "curr": 1200,
+            "last_ws_update_ts": 1011.0,
+            "ws_snapshot_recovery_source": "ka10001_rest_quote_fallback",
+        },
+        throttle_sec=0,
+    )
+
+    fields = emitted[-1]["fields"]
+    assert fields["fast_precheck_result"] == "eligible_for_heavy_entry_eval"
+    assert fields["fast_precheck_reason"] == "rising_rest_quote_recovery_without_realtime_strength"
+    assert fields["fast_precheck_rest_quote_relief_applied"] is True
+    assert fields["fast_precheck_realtime_relief_scope"] == "rising_entry_relief_only"
+    assert fields["heavy_queue_enter_epoch"] == "1012.000"
+    assert stock["_scanner_fast_precheck_result"] == "eligible_for_heavy_entry_eval"
 
 
 def test_scanner_fast_precheck_allows_subscription_recheck_with_fresh_realtime_strength(monkeypatch):
@@ -3319,6 +3361,102 @@ def test_score65_74_recovery_probe_quote_stale_relief_stays_scanner_real_only(mo
         None,
         feature_probe=feature_probe,
         stock={"strategy": "SCALPING", "position_tag": "VWAP_RECLAIM", "status": "WATCHING"},
+    )
+
+    assert decision["allowed"] is False
+    assert decision["score65_74_recovery_probe_skip_reason"] == "source_quality_hard_block"
+    assert decision["score65_74_recovery_probe_quote_stale_relief_reason"] == (
+        "scope_not_real_scanner_rising_watching"
+    )
+
+
+def test_score65_74_recovery_probe_quote_stale_relief_allows_rank_rising_scanner(monkeypatch):
+    rules = replace(
+        TRADING_RULES,
+        AI_SCORE65_74_RECOVERY_PROBE_ENABLED=True,
+        AI_SCORE65_74_RECOVERY_PROBE_MIN_SCORE=60,
+        AI_SCORE65_74_RECOVERY_PROBE_MAX_SCORE=74,
+        AI_SCORE65_74_RECOVERY_PROBE_MIN_BUY_PRESSURE=65.0,
+        AI_SCORE65_74_RECOVERY_PROBE_MIN_TICK_ACCEL=1.2,
+        AI_SCORE65_74_RECOVERY_PROBE_MIN_MICRO_VWAP_BP=0.0,
+        AI_SCORE65_74_RECOVERY_PROBE_ALLOW_QUOTE_STALE_WITH_PRE_SUBMIT_REFRESH=True,
+        AI_SCORE65_74_RECOVERY_PROBE_MAX_QUOTE_STALE_AGE_MS=7000,
+    )
+    monkeypatch.setattr("src.engine.sniper_state_handlers.TRADING_RULES", rules)
+    monkeypatch.setenv("KORSTOCKSCAN_SCALP_PRE_SUBMIT_QUOTE_REFRESH_ENABLED", "true")
+    feature_probe = {
+        "buy_pressure": 86.0,
+        "tick_accel": 1.55,
+        "micro_vwap_bp": 18.0,
+        "tick_context_stale": False,
+        "tick_context_quality": "fresh_computed",
+        "tick_accel_source": "computed_10ticks",
+        "quote_stale": True,
+        "quote_age_ms": 4500,
+    }
+
+    decision = _score65_74_recovery_probe_decision(
+        {"action": "WAIT", "reason": "rank and value expansion"},
+        62,
+        {"latency_state": "OK"},
+        [],
+        [],
+        None,
+        feature_probe=feature_probe,
+        stock={
+            "strategy": "SCALPING",
+            "position_tag": "SCANNER",
+            "status": "WATCHING",
+            "scanner_promotion_reason": "rank_jump_acceleration",
+            "source_signature": "OPEN_TOP,REALTIME_RANK_START,VALUE_TOP",
+            "price_delta_since_first_seen_pct": "1.77",
+        },
+    )
+
+    assert decision["allowed"] is True
+    assert decision["score65_74_recovery_probe_quote_stale_relief_applied"] is True
+    assert decision["score65_74_recovery_probe_quote_stale_relief_reason"] == (
+        "quote_stale_only_pre_submit_refresh_required"
+    )
+
+
+def test_score65_74_recovery_probe_quote_stale_relief_blocks_thin_rank_rising_scanner(monkeypatch):
+    rules = replace(
+        TRADING_RULES,
+        AI_SCORE65_74_RECOVERY_PROBE_ENABLED=True,
+        AI_SCORE65_74_RECOVERY_PROBE_MIN_SCORE=60,
+        AI_SCORE65_74_RECOVERY_PROBE_MAX_SCORE=74,
+        AI_SCORE65_74_RECOVERY_PROBE_MIN_BUY_PRESSURE=65.0,
+        AI_SCORE65_74_RECOVERY_PROBE_MIN_TICK_ACCEL=1.2,
+        AI_SCORE65_74_RECOVERY_PROBE_MIN_MICRO_VWAP_BP=0.0,
+        AI_SCORE65_74_RECOVERY_PROBE_ALLOW_QUOTE_STALE_WITH_PRE_SUBMIT_REFRESH=True,
+    )
+    monkeypatch.setattr("src.engine.sniper_state_handlers.TRADING_RULES", rules)
+    feature_probe = {
+        "buy_pressure": 86.0,
+        "tick_accel": 1.55,
+        "micro_vwap_bp": 18.0,
+        "tick_context_stale": False,
+        "quote_stale": True,
+        "quote_age_ms": 4500,
+    }
+
+    decision = _score65_74_recovery_probe_decision(
+        {"action": "WAIT", "reason": "rank and value expansion"},
+        62,
+        {"latency_state": "OK"},
+        [],
+        [],
+        None,
+        feature_probe=feature_probe,
+        stock={
+            "strategy": "SCALPING",
+            "position_tag": "SCANNER",
+            "status": "WATCHING",
+            "scanner_promotion_reason": "rank_jump_acceleration",
+            "source_signature": "OPEN_TOP,REALTIME_RANK_START,VALUE_TOP",
+            "price_delta_since_first_seen_pct": "0.25",
+        },
     )
 
     assert decision["allowed"] is False
