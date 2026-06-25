@@ -14104,7 +14104,7 @@ def _resolve_early_accel_strong_bundle_recheck(
     if action != "WAIT":
         return {"allowed": False, "skip_reason": "original_action_not_wait", **base}
     min_score = max(0, _rule_int("EARLY_ACCEL_STRONG_BUNDLE_RECHECK_MIN_SCORE", 60))
-    max_score = max(min_score, _rule_int("EARLY_ACCEL_STRONG_BUNDLE_RECHECK_MAX_SCORE", 66))
+    max_score = max(min_score, _rule_int("EARLY_ACCEL_STRONG_BUNDLE_RECHECK_MAX_SCORE", 74))
     numeric_score = _safe_float(ai_score, 0.0)
     if numeric_score < float(min_score):
         return {"allowed": False, "skip_reason": "score_below_min", **base}

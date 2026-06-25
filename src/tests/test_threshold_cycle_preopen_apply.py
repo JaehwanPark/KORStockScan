@@ -2132,7 +2132,7 @@ def test_score65_74_strong_micro_override_operator_lock_coexists_with_score65(tm
                 "env_overrides": {
                     "KORSTOCKSCAN_EARLY_ACCEL_RECHECK_RUNTIME_ENABLED": "true",
                     "KORSTOCKSCAN_EARLY_ACCEL_STRONG_BUNDLE_RECHECK_ENABLED": "true",
-                    "KORSTOCKSCAN_EARLY_ACCEL_STRONG_BUNDLE_RECHECK_MAX_SCORE": "66",
+                    "KORSTOCKSCAN_EARLY_ACCEL_STRONG_BUNDLE_RECHECK_MAX_SCORE": "74",
                 },
                 "allowed_close_reason_keywords": [
                     "same_stage_owner_conflict",
@@ -2314,7 +2314,7 @@ def test_early_accel_recheck_operator_lock_emits_env(tmp_path, monkeypatch):
                     "KORSTOCKSCAN_EARLY_ACCEL_RECHECK_ALLOW_STRENGTH_BLOCKED": "true",
                     "KORSTOCKSCAN_EARLY_ACCEL_STRONG_BUNDLE_RECHECK_ENABLED": "true",
                     "KORSTOCKSCAN_EARLY_ACCEL_STRONG_BUNDLE_RECHECK_MIN_SCORE": "60",
-                    "KORSTOCKSCAN_EARLY_ACCEL_STRONG_BUNDLE_RECHECK_MAX_SCORE": "66",
+                    "KORSTOCKSCAN_EARLY_ACCEL_STRONG_BUNDLE_RECHECK_MAX_SCORE": "74",
                     "KORSTOCKSCAN_EARLY_ACCEL_STRONG_BUNDLE_RECHECK_BUY_MIN_SCORE": "75",
                     "KORSTOCKSCAN_EARLY_ACCEL_STRONG_BUNDLE_RECHECK_MIN_PASS_COUNT": "2",
                     "KORSTOCKSCAN_EARLY_ACCEL_STRONG_BUNDLE_RECHECK_MAX_PER_SYMBOL": "1",
@@ -2344,7 +2344,7 @@ def test_early_accel_recheck_operator_lock_emits_env(tmp_path, monkeypatch):
     assert manifest["runtime_env_overrides"]["KORSTOCKSCAN_EARLY_ACCEL_RECHECK_MAX_COUNT"] == "2"
     assert manifest["runtime_env_overrides"]["KORSTOCKSCAN_EARLY_ACCEL_RECHECK_MIN_INTERVAL_SEC"] == "20"
     assert manifest["runtime_env_overrides"]["KORSTOCKSCAN_EARLY_ACCEL_STRONG_BUNDLE_RECHECK_ENABLED"] == "true"
-    assert manifest["runtime_env_overrides"]["KORSTOCKSCAN_EARLY_ACCEL_STRONG_BUNDLE_RECHECK_MAX_SCORE"] == "66"
+    assert manifest["runtime_env_overrides"]["KORSTOCKSCAN_EARLY_ACCEL_STRONG_BUNDLE_RECHECK_MAX_SCORE"] == "74"
 
 
 def test_early_accel_recheck_operator_lock_closes_for_entry_live_owner(tmp_path, monkeypatch):
