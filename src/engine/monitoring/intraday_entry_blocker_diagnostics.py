@@ -601,6 +601,12 @@ def _summarize_code(
         row for row in rows if str(_field(row, "actual_order_submitted")).lower() == REAL_SUBMIT_TRUE
     ]
     blocker_rows = [row for row in rows if _is_blocker_row(row)]
+    budget_deferred_rows = [
+        row
+        for row in blocker_rows
+        if _blocker_reason(row) == "scanner_full_eval_loop_budget_deferred"
+    ]
+    latest_budget_deferred = budget_deferred_rows[-1] if budget_deferred_rows else {}
     queue_counts = {stage: stage_counts.get(stage, 0) for stage in QUEUE_STAGES if stage_counts.get(stage, 0)}
     latest_ai = ai_rows[-1] if ai_rows else {}
     return {
@@ -625,6 +631,23 @@ def _summarize_code(
         "queue_observation_counts": queue_counts,
         "low_ai_or_negative_pressure_eval_quality": _low_ai_pressure_quality_counts(rows),
         "zero_strength_history_source_quality": _zero_strength_history_source_quality(rows),
+        "scanner_full_eval_budget_deferred": {
+            "count": len(budget_deferred_rows),
+            "latest_at": _event_time(latest_budget_deferred) if latest_budget_deferred else "",
+            "scanner_full_eval_limit": _safe_float(_field(latest_budget_deferred, "scanner_full_eval_limit")),
+            "scanner_full_eval_count": _safe_float(_field(latest_budget_deferred, "scanner_full_eval_count")),
+            "scanner_rising_full_eval_extra_limit": _safe_float(
+                _field(latest_budget_deferred, "scanner_rising_full_eval_extra_limit")
+            ),
+            "scanner_rising_full_eval_relief_count": _safe_float(
+                _field(latest_budget_deferred, "scanner_rising_full_eval_relief_count")
+            ),
+            "scanner_full_eval_budget_source": _field(
+                latest_budget_deferred,
+                "scanner_full_eval_budget_source",
+                "",
+            ),
+        },
         "recent_blockers": [
             {
                 "emitted_at": _event_time(row),
@@ -638,6 +661,14 @@ def _summarize_code(
                 "rising_entry_relief_reason": _field(row, "rising_entry_relief_reason", ""),
                 "scanner_positive_delta_pct": _safe_float(_field(row, "scanner_positive_delta_pct")),
                 "scanner_full_eval_budget_source": _field(row, "scanner_full_eval_budget_source", ""),
+                "scanner_full_eval_limit": _safe_float(_field(row, "scanner_full_eval_limit")),
+                "scanner_full_eval_count": _safe_float(_field(row, "scanner_full_eval_count")),
+                "scanner_rising_full_eval_extra_limit": _safe_float(
+                    _field(row, "scanner_rising_full_eval_extra_limit")
+                ),
+                "scanner_rising_full_eval_relief_count": _safe_float(
+                    _field(row, "scanner_rising_full_eval_relief_count")
+                ),
             }
             for row in blocker_rows[-8:]
         ],
@@ -666,6 +697,53 @@ def _rollup_low_ai_pressure_quality(items: list[dict[str, Any]]) -> dict[str, in
         "fresh_eval": int(counter.get("fresh_eval", 0)),
         "stale_or_delayed_eval": int(counter.get("stale_or_delayed_eval", 0)),
         "unknown_eval_quality": int(counter.get("unknown_eval_quality", 0)),
+    }
+
+
+def _scanner_full_eval_budget_diagnostics(items: list[dict[str, Any]]) -> dict[str, Any]:
+    symbol_rows: list[dict[str, Any]] = []
+    total_count = 0
+    for item in items:
+        budget = item.get("scanner_full_eval_budget_deferred") or {}
+        count = int(budget.get("count") or 0)
+        if count <= 0:
+            continue
+        total_count += count
+        symbol_rows.append(
+            {
+                "stock_code": item.get("stock_code") or "",
+                "stock_name": item.get("stock_name") or "",
+                "count": count,
+                "latest_at": budget.get("latest_at") or "",
+                "latest_price_delta_since_first_seen_pct": item.get("latest_price_delta_since_first_seen_pct"),
+                "max_price_delta_since_first_seen_pct": item.get("max_price_delta_since_first_seen_pct"),
+                "scanner_full_eval_limit": budget.get("scanner_full_eval_limit"),
+                "scanner_rising_full_eval_extra_limit": budget.get("scanner_rising_full_eval_extra_limit"),
+                "scanner_rising_full_eval_relief_count": budget.get("scanner_rising_full_eval_relief_count"),
+                "scanner_full_eval_count": budget.get("scanner_full_eval_count"),
+                "scanner_full_eval_budget_source": budget.get("scanner_full_eval_budget_source") or "",
+            }
+        )
+    symbol_rows.sort(
+        key=lambda row: (
+            int(row.get("count") or 0),
+            row.get("max_price_delta_since_first_seen_pct") or -999.0,
+        ),
+        reverse=True,
+    )
+    return {
+        "deferred_count": total_count,
+        "symbol_count": len(symbol_rows),
+        "top_symbols": symbol_rows[:12],
+        "decision_authority": "diagnostic_only_no_runtime_budget_change",
+        "runtime_effect": False,
+        "forbidden_uses": [
+            "buy_score_relaxation",
+            "threshold_relaxation",
+            "stale_submit_bypass",
+            "broker_guard_bypass",
+            "unbounded_cpu_or_ai_budget_increase",
+        ],
     }
 
 
@@ -710,6 +788,7 @@ def _root_cause_priorities(
     rising_missed: list[dict[str, Any]],
     falling_submitted: list[dict[str, Any]],
     summaries: list[dict[str, Any]],
+    scanner_budget: dict[str, Any],
     entry_price: dict[str, Any],
     scale_in: dict[str, Any],
     post_sell: dict[str, Any],
@@ -749,6 +828,29 @@ def _root_cause_priorities(
             }
         )
 
+    budget_deferred_count = int(scanner_budget.get("deferred_count") or 0)
+    if budget_deferred_count:
+        priorities.append(
+            {
+                "priority": 2,
+                "issue": "scanner_full_eval_budget_deferred",
+                "decision": "treat_as_evaluation_throughput_bottleneck_not_buy_threshold_signal",
+                "evidence": {
+                    "deferred_count": budget_deferred_count,
+                    "symbol_count": int(scanner_budget.get("symbol_count") or 0),
+                    "top_symbols": scanner_budget.get("top_symbols") or [],
+                },
+                "next_action": "raise_only_bounded_scanner_eval_capacity_if_high_delta_candidates_keep_deferred",
+                "runtime_effect": False,
+                "forbidden_uses": scanner_budget.get("forbidden_uses") or [
+                    "buy_score_relaxation",
+                    "threshold_relaxation",
+                    "stale_submit_bypass",
+                    "broker_guard_bypass",
+                ],
+            }
+        )
+
     ai_wait = 0
     for item in rising_missed:
         for blocker in item.get("recent_blockers") or []:
@@ -757,7 +859,7 @@ def _root_cause_priorities(
     if ai_wait:
         priorities.append(
             {
-                "priority": 2,
+                "priority": 3,
                 "issue": "ai_wait_or_baseline_prior_score_block",
                 "decision": "do_not_relax_score_without_fresh_positive_context_and_rolling_confirmation",
                 "evidence": {
@@ -789,7 +891,7 @@ def _root_cause_priorities(
     if price_block_count or price_candidate_failure_count:
         priorities.append(
             {
-                "priority": 3,
+                "priority": 4,
                 "issue": "entry_price_or_submit_price_guard_block",
                 "decision": "review_price_resolution_quality_without_stale_submit_bypass",
                 "evidence": {
@@ -813,7 +915,7 @@ def _root_cause_priorities(
     if scale_block_count:
         priorities.append(
             {
-                "priority": 4,
+                "priority": 5,
                 "issue": "scale_in_blocked",
                 "decision": "preserve_scale_in_safety_and_find_blocker_class",
                 "evidence": {
@@ -836,7 +938,7 @@ def _root_cause_priorities(
     if falling_submitted:
         priorities.append(
             {
-                "priority": 5,
+                "priority": 6,
                 "issue": "falling_promoted_real_submit",
                 "decision": "minimize_bad_entry_before_any_entry_relief",
                 "evidence": {
@@ -855,7 +957,7 @@ def _root_cause_priorities(
     if int(post_sell.get("missed_upside_count") or 0) or int(post_sell.get("bad_entry_after_sell_count") or 0):
         priorities.append(
             {
-                "priority": 6,
+                "priority": 7,
                 "issue": "post_sell_missed_upside_or_bad_entry",
                 "decision": "use_as_exit_entry_diagnostic_not_intraday_exit_mutation",
                 "evidence": {
@@ -949,6 +1051,7 @@ def build_report(
         target_date=target_date,
         post_sell_dir=post_sell_dir or PROJECT_ROOT / "data" / "post_sell",
     )
+    scanner_budget = _scanner_full_eval_budget_diagnostics(rising_missed)
     return {
         "schema_version": 1,
         "report_type": "intraday_entry_blocker_diagnostics",
@@ -992,6 +1095,21 @@ def build_report(
                     "broker_guard_bypass",
                     "stale_submit_bypass",
                     "real_order_approval",
+                ],
+            },
+            "scanner_full_eval_budget_diagnostics": {
+                "metric_role": "runtime_evaluation_throughput_diagnostic",
+                "decision_authority": "diagnostic_only",
+                "window_policy": "same_day_intraday_light",
+                "sample_floor": "none_intraday_diagnostic",
+                "primary_decision_metric": False,
+                "source_quality_gate": "scanner_runtime_skip_fields_present",
+                "forbidden_uses": [
+                    "buy_score_relaxation",
+                    "threshold_relaxation",
+                    "stale_submit_bypass",
+                    "broker_guard_bypass",
+                    "unbounded_cpu_or_ai_budget_increase",
                 ],
             },
             "entry_price_execution": {
@@ -1039,6 +1157,7 @@ def build_report(
                 ],
             },
         },
+        "scanner_full_eval_budget_diagnostics": scanner_budget,
         "entry_price_execution": entry_price,
         "scale_in_diagnostics": scale_in,
         "post_sell_flow_diagnostics": post_sell,
@@ -1061,6 +1180,12 @@ def build_report(
             "rising_missed_repeated_zero_strength_history_workorder_count": len(
                 _zero_strength_history_workorders(rising_missed)
             ),
+            "rising_missed_full_eval_budget_deferred_count": int(
+                scanner_budget.get("deferred_count") or 0
+            ),
+            "rising_missed_full_eval_budget_deferred_symbol_count": int(
+                scanner_budget.get("symbol_count") or 0
+            ),
         },
         "source_quality_workorders": {
             "repeated_zero_strength_history": _zero_strength_history_workorders(summaries),
@@ -1072,6 +1197,7 @@ def build_report(
             rising_missed=rising_missed,
             falling_submitted=falling_submitted,
             summaries=summaries,
+            scanner_budget=scanner_budget,
             entry_price=entry_price,
             scale_in=scale_in,
             post_sell=post_sell,

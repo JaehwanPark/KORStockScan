@@ -59,6 +59,10 @@ def test_build_report_surfaces_rising_promoted_without_real_submit(tmp_path):
                 "rising_entry_relief_eligible": True,
                 "scanner_positive_delta_pct": "7.80",
                 "scanner_full_eval_budget_source": "deferred_no_relief",
+                "scanner_full_eval_limit": "12",
+                "scanner_full_eval_count": "12",
+                "scanner_rising_full_eval_extra_limit": "4",
+                "scanner_rising_full_eval_relief_count": "4",
             },
         ),
         _event("010690", "화신", "scalp_sim_buy_order_assumed_filled", {"simulated_order": "True"}),
@@ -82,6 +86,14 @@ def test_build_report_surfaces_rising_promoted_without_real_submit(tmp_path):
         "count": 1,
     }
     assert item["recent_blockers"][-1]["scanner_full_eval_budget_source"] == "deferred_no_relief"
+    assert item["scanner_full_eval_budget_deferred"]["count"] == 1
+    assert report["summary"]["rising_missed_full_eval_budget_deferred_count"] == 1
+    assert report["scanner_full_eval_budget_diagnostics"]["top_symbols"][0]["stock_code"] == "010690"
+    budget_priority = next(
+        item for item in report["root_cause_priorities"] if item["issue"] == "scanner_full_eval_budget_deferred"
+    )
+    assert budget_priority["decision"] == "treat_as_evaluation_throughput_bottleneck_not_buy_threshold_signal"
+    assert "threshold_relaxation" in budget_priority["forbidden_uses"]
 
 
 def test_build_report_splits_relief_blockers_for_non_rising(tmp_path):
