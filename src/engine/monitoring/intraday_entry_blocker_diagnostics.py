@@ -313,13 +313,58 @@ def _is_zero_strength_history_source_quality_event(row: dict[str, Any]) -> bool:
     )
 
 
+def _is_downstream_progress_after_stale_source(row: dict[str, Any]) -> bool:
+    stage = str(row.get("stage") or "")
+    reason = _blocker_reason(row)
+    if _field(row, "fast_precheck_result") == "eligible_for_heavy_entry_eval":
+        return True
+    if _field(row, "fast_precheck_reason") in {
+        "fast_precheck_pass",
+        "rising_realtime_type_fresh_quote_timestamp_stale",
+        "rising_subscription_recheck_fresh_realtime_evidence",
+    }:
+        return True
+    return stage in {
+        "ai_confirmed",
+        "ai_confirmed_terminal_no_budget",
+        "blocked_ai_score",
+        "blocked_strength_momentum",
+        "entry_ai_price_canary_applied",
+        "scalp_entry_action_decision_snapshot",
+        "strength_momentum_observed",
+        "strength_momentum_pass",
+    } and reason not in RECOVERY_OBSERVATION_REASONS
+
+
 def _zero_strength_history_source_quality(rows: list[dict[str, Any]]) -> dict[str, Any]:
-    zero_rows = [row for row in rows if _is_zero_strength_history_source_quality_event(row)]
-    reason_counts = Counter(_blocker_reason(row) or str(row.get("stage") or "") for row in zero_rows)
-    latest = zero_rows[-1] if zero_rows else {}
+    zero_indexed_rows = [
+        (idx, row) for idx, row in enumerate(rows) if _is_zero_strength_history_source_quality_event(row)
+    ]
+    zero_rows = [row for _idx, row in zero_indexed_rows]
+    latest_zero_idx = zero_indexed_rows[-1][0] if zero_indexed_rows else -1
+    downstream_progress = next(
+        (row for row in rows[latest_zero_idx + 1 :] if _is_downstream_progress_after_stale_source(row)),
+        None,
+    )
+    unresolved_zero_rows = [] if downstream_progress else zero_rows
+    reason_counts = Counter(
+        _blocker_reason(row) or str(row.get("stage") or "") for row in unresolved_zero_rows
+    )
+    latest = unresolved_zero_rows[-1] if unresolved_zero_rows else {}
+    raw_reason_counts = Counter(_blocker_reason(row) or str(row.get("stage") or "") for row in zero_rows)
+    route = "transient_stale_recovered_to_downstream_blocker" if zero_rows and downstream_progress else (
+        "source_quality_workorder_required"
+        if len(unresolved_zero_rows) >= ZERO_HISTORY_WORKORDER_MIN_EVENTS
+        else "observe_until_repeated"
+    )
     return {
-        "event_count": len(zero_rows),
-        "repeated": len(zero_rows) >= ZERO_HISTORY_WORKORDER_MIN_EVENTS,
+        "event_count": len(unresolved_zero_rows),
+        "raw_event_count": len(zero_rows),
+        "recovered_by_downstream_progress": bool(downstream_progress),
+        "downstream_progress_at": _event_time(downstream_progress) if downstream_progress else "",
+        "downstream_progress_stage": (downstream_progress.get("stage") or "") if downstream_progress else "",
+        "downstream_progress_reason": _blocker_reason(downstream_progress) if downstream_progress else "",
+        "repeated": len(unresolved_zero_rows) >= ZERO_HISTORY_WORKORDER_MIN_EVENTS,
         "latest_at": _event_time(latest) if latest else "",
         "latest_stage": (latest.get("stage") or "") if latest else "",
         "latest_reason": _blocker_reason(latest) if latest else "",
@@ -327,11 +372,11 @@ def _zero_strength_history_source_quality(rows: list[dict[str, Any]]) -> dict[st
             {"reason": reason, "count": count}
             for reason, count in reason_counts.most_common(5)
         ],
-        "source_quality_route": (
-            "source_quality_workorder_required"
-            if len(zero_rows) >= ZERO_HISTORY_WORKORDER_MIN_EVENTS
-            else "observe_until_repeated"
-        ),
+        "raw_top_reasons": [
+            {"reason": reason, "count": count}
+            for reason, count in raw_reason_counts.most_common(5)
+        ],
+        "source_quality_route": route,
     }
 
 

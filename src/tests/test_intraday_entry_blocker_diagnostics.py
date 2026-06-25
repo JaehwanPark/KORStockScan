@@ -325,6 +325,74 @@ def test_build_report_surfaces_repeated_zero_strength_history_workorder(tmp_path
     )
 
 
+def test_build_report_suppresses_transient_zero_history_after_downstream_progress(tmp_path):
+    path = tmp_path / "pipeline_events_2026-06-23.jsonl"
+    rows = [
+        _event("000001", "A", "scalping_scanner_candidate_promoted", {"price_delta_since_first_seen_pct": "2.40"}),
+        _event(
+            "000001",
+            "A",
+            "scalping_scanner_watching_runtime_skip",
+            {
+                "price_delta_since_first_seen_pct": "2.40",
+                "skip_reason": "scanner_fast_precheck_stability_pending",
+                "fast_precheck_result": "stability_pending",
+                "fast_precheck_reason": "stale_ws_snapshot",
+                "ws_strength_history_count": "0",
+            },
+        ),
+        _event(
+            "000001",
+            "A",
+            "scalping_scanner_watching_runtime_skip",
+            {
+                "price_delta_since_first_seen_pct": "2.40",
+                "skip_reason": "scanner_fast_precheck_stability_pending",
+                "fast_precheck_result": "stability_pending",
+                "fast_precheck_reason": "stale_ws_snapshot",
+                "ws_strength_history_count": "0",
+            },
+        ),
+        _event(
+            "000001",
+            "A",
+            "scalping_scanner_fast_precheck",
+            {
+                "price_delta_since_first_seen_pct": "2.40",
+                "fast_precheck_result": "eligible_for_heavy_entry_eval",
+                "fast_precheck_reason": "fast_precheck_pass",
+                "ws_strength_history_count": "3",
+            },
+        ),
+        _event(
+            "000001",
+            "A",
+            "blocked_strength_momentum",
+            {
+                "price_delta_since_first_seen_pct": "2.40",
+                "reason": "below_strength_base",
+                "ai_score": "62",
+                "ws_strength_history_count": "3",
+            },
+        ),
+    ]
+    path.write_text("\n".join(json.dumps(row, ensure_ascii=False) for row in rows), encoding="utf-8")
+
+    report = build_report(target_date="2026-06-23", pipeline_path=path, generated_at="fixed")
+
+    quality = report["rising_missed_buy"][0]["zero_strength_history_source_quality"]
+    assert quality["event_count"] == 0
+    assert quality["raw_event_count"] == 2
+    assert quality["recovered_by_downstream_progress"] is True
+    assert quality["source_quality_route"] == "transient_stale_recovered_to_downstream_blocker"
+    assert report["summary"]["rising_missed_repeated_zero_strength_history_workorder_count"] == 0
+    assert report["source_quality_workorders"]["rising_missed_repeated_zero_strength_history"] == []
+    assert all(
+        item["issue"] != "scanner_strength_history_or_stale_eval"
+        for item in report["root_cause_priorities"]
+    )
+
+
 def test_build_report_excludes_sim_and_keeps_falling_real_submit(tmp_path):
     path = tmp_path / "pipeline_events_2026-06-23.jsonl"
     rows = [
