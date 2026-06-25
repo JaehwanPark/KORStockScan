@@ -2758,6 +2758,32 @@ def _read_pid_environ(pid: int) -> dict[str, str]:
         return {}
 
 
+def _read_shell_export_env(path: Path) -> dict[str, str]:
+    if not path.exists():
+        return {}
+    values: dict[str, str] = {}
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("export "):
+            line = line[len("export ") :].strip()
+        if "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        key = key.strip()
+        if not key:
+            continue
+        value = value.strip()
+        try:
+            parts = shlex.split(value, comments=False, posix=True)
+            parsed_value = parts[0] if parts else ""
+        except ValueError:
+            parsed_value = value.strip("\"'")
+        values[key] = parsed_value
+    return values
+
+
 def verify_runtime_env_handoff(
     target_date: str,
     *,
@@ -2773,6 +2799,10 @@ def verify_runtime_env_handoff(
     env_overrides = manifest.get("env_overrides")
     if not isinstance(env_overrides, dict):
         env_overrides = {}
+    operator_override_path = RUNTIME_ENV_DIR / "operator_runtime_overrides.env"
+    operator_overrides = _read_shell_export_env(operator_override_path)
+    effective_env_overrides = dict(env_overrides)
+    effective_env_overrides.update(operator_overrides)
     findings: list[dict[str, Any]] = []
     missing_families: list[str] = []
     for family in selected_families:
@@ -2798,7 +2828,7 @@ def verify_runtime_env_handoff(
         for family in selected_families:
             required_keys = SELECTED_FAMILY_REQUIRED_ENV_KEYS.get(family, [])
             for key in required_keys:
-                manifest_value = env_overrides.get(key)
+                manifest_value = effective_env_overrides.get(key)
                 pid_value = pid_env.get(key)
                 if manifest_value is None:
                     continue
@@ -2818,6 +2848,11 @@ def verify_runtime_env_handoff(
                             "env_key": key,
                             "manifest_value": manifest_value,
                             "pid_value": pid_value,
+                            "expected_value_source": (
+                                "operator_runtime_overrides"
+                                if key in operator_overrides
+                                else "threshold_runtime_env_manifest"
+                            ),
                         }
                     )
     passed = len(findings) == 0
@@ -2834,6 +2869,10 @@ def verify_runtime_env_handoff(
         "pid_passed": pid_passed,
         "pid_mismatches": pid_mismatches,
         "pid_missing": pid_missing,
+        "operator_runtime_override_path": (
+            str(operator_override_path) if operator_override_path.exists() else None
+        ),
+        "operator_runtime_override_keys": sorted(operator_overrides),
     }
     if not passed:
         result["status"] = "fail"

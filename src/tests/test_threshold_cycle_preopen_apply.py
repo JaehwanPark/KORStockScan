@@ -6243,6 +6243,66 @@ def test_verify_runtime_env_handoff_pid_missing_key(tmp_path, monkeypatch):
     assert result["pid_missing"][0]["severity"] == "runtime_env_pid_missing"
 
 
+def test_verify_runtime_env_handoff_pid_uses_operator_runtime_overrides(tmp_path, monkeypatch):
+    report_dir = tmp_path / "report"
+    apply_dir = tmp_path / "apply_plans"
+    runtime_dir = tmp_path / "runtime_env"
+    latency_dir = tmp_path / "missing_latency_classifier_recommendation"
+    lock_dir = tmp_path / "operator_runtime_env_locks"
+    report_dir.mkdir(parents=True)
+    runtime_dir.mkdir(parents=True)
+    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "APPLY_PLAN_DIR", apply_dir)
+    monkeypatch.setattr(mod, "RUNTIME_ENV_DIR", runtime_dir)
+    monkeypatch.setattr(mod, "OPERATOR_RUNTIME_ENV_LOCK_DIR", lock_dir)
+    monkeypatch.setattr(mod, "LATENCY_CLASSIFIER_RECOMMENDATION_DIR", latency_dir)
+
+    manifest = runtime_dir / "threshold_runtime_env_2026-06-11.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "target_date": "2026-06-11",
+                "selected_families": ["swing_sim_auto_approval"],
+                "env_overrides": {
+                    "KORSTOCKSCAN_SWING_SIM_AUTO_POLICY_ENABLED": "true",
+                    "KORSTOCKSCAN_SWING_SIM_AUTO_POLICY_FILE": "/tmp/swing_policy.json",
+                    "KORSTOCKSCAN_SWING_SIM_AUTO_POLICY_VERSION": "swing_sim_auto_approval:2026-06-10",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    (runtime_dir / "operator_runtime_overrides.env").write_text(
+        "\n".join(
+            [
+                "export KORSTOCKSCAN_SWING_SIM_AUTO_POLICY_ENABLED=false",
+                "export KORSTOCKSCAN_SWING_SIM_AUTO_POLICY_FILE=",
+                "export KORSTOCKSCAN_SWING_SIM_AUTO_POLICY_VERSION=",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    def _fake_pid_environ(pid):
+        return {
+            "KORSTOCKSCAN_SWING_SIM_AUTO_POLICY_ENABLED": "false",
+            "KORSTOCKSCAN_SWING_SIM_AUTO_POLICY_FILE": "",
+            "KORSTOCKSCAN_SWING_SIM_AUTO_POLICY_VERSION": "",
+        }
+
+    monkeypatch.setattr(mod, "_read_pid_environ", _fake_pid_environ)
+
+    result = mod.verify_runtime_env_handoff("2026-06-11", pid=12345)
+
+    assert result["status"] == "pass"
+    assert result["pid_mismatches"] == []
+    assert result["operator_runtime_override_keys"] == [
+        "KORSTOCKSCAN_SWING_SIM_AUTO_POLICY_ENABLED",
+        "KORSTOCKSCAN_SWING_SIM_AUTO_POLICY_FILE",
+        "KORSTOCKSCAN_SWING_SIM_AUTO_POLICY_VERSION",
+    ]
+
+
 def test_verify_runtime_env_handoff_lifecycle_bucket_missing_live_auto_apply(tmp_path, monkeypatch):
     report_dir = tmp_path / "report"
     apply_dir = tmp_path / "apply_plans"
