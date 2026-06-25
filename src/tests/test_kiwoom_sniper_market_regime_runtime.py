@@ -3175,6 +3175,25 @@ def test_scanner_ws_subscription_recheck_requires_repair_when_subscribed_but_zer
     assert fields["ws_subscription_recheck_received_types"] == "0D"
 
 
+def test_scanner_ws_subscription_recheck_requires_repair_without_timestamp():
+    manager = SimpleNamespace(
+        subscribed_codes={"005930"},
+        get_latest_data=lambda code: {"curr": 70000},
+    )
+
+    fields = kiwoom_sniper_v2._scanner_ws_subscription_recheck_fields(
+        manager,
+        "005930",
+        {},
+        now_ts=1001.0,
+    )
+
+    assert fields["ws_subscription_recheck_status"] == "subscribed_snapshot_stale_or_missing"
+    assert fields["ws_subscription_repair_needed"] is True
+    assert fields["ws_subscription_recheck_age_sec"] == "not_available_ws_age_sec"
+    assert fields["ws_subscription_recheck_received_types"] == "-"
+
+
 def test_scanner_ws_subscription_recheck_requires_repair_when_snapshot_stale(monkeypatch):
     monkeypatch.delenv("KORSTOCKSCAN_SCANNER_WS_SUBSCRIPTION_RECHECK_FRESH_SEC", raising=False)
     manager = SimpleNamespace(subscribed_codes={"005930"})

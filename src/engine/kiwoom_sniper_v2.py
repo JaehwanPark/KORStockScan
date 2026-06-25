@@ -2844,7 +2844,7 @@ def _scanner_ws_subscription_recheck_snapshot_and_fields(manager, code, ws_data,
         received_types = []
     snapshot_present = bool(snapshot)
     fresh_sec = _scanner_ws_subscription_recheck_fresh_sec()
-    fresh_curr = curr > 0 and (age_sec is None or age_sec <= fresh_sec)
+    fresh_curr = curr > 0 and age_sec is not None and age_sec <= fresh_sec
     repair_needed = not (subscribed and fresh_curr)
     fields = {
         "ws_subscription_recheck_status": (
