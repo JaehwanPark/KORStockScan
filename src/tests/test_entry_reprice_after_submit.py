@@ -233,9 +233,9 @@ def test_pending_order_reprices_once(monkeypatch):
 
     assert result == "submitted"
     assert calls == {"cancel": 1, "buy": 1}
-    assert cancel_calls[-1]["dmst_stex_tp"] == "KRX"
+    assert cancel_calls[-1]["dmst_stex_tp"] == "SOR"
     assert stock["pending_entry_orders"][0]["ord_no"] == "0034000"
-    assert stock["pending_entry_orders"][0]["dmst_stex_tp"] == "KRX"
+    assert stock["pending_entry_orders"][0]["dmst_stex_tp"] == "SOR"
     assert stock["pending_entry_orders"][0]["entry_reprice_parent_ord_no"] == "0033470"
     assert stock["entry_reprice_child_ord_no"] == "0034000"
     assert "entry_reprice_resubmit_submitted" in [stage for stage, _ in events]

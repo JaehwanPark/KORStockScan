@@ -12879,6 +12879,9 @@ def _holding_ws_freshness_recover_or_block(stock, code, ws_data, *, now_ts):
     elif age_sec is not None and age_sec > max_age_sec:
         block_reason = "holding_ws_snapshot_stale"
     if not block_reason:
+        if isinstance(stock, dict):
+            stock.pop("holding_rest_quote_only_recovery", None)
+            stock.pop("holding_rest_quote_only_recovered_at", None)
         return ws_data, False, {}
 
     state = stock.setdefault("_holding_ws_freshness_recovery", {}) if isinstance(stock, dict) else {}
@@ -12919,6 +12922,9 @@ def _holding_ws_freshness_recover_or_block(stock, code, ws_data, *, now_ts):
             recovered.update(fallback)
             recovered.pop("orderbook", None)
             recovered["holding_rest_quote_only_recovery"] = True
+            if isinstance(stock, dict):
+                stock["holding_rest_quote_only_recovery"] = True
+                stock["holding_rest_quote_only_recovered_at"] = float(now_ts)
             fields.update(
                 {
                     "holding_ws_recovery_action": "rest_quote_applied",
@@ -12938,7 +12944,51 @@ def _holding_ws_freshness_recover_or_block(stock, code, ws_data, *, now_ts):
         fields["holding_rest_quote_next_after_epoch"] = f"{last_rest_ts + _holding_rest_quote_fallback_min_interval_sec():.3f}"
 
     _maybe_publish_holding_ws_repair(state, code, fields, now_ts=now_ts)
+    if isinstance(stock, dict):
+        stock.pop("holding_rest_quote_only_recovery", None)
+        stock.pop("holding_rest_quote_only_recovered_at", None)
     return ws_data, True, fields
+
+
+def _rest_quote_only_hard_stop_confirmation_block(
+    stock,
+    code,
+    *,
+    exit_rule: str,
+    profit_rate: float,
+    emergency_pct: float,
+    held_sec: int,
+    curr_price: int,
+    buy_price,
+    quote_fields: dict | None = None,
+) -> bool:
+    if str(exit_rule or "").strip() not in {
+        "scalp_preset_hard_stop_pct",
+        "scalp_hard_stop_pct",
+        "scalp_soft_stop_pct",
+    }:
+        return False
+    if not bool((stock or {}).get("holding_rest_quote_only_recovery")):
+        return False
+    if float(profit_rate or 0.0) <= float(emergency_pct or -999.0):
+        return False
+    _log_holding_pipeline(
+        stock,
+        code,
+        "hard_stop_rest_quote_only_confirmation_blocked",
+        exit_rule=str(exit_rule or "-"),
+        profit_rate=f"{float(profit_rate or 0.0):+.2f}",
+        emergency_pct=f"{float(emergency_pct or 0.0):+.2f}",
+        held_sec=int(held_sec or 0),
+        curr_price=int(curr_price or 0),
+        buy_price=buy_price,
+        confirmation_required="ws_or_orderbook_quote",
+        actual_order_submitted=False,
+        broker_order_forbidden=True,
+        runtime_effect=False,
+        **(quote_fields or {}),
+    )
+    return True
 
 
 def _normalize_pre_ai_strength_ws_timestamp(snapshot: dict | None) -> tuple[dict, str]:
@@ -21258,10 +21308,12 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             continue
         ord_no = _extract_broker_order_no(res)
         order_sent_ts = time.time()
+        submit_dmst_stex_tp = _entry_order_submit_dmst_stex_tp(request)
         successful_orders.append({
             'tag': request['tag'], 'qty': qty, 'price': price, 'ord_no': ord_no, 'tif': request['tif'],
             'order_type': request['order_type_code'], 'status': 'OPEN', 'filled_qty': 0, 'sent_at': order_sent_ts,
-            'dmst_stex_tp': 'KRX' if str(request['order_type_code']) == '00' else 'SOR',
+            'dmst_stex_tp': submit_dmst_stex_tp,
+            'dmst_stex_tp_source': _entry_order_submit_dmst_stex_tp_source(request),
             'entry_order_lifecycle': submit_revalidation_fields.get('entry_order_lifecycle', 'standard'),
             'entry_passive_probe_applied': bool(submit_revalidation_fields.get('entry_passive_probe_applied')),
             'best_bid_at_submit': price_snapshot.get('best_bid_at_submit'),
@@ -21949,6 +22001,54 @@ def _has_open_pending_entry_orders(stock):
     )
 
 
+def _normalize_entry_dmst_stex_tp(value, *, default: str = "SOR") -> str:
+    normalized = str(value or "").strip().upper()
+    if normalized in {"KRX", "NXT", "SOR"}:
+        return normalized
+    return default
+
+
+def _entry_order_submit_dmst_stex_tp(request: dict | None) -> str:
+    request = request if isinstance(request, dict) else {}
+    return _normalize_entry_dmst_stex_tp(
+        request.get("dmst_stex_tp")
+        or request.get("domestic_exchange_type")
+        or request.get("exchange")
+        or request.get("stex_tp"),
+        default="SOR",
+    )
+
+
+def _entry_order_submit_dmst_stex_tp_source(request: dict | None) -> str:
+    request = request if isinstance(request, dict) else {}
+    if (
+        request.get("dmst_stex_tp")
+        or request.get("domestic_exchange_type")
+        or request.get("exchange")
+        or request.get("stex_tp")
+    ):
+        return "request"
+    return "default_sor"
+
+
+def _entry_order_cancel_dmst_stex_tp(order: dict | None) -> str:
+    order = order if isinstance(order, dict) else {}
+    explicit_exchange = (
+        order.get("domestic_exchange_type")
+        or order.get("exchange")
+        or order.get("stex_tp")
+    )
+    if explicit_exchange:
+        return _normalize_entry_dmst_stex_tp(explicit_exchange, default="SOR")
+    dmst_stex_tp = _normalize_entry_dmst_stex_tp(order.get("dmst_stex_tp"), default="SOR")
+    if dmst_stex_tp == "KRX" and str(order.get("dmst_stex_tp_source") or "") != "request":
+        return "SOR"
+    return _normalize_entry_dmst_stex_tp(
+        dmst_stex_tp,
+        default="SOR",
+    )
+
+
 def _cancel_pending_entry_orders(stock, code, *, force=False):
     """
     Cancel unresolved entry BUY orders.
@@ -21991,13 +22091,7 @@ def _cancel_pending_entry_orders(stock, code, *, force=False):
                 "price_decision_context_age_ms": order.get('price_decision_context_age_ms', "-"),
                 "quote_age_at_submit_ms": order.get('quote_age_at_submit_ms', "-"),
             }
-            cancel_dmst_stex_tp = str(
-                order.get('dmst_stex_tp')
-                or order.get('domestic_exchange_type')
-                or ("KRX" if str(order.get('order_type') or "") == "00" else "SOR")
-            ).strip().upper()
-            if cancel_dmst_stex_tp not in {"KRX", "NXT", "SOR"}:
-                cancel_dmst_stex_tp = "SOR"
+            cancel_dmst_stex_tp = _entry_order_cancel_dmst_stex_tp(order)
             cancel_fields["dmst_stex_tp"] = cancel_dmst_stex_tp
             wait_result = (stock or {}).get('entry_cancel_wait_attribution_result')
             if isinstance(wait_result, dict):
@@ -22430,9 +22524,7 @@ def _maybe_reprice_pending_entry_order(stock, code, strategy, *, timeout_sec=Non
 
     parent_order_no = str(order.get("ord_no") or "").strip()
     qty = max(0, _coerce_int_value(order.get("qty")) - _coerce_int_value(order.get("filled_qty")))
-    cancel_dmst_stex_tp = str(order.get("dmst_stex_tp") or "").strip().upper()
-    if cancel_dmst_stex_tp not in {"KRX", "NXT", "SOR"}:
-        cancel_dmst_stex_tp = "KRX" if str(order.get("order_type") or order.get("order_type_code")) == "00" else "SOR"
+    cancel_dmst_stex_tp = _entry_order_cancel_dmst_stex_tp(order)
     request_fields = {
         **decision.as_log_fields(),
         "actual_order_submitted": False,
@@ -22530,7 +22622,8 @@ def _maybe_reprice_pending_entry_order(stock, code, strategy, *, timeout_sec=Non
         "order_type": "00",
         "status": "OPEN",
         "filled_qty": 0,
-        "dmst_stex_tp": "KRX",
+        "dmst_stex_tp": cancel_dmst_stex_tp,
+        "dmst_stex_tp_source": str(order.get("dmst_stex_tp_source") or "inherited"),
         "sent_at": time.time(),
         "entry_order_lifecycle": "repriced_after_submit",
         "entry_passive_probe_applied": bool(order.get("entry_passive_probe_applied")),
@@ -23501,6 +23594,18 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                     emergency_pct=f"{preset_hard_stop_emergency_pct:+.2f}",
                 )
             else:
+                if _rest_quote_only_hard_stop_confirmation_block(
+                    stock,
+                    code,
+                    exit_rule="scalp_preset_hard_stop_pct",
+                    profit_rate=profit_rate,
+                    emergency_pct=preset_hard_stop_emergency_pct,
+                    held_sec=preset_held_sec,
+                    curr_price=curr_p,
+                    buy_price=buy_p,
+                    quote_fields=holding_ws_fields,
+                ):
+                    return
                 log_info(
                     f"🔪 [SCALP 출구엔진] {stock['name']} 손절선 터치({profit_rate:.2f}%). "
                     "즉각 최유리(IOC) 청산!"

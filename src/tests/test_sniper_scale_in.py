@@ -5926,10 +5926,118 @@ def test_pending_entry_cancel_logs_receipt_provenance(monkeypatch):
     stages = {stage: fields for stage, fields in logs}
     assert stages["entry_order_cancel_requested"]["orig_ord_no"] == "O1"
     assert stages["entry_order_cancel_requested"]["entry_order_lifecycle"] == "passive_probe"
-    assert stages["entry_order_cancel_requested"]["dmst_stex_tp"] == "KRX"
+    assert stages["entry_order_cancel_requested"]["dmst_stex_tp"] == "SOR"
     assert stages["entry_order_cancel_confirmed"]["cancel_ord_no"] == "C1"
     assert stages["entry_order_cancel_confirmed"]["submitted_price"] == 91900
-    assert cancel_calls[-1]["dmst_stex_tp"] == "KRX"
+    assert cancel_calls[-1]["dmst_stex_tp"] == "SOR"
+
+
+def test_pending_entry_cancel_corrects_legacy_krx_limit_marker(monkeypatch):
+    cancel_calls = []
+    monkeypatch.setattr(state_handlers, "_log_entry_pipeline", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        state_handlers.kiwoom_orders,
+        "send_cancel_order",
+        lambda **kwargs: cancel_calls.append(kwargs) or {"return_code": "0", "ord_no": "C1", "return_msg": "정상"},
+    )
+    stock = {
+        "id": 1,
+        "name": "TEST",
+        "pending_entry_orders": [
+            {
+                "tag": "normal",
+                "qty": 1,
+                "filled_qty": 0,
+                "price": 91900,
+                "ord_no": "O1",
+                "order_type": "00",
+                "status": "OPEN",
+                "sent_at": time.time() - 31,
+                "dmst_stex_tp": "KRX",
+            }
+        ],
+    }
+
+    assert state_handlers._cancel_pending_entry_orders(stock, "440110", force=True) == "cancelled"
+    assert cancel_calls[-1]["dmst_stex_tp"] == "SOR"
+
+
+def test_pending_entry_cancel_preserves_explicit_nxt(monkeypatch):
+    cancel_calls = []
+    monkeypatch.setattr(state_handlers, "_log_entry_pipeline", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        state_handlers.kiwoom_orders,
+        "send_cancel_order",
+        lambda **kwargs: cancel_calls.append(kwargs) or {"return_code": "0", "ord_no": "C1", "return_msg": "정상"},
+    )
+    stock = {
+        "id": 1,
+        "name": "TEST",
+        "pending_entry_orders": [
+            {
+                "tag": "normal",
+                "qty": 1,
+                "filled_qty": 0,
+                "price": 91900,
+                "ord_no": "O1",
+                "order_type": "00",
+                "status": "OPEN",
+                "sent_at": time.time() - 31,
+                "dmst_stex_tp": "NXT",
+                "dmst_stex_tp_source": "request",
+            }
+        ],
+    }
+
+    assert state_handlers._cancel_pending_entry_orders(stock, "440110", force=True) == "cancelled"
+    assert cancel_calls[-1]["dmst_stex_tp"] == "NXT"
+
+
+def test_rest_quote_only_hard_stop_requires_confirmation(monkeypatch):
+    logs = []
+    monkeypatch.setattr(state_handlers, "_log_holding_pipeline", lambda stock, code, stage, **fields: logs.append((stage, fields)))
+    stock = {
+        "name": "SK오션플랜트",
+        "holding_rest_quote_only_recovery": True,
+    }
+
+    blocked = state_handlers._rest_quote_only_hard_stop_confirmation_block(
+        stock,
+        "100090",
+        exit_rule="scalp_preset_hard_stop_pct",
+        profit_rate=-0.83,
+        emergency_pct=-1.2,
+        held_sec=0,
+        curr_price=16650,
+        buy_price=16750,
+        quote_fields={"holding_ws_recovery_outcome": "rest_quote_applied"},
+    )
+
+    assert blocked is True
+    assert logs[-1][0] == "hard_stop_rest_quote_only_confirmation_blocked"
+    assert logs[-1][1]["actual_order_submitted"] is False
+    assert logs[-1][1]["broker_order_forbidden"] is True
+
+
+def test_rest_quote_only_hard_stop_allows_emergency(monkeypatch):
+    monkeypatch.setattr(state_handlers, "_log_holding_pipeline", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError))
+    stock = {
+        "name": "TEST",
+        "holding_rest_quote_only_recovery": True,
+    }
+
+    blocked = state_handlers._rest_quote_only_hard_stop_confirmation_block(
+        stock,
+        "100090",
+        exit_rule="scalp_preset_hard_stop_pct",
+        profit_rate=-1.31,
+        emergency_pct=-1.2,
+        held_sec=8,
+        curr_price=16520,
+        buy_price=16750,
+    )
+
+    assert blocked is False
 
 
 def test_pending_entry_cancel_already_resolved_sets_recovery_probe_cooldown(monkeypatch):
