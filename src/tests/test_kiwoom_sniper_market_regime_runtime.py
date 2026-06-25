@@ -2848,6 +2848,12 @@ def test_scanner_rest_quote_budget_hot_reloads_operator_override_file(tmp_path, 
     monkeypatch.setattr(kiwoom_sniper_v2, "_SCANNER_HOT_RUNTIME_OVERRIDE_REFRESH_SEC", 0.0)
     monkeypatch.delenv("KORSTOCKSCAN_SCANNER_REST_QUOTE_FALLBACK_MAX_PER_LOOP", raising=False)
     monkeypatch.delenv("KORSTOCKSCAN_SCANNER_REST_QUOTE_FALLBACK_DYNAMIC_MAX_EXTRA_CALLS", raising=False)
+    monkeypatch.delenv("KORSTOCKSCAN_SCANNER_REST_QUOTE_FALLBACK_DEFER_SEC", raising=False)
+    monkeypatch.delenv("KORSTOCKSCAN_SCANNER_WS_REPAIR_CYCLE_WAIT_SEC", raising=False)
+    monkeypatch.delenv("KORSTOCKSCAN_SCANNER_WS_REPAIR_CYCLE_PERSISTENT_SEC", raising=False)
+    monkeypatch.delenv("KORSTOCKSCAN_SCANNER_WS_PERSISTENT_REPAIR_MIN_INTERVAL_SEC", raising=False)
+    monkeypatch.delenv("KORSTOCKSCAN_SCANNER_WS_SUBSCRIPTION_RECHECK_FRESH_SEC", raising=False)
+    monkeypatch.delenv("KORSTOCKSCAN_SCANNER_HEAVY_EVAL_RECHECK_FRESH_SEC", raising=False)
     _reset_scanner_hot_override_cache()
 
     override_path.write_text(
@@ -2855,6 +2861,12 @@ def test_scanner_rest_quote_budget_hot_reloads_operator_override_file(tmp_path, 
             [
                 "export KORSTOCKSCAN_SCANNER_REST_QUOTE_FALLBACK_MAX_PER_LOOP=7",
                 "export KORSTOCKSCAN_SCANNER_REST_QUOTE_FALLBACK_DYNAMIC_MAX_EXTRA_CALLS=3",
+                "export KORSTOCKSCAN_SCANNER_REST_QUOTE_FALLBACK_DEFER_SEC=4",
+                "export KORSTOCKSCAN_SCANNER_WS_REPAIR_CYCLE_WAIT_SEC=9",
+                "export KORSTOCKSCAN_SCANNER_WS_REPAIR_CYCLE_PERSISTENT_SEC=21",
+                "export KORSTOCKSCAN_SCANNER_WS_PERSISTENT_REPAIR_MIN_INTERVAL_SEC=11",
+                "export KORSTOCKSCAN_SCANNER_WS_SUBSCRIPTION_RECHECK_FRESH_SEC=12",
+                "export KORSTOCKSCAN_SCANNER_HEAVY_EVAL_RECHECK_FRESH_SEC=6",
                 "export KORSTOCKSCAN_BUY_SCORE_THRESHOLD=1",
             ]
         )
@@ -2865,6 +2877,12 @@ def test_scanner_rest_quote_budget_hot_reloads_operator_override_file(tmp_path, 
 
     assert kiwoom_sniper_v2._scanner_rest_quote_fallback_max_per_loop() == 7
     assert kiwoom_sniper_v2._scanner_rest_quote_fallback_dynamic_max_extra_calls() == 3
+    assert kiwoom_sniper_v2._scanner_rest_quote_fallback_defer_sec() == 4.0
+    assert kiwoom_sniper_v2._scanner_ws_repair_cycle_wait_sec() == 9.0
+    assert kiwoom_sniper_v2._scanner_ws_repair_cycle_persistent_sec() == 21.0
+    assert kiwoom_sniper_v2._scanner_ws_persistent_repair_min_interval_sec() == 11.0
+    assert kiwoom_sniper_v2._scanner_ws_subscription_recheck_fresh_sec() == 12.0
+    assert kiwoom_sniper_v2._scanner_heavy_eval_recheck_fresh_sec() == 6.0
     assert (
         kiwoom_sniper_v2._scanner_hot_runtime_override_value("KORSTOCKSCAN_BUY_SCORE_THRESHOLD")
         is None
@@ -2875,6 +2893,8 @@ def test_scanner_rest_quote_budget_hot_reloads_operator_override_file(tmp_path, 
             [
                 "export KORSTOCKSCAN_SCANNER_REST_QUOTE_FALLBACK_MAX_PER_LOOP=4",
                 "export KORSTOCKSCAN_SCANNER_REST_QUOTE_FALLBACK_DYNAMIC_MAX_EXTRA_CALLS=1",
+                "export KORSTOCKSCAN_SCANNER_WS_REPAIR_CYCLE_WAIT_SEC=6",
+                "export KORSTOCKSCAN_SCANNER_HEAVY_EVAL_RECHECK_FRESH_SEC=2",
             ]
         )
         + "\n",
@@ -2884,6 +2904,8 @@ def test_scanner_rest_quote_budget_hot_reloads_operator_override_file(tmp_path, 
 
     assert kiwoom_sniper_v2._scanner_rest_quote_fallback_max_per_loop() == 4
     assert kiwoom_sniper_v2._scanner_rest_quote_fallback_dynamic_max_extra_calls() == 1
+    assert kiwoom_sniper_v2._scanner_ws_repair_cycle_wait_sec() == 6.0
+    assert kiwoom_sniper_v2._scanner_heavy_eval_recheck_fresh_sec() == 2.0
     _reset_scanner_hot_override_cache()
 
 
@@ -3414,7 +3436,13 @@ def test_scanner_ws_subscription_recheck_requires_repair_without_timestamp():
     assert fields["ws_subscription_recheck_received_types"] == "-"
 
 
-def test_scanner_ws_subscription_recheck_requires_repair_when_snapshot_stale(monkeypatch):
+def test_scanner_ws_subscription_recheck_requires_repair_when_snapshot_stale(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        kiwoom_sniper_v2,
+        "_SCANNER_OPERATOR_RUNTIME_OVERRIDE_PATH",
+        tmp_path / "missing_operator_runtime_overrides.env",
+    )
+    _reset_scanner_hot_override_cache()
     monkeypatch.delenv("KORSTOCKSCAN_SCANNER_WS_SUBSCRIPTION_RECHECK_FRESH_SEC", raising=False)
     manager = SimpleNamespace(subscribed_codes={"005930"})
 
@@ -3431,7 +3459,13 @@ def test_scanner_ws_subscription_recheck_requires_repair_when_snapshot_stale(mon
     assert fields["ws_subscription_recheck_received_types"] == "0B,0D"
 
 
-def test_scanner_ws_persistent_repair_min_interval_allows_aggressive_source_refresh(monkeypatch):
+def test_scanner_ws_persistent_repair_min_interval_allows_aggressive_source_refresh(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        kiwoom_sniper_v2,
+        "_SCANNER_OPERATOR_RUNTIME_OVERRIDE_PATH",
+        tmp_path / "missing_operator_runtime_overrides.env",
+    )
+    _reset_scanner_hot_override_cache()
     monkeypatch.delenv("KORSTOCKSCAN_SCANNER_WS_PERSISTENT_REPAIR_MIN_INTERVAL_SEC", raising=False)
     assert kiwoom_sniper_v2._scanner_ws_persistent_repair_min_interval_sec() == 20.0
 
@@ -3442,7 +3476,13 @@ def test_scanner_ws_persistent_repair_min_interval_allows_aggressive_source_refr
     assert kiwoom_sniper_v2._scanner_ws_persistent_repair_min_interval_sec() == 5.0
 
 
-def test_scanner_ws_repair_cycle_defaults_are_aggressive_but_bounded(monkeypatch):
+def test_scanner_ws_repair_cycle_defaults_are_aggressive_but_bounded(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        kiwoom_sniper_v2,
+        "_SCANNER_OPERATOR_RUNTIME_OVERRIDE_PATH",
+        tmp_path / "missing_operator_runtime_overrides.env",
+    )
+    _reset_scanner_hot_override_cache()
     monkeypatch.delenv("KORSTOCKSCAN_SCANNER_WS_REPAIR_CYCLE_WAIT_SEC", raising=False)
     monkeypatch.delenv("KORSTOCKSCAN_SCANNER_WS_REPAIR_CYCLE_PERSISTENT_SEC", raising=False)
 
@@ -3455,7 +3495,13 @@ def test_scanner_ws_repair_cycle_defaults_are_aggressive_but_bounded(monkeypatch
     assert kiwoom_sniper_v2._scanner_ws_repair_cycle_persistent_sec() == 10.0
 
 
-def test_scanner_heavy_eval_recheck_fresh_sec_defaults_to_pre_ai_freshness(monkeypatch):
+def test_scanner_heavy_eval_recheck_fresh_sec_defaults_to_pre_ai_freshness(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        kiwoom_sniper_v2,
+        "_SCANNER_OPERATOR_RUNTIME_OVERRIDE_PATH",
+        tmp_path / "missing_operator_runtime_overrides.env",
+    )
+    _reset_scanner_hot_override_cache()
     monkeypatch.delenv("KORSTOCKSCAN_SCANNER_HEAVY_EVAL_RECHECK_FRESH_SEC", raising=False)
     assert kiwoom_sniper_v2._scanner_heavy_eval_recheck_fresh_sec() == 3.0
 

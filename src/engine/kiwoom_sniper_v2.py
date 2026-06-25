@@ -235,6 +235,12 @@ _SCANNER_HOT_RUNTIME_OVERRIDE_KEYS = frozenset(
         "KORSTOCKSCAN_SCANNER_REST_QUOTE_FALLBACK_POSITIVE_RESERVE_CALLS",
         "KORSTOCKSCAN_SCANNER_REST_QUOTE_FALLBACK_MAX_PER_LOOP",
         "KORSTOCKSCAN_SCANNER_REST_QUOTE_FALLBACK_DYNAMIC_MAX_EXTRA_CALLS",
+        "KORSTOCKSCAN_SCANNER_REST_QUOTE_FALLBACK_DEFER_SEC",
+        "KORSTOCKSCAN_SCANNER_WS_REPAIR_CYCLE_WAIT_SEC",
+        "KORSTOCKSCAN_SCANNER_WS_REPAIR_CYCLE_PERSISTENT_SEC",
+        "KORSTOCKSCAN_SCANNER_WS_PERSISTENT_REPAIR_MIN_INTERVAL_SEC",
+        "KORSTOCKSCAN_SCANNER_WS_SUBSCRIPTION_RECHECK_FRESH_SEC",
+        "KORSTOCKSCAN_SCANNER_HEAVY_EVAL_RECHECK_FRESH_SEC",
     }
 )
 _SCANNER_OPERATOR_RUNTIME_OVERRIDE_PATH = (
@@ -2846,7 +2852,7 @@ def _scanner_rest_quote_fallback_dynamic_max_extra_calls():
 
 
 def _scanner_rest_quote_fallback_defer_sec():
-    raw = os.getenv("KORSTOCKSCAN_SCANNER_REST_QUOTE_FALLBACK_DEFER_SEC", "")
+    raw = _scanner_hot_or_env_value("KORSTOCKSCAN_SCANNER_REST_QUOTE_FALLBACK_DEFER_SEC")
     try:
         value = float(str(raw).strip()) if str(raw).strip() else _SCANNER_REST_QUOTE_FALLBACK_DEFER_SEC
     except Exception:
@@ -2855,7 +2861,7 @@ def _scanner_rest_quote_fallback_defer_sec():
 
 
 def _scanner_ws_repair_cycle_wait_sec():
-    raw = os.getenv("KORSTOCKSCAN_SCANNER_WS_REPAIR_CYCLE_WAIT_SEC", "")
+    raw = _scanner_hot_or_env_value("KORSTOCKSCAN_SCANNER_WS_REPAIR_CYCLE_WAIT_SEC")
     try:
         value = float(str(raw).strip()) if str(raw).strip() else 10.0
     except Exception:
@@ -2864,7 +2870,7 @@ def _scanner_ws_repair_cycle_wait_sec():
 
 
 def _scanner_ws_repair_cycle_persistent_sec():
-    raw = os.getenv("KORSTOCKSCAN_SCANNER_WS_REPAIR_CYCLE_PERSISTENT_SEC", "")
+    raw = _scanner_hot_or_env_value("KORSTOCKSCAN_SCANNER_WS_REPAIR_CYCLE_PERSISTENT_SEC")
     try:
         value = float(str(raw).strip()) if str(raw).strip() else 30.0
     except Exception:
@@ -2873,7 +2879,7 @@ def _scanner_ws_repair_cycle_persistent_sec():
 
 
 def _scanner_ws_persistent_repair_min_interval_sec():
-    raw = os.getenv("KORSTOCKSCAN_SCANNER_WS_PERSISTENT_REPAIR_MIN_INTERVAL_SEC", "")
+    raw = _scanner_hot_or_env_value("KORSTOCKSCAN_SCANNER_WS_PERSISTENT_REPAIR_MIN_INTERVAL_SEC")
     try:
         value = float(str(raw).strip()) if str(raw).strip() else 20.0
     except Exception:
@@ -2882,7 +2888,7 @@ def _scanner_ws_persistent_repair_min_interval_sec():
 
 
 def _scanner_ws_subscription_recheck_fresh_sec():
-    raw = os.getenv("KORSTOCKSCAN_SCANNER_WS_SUBSCRIPTION_RECHECK_FRESH_SEC", "")
+    raw = _scanner_hot_or_env_value("KORSTOCKSCAN_SCANNER_WS_SUBSCRIPTION_RECHECK_FRESH_SEC")
     try:
         value = float(str(raw).strip()) if str(raw).strip() else 30.0
     except Exception:
@@ -2891,7 +2897,7 @@ def _scanner_ws_subscription_recheck_fresh_sec():
 
 
 def _scanner_heavy_eval_recheck_fresh_sec():
-    raw = os.getenv("KORSTOCKSCAN_SCANNER_HEAVY_EVAL_RECHECK_FRESH_SEC", "")
+    raw = _scanner_hot_or_env_value("KORSTOCKSCAN_SCANNER_HEAVY_EVAL_RECHECK_FRESH_SEC")
     try:
         value = float(str(raw).strip()) if str(raw).strip() else 3.0
     except Exception:
