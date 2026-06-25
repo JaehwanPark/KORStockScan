@@ -8626,6 +8626,63 @@ def test_scalp_preset_tp_hard_stop_logs_exit_rule(monkeypatch):
     assert sent_logs[-1]["order_type"] == "16"
 
 
+def test_scalp_preset_tp_hard_stop_does_not_avg_down_intercept(monkeypatch):
+    state_handlers.TRADING_RULES = replace(CONFIG, SCALE_IN_REQUIRE_HISTORY_TABLE=False)
+    state_handlers.COOLDOWNS = {}
+    state_handlers.ALERTED_STOCKS = set()
+    state_handlers.HIGHEST_PRICES = {"123456": 100}
+    state_handlers.LAST_AI_CALL_TIMES = {}
+    state_handlers.LAST_LOG_TIMES = {}
+    state_handlers.DB = _DummyDB()
+
+    pipeline_logs = []
+
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_holding_pipeline",
+        lambda stock, code, stage, **fields: pipeline_logs.append((stage, fields)),
+    )
+    monkeypatch.setattr(state_handlers, "_confirm_cancel_or_reload_remaining", lambda *args, **kwargs: 10)
+    monkeypatch.setattr(
+        state_handlers,
+        "_send_exit_best_ioc",
+        lambda *args, **kwargs: {"return_code": "0", "ord_no": "SIOC1"},
+    )
+
+    def fail_scale_in_gate(*args, **kwargs):
+        raise AssertionError("hard stop must not open late_loss AVG_DOWN gate")
+
+    monkeypatch.setattr(state_handlers, "can_consider_scale_in", fail_scale_in_gate)
+
+    stock = {
+        "id": 13,
+        "code": "123456",
+        "name": "TEST",
+        "status": "HOLDING",
+        "strategy": "SCALPING",
+        "buy_price": 100,
+        "buy_qty": 10,
+        "rt_ai_prob": 0.50,
+        "exit_mode": "SCALP_PRESET_TP",
+        "preset_tp_ord_no": "TP1",
+        "hard_stop_pct": -0.7,
+        "protect_profit_pct": None,
+    }
+
+    state_handlers.handle_holding_state(
+        stock=stock,
+        code="123456",
+        ws_data={"curr": 99.0, "orderbook": {"bids": [{"price": 99, "volume": 1000}]}},
+        admin_id=1,
+        market_regime="BULL",
+        radar=None,
+        ai_engine=None,
+    )
+
+    assert stock["status"] == "SELL_ORDERED"
+    assert not [stage for stage, _ in pipeline_logs if stage == "late_loss_avg_down_retry_candidate"]
+
+
 def test_scalp_preset_tp_discretionary_sell_open_time_block_logs_without_submit(monkeypatch):
     state_handlers.TRADING_RULES = replace(CONFIG, SCALE_IN_REQUIRE_HISTORY_TABLE=False)
     state_handlers.DB = _DummyDB()
@@ -8902,6 +8959,98 @@ def test_scalp_preset_tp_soft_stop_override_confirms_after_grace(monkeypatch):
     assert exit_logs[-1]["preset_tp_soft_stop_grace_sec"] == 45
     assert exit_logs[-1]["preset_tp_soft_stop_deferred"] is False
     assert exit_logs[-1]["formal_preset_tp_exit_tuning_selected"] is False
+
+
+def test_scalp_preset_tp_soft_stop_avg_down_intercepts_before_sell(monkeypatch):
+    state_handlers.TRADING_RULES = replace(
+        CONFIG,
+        SCALE_IN_REQUIRE_HISTORY_TABLE=False,
+        SCALP_PRESET_TP_SOFT_STOP_OVERRIDE_ENABLED=True,
+        SCALP_PRESET_TP_SOFT_STOP_TRIGGER_PCT=-0.7,
+        SCALP_PRESET_TP_SOFT_STOP_GRACE_SEC=45,
+        SCALP_PRESET_TP_SOFT_STOP_EMERGENCY_PCT=-1.2,
+        SCALP_PRESET_TP_SOFT_STOP_MAX_WORSEN_PCT=0.30,
+        SCALP_PRESET_TP_SOFT_STOP_RECOVERY_BUFFER_PCT=0.05,
+    )
+    state_handlers.COOLDOWNS = {}
+    state_handlers.ALERTED_STOCKS = set()
+    state_handlers.HIGHEST_PRICES = {"123456": 10000}
+    state_handlers.LAST_AI_CALL_TIMES = {}
+    state_handlers.LAST_LOG_TIMES = {}
+    state_handlers.DB = _DummyDB()
+
+    pipeline_logs = []
+    sell_calls = []
+    process_calls = []
+
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_holding_pipeline",
+        lambda stock, code, stage, **fields: pipeline_logs.append((stage, fields)),
+    )
+    monkeypatch.setattr(state_handlers, "_confirm_cancel_or_reload_remaining", lambda *args, **kwargs: 10)
+    monkeypatch.setattr(
+        state_handlers,
+        "_send_exit_best_ioc",
+        lambda *args, **kwargs: sell_calls.append(args) or {"return_code": "0", "ord_no": "SIOC1"},
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_evaluate_late_loss_avg_down_retry",
+        lambda *args, **kwargs: {
+            "should_retry": True,
+            "reason": "late_loss_avg_down_retry",
+            "used_count": 0,
+            "giveback_pct": 1.2,
+            "action": {"should_add": True, "add_type": "AVG_DOWN", "reason": "late_loss_avg_down_retry"},
+        },
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "can_consider_scale_in",
+        lambda *args, **kwargs: {"allowed": True, "reason": "ok"},
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_process_scale_in_action",
+        lambda **kwargs: process_calls.append(kwargs) or {"return_code": "0", "ord_no": "ADD1"},
+    )
+
+    stock = {
+        "id": 13,
+        "code": "123456",
+        "name": "TEST",
+        "status": "HOLDING",
+        "strategy": "SCALPING",
+        "buy_price": 10000,
+        "buy_qty": 10,
+        "rt_ai_prob": 0.50,
+        "exit_mode": "SCALP_PRESET_TP",
+        "preset_tp_ord_no": "TP1",
+        "hard_stop_pct": -0.7,
+        "protect_profit_pct": None,
+        "preset_tp_soft_stop_started_at": state_handlers.time.time() - 50,
+        "preset_tp_soft_stop_anchor_profit": -0.85,
+    }
+
+    state_handlers.handle_holding_state(
+        stock=stock,
+        code="123456",
+        ws_data={"curr": 9930, "orderbook": {"bids": [{"price": 9930, "volume": 1000}]}},
+        admin_id=1,
+        market_regime="BULL",
+        radar=None,
+        ai_engine=None,
+    )
+
+    assert stock["status"] == "HOLDING"
+    assert not sell_calls
+    assert process_calls
+    submitted = [fields for stage, fields in pipeline_logs if stage == "late_loss_avg_down_retry_submitted"]
+    assert submitted
+    assert submitted[-1]["sell_intercept_context"] == "preset_tp_after_cancel_remaining"
+    assert submitted[-1]["exit_rule"] == "scalp_preset_soft_stop_confirmed"
+    assert stock["late_loss_avg_down_retry_used"] is True
 
 
 def test_scalp_preset_tp_soft_stop_override_recovers_above_trigger_and_resets(monkeypatch):
@@ -12339,10 +12488,21 @@ def test_late_loss_avg_down_retry_includes_hanall_and_gwangju_like_cases(monkeyp
         current_ai_score=67,
         held_sec=596,
     )
+    protect_trailing = state_handlers._evaluate_late_loss_avg_down_retry(
+        {"strategy": "SCALPING"},
+        strategy="SCALPING",
+        sell_reason_type="PROFIT_PROTECT",
+        exit_rule="protect_trailing_stop",
+        profit_rate=-0.20,
+        peak_profit=1.33,
+        current_ai_score=67,
+        held_sec=596,
+    )
 
     assert hanall["should_retry"] is True
     assert hanall["eligibility_path"] == "deep_loss_retry"
     assert gwangju == {"should_retry": False, "reason": "hard_safety_exit"}
+    assert protect_trailing == {"should_retry": False, "reason": "hard_safety_exit"}
 
 
 def test_late_loss_avg_down_price_resolver_bypasses_micro_vwap_only_for_late_retry(monkeypatch):

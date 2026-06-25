@@ -111,3 +111,18 @@
 ```bash
 PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTHONPATH=. .venv/bin/python -m src.engine.sync_github_project_calendar
 ```
+
+<!-- AUTO_SERVER_COMPARISON_START -->
+### 본서버 vs songstockscan 자동 비교 (`2026-06-25 15:46:56`)
+
+- 기준: `profit-derived metrics are excluded by default because fallback-normalized values such as NULL -> 0 can distort comparison`
+- 상세 리포트: `data/report/server_comparison/server_comparison_2026-06-25.md`
+- `Trade Review`: status=`remote_error`, differing_safe_metrics=`0`
+  - safe 기준 차이 없음
+- `Performance Tuning`: status=`remote_error`, differing_safe_metrics=`0`
+  - safe 기준 차이 없음
+- `Post Sell Feedback`: status=`remote_error`, differing_safe_metrics=`0`
+  - safe 기준 차이 없음
+- `Entry Pipeline Flow`: status=`remote_error`, differing_safe_metrics=`0`
+  - safe 기준 차이 없음
+<!-- AUTO_SERVER_COMPARISON_END -->

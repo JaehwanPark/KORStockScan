@@ -1841,6 +1841,9 @@ def _evaluate_late_loss_avg_down_retry(
     hard_safety_tokens = (
         "hard_stop",
         "protect_hard",
+        "protect_trailing",
+        "protect_profit",
+        "preset_protect",
         "emergency",
         "daily_limit",
         "limit_up",
@@ -1928,6 +1931,156 @@ def _evaluate_late_loss_avg_down_retry(
             "current_ai_score": current_ai_score,
         },
     }
+
+
+def _attempt_late_loss_avg_down_retry_before_sell(
+    *,
+    stock: dict | None,
+    code: str,
+    ws_data: dict | None,
+    strategy: str | None,
+    market_regime,
+    admin_id,
+    sell_reason_type: str | None,
+    exit_rule: str | None,
+    profit_rate: float,
+    peak_profit: float,
+    current_ai_score: float,
+    held_sec: int,
+    now_ts: float,
+    context_fields: dict | None = None,
+) -> dict:
+    """Try the one-shot AVG_DOWN recovery path before submitting a final loss sell."""
+    late_loss_avg_down_retry = _evaluate_late_loss_avg_down_retry(
+        stock,
+        strategy=strategy,
+        sell_reason_type=sell_reason_type,
+        exit_rule=exit_rule or (stock or {}).get("last_exit_rule"),
+        profit_rate=profit_rate,
+        peak_profit=peak_profit,
+        current_ai_score=current_ai_score,
+        held_sec=held_sec,
+    )
+    if not late_loss_avg_down_retry.get("should_retry"):
+        return {
+            "attempted": False,
+            "submitted": False,
+            "reason": late_loss_avg_down_retry.get("reason", "not_eligible"),
+        }
+
+    retry_gate = can_consider_scale_in(
+        stock=stock,
+        code=code,
+        ws_data=ws_data or {},
+        strategy=strategy,
+        market_regime=market_regime,
+        skip_add_judgment_lock=True,
+    )
+    retry_common_fields = {
+        "threshold_family": "scalp_late_loss_avg_down_retry",
+        "decision_source": "LATE_LOSS_AVG_DOWN_RETRY",
+        "decision_authority": "real_scalping_final_loss_sell_intercept",
+        "metric_role": "bounded_tunable",
+        "window_policy": "same_day_intraday_runtime",
+        "sample_floor": "not_applicable_runtime_guard",
+        "primary_decision_metric": "mfe_giveback_pct",
+        "source_quality_gate": "real_holding_price_peak_profit_and_scale_in_guards_present",
+        "runtime_effect": True,
+        "allowed_runtime_apply": True,
+        "forbidden_uses": (
+            "entry_threshold_relaxation|provider_route_change|broker_guard_bypass|"
+            "quantity_cap_release|hard_safety_bypass|second_avg_down_retry"
+        ),
+        "sell_reason_type": sell_reason_type,
+        "exit_rule": exit_rule or (stock or {}).get("last_exit_rule") or "-",
+        "profit_rate": f"{profit_rate:+.2f}",
+        "peak_profit": f"{peak_profit:+.2f}",
+        "giveback_pct": f"{_safe_float(late_loss_avg_down_retry.get('giveback_pct'), 0.0):.2f}",
+        "current_ai_score": f"{current_ai_score:.0f}",
+        "held_sec": held_sec,
+        "gate_allowed": bool(retry_gate.get("allowed")),
+        "gate_reason": retry_gate.get("reason", "-"),
+        "add_type": "AVG_DOWN",
+        "add_reason": "late_loss_avg_down_retry",
+        "actual_order_submitted": False,
+        "broker_order_forbidden": False,
+        **(context_fields or {}),
+    }
+    if retry_gate.get("allowed"):
+        _log_holding_pipeline(
+            stock,
+            code,
+            "late_loss_avg_down_retry_candidate",
+            **retry_common_fields,
+        )
+        retry_count = _safe_int(late_loss_avg_down_retry.get("used_count"), 0) + 1
+        _mutate_stock_state(
+            stock,
+            set_fields={
+                "late_loss_avg_down_retry_used": True,
+                "late_loss_avg_down_retry_count": retry_count,
+                "late_loss_avg_down_retry_at": now_ts,
+                "late_loss_avg_down_retry_exit_rule": exit_rule or (stock or {}).get("last_exit_rule") or "-",
+                "late_loss_avg_down_retry_original_profit_rate": profit_rate,
+                "late_loss_avg_down_retry_peak_profit": peak_profit,
+            },
+        )
+        add_result = _process_scale_in_action(
+            stock=stock,
+            code=code,
+            ws_data=ws_data or {},
+            action=late_loss_avg_down_retry.get("action") or {},
+            admin_id=admin_id,
+        )
+        if add_result:
+            _log_holding_pipeline(
+                stock,
+                code,
+                "late_loss_avg_down_retry_submitted",
+                **{
+                    **retry_common_fields,
+                    "actual_order_submitted": True,
+                    "ord_no": (
+                        str(add_result.get("ord_no") or add_result.get("odno") or "-")
+                        if isinstance(add_result, dict)
+                        else "-"
+                    ),
+                    "retry_count": retry_count,
+                },
+            )
+            log_info(
+                f"[LATE_LOSS_AVG_DOWN] {stock.get('name') if isinstance(stock, dict) else code}({code}) "
+                "AVG_DOWN submitted before final loss sell; sell submit skipped for re-evaluation."
+            )
+            return {"attempted": True, "submitted": True, "add_result": add_result}
+        _log_holding_pipeline(
+            stock,
+            code,
+            "late_loss_avg_down_retry_blocked",
+            **{
+                **retry_common_fields,
+                "retry_count": retry_count,
+                "block_reason": "scale_in_submit_failed_or_guard_blocked",
+                "broker_order_forbidden": True,
+            },
+        )
+        return {
+            "attempted": True,
+            "submitted": False,
+            "reason": "scale_in_submit_failed_or_guard_blocked",
+        }
+
+    _log_holding_pipeline(
+        stock,
+        code,
+        "late_loss_avg_down_retry_blocked",
+        **{
+            **retry_common_fields,
+            "block_reason": retry_gate.get("reason", "-"),
+            "broker_order_forbidden": True,
+        },
+    )
+    return {"attempted": True, "submitted": False, "reason": retry_gate.get("reason", "-")}
 
 
 def _boolish_true(value) -> bool:
@@ -10367,6 +10520,9 @@ def _dispatch_scalp_preset_exit(
     reason,
     exit_rule,
     extra_fields: dict | None = None,
+    ws_data: dict | None = None,
+    admin_id=None,
+    market_regime=None,
 ):
     target_id = stock.get('id')
     expected_qty = _safe_int(stock.get('buy_qty'), 0)
@@ -10449,6 +10605,34 @@ def _dispatch_scalp_preset_exit(
         )
         return
 
+    rem_qty = _confirm_cancel_or_reload_remaining(code, orig_ord_no, KIWOOM_TOKEN, expected_qty)
+    ws_context = dict(ws_data or {})
+    ws_context.setdefault("curr", curr_p)
+    if rem_qty > 0:
+        retry_result = _attempt_late_loss_avg_down_retry_before_sell(
+            stock=stock,
+            code=code,
+            ws_data=ws_context,
+            strategy=strategy,
+            market_regime=market_regime,
+            admin_id=admin_id,
+            sell_reason_type=sell_reason_type,
+            exit_rule=exit_rule,
+            profit_rate=profit_rate,
+            peak_profit=peak_profit,
+            current_ai_score=preset_ai_score,
+            held_sec=preset_held_sec,
+            now_ts=now_ts,
+            context_fields={
+                "sell_intercept_context": "preset_tp_after_cancel_remaining",
+                "preset_orig_ord_no": orig_ord_no or "-",
+                "preset_remaining_qty": rem_qty,
+                "preset_expected_qty": expected_qty,
+            },
+        )
+        if retry_result.get("submitted"):
+            return
+
     try:
         if target_id:
             with DB.get_session() as session:
@@ -10456,7 +10640,6 @@ def _dispatch_scalp_preset_exit(
     except Exception as e:
         log_error(f"🚨 [DB 에러] {stock['name']} SELL_ORDERED 장부 잠금 실패: {e}")
 
-    rem_qty = _confirm_cancel_or_reload_remaining(code, orig_ord_no, KIWOOM_TOKEN, expected_qty)
     pending_sell_msg = ""
     set_fields = {
         'last_exit_reason': reason,
@@ -23422,6 +23605,9 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                 sell_reason_type="LIMIT_UP",
                 reason="🚀 당일 상한가 도달 즉시매도",
                 exit_rule="daily_limit_up_immediate_exit",
+                ws_data=ws_data,
+                admin_id=admin_id,
+                market_regime=market_regime,
                 extra_fields=daily_limit_up_exit,
             )
             return
@@ -23567,6 +23753,9 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                         else f"🛑 SCALP preset TP soft stop confirmed ({preset_soft_stop_fields['preset_tp_soft_stop_trigger_pct']}%)"
                     ),
                     exit_rule=exit_rule,
+                    ws_data=ws_data,
+                    admin_id=admin_id,
+                    market_regime=market_regime,
                     extra_fields={
                         **preset_soft_stop_fields,
                         "preset_tp_soft_stop_triggered": True,
@@ -23622,6 +23811,9 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                     sell_reason_type="LOSS",
                     reason=f"🛑 SCALP 출구엔진 손절선 도달 ({preset_hard_stop_pct:+.2f}%)",
                     exit_rule="scalp_preset_hard_stop_pct",
+                    ws_data=ws_data,
+                    admin_id=admin_id,
+                    market_regime=market_regime,
                 )
                 return
 
@@ -23639,6 +23831,9 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                 sell_reason_type="PROFIT",
                 reason="🎯 SCALP sim preset TP touch",
                 exit_rule="scalp_sim_preset_tp_touch",
+                ws_data=ws_data,
+                admin_id=admin_id,
+                market_regime=market_regime,
             )
             return
 
@@ -23709,6 +23904,9 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                             sell_reason_type="MOMENTUM_DECAY",
                             reason="🛑 SCALP 출구엔진 AI 모멘텀 둔화 즉시청산",
                             exit_rule="scalp_preset_ai_review_exit",
+                            ws_data=ws_data,
+                            admin_id=admin_id,
+                            market_regime=market_regime,
                         )
                         return
                     else:
@@ -23750,6 +23948,9 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                 sell_reason_type="TRAILING",
                 reason=f"🛡️ SCALP 출구엔진 보호선 이탈 ({protect_pct:+.2f}%)",
                 exit_rule="scalp_preset_protect_profit",
+                ws_data=ws_data,
+                admin_id=admin_id,
+                market_regime=market_regime,
             )
             return
 
@@ -25841,123 +26042,24 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                 stock["_sell_order_retry_backoff_logged_key"] = log_key
             return
 
-        late_loss_avg_down_retry = _evaluate_late_loss_avg_down_retry(
-            stock,
+        late_loss_retry_result = _attempt_late_loss_avg_down_retry_before_sell(
+            stock=stock,
+            code=code,
+            ws_data=ws_data,
             strategy=strategy,
+            market_regime=market_regime,
+            admin_id=admin_id,
             sell_reason_type=sell_reason_type,
             exit_rule=exit_rule or stock.get("last_exit_rule"),
             profit_rate=profit_rate,
             peak_profit=peak_profit,
             current_ai_score=current_ai_score,
             held_sec=held_sec,
+            now_ts=now_ts,
+            context_fields={"sell_intercept_context": "standard_exit_before_submit"},
         )
-        if late_loss_avg_down_retry.get("should_retry"):
-            retry_gate = can_consider_scale_in(
-                stock=stock,
-                code=code,
-                ws_data=ws_data,
-                strategy=strategy,
-                market_regime=market_regime,
-                skip_add_judgment_lock=True,
-            )
-            retry_common_fields = {
-                "threshold_family": "scalp_late_loss_avg_down_retry",
-                "decision_source": "LATE_LOSS_AVG_DOWN_RETRY",
-                "decision_authority": "real_scalping_final_loss_sell_intercept",
-                "metric_role": "bounded_tunable",
-                "window_policy": "same_day_intraday_runtime",
-                "sample_floor": "not_applicable_runtime_guard",
-                "primary_decision_metric": "mfe_giveback_pct",
-                "source_quality_gate": "real_holding_price_peak_profit_and_scale_in_guards_present",
-                "runtime_effect": True,
-                "allowed_runtime_apply": True,
-                "forbidden_uses": (
-                    "entry_threshold_relaxation|provider_route_change|broker_guard_bypass|"
-                    "quantity_cap_release|hard_safety_bypass|second_avg_down_retry"
-                ),
-                "sell_reason_type": sell_reason_type,
-                "exit_rule": exit_rule or stock.get("last_exit_rule") or "-",
-                "profit_rate": f"{profit_rate:+.2f}",
-                "peak_profit": f"{peak_profit:+.2f}",
-                "giveback_pct": f"{_safe_float(late_loss_avg_down_retry.get('giveback_pct'), 0.0):.2f}",
-                "current_ai_score": f"{current_ai_score:.0f}",
-                "held_sec": held_sec,
-                "gate_allowed": bool(retry_gate.get("allowed")),
-                "gate_reason": retry_gate.get("reason", "-"),
-                "add_type": "AVG_DOWN",
-                "add_reason": "late_loss_avg_down_retry",
-                "actual_order_submitted": False,
-                "broker_order_forbidden": False,
-            }
-            if retry_gate.get("allowed"):
-                _log_holding_pipeline(
-                    stock,
-                    code,
-                    "late_loss_avg_down_retry_candidate",
-                    **retry_common_fields,
-                )
-                retry_count = _safe_int(late_loss_avg_down_retry.get("used_count"), 0) + 1
-                _mutate_stock_state(
-                    stock,
-                    set_fields={
-                        "late_loss_avg_down_retry_used": True,
-                        "late_loss_avg_down_retry_count": retry_count,
-                        "late_loss_avg_down_retry_at": now_ts,
-                        "late_loss_avg_down_retry_exit_rule": exit_rule or stock.get("last_exit_rule") or "-",
-                        "late_loss_avg_down_retry_original_profit_rate": profit_rate,
-                        "late_loss_avg_down_retry_peak_profit": peak_profit,
-                    },
-                )
-                add_result = _process_scale_in_action(
-                    stock=stock,
-                    code=code,
-                    ws_data=ws_data,
-                    action=late_loss_avg_down_retry.get("action") or {},
-                    admin_id=admin_id,
-                )
-                if add_result:
-                    _log_holding_pipeline(
-                        stock,
-                        code,
-                        "late_loss_avg_down_retry_submitted",
-                        **{
-                            **retry_common_fields,
-                            "actual_order_submitted": True,
-                            "ord_no": (
-                                str(add_result.get("ord_no") or add_result.get("odno") or "-")
-                                if isinstance(add_result, dict)
-                                else "-"
-                            ),
-                            "retry_count": retry_count,
-                        },
-                    )
-                    log_info(
-                        f"[LATE_LOSS_AVG_DOWN] {stock.get('name')}({code}) "
-                        "AVG_DOWN submitted before final loss sell; sell submit skipped for re-evaluation."
-                    )
-                    return
-                _log_holding_pipeline(
-                    stock,
-                    code,
-                    "late_loss_avg_down_retry_blocked",
-                    **{
-                        **retry_common_fields,
-                        "retry_count": retry_count,
-                        "block_reason": "scale_in_submit_failed_or_guard_blocked",
-                        "broker_order_forbidden": True,
-                    },
-                )
-            else:
-                _log_holding_pipeline(
-                    stock,
-                    code,
-                    "late_loss_avg_down_retry_blocked",
-                    **{
-                        **retry_common_fields,
-                        "block_reason": retry_gate.get("reason", "-"),
-                        "broker_order_forbidden": True,
-                    },
-                )
+        if late_loss_retry_result.get("submitted"):
+            return
 
         try:
             with DB.get_session() as session:
