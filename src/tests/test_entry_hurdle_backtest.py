@@ -133,6 +133,22 @@ def test_entry_hurdle_backtest_classifies_overblocking_from_existing_artifacts(t
                 ),
                 json.dumps(
                     {
+                        "stage": "first_ai_wait",
+                        "stock_code": "456789",
+                        "record_id": "4",
+                        "emitted_date": "2026-06-05",
+                        "emitted_at": "2026-06-05T10:03:00+09:00",
+                        "fields": {
+                            "ai_score": "62.0",
+                            "source_signature": "OPEN_TOP,REALTIME_RANK_START,VALUE_TOP,VOLUME_SURGE_POSITIVE",
+                            "curr_vs_micro_vwap_bp": "1.2",
+                            "quote_stale": "False",
+                            "tick_context_stale": "False",
+                        },
+                    }
+                ),
+                json.dumps(
+                    {
                         "stage": "blocked_ai_score",
                         "stock_code": "345678",
                         "record_id": "3",
@@ -184,10 +200,10 @@ def test_entry_hurdle_backtest_classifies_overblocking_from_existing_artifacts(t
     assert policy_backtest["runtime_effect"] is False
     assert "entry price reprice" in policy_backtest["forbidden_uses"]
     assert policy_backtest["liquidity_signature_micro_pressure_relief"]["eligible_attempts"] == 1
-    assert policy_backtest["ai_score_60_74_strong_bundle_recheck"]["eligible_recheck_attempts"] == 1
+    assert policy_backtest["ai_score_60_74_strong_bundle_recheck"]["eligible_recheck_attempts"] == 2
     assert policy_backtest["ai_score_60_74_strong_bundle_recheck"]["excluded_reasons"] == {
         "stale_quote_or_tick_context": 1
     }
-    assert policy_backtest["total"]["eligible_attempts"] == 2
+    assert policy_backtest["total"]["eligible_attempts"] == 3
     assert policy_backtest["total"]["conservative_estimated_order_submit_success"] == 0
     assert not report["missing_artifacts"]

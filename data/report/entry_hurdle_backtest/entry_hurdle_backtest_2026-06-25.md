@@ -7,12 +7,12 @@
 - missing_artifacts: `0`
 
 ## Implemented Policy Backtest
-- eligible attempts: `389`
-- unique symbols upper bound: `166`
-- conservative estimated submit success: `33`
-- upper bound submit-path reentry: `389`
+- eligible attempts: `402`
+- unique symbols upper bound: `168`
+- conservative estimated submit success: `34`
+- upper bound submit-path reentry: `402`
 - liquidity relief eligible/success: `4`/`1`
-- AI 60-74 recheck eligible/success: `385`/`32`
+- AI 60-74 recheck eligible/success: `398`/`33`
 
 ## Recommended Next Actions
 - `trace_latency_refresh_recovered_downstream_blocker`: priority=1, decision=instrumentation_or_guard_overlap_candidate, reason=quote refresh recovered latency pass but did not always reach broker submit

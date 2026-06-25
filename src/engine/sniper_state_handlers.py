@@ -14014,7 +14014,12 @@ def _source_signature_tokens(source_signature: str | None) -> set[str]:
 
 def _source_signature_strong_bundle_pass(source_signature: str | None) -> bool:
     tokens = _source_signature_tokens(source_signature)
-    return {"PRICE_JUMP_START", "VOLUME_SURGE_POSITIVE"}.issubset(tokens)
+    if {"PRICE_JUMP_START", "VOLUME_SURGE_POSITIVE"}.issubset(tokens):
+        return True
+    return (
+        {"VALUE_TOP", "VOLUME_SURGE_POSITIVE"}.issubset(tokens)
+        and bool({"REALTIME_RANK_START", "OPEN_TOP"} & tokens)
+    )
 
 
 def _resolve_early_accel_strong_bundle_recheck(

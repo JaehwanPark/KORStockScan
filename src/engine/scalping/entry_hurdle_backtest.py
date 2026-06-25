@@ -200,7 +200,13 @@ def _source_signature_tokens(source_signature: Any) -> set[str]:
 
 
 def _signature_strong_bundle(source_signature: Any) -> bool:
-    return {"PRICE_JUMP_START", "VOLUME_SURGE_POSITIVE"}.issubset(_source_signature_tokens(source_signature))
+    tokens = _source_signature_tokens(source_signature)
+    if {"PRICE_JUMP_START", "VOLUME_SURGE_POSITIVE"}.issubset(tokens):
+        return True
+    return (
+        {"VALUE_TOP", "VOLUME_SURGE_POSITIVE"}.issubset(tokens)
+        and bool({"REALTIME_RANK_START", "OPEN_TOP"} & tokens)
+    )
 
 
 def _signature_micro_pressure_path(fields: dict[str, Any]) -> bool:
