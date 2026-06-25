@@ -226,11 +226,15 @@ _SCANNER_REST_QUOTE_FALLBACK_FAILURE_COOLDOWN_SEC = 30.0
 _SCANNER_REST_QUOTE_FALLBACK_STATE = {"call_epochs": [], "cooldown_until": 0.0}
 _SCANNER_REST_QUOTE_FALLBACK_LOCK = threading.Lock()
 _SCANNER_REST_QUOTE_FALLBACK_DEFER_SEC = 5.0
+_SCANNER_REST_QUOTE_FALLBACK_DYNAMIC_PRESSURE_WINDOW_SEC = 30.0
+_SCANNER_REST_QUOTE_FALLBACK_DYNAMIC_BOOST_TTL_SEC = 45.0
+_SCANNER_REST_QUOTE_FALLBACK_DYNAMIC_MAX_EXTRA_CALLS = 2
 _SCANNER_HOT_RUNTIME_OVERRIDE_KEYS = frozenset(
     {
         "KORSTOCKSCAN_SCANNER_REST_QUOTE_FALLBACK_MAX_CALLS_PER_WINDOW",
         "KORSTOCKSCAN_SCANNER_REST_QUOTE_FALLBACK_POSITIVE_RESERVE_CALLS",
         "KORSTOCKSCAN_SCANNER_REST_QUOTE_FALLBACK_MAX_PER_LOOP",
+        "KORSTOCKSCAN_SCANNER_REST_QUOTE_FALLBACK_DYNAMIC_MAX_EXTRA_CALLS",
     }
 )
 _SCANNER_OPERATOR_RUNTIME_OVERRIDE_PATH = (
@@ -2731,12 +2735,74 @@ def _scanner_rest_quote_fallback_rate_limit(now_ts, *, priority=False):
         limit = _scanner_rest_quote_fallback_max_calls_per_window()
         if priority:
             limit += _scanner_rest_quote_fallback_positive_reserve_calls()
+        dynamic_extra = _scanner_rest_quote_dynamic_extra_calls_locked(state, now_ts)
+        limit += dynamic_extra
         if len(call_epochs) >= limit:
+            _scanner_rest_quote_note_dynamic_pressure_locked(state, now_ts)
+            boosted_extra = _scanner_rest_quote_dynamic_extra_calls_locked(
+                state,
+                now_ts,
+                force_recalculate=True,
+            )
+            boosted_limit = (
+                _scanner_rest_quote_fallback_max_calls_per_window()
+                + (_scanner_rest_quote_fallback_positive_reserve_calls() if priority else 0)
+                + boosted_extra
+            )
+            if boosted_limit > limit and len(call_epochs) < boosted_limit:
+                call_epochs.append(now_ts)
+                state["call_epochs"] = call_epochs
+                return True, "rest_quote_allowed_dynamic_boost"
             state["call_epochs"] = call_epochs
             return False, "rest_quote_rate_limited"
         call_epochs.append(now_ts)
         state["call_epochs"] = call_epochs
+        if dynamic_extra > 0:
+            return True, "rest_quote_allowed_dynamic_boost"
         return True, "rest_quote_allowed"
+
+
+def _scanner_rest_quote_note_dynamic_pressure_locked(state, now_ts):
+    window_start = now_ts - _SCANNER_REST_QUOTE_FALLBACK_DYNAMIC_PRESSURE_WINDOW_SEC
+    pressure_epochs = [
+        _safe_float(epoch, 0.0)
+        for epoch in (state.get("rate_limited_epochs") or [])
+        if _safe_float(epoch, 0.0) >= window_start
+    ]
+    pressure_epochs.append(float(now_ts))
+    state["rate_limited_epochs"] = pressure_epochs
+
+
+def _scanner_rest_quote_dynamic_extra_calls_locked(state, now_ts, *, force_recalculate=False):
+    max_extra = _scanner_rest_quote_fallback_dynamic_max_extra_calls()
+    if max_extra <= 0:
+        state["dynamic_extra_calls"] = 0
+        state["dynamic_boost_until"] = 0.0
+        return 0
+    boost_until = _safe_float(state.get("dynamic_boost_until"), 0.0)
+    current_extra = max(0, min(_safe_int(state.get("dynamic_extra_calls"), 0), max_extra))
+    if not force_recalculate and current_extra > 0 and float(now_ts) < boost_until:
+        return current_extra
+
+    window_start = float(now_ts) - _SCANNER_REST_QUOTE_FALLBACK_DYNAMIC_PRESSURE_WINDOW_SEC
+    pressure_epochs = [
+        _safe_float(epoch, 0.0)
+        for epoch in (state.get("rate_limited_epochs") or [])
+        if _safe_float(epoch, 0.0) >= window_start
+    ]
+    state["rate_limited_epochs"] = pressure_epochs
+    pressure_count = len(pressure_epochs)
+    if pressure_count >= 2:
+        extra = max_extra
+    elif pressure_count == 1:
+        extra = min(1, max_extra)
+    else:
+        extra = 0
+    state["dynamic_extra_calls"] = extra
+    state["dynamic_boost_until"] = (
+        float(now_ts) + _SCANNER_REST_QUOTE_FALLBACK_DYNAMIC_BOOST_TTL_SEC if extra > 0 else 0.0
+    )
+    return extra
 
 
 def _scanner_rest_quote_fallback_max_calls_per_window():
@@ -2764,6 +2830,19 @@ def _scanner_rest_quote_fallback_max_per_loop():
     except Exception:
         value = 6
     return max(0, min(value, 10))
+
+
+def _scanner_rest_quote_fallback_dynamic_max_extra_calls():
+    raw = _scanner_hot_or_env_value("KORSTOCKSCAN_SCANNER_REST_QUOTE_FALLBACK_DYNAMIC_MAX_EXTRA_CALLS")
+    try:
+        value = (
+            int(str(raw).strip())
+            if str(raw).strip()
+            else _SCANNER_REST_QUOTE_FALLBACK_DYNAMIC_MAX_EXTRA_CALLS
+        )
+    except Exception:
+        value = _SCANNER_REST_QUOTE_FALLBACK_DYNAMIC_MAX_EXTRA_CALLS
+    return max(0, min(value, 4))
 
 
 def _scanner_rest_quote_fallback_defer_sec():
@@ -3079,6 +3158,9 @@ def _reset_scanner_rest_quote_fallback_rate_limit_for_tests():
     with _SCANNER_REST_QUOTE_FALLBACK_LOCK:
         _SCANNER_REST_QUOTE_FALLBACK_STATE["call_epochs"] = []
         _SCANNER_REST_QUOTE_FALLBACK_STATE["cooldown_until"] = 0.0
+        _SCANNER_REST_QUOTE_FALLBACK_STATE["rate_limited_epochs"] = []
+        _SCANNER_REST_QUOTE_FALLBACK_STATE["dynamic_extra_calls"] = 0
+        _SCANNER_REST_QUOTE_FALLBACK_STATE["dynamic_boost_until"] = 0.0
 
 
 def _fetch_rest_quote_snapshot_for_ws_gap(code, now_ts):
@@ -3226,6 +3308,8 @@ def _recover_missing_ws_snapshot(
             now_ts,
             priority=True,
         )
+        recovery_fields["rest_quote_rate_limit_decision"] = rate_reason
+        recovery_fields["rest_quote_dynamic_budget_boosted"] = rate_reason == "rest_quote_allowed_dynamic_boost"
         if not allowed:
             recovery_fields.update(
                 _scanner_rest_quote_mark_deferred(

@@ -2728,7 +2728,17 @@ def test_recover_missing_ws_snapshot_rate_limits_rest_quote_burst(tmp_path, monk
     )
 
     for idx, code in enumerate(
-        ("005930", "000660", "035420", "051910", "068270", "247540", "373220"),
+        (
+            "005930",
+            "000660",
+            "035420",
+            "051910",
+            "068270",
+            "247540",
+            "373220",
+            "005380",
+            "012330",
+        ),
         start=1,
     ):
         stock = {
@@ -2745,9 +2755,14 @@ def test_recover_missing_ws_snapshot_rate_limits_rest_quote_burst(tmp_path, monk
             {},
             allow_early_rest_fallback=kiwoom_sniper_v2._scanner_rest_quote_fallback_allowed_for_ws_gap(stock),
         )
-        if idx <= 6:
+        if idx <= 8:
             assert ws_data["curr"] == 70000
             assert fields["ws_recovery_outcome"] == "rest_quote_applied"
+            assert fields["rest_quote_rate_limit_decision"] in {
+                "rest_quote_allowed",
+                "rest_quote_allowed_dynamic_boost",
+            }
+            assert fields["rest_quote_dynamic_budget_boosted"] == (idx >= 7)
         else:
             assert ws_data == {}
             assert fields["ws_recovery_outcome"] == "rest_quote_rate_limited"
@@ -2759,6 +2774,8 @@ def test_recover_missing_ws_snapshot_rate_limits_rest_quote_burst(tmp_path, monk
         ("051910", 1004.0),
         ("068270", 1005.0),
         ("247540", 1006.0),
+        ("373220", 1007.0),
+        ("005380", 1008.0),
     ]
     kiwoom_sniper_v2._reset_scanner_rest_quote_fallback_rate_limit_for_tests()
 
@@ -2773,6 +2790,7 @@ def test_scanner_rest_quote_rate_limit_uses_bounded_operator_override(tmp_path, 
     _reset_scanner_hot_override_cache()
     monkeypatch.setenv("KORSTOCKSCAN_SCANNER_REST_QUOTE_FALLBACK_MAX_CALLS_PER_WINDOW", "4")
     monkeypatch.setenv("KORSTOCKSCAN_SCANNER_REST_QUOTE_FALLBACK_POSITIVE_RESERVE_CALLS", "2")
+    monkeypatch.setenv("KORSTOCKSCAN_SCANNER_REST_QUOTE_FALLBACK_DYNAMIC_MAX_EXTRA_CALLS", "0")
 
     outcomes = [
         kiwoom_sniper_v2._scanner_rest_quote_fallback_rate_limit(1000.0 + idx, priority=True)
@@ -2781,6 +2799,29 @@ def test_scanner_rest_quote_rate_limit_uses_bounded_operator_override(tmp_path, 
 
     assert outcomes[:6] == [(True, "rest_quote_allowed")] * 6
     assert outcomes[6] == (False, "rest_quote_rate_limited")
+    kiwoom_sniper_v2._reset_scanner_rest_quote_fallback_rate_limit_for_tests()
+
+
+def test_scanner_rest_quote_rate_limit_dynamic_boosts_on_pressure(tmp_path, monkeypatch):
+    kiwoom_sniper_v2._reset_scanner_rest_quote_fallback_rate_limit_for_tests()
+    monkeypatch.setattr(
+        kiwoom_sniper_v2,
+        "_SCANNER_OPERATOR_RUNTIME_OVERRIDE_PATH",
+        tmp_path / "missing_operator_runtime_overrides.env",
+    )
+    _reset_scanner_hot_override_cache()
+    monkeypatch.setenv("KORSTOCKSCAN_SCANNER_REST_QUOTE_FALLBACK_MAX_CALLS_PER_WINDOW", "4")
+    monkeypatch.setenv("KORSTOCKSCAN_SCANNER_REST_QUOTE_FALLBACK_POSITIVE_RESERVE_CALLS", "2")
+    monkeypatch.setenv("KORSTOCKSCAN_SCANNER_REST_QUOTE_FALLBACK_DYNAMIC_MAX_EXTRA_CALLS", "2")
+
+    outcomes = [
+        kiwoom_sniper_v2._scanner_rest_quote_fallback_rate_limit(1000.0 + idx, priority=True)
+        for idx in range(9)
+    ]
+
+    assert outcomes[:6] == [(True, "rest_quote_allowed")] * 6
+    assert outcomes[6:8] == [(True, "rest_quote_allowed_dynamic_boost")] * 2
+    assert outcomes[8] == (False, "rest_quote_rate_limited")
     kiwoom_sniper_v2._reset_scanner_rest_quote_fallback_rate_limit_for_tests()
 
 
@@ -2806,12 +2847,14 @@ def test_scanner_rest_quote_budget_hot_reloads_operator_override_file(tmp_path, 
     monkeypatch.setattr(kiwoom_sniper_v2, "_SCANNER_OPERATOR_RUNTIME_OVERRIDE_PATH", override_path)
     monkeypatch.setattr(kiwoom_sniper_v2, "_SCANNER_HOT_RUNTIME_OVERRIDE_REFRESH_SEC", 0.0)
     monkeypatch.delenv("KORSTOCKSCAN_SCANNER_REST_QUOTE_FALLBACK_MAX_PER_LOOP", raising=False)
+    monkeypatch.delenv("KORSTOCKSCAN_SCANNER_REST_QUOTE_FALLBACK_DYNAMIC_MAX_EXTRA_CALLS", raising=False)
     _reset_scanner_hot_override_cache()
 
     override_path.write_text(
         "\n".join(
             [
                 "export KORSTOCKSCAN_SCANNER_REST_QUOTE_FALLBACK_MAX_PER_LOOP=7",
+                "export KORSTOCKSCAN_SCANNER_REST_QUOTE_FALLBACK_DYNAMIC_MAX_EXTRA_CALLS=3",
                 "export KORSTOCKSCAN_BUY_SCORE_THRESHOLD=1",
             ]
         )
@@ -2821,18 +2864,26 @@ def test_scanner_rest_quote_budget_hot_reloads_operator_override_file(tmp_path, 
     os.utime(override_path, ns=(1_000_000_000, 1_000_000_000))
 
     assert kiwoom_sniper_v2._scanner_rest_quote_fallback_max_per_loop() == 7
+    assert kiwoom_sniper_v2._scanner_rest_quote_fallback_dynamic_max_extra_calls() == 3
     assert (
         kiwoom_sniper_v2._scanner_hot_runtime_override_value("KORSTOCKSCAN_BUY_SCORE_THRESHOLD")
         is None
     )
 
     override_path.write_text(
-        "export KORSTOCKSCAN_SCANNER_REST_QUOTE_FALLBACK_MAX_PER_LOOP=4\n",
+        "\n".join(
+            [
+                "export KORSTOCKSCAN_SCANNER_REST_QUOTE_FALLBACK_MAX_PER_LOOP=4",
+                "export KORSTOCKSCAN_SCANNER_REST_QUOTE_FALLBACK_DYNAMIC_MAX_EXTRA_CALLS=1",
+            ]
+        )
+        + "\n",
         encoding="utf-8",
     )
     os.utime(override_path, ns=(2_000_000_000, 2_000_000_000))
 
     assert kiwoom_sniper_v2._scanner_rest_quote_fallback_max_per_loop() == 4
+    assert kiwoom_sniper_v2._scanner_rest_quote_fallback_dynamic_max_extra_calls() == 1
     _reset_scanner_hot_override_cache()
 
 
