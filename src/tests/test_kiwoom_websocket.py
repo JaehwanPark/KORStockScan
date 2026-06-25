@@ -1,5 +1,6 @@
 import asyncio
 import json
+import os
 from types import SimpleNamespace
 
 import pytest
@@ -20,6 +21,25 @@ class _FakeWS:
 
     async def send(self, payload):
         self.sent.append(payload)
+
+
+def _reset_ws_hot_override_cache():
+    with kiwoom_websocket._WS_HOT_RUNTIME_OVERRIDES_LOCK:
+        kiwoom_websocket._WS_HOT_RUNTIME_OVERRIDES.update(
+            {"mtime_ns": None, "values": {}, "next_check_ts": 0.0}
+        )
+
+
+@pytest.fixture(autouse=True)
+def _isolate_ws_hot_runtime_override(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        kiwoom_websocket,
+        "_WS_OPERATOR_RUNTIME_OVERRIDE_PATH",
+        tmp_path / "missing_operator_runtime_overrides.env",
+    )
+    _reset_ws_hot_override_cache()
+    yield
+    _reset_ws_hot_override_cache()
 
 
 def test_login_success_message_helpers():
@@ -505,6 +525,44 @@ def test_alternate_route_defaults_cover_more_repair_candidates(monkeypatch):
 
     assert KiwoomWSManager._alternate_route_max_codes() == 6
     assert KiwoomWSManager._alternate_route_ttl_sec() == 45.0
+
+
+def test_ws_repair_budget_hot_reloads_operator_override_file(tmp_path, monkeypatch):
+    override_path = tmp_path / "operator_runtime_overrides.env"
+    monkeypatch.setattr(kiwoom_websocket, "_WS_OPERATOR_RUNTIME_OVERRIDE_PATH", override_path)
+    monkeypatch.setattr(kiwoom_websocket, "_WS_HOT_RUNTIME_OVERRIDE_REFRESH_SEC", 0.0)
+    monkeypatch.delenv("KORSTOCKSCAN_WS_ALTERNATE_ROUTE_MAX_CODES", raising=False)
+    monkeypatch.delenv("KORSTOCKSCAN_WS_PERSISTENT_REPAIR_MAX_CODES", raising=False)
+    _reset_ws_hot_override_cache()
+
+    override_path.write_text(
+        "\n".join(
+            [
+                "export KORSTOCKSCAN_WS_ALTERNATE_ROUTE_MAX_CODES=11",
+                "export KORSTOCKSCAN_WS_ALTERNATE_ROUTE_TTL_SEC=30",
+                "export KORSTOCKSCAN_WS_PERSISTENT_REPAIR_MAX_CODES=17",
+                "export KORSTOCKSCAN_WS_PERSISTENT_REPAIR_TTL_SEC=20",
+                "export KORSTOCKSCAN_BUY_SCORE_THRESHOLD=1",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    os.utime(override_path, ns=(1_000_000_000, 1_000_000_000))
+
+    assert KiwoomWSManager._alternate_route_max_codes() == 11
+    assert KiwoomWSManager._alternate_route_ttl_sec() == 30.0
+    assert KiwoomWSManager._persistent_repair_max_codes() == 17
+    assert KiwoomWSManager._persistent_repair_ttl_sec() == 20.0
+    assert kiwoom_websocket._ws_hot_runtime_override_value("KORSTOCKSCAN_BUY_SCORE_THRESHOLD") is None
+
+    override_path.write_text(
+        "export KORSTOCKSCAN_WS_ALTERNATE_ROUTE_MAX_CODES=9\n",
+        encoding="utf-8",
+    )
+    os.utime(override_path, ns=(2_000_000_000, 2_000_000_000))
+
+    assert KiwoomWSManager._alternate_route_max_codes() == 9
 
 
 def test_persistent_repair_filter_throttles_recent_codes(monkeypatch):

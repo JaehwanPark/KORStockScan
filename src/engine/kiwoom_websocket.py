@@ -6,9 +6,11 @@ import threading
 import time
 import copy
 import os
+import shlex
 from collections import OrderedDict, deque
 from queue import Queue, Empty
 from datetime import datetime
+from pathlib import Path
 
 # 💡 [Level 1 & 2 적용] 독립 로거 및 싱글톤 이벤트 버스 임포트
 from src.utils.logger import log_error
@@ -38,11 +40,89 @@ def _load_system_config():
 
 
 WS_CONDITION_SEARCH_ENABLED_ENV = "KORSTOCKSCAN_WS_CONDITION_SEARCH_ENABLED"
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+_WS_HOT_RUNTIME_OVERRIDE_KEYS = frozenset(
+    {
+        "KORSTOCKSCAN_WS_ALTERNATE_ROUTE_MAX_CODES",
+        "KORSTOCKSCAN_WS_ALTERNATE_ROUTE_TTL_SEC",
+        "KORSTOCKSCAN_WS_PERSISTENT_REPAIR_MAX_CODES",
+        "KORSTOCKSCAN_WS_PERSISTENT_REPAIR_TTL_SEC",
+    }
+)
+_WS_OPERATOR_RUNTIME_OVERRIDE_PATH = (
+    PROJECT_ROOT / "data" / "threshold_cycle" / "runtime_env" / "operator_runtime_overrides.env"
+)
+_WS_HOT_RUNTIME_OVERRIDE_REFRESH_SEC = 5.0
+_WS_HOT_RUNTIME_OVERRIDES = {
+    "mtime_ns": None,
+    "values": {},
+    "next_check_ts": 0.0,
+}
+_WS_HOT_RUNTIME_OVERRIDES_LOCK = threading.Lock()
 
 
 def is_ws_condition_search_enabled() -> bool:
     raw = str(os.getenv(WS_CONDITION_SEARCH_ENABLED_ENV, "") or "").strip().lower()
     return raw in {"1", "true", "t", "yes", "y", "on"}
+
+
+def _parse_ws_hot_runtime_override_file(path):
+    values = {}
+    try:
+        lines = Path(path).read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return values
+    for raw_line in lines:
+        line = str(raw_line or "").strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("export "):
+            line = line[len("export ") :].strip()
+        if "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        key = key.strip()
+        if key not in _WS_HOT_RUNTIME_OVERRIDE_KEYS:
+            continue
+        value = value.strip()
+        try:
+            parts = shlex.split(value, comments=False, posix=True)
+            parsed_value = parts[0] if parts else ""
+        except ValueError:
+            parsed_value = value.strip("\"'")
+        values[key] = str(parsed_value).strip()
+    return values
+
+
+def _ws_hot_runtime_override_value(name, now_ts=None):
+    key = str(name or "").strip()
+    if key not in _WS_HOT_RUNTIME_OVERRIDE_KEYS:
+        return None
+    now_value = time.time() if now_ts is None else float(now_ts)
+    with _WS_HOT_RUNTIME_OVERRIDES_LOCK:
+        cache = _WS_HOT_RUNTIME_OVERRIDES
+        if now_value < float(cache.get("next_check_ts") or 0.0):
+            return (cache.get("values") or {}).get(key)
+        cache["next_check_ts"] = now_value + _WS_HOT_RUNTIME_OVERRIDE_REFRESH_SEC
+        path = _WS_OPERATOR_RUNTIME_OVERRIDE_PATH
+        try:
+            stat = Path(path).stat()
+            mtime_ns = int(getattr(stat, "st_mtime_ns", 0) or 0)
+        except OSError:
+            cache["mtime_ns"] = None
+            cache["values"] = {}
+            return None
+        if cache.get("mtime_ns") != mtime_ns:
+            cache["values"] = _parse_ws_hot_runtime_override_file(path)
+            cache["mtime_ns"] = mtime_ns
+        return (cache.get("values") or {}).get(key)
+
+
+def _ws_hot_or_env_value(name):
+    hot_value = _ws_hot_runtime_override_value(name)
+    if hot_value not in (None, ""):
+        return hot_value
+    return os.getenv(name, "")
 
 
 class KiwoomWSManager:
@@ -329,7 +409,7 @@ class KiwoomWSManager:
 
     @staticmethod
     def _alternate_route_max_codes():
-        raw = os.getenv("KORSTOCKSCAN_WS_ALTERNATE_ROUTE_MAX_CODES", "")
+        raw = _ws_hot_or_env_value("KORSTOCKSCAN_WS_ALTERNATE_ROUTE_MAX_CODES")
         try:
             value = int(str(raw).strip()) if str(raw).strip() else 6
         except Exception:
@@ -338,7 +418,7 @@ class KiwoomWSManager:
 
     @staticmethod
     def _alternate_route_ttl_sec():
-        raw = os.getenv("KORSTOCKSCAN_WS_ALTERNATE_ROUTE_TTL_SEC", "")
+        raw = _ws_hot_or_env_value("KORSTOCKSCAN_WS_ALTERNATE_ROUTE_TTL_SEC")
         try:
             value = float(str(raw).strip()) if str(raw).strip() else 45.0
         except Exception:
@@ -379,7 +459,7 @@ class KiwoomWSManager:
 
     @staticmethod
     def _persistent_repair_max_codes():
-        raw = os.getenv("KORSTOCKSCAN_WS_PERSISTENT_REPAIR_MAX_CODES", "")
+        raw = _ws_hot_or_env_value("KORSTOCKSCAN_WS_PERSISTENT_REPAIR_MAX_CODES")
         try:
             value = int(str(raw).strip()) if str(raw).strip() else 8
         except Exception:
@@ -388,7 +468,7 @@ class KiwoomWSManager:
 
     @staticmethod
     def _persistent_repair_ttl_sec():
-        raw = os.getenv("KORSTOCKSCAN_WS_PERSISTENT_REPAIR_TTL_SEC", "")
+        raw = _ws_hot_or_env_value("KORSTOCKSCAN_WS_PERSISTENT_REPAIR_TTL_SEC")
         try:
             value = float(str(raw).strip()) if str(raw).strip() else 30.0
         except Exception:

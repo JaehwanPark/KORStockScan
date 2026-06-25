@@ -2706,8 +2706,14 @@ def test_recover_missing_ws_snapshot_defers_rest_quote_when_loop_budget_exhauste
     kiwoom_sniper_v2._reset_scanner_rest_quote_fallback_rate_limit_for_tests()
 
 
-def test_recover_missing_ws_snapshot_rate_limits_rest_quote_burst(monkeypatch):
+def test_recover_missing_ws_snapshot_rate_limits_rest_quote_burst(tmp_path, monkeypatch):
     kiwoom_sniper_v2._reset_scanner_rest_quote_fallback_rate_limit_for_tests()
+    monkeypatch.setattr(
+        kiwoom_sniper_v2,
+        "_SCANNER_OPERATOR_RUNTIME_OVERRIDE_PATH",
+        tmp_path / "missing_operator_runtime_overrides.env",
+    )
+    _reset_scanner_hot_override_cache()
     monkeypatch.setenv("KORSTOCKSCAN_SCANNER_RISING_WS_GAP_PRIORITY_RECOVERY_ENABLED", "true")
     calls = []
     monkeypatch.setattr(
