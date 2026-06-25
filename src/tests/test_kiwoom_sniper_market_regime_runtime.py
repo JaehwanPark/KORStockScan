@@ -3208,6 +3208,33 @@ def test_scanner_ws_subscription_recheck_requires_repair_when_subscribed_but_zer
     assert fields["ws_subscription_recheck_received_types"] == "0D"
 
 
+def test_scanner_rest_quote_applied_keeps_entry_realtime_stale_outcome():
+    fields = kiwoom_sniper_v2._scanner_rest_quote_entry_realtime_outcome_fields(
+        {
+            "ws_recovery_outcome": "rest_quote_applied",
+            "ws_subscription_repair_needed": True,
+            "ws_subscription_recheck_status": "subscribed_snapshot_stale_or_missing",
+        }
+    )
+
+    assert fields["ws_recovery_outcome"] == "rest_quote_applied_entry_realtime_still_stale"
+    assert fields["rest_quote_price_recovery_only"] is True
+    assert fields["entry_evaluable_fresh_after_rest_quote"] is False
+
+
+def test_scanner_rest_quote_applied_preserves_fresh_entry_realtime_outcome():
+    fields = kiwoom_sniper_v2._scanner_rest_quote_entry_realtime_outcome_fields(
+        {
+            "ws_recovery_outcome": "rest_quote_applied",
+            "ws_subscription_repair_needed": False,
+            "ws_subscription_recheck_status": "subscribed_fresh_snapshot",
+        }
+    )
+
+    assert fields["ws_recovery_outcome"] == "rest_quote_applied"
+    assert "rest_quote_price_recovery_only" not in fields
+
+
 def test_scanner_ws_subscription_recheck_requires_repair_without_timestamp():
     manager = SimpleNamespace(
         subscribed_codes={"005930"},

@@ -2934,6 +2934,18 @@ def _scanner_ws_subscription_recheck_fields(manager, code, ws_data, *, now_ts):
     return fields
 
 
+def _scanner_rest_quote_entry_realtime_outcome_fields(recovery_fields):
+    fields = dict(recovery_fields or {})
+    if (
+        fields.get("ws_recovery_outcome") == "rest_quote_applied"
+        and bool(fields.get("ws_subscription_repair_needed"))
+    ):
+        fields["ws_recovery_outcome"] = "rest_quote_applied_entry_realtime_still_stale"
+        fields["rest_quote_price_recovery_only"] = True
+        fields["entry_evaluable_fresh_after_rest_quote"] = False
+    return fields
+
+
 def _scanner_rest_quote_fallback_due(stock, now_ts, *, allow_early_rest_fallback):
     if not allow_early_rest_fallback:
         return False
@@ -4675,6 +4687,9 @@ def run_sniper(is_test_mode=False):
                                     phase="watching_missing_or_zero",
                                 )
                             )
+                            recovery_fields = _scanner_rest_quote_entry_realtime_outcome_fields(
+                                recovery_fields
+                            )
                         if recovery_fields.get("ws_recovery_outcome") == "rest_quote_applied":
                             _scanner_watch_reset_stale_eviction_state(stock)
                             _defer_scanner_watching_runtime_skip(
@@ -4839,6 +4854,9 @@ def run_sniper(is_test_mode=False):
                                     recovery_fields,
                                     phase="fast_precheck",
                                 )
+                            )
+                            recovery_fields = _scanner_rest_quote_entry_realtime_outcome_fields(
+                                recovery_fields
                             )
                             if recovery_fields.get("ws_recovery_outcome") in {
                                 "rest_quote_applied",
