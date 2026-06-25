@@ -45,6 +45,7 @@ _WS_HOT_RUNTIME_OVERRIDE_KEYS = frozenset(
     {
         "KORSTOCKSCAN_WS_ALTERNATE_ROUTE_MAX_CODES",
         "KORSTOCKSCAN_WS_ALTERNATE_ROUTE_TTL_SEC",
+        "KORSTOCKSCAN_WS_MAX_REG_ITEMS",
         "KORSTOCKSCAN_WS_PERSISTENT_REPAIR_MAX_CODES",
         "KORSTOCKSCAN_WS_PERSISTENT_REPAIR_TTL_SEC",
     }
@@ -157,6 +158,7 @@ class KiwoomWSManager:
         self._recent_reg_request_ts = {}
         self._alternate_route_request_ts = {}
         self._persistent_repair_request_ts = {}
+        self._persistent_repair_overflow_codes = OrderedDict()
         self._registered_items_by_code = {}
         
         # 전역 EventBus 인스턴스 획득 및 외부 명령 수신기 장착
@@ -316,7 +318,7 @@ class KiwoomWSManager:
 
     @staticmethod
     def _max_registered_item_count():
-        raw = os.getenv("KORSTOCKSCAN_WS_MAX_REG_ITEMS", "")
+        raw = _ws_hot_or_env_value("KORSTOCKSCAN_WS_MAX_REG_ITEMS")
         try:
             value = int(str(raw).strip()) if str(raw).strip() else 24
         except Exception:
@@ -464,7 +466,7 @@ class KiwoomWSManager:
             value = int(str(raw).strip()) if str(raw).strip() else 8
         except Exception:
             value = 8
-        return max(0, min(value, 20))
+        return max(0, min(value, 32))
 
     @staticmethod
     def _persistent_repair_ttl_sec():
@@ -486,7 +488,20 @@ class KiwoomWSManager:
         now_ts = time.time()
         allowed = []
         skipped = []
+        overflow_skipped = []
         with self.lock:
+            requested_set = set(normalized_codes)
+            for code in list(self._persistent_repair_overflow_codes.keys()):
+                if code not in requested_set:
+                    self._persistent_repair_overflow_codes.pop(code, None)
+            overflow_first = [
+                code for code in self._persistent_repair_overflow_codes.keys() if code in requested_set
+            ]
+            if overflow_first:
+                overflow_set = set(overflow_first)
+                normalized_codes = overflow_first + [
+                    code for code in normalized_codes if code not in overflow_set
+                ]
             if ttl_sec > 0:
                 stale_codes = [
                     code
@@ -502,9 +517,15 @@ class KiwoomWSManager:
                     continue
                 if len(allowed) >= max_codes:
                     skipped.append(code)
+                    overflow_skipped.append(code)
                     continue
                 self._persistent_repair_request_ts[code] = now_ts
+                self._persistent_repair_overflow_codes.pop(code, None)
                 allowed.append(code)
+            for code in overflow_skipped:
+                self._persistent_repair_overflow_codes[code] = now_ts
+            while len(self._persistent_repair_overflow_codes) > 200:
+                self._persistent_repair_overflow_codes.popitem(last=False)
         return allowed, skipped
 
     @staticmethod

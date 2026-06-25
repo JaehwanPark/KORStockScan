@@ -503,6 +503,28 @@ def test_persistent_repair_filter_limits_codes_per_batch(monkeypatch):
     assert skipped == ["000004", "000005"]
 
 
+def test_persistent_repair_filter_prioritizes_previous_overflow(monkeypatch):
+    manager = KiwoomWSManager("test-token")
+    monkeypatch.setenv("KORSTOCKSCAN_WS_PERSISTENT_REPAIR_MAX_CODES", "3")
+    monkeypatch.setenv("KORSTOCKSCAN_WS_PERSISTENT_REPAIR_TTL_SEC", "0")
+    now = {"value": 1000.0}
+    monkeypatch.setattr(kiwoom_websocket.time, "time", lambda: now["value"])
+
+    allowed, skipped = manager._filter_persistent_repair_targets(
+        ["000001", "000002", "000003", "000004", "000005"]
+    )
+    assert allowed == ["000001", "000002", "000003"]
+    assert skipped == ["000004", "000005"]
+
+    now["value"] = 1001.0
+    allowed, skipped = manager._filter_persistent_repair_targets(
+        ["000001", "000002", "000003", "000004", "000005"]
+    )
+
+    assert allowed == ["000004", "000005", "000001"]
+    assert skipped == ["000002", "000003"]
+
+
 def test_persistent_repair_defaults_refresh_stale_scanner_sources_quickly(monkeypatch):
     manager = KiwoomWSManager("test-token")
     monkeypatch.delenv("KORSTOCKSCAN_WS_PERSISTENT_REPAIR_MAX_CODES", raising=False)
@@ -540,6 +562,7 @@ def test_ws_repair_budget_hot_reloads_operator_override_file(tmp_path, monkeypat
             [
                 "export KORSTOCKSCAN_WS_ALTERNATE_ROUTE_MAX_CODES=11",
                 "export KORSTOCKSCAN_WS_ALTERNATE_ROUTE_TTL_SEC=30",
+                "export KORSTOCKSCAN_WS_MAX_REG_ITEMS=41",
                 "export KORSTOCKSCAN_WS_PERSISTENT_REPAIR_MAX_CODES=17",
                 "export KORSTOCKSCAN_WS_PERSISTENT_REPAIR_TTL_SEC=20",
                 "export KORSTOCKSCAN_BUY_SCORE_THRESHOLD=1",
@@ -552,6 +575,7 @@ def test_ws_repair_budget_hot_reloads_operator_override_file(tmp_path, monkeypat
 
     assert KiwoomWSManager._alternate_route_max_codes() == 11
     assert KiwoomWSManager._alternate_route_ttl_sec() == 30.0
+    assert KiwoomWSManager._max_registered_item_count() == 41
     assert KiwoomWSManager._persistent_repair_max_codes() == 17
     assert KiwoomWSManager._persistent_repair_ttl_sec() == 20.0
     assert kiwoom_websocket._ws_hot_runtime_override_value("KORSTOCKSCAN_BUY_SCORE_THRESHOLD") is None
