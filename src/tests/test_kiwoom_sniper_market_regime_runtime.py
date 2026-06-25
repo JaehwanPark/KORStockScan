@@ -1843,6 +1843,21 @@ def test_scanner_pipeline_events_flush_before_heavy_eval_handler():
     assert flush_def_idx < heavy_lag_idx < pipeline_flush_idx < heavy_handle_idx
 
 
+def test_scanner_heavy_eval_refreshes_ws_snapshot_before_handler():
+    source = inspect.getsource(kiwoom_sniper_v2.run_sniper)
+    flush_def_idx = source.index("def _flush_delayed_scanner_heavy_eval")
+    eval_ws_idx = source.index("eval_ws_data = delayed_ws_data", flush_def_idx)
+    recheck_idx = source.index("_scanner_ws_subscription_recheck_snapshot_and_fields(", eval_ws_idx)
+    assign_idx = source.index("eval_ws_data = recheck_snapshot", recheck_idx)
+    handle_idx = source.index(
+        "handle_watching_state(\n                        delayed_stock",
+        assign_idx,
+    )
+    eval_arg_idx = source.index("eval_ws_data", handle_idx)
+
+    assert flush_def_idx < eval_ws_idx < recheck_idx < assign_idx < handle_idx < eval_arg_idx
+
+
 def test_scanner_strength_recheck_waiting_skips_before_full_eval_budget():
     source = inspect.getsource(kiwoom_sniper_v2.run_sniper)
     waiting_idx = source.index("if _scanner_strength_recheck_waiting(stock")

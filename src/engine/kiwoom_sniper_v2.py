@@ -4595,6 +4595,24 @@ def run_sniper(is_test_mode=False):
                 for delayed_stock, delayed_code, delayed_ws_data, queue_enter_epoch in delayed_scanner_heavy_eval:
                     if delayed_stock.get('status') != 'WATCHING':
                         continue
+                    eval_ws_data = delayed_ws_data
+                    if _is_scanner_watching_target(delayed_stock):
+                        recheck_snapshot, recheck_fields = _scanner_ws_subscription_recheck_snapshot_and_fields(
+                            WS_MANAGER,
+                            delayed_code,
+                            delayed_ws_data,
+                            now_ts=time.time(),
+                        )
+                        if (
+                            not recheck_fields.get("ws_subscription_repair_needed", True)
+                            and _safe_int(recheck_snapshot.get("curr"), 0) > 0
+                        ):
+                            eval_ws_data = recheck_snapshot
+                            delayed_stock["_scanner_heavy_eval_ws_snapshot_refreshed"] = True
+                            delayed_stock["_scanner_heavy_eval_ws_snapshot_refresh_status"] = (
+                                recheck_fields.get("ws_subscription_recheck_status")
+                                or "fresh_snapshot_rechecked"
+                            )
                     if delayed_stock.get("_scanner_fast_precheck_result") == "eligible_for_heavy_entry_eval":
                         _defer_emit_scanner_heavy_eval_lag(
                             delayed_stock,
@@ -4606,7 +4624,7 @@ def run_sniper(is_test_mode=False):
                     handle_watching_state(
                         delayed_stock,
                         delayed_code,
-                        delayed_ws_data,
+                        eval_ws_data,
                         admin_id,
                         now_ts=now_ts,
                         now_dt=now,
