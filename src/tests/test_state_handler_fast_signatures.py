@@ -93,6 +93,47 @@ def test_entry_adm_snapshot_uses_explicit_not_evaluated_ai_action(monkeypatch):
     assert captured["broker_order_forbidden"] is True
 
 
+def test_entry_adm_snapshot_prefers_latency_quote_freshness_over_ai_snapshot(monkeypatch):
+    captured = {}
+
+    def fake_log_entry_pipeline(stock, code, stage, **fields):
+        captured.update(fields)
+
+    monkeypatch.setattr(handlers, "_log_entry_pipeline", fake_log_entry_pipeline)
+
+    handlers._emit_scalp_entry_adm_snapshot(
+        {
+            "strategy": "SCALPING",
+            "name": "테스트",
+            "last_watching_ai_source_quality_fields": {
+                "quote_stale": True,
+                "quote_age_ms": 7_170,
+            },
+        },
+        "003490",
+        "latency_block",
+        ai_decision={"action": "BUY", "score": 78, "quote_stale": True},
+        ai_score=78,
+        chosen_action="WAIT_REQUOTE",
+        latency_gate={
+            "reason": "latency_state_danger",
+            "quote_stale": False,
+            "latency_state": "DANGER",
+            "latency_danger_reasons": "other_danger",
+            "pre_submit_ws_snapshot_refresh_applied": True,
+            "pre_submit_ws_snapshot_refresh_reason": "latest_ws_snapshot_fresh",
+            "pre_submit_ws_snapshot_refresh_age_ms": 227.569,
+        },
+        actual_order_submitted=False,
+        broker_order_forbidden=True,
+    )
+
+    assert captured["quote_stale"] is False
+    assert captured["latency_danger_reasons"] == "other_danger"
+    assert captured["pre_submit_ws_snapshot_refresh_applied"] is True
+    assert captured["pre_submit_ws_snapshot_refresh_reason"] == "latest_ws_snapshot_fresh"
+
+
 def test_gatekeeper_fast_signature_absorbs_small_noise():
     stock = {"position_tag": "MIDDLE"}
     ws_a = {

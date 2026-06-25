@@ -8011,6 +8011,26 @@ def _emit_scalp_entry_adm_snapshot(
         "forbidden_uses": "threshold mutation,order guard mutation,provider change,bot restart,broker order submit",
         **_scalp_pre_ai_gate_context_log_fields(stock.get("scalp_pre_ai_gate_context")),
     }
+    latency_snapshot_priority_keys = (
+        "quote_stale",
+        "latency_state",
+        "latency_danger_reasons",
+        "pre_submit_quote_refresh_enabled",
+        "pre_submit_quote_refresh_applied",
+        "pre_submit_quote_refresh_reason",
+        "pre_submit_quote_refresh_source",
+        "pre_submit_quote_refresh_quote_age_ms",
+        "pre_submit_ws_snapshot_refresh_enabled",
+        "pre_submit_ws_snapshot_refresh_applied",
+        "pre_submit_ws_snapshot_refresh_reason",
+        "pre_submit_ws_snapshot_refresh_source",
+        "pre_submit_ws_snapshot_refresh_age_ms",
+        "pre_submit_rest_orderbook_refresh_enabled",
+        "pre_submit_rest_orderbook_refresh_applied",
+        "pre_submit_rest_orderbook_refresh_reason",
+        "pre_submit_rest_orderbook_refresh_source",
+        "pre_submit_rest_orderbook_refresh_age_ms",
+    )
     for payload in (ai_decision or {}, latency_gate or {}, submit_fields or {}, price_snapshot or {}, orderbook_fields or {}, extra_fields or {}):
         if isinstance(payload, dict):
             for key, value in payload.items():
@@ -8021,6 +8041,10 @@ def _emit_scalp_entry_adm_snapshot(
         stock,
         not_evaluated_reason="snapshot_pre_contract_backfill",
     )
+    if isinstance(latency_gate, dict):
+        for key in latency_snapshot_priority_keys:
+            if key in latency_gate and latency_gate.get(key) is not None:
+                fields[key] = latency_gate.get(key)
     parity_keys = (
         "tick_acceleration_ratio",
         "tick_acceleration_ratio_raw",
