@@ -2713,7 +2713,10 @@ def test_recover_missing_ws_snapshot_rate_limits_rest_quote_burst(monkeypatch):
         lambda code, now_ts: calls.append((code, now_ts)) or {"curr": 70000},
     )
 
-    for idx, code in enumerate(("005930", "000660", "035420", "051910"), start=1):
+    for idx, code in enumerate(
+        ("005930", "000660", "035420", "051910", "068270", "247540", "373220"),
+        start=1,
+    ):
         stock = {
             "status": "WATCHING",
             "strategy": "SCALPING",
@@ -2728,14 +2731,21 @@ def test_recover_missing_ws_snapshot_rate_limits_rest_quote_burst(monkeypatch):
             {},
             allow_early_rest_fallback=kiwoom_sniper_v2._scanner_rest_quote_fallback_allowed_for_ws_gap(stock),
         )
-        if idx <= 3:
+        if idx <= 6:
             assert ws_data["curr"] == 70000
             assert fields["ws_recovery_outcome"] == "rest_quote_applied"
         else:
             assert ws_data == {}
             assert fields["ws_recovery_outcome"] == "rest_quote_rate_limited"
 
-    assert calls == [("005930", 1001.0), ("000660", 1002.0), ("035420", 1003.0)]
+    assert calls == [
+        ("005930", 1001.0),
+        ("000660", 1002.0),
+        ("035420", 1003.0),
+        ("051910", 1004.0),
+        ("068270", 1005.0),
+        ("247540", 1006.0),
+    ]
     kiwoom_sniper_v2._reset_scanner_rest_quote_fallback_rate_limit_for_tests()
 
 
@@ -2755,6 +2765,9 @@ def test_scanner_rest_quote_rate_limit_uses_bounded_operator_override(monkeypatc
 
 
 def test_scanner_rest_quote_loop_limit_allows_bounded_intraday_recovery_override(monkeypatch):
+    monkeypatch.delenv("KORSTOCKSCAN_SCANNER_REST_QUOTE_FALLBACK_MAX_PER_LOOP", raising=False)
+    assert kiwoom_sniper_v2._scanner_rest_quote_fallback_max_per_loop() == 3
+
     monkeypatch.setenv("KORSTOCKSCAN_SCANNER_REST_QUOTE_FALLBACK_MAX_PER_LOOP", "8")
     assert kiwoom_sniper_v2._scanner_rest_quote_fallback_max_per_loop() == 8
 

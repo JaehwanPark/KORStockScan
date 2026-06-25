@@ -219,8 +219,8 @@ _GATEKEEPER_REPORT_NOTIFY_TTL_SEC = 600.0
 _GATEKEEPER_REPORT_NOTIFY_RECENT: dict[str, float] = {}
 _GATEKEEPER_REPORT_NOTIFY_LOCK = threading.Lock()
 _SCANNER_REST_QUOTE_FALLBACK_WINDOW_SEC = 30.0
-_SCANNER_REST_QUOTE_FALLBACK_MAX_CALLS = 2
-_SCANNER_REST_QUOTE_FALLBACK_POSITIVE_RESERVE_CALLS = 1
+_SCANNER_REST_QUOTE_FALLBACK_MAX_CALLS = 4
+_SCANNER_REST_QUOTE_FALLBACK_POSITIVE_RESERVE_CALLS = 2
 _SCANNER_REST_QUOTE_FALLBACK_FAILURE_COOLDOWN_SEC = 30.0
 _SCANNER_REST_QUOTE_FALLBACK_STATE = {"call_epochs": [], "cooldown_until": 0.0}
 _SCANNER_REST_QUOTE_FALLBACK_LOCK = threading.Lock()
@@ -2683,9 +2683,9 @@ def _scanner_rest_quote_fallback_positive_reserve_calls():
 def _scanner_rest_quote_fallback_max_per_loop():
     raw = os.getenv("KORSTOCKSCAN_SCANNER_REST_QUOTE_FALLBACK_MAX_PER_LOOP", "")
     try:
-        value = int(str(raw).strip()) if str(raw).strip() else 1
+        value = int(str(raw).strip()) if str(raw).strip() else 3
     except Exception:
-        value = 1
+        value = 3
     return max(0, min(value, 10))
 
 
