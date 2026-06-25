@@ -588,10 +588,20 @@ class TradingConfig:
     REVERSAL_ADD_SESSION_CUTOFF: str = "14:30"     # 허용 시간대 상한
     REVERSAL_ADD_BOX_RANGE_MAX_PCT: float = 0.20   # 박스 폭 허용 최대치 (%p)
     REVERSAL_ADD_STAGNATION_LOW_FLOOR_MARGIN: float = 0.05  # 저점 미갱신 허용 마진 (%p)
+    AGGRESSIVE_REVERSAL_ADD_ENABLED: bool = True   # 고AI/강매수압 얕은 손실 구간 공격적 AVG_DOWN
+    AGGRESSIVE_REVERSAL_ADD_PNL_MIN: float = -0.70
+    AGGRESSIVE_REVERSAL_ADD_PNL_MAX: float = -0.10
+    AGGRESSIVE_REVERSAL_ADD_MIN_HOLD_SEC: int = 20
+    AGGRESSIVE_REVERSAL_ADD_MAX_HOLD_SEC: int = 240
+    AGGRESSIVE_REVERSAL_ADD_MIN_AI_SCORE: int = 80
+    AGGRESSIVE_REVERSAL_ADD_MIN_BUY_PRESSURE: float = 85.0
+    AGGRESSIVE_REVERSAL_ADD_VWAP_BP_MIN: float = -12.0
+    AGGRESSIVE_REVERSAL_ADD_SIZE_RATIO: float = 0.50
     SCALP_LOSS_FALLBACK_ENABLED: bool = True        # 운영 override: 손절 직전 ADM/fallback 추가매수 실전 적용
     SCALP_LOSS_FALLBACK_OBSERVE_ONLY: bool = False  # 운영 override: 후보 기록에 그치지 않고 scale-in safety 후 실행
     SCALP_LOSS_FALLBACK_ALLOWED_REASONS: tuple = (
         "reversal_add_ok",
+        "aggressive_reversal_add_ok",
         "holding_exit_matrix_avg_down_bias",
     )  # 손절 fallback 허용 reason
     SCALP_LOSS_FALLBACK_MIN_AI_SCORE: int = 65      # 손절 fallback 후보 최소 AI 점수
@@ -1814,6 +1824,15 @@ def _build_trading_rules() -> TradingConfig:
     env_reversal_add_vwap_bp_min = _env_float("KORSTOCKSCAN_REVERSAL_ADD_VWAP_BP_MIN")
     env_reversal_add_size_ratio = _env_float("KORSTOCKSCAN_REVERSAL_ADD_SIZE_RATIO")
     env_reversal_add_min_qty_floor_enabled = _env_bool("KORSTOCKSCAN_REVERSAL_ADD_MIN_QTY_FLOOR_ENABLED")
+    env_aggressive_reversal_add_enabled = _env_bool("KORSTOCKSCAN_AGGRESSIVE_REVERSAL_ADD_ENABLED")
+    env_aggressive_reversal_add_pnl_min = _env_float("KORSTOCKSCAN_AGGRESSIVE_REVERSAL_ADD_PNL_MIN")
+    env_aggressive_reversal_add_pnl_max = _env_float("KORSTOCKSCAN_AGGRESSIVE_REVERSAL_ADD_PNL_MAX")
+    env_aggressive_reversal_add_min_hold_sec = _env_int("KORSTOCKSCAN_AGGRESSIVE_REVERSAL_ADD_MIN_HOLD_SEC")
+    env_aggressive_reversal_add_max_hold_sec = _env_int("KORSTOCKSCAN_AGGRESSIVE_REVERSAL_ADD_MAX_HOLD_SEC")
+    env_aggressive_reversal_add_min_ai_score = _env_int("KORSTOCKSCAN_AGGRESSIVE_REVERSAL_ADD_MIN_AI_SCORE")
+    env_aggressive_reversal_add_min_buy_pressure = _env_float("KORSTOCKSCAN_AGGRESSIVE_REVERSAL_ADD_MIN_BUY_PRESSURE")
+    env_aggressive_reversal_add_vwap_bp_min = _env_float("KORSTOCKSCAN_AGGRESSIVE_REVERSAL_ADD_VWAP_BP_MIN")
+    env_aggressive_reversal_add_size_ratio = _env_float("KORSTOCKSCAN_AGGRESSIVE_REVERSAL_ADD_SIZE_RATIO")
     env_bad_entry_observe_enabled = _env_bool("KORSTOCKSCAN_SCALP_BAD_ENTRY_BLOCK_OBSERVE_ENABLED")
     env_bad_entry_refined_enabled = _env_bool("KORSTOCKSCAN_SCALP_BAD_ENTRY_REFINED_CANARY_ENABLED")
     env_bad_entry_refined_min_hold = _env_int("KORSTOCKSCAN_SCALP_BAD_ENTRY_REFINED_MIN_HOLD_SEC")
@@ -2519,6 +2538,33 @@ def _build_trading_rules() -> TradingConfig:
             REVERSAL_ADD_MIN_QTY_FLOOR_ENABLED=env_reversal_add_min_qty_floor_enabled
             if env_reversal_add_min_qty_floor_enabled is not None
             else config.REVERSAL_ADD_MIN_QTY_FLOOR_ENABLED,
+            AGGRESSIVE_REVERSAL_ADD_ENABLED=env_aggressive_reversal_add_enabled
+            if env_aggressive_reversal_add_enabled is not None
+            else config.AGGRESSIVE_REVERSAL_ADD_ENABLED,
+            AGGRESSIVE_REVERSAL_ADD_PNL_MIN=env_aggressive_reversal_add_pnl_min
+            if env_aggressive_reversal_add_pnl_min is not None
+            else config.AGGRESSIVE_REVERSAL_ADD_PNL_MIN,
+            AGGRESSIVE_REVERSAL_ADD_PNL_MAX=env_aggressive_reversal_add_pnl_max
+            if env_aggressive_reversal_add_pnl_max is not None
+            else config.AGGRESSIVE_REVERSAL_ADD_PNL_MAX,
+            AGGRESSIVE_REVERSAL_ADD_MIN_HOLD_SEC=env_aggressive_reversal_add_min_hold_sec
+            if env_aggressive_reversal_add_min_hold_sec is not None
+            else config.AGGRESSIVE_REVERSAL_ADD_MIN_HOLD_SEC,
+            AGGRESSIVE_REVERSAL_ADD_MAX_HOLD_SEC=env_aggressive_reversal_add_max_hold_sec
+            if env_aggressive_reversal_add_max_hold_sec is not None
+            else config.AGGRESSIVE_REVERSAL_ADD_MAX_HOLD_SEC,
+            AGGRESSIVE_REVERSAL_ADD_MIN_AI_SCORE=env_aggressive_reversal_add_min_ai_score
+            if env_aggressive_reversal_add_min_ai_score is not None
+            else config.AGGRESSIVE_REVERSAL_ADD_MIN_AI_SCORE,
+            AGGRESSIVE_REVERSAL_ADD_MIN_BUY_PRESSURE=env_aggressive_reversal_add_min_buy_pressure
+            if env_aggressive_reversal_add_min_buy_pressure is not None
+            else config.AGGRESSIVE_REVERSAL_ADD_MIN_BUY_PRESSURE,
+            AGGRESSIVE_REVERSAL_ADD_VWAP_BP_MIN=env_aggressive_reversal_add_vwap_bp_min
+            if env_aggressive_reversal_add_vwap_bp_min is not None
+            else config.AGGRESSIVE_REVERSAL_ADD_VWAP_BP_MIN,
+            AGGRESSIVE_REVERSAL_ADD_SIZE_RATIO=env_aggressive_reversal_add_size_ratio
+            if env_aggressive_reversal_add_size_ratio is not None
+            else config.AGGRESSIVE_REVERSAL_ADD_SIZE_RATIO,
             SCALP_BAD_ENTRY_BLOCK_OBSERVE_ENABLED=env_bad_entry_observe_enabled
             if env_bad_entry_observe_enabled is not None
             else config.SCALP_BAD_ENTRY_BLOCK_OBSERVE_ENABLED,

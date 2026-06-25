@@ -20,6 +20,12 @@ _SCALE_IN_RULES = {
         "floor_rule": "REVERSAL_ADD_MIN_QTY_FLOOR_ENABLED",
         "floor_default": True,
     },
+    ("SCALPING", "AVG_DOWN", "aggressive_reversal_add_ok"): {
+        "ratio_rule": "AGGRESSIVE_REVERSAL_ADD_SIZE_RATIO",
+        "default_ratio": 0.50,
+        "floor_rule": "REVERSAL_ADD_MIN_QTY_FLOOR_ENABLED",
+        "floor_default": True,
+    },
     ("SCALPING", "AVG_DOWN", "default"): {
         "ratio": _DEFAULT_SCALE_IN_RATIO,
     },
@@ -327,6 +333,43 @@ def _check_reversal_add_supply(stock):
     return None
 
 
+def _check_aggressive_reversal_add(stock, profit_rate, current_ai_score, held_sec):
+    if not bool(getattr(TRADING_RULES, 'AGGRESSIVE_REVERSAL_ADD_ENABLED', False)):
+        return "aggressive_reversal_add_disabled"
+
+    pnl_min = float(getattr(TRADING_RULES, 'AGGRESSIVE_REVERSAL_ADD_PNL_MIN', -0.70))
+    pnl_max = float(getattr(TRADING_RULES, 'AGGRESSIVE_REVERSAL_ADD_PNL_MAX', -0.10))
+    if not (pnl_min <= profit_rate <= pnl_max):
+        return f"aggressive_pnl_out_of_range({profit_rate:.2f})"
+
+    min_hold = int(getattr(TRADING_RULES, 'AGGRESSIVE_REVERSAL_ADD_MIN_HOLD_SEC', 20))
+    max_hold = int(getattr(TRADING_RULES, 'AGGRESSIVE_REVERSAL_ADD_MAX_HOLD_SEC', 240))
+    if not (min_hold <= held_sec <= max_hold):
+        return f"aggressive_hold_sec_out_of_range({held_sec}s)"
+
+    min_ai = int(getattr(TRADING_RULES, 'AGGRESSIVE_REVERSAL_ADD_MIN_AI_SCORE', 80))
+    if current_ai_score < min_ai:
+        return f"aggressive_ai_score_too_low({current_ai_score})"
+
+    feat = stock.get('last_reversal_features', {}) or {}
+    if not feat:
+        return "aggressive_reversal_features_missing"
+
+    buy_pressure = _safe_float(feat.get('buy_pressure_10t'), 0.0)
+    micro_vwap_bp = _safe_float(feat.get('curr_vs_micro_vwap_bp'), -999.0)
+    large_sell = bool(feat.get('large_sell_print_detected', True))
+    min_buy_pressure = float(getattr(TRADING_RULES, 'AGGRESSIVE_REVERSAL_ADD_MIN_BUY_PRESSURE', 85.0))
+    min_micro_vwap_bp = float(getattr(TRADING_RULES, 'AGGRESSIVE_REVERSAL_ADD_VWAP_BP_MIN', -12.0))
+
+    if buy_pressure < min_buy_pressure:
+        return f"aggressive_buy_pressure_not_met({buy_pressure:.2f})"
+    if large_sell:
+        return "aggressive_large_sell_detected"
+    if micro_vwap_bp < min_micro_vwap_bp:
+        return f"aggressive_micro_vwap_not_met({micro_vwap_bp:.2f})"
+    return None
+
+
 def _build_reversal_add_probe(stock, profit_rate, current_ai_score, held_sec):
     pnl_min = float(getattr(TRADING_RULES, 'REVERSAL_ADD_PNL_MIN', -0.45))
     pnl_max = float(getattr(TRADING_RULES, 'REVERSAL_ADD_PNL_MAX', -0.10))
@@ -390,6 +433,16 @@ def _build_reversal_add_probe(stock, profit_rate, current_ai_score, held_sec):
         "supply_pass_count": supply_pass_count if feat else (1 if supply_ok else 0),
         "supply_ok": supply_ok,
         "has_reversal_features": bool(feat),
+        "aggressive_enabled": bool(getattr(TRADING_RULES, 'AGGRESSIVE_REVERSAL_ADD_ENABLED', False)),
+        "aggressive_min_ai_score": int(getattr(TRADING_RULES, 'AGGRESSIVE_REVERSAL_ADD_MIN_AI_SCORE', 80)),
+        "aggressive_min_buy_pressure": _safe_float(
+            getattr(TRADING_RULES, 'AGGRESSIVE_REVERSAL_ADD_MIN_BUY_PRESSURE', 85.0),
+            85.0,
+        ),
+        "aggressive_min_micro_vwap_bp": _safe_float(
+            getattr(TRADING_RULES, 'AGGRESSIVE_REVERSAL_ADD_VWAP_BP_MIN', -12.0),
+            -12.0,
+        ),
     }
     probe.update(supply_checks)
     return probe
@@ -408,15 +461,24 @@ def evaluate_scalping_reversal_add(stock, profit_rate, current_ai_score, held_se
         result["reason"] = "reversal_add_disabled"
         return result
 
-    for reason in (
+    reasons = (
         _check_reversal_add_pnl_range(profit_rate),
         _check_reversal_add_hold_sec(held_sec),
         _check_reversal_add_low_floor(stock, profit_rate),
         _check_reversal_add_supply(stock),
         _check_reversal_add_ai_recovery(stock, current_ai_score),
-    ):
+    )
+    for reason in reasons:
         if reason:
+            aggressive_reason = _check_aggressive_reversal_add(stock, profit_rate, current_ai_score, held_sec)
+            if aggressive_reason is None:
+                result["should_add"] = True
+                result["add_type"] = "AVG_DOWN"
+                result["reason"] = "aggressive_reversal_add_ok"
+                result["blocked_standard_reason"] = reason
+                return result
             result["reason"] = reason
+            result["aggressive_blocked_reason"] = aggressive_reason
             return result
 
     result["should_add"] = True
@@ -579,7 +641,7 @@ def _resolve_scale_in_ratio(raw_strategy, add_type, add_reason):
 def _resolve_scale_in_rule(raw_strategy, add_type, add_reason):
     normalized_reason = (
         add_reason
-        if add_reason in {"reversal_add_ok", "late_loss_avg_down_retry"}
+        if add_reason in {"reversal_add_ok", "late_loss_avg_down_retry", "aggressive_reversal_add_ok"}
         else "default"
     )
     if raw_strategy == "SCALPING":
@@ -828,7 +890,7 @@ def describe_dynamic_scale_in_qty(
             return details
         would_qty = max(1, int(scalp_budget_qty or legacy.get("template_qty", 0) or legacy.get("qty", 0) or 0))
     elif add_type == "AVG_DOWN":
-        if add_reason not in {"reversal_add_ok", "late_loss_avg_down_retry"}:
+        if add_reason not in {"reversal_add_ok", "late_loss_avg_down_retry", "aggressive_reversal_add_ok"}:
             details.update({"would_qty": 0, "effective_qty": 0, "qty": 0, "qty_reason": "reversal_probe_missing"})
             return details
         hard_stop_price = _safe_float(stock.get("hard_stop_price"), 0.0)

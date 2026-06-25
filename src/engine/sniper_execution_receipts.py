@@ -1202,7 +1202,8 @@ def _handle_add_buy_execution(
     target_stock['last_add_time'] = time.time()
     if (
         add_type == 'AVG_DOWN'
-        and str(target_stock.get('pending_add_reason') or '').strip() == 'reversal_add_ok'
+        and str(target_stock.get('pending_add_reason') or '').strip()
+        in {'reversal_add_ok', 'aggressive_reversal_add_ok'}
     ):
         target_stock['reversal_add_state'] = 'POST_ADD_EVAL'
         target_stock['reversal_add_executed_at'] = now.timestamp()

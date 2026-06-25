@@ -26093,7 +26093,7 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                 reason=scale_in_action.get("reason") or "-",
                 force=True,
             )
-            if scale_in_action.get("reason") == "reversal_add_ok":
+            if scale_in_action.get("reason") in {"reversal_add_ok", "aggressive_reversal_add_ok"}:
                 _mutate_stock_state(stock, set_fields={'reversal_add_state': 'ADD_ARMED'})
             log_info(
                 "[ADD_SIGNAL] "
@@ -26109,9 +26109,9 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                 action=scale_in_action,
                 admin_id=admin_id,
             )
-            if add_result and scale_in_action.get("reason") == "reversal_add_ok":
+            if add_result and scale_in_action.get("reason") in {"reversal_add_ok", "aggressive_reversal_add_ok"}:
                 _mutate_stock_state(stock, set_fields={'reversal_add_state': 'ADD_ARMED'})
-            elif (not add_result) and scale_in_action.get("reason") == "reversal_add_ok":
+            elif (not add_result) and scale_in_action.get("reason") in {"reversal_add_ok", "aggressive_reversal_add_ok"}:
                 _mutate_stock_state(stock, set_fields={'reversal_add_state': 'REVERSAL_CANDIDATE'})
                 _log_holding_pipeline(
                     stock,
@@ -26173,7 +26173,7 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                 else:
                     _ra_probe = evaluate_scalping_reversal_add(stock, profit_rate, current_ai_score, held_sec)
                     _ra_probe_reason = str(_ra_probe.get("reason") or "")
-                    if _ra_probe_reason and _ra_probe_reason != "reversal_add_ok":
+                    if _ra_probe_reason and _ra_probe_reason not in {"reversal_add_ok", "aggressive_reversal_add_ok"}:
                         _log_holding_pipeline(
                             stock,
                             code,
