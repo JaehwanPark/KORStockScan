@@ -22145,6 +22145,16 @@ def _entry_reprice_int(name: str, default: int) -> int:
     return int(_rule_int(name, default))
 
 
+def _entry_reprice_float(name: str, default: float) -> float:
+    raw = os.getenv(f"KORSTOCKSCAN_{name}")
+    if raw is not None:
+        try:
+            return float(str(raw).strip())
+        except (TypeError, ValueError):
+            return float(default)
+    return float(_rule_float(name, default))
+
+
 def _entry_reprice_config() -> dict:
     return {
         "enabled": _entry_reprice_bool("ENTRY_REPRICE_AFTER_SUBMIT_ENABLED", True),
@@ -22153,6 +22163,9 @@ def _entry_reprice_config() -> dict:
         "max_upward_bps": max(0, _entry_reprice_int("ENTRY_REPRICE_AFTER_SUBMIT_MAX_UPWARD_BPS", ENTRY_REPRICE_DEFAULT_MAX_UPWARD_BPS)),
         "max_quote_age_ms": max(1, _entry_reprice_int("ENTRY_REPRICE_AFTER_SUBMIT_MAX_QUOTE_AGE_MS", ENTRY_REPRICE_DEFAULT_MAX_QUOTE_AGE_MS)),
         "max_spread_bps": max(1, _entry_reprice_int("ENTRY_REPRICE_AFTER_SUBMIT_MAX_SPREAD_BPS", ENTRY_REPRICE_DEFAULT_MAX_SPREAD_BPS)),
+        "strong_score_floor": max(0.0, _entry_reprice_float("ENTRY_REPRICE_AFTER_SUBMIT_STRONG_SCORE_FLOOR", 75.0)),
+        "strong_buy_pressure": max(0.0, _entry_reprice_float("ENTRY_REPRICE_AFTER_SUBMIT_STRONG_BUY_PRESSURE", 85.0)),
+        "tight_spread_ticks": max(1, _entry_reprice_int("ENTRY_REPRICE_AFTER_SUBMIT_TIGHT_SPREAD_TICKS", 2)),
     }
 
 

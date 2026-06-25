@@ -25,6 +25,20 @@ def _base_order(**overrides):
     return order
 
 
+def test_pending_reprice_config_reads_score_and_pressure_env(monkeypatch):
+    import src.engine.sniper_state_handlers as handlers
+
+    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_REPRICE_AFTER_SUBMIT_STRONG_SCORE_FLOOR", "60")
+    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_REPRICE_AFTER_SUBMIT_STRONG_BUY_PRESSURE", "50")
+    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_REPRICE_AFTER_SUBMIT_TIGHT_SPREAD_TICKS", "3")
+
+    config = handlers._entry_reprice_config()
+
+    assert config["strong_score_floor"] == 60.0
+    assert config["strong_buy_pressure"] == 50.0
+    assert config["tight_spread_ticks"] == 3
+
+
 def test_helper_allows_tight_spread_continuation_without_negative_adm():
     decision = evaluate_entry_reprice_after_submit(
         order=_base_order(),
