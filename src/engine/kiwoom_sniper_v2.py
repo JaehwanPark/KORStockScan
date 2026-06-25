@@ -2683,9 +2683,9 @@ def _scanner_rest_quote_fallback_positive_reserve_calls():
 def _scanner_rest_quote_fallback_max_per_loop():
     raw = os.getenv("KORSTOCKSCAN_SCANNER_REST_QUOTE_FALLBACK_MAX_PER_LOOP", "")
     try:
-        value = int(str(raw).strip()) if str(raw).strip() else 3
+        value = int(str(raw).strip()) if str(raw).strip() else 6
     except Exception:
-        value = 3
+        value = 6
     return max(0, min(value, 10))
 
 

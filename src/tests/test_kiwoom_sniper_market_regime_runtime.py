@@ -2766,7 +2766,7 @@ def test_scanner_rest_quote_rate_limit_uses_bounded_operator_override(monkeypatc
 
 def test_scanner_rest_quote_loop_limit_allows_bounded_intraday_recovery_override(monkeypatch):
     monkeypatch.delenv("KORSTOCKSCAN_SCANNER_REST_QUOTE_FALLBACK_MAX_PER_LOOP", raising=False)
-    assert kiwoom_sniper_v2._scanner_rest_quote_fallback_max_per_loop() == 3
+    assert kiwoom_sniper_v2._scanner_rest_quote_fallback_max_per_loop() == 6
 
     monkeypatch.setenv("KORSTOCKSCAN_SCANNER_REST_QUOTE_FALLBACK_MAX_PER_LOOP", "8")
     assert kiwoom_sniper_v2._scanner_rest_quote_fallback_max_per_loop() == 8
