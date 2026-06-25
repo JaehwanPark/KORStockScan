@@ -2804,6 +2804,54 @@ def _scanner_normalize_ws_snapshot_for_entry_eval(snapshot, *, now_ts):
     return normalized, fields
 
 
+def _scanner_ws_snapshot_entry_realtime_fresh(snapshot, *, now_ts, fresh_sec):
+    snapshot = snapshot if isinstance(snapshot, dict) else {}
+    fresh_sec = _safe_float(fresh_sec, 0.0)
+    if not snapshot or fresh_sec <= 0 or _safe_int(snapshot.get("curr"), 0) <= 0:
+        return False, "missing_entry_snapshot"
+
+    candidates = []
+    type_ts = snapshot.get("last_realtime_type_ts")
+    if isinstance(type_ts, dict):
+        tick_ts = _safe_float(type_ts.get("0B"), 0.0)
+        if tick_ts > 0:
+            candidates.append(("last_realtime_type_ts_0B", tick_ts))
+
+    last_trade = snapshot.get("last_trade_tick")
+    if isinstance(last_trade, dict):
+        trade_ts = _safe_float(last_trade.get("ts"), 0.0)
+        if trade_ts > 0:
+            candidates.append(("last_trade_tick", trade_ts))
+
+    history = snapshot.get("strength_momentum_history") or []
+    try:
+        latest_history = history[-1] if history else None
+    except Exception:
+        latest_history = None
+    if isinstance(latest_history, dict):
+        history_ts = _safe_float(latest_history.get("ts") or latest_history.get("timestamp"), 0.0)
+        if history_ts > 0:
+            candidates.append(("strength_momentum_history", history_ts))
+
+    if candidates:
+        source, latest_ts = max(candidates, key=lambda item: item[1])
+        age_sec = max(0.0, float(now_ts) - latest_ts)
+        return age_sec <= fresh_sec, source
+    if isinstance(type_ts, dict) and type_ts:
+        return False, "missing_fresh_0B_or_strength_history"
+
+    received = snapshot.get("received_types") or []
+    try:
+        received_types = {str(item) for item in received if str(item).strip()}
+    except Exception:
+        received_types = set()
+    base_ts = _safe_float(snapshot.get("last_ws_update_ts"), 0.0)
+    if "0B" in received_types and base_ts > 0:
+        age_sec = max(0.0, float(now_ts) - base_ts)
+        return age_sec <= fresh_sec, "last_ws_update_ts_with_0B"
+    return False, "missing_fresh_0B_or_strength_history"
+
+
 def _scanner_ws_subscription_recheck_snapshot_and_fields(manager, code, ws_data, *, now_ts):
     norm_code = str(code or "").strip()[:6]
     snapshot = dict(ws_data or {}) if isinstance(ws_data, dict) else {}
@@ -2845,11 +2893,16 @@ def _scanner_ws_subscription_recheck_snapshot_and_fields(manager, code, ws_data,
     snapshot_present = bool(snapshot)
     fresh_sec = _scanner_ws_subscription_recheck_fresh_sec()
     fresh_curr = curr > 0 and age_sec is not None and age_sec <= fresh_sec
-    repair_needed = not (subscribed and fresh_curr)
+    entry_realtime_fresh, entry_realtime_source = _scanner_ws_snapshot_entry_realtime_fresh(
+        snapshot,
+        now_ts=now_ts,
+        fresh_sec=fresh_sec,
+    )
+    repair_needed = not (subscribed and fresh_curr and entry_realtime_fresh)
     fields = {
         "ws_subscription_recheck_status": (
             "subscribed_fresh_snapshot"
-            if subscribed and fresh_curr
+            if subscribed and fresh_curr and entry_realtime_fresh
             else "subscribed_snapshot_stale_or_missing"
             if subscribed
             else "not_subscribed"
@@ -2863,6 +2916,8 @@ def _scanner_ws_subscription_recheck_snapshot_and_fields(manager, code, ws_data,
         ),
         "ws_subscription_recheck_fresh_sec": round(fresh_sec, 3),
         "ws_subscription_recheck_received_types": ",".join(received_types) if received_types else "-",
+        "ws_subscription_recheck_entry_realtime_fresh": bool(entry_realtime_fresh),
+        "ws_subscription_recheck_entry_realtime_source": entry_realtime_source,
         "ws_subscription_repair_needed": bool(repair_needed),
         **entry_timestamp_fields,
     }

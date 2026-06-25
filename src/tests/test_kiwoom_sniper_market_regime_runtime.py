@@ -3059,6 +3059,8 @@ def test_scanner_ws_subscription_recheck_closes_when_subscribed_snapshot_fresh()
     assert fields["ws_subscription_recheck_status"] == "subscribed_fresh_snapshot"
     assert fields["ws_subscription_repair_needed"] is False
     assert fields["ws_subscription_recheck_received_types"] == "0B"
+    assert fields["ws_subscription_recheck_entry_realtime_fresh"] is True
+    assert fields["ws_subscription_recheck_entry_realtime_source"] == "last_ws_update_ts_with_0B"
 
 
 def test_scanner_ws_subscription_recheck_prefers_fresher_manager_snapshot():
@@ -3155,9 +3157,40 @@ def test_scanner_ws_subscription_recheck_does_not_normalize_from_non_price_type_
 
     assert snapshot["last_ws_update_ts"] == 1020.0
     assert "entry_eval_last_ws_update_ts_normalized_from" not in snapshot
+    assert fields["ws_subscription_recheck_status"] == "subscribed_snapshot_stale_or_missing"
+    assert fields["ws_subscription_repair_needed"] is True
+    assert fields["ws_subscription_recheck_entry_realtime_fresh"] is False
+    assert fields["ws_subscription_recheck_entry_realtime_source"] == "missing_fresh_0B_or_strength_history"
     assert fields["ws_subscription_recheck_entry_timestamp_normalized"] is False
     assert fields["ws_subscription_recheck_entry_timestamp_source"] == "last_ws_update_ts"
     assert fields["ws_subscription_recheck_age_sec"] == 10.0
+
+
+def test_scanner_ws_subscription_recheck_requires_fresh_entry_realtime_source():
+    manager = SimpleNamespace(
+        subscribed_codes={"005930"},
+        get_latest_data=lambda code: {
+            "curr": 71000,
+            "last_ws_update_ts": 1029.0,
+            "last_realtime_type_ts": {"0B": 900.0, "0D": 1029.0, "0w": 1029.0},
+            "strength_momentum_history": [{"ts": 900.0, "price": 71000}],
+            "received_types": ["0B", "0D", "0w"],
+        },
+    )
+
+    snapshot, fields = kiwoom_sniper_v2._scanner_ws_subscription_recheck_snapshot_and_fields(
+        manager,
+        "005930",
+        {},
+        now_ts=1030.0,
+    )
+
+    assert snapshot["curr"] == 71000
+    assert fields["ws_subscription_recheck_age_sec"] == 1.0
+    assert fields["ws_subscription_recheck_status"] == "subscribed_snapshot_stale_or_missing"
+    assert fields["ws_subscription_repair_needed"] is True
+    assert fields["ws_subscription_recheck_entry_realtime_fresh"] is False
+    assert fields["ws_subscription_recheck_entry_realtime_source"] == "last_realtime_type_ts_0B"
 
 
 def test_scanner_ws_subscription_recheck_requires_repair_when_subscribed_but_zero_curr():
