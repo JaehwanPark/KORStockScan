@@ -4660,6 +4660,10 @@ def run_sniper(is_test_mode=False):
                                     delayed_code,
                                     "scanner_heavy_eval_stale_ws_recovery",
                                 )
+                            heavy_recheck_skip_fields = {
+                                **recheck_fields,
+                                **recovery_fields,
+                            }
                             _defer_scanner_watching_runtime_skip(
                                 delayed_stock,
                                 delayed_code,
@@ -4667,8 +4671,7 @@ def run_sniper(is_test_mode=False):
                                 now_ts=time.time(),
                                 ws_data=recheck_snapshot or delayed_ws_data,
                                 ws_manager_available=bool(WS_MANAGER),
-                                **recheck_fields,
-                                **recovery_fields,
+                                **heavy_recheck_skip_fields,
                             )
                             continue
                         if (

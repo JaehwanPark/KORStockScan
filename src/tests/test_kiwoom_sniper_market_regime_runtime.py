@@ -1865,14 +1865,17 @@ def test_scanner_heavy_eval_stale_recheck_repairs_before_handler():
     fresh_idx = source.index("_scanner_heavy_eval_recheck_fresh_sec()", recheck_idx)
     stale_idx = source.index("heavy_recheck_repair_needed = bool(", fresh_idx)
     recover_idx = source.index("scanner_heavy_eval_stale_ws_recovery", stale_idx)
+    merge_idx = source.index("heavy_recheck_skip_fields = {", recover_idx)
     skip_idx = source.index('skip_reason="scanner_heavy_eval_stale_snapshot_recheck"', recover_idx)
+    merged_arg_idx = source.index("**heavy_recheck_skip_fields", skip_idx)
     continue_idx = source.index("continue", skip_idx)
     handle_idx = source.index(
         "handle_watching_state(\n                        delayed_stock",
         continue_idx,
     )
 
-    assert recheck_idx < fresh_idx < stale_idx < recover_idx < skip_idx < continue_idx < handle_idx
+    assert recheck_idx < fresh_idx < stale_idx < recover_idx < merge_idx < skip_idx
+    assert skip_idx < merged_arg_idx < continue_idx < handle_idx
 
 
 def test_scanner_strength_recheck_waiting_skips_before_full_eval_budget():
