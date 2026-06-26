@@ -2817,7 +2817,7 @@ def _scanner_rest_quote_fallback_max_calls_per_window():
         value = int(str(raw).strip()) if str(raw).strip() else _SCANNER_REST_QUOTE_FALLBACK_MAX_CALLS
     except Exception:
         value = _SCANNER_REST_QUOTE_FALLBACK_MAX_CALLS
-    return max(0, min(value, 8))
+    return max(0, min(value, 12))
 
 
 def _scanner_rest_quote_fallback_positive_reserve_calls():
@@ -2826,7 +2826,7 @@ def _scanner_rest_quote_fallback_positive_reserve_calls():
         value = int(str(raw).strip()) if str(raw).strip() else _SCANNER_REST_QUOTE_FALLBACK_POSITIVE_RESERVE_CALLS
     except Exception:
         value = _SCANNER_REST_QUOTE_FALLBACK_POSITIVE_RESERVE_CALLS
-    return max(0, min(value, 4))
+    return max(0, min(value, 6))
 
 
 def _scanner_rest_quote_fallback_max_per_loop():
@@ -2835,7 +2835,7 @@ def _scanner_rest_quote_fallback_max_per_loop():
         value = int(str(raw).strip()) if str(raw).strip() else 6
     except Exception:
         value = 6
-    return max(0, min(value, 16))
+    return max(0, min(value, 24))
 
 
 def _scanner_rest_quote_fallback_dynamic_max_extra_calls():
@@ -2848,7 +2848,7 @@ def _scanner_rest_quote_fallback_dynamic_max_extra_calls():
         )
     except Exception:
         value = _SCANNER_REST_QUOTE_FALLBACK_DYNAMIC_MAX_EXTRA_CALLS
-    return max(0, min(value, 4))
+    return max(0, min(value, 8))
 
 
 def _scanner_rest_quote_fallback_defer_sec():

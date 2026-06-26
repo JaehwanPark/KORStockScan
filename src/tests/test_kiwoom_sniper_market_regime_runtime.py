@@ -2839,7 +2839,35 @@ def test_scanner_rest_quote_loop_limit_allows_bounded_intraday_recovery_override
     assert kiwoom_sniper_v2._scanner_rest_quote_fallback_max_per_loop() == 8
 
     monkeypatch.setenv("KORSTOCKSCAN_SCANNER_REST_QUOTE_FALLBACK_MAX_PER_LOOP", "99")
-    assert kiwoom_sniper_v2._scanner_rest_quote_fallback_max_per_loop() == 16
+    assert kiwoom_sniper_v2._scanner_rest_quote_fallback_max_per_loop() == 24
+
+
+def test_scanner_rest_quote_budget_caps_cover_intraday_observation_override(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        kiwoom_sniper_v2,
+        "_SCANNER_OPERATOR_RUNTIME_OVERRIDE_PATH",
+        tmp_path / "missing_operator_runtime_overrides.env",
+    )
+    _reset_scanner_hot_override_cache()
+    monkeypatch.setenv("KORSTOCKSCAN_SCANNER_REST_QUOTE_FALLBACK_MAX_PER_LOOP", "24")
+    monkeypatch.setenv("KORSTOCKSCAN_SCANNER_REST_QUOTE_FALLBACK_MAX_CALLS_PER_WINDOW", "12")
+    monkeypatch.setenv("KORSTOCKSCAN_SCANNER_REST_QUOTE_FALLBACK_POSITIVE_RESERVE_CALLS", "6")
+    monkeypatch.setenv("KORSTOCKSCAN_SCANNER_REST_QUOTE_FALLBACK_DYNAMIC_MAX_EXTRA_CALLS", "8")
+
+    assert kiwoom_sniper_v2._scanner_rest_quote_fallback_max_per_loop() == 24
+    assert kiwoom_sniper_v2._scanner_rest_quote_fallback_max_calls_per_window() == 12
+    assert kiwoom_sniper_v2._scanner_rest_quote_fallback_positive_reserve_calls() == 6
+    assert kiwoom_sniper_v2._scanner_rest_quote_fallback_dynamic_max_extra_calls() == 8
+
+    monkeypatch.setenv("KORSTOCKSCAN_SCANNER_REST_QUOTE_FALLBACK_MAX_PER_LOOP", "99")
+    monkeypatch.setenv("KORSTOCKSCAN_SCANNER_REST_QUOTE_FALLBACK_MAX_CALLS_PER_WINDOW", "99")
+    monkeypatch.setenv("KORSTOCKSCAN_SCANNER_REST_QUOTE_FALLBACK_POSITIVE_RESERVE_CALLS", "99")
+    monkeypatch.setenv("KORSTOCKSCAN_SCANNER_REST_QUOTE_FALLBACK_DYNAMIC_MAX_EXTRA_CALLS", "99")
+
+    assert kiwoom_sniper_v2._scanner_rest_quote_fallback_max_per_loop() == 24
+    assert kiwoom_sniper_v2._scanner_rest_quote_fallback_max_calls_per_window() == 12
+    assert kiwoom_sniper_v2._scanner_rest_quote_fallback_positive_reserve_calls() == 6
+    assert kiwoom_sniper_v2._scanner_rest_quote_fallback_dynamic_max_extra_calls() == 8
 
 
 def test_scanner_rest_quote_budget_hot_reloads_operator_override_file(tmp_path, monkeypatch):
