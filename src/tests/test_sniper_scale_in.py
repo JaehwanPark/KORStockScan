@@ -2329,6 +2329,36 @@ def test_protect_trailing_uses_smoothing_not_single_tick(monkeypatch):
     assert any(stage == "protect_trailing_smooth_hold" for stage, _ in calls["stages"])
 
 
+def test_protect_trailing_loss_floor_holds_near_flat_break(monkeypatch):
+    from src.utils.constants import TRADING_RULES as CONFIG
+
+    state_handlers.TRADING_RULES = replace(
+        CONFIG,
+        SCALP_PROTECT_TRAILING_SMOOTH_ENABLED=True,
+        SCALP_PROTECT_TRAILING_MIN_EXIT_PROFIT_PCT=-0.30,
+        SCALP_PROTECT_TRAILING_EMERGENCY_PCT=-2.0,
+    )
+    calls = []
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_holding_pipeline",
+        lambda stock, code, stage, **fields: calls.append((stage, fields)),
+    )
+
+    confirmed = state_handlers._protect_trailing_break_confirmed(
+        {"holding_price_samples": [{"ts": 1, "price": 9900}, {"ts": 10, "price": 9900}, {"ts": 20, "price": 9900}]},
+        "123456",
+        now_ts=20,
+        curr_price=9900,
+        trailing_stop_price=10000,
+        profit_rate=-0.10,
+        peak_profit=1.20,
+    )
+
+    assert confirmed is False
+    assert calls[-1][0] == "protect_trailing_loss_floor_hold"
+
+
 def test_pyramid_post_add_grace_prefers_older_db_timestamp_when_runtime_time_is_refreshed():
     from src.utils.constants import TRADING_RULES as CONFIG
 

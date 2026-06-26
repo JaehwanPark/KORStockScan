@@ -694,6 +694,14 @@ def test_trading_rules_profit_stagnation_exit_env_override(monkeypatch):
     assert reloaded.TRADING_RULES.SCALP_PROFIT_STAGNATION_MIN_AI_SCORE == 45
 
 
+def test_trading_rules_protect_trailing_loss_floor_env_override(monkeypatch):
+    monkeypatch.setenv("KORSTOCKSCAN_SCALP_PROTECT_TRAILING_MIN_EXIT_PROFIT_PCT", "-0.3")
+
+    reloaded = importlib.reload(constants)
+
+    assert reloaded.TRADING_RULES.SCALP_PROTECT_TRAILING_MIN_EXIT_PROFIT_PCT == -0.3
+
+
 def test_trading_rules_ai_cadence_defaults_are_rate_limited(monkeypatch):
     for key in (
         "KORSTOCKSCAN_AI_WATCHING_COOLDOWN",

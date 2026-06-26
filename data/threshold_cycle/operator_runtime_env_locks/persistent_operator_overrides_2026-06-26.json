@@ -111,6 +111,7 @@
     "KORSTOCKSCAN_SCALP_LIVE_SIMULATOR_MAX_OPEN": "4",
     "KORSTOCKSCAN_SCALP_LOSS_FALLBACK_ENABLED": "true",
     "KORSTOCKSCAN_SCALP_LOSS_FALLBACK_OBSERVE_ONLY": "false",
+    "KORSTOCKSCAN_SCALP_MFE_PROTECT_TRIGGER_PROFIT_PCT": "-0.3",
     "KORSTOCKSCAN_SCALP_PRESET_HARD_STOP_EMERGENCY_PCT": "-2.4",
     "KORSTOCKSCAN_SCALP_PRESET_HARD_STOP_FALLBACK_BASE_EMERGENCY_PCT": "-2.4",
     "KORSTOCKSCAN_SCALP_PRESET_HARD_STOP_FALLBACK_BASE_PCT": "-1.4",
@@ -127,6 +128,7 @@
     "KORSTOCKSCAN_SCALP_SIM_CANDIDATE_WINDOW_MAX_OPEN": "4",
     "KORSTOCKSCAN_SCALP_SIM_SCALE_IN_EXECUTION_OBSERVATION_ENABLED": "true",
     "KORSTOCKSCAN_SCALP_SIM_SCALE_IN_WINDOW_EXPANSION_ENABLED": "true",
+    "KORSTOCKSCAN_SCALP_PROTECT_TRAILING_MIN_EXIT_PROFIT_PCT": "-0.3",
     "KORSTOCKSCAN_SCALP_SOFT_STOP_DYNAMIC_GRACE_EMERGENCY_PCT": "-5.6",
     "KORSTOCKSCAN_SCALP_SOFT_STOP_MICRO_GRACE_EMERGENCY_PCT": "-4.0",
     "KORSTOCKSCAN_SCALP_STOP": "-3.0",
@@ -208,6 +210,6 @@
     "reason": "User explicitly instructed that all temporarily overridden runtimes must be maintained for the next business day.",
     "operator_override_path": "data/threshold_cycle/runtime_env/operator_runtime_overrides.env",
     "user_instruction": "모두 유지해야해",
-    "captured_effective_export_count": 161
+    "captured_effective_export_count": 163
   }
 }

@@ -110,3 +110,10 @@ def test_stop_loss_recovery_backtest_flags_recoverable_soft_stop(tmp_path, monke
     assert mfe["hard_safety_count"] == 0
     assert report["runtime_effect"] is False
     assert report["rows"][0]["avg_down_recovery"]["horizons"]["10m"]["avg_down_recovery_possible"] is True
+    assert report["summary"]["post_sell_evaluation_count"] == 3
+    assert report["summary"]["recovery_eligible_evaluated_count"] == 2
+    recommendations = report["summary"]["stop_line_recommendations_by_family"]
+    assert recommendations["scalp_hard_soft_stop"]["evaluated_count"] == 1
+    assert recommendations["mfe_protect"]["recommended_runtime_env"] == {
+        "KORSTOCKSCAN_SCALP_MFE_PROTECT_TRIGGER_PROFIT_PCT": "-0.3"
+    }

@@ -6747,6 +6747,25 @@ def _protect_trailing_break_confirmed(
     emergency_pct = _rule_float('SCALP_PROTECT_TRAILING_EMERGENCY_PCT', -2.0)
     if profit_rate <= emergency_pct:
         return True
+    min_exit_profit_pct = _rule_float('SCALP_PROTECT_TRAILING_MIN_EXIT_PROFIT_PCT', -999.0)
+    if min_exit_profit_pct > -100.0 and profit_rate > min_exit_profit_pct:
+        last_floor_log = float(stock.get('last_protect_trailing_loss_floor_hold_log_ts', 0) or 0)
+        if float(now_ts or time.time()) - last_floor_log >= 5:
+            _mutate_stock_state(
+                stock,
+                set_fields={'last_protect_trailing_loss_floor_hold_log_ts': float(now_ts or time.time())},
+            )
+            _log_holding_pipeline(
+                stock,
+                code,
+                "protect_trailing_loss_floor_hold",
+                threshold_family="protect_trailing_smoothing",
+                exit_rule_candidate="protect_trailing_stop",
+                profit_rate=f"{profit_rate:+.2f}",
+                min_exit_profit_pct=f"{min_exit_profit_pct:+.2f}",
+                peak_profit=f"{peak_profit:+.2f}",
+            )
+        return False
 
     samples = list(stock.get('holding_price_samples') or [])
     min_samples = max(1, _rule_int('SCALP_PROTECT_TRAILING_SMOOTH_MIN_SAMPLES', 3))

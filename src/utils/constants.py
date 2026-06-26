@@ -571,6 +571,7 @@ class TradingConfig:
     SCALP_PROTECT_TRAILING_SMOOTH_BELOW_RATIO: float = 0.67  # 버퍼 하단 이탈 샘플 비율
     SCALP_PROTECT_TRAILING_SMOOTH_BUFFER_PCT: float = 1.00  # 보호선 대비 노이즈 허용폭
     SCALP_PROTECT_TRAILING_EMERGENCY_PCT: float = -2.0  # 평탄화 전에도 즉시 청산할 손실폭
+    SCALP_PROTECT_TRAILING_MIN_EXIT_PROFIT_PCT: float = -999.0  # operator override only; above this loss floor, keep smoothing hold
 
     # ── reversal_add ────────────────────────────────────────
     REVERSAL_ADD_ENABLED: bool = True              # 2026-04-30 canary: 역전 확인 추가매수 소형 실험
@@ -1923,6 +1924,7 @@ def _build_trading_rules() -> TradingConfig:
     env_protect_trailing_smooth_below_ratio = _env_float("KORSTOCKSCAN_SCALP_PROTECT_TRAILING_SMOOTH_BELOW_RATIO")
     env_protect_trailing_smooth_buffer = _env_float("KORSTOCKSCAN_SCALP_PROTECT_TRAILING_SMOOTH_BUFFER_PCT")
     env_protect_trailing_emergency = _env_float("KORSTOCKSCAN_SCALP_PROTECT_TRAILING_EMERGENCY_PCT")
+    env_protect_trailing_min_exit_profit = _env_float("KORSTOCKSCAN_SCALP_PROTECT_TRAILING_MIN_EXIT_PROFIT_PCT")
     if (
         env_dynamic_strength_enabled is not None
         or env_dynamic_strength_tags is not None
@@ -2103,6 +2105,7 @@ def _build_trading_rules() -> TradingConfig:
         or env_protect_trailing_smooth_below_ratio is not None
         or env_protect_trailing_smooth_buffer is not None
         or env_protect_trailing_emergency is not None
+        or env_protect_trailing_min_exit_profit is not None
     ):
         config = replace(
             config,
@@ -2763,6 +2766,9 @@ def _build_trading_rules() -> TradingConfig:
             SCALP_PROTECT_TRAILING_EMERGENCY_PCT=env_protect_trailing_emergency
             if env_protect_trailing_emergency is not None
             else config.SCALP_PROTECT_TRAILING_EMERGENCY_PCT,
+            SCALP_PROTECT_TRAILING_MIN_EXIT_PROFIT_PCT=env_protect_trailing_min_exit_profit
+            if env_protect_trailing_min_exit_profit is not None
+            else config.SCALP_PROTECT_TRAILING_MIN_EXIT_PROFIT_PCT,
         )
 
     env_scalping_enable_pyramid = _env_bool("KORSTOCKSCAN_SCALPING_ENABLE_PYRAMID")

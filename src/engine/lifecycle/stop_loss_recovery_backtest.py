@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import gzip
 import json
+import math
 from collections import Counter, defaultdict
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -26,6 +27,7 @@ PIPELINE_EVENTS_DIR = DATA_DIR / "pipeline_events"
 POST_SELL_DIR = DATA_DIR / "post_sell"
 SCALE_IN_CF_DIR = DATA_DIR / "report" / "scale_in_incremental_counterfactual"
 ASSUMED_AVG_DOWN_RATIO = 0.30
+MIN_STOP_RECOMMENDATION_EVALUATED_SAMPLE = 20
 
 STOP_LOSS_LOGIC_AUDIT_ORDER = [
     "preset_tp_loss_exit",
@@ -90,6 +92,20 @@ def _safe_int(value: Any, default: int = 0) -> int:
         return int(float(value))
     except Exception:
         return default
+
+
+def _percentile(values: list[float], pct: float, default: float | None = None) -> float | None:
+    usable = sorted(v for v in values if math.isfinite(v))
+    if not usable:
+        return default
+    if len(usable) == 1:
+        return usable[0]
+    position = (len(usable) - 1) * max(0.0, min(100.0, pct)) / 100.0
+    lower = math.floor(position)
+    upper = math.ceil(position)
+    if lower == upper:
+        return usable[lower]
+    return usable[lower] * (upper - position) + usable[upper] * (position - lower)
 
 
 def _event_path(target_date: str) -> Path:
@@ -295,6 +311,113 @@ def _avg_down_recovery(evaluation: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _max_mfe_pct(recovery: dict[str, Any]) -> float | None:
+    values: list[float] = []
+    horizons = recovery.get("horizons")
+    if not isinstance(horizons, dict):
+        return None
+    for metrics in horizons.values():
+        if isinstance(metrics, dict):
+            values.append(_safe_float(metrics.get("mfe_pct"), float("nan")))
+    values = [value for value in values if math.isfinite(value)]
+    return max(values) if values else None
+
+
+def _recommend_stop_line(family: str, rows: list[dict[str, Any]]) -> dict[str, Any]:
+    eligible = [row for row in rows if row.get("recovery_eligible")]
+    evaluated = [
+        row
+        for row in eligible
+        if (row.get("avg_down_recovery") or {}).get("status") == "evaluated"
+    ]
+    recoverable = [
+        row
+        for row in evaluated
+        if (row.get("avg_down_recovery") or {}).get("avg_down_recovery_possible")
+    ]
+    loss_values = [
+        abs(_safe_float(row.get("profit_rate"), float("nan")))
+        for row in evaluated
+    ]
+    loss_values = [value for value in loss_values if math.isfinite(value)]
+    mfe_values = [
+        _max_mfe_pct(row.get("avg_down_recovery") or {})
+        for row in evaluated
+    ]
+    mfe_values = [value for value in mfe_values if value is not None and math.isfinite(value)]
+    missing_count = len(eligible) - len(evaluated)
+    evaluated_count = len(evaluated)
+    evaluated_rate = evaluated_count / len(eligible) if eligible else 0.0
+    recoverable_rate = len(recoverable) / evaluated_count if evaluated_count else 0.0
+    recommendation = {
+        "sample_floor": MIN_STOP_RECOMMENDATION_EVALUATED_SAMPLE,
+        "eligible_count": len(eligible),
+        "evaluated_count": evaluated_count,
+        "missing_evaluation_count": missing_count,
+        "evaluated_rate": round(evaluated_rate, 4),
+        "recoverable_count": len(recoverable),
+        "recoverable_rate_evaluated": round(recoverable_rate, 4),
+        "loss_abs_pct": {
+            "p25": round(_percentile(loss_values, 25, 0.0) or 0.0, 3),
+            "median": round(_percentile(loss_values, 50, 0.0) or 0.0, 3),
+            "p75": round(_percentile(loss_values, 75, 0.0) or 0.0, 3),
+        },
+        "post_sell_mfe_pct": {
+            "p25": round(_percentile(mfe_values, 25, 0.0) or 0.0, 3),
+            "median": round(_percentile(mfe_values, 50, 0.0) or 0.0, 3),
+            "p75": round(_percentile(mfe_values, 75, 0.0) or 0.0, 3),
+            "p90": round(_percentile(mfe_values, 90, 0.0) or 0.0, 3),
+        },
+        "recommendation_authority": "operator_review_only",
+        "recommended_runtime_env": {},
+        "confidence": "insufficient_evaluated_sample",
+        "rationale": "insufficient evaluated post-sell MFE sample",
+    }
+    if family == "scalp_hard_soft_stop" and evaluated_count >= MIN_STOP_RECOMMENDATION_EVALUATED_SAMPLE:
+        recommendation.update(
+            {
+                "confidence": "directional_cumulative",
+                "recommended_runtime_env": {
+                    "KORSTOCKSCAN_SCALP_STOP": "-3.0",
+                    "KORSTOCKSCAN_SCALP_HARD_STOP": "-5.0",
+                },
+                "rationale": "old -1.5/-2.5 exits cluster near loss median around 2%; evaluated MFE recovers about half after avg-down counterfactual",
+            }
+        )
+    elif family == "mfe_protect":
+        recommendation.update(
+            {
+                "confidence": "thin_sample_directional",
+                "recommended_runtime_env": {
+                    "KORSTOCKSCAN_SCALP_MFE_PROTECT_TRIGGER_PROFIT_PCT": "-0.3",
+                },
+                "rationale": "positive-MFE giveback exits near flat had high post-sell MFE in thin sample; require a small loss floor before protective exit",
+            }
+        )
+    elif family == "protect_hard_trailing":
+        recommendation.update(
+            {
+                "confidence": "thin_sample_directional",
+                "recommended_runtime_env": {
+                    "KORSTOCKSCAN_SCALP_PROTECT_TRAILING_MIN_EXIT_PROFIT_PCT": "-0.3",
+                },
+                "rationale": "near-flat protect trailing losses recovered in thin evaluated sample; hold above the small loss floor while preserving hard stop emergency",
+            }
+        )
+    elif family == "preset_tp_loss_exit":
+        recommendation.update(
+            {
+                "confidence": "not_evaluated_hard_safety",
+                "recommended_runtime_env": {
+                    "KORSTOCKSCAN_SCALP_PRESET_HARD_STOP_PCT": "-1.4",
+                    "KORSTOCKSCAN_SCALP_PRESET_HARD_STOP_EMERGENCY_PCT": "-2.4",
+                },
+                "rationale": "preset exits are hard-safety classified here; keep current operator values until post-sell MFE can evaluate them",
+            }
+        )
+    return recommendation
+
+
 def _scale_in_counterfactual_summary(target_date: str) -> dict[str, Any]:
     path = SCALE_IN_CF_DIR / f"scale_in_incremental_counterfactual_{target_date}.json"
     payload = _load_json(path)
@@ -366,6 +489,16 @@ def build_report(
                 }
             )
 
+    rows_by_family: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in rows:
+        rows_by_family[str(row.get("exit_family") or "unknown")].append(row)
+    evaluated_count = sum(
+        1
+        for row in rows
+        if (row.get("avg_down_recovery") or {}).get("status") == "evaluated"
+    )
+    eligible_count = sum(1 for row in rows if row.get("recovery_eligible"))
+
     return {
         "schema_version": SCHEMA_VERSION,
         "report_type": REPORT_TYPE,
@@ -391,9 +524,21 @@ def build_report(
         "summary": {
             "exit_count": len(rows),
             "missing_post_sell_evaluation_count": missing_evaluation_count,
+            "post_sell_evaluation_count": evaluated_count,
+            "recovery_eligible_count": eligible_count,
+            "recovery_eligible_evaluated_count": sum(
+                1
+                for row in rows
+                if row.get("recovery_eligible")
+                and (row.get("avg_down_recovery") or {}).get("status") == "evaluated"
+            ),
             "by_exit_family": {
                 family: dict(counter)
                 for family, counter in sorted(summary_by_family.items())
+            },
+            "stop_line_recommendations_by_family": {
+                family: _recommend_stop_line(family, rows_by_family.get(family, []))
+                for family in sorted(summary_by_family)
             },
         },
         "rows": rows,
@@ -412,6 +557,7 @@ def build_markdown(report: dict[str, Any]) -> str:
         f"- runtime_effect: `{report['runtime_effect']}`",
         f"- source_dates: `{', '.join(report.get('source_dates') or []) or '-'}`",
         f"- exit_count: `{report.get('summary', {}).get('exit_count', 0)}`",
+        f"- post_sell_evaluation_count: `{report.get('summary', {}).get('post_sell_evaluation_count', 0)}`",
         f"- missing_post_sell_evaluation_count: `{report.get('summary', {}).get('missing_post_sell_evaluation_count', 0)}`",
         "",
         "## By Exit Family",
@@ -423,6 +569,17 @@ def build_markdown(report: dict[str, Any]) -> str:
             f"recovery_possible={row.get('avg_down_recovery_possible_count', 0)}, "
             f"hard_safety={row.get('hard_safety_count', 0)}"
         )
+    recommendations = report.get("summary", {}).get("stop_line_recommendations_by_family") or {}
+    if recommendations:
+        lines.extend(["", "## Stop Line Recommendations"])
+        for family, row in recommendations.items():
+            env = row.get("recommended_runtime_env") if isinstance(row, dict) else {}
+            lines.append(
+                f"- `{family}`: confidence={row.get('confidence')}, "
+                f"evaluated={row.get('evaluated_count')}/{row.get('eligible_count')}, "
+                f"recoverable_rate_evaluated={row.get('recoverable_rate_evaluated')}, "
+                f"env={env or '-'}"
+            )
     return "\n".join(lines) + "\n"
 
 
