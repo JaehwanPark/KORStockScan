@@ -171,6 +171,15 @@ def resolve_holding_elapsed_sec(stock, *, now_dt=None, now_ts=None):
         except (TypeError, ValueError):
             pass
 
+    raw_holding_started_at = stock.get("holding_started_at")
+    if raw_holding_started_at not in (None, "", 0, "0"):
+        try:
+            return max(0, int(current_ts - float(raw_holding_started_at)))
+        except (TypeError, ValueError):
+            holding_dt = resolve_buy_time_as_datetime(raw_holding_started_at, current_dt)
+            if holding_dt is not None:
+                return max(0, int((current_dt - holding_dt).total_seconds()))
+
     raw_buy_time = stock.get("buy_time")
     if not raw_buy_time:
         return 0

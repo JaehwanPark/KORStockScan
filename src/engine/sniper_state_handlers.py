@@ -10679,15 +10679,7 @@ def _dispatch_scalp_preset_exit(
     expected_qty = _safe_int(stock.get('buy_qty'), 0)
     orig_ord_no = stock.get('preset_tp_ord_no', '')
     preset_ai_score = float(stock.get('rt_ai_prob', 0.5) or 0.5) * 100
-    preset_held_sec = 0
-    try:
-        if stock.get('order_time'):
-            preset_held_sec = max(0, int(now_ts - float(stock.get('order_time') or 0)))
-    except Exception as exc:
-        log_error(
-            f"[SCALP_PRESET_EXIT] order_time 파싱 실패 ({stock.get('code', '-')}, {stock.get('order_time')}): {exc}"
-        )
-        preset_held_sec = 0
+    preset_held_sec = _resolve_holding_elapsed_sec(stock, now_ts=now_ts)
 
     _remember_exit_context(
         stock=stock,
@@ -17784,8 +17776,8 @@ def _scalp_ai_wait_rebound_recheck_decision(
     return fields
 
 
-def _resolve_holding_elapsed_sec(stock):
-    return resolve_holding_elapsed_sec(stock)
+def _resolve_holding_elapsed_sec(stock, *, now_dt=None, now_ts=None):
+    return resolve_holding_elapsed_sec(stock, now_dt=now_dt, now_ts=now_ts)
 
 
 def _bucket_int(value, bucket):
@@ -23871,7 +23863,7 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                 min(preset_hard_stop_pct - 0.5, -1.2),
             )
         )
-        preset_held_sec = _resolve_holding_elapsed_sec(stock)
+        preset_held_sec = _resolve_holding_elapsed_sec(stock, now_ts=now_ts)
         preset_ai_score = float(stock.get('rt_ai_prob', 0.5) or 0.5) * 100
         _emit_scalp_hard_time_stop_shadow(
             stock=stock,

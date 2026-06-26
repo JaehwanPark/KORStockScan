@@ -449,6 +449,15 @@ def test_resolve_holding_elapsed_sec_supports_time_only_buy_time():
     assert 530 <= held_sec <= 550
 
 
+def test_resolve_holding_elapsed_sec_prefers_holding_started_at_epoch():
+    held_sec = scale_in.resolve_holding_elapsed_sec(
+        {"holding_started_at": 880, "buy_time": 1},
+        now_ts=1000,
+    )
+
+    assert held_sec == 120
+
+
 def test_state_handler_resolve_holding_elapsed_sec_uses_shared_parser():
     buy_time = (datetime.now() - timedelta(minutes=6)).time().replace(microsecond=0)
 
@@ -8936,6 +8945,8 @@ def test_scalp_preset_tp_hard_stop_passthrough_when_sell_open_time_block_enabled
         "rt_ai_prob": 0.50,
         "exit_mode": "SCALP_PRESET_TP",
         "preset_tp_ord_no": "TP1",
+        "buy_time": 880,
+        "holding_started_at": 880,
     }
 
     state_handlers._dispatch_scalp_preset_exit(
@@ -8954,8 +8965,10 @@ def test_scalp_preset_tp_hard_stop_passthrough_when_sell_open_time_block_enabled
 
     blocked_logs = [fields for stage, fields in pipeline_logs if stage == "sell_order_blocked_open_time"]
     sent_logs = [fields for stage, fields in pipeline_logs if stage == "sell_order_sent"]
+    exit_logs = [fields for stage, fields in pipeline_logs if stage == "exit_signal"]
 
     assert blocked_logs == []
+    assert exit_logs[-1]["held_sec"] == 120
     assert sell_calls
     assert stock["status"] == "SELL_ORDERED"
     assert sent_logs[-1]["sell_time_block_applied"] is False
