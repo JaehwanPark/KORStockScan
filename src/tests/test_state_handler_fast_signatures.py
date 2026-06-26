@@ -715,6 +715,45 @@ def test_strength_momentum_stability_recheck_allows_strong_rising_min_history_ai
     assert result["recheck_ai_ready_sample_count"] == 2
 
 
+def test_strength_momentum_stability_recheck_allows_rising_window_buy_value_ai_recheck(monkeypatch):
+    rules = SimpleNamespace(
+        SCALP_PRE_AI_MAX_WS_AGE_SEC=3.0,
+        SCANNER_RISING_STRENGTH_PRE_AI_OVERRIDE_ENABLED=True,
+        SCANNER_RISING_STRENGTH_OVERRIDE_MIN_DELTA_PCT=1.0,
+        SCANNER_STRENGTH_MOMENTUM_STABILITY_RECHECK_ENABLED=True,
+        SCANNER_STRENGTH_MOMENTUM_STABILITY_RECHECK_MAX_ATTEMPTS=30,
+        SCANNER_STRENGTH_MOMENTUM_STABILITY_RECHECK_DELAY_SEC=2,
+    )
+    monkeypatch.setattr(handlers, "TRADING_RULES", rules)
+    monkeypatch.setenv("KORSTOCKSCAN_SCANNER_RISING_INSUFFICIENT_HISTORY_AI_RECHECK_MIN_SAMPLES", "2")
+
+    result = _strength_momentum_stability_recheck_decision(
+        {
+            "strategy": "SCALPING",
+            "position_tag": "SCANNER",
+            "entry_armed_at_epoch": 90.0,
+            "scanner_promotion_reason": "price_jump_start_acceleration",
+            "source_signature": "PRICE_JUMP_START,REALTIME_RANK_START,VOLUME_SURGE_POSITIVE",
+            "price_delta_since_first_seen_pct": "1.35",
+        },
+        {},
+        {"reason": "below_window_buy_value"},
+        {
+            "quote_age_ms": 250.0,
+            "refresh_reason": "latest_ws_snapshot_fresh",
+            "refresh_age_ms": 250.0,
+            "tick_sample_count": 2,
+            "tick_window_sample_count": 2,
+            "tick_window_span_sec": 1.0,
+        },
+        now_ts=100.0,
+    )
+
+    assert result["pending"] is False
+    assert result["reason"] == "rising_window_buy_value_ai_recheck_ready"
+    assert result["recheck_ai_ready_reason"] == "strong_rising_window_value_ready"
+
+
 def test_scanner_rising_strength_override_accepts_insufficient_history_only_when_enabled(monkeypatch):
     stock = {
         "position_tag": "SCANNER",
@@ -1314,6 +1353,43 @@ def test_ai_numeric_consistency_recheck_records_two_feature_candidate_only(monke
     assert result["allowed"] is False
     assert result["feature_pass_count"] == 2
     assert result["skip_reason"] == "strong_micro_override_candidate_only"
+
+
+def test_ai_numeric_consistency_recheck_allows_two_feature_bundle_when_runtime_floor_is_two(monkeypatch):
+    rules = replace(
+        TRADING_RULES,
+        AI_NUMERIC_CONSISTENCY_RECHECK_ENABLED=True,
+        AI_NUMERIC_CONSISTENCY_RECHECK_MIN_SCORE=65,
+        AI_NUMERIC_CONSISTENCY_RECHECK_MIN_FEATURE_PASS_COUNT=2,
+        AI_NUMERIC_CONSISTENCY_RECHECK_MAX_PER_SYMBOL=1,
+    )
+    monkeypatch.setattr(handlers, "TRADING_RULES", rules)
+    decision = {
+        "action": "WAIT",
+        "score": 68,
+        "reason": "position and supply pass but text says weak",
+        "ai_reason_numeric_inconsistency": True,
+        "ai_reason_numeric_inconsistency_field": "position_advantage",
+        "ai_reason_numeric_inconsistency_reason": "positive_numeric_fields_described_as_weak",
+        "tick_acceleration_ratio": 0.95,
+        "buy_pressure_10t": 75.0,
+        "net_aggressive_delta_10t": 500.0,
+        "curr_vs_micro_vwap_bp": 6.0,
+        "curr_vs_ma5_bp": -1.0,
+    }
+
+    result = _resolve_ai_numeric_consistency_recheck(
+        {"strategy": "SCALPING"},
+        {"quote_stale": False},
+        now_ts=100.0,
+        strategy="SCALPING",
+        ai_decision=decision,
+        ai_score=68.0,
+    )
+
+    assert result["allowed"] is True
+    assert result["feature_pass_count"] == 2
+    assert result["skip_reason"] == "allowed"
 
 
 def test_ai_numeric_consistency_recheck_blocks_sim_and_stale_scope(monkeypatch):
@@ -3253,6 +3329,39 @@ def test_first_ai_big_bite_wait_does_not_block_strong_buy():
         big_bite_confirmed=True,
         entry_score_threshold=75,
     ) is False
+
+
+def test_first_ai_big_bite_wait_arms_rebound_anchor_for_score_band(monkeypatch):
+    monkeypatch.setenv("KORSTOCKSCAN_SCALP_AI_WAIT_REBOUND_RECHECK_ENABLED", "true")
+    monkeypatch.setenv("KORSTOCKSCAN_SCALP_AI_WAIT_REBOUND_RECHECK_MIN_SCORE", "65")
+    monkeypatch.setenv("KORSTOCKSCAN_SCALP_AI_WAIT_REBOUND_RECHECK_MAX_SCORE", "74")
+    cooldowns = {}
+    stock = {"strategy": "SCALPING", "position_tag": "SCANNER"}
+
+    result = handlers._arm_ai_wait_rebound_recheck_anchor(
+        stock=stock,
+        code="123456",
+        ws_data={"curr": 10000},
+        ai_decision={
+            "action": "WAIT",
+            "score": 70,
+            "reason": "big bite not confirmed",
+            "buy_pressure_10t": 82.0,
+            "curr_vs_micro_vwap_bp": 4.0,
+            "tick_acceleration_ratio": 1.2,
+        },
+        ai_score=70,
+        config={"AI_WAIT_DROP_COOLDOWN": 180},
+        cooldowns=cooldowns,
+        now_ts=100.0,
+        source_stage="first_ai_wait_big_bite_not_confirmed",
+    )
+
+    assert result["ai_wait_rebound_anchor_armed"] is True
+    assert cooldowns["123456"] == 280.0
+    assert stock["ai_wait_cooldown_anchor_action"] == "WAIT"
+    assert stock["ai_wait_cooldown_anchor_score"] == 70.0
+    assert stock["last_watching_ai_feature_probe"]["buy_pressure"] == 82.0
 
 
 def test_build_ai_overlap_log_fields_includes_momentum_and_profile():

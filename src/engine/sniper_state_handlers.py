@@ -14647,7 +14647,10 @@ def _resolve_ai_numeric_consistency_recheck(
         return {"allowed": False, "skip_reason": "source_quality_hard_block", **base}
     if recheck_count >= max(0, _rule_int("AI_NUMERIC_CONSISTENCY_RECHECK_MAX_PER_SYMBOL", 1)):
         return {"allowed": False, "skip_reason": "max_recheck_count_reached", **base}
-    if feature_pass_count >= max(1, _rule_int("AI_NUMERIC_CONSISTENCY_RECHECK_MIN_FEATURE_PASS_COUNT", 3)) and _safe_float(ai_score, 0.0) >= 70.0:
+    if (
+        feature_pass_count >= max(1, _rule_int("AI_NUMERIC_CONSISTENCY_RECHECK_MIN_FEATURE_PASS_COUNT", 3))
+        and _safe_float(ai_score, 0.0) >= float(score_floor)
+    ):
         return {"allowed": True, "skip_reason": "allowed", **base}
     if feature_pass_count >= 2 and 65.0 <= _safe_float(ai_score, 0.0) <= 74.0:
         return {"allowed": False, "skip_reason": "strong_micro_override_candidate_only", **base}
@@ -15463,20 +15466,37 @@ def _scanner_rising_insufficient_history_ai_recheck_min_samples() -> int:
     )
 
 
-def _scanner_rising_insufficient_history_ai_recheck_ready(stock, fields: dict | None) -> dict:
+def _scanner_rising_strength_ai_recheck_ready(stock, fields: dict | None, *, reason: str) -> dict:
     fields = fields if isinstance(fields, dict) else {}
+    reason = str(reason or "").strip().lower()
+    if reason == "insufficient_history":
+        enabled = _scanner_rising_insufficient_history_ai_recheck_enabled()
+        min_delta_pct = _scanner_rising_insufficient_history_ai_recheck_min_delta_pct()
+        require_bid_imbalance = False
+        ready_reason = "strong_rising_min_history_ready"
+    elif reason == "below_window_buy_value":
+        enabled = _rule_bool("SCANNER_RISING_STRENGTH_PRE_AI_OVERRIDE_ENABLED", True)
+        min_delta_pct = max(0.5, _rule_float("SCANNER_RISING_STRENGTH_OVERRIDE_MIN_DELTA_PCT", 1.0))
+        require_bid_imbalance = False
+        ready_reason = "strong_rising_window_value_ready"
+    else:
+        enabled = False
+        min_delta_pct = _scanner_rising_insufficient_history_ai_recheck_min_delta_pct()
+        require_bid_imbalance = True
+        ready_reason = "reason_not_recheckable"
     base = {
         "allowed": False,
         "reason": "not_evaluated",
-        "min_delta_pct": f"{_scanner_rising_insufficient_history_ai_recheck_min_delta_pct():.2f}",
+        "strength_momentum_reason": reason or "-",
+        "min_delta_pct": f"{min_delta_pct:.2f}",
         "min_samples": _scanner_rising_insufficient_history_ai_recheck_min_samples(),
     }
-    if not _scanner_rising_insufficient_history_ai_recheck_enabled():
+    if not enabled:
         return {**base, "reason": "disabled"}
     context = _find_scanner_rising_strength_context(
         stock,
-        min_delta=_scanner_rising_insufficient_history_ai_recheck_min_delta_pct(),
-        require_bid_imbalance=False,
+        min_delta=min_delta_pct,
+        require_bid_imbalance=require_bid_imbalance,
     )
     if not context.get("allowed"):
         return {**base, **context, "reason": context.get("skip_reason") or "scanner_context_not_qualified"}
@@ -15496,7 +15516,11 @@ def _scanner_rising_insufficient_history_ai_recheck_ready(stock, fields: dict | 
     sample_count = _safe_int(fields.get("tick_sample_count"), _safe_int(fields.get("tick_window_sample_count"), 0))
     if sample_count < _scanner_rising_insufficient_history_ai_recheck_min_samples():
         return {**base, **context, "reason": "sample_floor_not_met", "sample_count": sample_count}
-    return {**base, **context, "allowed": True, "reason": "strong_rising_min_history_ready", "sample_count": sample_count}
+    return {**base, **context, "allowed": True, "reason": ready_reason, "sample_count": sample_count}
+
+
+def _scanner_rising_insufficient_history_ai_recheck_ready(stock, fields: dict | None) -> dict:
+    return _scanner_rising_strength_ai_recheck_ready(stock, fields, reason="insufficient_history")
 
 
 def _strength_momentum_stability_recheck_decision(
@@ -15636,13 +15660,17 @@ def _strength_momentum_stability_recheck_decision(
             ),
         )
     after_epoch = now_value + float(delay_sec)
-    if scanner_rising_relief and reason == "insufficient_history":
-        ai_recheck_ready = _scanner_rising_insufficient_history_ai_recheck_ready(stock, fields)
+    if scanner_rising_relief and reason in {"insufficient_history", "below_window_buy_value"}:
+        ai_recheck_ready = _scanner_rising_strength_ai_recheck_ready(stock, fields, reason=reason)
         if ai_recheck_ready.get("allowed"):
             base.update(
                 {
                     "pending": False,
-                    "reason": "rising_insufficient_history_ai_recheck_ready",
+                    "reason": (
+                        "rising_insufficient_history_ai_recheck_ready"
+                        if reason == "insufficient_history"
+                        else "rising_window_buy_value_ai_recheck_ready"
+                    ),
                     "recheck_attempt_count": attempt_count,
                     "recheck_ai_ready_reason": ai_recheck_ready.get("reason"),
                     "recheck_ai_ready_sample_count": ai_recheck_ready.get("sample_count", 0),
@@ -15650,16 +15678,23 @@ def _strength_momentum_stability_recheck_decision(
                 }
             )
             return base
-        base.update(
-            {
-                "pending": True,
-                "reason": "rising_strength_history_recheck_pending",
-                "recheck_after_epoch": f"{after_epoch:.3f}",
-                "recheck_delay_sec": delay_sec,
-                "recheck_attempt_count": attempt_count + 1,
-            }
-        )
-        return base
+        if reason != "insufficient_history":
+            base["recheck_ai_ready_reason"] = ai_recheck_ready.get("reason")
+            base["recheck_ai_ready_min_delta_pct"] = ai_recheck_ready.get("min_delta_pct")
+            base["recheck_ai_ready_sample_count"] = ai_recheck_ready.get("sample_count", 0)
+            # Continue to the normal stable-window handling below; the scanner-rising
+            # override can still permit AI recheck when source quality is clean.
+        else:
+            base.update(
+                {
+                    "pending": True,
+                    "reason": "rising_strength_history_recheck_pending",
+                    "recheck_after_epoch": f"{after_epoch:.3f}",
+                    "recheck_delay_sec": delay_sec,
+                    "recheck_attempt_count": attempt_count + 1,
+                }
+            )
+            return base
     if source_quality_recheckable:
         base.update(
             {
@@ -17811,6 +17846,84 @@ def _scalp_ai_wait_rebound_recheck_decision(
     return fields
 
 
+def _arm_ai_wait_rebound_recheck_anchor(
+    *,
+    stock: dict | None,
+    code: str,
+    ws_data: dict | None,
+    ai_decision: dict | None,
+    ai_score,
+    config: dict,
+    cooldowns: dict,
+    now_ts: float,
+    source_stage: str,
+) -> dict:
+    score = _safe_float(ai_score, 0.0)
+    action = str((ai_decision or {}).get("action") or "WAIT").strip().upper() or "WAIT"
+    fields = {
+        "ai_wait_rebound_anchor_armed": False,
+        "ai_wait_rebound_anchor_reason": "not_evaluated",
+        "ai_wait_rebound_anchor_source_stage": source_stage or "-",
+        "ai_wait_rebound_anchor_action": action,
+        "ai_wait_rebound_anchor_score": f"{score:.1f}",
+    }
+    if not _env_bool("KORSTOCKSCAN_SCALP_AI_WAIT_REBOUND_RECHECK_ENABLED", False):
+        fields["ai_wait_rebound_anchor_reason"] = "disabled"
+        return fields
+    if not isinstance(stock, dict):
+        fields["ai_wait_rebound_anchor_reason"] = "missing_stock_state"
+        return fields
+    if normalize_position_tag(str(stock.get("strategy") or ""), stock.get("position_tag")) != "SCANNER":
+        fields["ai_wait_rebound_anchor_reason"] = "non_scanner"
+        return fields
+    min_score = _safe_float(os.getenv("KORSTOCKSCAN_SCALP_AI_WAIT_REBOUND_RECHECK_MIN_SCORE"), 65.0)
+    max_score = _safe_float(os.getenv("KORSTOCKSCAN_SCALP_AI_WAIT_REBOUND_RECHECK_MAX_SCORE"), 74.0)
+    if action != "WAIT" or score < min_score or score > max_score:
+        fields["ai_wait_rebound_anchor_reason"] = "anchor_not_wait_score_band"
+        return fields
+
+    cooldown_raw = (
+        config.get("AI_WAIT_DROP_COOLDOWN")
+        if isinstance(config, dict)
+        else getattr(config, "AI_WAIT_DROP_COOLDOWN", None)
+    )
+    cooldown_time = _safe_float(cooldown_raw, _rule_int("AI_WAIT_DROP_COOLDOWN", 300))
+    anchor_until = float(now_ts) + max(1.0, cooldown_time)
+    curr_price = _safe_int((ws_data or {}).get("curr"), 0)
+    with ENTRY_LOCK:
+        cooldowns[code] = anchor_until
+    feature_probe = {
+        "buy_pressure": _safe_float((ai_decision or {}).get("buy_pressure_10t"), 0.0),
+        "buy_pressure_10t": _safe_float((ai_decision or {}).get("buy_pressure_10t"), 0.0),
+        "micro_vwap_bp": _safe_float((ai_decision or {}).get("curr_vs_micro_vwap_bp"), 0.0),
+        "curr_vs_micro_vwap_bp": _safe_float((ai_decision or {}).get("curr_vs_micro_vwap_bp"), 0.0),
+        "tick_accel": _safe_float((ai_decision or {}).get("tick_acceleration_ratio"), 0.0),
+        "tick_acceleration_ratio": _safe_float((ai_decision or {}).get("tick_acceleration_ratio"), 0.0),
+    }
+    _mutate_stock_state(
+        stock,
+        set_fields={
+            "ai_wait_cooldown_anchor_at": now_ts,
+            "ai_wait_cooldown_anchor_until": anchor_until,
+            "ai_wait_cooldown_anchor_price": curr_price,
+            "ai_wait_cooldown_anchor_score": score,
+            "ai_wait_cooldown_anchor_action": action,
+            "ai_wait_cooldown_anchor_reason": str((ai_decision or {}).get("reason") or "")[:240],
+            "ai_wait_cooldown_anchor_source_stage": source_stage or "-",
+            "last_watching_ai_feature_probe": feature_probe,
+        },
+    )
+    fields.update(
+        {
+            "ai_wait_rebound_anchor_armed": True,
+            "ai_wait_rebound_anchor_reason": "wait_rebound_anchor_armed",
+            "ai_wait_rebound_anchor_until": f"{anchor_until:.3f}",
+            "ai_wait_rebound_anchor_price": curr_price or "-",
+        }
+    )
+    return fields
+
+
 def _resolve_holding_elapsed_sec(stock, *, now_dt=None, now_ts=None):
     return resolve_holding_elapsed_sec(stock, now_dt=now_dt, now_ts=now_ts)
 
@@ -19518,6 +19631,38 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                                 big_bite_confirmed=big_bite_confirmed,
                                 vip_target=is_vip_target,
                             )
+                            rebound_anchor = _arm_ai_wait_rebound_recheck_anchor(
+                                stock=stock,
+                                code=code,
+                                ws_data=ws_data,
+                                ai_decision=ai_decision,
+                                ai_score=current_ai_score,
+                                config=config,
+                                cooldowns=cooldowns,
+                                now_ts=now_ts,
+                                source_stage="first_ai_wait_big_bite_not_confirmed",
+                            )
+                            if rebound_anchor.get("ai_wait_rebound_anchor_armed"):
+                                _log_entry_pipeline(
+                                    stock,
+                                    code,
+                                    "first_ai_wait_rebound_anchor_armed",
+                                    metric_role="bounded_tunable",
+                                    decision_authority="ai_wait_rebound_recheck_runtime",
+                                    window_policy="same_day_intraday_runtime_state",
+                                    sample_floor="not_applicable_runtime_guard",
+                                    primary_decision_metric="ai_wait_rebound_anchor_reason",
+                                    source_quality_gate="wait_anchor_fields_present",
+                                    runtime_effect=True,
+                                    actual_order_submitted=False,
+                                    broker_order_forbidden=True,
+                                    allowed_runtime_apply=False,
+                                    forbidden_uses=(
+                                        "score_threshold_change,provider_route_change,order_price_change,"
+                                        "quantity_or_cap_change,broker_guard_bypass,stale_submit_bypass"
+                                    ),
+                                    **rebound_anchor,
+                                )
                             _log_ai_confirmed_terminal_no_budget(
                                 stock,
                                 code,
@@ -19528,6 +19673,7 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                                 extra_fields={
                                     "big_bite_confirmed": big_bite_confirmed,
                                     "vip_target": is_vip_target,
+                                    **rebound_anchor,
                                 },
                             )
                             _maybe_arm_scalp_sim_candidate_window(
