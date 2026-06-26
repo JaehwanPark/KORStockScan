@@ -508,6 +508,11 @@ def resolve_scale_in_order_price(stock, ws_data, action, *, strategy=None, curr_
     add_type = (action.get("add_type") or "").upper()
     add_reason = str(action.get("reason") or "")
     late_loss_retry = add_reason == "late_loss_avg_down_retry"
+    sim_scale_in_observation = action.get("source") == "scalp_sim_scale_in_window_expansion"
+    stop_line_touched = bool(
+        action.get("stop_line_touched")
+        or stock.get("scale_in_stop_line_touched")
+    )
     curr_price = _safe_int(curr_price if curr_price is not None else ws_data.get("curr"), 0)
 
     result = {
@@ -522,6 +527,7 @@ def resolve_scale_in_order_price(stock, ws_data, action, *, strategy=None, curr_
         "max_spread_bps": float(getattr(TRADING_RULES, "SCALPING_SCALE_IN_MAX_SPREAD_BPS", 80.0) or 80.0),
         "defensive_ticks": 1,
         "defensive_price": 0,
+        "stop_line_touched": stop_line_touched,
         "curr_vs_micro_vwap_bp": _safe_float(
             (stock.get("last_reversal_features") or {}).get("curr_vs_micro_vwap_bp"),
             0.0,
@@ -586,6 +592,27 @@ def resolve_scale_in_order_price(stock, ws_data, action, *, strategy=None, curr_
         if micro_vwap_bp < min_micro_vwap and not late_loss_retry:
             result["reason"] = f"micro_vwap_bp<{min_micro_vwap:.1f}"
             return result
+
+    if (
+        add_type == "AVG_DOWN"
+        and stop_line_touched
+        and not sim_scale_in_observation
+        and bool(getattr(TRADING_RULES, "SCALPING_AVG_DOWN_MARKET_ON_STOP_TOUCH_ENABLED", False))
+    ):
+        result.update({
+            "allowed": True,
+            "order_price": 0,
+            "reason": "stop_line_touch_market",
+            "price_source": "stop_line_touch_market",
+        })
+        return result
+    if (
+        add_type == "AVG_DOWN"
+        and not sim_scale_in_observation
+        and bool(getattr(TRADING_RULES, "SCALPING_AVG_DOWN_MARKET_ON_STOP_TOUCH_ENABLED", False))
+    ):
+        result["reason"] = "stop_line_not_touched"
+        return result
 
     avg_down_bid_discount_ticks = max(
         0,

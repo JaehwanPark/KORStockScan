@@ -1968,6 +1968,8 @@ def _evaluate_late_loss_avg_down_retry(
             "profit_rate": profit_rate,
             "peak_profit": peak_profit,
             "current_ai_score": current_ai_score,
+            "stop_line_touched": True,
+            "stop_line_source": exit_rule or (stock or {}).get("last_exit_rule") or sell_reason_type or "late_loss_avg_down_retry",
         },
     }
 
@@ -25873,6 +25875,13 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
             )
             _log_holding_pipeline(stock, code, "loss_fallback_probe", **fallback_log_fields)
             if fallback_candidate:
+                if isinstance(fallback_action, dict):
+                    fallback_action = {
+                        **fallback_action,
+                        "stop_line_touched": True,
+                        "stop_line_pct": dynamic_stop_pct,
+                        "stop_line_source": exit_rule or "loss_fallback",
+                    }
                 observe_only = _rule_bool("SCALP_LOSS_FALLBACK_OBSERVE_ONLY", True)
                 enabled = _rule_bool("SCALP_LOSS_FALLBACK_ENABLED", False)
                 execution_gate_allowed = bool(fallback_gate.get("allowed"))
@@ -26625,6 +26634,21 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
             held_sec=held_sec,
         )
         if scale_in_action:
+            scale_in_stop_line_pct = _safe_float(
+                locals().get("dynamic_stop_pct"),
+                _rule_float("SCALP_STOP", -1.5),
+            )
+            if (
+                strategy == "SCALPING"
+                and str(scale_in_action.get("add_type") or "").upper() == "AVG_DOWN"
+                and float(profit_rate or 0.0) <= float(scale_in_stop_line_pct)
+            ):
+                scale_in_action = {
+                    **scale_in_action,
+                    "stop_line_touched": True,
+                    "stop_line_pct": scale_in_stop_line_pct,
+                    "stop_line_source": "scalp_stop_pct",
+                }
             recent_exit_candidate_block = _recent_exit_candidate_pyramid_block_context(
                 stock,
                 strategy=strategy,
@@ -27692,7 +27716,7 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
         if simulated_position
         else {}
     )
-    qty_price = resolved_price if strategy == "SCALPING" else curr_price
+    qty_price = resolved_price if strategy == "SCALPING" and resolved_price > 0 else curr_price
     qty_details = describe_dynamic_scale_in_qty(
         stock=stock,
         resolved_price=qty_price,
@@ -27762,8 +27786,12 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
         return None
 
     if strategy == 'SCALPING':
-        order_type_code = "00"
-        final_price = resolved_price
+        if price_resolution.get("price_source") == "stop_line_touch_market":
+            order_type_code = "3"
+            final_price = 0
+        else:
+            order_type_code = "00"
+            final_price = resolved_price
     else:
         order_type_code = "6"
         final_price = 0
@@ -27779,8 +27807,10 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
         reason=price_resolution.get("reason"),
         curr_price=curr_price,
         resolved_price=resolved_price,
+        order_type=order_type_code,
         price_source=price_resolution.get("price_source"),
         price_policy=price_resolution.get("price_source") or price_resolution.get("reason"),
+        stop_line_touched=bool(price_resolution.get("stop_line_touched")),
         avg_down_bid_discount_ticks=price_resolution.get("avg_down_bid_discount_ticks"),
         best_bid=price_resolution.get("best_bid"),
         best_ask=price_resolution.get("best_ask"),

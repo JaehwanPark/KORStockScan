@@ -1777,6 +1777,109 @@ def test_execute_scalping_reversal_add_uses_resolved_price_not_curr(monkeypatch)
     assert resolved["avg_down_bid_discount_ticks"] == 1
 
 
+def test_execute_scalping_avg_down_stop_touch_uses_market_order(monkeypatch):
+    rules = replace(
+        CONFIG,
+        MAX_POSITION_PCT=1.0,
+        SCALPING_AVG_DOWN_MARKET_ON_STOP_TOUCH_ENABLED=True,
+    )
+    monkeypatch.setattr(state_handlers, "TRADING_RULES", rules)
+    monkeypatch.setattr(scale_in, "TRADING_RULES", rules)
+    state_handlers.KIWOOM_TOKEN = "test"
+
+    sent_orders = []
+    logs = []
+    monkeypatch.setattr(state_handlers.kiwoom_orders, "get_deposit", lambda *args, **kwargs: 10_000_000)
+    monkeypatch.setattr(
+        state_handlers.kiwoom_orders,
+        "send_buy_order",
+        lambda *args, **kwargs: sent_orders.append(args) or {"return_code": "0", "ord_no": "M1"},
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_holding_pipeline",
+        lambda stock, code, stage, **fields: logs.append((stage, fields)),
+    )
+
+    stock = {
+        "id": 1,
+        "name": "TEST",
+        "strategy": "SCALPING",
+        "buy_qty": 3,
+        "hard_stop_price": 9_000,
+        "last_reversal_features": {"curr_vs_micro_vwap_bp": 0.0},
+    }
+    action = {
+        "add_type": "AVG_DOWN",
+        "reason": "reversal_add_ok",
+        "stop_line_touched": True,
+        "profit_rate": -3.1,
+    }
+    ws_data = {"curr": 10_000, "best_bid": 9_980, "best_ask": 10_000}
+
+    state_handlers.execute_scale_in_order(
+        stock=stock,
+        code="123456",
+        ws_data=ws_data,
+        action=action,
+        admin_id=1,
+    )
+
+    assert sent_orders == [("123456", 95, 0, "3")]
+    resolved = [fields for stage, fields in logs if stage == "scale_in_price_resolved"][0]
+    assert resolved["price_source"] == "stop_line_touch_market"
+    assert resolved["order_type"] == "3"
+    assert resolved["stop_line_touched"] is True
+
+
+def test_execute_scalping_avg_down_market_override_blocks_before_stop_touch(monkeypatch):
+    rules = replace(
+        CONFIG,
+        MAX_POSITION_PCT=1.0,
+        SCALPING_AVG_DOWN_MARKET_ON_STOP_TOUCH_ENABLED=True,
+    )
+    monkeypatch.setattr(state_handlers, "TRADING_RULES", rules)
+    monkeypatch.setattr(scale_in, "TRADING_RULES", rules)
+    state_handlers.KIWOOM_TOKEN = "test"
+
+    sent_orders = []
+    logs = []
+    monkeypatch.setattr(state_handlers.kiwoom_orders, "get_deposit", lambda *args, **kwargs: 10_000_000)
+    monkeypatch.setattr(
+        state_handlers.kiwoom_orders,
+        "send_buy_order",
+        lambda *args, **kwargs: sent_orders.append(args) or {"return_code": "0", "ord_no": "M2"},
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_holding_pipeline",
+        lambda stock, code, stage, **fields: logs.append((stage, fields)),
+    )
+
+    stock = {
+        "id": 1,
+        "name": "TEST",
+        "strategy": "SCALPING",
+        "buy_qty": 3,
+        "last_reversal_features": {"curr_vs_micro_vwap_bp": 0.0},
+    }
+    action = {"add_type": "AVG_DOWN", "reason": "reversal_add_ok", "profit_rate": -1.0}
+    ws_data = {"curr": 10_000, "best_bid": 9_980, "best_ask": 10_000}
+
+    result = state_handlers.execute_scale_in_order(
+        stock=stock,
+        code="123456",
+        ws_data=ws_data,
+        action=action,
+        admin_id=1,
+    )
+
+    assert result is None
+    assert sent_orders == []
+    blocked = [fields for stage, fields in logs if stage == "scale_in_price_guard_block"][0]
+    assert blocked["reason"] == "stop_line_not_touched"
+
+
 def test_dynamic_scale_in_qty_blocks_weak_pyramid_evidence(monkeypatch):
     rules = replace(CONFIG, MAX_POSITION_PCT=1.0)
     monkeypatch.setattr(state_handlers, "TRADING_RULES", rules)

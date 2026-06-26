@@ -71,6 +71,7 @@ class TradingConfig:
     SCALE_IN_LIVE_TUNING_SELECTED: bool = False
     STAT_ACTION_DECISION_SNAPSHOT_ENABLED: bool = True  # 행동가중치용 HOLDING decision snapshot observe-only
     STAT_ACTION_DECISION_SNAPSHOT_MIN_INTERVAL_SEC: int = 30  # IO guard: 종목별 snapshot 최소 간격
+    SCALPING_AVG_DOWN_MARKET_ON_STOP_TOUCH_ENABLED: bool = False  # 실매매 SCALPING AVG_DOWN 손절선 터치 시 시장가 전환
 
     # ==========================================
     # 3.2 추가매수(스캘핑) 설정
@@ -2997,6 +2998,9 @@ def _build_trading_rules() -> TradingConfig:
     env_scale_in_price_resolver_enabled = _env_bool(
         "KORSTOCKSCAN_SCALPING_SCALE_IN_PRICE_RESOLVER_ENABLED"
     )
+    env_avg_down_market_on_stop_touch_enabled = _env_bool(
+        "KORSTOCKSCAN_SCALPING_AVG_DOWN_MARKET_ON_STOP_TOUCH_ENABLED"
+    )
     env_scale_in_dynamic_qty_enabled = _env_bool(
         "KORSTOCKSCAN_SCALPING_SCALE_IN_DYNAMIC_QTY_ENABLED"
     )
@@ -3123,6 +3127,7 @@ def _build_trading_rules() -> TradingConfig:
         or env_sell_side_open_time_block_until is not None
         or env_sell_side_open_time_block_scope is not None
         or env_scale_in_price_resolver_enabled is not None
+        or env_avg_down_market_on_stop_touch_enabled is not None
         or env_scale_in_dynamic_qty_enabled is not None
         or env_scale_in_max_spread_bps is not None
         or env_pyramid_price_guard_enabled is not None
@@ -3438,6 +3443,9 @@ def _build_trading_rules() -> TradingConfig:
             SCALPING_SCALE_IN_PRICE_RESOLVER_ENABLED=env_scale_in_price_resolver_enabled
             if env_scale_in_price_resolver_enabled is not None
             else config.SCALPING_SCALE_IN_PRICE_RESOLVER_ENABLED,
+            SCALPING_AVG_DOWN_MARKET_ON_STOP_TOUCH_ENABLED=env_avg_down_market_on_stop_touch_enabled
+            if env_avg_down_market_on_stop_touch_enabled is not None
+            else config.SCALPING_AVG_DOWN_MARKET_ON_STOP_TOUCH_ENABLED,
             SCALPING_SCALE_IN_DYNAMIC_QTY_ENABLED=env_scale_in_dynamic_qty_enabled
             if env_scale_in_dynamic_qty_enabled is not None
             else config.SCALPING_SCALE_IN_DYNAMIC_QTY_ENABLED,
