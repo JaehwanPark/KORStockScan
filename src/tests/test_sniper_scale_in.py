@@ -75,6 +75,64 @@ def test_extract_broker_order_no_accepts_flat_and_nested_response_keys():
     assert state_handlers._extract_broker_order_no(None) == ""
 
 
+def test_entry_receipt_seeds_holding_ai_score_from_submit_order(monkeypatch):
+    events = []
+    monkeypatch.setattr(
+        receipts,
+        "_log_holding_pipeline",
+        lambda name, code, target_id, stage, **fields: events.append((stage, fields)),
+    )
+
+    class _NoopThread:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def start(self):
+            return None
+
+    monkeypatch.setattr(receipts.threading, "Thread", _NoopThread)
+    receipts.highest_prices = {}
+
+    stock = {
+        "id": 13672,
+        "name": "테스",
+        "code": "095610",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "rt_ai_prob": 0.50,
+        "pending_entry_orders": [
+            {
+                "ord_no": "0056010",
+                "qty": 9,
+                "filled_qty": 0,
+                "price": 178200,
+                "ai_score": 82.0,
+                "status": "OPEN",
+            }
+        ],
+        "entry_requested_qty": 9,
+        "requested_buy_qty": 9,
+    }
+
+    receipts._handle_entry_buy_execution(
+        target_id=13672,
+        target_stock=stock,
+        code="095610",
+        order_no="0056010",
+        exec_price=178200,
+        exec_qty=9,
+        now=datetime(2026, 6, 26, 14, 7, 32),
+    )
+
+    assert stock["rt_ai_prob"] == pytest.approx(0.82)
+    assert stock["entry_submit_ai_score"] == pytest.approx(82.0)
+    assert stock["holding_entry_ai_score"] == pytest.approx(82.0)
+    holding_started = [fields for stage, fields in events if stage == "holding_started"]
+    assert holding_started
+    assert holding_started[-1]["entry_submit_ai_score"] == "82.0"
+    assert holding_started[-1]["holding_ai_score_seeded_from_entry"] is True
+
+
 def test_real_weak_pullback_entry_block_blocks_caution_weak_without_micro(monkeypatch):
     monkeypatch.setattr(
         state_handlers,
@@ -6242,6 +6300,34 @@ def test_rest_quote_only_hard_stop_allows_emergency(monkeypatch):
     )
 
     assert blocked is False
+
+
+def test_rest_quote_only_mfe_protect_requires_confirmation(monkeypatch):
+    logs = []
+    monkeypatch.setattr(state_handlers, "_log_holding_pipeline", lambda stock, code, stage, **fields: logs.append((stage, fields)))
+    stock = {
+        "name": "TEST",
+        "holding_rest_quote_only_recovery": True,
+    }
+
+    blocked = state_handlers._rest_quote_only_hard_stop_confirmation_block(
+        stock,
+        "123456",
+        exit_rule="scalp_mfe_protect_exit",
+        profit_rate=-0.06,
+        emergency_pct=-999.0,
+        held_sec=867,
+        curr_price=178500,
+        buy_price=178200,
+        quote_fields={"holding_ws_recovery_outcome": "rest_quote_applied"},
+    )
+
+    assert blocked is True
+    assert logs[-1][0] == "mfe_protect_rest_quote_only_confirmation_blocked"
+    assert logs[-1][1]["exit_rule"] == "scalp_mfe_protect_exit"
+    assert logs[-1][1]["confirmation_required"] == "ws_or_orderbook_quote"
+    assert logs[-1][1]["actual_order_submitted"] is False
+    assert logs[-1][1]["broker_order_forbidden"] is True
 
 
 def test_pending_entry_cancel_already_resolved_sets_recovery_probe_cooldown(monkeypatch):
@@ -12549,6 +12635,91 @@ def test_handle_holding_state_submits_mfe_protect_exit_before_soft_stop(monkeypa
     protect_events = [fields for stage, fields in pipeline_events if stage == "scalp_mfe_protect_exit"]
     assert protect_events
     assert float(protect_events[0]["giveback_pct"]) == pytest.approx(1.55, abs=0.05)
+
+
+def test_handle_holding_state_blocks_mfe_protect_on_rest_quote_only_recovery(monkeypatch):
+    state_handlers.TRADING_RULES = replace(
+        CONFIG,
+        SCALE_IN_REQUIRE_HISTORY_TABLE=False,
+        SCALP_MFE_PROTECT_EXIT_ENABLED=True,
+        SCALP_MFE_PROTECT_MIN_PEAK_PCT=0.60,
+        SCALP_MFE_PROTECT_TRIGGER_PROFIT_PCT=0.10,
+        SCALP_MFE_PROTECT_MIN_GIVEBACK_PCT=0.55,
+        SCALP_MFE_PROTECT_MIN_HOLD_SEC=30,
+        SCALP_MFE_PROTECT_MAX_AI_SCORE=74,
+    )
+    state_handlers.COOLDOWNS = {}
+    state_handlers.ALERTED_STOCKS = set()
+    state_handlers.HIGHEST_PRICES = {"123456": 10_180}
+    state_handlers.LAST_AI_CALL_TIMES = {}
+    state_handlers.LAST_LOG_TIMES = {}
+    state_handlers.DB = _DummyDB()
+    state_handlers.KIWOOM_TOKEN = "token"
+
+    sell_calls = []
+    pipeline_events = []
+    monkeypatch.setattr(
+        state_handlers,
+        "can_consider_scale_in",
+        lambda *args, **kwargs: {"allowed": False, "reason": "test_no_add"},
+    )
+    monkeypatch.setattr(
+        state_handlers.kiwoom_orders,
+        "send_smart_sell_order",
+        lambda **kwargs: sell_calls.append(kwargs) or {"return_code": "0", "ord_no": "S1"},
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_holding_pipeline",
+        lambda stock, code, stage, **fields: pipeline_events.append((stage, fields)),
+    )
+    def fake_recover(stock, code, ws_data, *, now_ts):
+        stock["holding_rest_quote_only_recovery"] = True
+        return (
+            {"curr": 10_025, "holding_rest_quote_only_recovery": True},
+            False,
+            {
+                "holding_ws_recovery_outcome": "rest_quote_applied",
+                "holding_rest_quote_only_recovery": True,
+            },
+        )
+
+    monkeypatch.setattr(state_handlers, "_holding_ws_freshness_recover_or_block", fake_recover)
+
+    stock = {
+        "id": 1,
+        "code": "123456",
+        "name": "TEST",
+        "status": "HOLDING",
+        "strategy": "SCALPING",
+        "buy_price": 10_000,
+        "buy_qty": 3,
+        "rt_ai_prob": 0.67,
+        "buy_time": 1_000.0,
+        "holding_rest_quote_only_recovery": True,
+    }
+
+    state_handlers.handle_holding_state(
+        stock=stock,
+        code="123456",
+        ws_data={"curr": 10_025},
+        admin_id=1,
+        market_regime="BULL",
+        now_ts=1_240.0,
+        now_dt=datetime(2026, 6, 24, 13, 45, 0),
+        radar=None,
+        ai_engine=None,
+    )
+
+    assert stock["status"] == "HOLDING"
+    assert not sell_calls
+    block_events = [
+        fields
+        for stage, fields in pipeline_events
+        if stage == "mfe_protect_rest_quote_only_confirmation_blocked"
+    ]
+    assert block_events
+    assert block_events[0]["exit_rule"] == "scalp_mfe_protect_exit"
 
 
 def test_handle_holding_state_submits_late_loss_avg_down_before_final_sell(monkeypatch):

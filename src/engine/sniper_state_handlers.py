@@ -13356,16 +13356,22 @@ def _rest_quote_only_hard_stop_confirmation_block(
         "scalp_preset_hard_stop_pct",
         "scalp_hard_stop_pct",
         "scalp_soft_stop_pct",
+        "scalp_mfe_protect_exit",
     }:
         return False
     if not bool((stock or {}).get("holding_rest_quote_only_recovery")):
         return False
     if float(profit_rate or 0.0) <= float(emergency_pct or -999.0):
         return False
+    block_stage = (
+        "mfe_protect_rest_quote_only_confirmation_blocked"
+        if str(exit_rule or "").strip() == "scalp_mfe_protect_exit"
+        else "hard_stop_rest_quote_only_confirmation_blocked"
+    )
     _log_holding_pipeline(
         stock,
         code,
-        "hard_stop_rest_quote_only_confirmation_blocked",
+        block_stage,
         exit_rule=str(exit_rule or "-"),
         profit_rate=f"{float(profit_rate or 0.0):+.2f}",
         emergency_pct=f"{float(emergency_pct or 0.0):+.2f}",
@@ -25079,6 +25085,18 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                 held_sec=held_sec,
             )
             if mfe_protect_exit.get("should_exit"):
+                if _rest_quote_only_hard_stop_confirmation_block(
+                    stock,
+                    code,
+                    exit_rule="scalp_mfe_protect_exit",
+                    profit_rate=profit_rate,
+                    emergency_pct=-999.0,
+                    held_sec=held_sec,
+                    curr_price=curr_p,
+                    buy_price=buy_p,
+                    quote_fields=holding_ws_fields,
+                ):
+                    return
                 is_sell_signal = True
                 sell_reason_type = "PROFIT_PROTECT"
                 reason = (

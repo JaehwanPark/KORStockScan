@@ -156,6 +156,9 @@ _SELL_REVIVE_RESET_KEYS = (
     "entry_filled_qty",
     "entry_fill_amount",
     "entry_bundle_id",
+    "entry_submit_ai_score",
+    "holding_entry_ai_score",
+    "holding_ai_score_seeded_from_entry",
     "requested_buy_qty",
     "_entry_receipt_filled_by_order_no",
     "_entry_receipt_requested_by_order_no",
@@ -171,6 +174,9 @@ _SELL_COMPLETE_RESET_KEYS = (
     "entry_filled_qty",
     "entry_fill_amount",
     "entry_bundle_id",
+    "entry_submit_ai_score",
+    "holding_entry_ai_score",
+    "holding_ai_score_seeded_from_entry",
     "requested_buy_qty",
     "_entry_receipt_filled_by_order_no",
     "_entry_receipt_requested_by_order_no",
@@ -240,6 +246,31 @@ def _log_holding_pipeline(name, code, target_id, stage, **fields):
 
 def _receipt_snapshot(target_stock: dict[str, Any], keys: tuple[str, ...]) -> dict[str, Any]:
     return {key: target_stock.get(key) for key in keys}
+
+
+def _resolve_entry_submit_ai_score(target_stock: dict[str, Any], order_no: str = "") -> float | None:
+    """Return the BUY submit score that should seed first holding review state."""
+    pending_orders = target_stock.get("pending_entry_orders") or []
+    if isinstance(pending_orders, list):
+        for order in pending_orders:
+            if not isinstance(order, dict):
+                continue
+            if order_no and str(order.get("ord_no", "") or "").strip() != str(order_no).strip():
+                continue
+            score = _safe_float(order.get("ai_score"), 0.0)
+            if score > 0:
+                return score
+    for key in (
+        "entry_submit_ai_score",
+        "entry_armed_ai_score",
+        "last_watching_ai_score",
+        "current_ai_score",
+        "ai_score",
+    ):
+        score = _safe_float(target_stock.get(key), 0.0)
+        if score > 0:
+            return score
+    return None
 
 
 def _receipt_audience(snapshot: dict[str, Any] | None) -> str:
@@ -1360,6 +1391,16 @@ def _handle_entry_buy_execution(
         target_stock['holding_started_at'] = now
     highest_prices[code] = max(highest_prices.get(code, 0), exec_price)
 
+    submit_ai_score = _resolve_entry_submit_ai_score(target_stock, order_no)
+    holding_ai_seeded = False
+    if submit_ai_score is not None:
+        target_stock['entry_submit_ai_score'] = round(float(submit_ai_score), 2)
+        target_stock['holding_entry_ai_score'] = round(float(submit_ai_score), 2)
+        if old_qty <= 0:
+            target_stock['rt_ai_prob'] = max(0.0, min(1.0, float(submit_ai_score) / 100.0))
+            target_stock['holding_ai_score_seeded_from_entry'] = True
+            holding_ai_seeded = True
+
     requested_entry_qty = int(target_stock.get('entry_requested_qty', target_stock.get('requested_buy_qty', 0)) or 0)
     cum_filled_qty = int(target_stock.get('entry_filled_qty', 0) or 0)
     remaining_qty = max(0, requested_entry_qty - cum_filled_qty) if requested_entry_qty > 0 else 0
@@ -1557,6 +1598,10 @@ def _handle_entry_buy_execution(
         order_requested_qty=int(order_requested_qty or 0),
         order_filled_qty=int(order_filled_qty or 0),
         entry_mode=entry_mode,
+        entry_submit_ai_score=(
+            f"{float(submit_ai_score):.1f}" if submit_ai_score is not None else "-"
+        ),
+        holding_ai_score_seeded_from_entry=holding_ai_seeded,
     )
 
     buy_receipt_snapshot = _receipt_snapshot(target_stock, _BUY_RECEIPT_SNAPSHOT_KEYS)
