@@ -3960,6 +3960,103 @@ def _build_trading_rules() -> TradingConfig:
             else config.WATCHING_STATE_DEBUG_LOG_ENABLED,
         )
 
+    env_stop_loss_bull = _env_float("KORSTOCKSCAN_STOP_LOSS_BULL")
+    env_stop_loss_bear = _env_float("KORSTOCKSCAN_STOP_LOSS_BEAR")
+    env_stop_loss_breakout = _env_float("KORSTOCKSCAN_STOP_LOSS_BREAKOUT")
+    env_stop_loss_bottom = _env_float("KORSTOCKSCAN_STOP_LOSS_BOTTOM")
+    env_scalp_stop = _env_float("KORSTOCKSCAN_SCALP_STOP")
+    env_scalp_hard_stop = _env_float("KORSTOCKSCAN_SCALP_HARD_STOP")
+    env_scalp_soft_stop_micro_grace_emergency = _env_float(
+        "KORSTOCKSCAN_SCALP_SOFT_STOP_MICRO_GRACE_EMERGENCY_PCT"
+    )
+    env_scalp_soft_stop_dynamic_grace_emergency = _env_float(
+        "KORSTOCKSCAN_SCALP_SOFT_STOP_DYNAMIC_GRACE_EMERGENCY_PCT"
+    )
+    env_scalp_preset_hard_stop = _env_float("KORSTOCKSCAN_SCALP_PRESET_HARD_STOP_PCT")
+    env_scalp_preset_hard_stop_emergency = _env_float(
+        "KORSTOCKSCAN_SCALP_PRESET_HARD_STOP_EMERGENCY_PCT"
+    )
+    env_scalp_preset_tp_soft_stop_trigger = _env_float(
+        "KORSTOCKSCAN_SCALP_PRESET_TP_SOFT_STOP_TRIGGER_PCT"
+    )
+    env_scalp_preset_tp_soft_stop_emergency = _env_float(
+        "KORSTOCKSCAN_SCALP_PRESET_TP_SOFT_STOP_EMERGENCY_PCT"
+    )
+    env_scalp_preset_fallback_hard_stop = _env_float(
+        "KORSTOCKSCAN_SCALP_PRESET_HARD_STOP_FALLBACK_BASE_PCT"
+    )
+    env_scalp_preset_fallback_hard_stop_emergency = _env_float(
+        "KORSTOCKSCAN_SCALP_PRESET_HARD_STOP_FALLBACK_BASE_EMERGENCY_PCT"
+    )
+    env_kosdaq_stop = _env_float("KORSTOCKSCAN_KOSDAQ_STOP")
+    if (
+        env_stop_loss_bull is not None
+        or env_stop_loss_bear is not None
+        or env_stop_loss_breakout is not None
+        or env_stop_loss_bottom is not None
+        or env_scalp_stop is not None
+        or env_scalp_hard_stop is not None
+        or env_scalp_soft_stop_micro_grace_emergency is not None
+        or env_scalp_soft_stop_dynamic_grace_emergency is not None
+        or env_scalp_preset_hard_stop is not None
+        or env_scalp_preset_hard_stop_emergency is not None
+        or env_scalp_preset_tp_soft_stop_trigger is not None
+        or env_scalp_preset_tp_soft_stop_emergency is not None
+        or env_scalp_preset_fallback_hard_stop is not None
+        or env_scalp_preset_fallback_hard_stop_emergency is not None
+        or env_kosdaq_stop is not None
+    ):
+        config = replace(
+            config,
+            STOP_LOSS_BULL=env_stop_loss_bull
+            if env_stop_loss_bull is not None
+            else config.STOP_LOSS_BULL,
+            STOP_LOSS_BEAR=env_stop_loss_bear
+            if env_stop_loss_bear is not None
+            else config.STOP_LOSS_BEAR,
+            STOP_LOSS_BREAKOUT=env_stop_loss_breakout
+            if env_stop_loss_breakout is not None
+            else config.STOP_LOSS_BREAKOUT,
+            STOP_LOSS_BOTTOM=env_stop_loss_bottom
+            if env_stop_loss_bottom is not None
+            else config.STOP_LOSS_BOTTOM,
+            SCALP_STOP=env_scalp_stop
+            if env_scalp_stop is not None
+            else config.SCALP_STOP,
+            SCALP_HARD_STOP=env_scalp_hard_stop
+            if env_scalp_hard_stop is not None
+            else config.SCALP_HARD_STOP,
+            SCALP_SOFT_STOP_MICRO_GRACE_EMERGENCY_PCT=env_scalp_soft_stop_micro_grace_emergency
+            if env_scalp_soft_stop_micro_grace_emergency is not None
+            else config.SCALP_SOFT_STOP_MICRO_GRACE_EMERGENCY_PCT,
+            SCALP_SOFT_STOP_DYNAMIC_GRACE_EMERGENCY_PCT=env_scalp_soft_stop_dynamic_grace_emergency
+            if env_scalp_soft_stop_dynamic_grace_emergency is not None
+            else config.SCALP_SOFT_STOP_DYNAMIC_GRACE_EMERGENCY_PCT,
+            SCALP_PRESET_HARD_STOP_PCT=env_scalp_preset_hard_stop
+            if env_scalp_preset_hard_stop is not None
+            else config.SCALP_PRESET_HARD_STOP_PCT,
+            SCALP_PRESET_HARD_STOP_EMERGENCY_PCT=env_scalp_preset_hard_stop_emergency
+            if env_scalp_preset_hard_stop_emergency is not None
+            else config.SCALP_PRESET_HARD_STOP_EMERGENCY_PCT,
+            SCALP_PRESET_TP_SOFT_STOP_TRIGGER_PCT=env_scalp_preset_tp_soft_stop_trigger
+            if env_scalp_preset_tp_soft_stop_trigger is not None
+            else config.SCALP_PRESET_TP_SOFT_STOP_TRIGGER_PCT,
+            SCALP_PRESET_TP_SOFT_STOP_EMERGENCY_PCT=env_scalp_preset_tp_soft_stop_emergency
+            if env_scalp_preset_tp_soft_stop_emergency is not None
+            else config.SCALP_PRESET_TP_SOFT_STOP_EMERGENCY_PCT,
+            SCALP_PRESET_HARD_STOP_FALLBACK_BASE_PCT=env_scalp_preset_fallback_hard_stop
+            if env_scalp_preset_fallback_hard_stop is not None
+            else config.SCALP_PRESET_HARD_STOP_FALLBACK_BASE_PCT,
+            SCALP_PRESET_HARD_STOP_FALLBACK_BASE_EMERGENCY_PCT=(
+                env_scalp_preset_fallback_hard_stop_emergency
+                if env_scalp_preset_fallback_hard_stop_emergency is not None
+                else config.SCALP_PRESET_HARD_STOP_FALLBACK_BASE_EMERGENCY_PCT
+            ),
+            KOSDAQ_STOP=env_kosdaq_stop
+            if env_kosdaq_stop is not None
+            else config.KOSDAQ_STOP,
+        )
+
     env_ed_enabled = _env_bool("KORSTOCKSCAN_ERROR_DETECTOR_ENABLED")
     env_ed_daemon_interval = _env_int("KORSTOCKSCAN_ERROR_DETECTOR_DAEMON_INTERVAL_SEC")
     env_ed_process_main_loop_timeout = _env_int(

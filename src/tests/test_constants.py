@@ -75,6 +75,42 @@ def test_reversal_add_runtime_env_overrides(monkeypatch):
     assert reloaded.TRADING_RULES.REVERSAL_ADD_VWAP_BP_MIN == 5
 
 
+def test_stop_loss_runtime_env_overrides(monkeypatch):
+    monkeypatch.setenv("KORSTOCKSCAN_SCALP_STOP", "-3.0")
+    monkeypatch.setenv("KORSTOCKSCAN_SCALP_HARD_STOP", "-5.0")
+    monkeypatch.setenv("KORSTOCKSCAN_SCALP_SOFT_STOP_MICRO_GRACE_EMERGENCY_PCT", "-4.0")
+    monkeypatch.setenv("KORSTOCKSCAN_SCALP_SOFT_STOP_DYNAMIC_GRACE_EMERGENCY_PCT", "-5.6")
+    monkeypatch.setenv("KORSTOCKSCAN_SCALP_PRESET_HARD_STOP_PCT", "-1.4")
+    monkeypatch.setenv("KORSTOCKSCAN_SCALP_PRESET_HARD_STOP_EMERGENCY_PCT", "-2.4")
+    monkeypatch.setenv("KORSTOCKSCAN_SCALP_PRESET_TP_SOFT_STOP_TRIGGER_PCT", "-1.4")
+    monkeypatch.setenv("KORSTOCKSCAN_SCALP_PRESET_TP_SOFT_STOP_EMERGENCY_PCT", "-2.4")
+    monkeypatch.setenv("KORSTOCKSCAN_SCALP_PRESET_HARD_STOP_FALLBACK_BASE_PCT", "-1.4")
+    monkeypatch.setenv("KORSTOCKSCAN_SCALP_PRESET_HARD_STOP_FALLBACK_BASE_EMERGENCY_PCT", "-2.4")
+    monkeypatch.setenv("KORSTOCKSCAN_KOSDAQ_STOP", "-5.0")
+    monkeypatch.setenv("KORSTOCKSCAN_STOP_LOSS_BULL", "-6.0")
+    monkeypatch.setenv("KORSTOCKSCAN_STOP_LOSS_BEAR", "-6.0")
+    monkeypatch.setenv("KORSTOCKSCAN_STOP_LOSS_BREAKOUT", "-3.0")
+    monkeypatch.setenv("KORSTOCKSCAN_STOP_LOSS_BOTTOM", "-8.0")
+
+    reloaded = importlib.reload(constants)
+
+    assert reloaded.TRADING_RULES.SCALP_STOP == -3.0
+    assert reloaded.TRADING_RULES.SCALP_HARD_STOP == -5.0
+    assert reloaded.TRADING_RULES.SCALP_SOFT_STOP_MICRO_GRACE_EMERGENCY_PCT == -4.0
+    assert reloaded.TRADING_RULES.SCALP_SOFT_STOP_DYNAMIC_GRACE_EMERGENCY_PCT == -5.6
+    assert reloaded.TRADING_RULES.SCALP_PRESET_HARD_STOP_PCT == -1.4
+    assert reloaded.TRADING_RULES.SCALP_PRESET_HARD_STOP_EMERGENCY_PCT == -2.4
+    assert reloaded.TRADING_RULES.SCALP_PRESET_TP_SOFT_STOP_TRIGGER_PCT == -1.4
+    assert reloaded.TRADING_RULES.SCALP_PRESET_TP_SOFT_STOP_EMERGENCY_PCT == -2.4
+    assert reloaded.TRADING_RULES.SCALP_PRESET_HARD_STOP_FALLBACK_BASE_PCT == -1.4
+    assert reloaded.TRADING_RULES.SCALP_PRESET_HARD_STOP_FALLBACK_BASE_EMERGENCY_PCT == -2.4
+    assert reloaded.TRADING_RULES.KOSDAQ_STOP == -5.0
+    assert reloaded.TRADING_RULES.STOP_LOSS_BULL == -6.0
+    assert reloaded.TRADING_RULES.STOP_LOSS_BEAR == -6.0
+    assert reloaded.TRADING_RULES.STOP_LOSS_BREAKOUT == -3.0
+    assert reloaded.TRADING_RULES.STOP_LOSS_BOTTOM == -8.0
+
+
 def test_scalping_new_buy_cutoff_defaults_to_nxt_close(monkeypatch):
     monkeypatch.delenv("KORSTOCKSCAN_SCALPING_BUY_WINDOWS", raising=False)
     monkeypatch.delenv("KORSTOCKSCAN_SCALPING_NEW_BUY_CUTOFF", raising=False)
