@@ -561,6 +561,23 @@ def _rule_str(name, default=""):
     return str(value)
 
 
+def _env_or_rule_int(name: str, default: int) -> int:
+    raw = os.getenv(f"KORSTOCKSCAN_{name}")
+    if raw is not None:
+        try:
+            return int(float(str(raw).strip()))
+        except (TypeError, ValueError):
+            return int(default)
+    return _rule_int(name, default)
+
+
+def _env_or_rule_bool(name: str, default: bool = False) -> bool:
+    raw = os.getenv(f"KORSTOCKSCAN_{name}")
+    if raw is not None:
+        return str(raw).strip().lower() in {"1", "true", "yes", "y", "on"}
+    return _rule_bool(name, default)
+
+
 def _runtime_apply_date_for_policy_guard() -> str:
     return str(os.environ.get("KORSTOCKSCAN_THRESHOLD_RUNTIME_APPLY_DATE") or "").strip()
 
@@ -12389,8 +12406,8 @@ def _build_entry_submit_revalidation_fields(ws_data, latency_gate, *, now_ts=Non
     quote_age_sec = _get_ws_snapshot_age_sec(ws_data)
     quote_age_ms = "-" if quote_age_sec is None else int(round(quote_age_sec * 1000.0))
     decision_age_ms = "-" if decision_ts <= 0 else int(round(max(0.0, now_ts - decision_ts) * 1000.0))
-    max_context_age_ms = int(_rule("SCALPING_ENTRY_SUBMIT_REVALIDATION_MAX_CONTEXT_AGE_MS", 8000) or 8000)
-    max_quote_age_ms = int(_rule("SCALPING_ENTRY_SUBMIT_REVALIDATION_MAX_QUOTE_AGE_MS", 2000) or 2000)
+    max_context_age_ms = _env_or_rule_int("SCALPING_ENTRY_SUBMIT_REVALIDATION_MAX_CONTEXT_AGE_MS", 8000)
+    max_quote_age_ms = _env_or_rule_int("SCALPING_ENTRY_SUBMIT_REVALIDATION_MAX_QUOTE_AGE_MS", 2000)
     context_stale = context_age_ms > max_context_age_ms if context_age_ms else False
     quote_stale = quote_age_ms != "-" and int(quote_age_ms) > max_quote_age_ms
     return {
@@ -12408,10 +12425,19 @@ def _build_entry_submit_revalidation_fields(ws_data, latency_gate, *, now_ts=Non
 
 
 def _is_passive_probe_stale_submit_block(submit_revalidation_fields) -> bool:
-    if not bool(_rule("SCALPING_ENTRY_PASSIVE_PROBE_STALE_SUBMIT_BLOCK_ENABLED", True)):
+    if not _env_or_rule_bool("SCALPING_ENTRY_PASSIVE_PROBE_STALE_SUBMIT_BLOCK_ENABLED", True):
         return False
     fields = submit_revalidation_fields or {}
     if str(fields.get("entry_order_lifecycle") or "").strip() != "passive_probe":
+        return False
+    return bool(fields.get("price_context_stale_at_submit") or fields.get("quote_stale_at_submit"))
+
+
+def _is_standard_stale_submit_block(submit_revalidation_fields) -> bool:
+    if not _env_or_rule_bool("SCALPING_ENTRY_SUBMIT_REVALIDATION_BLOCK_STALE_STANDARD_ENABLED", True):
+        return False
+    fields = submit_revalidation_fields or {}
+    if str(fields.get("entry_order_lifecycle") or "standard").strip() != "standard":
         return False
     return bool(fields.get("price_context_stale_at_submit") or fields.get("quote_stale_at_submit"))
 
@@ -21136,6 +21162,46 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             broker_order_forbidden=True,
             extra_fields={
                 "block_reason": "caution_overbought_stale_context_or_quote",
+                **real_pre_submit_guard_fields,
+            },
+        )
+        return False
+
+    if _is_standard_stale_submit_block(submit_revalidation_fields):
+        log_info(
+            f"[ENTRY_SUBMIT_REVALIDATION_BLOCK] {stock.get('name')}({code}) "
+            f"lifecycle=standard warning={submit_revalidation_fields.get('entry_submit_revalidation_warning')}"
+        )
+        clear_signal_reference(stock)
+        _log_entry_pipeline(
+            stock,
+            code,
+            "entry_submit_revalidation_block",
+            block_reason="standard_stale_context_or_quote",
+            actual_order_submitted=False,
+            threshold_family="pre_submit_price_guard",
+            **_merge_entry_pipeline_field_groups(
+                real_pre_submit_guard_fields,
+                submit_revalidation_fields,
+                latency_price_snapshot,
+                entry_orderbook_micro_fields,
+                swing_entry_micro_fields,
+            ),
+        )
+        _emit_scalp_entry_adm_snapshot(
+            stock,
+            code,
+            "entry_submit_revalidation_block",
+            ai_score=latency_signal_score,
+            chosen_action="WAIT_REQUOTE",
+            latency_gate=latency_gate,
+            submit_fields=submit_revalidation_fields,
+            price_snapshot=latency_price_snapshot,
+            orderbook_fields=entry_orderbook_micro_fields,
+            actual_order_submitted=False,
+            broker_order_forbidden=True,
+            extra_fields={
+                "block_reason": "standard_stale_context_or_quote",
                 **real_pre_submit_guard_fields,
             },
         )

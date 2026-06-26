@@ -5965,6 +5965,51 @@ def test_passive_probe_stale_submit_revalidation_blocks(monkeypatch):
     assert state_handlers._is_passive_probe_stale_submit_block(fields) is True
 
 
+def test_submit_revalidation_quote_age_uses_operator_env(monkeypatch):
+    monkeypatch.setattr(state_handlers.time, "time", lambda: 100.0)
+    monkeypatch.setenv("KORSTOCKSCAN_SCALPING_ENTRY_SUBMIT_REVALIDATION_MAX_QUOTE_AGE_MS", "700")
+    fields = state_handlers._build_entry_submit_revalidation_fields(
+        {"last_ws_update_ts": 99.096},
+        {"entry_order_lifecycle": "standard"},
+        now_ts=100.0,
+    )
+
+    assert fields["quote_age_at_submit_ms"] == 904
+    assert fields["quote_stale_at_submit"] is True
+    assert fields["entry_submit_revalidation_warning"] == "stale_context_or_quote"
+
+
+def test_standard_stale_submit_revalidation_blocks_by_default():
+    assert (
+        state_handlers._is_standard_stale_submit_block(
+            {
+                "entry_order_lifecycle": "standard",
+                "entry_submit_revalidation_warning": "stale_context_or_quote",
+                "quote_stale_at_submit": True,
+                "price_context_stale_at_submit": False,
+            }
+        )
+        is True
+    )
+
+
+def test_standard_stale_submit_revalidation_can_be_disabled(monkeypatch):
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_SCALPING_ENTRY_SUBMIT_REVALIDATION_BLOCK_STALE_STANDARD_ENABLED",
+        "false",
+    )
+    assert (
+        state_handlers._is_standard_stale_submit_block(
+            {
+                "entry_order_lifecycle": "standard",
+                "entry_submit_revalidation_warning": "stale_context_or_quote",
+                "quote_stale_at_submit": True,
+            }
+        )
+        is False
+    )
+
+
 def test_caution_overbought_stale_submit_revalidation_blocks_standard_scalp():
     assert (
         state_handlers._is_caution_overbought_stale_submit_block(
