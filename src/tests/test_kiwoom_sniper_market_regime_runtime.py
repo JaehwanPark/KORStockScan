@@ -1451,7 +1451,13 @@ def test_scalping_fifo_overflow_keeps_scanner_candidates_without_mutating_input_
     assert [target["id"] for target in overflow_order] == ["generic_old", "scanner_never_eval"]
 
 
-def test_scanner_full_eval_max_per_loop_env(monkeypatch):
+def test_scanner_full_eval_max_per_loop_env(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        kiwoom_sniper_v2,
+        "_SCANNER_OPERATOR_RUNTIME_OVERRIDE_PATH",
+        tmp_path / "missing_operator_runtime_overrides.env",
+    )
+    _reset_scanner_hot_override_cache()
     monkeypatch.delenv("KORSTOCKSCAN_SCANNER_FULL_EVAL_MAX_PER_LOOP", raising=False)
     assert kiwoom_sniper_v2._scanner_full_eval_max_per_loop() == 8
 
@@ -1460,6 +1466,7 @@ def test_scanner_full_eval_max_per_loop_env(monkeypatch):
 
     monkeypatch.setenv("KORSTOCKSCAN_SCANNER_FULL_EVAL_MAX_PER_LOOP", "0")
     assert kiwoom_sniper_v2._scanner_full_eval_max_per_loop() == 1
+    _reset_scanner_hot_override_cache()
 
 
 def test_scanner_rising_full_eval_relief_defaults_to_aggressive_budget_and_uses_env(monkeypatch):
@@ -1704,7 +1711,13 @@ def test_runtime_scanner_ws_snapshot_cache_waits_briefly_for_busy_lock(monkeypat
     assert snapshots == {"005930": {"curr": 70000, "last_ws_update_ts": 1000.0}}
 
 
-def test_scanner_full_eval_effective_limit_expands_for_backlog(monkeypatch):
+def test_scanner_full_eval_effective_limit_expands_for_backlog(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        kiwoom_sniper_v2,
+        "_SCANNER_OPERATOR_RUNTIME_OVERRIDE_PATH",
+        tmp_path / "missing_operator_runtime_overrides.env",
+    )
+    _reset_scanner_hot_override_cache()
     monkeypatch.delenv("KORSTOCKSCAN_SCANNER_FULL_EVAL_MAX_PER_LOOP", raising=False)
     monkeypatch.delenv("KORSTOCKSCAN_SCANNER_FULL_EVAL_BACKLOG_EXTRA_PER_LOOP", raising=False)
 
@@ -1714,9 +1727,16 @@ def test_scanner_full_eval_effective_limit_expands_for_backlog(monkeypatch):
 
     monkeypatch.setenv("KORSTOCKSCAN_SCANNER_FULL_EVAL_BACKLOG_EXTRA_PER_LOOP", "0")
     assert kiwoom_sniper_v2._scanner_full_eval_effective_limit({"scanner_watching_count": 40}) == 8
+    _reset_scanner_hot_override_cache()
 
 
-def test_scanner_full_eval_effective_limit_respects_env_caps(monkeypatch):
+def test_scanner_full_eval_effective_limit_respects_env_caps(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        kiwoom_sniper_v2,
+        "_SCANNER_OPERATOR_RUNTIME_OVERRIDE_PATH",
+        tmp_path / "missing_operator_runtime_overrides.env",
+    )
+    _reset_scanner_hot_override_cache()
     monkeypatch.setenv("KORSTOCKSCAN_SCANNER_FULL_EVAL_MAX_PER_LOOP", "6")
     monkeypatch.setenv("KORSTOCKSCAN_SCANNER_FULL_EVAL_BACKLOG_EXTRA_PER_LOOP", "4")
     assert kiwoom_sniper_v2._scanner_full_eval_effective_limit({"scanner_watching_count": 40}) == 10
@@ -1724,6 +1744,7 @@ def test_scanner_full_eval_effective_limit_respects_env_caps(monkeypatch):
     monkeypatch.setenv("KORSTOCKSCAN_SCANNER_FULL_EVAL_MAX_PER_LOOP", "40")
     monkeypatch.setenv("KORSTOCKSCAN_SCANNER_FULL_EVAL_BACKLOG_EXTRA_PER_LOOP", "40")
     assert kiwoom_sniper_v2._scanner_full_eval_effective_limit({"scanner_watching_count": 100}) == 40
+    _reset_scanner_hot_override_cache()
 
 
 def test_scanner_full_eval_budget_defers_before_watching_handler():
@@ -2882,6 +2903,8 @@ def test_scanner_rest_quote_budget_hot_reloads_operator_override_file(tmp_path, 
     monkeypatch.delenv("KORSTOCKSCAN_SCANNER_WS_PERSISTENT_REPAIR_MIN_INTERVAL_SEC", raising=False)
     monkeypatch.delenv("KORSTOCKSCAN_SCANNER_WS_SUBSCRIPTION_RECHECK_FRESH_SEC", raising=False)
     monkeypatch.delenv("KORSTOCKSCAN_SCANNER_HEAVY_EVAL_RECHECK_FRESH_SEC", raising=False)
+    monkeypatch.delenv("KORSTOCKSCAN_SCANNER_FULL_EVAL_MAX_PER_LOOP", raising=False)
+    monkeypatch.delenv("KORSTOCKSCAN_SCANNER_FULL_EVAL_BACKLOG_EXTRA_PER_LOOP", raising=False)
     _reset_scanner_hot_override_cache()
 
     override_path.write_text(
@@ -2895,6 +2918,8 @@ def test_scanner_rest_quote_budget_hot_reloads_operator_override_file(tmp_path, 
                 "export KORSTOCKSCAN_SCANNER_WS_PERSISTENT_REPAIR_MIN_INTERVAL_SEC=11",
                 "export KORSTOCKSCAN_SCANNER_WS_SUBSCRIPTION_RECHECK_FRESH_SEC=12",
                 "export KORSTOCKSCAN_SCANNER_HEAVY_EVAL_RECHECK_FRESH_SEC=6",
+                "export KORSTOCKSCAN_SCANNER_FULL_EVAL_MAX_PER_LOOP=18",
+                "export KORSTOCKSCAN_SCANNER_FULL_EVAL_BACKLOG_EXTRA_PER_LOOP=10",
                 "export KORSTOCKSCAN_BUY_SCORE_THRESHOLD=1",
             ]
         )
@@ -2911,6 +2936,9 @@ def test_scanner_rest_quote_budget_hot_reloads_operator_override_file(tmp_path, 
     assert kiwoom_sniper_v2._scanner_ws_persistent_repair_min_interval_sec() == 11.0
     assert kiwoom_sniper_v2._scanner_ws_subscription_recheck_fresh_sec() == 12.0
     assert kiwoom_sniper_v2._scanner_heavy_eval_recheck_fresh_sec() == 6.0
+    assert kiwoom_sniper_v2._scanner_full_eval_max_per_loop() == 18
+    assert kiwoom_sniper_v2._scanner_full_eval_backlog_extra_per_loop() == 10
+    assert kiwoom_sniper_v2._scanner_full_eval_effective_limit({"scanner_watching_count": 40}) == 28
     assert (
         kiwoom_sniper_v2._scanner_hot_runtime_override_value("KORSTOCKSCAN_BUY_SCORE_THRESHOLD")
         is None
@@ -2923,6 +2951,8 @@ def test_scanner_rest_quote_budget_hot_reloads_operator_override_file(tmp_path, 
                 "export KORSTOCKSCAN_SCANNER_REST_QUOTE_FALLBACK_DYNAMIC_MAX_EXTRA_CALLS=1",
                 "export KORSTOCKSCAN_SCANNER_WS_REPAIR_CYCLE_WAIT_SEC=6",
                 "export KORSTOCKSCAN_SCANNER_HEAVY_EVAL_RECHECK_FRESH_SEC=2",
+                "export KORSTOCKSCAN_SCANNER_FULL_EVAL_MAX_PER_LOOP=9",
+                "export KORSTOCKSCAN_SCANNER_FULL_EVAL_BACKLOG_EXTRA_PER_LOOP=3",
             ]
         )
         + "\n",
@@ -2934,6 +2964,9 @@ def test_scanner_rest_quote_budget_hot_reloads_operator_override_file(tmp_path, 
     assert kiwoom_sniper_v2._scanner_rest_quote_fallback_dynamic_max_extra_calls() == 1
     assert kiwoom_sniper_v2._scanner_ws_repair_cycle_wait_sec() == 6.0
     assert kiwoom_sniper_v2._scanner_heavy_eval_recheck_fresh_sec() == 2.0
+    assert kiwoom_sniper_v2._scanner_full_eval_max_per_loop() == 9
+    assert kiwoom_sniper_v2._scanner_full_eval_backlog_extra_per_loop() == 3
+    assert kiwoom_sniper_v2._scanner_full_eval_effective_limit({"scanner_watching_count": 40}) == 12
     _reset_scanner_hot_override_cache()
 
 

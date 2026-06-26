@@ -241,6 +241,8 @@ _SCANNER_HOT_RUNTIME_OVERRIDE_KEYS = frozenset(
         "KORSTOCKSCAN_SCANNER_WS_PERSISTENT_REPAIR_MIN_INTERVAL_SEC",
         "KORSTOCKSCAN_SCANNER_WS_SUBSCRIPTION_RECHECK_FRESH_SEC",
         "KORSTOCKSCAN_SCANNER_HEAVY_EVAL_RECHECK_FRESH_SEC",
+        "KORSTOCKSCAN_SCANNER_FULL_EVAL_MAX_PER_LOOP",
+        "KORSTOCKSCAN_SCANNER_FULL_EVAL_BACKLOG_EXTRA_PER_LOOP",
     }
 )
 _SCANNER_OPERATOR_RUNTIME_OVERRIDE_PATH = (
@@ -2146,7 +2148,7 @@ def _scanner_cooldown_recheck_waiting(target, now_ts=None):
 
 
 def _scanner_full_eval_max_per_loop():
-    raw = os.getenv("KORSTOCKSCAN_SCANNER_FULL_EVAL_MAX_PER_LOOP", "")
+    raw = _scanner_hot_or_env_value("KORSTOCKSCAN_SCANNER_FULL_EVAL_MAX_PER_LOOP")
     try:
         value = int(str(raw).strip()) if str(raw).strip() else 8
     except Exception:
@@ -2155,7 +2157,7 @@ def _scanner_full_eval_max_per_loop():
 
 
 def _scanner_full_eval_backlog_extra_per_loop():
-    raw = os.getenv("KORSTOCKSCAN_SCANNER_FULL_EVAL_BACKLOG_EXTRA_PER_LOOP", "")
+    raw = _scanner_hot_or_env_value("KORSTOCKSCAN_SCANNER_FULL_EVAL_BACKLOG_EXTRA_PER_LOOP")
     try:
         value = int(str(raw).strip()) if str(raw).strip() else 4
     except Exception:
