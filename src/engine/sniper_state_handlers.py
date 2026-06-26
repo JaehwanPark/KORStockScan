@@ -200,6 +200,9 @@ _SCANNER_PROMOTION_CONTEXT_FIELDS = (
     "scanner_promotion_emitted_epoch",
     "scanner_promotion_reason",
     "source_signature",
+    "first_seen_price",
+    "current_price",
+    "current_price_observed",
     "price_delta_since_first_seen_pct",
     "comparable_flu_delta_since_first_seen",
     "cntr_str_available",
@@ -265,6 +268,15 @@ def _scanner_promotion_context_present(stock: dict[str, Any] | None) -> bool:
     return "cntr_str_available" in stock
 
 
+def _scanner_promotion_price_anchor_present(stock: dict[str, Any] | None) -> bool:
+    if not isinstance(stock, dict):
+        return False
+    return any(
+        _safe_int(stock.get(key), 0) > 0
+        for key in ("current_price_observed", "current_price", "first_seen_price")
+    )
+
+
 def _load_scanner_promotion_context_events(target_date: str) -> dict[str, list[dict[str, Any]]]:
     path = existing_or_gzip_path(_scanner_promotion_events_path(target_date))
     cache = _SCANNER_PROMOTION_CONTEXT_CACHE
@@ -323,6 +335,7 @@ def _hydrate_scanner_promotion_runtime_context(stock: dict[str, Any] | None) -> 
     existing_promotion_epoch = _safe_float(stock.get("scanner_promotion_emitted_epoch"), 0.0)
     if (
         _scanner_promotion_context_present(stock)
+        and _scanner_promotion_price_anchor_present(stock)
         and _safe_int(stock.get("buy_price"), 0) > 0
         and anchor_epoch > 0.0
         and str(stock.get("scanner_promotion_id") or "").strip()
@@ -370,6 +383,14 @@ def _hydrate_scanner_promotion_runtime_context(stock: dict[str, Any] | None) -> 
         ).strip(),
         "scanner_promotion_reason": str(fields.get("scanner_promotion_reason") or "").strip(),
         "source_signature": str(fields.get("source_signature") or "").strip(),
+        "first_seen_price": str(fields.get("first_seen_price") or "").strip(),
+        "current_price": str(fields.get("current_price") or "").strip(),
+        "current_price_observed": str(
+            fields.get("current_price_observed")
+            or fields.get("current_price")
+            or promotion_price
+            or ""
+        ).strip(),
         "price_delta_since_first_seen_pct": str(fields.get("price_delta_since_first_seen_pct") or "0.00").strip(),
         "comparable_flu_delta_since_first_seen": str(
             fields.get("comparable_flu_delta_since_first_seen") or "0.00"
@@ -7377,6 +7398,24 @@ def _scanner_rising_rest_quote_full_eval_min_delta_pct() -> float:
     return max(0.0, min(value, 20.0))
 
 
+def _scanner_rest_quote_recovery_anchor_gap_max_pct() -> float:
+    raw = os.getenv("KORSTOCKSCAN_SCANNER_REST_QUOTE_RECOVERY_ANCHOR_GAP_MAX_PCT", "")
+    try:
+        value = float(str(raw).strip()) if str(raw).strip() else 1.0
+    except Exception:
+        value = 1.0
+    return max(0.0, min(value, 20.0))
+
+
+def _scanner_rest_quote_recovery_anchor_price(scanner_fields: dict[str, Any]) -> int:
+    fields = scanner_fields if isinstance(scanner_fields, dict) else {}
+    for key in ("current_price_observed", "current_price", "first_seen_price"):
+        value = _safe_int(fields.get(key), 0)
+        if value > 0:
+            return value
+    return 0
+
+
 def _scanner_rising_stale_ws_full_eval_relief_enabled() -> bool:
     return _env_bool("KORSTOCKSCAN_SCANNER_RISING_STALE_WS_FULL_EVAL_RELIEF_ENABLED", False)
 
@@ -7800,8 +7839,22 @@ def _scanner_fast_precheck_fields(
         and not fresh_realtime_evidence
         and not subscription_recheck_fresh_realtime_evidence
     )
+    rest_quote_anchor_price = _scanner_rest_quote_recovery_anchor_price(scanner_fields)
+    rest_quote_anchor_gap_max_pct = _scanner_rest_quote_recovery_anchor_gap_max_pct()
+    rest_quote_anchor_gap_pct = (
+        (float(rest_quote_anchor_price) - float(curr)) / float(rest_quote_anchor_price) * 100.0
+        if rest_quote_anchor_price > 0 and curr > 0 and curr < rest_quote_anchor_price
+        else 0.0
+    )
+    rest_quote_promotion_conflict = (
+        rest_quote_only_recovery
+        and rest_quote_anchor_price > 0
+        and curr > 0
+        and rest_quote_anchor_gap_pct > rest_quote_anchor_gap_max_pct
+    )
     rising_rest_quote_relief = (
         rest_quote_only_recovery
+        and not rest_quote_promotion_conflict
         and _scanner_rising_rest_quote_full_eval_relief_enabled()
         and _scanner_rising_entry_relief_eligible(stock)
         and _scanner_positive_delta_pct(stock) >= _scanner_rising_rest_quote_full_eval_min_delta_pct()
@@ -7819,6 +7872,9 @@ def _scanner_fast_precheck_fields(
     if curr <= 0:
         result = "source_quality_blocked"
         reason = "missing_or_zero_curr"
+    elif rest_quote_promotion_conflict:
+        result = "stability_pending"
+        reason = "rest_quote_conflicts_with_scanner_promotion"
     elif rest_quote_only_recovery and not rising_rest_quote_relief:
         result = "stability_pending"
         reason = "rest_quote_without_realtime_strength"
@@ -7881,6 +7937,28 @@ def _scanner_fast_precheck_fields(
             round(_scanner_rising_rest_quote_full_eval_min_delta_pct(), 4)
             if rising_rest_quote_relief
             else "not_applicable_rest_quote_relief_min_delta_pct"
+        ),
+        "fast_precheck_rest_quote_anchor_price": (
+            int(rest_quote_anchor_price)
+            if rest_quote_only_recovery and rest_quote_anchor_price > 0
+            else "not_applicable_rest_quote_anchor_price"
+        ),
+        "fast_precheck_rest_quote_anchor_gap_pct": (
+            round(rest_quote_anchor_gap_pct, 3)
+            if rest_quote_only_recovery and rest_quote_anchor_price > 0 and curr > 0
+            else "not_applicable_rest_quote_anchor_gap_pct"
+        ),
+        "fast_precheck_rest_quote_anchor_gap_max_pct": (
+            round(rest_quote_anchor_gap_max_pct, 3)
+            if rest_quote_only_recovery
+            else "not_applicable_rest_quote_anchor_gap_max_pct"
+        ),
+        "fast_precheck_rest_quote_consistency_status": (
+            "conflicts_with_scanner_promotion"
+            if rest_quote_promotion_conflict
+            else "pass"
+            if rest_quote_only_recovery
+            else "not_applicable_rest_quote_consistency"
         ),
         "fast_precheck_stale_ws_relief_applied": bool(rising_stale_ws_relief),
         "fast_precheck_stale_ws_relief_min_delta_pct": (
@@ -8044,10 +8122,14 @@ def _scanner_promotion_correlation_fields(stock) -> dict[str, Any]:
         return {}
     anchor_epoch = _safe_float(stock.get("entry_armed_at_epoch"), 0.0)
     promotion_epoch = _safe_float(stock.get("scanner_promotion_emitted_epoch"), 0.0)
-    needs_refresh = not stock.get("scanner_promotion_id") or (
-        anchor_epoch > 0.0
-        and promotion_epoch > 0.0
-        and abs(anchor_epoch - promotion_epoch) > 5.0
+    needs_refresh = (
+        not stock.get("scanner_promotion_id")
+        or not _scanner_promotion_price_anchor_present(stock)
+        or (
+            anchor_epoch > 0.0
+            and promotion_epoch > 0.0
+            and abs(anchor_epoch - promotion_epoch) > 5.0
+        )
     )
     if needs_refresh and str(stock.get("position_tag") or "").upper() == "SCANNER":
         _hydrate_scanner_promotion_runtime_context(stock)
@@ -8057,6 +8139,9 @@ def _scanner_promotion_correlation_fields(stock) -> dict[str, Any]:
         "scanner_promotion_emitted_epoch",
         "scanner_promotion_reason",
         "source_signature",
+        "first_seen_price",
+        "current_price",
+        "current_price_observed",
         "price_delta_since_first_seen_pct",
     ):
         value = stock.get(key)

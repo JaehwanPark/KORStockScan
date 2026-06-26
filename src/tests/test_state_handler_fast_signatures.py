@@ -3046,6 +3046,52 @@ def test_scanner_fast_precheck_allows_high_delta_rest_quote_recovery(monkeypatch
     assert stock["_scanner_fast_precheck_result"] == "eligible_for_heavy_entry_eval"
 
 
+def test_scanner_fast_precheck_blocks_rest_quote_below_promotion_anchor(monkeypatch):
+    emitted = []
+    monkeypatch.setattr(handlers.time, "time", lambda: 1012.0)
+    monkeypatch.setattr(
+        handlers,
+        "emit_pipeline_event",
+        lambda pipeline, name, code, stage, *, record_id=None, fields=None: emitted.append(
+            {"stage": stage, "fields": fields or {}}
+        ),
+    )
+    stock = {
+        "id": 851,
+        "name": "RISING_BAD_REST_QUOTE",
+        "status": "WATCHING",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "entry_armed_at_epoch": 1000.0,
+        "first_seen_price": "43400",
+        "current_price_observed": "45400",
+        "price_delta_since_first_seen_pct": "6.22",
+    }
+
+    assert handlers.emit_scanner_fast_precheck(
+        stock,
+        "376900",
+        now_ts=1012.0,
+        ws_data={
+            "curr": 40000,
+            "last_ws_update_ts": 1011.0,
+            "ws_snapshot_recovery_source": "ka10001_rest_quote_fallback",
+        },
+        throttle_sec=0,
+    )
+
+    fields = emitted[-1]["fields"]
+    assert fields["fast_precheck_result"] == "stability_pending"
+    assert fields["fast_precheck_reason"] == "rest_quote_conflicts_with_scanner_promotion"
+    assert fields["fast_precheck_rest_quote_relief_applied"] is False
+    assert fields["fast_precheck_rest_quote_anchor_price"] == 45400
+    assert fields["fast_precheck_rest_quote_anchor_gap_pct"] > 1.0
+    assert fields["fast_precheck_rest_quote_consistency_status"] == "conflicts_with_scanner_promotion"
+    assert fields["heavy_queue_enter_epoch"] == "not_queued"
+    assert stock["_scanner_fast_precheck_result"] == "stability_pending"
+    assert "_scanner_heavy_queue_enter_epoch" not in stock
+
+
 def test_scanner_fast_precheck_allows_configured_high_delta_stale_ws_relief(monkeypatch):
     emitted = []
     monkeypatch.setenv("KORSTOCKSCAN_SCANNER_RISING_STALE_WS_FULL_EVAL_RELIEF_ENABLED", "true")
