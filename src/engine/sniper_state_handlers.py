@@ -1864,6 +1864,7 @@ def _evaluate_late_loss_avg_down_retry(
         "protect_hard",
         "protect_trailing",
         "protect_profit",
+        "mfe_protect",
         "preset_protect",
         "emergency",
         "daily_limit",
@@ -27583,6 +27584,7 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
             curr_vs_micro_vwap_bp=f"{float(price_resolution.get('curr_vs_micro_vwap_bp') or 0):.2f}",
             max_micro_vwap_bps=f"{float(price_resolution.get('max_micro_vwap_bps') or 0):.2f}",
             price_source=price_resolution.get("price_source"),
+            avg_down_bid_discount_ticks=price_resolution.get("avg_down_bid_discount_ticks"),
             scale_in_candidate_funnel_state=(
                 "price_guard_blocked" if sim_window_observation else None
             ),
@@ -27695,6 +27697,7 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
         resolved_price=resolved_price,
         price_source=price_resolution.get("price_source"),
         price_policy=price_resolution.get("price_source") or price_resolution.get("reason"),
+        avg_down_bid_discount_ticks=price_resolution.get("avg_down_bid_discount_ticks"),
         best_bid=price_resolution.get("best_bid"),
         best_ask=price_resolution.get("best_ask"),
         spread_bps="-" if price_resolution.get("spread_bps") is None else f"{price_resolution.get('spread_bps'):.2f}",

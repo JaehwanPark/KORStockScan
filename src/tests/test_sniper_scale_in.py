@@ -1681,11 +1681,17 @@ def test_execute_scalping_reversal_add_uses_resolved_price_not_curr(monkeypatch)
     state_handlers.KIWOOM_TOKEN = "test"
 
     sent_orders = []
+    logs = []
     monkeypatch.setattr(state_handlers.kiwoom_orders, "get_deposit", lambda *args, **kwargs: 10_000_000)
     monkeypatch.setattr(
         state_handlers.kiwoom_orders,
         "send_buy_order",
         lambda *args, **kwargs: sent_orders.append(args) or {"return_code": "0", "ord_no": "R1"},
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_holding_pipeline",
+        lambda stock, code, stage, **fields: logs.append((stage, fields)),
     )
 
     stock = {
@@ -1707,7 +1713,10 @@ def test_execute_scalping_reversal_add_uses_resolved_price_not_curr(monkeypatch)
         admin_id=1,
     )
 
-    assert sent_orders == [("123456", 95, 9_980, "00")]
+    assert sent_orders == [("123456", 95, 9_970, "00")]
+    resolved = [fields for stage, fields in logs if stage == "scale_in_price_resolved"][0]
+    assert resolved["price_source"] == "best_bid_discount"
+    assert resolved["avg_down_bid_discount_ticks"] == 1
 
 
 def test_dynamic_scale_in_qty_blocks_weak_pyramid_evidence(monkeypatch):
@@ -12568,20 +12577,13 @@ def test_handle_holding_state_submits_late_loss_avg_down_before_final_sell(monke
         ai_engine=None,
     )
 
-    assert sell_calls == []
-    assert add_actions and add_actions[0]["reason"] == "late_loss_avg_down_retry"
-    assert add_actions[0]["add_type"] == "AVG_DOWN"
-    assert stock["status"] == "HOLDING"
-    assert stock["late_loss_avg_down_retry_used"] is True
-    assert stock["late_loss_avg_down_retry_count"] == 1
-    assert stock["late_loss_avg_down_retry_exit_rule"] in {
-        "scalp_hard_stop_pct",
-        "scalp_soft_stop_pct",
-        "scalp_mfe_protect_exit",
-    }
+    assert sell_calls and sell_calls[0]["reason_type"] == "PROFIT_PROTECT"
+    assert add_actions == []
+    assert stock["status"] == "SELL_ORDERED"
+    assert "late_loss_avg_down_retry_used" not in stock
     by_stage = {stage: fields for stage, fields in pipeline_events}
-    assert by_stage["late_loss_avg_down_retry_candidate"]["gate_allowed"] is True
-    assert by_stage["late_loss_avg_down_retry_submitted"]["actual_order_submitted"] is True
+    assert "late_loss_avg_down_retry_candidate" not in by_stage
+    assert "late_loss_avg_down_retry_submitted" not in by_stage
 
 
 def test_handle_holding_state_late_loss_avg_down_one_shot_then_sell(monkeypatch):
@@ -12713,11 +12715,10 @@ def test_handle_holding_state_late_loss_avg_down_failure_continues_sell(monkeypa
         ai_engine=None,
     )
 
-    assert sell_calls
-    assert stock["late_loss_avg_down_retry_used"] is True
+    assert sell_calls and sell_calls[0]["reason_type"] == "PROFIT_PROTECT"
+    assert "late_loss_avg_down_retry_used" not in stock
     blocked = [fields for stage, fields in pipeline_events if stage == "late_loss_avg_down_retry_blocked"]
-    assert blocked
-    assert blocked[-1]["block_reason"] == "scale_in_submit_failed_or_guard_blocked"
+    assert blocked == []
 
 
 def test_late_loss_avg_down_retry_uses_reversal_qty_rule_and_hard_stop_guard(monkeypatch):
@@ -12829,11 +12830,22 @@ def test_late_loss_avg_down_retry_includes_hanall_and_gwangju_like_cases(monkeyp
         current_ai_score=67,
         held_sec=596,
     )
+    mfe_protect = state_handlers._evaluate_late_loss_avg_down_retry(
+        {"strategy": "SCALPING"},
+        strategy="SCALPING",
+        sell_reason_type="PROFIT_PROTECT",
+        exit_rule="scalp_mfe_protect_exit",
+        profit_rate=-0.23,
+        peak_profit=1.81,
+        current_ai_score=74,
+        held_sec=515,
+    )
 
     assert hanall["should_retry"] is True
     assert hanall["eligibility_path"] == "deep_loss_retry"
     assert gwangju == {"should_retry": False, "reason": "hard_safety_exit"}
     assert protect_trailing == {"should_retry": False, "reason": "hard_safety_exit"}
+    assert mfe_protect == {"should_retry": False, "reason": "hard_safety_exit"}
 
 
 def test_late_loss_avg_down_price_resolver_bypasses_micro_vwap_only_for_late_retry(monkeypatch):
@@ -12867,6 +12879,34 @@ def test_late_loss_avg_down_price_resolver_bypasses_micro_vwap_only_for_late_ret
     assert reversal["reason"] == "micro_vwap_bp<-5.0"
     assert late["allowed"] is True
     assert late["late_loss_avg_down_retry_micro_vwap_bypass"] is True
+    assert late["order_price"] == 40_350
+    assert late["price_source"] == "best_bid_discount"
+
+
+def test_avg_down_price_resolver_discounts_best_bid_for_high_price_recovery(monkeypatch):
+    scale_in.TRADING_RULES = replace(CONFIG, REVERSAL_ADD_VWAP_BP_MIN=-120.0)
+    stock = {
+        "strategy": "SCALPING",
+        "last_reversal_features": {"curr_vs_micro_vwap_bp": -109.81},
+    }
+    ws_data = {
+        "curr": 141_500,
+        "best_bid": 141_400,
+        "best_ask": 141_500,
+    }
+
+    resolved = scale_in.resolve_scale_in_order_price(
+        stock=stock,
+        ws_data=ws_data,
+        action={"add_type": "AVG_DOWN", "reason": "reversal_add_ok"},
+        strategy="SCALPING",
+        curr_price=141_500,
+    )
+
+    assert resolved["allowed"] is True
+    assert resolved["order_price"] == 141_300
+    assert resolved["price_source"] == "best_bid_discount"
+    assert resolved["avg_down_bid_discount_ticks"] == 1
 
 
 def test_scalp_profit_stagnation_time_exit_resets_on_profit_or_peak_breakout(monkeypatch):

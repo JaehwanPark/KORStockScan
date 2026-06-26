@@ -587,7 +587,15 @@ def resolve_scale_in_order_price(stock, ws_data, action, *, strategy=None, curr_
             result["reason"] = f"micro_vwap_bp<{min_micro_vwap:.1f}"
             return result
 
-    if best_bid > 0 and best_bid < curr_price:
+    avg_down_bid_discount_ticks = max(
+        0,
+        _safe_int(getattr(TRADING_RULES, "SCALPING_AVG_DOWN_BID_DISCOUNT_TICKS", 1), 1),
+    )
+    result["avg_down_bid_discount_ticks"] = avg_down_bid_discount_ticks
+    if add_type == "AVG_DOWN" and best_bid > 0 and best_bid < curr_price and avg_down_bid_discount_ticks > 0:
+        order_price = _ticks_down(best_bid, avg_down_bid_discount_ticks)
+        source = "best_bid_discount"
+    elif best_bid > 0 and best_bid < curr_price:
         order_price = best_bid
         source = "best_bid"
     elif defensive_price > 0 and defensive_price < curr_price:
