@@ -78,6 +78,7 @@ _OPTIONAL_ARTIFACT_LABELS = {
     "ldm_hypothesis_parent_refinement",
     "key_lineage_ledger",
     "conversion_lane",
+    "quote_consistency",
 }
 _AI_EXEMPT_RUNTIME_FAMILIES = {
     "latency_classifier_runtime_profile",
@@ -527,6 +528,7 @@ def _artifact_paths(target_date: str) -> dict[str, Path]:
         "runtime_apply_bridge": REPORT_DIR
         / "runtime_apply_bridge"
         / f"runtime_apply_bridge_{target_date}.json",
+        "quote_consistency": REPORT_DIR / "quote_consistency" / f"quote_consistency_{target_date}.json",
         "threshold_preopen_apply_current": PROJECT_ROOT
         / "data"
         / "threshold_cycle"
@@ -2543,16 +2545,28 @@ def _active_sim_priority_handoff_status(
 
     preopen_seed_ids = collect_values(preopen_apply, "active_sim_priority_seed_ids")
     preopen_swing_policy_ids = collect_values(preopen_apply, "active_arm_priority_policy_ids")
+    preopen_source_date = str(preopen_apply.get("source_date") or "").strip() if isinstance(preopen_apply, dict) else ""
+    preopen_catalog_due_for_target = not preopen_source_date or preopen_source_date >= target_date
+    due_active_seed_ids = active_seed_ids if preopen_catalog_due_for_target else active_seed_ids & preopen_seed_ids
+    due_active_swing_policy_ids = (
+        active_swing_policy_ids if preopen_catalog_due_for_target else active_swing_policy_ids & preopen_swing_policy_ids
+    )
+    pending_active_seed_ids = active_seed_ids - due_active_seed_ids
+    pending_active_swing_policy_ids = active_swing_policy_ids - due_active_swing_policy_ids
     if (active_seed_ids or active_swing_policy_ids) and preopen_apply:
-        if active_seed_ids and "scalp_sim_auto_approval" not in selected_families:
+        if due_active_seed_ids and "scalp_sim_auto_approval" not in selected_families:
             missing.append("active_sim_priority_preopen_handoff_missing")
-        elif active_seed_ids and not active_seed_ids.issubset(preopen_seed_ids):
+        elif due_active_seed_ids and not due_active_seed_ids.issubset(preopen_seed_ids):
             missing.append("active_sim_priority_preopen_handoff_missing")
-        if active_swing_policy_ids and "swing_sim_auto_approval" not in selected_families:
-            missing.append("swing_active_arm_priority_preopen_handoff_missing")
-        elif active_swing_policy_ids and not preopen_swing_policy_ids:
+        if pending_active_seed_ids:
             warnings.append("active_sim_priority_preopen_handoff_pending")
-        elif active_swing_policy_ids and not active_swing_policy_ids.issubset(preopen_swing_policy_ids):
+        if due_active_swing_policy_ids and "swing_sim_auto_approval" not in selected_families:
+            missing.append("swing_active_arm_priority_preopen_handoff_missing")
+        elif due_active_swing_policy_ids and not preopen_swing_policy_ids:
+            warnings.append("active_sim_priority_preopen_handoff_pending")
+        elif due_active_swing_policy_ids and not due_active_swing_policy_ids.issubset(preopen_swing_policy_ids):
+            warnings.append("swing_active_arm_priority_preopen_handoff_pending")
+        if pending_active_swing_policy_ids:
             warnings.append("swing_active_arm_priority_preopen_handoff_pending")
     elif active_seed_ids or active_swing_policy_ids:
         warnings.append("active_sim_priority_preopen_handoff_pending")
@@ -2659,13 +2673,13 @@ def _active_sim_priority_handoff_status(
         missing.append("active_sim_priority_inactive_key_consumed")
     if stale_alias_consumed:
         warnings.append("active_sim_priority_stale_seed_alias_consumed")
-    active_seed_runtime_expected = bool(active_seed_ids and active_seed_ids.issubset(preopen_seed_ids))
+    active_seed_runtime_expected = bool(due_active_seed_ids and due_active_seed_ids.issubset(preopen_seed_ids))
     active_swing_runtime_expected = bool(
-        active_swing_policy_ids and active_swing_policy_ids.issubset(preopen_swing_policy_ids)
+        due_active_swing_policy_ids and due_active_swing_policy_ids.issubset(preopen_swing_policy_ids)
     )
-    if active_seed_runtime_expected and not (observed_seed_ids & active_seed_ids):
+    if active_seed_runtime_expected and not (observed_seed_ids & due_active_seed_ids):
         warnings.append("active_sim_priority_runtime_observation_missing")
-    if active_swing_runtime_expected and not (observed_swing_policy_ids & active_swing_policy_ids):
+    if active_swing_runtime_expected and not (observed_swing_policy_ids & due_active_swing_policy_ids):
         warnings.append("swing_active_arm_priority_runtime_observation_missing")
     active_prefixes = {
         json.dumps(seed.get("observable_prefix"), ensure_ascii=True, sort_keys=True)
@@ -2703,8 +2717,8 @@ def _active_sim_priority_handoff_status(
                 "reason": ",".join(sorted(set(missing))),
             }
         )
-    elif active_seed_runtime_expected and not (observed_seed_ids & active_seed_ids):
-        if not preopen_seed_ids or not active_seed_ids.issubset(preopen_seed_ids):
+    elif active_seed_runtime_expected and not (observed_seed_ids & due_active_seed_ids):
+        if not preopen_seed_ids or not due_active_seed_ids.issubset(preopen_seed_ids):
             diagnosis = "catalog_or_preopen_handoff_gap"
             reason = "active_seed_not_preserved_in_preopen_apply"
         elif not candidate_prefix_counts:
@@ -3545,6 +3559,7 @@ def build_threshold_cycle_postclose_verification(
     key_lineage_ledger = _load_json(paths["key_lineage_ledger"])
     conversion_lane = _load_json(paths["conversion_lane"])
     bridge_report = _load_json(paths["runtime_apply_bridge"])
+    quote_consistency_report = _load_json(paths["quote_consistency"])
     preopen_apply_current = _load_json(paths["threshold_preopen_apply_current"])
     preopen_apply_next = _load_json(paths["threshold_preopen_apply_next"])
     active_priority_preopen_apply = preopen_apply_current or preopen_apply_next
@@ -4062,6 +4077,21 @@ def build_threshold_cycle_postclose_verification(
         and not paths["ldm_hypothesis_parent_refinement"].exists()
     ):
         missing_required_artifacts.append("ldm_hypothesis_parent_refinement")
+    quote_consistency_findings = quote_consistency_report.get("verifier_findings") or []
+    quote_consistency_failures = [
+        str(item.get("code") or "quote_consistency_fail")
+        for item in quote_consistency_findings
+        if isinstance(item, dict) and str(item.get("severity") or "").lower() == "fail"
+    ]
+    quote_consistency_warnings = [
+        str(item.get("code") or "quote_consistency_warning")
+        for item in quote_consistency_findings
+        if isinstance(item, dict) and str(item.get("severity") or "").lower() == "warning"
+    ]
+    if target_date >= "2026-06-27" and not paths["quote_consistency"].exists():
+        quote_consistency_warnings.append("quote_consistency_report_missing")
+    if quote_consistency_warnings:
+        handoff_warnings.extend(quote_consistency_warnings)
     missing_downstream_links = [
         key for key, value in downstream_links.items() if value in (None, "", "-")
     ]
@@ -4452,6 +4482,9 @@ def build_threshold_cycle_postclose_verification(
         log_issues.append("postclose_done_marker_missing_required_flags")
     elif missing_required_artifacts:
         status = "fail"
+    elif quote_consistency_failures:
+        status = "fail"
+        log_issues.extend(quote_consistency_failures)
     elif missing_downstream_links:
         status = "fail"
     elif runtime_apply_gap_audit_issues:
@@ -4543,6 +4576,20 @@ def build_threshold_cycle_postclose_verification(
             "runtime_apply_bridge_generated_at": bridge_report.get("generated_at"),
             "threshold_preopen_apply_next_generated_at": preopen_apply_next.get("generated_at"),
             "threshold_preopen_apply_current_generated_at": preopen_apply_current.get("generated_at"),
+        },
+        "quote_consistency": {
+            "status": (
+                "fail"
+                if quote_consistency_failures
+                else "warning"
+                if quote_consistency_warnings
+                else "pass"
+            ),
+            "summary": quote_consistency_report.get("summary") or {},
+            "findings": quote_consistency_findings,
+            "failures": quote_consistency_failures,
+            "warnings": quote_consistency_warnings,
+            "path": str(paths["quote_consistency"]) if paths["quote_consistency"].exists() else None,
         },
         "conversion_kpi": {
             "status": conversion_kpi_status,

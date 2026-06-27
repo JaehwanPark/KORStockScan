@@ -2386,6 +2386,72 @@ def test_active_sim_priority_pending_preopen_does_not_require_runtime_observatio
     assert "swing_active_arm_priority_runtime_observation_missing" not in status["warnings"]
 
 
+def test_active_sim_priority_current_preopen_only_requires_due_prior_source_seeds(monkeypatch):
+    monkeypatch.setattr(
+        mod,
+        "_iter_pipeline_event_fields",
+        lambda target_date: [
+            {
+                "active_seed_id": "active_seed_prior",
+                "scalp_sim_auto_policy_file": "",
+                "actual_order_submitted": "False",
+                "broker_order_forbidden": "True",
+            }
+        ],
+    )
+
+    status = mod._active_sim_priority_handoff_status(
+        target_date="2026-06-26",
+        discovery={},
+        scalp_catalog={
+            "schema_version": "scalp_sim_policy_catalog_v1",
+            "active_sim_priority_seeds": [
+                {
+                    "active_seed_id": "active_seed_prior",
+                    "source_parent_bucket_id": "parent_positive_prior",
+                    "status": "active",
+                    "observable_prefix": {
+                        "entry_score_parent": "score_watch_recovery",
+                        "entry_source_parent": "entry_source_wait6579",
+                    },
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                    "runtime_effect": False,
+                },
+                {
+                    "active_seed_id": "active_seed_new_postclose",
+                    "source_parent_bucket_id": "parent_positive_new",
+                    "status": "active",
+                    "observable_prefix": {
+                        "entry_score_parent": "score_mid_recovery",
+                        "entry_source_parent": "entry_source_blocked_ai_score",
+                    },
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                    "runtime_effect": False,
+                },
+            ],
+        },
+        swing_catalog={},
+        preopen_apply={
+            "source_date": "2026-06-25",
+            "selected": [
+                {
+                    "family": "scalp_sim_auto_approval",
+                    "selected": True,
+                    "active_sim_priority_seed_ids": ["active_seed_prior"],
+                }
+            ],
+        },
+        swing_sim_report={},
+    )
+
+    assert status["status"] == "warning"
+    assert "active_sim_priority_preopen_handoff_missing" not in status["missing"]
+    assert "active_sim_priority_preopen_handoff_pending" in status["warnings"]
+    assert "active_sim_priority_runtime_observation_missing" not in status["warnings"]
+
+
 def test_active_sim_priority_handoff_fails_when_preopen_apply_omits_active_seed(monkeypatch):
     monkeypatch.setattr(mod, "_iter_pipeline_event_fields", lambda target_date: [])
 

@@ -1863,12 +1863,17 @@ def get_stock_orderbook_ka10004(token, code):
     best_bid = bids[0]["price"] if bids else 0
     best_ask_qty = asks[0]["volume"] if asks else 0
     best_bid_qty = bids[0]["volume"] if bids else 0
+    rest_mid_price = int(round((best_ask + best_bid) / 2.0)) if best_ask > 0 and best_bid > 0 else 0
     return {
         "source": "ka10004_rest_orderbook",
         "stock_code": normalize_stock_code(code),
         "request_code": payload["stk_cd"],
         "bid_req_base_tm": str(row.get("bid_req_base_tm") or "").strip(),
-        "curr": best_ask or best_bid,
+        "curr": 0,
+        "rest_current_price": 0,
+        "rest_mid_price": rest_mid_price,
+        "executable_buy_price": best_bid,
+        "executable_sell_price": best_bid,
         "best_ask": best_ask,
         "best_bid": best_bid,
         "best_ask_qty": best_ask_qty,

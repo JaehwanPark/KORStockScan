@@ -198,6 +198,8 @@ BASE_FORBIDDEN_USES = with_evidence_authority_forbidden_uses(
 SOURCE_CONTRACT_SCHEMA_VERSION = "lifecycle_source_contract_snapshot_v2"
 LEGACY_DAILY_LDM_SOURCE_KEY = "daily_lifecycle_decision_matrix_reports"
 CANONICAL_PER_DATE_SOURCE_KEY = "per_date_sources"
+SCALE_IN_AI_SCORE_SOURCE_MISSING_GAP = "scale_in_ai_score_source_missing"
+SCALE_IN_AI_SCORE_SOURCE_MISSING_RESOLUTION = "source_quality_blocked_missing_runtime_features_ai_score"
 SOURCE_CONTRACT_SECTION_SCHEMAS: dict[str, dict[str, tuple[str, ...]]] = {
     "lifecycle_flow_bucket_attribution": {
         "bucket_types": ("combo_lifecycle_flow",),
@@ -833,6 +835,8 @@ def _flow_sim_transition_state(state: str, bucket: dict[str, Any], grade: dict[s
 def _recommended_resolution(candidate_state: str, bucket: dict[str, Any]) -> str:
     if _lifecycle_flow_source_only_blocker(bucket):
         return "explicit_lifecycle_flow_source_only_blocker"
+    if _scale_in_ai_score_source_missing(bucket):
+        return SCALE_IN_AI_SCORE_SOURCE_MISSING_RESOLUTION
     existing = str(bucket.get("recommended_resolution") or "").strip()
     if existing and existing != "none":
         return existing
@@ -868,6 +872,15 @@ def _actionable_unknown_source_dimension_gap(
     if taxonomy.get("missing_dimension_keys"):
         return True
     text = str(bucket_key or "").strip().lower()
+    if _scale_in_ai_score_source_missing(
+        {
+            **bucket,
+            "stage": stage,
+            "bucket_type": bucket_type,
+            "bucket_key": bucket_key,
+        }
+    ):
+        return False
     if stage == "exit" and bucket_type == "exit_outcome" and text == "outcome_unknown":
         return False
     if bucket.get("unknown_dimension_counts"):
@@ -877,6 +890,41 @@ def _actionable_unknown_source_dimension_gap(
     if stage == "lifecycle_flow" or bucket_type == "combo_lifecycle_flow":
         return False
     return "_unknown" in text or "unknown_" in text
+
+
+def _scale_in_ai_score_source_missing(bucket: dict[str, Any]) -> bool:
+    if str(bucket.get("stage") or "") != "scale_in":
+        return False
+    if str(bucket.get("bucket_type") or "") != "ai_score_band":
+        return False
+    if str(bucket.get("bucket_key") or "").strip().lower() != "score_unknown":
+        return False
+    coverage = bucket.get("source_field_coverage") if isinstance(bucket.get("source_field_coverage"), dict) else {}
+    ai_score_coverage = coverage.get("ai_score_band") if isinstance(coverage.get("ai_score_band"), dict) else {}
+    reasons = bucket.get("unknown_reason_counts") if isinstance(bucket.get("unknown_reason_counts"), dict) else {}
+    present_count = _safe_int(ai_score_coverage.get("present_count"))
+    sample_count = _safe_int(ai_score_coverage.get("sample_count"), _safe_int(bucket.get("sample")))
+    return (
+        _safe_int(reasons.get("missing_source_field")) > 0
+        and sample_count > 0
+        and present_count == 0
+    )
+
+
+def _scale_in_ai_score_source_missing_provenance(bucket: dict[str, Any]) -> dict[str, Any]:
+    coverage = bucket.get("source_field_coverage") if isinstance(bucket.get("source_field_coverage"), dict) else {}
+    ai_score_coverage = coverage.get("ai_score_band") if isinstance(coverage.get("ai_score_band"), dict) else {}
+    return {
+        "gap": SCALE_IN_AI_SCORE_SOURCE_MISSING_GAP,
+        "resolution": SCALE_IN_AI_SCORE_SOURCE_MISSING_RESOLUTION,
+        "source_fields": ai_score_coverage.get("source_fields") or ["runtime_features.ai_score"],
+        "present_count": _safe_int(ai_score_coverage.get("present_count")),
+        "sample_count": _safe_int(ai_score_coverage.get("sample_count"), _safe_int(bucket.get("sample"))),
+        "coverage_rate": _safe_float(ai_score_coverage.get("coverage_rate"), 0.0),
+        "decision_authority": "source_quality_gap_discovery",
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+    }
 
 
 def _decision_authority_for_state(state: str) -> str:
@@ -1054,6 +1102,8 @@ def _source_dimension_gap_summary(candidates: list[dict[str, Any]]) -> dict[str,
             "missing_dimension_keys": item.get("missing_dimension_keys") or [],
             "missing_lifecycle_flow_stage_keys": item.get("missing_lifecycle_flow_stage_keys") or [],
             "unknown_reason_counts": reason_counts,
+            "source_field_coverage": item.get("source_field_coverage") or {},
+            "source_dimension_gap_provenance": item.get("source_dimension_gap_provenance") or {},
         }
         if gap == "unknown_source_dimensions" and resolution in SOURCE_DIMENSION_ACTIONABLE_RESOLUTIONS:
             actionable.append(compact)
@@ -2914,6 +2964,15 @@ def _candidate_from_bucket(stage: str, bucket: dict[str, Any]) -> dict[str, Any]
         and "unknown" in bucket_key
     ):
         source_dimension_gap = "legacy_contract_known_unknown"
+    elif _scale_in_ai_score_source_missing(
+        {
+            **bucket,
+            "stage": stage,
+            "bucket_type": bucket_type,
+            "bucket_key": bucket_key,
+        }
+    ):
+        source_dimension_gap = SCALE_IN_AI_SCORE_SOURCE_MISSING_GAP
     elif _actionable_unknown_source_dimension_gap(
         stage=stage,
         bucket_type=bucket_type,
@@ -2967,6 +3026,9 @@ def _candidate_from_bucket(stage: str, bucket: dict[str, Any]) -> dict[str, Any]
             and "unknown" in bucket_key
         ),
         "source_dimension_gap": source_dimension_gap,
+        "source_dimension_gap_provenance": _scale_in_ai_score_source_missing_provenance(bucket)
+        if source_dimension_gap == SCALE_IN_AI_SCORE_SOURCE_MISSING_GAP
+        else {},
         "explicit_runtime_exclusion": lifecycle_flow_source_only_blocker,
         "source_only_explicit_exclusion": lifecycle_flow_source_only_blocker,
         "runtime_exclusion_reason": "lifecycle_flow_incomplete_stage_contract"
@@ -3031,7 +3093,15 @@ def _candidate_from_bucket(stage: str, bucket: dict[str, Any]) -> dict[str, Any]
             bucket_type=bucket_type,
             ev=_safe_float(bucket.get("source_quality_adjusted_ev_pct"), None),
         ),
-        "recommended_resolution": _recommended_resolution(state, bucket),
+        "recommended_resolution": _recommended_resolution(
+            state,
+            {
+                **bucket,
+                "stage": stage,
+                "bucket_type": bucket_type,
+                "bucket_key": bucket_key,
+            },
+        ),
         "unknown_dimension_counts": bucket.get("unknown_dimension_counts") or {},
         "unknown_reason_counts": bucket.get("unknown_reason_counts") or {},
         "source_field_coverage": bucket.get("source_field_coverage") or {},

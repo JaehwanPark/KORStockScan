@@ -977,7 +977,9 @@ def test_real_pre_submit_rest_orderbook_refresh_uses_ka10004_fresh_snapshot(monk
         lambda token, code: {
             "source": "ka10004_rest_orderbook",
             "bid_req_base_tm": now_hhmmss,
-            "curr": 10_030,
+            "curr": 0,
+            "rest_current_price": 0,
+            "rest_mid_price": 10_025,
             "best_ask": 10_030,
             "best_bid": 10_020,
             "best_ask_qty": 100,
@@ -1001,7 +1003,7 @@ def test_real_pre_submit_rest_orderbook_refresh_uses_ka10004_fresh_snapshot(monk
     assert fields["pre_submit_rest_orderbook_refresh_enabled"] is True
     assert fields["pre_submit_rest_orderbook_refresh_applied"] is True
     assert fields["pre_submit_rest_orderbook_refresh_reason"] == "rest_orderbook_fresh"
-    assert refreshed["curr"] == 10_030
+    assert refreshed["curr"] == 10_025
     assert refreshed["best_ask"] == 10_030
     assert refreshed["best_bid"] == 10_020
     assert refreshed["quote_refresh_source"] == "ka10004_rest_orderbook"

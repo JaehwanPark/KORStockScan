@@ -178,6 +178,8 @@ def test_ldm_refinement_pressure_is_consumed_without_hypothesis_seed_fragmentati
     refinement_dir = tmp_path / "ldm_refinement"
     refinement_dir.mkdir()
     monkeypatch.setattr(mod, "LDM_REFINEMENT_REPORT_DIR", refinement_dir)
+    monkeypatch.setattr(mod, "CATALOG_DIR", tmp_path / "catalog")
+    monkeypatch.setattr(mod, "_load_previous_active_sim_priority_seeds", lambda target_date: {})
     refinement_dir.joinpath("ldm_hypothesis_parent_refinement_2026-06-01.json").write_text(
         json.dumps(
             {
@@ -1192,6 +1194,53 @@ def test_lifecycle_source_dimension_explicit_unknown_and_flow_tokens_are_not_act
     assert flow_candidate["source_dimension_gap"] == ""
     summary = mod._source_dimension_gap_summary([exit_candidate, flow_candidate])
     assert summary["actionable_unknown_gap_count"] == 0
+
+
+def test_scale_in_ai_score_unknown_keeps_source_quality_blocker_provenance():
+    candidate = mod._candidate_from_bucket(
+        "scale_in",
+        {
+            "bucket_type": "ai_score_band",
+            "bucket_key": "score_unknown",
+            "sample": 167,
+            "joined_sample": 4,
+            "source_quality_gate": "hold_sample",
+            "recommended_route": "hold_sample",
+            "unknown_dimension_counts": {"ai_score_band": 1},
+            "unknown_reason_counts": {"missing_source_field": 1},
+            "source_field_coverage": {
+                "ai_score_band": {
+                    "source_fields": ["runtime_features.ai_score"],
+                    "present_count": 0,
+                    "sample_count": 167,
+                    "coverage_rate": 0.0,
+                }
+            },
+        },
+    )
+
+    assert candidate["source_dimension_gap"] == mod.SCALE_IN_AI_SCORE_SOURCE_MISSING_GAP
+    assert candidate["recommended_resolution"] == mod.SCALE_IN_AI_SCORE_SOURCE_MISSING_RESOLUTION
+    assert candidate["source_dimension_gap_provenance"] == {
+        "gap": mod.SCALE_IN_AI_SCORE_SOURCE_MISSING_GAP,
+        "resolution": mod.SCALE_IN_AI_SCORE_SOURCE_MISSING_RESOLUTION,
+        "source_fields": ["runtime_features.ai_score"],
+        "present_count": 0,
+        "sample_count": 167,
+        "coverage_rate": 0.0,
+        "decision_authority": "source_quality_gap_discovery",
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+    }
+    assert candidate["runtime_effect"] is False
+    assert candidate["allowed_runtime_apply"] is False
+    assert candidate["broker_order_forbidden"] is True
+
+    summary = mod._source_dimension_gap_summary([candidate])
+    assert summary["actionable_unknown_gap_count"] == 0
+    assert summary["rollup_only_gap_count"] == 1
+    assert summary["source_dimension_gap_counts"][mod.SCALE_IN_AI_SCORE_SOURCE_MISSING_GAP] == 1
+    assert summary["rollup_candidates"][0]["source_dimension_gap_provenance"]["sample_count"] == 167
 
 
 def test_lifecycle_bucket_discovery_classifies_live_sim_and_new_buckets(tmp_path, monkeypatch):

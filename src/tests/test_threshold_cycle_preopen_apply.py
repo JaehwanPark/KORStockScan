@@ -1612,6 +1612,55 @@ def test_operator_runtime_env_lock_supports_env_overrides_without_env_key(tmp_pa
     assert manifest["runtime_env_overrides"]["KORSTOCKSCAN_SCALP_SIM_AI_MAX_CALLS_PER_MIN"] == "10"
 
 
+def test_quote_consistency_operator_lock_enables_next_preopen(tmp_path, monkeypatch):
+    report_dir = tmp_path / "report"
+    apply_dir = tmp_path / "apply_plans"
+    runtime_dir = tmp_path / "runtime_env"
+    lock_dir = tmp_path / "operator_runtime_env_locks"
+    latency_dir = tmp_path / "missing_latency_classifier_recommendation"
+    report_dir.mkdir(parents=True)
+    lock_dir.mkdir(parents=True)
+    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "APPLY_PLAN_DIR", apply_dir)
+    monkeypatch.setattr(mod, "RUNTIME_ENV_DIR", runtime_dir)
+    monkeypatch.setattr(mod, "OPERATOR_RUNTIME_ENV_LOCK_DIR", lock_dir)
+    monkeypatch.setattr(mod, "LATENCY_CLASSIFIER_RECOMMENDATION_DIR", latency_dir)
+
+    (lock_dir / "quote_consistency_normalization_2026-06-29.json").write_text(
+        json.dumps(
+            {
+                "lock_id": "quote_consistency_normalization_operator_apply_2026_06_29",
+                "enabled": True,
+                "family": "quote_consistency_normalization",
+                "stage": "cross_lifecycle_quote_normalization",
+                "active_from_date": "2026-06-29",
+                "explicit_close_required": True,
+                "env_overrides": {
+                    "KORSTOCKSCAN_QUOTE_CONSISTENCY_RUNTIME_ENABLED": "true",
+                    "KORSTOCKSCAN_QUOTE_CONSISTENCY_MAX_WS_AGE_MS": "700",
+                    "KORSTOCKSCAN_QUOTE_CONSISTENCY_BLOCK_ENTRY_ON_DIVERGENCE": "true",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    manifest = mod.build_preopen_apply_manifest(
+        "2026-06-29",
+        source_date="2026-06-26",
+        apply_mode="auto_bounded_live",
+        auto_apply=True,
+        require_ai=True,
+    )
+
+    decision = [
+        item for item in manifest["auto_apply_decisions"] if item["family"] == "quote_consistency_normalization"
+    ][0]
+    assert decision["operator_runtime_env_lock"]["applied"] is True
+    assert manifest["runtime_env_overrides"]["KORSTOCKSCAN_QUOTE_CONSISTENCY_RUNTIME_ENABLED"] == "true"
+    assert manifest["runtime_env_overrides"]["KORSTOCKSCAN_QUOTE_CONSISTENCY_MAX_WS_AGE_MS"] == "700"
+
+
 def test_sell_side_open_time_operator_lock_enables_next_preopen(tmp_path, monkeypatch):
     report_dir = tmp_path / "report"
     apply_dir = tmp_path / "apply_plans"
@@ -1799,7 +1848,7 @@ def test_weak_pullback_operator_lock_closes_for_same_stage_live_bucket(tmp_path,
     assert "KORSTOCKSCAN_SCALP_REAL_WEAK_PULLBACK_ENTRY_BLOCK_ENABLED" not in manifest["runtime_env_overrides"]
 
 
-def test_aggressive_entry_price_operator_lock_applies_without_formal_entry_price_candidate(tmp_path, monkeypatch):
+def test_aggressive_entry_price_operator_lock_is_retired_without_formal_entry_price_candidate(tmp_path, monkeypatch):
     report_dir = tmp_path / "report"
     apply_dir = tmp_path / "apply_plans"
     runtime_dir = tmp_path / "runtime_env"
@@ -1862,16 +1911,17 @@ def test_aggressive_entry_price_operator_lock_applies_without_formal_entry_price
     decision = [
         item for item in manifest["auto_apply_decisions"] if item["family"] == "aggressive_entry_price_override_runtime"
     ][0]
-    assert decision["selected"] is True
-    assert decision["operator_runtime_env_lock"]["applied"] is True
-    assert manifest["runtime_env_overrides"]["KORSTOCKSCAN_SCALP_AGGRESSIVE_ENTRY_PRICE_OVERRIDE_ENABLED"] == "true"
+    assert decision["selected"] is False
+    assert decision["decision_reason"].startswith("retired_runtime_family:")
+    assert decision["operator_runtime_env_lock"]["applied"] is False
+    assert "KORSTOCKSCAN_SCALP_AGGRESSIVE_ENTRY_PRICE_OVERRIDE_ENABLED" not in manifest["runtime_env_overrides"]
     assert (
-        manifest["runtime_env_overrides"]["KORSTOCKSCAN_SCALP_AGGRESSIVE_ENTRY_PRICE_OVERRIDE_TYPES"]
-        == "defensive_missed_upside_v1,reference_target_cap_missed_upside_v1"
+        "KORSTOCKSCAN_SCALP_AGGRESSIVE_ENTRY_PRICE_OVERRIDE_TYPES"
+        not in manifest["runtime_env_overrides"]
     )
     assert (
-        manifest["runtime_env_overrides"]["KORSTOCKSCAN_SCALP_REFERENCE_TARGET_MISSED_UPSIDE_MIN_BELOW_BID_BPS"]
-        == "20"
+        "KORSTOCKSCAN_SCALP_REFERENCE_TARGET_MISSED_UPSIDE_MIN_BELOW_BID_BPS"
+        not in manifest["runtime_env_overrides"]
     )
 
 
@@ -3233,7 +3283,7 @@ def test_scalping_scanner_real_source_guard_closes_for_same_stage_live_owner(tmp
     assert "KORSTOCKSCAN_SCALP_SCANNER_PRIORITY_TIERING_ENABLED" not in manifest["runtime_env_overrides"]
 
 
-def test_aggressive_entry_price_operator_lock_closes_for_dynamic_entry_price_resolver(tmp_path, monkeypatch):
+def test_retired_runtime_families_are_never_selected_even_with_operator_locks(tmp_path, monkeypatch):
     report_dir = tmp_path / "report"
     apply_dir = tmp_path / "apply_plans"
     runtime_dir = tmp_path / "runtime_env"
@@ -3253,135 +3303,55 @@ def test_aggressive_entry_price_operator_lock_closes_for_dynamic_entry_price_res
                 "date": "2026-06-14",
                 "calibration_candidates": [
                     {
-                        "family": "dynamic_entry_price_resolver",
+                        "family": "late_entry_price_drift_guard_runtime",
                         "stage": "entry",
                         "priority": 10,
                         "allowed_runtime_apply": True,
                         "safety_revert_required": False,
                         "calibration_state": "adjust_up",
-                        "target_env_keys": ["SCALPING_NORMAL_DEFENSIVE_BPS"],
-                        "current_values": {"normal_defensive_bps": 50},
-                        "recommended_values": {"normal_defensive_bps": 25},
+                        "target_env_keys": ["SCALP_LATE_ENTRY_PRICE_DRIFT_GUARD_ENABLED"],
+                        "current_values": {"enabled": False},
+                        "recommended_values": {"enabled": True},
                     }
                 ],
             }
         ),
         encoding="utf-8",
     )
-    (lock_dir / "aggressive_entry_price_override_2026-06-13.json").write_text(
-        json.dumps(
-            {
-                "lock_id": "aggressive_entry_price_override_real_operator_override_2026-06-13",
-                "enabled": True,
-                "family": "aggressive_entry_price_override_runtime",
-                "stage": "entry",
-                "priority": 900,
-                "active_from_date": "2026-06-15",
-                "explicit_close_required": True,
-                "env_overrides": {
-                    "KORSTOCKSCAN_SCALP_AGGRESSIVE_ENTRY_PRICE_OVERRIDE_ENABLED": "true",
-                },
-                "allowed_close_reason_keywords": [
-                    "same_stage_owner_conflict",
-                    "dynamic_entry_price_resolver",
-                    "live_auto_apply_ready",
-                    "tuning_override",
-                    "safety_revert_required",
-                ],
-            }
+    retired_locks = {
+        "aggressive_entry_price_override_2026-06-13.json": (
+            "aggressive_entry_price_override_runtime",
+            "entry",
+            {"KORSTOCKSCAN_SCALP_AGGRESSIVE_ENTRY_PRICE_OVERRIDE_ENABLED": "true"},
         ),
-        encoding="utf-8",
-    )
-
-    manifest = mod.build_preopen_apply_manifest(
-        "2026-06-15",
-        source_date="2026-06-14",
-        apply_mode="auto_bounded_live",
-        auto_apply=True,
-        require_ai=False,
-    )
-
-    decisions = {item["family"]: item for item in manifest["auto_apply_decisions"]}
-    assert decisions["dynamic_entry_price_resolver"]["selected"] is True
-    lock_decision = decisions["aggressive_entry_price_override_runtime"]
-    assert lock_decision["selected"] is False
-    assert lock_decision["decision_reason"] == "same_stage_owner_conflict:dynamic_entry_price_resolver"
-    assert lock_decision["operator_runtime_env_lock"]["allowed_close"] is True
-    assert "KORSTOCKSCAN_SCALP_AGGRESSIVE_ENTRY_PRICE_OVERRIDE_ENABLED" not in manifest["runtime_env_overrides"]
-    assert manifest["runtime_env_overrides"]["KORSTOCKSCAN_SCALPING_NORMAL_DEFENSIVE_BPS"] == "25"
-    assert manifest["runtime_env_overrides"]["KORSTOCKSCAN_DYNAMIC_ENTRY_PRICE_RESOLVER_LIVE_SELECTED"] == "true"
-    assert manifest["runtime_env_overrides"]["KORSTOCKSCAN_ENTRY_PRICE_LIVE_TUNING_SELECTED"] == "true"
-
-
-def test_aggressive_entry_price_operator_lock_closes_for_runtime_bridge_entry_owner(tmp_path, monkeypatch):
-    report_dir = tmp_path / "report"
-    apply_dir = tmp_path / "apply_plans"
-    runtime_dir = tmp_path / "runtime_env"
-    lock_dir = tmp_path / "operator_runtime_env_locks"
-    latency_dir = tmp_path / "missing_latency_classifier_recommendation"
-    report_dir.mkdir(parents=True)
-    lock_dir.mkdir(parents=True)
-    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
-    monkeypatch.setattr(mod, "APPLY_PLAN_DIR", apply_dir)
-    monkeypatch.setattr(mod, "RUNTIME_ENV_DIR", runtime_dir)
-    monkeypatch.setattr(mod, "OPERATOR_RUNTIME_ENV_LOCK_DIR", lock_dir)
-    monkeypatch.setattr(mod, "LATENCY_CLASSIFIER_RECOMMENDATION_DIR", latency_dir)
-    monkeypatch.setattr(
-        mod,
-        "_load_runtime_apply_bridge_approval",
-        lambda source_date: {
-            "request_report": None,
-            "artifacts": {},
-            "candidates": [],
-            "metadata": [],
-            "approved_requests": [
+        "soft_stop_dynamic_grace_2026-06-13.json": (
+            "soft_stop_dynamic_grace_runtime",
+            "holding_exit",
+            {"KORSTOCKSCAN_SCALP_SOFT_STOP_DYNAMIC_GRACE_OVERRIDE_ENABLED": "true"},
+        ),
+        "preset_tp_soft_stop_2026-06-15.json": (
+            "preset_tp_soft_stop_runtime",
+            "holding_exit",
+            {"KORSTOCKSCAN_SCALP_PRESET_TP_SOFT_STOP_OVERRIDE_ENABLED": "true"},
+        ),
+    }
+    for name, (family, stage, overrides) in retired_locks.items():
+        (lock_dir / name).write_text(
+            json.dumps(
                 {
-                    "approval_id": "entry_price_bucket:2026-06-14",
-                    "family": "entry_price_bucket_runtime_v1",
-                    "stage": "entry",
-                    "priority": 10,
-                    "allowed_runtime_apply": True,
-                    "target_env_keys": ["SCALPING_NORMAL_DEFENSIVE_BPS"],
-                    "recommended_values": {"normal_defensive_bps": 25},
-                    "current_values": {"normal_defensive_bps": 50},
-                    "approval_state": "auto_live",
-                    "actual_order_submitted": False,
+                    "lock_id": f"{family}_legacy_lock",
+                    "enabled": True,
+                    "family": family,
+                    "stage": stage,
+                    "priority": 20,
+                    "active_from_date": "2026-06-15",
+                    "explicit_close_required": True,
+                    "env_overrides": overrides,
+                    "allowed_close_reason_keywords": ["same_stage_owner_conflict"],
                 }
-            ],
-            "blocked": [],
-        },
-    )
-
-    (report_dir / "threshold_cycle_2026-06-14.json").write_text(
-        json.dumps({"date": "2026-06-14", "calibration_candidates": []}),
-        encoding="utf-8",
-    )
-    (lock_dir / "aggressive_entry_price_override_2026-06-13.json").write_text(
-        json.dumps(
-            {
-                "lock_id": "aggressive_entry_price_override_real_operator_override_2026-06-13",
-                "enabled": True,
-                "family": "aggressive_entry_price_override_runtime",
-                "stage": "entry",
-                "priority": 900,
-                "active_from_date": "2026-06-15",
-                "explicit_close_required": True,
-                "env_overrides": {
-                    "KORSTOCKSCAN_SCALP_AGGRESSIVE_ENTRY_PRICE_OVERRIDE_ENABLED": "true",
-                    "KORSTOCKSCAN_SCALP_AGGRESSIVE_ENTRY_PRICE_OVERRIDE_TYPES": "defensive_missed_upside_v1,reference_target_cap_missed_upside_v1",
-                    "KORSTOCKSCAN_SCALP_REFERENCE_TARGET_MISSED_UPSIDE_MIN_BELOW_BID_BPS": "20",
-                },
-                "allowed_close_reason_keywords": [
-                    "same_stage_owner_conflict",
-                    "dynamic_entry_price_resolver",
-                    "live_auto_apply_ready",
-                    "tuning_override",
-                    "safety_revert_required",
-                ],
-            }
-        ),
-        encoding="utf-8",
-    )
+            ),
+            encoding="utf-8",
+        )
 
     manifest = mod.build_preopen_apply_manifest(
         "2026-06-15",
@@ -3392,466 +3362,19 @@ def test_aggressive_entry_price_operator_lock_closes_for_runtime_bridge_entry_ow
     )
 
     decisions = {item["family"]: item for item in manifest["auto_apply_decisions"]}
-    lock_decision = decisions["aggressive_entry_price_override_runtime"]
-    assert lock_decision["selected"] is False
-    assert lock_decision["decision_reason"] == "same_stage_owner_conflict:entry_price_bucket_runtime_v1"
-    assert lock_decision["operator_runtime_env_lock"]["applied"] is False
-    assert lock_decision["operator_runtime_env_lock"]["allowed_close"] is True
-    assert "KORSTOCKSCAN_SCALP_AGGRESSIVE_ENTRY_PRICE_OVERRIDE_ENABLED" not in manifest["runtime_env_overrides"]
-    assert (
-        "KORSTOCKSCAN_SCALP_REFERENCE_TARGET_MISSED_UPSIDE_MIN_BELOW_BID_BPS"
-        not in manifest["runtime_env_overrides"]
-    )
-    assert manifest["runtime_env_overrides"]["KORSTOCKSCAN_SCALPING_NORMAL_DEFENSIVE_BPS"] == "25"
-    assert manifest["runtime_env_overrides"]["KORSTOCKSCAN_ENTRY_PRICE_LIVE_TUNING_SELECTED"] == "true"
-
-
-def test_soft_stop_dynamic_grace_operator_lock_applies_without_formal_holding_exit_candidate(tmp_path, monkeypatch):
-    report_dir = tmp_path / "report"
-    apply_dir = tmp_path / "apply_plans"
-    runtime_dir = tmp_path / "runtime_env"
-    lock_dir = tmp_path / "operator_runtime_env_locks"
-    latency_dir = tmp_path / "missing_latency_classifier_recommendation"
-    report_dir.mkdir(parents=True)
-    lock_dir.mkdir(parents=True)
-    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
-    monkeypatch.setattr(mod, "APPLY_PLAN_DIR", apply_dir)
-    monkeypatch.setattr(mod, "RUNTIME_ENV_DIR", runtime_dir)
-    monkeypatch.setattr(mod, "OPERATOR_RUNTIME_ENV_LOCK_DIR", lock_dir)
-    monkeypatch.setattr(mod, "LATENCY_CLASSIFIER_RECOMMENDATION_DIR", latency_dir)
-
-    (report_dir / "threshold_cycle_2026-06-14.json").write_text(
-        json.dumps({"date": "2026-06-14", "calibration_candidates": []}),
-        encoding="utf-8",
-    )
-    (lock_dir / "soft_stop_dynamic_grace_2026-06-13.json").write_text(
-        json.dumps(
-            {
-                "lock_id": "soft_stop_dynamic_grace_real_operator_override_2026-06-13",
-                "enabled": True,
-                "family": "soft_stop_dynamic_grace_runtime",
-                "stage": "holding_exit",
-                "priority": 900,
-                "active_from_date": "2026-06-15",
-                "explicit_close_required": True,
-                "env_overrides": {
-                    "KORSTOCKSCAN_SCALP_SOFT_STOP_DYNAMIC_GRACE_OVERRIDE_ENABLED": "true",
-                    "KORSTOCKSCAN_SCALP_SOFT_STOP_DYNAMIC_GRACE_WEAK_SEC": "20",
-                    "KORSTOCKSCAN_SCALP_SOFT_STOP_DYNAMIC_GRACE_BASE_SEC": "45",
-                    "KORSTOCKSCAN_SCALP_SOFT_STOP_DYNAMIC_GRACE_STRONG_SEC": "90",
-                    "KORSTOCKSCAN_SCALP_SOFT_STOP_DYNAMIC_GRACE_MIN_AI_SCORE": "65",
-                    "KORSTOCKSCAN_SCALP_SOFT_STOP_DYNAMIC_GRACE_EMERGENCY_PCT": "-2.8",
-                    "KORSTOCKSCAN_SCALP_SOFT_STOP_DYNAMIC_GRACE_MAX_WORSEN_PCT": "0.30",
-                },
-                "allowed_close_reason_keywords": [
-                    "same_stage_owner_conflict",
-                    "soft_stop_whipsaw_confirmation",
-                    "holding_exit_matrix_runtime",
-                    "live_auto_apply_ready",
-                    "tuning_override",
-                    "safety_revert_required",
-                ],
-            }
-        ),
-        encoding="utf-8",
-    )
-
-    manifest = mod.build_preopen_apply_manifest(
-        "2026-06-15",
-        source_date="2026-06-14",
-        apply_mode="auto_bounded_live",
-        auto_apply=True,
-        require_ai=False,
-    )
-
-    decision = [
-        item for item in manifest["auto_apply_decisions"] if item["family"] == "soft_stop_dynamic_grace_runtime"
-    ][0]
-    assert decision["selected"] is True
-    assert decision["operator_runtime_env_lock"]["applied"] is True
-    assert manifest["runtime_env_overrides"]["KORSTOCKSCAN_SCALP_SOFT_STOP_DYNAMIC_GRACE_OVERRIDE_ENABLED"] == "true"
-    assert manifest["runtime_env_overrides"]["KORSTOCKSCAN_SCALP_SOFT_STOP_DYNAMIC_GRACE_STRONG_SEC"] == "90"
-    assert "KORSTOCKSCAN_HOLDING_EXIT_LIVE_TUNING_SELECTED" not in manifest["runtime_env_overrides"]
-
-
-def test_soft_stop_dynamic_grace_operator_lock_closes_for_formal_holding_exit_owner(tmp_path, monkeypatch):
-    report_dir = tmp_path / "report"
-    apply_dir = tmp_path / "apply_plans"
-    runtime_dir = tmp_path / "runtime_env"
-    lock_dir = tmp_path / "operator_runtime_env_locks"
-    latency_dir = tmp_path / "missing_latency_classifier_recommendation"
-    report_dir.mkdir(parents=True)
-    lock_dir.mkdir(parents=True)
-    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
-    monkeypatch.setattr(mod, "APPLY_PLAN_DIR", apply_dir)
-    monkeypatch.setattr(mod, "RUNTIME_ENV_DIR", runtime_dir)
-    monkeypatch.setattr(mod, "OPERATOR_RUNTIME_ENV_LOCK_DIR", lock_dir)
-    monkeypatch.setattr(mod, "LATENCY_CLASSIFIER_RECOMMENDATION_DIR", latency_dir)
-
-    (report_dir / "threshold_cycle_2026-06-14.json").write_text(
-        json.dumps(
-            {
-                "date": "2026-06-14",
-                "calibration_candidates": [
-                    {
-                        "family": "soft_stop_whipsaw_confirmation",
-                        "stage": "holding_exit",
-                        "priority": 10,
-                        "allowed_runtime_apply": True,
-                        "safety_revert_required": False,
-                        "calibration_state": "adjust_up",
-                        "target_env_keys": ["SCALP_SOFT_STOP_WHIPSAW_CONFIRMATION_ENABLED"],
-                        "current_values": {"enabled": False},
-                        "recommended_values": {"enabled": True},
-                    }
-                ],
-            }
-        ),
-        encoding="utf-8",
-    )
-    (lock_dir / "soft_stop_dynamic_grace_2026-06-13.json").write_text(
-        json.dumps(
-            {
-                "lock_id": "soft_stop_dynamic_grace_real_operator_override_2026-06-13",
-                "enabled": True,
-                "family": "soft_stop_dynamic_grace_runtime",
-                "stage": "holding_exit",
-                "priority": 900,
-                "active_from_date": "2026-06-15",
-                "explicit_close_required": True,
-                "env_overrides": {
-                    "KORSTOCKSCAN_SCALP_SOFT_STOP_DYNAMIC_GRACE_OVERRIDE_ENABLED": "true",
-                },
-                "allowed_close_reason_keywords": [
-                    "same_stage_owner_conflict",
-                    "soft_stop_whipsaw_confirmation",
-                    "holding_exit_matrix_runtime",
-                    "live_auto_apply_ready",
-                    "tuning_override",
-                    "safety_revert_required",
-                ],
-            }
-        ),
-        encoding="utf-8",
-    )
-
-    manifest = mod.build_preopen_apply_manifest(
-        "2026-06-15",
-        source_date="2026-06-14",
-        apply_mode="auto_bounded_live",
-        auto_apply=True,
-        require_ai=False,
-    )
-
-    decisions = {item["family"]: item for item in manifest["auto_apply_decisions"]}
-    assert decisions["soft_stop_whipsaw_confirmation"]["selected"] is True
-    lock_decision = decisions["soft_stop_dynamic_grace_runtime"]
-    assert lock_decision["selected"] is False
-    assert lock_decision["decision_reason"] == "same_stage_owner_conflict:soft_stop_whipsaw_confirmation"
-    assert lock_decision["operator_runtime_env_lock"]["allowed_close"] is True
-    assert "KORSTOCKSCAN_SCALP_SOFT_STOP_DYNAMIC_GRACE_OVERRIDE_ENABLED" not in manifest["runtime_env_overrides"]
-    assert manifest["runtime_env_overrides"]["KORSTOCKSCAN_SCALP_SOFT_STOP_WHIPSAW_CONFIRMATION_ENABLED"] == "true"
-    assert manifest["runtime_env_overrides"]["KORSTOCKSCAN_HOLDING_EXIT_LIVE_TUNING_SELECTED"] == "true"
-
-
-def test_soft_stop_dynamic_grace_lock_close_respects_allowed_keywords(tmp_path, monkeypatch):
-    report_dir = tmp_path / "report"
-    apply_dir = tmp_path / "apply_plans"
-    runtime_dir = tmp_path / "runtime_env"
-    lock_dir = tmp_path / "operator_runtime_env_locks"
-    latency_dir = tmp_path / "missing_latency_classifier_recommendation"
-    report_dir.mkdir(parents=True)
-    lock_dir.mkdir(parents=True)
-    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
-    monkeypatch.setattr(mod, "APPLY_PLAN_DIR", apply_dir)
-    monkeypatch.setattr(mod, "RUNTIME_ENV_DIR", runtime_dir)
-    monkeypatch.setattr(mod, "OPERATOR_RUNTIME_ENV_LOCK_DIR", lock_dir)
-    monkeypatch.setattr(mod, "LATENCY_CLASSIFIER_RECOMMENDATION_DIR", latency_dir)
-
-    (report_dir / "threshold_cycle_2026-06-14.json").write_text(
-        json.dumps(
-            {
-                "date": "2026-06-14",
-                "calibration_candidates": [
-                    {
-                        "family": "soft_stop_whipsaw_confirmation",
-                        "stage": "holding_exit",
-                        "priority": 10,
-                        "allowed_runtime_apply": True,
-                        "safety_revert_required": False,
-                        "calibration_state": "adjust_up",
-                        "target_env_keys": ["SCALP_SOFT_STOP_WHIPSAW_CONFIRMATION_ENABLED"],
-                        "current_values": {"enabled": False},
-                        "recommended_values": {"enabled": True},
-                    }
-                ],
-            }
-        ),
-        encoding="utf-8",
-    )
-    (lock_dir / "soft_stop_dynamic_grace_2026-06-13.json").write_text(
-        json.dumps(
-            {
-                "lock_id": "soft_stop_dynamic_grace_real_operator_override_2026-06-13",
-                "enabled": True,
-                "family": "soft_stop_dynamic_grace_runtime",
-                "stage": "holding_exit",
-                "priority": 900,
-                "active_from_date": "2026-06-15",
-                "explicit_close_required": True,
-                "env_overrides": {
-                    "KORSTOCKSCAN_SCALP_SOFT_STOP_DYNAMIC_GRACE_OVERRIDE_ENABLED": "true",
-                },
-                "allowed_close_reason_keywords": ["safety_revert_required"],
-            }
-        ),
-        encoding="utf-8",
-    )
-
-    manifest = mod.build_preopen_apply_manifest(
-        "2026-06-15",
-        source_date="2026-06-14",
-        apply_mode="auto_bounded_live",
-        auto_apply=True,
-        require_ai=False,
-    )
-
-    decisions = {item["family"]: item for item in manifest["auto_apply_decisions"]}
-    lock_decision = decisions["soft_stop_dynamic_grace_runtime"]
-    assert lock_decision["selected"] is False
-    assert lock_decision["decision_reason"] == "same_stage_owner_conflict:soft_stop_whipsaw_confirmation"
-    assert lock_decision["operator_runtime_env_lock"]["allowed_close"] is False
-    assert "KORSTOCKSCAN_SCALP_SOFT_STOP_DYNAMIC_GRACE_OVERRIDE_ENABLED" not in manifest["runtime_env_overrides"]
-    assert manifest["runtime_env_overrides"]["KORSTOCKSCAN_HOLDING_EXIT_LIVE_TUNING_SELECTED"] == "true"
-
-
-def test_preset_tp_soft_stop_operator_lock_applies_without_formal_owner(tmp_path, monkeypatch):
-    report_dir = tmp_path / "report"
-    apply_dir = tmp_path / "apply_plans"
-    runtime_dir = tmp_path / "runtime_env"
-    lock_dir = tmp_path / "operator_runtime_env_locks"
-    latency_dir = tmp_path / "missing_latency_classifier_recommendation"
-    report_dir.mkdir(parents=True)
-    lock_dir.mkdir(parents=True)
-    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
-    monkeypatch.setattr(mod, "APPLY_PLAN_DIR", apply_dir)
-    monkeypatch.setattr(mod, "RUNTIME_ENV_DIR", runtime_dir)
-    monkeypatch.setattr(mod, "OPERATOR_RUNTIME_ENV_LOCK_DIR", lock_dir)
-    monkeypatch.setattr(mod, "LATENCY_CLASSIFIER_RECOMMENDATION_DIR", latency_dir)
-
-    (report_dir / "threshold_cycle_2026-06-14.json").write_text(
-        json.dumps({"date": "2026-06-14", "calibration_candidates": []}),
-        encoding="utf-8",
-    )
-    (lock_dir / "preset_tp_soft_stop_2026-06-15.json").write_text(
-        json.dumps(
-            {
-                "lock_id": "preset_tp_soft_stop_real_operator_override_2026-06-15",
-                "enabled": True,
-                "family": "preset_tp_soft_stop_runtime",
-                "stage": "holding_exit",
-                "priority": 20,
-                "active_from_date": "2026-06-15",
-                "explicit_close_required": True,
-                "env_overrides": {
-                    "KORSTOCKSCAN_SCALP_PRESET_TP_SOFT_STOP_OVERRIDE_ENABLED": "true",
-                    "KORSTOCKSCAN_SCALP_PRESET_TP_SOFT_STOP_TRIGGER_PCT": "-0.7",
-                    "KORSTOCKSCAN_SCALP_PRESET_TP_SOFT_STOP_GRACE_SEC": "45",
-                    "KORSTOCKSCAN_SCALP_PRESET_TP_SOFT_STOP_EMERGENCY_PCT": "-1.2",
-                    "KORSTOCKSCAN_SCALP_PRESET_TP_SOFT_STOP_MAX_WORSEN_PCT": "0.30",
-                    "KORSTOCKSCAN_SCALP_PRESET_TP_SOFT_STOP_RECOVERY_BUFFER_PCT": "0.05",
-                },
-                "allowed_close_reason_keywords": [
-                    "same_stage_owner_conflict",
-                    "preset_tp_exit_profile",
-                    "holding_exit_matrix_runtime",
-                    "soft_stop_whipsaw_confirmation",
-                    "live_auto_apply_ready",
-                    "tuning_override",
-                    "safety_revert_required",
-                ],
-            }
-        ),
-        encoding="utf-8",
-    )
-
-    manifest = mod.build_preopen_apply_manifest(
-        "2026-06-15",
-        source_date="2026-06-14",
-        apply_mode="auto_bounded_live",
-        auto_apply=True,
-        require_ai=False,
-    )
-
-    decision = [
-        item for item in manifest["auto_apply_decisions"] if item["family"] == "preset_tp_soft_stop_runtime"
-    ][0]
-    assert decision["selected"] is True
-    assert decision["operator_runtime_env_lock"]["applied"] is True
     env = manifest["runtime_env_overrides"]
-    assert env["KORSTOCKSCAN_SCALP_PRESET_TP_SOFT_STOP_OVERRIDE_ENABLED"] == "true"
-    assert env["KORSTOCKSCAN_SCALP_PRESET_TP_SOFT_STOP_GRACE_SEC"] == "45"
-    assert "KORSTOCKSCAN_PRESET_TP_EXIT_LIVE_TUNING_SELECTED" not in env
-    assert "KORSTOCKSCAN_HOLDING_EXIT_LIVE_TUNING_SELECTED" not in env
-
-
-def test_preset_tp_soft_stop_operator_lock_closes_for_formal_holding_exit_owner(tmp_path, monkeypatch):
-    report_dir = tmp_path / "report"
-    apply_dir = tmp_path / "apply_plans"
-    runtime_dir = tmp_path / "runtime_env"
-    lock_dir = tmp_path / "operator_runtime_env_locks"
-    latency_dir = tmp_path / "missing_latency_classifier_recommendation"
-    report_dir.mkdir(parents=True)
-    lock_dir.mkdir(parents=True)
-    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
-    monkeypatch.setattr(mod, "APPLY_PLAN_DIR", apply_dir)
-    monkeypatch.setattr(mod, "RUNTIME_ENV_DIR", runtime_dir)
-    monkeypatch.setattr(mod, "OPERATOR_RUNTIME_ENV_LOCK_DIR", lock_dir)
-    monkeypatch.setattr(mod, "LATENCY_CLASSIFIER_RECOMMENDATION_DIR", latency_dir)
-
-    (report_dir / "threshold_cycle_2026-06-14.json").write_text(
-        json.dumps(
-            {
-                "date": "2026-06-14",
-                "calibration_candidates": [
-                    {
-                        "family": "soft_stop_whipsaw_confirmation",
-                        "stage": "holding_exit",
-                        "priority": 10,
-                        "allowed_runtime_apply": True,
-                        "safety_revert_required": False,
-                        "calibration_state": "adjust_up",
-                        "target_env_keys": ["SCALP_SOFT_STOP_WHIPSAW_CONFIRMATION_ENABLED"],
-                        "current_values": {"enabled": False},
-                        "recommended_values": {"enabled": True},
-                    }
-                ],
-            }
-        ),
-        encoding="utf-8",
-    )
-    (lock_dir / "preset_tp_soft_stop_2026-06-15.json").write_text(
-        json.dumps(
-            {
-                "lock_id": "preset_tp_soft_stop_real_operator_override_2026-06-15",
-                "enabled": True,
-                "family": "preset_tp_soft_stop_runtime",
-                "stage": "holding_exit",
-                "priority": 20,
-                "active_from_date": "2026-06-15",
-                "explicit_close_required": True,
-                "env_overrides": {
-                    "KORSTOCKSCAN_SCALP_PRESET_TP_SOFT_STOP_OVERRIDE_ENABLED": "true",
-                    "KORSTOCKSCAN_SCALP_PRESET_TP_SOFT_STOP_GRACE_SEC": "45",
-                },
-                "allowed_close_reason_keywords": [
-                    "same_stage_owner_conflict",
-                    "soft_stop_whipsaw_confirmation",
-                ],
-            }
-        ),
-        encoding="utf-8",
-    )
-
-    manifest = mod.build_preopen_apply_manifest(
-        "2026-06-15",
-        source_date="2026-06-14",
-        apply_mode="auto_bounded_live",
-        auto_apply=True,
-        require_ai=False,
-    )
-
-    decisions = {item["family"]: item for item in manifest["auto_apply_decisions"]}
-    lock_decision = decisions["preset_tp_soft_stop_runtime"]
-    assert lock_decision["selected"] is False
-    assert lock_decision["decision_reason"] == "same_stage_owner_conflict:soft_stop_whipsaw_confirmation"
-    assert lock_decision["operator_runtime_env_lock"]["allowed_close"] is True
-    env = manifest["runtime_env_overrides"]
+    for family in (
+        "aggressive_entry_price_override_runtime",
+        "soft_stop_dynamic_grace_runtime",
+        "preset_tp_soft_stop_runtime",
+        "late_entry_price_drift_guard_runtime",
+    ):
+        assert decisions[family]["selected"] is False
+        assert decisions[family]["decision_reason"].startswith("retired_runtime_family:")
+    assert "KORSTOCKSCAN_SCALP_AGGRESSIVE_ENTRY_PRICE_OVERRIDE_ENABLED" not in env
+    assert "KORSTOCKSCAN_SCALP_SOFT_STOP_DYNAMIC_GRACE_OVERRIDE_ENABLED" not in env
     assert "KORSTOCKSCAN_SCALP_PRESET_TP_SOFT_STOP_OVERRIDE_ENABLED" not in env
-    assert env["KORSTOCKSCAN_PRESET_TP_EXIT_LIVE_TUNING_SELECTED"] == "true"
-    assert env["KORSTOCKSCAN_HOLDING_EXIT_LIVE_TUNING_SELECTED"] == "true"
-
-
-def test_preset_tp_soft_stop_operator_lock_coexists_with_profit_stagnation_lock(tmp_path, monkeypatch):
-    report_dir = tmp_path / "report"
-    apply_dir = tmp_path / "apply_plans"
-    runtime_dir = tmp_path / "runtime_env"
-    lock_dir = tmp_path / "operator_runtime_env_locks"
-    latency_dir = tmp_path / "missing_latency_classifier_recommendation"
-    report_dir.mkdir(parents=True)
-    lock_dir.mkdir(parents=True)
-    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
-    monkeypatch.setattr(mod, "APPLY_PLAN_DIR", apply_dir)
-    monkeypatch.setattr(mod, "RUNTIME_ENV_DIR", runtime_dir)
-    monkeypatch.setattr(mod, "OPERATOR_RUNTIME_ENV_LOCK_DIR", lock_dir)
-    monkeypatch.setattr(mod, "LATENCY_CLASSIFIER_RECOMMENDATION_DIR", latency_dir)
-
-    (report_dir / "threshold_cycle_2026-06-14.json").write_text(
-        json.dumps({"date": "2026-06-14", "calibration_candidates": []}),
-        encoding="utf-8",
-    )
-    (lock_dir / "profit_stagnation_exit_2026-06-14.json").write_text(
-        json.dumps(
-            {
-                "lock_id": "profit_stagnation_time_exit_real_operator_override_2026-06-14",
-                "enabled": True,
-                "family": "profit_stagnation_exit_runtime",
-                "stage": "holding_exit",
-                "priority": 12,
-                "active_from_date": "2026-06-15",
-                "explicit_close_required": True,
-                "env_overrides": {
-                    "KORSTOCKSCAN_SCALP_PROFIT_STAGNATION_EXIT_ENABLED": "true",
-                    "KORSTOCKSCAN_SCALP_PROFIT_STAGNATION_MIN_SEC": "180",
-                },
-                "allowed_close_reason_keywords": ["tuning_override", "safety_revert_required"],
-            }
-        ),
-        encoding="utf-8",
-    )
-    (lock_dir / "preset_tp_soft_stop_2026-06-15.json").write_text(
-        json.dumps(
-            {
-                "lock_id": "preset_tp_soft_stop_real_operator_override_2026-06-15",
-                "enabled": True,
-                "family": "preset_tp_soft_stop_runtime",
-                "stage": "holding_exit",
-                "priority": 20,
-                "active_from_date": "2026-06-15",
-                "explicit_close_required": True,
-                "env_overrides": {
-                    "KORSTOCKSCAN_SCALP_PRESET_TP_SOFT_STOP_OVERRIDE_ENABLED": "true",
-                    "KORSTOCKSCAN_SCALP_PRESET_TP_SOFT_STOP_GRACE_SEC": "45",
-                },
-                "allowed_close_reason_keywords": [
-                    "same_stage_owner_conflict",
-                    "preset_tp_exit_profile",
-                    "holding_exit_matrix_runtime",
-                    "soft_stop_whipsaw_confirmation",
-                    "live_auto_apply_ready",
-                    "tuning_override",
-                    "safety_revert_required",
-                ],
-            }
-        ),
-        encoding="utf-8",
-    )
-
-    manifest = mod.build_preopen_apply_manifest(
-        "2026-06-15",
-        source_date="2026-06-14",
-        apply_mode="auto_bounded_live",
-        auto_apply=True,
-        require_ai=False,
-    )
-
-    decisions = {item["family"]: item for item in manifest["auto_apply_decisions"]}
-    assert decisions["profit_stagnation_exit_runtime"]["selected"] is True
-    assert decisions["preset_tp_soft_stop_runtime"]["selected"] is True
-    env = manifest["runtime_env_overrides"]
-    assert env["KORSTOCKSCAN_SCALP_PROFIT_STAGNATION_EXIT_ENABLED"] == "true"
-    assert env["KORSTOCKSCAN_SCALP_PRESET_TP_SOFT_STOP_OVERRIDE_ENABLED"] == "true"
-    assert "KORSTOCKSCAN_PRESET_TP_EXIT_LIVE_TUNING_SELECTED" not in env
+    assert "KORSTOCKSCAN_SCALP_LATE_ENTRY_PRICE_DRIFT_GUARD_ENABLED" not in env
 
 
 def test_scalp_sim_candidate_window_operator_lock_applies_240_daily_quota(tmp_path, monkeypatch):

@@ -10,8 +10,9 @@ def test_static_parser_detects_repeated_ev_verifier_and_lifecycle_windows():
     report = mod.build_report("2026-06-02")
 
     producers = Counter(item["producer"] for item in report["step_inventory"])
-    assert producers["src.engine.threshold_cycle_ev_report"] == 3
+    assert producers["src.engine.threshold_cycle_ev_report"] == 5
     assert producers["src.engine.verify_threshold_cycle_postclose_chain"] == 2
+    assert producers["src.engine.monitoring.quote_consistency_report"] == 1
     lifecycle_context = next(
         item for item in report["step_inventory"] if item["producer"] == "src.engine.lifecycle_ai_context"
     )

@@ -12,6 +12,7 @@ from src.trading.entry.state_machine import EntryStateMachine
 from src.trading.logging.metrics_recorder import MetricsRecorder
 from src.trading.logging.trade_logger import TradeLogger
 from src.trading.market.market_data_cache import MarketDataCache
+from src.trading.market.quote_consistency import build_quote_consistency_snapshot, quote_input_from_ws
 from src.trading.order.order_manager import OrderManager
 
 
@@ -58,7 +59,22 @@ class EntryOrchestrator:
         self.state_machine.transition(symbol, "POLICY_CHECKING", reason="start_policy_check")
         latest_price = self.market_data_cache.get_last_price(symbol)
         best_ask = self.market_data_cache.get_best_ask(symbol)
+        best_bid = self.market_data_cache.get_best_bid(symbol)
         quote_health = self.market_data_cache.get_quote_health(symbol)
+        quote_consistency = build_quote_consistency_snapshot(
+            ws=quote_input_from_ws(
+                {
+                    "curr": latest_price,
+                    "best_ask": best_ask,
+                    "best_bid": best_bid,
+                    "quote_consistency_ws_age_ms": quote_health.ws_age_ms,
+                }
+            ),
+            side="buy",
+        )
+        quote_consistency_fields = quote_consistency.as_event_fields()
+        if quote_consistency.canonical_mark_price > 0:
+            latest_price = int(quote_consistency.canonical_mark_price)
         latency = self.latency_monitor.evaluate(
             ws_age_ms=quote_health.ws_age_ms,
             ws_jitter_ms=quote_health.ws_jitter_ms,
@@ -67,6 +83,34 @@ class EntryOrchestrator:
             quote_stale=quote_health.quote_stale,
             spread_ratio=quote_health.spread_ratio,
         )
+        if quote_consistency.normalization_runtime_effect and quote_consistency.entry_blocked:
+            self.state_machine.transition(symbol, "REJECTED_DANGER", reason=quote_consistency.reason)
+            self.metrics_recorder.increment("entry.reject_quote_consistency")
+            result = {
+                "status": "REJECTED_DANGER",
+                "mode": "reject",
+                "reason": quote_consistency.reason,
+                "latency_state": latency.state.value,
+                "orders": [],
+                "broker_results": [],
+                **quote_consistency_fields,
+            }
+            self.trade_logger.log_policy(
+                symbol=symbol,
+                latest_price=latest_price,
+                elapsed_ms=int((datetime.now(UTC) - snapshot.signal_time).total_seconds() * 1000),
+                latency_state=latency.state.value,
+                ws_age_ms=latency.ws_age_ms,
+                ws_jitter_ms=latency.ws_jitter_ms,
+                order_rtt_avg_ms=latency.order_rtt_avg_ms,
+                order_rtt_p95_ms=latency.order_rtt_p95_ms,
+                allowed_slippage=0,
+                decision="REJECT_DANGER",
+                reason=quote_consistency.reason,
+                **quote_consistency_fields,
+            )
+            self.trade_logger.log_result(**result)
+            return result
         policy = self.entry_policy.evaluate(
             snapshot=snapshot,
             latency_status=latency,
@@ -85,6 +129,7 @@ class EntryOrchestrator:
             allowed_slippage=policy.computed_allowed_slippage,
             decision=policy.decision.value,
             reason=policy.reason,
+            **quote_consistency_fields,
         )
 
         if policy.decision in {

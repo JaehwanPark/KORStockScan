@@ -3,9 +3,11 @@
 import fcntl
 import json
 import os
+import queue
 import re
 import time
 import math
+import threading
 from datetime import date as date_cls, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -104,6 +106,12 @@ from src.engine.lifecycle.ofi_ai_smoothing import (
     ofi_smoothing_log_fields,
 )
 from src.trading.entry.orderbook_stability_observer import ORDERBOOK_STABILITY_OBSERVER
+from src.trading.market.quote_consistency import (
+    QuoteConsistencyConfig,
+    build_quote_consistency_snapshot,
+    quote_input_from_rest_orderbook,
+    quote_input_from_ws,
+)
 from src.trading.order.tick_utils import clamp_price_to_tick, move_price_down_by_bps
 from src.engine.scalping.entry_cancel_wait_attribution import (
     EntryCancelWaitAttributionResult,
@@ -10910,6 +10918,8 @@ def _pre_submit_refresh_real_ws_snapshot(code: str, ws_data: dict | None, strate
         "pre_submit_ws_snapshot_refresh_best_ask": 0,
         "pre_submit_ws_snapshot_refresh_latest_price": _safe_int(base.get("curr"), 0),
     }
+    base_quote_fields, _, _, _ = _build_quote_consistency_fields(base, side="buy")
+    _merge_quote_consistency_fields(fields, base_quote_fields)
     if str(strategy or "").upper() not in {"SCALPING", "SCALP", "KOSPI_ML"}:
         fields["pre_submit_ws_snapshot_refresh_reason"] = "non_scalping"
         return base, fields
@@ -10959,6 +10969,8 @@ def _pre_submit_refresh_real_ws_snapshot(code: str, ws_data: dict | None, strate
             "pre_submit_ws_snapshot_refresh_latest_price": latest_price,
         }
     )
+    latest_quote_fields, _, _, _ = _build_quote_consistency_fields(latest, side="buy", now_ts=now_ts)
+    _merge_quote_consistency_fields(fields, latest_quote_fields)
     if latest_price <= 0:
         fields["pre_submit_ws_snapshot_refresh_reason"] = "latest_price_missing"
         return base, fields
@@ -10999,6 +11011,82 @@ def _parse_hhmmss_age_ms(hhmmss: str, *, now_ts: float | None = None) -> float |
     return max(0.0, age_ms)
 
 
+def _quote_consistency_runtime_enabled() -> bool:
+    return str(os.getenv("KORSTOCKSCAN_QUOTE_CONSISTENCY_RUNTIME_ENABLED") or "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "y",
+        "on",
+    }
+
+
+def _build_quote_consistency_fields(
+    ws_data: dict | None,
+    *,
+    rest_snapshot: dict | None = None,
+    side: str = "mark",
+    safety_exit: bool = False,
+    now_ts: float | None = None,
+) -> tuple[dict, int, int, int]:
+    snapshot = build_quote_consistency_snapshot(
+        ws=quote_input_from_ws(ws_data or {}, now_ts=now_ts),
+        rest=quote_input_from_rest_orderbook(rest_snapshot or {}, now_ts=now_ts) if rest_snapshot else None,
+        side=side,
+        safety_exit=safety_exit,
+        runtime_enabled=_quote_consistency_runtime_enabled(),
+        config=QuoteConsistencyConfig.from_env(),
+    )
+    fields = snapshot.as_event_fields()
+    return (
+        fields,
+        int(snapshot.canonical_mark_price or 0),
+        int(snapshot.executable_buy_price or 0),
+        int(snapshot.executable_sell_price or 0),
+    )
+
+
+def _merge_quote_consistency_fields(target: dict, fields: dict | None) -> dict:
+    for key, value in (fields or {}).items():
+        if (
+            key.startswith("quote_consistency_")
+            or key
+            in {
+                "canonical_mark_price",
+                "executable_buy_price",
+                "executable_sell_price",
+                "ws_rest_gap_bps",
+                "price_source",
+                "normalization_runtime_effect",
+            }
+        ):
+            target[key] = value
+    return target
+
+
+def _fetch_rest_orderbook_snapshot_bounded(code: str, timeout_ms: int) -> tuple[dict, str, float]:
+    if not KIWOOM_TOKEN:
+        return {}, "token_missing", 0.0
+    timeout_sec = max(0.05, float(timeout_ms or 400) / 1000.0)
+    results: queue.Queue = queue.Queue(maxsize=1)
+
+    def _worker() -> None:
+        started = time.time()
+        try:
+            results.put((kiwoom_utils.get_stock_orderbook_ka10004(KIWOOM_TOKEN, code) or {}, "ok", started), block=False)
+        except Exception as exc:
+            results.put(({}, f"error:{str(exc)[:80]}", started), block=False)
+
+    thread = threading.Thread(target=_worker, name=f"quote-rest-{code}", daemon=True)
+    thread.start()
+    try:
+        snapshot, state, started = results.get(timeout=timeout_sec)
+        elapsed_ms = max(0.0, (time.time() - float(started)) * 1000.0)
+        return snapshot if isinstance(snapshot, dict) else {}, str(state), elapsed_ms
+    except queue.Empty:
+        return {}, "timeout", timeout_sec * 1000.0
+
+
 def _pre_submit_refresh_rest_orderbook_snapshot(
     code: str,
     ws_data: dict | None,
@@ -11017,6 +11105,8 @@ def _pre_submit_refresh_rest_orderbook_snapshot(
         "pre_submit_rest_orderbook_refresh_latest_price": _safe_int(base.get("curr"), 0),
         "pre_submit_rest_orderbook_refresh_bid_req_base_tm": "",
     }
+    base_quote_fields, _, _, _ = _build_quote_consistency_fields(base, side="buy")
+    _merge_quote_consistency_fields(fields, base_quote_fields)
     if str(strategy or "").upper() not in {"SCALPING", "SCALP", "KOSPI_ML"}:
         fields["pre_submit_rest_orderbook_refresh_reason"] = "non_scalping"
         return base, fields
@@ -11043,7 +11133,13 @@ def _pre_submit_refresh_rest_orderbook_snapshot(
         return base, fields
     best_ask = _safe_int(snapshot.get("best_ask"), 0)
     best_bid = _safe_int(snapshot.get("best_bid"), 0)
-    latest_price = _safe_int(snapshot.get("curr"), 0) or best_ask or best_bid
+    quote_fields, canonical_mark_price, _, _ = _build_quote_consistency_fields(
+        base,
+        rest_snapshot=snapshot,
+        side="buy",
+    )
+    _merge_quote_consistency_fields(fields, quote_fields)
+    latest_price = int(canonical_mark_price or 0)
     bid_req_base_tm = str(snapshot.get("bid_req_base_tm") or "").strip()
     age_ms = _parse_hhmmss_age_ms(bid_req_base_tm)
     fields.update(
@@ -11098,6 +11194,7 @@ def _pre_submit_refresh_rest_orderbook_snapshot(
     )
     fields["pre_submit_rest_orderbook_refresh_applied"] = True
     fields["pre_submit_rest_orderbook_refresh_reason"] = "rest_orderbook_fresh"
+    _merge_quote_consistency_fields(refreshed, fields)
     refreshed.update(fields)
     return refreshed, fields
 
@@ -11112,7 +11209,7 @@ def _pre_submit_input_snapshot_has_usable_quote(ws_data: dict | None) -> bool:
 
 def _pre_submit_ws_snapshot_refresh_log_fields(source: dict | None) -> dict:
     data = source or {}
-    return {
+    fields = {
         "pre_submit_ws_snapshot_refresh_enabled": bool(data.get("pre_submit_ws_snapshot_refresh_enabled")),
         "pre_submit_ws_snapshot_refresh_applied": bool(data.get("pre_submit_ws_snapshot_refresh_applied")),
         "pre_submit_ws_snapshot_refresh_reason": data.get("pre_submit_ws_snapshot_refresh_reason"),
@@ -11150,6 +11247,8 @@ def _pre_submit_ws_snapshot_refresh_log_fields(source: dict | None) -> dict:
             "pre_submit_rest_orderbook_refresh_bid_req_base_tm"
         ),
     }
+    _merge_quote_consistency_fields(fields, data)
+    return fields
 
 
 def _latency_gate_observer_unhealthy(latency_gate: dict | None) -> bool:
@@ -12431,18 +12530,57 @@ def _build_entry_submit_revalidation_fields(ws_data, latency_gate, *, now_ts=Non
     max_quote_age_ms = _env_or_rule_int("SCALPING_ENTRY_SUBMIT_REVALIDATION_MAX_QUOTE_AGE_MS", 2000)
     context_stale = context_age_ms > max_context_age_ms if context_age_ms else False
     quote_stale = quote_age_ms != "-" and int(quote_age_ms) > max_quote_age_ms
-    return {
+    existing_quote_source = None
+    if isinstance(latency_gate, dict) and "quote_consistency_family" in latency_gate:
+        existing_quote_source = latency_gate
+    elif isinstance(ws_data, dict) and "quote_consistency_family" in ws_data:
+        existing_quote_source = ws_data
+    latency_has_quote_fields = existing_quote_source is latency_gate
+    if existing_quote_source is not None:
+        quote_fields = {
+            key: value
+            for key, value in existing_quote_source.items()
+            if (
+                key.startswith("quote_consistency_")
+                or key
+                in {
+                    "canonical_mark_price",
+                    "executable_buy_price",
+                    "executable_sell_price",
+                    "ws_rest_gap_bps",
+                    "price_source",
+                    "normalization_runtime_effect",
+                }
+            )
+        }
+    else:
+        quote_fields, _, _, _ = _build_quote_consistency_fields(ws_data, side="buy", now_ts=now_ts)
+    quote_state = str(quote_fields.get("quote_consistency_state") or "")
+    quote_consistency_block = (
+        bool(quote_fields.get("normalization_runtime_effect"))
+        and bool(quote_fields.get("quote_consistency_entry_blocked"))
+    )
+    warnings = []
+    if context_stale or quote_stale:
+        warnings.append("stale_context_or_quote")
+    if quote_consistency_block:
+        warnings.append(f"quote_consistency_{quote_state or 'blocked'}")
+    fields = {
         "entry_submit_revalidation": "checked",
         "price_decision_age_ms": decision_age_ms,
         "price_decision_context_age_ms": context_age_ms or "-",
         "quote_age_at_submit_ms": quote_age_ms,
         "price_context_stale_at_submit": bool(context_stale),
         "quote_stale_at_submit": bool(quote_stale),
-        "entry_submit_revalidation_warning": "stale_context_or_quote" if (context_stale or quote_stale) else "",
+        "entry_submit_revalidation_warning": "|".join(warnings),
+        "quote_consistency_block_at_submit": bool(quote_consistency_block),
         "entry_order_lifecycle": str((latency_gate or {}).get("entry_order_lifecycle") or "standard"),
         "entry_passive_probe_applied": bool((latency_gate or {}).get("entry_passive_probe_applied")),
         "entry_passive_probe_reason": str((latency_gate or {}).get("entry_passive_probe_reason") or ""),
     }
+    if not latency_has_quote_fields:
+        _merge_quote_consistency_fields(fields, quote_fields)
+    return fields
 
 
 def _is_passive_probe_stale_submit_block(submit_revalidation_fields) -> bool:
@@ -12451,7 +12589,11 @@ def _is_passive_probe_stale_submit_block(submit_revalidation_fields) -> bool:
     fields = submit_revalidation_fields or {}
     if str(fields.get("entry_order_lifecycle") or "").strip() != "passive_probe":
         return False
-    return bool(fields.get("price_context_stale_at_submit") or fields.get("quote_stale_at_submit"))
+    return bool(
+        fields.get("price_context_stale_at_submit")
+        or fields.get("quote_stale_at_submit")
+        or fields.get("quote_consistency_block_at_submit")
+    )
 
 
 def _is_standard_stale_submit_block(submit_revalidation_fields) -> bool:
@@ -12460,7 +12602,11 @@ def _is_standard_stale_submit_block(submit_revalidation_fields) -> bool:
     fields = submit_revalidation_fields or {}
     if str(fields.get("entry_order_lifecycle") or "standard").strip() != "standard":
         return False
-    return bool(fields.get("price_context_stale_at_submit") or fields.get("quote_stale_at_submit"))
+    return bool(
+        fields.get("price_context_stale_at_submit")
+        or fields.get("quote_stale_at_submit")
+        or fields.get("quote_consistency_block_at_submit")
+    )
 
 
 def _is_caution_overbought_stale_submit_block(
@@ -22932,6 +23078,8 @@ def _open_reprice_candidate_orders(stock):
 def _entry_reprice_latency_state_from_snapshot(snapshot: dict) -> str:
     if not isinstance(snapshot, dict) or not snapshot:
         return "DANGER"
+    if bool(snapshot.get("normalization_runtime_effect")) and bool(snapshot.get("quote_consistency_entry_blocked")):
+        return "DANGER"
     missing_reason = str(snapshot.get("observer_missing_reason") or "").strip().lower()
     best_bid = _coerce_int_value(snapshot.get("best_bid"))
     best_ask = _coerce_int_value(snapshot.get("best_ask"))
@@ -22970,7 +23118,7 @@ def _entry_reprice_quote_refresh_log_fields(ws_fields: dict | None, rest_fields:
     elif rest_fields:
         reason = str(rest_fields.get("pre_submit_rest_orderbook_refresh_reason") or reason)
 
-    return {
+    fields = {
         "entry_reprice_quote_refresh_enabled": bool(
             ws_fields.get("pre_submit_ws_snapshot_refresh_enabled")
             or rest_fields.get("pre_submit_rest_orderbook_refresh_enabled")
@@ -22983,6 +23131,13 @@ def _entry_reprice_quote_refresh_log_fields(ws_fields: dict | None, rest_fields:
         "entry_reprice_quote_refresh_best_ask": applied_ask,
         "entry_reprice_quote_refresh_latest_price": applied_price,
     }
+    if applied_source == "ws_manager_latest_data":
+        _merge_quote_consistency_fields(fields, ws_fields)
+    elif applied_source == "ka10004_rest_orderbook":
+        _merge_quote_consistency_fields(fields, rest_fields)
+    else:
+        _merge_quote_consistency_fields(fields, rest_fields or ws_fields)
+    return fields
 
 
 def _entry_reprice_refresh_snapshot(code: str, snapshot: dict, stock: dict, order: dict, strategy: str, now_ts: float) -> tuple[dict, dict]:
@@ -23036,6 +23191,7 @@ def _entry_reprice_refresh_snapshot(code: str, snapshot: dict, stock: dict, orde
             "entry_reprice_quote_refresh_source": fields.get("entry_reprice_quote_refresh_source"),
         }
     )
+    _merge_quote_consistency_fields(refreshed_snapshot, fields)
     return refreshed_snapshot, fields
 
 
@@ -23988,6 +24144,18 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
             **holding_ws_fields,
         )
         return
+    holding_quote_fields, canonical_mark_price, _, executable_sell_price = _build_quote_consistency_fields(
+        ws_data,
+        side="sell",
+        now_ts=now_ts,
+    )
+    if canonical_mark_price > 0:
+        curr_p = int(canonical_mark_price)
+        ws_data = dict(ws_data or {})
+        ws_data["curr"] = curr_p
+    if executable_sell_price > 0:
+        ws_data = dict(ws_data or {})
+        ws_data["executable_sell_price"] = int(executable_sell_price)
     if curr_p <= 0 or buy_p <= 0:
         return
     _append_holding_price_sample(stock, now_ts=now_ts, curr_price=curr_p)
@@ -26540,6 +26708,57 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
         if late_loss_retry_result.get("submitted"):
             return
 
+        sell_safety_exit = _is_sell_side_open_time_safety_exit(
+            exit_rule or stock.get("last_exit_rule"),
+            sell_reason_type,
+        )
+        rest_snapshot = {}
+        rest_check_state = "not_attempted"
+        rest_check_elapsed_ms = 0.0
+        if sell_safety_exit:
+            rest_snapshot, rest_check_state, rest_check_elapsed_ms = _fetch_rest_orderbook_snapshot_bounded(
+                code,
+                QuoteConsistencyConfig.from_env().emergency_rest_timeout_ms,
+            )
+        sell_quote_fields, sell_mark_price, _, sell_order_price = _build_quote_consistency_fields(
+            ws_data,
+            rest_snapshot=rest_snapshot if rest_snapshot else None,
+            side="sell",
+            safety_exit=sell_safety_exit,
+            now_ts=now_ts,
+        )
+        if not sell_quote_fields and holding_quote_fields:
+            sell_quote_fields = dict(holding_quote_fields)
+        sell_quote_fields.update(
+            {
+                "quote_consistency_rest_check_state": rest_check_state,
+                "quote_consistency_rest_check_elapsed_ms": round(float(rest_check_elapsed_ms), 3),
+                "quote_consistency_safety_exit": bool(sell_safety_exit),
+            }
+        )
+        if sell_mark_price > 0:
+            curr_p = int(sell_mark_price)
+            profit_rate = calculate_net_profit_rate(buy_p, curr_p)
+        sell_order_price = int(sell_order_price or curr_p or 0)
+        if sell_order_price > 0:
+            ws_data = dict(ws_data or {})
+            ws_data["executable_sell_price"] = sell_order_price
+            orderbook = dict(ws_data.get("orderbook") or {})
+            bids = list(orderbook.get("bids") or [])
+            if bids and isinstance(bids[0], dict):
+                bids[0] = dict(bids[0])
+                bids[0]["price"] = sell_order_price
+            else:
+                bids = [
+                    {
+                        "price": sell_order_price,
+                        "volume": _safe_int((rest_snapshot or {}).get("best_bid_qty"), 0),
+                    }
+                ]
+            orderbook["bids"] = bids
+            ws_data["orderbook"] = orderbook
+            ws_data["curr"] = curr_p if curr_p > 0 else sell_order_price
+
         try:
             with DB.get_session() as session:
                 session.query(RecommendationHistory).filter_by(id=target_id).update({"status": "SELL_ORDERED"})
@@ -26550,7 +26769,7 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
             stock,
             set_fields={
                 'status': 'SELL_ORDERED',
-                'sell_target_price': curr_p,
+                'sell_target_price': sell_order_price or curr_p,
             },
         )
 
@@ -26561,10 +26780,7 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
             ws_data=ws_data,
             reason_type=sell_reason_type,
             strategy=strategy,
-            bypass_open_time_block=_is_sell_side_open_time_safety_exit(
-                exit_rule or stock.get("last_exit_rule"),
-                sell_reason_type,
-            ),
+            bypass_open_time_block=sell_safety_exit,
         )
 
         ord_no = ''
@@ -26594,6 +26810,9 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                 set_fields['sell_odno'] = ord_no
             _mutate_stock_state(stock, set_fields=set_fields)
             stock.pop("_sell_order_retry_backoff_logged_key", None)
+            sell_order_log_fields = dict(sell_time_block_fields or {})
+            sell_order_log_fields.update(exit_extra_fields or {})
+            sell_order_log_fields.update(sell_quote_fields or {})
             _log_holding_pipeline(
                 stock,
                 code,
@@ -26605,8 +26824,7 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                 ord_no=ord_no or "-",
                 order_type=stock.get("exit_order_type") or "-",
                 profit_rate=f"{profit_rate:+.2f}",
-                **sell_time_block_fields,
-                **exit_extra_fields,
+                **sell_order_log_fields,
             )
             _publish_greenfield_stage_notice(
                 stock,
@@ -27830,6 +28048,52 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
         refreshed_curr_price = _safe_int(ws_data.get('curr'), curr_price)
         if refreshed_curr_price > 0:
             curr_price = refreshed_curr_price
+    scale_quote_fields, canonical_mark_price, executable_buy_price, _ = _build_quote_consistency_fields(
+        ws_data,
+        side="buy",
+    )
+    _merge_quote_consistency_fields(scale_in_quote_refresh_fields, scale_quote_fields)
+    if canonical_mark_price > 0:
+        curr_price = int(canonical_mark_price)
+        ws_data = dict(ws_data or {})
+        ws_data["curr"] = curr_price
+    if executable_buy_price > 0:
+        ws_data = dict(ws_data or {})
+        ws_data["executable_buy_price"] = int(executable_buy_price)
+    scale_in_quote_refresh_non_price_source_fields = {
+        key: value for key, value in scale_in_quote_refresh_fields.items() if key != "price_source"
+    }
+    if (
+        bool(scale_in_quote_refresh_fields.get("normalization_runtime_effect"))
+        and bool(scale_in_quote_refresh_fields.get("quote_consistency_entry_blocked"))
+        and not simulated_position
+    ):
+        _log_holding_pipeline(
+            stock,
+            code,
+            "scale_in_price_guard_block",
+            add_type=add_type,
+            scale_in_arm=add_type,
+            scale_in_blocker_namespace=add_type,
+            scale_in_blocker_reason="quote_consistency_diverged",
+            reason="quote_consistency_diverged",
+            curr_price=curr_price,
+            resolved_price=0,
+            best_bid=scale_in_quote_refresh_fields.get("executable_buy_price"),
+            best_ask=0,
+            price_source=scale_in_quote_refresh_fields.get("price_source"),
+            scale_in_candidate_funnel_state=(
+                "price_guard_blocked" if sim_window_observation else None
+            ),
+            **scale_in_quote_refresh_non_price_source_fields,
+            **sim_funnel_fields,
+            **swing_scale_micro_fields,
+        )
+        log_info(
+            f"[ADD_BLOCKED] {stock.get('name')}({code}) "
+            f"reason=quote_consistency_diverged curr_price={curr_price}"
+        )
+        return None
     price_resolution = resolve_scale_in_order_price(
         stock=stock,
         ws_data=ws_data,
@@ -27861,7 +28125,7 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
             scale_in_candidate_funnel_state=(
                 "price_guard_blocked" if sim_window_observation else None
             ),
-            **scale_in_quote_refresh_fields,
+            **scale_in_quote_refresh_non_price_source_fields,
             **sim_funnel_fields,
             **swing_scale_micro_fields,
         )
@@ -27985,7 +28249,7 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
         effective_qty=effective_qty,
         qty_reason=qty_reason,
         **scale_in_qty_budget_fields,
-        **scale_in_quote_refresh_fields,
+        **scale_in_quote_refresh_non_price_source_fields,
         **sim_budget_fields,
         **swing_scale_micro_fields,
     )
@@ -28001,7 +28265,7 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
         resolved_price=resolved_price,
         price_source=price_resolution.get("price_source"),
         add_type=add_type,
-        **scale_in_quote_refresh_fields,
+        **scale_in_quote_refresh_non_price_source_fields,
         **swing_scale_micro_fields,
     )
 

@@ -109,6 +109,20 @@ HOLD_CARRY_FORWARD_BLOCK_REASON_KEYS: dict[str, frozenset[str]] = {
     "order_provenance_breach": frozenset({"provenance_breach", "order_provenance", "order_failure"}),
     "same_stage_owner_conflict": frozenset({"same_stage_owner_conflict"}),
 }
+RETIRED_RUNTIME_FAMILY_REASONS = {
+    "aggressive_entry_price_override_runtime": (
+        "retired_runtime_family:entry_price_gap_profile_and_quote_consistency_own_entry_price"
+    ),
+    "soft_stop_dynamic_grace_runtime": (
+        "retired_runtime_family:soft_stop_whipsaw_confirmation_owns_soft_stop_deferral"
+    ),
+    "preset_tp_soft_stop_runtime": (
+        "retired_runtime_family:formal_holding_exit_owner_supersedes_preset_tp_soft_stop_override"
+    ),
+    "late_entry_price_drift_guard_runtime": (
+        "retired_runtime_family:weak_context_late_entry_guard_and_quote_consistency_own_late_entry_drift"
+    ),
+}
 
 TARGET_ENV_VALUE_KEYS = {
     "SCALP_SOFT_STOP_WHIPSAW_CONFIRMATION_ENABLED": "enabled",
@@ -761,6 +775,7 @@ def _hold_carry_forward_blockers(candidate: dict[str, Any]) -> list[str]:
 
 _FAMILY_ENV_KEY_PREFIXES: dict[str, str] = {
     "entry_cancel_wait_runtime": "KORSTOCKSCAN_ENTRY_CANCEL_WAIT_",
+    "quote_consistency_normalization": "KORSTOCKSCAN_QUOTE_CONSISTENCY_",
     "soft_stop_whipsaw_confirmation": "KORSTOCKSCAN_SCALP_SOFT_STOP_WHIPSAW_CONFIRMATION_",
     "score65_74_recovery_probe": "KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_",
     SCORE65_74_STRONG_MICRO_OVERRIDE_FAMILY: "KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_STRONG_MICRO_",
@@ -1350,7 +1365,9 @@ def _select_runtime_apply_bridge_approval(
         stage = str(item.get("stage") or "unknown")
         overrides = _env_overrides_for_candidate(item)
         reject_reason = ""
-        if include_families is not None and family not in include_families:
+        if family in RETIRED_RUNTIME_FAMILY_REASONS:
+            reject_reason = RETIRED_RUNTIME_FAMILY_REASONS[family]
+        elif include_families is not None and family not in include_families:
             reject_reason = "operator_family_filter_excluded"
         elif bool(item.get("actual_order_submitted")):
             reject_reason = "actual_order_submission_not_allowed"
@@ -1956,7 +1973,9 @@ def _select_auto_apply_candidates(
         hold_carry_forward = False
         hold_carry_forward_blockers: list[str] = []
         hold_carry_forward_env_overrides: dict[str, str] = {}
-        if include_families is not None and family not in include_families:
+        if family in RETIRED_RUNTIME_FAMILY_REASONS:
+            reject_reason = RETIRED_RUNTIME_FAMILY_REASONS[family]
+        elif include_families is not None and family not in include_families:
             reject_reason = "operator_family_filter_excluded"
         elif family in NON_LIVE_SELECTABLE_FAMILIES or str(candidate.get("family_type") or "") == "sim_lifecycle_source":
             reject_reason = "non_live_selectable_sim_lifecycle_source"
@@ -2014,7 +2033,9 @@ def _select_auto_apply_candidates(
         lock_close_reasons = _candidate_close_reasons(candidate, reject_reason)
         if lock_stage_conflict_reason:
             lock_close_reasons.append(lock_stage_conflict_reason)
-        if lock and (include_families is None or family in include_families):
+        if lock and family not in RETIRED_RUNTIME_FAMILY_REASONS and (
+            include_families is None or family in include_families
+        ):
             lock_overrides = _lock_env_overrides(lock)
             lock_allowed_close = _lock_allows_close(lock, lock_close_reasons)
             lock_can_preserve = bool(lock_overrides) and not lock_allowed_close

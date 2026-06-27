@@ -25,11 +25,12 @@
 
 ## 장전 체크리스트 (08:45~09:00)
 
-- [ ] `[ThresholdEnvAutoApplyPreopen0626] threshold env 자동 apply 산출물 및 사용자 개입 여부 확인` (`Due: 2026-06-26`, `Slot: PREOPEN`, `TimeWindow: 08:50~08:55`, `Track: RuntimeStability`)
+- [x] `[ThresholdEnvAutoApplyPreopen0626] threshold env 자동 apply 산출물 및 사용자 개입 여부 확인` (`Due: 2026-06-26`, `Slot: PREOPEN`, `TimeWindow: 08:50~08:55`, `Track: RuntimeStability`)
   - Source: [threshold_cycle_ev_2026-06-25.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-06-25.json), [threshold_cycle_preopen_apply.py](/home/ubuntu/KORStockScan/src/engine/threshold_cycle_preopen_apply.py), [run_bot.sh](/home/ubuntu/KORStockScan/src/run_bot.sh)
   - 판정 기준: 전일 postclose EV와 당일 apply plan/runtime env를 확인하고 `auto_bounded_live` guard 통과분만 runtime env로 인정한다.
   - 금지: blocked family, approval artifact missing, same-stage owner conflict를 수동 env override로 우회하지 않는다.
   - 다음 액션: `applied_guard_passed_env`, `blocked_no_env`, `partial_apply_with_blocked_families`, `failed_preopen_wrapper`, `not_yet_due` 중 하나로 닫는다.
+  - 실행 메모 (`2026-06-26 07:40 KST`): `applied_guard_passed_env`. [threshold_cycle_preopen_2026-06-26.status.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_preopen_status/threshold_cycle_preopen_2026-06-26.status.json)은 `status=succeeded`, `exit_code=0`, `apply_mode=auto_bounded_live`, `runtime_effect=preopen_runtime_env_apply_only`, `finished_at=2026-06-26T07:35:01+09:00`이다. [threshold_apply_2026-06-26.json](/home/ubuntu/KORStockScan/data/threshold_cycle/apply_plans/threshold_apply_2026-06-26.json)은 `status=auto_bounded_live_ready`, `runtime_change=true`, `warnings=[]`이고, [threshold_runtime_env_verify_2026-06-26.json](/home/ubuntu/KORStockScan/data/threshold_cycle/runtime_env/threshold_runtime_env_verify_2026-06-26.json)은 `status=pass`, `missing_family_count=0`이다. runtime env selected families는 `soft_stop_whipsaw_confirmation`, `score65_74_recovery_probe`, `scalping_scanner_real_source_guard_runtime`, `score65_74_recovery_probe_strong_micro_override_runtime`, `entry_price_gap_profile_runtime`, `profit_stagnation_exit_runtime`, `latency_spread_relief_real_operator_override`, `scalp_sim_candidate_window_expansion`, `scalp_sim_ai_budget_manager`, `ai_watching_score_smoothing_report_only`, `lifecycle_decision_matrix_runtime`, `weak_pullback_entry_block_runtime`, `early_accel_recheck_runtime`, `real_pyramid_scale_in_quality_guard_runtime`, `sell_side_open_time_block_runtime`, `pre_submit_liquidity_relief_runtime`, `weak_context_late_entry_guard_runtime`, `scalp_sim_auto_approval`, `lifecycle_bucket_discovery_sim_auto_approval`, `swing_sim_auto_approval`, `entry_cancel_wait_runtime`이다. `runtime_apply_bridge_2026-06-25.json`은 `status=pass`, `live_auto_apply_ready_count=0`, `human_approval_required=false`, `runtime_mutation_performed=false`로 greenfield real env는 정책 미발행 상태를 유지한다. 사용자 개입 또는 수동 env override는 수행하지 않았다.
 
 ## 장중 체크리스트 (09:05~15:20)
 
@@ -99,3 +100,18 @@
 ```bash
 PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTHONPATH=. .venv/bin/python -m src.engine.sync_github_project_calendar
 ```
+
+<!-- AUTO_SERVER_COMPARISON_START -->
+### 본서버 vs songstockscan 자동 비교 (`2026-06-26 15:46:48`)
+
+- 기준: `profit-derived metrics are excluded by default because fallback-normalized values such as NULL -> 0 can distort comparison`
+- 상세 리포트: `data/report/server_comparison/server_comparison_2026-06-26.md`
+- `Trade Review`: status=`remote_error`, differing_safe_metrics=`0`
+  - safe 기준 차이 없음
+- `Performance Tuning`: status=`remote_error`, differing_safe_metrics=`0`
+  - safe 기준 차이 없음
+- `Post Sell Feedback`: status=`remote_error`, differing_safe_metrics=`0`
+  - safe 기준 차이 없음
+- `Entry Pipeline Flow`: status=`remote_error`, differing_safe_metrics=`0`
+  - safe 기준 차이 없음
+<!-- AUTO_SERVER_COMPARISON_END -->
