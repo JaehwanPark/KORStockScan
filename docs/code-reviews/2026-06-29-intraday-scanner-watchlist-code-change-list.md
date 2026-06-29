@@ -440,3 +440,41 @@
 - 09:50 이후 최근 상승 종목만 보면 blocker가 AI score, strength, liquidity, overbought 쪽으로 내려오지만, stale 평가가 27/37개에 섞여 있어 threshold downsizing은 아직 보류한다.
 - SK이터닉스, LG에너지솔루션, 케이씨텍, 테스처럼 BUY/pre-submit 경로까지 간 종목도 실제 submit은 0건이며, 원인은 latency danger 또는 `stale_context_or_quote` 계열이다. stale submit bypass와 broker guard bypass는 금지 유지한다.
 - scale-in은 executed_count=0이며, 주요 blocker는 `pnl_out_of_range`, `profit_not_enough`, `flow_hold_interval` 계열이다. quantity cap release나 scale-in guard bypass는 하지 않는다.
+
+## 14. 10:47 hot runtime pressure relief
+
+작성 시각: `2026-06-29 10:47 KST`
+
+### 14.1 조치 사유
+
+- 10:40 graceful restart 이후에도 다음 loop pressure가 반복됐다.
+  - `10:45:45 loop_elapsed_ms=30094.5`
+  - `10:46:54 loop_elapsed_ms=36803.8`
+- `10:46:52`에 scanner promoted target이 한 루프에 12개 attach되며 `target_count=25`, `watching=21`까지 상승했다.
+- 같은 blocker에 재기동을 반복하기보다, hot reload 가능한 scanner full-eval throughput만 낮춰 observation pressure를 줄이는 쪽으로 조치했다.
+
+### 14.2 runtime override
+
+- 파일:
+  - `data/threshold_cycle/runtime_env/operator_runtime_overrides.env`
+- git 상태:
+  - 이 파일은 `.gitignore` 대상 runtime env이므로 커밋되지 않는다. 다음 세션 추적을 위해 이 문서에 기록한다.
+- 추가 최종 export:
+  - `KORSTOCKSCAN_SCANNER_FULL_EVAL_MAX_PER_LOOP=12`
+  - `KORSTOCKSCAN_SCANNER_FULL_EVAL_BACKLOG_EXTRA_PER_LOOP=4`
+- rollback:
+  - `KORSTOCKSCAN_SCANNER_FULL_EVAL_MAX_PER_LOOP=24`
+  - `KORSTOCKSCAN_SCANNER_FULL_EVAL_BACKLOG_EXTRA_PER_LOOP=16`
+- 검증:
+  - `bash -n data/threshold_cycle/runtime_env/operator_runtime_overrides.env`
+    - 통과
+  - local parser check:
+    - `_scanner_full_eval_max_per_loop()=12`
+    - `_scanner_full_eval_backlog_extra_per_loop()=4`
+    - `_scanner_full_eval_effective_limit({"scanner_watching_count": 40})=16`
+
+### 14.3 안전 경계
+
+- 이 조치는 SCALPING SCANNER observation/evaluation 처리량 완화만 수행한다.
+- BUY score, AI threshold, order price, stale-submit, broker/account/order/quantity guard, provider route, hard/protect/emergency stops는 변경하지 않았다.
+- `KORSTOCKSCAN_SCANNER_RISING_FULL_EVAL_EXTRA_PER_LOOP=12`는 현재 코드에서 hot key가 아니므로 이번 조치에 포함하지 않았다. 반복적으로 조정할 필요가 있으면 별도 코드 변경으로 hot key화한 뒤 review gate를 거친다.
