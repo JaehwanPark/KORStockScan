@@ -1615,7 +1615,8 @@ def test_scanner_rising_full_eval_relief_defaults_to_aggressive_budget_and_uses_
     assert kiwoom_sniper_v2._scanner_rising_full_eval_extra_per_loop() == 4
 
 
-def test_scalping_fifo_max_active_env(monkeypatch):
+def test_scalping_fifo_max_active_env(monkeypatch, tmp_path):
+    _disable_scanner_operator_runtime_overrides(monkeypatch, tmp_path)
     kiwoom_sniper_v2._reset_scalping_dynamic_watch_cap_state()
     monkeypatch.delenv("KORSTOCKSCAN_SCALPING_WATCHING_MAX_ACTIVE", raising=False)
     monkeypatch.delenv("KORSTOCKSCAN_SCALPING_WATCHING_DYNAMIC_CAP_ENABLED", raising=False)
@@ -1629,7 +1630,8 @@ def test_scalping_fifo_max_active_env(monkeypatch):
     kiwoom_sniper_v2._reset_scalping_dynamic_watch_cap_state()
 
 
-def test_scalping_dynamic_watch_cap_reduces_without_restart(monkeypatch):
+def test_scalping_dynamic_watch_cap_reduces_without_restart(monkeypatch, tmp_path):
+    _disable_scanner_operator_runtime_overrides(monkeypatch, tmp_path)
     kiwoom_sniper_v2._reset_scalping_dynamic_watch_cap_state()
     monkeypatch.setenv("KORSTOCKSCAN_SCALPING_WATCHING_MAX_ACTIVE", "24")
     monkeypatch.setenv("KORSTOCKSCAN_SCALPING_WATCHING_DYNAMIC_CAP_ENABLED", "true")
@@ -1648,7 +1650,8 @@ def test_scalping_dynamic_watch_cap_reduces_without_restart(monkeypatch):
     kiwoom_sniper_v2._reset_scalping_dynamic_watch_cap_state()
 
 
-def test_scalping_dynamic_watch_cap_recovers_gradually(monkeypatch):
+def test_scalping_dynamic_watch_cap_recovers_gradually(monkeypatch, tmp_path):
+    _disable_scanner_operator_runtime_overrides(monkeypatch, tmp_path)
     kiwoom_sniper_v2._reset_scalping_dynamic_watch_cap_state()
     monkeypatch.setenv("KORSTOCKSCAN_SCALPING_WATCHING_MAX_ACTIVE", "24")
     monkeypatch.setenv("KORSTOCKSCAN_SCALPING_WATCHING_DYNAMIC_CAP_ENABLED", "true")
@@ -1666,7 +1669,8 @@ def test_scalping_dynamic_watch_cap_recovers_gradually(monkeypatch):
     kiwoom_sniper_v2._reset_scalping_dynamic_watch_cap_state()
 
 
-def test_scalping_dynamic_watch_cap_disabled_keeps_base(monkeypatch):
+def test_scalping_dynamic_watch_cap_disabled_keeps_base(monkeypatch, tmp_path):
+    _disable_scanner_operator_runtime_overrides(monkeypatch, tmp_path)
     kiwoom_sniper_v2._reset_scalping_dynamic_watch_cap_state()
     monkeypatch.setenv("KORSTOCKSCAN_SCALPING_WATCHING_MAX_ACTIVE", "24")
     monkeypatch.setenv("KORSTOCKSCAN_SCALPING_WATCHING_DYNAMIC_CAP_ENABLED", "false")
@@ -3228,6 +3232,13 @@ def test_scanner_rest_quote_budget_hot_reloads_operator_override_file(tmp_path, 
     monkeypatch.delenv("KORSTOCKSCAN_SCANNER_FULL_EVAL_BACKLOG_EXTRA_PER_LOOP", raising=False)
     monkeypatch.delenv("KORSTOCKSCAN_SCANNER_FULL_EVAL_AUTO_PRESSURE_ENABLED", raising=False)
     monkeypatch.delenv("KORSTOCKSCAN_SCANNER_FULL_EVAL_AUTO_PRESSURE_MIN_LIMIT", raising=False)
+    monkeypatch.delenv("KORSTOCKSCAN_SCALPING_WATCHING_MAX_ACTIVE", raising=False)
+    monkeypatch.delenv("KORSTOCKSCAN_SCALPING_WATCHING_DYNAMIC_CAP_ENABLED", raising=False)
+    monkeypatch.delenv("KORSTOCKSCAN_SCALPING_WATCHING_DYNAMIC_MIN_ACTIVE", raising=False)
+    monkeypatch.delenv("KORSTOCKSCAN_SCALPING_WATCHING_DYNAMIC_PRESSURE_MS", raising=False)
+    monkeypatch.delenv("KORSTOCKSCAN_SCALPING_WATCHING_DYNAMIC_RELIEF_MS", raising=False)
+    monkeypatch.delenv("KORSTOCKSCAN_SCALPING_WATCHING_DYNAMIC_COOLDOWN_SEC", raising=False)
+    monkeypatch.delenv("KORSTOCKSCAN_SCALPING_WATCHING_DYNAMIC_RECOVERY_STREAK", raising=False)
     _reset_scanner_hot_override_cache()
 
     override_path.write_text(
@@ -3245,6 +3256,13 @@ def test_scanner_rest_quote_budget_hot_reloads_operator_override_file(tmp_path, 
                 "export KORSTOCKSCAN_SCANNER_FULL_EVAL_BACKLOG_EXTRA_PER_LOOP=10",
                 "export KORSTOCKSCAN_SCANNER_FULL_EVAL_AUTO_PRESSURE_ENABLED=false",
                 "export KORSTOCKSCAN_SCANNER_FULL_EVAL_AUTO_PRESSURE_MIN_LIMIT=9",
+                "export KORSTOCKSCAN_SCALPING_WATCHING_MAX_ACTIVE=28",
+                "export KORSTOCKSCAN_SCALPING_WATCHING_DYNAMIC_CAP_ENABLED=true",
+                "export KORSTOCKSCAN_SCALPING_WATCHING_DYNAMIC_MIN_ACTIVE=14",
+                "export KORSTOCKSCAN_SCALPING_WATCHING_DYNAMIC_PRESSURE_MS=10000",
+                "export KORSTOCKSCAN_SCALPING_WATCHING_DYNAMIC_RELIEF_MS=5000",
+                "export KORSTOCKSCAN_SCALPING_WATCHING_DYNAMIC_COOLDOWN_SEC=20",
+                "export KORSTOCKSCAN_SCALPING_WATCHING_DYNAMIC_RECOVERY_STREAK=4",
                 "export KORSTOCKSCAN_BUY_SCORE_THRESHOLD=1",
             ]
         )
@@ -3266,6 +3284,13 @@ def test_scanner_rest_quote_budget_hot_reloads_operator_override_file(tmp_path, 
     assert kiwoom_sniper_v2._scanner_full_eval_auto_pressure_enabled() is False
     assert kiwoom_sniper_v2._scanner_full_eval_auto_pressure_min_limit(28) == 9
     assert kiwoom_sniper_v2._scanner_full_eval_effective_limit({"scanner_watching_count": 40}) == 28
+    assert kiwoom_sniper_v2._scalping_fifo_base_max_active() == 28
+    assert kiwoom_sniper_v2._scalping_dynamic_watch_cap_enabled() is True
+    assert kiwoom_sniper_v2._scalping_dynamic_watch_cap_min(28) == 14
+    assert kiwoom_sniper_v2._scalping_dynamic_watch_cap_pressure_ms() == 10000.0
+    assert kiwoom_sniper_v2._scalping_dynamic_watch_cap_relief_ms() == 5000.0
+    assert kiwoom_sniper_v2._scalping_dynamic_watch_cap_cooldown_sec() == 20.0
+    assert kiwoom_sniper_v2._scalping_dynamic_watch_cap_recovery_streak() == 4
     assert (
         kiwoom_sniper_v2._scanner_hot_runtime_override_value("KORSTOCKSCAN_BUY_SCORE_THRESHOLD")
         is None
@@ -3282,6 +3307,9 @@ def test_scanner_rest_quote_budget_hot_reloads_operator_override_file(tmp_path, 
                 "export KORSTOCKSCAN_SCANNER_FULL_EVAL_BACKLOG_EXTRA_PER_LOOP=3",
                 "export KORSTOCKSCAN_SCANNER_FULL_EVAL_AUTO_PRESSURE_ENABLED=true",
                 "export KORSTOCKSCAN_SCANNER_FULL_EVAL_AUTO_PRESSURE_MIN_LIMIT=5",
+                "export KORSTOCKSCAN_SCALPING_WATCHING_MAX_ACTIVE=20",
+                "export KORSTOCKSCAN_SCALPING_WATCHING_DYNAMIC_MIN_ACTIVE=12",
+                "export KORSTOCKSCAN_SCALPING_WATCHING_DYNAMIC_COOLDOWN_SEC=5",
             ]
         )
         + "\n",
@@ -3298,6 +3326,9 @@ def test_scanner_rest_quote_budget_hot_reloads_operator_override_file(tmp_path, 
     assert kiwoom_sniper_v2._scanner_full_eval_auto_pressure_enabled() is True
     assert kiwoom_sniper_v2._scanner_full_eval_auto_pressure_min_limit(12) == 5
     assert kiwoom_sniper_v2._scanner_full_eval_effective_limit({"scanner_watching_count": 40}) == 12
+    assert kiwoom_sniper_v2._scalping_fifo_base_max_active() == 20
+    assert kiwoom_sniper_v2._scalping_dynamic_watch_cap_min(20) == 12
+    assert kiwoom_sniper_v2._scalping_dynamic_watch_cap_cooldown_sec() == 5.0
     _reset_scanner_hot_override_cache()
     kiwoom_sniper_v2._reset_scanner_full_eval_pressure_state()
 

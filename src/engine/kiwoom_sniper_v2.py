@@ -249,6 +249,13 @@ _SCANNER_HOT_RUNTIME_OVERRIDE_KEYS = frozenset(
         "KORSTOCKSCAN_SCANNER_FULL_EVAL_AUTO_RELIEF_MS",
         "KORSTOCKSCAN_SCANNER_FULL_EVAL_AUTO_COOLDOWN_SEC",
         "KORSTOCKSCAN_SCANNER_FULL_EVAL_AUTO_RECOVERY_STREAK",
+        "KORSTOCKSCAN_SCALPING_WATCHING_MAX_ACTIVE",
+        "KORSTOCKSCAN_SCALPING_WATCHING_DYNAMIC_CAP_ENABLED",
+        "KORSTOCKSCAN_SCALPING_WATCHING_DYNAMIC_MIN_ACTIVE",
+        "KORSTOCKSCAN_SCALPING_WATCHING_DYNAMIC_PRESSURE_MS",
+        "KORSTOCKSCAN_SCALPING_WATCHING_DYNAMIC_RELIEF_MS",
+        "KORSTOCKSCAN_SCALPING_WATCHING_DYNAMIC_COOLDOWN_SEC",
+        "KORSTOCKSCAN_SCALPING_WATCHING_DYNAMIC_RECOVERY_STREAK",
         "KORSTOCKSCAN_SCANNER_RISING_TERMINAL_HARDGATE_RECHECK_ENABLED",
         "KORSTOCKSCAN_SCANNER_RISING_TERMINAL_HARDGATE_RECHECK_DELAY_SEC",
         "KORSTOCKSCAN_SCANNER_RISING_TERMINAL_HARDGATE_RECHECK_MAX_ATTEMPTS",
@@ -2479,7 +2486,7 @@ def _scalping_fifo_candidates(watching_stocks, now_ts):
 
 
 def _scalping_fifo_base_max_active():
-    raw = os.getenv("KORSTOCKSCAN_SCALPING_WATCHING_MAX_ACTIVE", "")
+    raw = _scanner_hot_or_env_value("KORSTOCKSCAN_SCALPING_WATCHING_MAX_ACTIVE")
     try:
         value = int(str(raw).strip()) if str(raw).strip() else 24
     except Exception:
@@ -2488,29 +2495,34 @@ def _scalping_fifo_base_max_active():
 
 
 def _scalping_dynamic_watch_cap_enabled():
-    return _env_bool("KORSTOCKSCAN_SCALPING_WATCHING_DYNAMIC_CAP_ENABLED", True)
+    raw = _scanner_hot_or_env_value("KORSTOCKSCAN_SCALPING_WATCHING_DYNAMIC_CAP_ENABLED")
+    return _env_bool_from_value(raw, True)
 
 
 def _scalping_dynamic_watch_cap_min(base_cap):
-    raw = os.getenv("KORSTOCKSCAN_SCALPING_WATCHING_DYNAMIC_MIN_ACTIVE", "16")
+    raw = _scanner_hot_or_env_value("KORSTOCKSCAN_SCALPING_WATCHING_DYNAMIC_MIN_ACTIVE")
     value = _safe_int(raw, 16)
     return max(1, min(base_cap, value))
 
 
 def _scalping_dynamic_watch_cap_pressure_ms():
-    return max(1000.0, _safe_float(os.getenv("KORSTOCKSCAN_SCALPING_WATCHING_DYNAMIC_PRESSURE_MS", "12000"), 12000.0))
+    raw = _scanner_hot_or_env_value("KORSTOCKSCAN_SCALPING_WATCHING_DYNAMIC_PRESSURE_MS")
+    return max(1000.0, _safe_float(raw, 12000.0))
 
 
 def _scalping_dynamic_watch_cap_relief_ms():
-    return max(1000.0, _safe_float(os.getenv("KORSTOCKSCAN_SCALPING_WATCHING_DYNAMIC_RELIEF_MS", "7000"), 7000.0))
+    raw = _scanner_hot_or_env_value("KORSTOCKSCAN_SCALPING_WATCHING_DYNAMIC_RELIEF_MS")
+    return max(1000.0, _safe_float(raw, 7000.0))
 
 
 def _scalping_dynamic_watch_cap_cooldown_sec():
-    return max(0.0, _safe_float(os.getenv("KORSTOCKSCAN_SCALPING_WATCHING_DYNAMIC_COOLDOWN_SEC", "60"), 60.0))
+    raw = _scanner_hot_or_env_value("KORSTOCKSCAN_SCALPING_WATCHING_DYNAMIC_COOLDOWN_SEC")
+    return max(0.0, _safe_float(raw, 60.0))
 
 
 def _scalping_dynamic_watch_cap_recovery_streak():
-    return max(1, _safe_int(os.getenv("KORSTOCKSCAN_SCALPING_WATCHING_DYNAMIC_RECOVERY_STREAK", "3"), 3))
+    raw = _scanner_hot_or_env_value("KORSTOCKSCAN_SCALPING_WATCHING_DYNAMIC_RECOVERY_STREAK")
+    return max(1, _safe_int(raw, 3))
 
 
 def _scalping_dynamic_watch_cap_step(loop_elapsed_ms, pressure_ms):

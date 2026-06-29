@@ -938,3 +938,163 @@
 - 다음 루프 확인:
   - 새 PID 기준 `pre_ai_ws_snapshot_refresh_applied=True`가 overbought/strength/liquidity 전단 stale-mixed row를 줄이는지 확인한다.
   - `diagnostic_quote_age_stale`가 유지되면 full-eval 지연/WS subscription freshness 쪽을 다음 major issue로 재분해한다.
+
+## 22. 12:20 목표 루프 및 full-eval pressure p3 hot override
+
+작성 시각: `2026-06-29 12:21 KST`
+
+### 22.1 12:20 관측
+
+- 11:30 이후 flow:
+  - `symbol_count=97`
+  - `rising_symbol_count_by_max_delta=27`
+  - `rising_missed_symbol_count_in_report=30`
+  - `real_submit_symbol_count_in_latest_diagnostic=0`
+  - `buy_signal_or_pre_submit_pass_seen_symbols=1`
+  - `stale_eval_symbol_count=59`
+  - `rising_stale_eval_symbol_count=21`
+  - `stale_refresh_recovered_symbol_count=44`
+- 변화:
+  - BUY/pre-submit 통과는 0에서 1로 늘었고, 올릭스는 `entry_armed -> budget_pass -> latency_pass:safe_normal_entry_allowed`까지 도달했다.
+  - 실제 submit은 여전히 0건이다.
+  - refresh 회복 row는 29에서 44로 늘었지만, 남은 stale category는 전부 `diagnostic_quote_age_stale`다.
+- 새 PID 이후 loop pressure:
+  - `12:09:04 loop_elapsed_ms=196.6`
+  - `12:10:31 loop_elapsed_ms=86224.6`
+  - `12:14:43 loop_elapsed_ms=59536.2`
+  - `12:15:23 loop_elapsed_ms=38388.8`
+  - `12:19:46 loop_elapsed_ms=9483.0`
+- 판정:
+  - pre-AI quote refresh는 일부 stale-mixed row를 `refresh회복`으로 분리했지만, full-eval/WS prune pressure가 다시 stale source를 만들고 있다.
+  - 다음 major issue는 threshold downsizing이 아니라 scanner full-eval pressure와 WS subscription freshness다.
+
+### 22.2 p3 hot override
+
+- 파일:
+  - `data/threshold_cycle/runtime_env/operator_runtime_overrides.env`
+- 추가 값:
+  - `KORSTOCKSCAN_SCANNER_FULL_EVAL_AUTO_PRESSURE_ENABLED=true`
+  - `KORSTOCKSCAN_SCANNER_FULL_EVAL_AUTO_PRESSURE_MIN_LIMIT=4`
+  - `KORSTOCKSCAN_SCANNER_FULL_EVAL_AUTO_PRESSURE_MS=10000`
+  - `KORSTOCKSCAN_SCANNER_FULL_EVAL_AUTO_RELIEF_MS=5000`
+  - `KORSTOCKSCAN_SCANNER_FULL_EVAL_AUTO_COOLDOWN_SEC=20`
+  - `KORSTOCKSCAN_SCANNER_FULL_EVAL_AUTO_RECOVERY_STREAK=4`
+- 목적:
+  - p2 기준 `FULL_EVAL_MAX_PER_LOOP=8`, `BACKLOG_EXTRA_PER_LOOP=2` 위에서 자동 governor가 `8 -> 6`까지만 감압하던 한계를 완화해, pressure 반복 시 4까지 낮출 수 있게 한다.
+  - cooldown을 60초에서 20초로 줄여 반복 pressure에 빠르게 반응한다.
+- rollback:
+  - `AUTO_PRESSURE_MIN_LIMIT=6`
+  - `AUTO_PRESSURE_MS=12000`
+  - `AUTO_RELIEF_MS=7000`
+  - `AUTO_COOLDOWN_SEC=60`
+  - `AUTO_RECOVERY_STREAK=3`
+
+### 22.3 권한/충돌 검토
+
+- 이 변경은 real SCALPING SCANNER observation throughput만 조절한다.
+- BUY score, AI threshold, liquidity/latency/stale-submit, broker/account/order/quantity/cooldown guard, provider route, hard/protect/emergency stop, scale-in guard는 변경하지 않는다.
+- hot reload 가능 key이므로 즉시 재기동하지 않는다. 다음 루프에서 runtime이 반영하지 못했을 때만 `restart.flag`를 재검토한다.
+
+### 22.4 검증
+
+- `bash -n data/threshold_cycle/runtime_env/operator_runtime_overrides.env`
+  - 통과
+
+## 23. 12:28 dynamic watch cap hot reload 및 p4 pressure override
+
+작성 시각: `2026-06-29 12:28 KST`
+
+### 23.1 누적 관측
+
+- p3 full-eval hot override는 런타임에 반영되었다.
+  - `12:22:03 [SCANNER_FULL_EVAL_PRESSURE] ... effective_limit=4 min_limit=4`
+- 그러나 p3 반영 뒤에도 loop pressure가 남았다.
+  - `12:22:31 loop_elapsed_ms=26957.2 target_count=25 watching=21`
+  - `12:23:53 loop_elapsed_ms=41439.2 target_count=20 watching=16`
+  - `12:27:15 loop_elapsed_ms=13661.4 target_count=18 watching=14`
+- `12:28:05 [SCALPING_DYNAMIC_WATCH_CAP] action=recover ... base_cap=22 effective_cap=17` 로그로 보아 기존 running process는 watch cap 값을 old env 기반으로만 읽고 있었다.
+
+### 23.2 코드 수정
+
+- 파일:
+  - `src/engine/kiwoom_sniper_v2.py`
+  - `src/tests/test_kiwoom_sniper_market_regime_runtime.py`
+- 변경:
+  - `KORSTOCKSCAN_SCALPING_WATCHING_MAX_ACTIVE`
+  - `KORSTOCKSCAN_SCALPING_WATCHING_DYNAMIC_CAP_ENABLED`
+  - `KORSTOCKSCAN_SCALPING_WATCHING_DYNAMIC_MIN_ACTIVE`
+  - `KORSTOCKSCAN_SCALPING_WATCHING_DYNAMIC_PRESSURE_MS`
+  - `KORSTOCKSCAN_SCALPING_WATCHING_DYNAMIC_RELIEF_MS`
+  - `KORSTOCKSCAN_SCALPING_WATCHING_DYNAMIC_COOLDOWN_SEC`
+  - `KORSTOCKSCAN_SCALPING_WATCHING_DYNAMIC_RECOVERY_STREAK`
+  - 위 key들을 scanner hot runtime override allowlist에 추가했다.
+  - dynamic watch cap getter가 `os.getenv` 대신 `_scanner_hot_or_env_value`를 사용하도록 변경했다.
+  - 기존 env-only 테스트는 실제 `operator_runtime_overrides.env` 영향을 받지 않도록 격리했다.
+  - hot reload 테스트에 dynamic watch cap key 재로딩 검증을 추가했다.
+
+### 23.3 p4 hot override
+
+- 파일:
+  - `data/threshold_cycle/runtime_env/operator_runtime_overrides.env`
+- 추가 값:
+  - `KORSTOCKSCAN_SCALPING_WATCHING_MAX_ACTIVE=20`
+  - `KORSTOCKSCAN_SCALPING_WATCHING_DYNAMIC_CAP_ENABLED=true`
+  - `KORSTOCKSCAN_SCALPING_WATCHING_DYNAMIC_MIN_ACTIVE=12`
+  - `KORSTOCKSCAN_SCALPING_WATCHING_DYNAMIC_PRESSURE_MS=10000`
+  - `KORSTOCKSCAN_SCALPING_WATCHING_DYNAMIC_RELIEF_MS=5000`
+  - `KORSTOCKSCAN_SCALPING_WATCHING_DYNAMIC_COOLDOWN_SEC=20`
+  - `KORSTOCKSCAN_SCALPING_WATCHING_DYNAMIC_RECOVERY_STREAK=4`
+- 목적:
+  - full-eval limit이 이미 4까지 내려갔는데도 loop spike와 WS prune burst가 반복되어, WATCHING pool pressure도 같이 낮춘다.
+  - p4 이후에는 코드상 같은 key가 hot reload 대상이므로 값 조정만으로는 봇 재기동이 필요하지 않다.
+- rollback:
+  - `KORSTOCKSCAN_SCALPING_WATCHING_MAX_ACTIVE=22`
+  - `KORSTOCKSCAN_SCALPING_WATCHING_DYNAMIC_MIN_ACTIVE=16`
+  - `KORSTOCKSCAN_SCALPING_WATCHING_DYNAMIC_PRESSURE_MS=12000`
+  - `KORSTOCKSCAN_SCALPING_WATCHING_DYNAMIC_RELIEF_MS=7000`
+  - `KORSTOCKSCAN_SCALPING_WATCHING_DYNAMIC_COOLDOWN_SEC=60`
+  - `KORSTOCKSCAN_SCALPING_WATCHING_DYNAMIC_RECOVERY_STREAK=3`
+
+### 23.4 권한/충돌 검토
+
+- 이 변경은 SCALPING WATCHING pool throughput과 loop pressure 자동조절만 다룬다.
+- BUY score, AI threshold, liquidity/latency/stale-submit, broker/account/order/quantity/cooldown guard, provider route, hard/protect/emergency stop, scale-in guard는 변경하지 않는다.
+- watch cap을 낮추면 저우선순위 WATCHING 정리는 빨라질 수 있으므로, 다음 루프에서 `rising_missed_symbol_count`, `refresh회복`, `stale_eval`, `scanner_fast_precheck_stability_pending`, `ws_snapshot_missing_or_zero`를 같이 본다.
+- `operator_runtime_overrides.env`는 `.gitignore` 대상이라 커밋에는 직접 포함되지 않는다. 지속성은 런타임 파일 자체와 이 수정목록 문서로 관리한다.
+
+### 23.5 검증
+
+- `PYTHONPATH=. .venv/bin/python -m pytest src/tests/test_kiwoom_sniper_market_regime_runtime.py -k 'scalping_fifo_max_active_env or scalping_dynamic_watch_cap or scanner_rest_quote_budget_hot_reloads_operator_override_file or scanner_full_eval_pressure'`
+  - `8 passed, 145 deselected`
+- `PYTHONPATH=. .venv/bin/python -m py_compile src/engine/kiwoom_sniper_v2.py src/tests/test_kiwoom_sniper_market_regime_runtime.py`
+  - 통과
+- `bash -n data/threshold_cycle/runtime_env/operator_runtime_overrides.env`
+  - 통과
+
+### 23.6 런타임 후속
+
+- 이번 변경은 코드 deploy가 필요하므로 기존 PID에는 hot reload가 적용되지 않는다.
+- review gate 및 `git diff --check` 통과 후 `restart.flag` 방식의 우아한 재기동을 사용한다.
+
+### 23.7 12:30 재기동 전 flow 기준선
+
+- 11:30 이후 flow:
+  - `symbol_count=108`
+  - `rising_symbol_count_by_max_delta=29`
+  - `rising_missed_symbol_count_in_report=31`
+  - `real_submit_symbol_count_in_latest_diagnostic=0`
+  - `buy_signal_or_pre_submit_pass_seen_symbols=1`
+  - `stale_eval_symbol_count=69`
+  - `rising_stale_eval_symbol_count=23`
+  - `stale_refresh_recovered_symbol_count=53`
+- 08:00 이후 누적 참조 flow:
+  - `symbol_count=451`
+  - `rising_symbol_count_by_max_delta=89`
+  - `rising_missed_symbol_count_in_report=74`
+  - `buy_signal_or_pre_submit_pass_seen_symbols=27`
+  - `stale_eval_symbol_count=213`
+  - `rising_stale_eval_symbol_count=76`
+  - `stale_refresh_recovered_symbol_count=198`
+- 판정:
+  - p3 이후 refresh 회복 표본은 늘었지만 재기동 전까지 stale source는 계속 증가했다.
+  - p4 코드 반영 후 다음 루프에서 watch cap base/min이 `20/12`로 읽히는지와 loop spike가 줄어드는지를 확인한다.
