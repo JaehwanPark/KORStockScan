@@ -1098,3 +1098,68 @@
 - 판정:
   - p3 이후 refresh 회복 표본은 늘었지만 재기동 전까지 stale source는 계속 증가했다.
   - p4 코드 반영 후 다음 루프에서 watch cap base/min이 `20/12`로 읽히는지와 loop spike가 줄어드는지를 확인한다.
+
+## 24. 12:41 p4 반영 후 루프 관측
+
+작성 시각: `2026-06-29 12:42 KST`
+
+### 24.1 재기동 및 runtime 반영
+
+- 재기동:
+  - 방식: `./restart.sh` 기반 `restart.flag` 우아한 재기동
+  - PID: `79579 -> 87721`
+  - 새 PID 시작: `Mon Jun 29 12:31:39 2026`
+  - runtime env handoff: `passed=true`, `missing_family_count=0`, `pid_passed=true`
+- 새 PID env 확인:
+  - `KORSTOCKSCAN_SCALPING_WATCHING_MAX_ACTIVE=20`
+  - `KORSTOCKSCAN_SCALPING_WATCHING_DYNAMIC_MIN_ACTIVE=12`
+  - `KORSTOCKSCAN_SCALPING_WATCHING_DYNAMIC_PRESSURE_MS=10000`
+  - `KORSTOCKSCAN_SCALPING_WATCHING_DYNAMIC_COOLDOWN_SEC=20`
+  - `KORSTOCKSCAN_SCANNER_FULL_EVAL_AUTO_PRESSURE_MIN_LIMIT=4`
+
+### 24.2 p4 효과
+
+- 새 PID 로그:
+  - `12:30:40 loop_elapsed_ms=14351.1 target_count=20 watching=16`
+  - `12:33:21 [SCALPING_DYNAMIC_WATCH_CAP] action=reduce ... base_cap=20 effective_cap=17 min_cap=12`
+  - `12:33:21 [SCANNER_FULL_EVAL_PRESSURE] action=reduce ... effective_limit=6 min_limit=4`
+  - `12:33:55 [SCALPING_DYNAMIC_WATCH_CAP] action=reduce ... effective_cap=14 min_cap=12`
+  - `12:33:55 [SCANNER_FULL_EVAL_PRESSURE] action=reduce ... effective_limit=4 min_limit=4`
+  - `12:34:23 [SCALPING_DYNAMIC_WATCH_CAP] action=reduce ... effective_cap=12 min_cap=12`
+  - `12:41:19 loop_elapsed_ms=4252.6 target_count=16 watching=12`
+- 판정:
+  - p4는 런타임에 반영되었고 watch cap governor가 `20 -> 12`까지 감압했다.
+  - loop spike는 재기동 직후 한 차례 남았지만, cap 최저값 도달 뒤 12:41 루프는 4.2초로 안정됐다.
+  - 따라서 기존 `full-eval pressure + watch pool pressure` 병목은 해소 방향으로 이동했다.
+
+### 24.3 12:41 flow
+
+- 11:30 이후 flow:
+  - `symbol_count=115`
+  - `rising_symbol_count_by_max_delta=31`
+  - `rising_missed_symbol_count_in_report=32`
+  - `real_submit_symbol_count_in_latest_diagnostic=0`
+  - `buy_signal_or_pre_submit_pass_seen_symbols=1`
+  - `stale_eval_symbol_count=76`
+  - `rising_stale_eval_symbol_count=24`
+  - `stale_refresh_recovered_symbol_count=59`
+- 08:00 이후 누적 참조 flow:
+  - `symbol_count=451`
+  - `rising_symbol_count_by_max_delta=90`
+  - `rising_missed_symbol_count_in_report=74`
+  - `buy_signal_or_pre_submit_pass_seen_symbols=27`
+  - `stale_eval_symbol_count=218`
+  - `rising_stale_eval_symbol_count=77`
+  - `stale_refresh_recovered_symbol_count=201`
+
+### 24.4 다음 major blocker
+
+- 실제 submit은 여전히 0건이다.
+- 11:30 이후 rising blocker는 다음으로 이동했다.
+  - `blocked_strength_momentum/below_buy_ratio`
+  - `blocked_strength_momentum/insufficient_history`
+  - `blocked_strength_momentum/below_strength_base`
+  - `blocked_overbought/below_window_buy_value`
+  - `ai_confirmed/blocked_ai_score_below_buy_score_threshold`
+- stale category는 아직 전부 `diagnostic_quote_age_stale`다.
+- 다음 루프에서는 fresh-only 표본과 stale-mixed 표본을 분리해, strength/AI blocker가 중복 또는 과도한 차단인지 확인한다. stale submit hard block은 계속 유지한다.
