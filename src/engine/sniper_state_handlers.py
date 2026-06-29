@@ -13690,6 +13690,85 @@ def _pre_ai_refresh_strength_momentum_ws_snapshot(code: str, ws_data: dict | Non
     return refreshed, fields
 
 
+def _pre_ai_refresh_quote_ws_snapshot(code: str, ws_data: dict | None, strategy: str) -> tuple[dict, dict]:
+    """Refresh pre-AI quote freshness without requiring strength-history samples."""
+    base, base_normalized_from = _normalize_pre_ai_strength_ws_timestamp(ws_data)
+    fields = {
+        "pre_ai_ws_snapshot_refresh_enabled": False,
+        "pre_ai_ws_snapshot_refresh_applied": False,
+        "pre_ai_ws_snapshot_refresh_reason": "not_attempted",
+        "pre_ai_ws_snapshot_refresh_source": "ws_manager_latest_data",
+        "pre_ai_ws_snapshot_refresh_input_age_ms": None,
+        "pre_ai_ws_snapshot_refresh_age_ms": None,
+        "pre_ai_ws_snapshot_refresh_latest_price": _safe_int(base.get("curr"), 0),
+        "pre_ai_ws_snapshot_refresh_history_count": 0,
+        "pre_ai_ws_snapshot_refresh_input_timestamp_normalized_from": base_normalized_from or "",
+        "pre_ai_ws_snapshot_refresh_latest_timestamp_normalized_from": "",
+    }
+    if str(strategy or "").upper() not in {"SCALPING", "SCALP", "KOSPI_ML"}:
+        fields["pre_ai_ws_snapshot_refresh_reason"] = "non_scalping"
+        return base, fields
+    if not _rule_bool("SCALP_PRE_AI_WS_SNAPSHOT_REFRESH_ENABLED", True):
+        fields["pre_ai_ws_snapshot_refresh_reason"] = "disabled"
+        return base, fields
+
+    fields["pre_ai_ws_snapshot_refresh_enabled"] = True
+    base_age = _get_ws_snapshot_age_sec(base)
+    max_age_sec = _rule_float("SCALP_PRE_AI_MAX_WS_AGE_SEC", 3.0)
+    if base_age is not None:
+        fields["pre_ai_ws_snapshot_refresh_input_age_ms"] = round(base_age * 1000.0, 3)
+    if base_age is not None and base_age <= max_age_sec and _safe_int(base.get("curr"), 0) > 0:
+        fields["pre_ai_ws_snapshot_refresh_reason"] = "input_snapshot_fresh"
+        return base, fields
+
+    manager = WS_MANAGER
+    if manager is None or not hasattr(manager, "get_latest_data"):
+        fields["pre_ai_ws_snapshot_refresh_reason"] = "ws_manager_missing"
+        return base, fields
+    try:
+        latest = manager.get_latest_data(code) or {}
+    except Exception as exc:
+        fields["pre_ai_ws_snapshot_refresh_reason"] = "ws_manager_error"
+        fields["pre_ai_ws_snapshot_refresh_error"] = str(exc)[:120]
+        return base, fields
+    if not isinstance(latest, dict) or not latest:
+        fields["pre_ai_ws_snapshot_refresh_reason"] = "latest_snapshot_missing"
+        return base, fields
+
+    latest, latest_normalized_from = _normalize_pre_ai_strength_ws_timestamp(latest)
+    fields["pre_ai_ws_snapshot_refresh_latest_timestamp_normalized_from"] = latest_normalized_from or ""
+    latest_ts = _safe_float(latest.get("last_ws_update_ts"), 0.0)
+    base_ts = _safe_float(base.get("last_ws_update_ts"), 0.0)
+    latest_age = None if latest_ts <= 0 else max(0.0, (time.time() - latest_ts) * 1000.0)
+    history = latest.get("strength_momentum_history") or []
+    history_count = len(history) if hasattr(history, "__len__") else 0
+    fields.update(
+        {
+            "pre_ai_ws_snapshot_refresh_age_ms": None if latest_age is None else round(latest_age, 3),
+            "pre_ai_ws_snapshot_refresh_latest_price": _safe_int(latest.get("curr"), 0),
+            "pre_ai_ws_snapshot_refresh_history_count": int(history_count or 0),
+        }
+    )
+    if latest_ts <= 0:
+        fields["pre_ai_ws_snapshot_refresh_reason"] = "latest_timestamp_missing"
+        return base, fields
+    if base_ts > 0 and latest_ts < base_ts:
+        fields["pre_ai_ws_snapshot_refresh_reason"] = "latest_snapshot_older_than_input"
+        return base, fields
+    if latest_age is None or latest_age > max_age_sec * 1000.0:
+        fields["pre_ai_ws_snapshot_refresh_reason"] = "latest_snapshot_stale"
+        return base, fields
+    if _safe_int(latest.get("curr"), 0) <= 0:
+        fields["pre_ai_ws_snapshot_refresh_reason"] = "latest_price_missing"
+        return base, fields
+
+    refreshed = dict(latest)
+    fields["pre_ai_ws_snapshot_refresh_applied"] = True
+    fields["pre_ai_ws_snapshot_refresh_reason"] = "latest_ws_snapshot_fresh"
+    refreshed.update(fields)
+    return refreshed, fields
+
+
 def _update_ai_quote_freshness_fields(ws_data: dict | None) -> dict:
     """Recompute AI quote freshness from the current snapshot instead of preserving stale flags."""
     if not isinstance(ws_data, dict):
@@ -18197,6 +18276,32 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
             is_trigger = True
         else:
             _reset_scalp_pre_ai_gate_context(stock, ws_data)
+            ws_data, pre_ai_ws_refresh_fields = _pre_ai_refresh_quote_ws_snapshot(
+                code,
+                ws_data,
+                strategy,
+            )
+            if (
+                pre_ai_ws_refresh_fields.get("pre_ai_ws_snapshot_refresh_applied")
+                or pre_ai_ws_refresh_fields.get("pre_ai_ws_snapshot_refresh_reason") == "input_snapshot_fresh"
+            ):
+                curr_price = _safe_int(ws_data.get("curr"), curr_price) or curr_price
+                current_vpw = _safe_float(ws_data.get("v_pw"), current_vpw)
+                fluctuation = _safe_float(
+                    ws_data.get("fluctuation", ws_data.get("fluctuation_rate")),
+                    fluctuation,
+                )
+                ask_tot = _safe_int(ws_data.get("ask_tot"), ask_tot)
+                bid_tot = _safe_int(ws_data.get("bid_tot"), bid_tot)
+                liquidity_totals_present = "ask_tot" in ws_data or "bid_tot" in ws_data
+                open_price = float(ws_data.get("open", open_price) or open_price)
+                intraday_surge = ((curr_price - open_price) / open_price) * 100 if open_price > 0 else fluctuation
+                liquidity_value = (ask_tot + bid_tot) * curr_price
+                runtime["liquidity_value"] = int(liquidity_value)
+                runtime["scalp_liquidity_value"] = int(liquidity_value)
+                runtime["scalp_liquidity_source_quality"] = (
+                    "valid_orderbook_totals" if liquidity_totals_present else "missing_orderbook_totals"
+                )
             if fluctuation >= max_surge or intraday_surge >= max_intraday_surge:
                 overlap_snapshot = _extract_ai_overlap_snapshot(ws_data=ws_data)
                 overbought_risk = _classify_overbought_risk(
@@ -18241,6 +18346,7 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                     **_pre_ai_blocked_gate_quality_fields(
                         gate_name="overbought",
                         ws_data=ws_data,
+                        refresh_fields=pre_ai_ws_refresh_fields,
                     ),
                     **_merge_entry_pipeline_field_groups(
                         _build_ai_input_not_evaluated_fields("pre_ai_overbought_gate"),
@@ -18339,11 +18445,12 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                     return False
 
                 observe_only = bool(_rule("SCALP_DYNAMIC_VPW_OBSERVE_ONLY", True))
-                ws_data, pre_ai_ws_refresh_fields = _pre_ai_refresh_strength_momentum_ws_snapshot(
-                    code,
-                    ws_data,
-                    strategy,
-                )
+                if not pre_ai_ws_refresh_fields.get("pre_ai_ws_snapshot_refresh_applied"):
+                    ws_data, pre_ai_ws_refresh_fields = _pre_ai_refresh_strength_momentum_ws_snapshot(
+                        code,
+                        ws_data,
+                        strategy,
+                    )
                 if pre_ai_ws_refresh_fields.get("pre_ai_ws_snapshot_refresh_applied"):
                     curr_price = _safe_int(ws_data.get("curr"), curr_price) or curr_price
                     current_vpw = _safe_float(ws_data.get("v_pw"), current_vpw)

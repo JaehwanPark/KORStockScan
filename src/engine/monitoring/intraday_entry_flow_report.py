@@ -22,6 +22,14 @@ BUY_SIGNAL_STAGES = {
 }
 SUBMIT_STAGE_MARKERS = ("submitted", "order_send", "broker_submit", "buy_submit")
 STALE_EVAL_QUOTE_AGE_MS = 3000.0
+FRESH_REFRESH_REASONS = {
+    "input_snapshot_fresh",
+    "latest_ws_snapshot_fresh",
+    "rest_orderbook_fresh",
+    "observer_quote_fresh",
+    "ws_snapshot_arrived_after_subscription_recheck",
+    "rest_quote_applied",
+}
 
 
 def _parse_ts(value: Any) -> datetime | None:
@@ -52,6 +60,66 @@ def _reason(fields: dict[str, Any]) -> str:
         value = _field(fields, key)
         if value:
             return value
+    return ""
+
+
+def _boolish(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    return str(value or "").strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def _fresh_refresh_age_ms(fields: dict[str, Any]) -> float | None:
+    if _boolish(fields.get("refresh_applied")):
+        reason = str(fields.get("refresh_reason") or "").strip()
+        if not reason or reason in FRESH_REFRESH_REASONS:
+            age = _safe_float(fields.get("refresh_age_ms"))
+            return 0.0 if age is None else age
+    for applied_key, reason_key, age_key in (
+        (
+            "pre_ai_ws_snapshot_refresh_applied",
+            "pre_ai_ws_snapshot_refresh_reason",
+            "pre_ai_ws_snapshot_refresh_age_ms",
+        ),
+        (
+            "pre_submit_ws_snapshot_refresh_applied",
+            "pre_submit_ws_snapshot_refresh_reason",
+            "pre_submit_ws_snapshot_refresh_age_ms",
+        ),
+        (
+            "pre_submit_rest_orderbook_refresh_applied",
+            "pre_submit_rest_orderbook_refresh_reason",
+            "pre_submit_rest_orderbook_refresh_age_ms",
+        ),
+        (
+            "pre_submit_quote_refresh_applied",
+            "pre_submit_quote_refresh_reason",
+            "pre_submit_quote_refresh_quote_age_ms",
+        ),
+    ):
+        if not _boolish(fields.get(applied_key)):
+            continue
+        reason = str(fields.get(reason_key) or "").strip()
+        if reason and reason not in FRESH_REFRESH_REASONS:
+            continue
+        age = _safe_float(fields.get(age_key))
+        return 0.0 if age is None else age
+    return None
+
+
+def _stale_eval_category(stage: str, reason: str, fields: dict[str, Any], quote_age_ms: float | None) -> str:
+    refresh_age_ms = _fresh_refresh_age_ms(fields)
+    if refresh_age_ms is not None and refresh_age_ms <= STALE_EVAL_QUOTE_AGE_MS:
+        return "fresh_refresh_recovered"
+    text = f"{stage} {reason} {_field(fields, 'entry_submit_revalidation_warning')}".lower()
+    if "stale_context_or_quote" in text:
+        return "pre_submit_stale_context_or_quote"
+    if "ws_snapshot_missing_or_zero" in text or "missing_or_zero_curr" in text:
+        return "ws_snapshot_missing_or_zero"
+    if "stale_ws_snapshot" in text:
+        return "pre_ai_or_fast_precheck_stale_ws"
+    if quote_age_ms is not None and quote_age_ms > STALE_EVAL_QUOTE_AGE_MS:
+        return "diagnostic_quote_age_stale"
     return ""
 
 
@@ -202,8 +270,10 @@ def build_report(
             "buy_signal_seen": False,
             "first_buy_signal_ts": None,
             "stale_eval_count": 0,
+            "stale_refresh_recovered_count": 0,
             "max_quote_age_ms": None,
             "stale_eval_stage_counts": Counter(),
+            "stale_eval_category_counts": Counter(),
         }
     )
 
@@ -240,9 +310,13 @@ def build_report(
                 if record["max_quote_age_ms"] is None
                 else max(record["max_quote_age_ms"], quote_age_ms)
             )
-        if quote_age_ms is not None and quote_age_ms > STALE_EVAL_QUOTE_AGE_MS:
+        stale_eval_category = _stale_eval_category(stage, reason, fields, quote_age_ms)
+        if stale_eval_category == "fresh_refresh_recovered":
+            record["stale_refresh_recovered_count"] += 1
+        elif stale_eval_category:
             record["stale_eval_count"] += 1
             record["stale_eval_stage_counts"][stage] += 1
+            record["stale_eval_category_counts"][stale_eval_category] += 1
         record["stage_counts"][stage] += 1
         if reason:
             record["reason_counts"][reason] += 1
@@ -314,10 +388,16 @@ def build_report(
                 "latest_ai_score": record["latest_ai_score"],
                 "latest_ai_action": record["latest_ai_action"],
                 "stale_eval_count": int(record["stale_eval_count"] or 0),
+                "stale_refresh_recovered_count": int(record["stale_refresh_recovered_count"] or 0),
                 "max_quote_age_ms": record["max_quote_age_ms"],
                 "dominant_stale_eval_stage": (
                     record["stale_eval_stage_counts"].most_common(1)[0][0]
                     if record["stale_eval_stage_counts"]
+                    else ""
+                ),
+                "dominant_stale_eval_category": (
+                    record["stale_eval_category_counts"].most_common(1)[0][0]
+                    if record["stale_eval_category_counts"]
                     else ""
                 ),
                 "rising_missed_in_diagnostic": code in rising_missed_codes,
@@ -352,11 +432,18 @@ def build_report(
         "rising_stale_eval_symbol_count": sum(
             1 for row in rows if row["rise_after_watch"] == "rising" and row["stale_eval_count"] > 0
         ),
+        "stale_refresh_recovered_symbol_count": sum(1 for row in rows if row["stale_refresh_recovered_count"] > 0),
     }
     stale_eval_rollup = [
         {"stage": stage or "-", "count": count}
         for stage, count in Counter(
             row["dominant_stale_eval_stage"] for row in rows if row["dominant_stale_eval_stage"]
+        ).most_common()
+    ]
+    stale_eval_category_rollup = [
+        {"category": category or "-", "count": count}
+        for category, count in Counter(
+            row["dominant_stale_eval_category"] for row in rows if row["dominant_stale_eval_category"]
         ).most_common()
     ]
     return {
@@ -380,6 +467,7 @@ def build_report(
         "blocker_rollup": blocker_rollup,
         "rising_symbol_blocker_rollup": rising_blocker_rollup,
         "stale_eval_rollup": stale_eval_rollup,
+        "stale_eval_category_rollup": stale_eval_category_rollup,
         "rows": rows,
     }
 
@@ -424,9 +512,12 @@ def write_outputs(report: dict[str, Any], *, output_md: Path, output_csv: Path, 
         handle.write("\n## stale-eval rollup\n\n")
         for item in report["stale_eval_rollup"][:12]:
             handle.write(f"- {item['count']}: `{item['stage']}`\n")
+        handle.write("\n## stale-eval category rollup\n\n")
+        for item in report.get("stale_eval_category_rollup", [])[:12]:
+            handle.write(f"- {item['count']}: `{item['category']}`\n")
         handle.write("\n## top rows by max delta\n\n")
-        handle.write("|종목|첫감시|마지막|상승여부|maxΔ|latestΔ|BUY전 주 blocker|stale평가|max quote age|BUY전 통과신호|AI|실제submit|흐름|\n")
-        handle.write("|---|---:|---:|---|---:|---:|---|---:|---:|---:|---:|---:|---|\n")
+        handle.write("|종목|첫감시|마지막|상승여부|maxΔ|latestΔ|BUY전 주 blocker|stale평가|refresh회복|stale유형|max quote age|BUY전 통과신호|AI|실제submit|흐름|\n")
+        handle.write("|---|---:|---:|---|---:|---:|---|---:|---:|---|---:|---:|---:|---:|---|\n")
         for row in rows[:max_rows]:
             ai = ""
             if row["latest_ai_score"] is not None:
@@ -442,6 +533,8 @@ def write_outputs(report: dict[str, Any], *, output_md: Path, output_csv: Path, 
                 f"{_format_pct(row['latest_delta_since_first_seen_pct'])}|"
                 f"{blocker}|"
                 f"{row['stale_eval_count']}|"
+                f"{row['stale_refresh_recovered_count']}|"
+                f"{row['dominant_stale_eval_category'] or '-'}|"
                 f"{'' if row['max_quote_age_ms'] is None else round(float(row['max_quote_age_ms']), 0)}|"
                 f"{row['first_buy_signal_at'] or '-'}|"
                 f"{ai}|"

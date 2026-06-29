@@ -194,6 +194,7 @@ def test_write_outputs_uses_since_window_in_title(tmp_path):
         "blocker_rollup": [],
         "rising_symbol_blocker_rollup": [],
         "stale_eval_rollup": [],
+        "stale_eval_category_rollup": [],
         "rows": [],
     }
 
@@ -202,3 +203,94 @@ def test_write_outputs_uses_since_window_in_title(tmp_path):
     write_outputs(report, output_md=output_md, output_csv=output_csv)
 
     assert output_md.read_text(encoding="utf-8").splitlines()[0] == "# 2026-06-29 08:00 이후 감시대상 BUY 전 흐름"
+
+
+def test_build_report_separates_refresh_recovered_stale_from_hard_stale(tmp_path):
+    event_path = tmp_path / "events.jsonl"
+    diagnostic_path = tmp_path / "diag.json"
+    diagnostic_path.write_text(
+        json.dumps(
+            {
+                "summary": {"real_submit_symbol_count": 0},
+                "promoted_symbols": [
+                    {
+                        "stock_code": "000001",
+                        "stock_name": "refresh",
+                        "first_promoted_at": "2026-06-29T11:30:00",
+                        "max_price_delta_since_first_seen_pct": 2.0,
+                    },
+                    {
+                        "stock_code": "000002",
+                        "stock_name": "hard",
+                        "first_promoted_at": "2026-06-29T11:30:00",
+                        "max_price_delta_since_first_seen_pct": 1.0,
+                    },
+                ],
+                "rising_missed_buy": [{"stock_code": "000001"}, {"stock_code": "000002"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    rows = [
+        _event(
+            "000001",
+            "refresh",
+            "ai_confirmed",
+            {
+                "scanner_promotion_id": "p1",
+                "price_delta_since_first_seen_pct": "2.0",
+                "quote_age_ms": "6500",
+                "pre_ai_ws_snapshot_refresh_applied": True,
+                "pre_ai_ws_snapshot_refresh_reason": "latest_ws_snapshot_fresh",
+                "pre_ai_ws_snapshot_refresh_age_ms": "110",
+            },
+            emitted_at="2026-06-29T11:31:00",
+        ),
+        _event(
+            "000001",
+            "refresh",
+            "blocked_strength_momentum",
+            {
+                "scanner_promotion_id": "p1",
+                "price_delta_since_first_seen_pct": "2.0",
+                "quote_age_ms": "6400",
+                "refresh_applied": True,
+                "refresh_reason": "latest_ws_snapshot_fresh",
+                "refresh_age_ms": "90",
+            },
+            emitted_at="2026-06-29T11:31:10",
+        ),
+        _event(
+            "000002",
+            "hard",
+            "entry_submit_revalidation_warning",
+            {
+                "scanner_promotion_id": "p2",
+                "price_delta_since_first_seen_pct": "1.0",
+                "quote_age_at_submit_ms": "7000",
+                "entry_submit_revalidation_warning": "stale_context_or_quote",
+            },
+            emitted_at="2026-06-29T11:32:00",
+        ),
+    ]
+    event_path.write_text("\n".join(json.dumps(row, ensure_ascii=False) for row in rows), encoding="utf-8")
+
+    report = build_report(
+        target_date="2026-06-29",
+        event_cache_path=event_path,
+        diagnostic_path=diagnostic_path,
+        since="2026-06-29T11:30:00",
+        generated_at="fixed",
+    )
+
+    by_code = {row["stock_code"]: row for row in report["rows"]}
+    assert by_code["000001"]["stale_eval_count"] == 0
+    assert by_code["000001"]["stale_refresh_recovered_count"] == 2
+    assert by_code["000002"]["stale_eval_count"] == 1
+    assert by_code["000002"]["dominant_stale_eval_category"] == "pre_submit_stale_context_or_quote"
+    assert report["summary"]["stale_eval_symbol_count"] == 1
+    assert report["summary"]["stale_refresh_recovered_symbol_count"] == 1
+    assert report["stale_eval_category_rollup"][0] == {
+        "category": "pre_submit_stale_context_or_quote",
+        "count": 1,
+    }

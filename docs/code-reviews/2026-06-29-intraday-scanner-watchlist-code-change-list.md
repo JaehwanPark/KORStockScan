@@ -258,6 +258,7 @@
 ### 10.4 blocker downsizing 판정
 
 - `scanner_fast_precheck_stability_pending`과 `ws_snapshot_missing_or_zero`는 전체 watch pool 병목으로는 다시 커졌지만, 10:33 상승 종목의 직접 1차 blocker는 아니다. 따라서 이 둘만 보고 entry threshold나 BUY score를 낮추는 것은 부적절하다.
+
 - `strength/liquidity/AI` blocker가 중복으로 보이는 종목이 늘었지만, stale 평가가 상승 종목 22개에 섞여 있다. 지금 downsizing을 적용하면 stale quote submit block 또는 broker guard 우회 위험이 있다.
 - 이번 루프의 조치는 코드 변경이 아니라 관측 유지다. 다음 루프에서 `fresh-only 상승 종목`만 분리해도 같은 blocker가 반복되면 그때 downsizing 후보를 `below_window_buy_value`, `below_strength_base`, `blocked_ai_score_below_buy_score_threshold`, `first_ai_wait_big_bite_not_confirmed` 순서로 좁힌다.
 
@@ -844,3 +845,96 @@
 
 - 반복 수동감시 후 값 조정이 필요한 구간은 자동 governor가 우선 흡수한다.
 - 런타임에 더 강한 감압/완화가 필요하면 위 hot override env만 바꾸면 되고, threshold/order/provider/bot authority 변경으로 해석하지 않는다.
+
+## 21. 11:30 이후 stale/quote freshness 병목 해소 패치
+
+작성 시각: `2026-06-29 12:04 KST`
+
+### 21.1 누적 변경목록 충돌 검토
+
+- 기존 2.1~2.4 변경은 WATCHING 유지, terminal hardgate 재점검, attach/cap 관측, FIFO grace에 한정되어 있었다.
+- 이번 변경은 BUY threshold, broker submit guard, stale submit block, account/order/quantity/cooldown guard를 완화하지 않고, pre-AI 평가 입력의 quote freshness와 리포트 stale 분류만 보강한다.
+- 따라서 기존 FIFO/grace 관측 보강과 직접 충돌하지 않는다. 다만 같은 entry stage의 병목을 다루므로 이후 strength/liquidity/AI threshold downsizing을 추가할 때는 fresh-only 표본과 stale-mixed 표본을 분리한 뒤 별도 보고가 필요하다.
+
+### 21.2 리포트 stale 분리
+
+- 파일: `src/engine/monitoring/intraday_entry_flow_report.py`
+- 테스트: `src/tests/test_intraday_entry_flow_report.py`
+- 내용:
+  - `stale_eval_category_rollup`, `dominant_stale_eval_category`, `stale_refresh_recovered_count`를 추가했다.
+  - refresh가 fresh snapshot으로 회복된 row는 `stale_eval_count`에서 제외하고 `refresh회복`으로 별도 표시한다.
+  - hard stale submit block은 `pre_submit_stale_context_or_quote`, WS 결손은 `ws_snapshot_missing_or_zero`, quote age 기반 진단 stale은 `diagnostic_quote_age_stale`로 분리한다.
+- 권한 경계:
+  - `decision_authority=source_quality_and_blocker_observation_only`
+  - `runtime_effect=false`
+  - forbidden uses: runtime threshold apply, order submit, broker guard bypass
+
+### 21.3 pre-AI quote-only WS refresh
+
+- 파일: `src/engine/sniper_state_handlers.py`
+- 테스트: `src/tests/test_sniper_entry_latency.py`
+- 내용:
+  - `_pre_ai_refresh_quote_ws_snapshot`를 추가해 strength history가 아직 비어 있어도 최신 WS quote가 fresh이면 pre-AI overbought/strength/liquidity 평가 입력을 최신 snapshot으로 갱신한다.
+  - refresh 성공 시 `curr`, `v_pw`, `fluctuation`, orderbook total, `intraday_surge`, liquidity value를 함께 재계산한다.
+  - 기존 `_pre_ai_refresh_strength_momentum_ws_snapshot`는 quote refresh가 적용되지 않았을 때만 수행한다. quote refresh가 적용된 snapshot에 strength history가 있으면 그대로 사용하고, history가 없으면 기존 strength/insufficient_history blocker가 유지된다.
+- 권한 경계:
+  - stale submit block, broker/account/order/quantity/cooldown guard, hard/protect/emergency safety는 변경하지 않았다.
+  - BUY score/VPW/strength/liquidity threshold 값은 변경하지 않았다.
+  - runtime 반영에는 봇 코드 재로딩이 필요하므로 review gate 통과 후 `restart.flag` 방식으로만 적용한다.
+
+### 21.4 12:04 관측 결과
+
+- 08:00 이후 누적 flow:
+  - `symbol_count=444`
+  - `rising_symbol_count_by_max_delta=88`
+  - `rising_missed_buy_count_in_latest_diagnostic=74`
+  - `rising_missed_symbol_count_in_report=74`
+  - `real_submit_symbol_count_in_latest_diagnostic=0`
+  - `buy_signal_or_pre_submit_pass_seen_symbols=26`
+  - `stale_eval_symbol_count=202`
+  - `rising_stale_eval_symbol_count=74`
+  - `stale_refresh_recovered_symbol_count=184`
+- 11:30 이후 flow:
+  - `symbol_count=82`
+  - `rising_symbol_count_by_max_delta=25`
+  - `rising_missed_symbol_count_in_report=25`
+  - `real_submit_symbol_count_in_latest_diagnostic=0`
+  - `buy_signal_or_pre_submit_pass_seen_symbols=0`
+  - `stale_eval_symbol_count=51`
+  - `rising_stale_eval_symbol_count=19`
+  - `stale_refresh_recovered_symbol_count=29`
+- 11:30 이후 남은 stale category는 전부 `diagnostic_quote_age_stale`로 분류됐다. refresh 회복 row가 별도 분리된 뒤에도 stale-mixed blocked_overbought/blocked_strength_momentum/ai_confirmed가 남아 있으므로, 다음 루프에서는 runtime 재기동 후 `diagnostic_quote_age_stale` 감소 여부와 fresh-only strength/liquidity/AI blocker를 분리 확인한다.
+
+### 21.5 검증
+
+- `PYTHONPATH=. .venv/bin/python -m pytest src/tests/test_intraday_entry_flow_report.py src/tests/test_sniper_entry_latency.py -k 'intraday_entry_flow or pre_ai_strength_ws_snapshot_refresh or pre_ai_quote_ws_snapshot_refresh or strength_source_quality'`
+  - `14 passed, 71 deselected`
+- `PYTHONPATH=. .venv/bin/python -m py_compile src/engine/monitoring/intraday_entry_flow_report.py src/engine/sniper_state_handlers.py src/tests/test_intraday_entry_flow_report.py src/tests/test_sniper_entry_latency.py`
+  - 통과
+- `PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project --print-backlog-only --limit 500`
+  - 통과
+- `git diff --check`
+  - 통과
+
+### 21.6 런타임 반영
+
+- 실행:
+  - `./restart.sh`
+- 방식:
+  - `restart.flag` handoff
+  - KILL 명령 미사용
+  - 직접 중복 봇 기동 미사용
+- 결과:
+  - 이전 PID `48856`
+  - 신규 PID `79579`
+  - `restart.flag` 소모 확인
+  - runtime env handoff `passed=true`, `missing_family_count=0`, `pid_passed=true`
+  - `12:08:58` 스나이퍼/스캐너 루프 재진입
+  - `12:09:04 loop_elapsed_ms=196.6`
+- 12:09 리포트 재생성:
+  - 사용자 지정 누적 참조 파일 `data/report/intraday_entry_flow/intraday_entry_flow_2026-06-29_0800_to_1004.md` 갱신
+  - 11:30 이후 보조 리포트 `data/report/intraday_entry_flow/intraday_entry_flow_2026-06-29_1130_to_1209.md` 생성
+  - 재시작 직후 신규 감시 이벤트가 충분히 쌓이기 전이라 12:04와 summary 수치는 동일하다.
+- 다음 루프 확인:
+  - 새 PID 기준 `pre_ai_ws_snapshot_refresh_applied=True`가 overbought/strength/liquidity 전단 stale-mixed row를 줄이는지 확인한다.
+  - `diagnostic_quote_age_stale`가 유지되면 full-eval 지연/WS subscription freshness 쪽을 다음 major issue로 재분해한다.

@@ -840,6 +840,81 @@ def test_pre_ai_strength_ws_snapshot_refresh_keeps_stale_latest_blocked(monkeypa
     assert refreshed["curr"] == original["curr"]
 
 
+def test_pre_ai_quote_ws_snapshot_refresh_uses_fresh_quote_without_strength_history(monkeypatch):
+    class FakeWsManager:
+        def get_latest_data(self, code):
+            assert code == "123456"
+            return {
+                "curr": 10_040,
+                "v_pw": 118.0,
+                "last_ws_update_ts": time.time(),
+                "ask_tot": 500,
+                "bid_tot": 600,
+                "open": 9_900,
+                "fluctuation": 2.4,
+                "strength_momentum_history": [],
+            }
+
+    monkeypatch.setattr(state_handlers, "WS_MANAGER", FakeWsManager())
+    monkeypatch.setattr(
+        state_handlers,
+        "TRADING_RULES",
+        replace(CONFIG, SCALP_PRE_AI_MAX_WS_AGE_SEC=3.0),
+    )
+
+    refreshed, fields = state_handlers._pre_ai_refresh_quote_ws_snapshot(
+        "123456",
+        {
+            "curr": 10_000,
+            "v_pw": 99.0,
+            "last_ws_update_ts": time.time() - 8.0,
+            "strength_momentum_history": [],
+        },
+        "SCALPING",
+    )
+
+    assert fields["pre_ai_ws_snapshot_refresh_enabled"] is True
+    assert fields["pre_ai_ws_snapshot_refresh_applied"] is True
+    assert fields["pre_ai_ws_snapshot_refresh_reason"] == "latest_ws_snapshot_fresh"
+    assert fields["pre_ai_ws_snapshot_refresh_history_count"] == 0
+    assert fields["pre_ai_ws_snapshot_refresh_age_ms"] < 3000
+    assert refreshed["curr"] == 10_040
+    assert refreshed["ask_tot"] == 500
+
+
+def test_pre_ai_quote_ws_snapshot_refresh_keeps_stale_latest_blocked(monkeypatch):
+    class FakeWsManager:
+        def get_latest_data(self, code):
+            return {
+                "curr": 10_020,
+                "last_ws_update_ts": time.time() - 10.0,
+                "ask_tot": 500,
+                "bid_tot": 600,
+            }
+
+    monkeypatch.setattr(state_handlers, "WS_MANAGER", FakeWsManager())
+    monkeypatch.setattr(
+        state_handlers,
+        "TRADING_RULES",
+        replace(CONFIG, SCALP_PRE_AI_MAX_WS_AGE_SEC=3.0),
+    )
+    original = {
+        "curr": 10_000,
+        "last_ws_update_ts": time.time() - 15.0,
+    }
+
+    refreshed, fields = state_handlers._pre_ai_refresh_quote_ws_snapshot(
+        "123456",
+        original,
+        "SCALPING",
+    )
+
+    assert fields["pre_ai_ws_snapshot_refresh_enabled"] is True
+    assert fields["pre_ai_ws_snapshot_refresh_applied"] is False
+    assert fields["pre_ai_ws_snapshot_refresh_reason"] == "latest_snapshot_stale"
+    assert refreshed["curr"] == original["curr"]
+
+
 def test_strength_source_quality_uses_refreshed_snapshot_age(monkeypatch):
     monkeypatch.setattr(
         state_handlers,
