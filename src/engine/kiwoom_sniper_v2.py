@@ -256,6 +256,7 @@ _SCANNER_HOT_RUNTIME_OVERRIDE_KEYS = frozenset(
         "KORSTOCKSCAN_SCALPING_WATCHING_DYNAMIC_RELIEF_MS",
         "KORSTOCKSCAN_SCALPING_WATCHING_DYNAMIC_COOLDOWN_SEC",
         "KORSTOCKSCAN_SCALPING_WATCHING_DYNAMIC_RECOVERY_STREAK",
+        "KORSTOCKSCAN_SCALPING_WATCHING_ATTACH_REPLACE_ENABLED",
         "KORSTOCKSCAN_SCANNER_RISING_TERMINAL_HARDGATE_RECHECK_ENABLED",
         "KORSTOCKSCAN_SCANNER_RISING_TERMINAL_HARDGATE_RECHECK_DELAY_SEC",
         "KORSTOCKSCAN_SCANNER_RISING_TERMINAL_HARDGATE_RECHECK_MAX_ATTEMPTS",
@@ -2525,6 +2526,11 @@ def _scalping_dynamic_watch_cap_recovery_streak():
     return max(1, _safe_int(raw, 3))
 
 
+def _scalping_attach_replace_enabled():
+    raw = _scanner_hot_or_env_value("KORSTOCKSCAN_SCALPING_WATCHING_ATTACH_REPLACE_ENABLED")
+    return _env_bool_from_value(raw, True)
+
+
 def _scalping_dynamic_watch_cap_step(loop_elapsed_ms, pressure_ms):
     if loop_elapsed_ms >= pressure_ms * 2.0:
         return 3
@@ -2570,6 +2576,8 @@ def _scalping_attach_capacity_allows(new_target, now_ts):
     ]
     if len(watching_targets) < scanner_limit:
         return True
+    if not _scalping_attach_replace_enabled():
+        return False
 
     candidate = dict(new_target or {})
     candidate["_scanner_attach_capacity_candidate"] = True

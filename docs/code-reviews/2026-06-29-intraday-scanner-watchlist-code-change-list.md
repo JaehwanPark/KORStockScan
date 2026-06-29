@@ -1233,3 +1233,87 @@
   - `5 passed`
 - `PYTHONPATH=. .venv/bin/python -m py_compile src/engine/monitoring/intraday_entry_flow_report.py src/tests/test_intraday_entry_flow_report.py`
   - 통과
+
+## 26. 12:55 5분 루프 전환 및 attach burst pressure p6
+
+작성 시각: `2026-06-29 12:59 KST`
+
+### 26.1 목표 변경 반영
+
+- 사용자 목표가 `14:00 종료`, `5분 단위 감시`로 변경되었다.
+- 기존 13:00 대기 세션은 중단하고 즉시 12:55 기준 리포트/로그를 재생성했다.
+
+### 26.2 12:55 관측
+
+- 11:30 이후 flow:
+  - `symbol_count=130`
+  - `rising_symbol_count_by_max_delta=32`
+  - `rising_missed_symbol_count_in_report=34`
+  - `real_submit_symbol_count_in_latest_diagnostic=0`
+  - `buy_signal_or_pre_submit_pass_seen_symbols=3`
+  - `stale_eval_symbol_count=82`
+  - `rising_stale_eval_symbol_count=24`
+  - `rising_fresh_only_symbol_count=8`
+  - `stale_refresh_recovered_symbol_count=71`
+- 변화:
+  - BUY/pre-submit 통과는 1개에서 3개로 늘었다.
+  - 실제 submit은 여전히 0건이다.
+  - fresh-only 최상위 blocker는 `ai_confirmed/blocked_ai_score_below_buy_score_threshold=2`로 유지되어 live threshold 완화 근거로는 아직 얇다.
+
+### 26.3 p5 hot override
+
+- 파일:
+  - `data/threshold_cycle/runtime_env/operator_runtime_overrides.env`
+- 추가 값:
+  - `KORSTOCKSCAN_SCALPING_WATCHING_MAX_ACTIVE=16`
+  - `KORSTOCKSCAN_SCALPING_WATCHING_DYNAMIC_MIN_ACTIVE=8`
+  - `KORSTOCKSCAN_SCALPING_WATCHING_DYNAMIC_PRESSURE_MS=8000`
+  - `KORSTOCKSCAN_SCALPING_WATCHING_DYNAMIC_RELIEF_MS=4000`
+  - `KORSTOCKSCAN_SCALPING_WATCHING_DYNAMIC_COOLDOWN_SEC=10`
+  - `KORSTOCKSCAN_SCALPING_WATCHING_DYNAMIC_RECOVERY_STREAK=8`
+- 효과:
+  - hot reload로 `base_cap=16`, `min_cap=8`이 반영되었다.
+  - `12:52:39 effective_cap=10`, `12:53:03 effective_cap=9`, `12:53:50 effective_cap=8`까지 감압했다.
+- 한계:
+  - `12:55:21 loop_elapsed_ms=27331.1 target_count=24 watching=20`이 재발했다.
+  - 짧은 시간에 `SCALPING_SCANNER_PROMOTED_TARGET attached`가 burst로 발생하면서 기존 WATCHING이 FIFO로 정리되기 전에 pool이 다시 부풀었다.
+
+### 26.4 코드 수정 p6
+
+- 파일:
+  - `src/engine/kiwoom_sniper_v2.py`
+  - `src/tests/test_kiwoom_sniper_market_regime_runtime.py`
+- 추가 hot runtime key:
+  - `KORSTOCKSCAN_SCALPING_WATCHING_ATTACH_REPLACE_ENABLED`
+- 변경:
+  - `_scalping_attach_replace_enabled()`를 추가했다.
+  - `_scalping_attach_capacity_allows()`에서 현재 WATCHING 수가 effective cap 이상이고 replacement가 disabled이면, 신규 scanner attach를 즉시 skip한다.
+  - 기존 기본값은 `true`라 기존 high-priority replacement 동작은 유지된다.
+  - p6 runtime override에서만 `false`로 설정해 pressure 구간의 attach burst를 막는다.
+- p6 hot override:
+  - `KORSTOCKSCAN_SCALPING_WATCHING_ATTACH_REPLACE_ENABLED=false`
+- rollback:
+  - `KORSTOCKSCAN_SCALPING_WATCHING_ATTACH_REPLACE_ENABLED=true`
+
+### 26.5 권한/충돌 검토
+
+- 이 변경은 WATCHING attach pressure만 제한한다.
+- BUY score, AI threshold, liquidity/latency/stale-submit, broker/account/order/quantity/cooldown guard, provider route, hard/protect/emergency stop, scale-in guard는 변경하지 않는다.
+- 단점:
+  - pressure 구간에서 일부 신규 scanner 후보는 attach 자체가 skip될 수 있다.
+  - 그러나 기존 방식은 attach burst로 loop/stale가 재발하여 전체 BUY 제출 가능 경로를 막고 있었으므로, 5분 목표 루프에서는 submit-path 회복을 위해 attach burst 제한을 우선 적용한다.
+
+### 26.6 검증
+
+- `PYTHONPATH=. .venv/bin/python -m pytest src/tests/test_kiwoom_sniper_market_regime_runtime.py -k 'scalping_scanner_promoted_target_blocks_capacity_replacement_when_hot_disabled or scalping_scanner_promoted_target_allows_higher_priority_capacity_candidate or scalping_fifo_max_active_env or scalping_dynamic_watch_cap'`
+  - `6 passed, 148 deselected`
+- `PYTHONPATH=. .venv/bin/python -m py_compile src/engine/kiwoom_sniper_v2.py src/tests/test_kiwoom_sniper_market_regime_runtime.py`
+  - 통과
+- `bash -n data/threshold_cycle/runtime_env/operator_runtime_overrides.env`
+  - 통과
+
+### 26.7 런타임 후속
+
+- p6는 코드 배포가 필요하므로 review gate 통과 후 `restart.flag` 방식의 우아한 재기동을 사용한다.
+- 새 PID에서 `KORSTOCKSCAN_SCALPING_WATCHING_ATTACH_REPLACE_ENABLED=false`가 들어갔는지 확인한다.
+- 13:00 이후 5분 루프에서 attach burst skip 로그, loop time, BUY/pre-submit pass, 실제 submit 여부를 확인한다.

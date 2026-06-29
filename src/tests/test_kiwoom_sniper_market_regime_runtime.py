@@ -368,6 +368,77 @@ def test_scalping_scanner_promoted_target_allows_higher_priority_capacity_candid
     kiwoom_sniper_v2._reset_scalping_dynamic_watch_cap_state()
 
 
+def test_scalping_scanner_promoted_target_blocks_capacity_replacement_when_hot_disabled(monkeypatch, tmp_path):
+    emitted = []
+    published = []
+    override_path = tmp_path / "operator_runtime_overrides.env"
+    _reset_scanner_hot_override_cache()
+    monkeypatch.setattr(kiwoom_sniper_v2, "_SCANNER_OPERATOR_RUNTIME_OVERRIDE_PATH", override_path)
+    monkeypatch.setattr(kiwoom_sniper_v2, "_SCANNER_HOT_RUNTIME_OVERRIDE_REFRESH_SEC", 0.0)
+    kiwoom_sniper_v2._reset_scalping_dynamic_watch_cap_state()
+    monkeypatch.setenv("KORSTOCKSCAN_SCALPING_WATCHING_MAX_ACTIVE", "1")
+    override_path.write_text(
+        "export KORSTOCKSCAN_SCALPING_WATCHING_ATTACH_REPLACE_ENABLED=false\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        kiwoom_sniper_v2,
+        "ACTIVE_TARGETS",
+        [
+            {
+                "id": 1,
+                "code": "000001",
+                "name": "FLAT",
+                "strategy": "SCALPING",
+                "status": "WATCHING",
+                "position_tag": "SCANNER",
+                "entry_armed_at_epoch": 1000.0,
+                "price_delta_since_first_seen_pct": "0.0",
+            }
+        ],
+    )
+    monkeypatch.setattr(kiwoom_sniper_v2, "_resolve_stock_marcap", lambda stock, code: 123456789)
+    monkeypatch.setattr(kiwoom_sniper_v2, "_latest_stock_name_from_db", lambda code: "")
+    monkeypatch.setattr(
+        kiwoom_sniper_v2,
+        "emit_pipeline_event",
+        lambda pipeline, name, code, stage, *, record_id=None, fields=None: emitted.append(
+            {"pipeline": pipeline, "name": name, "code": code, "stage": stage, "fields": fields or {}}
+        ),
+    )
+    monkeypatch.setattr(
+        kiwoom_sniper_v2,
+        "event_bus",
+        SimpleNamespace(publish=lambda name, payload: published.append((name, payload))),
+    )
+
+    attached = kiwoom_sniper_v2.handle_scalping_scanner_promoted_target(
+        {
+            "record_id": 2,
+            "code": "000002",
+            "name": "RISING",
+            "strategy": "SCALPING",
+            "trade_type": "SCALP",
+            "position_tag": "SCANNER",
+            "buy_price": 10000,
+            "added_time": 1010.0,
+            "entry_armed_at_epoch": 1010.0,
+            "price_delta_since_first_seen_pct": "3.0",
+        }
+    )
+
+    assert attached is False
+    assert [target["code"] for target in kiwoom_sniper_v2.ACTIVE_TARGETS] == ["000001"]
+    assert published == []
+    assert emitted[-1]["fields"]["runtime_target_attach_outcome"] == "skipped"
+    assert emitted[-1]["fields"]["runtime_target_attach_reason"] == "scalping_dynamic_watch_cap_capacity"
+    assert emitted[-1]["fields"]["scanner_attach_capacity_cap"] == 1
+    assert emitted[-1]["fields"]["scanner_attach_capacity_watching_count"] == 1
+    assert emitted[-1]["fields"]["scanner_attach_capacity_candidate_overflow"] is True
+    _reset_scanner_hot_override_cache()
+    kiwoom_sniper_v2._reset_scalping_dynamic_watch_cap_state()
+
+
 def test_scalping_scanner_promoted_target_allows_recent_promotion_grace_capacity_candidate(monkeypatch, tmp_path):
     emitted = []
     published = []
