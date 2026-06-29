@@ -11422,6 +11422,22 @@ def _build_entry_price_snapshot_fields(latency_gate, *, request_price, curr_pric
         'ai_entry_price_canary_max_wait_sec': _coerce_int_value(
             latency_gate.get('ai_entry_price_canary_max_wait_sec')
         ),
+        'entry_price_zero_context_recovered': bool(latency_gate.get('entry_price_zero_context_recovered')),
+        'entry_price_zero_context_recovery_reason': str(
+            latency_gate.get('entry_price_zero_context_recovery_reason') or ''
+        ),
+        'entry_price_zero_context_basis_price': _coerce_int_value(
+            latency_gate.get('entry_price_zero_context_basis_price')
+        ),
+        'entry_price_zero_context_candidate_price': _coerce_int_value(
+            latency_gate.get('entry_price_zero_context_candidate_price')
+        ),
+        'entry_price_zero_context_planned_order_rebuilt': bool(
+            latency_gate.get('entry_price_zero_context_planned_order_rebuilt')
+        ),
+        'entry_price_zero_context_forbidden_uses': str(
+            latency_gate.get('entry_price_zero_context_forbidden_uses') or ''
+        ),
     }
 
 
@@ -12593,6 +12609,165 @@ def _fresh_entry_defensive_price_from_context(
     }
 
 
+ENTRY_PRICE_ZERO_CONTEXT_FORBIDDEN_USES = (
+    "stale_submit_bypass|broker_guard_bypass|threshold_mutation|"
+    "order_price_relaxation_beyond_defensive_recovery"
+)
+
+
+def _entry_price_zero_context_base_fields(reason: str = "not_evaluated") -> dict[str, Any]:
+    return {
+        "entry_price_zero_context_recovered": False,
+        "entry_price_zero_context_recovery_reason": reason,
+        "entry_price_zero_context_basis_price": 0,
+        "entry_price_zero_context_candidate_price": 0,
+        "entry_price_zero_context_planned_order_rebuilt": False,
+        "entry_price_zero_context_forbidden_uses": ENTRY_PRICE_ZERO_CONTEXT_FORBIDDEN_USES,
+    }
+
+
+def _is_entry_price_zero_handoff_context(
+    *,
+    defensive_price,
+    reference_price,
+    resolved_price,
+    planned_order_price,
+) -> bool:
+    return (
+        _coerce_int_value(defensive_price) <= 0
+        and _coerce_int_value(reference_price) <= 0
+        and _coerce_int_value(resolved_price) <= 0
+        and _coerce_int_value(planned_order_price) <= 0
+    )
+
+
+def _recover_entry_price_zero_context(
+    *,
+    latency_gate,
+    current_price,
+    best_bid,
+    best_ask,
+    applied_bps,
+) -> tuple[int, dict[str, Any]]:
+    fields = _entry_price_zero_context_base_fields("invalid_fresh_context")
+    context_current = _coerce_int_value(current_price)
+    context_best_bid = _coerce_int_value(best_bid)
+    context_best_ask = _coerce_int_value(best_ask)
+    if context_current <= 0:
+        fields["entry_price_zero_context_recovery_reason"] = "missing_current_price"
+        return 0, fields
+    if context_best_bid <= 0:
+        fields["entry_price_zero_context_recovery_reason"] = "missing_best_bid"
+        return 0, fields
+    if context_best_ask > 0 and context_best_bid > context_best_ask:
+        fields["entry_price_zero_context_recovery_reason"] = "crossed_best_bid_ask"
+        return 0, fields
+
+    bps = _coerce_int_value(applied_bps)
+    if bps > 0:
+        candidate_price, fresh_fields = _fresh_entry_defensive_price_from_context(
+            latency_gate=latency_gate,
+            current_price=context_current,
+            best_bid=context_best_bid,
+            applied_bps=bps,
+        )
+        candidate_price = _coerce_int_value(candidate_price)
+        fields.update(fresh_fields)
+        fields["entry_price_zero_context_basis_price"] = _coerce_int_value(
+            fresh_fields.get("entry_price_fresh_basis_price")
+        )
+        fields["entry_price_zero_context_recovery_reason"] = "fresh_context_bps_defensive_rebuild"
+    else:
+        candidate_price = clamp_price_to_tick(context_best_bid)
+        fields["entry_price_zero_context_basis_price"] = context_best_bid
+        fields["entry_price_zero_context_recovery_reason"] = "fresh_best_bid_defensive_rebuild"
+
+    candidate_price = clamp_price_to_tick(candidate_price)
+    if candidate_price <= 0:
+        fields["entry_price_zero_context_recovery_reason"] = "invalid_candidate_price"
+        return 0, fields
+
+    fields["entry_price_zero_context_recovered"] = True
+    fields["entry_price_zero_context_candidate_price"] = candidate_price
+    return candidate_price, fields
+
+
+def _apply_entry_price_zero_context_fields(latency_gate: dict | None, fields: dict | None) -> None:
+    if not isinstance(latency_gate, dict) or not isinstance(fields, dict):
+        return
+    for key, value in fields.items():
+        if str(key).startswith("entry_price_zero_context_"):
+            latency_gate[key] = value
+
+
+def _maybe_rebuild_zero_context_entry_planned_order(
+    *,
+    strategy,
+    latency_gate,
+    planned_orders,
+    requested_qty,
+    curr_price,
+    best_bid,
+    best_ask,
+    real_order_subject,
+) -> tuple[list, dict[str, Any]]:
+    fields = _entry_price_zero_context_base_fields("not_applicable")
+    gate = latency_gate if isinstance(latency_gate, dict) else {}
+    orders = list(planned_orders or [])
+    if str(strategy or "").upper() not in {"SCALPING", "SCALP"}:
+        fields["entry_price_zero_context_recovery_reason"] = "non_scalping_noop"
+        return orders, fields
+    if orders:
+        fields["entry_price_zero_context_recovery_reason"] = "planned_orders_present"
+        return orders, fields
+    if not real_order_subject:
+        fields["entry_price_zero_context_recovery_reason"] = "non_real_order_subject_noop"
+        return orders, fields
+    safe_qty = _coerce_int_value(requested_qty)
+    if safe_qty <= 0:
+        fields["entry_price_zero_context_recovery_reason"] = "missing_requested_qty"
+        return orders, fields
+
+    defensive_price = _coerce_int_value(gate.get("latency_guarded_order_price"))
+    reference_price = _coerce_int_value(gate.get("target_buy_price"))
+    resolved_price = _coerce_int_value(gate.get("order_price"))
+    if not _is_entry_price_zero_handoff_context(
+        defensive_price=defensive_price,
+        reference_price=reference_price,
+        resolved_price=resolved_price,
+        planned_order_price=0,
+    ):
+        fields["entry_price_zero_context_recovery_reason"] = "non_zero_price_context"
+        return orders, fields
+
+    candidate_price, fields = _recover_entry_price_zero_context(
+        latency_gate=latency_gate,
+        current_price=curr_price,
+        best_bid=best_bid,
+        best_ask=best_ask,
+        applied_bps=_coerce_int_value(gate.get("entry_price_gap_profile_bps")),
+    )
+    if not fields.get("entry_price_zero_context_recovered") or candidate_price <= 0:
+        return orders, fields
+
+    rebuilt_order = {
+        "tag": "normal",
+        "qty": safe_qty,
+        "price": candidate_price,
+        "tif": "DAY",
+        "order_type": "LIMIT",
+    }
+    fields["entry_price_zero_context_planned_order_rebuilt"] = True
+    if isinstance(latency_gate, dict):
+        latency_gate["orders"] = [rebuilt_order]
+        latency_gate["order_price"] = candidate_price
+        latency_gate["latency_guarded_order_price"] = candidate_price
+        latency_gate["normal_defensive_order_price"] = candidate_price
+        latency_gate["price_resolution_reason"] = "entry_price_zero_context_defensive_rebuild"
+        _apply_entry_price_zero_context_fields(latency_gate, fields)
+    return [rebuilt_order], fields
+
+
 def _build_entry_submit_revalidation_fields(ws_data, latency_gate, *, now_ts=None):
     now_ts = float(now_ts or time.time())
     decision_ts = _safe_float((latency_gate or {}).get("ai_entry_price_canary_decision_ts"), 0.0)
@@ -12990,6 +13165,8 @@ def _apply_entry_ai_price_canary(
     curr_price,
     best_bid,
     best_ask,
+    requested_qty=0,
+    real_order_subject=False,
     refresh_attempt=False,
 ):
     if strategy not in ("SCALPING", "SCALP"):
@@ -13121,6 +13298,8 @@ def _apply_entry_ai_price_canary(
                 curr_price=curr_price,
                 best_bid=best_bid,
                 best_ask=best_ask,
+                requested_qty=requested_qty,
+                real_order_subject=real_order_subject,
                 refresh_attempt=True,
             )
     action = str((result or {}).get("action") or "USE_DEFENSIVE").strip().upper()
@@ -13226,12 +13405,26 @@ def _apply_entry_ai_price_canary(
     else:
         action = "USE_DEFENSIVE"
         applied_bps = _coerce_int_value((latency_gate or {}).get("entry_price_gap_profile_bps"))
-        candidate_price, fresh_basis_fields = _fresh_entry_defensive_price_from_context(
-            latency_gate=latency_gate,
-            current_price=current_price,
-            best_bid=best_bid,
-            applied_bps=applied_bps,
-        )
+        if _is_entry_price_zero_handoff_context(
+            defensive_price=defensive_price,
+            reference_price=reference_price,
+            resolved_price=resolved_price,
+            planned_order_price=planned_order_price,
+        ):
+            candidate_price, fresh_basis_fields = _recover_entry_price_zero_context(
+                latency_gate=latency_gate,
+                current_price=current_price,
+                best_bid=best_bid,
+                best_ask=best_ask,
+                applied_bps=applied_bps,
+            )
+        else:
+            candidate_price, fresh_basis_fields = _fresh_entry_defensive_price_from_context(
+                latency_gate=latency_gate,
+                current_price=current_price,
+                best_bid=best_bid,
+                applied_bps=applied_bps,
+            )
         if candidate_price <= 0:
             candidate_price = defensive_price or resolved_price
             fresh_basis_fields = {
@@ -13242,7 +13435,10 @@ def _apply_entry_ai_price_canary(
     if candidate_price <= 0:
         _log_entry_pipeline(
             stock, code, "entry_ai_price_canary_fallback", reason="invalid_price", action=action,
-            **invalid_price_context_fields, **openai_transport_fields, **micro_log_fields
+            **invalid_price_context_fields,
+            **(fresh_basis_fields if action == "USE_DEFENSIVE" else {}),
+            **openai_transport_fields,
+            **micro_log_fields
         )
         return planned_orders, False
     unclamped_candidate_price = candidate_price
@@ -13252,6 +13448,7 @@ def _apply_entry_ai_price_canary(
             stock, code, "entry_ai_price_canary_fallback", reason="invalid_price", action=action,
             unclamped_candidate_price=unclamped_candidate_price,
             **invalid_price_context_fields,
+            **(fresh_basis_fields if action == "USE_DEFENSIVE" else {}),
             **openai_transport_fields,
             **micro_log_fields,
         )
@@ -13260,14 +13457,18 @@ def _apply_entry_ai_price_canary(
         _log_entry_pipeline(
             stock, code, "entry_ai_price_canary_fallback", reason="above_best_ask",
             action=action, candidate_price=candidate_price, best_ask=best_ask,
-            **openai_transport_fields, **micro_log_fields,
+            **(fresh_basis_fields if action == "USE_DEFENSIVE" else {}),
+            **openai_transport_fields,
+            **micro_log_fields,
         )
         return planned_orders, False
     if _is_pre_submit_price_guard_block(strategy, candidate_price, best_bid):
         _log_entry_pipeline(
             stock, code, "entry_ai_price_canary_fallback", reason="pre_submit_price_guard",
             action=action, candidate_price=candidate_price, best_bid=best_bid,
-            **openai_transport_fields, **micro_log_fields,
+            **(fresh_basis_fields if action == "USE_DEFENSIVE" else {}),
+            **openai_transport_fields,
+            **micro_log_fields,
         )
         return planned_orders, False
 
@@ -13298,7 +13499,45 @@ def _apply_entry_ai_price_canary(
             )
             return planned_orders, False
 
-    if action == "USE_DEFENSIVE" and fresh_basis_fields.get("entry_price_fresh_basis_applied"):
+    if (
+        action == "USE_DEFENSIVE"
+        and not planned_orders
+        and fresh_basis_fields.get("entry_price_zero_context_recovered")
+    ):
+        planned_orders, rebuild_fields = _maybe_rebuild_zero_context_entry_planned_order(
+            strategy=strategy,
+            latency_gate=latency_gate,
+            planned_orders=planned_orders,
+            requested_qty=requested_qty,
+            curr_price=current_price,
+            best_bid=best_bid,
+            best_ask=best_ask,
+            real_order_subject=real_order_subject,
+        )
+        fresh_basis_fields.update(rebuild_fields)
+        if not fresh_basis_fields.get("entry_price_zero_context_planned_order_rebuilt"):
+            _log_entry_pipeline(
+                stock,
+                code,
+                "entry_price_order_contract_gap",
+                reason=fresh_basis_fields.get("entry_price_zero_context_recovery_reason"),
+                action=action,
+                requested_qty=_coerce_int_value(requested_qty),
+                actual_order_submitted=False,
+                broker_order_forbidden=True,
+                runtime_effect=False,
+                decision_authority="fail_closed_no_order_price_contract",
+                source_quality_gate="entry_price_order_contract_gap",
+                metric_role="source_quality_gate",
+                **fresh_basis_fields,
+                **micro_log_fields,
+            )
+            return planned_orders, False
+
+    if action == "USE_DEFENSIVE" and (
+        fresh_basis_fields.get("entry_price_fresh_basis_applied")
+        or fresh_basis_fields.get("entry_price_zero_context_recovered")
+    ):
         defensive_price = _coerce_int_value(
             fresh_basis_fields.get("entry_price_fresh_basis_recomputed_price")
         ) or candidate_price
@@ -13318,6 +13557,7 @@ def _apply_entry_ai_price_canary(
             _coerce_int_value(latency_gate.get("latest_price")),
             _coerce_int_value(fresh_basis_fields.get("entry_price_fresh_basis_price")),
         )
+        _apply_entry_price_zero_context_fields(latency_gate, fresh_basis_fields)
 
     adjusted_orders = []
     for order in planned_orders or []:
@@ -21439,6 +21679,12 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             pop_fields=['wait6579_probe_canary_armed', 'wait6579_probe_canary_source', 'wait6579_probe_canary_score'],
         )
 
+    real_entry_panic_gap_subject = (
+        strategy == "SCALPING"
+        and not _is_any_simulated_position(stock, strategy)
+        and not _is_swing_live_order_dry_run(strategy)
+    )
+
     planned_orders, ai_price_canary_touched = _apply_entry_ai_price_canary(
         stock=stock,
         code=code,
@@ -21450,6 +21696,8 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         curr_price=curr_price,
         best_bid=best_bid_at_submit,
         best_ask=best_ask_at_submit,
+        requested_qty=requested_qty,
+        real_order_subject=real_entry_panic_gap_subject,
     )
     if ai_price_canary_touched:
         latency_gate["orders"] = planned_orders
@@ -21457,11 +21705,23 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             latency_gate, request_price=latency_gate.get('order_price', 0), curr_price=curr_price,
             best_bid=best_bid_at_submit, best_ask=best_ask_at_submit,
         )
-    real_entry_panic_gap_subject = (
-        strategy == "SCALPING"
-        and not _is_any_simulated_position(stock, strategy)
-        and not _is_swing_live_order_dry_run(strategy)
-    )
+    elif real_entry_panic_gap_subject and not planned_orders and requested_qty > 0:
+        clear_signal_reference(stock)
+        _log_entry_pipeline(
+            stock,
+            code,
+            "entry_price_order_contract_gap",
+            reason="entry_ai_price_canary_no_order_plan",
+            requested_qty=requested_qty,
+            actual_order_submitted=False,
+            broker_order_forbidden=True,
+            runtime_effect=False,
+            decision_authority="fail_closed_no_order_price_contract",
+            source_quality_gate="entry_price_order_contract_gap",
+            metric_role="source_quality_gate",
+            **_entry_price_zero_context_base_fields("entry_ai_price_canary_no_order_plan"),
+        )
+        return False
     panic_context = None
     euphoria_context = None
     if real_entry_panic_gap_subject and _rule_bool("REAL_ENTRY_PANIC_GAP_WEIGHT_ENABLED", True):

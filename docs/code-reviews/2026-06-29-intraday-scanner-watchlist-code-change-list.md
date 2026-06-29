@@ -1718,3 +1718,77 @@
   - 기존 refresh reset 테스트에 해당 내부 키 제거 검증을 추가했다.
 - 재리뷰 결과 런타임/order/provider/threshold 권한 누수는 없다.
 - runtime 반영을 위해 검증 후 `restart.flag` 방식의 우아한 재기동 대상이다.
+
+## 34. Entry Price 0원 핸드오프 복원 p14
+
+작성 시각: `2026-06-29 15:00 이후 KST`
+
+### 34.1 관측
+
+- `entry_ai_price_canary` 진입 시 `current_price`, `best_bid`, `best_ask`는 유효하지만 `defensive_order_price`, `reference_price`, `resolved_order_price`, `planned_order_price`가 모두 0인 실주문 후보가 확인됐다.
+- 이 케이스는 주문가 완화 대상이 아니라, latency/budget 경로 이후 real submit 후보에서 누락된 defensive order price/order plan handoff를 복원해야 하는 contract gap으로 분류한다.
+
+### 34.2 코드 수정 범위
+
+- 파일:
+  - `src/engine/sniper_state_handlers.py`
+  - `src/tests/test_sniper_scale_in.py`
+- 변경:
+  - `USE_DEFENSIVE` action 한정 zero-price recovery helper를 추가했다.
+  - `best_bid > 0`, `current_price > 0`, `best_ask == 0 or best_bid <= best_ask` 조건에서만 후보 가격을 만든다.
+  - `entry_price_gap_profile_bps > 0`이면 기존 fresh defensive price 재계산을 사용하고, 없으면 `best_bid` tick clamp 가격을 사용한다.
+  - real submit path는 canary에 `requested_qty`와 real subject 여부만 넘기고, canary 내부에서 AI action이 `USE_DEFENSIVE`로 확정된 뒤 `planned_orders`가 비어 있고 `requested_qty > 0`이며 real scalping subject인 경우에만 DAY LIMIT 1개를 복원한다.
+  - 복원 후보 가격이 `above_best_ask` 또는 pre-submit price guard 등에 걸리면 주문을 만들지 않고 기존 `entry_ai_price_canary_fallback` 또는 `entry_price_order_contract_gap`으로 fail-closed한다.
+
+### 34.3 관측 provenance
+
+- 추가 필드:
+  - `entry_price_zero_context_recovered`
+  - `entry_price_zero_context_recovery_reason`
+  - `entry_price_zero_context_basis_price`
+  - `entry_price_zero_context_candidate_price`
+  - `entry_price_zero_context_planned_order_rebuilt`
+  - `entry_price_zero_context_forbidden_uses`
+- forbidden uses:
+  - stale submit bypass
+  - broker guard bypass
+  - threshold mutation
+  - order-price relaxation beyond defensive recovery
+
+### 34.4 권한/금지
+
+- threshold, AI score, provider route, quantity cap, broker/account/order/cooldown guard, stale quote guard, hard/protect/emergency stop은 변경하지 않는다.
+- 복원 가격은 aggressive ask chasing이 아니라 defensive/bid-side recovery로 제한한다.
+- 복원된 주문도 기존 `above_best_ask`, pre-submit price guard, submit revalidation, broker/account/order/quantity/cooldown guard를 그대로 통과해야 한다.
+
+### 34.5 검증 계획
+
+- `PYTHONPATH=. .venv/bin/python -m pytest src/tests/test_sniper_scale_in.py -k 'entry_ai_price_canary or pre_submit_price_guard'`
+- `PYTHONPATH=. .venv/bin/python -m pytest src/tests/test_sniper_entry_latency.py -k 'price_guard or defensive_order_price or quote_fresh_composite'`
+- `PYTHONPATH=. .venv/bin/python -m py_compile src/engine/sniper_state_handlers.py src/tests/test_sniper_scale_in.py src/tests/test_sniper_entry_latency.py`
+- `git diff --check`
+- `PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project --print-backlog-only --limit 500`
+
+### 34.6 검증 결과
+
+- `PYTHONPATH=. .venv/bin/python -m pytest src/tests/test_sniper_scale_in.py -k 'entry_ai_price_canary or pre_submit_price_guard'`
+  - `10 passed, 292 deselected`
+- `PYTHONPATH=. .venv/bin/python -m pytest src/tests/test_sniper_entry_latency.py -k 'price_guard or defensive_order_price or quote_fresh_composite'`
+  - `5 passed, 77 deselected`
+- `PYTHONPATH=. .venv/bin/python -m py_compile src/engine/sniper_state_handlers.py src/tests/test_sniper_scale_in.py src/tests/test_sniper_entry_latency.py`
+  - 통과
+- `git diff --check`
+  - 통과
+- `PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project --print-backlog-only --limit 500`
+  - parser 통과, backlog count `22`
+
+### 34.7 자체 리뷰 판정
+
+- review-gate 1차에서 `planned_orders` 복원이 AI action 확정 전이면 `USE_DEFENSIVE` 한정 원칙을 엄밀히 만족하지 못하는 결함을 발견했다.
+- 보완:
+  - real submit path는 canary에 `requested_qty`와 real subject 여부만 전달한다.
+  - canary 내부에서 `USE_DEFENSIVE` action, zero-price handoff, fresh bid/current 조건, price guard 통과가 모두 확인된 뒤에만 empty planned order를 복원한다.
+- 재리뷰 결과:
+  - threshold/provider/quantity cap 변경 없음.
+  - stale quote, broker/account/order/cooldown, pre-submit price guard, hard/protect/emergency stop 우회 없음.
+  - 복원 실패 또는 canary 거절 시 fail-closed한다.
