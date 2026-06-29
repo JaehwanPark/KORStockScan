@@ -92,6 +92,73 @@ def test_order_reference_snapshot_2nd_pass_uses_finalized_params(monkeypatch):
     assert rows[0]["orig_ord_no"] == "0000000"
 
 
+def test_unfilled_order_snapshot_ka10075_preserves_exchange_fields(monkeypatch):
+    calls = []
+
+    def fake_fetch(*, url, token, api_id, payload, use_continuous):
+        calls.append(
+            {
+                "url": url,
+                "token": token,
+                "api_id": api_id,
+                "payload": dict(payload),
+                "use_continuous": use_continuous,
+            }
+        )
+        return [
+            {
+                "oso": [
+                    {
+                        "stk_cd": "A440110",
+                        "stk_nm": "TEST",
+                        "io_tp_nm": "+매수",
+                        "ord_qty": "8",
+                        "oso_qty": "3",
+                        "ord_pric": "166300",
+                        "ord_no": "0059624",
+                        "orig_ord_no": "0000000",
+                        "stex_tp": "1",
+                        "stex_tp_txt": "KRX",
+                        "sor_yn": "N",
+                    }
+                ],
+                "return_code": 0,
+            }
+        ]
+
+    monkeypatch.setattr(kiwoom_utils, "fetch_kiwoom_api_continuous", fake_fetch)
+    monkeypatch.setattr(kiwoom_utils, "get_api_url", lambda path: f"https://example.test{path}")
+
+    rows = kiwoom_utils.get_unfilled_order_snapshot_ka10075(
+        "token",
+        stk_cd="440110",
+        stex_tp="0",
+    )
+
+    assert calls == [
+        {
+            "url": "https://example.test/api/dostk/acnt",
+            "token": "token",
+            "api_id": "ka10075",
+            "payload": {
+                "all_stk_tp": "1",
+                "trde_tp": "0",
+                "stk_cd": "440110",
+                "stex_tp": "0",
+            },
+            "use_continuous": True,
+        }
+    ]
+    assert rows[0]["code"] == "440110"
+    assert rows[0]["ord_no"] == "0059624"
+    assert rows[0]["qty"] == 8
+    assert rows[0]["remaining_qty"] == 3
+    assert rows[0]["unit_price"] == 166300
+    assert rows[0]["stex_tp"] == "1"
+    assert rows[0]["stex_tp_txt"] == "KRX"
+    assert rows[0]["sor_yn"] == "N"
+
+
 def test_find_order_reference_match_by_code_side_qty_price():
     rows = [
         {

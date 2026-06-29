@@ -1713,6 +1713,10 @@ def test_real_source_guard_blocks_deteriorating_value_top_only_without_strength(
     assert event["fields"]["actual_order_submitted"] is False
     assert event["fields"]["broker_order_forbidden"] is True
     assert event["fields"]["decision_authority"] == "real_scalping_scanner_source_guard_only"
+    assert event["fields"]["zero_context_domain"] == "scanner_source_guard"
+    assert event["fields"]["zero_context_blocker"] == "non_positive_liquidity_only_source"
+    assert event["fields"]["zero_context_cntr_str_state"] == "missing_defaulted_zero"
+    assert "broker_guard_bypass" in event["fields"]["zero_context_forbidden_uses"]
 
 
 def test_real_source_guard_blocks_value_top_first_seen_as_probe(monkeypatch):
@@ -2550,6 +2554,8 @@ def test_promote_candidates_records_invalid_stock_filter_as_block(monkeypatch):
     assert emitted[0]["fields"]["scanner_filter_reason"] == "invalid_stock_filter"
     assert emitted[0]["fields"]["actual_order_submitted"] is False
     assert emitted[0]["fields"]["broker_order_forbidden"] is True
+    assert emitted[0]["fields"]["zero_context_domain"] == "scanner_source_guard"
+    assert emitted[0]["fields"]["zero_context_blocker"] == "invalid_stock_filter"
 
 
 def test_run_scalper_iteration_keeps_ws_payload_and_max_new_codes(monkeypatch):

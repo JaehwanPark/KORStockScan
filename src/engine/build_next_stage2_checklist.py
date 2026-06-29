@@ -666,7 +666,7 @@ def _render_auto_block(
     sections = (
         ("PREOPEN", "장전 체크리스트 (08:45~09:00)"),
         ("INTRADAY", "장중 체크리스트 (09:05~15:20)"),
-        ("POSTCLOSE", "장후 체크리스트 (21:40~23:05)"),
+        ("POSTCLOSE", "장후 체크리스트 (20:40~23:05)"),
     )
     for slot, heading in sections:
         lines.append(f"## {heading}")

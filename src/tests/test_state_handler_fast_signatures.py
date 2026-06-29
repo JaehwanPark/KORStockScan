@@ -2390,6 +2390,12 @@ def test_emit_scanner_watching_runtime_skip_fills_contract_fields(monkeypatch):
     assert fields["rising_entry_relief_eligible"] is True
     assert fields["scanner_positive_delta_pct"] == 1.2
     assert fields["scanner_full_eval_budget_source"] == "not_applicable_full_eval_budget_source"
+    assert fields["zero_context_domain"] == "ws_quote"
+    assert fields["zero_context_blocker"] == "ws_snapshot_missing_or_zero"
+    assert fields["zero_context_ws_curr_state"] == "missing_defaulted_zero"
+    assert fields["zero_context_ws_received_type_count_state"] == "missing_defaulted_zero"
+    assert fields["zero_context_defaulted_zero_field_count"] >= 2
+    assert "threshold_mutation" in fields["zero_context_forbidden_uses"]
 
 
 def test_emit_scanner_watching_runtime_skip_reports_ws_type_freshness(monkeypatch):
@@ -2431,6 +2437,26 @@ def test_emit_scanner_watching_runtime_skip_reports_ws_type_freshness(monkeypatc
     assert fields["ws_last_0d_age_ms"] == 10000.0
     assert fields["ws_last_strength_history_age_ms"] == 500.0
     assert fields["ws_strength_history_count"] == 1
+
+
+def test_zero_context_strength_momentum_fields_split_insufficient_history():
+    fields = handlers._strength_momentum_zero_context_fields(
+        {
+            "reason": "insufficient_history",
+            "window_buy_value": 0,
+            "window_net_buy_qty": 0,
+            "window_buy_ratio": None,
+            "tick_window_sample_count": None,
+        },
+        "insufficient_history",
+    )
+
+    assert fields["zero_context_domain"] == "strength_momentum"
+    assert fields["zero_context_blocker"] == "insufficient_history"
+    assert fields["zero_context_window_buy_value_state"] == "actual_zero"
+    assert fields["zero_context_window_buy_ratio_state"] == "not_applicable_zero"
+    assert fields["zero_context_sample_count_state"] == "not_applicable_zero"
+    assert "stale_quote_bypass" in fields["zero_context_forbidden_uses"]
 
 
 def test_emit_scanner_watching_runtime_skip_carries_fast_precheck_observed_fields(monkeypatch):

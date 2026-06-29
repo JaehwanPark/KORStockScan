@@ -55,6 +55,14 @@ from src.engine.scalping.watching_score_smoothing import (
     evaluate_watching_score,
     normalize_mode as normalize_watching_score_smoothing_mode,
 )
+from src.engine.scalping.rising_missed_one_share_entry import (
+    BLOCK_ALREADY_HOLDING as RISING_MISSED_BLOCK_ALREADY_HOLDING,
+    BLOCK_OPEN_PENDING as RISING_MISSED_BLOCK_OPEN_PENDING,
+    FORCED_ENTRY_REASON as RISING_MISSED_FORCED_ENTRY_REASON,
+    collapse_to_one_share_order,
+    evaluate_rising_missed_one_share_entry,
+    is_forced_rising_missed_one_share_entry,
+)
 from src.engine.sniper_scale_in_utils import record_add_history_event
 from src.engine.trade_pause_control import is_buy_side_paused, get_pause_state_label
 from src.engine.sniper_entry_latency import (
@@ -143,6 +151,7 @@ EVENT_BUS = None
 ACTIVE_TARGETS = None
 WS_MANAGER = None
 _GREENFIELD_TELEGRAM_KEYS: set[str] = set()
+_STOP_LINE_TOUCH_MANDATORY_AVG_DOWN_REASON = "stop_line_touch_mandatory_avg_down"
 
 SCALPING_ENTRY_BLOCKER_ROLE_REGISTRY = {
     "blocked_gap_from_scan": {
@@ -1588,6 +1597,164 @@ def _safe_int(value, default=0):
         return default
 
 
+ZERO_CONTEXT_FORBIDDEN_USES = (
+    "threshold_mutation,provider_route_change,order_price_relaxation,"
+    "quantity_or_cap_change,broker_guard_bypass,stale_quote_bypass,"
+    "hard_safety_guard_bypass,real_execution_quality_approval"
+)
+
+
+def _zero_context_value_missing(value) -> bool:
+    if value is None:
+        return True
+    text = str(value).strip().lower()
+    return (
+        text == ""
+        or text in {"-", "none", "null", "nan", "nat", "not_evaluated"}
+        or text.startswith("not_applicable")
+    )
+
+
+def _zero_context_value_state(
+    value,
+    *,
+    numeric_value=None,
+    stale: bool = False,
+    not_applicable: bool = False,
+    guard_intended: bool = False,
+) -> str:
+    numeric = _safe_float(value if numeric_value is None else numeric_value, 0.0)
+    if abs(numeric) > 1e-12:
+        return "non_zero"
+    if not_applicable:
+        return "not_applicable_zero"
+    if stale:
+        return "stale_defaulted_zero"
+    if _zero_context_value_missing(value):
+        return "missing_defaulted_zero"
+    if guard_intended:
+        return "guard_intended_zero"
+    return "actual_zero"
+
+
+def _zero_context_observation_fields(*, domain: str, blocker: str, states: dict) -> dict:
+    zero_states = {str(key): str(value) for key, value in (states or {}).items()}
+    blocking_states = [
+        value
+        for value in zero_states.values()
+        if value in {"missing_defaulted_zero", "stale_defaulted_zero"}
+    ]
+    return {
+        "zero_context_observed": bool(zero_states),
+        "zero_context_domain": str(domain or "unknown"),
+        "zero_context_blocker": str(blocker or "unknown"),
+        "zero_context_primary_state": blocking_states[0] if blocking_states else (
+            next(iter(zero_states.values())) if zero_states else "not_applicable_zero"
+        ),
+        "zero_context_defaulted_zero_field_count": len(blocking_states),
+        "zero_context_forbidden_uses": ZERO_CONTEXT_FORBIDDEN_USES,
+        **{f"zero_context_{key}_state": value for key, value in zero_states.items()},
+    }
+
+
+def _scanner_watch_zero_context_fields(skip_reason: str, ws_data: dict | None, now_ts: float | None = None) -> dict:
+    fields = _ws_realtime_type_freshness_fields(ws_data or {}, now_ts=now_ts)
+    reason_text = str(skip_reason or "")
+    stale = "stale" in reason_text
+    missing_or_zero = "missing_or_zero" in reason_text
+    received_type_count = fields.get("ws_received_type_count")
+    strength_history_count = fields.get("ws_strength_history_count")
+    received_type_value = (
+        None if missing_or_zero and _safe_int(received_type_count, 0) <= 0 else received_type_count
+    )
+    strength_history_value = (
+        None if missing_or_zero and _safe_int(strength_history_count, 0) <= 0 else strength_history_count
+    )
+    return _zero_context_observation_fields(
+        domain="ws_quote",
+        blocker=reason_text,
+        states={
+            "ws_curr": _zero_context_value_state(
+                (ws_data or {}).get("curr"),
+                stale=stale,
+                not_applicable=not missing_or_zero and _zero_context_value_missing((ws_data or {}).get("curr")),
+            ),
+            "ws_received_type_count": _zero_context_value_state(
+                received_type_value,
+                stale=stale,
+                not_applicable=not missing_or_zero and _zero_context_value_missing(received_type_value),
+            ),
+            "ws_strength_history_count": _zero_context_value_state(
+                strength_history_value,
+                stale=stale,
+                not_applicable=not missing_or_zero and _zero_context_value_missing(strength_history_value),
+            ),
+        },
+    )
+
+
+def _strength_momentum_zero_context_fields(momentum_gate: dict | None, source_quality_block_reason: str | None) -> dict:
+    gate = momentum_gate or {}
+    reason_text = str(source_quality_block_reason or gate.get("reason") or "")
+    stale = reason_text in {"stale_ws_snapshot", "trade_tick_quiet"} or "stale" in reason_text
+    missing_context = reason_text == "insufficient_history"
+    return _zero_context_observation_fields(
+        domain="strength_momentum",
+        blocker=reason_text or "risk_context_only",
+        states={
+            "window_buy_value": _zero_context_value_state(
+                gate.get("window_buy_value"),
+                stale=stale,
+                not_applicable=False,
+            ),
+            "window_net_buy_qty": _zero_context_value_state(
+                gate.get("window_net_buy_qty"),
+                stale=stale,
+                not_applicable=False,
+            ),
+            "window_buy_ratio": _zero_context_value_state(
+                gate.get("window_buy_ratio"),
+                stale=stale,
+                not_applicable=missing_context and _zero_context_value_missing(gate.get("window_buy_ratio")),
+            ),
+            "sample_count": _zero_context_value_state(
+                gate.get("tick_window_sample_count", gate.get("sample_count")),
+                stale=stale,
+                not_applicable=missing_context and _zero_context_value_missing(gate.get("tick_window_sample_count", gate.get("sample_count"))),
+            ),
+        },
+    )
+
+
+def _quantity_zero_context_fields(
+    *,
+    domain: str,
+    blocker: str,
+    qty=None,
+    template_qty=None,
+    would_qty=None,
+    effective_qty=None,
+    cap_qty=None,
+    guard_intended: bool = False,
+) -> dict:
+    cap_not_applicable = str(cap_qty or "").strip().lower().startswith("not_applicable")
+    return _zero_context_observation_fields(
+        domain=domain,
+        blocker=blocker,
+        states={
+            "qty": _zero_context_value_state(qty, guard_intended=guard_intended),
+            "template_qty": _zero_context_value_state(template_qty, guard_intended=guard_intended),
+            "would_qty": _zero_context_value_state(would_qty, guard_intended=guard_intended),
+            "effective_qty": _zero_context_value_state(effective_qty, guard_intended=guard_intended),
+            "cap_qty": _zero_context_value_state(
+                cap_qty,
+                not_applicable=cap_not_applicable,
+                guard_intended=guard_intended,
+            ),
+        },
+    )
+
+
 def _is_swing_strategy(strategy: str | None) -> bool:
     return str(strategy or "").strip().upper() in {"KOSPI_ML", "KOSDAQ_ML", "MAIN"}
 
@@ -1860,6 +2027,247 @@ def _evaluate_scalp_mfe_protect_exit(
         "min_hold_sec": min_hold_sec,
         "max_ai_score": max_ai_score,
     }
+
+
+def _evaluate_stop_line_touch_mandatory_avg_down(
+    stock: dict | None,
+    *,
+    strategy: str | None,
+    sell_reason_type: str | None,
+    exit_rule: str | None,
+    profit_rate: float,
+    peak_profit: float,
+    current_ai_score: float,
+    held_sec: int,
+    dynamic_stop_pct: float,
+) -> dict:
+    if not _rule_bool("SCALPING_AVG_DOWN_MARKET_ON_STOP_TOUCH_ENABLED", False):
+        return {"should_retry": False, "reason": "disabled"}
+    if not isinstance(stock, dict) or not _is_scalp_strategy(strategy):
+        return {"should_retry": False, "reason": "not_real_scalping"}
+    if _is_scalp_simulated_position(stock, strategy) or _has_sim_probe_provenance(stock):
+        return {"should_retry": False, "reason": "simulated_position"}
+
+    rule = str(exit_rule or "").strip()
+    reason_type = str(sell_reason_type or "").upper()
+    if rule != "scalp_soft_stop_pct" or reason_type != "LOSS":
+        return {
+            "should_retry": False,
+            "reason": "not_soft_stop_loss_touch",
+            "exit_rule": rule or "-",
+            "sell_reason_type": reason_type or "-",
+        }
+
+    stop_pct = _safe_float(dynamic_stop_pct, 0.0)
+    current_profit = _safe_float(profit_rate, 0.0)
+    if current_profit > stop_pct:
+        return {
+            "should_retry": False,
+            "reason": "stop_line_not_touched",
+            "profit_rate": current_profit,
+            "stop_line_pct": stop_pct,
+        }
+
+    max_per_position = max(0, _rule_int("SCALP_LATE_LOSS_AVG_DOWN_MAX_PER_POSITION", 1))
+    used_count = max(
+        _safe_int(stock.get("stop_line_touch_avg_down_count"), 0),
+        _safe_int(stock.get("avg_down_count"), 0),
+        _safe_int(stock.get("late_loss_avg_down_retry_count"), 0),
+    )
+    if bool(stock.get("stop_line_touch_avg_down_used")) and used_count <= 0:
+        used_count = 1
+    if bool(stock.get("late_loss_avg_down_retry_used")) and used_count <= 0:
+        used_count = 1
+    if bool(stock.get("reversal_add_used")) and used_count <= 0:
+        used_count = 1
+    if str(stock.get("last_add_type") or "").strip().upper() == "AVG_DOWN" and used_count <= 0:
+        used_count = 1
+    if max_per_position <= 0:
+        return {"should_retry": False, "reason": "max_per_position_zero"}
+    if used_count >= max_per_position:
+        return {
+            "should_retry": False,
+            "reason": "already_used",
+            "used_count": used_count,
+            "max_per_position": max_per_position,
+        }
+
+    return {
+        "should_retry": True,
+        "reason": _STOP_LINE_TOUCH_MANDATORY_AVG_DOWN_REASON,
+        "add_type": "AVG_DOWN",
+        "profit_rate": current_profit,
+        "peak_profit": peak_profit,
+        "stop_line_pct": stop_pct,
+        "current_ai_score": current_ai_score,
+        "held_sec": held_sec,
+        "used_count": used_count,
+        "max_per_position": max_per_position,
+        "action": {
+            "should_add": True,
+            "add_type": "AVG_DOWN",
+            "reason": _STOP_LINE_TOUCH_MANDATORY_AVG_DOWN_REASON,
+            "source": "stop_line_touch_mandatory_avg_down",
+            "profit_rate": current_profit,
+            "peak_profit": peak_profit,
+            "current_ai_score": current_ai_score,
+            "stop_line_touched": True,
+            "stop_line_pct": stop_pct,
+            "stop_line_source": "scalp_soft_stop_pct",
+        },
+    }
+
+
+def _attempt_stop_line_touch_mandatory_avg_down(
+    *,
+    stock: dict | None,
+    code: str,
+    ws_data: dict | None,
+    strategy: str | None,
+    market_regime,
+    admin_id,
+    sell_reason_type: str | None,
+    exit_rule: str | None,
+    profit_rate: float,
+    peak_profit: float,
+    current_ai_score: float,
+    held_sec: int,
+    dynamic_stop_pct: float,
+    now_ts: float,
+    context_fields: dict | None = None,
+) -> dict:
+    """Submit the operator-required one-shot AVG_DOWN at real soft stop touch."""
+    stop_touch_avg_down = _evaluate_stop_line_touch_mandatory_avg_down(
+        stock,
+        strategy=strategy,
+        sell_reason_type=sell_reason_type,
+        exit_rule=exit_rule,
+        profit_rate=profit_rate,
+        peak_profit=peak_profit,
+        current_ai_score=current_ai_score,
+        held_sec=held_sec,
+        dynamic_stop_pct=dynamic_stop_pct,
+    )
+    if not stop_touch_avg_down.get("should_retry"):
+        return {
+            "attempted": False,
+            "submitted": False,
+            "reason": stop_touch_avg_down.get("reason", "not_eligible"),
+        }
+
+    retry_gate = can_consider_scale_in(
+        stock=stock,
+        code=code,
+        ws_data=ws_data or {},
+        strategy=strategy,
+        market_regime=market_regime,
+        skip_add_judgment_lock=True,
+    )
+    retry_common_fields = {
+        "threshold_family": "stop_line_touch_mandatory_avg_down",
+        "decision_source": "STOP_LINE_TOUCH_MANDATORY_AVG_DOWN",
+        "decision_authority": "real_scalping_soft_stop_touch_intercept",
+        "metric_role": "bounded_tunable",
+        "window_policy": "same_day_intraday_runtime",
+        "sample_floor": "not_applicable_operator_override",
+        "primary_decision_metric": "soft_stop_touch",
+        "source_quality_gate": "real_holding_soft_stop_touch_and_scale_in_guards_present",
+        "runtime_effect": True,
+        "allowed_runtime_apply": True,
+        "forbidden_uses": (
+            "entry_threshold_relaxation|provider_route_change|broker_guard_bypass|"
+            "quantity_cap_release|hard_safety_bypass|second_avg_down_retry|hard_stop_bypass"
+        ),
+        "sell_reason_type": sell_reason_type,
+        "exit_rule": exit_rule or "-",
+        "profit_rate": f"{profit_rate:+.2f}",
+        "peak_profit": f"{peak_profit:+.2f}",
+        "stop_line_pct": f"{_safe_float(dynamic_stop_pct, 0.0):+.2f}",
+        "current_ai_score": f"{current_ai_score:.0f}",
+        "held_sec": held_sec,
+        "gate_allowed": bool(retry_gate.get("allowed")),
+        "gate_reason": retry_gate.get("reason", "-"),
+        "add_type": "AVG_DOWN",
+        "add_reason": _STOP_LINE_TOUCH_MANDATORY_AVG_DOWN_REASON,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": False,
+        **(context_fields or {}),
+    }
+    if retry_gate.get("allowed"):
+        _log_holding_pipeline(
+            stock,
+            code,
+            "stop_line_touch_mandatory_avg_down_candidate",
+            **retry_common_fields,
+        )
+        retry_count = _safe_int(stop_touch_avg_down.get("used_count"), 0) + 1
+        _mutate_stock_state(
+            stock,
+            set_fields={
+                "stop_line_touch_avg_down_used": True,
+                "stop_line_touch_avg_down_count": retry_count,
+                "stop_line_touch_avg_down_at": now_ts,
+                "stop_line_touch_avg_down_exit_rule": exit_rule or "-",
+                "stop_line_touch_avg_down_original_profit_rate": profit_rate,
+                "stop_line_touch_avg_down_peak_profit": peak_profit,
+            },
+        )
+        add_result = _process_scale_in_action(
+            stock=stock,
+            code=code,
+            ws_data=ws_data or {},
+            action=stop_touch_avg_down.get("action") or {},
+            admin_id=admin_id,
+        )
+        if add_result:
+            _log_holding_pipeline(
+                stock,
+                code,
+                "stop_line_touch_mandatory_avg_down_submitted",
+                **{
+                    **retry_common_fields,
+                    "actual_order_submitted": True,
+                    "ord_no": (
+                        str(add_result.get("ord_no") or add_result.get("odno") or "-")
+                        if isinstance(add_result, dict)
+                        else "-"
+                    ),
+                    "retry_count": retry_count,
+                },
+            )
+            log_info(
+                f"[STOP_LINE_TOUCH_AVG_DOWN] {stock.get('name') if isinstance(stock, dict) else code}({code}) "
+                "mandatory AVG_DOWN submitted at soft stop touch; sell submit skipped for re-evaluation."
+            )
+            return {"attempted": True, "submitted": True, "add_result": add_result}
+        _log_holding_pipeline(
+            stock,
+            code,
+            "stop_line_touch_mandatory_avg_down_blocked",
+            **{
+                **retry_common_fields,
+                "retry_count": retry_count,
+                "block_reason": "scale_in_submit_failed_or_guard_blocked",
+                "broker_order_forbidden": True,
+            },
+        )
+        return {
+            "attempted": True,
+            "submitted": False,
+            "reason": "scale_in_submit_failed_or_guard_blocked",
+        }
+
+    _log_holding_pipeline(
+        stock,
+        code,
+        "stop_line_touch_mandatory_avg_down_blocked",
+        **{
+            **retry_common_fields,
+            "block_reason": retry_gate.get("reason", "-"),
+            "broker_order_forbidden": True,
+        },
+    )
+    return {"attempted": True, "submitted": False, "reason": retry_gate.get("reason", "-")}
 
 
 def _evaluate_late_loss_avg_down_retry(
@@ -7683,6 +8091,7 @@ def _scanner_watching_runtime_skip_fields(stock, *, skip_reason: str, now_ts: fl
         "ws_curr": ws_data.get("curr") if ws_data.get("curr") not in (None, "") else "not_applicable_ws_curr",
         "observed_epoch": f"{float(now_ts):.3f}",
         **_ws_realtime_type_freshness_fields(ws_data, now_ts=now_ts),
+        **_scanner_watch_zero_context_fields(skip_reason, ws_data, now_ts=now_ts),
         **fast_precheck_observed,
         **_scanner_rising_relief_observation_fields(stock, now_ts=now_ts),
         **extra,
@@ -18997,6 +19406,10 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                                 net_buy_qty=int(momentum_gate.get("window_net_buy_qty", 0) or 0),
                                 window_net_buy_qty=int(momentum_gate.get("window_net_buy_qty", 0) or 0),
                                 strength_momentum_reason=momentum_gate.get("reason"),
+                                **_strength_momentum_zero_context_fields(
+                                    momentum_gate,
+                                    source_quality_block_reason,
+                                ),
                                 **strength_gate_quality_fields,
                                 **pre_ai_ws_refresh_fields,
                                 **_build_ai_overlap_log_fields(
@@ -21124,6 +21537,39 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
     cooldowns = runtime["cooldowns"]
     alerted_stocks = runtime["alerted_stocks"]
     ai_engine = runtime.get("ai_engine")
+    forced_rising_missed_one_share = (
+        _rising_missed_one_share_entry_enabled()
+        and is_forced_rising_missed_one_share_entry(stock, runtime)
+    )
+    scout_upgrade_entry = (
+        bool(runtime.get("scout_upgrade_entry"))
+        and _is_rising_missed_one_share_scout_holding(
+            stock,
+            strategy=strategy,
+            pos_tag=runtime.get("pos_tag") or stock.get("position_tag"),
+        )
+    )
+
+    if forced_rising_missed_one_share and (
+        _has_open_pending_entry_orders(stock) or _already_holding_entry_position(stock)
+    ):
+        block_reason = (
+            RISING_MISSED_BLOCK_OPEN_PENDING
+            if _has_open_pending_entry_orders(stock)
+            else RISING_MISSED_BLOCK_ALREADY_HOLDING
+        )
+        _log_entry_pipeline(
+            stock,
+            code,
+            "rising_missed_one_share_entry_submit_blocked",
+            block_reason=block_reason,
+            forced_entry_reason=RISING_MISSED_FORCED_ENTRY_REASON,
+            forced_entry_qty=1,
+            actual_order_submitted=False,
+            broker_order_forbidden=True,
+            runtime_effect=False,
+        )
+        return False
 
     if not admin_id:
         log_info(f"⚠️ [매수보류] {stock['name']}: 관리자 ID가 없습니다.")
@@ -21157,6 +21603,11 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         max_budget=budget_cap,
         allow_min_one_share_over_budget=min_one_share_floor_enabled,
     )
+    if forced_rising_missed_one_share and _safe_int(deposit, 0) >= curr_price > 0:
+        target_budget = curr_price
+        safe_budget = curr_price
+        real_buy_qty = 1
+        used_safety_ratio = 1.0
     budget_cap_applied = budget_cap > 0 and target_budget < uncapped_target_budget
     min_one_share_floor_applied = (
         min_one_share_floor_enabled
@@ -21199,8 +21650,19 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             budget_cap=budget_cap if budget_cap_applied else "-", cooldown_sec=zero_qty_cooldown_sec,
             min_one_share_floor_enabled=min_one_share_floor_enabled,
             min_one_share_floor_applied=False,
+            rising_missed_one_share_entry_forced=forced_rising_missed_one_share,
             auth_return_code=(auth_failure or {}).get("return_code", "-"),
             auth_return_msg=(auth_failure or {}).get("return_msg", "-"),
+            **_quantity_zero_context_fields(
+                domain="buy_capacity",
+                blocker=zero_qty_stage,
+                qty=real_buy_qty,
+                template_qty=target_budget,
+                would_qty=safe_budget,
+                effective_qty=real_buy_qty,
+                cap_qty=budget_cap if budget_cap_applied else "not_applicable_cap_qty",
+                guard_intended=True,
+            ),
         )
         if _is_swing_strategy(strategy):
             maybe_start_swing_intraday_probe(
@@ -21227,6 +21689,8 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         budget_cap=budget_cap if budget_cap_applied else "-", qty=real_buy_qty,
         min_one_share_floor_enabled=min_one_share_floor_enabled,
         min_one_share_floor_applied=min_one_share_floor_applied,
+        rising_missed_one_share_entry_forced=forced_rising_missed_one_share,
+        forced_entry_reason=RISING_MISSED_FORCED_ENTRY_REASON if forced_rising_missed_one_share else "-",
         deposit_source=deposit_meta.get("source", "-"),
         deposit_age_sec=deposit_meta.get("age_sec", "-"),
         deposit_cache_hit=deposit_meta.get("cache_hit", False),
@@ -21747,6 +22211,31 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             curr_price=curr_price,
             best_bid=best_bid_at_submit,
             best_ask=best_ask_at_submit,
+        )
+    if forced_rising_missed_one_share:
+        planned_orders = collapse_to_one_share_order(
+            planned_orders,
+            fallback_price=int(latency_gate.get("order_price", 0) or final_price or curr_price or 0),
+        )
+        latency_gate["orders"] = planned_orders
+        requested_qty = 1
+        latency_price_snapshot = _build_entry_price_snapshot_fields(
+            latency_gate,
+            request_price=planned_orders[0].get("price", 0),
+            curr_price=curr_price,
+            best_bid=best_bid_at_submit,
+            best_ask=best_ask_at_submit,
+        )
+        _log_entry_pipeline(
+            stock,
+            code,
+            "rising_missed_one_share_entry_order_plan_forced",
+            forced_entry_reason=RISING_MISSED_FORCED_ENTRY_REASON,
+            forced_entry_qty=1,
+            planned_order_count=len(planned_orders),
+            planned_order_price=planned_orders[0].get("price", 0),
+            actual_order_submitted=False,
+            broker_order_forbidden=False,
         )
     submit_revalidation_fields = _build_entry_submit_revalidation_fields(ws_data, latency_gate, now_ts=time.time())
     scalp_pre_ai_gate_context = runtime.get("scalp_pre_ai_gate_context") if isinstance(runtime.get("scalp_pre_ai_gate_context"), dict) else {}
@@ -22352,7 +22841,25 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         qty = request['qty']
         price = request['price']
         if qty <= 0:
-            _log_entry_pipeline(stock, code, "skip_order_leg_zero_qty", tag=request['tag'])
+            _log_entry_pipeline(
+                stock,
+                code,
+                "skip_order_leg_zero_qty",
+                tag=request['tag'],
+                planned_order_qty=planned_order.get("qty", "not_applicable_planned_order_qty"),
+                planned_order_price=planned_order.get("price", "not_applicable_planned_order_price"),
+                resolved_order_price=price,
+                **_quantity_zero_context_fields(
+                    domain="submit_order_leg",
+                    blocker="skip_order_leg_zero_qty",
+                    qty=qty,
+                    template_qty=planned_order.get("qty"),
+                    would_qty=qty,
+                    effective_qty=qty,
+                    cap_qty="not_applicable_cap_qty",
+                    guard_intended=True,
+                ),
+            )
             continue
         price_snapshot = _build_entry_price_snapshot_fields(
             latency_gate, request_price=price, curr_price=curr_price,
@@ -22687,6 +23194,16 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         return False
 
     _mutate_stock_state(stock, set_fields={'entry_mode': entry_mode})
+    if scout_upgrade_entry:
+        _mutate_stock_state(
+            stock,
+            set_fields={
+                "rising_missed_scout_upgrade_order_pending": True,
+                "rising_missed_scout_upgrade_pending": False,
+                "rising_missed_scout_upgrade_submitted_at": now_ts,
+                "rising_missed_scout_upgrade_reason": "normal_buy_signal",
+            },
+        )
     _finalize_buy_order_submission(
         stock=stock, code=code, curr_price=curr_price, requested_qty=requested_qty, msg=msg, entry_orders=successful_orders,
     )
@@ -22795,18 +23312,21 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         },
     )
 
-    if strategy in ['SCALPING', 'SCALP']:
+    if strategy in ['SCALPING', 'SCALP'] and not forced_rising_missed_one_share:
         with ENTRY_LOCK:
             alerted_stocks.add(code)
     else:
         _mutate_stock_state(stock, set_fields={'msg_audience': _resolve_telegram_audience_for_stock(stock, strategy)})
 
     try:
+        db_status = "HOLDING" if scout_upgrade_entry else "BUY_ORDERED"
+        db_buy_qty = _safe_int(stock.get("buy_qty"), 0) if scout_upgrade_entry else requested_qty
+        db_buy_price = _safe_int(stock.get("buy_price"), 0) if scout_upgrade_entry else curr_price
         with DB.get_session() as session:
             session.query(RecommendationHistory).filter_by(id=stock.get('id')).update({
-                "status": "BUY_ORDERED",
-                "buy_price": curr_price,
-                "buy_qty": requested_qty,
+                "status": db_status,
+                "buy_price": db_buy_price,
+                "buy_qty": db_buy_qty,
             })
     except Exception as e:
         log_error(f"🚨 [DB 에러] {stock['name']} BUY_ORDERED 장부 업데이트 실패: {e}")
@@ -23123,6 +23643,7 @@ def _clear_pending_entry_meta(stock):
             'entry_dynamic_reason',
             'requested_buy_qty',
             'entry_bundle_id',
+            'rising_missed_scout_upgrade_order_pending',
         ]:
             stock.pop(key, None)
     _clear_entry_arm(stock)
@@ -23258,6 +23779,181 @@ def _has_open_pending_entry_orders(stock):
     )
 
 
+def _already_holding_entry_position(stock) -> bool:
+    if not isinstance(stock, dict):
+        return False
+    status = str(stock.get("status") or "").strip().upper()
+    return (
+        status == "HOLDING"
+        or _safe_int(stock.get("buy_qty"), 0) > 0
+        or _safe_int(stock.get("entry_filled_qty"), 0) > 0
+        or _safe_int(stock.get("holding_qty"), 0) > 0
+    )
+
+
+def _is_rising_missed_one_share_scout_holding(stock, *, strategy: str, pos_tag: str) -> bool:
+    if not isinstance(stock, dict):
+        return False
+    if normalize_strategy(strategy) != "SCALPING":
+        return False
+    if normalize_position_tag(strategy, pos_tag) != "SCANNER":
+        return False
+    if str(stock.get("status") or "").strip().upper() != "HOLDING":
+        return False
+    if not bool(stock.get("rising_missed_one_share_scout")):
+        return False
+    if _safe_int(stock.get("buy_qty"), 0) != 1:
+        return False
+    if _safe_int(stock.get("entry_filled_qty"), 0) > 1:
+        return False
+    if bool(stock.get("rising_missed_scout_upgrade_order_pending")):
+        return False
+    if _has_open_pending_entry_orders(stock):
+        return False
+    return True
+
+
+def _rising_missed_one_share_entry_enabled() -> bool:
+    return _env_bool("KORSTOCKSCAN_RISING_MISSED_ONE_SHARE_ENTRY_ENABLED", False)
+
+
+def _maybe_submit_rising_missed_one_share_entry(
+    stock,
+    code,
+    ws_data,
+    admin_id,
+    runtime,
+    *,
+    strategy,
+    pos_tag,
+    curr_price,
+) -> bool:
+    feature_enabled = _rising_missed_one_share_entry_enabled()
+    if not feature_enabled:
+        return False
+    decision = evaluate_rising_missed_one_share_entry(
+        stock,
+        strategy=strategy,
+        position_tag=pos_tag,
+        feature_enabled=feature_enabled,
+        has_open_pending=_has_open_pending_entry_orders(stock),
+        already_holding=_already_holding_entry_position(stock),
+        positive_delta_pct=_scanner_positive_delta_pct(stock),
+        min_delta_pct=_scanner_rising_entry_min_delta_pct(),
+    )
+    if decision.reason in {RISING_MISSED_BLOCK_OPEN_PENDING, RISING_MISSED_BLOCK_ALREADY_HOLDING}:
+        _log_entry_pipeline(
+            stock,
+            code,
+            "rising_missed_one_share_entry_blocked",
+            block_reason=decision.reason,
+            forced_entry_reason=RISING_MISSED_FORCED_ENTRY_REASON,
+            actual_order_submitted=False,
+            broker_order_forbidden=True,
+            runtime_effect=False,
+            **(decision.log_fields or {}),
+        )
+        return True
+    if not decision.allowed:
+        return False
+
+    _mutate_stock_state(
+        stock,
+        set_fields={
+            "rising_missed_one_share_entry_forced": True,
+            "rising_missed_one_share_scout": True,
+            "rising_missed_scout_upgrade_pending": True,
+            "rising_missed_scout_started_at": runtime.get("now_ts"),
+            "forced_entry_qty": int(decision.forced_qty or 1),
+            "forced_entry_reason": RISING_MISSED_FORCED_ENTRY_REASON,
+            "target_buy_price": curr_price,
+            "msg_audience": _resolve_telegram_audience_for_stock(stock, strategy),
+        },
+    )
+    runtime.update(
+        {
+            "is_trigger": True,
+            "msg": (
+                f"✅ **{stock.get('name')} ({code}) rising missed 1주 진입 주문 전송!**\n"
+                f"전략: `{strategy}`\n현재가: `{curr_price:,}원`\n주문 수량: `1주`"
+            ),
+            "ratio": 0.0,
+            "liquidity_value": None,
+            "scalp_min_liquidity": 0,
+            "forced_entry_reason": RISING_MISSED_FORCED_ENTRY_REASON,
+            "forced_entry_qty": int(decision.forced_qty or 1),
+            "rising_missed_one_share_entry_forced": True,
+        }
+    )
+    _log_entry_pipeline(
+        stock,
+        code,
+        "rising_missed_one_share_entry",
+        forced_entry_reason=RISING_MISSED_FORCED_ENTRY_REASON,
+        forced_entry_qty=int(decision.forced_qty or 1),
+        actual_order_submitted=False,
+        broker_order_forbidden=False,
+        runtime_effect=True,
+        **(decision.log_fields or {}),
+    )
+    _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime)
+    return True
+
+
+def _maybe_submit_rising_missed_scout_upgrade(
+    stock,
+    code,
+    ws_data,
+    admin_id,
+    market_regime,
+    *,
+    strategy,
+    pos_tag,
+    now_ts,
+    now_dt,
+    radar=None,
+    ai_engine=None,
+) -> bool:
+    if not _is_rising_missed_one_share_scout_holding(stock, strategy=strategy, pos_tag=pos_tag):
+        return False
+    _log_entry_pipeline(
+        stock,
+        code,
+        "rising_missed_scout_upgrade_eval",
+        rising_missed_one_share_scout=True,
+        scout_buy_qty=_safe_int(stock.get("buy_qty"), 0),
+        actual_order_submitted=False,
+        broker_order_forbidden=False,
+        runtime_effect=True,
+    )
+    handle_watching_state(
+        stock,
+        code,
+        ws_data,
+        admin_id,
+        now_ts=now_ts,
+        now_dt=now_dt,
+        radar=radar,
+        ai_engine=ai_engine,
+        skip_rising_missed_hook=True,
+        scout_upgrade_entry=True,
+    )
+    submitted_upgrade = bool(stock.get("rising_missed_scout_upgrade_order_pending"))
+    if submitted_upgrade:
+        _log_entry_pipeline(
+            stock,
+            code,
+            "rising_missed_scout_upgrade_submitted",
+            rising_missed_one_share_scout=True,
+            status=stock.get("status"),
+            scout_buy_qty=_safe_int(stock.get("buy_qty"), 0),
+            actual_order_submitted=True,
+            broker_order_forbidden=False,
+            runtime_effect=True,
+        )
+    return submitted_upgrade
+
+
 def _normalize_entry_dmst_stex_tp(value, *, default: str = "SOR") -> str:
     normalized = str(value or "").strip().upper()
     if normalized in {"KRX", "NXT", "SOR"}:
@@ -23304,6 +24000,57 @@ def _entry_order_cancel_dmst_stex_tp(order: dict | None) -> str:
         dmst_stex_tp,
         default="SOR",
     )
+
+
+def _cancel_reject_indicates_sor_exchange_mismatch(message: str) -> bool:
+    text = str(message or "")
+    return "571412" in text or "원주문이 SOR주문" in text
+
+
+def _cancel_exchange_from_unfilled_row(row: dict | None) -> str:
+    row = row if isinstance(row, dict) else {}
+    sor_yn = str(row.get("sor_yn") or (row.get("raw") or {}).get("sor_yn") or "").strip().upper()
+    if sor_yn == "Y":
+        return "SOR"
+    stex_tp = str(row.get("stex_tp") or (row.get("raw") or {}).get("stex_tp") or "").strip().upper()
+    if stex_tp == "1":
+        return "KRX"
+    if stex_tp == "2":
+        return "NXT"
+    stex_text = str(row.get("stex_tp_txt") or (row.get("raw") or {}).get("stex_tp_txt") or "").strip().upper()
+    if "NXT" in stex_text:
+        return "NXT"
+    if "KRX" in stex_text:
+        return "KRX"
+    return ""
+
+
+def _resolve_entry_cancel_exchange_from_unfilled_snapshot(code: str, ord_no: str) -> dict:
+    try:
+        rows = kiwoom_utils.get_unfilled_order_snapshot_ka10075(
+            KIWOOM_TOKEN,
+            stk_cd=code,
+            stex_tp="0",
+        )
+    except Exception as exc:
+        return {"resolved": False, "reason": "snapshot_error", "message": str(exc)[:160]}
+    normalized_ord_no = str(ord_no or "").strip()
+    for row in rows or []:
+        row_ord_no = str((row or {}).get("ord_no") or "").strip()
+        if row_ord_no != normalized_ord_no:
+            continue
+        exchange = _cancel_exchange_from_unfilled_row(row)
+        return {
+            "resolved": bool(exchange),
+            "reason": "matched_unfilled_order" if exchange else "matched_without_exchange",
+            "exchange": exchange,
+            "source_api": str(row.get("source_api") or ""),
+            "stex_tp": str(row.get("stex_tp") or ""),
+            "stex_tp_txt": str(row.get("stex_tp_txt") or ""),
+            "sor_yn": str(row.get("sor_yn") or ""),
+            "remaining_qty": _coerce_int_value(row.get("remaining_qty")),
+        }
+    return {"resolved": False, "reason": "order_not_found", "row_count": len(rows or [])}
 
 
 def _cancel_pending_entry_orders(stock, code, *, force=False):
@@ -23384,6 +24131,57 @@ def _cancel_pending_entry_orders(stock, code, *, force=False):
                 cancel_ord_no = str(res.get('ord_no', '') or res.get('odno', '') or '')
             elif res:
                 is_success = True
+
+            if (
+                not is_success
+                and cancel_dmst_stex_tp == "SOR"
+                and _cancel_reject_indicates_sor_exchange_mismatch(err_msg)
+            ):
+                exchange_resolution = _resolve_entry_cancel_exchange_from_unfilled_snapshot(code, ord_no)
+                retry_dmst_stex_tp = _normalize_entry_dmst_stex_tp(
+                    exchange_resolution.get("exchange"),
+                    default="",
+                )
+                _log_entry_pipeline(
+                    stock,
+                    code,
+                    "entry_order_cancel_exchange_resolution",
+                    **cancel_fields,
+                    cancel_response="failed",
+                    cancel_message=err_msg[:160],
+                    exchange_resolution_reason=exchange_resolution.get("reason", ""),
+                    exchange_resolution_source_api=exchange_resolution.get("source_api", ""),
+                    exchange_resolution_stex_tp=exchange_resolution.get("stex_tp", ""),
+                    exchange_resolution_stex_tp_txt=exchange_resolution.get("stex_tp_txt", ""),
+                    exchange_resolution_sor_yn=exchange_resolution.get("sor_yn", ""),
+                    exchange_resolution_remaining_qty=exchange_resolution.get("remaining_qty", "-"),
+                    resolved_dmst_stex_tp=retry_dmst_stex_tp or "-",
+                )
+                if retry_dmst_stex_tp in {"KRX", "NXT"}:
+                    retry_fields = {
+                        **cancel_fields,
+                        "dmst_stex_tp": retry_dmst_stex_tp,
+                        "cancel_reason": "entry_timeout_or_reconcile_exchange_retry",
+                    }
+                    _log_entry_pipeline(stock, code, "entry_order_cancel_exchange_retry_requested", **retry_fields)
+                    retry_res = kiwoom_orders.send_cancel_order(
+                        code=code,
+                        orig_ord_no=ord_no,
+                        token=KIWOOM_TOKEN,
+                        qty=0,
+                        dmst_stex_tp=retry_dmst_stex_tp,
+                    )
+                    if isinstance(retry_res, dict):
+                        res = retry_res
+                        if str(res.get('return_code', res.get('rt_cd', ''))) == '0':
+                            is_success = True
+                        err_msg = str(res.get('return_msg', '') or '')
+                        cancel_ord_no = str(res.get('ord_no', '') or res.get('odno', '') or '')
+                        cancel_fields = retry_fields
+                    elif retry_res:
+                        res = retry_res
+                        is_success = True
+                        cancel_fields = retry_fields
 
             already_resolved = any(keyword in err_msg for keyword in ['취소가능수량', '잔고', '주문없음', '체결'])
             if is_success or already_resolved:
@@ -23952,7 +24750,15 @@ def _stage_buy_order_submission(stock, code, curr_price, requested_qty, msg, ent
         _clear_entry_arm(stock)
         existing_filled_qty = int(stock.get('entry_filled_qty', 0) or 0)
         existing_fill_amount = int(stock.get('entry_fill_amount', 0) or 0)
-        stock['status'] = 'HOLDING' if requested_qty > 0 and existing_filled_qty >= requested_qty else 'BUY_ORDERED'
+        preserve_holding_for_scout_upgrade = (
+            bool(stock.get("rising_missed_scout_upgrade_order_pending"))
+            and _safe_int(stock.get("buy_qty"), 0) > 0
+        )
+        stock['status'] = (
+            'HOLDING'
+            if preserve_holding_for_scout_upgrade or (requested_qty > 0 and existing_filled_qty >= requested_qty)
+            else 'BUY_ORDERED'
+        )
         order_sent_times = [
             _safe_float((order or {}).get('sent_at'), 0.0)
             for order in (entry_orders or [])
@@ -24070,9 +24876,20 @@ def _reconcile_pending_entry_orders(stock, code, strategy):
     if time.time() - order_time <= timeout_sec:
         return
 
+    was_rising_missed_scout_upgrade = bool(stock.get("rising_missed_scout_upgrade_order_pending"))
     result = _cancel_pending_entry_orders(stock, code, force=True)
     if result == 'failed':
         return
+    if was_rising_missed_scout_upgrade and ALERTED_STOCKS is not None:
+        with ENTRY_LOCK:
+            ALERTED_STOCKS.discard(code)
+        _mutate_stock_state(
+            stock,
+            set_fields={
+                "rising_missed_scout_upgrade_pending": True,
+                "rising_missed_scout_upgrade_last_cancelled_at": time.time(),
+            },
+        )
 
     buy_qty = _safe_int(stock.get('buy_qty'), 0)
     if buy_qty > 0:
@@ -24262,7 +25079,19 @@ def _reconcile_pending_entry_orders(stock, code, strategy):
 # 🧠 상태 머신 (State Machine) 핸들러
 # =====================================================================
 
-def handle_watching_state(stock, code, ws_data, admin_id, *, now_ts=None, now_dt=None, radar=None, ai_engine=None):
+def handle_watching_state(
+    stock,
+    code,
+    ws_data,
+    admin_id,
+    *,
+    now_ts=None,
+    now_dt=None,
+    radar=None,
+    ai_engine=None,
+    skip_rising_missed_hook=False,
+    scout_upgrade_entry=False,
+):
     """
     [WATCHING 상태] 진입 타점 감시 및 AI 교차 검증
     """
@@ -24527,6 +25356,7 @@ def handle_watching_state(stock, code, ws_data, admin_id, *, now_ts=None, now_dt
         "alerted_stocks": alerted_stocks,
         "event_bus": event_bus,
         "ai_engine": ai_engine,
+        "scout_upgrade_entry": bool(scout_upgrade_entry),
     }
     config = {
         "MAX_SCALP_SURGE_PCT": MAX_SCALP_SURGE_PCT,
@@ -24557,6 +25387,18 @@ def handle_watching_state(stock, code, ws_data, admin_id, *, now_ts=None, now_dt
         "BIG_BITE_HARD_GATE_TAGS_KOSDAQ": BIG_BITE_HARD_GATE_TAGS_KOSDAQ,
         "BIG_BITE_HARD_GATE_TAGS_KOSPI": BIG_BITE_HARD_GATE_TAGS_KOSPI,
     }
+
+    if not skip_rising_missed_hook and _maybe_submit_rising_missed_one_share_entry(
+        stock,
+        code,
+        ws_data,
+        admin_id,
+        runtime,
+        strategy=strategy,
+        pos_tag=pos_tag,
+        curr_price=curr_price,
+    ):
+        return
 
     if not _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, runtime, config):
         return
@@ -24625,6 +25467,20 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
         ws_data = dict(ws_data or {})
         ws_data["executable_sell_price"] = int(executable_sell_price)
     if curr_p <= 0 or buy_p <= 0:
+        return
+    if _maybe_submit_rising_missed_scout_upgrade(
+        stock,
+        code,
+        ws_data,
+        admin_id,
+        market_regime,
+        strategy=strategy,
+        pos_tag=pos_tag,
+        now_ts=now_ts,
+        now_dt=now_dt,
+        radar=radar,
+        ai_engine=ai_engine,
+    ):
         return
     _append_holding_price_sample(stock, now_ts=now_ts, curr_price=curr_p)
     price_key = _price_tracking_key(stock, code)
@@ -26007,6 +26863,25 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                     set_fields={'soft_stop_micro_grace_started_at': soft_stop_grace_started_at},
                 )
             soft_stop_grace_elapsed_sec = max(0, int(now_ts - soft_stop_grace_started_at))
+            stop_touch_avg_down_result = _attempt_stop_line_touch_mandatory_avg_down(
+                stock=stock,
+                code=code,
+                ws_data=ws_data,
+                strategy=strategy,
+                market_regime=market_regime,
+                admin_id=admin_id,
+                sell_reason_type="LOSS",
+                exit_rule="scalp_soft_stop_pct",
+                profit_rate=profit_rate,
+                peak_profit=peak_profit,
+                current_ai_score=current_ai_score,
+                held_sec=held_sec,
+                dynamic_stop_pct=dynamic_stop_pct,
+                now_ts=now_ts,
+                context_fields={"sell_intercept_context": "soft_stop_touch_before_grace"},
+            )
+            if stop_touch_avg_down_result.get("submitted"):
+                return
             soft_stop_within_grace = (
                 soft_stop_grace_enabled
                 and soft_stop_grace_sec > 0
@@ -26599,6 +27474,26 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
             buy_price=buy_p,
             now_ts=now_ts,
         ):
+            return
+
+        stop_touch_avg_down_result = _attempt_stop_line_touch_mandatory_avg_down(
+            stock=stock,
+            code=code,
+            ws_data=ws_data,
+            strategy=strategy,
+            market_regime=market_regime,
+            admin_id=admin_id,
+            sell_reason_type=sell_reason_type,
+            exit_rule=exit_rule,
+            profit_rate=profit_rate,
+            peak_profit=peak_profit,
+            current_ai_score=current_ai_score,
+            held_sec=held_sec,
+            dynamic_stop_pct=_safe_float(locals().get("dynamic_stop_pct"), profit_rate),
+            now_ts=now_ts,
+            context_fields={"sell_intercept_context": "final_loss_sell_before_fallback"},
+        )
+        if stop_touch_avg_down_result.get("submitted"):
             return
 
         fallback_gate = None
@@ -28660,6 +29555,16 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
             effective_qty=effective_qty,
             cap_qty=cap_qty,
             floor_applied=floor_applied,
+            **_quantity_zero_context_fields(
+                domain="scale_in_quantity",
+                blocker=qty_reason,
+                qty=qty,
+                template_qty=template_qty,
+                would_qty=would_qty,
+                effective_qty=effective_qty,
+                cap_qty=cap_qty,
+                guard_intended=qty_reason == "position_cap_or_budget",
+            ),
             scale_in_candidate_funnel_state=(
                 "qty_guard_blocked" if sim_window_observation else None
             ),

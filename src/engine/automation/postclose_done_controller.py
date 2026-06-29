@@ -45,6 +45,8 @@ DONE_ACCEPTABLE_WARNING_ISSUES = {
     "active_sim_priority_preopen_handoff_pending",
     "active_or_hypothesis_preopen_handoff_pending",
     "ai_watching_score_smoothing_diagnostic_followup_open",
+    "quote_consistency_required_fields_excluded",
+    "quote_consistency_source_missing",
     "lifecycle_bucket_discovery_rolling5d_parent_granularity_not_target",
     "swing_active_arm_priority_preopen_handoff_pending",
     "swing_active_arm_priority_runtime_observation_missing",

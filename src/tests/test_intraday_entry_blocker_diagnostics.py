@@ -92,8 +92,14 @@ def test_build_report_surfaces_rising_promoted_without_real_submit(tmp_path):
     budget_priority = next(
         item for item in report["root_cause_priorities"] if item["issue"] == "scanner_full_eval_budget_deferred"
     )
-    assert budget_priority["decision"] == "treat_as_evaluation_throughput_bottleneck_not_buy_threshold_signal"
+    assert budget_priority["decision"] == "treat_only_sla_breach_as_evaluation_throughput_bottleneck"
     assert "threshold_relaxation" in budget_priority["forbidden_uses"]
+    assert {
+        "class": "runtime_backpressure",
+        "stage": "scalping_scanner_watching_runtime_skip",
+        "reason": "scanner_full_eval_loop_budget_deferred",
+        "count": 1,
+    } in report["blocker_taxonomy"]["suppressed_non_actionable_counts"]
 
 
 def test_build_report_splits_relief_blockers_for_non_rising(tmp_path):
@@ -115,6 +121,198 @@ def test_build_report_splits_relief_blockers_for_non_rising(tmp_path):
     assert report["relief_blocker_split_rollup"]["rising_missed_buy"] == []
     assert report["relief_blocker_split_rollup"]["non_rising_promoted"] == [
         {"stage": "scalping_scanner_watching_runtime_skip", "reason": "entry_cooldown_active", "count": 1}
+    ]
+
+
+def test_build_report_suppresses_normal_cooldown_and_single_deferred_as_major_blockers(tmp_path):
+    path = tmp_path / "pipeline_events_2026-06-23.jsonl"
+    rows = [
+        _event("000001", "A", "scalping_scanner_candidate_promoted", {"price_delta_since_first_seen_pct": "0.30"}),
+        _event(
+            "000001",
+            "A",
+            "scalping_scanner_watching_runtime_skip",
+            {"price_delta_since_first_seen_pct": "0.30", "skip_reason": "entry_cooldown_active"},
+        ),
+        _event("000002", "B", "scalping_scanner_candidate_promoted", {"price_delta_since_first_seen_pct": "0.40"}),
+        _event(
+            "000002",
+            "B",
+            "scalping_scanner_watching_runtime_skip",
+            {
+                "price_delta_since_first_seen_pct": "0.40",
+                "skip_reason": "scanner_full_eval_loop_budget_deferred",
+                "scanner_full_eval_limit": "4",
+                "scanner_full_eval_count": "4",
+            },
+        ),
+    ]
+    path.write_text("\n".join(json.dumps(row, ensure_ascii=False) for row in rows), encoding="utf-8")
+
+    report = build_report(target_date="2026-06-23", pipeline_path=path, generated_at="fixed")
+
+    taxonomy = report["blocker_taxonomy"]
+    assert taxonomy["suppressed_non_major_counts"] == taxonomy["suppressed_non_actionable_counts"]
+    assert taxonomy["suppressed_non_actionable_counts"] == [
+        {
+            "class": "intended_guard",
+            "stage": "scalping_scanner_watching_runtime_skip",
+            "reason": "entry_cooldown_active",
+            "count": 1,
+        },
+        {
+            "class": "runtime_backpressure",
+            "stage": "scalping_scanner_watching_runtime_skip",
+            "reason": "scanner_full_eval_loop_budget_deferred",
+            "count": 1,
+        },
+    ]
+    assert all(item["issue"] != "scanner_full_eval_budget_deferred" for item in report["root_cause_priorities"])
+    assert report["summary"]["suppressed_non_actionable_blocker_count"] == 2
+
+
+def test_build_report_splits_full_eval_deferred_then_evaluated_status(tmp_path):
+    path = tmp_path / "pipeline_events_2026-06-23.jsonl"
+    rows = [
+        _event("000001", "A", "scalping_scanner_candidate_promoted", {"price_delta_since_first_seen_pct": "1.30"}),
+        _event(
+            "000001",
+            "A",
+            "scalping_scanner_watching_runtime_skip",
+            {
+                "price_delta_since_first_seen_pct": "1.30",
+                "skip_reason": "scanner_full_eval_loop_budget_deferred",
+                "scanner_full_eval_limit": "4",
+                "scanner_full_eval_count": "4",
+            },
+        ),
+        _event(
+            "000001",
+            "A",
+            "blocked_strength_momentum",
+            {
+                "price_delta_since_first_seen_pct": "1.30",
+                "reason": "below_strength_base",
+            },
+        ),
+        _event("000002", "B", "scalping_scanner_candidate_promoted", {"price_delta_since_first_seen_pct": "1.40"}),
+        _event(
+            "000002",
+            "B",
+            "scalping_scanner_watching_runtime_skip",
+            {
+                "price_delta_since_first_seen_pct": "1.40",
+                "skip_reason": "scanner_full_eval_loop_budget_deferred",
+                "scanner_full_eval_limit": "4",
+                "scanner_full_eval_count": "4",
+            },
+        ),
+    ]
+    path.write_text("\n".join(json.dumps(row, ensure_ascii=False) for row in rows), encoding="utf-8")
+
+    report = build_report(target_date="2026-06-23", pipeline_path=path, generated_at="fixed")
+    by_code = {item["stock_code"]: item for item in report["rising_missed_buy"]}
+
+    assert by_code["000001"]["scanner_full_eval_budget_deferred"]["status"] == "deferred_then_evaluated"
+    assert by_code["000002"]["scanner_full_eval_budget_deferred"]["status"] == "deferred_never_evaluated"
+    assert {
+        item["status"]: item["count"]
+        for item in report["scanner_full_eval_budget_diagnostics"]["status_counts"]
+    } == {
+        "deferred_then_evaluated": 1,
+        "deferred_never_evaluated": 1,
+    }
+
+
+def test_build_report_splits_ws_snapshot_missing_as_recovering_or_evictable_budget_state(tmp_path):
+    path = tmp_path / "pipeline_events_2026-06-23.jsonl"
+    rows = [
+        _event("000001", "A", "scalping_scanner_candidate_promoted", {"price_delta_since_first_seen_pct": "0.30"}),
+        _event(
+            "000001",
+            "A",
+            "scalping_scanner_watching_runtime_skip",
+            {"price_delta_since_first_seen_pct": "0.30", "skip_reason": "ws_snapshot_missing_or_zero"},
+        ),
+        _event("000002", "B", "scalping_scanner_candidate_promoted", {"price_delta_since_first_seen_pct": "0.30"}),
+        _event(
+            "000002",
+            "B",
+            "scalping_scanner_watching_runtime_skip",
+            {"price_delta_since_first_seen_pct": "0.30", "skip_reason": "ws_snapshot_missing_or_zero"},
+        ),
+        _event(
+            "000002",
+            "B",
+            "scalping_scanner_watching_runtime_skip",
+            {"price_delta_since_first_seen_pct": "0.30", "skip_reason": "ws_snapshot_missing_or_zero"},
+        ),
+        _event(
+            "000002",
+            "B",
+            "scalping_scanner_watching_runtime_skip",
+            {"price_delta_since_first_seen_pct": "0.30", "skip_reason": "ws_snapshot_missing_or_zero"},
+        ),
+    ]
+    path.write_text("\n".join(json.dumps(row, ensure_ascii=False) for row in rows), encoding="utf-8")
+
+    report = build_report(target_date="2026-06-23", pipeline_path=path, generated_at="fixed")
+
+    by_code = {item["stock_code"]: item for item in report["promoted_symbols"]}
+    assert by_code["000001"]["dominant_actionable_blocker"]["class"] == "non_actionable_guard_or_backpressure"
+    assert by_code["000002"]["dominant_actionable_blocker"]["class"] == "non_actionable_guard_or_backpressure"
+    assert report["blocker_taxonomy"]["actionable_major_blocker_counts"] == []
+    assert report["blocker_taxonomy"]["suppressed_non_major_counts"] == report["blocker_taxonomy"]["suppressed_non_actionable_counts"]
+    assert report["blocker_taxonomy"]["suppressed_non_actionable_counts"] == [
+        {
+            "class": "source_freshness_evictable",
+            "stage": "scalping_scanner_watching_runtime_skip",
+            "reason": "ws_snapshot_missing_or_zero",
+            "count": 3,
+        },
+        {
+            "class": "source_freshness_recovering",
+            "stage": "scalping_scanner_watching_runtime_skip",
+            "reason": "ws_snapshot_missing_or_zero",
+            "count": 1,
+        },
+    ]
+
+
+def test_build_report_marks_watch_eviction_as_budget_reallocated(tmp_path):
+    path = tmp_path / "pipeline_events_2026-06-23.jsonl"
+    rows = [
+        _event("000001", "A", "scalping_scanner_candidate_promoted", {"price_delta_since_first_seen_pct": "0.30"}),
+        _event(
+            "000001",
+            "A",
+            "scalping_scanner_watch_eviction",
+            {
+                "price_delta_since_first_seen_pct": "0.30",
+                "eviction_reason": "stale_recovery_failed",
+                "terminal_reason": "ws_snapshot_missing_or_zero",
+                "eviction_attempt_count": "4",
+                "stale_age_sec": "91.0",
+            },
+        ),
+    ]
+    path.write_text("\n".join(json.dumps(row, ensure_ascii=False) for row in rows), encoding="utf-8")
+
+    report = build_report(target_date="2026-06-23", pipeline_path=path, generated_at="fixed")
+
+    assert report["promoted_symbols"][0]["recent_blockers"][-1]["taxonomy"] == {
+        "class": "watch_budget_reallocated",
+        "actionable": False,
+        "major_blocker": False,
+        "route": "watch_budget_reallocated_after_stale_or_terminal_expiry",
+    }
+    assert report["blocker_taxonomy"]["suppressed_non_actionable_counts"] == [
+        {
+            "class": "watch_budget_reallocated",
+            "stage": "scalping_scanner_watch_eviction",
+            "reason": "stale_recovery_failed",
+            "count": 1,
+        }
     ]
 
 

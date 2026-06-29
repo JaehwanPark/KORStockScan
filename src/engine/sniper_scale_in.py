@@ -7,6 +7,13 @@ from src.utils import kiwoom_utils
 
 _DEFAULT_SCALE_IN_RATIO = 0.50
 _DEFAULT_SWING_PYRAMID_RATIO = 0.30
+_STOP_LINE_TOUCH_MANDATORY_AVG_DOWN_REASON = "stop_line_touch_mandatory_avg_down"
+_SCALPING_AVG_DOWN_SPECIAL_REASONS = {
+    "reversal_add_ok",
+    "late_loss_avg_down_retry",
+    "aggressive_reversal_add_ok",
+    _STOP_LINE_TOUCH_MANDATORY_AVG_DOWN_REASON,
+}
 _SCALE_IN_RULES = {
     ("SCALPING", "AVG_DOWN", "reversal_add_ok"): {
         "ratio_rule": "REVERSAL_ADD_SIZE_RATIO",
@@ -23,6 +30,12 @@ _SCALE_IN_RULES = {
     ("SCALPING", "AVG_DOWN", "aggressive_reversal_add_ok"): {
         "ratio_rule": "AGGRESSIVE_REVERSAL_ADD_SIZE_RATIO",
         "default_ratio": 0.50,
+        "floor_rule": "REVERSAL_ADD_MIN_QTY_FLOOR_ENABLED",
+        "floor_default": True,
+    },
+    ("SCALPING", "AVG_DOWN", _STOP_LINE_TOUCH_MANDATORY_AVG_DOWN_REASON): {
+        "ratio_rule": "REVERSAL_ADD_SIZE_RATIO",
+        "default_ratio": 0.33,
         "floor_rule": "REVERSAL_ADD_MIN_QTY_FLOOR_ENABLED",
         "floor_default": True,
     },
@@ -685,7 +698,7 @@ def _resolve_scale_in_ratio(raw_strategy, add_type, add_reason):
 def _resolve_scale_in_rule(raw_strategy, add_type, add_reason):
     normalized_reason = (
         add_reason
-        if add_reason in {"reversal_add_ok", "late_loss_avg_down_retry", "aggressive_reversal_add_ok"}
+        if add_reason in _SCALPING_AVG_DOWN_SPECIAL_REASONS
         else "default"
     )
     if raw_strategy == "SCALPING":
@@ -934,7 +947,7 @@ def describe_dynamic_scale_in_qty(
             return details
         would_qty = max(1, int(scalp_budget_qty or legacy.get("template_qty", 0) or legacy.get("qty", 0) or 0))
     elif add_type == "AVG_DOWN":
-        if add_reason not in {"reversal_add_ok", "late_loss_avg_down_retry", "aggressive_reversal_add_ok"}:
+        if add_reason not in _SCALPING_AVG_DOWN_SPECIAL_REASONS:
             details.update({"would_qty": 0, "effective_qty": 0, "qty": 0, "qty_reason": "reversal_probe_missing"})
             return details
         hard_stop_price = _safe_float(stock.get("hard_stop_price"), 0.0)

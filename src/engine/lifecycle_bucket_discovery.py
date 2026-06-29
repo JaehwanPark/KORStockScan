@@ -694,6 +694,62 @@ def _safe_float(value: Any, default: float | None = None) -> float | None:
     return number if number == number else default
 
 
+def _positive_ev(item: dict[str, Any]) -> bool:
+    ev = _safe_float(item.get("source_quality_adjusted_ev_pct"), None)
+    return ev is not None and ev > 0
+
+
+def _sim_auto_positive_ev_summary(items: list[dict[str, Any]]) -> dict[str, Any]:
+    positive = [item for item in items if _positive_ev(item)]
+    nonpositive = [item for item in items if not _positive_ev(item)]
+    entry_only_positive = [
+        item
+        for item in positive
+        if str(item.get("classification_state") or "") == "entry_only_sim_auto_approved"
+    ]
+    entry_only_nonpositive = [
+        item
+        for item in nonpositive
+        if str(item.get("classification_state") or "") == "entry_only_sim_auto_approved"
+    ]
+    top_positive = sorted(
+        positive,
+        key=lambda item: (
+            -(_safe_float(item.get("source_quality_adjusted_ev_pct"), 0.0) or 0.0),
+            -_safe_int(item.get("joined_sample"), _safe_int(item.get("sample"), 0)),
+            str(item.get("bucket_id") or ""),
+        ),
+    )[:12]
+    top_nonpositive = sorted(
+        nonpositive,
+        key=lambda item: (
+            _safe_float(item.get("source_quality_adjusted_ev_pct"), 0.0) or 0.0,
+            -_safe_int(item.get("joined_sample"), _safe_int(item.get("sample"), 0)),
+            str(item.get("bucket_id") or ""),
+        ),
+    )[:12]
+
+    def compact(item: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "bucket_id": item.get("bucket_id"),
+            "classification_state": item.get("classification_state"),
+            "stage": item.get("stage"),
+            "bucket_type": item.get("bucket_type"),
+            "source_quality_adjusted_ev_pct": item.get("source_quality_adjusted_ev_pct"),
+            "joined_sample": item.get("joined_sample"),
+            "sample": item.get("sample"),
+        }
+
+    return {
+        "sim_auto_positive_ev_count": len(positive),
+        "sim_auto_nonpositive_ev_count": len(nonpositive),
+        "entry_only_sim_auto_positive_ev_count": len(entry_only_positive),
+        "entry_only_sim_auto_nonpositive_ev_count": len(entry_only_nonpositive),
+        "sim_auto_positive_ev_top": [compact(item) for item in top_positive],
+        "sim_auto_nonpositive_ev_top": [compact(item) for item in top_nonpositive],
+    }
+
+
 def _slug(value: Any, *, max_len: int = 96) -> str:
     text = re.sub(r"[^a-zA-Z0-9가-힣]+", "_", str(value or "").strip().lower()).strip("_")
     return text[:max_len] or "unknown"
@@ -2167,6 +2223,7 @@ def _build_active_sim_priority_seeds(report: dict[str, Any]) -> list[dict[str, A
             },
         )
         seeds.append(seed)
+    _dedupe_active_sim_priority_seed_prefixes(seeds)
     return sorted(
         seeds,
         key=lambda item: (
@@ -2175,6 +2232,56 @@ def _build_active_sim_priority_seeds(report: dict[str, Any]) -> list[dict[str, A
             str(item.get("active_seed_id") or ""),
         ),
     )
+
+
+def _active_seed_prefix_key(seed: dict[str, Any]) -> str:
+    prefix = seed.get("observable_prefix") if isinstance(seed.get("observable_prefix"), dict) else {}
+    compact = {str(key): str(value) for key, value in prefix.items() if str(value or "").strip()}
+    if not compact:
+        return ""
+    return json.dumps(compact, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+
+
+def _active_seed_prefix_rank(seed: dict[str, Any]) -> tuple[float, int, int, str]:
+    return (
+        _safe_float(seed.get("parent_ev_pct"), -999.0) or -999.0,
+        _safe_int(seed.get("complete_flow_count")),
+        _safe_int(seed.get("parent_joined_sample")),
+        str(seed.get("active_seed_id") or ""),
+    )
+
+
+def _dedupe_active_sim_priority_seed_prefixes(seeds: list[dict[str, Any]]) -> None:
+    active_by_prefix: dict[str, list[dict[str, Any]]] = {}
+    for seed in seeds:
+        if str(seed.get("status") or "").strip() != "active":
+            continue
+        prefix_key = _active_seed_prefix_key(seed)
+        if not prefix_key:
+            continue
+        active_by_prefix.setdefault(prefix_key, []).append(seed)
+    for prefix_key, duplicates in active_by_prefix.items():
+        if len(duplicates) <= 1:
+            continue
+        winner = max(duplicates, key=_active_seed_prefix_rank)
+        for seed in duplicates:
+            seed["active_observable_prefix_duplicate_count"] = len(duplicates)
+            seed["active_observable_prefix_dedup_policy"] = "single_active_seed_per_observable_prefix_v1"
+            seed["active_observable_prefix_dedup_winner_seed_id"] = winner.get("active_seed_id")
+            if seed is winner:
+                seed["active_observable_prefix_dedup_state"] = "winner"
+                continue
+            seed["status"] = "cooldown"
+            seed["active_observable_prefix_dedup_state"] = "suppressed_duplicate"
+            seed["active_collection_reason"] = "duplicate_observable_prefix_suppressed"
+            seed["source_quality_status"] = "observable_prefix_duplicate_suppressed"
+            seed["retired_reason"] = ""
+            seed.setdefault("targeted_sim_quota", {})
+            if isinstance(seed["targeted_sim_quota"], dict):
+                seed["targeted_sim_quota"]["needs_revisit_sample"] = False
+                seed["targeted_sim_quota"]["reason"] = "duplicate_observable_prefix_suppressed"
+                seed["targeted_sim_quota"]["runtime_effect"] = False
+                seed["targeted_sim_quota"]["allowed_runtime_apply"] = False
 
 
 def _active_sim_priority_diagnostics(report: dict[str, Any], seeds: list[dict[str, Any]]) -> dict[str, int]:
@@ -2226,6 +2333,47 @@ def _active_sim_priority_diagnostics(report: dict[str, Any], seeds: list[dict[st
         "active_sim_priority_targeted_total_share_pct": ACTIVE_SIM_PRIORITY_TOTAL_SHARE_PCT,
         "active_sim_priority_targeted_per_seed_daily_limit": ACTIVE_SIM_PRIORITY_PER_SEED_DAILY_LIMIT,
         "active_sim_priority_sample_goal_per_bucket": ACTIVE_SIM_PRIORITY_SAMPLE_GOAL_PER_BUCKET,
+    }
+
+
+def _positive_parent_diagnostics(report: dict[str, Any]) -> dict[str, Any]:
+    positive: list[dict[str, Any]] = []
+    sample_ready: list[dict[str, Any]] = []
+    conflicted = 0
+    for parent in report.get("parent_bucket_summaries") or []:
+        if not isinstance(parent, dict):
+            continue
+        ev = _safe_float(parent.get("parent_source_quality_adjusted_ev_pct"), None)
+        if ev is None or ev <= 0:
+            continue
+        joined_sample = _safe_int(parent.get("parent_joined_sample"))
+        dimensions = parent.get("dimension_filters") if isinstance(parent.get("dimension_filters"), dict) else {}
+        item = {
+            "parent_bucket_id": parent.get("parent_bucket_id") or parent.get("policy_bucket_id"),
+            "parent_ev_pct": ev,
+            "parent_joined_sample": joined_sample,
+            "complete_flow_count": _safe_int(parent.get("complete_flow_count")),
+            "child_conflict_warning": bool(parent.get("child_conflict_warning")),
+            "entry_score_parent": dimensions.get("entry_score_parent"),
+            "entry_source_parent": dimensions.get("entry_source_parent"),
+            "submit_quality_parent": dimensions.get("submit_quality_parent"),
+            "exit_outcome_parent": dimensions.get("exit_outcome_parent"),
+            "major_holding_parent": dimensions.get("major_holding_parent"),
+            "scale_in_parent": dimensions.get("scale_in_parent"),
+        }
+        positive.append(item)
+        if joined_sample >= LIFECYCLE_FLOW_PARENT_MIN_JOINED_SAMPLE:
+            sample_ready.append(item)
+        if item["child_conflict_warning"]:
+            conflicted += 1
+    positive.sort(key=lambda item: (item["parent_ev_pct"], item["parent_joined_sample"]), reverse=True)
+    sample_ready.sort(key=lambda item: (item["parent_ev_pct"], item["parent_joined_sample"]), reverse=True)
+    return {
+        "positive_parent_count": len(positive),
+        "positive_parent_sample_ready_count": len(sample_ready),
+        "positive_parent_conflict_count": conflicted,
+        "top_positive_parent_buckets": positive[:12],
+        "top_sample_ready_positive_parent_buckets": sample_ready[:12],
     }
 
 
@@ -2560,12 +2708,26 @@ def _apply_lifecycle_flow_parent_absorption(report: dict[str, Any], candidates: 
     summary["active_sim_priority_seed_count"] = len(active_seeds)
     summary["active_sim_priority_seed_status_counts"] = dict(sorted(active_seed_counts.items()))
     summary["active_sim_priority_active_seed_count"] = active_seed_counts.get("active", 0)
+    summary["active_sim_priority_positive_seed_count"] = sum(
+        1
+        for item in active_seeds
+        if str(item.get("status") or "") == "active"
+        and (_safe_float(item.get("parent_ev_pct"), None) or 0.0) > 0
+    )
+    summary["active_sim_priority_nonpositive_seed_count"] = sum(
+        1
+        for item in active_seeds
+        if str(item.get("status") or "") == "active"
+        and _safe_float(item.get("parent_ev_pct"), None) is not None
+        and (_safe_float(item.get("parent_ev_pct"), None) or 0.0) <= 0
+    )
     summary["active_sim_priority_entry_source_taxonomy_contract_counts"] = dict(
         sorted(active_seed_taxonomy_counts.items())
     )
     summary["active_sim_priority_pending_taxonomy_contract_count"] = active_seed_taxonomy_counts.get(
         "new_axis_pending_taxonomy", 0
     )
+    summary.update(_positive_parent_diagnostics(report))
     summary.update(_active_sim_priority_diagnostics(report, active_seeds))
     report["summary"] = summary
 
@@ -4262,6 +4424,10 @@ def _finalize_report(
 ) -> dict[str, Any]:
     _apply_lifecycle_flow_parent_absorption(report, candidates)
     state_counts = Counter(str(item.get("classification_state") or "unknown") for item in candidates)
+    sim_auto_candidates = [
+        item for item in candidates if str(item.get("classification_state") or "") in SIM_APPROVAL_STATES
+    ]
+    sim_auto_positive_summary = _sim_auto_positive_ev_summary(sim_auto_candidates)
     review_category_counts = Counter(str(item.get("review_category") or "unknown") for item in candidates)
     review_sub_state_counts = Counter(
         str(item.get("review_sub_state"))
@@ -4350,6 +4516,7 @@ def _finalize_report(
             "surfaced_candidate_count": len(surfaced),
             "sim_auto_approved_count": state_counts.get("sim_auto_approved", 0),
             "entry_only_sim_auto_approved_count": state_counts.get("entry_only_sim_auto_approved", 0),
+            **sim_auto_positive_summary,
             "lifecycle_flow_sim_probe_candidate_count": state_counts.get(LIFECYCLE_FLOW_SIM_PROBE_STATE, 0),
             "live_auto_apply_ready_count": state_counts.get("live_auto_apply_ready", 0),
             "new_bucket_candidate_count": state_counts.get("new_bucket_candidate", 0),
@@ -4415,9 +4582,7 @@ def _finalize_report(
     report["live_auto_apply_candidates"] = [
         item for item in candidates if item.get("classification_state") == "live_auto_apply_ready"
     ]
-    report["sim_auto_approved_candidates"] = [
-        item for item in candidates if str(item.get("classification_state") or "") in SIM_APPROVAL_STATES
-    ][:200]
+    report["sim_auto_approved_candidates"] = sim_auto_candidates[:200]
     report["warnings"] = warnings
     return report
 
@@ -4687,9 +4852,12 @@ def _write_sim_auto_approval(report: dict[str, Any]) -> None:
         for item in (report.get("sim_auto_approved_candidates") or [])
         if isinstance(item, dict) and item.get("bucket_id")
     ]
+    positive_approved_candidates = [item for item in approved_candidates if _positive_ev(item)]
+    nonpositive_approved_candidates = [item for item in approved_candidates if not _positive_ev(item)]
     approved_bucket_ids = [str(item.get("bucket_id")) for item in approved_candidates]
-    approved_bucket_rows = [
-        {
+
+    def approved_row(item: dict[str, Any]) -> dict[str, Any]:
+        return {
             "bucket_id": str(item.get("bucket_id") or ""),
             "source_bucket_id": str(item.get("source_bucket_id") or ""),
             "classification_state": item.get("classification_state"),
@@ -4702,8 +4870,10 @@ def _write_sim_auto_approval(report: dict[str, Any]) -> None:
             "complete_flow_count": item.get("complete_flow_count"),
             "incomplete_flow_count": item.get("incomplete_flow_count"),
         }
-        for item in approved_candidates
-    ]
+
+    approved_bucket_rows = [approved_row(item) for item in approved_candidates]
+    positive_ev_bucket_rows = [approved_row(item) for item in positive_approved_candidates]
+    nonpositive_ev_bucket_rows = [approved_row(item) for item in nonpositive_approved_candidates]
     active_sim_priority_seeds = [
         item
         for item in (report.get("active_sim_priority_seeds") or [])
@@ -4731,6 +4901,8 @@ def _write_sim_auto_approval(report: dict[str, Any]) -> None:
         "policy_file": str(bucket_catalog_path(target_date)),
         "approved_bucket_ids": approved_bucket_ids,
         "approved_bucket_rows": approved_bucket_rows,
+        "positive_ev_bucket_rows": positive_ev_bucket_rows,
+        "nonpositive_ev_bucket_rows": nonpositive_ev_bucket_rows,
         "active_sim_priority_seeds": active_sim_priority_seeds,
         "targeted_sim_collection": {
             "policy_version": ACTIVE_SIM_PRIORITY_QUOTA_POLICY_VERSION,
@@ -4744,6 +4916,8 @@ def _write_sim_auto_approval(report: dict[str, Any]) -> None:
             "broker_order_forbidden": True,
         },
         "approved_bucket_count": len(approved_bucket_ids),
+        "positive_ev_approved_bucket_count": len(positive_ev_bucket_rows),
+        "nonpositive_ev_approved_bucket_count": len(nonpositive_ev_bucket_rows),
         "approved_unique_source_bucket_count": len(set(approved_source_bucket_ids)),
         "approved_state_counts": dict(sorted(state_counts.items())),
         "active_sim_priority_seed_count": len(active_sim_priority_seeds),

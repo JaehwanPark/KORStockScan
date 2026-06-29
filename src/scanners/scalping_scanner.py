@@ -249,6 +249,55 @@ def _safe_int(value, default=0):
         return default
 
 
+ZERO_CONTEXT_FORBIDDEN_USES = (
+    "threshold_mutation,provider_route_change,order_price_relaxation,"
+    "quantity_or_cap_change,broker_guard_bypass,stale_quote_bypass,"
+    "hard_safety_guard_bypass,real_execution_quality_approval"
+)
+
+
+def _zero_context_value_missing(value) -> bool:
+    if value is None:
+        return True
+    text = str(value).strip().lower()
+    return (
+        text == ""
+        or text in {"-", "none", "null", "nan", "nat", "not_evaluated"}
+        or text.startswith("not_applicable")
+    )
+
+
+def _zero_context_value_state(value, *, missing: bool = False, not_applicable: bool = False) -> str:
+    numeric = _safe_float(value, 0.0)
+    if abs(numeric) > 1e-12:
+        return "non_zero"
+    if not_applicable:
+        return "not_applicable_zero"
+    if missing or _zero_context_value_missing(value):
+        return "missing_defaulted_zero"
+    return "actual_zero"
+
+
+def _zero_context_observation_fields(*, domain: str, blocker: str, states: dict) -> dict:
+    zero_states = {str(key): str(value) for key, value in (states or {}).items()}
+    blocking_states = [
+        value
+        for value in zero_states.values()
+        if value in {"missing_defaulted_zero", "stale_defaulted_zero"}
+    ]
+    return {
+        "zero_context_observed": bool(zero_states),
+        "zero_context_domain": str(domain or "unknown"),
+        "zero_context_blocker": str(blocker or "unknown"),
+        "zero_context_primary_state": blocking_states[0] if blocking_states else (
+            next(iter(zero_states.values())) if zero_states else "not_applicable_zero"
+        ),
+        "zero_context_defaulted_zero_field_count": len(blocking_states),
+        "zero_context_forbidden_uses": ZERO_CONTEXT_FORBIDDEN_USES,
+        **{f"zero_context_{key}_state": value for key, value in zero_states.items()},
+    }
+
+
 def _safe_positive_int(value, default=0):
     parsed = _safe_int(value, default)
     if parsed is None:
@@ -1278,6 +1327,28 @@ def _scanner_source_guard_requires_first_seen_provenance(reason):
     return False
 
 
+def _scanner_zero_context_fields(target, source_guard, current_flu, source_guard_context):
+    cntr_str_available = bool(target.get("CntrStrAvailable", False))
+    first_seen_not_applicable = source_guard_context == "first_seen_not_applicable"
+    return _zero_context_observation_fields(
+        domain="scanner_source_guard",
+        blocker=source_guard.get("reason") or "candidate_observed",
+        states={
+            "current_flu_rate": _zero_context_value_state(current_flu),
+            "rank_jump": _zero_context_value_state(_rank_jump(target)),
+            "spike_rate": _zero_context_value_state(target.get("SpikeRate")),
+            "cntr_str": _zero_context_value_state(
+                target.get("CntrStr"),
+                missing=not cntr_str_available,
+            ),
+            "price_delta_since_first_seen_pct": _zero_context_value_state(
+                source_guard.get("price_delta_since_first_seen_pct"),
+                not_applicable=first_seen_not_applicable,
+            ),
+        },
+    )
+
+
 def _scanner_event_fields(target, source_guard=None):
     source_guard = source_guard or {}
     source_signature = source_guard.get("source_signature") or ",".join(_source_signature(target))
@@ -1365,6 +1436,7 @@ def _scanner_event_fields(target, source_guard=None):
         "cntr_str": _safe_float(target.get("CntrStr")),
         "current_price_observed": _safe_positive_int(target.get("Price")),
         "current_source": target.get("Source"),
+        **_scanner_zero_context_fields(target, source_guard, current_flu, source_guard_context),
     }
 
 

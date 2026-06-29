@@ -491,6 +491,115 @@ def test_active_seed_candidate_without_seed_details_split_new_entry_and_followup
     }
 
 
+def test_key_lineage_infers_followup_parent_seed_from_unique_observable_prefix(monkeypatch, tmp_path):
+    _patch_dirs(monkeypatch, tmp_path)
+    target = "2026-06-04"
+    prefix = {
+        "entry_score_parent": "score_watch_recovery",
+        "entry_source_parent": "entry_source_wait6579",
+    }
+    prefix_text = json.dumps(prefix, sort_keys=True)
+    _write(tmp_path / "report" / "lifecycle_bucket_discovery" / f"lifecycle_bucket_discovery_{target}.json", {})
+    _write(
+        tmp_path / "threshold_cycle" / "scalp_sim_policies" / f"scalp_sim_policy_catalog_{target}.json",
+        {
+            "active_sim_priority_seeds": [
+                {
+                    "active_seed_id": "seed_wait6579",
+                    "status": "active",
+                    "observable_prefix": prefix,
+                }
+            ]
+        },
+    )
+    _write(tmp_path / "threshold_cycle" / "swing_sim_policies" / f"swing_sim_policy_catalog_{target}.json", {})
+    _write(
+        tmp_path / "threshold_cycle" / "apply_plans" / f"threshold_apply_{target}.json",
+        {
+            "source_date": target,
+            "scalp_sim_auto_approval": {"approved_request": {"active_sim_priority_seed_ids": ["seed_wait6579"]}},
+        },
+    )
+    event_path = tmp_path / "pipeline_events" / f"pipeline_events_{target}.jsonl"
+    event_path.parent.mkdir(parents=True, exist_ok=True)
+    event_path.write_text(
+        json.dumps(
+            {
+                "stage": "scalp_sim_holding_started",
+                "fields": {
+                    "scalp_sim_auto_policy_active_seed_count": "1",
+                    "active_seed_candidate_observable_prefix": prefix_text,
+                    "scalp_sim_active_priority_seed_matched": False,
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    report = ledger.build_key_lineage_ledger(target)
+    summary = report["summary"]
+
+    assert summary["same_key_continuity_pass_count"] == 1
+    assert summary["active_seed_candidate_raw_without_seed_id_event_count"] == 1
+    assert summary["active_seed_candidate_without_seed_id_event_count"] == 0
+    assert summary["active_seed_candidate_followup_without_seed_id_event_count"] == 0
+    assert summary["active_seed_candidate_inferred_parent_seed_id_event_count"] == 1
+    assert summary["active_seed_candidate_inferred_parent_seed_id_stage_counts"] == {
+        "scalp_sim_holding_started": 1
+    }
+    assert summary["active_seed_candidate_lineage_closure_status"] == "closed"
+    assert summary["active_seed_candidate_lineage_followup_required"] is False
+    assert "inferred_parent_seed_id=`1`" in ledger._render_markdown(report)
+
+
+def test_key_lineage_keeps_ambiguous_observable_prefix_as_followup_gap(monkeypatch, tmp_path):
+    _patch_dirs(monkeypatch, tmp_path)
+    target = "2026-06-04"
+    prefix = {"entry_score_parent": "score_watch_recovery"}
+    _write(tmp_path / "report" / "lifecycle_bucket_discovery" / f"lifecycle_bucket_discovery_{target}.json", {})
+    _write(
+        tmp_path / "threshold_cycle" / "scalp_sim_policies" / f"scalp_sim_policy_catalog_{target}.json",
+        {
+            "active_sim_priority_seeds": [
+                {"active_seed_id": "seed_a", "status": "active", "observable_prefix": prefix},
+                {"active_seed_id": "seed_b", "status": "active", "observable_prefix": prefix},
+            ]
+        },
+    )
+    _write(tmp_path / "threshold_cycle" / "swing_sim_policies" / f"swing_sim_policy_catalog_{target}.json", {})
+    _write(
+        tmp_path / "threshold_cycle" / "apply_plans" / f"threshold_apply_{target}.json",
+        {
+            "source_date": target,
+            "scalp_sim_auto_approval": {"approved_request": {"active_sim_priority_seed_ids": ["seed_a", "seed_b"]}},
+        },
+    )
+    event_path = tmp_path / "pipeline_events" / f"pipeline_events_{target}.jsonl"
+    event_path.parent.mkdir(parents=True, exist_ok=True)
+    event_path.write_text(
+        json.dumps(
+            {
+                "stage": "scalp_sim_holding_started",
+                "fields": {
+                    "scalp_sim_auto_policy_active_seed_count": "2",
+                    "active_seed_candidate_observable_prefix": json.dumps(prefix, sort_keys=True),
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    report = ledger.build_key_lineage_ledger(target)
+    summary = report["summary"]
+
+    assert summary["active_seed_candidate_ambiguous_parent_seed_prefix_event_count"] == 1
+    assert summary["active_seed_candidate_inferred_parent_seed_id_event_count"] == 0
+    assert summary["active_seed_candidate_without_seed_id_event_count"] == 1
+    assert summary["active_seed_candidate_lineage_followup_required"] is True
+
+
 def test_runtime_lineage_uses_target_apply_catalog_not_next_catalog(monkeypatch, tmp_path):
     _patch_dirs(monkeypatch, tmp_path)
     target = "2026-06-04"
@@ -737,7 +846,14 @@ def test_conversion_lane_adds_runtime_observed_matched_bucket_to_real_queue(monk
     _write(
         tmp_path / "report" / "key_lineage_ledger" / f"key_lineage_ledger_{target}.json",
         {
-            "summary": {"lineage_blocker_count": 0},
+            "summary": {
+                "lineage_blocker_count": 0,
+                "active_seed_candidate_inferred_parent_seed_id_event_count": 2,
+                "active_seed_candidate_inferred_parent_seed_id_stage_counts": {
+                    "scalp_sim_holding_started": 2
+                },
+                "active_seed_candidate_ambiguous_parent_seed_prefix_event_count": 1,
+            },
             "lineage_rows": [
                 {
                     "source_key_id": "lifecycle_flow:combo_entry:abc123",
@@ -766,6 +882,12 @@ def test_conversion_lane_adds_runtime_observed_matched_bucket_to_real_queue(monk
     assert report["summary"]["positive_ev_sample_floor_blocked_count"] == 0
     assert report["summary"]["positive_ev_sample_floor_unknown_floor_count"] == 1
     assert report["summary"]["positive_ev_sample_floor_related_count"] == 1
+    assert report["summary"]["active_seed_candidate_inferred_parent_seed_id_event_count"] == 2
+    assert report["summary"]["active_seed_candidate_inferred_parent_seed_id_stage_counts"] == {
+        "scalp_sim_holding_started": 2
+    }
+    assert report["summary"]["active_seed_candidate_ambiguous_parent_seed_prefix_event_count"] == 1
+    assert "inferred_parent_seed_id=`2`" in lane._render_markdown(report)
     assert report["summary"]["conversion_candidate_strategy_scope_counts"]["scalp"] == 1
     assert report["summary"]["unscoped_conversion_candidate_count"] == 0
     assert report["summary"]["conversion_blocker_count"] == 1

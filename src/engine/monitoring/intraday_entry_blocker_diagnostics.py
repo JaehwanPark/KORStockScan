@@ -97,6 +97,10 @@ ENTRY_FRESH_MAX_AGE_MS = 3000.0
 ZERO_HISTORY_WORKORDER_MIN_EVENTS = 2
 DEFAULT_BUY_WINDOW_START = dt_time(9, 0)
 DEFAULT_BUY_WINDOW_END = dt_time(15, 20)
+ACTIONABLE_FULL_EVAL_DEFERRED_MIN_COUNT = 2
+ACTIONABLE_FULL_EVAL_DEFERRED_MIN_DELTA_PCT = 1.0
+ACTIONABLE_COOLDOWN_MIN_COUNT = 2
+ACTIONABLE_COOLDOWN_MIN_DELTA_PCT = 1.0
 
 STRENGTH_HISTORY_COUNT_KEYS = (
     "fast_precheck_observed_ws_strength_history_count",
@@ -183,6 +187,7 @@ def _blocker_reason(row: dict[str, Any]) -> str:
         "skip_reason",
         "scanner_watch_skip_reason",
         "scanner_block_reason",
+        "eviction_reason",
         "budget_block_reason",
         "terminal_reason",
         "entry_submit_revalidation_warning",
@@ -457,6 +462,112 @@ def _latest_blocker(rows: list[dict[str, Any]]) -> dict[str, Any]:
                 ),
             }
     return {"emitted_at": "", "stage": "", "reason": "", "ai_score": None, "price_delta_since_first_seen_pct": None}
+
+
+def _blocker_taxonomy(
+    *,
+    stage: str,
+    reason: str,
+    count: int = 1,
+    max_delta_pct: float | None = None,
+) -> dict[str, Any]:
+    reason_lower = reason.lower()
+    stage_lower = stage.lower()
+    delta = max_delta_pct if max_delta_pct is not None else 0.0
+    if stage == "scalping_scanner_watch_eviction":
+        return {
+            "class": "watch_budget_reallocated",
+            "actionable": False,
+            "major_blocker": False,
+            "route": "watch_budget_reallocated_after_stale_or_terminal_expiry",
+        }
+    if reason == "ws_snapshot_missing_or_zero":
+        evictable = count >= 3
+        return {
+            "class": "source_freshness_evictable" if evictable else "source_freshness_recovering",
+            "actionable": evictable,
+            "major_blocker": False,
+            "route": "evict_or_quarantine_and_reallocate_watch_budget"
+            if evictable
+            else "short_recovery_window_before_watch_budget_reallocation",
+        }
+    if reason == "scanner_full_eval_loop_budget_deferred":
+        return {
+            "class": "runtime_backpressure",
+            "actionable": False,
+            "major_blocker": False,
+            "route": "auto_governor_backpressure_observation",
+        }
+    if reason == "entry_cooldown_active":
+        actionable = count >= ACTIONABLE_COOLDOWN_MIN_COUNT and delta >= ACTIONABLE_COOLDOWN_MIN_DELTA_PCT
+        return {
+            "class": "intended_guard",
+            "actionable": actionable,
+            "major_blocker": actionable,
+            "route": (
+                "review_cooldown_opportunity_loss_or_wrong_scope"
+                if actionable
+                else "normal_cooldown_guard"
+            ),
+        }
+    if "stale_context_or_quote" in reason_lower or "submit_revalidation" in stage_lower:
+        return {
+            "class": "submit_hard_guard",
+            "actionable": True,
+            "major_blocker": True,
+            "route": "preserve_stale_submit_block_and_fix_price_or_quote_context",
+        }
+    if "stale" in reason_lower or "insufficient_history" in reason_lower:
+        return {
+            "class": "source_freshness_blocker",
+            "actionable": True,
+            "major_blocker": True,
+            "route": "fix_observation_source_quality_before_threshold_tuning",
+        }
+    return {
+        "class": "strategy_reject",
+        "actionable": True,
+        "major_blocker": True,
+        "route": "strategy_or_ai_reject_attribution",
+    }
+
+
+def _dominant_actionable_blocker(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    blocker_rows = [row for row in rows if _is_blocker_row(row)]
+    if not blocker_rows:
+        return {"stage": "", "reason": "", "count": 0, "class": "", "route": ""}
+    max_delta = _max_delta(rows)
+    counts = Counter((row.get("stage") or "", _blocker_reason(row)) for row in blocker_rows)
+    for (stage, reason), count in counts.most_common():
+        taxonomy = _blocker_taxonomy(
+            stage=str(stage),
+            reason=str(reason),
+            count=int(count),
+            max_delta_pct=max_delta,
+        )
+        if taxonomy["major_blocker"]:
+            return {
+                "stage": stage,
+                "reason": reason,
+                "count": count,
+                "class": taxonomy["class"],
+                "route": taxonomy["route"],
+            }
+    return {"stage": "", "reason": "", "count": 0, "class": "non_actionable_guard_or_backpressure", "route": "observe_only"}
+
+
+def _full_eval_deferred_status(rows: list[dict[str, Any]], deferred_rows: list[dict[str, Any]]) -> str:
+    if not deferred_rows:
+        return "not_deferred"
+    latest_deferred = deferred_rows[-1]
+    try:
+        latest_idx = max(idx for idx, row in enumerate(rows) if row is latest_deferred)
+    except ValueError:
+        latest_idx = -1
+    later_rows = rows[latest_idx + 1 :] if latest_idx >= 0 else []
+    if any(_is_downstream_progress_after_stale_source(row) for row in later_rows):
+        return "deferred_then_evaluated"
+    return "deferred_never_evaluated"
 
 
 def _latest_delta(rows: list[dict[str, Any]]) -> float | None:
@@ -739,6 +850,7 @@ def _summarize_code(
     latest_budget_deferred = budget_deferred_rows[-1] if budget_deferred_rows else {}
     queue_counts = {stage: stage_counts.get(stage, 0) for stage in QUEUE_STAGES if stage_counts.get(stage, 0)}
     latest_ai = ai_rows[-1] if ai_rows else {}
+    max_delta = _max_delta(rows)
     return {
         "stock_code": code,
         "stock_name": name,
@@ -746,7 +858,7 @@ def _summarize_code(
         "first_promoted_at": _event_time(promoted_rows[0]) if promoted_rows else "",
         "promoted_in_event_window": any(row.get("stage") == PROMOTED_STAGE for row in rows),
         "last_event_at": _event_time(rows[-1]) if rows else "",
-        "max_price_delta_since_first_seen_pct": _max_delta(rows),
+        "max_price_delta_since_first_seen_pct": max_delta,
         "latest_price_delta_since_first_seen_pct": _latest_delta(rows),
         "ai_confirmed_count": len(ai_rows),
         "latest_ai_action": _field(latest_ai, "action") if latest_ai else "",
@@ -757,6 +869,7 @@ def _summarize_code(
         "real_submit_count": len(real_submit_rows),
         "blocker_count": len(blocker_rows),
         "dominant_blocker": _dominant_blocker(rows),
+        "dominant_actionable_blocker": _dominant_actionable_blocker(rows),
         "latest_blocker": _latest_blocker(rows),
         "queue_observation_counts": queue_counts,
         "low_ai_or_negative_pressure_eval_quality": _low_ai_pressure_quality_counts(rows),
@@ -765,6 +878,7 @@ def _summarize_code(
         "zero_strength_history_source_quality": _zero_strength_history_source_quality(rows),
         "scanner_full_eval_budget_deferred": {
             "count": len(budget_deferred_rows),
+            "status": _full_eval_deferred_status(rows, budget_deferred_rows),
             "latest_at": _event_time(latest_budget_deferred) if latest_budget_deferred else "",
             "scanner_full_eval_limit": _safe_float(_field(latest_budget_deferred, "scanner_full_eval_limit")),
             "scanner_full_eval_count": _safe_float(_field(latest_budget_deferred, "scanner_full_eval_count")),
@@ -801,8 +915,74 @@ def _summarize_code(
                 "scanner_rising_full_eval_relief_count": _safe_float(
                     _field(row, "scanner_rising_full_eval_relief_count")
                 ),
+                "eviction_reason": _field(row, "eviction_reason", ""),
+                "terminal_reason": _field(row, "terminal_reason", ""),
+                "eviction_attempt_count": _safe_float(_field(row, "eviction_attempt_count")),
+                "stale_age_sec": _safe_float(_field(row, "stale_age_sec")),
+                "taxonomy": _blocker_taxonomy(
+                    stage=str(row.get("stage") or ""),
+                    reason=_blocker_reason(row),
+                    count=1,
+                    max_delta_pct=max_delta,
+                ),
             }
             for row in blocker_rows[-8:]
+        ],
+    }
+
+
+def _rollup_blocker_taxonomy(items: list[dict[str, Any]]) -> dict[str, Any]:
+    class_counter: Counter[str] = Counter()
+    route_counter: Counter[tuple[str, str]] = Counter()
+    actionable_counter: Counter[tuple[str, str, str]] = Counter()
+    suppressed_non_major_counter: Counter[tuple[str, str, str]] = Counter()
+    for item in items:
+        max_delta = item.get("max_price_delta_since_first_seen_pct")
+        per_symbol_counter = Counter(
+            (blocker.get("stage") or "", blocker.get("reason") or "")
+            for blocker in item.get("recent_blockers") or []
+            if blocker.get("stage")
+        )
+        for (stage, reason), count in per_symbol_counter.items():
+            effective_count = int(count)
+            if reason == "scanner_full_eval_loop_budget_deferred":
+                budget = item.get("scanner_full_eval_budget_deferred") or {}
+                effective_count = max(effective_count, int(budget.get("count") or 0))
+            taxonomy = _blocker_taxonomy(
+                stage=stage,
+                reason=reason,
+                count=effective_count,
+                max_delta_pct=max_delta,
+            )
+            block_class = taxonomy["class"]
+            route = taxonomy["route"]
+            class_counter[block_class] += effective_count
+            route_counter[(block_class, route)] += effective_count
+            target = actionable_counter if taxonomy["major_blocker"] else suppressed_non_major_counter
+            target[(block_class, stage, reason)] += effective_count
+    suppressed_non_major_counts = [
+        {"class": block_class, "stage": stage, "reason": reason, "count": count}
+        for (block_class, stage, reason), count in suppressed_non_major_counter.most_common()
+    ]
+    return {
+        "class_counts": _top_counter(class_counter, key_name="class"),
+        "route_counts": [
+            {"class": block_class, "route": route, "count": count}
+            for (block_class, route), count in route_counter.most_common()
+        ],
+        "actionable_major_blocker_counts": [
+            {"class": block_class, "stage": stage, "reason": reason, "count": count}
+            for (block_class, stage, reason), count in actionable_counter.most_common()
+        ],
+        "suppressed_non_major_counts": suppressed_non_major_counts,
+        "suppressed_non_actionable_counts": suppressed_non_major_counts,
+        "decision_authority": "diagnostic_taxonomy_only_no_runtime_or_guard_change",
+        "runtime_effect": False,
+        "forbidden_uses": [
+            "guard_bypass",
+            "stale_submit_bypass",
+            "intraday_threshold_mutation",
+            "real_order_approval",
         ],
     }
 
@@ -890,6 +1070,7 @@ def _scanner_full_eval_budget_diagnostics(items: list[dict[str, Any]]) -> dict[s
                 "scanner_rising_full_eval_relief_count": budget.get("scanner_rising_full_eval_relief_count"),
                 "scanner_full_eval_count": budget.get("scanner_full_eval_count"),
                 "scanner_full_eval_budget_source": budget.get("scanner_full_eval_budget_source") or "",
+                "deferred_status": budget.get("status") or "deferred_never_evaluated",
             }
         )
     symbol_rows.sort(
@@ -903,6 +1084,10 @@ def _scanner_full_eval_budget_diagnostics(items: list[dict[str, Any]]) -> dict[s
         "deferred_count": total_count,
         "symbol_count": len(symbol_rows),
         "top_symbols": symbol_rows[:12],
+        "status_counts": _top_counter(
+            Counter(str(row.get("deferred_status") or "deferred_never_evaluated") for row in symbol_rows),
+            key_name="status",
+        ),
         "decision_authority": "diagnostic_only_no_runtime_budget_change",
         "runtime_effect": False,
         "forbidden_uses": [
@@ -913,6 +1098,30 @@ def _scanner_full_eval_budget_diagnostics(items: list[dict[str, Any]]) -> dict[s
             "unbounded_cpu_or_ai_budget_increase",
         ],
     }
+
+
+def _actionable_scanner_full_eval_backpressure(scanner_budget: dict[str, Any]) -> list[dict[str, Any]]:
+    actionable_rows: list[dict[str, Any]] = []
+    for row in scanner_budget.get("top_symbols") or []:
+        count = int(row.get("count") or 0)
+        max_delta = _safe_float(row.get("max_price_delta_since_first_seen_pct"), 0.0) or 0.0
+        if row.get("deferred_status") == "deferred_then_evaluated":
+            continue
+        if count < ACTIONABLE_FULL_EVAL_DEFERRED_MIN_COUNT and max_delta < ACTIONABLE_FULL_EVAL_DEFERRED_MIN_DELTA_PCT:
+            continue
+        actionable_rows.append(row)
+    total_count = sum(int(row.get("count") or 0) for row in actionable_rows)
+    if not actionable_rows:
+        return []
+    return [
+        {
+            "class": "runtime_backpressure",
+            "stage": "scalping_scanner_watching_runtime_skip",
+            "reason": "scanner_full_eval_loop_budget_deferred",
+            "count": total_count,
+            "symbol_count": len(actionable_rows),
+        }
+    ]
 
 
 def _zero_strength_history_workorders(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -1004,16 +1213,18 @@ def _root_cause_priorities(
         )
 
     budget_deferred_count = int(scanner_budget.get("deferred_count") or 0)
-    if budget_deferred_count:
+    actionable_backpressure = _actionable_scanner_full_eval_backpressure(scanner_budget)
+    if budget_deferred_count and actionable_backpressure:
         priorities.append(
             {
                 "priority": 2,
                 "issue": "scanner_full_eval_budget_deferred",
-                "decision": "treat_as_evaluation_throughput_bottleneck_not_buy_threshold_signal",
+                "decision": "treat_only_sla_breach_as_evaluation_throughput_bottleneck",
                 "evidence": {
                     "deferred_count": budget_deferred_count,
                     "symbol_count": int(scanner_budget.get("symbol_count") or 0),
                     "top_symbols": scanner_budget.get("top_symbols") or [],
+                    "actionable_backpressure_counts": actionable_backpressure,
                 },
                 "next_action": "raise_only_bounded_scanner_eval_capacity_if_high_delta_candidates_keep_deferred",
                 "runtime_effect": False,
@@ -1227,6 +1438,7 @@ def build_report(
         post_sell_dir=post_sell_dir or PROJECT_ROOT / "data" / "post_sell",
     )
     scanner_budget = _scanner_full_eval_budget_diagnostics(rising_missed)
+    blocker_taxonomy = _rollup_blocker_taxonomy(summaries)
     return {
         "schema_version": 1,
         "report_type": "intraday_entry_blocker_diagnostics",
@@ -1302,6 +1514,20 @@ def build_report(
                     "unbounded_cpu_or_ai_budget_increase",
                 ],
             },
+            "blocker_taxonomy": {
+                "metric_role": "funnel_count",
+                "decision_authority": "diagnostic_taxonomy_only",
+                "window_policy": "intraday_event_window",
+                "sample_floor": "none_diagnostic",
+                "primary_decision_metric": False,
+                "source_quality_gate": "blocker_stage_reason_fields_present",
+                "forbidden_uses": [
+                    "guard_bypass",
+                    "stale_submit_bypass",
+                    "intraday_threshold_mutation",
+                    "real_order_approval",
+                ],
+            },
             "entry_price_execution": {
                 "metric_role": "execution_quality_real_only",
                 "decision_authority": "diagnostic_only",
@@ -1348,6 +1574,7 @@ def build_report(
             },
         },
         "scanner_full_eval_budget_diagnostics": scanner_budget,
+        "blocker_taxonomy": blocker_taxonomy,
         "entry_price_execution": entry_price,
         "scale_in_diagnostics": scale_in,
         "post_sell_flow_diagnostics": post_sell,
@@ -1378,6 +1605,14 @@ def build_report(
             ),
             "rising_missed_full_eval_budget_deferred_symbol_count": int(
                 scanner_budget.get("symbol_count") or 0
+            ),
+            "actionable_major_blocker_count": sum(
+                int(item.get("count") or 0)
+                for item in blocker_taxonomy.get("actionable_major_blocker_counts", [])
+            ),
+            "suppressed_non_actionable_blocker_count": sum(
+                int(item.get("count") or 0)
+                for item in blocker_taxonomy.get("suppressed_non_actionable_counts", [])
             ),
         },
         "source_quality_workorders": {

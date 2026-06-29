@@ -298,7 +298,7 @@ class TestCronCompletionDetector:
         (logs_dir / "postclose_done_controller_cron.log").write_text(
             "\n".join(
                 [
-                    "[START] postclose_done_controller target_date=2026-06-04 started_at=2026-06-04T21:40:01+0900",
+                    "[START] postclose_done_controller target_date=2026-06-04 started_at=2026-06-04T20:40:01+0900",
                     '{"status": "blocked_recoverable_action_failed", "date": "2026-06-04"}',
                 ]
             ),

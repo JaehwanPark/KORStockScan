@@ -87,7 +87,7 @@ class ProcessHealthDetector(BaseDetector):
         expected_running = _is_bot_expected_running()
         details["bot_expected_running"] = expected_running
         details["bot_expected_window"] = {
-            "start": getattr(TRADING_RULES, "ERROR_DETECTOR_BOT_EXPECTED_START_HHMM", "07:40"),
+            "start": getattr(TRADING_RULES, "ERROR_DETECTOR_BOT_EXPECTED_START_HHMM", "07:55"),
             "end": getattr(TRADING_RULES, "ERROR_DETECTOR_BOT_EXPECTED_END_HHMM", "20:10"),
         }
         details["restart_grace_sec"] = restart_grace
@@ -395,7 +395,7 @@ def _is_bot_expected_running(now: datetime | None = None) -> bool:
     current = now or datetime.now().astimezone()
     if not is_krx_trading_day(current.date()):
         return False
-    start = _parse_hhmm(getattr(TRADING_RULES, "ERROR_DETECTOR_BOT_EXPECTED_START_HHMM", "07:40"))
+    start = _parse_hhmm(getattr(TRADING_RULES, "ERROR_DETECTOR_BOT_EXPECTED_START_HHMM", "07:55"))
     end = _parse_hhmm(getattr(TRADING_RULES, "ERROR_DETECTOR_BOT_EXPECTED_END_HHMM", "20:10"))
     if start is None or end is None:
         return True
@@ -410,7 +410,7 @@ def _seconds_since_expected_start(now: datetime | None = None) -> float | None:
     if not enabled:
         return None
     current = now or datetime.now().astimezone()
-    start = _parse_hhmm(getattr(TRADING_RULES, "ERROR_DETECTOR_BOT_EXPECTED_START_HHMM", "07:40"))
+    start = _parse_hhmm(getattr(TRADING_RULES, "ERROR_DETECTOR_BOT_EXPECTED_START_HHMM", "07:55"))
     if start is None:
         return None
     start_dt = current.replace(hour=start // 60, minute=start % 60, second=0, microsecond=0)

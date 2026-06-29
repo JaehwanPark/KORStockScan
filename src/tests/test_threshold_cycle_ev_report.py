@@ -624,6 +624,116 @@ def test_threshold_cycle_ev_lifecycle_summary_surfaces_submit_contract(tmp_path,
     assert summary["scale_in_bucket_code_improvement_workorders"] == [{"workorder_id": "scale_in_order"}]
 
 
+def test_threshold_cycle_ev_lifecycle_bucket_summary_extracts_positive_sim_cases(tmp_path, monkeypatch):
+    report_dir = tmp_path / "lifecycle_bucket_discovery"
+    report_dir.mkdir()
+    path = report_dir / "lifecycle_bucket_discovery_2026-06-26.json"
+    path.write_text(
+        json.dumps(
+            {
+                "window_policy": "mtd",
+                "summary": {
+                    "status": "pass",
+                    "candidate_count": 4,
+                    "surfaced_candidate_count": 4,
+                    "sim_auto_approved_count": 1,
+                    "entry_only_sim_auto_approved_count": 1,
+                    "sim_auto_positive_ev_count": 1,
+                    "sim_auto_nonpositive_ev_count": 1,
+                    "active_sim_priority_positive_seed_count": 1,
+                    "active_sim_priority_nonpositive_seed_count": 0,
+                    "parent_bucket_count": 2,
+                    "parent_granularity_status": "target_pass",
+                    "child_conflict_warning_count": 1,
+                    "source_contract_status": "pass",
+                    "ai_two_pass_review_status": "parsed",
+                },
+                "parent_bucket_summaries": [
+                    {
+                        "parent_bucket_id": "parent_positive",
+                        "parent_joined_sample": 42,
+                        "complete_flow_count": 0,
+                        "parent_granularity_floor_passed": True,
+                        "parent_source_quality_adjusted_ev_pct": 1.7,
+                        "child_conflict_warning": True,
+                        "dimension_filters": {
+                            "entry_score_parent": "score_watch_recovery",
+                            "entry_source_parent": "entry_source_wait6579",
+                            "submit_quality_parent": "submit_missing",
+                            "exit_outcome_parent": "exit_missing",
+                            "major_holding_parent": "holding_missing",
+                            "scale_in_parent": "scale_in_none",
+                        },
+                    },
+                    {
+                        "parent_bucket_id": "parent_negative",
+                        "parent_joined_sample": 100,
+                        "parent_source_quality_adjusted_ev_pct": -0.2,
+                        "dimension_filters": {
+                            "entry_score_parent": "score_unobserved",
+                        },
+                    },
+                ],
+                "sim_auto_approved_candidates": [
+                    {
+                        "bucket_id": "entry:positive",
+                        "classification_state": "sim_auto_approved",
+                        "stage": "entry",
+                        "bucket_type": "score_band",
+                        "source_quality_adjusted_ev_pct": 1.4,
+                        "joined_sample": 12,
+                    },
+                    {
+                        "bucket_id": "entry:avoid",
+                        "classification_state": "entry_only_sim_auto_approved",
+                        "stage": "entry",
+                        "bucket_type": "chosen_action",
+                        "source_quality_adjusted_ev_pct": -0.5,
+                        "joined_sample": 20,
+                    },
+                ],
+                "active_sim_priority_seeds": [
+                    {
+                        "active_seed_id": "seed_positive",
+                        "status": "active",
+                        "parent_ev_pct": 1.7,
+                        "parent_joined_sample": 42,
+                        "complete_flow_count": 0,
+                        "observable_prefix": {
+                            "entry_score_parent": "score_watch_recovery",
+                            "entry_source_parent": "entry_source_wait6579",
+                        },
+                        "active_collection_reason": "positive_ev_parent_needs_sim_collection",
+                        "live_conversion_blocked_reason": "incomplete_lifecycle_flow",
+                    }
+                ],
+                "warnings": [],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        mod,
+        "lifecycle_bucket_discovery_report_path",
+        lambda target_date: report_dir / f"lifecycle_bucket_discovery_{target_date}.json",
+    )
+
+    summary, artifact, warnings = mod._lifecycle_bucket_discovery_summary("2026-06-26")
+
+    assert artifact == str(path)
+    assert warnings == []
+    assert summary["positive_parent_count"] == 1
+    assert summary["positive_parent_sample_ready_count"] == 1
+    assert summary["positive_parent_conflict_count"] == 1
+    assert summary["top_sample_ready_positive_parent_buckets"][0]["parent_bucket_id"] == "parent_positive"
+    assert summary["top_active_positive_seeds"][0]["active_seed_id"] == "seed_positive"
+    assert summary["sim_auto_positive_ev_count"] == 1
+    assert summary["sim_auto_nonpositive_ev_count"] == 1
+    assert summary["top_positive_sim_auto_approved"][0]["bucket_id"] == "entry:positive"
+    assert summary["top_nonpositive_sim_auto_approved"][0]["bucket_id"] == "entry:avoid"
+
+
 def test_audit_summary_resolves_source_only_candidate_warning(tmp_path):
     report_dir = tmp_path / "producer_gap_discovery"
     report_dir.mkdir()

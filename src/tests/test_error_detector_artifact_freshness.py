@@ -229,7 +229,7 @@ class TestArtifactFreshnessDetector:
         today = now.strftime("%Y-%m-%d")
         controller_log = tmp_path / "postclose_done_controller_cron.log"
         controller_log.write_text(
-            f"[START] postclose_done_controller target_date={today} started_at={today}T21:40:01+0900\n",
+            f"[START] postclose_done_controller target_date={today} started_at={today}T20:40:01+0900\n",
             encoding="utf-8",
         )
         artifact = {

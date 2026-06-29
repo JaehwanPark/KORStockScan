@@ -174,6 +174,54 @@ def test_active_sim_priority_seed_uses_observable_prefix_only(tmp_path, monkeypa
     assert cooldown["status"] == "cooldown"
 
 
+def test_active_sim_priority_dedupes_duplicate_active_observable_prefix(tmp_path, monkeypatch):
+    monkeypatch.setattr(mod, "REPORT_DIR", tmp_path)
+    shared_dimensions = {
+        "entry_score_parent": "score_watch_recovery",
+        "entry_source_parent": "entry_source_wait6579",
+        "exit_outcome_parent": "exit_missed_upside",
+    }
+    report = {
+        "date": "2026-06-01",
+        "parent_bucket_summaries": [
+            {
+                "source_parent_bucket_id": "parent_lower_ev",
+                "parent_source_quality_adjusted_ev_pct": 0.8,
+                "complete_flow_count": 3,
+                "parent_joined_sample": 20,
+                "parent_granularity_floor_passed": True,
+                "dimension_filters": shared_dimensions,
+            },
+            {
+                "source_parent_bucket_id": "parent_higher_ev",
+                "parent_source_quality_adjusted_ev_pct": 1.2,
+                "complete_flow_count": 1,
+                "parent_joined_sample": 10,
+                "parent_granularity_floor_passed": True,
+                "dimension_filters": {
+                    **shared_dimensions,
+                    "major_holding_parent": "holding_active_decision",
+                },
+            },
+        ],
+    }
+
+    seeds = mod._build_active_sim_priority_seeds(report)
+
+    active = [seed for seed in seeds if seed["status"] == "active"]
+    cooldown = [seed for seed in seeds if seed["status"] == "cooldown"]
+    assert [seed["source_parent_bucket_id"] for seed in active] == ["parent_higher_ev"]
+    assert [seed["source_parent_bucket_id"] for seed in cooldown] == ["parent_lower_ev"]
+    assert active[0]["active_observable_prefix_dedup_state"] == "winner"
+    assert active[0]["active_observable_prefix_duplicate_count"] == 2
+    assert cooldown[0]["active_observable_prefix_dedup_state"] == "suppressed_duplicate"
+    assert cooldown[0]["active_collection_reason"] == "duplicate_observable_prefix_suppressed"
+    assert cooldown[0]["source_quality_status"] == "observable_prefix_duplicate_suppressed"
+    assert cooldown[0]["targeted_sim_quota"]["needs_revisit_sample"] is False
+    assert cooldown[0]["runtime_effect"] is False
+    assert cooldown[0]["allowed_runtime_apply"] is False
+
+
 def test_ldm_refinement_pressure_is_consumed_without_hypothesis_seed_fragmentation(tmp_path, monkeypatch):
     refinement_dir = tmp_path / "ldm_refinement"
     refinement_dir.mkdir()
@@ -814,6 +862,9 @@ def test_active_sim_priority_summary_exposes_collection_and_live_blockers(monkey
     assert report["summary"]["active_sim_priority_targeted_total_share_pct"] == 35
     assert report["summary"]["active_sim_priority_targeted_per_seed_daily_limit"] == 20
     assert report["summary"]["active_sim_priority_sample_goal_per_bucket"] == 10
+    assert report["summary"]["positive_parent_count"] == 1
+    assert report["summary"]["positive_parent_sample_ready_count"] == 0
+    assert report["summary"]["top_positive_parent_buckets"][0]["parent_ev_pct"] == 1.2
     assert report["summary"]["parent_live_auto_apply_ready_count"] == 0
     seed = report["active_sim_priority_seeds"][0]
     assert seed["live_conversion_blocked_reason"] == "incomplete_lifecycle_flow"
@@ -824,6 +875,53 @@ def test_active_sim_priority_summary_exposes_collection_and_live_blockers(monkey
     assert seed["targeted_sim_quota"]["needs_revisit_sample"] is True
     assert seed["targeted_sim_quota"]["actual_order_submitted"] is False
     assert seed["targeted_sim_quota"]["broker_order_forbidden"] is True
+
+
+def test_sim_auto_approval_separates_positive_and_nonpositive_ev(monkeypatch, tmp_path):
+    monkeypatch.setattr(mod, "SIM_AUTO_APPROVAL_DIR", tmp_path)
+    candidates = [
+        {
+            "bucket_id": "entry:positive",
+            "source_bucket_id": "entry:positive:source",
+            "classification_state": "sim_auto_approved",
+            "stage": "entry",
+            "bucket_type": "score_band",
+            "source_quality_adjusted_ev_pct": 1.2,
+            "sample": 20,
+            "joined_sample": 12,
+            "source_quality_gate": "pass",
+        },
+        {
+            "bucket_id": "entry:avoid",
+            "source_bucket_id": "entry:avoid:source",
+            "classification_state": "entry_only_sim_auto_approved",
+            "stage": "entry",
+            "bucket_type": "chosen_action",
+            "source_quality_adjusted_ev_pct": -0.4,
+            "sample": 30,
+            "joined_sample": 20,
+            "source_quality_gate": "pass",
+        },
+    ]
+
+    report = mod._finalize_report({"date": "2026-06-01", "summary": {}}, candidates, [])
+    summary = report["summary"]
+
+    assert summary["sim_auto_positive_ev_count"] == 1
+    assert summary["sim_auto_nonpositive_ev_count"] == 1
+    assert summary["entry_only_sim_auto_positive_ev_count"] == 0
+    assert summary["entry_only_sim_auto_nonpositive_ev_count"] == 1
+    assert summary["sim_auto_positive_ev_top"][0]["bucket_id"] == "entry:positive"
+    assert summary["sim_auto_nonpositive_ev_top"][0]["bucket_id"] == "entry:avoid"
+
+    mod._write_sim_auto_approval(report)
+    payload = json.loads((tmp_path / "lifecycle_bucket_sim_auto_approval_2026-06-01.json").read_text())
+
+    assert payload["approved_bucket_count"] == 2
+    assert payload["positive_ev_approved_bucket_count"] == 1
+    assert payload["nonpositive_ev_approved_bucket_count"] == 1
+    assert payload["positive_ev_bucket_rows"][0]["bucket_id"] == "entry:positive"
+    assert payload["nonpositive_ev_bucket_rows"][0]["bucket_id"] == "entry:avoid"
 
 
 def test_lifecycle_bucket_discovery_summarizes_quiet_gaps():

@@ -1416,7 +1416,7 @@ def _handle_entry_buy_execution(
     preset_tp_ord_no_after = preset_tp_ord_no_before
     preset_sync_status = "NOT_APPLICABLE"
     preset_sync_reason = "non_scalping_or_non_default_tag"
-    if requested_entry_qty > 0 and new_qty >= requested_entry_qty:
+    if requested_entry_qty > 0 and cum_filled_qty >= requested_entry_qty:
         log_info(
             f"[ENTRY_BUNDLE_FILLED] {target_stock.get('name')}({code}) "
             f"mode={target_stock.get('entry_mode', 'normal')} "
@@ -1429,6 +1429,9 @@ def _handle_entry_buy_execution(
         target_stock.pop('entry_filled_qty', None)
         target_stock.pop('entry_fill_amount', None)
         target_stock.pop('entry_bundle_id', None)
+        target_stock.pop('rising_missed_scout_upgrade_order_pending', None)
+        if target_stock.get('rising_missed_one_share_scout'):
+            target_stock['rising_missed_scout_upgraded'] = True
 
     strategy = normalize_strategy(target_stock.get('strategy'))
     pos_tag = normalize_position_tag(strategy, target_stock.get('position_tag'))

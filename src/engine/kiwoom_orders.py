@@ -1118,7 +1118,7 @@ def send_cancel_order(code, orig_ord_no, token, qty=0, dmst_stex_tp=None):
         'authorization': f'Bearer {token}',
         'cont-yn': 'N',
         'next-key': '',
-        'api-id': 'kt10003'  # 🚀 취소 전용 TR 명시
+        'api-id': 'kt10003'  # 주식 취소 전용 TR 명시
     }
 
     payload = {

@@ -158,6 +158,149 @@ def test_pattern_lab_ai_review_resolves_generic_handoff_gap_when_feedback_source
     assert conclusion["feedback_handoff_resolution"]["status"] == "resolved_by_currentness_feedback_handoff_pass"
 
 
+def test_pattern_lab_ai_review_resolves_closed_propagation_and_workorder_source_gap(tmp_path, monkeypatch):
+    report_dir = tmp_path / "data" / "report"
+    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+    _write_json(
+        report_dir / "pattern_lab_currentness_audit" / "pattern_lab_currentness_audit_2026-05-15.json",
+        {
+            "status": "pass",
+            "summary": {
+                "consumed_feedback_source_count": 8,
+                "missing_feedback_source_count": 0,
+            },
+            "checks": [
+                {
+                    "check_id": "pattern_lab_ai_review_contract",
+                    "status": "pass",
+                    "severity": "info",
+                    "finding": "Pattern lab AI reviewer contract is present.",
+                }
+            ],
+        },
+    )
+    for label in (
+        "threshold_cycle_ev",
+        "code_improvement_workorder",
+        "lifecycle_decision_matrix",
+        "lifecycle_bucket_discovery",
+        "swing_lifecycle_decision_matrix",
+        "swing_lifecycle_bucket_discovery",
+        "swing_strategy_discovery_ev",
+        "pattern_lab_propagation_audit",
+    ):
+        _write_json(
+            report_dir / label / f"{label}_2026-05-15.json",
+            {"status": "pass", "runtime_effect": False, "allowed_runtime_apply": False, "summary": {}},
+        )
+    _write_json(
+        report_dir / "scalping_pattern_lab_automation" / "scalping_pattern_lab_automation_2026-05-15.json",
+        {"status": "pass", "runtime_effect": False, "allowed_runtime_apply": False},
+    )
+    raw_response = {
+        "schema_version": 1,
+        "interpretation": {"review_items": [], "source_feedback_status": "warning"},
+        "audit": {
+            "status": "correction_required",
+            "issues": [
+                "Missing threshold_cycle_ev source prevents validation.",
+                "Missing code_improvement_workorder source prevents tracking.",
+                "Missing pattern_lab_propagation_audit source prevents handoff verification.",
+            ],
+            "forbidden_use_violations": [],
+        },
+        "final_conclusions": [
+            {
+                "review_id": "ai_review_gap",
+                "domain": "scalping",
+                "final_state": "ai_review_gap",
+                "final_decision": "block_runtime_use",
+                "reason": (
+                    "The reviewer contract is missing and threshold_cycle_ev, code_improvement_workorder, "
+                    "and pattern_lab_propagation_audit sources are missing."
+                ),
+                "required_followup": ["restore_sources"],
+            }
+        ],
+    }
+
+    report = mod.build_pattern_lab_ai_review_report("2026-05-15", provider="openai", ai_raw_response=raw_response)
+
+    handoff = report["feedback_handoff_summary"]
+    assert handoff["status"] == "pass"
+    assert handoff["present_auxiliary_source_count"] == 2
+    assert handoff["missing_auxiliary_source_labels"] == []
+    assert report["status"] == "pass"
+    assert report["summary"]["audit_status"] == "pass"
+    assert report["code_improvement_orders"] == []
+    conclusion = report["ai_two_pass_review"]["final_conclusions"][0]
+    assert conclusion["final_state"] == "source_only_keep_collecting"
+    assert conclusion["final_decision"] == "keep"
+    assert conclusion["feedback_handoff_resolution"]["runtime_effect"] is False
+    assert any("pattern_lab_propagation_audit" in path for path in conclusion["source_paths"])
+
+
+def test_pattern_lab_ai_review_keeps_unclosed_propagation_source_gap(tmp_path, monkeypatch):
+    report_dir = tmp_path / "data" / "report"
+    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+    _write_json(
+        report_dir / "pattern_lab_currentness_audit" / "pattern_lab_currentness_audit_2026-05-15.json",
+        {
+            "status": "pass",
+            "summary": {
+                "consumed_feedback_source_count": 8,
+                "missing_feedback_source_count": 0,
+            },
+            "checks": [
+                {
+                    "check_id": "pattern_lab_ai_review_contract",
+                    "status": "pass",
+                    "severity": "info",
+                    "finding": "Pattern lab AI reviewer contract is present.",
+                }
+            ],
+        },
+    )
+    for label in (
+        "threshold_cycle_ev",
+        "code_improvement_workorder",
+        "lifecycle_decision_matrix",
+        "lifecycle_bucket_discovery",
+        "swing_lifecycle_decision_matrix",
+        "swing_lifecycle_bucket_discovery",
+        "swing_strategy_discovery_ev",
+    ):
+        _write_json(
+            report_dir / label / f"{label}_2026-05-15.json",
+            {"status": "pass", "runtime_effect": False, "allowed_runtime_apply": False, "summary": {}},
+        )
+    raw_response = {
+        "schema_version": 1,
+        "interpretation": {"review_items": [], "source_feedback_status": "warning"},
+        "audit": {"status": "correction_required", "issues": [], "forbidden_use_violations": []},
+        "final_conclusions": [
+            {
+                "review_id": "ai_review_gap",
+                "domain": "scalping",
+                "final_state": "ai_review_gap",
+                "final_decision": "block_runtime_use",
+                "reason": "The reviewer contract is present but pattern_lab_propagation_audit source is missing.",
+                "required_followup": ["restore_pattern_lab_propagation_audit"],
+            }
+        ],
+    }
+
+    report = mod.build_pattern_lab_ai_review_report("2026-05-15", provider="openai", ai_raw_response=raw_response)
+
+    handoff = report["feedback_handoff_summary"]
+    assert handoff["missing_auxiliary_source_labels"] == ["pattern_lab_propagation_audit"]
+    assert report["summary"]["audit_status"] == "correction_required"
+    assert any(order["review_id"] == "ai_review_gap" for order in report["code_improvement_orders"])
+    conclusion = report["ai_two_pass_review"]["final_conclusions"][0]
+    assert conclusion["final_state"] == "ai_review_gap"
+    assert "feedback_handoff_resolution" not in conclusion
+
+
 def test_pattern_lab_ai_review_keeps_specific_handoff_gap_when_feedback_sources_closed(tmp_path, monkeypatch):
     report_dir = tmp_path / "data" / "report"
     monkeypatch.setattr(mod, "REPORT_DIR", report_dir)

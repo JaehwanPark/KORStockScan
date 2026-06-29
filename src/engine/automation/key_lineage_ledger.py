@@ -172,6 +172,23 @@ def _active_seed_without_seed_detail(
     return "taxonomy_pending_source"
 
 
+def _canonical_json_text(value: Any) -> str:
+    if isinstance(value, str):
+        raw = value.strip()
+        if not raw:
+            return ""
+        try:
+            value = json.loads(raw)
+        except Exception:
+            return raw
+    if isinstance(value, dict):
+        compact = {str(key): str(val) for key, val in value.items() if str(val or "").strip()}
+        if not compact:
+            return ""
+        return json.dumps(compact, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+    return str(value or "").strip()
+
+
 def _runtime_apply_path(target_date: str) -> Path:
     exact = APPLY_PLAN_DIR / f"threshold_apply_{target_date}.json"
     if exact.exists():
@@ -248,6 +265,21 @@ def _collect_values(payload: Any, keys: set[str]) -> set[str]:
     return values
 
 
+def _active_seed_prefix_index(catalog: dict[str, Any]) -> dict[str, list[str]]:
+    index: dict[str, list[str]] = {}
+    for seed in catalog.get("active_sim_priority_seeds") or []:
+        if not isinstance(seed, dict):
+            continue
+        if str(seed.get("status") or "").strip().lower() != "active":
+            continue
+        seed_id = _seed_id(seed)
+        prefix_key = _canonical_json_text(seed.get("observable_prefix"))
+        if not seed_id or not prefix_key:
+            continue
+        index.setdefault(prefix_key, []).append(seed_id)
+    return {key: sorted(set(values)) for key, values in index.items()}
+
+
 def _event_io_guard_config() -> tuple[int, int]:
     return (
         max(
@@ -310,8 +342,13 @@ def _iter_jsonl_payloads(path: Path, values: dict[str, Any], *, line_bytes_limit
         guard["file_read_error_count"] += 1
 
 
-def _event_field_values(target_date: str, tracked_values: dict[str, set[str]] | None = None) -> dict[str, Any]:
+def _event_field_values(
+    target_date: str,
+    tracked_values: dict[str, set[str]] | None = None,
+    active_seed_prefix_index: dict[str, list[str]] | None = None,
+) -> dict[str, Any]:
     tracked_values = tracked_values or {}
+    active_seed_prefix_index = active_seed_prefix_index or {}
     untracked_value_limit, line_bytes_limit = _event_io_guard_config()
     field_keys = {
         "active_seed_id",
@@ -374,6 +411,10 @@ def _event_field_values(target_date: str, tracked_values: dict[str, set[str]] | 
         "active_seed_candidate_not_match_eligible_reason_counts": {},
         "active_seed_candidate_without_seed_id_reason_counts": {},
         "active_seed_candidate_without_seed_id_detail_counts": {},
+        "active_seed_candidate_inferred_parent_seed_id_event_count": 0,
+        "active_seed_candidate_inferred_parent_seed_id_stage_counts": {},
+        "active_seed_candidate_inferred_parent_seed_id_prefix_counts": {},
+        "active_seed_candidate_ambiguous_parent_seed_prefix_event_count": 0,
         "active_seed_candidate_missing_parent_seed_lookup_key_counts": {},
         "active_seed_candidate_missing_parent_seed_stage_counts": {},
         "active_seed_candidate_followup_stage_counts": {},
@@ -426,6 +467,30 @@ def _event_field_values(target_date: str, tracked_values: dict[str, set[str]] | 
                 if candidate_prefix:
                     policy_diag["active_seed_candidate_event_count"] += 1
                     seed_id = str(fields.get("active_seed_id") or "").strip()
+                    raw_seed_id = seed_id
+                    prefix_key = _canonical_json_text(candidate_prefix)
+                    inferred_parent_seed_ids = active_seed_prefix_index.get(prefix_key, [])
+                    if not seed_id and len(inferred_parent_seed_ids) == 1:
+                        seed_id = inferred_parent_seed_ids[0]
+                        fields["active_seed_id"] = seed_id
+                        fields["active_seed_id_inferred_from_observable_prefix"] = True
+                        fields["active_seed_id_inference_source"] = (
+                            "catalog_active_observable_prefix_unique_match"
+                        )
+                        policy_diag["active_seed_candidate_inferred_parent_seed_id_event_count"] += 1
+                        stage_counts = policy_diag[
+                            "active_seed_candidate_inferred_parent_seed_id_stage_counts"
+                        ]
+                        stage_counts[stage or "unknown"] = stage_counts.get(stage or "unknown", 0) + 1
+                        prefix_counts = policy_diag[
+                            "active_seed_candidate_inferred_parent_seed_id_prefix_counts"
+                        ]
+                        prefix_counts[prefix_key] = prefix_counts.get(prefix_key, 0) + 1
+                    elif not seed_id and len(inferred_parent_seed_ids) > 1:
+                        fields["active_seed_id_inference_source"] = (
+                            "catalog_active_observable_prefix_ambiguous"
+                        )
+                        policy_diag["active_seed_candidate_ambiguous_parent_seed_prefix_event_count"] += 1
                     matched = str(fields.get("scalp_sim_active_priority_seed_matched") or "").strip().lower()
                     explicit_eligible = _bool_field(fields.get("active_seed_match_eligible"), None)
                     exclusion_reason = str(fields.get("active_seed_match_exclusion_reason") or "").strip()
@@ -454,7 +519,7 @@ def _event_field_values(target_date: str, tracked_values: dict[str, set[str]] | 
                         policy_diag["active_seed_candidate_followup_event_count"] += 1
                         followup_counts = policy_diag["active_seed_candidate_followup_stage_counts"]
                         followup_counts[stage or "unknown"] = followup_counts.get(stage or "unknown", 0) + 1
-                    if not seed_id:
+                    if not raw_seed_id:
                         policy_diag["active_seed_candidate_raw_without_seed_id_event_count"] += 1
                         if stage != "scalp_sim_entry_armed":
                             policy_diag["active_seed_candidate_raw_followup_without_seed_id_event_count"] += 1
@@ -1254,6 +1319,7 @@ def build_key_lineage_ledger(target_date: str) -> dict[str, Any]:
             hypothesis_plan=hypothesis_plan,
             refinement=refinement,
         ),
+        active_seed_prefix_index=_active_seed_prefix_index(scalp_catalog),
     )
     active_policy_observation = (
         events.get("active_policy_observation")
@@ -1453,6 +1519,20 @@ def build_key_lineage_ledger(target_date: str) -> dict[str, Any]:
                 "active_seed_candidate_without_seed_id_detail_counts"
             )
             or {},
+            "active_seed_candidate_inferred_parent_seed_id_event_count": _safe_int(
+                active_policy_observation.get("active_seed_candidate_inferred_parent_seed_id_event_count")
+            ),
+            "active_seed_candidate_inferred_parent_seed_id_stage_counts": active_policy_observation.get(
+                "active_seed_candidate_inferred_parent_seed_id_stage_counts"
+            )
+            or {},
+            "active_seed_candidate_inferred_parent_seed_id_prefix_counts": active_policy_observation.get(
+                "active_seed_candidate_inferred_parent_seed_id_prefix_counts"
+            )
+            or {},
+            "active_seed_candidate_ambiguous_parent_seed_prefix_event_count": _safe_int(
+                active_policy_observation.get("active_seed_candidate_ambiguous_parent_seed_prefix_event_count")
+            ),
             "active_seed_candidate_missing_parent_seed_lookup_key_counts": active_policy_observation.get(
                 "active_seed_candidate_missing_parent_seed_lookup_key_counts"
             )
@@ -1616,6 +1696,9 @@ def _render_markdown(report: dict[str, Any]) -> str:
         f"followup_unmatched=`{summary.get('active_seed_candidate_followup_unmatched_event_count', 0)}` "
         f"eligible_without_seed_id=`{summary.get('active_seed_candidate_without_seed_id_event_count', 0)}` "
         f"without_seed_details=`{summary.get('active_seed_candidate_without_seed_id_detail_counts') or {}}` "
+        f"inferred_parent_seed_id=`{summary.get('active_seed_candidate_inferred_parent_seed_id_event_count', 0)}` "
+        f"inferred_stages=`{summary.get('active_seed_candidate_inferred_parent_seed_id_stage_counts') or {}}` "
+        f"ambiguous_prefix=`{summary.get('active_seed_candidate_ambiguous_parent_seed_prefix_event_count', 0)}` "
         f"missing_parent_stages=`{summary.get('active_seed_candidate_missing_parent_seed_stage_counts') or {}}` "
         f"raw_without_seed_id=`{summary.get('active_seed_candidate_raw_without_seed_id_event_count', 0)}` "
         f"eligible_followup_without_seed_id=`{summary.get('active_seed_candidate_followup_without_seed_id_event_count', 0)}` "

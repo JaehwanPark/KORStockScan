@@ -1,0 +1,172 @@
+"""Pure decision helper for rising-missed one-share SCALPING entries."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Any
+
+
+FORCED_ENTRY_REASON = "rising_missed_one_share_entry"
+BLOCK_FEATURE_DISABLED = "feature_disabled"
+BLOCK_NOT_CANDIDATE = "not_rising_missed_candidate"
+BLOCK_OPEN_PENDING = "open_pending_entry_order"
+BLOCK_ALREADY_HOLDING = "already_holding"
+
+
+@dataclass(frozen=True)
+class RisingMissedOneShareDecision:
+    allowed: bool
+    reason: str
+    forced_qty: int = 0
+    positive_delta_pct: float = 0.0
+    log_fields: dict[str, Any] | None = None
+
+
+def _safe_float(value: Any, default: float = 0.0) -> float:
+    try:
+        return float(value)
+    except Exception:
+        return float(default)
+
+
+def _safe_int(value: Any, default: int = 0) -> int:
+    try:
+        return int(float(value))
+    except Exception:
+        return int(default)
+
+
+def _normalized_text(value: Any) -> str:
+    return str(value or "").strip().upper()
+
+
+def _field_present(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    text = str(value or "").strip().lower()
+    return bool(text) and text not in {"0", "false", "no", "n", "off", "none", "null", "-"}
+
+
+def _positive_delta_pct(stock: dict[str, Any], explicit_delta_pct: Any = None) -> float:
+    values = [
+        explicit_delta_pct,
+        stock.get("price_delta_since_first_seen_pct"),
+        stock.get("scanner_positive_delta_pct"),
+        stock.get("comparable_flu_delta_since_first_seen"),
+        stock.get("max_price_delta_since_first_seen_pct"),
+    ]
+    return max(0.0, *(_safe_float(value, 0.0) for value in values))
+
+
+def _looks_like_scanner_rising_missed_candidate(
+    stock: dict[str, Any],
+    *,
+    strategy: str,
+    position_tag: str,
+    positive_delta_pct: float,
+    min_delta_pct: float,
+) -> bool:
+    if _normalized_text(strategy) != "SCALPING":
+        return False
+    if _normalized_text(position_tag) != "SCANNER":
+        return False
+    if positive_delta_pct < max(0.0, float(min_delta_pct)):
+        return False
+    return bool(
+        _field_present(stock.get("scanner_promotion_id"))
+        or _field_present(stock.get("scanner_promotion_reason"))
+        or _field_present(stock.get("entry_armed_at_epoch"))
+        or _field_present(stock.get("_scanner_rising_entry_relief_reason"))
+        or _field_present(stock.get("rising_missed_buy"))
+        or _field_present(stock.get("rising_entry_relief_eligible"))
+    )
+
+
+def evaluate_rising_missed_one_share_entry(
+    stock: dict[str, Any] | None,
+    *,
+    strategy: str,
+    position_tag: str,
+    feature_enabled: bool,
+    has_open_pending: bool,
+    already_holding: bool,
+    positive_delta_pct: Any = None,
+    min_delta_pct: float = 0.5,
+) -> RisingMissedOneShareDecision:
+    stock = stock if isinstance(stock, dict) else {}
+    delta_pct = _positive_delta_pct(stock, explicit_delta_pct=positive_delta_pct)
+    base_fields = {
+        "rising_missed_one_share_entry_enabled": bool(feature_enabled),
+        "rising_missed_one_share_entry_positive_delta_pct": f"{delta_pct:.4f}",
+        "rising_missed_one_share_entry_min_delta_pct": f"{float(min_delta_pct):.4f}",
+        "rising_missed_one_share_entry_strategy": _normalized_text(strategy) or "-",
+        "rising_missed_one_share_entry_position_tag": _normalized_text(position_tag) or "-",
+        "rising_missed_one_share_entry_forced_qty": 1,
+    }
+    if not feature_enabled:
+        return RisingMissedOneShareDecision(
+            allowed=False,
+            reason=BLOCK_FEATURE_DISABLED,
+            positive_delta_pct=delta_pct,
+            log_fields=base_fields,
+        )
+    if not _looks_like_scanner_rising_missed_candidate(
+        stock,
+        strategy=strategy,
+        position_tag=position_tag,
+        positive_delta_pct=delta_pct,
+        min_delta_pct=min_delta_pct,
+    ):
+        return RisingMissedOneShareDecision(
+            allowed=False,
+            reason=BLOCK_NOT_CANDIDATE,
+            positive_delta_pct=delta_pct,
+            log_fields=base_fields,
+        )
+    if has_open_pending:
+        return RisingMissedOneShareDecision(
+            allowed=False,
+            reason=BLOCK_OPEN_PENDING,
+            positive_delta_pct=delta_pct,
+            log_fields=base_fields,
+        )
+    if already_holding:
+        return RisingMissedOneShareDecision(
+            allowed=False,
+            reason=BLOCK_ALREADY_HOLDING,
+            positive_delta_pct=delta_pct,
+            log_fields=base_fields,
+        )
+    return RisingMissedOneShareDecision(
+        allowed=True,
+        reason=FORCED_ENTRY_REASON,
+        forced_qty=1,
+        positive_delta_pct=delta_pct,
+        log_fields=base_fields,
+    )
+
+
+def is_forced_rising_missed_one_share_entry(stock: dict[str, Any] | None, runtime: dict[str, Any] | None) -> bool:
+    stock = stock if isinstance(stock, dict) else {}
+    runtime = runtime if isinstance(runtime, dict) else {}
+    return (
+        bool(stock.get("rising_missed_one_share_entry_forced"))
+        and _safe_int(stock.get("forced_entry_qty"), 0) == 1
+        and str(stock.get("forced_entry_reason") or runtime.get("forced_entry_reason") or "").strip()
+        == FORCED_ENTRY_REASON
+    )
+
+
+def collapse_to_one_share_order(planned_orders: list[dict[str, Any]] | None, *, fallback_price: int) -> list[dict[str, Any]]:
+    base = dict((planned_orders or [{}])[0] or {})
+    price = _safe_int(base.get("price"), 0) or _safe_int(fallback_price, 0)
+    base.update(
+        {
+            "tag": base.get("tag") or FORCED_ENTRY_REASON,
+            "qty": 1,
+            "price": price,
+            "tif": base.get("tif") or "DAY",
+        }
+    )
+    base["rising_missed_one_share_entry_forced"] = True
+    return [base]

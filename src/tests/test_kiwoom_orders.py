@@ -258,6 +258,7 @@ def test_send_cancel_order_uses_requested_exchange(monkeypatch):
 
     def fake_post(url, headers, json, timeout):
         captured["payload"] = json
+        captured["headers"] = headers
         return DummyResponse()
 
     monkeypatch.setattr(kiwoom_orders.requests, "post", fake_post)
@@ -271,6 +272,7 @@ def test_send_cancel_order_uses_requested_exchange(monkeypatch):
     )
 
     assert result["return_code"] == "0"
+    assert captured["headers"]["api-id"] == "kt10003"
     assert captured["payload"]["dmst_stex_tp"] == "KRX"
     assert captured["payload"]["orig_ord_no"] == "0062482"
 

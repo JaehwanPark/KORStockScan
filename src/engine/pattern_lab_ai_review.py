@@ -166,13 +166,17 @@ def _feedback_handoff_summary(payloads: dict[str, dict[str, Any]]) -> dict[str, 
         "swing_lifecycle_bucket_discovery",
         "swing_strategy_discovery_ev",
     ]
+    auxiliary_feedback_labels = [
+        "code_improvement_workorder",
+        "pattern_lab_propagation_audit",
+    ]
     consumed_count = _safe_int(currentness_summary.get("consumed_feedback_source_count"), 0)
     missing_count = _safe_int(currentness_summary.get("missing_feedback_source_count"), 0)
-    source_statuses: dict[str, dict[str, Any]] = {}
-    for label in feedback_labels:
+
+    def _status_for(label: str) -> dict[str, Any]:
         payload = payloads.get(label) or {}
         summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
-        source_statuses[label] = {
+        return {
             "exists": bool(payload),
             "status": payload.get("status") or summary.get("status"),
             "runtime_effect": payload.get("runtime_effect"),
@@ -182,6 +186,11 @@ def _feedback_handoff_summary(payloads: dict[str, dict[str, Any]]) -> dict[str, 
             or summary.get("candidate_ledger_count"),
             "workorder_count": summary.get("workorder_count") or summary.get("code_patch_required_count"),
         }
+
+    source_statuses: dict[str, dict[str, Any]] = {}
+    for label in feedback_labels:
+        source_statuses[label] = _status_for(label)
+    auxiliary_source_statuses = {label: _status_for(label) for label in auxiliary_feedback_labels}
     status = "pass"
     if missing_count > 0:
         status = "warning"
@@ -195,6 +204,15 @@ def _feedback_handoff_summary(payloads: dict[str, dict[str, Any]]) -> dict[str, 
         "consumed_feedback_source_count": consumed_count,
         "missing_feedback_source_count": missing_count,
         "source_statuses": source_statuses,
+        "auxiliary_source_statuses": auxiliary_source_statuses,
+        "present_feedback_source_count": sum(1 for item in source_statuses.values() if item["exists"]),
+        "present_auxiliary_source_count": sum(1 for item in auxiliary_source_statuses.values() if item["exists"]),
+        "missing_feedback_source_labels": [
+            label for label, item in source_statuses.items() if not item["exists"]
+        ],
+        "missing_auxiliary_source_labels": [
+            label for label, item in auxiliary_source_statuses.items() if not item["exists"]
+        ],
         "interpretation_hint": (
             "Currentness audit reports pattern-lab feedback sources consumed; do not classify "
             "automation_handoff_gap unless a listed source is missing or has explicit fail status."
@@ -671,6 +689,8 @@ def _source_label_status_closed(context: dict[str, Any], label: str) -> bool:
     source = sources.get(label) if isinstance(sources.get(label), dict) else {}
     if not source:
         return False
+    if source.get("exists") is False or not source.get("path"):
+        return False
     summary = source.get("summary") if isinstance(source.get("summary"), dict) else {}
     status = str(source.get("status") or summary.get("status") or "pass").lower()
     if status in {"fail", "failed"}:
@@ -684,7 +704,29 @@ _FEEDBACK_SOURCE_REVIEW_IDS = {
     "pattern_lab_currentness_audit",
     "threshold_cycle_ev",
     "code_improvement_workorder",
+    "pattern_lab_propagation_audit",
 }
+
+
+def _mentioned_feedback_source_labels(item: dict[str, Any]) -> list[str]:
+    review_id = str(item.get("review_id") or "").strip().lower()
+    reason = str(item.get("reason") or "").lower()
+    normalized_reason = reason.replace(" ", "_")
+    return [
+        label
+        for label in _FEEDBACK_SOURCE_REVIEW_IDS
+        if review_id == label or label in reason or label in normalized_reason
+    ]
+
+
+def _has_unclosed_mentioned_feedback_source_gap(item: dict[str, Any], context: dict[str, Any]) -> bool:
+    reason = str(item.get("reason") or "").lower()
+    if not any(token in reason for token in ("missing", "absence", "incomplete", "handoff", "feedback")):
+        return False
+    return any(
+        not _source_label_status_closed(context, label)
+        for label in _mentioned_feedback_source_labels(item)
+    )
 
 
 def _is_resolved_feedback_source_missing_gap(item: dict[str, Any], context: dict[str, Any]) -> bool:
@@ -694,14 +736,8 @@ def _is_resolved_feedback_source_missing_gap(item: dict[str, Any], context: dict
         return False
     if not _feedback_handoff_closed(context):
         return False
-    review_id = str(item.get("review_id") or "").strip().lower()
     reason = str(item.get("reason") or "").lower()
-    normalized_reason = reason.replace(" ", "_")
-    matched_labels = [
-        label
-        for label in _FEEDBACK_SOURCE_REVIEW_IDS
-        if review_id == label or label in reason or label in normalized_reason
-    ]
+    matched_labels = _mentioned_feedback_source_labels(item)
     if not matched_labels:
         return False
     if not any(token in reason for token in ("missing", "absence", "incomplete", "handoff", "feedback")):
@@ -749,6 +785,8 @@ def _is_resolved_pattern_lab_ai_review_contract_gap(item: dict[str, Any], contex
     if str(item.get("final_state") or "") != "ai_review_gap":
         return False
     if str(item.get("final_decision") or "") == "keep":
+        return False
+    if _has_unclosed_mentioned_feedback_source_gap(item, context):
         return False
     review_id = str(item.get("review_id") or "").strip().lower()
     reason = str(item.get("reason") or "").lower()
@@ -996,17 +1034,21 @@ def _source_path_labels_for_domain(context: dict[str, Any], domain: str) -> list
             "scalping_pattern_lab_automation",
             "pattern_lab_currentness_audit",
             "threshold_cycle_ev",
+            "code_improvement_workorder",
             "lifecycle_decision_matrix",
             "lifecycle_bucket_discovery",
+            "pattern_lab_propagation_audit",
         ]
     elif domain == "swing":
         labels = [
             "swing_pattern_lab_automation",
             "pattern_lab_currentness_audit",
             "threshold_cycle_ev",
+            "code_improvement_workorder",
             "swing_lifecycle_decision_matrix",
             "swing_lifecycle_bucket_discovery",
             "swing_strategy_discovery_ev",
+            "pattern_lab_propagation_audit",
         ]
     else:
         labels = list(sources)

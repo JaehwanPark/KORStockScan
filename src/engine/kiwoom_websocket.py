@@ -47,7 +47,12 @@ _WS_HOT_RUNTIME_OVERRIDE_KEYS = frozenset(
         "KORSTOCKSCAN_WS_ALTERNATE_ROUTE_TTL_SEC",
         "KORSTOCKSCAN_WS_MAX_REG_ITEMS",
         "KORSTOCKSCAN_WS_PERSISTENT_REPAIR_MAX_CODES",
+        "KORSTOCKSCAN_WS_PERSISTENT_REPAIR_REBUILD_GROUP_ENABLED",
+        "KORSTOCKSCAN_WS_PERSISTENT_REPAIR_REBUILD_GROUP_MIN_INTERVAL_SEC",
+        "KORSTOCKSCAN_WS_PERSISTENT_REPAIR_STUCK_COOLDOWN_SEC",
+        "KORSTOCKSCAN_WS_PERSISTENT_REPAIR_STUCK_MIN_ATTEMPTS",
         "KORSTOCKSCAN_WS_PERSISTENT_REPAIR_TTL_SEC",
+        "KORSTOCKSCAN_WS_REG_RECENT_TTL_SEC",
     }
 )
 _WS_OPERATOR_RUNTIME_OVERRIDE_PATH = (
@@ -158,7 +163,10 @@ class KiwoomWSManager:
         self._recent_reg_request_ts = {}
         self._alternate_route_request_ts = {}
         self._persistent_repair_request_ts = {}
+        self._persistent_repair_no_tick_attempts = {}
+        self._persistent_repair_stuck_until_ts = {}
         self._persistent_repair_overflow_codes = OrderedDict()
+        self._last_persistent_repair_rebuild_ts = 0.0
         self._registered_items_by_code = {}
         
         # 전역 EventBus 인스턴스 획득 및 외부 명령 수신기 장착
@@ -375,7 +383,7 @@ class KiwoomWSManager:
 
     @staticmethod
     def _recent_reg_ttl_sec():
-        raw = os.getenv("KORSTOCKSCAN_WS_REG_RECENT_TTL_SEC", "")
+        raw = _ws_hot_or_env_value("KORSTOCKSCAN_WS_REG_RECENT_TTL_SEC")
         try:
             value = float(str(raw).strip()) if str(raw).strip() else 20.0
         except Exception:
@@ -416,7 +424,7 @@ class KiwoomWSManager:
             value = int(str(raw).strip()) if str(raw).strip() else 6
         except Exception:
             value = 6
-        return max(0, min(value, 20))
+        return max(0, min(value, 32))
 
     @staticmethod
     def _alternate_route_ttl_sec():
@@ -477,6 +485,56 @@ class KiwoomWSManager:
             value = 30.0
         return max(0.0, min(value, 1800.0))
 
+    @staticmethod
+    def _persistent_repair_stuck_min_attempts():
+        raw = _ws_hot_or_env_value("KORSTOCKSCAN_WS_PERSISTENT_REPAIR_STUCK_MIN_ATTEMPTS")
+        try:
+            value = int(str(raw).strip()) if str(raw).strip() else 3
+        except Exception:
+            value = 3
+        return max(0, min(value, 20))
+
+    @staticmethod
+    def _persistent_repair_stuck_cooldown_sec():
+        raw = _ws_hot_or_env_value("KORSTOCKSCAN_WS_PERSISTENT_REPAIR_STUCK_COOLDOWN_SEC")
+        try:
+            value = float(str(raw).strip()) if str(raw).strip() else 240.0
+        except Exception:
+            value = 240.0
+        return max(0.0, min(value, 1800.0))
+
+    @staticmethod
+    def _persistent_repair_rebuild_group_enabled():
+        raw = str(_ws_hot_or_env_value("KORSTOCKSCAN_WS_PERSISTENT_REPAIR_REBUILD_GROUP_ENABLED") or "")
+        return raw.strip().lower() in {"1", "true", "t", "yes", "y", "on"}
+
+    @staticmethod
+    def _persistent_repair_rebuild_group_min_interval_sec():
+        raw = _ws_hot_or_env_value("KORSTOCKSCAN_WS_PERSISTENT_REPAIR_REBUILD_GROUP_MIN_INTERVAL_SEC")
+        try:
+            value = float(str(raw).strip()) if str(raw).strip() else 60.0
+        except Exception:
+            value = 60.0
+        return max(0.0, min(value, 600.0))
+
+    def _persistent_repair_rebuild_targets(self, repair_targets):
+        normalized_targets = self._normalize_subscribe_codes(repair_targets)
+        if not normalized_targets or not self._persistent_repair_rebuild_group_enabled():
+            return False, normalized_targets
+        now_ts = time.time()
+        min_interval_sec = self._persistent_repair_rebuild_group_min_interval_sec()
+        with self.lock:
+            last_ts = float(self._last_persistent_repair_rebuild_ts or 0.0)
+            if min_interval_sec > 0 and last_ts > 0 and now_ts - last_ts < min_interval_sec:
+                return False, normalized_targets
+            self._last_persistent_repair_rebuild_ts = now_ts
+            merged_targets = list(
+                OrderedDict.fromkeys(
+                    list(sorted(self.subscribed_codes)) + list(normalized_targets)
+                )
+            )
+        return True, merged_targets
+
     def _filter_persistent_repair_targets(self, codes):
         normalized_codes = self._normalize_subscribe_codes(codes)
         if not normalized_codes:
@@ -489,8 +547,12 @@ class KiwoomWSManager:
         allowed = []
         skipped = []
         overflow_skipped = []
+        stuck_skipped = []
         with self.lock:
             requested_set = set(normalized_codes)
+            for code in list(self._persistent_repair_stuck_until_ts.keys()):
+                if now_ts >= float(self._persistent_repair_stuck_until_ts.get(code) or 0.0):
+                    self._persistent_repair_stuck_until_ts.pop(code, None)
             for code in list(self._persistent_repair_overflow_codes.keys()):
                 if code not in requested_set:
                     self._persistent_repair_overflow_codes.pop(code, None)
@@ -502,6 +564,15 @@ class KiwoomWSManager:
                 normalized_codes = overflow_first + [
                     code for code in normalized_codes if code not in overflow_set
                 ]
+            active_codes = []
+            for code in normalized_codes:
+                stuck_until = float(self._persistent_repair_stuck_until_ts.get(code) or 0.0)
+                if stuck_until > now_ts:
+                    skipped.append(code)
+                    stuck_skipped.append(code)
+                    continue
+                active_codes.append(code)
+            normalized_codes = active_codes
             if ttl_sec > 0:
                 stale_codes = [
                     code
@@ -520,13 +591,40 @@ class KiwoomWSManager:
                     overflow_skipped.append(code)
                     continue
                 self._persistent_repair_request_ts[code] = now_ts
+                self._note_persistent_repair_attempt_locked(code, now_ts)
                 self._persistent_repair_overflow_codes.pop(code, None)
                 allowed.append(code)
             for code in overflow_skipped:
                 self._persistent_repair_overflow_codes[code] = now_ts
             while len(self._persistent_repair_overflow_codes) > 200:
                 self._persistent_repair_overflow_codes.popitem(last=False)
+        if stuck_skipped:
+            print(
+                "🧯 [WS] persistent repair stuck cooldown: "
+                f"skipped={stuck_skipped} "
+                f"cooldown_sec={self._persistent_repair_stuck_cooldown_sec():.1f}"
+            )
         return allowed, skipped
+
+    def _note_persistent_repair_attempt_locked(self, code, now_ts):
+        target = self.realtime_data.get(code) or {}
+        if target.get("_first_tick_logged") or self._is_ws_ready(target, require_trade=False):
+            self._persistent_repair_no_tick_attempts.pop(code, None)
+            self._persistent_repair_stuck_until_ts.pop(code, None)
+            return
+        min_attempts = self._persistent_repair_stuck_min_attempts()
+        cooldown_sec = self._persistent_repair_stuck_cooldown_sec()
+        if min_attempts <= 0 or cooldown_sec <= 0:
+            return
+        attempts = int(self._persistent_repair_no_tick_attempts.get(code) or 0) + 1
+        self._persistent_repair_no_tick_attempts[code] = attempts
+        if attempts >= min_attempts:
+            self._persistent_repair_stuck_until_ts[code] = now_ts + cooldown_sec
+            self._persistent_repair_no_tick_attempts[code] = 0
+            print(
+                "🧯 [WS] persistent repair no-tick cooldown entered: "
+                f"code={code} attempts={attempts} cooldown_sec={cooldown_sec:.1f}"
+            )
 
     @staticmethod
     def _parse_condition_list_rows(data_list):
@@ -1392,6 +1490,8 @@ class KiwoomWSManager:
                                 received = sorted(list(target.get('received_types') or []))
                                 print(f"✅ [WS] 첫 실시간 데이터 수신 확인: {item_code} / types={received}")
                                 target['_first_tick_logged'] = True
+                            self._persistent_repair_no_tick_attempts.pop(item_code, None)
+                            self._persistent_repair_stuck_until_ts.pop(item_code, None)
                             self._maybe_write_dashboard_snapshot()
                             
                             # 💡 파싱 완료 후 구독자들에게 전파
@@ -1570,6 +1670,15 @@ class KiwoomWSManager:
                     )
                 if not new_targets:
                     return
+                rebuild_existing_group, rebuild_targets = self._persistent_repair_rebuild_targets(new_targets)
+                if rebuild_existing_group:
+                    print(
+                        "🔁 [WS] persistent repair 전체 REG 그룹 재구성: "
+                        f"repair_targets={new_targets} rebuild_targets={rebuild_targets} "
+                        f"min_interval_sec={self._persistent_repair_rebuild_group_min_interval_sec():.1f}"
+                    )
+                    new_targets = rebuild_targets
+                    replace_existing = True
             enforce_item_budget = True
             include_alternate_route = persistent_repair
             alternate_route_codes = None

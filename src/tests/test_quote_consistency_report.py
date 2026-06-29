@@ -58,3 +58,44 @@ def test_quote_consistency_report_flags_defective_rows(monkeypatch, tmp_path):
     assert report["summary"]["gap_bps"]["max"] == 120.5
     assert report["stage_state_counts"]["entry_submit_revalidation_block"]["diverged"] == 1
     assert report["defective_row_candidates"][0]["quote_consistency_state"] == "diverged"
+
+
+def test_quote_consistency_missing_required_fields_are_warning_when_ev_blocked(monkeypatch, tmp_path):
+    pipeline_dir = tmp_path / "pipeline_events"
+    threshold_dir = tmp_path / "threshold_cycle"
+    pipeline_dir.mkdir()
+    threshold_dir.mkdir()
+    path = pipeline_dir / "pipeline_events_2026-06-29.jsonl"
+    (threshold_dir / "threshold_events_2026-06-29.jsonl").write_text("", encoding="utf-8")
+    row = {
+        "event_type": "pipeline_event",
+        "pipeline": "SCALE_IN_PIPELINE",
+        "stage": "scale_in_price_guard_block",
+        "stock_code": "005930",
+        "fields": {
+            "quote_consistency_family": "quote_consistency_normalization",
+            "quote_consistency_state": "stale",
+            "canonical_mark_price": 10000,
+            "executable_buy_price": 9990,
+            "executable_sell_price": 9990,
+            "normalization_runtime_effect": True,
+        },
+    }
+    path.write_text(json.dumps(row, ensure_ascii=False) + "\n", encoding="utf-8")
+    monkeypatch.setattr(mod, "PIPELINE_EVENTS_DIR", pipeline_dir)
+    monkeypatch.setattr(mod, "THRESHOLD_EVENTS_DIR", threshold_dir)
+
+    report = mod.build_quote_consistency_report("2026-06-29")
+
+    assert report["summary"]["missing_required_fields"] == 1
+    assert report["summary"]["missing_required_fields_ev_blocked_count"] == 1
+    assert report["summary"]["ev_input_blocked_count"] == 1
+    assert report["verifier_findings"] == [
+        {
+            "severity": "warning",
+            "code": "quote_consistency_required_fields_excluded",
+            "count": 1,
+            "ev_blocked_count": 1,
+            "message": "Rows with missing quote consistency required fields were excluded from EV input.",
+        }
+    ]

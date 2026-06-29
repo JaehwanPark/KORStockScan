@@ -805,9 +805,13 @@ def _normalize_order_history_rows(*, results, source_api):
                     "name": str(_pick_first(item, ("stk_nm", "name", "hts_kor_isnm"))).strip(),
                     "side": side,
                     "qty": qty,
+                    "remaining_qty": _to_int_safe(_pick_first(item, ("oso_qty", "osop_qty", "remaining_qty"))),
                     "unit_price": unit_price,
                     "ord_no": ord_no,
                     "orig_ord_no": orig_ord_no,
+                    "stex_tp": str(_pick_first(item, ("stex_tp", "dmst_stex_tp"))).strip(),
+                    "stex_tp_txt": str(_pick_first(item, ("stex_tp_txt", "dmst_stex_tp_txt"))).strip(),
+                    "sor_yn": str(_pick_first(item, ("sor_yn", "sorYn", "sor"))).strip(),
                     "seq": str(_pick_first(item, ("seq", "odno_dseq", "ord_seq"))).strip(),
                     "raw": item,
                 }
@@ -890,6 +894,38 @@ def get_order_reference_snapshot_ka10076(
         use_continuous=True,
     )
     return _normalize_order_history_rows(results=results, source_api="ka10076")
+
+
+def get_unfilled_order_snapshot_ka10075(
+    token,
+    *,
+    stk_cd="",
+    all_stk_tp="1",
+    trde_tp="0",
+    stex_tp="0",
+    extra_payload=None,
+):
+    """
+    [ka10075] 미체결요청을 정규화해서 반환합니다.
+    - 목적: 취소 거절 시 원주문 거래소(stex_tp/sor_yn) 보강 확인
+    """
+    url = get_api_url("/api/dostk/acnt")
+    payload = {
+        "all_stk_tp": str(all_stk_tp or "1"),
+        "trde_tp": str(trde_tp or "0"),
+        "stk_cd": str(stk_cd or ""),
+        "stex_tp": str(stex_tp or "0"),
+    }
+    if extra_payload:
+        payload.update({k: v for k, v in dict(extra_payload).items() if v is not None})
+    results = fetch_kiwoom_api_continuous(
+        url=url,
+        token=token,
+        api_id="ka10075",
+        payload=payload,
+        use_continuous=True,
+    )
+    return _normalize_order_history_rows(results=results, source_api="ka10075")
 
 
 def get_order_reference_snapshot_2nd_pass(token, *, qry_tp="0", stk_bond_tp="0", sell_tp="0"):

@@ -88,6 +88,7 @@ def build_quote_consistency_report(target_date: str | None = None) -> dict[str, 
     safety_exit_count = 0
     rest_fallback_count = 0
     missing_required_fields = 0
+    missing_required_fields_ev_blocked_count = 0
     ev_input_blocked_count = 0
 
     for source_name, path in paths.items():
@@ -130,6 +131,8 @@ def build_quote_consistency_report(target_date: str | None = None) -> dict[str, 
             ev_ineligible = state_lower in {"diverged", "missing", "stale"} or bool(required_missing)
             if ev_ineligible:
                 ev_input_blocked_count += 1
+                if required_missing:
+                    missing_required_fields_ev_blocked_count += 1
                 if len(defective_rows) < 200:
                     defective_rows.append(
                         {
@@ -163,12 +166,24 @@ def build_quote_consistency_report(target_date: str | None = None) -> dict[str, 
                 "message": "No quote_consistency_normalization rows were found for the target date.",
             }
         )
-    if missing_required_fields:
+    if missing_required_fields and missing_required_fields_ev_blocked_count < missing_required_fields:
         verifier_findings.append(
             {
                 "severity": "fail",
                 "code": "quote_consistency_required_fields_missing",
                 "count": missing_required_fields,
+                "ev_blocked_count": missing_required_fields_ev_blocked_count,
+                "unblocked_count": missing_required_fields - missing_required_fields_ev_blocked_count,
+            }
+        )
+    elif missing_required_fields:
+        verifier_findings.append(
+            {
+                "severity": "warning",
+                "code": "quote_consistency_required_fields_excluded",
+                "count": missing_required_fields,
+                "ev_blocked_count": missing_required_fields_ev_blocked_count,
+                "message": "Rows with missing quote consistency required fields were excluded from EV input.",
             }
         )
     if any(counts.get("diverged", 0) for counts in stage_counts.values()) and safety_exit_count <= 0:
@@ -189,6 +204,7 @@ def build_quote_consistency_report(target_date: str | None = None) -> dict[str, 
             "rest_fallback_count": rest_fallback_count,
             "safety_exit_count": safety_exit_count,
             "missing_required_fields": missing_required_fields,
+            "missing_required_fields_ev_blocked_count": missing_required_fields_ev_blocked_count,
             "ev_input_blocked_count": ev_input_blocked_count,
             "gap_bps": _percentiles(gap_values),
         },

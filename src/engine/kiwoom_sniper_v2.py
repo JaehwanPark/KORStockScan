@@ -306,6 +306,7 @@ SCANNER_FIFO_NEW_PROMOTION_GRACE_SEC = 60.0
 KRX_OPEN_WATCHLIST_RESET_POLICY_VERSION = "krx_open_watchlist_reset_v1"
 SCANNER_WATCH_EVICTION_SOURCE_QUALITY_REASONS = {
     "insufficient_history",
+    "rising_rest_quote_recovery_without_realtime_strength",
 }
 SCANNER_WATCH_EVICTION_STALE_REASONS = {
     "rest_quote_without_realtime_strength",
@@ -1637,6 +1638,9 @@ def _scanner_watch_eviction_decision_from_stale(target, *, now_ts, stale_reason,
         return {"should_evict": False, "eviction_attempt_count": 0}
     recovery_fields = recovery_fields if isinstance(recovery_fields, dict) else {}
     is_source_quality_unresolved = reason in SCANNER_WATCH_EVICTION_SOURCE_QUALITY_REASONS
+    rest_quote_price_only_strength_missing = (
+        reason == "rising_rest_quote_recovery_without_realtime_strength"
+    )
     recovery_outcome = str(
         recovery_fields.get("ws_recovery_outcome")
         or (
@@ -1645,6 +1649,8 @@ def _scanner_watch_eviction_decision_from_stale(target, *, now_ts, stale_reason,
             else "not_applicable_ws_recovery_outcome"
         )
     )
+    if rest_quote_price_only_strength_missing:
+        recovery_outcome = "source_quality_unresolved_price_only_rest_quote"
     subscription_repair_needed = bool(recovery_fields.get("ws_subscription_repair_needed"))
     subscription_recheck_status = str(recovery_fields.get("ws_subscription_recheck_status") or "")
     watch_age_sec = max(0.0, float(now_ts) - _runtime_added_time_for_target(target, now_ts=now_ts))
@@ -1690,6 +1696,7 @@ def _scanner_watch_eviction_decision_from_stale(target, *, now_ts, stale_reason,
         not after_buy_window_source_quality_expired
         and _scanner_rising_ws_gap_priority_recovery_enabled()
         and _scanner_is_rising_entry_relief_candidate(target)
+        and not rest_quote_price_only_strength_missing
         and (
             is_source_quality_unresolved
             or not (
@@ -1744,6 +1751,20 @@ def _scanner_watch_eviction_decision_from_stale(target, *, now_ts, stale_reason,
         "stale_age_sec": round(stale_age_sec, 3),
         "ws_recovery_outcome": recovery_outcome,
         "after_buy_window_source_quality_expired": after_buy_window_source_quality_expired,
+        "source_quality_detail_route": recovery_fields.get("source_quality_detail_route")
+        or (
+            "price_only_rest_quote_strength_history_missing"
+            if rest_quote_price_only_strength_missing
+            else "not_applicable_source_quality_detail_route"
+        ),
+        "rest_quote_price_recovery_only": bool(
+            rest_quote_price_only_strength_missing
+            or recovery_fields.get("rest_quote_price_recovery_only")
+        ),
+        "scanner_source_quality_reallocation_candidate": bool(
+            rest_quote_price_only_strength_missing
+            or recovery_fields.get("scanner_source_quality_reallocation_candidate")
+        ),
         "observed_epoch": f"{float(now_ts):.3f}",
     }
 
@@ -1930,6 +1951,12 @@ def _scanner_watch_eviction_event_fields(target, *, decision):
         "stale_first_seen_epoch": decision.get("stale_first_seen_epoch") or "not_applicable_stale_first_seen_epoch",
         "stale_age_sec": decision.get("stale_age_sec") or "not_applicable_stale_age_sec",
         "ws_recovery_outcome": decision.get("ws_recovery_outcome") or "not_applicable_ws_recovery_outcome",
+        "source_quality_detail_route": decision.get("source_quality_detail_route")
+        or "not_applicable_source_quality_detail_route",
+        "rest_quote_price_recovery_only": bool(decision.get("rest_quote_price_recovery_only")),
+        "scanner_source_quality_reallocation_candidate": bool(
+            decision.get("scanner_source_quality_reallocation_candidate")
+        ),
         "no_trade_first_observed_epoch": decision.get("no_trade_first_observed_epoch")
         or "not_applicable_no_trade_first_observed_epoch",
         "no_trade_watch_age_sec": decision.get("no_trade_watch_age_sec")
@@ -5101,20 +5128,38 @@ def run_sniper(is_test_mode=False):
                                     delayed_code,
                                     "scanner_heavy_eval_stale_ws_recovery",
                                 )
-                            heavy_recheck_skip_fields = {
-                                **recheck_fields,
-                                **recovery_fields,
-                            }
-                            _defer_scanner_watching_runtime_skip(
-                                delayed_stock,
-                                delayed_code,
-                                skip_reason="scanner_heavy_eval_stale_snapshot_recheck",
-                                now_ts=time.time(),
-                                ws_data=recheck_snapshot or delayed_ws_data,
-                                ws_manager_available=bool(WS_MANAGER),
-                                **heavy_recheck_skip_fields,
+                            recovered_eval_ws_data, recovery_fields, recovery_snapshot_applied = (
+                                _apply_subscription_recheck_snapshot_if_ready(
+                                    _recovered_ws_data or recheck_snapshot or delayed_ws_data,
+                                    recovery_fields,
+                                    phase="heavy_eval_repair",
+                                )
                             )
-                            continue
+                            if recovery_snapshot_applied:
+                                eval_ws_data = recovered_eval_ws_data
+                                delayed_stock["_scanner_heavy_eval_ws_snapshot_refreshed"] = True
+                                delayed_stock["_scanner_heavy_eval_ws_snapshot_refresh_status"] = (
+                                    recovery_fields.get("ws_subscription_recheck_status")
+                                    or "fresh_snapshot_recovered"
+                                )
+                                delayed_stock["_scanner_heavy_eval_ws_snapshot_apply_phase"] = (
+                                    "heavy_eval_repair"
+                                )
+                            else:
+                                heavy_recheck_skip_fields = {
+                                    **recheck_fields,
+                                    **recovery_fields,
+                                }
+                                _defer_scanner_watching_runtime_skip(
+                                    delayed_stock,
+                                    delayed_code,
+                                    skip_reason="scanner_heavy_eval_stale_snapshot_recheck",
+                                    now_ts=time.time(),
+                                    ws_data=recheck_snapshot or delayed_ws_data,
+                                    ws_manager_available=bool(WS_MANAGER),
+                                    **heavy_recheck_skip_fields,
+                                )
+                                continue
                         if (
                             not recheck_fields.get("ws_subscription_repair_needed", True)
                             and _safe_int(recheck_snapshot.get("curr"), 0) > 0
@@ -5426,6 +5471,35 @@ def run_sniper(is_test_mode=False):
                                 )
                                 fast_precheck_result = str(stock.get("_scanner_fast_precheck_result") or "")
                                 fast_precheck_reason = str(stock.get("_scanner_fast_precheck_reason") or "")
+                        if (
+                            fast_precheck_result == "eligible_for_heavy_entry_eval"
+                            and fast_precheck_reason
+                            == "rising_rest_quote_recovery_without_realtime_strength"
+                        ):
+                            price_only_recovery_fields = dict(recovery_fields or {})
+                            price_only_recovery_fields.update(
+                                {
+                                    "ws_recovery_outcome": (
+                                        "source_quality_unresolved_price_only_rest_quote"
+                                    ),
+                                    "source_quality_detail_route": (
+                                        "price_only_rest_quote_strength_history_missing"
+                                    ),
+                                    "rest_quote_price_recovery_only": True,
+                                    "entry_evaluable_fresh_after_rest_quote": False,
+                                    "scanner_source_quality_reallocation_candidate": True,
+                                }
+                            )
+                            if _maybe_expire_scanner_watch_for_stale(
+                                stock,
+                                code,
+                                targets,
+                                now_ts=heavy_queue_enter_epoch,
+                                stale_reason=fast_precheck_reason,
+                                recovery_fields=price_only_recovery_fields,
+                                emit_event_fn=_defer_scanner_entry_pipeline_log,
+                            ):
+                                continue
                         if fast_precheck_result != "eligible_for_heavy_entry_eval":
                             skip_reason = (
                                 "scanner_fast_precheck_stability_pending"

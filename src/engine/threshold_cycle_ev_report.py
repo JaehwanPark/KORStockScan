@@ -1648,6 +1648,140 @@ def _audit_summary(target_date: str, report_type: str, report_dir: Path) -> tupl
     )
 
 
+def _positive_lifecycle_parent_summary(payload: dict[str, Any], *, limit: int = 8) -> dict[str, Any]:
+    parents = payload.get("parent_bucket_summaries") if isinstance(payload.get("parent_bucket_summaries"), list) else []
+    positive: list[dict[str, Any]] = []
+    sample_ready: list[dict[str, Any]] = []
+    conflicted: list[dict[str, Any]] = []
+    for parent in parents:
+        if not isinstance(parent, dict):
+            continue
+        ev = _safe_float(parent.get("parent_source_quality_adjusted_ev_pct"), None)
+        joined_sample = _safe_int(parent.get("parent_joined_sample"), 0)
+        if ev is None or ev <= 0:
+            continue
+        dimensions = parent.get("dimension_filters") if isinstance(parent.get("dimension_filters"), dict) else {}
+        item = {
+            "parent_bucket_id": parent.get("parent_bucket_id") or parent.get("policy_bucket_id"),
+            "parent_ev_pct": ev,
+            "parent_joined_sample": joined_sample,
+            "complete_flow_count": _safe_int(parent.get("complete_flow_count"), 0),
+            "parent_granularity_floor_passed": bool(parent.get("parent_granularity_floor_passed")),
+            "child_conflict_warning": bool(parent.get("child_conflict_warning")),
+            "entry_score_parent": dimensions.get("entry_score_parent"),
+            "entry_source_parent": dimensions.get("entry_source_parent"),
+            "submit_quality_parent": dimensions.get("submit_quality_parent"),
+            "exit_outcome_parent": dimensions.get("exit_outcome_parent"),
+            "major_holding_parent": dimensions.get("major_holding_parent"),
+            "scale_in_parent": dimensions.get("scale_in_parent"),
+        }
+        positive.append(item)
+        if joined_sample >= 10:
+            sample_ready.append(item)
+        if item["child_conflict_warning"]:
+            conflicted.append(item)
+    positive.sort(key=lambda item: (item["parent_ev_pct"], item["parent_joined_sample"]), reverse=True)
+    sample_ready.sort(key=lambda item: (item["parent_ev_pct"], item["parent_joined_sample"]), reverse=True)
+    return {
+        "positive_parent_count": len(positive),
+        "positive_parent_sample_ready_count": len(sample_ready),
+        "positive_parent_conflict_count": len(conflicted),
+        "top_positive_parent_buckets": positive[:limit],
+        "top_sample_ready_positive_parent_buckets": sample_ready[:limit],
+    }
+
+
+def _positive_sim_auto_summary(payload: dict[str, Any], *, limit: int = 8) -> dict[str, Any]:
+    items = (
+        payload.get("sim_auto_approved_candidates")
+        if isinstance(payload.get("sim_auto_approved_candidates"), list)
+        else []
+    )
+    positive: list[dict[str, Any]] = []
+    nonpositive: list[dict[str, Any]] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        ev = _safe_float(item.get("source_quality_adjusted_ev_pct"), None)
+        row = {
+            "bucket_id": item.get("bucket_id"),
+            "classification_state": item.get("classification_state"),
+            "stage": item.get("stage"),
+            "bucket_type": item.get("bucket_type"),
+            "source_quality_adjusted_ev_pct": ev,
+            "joined_sample": item.get("joined_sample"),
+        }
+        if ev is not None and ev > 0:
+            positive.append(row)
+        else:
+            nonpositive.append(row)
+    positive.sort(
+        key=lambda item: (
+            _safe_float(item.get("source_quality_adjusted_ev_pct"), 0.0) or 0.0,
+            _safe_int(item.get("joined_sample"), 0),
+        ),
+        reverse=True,
+    )
+    nonpositive.sort(
+        key=lambda item: (
+            _safe_float(item.get("source_quality_adjusted_ev_pct"), 0.0) or 0.0,
+            -_safe_int(item.get("joined_sample"), 0),
+        )
+    )
+    return {
+        "positive_sim_auto_approved_count": len(positive),
+        "nonpositive_sim_auto_approved_count": len(nonpositive),
+        "entry_only_positive_sim_auto_approved_count": sum(
+            1
+            for item in positive
+            if str(item.get("classification_state") or "") == "entry_only_sim_auto_approved"
+        ),
+        "entry_only_nonpositive_sim_auto_approved_count": sum(
+            1
+            for item in nonpositive
+            if str(item.get("classification_state") or "") == "entry_only_sim_auto_approved"
+        ),
+        "top_positive_sim_auto_approved": positive[:limit],
+        "top_nonpositive_sim_auto_approved": nonpositive[:limit],
+    }
+
+
+def _active_positive_seed_summary(payload: dict[str, Any], *, limit: int = 8) -> dict[str, Any]:
+    seeds = payload.get("active_sim_priority_seeds") if isinstance(payload.get("active_sim_priority_seeds"), list) else []
+    active_positive: list[dict[str, Any]] = []
+    active_nonpositive = 0
+    for seed in seeds:
+        if not isinstance(seed, dict) or str(seed.get("status") or "") != "active":
+            continue
+        ev = _safe_float(seed.get("parent_ev_pct"), None)
+        if ev is None or ev <= 0:
+            active_nonpositive += 1
+            continue
+        active_positive.append(
+            {
+                "active_seed_id": seed.get("active_seed_id"),
+                "parent_ev_pct": ev,
+                "parent_joined_sample": seed.get("parent_joined_sample"),
+                "complete_flow_count": seed.get("complete_flow_count"),
+                "observable_prefix": seed.get("observable_prefix"),
+                "active_collection_reason": seed.get("active_collection_reason"),
+                "live_conversion_blocked_reason": seed.get("live_conversion_blocked_reason"),
+            }
+        )
+    active_positive.sort(
+        key=lambda item: (
+            _safe_int(item.get("parent_joined_sample"), 0),
+            _safe_float(item.get("parent_ev_pct"), 0.0) or 0.0,
+        ),
+        reverse=True,
+    )
+    return {
+        "active_positive_seed_count": len(active_positive),
+        "active_nonpositive_seed_count": active_nonpositive,
+        "top_active_positive_seeds": active_positive[:limit],
+    }
+
+
 def _lifecycle_bucket_discovery_summary(target_date: str) -> tuple[dict[str, Any], str | None, list[str]]:
     json_path = lifecycle_bucket_discovery_report_path(target_date)
     payload = _load_json(json_path)
@@ -1671,6 +1805,9 @@ def _lifecycle_bucket_discovery_summary(target_date: str) -> tuple[dict[str, Any
         )
     summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
     warnings = [f"lifecycle_bucket_discovery:{item}" for item in (payload.get("warnings") or []) if str(item)]
+    positive_parent_summary = _positive_lifecycle_parent_summary(payload)
+    positive_sim_auto_summary = _positive_sim_auto_summary(payload)
+    active_seed_summary = _active_positive_seed_summary(payload)
     return (
         {
             "available": True,
@@ -1682,6 +1819,22 @@ def _lifecycle_bucket_discovery_summary(target_date: str) -> tuple[dict[str, Any
             "surfaced_candidate_count": _safe_int(summary.get("surfaced_candidate_count"), 0),
             "sim_auto_approved_count": _safe_int(summary.get("sim_auto_approved_count"), 0),
             "entry_only_sim_auto_approved_count": _safe_int(summary.get("entry_only_sim_auto_approved_count"), 0),
+            "sim_auto_positive_ev_count": _safe_int(
+                summary.get("sim_auto_positive_ev_count"),
+                positive_sim_auto_summary["positive_sim_auto_approved_count"],
+            ),
+            "sim_auto_nonpositive_ev_count": _safe_int(
+                summary.get("sim_auto_nonpositive_ev_count"),
+                positive_sim_auto_summary["nonpositive_sim_auto_approved_count"],
+            ),
+            "entry_only_sim_auto_positive_ev_count": _safe_int(
+                summary.get("entry_only_sim_auto_positive_ev_count"),
+                positive_sim_auto_summary["entry_only_positive_sim_auto_approved_count"],
+            ),
+            "entry_only_sim_auto_nonpositive_ev_count": _safe_int(
+                summary.get("entry_only_sim_auto_nonpositive_ev_count"),
+                positive_sim_auto_summary["entry_only_nonpositive_sim_auto_approved_count"],
+            ),
             "lifecycle_flow_sim_probe_candidate_count": _safe_int(
                 summary.get("lifecycle_flow_sim_probe_candidate_count"),
                 0,
@@ -1696,6 +1849,41 @@ def _lifecycle_bucket_discovery_summary(target_date: str) -> tuple[dict[str, Any
             "absorbed_child_count": _safe_int(summary.get("absorbed_child_count"), 0),
             "absorbed_sample_count": _safe_int(summary.get("absorbed_sample_count"), 0),
             "child_conflict_warning_count": _safe_int(summary.get("child_conflict_warning_count"), 0),
+            "positive_parent_count": _safe_int(
+                summary.get("positive_parent_count"),
+                positive_parent_summary["positive_parent_count"],
+            ),
+            "positive_parent_sample_ready_count": _safe_int(
+                summary.get("positive_parent_sample_ready_count"),
+                positive_parent_summary["positive_parent_sample_ready_count"],
+            ),
+            "positive_parent_conflict_count": _safe_int(
+                summary.get("positive_parent_conflict_count"),
+                positive_parent_summary["positive_parent_conflict_count"],
+            ),
+            "top_positive_parent_buckets": positive_parent_summary["top_positive_parent_buckets"],
+            "top_sample_ready_positive_parent_buckets": positive_parent_summary[
+                "top_sample_ready_positive_parent_buckets"
+            ],
+            "top_positive_sim_auto_approved": (
+                summary.get("sim_auto_positive_ev_top")
+                if isinstance(summary.get("sim_auto_positive_ev_top"), list)
+                else positive_sim_auto_summary["top_positive_sim_auto_approved"]
+            ),
+            "top_nonpositive_sim_auto_approved": (
+                summary.get("sim_auto_nonpositive_ev_top")
+                if isinstance(summary.get("sim_auto_nonpositive_ev_top"), list)
+                else positive_sim_auto_summary["top_nonpositive_sim_auto_approved"]
+            ),
+            "active_sim_priority_positive_seed_count": _safe_int(
+                summary.get("active_sim_priority_positive_seed_count"),
+                active_seed_summary["active_positive_seed_count"],
+            ),
+            "active_sim_priority_nonpositive_seed_count": _safe_int(
+                summary.get("active_sim_priority_nonpositive_seed_count"),
+                active_seed_summary["active_nonpositive_seed_count"],
+            ),
+            "top_active_positive_seeds": active_seed_summary["top_active_positive_seeds"],
             "source_contract_status": summary.get("source_contract_status"),
             "ai_two_pass_review_status": summary.get("ai_two_pass_review_status"),
             "deterministic_proposal_count": _safe_int(summary.get("deterministic_proposal_count"), 0),
@@ -1750,6 +1938,7 @@ def _lifecycle_bucket_windows_summary(target_date: str) -> tuple[dict[str, Any],
         path = _lifecycle_bucket_window_report_path(target_date, suffix)
         payload = _load_json(path)
         summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
+        positive_parent_summary = _positive_lifecycle_parent_summary(payload)
         item = {
             "available": bool(payload),
             "artifact": str(path) if path.exists() else None,
@@ -1762,6 +1951,21 @@ def _lifecycle_bucket_windows_summary(target_date: str) -> tuple[dict[str, Any],
             "absorbed_child_count": _safe_int(summary.get("absorbed_child_count"), 0),
             "absorbed_sample_count": _safe_int(summary.get("absorbed_sample_count"), 0),
             "child_conflict_warning_count": _safe_int(summary.get("child_conflict_warning_count"), 0),
+            "positive_parent_count": _safe_int(
+                summary.get("positive_parent_count"),
+                positive_parent_summary["positive_parent_count"],
+            ),
+            "positive_parent_sample_ready_count": _safe_int(
+                summary.get("positive_parent_sample_ready_count"),
+                positive_parent_summary["positive_parent_sample_ready_count"],
+            ),
+            "positive_parent_conflict_count": _safe_int(
+                summary.get("positive_parent_conflict_count"),
+                positive_parent_summary["positive_parent_conflict_count"],
+            ),
+            "top_sample_ready_positive_parent_buckets": positive_parent_summary[
+                "top_sample_ready_positive_parent_buckets"
+            ],
             "live_auto_apply_ready_count": _safe_int(summary.get("live_auto_apply_ready_count"), 0),
             "source_contract_status": summary.get("source_contract_status"),
             "ai_two_pass_review_status": summary.get("ai_two_pass_review_status"),
@@ -2235,8 +2439,15 @@ def render_threshold_cycle_ev_markdown(report: dict[str, Any]) -> str:
         f"- sim_auto/live_auto/new_bucket: `{lifecycle_bucket_discovery.get('sim_auto_approved_count')}` / `{lifecycle_bucket_discovery.get('live_auto_apply_ready_count')}` / `{lifecycle_bucket_discovery.get('new_bucket_candidate_count')}`",
         f"- role/window: `{lifecycle_bucket_discovery.get('window_role')}` / `{lifecycle_bucket_discovery.get('window_policy')}`",
         f"- parent_count/granularity/conflict: `{lifecycle_bucket_discovery.get('parent_bucket_count')}` / `{lifecycle_bucket_discovery.get('parent_granularity_status')}` / `{lifecycle_bucket_discovery.get('child_conflict_warning_count')}`",
+        f"- positive_parent/sample_ready/conflict: `{lifecycle_bucket_discovery.get('positive_parent_count', 0)}` / `{lifecycle_bucket_discovery.get('positive_parent_sample_ready_count', 0)}` / `{lifecycle_bucket_discovery.get('positive_parent_conflict_count', 0)}`",
+        f"- active_positive_seed/nonpositive_seed: `{lifecycle_bucket_discovery.get('active_sim_priority_positive_seed_count', 0)}` / `{lifecycle_bucket_discovery.get('active_sim_priority_nonpositive_seed_count', 0)}`",
+        f"- positive_sim_auto/nonpositive_sim_auto: `{lifecycle_bucket_discovery.get('sim_auto_positive_ev_count', 0)}` / `{lifecycle_bucket_discovery.get('sim_auto_nonpositive_ev_count', 0)}`",
         f"- state_counts: `{lifecycle_bucket_discovery.get('state_counts') or {}}`",
         f"- top_surfaced: `{lifecycle_bucket_discovery.get('top_surfaced') or []}`",
+        f"- top_sample_ready_positive_parent_buckets: `{lifecycle_bucket_discovery.get('top_sample_ready_positive_parent_buckets') or []}`",
+        f"- top_active_positive_seeds: `{lifecycle_bucket_discovery.get('top_active_positive_seeds') or []}`",
+        f"- top_positive_sim_auto_approved: `{lifecycle_bucket_discovery.get('top_positive_sim_auto_approved') or []}`",
+        f"- top_nonpositive_sim_auto_approved: `{lifecycle_bucket_discovery.get('top_nonpositive_sim_auto_approved') or []}`",
         "",
         "## Lifecycle Bucket Windows",
         f"- promotion_window: `{(report.get('lifecycle_bucket_windows') or {}).get('promotion_window') if isinstance(report.get('lifecycle_bucket_windows'), dict) else '-'}`",

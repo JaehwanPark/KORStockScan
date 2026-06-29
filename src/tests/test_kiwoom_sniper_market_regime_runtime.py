@@ -2530,6 +2530,47 @@ def test_scanner_watch_insufficient_history_eviction_requires_three_attempts_and
     assert last_decision["stale_age_sec"] == 91.0
 
 
+def test_scanner_watch_rest_quote_price_only_strength_gap_evicts_without_priority_recheck(monkeypatch):
+    monkeypatch.setenv("KORSTOCKSCAN_SCANNER_RISING_WS_GAP_PRIORITY_RECOVERY_ENABLED", "true")
+    monkeypatch.setattr(
+        kiwoom_sniper_v2,
+        "scalping_buy_time_block_reason",
+        lambda _now_t: "",
+    )
+    stock = _scanner_watch_stock(price_delta_since_first_seen_pct="5.40")
+
+    for observed_epoch in (1000.0, 1050.0, 1091.0):
+        last_decision = kiwoom_sniper_v2._scanner_watch_eviction_decision_from_stale(
+            stock,
+            now_ts=observed_epoch,
+            stale_reason="rising_rest_quote_recovery_without_realtime_strength",
+            recovery_fields={
+                "ws_recovery_outcome": "rest_quote_applied",
+                "source_quality_detail_route": "price_only_rest_quote_strength_history_missing",
+                "rest_quote_price_recovery_only": True,
+                "scanner_source_quality_reallocation_candidate": True,
+            },
+        )
+
+    assert last_decision["should_evict"] is True
+    assert last_decision["eviction_reason"] == "source_quality_unresolved"
+    assert last_decision["terminal_reason"] == "rising_rest_quote_recovery_without_realtime_strength"
+    assert last_decision["ws_recovery_outcome"] == "source_quality_unresolved_price_only_rest_quote"
+    assert last_decision["source_quality_detail_route"] == "price_only_rest_quote_strength_history_missing"
+    assert last_decision["rest_quote_price_recovery_only"] is True
+    assert last_decision["scanner_source_quality_reallocation_candidate"] is True
+    assert last_decision["eviction_attempt_count"] == 3
+    assert last_decision["stale_age_sec"] == 91.0
+    assert "_scanner_rising_ws_gap_priority_recheck_after_epoch" not in stock
+
+    event_fields = kiwoom_sniper_v2._scanner_watch_eviction_event_fields(
+        stock,
+        decision=last_decision,
+    )
+    assert event_fields["source_quality_route"] == "runtime_watchlist_eviction_pool_management_only"
+    assert event_fields["source_quality_detail_route"] == "price_only_rest_quote_strength_history_missing"
+
+
 def test_scanner_watch_cooldown_pool_block_requires_repeat_and_remaining_time():
     short = _scanner_watch_stock(
         _scanner_watch_last_pool_block={
@@ -4048,6 +4089,27 @@ def test_subscription_recheck_snapshot_is_applied_before_fast_precheck_retry():
     assert helper_idx < queue_idx < apply_idx < retry_idx
     assert apply_idx < skip_idx
     assert retry_idx < residual_idx
+
+
+def test_subscription_recheck_snapshot_is_applied_before_heavy_eval_recheck_skip():
+    source = inspect.getsource(kiwoom_sniper_v2.run_sniper)
+    flush_idx = source.index("def _flush_delayed_scanner_heavy_eval")
+    repair_idx = source.index("scanner_heavy_eval_stale_ws_recovery", flush_idx)
+    apply_idx = source.index('phase="heavy_eval_repair"', repair_idx)
+    continue_idx = source.index("continue", apply_idx)
+    handle_idx = source.index("handle_watching_state(", apply_idx)
+
+    assert repair_idx < apply_idx < continue_idx
+    assert apply_idx < handle_idx
+
+
+def test_rest_quote_price_only_strength_gap_eviction_runs_before_full_eval_budget():
+    source = inspect.getsource(kiwoom_sniper_v2.run_sniper)
+    reason_idx = source.index('"rising_rest_quote_recovery_without_realtime_strength"')
+    eviction_idx = source.index("_maybe_expire_scanner_watch_for_stale", reason_idx)
+    budget_idx = source.index("if scanner_full_eval_count >= scanner_full_eval_limit", eviction_idx)
+
+    assert reason_idx < eviction_idx < budget_idx
 
 
 def test_scanner_no_trade_eviction_requires_grace_and_repeated_confirmation(monkeypatch):

@@ -4,13 +4,14 @@ import argparse
 import csv
 import json
 from collections import Counter, defaultdict
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 ENTRY_PIPELINE = "ENTRY_PIPELINE"
+KST = timezone(timedelta(hours=9))
 
 BUY_SIGNAL_STAGES = {
     "entry_armed",
@@ -37,7 +38,10 @@ def _parse_ts(value: Any, *, target_date: str | None = None) -> datetime | None:
         return None
     text = str(value).strip()
     try:
-        return datetime.fromisoformat(text)
+        parsed = datetime.fromisoformat(text)
+        if parsed.tzinfo is not None:
+            return parsed.astimezone(KST).replace(tzinfo=None)
+        return parsed
     except ValueError:
         pass
     if target_date and len(text.split(":")) in {2, 3}:
@@ -64,7 +68,7 @@ def _field(fields: dict[str, Any], key: str, default: str = "") -> str:
 
 
 def _reason(fields: dict[str, Any]) -> str:
-    for key in ("reason", "skip_reason", "blocked_reason", "terminal_reason", "entry_submit_revalidation_warning"):
+    for key in ("reason", "skip_reason", "blocked_reason", "eviction_reason", "terminal_reason", "entry_submit_revalidation_warning"):
         value = _field(fields, key)
         if value:
             return value
@@ -215,6 +219,9 @@ def _flow_summary(events: list[dict[str, Any]], *, limit: int = 8) -> str:
 
 def _main_blocker(record: dict[str, Any], promoted: dict[str, dict[str, Any]]) -> tuple[str, str, int]:
     item = promoted.get(record["code"]) or {}
+    actionable = item.get("dominant_actionable_blocker") if isinstance(item.get("dominant_actionable_blocker"), dict) else {}
+    if actionable.get("stage"):
+        return str(actionable.get("stage") or ""), str(actionable.get("reason") or ""), int(actionable.get("count") or 0)
     dominant = item.get("dominant_blocker") if isinstance(item.get("dominant_blocker"), dict) else {}
     if dominant.get("stage"):
         return str(dominant.get("stage") or ""), str(dominant.get("reason") or ""), int(dominant.get("count") or 0)
@@ -368,6 +375,7 @@ def build_report(
     for code, record in grouped.items():
         if record["first_ts"] is None:
             continue
+        diagnostic_item = promoted.get(code) or {}
         stage, reason, count = _main_blocker(record, promoted)
         max_delta = record["max_delta"]
         if max_delta is None:
@@ -391,6 +399,11 @@ def build_report(
                 "main_blocker_stage": stage,
                 "main_blocker_reason": reason,
                 "main_blocker_count": count,
+                "main_blocker_class": (
+                    (diagnostic_item.get("dominant_actionable_blocker") or {}).get("class")
+                    if isinstance(diagnostic_item.get("dominant_actionable_blocker"), dict)
+                    else ""
+                ),
                 "latest_stage": record["latest_stage"],
                 "latest_reason": record["latest_reason"],
                 "latest_ai_score": record["latest_ai_score"],
@@ -491,6 +504,7 @@ def build_report(
             "broker_guard_bypass",
         ],
         "summary": summary,
+        "blocker_taxonomy": diagnostic.get("blocker_taxonomy") if isinstance(diagnostic.get("blocker_taxonomy"), dict) else {},
         "blocker_rollup": blocker_rollup,
         "rising_symbol_blocker_rollup": rising_blocker_rollup,
         "rising_fresh_only_blocker_rollup": rising_fresh_only_blocker_rollup,
@@ -535,6 +549,18 @@ def write_outputs(report: dict[str, Any], *, output_md: Path, output_csv: Path, 
         handle.write("\n## blocker rollup\n\n")
         for item in report["blocker_rollup"][:12]:
             handle.write(f"- {item['count']}: `{item['stage']}` / `{item['reason']}`\n")
+        taxonomy = report.get("blocker_taxonomy") if isinstance(report.get("blocker_taxonomy"), dict) else {}
+        if taxonomy:
+            handle.write("\n## blocker taxonomy\n\n")
+            for item in taxonomy.get("class_counts", [])[:12]:
+                handle.write(f"- {item['count']}: `{item['class']}`\n")
+            suppressed = taxonomy.get("suppressed_non_major_counts") or taxonomy.get("suppressed_non_actionable_counts", [])
+            if suppressed:
+                handle.write("\n## suppressed non-major blocker counts\n\n")
+                for item in suppressed[:12]:
+                    handle.write(
+                        f"- {item['count']}: `{item['class']}` / `{item['stage']}` / `{item['reason']}`\n"
+                    )
         handle.write("\n## rising-symbol blocker rollup\n\n")
         for item in report["rising_symbol_blocker_rollup"][:12]:
             handle.write(f"- {item['count']}: `{item['stage']}` / `{item['reason']}`\n")
@@ -551,8 +577,8 @@ def write_outputs(report: dict[str, Any], *, output_md: Path, output_csv: Path, 
         for item in report.get("stale_eval_category_rollup", [])[:12]:
             handle.write(f"- {item['count']}: `{item['category']}`\n")
         handle.write("\n## top rows by max delta\n\n")
-        handle.write("|종목|첫감시|마지막|상승여부|maxΔ|latestΔ|BUY전 주 blocker|stale평가|refresh회복|stale유형|max quote age|BUY전 통과신호|AI|실제submit|흐름|\n")
-        handle.write("|---|---:|---:|---|---:|---:|---|---:|---:|---|---:|---:|---:|---:|---|\n")
+        handle.write("|종목|첫감시|마지막|상승여부|maxΔ|latestΔ|BUY전 주 blocker|class|stale평가|refresh회복|stale유형|max quote age|BUY전 통과신호|AI|실제submit|흐름|\n")
+        handle.write("|---|---:|---:|---|---:|---:|---|---|---:|---:|---|---:|---:|---:|---:|---|\n")
         for row in rows[:max_rows]:
             ai = ""
             if row["latest_ai_score"] is not None:
@@ -567,6 +593,7 @@ def write_outputs(report: dict[str, Any], *, output_md: Path, output_csv: Path, 
                 f"{_format_pct(row['max_delta_since_first_seen_pct'])}|"
                 f"{_format_pct(row['latest_delta_since_first_seen_pct'])}|"
                 f"{blocker}|"
+                f"{row.get('main_blocker_class') or '-'}|"
                 f"{row['stale_eval_count']}|"
                 f"{row['stale_refresh_recovered_count']}|"
                 f"{row['dominant_stale_eval_category'] or '-'}|"

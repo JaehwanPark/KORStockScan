@@ -180,6 +180,62 @@ def test_build_report_filters_diagnostic_promotions_before_since(tmp_path):
     assert report["summary"]["rising_missed_symbol_count_in_report"] == 1
 
 
+def test_build_report_accepts_offset_aware_since_for_target_date(tmp_path):
+    event_path = tmp_path / "events.jsonl"
+    diagnostic_path = tmp_path / "diag.json"
+    diagnostic_path.write_text(
+        json.dumps(
+            {
+                "summary": {"real_submit_symbol_count": 0},
+                "promoted_symbols": [
+                    {
+                        "stock_code": "000001",
+                        "stock_name": "old",
+                        "first_promoted_at": "2026-06-29T14:59:59+09:00",
+                        "max_price_delta_since_first_seen_pct": 5,
+                    },
+                    {
+                        "stock_code": "000002",
+                        "stock_name": "new",
+                        "first_promoted_at": "2026-06-29T15:00:00+09:00",
+                        "max_price_delta_since_first_seen_pct": 1,
+                    },
+                ],
+                "rising_missed_buy": [{"stock_code": "000001"}, {"stock_code": "000002"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    rows = [
+        _event(
+            "000001",
+            "old",
+            "blocked_strength_momentum",
+            {"scanner_promotion_id": "old", "price_delta_since_first_seen_pct": "5"},
+            emitted_at="2026-06-29T14:59:59+09:00",
+        ),
+        _event(
+            "000002",
+            "new",
+            "blocked_strength_momentum",
+            {"scanner_promotion_id": "new", "price_delta_since_first_seen_pct": "1"},
+            emitted_at="2026-06-29T15:00:00+09:00",
+        ),
+    ]
+    event_path.write_text("\n".join(json.dumps(row, ensure_ascii=False) for row in rows), encoding="utf-8")
+
+    report = build_report(
+        target_date="2026-06-29",
+        event_cache_path=event_path,
+        diagnostic_path=diagnostic_path,
+        since="2026-06-29T15:00:00+09:00",
+        generated_at="fixed",
+    )
+
+    assert [row["stock_code"] for row in report["rows"]] == ["000002"]
+    assert report["summary"]["symbol_count"] == 1
+
+
 def test_build_report_accepts_time_only_since_for_target_date(tmp_path):
     event_path = tmp_path / "events.jsonl"
     diagnostic_path = tmp_path / "diag.json"
