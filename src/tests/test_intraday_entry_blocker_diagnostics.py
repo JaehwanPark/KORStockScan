@@ -909,6 +909,49 @@ def test_build_report_does_not_prioritize_recovered_stale_low_ai_eval(tmp_path):
     )
 
 
+def test_build_report_uses_fast_precheck_observed_history_for_zero_history_workorders(tmp_path):
+    path = tmp_path / "pipeline_events_2026-06-23.jsonl"
+    rows = [
+        _event("000001", "A", "scalping_scanner_candidate_promoted", {"price_delta_since_first_seen_pct": "2.40"}),
+        _event(
+            "000001",
+            "A",
+            "scalping_scanner_watching_runtime_skip",
+            {
+                "price_delta_since_first_seen_pct": "2.40",
+                "skip_reason": "scanner_fast_precheck_stability_pending",
+                "fast_precheck_result": "stability_pending",
+                "fast_precheck_reason": "stale_ws_snapshot",
+                "ws_strength_history_count": "0",
+                "fast_precheck_observed_ws_strength_history_count": "13",
+            },
+        ),
+        _event(
+            "000001",
+            "A",
+            "scalping_scanner_watching_runtime_skip",
+            {
+                "price_delta_since_first_seen_pct": "2.40",
+                "skip_reason": "scanner_fast_precheck_stability_pending",
+                "fast_precheck_result": "stability_pending",
+                "fast_precheck_reason": "stale_ws_snapshot",
+                "ws_strength_history_count": "0",
+                "fast_precheck_observed_ws_strength_history_count": "12",
+            },
+        ),
+    ]
+    path.write_text("\n".join(json.dumps(row, ensure_ascii=False) for row in rows), encoding="utf-8")
+
+    report = build_report(target_date="2026-06-23", pipeline_path=path, generated_at="fixed")
+
+    quality = report["rising_missed_buy"][0]["zero_strength_history_source_quality"]
+    assert quality["event_count"] == 0
+    assert quality["raw_event_count"] == 0
+    assert quality["source_quality_route"] == "observe_until_repeated"
+    assert report["summary"]["rising_missed_repeated_zero_strength_history_workorder_count"] == 0
+    assert report["source_quality_workorders"]["rising_missed_repeated_zero_strength_history"] == []
+
+
 def test_build_report_does_not_prioritize_stale_low_ai_after_heavy_eval_repair(tmp_path):
     path = tmp_path / "pipeline_events_2026-06-23.jsonl"
     rows = [

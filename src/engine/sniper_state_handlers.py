@@ -7621,8 +7621,33 @@ def _next_scalping_buy_window_recheck_epoch(now_dt) -> float | None:
     return None
 
 
+def _scanner_fast_precheck_observed_fields(fast_precheck_fields) -> dict[str, Any]:
+    if not isinstance(fast_precheck_fields, dict):
+        return {}
+    observed: dict[str, Any] = {}
+    field_map = {
+        "ws_strength_history_count": "fast_precheck_observed_ws_strength_history_count",
+        "ws_last_strength_history_age_ms": "fast_precheck_observed_ws_last_strength_history_age_ms",
+        "quote_age_ms": "fast_precheck_observed_quote_age_ms",
+        "quote_age_source": "fast_precheck_observed_quote_age_source",
+        "snapshot_source": "fast_precheck_observed_snapshot_source",
+        "fast_precheck_result": "fast_precheck_observed_result",
+        "fast_precheck_reason": "fast_precheck_observed_reason",
+    }
+    for source_key, target_key in field_map.items():
+        value = fast_precheck_fields.get(source_key)
+        if value not in (None, ""):
+            observed[target_key] = value
+    if observed:
+        observed.setdefault("fast_precheck_observed_payload_source", "scanner_fast_precheck_fields")
+    return observed
+
+
 def _scanner_watching_runtime_skip_fields(stock, *, skip_reason: str, now_ts: float, ws_data=None, **extra) -> dict[str, Any]:
     ws_data = ws_data if isinstance(ws_data, dict) else {}
+    fast_precheck_observed = _scanner_fast_precheck_observed_fields(
+        extra.pop("fast_precheck_fields", None)
+    )
     scanner_fields = _scanner_promotion_correlation_fields(stock)
     return {
         "scanner_promotion_id": scanner_fields.get("scanner_promotion_id")
@@ -7658,6 +7683,7 @@ def _scanner_watching_runtime_skip_fields(stock, *, skip_reason: str, now_ts: fl
         "ws_curr": ws_data.get("curr") if ws_data.get("curr") not in (None, "") else "not_applicable_ws_curr",
         "observed_epoch": f"{float(now_ts):.3f}",
         **_ws_realtime_type_freshness_fields(ws_data, now_ts=now_ts),
+        **fast_precheck_observed,
         **_scanner_rising_relief_observation_fields(stock, now_ts=now_ts),
         **extra,
     }

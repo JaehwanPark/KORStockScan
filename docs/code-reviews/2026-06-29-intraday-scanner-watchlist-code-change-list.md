@@ -1644,3 +1644,77 @@
 - 반복 major blocker는 실제 pre-submit hard stale가 아니라 대부분 diagnostic quote-age stale로 분해됐다.
 - full-eval delay와 WS quote missing은 14:00 summary 기준 stale_or_delayed 하위 원인에서는 0이고, full-eval deferred도 13:40 이후 창에서는 0건이다.
 - 다음 루프는 diagnostic stale가 실제 stale submit 차단인지, pre-AI 이벤트의 오래된 age 필드가 fresh refresh 이후에도 max-age 방식으로 과대 집계되는지 확인한다.
+
+## 33. 14:10 fast-precheck history provenance 전파 p13
+
+작성 시각: `2026-06-29 14:15 KST`
+
+### 33.1 관측
+
+- 14:10 diagnostic 기준 반복 major blocker는 계속 `scanner_strength_history_or_stale_eval`이었지만, p12 분해 결과는 다음과 같았다.
+  - `full_eval_delay=0`
+  - `ws_quote_missing=0`
+  - `pre_submit_hard_stale=0`
+  - `pre_ai_stale_or_history_gap=6`
+  - 대부분은 `diagnostic_quote_age_stale=90`
+- `서산(079650)`, `동아엘텍(088130)`에서 직전 `scalping_scanner_fast_precheck`는 `ws_strength_history_count > 0`을 기록했지만, 이어지는 `scalping_scanner_watching_runtime_skip`은 `ws_strength_history_count=0`으로 남아 repeated zero-history workorder로 집계될 수 있었다.
+- 이는 stale quote hard guard가 아니라 fast-precheck 관측 payload가 skip 이벤트에 전달되지 않는 진단 provenance gap이다.
+
+### 33.2 코드 수정 p13
+
+- 파일:
+  - `src/engine/sniper_state_handlers.py`
+  - `src/engine/kiwoom_sniper_v2.py`
+  - `src/engine/monitoring/intraday_entry_blocker_diagnostics.py`
+  - `src/tests/test_state_handler_fast_signatures.py`
+  - `src/tests/test_intraday_entry_blocker_diagnostics.py`
+  - `src/tests/test_kiwoom_sniper_market_regime_runtime.py`
+- 변경:
+  - `_defer_emit_scanner_fast_precheck()`가 계산한 fast-precheck fields를 stock에 보관한다.
+  - fast-precheck not-eligible skip 이벤트에 `fast_precheck_fields`를 전달한다.
+  - `scalping_scanner_watching_runtime_skip` 이벤트에 아래 observation-only provenance 필드를 추가한다.
+    - `fast_precheck_observed_ws_strength_history_count`
+    - `fast_precheck_observed_ws_last_strength_history_age_ms`
+    - `fast_precheck_observed_quote_age_ms`
+    - `fast_precheck_observed_quote_age_source`
+    - `fast_precheck_observed_snapshot_source`
+    - `fast_precheck_observed_result`
+    - `fast_precheck_observed_reason`
+  - diagnostics는 `fast_precheck_observed_ws_strength_history_count`가 양수이면 skip 이벤트의 `ws_strength_history_count=0`만으로 zero-history source-quality workorder를 만들지 않는다.
+- 권한/충돌:
+  - 관측/진단 보강 전용이다.
+  - BUY score, AI threshold, order price, quantity/cap, provider route, broker/account/order/cooldown guard, stale-submit hard guard, hard/protect/emergency stop은 변경하지 않는다.
+  - p12 stale_or_delayed_eval 분해와 충돌하지 않고, p12의 `pre_ai_stale_or_history_gap` 중 진단 provenance gap을 축소하는 후속 수정이다.
+
+### 33.3 검증 계획
+
+- targeted pytest:
+  - `src/tests/test_state_handler_fast_signatures.py`
+  - `src/tests/test_intraday_entry_blocker_diagnostics.py`
+  - `src/tests/test_kiwoom_sniper_market_regime_runtime.py -k scanner_fast_precheck_not_eligible`
+- `py_compile`
+- `git diff --check`
+- 검증 후 runtime 반영이 필요한 경우에만 `restart.flag` 방식으로 우아한 재기동한다.
+
+### 33.4 검증 결과
+
+- `PYTHONPATH=. .venv/bin/python -m pytest src/tests/test_state_handler_fast_signatures.py -k 'scanner_watching_runtime_skip or scanner_fast_precheck'`
+  - `19 passed, 114 deselected`
+- `PYTHONPATH=. .venv/bin/python -m pytest src/tests/test_intraday_entry_blocker_diagnostics.py`
+  - `21 passed`
+- `PYTHONPATH=. .venv/bin/python -m pytest src/tests/test_kiwoom_sniper_market_regime_runtime.py -k 'scanner_fast_precheck_not_eligible or scalping_scanner_promoted_target_refresh_resets_eval_state'`
+  - `2 passed, 153 deselected`
+- `PYTHONPATH=. .venv/bin/python -m py_compile src/engine/sniper_state_handlers.py src/engine/kiwoom_sniper_v2.py src/engine/monitoring/intraday_entry_blocker_diagnostics.py src/tests/test_state_handler_fast_signatures.py src/tests/test_intraday_entry_blocker_diagnostics.py src/tests/test_kiwoom_sniper_market_regime_runtime.py`
+  - 통과
+- `git diff --check`
+  - 통과
+- `PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project --print-backlog-only --limit 500`
+  - parser 통과, backlog count `25`
+
+### 33.5 자체 리뷰 판정
+
+- review-gate 결과 추가 결함 1건을 발견해 보완했다.
+  - `_scanner_fast_precheck_fields`가 promotion refresh 후에도 남을 수 있어 `_reset_scanner_runtime_eval_state()` 제거 목록에 추가했다.
+  - 기존 refresh reset 테스트에 해당 내부 키 제거 검증을 추가했다.
+- 재리뷰 결과 런타임/order/provider/threshold 권한 누수는 없다.
+- runtime 반영을 위해 검증 후 `restart.flag` 방식의 우아한 재기동 대상이다.

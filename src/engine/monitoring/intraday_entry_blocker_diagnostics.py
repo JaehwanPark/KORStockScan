@@ -99,6 +99,7 @@ DEFAULT_BUY_WINDOW_START = dt_time(9, 0)
 DEFAULT_BUY_WINDOW_END = dt_time(15, 20)
 
 STRENGTH_HISTORY_COUNT_KEYS = (
+    "fast_precheck_observed_ws_strength_history_count",
     "ws_strength_history_count",
     "strength_momentum_history_count",
     "pre_ai_ws_snapshot_refresh_history_count",

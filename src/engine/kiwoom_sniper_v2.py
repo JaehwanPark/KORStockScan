@@ -2433,6 +2433,7 @@ def _reset_scanner_runtime_eval_state(target):
         "_scanner_heavy_queue_enter_epoch",
         "_scanner_fast_precheck_result",
         "_scanner_fast_precheck_reason",
+        "_scanner_fast_precheck_fields",
         "_scanner_watching_runtime_skip_logged",
         "_scanner_rising_cooldown_recheck_after_epoch",
         "_scanner_rising_cutoff_recheck_after_epoch",
@@ -4761,6 +4762,7 @@ def run_sniper(is_test_mode=False):
                     stock_value["_scanner_heavy_queue_enter_epoch"] = float(now_value)
                 stock_value["_scanner_fast_precheck_result"] = fields.get("fast_precheck_result")
                 stock_value["_scanner_fast_precheck_reason"] = fields.get("fast_precheck_reason")
+                stock_value["_scanner_fast_precheck_fields"] = dict(fields)
                 _defer_scanner_entry_pipeline_log(
                     stock_value,
                     code_value,
@@ -5477,6 +5479,7 @@ def run_sniper(is_test_mode=False):
                                 scanner_watching_count=queue_context["scanner_watching_count"],
                                 fast_precheck_result=fast_precheck_result or "-",
                                 fast_precheck_reason=fast_precheck_reason or "-",
+                                fast_precheck_fields=dict(stock.get("_scanner_fast_precheck_fields") or {}),
                                 **skip_recovery_fields,
                             )
                             if fast_precheck_stale_like:

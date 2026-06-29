@@ -627,6 +627,7 @@ def test_scalping_scanner_promoted_target_refresh_resets_eval_state(monkeypatch)
         "_scanner_heavy_queue_enter_epoch": 1500.0,
         "_scanner_fast_precheck_result": "eligible_for_heavy_entry_eval",
         "_scanner_fast_precheck_reason": "fast_precheck_pass",
+        "_scanner_fast_precheck_fields": {"fast_precheck_result": "eligible_for_heavy_entry_eval"},
         "_scanner_watching_runtime_skip_logged": {"scanner_full_eval_loop_budget_deferred": 1500.0},
     }
     older_never_eval = {
@@ -691,6 +692,7 @@ def test_scalping_scanner_promoted_target_refresh_resets_eval_state(monkeypatch)
         "_scanner_heavy_queue_enter_epoch",
         "_scanner_fast_precheck_result",
         "_scanner_fast_precheck_reason",
+        "_scanner_fast_precheck_fields",
         "_scanner_watching_runtime_skip_logged",
     ):
         assert key not in existing
@@ -2237,6 +2239,8 @@ def test_scanner_fast_precheck_not_eligible_skips_before_heavy_eval():
     source = inspect.getsource(kiwoom_sniper_v2.run_sniper)
     precheck_idx = source.index("fast_precheck_result = str(stock.get")
     not_eligible_idx = source.index('fast_precheck_result != "eligible_for_heavy_entry_eval"', precheck_idx)
+    fields_store_idx = source.index('stock_value["_scanner_fast_precheck_fields"] = dict(fields)')
+    fields_arg_idx = source.index('fast_precheck_fields=dict(stock.get("_scanner_fast_precheck_fields") or {})', not_eligible_idx)
     ws_reg_idx = source.index("scanner_fast_precheck_stale_ws_recovery", not_eligible_idx)
     recovered_idx = source.index("scanner_fast_precheck_stale_ws_recovered", ws_reg_idx)
     recheck_idx = source.index("throttle_sec=0", recovered_idx)
@@ -2245,6 +2249,7 @@ def test_scanner_fast_precheck_not_eligible_skips_before_heavy_eval():
     append_idx = source.index("delayed_scanner_heavy_eval.append", budget_idx)
 
     assert precheck_idx < not_eligible_idx < waiting_idx < budget_idx < append_idx
+    assert fields_store_idx < precheck_idx < fields_arg_idx < waiting_idx
     assert not_eligible_idx < ws_reg_idx < waiting_idx
     assert ws_reg_idx < recovered_idx < recheck_idx < waiting_idx
 

@@ -2433,6 +2433,57 @@ def test_emit_scanner_watching_runtime_skip_reports_ws_type_freshness(monkeypatc
     assert fields["ws_strength_history_count"] == 1
 
 
+def test_emit_scanner_watching_runtime_skip_carries_fast_precheck_observed_fields(monkeypatch):
+    emitted = []
+    monkeypatch.setattr(
+        handlers,
+        "emit_pipeline_event",
+        lambda pipeline, name, code, stage, *, record_id=None, fields=None: emitted.append(fields or {}),
+    )
+    stock = {
+        "id": 80,
+        "name": "PROMOTED",
+        "code": "000080",
+        "status": "WATCHING",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "entry_armed_at_epoch": 1000.0,
+        "price_delta_since_first_seen_pct": "1.20",
+    }
+
+    assert handlers.emit_scanner_watching_runtime_skip(
+        stock,
+        "000080",
+        skip_reason="scanner_fast_precheck_stability_pending",
+        now_ts=1100.0,
+        ws_data={},
+        throttle_sec=0,
+        fast_precheck_fields={
+            "ws_strength_history_count": 13,
+            "ws_last_strength_history_age_ms": 1234.0,
+            "quote_age_ms": 7377.143,
+            "quote_age_source": "last_ws_update_ts",
+            "snapshot_source": "ws_snapshot_input",
+            "fast_precheck_result": "stability_pending",
+            "fast_precheck_reason": "stale_ws_snapshot",
+        },
+    )
+
+    fields = emitted[-1]
+    assert fields["ws_strength_history_count"] == 0
+    assert fields["fast_precheck_observed_ws_strength_history_count"] == 13
+    assert fields["fast_precheck_observed_ws_last_strength_history_age_ms"] == 1234.0
+    assert fields["fast_precheck_observed_quote_age_ms"] == 7377.143
+    assert fields["fast_precheck_observed_quote_age_source"] == "last_ws_update_ts"
+    assert fields["fast_precheck_observed_snapshot_source"] == "ws_snapshot_input"
+    assert fields["fast_precheck_observed_result"] == "stability_pending"
+    assert fields["fast_precheck_observed_reason"] == "stale_ws_snapshot"
+    assert fields["fast_precheck_observed_payload_source"] == "scanner_fast_precheck_fields"
+    assert fields["runtime_effect"] is False
+    assert fields["actual_order_submitted"] is False
+    assert fields["broker_order_forbidden"] is True
+
+
 def test_emit_scanner_watching_runtime_skip_ignores_expired_cutoff_relief_state(monkeypatch):
     emitted = []
     monkeypatch.setattr(
