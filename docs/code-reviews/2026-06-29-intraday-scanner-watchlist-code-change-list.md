@@ -688,3 +688,64 @@
 - BUY score, AI threshold, order price, stale-submit, broker/account/order/quantity guard, provider route, hard/protect/emergency stop, scale-in guard는 변경하지 않았다.
 - runtime hot reload가 5초 주기로 적용 가능하므로 즉시 재기동하지 않는다. 다음 루프에서 30초 이상 loop 지연이 계속 반복되면 그때 `restart.flag` 기반 graceful restart를 재검토한다.
 - broad threshold downsizing은 보류한다. 현재는 stale 평가와 loop pressure가 blocker 판정에 섞여 있어 fresh-only 표본으로 분리되기 전까지 실매매 threshold를 낮추면 stale submit bypass 위험이 있다.
+
+## 18. 11:30 목표 루프 관측 결과
+
+작성 시각: `2026-06-29 11:30 KST`
+
+### 18.1 산출물
+
+- 최신 진단:
+  - `data/report/intraday_entry_blocker_diagnostics/intraday_entry_blocker_diagnostics_2026-06-29_1130_0800_goal.json`
+  - `data/report/intraday_entry_blocker_diagnostics/intraday_entry_blocker_diagnostics_2026-06-29_1130_0950_goal.json`
+- 최신 flow:
+  - `data/report/intraday_entry_flow/intraday_entry_flow_2026-06-29_0800_to_1130.md`
+  - `data/report/intraday_entry_flow/intraday_entry_flow_2026-06-29_0950_to_1130.md`
+  - 사용자 지정 누적 참조 파일 `data/report/intraday_entry_flow/intraday_entry_flow_2026-06-29_0800_to_1004.md`도 08:00 기준 최신 내용으로 재생성했다.
+
+### 18.2 09:50 이후 flow summary
+
+- `symbol_count=269`
+- `rising_symbol_count_by_max_delta=44`
+- `rising_missed_buy_count_in_latest_diagnostic=55`
+- `rising_missed_symbol_count_in_report=46`
+- `real_submit_symbol_count_in_latest_diagnostic=0`
+- `buy_signal_or_pre_submit_pass_seen_symbols=13`
+- `stale_eval_symbol_count=129`
+- `rising_stale_eval_symbol_count=38`
+
+### 18.3 blocker 판단
+
+- 09:50 이후 상승 종목 blocker:
+  - `ai_confirmed/blocked_ai_score_below_buy_score_threshold=8`
+  - `blocked_strength_momentum/below_strength_base=5`
+  - `blocked_liquidity/first_ai_wait_big_bite_not_confirmed=5`
+  - `blocked_strength_momentum/below_window_buy_value=5`
+  - `scalping_scanner_watching_runtime_skip/scanner_fast_precheck_stability_pending=4`
+  - `blocked_strength_momentum/insufficient_history=3`
+- stale 평가:
+  - 09:50 이후 상승 44개 중 38개가 stale 평가를 포함했다.
+  - 09:50 이후 diagnostic의 `stale_or_delayed_eval=428`, `fresh_eval=131`으로 11:20보다 stale/지연 평가가 늘었다.
+- submit/price path:
+  - 실제 submit은 0건이다.
+  - BUY/pre-submit pass는 13개로 11:20과 동일하다.
+  - 최근 submit-path blocker는 계속 `entry_submit_revalidation_warning=stale_context_or_quote`, `entry_submit_revalidation_block`, `pre_submit_liquidity_guard BLOCK`, `invalid_price` 계열이다.
+
+### 18.4 runtime pressure 판정
+
+- p2 hot override 이후 주요 loop:
+  - `11:21:18 loop_elapsed_ms=21435.7`
+  - `11:22:25 loop_elapsed_ms=14869.2`
+  - `11:23:43 loop_elapsed_ms=25780.9`
+  - `11:24:55 loop_elapsed_ms=5522.3`
+  - `11:30:23 loop_elapsed_ms=10883.2`
+- 30초 이상 loop 지연은 p2 이후 재발하지 않았다.
+- 신규 graceful restart 또는 KILL은 수행하지 않는다.
+
+### 18.5 11:30 판정
+
+- 09:50 이후 rising missed는 55로 11:20과 같지만, 감시 종목과 stale eval은 증가했다.
+- 직접 blocker는 AI score, strength, liquidity로 보이지만 source freshness가 닫히지 않아 broad threshold downsizing은 여전히 보류한다.
+- stale submit, broker guard, order guard bypass는 금지 유지한다.
+- falling real submitted는 0건이라 하락 후 submit 개선과 손절/MFE 업데이트 대상은 아직 없다.
+- 다음 11:45 루프에서는 p2 이후 stale 평가가 줄어드는지와 fresh-only 상승 종목 blocker가 여전히 동일한지 분리해서 본다.
