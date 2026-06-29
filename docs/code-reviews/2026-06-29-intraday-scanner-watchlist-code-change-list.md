@@ -749,3 +749,66 @@
 - stale submit, broker guard, order guard bypass는 금지 유지한다.
 - falling real submitted는 0건이라 하락 후 submit 개선과 손절/MFE 업데이트 대상은 아직 없다.
 - 다음 11:45 루프에서는 p2 이후 stale 평가가 줄어드는지와 fresh-only 상승 종목 blocker가 여전히 동일한지 분리해서 본다.
+
+## 19. 11:45 목표 종료 루프 관측 결과
+
+작성 시각: `2026-06-29 11:45 KST`
+
+### 19.1 산출물
+
+- 최신 진단:
+  - `data/report/intraday_entry_blocker_diagnostics/intraday_entry_blocker_diagnostics_2026-06-29_1145_0800_goal.json`
+  - `data/report/intraday_entry_blocker_diagnostics/intraday_entry_blocker_diagnostics_2026-06-29_1145_0950_goal.json`
+- 최신 flow:
+  - `data/report/intraday_entry_flow/intraday_entry_flow_2026-06-29_0800_to_1145.md`
+  - `data/report/intraday_entry_flow/intraday_entry_flow_2026-06-29_0950_to_1145.md`
+  - 사용자 지정 누적 참조 파일 `data/report/intraday_entry_flow/intraday_entry_flow_2026-06-29_0800_to_1004.md`도 08:00 기준 최신 내용으로 재생성했다.
+
+### 19.2 09:50 이후 flow summary
+
+- `symbol_count=291`
+- `rising_symbol_count_by_max_delta=49`
+- `rising_missed_buy_count_in_latest_diagnostic=57`
+- `rising_missed_symbol_count_in_report=49`
+- `real_submit_symbol_count_in_latest_diagnostic=0`
+- `buy_signal_or_pre_submit_pass_seen_symbols=13`
+- `stale_eval_symbol_count=138`
+- `rising_stale_eval_symbol_count=43`
+
+### 19.3 blocker 판단
+
+- 09:50 이후 상승 종목 blocker:
+  - `ai_confirmed/blocked_ai_score_below_buy_score_threshold=8`
+  - `blocked_strength_momentum/below_strength_base=5`
+  - `blocked_liquidity/first_ai_wait_big_bite_not_confirmed=5`
+  - `blocked_strength_momentum/below_window_buy_value=5`
+  - `scalping_scanner_watching_runtime_skip/scanner_fast_precheck_stability_pending=5`
+  - `blocked_strength_momentum/insufficient_history=4`
+  - `blocked_strength_momentum/below_buy_ratio=4`
+- stale 평가:
+  - 09:50 이후 상승 49개 중 43개가 stale 평가를 포함했다.
+  - 09:50 이후 diagnostic의 `stale_or_delayed_eval=465`, `fresh_eval=143`으로 stale/지연 평가 우위가 유지됐다.
+- submit/price path:
+  - 실제 submit은 0건이다.
+  - BUY/pre-submit pass는 13개로 11:20, 11:30과 동일하다.
+  - price/submit guard diagnostic은 `block_or_unfilled_count=30`, `candidate_failure_count=5`, 실패 reason은 모두 `invalid_price`다.
+
+### 19.4 runtime pressure 판정
+
+- p2 hot override 이후에도 중간 spike는 재발했다.
+  - `11:35:11 loop_elapsed_ms=48124.3`
+  - `11:38:16 loop_elapsed_ms=35471.0`
+- 다만 종료 직전 구간은 회복됐다.
+  - `11:40:59 loop_elapsed_ms=2122.1`
+  - `11:42:41 loop_elapsed_ms=8664.9`
+  - `11:43:45 loop_elapsed_ms=8579.8`
+  - `11:44:59 loop_elapsed_ms=14893.6`
+- 목표 종료 시각이 지났으므로 추가 graceful restart 또는 KILL은 수행하지 않는다.
+
+### 19.5 종료 판정
+
+- 11:45 이후 목표 기능을 종료한다.
+- 주요 병목은 `scanner_fast_precheck_stability_pending`, `ws_snapshot_missing_or_zero`, stale/지연 strength/liquidity/AI 평가, 그리고 submit 직전 `stale_context_or_quote`/`invalid_price` 계열이다.
+- blocker downsizing은 보류한다. 직접 blocker가 AI score/strength/liquidity로 보이지만 stale 평가가 43/49개에 섞여 있어, 실매매 threshold를 낮추면 stale submit 또는 broker/order guard 우회 위험이 있다.
+- real submit은 0건이고 falling real submitted도 0건이라, 하락 후 submit 개선/손절/MFE 업데이트/scale-in 복구 검증 대상은 발생하지 않았다.
+- p2 runtime pressure relief는 최종 hot value `KORSTOCKSCAN_SCANNER_FULL_EVAL_MAX_PER_LOOP=8`, `KORSTOCKSCAN_SCANNER_FULL_EVAL_BACKLOG_EXTRA_PER_LOOP=2`로 남겨둔다. rollback은 각각 `12`, `4`다.
