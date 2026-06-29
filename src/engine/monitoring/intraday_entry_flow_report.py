@@ -32,13 +32,21 @@ FRESH_REFRESH_REASONS = {
 }
 
 
-def _parse_ts(value: Any) -> datetime | None:
+def _parse_ts(value: Any, *, target_date: str | None = None) -> datetime | None:
     if value in (None, ""):
         return None
+    text = str(value).strip()
     try:
-        return datetime.fromisoformat(str(value))
+        return datetime.fromisoformat(text)
     except ValueError:
-        return None
+        pass
+    if target_date and len(text.split(":")) in {2, 3}:
+        time_text = text if len(text.split(":")) == 3 else f"{text}:00"
+        try:
+            return datetime.fromisoformat(f"{target_date}T{time_text}")
+        except ValueError:
+            return None
+    return None
 
 
 def _safe_float(value: Any) -> float | None:
@@ -235,7 +243,7 @@ def build_report(
         for item in diagnostic.get("promoted_symbols", [])
         if isinstance(item, dict) and item.get("stock_code")
     }
-    since_ts = _parse_ts(since) if since else None
+    since_ts = _parse_ts(since, target_date=target_date) if since else None
     promoted: dict[str, dict[str, Any]] = {}
     for code, item in raw_promoted.items():
         first_promoted_at = _parse_ts(item.get("first_promoted_at"))
@@ -500,7 +508,7 @@ def _format_pct(value: Any) -> str:
 
 
 def _window_label(report: dict[str, Any]) -> str:
-    since_ts = _parse_ts(report.get("event_window", {}).get("since"))
+    since_ts = _parse_ts(report.get("event_window", {}).get("since"), target_date=report.get("target_date"))
     if since_ts is None:
         return "전체"
     return since_ts.strftime("%H:%M")
@@ -572,10 +580,10 @@ def write_outputs(report: dict[str, Any], *, output_md: Path, output_csv: Path, 
 
 def _default_output_paths(target_date: str, since: str | None, generated_at: str) -> tuple[Path, Path]:
     suffix = "all"
-    since_ts = _parse_ts(since)
+    since_ts = _parse_ts(since, target_date=target_date)
     if since_ts is not None:
         suffix = since_ts.strftime("%H%M")
-    generated_ts = _parse_ts(generated_at) or datetime.now()
+    generated_ts = _parse_ts(generated_at, target_date=target_date) or datetime.now()
     base = PROJECT_ROOT / "data" / "report" / "intraday_entry_flow" / f"intraday_entry_flow_{target_date}_{suffix}_to_{generated_ts.strftime('%H%M')}"
     return base.with_suffix(".md"), base.with_suffix(".csv")
 

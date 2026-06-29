@@ -1360,8 +1360,96 @@
   - BUY score, AI threshold, liquidity guard, broker/account/order/quantity/cooldown guard, provider route, order quantity, hard/protect/emergency stop은 변경하지 않는다.
   - passive probe stale-submit block은 기존 경로를 유지한다.
 
-### 27.3 검증 예정
+### 27.3 검증
 
 - `PYTHONPATH=. .venv/bin/python -m pytest src/tests/test_sniper_scale_in.py -k 'submit_revalidation or pre_submit_liquidity_relief'`
+  - `17 passed, 280 deselected`
 - `PYTHONPATH=. .venv/bin/python -m py_compile src/engine/sniper_state_handlers.py src/tests/test_sniper_scale_in.py`
+  - 통과
 - `git diff --check`
+  - 통과
+
+### 27.4 p7 이후 관측
+
+- commit:
+  - `a1a1686c`
+- 재기동:
+  - 새 PID `100032`
+- 13:10 `S-Oil(010950)` submit-path:
+  - `ai_confirmed BUY score=74`
+  - `latency_pass`
+  - `entry_submit_revalidation_quote_freshness_override_applied=True`
+  - `entry_submit_revalidation_warning=""`
+  - `quote_stale_at_submit=False`
+  - 다음 blocker는 `PRE_SUBMIT_LIQUIDITY_GUARD_BLOCK liquidity=272267400 min=350000000`
+- 판정:
+  - p7은 submit revalidation stale 중복판정을 실제 새 샘플에서 해소했다.
+  - 실제 submit은 아직 0건이며, p7 이후 submit 직전 blocker는 stale가 아니라 pre-submit liquidity guard로 이동했다.
+  - liquidity guard는 하드성 submit guard라 단일 샘플만으로 완화하지 않는다.
+
+## 28. 13:18 11:30 이후 flow 시간창 보정 p8
+
+작성 시각: `2026-06-29 13:19 KST`
+
+### 28.1 관측
+
+- `intraday_entry_flow_report --since 11:30` 실행 결과가 08:00 전체 집계와 동일하게 나왔다.
+- 원인:
+  - `src/engine/monitoring/intraday_entry_flow_report.py`의 `_parse_ts()`가 ISO datetime만 허용해 `11:30`, `08:00`, `13:18` 같은 time-only 입력을 파싱하지 못했다.
+  - 그 결과 `since_ts=None`으로 처리되어 event/diagnostic 필터가 사실상 꺼졌고, 제목도 `전체 이후`로 출력됐다.
+- 영향:
+  - 목표 0번의 11:30 이후 감시대상 흐름 산출물이 과대 집계되어 blocker 판단을 왜곡했다.
+  - 주문/threshold/provider/broker guard에는 영향이 없고 관측 산출물 정확도 문제다.
+
+### 28.2 코드 수정 p8
+
+- 파일:
+  - `src/engine/monitoring/intraday_entry_flow_report.py`
+  - `src/tests/test_intraday_entry_flow_report.py`
+- 변경:
+  - `_parse_ts(value, target_date=...)`가 ISO datetime을 우선 파싱하고, 실패 시 `HH:MM` 또는 `HH:MM:SS`를 `target_date` 당일 시각으로 해석한다.
+  - `build_report()`, `_window_label()`, `_default_output_paths()`가 target date를 넘기도록 수정했다.
+  - `--since 11:30`, `--generated-at 13:18`이 각각 필터/제목/기본 output path에 반영된다.
+- 신규 테스트:
+  - time-only `since`가 11:30 이전 diagnostic/event row를 제외하는지 확인.
+  - time-only `since` 제목이 `11:30 이후`로 출력되는지 확인.
+  - time-only `since`/`generated_at` 기본 파일명이 `1130_to_1318`로 생성되는지 확인.
+
+### 28.3 검증
+
+- `PYTHONPATH=. .venv/bin/python -m pytest src/tests/test_intraday_entry_flow_report.py`
+  - `8 passed`
+- `PYTHONPATH=. .venv/bin/python -m py_compile src/engine/monitoring/intraday_entry_flow_report.py src/tests/test_intraday_entry_flow_report.py`
+  - 통과
+- `git diff --check`
+  - 통과
+- `PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project --print-backlog-only --limit 500`
+  - `count=25`
+
+### 28.4 재생성 결과
+
+- 13:20 11:30 이후 flow:
+  - 최신 diagnostic: `data/report/intraday_entry_blocker_diagnostics/intraday_entry_blocker_diagnostics_2026-06-29_1319_1130_goal.json`
+  - `symbol_count=223`
+  - `rising_symbol_count_by_max_delta=38`
+  - `rising_missed_buy_count_in_latest_diagnostic=45`
+  - `rising_missed_symbol_count_in_report=39`
+  - `real_submit_symbol_count_in_latest_diagnostic=0`
+  - `buy_signal_or_pre_submit_pass_seen_symbols=6`
+  - `stale_eval_symbol_count=101`
+  - `rising_stale_eval_symbol_count=28`
+  - `rising_fresh_only_symbol_count=10`
+  - `stale_refresh_recovered_symbol_count=91`
+- rising fresh-only blocker:
+  - `2: scalping_scanner_watching_runtime_skip / scanner_fast_precheck_stability_pending`
+  - `2: ai_confirmed / blocked_ai_score_below_buy_score_threshold`
+  - `1: blocked_strength_momentum / insufficient_history`
+  - `1: blocked_strength_momentum / below_strength_base`
+  - `1: ai_confirmed / first_ai_wait_big_bite_not_confirmed`
+  - `1: blocked_overbought / -`
+  - `1: ai_confirmed / below_buy_ratio`
+  - `1: ai_confirmed_terminal_no_budget / below_buy_ratio`
+- 판정:
+  - 11:30 이후 시간창 기준으로 fresh-only threshold 완화 근거는 아직 2건이라 약하다.
+  - p7 이후 stale submit block은 새 샘플에서 해소됐고, submit 직전 병목은 liquidity guard로 이동했다.
+  - 최신 diagnostic root priority는 `scanner_strength_history_or_stale_eval`이며, 다음 루프에서는 `scanner_fast_precheck_stability_pending`/`ws_snapshot_missing_or_zero`가 fresh-only에도 남는 원인을 먼저 본다.

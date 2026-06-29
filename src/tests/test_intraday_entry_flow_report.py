@@ -1,6 +1,6 @@
 import json
 
-from src.engine.monitoring.intraday_entry_flow_report import build_report, write_outputs
+from src.engine.monitoring.intraday_entry_flow_report import _default_output_paths, build_report, write_outputs
 
 
 def _event(code, name, stage, fields, emitted_at="2026-06-29T09:50:00"):
@@ -180,6 +180,63 @@ def test_build_report_filters_diagnostic_promotions_before_since(tmp_path):
     assert report["summary"]["rising_missed_symbol_count_in_report"] == 1
 
 
+def test_build_report_accepts_time_only_since_for_target_date(tmp_path):
+    event_path = tmp_path / "events.jsonl"
+    diagnostic_path = tmp_path / "diag.json"
+    diagnostic_path.write_text(
+        json.dumps(
+            {
+                "summary": {"real_submit_symbol_count": 0},
+                "promoted_symbols": [
+                    {
+                        "stock_code": "000001",
+                        "stock_name": "old",
+                        "first_promoted_at": "2026-06-29T11:29:59",
+                        "max_price_delta_since_first_seen_pct": 5,
+                    },
+                    {
+                        "stock_code": "000002",
+                        "stock_name": "new",
+                        "first_promoted_at": "2026-06-29T11:30:00",
+                        "max_price_delta_since_first_seen_pct": 1,
+                    },
+                ],
+                "rising_missed_buy": [{"stock_code": "000001"}, {"stock_code": "000002"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    rows = [
+        _event(
+            "000001",
+            "old",
+            "blocked_strength_momentum",
+            {"scanner_promotion_id": "old", "price_delta_since_first_seen_pct": "5"},
+            emitted_at="2026-06-29T11:29:59",
+        ),
+        _event(
+            "000002",
+            "new",
+            "blocked_strength_momentum",
+            {"scanner_promotion_id": "new", "price_delta_since_first_seen_pct": "1"},
+            emitted_at="2026-06-29T11:30:00",
+        ),
+    ]
+    event_path.write_text("\n".join(json.dumps(row, ensure_ascii=False) for row in rows), encoding="utf-8")
+
+    report = build_report(
+        target_date="2026-06-29",
+        event_cache_path=event_path,
+        diagnostic_path=diagnostic_path,
+        since="11:30",
+        generated_at="fixed",
+    )
+
+    assert [row["stock_code"] for row in report["rows"]] == ["000002"]
+    assert report["summary"]["symbol_count"] == 1
+    assert report["summary"]["rising_missed_symbol_count_in_report"] == 1
+
+
 def test_write_outputs_uses_since_window_in_title(tmp_path):
     report = {
         "target_date": "2026-06-29",
@@ -212,6 +269,47 @@ def test_write_outputs_uses_since_window_in_title(tmp_path):
     write_outputs(report, output_md=output_md, output_csv=output_csv)
 
     assert output_md.read_text(encoding="utf-8").splitlines()[0] == "# 2026-06-29 08:00 이후 감시대상 BUY 전 흐름"
+
+
+def test_write_outputs_uses_time_only_since_window_in_title(tmp_path):
+    report = {
+        "target_date": "2026-06-29",
+        "generated_at": "fixed",
+        "source_events": "events.jsonl",
+        "source_diagnostic": "diag.json",
+        "event_window": {"since": "11:30"},
+        "summary": {
+            "symbol_count": 0,
+            "rising_symbol_count_by_max_delta": 0,
+            "rising_missed_buy_count_in_latest_diagnostic": 0,
+            "rising_missed_symbol_count_in_report": 0,
+            "real_submit_symbol_count_in_latest_diagnostic": 0,
+            "buy_signal_or_pre_submit_pass_seen_symbols": 0,
+            "stale_eval_symbol_count": 0,
+            "rising_stale_eval_symbol_count": 0,
+            "rising_fresh_only_symbol_count": 0,
+        },
+        "blocker_rollup": [],
+        "rising_symbol_blocker_rollup": [],
+        "rising_fresh_only_blocker_rollup": [],
+        "rising_stale_mixed_blocker_rollup": [],
+        "stale_eval_rollup": [],
+        "stale_eval_category_rollup": [],
+        "rows": [],
+    }
+
+    output_md = tmp_path / "flow.md"
+    output_csv = tmp_path / "flow.csv"
+    write_outputs(report, output_md=output_md, output_csv=output_csv)
+
+    assert output_md.read_text(encoding="utf-8").splitlines()[0] == "# 2026-06-29 11:30 이후 감시대상 BUY 전 흐름"
+
+
+def test_default_output_paths_accept_time_only_since_and_generated_at():
+    output_md, output_csv = _default_output_paths("2026-06-29", "11:30", "13:18")
+
+    assert output_md.name == "intraday_entry_flow_2026-06-29_1130_to_1318.md"
+    assert output_csv.name == "intraday_entry_flow_2026-06-29_1130_to_1318.csv"
 
 
 def test_build_report_separates_refresh_recovered_stale_from_hard_stale(tmp_path):
