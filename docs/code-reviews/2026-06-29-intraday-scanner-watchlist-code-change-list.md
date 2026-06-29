@@ -1540,3 +1540,61 @@
   - 같은 구간 `져스텍(153890)`은 `ai_confirmed BUY score=78`까지 갔지만 `quote_stale=True`, `quote_age_ms=4955` 상태였고 submit 관측은 없었다.
   - 따라서 p10 파일 값은 last-wins 기준 `12`로 정리됐지만, 13:40 목표 종료 전 런타임 이벤트 반영 증거는 확보하지 못했다.
 - 13:40 목표 종료 조건 때문에 추가 감시/restart는 수행하지 않았다. 다음 세션에서 이 목표를 이어갈 경우 첫 조치는 `restart.flag` 우아한 재기동 후 `scanner_attach_capacity_cap=12` 반영 여부 확인이다.
+
+## 31. 13:45 restart 후 cap=12 반영 및 져스텍 stale/fresh 관측 보강 p11
+
+### 31.1 관측
+
+- `restart.flag` 방식으로 재기동했고 새 PID는 `115839`다.
+- 새 PID 환경:
+  - `KORSTOCKSCAN_SCALPING_WATCHING_MAX_ACTIVE=16`
+  - `KORSTOCKSCAN_SCALPING_WATCHING_DYNAMIC_MIN_ACTIVE=12`
+  - `KORSTOCKSCAN_SCALPING_WATCHING_DYNAMIC_CAP_ENABLED=true`
+  - `KORSTOCKSCAN_SCALPING_WATCHING_ATTACH_REPLACE_ENABLED=false`
+- 13:45 이후 `scalping_scanner_runtime_target_attach` 이벤트:
+  - `new_watching_target_attached=7`
+  - `scalping_dynamic_watch_cap_capacity=4`
+  - capacity skip은 `scanner_attach_capacity_cap=12`, `scanner_attach_capacity_watching_count=12`로 찍혀 p10 반영을 확인했다.
+- 져스텍(`153890`) 경로:
+  - 13:35에는 `ai_confirmed BUY score=78`, AI 입력 `quote_stale=True`, `quote_age_ms=4955`.
+  - pre-submit 단계에서는 `pre_submit_ws_snapshot_refresh_applied=True`, `quote_stale=False`, `quote_consistency_entry_blocked=False`로 fresh quote 회복이 됐다.
+  - 최종 차단은 stale submit block이 아니라 `latency_block`, `latency_state=DANGER`, `reason=latency_state_danger`였다.
+  - 기존 snapshot에는 AI 입력 당시 `quote_age_ms=4955`와 pre-submit fresh 재평가가 섞여 남아 리포트가 stale 차단과 latency 차단을 혼동할 수 있었다.
+
+### 31.2 코드 수정 p11
+
+- 파일:
+  - `src/engine/sniper_state_handlers.py`
+  - `src/tests/test_sniper_entry_latency.py`
+- 변경:
+  - `_pre_submit_effective_quote_log_fields()`를 추가했다.
+  - `latency_block` 이벤트와 `scalp_entry_action_decision_snapshot`에 아래 관측 필드를 추가한다.
+    - `pre_submit_effective_quote_stale`
+    - `pre_submit_effective_quote_age_ms`
+    - `pre_submit_effective_quote_age_source`
+    - `pre_submit_ai_input_quote_stale`
+    - `pre_submit_ai_input_quote_age_ms`
+    - `pre_submit_refresh_recovered_stale_ai_context`
+- 목적:
+  - stale AI 입력이 fresh pre-submit refresh로 회복됐는지 명시한다.
+  - refresh 이후에도 차단된 경우 stale submit blocker가 아니라 latency/spread/other danger blocker로 분류할 수 있게 한다.
+- 권한/충돌:
+  - 관측 보강 전용이다.
+  - BUY score, AI threshold, latency guard, stale submit block, broker/account/order/quantity/cooldown guard, provider route, order price, hard/protect/emergency stop, scale-in guard는 변경하지 않는다.
+  - `quote_stale=False`로 재평가된 사실을 기록할 뿐, stale submit guard를 우회하지 않는다.
+
+### 31.3 검증
+
+- `PYTHONPATH=. .venv/bin/python -m pytest src/tests/test_sniper_entry_latency.py -k 'pre_submit_effective_quote_fields or real_pre_submit_ws_snapshot_refresh_uses_fresh_ws_manager_snapshot'`
+  - `3 passed, 79 deselected`
+- `PYTHONPATH=. .venv/bin/python -m pytest src/tests/test_sniper_entry_latency.py`
+  - `82 passed`
+- `PYTHONPATH=. .venv/bin/python -m py_compile src/engine/sniper_state_handlers.py src/tests/test_sniper_entry_latency.py`
+  - 통과
+- `git diff --check`
+  - 통과
+
+### 31.4 런타임 후속
+
+- 코드 반영을 위해 review-gate 통과 후에만 `restart.flag` 방식으로 우아한 재기동한다.
+- 다음 관측에서는 져스텍과 유사한 BUY+stale AI 입력 케이스가 `pre_submit_refresh_recovered_stale_ai_context=True`로 찍히고, 최종 차단이 latency/spread인지 stale인지 분리되는지 확인한다.

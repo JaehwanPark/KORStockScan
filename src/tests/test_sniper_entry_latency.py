@@ -649,6 +649,41 @@ def test_real_pre_submit_ws_snapshot_refresh_uses_fresh_ws_manager_snapshot(monk
     assert refreshed["pre_submit_ws_snapshot_refresh_latest_price"] == 10_020
 
 
+def test_pre_submit_effective_quote_fields_mark_stale_ai_recovered_by_ws_refresh():
+    fields = state_handlers._pre_submit_effective_quote_log_fields(
+        latency_gate={
+            "quote_stale": False,
+            "pre_submit_ws_snapshot_refresh_applied": True,
+            "pre_submit_ws_snapshot_refresh_age_ms": 79.165,
+        },
+        ai_quote_stale=True,
+        ai_quote_age_ms=4955,
+    )
+
+    assert fields["pre_submit_effective_quote_stale"] is False
+    assert fields["pre_submit_effective_quote_age_ms"] == 79.165
+    assert fields["pre_submit_effective_quote_age_source"] == "pre_submit_ws_snapshot_refresh"
+    assert fields["pre_submit_ai_input_quote_stale"] is True
+    assert fields["pre_submit_ai_input_quote_age_ms"] == 4955
+    assert fields["pre_submit_refresh_recovered_stale_ai_context"] is True
+
+
+def test_pre_submit_effective_quote_fields_fall_back_to_latency_gate_age():
+    fields = state_handlers._pre_submit_effective_quote_log_fields(
+        latency_gate={
+            "quote_stale": False,
+            "ws_age_ms": 310,
+        },
+        ai_quote_stale=False,
+        ai_quote_age_ms=120,
+    )
+
+    assert fields["pre_submit_effective_quote_stale"] is False
+    assert fields["pre_submit_effective_quote_age_ms"] == 310
+    assert fields["pre_submit_effective_quote_age_source"] == "latency_gate_ws_age"
+    assert fields["pre_submit_refresh_recovered_stale_ai_context"] is False
+
+
 def test_real_pre_submit_ws_snapshot_refresh_keeps_valid_input_when_timestamp_missing(monkeypatch):
     class FakeWsManager:
         def get_latest_data(self, code):

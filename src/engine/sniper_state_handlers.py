@@ -8397,6 +8397,8 @@ def _emit_scalp_entry_adm_snapshot(
             for key, value in payload.items():
                 if key not in fields and value is not None:
                     fields[key] = value
+    ai_input_quote_stale = fields.get("quote_stale")
+    ai_input_quote_age_ms = fields.get("quote_age_ms")
     fields = _ensure_ai_source_quality_fields(
         fields,
         stock,
@@ -8406,6 +8408,13 @@ def _emit_scalp_entry_adm_snapshot(
         for key in latency_snapshot_priority_keys:
             if key in latency_gate and latency_gate.get(key) is not None:
                 fields[key] = latency_gate.get(key)
+        fields.update(
+            _pre_submit_effective_quote_log_fields(
+                latency_gate=latency_gate,
+                ai_quote_stale=ai_input_quote_stale,
+                ai_quote_age_ms=ai_input_quote_age_ms,
+            )
+        )
     parity_keys = (
         "tick_acceleration_ratio",
         "tick_acceleration_ratio_raw",
@@ -11252,6 +11261,42 @@ def _pre_submit_ws_snapshot_refresh_log_fields(source: dict | None) -> dict:
     }
     _merge_quote_consistency_fields(fields, data)
     return fields
+
+
+def _pre_submit_effective_quote_log_fields(
+    *,
+    latency_gate: dict | None,
+    ai_quote_stale: Any = None,
+    ai_quote_age_ms: Any = None,
+) -> dict:
+    if not isinstance(latency_gate, dict):
+        return {}
+    effective_stale = bool(latency_gate.get("quote_stale"))
+    effective_age = latency_gate.get("pre_submit_ws_snapshot_refresh_age_ms")
+    effective_source = "pre_submit_ws_snapshot_refresh"
+    if effective_age in (None, "", "-", "None", "none"):
+        effective_age = latency_gate.get("pre_submit_rest_orderbook_refresh_age_ms")
+        effective_source = "pre_submit_rest_orderbook_refresh"
+    if effective_age in (None, "", "-", "None", "none"):
+        effective_age = latency_gate.get("pre_submit_quote_refresh_quote_age_ms")
+        effective_source = "pre_submit_quote_refresh"
+    if effective_age in (None, "", "-", "None", "none"):
+        effective_age = latency_gate.get("ws_age_ms")
+        effective_source = "latency_gate_ws_age"
+    ai_stale = str(ai_quote_stale).strip().lower() == "true" if ai_quote_stale is not None else False
+    recovered = ai_stale and not effective_stale and (
+        bool(latency_gate.get("pre_submit_ws_snapshot_refresh_applied"))
+        or bool(latency_gate.get("pre_submit_rest_orderbook_refresh_applied"))
+        or bool(latency_gate.get("pre_submit_quote_refresh_applied"))
+    )
+    return {
+        "pre_submit_effective_quote_stale": effective_stale,
+        "pre_submit_effective_quote_age_ms": effective_age,
+        "pre_submit_effective_quote_age_source": effective_source,
+        "pre_submit_ai_input_quote_stale": ai_stale,
+        "pre_submit_ai_input_quote_age_ms": ai_quote_age_ms,
+        "pre_submit_refresh_recovered_stale_ai_context": recovered,
+    }
 
 
 def _latency_gate_observer_unhealthy(latency_gate: dict | None) -> bool:
@@ -21199,6 +21244,13 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         f"allowed_slippage={latency_gate.get('computed_allowed_slippage')} orders={len(latency_gate.get('orders') or [])}"
     )
     if not latency_gate.get('allowed') or entry_mode == 'reject':
+        ai_source_quality_fields = stock.get("last_watching_ai_source_quality_fields")
+        ai_source_quality_fields = ai_source_quality_fields if isinstance(ai_source_quality_fields, dict) else {}
+        effective_quote_log_fields = _pre_submit_effective_quote_log_fields(
+            latency_gate=latency_gate,
+            ai_quote_stale=ai_source_quality_fields.get("quote_stale"),
+            ai_quote_age_ms=ai_source_quality_fields.get("quote_age_ms"),
+        )
         log_info(
             f"[LATENCY_ENTRY_BLOCK] {stock.get('name')}({code}) decision={latency_gate.get('decision')} "
             f"latency={latency_gate.get('latency_state')} reason={latency_gate.get('reason')} "
@@ -21274,6 +21326,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             ),
             pre_submit_quote_refresh_spread_ratio=latency_gate.get('pre_submit_quote_refresh_spread_ratio'),
             **_pre_submit_ws_snapshot_refresh_log_fields(latency_gate),
+            **effective_quote_log_fields,
             **_merge_entry_pipeline_field_groups(
                 _build_ai_overlap_log_fields(
                     stock=stock, ai_score=latency_signal_score, momentum_tag=stock.get("entry_momentum_tag"),
