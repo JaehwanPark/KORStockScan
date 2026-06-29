@@ -1,0 +1,174 @@
+import json
+
+from src.engine.monitoring.intraday_entry_flow_report import build_report
+
+
+def _event(code, name, stage, fields, emitted_at="2026-06-29T09:50:00"):
+    return {
+        "pipeline": "ENTRY_PIPELINE",
+        "stock_code": code,
+        "stock_name": name,
+        "stage": stage,
+        "fields": fields,
+        "emitted_at": emitted_at,
+    }
+
+
+def test_build_report_summarizes_flow_and_rising_blocker(tmp_path):
+    event_path = tmp_path / "buy_funnel_sentinel_events_2026-06-29.jsonl"
+    diagnostic_path = tmp_path / "diag.json"
+    diagnostic_path.write_text(
+        json.dumps(
+            {
+                "summary": {"real_submit_symbol_count": 0},
+                "promoted_symbols": [
+                    {
+                        "stock_code": "000001",
+                        "stock_name": "상승",
+                        "first_promoted_at": "2026-06-29T09:50:00",
+                        "last_event_at": "2026-06-29T09:55:00",
+                        "latest_price_delta_since_first_seen_pct": 3.0,
+                        "max_price_delta_since_first_seen_pct": 3.0,
+                        "real_submit_count": 0,
+                        "latest_ai_score": 62,
+                        "latest_ai_action": "WAIT",
+                        "dominant_blocker": {
+                            "stage": "scalping_scanner_watching_runtime_skip",
+                            "reason": "scanner_fast_precheck_stability_pending",
+                            "count": 3,
+                        },
+                    }
+                ],
+                "rising_missed_buy": [{"stock_code": "000001"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    rows = [
+        _event(
+            "000001",
+            "상승",
+            "scalping_scanner_watching_runtime_skip",
+            {
+                "scanner_promotion_id": "p1",
+                "price_delta_since_first_seen_pct": "1.0",
+                "skip_reason": "scanner_fast_precheck_stability_pending",
+            },
+        ),
+        _event(
+            "000001",
+            "상승",
+            "ai_confirmed",
+            {
+                "scanner_promotion_id": "p1",
+                "price_delta_since_first_seen_pct": "3.0",
+                "ai_score": "62",
+                "action": "WAIT",
+                "quote_age_ms": "3500",
+            },
+            emitted_at="2026-06-29T09:55:00",
+        ),
+    ]
+    event_path.write_text("\n".join(json.dumps(row, ensure_ascii=False) for row in rows), encoding="utf-8")
+
+    report = build_report(
+        target_date="2026-06-29",
+        event_cache_path=event_path,
+        diagnostic_path=diagnostic_path,
+        since="2026-06-29T09:50:00",
+        generated_at="fixed",
+    )
+
+    assert report["summary"]["symbol_count"] == 1
+    assert report["summary"]["rising_symbol_count_by_max_delta"] == 1
+    assert report["rising_symbol_blocker_rollup"][0] == {
+        "stage": "scalping_scanner_watching_runtime_skip",
+        "reason": "scanner_fast_precheck_stability_pending",
+        "count": 1,
+    }
+    row = report["rows"][0]
+    assert row["rise_after_watch"] == "rising"
+    assert row["main_blocker_reason"] == "scanner_fast_precheck_stability_pending"
+    assert row["stale_eval_count"] == 1
+    assert row["dominant_stale_eval_stage"] == "ai_confirmed"
+    assert report["summary"]["rising_stale_eval_symbol_count"] == 1
+    assert "09:50:00 scalping_scanner_watching_runtime_skip" in row["flow"]
+
+
+def test_build_report_excludes_before_since_and_sim_rows(tmp_path):
+    event_path = tmp_path / "events.jsonl"
+    diagnostic_path = tmp_path / "diag.json"
+    diagnostic_path.write_text(json.dumps({"summary": {}, "promoted_symbols": [], "rising_missed_buy": []}), encoding="utf-8")
+    rows = [
+        _event(
+            "000001",
+            "old",
+            "blocked_strength_momentum",
+            {"scanner_promotion_id": "old", "price_delta_since_first_seen_pct": "10"},
+            emitted_at="2026-06-29T09:49:59",
+        ),
+        _event(
+            "000002",
+            "sim",
+            "scalp_sim_buy_order_assumed_filled",
+            {"scanner_promotion_id": "sim", "simulated_order": "True", "price_delta_since_first_seen_pct": "5"},
+        ),
+        _event(
+            "000003",
+            "new",
+            "blocked_strength_momentum",
+            {"scanner_promotion_id": "new", "price_delta_since_first_seen_pct": "0"},
+        ),
+    ]
+    event_path.write_text("\n".join(json.dumps(row, ensure_ascii=False) for row in rows), encoding="utf-8")
+
+    report = build_report(
+        target_date="2026-06-29",
+        event_cache_path=event_path,
+        diagnostic_path=diagnostic_path,
+        since="2026-06-29T09:50:00",
+        generated_at="fixed",
+    )
+
+    assert [row["stock_code"] for row in report["rows"]] == ["000003"]
+    assert report["summary"]["rising_symbol_count_by_max_delta"] == 0
+
+
+def test_build_report_filters_diagnostic_promotions_before_since(tmp_path):
+    event_path = tmp_path / "events.jsonl"
+    diagnostic_path = tmp_path / "diag.json"
+    event_path.write_text("", encoding="utf-8")
+    diagnostic_path.write_text(
+        json.dumps(
+            {
+                "summary": {"real_submit_symbol_count": 0},
+                "promoted_symbols": [
+                    {
+                        "stock_code": "000001",
+                        "stock_name": "old",
+                        "first_promoted_at": "2026-06-29T09:49:59",
+                        "max_price_delta_since_first_seen_pct": 5,
+                    },
+                    {
+                        "stock_code": "000002",
+                        "stock_name": "new",
+                        "first_promoted_at": "2026-06-29T09:50:00",
+                        "max_price_delta_since_first_seen_pct": 1,
+                    },
+                ],
+                "rising_missed_buy": [{"stock_code": "000001"}, {"stock_code": "000002"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    report = build_report(
+        target_date="2026-06-29",
+        event_cache_path=event_path,
+        diagnostic_path=diagnostic_path,
+        since="2026-06-29T09:50:00",
+        generated_at="fixed",
+    )
+
+    assert [row["stock_code"] for row in report["rows"]] == ["000002"]
+    assert report["summary"]["rising_missed_symbol_count_in_report"] == 1
