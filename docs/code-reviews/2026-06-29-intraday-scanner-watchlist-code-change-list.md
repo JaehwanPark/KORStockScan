@@ -208,3 +208,162 @@
   - `3 passed`
 - `PYTHONPATH=. .venv/bin/python -m py_compile src/engine/monitoring/intraday_entry_flow_report.py src/tests/test_intraday_entry_flow_report.py`
   - 통과
+
+## 10. 10:33 목표 루프 관측 결과
+
+작성 시각: `2026-06-29 10:33 KST`
+
+### 10.1 산출물
+
+- 최신 진단:
+  - `data/report/intraday_entry_blocker_diagnostics/intraday_entry_blocker_diagnostics_2026-06-29_1033_goal.json`
+- 최신 flow:
+  - `data/report/intraday_entry_flow/intraday_entry_flow_2026-06-29_0950_to_1033.md`
+  - 사용자 지정 누적 참조 파일 `data/report/intraday_entry_flow/intraday_entry_flow_2026-06-29_0800_to_1004.md`도 같은 내용으로 갱신했다.
+
+### 10.2 10:18 대비 변화
+
+- 09:50 이후 진단 summary:
+  - `promoted_symbol_count=252`
+  - `rising_missed_buy_count=48` (`10:18`의 42에서 증가)
+  - `real_submit_symbol_count=0`
+  - `falling_real_submitted_count=0`
+  - `rising_missed_low_ai_or_negative_pressure_eval_quality.stale_or_delayed_eval=176` (`10:18`의 104에서 증가)
+- 09:50 이후 flow summary:
+  - `symbol_count=178`
+  - `rising_symbol_count_by_max_delta=32`
+  - `rising_missed_symbol_count_in_report=37`
+  - `buy_signal_or_pre_submit_pass_seen_symbols=8`
+  - `stale_eval_symbol_count=77`
+  - `rising_stale_eval_symbol_count=22`
+- runtime log:
+  - `10:32:40` loop elapsed가 `50539.0ms`까지 늘었고, 직전/직후 `WS_SUBSCRIPTION_PRUNE`가 여러 번 발생했다.
+
+### 10.3 blocker 판단
+
+- 전체 watch pool 기준:
+  - `scanner_fast_precheck_stability_pending=65`
+  - `ws_snapshot_missing_or_zero=21`
+  - `blocked_strength_momentum/below_window_buy_value=28`
+- 상승 종목 기준:
+  - `ai_confirmed/blocked_ai_score_below_buy_score_threshold=6`
+  - `blocked_strength_momentum/below_window_buy_value=5`
+  - `blocked_strength_momentum/below_strength_base=4`
+  - `blocked_strength_momentum/insufficient_history=3`
+  - `scanner_fast_precheck_stability_pending=1`
+- stale 평가:
+  - 상승 종목 32개 중 22개가 stale 평가를 포함했다.
+  - stale stage는 `blocked_strength_momentum`, `blocked_vpw`, `blocked_liquidity`, `blocked_overbought`, `ai_confirmed`에 분산되어 있다.
+
+### 10.4 blocker downsizing 판정
+
+- `scanner_fast_precheck_stability_pending`과 `ws_snapshot_missing_or_zero`는 전체 watch pool 병목으로는 다시 커졌지만, 10:33 상승 종목의 직접 1차 blocker는 아니다. 따라서 이 둘만 보고 entry threshold나 BUY score를 낮추는 것은 부적절하다.
+- `strength/liquidity/AI` blocker가 중복으로 보이는 종목이 늘었지만, stale 평가가 상승 종목 22개에 섞여 있다. 지금 downsizing을 적용하면 stale quote submit block 또는 broker guard 우회 위험이 있다.
+- 이번 루프의 조치는 코드 변경이 아니라 관측 유지다. 다음 루프에서 `fresh-only 상승 종목`만 분리해도 같은 blocker가 반복되면 그때 downsizing 후보를 `below_window_buy_value`, `below_strength_base`, `blocked_ai_score_below_buy_score_threshold`, `first_ai_wait_big_bite_not_confirmed` 순서로 좁힌다.
+
+## 11. 10:37 08:00 기준 목표 루프 관측 및 리포트 제목 수정
+
+작성 시각: `2026-06-29 10:37 KST`
+
+### 11.1 산출물
+
+- 최신 진단:
+  - `data/report/intraday_entry_blocker_diagnostics/intraday_entry_blocker_diagnostics_2026-06-29_1037_0800_goal.json`
+- 최신 flow:
+  - `data/report/intraday_entry_flow/intraday_entry_flow_2026-06-29_0800_to_1037.md`
+  - 사용자 지정 누적 참조 파일 `data/report/intraday_entry_flow/intraday_entry_flow_2026-06-29_0800_to_1004.md`도 08:00 기준으로 재생성했다.
+
+### 11.2 08:00 이후 flow summary
+
+- `symbol_count=365`
+- `rising_symbol_count_by_max_delta=79`
+- `rising_missed_buy_count_in_latest_diagnostic=71`
+- `rising_missed_symbol_count_in_report=71`
+- `real_submit_symbol_count_in_latest_diagnostic=0`
+- `buy_signal_or_pre_submit_pass_seen_symbols=21`
+- `stale_eval_symbol_count=161`
+- `rising_stale_eval_symbol_count=64`
+
+### 11.3 주요 blocker 위치
+
+- 전체 watch pool:
+  - `scanner_fast_precheck_stability_pending=239`
+  - `ws_snapshot_missing_or_zero=85`
+  - `entry_cooldown_active=14`
+- 상승 종목:
+  - `scanner_fast_precheck_stability_pending=42`
+  - `entry_cooldown_active=14`
+  - `ws_snapshot_missing_or_zero=10`
+  - `blocked_overbought/-=4`
+  - `blocked_strength_momentum/below_window_buy_value=3`
+- stale 평가:
+  - 상승 종목 79개 중 64개에 stale 평가가 포함됐다.
+  - stale stage는 `blocked_strength_momentum=78`, `blocked_liquidity=29`, `blocked_vpw=26`, `blocked_overbought=14`, `ai_confirmed=13`으로 분산된다.
+
+### 11.4 코드 수정
+
+- 파일:
+  - `src/engine/monitoring/intraday_entry_flow_report.py`
+  - `src/tests/test_intraday_entry_flow_report.py`
+- 내용:
+  - flow markdown 제목이 `09:50 이후`로 고정되어 있어 08:00 리포트와 불일치하던 관측 품질 결함을 수정했다.
+  - 제목은 `event_window_since`에서 계산한 `HH:MM 이후`를 사용한다.
+  - 08:00 제목 회귀 테스트를 추가했다.
+- 충돌 검토:
+  - 리포트 렌더링 표기 수정이며 runtime threshold, order submit, provider route, bot restart, stale submit block, broker guard에는 영향이 없다.
+
+### 11.5 10:37 판정
+
+- 08:00 이후 전체 흐름에서는 상승 미진입의 대부분이 `scanner_fast_precheck_stability_pending`, `ws_snapshot_missing_or_zero`, `entry_cooldown_active`에서 막혔다.
+- 상승 후 BUY/pre-submit 신호까지 간 종목은 21개지만 실제 submit은 0개다. SK이터닉스, LG에너지솔루션 계열처럼 BUY 또는 latency pass 후에도 `stale_context_or_quote` revalidation block이 존재하므로 stale submit bypass는 금지한다.
+- 이번 루프에서는 blocker downsizing보다 observation freshness/WS snapshot/strength history 쪽이 major issue다. 10:37 직전 런타임 로그에서 10:32 `50539ms`, 10:36 `39708ms`, 10:37 `31825.9ms` loop pressure가 보였으므로 다음 루프에서 30초 이상 loop가 반복되면 `restart.flag` 기반 graceful restart를 검토한다.
+
+### 11.6 검증
+
+- `PYTHONPATH=. .venv/bin/python -m pytest src/tests/test_intraday_entry_flow_report.py`
+  - `4 passed`
+- `PYTHONPATH=. .venv/bin/python -m py_compile src/engine/monitoring/intraday_entry_flow_report.py src/tests/test_intraday_entry_flow_report.py`
+  - 통과
+- `git diff --check`
+  - 통과
+- `PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project --print-backlog-only --limit 500`
+  - 통과
+
+## 12. 10:40 graceful restart 기록
+
+작성 시각: `2026-06-29 10:40 KST`
+
+### 12.1 재기동 사유
+
+- 10:32 `50539.0ms`, 10:36 `39708.3ms`, 10:37 `31825.9ms`, 10:38 `32611.3ms` loop 지연이 반복되어 observation freshness/WS snapshot 병목 완화가 필요했다.
+- 코드/리포트 변경은 review gate 검증을 통과했고 봇 runtime decision authority를 바꾸지 않는 범위라, threshold/order/provider 변경 없이 runbook 표준 graceful restart만 수행했다.
+
+### 12.2 실행 경로
+
+- 명령:
+  - `./restart.sh`
+- 방식:
+  - `restart.flag` handoff
+  - KILL 명령 미사용
+  - 직접 중복 봇 기동 미사용
+
+### 12.3 결과
+
+- 이전 PID:
+  - `21129`
+- 신규 PID:
+  - `48856`
+- runtime env handoff:
+  - `passed=true`
+  - `missing_family_count=0`
+  - `pid_passed=true`
+- 봇 재진입:
+  - `10:40:22` 스나이퍼/스캐너 루프 재진입
+  - `10:40:23` 웹소켓 감시 8종목 등록
+- 재기동 후 첫 loop metric:
+  - `10:40:39 loop_elapsed_ms=9126.1`
+
+### 12.4 후속 판정
+
+- 재기동 직후 30초대 loop 지연은 해소된 것으로 보이나, 아직 첫 샘플이다.
+- 다음 15분 루프에서 `LOOP_METRICS`, `stale_eval_symbol_count`, `rising_stale_eval_symbol_count`, `stale_context_or_quote` submit block 재발 여부를 함께 확인한다.

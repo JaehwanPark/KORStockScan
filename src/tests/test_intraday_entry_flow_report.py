@@ -1,6 +1,6 @@
 import json
 
-from src.engine.monitoring.intraday_entry_flow_report import build_report
+from src.engine.monitoring.intraday_entry_flow_report import build_report, write_outputs
 
 
 def _event(code, name, stage, fields, emitted_at="2026-06-29T09:50:00"):
@@ -172,3 +172,33 @@ def test_build_report_filters_diagnostic_promotions_before_since(tmp_path):
 
     assert [row["stock_code"] for row in report["rows"]] == ["000002"]
     assert report["summary"]["rising_missed_symbol_count_in_report"] == 1
+
+
+def test_write_outputs_uses_since_window_in_title(tmp_path):
+    report = {
+        "target_date": "2026-06-29",
+        "generated_at": "fixed",
+        "source_events": "events.jsonl",
+        "source_diagnostic": "diag.json",
+        "event_window": {"since": "2026-06-29T08:00:00"},
+        "summary": {
+            "symbol_count": 0,
+            "rising_symbol_count_by_max_delta": 0,
+            "rising_missed_buy_count_in_latest_diagnostic": 0,
+            "rising_missed_symbol_count_in_report": 0,
+            "real_submit_symbol_count_in_latest_diagnostic": 0,
+            "buy_signal_or_pre_submit_pass_seen_symbols": 0,
+            "stale_eval_symbol_count": 0,
+            "rising_stale_eval_symbol_count": 0,
+        },
+        "blocker_rollup": [],
+        "rising_symbol_blocker_rollup": [],
+        "stale_eval_rollup": [],
+        "rows": [],
+    }
+
+    output_md = tmp_path / "flow.md"
+    output_csv = tmp_path / "flow.csv"
+    write_outputs(report, output_md=output_md, output_csv=output_csv)
+
+    assert output_md.read_text(encoding="utf-8").splitlines()[0] == "# 2026-06-29 08:00 이후 감시대상 BUY 전 흐름"

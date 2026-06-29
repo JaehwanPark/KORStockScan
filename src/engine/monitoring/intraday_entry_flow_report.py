@@ -390,6 +390,13 @@ def _format_pct(value: Any) -> str:
     return f"{float(value):.2f}%"
 
 
+def _window_label(report: dict[str, Any]) -> str:
+    since_ts = _parse_ts(report.get("event_window", {}).get("since"))
+    if since_ts is None:
+        return "전체"
+    return since_ts.strftime("%H:%M")
+
+
 def write_outputs(report: dict[str, Any], *, output_md: Path, output_csv: Path, max_rows: int = 100) -> None:
     output_md.parent.mkdir(parents=True, exist_ok=True)
     output_csv.parent.mkdir(parents=True, exist_ok=True)
@@ -401,7 +408,7 @@ def write_outputs(report: dict[str, Any], *, output_md: Path, output_csv: Path, 
             writer.writeheader()
             writer.writerows(rows)
     with output_md.open("w", encoding="utf-8") as handle:
-        handle.write(f"# {report['target_date']} 09:50 이후 감시대상 BUY 전 흐름\n\n")
+        handle.write(f"# {report['target_date']} {_window_label(report)} 이후 감시대상 BUY 전 흐름\n\n")
         handle.write(f"- generated_at: {report['generated_at']}\n")
         handle.write(f"- source_events: {report['source_events']}\n")
         handle.write(f"- source_diagnostic: {report['source_diagnostic']}\n")
