@@ -12563,6 +12563,20 @@ def _build_entry_submit_revalidation_fields(ws_data, latency_gate, *, now_ts=Non
         bool(quote_fields.get("normalization_runtime_effect"))
         and bool(quote_fields.get("quote_consistency_entry_blocked"))
     )
+    quote_freshness_override_applied = False
+    quote_freshness_override_reason = ""
+    quote_consistency_age_ms = _safe_float(quote_fields.get("quote_consistency_age_ms"), -1.0)
+    lifecycle = str((latency_gate or {}).get("entry_order_lifecycle") or "standard")
+    if (
+        lifecycle == "standard"
+        and quote_stale
+        and bool(quote_fields.get("normalization_runtime_effect"))
+        and not quote_consistency_block
+        and 0 <= quote_consistency_age_ms <= max_quote_age_ms
+    ):
+        quote_stale = False
+        quote_freshness_override_applied = True
+        quote_freshness_override_reason = "quote_consistency_fresh_context"
     warnings = []
     if context_stale or quote_stale:
         warnings.append("stale_context_or_quote")
@@ -12577,7 +12591,12 @@ def _build_entry_submit_revalidation_fields(ws_data, latency_gate, *, now_ts=Non
         "quote_stale_at_submit": bool(quote_stale),
         "entry_submit_revalidation_warning": "|".join(warnings),
         "quote_consistency_block_at_submit": bool(quote_consistency_block),
-        "entry_order_lifecycle": str((latency_gate or {}).get("entry_order_lifecycle") or "standard"),
+        "entry_submit_revalidation_quote_freshness_override_applied": bool(quote_freshness_override_applied),
+        "entry_submit_revalidation_quote_freshness_override_reason": quote_freshness_override_reason,
+        "entry_submit_revalidation_quote_consistency_age_ms": (
+            round(quote_consistency_age_ms, 3) if quote_consistency_age_ms >= 0 else "-"
+        ),
+        "entry_order_lifecycle": lifecycle,
         "entry_passive_probe_applied": bool((latency_gate or {}).get("entry_passive_probe_applied")),
         "entry_passive_probe_reason": str((latency_gate or {}).get("entry_passive_probe_reason") or ""),
     }

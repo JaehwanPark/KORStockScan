@@ -1317,3 +1317,51 @@
 - p6는 코드 배포가 필요하므로 review gate 통과 후 `restart.flag` 방식의 우아한 재기동을 사용한다.
 - 새 PID에서 `KORSTOCKSCAN_SCALPING_WATCHING_ATTACH_REPLACE_ENABLED=false`가 들어갔는지 확인한다.
 - 13:00 이후 5분 루프에서 attach burst skip 로그, loop time, BUY/pre-submit pass, 실제 submit 여부를 확인한다.
+
+## 27. 13:04 submit stale 중복판정 p7
+
+작성 시각: `2026-06-29 13:08 KST`
+
+### 27.1 관측
+
+- p6 배포/재기동:
+  - commit `fbed53b3`
+  - 새 PID `98342`
+  - runtime env handoff `pass`
+  - PID env에서 `KORSTOCKSCAN_SCALPING_WATCHING_ATTACH_REPLACE_ENABLED=false` 확인
+- 13:03 11:30 이후 flow:
+  - `symbol_count=139`
+  - `rising_symbol_count_by_max_delta=32`
+  - `rising_missed_symbol_count_in_report=35`
+  - `real_submit_symbol_count_in_latest_diagnostic=0`
+  - `buy_signal_or_pre_submit_pass_seen_symbols=4`
+  - `stale_eval_symbol_count=89`
+  - `rising_stale_eval_symbol_count=24`
+  - `rising_fresh_only_symbol_count=8`
+- submit-path 사례:
+  - `화천기공(000850)`은 `ai_confirmed BUY score=80`, `entry_armed`, `budget_pass`, `latency_pass`까지 진행했다.
+  - 그러나 `sniper_state_handlers` 로그에서 `[ENTRY_SUBMIT_REVALIDATION_BLOCK] ... warning=stale_context_or_quote`로 실제 submit 전 차단됐다.
+  - event payload에는 `pre_submit_rest_orderbook_refresh_applied=True`, `pre_submit_rest_orderbook_refresh_age_ms=394.641`, `quote_consistency_reason=rest_only_fresh`, `quote_consistency_age_ms=394.568`가 있었지만 `quote_age_at_submit_ms=2085`만으로 stale warning이 남았다.
+
+### 27.2 코드 수정 p7
+
+- 파일:
+  - `src/engine/sniper_state_handlers.py`
+  - `src/tests/test_sniper_scale_in.py`
+- 변경:
+  - `_build_entry_submit_revalidation_fields()`에서 standard lifecycle에 한해 quote consistency가 runtime effect로 fresh context를 제공하고 entry block이 아니며 `quote_consistency_age_ms <= max_quote_age_ms`이면 WS quote stale 판정을 fresh quote consistency로 재평가한다.
+  - stale hard guard를 끄지 않고, 이미 확보된 fresh REST/orderbook 기반 quote context를 submit revalidation 입력으로 인정한다.
+  - quote consistency 자체가 entry block이면 기존 `quote_consistency_*` warning/block을 유지한다.
+- 신규 관측 필드:
+  - `entry_submit_revalidation_quote_freshness_override_applied`
+  - `entry_submit_revalidation_quote_freshness_override_reason`
+  - `entry_submit_revalidation_quote_consistency_age_ms`
+- 권한/충돌:
+  - BUY score, AI threshold, liquidity guard, broker/account/order/quantity/cooldown guard, provider route, order quantity, hard/protect/emergency stop은 변경하지 않는다.
+  - passive probe stale-submit block은 기존 경로를 유지한다.
+
+### 27.3 검증 예정
+
+- `PYTHONPATH=. .venv/bin/python -m pytest src/tests/test_sniper_scale_in.py -k 'submit_revalidation or pre_submit_liquidity_relief'`
+- `PYTHONPATH=. .venv/bin/python -m py_compile src/engine/sniper_state_handlers.py src/tests/test_sniper_scale_in.py`
+- `git diff --check`

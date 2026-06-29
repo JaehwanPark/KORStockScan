@@ -6170,6 +6170,59 @@ def test_submit_revalidation_quote_age_uses_operator_env(monkeypatch):
     assert fields["entry_submit_revalidation_warning"] == "stale_context_or_quote"
 
 
+def test_submit_revalidation_uses_fresh_quote_consistency_context(monkeypatch):
+    monkeypatch.setattr(state_handlers.time, "time", lambda: 100.0)
+    monkeypatch.setenv("KORSTOCKSCAN_SCALPING_ENTRY_SUBMIT_REVALIDATION_MAX_QUOTE_AGE_MS", "700")
+    fields = state_handlers._build_entry_submit_revalidation_fields(
+        {"last_ws_update_ts": 97.0},
+        {
+            "entry_order_lifecycle": "standard",
+            "quote_consistency_family": "quote_consistency_normalization",
+            "normalization_runtime_effect": True,
+            "quote_consistency_entry_blocked": False,
+            "quote_consistency_state": "single_source",
+            "quote_consistency_reason": "rest_only_fresh",
+            "quote_consistency_age_ms": 394.568,
+            "price_source": "rest_mid",
+            "canonical_mark_price": 40750,
+            "executable_buy_price": 40700,
+            "executable_sell_price": 40700,
+        },
+        now_ts=100.0,
+    )
+
+    assert fields["quote_age_at_submit_ms"] == 3000
+    assert fields["quote_stale_at_submit"] is False
+    assert fields["entry_submit_revalidation_warning"] == ""
+    assert fields["entry_submit_revalidation_quote_freshness_override_applied"] is True
+    assert fields["entry_submit_revalidation_quote_freshness_override_reason"] == "quote_consistency_fresh_context"
+    assert fields["entry_submit_revalidation_quote_consistency_age_ms"] == 394.568
+    assert state_handlers._is_standard_stale_submit_block(fields) is False
+
+
+def test_submit_revalidation_keeps_quote_consistency_block(monkeypatch):
+    monkeypatch.setattr(state_handlers.time, "time", lambda: 100.0)
+    monkeypatch.setenv("KORSTOCKSCAN_SCALPING_ENTRY_SUBMIT_REVALIDATION_MAX_QUOTE_AGE_MS", "700")
+    fields = state_handlers._build_entry_submit_revalidation_fields(
+        {"last_ws_update_ts": 97.0},
+        {
+            "entry_order_lifecycle": "standard",
+            "quote_consistency_family": "quote_consistency_normalization",
+            "normalization_runtime_effect": True,
+            "quote_consistency_entry_blocked": True,
+            "quote_consistency_state": "cross_source_gap",
+            "quote_consistency_age_ms": 120.0,
+            "price_source": "blocked",
+        },
+        now_ts=100.0,
+    )
+
+    assert fields["quote_stale_at_submit"] is True
+    assert fields["entry_submit_revalidation_quote_freshness_override_applied"] is False
+    assert fields["entry_submit_revalidation_warning"] == "stale_context_or_quote|quote_consistency_cross_source_gap"
+    assert state_handlers._is_standard_stale_submit_block(fields) is True
+
+
 def test_standard_stale_submit_revalidation_blocks_by_default():
     assert (
         state_handlers._is_standard_stale_submit_block(

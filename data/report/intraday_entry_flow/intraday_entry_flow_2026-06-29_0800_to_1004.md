@@ -1,19 +1,19 @@
 # 2026-06-29 08:00 이후 감시대상 BUY 전 흐름
 
-- generated_at: 2026-06-29T12:55:50+09:00
+- generated_at: 2026-06-29T13:03:30+09:00
 - source_events: /home/ubuntu/KORStockScan/data/runtime/sentinel_event_cache/buy_funnel_sentinel_events_2026-06-29.jsonl
 - source_diagnostic: /home/ubuntu/KORStockScan/data/report/intraday_entry_blocker_diagnostics/intraday_entry_blocker_diagnostics_2026-06-29_1145_0800_goal.json
 - event_window_since: 2026-06-29T08:00:00
-- symbol_count: 453
+- symbol_count: 457
 - rising_symbol_count_by_max_delta: 90
 - rising_missed_buy_count_in_latest_diagnostic: 74
 - rising_missed_symbol_count_in_report: 74
 - real_submit_symbol_count_in_latest_diagnostic: 0
-- buy_signal_or_pre_submit_pass_seen_symbols: 29
-- stale_eval_symbol_count: 223
+- buy_signal_or_pre_submit_pass_seen_symbols: 30
+- stale_eval_symbol_count: 228
 - rising_stale_eval_symbol_count: 77
 - rising_fresh_only_symbol_count: 13
-- stale_refresh_recovered_symbol_count: 208
+- stale_refresh_recovered_symbol_count: 211
 
 ## blocker rollup
 
@@ -21,8 +21,8 @@
 - 101: `scalping_scanner_watching_runtime_skip` / `ws_snapshot_missing_or_zero`
 - 16: `scalping_scanner_watching_runtime_skip` / `entry_cooldown_active`
 - 15: `blocked_strength_momentum` / `below_window_buy_value`
+- 10: `blocked_strength_momentum` / `below_strength_base`
 - 6: `-` / `-`
-- 6: `blocked_strength_momentum` / `below_strength_base`
 - 4: `blocked_overbought` / `-`
 - 4: `blocked_strength_momentum` / `insufficient_history`
 - 2: `blocked_strength_momentum` / `below_buy_ratio`
@@ -62,16 +62,16 @@
 
 ## stale-eval rollup
 
-- 105: `blocked_strength_momentum`
-- 67: `ai_confirmed`
-- 23: `blocked_overbought`
+- 107: `blocked_strength_momentum`
+- 68: `ai_confirmed`
+- 25: `blocked_overbought`
 - 10: `blocked_vpw`
 - 9: `ai_confirmed_terminal_no_budget`
 - 9: `blocked_liquidity`
 
 ## stale-eval category rollup
 
-- 223: `diagnostic_quote_age_stale`
+- 228: `diagnostic_quote_age_stale`
 
 ## top rows by max delta
 
@@ -116,8 +116,8 @@
 |박셀바이오(323990)|10:01:23|10:13:36|rising|2.82%|2.62%|`blocked_overbought`/-|4|4|diagnostic_quote_age_stale|5213.0|-|62/WAIT|0|10:03:40 blocked_overbought(+2.82%) -> 10:03:45 blocked_strength_momentum:below_strength_base(+2.82%) -> 10:03:45 blocked_vpw(+2.82%) -> 10:03:45 blocked_liquidity(+2.82%) -> ... -> 10:11:50 blocked_overbought(+2.62%) -> 10:11:51 blocked_liquidity(+2.62%) -> 10:11:51 blocked_ai_score:ai_score_50_buy_hold_override(+2.62%)|
 |지앤비에스 에코(382800)|10:11:03|10:14:38|rising|2.82%|2.82%|`-`/-|0|0|-||-||0|-|
 |한선엔지니어링(452280)|09:18:50|11:27:17|rising|2.78%|0.00%|`scalping_scanner_watching_runtime_skip`/scanner_fast_precheck_stability_pending|1|1|diagnostic_quote_age_stale|3641.0|-|62/WAIT|0|09:19:11 blocked_strength_momentum:below_strength_base(+0.00%) -> 09:19:11 blocked_vpw(+0.00%) -> 09:19:11 blocked_liquidity(+0.00%) -> 09:19:13 ai_confirmed(+0.00%) -> 09:19:13 first_ai_wait(+0.00%) -> 09:19:13 ai_confirmed_terminal_no_budget:first_ai_wait_big_bite_not_confirmed(+0.00%) -> 10:38:09 blocked_strength_momentum:insufficient_history(+2.78%) -> 12:50:45 blocked_strength_momentum:below_strength_base(+0.00%)|
-|아모레퍼시픽(090430)|09:16:05|11:17:39|rising|2.58%|0.00%|`scalping_scanner_watching_runtime_skip`/scanner_fast_precheck_stability_pending|8|4|diagnostic_quote_age_stale|6995.0|11:17:31|68/WAIT|0|09:51:27 ai_confirmed(+0.00%) -> 09:51:27 first_ai_wait(+0.00%) -> 09:51:27 ai_confirmed_terminal_no_budget:first_ai_wait_big_bite_not_confirmed(+0.00%) -> 09:52:02 blocked_strength_momentum:below_buy_ratio(+0.00%) -> ... -> 11:17:31 entry_armed:qualification_passed(+0.00%) -> 11:17:31 budget_pass(+0.00%) -> 11:17:39 latency_pass:caution_normal_entry_allowed(+0.00%)|
-|에이비엘바이오(298380)|08:42:38|11:33:13|rising|2.53%|1.04%|`scalping_scanner_watching_runtime_skip`/scanner_fast_precheck_stability_pending|10|4|diagnostic_quote_age_stale|7350.0|-|62/WAIT|0|09:37:16 ai_confirmed(+0.00%) -> 09:37:16 first_ai_wait(+0.00%) -> 09:37:16 ai_confirmed_terminal_no_budget:first_ai_wait_big_bite_not_confirmed(+0.00%) -> 09:37:23 blocked_strength_momentum:below_buy_ratio(+0.00%) -> ... -> 11:56:49 ai_confirmed_terminal_no_budget:blocked_ai_score_below_buy_score_threshold(+0.00%) -> 12:00:57 blocked_overbought(+0.00%) -> 12:01:00 blocked_strength_momentum:below_window_buy_value(+0.00%)|
+|아모레퍼시픽(090430)|09:16:05|11:17:39|rising|2.58%|0.00%|`scalping_scanner_watching_runtime_skip`/scanner_fast_precheck_stability_pending|12|4|diagnostic_quote_age_stale|10711.0|11:17:31|68/WAIT|0|09:51:27 ai_confirmed(+0.00%) -> 09:51:27 first_ai_wait(+0.00%) -> 09:51:27 ai_confirmed_terminal_no_budget:first_ai_wait_big_bite_not_confirmed(+0.00%) -> 09:52:02 blocked_strength_momentum:below_buy_ratio(+0.00%) -> ... -> 12:56:16 ai_confirmed_terminal_no_budget:first_ai_wait_big_bite_not_confirmed(+0.00%) -> 12:56:53 blocked_overbought(+0.00%) -> 12:56:53 blocked_strength_momentum:below_buy_ratio(+0.00%)|
+|에이비엘바이오(298380)|08:42:38|11:33:13|rising|2.53%|1.04%|`scalping_scanner_watching_runtime_skip`/scanner_fast_precheck_stability_pending|10|4|diagnostic_quote_age_stale|7350.0|-|62/WAIT|0|09:37:16 ai_confirmed(+0.00%) -> 09:37:16 first_ai_wait(+0.00%) -> 09:37:16 ai_confirmed_terminal_no_budget:first_ai_wait_big_bite_not_confirmed(+0.00%) -> 09:37:23 blocked_strength_momentum:below_buy_ratio(+0.00%) -> ... -> 12:57:31 ai_confirmed(+0.00%) -> 12:57:31 first_ai_wait(+0.00%) -> 12:57:31 ai_confirmed_terminal_no_budget:first_ai_wait_big_bite_not_confirmed(+0.00%)|
 |브이엠(089970)|08:01:44|10:33:10|rising|2.50%|2.50%|`scalping_scanner_watching_runtime_skip`/entry_cooldown_active|5|5|diagnostic_quote_age_stale|4108.0|-|54/WAIT|0|08:03:17 blocked_strength_momentum:below_window_buy_value(-0.98%) -> 08:03:17 blocked_vpw(-0.98%) -> 08:03:18 ai_confirmed(-0.98%) -> 08:03:18 first_ai_wait(-0.98%) -> ... -> 09:12:45 blocked_liquidity(+2.50%) -> 09:12:45 blocked_gap_from_scan(+2.50%) -> 09:12:45 blocked_ai_score:ai_score_50_buy_hold_override(+2.50%)|
 |메디포스트(078160)|10:18:35|11:42:31|rising|2.45%|0.00%|`scalping_scanner_watching_runtime_skip`/scanner_fast_precheck_stability_pending|1|1|diagnostic_quote_age_stale|7914.0|-|50/|0|10:19:53 blocked_strength_momentum:below_window_buy_value(+0.00%) -> 12:23:39 blocked_overbought(+2.45%)|
 |시노펙스(025320)|09:33:53|10:14:44|rising|2.44%|0.00%|`scalping_scanner_watching_runtime_skip`/scanner_fast_precheck_stability_pending|1|0|diagnostic_quote_age_stale|4372.0|-|50/|0|09:34:01 blocked_ai_score:ai_score_50_buy_hold_override(+2.44%) -> 10:14:14 blocked_strength_momentum:below_window_buy_value(+0.00%)|
