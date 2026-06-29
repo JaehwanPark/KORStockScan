@@ -478,3 +478,75 @@
 - 이 조치는 SCALPING SCANNER observation/evaluation 처리량 완화만 수행한다.
 - BUY score, AI threshold, order price, stale-submit, broker/account/order/quantity guard, provider route, hard/protect/emergency stops는 변경하지 않았다.
 - `KORSTOCKSCAN_SCANNER_RISING_FULL_EVAL_EXTRA_PER_LOOP=12`는 현재 코드에서 hot key가 아니므로 이번 조치에 포함하지 않았다. 반복적으로 조정할 필요가 있으면 별도 코드 변경으로 hot key화한 뒤 review gate를 거친다.
+
+## 15. 11:00 목표 루프 관측 결과
+
+작성 시각: `2026-06-29 11:00 KST`
+
+### 15.1 산출물
+
+- 최신 진단:
+  - `data/report/intraday_entry_blocker_diagnostics/intraday_entry_blocker_diagnostics_2026-06-29_1100_0800_goal.json`
+  - `data/report/intraday_entry_blocker_diagnostics/intraday_entry_blocker_diagnostics_2026-06-29_1100_0950_goal.json`
+- 최신 flow:
+  - `data/report/intraday_entry_flow/intraday_entry_flow_2026-06-29_0800_to_1100.md`
+  - `data/report/intraday_entry_flow/intraday_entry_flow_2026-06-29_0950_to_1100.md`
+  - 사용자 지정 누적 참조 파일 `data/report/intraday_entry_flow/intraday_entry_flow_2026-06-29_0800_to_1004.md`도 08:00 기준 최신 내용으로 재생성했다.
+
+### 15.2 08:00 이후 flow summary
+
+- `symbol_count=385`
+- `rising_symbol_count_by_max_delta=80`
+- `rising_missed_buy_count_in_latest_diagnostic=71`
+- `rising_missed_symbol_count_in_report=71`
+- `real_submit_symbol_count_in_latest_diagnostic=0`
+- `buy_signal_or_pre_submit_pass_seen_symbols=24`
+- `stale_eval_symbol_count=180`
+- `rising_stale_eval_symbol_count=70`
+
+### 15.3 09:50 이후 flow summary
+
+- `symbol_count=219`
+- `rising_symbol_count_by_max_delta=40`
+- `rising_missed_buy_count_in_latest_diagnostic=51`
+- `rising_missed_symbol_count_in_report=42`
+- `real_submit_symbol_count_in_latest_diagnostic=0`
+- `buy_signal_or_pre_submit_pass_seen_symbols=11`
+- `stale_eval_symbol_count=108`
+- `rising_stale_eval_symbol_count=33`
+
+### 15.4 blocker 판단
+
+- 08:00 이후 누적 기준 상승 종목 blocker:
+  - `scanner_fast_precheck_stability_pending=44`
+  - `entry_cooldown_active=15`
+  - `ws_snapshot_missing_or_zero=9`
+  - `blocked_overbought/-=4`
+  - `blocked_strength_momentum/below_window_buy_value=3`
+- 09:50 이후 최근 기준 상승 종목 blocker:
+  - `ai_confirmed/blocked_ai_score_below_buy_score_threshold=9`
+  - `blocked_strength_momentum/below_window_buy_value=5`
+  - `blocked_liquidity/first_ai_wait_big_bite_not_confirmed=4`
+  - `blocked_strength_momentum/below_strength_base=4`
+  - `blocked_strength_momentum/insufficient_history=3`
+  - `scalping_scanner_watching_runtime_skip/scanner_fast_precheck_stability_pending=2`
+- stale 평가:
+  - 08:00 이후 상승 80개 중 70개가 stale 평가를 포함했다.
+  - 09:50 이후 상승 40개 중 33개가 stale 평가를 포함했다.
+
+### 15.5 runtime pressure 판정
+
+- hot override 이후 최근 loop:
+  - `10:47:37 loop_elapsed_ms=11381.8`
+  - `10:48:50 loop_elapsed_ms=19603.4`
+  - `11:01:12 loop_elapsed_ms=8481.2`
+- 판정:
+  - 30초 이상 loop 지연 반복은 10:47 hot override 이후 일단 해소됐다.
+  - 재기동은 추가로 수행하지 않는다.
+
+### 15.6 11:00 판정
+
+- BUY/pre-submit 경로까지 간 종목은 늘었지만 실제 submit은 여전히 0건이다.
+- 신규 submit-path blocker로 대우건설이 `pre_submit_liquidity_guard_action=BLOCK`, `pre_submit_liquidity_reason=below_min_liquidity`, `entry_submit_revalidation_warning=stale_context_or_quote`로 차단됐다.
+- 최근 상승 종목 blocker는 AI score/strength/liquidity 쪽으로 내려왔지만 stale 평가가 33/40개에 섞여 있으므로 broad threshold downsizing은 아직 보류한다.
+- 다음 루프에서는 fresh-only 상승 종목과 BUY/pre-submit pass 이후 `latency_block`, `entry_submit_revalidation_block`, `pre_submit_liquidity_guard BLOCK` 종목만 분리해서 볼 필요가 있다.
