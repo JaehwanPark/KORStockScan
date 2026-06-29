@@ -367,3 +367,76 @@
 
 - 재기동 직후 30초대 loop 지연은 해소된 것으로 보이나, 아직 첫 샘플이다.
 - 다음 15분 루프에서 `LOOP_METRICS`, `stale_eval_symbol_count`, `rising_stale_eval_symbol_count`, `stale_context_or_quote` submit block 재발 여부를 함께 확인한다.
+
+## 13. 10:45 목표 루프 관측 결과
+
+작성 시각: `2026-06-29 10:45 KST`
+
+### 13.1 산출물
+
+- 최신 진단:
+  - `data/report/intraday_entry_blocker_diagnostics/intraday_entry_blocker_diagnostics_2026-06-29_1045_0800_goal.json`
+  - `data/report/intraday_entry_blocker_diagnostics/intraday_entry_blocker_diagnostics_2026-06-29_1045_0950_goal.json`
+- 최신 flow:
+  - `data/report/intraday_entry_flow/intraday_entry_flow_2026-06-29_0800_to_1045.md`
+  - `data/report/intraday_entry_flow/intraday_entry_flow_2026-06-29_0950_to_1045.md`
+  - 사용자 지정 누적 참조 파일 `data/report/intraday_entry_flow/intraday_entry_flow_2026-06-29_0800_to_1004.md`도 08:00 기준 최신 내용으로 재생성했다.
+
+### 13.2 08:00 이후 flow summary
+
+- `symbol_count=372`
+- `rising_symbol_count_by_max_delta=79`
+- `rising_missed_buy_count_in_latest_diagnostic=71`
+- `rising_missed_symbol_count_in_report=71`
+- `real_submit_symbol_count_in_latest_diagnostic=0`
+- `buy_signal_or_pre_submit_pass_seen_symbols=23`
+- `stale_eval_symbol_count=172`
+- `rising_stale_eval_symbol_count=67`
+
+### 13.3 09:50 이후 flow summary
+
+- `symbol_count=199`
+- `rising_symbol_count_by_max_delta=37`
+- `rising_missed_buy_count_in_latest_diagnostic=51`
+- `rising_missed_symbol_count_in_report=41`
+- `real_submit_symbol_count_in_latest_diagnostic=0`
+- `buy_signal_or_pre_submit_pass_seen_symbols=10`
+- `stale_eval_symbol_count=95`
+- `rising_stale_eval_symbol_count=27`
+
+### 13.4 blocker 판단
+
+- 08:00 이후 누적 기준 상승 종목 blocker:
+  - `scanner_fast_precheck_stability_pending=42`
+  - `entry_cooldown_active=14`
+  - `ws_snapshot_missing_or_zero=10`
+  - `blocked_overbought/-=4`
+  - `blocked_strength_momentum/below_window_buy_value=3`
+- 09:50 이후 최근 기준 상승 종목 blocker:
+  - `ai_confirmed/blocked_ai_score_below_buy_score_threshold=9`
+  - `blocked_strength_momentum/below_window_buy_value=5`
+  - `blocked_strength_momentum/insufficient_history=4`
+  - `blocked_strength_momentum/below_strength_base=4`
+  - `blocked_overbought/below_window_buy_value=2`
+  - `blocked_liquidity/first_ai_wait_big_bite_not_confirmed=2`
+- stale 평가:
+  - 08:00 이후 상승 79개 중 67개가 stale 평가를 포함했다.
+  - 09:50 이후 상승 37개 중 27개가 stale 평가를 포함했다.
+
+### 13.5 재기동 후 runtime 관측
+
+- `10:40:39 loop_elapsed_ms=9126.1`
+- `10:42:02 dynamic watch cap reduce loop_elapsed_ms=82079.5`
+- `10:42:11 loop_elapsed_ms=8135.0`
+- `10:42:48 dynamic watch cap reduce loop_elapsed_ms=35894.0`
+- `10:43:35 loop_elapsed_ms=4199.2`
+- 판정:
+  - 재기동 직후 초기 재구독/재초기화 구간에서 다시 큰 spike가 있었지만, 이후 loop metric은 8초대와 4초대로 내려왔다.
+  - 현 시점에는 즉시 2차 재기동하지 않는다. 다음 루프에서 30초 이상 loop 지연이 2회 이상 다시 반복되면 runtime pressure를 재발로 보고 재검토한다.
+
+### 13.6 10:45 판정
+
+- 08:00 이후 누적 기준 병목은 여전히 scanner/WS observation freshness다.
+- 09:50 이후 최근 상승 종목만 보면 blocker가 AI score, strength, liquidity, overbought 쪽으로 내려오지만, stale 평가가 27/37개에 섞여 있어 threshold downsizing은 아직 보류한다.
+- SK이터닉스, LG에너지솔루션, 케이씨텍, 테스처럼 BUY/pre-submit 경로까지 간 종목도 실제 submit은 0건이며, 원인은 latency danger 또는 `stale_context_or_quote` 계열이다. stale submit bypass와 broker guard bypass는 금지 유지한다.
+- scale-in은 executed_count=0이며, 주요 blocker는 `pnl_out_of_range`, `profit_not_enough`, `flow_hold_interval` 계열이다. quantity cap release나 scale-in guard bypass는 하지 않는다.
