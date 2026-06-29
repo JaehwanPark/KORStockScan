@@ -619,3 +619,72 @@
 - BUY/pre-submit 경로까지 간 종목은 25개로 늘었지만 실제 submit은 여전히 0건이다. 져스텍, SK이터닉스, 테스, 대우건설처럼 BUY 또는 budget/latency pass가 보인 종목도 latency, liquidity, stale context revalidation 단계에서 막혔다.
 - falling real submitted는 0건이라 하락 후 submit 유형 개선이나 손절/MFE 업데이트 대상은 아직 발생하지 않았다.
 - 다음 루프에서는 fresh-only 상승 종목과 BUY/pre-submit pass 이후 submit-path blocker를 분리해서 본다. stale submit, broker guard, order guard bypass는 금지 유지한다.
+
+## 17. 11:20 목표 루프 관측 및 hot runtime pressure relief p2
+
+작성 시각: `2026-06-29 11:20 KST`
+
+### 17.1 산출물
+
+- 최신 진단:
+  - `data/report/intraday_entry_blocker_diagnostics/intraday_entry_blocker_diagnostics_2026-06-29_1120_0800_goal.json`
+  - `data/report/intraday_entry_blocker_diagnostics/intraday_entry_blocker_diagnostics_2026-06-29_1120_0950_goal.json`
+- 최신 flow:
+  - `data/report/intraday_entry_flow/intraday_entry_flow_2026-06-29_0800_to_1120.md`
+  - `data/report/intraday_entry_flow/intraday_entry_flow_2026-06-29_0950_to_1120.md`
+  - 사용자 지정 누적 참조 파일 `data/report/intraday_entry_flow/intraday_entry_flow_2026-06-29_0800_to_1004.md`도 08:00 기준 최신 내용으로 재생성했다.
+
+### 17.2 09:50 이후 flow summary
+
+- `symbol_count=254`
+- `rising_symbol_count_by_max_delta=44`
+- `rising_missed_buy_count_in_latest_diagnostic=55`
+- `rising_missed_symbol_count_in_report=46`
+- `real_submit_symbol_count_in_latest_diagnostic=0`
+- `buy_signal_or_pre_submit_pass_seen_symbols=13`
+- `stale_eval_symbol_count=125`
+- `rising_stale_eval_symbol_count=38`
+
+### 17.3 blocker 판단
+
+- 09:50 이후 상승 종목 blocker:
+  - `ai_confirmed/blocked_ai_score_below_buy_score_threshold=8`
+  - `blocked_strength_momentum/below_strength_base=5`
+  - `blocked_liquidity/first_ai_wait_big_bite_not_confirmed=5`
+  - `blocked_strength_momentum/below_window_buy_value=5`
+  - `scalping_scanner_watching_runtime_skip/scanner_fast_precheck_stability_pending=4`
+  - `blocked_strength_momentum/insufficient_history=3`
+- stale 평가:
+  - 09:50 이후 상승 44개 중 38개가 stale 평가를 포함했다.
+  - 09:50 이후 diagnostic의 `stale_or_delayed_eval=397`, `fresh_eval=130`으로 stale/지연 평가가 여전히 우세하다.
+- submit/price path:
+  - 실제 submit은 0건이다.
+  - 최근 submit-path blocker는 대우건설과 아모레퍼시픽의 `entry_submit_revalidation_warning=stale_context_or_quote` 및 `entry_submit_revalidation_block`이다.
+  - price/submit guard diagnostic은 `block_or_unfilled_count=30`, `candidate_failure_count=4`, 실패 reason은 모두 `invalid_price`다.
+
+### 17.4 runtime pressure relief p2
+
+- 재발 근거:
+  - `11:18:12 loop_elapsed_ms=54549.8`
+  - `11:19:41 loop_elapsed_ms=41648.6`
+- 조치:
+  - `data/threshold_cycle/runtime_env/operator_runtime_overrides.env` EOF의 최종 export를 다음 값으로 조정했다.
+  - `KORSTOCKSCAN_SCANNER_FULL_EVAL_MAX_PER_LOOP=8`
+  - `KORSTOCKSCAN_SCANNER_FULL_EVAL_BACKLOG_EXTRA_PER_LOOP=2`
+- rollback:
+  - `KORSTOCKSCAN_SCANNER_FULL_EVAL_MAX_PER_LOOP=12`
+  - `KORSTOCKSCAN_SCANNER_FULL_EVAL_BACKLOG_EXTRA_PER_LOOP=4`
+- 검증:
+  - `bash -n data/threshold_cycle/runtime_env/operator_runtime_overrides.env`
+    - 통과
+  - local parser check:
+    - `_scanner_full_eval_max_per_loop()=8`
+    - `_scanner_full_eval_backlog_extra_per_loop()=2`
+    - `_scanner_full_eval_effective_limit({"scanner_watching_count": 40})=10`
+
+### 17.5 안전 경계 및 판정
+
+- 이번 조치는 SCALPING SCANNER observation/evaluation 처리량만 낮춘다.
+- BUY score, AI threshold, order price, stale-submit, broker/account/order/quantity guard, provider route, hard/protect/emergency stop, scale-in guard는 변경하지 않았다.
+- runtime hot reload가 5초 주기로 적용 가능하므로 즉시 재기동하지 않는다. 다음 루프에서 30초 이상 loop 지연이 계속 반복되면 그때 `restart.flag` 기반 graceful restart를 재검토한다.
+- broad threshold downsizing은 보류한다. 현재는 stale 평가와 loop pressure가 blocker 판정에 섞여 있어 fresh-only 표본으로 분리되기 전까지 실매매 threshold를 낮추면 stale submit bypass 위험이 있다.
