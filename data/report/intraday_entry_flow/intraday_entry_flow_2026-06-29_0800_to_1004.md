@@ -160,3 +160,38 @@
 |HD현대(267250)|19:43:50|19:45:42|flat_or_falling|0.00%|0.00%|`scalping_scanner_watching_runtime_skip`/scanner_fast_precheck_stability_pending|strategy_reject|0|0|-||-||0|-|
 |네오팜(092730)|19:43:50|19:45:42|flat_or_falling|0.00%|0.00%|`scalping_scanner_watching_runtime_skip`/scanner_fast_precheck_stability_pending|strategy_reject|0|0|-||-||0|-|
 |네패스(033640)|19:43:50|19:49:46|flat_or_falling|0.00%|0.00%|`scalping_scanner_watching_runtime_skip`/scanner_fast_precheck_stability_pending|strategy_reject|0|0|-||-||0|-|
+
+## completion audit - 2026-06-30
+
+- audit_status: `not_proven_complete`
+- audit_basis: `data/report/intraday_entry_blocker_diagnostics/intraday_entry_blocker_diagnostics_2026-06-29_1930_taxonomy.json`
+- runtime_effect: `false`
+- action_taken: `audit_only_no_runtime_change`
+- reason: `2026-06-29 buy window is closed; do not apply new runtime/order/provider/threshold changes from this audit.`
+
+### requirement check
+
+- fixed flow artifact present: `pass`
+  - This file remains the fixed reporting target requested by the objective.
+- blocker classes separated: `pass`
+  - `runtime_backpressure`, `source_freshness_evictable`, `source_freshness_recovering`, `watch_budget_reallocated`, `source_freshness_blocker`, `intended_guard`, and `strategy_reject` are separated in the blocker taxonomy.
+- source-quality churn reallocated: `partial_pass`
+  - `source_freshness_evictable/ws_snapshot_missing_or_zero=271`, `source_freshness_recovering/ws_snapshot_missing_or_zero=118`, and `watch_budget_reallocated/stale_recovery_failed=113` are recorded.
+  - Residual `source_freshness_blocker=28` remains, mainly `blocked_strength_momentum/insufficient_history`.
+- runtime backpressure handled as non-major observation: `partial_pass`
+  - `scanner_full_eval_loop_budget_deferred=583` is suppressed as `runtime_backpressure`.
+  - Final diagnostic evidence still requires checking deferred status before treating it as fully resolved.
+- hard guard preservation: `pass`
+  - Final stale split has `pre_submit_hard_stale=0`, `ws_quote_missing=0`, and no evidence of stale-submit, broker/account/order/quantity/cooldown, hard/protect/emergency guard bypass in this report.
+- submit/fill/holding/exit reflected: `partial_pass`
+  - Latest diagnostic summary has `real_submit_symbol_count=1`.
+  - The separate code-review log records the real 226950 submit, FULL_FILL, holding, and later sell/fill sequence, but this fixed flow table does not itself show the full lifecycle row.
+- final stabilization condition: `fail`
+  - The diagnostic summary still reports `actionable_major_blocker_count=528`, `rising_missed_buy_count=32`, `rising_missed_full_eval_budget_deferred_count=11`, and `repeated_zero_strength_history_workorder_count=19`.
+  - Therefore the final stabilization condition is not proven by the current fixed artifact.
+
+### audit decision
+
+- Do not make additional code, override, restart, order, provider, or threshold changes from this audit.
+- Treat the objective state as `monitor_or_postclose_followup_required`, not `complete`.
+- Next valid action must come from a current buy-window run or the dated checklist/postclose workorder path, with hard guards and clean-baseline policy preserved.
