@@ -1500,3 +1500,43 @@
 
 - 코드 반영이 필요하므로 review gate 통과 후 `restart.flag` 방식으로 우아한 재기동한다.
 - 새 PID에서 p9 hot override가 반영되어 cap이 10 이상으로 올라가는지 확인한다.
+
+## 30. 13:35 dynamic watch cap 후속 hot override p10
+
+### 30.1 관측
+
+- `restart.flag` 기반 우아한 재기동 후 새 PID `109469`에서 p9 env handoff는 통과했다.
+- 13:30 이후 이벤트 기준:
+  - `scalping_scanner_runtime_target_attach` 19건 중 12건이 `runtime_target_attach_reason=scalping_dynamic_watch_cap_capacity`.
+  - capacity skip은 `scanner_attach_capacity_cap=10`, `scanner_attach_capacity_watching_count=10`으로 찍혔다.
+  - 같은 구간 실제 submit 관측은 0건이며, AI 평가까지 간 fresh/혼합 표본은 주로 `WAIT`/score 58~66으로 종료됐다.
+- p9는 cap=8 고착 문제를 해소했지만, 신규 상승 후보가 cap=10에서 다시 감시열 진입 전에 막히는 병목이 남았다.
+
+### 30.2 조치
+
+- 파일:
+  - `data/threshold_cycle/runtime_env/operator_runtime_overrides.env`
+- 변경:
+  - EOF effective override로 `KORSTOCKSCAN_SCALPING_WATCHING_DYNAMIC_MIN_ACTIVE=12`를 추가했다.
+  - base `KORSTOCKSCAN_SCALPING_WATCHING_MAX_ACTIVE=16` 범위 안의 bounded relief이며 attach replacement는 계속 비활성 상태로 둔다.
+- 권한/충돌:
+  - 기존 p9와 같은 scanner watchlist pool pressure relief 축의 후속 조치다.
+  - BUY score, AI threshold, stale-submit, liquidity/latency, broker/account/order/quantity/cooldown guard, provider route, order price, hard/protect/emergency stop, scale-in guard는 변경하지 않는다.
+
+### 30.3 검증
+
+- `bash -n data/threshold_cycle/runtime_env/operator_runtime_overrides.env`
+  - 통과
+- 단순 last-wins 파싱:
+  - `KORSTOCKSCAN_SCALPING_WATCHING_DYNAMIC_MIN_ACTIVE=12`
+
+### 30.4 런타임 후속
+
+- hot override 파일 경로이므로 우선 재기동 없이 다음 루프의 `scanner_attach_capacity_cap`이 12로 올라가는지 확인한다.
+- 반영되지 않으면 `restart.flag` 방식으로만 우아한 재기동한다.
+- 13:35~13:40 관측:
+  - `scalping_scanner_runtime_target_attach` 46건 중 18건이 계속 `scalping_dynamic_watch_cap_capacity`.
+  - capacity skip은 계속 `scanner_attach_capacity_cap=10`, `scanner_attach_capacity_watching_count=10`으로 찍혔다.
+  - 같은 구간 `져스텍(153890)`은 `ai_confirmed BUY score=78`까지 갔지만 `quote_stale=True`, `quote_age_ms=4955` 상태였고 submit 관측은 없었다.
+  - 따라서 p10 파일 값은 last-wins 기준 `12`로 정리됐지만, 13:40 목표 종료 전 런타임 이벤트 반영 증거는 확보하지 못했다.
+- 13:40 목표 종료 조건 때문에 추가 감시/restart는 수행하지 않았다. 다음 세션에서 이 목표를 이어갈 경우 첫 조치는 `restart.flag` 우아한 재기동 후 `scanner_attach_capacity_cap=12` 반영 여부 확인이다.
