@@ -1163,3 +1163,73 @@
   - `ai_confirmed/blocked_ai_score_below_buy_score_threshold`
 - stale category는 아직 전부 `diagnostic_quote_age_stale`다.
 - 다음 루프에서는 fresh-only 표본과 stale-mixed 표본을 분리해, strength/AI blocker가 중복 또는 과도한 차단인지 확인한다. stale submit hard block은 계속 유지한다.
+
+## 25. 12:45 fresh-only/stale-mixed blocker 관측 보강
+
+작성 시각: `2026-06-29 12:46 KST`
+
+### 25.1 코드 수정
+
+- 파일:
+  - `src/engine/monitoring/intraday_entry_flow_report.py`
+  - `src/tests/test_intraday_entry_flow_report.py`
+- 변경:
+  - summary에 `rising_fresh_only_symbol_count`를 추가했다.
+  - markdown/report에 `rising fresh-only blocker rollup`과 `rising stale-mixed blocker rollup`을 추가했다.
+  - 기존 stale category와 refresh recovered 분류는 유지했다.
+- 목적:
+  - blocker downsizing 검토 전에 fresh-only 표본과 stale-mixed 표본을 자동으로 분리한다.
+  - stale가 섞인 strength/AI blocker를 바로 threshold 완화 근거로 쓰지 않도록 한다.
+
+### 25.2 12:45 flow 기준선
+
+- 11:30 이후 flow:
+  - `symbol_count=118`
+  - `rising_symbol_count_by_max_delta=31`
+  - `rising_missed_symbol_count_in_report=32`
+  - `real_submit_symbol_count_in_latest_diagnostic=0`
+  - `buy_signal_or_pre_submit_pass_seen_symbols=1`
+  - `stale_eval_symbol_count=77`
+  - `rising_stale_eval_symbol_count=24`
+  - `rising_fresh_only_symbol_count=7`
+  - `stale_refresh_recovered_symbol_count=62`
+- 08:00 이후 누적 참조 flow:
+  - `symbol_count=452`
+  - `rising_symbol_count_by_max_delta=90`
+  - `rising_missed_symbol_count_in_report=74`
+  - `buy_signal_or_pre_submit_pass_seen_symbols=27`
+  - `stale_eval_symbol_count=219`
+  - `rising_stale_eval_symbol_count=77`
+  - `rising_fresh_only_symbol_count=13`
+  - `stale_refresh_recovered_symbol_count=203`
+
+### 25.3 fresh-only blocker
+
+- 11:30 이후 rising fresh-only blocker:
+  - `2: ai_confirmed / blocked_ai_score_below_buy_score_threshold`
+  - `1: blocked_strength_momentum / insufficient_history`
+  - `1: blocked_strength_momentum / below_strength_base`
+  - `1: blocked_overbought / insufficient_history`
+  - `1: blocked_overbought / -`
+  - `1: ai_confirmed / below_buy_ratio`
+- 판정:
+  - fresh-only 기준으로는 `blocked_ai_score_below_buy_score_threshold`가 최상위지만 2건이라 아직 live threshold 완화 근거로 쓰기에는 얇다.
+  - 다음 12:50 루프에서도 fresh-only AI score block이 반복되면, BUY threshold 변경이 아니라 score/action 재평가 또는 AI WAIT 재평가 cadence부터 검토한다.
+
+### 25.4 p4 이후 loop 상태
+
+- 새 PID p4 적용 뒤 주요 loop:
+  - `12:41:19 loop_elapsed_ms=4252.6 target_count=16 watching=12`
+  - `12:42:29 loop_elapsed_ms=6548.3 target_count=16 watching=12`
+  - `12:43:53 loop_elapsed_ms=11081.5 target_count=13 watching=9`
+  - `12:45:20 loop_elapsed_ms=8521.1 target_count=17 watching=13`
+- 판정:
+  - p4 이후 loop는 대체로 4~8초대까지 내려왔고, 12:43에 11초 한 번이 있었다.
+  - WS prune burst는 남아 있으나 full-eval/watch cap pressure는 이전 30~80초대보다 완화됐다.
+
+### 25.5 검증
+
+- `PYTHONPATH=. .venv/bin/python -m pytest src/tests/test_intraday_entry_flow_report.py`
+  - `5 passed`
+- `PYTHONPATH=. .venv/bin/python -m py_compile src/engine/monitoring/intraday_entry_flow_report.py src/tests/test_intraday_entry_flow_report.py`
+  - 통과

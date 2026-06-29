@@ -86,6 +86,12 @@ def test_build_report_summarizes_flow_and_rising_blocker(tmp_path):
         "reason": "scanner_fast_precheck_stability_pending",
         "count": 1,
     }
+    assert report["rising_fresh_only_blocker_rollup"] == []
+    assert report["rising_stale_mixed_blocker_rollup"][0] == {
+        "stage": "scalping_scanner_watching_runtime_skip",
+        "reason": "scanner_fast_precheck_stability_pending",
+        "count": 1,
+    }
     row = report["rows"][0]
     assert row["rise_after_watch"] == "rising"
     assert row["main_blocker_reason"] == "scanner_fast_precheck_stability_pending"
@@ -190,9 +196,12 @@ def test_write_outputs_uses_since_window_in_title(tmp_path):
             "buy_signal_or_pre_submit_pass_seen_symbols": 0,
             "stale_eval_symbol_count": 0,
             "rising_stale_eval_symbol_count": 0,
+            "rising_fresh_only_symbol_count": 0,
         },
         "blocker_rollup": [],
         "rising_symbol_blocker_rollup": [],
+        "rising_fresh_only_blocker_rollup": [],
+        "rising_stale_mixed_blocker_rollup": [],
         "stale_eval_rollup": [],
         "stale_eval_category_rollup": [],
         "rows": [],
@@ -289,7 +298,18 @@ def test_build_report_separates_refresh_recovered_stale_from_hard_stale(tmp_path
     assert by_code["000002"]["stale_eval_count"] == 1
     assert by_code["000002"]["dominant_stale_eval_category"] == "pre_submit_stale_context_or_quote"
     assert report["summary"]["stale_eval_symbol_count"] == 1
+    assert report["summary"]["rising_fresh_only_symbol_count"] == 1
     assert report["summary"]["stale_refresh_recovered_symbol_count"] == 1
+    assert report["rising_fresh_only_blocker_rollup"][0] == {
+        "stage": "ai_confirmed",
+        "reason": "-",
+        "count": 1,
+    }
+    assert report["rising_stale_mixed_blocker_rollup"][0] == {
+        "stage": "entry_submit_revalidation_warning",
+        "reason": "stale_context_or_quote",
+        "count": 1,
+    }
     assert report["stale_eval_category_rollup"][0] == {
         "category": "pre_submit_stale_context_or_quote",
         "count": 1,

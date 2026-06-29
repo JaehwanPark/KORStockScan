@@ -421,6 +421,22 @@ def build_report(
             (row["main_blocker_stage"], row["main_blocker_reason"]) for row in rows if row["rise_after_watch"] == "rising"
         ).most_common()
     ]
+    rising_fresh_only_blocker_rollup = [
+        {"stage": stage or "-", "reason": reason or "-", "count": count}
+        for (stage, reason), count in Counter(
+            (row["main_blocker_stage"], row["main_blocker_reason"])
+            for row in rows
+            if row["rise_after_watch"] == "rising" and row["stale_eval_count"] <= 0
+        ).most_common()
+    ]
+    rising_stale_mixed_blocker_rollup = [
+        {"stage": stage or "-", "reason": reason or "-", "count": count}
+        for (stage, reason), count in Counter(
+            (row["main_blocker_stage"], row["main_blocker_reason"])
+            for row in rows
+            if row["rise_after_watch"] == "rising" and row["stale_eval_count"] > 0
+        ).most_common()
+    ]
     summary = {
         "symbol_count": len(rows),
         "rising_symbol_count_by_max_delta": sum(1 for row in rows if row["rise_after_watch"] == "rising"),
@@ -431,6 +447,9 @@ def build_report(
         "stale_eval_symbol_count": sum(1 for row in rows if row["stale_eval_count"] > 0),
         "rising_stale_eval_symbol_count": sum(
             1 for row in rows if row["rise_after_watch"] == "rising" and row["stale_eval_count"] > 0
+        ),
+        "rising_fresh_only_symbol_count": sum(
+            1 for row in rows if row["rise_after_watch"] == "rising" and row["stale_eval_count"] <= 0
         ),
         "stale_refresh_recovered_symbol_count": sum(1 for row in rows if row["stale_refresh_recovered_count"] > 0),
     }
@@ -466,6 +485,8 @@ def build_report(
         "summary": summary,
         "blocker_rollup": blocker_rollup,
         "rising_symbol_blocker_rollup": rising_blocker_rollup,
+        "rising_fresh_only_blocker_rollup": rising_fresh_only_blocker_rollup,
+        "rising_stale_mixed_blocker_rollup": rising_stale_mixed_blocker_rollup,
         "stale_eval_rollup": stale_eval_rollup,
         "stale_eval_category_rollup": stale_eval_category_rollup,
         "rows": rows,
@@ -508,6 +529,12 @@ def write_outputs(report: dict[str, Any], *, output_md: Path, output_csv: Path, 
             handle.write(f"- {item['count']}: `{item['stage']}` / `{item['reason']}`\n")
         handle.write("\n## rising-symbol blocker rollup\n\n")
         for item in report["rising_symbol_blocker_rollup"][:12]:
+            handle.write(f"- {item['count']}: `{item['stage']}` / `{item['reason']}`\n")
+        handle.write("\n## rising fresh-only blocker rollup\n\n")
+        for item in report.get("rising_fresh_only_blocker_rollup", [])[:12]:
+            handle.write(f"- {item['count']}: `{item['stage']}` / `{item['reason']}`\n")
+        handle.write("\n## rising stale-mixed blocker rollup\n\n")
+        for item in report.get("rising_stale_mixed_blocker_rollup", [])[:12]:
             handle.write(f"- {item['count']}: `{item['stage']}` / `{item['reason']}`\n")
         handle.write("\n## stale-eval rollup\n\n")
         for item in report["stale_eval_rollup"][:12]:

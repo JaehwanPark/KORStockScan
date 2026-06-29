@@ -1,25 +1,26 @@
 # 2026-06-29 08:00 이후 감시대상 BUY 전 흐름
 
-- generated_at: 2026-06-29T12:41:33+09:00
+- generated_at: 2026-06-29T12:45:37+09:00
 - source_events: /home/ubuntu/KORStockScan/data/runtime/sentinel_event_cache/buy_funnel_sentinel_events_2026-06-29.jsonl
 - source_diagnostic: /home/ubuntu/KORStockScan/data/report/intraday_entry_blocker_diagnostics/intraday_entry_blocker_diagnostics_2026-06-29_1145_0800_goal.json
 - event_window_since: 2026-06-29T08:00:00
-- symbol_count: 451
+- symbol_count: 452
 - rising_symbol_count_by_max_delta: 90
 - rising_missed_buy_count_in_latest_diagnostic: 74
 - rising_missed_symbol_count_in_report: 74
 - real_submit_symbol_count_in_latest_diagnostic: 0
 - buy_signal_or_pre_submit_pass_seen_symbols: 27
-- stale_eval_symbol_count: 218
+- stale_eval_symbol_count: 219
 - rising_stale_eval_symbol_count: 77
-- stale_refresh_recovered_symbol_count: 201
+- rising_fresh_only_symbol_count: 13
+- stale_refresh_recovered_symbol_count: 203
 
 ## blocker rollup
 
 - 298: `scalping_scanner_watching_runtime_skip` / `scanner_fast_precheck_stability_pending`
 - 101: `scalping_scanner_watching_runtime_skip` / `ws_snapshot_missing_or_zero`
 - 16: `scalping_scanner_watching_runtime_skip` / `entry_cooldown_active`
-- 13: `blocked_strength_momentum` / `below_window_buy_value`
+- 14: `blocked_strength_momentum` / `below_window_buy_value`
 - 6: `-` / `-`
 - 6: `blocked_strength_momentum` / `below_strength_base`
 - 4: `blocked_overbought` / `-`
@@ -40,18 +41,37 @@
 - 1: `blocked_strength_momentum` / `insufficient_history`
 - 1: `blocked_strength_momentum` / `below_strength_base`
 
+## rising fresh-only blocker rollup
+
+- 7: `scalping_scanner_watching_runtime_skip` / `scanner_fast_precheck_stability_pending`
+- 3: `scalping_scanner_watching_runtime_skip` / `ws_snapshot_missing_or_zero`
+- 2: `-` / `-`
+- 1: `blocked_strength_momentum` / `below_window_buy_value`
+
+## rising stale-mixed blocker rollup
+
+- 44: `scalping_scanner_watching_runtime_skip` / `scanner_fast_precheck_stability_pending`
+- 16: `scalping_scanner_watching_runtime_skip` / `entry_cooldown_active`
+- 6: `scalping_scanner_watching_runtime_skip` / `ws_snapshot_missing_or_zero`
+- 4: `blocked_overbought` / `-`
+- 3: `blocked_strength_momentum` / `below_window_buy_value`
+- 1: `blocked_vpw` / `-`
+- 1: `blocked_strength_momentum` / `below_buy_ratio`
+- 1: `blocked_strength_momentum` / `insufficient_history`
+- 1: `blocked_strength_momentum` / `below_strength_base`
+
 ## stale-eval rollup
 
 - 102: `blocked_strength_momentum`
 - 66: `ai_confirmed`
 - 23: `blocked_overbought`
 - 10: `blocked_vpw`
+- 9: `ai_confirmed_terminal_no_budget`
 - 9: `blocked_liquidity`
-- 8: `ai_confirmed_terminal_no_budget`
 
 ## stale-eval category rollup
 
-- 218: `diagnostic_quote_age_stale`
+- 219: `diagnostic_quote_age_stale`
 
 ## top rows by max delta
 
@@ -73,7 +93,7 @@
 |우리기술(032820)|09:05:00|09:23:09|rising|6.41%|6.41%|`scalping_scanner_watching_runtime_skip`/ws_snapshot_missing_or_zero|3|2|diagnostic_quote_age_stale|3356.0|-|62/WAIT|0|09:06:33 blocked_liquidity(+0.00%) -> 09:06:33 blocked_gap_from_scan(+0.00%) -> 09:06:35 ai_confirmed(+0.00%) -> 09:06:37 first_ai_wait(+0.00%) -> ... -> 09:21:04 ai_confirmed(+6.41%) -> 09:21:04 blocked_ai_score(+6.41%) -> 09:21:04 ai_confirmed_terminal_no_budget:blocked_ai_score_below_buy_score_threshold(+6.41%)|
 |주성엔지니어링(036930)|09:05:00|11:34:38|rising|6.22%|6.22%|`blocked_strength_momentum`/below_buy_ratio|6|6|diagnostic_quote_age_stale|7016.0|-|62/WAIT|0|09:11:16 blocked_strength_momentum:insufficient_history(+6.22%) -> 09:37:37 blocked_strength_momentum:below_buy_ratio(+6.22%) -> 09:37:37 blocked_vpw(+6.22%) -> 09:37:39 ai_confirmed(+6.22%) -> ... -> 12:04:53 ai_confirmed(+6.22%) -> 12:04:53 first_ai_wait(+6.22%) -> 12:04:53 ai_confirmed_terminal_no_budget:first_ai_wait_big_bite_not_confirmed(+6.22%)|
 |채비(000110)|09:22:41|11:40:56|rising|6.11%|6.11%|`scalping_scanner_watching_runtime_skip`/ws_snapshot_missing_or_zero|0|0|-||-||0|-|
-|SK이터닉스(475150)|09:03:29|11:38:50|rising|5.99%|5.99%|`scalping_scanner_watching_runtime_skip`/scanner_fast_precheck_stability_pending|4|4|diagnostic_quote_age_stale|5942.0|10:18:34|80/BUY|0|09:22:23 blocked_strength_momentum:insufficient_history(+5.99%) -> 09:48:39 blocked_overbought(+5.99%) -> 09:48:41 blocked_strength_momentum:below_buy_ratio(+5.99%) -> 10:16:44 blocked_overbought(+5.99%) -> ... -> 12:29:38 ai_confirmed_terminal_no_budget:first_ai_wait_big_bite_not_confirmed(+0.59%) -> 12:30:18 blocked_ai_score(+0.59%) -> 12:30:18 ai_confirmed_terminal_no_budget:blocked_ai_score_below_buy_score_threshold(+0.59%)|
+|SK이터닉스(475150)|09:03:29|11:38:50|rising|5.99%|5.99%|`scalping_scanner_watching_runtime_skip`/scanner_fast_precheck_stability_pending|4|4|diagnostic_quote_age_stale|5942.0|10:18:34|80/BUY|0|09:22:23 blocked_strength_momentum:insufficient_history(+5.99%) -> 09:48:39 blocked_overbought(+5.99%) -> 09:48:41 blocked_strength_momentum:below_buy_ratio(+5.99%) -> 10:16:44 blocked_overbought(+5.99%) -> ... -> 12:44:01 ai_confirmed(+0.59%) -> 12:44:03 first_ai_wait(+0.59%) -> 12:44:03 ai_confirmed_terminal_no_budget:first_ai_wait_big_bite_not_confirmed(+0.59%)|
 |이수화학(005950)|09:10:45|10:28:29|rising|5.74%|0.00%|`scalping_scanner_watching_runtime_skip`/ws_snapshot_missing_or_zero|4|1|diagnostic_quote_age_stale|7280.0|-|62/WAIT|0|09:12:07 blocked_liquidity(+0.00%) -> 09:12:08 ai_confirmed(+0.00%) -> 09:12:08 first_ai_wait(+0.00%) -> 09:12:08 ai_confirmed_terminal_no_budget:first_ai_wait_big_bite_not_confirmed(+0.00%) -> 10:28:24 blocked_overbought(+0.00%) -> 10:28:29 blocked_strength_momentum:below_buy_ratio(+0.00%)|
 |삼일씨엔에스(004440)|09:20:00|11:31:38|rising|5.26%|0.81%|`scalping_scanner_watching_runtime_skip`/scanner_fast_precheck_stability_pending|6|8|diagnostic_quote_age_stale|7833.0|-|62/WAIT|0|09:21:23 blocked_strength_momentum:below_strength_base(+0.00%) -> 09:21:23 blocked_vpw(+0.00%) -> 09:21:23 blocked_liquidity(+0.00%) -> 09:21:24 ai_confirmed(+0.00%) -> ... -> 10:53:36 blocked_ai_score(+1.98%) -> 10:53:36 ai_confirmed_terminal_no_budget:blocked_ai_score_below_buy_score_threshold(+1.98%) -> 12:06:55 blocked_strength_momentum:below_window_buy_value(+0.00%)|
 |HPSP(403870)|09:09:24|11:44:09|rising|4.94%|4.94%|`blocked_strength_momentum`/insufficient_history|2|6|diagnostic_quote_age_stale|6462.0|-|62/WAIT|0|09:14:07 blocked_strength_momentum:insufficient_history(+4.94%) -> 09:17:01 blocked_strength_momentum:below_buy_ratio(+4.94%) -> 09:17:56 blocked_strength_momentum:insufficient_history(+4.94%) -> 09:18:10 ai_confirmed(+4.94%) -> ... -> 12:32:05 blocked_strength_momentum:below_strength_base(+4.94%) -> 12:32:05 blocked_vpw(+4.94%) -> 12:32:05 blocked_ai_score:ai_score_50_buy_hold_override(+4.94%)|
@@ -109,7 +129,7 @@
 |대한광통신(010170)|09:06:52|10:52:57|rising|2.13%|2.13%|`scalping_scanner_watching_runtime_skip`/scanner_fast_precheck_stability_pending|1|0|diagnostic_quote_age_stale|3418.0|-|62/WAIT|0|09:52:34 blocked_strength_momentum:below_buy_ratio(+0.00%) -> 10:51:33 blocked_liquidity(+2.13%) -> 10:51:35 ai_confirmed(+2.13%) -> 10:51:35 first_ai_wait(+2.13%) -> 10:51:35 ai_confirmed_terminal_no_budget:first_ai_wait_big_bite_not_confirmed(+2.13%)|
 |메쥬(000880)|09:25:09|11:33:05|rising|2.10%|2.10%|`-`/-|0|0|-||-||0|-|
 |SK아이이테크놀로지(361610)|09:16:05|11:45:25|rising|2.00%|0.00%|`scalping_scanner_watching_runtime_skip`/scanner_fast_precheck_stability_pending|3|2|diagnostic_quote_age_stale|7151.0|-|50/|0|09:48:48 blocked_strength_momentum:insufficient_history(+0.00%) -> 09:50:15 blocked_strength_momentum:below_window_buy_value(+0.00%) -> 10:25:29 blocked_overbought(+0.00%) -> 10:25:29 blocked_strength_momentum:below_window_buy_value(+0.00%) -> 10:26:08 blocked_overbought(+0.00%) -> 10:26:09 blocked_strength_momentum:below_window_buy_value(+0.00%)|
-|에코프로(086520)|08:21:17|11:39:11|rising|1.93%|0.74%|`scalping_scanner_watching_runtime_skip`/scanner_fast_precheck_stability_pending|9|7|diagnostic_quote_age_stale|7415.0|-|64/WAIT|0|09:08:35 ai_confirmed(+0.00%) -> 09:08:35 first_ai_wait(+0.00%) -> 09:08:35 ai_confirmed_terminal_no_budget:first_ai_wait_big_bite_not_confirmed(+0.00%) -> 09:34:04 ai_confirmed(+0.00%) -> ... -> 12:30:32 blocked_overbought(+1.93%) -> 12:30:32 blocked_strength_momentum:below_buy_ratio(+1.93%) -> 12:30:32 blocked_ai_score:ai_score_50_buy_hold_override(+1.93%)|
+|에코프로(086520)|08:21:17|11:39:11|rising|1.93%|0.74%|`scalping_scanner_watching_runtime_skip`/scanner_fast_precheck_stability_pending|9|8|diagnostic_quote_age_stale|7415.0|-|64/WAIT|0|09:08:35 ai_confirmed(+0.00%) -> 09:08:35 first_ai_wait(+0.00%) -> 09:08:35 ai_confirmed_terminal_no_budget:first_ai_wait_big_bite_not_confirmed(+0.00%) -> 09:34:04 ai_confirmed(+0.00%) -> ... -> 12:30:32 blocked_ai_score:ai_score_50_buy_hold_override(+1.93%) -> 12:40:33 blocked_overbought(+1.93%) -> 12:40:33 blocked_ai_score:ai_score_50_buy_hold_override(+1.93%)|
 |나무기술(242040)|09:38:26|11:16:34|rising|1.83%|0.00%|`scalping_scanner_watching_runtime_skip`/scanner_fast_precheck_stability_pending|0|0|-||-||0|-|
 |원익IPS(240810)|08:01:44|11:04:25|rising|1.74%|0.61%|`scalping_scanner_watching_runtime_skip`/entry_cooldown_active|6|3|diagnostic_quote_age_stale|4513.0|09:28:28|78/BUY|0|08:03:00 blocked_strength_momentum:below_strength_base(-0.64%) -> 08:03:00 blocked_vpw(-0.64%) -> 08:03:00 blocked_ai_score:ai_score_50_buy_hold_override(-0.64%) -> 08:13:33 blocked_strength_momentum:below_buy_ratio(+1.74%) -> ... -> 09:28:30 latency_pass:caution_normal_entry_allowed(+1.74%) -> 09:29:12 entry_armed_expired:qualification_passed(+1.74%) -> 09:29:12 blocked_strength_momentum:insufficient_history(+1.74%)|
 |피에스케이(319660)|08:01:44|11:02:36|rising|1.63%|1.63%|`blocked_strength_momentum`/below_strength_base|11|2|diagnostic_quote_age_stale|5370.0|08:33:12|62/WAIT|0|08:03:27 blocked_strength_momentum:below_buy_ratio(+0.36%) -> 08:07:36 blocked_strength_momentum:insufficient_history(+1.63%) -> 08:10:02 ai_confirmed(+1.63%) -> 08:10:02 first_ai_wait(+1.63%) -> ... -> 09:11:03 ai_confirmed(+1.63%) -> 09:11:03 first_ai_wait(+1.63%) -> 09:11:03 ai_confirmed_terminal_no_budget:first_ai_wait_big_bite_not_confirmed(+1.63%)|
