@@ -162,6 +162,13 @@ def test_build_report_splits_low_ai_pressure_by_eval_freshness(tmp_path):
     expected = {"fresh_eval": 1, "stale_or_delayed_eval": 1, "unknown_eval_quality": 1}
     assert report["summary"]["rising_missed_low_ai_or_negative_pressure_eval_quality"] == expected
     assert report["rising_missed_buy"][0]["low_ai_or_negative_pressure_eval_quality"] == expected
+    assert report["summary"]["rising_missed_stale_or_delayed_eval_category_counts"] == {
+        "diagnostic_quote_age_stale": 1,
+        "full_eval_delay": 0,
+        "ws_quote_missing": 0,
+        "pre_ai_stale_or_history_gap": 0,
+        "pre_submit_hard_stale": 0,
+    }
 
 
 def test_build_report_excludes_recovery_observations_from_blockers(tmp_path):
@@ -249,6 +256,80 @@ def test_build_report_treats_recovered_stale_ws_as_recovered_not_stale_eval(tmp_
     assert report["summary"]["rising_missed_low_ai_or_negative_pressure_eval_quality"] == expected
     assert report["summary"]["rising_missed_repeated_zero_strength_history_workorder_count"] == 0
     assert report["source_quality_workorders"]["rising_missed_repeated_zero_strength_history"] == []
+
+
+def test_build_report_splits_stale_or_delayed_eval_categories(tmp_path):
+    path = tmp_path / "pipeline_events_2026-06-23.jsonl"
+    rows = [
+        _event("000001", "A", "scalping_scanner_candidate_promoted", {"price_delta_since_first_seen_pct": "1.20"}),
+        _event(
+            "000001",
+            "A",
+            "blocked_ai_score",
+            {
+                "price_delta_since_first_seen_pct": "1.20",
+                "ai_score": "60",
+                "quote_age_ms": "7000",
+            },
+        ),
+        _event(
+            "000001",
+            "A",
+            "scalping_scanner_watching_runtime_skip",
+            {
+                "price_delta_since_first_seen_pct": "1.20",
+                "ai_score": "60",
+                "skip_reason": "scanner_full_eval_loop_budget_deferred",
+            },
+        ),
+        _event(
+            "000001",
+            "A",
+            "scalping_scanner_watching_runtime_skip",
+            {
+                "price_delta_since_first_seen_pct": "1.20",
+                "ai_score": "60",
+                "skip_reason": "ws_snapshot_missing_or_zero",
+            },
+        ),
+        _event(
+            "000001",
+            "A",
+            "blocked_strength_momentum",
+            {
+                "price_delta_since_first_seen_pct": "1.20",
+                "ai_score": "60",
+                "reason": "insufficient_history",
+            },
+        ),
+        _event(
+            "000001",
+            "A",
+            "entry_submit_revalidation_warning",
+            {
+                "price_delta_since_first_seen_pct": "1.20",
+                "ai_score": "60",
+                "entry_submit_revalidation_warning": "stale_context_or_quote",
+            },
+        ),
+    ]
+    path.write_text("\n".join(json.dumps(row, ensure_ascii=False) for row in rows), encoding="utf-8")
+
+    report = build_report(target_date="2026-06-23", pipeline_path=path, generated_at="fixed")
+
+    expected = {
+        "diagnostic_quote_age_stale": 1,
+        "full_eval_delay": 1,
+        "ws_quote_missing": 1,
+        "pre_ai_stale_or_history_gap": 1,
+        "pre_submit_hard_stale": 1,
+    }
+    assert report["rising_missed_buy"][0]["stale_or_delayed_eval_category_counts"] == expected
+    assert report["summary"]["rising_missed_stale_or_delayed_eval_category_counts"] == expected
+    priority = next(
+        item for item in report["root_cause_priorities"] if item["issue"] == "scanner_strength_history_or_stale_eval"
+    )
+    assert priority["evidence"]["stale_or_delayed_eval_category_counts"] == expected
 
 
 def test_build_report_surfaces_repeated_zero_strength_history_workorder(tmp_path):

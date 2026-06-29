@@ -184,6 +184,7 @@ def _blocker_reason(row: dict[str, Any]) -> str:
         "scanner_block_reason",
         "budget_block_reason",
         "terminal_reason",
+        "entry_submit_revalidation_warning",
         "scalp_sim_candidate_window_blocked_reason",
     ):
         value = _field(row, key)
@@ -219,8 +220,12 @@ def _event_max_age_ms(row: dict[str, Any]) -> float | None:
 
 
 def _event_has_stale_or_delayed_context(row: dict[str, Any]) -> bool:
+    return _stale_or_delayed_eval_category(row) != ""
+
+
+def _stale_or_delayed_eval_category(row: dict[str, Any]) -> str:
     if _event_is_recovery_observation(row):
-        return False
+        return ""
     reason = _blocker_reason(row).lower()
     stage = str(row.get("stage") or "").lower()
     fields = row.get("fields") if isinstance(row.get("fields"), dict) else {}
@@ -229,18 +234,26 @@ def _event_has_stale_or_delayed_context(row: dict[str, Any]) -> bool:
         for key, value in fields.items()
         if any(token in str(key).lower() for token in ("stale", "fresh", "snapshot", "subscription"))
     )
-    if any(
-        token in f"{stage} {reason} {context_text}"
-        for token in (
-            "stale",
-            "ws_snapshot_missing_or_zero",
-            "subscription_alive_but_entry_stale",
-            "insufficient_history",
-        )
+    combined = f"{stage} {reason} {context_text}"
+    if "scanner_full_eval_loop_budget_deferred" in combined or ("full_eval" in stage and "lag" in stage):
+        return "full_eval_delay"
+    if "ws_snapshot_missing_or_zero" in combined or "missing_or_zero_curr" in combined:
+        return "ws_quote_missing"
+    if "stale_context_or_quote" in combined or ("entry_submit_revalidation" in stage and "stale" in combined):
+        return "pre_submit_hard_stale"
+    if (
+        ("pre_ai" in combined and "stale" in combined)
+        or "stale_ws_snapshot" in combined
+        or "subscription_alive_but_entry_stale" in combined
+        or "insufficient_history" in combined
     ):
-        return True
+        return "pre_ai_stale_or_history_gap"
+    if "stale" in combined:
+        return "diagnostic_quote_age_stale"
     max_age_ms = _event_max_age_ms(row)
-    return max_age_ms is not None and max_age_ms > ENTRY_FRESH_MAX_AGE_MS
+    if max_age_ms is not None and max_age_ms > ENTRY_FRESH_MAX_AGE_MS:
+        return "diagnostic_quote_age_stale"
+    return ""
 
 
 def _event_is_fresh_context(row: dict[str, Any]) -> bool:
@@ -283,6 +296,23 @@ def _low_ai_pressure_quality_counts(rows: list[dict[str, Any]]) -> dict[str, int
         else:
             counts["unknown_eval_quality"] += 1
     return counts
+
+
+def _stale_or_delayed_eval_category_counts(rows: list[dict[str, Any]]) -> dict[str, int]:
+    counter: Counter[str] = Counter()
+    for row in rows:
+        if not _low_ai_or_negative_pressure(row):
+            continue
+        category = _stale_or_delayed_eval_category(row)
+        if category:
+            counter[category] += 1
+    return {
+        "diagnostic_quote_age_stale": int(counter.get("diagnostic_quote_age_stale", 0)),
+        "full_eval_delay": int(counter.get("full_eval_delay", 0)),
+        "ws_quote_missing": int(counter.get("ws_quote_missing", 0)),
+        "pre_ai_stale_or_history_gap": int(counter.get("pre_ai_stale_or_history_gap", 0)),
+        "pre_submit_hard_stale": int(counter.get("pre_submit_hard_stale", 0)),
+    }
 
 
 def _unresolved_stale_low_ai_pressure_count(rows: list[dict[str, Any]]) -> int:
@@ -729,6 +759,7 @@ def _summarize_code(
         "latest_blocker": _latest_blocker(rows),
         "queue_observation_counts": queue_counts,
         "low_ai_or_negative_pressure_eval_quality": _low_ai_pressure_quality_counts(rows),
+        "stale_or_delayed_eval_category_counts": _stale_or_delayed_eval_category_counts(rows),
         "unresolved_stale_low_ai_or_pressure_eval_count": _unresolved_stale_low_ai_pressure_count(rows),
         "zero_strength_history_source_quality": _zero_strength_history_source_quality(rows),
         "scanner_full_eval_budget_deferred": {
@@ -797,6 +828,19 @@ def _rollup_low_ai_pressure_quality(items: list[dict[str, Any]]) -> dict[str, in
         "fresh_eval": int(counter.get("fresh_eval", 0)),
         "stale_or_delayed_eval": int(counter.get("stale_or_delayed_eval", 0)),
         "unknown_eval_quality": int(counter.get("unknown_eval_quality", 0)),
+    }
+
+
+def _rollup_stale_or_delayed_eval_categories(items: list[dict[str, Any]]) -> dict[str, int]:
+    counter: Counter[str] = Counter()
+    for item in items:
+        counter.update(item.get("stale_or_delayed_eval_category_counts") or {})
+    return {
+        "diagnostic_quote_age_stale": int(counter.get("diagnostic_quote_age_stale", 0)),
+        "full_eval_delay": int(counter.get("full_eval_delay", 0)),
+        "ws_quote_missing": int(counter.get("ws_quote_missing", 0)),
+        "pre_ai_stale_or_history_gap": int(counter.get("pre_ai_stale_or_history_gap", 0)),
+        "pre_submit_hard_stale": int(counter.get("pre_submit_hard_stale", 0)),
     }
 
 
@@ -932,6 +976,9 @@ def _root_cause_priorities(
                     "rising_missed_symbols": len(rising_missed),
                     "repeated_zero_strength_history_symbols": len(zero_history),
                     "stale_or_delayed_low_ai_or_pressure_events": stale_eval_count,
+                    "stale_or_delayed_eval_category_counts": _rollup_stale_or_delayed_eval_categories(
+                        rising_missed
+                    ),
                     "unresolved_stale_or_delayed_low_ai_or_pressure_events": unresolved_stale_eval_count,
                     "top_symbols": [
                         {
@@ -1208,6 +1255,21 @@ def build_report(
                     "real_order_approval",
                 ],
             },
+            "rising_missed_stale_or_delayed_eval_category_counts": {
+                "metric_role": "source_quality_gate",
+                "decision_authority": "diagnostic_only",
+                "window_policy": "intraday_event_window",
+                "sample_floor": "none_diagnostic",
+                "primary_decision_metric": False,
+                "source_quality_gate": "entry_eval_freshness_cause_classification",
+                "forbidden_uses": [
+                    "buy_score_relaxation",
+                    "ai_threshold_relaxation",
+                    "broker_guard_bypass",
+                    "stale_submit_bypass",
+                    "real_order_approval",
+                ],
+            },
             "repeated_zero_strength_history_source_quality_workorders": {
                 "metric_role": "source_quality_gate",
                 "decision_authority": "source_quality_only",
@@ -1299,6 +1361,9 @@ def build_report(
             "real_submit_symbol_count": sum(1 for item in summaries if item["real_submit_count"] > 0),
             "excluded_analysis_scope": "sim_and_swing_events",
             "rising_missed_low_ai_or_negative_pressure_eval_quality": _rollup_low_ai_pressure_quality(
+                rising_missed
+            ),
+            "rising_missed_stale_or_delayed_eval_category_counts": _rollup_stale_or_delayed_eval_categories(
                 rising_missed
             ),
             "repeated_zero_strength_history_workorder_count": len(

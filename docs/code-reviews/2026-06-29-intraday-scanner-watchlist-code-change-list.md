@@ -1598,3 +1598,49 @@
 
 - 코드 반영을 위해 review-gate 통과 후에만 `restart.flag` 방식으로 우아한 재기동한다.
 - 다음 관측에서는 져스텍과 유사한 BUY+stale AI 입력 케이스가 `pre_submit_refresh_recovered_stale_ai_context=True`로 찍히고, 최종 차단이 latency/spread인지 stale인지 분리되는지 확인한다.
+
+## 32. 14:00 stale_or_delayed_eval 분해 p12
+
+작성 시각: `2026-06-29 14:00 KST`
+
+### 32.1 관측
+
+- 13:40~14:00 루프에서 실제 real submit/fill은 1건으로 증가했다.
+  - `LG에너지솔루션(373220)`은 `ai_confirmed BUY score=83 -> entry_armed -> budget_pass -> latency_pass -> order_bundle_submitted -> holding_started`까지 연결됐다.
+- 13:40 이후 기준 `falling_real_submitted_count=0`으로 승격시점 대비 하락 submit 유형은 아직 관측되지 않았다.
+- `stale_or_delayed_eval`은 반복 major blocker로 남았지만, 기존 요약이 원인별로 분해되지 않아 full-eval delay, WS quote 결손, pre-AI stale/history gap, pre-submit hard stale, 단순 diagnostic quote-age stale를 구분하기 어려웠다.
+
+### 32.2 코드 수정 p12
+
+- 파일:
+  - `src/engine/monitoring/intraday_entry_blocker_diagnostics.py`
+  - `src/tests/test_intraday_entry_blocker_diagnostics.py`
+- 변경:
+  - `stale_or_delayed_eval` 하위 원인을 `diagnostic_quote_age_stale`, `full_eval_delay`, `ws_quote_missing`, `pre_ai_stale_or_history_gap`, `pre_submit_hard_stale`로 분해한다.
+  - `rising_missed_stale_or_delayed_eval_category_counts`를 summary와 root-cause evidence에 추가했다.
+  - `entry_submit_revalidation_warning`을 blocker reason resolver에 추가해 pre-submit hard stale rows가 reason 없이 누락되지 않게 했다.
+- 권한/충돌:
+  - 진단/관측 보강 전용이다.
+  - BUY score, AI threshold, order price, stale-submit hard guard, broker/account/order/quantity/cooldown guard, provider route, hard/protect/emergency stop, scale-in guard는 변경하지 않는다.
+
+### 32.3 검증 및 14:00 산출물
+
+- `PYTHONPATH=. .venv/bin/python -m pytest src/tests/test_intraday_entry_blocker_diagnostics.py`
+  - `20 passed`
+- `PYTHONPATH=. .venv/bin/python -m py_compile src/engine/monitoring/intraday_entry_blocker_diagnostics.py src/tests/test_intraday_entry_blocker_diagnostics.py`
+  - 통과
+- 14:00 diagnostic:
+  - `data/report/intraday_entry_blocker_diagnostics/intraday_entry_blocker_diagnostics_2026-06-29_1400_1340_goal.json`
+  - `real_submit_symbol_count=1`
+  - `rising_missed_buy_count=16`
+  - `rising_missed_full_eval_budget_deferred_count=0`
+  - `rising_missed_stale_or_delayed_eval_category_counts={diagnostic_quote_age_stale:56, full_eval_delay:0, ws_quote_missing:0, pre_ai_stale_or_history_gap:3, pre_submit_hard_stale:0}`
+- 14:00 flow:
+  - `data/report/intraday_entry_flow/intraday_entry_flow_2026-06-29_1340_to_1400.md`
+  - 사용자 지정 누적 참조 파일 `data/report/intraday_entry_flow/intraday_entry_flow_2026-06-29_0800_to_1004.md`도 같은 diagnostic 기준으로 갱신했다.
+
+### 32.4 판정
+
+- 반복 major blocker는 실제 pre-submit hard stale가 아니라 대부분 diagnostic quote-age stale로 분해됐다.
+- full-eval delay와 WS quote missing은 14:00 summary 기준 stale_or_delayed 하위 원인에서는 0이고, full-eval deferred도 13:40 이후 창에서는 0건이다.
+- 다음 루프는 diagnostic stale가 실제 stale submit 차단인지, pre-AI 이벤트의 오래된 age 필드가 fresh refresh 이후에도 max-age 방식으로 과대 집계되는지 확인한다.
