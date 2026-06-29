@@ -243,6 +243,12 @@ _SCANNER_HOT_RUNTIME_OVERRIDE_KEYS = frozenset(
         "KORSTOCKSCAN_SCANNER_HEAVY_EVAL_RECHECK_FRESH_SEC",
         "KORSTOCKSCAN_SCANNER_FULL_EVAL_MAX_PER_LOOP",
         "KORSTOCKSCAN_SCANNER_FULL_EVAL_BACKLOG_EXTRA_PER_LOOP",
+        "KORSTOCKSCAN_SCANNER_FULL_EVAL_AUTO_PRESSURE_ENABLED",
+        "KORSTOCKSCAN_SCANNER_FULL_EVAL_AUTO_PRESSURE_MIN_LIMIT",
+        "KORSTOCKSCAN_SCANNER_FULL_EVAL_AUTO_PRESSURE_MS",
+        "KORSTOCKSCAN_SCANNER_FULL_EVAL_AUTO_RELIEF_MS",
+        "KORSTOCKSCAN_SCANNER_FULL_EVAL_AUTO_COOLDOWN_SEC",
+        "KORSTOCKSCAN_SCANNER_FULL_EVAL_AUTO_RECOVERY_STREAK",
         "KORSTOCKSCAN_SCANNER_RISING_TERMINAL_HARDGATE_RECHECK_ENABLED",
         "KORSTOCKSCAN_SCANNER_RISING_TERMINAL_HARDGATE_RECHECK_DELAY_SEC",
         "KORSTOCKSCAN_SCANNER_RISING_TERMINAL_HARDGATE_RECHECK_MAX_ATTEMPTS",
@@ -261,6 +267,12 @@ _SCANNER_HOT_RUNTIME_OVERRIDES = {
 _SCANNER_HOT_RUNTIME_OVERRIDES_LOCK = threading.Lock()
 _SCALPING_DYNAMIC_WATCH_CAP_STATE = {
     "effective_cap": None,
+    "last_adjust_ts": 0.0,
+    "pressure_streak": 0,
+    "relief_streak": 0,
+}
+_SCANNER_FULL_EVAL_PRESSURE_STATE = {
+    "reduction": 0,
     "last_adjust_ts": 0.0,
     "pressure_streak": 0,
     "relief_streak": 0,
@@ -1051,6 +1063,10 @@ def _filter_disabled_swing_watching_targets(targets):
 
 def _env_bool(name, default=False):
     raw = os.getenv(name, "")
+    return _env_bool_from_value(raw, default)
+
+
+def _env_bool_from_value(raw, default=False):
     text = str(raw).strip().lower()
     if not text:
         return bool(default)
@@ -2251,7 +2267,67 @@ def _scanner_full_eval_backlog_extra_per_loop():
     return max(0, min(value, 40))
 
 
-def _scanner_full_eval_effective_limit(queue_context, base_limit=None):
+def _scanner_full_eval_auto_pressure_enabled():
+    raw = _scanner_hot_or_env_value("KORSTOCKSCAN_SCANNER_FULL_EVAL_AUTO_PRESSURE_ENABLED")
+    return _env_bool_from_value(raw, True)
+
+
+def _scanner_full_eval_auto_pressure_min_limit(base_limit):
+    raw = _scanner_hot_or_env_value("KORSTOCKSCAN_SCANNER_FULL_EVAL_AUTO_PRESSURE_MIN_LIMIT")
+    value = _safe_int(raw, 6)
+    return max(1, min(max(1, _safe_int(base_limit, 8)), value))
+
+
+def _scanner_full_eval_auto_pressure_ms():
+    raw = _scanner_hot_or_env_value("KORSTOCKSCAN_SCANNER_FULL_EVAL_AUTO_PRESSURE_MS")
+    return max(1000.0, _safe_float(raw, 12000.0))
+
+
+def _scanner_full_eval_auto_relief_ms():
+    raw = _scanner_hot_or_env_value("KORSTOCKSCAN_SCANNER_FULL_EVAL_AUTO_RELIEF_MS")
+    return max(1000.0, _safe_float(raw, 7000.0))
+
+
+def _scanner_full_eval_auto_cooldown_sec():
+    raw = _scanner_hot_or_env_value("KORSTOCKSCAN_SCANNER_FULL_EVAL_AUTO_COOLDOWN_SEC")
+    return max(0.0, _safe_float(raw, 60.0))
+
+
+def _scanner_full_eval_auto_recovery_streak():
+    raw = _scanner_hot_or_env_value("KORSTOCKSCAN_SCANNER_FULL_EVAL_AUTO_RECOVERY_STREAK")
+    return max(1, _safe_int(raw, 3))
+
+
+def _scanner_full_eval_pressure_step(loop_elapsed_ms, pressure_ms):
+    if loop_elapsed_ms >= pressure_ms * 2.0:
+        return 4
+    if loop_elapsed_ms >= pressure_ms * 1.5:
+        return 2
+    return 1
+
+
+def _reset_scanner_full_eval_pressure_state():
+    _SCANNER_FULL_EVAL_PRESSURE_STATE.update(
+        {
+            "reduction": 0,
+            "last_adjust_ts": 0.0,
+            "pressure_streak": 0,
+            "relief_streak": 0,
+        }
+    )
+
+
+def _scanner_full_eval_pressure_reduction(base_limit):
+    if not _scanner_full_eval_auto_pressure_enabled():
+        return 0
+    base_limit = max(1, min(_safe_int(base_limit, 8), 40))
+    min_limit = _scanner_full_eval_auto_pressure_min_limit(base_limit)
+    max_reduction = max(0, base_limit - min_limit)
+    reduction = max(0, _safe_int(_SCANNER_FULL_EVAL_PRESSURE_STATE.get("reduction"), 0))
+    return min(reduction, max_reduction)
+
+
+def _scanner_full_eval_base_effective_limit(queue_context, base_limit=None):
     if base_limit is None:
         base_limit = _scanner_full_eval_max_per_loop()
     else:
@@ -2262,6 +2338,80 @@ def _scanner_full_eval_effective_limit(queue_context, base_limit=None):
     backlog_extra_cap = _scanner_full_eval_backlog_extra_per_loop()
     backlog_extra = min(backlog_extra_cap, max(0, scanner_watching_count - base_limit))
     return max(1, min(base_limit + backlog_extra, 40))
+
+
+def _scanner_full_eval_effective_limit(queue_context, base_limit=None):
+    effective_base_limit = _scanner_full_eval_base_effective_limit(queue_context, base_limit=base_limit)
+    reduction = _scanner_full_eval_pressure_reduction(effective_base_limit)
+    if reduction <= 0:
+        return effective_base_limit
+    min_limit = _scanner_full_eval_auto_pressure_min_limit(effective_base_limit)
+    return max(min_limit, effective_base_limit - reduction)
+
+
+def _update_scanner_full_eval_pressure(loop_elapsed_ms, queue_context=None, *, now_ts=None, buy_time_allowed=True):
+    base_limit = _scanner_full_eval_base_effective_limit(queue_context or {})
+    if not _scanner_full_eval_auto_pressure_enabled():
+        _reset_scanner_full_eval_pressure_state()
+        return base_limit
+
+    if not buy_time_allowed:
+        _SCANNER_FULL_EVAL_PRESSURE_STATE["pressure_streak"] = 0
+        _SCANNER_FULL_EVAL_PRESSURE_STATE["relief_streak"] = 0
+        return _scanner_full_eval_effective_limit(queue_context or {})
+
+    now_ts = time.time() if now_ts is None else now_ts
+    pressure_ms = _scanner_full_eval_auto_pressure_ms()
+    relief_ms = min(_scanner_full_eval_auto_relief_ms(), pressure_ms)
+    cooldown_sec = _scanner_full_eval_auto_cooldown_sec()
+    current_limit = _scanner_full_eval_effective_limit(queue_context or {})
+    min_limit = _scanner_full_eval_auto_pressure_min_limit(base_limit)
+    last_adjust_ts = _safe_float(_SCANNER_FULL_EVAL_PRESSURE_STATE.get("last_adjust_ts"), 0.0)
+    can_adjust = (now_ts - last_adjust_ts) >= cooldown_sec
+
+    if loop_elapsed_ms >= pressure_ms:
+        _SCANNER_FULL_EVAL_PRESSURE_STATE["pressure_streak"] = (
+            _safe_int(_SCANNER_FULL_EVAL_PRESSURE_STATE.get("pressure_streak"), 0) + 1
+        )
+        _SCANNER_FULL_EVAL_PRESSURE_STATE["relief_streak"] = 0
+        if can_adjust and current_limit > min_limit:
+            next_limit = max(min_limit, current_limit - _scanner_full_eval_pressure_step(loop_elapsed_ms, pressure_ms))
+            if next_limit != current_limit:
+                _SCANNER_FULL_EVAL_PRESSURE_STATE["reduction"] = max(0, base_limit - next_limit)
+                _SCANNER_FULL_EVAL_PRESSURE_STATE["last_adjust_ts"] = now_ts
+                log_info(
+                    f"[SCANNER_FULL_EVAL_PRESSURE] action=reduce "
+                    f"loop_elapsed_ms={loop_elapsed_ms:.1f} "
+                    f"base_limit={base_limit} effective_limit={next_limit} min_limit={min_limit} "
+                    f"reduction={_SCANNER_FULL_EVAL_PRESSURE_STATE['reduction']}"
+                )
+            return _scanner_full_eval_effective_limit(queue_context or {})
+        return current_limit
+
+    if loop_elapsed_ms <= relief_ms:
+        _SCANNER_FULL_EVAL_PRESSURE_STATE["pressure_streak"] = 0
+        _SCANNER_FULL_EVAL_PRESSURE_STATE["relief_streak"] = (
+            _safe_int(_SCANNER_FULL_EVAL_PRESSURE_STATE.get("relief_streak"), 0) + 1
+        )
+        relief_streak = _safe_int(_SCANNER_FULL_EVAL_PRESSURE_STATE.get("relief_streak"), 0)
+        current_reduction = _safe_int(_SCANNER_FULL_EVAL_PRESSURE_STATE.get("reduction"), 0)
+        if can_adjust and current_reduction > 0 and relief_streak >= _scanner_full_eval_auto_recovery_streak():
+            next_reduction = max(0, current_reduction - 1)
+            _SCANNER_FULL_EVAL_PRESSURE_STATE["reduction"] = next_reduction
+            _SCANNER_FULL_EVAL_PRESSURE_STATE["last_adjust_ts"] = now_ts
+            _SCANNER_FULL_EVAL_PRESSURE_STATE["relief_streak"] = 0
+            next_limit = _scanner_full_eval_effective_limit(queue_context or {})
+            log_info(
+                f"[SCANNER_FULL_EVAL_PRESSURE] action=recover "
+                f"loop_elapsed_ms={loop_elapsed_ms:.1f} "
+                f"base_limit={base_limit} effective_limit={next_limit} reduction={next_reduction}"
+            )
+            return next_limit
+        return current_limit
+
+    _SCANNER_FULL_EVAL_PRESSURE_STATE["pressure_streak"] = 0
+    _SCANNER_FULL_EVAL_PRESSURE_STATE["relief_streak"] = 0
+    return current_limit
 
 
 def _reset_scanner_runtime_eval_state(target):
@@ -5465,6 +5615,12 @@ def run_sniper(is_test_mode=False):
             _holding_count = len([t for t in targets if t.get('status') == 'HOLDING'])
             _update_scalping_dynamic_watch_cap(
                 _loop_elapsed_ms,
+                now_ts=now_ts,
+                buy_time_allowed=is_scalping_buy_time_allowed(now),
+            )
+            _update_scanner_full_eval_pressure(
+                _loop_elapsed_ms,
+                queue_context=queue_context,
                 now_ts=now_ts,
                 buy_time_allowed=is_scalping_buy_time_allowed(now),
             )

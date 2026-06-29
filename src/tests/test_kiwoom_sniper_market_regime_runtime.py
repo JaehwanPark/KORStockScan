@@ -1850,6 +1850,7 @@ def test_runtime_scanner_ws_snapshot_cache_waits_briefly_for_busy_lock(monkeypat
 
 
 def test_scanner_full_eval_effective_limit_expands_for_backlog(tmp_path, monkeypatch):
+    kiwoom_sniper_v2._reset_scanner_full_eval_pressure_state()
     monkeypatch.setattr(
         kiwoom_sniper_v2,
         "_SCANNER_OPERATOR_RUNTIME_OVERRIDE_PATH",
@@ -1866,9 +1867,11 @@ def test_scanner_full_eval_effective_limit_expands_for_backlog(tmp_path, monkeyp
     monkeypatch.setenv("KORSTOCKSCAN_SCANNER_FULL_EVAL_BACKLOG_EXTRA_PER_LOOP", "0")
     assert kiwoom_sniper_v2._scanner_full_eval_effective_limit({"scanner_watching_count": 40}) == 8
     _reset_scanner_hot_override_cache()
+    kiwoom_sniper_v2._reset_scanner_full_eval_pressure_state()
 
 
 def test_scanner_full_eval_effective_limit_respects_env_caps(tmp_path, monkeypatch):
+    kiwoom_sniper_v2._reset_scanner_full_eval_pressure_state()
     monkeypatch.setattr(
         kiwoom_sniper_v2,
         "_SCANNER_OPERATOR_RUNTIME_OVERRIDE_PATH",
@@ -1883,6 +1886,92 @@ def test_scanner_full_eval_effective_limit_respects_env_caps(tmp_path, monkeypat
     monkeypatch.setenv("KORSTOCKSCAN_SCANNER_FULL_EVAL_BACKLOG_EXTRA_PER_LOOP", "40")
     assert kiwoom_sniper_v2._scanner_full_eval_effective_limit({"scanner_watching_count": 100}) == 40
     _reset_scanner_hot_override_cache()
+    kiwoom_sniper_v2._reset_scanner_full_eval_pressure_state()
+
+
+def test_scanner_full_eval_pressure_reduces_loop_budget_without_restart(tmp_path, monkeypatch):
+    _disable_scanner_operator_runtime_overrides(monkeypatch, tmp_path)
+    kiwoom_sniper_v2._reset_scanner_full_eval_pressure_state()
+    monkeypatch.setenv("KORSTOCKSCAN_SCANNER_FULL_EVAL_MAX_PER_LOOP", "8")
+    monkeypatch.setenv("KORSTOCKSCAN_SCANNER_FULL_EVAL_BACKLOG_EXTRA_PER_LOOP", "4")
+    monkeypatch.setenv("KORSTOCKSCAN_SCANNER_FULL_EVAL_AUTO_PRESSURE_ENABLED", "true")
+    monkeypatch.setenv("KORSTOCKSCAN_SCANNER_FULL_EVAL_AUTO_PRESSURE_MIN_LIMIT", "6")
+    monkeypatch.setenv("KORSTOCKSCAN_SCANNER_FULL_EVAL_AUTO_PRESSURE_MS", "12000")
+    monkeypatch.setenv("KORSTOCKSCAN_SCANNER_FULL_EVAL_AUTO_COOLDOWN_SEC", "0")
+
+    queue_context = {"scanner_watching_count": 40}
+    assert kiwoom_sniper_v2._scanner_full_eval_effective_limit(queue_context) == 12
+
+    effective = kiwoom_sniper_v2._update_scanner_full_eval_pressure(
+        19000.0,
+        queue_context=queue_context,
+        now_ts=1000.0,
+        buy_time_allowed=True,
+    )
+
+    assert effective == 10
+    assert kiwoom_sniper_v2._scanner_full_eval_effective_limit(queue_context) == 10
+    kiwoom_sniper_v2._reset_scanner_full_eval_pressure_state()
+
+
+def test_scanner_full_eval_pressure_recovers_gradually(tmp_path, monkeypatch):
+    _disable_scanner_operator_runtime_overrides(monkeypatch, tmp_path)
+    kiwoom_sniper_v2._reset_scanner_full_eval_pressure_state()
+    monkeypatch.setenv("KORSTOCKSCAN_SCANNER_FULL_EVAL_MAX_PER_LOOP", "8")
+    monkeypatch.setenv("KORSTOCKSCAN_SCANNER_FULL_EVAL_BACKLOG_EXTRA_PER_LOOP", "4")
+    monkeypatch.setenv("KORSTOCKSCAN_SCANNER_FULL_EVAL_AUTO_PRESSURE_ENABLED", "true")
+    monkeypatch.setenv("KORSTOCKSCAN_SCANNER_FULL_EVAL_AUTO_PRESSURE_MIN_LIMIT", "6")
+    monkeypatch.setenv("KORSTOCKSCAN_SCANNER_FULL_EVAL_AUTO_PRESSURE_MS", "12000")
+    monkeypatch.setenv("KORSTOCKSCAN_SCANNER_FULL_EVAL_AUTO_RELIEF_MS", "7000")
+    monkeypatch.setenv("KORSTOCKSCAN_SCANNER_FULL_EVAL_AUTO_COOLDOWN_SEC", "0")
+    monkeypatch.setenv("KORSTOCKSCAN_SCANNER_FULL_EVAL_AUTO_RECOVERY_STREAK", "3")
+
+    queue_context = {"scanner_watching_count": 40}
+    assert kiwoom_sniper_v2._update_scanner_full_eval_pressure(
+        19000.0,
+        queue_context=queue_context,
+        now_ts=1000.0,
+        buy_time_allowed=True,
+    ) == 10
+    assert kiwoom_sniper_v2._update_scanner_full_eval_pressure(
+        6000.0,
+        queue_context=queue_context,
+        now_ts=1001.0,
+        buy_time_allowed=True,
+    ) == 10
+    assert kiwoom_sniper_v2._update_scanner_full_eval_pressure(
+        6000.0,
+        queue_context=queue_context,
+        now_ts=1002.0,
+        buy_time_allowed=True,
+    ) == 10
+    assert kiwoom_sniper_v2._update_scanner_full_eval_pressure(
+        6000.0,
+        queue_context=queue_context,
+        now_ts=1003.0,
+        buy_time_allowed=True,
+    ) == 11
+
+    kiwoom_sniper_v2._reset_scanner_full_eval_pressure_state()
+
+
+def test_scanner_full_eval_pressure_disabled_keeps_base_limit(tmp_path, monkeypatch):
+    _disable_scanner_operator_runtime_overrides(monkeypatch, tmp_path)
+    kiwoom_sniper_v2._reset_scanner_full_eval_pressure_state()
+    monkeypatch.setenv("KORSTOCKSCAN_SCANNER_FULL_EVAL_MAX_PER_LOOP", "8")
+    monkeypatch.setenv("KORSTOCKSCAN_SCANNER_FULL_EVAL_BACKLOG_EXTRA_PER_LOOP", "4")
+    monkeypatch.setenv("KORSTOCKSCAN_SCANNER_FULL_EVAL_AUTO_PRESSURE_ENABLED", "false")
+
+    queue_context = {"scanner_watching_count": 40}
+
+    assert kiwoom_sniper_v2._update_scanner_full_eval_pressure(
+        30000.0,
+        queue_context=queue_context,
+        now_ts=1000.0,
+        buy_time_allowed=True,
+    ) == 12
+    assert kiwoom_sniper_v2._scanner_full_eval_effective_limit(queue_context) == 12
+    kiwoom_sniper_v2._reset_scanner_full_eval_pressure_state()
 
 
 def test_scanner_full_eval_budget_defers_before_watching_handler():
@@ -3123,6 +3212,7 @@ def test_scanner_rest_quote_budget_caps_cover_intraday_observation_override(tmp_
 
 
 def test_scanner_rest_quote_budget_hot_reloads_operator_override_file(tmp_path, monkeypatch):
+    kiwoom_sniper_v2._reset_scanner_full_eval_pressure_state()
     override_path = tmp_path / "operator_runtime_overrides.env"
     monkeypatch.setattr(kiwoom_sniper_v2, "_SCANNER_OPERATOR_RUNTIME_OVERRIDE_PATH", override_path)
     monkeypatch.setattr(kiwoom_sniper_v2, "_SCANNER_HOT_RUNTIME_OVERRIDE_REFRESH_SEC", 0.0)
@@ -3136,6 +3226,8 @@ def test_scanner_rest_quote_budget_hot_reloads_operator_override_file(tmp_path, 
     monkeypatch.delenv("KORSTOCKSCAN_SCANNER_HEAVY_EVAL_RECHECK_FRESH_SEC", raising=False)
     monkeypatch.delenv("KORSTOCKSCAN_SCANNER_FULL_EVAL_MAX_PER_LOOP", raising=False)
     monkeypatch.delenv("KORSTOCKSCAN_SCANNER_FULL_EVAL_BACKLOG_EXTRA_PER_LOOP", raising=False)
+    monkeypatch.delenv("KORSTOCKSCAN_SCANNER_FULL_EVAL_AUTO_PRESSURE_ENABLED", raising=False)
+    monkeypatch.delenv("KORSTOCKSCAN_SCANNER_FULL_EVAL_AUTO_PRESSURE_MIN_LIMIT", raising=False)
     _reset_scanner_hot_override_cache()
 
     override_path.write_text(
@@ -3151,6 +3243,8 @@ def test_scanner_rest_quote_budget_hot_reloads_operator_override_file(tmp_path, 
                 "export KORSTOCKSCAN_SCANNER_HEAVY_EVAL_RECHECK_FRESH_SEC=6",
                 "export KORSTOCKSCAN_SCANNER_FULL_EVAL_MAX_PER_LOOP=18",
                 "export KORSTOCKSCAN_SCANNER_FULL_EVAL_BACKLOG_EXTRA_PER_LOOP=10",
+                "export KORSTOCKSCAN_SCANNER_FULL_EVAL_AUTO_PRESSURE_ENABLED=false",
+                "export KORSTOCKSCAN_SCANNER_FULL_EVAL_AUTO_PRESSURE_MIN_LIMIT=9",
                 "export KORSTOCKSCAN_BUY_SCORE_THRESHOLD=1",
             ]
         )
@@ -3169,6 +3263,8 @@ def test_scanner_rest_quote_budget_hot_reloads_operator_override_file(tmp_path, 
     assert kiwoom_sniper_v2._scanner_heavy_eval_recheck_fresh_sec() == 6.0
     assert kiwoom_sniper_v2._scanner_full_eval_max_per_loop() == 18
     assert kiwoom_sniper_v2._scanner_full_eval_backlog_extra_per_loop() == 10
+    assert kiwoom_sniper_v2._scanner_full_eval_auto_pressure_enabled() is False
+    assert kiwoom_sniper_v2._scanner_full_eval_auto_pressure_min_limit(28) == 9
     assert kiwoom_sniper_v2._scanner_full_eval_effective_limit({"scanner_watching_count": 40}) == 28
     assert (
         kiwoom_sniper_v2._scanner_hot_runtime_override_value("KORSTOCKSCAN_BUY_SCORE_THRESHOLD")
@@ -3184,6 +3280,8 @@ def test_scanner_rest_quote_budget_hot_reloads_operator_override_file(tmp_path, 
                 "export KORSTOCKSCAN_SCANNER_HEAVY_EVAL_RECHECK_FRESH_SEC=2",
                 "export KORSTOCKSCAN_SCANNER_FULL_EVAL_MAX_PER_LOOP=9",
                 "export KORSTOCKSCAN_SCANNER_FULL_EVAL_BACKLOG_EXTRA_PER_LOOP=3",
+                "export KORSTOCKSCAN_SCANNER_FULL_EVAL_AUTO_PRESSURE_ENABLED=true",
+                "export KORSTOCKSCAN_SCANNER_FULL_EVAL_AUTO_PRESSURE_MIN_LIMIT=5",
             ]
         )
         + "\n",
@@ -3197,8 +3295,11 @@ def test_scanner_rest_quote_budget_hot_reloads_operator_override_file(tmp_path, 
     assert kiwoom_sniper_v2._scanner_heavy_eval_recheck_fresh_sec() == 2.0
     assert kiwoom_sniper_v2._scanner_full_eval_max_per_loop() == 9
     assert kiwoom_sniper_v2._scanner_full_eval_backlog_extra_per_loop() == 3
+    assert kiwoom_sniper_v2._scanner_full_eval_auto_pressure_enabled() is True
+    assert kiwoom_sniper_v2._scanner_full_eval_auto_pressure_min_limit(12) == 5
     assert kiwoom_sniper_v2._scanner_full_eval_effective_limit({"scanner_watching_count": 40}) == 12
     _reset_scanner_hot_override_cache()
+    kiwoom_sniper_v2._reset_scanner_full_eval_pressure_state()
 
 
 def test_non_rising_ws_misses_do_not_consume_positive_rest_quote_slot(monkeypatch):

@@ -812,3 +812,35 @@
 - blocker downsizing은 보류한다. 직접 blocker가 AI score/strength/liquidity로 보이지만 stale 평가가 43/49개에 섞여 있어, 실매매 threshold를 낮추면 stale submit 또는 broker/order guard 우회 위험이 있다.
 - real submit은 0건이고 falling real submitted도 0건이라, 하락 후 submit 개선/손절/MFE 업데이트/scale-in 복구 검증 대상은 발생하지 않았다.
 - p2 runtime pressure relief는 최종 hot value `KORSTOCKSCAN_SCANNER_FULL_EVAL_MAX_PER_LOOP=8`, `KORSTOCKSCAN_SCANNER_FULL_EVAL_BACKLOG_EXTRA_PER_LOOP=2`로 남겨둔다. rollback은 각각 `12`, `4`다.
+
+## 20. hot runtime pressure relief 자동관측/자동조절 구현
+
+작성 시각: `2026-06-29 KST`
+
+### 20.1 변경 목록
+
+- `src/engine/kiwoom_sniper_v2.py`
+  - `SCANNER_FULL_EVAL_PRESSURE` governor를 추가했다.
+  - `LOOP_METRICS`의 `loop_elapsed_ms`를 관측해 다음 loop의 scanner full-eval effective limit을 메모리 상태로 자동 감압/회복한다.
+  - hot override 가능 env:
+    - `KORSTOCKSCAN_SCANNER_FULL_EVAL_AUTO_PRESSURE_ENABLED`
+    - `KORSTOCKSCAN_SCANNER_FULL_EVAL_AUTO_PRESSURE_MIN_LIMIT`
+    - `KORSTOCKSCAN_SCANNER_FULL_EVAL_AUTO_PRESSURE_MS`
+    - `KORSTOCKSCAN_SCANNER_FULL_EVAL_AUTO_RELIEF_MS`
+    - `KORSTOCKSCAN_SCANNER_FULL_EVAL_AUTO_COOLDOWN_SEC`
+    - `KORSTOCKSCAN_SCANNER_FULL_EVAL_AUTO_RECOVERY_STREAK`
+- `src/tests/test_kiwoom_sniper_market_regime_runtime.py`
+  - 감압, 점진 회복, disabled base 유지 테스트를 추가했다.
+
+### 20.2 권한/충돌 검토
+
+- 이 변경은 scanner full-eval 관측 예산만 조절한다.
+- BUY threshold, AI score threshold, 주문가, 주문수량, provider route, broker/account/order/quantity/cooldown guard, stop/exit 로직은 변경하지 않는다.
+- operator runtime override 파일은 직접 수정하지 않는다. hot 값은 읽기만 하고, 자동 감압 상태는 프로세스 메모리에만 둔다.
+- buy window가 아닐 때는 pressure streak/recovery streak를 진행하지 않아 감시 외 시간의 loop 지연이 자동 감압 근거가 되지 않는다.
+- 기존 p2 hot override `FULL_EVAL_MAX_PER_LOOP=8`, `BACKLOG_EXTRA_PER_LOOP=2`와 충돌하지 않는다. governor는 해당 base 위에서 일시적으로 아래 방향만 감압하고, 정상 loop가 누적되면 base까지 회복한다.
+
+### 20.3 운영 판정
+
+- 반복 수동감시 후 값 조정이 필요한 구간은 자동 governor가 우선 흡수한다.
+- 런타임에 더 강한 감압/완화가 필요하면 위 hot override env만 바꾸면 되고, threshold/order/provider/bot authority 변경으로 해석하지 않는다.
