@@ -1,0 +1,61 @@
+# Swing Lifecycle Bucket Discovery 2026-06-29
+
+## Summary
+- runtime_effect: `False`
+- decision_authority: `swing_ldm_bucket_discovery_sim_auto`
+- source_contract_status: `pass`
+- surfaced_candidate_count: `647`
+- sim_auto_approved_count: `18`
+- sim_auto_reviewed_candidate_count: `18`
+- sim_auto_unreviewed_candidate_count: `0`
+- sim_auto_downgraded_by_review_count: `0`
+- sim_auto_review_shard_count: `1`
+- swing_lifecycle_flow_bucket_count: `212`
+- complete_flow_count: `1121`
+- incomplete_flow_count: `7698`
+- identity_join_rate: `1.0`
+- complete_flow_rate: `0.127112`
+- join_contract_blocked: `False`
+- flow_sim_auto_approved_count: `18`
+- stage_only_source_only_count: `410`
+- code_patch_required_count: `62`
+- implemented_source_quality_waiting_sample_count: `0`
+- implemented_source_quality_waiting_sample_candidate_count: `0`
+- implemented_source_quality_waiting_sample_workorder_count: `0`
+- implemented_source_quality_waiting_sample_total_count: `0`
+- raw_implemented_source_quality_waiting_sample_count: `47`
+- ai_review_augmentation_point_count: `4`
+- ai_review_orchestration_policy: `critical_sim_policy_first`
+- ai_review_optional_deferred_shard_count: `2`
+- ai_review_optional_deferred_candidate_count: `47`
+- ai_review_id_repair_count: `1`
+- human_intervention_required: `False`
+- warnings: `[]`
+
+## Surfaced Candidates
+- `swing_ldm_lifecycle_flow_combo_swing_lifecycle_flow_entry_swing_entry_entry_bucket_attribution_swing_strategy_discovery_s_dbcdc8c839` state=`sim_auto_approved` stage=`lifecycle_flow` route=`next_preopen_swing_sim_policy_input`
+- `swing_ldm_lifecycle_flow_combo_swing_lifecycle_flow_entry_swing_entry_entry_bucket_attribution_swing_strategy_discovery_s_d766d7a8b3` state=`sim_auto_approved` stage=`lifecycle_flow` route=`next_preopen_swing_sim_policy_input`
+- `swing_ldm_lifecycle_flow_combo_swing_lifecycle_flow_entry_swing_entry_entry_bucket_attribution_swing_strategy_discovery_s_1b4afcfd76` state=`sim_auto_approved` stage=`lifecycle_flow` route=`next_preopen_swing_sim_policy_input`
+- `swing_ldm_lifecycle_flow_combo_swing_lifecycle_flow_entry_swing_entry_entry_bucket_attribution_swing_strategy_discovery_s_17be04825a` state=`sim_auto_approved` stage=`lifecycle_flow` route=`next_preopen_swing_sim_policy_input`
+- `swing_ldm_lifecycle_flow_combo_swing_lifecycle_flow_entry_swing_entry_entry_bucket_attribution_swing_strategy_discovery_s_53dd26ec9c` state=`sim_auto_approved` stage=`lifecycle_flow` route=`next_preopen_swing_sim_policy_input`
+- `swing_ldm_lifecycle_flow_combo_swing_lifecycle_flow_entry_swing_entry_entry_bucket_attribution_swing_strategy_discovery_s_1d2a773521` state=`sim_auto_approved` stage=`lifecycle_flow` route=`next_preopen_swing_sim_policy_input`
+- `swing_ldm_lifecycle_flow_combo_swing_lifecycle_flow_entry_swing_entry_entry_bucket_attribution_swing_strategy_discovery_s_d27ece90a1` state=`sim_auto_approved` stage=`lifecycle_flow` route=`next_preopen_swing_sim_policy_input`
+- `swing_ldm_lifecycle_flow_combo_swing_lifecycle_flow_entry_swing_entry_entry_bucket_attribution_swing_strategy_discovery_s_4171503214` state=`sim_auto_approved` stage=`lifecycle_flow` route=`next_preopen_swing_sim_policy_input`
+- `swing_ldm_lifecycle_flow_combo_swing_lifecycle_flow_entry_swing_entry_entry_bucket_attribution_swing_strategy_discovery_s_b0984ff4fa` state=`sim_auto_approved` stage=`lifecycle_flow` route=`next_preopen_swing_sim_policy_input`
+- `swing_ldm_lifecycle_flow_combo_swing_lifecycle_flow_entry_swing_entry_entry_bucket_attribution_swing_strategy_discovery_s_435fd1c339` state=`sim_auto_approved` stage=`lifecycle_flow` route=`next_preopen_swing_sim_policy_input`
+- `swing_ldm_lifecycle_flow_combo_swing_lifecycle_flow_entry_swing_entry_entry_bucket_attribution_swing_strategy_discovery_s_9a16bc8153` state=`sim_auto_approved` stage=`lifecycle_flow` route=`next_preopen_swing_sim_policy_input`
+- `swing_ldm_lifecycle_flow_combo_swing_lifecycle_flow_entry_swing_entry_entry_bucket_attribution_swing_strategy_discovery_s_c515f99b98` state=`sim_auto_approved` stage=`lifecycle_flow` route=`next_preopen_swing_sim_policy_input`
+- `swing_ldm_lifecycle_flow_combo_swing_lifecycle_flow_entry_swing_entry_entry_bucket_attribution_swing_strategy_discovery_s_7d92990310` state=`sim_auto_approved` stage=`lifecycle_flow` route=`next_preopen_swing_sim_policy_input`
+- `swing_ldm_lifecycle_flow_combo_swing_lifecycle_flow_entry_swing_entry_entry_bucket_attribution_swing_strategy_discovery_s_5ea568a2cc` state=`sim_auto_approved` stage=`lifecycle_flow` route=`next_preopen_swing_sim_policy_input`
+- `swing_ldm_lifecycle_flow_combo_swing_lifecycle_flow_entry_swing_entry_entry_bucket_attribution_swing_strategy_discovery_s_adae86bbd6` state=`sim_auto_approved` stage=`lifecycle_flow` route=`next_preopen_swing_sim_policy_input`
+- `swing_ldm_lifecycle_flow_combo_swing_lifecycle_flow_entry_swing_entry_entry_bucket_attribution_swing_strategy_discovery_s_ac21ef8125` state=`sim_auto_approved` stage=`lifecycle_flow` route=`next_preopen_swing_sim_policy_input`
+- `swing_ldm_lifecycle_flow_combo_swing_lifecycle_flow_entry_swing_entry_entry_bucket_attribution_swing_strategy_discovery_s_989c398358` state=`sim_auto_approved` stage=`lifecycle_flow` route=`next_preopen_swing_sim_policy_input`
+- `swing_ldm_lifecycle_flow_combo_swing_lifecycle_flow_entry_swing_entry_entry_bucket_attribution_swing_strategy_discovery_s_da5b17ed0a` state=`sim_auto_approved` stage=`lifecycle_flow` route=`next_preopen_swing_sim_policy_input`
+- `swing_bucket_lifecycle_flow_combo_swing_lifecycle_flow_entry_swing_entry_entry_bucket_attribution_swing_strategy_discovery_4bd1f39bc09b` state=`source_only_keep_collecting` stage=`lifecycle_flow` route=`postclose_source_quality_or_sample_collection`
+- `swing_bucket_lifecycle_flow_combo_swing_lifecycle_flow_entry_swing_entry_entry_bucket_attribution_swing_strategy_discovery_9e6b29c2ed60` state=`source_only_keep_collecting` stage=`lifecycle_flow` route=`postclose_source_quality_or_sample_collection`
+
+## AI Review Augmentation Points
+- `swing_ldm_bucket_semantic_two_pass_review` stage=`bucket_discovery` route=`keep_source_only`
+- `swing_ldm_source_contract_ai_audit` stage=`source_contract` route=`keep_source_only`
+- `swing_ldm_sim_policy_handoff_ai_audit` stage=`sim_policy_handoff` route=`code_improvement_workorder`
+- `swing_ldm_source_quality_gap_ai_triage` stage=`source_quality` route=`keep_source_only`
