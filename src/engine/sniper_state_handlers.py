@@ -7491,6 +7491,7 @@ def _scanner_active_rising_recheck_reason(stock, *, now_ts: float | None = None)
         ("_scanner_rising_cooldown_recheck_after_epoch", "cooldown_recheck_pending"),
         ("_scanner_rising_cutoff_recheck_after_epoch", "next_buy_window_recheck_pending"),
         ("_scanner_rising_ws_gap_priority_recheck_after_epoch", "ws_gap_recovery_deferred_priority"),
+        ("_scanner_rising_terminal_hardgate_recheck_after_epoch", "terminal_hardgate_recheck_pending"),
     )
     for epoch_key, default_reason in recheck_keys:
         recheck_epoch = _safe_float(stock.get(epoch_key), 0.0)
@@ -7509,6 +7510,8 @@ def _scanner_active_full_eval_budget_source(stock, *, now_ts: float | None = Non
         return "not_applicable_cutoff"
     if reason == "ws_gap_recovery_deferred_priority":
         return "not_applicable_ws_gap"
+    if reason == "terminal_hardgate_recheck_pending":
+        return "not_applicable_terminal_hardgate"
     return stock.get("_scanner_full_eval_budget_source")
 
 

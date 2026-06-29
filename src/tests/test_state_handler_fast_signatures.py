@@ -2540,6 +2540,39 @@ def test_emit_scanner_watching_runtime_skip_uses_active_epoch_reason_over_stale_
     assert fields["scanner_full_eval_budget_source"] == "not_applicable_cooldown"
 
 
+def test_emit_scanner_watching_runtime_skip_keeps_terminal_hardgate_recheck_state(monkeypatch):
+    emitted = []
+    monkeypatch.setattr(
+        handlers,
+        "emit_pipeline_event",
+        lambda pipeline, name, code, stage, *, record_id=None, fields=None: emitted.append(fields or {}),
+    )
+    stock = {
+        "id": 82,
+        "name": "PROMOTED",
+        "code": "000082",
+        "status": "WATCHING",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "entry_armed_at_epoch": 1000.0,
+        "price_delta_since_first_seen_pct": "1.20",
+        "_scanner_rising_terminal_hardgate_recheck_after_epoch": 1150.0,
+    }
+
+    assert handlers.emit_scanner_watching_runtime_skip(
+        stock,
+        "000082",
+        skip_reason="blocked_strength_momentum",
+        now_ts=1100.0,
+        ws_data={},
+        throttle_sec=0,
+    )
+
+    fields = emitted[-1]
+    assert fields["rising_entry_relief_reason"] == "terminal_hardgate_recheck_pending"
+    assert fields["scanner_full_eval_budget_source"] == "not_applicable_terminal_hardgate"
+
+
 def test_emit_scanner_watching_runtime_skip_resets_terminal_eviction_memory(monkeypatch):
     monkeypatch.setattr(
         handlers,

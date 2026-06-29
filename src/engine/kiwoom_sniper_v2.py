@@ -243,6 +243,10 @@ _SCANNER_HOT_RUNTIME_OVERRIDE_KEYS = frozenset(
         "KORSTOCKSCAN_SCANNER_HEAVY_EVAL_RECHECK_FRESH_SEC",
         "KORSTOCKSCAN_SCANNER_FULL_EVAL_MAX_PER_LOOP",
         "KORSTOCKSCAN_SCANNER_FULL_EVAL_BACKLOG_EXTRA_PER_LOOP",
+        "KORSTOCKSCAN_SCANNER_RISING_TERMINAL_HARDGATE_RECHECK_ENABLED",
+        "KORSTOCKSCAN_SCANNER_RISING_TERMINAL_HARDGATE_RECHECK_DELAY_SEC",
+        "KORSTOCKSCAN_SCANNER_RISING_TERMINAL_HARDGATE_RECHECK_MAX_ATTEMPTS",
+        "KORSTOCKSCAN_SCANNER_FIFO_NEW_PROMOTION_GRACE_SEC",
     }
 )
 _SCANNER_OPERATOR_RUNTIME_OVERRIDE_PATH = (
@@ -261,7 +265,7 @@ _SCALPING_DYNAMIC_WATCH_CAP_STATE = {
     "pressure_streak": 0,
     "relief_streak": 0,
 }
-SCANNER_WATCH_EVICTION_POLICY_VERSION = "scalping_scanner_watch_eviction_v4"
+SCANNER_WATCH_EVICTION_POLICY_VERSION = "scalping_scanner_watch_eviction_v5"
 SCANNER_WATCH_EVICTION_TERMINAL_MIN_COUNT = 2
 SCANNER_WATCH_EVICTION_PREFILTER_HARDGATE_STAGES = {
     "blocked_strength_momentum",
@@ -276,6 +280,9 @@ SCANNER_WATCH_EVICTION_NO_TRADE_MIN_COUNT = 2
 SCANNER_WATCH_EVICTION_NO_TRADE_MAX_PER_LOOP = 4
 SCANNER_WATCH_EVICTION_AFTER_BUY_WINDOW_MIN_COUNT = 2
 SCANNER_WATCH_EVICTION_AFTER_BUY_WINDOW_MIN_AGE_SEC = 60.0
+SCANNER_WATCH_EVICTION_RISING_TERMINAL_RECHECK_DELAY_SEC = 5.0
+SCANNER_WATCH_EVICTION_RISING_TERMINAL_RECHECK_MAX_ATTEMPTS = 2
+SCANNER_FIFO_NEW_PROMOTION_GRACE_SEC = 60.0
 KRX_OPEN_WATCHLIST_RESET_POLICY_VERSION = "krx_open_watchlist_reset_v1"
 SCANNER_WATCH_EVICTION_SOURCE_QUALITY_REASONS = {
     "insufficient_history",
@@ -1175,6 +1182,41 @@ def _scanner_after_buy_window_source_quality_eviction_min_age_sec():
     return max(10.0, min(value, 900.0))
 
 
+def _scanner_rising_terminal_hardgate_recheck_enabled():
+    raw = _scanner_hot_or_env_value("KORSTOCKSCAN_SCANNER_RISING_TERMINAL_HARDGATE_RECHECK_ENABLED")
+    text = str(raw).strip().lower()
+    if text == "":
+        return True
+    return text in {"1", "true", "yes", "y", "on"}
+
+
+def _scanner_rising_terminal_hardgate_recheck_delay_sec():
+    raw = _scanner_hot_or_env_value("KORSTOCKSCAN_SCANNER_RISING_TERMINAL_HARDGATE_RECHECK_DELAY_SEC")
+    try:
+        value = float(str(raw).strip()) if str(raw).strip() else SCANNER_WATCH_EVICTION_RISING_TERMINAL_RECHECK_DELAY_SEC
+    except Exception:
+        value = SCANNER_WATCH_EVICTION_RISING_TERMINAL_RECHECK_DELAY_SEC
+    return max(1.0, min(value, 60.0))
+
+
+def _scanner_rising_terminal_hardgate_recheck_max_attempts():
+    raw = _scanner_hot_or_env_value("KORSTOCKSCAN_SCANNER_RISING_TERMINAL_HARDGATE_RECHECK_MAX_ATTEMPTS")
+    try:
+        value = int(str(raw).strip()) if str(raw).strip() else SCANNER_WATCH_EVICTION_RISING_TERMINAL_RECHECK_MAX_ATTEMPTS
+    except Exception:
+        value = SCANNER_WATCH_EVICTION_RISING_TERMINAL_RECHECK_MAX_ATTEMPTS
+    return max(0, min(value, 10))
+
+
+def _scanner_fifo_new_promotion_grace_sec():
+    raw = _scanner_hot_or_env_value("KORSTOCKSCAN_SCANNER_FIFO_NEW_PROMOTION_GRACE_SEC")
+    try:
+        value = float(str(raw).strip()) if str(raw).strip() else SCANNER_FIFO_NEW_PROMOTION_GRACE_SEC
+    except Exception:
+        value = SCANNER_FIFO_NEW_PROMOTION_GRACE_SEC
+    return max(0.0, min(value, 300.0))
+
+
 def _scanner_scalping_buy_window_closed(now_ts):
     try:
         now_t = datetime.fromtimestamp(float(now_ts)).time()
@@ -1238,6 +1280,13 @@ def _scanner_runtime_target_event_fields(payload, *, outcome, reason, target=Non
         "broker_order_forbidden": True,
         "runtime_target_attach_outcome": outcome,
         "runtime_target_attach_reason": reason,
+        "scanner_attach_capacity_cap": payload.get("scanner_attach_capacity_cap")
+        or "not_applicable_scanner_attach_capacity_cap",
+        "scanner_attach_capacity_watching_count": payload.get("scanner_attach_capacity_watching_count")
+        or "not_applicable_scanner_attach_capacity_watching_count",
+        "scanner_attach_capacity_candidate_overflow": payload.get("scanner_attach_capacity_candidate_overflow")
+        if payload.get("scanner_attach_capacity_candidate_overflow") is not None
+        else "not_applicable_scanner_attach_capacity_candidate_overflow",
         "runtime_record_id": payload.get("record_id") or target.get("id") or "not_applicable_runtime_record_id",
         "scanner_promotion_id": payload.get("scanner_promotion_id") or "not_applicable_scanner_promotion_id",
         "scanner_promotion_reason": payload.get("scanner_promotion_reason") or "not_applicable_scanner_promotion_reason",
@@ -1509,6 +1558,39 @@ def _scanner_watch_eviction_decision_from_terminal(target, *, now_ts):
             "ws_recovery_outcome": "not_applicable_ws_recovery_outcome",
             "observed_epoch": f"{float(now_ts):.3f}",
         }
+    rising_terminal_recheck_allowed = (
+        hardgate_prefilter
+        and _scanner_rising_terminal_hardgate_recheck_enabled()
+        and _scanner_is_rising_entry_relief_candidate(target)
+        and not _scanner_scalping_buy_window_closed(now_ts)
+        and attempt_count <= _scanner_rising_terminal_hardgate_recheck_max_attempts()
+    )
+    if rising_terminal_recheck_allowed:
+        delay_sec = _scanner_rising_terminal_hardgate_recheck_delay_sec()
+        _scanner_set_rising_recheck(
+            target,
+            kind="terminal_hardgate",
+            after_epoch=float(now_ts) + delay_sec,
+            reason="terminal_hardgate_recheck_pending",
+        )
+        return {
+            "should_evict": False,
+            "eviction_reason": "terminal_hardgate_recheck_pending",
+            "eviction_attempt_count": attempt_count,
+            "terminal_stage": stage,
+            "terminal_reason": reason,
+            "fresh_input_confirmed": True,
+            "stale_first_seen_epoch": "not_applicable_stale_first_seen_epoch",
+            "stale_age_sec": "not_applicable_stale_age_sec",
+            "ws_recovery_outcome": "not_applicable_ws_recovery_outcome",
+            "rising_entry_relief_eligible": True,
+            "rising_entry_relief_reason": "terminal_hardgate_recheck_pending",
+            "scanner_positive_delta_pct": round(_scanner_positive_delta_value(target), 4),
+            "scanner_full_eval_budget_source": "not_applicable_terminal_hardgate",
+            "terminal_hardgate_recheck_delay_sec": delay_sec,
+            "terminal_hardgate_recheck_max_attempts": _scanner_rising_terminal_hardgate_recheck_max_attempts(),
+            "observed_epoch": f"{float(now_ts):.3f}",
+        }
     return {
         "should_evict": hardgate_prefilter or attempt_count >= SCANNER_WATCH_EVICTION_TERMINAL_MIN_COUNT,
         "eviction_reason": "scanner_hardgate_prefilter" if hardgate_prefilter else "terminal_blocker_repeated",
@@ -1584,9 +1666,12 @@ def _scanner_watch_eviction_decision_from_stale(target, *, now_ts, stale_reason,
         not after_buy_window_source_quality_expired
         and _scanner_rising_ws_gap_priority_recovery_enabled()
         and _scanner_is_rising_entry_relief_candidate(target)
-        and not (
-            attempt_count >= SCANNER_WATCH_EVICTION_STALE_MIN_COUNT
-            and stale_age_sec >= SCANNER_WATCH_EVICTION_STALE_MIN_AGE_SEC
+        and (
+            is_source_quality_unresolved
+            or not (
+                attempt_count >= SCANNER_WATCH_EVICTION_STALE_MIN_COUNT
+                and stale_age_sec >= SCANNER_WATCH_EVICTION_STALE_MIN_AGE_SEC
+            )
         )
     ):
         _scanner_set_rising_recheck(
@@ -2096,6 +2181,7 @@ def _scanner_rising_recheck_pending(target, now_ts=None):
         _safe_float(target.get("_scanner_rising_cooldown_recheck_after_epoch"), 0.0),
         _safe_float(target.get("_scanner_rising_cutoff_recheck_after_epoch"), 0.0),
         _safe_float(target.get("_scanner_rising_ws_gap_priority_recheck_after_epoch"), 0.0),
+        _safe_float(target.get("_scanner_rising_terminal_hardgate_recheck_after_epoch"), 0.0),
     )
     if after_epoch <= 0.0:
         return False
@@ -2395,19 +2481,27 @@ def _update_scalping_dynamic_watch_cap(loop_elapsed_ms, *, now_ts=None, buy_time
 
 def _scalping_fifo_overflow_candidates(scalp_fifo_targets, now_ts):
     """Prefer expiring non-scanner and non-rising scanner rows before rising scanner promotions."""
+    scanner_new_promotion_grace_sec = _scanner_fifo_new_promotion_grace_sec()
 
     def _overflow_rank(target):
         if not _is_scanner_watching_target(target):
             return (0, _runtime_added_time_for_target(target, now_ts=now_ts))
+        armed_epoch = _runtime_added_time_for_target(target, now_ts=now_ts)
+        if (
+            scanner_new_promotion_grace_sec > 0.0
+            and armed_epoch > 0.0
+            and float(now_ts) - armed_epoch < scanner_new_promotion_grace_sec
+        ):
+            return (5, armed_epoch)
         last_full_eval = _scanner_last_full_eval_epoch(target)
         rising = _scanner_positive_delta_value(target) >= _scanner_rising_entry_min_delta_pct()
         if not rising:
             if last_full_eval > 0:
-                return (1, last_full_eval, _runtime_added_time_for_target(target, now_ts=now_ts))
-            return (2, _runtime_added_time_for_target(target, now_ts=now_ts))
+                return (1, last_full_eval, armed_epoch)
+            return (2, armed_epoch)
         if last_full_eval > 0:
-            return (3, last_full_eval, _runtime_added_time_for_target(target, now_ts=now_ts))
-        return (4, _runtime_added_time_for_target(target, now_ts=now_ts))
+            return (3, last_full_eval, armed_epoch)
+        return (4, armed_epoch)
 
     return sorted(list(scalp_fifo_targets or []), key=_overflow_rank)
 
@@ -3428,6 +3522,7 @@ def _scanner_pipeline_stock_snapshot(stock_value):
             "_scanner_rising_cooldown_recheck_after_epoch",
             "_scanner_rising_cutoff_recheck_after_epoch",
             "_scanner_rising_ws_gap_priority_recheck_after_epoch",
+            "_scanner_rising_terminal_hardgate_recheck_after_epoch",
             "_scanner_rising_recheck_reason",
         )
     }
@@ -3593,6 +3688,7 @@ def handle_scalping_scanner_promoted_target(payload):
                             and _is_scalping_fifo_target(target)
                         ]
                     ),
+                    "scanner_attach_capacity_candidate_overflow": True,
                 },
                 outcome="skipped",
                 reason="scalping_dynamic_watch_cap_capacity",
