@@ -1453,3 +1453,50 @@
   - 11:30 이후 시간창 기준으로 fresh-only threshold 완화 근거는 아직 2건이라 약하다.
   - p7 이후 stale submit block은 새 샘플에서 해소됐고, submit 직전 병목은 liquidity guard로 이동했다.
   - 최신 diagnostic root priority는 `scanner_strength_history_or_stale_eval`이며, 다음 루프에서는 `scanner_fast_precheck_stability_pending`/`ws_snapshot_missing_or_zero`가 fresh-only에도 남는 원인을 먼저 본다.
+
+## 29. 13:25 dynamic watch cap hot-min 반영 p9
+
+작성 시각: `2026-06-29 13:25 KST`
+
+### 29.1 관측
+
+- p6/p8 이후 loop는 대체로 안정화됐지만 `SCALPING_SCANNER_PROMOTED_TARGET skipped ... reason=scalping_dynamic_watch_cap_capacity cap=8`가 반복됐다.
+- 13:20~13:25 주요 로그:
+  - `13:20:32 loop_elapsed_ms=5273.4 target_count=12 watching=8 holding=4`
+  - `13:21:55 loop_elapsed_ms=13843.1 target_count=12 watching=8 holding=4`
+  - `13:23:13 loop_elapsed_ms=21120.4 target_count=12 watching=8 holding=4`
+  - `13:24:20 loop_elapsed_ms=27210.1 target_count=12 watching=8 holding=4`
+  - 같은 구간 scanner attach skip은 계속 `cap=8`로 찍혔다.
+- p9 hot override:
+  - `KORSTOCKSCAN_SCALPING_WATCHING_DYNAMIC_MIN_ACTIVE=10`
+  - `KORSTOCKSCAN_SCALPING_WATCHING_DYNAMIC_PRESSURE_MS=12000`
+  - `KORSTOCKSCAN_SCALPING_WATCHING_DYNAMIC_RELIEF_MS=7000`
+  - `KORSTOCKSCAN_SCALPING_WATCHING_DYNAMIC_COOLDOWN_SEC=5`
+  - `KORSTOCKSCAN_SCALPING_WATCHING_DYNAMIC_RECOVERY_STREAK=2`
+- 문제:
+  - hot override parser는 마지막 값을 정상 파싱하지만, 기존 `_SCALPING_DYNAMIC_WATCH_CAP_STATE["effective_cap"]=8`이 새 `min_cap=10` 아래로 남아 있었다.
+  - `_scalping_dynamic_watch_cap_effective()`가 기존 effective cap을 새 min cap으로 clamp하지 않아 hot min 상승이 즉시 반영되지 않았다.
+
+### 29.2 코드 수정 p9
+
+- 파일:
+  - `src/engine/kiwoom_sniper_v2.py`
+  - `src/tests/test_kiwoom_sniper_market_regime_runtime.py`
+- 변경:
+  - `_scalping_dynamic_watch_cap_effective()`에서 기존 effective cap을 현재 base/min 범위로 clamp한다.
+  - hot override로 `DYNAMIC_MIN_ACTIVE`가 올라가면 기존 effective cap이 새 min 아래에 고정되지 않고 즉시 min으로 보정된다.
+- 권한/충돌:
+  - scanner watchlist pool pressure relief에 한정한다.
+  - BUY score, AI threshold, stale-submit, liquidity/latency, broker/account/order/quantity/cooldown guard, provider route, order price, hard/protect/emergency stop, scale-in guard는 변경하지 않는다.
+
+### 29.3 검증
+
+- `PYTHONPATH=. .venv/bin/python -m pytest src/tests/test_kiwoom_sniper_market_regime_runtime.py -k 'scalping_dynamic_watch_cap or scalping_scanner_promoted_target_blocks_capacity_replacement_when_hot_disabled or scalping_scanner_promoted_target_allows_higher_priority_capacity_candidate'`
+  - `6 passed, 149 deselected`
+- `PYTHONPATH=. .venv/bin/python -m py_compile src/engine/kiwoom_sniper_v2.py src/tests/test_kiwoom_sniper_market_regime_runtime.py`
+  - 통과
+
+### 29.4 런타임 후속
+
+- 코드 반영이 필요하므로 review gate 통과 후 `restart.flag` 방식으로 우아한 재기동한다.
+- 새 PID에서 p9 hot override가 반영되어 cap이 10 이상으로 올라가는지 확인한다.

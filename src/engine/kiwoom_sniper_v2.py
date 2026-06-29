@@ -2556,7 +2556,11 @@ def _scalping_dynamic_watch_cap_effective(base_cap):
     effective_cap = _safe_int(_SCALPING_DYNAMIC_WATCH_CAP_STATE.get("effective_cap"), 0)
     if effective_cap <= 0:
         return base_cap
-    return max(1, min(base_cap, effective_cap))
+    min_cap = _scalping_dynamic_watch_cap_min(base_cap)
+    clamped_cap = max(min_cap, min(base_cap, effective_cap))
+    if clamped_cap != effective_cap:
+        _SCALPING_DYNAMIC_WATCH_CAP_STATE["effective_cap"] = None if clamped_cap >= base_cap else clamped_cap
+    return clamped_cap
 
 
 def _scalping_fifo_max_active():

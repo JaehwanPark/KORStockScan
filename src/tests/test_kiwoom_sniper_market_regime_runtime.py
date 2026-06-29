@@ -1740,6 +1740,21 @@ def test_scalping_dynamic_watch_cap_recovers_gradually(monkeypatch, tmp_path):
     kiwoom_sniper_v2._reset_scalping_dynamic_watch_cap_state()
 
 
+def test_scalping_dynamic_watch_cap_clamps_existing_state_to_hot_min(monkeypatch, tmp_path):
+    _disable_scanner_operator_runtime_overrides(monkeypatch, tmp_path)
+    kiwoom_sniper_v2._reset_scalping_dynamic_watch_cap_state()
+    monkeypatch.setenv("KORSTOCKSCAN_SCALPING_WATCHING_MAX_ACTIVE", "16")
+    monkeypatch.setenv("KORSTOCKSCAN_SCALPING_WATCHING_DYNAMIC_CAP_ENABLED", "true")
+    monkeypatch.setenv("KORSTOCKSCAN_SCALPING_WATCHING_DYNAMIC_MIN_ACTIVE", "8")
+    kiwoom_sniper_v2._SCALPING_DYNAMIC_WATCH_CAP_STATE["effective_cap"] = 8
+
+    monkeypatch.setenv("KORSTOCKSCAN_SCALPING_WATCHING_DYNAMIC_MIN_ACTIVE", "10")
+
+    assert kiwoom_sniper_v2._scalping_fifo_max_active() == 10
+    assert kiwoom_sniper_v2._SCALPING_DYNAMIC_WATCH_CAP_STATE["effective_cap"] == 10
+    kiwoom_sniper_v2._reset_scalping_dynamic_watch_cap_state()
+
+
 def test_scalping_dynamic_watch_cap_disabled_keeps_base(monkeypatch, tmp_path):
     _disable_scanner_operator_runtime_overrides(monkeypatch, tmp_path)
     kiwoom_sniper_v2._reset_scalping_dynamic_watch_cap_state()
