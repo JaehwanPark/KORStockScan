@@ -4474,6 +4474,35 @@ def test_sell_side_open_time_block_defaults_off(monkeypatch):
     )
 
 
+def test_sell_side_open_time_block_enabled_without_schedule_does_not_block(monkeypatch):
+    monkeypatch.setattr(
+        kiwoom_orders,
+        "TRADING_RULES",
+        replace(
+            CONFIG,
+            SELL_SIDE_OPEN_TIME_BLOCK_ENABLED=True,
+            SELL_SIDE_OPEN_TIME_BLOCK_UNTIL_HHMM="",
+            SELL_SIDE_OPEN_TIME_BLOCK_SCOPE="",
+            SELL_WINDOWS="",
+            SCALPING_SELL_WINDOWS="",
+        ),
+    )
+    today = datetime.now().date()
+
+    assert not kiwoom_orders.is_sell_side_open_time_blocked(
+        datetime.combine(today, dt_time(9, 2, 59)),
+        reason_type="PROFIT_STAGNATION",
+        strategy="SCALPING",
+    )
+    fields = kiwoom_orders.get_sell_side_open_time_block_fields(
+        datetime.combine(today, dt_time(9, 2, 59)),
+        reason_type="PROFIT_STAGNATION",
+        strategy="SCALPING",
+    )
+    assert fields["sell_time_block_until_hhmm"] == ""
+    assert fields["sell_time_block_applied"] is False
+
+
 def test_sell_side_open_time_block_blocks_discretionary_scalping_until_0903(monkeypatch):
     monkeypatch.setattr(
         kiwoom_orders,

@@ -225,8 +225,8 @@ def test_trading_rules_sell_side_open_time_block_default_off_and_env_override(mo
     reloaded = importlib.reload(constants)
 
     assert reloaded.TRADING_RULES.SELL_SIDE_OPEN_TIME_BLOCK_ENABLED is False
-    assert reloaded.TRADING_RULES.SELL_SIDE_OPEN_TIME_BLOCK_UNTIL_HHMM == "09:03"
-    assert reloaded.TRADING_RULES.SELL_SIDE_OPEN_TIME_BLOCK_SCOPE == "discretionary_exit_only"
+    assert reloaded.TRADING_RULES.SELL_SIDE_OPEN_TIME_BLOCK_UNTIL_HHMM == ""
+    assert reloaded.TRADING_RULES.SELL_SIDE_OPEN_TIME_BLOCK_SCOPE == ""
     assert reloaded.TRADING_RULES.SELL_WINDOWS == ""
     assert reloaded.TRADING_RULES.SCALPING_SELL_WINDOWS == ""
 

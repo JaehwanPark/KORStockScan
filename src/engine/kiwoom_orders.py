@@ -852,20 +852,19 @@ def get_buy_side_time_block_label() -> str:
 
 def _sell_side_open_time_block_cutoff():
     raw_cutoff = str(
-        getattr(TRADING_RULES, "SELL_SIDE_OPEN_TIME_BLOCK_UNTIL_HHMM", "09:03") or ""
+        getattr(TRADING_RULES, "SELL_SIDE_OPEN_TIME_BLOCK_UNTIL_HHMM", "") or ""
     ).strip()
     try:
         hour_text, minute_text = raw_cutoff.split(":", 1)
         return datetime_time(hour=int(hour_text), minute=int(minute_text))
     except Exception:
-        return datetime_time(hour=9, minute=3)
+        return None
 
 
 def _sell_side_open_time_scope() -> str:
     return str(
-        getattr(TRADING_RULES, "SELL_SIDE_OPEN_TIME_BLOCK_SCOPE", "discretionary_exit_only")
-        or "discretionary_exit_only"
-    ).strip() or "discretionary_exit_only"
+        getattr(TRADING_RULES, "SELL_SIDE_OPEN_TIME_BLOCK_SCOPE", "") or ""
+    ).strip()
 
 
 def _sell_side_scope_applies_to_all() -> bool:
@@ -917,7 +916,10 @@ def is_sell_side_open_time_blocked(now=None, reason_type=None, strategy=None) ->
     current_time = current_kst.time()
     if _sell_windows():
         return not _inside_sell_window(current_time)
-    return current_kst.time() < _sell_side_open_time_block_cutoff()
+    cutoff = _sell_side_open_time_block_cutoff()
+    if cutoff is None:
+        return False
+    return current_kst.time() < cutoff
 
 
 def get_sell_side_open_time_block_label() -> str:
@@ -928,6 +930,8 @@ def get_sell_side_open_time_block_label() -> str:
             f"{start.strftime('%H:%M:%S')}-{end.strftime('%H:%M:%S')}" for start, end in sell_windows
         )
         return f"real SELL 허용 시간창 밖 차단 (KST {windows_text})"
+    if cutoff is None:
+        return "real SELL 시간 차단 설정 없음"
     return (
         "real SCALPING 장초반 discretionary 매도 시간 차단 "
         f"(KST {cutoff.strftime('%H:%M')} 전)"
@@ -946,14 +950,14 @@ def get_sell_side_open_time_block_fields(now=None, reason_type=None, strategy=No
     current_time = current_kst.time()
     sell_windows = _sell_windows()
     inside_sell_window = _inside_sell_window(current_time) if sell_windows else True
-    before_cutoff = current_time < cutoff
+    before_cutoff = current_time < cutoff if cutoff is not None else False
     blocked_by_time = not inside_sell_window if sell_windows else before_cutoff
     applied = bool(enabled and strategy_allowed and not passthrough_reason and blocked_by_time)
     return {
         "runtime_family": "sell_side_open_time_block_runtime",
         "policy_version": "sell_side_open_time_block_v1",
         "sell_time_block_enabled": enabled,
-        "sell_time_block_until_hhmm": cutoff.strftime("%H:%M"),
+        "sell_time_block_until_hhmm": cutoff.strftime("%H:%M") if cutoff is not None else "",
         "sell_time_block_scope": _sell_side_open_time_scope(),
         "sell_windows": ",".join(
             f"{start.strftime('%H:%M:%S')}-{end.strftime('%H:%M:%S')}" for start, end in sell_windows

@@ -193,10 +193,10 @@ class TradingConfig:
     SCALPING_MIN_ONE_SHARE_FLOOR_ENABLED: bool = True  # 비중 예산 초과 시 주문가능금액 내 최소 1주 허용
     BUY_SIDE_TIME_BLOCK_ENABLED: bool = True  # 신규 매수/추가매수 브로커 제출 시간 차단
     BUY_SIDE_TIME_BLOCK_UNTIL_HHMM: str = "09:10"  # KST 기준, 이 시각 전 BUY 제출 차단
-    SELL_SIDE_OPEN_TIME_BLOCK_ENABLED: bool = False  # real SCALPING discretionary SELL 장초반 제출 차단
-    SELL_SIDE_OPEN_TIME_BLOCK_UNTIL_HHMM: str = "09:03"  # KST 기준, 이 시각 전 SELL 제출 차단
-    SELL_SIDE_OPEN_TIME_BLOCK_SCOPE: str = "discretionary_exit_only"
-    SELL_WINDOWS: str = ""  # 설정 시 real SELL 제출 허용 시간창. 비어 있으면 기존 open-time block 사용
+    SELL_SIDE_OPEN_TIME_BLOCK_ENABLED: bool = False  # real SELL 시간 차단은 env/runtime override로만 명시 활성화
+    SELL_SIDE_OPEN_TIME_BLOCK_UNTIL_HHMM: str = ""  # enabled=true일 때만 쓰는 cutoff; 기본 정책값 없음
+    SELL_SIDE_OPEN_TIME_BLOCK_SCOPE: str = ""  # enabled=true일 때만 쓰는 scope; 기본 정책값 없음
+    SELL_WINDOWS: str = ""  # 설정 시 real SELL 제출 허용 시간창
     SCALPING_SELL_WINDOWS: str = ""  # legacy alias for SELL_WINDOWS
 
     # 💡 [신규 추가] 스윙 AI 동적 비중 조절용 (Min~Max)
