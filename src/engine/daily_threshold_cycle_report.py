@@ -1518,6 +1518,16 @@ def _summarize_calibration_report_sources(target_date: str) -> dict:
     buy_ratios = buy_session.get("ratios") if isinstance(buy_session.get("ratios"), dict) else {}
     buy_classification = buy_funnel_sentinel.get("classification") if isinstance(buy_funnel_sentinel, dict) else {}
     buy_classification = buy_classification if isinstance(buy_classification, dict) else {}
+    buy_submit_drought_root = (
+        buy_classification.get("submit_drought_root_cause")
+        if isinstance(buy_classification.get("submit_drought_root_cause"), dict)
+        else {}
+    )
+    buy_latency_root_counts = (
+        buy_submit_drought_root.get("latency_root_cause_counts")
+        if isinstance(buy_submit_drought_root.get("latency_root_cause_counts"), dict)
+        else {}
+    )
     wait_metrics = wait6579_ev.get("metrics") if isinstance(wait6579_ev.get("metrics"), dict) else {}
     wait_approval = wait6579_ev.get("approval_gate") if isinstance(wait6579_ev.get("approval_gate"), dict) else {}
     wait_rows = wait6579_ev.get("rows") if isinstance(wait6579_ev.get("rows"), list) else []
@@ -1701,6 +1711,19 @@ def _summarize_calibration_report_sources(target_date: str) -> dict:
             "sentinel_secondary": buy_classification.get("secondary")
             if isinstance(buy_classification.get("secondary"), list)
             else [],
+            "sentinel_matches": buy_classification.get("matches")
+            if isinstance(buy_classification.get("matches"), list)
+            else [],
+            "latency_root_cause_counts": buy_latency_root_counts,
+            "latency_spread_microstructure_guard_count": _safe_int(
+                buy_latency_root_counts.get("spread_microstructure_guard"), 0
+            )
+            or 0,
+            "latency_spread_or_slippage_guard_count": _safe_int(
+                buy_latency_root_counts.get("spread_or_slippage_guard"), 0
+            )
+            or 0,
+            "latency_quote_stale_count": _safe_int(buy_latency_root_counts.get("quote_stale"), 0) or 0,
             "wait6579_total_candidates": _safe_int(wait_metrics.get("total_candidates"), 0) or 0,
             "wait6579_entered_attempts": _safe_int(wait_metrics.get("entered_attempts"), 0) or 0,
             "wait6579_missed_attempts": _safe_int(wait_metrics.get("missed_attempts"), 0) or 0,

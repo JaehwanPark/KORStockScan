@@ -286,6 +286,39 @@ def test_latency_drought_classifies_ws_jitter_as_quote_stale(monkeypatch, tmp_pa
     assert root_cause["unknown_latency_reason_count"] == 0
 
 
+def test_latency_drought_splits_orderbook_microstructure_spread(monkeypatch, tmp_path):
+    monkeypatch.setattr(sentinel, "DATA_DIR", tmp_path)
+    rows = []
+    for idx in range(5):
+        rows.append(_event("2026-05-06", f"10:0{idx}:00", "ai_confirmed", record_id=idx))
+        rows.append(_event("2026-05-06", f"10:0{idx}:10", "budget_pass", record_id=idx))
+        rows.append(
+            _event(
+                "2026-05-06",
+                f"10:0{idx}:20",
+                "latency_block",
+                record_id=idx,
+                fields={
+                    "reason": "latency_state_danger",
+                    "latency_danger_reasons": "ws_age_too_high",
+                    "orderbook_micro_spread_ticks": "6",
+                    "orderbook_micro_ofi_bucket_key": "spread=wide|price=high|depth=normal|sample=rich",
+                },
+            )
+        )
+    _write_events(tmp_path, "2026-05-06", rows)
+
+    report = sentinel.build_buy_funnel_sentinel_report(
+        "2026-05-06",
+        as_of=sentinel._parse_as_of("2026-05-06", "10:10:00"),
+    )
+
+    root_cause = report["classification"]["submit_drought_root_cause"]
+    assert root_cause["latency_root_cause_counts"]["quote_stale"] == 5
+    assert root_cause["latency_root_cause_counts"]["spread_microstructure_guard"] == 5
+    assert root_cause["unknown_latency_reason_count"] == 0
+
+
 def test_latency_drought_classifies_other_danger_as_order_rtt_guard(monkeypatch, tmp_path):
     monkeypatch.setattr(sentinel, "DATA_DIR", tmp_path)
     rows = []

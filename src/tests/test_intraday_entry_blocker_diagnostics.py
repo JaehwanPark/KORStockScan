@@ -102,7 +102,7 @@ def test_build_report_surfaces_rising_promoted_without_real_submit(tmp_path):
     } in report["blocker_taxonomy"]["suppressed_non_actionable_counts"]
 
 
-def test_build_report_treats_latency_block_as_latest_pre_submit_quality_guard(tmp_path):
+def test_build_report_suppresses_known_latency_guard_as_resolved_non_major(tmp_path):
     path = tmp_path / "pipeline_events_2026-06-23.jsonl"
     rows = [
         _event(
@@ -115,22 +115,17 @@ def test_build_report_treats_latency_block_as_latest_pre_submit_quality_guard(tm
         _event(
             "475150",
             "SK이터닉스",
-            "scalping_scanner_watching_runtime_skip",
-            {
-                "price_delta_since_first_seen_pct": "4.06",
-                "skip_reason": "scanner_fast_precheck_stability_pending",
-            },
-            emitted_at="2026-06-23T10:12:33",
-        ),
-        _event(
-            "475150",
-            "SK이터닉스",
             "latency_block",
             {
                 "price_delta_since_first_seen_pct": "4.06",
                 "reason": "latency_state_danger",
                 "actual_order_submitted": "False",
                 "broker_order_forbidden": "True",
+                "spread_ratio": "0.0112",
+                "ws_age_ms": "81",
+                "orderbook_micro_spread_ticks": "5",
+                "orderbook_micro_state": "neutral",
+                "orderbook_micro_ofi_bucket_key": "spread=wide|price=high|depth=normal|sample=rich",
             },
             emitted_at="2026-06-23T10:16:55",
         ),
@@ -142,6 +137,63 @@ def test_build_report_treats_latency_block_as_latest_pre_submit_quality_guard(tm
     item = report["rising_missed_buy"][0]
     assert item["latest_blocker"]["stage"] == "latency_block"
     assert item["latest_blocker"]["reason"] == "latency_state_danger"
+    assert item["dominant_actionable_blocker"] == {
+        "stage": "",
+        "reason": "",
+        "count": 0,
+        "class": "non_actionable_guard_or_backpressure",
+        "route": "observe_only",
+    }
+    assert item["latency_danger_root_cause"]["top_cause"] == "spread_too_wide"
+    assert item["latency_danger_root_cause"]["spread_ratio"] == {"min": 0.0112, "median": 0.0112, "max": 0.0112}
+    assert item["recent_blockers"][-1]["latency_root_cause"] == "spread_too_wide"
+    assert item["recent_blockers"][-1]["ofi_bucket"] == "spread=wide|price=high|depth=normal|sample=rich"
+    assert item["recent_blockers"][-1]["taxonomy"] == {
+        "class": "pre_submit_quality_guard",
+        "actionable": False,
+        "major_blocker": False,
+        "route": "known_spread_too_wide_guard_preserved_no_bypass",
+    }
+    assert {
+        "class": "pre_submit_quality_guard",
+        "stage": "latency_block",
+        "reason": "latency_state_danger",
+        "count": 1,
+    } in report["blocker_taxonomy"]["suppressed_non_actionable_counts"]
+    assert report["blocker_taxonomy"]["actionable_major_blocker_counts"] == []
+
+
+def test_build_report_keeps_unknown_latency_guard_as_actionable_major(tmp_path):
+    path = tmp_path / "pipeline_events_2026-06-23.jsonl"
+    rows = [
+        _event(
+            "000001",
+            "A",
+            "scalping_scanner_candidate_promoted",
+            {"price_delta_since_first_seen_pct": "4.06"},
+            emitted_at="2026-06-23T10:11:58",
+        ),
+        _event(
+            "000001",
+            "A",
+            "latency_block",
+            {
+                "price_delta_since_first_seen_pct": "4.06",
+                "reason": "latency_state_danger",
+                "actual_order_submitted": "False",
+                "broker_order_forbidden": "True",
+                "latency_danger_reasons": "other_danger",
+                "ws_age_ms": "81",
+            },
+            emitted_at="2026-06-23T10:16:55",
+        ),
+    ]
+    path.write_text("\n".join(json.dumps(row, ensure_ascii=False) for row in rows), encoding="utf-8")
+
+    report = build_report(target_date="2026-06-23", pipeline_path=path, generated_at="fixed")
+
+    item = report["rising_missed_buy"][0]
+    assert item["latency_danger_root_cause"]["top_cause"] == "other_danger"
     assert item["dominant_actionable_blocker"] == {
         "stage": "latency_block",
         "reason": "latency_state_danger",
@@ -155,6 +207,58 @@ def test_build_report_treats_latency_block_as_latest_pre_submit_quality_guard(tm
         "reason": "latency_state_danger",
         "count": 1,
     } in report["blocker_taxonomy"]["actionable_major_blocker_counts"]
+
+
+def test_build_report_splits_mixed_known_and_unknown_latency_causes(tmp_path):
+    path = tmp_path / "pipeline_events_2026-06-23.jsonl"
+    rows = [
+        _event(
+            "000001",
+            "A",
+            "scalping_scanner_candidate_promoted",
+            {"price_delta_since_first_seen_pct": "4.06"},
+            emitted_at="2026-06-23T10:11:58",
+        ),
+        _event(
+            "000001",
+            "A",
+            "latency_block",
+            {
+                "price_delta_since_first_seen_pct": "4.06",
+                "reason": "latency_state_danger",
+                "spread_ratio": "0.0112",
+            },
+            emitted_at="2026-06-23T10:16:55",
+        ),
+        _event(
+            "000001",
+            "A",
+            "latency_block",
+            {
+                "price_delta_since_first_seen_pct": "4.06",
+                "reason": "latency_state_danger",
+                "latency_danger_reasons": "other_danger",
+                "ws_age_ms": "81",
+            },
+            emitted_at="2026-06-23T10:17:55",
+        ),
+    ]
+    path.write_text("\n".join(json.dumps(row, ensure_ascii=False) for row in rows), encoding="utf-8")
+
+    report = build_report(target_date="2026-06-23", pipeline_path=path, generated_at="fixed")
+
+    assert {
+        "class": "pre_submit_quality_guard",
+        "stage": "latency_block",
+        "reason": "latency_state_danger",
+        "count": 1,
+    } in report["blocker_taxonomy"]["actionable_major_blocker_counts"]
+    assert {
+        "class": "pre_submit_quality_guard",
+        "stage": "latency_block",
+        "reason": "latency_state_danger",
+        "count": 1,
+    } in report["blocker_taxonomy"]["suppressed_non_actionable_counts"]
 
 
 def test_build_report_splits_relief_blockers_for_non_rising(tmp_path):

@@ -3357,6 +3357,7 @@ def test_build_code_improvement_workorder_closes_submit_drought_when_root_cause_
                     "submit_drought_root_cause": {
                         "latency_root_cause_counts": {
                             "quote_stale": 9,
+                            "spread_microstructure_guard": 6,
                             "spread_or_slippage_guard": 4,
                         },
                         "unknown_latency_reason_count": 0,
@@ -3466,6 +3467,7 @@ def test_build_code_improvement_workorder_closes_submit_drought_when_root_cause_
 
     order = next(item for item in report["orders"] if item["order_id"] == "order_entry_submit_drought_auto_resolution")
     assert order["root_cause_closure_status"] == "root_cause_closed"
+    assert order["implementation_provenance"]["root_cause_counts"]["spread_microstructure_guard"] == 6
     assert order["implementation_provenance"]["root_cause_closure_status_hint"] == "root_cause_closed"
     assert (
         order["implementation_provenance"]["observation_breakdown"]["decision_authority"]

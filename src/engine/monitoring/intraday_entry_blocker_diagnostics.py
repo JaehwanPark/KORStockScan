@@ -113,6 +113,25 @@ DEFAULT_BUY_WINDOW_START = dt_time(9, 0)
 DEFAULT_BUY_WINDOW_END = dt_time(15, 20)
 ACTIONABLE_FULL_EVAL_DEFERRED_MIN_COUNT = 2
 ACTIONABLE_FULL_EVAL_DEFERRED_MIN_DELTA_PCT = 1.0
+LATENCY_DANGER_SPREAD_RATIO_CAP = 0.0100
+LATENCY_DANGER_WS_AGE_MS_CAP = 450.0
+
+LATENCY_PROVENANCE_FIELD_KEYS = (
+    "latency_state",
+    "latency_danger_reasons",
+    "spread_ratio",
+    "pre_submit_quote_refresh_spread_ratio",
+    "ws_age_ms",
+    "pre_submit_effective_quote_age_ms",
+    "pre_submit_ws_snapshot_refresh_age_ms",
+    "pre_submit_effective_quote_stale",
+    "quote_stale_at_submit",
+    "quote_stale",
+    "orderbook_micro_spread_ticks",
+    "orderbook_micro_state",
+    "orderbook_micro_ofi_bucket_key",
+    "orderbook_micro_calibration_bucket",
+)
 ACTIONABLE_COOLDOWN_MIN_COUNT = 2
 ACTIONABLE_COOLDOWN_MIN_DELTA_PCT = 1.0
 
@@ -248,6 +267,127 @@ def _field(row: dict[str, Any], key: str, default: Any = "") -> Any:
     if not isinstance(fields, dict):
         return default
     return fields.get(key, default)
+
+
+def _boolish(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    return str(value or "").strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def _median(values: list[float]) -> float | None:
+    if not values:
+        return None
+    ordered = sorted(values)
+    mid = len(ordered) // 2
+    if len(ordered) % 2:
+        return ordered[mid]
+    return (ordered[mid - 1] + ordered[mid]) / 2.0
+
+
+def _metric_summary(values: list[float]) -> dict[str, float | None]:
+    return {
+        "min": round(min(values), 6) if values else None,
+        "median": round(_median(values), 6) if values else None,
+        "max": round(max(values), 6) if values else None,
+    }
+
+
+def _latency_danger_cause(fields: dict[str, Any]) -> str:
+    reason_text = str(fields.get("latency_danger_reasons") or fields.get("latency_reason") or "").lower()
+    stale_values = (
+        fields.get("pre_submit_effective_quote_stale"),
+        fields.get("quote_stale_at_submit"),
+        fields.get("quote_stale"),
+    )
+    if any(_boolish(value) for value in stale_values) or "quote_stale" in reason_text:
+        return "quote_stale"
+    if "spread_too_wide" in reason_text:
+        return "spread_too_wide"
+    spread_ratio = _safe_float(fields.get("spread_ratio") or fields.get("pre_submit_quote_refresh_spread_ratio"))
+    if spread_ratio is not None and spread_ratio > LATENCY_DANGER_SPREAD_RATIO_CAP:
+        return "spread_too_wide"
+    spread_ticks = _safe_float(fields.get("orderbook_micro_spread_ticks"))
+    bucket = str(fields.get("orderbook_micro_ofi_bucket_key") or fields.get("orderbook_micro_calibration_bucket") or "")
+    if (spread_ticks is not None and spread_ticks >= 5.0) or "spread=wide" in bucket:
+        return "spread_microstructure_wide"
+    ws_age_ms = _safe_float(
+        fields.get("ws_age_ms")
+        or fields.get("pre_submit_effective_quote_age_ms")
+        or fields.get("pre_submit_ws_snapshot_refresh_age_ms")
+    )
+    if (ws_age_ms is not None and ws_age_ms > LATENCY_DANGER_WS_AGE_MS_CAP) or "ws_age_too_high" in reason_text:
+        return "ws_age_too_high"
+    return "other_danger"
+
+
+def _latency_danger_event_fields(row: dict[str, Any]) -> dict[str, Any]:
+    fields = row.get("fields") if isinstance(row.get("fields"), dict) else {}
+    return {
+        "latency_state": str(fields.get("latency_state") or ""),
+        "latency_danger_reasons": str(fields.get("latency_danger_reasons") or ""),
+        "latency_root_cause": _latency_danger_cause(fields),
+        "spread_ratio": _safe_float(fields.get("spread_ratio") or fields.get("pre_submit_quote_refresh_spread_ratio")),
+        "ws_age_ms": _safe_float(
+            fields.get("ws_age_ms")
+            or fields.get("pre_submit_effective_quote_age_ms")
+            or fields.get("pre_submit_ws_snapshot_refresh_age_ms")
+        ),
+        "spread_ticks": _safe_float(fields.get("orderbook_micro_spread_ticks")),
+        "micro_state": str(fields.get("orderbook_micro_state") or ""),
+        "ofi_bucket": str(
+            fields.get("orderbook_micro_ofi_bucket_key")
+            or fields.get("orderbook_micro_calibration_bucket")
+            or ""
+        ),
+        "pre_submit_effective_quote_stale": str(fields.get("pre_submit_effective_quote_stale") or ""),
+        "quote_stale_at_submit": str(fields.get("quote_stale_at_submit") or ""),
+        "quote_stale": str(fields.get("quote_stale") or ""),
+    }
+
+
+def _latency_danger_root_cause_summary(blocker_rows: list[dict[str, Any]]) -> dict[str, Any]:
+    events = []
+    for row in blocker_rows:
+        if row.get("stage") != "latency_block" or _blocker_reason(row) != "latency_state_danger":
+            continue
+        fields = row.get("fields") if isinstance(row.get("fields"), dict) else {}
+        if not any(fields.get(key) not in (None, "") for key in LATENCY_PROVENANCE_FIELD_KEYS):
+            continue
+        events.append(_latency_danger_event_fields(row))
+    if not events:
+        return {
+            "event_count": 0,
+            "top_cause": "",
+            "cause_counts": [],
+            "spread_ratio": _metric_summary([]),
+            "ws_age_ms": _metric_summary([]),
+            "spread_ticks": _metric_summary([]),
+            "top_micro_state": "-",
+            "top_ofi_bucket": "no_latency_provenance_fields",
+        }
+    cause_counts = Counter(str(item.get("latency_root_cause") or "other_danger") for item in events)
+    micro_state_counts = Counter(str(item.get("micro_state") or "-") for item in events)
+    bucket_counts = Counter(str(item.get("ofi_bucket") or "-") for item in events)
+    return {
+        "event_count": len(events),
+        "top_cause": cause_counts.most_common(1)[0][0],
+        "cause_counts": [
+            {"cause": cause, "count": count}
+            for cause, count in cause_counts.most_common()
+        ],
+        "spread_ratio": _metric_summary(
+            [value for item in events if (value := item.get("spread_ratio")) is not None]
+        ),
+        "ws_age_ms": _metric_summary(
+            [value for item in events if (value := item.get("ws_age_ms")) is not None]
+        ),
+        "spread_ticks": _metric_summary(
+            [value for item in events if (value := item.get("spread_ticks")) is not None]
+        ),
+        "top_micro_state": micro_state_counts.most_common(1)[0][0],
+        "top_ofi_bucket": bucket_counts.most_common(1)[0][0],
+    }
 
 
 def _blocker_reason(row: dict[str, Any]) -> str:
@@ -540,9 +680,11 @@ def _blocker_taxonomy(
     reason: str,
     count: int = 1,
     max_delta_pct: float | None = None,
+    latency_root_cause: str = "",
 ) -> dict[str, Any]:
     reason_lower = reason.lower()
     stage_lower = stage.lower()
+    latency_cause = latency_root_cause.strip().lower()
     delta = max_delta_pct if max_delta_pct is not None else 0.0
     if stage == "scalping_scanner_watch_eviction":
         return {
@@ -588,6 +730,13 @@ def _blocker_taxonomy(
             "route": "preserve_stale_submit_block_and_fix_price_or_quote_context",
         }
     if stage == "latency_block":
+        if latency_cause in {"quote_stale", "spread_too_wide", "spread_microstructure_wide"}:
+            return {
+                "class": "pre_submit_quality_guard",
+                "actionable": False,
+                "major_blocker": False,
+                "route": f"known_{latency_cause}_guard_preserved_no_bypass",
+            }
         return {
             "class": "pre_submit_quality_guard",
             "actionable": True,
@@ -614,7 +763,16 @@ def _dominant_actionable_blocker(rows: list[dict[str, Any]]) -> dict[str, Any]:
     if not blocker_rows:
         return {"stage": "", "reason": "", "count": 0, "class": "", "route": ""}
     max_delta = _max_delta(rows)
-    counts = Counter((row.get("stage") or "", _blocker_reason(row)) for row in blocker_rows)
+    counts = Counter(
+        (
+            row.get("stage") or "",
+            _blocker_reason(row),
+            _latency_danger_cause(row.get("fields") if isinstance(row.get("fields"), dict) else {})
+            if row.get("stage") == "latency_block" and _blocker_reason(row) == "latency_state_danger"
+            else "",
+        )
+        for row in blocker_rows
+    )
     ordered = sorted(
         counts.items(),
         key=lambda item: (
@@ -623,12 +781,13 @@ def _dominant_actionable_blocker(rows: list[dict[str, Any]]) -> dict[str, Any]:
         ),
         reverse=True,
     )
-    for (stage, reason), count in ordered:
+    for (stage, reason, latency_root_cause), count in ordered:
         taxonomy = _blocker_taxonomy(
             stage=str(stage),
             reason=str(reason),
             count=int(count),
             max_delta_pct=max_delta,
+            latency_root_cause=str(latency_root_cause),
         )
         if taxonomy["major_blocker"]:
             return {
@@ -986,6 +1145,7 @@ def _summarize_code(
         "dominant_blocker": _dominant_blocker(rows),
         "dominant_actionable_blocker": _dominant_actionable_blocker(rows),
         "latest_blocker": _latest_blocker(rows),
+        "latency_danger_root_cause": _latency_danger_root_cause_summary(blocker_rows),
         "queue_observation_counts": queue_counts,
         "low_ai_or_negative_pressure_eval_quality": _low_ai_pressure_quality_counts(rows),
         "stale_or_delayed_eval_category_counts": _stale_or_delayed_eval_category_counts(rows),
@@ -1034,11 +1194,19 @@ def _summarize_code(
                 "terminal_reason": _field(row, "terminal_reason", ""),
                 "eviction_attempt_count": _safe_float(_field(row, "eviction_attempt_count")),
                 "stale_age_sec": _safe_float(_field(row, "stale_age_sec")),
+                **(
+                    _latency_danger_event_fields(row)
+                    if row.get("stage") == "latency_block" and _blocker_reason(row) == "latency_state_danger"
+                    else {}
+                ),
                 "taxonomy": _blocker_taxonomy(
                     stage=str(row.get("stage") or ""),
                     reason=_blocker_reason(row),
                     count=1,
                     max_delta_pct=max_delta,
+                    latency_root_cause=_latency_danger_cause(row.get("fields") if isinstance(row.get("fields"), dict) else {})
+                    if row.get("stage") == "latency_block" and _blocker_reason(row) == "latency_state_danger"
+                    else "",
                 ),
             }
             for row in blocker_rows[-8:]
@@ -1054,11 +1222,17 @@ def _rollup_blocker_taxonomy(items: list[dict[str, Any]]) -> dict[str, Any]:
     for item in items:
         max_delta = item.get("max_price_delta_since_first_seen_pct")
         per_symbol_counter = Counter(
-            (blocker.get("stage") or "", blocker.get("reason") or "")
+            (
+                blocker.get("stage") or "",
+                blocker.get("reason") or "",
+                str(blocker.get("latency_root_cause") or "")
+                if blocker.get("stage") == "latency_block" and blocker.get("reason") == "latency_state_danger"
+                else "",
+            )
             for blocker in item.get("recent_blockers") or []
             if blocker.get("stage")
         )
-        for (stage, reason), count in per_symbol_counter.items():
+        for (stage, reason, latency_root_cause), count in per_symbol_counter.items():
             effective_count = int(count)
             if reason == "scanner_full_eval_loop_budget_deferred":
                 budget = item.get("scanner_full_eval_budget_deferred") or {}
@@ -1068,6 +1242,7 @@ def _rollup_blocker_taxonomy(items: list[dict[str, Any]]) -> dict[str, Any]:
                 reason=reason,
                 count=effective_count,
                 max_delta_pct=max_delta,
+                latency_root_cause=latency_root_cause,
             )
             block_class = taxonomy["class"]
             route = taxonomy["route"]

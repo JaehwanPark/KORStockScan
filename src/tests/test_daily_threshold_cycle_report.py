@@ -1784,6 +1784,43 @@ def test_reuse_ai_review_requires_matching_input_hash(tmp_path):
     assert report_mod._load_reusable_threshold_ai_review(path, input_context_hash="different") is None
 
 
+def test_calibration_report_sources_preserve_buy_funnel_latency_microstructure_counts(tmp_path, monkeypatch):
+    report_dir = tmp_path / "report"
+    buy_dir = report_dir / "buy_funnel_sentinel"
+    buy_dir.mkdir(parents=True)
+    target_date = "2099-01-05"
+    (buy_dir / f"buy_funnel_sentinel_{target_date}.json").write_text(
+        json.dumps(
+            {
+                "classification": {
+                    "primary": "PRICE_GUARD_DROUGHT",
+                    "matches": ["PRICE_GUARD_DROUGHT", "LATENCY_DROUGHT"],
+                    "secondary": ["LATENCY_DROUGHT"],
+                    "submit_drought_root_cause": {
+                        "latency_root_cause_counts": {
+                            "spread_microstructure_guard": 17,
+                            "spread_or_slippage_guard": 5,
+                            "quote_stale": 3,
+                        }
+                    },
+                },
+                "current": {"session": {"stage_events": {}, "ratios": {}}},
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(report_mod, "REPORT_DIR", report_dir)
+
+    bundle = report_mod._summarize_calibration_report_sources(target_date)
+    metrics = bundle["source_metrics"]["buy_score65_74"]
+
+    assert metrics["sentinel_matches"] == ["PRICE_GUARD_DROUGHT", "LATENCY_DROUGHT"]
+    assert metrics["latency_root_cause_counts"]["spread_microstructure_guard"] == 17
+    assert metrics["latency_spread_microstructure_guard_count"] == 17
+    assert metrics["latency_spread_or_slippage_guard_count"] == 5
+    assert metrics["latency_quote_stale_count"] == 3
+
+
 def test_efficient_tradeoff_calibration_adds_entry_bad_entry_and_adm_candidates():
     report_sources = {
         "schema_version": 1,

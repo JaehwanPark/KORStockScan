@@ -762,6 +762,59 @@ def test_build_report_marks_wide_microstructure_latency_cause_below_ratio_cap(tm
     assert root["spread_ratio"] == {"min": 0.0096, "median": 0.0096, "max": 0.0096}
 
 
+def test_build_report_uses_diagnostic_latency_root_cause_when_event_cache_missing(tmp_path):
+    event_path = tmp_path / "events.jsonl"
+    diagnostic_path = tmp_path / "diag.json"
+    event_path.write_text("", encoding="utf-8")
+    diagnostic_path.write_text(
+        json.dumps(
+            {
+                "summary": {"real_submit_symbol_count": 0},
+                "promoted_symbols": [
+                    {
+                        "stock_code": "033100",
+                        "stock_name": "제룡전기",
+                        "first_promoted_at": "2026-06-30T08:01:00",
+                        "max_price_delta_since_first_seen_pct": 5.25,
+                        "dominant_actionable_blocker": {
+                            "stage": "latency_block",
+                            "reason": "latency_state_danger",
+                            "count": 3,
+                            "class": "pre_submit_quality_guard",
+                        },
+                        "latency_danger_root_cause": {
+                            "event_count": 3,
+                            "top_cause": "quote_stale",
+                            "cause_counts": [{"cause": "quote_stale", "count": 2}, {"cause": "spread_too_wide", "count": 1}],
+                            "spread_ratio": {"min": 0.001, "median": 0.007, "max": 0.012},
+                            "ws_age_ms": {"min": 121.0, "median": 764.0, "max": 1085.0},
+                            "spread_ticks": {"min": 1.0, "median": 6.0, "max": 7.0},
+                            "top_micro_state": "neutral",
+                            "top_ofi_bucket": "spread=wide|price=mid|depth=normal|sample=rich",
+                        },
+                    }
+                ],
+                "rising_missed_buy": [{"stock_code": "033100"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    report = build_report(
+        target_date="2026-06-30",
+        event_cache_path=event_path,
+        diagnostic_path=diagnostic_path,
+        since="2026-06-30T11:00:00",
+        generated_at="fixed",
+    )
+
+    root = report["latency_danger_root_cause"][0]
+    assert root["stock_code"] == "033100"
+    assert root["event_count"] == 3
+    assert root["top_cause"] == "quote_stale"
+    assert root["top_ofi_bucket"] == "spread=wide|price=mid|depth=normal|sample=rich"
+
+
 def test_build_report_marks_diagnostic_only_latency_provenance_gap(tmp_path):
     event_path = tmp_path / "events.jsonl"
     diagnostic_path = tmp_path / "diag.json"

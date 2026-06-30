@@ -144,6 +144,15 @@ def _safe_str(value: Any) -> str:
     return str(value if value is not None else "").strip()
 
 
+def _safe_float(value: Any) -> float | None:
+    if value in (None, "", "-"):
+        return None
+    try:
+        return float(str(value).replace(",", "").replace("+", "").replace("%", ""))
+    except ValueError:
+        return None
+
+
 def _parse_iso_datetime(value: str) -> datetime | None:
     text = _safe_str(value)
     if not text:
@@ -791,6 +800,13 @@ def _latency_danger_reason_labels(event: PipelineEvent) -> list[str]:
     observer_reason = _safe_str(event.fields.get("orderbook_micro_observer_missing_reason"))
     if observer_reason and observer_reason not in {"ok", "-", "None"}:
         labels.append(f"observer_{observer_reason}")
+    micro_bucket = _safe_str(
+        event.fields.get("orderbook_micro_ofi_bucket_key")
+        or event.fields.get("orderbook_micro_calibration_bucket")
+    ).lower()
+    micro_spread_ticks = _safe_float(event.fields.get("orderbook_micro_spread_ticks"))
+    if "spread=wide" in micro_bucket or (micro_spread_ticks is not None and micro_spread_ticks >= 5.0):
+        labels.append("orderbook_micro_spread_wide")
     refresh_reason = _safe_str(event.fields.get("pre_submit_quote_refresh_reason")).lower()
     if refresh_reason and refresh_reason not in PRE_SUBMIT_REFRESH_NOOP_REASONS:
         labels.append(f"pre_submit_quote_refresh_{refresh_reason}")
@@ -852,6 +868,13 @@ def _latency_root_cause_bucket(label: str) -> str:
         return "quote_stale"
     if refresh_bucket and "spread" in refresh_bucket:
         return "spread_or_slippage_guard"
+    if (
+        "spread_microstructure_wide" in text
+        or "orderbook_micro_spread_wide" in text
+        or "quote_fresh_composite_orderbook_micro_block" in text
+        or "spread=wide" in text
+    ):
+        return "spread_microstructure_guard"
     if "ws_jitter" in text:
         return "quote_stale"
     # `other_danger` is the residual DANGER state after quote_stale/ws_age/

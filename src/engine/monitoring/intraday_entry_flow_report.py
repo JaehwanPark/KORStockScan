@@ -179,13 +179,16 @@ def _stale_eval_category(stage: str, reason: str, fields: dict[str, Any], quote_
 
 
 def _latency_danger_cause(fields: dict[str, Any]) -> str:
+    reason_text = str(fields.get("latency_danger_reasons") or fields.get("latency_reason") or "").lower()
     stale_values = (
         fields.get("pre_submit_effective_quote_stale"),
         fields.get("quote_stale_at_submit"),
         fields.get("quote_stale"),
     )
-    if any(_boolish(value) for value in stale_values):
+    if any(_boolish(value) for value in stale_values) or "quote_stale" in reason_text:
         return "quote_stale"
+    if "spread_too_wide" in reason_text:
+        return "spread_too_wide"
     spread_ratio = _safe_float(fields.get("spread_ratio") or fields.get("pre_submit_quote_refresh_spread_ratio"))
     if spread_ratio is not None and spread_ratio > LATENCY_DANGER_SPREAD_RATIO_CAP:
         return "spread_too_wide"
@@ -198,9 +201,30 @@ def _latency_danger_cause(fields: dict[str, Any]) -> str:
         or fields.get("pre_submit_effective_quote_age_ms")
         or fields.get("pre_submit_ws_snapshot_refresh_age_ms")
     )
-    if ws_age_ms is not None and ws_age_ms > LATENCY_DANGER_WS_AGE_MS_CAP:
+    if (ws_age_ms is not None and ws_age_ms > LATENCY_DANGER_WS_AGE_MS_CAP) or "ws_age_too_high" in reason_text:
         return "ws_age_too_high"
     return "other_danger"
+
+
+def _latency_danger_event(fields: dict[str, Any]) -> dict[str, Any]:
+    cause = str(fields.get("latency_root_cause") or "").strip() or _latency_danger_cause(fields)
+    return {
+        "cause": cause,
+        "spread_ratio": _safe_float(fields.get("spread_ratio") or fields.get("pre_submit_quote_refresh_spread_ratio")),
+        "ws_age_ms": _safe_float(
+            fields.get("ws_age_ms")
+            or fields.get("pre_submit_effective_quote_age_ms")
+            or fields.get("pre_submit_ws_snapshot_refresh_age_ms")
+        ),
+        "spread_ticks": _safe_float(fields.get("orderbook_micro_spread_ticks") or fields.get("spread_ticks")),
+        "micro_state": str(fields.get("orderbook_micro_state") or fields.get("micro_state") or ""),
+        "ofi_bucket": str(
+            fields.get("orderbook_micro_ofi_bucket_key")
+            or fields.get("orderbook_micro_calibration_bucket")
+            or fields.get("ofi_bucket")
+            or ""
+        ),
+    }
 
 
 def _median(values: list[float]) -> float | None:
@@ -438,26 +462,7 @@ def build_report(
             record["stale_eval_category_counts"][stale_eval_category] += 1
         record["stage_counts"][stage] += 1
         if stage == "latency_block" and reason == "latency_state_danger":
-            record["latency_danger_events"].append(
-                {
-                    "cause": _latency_danger_cause(fields),
-                    "spread_ratio": _safe_float(
-                        fields.get("spread_ratio") or fields.get("pre_submit_quote_refresh_spread_ratio")
-                    ),
-                    "ws_age_ms": _safe_float(
-                        fields.get("ws_age_ms")
-                        or fields.get("pre_submit_effective_quote_age_ms")
-                        or fields.get("pre_submit_ws_snapshot_refresh_age_ms")
-                    ),
-                    "spread_ticks": _safe_float(fields.get("orderbook_micro_spread_ticks")),
-                    "micro_state": str(fields.get("orderbook_micro_state") or ""),
-                    "ofi_bucket": str(
-                        fields.get("orderbook_micro_ofi_bucket_key")
-                        or fields.get("orderbook_micro_calibration_bucket")
-                        or ""
-                    ),
-                }
-            )
+            record["latency_danger_events"].append(_latency_danger_event(fields))
         if reason:
             record["reason_counts"][reason] += 1
         record["latest_stage"] = stage
@@ -666,6 +671,73 @@ def build_report(
             continue
         count = int(blocker.get("count") or 0)
         if count <= 0:
+            continue
+        diagnostic_root = item.get("latency_danger_root_cause")
+        if isinstance(diagnostic_root, dict) and int(diagnostic_root.get("event_count") or 0) > 0:
+            latency_danger_root_cause.append(
+                {
+                    "stock_code": code,
+                    "stock_name": item.get("stock_name") or "",
+                    "event_count": int(diagnostic_root.get("event_count") or count),
+                    "top_cause": diagnostic_root.get("top_cause") or "other_danger",
+                    "cause_counts": diagnostic_root.get("cause_counts") or [],
+                    "spread_ratio": diagnostic_root.get("spread_ratio") or _metric_summary([]),
+                    "ws_age_ms": diagnostic_root.get("ws_age_ms") or _metric_summary([]),
+                    "spread_ticks": diagnostic_root.get("spread_ticks") or _metric_summary([]),
+                    "top_micro_state": diagnostic_root.get("top_micro_state") or "-",
+                    "top_ofi_bucket": diagnostic_root.get("top_ofi_bucket") or "diagnostic_latency_root_cause",
+                }
+            )
+            continue
+        diagnostic_events = []
+        for recent in item.get("recent_blockers") or []:
+            if not isinstance(recent, dict):
+                continue
+            if recent.get("stage") != "latency_block" or recent.get("reason") != "latency_state_danger":
+                continue
+            if not any(
+                recent.get(key) not in (None, "")
+                for key in (
+                    "latency_root_cause",
+                    "spread_ratio",
+                    "ws_age_ms",
+                    "spread_ticks",
+                    "orderbook_micro_spread_ticks",
+                    "ofi_bucket",
+                    "orderbook_micro_ofi_bucket_key",
+                    "pre_submit_effective_quote_stale",
+                    "quote_stale",
+                )
+            ):
+                continue
+            diagnostic_events.append(_latency_danger_event(recent))
+        if diagnostic_events:
+            cause_counts = Counter(str(event.get("cause") or "other_danger") for event in diagnostic_events)
+            micro_state_counts = Counter(str(event.get("micro_state") or "-") for event in diagnostic_events)
+            bucket_counts = Counter(str(event.get("ofi_bucket") or "-") for event in diagnostic_events)
+            latency_danger_root_cause.append(
+                {
+                    "stock_code": code,
+                    "stock_name": item.get("stock_name") or "",
+                    "event_count": len(diagnostic_events),
+                    "top_cause": cause_counts.most_common(1)[0][0],
+                    "cause_counts": [
+                        {"cause": cause, "count": event_count}
+                        for cause, event_count in cause_counts.most_common()
+                    ],
+                    "spread_ratio": _metric_summary(
+                        [value for event in diagnostic_events if (value := event.get("spread_ratio")) is not None]
+                    ),
+                    "ws_age_ms": _metric_summary(
+                        [value for event in diagnostic_events if (value := event.get("ws_age_ms")) is not None]
+                    ),
+                    "spread_ticks": _metric_summary(
+                        [value for event in diagnostic_events if (value := event.get("spread_ticks")) is not None]
+                    ),
+                    "top_micro_state": micro_state_counts.most_common(1)[0][0],
+                    "top_ofi_bucket": bucket_counts.most_common(1)[0][0],
+                }
+            )
             continue
         latency_danger_root_cause.append(
             {

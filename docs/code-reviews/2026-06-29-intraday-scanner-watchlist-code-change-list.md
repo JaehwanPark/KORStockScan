@@ -3392,7 +3392,8 @@
   - `real_submit_symbol_count_in_latest_diagnostic=0`
   - forced scout residual: `000500`, `001820`, `002990`, `010120`, `025320`, `080220`, `103590`, `153890`, `240810`, `475150`
   - forced scout 제외 residual: `033100`, `095610`, `356680`
-  - 최종 root cause: `033100`은 `latency_provenance_gap`, `000500`/`010120`은 `spread_too_wide`, `475150`/`002990`/`080220`/`025320`/`103590`은 `spread_microstructure_wide`
+  - 최초 root cause: `033100`은 `latency_provenance_gap`, `000500`/`010120`은 `spread_too_wide`, `475150`/`002990`/`080220`/`025320`/`103590`은 `spread_microstructure_wide`
+  - 57절 source-quality 보완 후 `033100`은 `spread_microstructure_wide`로 복구됐다.
 
 ### 56.4 검증
 
@@ -3406,3 +3407,157 @@
 - `runtime_effect=false`
 - forbidden uses: `stale_submit_bypass`, `broker_guard_bypass`, `intraday_threshold_mutation`, `order_price_relaxation_without_operator_override`, `real_order_approval`
 - stale quote, latency DANGER/spread guard, broker/account/order/quantity/cooldown, hard/protect/emergency stop은 우회하지 않았다.
+
+## 57. 2026-06-30 latency provenance gap 보완
+
+### 57.1 판정
+
+- `033100` 제룡전기의 `latency_provenance_gap`는 원본 `pipeline_events` 결손이 아니라 intraday diagnostic/event-cache 소비 경로의 source-quality 누락이었다.
+- 원본 `ENTRY_PIPELINE latency_block/latency_state_danger` 38건에는 spread/WS age/orderbook microstructure 필드가 있었다.
+- 보완 후 13:00 flow report에서 `033100` top cause는 `spread_microstructure_wide`로 복구됐다.
+
+### 57.2 변경
+
+- `src/engine/monitoring/intraday_entry_blocker_diagnostics.py`
+  - 종목별 `latency_danger_root_cause` 요약을 추가했다.
+  - `recent_blockers`에 latency state, stale flag, spread ratio, WS age, spread ticks, microstructure bucket, root cause를 보존한다.
+- `src/engine/monitoring/intraday_entry_flow_report.py`
+  - event cache에 종목 latency row가 없을 때 diagnostic의 `latency_danger_root_cause`를 우선 사용한다.
+  - diagnostic에도 provenance가 없을 때만 `latency_provenance_gap`를 남긴다.
+- `src/tests/test_intraday_entry_blocker_diagnostics.py`, `src/tests/test_intraday_entry_flow_report.py`
+  - diagnostic latency provenance 보존과 event-cache missing fallback 회귀 테스트를 추가했다.
+
+### 57.3 재생성 결과
+
+- 재생성:
+  - `data/report/intraday_entry_blocker_diagnostics/intraday_entry_blocker_diagnostics_2026-06-30_1300_1100_goal.json`
+  - `data/report/intraday_entry_flow/intraday_entry_flow_2026-06-30_1100_to_1300.md`
+- `033100` root cause:
+  - `event_count=38`
+  - `top_cause=spread_microstructure_wide`
+  - `cause_counts`: `spread_microstructure_wide=19`, `quote_stale=18`, `spread_too_wide=1`
+  - `spread_ratio median/max=0.00996/0.011952`
+  - `ws_age_ms median/max=646.5/14480.0`
+  - `spread_ticks median/max=5.0/9.0`
+
+### 57.4 검증
+
+- `PYTHONPATH=. .venv/bin/python -m pytest src/tests/test_intraday_entry_blocker_diagnostics.py src/tests/test_intraday_entry_flow_report.py`
+  - 통과: `46 passed`
+- `PYTHONPATH=. .venv/bin/python -m py_compile src/engine/monitoring/intraday_entry_blocker_diagnostics.py src/engine/monitoring/intraday_entry_flow_report.py`
+  - 통과
+
+### 57.5 운영 경계
+
+- `runtime_effect=false`
+- forbidden uses: `stale_submit_bypass`, `broker_guard_bypass`, `intraday_threshold_mutation`, `order_price_relaxation_without_operator_override`, `real_order_approval`
+- 이번 변경은 source-quality/diagnostic 보완이며 latency DANGER, spread, stale quote, broker/account/order/quantity/cooldown, hard/protect/emergency guard를 우회하지 않는다.
+
+## 58. 2026-06-30 spread microstructure latency 후속 handoff 보완
+
+### 58.1 판정
+
+- `033100` 복구 후 남은 핵심 blocker는 단순 spread/slippage가 아니라 orderbook microstructure spread 계열까지 포함한다.
+- 기존 BUY Funnel submit-drought root cause는 spread 계열을 `spread_or_slippage_guard`로 합쳐 downstream workorder/daily source bundle에서 microstructure spread를 별도 축으로 보기 어려웠다.
+- 보완 후 `spread_microstructure_guard`가 BUY Funnel root cause, code-improvement workorder provenance, daily threshold-cycle source metrics까지 전달된다.
+
+### 58.2 변경
+
+- `src/engine/buy_funnel_sentinel.py`
+  - `orderbook_micro_spread_ticks>=5` 또는 `orderbook_micro_*bucket`의 `spread=wide`를 `orderbook_micro_spread_wide` label로 보존한다.
+  - 해당 label과 `spread_microstructure_wide`/`quote_fresh_composite_orderbook_micro_block`을 `spread_microstructure_guard` root cause로 분리한다.
+- `src/engine/daily_threshold_cycle_report.py`
+  - BUY Funnel `submit_drought_root_cause.latency_root_cause_counts`를 source metrics에 보존한다.
+  - `latency_spread_microstructure_guard_count`, `latency_spread_or_slippage_guard_count`, `latency_quote_stale_count`를 별도 필드로 노출한다.
+- `src/tests/test_buy_funnel_sentinel.py`, `src/tests/test_build_code_improvement_workorder.py`, `src/tests/test_daily_threshold_cycle_report.py`
+  - microstructure spread 분리, workorder provenance 보존, daily source bundle 전달 회귀 테스트를 추가했다.
+
+### 58.3 현재 산출물 확인
+
+- `data/report/buy_funnel_sentinel/buy_funnel_sentinel_2026-06-30.json`
+  - `primary=PRICE_GUARD_DROUGHT`
+  - `matches`: `PRICE_GUARD_DROUGHT`, `LATENCY_DROUGHT`, `UPSTREAM_AI_THRESHOLD`
+  - `latency_root_cause_counts.spread_microstructure_guard=411`
+  - `unknown_latency_reason_count=0`
+- 현재 날짜는 submit-drought primary가 아니라 `entry_submit_drought_contract.critical=false`이며, followup route는 `pre_submit_price_guard_review`다.
+
+### 58.4 검증
+
+- `PYTHONPATH=. .venv/bin/python -m pytest src/tests/test_buy_funnel_sentinel.py src/tests/test_build_code_improvement_workorder.py src/tests/test_daily_threshold_cycle_report.py src/tests/test_intraday_entry_blocker_diagnostics.py src/tests/test_intraday_entry_flow_report.py`
+  - 통과: `274 passed`
+- `PYTHONPATH=. .venv/bin/python -m py_compile src/engine/buy_funnel_sentinel.py src/engine/build_code_improvement_workorder.py src/engine/daily_threshold_cycle_report.py src/engine/monitoring/intraday_entry_blocker_diagnostics.py src/engine/monitoring/intraday_entry_flow_report.py`
+  - 통과
+
+### 58.5 운영 경계
+
+- `runtime_effect=false`
+- `allowed_runtime_apply=false`
+- 이번 변경은 source taxonomy/handoff 보완이며 spread cap, stale quote, latency DANGER, broker/account/order/quantity/cooldown, hard/protect/emergency guard를 완화하지 않는다.
+
+## 59. 2026-06-30 root cause 해소 기준 보정
+
+### 59.1 판정
+
+- 목표 문구는 불분명하지 않았다. 목표 2번은 반복 actionable blocker에 대해 root cause 분해 뒤 최소 1개 이상의 해소 조치를 요구한다.
+- 58절 변경은 `spread_microstructure_guard`를 downstream에 전달했지만, intraday diagnostic taxonomy에서는 `latency_block/latency_state_danger`가 계속 actionable major로 남아 root cause 해소 판정까지 닫지 못했다.
+- 이번 보정 후 known latency guard(`quote_stale`, `spread_too_wide`, `spread_microstructure_wide`)는 guard를 유지한 채 non-major `pre_submit_quality_guard`로 내려간다. unknown/other/ws-age latency는 계속 actionable major로 남겨 후속 수정을 요구한다.
+
+### 59.2 변경
+
+- `src/engine/monitoring/intraday_entry_blocker_diagnostics.py`
+  - `_blocker_taxonomy`가 `latency_root_cause`를 입력받도록 확장했다.
+  - `spread_microstructure_wide`, `spread_too_wide`, `quote_stale`는 `known_*_guard_preserved_no_bypass` route로 suppress한다.
+  - dominant actionable blocker와 taxonomy rollup이 latency root cause를 같이 소비하도록 보정했다.
+- `src/tests/test_intraday_entry_blocker_diagnostics.py`
+  - known latency guard는 suppressed non-major로 닫히고, `other_danger`는 actionable major로 유지되는 회귀 테스트를 추가했다.
+  - 같은 종목 안에 known/unknown latency 원인이 섞여도 개별 root cause별로 major/suppressed가 갈라지는 회귀 테스트를 추가했다.
+
+### 59.3 재생성 결과
+
+- 재생성:
+  - `data/report/intraday_entry_blocker_diagnostics/intraday_entry_blocker_diagnostics_2026-06-30_1300_1100_goal.json`
+  - `data/report/intraday_entry_flow/intraday_entry_flow_2026-06-30_1100_to_1300.md`
+- 결과:
+  - `pre_submit_quality_guard/latency_block/latency_state_danger=24`가 `suppressed_non_actionable_counts`로 이동했다.
+  - `actionable_major_blocker_counts`에는 latency known guard가 남지 않는다.
+  - 남은 `actionable_major_blocker_count=157`은 strategy reject, entry cooldown opportunity, source freshness 등 별도 축이다.
+
+### 59.4 검증
+
+- `PYTHONPATH=. .venv/bin/python -m pytest src/tests/test_intraday_entry_blocker_diagnostics.py src/tests/test_intraday_entry_flow_report.py`
+  - 통과: `48 passed`
+- `PYTHONPATH=. .venv/bin/python -m pytest src/tests/test_buy_funnel_sentinel.py src/tests/test_build_code_improvement_workorder.py src/tests/test_daily_threshold_cycle_report.py src/tests/test_intraday_entry_blocker_diagnostics.py src/tests/test_intraday_entry_flow_report.py`
+  - 통과: `276 passed`
+- `PYTHONPATH=. .venv/bin/python -m py_compile src/engine/monitoring/intraday_entry_blocker_diagnostics.py src/engine/monitoring/intraday_entry_flow_report.py`
+  - 통과
+
+### 59.5 운영 경계
+
+- `runtime_effect=false`
+- `allowed_runtime_apply=false`
+- 이번 변경은 diagnostic taxonomy 해소 보정이며 spread/stale/latency/broker/account/order/quantity/cooldown/hard/protect/emergency guard를 완화하지 않는다.
+
+## 60. 2026-06-30 intraday_entry_flow 중간 스냅샷 정리
+
+### 60.1 판정
+
+- `data/report/intraday_entry_flow/intraday_entry_flow_2026-06-30_*_to_*.md` timestamp flow report는 사용 후 삭제 가능한 중간 산출물로 정리했다.
+- 원천 이벤트와 루프별 진단 JSON은 별도 경로에 보존되며, flow 최종 판단은 고정 갱신 파일과 final stabilization 요약으로 유지한다.
+
+### 60.2 변경
+
+- 유지 파일:
+  - `data/report/intraday_entry_flow/intraday_entry_flow_2026-06-30_current.md`
+  - `data/report/intraday_entry_flow/intraday_entry_flow_2026-06-30_final_stabilization.md`
+  - `data/report/intraday_entry_flow/intraday_entry_flow_2026-06-30_1300_to_1500_final_stabilization.md`
+- 삭제 파일:
+  - 2026-06-30 `0800_to_*`, `1100_to_*`, `1300_to_*` 중간 flow md/csv 스냅샷
+- 10:00~11:00 final stabilization의 삭제된 flow/csv 참조는 `consolidated_into_final_summary`와 `deleted_after_use`로 정리했다.
+- 13:00~15:00 final stabilization은 `source_flow_final`을 `intraday_entry_flow_2026-06-30_current.md`로 연결했다.
+
+### 60.3 검증
+
+- `find data/report/intraday_entry_flow -maxdepth 1 -type f -name 'intraday_entry_flow_2026-06-30*.csv'`
+  - 잔여 없음
+- `git diff --check`
+  - 통과
