@@ -3287,3 +3287,122 @@
 - `runtime_effect=false`
 - forbidden uses: `stale_submit_bypass`, `broker_guard_bypass`, `intraday_threshold_mutation`, `order_price_relaxation_without_operator_override`, `real_order_approval`
 - latency DANGER/slippage guard, stale quote guard, broker/account/order/quantity/cooldown, hard/protect/emergency stop은 우회하지 않았다.
+
+## 56. 2026-06-30 11:00-13:00 목표 루프: forced scout residual 관측 분리
+
+작성 시각: `2026-06-30 11:25 KST`
+수정 시각: `2026-06-30 11:43 KST`
+
+### 56.1 판정
+
+- 11:20 루프에서 `rising_missed_buy_count=8`로 재발했고, `rising_missed_one_share_entry` forced scout가 발생한 종목도 residual에 남아 있었다.
+- 원익IPS는 일반 submit 성공이 아니라 `rising_missed_one_share_entry` forced scout 직후 1주 submit/fill lineage로 확인되어 일반 BUY/submit/fill/holding 성공에서 제외했다.
+- 따라서 forced 1주 scout/매수 이벤트 때문에 감시대상 종목 자체가 제외되어 `rising missed=0`처럼 사라지는 상황은 아니다.
+- 반복 actionable major blocker는 `latency_block/latency_state_danger`이며, 원본 이벤트상 quote stale이 아니라 약 1%대 `spread_ratio`에 따른 pre-submit 품질가드 차단이다.
+- 주문/threshold/cancel wait/provider/broker guard를 변경하지 않고, 리포트 관측에서 forced scout와 일반 residual을 분리한다.
+
+### 56.2 코드수정
+
+- `src/engine/monitoring/intraday_entry_blocker_diagnostics.py`
+  - forced scout row 자체뿐 아니라 같은 종목의 forced scout 직후 180초 안에 이어지는 `latency_pass`, `order_bundle_submitted`, `holding_started`, 1주 fill/submit lineage를 일반 real submit 집계에서 제외했다.
+- `src/engine/monitoring/intraday_entry_flow_report.py`
+  - 기존처럼 `rising_missed_one_share_entry` forced row는 일반 BUY flow/submit count에서 제외한다.
+  - forced scout 직후 180초 안에 이어지는 submit/fill lineage도 일반 BUY flow/submit count에서 제외한다.
+  - forced scout 이벤트 수, forced scout 종목 수, forced scout 종목 중 rising missed residual 유지 종목 수를 summary에 추가했다.
+  - `latency danger root cause` 섹션을 추가해 종목별 `spread_ratio`, `ws_age_ms`, spread tick, micro bucket, top cause를 출력한다.
+  - Markdown에 `forced scout observation` 섹션을 추가해 forced scout 종목과 forced scout 제외 residual 종목을 함께 출력한다.
+- `src/tests/test_intraday_entry_blocker_diagnostics.py`
+  - 원익IPS형 forced scout 이후 플래그 없는 submit/fill lineage가 일반 `real_submit_count`를 올리지 않는 회귀 테스트를 추가했다.
+- `src/tests/test_intraday_entry_flow_report.py`
+  - forced broker submit row가 일반 submit count를 올리지 않으면서 forced scout observation에만 집계되는 회귀 테스트를 추가했다.
+  - forced scout 이후 플래그 없는 submit row가 일반 flow submit count와 BUY 통과 신호를 올리지 않는 회귀 테스트를 추가했다.
+  - `spread_too_wide`, `spread_microstructure_wide`, `latency_provenance_gap` latency root cause 집계 회귀 테스트를 추가했다.
+
+### 56.3 11:20 산출물
+
+- `data/report/intraday_entry_blocker_diagnostics/intraday_entry_blocker_diagnostics_2026-06-30_1120_1100_goal.json`
+- `data/report/intraday_entry_flow/intraday_entry_flow_2026-06-30_1100_to_1120.md`
+- 주요 값:
+  - `rising_missed_buy_count_in_latest_diagnostic=8`
+  - `real_submit_symbol_count_in_latest_diagnostic=0`
+  - `rising_missed_forced_scout_event_count=22`
+  - `rising_missed_forced_scout_symbol_count=3`
+  - `rising_missed_forced_scout_residual_symbol_count=3`
+  - `rising_missed_residual_excluding_forced_scout_symbol_count=5`
+  - forced scout residual: `000500`, `010120`, `240810`
+  - forced scout 제외 residual: `001820`, `033100`, `095610`, `153890`, `475150`
+- 11:30:
+  - `data/report/intraday_entry_blocker_diagnostics/intraday_entry_blocker_diagnostics_2026-06-30_1130_1100_goal.json`
+  - `data/report/intraday_entry_flow/intraday_entry_flow_2026-06-30_1100_to_1130.md`
+  - `rising_missed_buy_count_in_latest_diagnostic=8`
+  - `real_submit_symbol_count_in_latest_diagnostic=0`
+  - forced scout residual: `000500`, `010120`, `240810`, `475150`
+- 11:40:
+  - `data/report/intraday_entry_blocker_diagnostics/intraday_entry_blocker_diagnostics_2026-06-30_1140_1100_goal.json`
+  - `data/report/intraday_entry_flow/intraday_entry_flow_2026-06-30_1100_to_1140.md`
+  - `rising_missed_buy_count_in_latest_diagnostic=8`
+  - `real_submit_symbol_count_in_latest_diagnostic=0`
+  - forced scout residual: `000500`, `010120`, `240810`, `475150`
+- 11:50:
+  - `data/report/intraday_entry_blocker_diagnostics/intraday_entry_blocker_diagnostics_2026-06-30_1150_1100_goal.json`
+  - `data/report/intraday_entry_flow/intraday_entry_flow_2026-06-30_1100_to_1150.md`
+  - `rising_missed_buy_count_in_latest_diagnostic=8`
+  - `real_submit_symbol_count_in_latest_diagnostic=0`
+  - root cause: `000500`/`010120`은 `spread_too_wide`, `475150`은 `spread_microstructure_wide`
+- 12:00:
+  - `data/report/intraday_entry_blocker_diagnostics/intraday_entry_blocker_diagnostics_2026-06-30_1200_1100_goal.json`
+  - `data/report/intraday_entry_flow/intraday_entry_flow_2026-06-30_1100_to_1200.md`
+  - `rising_missed_buy_count_in_latest_diagnostic=8`
+  - `real_submit_symbol_count_in_latest_diagnostic=0`
+  - root cause: `033100`은 `latency_provenance_gap`, `000500`/`010120`은 `spread_too_wide`, `475150`은 `spread_microstructure_wide`
+- 12:10:
+  - `data/report/intraday_entry_blocker_diagnostics/intraday_entry_blocker_diagnostics_2026-06-30_1210_1100_goal.json`
+  - `data/report/intraday_entry_flow/intraday_entry_flow_2026-06-30_1100_to_1210.md`
+  - `rising_missed_buy_count_in_latest_diagnostic=9`
+  - `real_submit_symbol_count_in_latest_diagnostic=0`
+  - root cause: `033100`은 `latency_provenance_gap`, `000500`/`010120`은 `spread_too_wide`, `475150`/`002990`은 `spread_microstructure_wide`
+- 12:20:
+  - `data/report/intraday_entry_blocker_diagnostics/intraday_entry_blocker_diagnostics_2026-06-30_1220_1100_goal.json`
+  - `data/report/intraday_entry_flow/intraday_entry_flow_2026-06-30_1100_to_1220.md`
+  - `rising_missed_buy_count_in_latest_diagnostic=10`
+  - `real_submit_symbol_count_in_latest_diagnostic=0`
+  - forced scout 제외 residual: `033100`, `095610`
+- 12:30:
+  - `data/report/intraday_entry_blocker_diagnostics/intraday_entry_blocker_diagnostics_2026-06-30_1230_1100_goal.json`
+  - `data/report/intraday_entry_flow/intraday_entry_flow_2026-06-30_1100_to_1230.md`
+  - `rising_missed_buy_count_in_latest_diagnostic=10`
+  - `real_submit_symbol_count_in_latest_diagnostic=0`
+  - forced scout 제외 residual: `033100`, `095610`
+- 12:40:
+  - `data/report/intraday_entry_blocker_diagnostics/intraday_entry_blocker_diagnostics_2026-06-30_1240_1100_goal.json`
+  - `data/report/intraday_entry_flow/intraday_entry_flow_2026-06-30_1100_to_1240.md`
+  - `rising_missed_buy_count_in_latest_diagnostic=11`
+  - `real_submit_symbol_count_in_latest_diagnostic=0`
+  - root cause: `080220` quote stale가 latency root cause에 추가
+- 12:50:
+  - `data/report/intraday_entry_blocker_diagnostics/intraday_entry_blocker_diagnostics_2026-06-30_1250_1100_goal.json`
+  - `data/report/intraday_entry_flow/intraday_entry_flow_2026-06-30_1100_to_1250.md`
+  - `rising_missed_buy_count_in_latest_diagnostic=11`
+  - `real_submit_symbol_count_in_latest_diagnostic=0`
+  - forced scout residual: 9종목
+- 13:00:
+  - `data/report/intraday_entry_blocker_diagnostics/intraday_entry_blocker_diagnostics_2026-06-30_1300_1100_goal.json`
+  - `data/report/intraday_entry_flow/intraday_entry_flow_2026-06-30_1100_to_1300.md`
+  - `rising_missed_buy_count_in_latest_diagnostic=13`
+  - `real_submit_symbol_count_in_latest_diagnostic=0`
+  - forced scout residual: `000500`, `001820`, `002990`, `010120`, `025320`, `080220`, `103590`, `153890`, `240810`, `475150`
+  - forced scout 제외 residual: `033100`, `095610`, `356680`
+  - 최종 root cause: `033100`은 `latency_provenance_gap`, `000500`/`010120`은 `spread_too_wide`, `475150`/`002990`/`080220`/`025320`/`103590`은 `spread_microstructure_wide`
+
+### 56.4 검증
+
+- `PYTHONPATH=. .venv/bin/python -m pytest src/tests/test_intraday_entry_blocker_diagnostics.py src/tests/test_intraday_entry_flow_report.py`
+  - 통과: `45 passed`
+- `.venv/bin/python -m py_compile src/engine/monitoring/intraday_entry_blocker_diagnostics.py src/engine/monitoring/intraday_entry_flow_report.py src/tests/test_intraday_entry_blocker_diagnostics.py src/tests/test_intraday_entry_flow_report.py`
+  - 통과
+
+### 56.5 운영 경계
+
+- `runtime_effect=false`
+- forbidden uses: `stale_submit_bypass`, `broker_guard_bypass`, `intraday_threshold_mutation`, `order_price_relaxation_without_operator_override`, `real_order_approval`
+- stale quote, latency DANGER/spread guard, broker/account/order/quantity/cooldown, hard/protect/emergency stop은 우회하지 않았다.

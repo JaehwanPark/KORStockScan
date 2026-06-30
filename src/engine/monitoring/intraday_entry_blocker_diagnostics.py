@@ -15,6 +15,12 @@ ENTRY_PIPELINE = "ENTRY_PIPELINE"
 PROMOTED_STAGE = "scalping_scanner_candidate_promoted"
 REAL_SUBMIT_TRUE = "true"
 RISING_MISSED_FORCED_ENTRY_REASON = "rising_missed_one_share_entry"
+RISING_MISSED_FORCED_LINEAGE_WINDOW_SEC = 180
+RISING_MISSED_FORCED_LINEAGE_STAGES = {
+    "latency_pass",
+    "order_bundle_submitted",
+    "holding_started",
+}
 
 BLOCKER_STAGES = {
     "ai_confirmed_terminal_no_budget",
@@ -177,14 +183,60 @@ def _is_rising_missed_forced_one_share_entry(fields: dict[str, Any]) -> bool:
     return one_share_or_missing and (reason == RISING_MISSED_FORCED_ENTRY_REASON or forced)
 
 
+def _parse_event_dt(row: dict[str, Any]) -> datetime | None:
+    value = _event_time(row)
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    return parsed.replace(tzinfo=None)
+
+
+def _forced_lineage_qty_is_one(fields: dict[str, Any]) -> bool:
+    for key in ("forced_entry_qty", "order_requested_qty", "order_quantity", "quantity", "qty", "fill_qty", "order_filled_qty"):
+        value = _safe_float(fields.get(key))
+        if value == 1.0:
+            return True
+    return False
+
+
+def _is_rising_missed_forced_lineage_row(
+    row: dict[str, Any],
+    latest_forced_scout_at_by_code: dict[str, datetime],
+) -> bool:
+    code = str(row.get("stock_code") or "").strip()
+    forced_at = latest_forced_scout_at_by_code.get(code)
+    event_at = _parse_event_dt(row)
+    if forced_at is None or event_at is None:
+        return False
+    elapsed_sec = (event_at - forced_at).total_seconds()
+    if elapsed_sec < 0 or elapsed_sec > RISING_MISSED_FORCED_LINEAGE_WINDOW_SEC:
+        return False
+    fields = row.get("fields") if isinstance(row.get("fields"), dict) else {}
+    stage = str(row.get("stage") or "")
+    actual_submitted = str(fields.get("actual_order_submitted") or "").strip().lower() == REAL_SUBMIT_TRUE
+    return stage in RISING_MISSED_FORCED_LINEAGE_STAGES or actual_submitted or _forced_lineage_qty_is_one(fields)
+
+
 def _entry_events(rows: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
     grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    latest_forced_scout_at_by_code: dict[str, datetime] = {}
     for row in rows:
         if row.get("pipeline") != ENTRY_PIPELINE:
             continue
+        code = str(row.get("stock_code") or "").strip()
+        fields = row.get("fields") if isinstance(row.get("fields"), dict) else {}
+        if _is_rising_missed_forced_one_share_entry(fields):
+            event_at = _parse_event_dt(row)
+            if code and event_at is not None:
+                latest_forced_scout_at_by_code[code] = event_at
+            continue
+        if _is_rising_missed_forced_lineage_row(row, latest_forced_scout_at_by_code):
+            continue
         if _exclude_from_real_entry_analysis(row):
             continue
-        code = str(row.get("stock_code") or "").strip()
         if not code or code == "-":
             continue
         grouped[code].append(row)
@@ -635,11 +687,24 @@ def _real_rows(
     event_until: str | None = None,
 ) -> list[dict[str, Any]]:
     selected = []
+    latest_forced_scout_at_by_code: dict[str, datetime] = {}
     for row in rows:
         event_time = _event_time(row)
         if since and event_time < since:
             continue
         if event_until and event_time > event_until:
+            continue
+        code = str(row.get("stock_code") or "").strip()
+        fields = row.get("fields") if isinstance(row.get("fields"), dict) else {}
+        if row.get("pipeline") == ENTRY_PIPELINE and _is_rising_missed_forced_one_share_entry(fields):
+            event_at = _parse_event_dt(row)
+            if code and event_at is not None:
+                latest_forced_scout_at_by_code[code] = event_at
+            continue
+        if row.get("pipeline") == ENTRY_PIPELINE and _is_rising_missed_forced_lineage_row(
+            row,
+            latest_forced_scout_at_by_code,
+        ):
             continue
         if _exclude_from_real_entry_analysis(row):
             continue

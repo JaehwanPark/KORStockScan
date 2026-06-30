@@ -524,6 +524,285 @@ def test_build_report_excludes_rising_missed_one_share_forced_submit_from_flow_s
     assert row["actual_submit_count"] == 0
     assert report["summary"]["real_submit_symbol_count_in_latest_diagnostic"] == 0
     assert report["summary"]["rising_missed_symbol_count_in_report"] == 1
+    assert report["summary"]["rising_missed_forced_scout_event_count"] == 1
+    assert report["summary"]["rising_missed_forced_scout_symbol_count"] == 1
+    assert report["summary"]["rising_missed_forced_scout_residual_symbol_count"] == 1
+    assert report["summary"]["rising_missed_residual_excluding_forced_scout_symbol_count"] == 0
+    assert report["forced_scout_observation"] == {
+        "event_count": 1,
+        "symbol_count": 1,
+        "symbols": ["000777"],
+        "rising_missed_residual_symbols": ["000777"],
+        "rising_missed_residual_excluding_forced_scout_symbols": [],
+        "decision_authority": "source_quality_only",
+        "runtime_effect": False,
+    }
+
+
+def test_build_report_excludes_unflagged_submit_after_forced_scout_from_flow_submit_count(tmp_path):
+    event_path = tmp_path / "events.jsonl"
+    diagnostic_path = tmp_path / "diag.json"
+    diagnostic_path.write_text(
+        json.dumps(
+            {
+                "summary": {"real_submit_symbol_count": 0},
+                "promoted_symbols": [
+                    {
+                        "stock_code": "240810",
+                        "stock_name": "원익IPS",
+                        "first_promoted_at": "2026-06-30T11:04:00",
+                        "last_event_at": "2026-06-30T11:06:00",
+                        "max_price_delta_since_first_seen_pct": 0.55,
+                        "latest_price_delta_since_first_seen_pct": 0.55,
+                        "real_submit_count": 0,
+                    }
+                ],
+                "rising_missed_buy": [{"stock_code": "240810"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    rows = [
+        _event(
+            "240810",
+            "원익IPS",
+            "budget_pass",
+            {
+                "scanner_promotion_id": "p1",
+                "price_delta_since_first_seen_pct": "0.55",
+                "order_quantity": "1",
+                "forced_entry_reason": "rising_missed_one_share_entry",
+                "rising_missed_one_share_entry_forced": "true",
+            },
+            emitted_at="2026-06-30T11:04:10",
+        ),
+        _event(
+            "240810",
+            "원익IPS",
+            "latency_pass",
+            {
+                "scanner_promotion_id": "p1",
+                "actual_order_submitted": "False",
+                "price_delta_since_first_seen_pct": "0.55",
+                "reason": "safe_normal_entry_allowed",
+            },
+            emitted_at="2026-06-30T11:04:16",
+        ),
+        _event(
+            "240810",
+            "원익IPS",
+            "order_bundle_submitted",
+            {
+                "scanner_promotion_id": "p1",
+                "actual_order_submitted": "true",
+                "price_delta_since_first_seen_pct": "0.55",
+            },
+            emitted_at="2026-06-30T11:04:20",
+        ),
+        _event(
+            "240810",
+            "원익IPS",
+            "blocked_strength_momentum",
+            {
+                "scanner_promotion_id": "p1",
+                "price_delta_since_first_seen_pct": "0.55",
+                "reason": "below_buy_ratio",
+            },
+            emitted_at="2026-06-30T11:06:00",
+        ),
+    ]
+    event_path.write_text("\n".join(json.dumps(row, ensure_ascii=False) for row in rows), encoding="utf-8")
+
+    report = build_report(
+        target_date="2026-06-30",
+        event_cache_path=event_path,
+        diagnostic_path=diagnostic_path,
+        since="2026-06-30T11:00:00",
+        generated_at="fixed",
+    )
+
+    row = report["rows"][0]
+    assert row["stock_code"] == "240810"
+    assert row["actual_submit_count"] == 0
+    assert row["buy_signal_seen"] is False
+    assert report["summary"]["rising_missed_forced_scout_event_count"] == 1
+    assert report["summary"]["rising_missed_forced_scout_residual_symbol_count"] == 1
+
+
+def test_build_report_summarizes_latency_danger_root_cause(tmp_path):
+    event_path = tmp_path / "events.jsonl"
+    diagnostic_path = tmp_path / "diag.json"
+    diagnostic_path.write_text(
+        json.dumps(
+            {
+                "summary": {"real_submit_symbol_count": 0},
+                "promoted_symbols": [
+                    {
+                        "stock_code": "000500",
+                        "stock_name": "가온전선",
+                        "first_promoted_at": "2026-06-30T11:17:00",
+                        "last_event_at": "2026-06-30T11:19:00",
+                        "max_price_delta_since_first_seen_pct": 20.44,
+                        "dominant_actionable_blocker": {
+                            "stage": "latency_block",
+                            "reason": "latency_state_danger",
+                            "count": 2,
+                            "class": "pre_submit_quality_guard",
+                        },
+                    }
+                ],
+                "rising_missed_buy": [{"stock_code": "000500"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    rows = [
+        _event(
+            "000500",
+            "가온전선",
+            "latency_block",
+            {
+                "scanner_promotion_id": "p1",
+                "price_delta_since_first_seen_pct": "20.44",
+                "reason": "latency_state_danger",
+                "spread_ratio": "0.0111",
+                "ws_age_ms": "35",
+                "orderbook_micro_spread_ticks": "5",
+                "orderbook_micro_state": "neutral",
+                "orderbook_micro_ofi_bucket_key": "spread=wide|price=high|depth=normal|sample=rich",
+            },
+            emitted_at="2026-06-30T11:17:44",
+        ),
+        _event(
+            "000500",
+            "가온전선",
+            "latency_block",
+            {
+                "scanner_promotion_id": "p1",
+                "price_delta_since_first_seen_pct": "20.44",
+                "reason": "latency_state_danger",
+                "spread_ratio": "0.0113",
+                "ws_age_ms": "81",
+                "orderbook_micro_spread_ticks": "5",
+                "orderbook_micro_state": "neutral",
+                "orderbook_micro_ofi_bucket_key": "spread=wide|price=high|depth=normal|sample=rich",
+            },
+            emitted_at="2026-06-30T11:18:58",
+        ),
+    ]
+    event_path.write_text("\n".join(json.dumps(row, ensure_ascii=False) for row in rows), encoding="utf-8")
+
+    report = build_report(
+        target_date="2026-06-30",
+        event_cache_path=event_path,
+        diagnostic_path=diagnostic_path,
+        since="2026-06-30T11:00:00",
+        generated_at="fixed",
+    )
+
+    root = report["latency_danger_root_cause"][0]
+    assert root["stock_code"] == "000500"
+    assert root["event_count"] == 2
+    assert root["top_cause"] == "spread_too_wide"
+    assert root["spread_ratio"] == {"min": 0.0111, "median": 0.0112, "max": 0.0113}
+    assert root["ws_age_ms"] == {"min": 35.0, "median": 58.0, "max": 81.0}
+    assert root["top_ofi_bucket"] == "spread=wide|price=high|depth=normal|sample=rich"
+
+
+def test_build_report_marks_wide_microstructure_latency_cause_below_ratio_cap(tmp_path):
+    event_path = tmp_path / "events.jsonl"
+    diagnostic_path = tmp_path / "diag.json"
+    diagnostic_path.write_text(
+        json.dumps(
+            {
+                "summary": {"real_submit_symbol_count": 0},
+                "promoted_symbols": [
+                    {
+                        "stock_code": "475150",
+                        "stock_name": "SK이터닉스",
+                        "first_promoted_at": "2026-06-30T11:21:00",
+                        "max_price_delta_since_first_seen_pct": 4.06,
+                    }
+                ],
+                "rising_missed_buy": [{"stock_code": "475150"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    rows = [
+        _event(
+            "475150",
+            "SK이터닉스",
+            "latency_block",
+            {
+                "scanner_promotion_id": "p1",
+                "price_delta_since_first_seen_pct": "4.06",
+                "reason": "latency_state_danger",
+                "spread_ratio": "0.0096",
+                "ws_age_ms": "81",
+                "orderbook_micro_spread_ticks": "5",
+                "orderbook_micro_state": "neutral",
+                "orderbook_micro_ofi_bucket_key": "spread=wide|price=high|depth=thick|sample=rich",
+            },
+            emitted_at="2026-06-30T11:21:09",
+        ),
+    ]
+    event_path.write_text("\n".join(json.dumps(row, ensure_ascii=False) for row in rows), encoding="utf-8")
+
+    report = build_report(
+        target_date="2026-06-30",
+        event_cache_path=event_path,
+        diagnostic_path=diagnostic_path,
+        since="2026-06-30T11:00:00",
+        generated_at="fixed",
+    )
+
+    root = report["latency_danger_root_cause"][0]
+    assert root["top_cause"] == "spread_microstructure_wide"
+    assert root["spread_ratio"] == {"min": 0.0096, "median": 0.0096, "max": 0.0096}
+
+
+def test_build_report_marks_diagnostic_only_latency_provenance_gap(tmp_path):
+    event_path = tmp_path / "events.jsonl"
+    diagnostic_path = tmp_path / "diag.json"
+    event_path.write_text("", encoding="utf-8")
+    diagnostic_path.write_text(
+        json.dumps(
+            {
+                "summary": {"real_submit_symbol_count": 0},
+                "promoted_symbols": [
+                    {
+                        "stock_code": "033100",
+                        "stock_name": "제룡전기",
+                        "first_promoted_at": "2026-06-30T08:01:00",
+                        "max_price_delta_since_first_seen_pct": 5.25,
+                        "dominant_actionable_blocker": {
+                            "stage": "latency_block",
+                            "reason": "latency_state_danger",
+                            "count": 34,
+                            "class": "pre_submit_quality_guard",
+                        },
+                    }
+                ],
+                "rising_missed_buy": [{"stock_code": "033100"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    report = build_report(
+        target_date="2026-06-30",
+        event_cache_path=event_path,
+        diagnostic_path=diagnostic_path,
+        since="2026-06-30T11:00:00",
+        generated_at="fixed",
+    )
+
+    root = report["latency_danger_root_cause"][0]
+    assert root["stock_code"] == "033100"
+    assert root["event_count"] == 34
+    assert root["top_cause"] == "latency_provenance_gap"
+    assert root["top_ofi_bucket"] == "diagnostic_latency_without_source_event_fields"
 
 
 def test_build_report_until_excludes_later_event_cache_submit(tmp_path):

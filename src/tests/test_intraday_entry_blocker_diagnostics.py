@@ -1325,6 +1325,83 @@ def test_build_report_excludes_rising_missed_one_share_forced_submit_from_genera
     assert item["real_submit_count"] == 0
 
 
+def test_build_report_excludes_unflagged_submit_after_rising_missed_forced_scout(tmp_path):
+    path = tmp_path / "pipeline_events_2026-06-30.jsonl"
+    rows = [
+        _event(
+            "240810",
+            "원익IPS",
+            "scalping_scanner_candidate_promoted",
+            {"price_delta_since_first_seen_pct": "0.55"},
+            emitted_at="2026-06-30T11:04:00",
+        ),
+        _event(
+            "240810",
+            "원익IPS",
+            "budget_pass",
+            {
+                "price_delta_since_first_seen_pct": "0.55",
+                "order_quantity": "1",
+                "forced_entry_reason": "rising_missed_one_share_entry",
+                "rising_missed_one_share_entry_forced": "true",
+            },
+            emitted_at="2026-06-30T11:04:10",
+        ),
+        _event(
+            "240810",
+            "원익IPS",
+            "latency_pass",
+            {
+                "actual_order_submitted": "False",
+                "broker_order_forbidden": "False",
+                "price_delta_since_first_seen_pct": "0.55",
+                "reason": "safe_normal_entry_allowed",
+            },
+            emitted_at="2026-06-30T11:04:16",
+        ),
+        _event(
+            "240810",
+            "원익IPS",
+            "order_bundle_submitted",
+            {
+                "actual_order_submitted": "true",
+                "broker_order_submitted": "True",
+                "price_delta_since_first_seen_pct": "0.55",
+            },
+            emitted_at="2026-06-30T11:04:20",
+        ),
+        _event(
+            "240810",
+            "원익IPS",
+            "holding_started",
+            {
+                "actual_order_submitted": "True",
+                "order_requested_qty": "1",
+                "order_filled_qty": "1",
+                "fill_qty": "1",
+            },
+            emitted_at="2026-06-30T11:05:20",
+        ),
+        _event(
+            "240810",
+            "원익IPS",
+            "blocked_strength_momentum",
+            {"price_delta_since_first_seen_pct": "0.55", "reason": "below_buy_ratio"},
+            emitted_at="2026-06-30T11:06:00",
+        ),
+    ]
+    path.write_text("\n".join(json.dumps(row, ensure_ascii=False) for row in rows), encoding="utf-8")
+
+    report = build_report(target_date="2026-06-30", pipeline_path=path, generated_at="fixed")
+
+    assert report["summary"]["real_submit_symbol_count"] == 0
+    assert report["summary"]["rising_missed_buy_count"] == 1
+    item = report["rising_missed_buy"][0]
+    assert item["stock_code"] == "240810"
+    assert item["real_submit_count"] == 0
+    assert item["latest_blocker"]["stage"] == "blocked_strength_momentum"
+
+
 def test_build_report_event_until_excludes_later_submit_from_window(tmp_path):
     path = tmp_path / "pipeline_events_2026-06-30.jsonl"
     rows = [
