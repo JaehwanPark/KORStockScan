@@ -1,0 +1,30 @@
+# Threshold Cycle AI Correction - 2026-06-30 postclose
+
+- AI status: `parsed`
+- Authority: proposal-only; deterministic calibration guard is the source of truth.
+- Runtime change: `false`
+- Input context chars: `81251`
+- Input context hash: `1a89340376ded4890b1305708c8fcdb674940fc698e1df1828ab86a372f90f1d`
+- Provider status: `openai / success`
+- Usage: input_tokens=`31824`, output_tokens=`6061`, total_tokens=`37885`, elapsed_ms=`71912`
+- Cost: estimated_cost_usd=`None`, status=`missing_price_contract`
+
+| family | ai_state | route | proposal | guard | reason |
+| --- | --- | --- | --- | --- | --- |
+| soft_stop_whipsaw_confirmation | correction_proposed | threshold_candidate | state=adjust_up, value=80, window=rolling_10d | accepted=True, effective_state=adjust_up, effective_value=80, runtime_change=False | "calibration_state": "adjust_up" conflicts with "current_value": 60 and "recommended_value": 20. Whipsaw evidence supports more confirmation, not a drop to 20. |
+| holding_flow_ofi_smoothing | caution | normal_drift | state=hold, value=90, window=daily_intraday | accepted=True, effective_state=hold, effective_value=90, runtime_change=False | Hold is acceptable, but "sentinel_primary": "HOLD_DEFER_DANGER" and defer/force-exit imbalance warrant continued daily review. |
+| protect_trailing_smoothing | correction_proposed | threshold_candidate | state=freeze, value=20, window=rolling_10d | accepted=True, effective_state=freeze, effective_value=20, runtime_change=False | Do not apply "adjust_down" while "eligible_for_live_review": false and "qualifying_cohort_count": 0. |
+| trailing_continuation | agree | threshold_candidate | state=freeze, value=0.4, window=rolling_10d | accepted=True, effective_state=freeze, effective_value=0.4, runtime_change=False | Freeze is appropriate because live review is ineligible and GOOD_EXIT harm risk remains unresolved. |
+| market_regime_continuous_thresholds | agree | instrumentation_gap | state=hold_sample, value=65, window=rolling_10d | accepted=True, effective_state=hold_sample, effective_value=65, runtime_change=False | Hold-sample is appropriate because valid market regime days are below the rolling source floor. |
+| pre_submit_price_guard | agree | normal_drift | state=hold, value=True, window=daily_intraday | accepted=True, effective_state=hold, effective_value=True, runtime_change=False | Hold is appropriate because this family is a hard safety/source-quality audit and not a runtime threshold candidate. |
+| dynamic_entry_price_resolver | agree | instrumentation_gap | state=hold_sample, value=1, window=daily_intraday | accepted=True, effective_state=hold_sample, effective_value=1, runtime_change=False | Hold-sample is appropriate until the counterfactual join gap is resolved and a bounded candidate exists. |
+| entry_price_execution_quality | caution | instrumentation_gap | state=hold_sample, value=report_only, window=daily_intraday | accepted=True, effective_state=hold_sample, effective_value=report_only, runtime_change=False | Report-only status should remain, but "source_sample_count": 0 is below the sample floor for audit calibration evidence. |
+| score65_74_recovery_probe | caution | incident | state=hold, value=False, window=rolling_5d | accepted=True, effective_state=hold, effective_value=False, runtime_change=False | Hold is reasonable; positive cohort EV is offset by source-quality and latency drought sentinels. |
+| strength_momentum_soft_gate_p1 | correction_proposed | instrumentation_gap | state=hold_sample, value=False, window=rolling_5d | accepted=True, effective_state=hold_sample, effective_value=False, runtime_change=False | Use hold_sample rather than plain hold because "source_sample_count": 0 and no source metrics are provided for this report-only redesign family. |
+| overbought_pullback_guard_p1 | agree | threshold_candidate | state=hold, value=False, window=rolling_5d | accepted=True, effective_state=hold, effective_value=False, runtime_change=False | Hold is appropriate because runtime apply is not allowed and missed-winner risk is high. |
+| liquidity_pre_submit_guard_p1 | agree | threshold_candidate | state=hold, value=False, window=rolling_5d | accepted=True, effective_state=hold, effective_value=False, runtime_change=False | Hold is appropriate because runtime apply is not allowed; loss-tail evidence and missed-winner tradeoff require approval. |
+| bad_entry_refined_canary | correction_proposed | instrumentation_gap | state=freeze, value=False, window=rolling_10d | accepted=True, effective_state=hold_sample, effective_value=False, runtime_change=False | Do not enable the canary from false to true while lifecycle attribution shows no preventable candidates and material false-positive risk. |
+| holding_exit_decision_matrix_advisory | correction_proposed | instrumentation_gap | state=hold_sample, value=False, window=daily_intraday | accepted=True, effective_state=hold_sample, effective_value=False, runtime_change=False | Map the non-standard "hold_no_edge" condition to hold_sample because the matrix contract is missing. |
+| lifecycle_decision_matrix_runtime | correction_proposed | instrumentation_gap | state=freeze, value=False, window=rolling_5d | accepted=True, effective_state=hold_sample, effective_value=False, runtime_change=False | Do not enable runtime from false to true while candidates show "approval_required": true and "allowed_runtime_apply": false. |
+| scale_in_price_guard | agree | normal_drift | state=hold, value=60, window=rolling_10d | accepted=True, effective_state=hold, effective_value=60, runtime_change=False | Hold is appropriate because scale-in evidence is sparse and SAW weight source is not ready. |
+| position_sizing_dynamic_formula | agree | instrumentation_gap | state=hold_sample, value=linear_10_30_current, window=rolling_10d | accepted=True, effective_state=hold_sample, effective_value=linear_10_30_current, runtime_change=False | Hold-sample is appropriate because required sizing inputs are missing and "source_sample_count": 0 is below floor. |
