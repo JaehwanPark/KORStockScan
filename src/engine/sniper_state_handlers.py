@@ -12921,6 +12921,148 @@ def _evaluate_real_weak_pullback_entry_block(
     }
 
 
+def _field_has_numeric_value(value) -> bool:
+    if value is None:
+        return False
+    if isinstance(value, str) and value.strip().lower() in {"", "-", "none", "null", "not_evaluated"}:
+        return False
+    try:
+        float(value)
+        return True
+    except Exception:
+        return False
+
+
+def _evaluate_real_weak_ai_micro_entry_block(
+    *,
+    strategy,
+    stock,
+    latency_gate,
+    latency_signal_score,
+    orderbook_fields,
+    microstructure_fields=None,
+) -> dict:
+    if str(strategy or "").upper() not in {"SCALPING", "SCALP"}:
+        return {"blocked": False, "reason": "non_scalping"}
+    if not _rule_bool("SCALP_REAL_WEAK_AI_MICRO_ENTRY_BLOCK_ENABLED", True):
+        return {"blocked": False, "reason": "disabled"}
+    if _is_any_simulated_position(stock, strategy) or _is_swing_live_order_dry_run(strategy):
+        return {"blocked": False, "reason": "sim_or_dry_run"}
+
+    latency_fields = latency_gate if isinstance(latency_gate, dict) else {}
+    max_ai_score = _rule_float("SCALP_REAL_WEAK_AI_MICRO_ENTRY_BLOCK_MAX_AI_SCORE", 62.0)
+    min_buy_pressure = _rule_float("SCALP_REAL_WEAK_AI_MICRO_ENTRY_BLOCK_MIN_BUY_PRESSURE_10T", 30.0)
+    min_qi = _rule_float("SCALP_REAL_WEAK_AI_MICRO_ENTRY_BLOCK_MIN_QI", 0.20)
+    ai_score = _safe_float(
+        _entry_submit_field(
+            latency_fields,
+            stock,
+            key="ai_score",
+            aliases=("last_watching_ai_score", "current_ai_score"),
+            default=latency_signal_score,
+        ),
+        latency_signal_score,
+    )
+    ai_action = str(
+        _entry_submit_field(
+            latency_fields,
+            stock,
+            key="ai_action",
+            aliases=("last_watching_ai_action", "action"),
+            default="WAIT",
+        )
+        or "WAIT"
+    ).strip().upper()
+    if ai_score > max_ai_score:
+        return {
+            "blocked": False,
+            "reason": "ai_context_not_weak",
+            "weak_ai_micro_entry_block_ai_score": f"{ai_score:.1f}",
+            "weak_ai_micro_entry_block_ai_action": ai_action or "-",
+            "weak_ai_micro_entry_block_max_ai_score": f"{max_ai_score:.1f}",
+        }
+
+    buy_pressure_raw = _entry_submit_field(
+        microstructure_fields,
+        orderbook_fields,
+        latency_fields,
+        stock,
+        key="buy_pressure_10t",
+        aliases=("buy_pressure", "last_buy_pressure_10t"),
+        default=None,
+    )
+    has_buy_pressure = _field_has_numeric_value(buy_pressure_raw)
+    buy_pressure = _safe_float(buy_pressure_raw, 0.0)
+    weak_buy_pressure = has_buy_pressure and buy_pressure <= min_buy_pressure
+
+    micro_state = str(
+        _entry_submit_field(
+            orderbook_fields,
+            microstructure_fields,
+            latency_fields,
+            stock,
+            key="orderbook_micro_state",
+            aliases=("micro_state",),
+            default="",
+        )
+        or ""
+    ).strip().lower()
+    ofi_raw = _entry_submit_field(
+        orderbook_fields,
+        microstructure_fields,
+        latency_fields,
+        stock,
+        key="orderbook_micro_ofi_norm",
+        aliases=("ofi_norm",),
+        default=None,
+    )
+    qi_raw = _entry_submit_field(
+        orderbook_fields,
+        microstructure_fields,
+        latency_fields,
+        stock,
+        key="orderbook_micro_qi",
+        aliases=("qi",),
+        default=None,
+    )
+    has_ofi = _field_has_numeric_value(ofi_raw)
+    has_qi = _field_has_numeric_value(qi_raw)
+    ofi_norm = _safe_float(ofi_raw, 0.0)
+    qi = _safe_float(qi_raw, 0.0)
+    weak_micro_state = micro_state in {"neutral", "bearish", "weak", "mixed", "insufficient"}
+    weak_ofi = has_ofi and ofi_norm <= 0.0
+    weak_qi = has_qi and qi < min_qi
+    weak_micro = weak_micro_state or weak_ofi or weak_qi
+
+    fields = {
+        "blocked": bool(weak_buy_pressure and weak_micro),
+        "reason": "weak_ai_buy_pressure_micro_context",
+        "block_reason": "weak_ai_buy_pressure_micro_context",
+        "threshold_family": "scalp_real_weak_ai_micro_entry_block",
+        "decision_authority": "operator_runtime_override_real_entry_block",
+        "runtime_effect": True,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "weak_ai_micro_entry_block_enabled": True,
+        "weak_ai_micro_entry_block_ai_score": f"{ai_score:.1f}",
+        "weak_ai_micro_entry_block_ai_action": ai_action or "-",
+        "weak_ai_micro_entry_block_max_ai_score": f"{max_ai_score:.1f}",
+        "weak_ai_micro_entry_block_buy_pressure_10t": f"{buy_pressure:.2f}" if has_buy_pressure else "-",
+        "weak_ai_micro_entry_block_min_buy_pressure_10t": f"{min_buy_pressure:.2f}",
+        "weak_ai_micro_entry_block_weak_buy_pressure": weak_buy_pressure,
+        "weak_ai_micro_entry_block_micro_state": micro_state or "-",
+        "weak_ai_micro_entry_block_ofi_norm": f"{ofi_norm:.4f}" if has_ofi else "-",
+        "weak_ai_micro_entry_block_qi": f"{qi:.4f}" if has_qi else "-",
+        "weak_ai_micro_entry_block_min_qi": f"{min_qi:.4f}",
+        "weak_ai_micro_entry_block_weak_micro": weak_micro,
+        "forbidden_uses": "score_threshold_mutation,provider_route_change,quantity_cap_release,broker_guard_bypass,tuning_auto_apply_authority",
+    }
+    if not fields["blocked"]:
+        fields["reason"] = "weak_context_not_confirmed"
+        fields["block_reason"] = "weak_context_not_confirmed"
+    return fields
+
+
 def _entry_planned_total_qty(planned_orders) -> int:
     total = 0
     for order in planned_orders or []:
@@ -22330,6 +22472,50 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             best_bid=best_bid_at_submit,
             best_ask=best_ask_at_submit,
         )
+    microstructure_submit_log_fields = _microstructure_reaction_log_fields_from_stock(stock)
+    weak_ai_micro_entry_block = _evaluate_real_weak_ai_micro_entry_block(
+        strategy=strategy,
+        stock=stock,
+        latency_gate=latency_gate,
+        latency_signal_score=latency_signal_score,
+        orderbook_fields=entry_orderbook_micro_fields,
+        microstructure_fields=microstructure_submit_log_fields,
+    )
+    if weak_ai_micro_entry_block.get("blocked"):
+        log_info(
+            f"[REAL_WEAK_AI_MICRO_ENTRY_BLOCK] {stock.get('name')}({code}) "
+            f"ai={weak_ai_micro_entry_block.get('weak_ai_micro_entry_block_ai_score')} "
+            f"bp={weak_ai_micro_entry_block.get('weak_ai_micro_entry_block_buy_pressure_10t')} "
+            f"micro={weak_ai_micro_entry_block.get('weak_ai_micro_entry_block_micro_state')}"
+        )
+        clear_signal_reference(stock)
+        _log_entry_pipeline(
+            stock,
+            code,
+            "real_weak_ai_micro_entry_block",
+            forced_entry_reason=RISING_MISSED_FORCED_ENTRY_REASON if forced_rising_missed_one_share else "-",
+            forced_entry_qty=1 if forced_rising_missed_one_share else 0,
+            **_merge_entry_pipeline_field_groups(
+                latency_price_snapshot,
+                entry_orderbook_micro_fields,
+                microstructure_submit_log_fields,
+                weak_ai_micro_entry_block,
+            ),
+        )
+        _emit_scalp_entry_adm_snapshot(
+            stock,
+            code,
+            "real_weak_ai_micro_entry_block",
+            ai_score=latency_signal_score,
+            chosen_action="NO_BUY_AI",
+            latency_gate=latency_gate,
+            price_snapshot=latency_price_snapshot,
+            orderbook_fields=entry_orderbook_micro_fields,
+            actual_order_submitted=False,
+            broker_order_forbidden=True,
+            extra_fields=weak_ai_micro_entry_block,
+        )
+        return False
     if forced_rising_missed_one_share:
         planned_orders = collapse_to_one_share_order(
             planned_orders,
@@ -22365,7 +22551,6 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         pre_ai_context_fields=pre_ai_gate_submit_log_fields,
     )
     real_pre_submit_guard_fields = _pre_submit_guard_verdict_log_fields(real_pre_submit_guard_verdicts)
-    microstructure_submit_log_fields = _microstructure_reaction_log_fields_from_stock(stock)
 
     if submit_revalidation_fields.get("entry_submit_revalidation_warning"):
         _log_entry_pipeline(

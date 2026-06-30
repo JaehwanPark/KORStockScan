@@ -363,6 +363,10 @@ class TradingConfig:
     SCALPING_CONDITIONAL_STRONG_DEFENSIVE_BPS: int = 10  # percent_bps 모드 강세 조건 방어 제출가 bp (0.1%)
     SCALPING_NORMAL_FAVORABLE_DEFENSIVE_BPS: int = 15  # percent_bps 모드 우호 micro 방어 제출가 bp
     SCALPING_NORMAL_WEAK_DEFENSIVE_BPS: int = 40  # percent_bps 모드 약한 유동성/넓은 spread 방어 제출가 bp
+    SCALP_REAL_WEAK_AI_MICRO_ENTRY_BLOCK_ENABLED: bool = True  # real SCALPING 약한 AI/매수압/micro 실매수 제출 차단
+    SCALP_REAL_WEAK_AI_MICRO_ENTRY_BLOCK_MAX_AI_SCORE: float = 62.0
+    SCALP_REAL_WEAK_AI_MICRO_ENTRY_BLOCK_MIN_BUY_PRESSURE_10T: float = 30.0
+    SCALP_REAL_WEAK_AI_MICRO_ENTRY_BLOCK_MIN_QI: float = 0.20
     SCALP_REAL_WEAK_PULLBACK_ENTRY_BLOCK_ENABLED: bool = False  # real SCALPING 약한 눌림/CAUTION 진입 차단은 runtime env로만 ON
     SCALP_REAL_WEAK_PULLBACK_ENTRY_BLOCK_MIN_MICRO_POSITIVES: int = 2
     SCALP_REAL_WEAK_PULLBACK_ENTRY_BLOCK_MIN_SPREAD_TICKS: int = 5
@@ -1629,6 +1633,18 @@ def _build_trading_rules() -> TradingConfig:
         "KORSTOCKSCAN_SCALPING_NORMAL_FAVORABLE_DEFENSIVE_BPS"
     )
     env_scalping_normal_weak_defensive_bps = _env_int("KORSTOCKSCAN_SCALPING_NORMAL_WEAK_DEFENSIVE_BPS")
+    env_scalp_real_weak_ai_micro_entry_block_enabled = _env_bool(
+        "KORSTOCKSCAN_SCALP_REAL_WEAK_AI_MICRO_ENTRY_BLOCK_ENABLED"
+    )
+    env_scalp_real_weak_ai_micro_entry_block_max_ai_score = _env_float(
+        "KORSTOCKSCAN_SCALP_REAL_WEAK_AI_MICRO_ENTRY_BLOCK_MAX_AI_SCORE"
+    )
+    env_scalp_real_weak_ai_micro_entry_block_min_buy_pressure = _env_float(
+        "KORSTOCKSCAN_SCALP_REAL_WEAK_AI_MICRO_ENTRY_BLOCK_MIN_BUY_PRESSURE_10T"
+    )
+    env_scalp_real_weak_ai_micro_entry_block_min_qi = _env_float(
+        "KORSTOCKSCAN_SCALP_REAL_WEAK_AI_MICRO_ENTRY_BLOCK_MIN_QI"
+    )
     env_scalp_real_weak_pullback_entry_block_enabled = _env_bool(
         "KORSTOCKSCAN_SCALP_REAL_WEAK_PULLBACK_ENTRY_BLOCK_ENABLED"
     )
@@ -2239,6 +2255,18 @@ def _build_trading_rules() -> TradingConfig:
             SCALPING_NORMAL_WEAK_DEFENSIVE_BPS=env_scalping_normal_weak_defensive_bps
             if env_scalping_normal_weak_defensive_bps is not None
             else config.SCALPING_NORMAL_WEAK_DEFENSIVE_BPS,
+            SCALP_REAL_WEAK_AI_MICRO_ENTRY_BLOCK_ENABLED=env_scalp_real_weak_ai_micro_entry_block_enabled
+            if env_scalp_real_weak_ai_micro_entry_block_enabled is not None
+            else config.SCALP_REAL_WEAK_AI_MICRO_ENTRY_BLOCK_ENABLED,
+            SCALP_REAL_WEAK_AI_MICRO_ENTRY_BLOCK_MAX_AI_SCORE=env_scalp_real_weak_ai_micro_entry_block_max_ai_score
+            if env_scalp_real_weak_ai_micro_entry_block_max_ai_score is not None
+            else config.SCALP_REAL_WEAK_AI_MICRO_ENTRY_BLOCK_MAX_AI_SCORE,
+            SCALP_REAL_WEAK_AI_MICRO_ENTRY_BLOCK_MIN_BUY_PRESSURE_10T=env_scalp_real_weak_ai_micro_entry_block_min_buy_pressure
+            if env_scalp_real_weak_ai_micro_entry_block_min_buy_pressure is not None
+            else config.SCALP_REAL_WEAK_AI_MICRO_ENTRY_BLOCK_MIN_BUY_PRESSURE_10T,
+            SCALP_REAL_WEAK_AI_MICRO_ENTRY_BLOCK_MIN_QI=env_scalp_real_weak_ai_micro_entry_block_min_qi
+            if env_scalp_real_weak_ai_micro_entry_block_min_qi is not None
+            else config.SCALP_REAL_WEAK_AI_MICRO_ENTRY_BLOCK_MIN_QI,
             SCALP_REAL_WEAK_PULLBACK_ENTRY_BLOCK_ENABLED=env_scalp_real_weak_pullback_entry_block_enabled
             if env_scalp_real_weak_pullback_entry_block_enabled is not None
             else config.SCALP_REAL_WEAK_PULLBACK_ENTRY_BLOCK_ENABLED,

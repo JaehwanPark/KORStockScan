@@ -155,6 +155,71 @@ def test_rising_missed_one_share_order_collapse_keeps_single_one_share_leg():
     ]
 
 
+def test_real_weak_ai_micro_entry_block_matches_jusung_case(monkeypatch):
+    monkeypatch.delenv("KORSTOCKSCAN_SCALP_REAL_WEAK_AI_MICRO_ENTRY_BLOCK_ENABLED", raising=False)
+
+    decision = state_handlers._evaluate_real_weak_ai_micro_entry_block(
+        strategy="SCALPING",
+        stock={
+            "last_watching_ai_action": "WAIT",
+            "last_watching_ai_score": 62.0,
+            "last_buy_pressure_10t": 12.75,
+        },
+        latency_gate={"allowed": True, "decision": "ALLOW_NORMAL"},
+        latency_signal_score=62.0,
+        orderbook_fields={
+            "orderbook_micro_state": "neutral",
+            "orderbook_micro_ofi_norm": -0.286618,
+            "orderbook_micro_qi": 0.096074,
+        },
+        microstructure_fields={"buy_pressure_10t": "12.750"},
+    )
+
+    assert decision["blocked"] is True
+    assert decision["block_reason"] == "weak_ai_buy_pressure_micro_context"
+    assert decision["actual_order_submitted"] is False
+    assert decision["broker_order_forbidden"] is True
+    assert decision["weak_ai_micro_entry_block_ai_score"] == "62.0"
+    assert decision["weak_ai_micro_entry_block_weak_buy_pressure"] is True
+    assert decision["weak_ai_micro_entry_block_weak_micro"] is True
+
+
+def test_real_weak_ai_micro_entry_block_keeps_strong_buy_context():
+    decision = state_handlers._evaluate_real_weak_ai_micro_entry_block(
+        strategy="SCALPING",
+        stock={"last_watching_ai_action": "BUY", "last_watching_ai_score": 78.0},
+        latency_gate={"allowed": True, "decision": "ALLOW_NORMAL"},
+        latency_signal_score=78.0,
+        orderbook_fields={
+            "orderbook_micro_state": "bullish",
+            "orderbook_micro_ofi_norm": 0.4,
+            "orderbook_micro_qi": 0.35,
+        },
+        microstructure_fields={"buy_pressure_10t": "58.0"},
+    )
+
+    assert decision["blocked"] is False
+    assert decision["reason"] == "ai_context_not_weak"
+
+
+def test_real_weak_ai_micro_entry_block_blocks_low_score_buy_action():
+    decision = state_handlers._evaluate_real_weak_ai_micro_entry_block(
+        strategy="SCALPING",
+        stock={"last_watching_ai_action": "BUY", "last_watching_ai_score": 62.0},
+        latency_gate={"allowed": True, "decision": "ALLOW_NORMAL"},
+        latency_signal_score=62.0,
+        orderbook_fields={
+            "orderbook_micro_state": "neutral",
+            "orderbook_micro_ofi_norm": -0.1,
+            "orderbook_micro_qi": 0.10,
+        },
+        microstructure_fields={"buy_pressure_10t": "20.0"},
+    )
+
+    assert decision["blocked"] is True
+    assert decision["weak_ai_micro_entry_block_ai_action"] == "BUY"
+
+
 def test_rising_missed_one_share_hook_bypasses_watching_soft_branch(monkeypatch):
     state_handlers.COOLDOWNS = {}
     state_handlers.ALERTED_STOCKS = set()
