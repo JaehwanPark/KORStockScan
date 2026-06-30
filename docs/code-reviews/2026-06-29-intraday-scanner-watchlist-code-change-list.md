@@ -3234,3 +3234,56 @@
   - threshold/provider/order price/quantity cap 변경 없음.
   - stale quote, broker/account/order/cooldown, hard/protect/emergency stop 우회 없음.
   - runtime effect는 scanner WATCHING pool management에만 한정된다.
+
+## 55. 2026-06-30 10:20-10:40 목표 루프: latency block 진단 분류 보강
+
+작성 시각: `2026-06-30 10:43 KST`
+
+### 55.1 판정
+
+- 10:20 루프에서 `rising_missed_buy_count=2`가 재발했으나, 두 종목 모두 scanner precheck 이후 `latency_block`까지 진행했다.
+- 기존 diagnostic은 `latency_block`을 blocker stage로 보지 않아 최신 pre-submit guard를 놓치고, 이전 `scanner_fast_precheck_stability_pending`을 주 blocker로 남겼다.
+- 이는 BUY threshold, order price, cancel wait, broker guard 문제가 아니라 관측 producer의 pre-submit blocker 분류 누락이다.
+- 10:40 루프에서는 `rising_missed_buy_count=0`, `real_submit_symbol_count=20`으로 일반 BUY 전 actionable major blocker는 실질 잔여 없음으로 회복됐다.
+
+### 55.2 코드수정
+
+- `src/engine/monitoring/intraday_entry_blocker_diagnostics.py`
+  - `latency_block`을 blocker stage에 추가했다.
+  - `latency_block` taxonomy를 `pre_submit_quality_guard` / `inspect_latency_danger_or_slippage_without_guard_bypass`로 분류했다.
+  - pre-submit quality guard가 scanner skip보다 뒤 단계의 submit 직전 차단으로 보이도록 dominant actionable blocker 우선순위를 추가했다.
+- `src/tests/test_intraday_entry_blocker_diagnostics.py`
+  - scanner precheck 이후 `latency_block/latency_state_danger`가 최신 blocker와 dominant actionable blocker로 남는 회귀 테스트를 추가했다.
+
+### 55.3 산출물
+
+- 10:20:
+  - `data/report/intraday_entry_blocker_diagnostics/intraday_entry_blocker_diagnostics_2026-06-30_1020_goal.json`
+  - `data/report/intraday_entry_flow/intraday_entry_flow_2026-06-30_0800_to_1020.md`
+  - `rising_missed_buy_count=2`, 최신 blocker는 `latency_block/latency_state_danger`로 정정.
+- 10:30:
+  - `data/report/intraday_entry_blocker_diagnostics/intraday_entry_blocker_diagnostics_2026-06-30_1030_goal.json`
+  - `data/report/intraday_entry_flow/intraday_entry_flow_2026-06-30_0800_to_1030.md`
+  - `rising_missed_buy_count=1`, 삼화콘덴서 최신 blocker는 `latency_block/caution_slippage_exceeded`.
+  - full-eval deferred는 `deferred_then_evaluated`라 submit 병목으로 승격하지 않음.
+- 10:40:
+  - `data/report/intraday_entry_blocker_diagnostics/intraday_entry_blocker_diagnostics_2026-06-30_1040_goal.json`
+  - `data/report/intraday_entry_flow/intraday_entry_flow_2026-06-30_0800_to_1040.md`
+  - `rising_missed_buy_count=0`, `real_submit_symbol_count=20`, `buy_signal_or_pre_submit_pass_seen_symbols=21`.
+- 10:50:
+  - `data/report/intraday_entry_blocker_diagnostics/intraday_entry_blocker_diagnostics_2026-06-30_1050_goal.json`
+  - `data/report/intraday_entry_flow/intraday_entry_flow_2026-06-30_0800_to_1050.md`
+  - `rising_missed_buy_count=0`, `real_submit_symbol_count=21`.
+- 11:00:
+  - `data/report/intraday_entry_blocker_diagnostics/intraday_entry_blocker_diagnostics_2026-06-30_1100_goal.json`
+  - `data/report/intraday_entry_flow/intraday_entry_flow_2026-06-30_0800_to_1100.md`
+  - `rising_missed_buy_count=0`, `real_submit_symbol_count=21`, `rising_missed_full_eval_budget_deferred_symbol_count=0`.
+- final stabilization:
+  - `data/report/intraday_entry_flow/intraday_entry_flow_2026-06-30_final_stabilization.md`
+  - 사용자 목표 변경에 맞춰 10:00~11:00 loop 판정으로 갱신.
+
+### 55.4 운영 경계
+
+- `runtime_effect=false`
+- forbidden uses: `stale_submit_bypass`, `broker_guard_bypass`, `intraday_threshold_mutation`, `order_price_relaxation_without_operator_override`, `real_order_approval`
+- latency DANGER/slippage guard, stale quote guard, broker/account/order/quantity/cooldown, hard/protect/emergency stop은 우회하지 않았다.
