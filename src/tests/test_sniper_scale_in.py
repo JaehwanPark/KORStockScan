@@ -97,6 +97,23 @@ def test_rising_missed_one_share_entry_blocks_price_above_cap():
     assert decision.log_fields["rising_missed_one_share_entry_price_cap_krw"] == MAX_ONE_SHARE_ENTRY_PRICE_KRW
 
 
+def test_rising_missed_one_share_collapse_overrides_existing_order_tag():
+    collapsed = collapse_to_one_share_order(
+        [{"tag": "normal", "qty": 5, "price": 10000, "tif": "IOC"}],
+        fallback_price=9000,
+    )
+
+    assert collapsed == [
+        {
+            "tag": FORCED_ENTRY_REASON,
+            "qty": 1,
+            "price": 10000,
+            "tif": "IOC",
+            "rising_missed_one_share_entry_forced": True,
+        }
+    ]
+
+
 def test_rising_missed_one_share_entry_blocks_open_pending_and_holding():
     base_stock = {
         "strategy": "SCALPING",
@@ -146,7 +163,7 @@ def test_rising_missed_one_share_order_collapse_keeps_single_one_share_leg():
 
     assert collapsed == [
         {
-            "tag": "main",
+            "tag": FORCED_ENTRY_REASON,
             "qty": 1,
             "price": 10050,
             "tif": "DAY",
@@ -633,6 +650,64 @@ def test_rising_missed_one_share_submit_rechecks_pending_before_deposit(monkeypa
     }
 
     assert state_handlers._submit_watching_triggered_entry(stock, "123456", {"curr": 10000}, 1, runtime) is False
+
+
+def test_rising_missed_one_share_submit_rechecks_price_cap_before_deposit(monkeypatch):
+    state_handlers.TRADING_RULES = CONFIG
+    logs = []
+
+    monkeypatch.setenv("KORSTOCKSCAN_RISING_MISSED_ONE_SHARE_ENTRY_ENABLED", "true")
+    monkeypatch.setattr(
+        state_handlers.kiwoom_orders,
+        "get_deposit",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("deposit should not be queried")),
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_entry_pipeline",
+        lambda stock, code, stage, **fields: logs.append((stage, fields)),
+    )
+
+    stock = {
+        "id": 1,
+        "name": "RISING_HIGH_PRICE",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "rising_missed_one_share_entry_forced": True,
+        "rising_missed_one_share_scout": True,
+        "rising_missed_scout_upgrade_pending": True,
+        "forced_entry_qty": 1,
+        "forced_entry_reason": FORCED_ENTRY_REASON,
+        "target_buy_price": MAX_ONE_SHARE_ENTRY_PRICE_KRW + 1,
+    }
+    runtime = {
+        "strategy": "SCALPING",
+        "ratio": 0.0,
+        "curr_price": MAX_ONE_SHARE_ENTRY_PRICE_KRW + 1,
+        "liquidity_value": None,
+        "msg": "forced",
+        "now_ts": 1000.0,
+        "cooldowns": {},
+        "alerted_stocks": set(),
+        "forced_entry_reason": FORCED_ENTRY_REASON,
+    }
+
+    result = state_handlers._submit_watching_triggered_entry(
+        stock,
+        "123456",
+        {"curr": MAX_ONE_SHARE_ENTRY_PRICE_KRW + 1},
+        1,
+        runtime,
+    )
+
+    assert result is False
+    assert stock.get("rising_missed_one_share_entry_forced") is None
+    assert stock.get("rising_missed_one_share_scout") is None
+    assert logs[-1][0] == "rising_missed_one_share_entry_submit_blocked"
+    assert logs[-1][1]["block_reason"] == BLOCK_PRICE_ABOVE_CAP
+    assert logs[-1][1]["rising_missed_one_share_entry_price"] == MAX_ONE_SHARE_ENTRY_PRICE_KRW + 1
+    assert logs[-1][1]["rising_missed_one_share_entry_price_cap_krw"] == MAX_ONE_SHARE_ENTRY_PRICE_KRW
+    assert logs[-1][1]["broker_order_forbidden"] is True
 
 
 def test_state_handler_parse_holding_entry_date_accepts_date_types():
@@ -2058,8 +2133,16 @@ def test_non_defensive_avg_down_still_blocks_quote_divergence(monkeypatch):
     assert blocked[-1]["reason"] == "quote_consistency_diverged"
 
 
-def test_late_loss_avg_down_still_blocks_stale_quote_consistency(monkeypatch):
-    rules = replace(CONFIG, MAX_POSITION_PCT=1.0)
+@pytest.mark.parametrize(
+    "add_reason",
+    ["late_loss_avg_down_retry", "stop_line_touch_mandatory_avg_down"],
+)
+def test_defensive_avg_down_bypasses_stale_quote_consistency_when_executable_price_exists(monkeypatch, add_reason):
+    rules = replace(
+        CONFIG,
+        MAX_POSITION_PCT=1.0,
+        SCALPING_AVG_DOWN_MARKET_ON_STOP_TOUCH_ENABLED=True,
+    )
     monkeypatch.setattr(state_handlers, "TRADING_RULES", rules)
     monkeypatch.setattr(scale_in, "TRADING_RULES", rules)
     state_handlers.KIWOOM_TOKEN = "test"
@@ -2070,8 +2153,10 @@ def test_late_loss_avg_down_still_blocks_stale_quote_consistency(monkeypatch):
     monkeypatch.setattr(
         state_handlers.kiwoom_orders,
         "send_buy_order",
-        lambda *args, **kwargs: sent_orders.append((args, kwargs)) or {"return_code": "0", "ord_no": "STALE1"},
+        lambda *args, **kwargs: sent_orders.append((args, kwargs))
+        or {"return_code": "0", "ord_no": f"STALE{len(sent_orders)}"},
     )
+    monkeypatch.setattr(state_handlers, "record_add_history_event", lambda *args, **kwargs: True)
     monkeypatch.setattr(
         state_handlers,
         "_log_holding_pipeline",
@@ -2111,19 +2196,22 @@ def test_late_loss_avg_down_still_blocks_stale_quote_consistency(monkeypatch):
         ws_data={"curr": 2_569_000, "best_bid": 2_569_000, "best_ask": 2_570_000},
         action={
             "add_type": "AVG_DOWN",
-            "reason": "late_loss_avg_down_retry",
+            "reason": add_reason,
             "stop_line_touched": True,
             "profit_rate": -3.35,
         },
         admin_id=1,
     )
 
-    assert result is None
-    assert sent_orders == []
-    assert not [stage for stage, _ in logs if stage == "scale_in_quote_consistency_defensive_bypass"]
-    blocked = [fields for stage, fields in logs if stage == "scale_in_price_guard_block"]
-    assert blocked
-    assert blocked[-1]["reason"] == "quote_consistency_diverged"
+    assert result["ord_no"] == "STALE1"
+    assert sent_orders
+    bypassed = [fields for stage, fields in logs if stage == "scale_in_quote_consistency_defensive_bypass"]
+    assert bypassed
+    assert bypassed[-1]["reason"] == "quote_consistency_stale_defensive_bypass"
+    assert not [stage for stage, _ in logs if stage == "scale_in_price_guard_block"]
+    assert sent_orders[0][0][2] == 0
+    assert sent_orders[0][0][3] == "3"
+    assert sent_orders[0][1]["time_block_override_reason"] == add_reason
 
 
 def test_late_loss_avg_down_uses_fresh_rest_quote_after_stale_ws_refresh(monkeypatch):
@@ -2435,6 +2523,42 @@ def test_pending_scale_in_revalidation_context_detects_deterioration():
     assert decision["curr_vs_micro_vwap_bp"] == -3.0
 
 
+def test_pending_scale_in_revalidation_not_skipped_by_holding_exit_tuning():
+    rules = replace(
+        CONFIG,
+        HOLDING_EXIT_LIVE_TUNING_SELECTED=True,
+        PENDING_SCALE_IN_REVALIDATION_CANCEL_ENABLED=True,
+        PENDING_SCALE_IN_REVALIDATION_MIN_AI_SCORE=66,
+        PENDING_SCALE_IN_REVALIDATION_MIN_TICK_ACCEL=1.10,
+        PENDING_SCALE_IN_REVALIDATION_MIN_BUY_PRESSURE=60.0,
+        PENDING_SCALE_IN_REVALIDATION_MIN_MICRO_VWAP_BP=0.0,
+    )
+    original_rules = state_handlers.TRADING_RULES
+    state_handlers.TRADING_RULES = rules
+    try:
+        decision = state_handlers._pending_scale_in_revalidation_context(
+            {
+                "strategy": "SCALPING",
+                "pending_add_order": True,
+                "pending_add_type": "PYRAMID",
+                "last_reversal_features": {
+                    "curr_vs_micro_vwap_bp": -3.0,
+                    "buy_pressure_10t": 55.0,
+                    "tick_acceleration_ratio": 0.8,
+                },
+                "holding_exit_matrix_original_action": "EXIT",
+            },
+            strategy="SCALPING",
+            current_ai_score=64,
+        )
+    finally:
+        state_handlers.TRADING_RULES = original_rules
+
+    assert decision is not None
+    assert "holding_exit_matrix_exit" in decision["reason"]
+    assert "micro_vwap_negative" in decision["reason"]
+
+
 def test_recent_exit_candidate_pyramid_block_context_blocks_within_window():
     rules = replace(CONFIG, RECENT_EXIT_CANDIDATE_PYRAMID_BLOCK_ENABLED=True, RECENT_EXIT_CANDIDATE_PYRAMID_BLOCK_SEC=180)
     original_rules = state_handlers.TRADING_RULES
@@ -2449,6 +2573,36 @@ def test_recent_exit_candidate_pyramid_block_context_blocks_within_window():
         }
         decision = state_handlers._recent_exit_candidate_pyramid_block_context(
             stock,
+            strategy="SCALPING",
+            add_type="PYRAMID",
+            now_ts=now_ts,
+        )
+    finally:
+        state_handlers.TRADING_RULES = original_rules
+
+    assert decision is not None
+    assert decision["exit_rule"] == "protect_trailing_stop"
+    assert decision["elapsed_sec"] == 60
+
+
+def test_recent_exit_candidate_pyramid_block_not_skipped_by_holding_exit_tuning():
+    rules = replace(
+        CONFIG,
+        HOLDING_EXIT_LIVE_TUNING_SELECTED=True,
+        RECENT_EXIT_CANDIDATE_PYRAMID_BLOCK_ENABLED=True,
+        RECENT_EXIT_CANDIDATE_PYRAMID_BLOCK_SEC=180,
+    )
+    original_rules = state_handlers.TRADING_RULES
+    state_handlers.TRADING_RULES = rules
+    try:
+        now_ts = time.time()
+        decision = state_handlers._recent_exit_candidate_pyramid_block_context(
+            {
+                "strategy": "SCALPING",
+                "recent_scale_in_exit_candidate_rule": "protect_trailing_stop",
+                "recent_scale_in_exit_candidate_stage": "exit_signal",
+                "recent_scale_in_exit_candidate_ts": now_ts - 60,
+            },
             strategy="SCALPING",
             add_type="PYRAMID",
             now_ts=now_ts,

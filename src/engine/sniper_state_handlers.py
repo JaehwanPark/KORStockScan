@@ -61,6 +61,7 @@ from src.engine.scalping.rising_missed_one_share_entry import (
     BLOCK_OPEN_PENDING as RISING_MISSED_BLOCK_OPEN_PENDING,
     BLOCK_PRICE_ABOVE_CAP as RISING_MISSED_BLOCK_PRICE_ABOVE_CAP,
     FORCED_ENTRY_REASON as RISING_MISSED_FORCED_ENTRY_REASON,
+    MAX_ONE_SHARE_ENTRY_PRICE_KRW as RISING_MISSED_MAX_ONE_SHARE_ENTRY_PRICE_KRW,
     collapse_to_one_share_order,
     evaluate_rising_missed_one_share_entry,
     is_forced_rising_missed_one_share_entry,
@@ -9599,9 +9600,7 @@ def _mark_same_symbol_soft_stop(code: str, *, now_ts: float) -> None:
 
 
 def _scale_in_quality_runtime_skipped() -> bool:
-    return _rule_bool("SCALE_IN_LIVE_TUNING_SELECTED", False) or _rule_bool(
-        "HOLDING_EXIT_LIVE_TUNING_SELECTED", False
-    )
+    return _rule_bool("SCALE_IN_LIVE_TUNING_SELECTED", False)
 
 
 def _mark_recent_exit_candidate(
@@ -21831,6 +21830,41 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         )
         return False
 
+    if forced_rising_missed_one_share:
+        price_cap = _rising_missed_one_share_entry_max_price_krw()
+        forced_entry_price = (
+            _safe_int(curr_price, 0)
+            or _safe_int((ws_data or {}).get("curr"), 0)
+            or _safe_int(stock.get("target_buy_price"), 0)
+            or _safe_int(stock.get("curr_price"), 0)
+        )
+        if price_cap > 0 and forced_entry_price > price_cap:
+            _mutate_stock_state(
+                stock,
+                pop_fields=[
+                    "rising_missed_one_share_entry_forced",
+                    "rising_missed_one_share_scout",
+                    "rising_missed_scout_upgrade_pending",
+                    "forced_entry_qty",
+                    "forced_entry_reason",
+                    "target_buy_price",
+                ],
+            )
+            _log_entry_pipeline(
+                stock,
+                code,
+                "rising_missed_one_share_entry_submit_blocked",
+                block_reason=RISING_MISSED_BLOCK_PRICE_ABOVE_CAP,
+                forced_entry_reason=RISING_MISSED_FORCED_ENTRY_REASON,
+                forced_entry_qty=1,
+                rising_missed_one_share_entry_price=forced_entry_price,
+                rising_missed_one_share_entry_price_cap_krw=price_cap,
+                actual_order_submitted=False,
+                broker_order_forbidden=True,
+                runtime_effect=True,
+            )
+            return False
+
     if not admin_id:
         log_info(f"⚠️ [매수보류] {stock['name']}: 관리자 ID가 없습니다.")
         _log_entry_pipeline(stock, code, "blocked_no_admin")
@@ -24120,6 +24154,16 @@ def _rising_missed_one_share_entry_enabled() -> bool:
     return _env_bool("KORSTOCKSCAN_RISING_MISSED_ONE_SHARE_ENTRY_ENABLED", False)
 
 
+def _rising_missed_one_share_entry_max_price_krw() -> int:
+    return max(
+        0,
+        _env_int(
+            "KORSTOCKSCAN_RISING_MISSED_ONE_SHARE_ENTRY_MAX_PRICE_KRW",
+            RISING_MISSED_MAX_ONE_SHARE_ENTRY_PRICE_KRW,
+        ),
+    )
+
+
 def _maybe_submit_rising_missed_one_share_entry(
     stock,
     code,
@@ -24144,6 +24188,7 @@ def _maybe_submit_rising_missed_one_share_entry(
         positive_delta_pct=_scanner_positive_delta_pct(stock),
         min_delta_pct=_scanner_rising_entry_min_delta_pct(),
         current_price=curr_price,
+        max_entry_price_krw=_rising_missed_one_share_entry_max_price_krw(),
     )
     if decision.allowed is False and decision.reason != RISING_MISSED_BLOCK_NOT_CANDIDATE:
         _log_entry_pipeline(
@@ -29815,17 +29860,24 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
             "late_loss_avg_down_retry",
         }
     )
-    defensive_quote_divergence_bypass = (
+    defensive_quote_consistency_bypass = (
         defensive_avg_down_reason
-        and quote_consistency_state == "diverged"
+        and quote_consistency_state in {"diverged", "stale"}
         and canonical_mark_price > 0
         and executable_buy_price > 0
+    )
+    quote_consistency_block_reason = str(
+        scale_in_quote_refresh_fields.get("quote_consistency_reason") or ""
+    ).strip() or (
+        f"quote_consistency_{quote_consistency_state}"
+        if quote_consistency_state
+        else "quote_consistency_blocked"
     )
     if (
         bool(scale_in_quote_refresh_fields.get("normalization_runtime_effect"))
         and bool(scale_in_quote_refresh_fields.get("quote_consistency_entry_blocked"))
         and not simulated_position
-        and not defensive_quote_divergence_bypass
+        and not defensive_quote_consistency_bypass
     ):
         _log_holding_pipeline(
             stock,
@@ -29834,8 +29886,8 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
             add_type=add_type,
             scale_in_arm=add_type,
             scale_in_blocker_namespace=add_type,
-            scale_in_blocker_reason="quote_consistency_diverged",
-            reason="quote_consistency_diverged",
+            scale_in_blocker_reason=quote_consistency_block_reason,
+            reason=quote_consistency_block_reason,
             curr_price=curr_price,
             resolved_price=0,
             best_bid=scale_in_quote_refresh_fields.get("executable_buy_price"),
@@ -29850,15 +29902,20 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
         )
         log_info(
             f"[ADD_BLOCKED] {stock.get('name')}({code}) "
-            f"reason=quote_consistency_diverged curr_price={curr_price}"
+            f"reason={quote_consistency_block_reason} curr_price={curr_price}"
         )
         return None
     if (
         bool(scale_in_quote_refresh_fields.get("normalization_runtime_effect"))
         and bool(scale_in_quote_refresh_fields.get("quote_consistency_entry_blocked"))
-        and defensive_quote_divergence_bypass
+        and defensive_quote_consistency_bypass
         and not simulated_position
     ):
+        defensive_bypass_reason = (
+            f"quote_consistency_{quote_consistency_state}_defensive_bypass"
+            if quote_consistency_state
+            else "quote_consistency_defensive_bypass"
+        )
         _log_holding_pipeline(
             stock,
             code,
@@ -29867,8 +29924,8 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
             scale_in_arm=add_type,
             add_reason=add_reason,
             scale_in_blocker_namespace=add_type,
-            scale_in_blocker_reason="quote_consistency_diverged_defensive_bypass",
-            reason="quote_consistency_diverged_defensive_bypass",
+            scale_in_blocker_reason=defensive_bypass_reason,
+            reason=defensive_bypass_reason,
             curr_price=curr_price,
             canonical_mark_price=canonical_mark_price,
             executable_buy_price=executable_buy_price,

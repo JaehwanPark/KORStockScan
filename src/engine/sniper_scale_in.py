@@ -596,16 +596,6 @@ def resolve_scale_in_order_price(stock, ws_data, action, *, strategy=None, curr_
     if add_type == "PYRAMID" and micro_vwap_bp > result["max_micro_vwap_bps"]:
         result["reason"] = f"micro_vwap_bp>{result['max_micro_vwap_bps']:.1f}"
         return result
-    if add_type == "AVG_DOWN":
-        min_micro_vwap = float(getattr(TRADING_RULES, "REVERSAL_ADD_VWAP_BP_MIN", -5.0) or -5.0)
-        result["min_micro_vwap_bps"] = min_micro_vwap
-        result["late_loss_avg_down_retry_micro_vwap_bypass"] = bool(
-            late_loss_retry and micro_vwap_bp < min_micro_vwap
-        )
-        if micro_vwap_bp < min_micro_vwap and not late_loss_retry:
-            result["reason"] = f"micro_vwap_bp<{min_micro_vwap:.1f}"
-            return result
-
     if (
         add_type == "AVG_DOWN"
         and stop_line_touched
@@ -619,6 +609,16 @@ def resolve_scale_in_order_price(stock, ws_data, action, *, strategy=None, curr_
             "price_source": "stop_line_touch_market",
         })
         return result
+    if add_type == "AVG_DOWN":
+        min_micro_vwap = float(getattr(TRADING_RULES, "REVERSAL_ADD_VWAP_BP_MIN", -5.0) or -5.0)
+        result["min_micro_vwap_bps"] = min_micro_vwap
+        result["late_loss_avg_down_retry_micro_vwap_bypass"] = bool(
+            late_loss_retry and micro_vwap_bp < min_micro_vwap
+        )
+        if micro_vwap_bp < min_micro_vwap and not late_loss_retry:
+            result["reason"] = f"micro_vwap_bp<{min_micro_vwap:.1f}"
+            return result
+
     if (
         add_type == "AVG_DOWN"
         and not sim_scale_in_observation

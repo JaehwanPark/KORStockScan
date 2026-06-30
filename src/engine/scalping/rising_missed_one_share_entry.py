@@ -179,7 +179,7 @@ def collapse_to_one_share_order(planned_orders: list[dict[str, Any]] | None, *, 
     price = _safe_int(base.get("price"), 0) or _safe_int(fallback_price, 0)
     base.update(
         {
-            "tag": base.get("tag") or FORCED_ENTRY_REASON,
+            "tag": FORCED_ENTRY_REASON,
             "qty": 1,
             "price": price,
             "tif": base.get("tif") or "DAY",
