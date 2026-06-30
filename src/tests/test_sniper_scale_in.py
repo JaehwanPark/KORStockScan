@@ -14811,7 +14811,7 @@ def test_handle_holding_state_blocks_negative_mfe_protect_before_late_loss_inter
         SCALP_LATE_LOSS_AVG_DOWN_MIN_GIVEBACK_PCT=0.55,
         SCALP_LATE_LOSS_AVG_DOWN_MIN_HOLD_SEC=30,
         SCALP_LATE_LOSS_AVG_DOWN_MIN_AI_SCORE=60,
-        SCALP_LATE_LOSS_AVG_DOWN_MAX_PER_POSITION=1,
+        SCALP_LATE_LOSS_AVG_DOWN_MAX_PER_POSITION=2,
     )
     state_handlers.COOLDOWNS = {}
     state_handlers.ALERTED_STOCKS = set()
@@ -14888,7 +14888,7 @@ def test_handle_holding_state_negative_mfe_protect_stays_holding_after_retry_use
         REVERSAL_ADD_ENABLED=True,
         SCALP_LOSS_FALLBACK_ENABLED=False,
         SCALP_LATE_LOSS_AVG_DOWN_ENABLED=True,
-        SCALP_LATE_LOSS_AVG_DOWN_MAX_PER_POSITION=1,
+        SCALP_LATE_LOSS_AVG_DOWN_MAX_PER_POSITION=2,
     )
     state_handlers.COOLDOWNS = {}
     state_handlers.ALERTED_STOCKS = set()
@@ -14928,7 +14928,7 @@ def test_handle_holding_state_negative_mfe_protect_stays_holding_after_retry_use
         "rt_ai_prob": 0.67,
         "buy_time": 1_000.0,
         "late_loss_avg_down_retry_used": True,
-        "late_loss_avg_down_retry_count": 1,
+        "late_loss_avg_down_retry_count": 2,
     }
 
     state_handlers.handle_holding_state(
@@ -15101,7 +15101,7 @@ def test_stop_line_touch_mandatory_avg_down_includes_ollix_like_case(monkeypatch
     state_handlers.TRADING_RULES = replace(
         CONFIG,
         SCALPING_AVG_DOWN_MARKET_ON_STOP_TOUCH_ENABLED=True,
-        SCALP_LATE_LOSS_AVG_DOWN_MAX_PER_POSITION=1,
+        SCALP_LATE_LOSS_AVG_DOWN_MAX_PER_POSITION=2,
     )
     stock = {
         "id": 13961,
@@ -15135,6 +15135,22 @@ def test_stop_line_touch_mandatory_avg_down_includes_ollix_like_case(monkeypatch
 
     stock["stop_line_touch_avg_down_used"] = True
     stock["stop_line_touch_avg_down_count"] = 1
+    second_allowed = state_handlers._evaluate_stop_line_touch_mandatory_avg_down(
+        stock,
+        strategy="SCALPING",
+        sell_reason_type="LOSS",
+        exit_rule="scalp_soft_stop_pct",
+        profit_rate=-3.65,
+        peak_profit=0.31,
+        current_ai_score=50,
+        held_sec=1_494,
+        dynamic_stop_pct=-3.00,
+    )
+    assert second_allowed["should_retry"] is True
+    assert second_allowed["used_count"] == 1
+    assert second_allowed["max_per_position"] == 2
+
+    stock["stop_line_touch_avg_down_count"] = 2
     already_used = state_handlers._evaluate_stop_line_touch_mandatory_avg_down(
         stock,
         strategy="SCALPING",
@@ -15155,7 +15171,7 @@ def test_stop_line_touch_mandatory_avg_down_includes_ollix_like_case(monkeypatch
         "stop_line_touch_avg_down_count": 0,
         "last_add_type": "AVG_DOWN",
     }
-    already_had_avg_down = state_handlers._evaluate_stop_line_touch_mandatory_avg_down(
+    inferred_first_used = state_handlers._evaluate_stop_line_touch_mandatory_avg_down(
         stock_without_count,
         strategy="SCALPING",
         sell_reason_type="LOSS",
@@ -15166,15 +15182,15 @@ def test_stop_line_touch_mandatory_avg_down_includes_ollix_like_case(monkeypatch
         held_sec=1_494,
         dynamic_stop_pct=-3.00,
     )
-    assert already_had_avg_down["should_retry"] is False
-    assert already_had_avg_down["reason"] == "already_used"
+    assert inferred_first_used["should_retry"] is True
+    assert inferred_first_used["used_count"] == 1
 
 
 def test_stop_line_touch_mandatory_avg_down_submits_before_grace(monkeypatch):
     state_handlers.TRADING_RULES = replace(
         CONFIG,
         SCALPING_AVG_DOWN_MARKET_ON_STOP_TOUCH_ENABLED=True,
-        SCALP_LATE_LOSS_AVG_DOWN_MAX_PER_POSITION=1,
+        SCALP_LATE_LOSS_AVG_DOWN_MAX_PER_POSITION=2,
     )
     stock = {
         "id": 13961,
@@ -15285,9 +15301,35 @@ def test_late_loss_avg_down_retry_includes_hanall_and_gwangju_like_cases(monkeyp
         current_ai_score=74,
         held_sec=515,
     )
+    one_used = state_handlers._evaluate_late_loss_avg_down_retry(
+        {"strategy": "SCALPING", "avg_down_count": 1},
+        strategy="SCALPING",
+        sell_reason_type="LOSS",
+        exit_rule="scalp_soft_stop_pct",
+        profit_rate=-2.10,
+        peak_profit=-0.23,
+        current_ai_score=70,
+        held_sec=2471,
+    )
+    two_used = state_handlers._evaluate_late_loss_avg_down_retry(
+        {"strategy": "SCALPING", "stop_line_touch_avg_down_count": 2},
+        strategy="SCALPING",
+        sell_reason_type="LOSS",
+        exit_rule="scalp_soft_stop_pct",
+        profit_rate=-2.10,
+        peak_profit=-0.23,
+        current_ai_score=70,
+        held_sec=2471,
+    )
 
     assert hanall["should_retry"] is True
     assert hanall["eligibility_path"] == "deep_loss_retry"
+    assert one_used["should_retry"] is True
+    assert one_used["used_count"] == 1
+    assert one_used["max_per_position"] == 2
+    assert two_used["should_retry"] is False
+    assert two_used["reason"] == "already_used"
+    assert two_used["used_count"] == 2
     assert gwangju == {"should_retry": False, "reason": "hard_safety_exit"}
     assert protect_trailing == {"should_retry": False, "reason": "hard_safety_exit"}
     assert mfe_protect == {"should_retry": False, "reason": "hard_safety_exit"}

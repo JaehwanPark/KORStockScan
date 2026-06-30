@@ -156,6 +156,25 @@ WS_MANAGER = None
 _GREENFIELD_TELEGRAM_KEYS: set[str] = set()
 _STOP_LINE_TOUCH_MANDATORY_AVG_DOWN_REASON = "stop_line_touch_mandatory_avg_down"
 
+
+def _defensive_avg_down_used_count(stock: dict | None) -> int:
+    if not isinstance(stock, dict):
+        return 0
+    used_count = max(
+        _safe_int(stock.get("stop_line_touch_avg_down_count"), 0),
+        _safe_int(stock.get("avg_down_count"), 0),
+        _safe_int(stock.get("late_loss_avg_down_retry_count"), 0),
+    )
+    if bool(stock.get("stop_line_touch_avg_down_used")) and used_count <= 0:
+        used_count = 1
+    if bool(stock.get("late_loss_avg_down_retry_used")) and used_count <= 0:
+        used_count = 1
+    if bool(stock.get("reversal_add_used")) and used_count <= 0:
+        used_count = 1
+    if str(stock.get("last_add_type") or "").strip().upper() == "AVG_DOWN" and used_count <= 0:
+        used_count = 1
+    return used_count
+
 SCALPING_ENTRY_BLOCKER_ROLE_REGISTRY = {
     "blocked_gap_from_scan": {
         "role": "baseline_prior_feature",
@@ -2081,20 +2100,8 @@ def _evaluate_stop_line_touch_mandatory_avg_down(
             "stop_line_pct": stop_pct,
         }
 
-    max_per_position = max(0, _rule_int("SCALP_LATE_LOSS_AVG_DOWN_MAX_PER_POSITION", 1))
-    used_count = max(
-        _safe_int(stock.get("stop_line_touch_avg_down_count"), 0),
-        _safe_int(stock.get("avg_down_count"), 0),
-        _safe_int(stock.get("late_loss_avg_down_retry_count"), 0),
-    )
-    if bool(stock.get("stop_line_touch_avg_down_used")) and used_count <= 0:
-        used_count = 1
-    if bool(stock.get("late_loss_avg_down_retry_used")) and used_count <= 0:
-        used_count = 1
-    if bool(stock.get("reversal_add_used")) and used_count <= 0:
-        used_count = 1
-    if str(stock.get("last_add_type") or "").strip().upper() == "AVG_DOWN" and used_count <= 0:
-        used_count = 1
+    max_per_position = max(0, _rule_int("SCALP_LATE_LOSS_AVG_DOWN_MAX_PER_POSITION", 2))
+    used_count = _defensive_avg_down_used_count(stock)
     if max_per_position <= 0:
         return {"should_retry": False, "reason": "max_per_position_zero"}
     if used_count >= max_per_position:
@@ -2324,10 +2331,8 @@ def _evaluate_late_loss_avg_down_retry(
     if reason_type not in {"LOSS", "PROFIT_PROTECT"} and "stop" not in rule and "loss" not in rule:
         return {"should_retry": False, "reason": "sell_reason_not_loss"}
 
-    max_per_position = max(0, _rule_int("SCALP_LATE_LOSS_AVG_DOWN_MAX_PER_POSITION", 1))
-    used_count = _safe_int(stock.get("late_loss_avg_down_retry_count"), 0)
-    if bool(stock.get("late_loss_avg_down_retry_used")) and used_count <= 0:
-        used_count = 1
+    max_per_position = max(0, _rule_int("SCALP_LATE_LOSS_AVG_DOWN_MAX_PER_POSITION", 2))
+    used_count = _defensive_avg_down_used_count(stock)
     if max_per_position <= 0:
         return {"should_retry": False, "reason": "max_per_position_zero"}
     if used_count >= max_per_position:
