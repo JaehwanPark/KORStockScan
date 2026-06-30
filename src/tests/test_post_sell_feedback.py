@@ -59,6 +59,7 @@ def test_record_and_evaluate_post_sell_feedback(monkeypatch, tmp_path):
     assert candidate_upside is not None
     assert candidate_good_exit is not None
     assert candidate_upside["exit_decision_source"] == "-"
+    assert candidate_upside["realized_result_label"] == "익절"
 
     candle_map = {
         "111111": [
@@ -106,6 +107,42 @@ def test_record_and_evaluate_post_sell_feedback(monkeypatch, tmp_path):
     text = feedback_mod.format_post_sell_feedback_summary(summary)
     assert "MISSED_UPSIDE 1" in text
     assert "GOOD_EXIT 1" in text
+
+
+def test_profitable_hard_stop_keeps_exit_rule_but_labels_realized_profit(monkeypatch, tmp_path):
+    monkeypatch.setattr(feedback_mod, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(
+        feedback_mod,
+        "TRADING_RULES",
+        SimpleNamespace(
+            POST_SELL_FEEDBACK_ENABLED=True,
+            POST_SELL_FEEDBACK_EVAL_ENABLED=True,
+            POST_SELL_FEEDBACK_MISSED_UPSIDE_MFE_PCT=0.8,
+            POST_SELL_FEEDBACK_MISSED_UPSIDE_CLOSE_PCT=0.3,
+            POST_SELL_FEEDBACK_GOOD_EXIT_MAE_PCT=-0.6,
+            POST_SELL_FEEDBACK_GOOD_EXIT_CLOSE_PCT=-0.2,
+        ),
+    )
+    feedback_mod._RECORDED_KEYS.clear()
+
+    candidate = feedback_mod.record_post_sell_candidate(
+        recommendation_id=30,
+        stock={"name": "데브시스터즈", "strategy": "SCALPING", "position_tag": "SCANNER"},
+        code="194480",
+        sell_time="2026-06-30 08:07:29",
+        buy_price=18340,
+        sell_price=18630,
+        profit_rate=1.35,
+        buy_qty=1,
+        exit_rule="scalp_hard_stop_pct",
+        revive=True,
+    )
+
+    assert candidate is not None
+    assert candidate["exit_rule"] == "scalp_hard_stop_pct"
+    assert candidate["profit_rate"] == 1.35
+    assert candidate["realized_result_label"] == "익절"
+    assert candidate["exit_rule_profit_mismatch"] is True
 
 
 def test_record_and_evaluate_sim_post_sell_feedback_isolated(monkeypatch, tmp_path):

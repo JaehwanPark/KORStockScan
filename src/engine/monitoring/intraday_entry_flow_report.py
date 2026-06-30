@@ -22,6 +22,7 @@ BUY_SIGNAL_STAGES = {
     "latency_pass",
 }
 SUBMIT_STAGE_MARKERS = ("submitted", "order_send", "broker_submit", "buy_submit")
+RISING_MISSED_FORCED_ENTRY_REASON = "rising_missed_one_share_entry"
 STALE_EVAL_QUOTE_AGE_MS = 3000.0
 FRESH_REFRESH_REASONS = {
     "input_snapshot_fresh",
@@ -79,6 +80,14 @@ def _boolish(value: Any) -> bool:
     if isinstance(value, bool):
         return value
     return str(value or "").strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def _is_rising_missed_forced_one_share_entry(fields: dict[str, Any]) -> bool:
+    reason = str(fields.get("forced_entry_reason") or "").strip()
+    forced = _boolish(fields.get("rising_missed_one_share_entry_forced"))
+    qty = _safe_float(fields.get("forced_entry_qty"))
+    one_share_or_missing = qty is None or qty == 1.0
+    return one_share_or_missing and (reason == RISING_MISSED_FORCED_ENTRY_REASON or forced)
 
 
 def _fresh_refresh_age_ms(fields: dict[str, Any]) -> float | None:
@@ -143,6 +152,8 @@ def _is_real_entry_candidate(row: dict[str, Any], promoted_codes: set[str]) -> b
         return False
     fields = row.get("fields") if isinstance(row.get("fields"), dict) else {}
     if str(fields.get("simulated_order") or "").strip().lower() == "true":
+        return False
+    if _is_rising_missed_forced_one_share_entry(fields):
         return False
     stage = str(row.get("stage") or "")
     if stage.startswith("scalp_sim_") or stage.startswith("swing_"):
@@ -240,6 +251,7 @@ def build_report(
     event_cache_path: Path | None = None,
     diagnostic_path: Path | None = None,
     since: str | None = None,
+    until: str | None = None,
     generated_at: str | None = None,
 ) -> dict[str, Any]:
     event_cache_path = event_cache_path or _default_event_cache_path(target_date)
@@ -251,10 +263,13 @@ def build_report(
         if isinstance(item, dict) and item.get("stock_code")
     }
     since_ts = _parse_ts(since, target_date=target_date) if since else None
+    until_ts = _parse_ts(until, target_date=target_date) if until else None
     promoted: dict[str, dict[str, Any]] = {}
     for code, item in raw_promoted.items():
         first_promoted_at = _parse_ts(item.get("first_promoted_at"))
         if since_ts is not None and first_promoted_at is not None and first_promoted_at < since_ts:
+            continue
+        if until_ts is not None and first_promoted_at is not None and first_promoted_at > until_ts:
             continue
         promoted[code] = item
     rising_missed_codes = {
@@ -294,7 +309,7 @@ def build_report(
 
     for row in _read_jsonl(event_cache_path):
         ts = _parse_ts(row.get("emitted_at"))
-        if ts is None or (since_ts is not None and ts < since_ts):
+        if ts is None or (since_ts is not None and ts < since_ts) or (until_ts is not None and ts > until_ts):
             continue
         if not _is_real_entry_candidate(row, raw_promoted_codes):
             continue
@@ -491,7 +506,7 @@ def build_report(
         "schema_version": 1,
         "target_date": target_date,
         "generated_at": generated_at or datetime.now().isoformat(timespec="seconds"),
-        "event_window": {"since": since},
+        "event_window": {"since": since, "until": until},
         "source_events": str(event_cache_path),
         "source_diagnostic": str(diagnostic_path),
         "decision_authority": "source_quality_and_blocker_observation_only",
@@ -544,6 +559,7 @@ def write_outputs(report: dict[str, Any], *, output_md: Path, output_csv: Path, 
         handle.write(f"- source_events: {report['source_events']}\n")
         handle.write(f"- source_diagnostic: {report['source_diagnostic']}\n")
         handle.write(f"- event_window_since: {report.get('event_window', {}).get('since')}\n")
+        handle.write(f"- event_window_until: {report.get('event_window', {}).get('until')}\n")
         for key, value in report["summary"].items():
             handle.write(f"- {key}: {value}\n")
         handle.write("\n## blocker rollup\n\n")
@@ -622,6 +638,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--diagnostic-path", type=Path)
     parser.add_argument("--since")
     parser.add_argument("--generated-at")
+    parser.add_argument("--until")
     parser.add_argument("--output-md", type=Path)
     parser.add_argument("--output-csv", type=Path)
     parser.add_argument("--max-rows", type=int, default=100)
@@ -634,6 +651,7 @@ def main(argv: list[str] | None = None) -> int:
         event_cache_path=args.event_cache_path,
         diagnostic_path=args.diagnostic_path,
         since=args.since,
+        until=args.until,
         generated_at=generated_at,
     )
     default_md, default_csv = _default_output_paths(args.target_date, args.since, generated_at)

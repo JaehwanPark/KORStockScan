@@ -45,6 +45,36 @@ class _ReceiptDB:
         return _ReceiptSession(self.record)
 
 
+def test_sell_execution_message_relabels_pending_stop_loss_when_realized_profit():
+    bus = _Bus()
+    receipts.event_bus = bus
+
+    receipts._publish_sell_execution_message(
+        name="데브시스터즈",
+        pending_msg=(
+            "📉 [손절 주문] **[데브시스터즈]** 매도 전송\n"
+            "사유: `🛑 하드스탑 도달 (-5.0%) [AI: 50]`\n"
+            "현재가 기준 수익: `-5.75%` (고점: -0.2%)"
+        ),
+        audience="VIP_ALL",
+        exec_price=18630,
+        profit_rate=1.35,
+    )
+
+    assert len(bus.events) == 1
+    _, payload = bus.events[0]
+    assert "[익절 완료]" in payload["message"]
+    assert "🎊 [익절 완료]" in payload["message"]
+    assert "📉 [익절 완료]" not in payload["message"]
+    assert "[손절 완료]" not in payload["message"]
+    assert "청산 신호: `🛑 하드스탑 도달 (-5.0%) [AI: 50]`" in payload["message"]
+    assert "실현 결과: `익절 확정`" in payload["message"]
+    assert "사유: `🛑 하드스탑 도달" not in payload["message"]
+    assert "신호 당시 평가손익: `-5.75%`" in payload["message"]
+    assert "현재가 기준 수익" not in payload["message"]
+    assert "확정 수익률: `+1.35%`" in payload["message"]
+
+
 class _SyncSession:
     def __init__(self, active_records, pending_records, history_records=None):
         self._active_records = active_records

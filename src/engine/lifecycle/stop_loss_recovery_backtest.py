@@ -389,9 +389,9 @@ def _recommend_stop_line(family: str, rows: list[dict[str, Any]]) -> dict[str, A
             {
                 "confidence": "thin_sample_directional",
                 "recommended_runtime_env": {
-                    "KORSTOCKSCAN_SCALP_MFE_PROTECT_TRIGGER_PROFIT_PCT": "-0.3",
+                    "KORSTOCKSCAN_SCALP_MFE_PROTECT_TRIGGER_PROFIT_PCT": "0.0",
                 },
-                "rationale": "positive-MFE giveback exits near flat had high post-sell MFE in thin sample; require a small loss floor before protective exit",
+                "rationale": "positive-MFE giveback exits should remain profit-protective; do not recommend a negative trigger that turns MFE protect into a late loss exit",
             }
         )
     elif family == "protect_hard_trailing":

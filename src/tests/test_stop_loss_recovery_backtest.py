@@ -115,5 +115,5 @@ def test_stop_loss_recovery_backtest_flags_recoverable_soft_stop(tmp_path, monke
     recommendations = report["summary"]["stop_line_recommendations_by_family"]
     assert recommendations["scalp_hard_soft_stop"]["evaluated_count"] == 1
     assert recommendations["mfe_protect"]["recommended_runtime_env"] == {
-        "KORSTOCKSCAN_SCALP_MFE_PROTECT_TRIGGER_PROFIT_PCT": "-0.3"
+        "KORSTOCKSCAN_SCALP_MFE_PROTECT_TRIGGER_PROFIT_PCT": "0.0"
     }

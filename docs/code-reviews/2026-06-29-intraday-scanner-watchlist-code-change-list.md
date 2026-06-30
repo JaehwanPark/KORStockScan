@@ -209,6 +209,41 @@
 - `PYTHONPATH=. .venv/bin/python -m py_compile src/engine/monitoring/intraday_entry_flow_report.py src/tests/test_intraday_entry_flow_report.py`
   - 통과
 
+## 2026-06-30 09:40 목표 루프 관측 보강
+
+작성 시각: `2026-06-30 09:45 KST`
+
+### 판정
+
+- 09:31/09:40 루프에서 `rising_missed_buy_count=0`, `deferred_never_evaluated=0`, `real_submit_symbol_count=16`으로 BUY 전 actionable major blocker는 실질 잔여 없음으로 판정했다.
+- 반복 root cause priority는 BUY 전 submit drought가 아니라 `entry_price_or_submit_price_guard_block`의 evidence 품질 문제였다. `entry_order_cancel_*` 이벤트는 실제 주문가를 `submitted_price`로 남기는데 diagnostics가 `submitted_order_price`만 읽어 recent issue에 주문가가 `null`로 표시됐다.
+- 이 문제는 주문/취소 로직 결함이 아니라 관측 producer의 필드 정규화 누락이다. 주문가 완화, cancel wait 변경, stale/broker guard 우회는 수행하지 않았다.
+
+### 코드수정
+
+- 파일: `src/engine/monitoring/intraday_entry_blocker_diagnostics.py`
+- 내용:
+  - `entry_order_cancel_requested/confirmed` recent issue가 `submitted_order_price -> submitted_price -> order_price -> resolved_order_price` 순서로 주문가를 복원하도록 보강했다.
+  - 목적은 미체결/취소 품질 분석에서 missing-to-null evidence를 제거하고, 방어가 주문가가 bid 대비 얼마나 낮았는지 즉시 볼 수 있게 하는 것이다.
+- 테스트: `src/tests/test_intraday_entry_blocker_diagnostics.py`
+  - cancel 이벤트가 `submitted_price`만 보유해도 `entry_price_execution.recent_issues[].submitted_order_price`에 값이 채워지는 회귀 테스트를 추가했다.
+
+### 검증
+
+- `PYTHONPATH=. .venv/bin/python -m pytest src/tests/test_intraday_entry_blocker_diagnostics.py -k "entry_price or submitted_price"`
+  - `4 passed, 22 deselected`
+- `PYTHONPATH=. .venv/bin/python -m py_compile src/engine/monitoring/intraday_entry_blocker_diagnostics.py src/tests/test_intraday_entry_blocker_diagnostics.py`
+  - 통과
+- 09:40 diagnostics 재생성:
+  - `data/report/intraday_entry_blocker_diagnostics/intraday_entry_blocker_diagnostics_2026-06-30_0940_goal.json`
+  - 최근 cancel issue의 `submitted_order_price`가 `16690/174500/10440` 등으로 정상 복원됨을 확인했다.
+
+### 운영 경계
+
+- `runtime_effect=false`
+- forbidden uses: `stale_submit_bypass`, `broker_guard_bypass`, `intraday_order_price_relaxation_without_operator_override`
+- 실주문 권한, hard/protect/emergency safety, broker/account/order/quantity/cooldown guard, threshold, provider route, bot restart는 변경하지 않았다.
+
 ## 10. 10:33 목표 루프 관측 결과
 
 작성 시각: `2026-06-29 10:33 KST`

@@ -57,7 +57,9 @@ from src.engine.scalping.watching_score_smoothing import (
 )
 from src.engine.scalping.rising_missed_one_share_entry import (
     BLOCK_ALREADY_HOLDING as RISING_MISSED_BLOCK_ALREADY_HOLDING,
+    BLOCK_NOT_CANDIDATE as RISING_MISSED_BLOCK_NOT_CANDIDATE,
     BLOCK_OPEN_PENDING as RISING_MISSED_BLOCK_OPEN_PENDING,
+    BLOCK_PRICE_ABOVE_CAP as RISING_MISSED_BLOCK_PRICE_ABOVE_CAP,
     FORCED_ENTRY_REASON as RISING_MISSED_FORCED_ENTRY_REASON,
     collapse_to_one_share_order,
     evaluate_rising_missed_one_share_entry,
@@ -1981,6 +1983,7 @@ def _evaluate_scalp_mfe_protect_exit(
     min_giveback_pct = max(0.0, _rule_float("SCALP_MFE_PROTECT_MIN_GIVEBACK_PCT", 0.55))
     min_hold_sec = max(0, _rule_int("SCALP_MFE_PROTECT_MIN_HOLD_SEC", 30))
     max_ai_score = _rule_float("SCALP_MFE_PROTECT_MAX_AI_SCORE", 74.0)
+    min_protect_profit_pct = 0.0
     giveback_pct = float(peak_profit) - float(profit_rate)
 
     if held_sec < min_hold_sec:
@@ -1997,6 +2000,14 @@ def _evaluate_scalp_mfe_protect_exit(
             "should_exit": False,
             "reason": "profit_above_trigger",
             "profit_rate": profit_rate,
+            "trigger_profit_pct": trigger_profit_pct,
+        }
+    if profit_rate < min_protect_profit_pct:
+        return {
+            "should_exit": False,
+            "reason": "profit_below_protect_floor",
+            "profit_rate": profit_rate,
+            "min_protect_profit_pct": min_protect_profit_pct,
             "trigger_profit_pct": trigger_profit_pct,
         }
     if giveback_pct < min_giveback_pct:
@@ -2023,6 +2034,7 @@ def _evaluate_scalp_mfe_protect_exit(
         "giveback_pct": giveback_pct,
         "min_peak_pct": min_peak_pct,
         "trigger_profit_pct": trigger_profit_pct,
+        "min_protect_profit_pct": min_protect_profit_pct,
         "min_giveback_pct": min_giveback_pct,
         "min_hold_sec": min_hold_sec,
         "max_ai_score": max_ai_score,
@@ -2162,6 +2174,7 @@ def _attempt_stop_line_touch_mandatory_avg_down(
         strategy=strategy,
         market_regime=market_regime,
         skip_add_judgment_lock=True,
+        bypass_scalping_buy_window=True,
     )
     retry_common_fields = {
         "threshold_family": "stop_line_touch_mandatory_avg_down",
@@ -2432,6 +2445,7 @@ def _attempt_late_loss_avg_down_retry_before_sell(
         strategy=strategy,
         market_regime=market_regime,
         skip_add_judgment_lock=True,
+        bypass_scalping_buy_window=True,
     )
     retry_common_fields = {
         "threshold_family": "scalp_late_loss_avg_down_retry",
@@ -11226,15 +11240,17 @@ def _dispatch_scalp_preset_exit(
             stock,
             code,
             "sell_order_blocked_open_time",
-            sell_reason_type=sell_reason_type,
-            exit_rule=exit_rule or "-",
-            exit_decision_source=exit_decision_source,
-            qty=expected_qty,
-            profit_rate=f"{profit_rate:+.2f}",
-            actual_order_submitted=False,
-            broker_order_forbidden=True,
-            runtime_effect=True,
-            **sell_time_block_fields,
+            **{
+                **sell_time_block_fields,
+                "sell_reason_type": sell_reason_type,
+                "exit_rule": exit_rule or "-",
+                "exit_decision_source": exit_decision_source,
+                "qty": expected_qty,
+                "profit_rate": f"{profit_rate:+.2f}",
+                "actual_order_submitted": False,
+                "broker_order_forbidden": True,
+                "runtime_effect": True,
+            },
         )
         log_info(
             f"[SELL_TIME_BLOCK] {stock.get('name', code)} {sell_reason_type} "
@@ -11580,15 +11596,18 @@ def _pre_submit_refresh_rest_orderbook_snapshot(
         return base, fields
     best_ask = _safe_int(snapshot.get("best_ask"), 0)
     best_bid = _safe_int(snapshot.get("best_bid"), 0)
+    bid_req_base_tm = str(snapshot.get("bid_req_base_tm") or "").strip()
+    age_ms = _parse_hhmmss_age_ms(bid_req_base_tm)
+    snapshot_for_consistency = dict(snapshot)
+    if age_ms is not None:
+        snapshot_for_consistency["age_ms"] = age_ms
     quote_fields, canonical_mark_price, _, _ = _build_quote_consistency_fields(
         base,
-        rest_snapshot=snapshot,
+        rest_snapshot=snapshot_for_consistency,
         side="buy",
     )
     _merge_quote_consistency_fields(fields, quote_fields)
     latest_price = int(canonical_mark_price or 0)
-    bid_req_base_tm = str(snapshot.get("bid_req_base_tm") or "").strip()
-    age_ms = _parse_hhmmss_age_ms(bid_req_base_tm)
     fields.update(
         {
             "pre_submit_rest_orderbook_refresh_age_ms": None if age_ms is None else round(age_ms, 3),
@@ -12846,7 +12865,9 @@ def _evaluate_real_weak_pullback_entry_block(
         0,
     )
     min_spread_ticks = max(0, _rule_int("SCALP_REAL_WEAK_PULLBACK_ENTRY_BLOCK_MIN_SPREAD_TICKS", 5))
-    if spread_ticks < min_spread_ticks:
+    spread_requirement_met = spread_ticks >= min_spread_ticks
+    caution_submit = latency_state == "CAUTION"
+    if not caution_submit and not spread_requirement_met:
         return {"blocked": False, "reason": "spread_not_wide", "spread_ticks": spread_ticks}
 
     positive_signal_count = sum(
@@ -12889,6 +12910,8 @@ def _evaluate_real_weak_pullback_entry_block(
         "weak_pullback_entry_block_min_spread_ticks": min_spread_ticks,
         "weak_pullback_entry_block_positive_signal_count": positive_signal_count,
         "weak_pullback_entry_block_spread_ticks": spread_ticks,
+        "weak_pullback_entry_block_spread_requirement_met": spread_requirement_met,
+        "weak_pullback_entry_block_caution_submit": caution_submit,
         "weak_pullback_entry_block_strength_state": strength_state or "-",
         "weak_pullback_entry_block_strength_reason": strength_reason or "-",
         "weak_pullback_entry_block_overbought_state": overbought_state or "-",
@@ -14281,17 +14304,112 @@ def _rest_quote_only_hard_stop_confirmation_block(
         stock,
         code,
         block_stage,
-        exit_rule=str(exit_rule or "-"),
-        profit_rate=f"{float(profit_rate or 0.0):+.2f}",
-        emergency_pct=f"{float(emergency_pct or 0.0):+.2f}",
-        held_sec=int(held_sec or 0),
-        curr_price=int(curr_price or 0),
-        buy_price=buy_price,
-        confirmation_required="ws_or_orderbook_quote",
-        actual_order_submitted=False,
-        broker_order_forbidden=True,
-        runtime_effect=False,
-        **(quote_fields or {}),
+        **{
+            **(quote_fields or {}),
+            "exit_rule": str(exit_rule or "-"),
+            "profit_rate": f"{float(profit_rate or 0.0):+.2f}",
+            "emergency_pct": f"{float(emergency_pct or 0.0):+.2f}",
+            "held_sec": int(held_sec or 0),
+            "curr_price": int(curr_price or 0),
+            "buy_price": buy_price,
+            "confirmation_required": "ws_or_orderbook_quote",
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+            "runtime_effect": False,
+        },
+    )
+    return True
+
+
+def _hard_stop_quote_revalidation_block(
+    stock,
+    code,
+    *,
+    exit_rule: str | None,
+    profit_rate: float,
+    threshold_pct: float,
+    curr_price: int,
+    buy_price,
+    current_ai_score: float,
+    held_sec: int,
+    now_ts: float,
+    peak_profit: float | None = None,
+) -> bool:
+    if str(exit_rule or "").strip() != "scalp_hard_stop_pct":
+        return False
+    buy_price_float = _safe_float(buy_price, 0.0)
+    if buy_price_float <= 0:
+        return False
+
+    rest_snapshot, rest_check_state, rest_check_elapsed_ms = _fetch_rest_orderbook_snapshot_bounded(
+        code,
+        QuoteConsistencyConfig.from_env().emergency_rest_timeout_ms,
+    )
+    if not rest_snapshot:
+        return False
+
+    quote_fields, refreshed_mark_price, _, refreshed_sell_price = _build_quote_consistency_fields(
+        {"curr": curr_price},
+        rest_snapshot=rest_snapshot,
+        side="sell",
+        safety_exit=True,
+        now_ts=now_ts,
+    )
+    effective_recheck_price = int(refreshed_sell_price or refreshed_mark_price or 0)
+    if effective_recheck_price <= 0:
+        return False
+
+    refreshed_profit_rate = calculate_net_profit_rate(buy_price_float, effective_recheck_price)
+    threshold = _safe_float(threshold_pct, -999.0)
+    if refreshed_profit_rate <= threshold:
+        return False
+
+    _log_holding_pipeline(
+        stock,
+        code,
+        "hard_stop_quote_revalidation_blocked",
+        **{
+            **(quote_fields or {}),
+            "exit_rule": "scalp_hard_stop_pct",
+            "original_profit_rate": f"{_safe_float(profit_rate, 0.0):+.2f}",
+            "revalidated_profit_rate": f"{refreshed_profit_rate:+.2f}",
+            "hard_stop_pct": f"{threshold:+.2f}",
+            "original_curr_price": int(curr_price or 0),
+            "revalidated_price": effective_recheck_price,
+            "revalidated_mark_price": int(refreshed_mark_price or 0),
+            "revalidated_sell_price": int(refreshed_sell_price or 0),
+            "peak_profit": "-" if peak_profit is None else f"{_safe_float(peak_profit, 0.0):+.2f}",
+            "current_ai_score": f"{_safe_float(current_ai_score, 0.0):.0f}",
+            "held_sec": int(held_sec or 0),
+            "quote_consistency_rest_check_state": rest_check_state,
+            "quote_consistency_rest_check_elapsed_ms": round(float(rest_check_elapsed_ms or 0.0), 3),
+            "confirmation_required": "rest_revalidated_hard_stop",
+            "threshold_family": "hard_stop_quote_revalidation_guard",
+            "decision_source": "HARD_STOP_QUOTE_REVALIDATION",
+            "decision_authority": "real_scalping_hard_stop_quote_revalidation_guard",
+            "metric_role": "hard_safety_confirmation_guard",
+            "window_policy": "same_loop_pre_submit_rest_revalidation",
+            "sample_floor": "not_applicable_runtime_safety_guard",
+            "primary_decision_metric": "revalidated_profit_rate_vs_hard_stop_pct",
+            "source_quality_gate": "fresh_rest_orderbook_snapshot_available",
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+            "runtime_effect": True,
+            "allowed_runtime_apply": False,
+            "forbidden_uses": (
+                "EV|rolling|MTD|cumulative_tuning|live_auto_promotion|runtime_apply_bridge|"
+                "threshold_mutation|provider_change|order_price_change|quantity_cap_change|"
+                "broker_guard_bypass|hard_stop_threshold_relaxation"
+            ),
+        },
+    )
+    _mutate_stock_state(
+        stock,
+        pop_fields=(
+            "last_exit_rule",
+            "last_exit_reason",
+            "last_exit_decision_source",
+        ),
     )
     return True
 
@@ -23840,8 +23958,9 @@ def _maybe_submit_rising_missed_one_share_entry(
         already_holding=_already_holding_entry_position(stock),
         positive_delta_pct=_scanner_positive_delta_pct(stock),
         min_delta_pct=_scanner_rising_entry_min_delta_pct(),
+        current_price=curr_price,
     )
-    if decision.reason in {RISING_MISSED_BLOCK_OPEN_PENDING, RISING_MISSED_BLOCK_ALREADY_HOLDING}:
+    if decision.allowed is False and decision.reason != RISING_MISSED_BLOCK_NOT_CANDIDATE:
         _log_entry_pipeline(
             stock,
             code,
@@ -23850,7 +23969,7 @@ def _maybe_submit_rising_missed_one_share_entry(
             forced_entry_reason=RISING_MISSED_FORCED_ENTRY_REASON,
             actual_order_submitted=False,
             broker_order_forbidden=True,
-            runtime_effect=False,
+            runtime_effect=decision.reason == RISING_MISSED_BLOCK_PRICE_ABOVE_CAP,
             **(decision.log_fields or {}),
         )
         return True
@@ -25527,15 +25646,17 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
             stock,
             code,
             "daily_limit_up_exit_already_pending",
-            sell_reason_type="LIMIT_UP",
-            exit_rule="daily_limit_up_immediate_exit",
-            profit_rate=f"{profit_rate:+.2f}",
-            curr_price=curr_p,
-            buy_price=buy_p,
-            actual_order_submitted=False,
-            broker_order_forbidden=False,
-            runtime_effect=False,
-            **daily_limit_up_exit,
+            **{
+                **daily_limit_up_exit,
+                "sell_reason_type": "LIMIT_UP",
+                "exit_rule": "daily_limit_up_immediate_exit",
+                "profit_rate": f"{profit_rate:+.2f}",
+                "curr_price": curr_p,
+                "buy_price": buy_p,
+                "actual_order_submitted": False,
+                "broker_order_forbidden": False,
+                "runtime_effect": False,
+            },
         )
         return
 
@@ -27690,6 +27811,20 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
             if str(exit_rule or "").strip() == "daily_limit_up_immediate_exit"
             else {}
         )
+        if _hard_stop_quote_revalidation_block(
+            stock,
+            code,
+            exit_rule=exit_rule,
+            profit_rate=profit_rate,
+            threshold_pct=_safe_float(locals().get("hard_stop_pct"), _rule_float("SCALP_HARD_STOP", -2.5)),
+            curr_price=curr_p,
+            buy_price=buy_p,
+            current_ai_score=current_ai_score,
+            held_sec=held_sec,
+            peak_profit=peak_profit,
+            now_ts=now_ts,
+        ):
+            return
         _emit_stat_action_decision_snapshot(
             stock=stock,
             code=code,
@@ -27999,15 +28134,17 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                 stock,
                 code,
                 "sell_order_blocked_open_time",
-                sell_reason_type=sell_reason_type,
-                exit_rule=exit_rule or stock.get("last_exit_rule") or "-",
-                exit_decision_source=stock.get("last_exit_decision_source") or "MANUAL",
-                qty=buy_qty,
-                profit_rate=f"{profit_rate:+.2f}",
-                actual_order_submitted=False,
-                broker_order_forbidden=True,
-                runtime_effect=True,
-                **sell_time_block_fields,
+                **{
+                    **sell_time_block_fields,
+                    "sell_reason_type": sell_reason_type,
+                    "exit_rule": exit_rule or stock.get("last_exit_rule") or "-",
+                    "exit_decision_source": stock.get("last_exit_decision_source") or "MANUAL",
+                    "qty": buy_qty,
+                    "profit_rate": f"{profit_rate:+.2f}",
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                    "runtime_effect": True,
+                },
             )
             log_info(
                 f"[SELL_TIME_BLOCK] {stock.get('name', code)} {sell_reason_type} "
@@ -28027,27 +28164,29 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                     stock,
                     code,
                     "sell_order_retry_backoff_active",
-                    sell_reason_type=sell_reason_type,
-                    exit_rule=exit_rule or stock.get("last_exit_rule") or "-",
-                    exit_decision_source=stock.get("last_exit_decision_source") or "MANUAL",
-                    qty=buy_qty,
-                    profit_rate=f"{profit_rate:+.2f}",
-                    metric_role="broker_reject_burst_suppression",
-                    decision_authority="sell_order_failure_retry_backoff_runtime_guard",
-                    window_policy="intraday_real_order_retry_backoff",
-                    sample_floor="not_applicable_runtime_safety_guard",
-                    primary_decision_metric="retry_backoff_remaining_sec",
-                    source_quality_gate="sell_order_retry_backoff_contract_fields_present",
-                    runtime_effect=True,
-                    allowed_runtime_apply=False,
-                    forbidden_uses=(
-                        "EV|rolling|MTD|cumulative_tuning|live_auto_promotion|runtime_apply_bridge|"
-                        "threshold_mutation|provider_change|order_price_change|quantity_cap_change|"
-                        "broker_guard_bypass"
-                    ),
-                    actual_order_submitted=False,
-                    broker_order_forbidden=True,
-                    **sell_retry_backoff,
+                    **{
+                        **sell_retry_backoff,
+                        "sell_reason_type": sell_reason_type,
+                        "exit_rule": exit_rule or stock.get("last_exit_rule") or "-",
+                        "exit_decision_source": stock.get("last_exit_decision_source") or "MANUAL",
+                        "qty": buy_qty,
+                        "profit_rate": f"{profit_rate:+.2f}",
+                        "metric_role": "broker_reject_burst_suppression",
+                        "decision_authority": "sell_order_failure_retry_backoff_runtime_guard",
+                        "window_policy": "intraday_real_order_retry_backoff",
+                        "sample_floor": "not_applicable_runtime_safety_guard",
+                        "primary_decision_metric": "retry_backoff_remaining_sec",
+                        "source_quality_gate": "sell_order_retry_backoff_contract_fields_present",
+                        "runtime_effect": True,
+                        "allowed_runtime_apply": False,
+                        "forbidden_uses": (
+                            "EV|rolling|MTD|cumulative_tuning|live_auto_promotion|runtime_apply_bridge|"
+                            "threshold_mutation|provider_change|order_price_change|quantity_cap_change|"
+                            "broker_guard_bypass"
+                        ),
+                        "actual_order_submitted": False,
+                        "broker_order_forbidden": True,
+                    },
                 )
                 stock["_sell_order_retry_backoff_logged_key"] = log_key
             return
@@ -28296,7 +28435,11 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                     "sell_order_failure_count": 0,
                 }
 
-            _mutate_stock_state(stock, set_fields={'status': new_status})
+            _mutate_stock_state(
+                stock,
+                set_fields={'status': new_status},
+                pop_fields=['sell_odno', 'sell_order_time', 'pending_sell_msg', 'sell_target_price'],
+            )
             _log_holding_pipeline(
                 stock,
                 code,
@@ -28674,6 +28817,7 @@ def can_consider_scale_in(
     market_regime,
     *,
     skip_add_judgment_lock=False,
+    bypass_scalping_buy_window=False,
 ):
     """추가매수 공통 게이트: 조건을 만족하는 경우에만 True."""
     _ = (code, ws_data)
@@ -28780,7 +28924,7 @@ def can_consider_scale_in(
         return {"allowed": False, "reason": "unknown_strategy"}
 
     now = datetime.now()
-    if raw_strategy == 'SCALPING' and not is_scalping_buy_time_allowed(now):
+    if raw_strategy == 'SCALPING' and not bypass_scalping_buy_window and not is_scalping_buy_time_allowed(now):
         reason = scalping_buy_time_block_reason(now)
         if reason == "scalping_new_buy_cutoff":
             return {"allowed": False, "reason": "scalping_cutoff"}
@@ -29341,6 +29485,16 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
     if add_type not in ("AVG_DOWN", "PYRAMID"):
         log_info(f"[ADD_BLOCKED] {stock.get('name')}({code}) reason=invalid_add_type")
         return None
+    add_reason = str(action.get("reason") or "").strip()
+    buy_time_block_override_reason = (
+        add_reason
+        if add_type == "AVG_DOWN"
+        and add_reason in {
+            _STOP_LINE_TOUCH_MANDATORY_AVG_DOWN_REASON,
+            "late_loss_avg_down_retry",
+        }
+        else None
+    )
 
     curr_price = _safe_int(ws_data.get('curr'), 0)
     if curr_price <= 0:
@@ -29405,16 +29559,57 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
                 {
                     key: value
                     for key, value in rest_refresh_log_fields.items()
-                    if key.startswith("pre_submit_rest_orderbook_refresh_")
+                    if (
+                        key.startswith("pre_submit_rest_orderbook_refresh_")
+                        or key.startswith("quote_consistency_")
+                        or key
+                        in {
+                            "canonical_mark_price",
+                            "executable_buy_price",
+                            "executable_sell_price",
+                            "ws_rest_gap_bps",
+                            "price_source",
+                            "normalization_runtime_effect",
+                        }
+                    )
                 }
             )
         refreshed_curr_price = _safe_int(ws_data.get('curr'), curr_price)
         if refreshed_curr_price > 0:
             curr_price = refreshed_curr_price
-    scale_quote_fields, canonical_mark_price, executable_buy_price, _ = _build_quote_consistency_fields(
-        ws_data,
-        side="buy",
+    rest_orderbook_refresh_applied = bool(
+        scale_in_quote_refresh_fields.get("pre_submit_rest_orderbook_refresh_applied")
     )
+    if rest_orderbook_refresh_applied and scale_in_quote_refresh_fields.get("quote_consistency_state"):
+        scale_quote_fields = {
+            key: value
+            for key, value in scale_in_quote_refresh_fields.items()
+            if (
+                key.startswith("quote_consistency_")
+                or key
+                in {
+                    "canonical_mark_price",
+                    "executable_buy_price",
+                    "executable_sell_price",
+                    "ws_rest_gap_bps",
+                    "price_source",
+                    "normalization_runtime_effect",
+                }
+            )
+        }
+        canonical_mark_price = _safe_int(
+            scale_quote_fields.get("canonical_mark_price") or ws_data.get("curr"),
+            0,
+        )
+        executable_buy_price = _safe_int(
+            scale_quote_fields.get("executable_buy_price") or ws_data.get("best_bid"),
+            0,
+        )
+    else:
+        scale_quote_fields, canonical_mark_price, executable_buy_price, _ = _build_quote_consistency_fields(
+            ws_data,
+            side="buy",
+        )
     _merge_quote_consistency_fields(scale_in_quote_refresh_fields, scale_quote_fields)
     if canonical_mark_price > 0:
         curr_price = int(canonical_mark_price)
@@ -29426,10 +29621,26 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
     scale_in_quote_refresh_non_price_source_fields = {
         key: value for key, value in scale_in_quote_refresh_fields.items() if key != "price_source"
     }
+    quote_consistency_state = str(scale_in_quote_refresh_fields.get("quote_consistency_state") or "").strip().lower()
+    defensive_avg_down_reason = (
+        add_type == "AVG_DOWN"
+        and add_reason
+        in {
+            _STOP_LINE_TOUCH_MANDATORY_AVG_DOWN_REASON,
+            "late_loss_avg_down_retry",
+        }
+    )
+    defensive_quote_divergence_bypass = (
+        defensive_avg_down_reason
+        and quote_consistency_state == "diverged"
+        and canonical_mark_price > 0
+        and executable_buy_price > 0
+    )
     if (
         bool(scale_in_quote_refresh_fields.get("normalization_runtime_effect"))
         and bool(scale_in_quote_refresh_fields.get("quote_consistency_entry_blocked"))
         and not simulated_position
+        and not defensive_quote_divergence_bypass
     ):
         _log_holding_pipeline(
             stock,
@@ -29457,6 +29668,45 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
             f"reason=quote_consistency_diverged curr_price={curr_price}"
         )
         return None
+    if (
+        bool(scale_in_quote_refresh_fields.get("normalization_runtime_effect"))
+        and bool(scale_in_quote_refresh_fields.get("quote_consistency_entry_blocked"))
+        and defensive_quote_divergence_bypass
+        and not simulated_position
+    ):
+        _log_holding_pipeline(
+            stock,
+            code,
+            "scale_in_quote_consistency_defensive_bypass",
+            add_type=add_type,
+            scale_in_arm=add_type,
+            add_reason=add_reason,
+            scale_in_blocker_namespace=add_type,
+            scale_in_blocker_reason="quote_consistency_diverged_defensive_bypass",
+            reason="quote_consistency_diverged_defensive_bypass",
+            curr_price=curr_price,
+            canonical_mark_price=canonical_mark_price,
+            executable_buy_price=executable_buy_price,
+            price_source=scale_in_quote_refresh_fields.get("price_source"),
+            threshold_family="defensive_avg_down_quote_consistency_bypass",
+            decision_authority="real_scalping_defensive_avg_down_pre_sell_intercept",
+            metric_role="hard_safety_price_refresh_exception",
+            window_policy="same_loop_pre_submit_quote_revalidated",
+            sample_floor="not_applicable_runtime_guard",
+            primary_decision_metric="executable_buy_price_available_after_quote_normalization",
+            source_quality_gate="canonical_mark_and_executable_buy_price_present",
+            runtime_effect=True,
+            allowed_runtime_apply=False,
+            actual_order_submitted=False,
+            broker_order_forbidden=False,
+            forbidden_uses=(
+                "entry_threshold_relaxation|provider_route_change|quantity_cap_release|"
+                "non_defensive_avg_down|pyramid_scale_in|broker_guard_bypass|"
+                "hard_safety_bypass|second_avg_down_retry"
+            ),
+            **scale_in_quote_refresh_non_price_source_fields,
+            **swing_scale_micro_fields,
+        )
     price_resolution = resolve_scale_in_order_price(
         stock=stock,
         ws_data=ws_data,
@@ -30101,19 +30351,21 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
             stock,
             code,
             "scale_in_pyramid_micro_context_guard_block",
-            threshold_family="real_pyramid_scale_in_quality_guard_runtime",
-            runtime_family_candidate="real_pyramid_scale_in_quality_guard_runtime",
-            decision_authority="real_scalping_scale_in_quality_guard_runtime_only",
-            runtime_effect=True,
-            allowed_runtime_apply=False,
-            source_quality_gate="real_pyramid_scale_in_quality_guard_contract",
-            forbidden_uses=TRADE_QUALITY_RUNTIME_FORBIDDEN_USES,
-            actual_order_submitted=False,
-            broker_order_forbidden=True,
-            add_type=add_type,
-            scale_in_guard_reason=real_pyramid_micro_guard.get("reason"),
-            trade_quality_signature_version="scale_in_quality_v1",
-            **(real_pyramid_micro_guard.get("log_fields") or {}),
+            **{
+                **(real_pyramid_micro_guard.get("log_fields") or {}),
+                "threshold_family": "real_pyramid_scale_in_quality_guard_runtime",
+                "runtime_family_candidate": "real_pyramid_scale_in_quality_guard_runtime",
+                "decision_authority": "real_scalping_scale_in_quality_guard_runtime_only",
+                "runtime_effect": True,
+                "allowed_runtime_apply": False,
+                "source_quality_gate": "real_pyramid_scale_in_quality_guard_contract",
+                "forbidden_uses": TRADE_QUALITY_RUNTIME_FORBIDDEN_USES,
+                "actual_order_submitted": False,
+                "broker_order_forbidden": True,
+                "add_type": add_type,
+                "scale_in_guard_reason": real_pyramid_micro_guard.get("reason"),
+                "trade_quality_signature_version": "scale_in_quality_v1",
+            },
         )
         log_info(
             f"[ADD_BLOCKED] {stock.get('name')}({code}) reason=scale_in_pyramid_micro_context_guard "
@@ -30128,6 +30380,8 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
         order_type_code,
         token=KIWOOM_TOKEN,
         order_type_desc=f"추가매수({add_type})",
+        allow_time_block_override=bool(buy_time_block_override_reason),
+        time_block_override_reason=buy_time_block_override_reason,
     )
 
     if res is None:

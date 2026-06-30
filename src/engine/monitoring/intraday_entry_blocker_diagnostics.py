@@ -14,6 +14,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[3]
 ENTRY_PIPELINE = "ENTRY_PIPELINE"
 PROMOTED_STAGE = "scalping_scanner_candidate_promoted"
 REAL_SUBMIT_TRUE = "true"
+RISING_MISSED_FORCED_ENTRY_REASON = "rising_missed_one_share_entry"
 
 BLOCKER_STAGES = {
     "ai_confirmed_terminal_no_budget",
@@ -24,6 +25,7 @@ BLOCKER_STAGES = {
     "blocked_strength_momentum",
     "blocked_vpw",
     "first_ai_wait",
+    "latency_block",
     "score65_74_recovery_probe_blocked",
     "scalping_scanner_watch_eviction",
     "scalping_scanner_watching_runtime_skip",
@@ -66,6 +68,12 @@ SCALE_IN_STAGES = {
     "scale_in_p2_observe",
     "scale_in_executed",
     "stat_action_decision_snapshot",
+}
+
+ACTIONABLE_BLOCKER_STAGE_PRIORITY = {
+    "latency_block": 100,
+    "entry_submit_revalidation_block": 95,
+    "pre_submit_price_guard_block": 90,
 }
 
 SCALE_IN_REASON_TOKENS = {
@@ -155,8 +163,18 @@ def _exclude_from_real_entry_analysis(row: dict[str, Any]) -> bool:
         return True
     if str(fields.get("reason") or "").strip() == "scalp_live_simulator":
         return True
+    if _is_rising_missed_forced_one_share_entry(fields):
+        return True
     authority = str(fields.get("decision_authority") or "").lower()
     return "sim_" in authority or "swing_" in authority
+
+
+def _is_rising_missed_forced_one_share_entry(fields: dict[str, Any]) -> bool:
+    reason = str(fields.get("forced_entry_reason") or "").strip()
+    forced = str(fields.get("rising_missed_one_share_entry_forced") or "").strip().lower() == "true"
+    qty = _safe_float(fields.get("forced_entry_qty"))
+    one_share_or_missing = qty is None or qty == 1.0
+    return one_share_or_missing and (reason == RISING_MISSED_FORCED_ENTRY_REASON or forced)
 
 
 def _entry_events(rows: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
@@ -517,6 +535,13 @@ def _blocker_taxonomy(
             "major_blocker": True,
             "route": "preserve_stale_submit_block_and_fix_price_or_quote_context",
         }
+    if stage == "latency_block":
+        return {
+            "class": "pre_submit_quality_guard",
+            "actionable": True,
+            "major_blocker": True,
+            "route": "inspect_latency_danger_or_slippage_without_guard_bypass",
+        }
     if "stale" in reason_lower or "insufficient_history" in reason_lower:
         return {
             "class": "source_freshness_blocker",
@@ -538,7 +563,15 @@ def _dominant_actionable_blocker(rows: list[dict[str, Any]]) -> dict[str, Any]:
         return {"stage": "", "reason": "", "count": 0, "class": "", "route": ""}
     max_delta = _max_delta(rows)
     counts = Counter((row.get("stage") or "", _blocker_reason(row)) for row in blocker_rows)
-    for (stage, reason), count in counts.most_common():
+    ordered = sorted(
+        counts.items(),
+        key=lambda item: (
+            ACTIONABLE_BLOCKER_STAGE_PRIORITY.get(str(item[0][0]), 0),
+            item[1],
+        ),
+        reverse=True,
+    )
+    for (stage, reason), count in ordered:
         taxonomy = _blocker_taxonomy(
             stage=str(stage),
             reason=str(reason),
@@ -595,10 +628,18 @@ def _top_counter(counter: Counter[Any], *, limit: int = 10, key_name: str = "key
     return [{key_name: key, "count": count} for key, count in counter.most_common(limit)]
 
 
-def _real_rows(rows: list[dict[str, Any]], *, since: str | None = None) -> list[dict[str, Any]]:
+def _real_rows(
+    rows: list[dict[str, Any]],
+    *,
+    since: str | None = None,
+    event_until: str | None = None,
+) -> list[dict[str, Any]]:
     selected = []
     for row in rows:
-        if since and _event_time(row) < since:
+        event_time = _event_time(row)
+        if since and event_time < since:
+            continue
+        if event_until and event_time > event_until:
             continue
         if _exclude_from_real_entry_analysis(row):
             continue
@@ -642,6 +683,15 @@ def _entry_price_diagnostics(rows: list[dict[str, Any]]) -> dict[str, Any]:
         if str(row.get("stage") or "") == "entry_ai_price_canary_fallback"
     ]
     candidate_failure_reason_counts = Counter(_blocker_reason(row) or "-" for row in candidate_failure_rows)
+
+    def _submitted_order_price(row: dict[str, Any]) -> float | None:
+        return _safe_float(
+            _field(row, "submitted_order_price")
+            or _field(row, "submitted_price")
+            or _field(row, "order_price")
+            or _field(row, "resolved_order_price")
+        )
+
     return {
         "event_count": len(relevant),
         "block_or_unfilled_count": len(block_rows),
@@ -663,7 +713,7 @@ def _entry_price_diagnostics(rows: list[dict[str, Any]]) -> dict[str, Any]:
                 "entry_price_guard": _field(row, "entry_price_guard", ""),
                 "resolution_reason": _field(row, "resolution_reason", ""),
                 "price_below_bid_bps": _safe_float(_field(row, "price_below_bid_bps")),
-                "submitted_order_price": _safe_float(_field(row, "submitted_order_price")),
+                "submitted_order_price": _submitted_order_price(row),
                 "best_bid_at_submit": _safe_float(_field(row, "best_bid_at_submit")),
                 "quote_age_at_submit_ms": _safe_float(_field(row, "quote_age_at_submit_ms")),
                 "entry_submit_revalidation": _field(row, "entry_submit_revalidation", ""),
@@ -1388,15 +1438,17 @@ def build_report(
     post_sell_dir: Path | None = None,
     generated_at: str | None = None,
     since: str | None = None,
+    event_until: str | None = None,
     rising_threshold_pct: float = 0.5,
     falling_threshold_pct: float = -0.1,
 ) -> dict[str, Any]:
     all_rows = _read_jsonl(pipeline_path)
-    full_grouped = _entry_events(all_rows)
-    rows = all_rows
+    source_rows = [row for row in all_rows if not event_until or _event_time(row) <= event_until]
+    full_grouped = _entry_events(source_rows)
+    rows = source_rows
     if since:
         rows = [row for row in rows if _event_time(row) >= since]
-    real_rows = _real_rows(all_rows, since=since)
+    real_rows = _real_rows(all_rows, since=since, event_until=event_until)
     grouped = _entry_events(rows)
     real_entry_event_count = sum(len(events) for events in grouped.values())
     summaries = [
@@ -1447,6 +1499,7 @@ def build_report(
         "source_pipeline_events": str(pipeline_path),
         "event_window": {
             "since": since or "",
+            "until": event_until or "",
         },
         "thresholds": {
             "rising_missed_pct": rising_threshold_pct,
@@ -1587,7 +1640,7 @@ def build_report(
             "rising_missed_buy_count": len(rising_missed),
             "falling_real_submitted_count": len(falling_submitted),
             "real_submit_symbol_count": sum(1 for item in summaries if item["real_submit_count"] > 0),
-            "excluded_analysis_scope": "sim_and_swing_events",
+            "excluded_analysis_scope": "sim_swing_and_rising_missed_forced_one_share_events",
             "rising_missed_low_ai_or_negative_pressure_eval_quality": _rollup_low_ai_pressure_quality(
                 rising_missed
             ),
@@ -1696,6 +1749,7 @@ def _build_write_report(args: argparse.Namespace) -> dict[str, Any]:
         pipeline_path=pipeline_path,
         post_sell_dir=args.post_sell_dir,
         since=args.since,
+        event_until=args.event_until,
     )
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -1713,6 +1767,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--post-sell-dir", type=Path)
     parser.add_argument("--output", type=Path)
     parser.add_argument("--since", help="Only include events with emitted_at at or after this ISO timestamp.")
+    parser.add_argument("--event-until", help="Only include events with emitted_at at or before this ISO timestamp.")
     parser.add_argument("--print-summary", action="store_true")
     parser.add_argument("--loop", action="store_true", help="Repeat report generation until --until.")
     parser.add_argument("--interval-sec", type=int, default=180)

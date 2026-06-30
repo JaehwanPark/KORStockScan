@@ -11,6 +11,8 @@ BLOCK_FEATURE_DISABLED = "feature_disabled"
 BLOCK_NOT_CANDIDATE = "not_rising_missed_candidate"
 BLOCK_OPEN_PENDING = "open_pending_entry_order"
 BLOCK_ALREADY_HOLDING = "already_holding"
+BLOCK_PRICE_ABOVE_CAP = "price_above_one_share_entry_cap"
+MAX_ONE_SHARE_ENTRY_PRICE_KRW = 1_000_000
 
 
 @dataclass(frozen=True)
@@ -92,9 +94,15 @@ def evaluate_rising_missed_one_share_entry(
     already_holding: bool,
     positive_delta_pct: Any = None,
     min_delta_pct: float = 0.5,
+    current_price: Any = None,
+    max_entry_price_krw: int = MAX_ONE_SHARE_ENTRY_PRICE_KRW,
 ) -> RisingMissedOneShareDecision:
     stock = stock if isinstance(stock, dict) else {}
     delta_pct = _positive_delta_pct(stock, explicit_delta_pct=positive_delta_pct)
+    entry_price = _safe_int(current_price, 0) or _safe_int(stock.get("target_buy_price"), 0) or _safe_int(
+        stock.get("curr_price"), 0
+    )
+    price_cap = max(0, _safe_int(max_entry_price_krw, MAX_ONE_SHARE_ENTRY_PRICE_KRW))
     base_fields = {
         "rising_missed_one_share_entry_enabled": bool(feature_enabled),
         "rising_missed_one_share_entry_positive_delta_pct": f"{delta_pct:.4f}",
@@ -102,6 +110,8 @@ def evaluate_rising_missed_one_share_entry(
         "rising_missed_one_share_entry_strategy": _normalized_text(strategy) or "-",
         "rising_missed_one_share_entry_position_tag": _normalized_text(position_tag) or "-",
         "rising_missed_one_share_entry_forced_qty": 1,
+        "rising_missed_one_share_entry_price": entry_price,
+        "rising_missed_one_share_entry_price_cap_krw": price_cap,
     }
     if not feature_enabled:
         return RisingMissedOneShareDecision(
@@ -134,6 +144,13 @@ def evaluate_rising_missed_one_share_entry(
         return RisingMissedOneShareDecision(
             allowed=False,
             reason=BLOCK_ALREADY_HOLDING,
+            positive_delta_pct=delta_pct,
+            log_fields=base_fields,
+        )
+    if price_cap > 0 and entry_price > price_cap:
+        return RisingMissedOneShareDecision(
+            allowed=False,
+            reason=BLOCK_PRICE_ABOVE_CAP,
             positive_delta_pct=delta_pct,
             log_fields=base_fields,
         )

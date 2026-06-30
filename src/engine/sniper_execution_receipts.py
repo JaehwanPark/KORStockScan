@@ -382,12 +382,45 @@ def _clear_runtime_keys(target_stock: dict[str, Any], keys: tuple[str, ...]) -> 
         target_stock.pop(key, None)
 
 
+def _normalize_sell_pending_message_for_realized_result(
+    pending_msg: str,
+    *,
+    result_label: str,
+    profit_rate: float,
+) -> str:
+    final_msg = (
+        pending_msg.replace("매도 전송", "매도 체결 완료")
+        .replace("[익절 주문]", result_label)
+        .replace("[손절 주문]", result_label)
+        .replace("[익절 완료]", result_label)
+        .replace("[손절 완료]", result_label)
+    )
+    if profit_rate > 0:
+        final_msg = final_msg.replace("📉 [익절 완료]", "🎊 [익절 완료]")
+        normalized_lines = []
+        for line in final_msg.splitlines():
+            if line.startswith("사유:") and ("하드스탑" in line or "손절" in line or "LOSS" in line):
+                normalized_lines.append(line.replace("사유:", "청산 신호:", 1))
+                normalized_lines.append("실현 결과: `익절 확정`")
+                continue
+            if line.startswith("현재가 기준 수익:"):
+                normalized_lines.append(line.replace("현재가 기준 수익:", "신호 당시 평가손익:", 1))
+                continue
+            normalized_lines.append(line)
+        final_msg = "\n".join(normalized_lines)
+    elif profit_rate < 0:
+        final_msg = final_msg.replace("🎊 [손절 완료]", "📉 [손절 완료]")
+        final_msg = final_msg.replace("💰 [손절 완료]", "📉 [손절 완료]")
+    return final_msg
+
+
 def _publish_sell_execution_message(*, name: str, pending_msg: str, audience: str, exec_price: int, profit_rate: float) -> None:
+    result_label = "[익절 완료]" if profit_rate > 0 else "[손절 완료]"
     if pending_msg:
-        final_msg = (
-            pending_msg.replace("매도 전송", "매도 체결 완료")
-            .replace("[익절 주문]", "[익절 완료]")
-            .replace("[손절 주문]", "[손절 완료]")
+        final_msg = _normalize_sell_pending_message_for_realized_result(
+            pending_msg,
+            result_label=result_label,
+            profit_rate=profit_rate,
         )
         final_msg += f"\n✅ **실제 체결가:** `{exec_price:,}원` (확정 수익률: `{profit_rate:+.2f}%`)"
         event_bus.publish(
@@ -396,7 +429,7 @@ def _publish_sell_execution_message(*, name: str, pending_msg: str, audience: st
         )
         return
 
-    sign = "🎊 [익절 완료]" if profit_rate > 0 else "📉 [손절 완료]"
+    sign = f"🎊 {result_label}" if profit_rate > 0 else f"📉 {result_label}"
     event_bus.publish(
         'TELEGRAM_BROADCAST',
         {

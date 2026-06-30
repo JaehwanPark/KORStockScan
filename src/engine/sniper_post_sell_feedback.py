@@ -139,6 +139,23 @@ def _safe_bool(value, default: bool = False) -> bool:
     return default
 
 
+def _realized_result_label(profit_rate) -> str:
+    value = _safe_float(profit_rate, 0.0)
+    if value > 0.0:
+        return "익절"
+    if value < 0.0:
+        return "손절"
+    return "보합"
+
+
+def _exit_rule_profit_mismatch(exit_rule, profit_rate) -> bool:
+    rule = str(exit_rule or "").strip().lower()
+    value = _safe_float(profit_rate, 0.0)
+    if value <= 0.0:
+        return False
+    return any(marker in rule for marker in ("hard_stop", "soft_stop", "stop_loss", "loss"))
+
+
 def _ratio(numerator: int, denominator: int) -> float:
     if denominator <= 0:
         return 0.0
@@ -336,6 +353,8 @@ def record_post_sell_candidate(
             "profit_rate": round(_safe_float(profit_rate, 0.0), 3),
             "buy_qty": _safe_int(buy_qty, 0),
             "exit_rule": resolved_exit_rule,
+            "realized_result_label": _realized_result_label(profit_rate),
+            "exit_rule_profit_mismatch": _exit_rule_profit_mismatch(resolved_exit_rule, profit_rate),
             "exit_decision_source": str(stock.get("last_exit_decision_source") or "-"),
             "revive": bool(revive),
             "peak_profit": round(_safe_float(peak_profit, stock.get("last_exit_peak_profit", 0.0)), 3),
@@ -765,6 +784,16 @@ def evaluate_post_sell_candidates(target_date: str, token: str | None = None) ->
             "profit_rate": candidate.get("profit_rate", 0.0),
             "buy_qty": candidate.get("buy_qty", 0),
             "exit_rule": candidate.get("exit_rule", "-"),
+            "realized_result_label": candidate.get(
+                "realized_result_label",
+                _realized_result_label(candidate.get("profit_rate", 0.0)),
+            ),
+            "exit_rule_profit_mismatch": bool(
+                candidate.get(
+                    "exit_rule_profit_mismatch",
+                    _exit_rule_profit_mismatch(candidate.get("exit_rule", "-"), candidate.get("profit_rate", 0.0)),
+                )
+            ),
             "revive": bool(candidate.get("revive", False)),
             "peak_profit": candidate.get("peak_profit", 0.0),
             "held_sec": candidate.get("held_sec", 0),
@@ -1159,6 +1188,7 @@ def _enrich_post_sell_rows(
         mae_10m = _safe_float(metrics_10m.get("mae_pct"), 0.0)
         close_10m = _safe_float(metrics_10m.get("close_ret_pct"), 0.0)
         profit_rate = _safe_float(item.get("profit_rate", candidate.get("profit_rate")), 0.0)
+        exit_rule = str(item.get("exit_rule") or candidate.get("exit_rule") or "-")
         sell_price = _safe_float(item.get("sell_price", candidate.get("sell_price")), 0.0)
         buy_price = _safe_float(item.get("buy_price", candidate.get("buy_price")), 0.0)
         buy_qty = _safe_int(item.get("buy_qty", candidate.get("buy_qty")), 0)
@@ -1215,11 +1245,25 @@ def _enrich_post_sell_rows(
             "sell_price": int(round(sell_price)),
             "buy_qty": int(buy_qty),
             "profit_rate": round(profit_rate, 3),
+            "realized_result_label": str(
+                item.get("realized_result_label")
+                or candidate.get("realized_result_label")
+                or _realized_result_label(profit_rate)
+            ),
+            "exit_rule_profit_mismatch": bool(
+                item.get(
+                    "exit_rule_profit_mismatch",
+                    candidate.get(
+                        "exit_rule_profit_mismatch",
+                        _exit_rule_profit_mismatch(exit_rule, profit_rate),
+                    ),
+                )
+            ),
             "peak_profit": round(peak_profit, 3),
             "held_sec": int(held_sec),
             "current_ai_score": round(current_ai_score, 1),
             **conflict_fields,
-            "exit_rule": str(item.get("exit_rule") or candidate.get("exit_rule") or "-"),
+            "exit_rule": exit_rule,
             "revive": bool(item.get("revive", candidate.get("revive", False))),
             "outcome": str(item.get("outcome") or "NEUTRAL").upper(),
             "soft_stop_threshold_pct": round(soft_stop_threshold_pct, 3),
@@ -1595,6 +1639,15 @@ def _case_view(row: dict) -> dict:
         "strategy": str(row.get("strategy") or ""),
         "position_tag": str(row.get("position_tag") or ""),
         "exit_rule": str(row.get("exit_rule") or "-"),
+        "realized_result_label": str(
+            row.get("realized_result_label") or _realized_result_label(row.get("profit_rate"))
+        ),
+        "exit_rule_profit_mismatch": bool(
+            row.get(
+                "exit_rule_profit_mismatch",
+                _exit_rule_profit_mismatch(row.get("exit_rule"), row.get("profit_rate")),
+            )
+        ),
         "profit_rate": round(_safe_float(row.get("profit_rate"), 0.0), 3),
         "mfe_10m_pct": round(_safe_float(row.get("mfe_10m_pct"), 0.0), 3),
         "mae_10m_pct": round(_safe_float(row.get("mae_10m_pct"), 0.0), 3),

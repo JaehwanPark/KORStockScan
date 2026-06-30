@@ -19,7 +19,9 @@ from src.engine.scalping.rising_missed_one_share_entry import (
     BLOCK_ALREADY_HOLDING,
     BLOCK_NOT_CANDIDATE,
     BLOCK_OPEN_PENDING,
+    BLOCK_PRICE_ABOVE_CAP,
     FORCED_ENTRY_REASON,
+    MAX_ONE_SHARE_ENTRY_PRICE_KRW,
     collapse_to_one_share_order,
     evaluate_rising_missed_one_share_entry,
 )
@@ -70,6 +72,29 @@ def test_rising_missed_one_share_entry_allows_scanner_rising_candidate():
     assert decision.allowed is True
     assert decision.reason == FORCED_ENTRY_REASON
     assert decision.forced_qty == 1
+
+
+def test_rising_missed_one_share_entry_blocks_price_above_cap():
+    decision = evaluate_rising_missed_one_share_entry(
+        {
+            "strategy": "SCALPING",
+            "position_tag": "SCANNER",
+            "scanner_promotion_id": "scan-1",
+            "price_delta_since_first_seen_pct": 1.2,
+        },
+        strategy="SCALPING",
+        position_tag="SCANNER",
+        feature_enabled=True,
+        has_open_pending=False,
+        already_holding=False,
+        min_delta_pct=0.5,
+        current_price=MAX_ONE_SHARE_ENTRY_PRICE_KRW + 1,
+    )
+
+    assert decision.allowed is False
+    assert decision.reason == BLOCK_PRICE_ABOVE_CAP
+    assert decision.log_fields["rising_missed_one_share_entry_price"] == MAX_ONE_SHARE_ENTRY_PRICE_KRW + 1
+    assert decision.log_fields["rising_missed_one_share_entry_price_cap_krw"] == MAX_ONE_SHARE_ENTRY_PRICE_KRW
 
 
 def test_rising_missed_one_share_entry_blocks_open_pending_and_holding():
@@ -184,6 +209,66 @@ def test_rising_missed_one_share_hook_bypasses_watching_soft_branch(monkeypatch)
     assert submitted_stock["forced_entry_reason"] == FORCED_ENTRY_REASON
     assert runtime["forced_entry_qty"] == 1
     assert runtime["forced_entry_reason"] == FORCED_ENTRY_REASON
+
+
+def test_rising_missed_one_share_hook_blocks_price_above_cap_without_submit(monkeypatch):
+    state_handlers.COOLDOWNS = {}
+    state_handlers.ALERTED_STOCKS = set()
+    state_handlers.TRADING_RULES = CONFIG
+
+    branch_calls = []
+    submit_calls = []
+    entry_logs = []
+
+    monkeypatch.setenv("KORSTOCKSCAN_RISING_MISSED_ONE_SHARE_ENTRY_ENABLED", "true")
+    monkeypatch.setattr(state_handlers, "is_buy_side_paused", lambda: False)
+    monkeypatch.setattr(
+        state_handlers,
+        "evaluate_scalp_same_symbol_loss_reentry_guard",
+        lambda *args, **kwargs: {"allowed": True},
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_handle_watching_strategy_branch",
+        lambda *args, **kwargs: branch_calls.append(True) or False,
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_submit_watching_triggered_entry",
+        lambda *args, **kwargs: submit_calls.append(True) or True,
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_entry_pipeline",
+        lambda stock, code, stage, **fields: entry_logs.append((stage, fields)),
+    )
+
+    stock = {
+        "id": 1,
+        "name": "RISING_HIGH_PRICE",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "scanner_promotion_id": "scan-1",
+        "price_delta_since_first_seen_pct": 2.1,
+        "prob": 0.62,
+    }
+
+    state_handlers.handle_watching_state(
+        stock,
+        "123456",
+        {"curr": MAX_ONE_SHARE_ENTRY_PRICE_KRW + 1, "v_pw": 100.0},
+        admin_id=1,
+        now_ts=1000.0,
+        now_dt=datetime(2026, 6, 29, 10, 0, 0),
+    )
+
+    assert submit_calls == []
+    assert branch_calls == []
+    assert stock.get("rising_missed_one_share_entry_forced") is None
+    assert entry_logs[-1][0] == "rising_missed_one_share_entry_blocked"
+    assert entry_logs[-1][1]["block_reason"] == BLOCK_PRICE_ABOVE_CAP
+    assert entry_logs[-1][1]["broker_order_forbidden"] is True
+    assert entry_logs[-1][1]["runtime_effect"] is True
 
 
 def test_rising_missed_one_share_skip_hook_allows_normal_watching_branch(monkeypatch):
@@ -733,6 +818,74 @@ def test_real_weak_pullback_entry_block_blocks_normalized_allow_normal_weak_with
     assert verdict["block_reason"] == "weak_momentum_caution_without_micro_confirmation"
     assert verdict["weak_pullback_entry_block_positive_signal_count"] == 0
     assert verdict["weak_pullback_entry_block_spread_ticks"] == 6
+
+
+def test_real_weak_pullback_entry_block_blocks_caution_weak_even_without_spread_ticks(monkeypatch):
+    monkeypatch.setattr(
+        state_handlers,
+        "TRADING_RULES",
+        replace(
+            CONFIG,
+            SCALP_REAL_WEAK_PULLBACK_ENTRY_BLOCK_ENABLED=True,
+            SCALP_REAL_WEAK_PULLBACK_ENTRY_BLOCK_MIN_MICRO_POSITIVES=2,
+            SCALP_REAL_WEAK_PULLBACK_ENTRY_BLOCK_MIN_SPREAD_TICKS=5,
+        ),
+    )
+    monkeypatch.setattr(state_handlers, "_is_any_simulated_position", lambda *args, **kwargs: False)
+
+    verdict = state_handlers._evaluate_real_weak_pullback_entry_block(
+        strategy="SCALPING",
+        stock={"name": "에코프로비엠"},
+        latency_gate={
+            "latency_state": "CAUTION",
+            "decision": "ALLOW_NORMAL",
+        },
+        pre_ai_fields={
+            "strength_momentum_risk_state": "below_static_vpw_context",
+            "strength_momentum_reason": "below_window_buy_value",
+        },
+        guard_fields={},
+        orderbook_fields={"orderbook_micro_state": "neutral"},
+    )
+
+    assert verdict["blocked"] is True
+    assert verdict["block_reason"] == "weak_momentum_caution_without_micro_confirmation"
+    assert verdict["weak_pullback_entry_block_caution_submit"] is True
+    assert verdict["weak_pullback_entry_block_spread_requirement_met"] is False
+    assert verdict["weak_pullback_entry_block_spread_ticks"] == 0
+
+
+def test_real_weak_pullback_entry_block_keeps_safe_submit_spread_requirement(monkeypatch):
+    monkeypatch.setattr(
+        state_handlers,
+        "TRADING_RULES",
+        replace(
+            CONFIG,
+            SCALP_REAL_WEAK_PULLBACK_ENTRY_BLOCK_ENABLED=True,
+            SCALP_REAL_WEAK_PULLBACK_ENTRY_BLOCK_MIN_MICRO_POSITIVES=2,
+            SCALP_REAL_WEAK_PULLBACK_ENTRY_BLOCK_MIN_SPREAD_TICKS=5,
+        ),
+    )
+    monkeypatch.setattr(state_handlers, "_is_any_simulated_position", lambda *args, **kwargs: False)
+
+    verdict = state_handlers._evaluate_real_weak_pullback_entry_block(
+        strategy="SCALPING",
+        stock={"name": "SAFE"},
+        latency_gate={
+            "latency_state": "SAFE",
+            "decision": "ALLOW_NORMAL",
+        },
+        pre_ai_fields={
+            "strength_momentum_risk_state": "below_static_vpw_context",
+            "strength_momentum_reason": "below_window_buy_value",
+        },
+        guard_fields={},
+        orderbook_fields={"orderbook_micro_state": "neutral"},
+    )
+
+    assert verdict["blocked"] is False
+    assert verdict["reason"] == "spread_not_wide"
+    assert verdict["spread_ticks"] == 0
 
 
 def test_real_weak_pullback_entry_block_reads_entry_strength_alias_from_stock(monkeypatch):
@@ -1596,6 +1749,397 @@ def test_execute_scalping_pyramid_sends_resolved_best_bid_with_capped_percent_bu
     assert resolved["would_qty"] == 5
     assert resolved["effective_qty"] == 5
     assert any(stage == "scale_in_price_p2_observe" for stage, _ in logs)
+
+
+def test_execute_scalping_pyramid_blocks_one_share_position_by_exposure_cap(monkeypatch):
+    rules = replace(CONFIG, MAX_POSITION_PCT=1.0, SCALPING_PYRAMID_MAX_ADD_QTY_RATIO=0.50)
+    monkeypatch.setattr(state_handlers, "TRADING_RULES", rules)
+    monkeypatch.setattr(scale_in, "TRADING_RULES", rules)
+    state_handlers.KIWOOM_TOKEN = "test"
+
+    sent_orders = []
+    logs = []
+    monkeypatch.setattr(state_handlers.kiwoom_orders, "get_deposit", lambda *args, **kwargs: 10_000_000)
+    monkeypatch.setattr(
+        state_handlers.kiwoom_orders,
+        "send_buy_order",
+        lambda *args, **kwargs: sent_orders.append(args) or {"return_code": "0", "ord_no": "P1"},
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_holding_pipeline",
+        lambda stock, code, stage, **fields: logs.append((stage, fields)),
+    )
+
+    stock = {
+        "id": 1,
+        "name": "TEST",
+        "strategy": "SCALPING",
+        "buy_qty": 1,
+        "last_reversal_features": {
+            "buy_pressure_10t": 79.31,
+            "tick_acceleration_ratio": 1.0,
+            "large_sell_print_detected": False,
+            "curr_vs_micro_vwap_bp": 47.85,
+        },
+    }
+    action = {
+        "add_type": "PYRAMID",
+        "reason": "scalping_pyramid_ok",
+        "current_ai_score": 72,
+        "profit_rate": 1.55,
+        "peak_profit": 1.61,
+    }
+    ws_data = {"curr": 177_100, "best_bid": 177_000, "best_ask": 177_100}
+
+    state_handlers.execute_scale_in_order(
+        stock=stock,
+        code="240810",
+        ws_data=ws_data,
+        action=action,
+        admin_id=1,
+    )
+
+    assert sent_orders == []
+    blocked = [fields for stage, fields in logs if stage == "scale_in_qty_block"][0]
+    assert blocked["reason"] == "pyramid_exposure_cap"
+    assert blocked["pyramid_max_add_qty_ratio"] == 0.5
+    assert blocked["pyramid_max_add_qty"] == 0
+    assert blocked["would_qty"] == 0
+    assert stock.get("pending_add_order") is None
+
+
+def test_execute_defensive_avg_down_passes_buy_time_block_override(monkeypatch):
+    rules = replace(CONFIG, MAX_POSITION_PCT=1.0)
+    monkeypatch.setattr(state_handlers, "TRADING_RULES", rules)
+    monkeypatch.setattr(scale_in, "TRADING_RULES", rules)
+    state_handlers.KIWOOM_TOKEN = "test"
+
+    sent_orders = []
+    monkeypatch.setattr(state_handlers.kiwoom_orders, "get_deposit", lambda *args, **kwargs: 1_000_000)
+    monkeypatch.setattr(
+        state_handlers.kiwoom_orders,
+        "send_buy_order",
+        lambda *args, **kwargs: sent_orders.append((args, kwargs)) or {"return_code": "0", "ord_no": "D1"},
+    )
+    monkeypatch.setattr(state_handlers, "record_add_history_event", lambda *args, **kwargs: True)
+    monkeypatch.setattr(state_handlers, "_log_holding_pipeline", lambda *args, **kwargs: None)
+
+    stock = {
+        "id": 1,
+        "name": "TEST",
+        "strategy": "SCALPING",
+        "buy_price": 90_500,
+        "buy_qty": 1,
+        "rt_ai_prob": 0.67,
+        "last_reversal_features": {
+            "buy_pressure_10t": 75.0,
+            "tick_acceleration_ratio": 1.0,
+            "large_sell_print_detected": False,
+            "curr_vs_micro_vwap_bp": 5.0,
+        },
+    }
+
+    result = state_handlers.execute_scale_in_order(
+        stock=stock,
+        code="034020",
+        ws_data={"curr": 86_300, "best_bid": 86_300, "best_ask": 86_400},
+        action={
+            "add_type": "AVG_DOWN",
+            "reason": "stop_line_touch_mandatory_avg_down",
+            "stop_line_touched": True,
+            "profit_rate": -4.75,
+            "peak_profit": -0.23,
+            "current_ai_score": 67,
+        },
+        admin_id=1,
+    )
+
+    assert result["ord_no"] == "D1"
+    assert sent_orders
+    assert sent_orders[0][1]["allow_time_block_override"] is True
+    assert sent_orders[0][1]["time_block_override_reason"] == "stop_line_touch_mandatory_avg_down"
+
+
+def test_late_loss_avg_down_bypasses_quote_divergence_when_executable_price_exists(monkeypatch):
+    rules = replace(CONFIG, MAX_POSITION_PCT=1.0)
+    monkeypatch.setattr(state_handlers, "TRADING_RULES", rules)
+    monkeypatch.setattr(scale_in, "TRADING_RULES", rules)
+    state_handlers.KIWOOM_TOKEN = "test"
+
+    sent_orders = []
+    logs = []
+    monkeypatch.setattr(state_handlers.kiwoom_orders, "get_deposit", lambda *args, **kwargs: 100_000_000)
+    monkeypatch.setattr(
+        state_handlers.kiwoom_orders,
+        "send_buy_order",
+        lambda *args, **kwargs: sent_orders.append((args, kwargs)) or {"return_code": "0", "ord_no": "LATE1"},
+    )
+    monkeypatch.setattr(state_handlers, "record_add_history_event", lambda *args, **kwargs: True)
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_holding_pipeline",
+        lambda stock, code, stage, **fields: logs.append((stage, fields)),
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_pre_submit_refresh_real_ws_snapshot",
+        lambda code, ws_data, strategy: (dict(ws_data), {"normalization_runtime_effect": True}),
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_build_quote_consistency_fields",
+        lambda *args, **kwargs: (
+            {
+                "normalization_runtime_effect": True,
+                "quote_consistency_entry_blocked": True,
+                "quote_consistency_state": "diverged",
+                "price_source": "rest_orderbook",
+            },
+            2_569_000,
+            2_570_000,
+            0,
+        ),
+    )
+
+    result = state_handlers.execute_scale_in_order(
+        stock={
+            "id": 1,
+            "name": "SK하이닉스",
+            "strategy": "SCALPING",
+            "buy_price": 2_652_000,
+            "buy_qty": 1,
+            "last_reversal_features": {"curr_vs_micro_vwap_bp": -40.7},
+        },
+        code="000660",
+        ws_data={"curr": 2_569_000, "best_bid": 2_569_000, "best_ask": 2_570_000},
+        action={
+            "add_type": "AVG_DOWN",
+            "reason": "late_loss_avg_down_retry",
+            "stop_line_touched": True,
+            "profit_rate": -3.35,
+            "peak_profit": -0.23,
+            "current_ai_score": 62,
+        },
+        admin_id=1,
+    )
+
+    assert result["ord_no"] == "LATE1"
+    assert sent_orders
+    assert any(stage == "scale_in_quote_consistency_defensive_bypass" for stage, _ in logs)
+    assert not [stage for stage, _ in logs if stage == "scale_in_price_guard_block"]
+    assert sent_orders[0][1]["time_block_override_reason"] == "late_loss_avg_down_retry"
+
+
+def test_non_defensive_avg_down_still_blocks_quote_divergence(monkeypatch):
+    rules = replace(CONFIG, MAX_POSITION_PCT=1.0)
+    monkeypatch.setattr(state_handlers, "TRADING_RULES", rules)
+    monkeypatch.setattr(scale_in, "TRADING_RULES", rules)
+    state_handlers.KIWOOM_TOKEN = "test"
+
+    sent_orders = []
+    logs = []
+    monkeypatch.setattr(state_handlers.kiwoom_orders, "get_deposit", lambda *args, **kwargs: 100_000_000)
+    monkeypatch.setattr(
+        state_handlers.kiwoom_orders,
+        "send_buy_order",
+        lambda *args, **kwargs: sent_orders.append((args, kwargs)) or {"return_code": "0", "ord_no": "AVG1"},
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_holding_pipeline",
+        lambda stock, code, stage, **fields: logs.append((stage, fields)),
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_pre_submit_refresh_real_ws_snapshot",
+        lambda code, ws_data, strategy: (dict(ws_data), {"normalization_runtime_effect": True}),
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_build_quote_consistency_fields",
+        lambda *args, **kwargs: (
+            {
+                "normalization_runtime_effect": True,
+                "quote_consistency_entry_blocked": True,
+                "quote_consistency_state": "diverged",
+                "price_source": "rest_orderbook",
+            },
+            2_569_000,
+            2_570_000,
+            0,
+        ),
+    )
+
+    result = state_handlers.execute_scale_in_order(
+        stock={
+            "id": 1,
+            "name": "SK하이닉스",
+            "strategy": "SCALPING",
+            "buy_price": 2_652_000,
+            "buy_qty": 1,
+            "last_reversal_features": {"curr_vs_micro_vwap_bp": 0.0},
+        },
+        code="000660",
+        ws_data={"curr": 2_569_000, "best_bid": 2_569_000, "best_ask": 2_570_000},
+        action={"add_type": "AVG_DOWN", "reason": "reversal_add_ok", "profit_rate": -3.35},
+        admin_id=1,
+    )
+
+    assert result is None
+    assert sent_orders == []
+    blocked = [fields for stage, fields in logs if stage == "scale_in_price_guard_block"]
+    assert blocked
+    assert blocked[-1]["reason"] == "quote_consistency_diverged"
+
+
+def test_late_loss_avg_down_still_blocks_stale_quote_consistency(monkeypatch):
+    rules = replace(CONFIG, MAX_POSITION_PCT=1.0)
+    monkeypatch.setattr(state_handlers, "TRADING_RULES", rules)
+    monkeypatch.setattr(scale_in, "TRADING_RULES", rules)
+    state_handlers.KIWOOM_TOKEN = "test"
+
+    sent_orders = []
+    logs = []
+    monkeypatch.setattr(state_handlers.kiwoom_orders, "get_deposit", lambda *args, **kwargs: 100_000_000)
+    monkeypatch.setattr(
+        state_handlers.kiwoom_orders,
+        "send_buy_order",
+        lambda *args, **kwargs: sent_orders.append((args, kwargs)) or {"return_code": "0", "ord_no": "STALE1"},
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_holding_pipeline",
+        lambda stock, code, stage, **fields: logs.append((stage, fields)),
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_pre_submit_refresh_real_ws_snapshot",
+        lambda code, ws_data, strategy: (dict(ws_data), {"normalization_runtime_effect": True}),
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_build_quote_consistency_fields",
+        lambda *args, **kwargs: (
+            {
+                "normalization_runtime_effect": True,
+                "quote_consistency_entry_blocked": True,
+                "quote_consistency_state": "stale",
+                "price_source": "stale_cached",
+            },
+            2_569_000,
+            2_570_000,
+            0,
+        ),
+    )
+
+    result = state_handlers.execute_scale_in_order(
+        stock={
+            "id": 1,
+            "name": "SK하이닉스",
+            "strategy": "SCALPING",
+            "buy_price": 2_652_000,
+            "buy_qty": 1,
+            "last_reversal_features": {"curr_vs_micro_vwap_bp": -40.7},
+        },
+        code="000660",
+        ws_data={"curr": 2_569_000, "best_bid": 2_569_000, "best_ask": 2_570_000},
+        action={
+            "add_type": "AVG_DOWN",
+            "reason": "late_loss_avg_down_retry",
+            "stop_line_touched": True,
+            "profit_rate": -3.35,
+        },
+        admin_id=1,
+    )
+
+    assert result is None
+    assert sent_orders == []
+    assert not [stage for stage, _ in logs if stage == "scale_in_quote_consistency_defensive_bypass"]
+    blocked = [fields for stage, fields in logs if stage == "scale_in_price_guard_block"]
+    assert blocked
+    assert blocked[-1]["reason"] == "quote_consistency_diverged"
+
+
+def test_late_loss_avg_down_uses_fresh_rest_quote_after_stale_ws_refresh(monkeypatch):
+    rules = replace(CONFIG, MAX_POSITION_PCT=1.0)
+    monkeypatch.setattr(state_handlers, "TRADING_RULES", rules)
+    monkeypatch.setattr(scale_in, "TRADING_RULES", rules)
+    state_handlers.KIWOOM_TOKEN = "test"
+
+    sent_orders = []
+    logs = []
+    monkeypatch.setattr(state_handlers, "is_buy_side_paused", lambda: False)
+    monkeypatch.setattr(state_handlers.kiwoom_orders, "get_deposit", lambda *args, **kwargs: 100_000_000)
+    monkeypatch.setattr(
+        state_handlers.kiwoom_orders,
+        "send_buy_order",
+        lambda *args, **kwargs: sent_orders.append((args, kwargs)) or {"return_code": "0", "ord_no": "REST-LATE"},
+    )
+    monkeypatch.setattr(state_handlers, "record_add_history_event", lambda *args, **kwargs: True)
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_holding_pipeline",
+        lambda stock, code, stage, **fields: logs.append((stage, fields)),
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_pre_submit_refresh_real_ws_snapshot",
+        lambda code, ws_data, strategy: (
+            dict(ws_data),
+            {
+                "normalization_runtime_effect": True,
+                "pre_submit_ws_snapshot_refresh_enabled": True,
+                "pre_submit_ws_snapshot_refresh_applied": False,
+                "pre_submit_ws_snapshot_refresh_reason": "latest_snapshot_stale",
+                "pre_submit_ws_snapshot_refresh_age_ms": 55_000,
+            },
+        ),
+    )
+    monkeypatch.setattr(
+        state_handlers.kiwoom_utils,
+        "get_stock_orderbook_ka10004",
+        lambda token, code: {
+            "current_price": 218_750,
+            "best_bid": 218_500,
+            "best_ask": 219_000,
+            "best_bid_qty": 100,
+            "best_ask_qty": 80,
+            "bid_req_base_tm": "101619",
+        },
+    )
+    monkeypatch.setattr(state_handlers, "_parse_hhmmss_age_ms", lambda *args, **kwargs: 750.0)
+
+    result = state_handlers.execute_scale_in_order(
+        stock={
+            "id": 1,
+            "name": "가온전선",
+            "strategy": "SCALPING",
+            "buy_price": 226_500,
+            "buy_qty": 1,
+            "last_reversal_features": {"curr_vs_micro_vwap_bp": -52.22},
+        },
+        code="000500",
+        ws_data={"curr": 218_500},
+        action={
+            "add_type": "AVG_DOWN",
+            "reason": "late_loss_avg_down_retry",
+            "stop_line_touched": True,
+            "profit_rate": -3.75,
+            "peak_profit": -0.23,
+            "current_ai_score": 74,
+        },
+        admin_id=1,
+    )
+
+    assert result["ord_no"] == "REST-LATE"
+    assert sent_orders
+    assert not [stage for stage, _ in logs if stage == "scale_in_price_guard_block"]
+    resolved = [fields for stage, fields in logs if stage == "scale_in_price_resolved"][0]
+    assert resolved["pre_submit_rest_orderbook_refresh_applied"] is True
+    assert resolved["pre_submit_rest_orderbook_refresh_reason"] == "rest_orderbook_fresh"
+    assert resolved["quote_consistency_state"] == "single_source"
+    assert resolved["quote_consistency_reason"] == "rest_only_fresh"
 
 
 def test_execute_scalping_pyramid_refreshes_rest_orderbook_when_quote_missing(monkeypatch):
@@ -3480,6 +4024,51 @@ def test_send_buy_order_market_blocked_before_buy_time_cutoff(monkeypatch):
     assert published == []
 
 
+def test_send_buy_order_market_allows_time_block_override_for_defensive_scale_in(monkeypatch):
+    monkeypatch.setattr(kiwoom_orders, "is_buy_side_paused", lambda: False)
+    monkeypatch.setattr(kiwoom_orders, "is_buy_side_time_blocked", lambda: True)
+    captured = {}
+
+    class DummyResponse:
+        status_code = 200
+
+    def fake_post(url, headers, payload, api_id, timeout=5):
+        captured["payload"] = payload
+        return DummyResponse(), {"rt_cd": "0", "ord_no": "BDEF"}
+
+    monkeypatch.setattr(kiwoom_orders.kiwoom_utils, "get_api_url", lambda path: f"https://example.test{path}")
+    monkeypatch.setattr(kiwoom_orders, "_post_kiwoom_with_auth_retry", fake_post)
+
+    result = kiwoom_orders.send_buy_order_market(
+        "123456",
+        1,
+        "token",
+        order_type="3",
+        allow_time_block_override=True,
+        time_block_override_reason="stop_line_touch_mandatory_avg_down",
+    )
+
+    assert result["ord_no"] == "BDEF"
+    assert captured["payload"]["stk_cd"] == "123456"
+
+
+def test_send_buy_order_market_rejects_unknown_time_block_override_reason(monkeypatch):
+    monkeypatch.setattr(kiwoom_orders, "is_buy_side_paused", lambda: False)
+    monkeypatch.setattr(kiwoom_orders, "is_buy_side_time_blocked", lambda: True)
+
+    result = kiwoom_orders.send_buy_order_market(
+        "123456",
+        1,
+        "token",
+        order_type="3",
+        allow_time_block_override=True,
+        time_block_override_reason="manual_override",
+    )
+
+    assert result["return_code"] == "BUY_TIME_BLOCKED"
+    assert result["ord_no"] == ""
+
+
 def test_buy_side_time_block_allows_from_0910(monkeypatch):
     monkeypatch.setattr(
         kiwoom_orders,
@@ -3694,6 +4283,78 @@ def test_send_sell_order_market_retries_sor_market_time_reject_as_best(monkeypat
     )
 
     assert result["ord_no"] == "SRETRY"
+    assert [payload["trde_tp"] for payload in calls] == ["3", "6"]
+    assert calls[1]["ord_uv"] == ""
+
+
+def test_send_buy_order_market_remaps_pre0830_sor_market_buy(monkeypatch):
+    class FixedDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return cls(2026, 6, 30, 8, 29, 0, tzinfo=tz)
+
+    captured = {}
+
+    class DummyResponse:
+        status_code = 200
+
+    def fake_post(url, headers, payload, api_id, timeout=5):
+        captured["payload"] = payload
+        return DummyResponse(), {"rt_cd": "0", "ord_no": "B0830"}
+
+    monkeypatch.setattr(kiwoom_orders, "datetime", FixedDateTime)
+    monkeypatch.setattr(kiwoom_orders, "is_buy_side_paused", lambda: False)
+    monkeypatch.setattr(kiwoom_orders, "is_buy_side_time_blocked", lambda: False)
+    monkeypatch.setattr(kiwoom_orders.kiwoom_utils, "get_api_url", lambda path: f"https://example.test{path}")
+    monkeypatch.setattr(kiwoom_orders, "_post_kiwoom_with_auth_retry", fake_post)
+
+    result = kiwoom_orders.send_buy_order_market(
+        "123456",
+        1,
+        "token",
+        order_type="3",
+    )
+
+    assert result["ord_no"] == "B0830"
+    assert captured["payload"]["trde_tp"] == "6"
+    assert captured["payload"]["ord_uv"] == ""
+
+
+def test_send_buy_order_market_retries_sor_market_time_reject_as_best(monkeypatch):
+    class FixedDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return cls(2026, 6, 30, 9, 10, 0, tzinfo=tz)
+
+    calls = []
+
+    class DummyResponse:
+        status_code = 200
+
+    def fake_post(url, headers, payload, api_id, timeout=5):
+        calls.append(payload)
+        if len(calls) == 1:
+            return DummyResponse(), {
+                "rt_cd": "20",
+                "return_code": "20",
+                "return_msg": "[2000](571034:SOR 시장가 주문은 08:30 이후 가능합니다. 주문유형 변경 바랍니다.)",
+            }
+        return DummyResponse(), {"rt_cd": "0", "ord_no": "BRETRY"}
+
+    monkeypatch.setattr(kiwoom_orders, "datetime", FixedDateTime)
+    monkeypatch.setattr(kiwoom_orders, "is_buy_side_paused", lambda: False)
+    monkeypatch.setattr(kiwoom_orders, "is_buy_side_time_blocked", lambda: False)
+    monkeypatch.setattr(kiwoom_orders.kiwoom_utils, "get_api_url", lambda path: f"https://example.test{path}")
+    monkeypatch.setattr(kiwoom_orders, "_post_kiwoom_with_auth_retry", fake_post)
+
+    result = kiwoom_orders.send_buy_order_market(
+        "123456",
+        1,
+        "token",
+        order_type="3",
+    )
+
+    assert result["ord_no"] == "BRETRY"
     assert [payload["trde_tp"] for payload in calls] == ["3", "6"]
     assert calls[1]["ord_uv"] == ""
 
@@ -4626,6 +5287,7 @@ def test_score65_74_recovery_probe_bypasses_first_ai_big_bite_wait(monkeypatch):
         CONFIG,
         SCALE_IN_REQUIRE_HISTORY_TABLE=False,
         AI_SCORE65_74_RECOVERY_PROBE_ENABLED=True,
+        SCALP_SAME_SYMBOL_LOSS_REENTRY_COOLDOWN_ENABLED=False,
     )
     state_handlers.COOLDOWNS = {}
     state_handlers.ALERTED_STOCKS = set()
@@ -5250,6 +5912,8 @@ def test_scalping_pre_ai_soft_gate_allows_ai_and_blocks_low_liquidity_at_submit(
     state_handlers.HIGHEST_PRICES = {}
     state_handlers.LAST_AI_CALL_TIMES = {}
     state_handlers.LAST_LOG_TIMES = {}
+    state_handlers._SCALP_SAME_SYMBOL_LOSS_REENTRY_COOLDOWNS.clear()
+    state_handlers._SCALP_LOSS_REENTRY_EVENT_CACHE.update({"date": None, "events": []})
     state_handlers.DB = _DummyDB()
     state_handlers.KIWOOM_TOKEN = "token"
 
@@ -7371,6 +8035,98 @@ def test_rest_quote_only_hard_stop_allows_emergency(monkeypatch):
     )
 
     assert blocked is False
+
+
+def test_hard_stop_quote_revalidation_blocks_false_ws_spike(monkeypatch):
+    logs = []
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_holding_pipeline",
+        lambda stock, code, stage, **fields: logs.append((stage, fields)),
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_fetch_rest_orderbook_snapshot_bounded",
+        lambda code, timeout_ms: (
+            {
+                "current_price": 28_700,
+                "best_bid": 28_700,
+                "best_ask": 28_750,
+                "age_ms": 25,
+            },
+            "success",
+            12.3,
+        ),
+    )
+    stock = {
+        "name": "현대무벡스",
+        "last_exit_rule": "scalp_hard_stop_pct",
+        "last_exit_reason": "stale hard stop",
+        "last_exit_decision_source": "MANUAL",
+    }
+
+    blocked = state_handlers._hard_stop_quote_revalidation_block(
+        stock,
+        "319400",
+        exit_rule="scalp_hard_stop_pct",
+        profit_rate=-13.77,
+        threshold_pct=-5.0,
+        curr_price=25_150,
+        buy_price=29_100,
+        current_ai_score=50,
+        held_sec=157,
+        peak_profit=-0.23,
+        now_ts=1000.0,
+    )
+
+    assert blocked is True
+    assert logs[-1][0] == "hard_stop_quote_revalidation_blocked"
+    assert logs[-1][1]["original_profit_rate"] == "-13.77"
+    assert logs[-1][1]["revalidated_profit_rate"] == "-1.60"
+    assert logs[-1][1]["revalidated_price"] == 28700
+    assert logs[-1][1]["actual_order_submitted"] is False
+    assert logs[-1][1]["broker_order_forbidden"] is True
+    assert "last_exit_rule" not in stock
+
+
+def test_hard_stop_quote_revalidation_allows_confirmed_hard_stop(monkeypatch):
+    logs = []
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_holding_pipeline",
+        lambda stock, code, stage, **fields: logs.append((stage, fields)),
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_fetch_rest_orderbook_snapshot_bounded",
+        lambda code, timeout_ms: (
+            {
+                "current_price": 27_000,
+                "best_bid": 27_000,
+                "best_ask": 27_050,
+                "age_ms": 25,
+            },
+            "success",
+            12.3,
+        ),
+    )
+
+    blocked = state_handlers._hard_stop_quote_revalidation_block(
+        {"name": "TEST"},
+        "319400",
+        exit_rule="scalp_hard_stop_pct",
+        profit_rate=-7.50,
+        threshold_pct=-5.0,
+        curr_price=25_150,
+        buy_price=29_100,
+        current_ai_score=50,
+        held_sec=157,
+        peak_profit=-0.23,
+        now_ts=1000.0,
+    )
+
+    assert blocked is False
+    assert logs == []
 
 
 def test_rest_quote_only_mfe_protect_requires_confirmation(monkeypatch):
@@ -10067,6 +10823,7 @@ def test_scalp_preset_tp_discretionary_sell_open_time_block_logs_without_submit(
             "sell_time_block_until_hhmm": "09:03",
             "sell_time_block_scope": "discretionary_exit_only",
             "sell_time_block_passthrough_reason": "-",
+            "runtime_effect": "helper_value_should_be_overridden",
         },
     )
     monkeypatch.setattr(
@@ -10857,6 +11614,10 @@ def test_sell_reject_with_zero_sellable_qty_marks_completed(monkeypatch):
 
     fail_logs = [fields for stage, fields in pipeline_logs if stage == "sell_order_failed"]
     assert stock["status"] == "COMPLETED"
+    assert "sell_order_time" not in stock
+    assert "sell_odno" not in stock
+    assert "pending_sell_msg" not in stock
+    assert "sell_target_price" not in stock
     assert fail_logs
     assert fail_logs[-1]["new_status"] == "COMPLETED"
     assert fail_logs[-1]["sellable_qty"] == 0
@@ -13462,6 +14223,32 @@ def test_scalp_mfe_protect_exit_triggers_for_real_position(monkeypatch):
     assert decision["giveback_pct"] == pytest.approx(1.30)
 
 
+def test_scalp_mfe_protect_exit_blocks_negative_profit_even_with_negative_trigger(monkeypatch):
+    state_handlers.TRADING_RULES = replace(
+        CONFIG,
+        SCALP_MFE_PROTECT_EXIT_ENABLED=True,
+        SCALP_MFE_PROTECT_MIN_PEAK_PCT=0.60,
+        SCALP_MFE_PROTECT_TRIGGER_PROFIT_PCT=-0.30,
+        SCALP_MFE_PROTECT_MIN_GIVEBACK_PCT=0.55,
+        SCALP_MFE_PROTECT_MIN_HOLD_SEC=30,
+        SCALP_MFE_PROTECT_MAX_AI_SCORE=74,
+    )
+
+    decision = state_handlers._evaluate_scalp_mfe_protect_exit(
+        {"strategy": "SCALPING"},
+        strategy="SCALPING",
+        profit_rate=-0.49,
+        peak_profit=1.26,
+        current_ai_score=74,
+        held_sec=350,
+    )
+
+    assert decision["should_exit"] is False
+    assert decision["reason"] == "profit_below_protect_floor"
+    assert decision["min_protect_profit_pct"] == 0.0
+    assert decision["trigger_profit_pct"] == -0.30
+
+
 def test_scalp_mfe_protect_exit_skips_strong_ai_or_simulated_position(monkeypatch):
     state_handlers.TRADING_RULES = replace(
         CONFIG,
@@ -13793,7 +14580,7 @@ def test_handle_holding_state_blocks_mfe_protect_on_rest_quote_only_recovery(mon
     assert block_events[0]["exit_rule"] == "scalp_mfe_protect_exit"
 
 
-def test_handle_holding_state_submits_late_loss_avg_down_before_final_sell(monkeypatch):
+def test_handle_holding_state_blocks_negative_mfe_protect_before_late_loss_intercept(monkeypatch):
     state_handlers.TRADING_RULES = replace(
         CONFIG,
         SCALE_IN_REQUIRE_HISTORY_TABLE=False,
@@ -13864,16 +14651,17 @@ def test_handle_holding_state_submits_late_loss_avg_down_before_final_sell(monke
         ai_engine=None,
     )
 
-    assert sell_calls and sell_calls[0]["reason_type"] == "PROFIT_PROTECT"
+    assert sell_calls == []
     assert add_actions == []
-    assert stock["status"] == "SELL_ORDERED"
+    assert stock["status"] == "HOLDING"
     assert "late_loss_avg_down_retry_used" not in stock
     by_stage = {stage: fields for stage, fields in pipeline_events}
+    assert "scalp_mfe_protect_exit" not in by_stage
     assert "late_loss_avg_down_retry_candidate" not in by_stage
     assert "late_loss_avg_down_retry_submitted" not in by_stage
 
 
-def test_handle_holding_state_late_loss_avg_down_one_shot_then_sell(monkeypatch):
+def test_handle_holding_state_negative_mfe_protect_stays_holding_after_retry_used(monkeypatch):
     state_handlers.TRADING_RULES = replace(
         CONFIG,
         SCALE_IN_REQUIRE_HISTORY_TABLE=False,
@@ -13937,11 +14725,11 @@ def test_handle_holding_state_late_loss_avg_down_one_shot_then_sell(monkeypatch)
     )
 
     assert add_calls == []
-    assert sell_calls and sell_calls[0]["reason_type"] in {"LOSS", "PROFIT_PROTECT"}
-    assert stock["status"] == "SELL_ORDERED"
+    assert sell_calls == []
+    assert stock["status"] == "HOLDING"
 
 
-def test_handle_holding_state_late_loss_avg_down_failure_continues_sell(monkeypatch):
+def test_handle_holding_state_negative_mfe_protect_does_not_fall_through_to_sell(monkeypatch):
     state_handlers.TRADING_RULES = replace(
         CONFIG,
         SCALE_IN_REQUIRE_HISTORY_TABLE=False,
@@ -14002,7 +14790,8 @@ def test_handle_holding_state_late_loss_avg_down_failure_continues_sell(monkeypa
         ai_engine=None,
     )
 
-    assert sell_calls and sell_calls[0]["reason_type"] == "PROFIT_PROTECT"
+    assert sell_calls == []
+    assert stock["status"] == "HOLDING"
     assert "late_loss_avg_down_retry_used" not in stock
     blocked = [fields for stage, fields in pipeline_events if stage == "late_loss_avg_down_retry_blocked"]
     assert blocked == []
@@ -14180,10 +14969,11 @@ def test_stop_line_touch_mandatory_avg_down_submits_before_grace(monkeypatch):
     }
     pipeline_events = []
     add_calls = []
+    gate_calls = []
     monkeypatch.setattr(
         state_handlers,
         "can_consider_scale_in",
-        lambda *args, **kwargs: {"allowed": True, "reason": "ok"},
+        lambda *args, **kwargs: gate_calls.append((args, kwargs)) or {"allowed": True, "reason": "ok"},
     )
     monkeypatch.setattr(
         state_handlers,
@@ -14217,6 +15007,7 @@ def test_stop_line_touch_mandatory_avg_down_submits_before_grace(monkeypatch):
     assert result["submitted"] is True
     assert stock["stop_line_touch_avg_down_used"] is True
     assert stock["stop_line_touch_avg_down_count"] == 1
+    assert gate_calls[-1][1]["bypass_scalping_buy_window"] is True
     assert add_calls[0]["action"]["reason"] == "stop_line_touch_mandatory_avg_down"
     assert add_calls[0]["action"]["stop_line_touched"] is True
     by_stage = {stage: fields for stage, fields in pipeline_events}

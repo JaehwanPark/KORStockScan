@@ -468,3 +468,109 @@ def test_build_report_separates_refresh_recovered_stale_from_hard_stale(tmp_path
         "category": "pre_submit_stale_context_or_quote",
         "count": 1,
     }
+
+
+def test_build_report_excludes_rising_missed_one_share_forced_submit_from_flow_submit_count(tmp_path):
+    event_path = tmp_path / "events.jsonl"
+    diagnostic_path = tmp_path / "diag.json"
+    diagnostic_path.write_text(
+        json.dumps(
+            {
+                "summary": {"real_submit_symbol_count": 0},
+                "promoted_symbols": [
+                    {
+                        "stock_code": "000777",
+                        "stock_name": "강제1주",
+                        "first_promoted_at": "2026-06-30T09:10:00",
+                        "last_event_at": "2026-06-30T09:12:00",
+                        "max_price_delta_since_first_seen_pct": 1.2,
+                        "latest_price_delta_since_first_seen_pct": 1.2,
+                        "real_submit_count": 0,
+                    }
+                ],
+                "rising_missed_buy": [{"stock_code": "000777"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    rows = [
+        _event(
+            "000777",
+            "강제1주",
+            "broker_buy_submit",
+            {
+                "scanner_promotion_id": "p1",
+                "actual_order_submitted": "true",
+                "price_delta_since_first_seen_pct": "1.2",
+                "rising_missed_one_share_entry_forced": "true",
+                "forced_entry_qty": "1",
+                "forced_entry_reason": "rising_missed_one_share_entry",
+            },
+            emitted_at="2026-06-30T09:11:00",
+        )
+    ]
+    event_path.write_text("\n".join(json.dumps(row, ensure_ascii=False) for row in rows), encoding="utf-8")
+
+    report = build_report(
+        target_date="2026-06-30",
+        event_cache_path=event_path,
+        diagnostic_path=diagnostic_path,
+        since="2026-06-30T09:00:00",
+        generated_at="fixed",
+    )
+
+    row = report["rows"][0]
+    assert row["stock_code"] == "000777"
+    assert row["actual_submit_count"] == 0
+    assert report["summary"]["real_submit_symbol_count_in_latest_diagnostic"] == 0
+    assert report["summary"]["rising_missed_symbol_count_in_report"] == 1
+
+
+def test_build_report_until_excludes_later_event_cache_submit(tmp_path):
+    event_path = tmp_path / "events.jsonl"
+    diagnostic_path = tmp_path / "diag.json"
+    diagnostic_path.write_text(
+        json.dumps(
+            {
+                "summary": {"real_submit_symbol_count": 0},
+                "promoted_symbols": [
+                    {
+                        "stock_code": "000888",
+                        "stock_name": "상한필터",
+                        "first_promoted_at": "2026-06-30T09:59:00",
+                        "max_price_delta_since_first_seen_pct": 1.0,
+                        "real_submit_count": 0,
+                    }
+                ],
+                "rising_missed_buy": [{"stock_code": "000888"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    rows = [
+        _event(
+            "000888",
+            "상한필터",
+            "broker_buy_submit",
+            {
+                "scanner_promotion_id": "p1",
+                "actual_order_submitted": "true",
+                "price_delta_since_first_seen_pct": "1.0",
+            },
+            emitted_at="2026-06-30T10:00:01",
+        )
+    ]
+    event_path.write_text("\n".join(json.dumps(row, ensure_ascii=False) for row in rows), encoding="utf-8")
+
+    report = build_report(
+        target_date="2026-06-30",
+        event_cache_path=event_path,
+        diagnostic_path=diagnostic_path,
+        since="2026-06-30T08:00:00",
+        until="2026-06-30T10:00:00",
+        generated_at="fixed",
+    )
+
+    row = report["rows"][0]
+    assert row["actual_submit_count"] == 0
+    assert report["event_window"]["until"] == "2026-06-30T10:00:00"

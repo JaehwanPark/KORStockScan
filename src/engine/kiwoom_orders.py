@@ -30,6 +30,12 @@ _DEPOSIT_API_FETCH_LOCKS = {}
 _LAST_SUCCESSFUL_DEPOSIT_BY_KEY = {}
 _ORDERABLE_AMOUNT_CACHE = {}
 KST = ZoneInfo("Asia/Seoul")
+_DEFENSIVE_BUY_TIME_BLOCK_OVERRIDE_REASONS = frozenset(
+    {
+        "stop_line_touch_mandatory_avg_down",
+        "late_loss_avg_down_retry",
+    }
+)
 
 def get_last_inventory_errors():
     """최근 잔고 조회 실패 원인을 반환합니다."""
@@ -661,6 +667,12 @@ def _resolve_buy_order_type(order_type, price=0, tif=None):
     tif_value = str(tif or "DAY").upper()
     requested_type = str(order_type or "6").upper()
     requested_price = int(price or 0)
+    if requested_type in {"3", "MARKET"} and _pre0830_sor_market_order_remap_required(requested_type):
+        log_info(
+            "[PRE0830_BUY_MARKET_REMAP] SOR market buy is unavailable before 08:30; "
+            "using best-limit style buy order type 6"
+        )
+        return "6", 0
 
     if tif_value == "IOC":
         if requested_type in {"00", "LIMIT", "6", "BEST", "16"}:
@@ -682,7 +694,7 @@ def _resolve_buy_order_type(order_type, price=0, tif=None):
     return str(order_type), requested_price
 
 
-def _pre0830_sor_market_sell_remap_required(order_type, now=None) -> bool:
+def _pre0830_sor_market_order_remap_required(order_type, now=None) -> bool:
     if str(order_type) != "3":
         return False
     current = now or datetime.now(KST)
@@ -690,6 +702,10 @@ def _pre0830_sor_market_sell_remap_required(order_type, now=None) -> bool:
         current = current.replace(tzinfo=KST)
     current_kst = current.astimezone(KST)
     return current_kst.time() < datetime_time(hour=8, minute=30)
+
+
+def _pre0830_sor_market_sell_remap_required(order_type, now=None) -> bool:
+    return _pre0830_sor_market_order_remap_required(order_type, now=now)
 
 
 def _resolve_sell_order_type(order_type, price=0, *, now=None):
@@ -704,7 +720,7 @@ def _resolve_sell_order_type(order_type, price=0, *, now=None):
     return normalized_type, normalized_price
 
 
-def _is_sor_market_sell_time_reject(data) -> bool:
+def _is_sor_market_time_reject(data) -> bool:
     msg = str(data.get("return_msg") or data.get("err_msg") or "")
     code = str(data.get("return_code") or data.get("rt_cd") or "")
     return (
@@ -712,6 +728,10 @@ def _is_sor_market_sell_time_reject(data) -> bool:
         or "571034" in msg
         or "SOR 시장가 주문은 08:30 이후" in msg
     )
+
+
+def _is_sor_market_sell_time_reject(data) -> bool:
+    return _is_sor_market_time_reject(data)
 
 
 def _buy_time_block_cutoff():
@@ -884,7 +904,16 @@ def get_sell_side_open_time_block_fields(now=None, reason_type=None, strategy=No
     }
 
 
-def send_buy_order_market(code, qty, token, order_type="6", price=0, tif=None):
+def send_buy_order_market(
+    code,
+    qty,
+    token,
+    order_type="6",
+    price=0,
+    tif=None,
+    allow_time_block_override=False,
+    time_block_override_reason=None,
+):
     """
     [kt10000] 매수 주문 - return_code 대응 수정 및 지정가(00) 기능 추가
     - order_type: "00" (지정가 - 스캘핑 눌림목 그물망용)
@@ -893,6 +922,11 @@ def send_buy_order_market(code, qty, token, order_type="6", price=0, tif=None):
     - price: 지정가 주문 시 입력할 1주당 단가 (시장가/최유리 지정가일 경우 0 또는 생략)
     """
     if qty <= 0: return None
+    time_block_override_reason = str(time_block_override_reason or "").strip()
+    allow_time_block_override = (
+        bool(allow_time_block_override)
+        and time_block_override_reason in _DEFENSIVE_BUY_TIME_BLOCK_OVERRIDE_REASONS
+    )
 
     if is_buy_side_paused():
         clean_code = str(code)[:6]
@@ -906,7 +940,8 @@ def send_buy_order_market(code, qty, token, order_type="6", price=0, tif=None):
             "ord_no": "",
         }
 
-    if is_buy_side_time_blocked():
+    buy_time_blocked = is_buy_side_time_blocked()
+    if buy_time_blocked and not allow_time_block_override:
         clean_code = str(code)[:6]
         label = get_buy_side_time_block_label()
         msg = f"[BUY_TIME_BLOCK] buy order blocked 종목:{clean_code}, 상태:{label}"
@@ -917,6 +952,12 @@ def send_buy_order_market(code, qty, token, order_type="6", price=0, tif=None):
             "return_msg": label,
             "ord_no": "",
         }
+    if buy_time_blocked and allow_time_block_override:
+        clean_code = str(code)[:6]
+        log_info(
+            f"[BUY_TIME_BLOCK_OVERRIDE] buy order time block bypassed 종목:{clean_code}, "
+            f"reason={time_block_override_reason}"
+        )
 
     clean_code = str(code)[:6]
     url = kiwoom_utils.get_api_url("/api/dostk/ordr")
@@ -948,6 +989,24 @@ def send_buy_order_market(code, qty, token, order_type="6", price=0, tif=None):
         if res.status_code == 200 and is_success:
             return data
         else:
+            if str(payload.get("trde_tp")) == "3" and _is_sor_market_time_reject(data):
+                retry_payload = dict(payload)
+                retry_payload["trde_tp"] = "6"
+                retry_payload["ord_uv"] = ""
+                log_info(
+                    f"[BUY_MARKET_RETRY_AS_BEST] {clean_code} SOR market buy rejected; "
+                    "retrying with order type 6"
+                )
+                retry_res, retry_data = _post_kiwoom_with_auth_retry(
+                    url, headers, retry_payload, 'kt10000', timeout=5
+                )
+                retry_success = (
+                    str(retry_data.get('rt_cd', '')) == '0'
+                    or str(retry_data.get('return_code', '')) == '0'
+                )
+                if retry_res.status_code == 200 and retry_success:
+                    return retry_data
+                data = retry_data
             err_msg = data.get('return_msg') or data.get('err_msg') or '상세 사유 없음'
             err_code = data.get('return_code', data.get('rt_cd', ''))
             
@@ -966,7 +1025,17 @@ def send_buy_order_market(code, qty, token, order_type="6", price=0, tif=None):
 # -------------------------------------------------------------------
 # Compatibility wrapper (legacy callers)
 # -------------------------------------------------------------------
-def send_buy_order(code, qty, price, order_type_code, token, order_type_desc=None, tif=None):
+def send_buy_order(
+    code,
+    qty,
+    price,
+    order_type_code,
+    token,
+    order_type_desc=None,
+    tif=None,
+    allow_time_block_override=False,
+    time_block_override_reason=None,
+):
     """
     Legacy wrapper for send_buy_order_market.
     - order_type_code: "00" 지정가, "6" 최유리지정가, "3" 시장가
@@ -979,6 +1048,8 @@ def send_buy_order(code, qty, price, order_type_code, token, order_type_desc=Non
         order_type=str(order_type_code),
         price=price or 0,
         tif=tif,
+        allow_time_block_override=allow_time_block_override,
+        time_block_override_reason=time_block_override_reason,
     )
 
 def send_sell_order_market(

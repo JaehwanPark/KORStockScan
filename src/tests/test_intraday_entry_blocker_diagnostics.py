@@ -102,6 +102,61 @@ def test_build_report_surfaces_rising_promoted_without_real_submit(tmp_path):
     } in report["blocker_taxonomy"]["suppressed_non_actionable_counts"]
 
 
+def test_build_report_treats_latency_block_as_latest_pre_submit_quality_guard(tmp_path):
+    path = tmp_path / "pipeline_events_2026-06-23.jsonl"
+    rows = [
+        _event(
+            "475150",
+            "SK이터닉스",
+            "scalping_scanner_candidate_promoted",
+            {"price_delta_since_first_seen_pct": "4.06"},
+            emitted_at="2026-06-23T10:11:58",
+        ),
+        _event(
+            "475150",
+            "SK이터닉스",
+            "scalping_scanner_watching_runtime_skip",
+            {
+                "price_delta_since_first_seen_pct": "4.06",
+                "skip_reason": "scanner_fast_precheck_stability_pending",
+            },
+            emitted_at="2026-06-23T10:12:33",
+        ),
+        _event(
+            "475150",
+            "SK이터닉스",
+            "latency_block",
+            {
+                "price_delta_since_first_seen_pct": "4.06",
+                "reason": "latency_state_danger",
+                "actual_order_submitted": "False",
+                "broker_order_forbidden": "True",
+            },
+            emitted_at="2026-06-23T10:16:55",
+        ),
+    ]
+    path.write_text("\n".join(json.dumps(row, ensure_ascii=False) for row in rows), encoding="utf-8")
+
+    report = build_report(target_date="2026-06-23", pipeline_path=path, generated_at="fixed")
+
+    item = report["rising_missed_buy"][0]
+    assert item["latest_blocker"]["stage"] == "latency_block"
+    assert item["latest_blocker"]["reason"] == "latency_state_danger"
+    assert item["dominant_actionable_blocker"] == {
+        "stage": "latency_block",
+        "reason": "latency_state_danger",
+        "count": 1,
+        "class": "pre_submit_quality_guard",
+        "route": "inspect_latency_danger_or_slippage_without_guard_bypass",
+    }
+    assert {
+        "class": "pre_submit_quality_guard",
+        "stage": "latency_block",
+        "reason": "latency_state_danger",
+        "count": 1,
+    } in report["blocker_taxonomy"]["actionable_major_blocker_counts"]
+
+
 def test_build_report_splits_relief_blockers_for_non_rising(tmp_path):
     path = tmp_path / "pipeline_events_2026-06-23.jsonl"
     rows = [
@@ -701,7 +756,7 @@ def test_build_report_excludes_sim_and_keeps_falling_real_submit(tmp_path):
     assert [item["stock_code"] for item in report["falling_real_submitted"]] == ["000001"]
     assert "falling_sim_submitted" not in report
     assert report["summary"]["falling_real_submitted_count"] == 1
-    assert report["summary"]["excluded_analysis_scope"] == "sim_and_swing_events"
+    assert report["summary"]["excluded_analysis_scope"] == "sim_swing_and_rising_missed_forced_one_share_events"
 
 
 def test_build_report_excludes_sim_price_rows_from_real_entry_price_diagnostics(tmp_path):
@@ -759,8 +814,33 @@ def test_build_report_prioritizes_real_entry_price_candidate_failures(tmp_path):
     assert report["entry_price_execution"]["candidate_failure_reason_counts"] == [
         {"reason": "invalid_price", "count": 1}
     ]
+
+
+def test_build_report_uses_submitted_price_for_entry_cancel_recent_issue(tmp_path):
+    path = tmp_path / "pipeline_events_2026-06-23.jsonl"
+    rows = [
+        _event("000001", "A", "scalping_scanner_candidate_promoted", {"price_delta_since_first_seen_pct": "1.00"}),
+        _event(
+            "000001",
+            "A",
+            "entry_order_cancel_confirmed",
+            {
+                "submitted_price": "24800",
+                "best_bid_at_submit": "24850",
+                "quote_age_at_submit_ms": "1166",
+                "cancel_reason": "entry_timeout_or_reconcile",
+            },
+        ),
+    ]
+    path.write_text("\n".join(json.dumps(row, ensure_ascii=False) for row in rows), encoding="utf-8")
+
+    report = build_report(target_date="2026-06-23", pipeline_path=path, generated_at="fixed")
+
+    recent_issue = report["entry_price_execution"]["recent_issues"][-1]
+    assert recent_issue["submitted_order_price"] == 24800
+    assert recent_issue["best_bid_at_submit"] == 24850
     priority = next(item for item in report["root_cause_priorities"] if item["issue"] == "entry_price_or_submit_price_guard_block")
-    assert priority["evidence"]["candidate_failure_count"] == 1
+    assert priority["evidence"]["block_or_unfilled_count"] == 1
     assert "stale_submit_bypass" in priority["forbidden_uses"]
 
 
@@ -1200,3 +1280,79 @@ def test_loop_window_helpers():
     assert not _within_time_window(datetime(2026, 6, 25, 15, 21), start=buy_start, end=buy_end)
     assert not _loop_should_stop(datetime(2026, 6, 25, 19, 0), until=_parse_hhmm("19:00"))
     assert _loop_should_stop(datetime(2026, 6, 25, 19, 0, 1), until=_parse_hhmm("19:00"))
+
+
+def test_build_report_excludes_rising_missed_one_share_forced_submit_from_general_buy_metrics(tmp_path):
+    path = tmp_path / "pipeline_events_2026-06-30.jsonl"
+    rows = [
+        _event(
+            "000777",
+            "강제1주",
+            "scalping_scanner_candidate_promoted",
+            {"price_delta_since_first_seen_pct": "1.20"},
+            emitted_at="2026-06-30T09:10:00",
+        ),
+        _event(
+            "000777",
+            "강제1주",
+            "order_bundle_submitted",
+            {
+                "actual_order_submitted": "true",
+                "price_delta_since_first_seen_pct": "1.20",
+                "rising_missed_one_share_entry_forced": "true",
+                "forced_entry_qty": "1",
+                "forced_entry_reason": "rising_missed_one_share_entry",
+            },
+            emitted_at="2026-06-30T09:11:00",
+        ),
+        _event(
+            "000777",
+            "강제1주",
+            "blocked_strength_momentum",
+            {"price_delta_since_first_seen_pct": "1.20", "reason": "below_strength_base"},
+            emitted_at="2026-06-30T09:12:00",
+        ),
+    ]
+    path.write_text("\n".join(json.dumps(row, ensure_ascii=False) for row in rows), encoding="utf-8")
+
+    report = build_report(target_date="2026-06-30", pipeline_path=path, generated_at="fixed")
+
+    assert report["summary"]["real_submit_symbol_count"] == 0
+    assert report["summary"]["rising_missed_buy_count"] == 1
+    assert report["summary"]["excluded_analysis_scope"] == "sim_swing_and_rising_missed_forced_one_share_events"
+    item = report["rising_missed_buy"][0]
+    assert item["stock_code"] == "000777"
+    assert item["real_submit_count"] == 0
+
+
+def test_build_report_event_until_excludes_later_submit_from_window(tmp_path):
+    path = tmp_path / "pipeline_events_2026-06-30.jsonl"
+    rows = [
+        _event(
+            "000888",
+            "상한필터",
+            "scalping_scanner_candidate_promoted",
+            {"price_delta_since_first_seen_pct": "1.00"},
+            emitted_at="2026-06-30T09:59:00",
+        ),
+        _event(
+            "000888",
+            "상한필터",
+            "broker_buy_submit",
+            {"price_delta_since_first_seen_pct": "1.00", "actual_order_submitted": "true"},
+            emitted_at="2026-06-30T10:00:01",
+        ),
+    ]
+    path.write_text("\n".join(json.dumps(row, ensure_ascii=False) for row in rows), encoding="utf-8")
+
+    report = build_report(
+        target_date="2026-06-30",
+        pipeline_path=path,
+        generated_at="fixed",
+        since="2026-06-30T08:00:00",
+        event_until="2026-06-30T10:00:00",
+    )
+
+    assert report["summary"]["real_submit_symbol_count"] == 0
+    assert report["summary"]["rising_missed_buy_count"] == 1
+    assert report["event_window"]["until"] == "2026-06-30T10:00:00"
