@@ -819,6 +819,7 @@ def describe_dynamic_scale_in_qty(
     raw_strategy = (strategy or "").upper()
     normalized_strategy = "SCALPING" if raw_strategy in {"SCALPING", "SCALP"} else raw_strategy
     add_type = (add_type or "").upper()
+    buy_qty = _safe_int(stock.get("buy_qty"), 0)
     if normalized_strategy in {"KOSPI_ML", "KOSDAQ_ML", "MAIN"}:
         details["dynamic_enabled"] = bool(getattr(TRADING_RULES, "SWING_SCALE_IN_DYNAMIC_QTY_ENABLED", True))
         details["effective_qty_cap"] = int(getattr(TRADING_RULES, "SWING_SCALE_IN_EFFECTIVE_QTY_CAP", 0) or 0)
@@ -946,6 +947,22 @@ def describe_dynamic_scale_in_qty(
             details.update({"would_qty": 0, "effective_qty": 0, "qty": 0, "qty_reason": "pyramid_evidence_insufficient:" + ",".join(failed)})
             return details
         would_qty = max(1, int(scalp_budget_qty or legacy.get("template_qty", 0) or legacy.get("qty", 0) or 0))
+        max_add_qty_ratio = _safe_float(
+            getattr(TRADING_RULES, "SCALPING_PYRAMID_MAX_ADD_QTY_RATIO", 0.50),
+            0.50,
+        )
+        max_add_qty = int(math.floor(float(buy_qty) * max_add_qty_ratio)) if buy_qty > 0 and max_add_qty_ratio > 0 else 0
+        if not details["sim_uncapped_qty"]:
+            details.update(
+                {
+                    "pyramid_max_add_qty_ratio": round(max_add_qty_ratio, 6),
+                    "pyramid_max_add_qty": max_add_qty,
+                }
+            )
+            if max_add_qty <= 0:
+                details.update({"would_qty": 0, "effective_qty": 0, "qty": 0, "qty_reason": "pyramid_exposure_cap"})
+                return details
+            would_qty = min(would_qty, max_add_qty)
     elif add_type == "AVG_DOWN":
         if add_reason not in _SCALPING_AVG_DOWN_SPECIAL_REASONS:
             details.update({"would_qty": 0, "effective_qty": 0, "qty": 0, "qty_reason": "reversal_probe_missing"})

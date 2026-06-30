@@ -3097,6 +3097,102 @@ def test_real_scalp_scale_in_uses_orderable_percent_budget_without_one_share_cap
     assert details["qty"] == 28
 
 
+def test_real_scalp_pyramid_blocks_when_existing_qty_too_small_for_exposure_cap(monkeypatch):
+    rules = replace(
+        CONFIG,
+        INVEST_RATIO_SCALPING_MIN=0.10,
+        INVEST_RATIO_SCALPING_MAX=0.30,
+        SCALPING_SCALE_IN_DYNAMIC_QTY_ENABLED=True,
+        SCALPING_PYRAMID_MAX_ADD_QTY_RATIO=0.50,
+    )
+    monkeypatch.setattr(scale_in, "TRADING_RULES", rules)
+    stock = {
+        "name": "TEST",
+        "code": "123456",
+        "strategy": "SCALPING",
+        "status": "HOLDING",
+        "buy_price": 173_700,
+        "buy_qty": 1,
+        "rt_ai_prob": 0.72,
+        "last_reversal_features": {
+            "buy_pressure_10t": 79.31,
+            "tick_acceleration_ratio": 1.0,
+            "large_sell_print_detected": False,
+        },
+        "actual_order_submitted": True,
+    }
+
+    details = scale_in.describe_dynamic_scale_in_qty(
+        stock=stock,
+        resolved_price=177_000,
+        deposit=10_000_000,
+        add_type="PYRAMID",
+        strategy="SCALPING",
+        add_reason="scalping_pyramid_ok",
+        price_resolution={"allowed": True},
+        action={
+            "reason": "scalping_pyramid_ok",
+            "current_ai_score": 72,
+            "profit_rate": 1.55,
+            "peak_profit": 1.61,
+        },
+    )
+
+    assert details["sim_uncapped_qty"] is False
+    assert details["pyramid_max_add_qty_ratio"] == 0.5
+    assert details["pyramid_max_add_qty"] == 0
+    assert details["qty"] == 0
+    assert details["qty_reason"] == "pyramid_exposure_cap"
+
+
+def test_real_scalp_pyramid_caps_effective_qty_to_existing_position_ratio(monkeypatch):
+    rules = replace(
+        CONFIG,
+        INVEST_RATIO_SCALPING_MIN=0.10,
+        INVEST_RATIO_SCALPING_MAX=0.30,
+        SCALPING_SCALE_IN_DYNAMIC_QTY_ENABLED=True,
+        SCALPING_PYRAMID_MAX_ADD_QTY_RATIO=0.50,
+    )
+    monkeypatch.setattr(scale_in, "TRADING_RULES", rules)
+    stock = {
+        "name": "TEST",
+        "code": "123456",
+        "strategy": "SCALPING",
+        "status": "HOLDING",
+        "buy_price": 10_000,
+        "buy_qty": 10,
+        "rt_ai_prob": 0.90,
+        "last_reversal_features": {
+            "buy_pressure_10t": 80.0,
+            "tick_acceleration_ratio": 1.2,
+            "large_sell_print_detected": False,
+        },
+        "actual_order_submitted": True,
+    }
+
+    details = scale_in.describe_dynamic_scale_in_qty(
+        stock=stock,
+        resolved_price=10_000,
+        deposit=10_000_000,
+        add_type="PYRAMID",
+        strategy="SCALPING",
+        add_reason="scalping_pyramid_ok",
+        price_resolution={"allowed": True},
+        action={
+            "reason": "scalping_pyramid_ok",
+            "current_ai_score": 90,
+            "profit_rate": 2.0,
+            "peak_profit": 2.0,
+        },
+    )
+
+    assert details["scale_in_budget_qty"] == 266
+    assert details["pyramid_max_add_qty"] == 5
+    assert details["would_qty"] == 5
+    assert details["effective_qty"] == 5
+    assert details["qty"] == 5
+
+
 def test_real_scalp_scale_in_min_one_share_floor_when_percent_budget_is_below_price(monkeypatch):
     rules = replace(
         CONFIG,

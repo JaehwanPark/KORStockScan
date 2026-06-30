@@ -1535,7 +1535,7 @@ def test_execute_scalping_pyramid_blocks_wide_spread_price_guard(monkeypatch):
     assert stock.get("pending_add_order") is None
 
 
-def test_execute_scalping_pyramid_sends_resolved_best_bid_with_percent_budget_qty(monkeypatch):
+def test_execute_scalping_pyramid_sends_resolved_best_bid_with_capped_percent_budget_qty(monkeypatch):
     rules = replace(CONFIG, MAX_POSITION_PCT=1.0)
     monkeypatch.setattr(state_handlers, "TRADING_RULES", rules)
     monkeypatch.setattr(scale_in, "TRADING_RULES", rules)
@@ -1590,9 +1590,11 @@ def test_execute_scalping_pyramid_sends_resolved_best_bid_with_percent_budget_qt
         admin_id=1,
     )
 
-    assert sent_orders == [("123456", 237, 9_990, "00")]
+    assert sent_orders == [("123456", 5, 9_990, "00")]
     assert history[0]["request_price"] == 9_990
-    assert any(stage == "scale_in_price_resolved" for stage, _ in logs)
+    resolved = [fields for stage, fields in logs if stage == "scale_in_price_resolved"][0]
+    assert resolved["would_qty"] == 5
+    assert resolved["effective_qty"] == 5
     assert any(stage == "scale_in_price_p2_observe" for stage, _ in logs)
 
 
@@ -1664,9 +1666,11 @@ def test_execute_scalping_pyramid_refreshes_rest_orderbook_when_quote_missing(mo
         admin_id=1,
     )
 
-    assert sent_orders == [("123456", 237, 9_990, "00")]
+    assert sent_orders == [("123456", 5, 9_990, "00")]
     assert history[0]["request_price"] == 9_990
     resolved = [fields for stage, fields in logs if stage == "scale_in_price_resolved"][0]
+    assert resolved["would_qty"] == 5
+    assert resolved["effective_qty"] == 5
     assert resolved["pre_submit_ws_snapshot_refresh_reason"] == "ws_manager_missing"
     assert resolved["pre_submit_rest_orderbook_refresh_applied"] is True
     assert resolved["pre_submit_rest_orderbook_refresh_reason"] == "rest_orderbook_fresh"
@@ -2497,7 +2501,7 @@ def test_p2_observe_skip_does_not_change_live_order(monkeypatch):
         admin_id=1,
     )
 
-    assert sent_orders == [("123456", 232, 9_990, "00")]
+    assert sent_orders == [("123456", 5, 9_990, "00")]
     p2_logs = [fields for stage, fields in logs if stage == "scale_in_price_p2_observe"]
     assert p2_logs
     assert p2_logs[0]["live_runtime_effect"] is False

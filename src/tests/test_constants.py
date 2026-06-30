@@ -589,6 +589,7 @@ def test_trading_rules_real_pyramid_scale_in_quality_guard_env(monkeypatch):
     monkeypatch.setenv("KORSTOCKSCAN_PENDING_SCALE_IN_REVALIDATION_MIN_MICRO_VWAP_BP", "0.0")
     monkeypatch.setenv("KORSTOCKSCAN_RECENT_EXIT_CANDIDATE_PYRAMID_BLOCK_ENABLED", "true")
     monkeypatch.setenv("KORSTOCKSCAN_RECENT_EXIT_CANDIDATE_PYRAMID_BLOCK_SEC", "180")
+    monkeypatch.setenv("KORSTOCKSCAN_SCALPING_PYRAMID_MAX_ADD_QTY_RATIO", "0.25")
     monkeypatch.setenv("KORSTOCKSCAN_SCALE_IN_LIVE_TUNING_SELECTED", "true")
 
     reloaded = importlib.reload(constants)
@@ -601,6 +602,7 @@ def test_trading_rules_real_pyramid_scale_in_quality_guard_env(monkeypatch):
     assert reloaded.TRADING_RULES.PENDING_SCALE_IN_REVALIDATION_MIN_MICRO_VWAP_BP == 0.0
     assert reloaded.TRADING_RULES.RECENT_EXIT_CANDIDATE_PYRAMID_BLOCK_ENABLED is True
     assert reloaded.TRADING_RULES.RECENT_EXIT_CANDIDATE_PYRAMID_BLOCK_SEC == 180
+    assert reloaded.TRADING_RULES.SCALPING_PYRAMID_MAX_ADD_QTY_RATIO == 0.25
     assert reloaded.TRADING_RULES.SCALE_IN_LIVE_TUNING_SELECTED is True
 
 

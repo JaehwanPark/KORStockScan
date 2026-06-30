@@ -29535,6 +29535,8 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
             "scale_in_budget_qty",
             "scale_in_min_one_share_floor_enabled",
             "scale_in_min_one_share_floor_applied",
+            "pyramid_max_add_qty_ratio",
+            "pyramid_max_add_qty",
         )
         if key in qty_details
     }

@@ -60,6 +60,7 @@ class TradingConfig:
     SCALPING_PYRAMID_MIN_AI_SCORE: int = 70  # PYRAMID 허용 AI 최소점수
     SCALPING_PYRAMID_MIN_BUY_PRESSURE: float = 60.0  # PYRAMID 허용 매수압 최소값
     SCALPING_PYRAMID_MIN_TICK_ACCEL: float = 0.5  # PYRAMID 허용 틱 가속 최소값
+    SCALPING_PYRAMID_MAX_ADD_QTY_RATIO: float = 0.50  # 실계좌 PYRAMID 1회 추가수량은 기존 보유수량의 50% 이내
     REAL_PYRAMID_MICRO_CONTEXT_GUARD_ENABLED: bool = False  # real SCALPING PYRAMID micro context guard; PREOPEN env only
     PENDING_SCALE_IN_REVALIDATION_CANCEL_ENABLED: bool = False  # real pending PYRAMID revalidation cancel; PREOPEN env only
     PENDING_SCALE_IN_REVALIDATION_MIN_AI_SCORE: int = 66
@@ -3020,6 +3021,7 @@ def _build_trading_rules() -> TradingConfig:
     env_pyramid_min_ai_score = _env_int("KORSTOCKSCAN_SCALPING_PYRAMID_MIN_AI_SCORE")
     env_pyramid_min_buy_pressure = _env_float("KORSTOCKSCAN_SCALPING_PYRAMID_MIN_BUY_PRESSURE")
     env_pyramid_min_tick_accel = _env_float("KORSTOCKSCAN_SCALPING_PYRAMID_MIN_TICK_ACCEL")
+    env_pyramid_max_add_qty_ratio = _env_float("KORSTOCKSCAN_SCALPING_PYRAMID_MAX_ADD_QTY_RATIO")
     env_real_pyramid_micro_context_guard_enabled = _env_bool(
         "KORSTOCKSCAN_REAL_PYRAMID_MICRO_CONTEXT_GUARD_ENABLED"
     )
@@ -3142,6 +3144,7 @@ def _build_trading_rules() -> TradingConfig:
         or env_pyramid_min_ai_score is not None
         or env_pyramid_min_buy_pressure is not None
         or env_pyramid_min_tick_accel is not None
+        or env_pyramid_max_add_qty_ratio is not None
         or env_real_pyramid_micro_context_guard_enabled is not None
         or env_pending_scale_in_revalidation_cancel_enabled is not None
         or env_pending_scale_in_revalidation_min_ai_score is not None
@@ -3479,6 +3482,9 @@ def _build_trading_rules() -> TradingConfig:
             SCALPING_PYRAMID_MIN_TICK_ACCEL=env_pyramid_min_tick_accel
             if env_pyramid_min_tick_accel is not None
             else config.SCALPING_PYRAMID_MIN_TICK_ACCEL,
+            SCALPING_PYRAMID_MAX_ADD_QTY_RATIO=env_pyramid_max_add_qty_ratio
+            if env_pyramid_max_add_qty_ratio is not None
+            else config.SCALPING_PYRAMID_MAX_ADD_QTY_RATIO,
             REAL_PYRAMID_MICRO_CONTEXT_GUARD_ENABLED=env_real_pyramid_micro_context_guard_enabled
             if env_real_pyramid_micro_context_guard_enabled is not None
             else config.REAL_PYRAMID_MICRO_CONTEXT_GUARD_ENABLED,
