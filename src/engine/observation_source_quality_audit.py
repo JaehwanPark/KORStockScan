@@ -1477,6 +1477,14 @@ def _reviewed_unknown_reason_for_stage_field(
             and _field_text("sim_parent_record_id") not in {"", "-", "unknown_pre_contract"}
         )
 
+    def _is_reviewed_live_liquidity_not_available() -> bool:
+        return (
+            _field_text("pre_submit_liquidity_guard_action") == "NOT_AVAILABLE"
+            and _field_text("pre_submit_liquidity_reason") == "liquidity_not_available"
+            and _field_text("pre_submit_liquidity_value") == "not_available"
+            and _field_text("pre_submit_min_liquidity") not in {"", "-", "unknown_pre_contract"}
+        )
+
     def _is_reviewed_entry_adm_bucket_provenance() -> bool:
         if stage not in {"scalp_entry_action_decision_snapshot", "ai_confirmed"}:
             return False
@@ -1508,6 +1516,10 @@ def _reviewed_unknown_reason_for_stage_field(
     if str(key or "") == "sim_pre_submit_liquidity_guard_action" and str(value or "").upper() == "WOULD_UNKNOWN":
         if _is_reviewed_sim_liquidity_not_available():
             return "reviewed_sim_liquidity_not_available"
+        return None
+    if str(key or "") == "liquidity_guard_action" and str(value or "").upper() == "WOULD_UNKNOWN":
+        if _is_reviewed_live_liquidity_not_available():
+            return "reviewed_pre_submit_liquidity_not_available"
         return None
     if str(key or "") == "__stage" and str(stage or "") == "scalp_sim_pre_submit_liquidity_guard_unknown":
         if _is_reviewed_sim_liquidity_not_available():

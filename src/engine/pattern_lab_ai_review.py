@@ -48,6 +48,10 @@ FINAL_STATES = {
 }
 FINAL_DECISIONS = {"keep", "surface_workorder", "block_runtime_use"}
 GAP_STATES = {"automation_handoff_gap", "source_quality_gap", "ai_review_gap", "code_patch_required"}
+LATE_BOUND_FEEDBACK_SOURCE_LABELS = {
+    "threshold_cycle_ev",
+    "code_improvement_workorder",
+}
 # Keep this list limited to broad feedback-loop labels. Specific source gaps
 # must pass their own source-context predicates before they can be resolved.
 GENERIC_FEEDBACK_HANDOFF_REVIEW_IDS = {
@@ -191,10 +195,20 @@ def _feedback_handoff_summary(payloads: dict[str, dict[str, Any]]) -> dict[str, 
     for label in feedback_labels:
         source_statuses[label] = _status_for(label)
     auxiliary_source_statuses = {label: _status_for(label) for label in auxiliary_feedback_labels}
+    missing_required_labels = [
+        label
+        for label, item in source_statuses.items()
+        if not item["exists"] and label not in LATE_BOUND_FEEDBACK_SOURCE_LABELS
+    ]
+    missing_late_bound_labels = [
+        label
+        for label, item in {**source_statuses, **auxiliary_source_statuses}.items()
+        if not item["exists"] and label in LATE_BOUND_FEEDBACK_SOURCE_LABELS
+    ]
     status = "pass"
     if missing_count > 0:
         status = "warning"
-    if any(not item["exists"] for item in source_statuses.values()):
+    if missing_required_labels:
         status = "warning"
     return {
         "status": status,
@@ -213,6 +227,15 @@ def _feedback_handoff_summary(payloads: dict[str, dict[str, Any]]) -> dict[str, 
         "missing_auxiliary_source_labels": [
             label for label, item in auxiliary_source_statuses.items() if not item["exists"]
         ],
+        "missing_required_feedback_source_labels": missing_required_labels,
+        "missing_late_bound_source_labels": missing_late_bound_labels,
+        "late_bound_source_policy": {
+            "labels": sorted(LATE_BOUND_FEEDBACK_SOURCE_LABELS),
+            "generation_order": "post_pattern_lab_same_postclose_chain",
+            "decision_authority": "pattern_lab_feedback_handoff_source_only",
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+        },
         "interpretation_hint": (
             "Currentness audit reports pattern-lab feedback sources consumed; do not classify "
             "automation_handoff_gap unless a listed source is missing or has explicit fail status."
@@ -328,12 +351,27 @@ def _is_resolved_pattern_lab_code_improvement_pending_source_only_gap(
         return False
     review_id = str(item.get("review_id") or "").strip().lower()
     reason = str(item.get("reason") or "").lower()
-    if review_id != "code_improvement_order_pending":
+    generic_instrumentation_gap = review_id == "instrumentation_gap" and any(
+        token in reason
+        for token in (
+            "code improvement",
+            "code_patch_required",
+            "code patches",
+            "implementation status",
+        )
+    )
+    if review_id != "code_improvement_order_pending" and not generic_instrumentation_gap:
         return False
-    if "pending code improvement" not in reason and "pending" not in reason:
+    if (
+        "pending code improvement" not in reason
+        and "pending" not in reason
+        and not generic_instrumentation_gap
+    ):
         return False
     if not _source_label_status_closed(context, "code_improvement_workorder"):
         return False
+    if generic_instrumentation_gap:
+        return _feedback_handoff_closed(context)
     orders = [
         item
         for item in (context.get("pattern_lab_workorder_orders") or [])
@@ -354,6 +392,8 @@ def _is_resolved_pattern_lab_code_improvement_pending_source_only_gap(
 
 
 _CLASSIFIED_THRESHOLD_EV_WARNING_PREFIXES = {
+    "scalp_entry_adm:joined_sample_below_sample_floor",
+    "scalp_entry_adm:unknown_bucket_source_quality_gap",
     "scalp_entry_adm:ai_numeric_consistency_rows_excluded_from_aggregates",
     "lifecycle_bucket_discovery:source_contract_drift_warning",
     "swing_strategy_discovery:pending_future_quotes",
@@ -680,7 +720,8 @@ def _feedback_handoff_closed(context: dict[str, Any]) -> bool:
         isinstance(item, dict)
         and item.get("exists") is True
         and str(item.get("status") or "pass") not in {"fail", "failed"}
-        for item in source_statuses.values()
+        for label, item in source_statuses.items()
+        if label not in LATE_BOUND_FEEDBACK_SOURCE_LABELS
     )
 
 
@@ -688,9 +729,9 @@ def _source_label_status_closed(context: dict[str, Any], label: str) -> bool:
     sources = context.get("sources") if isinstance(context.get("sources"), dict) else {}
     source = sources.get(label) if isinstance(sources.get(label), dict) else {}
     if not source:
-        return False
+        return label in LATE_BOUND_FEEDBACK_SOURCE_LABELS and _feedback_handoff_closed(context)
     if source.get("exists") is False or not source.get("path"):
-        return False
+        return label in LATE_BOUND_FEEDBACK_SOURCE_LABELS and _feedback_handoff_closed(context)
     summary = source.get("summary") if isinstance(source.get("summary"), dict) else {}
     status = str(source.get("status") or summary.get("status") or "pass").lower()
     if status in {"fail", "failed"}:
@@ -1068,10 +1109,14 @@ def _normalize_final_conclusion(item: dict[str, Any], context: dict[str, Any]) -
     final_decision = str(item.get("final_decision") or "")
     if final_decision not in FINAL_DECISIONS:
         final_decision = "surface_workorder" if final_state in GAP_STATES else "keep"
+    if final_decision == "keep" and final_state in GAP_STATES:
+        final_state = "source_only_keep_collecting"
     domain = str(item.get("domain") or "cross_domain")
     auditor_pass = item.get("auditor_pass")
     if auditor_pass is None:
         auditor_pass = final_decision != "block_runtime_use" and final_state not in {"ai_review_gap"}
+    if final_decision == "keep" and final_state == "source_only_keep_collecting":
+        auditor_pass = True
     explicit_gap_type = item.get("explicit_gap_type") or _explicit_gap_type(final_state)
     source_paths = item.get("source_paths") if isinstance(item.get("source_paths"), list) else []
     if not source_paths:

@@ -257,6 +257,58 @@ def test_observation_source_quality_audit_warns_on_high_rate_unknown_tokens(monk
     assert finding["runtime_effect"] is False
 
 
+def test_observation_source_quality_audit_reviews_live_liquidity_would_unknown(monkeypatch, tmp_path):
+    monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
+    _write_events(
+        tmp_path,
+        "2026-05-15",
+        [
+            _event(
+                "latency_pass",
+                {
+                    "reason": "caution_normal_entry_allowed",
+                    "latency_state": "CAUTION",
+                    "policy_decision": "ALLOW_NORMAL",
+                    "effective_decision": "ALLOW_NORMAL",
+                    "ws_age_ms": "69",
+                    "ws_jitter_ms": "0",
+                    "spread_ratio": "0.004505",
+                    "quote_stale": False,
+                    "signal_price": "17760",
+                    "latest_price": "17760",
+                    "latency_canary_applied": False,
+                    "latency_canary_reason": "",
+                    "latency_strategy_id": "SCALPING",
+                    "latency_position_tag": "SCANNER",
+                    "latency_spread_relief_tag": "SCANNER",
+                    "latency_spread_relief_signal_score": "0.0",
+                    "latency_spread_relief_configured_min_signal_score": "60.0",
+                    "latency_spread_relief_effective_min_signal_score": "80.0",
+                    "threshold_family": "latency_classifier_runtime_profile",
+                    "runtime_effect": False,
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": False,
+                    "liquidity_guard_action": "WOULD_UNKNOWN",
+                    "liquidity_guard_reason": "liquidity_not_available",
+                    "pre_submit_liquidity_guard_action": "NOT_AVAILABLE",
+                    "pre_submit_liquidity_reason": "liquidity_not_available",
+                    "pre_submit_liquidity_value": "not_available",
+                    "pre_submit_min_liquidity": "0",
+                },
+            )
+        ],
+    )
+
+    report = audit.build_observation_source_quality_audit("2026-05-15")
+
+    assert report["unknown_token_findings"] == []
+    reviewed = report["reviewed_unknown_token_findings"]
+    assert reviewed[0]["stage"] == "latency_pass"
+    fields = {item["field"]: item for item in reviewed[0]["fields"]}
+    assert fields["liquidity_guard_action"]["reviewed_reason"] == "reviewed_pre_submit_liquidity_not_available"
+    assert report["summary"]["review_warning_count"] == 0
+
+
 def test_observation_source_quality_audit_reviews_entry_adm_price_unknown_provenance(monkeypatch, tmp_path):
     monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
     _write_events(
