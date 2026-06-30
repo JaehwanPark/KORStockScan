@@ -5,8 +5,8 @@
 - analysis_scope: general BUY bottleneck excludes sim/swing events and rising_missed forced one-share scout entries.
 - excluded_for_general_buy: forced_entry_reason=rising_missed_one_share_entry, rising_missed_one_share_entry_forced=true with forced_entry_qty=1.
 - diagnostic_artifact: data/report/intraday_entry_blocker_diagnostics/intraday_entry_blocker_diagnostics_2026-06-30_1100_goal.json
-- flow_artifact: data/report/intraday_entry_flow/intraday_entry_flow_2026-06-30_0800_to_1100.md
-- csv_artifact: data/report/intraday_entry_flow/intraday_entry_flow_2026-06-30_0800_to_1100.csv
+- flow_artifact: consolidated_into_final_summary; intermediate snapshot deleted after use
+- csv_artifact: deleted_after_use; source diagnostic remains available
 
 ## Decision
 
