@@ -967,10 +967,6 @@ def describe_dynamic_scale_in_qty(
         if add_reason not in _SCALPING_AVG_DOWN_SPECIAL_REASONS:
             details.update({"would_qty": 0, "effective_qty": 0, "qty": 0, "qty_reason": "reversal_probe_missing"})
             return details
-        hard_stop_price = _safe_float(stock.get("hard_stop_price"), 0.0)
-        if hard_stop_price > 0 and resolved_price <= hard_stop_price:
-            details.update({"would_qty": 0, "effective_qty": 0, "qty": 0, "qty_reason": "protection_distance_invalid"})
-            return details
         would_qty = max(1, int(scalp_budget_qty or legacy.get("template_qty", 0) or legacy.get("qty", 0) or 0))
     else:
         details.update({"would_qty": 0, "effective_qty": 0, "qty": 0, "qty_reason": "invalid_add_type"})

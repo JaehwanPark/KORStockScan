@@ -559,10 +559,13 @@ def _strength_history_count(row: dict[str, Any]) -> int | None:
 def _is_zero_strength_history_source_quality_event(row: dict[str, Any]) -> bool:
     if _event_is_recovery_observation(row):
         return False
+    stage = str(row.get("stage") or "").lower()
+    fast_precheck_result = str(_field(row, "fast_precheck_result", "") or "").strip().lower()
+    if stage == "scalping_scanner_fast_precheck" and fast_precheck_result == "eligible_for_heavy_entry_eval":
+        return False
     history_count = _strength_history_count(row)
     if history_count is None or history_count > 0:
         return False
-    stage = str(row.get("stage") or "").lower()
     reason = _blocker_reason(row).lower()
     context = f"{stage} {reason}"
     return any(

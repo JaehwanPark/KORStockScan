@@ -554,7 +554,7 @@ def _build_rebound_windows(rows: list[dict]) -> list[dict]:
 
 
 def _build_hard_stop_auxiliary(post_sell_rows: list[dict], valid_trades: list[dict]) -> dict:
-    hard_rules = {"scalp_preset_hard_stop_pct", "scalp_hard_stop_pct", "protect_hard_stop"}
+    hard_rules = {"scalp_preset_hard_stop_pct", "scalp_hard_stop_pct"}
     rows = [row for row in post_sell_rows if _exit_group(str(row.get("exit_rule") or "-")) in hard_rules]
     completed_rows = [
         row

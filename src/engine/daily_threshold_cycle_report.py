@@ -2757,7 +2757,7 @@ def _classify_lifecycle_type(
         return "soft_stop_good_exit" if post_sell_outcome == "GOOD_EXIT" else "soft_stop_missed_upside" if post_sell_outcome == "MISSED_UPSIDE" else "soft_stop_neutral"
     if rule in {"scalp_trailing_take_profit", "protect_trailing_stop"}:
         return "trailing_good_exit" if post_sell_outcome == "GOOD_EXIT" else "trailing_early_exit" if post_sell_outcome == "MISSED_UPSIDE" else "trailing_neutral"
-    if rule in {"scalp_hard_stop_pct", "protect_hard_stop", "scalp_emergency_stop"}:
+    if rule in {"scalp_hard_stop_pct", "scalp_emergency_stop"}:
         return "hard_stop_good_exit" if post_sell_outcome == "GOOD_EXIT" else "hard_stop_missed_upside" if post_sell_outcome == "MISSED_UPSIDE" else "hard_stop_neutral"
     if rule == "scalp_bad_entry_refined_canary":
         return "bad_entry_refined_good_exit" if post_sell_outcome == "GOOD_EXIT" else "bad_entry_refined_missed_upside" if post_sell_outcome == "MISSED_UPSIDE" else "bad_entry_refined_neutral"
@@ -5950,7 +5950,7 @@ def _build_protect_trailing_smoothing_family(events: list[dict]) -> dict:
         "apply_mode": "next_preopen_single_owner" if sample_ready else "observe_only",
         "notes": [
             "protect_trailing smoothing 값은 장중 자동 변경하지 않고 장후 report와 다음 장전 manifest 후보로만 산출한다.",
-            "protect_hard_stop과 emergency_pct 이탈은 평탄화 대상이 아니므로 별도 safety로 유지한다.",
+            "emergency_pct 이탈은 평탄화 대상이 아니므로 별도 safety로 유지한다.",
             "sample floor 미달이면 추천값은 direction-only이며 리노공업 단일 케이스로 live 재조정하지 않는다.",
         ],
     }

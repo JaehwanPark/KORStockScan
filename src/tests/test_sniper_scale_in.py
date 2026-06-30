@@ -2007,8 +2007,17 @@ def test_late_loss_avg_down_bypasses_quote_divergence_when_executable_price_exis
     monkeypatch.setattr(scale_in, "TRADING_RULES", rules)
     state_handlers.KIWOOM_TOKEN = "test"
 
+    class FixedDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            value = cls(2026, 6, 30, 14, 0, 0)
+            if tz is not None:
+                return value.replace(tzinfo=tz)
+            return value
+
     sent_orders = []
     logs = []
+    monkeypatch.setattr(state_handlers, "datetime", FixedDateTime)
     monkeypatch.setattr(state_handlers.kiwoom_orders, "get_deposit", lambda *args, **kwargs: 100_000_000)
     monkeypatch.setattr(
         state_handlers.kiwoom_orders,
@@ -2035,6 +2044,9 @@ def test_late_loss_avg_down_bypasses_quote_divergence_when_executable_price_exis
                 "quote_consistency_entry_blocked": True,
                 "quote_consistency_state": "diverged",
                 "price_source": "rest_orderbook",
+                "canonical_mark_price": 2_569_000,
+                "executable_buy_price": 2_570_000,
+                "executable_sell_price": 2_568_000,
             },
             2_569_000,
             2_570_000,
@@ -2066,7 +2078,11 @@ def test_late_loss_avg_down_bypasses_quote_divergence_when_executable_price_exis
 
     assert result["ord_no"] == "LATE1"
     assert sent_orders
-    assert any(stage == "scale_in_quote_consistency_defensive_bypass" for stage, _ in logs)
+    bypassed = [fields for stage, fields in logs if stage == "scale_in_quote_consistency_defensive_bypass"]
+    assert bypassed
+    assert bypassed[-1]["canonical_mark_price"] == 2_569_000
+    assert bypassed[-1]["executable_buy_price"] == 2_570_000
+    assert bypassed[-1]["executable_sell_price"] == 2_568_000
     assert not [stage for stage, _ in logs if stage == "scale_in_price_guard_block"]
     assert sent_orders[0][1]["time_block_override_reason"] == "late_loss_avg_down_retry"
 
@@ -2147,8 +2163,17 @@ def test_defensive_avg_down_bypasses_stale_quote_consistency_when_executable_pri
     monkeypatch.setattr(scale_in, "TRADING_RULES", rules)
     state_handlers.KIWOOM_TOKEN = "test"
 
+    class FixedDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            value = cls(2026, 6, 30, 14, 0, 0)
+            if tz is not None:
+                return value.replace(tzinfo=tz)
+            return value
+
     sent_orders = []
     logs = []
+    monkeypatch.setattr(state_handlers, "datetime", FixedDateTime)
     monkeypatch.setattr(state_handlers.kiwoom_orders, "get_deposit", lambda *args, **kwargs: 100_000_000)
     monkeypatch.setattr(
         state_handlers.kiwoom_orders,
@@ -2212,6 +2237,68 @@ def test_defensive_avg_down_bypasses_stale_quote_consistency_when_executable_pri
     assert sent_orders[0][0][2] == 0
     assert sent_orders[0][0][3] == "3"
     assert sent_orders[0][1]["time_block_override_reason"] == add_reason
+
+
+def test_real_scalping_scale_in_uses_buy_window_not_regular_market_close(monkeypatch):
+    rules = replace(CONFIG, MAX_POSITION_PCT=1.0, MARKET_CLOSE_TIME="15:30:00")
+    monkeypatch.setattr(state_handlers, "TRADING_RULES", rules)
+    monkeypatch.setattr(scale_in, "TRADING_RULES", rules)
+    state_handlers.KIWOOM_TOKEN = "test"
+
+    class FixedDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            value = cls(2026, 6, 30, 16, 41, 0)
+            if tz is not None:
+                return value.replace(tzinfo=tz)
+            return value
+
+    sent_orders = []
+    logs = []
+    monkeypatch.setattr(state_handlers, "datetime", FixedDateTime)
+    monkeypatch.setattr(state_handlers, "is_scalping_buy_time_allowed", lambda now=None: True)
+    monkeypatch.setattr(state_handlers, "scalping_buy_time_block_reason", lambda now=None: "nxt_buy_window_allowed")
+    monkeypatch.setattr(state_handlers.kiwoom_orders, "get_deposit", lambda *args, **kwargs: 100_000_000)
+    monkeypatch.setattr(
+        state_handlers,
+        "_pre_submit_refresh_real_ws_snapshot",
+        lambda code, ws_data, strategy: (dict(ws_data), {}),
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_holding_pipeline",
+        lambda stock, code, stage, **fields: logs.append((stage, fields)),
+    )
+    monkeypatch.setattr(
+        state_handlers.kiwoom_orders,
+        "send_buy_order",
+        lambda *args, **kwargs: sent_orders.append((args, kwargs)) or {"return_code": "0", "ord_no": "NXT1"},
+    )
+    monkeypatch.setattr(state_handlers, "record_add_history_event", lambda *args, **kwargs: True)
+
+    result = state_handlers.execute_scale_in_order(
+        stock={
+            "id": 1,
+            "name": "가온전선",
+            "strategy": "SCALPING",
+            "buy_price": 234_500,
+            "buy_qty": 1,
+        },
+        code="000500",
+        ws_data={"curr": 226_000, "best_bid": 226_000, "best_ask": 226_500},
+        action={
+            "add_type": "AVG_DOWN",
+            "reason": "stop_line_touch_mandatory_avg_down",
+            "stop_line_touched": True,
+            "profit_rate": -3.63,
+            "current_ai_score": 70,
+        },
+        admin_id=1,
+    )
+
+    assert result["ord_no"] == "NXT1"
+    assert sent_orders
+    assert not [stage for stage, _ in logs if stage == "scale_in_market_closed_block"]
 
 
 def test_late_loss_avg_down_uses_fresh_rest_quote_after_stale_ws_refresh(monkeypatch):
@@ -4246,6 +4333,7 @@ def test_send_buy_order_market_blocked_before_buy_time_cutoff(monkeypatch):
 def test_send_buy_order_market_allows_time_block_override_for_defensive_scale_in(monkeypatch):
     monkeypatch.setattr(kiwoom_orders, "is_buy_side_paused", lambda: False)
     monkeypatch.setattr(kiwoom_orders, "is_buy_side_time_blocked", lambda: True)
+    monkeypatch.setattr(kiwoom_orders, "is_scalping_buy_window_blocked", lambda: False)
     captured = {}
 
     class DummyResponse:
@@ -4274,6 +4362,7 @@ def test_send_buy_order_market_allows_time_block_override_for_defensive_scale_in
 def test_send_buy_order_market_rejects_unknown_time_block_override_reason(monkeypatch):
     monkeypatch.setattr(kiwoom_orders, "is_buy_side_paused", lambda: False)
     monkeypatch.setattr(kiwoom_orders, "is_buy_side_time_blocked", lambda: True)
+    monkeypatch.setattr(kiwoom_orders, "is_scalping_buy_window_blocked", lambda: False)
 
     result = kiwoom_orders.send_buy_order_market(
         "123456",
@@ -4303,6 +4392,7 @@ def test_buy_side_time_block_allows_from_0910(monkeypatch):
 
     assert kiwoom_orders.is_buy_side_time_blocked(datetime.combine(today, dt_time(9, 9, 59)))
     assert not kiwoom_orders.is_buy_side_time_blocked(datetime.combine(today, dt_time(9, 10, 0)))
+    assert kiwoom_orders.is_buy_side_time_blocked(datetime.combine(today, dt_time(15, 20, 1)))
 
 
 def test_buy_side_time_block_respects_scalping_morning_buy_window(monkeypatch):
@@ -4321,6 +4411,52 @@ def test_buy_side_time_block_respects_scalping_morning_buy_window(monkeypatch):
     assert not kiwoom_orders.is_buy_side_time_blocked(datetime.combine(today, dt_time(8, 10, 0)))
     assert not kiwoom_orders.is_buy_side_time_blocked(datetime.combine(today, dt_time(8, 40, 0)))
     assert kiwoom_orders.is_buy_side_time_blocked(datetime.combine(today, dt_time(8, 41, 0)))
+    assert not kiwoom_orders.is_buy_side_time_blocked(datetime.combine(today, dt_time(15, 20, 0)))
+    assert kiwoom_orders.is_buy_side_time_blocked(datetime.combine(today, dt_time(15, 20, 1)))
+
+
+def test_buy_side_time_block_allows_scalping_nxt_buy_window(monkeypatch):
+    monkeypatch.setattr(
+        kiwoom_orders,
+        "TRADING_RULES",
+        replace(
+            CONFIG,
+            BUY_SIDE_TIME_BLOCK_ENABLED=True,
+            BUY_SIDE_TIME_BLOCK_UNTIL_HHMM="09:10",
+            SCALPING_BUY_WINDOWS="08:01:00-08:40:00,09:01:00-15:00:00,16:00:00-19:45:00",
+        ),
+    )
+    today = datetime.now().date()
+
+    assert kiwoom_orders.is_buy_side_time_blocked(datetime.combine(today, dt_time(15, 50, 0)))
+    assert not kiwoom_orders.is_buy_side_time_blocked(datetime.combine(today, dt_time(16, 0, 0)))
+    assert not kiwoom_orders.is_buy_side_time_blocked(datetime.combine(today, dt_time(16, 41, 0)))
+    assert not kiwoom_orders.is_buy_side_time_blocked(datetime.combine(today, dt_time(19, 45, 0)))
+    assert kiwoom_orders.is_buy_side_time_blocked(datetime.combine(today, dt_time(19, 45, 1)))
+
+
+def test_send_buy_order_market_blocks_outside_buy_window_even_with_defensive_override(monkeypatch):
+    monkeypatch.setattr(kiwoom_orders, "is_buy_side_paused", lambda: False)
+    monkeypatch.setattr(kiwoom_orders, "is_scalping_buy_window_blocked", lambda: True)
+    monkeypatch.setattr(kiwoom_orders, "is_buy_side_time_blocked", lambda: True)
+
+    def _should_not_call_api(*args, **kwargs):
+        raise AssertionError("buy window hard block must stop broker submission")
+
+    monkeypatch.setattr(kiwoom_orders.requests, "post", _should_not_call_api)
+    monkeypatch.setattr(kiwoom_orders, "_post_kiwoom_with_auth_retry", _should_not_call_api)
+
+    result = kiwoom_orders.send_buy_order_market(
+        "000500",
+        1,
+        "token",
+        order_type="3",
+        allow_time_block_override=True,
+        time_block_override_reason="late_loss_avg_down_retry",
+    )
+
+    assert result["return_code"] == "BUY_TIME_BLOCKED"
+    assert result["ord_no"] == ""
 
 
 def test_sell_side_open_time_block_defaults_off(monkeypatch):
@@ -4371,6 +4507,77 @@ def test_sell_side_open_time_block_blocks_discretionary_scalping_until_0903(monk
         reason_type="PROFIT_STAGNATION",
         strategy="KOSPI",
     )
+
+
+def test_sell_side_time_block_uses_sell_windows_for_all_scope(monkeypatch):
+    monkeypatch.setattr(
+        kiwoom_orders,
+        "TRADING_RULES",
+        replace(
+            CONFIG,
+            SELL_SIDE_OPEN_TIME_BLOCK_ENABLED=True,
+            SELL_SIDE_OPEN_TIME_BLOCK_UNTIL_HHMM="09:05",
+            SELL_SIDE_OPEN_TIME_BLOCK_SCOPE="all",
+            SELL_WINDOWS="08:05:00-08:49:00,09:05:00-15:19:00,16:05:00-19:49:00",
+        ),
+    )
+    today = datetime.now().date()
+
+    assert kiwoom_orders.is_sell_side_open_time_blocked(
+        datetime.combine(today, dt_time(8, 4, 59)),
+        reason_type="LOSS",
+        strategy="SCALPING",
+    )
+    assert not kiwoom_orders.is_sell_side_open_time_blocked(
+        datetime.combine(today, dt_time(8, 5, 0)),
+        reason_type="LOSS",
+        strategy="SCALPING",
+    )
+    assert not kiwoom_orders.is_sell_side_open_time_blocked(
+        datetime.combine(today, dt_time(15, 19, 0)),
+        reason_type="PROFIT_STAGNATION",
+        strategy="SCALPING",
+    )
+    assert kiwoom_orders.is_sell_side_open_time_blocked(
+        datetime.combine(today, dt_time(15, 19, 1)),
+        reason_type="HARD_STOP",
+        strategy="SCALPING",
+    )
+    assert not kiwoom_orders.is_sell_side_open_time_blocked(
+        datetime.combine(today, dt_time(16, 5, 0)),
+        reason_type="PANIC",
+        strategy="SCALPING",
+    )
+    assert kiwoom_orders.is_sell_side_open_time_blocked(
+        datetime.combine(today, dt_time(19, 49, 1)),
+        reason_type="SAFETY",
+        strategy="SCALPING",
+    )
+    assert kiwoom_orders.is_sell_side_open_time_blocked(
+        datetime.combine(today, dt_time(15, 19, 1)),
+        reason_type="HARD_STOP",
+        strategy="KOSPI",
+    )
+    assert kiwoom_orders.is_sell_side_open_time_blocked(
+        datetime.combine(today, dt_time(15, 19, 1)),
+        reason_type="HARD_STOP",
+        strategy="",
+    )
+
+    fields = kiwoom_orders.get_sell_side_open_time_block_fields(
+        now=datetime.combine(today, dt_time(15, 19, 1)),
+        reason_type="HARD_STOP",
+        strategy="SCALPING",
+    )
+    assert fields["sell_time_block_applied"] is True
+    assert fields["sell_time_block_scope"] == "all"
+    assert fields["sell_time_block_inside_sell_window"] is False
+    assert fields["sell_time_block_passthrough_reason"] == "-"
+    assert (
+        fields["sell_windows"]
+        == "08:05:00-08:49:00,09:05:00-15:19:00,16:05:00-19:49:00"
+    )
+    assert fields["sell_time_block_strategy_allowed"] is True
 
 
 def test_send_sell_order_market_blocks_discretionary_before_sell_time_cutoff(monkeypatch):
@@ -8346,6 +8553,69 @@ def test_hard_stop_quote_revalidation_allows_confirmed_hard_stop(monkeypatch):
 
     assert blocked is False
     assert logs == []
+
+
+def test_hard_stop_avg_down_attempt_runs_after_quote_revalidation(monkeypatch):
+    state_handlers.TRADING_RULES = replace(
+        CONFIG,
+        SCALE_IN_REQUIRE_HISTORY_TABLE=False,
+        SCALPING_AVG_DOWN_MARKET_ON_STOP_TOUCH_ENABLED=True,
+        SCALP_HARD_STOP=-2.5,
+    )
+    state_handlers.COOLDOWNS = {}
+    state_handlers.ALERTED_STOCKS = set()
+    state_handlers.HIGHEST_PRICES = {"123456": 100}
+    state_handlers.LAST_AI_CALL_TIMES = {}
+    state_handlers.LAST_LOG_TIMES = {}
+    state_handlers.DB = _DummyDB()
+
+    revalidation_calls = []
+    avg_down_calls = []
+    sell_calls = []
+    monkeypatch.setattr(state_handlers, "_evaluate_holding_flow_override", lambda **kwargs: True)
+    monkeypatch.setattr(
+        state_handlers,
+        "_hard_stop_quote_revalidation_block",
+        lambda *args, **kwargs: revalidation_calls.append((args, kwargs)) or True,
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_attempt_stop_line_touch_mandatory_avg_down",
+        lambda **kwargs: avg_down_calls.append(kwargs) or {"submitted": True},
+    )
+    monkeypatch.setattr(
+        state_handlers.kiwoom_orders,
+        "send_smart_sell_order",
+        lambda *args, **kwargs: sell_calls.append((args, kwargs)) or {"return_code": "0", "ord_no": "S1"},
+    )
+
+    stock = {
+        "id": 13,
+        "code": "123456",
+        "name": "TEST",
+        "status": "HOLDING",
+        "strategy": "SCALPING",
+        "buy_price": 100,
+        "buy_qty": 10,
+        "rt_ai_prob": 0.50,
+    }
+
+    state_handlers.handle_holding_state(
+        stock=stock,
+        code="123456",
+        ws_data={"curr": 97.0, "orderbook": {"bids": [{"price": 97, "volume": 1000}]}},
+        admin_id=1,
+        market_regime="BULL",
+        now_ts=1_000.0,
+        now_dt=datetime(2026, 6, 30, 13, 0, 0),
+        radar=None,
+        ai_engine=None,
+    )
+
+    assert revalidation_calls
+    assert revalidation_calls[-1][1]["exit_rule"] == "scalp_hard_stop_pct"
+    assert avg_down_calls == []
+    assert sell_calls == []
 
 
 def test_rest_quote_only_mfe_protect_requires_confirmation(monkeypatch):
@@ -15016,7 +15286,7 @@ def test_handle_holding_state_negative_mfe_protect_does_not_fall_through_to_sell
     assert blocked == []
 
 
-def test_late_loss_avg_down_retry_uses_reversal_qty_rule_and_hard_stop_guard(monkeypatch):
+def test_late_loss_avg_down_retry_uses_reversal_qty_rule(monkeypatch):
     scale_in.TRADING_RULES = replace(
         CONFIG,
         MAX_POSITION_PCT=1.0,
@@ -15070,32 +15340,6 @@ def test_late_loss_avg_down_retry_uses_reversal_qty_rule_and_hard_stop_guard(mon
     assert stop_touch_mandatory["qty"] > 0
     assert stop_touch_mandatory["qty_reason"] != "reversal_probe_missing"
 
-    reversal_blocked = scale_in.describe_dynamic_scale_in_qty(
-        stock={**stock, "hard_stop_price": 9_950},
-        resolved_price=9_900,
-        deposit=100_000,
-        add_type="AVG_DOWN",
-        strategy="SCALPING",
-        add_reason="reversal_add_ok",
-        price_resolution=price_resolution,
-        action={"current_ai_score": 67, "profit_rate": -2.0, "peak_profit": 1.0},
-    )
-    assert reversal_blocked["qty"] == 0
-    assert reversal_blocked["qty_reason"] == "protection_distance_invalid"
-
-    late_hard_stop_distance_blocked = scale_in.describe_dynamic_scale_in_qty(
-        stock={**stock, "hard_stop_price": 9_950},
-        resolved_price=9_900,
-        deposit=100_000,
-        add_type="AVG_DOWN",
-        strategy="SCALPING",
-        add_reason="late_loss_avg_down_retry",
-        price_resolution=price_resolution,
-        action={"current_ai_score": 67, "profit_rate": -2.0, "peak_profit": 1.0},
-    )
-    assert late_hard_stop_distance_blocked["qty"] == 0
-    assert late_hard_stop_distance_blocked["qty_reason"] == "protection_distance_invalid"
-
 
 def test_stop_line_touch_mandatory_avg_down_includes_ollix_like_case(monkeypatch):
     state_handlers.TRADING_RULES = replace(
@@ -15132,6 +15376,22 @@ def test_stop_line_touch_mandatory_avg_down_includes_ollix_like_case(monkeypatch
     assert result["action"]["reason"] == "stop_line_touch_mandatory_avg_down"
     assert result["action"]["stop_line_touched"] is True
     assert result["action"]["stop_line_pct"] == -3.00
+    assert result["action"]["stop_line_source"] == "scalp_soft_stop_pct"
+
+    hard_stop_touch = state_handlers._evaluate_stop_line_touch_mandatory_avg_down(
+        stock,
+        strategy="SCALPING",
+        sell_reason_type="LOSS",
+        exit_rule="scalp_hard_stop_pct",
+        profit_rate=-3.65,
+        peak_profit=0.31,
+        current_ai_score=50,
+        held_sec=1_494,
+        dynamic_stop_pct=-2.50,
+    )
+    assert hard_stop_touch["should_retry"] is True
+    assert hard_stop_touch["action"]["stop_line_source"] == "scalp_hard_stop_pct"
+    assert hard_stop_touch["action"]["stop_line_pct"] == -2.50
 
     stock["stop_line_touch_avg_down_used"] = True
     stock["stop_line_touch_avg_down_count"] = 1

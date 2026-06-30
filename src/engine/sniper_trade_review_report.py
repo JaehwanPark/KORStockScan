@@ -516,7 +516,6 @@ def _infer_exit_rule_from_reason(reason: Any) -> str:
         ("고점 대비 밀림", "scalp_trailing_take_profit"),
         ("소프트 손절", "scalp_soft_stop_pct"),
         ("하드스탑 도달", "scalp_hard_stop_pct"),
-        ("보호 하드스탑", "protect_hard_stop"),
         ("보호 트레일링", "protect_trailing_stop"),
         ("코스닥 스윙 기한 만료 청산", "kosdaq_timeout"),
         ("KOSDAQ 트레일링 익절", "kosdaq_trailing_take_profit"),
@@ -552,7 +551,7 @@ def _infer_exit_decision_source(
         return "HOLDING_FLOW_OVERRIDE"
     if rule == "scalp_preset_hard_stop_pct":
         return "PRESET_HARD_STOP"
-    if rule in {"scalp_preset_protect_profit", "protect_hard_stop", "protect_trailing_stop"}:
+    if rule in {"scalp_preset_protect_profit", "protect_trailing_stop"}:
         return "PRESET_PROTECT"
     if rule == "scalp_preset_ai_review_exit":
         return "AI_REVIEW_EXIT"
@@ -970,12 +969,6 @@ def _build_hard_stop_taxonomy(rows: list[dict], events: list[HoldingEvent]) -> d
         {
             "key": "scalp_preset_hard_stop_pct",
             "label": "Preset Hard Stop",
-            "mode": "live",
-            "stage": "exit_signal",
-        },
-        {
-            "key": "protect_hard_stop",
-            "label": "Protect Hard Stop",
             "mode": "live",
             "stage": "exit_signal",
         },

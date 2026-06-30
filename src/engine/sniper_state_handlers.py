@@ -2082,10 +2082,11 @@ def _evaluate_stop_line_touch_mandatory_avg_down(
 
     rule = str(exit_rule or "").strip()
     reason_type = str(sell_reason_type or "").upper()
-    if rule != "scalp_soft_stop_pct" or reason_type != "LOSS":
+    stop_touch_rules = {"scalp_soft_stop_pct", "scalp_hard_stop_pct"}
+    if rule not in stop_touch_rules or reason_type != "LOSS":
         return {
             "should_retry": False,
-            "reason": "not_soft_stop_loss_touch",
+            "reason": "not_stop_line_loss_touch",
             "exit_rule": rule or "-",
             "sell_reason_type": reason_type or "-",
         }
@@ -2133,7 +2134,7 @@ def _evaluate_stop_line_touch_mandatory_avg_down(
             "current_ai_score": current_ai_score,
             "stop_line_touched": True,
             "stop_line_pct": stop_pct,
-            "stop_line_source": "scalp_soft_stop_pct",
+            "stop_line_source": rule,
         },
     }
 
@@ -2156,7 +2157,7 @@ def _attempt_stop_line_touch_mandatory_avg_down(
     now_ts: float,
     context_fields: dict | None = None,
 ) -> dict:
-    """Submit the operator-required one-shot AVG_DOWN at real soft stop touch."""
+    """Submit the operator-required AVG_DOWN at real soft/hard stop touch."""
     stop_touch_avg_down = _evaluate_stop_line_touch_mandatory_avg_down(
         stock,
         strategy=strategy,
@@ -2187,23 +2188,23 @@ def _attempt_stop_line_touch_mandatory_avg_down(
     retry_common_fields = {
         "threshold_family": "stop_line_touch_mandatory_avg_down",
         "decision_source": "STOP_LINE_TOUCH_MANDATORY_AVG_DOWN",
-        "decision_authority": "real_scalping_soft_stop_touch_intercept",
+        "decision_authority": "real_scalping_stop_line_touch_intercept",
         "metric_role": "bounded_tunable",
         "window_policy": "same_day_intraday_runtime",
         "sample_floor": "not_applicable_operator_override",
-        "primary_decision_metric": "soft_stop_touch",
-        "source_quality_gate": "real_holding_soft_stop_touch_and_scale_in_guards_present",
+        "primary_decision_metric": "stop_line_touch",
+        "source_quality_gate": "real_holding_stop_line_touch_and_scale_in_guards_present",
         "runtime_effect": True,
         "allowed_runtime_apply": True,
         "forbidden_uses": (
             "entry_threshold_relaxation|provider_route_change|broker_guard_bypass|"
-            "quantity_cap_release|hard_safety_bypass|second_avg_down_retry|hard_stop_bypass"
+            "quantity_cap_release|protect_or_emergency_bypass|second_avg_down_retry|hard_stop_threshold_relaxation"
         ),
         "sell_reason_type": sell_reason_type,
         "exit_rule": exit_rule or "-",
         "profit_rate": f"{profit_rate:+.2f}",
         "peak_profit": f"{peak_profit:+.2f}",
-        "stop_line_pct": f"{_safe_float(dynamic_stop_pct, 0.0):+.2f}",
+        "stop_line_pct": f"{_safe_float(stop_touch_avg_down.get('stop_line_pct'), dynamic_stop_pct):+.2f}",
         "current_ai_score": f"{current_ai_score:.0f}",
         "held_sec": held_sec,
         "gate_allowed": bool(retry_gate.get("allowed")),
@@ -2315,7 +2316,6 @@ def _evaluate_late_loss_avg_down_retry(
         return {"should_retry": False, "reason": "hard_safety_limit_up_exit"}
     hard_safety_tokens = (
         "hard_stop",
-        "protect_hard",
         "protect_trailing",
         "protect_profit",
         "mfe_protect",
@@ -3606,7 +3606,6 @@ def _is_swing_loss_reentry_stop_rule(exit_rule: str | None) -> bool:
             "stop-loss",
             "hard_stop",
             "protect_stop",
-            "protect_hard",
             "emergency_stop",
             "loss_cut",
         )
@@ -3624,7 +3623,6 @@ def _is_greenfield_hard_safety_exit(exit_rule: str | None, sell_reason_type: str
             "stop-loss",
             "hard_stop",
             "protect_stop",
-            "protect_hard",
             "emergency_stop",
             "loss_cut",
             "daily_limit_up",
@@ -3668,7 +3666,11 @@ def _sell_side_open_time_block_fields(
         reason_type=sell_reason_type,
         strategy=strategy,
     )
-    if _is_sell_side_open_time_safety_exit(exit_rule, sell_reason_type):
+    if (
+        str(fields.get("sell_time_block_scope") or "").lower()
+        not in {"all", "all_exit", "all_sells", "all_sell"}
+        and _is_sell_side_open_time_safety_exit(exit_rule, sell_reason_type)
+    ):
         fields["sell_time_block_applied"] = False
         fields["sell_time_block_passthrough_reason"] = "safety_exit_passthrough"
     elif fields.get("sell_time_block_passthrough_reason") == "scope_unknown_passthrough":
@@ -9571,7 +9573,7 @@ def _resolve_exit_decision_source(
     if rule == "scalp_preset_hard_stop_pct":
         return "PRESET_HARD_STOP"
 
-    if rule in {"scalp_preset_protect_profit", "protect_hard_stop", "protect_trailing_stop"}:
+    if rule in {"scalp_preset_protect_profit", "protect_trailing_stop"}:
         return "PRESET_PROTECT"
 
     if rule == "scalp_preset_ai_review_exit":
@@ -11529,6 +11531,15 @@ def _merge_quote_consistency_fields(target: dict, fields: dict | None) -> dict:
         ):
             target[key] = value
     return target
+
+
+def _without_event_field_collisions(fields: dict | None, *reserved_keys: str) -> dict:
+    reserved = {str(key) for key in reserved_keys}
+    return {
+        key: value
+        for key, value in (fields or {}).items()
+        if key not in reserved
+    }
 
 
 def _fetch_rest_orderbook_snapshot_bounded(code: str, timeout_ms: int) -> tuple[dict, str, float]:
@@ -25861,7 +25872,6 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
     profit_rate = calculate_net_profit_rate(buy_p, curr_p)
     peak_profit = calculate_net_profit_rate(buy_p, highest_prices.get(price_key, curr_p))
     trailing_stop_price = float(stock.get('trailing_stop_price') or 0)
-    hard_stop_price = float(stock.get('hard_stop_price') or 0)
     daily_limit_up_exit = _daily_limit_up_exit_fields(stock, ws_data, curr_p)
     daily_limit_up_triggered = bool(daily_limit_up_exit.get("daily_limit_up_exit_triggered"))
 
@@ -26865,13 +26875,7 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
         elif _ra_elapsed >= _ra_eval_sec:
             _mutate_stock_state(stock, set_fields={'reversal_add_state': ''})
 
-    if hard_stop_price > 0 and curr_p <= hard_stop_price:
-        is_sell_signal = True
-        sell_reason_type = "LOSS"
-        reason = f"🛑 보호 하드스탑 이탈 ({hard_stop_price:,.0f}원)"
-        exit_rule = "protect_hard_stop"
-
-    elif trailing_stop_price > 0 and curr_p <= trailing_stop_price:
+    if trailing_stop_price > 0 and curr_p <= trailing_stop_price:
         if _protect_trailing_break_confirmed(
             stock,
             code,
@@ -27832,6 +27836,24 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
         ):
             return
 
+        hard_stop_revalidation_already_passed = False
+        if str(exit_rule or "").strip() == "scalp_hard_stop_pct":
+            if _hard_stop_quote_revalidation_block(
+                stock,
+                code,
+                exit_rule=exit_rule,
+                profit_rate=profit_rate,
+                threshold_pct=_safe_float(locals().get("hard_stop_pct"), _rule_float("SCALP_HARD_STOP", -2.5)),
+                curr_price=curr_p,
+                buy_price=buy_p,
+                current_ai_score=current_ai_score,
+                held_sec=held_sec,
+                peak_profit=peak_profit,
+                now_ts=now_ts,
+            ):
+                return
+            hard_stop_revalidation_already_passed = True
+
         stop_touch_avg_down_result = _attempt_stop_line_touch_mandatory_avg_down(
             stock=stock,
             code=code,
@@ -27845,7 +27867,11 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
             peak_profit=peak_profit,
             current_ai_score=current_ai_score,
             held_sec=held_sec,
-            dynamic_stop_pct=_safe_float(locals().get("dynamic_stop_pct"), profit_rate),
+            dynamic_stop_pct=(
+                _safe_float(locals().get("hard_stop_pct"), profit_rate)
+                if str(exit_rule or "").strip() == "scalp_hard_stop_pct"
+                else _safe_float(locals().get("dynamic_stop_pct"), profit_rate)
+            ),
             now_ts=now_ts,
             context_fields={"sell_intercept_context": "final_loss_sell_before_fallback"},
         )
@@ -28046,7 +28072,7 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
             if str(exit_rule or "").strip() == "daily_limit_up_immediate_exit"
             else {}
         )
-        if _hard_stop_quote_revalidation_block(
+        if not hard_stop_revalidation_already_passed and _hard_stop_quote_revalidation_block(
             stock,
             code,
             exit_rule=exit_rule,
@@ -29771,6 +29797,7 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
         )
     else:
         swing_scale_micro_fields = _build_orderbook_micro_log_fields(None)
+
     scale_in_quote_refresh_fields = {}
     if strategy == "SCALPING" and not simulated_position:
         ws_data, pre_submit_ws_snapshot_refresh = _pre_submit_refresh_real_ws_snapshot(
@@ -29812,6 +29839,7 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
         refreshed_curr_price = _safe_int(ws_data.get('curr'), curr_price)
         if refreshed_curr_price > 0:
             curr_price = refreshed_curr_price
+
     rest_orderbook_refresh_applied = bool(
         scale_in_quote_refresh_fields.get("pre_submit_rest_orderbook_refresh_applied")
     )
@@ -29856,6 +29884,29 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
     scale_in_quote_refresh_non_price_source_fields = {
         key: value for key, value in scale_in_quote_refresh_fields.items() if key != "price_source"
     }
+    scale_in_quote_refresh_non_price_identity_fields = _without_event_field_collisions(
+        scale_in_quote_refresh_non_price_source_fields,
+        "canonical_mark_price",
+        "executable_buy_price",
+        "executable_sell_price",
+    )
+    scale_in_micro_fields_without_authority_collisions = _without_event_field_collisions(
+        swing_scale_micro_fields,
+        "actual_order_submitted",
+        "broker_order_forbidden",
+        "canonical_mark_price",
+        "decision_authority",
+        "executable_buy_price",
+        "executable_sell_price",
+        "forbidden_uses",
+        "metric_role",
+        "price_source",
+        "primary_decision_metric",
+        "runtime_effect",
+        "sample_floor",
+        "source_quality_gate",
+        "window_policy",
+    )
     quote_consistency_state = str(scale_in_quote_refresh_fields.get("quote_consistency_state") or "").strip().lower()
     defensive_avg_down_reason = (
         add_type == "AVG_DOWN"
@@ -29903,7 +29954,7 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
             ),
             **scale_in_quote_refresh_non_price_source_fields,
             **sim_funnel_fields,
-            **swing_scale_micro_fields,
+            **scale_in_micro_fields_without_authority_collisions,
         )
         log_info(
             f"[ADD_BLOCKED] {stock.get('name')}({code}) "
@@ -29934,6 +29985,7 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
             curr_price=curr_price,
             canonical_mark_price=canonical_mark_price,
             executable_buy_price=executable_buy_price,
+            executable_sell_price=scale_in_quote_refresh_fields.get("executable_sell_price"),
             price_source=scale_in_quote_refresh_fields.get("price_source"),
             threshold_family="defensive_avg_down_quote_consistency_bypass",
             decision_authority="real_scalping_defensive_avg_down_pre_sell_intercept",
@@ -29951,8 +30003,8 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
                 "non_defensive_avg_down|pyramid_scale_in|broker_guard_bypass|"
                 "hard_safety_bypass|second_avg_down_retry"
             ),
-            **scale_in_quote_refresh_non_price_source_fields,
-            **swing_scale_micro_fields,
+            **scale_in_quote_refresh_non_price_identity_fields,
+            **scale_in_micro_fields_without_authority_collisions,
         )
     price_resolution = resolve_scale_in_order_price(
         stock=stock,

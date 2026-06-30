@@ -31,7 +31,7 @@ MIN_STOP_RECOMMENDATION_EVALUATED_SAMPLE = 20
 
 STOP_LOSS_LOGIC_AUDIT_ORDER = [
     "preset_tp_loss_exit",
-    "protect_hard_trailing",
+    "protect_trailing",
     "scalp_hard_soft_stop",
     "mfe_protect",
     "bad_entry",
@@ -51,7 +51,6 @@ FORBIDDEN_USES = [
 
 HARD_SAFETY_TOKENS = (
     "hard_stop",
-    "protect_hard",
     "protect_trailing",
     "protect_profit",
     "preset_protect",
@@ -235,7 +234,7 @@ def _exit_family(row: dict[str, Any]) -> str:
     if "mfe_protect" in rule:
         return "mfe_protect"
     if "protect" in rule or "trailing" in rule:
-        return "protect_hard_trailing"
+        return "protect_trailing"
     if "bad_entry" in rule:
         return "bad_entry"
     if "open_reclaim" in rule or "scanner_fallback" in rule or "never_green" in rule:
@@ -394,7 +393,7 @@ def _recommend_stop_line(family: str, rows: list[dict[str, Any]]) -> dict[str, A
                 "rationale": "positive-MFE giveback exits should remain profit-protective; do not recommend a negative trigger that turns MFE protect into a late loss exit",
             }
         )
-    elif family == "protect_hard_trailing":
+    elif family == "protect_trailing":
         recommendation.update(
             {
                 "confidence": "thin_sample_directional",

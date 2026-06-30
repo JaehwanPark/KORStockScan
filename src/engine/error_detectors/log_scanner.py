@@ -52,6 +52,15 @@ _register_pattern(
     "MEMORY_ERROR",
     r"(?:\bmemory(?:error)?\b|\boom\b|out\s+of\s+memory|cannot\s+allocate\s+memory)",
 )
+_register_pattern(
+    "ORDER_REJECT",
+    r"(?:"
+    r"order.*reject|cancel_failed|"
+    r"매수거절|매도거절|취소거절|주문\s*거절|추가매수\s*주문\s*거절|"
+    r"주문\s*불가능|매도가능수량이\s*부족|"
+    r"sor.*주문|원주문이\s*krx주문이\s*아닙니다|원주문이\s*sor주문"
+    r")",
+)
 _register_pattern("UNKNOWN", r"(?:error|exception|critical|fatal)",)
 
 

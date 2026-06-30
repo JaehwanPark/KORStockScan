@@ -45,7 +45,6 @@ RECOVERY_ACTIVE_WIN_RATE_QUANTILE = 0.75
 RECOVERY_REBOUND_QUANTILE = 0.75
 HARD_PROTECT_EMERGENCY_RULE_MARKERS = (
     "emergency",
-    "protect_hard_stop",
     "scalp_hard_stop_pct",
     "scalp_preset_hard_stop_pct",
     "hard_stop",
@@ -60,7 +59,6 @@ STOP_LOSS_MARKERS = (
     "stop_loss",
     "hard_stop",
     "soft_stop",
-    "protect_hard_stop",
     "loss",
     "손절",
     "방어선",

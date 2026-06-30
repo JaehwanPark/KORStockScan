@@ -237,6 +237,30 @@ class TestLogScanner:
             assert errors == 3
             assert counter == {"UNKNOWN": 1, "MEMORY_ERROR": 2}
 
+    def test_scan_file_classifies_korean_broker_order_rejections(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            log_file = Path(tmpdir) / "kiwoom_orders_error.log"
+            log_file.write_text(
+                "\n".join([
+                    "[2026-06-30 15:50:14] 🚨 ERROR in kiwoom_orders: "
+                    "❌ [매수거절] 종목:000500, 사유:[2000](521790:주문 불가능합니다.) (코드:20)",
+                    "[2026-06-30 16:02:05] 🚨 ERROR in kiwoom_orders: "
+                    "❌ [취소거절] 281820: [2000](571412:SOR정정 및 취소주문은 원주문이 SOR주문인 경우 가능합니다.)",
+                    "[2026-06-30 08:42:37] 🚨 ERROR in sniper_state_handlers: "
+                    "❌ [매도거절] 제룡전기: [2000](800033:매도가능수량이 부족합니다. 0주 매도가능)",
+                    "[2026-06-30 16:56:56] 🚨 ERROR in sniper_state_handlers: "
+                    "❌ [에코프로비엠] 추가매수 주문 거절: [2000](521790:주문 불가능합니다.)",
+                ]),
+                encoding="utf-8",
+            )
+
+            scanner = LogScanner()
+            counter = __import__("collections").Counter()
+            errors, _, _ = scanner._scan_file(log_file, 0, counter)
+
+            assert errors == 4
+            assert counter == {"ORDER_REJECT": 4}
+
     def test_scan_file_no_change(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             log_file = Path(tmpdir) / "test_error.log"

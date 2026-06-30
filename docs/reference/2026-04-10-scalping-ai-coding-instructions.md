@@ -183,10 +183,10 @@
   - `src/engine/sniper_trade_review_report.py`
   - 필요 시 관련 테스트
 - 작업:
-  - `COMMON shadow-only`와 별개로 존재하는 live stop 계열을 정리한다.
+  - `COMMON shadow-only`와 별개로 존재하는 live hard/protect stop 계열을 정리한다.
+  - 2026-06-30 기준 price-field 기반 legacy protect-hard 런타임 분기는 제거됐고, `hard_stop_price`는 legacy schema/S15 TTL 호환 필드로만 유지한다.
   - 최소 분류:
     - `scalp_preset_hard_stop_pct`
-    - `protect_hard_stop`
     - `scalp_hard_stop_pct`
     - `hard_time_stop_shadow`
   - 각 exit rule이

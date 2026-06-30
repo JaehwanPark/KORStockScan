@@ -190,7 +190,7 @@
 | 항목 | 내용 |
 | --- | --- |
 | soft_stop 휩쏘 가설 | 소프트손절 후 `1m/3m/5m/10m/20m` 반등을 `rebound_above_sell`, `rebound_above_buy`, `mfe_ge_0_5`, `mfe_ge_1_0`로 분리한다. 매도가만 재상회하면 micro grace/확인유예 후보이고, 매수가까지 회복하면 cooldown live가 아니라 threshold/AI 재판정 후보로 본다. |
-| 하드스탑 위치 | `scalp_preset_hard_stop_pct`, `scalp_hard_stop_pct`, `protect_hard_stop`은 soft_stop보다 완화 우선순위를 낮춘다. 하드스탑은 극단 손실 방어선이므로 반등 사례가 있어도 `hard_stop_whipsaw_aux` 보조 관찰로만 두고, 바로 완화 canary로 올리지 않는다. |
+| 하드스탑 위치 | `scalp_preset_hard_stop_pct`, `scalp_hard_stop_pct`는 soft_stop보다 완화 우선순위를 낮춘다. 하드스탑은 극단 손실 방어선이므로 반등 사례가 있어도 `hard_stop_whipsaw_aux` 보조 관찰로만 두고, 바로 완화 canary로 올리지 않는다. `hard_stop_price`는 legacy schema/S15 TTL 호환 필드로만 유지한다. |
 | 하방카운트 위치 | `ai_low_score_hits`/`scalp_ai_early_exit`는 2026-04-27 기준 live 경로에서 제거했다. 기존 하방카운트는 가격 휩쏘 필터가 아니라 후행 AI 조기손절이라 soft_stop 보호장치로서 실효성이 낮았다. |
 | 4월 로그 해석 | 4월 하방카운트 `0/3` 또는 `0/4` 편중과 `3/3` 희소성은 제거 판단 근거로만 보존한다. 현재 soft_stop 해석은 `rebound_above_sell/buy`, `mfe_ge_*`, `same_symbol_reentry`, `hard_stop_auxiliary` 중심으로 고정한다. |
 
@@ -459,7 +459,7 @@
 | 제외 조건 | `reversal_add_used=True`, `POST_ADD_EVAL`, hard/emergency stop, `profit_rate <= -2.0%`, active sell order pending, invalid feature, REVERSAL_ADD 체결 포지션은 v2 적용에서 제외한다. |
 | 원인귀속 보존 | live 변경은 여러 전략 이름을 갖지만 `soft_stop_micro_grace v2` 하나의 canary owner로 묶는다. 개별 전략은 로그 필드와 cohort tag로 분리하고, 성과 판정은 v1 baseline과 v2 guarded cohort를 비교한다. |
 | rollback guard | guarded cohort 평균손익 `<= -0.30%`, guarded 후 hard/protect stop 전이, `sell_order_failed`, 또는 REVERSAL_ADD 체결 포지션 적용 1건 이상이면 v2를 OFF한다. |
-| 현재 상태 | 최종 집계 기준 `2026-04-30 12:00~15:30 KST`에서 `soft_stop_expert_shadow=58 / unique 11`, `adverse_fill_observed=58 / unique 11`, `soft_stop_absorption_probe=7 / unique 6`, `extend=1`, `recovered=1`, `exit=6`이었다. v2 touched `11`개 중 profit 확인 `10`개 평균은 `-1.567%`이고 exit rule은 `scalp_soft_stop_pct=9`, `scalp_trailing_take_profit=1`이다. `sell_order_failed`, `protect_hard_stop`, `protect_trailing_stop`, `reversal_add_used` 혼입은 없었다. |
+| 현재 상태 | 최종 집계 기준 `2026-04-30 12:00~15:30 KST`에서 `soft_stop_expert_shadow=58 / unique 11`, `adverse_fill_observed=58 / unique 11`, `soft_stop_absorption_probe=7 / unique 6`, `extend=1`, `recovered=1`, `exit=6`이었다. v2 touched `11`개 중 profit 확인 `10`개 평균은 `-1.567%`이고 exit rule은 `scalp_soft_stop_pct=9`, `scalp_trailing_take_profit=1`이다. `sell_order_failed`, `protect_trailing_stop`, `reversal_add_used` 혼입은 없었다. |
 | 후속 액션 | 다음 운영일에는 새 live 축을 v2로 이어가지 않는다. v2 로그는 손실 flow taxonomy(`bad_entry/never-green`, 동일종목 반복손실, positive peak 후 soft stop, v2 guarded, preset hard`)와 refined `bad_entry` canary 설계 근거로만 사용한다. |
 | Source | [2026-04-30-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/checklists/2026-04-30-stage2-todo-checklist.md), [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md) |
 
@@ -473,7 +473,7 @@
 | 적용 상태 | `2026-04-30 12:00~15:30 KST` v2 live 수집에 포함됐다. 다음 재승인 전에는 live가 아니라 v2 로그 해석용 계층이다. |
 | 우선순위 | emergency/hard stop과 active sell pending은 항상 우선한다. 그 다음 thesis invalidation veto를 보고, veto가 없고 absorption score가 충분할 때만 soft stop 20초 1회 유예를 허용한다. |
 | 기대효과 | 서로 다른 방어전략이 동시에 발동해 `유예`, `추가매수`, `트레일링`, `감산`이 섞이는 것을 막아 원인귀속을 보존한다. |
-| 현재 상태 | 동작 자체는 정상이다. 최종 집계에서도 `reversal_add_used` 혼입 `0건`, `sell_order_failed=0`, `protect_hard_stop=0`, `protect_trailing_stop=0`이라 arbitration 오염은 없었다. 다만 오염이 없었다는 것은 v2를 계속 켤 근거가 아니라, v2가 손실 flow를 잘 분류했다는 근거에 가깝다. |
+| 현재 상태 | 동작 자체는 정상이다. 최종 집계에서도 `reversal_add_used` 혼입 `0건`, `sell_order_failed=0`, `protect_trailing_stop=0`이라 arbitration 오염은 없었다. 다만 오염이 없었다는 것은 v2를 계속 켤 근거가 아니라, v2가 손실 flow를 잘 분류했다는 근거에 가깝다. |
 | 실패 신호 | excluded cohort에 v2가 적용되거나, active sell pending 상태에서 추가 유예가 찍히면 즉시 구현/운영 오류로 본다. |
 | 다음 액션 | `soft_stop_absorption_probe/extend/exit` 로그에서 `expert_exclusion_reason`과 `reversal_add_used` 제외가 지켜지는지 확인한다. |
 

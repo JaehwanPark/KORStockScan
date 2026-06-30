@@ -464,10 +464,9 @@ def test_micro_recovery_confirmed_does_not_release_market_risk_off():
     assert "microstructure recovery confirmed but market risk-off remains" in reasons
 
 
-def test_hard_protect_emergency_exits_are_never_confirmation_eligible():
+def test_hard_emergency_exits_are_never_confirmation_eligible():
     hard_rows = [
         _event("10:00:00", fields={"exit_rule": "scalp_hard_stop_pct"}),
-        _event("10:01:00", fields={"exit_rule": "protect_hard_stop"}),
         _event("10:02:00", fields={"exit_rule": "emergency_stop"}),
     ]
     eligible_rows = [

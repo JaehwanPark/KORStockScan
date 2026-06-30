@@ -26,7 +26,6 @@ REPORT_DIRNAME = "panic_buying"
 TP_RULE_MARKERS = ("take_profit", "trailing", "preset_tp", "익절", "profit")
 HARD_PROTECT_EMERGENCY_RULE_MARKERS = (
     "emergency",
-    "protect_hard_stop",
     "scalp_hard_stop_pct",
     "scalp_preset_hard_stop_pct",
     "hard_stop",

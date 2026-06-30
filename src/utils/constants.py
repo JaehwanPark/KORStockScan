@@ -196,6 +196,8 @@ class TradingConfig:
     SELL_SIDE_OPEN_TIME_BLOCK_ENABLED: bool = False  # real SCALPING discretionary SELL 장초반 제출 차단
     SELL_SIDE_OPEN_TIME_BLOCK_UNTIL_HHMM: str = "09:03"  # KST 기준, 이 시각 전 SELL 제출 차단
     SELL_SIDE_OPEN_TIME_BLOCK_SCOPE: str = "discretionary_exit_only"
+    SELL_WINDOWS: str = ""  # 설정 시 real SELL 제출 허용 시간창. 비어 있으면 기존 open-time block 사용
+    SCALPING_SELL_WINDOWS: str = ""  # legacy alias for SELL_WINDOWS
 
     # 💡 [신규 추가] 스윙 AI 동적 비중 조절용 (Min~Max)
     INVEST_RATIO_KOSDAQ_MIN: float = 0.05  # 코스닥 AI 점수 60점일 때 (5%)
@@ -3030,6 +3032,8 @@ def _build_trading_rules() -> TradingConfig:
     env_sell_side_open_time_block_scope = _env_str(
         "KORSTOCKSCAN_SELL_SIDE_OPEN_TIME_BLOCK_SCOPE"
     )
+    env_scalping_sell_windows = _env_str("KORSTOCKSCAN_SCALPING_SELL_WINDOWS")
+    env_sell_windows = _env_str("KORSTOCKSCAN_SELL_WINDOWS")
     env_scale_in_price_resolver_enabled = _env_bool(
         "KORSTOCKSCAN_SCALPING_SCALE_IN_PRICE_RESOLVER_ENABLED"
     )
@@ -3477,6 +3481,12 @@ def _build_trading_rules() -> TradingConfig:
             SELL_SIDE_OPEN_TIME_BLOCK_SCOPE=env_sell_side_open_time_block_scope
             if env_sell_side_open_time_block_scope is not None
             else config.SELL_SIDE_OPEN_TIME_BLOCK_SCOPE,
+            SELL_WINDOWS=env_sell_windows
+            if env_sell_windows is not None
+            else config.SELL_WINDOWS,
+            SCALPING_SELL_WINDOWS=env_scalping_sell_windows
+            if env_scalping_sell_windows is not None
+            else config.SCALPING_SELL_WINDOWS,
             SCALPING_SCALE_IN_PRICE_RESOLVER_ENABLED=env_scale_in_price_resolver_enabled
             if env_scale_in_price_resolver_enabled is not None
             else config.SCALPING_SCALE_IN_PRICE_RESOLVER_ENABLED,

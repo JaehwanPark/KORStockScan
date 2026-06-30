@@ -426,18 +426,6 @@ def _apply_overnight_flow_override(record, mem_stock, ws_data, ctx, decision, ai
         )
         return decision
 
-    hard_stop_price = _safe_float((mem_stock or {}).get("hard_stop_price"), 0.0)
-    if hard_stop_price > 0 and curr_price <= hard_stop_price:
-        _log_holding_pipeline(
-            name,
-            code,
-            "overnight_flow_override_skip",
-            skip_reason="hard_stop_risk",
-            curr_price=f"{curr_price:.2f}",
-            hard_stop_price=f"{hard_stop_price:.2f}",
-        )
-        return decision
-
     if str(getattr(record, "status", "") or "").upper() == "SELL_ORDERED":
         ord_no = ((mem_stock or {}).get("sell_odno") or (mem_stock or {}).get("sell_ord_no") or "")
         if not ord_no:

@@ -765,6 +765,19 @@ def _parse_hhmmss_time(raw_value):
 
 def _scalping_buy_windows():
     raw_windows = str(getattr(TRADING_RULES, "SCALPING_BUY_WINDOWS", "") or "").strip()
+    return _parse_time_windows(raw_windows)
+
+
+def _sell_windows():
+    raw_windows = str(
+        getattr(TRADING_RULES, "SELL_WINDOWS", "")
+        or getattr(TRADING_RULES, "SCALPING_SELL_WINDOWS", "")
+        or ""
+    ).strip()
+    return _parse_time_windows(raw_windows)
+
+
+def _parse_time_windows(raw_windows):
     windows = []
     for token in raw_windows.split(","):
         token = token.strip()
@@ -789,6 +802,22 @@ def _inside_scalping_buy_window(now_t) -> bool:
     return any(_time_in_window(now_t, start, end) for start, end in _scalping_buy_windows())
 
 
+def _inside_sell_window(now_t) -> bool:
+    return any(_time_in_window(now_t, start, end) for start, end in _sell_windows())
+
+
+def is_scalping_buy_window_blocked(now=None) -> bool:
+    if not bool(getattr(TRADING_RULES, "BUY_SIDE_TIME_BLOCK_ENABLED", True)):
+        return False
+    if not _scalping_buy_windows():
+        return False
+    current = now or datetime.now(KST)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=KST)
+    current_kst = current.astimezone(KST)
+    return not _inside_scalping_buy_window(current_kst.time())
+
+
 def is_buy_side_time_blocked(now=None) -> bool:
     if not bool(getattr(TRADING_RULES, "BUY_SIDE_TIME_BLOCK_ENABLED", True)):
         return False
@@ -797,6 +826,8 @@ def is_buy_side_time_blocked(now=None) -> bool:
         current = current.replace(tzinfo=KST)
     current_kst = current.astimezone(KST)
     current_time = current_kst.time()
+    if is_scalping_buy_window_blocked(current_kst):
+        return True
     if current_time < _buy_time_block_cutoff() and _inside_scalping_buy_window(current_time):
         return False
     return current_time < _buy_time_block_cutoff()
@@ -804,6 +835,15 @@ def is_buy_side_time_blocked(now=None) -> bool:
 
 def get_buy_side_time_block_label() -> str:
     cutoff = _buy_time_block_cutoff()
+    buy_windows = _scalping_buy_windows()
+    if buy_windows:
+        windows_text = ",".join(
+            f"{start.strftime('%H:%M:%S')}-{end.strftime('%H:%M:%S')}" for start, end in buy_windows
+        )
+        return (
+            "real BUY 허용 시간창 밖 차단 또는 신규 매수 및 추가매수 시간 차단 "
+            f"(KST {cutoff.strftime('%H:%M')} 전, BUY windows {windows_text})"
+        )
     return (
         "신규 매수 및 추가매수 시간 차단 "
         f"(KST {cutoff.strftime('%H:%M')} 전)"
@@ -828,12 +868,20 @@ def _sell_side_open_time_scope() -> str:
     ).strip() or "discretionary_exit_only"
 
 
+def _sell_side_scope_applies_to_all() -> bool:
+    return _sell_side_open_time_scope().lower() in {"all", "all_exit", "all_sells", "all_sell"}
+
+
 def _sell_side_open_time_strategy_allowed(strategy=None) -> bool:
+    if _sell_side_scope_applies_to_all():
+        return True
     strategy_key = str(strategy or "").strip().upper()
     return strategy_key in {"SCALPING", "SCALP"}
 
 
 def sell_side_open_time_passthrough_reason(reason_type=None) -> str:
+    if _sell_side_scope_applies_to_all():
+        return ""
     reason_key = str(reason_type or "").strip().upper()
     if not reason_key:
         return "scope_unknown_passthrough"
@@ -866,11 +914,20 @@ def is_sell_side_open_time_blocked(now=None, reason_type=None, strategy=None) ->
     if current.tzinfo is None:
         current = current.replace(tzinfo=KST)
     current_kst = current.astimezone(KST)
+    current_time = current_kst.time()
+    if _sell_windows():
+        return not _inside_sell_window(current_time)
     return current_kst.time() < _sell_side_open_time_block_cutoff()
 
 
 def get_sell_side_open_time_block_label() -> str:
     cutoff = _sell_side_open_time_block_cutoff()
+    sell_windows = _sell_windows()
+    if sell_windows:
+        windows_text = ",".join(
+            f"{start.strftime('%H:%M:%S')}-{end.strftime('%H:%M:%S')}" for start, end in sell_windows
+        )
+        return f"real SELL 허용 시간창 밖 차단 (KST {windows_text})"
     return (
         "real SCALPING 장초반 discretionary 매도 시간 차단 "
         f"(KST {cutoff.strftime('%H:%M')} 전)"
@@ -886,14 +943,22 @@ def get_sell_side_open_time_block_fields(now=None, reason_type=None, strategy=No
     current_kst = current.astimezone(KST)
     enabled = bool(getattr(TRADING_RULES, "SELL_SIDE_OPEN_TIME_BLOCK_ENABLED", False))
     strategy_allowed = _sell_side_open_time_strategy_allowed(strategy)
-    before_cutoff = current_kst.time() < cutoff
-    applied = bool(enabled and strategy_allowed and not passthrough_reason and before_cutoff)
+    current_time = current_kst.time()
+    sell_windows = _sell_windows()
+    inside_sell_window = _inside_sell_window(current_time) if sell_windows else True
+    before_cutoff = current_time < cutoff
+    blocked_by_time = not inside_sell_window if sell_windows else before_cutoff
+    applied = bool(enabled and strategy_allowed and not passthrough_reason and blocked_by_time)
     return {
         "runtime_family": "sell_side_open_time_block_runtime",
         "policy_version": "sell_side_open_time_block_v1",
         "sell_time_block_enabled": enabled,
         "sell_time_block_until_hhmm": cutoff.strftime("%H:%M"),
         "sell_time_block_scope": _sell_side_open_time_scope(),
+        "sell_windows": ",".join(
+            f"{start.strftime('%H:%M:%S')}-{end.strftime('%H:%M:%S')}" for start, end in sell_windows
+        ),
+        "sell_time_block_inside_sell_window": inside_sell_window,
         "sell_reason_type": str(reason_type or ""),
         "sell_time_block_checked": True,
         "sell_time_block_strategy": str(strategy or ""),
@@ -940,6 +1005,9 @@ def send_buy_order_market(
             "ord_no": "",
         }
 
+    buy_window_blocked = is_scalping_buy_window_blocked()
+    if buy_window_blocked:
+        allow_time_block_override = False
     buy_time_blocked = is_buy_side_time_blocked()
     if buy_time_blocked and not allow_time_block_override:
         clean_code = str(code)[:6]

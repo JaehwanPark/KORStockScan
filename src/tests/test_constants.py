@@ -219,22 +219,38 @@ def test_trading_rules_sell_side_open_time_block_default_off_and_env_override(mo
     monkeypatch.delenv("KORSTOCKSCAN_SELL_SIDE_OPEN_TIME_BLOCK_ENABLED", raising=False)
     monkeypatch.delenv("KORSTOCKSCAN_SELL_SIDE_OPEN_TIME_BLOCK_UNTIL_HHMM", raising=False)
     monkeypatch.delenv("KORSTOCKSCAN_SELL_SIDE_OPEN_TIME_BLOCK_SCOPE", raising=False)
+    monkeypatch.delenv("KORSTOCKSCAN_SELL_WINDOWS", raising=False)
+    monkeypatch.delenv("KORSTOCKSCAN_SCALPING_SELL_WINDOWS", raising=False)
 
     reloaded = importlib.reload(constants)
 
     assert reloaded.TRADING_RULES.SELL_SIDE_OPEN_TIME_BLOCK_ENABLED is False
     assert reloaded.TRADING_RULES.SELL_SIDE_OPEN_TIME_BLOCK_UNTIL_HHMM == "09:03"
     assert reloaded.TRADING_RULES.SELL_SIDE_OPEN_TIME_BLOCK_SCOPE == "discretionary_exit_only"
+    assert reloaded.TRADING_RULES.SELL_WINDOWS == ""
+    assert reloaded.TRADING_RULES.SCALPING_SELL_WINDOWS == ""
 
     monkeypatch.setenv("KORSTOCKSCAN_SELL_SIDE_OPEN_TIME_BLOCK_ENABLED", "true")
     monkeypatch.setenv("KORSTOCKSCAN_SELL_SIDE_OPEN_TIME_BLOCK_UNTIL_HHMM", "09:05")
-    monkeypatch.setenv("KORSTOCKSCAN_SELL_SIDE_OPEN_TIME_BLOCK_SCOPE", "discretionary_exit_only")
+    monkeypatch.setenv("KORSTOCKSCAN_SELL_SIDE_OPEN_TIME_BLOCK_SCOPE", "all")
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_SELL_WINDOWS",
+        "08:05:00-08:49:00,09:05:00-15:19:00,16:05:00-19:49:00",
+    )
 
     reloaded = importlib.reload(constants)
 
     assert reloaded.TRADING_RULES.SELL_SIDE_OPEN_TIME_BLOCK_ENABLED is True
     assert reloaded.TRADING_RULES.SELL_SIDE_OPEN_TIME_BLOCK_UNTIL_HHMM == "09:05"
-    assert reloaded.TRADING_RULES.SELL_SIDE_OPEN_TIME_BLOCK_SCOPE == "discretionary_exit_only"
+    assert reloaded.TRADING_RULES.SELL_SIDE_OPEN_TIME_BLOCK_SCOPE == "all"
+    assert (
+        reloaded.TRADING_RULES.SELL_WINDOWS
+        == "08:05:00-08:49:00,09:05:00-15:19:00,16:05:00-19:49:00"
+    )
+    assert (
+        reloaded.TRADING_RULES.SCALPING_SELL_WINDOWS
+        == ""
+    )
 
 
 def test_trading_rules_sell_order_failure_retry_backoff_default_on_and_env_override(monkeypatch):
