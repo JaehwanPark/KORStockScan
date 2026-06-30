@@ -83,6 +83,9 @@ ACTIVE_SIM_PRIORITY_QUOTA_POLICY_VERSION = "active_parent_seed_targeted_quota_v1
 ACTIVE_SIM_PRIORITY_TOTAL_SHARE_PCT = 35
 ACTIVE_SIM_PRIORITY_PER_SEED_DAILY_LIMIT = 20
 ACTIVE_SIM_PRIORITY_SAMPLE_GOAL_PER_BUCKET = 10
+ACTIVE_SIM_PRIORITY_COMPLETE_FLOW_GOAL_PER_BUCKET = 5
+ACTIVE_SIM_PRIORITY_CONFLICT_CHILD_SAMPLE_GOAL = 5
+STAGE_COUNTERFACTUAL_VARIANT_PLAN_VERSION = "stage_counterfactual_variant_plan_v1"
 LDM_REFINEMENT_CONSUMER = "lifecycle_bucket_discovery"
 LDM_REFINEMENT_SCHEMA_VERSION = "ldm_hypothesis_parent_refinement_v1"
 LDM_REFINEMENT_CLOSURE_STATUSES = {
@@ -1838,6 +1841,160 @@ def _active_sim_priority_targeted_quota(parent: dict[str, Any], *, eligible: boo
     }
 
 
+def _positive_ev_stage_sampling_plan(parent: dict[str, Any], *, eligible: bool) -> dict[str, Any]:
+    dimensions = parent.get("dimension_filters") if isinstance(parent.get("dimension_filters"), dict) else {}
+    joined_sample = _safe_int(parent.get("parent_joined_sample"))
+    complete_flow_count = _safe_int(parent.get("complete_flow_count"))
+    missing_complete_flow = max(0, ACTIVE_SIM_PRIORITY_COMPLETE_FLOW_GOAL_PER_BUCKET - complete_flow_count)
+    missing_parent_sample = max(0, ACTIVE_SIM_PRIORITY_SAMPLE_GOAL_PER_BUCKET - joined_sample)
+    observable_prefix = _observable_prefix_for_parent(dimensions)
+    return {
+        "schema_version": "positive_ev_stage_sampling_plan_v1",
+        "sampling_scope": "positive_ev_parent_stage_completion",
+        "sample_goal_per_bucket": ACTIVE_SIM_PRIORITY_SAMPLE_GOAL_PER_BUCKET,
+        "complete_flow_goal_per_bucket": ACTIVE_SIM_PRIORITY_COMPLETE_FLOW_GOAL_PER_BUCKET,
+        "current_parent_joined_sample": joined_sample,
+        "current_complete_flow_count": complete_flow_count,
+        "additional_parent_sample_needed": missing_parent_sample,
+        "additional_complete_flow_needed": missing_complete_flow,
+        "runtime_match_fields": observable_prefix,
+        "runtime_match_forbidden_fields": [
+            "exit_outcome_parent",
+            "major_holding_parent",
+            "scale_in_parent",
+        ],
+        "stage_targets": [
+            {
+                "stage": "entry",
+                "goal": "revisit_positive_prefix_candidates",
+                "match_role": "runtime_observable_prefix",
+            },
+            {
+                "stage": "submit",
+                "goal": "preserve_pre_submit_guard_verdict_and_revalidation",
+                "match_role": "runtime_observable_prefix_when_available",
+            },
+            {
+                "stage": "holding",
+                "goal": "attach_holding_outcome_to_candidate_identity",
+                "match_role": "post_observation_validation_only",
+            },
+            {
+                "stage": "exit",
+                "goal": "attach_exit_outcome_to_candidate_identity",
+                "match_role": "post_observation_validation_only",
+            },
+            {
+                "stage": "scale_in",
+                "goal": "separate_none_avg_down_pyramid_observation",
+                "match_role": "post_observation_validation_only",
+            },
+        ],
+        "priority_reason": (
+            "eligible_positive_parent_needs_complete_flow"
+            if eligible and missing_complete_flow > 0
+            else "eligible_positive_parent_needs_more_samples"
+            if eligible and missing_parent_sample > 0
+            else "metadata_only_until_parent_requalifies"
+        ),
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+    }
+
+
+def _child_conflict_stratified_targets(parent: dict[str, Any]) -> dict[str, Any]:
+    conflict_patterns = [
+        item
+        for item in (parent.get("conflicting_child_patterns") or [])
+        if isinstance(item, dict) and str(item.get("bucket_id") or "").strip()
+    ]
+    strata: list[dict[str, Any]] = []
+    for item in conflict_patterns:
+        joined_sample = _safe_int(item.get("joined_sample"))
+        strata.append(
+            {
+                "child_bucket_id": item.get("bucket_id"),
+                "child_bucket_key": item.get("bucket_key"),
+                "current_joined_sample": joined_sample,
+                "sample_goal": ACTIVE_SIM_PRIORITY_CONFLICT_CHILD_SAMPLE_GOAL,
+                "additional_sample_needed": max(
+                    0,
+                    ACTIVE_SIM_PRIORITY_CONFLICT_CHILD_SAMPLE_GOAL - joined_sample,
+                ),
+                "source_quality_adjusted_ev_pct": _safe_float(
+                    item.get("source_quality_adjusted_ev_pct"), None
+                ),
+                "collection_role": "conflict_child_stratum",
+                "runtime_consumption_allowed": False,
+                "post_observation_validation_only": True,
+            }
+        )
+    return {
+        "schema_version": "child_conflict_stratified_sampling_v1",
+        "enabled": bool(parent.get("child_conflict_warning")) and bool(strata),
+        "sample_goal_per_conflict_child": ACTIVE_SIM_PRIORITY_CONFLICT_CHILD_SAMPLE_GOAL,
+        "strata": strata,
+        "resolution_policy": "collect_until_child_floor_before_exclusion_or_live_authority",
+        "runtime_match_fields": _observable_prefix_for_parent(
+            parent.get("dimension_filters") if isinstance(parent.get("dimension_filters"), dict) else {}
+        ),
+        "post_observation_dimensions_only": [
+            "holding",
+            "exit",
+            "scale_in",
+            "profit",
+        ],
+        "runtime_consumption_allowed": False,
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+    }
+
+
+def _stage_counterfactual_variant_plan(parent: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "schema_version": STAGE_COUNTERFACTUAL_VARIANT_PLAN_VERSION,
+        "variant_scope": "source_only_stage_counterfactual_separation",
+        "variants": [
+            {
+                "stage": "entry",
+                "variant_axis": "entry_candidate_accept_wait_drop",
+                "metric_role": "sim_probe_ev",
+            },
+            {
+                "stage": "submit",
+                "variant_axis": "submit_guard_pass_block_counterfactual",
+                "metric_role": "sim_probe_ev",
+            },
+            {
+                "stage": "holding",
+                "variant_axis": "holding_wait_exit_counterfactual",
+                "metric_role": "sim_probe_ev",
+            },
+            {
+                "stage": "exit",
+                "variant_axis": "soft_stop_take_profit_trailing_counterfactual",
+                "metric_role": "sim_probe_ev",
+            },
+            {
+                "stage": "scale_in",
+                "variant_axis": "none_avg_down_pyramid_counterfactual",
+                "metric_role": "sim_probe_ev",
+            },
+        ],
+        "primary_decision_metric": "source_quality_adjusted_ev_pct",
+        "forbidden_uses": list(BASE_FORBIDDEN_USES),
+        "source_parent_bucket_id": parent.get("source_parent_bucket_id") or parent.get("parent_bucket_id"),
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+    }
+
+
 def _ldm_refinement_report_path(target_date: str) -> Path:
     return LDM_REFINEMENT_REPORT_DIR / f"ldm_hypothesis_parent_refinement_{target_date}.json"
 
@@ -2149,6 +2306,9 @@ def _build_active_sim_priority_seeds(report: dict[str, Any]) -> list[dict[str, A
             "complete_flow_count": complete_flow_count,
             "active_collection_reason": active_collection_reason,
             "targeted_sim_quota": _active_sim_priority_targeted_quota(parent, eligible=eligible),
+            "positive_ev_stage_sampling_plan": _positive_ev_stage_sampling_plan(parent, eligible=eligible),
+            "child_conflict_stratified_targets": _child_conflict_stratified_targets(parent),
+            "stage_counterfactual_variant_plan": _stage_counterfactual_variant_plan(parent),
             "live_conversion_blocked_reason": live_conversion_blocked_reason,
             "ldm_refinement_pressure_summary": {
                 "input_count": len(ldm_pressure_items),
@@ -2216,6 +2376,54 @@ def _build_active_sim_priority_seeds(report: dict[str, Any]) -> list[dict[str, A
                 "sample_goal_per_bucket": ACTIVE_SIM_PRIORITY_SAMPLE_GOAL_PER_BUCKET,
                 "needs_revisit_sample": True,
                 "reason": "previous_seed_carried_forward_metadata_only",
+                "runtime_effect": False,
+                "allowed_runtime_apply": False,
+                "actual_order_submitted": False,
+                "broker_order_forbidden": True,
+            },
+        )
+        seed.setdefault(
+            "positive_ev_stage_sampling_plan",
+            {
+                "schema_version": "positive_ev_stage_sampling_plan_v1",
+                "sampling_scope": "carried_forward_positive_ev_parent_stage_completion",
+                "sample_goal_per_bucket": ACTIVE_SIM_PRIORITY_SAMPLE_GOAL_PER_BUCKET,
+                "complete_flow_goal_per_bucket": ACTIVE_SIM_PRIORITY_COMPLETE_FLOW_GOAL_PER_BUCKET,
+                "runtime_match_fields": seed.get("observable_prefix") if isinstance(seed.get("observable_prefix"), dict) else {},
+                "runtime_match_forbidden_fields": [
+                    "exit_outcome_parent",
+                    "major_holding_parent",
+                    "scale_in_parent",
+                ],
+                "stage_targets": [],
+                "priority_reason": "previous_seed_carried_forward_metadata_only",
+                "runtime_effect": False,
+                "allowed_runtime_apply": False,
+                "actual_order_submitted": False,
+                "broker_order_forbidden": True,
+            },
+        )
+        seed.setdefault(
+            "child_conflict_stratified_targets",
+            {
+                "schema_version": "child_conflict_stratified_sampling_v1",
+                "enabled": False,
+                "sample_goal_per_conflict_child": ACTIVE_SIM_PRIORITY_CONFLICT_CHILD_SAMPLE_GOAL,
+                "strata": [],
+                "resolution_policy": "collect_until_child_floor_before_exclusion_or_live_authority",
+                "runtime_effect": False,
+                "allowed_runtime_apply": False,
+                "actual_order_submitted": False,
+                "broker_order_forbidden": True,
+            },
+        )
+        seed.setdefault(
+            "stage_counterfactual_variant_plan",
+            {
+                "schema_version": STAGE_COUNTERFACTUAL_VARIANT_PLAN_VERSION,
+                "variant_scope": "source_only_stage_counterfactual_separation",
+                "variants": [],
+                "forbidden_uses": list(BASE_FORBIDDEN_USES),
                 "runtime_effect": False,
                 "allowed_runtime_apply": False,
                 "actual_order_submitted": False,
@@ -2321,6 +2529,22 @@ def _active_sim_priority_diagnostics(report: dict[str, Any], seeds: list[dict[st
         if str(seed.get("status") or "") == "active"
         and bool((seed.get("targeted_sim_quota") or {}).get("needs_revisit_sample"))
     )
+    active_complete_flow_need_count = sum(
+        1
+        for seed in seeds
+        if str(seed.get("status") or "") == "active"
+        and _safe_int((seed.get("positive_ev_stage_sampling_plan") or {}).get("additional_complete_flow_needed")) > 0
+    )
+    active_conflict_strata_count = sum(
+        len((seed.get("child_conflict_stratified_targets") or {}).get("strata") or [])
+        for seed in seeds
+        if str(seed.get("status") or "") == "active"
+    )
+    active_counterfactual_variant_count = sum(
+        len((seed.get("stage_counterfactual_variant_plan") or {}).get("variants") or [])
+        for seed in seeds
+        if str(seed.get("status") or "") == "active"
+    )
     return {
         "active_sim_priority_eligible_count": eligible_count,
         "active_sim_priority_blocked_nonpositive_ev_count": blocked_nonpositive_ev_count,
@@ -2333,6 +2557,10 @@ def _active_sim_priority_diagnostics(report: dict[str, Any], seeds: list[dict[st
         "active_sim_priority_targeted_total_share_pct": ACTIVE_SIM_PRIORITY_TOTAL_SHARE_PCT,
         "active_sim_priority_targeted_per_seed_daily_limit": ACTIVE_SIM_PRIORITY_PER_SEED_DAILY_LIMIT,
         "active_sim_priority_sample_goal_per_bucket": ACTIVE_SIM_PRIORITY_SAMPLE_GOAL_PER_BUCKET,
+        "active_sim_priority_complete_flow_goal_per_bucket": ACTIVE_SIM_PRIORITY_COMPLETE_FLOW_GOAL_PER_BUCKET,
+        "active_sim_priority_complete_flow_need_count": active_complete_flow_need_count,
+        "active_sim_priority_conflict_child_strata_count": active_conflict_strata_count,
+        "active_sim_priority_stage_counterfactual_variant_count": active_counterfactual_variant_count,
     }
 
 
@@ -4835,6 +5063,15 @@ def _write_catalog(report: dict[str, Any]) -> None:
             "daily_total_share_pct": ACTIVE_SIM_PRIORITY_TOTAL_SHARE_PCT,
             "per_seed_daily_limit": ACTIVE_SIM_PRIORITY_PER_SEED_DAILY_LIMIT,
             "sample_goal_per_bucket": ACTIVE_SIM_PRIORITY_SAMPLE_GOAL_PER_BUCKET,
+            "complete_flow_goal_per_bucket": ACTIVE_SIM_PRIORITY_COMPLETE_FLOW_GOAL_PER_BUCKET,
+            "conflict_child_sample_goal": ACTIVE_SIM_PRIORITY_CONFLICT_CHILD_SAMPLE_GOAL,
+            "stage_counterfactual_variant_plan_version": STAGE_COUNTERFACTUAL_VARIANT_PLAN_VERSION,
+            "runtime_match_policy": "observable_prefix_only",
+            "post_observation_validation_dimensions": [
+                "exit_outcome_parent",
+                "major_holding_parent",
+                "scale_in_parent",
+            ],
             "runtime_effect": False,
             "allowed_runtime_apply": False,
             "actual_order_submitted": False,
@@ -4910,6 +5147,15 @@ def _write_sim_auto_approval(report: dict[str, Any]) -> None:
             "daily_total_share_pct": ACTIVE_SIM_PRIORITY_TOTAL_SHARE_PCT,
             "per_seed_daily_limit": ACTIVE_SIM_PRIORITY_PER_SEED_DAILY_LIMIT,
             "sample_goal_per_bucket": ACTIVE_SIM_PRIORITY_SAMPLE_GOAL_PER_BUCKET,
+            "complete_flow_goal_per_bucket": ACTIVE_SIM_PRIORITY_COMPLETE_FLOW_GOAL_PER_BUCKET,
+            "conflict_child_sample_goal": ACTIVE_SIM_PRIORITY_CONFLICT_CHILD_SAMPLE_GOAL,
+            "stage_counterfactual_variant_plan_version": STAGE_COUNTERFACTUAL_VARIANT_PLAN_VERSION,
+            "runtime_match_policy": "observable_prefix_only",
+            "post_observation_validation_dimensions": [
+                "exit_outcome_parent",
+                "major_holding_parent",
+                "scale_in_parent",
+            ],
             "runtime_effect": False,
             "allowed_runtime_apply": False,
             "actual_order_submitted": False,

@@ -168,6 +168,21 @@ def test_active_sim_priority_seed_uses_observable_prefix_only(tmp_path, monkeypa
         "major_holding_parent": "holding_whipsaw_recovery",
         "scale_in_parent": "scale_in_absent",
     }
+    plan = active["positive_ev_stage_sampling_plan"]
+    assert plan["sampling_scope"] == "positive_ev_parent_stage_completion"
+    assert plan["runtime_match_fields"] == active["observable_prefix"]
+    assert "exit_outcome_parent" in plan["runtime_match_forbidden_fields"]
+    assert {item["stage"] for item in plan["stage_targets"]} == {
+        "entry",
+        "submit",
+        "holding",
+        "exit",
+        "scale_in",
+    }
+    assert plan["actual_order_submitted"] is False
+    assert plan["broker_order_forbidden"] is True
+    assert active["stage_counterfactual_variant_plan"]["schema_version"] == "stage_counterfactual_variant_plan_v1"
+    assert len(active["stage_counterfactual_variant_plan"]["variants"]) == 5
     assert active["actual_order_submitted"] is False
     assert active["broker_order_forbidden"] is True
     cooldown = next(seed for seed in seeds if seed["source_parent_bucket_id"] == "parent_nonpositive")
@@ -862,6 +877,9 @@ def test_active_sim_priority_summary_exposes_collection_and_live_blockers(monkey
     assert report["summary"]["active_sim_priority_targeted_total_share_pct"] == 35
     assert report["summary"]["active_sim_priority_targeted_per_seed_daily_limit"] == 20
     assert report["summary"]["active_sim_priority_sample_goal_per_bucket"] == 10
+    assert report["summary"]["active_sim_priority_complete_flow_goal_per_bucket"] == 5
+    assert report["summary"]["active_sim_priority_complete_flow_need_count"] == 1
+    assert report["summary"]["active_sim_priority_stage_counterfactual_variant_count"] == 5
     assert report["summary"]["positive_parent_count"] == 1
     assert report["summary"]["positive_parent_sample_ready_count"] == 0
     assert report["summary"]["top_positive_parent_buckets"][0]["parent_ev_pct"] == 1.2
@@ -873,8 +891,59 @@ def test_active_sim_priority_summary_exposes_collection_and_live_blockers(monkey
     assert seed["targeted_sim_quota"]["per_seed_daily_limit"] == 20
     assert seed["targeted_sim_quota"]["sample_goal_per_bucket"] == 10
     assert seed["targeted_sim_quota"]["needs_revisit_sample"] is True
+    assert seed["positive_ev_stage_sampling_plan"]["additional_complete_flow_needed"] == 5
+    assert seed["positive_ev_stage_sampling_plan"]["runtime_match_fields"] == seed["observable_prefix"]
+    assert seed["positive_ev_stage_sampling_plan"]["runtime_effect"] is False
+    assert seed["stage_counterfactual_variant_plan"]["actual_order_submitted"] is False
     assert seed["targeted_sim_quota"]["actual_order_submitted"] is False
     assert seed["targeted_sim_quota"]["broker_order_forbidden"] is True
+
+
+def test_active_sim_priority_preserves_conflict_child_stratified_targets(monkeypatch, tmp_path):
+    monkeypatch.setattr(mod, "REPORT_DIR", tmp_path)
+    report = {
+        "date": "2026-06-01",
+        "parent_bucket_summaries": [
+            {
+                "source_parent_bucket_id": "parent_conflict_positive",
+                "parent_source_quality_adjusted_ev_pct": 1.4,
+                "complete_flow_count": 1,
+                "parent_joined_sample": 8,
+                "parent_granularity_floor_passed": True,
+                "child_conflict_warning": True,
+                "dimension_filters": {
+                    "entry_score_parent": "score_watch_recovery",
+                    "entry_source_parent": "entry_source_action_decision",
+                    "submit_quality_parent": "submit_revalidation_ok",
+                    "exit_outcome_parent": "exit_missed_upside",
+                    "major_holding_parent": "holding_active_decision",
+                    "scale_in_parent": "scale_in_none",
+                },
+                "conflicting_child_patterns": [
+                    {
+                        "bucket_id": "child_positive_thin",
+                        "bucket_key": "entry=score_watch|holding=wait|exit=missed",
+                        "joined_sample": 1,
+                        "source_quality_adjusted_ev_pct": 2.3,
+                    }
+                ],
+            }
+        ],
+    }
+
+    seed = mod._build_active_sim_priority_seeds(report)[0]
+
+    strata = seed["child_conflict_stratified_targets"]
+    assert strata["enabled"] is True
+    assert strata["sample_goal_per_conflict_child"] == 5
+    assert strata["strata"][0]["child_bucket_id"] == "child_positive_thin"
+    assert strata["strata"][0]["additional_sample_needed"] == 4
+    assert strata["strata"][0]["runtime_consumption_allowed"] is False
+    assert strata["strata"][0]["post_observation_validation_only"] is True
+    assert strata["runtime_match_fields"] == seed["observable_prefix"]
+    assert strata["runtime_consumption_allowed"] is False
+    assert strata["actual_order_submitted"] is False
+    assert strata["allowed_runtime_apply"] is False
 
 
 def test_sim_auto_approval_separates_positive_and_nonpositive_ev(monkeypatch, tmp_path):
@@ -1462,6 +1531,9 @@ def test_lifecycle_bucket_discovery_classifies_live_sim_and_new_buckets(tmp_path
     assert catalog["targeted_sim_collection"]["policy_version"] == "active_parent_seed_targeted_quota_v1"
     assert catalog["targeted_sim_collection"]["daily_total_share_pct"] == 35
     assert catalog["targeted_sim_collection"]["per_seed_daily_limit"] == 20
+    assert catalog["targeted_sim_collection"]["complete_flow_goal_per_bucket"] == 5
+    assert catalog["targeted_sim_collection"]["conflict_child_sample_goal"] == 5
+    assert catalog["targeted_sim_collection"]["runtime_match_policy"] == "observable_prefix_only"
     assert "active_sim_priority_seeds" in catalog
     auto = json.loads((sim_dir / "lifecycle_bucket_sim_auto_approval_2026-05-22.json").read_text())
     assert auto["approved"] is True
@@ -1478,6 +1550,9 @@ def test_lifecycle_bucket_discovery_classifies_live_sim_and_new_buckets(tmp_path
     assert auto["targeted_sim_collection"]["policy_version"] == "active_parent_seed_targeted_quota_v1"
     assert auto["targeted_sim_collection"]["daily_total_share_pct"] == 35
     assert auto["targeted_sim_collection"]["per_seed_daily_limit"] == 20
+    assert auto["targeted_sim_collection"]["stage_counterfactual_variant_plan_version"] == (
+        "stage_counterfactual_variant_plan_v1"
+    )
     flow_probe_row = next(row for row in auto["approved_bucket_rows"] if row["bucket_id"] == flow_probe["bucket_id"])
     assert flow_probe_row["source_bucket_id"] == flow_probe["source_bucket_id"]
     assert flow_probe_row["complete_flow_count"] == 1

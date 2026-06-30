@@ -1766,6 +1766,13 @@ def _active_positive_seed_summary(payload: dict[str, Any], *, limit: int = 8) ->
                 "observable_prefix": seed.get("observable_prefix"),
                 "active_collection_reason": seed.get("active_collection_reason"),
                 "live_conversion_blocked_reason": seed.get("live_conversion_blocked_reason"),
+                "positive_ev_stage_sampling_plan": seed.get("positive_ev_stage_sampling_plan"),
+                "child_conflict_stratified_targets": seed.get("child_conflict_stratified_targets"),
+                "stage_counterfactual_variant_count": len(
+                    (seed.get("stage_counterfactual_variant_plan") or {}).get("variants") or []
+                )
+                if isinstance(seed.get("stage_counterfactual_variant_plan"), dict)
+                else 0,
             }
         )
     active_positive.sort(
