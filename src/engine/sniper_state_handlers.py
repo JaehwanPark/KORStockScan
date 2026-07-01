@@ -29360,6 +29360,55 @@ def _clear_pending_add_meta(stock, reason=None):
         log_info(f"[ADD_CANCELLED] pending add cleared ({reason}) for {stock.get('name')}")
 
 
+def _rollback_unfilled_defensive_avg_down_usage(stock, reason: str | None = None) -> bool:
+    if not isinstance(stock, dict):
+        return False
+    add_type = str(stock.get('pending_add_type') or '').strip().upper()
+    add_reason = str(stock.get('pending_add_reason') or '').strip()
+    filled_qty = _safe_int(stock.get('pending_add_filled_qty'), 0)
+    if add_type != 'AVG_DOWN' or filled_qty > 0:
+        return False
+
+    rollback_fields: dict[str, object] = {}
+    rollback_kind = None
+    if add_reason == _STOP_LINE_TOUCH_MANDATORY_AVG_DOWN_REASON:
+        current_count = _safe_int(stock.get('stop_line_touch_avg_down_count'), 0)
+        if current_count <= 0:
+            return False
+        next_count = max(0, current_count - 1)
+        rollback_kind = 'stop_line_touch_mandatory_avg_down'
+        rollback_fields['stop_line_touch_avg_down_count'] = next_count
+        if next_count <= 0:
+            rollback_fields['stop_line_touch_avg_down_used'] = False
+    elif add_reason == 'late_loss_avg_down_retry':
+        current_count = _safe_int(stock.get('late_loss_avg_down_retry_count'), 0)
+        if current_count <= 0:
+            return False
+        next_count = max(0, current_count - 1)
+        rollback_kind = 'late_loss_avg_down_retry'
+        rollback_fields['late_loss_avg_down_retry_count'] = next_count
+        if next_count <= 0:
+            rollback_fields['late_loss_avg_down_retry_used'] = False
+    else:
+        return False
+
+    rollback_fields.update(
+        {
+            'last_defensive_avg_down_count_rollback_at': time.time(),
+            'last_defensive_avg_down_count_rollback_reason': reason or 'pending_add_unfilled',
+            'last_defensive_avg_down_count_rollback_kind': rollback_kind,
+            'last_defensive_avg_down_count_rollback_ord_no': stock.get('pending_add_ord_no') or '-',
+        }
+    )
+    _mutate_stock_state(stock, set_fields=rollback_fields)
+    log_info(
+        f"[ADD_CANCELLED] {stock.get('name')}({stock.get('code')}) unfilled defensive AVG_DOWN "
+        f"usage rolled back kind={rollback_kind} reason={reason or 'pending_add_unfilled'} "
+        f"next_count={next_count}"
+    )
+    return True
+
+
 def _persist_scale_in_flags(stock):
     target_id = stock.get('id')
     if not DB or not target_id:
@@ -29408,6 +29457,7 @@ def _cancel_or_reconcile_pending_add(stock, reason):
             reason=f"{reason}_missing_ordno",
             note='pending add missing order number; scale_in_locked applied',
         )
+        _rollback_unfilled_defensive_avg_down_usage(stock, reason=f"{reason}_missing_ordno")
         _clear_pending_add_meta(stock, reason=f"{reason}_missing_ordno")
         log_error(
             f"[ADD_CANCELLED] {stock.get('name')}({code}) pending add missing order number. "
@@ -29452,6 +29502,7 @@ def _cancel_or_reconcile_pending_add(stock, reason):
                 'last_add_cancel_ord_no': ord_no,
             },
         )
+        _rollback_unfilled_defensive_avg_down_usage(stock, reason=reason)
         _clear_pending_add_meta(stock, reason=reason)
         return {"cleared": True, "reason": f"{reason}_cancelled"}
 

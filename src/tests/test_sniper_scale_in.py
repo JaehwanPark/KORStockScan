@@ -4052,6 +4052,147 @@ def test_timeout_pending_add_attempts_cancel_before_clear(monkeypatch):
     assert result["reason"] == "scale_in_cancel_cooldown"
 
 
+def test_timeout_unfilled_stop_line_avg_down_restores_retry_count(monkeypatch):
+    from src.utils.constants import TRADING_RULES as CONFIG
+
+    state_handlers.TRADING_RULES = replace(CONFIG, SCALE_IN_REQUIRE_HISTORY_TABLE=False)
+    state_handlers.KIWOOM_TOKEN = "token"
+
+    monkeypatch.setattr(
+        state_handlers.kiwoom_orders,
+        "send_cancel_order",
+        lambda **kwargs: {"return_code": "0"},
+    )
+
+    stock = {
+        "name": "TEST",
+        "code": "123456",
+        "status": "HOLDING",
+        "strategy": "SCALPING",
+        "buy_price": 10000,
+        "buy_qty": 10,
+        "avg_down_count": 2,
+        "stop_line_touch_avg_down_used": True,
+        "stop_line_touch_avg_down_count": 3,
+        "pending_add_order": True,
+        "pending_add_type": "AVG_DOWN",
+        "pending_add_reason": "stop_line_touch_mandatory_avg_down",
+        "pending_add_qty": 5,
+        "pending_add_ord_no": "A3",
+        "pending_add_requested_at": 1.0,
+    }
+
+    monkeypatch.setattr(state_handlers.time, "time", lambda: 100.0)
+    result = state_handlers.can_consider_scale_in(
+        stock=stock,
+        code="123456",
+        ws_data={"curr": 10000},
+        strategy="SCALPING",
+        market_regime="BULL",
+    )
+
+    assert result["allowed"] is False
+    assert result["reason"] == "pending_add_timeout_released"
+    assert stock.get("pending_add_order") is None
+    assert stock["stop_line_touch_avg_down_count"] == 2
+    assert stock["stop_line_touch_avg_down_used"] is True
+    assert stock["last_defensive_avg_down_count_rollback_kind"] == "stop_line_touch_mandatory_avg_down"
+    assert stock["last_defensive_avg_down_count_rollback_ord_no"] == "A3"
+
+
+def test_timeout_partially_filled_stop_line_avg_down_keeps_retry_count(monkeypatch):
+    from src.utils.constants import TRADING_RULES as CONFIG
+
+    state_handlers.TRADING_RULES = replace(CONFIG, SCALE_IN_REQUIRE_HISTORY_TABLE=False)
+    state_handlers.KIWOOM_TOKEN = "token"
+
+    monkeypatch.setattr(
+        state_handlers.kiwoom_orders,
+        "send_cancel_order",
+        lambda **kwargs: {"return_code": "0"},
+    )
+
+    stock = {
+        "name": "TEST",
+        "code": "123456",
+        "status": "HOLDING",
+        "strategy": "SCALPING",
+        "buy_price": 10000,
+        "buy_qty": 10,
+        "avg_down_count": 3,
+        "stop_line_touch_avg_down_used": True,
+        "stop_line_touch_avg_down_count": 3,
+        "pending_add_order": True,
+        "pending_add_type": "AVG_DOWN",
+        "pending_add_reason": "stop_line_touch_mandatory_avg_down",
+        "pending_add_qty": 5,
+        "pending_add_ord_no": "A3",
+        "pending_add_requested_at": 1.0,
+        "pending_add_filled_qty": 1,
+    }
+
+    monkeypatch.setattr(state_handlers.time, "time", lambda: 100.0)
+    result = state_handlers.can_consider_scale_in(
+        stock=stock,
+        code="123456",
+        ws_data={"curr": 10000},
+        strategy="SCALPING",
+        market_regime="BULL",
+    )
+
+    assert result["allowed"] is False
+    assert result["reason"] == "pending_add_timeout_released"
+    assert stock.get("pending_add_order") is None
+    assert stock["stop_line_touch_avg_down_count"] == 3
+    assert "last_defensive_avg_down_count_rollback_kind" not in stock
+
+
+def test_timeout_unfilled_late_loss_avg_down_restores_retry_count(monkeypatch):
+    from src.utils.constants import TRADING_RULES as CONFIG
+
+    state_handlers.TRADING_RULES = replace(CONFIG, SCALE_IN_REQUIRE_HISTORY_TABLE=False)
+    state_handlers.KIWOOM_TOKEN = "token"
+
+    monkeypatch.setattr(
+        state_handlers.kiwoom_orders,
+        "send_cancel_order",
+        lambda **kwargs: {"return_code": "0"},
+    )
+
+    stock = {
+        "name": "TEST",
+        "code": "123456",
+        "status": "HOLDING",
+        "strategy": "SCALPING",
+        "buy_price": 10000,
+        "buy_qty": 10,
+        "late_loss_avg_down_retry_used": True,
+        "late_loss_avg_down_retry_count": 1,
+        "pending_add_order": True,
+        "pending_add_type": "AVG_DOWN",
+        "pending_add_reason": "late_loss_avg_down_retry",
+        "pending_add_qty": 5,
+        "pending_add_ord_no": "L1",
+        "pending_add_requested_at": 1.0,
+    }
+
+    monkeypatch.setattr(state_handlers.time, "time", lambda: 100.0)
+    result = state_handlers.can_consider_scale_in(
+        stock=stock,
+        code="123456",
+        ws_data={"curr": 10000},
+        strategy="SCALPING",
+        market_regime="BULL",
+    )
+
+    assert result["allowed"] is False
+    assert result["reason"] == "pending_add_timeout_released"
+    assert stock["late_loss_avg_down_retry_count"] == 0
+    assert stock["late_loss_avg_down_retry_used"] is False
+    assert stock["last_defensive_avg_down_count_rollback_kind"] == "late_loss_avg_down_retry"
+    assert stock["last_defensive_avg_down_count_rollback_ord_no"] == "L1"
+
+
 def test_missing_pending_ordno_locks_scale_in(monkeypatch):
     from src.utils.constants import TRADING_RULES as CONFIG
 

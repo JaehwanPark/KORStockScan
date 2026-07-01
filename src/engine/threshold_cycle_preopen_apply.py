@@ -797,6 +797,14 @@ def _previous_runtime_env_overrides_for_family(
     env_overrides = previous_manifest.get("env_overrides")
     if not isinstance(env_overrides, dict):
         return {}
+    if family == "sell_side_open_time_block_runtime":
+        exact_keys = {"KORSTOCKSCAN_SELL_WINDOWS", "KORSTOCKSCAN_SCALPING_SELL_WINDOWS"}
+        return {
+            str(k): str(v)
+            for k, v in env_overrides.items()
+            if str(k).startswith("KORSTOCKSCAN_SELL_SIDE_OPEN_TIME_BLOCK_")
+            or str(k) in exact_keys
+        }
     prefix = _FAMILY_ENV_KEY_PREFIXES.get(family)
     if prefix:
         return {str(k): str(v) for k, v in env_overrides.items() if str(k).startswith(prefix)}

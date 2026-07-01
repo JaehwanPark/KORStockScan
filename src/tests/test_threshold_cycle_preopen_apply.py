@@ -1691,8 +1691,9 @@ def test_sell_side_open_time_operator_lock_enables_next_preopen(tmp_path, monkey
                 "explicit_close_required": True,
                 "env_overrides": {
                     "KORSTOCKSCAN_SELL_SIDE_OPEN_TIME_BLOCK_ENABLED": "true",
-                    "KORSTOCKSCAN_SELL_SIDE_OPEN_TIME_BLOCK_UNTIL_HHMM": "09:03",
-                    "KORSTOCKSCAN_SELL_SIDE_OPEN_TIME_BLOCK_SCOPE": "discretionary_exit_only",
+                    "KORSTOCKSCAN_SELL_SIDE_OPEN_TIME_BLOCK_UNTIL_HHMM": "09:05",
+                    "KORSTOCKSCAN_SELL_SIDE_OPEN_TIME_BLOCK_SCOPE": "all",
+                    "KORSTOCKSCAN_SELL_WINDOWS": "08:05:00-08:49:00,09:05:00-15:19:00,16:05:00-19:49:00",
                 },
             }
         ),
@@ -1718,11 +1719,15 @@ def test_sell_side_open_time_operator_lock_enables_next_preopen(tmp_path, monkey
         manifest["runtime_env_overrides"]["KORSTOCKSCAN_SELL_SIDE_OPEN_TIME_BLOCK_ENABLED"] == "true"
     )
     assert (
-        manifest["runtime_env_overrides"]["KORSTOCKSCAN_SELL_SIDE_OPEN_TIME_BLOCK_UNTIL_HHMM"] == "09:03"
+        manifest["runtime_env_overrides"]["KORSTOCKSCAN_SELL_SIDE_OPEN_TIME_BLOCK_UNTIL_HHMM"] == "09:05"
     )
     assert (
         manifest["runtime_env_overrides"]["KORSTOCKSCAN_SELL_SIDE_OPEN_TIME_BLOCK_SCOPE"]
-        == "discretionary_exit_only"
+        == "all"
+    )
+    assert (
+        manifest["runtime_env_overrides"]["KORSTOCKSCAN_SELL_WINDOWS"]
+        == "08:05:00-08:49:00,09:05:00-15:19:00,16:05:00-19:49:00"
     )
 
 
@@ -1753,8 +1758,9 @@ def test_operator_lock_preserved_when_source_report_missing(tmp_path, monkeypatc
                 "explicit_close_required": True,
                 "env_overrides": {
                     "KORSTOCKSCAN_SELL_SIDE_OPEN_TIME_BLOCK_ENABLED": "true",
-                    "KORSTOCKSCAN_SELL_SIDE_OPEN_TIME_BLOCK_UNTIL_HHMM": "09:03",
-                    "KORSTOCKSCAN_SELL_SIDE_OPEN_TIME_BLOCK_SCOPE": "discretionary_exit_only",
+                    "KORSTOCKSCAN_SELL_SIDE_OPEN_TIME_BLOCK_UNTIL_HHMM": "09:05",
+                    "KORSTOCKSCAN_SELL_SIDE_OPEN_TIME_BLOCK_SCOPE": "all",
+                    "KORSTOCKSCAN_SELL_WINDOWS": "08:05:00-08:49:00,09:05:00-15:19:00,16:05:00-19:49:00",
                 },
             }
         ),
@@ -1773,6 +1779,10 @@ def test_operator_lock_preserved_when_source_report_missing(tmp_path, monkeypatc
     assert manifest["runtime_change"] is True
     assert (
         manifest["runtime_env_overrides"]["KORSTOCKSCAN_SELL_SIDE_OPEN_TIME_BLOCK_ENABLED"] == "true"
+    )
+    assert (
+        manifest["runtime_env_overrides"]["KORSTOCKSCAN_SELL_WINDOWS"]
+        == "08:05:00-08:49:00,09:05:00-15:19:00,16:05:00-19:49:00"
     )
     assert manifest["auto_apply_decisions"][0]["operator_runtime_env_lock"]["applied"] is True
 
@@ -5364,6 +5374,75 @@ def test_hold_carry_forward_previously_enabled_no_blockers(tmp_path, monkeypatch
     assert decision["hold_carry_forward"]["previous_selected"] is True
     assert decision["env_overrides"]["KORSTOCKSCAN_SCALP_SOFT_STOP_WHIPSAW_CONFIRMATION_ENABLED"] == "true"
     assert decision["env_overrides"]["KORSTOCKSCAN_SCALP_SOFT_STOP_WHIPSAW_CONFIRMATION_SEC"] == "20"
+
+
+def test_sell_side_window_hold_carry_forward_keeps_window_keys(tmp_path, monkeypatch):
+    report_dir = tmp_path / "report"
+    apply_dir = tmp_path / "apply_plans"
+    runtime_dir = tmp_path / "runtime_env"
+    latency_dir = tmp_path / "missing_latency_classifier_recommendation"
+    lock_dir = tmp_path / "operator_runtime_env_locks"
+    report_dir.mkdir(parents=True)
+    runtime_dir.mkdir(parents=True)
+    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "APPLY_PLAN_DIR", apply_dir)
+    monkeypatch.setattr(mod, "RUNTIME_ENV_DIR", runtime_dir)
+    monkeypatch.setattr(mod, "OPERATOR_RUNTIME_ENV_LOCK_DIR", lock_dir)
+    monkeypatch.setattr(mod, "LATENCY_CLASSIFIER_RECOMMENDATION_DIR", latency_dir)
+
+    prev_manifest = runtime_dir / "threshold_runtime_env_2026-06-30.json"
+    prev_manifest.write_text(
+        json.dumps(
+            {
+                "target_date": "2026-06-30",
+                "selected_families": ["sell_side_open_time_block_runtime"],
+                "env_overrides": {
+                    "KORSTOCKSCAN_SELL_SIDE_OPEN_TIME_BLOCK_ENABLED": "true",
+                    "KORSTOCKSCAN_SELL_SIDE_OPEN_TIME_BLOCK_UNTIL_HHMM": "09:05",
+                    "KORSTOCKSCAN_SELL_SIDE_OPEN_TIME_BLOCK_SCOPE": "all",
+                    "KORSTOCKSCAN_SELL_WINDOWS": "08:05:00-08:49:00,09:05:00-15:19:00,16:05:00-19:49:00",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    (report_dir / "threshold_cycle_2026-06-30.json").write_text(
+        json.dumps(
+            {
+                "date": "2026-06-30",
+                "calibration_candidates": [
+                    {
+                        "family": "sell_side_open_time_block_runtime",
+                        "stage": "exit_submit_time_guard",
+                        "priority": 906,
+                        "allowed_runtime_apply": True,
+                        "safety_revert_required": False,
+                        "calibration_state": "hold",
+                        "target_env_keys": [],
+                        "recommended_values": {},
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    manifest = mod.build_preopen_apply_manifest(
+        "2026-07-01",
+        source_date="2026-06-30",
+        apply_mode="auto_bounded_live",
+        auto_apply=True,
+        require_ai=False,
+    )
+
+    env = manifest["runtime_env_overrides"]
+    assert env["KORSTOCKSCAN_SELL_SIDE_OPEN_TIME_BLOCK_ENABLED"] == "true"
+    assert env["KORSTOCKSCAN_SELL_SIDE_OPEN_TIME_BLOCK_UNTIL_HHMM"] == "09:05"
+    assert env["KORSTOCKSCAN_SELL_SIDE_OPEN_TIME_BLOCK_SCOPE"] == "all"
+    assert (
+        env["KORSTOCKSCAN_SELL_WINDOWS"]
+        == "08:05:00-08:49:00,09:05:00-15:19:00,16:05:00-19:49:00"
+    )
 
 
 def test_hold_not_previously_enabled_rejects(tmp_path, monkeypatch):

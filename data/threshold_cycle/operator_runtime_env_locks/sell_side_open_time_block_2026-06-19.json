@@ -12,9 +12,10 @@
   "runtime_effect": true,
   "decision_authority": "operator_runtime_override",
   "scope": {
-    "strategy": "SCALPING",
+    "strategy": "ALL",
     "real_sell_submit_time_guard_only": true,
-    "discretionary_exit_only": true,
+    "sell_window_mode": true,
+    "discretionary_exit_only": false,
     "sim_probe_unchanged": true,
     "swing_dry_run_unchanged": true,
     "provider_route_unchanged": true,
@@ -22,12 +23,13 @@
     "order_price_unchanged": true,
     "quantity_cap_unchanged": true,
     "broker_guard_unchanged": true,
-    "hard_protect_emergency_panic_liquidity_sell_unchanged": true
+    "hard_protect_emergency_panic_liquidity_thresholds_unchanged": true
   },
   "env_overrides": {
     "KORSTOCKSCAN_SELL_SIDE_OPEN_TIME_BLOCK_ENABLED": "true",
-    "KORSTOCKSCAN_SELL_SIDE_OPEN_TIME_BLOCK_UNTIL_HHMM": "09:03",
-    "KORSTOCKSCAN_SELL_SIDE_OPEN_TIME_BLOCK_SCOPE": "discretionary_exit_only"
+    "KORSTOCKSCAN_SELL_SIDE_OPEN_TIME_BLOCK_UNTIL_HHMM": "09:05",
+    "KORSTOCKSCAN_SELL_SIDE_OPEN_TIME_BLOCK_SCOPE": "all",
+    "KORSTOCKSCAN_SELL_WINDOWS": "08:05:00-08:49:00,09:05:00-15:19:00,16:05:00-19:49:00"
   },
   "allowed_close_reason_keywords": [
     "explicit_operator_close",
@@ -49,14 +51,14 @@
   "rollback_guard": {
     "disable_key": "KORSTOCKSCAN_SELL_SIDE_OPEN_TIME_BLOCK_ENABLED=false",
     "explicit_operator_close_required": true,
-    "revert_scope": "real SCALPING discretionary SELL submit time block before configured cutoff",
+    "revert_scope": "real SELL submit window guard",
     "broker_guard_unchanged": true,
     "hard_safety_unchanged": true,
     "provider_route_unchanged": true
   },
   "source_evidence": {
-    "reason": "User requested enabling the real SCALPING sell-side open-time block for the next PREOPEN.",
+    "reason": "User requested the real SELL submit guard to persist as sell-window mode instead of the legacy open-time cutoff.",
     "checklist_owner": "docs/checklists/2026-06-18-stage2-todo-checklist.md#SellSideOpenTimeBlockPreopen0619",
-    "user_instruction": "다음장전에 ON 이 되도록 해줘"
+    "user_instruction": "sell 타임 블락이 이상하다. 분명히 sell window 방식으로 변경했는데? 수정하기 바람"
   }
 }
