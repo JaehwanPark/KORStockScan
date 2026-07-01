@@ -72,6 +72,46 @@ def test_update_ai_quote_freshness_fields_overwrites_stale_provenance(monkeypatc
     assert ws_data["quote_stale"] is False
 
 
+def test_update_ai_quote_freshness_fields_uses_pre_ai_window(monkeypatch):
+    monkeypatch.setattr(handlers.time, "time", lambda: 1000.0)
+    monkeypatch.setattr(
+        handlers,
+        "TRADING_RULES",
+        SimpleNamespace(SCALP_PRE_AI_MAX_WS_AGE_SEC=3.0),
+    )
+    ws_data = {
+        "curr": 10000,
+        "orderbook": {"ask": []},
+        "last_ws_update_ts": 997.5,
+    }
+
+    result = handlers._update_ai_quote_freshness_fields(ws_data)
+
+    assert result is ws_data
+    assert ws_data["quote_age_ms"] == 2500
+    assert ws_data["ai_quote_stale_max_ms"] == 3000
+    assert ws_data["quote_stale"] is False
+
+
+def test_update_ai_quote_freshness_fields_marks_stale_after_pre_ai_window(monkeypatch):
+    monkeypatch.setattr(handlers.time, "time", lambda: 1000.0)
+    monkeypatch.setattr(
+        handlers,
+        "TRADING_RULES",
+        SimpleNamespace(SCALP_PRE_AI_MAX_WS_AGE_SEC=3.0),
+    )
+    ws_data = {
+        "curr": 10000,
+        "orderbook": {"ask": []},
+        "last_ws_update_ts": 996.5,
+    }
+
+    handlers._update_ai_quote_freshness_fields(ws_data)
+
+    assert ws_data["quote_age_ms"] == 3500
+    assert ws_data["quote_stale"] is True
+
+
 def test_entry_adm_snapshot_uses_explicit_not_evaluated_ai_action(monkeypatch):
     captured = {}
 

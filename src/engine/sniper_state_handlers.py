@@ -15305,7 +15305,8 @@ def _update_ai_quote_freshness_fields(ws_data: dict | None) -> dict:
         quote_age_ms = int(round(quote_age_sec * 1000.0))
         ws_data["quote_age_ms"] = quote_age_ms
         ws_data["quote_age_source"] = "last_ws_update_ts"
-        max_quote_age_ms = int(_rule("SCALPING_ENTRY_SUBMIT_REVALIDATION_MAX_QUOTE_AGE_MS", 2000) or 2000)
+        max_quote_age_ms = int(float(_rule("SCALP_PRE_AI_MAX_WS_AGE_SEC", 3.0) or 3.0) * 1000.0)
+        ws_data["ai_quote_stale_max_ms"] = max(1, max_quote_age_ms)
         ws_data["quote_stale"] = quote_age_ms > max(1, max_quote_age_ms)
         return ws_data
     elif ws_data.get("orderbook"):
@@ -16729,12 +16730,22 @@ def _build_ai_ops_log_fields(
     if "ai_score_buy_guard_blocked" in payload:
         out["ai_score_buy_guard_blocked"] = bool(payload.get("ai_score_buy_guard_blocked"))
     for field_name in (
+        "pre_ai_ws_snapshot_refresh_enabled",
+        "pre_ai_ws_snapshot_refresh_applied",
+    ):
+        if field_name in payload:
+            out[field_name] = bool(payload.get(field_name))
+    for field_name in (
         "ai_score_raw",
         "ai_score_projected",
         "ai_score_valid_observation_count",
         "ai_score_dispersion",
         "ai_action_consistency",
         "ai_reason_numeric_inconsistency_detected_value",
+        "pre_ai_ws_snapshot_refresh_input_age_ms",
+        "pre_ai_ws_snapshot_refresh_age_ms",
+        "pre_ai_ws_snapshot_refresh_latest_price",
+        "pre_ai_ws_snapshot_refresh_history_count",
     ):
         if field_name in payload:
             out[field_name] = payload.get(field_name)
@@ -16763,6 +16774,7 @@ def _build_ai_ops_log_fields(
         "tick_latest_age_ms",
         "tick_window_span_sec",
         "quote_age_ms",
+        "quote_stale_threshold_ms",
         "microstructure_reaction_ask_sweep_score",
         "microstructure_reaction_post_sweep_hold_score",
         "microstructure_reaction_bid_replenishment_score",
@@ -16798,6 +16810,10 @@ def _build_ai_ops_log_fields(
         "quote_age_source",
         "ai_input_source_quality_status",
         "ai_input_source_quality_reason",
+        "pre_ai_ws_snapshot_refresh_reason",
+        "pre_ai_ws_snapshot_refresh_source",
+        "pre_ai_ws_snapshot_refresh_input_timestamp_normalized_from",
+        "pre_ai_ws_snapshot_refresh_latest_timestamp_normalized_from",
         "microstructure_reaction_context_version",
         "microstructure_reaction_context_status",
         "microstructure_reaction_entry_reaction_quality",
@@ -17044,6 +17060,58 @@ def _holding_flow_override_force_exit_contract_fields() -> dict:
         "broker_order_forbidden": False,
         "forbidden_uses": TRADE_QUALITY_RUNTIME_FORBIDDEN_USES,
     }
+
+
+_HOLDING_FLOW_OFI_SOURCE_QUALITY_FORCE_REASONS = {
+    "ai_engine_unavailable",
+    "context_fetch_failed",
+    "no_recent_ticks",
+    "parse_fail",
+    "ws_stale",
+}
+
+
+def _holding_flow_ofi_force_exit_phase_fields(
+    stock: dict | None,
+    *,
+    force_reason: str,
+    profit_rate: float | None,
+    now_ts: float | None,
+) -> dict:
+    stock = stock if isinstance(stock, dict) else {}
+    reason = str(force_reason or "-").strip() or "-"
+    debounce_count = _safe_int(stock.get("holding_flow_ofi_debounce_count"), 0)
+    started_at = _safe_float(stock.get("holding_flow_ofi_debounce_started_at"), 0.0) or 0.0
+    prior = bool(debounce_count > 0 or started_at > 0)
+    if reason in _HOLDING_FLOW_OFI_SOURCE_QUALITY_FORCE_REASONS:
+        phase = "source_quality_guard"
+    elif prior:
+        phase = "post_debounce_guard"
+    else:
+        phase = "pre_smoothing_guard"
+    fields = {
+        "ofi_force_exit_phase": phase,
+        "ofi_force_exit_terminal_reason": reason,
+        "ofi_debounce_prior": prior,
+    }
+    if prior:
+        now_value = float(now_ts or time.time())
+        anchor_profit = _safe_float(stock.get("holding_flow_ofi_debounce_anchor_profit"), profit_rate)
+        profit_value = _safe_float(profit_rate, None)
+        fields.update(
+            {
+                "ofi_debounce_elapsed_sec": max(0, int(now_value - started_at)) if started_at > 0 else 0,
+                "ofi_debounce_count": debounce_count,
+                "ofi_debounce_exit_rule": stock.get("holding_flow_ofi_debounce_exit_rule") or "-",
+                "ofi_debounce_anchor_profit": f"{float(anchor_profit):+.2f}" if anchor_profit is not None else "-",
+                "ofi_debounce_profit_delta": (
+                    f"{float(profit_value) - float(anchor_profit):+.2f}"
+                    if profit_value is not None and anchor_profit is not None
+                    else "-"
+                ),
+            }
+        )
+    return fields
 
 
 def _reset_scalp_pre_ai_gate_context(stock: dict | None, ws_data: dict | None) -> None:
@@ -18032,6 +18100,11 @@ def _clear_holding_flow_override_candidate(stock: dict, code: str, *, reason: st
             "holding_flow_override_next_review_sec",
             "holding_flow_override_defer_count",
             "holding_flow_override_last_defer_micro_vwap_bp",
+            "holding_flow_ofi_debounce_started_at",
+            "holding_flow_ofi_debounce_anchor_profit",
+            "holding_flow_ofi_debounce_count",
+            "holding_flow_ofi_debounce_exit_rule",
+            "holding_flow_ofi_debounce_anchor_micro_vwap_bp",
         ),
     )
     _log_holding_pipeline(
@@ -18097,6 +18170,12 @@ def _evaluate_holding_flow_override(
             force_reason="ai_engine_unavailable",
             profit_rate=f"{profit_rate:+.2f}",
             peak_profit=f"{peak_profit:+.2f}",
+            **_holding_flow_ofi_force_exit_phase_fields(
+                stock,
+                force_reason="ai_engine_unavailable",
+                profit_rate=profit_rate,
+                now_ts=now_ts,
+            ),
             **_holding_flow_override_force_exit_contract_fields(),
         )
         return True
@@ -18124,6 +18203,11 @@ def _evaluate_holding_flow_override(
                 "holding_flow_override_exit_rule": exit_rule,
                 "holding_flow_override_defer_count": 0,
                 "holding_flow_override_last_defer_micro_vwap_bp": None,
+                "holding_flow_ofi_debounce_started_at": None,
+                "holding_flow_ofi_debounce_anchor_profit": None,
+                "holding_flow_ofi_debounce_count": 0,
+                "holding_flow_ofi_debounce_exit_rule": None,
+                "holding_flow_ofi_debounce_anchor_micro_vwap_bp": None,
             },
         )
 
@@ -18153,6 +18237,12 @@ def _evaluate_holding_flow_override(
             max_defer_sec=max_defer_sec,
             profit_rate=f"{profit_rate:+.2f}",
             candidate_profit=f"{candidate_profit:+.2f}",
+            **_holding_flow_ofi_force_exit_phase_fields(
+                stock,
+                force_reason="max_defer_sec",
+                profit_rate=profit_rate,
+                now_ts=now_ts,
+            ),
             **_holding_flow_override_force_exit_contract_fields(),
         )
         return True
@@ -18167,6 +18257,12 @@ def _evaluate_holding_flow_override(
             worsen_pct=f"{worsen_pct:.2f}",
             profit_rate=f"{profit_rate:+.2f}",
             candidate_profit=f"{candidate_profit:+.2f}",
+            **_holding_flow_ofi_force_exit_phase_fields(
+                stock,
+                force_reason="worsen_floor",
+                profit_rate=profit_rate,
+                now_ts=now_ts,
+            ),
             **_holding_flow_override_force_exit_contract_fields(),
         )
         return True
@@ -18190,6 +18286,12 @@ def _evaluate_holding_flow_override(
                 profit_rate=f"{profit_rate:+.2f}",
                 peak_profit=f"{peak_profit:+.2f}",
                 candidate_profit=f"{candidate_profit:+.2f}",
+                **_holding_flow_ofi_force_exit_phase_fields(
+                    stock,
+                    force_reason="trailing_peak_worsen_floor",
+                    profit_rate=profit_rate,
+                    now_ts=now_ts,
+                ),
                 **_holding_flow_override_force_exit_contract_fields(),
             )
             return True
@@ -18268,6 +18370,49 @@ def _evaluate_holding_flow_override(
             broker_order_forbidden=True,
         )
         return True
+
+    def _holding_flow_ofi_debounce_allowed(
+        ofi_state,
+        *,
+        next_debounce_count: int,
+        curr_vs_micro_vwap_bp: float | None,
+        ws_age_sec: float | None,
+    ) -> tuple[bool, dict]:
+        max_count = max(0, _rule_int("HOLDING_FLOW_OFI_DEBOUNCE_MAX_COUNT", 2))
+        min_micro_vwap_bp = _rule_float("HOLDING_FLOW_OFI_DEBOUNCE_MIN_MICRO_VWAP_BP", 0.0)
+        fields = {
+            "ofi_debounce_allowed": False,
+            "ofi_debounce_reason": "not_evaluated",
+            "ofi_debounce_max_count": max_count,
+            "ofi_debounce_next_count": int(next_debounce_count),
+            "ofi_debounce_min_micro_vwap_bp": f"{min_micro_vwap_bp:.2f}",
+            "ofi_debounce_current_micro_vwap_bp": (
+                f"{float(curr_vs_micro_vwap_bp):.2f}" if curr_vs_micro_vwap_bp is not None else "-"
+            ),
+        }
+        if _is_scalp_simulated_position(stock, strategy) or _has_sim_probe_provenance(stock):
+            fields["ofi_debounce_reason"] = "sim_probe_not_allowed"
+            return False, fields
+        if ofi_state is None or getattr(ofi_state, "regime", None) != OFI_STABLE_BULLISH:
+            fields["ofi_debounce_reason"] = "not_stable_bullish"
+            return False, fields
+        if max_count <= 0:
+            fields["ofi_debounce_reason"] = "disabled_by_max_count"
+            return False, fields
+        if int(next_debounce_count) > max_count:
+            fields["ofi_debounce_reason"] = "count_limit_reached"
+            return False, fields
+        if ws_age_sec is not None and max_ws_age > 0 and ws_age_sec > max_ws_age:
+            fields["ofi_debounce_reason"] = "source_quality_stale_ws"
+            fields["ws_age_sec"] = f"{ws_age_sec:.2f}"
+            fields["max_ws_age_sec"] = f"{max_ws_age:.2f}"
+            return False, fields
+        if curr_vs_micro_vwap_bp is not None and curr_vs_micro_vwap_bp + 1e-9 < min_micro_vwap_bp:
+            fields["ofi_debounce_reason"] = "micro_vwap_below_floor"
+            return False, fields
+        fields["ofi_debounce_allowed"] = True
+        fields["ofi_debounce_reason"] = "stable_bullish_within_limit"
+        return True, fields
 
     if (
         last_review_at > 0
@@ -18423,6 +18568,12 @@ def _evaluate_holding_flow_override(
             ws_age_sec=f"{ws_age_sec:.2f}",
             max_ws_age_sec=f"{max_ws_age:.2f}",
             profit_rate=f"{profit_rate:+.2f}",
+            **_holding_flow_ofi_force_exit_phase_fields(
+                stock,
+                force_reason="ws_stale",
+                profit_rate=profit_rate,
+                now_ts=now_ts,
+            ),
             **_holding_flow_override_force_exit_contract_fields(),
         )
         return True
@@ -18441,6 +18592,12 @@ def _evaluate_holding_flow_override(
             force_reason="context_fetch_failed",
             error=str(exc)[:160],
             profit_rate=f"{profit_rate:+.2f}",
+            **_holding_flow_ofi_force_exit_phase_fields(
+                stock,
+                force_reason="context_fetch_failed",
+                profit_rate=profit_rate,
+                now_ts=now_ts,
+            ),
             **_holding_flow_override_force_exit_contract_fields(),
         )
         return True
@@ -18453,6 +18610,12 @@ def _evaluate_holding_flow_override(
             exit_rule=exit_rule,
             force_reason="no_recent_ticks",
             profit_rate=f"{profit_rate:+.2f}",
+            **_holding_flow_ofi_force_exit_phase_fields(
+                stock,
+                force_reason="no_recent_ticks",
+                profit_rate=profit_rate,
+                now_ts=now_ts,
+            ),
             **_holding_flow_override_force_exit_contract_fields(),
         )
         return True
@@ -18560,6 +18723,12 @@ def _evaluate_holding_flow_override(
             exit_rule=exit_rule,
             force_reason="parse_fail",
             profit_rate=f"{profit_rate:+.2f}",
+            **_holding_flow_ofi_force_exit_phase_fields(
+                stock,
+                force_reason="parse_fail",
+                profit_rate=profit_rate,
+                now_ts=now_ts,
+            ),
             **_holding_flow_override_force_exit_contract_fields(),
         )
         return True
@@ -18568,91 +18737,143 @@ def _evaluate_holding_flow_override(
             0.0,
             _rule_float("HOLDING_FLOW_OFI_BEARISH_CONFIRM_WORSEN_PCT", 0.30),
         )
+        ofi_no_change_logged = False
         if flow_action == "EXIT" and ofi_state.regime == OFI_STABLE_BULLISH:
             features, has_features = _normalize_soft_stop_expert_features(stock)
             curr_vs_micro_vwap_bp = _safe_float(features.get("curr_vs_micro_vwap_bp"), 0.0) if has_features else None
             next_defer_count = _safe_int(stock.get("holding_flow_override_defer_count"), 0) + 1
-            if _never_green_defer_clamp(
-                "ofi_stable_bullish_debounce",
-                "EXIT",
-                flow_state,
-                _safe_int(flow_result.get("score"), 0),
-                projected_defer_count=next_defer_count,
-                current_micro_vwap_bp=curr_vs_micro_vwap_bp,
-            ):
-                return True
-            _mutate_stock_state(
-                stock,
-                set_fields={
-                    "holding_flow_override_defer_count": next_defer_count,
-                    "holding_flow_override_last_defer_micro_vwap_bp": curr_vs_micro_vwap_bp,
-                },
+            next_ofi_debounce_count = _safe_int(stock.get("holding_flow_ofi_debounce_count"), 0) + 1
+            debounce_allowed, debounce_gate_fields = _holding_flow_ofi_debounce_allowed(
+                ofi_state,
+                next_debounce_count=next_ofi_debounce_count,
+                curr_vs_micro_vwap_bp=curr_vs_micro_vwap_bp,
+                ws_age_sec=ws_age_sec,
             )
-            _log_holding_pipeline(
-                stock,
-                code,
-                "holding_flow_ofi_smoothing_applied",
-                smoothing_action="DEBOUNCE_EXIT",
-                exit_rule=exit_rule,
-                raw_flow_action="EXIT",
-                final_flow_action="HOLD",
-                source="holding_flow_review",
-                profit_rate=f"{profit_rate:+.2f}",
-                candidate_profit=f"{candidate_profit:+.2f}",
-                worsen_from_candidate=f"{worsen_from_candidate:.2f}",
-                max_defer_sec=max_defer_sec,
-                worsen_pct=f"{worsen_pct:.2f}",
-                **ofi_log_fields,
-                **micro_log_fields_for_smoothing,
-                **swing_exit_micro_fields,
-            )
-            _log_holding_pipeline(
-                stock,
-                code,
-                "holding_flow_override_defer_exit",
-                exit_rule=exit_rule,
-                original_sell_reason_type=sell_reason_type,
-                flow_action="EXIT",
-                flow_state=flow_state,
-                flow_score=_safe_int(flow_result.get("score"), 0),
-                flow_reason=flow_result.get("reason", "-"),
-                flow_evidence=_flow_evidence_text(flow_result),
-                profit_rate=f"{profit_rate:+.2f}",
-                candidate_profit=f"{candidate_profit:+.2f}",
-                worsen_pct=f"{worsen_pct:.2f}",
-                elapsed_sec=elapsed_sec,
-                defer_reason="ofi_stable_bullish_debounce",
-                holding_flow_override_defer_count=next_defer_count,
-                curr_vs_micro_vwap_bp=f"{curr_vs_micro_vwap_bp:.2f}" if curr_vs_micro_vwap_bp is not None else "-",
-                **_build_observation_contract_fields("ops_volume_diagnostic"),
-                **swing_exit_micro_fields,
-            )
-            _mark_recent_exit_candidate(
-                stock,
-                exit_rule="holding_flow_override_defer_exit",
-                now_ts=now_ts,
-                source_stage="holding_flow_override_defer_exit",
-            )
-            _emit_stat_action_decision_snapshot(
-                stock=stock,
-                code=code,
-                strategy=strategy,
-                ws_data=ws_data,
-                chosen_action="hold_wait",
-                eligible_actions=["hold_wait", "exit_now"],
-                rejected_actions=["exit_now:ofi_stable_bullish_debounce"],
-                profit_rate=profit_rate,
-                peak_profit=peak_profit,
-                current_ai_score=current_ai_score,
-                held_sec=held_sec,
-                curr_price=curr_price,
-                buy_price=buy_price,
-                exit_rule=exit_rule or "-",
-                sell_reason_type=sell_reason_type or "-",
-                reason=f"holding_flow_ofi_smoothing:{flow_result.get('reason', '-')}",
-                force=True,
-            )
-            return False
+            if not debounce_allowed:
+                _log_holding_pipeline(
+                    stock,
+                    code,
+                    "holding_flow_ofi_smoothing_applied",
+                    smoothing_action="NO_CHANGE",
+                    exit_rule=exit_rule,
+                    raw_flow_action="EXIT",
+                    final_flow_action="EXIT",
+                    source="holding_flow_review",
+                    profit_rate=f"{profit_rate:+.2f}",
+                    candidate_profit=f"{candidate_profit:+.2f}",
+                    worsen_from_candidate=f"{worsen_from_candidate:.2f}",
+                    **debounce_gate_fields,
+                    **ofi_log_fields,
+                    **micro_log_fields_for_smoothing,
+                    **swing_exit_micro_fields,
+                )
+                ofi_no_change_logged = True
+            else:
+                if _never_green_defer_clamp(
+                    "ofi_stable_bullish_debounce",
+                    "EXIT",
+                    flow_state,
+                    _safe_int(flow_result.get("score"), 0),
+                    projected_defer_count=next_defer_count,
+                    current_micro_vwap_bp=curr_vs_micro_vwap_bp,
+                ):
+                    return True
+                ofi_started_at = _safe_float(stock.get("holding_flow_ofi_debounce_started_at"), 0.0) or now_ts
+                ofi_anchor_profit = _safe_float(stock.get("holding_flow_ofi_debounce_anchor_profit"), profit_rate)
+                ofi_anchor_micro_vwap_bp = _safe_float(
+                    stock.get("holding_flow_ofi_debounce_anchor_micro_vwap_bp"),
+                    curr_vs_micro_vwap_bp,
+                )
+                _mutate_stock_state(
+                    stock,
+                    set_fields={
+                        "holding_flow_override_defer_count": next_defer_count,
+                        "holding_flow_override_last_defer_micro_vwap_bp": curr_vs_micro_vwap_bp,
+                        "holding_flow_ofi_debounce_started_at": ofi_started_at,
+                        "holding_flow_ofi_debounce_anchor_profit": ofi_anchor_profit,
+                        "holding_flow_ofi_debounce_count": next_ofi_debounce_count,
+                        "holding_flow_ofi_debounce_exit_rule": exit_rule,
+                        "holding_flow_ofi_debounce_anchor_micro_vwap_bp": ofi_anchor_micro_vwap_bp,
+                    },
+                )
+                _log_holding_pipeline(
+                    stock,
+                    code,
+                    "holding_flow_ofi_smoothing_applied",
+                    smoothing_action="DEBOUNCE_EXIT",
+                    exit_rule=exit_rule,
+                    raw_flow_action="EXIT",
+                    final_flow_action="HOLD",
+                    source="holding_flow_review",
+                    profit_rate=f"{profit_rate:+.2f}",
+                    candidate_profit=f"{candidate_profit:+.2f}",
+                    worsen_from_candidate=f"{worsen_from_candidate:.2f}",
+                    max_defer_sec=max_defer_sec,
+                    worsen_pct=f"{worsen_pct:.2f}",
+                    ofi_debounce_started_at=f"{float(ofi_started_at):.3f}",
+                    ofi_debounce_anchor_profit=f"{float(ofi_anchor_profit):+.2f}"
+                    if ofi_anchor_profit is not None
+                    else "-",
+                    ofi_debounce_count=next_ofi_debounce_count,
+                    ofi_debounce_exit_rule=exit_rule,
+                    ofi_debounce_anchor_micro_vwap_bp=(
+                        f"{float(ofi_anchor_micro_vwap_bp):.2f}"
+                        if ofi_anchor_micro_vwap_bp is not None
+                        else "-"
+                    ),
+                    **debounce_gate_fields,
+                    **ofi_log_fields,
+                    **micro_log_fields_for_smoothing,
+                    **swing_exit_micro_fields,
+                )
+                _log_holding_pipeline(
+                    stock,
+                    code,
+                    "holding_flow_override_defer_exit",
+                    exit_rule=exit_rule,
+                    original_sell_reason_type=sell_reason_type,
+                    flow_action="EXIT",
+                    flow_state=flow_state,
+                    flow_score=_safe_int(flow_result.get("score"), 0),
+                    flow_reason=flow_result.get("reason", "-"),
+                    flow_evidence=_flow_evidence_text(flow_result),
+                    profit_rate=f"{profit_rate:+.2f}",
+                    candidate_profit=f"{candidate_profit:+.2f}",
+                    worsen_pct=f"{worsen_pct:.2f}",
+                    elapsed_sec=elapsed_sec,
+                    defer_reason="ofi_stable_bullish_debounce",
+                    holding_flow_override_defer_count=next_defer_count,
+                    holding_flow_ofi_debounce_count=next_ofi_debounce_count,
+                    curr_vs_micro_vwap_bp=f"{curr_vs_micro_vwap_bp:.2f}" if curr_vs_micro_vwap_bp is not None else "-",
+                    **_build_observation_contract_fields("ops_volume_diagnostic"),
+                    **swing_exit_micro_fields,
+                )
+                _mark_recent_exit_candidate(
+                    stock,
+                    exit_rule="holding_flow_override_defer_exit",
+                    now_ts=now_ts,
+                    source_stage="holding_flow_override_defer_exit",
+                )
+                _emit_stat_action_decision_snapshot(
+                    stock=stock,
+                    code=code,
+                    strategy=strategy,
+                    ws_data=ws_data,
+                    chosen_action="hold_wait",
+                    eligible_actions=["hold_wait", "exit_now"],
+                    rejected_actions=["exit_now:ofi_stable_bullish_debounce"],
+                    profit_rate=profit_rate,
+                    peak_profit=peak_profit,
+                    current_ai_score=current_ai_score,
+                    held_sec=held_sec,
+                    curr_price=curr_price,
+                    buy_price=buy_price,
+                    exit_rule=exit_rule or "-",
+                    sell_reason_type=sell_reason_type or "-",
+                    reason=f"holding_flow_ofi_smoothing:{flow_result.get('reason', '-')}",
+                    force=True,
+                )
+                return False
         if (
             flow_action in {"HOLD", "TRIM"}
             and ofi_state.regime == OFI_STABLE_BEARISH
@@ -18686,20 +18907,21 @@ def _evaluate_holding_flow_override(
                 confirm_reason="ofi_stable_bearish",
             )
             return True
-        _log_holding_pipeline(
-            stock,
-            code,
-            "holding_flow_ofi_smoothing_applied",
-            smoothing_action="NO_CHANGE",
-            exit_rule=exit_rule,
-            raw_flow_action=flow_action,
-            final_flow_action=flow_action,
-            source="holding_flow_review",
-            profit_rate=f"{profit_rate:+.2f}",
-            **ofi_log_fields,
-            **micro_log_fields_for_smoothing,
-            **swing_exit_micro_fields,
-        )
+        if not ofi_no_change_logged:
+            _log_holding_pipeline(
+                stock,
+                code,
+                "holding_flow_ofi_smoothing_applied",
+                smoothing_action="NO_CHANGE",
+                exit_rule=exit_rule,
+                raw_flow_action=flow_action,
+                final_flow_action=flow_action,
+                source="holding_flow_review",
+                profit_rate=f"{profit_rate:+.2f}",
+                **ofi_log_fields,
+                **micro_log_fields_for_smoothing,
+                **swing_exit_micro_fields,
+            )
     if flow_action == "EXIT":
         _log_holding_pipeline(
             stock,
@@ -20560,6 +20782,7 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                                     "source_event_stage": "watching_analyze_target",
                                 },
                             )
+                            ai_decision.update(pre_ai_ws_refresh_fields)
                             ai_call_executed = True
                             _mutate_stock_state(
                                 stock,

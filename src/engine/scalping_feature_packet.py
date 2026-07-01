@@ -9,6 +9,7 @@ from src.engine.scalping.microstructure_reaction_context import (
 
 
 SCALP_FEATURE_PACKET_VERSION = "scalp_feature_packet_v1"
+SCALP_FEATURE_PACKET_QUOTE_STALE_MS = 3000
 
 
 def _safe_number(value, default=0.0):
@@ -54,6 +55,8 @@ def extract_scalping_feature_packet(ws_data, recent_ticks, recent_candles=None, 
         recent_candles,
         now=now,
     )
+    if "ai_quote_stale_max_ms" in ws_data:
+        snapshot["ai_quote_stale_max_ms"] = ws_data.get("ai_quote_stale_max_ms")
     curr_price = snapshot.get("curr_price", 0) or 0
     v_pw = ws_data.get("v_pw", 0) or 0
     ask_tot = ws_data.get("ask_tot", 0) or 0
@@ -165,8 +168,15 @@ def extract_scalping_feature_packet(ws_data, recent_ticks, recent_candles=None, 
 
     quote_age_ms = snapshot.get("quote_age_ms")
     quote_age_source = snapshot.get("quote_age_source", "missing")
+    quote_stale_threshold_ms = max(
+        1,
+        int(
+            _safe_number(snapshot.get("ai_quote_stale_max_ms"), SCALP_FEATURE_PACKET_QUOTE_STALE_MS)
+            or SCALP_FEATURE_PACKET_QUOTE_STALE_MS
+        ),
+    )
     tick_stale = tick_latest_age_ms is not None and tick_latest_age_ms > 5000
-    quote_stale = quote_age_ms is not None and quote_age_ms > 1200
+    quote_stale = quote_age_ms is not None and quote_age_ms > quote_stale_threshold_ms
     tick_context_quality = "unknown"
     if not ticks:
         tick_context_quality = "missing_ticks"
@@ -246,6 +256,7 @@ def extract_scalping_feature_packet(ws_data, recent_ticks, recent_candles=None, 
         "tick_context_quality": tick_context_quality,
         "quote_age_ms": quote_age_ms if quote_age_ms is not None else "-",
         "quote_age_source": quote_age_source,
+        "quote_stale_threshold_ms": quote_stale_threshold_ms,
         "quote_stale": bool(quote_stale) if quote_age_ms is not None else "unknown",
         "same_price_buy_absorption": same_price_buy_absorption,
         "large_sell_print_detected": large_sell_print_detected,
@@ -293,6 +304,7 @@ def build_scalping_feature_audit_fields(packet):
         "tick_context_quality": payload.get("tick_context_quality", "unknown"),
         "quote_age_ms": payload.get("quote_age_ms", "-"),
         "quote_age_source": payload.get("quote_age_source", "missing"),
+        "quote_stale_threshold_ms": payload.get("quote_stale_threshold_ms", SCALP_FEATURE_PACKET_QUOTE_STALE_MS),
         "quote_stale": payload.get("quote_stale", "unknown"),
         "recent_5tick_seconds": payload.get("recent_5tick_seconds", "-"),
         "prev_5tick_seconds": payload.get("prev_5tick_seconds", "-"),

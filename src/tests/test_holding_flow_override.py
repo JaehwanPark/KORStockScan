@@ -145,6 +145,191 @@ def test_flow_exit_is_debounced_by_stable_bullish_ofi(monkeypatch):
         ),
     )
     ai = DummyFlowAI("EXIT")
+    stock = _stock()
+
+    proceed = handlers._evaluate_holding_flow_override(
+        stock=stock,
+        code="005930",
+        strategy="SCALPING",
+        ws_data=_ws(),
+        ai_engine=ai,
+        exit_rule="scalp_soft_stop_pct",
+        sell_reason_type="LOSS",
+        reason="soft stop",
+        profit_rate=-1.10,
+        peak_profit=0.00,
+        drawdown=1.10,
+        current_ai_score=25,
+        held_sec=80,
+        curr_price=10000,
+        buy_price=10110,
+        now_ts=1000.0,
+    )
+
+    assert proceed is False
+    assert stock["holding_flow_ofi_debounce_started_at"] == 1000.0
+    assert stock["holding_flow_ofi_debounce_anchor_profit"] == -1.10
+    assert stock["holding_flow_ofi_debounce_count"] == 1
+    assert stock["holding_flow_ofi_debounce_exit_rule"] == "scalp_soft_stop_pct"
+    assert any(
+        stage == "holding_flow_ofi_smoothing_applied" and fields.get("smoothing_action") == "DEBOUNCE_EXIT"
+        for stage, fields in logs
+    )
+    assert any(
+        stage == "stat_action_decision_snapshot"
+        and kwargs.get("rejected_actions") == ["exit_now:ofi_stable_bullish_debounce"]
+        for stage, kwargs in logs
+    )
+
+
+def test_flow_exit_bullish_ofi_debounce_count_limit_allows_sell(monkeypatch):
+    logs = []
+    _patch_holding_context(monkeypatch, logs)
+    monkeypatch.setattr(
+        handlers,
+        "_evaluate_holding_flow_ofi_state",
+        lambda stock, code, *, curr_price: (
+            {"ready": True, "micro_state": "bullish", "observer_healthy": True, "snapshot_age_ms": 100},
+            handlers.OfiSmoothingState(regime=handlers.OFI_STABLE_BULLISH, micro_score_smooth=0.62),
+        ),
+    )
+    ai = DummyFlowAI("EXIT")
+    stock = {
+        **_stock(),
+        "holding_flow_override_candidate_key": "scalp_soft_stop_pct:LOSS",
+        "holding_flow_override_started_at": 990.0,
+        "holding_flow_override_candidate_profit": -1.00,
+        "holding_flow_ofi_debounce_started_at": 995.0,
+        "holding_flow_ofi_debounce_anchor_profit": -1.05,
+        "holding_flow_ofi_debounce_count": 2,
+        "holding_flow_ofi_debounce_exit_rule": "scalp_soft_stop_pct",
+    }
+
+    proceed = handlers._evaluate_holding_flow_override(
+        stock=stock,
+        code="005930",
+        strategy="SCALPING",
+        ws_data=_ws(),
+        ai_engine=ai,
+        exit_rule="scalp_soft_stop_pct",
+        sell_reason_type="LOSS",
+        reason="soft stop",
+        profit_rate=-1.12,
+        peak_profit=0.00,
+        drawdown=1.12,
+        current_ai_score=25,
+        held_sec=80,
+        curr_price=9988,
+        buy_price=10100,
+        now_ts=1000.0,
+    )
+
+    assert proceed is True
+    no_change = next(
+        fields
+        for stage, fields in logs
+        if stage == "holding_flow_ofi_smoothing_applied" and fields.get("smoothing_action") == "NO_CHANGE"
+    )
+    assert no_change["ofi_debounce_allowed"] is False
+    assert no_change["ofi_debounce_reason"] == "count_limit_reached"
+    assert no_change["ofi_debounce_max_count"] == 2
+    assert any(stage == "holding_flow_override_exit_confirmed" for stage, _ in logs)
+
+
+def test_prior_ofi_debounce_max_defer_force_exit_is_post_debounce_guard(monkeypatch):
+    logs = []
+    _patch_holding_context(monkeypatch, logs)
+    ai = DummyFlowAI("HOLD")
+    stock = {
+        **_stock(),
+        "holding_flow_override_candidate_key": "scalp_soft_stop_pct:LOSS",
+        "holding_flow_override_started_at": 900.0,
+        "holding_flow_override_candidate_profit": -0.10,
+        "holding_flow_ofi_debounce_started_at": 950.0,
+        "holding_flow_ofi_debounce_anchor_profit": -0.10,
+        "holding_flow_ofi_debounce_count": 1,
+        "holding_flow_ofi_debounce_exit_rule": "scalp_soft_stop_pct",
+    }
+
+    proceed = handlers._evaluate_holding_flow_override(
+        stock=stock,
+        code="005930",
+        strategy="SCALPING",
+        ws_data=_ws(),
+        ai_engine=ai,
+        exit_rule="scalp_soft_stop_pct",
+        sell_reason_type="LOSS",
+        reason="soft stop",
+        profit_rate=-0.35,
+        peak_profit=0.00,
+        drawdown=0.35,
+        current_ai_score=30,
+        held_sec=120,
+        curr_price=9965,
+        buy_price=10000,
+        now_ts=1000.0,
+    )
+
+    assert proceed is True
+    assert ai.calls == []
+    force_exit = next(
+        fields
+        for stage, fields in logs
+        if stage == "holding_flow_override_force_exit" and fields.get("force_reason") == "max_defer_sec"
+    )
+    assert force_exit["ofi_force_exit_phase"] == "post_debounce_guard"
+    assert force_exit["ofi_debounce_prior"] is True
+    assert force_exit["ofi_debounce_elapsed_sec"] == 50
+    assert force_exit["ofi_debounce_profit_delta"] == "-0.25"
+    assert force_exit["ofi_force_exit_terminal_reason"] == "max_defer_sec"
+
+
+def test_stale_ws_force_exit_is_source_quality_guard_without_debounce(monkeypatch):
+    logs = []
+    _patch_holding_context(monkeypatch, logs)
+    monkeypatch.setattr(handlers.time, "time", lambda: 1000.0)
+    ai = DummyFlowAI("EXIT")
+    ws = {**_ws(), "last_ws_update_ts": 990.0}
+
+    proceed = handlers._evaluate_holding_flow_override(
+        stock=_stock(),
+        code="005930",
+        strategy="SCALPING",
+        ws_data=ws,
+        ai_engine=ai,
+        exit_rule="scalp_soft_stop_pct",
+        sell_reason_type="LOSS",
+        reason="soft stop",
+        profit_rate=-1.10,
+        peak_profit=0.00,
+        drawdown=1.10,
+        current_ai_score=25,
+        held_sec=80,
+        curr_price=10000,
+        buy_price=10110,
+        now_ts=1000.0,
+    )
+
+    assert proceed is True
+    assert ai.calls == []
+    assert not any(
+        stage == "holding_flow_ofi_smoothing_applied" and fields.get("smoothing_action") == "DEBOUNCE_EXIT"
+        for stage, fields in logs
+    )
+    force_exit = next(
+        fields
+        for stage, fields in logs
+        if stage == "holding_flow_override_force_exit" and fields.get("force_reason") == "ws_stale"
+    )
+    assert force_exit["ofi_force_exit_phase"] == "source_quality_guard"
+    assert force_exit["ofi_debounce_prior"] is False
+
+
+def test_no_recent_ticks_force_exit_is_source_quality_guard(monkeypatch):
+    logs = []
+    _patch_holding_context(monkeypatch, logs)
+    monkeypatch.setattr(handlers.kiwoom_utils, "get_tick_history_ka10003", lambda token, code, limit=30: [])
+    ai = DummyFlowAI("EXIT")
 
     proceed = handlers._evaluate_holding_flow_override(
         stock=_stock(),
@@ -165,16 +350,62 @@ def test_flow_exit_is_debounced_by_stable_bullish_ofi(monkeypatch):
         now_ts=1000.0,
     )
 
-    assert proceed is False
-    assert any(
-        stage == "holding_flow_ofi_smoothing_applied" and fields.get("smoothing_action") == "DEBOUNCE_EXIT"
+    assert proceed is True
+    assert ai.calls == []
+    force_exit = next(
+        fields
         for stage, fields in logs
+        if stage == "holding_flow_override_force_exit" and fields.get("force_reason") == "no_recent_ticks"
     )
-    assert any(
-        stage == "stat_action_decision_snapshot"
-        and kwargs.get("rejected_actions") == ["exit_now:ofi_stable_bullish_debounce"]
-        for stage, kwargs in logs
+    assert force_exit["ofi_force_exit_phase"] == "source_quality_guard"
+
+
+def test_parse_fail_force_exit_is_source_quality_guard(monkeypatch):
+    logs = []
+    _patch_holding_context(monkeypatch, logs)
+
+    class ParseFailAI(DummyFlowAI):
+        def evaluate_scalping_holding_flow(self, *args, **kwargs):
+            self.calls.append((args, kwargs))
+            return {
+                "action": "UNKNOWN",
+                "score": 0,
+                "flow_state": "-",
+                "reason": "parse failed",
+                "evidence": [],
+                "next_review_sec": 45,
+                "ai_parse_fail": True,
+            }
+
+    ai = ParseFailAI("EXIT")
+
+    proceed = handlers._evaluate_holding_flow_override(
+        stock=_stock(),
+        code="005930",
+        strategy="SCALPING",
+        ws_data=_ws(),
+        ai_engine=ai,
+        exit_rule="scalp_soft_stop_pct",
+        sell_reason_type="LOSS",
+        reason="soft stop",
+        profit_rate=-1.10,
+        peak_profit=0.00,
+        drawdown=1.10,
+        current_ai_score=25,
+        held_sec=80,
+        curr_price=10000,
+        buy_price=10110,
+        now_ts=1000.0,
     )
+
+    assert proceed is True
+    assert len(ai.calls) == 1
+    force_exit = next(
+        fields
+        for stage, fields in logs
+        if stage == "holding_flow_override_force_exit" and fields.get("force_reason") == "parse_fail"
+    )
+    assert force_exit["ofi_force_exit_phase"] == "source_quality_guard"
 
 
 def test_flow_hold_is_confirmed_exit_by_stable_bearish_ofi_after_worsen(monkeypatch):

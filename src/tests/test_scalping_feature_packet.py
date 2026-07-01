@@ -5,6 +5,7 @@ from src.engine import ai_engine_openai as openai_module
 from src.engine.ai_engine_openai import GPTSniperEngine
 from src.engine.scalping_feature_packet import (
     SCALP_FEATURE_PACKET_VERSION,
+    SCALP_FEATURE_PACKET_QUOTE_STALE_MS,
     build_scalping_feature_audit_fields,
     extract_scalping_feature_packet,
 )
@@ -319,7 +320,85 @@ def test_extract_scalping_feature_packet_uses_ws_update_timestamp_for_quote_age(
     assert packet["quote_stale"] is False
     assert fields["quote_age_ms"] == 450
     assert fields["quote_age_source"] == "last_ws_update_ts"
+    assert fields["quote_stale_threshold_ms"] == 3000
     assert fields["quote_stale"] is False
+
+
+def test_extract_scalping_feature_packet_uses_pre_ai_quote_freshness_window():
+    now = datetime(2026, 5, 15, 9, 0, 12)
+    ws_data = {
+        **_sample_ws_data(),
+        "last_ws_update_ts": (now - timedelta(milliseconds=2500)).timestamp(),
+    }
+
+    packet = extract_scalping_feature_packet(
+        ws_data,
+        _sample_ticks(),
+        _sample_candles(),
+        now=now,
+    )
+
+    assert SCALP_FEATURE_PACKET_QUOTE_STALE_MS == 3000
+    assert packet["quote_age_ms"] == 2500
+    assert packet["quote_stale_threshold_ms"] == 3000
+    assert packet["quote_stale"] is False
+
+
+def test_extract_scalping_feature_packet_uses_runtime_quote_freshness_window():
+    now = datetime(2026, 5, 15, 9, 0, 12)
+    ws_data = {
+        **_sample_ws_data(),
+        "last_ws_update_ts": (now - timedelta(milliseconds=2500)).timestamp(),
+        "ai_quote_stale_max_ms": 2000,
+    }
+
+    packet = extract_scalping_feature_packet(
+        ws_data,
+        _sample_ticks(),
+        _sample_candles(),
+        now=now,
+    )
+
+    assert packet["quote_age_ms"] == 2500
+    assert packet["quote_stale_threshold_ms"] == 2000
+    assert packet["quote_stale"] is True
+
+
+def test_extract_scalping_feature_packet_clamps_invalid_runtime_quote_window():
+    now = datetime(2026, 5, 15, 9, 0, 12)
+    ws_data = {
+        **_sample_ws_data(),
+        "last_ws_update_ts": (now - timedelta(milliseconds=2)).timestamp(),
+        "ai_quote_stale_max_ms": -100,
+    }
+
+    packet = extract_scalping_feature_packet(
+        ws_data,
+        _sample_ticks(),
+        _sample_candles(),
+        now=now,
+    )
+
+    assert packet["quote_stale_threshold_ms"] == 1
+    assert packet["quote_stale"] is True
+
+
+def test_extract_scalping_feature_packet_marks_quote_stale_after_pre_ai_window():
+    now = datetime(2026, 5, 15, 9, 0, 12)
+    ws_data = {
+        **_sample_ws_data(),
+        "last_ws_update_ts": (now - timedelta(milliseconds=3500)).timestamp(),
+    }
+
+    packet = extract_scalping_feature_packet(
+        ws_data,
+        _sample_ticks(),
+        _sample_candles(),
+        now=now,
+    )
+
+    assert packet["quote_age_ms"] == 3500
+    assert packet["quote_stale"] is True
 
 
 def test_extract_scalping_feature_packet_treats_same_second_ticks_as_burst():

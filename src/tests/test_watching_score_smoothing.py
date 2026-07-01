@@ -923,6 +923,33 @@ def test_ai_confirmed_optional_provenance_keeps_existing_score_contract():
     assert fields["ai_score_smoothing_applied"] is False
 
 
+def test_ai_confirmed_log_fields_preserve_pre_ai_refresh_provenance():
+    fields = handlers._build_ai_ops_log_fields(
+        {
+            **_valid_result(),
+            "pre_ai_ws_snapshot_refresh_enabled": True,
+            "pre_ai_ws_snapshot_refresh_applied": True,
+            "pre_ai_ws_snapshot_refresh_reason": "latest_ws_snapshot_fresh",
+            "pre_ai_ws_snapshot_refresh_source": "ws_manager_latest_data",
+            "pre_ai_ws_snapshot_refresh_input_age_ms": 5200.0,
+            "pre_ai_ws_snapshot_refresh_age_ms": 180.0,
+            "pre_ai_ws_snapshot_refresh_latest_price": 12450,
+            "pre_ai_ws_snapshot_refresh_history_count": 0,
+        },
+        ai_score_raw=82.0,
+        ai_score_after_bonus=82.0,
+    )
+
+    assert fields["pre_ai_ws_snapshot_refresh_enabled"] is True
+    assert fields["pre_ai_ws_snapshot_refresh_applied"] is True
+    assert fields["pre_ai_ws_snapshot_refresh_reason"] == "latest_ws_snapshot_fresh"
+    assert fields["pre_ai_ws_snapshot_refresh_source"] == "ws_manager_latest_data"
+    assert fields["pre_ai_ws_snapshot_refresh_input_age_ms"] == 5200.0
+    assert fields["pre_ai_ws_snapshot_refresh_age_ms"] == 180.0
+    assert fields["pre_ai_ws_snapshot_refresh_latest_price"] == 12450
+    assert fields["pre_ai_ws_snapshot_refresh_history_count"] == 0
+
+
 def test_report_only_mode_enables_bounded_state_change_refresh(monkeypatch):
     monkeypatch.setattr(
         handlers,

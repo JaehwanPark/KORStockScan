@@ -5965,6 +5965,25 @@ def _build_holding_flow_ofi_smoothing_family(events: list[dict]) -> dict:
     confirmed = [
         event for event in applied if str(_event_fields(event).get("smoothing_action") or "") == "CONFIRM_EXIT"
     ]
+    no_change = [
+        event for event in applied if str(_event_fields(event).get("smoothing_action") or "") == "NO_CHANGE"
+    ]
+    effective_action_count = len(debounced) + len(confirmed)
+    force_exit_before_smoothing = [
+        event
+        for event in force_exit
+        if str(_event_fields(event).get("ofi_force_exit_phase") or "pre_smoothing_guard") == "pre_smoothing_guard"
+    ]
+    force_exit_after_debounce = [
+        event
+        for event in force_exit
+        if str(_event_fields(event).get("ofi_force_exit_phase") or "") == "post_debounce_guard"
+    ]
+    force_exit_source_quality_guard = [
+        event
+        for event in force_exit
+        if str(_event_fields(event).get("ofi_force_exit_phase") or "") == "source_quality_guard"
+    ]
     applied_ids = _record_ids(applied)
     worsen_values = [
         value
@@ -5983,7 +6002,15 @@ def _build_holding_flow_ofi_smoothing_family(events: list[dict]) -> dict:
         )
         if value is not None
     ]
-    sample_ready = len(applied) >= 20 and len(debounced) >= 5 and len(confirmed) >= 5
+    debounce_profit_delta_values = [
+        value
+        for value in (
+            _safe_float(_event_fields(event).get("ofi_debounce_profit_delta"), None)
+            for event in force_exit_after_debounce
+        )
+        if value is not None
+    ]
+    sample_ready = effective_action_count >= 20 and len(debounced) >= 5 and len(confirmed) >= 5
     current = {
         "ofi_stale_threshold_ms": int(getattr(TRADING_RULES, "OFI_AI_SMOOTHING_STALE_THRESHOLD_MS", 700) or 700),
         "ofi_persistence_required": int(getattr(TRADING_RULES, "OFI_AI_SMOOTHING_PERSISTENCE_REQUIRED", 2) or 2),
@@ -5992,6 +6019,7 @@ def _build_holding_flow_ofi_smoothing_family(events: list[dict]) -> dict:
         ),
         "max_defer_sec": int(getattr(TRADING_RULES, "HOLDING_FLOW_OVERRIDE_MAX_DEFER_SEC", 90) or 90),
         "worsen_floor_pct": float(getattr(TRADING_RULES, "HOLDING_FLOW_OVERRIDE_WORSEN_PCT", 0.80) or 0.80),
+        "ofi_debounce_max_count": int(getattr(TRADING_RULES, "HOLDING_FLOW_OFI_DEBOUNCE_MAX_COUNT", 2) or 2),
     }
     recommended = dict(current)
     return {
@@ -5999,10 +6027,24 @@ def _build_holding_flow_ofi_smoothing_family(events: list[dict]) -> dict:
         "stage": "holding_exit",
         "sample": {
             "applied": len(applied),
+            "observed_total": len(applied),
             "exit_debounce": len(debounced),
             "bearish_confirm": len(confirmed),
+            "no_change": len(no_change),
+            "effective_action_count": effective_action_count,
             "force_exit_priority": len(force_exit),
+            "force_exit_before_smoothing": len(force_exit_before_smoothing),
+            "force_exit_after_debounce": len(force_exit_after_debounce),
+            "force_exit_source_quality_guard": len(force_exit_source_quality_guard),
             "force_exit_reason": _field_counter(force_exit, "force_reason"),
+            "force_exit_phase": _field_counter(force_exit, "ofi_force_exit_phase", default="pre_smoothing_guard"),
+            "debounce_terminal_reason": _field_counter(
+                force_exit_after_debounce,
+                "ofi_force_exit_terminal_reason",
+            ),
+            "debounce_profit_delta_avg": round(_avg(debounce_profit_delta_values) or 0.0, 4)
+            if debounce_profit_delta_values
+            else None,
             "avg_worsen_from_candidate": round(_avg(worsen_values) or 0.0, 4) if worsen_values else None,
             "smoothing_action": _field_counter(applied, "smoothing_action"),
             "ofi_regime": _field_counter(applied, "holding_flow_ofi_regime"),

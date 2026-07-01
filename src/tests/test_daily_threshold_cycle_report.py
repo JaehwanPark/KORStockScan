@@ -2581,7 +2581,40 @@ def test_ofi_ai_smoothing_families_generate_manifest_only_candidates():
                 },
             }
         )
+    pipeline_rows.append(
+        {
+            "stage": "holding_flow_ofi_smoothing_applied",
+            "record_id": 301,
+            "fields": {
+                "smoothing_action": "NO_CHANGE",
+                "holding_flow_ofi_regime": "neutral",
+                "orderbook_micro_state": "neutral",
+                "worsen_from_candidate": "0.05",
+            },
+        }
+    )
     pipeline_rows.append({"stage": "holding_flow_override_force_exit", "fields": {"force_reason": "worsen_floor"}})
+    pipeline_rows.append(
+        {
+            "stage": "holding_flow_override_force_exit",
+            "fields": {
+                "force_reason": "max_defer_sec",
+                "ofi_force_exit_phase": "post_debounce_guard",
+                "ofi_force_exit_terminal_reason": "max_defer_sec",
+                "ofi_debounce_profit_delta": "-0.25",
+            },
+        }
+    )
+    pipeline_rows.append(
+        {
+            "stage": "holding_flow_override_force_exit",
+            "fields": {
+                "force_reason": "ws_stale",
+                "ofi_force_exit_phase": "source_quality_guard",
+                "ofi_force_exit_terminal_reason": "ws_stale",
+            },
+        }
+    )
 
     report = report_mod.build_daily_threshold_cycle_report(
         "2026-04-30",
@@ -2603,7 +2636,19 @@ def test_ofi_ai_smoothing_families_generate_manifest_only_candidates():
     assert holding_family["apply_mode"] == "manifest_only"
     assert holding_family["sample"]["exit_debounce"] == 6
     assert holding_family["sample"]["bearish_confirm"] == 15
-    assert holding_family["sample"]["force_exit_priority"] == 1
+    assert holding_family["sample"]["no_change"] == 1
+    assert holding_family["sample"]["effective_action_count"] == 21
+    assert holding_family["sample"]["force_exit_priority"] == 3
+    assert holding_family["sample"]["force_exit_before_smoothing"] == 1
+    assert holding_family["sample"]["force_exit_after_debounce"] == 1
+    assert holding_family["sample"]["force_exit_source_quality_guard"] == 1
+    assert holding_family["sample"]["force_exit_phase"] == {
+        "pre_smoothing_guard": 1,
+        "post_debounce_guard": 1,
+        "source_quality_guard": 1,
+    }
+    assert holding_family["sample"]["debounce_terminal_reason"] == {"max_defer_sec": 1}
+    assert holding_family["sample"]["debounce_profit_delta_avg"] == -0.25
     assert holding_family["recommended"]["holding_bearish_confirm_worsen_pct"] == 0.3
 
     manifest_families = {

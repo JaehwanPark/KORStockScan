@@ -81,6 +81,45 @@ def test_profit_stagnation_carry_forward_env_includes_low_profit_hard_exit_candi
     assert env["KORSTOCKSCAN_SCALP_PROFIT_STAGNATION_EXIT_ENABLED"] == "true"
     assert env["KORSTOCKSCAN_SCALP_LOW_PROFIT_STAGNATION_HARD_EXIT_ENABLED"] == "true"
     assert env["KORSTOCKSCAN_SCALP_LOW_PROFIT_STAGNATION_MIN_HOLD_SEC"] == "1800"
+
+
+def test_protect_trailing_smoothing_candidate_emits_runtime_env_overrides():
+    env = mod._env_overrides_for_candidate(
+        {
+            "family": "protect_trailing_smoothing",
+            "calibration_state": "adjust_down",
+            "target_env_keys": [
+                "SCALP_PROTECT_TRAILING_SMOOTH_WINDOW_SEC",
+                "SCALP_PROTECT_TRAILING_SMOOTH_MIN_SPAN_SEC",
+                "SCALP_PROTECT_TRAILING_SMOOTH_MIN_SAMPLES",
+                "SCALP_PROTECT_TRAILING_SMOOTH_BELOW_RATIO",
+                "SCALP_PROTECT_TRAILING_SMOOTH_BUFFER_PCT",
+                "SCALP_PROTECT_TRAILING_EMERGENCY_PCT",
+            ],
+            "current_values": {
+                "window_sec": 20,
+                "min_span_sec": 8,
+                "min_samples": 3,
+                "below_ratio": 0.67,
+                "buffer_pct": 1.0,
+                "emergency_pct": -2.0,
+            },
+            "recommended_values": {
+                "window_sec": 12,
+                "min_span_sec": 12,
+                "min_samples": 3,
+                "below_ratio": 0.67,
+                "buffer_pct": 0.8,
+                "emergency_pct": -2.0,
+            },
+        }
+    )
+
+    assert env == {
+        "KORSTOCKSCAN_SCALP_PROTECT_TRAILING_SMOOTH_WINDOW_SEC": "12",
+        "KORSTOCKSCAN_SCALP_PROTECT_TRAILING_SMOOTH_MIN_SPAN_SEC": "12",
+        "KORSTOCKSCAN_SCALP_PROTECT_TRAILING_SMOOTH_BUFFER_PCT": "0.8",
+    }
 from src.engine import lifecycle_bucket_discovery as discovery_mod
 from src.engine.scalping import scalp_sim_auto_approval_control_tower as scalp_sim_auto_mod
 from src.engine.swing import sim_auto_approval_control_tower as swing_sim_mod
