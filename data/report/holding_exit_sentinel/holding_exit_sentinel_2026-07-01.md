@@ -3,7 +3,7 @@
 ## 판정
 
 - primary: `HOLD_DEFER_DANGER`
-- secondary: `AI_HOLDING_OPS`
+- secondary: `AI_HOLDING_OPS, TRAILING_EARLY_EXIT`
 - report_only: `true`
 - live_runtime_effect: `false`
 - operator_action_required: `false`
@@ -13,20 +13,20 @@
 
 ## 근거
 
-- as_of: `2026-07-01T11:50:03`
-- exit_signal unique: `26`
-- sell_order_sent unique: `21`
-- sell_completed unique: `21`
+- as_of: `2026-07-01T15:15:05`
+- exit_signal unique: `35`
+- sell_order_sent unique: `25`
+- sell_completed unique: `25`
 - real exit/sell_sent/sell_completed: `0` / `0` / `0`
-- non-real exit/sell_sent/sell_completed: `26` / `21` / `21`
-- sell_sent/exit_signal: `80.8%`
+- non-real exit/sell_sent/sell_completed: `35` / `25` / `25`
+- sell_sent/exit_signal: `71.4%`
 - real sell_sent/exit_signal: `0.0%`
-- non-real sell_sent/exit_signal: `80.8%`
+- non-real sell_sent/exit_signal: `71.4%`
 - flow defer events: `7`
 - AI holding cache MISS: `100.0%`
-- soft_stop rebound above sell 10m: `0.0%`
-- trailing missed-upside: `0.0%`
-- top reasons: `AI보유감시:cache_miss=1055, soft_stop_grace=34, 청산신호:scalp_trailing_take_profit=22, sell_order_sent=22, sell_completed=21`
+- soft_stop rebound above sell 10m: `66.7%`
+- trailing missed-upside: `37.5%`
+- top reasons: `AI보유감시:cache_miss=1664, soft_stop_grace=37, 청산신호:scalp_trailing_take_profit=31, sell_order_sent=26, sell_completed=25`
 
 ## 금지된 자동변경
 
