@@ -11109,6 +11109,61 @@ def test_add_execution_preserves_request_qty_on_final_fill(monkeypatch):
     assert target_stock.get("pending_add_order") is None
 
 
+def test_add_receipt_normalizes_cumulative_partial_fill(monkeypatch):
+    receipts.ACTIVE_TARGETS = []
+    receipts.highest_prices = {}
+    receipts._get_fast_state = lambda code: None
+
+    history_calls = []
+    pipeline_events = []
+
+    monkeypatch.setattr(receipts, "_update_db_for_add", lambda *args, **kwargs: None)
+    monkeypatch.setattr(receipts, "record_add_history_event", lambda *args, **kwargs: history_calls.append(kwargs) or True)
+    monkeypatch.setattr(
+        receipts,
+        "_log_holding_pipeline",
+        lambda name, code, target_id, stage, **fields: pipeline_events.append((stage, fields)),
+    )
+
+    target_stock = {
+        "id": 14823,
+        "code": "347700",
+        "name": "스피어",
+        "status": "HOLDING",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "buy_price": 29300,
+        "buy_qty": 1,
+        "pending_add_order": True,
+        "pending_add_type": "AVG_DOWN",
+        "pending_add_qty": 59,
+        "pending_add_ord_no": "0061569",
+        "add_count": 0,
+        "avg_down_count": 0,
+    }
+    receipts.ACTIVE_TARGETS.append(target_stock)
+
+    receipts.handle_real_execution(
+        {"code": "347700", "type": "BUY", "order_no": "0061569", "price": 27800, "qty": 37}
+    )
+    receipts.handle_real_execution(
+        {"code": "347700", "type": "BUY", "order_no": "0061569", "price": 27819, "qty": 59}
+    )
+    receipts.handle_real_execution(
+        {"code": "347700", "type": "BUY", "order_no": "0061569", "price": 27819, "qty": 59}
+    )
+
+    assert target_stock["buy_qty"] == 60
+    assert target_stock["buy_price"] == pytest.approx(27843.7, abs=0.0001)
+    assert target_stock["avg_down_count"] == 1
+    assert target_stock.get("pending_add_order") is None
+    assert [call["executed_qty"] for call in history_calls] == [37, 22]
+    assert [call["executed_price"] for call in history_calls] == [27800, 27851]
+    scale_in_events = [fields for stage, fields in pipeline_events if stage == "scale_in_executed"]
+    assert [event["fill_qty"] for event in scale_in_events] == [37, 22]
+    assert scale_in_events[-1]["new_buy_qty"] == 60
+
+
 def test_add_execution_keeps_original_buy_time(monkeypatch):
     receipts.ACTIVE_TARGETS = []
     receipts.highest_prices = {}

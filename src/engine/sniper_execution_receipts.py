@@ -136,6 +136,7 @@ _PENDING_ADD_META_KEYS = (
     "pending_add_requested_at",
     "pending_add_counted",
     "pending_add_filled_qty",
+    "pending_add_filled_amount",
     "add_order_time",
     "add_odno",
 )
@@ -375,6 +376,72 @@ def _resolve_entry_effective_fill_qty(
         pending_order["status"] = "FILLED" if requested_qty > 0 and new_filled >= requested_qty else "PARTIAL"
         pending_order["last_effective_fill_qty"] = effective_qty
     return effective_qty, requested_qty, new_filled
+
+
+def _resolve_add_effective_fill(
+    *,
+    target_stock: dict[str, Any],
+    code: str,
+    order_no: str,
+    exec_price: int,
+    exec_qty: int,
+) -> tuple[int, int, int, int]:
+    """Return the add-buy fill delta and effective incremental price.
+
+    Kiwoom add-buy execution notices can arrive as cumulative order fill
+    quantity/average price. Keep a per-pending-add ledger so a partial notice
+    such as 37 shares followed by cumulative 59 shares mutates runtime truth by
+    only the remaining 22 shares, with the incremental price reconstructed from
+    cumulative notional.
+    """
+
+    raw_qty = int(exec_qty or 0)
+    raw_price = int(exec_price or 0)
+    requested_qty = int(target_stock.get("pending_add_qty", 0) or 0)
+    already_filled = int(target_stock.get("pending_add_filled_qty", 0) or 0)
+    already_amount = int(target_stock.get("pending_add_filled_amount", 0) or 0)
+    if raw_qty <= 0:
+        return 0, raw_price, requested_qty, already_filled
+
+    if requested_qty <= 0:
+        effective_qty = raw_qty
+        effective_price = raw_price
+    else:
+        remaining_qty = max(0, requested_qty - already_filled)
+        if remaining_qty <= 0:
+            log_info(
+                f"[ADD_FILL_IGNORED] {target_stock.get('name')}({code}) "
+                f"ord_no={order_no or '-'} raw_fill_qty={raw_qty} "
+                f"already_filled={already_filled}/{requested_qty} reason=duplicate_or_cumulative_receipt"
+            )
+            return 0, raw_price, requested_qty, already_filled
+
+        effective_qty = min(raw_qty, remaining_qty)
+        effective_price = raw_price
+
+        if already_filled > 0 and raw_qty > remaining_qty and raw_qty <= requested_qty:
+            cumulative_amount = raw_price * raw_qty
+            delta_amount = cumulative_amount - already_amount
+            if delta_amount > 0:
+                effective_price = max(1, int(round(delta_amount / effective_qty)))
+                log_info(
+                    f"[ADD_FILL_CUMULATIVE_NORMALIZED] {target_stock.get('name')}({code}) "
+                    f"ord_no={order_no or '-'} raw_fill_qty={raw_qty} effective_fill_qty={effective_qty} "
+                    f"raw_avg_price={raw_price} effective_price={effective_price} "
+                    f"already_filled={already_filled}/{requested_qty}"
+                )
+        elif effective_qty < raw_qty:
+            log_info(
+                f"[ADD_FILL_CAPPED] {target_stock.get('name')}({code}) "
+                f"ord_no={order_no or '-'} raw_fill_qty={raw_qty} "
+                f"effective_fill_qty={effective_qty} already_filled={already_filled}/{requested_qty} "
+                "reason=over_requested_receipt"
+            )
+
+    new_filled = already_filled + effective_qty
+    target_stock["pending_add_filled_qty"] = new_filled
+    target_stock["pending_add_filled_amount"] = already_amount + (effective_price * effective_qty)
+    return effective_qty, effective_price, requested_qty, new_filled
 
 
 def _clear_runtime_keys(target_stock: dict[str, Any], keys: tuple[str, ...]) -> None:
@@ -1241,10 +1308,21 @@ def _handle_add_buy_execution(
     exec_qty: int,
     now: datetime,
 ) -> None:
+    effective_qty, effective_price, requested_qty, filled_qty = _resolve_add_effective_fill(
+        target_stock=target_stock,
+        code=code,
+        order_no=order_no,
+        exec_price=exec_price,
+        exec_qty=exec_qty,
+    )
+    if effective_qty <= 0:
+        return
+    exec_qty = effective_qty
+    exec_price = effective_price
     add_type = (target_stock.get('pending_add_type') or '').upper()
     old_price = float(target_stock.get('buy_price') or 0)
     old_qty = int(target_stock.get('buy_qty') or 0)
-    request_qty = int(target_stock.get('pending_add_qty', 0) or 0)
+    request_qty = int(requested_qty or target_stock.get('pending_add_qty', 0) or 0)
     pending_ord_no = str(target_stock.get('pending_add_ord_no', '') or '').strip()
     history_order_no = pending_ord_no or order_no
     new_qty = old_qty + exec_qty
@@ -1287,8 +1365,6 @@ def _handle_add_buy_execution(
         target_stock['pending_add_counted'] = True
         count_increment = True
 
-    filled = int(target_stock.get('pending_add_filled_qty', 0) or 0) + exec_qty
-    target_stock['pending_add_filled_qty'] = filled
     pending_qty = int(target_stock.get('pending_add_qty', 0) or 0)
 
     protection_ok = _apply_scale_in_protection(target_stock, add_type)
@@ -1335,7 +1411,7 @@ def _handle_add_buy_execution(
         add_count_after=target_stock.get('add_count', 0),
         reason='receipt_confirmed',
     )
-    if pending_qty > 0 and filled >= pending_qty:
+    if pending_qty > 0 and filled_qty >= pending_qty:
         _clear_pending_add_meta(target_stock)
     log_info(
         "[ADD_EXECUTED] "
