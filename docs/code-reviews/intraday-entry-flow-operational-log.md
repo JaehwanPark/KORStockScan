@@ -165,3 +165,31 @@ This file is cumulative. Do not append every 10-minute loop result here. Loop-le
 - `runtime_effect=false`
 - `allowed_runtime_apply=false`
 - This was artifact retention cleanup only.
+
+## 6. 2026-07-01 Rising Missed Classification And Current Artifact Output
+
+### Decision
+
+- Forced `rising_missed_one_share_entry` scout events remain separate observations and must not count as normal BUY/submit/fill resolution.
+- Rising missed diagnosis should prioritize eligible actionable blockers and exclude source-quality churn, intended guards, runtime backpressure observations, strategy rejects, and already-submitted candidates from forced one-share eligibility.
+- Intraday flow report defaults must update only the fixed `intraday_entry_flow_YYYY-MM-DD_current.md` artifact; CSV output is temporary under `/tmp`.
+
+### Change
+
+- Added common rising-missed classification fields and one-share eligibility gates.
+- Raised the default rising-missed full-eval threshold from `0.5%` to `1.0%` for scanner/runtime diagnostics.
+- Blocked forced one-share scout evaluation when a normal submit has already resolved the candidate.
+- Changed intraday flow report default output paths to fixed current markdown plus temporary `/tmp` CSV.
+- Added a rest-quote-only confirmation block before stop-line-touch mandatory averaging down.
+
+### Validation
+
+- `PYTHONPATH=. .venv/bin/pytest src/tests/test_sniper_scale_in.py src/tests/test_intraday_entry_blocker_diagnostics.py src/tests/test_intraday_entry_flow_report.py -q` passed with `403 passed`.
+- `PYTHONPATH=. .venv/bin/python -m py_compile src/engine/monitoring/intraday_entry_flow_report.py src/engine/monitoring/intraday_entry_blocker_diagnostics.py src/engine/scalping/rising_missed_one_share_entry.py src/engine/kiwoom_sniper_v2.py src/engine/sniper_state_handlers.py` passed.
+- `git diff --check` passed.
+
+### Operating Boundary
+
+- `runtime_effect=false` for report/classification changes.
+- `allowed_runtime_apply=false`
+- No intraday threshold mutation, provider route change, bot restart, cap change, or stale/broker/account/order/quantity/cooldown/hard-safety guard relaxation was performed.

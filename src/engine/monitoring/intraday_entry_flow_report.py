@@ -938,8 +938,15 @@ def _default_output_paths(target_date: str, since: str | None, generated_at: str
     if since_ts is not None:
         suffix = since_ts.strftime("%H%M")
     generated_ts = _parse_ts(generated_at, target_date=target_date) or datetime.now()
-    base = PROJECT_ROOT / "data" / "report" / "intraday_entry_flow" / f"intraday_entry_flow_{target_date}_{suffix}_to_{generated_ts.strftime('%H%M')}"
-    return base.with_suffix(".md"), base.with_suffix(".csv")
+    output_md = (
+        PROJECT_ROOT
+        / "data"
+        / "report"
+        / "intraday_entry_flow"
+        / f"intraday_entry_flow_{target_date}_current.md"
+    )
+    output_csv = Path("/tmp") / f"intraday_entry_flow_{target_date}_{suffix}_to_{generated_ts.strftime('%H%M')}.csv"
+    return output_md, output_csv
 
 
 def main(argv: list[str] | None = None) -> int:

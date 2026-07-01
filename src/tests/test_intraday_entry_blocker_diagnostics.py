@@ -102,6 +102,38 @@ def test_build_report_surfaces_rising_promoted_without_real_submit(tmp_path):
     } in report["blocker_taxonomy"]["suppressed_non_actionable_counts"]
 
 
+def test_build_report_uses_one_pct_rising_missed_threshold(tmp_path):
+    path = tmp_path / "pipeline_events_2026-06-23.jsonl"
+    rows = [
+        _event(
+            "000990",
+            "A",
+            "scalping_scanner_candidate_promoted",
+            {"price_delta_since_first_seen_pct": "0.99"},
+        ),
+        _event(
+            "001000",
+            "B",
+            "scalping_scanner_candidate_promoted",
+            {"price_delta_since_first_seen_pct": "1.00"},
+        ),
+    ]
+    path.write_text("\n".join(json.dumps(row, ensure_ascii=False) for row in rows), encoding="utf-8")
+
+    report = build_report(target_date="2026-06-23", pipeline_path=path, generated_at="fixed")
+
+    assert report["thresholds"]["rising_missed_pct"] == 1.0
+    assert report["summary"]["rising_missed_buy_count"] == 1
+    assert report["summary"]["rising_missed_class_counts"] == [
+        {"class": "rising_missed_raw", "count": 1}
+    ]
+    assert report["summary"]["rising_missed_one_share_eligible_symbol_count"] == 1
+    assert report["rising_missed_buy"][0]["stock_code"] == "001000"
+    assert report["rising_missed_buy"][0]["rising_missed_class"] == "rising_missed_raw"
+    assert report["rising_missed_buy"][0]["rising_missed_one_share_eligible"] is True
+    assert {item["stock_code"] for item in report["promoted_symbols"]} == {"000990", "001000"}
+
+
 def test_build_report_suppresses_known_latency_guard_as_resolved_non_major(tmp_path):
     path = tmp_path / "pipeline_events_2026-06-23.jsonl"
     rows = [
@@ -135,6 +167,8 @@ def test_build_report_suppresses_known_latency_guard_as_resolved_non_major(tmp_p
     report = build_report(target_date="2026-06-23", pipeline_path=path, generated_at="fixed")
 
     item = report["rising_missed_buy"][0]
+    assert item["rising_missed_class"] == "intended_guard_preserved"
+    assert item["rising_missed_one_share_eligible"] is False
     assert item["latest_blocker"]["stage"] == "latency_block"
     assert item["latest_blocker"]["reason"] == "latency_state_danger"
     assert item["dominant_actionable_blocker"] == {
@@ -193,6 +227,8 @@ def test_build_report_keeps_unknown_latency_guard_as_actionable_major(tmp_path):
     report = build_report(target_date="2026-06-23", pipeline_path=path, generated_at="fixed")
 
     item = report["rising_missed_buy"][0]
+    assert item["rising_missed_class"] == "actionable_major_missed"
+    assert item["rising_missed_one_share_eligible"] is True
     assert item["latency_danger_root_cause"]["top_cause"] == "other_danger"
     assert item["dominant_actionable_blocker"] == {
         "stage": "latency_block",
@@ -1480,7 +1516,7 @@ def test_build_report_excludes_unflagged_submit_after_rising_missed_forced_scout
             "240810",
             "원익IPS",
             "scalping_scanner_candidate_promoted",
-            {"price_delta_since_first_seen_pct": "0.55"},
+            {"price_delta_since_first_seen_pct": "1.05"},
             emitted_at="2026-06-30T11:04:00",
         ),
         _event(
@@ -1488,7 +1524,7 @@ def test_build_report_excludes_unflagged_submit_after_rising_missed_forced_scout
             "원익IPS",
             "budget_pass",
             {
-                "price_delta_since_first_seen_pct": "0.55",
+                "price_delta_since_first_seen_pct": "1.05",
                 "order_quantity": "1",
                 "forced_entry_reason": "rising_missed_one_share_entry",
                 "rising_missed_one_share_entry_forced": "true",
@@ -1502,7 +1538,7 @@ def test_build_report_excludes_unflagged_submit_after_rising_missed_forced_scout
             {
                 "actual_order_submitted": "False",
                 "broker_order_forbidden": "False",
-                "price_delta_since_first_seen_pct": "0.55",
+                "price_delta_since_first_seen_pct": "1.05",
                 "reason": "safe_normal_entry_allowed",
             },
             emitted_at="2026-06-30T11:04:16",
@@ -1514,7 +1550,7 @@ def test_build_report_excludes_unflagged_submit_after_rising_missed_forced_scout
             {
                 "actual_order_submitted": "true",
                 "broker_order_submitted": "True",
-                "price_delta_since_first_seen_pct": "0.55",
+                "price_delta_since_first_seen_pct": "1.05",
             },
             emitted_at="2026-06-30T11:04:20",
         ),
@@ -1534,7 +1570,7 @@ def test_build_report_excludes_unflagged_submit_after_rising_missed_forced_scout
             "240810",
             "원익IPS",
             "blocked_strength_momentum",
-            {"price_delta_since_first_seen_pct": "0.55", "reason": "below_buy_ratio"},
+            {"price_delta_since_first_seen_pct": "1.05", "reason": "below_buy_ratio"},
             emitted_at="2026-06-30T11:06:00",
         ),
     ]

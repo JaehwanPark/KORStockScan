@@ -2170,6 +2170,48 @@ def _attempt_stop_line_touch_mandatory_avg_down(
         dynamic_stop_pct=dynamic_stop_pct,
     )
     if not stop_touch_avg_down.get("should_retry"):
+        rule = str(exit_rule or "").strip()
+        reason_type = str(sell_reason_type or "").upper()
+        if (
+            isinstance(context_fields, dict)
+            and context_fields.get("sell_intercept_context")
+            and reason_type == "LOSS"
+            and rule in {"scalp_soft_stop_pct", "scalp_hard_stop_pct"}
+        ):
+            _log_holding_pipeline(
+                stock,
+                code,
+                "stop_line_touch_mandatory_avg_down_not_eligible",
+                threshold_family="stop_line_touch_mandatory_avg_down",
+                decision_source="STOP_LINE_TOUCH_MANDATORY_AVG_DOWN",
+                decision_authority="real_scalping_stop_line_touch_intercept",
+                metric_role="bounded_tunable",
+                window_policy="same_day_intraday_runtime",
+                sample_floor="not_applicable_operator_override",
+                primary_decision_metric="stop_line_touch",
+                source_quality_gate="real_holding_stop_line_touch_and_scale_in_guards_present",
+                runtime_effect=True,
+                allowed_runtime_apply=True,
+                forbidden_uses=(
+                    "entry_threshold_relaxation|provider_route_change|broker_guard_bypass|"
+                    "quantity_cap_release|protect_or_emergency_bypass|second_avg_down_retry|hard_stop_threshold_relaxation"
+                ),
+                sell_reason_type=sell_reason_type,
+                exit_rule=rule or "-",
+                profit_rate=f"{profit_rate:+.2f}",
+                peak_profit=f"{peak_profit:+.2f}",
+                stop_line_pct=f"{_safe_float(dynamic_stop_pct, 0.0):+.2f}",
+                current_ai_score=f"{current_ai_score:.0f}",
+                held_sec=held_sec,
+                gate_allowed=False,
+                gate_reason=stop_touch_avg_down.get("reason", "not_eligible"),
+                block_reason=stop_touch_avg_down.get("reason", "not_eligible"),
+                add_type="AVG_DOWN",
+                add_reason=_STOP_LINE_TOUCH_MANDATORY_AVG_DOWN_REASON,
+                actual_order_submitted=False,
+                broker_order_forbidden=True,
+                **context_fields,
+            )
         return {
             "attempted": False,
             "submitted": False,
@@ -2215,6 +2257,75 @@ def _attempt_stop_line_touch_mandatory_avg_down(
         "broker_order_forbidden": False,
         **(context_fields or {}),
     }
+    rest_quote_only_recovery = bool(
+        (stock or {}).get("holding_rest_quote_only_recovery")
+        or (ws_data or {}).get("holding_rest_quote_only_recovery")
+    )
+    if rest_quote_only_recovery:
+        refreshed_ws_data, rest_recheck_fields = _pre_submit_refresh_rest_orderbook_snapshot(
+            code,
+            ws_data or {},
+            strategy or "",
+        )
+        rest_confirmation_fields = {
+            key: value
+            for key, value in (rest_recheck_fields or {}).items()
+            if (
+                key.startswith("pre_submit_rest_orderbook_refresh_")
+                or key.startswith("quote_consistency_")
+                or key
+                in {
+                    "canonical_mark_price",
+                    "executable_buy_price",
+                    "executable_sell_price",
+                    "ws_rest_gap_bps",
+                    "price_source",
+                    "normalization_runtime_effect",
+                }
+            )
+        }
+        if bool((rest_recheck_fields or {}).get("pre_submit_rest_orderbook_refresh_applied")):
+            ws_data = dict(refreshed_ws_data or ws_data or {})
+            ws_data["holding_rest_quote_only_recovery"] = False
+            retry_common_fields.update(
+                {
+                    **rest_confirmation_fields,
+                    "rest_quote_only_confirmation_source": "ka10004_rest_orderbook",
+                    "rest_quote_only_confirmation_result": "confirmed_by_fresh_orderbook",
+                    "holding_rest_quote_only_recovery": False,
+                }
+            )
+        else:
+            retry_common_fields.update(rest_confirmation_fields)
+            retry_common_fields["rest_quote_only_confirmation_result"] = "confirmation_unavailable"
+            _log_holding_pipeline(
+                stock,
+                code,
+                "stop_line_touch_avg_down_rest_quote_only_confirmation_blocked",
+                **{
+                    **retry_common_fields,
+                    "gate_allowed": False,
+                    "gate_reason": "rest_quote_only_requires_ws_or_orderbook_confirmation",
+                    "source_quality_gate": "ws_or_orderbook_quote_required_before_stop_line_avg_down",
+                    "confirmation_required": "ws_or_orderbook_quote",
+                    "curr_price": _safe_int((ws_data or {}).get("curr"), 0),
+                    "buy_price": _safe_float((stock or {}).get("buy_price"), 0.0),
+                    "holding_ws_recovery_outcome": (
+                        (context_fields or {}).get("holding_ws_recovery_outcome")
+                        or (ws_data or {}).get("holding_ws_recovery_outcome")
+                        or "rest_quote_applied"
+                    ),
+                    "holding_rest_quote_only_recovery": True,
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                    "runtime_effect": False,
+                },
+            )
+            return {
+                "attempted": True,
+                "submitted": False,
+                "reason": "rest_quote_only_requires_ws_or_orderbook_confirmation",
+            }
     if retry_gate.get("allowed"):
         _log_holding_pipeline(
             stock,
@@ -7840,9 +7951,9 @@ def _env_int(name: str, default: int) -> int:
 def _scanner_rising_entry_min_delta_pct() -> float:
     raw = os.getenv("KORSTOCKSCAN_SCANNER_RISING_FULL_EVAL_MIN_DELTA_PCT", "")
     try:
-        value = float(str(raw).strip()) if str(raw).strip() else 0.5
+        value = float(str(raw).strip()) if str(raw).strip() else 1.0
     except Exception:
-        value = 0.5
+        value = 1.0
     return max(0.0, min(value, 20.0))
 
 
@@ -17657,6 +17768,29 @@ def _evaluate_holding_flow_override(
             **_holding_flow_override_force_exit_contract_fields(),
         )
         return True
+    if exit_rule == "scalp_trailing_take_profit":
+        trailing_peak_worsen = float(peak_profit or 0.0) - float(profit_rate or 0.0)
+        trailing_force_worsen_pct = (
+            _rule_float("SCALP_TRAILING_LIMIT_STRONG", 0.8)
+            if float(current_ai_score or 0.0) >= 75.0
+            else _rule_float("SCALP_TRAILING_LIMIT_WEAK", 0.4)
+        )
+        if trailing_peak_worsen + 1e-9 >= max(0.0, trailing_force_worsen_pct):
+            _log_holding_pipeline(
+                stock,
+                code,
+                "holding_flow_override_force_exit",
+                exit_rule=exit_rule,
+                force_reason="trailing_peak_worsen_floor",
+                trailing_peak_worsen=f"{trailing_peak_worsen:.2f}",
+                trailing_force_worsen_pct=f"{trailing_force_worsen_pct:.2f}",
+                drawdown=f"{drawdown:.2f}",
+                profit_rate=f"{profit_rate:+.2f}",
+                peak_profit=f"{peak_profit:+.2f}",
+                candidate_profit=f"{candidate_profit:+.2f}",
+                **_holding_flow_override_force_exit_contract_fields(),
+            )
+            return True
 
     def _never_green_defer_clamp(
         defer_reason: str,
@@ -17738,7 +17872,7 @@ def _evaluate_holding_flow_override(
         and last_review_action in {"HOLD", "TRIM"}
         and review_elapsed_sec is not None
         and review_elapsed_sec < max_review_sec
-        and (review_elapsed_sec < min_review_sec or profit_move_since_review < price_trigger_pct)
+        and (review_elapsed_sec < min_review_sec and profit_move_since_review < price_trigger_pct)
         and not state_change_review_requested
     ):
         if _rule_bool("HOLDING_FLOW_OFI_SMOOTHING_OVERRIDE_ENABLED", True):

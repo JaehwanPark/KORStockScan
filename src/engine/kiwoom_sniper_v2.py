@@ -2188,9 +2188,9 @@ def _scanner_positive_delta_value(target):
 def _scanner_rising_entry_min_delta_pct():
     raw = os.getenv("KORSTOCKSCAN_SCANNER_RISING_FULL_EVAL_MIN_DELTA_PCT", "")
     try:
-        value = float(str(raw).strip()) if str(raw).strip() else 0.5
+        value = float(str(raw).strip()) if str(raw).strip() else 1.0
     except Exception:
-        value = 0.5
+        value = 1.0
     return max(0.0, min(value, 20.0))
 
 

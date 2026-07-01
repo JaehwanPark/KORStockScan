@@ -9,6 +9,17 @@ from datetime import datetime, time as dt_time
 from pathlib import Path
 from typing import Any
 
+from src.engine.scalping.rising_missed_one_share_entry import (
+    RISING_MISSED_CLASS_ACTIONABLE_MAJOR,
+    RISING_MISSED_CLASS_INTENDED_GUARD_PRESERVED,
+    RISING_MISSED_CLASS_NOT_RISING,
+    RISING_MISSED_CLASS_RUNTIME_BACKPRESSURE,
+    RISING_MISSED_CLASS_SOURCE_QUALITY_EXCLUDED,
+    RISING_MISSED_CLASS_STRATEGY_REJECT,
+    RISING_MISSED_CLASS_SUBMITTED_RESOLVED,
+    classify_rising_missed_candidate,
+)
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 ENTRY_PIPELINE = "ENTRY_PIPELINE"
@@ -1453,6 +1464,70 @@ def _zero_strength_history_workorders(items: list[dict[str, Any]]) -> list[dict[
     return sorted(workorders, key=lambda item: item["event_count"], reverse=True)
 
 
+def _rising_missed_classification_for_item(item: dict[str, Any], *, rising_threshold_pct: float) -> dict[str, Any]:
+    dominant = item.get("dominant_actionable_blocker") if isinstance(item.get("dominant_actionable_blocker"), dict) else {}
+    blocker_class = str(dominant.get("class") or "")
+    blocker_route = str(dominant.get("route") or "")
+    budget = item.get("scanner_full_eval_budget_deferred") if isinstance(item.get("scanner_full_eval_budget_deferred"), dict) else {}
+    quality = item.get("zero_strength_history_source_quality") if isinstance(item.get("zero_strength_history_source_quality"), dict) else {}
+    recent_blockers = item.get("recent_blockers") if isinstance(item.get("recent_blockers"), list) else []
+    recent_taxonomies = [
+        row.get("taxonomy")
+        for row in recent_blockers
+        if isinstance(row, dict) and isinstance(row.get("taxonomy"), dict)
+    ]
+    recent_preserved_guard = any(
+        str(taxonomy.get("class") or "") in {"submit_hard_guard", "intended_guard"}
+        or (
+            str(taxonomy.get("class") or "") == "pre_submit_quality_guard"
+            and str(taxonomy.get("route") or "").startswith("known_")
+        )
+        for taxonomy in recent_taxonomies
+    )
+    source_quality_excluded = (
+        int(item.get("unresolved_stale_low_ai_or_pressure_eval_count") or 0) > 0
+        or int(quality.get("event_count") or 0) >= ZERO_HISTORY_WORKORDER_MIN_EVENTS
+        or blocker_class in {"source_freshness_blocker", "source_freshness_evictable"}
+    )
+    intended_guard_preserved = (
+        blocker_class in {"submit_hard_guard", "intended_guard"}
+        or (blocker_class == "pre_submit_quality_guard" and blocker_route.startswith("known_"))
+        or recent_preserved_guard
+    )
+    runtime_backpressure_observation = int(budget.get("count") or 0) > 0
+    strategy_reject_missed = blocker_class == "strategy_reject"
+    actionable_major_missed = bool(dominant.get("stage")) and blocker_class not in {
+        "",
+        "non_actionable_guard_or_backpressure",
+        "strategy_reject",
+        "submit_hard_guard",
+        "source_freshness_blocker",
+        "source_freshness_evictable",
+    }
+    classification = classify_rising_missed_candidate(
+        max_delta_pct=item.get("max_price_delta_since_first_seen_pct"),
+        real_submit_count=item.get("real_submit_count"),
+        min_delta_pct=rising_threshold_pct,
+        source_quality_excluded=source_quality_excluded,
+        intended_guard_preserved=intended_guard_preserved,
+        runtime_backpressure_observation=runtime_backpressure_observation,
+        strategy_reject_missed=strategy_reject_missed,
+        actionable_major_missed=actionable_major_missed,
+    )
+    return {
+        "rising_missed_class": classification.rising_missed_class,
+        "rising_missed_class_reason": classification.reason,
+        "rising_missed_one_share_eligible": classification.one_share_eligible,
+        "rising_missed_class_flags": {
+            RISING_MISSED_CLASS_SOURCE_QUALITY_EXCLUDED: source_quality_excluded,
+            RISING_MISSED_CLASS_INTENDED_GUARD_PRESERVED: intended_guard_preserved,
+            RISING_MISSED_CLASS_RUNTIME_BACKPRESSURE: runtime_backpressure_observation,
+            RISING_MISSED_CLASS_STRATEGY_REJECT: strategy_reject_missed,
+            RISING_MISSED_CLASS_ACTIONABLE_MAJOR: actionable_major_missed,
+        },
+    }
+
+
 def _root_cause_priorities(
     *,
     rising_missed: list[dict[str, Any]],
@@ -1682,7 +1757,7 @@ def build_report(
     generated_at: str | None = None,
     since: str | None = None,
     event_until: str | None = None,
-    rising_threshold_pct: float = 0.5,
+    rising_threshold_pct: float = 1.0,
     falling_threshold_pct: float = -0.1,
 ) -> dict[str, Any]:
     all_rows = _read_jsonl(pipeline_path)
@@ -1699,11 +1774,15 @@ def build_report(
         for code, events in grouped.items()
         if any(row.get("stage") == PROMOTED_STAGE for row in full_grouped.get(code, events))
     ]
+    for item in summaries:
+        item.update(_rising_missed_classification_for_item(item, rising_threshold_pct=rising_threshold_pct))
     rising_missed = [
         item
         for item in summaries
-        if (item["max_price_delta_since_first_seen_pct"] or 0.0) >= rising_threshold_pct
-        and item["real_submit_count"] == 0
+        if item.get("rising_missed_class") not in {
+            RISING_MISSED_CLASS_NOT_RISING,
+            RISING_MISSED_CLASS_SUBMITTED_RESOLVED,
+        }
     ]
     falling_submitted = [
         item
@@ -1901,6 +1980,13 @@ def build_report(
             ),
             "rising_missed_full_eval_budget_deferred_symbol_count": int(
                 scanner_budget.get("symbol_count") or 0
+            ),
+            "rising_missed_class_counts": _top_counter(
+                Counter(str(item.get("rising_missed_class") or "") for item in rising_missed),
+                key_name="class",
+            ),
+            "rising_missed_one_share_eligible_symbol_count": sum(
+                1 for item in rising_missed if bool(item.get("rising_missed_one_share_eligible"))
             ),
             "actionable_major_blocker_count": sum(
                 int(item.get("count") or 0)

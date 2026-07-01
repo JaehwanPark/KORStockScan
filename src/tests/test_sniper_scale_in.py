@@ -17,11 +17,13 @@ from src.engine import kiwoom_orders
 from src.engine.kiwoom_websocket import KiwoomWSManager
 from src.engine.scalping.rising_missed_one_share_entry import (
     BLOCK_ALREADY_HOLDING,
+    BLOCK_CLASS_NOT_ELIGIBLE,
     BLOCK_NOT_CANDIDATE,
     BLOCK_OPEN_PENDING,
     BLOCK_PRICE_ABOVE_CAP,
     FORCED_ENTRY_REASON,
     MAX_ONE_SHARE_ENTRY_PRICE_KRW,
+    RISING_MISSED_CLASS_SOURCE_QUALITY_EXCLUDED,
     collapse_to_one_share_order,
     evaluate_rising_missed_one_share_entry,
 )
@@ -72,6 +74,89 @@ def test_rising_missed_one_share_entry_allows_scanner_rising_candidate():
     assert decision.allowed is True
     assert decision.reason == FORCED_ENTRY_REASON
     assert decision.forced_qty == 1
+
+
+def test_rising_missed_default_min_delta_is_one_pct(monkeypatch):
+    monkeypatch.delenv("KORSTOCKSCAN_SCANNER_RISING_FULL_EVAL_MIN_DELTA_PCT", raising=False)
+
+    below = evaluate_rising_missed_one_share_entry(
+        {
+            "strategy": "SCALPING",
+            "position_tag": "SCANNER",
+            "scanner_promotion_id": "scan-1",
+            "price_delta_since_first_seen_pct": 0.99,
+        },
+        strategy="SCALPING",
+        position_tag="SCANNER",
+        feature_enabled=True,
+        has_open_pending=False,
+        already_holding=False,
+    )
+    at_threshold = evaluate_rising_missed_one_share_entry(
+        {
+            "strategy": "SCALPING",
+            "position_tag": "SCANNER",
+            "scanner_promotion_id": "scan-2",
+            "price_delta_since_first_seen_pct": 1.0,
+        },
+        strategy="SCALPING",
+        position_tag="SCANNER",
+        feature_enabled=True,
+        has_open_pending=False,
+        already_holding=False,
+    )
+
+    assert state_handlers._scanner_rising_entry_min_delta_pct() == 1.0
+    assert below.allowed is False
+    assert below.reason == BLOCK_NOT_CANDIDATE
+    assert at_threshold.allowed is True
+    assert at_threshold.reason == FORCED_ENTRY_REASON
+
+
+def test_rising_missed_one_share_uses_common_classification_gate():
+    decision = evaluate_rising_missed_one_share_entry(
+        {
+            "strategy": "SCALPING",
+            "position_tag": "SCANNER",
+            "scanner_promotion_id": "scan-1",
+            "price_delta_since_first_seen_pct": 2.0,
+            "rising_missed_class": RISING_MISSED_CLASS_SOURCE_QUALITY_EXCLUDED,
+        },
+        strategy="SCALPING",
+        position_tag="SCANNER",
+        feature_enabled=True,
+        has_open_pending=False,
+        already_holding=False,
+        current_price=50_000,
+    )
+
+    assert decision.allowed is False
+    assert decision.reason == BLOCK_CLASS_NOT_ELIGIBLE
+    assert decision.log_fields["rising_missed_class"] == RISING_MISSED_CLASS_SOURCE_QUALITY_EXCLUDED
+    assert decision.log_fields["rising_missed_one_share_eligible"] is False
+
+
+def test_rising_missed_one_share_blocks_already_submitted_candidate():
+    decision = evaluate_rising_missed_one_share_entry(
+        {
+            "strategy": "SCALPING",
+            "position_tag": "SCANNER",
+            "scanner_promotion_id": "scan-1",
+            "price_delta_since_first_seen_pct": 2.0,
+            "real_submit_count": 1,
+        },
+        strategy="SCALPING",
+        position_tag="SCANNER",
+        feature_enabled=True,
+        has_open_pending=False,
+        already_holding=False,
+        current_price=50_000,
+    )
+
+    assert decision.allowed is False
+    assert decision.reason == BLOCK_CLASS_NOT_ELIGIBLE
+    assert decision.log_fields["rising_missed_class"] == "submitted_resolved"
+    assert decision.log_fields["rising_missed_one_share_eligible"] is False
 
 
 def test_rising_missed_one_share_entry_blocks_price_above_cap():
@@ -15110,7 +15195,7 @@ def test_handle_holding_state_blocks_negative_mfe_protect_before_late_loss_inter
         SCALP_LATE_LOSS_AVG_DOWN_MIN_GIVEBACK_PCT=0.55,
         SCALP_LATE_LOSS_AVG_DOWN_MIN_HOLD_SEC=30,
         SCALP_LATE_LOSS_AVG_DOWN_MIN_AI_SCORE=60,
-        SCALP_LATE_LOSS_AVG_DOWN_MAX_PER_POSITION=2,
+        SCALP_LATE_LOSS_AVG_DOWN_MAX_PER_POSITION=3,
     )
     state_handlers.COOLDOWNS = {}
     state_handlers.ALERTED_STOCKS = set()
@@ -15187,7 +15272,7 @@ def test_handle_holding_state_negative_mfe_protect_stays_holding_after_retry_use
         REVERSAL_ADD_ENABLED=True,
         SCALP_LOSS_FALLBACK_ENABLED=False,
         SCALP_LATE_LOSS_AVG_DOWN_ENABLED=True,
-        SCALP_LATE_LOSS_AVG_DOWN_MAX_PER_POSITION=2,
+        SCALP_LATE_LOSS_AVG_DOWN_MAX_PER_POSITION=3,
     )
     state_handlers.COOLDOWNS = {}
     state_handlers.ALERTED_STOCKS = set()
@@ -15374,7 +15459,7 @@ def test_stop_line_touch_mandatory_avg_down_includes_ollix_like_case(monkeypatch
     state_handlers.TRADING_RULES = replace(
         CONFIG,
         SCALPING_AVG_DOWN_MARKET_ON_STOP_TOUCH_ENABLED=True,
-        SCALP_LATE_LOSS_AVG_DOWN_MAX_PER_POSITION=2,
+        SCALP_LATE_LOSS_AVG_DOWN_MAX_PER_POSITION=3,
     )
     stock = {
         "id": 13961,
@@ -15437,9 +15522,25 @@ def test_stop_line_touch_mandatory_avg_down_includes_ollix_like_case(monkeypatch
     )
     assert second_allowed["should_retry"] is True
     assert second_allowed["used_count"] == 1
-    assert second_allowed["max_per_position"] == 2
+    assert second_allowed["max_per_position"] == 3
 
     stock["stop_line_touch_avg_down_count"] = 2
+    third_allowed = state_handlers._evaluate_stop_line_touch_mandatory_avg_down(
+        stock,
+        strategy="SCALPING",
+        sell_reason_type="LOSS",
+        exit_rule="scalp_soft_stop_pct",
+        profit_rate=-3.65,
+        peak_profit=0.31,
+        current_ai_score=50,
+        held_sec=1_494,
+        dynamic_stop_pct=-3.00,
+    )
+    assert third_allowed["should_retry"] is True
+    assert third_allowed["used_count"] == 2
+    assert third_allowed["max_per_position"] == 3
+
+    stock["stop_line_touch_avg_down_count"] = 3
     already_used = state_handlers._evaluate_stop_line_touch_mandatory_avg_down(
         stock,
         strategy="SCALPING",
@@ -15479,7 +15580,7 @@ def test_stop_line_touch_mandatory_avg_down_submits_before_grace(monkeypatch):
     state_handlers.TRADING_RULES = replace(
         CONFIG,
         SCALPING_AVG_DOWN_MARKET_ON_STOP_TOUCH_ENABLED=True,
-        SCALP_LATE_LOSS_AVG_DOWN_MAX_PER_POSITION=2,
+        SCALP_LATE_LOSS_AVG_DOWN_MAX_PER_POSITION=3,
     )
     stock = {
         "id": 13961,
@@ -15536,6 +15637,244 @@ def test_stop_line_touch_mandatory_avg_down_submits_before_grace(monkeypatch):
     assert add_calls[0]["action"]["stop_line_touched"] is True
     by_stage = {stage: fields for stage, fields in pipeline_events}
     assert "stop_line_touch_mandatory_avg_down_candidate" in by_stage
+    assert by_stage["stop_line_touch_mandatory_avg_down_submitted"]["actual_order_submitted"] is True
+
+
+def test_stop_line_touch_mandatory_avg_down_logs_not_eligible(monkeypatch):
+    state_handlers.TRADING_RULES = replace(
+        CONFIG,
+        SCALPING_AVG_DOWN_MARKET_ON_STOP_TOUCH_ENABLED=False,
+        SCALP_LATE_LOSS_AVG_DOWN_MAX_PER_POSITION=3,
+    )
+    stock = {
+        "id": 14716,
+        "code": "073240",
+        "name": "금호타이어",
+        "status": "HOLDING",
+        "strategy": "SCALPING",
+        "buy_price": 5_290,
+        "buy_qty": 1,
+        "actual_order_submitted": True,
+    }
+    pipeline_events = []
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_holding_pipeline",
+        lambda stock, code, stage, **fields: pipeline_events.append((stage, fields)),
+    )
+
+    result = state_handlers._attempt_stop_line_touch_mandatory_avg_down(
+        stock=stock,
+        code="073240",
+        ws_data={"curr": 4_970, "best_bid": 4_970, "best_ask": 4_975},
+        strategy="SCALPING",
+        market_regime="NORMAL",
+        admin_id=1,
+        sell_reason_type="LOSS",
+        exit_rule="scalp_hard_stop_pct",
+        profit_rate=-6.27,
+        peak_profit=-0.23,
+        current_ai_score=50,
+        held_sec=3_637,
+        dynamic_stop_pct=-5.00,
+        now_ts=1_000.0,
+        context_fields={"sell_intercept_context": "final_loss_sell_before_fallback"},
+    )
+
+    assert result == {"attempted": False, "submitted": False, "reason": "disabled"}
+    by_stage = {stage: fields for stage, fields in pipeline_events}
+    diagnostic = by_stage["stop_line_touch_mandatory_avg_down_not_eligible"]
+    assert diagnostic["exit_rule"] == "scalp_hard_stop_pct"
+    assert diagnostic["gate_reason"] == "disabled"
+    assert diagnostic["block_reason"] == "disabled"
+    assert diagnostic["actual_order_submitted"] is False
+    assert diagnostic["broker_order_forbidden"] is True
+    assert diagnostic["sell_intercept_context"] == "final_loss_sell_before_fallback"
+
+
+def test_stop_line_touch_mandatory_avg_down_waits_on_rest_quote_only_recovery(monkeypatch):
+    state_handlers.TRADING_RULES = replace(
+        CONFIG,
+        SCALPING_AVG_DOWN_MARKET_ON_STOP_TOUCH_ENABLED=True,
+        SCALP_LATE_LOSS_AVG_DOWN_MAX_PER_POSITION=3,
+    )
+    stock = {
+        "id": 14720,
+        "code": "010120",
+        "name": "LS ELECTRIC",
+        "status": "HOLDING",
+        "strategy": "SCALPING",
+        "buy_price": 245_428,
+        "buy_qty": 7,
+        "actual_order_submitted": True,
+        "holding_rest_quote_only_recovery": True,
+    }
+    pipeline_events = []
+    add_calls = []
+    monkeypatch.setattr(
+        state_handlers,
+        "can_consider_scale_in",
+        lambda *args, **kwargs: {"allowed": True, "reason": "ok"},
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_process_scale_in_action",
+        lambda **kwargs: add_calls.append(kwargs) or {"return_code": "0", "ord_no": "A1"},
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_holding_pipeline",
+        lambda stock, code, stage, **fields: pipeline_events.append((stage, fields)),
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_pre_submit_refresh_rest_orderbook_snapshot",
+        lambda code, ws_data, strategy: (
+            dict(ws_data or {}),
+            {
+                "pre_submit_rest_orderbook_refresh_enabled": True,
+                "pre_submit_rest_orderbook_refresh_applied": False,
+                "pre_submit_rest_orderbook_refresh_reason": "rest_orderbook_stale",
+            },
+        ),
+    )
+
+    result = state_handlers._attempt_stop_line_touch_mandatory_avg_down(
+        stock=stock,
+        code="010120",
+        ws_data={
+            "curr": 238_000,
+            "holding_rest_quote_only_recovery": True,
+            "holding_ws_recovery_outcome": "rest_quote_applied",
+        },
+        strategy="SCALPING",
+        market_regime="NORMAL",
+        admin_id=1,
+        sell_reason_type="LOSS",
+        exit_rule="scalp_soft_stop_pct",
+        profit_rate=-3.25,
+        peak_profit=1.22,
+        current_ai_score=70,
+        held_sec=226,
+        dynamic_stop_pct=-3.00,
+        now_ts=1_000.0,
+        context_fields={"sell_intercept_context": "soft_stop_touch_before_grace"},
+    )
+
+    assert result == {
+        "attempted": True,
+        "submitted": False,
+        "reason": "rest_quote_only_requires_ws_or_orderbook_confirmation",
+    }
+    assert add_calls == []
+    assert "stop_line_touch_avg_down_used" not in stock
+    by_stage = {stage: fields for stage, fields in pipeline_events}
+    blocked = by_stage["stop_line_touch_avg_down_rest_quote_only_confirmation_blocked"]
+    assert blocked["actual_order_submitted"] is False
+    assert blocked["broker_order_forbidden"] is True
+    assert blocked["confirmation_required"] == "ws_or_orderbook_quote"
+    assert blocked["curr_price"] == 238_000
+    assert blocked["buy_price"] == 245_428.0
+    assert blocked["gate_reason"] == "rest_quote_only_requires_ws_or_orderbook_confirmation"
+    assert blocked["holding_ws_recovery_outcome"] == "rest_quote_applied"
+    assert blocked["pre_submit_rest_orderbook_refresh_applied"] is False
+    assert blocked["pre_submit_rest_orderbook_refresh_reason"] == "rest_orderbook_stale"
+    assert blocked["rest_quote_only_confirmation_result"] == "confirmation_unavailable"
+
+
+def test_stop_line_touch_mandatory_avg_down_uses_fresh_rest_orderbook_confirmation(monkeypatch):
+    state_handlers.TRADING_RULES = replace(
+        CONFIG,
+        SCALPING_AVG_DOWN_MARKET_ON_STOP_TOUCH_ENABLED=True,
+        SCALP_LATE_LOSS_AVG_DOWN_MAX_PER_POSITION=3,
+    )
+    stock = {
+        "id": 14733,
+        "code": "037710",
+        "name": "광주신세계",
+        "status": "HOLDING",
+        "strategy": "SCALPING",
+        "buy_price": 44_198,
+        "buy_qty": 30,
+        "actual_order_submitted": True,
+        "holding_rest_quote_only_recovery": True,
+    }
+    pipeline_events = []
+    add_calls = []
+    monkeypatch.setattr(
+        state_handlers,
+        "can_consider_scale_in",
+        lambda *args, **kwargs: {"allowed": True, "reason": "ok"},
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_pre_submit_refresh_rest_orderbook_snapshot",
+        lambda code, ws_data, strategy: (
+            {
+                **dict(ws_data or {}),
+                "curr": 42_550,
+                "best_bid": 42_550,
+                "best_ask": 42_600,
+                "holding_rest_quote_only_recovery": True,
+            },
+            {
+                "pre_submit_rest_orderbook_refresh_enabled": True,
+                "pre_submit_rest_orderbook_refresh_applied": True,
+                "pre_submit_rest_orderbook_refresh_reason": "rest_orderbook_fresh",
+                "pre_submit_rest_orderbook_refresh_best_bid": 42_550,
+                "pre_submit_rest_orderbook_refresh_best_ask": 42_600,
+                "pre_submit_rest_orderbook_refresh_latest_price": 42_550,
+                "quote_consistency_state": "single_source",
+                "quote_consistency_entry_blocked": False,
+                "canonical_mark_price": 42_550,
+                "executable_buy_price": 42_550,
+                "executable_sell_price": 42_550,
+                "price_source": "rest_orderbook",
+                "normalization_runtime_effect": True,
+            },
+        ),
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_process_scale_in_action",
+        lambda **kwargs: add_calls.append(kwargs) or {"return_code": "0", "ord_no": "A2"},
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_holding_pipeline",
+        lambda stock, code, stage, **fields: pipeline_events.append((stage, fields)),
+    )
+
+    result = state_handlers._attempt_stop_line_touch_mandatory_avg_down(
+        stock=stock,
+        code="037710",
+        ws_data={
+            "curr": 42_550,
+            "holding_rest_quote_only_recovery": True,
+            "holding_ws_recovery_outcome": "rest_quote_applied",
+        },
+        strategy="SCALPING",
+        market_regime="NORMAL",
+        admin_id=1,
+        sell_reason_type="LOSS",
+        exit_rule="scalp_soft_stop_pct",
+        profit_rate=-3.95,
+        peak_profit=1.02,
+        current_ai_score=50,
+        held_sec=3_070,
+        dynamic_stop_pct=-3.00,
+        now_ts=1_000.0,
+        context_fields={"sell_intercept_context": "soft_stop_touch_before_grace"},
+    )
+
+    assert result["submitted"] is True
+    assert add_calls[0]["ws_data"]["holding_rest_quote_only_recovery"] is False
+    assert add_calls[0]["ws_data"]["curr"] == 42_550
+    by_stage = {stage: fields for stage, fields in pipeline_events}
+    assert "stop_line_touch_avg_down_rest_quote_only_confirmation_blocked" not in by_stage
+    candidate = by_stage["stop_line_touch_mandatory_avg_down_candidate"]
+    assert candidate["pre_submit_rest_orderbook_refresh_applied"] is True
+    assert candidate["rest_quote_only_confirmation_result"] == "confirmed_by_fresh_orderbook"
     assert by_stage["stop_line_touch_mandatory_avg_down_submitted"]["actual_order_submitted"] is True
 
 
@@ -15601,7 +15940,7 @@ def test_late_loss_avg_down_retry_includes_hanall_and_gwangju_like_cases(monkeyp
         held_sec=2471,
     )
     two_used = state_handlers._evaluate_late_loss_avg_down_retry(
-        {"strategy": "SCALPING", "stop_line_touch_avg_down_count": 2},
+        {"strategy": "SCALPING", "stop_line_touch_avg_down_count": 3},
         strategy="SCALPING",
         sell_reason_type="LOSS",
         exit_rule="scalp_soft_stop_pct",
@@ -15615,10 +15954,10 @@ def test_late_loss_avg_down_retry_includes_hanall_and_gwangju_like_cases(monkeyp
     assert hanall["eligibility_path"] == "deep_loss_retry"
     assert one_used["should_retry"] is True
     assert one_used["used_count"] == 1
-    assert one_used["max_per_position"] == 2
+    assert one_used["max_per_position"] == 3
     assert two_used["should_retry"] is False
     assert two_used["reason"] == "already_used"
-    assert two_used["used_count"] == 2
+    assert two_used["used_count"] == 3
     assert gwangju == {"should_retry": False, "reason": "hard_safety_exit"}
     assert protect_trailing == {"should_retry": False, "reason": "hard_safety_exit"}
     assert mfe_protect == {"should_retry": False, "reason": "hard_safety_exit"}

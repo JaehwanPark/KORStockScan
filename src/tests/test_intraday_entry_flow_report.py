@@ -364,8 +364,10 @@ def test_write_outputs_uses_time_only_since_window_in_title(tmp_path):
 def test_default_output_paths_accept_time_only_since_and_generated_at():
     output_md, output_csv = _default_output_paths("2026-06-29", "11:30", "13:18")
 
-    assert output_md.name == "intraday_entry_flow_2026-06-29_1130_to_1318.md"
+    assert output_md.name == "intraday_entry_flow_2026-06-29_current.md"
+    assert output_md.parent.as_posix().endswith("data/report/intraday_entry_flow")
     assert output_csv.name == "intraday_entry_flow_2026-06-29_1130_to_1318.csv"
+    assert output_csv.parent.as_posix() == "/tmp"
 
 
 def test_build_report_separates_refresh_recovered_stale_from_hard_stale(tmp_path):
