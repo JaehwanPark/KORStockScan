@@ -1982,6 +1982,74 @@ def _evaluate_scalp_profit_stagnation_exit(
     }
 
 
+def _evaluate_scalp_low_profit_stagnation_hard_exit(
+    stock: dict | None,
+    *,
+    strategy: str | None,
+    profit_rate: float,
+    held_sec: int,
+) -> dict:
+    if not _rule_bool("SCALP_LOW_PROFIT_STAGNATION_HARD_EXIT_ENABLED", False):
+        return {"should_exit": False, "reason": "disabled"}
+    if not isinstance(stock, dict) or not _is_scalp_strategy(strategy):
+        return {"should_exit": False, "reason": "not_real_scalping"}
+    if _is_scalp_simulated_position(stock, strategy) or _has_sim_probe_provenance(stock):
+        return {"should_exit": False, "reason": "simulated_position"}
+
+    min_hold_sec = max(1, _rule_int("SCALP_LOW_PROFIT_STAGNATION_MIN_HOLD_SEC", 1800))
+    min_adjusted_profit = _rule_float(
+        "SCALP_LOW_PROFIT_STAGNATION_MIN_ADJUSTED_PROFIT_PCT",
+        0.20,
+    )
+    max_adjusted_profit = _rule_float(
+        "SCALP_LOW_PROFIT_STAGNATION_MAX_ADJUSTED_PROFIT_PCT",
+        1.00,
+    )
+    if max_adjusted_profit < min_adjusted_profit:
+        min_adjusted_profit, max_adjusted_profit = max_adjusted_profit, min_adjusted_profit
+    slippage_bps = max(
+        0.0,
+        _rule_float("SCALP_LOW_PROFIT_STAGNATION_ASSUMED_EXIT_SLIPPAGE_BPS", 15.0),
+    )
+    adjusted_profit = float(profit_rate) - (slippage_bps / 100.0)
+
+    if int(held_sec or 0) < min_hold_sec:
+        return {
+            "should_exit": False,
+            "reason": "hold_time_below_min",
+            "held_sec": int(held_sec or 0),
+            "min_hold_sec": min_hold_sec,
+            "adjusted_profit_pct": adjusted_profit,
+        }
+    if adjusted_profit < min_adjusted_profit:
+        return {
+            "should_exit": False,
+            "reason": "adjusted_profit_below_min",
+            "adjusted_profit_pct": adjusted_profit,
+            "min_adjusted_profit_pct": min_adjusted_profit,
+        }
+    if adjusted_profit > max_adjusted_profit:
+        return {
+            "should_exit": False,
+            "reason": "adjusted_profit_above_max",
+            "adjusted_profit_pct": adjusted_profit,
+            "max_adjusted_profit_pct": max_adjusted_profit,
+        }
+
+    return {
+        "should_exit": True,
+        "exit_rule": "scalp_low_profit_stagnation_hard_exit",
+        "sell_reason_type": "LOW_PROFIT_STAGNATION",
+        "held_sec": int(held_sec or 0),
+        "min_hold_sec": min_hold_sec,
+        "profit_rate_pct": float(profit_rate),
+        "adjusted_profit_pct": adjusted_profit,
+        "assumed_exit_slippage_bps": slippage_bps,
+        "min_adjusted_profit_pct": min_adjusted_profit,
+        "max_adjusted_profit_pct": max_adjusted_profit,
+    }
+
+
 def _evaluate_scalp_mfe_protect_exit(
     stock: dict | None,
     *,
@@ -28292,6 +28360,32 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                         f"peak=+{peak_profit:.2f}%, peak_improve={_safe_float(stagnation_exit.get('peak_improve'), 0.0):.2f}%p)"
                     )
                     exit_rule = "scalp_profit_stagnation_time_exit"
+
+        if not is_sell_signal:
+            low_profit_stagnation_exit = _evaluate_scalp_low_profit_stagnation_hard_exit(
+                stock,
+                strategy=strategy,
+                profit_rate=profit_rate,
+                held_sec=held_sec,
+            )
+            if low_profit_stagnation_exit.get("should_exit"):
+                adjusted_profit = _safe_float(
+                    low_profit_stagnation_exit.get("adjusted_profit_pct"),
+                    profit_rate,
+                )
+                slippage_bps = _safe_float(
+                    low_profit_stagnation_exit.get("assumed_exit_slippage_bps"),
+                    0.0,
+                )
+                is_sell_signal = True
+                sell_reason_type = "LOW_PROFIT_STAGNATION"
+                reason = (
+                    "조정수익권 장기횡보 하드청산 "
+                    f"(hold={held_sec}s/{low_profit_stagnation_exit.get('min_hold_sec', 0)}s, "
+                    f"profit=+{profit_rate:.2f}%, adjusted=+{adjusted_profit:.2f}%, "
+                    f"slippage={slippage_bps:.0f}bp)"
+                )
+                exit_rule = "scalp_low_profit_stagnation_hard_exit"
 
     elif strategy == 'KOSDAQ_ML':
         try:

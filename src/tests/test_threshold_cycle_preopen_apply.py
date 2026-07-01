@@ -46,6 +46,41 @@ def test_entry_cancel_wait_is_written_to_runtime_selected_families(tmp_path, mon
     assert "entry_cancel_wait_runtime" in runtime_manifest["selected_families"]
     assert runtime_manifest["report_type"] == "threshold_runtime_env"
     assert runtime_manifest["env_overrides"]["KORSTOCKSCAN_ENTRY_CANCEL_WAIT_ATTRIBUTION_ENABLED"] == "true"
+
+
+def test_profit_stagnation_lock_env_includes_low_profit_hard_exit_candidate():
+    env = mod._lock_env_overrides(
+        {
+            "family": mod.PROFIT_STAGNATION_EXIT_FAMILY,
+            "env_overrides": {
+                "KORSTOCKSCAN_SCALP_PROFIT_STAGNATION_EXIT_ENABLED": "true",
+                "KORSTOCKSCAN_SCALP_PROFIT_STAGNATION_MIN_SEC": "180",
+            },
+        }
+    )
+
+    assert env["KORSTOCKSCAN_SCALP_PROFIT_STAGNATION_EXIT_ENABLED"] == "true"
+    assert env["KORSTOCKSCAN_SCALP_LOW_PROFIT_STAGNATION_HARD_EXIT_ENABLED"] == "true"
+    assert env["KORSTOCKSCAN_SCALP_LOW_PROFIT_STAGNATION_MIN_ADJUSTED_PROFIT_PCT"] == "0.20"
+    assert env["KORSTOCKSCAN_SCALP_LOW_PROFIT_STAGNATION_MAX_ADJUSTED_PROFIT_PCT"] == "1.00"
+    assert env["KORSTOCKSCAN_SCALP_LOW_PROFIT_STAGNATION_MIN_HOLD_SEC"] == "1800"
+    assert env["KORSTOCKSCAN_SCALP_LOW_PROFIT_STAGNATION_ASSUMED_EXIT_SLIPPAGE_BPS"] == "15"
+
+
+def test_profit_stagnation_carry_forward_env_includes_low_profit_hard_exit_candidate():
+    env = mod._previous_runtime_env_overrides_for_family(
+        {
+            "env_overrides": {
+                "KORSTOCKSCAN_SCALP_PROFIT_STAGNATION_EXIT_ENABLED": "true",
+                "KORSTOCKSCAN_SCALP_PROFIT_STAGNATION_MIN_SEC": "180",
+            },
+        },
+        mod.PROFIT_STAGNATION_EXIT_FAMILY,
+    )
+
+    assert env["KORSTOCKSCAN_SCALP_PROFIT_STAGNATION_EXIT_ENABLED"] == "true"
+    assert env["KORSTOCKSCAN_SCALP_LOW_PROFIT_STAGNATION_HARD_EXIT_ENABLED"] == "true"
+    assert env["KORSTOCKSCAN_SCALP_LOW_PROFIT_STAGNATION_MIN_HOLD_SEC"] == "1800"
 from src.engine import lifecycle_bucket_discovery as discovery_mod
 from src.engine.scalping import scalp_sim_auto_approval_control_tower as scalp_sim_auto_mod
 from src.engine.swing import sim_auto_approval_control_tower as swing_sim_mod

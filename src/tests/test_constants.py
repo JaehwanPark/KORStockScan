@@ -709,6 +709,11 @@ def test_trading_rules_profit_stagnation_exit_env_override(monkeypatch):
     monkeypatch.setenv("KORSTOCKSCAN_SCALP_PROFIT_STAGNATION_MAX_PROFIT_MOVE_PCT", "0.15")
     monkeypatch.setenv("KORSTOCKSCAN_SCALP_PROFIT_STAGNATION_MAX_PEAK_IMPROVE_PCT", "0.10")
     monkeypatch.setenv("KORSTOCKSCAN_SCALP_PROFIT_STAGNATION_MIN_AI_SCORE", "45")
+    monkeypatch.setenv("KORSTOCKSCAN_SCALP_LOW_PROFIT_STAGNATION_HARD_EXIT_ENABLED", "true")
+    monkeypatch.setenv("KORSTOCKSCAN_SCALP_LOW_PROFIT_STAGNATION_MIN_ADJUSTED_PROFIT_PCT", "0.20")
+    monkeypatch.setenv("KORSTOCKSCAN_SCALP_LOW_PROFIT_STAGNATION_MAX_ADJUSTED_PROFIT_PCT", "1.00")
+    monkeypatch.setenv("KORSTOCKSCAN_SCALP_LOW_PROFIT_STAGNATION_MIN_HOLD_SEC", "1800")
+    monkeypatch.setenv("KORSTOCKSCAN_SCALP_LOW_PROFIT_STAGNATION_ASSUMED_EXIT_SLIPPAGE_BPS", "15")
 
     reloaded = importlib.reload(constants)
 
@@ -718,6 +723,11 @@ def test_trading_rules_profit_stagnation_exit_env_override(monkeypatch):
     assert reloaded.TRADING_RULES.SCALP_PROFIT_STAGNATION_MAX_PROFIT_MOVE_PCT == 0.15
     assert reloaded.TRADING_RULES.SCALP_PROFIT_STAGNATION_MAX_PEAK_IMPROVE_PCT == 0.10
     assert reloaded.TRADING_RULES.SCALP_PROFIT_STAGNATION_MIN_AI_SCORE == 45
+    assert reloaded.TRADING_RULES.SCALP_LOW_PROFIT_STAGNATION_HARD_EXIT_ENABLED is True
+    assert reloaded.TRADING_RULES.SCALP_LOW_PROFIT_STAGNATION_MIN_ADJUSTED_PROFIT_PCT == 0.20
+    assert reloaded.TRADING_RULES.SCALP_LOW_PROFIT_STAGNATION_MAX_ADJUSTED_PROFIT_PCT == 1.00
+    assert reloaded.TRADING_RULES.SCALP_LOW_PROFIT_STAGNATION_MIN_HOLD_SEC == 1800
+    assert reloaded.TRADING_RULES.SCALP_LOW_PROFIT_STAGNATION_ASSUMED_EXIT_SLIPPAGE_BPS == 15
 
 
 def test_trading_rules_protect_trailing_loss_floor_env_override(monkeypatch):

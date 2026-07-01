@@ -787,7 +787,30 @@ _FAMILY_ENV_KEY_PREFIXES: dict[str, str] = {
     "swing_sim_auto_approval": "KORSTOCKSCAN_SWING_SIM_AUTO_POLICY_",
     "scalp_sim_scale_in_window_expansion": "KORSTOCKSCAN_SCALP_SIM_SCALE_IN_",
     "lifecycle_bucket_discovery_sim_auto_approval": "KORSTOCKSCAN_LIFECYCLE_BUCKET_DISCOVERY_",
+    PROFIT_STAGNATION_EXIT_FAMILY: "KORSTOCKSCAN_SCALP_PROFIT_STAGNATION_",
 }
+
+
+PROFIT_STAGNATION_EXIT_REQUIRED_ENV_OVERRIDES: dict[str, str] = {
+    "KORSTOCKSCAN_SCALP_LOW_PROFIT_STAGNATION_HARD_EXIT_ENABLED": "true",
+    "KORSTOCKSCAN_SCALP_LOW_PROFIT_STAGNATION_MIN_ADJUSTED_PROFIT_PCT": "0.20",
+    "KORSTOCKSCAN_SCALP_LOW_PROFIT_STAGNATION_MAX_ADJUSTED_PROFIT_PCT": "1.00",
+    "KORSTOCKSCAN_SCALP_LOW_PROFIT_STAGNATION_MIN_HOLD_SEC": "1800",
+    "KORSTOCKSCAN_SCALP_LOW_PROFIT_STAGNATION_ASSUMED_EXIT_SLIPPAGE_BPS": "15",
+}
+
+
+def _normalize_runtime_env_overrides_for_family(
+    family: str,
+    env_overrides: dict[str, str],
+) -> dict[str, str]:
+    normalized = {str(k): str(v) for k, v in (env_overrides or {}).items()}
+    if family == PROFIT_STAGNATION_EXIT_FAMILY:
+        normalized = {
+            **PROFIT_STAGNATION_EXIT_REQUIRED_ENV_OVERRIDES,
+            **normalized,
+        }
+    return normalized
 
 
 def _previous_runtime_env_overrides_for_family(
@@ -807,19 +830,26 @@ def _previous_runtime_env_overrides_for_family(
         }
     prefix = _FAMILY_ENV_KEY_PREFIXES.get(family)
     if prefix:
-        return {str(k): str(v) for k, v in env_overrides.items() if str(k).startswith(prefix)}
+        return _normalize_runtime_env_overrides_for_family(
+            family,
+            {str(k): str(v) for k, v in env_overrides.items() if str(k).startswith(prefix)},
+        )
     return {}
 
 
 def _lock_env_overrides(lock: dict[str, Any]) -> dict[str, str]:
+    family = str(lock.get("family") or "").strip()
     overrides = lock.get("env_overrides") if isinstance(lock.get("env_overrides"), dict) else {}
     if overrides:
-        return {str(key): _format_env_value(value) for key, value in overrides.items()}
+        return _normalize_runtime_env_overrides_for_family(
+            family,
+            {str(key): _format_env_value(value) for key, value in overrides.items()},
+        )
     env_key = str(lock.get("env_key") or "").strip()
     if not env_key:
         return {}
     value = lock.get("env_value", "true")
-    return {env_key: _format_env_value(value)}
+    return _normalize_runtime_env_overrides_for_family(family, {env_key: _format_env_value(value)})
 
 
 def _candidate_close_reasons(candidate: dict[str, Any], reject_reason: str) -> list[str]:

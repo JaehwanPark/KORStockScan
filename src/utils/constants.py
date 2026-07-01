@@ -321,6 +321,11 @@ class TradingConfig:
     SCALP_PROFIT_STAGNATION_MAX_PROFIT_MOVE_PCT: float = 0.15
     SCALP_PROFIT_STAGNATION_MAX_PEAK_IMPROVE_PCT: float = 0.10
     SCALP_PROFIT_STAGNATION_MIN_AI_SCORE: int = 45
+    SCALP_LOW_PROFIT_STAGNATION_HARD_EXIT_ENABLED: bool = False  # real SCALPING low adjusted-profit hard time exit
+    SCALP_LOW_PROFIT_STAGNATION_MIN_ADJUSTED_PROFIT_PCT: float = 0.20
+    SCALP_LOW_PROFIT_STAGNATION_MAX_ADJUSTED_PROFIT_PCT: float = 1.00
+    SCALP_LOW_PROFIT_STAGNATION_MIN_HOLD_SEC: int = 1800
+    SCALP_LOW_PROFIT_STAGNATION_ASSUMED_EXIT_SLIPPAGE_BPS: float = 15.0
     SCALP_MFE_PROTECT_EXIT_ENABLED: bool = True  # real SCALPING positive-MFE giveback protection
     SCALP_MFE_PROTECT_MIN_PEAK_PCT: float = 0.60
     SCALP_MFE_PROTECT_TRIGGER_PROFIT_PCT: float = 0.10
@@ -1934,6 +1939,21 @@ def _build_trading_rules() -> TradingConfig:
     env_profit_stagnation_max_move = _env_float("KORSTOCKSCAN_SCALP_PROFIT_STAGNATION_MAX_PROFIT_MOVE_PCT")
     env_profit_stagnation_max_peak = _env_float("KORSTOCKSCAN_SCALP_PROFIT_STAGNATION_MAX_PEAK_IMPROVE_PCT")
     env_profit_stagnation_min_ai = _env_int("KORSTOCKSCAN_SCALP_PROFIT_STAGNATION_MIN_AI_SCORE")
+    env_low_profit_stagnation_enabled = _env_bool(
+        "KORSTOCKSCAN_SCALP_LOW_PROFIT_STAGNATION_HARD_EXIT_ENABLED"
+    )
+    env_low_profit_stagnation_min_adjusted_profit = _env_float(
+        "KORSTOCKSCAN_SCALP_LOW_PROFIT_STAGNATION_MIN_ADJUSTED_PROFIT_PCT"
+    )
+    env_low_profit_stagnation_max_adjusted_profit = _env_float(
+        "KORSTOCKSCAN_SCALP_LOW_PROFIT_STAGNATION_MAX_ADJUSTED_PROFIT_PCT"
+    )
+    env_low_profit_stagnation_min_hold = _env_int(
+        "KORSTOCKSCAN_SCALP_LOW_PROFIT_STAGNATION_MIN_HOLD_SEC"
+    )
+    env_low_profit_stagnation_slippage_bps = _env_float(
+        "KORSTOCKSCAN_SCALP_LOW_PROFIT_STAGNATION_ASSUMED_EXIT_SLIPPAGE_BPS"
+    )
     env_mfe_protect_enabled = _env_bool("KORSTOCKSCAN_SCALP_MFE_PROTECT_EXIT_ENABLED")
     env_mfe_protect_min_peak = _env_float("KORSTOCKSCAN_SCALP_MFE_PROTECT_MIN_PEAK_PCT")
     env_mfe_protect_trigger_profit = _env_float("KORSTOCKSCAN_SCALP_MFE_PROTECT_TRIGGER_PROFIT_PCT")
@@ -2121,6 +2141,11 @@ def _build_trading_rules() -> TradingConfig:
         or env_profit_stagnation_max_move is not None
         or env_profit_stagnation_max_peak is not None
         or env_profit_stagnation_min_ai is not None
+        or env_low_profit_stagnation_enabled is not None
+        or env_low_profit_stagnation_min_adjusted_profit is not None
+        or env_low_profit_stagnation_max_adjusted_profit is not None
+        or env_low_profit_stagnation_min_hold is not None
+        or env_low_profit_stagnation_slippage_bps is not None
         or env_mfe_protect_enabled is not None
         or env_mfe_protect_min_peak is not None
         or env_mfe_protect_trigger_profit is not None
@@ -2758,6 +2783,21 @@ def _build_trading_rules() -> TradingConfig:
             SCALP_PROFIT_STAGNATION_MIN_AI_SCORE=env_profit_stagnation_min_ai
             if env_profit_stagnation_min_ai is not None
             else config.SCALP_PROFIT_STAGNATION_MIN_AI_SCORE,
+            SCALP_LOW_PROFIT_STAGNATION_HARD_EXIT_ENABLED=env_low_profit_stagnation_enabled
+            if env_low_profit_stagnation_enabled is not None
+            else config.SCALP_LOW_PROFIT_STAGNATION_HARD_EXIT_ENABLED,
+            SCALP_LOW_PROFIT_STAGNATION_MIN_ADJUSTED_PROFIT_PCT=env_low_profit_stagnation_min_adjusted_profit
+            if env_low_profit_stagnation_min_adjusted_profit is not None
+            else config.SCALP_LOW_PROFIT_STAGNATION_MIN_ADJUSTED_PROFIT_PCT,
+            SCALP_LOW_PROFIT_STAGNATION_MAX_ADJUSTED_PROFIT_PCT=env_low_profit_stagnation_max_adjusted_profit
+            if env_low_profit_stagnation_max_adjusted_profit is not None
+            else config.SCALP_LOW_PROFIT_STAGNATION_MAX_ADJUSTED_PROFIT_PCT,
+            SCALP_LOW_PROFIT_STAGNATION_MIN_HOLD_SEC=env_low_profit_stagnation_min_hold
+            if env_low_profit_stagnation_min_hold is not None
+            else config.SCALP_LOW_PROFIT_STAGNATION_MIN_HOLD_SEC,
+            SCALP_LOW_PROFIT_STAGNATION_ASSUMED_EXIT_SLIPPAGE_BPS=env_low_profit_stagnation_slippage_bps
+            if env_low_profit_stagnation_slippage_bps is not None
+            else config.SCALP_LOW_PROFIT_STAGNATION_ASSUMED_EXIT_SLIPPAGE_BPS,
             SCALP_MFE_PROTECT_EXIT_ENABLED=env_mfe_protect_enabled
             if env_mfe_protect_enabled is not None
             else config.SCALP_MFE_PROTECT_EXIT_ENABLED,

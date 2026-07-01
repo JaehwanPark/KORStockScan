@@ -15197,6 +15197,106 @@ def test_scalp_profit_stagnation_time_exit_triggers_for_real_position(monkeypatc
     assert decision["elapsed_sec"] == 181
 
 
+def test_scalp_low_profit_stagnation_hard_exit_triggers_for_real_position(monkeypatch):
+    original_rules = state_handlers.TRADING_RULES
+    try:
+        state_handlers.TRADING_RULES = replace(
+            CONFIG,
+            SCALP_LOW_PROFIT_STAGNATION_HARD_EXIT_ENABLED=True,
+            SCALP_LOW_PROFIT_STAGNATION_MIN_ADJUSTED_PROFIT_PCT=0.20,
+            SCALP_LOW_PROFIT_STAGNATION_MAX_ADJUSTED_PROFIT_PCT=1.00,
+            SCALP_LOW_PROFIT_STAGNATION_MIN_HOLD_SEC=1800,
+            SCALP_LOW_PROFIT_STAGNATION_ASSUMED_EXIT_SLIPPAGE_BPS=15,
+        )
+
+        decision = state_handlers._evaluate_scalp_low_profit_stagnation_hard_exit(
+            {"strategy": "SCALPING"},
+            strategy="SCALPING",
+            profit_rate=0.80,
+            held_sec=1800,
+        )
+    finally:
+        state_handlers.TRADING_RULES = original_rules
+
+    assert decision["should_exit"] is True
+    assert decision["exit_rule"] == "scalp_low_profit_stagnation_hard_exit"
+    assert decision["sell_reason_type"] == "LOW_PROFIT_STAGNATION"
+    assert decision["adjusted_profit_pct"] == pytest.approx(0.65)
+
+
+def test_scalp_low_profit_stagnation_hard_exit_waits_for_hold_floor(monkeypatch):
+    original_rules = state_handlers.TRADING_RULES
+    try:
+        state_handlers.TRADING_RULES = replace(
+            CONFIG,
+            SCALP_LOW_PROFIT_STAGNATION_HARD_EXIT_ENABLED=True,
+            SCALP_LOW_PROFIT_STAGNATION_MIN_HOLD_SEC=1800,
+            SCALP_LOW_PROFIT_STAGNATION_ASSUMED_EXIT_SLIPPAGE_BPS=15,
+        )
+
+        decision = state_handlers._evaluate_scalp_low_profit_stagnation_hard_exit(
+            {"strategy": "SCALPING"},
+            strategy="SCALPING",
+            profit_rate=0.80,
+            held_sec=1799,
+        )
+    finally:
+        state_handlers.TRADING_RULES = original_rules
+
+    assert decision["should_exit"] is False
+    assert decision["reason"] == "hold_time_below_min"
+
+
+def test_scalp_low_profit_stagnation_hard_exit_skips_above_adjusted_band(monkeypatch):
+    original_rules = state_handlers.TRADING_RULES
+    try:
+        state_handlers.TRADING_RULES = replace(
+            CONFIG,
+            SCALP_LOW_PROFIT_STAGNATION_HARD_EXIT_ENABLED=True,
+            SCALP_LOW_PROFIT_STAGNATION_MAX_ADJUSTED_PROFIT_PCT=1.00,
+            SCALP_LOW_PROFIT_STAGNATION_MIN_HOLD_SEC=1800,
+            SCALP_LOW_PROFIT_STAGNATION_ASSUMED_EXIT_SLIPPAGE_BPS=15,
+        )
+
+        decision = state_handlers._evaluate_scalp_low_profit_stagnation_hard_exit(
+            {"strategy": "SCALPING"},
+            strategy="SCALPING",
+            profit_rate=1.30,
+            held_sec=2400,
+        )
+    finally:
+        state_handlers.TRADING_RULES = original_rules
+
+    assert decision["should_exit"] is False
+    assert decision["reason"] == "adjusted_profit_above_max"
+    assert decision["adjusted_profit_pct"] == pytest.approx(1.15)
+
+
+def test_scalp_low_profit_stagnation_hard_exit_skips_simulated_position(monkeypatch):
+    original_rules = state_handlers.TRADING_RULES
+    try:
+        state_handlers.TRADING_RULES = replace(
+            CONFIG,
+            SCALP_LOW_PROFIT_STAGNATION_HARD_EXIT_ENABLED=True,
+        )
+
+        decision = state_handlers._evaluate_scalp_low_profit_stagnation_hard_exit(
+            {
+                "strategy": "SCALPING",
+                "actual_order_submitted": False,
+                "broker_order_forbidden": True,
+                "decision_authority": "sim_observation_only",
+            },
+            strategy="SCALPING",
+            profit_rate=0.80,
+            held_sec=1800,
+        )
+    finally:
+        state_handlers.TRADING_RULES = original_rules
+
+    assert decision == {"should_exit": False, "reason": "simulated_position"}
+
+
 def test_scalp_mfe_protect_exit_triggers_for_real_position(monkeypatch):
     state_handlers.TRADING_RULES = replace(
         CONFIG,
