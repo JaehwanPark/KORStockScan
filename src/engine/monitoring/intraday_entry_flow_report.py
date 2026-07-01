@@ -316,6 +316,36 @@ def _read_jsonl(path: Path) -> list[dict[str, Any]]:
     return rows
 
 
+def _freshness_workorders_from_diagnostic(diagnostic: dict[str, Any]) -> list[dict[str, Any]]:
+    source_quality = diagnostic.get("source_quality_workorders")
+    if not isinstance(source_quality, dict):
+        return []
+    workorders = source_quality.get("rising_missed_freshness_recovery")
+    if not isinstance(workorders, list):
+        return []
+    normalized: list[dict[str, Any]] = []
+    for item in workorders:
+        if not isinstance(item, dict):
+            continue
+        normalized.append(
+            {
+                "stock_code": str(item.get("stock_code") or ""),
+                "stock_name": str(item.get("stock_name") or ""),
+                "event_count": int(item.get("event_count") or 0),
+                "diagnostic_quote_age_stale": int(item.get("diagnostic_quote_age_stale") or 0),
+                "pre_ai_stale_or_history_gap": int(item.get("pre_ai_stale_or_history_gap") or 0),
+                "latest_stage": str(item.get("latest_stage") or ""),
+                "latest_reason": str(item.get("latest_reason") or ""),
+                "next_action": str(item.get("next_action") or ""),
+                "decision_authority": str(item.get("decision_authority") or "source_quality_only"),
+                "runtime_effect": _boolish(item.get("runtime_effect")),
+                "allowed_runtime_apply": _boolish(item.get("allowed_runtime_apply")),
+            }
+        )
+    normalized.sort(key=lambda row: int(row.get("event_count") or 0), reverse=True)
+    return normalized
+
+
 def _flow_summary(events: list[dict[str, Any]], *, limit: int = 8) -> str:
     if not events:
         return "-"
@@ -805,6 +835,7 @@ def build_report(
         "rising_stale_mixed_blocker_rollup": rising_stale_mixed_blocker_rollup,
         "stale_eval_rollup": stale_eval_rollup,
         "stale_eval_category_rollup": stale_eval_category_rollup,
+        "freshness_recheck_workorders": _freshness_workorders_from_diagnostic(diagnostic),
         "latency_danger_root_cause": latency_danger_root_cause,
         "rows": rows,
     }
@@ -898,6 +929,30 @@ def write_outputs(report: dict[str, Any], *, output_md: Path, output_csv: Path, 
         handle.write("\n## stale-eval category rollup\n\n")
         for item in report.get("stale_eval_category_rollup", [])[:12]:
             handle.write(f"- {item['count']}: `{item['category']}`\n")
+        freshness_workorders = report.get("freshness_recheck_workorders") or []
+        if freshness_workorders:
+            handle.write("\n## bounded freshness recheck workorders\n\n")
+            handle.write(
+                "|종목|건수|diagnostic stale|history gap|latest|next action|authority|runtime|\n"
+            )
+            handle.write("|---|---:|---:|---:|---|---|---|---|\n")
+            for item in freshness_workorders[:12]:
+                latest = f"{item.get('latest_stage') or '-'}:{item.get('latest_reason') or '-'}"
+                runtime_state = (
+                    f"effect={bool(item.get('runtime_effect'))},"
+                    f"apply={bool(item.get('allowed_runtime_apply'))}"
+                )
+                handle.write(
+                    "|"
+                    f"{_md_cell(item.get('stock_name') or '')}({_md_cell(item.get('stock_code') or '')})|"
+                    f"{int(item.get('event_count') or 0)}|"
+                    f"{int(item.get('diagnostic_quote_age_stale') or 0)}|"
+                    f"{int(item.get('pre_ai_stale_or_history_gap') or 0)}|"
+                    f"{_md_cell(latest)}|"
+                    f"{_md_cell(item.get('next_action') or '-')}|"
+                    f"{_md_cell(item.get('decision_authority') or 'source_quality_only')}|"
+                    f"{runtime_state}|\n"
+                )
         latency_causes = report.get("latency_danger_root_cause") or []
         if latency_causes:
             handle.write("\n## latency danger root cause\n\n")

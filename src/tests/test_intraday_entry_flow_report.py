@@ -106,6 +106,81 @@ def test_build_report_summarizes_flow_and_rising_blocker(tmp_path):
     assert "09:50:00 scalping_scanner_watching_runtime_skip" in row["flow"]
 
 
+def test_write_outputs_surfaces_freshness_recheck_workorders(tmp_path):
+    event_path = tmp_path / "buy_funnel_sentinel_events_2026-06-29.jsonl"
+    diagnostic_path = tmp_path / "diag.json"
+    diagnostic_path.write_text(
+        json.dumps(
+            {
+                "summary": {"real_submit_symbol_count": 0},
+                "promoted_symbols": [
+                    {
+                        "stock_code": "000001",
+                        "stock_name": "상승",
+                        "first_promoted_at": "2026-06-29T09:50:00",
+                        "last_event_at": "2026-06-29T09:55:00",
+                        "latest_price_delta_since_first_seen_pct": 3.0,
+                        "max_price_delta_since_first_seen_pct": 3.0,
+                        "real_submit_count": 0,
+                    }
+                ],
+                "rising_missed_buy": [{"stock_code": "000001"}],
+                "source_quality_workorders": {
+                    "rising_missed_freshness_recovery": [
+                        {
+                            "stock_code": "000001",
+                            "stock_name": "상승",
+                            "event_count": 3,
+                            "diagnostic_quote_age_stale": 2,
+                            "pre_ai_stale_or_history_gap": 1,
+                            "latest_stage": "blocked_strength_momentum",
+                            "latest_reason": "insufficient_history",
+                            "next_action": "add_or_tune_bounded_fresh_recheck_enqueue_after_stale_or_history_gap",
+                            "decision_authority": "source_quality_only",
+                            "runtime_effect": "false",
+                            "allowed_runtime_apply": "false",
+                        }
+                    ]
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    rows = [
+        _event(
+            "000001",
+            "상승",
+            "blocked_strength_momentum",
+            {
+                "scanner_promotion_id": "p1",
+                "price_delta_since_first_seen_pct": "3.0",
+                "reason": "insufficient_history",
+                "quote_age_ms": "5200",
+            },
+            emitted_at="2026-06-29T09:55:00",
+        )
+    ]
+    event_path.write_text("\n".join(json.dumps(row, ensure_ascii=False) for row in rows), encoding="utf-8")
+
+    report = build_report(
+        target_date="2026-06-29",
+        event_cache_path=event_path,
+        diagnostic_path=diagnostic_path,
+        since="2026-06-29T09:50:00",
+        generated_at="fixed",
+    )
+    output_md = tmp_path / "flow.md"
+    output_csv = tmp_path / "flow.csv"
+    write_outputs(report, output_md=output_md, output_csv=output_csv)
+
+    assert report["freshness_recheck_workorders"][0]["stock_code"] == "000001"
+    assert report["freshness_recheck_workorders"][0]["runtime_effect"] is False
+    rendered = output_md.read_text(encoding="utf-8")
+    assert "## bounded freshness recheck workorders" in rendered
+    assert "effect=False,apply=False" in rendered
+    assert "add_or_tune_bounded_fresh_recheck_enqueue_after_stale_or_history_gap" in rendered
+
+
 def test_build_report_excludes_before_since_and_sim_rows(tmp_path):
     event_path = tmp_path / "events.jsonl"
     diagnostic_path = tmp_path / "diag.json"
