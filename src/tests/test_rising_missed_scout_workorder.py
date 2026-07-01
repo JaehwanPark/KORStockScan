@@ -178,6 +178,13 @@ def test_build_report_joins_forced_scout_post_sell_and_creates_workorders(tmp_pa
         "rising_missed_scout_scale_in_price_guard_split",
         "rising_missed_scout_scale_in_qty_evidence_split",
     }
+    assert {order["implementation_status"] for order in report["code_improvement_orders"]} == {
+        "implemented"
+    }
+    assert {
+        order["implementation_provenance"]["runtime_effect"]
+        for order in report["code_improvement_orders"]
+    } == {False}
     assert {order["runtime_effect"] for order in report["code_improvement_orders"]} == {False}
     assert {order["allowed_runtime_apply"] for order in report["code_improvement_orders"]} == {False}
     assert all("forced_one_share_success_counting" in order["forbidden_uses"] for order in report["code_improvement_orders"])

@@ -2542,8 +2542,19 @@ def test_swing_lifecycle_audit_reports_policy_disabled_db_divergence_and_report_
     assert report["recommendation_db_load"]["db_load_next_action"] == "continue_daily_lifecycle_audit"
     assert "swing_gap_market_budget_price_qty" in report["observation_axis_coverage"]["missing_required_fields_by_axis"]
     assert report["lifecycle_events"]["scale_in_observation"]["zero_sample_reason"] == "no_candidate"
+    scale_in_path = report["lifecycle_events"]["scale_in_observation"]["candidate_path_diagnostic"]
+    assert scale_in_path["status"] == "candidate_generation_gap"
+    assert scale_in_path["runtime_effect"] is False
+    assert scale_in_path["allowed_runtime_apply"] is False
     assert "order_swing_recommendation_db_load_gap" not in orders
     assert "zero_sample_reason=no_candidate" in orders["order_swing_scale_in_avg_down_pyramid_observation"]["evidence"]
+    scale_order = orders["order_swing_scale_in_avg_down_pyramid_observation"]
+    assert scale_order["implementation_status"] == "implemented_source_quality_contract_waiting_sample"
+    assert scale_order["implementation_provenance"]["source_contract"] == (
+        "swing_scale_in_candidate_path_diagnostic_v1"
+    )
+    assert scale_order["implementation_provenance"]["runtime_effect"] is False
+    assert scale_order["implementation_provenance"]["allowed_runtime_apply"] is False
     assert automation["ev_report_summary"]["db_load_gap"] is False
     assert automation["ev_report_summary"]["scale_in_zero_sample_reason"] == "no_candidate"
 

@@ -795,6 +795,47 @@ def _scale_in_zero_sample_reason(scale_in_raw_count: int, guard_blockers: Counte
     return "no_candidate"
 
 
+def _scale_in_candidate_path_diagnostic(
+    *,
+    scale_in_raw_count: int,
+    scale_in_actions: Counter,
+    scale_in_triggers: Counter,
+    scale_in_guard_blockers: Counter,
+    total_swing_events: int,
+) -> dict[str, Any]:
+    zero_sample_reason = _scale_in_zero_sample_reason(
+        scale_in_raw_count,
+        scale_in_guard_blockers,
+        total_swing_events,
+    )
+    if scale_in_raw_count > 0:
+        status = "candidate_path_observed"
+        next_action = "continue_post_add_outcome_collection"
+    elif zero_sample_reason == "blocked_guard":
+        status = "blocked_before_scale_in_candidate"
+        next_action = "review_guard_blocker_distribution_before_scale_in_family_change"
+    elif zero_sample_reason == "not_loaded":
+        status = "source_not_loaded"
+        next_action = "restore_swing_lifecycle_event_source_before_scale_in_judgment"
+    else:
+        status = "candidate_generation_gap"
+        next_action = "recheck_selection_entry_holding_flow_for_scale_in_candidate_reachability"
+    return {
+        "status": status,
+        "scale_in_raw_count": int(scale_in_raw_count),
+        "total_swing_event_count": int(total_swing_events),
+        "action_groups": _counter_dict(scale_in_actions),
+        "trigger_counts": _counter_dict(scale_in_triggers),
+        "guard_blockers": _counter_dict(scale_in_guard_blockers),
+        "zero_sample_reason": zero_sample_reason,
+        "next_action": next_action,
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+    }
+
+
 def load_pipeline_event_rows(target_date: str | date | datetime) -> list[dict[str, Any]]:
     date_key = _date_text(target_date)
     return _read_jsonl(Path(DATA_DIR) / "pipeline_events" / f"pipeline_events_{date_key}.jsonl")
@@ -1114,6 +1155,13 @@ def summarize_lifecycle_events(events: Iterable[dict[str, Any]]) -> dict[str, An
             "legacy_phase0_real_canary_receipts_ignored": _counter_dict(legacy_phase0_real_canary_receipts),
             "zero_sample_reason": _scale_in_zero_sample_reason(
                 scale_in_raw_count, scale_in_guard_blockers, swing_event_count
+            ),
+            "candidate_path_diagnostic": _scale_in_candidate_path_diagnostic(
+                scale_in_raw_count=scale_in_raw_count,
+                scale_in_actions=scale_in_actions,
+                scale_in_triggers=scale_in_triggers,
+                scale_in_guard_blockers=scale_in_guard_blockers,
+                total_swing_events=swing_event_count,
             ),
         },
         "ai_contract_metrics": {
@@ -3723,6 +3771,11 @@ def build_swing_improvement_automation_report(
     )
 
     if int((events.get("group_unique_counts") or {}).get("scale_in", 0) or 0) <= 0:
+        scale_in_candidate_path = (
+            scale_in_observation.get("candidate_path_diagnostic")
+            if isinstance(scale_in_observation.get("candidate_path_diagnostic"), dict)
+            else {}
+        )
         findings.append(
             {
                 "finding_id": "swing_scale_in_avg_down_pyramid_sample_gap",
@@ -3758,8 +3811,32 @@ def build_swing_improvement_automation_report(
                 evidence=[
                     "scale_in_unique_records=0",
                     f"zero_sample_reason={scale_in_observation.get('zero_sample_reason')}",
+                    f"candidate_path_status={scale_in_candidate_path.get('status')}",
+                    f"candidate_path_next_action={scale_in_candidate_path.get('next_action')}",
                 ],
                 improvement_type="lifecycle_logic_observation",
+                implementation_status="implemented_source_quality_contract_waiting_sample",
+                implementation_provenance={
+                    "implemented_scope": "swing_scale_in_candidate_path_source_only_diagnostic",
+                    "scope": "swing_scale_in_candidate_path_source_only_diagnostic",
+                    "runtime_effect": False,
+                    "allowed_runtime_apply": False,
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                    "decision_authority": "swing_improvement_automation_source_only",
+                    "source_contract": "swing_scale_in_candidate_path_diagnostic_v1",
+                    "source_fields": [
+                        "scale_in_observation.action_groups",
+                        "scale_in_observation.add_triggers",
+                        "scale_in_observation.guard_blockers",
+                        "scale_in_observation.zero_sample_reason",
+                        "scale_in_observation.candidate_path_diagnostic",
+                    ],
+                    "source_metric_snapshot": scale_in_candidate_path,
+                    "sample_status": "waiting_scale_in_candidate",
+                    "remaining_blocker_is_observation_or_policy_closure": True,
+                    "root_cause_closure_status_hint": "implementation_done",
+                },
             )
         )
 

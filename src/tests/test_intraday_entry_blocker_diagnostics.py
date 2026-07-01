@@ -225,6 +225,18 @@ def test_build_report_excludes_runtime_attach_identity_mismatch_from_one_share(t
             "decision_authority": "source_quality_only",
             "runtime_effect": False,
             "allowed_runtime_apply": False,
+            "implementation_status": "implemented_source_quality_contract_available",
+            "implementation_provenance": {
+                "implementation_type": "scanner_runtime_attach_identity_source_quality_provenance",
+                "metric_role": "source_quality_gate",
+                "decision_authority": "source_quality_only",
+                "latest_reason": "scanner_identity_name_mismatch",
+                "payload_name": "매드업",
+                "db_name": "SP삼화",
+                "runtime_effect": False,
+                "allowed_runtime_apply": False,
+                "root_cause_closure_status_hint": "implementation_done",
+            },
             "forbidden_uses": [
                 "buy_score_relaxation",
                 "ai_threshold_relaxation",
@@ -906,6 +918,12 @@ def test_build_report_surfaces_repeated_zero_strength_history_workorder(tmp_path
     assert [item["stock_code"] for item in rising_workorders] == ["000001"]
     assert rising_workorders[0]["decision_authority"] == "source_quality_only"
     assert rising_workorders[0]["runtime_effect"] is False
+    assert rising_workorders[0]["implementation_status"] == "implemented_source_quality_contract_available"
+    assert (
+        rising_workorders[0]["implementation_provenance"]["implementation_type"]
+        == "scanner_strength_history_source_quality_provenance"
+    )
+    assert rising_workorders[0]["implementation_provenance"]["runtime_effect"] is False
     assert "strength_threshold_relaxation" in rising_workorders[0]["forbidden_uses"]
     single_zero_history = next(item for item in report["rising_missed_buy"] if item["stock_code"] == "000002")
     assert single_zero_history["zero_strength_history_source_quality"]["source_quality_route"] == (

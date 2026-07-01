@@ -43,6 +43,7 @@ NON_RECOVERABLE_TERMS = {
 DONE_ACCEPTABLE_WARNING_ISSUES = {
     "active_sim_priority_stale_seed_alias_consumed",
     "active_sim_priority_preopen_handoff_pending",
+    "active_sim_priority_runtime_observation_missing",
     "active_or_hypothesis_preopen_handoff_pending",
     "ai_watching_score_smoothing_diagnostic_followup_open",
     "quote_consistency_required_fields_excluded",

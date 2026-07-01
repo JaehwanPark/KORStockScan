@@ -410,6 +410,16 @@ def _build_operational_workorders(
                 "priority": 2,
                 "runtime_effect": False,
                 "allowed_runtime_apply": False,
+                "implementation_status": "implemented",
+                "implementation_provenance": {
+                    "implementation_type": "forced_scout_post_sell_source_bridge",
+                    "decision_authority": "source_only_operational_workorder",
+                    "joined_post_sell_winner_count": len(winners),
+                    "joined_post_sell_loser_count": len(losers),
+                    "runtime_effect": False,
+                    "allowed_runtime_apply": False,
+                    "root_cause_closure_status_hint": "implementation_done",
+                },
                 "expected_ev_effect": (
                     "Use forced-scout post-sell MFE/profit and holding-quality evidence to request a bounded "
                     "normal-entry recheck workorder; do not count forced scouts as normal BUY success."
@@ -455,6 +465,18 @@ def _build_operational_workorders(
                 "priority": 2,
                 "runtime_effect": False,
                 "allowed_runtime_apply": False,
+                "implementation_status": "implemented",
+                "implementation_provenance": {
+                    "implementation_type": "forced_scout_scale_in_price_guard_source_split",
+                    "decision_authority": "source_only_scale_in_bottleneck_analysis",
+                    "price_guard_block_record_count": scale_in_bottleneck.get(
+                        "price_guard_block_record_count"
+                    ),
+                    "pyramid_ok_record_count": scale_in_bottleneck.get("pyramid_ok_record_count"),
+                    "runtime_effect": False,
+                    "allowed_runtime_apply": False,
+                    "root_cause_closure_status_hint": "implementation_done",
+                },
                 "expected_ev_effect": (
                     "Split profitable forced-scout PYRAMID candidates that reached scale-in price guard into "
                     "micro-vwap and quote-stale repair buckets before any scale-in guard or quantity change."
@@ -501,6 +523,18 @@ def _build_operational_workorders(
                 "priority": 2,
                 "runtime_effect": False,
                 "allowed_runtime_apply": False,
+                "implementation_status": "implemented",
+                "implementation_provenance": {
+                    "implementation_type": "forced_scout_scale_in_qty_evidence_source_split",
+                    "decision_authority": "source_only_scale_in_bottleneck_analysis",
+                    "qty_block_record_count": scale_in_bottleneck.get("qty_block_record_count"),
+                    "scale_in_executed_record_count": scale_in_bottleneck.get(
+                        "scale_in_executed_record_count"
+                    ),
+                    "runtime_effect": False,
+                    "allowed_runtime_apply": False,
+                    "root_cause_closure_status_hint": "implementation_done",
+                },
                 "expected_ev_effect": (
                     "Separate exposure-cap blocks from pyramid evidence-insufficient blocks for profitable "
                     "forced-scout scale-in candidates; no position cap release or real scale-in approval."
@@ -543,6 +577,15 @@ def _build_operational_workorders(
                 "priority": 2,
                 "runtime_effect": False,
                 "allowed_runtime_apply": False,
+                "implementation_status": "implemented",
+                "implementation_provenance": {
+                    "implementation_type": "forced_scout_loss_filter_source_split",
+                    "decision_authority": "source_only_operational_workorder",
+                    "joined_post_sell_loser_count": len(losers),
+                    "runtime_effect": False,
+                    "allowed_runtime_apply": False,
+                    "root_cause_closure_status_hint": "implementation_done",
+                },
                 "expected_ev_effect": (
                     "Separate profitable forced-scout examples from stop/soft-stop losers before any normal-entry "
                     "or scout-expansion proposal."

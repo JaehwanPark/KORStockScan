@@ -1176,6 +1176,54 @@ def test_postclose_done_controller_accepts_report_only_followup_warnings(
     assert report["blocked_reasons"] == []
 
 
+def test_postclose_done_controller_accepts_active_priority_natural_absence_warning(
+    monkeypatch,
+    tmp_path,
+):
+    report_dir = tmp_path / "report"
+    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "OUTPUT_DIR", report_dir / "postclose_done_controller")
+    _write_succeeded_status(report_dir)
+    _write_json(
+        report_dir / "threshold_cycle_postclose_verification" / "threshold_cycle_postclose_verification_2026-06-03.json",
+        {
+            "status": "warning",
+            "latest_done_marker": "[DONE] threshold-cycle postclose target_date=2026-06-03",
+            "artifact_status": _passable_artifact_status(),
+            "handoff_warnings": [
+                "active_sim_priority_preopen_handoff_pending",
+                "active_sim_priority_runtime_observation_missing",
+            ],
+            "active_sim_priority_handoff": {
+                "status": "warning",
+                "missing": [],
+                "warnings": [
+                    "active_sim_priority_preopen_handoff_pending",
+                    "active_sim_priority_runtime_observation_missing",
+                ],
+                "active_priority_match_absence_diagnosis": {
+                    "status": "warning",
+                    "diagnosis": "catalog_handoff_ok_natural_absence",
+                    "runtime_effect": False,
+                    "allowed_runtime_apply": False,
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                },
+            },
+        },
+    )
+
+    report = mod.build_postclose_done_controller(
+        "2026-06-03",
+        max_attempts=1,
+        allow_wrapper_rerun=True,
+        command_runner=lambda cmd, env=None: 0,
+    )
+
+    assert report["status"] == "done"
+    assert report["blocked_reasons"] == []
+
+
 def test_postclose_done_controller_repairs_active_priority_handoff_by_refreshing_next_preopen_apply(
     monkeypatch,
     tmp_path,

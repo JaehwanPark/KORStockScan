@@ -186,13 +186,20 @@ def test_build_code_improvement_workorder_adds_intraday_entry_blocker_source_qua
                     "stock_code": "000390",
                     "stock_name": "매드업",
                     "event_count": 5,
-                    "latest_reason": "scanner_identity_name_mismatch",
-                    "payload_name": "매드업",
-                    "db_name": "SP삼화",
-                    "mismatch_expired": "True",
-                    "forbidden_uses": ["stale_submit_bypass", "broker_guard_bypass"],
-                }
-            ],
+                        "latest_reason": "scanner_identity_name_mismatch",
+                        "payload_name": "매드업",
+                        "db_name": "SP삼화",
+                        "mismatch_expired": "True",
+                        "implementation_status": "implemented_source_quality_contract_available",
+                        "implementation_provenance": {
+                            "implementation_type": "scanner_runtime_attach_identity_source_quality_provenance",
+                            "runtime_effect": False,
+                            "allowed_runtime_apply": False,
+                            "root_cause_closure_status_hint": "implementation_done",
+                        },
+                        "forbidden_uses": ["stale_submit_bypass", "broker_guard_bypass"],
+                    }
+                ],
             "rising_missed_freshness_recovery": [
                 {
                     "workorder_type": "bounded_rising_candidate_freshness_recheck",
@@ -200,12 +207,19 @@ def test_build_code_improvement_workorder_adds_intraday_entry_blocker_source_qua
                     "stock_name": "두산퓨얼셀",
                     "event_count": 15,
                     "diagnostic_quote_age_stale": 9,
-                    "pre_ai_stale_or_history_gap": 6,
-                    "latest_stage": "blocked_strength_momentum",
-                    "latest_reason": "below_strength_base",
-                    "forbidden_uses": ["stale_submit_bypass", "broker_guard_bypass"],
-                }
-            ],
+                        "pre_ai_stale_or_history_gap": 6,
+                        "latest_stage": "blocked_strength_momentum",
+                        "latest_reason": "below_strength_base",
+                        "implementation_status": "implemented_source_quality_contract_available",
+                        "implementation_provenance": {
+                            "implementation_type": "bounded_rising_freshness_recheck_source_provenance",
+                            "runtime_effect": False,
+                            "allowed_runtime_apply": False,
+                            "root_cause_closure_status_hint": "implementation_done",
+                        },
+                        "forbidden_uses": ["stale_submit_bypass", "broker_guard_bypass"],
+                    }
+                ],
             "repeated_zero_strength_history": [
                 {
                     "workorder_type": "scanner_strength_momentum_history_missing",
@@ -213,6 +227,13 @@ def test_build_code_improvement_workorder_adds_intraday_entry_blocker_source_qua
                     "stock_name": "인벤티지랩",
                     "event_count": 6,
                     "latest_stage": "scalping_scanner_fast_precheck",
+                    "implementation_status": "implemented_source_quality_contract_available",
+                    "implementation_provenance": {
+                        "implementation_type": "scanner_strength_history_source_quality_provenance",
+                        "runtime_effect": False,
+                        "allowed_runtime_apply": False,
+                        "root_cause_closure_status_hint": "implementation_done",
+                    },
                     "forbidden_uses": ["stale_submit_bypass", "broker_guard_bypass"],
                 }
             ],
@@ -236,7 +257,7 @@ def test_build_code_improvement_workorder_adds_intraday_entry_blocker_source_qua
     ]
     assert report["summary"]["intraday_entry_blocker_source_order_count"] == 3
     assert len(intraday_orders) == 3
-    assert {item["decision"] for item in intraday_orders} == {"implement_now"}
+    assert {item["decision"] for item in intraday_orders} == {"attach_existing_family"}
     assert {item["runtime_effect"] for item in intraday_orders} == {False}
     assert {item["allowed_runtime_apply"] for item in intraday_orders} == {False}
     assert {item["mapped_family"] for item in intraday_orders} == {
@@ -244,6 +265,18 @@ def test_build_code_improvement_workorder_adds_intraday_entry_blocker_source_qua
         "scanner_runtime_attach_identity_mismatch",
         "scanner_strength_history_missing",
     }
+    strength_order = next(
+        item for item in intraday_orders if item["mapped_family"] == "scanner_strength_history_missing"
+    )
+    assert strength_order["implementation_status"] == "implemented_source_quality_contract_available"
+    assert (
+        strength_order["implementation_provenance"]["implementation_type"]
+        == "scanner_strength_history_source_quality_provenance"
+    )
+    assert all(
+        item["implementation_status"] == "implemented_source_quality_contract_available"
+        for item in intraday_orders
+    )
     assert all("stale_submit_bypass" in item["forbidden_uses"] for item in intraday_orders)
     assert report["source"]["intraday_entry_blocker_diagnostics"] == str(
         intraday_dir / "intraday_entry_blocker_diagnostics_2026-07-01.json"
@@ -270,6 +303,13 @@ def test_build_code_improvement_workorder_adds_rising_missed_scout_orders(tmp_pa
                 "priority": 2,
                 "runtime_effect": True,
                 "allowed_runtime_apply": True,
+                "implementation_status": "implemented",
+                "implementation_provenance": {
+                    "implementation_type": "forced_scout_post_sell_source_bridge",
+                    "runtime_effect": False,
+                    "allowed_runtime_apply": False,
+                    "root_cause_closure_status_hint": "implementation_done",
+                },
                 "evidence": ["winner_count=3", "forced scout remains source-only"],
                 "forbidden_uses": ["forced_one_share_success_counting", "stale_submit_bypass"],
             }
@@ -293,9 +333,11 @@ def test_build_code_improvement_workorder_adds_rising_missed_scout_orders(tmp_pa
     ]
     assert report["summary"]["rising_missed_scout_source_order_count"] == 1
     assert len(scout_orders) == 1
-    assert scout_orders[0]["decision"] == "implement_now"
+    assert scout_orders[0]["decision"] == "attach_existing_family"
     assert scout_orders[0]["runtime_effect"] is False
     assert scout_orders[0]["allowed_runtime_apply"] is False
+    assert scout_orders[0]["implementation_status"] == "implemented"
+    assert scout_orders[0]["implementation_provenance"]["runtime_effect"] is False
     assert "forced_one_share_success_counting" in scout_orders[0]["forbidden_uses"]
     assert "runtime_threshold_mutation" in scout_orders[0]["forbidden_uses"]
     assert "broker_guard_bypass" in scout_orders[0]["forbidden_uses"]

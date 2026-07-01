@@ -1472,6 +1472,21 @@ def _zero_strength_history_workorders(items: list[dict[str, Any]]) -> list[dict[
                 "decision_authority": "source_quality_only",
                 "runtime_effect": False,
                 "allowed_runtime_apply": False,
+                "implementation_status": "implemented_source_quality_contract_available",
+                "implementation_provenance": {
+                    "implementation_type": "scanner_strength_history_source_quality_provenance",
+                    "metric_role": "source_quality_gate",
+                    "decision_authority": "source_quality_only",
+                    "source_quality_route": quality.get("source_quality_route") or "",
+                    "raw_event_count": quality.get("raw_event_count") or 0,
+                    "recovered_by_downstream_progress": bool(
+                        quality.get("recovered_by_downstream_progress")
+                    ),
+                    "history_count_keys": list(STRENGTH_HISTORY_COUNT_KEYS),
+                    "runtime_effect": False,
+                    "allowed_runtime_apply": False,
+                    "root_cause_closure_status_hint": "implementation_done",
+                },
                 "forbidden_uses": [
                     "buy_score_relaxation",
                     "ai_threshold_relaxation",
@@ -1509,6 +1524,18 @@ def _runtime_attach_identity_workorders(items: list[dict[str, Any]]) -> list[dic
                 "decision_authority": "source_quality_only",
                 "runtime_effect": False,
                 "allowed_runtime_apply": False,
+                "implementation_status": "implemented_source_quality_contract_available",
+                "implementation_provenance": {
+                    "implementation_type": "scanner_runtime_attach_identity_source_quality_provenance",
+                    "metric_role": "source_quality_gate",
+                    "decision_authority": "source_quality_only",
+                    "latest_reason": mismatch.get("latest_reason") or "",
+                    "payload_name": mismatch.get("payload_name") or "",
+                    "db_name": mismatch.get("db_name") or "",
+                    "runtime_effect": False,
+                    "allowed_runtime_apply": False,
+                    "root_cause_closure_status_hint": "implementation_done",
+                },
                 "forbidden_uses": [
                     "buy_score_relaxation",
                     "ai_threshold_relaxation",
@@ -1548,6 +1575,17 @@ def _freshness_recovery_workorders(items: list[dict[str, Any]]) -> list[dict[str
                 "decision_authority": "source_quality_only",
                 "runtime_effect": False,
                 "allowed_runtime_apply": False,
+                "implementation_status": "implemented_source_quality_contract_available",
+                "implementation_provenance": {
+                    "implementation_type": "bounded_rising_freshness_recheck_source_provenance",
+                    "metric_role": "source_quality_gate",
+                    "decision_authority": "source_quality_only",
+                    "diagnostic_quote_age_stale": diagnostic_stale,
+                    "pre_ai_stale_or_history_gap": history_gap,
+                    "runtime_effect": False,
+                    "allowed_runtime_apply": False,
+                    "root_cause_closure_status_hint": "implementation_done",
+                },
                 "forbidden_uses": [
                     "buy_score_relaxation",
                     "ai_threshold_relaxation",

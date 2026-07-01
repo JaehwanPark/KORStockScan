@@ -403,6 +403,58 @@ def _ofi_qi_instrumentation_provenance(
                 },
             },
         }
+    if order_id == "order_swing_pattern_lab_deepseek_selection_low_candidate_count":
+        snapshot = evidence[0] if evidence and isinstance(evidence[0], dict) else {}
+        required_keys = ["low_selected_dates", "total_dates"]
+        present = {key: key in snapshot for key in required_keys}
+        total_dates = _safe_int(snapshot.get("total_dates"), 0)
+        low_selected_dates = _safe_int(snapshot.get("low_selected_dates"), 0)
+        implementation_ok = all(present.values()) and total_dates > 0
+        low_selected_rate = round(low_selected_dates / max(1, total_dates), 4)
+        return {
+            "implementation_status": (
+                "implemented_source_quality_contract_available"
+                if implementation_ok
+                else "instrumentation_gap"
+            ),
+            "implementation_checks": [
+                {
+                    "name": "selection_low_candidate_metric_contract",
+                    "status": "pass" if implementation_ok else "fail",
+                    "required_keys": required_keys,
+                    "missing_keys": [key for key, exists in present.items() if not exists],
+                    "low_selected_dates": low_selected_dates,
+                    "total_dates": total_dates,
+                },
+                {
+                    "name": "runtime_authority_contract",
+                    "status": "pass",
+                    "runtime_effect": False,
+                    "allowed_runtime_apply": False,
+                    "decision_authority": DECISION_AUTHORITY,
+                },
+            ],
+            "implementation_provenance": {
+                "owner": "swing_pattern_lab_automation",
+                "implemented_scope": "swing_selection_top_k_floor_source_only_review",
+                "scope": "swing_selection_top_k_floor_source_only_review",
+                "runtime_effect": False,
+                "allowed_runtime_apply": False,
+                "actual_order_submitted": False,
+                "broker_order_forbidden": True,
+                "decision_authority": DECISION_AUTHORITY,
+                "source_contract": "swing_pattern_lab_selection_low_candidate_source_metric_v1",
+                "source_fields": required_keys,
+                "source_metric_snapshot": {
+                    **snapshot,
+                    "low_selected_rate": low_selected_rate,
+                    "mapped_family": order.get("mapped_family") or order.get("threshold_family"),
+                    "candidate_handling": "source_only_top_k_floor_review",
+                    "forbidden_runtime_change": True,
+                },
+                "root_cause_closure_status_hint": "implementation_done",
+            },
+        }
     if order_id == "order_swing_pattern_lab_deepseek_ofi_qi_smoothing_review":
         snapshot = evidence[0] if evidence and isinstance(evidence[0], dict) else {}
         actions = snapshot.get("smoothing_actions") if isinstance(snapshot.get("smoothing_actions"), dict) else {}

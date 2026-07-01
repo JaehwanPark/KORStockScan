@@ -428,6 +428,31 @@ def _intraday_entry_blocker_followup_orders(report: dict[str, Any]) -> list[dict
                         if isinstance(source, dict)
                     )
                 )
+            implementation_status = item.get("implementation_status")
+            implementation_provenance = (
+                item.get("implementation_provenance")
+                if isinstance(item.get("implementation_provenance"), dict)
+                else None
+            )
+            if not implementation_status and source_items:
+                source_statuses = {
+                    str(source.get("implementation_status") or "").strip()
+                    for source in source_items
+                    if isinstance(source, dict)
+                }
+                source_statuses.discard("")
+                if source_statuses and all(_is_implemented_status(status) for status in source_statuses):
+                    implementation_status = "implemented_source_quality_contract_available"
+                    implementation_provenance = {
+                        "implementation_type": f"{family}_aggregate_source_quality_provenance",
+                        "metric_role": "source_quality_gate",
+                        "decision_authority": "source_quality_only",
+                        "source_symbol_count": len(source_items),
+                        "source_implementation_statuses": sorted(source_statuses),
+                        "runtime_effect": False,
+                        "allowed_runtime_apply": False,
+                        "root_cause_closure_status_hint": "implementation_done",
+                    }
             orders.append(
                 {
                     "order_id": f"order_intraday_entry_blocker_{order_slug}",
@@ -443,6 +468,9 @@ def _intraday_entry_blocker_followup_orders(report: dict[str, Any]) -> list[dict
                     "priority": 2,
                     "runtime_effect": False,
                     "allowed_runtime_apply": False,
+                    "implementation_status": implementation_status,
+                    "original_implementation_status": implementation_status,
+                    "implementation_provenance": implementation_provenance,
                     "expected_ev_effect": (
                         "Improve source-quality handoff for rising missed candidates before any BUY/submit "
                         "threshold judgment; no broker/order/provider/runtime authority."
