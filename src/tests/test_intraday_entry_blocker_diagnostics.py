@@ -134,6 +134,83 @@ def test_build_report_uses_one_pct_rising_missed_threshold(tmp_path):
     assert {item["stock_code"] for item in report["promoted_symbols"]} == {"000990", "001000"}
 
 
+def test_build_report_excludes_runtime_attach_identity_mismatch_from_one_share(tmp_path):
+    path = tmp_path / "pipeline_events_2026-06-23.jsonl"
+    rows = [
+        _event(
+            "000390",
+            "매드업",
+            "scalping_scanner_candidate_promoted",
+            {
+                "scanner_promotion_id": "SCANPROM-000390-1",
+                "price_delta_since_first_seen_pct": "0.00",
+            },
+            emitted_at="2026-06-23T10:04:09",
+        ),
+        _event(
+            "000390",
+            "매드업",
+            "scalping_scanner_runtime_target_attach",
+            {
+                "scanner_promotion_id": "SCANPROM-000390-1",
+                "runtime_target_attach_outcome": "skipped",
+                "runtime_target_attach_reason": "scanner_identity_name_mismatch",
+                "scanner_identity_payload_name": "매드업",
+                "scanner_identity_db_name": "SP삼화",
+                "scanner_identity_mismatch_expired": "True",
+                "price_delta_since_first_seen_pct": "0.00",
+            },
+            emitted_at="2026-06-23T10:04:10",
+        ),
+        _event(
+            "000390",
+            "매드업",
+            "scalping_scanner_candidate_promoted",
+            {
+                "scanner_promotion_id": "SCANPROM-000390-2",
+                "price_delta_since_first_seen_pct": "2.47",
+            },
+            emitted_at="2026-06-23T10:06:11",
+        ),
+        _event(
+            "000390",
+            "매드업",
+            "scalping_scanner_runtime_target_attach",
+            {
+                "scanner_promotion_id": "SCANPROM-000390-2",
+                "runtime_target_attach_outcome": "skipped",
+                "runtime_target_attach_reason": "scanner_identity_name_mismatch",
+                "scanner_identity_payload_name": "매드업",
+                "scanner_identity_db_name": "SP삼화",
+                "scanner_identity_mismatch_expired": "True",
+                "price_delta_since_first_seen_pct": "2.47",
+            },
+            emitted_at="2026-06-23T10:06:12",
+        ),
+    ]
+    path.write_text("\n".join(json.dumps(row, ensure_ascii=False) for row in rows), encoding="utf-8")
+
+    report = build_report(target_date="2026-06-23", pipeline_path=path, generated_at="fixed")
+
+    assert report["summary"]["rising_missed_buy_count"] == 1
+    assert report["summary"]["rising_missed_class_counts"] == [
+        {"class": "source_quality_excluded", "count": 1}
+    ]
+    assert report["summary"]["rising_missed_one_share_eligible_symbol_count"] == 0
+    item = report["rising_missed_buy"][0]
+    assert item["stock_code"] == "000390"
+    assert item["rising_missed_class"] == "source_quality_excluded"
+    assert item["rising_missed_one_share_eligible"] is False
+    assert item["runtime_attach_identity_mismatch"] == {
+        "count": 2,
+        "latest_at": "2026-06-23T10:06:12",
+        "latest_reason": "scanner_identity_name_mismatch",
+        "payload_name": "매드업",
+        "db_name": "SP삼화",
+        "mismatch_expired": "True",
+    }
+
+
 def test_build_report_suppresses_known_latency_guard_as_resolved_non_major(tmp_path):
     path = tmp_path / "pipeline_events_2026-06-23.jsonl"
     rows = [

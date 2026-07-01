@@ -814,6 +814,29 @@ def _dominant_actionable_blocker(rows: list[dict[str, Any]]) -> dict[str, Any]:
     return {"stage": "", "reason": "", "count": 0, "class": "non_actionable_guard_or_backpressure", "route": "observe_only"}
 
 
+def _runtime_attach_identity_mismatch(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    mismatch_rows = []
+    for row in rows:
+        if row.get("stage") != "scalping_scanner_runtime_target_attach":
+            continue
+        fields = row.get("fields") if isinstance(row.get("fields"), dict) else {}
+        if (
+            str(fields.get("runtime_target_attach_outcome") or "").strip() == "skipped"
+            and str(fields.get("runtime_target_attach_reason") or "").strip() == "scanner_identity_name_mismatch"
+        ):
+            mismatch_rows.append(row)
+    latest = mismatch_rows[-1] if mismatch_rows else {}
+    latest_fields = latest.get("fields") if isinstance(latest.get("fields"), dict) else {}
+    return {
+        "count": len(mismatch_rows),
+        "latest_at": _event_time(latest) if latest else "",
+        "latest_reason": str(latest_fields.get("runtime_target_attach_reason") or ""),
+        "payload_name": str(latest_fields.get("scanner_identity_payload_name") or ""),
+        "db_name": str(latest_fields.get("scanner_identity_db_name") or ""),
+        "mismatch_expired": str(latest_fields.get("scanner_identity_mismatch_expired") or ""),
+    }
+
+
 def _full_eval_deferred_status(rows: list[dict[str, Any]], deferred_rows: list[dict[str, Any]]) -> str:
     if not deferred_rows:
         return "not_deferred"
@@ -1158,6 +1181,7 @@ def _summarize_code(
         "blocker_count": len(blocker_rows),
         "dominant_blocker": _dominant_blocker(rows),
         "dominant_actionable_blocker": _dominant_actionable_blocker(rows),
+        "runtime_attach_identity_mismatch": _runtime_attach_identity_mismatch(rows),
         "latest_blocker": _latest_blocker(rows),
         "latency_danger_root_cause": _latency_danger_root_cause_summary(blocker_rows),
         "queue_observation_counts": queue_counts,
@@ -1486,6 +1510,7 @@ def _rising_missed_classification_for_item(item: dict[str, Any], *, rising_thres
     )
     source_quality_excluded = (
         int(item.get("unresolved_stale_low_ai_or_pressure_eval_count") or 0) > 0
+        or int((item.get("runtime_attach_identity_mismatch") or {}).get("count") or 0) > 0
         or int(quality.get("event_count") or 0) >= ZERO_HISTORY_WORKORDER_MIN_EVENTS
         or blocker_class in {"source_freshness_blocker", "source_freshness_evictable"}
     )

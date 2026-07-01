@@ -193,3 +193,25 @@ This file is cumulative. Do not append every 10-minute loop result here. Loop-le
 - `runtime_effect=false` for report/classification changes.
 - `allowed_runtime_apply=false`
 - No intraday threshold mutation, provider route change, bot restart, cap change, or stale/broker/account/order/quantity/cooldown/hard-safety guard relaxation was performed.
+
+## 7. 2026-07-01 Runtime Attach Identity Mismatch Exclusion
+
+### Decision
+
+- A rising scanner promotion that cannot attach to the runtime target because of `scanner_identity_name_mismatch` is a source-quality/identity mismatch exclusion, not a normal BUY submit blocker or forced one-share scout candidate.
+
+### Change
+
+- Intraday blocker diagnostics now summarize `scalping_scanner_runtime_target_attach` rows skipped by `scanner_identity_name_mismatch`.
+- Rising-missed classification routes those rows to `source_quality_excluded` and sets forced one-share eligibility to false.
+
+### Validation
+
+- Regression test added for a rising candidate with repeated runtime attach identity mismatch.
+- Live 2026-07-01 diagnostic regeneration changed the raw eligible case to `source_quality_excluded` and returned `rising_missed_one_share_eligible_symbol_count=0`.
+
+### Operating Boundary
+
+- `runtime_effect=false`
+- `allowed_runtime_apply=false`
+- This changed diagnostic/source-quality classification only. It did not alter runtime target attachment, order submission, stale/latency/broker/account/order/quantity/cooldown, hard safety, provider route, bot state, or thresholds.
