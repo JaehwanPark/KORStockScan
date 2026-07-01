@@ -2139,6 +2139,126 @@ def _evaluate_stop_line_touch_mandatory_avg_down(
     }
 
 
+_STOP_LINE_TOUCH_AVG_DOWN_DEFER_FIELDS = (
+    "stop_line_touch_avg_down_defer_started_at",
+    "stop_line_touch_avg_down_defer_last_seen_at",
+    "stop_line_touch_avg_down_defer_anchor_profit",
+    "stop_line_touch_avg_down_defer_anchor_price",
+    "stop_line_touch_avg_down_defer_stop_line_pct",
+)
+
+
+def _clear_stop_line_touch_avg_down_defer_state(stock: dict | None) -> None:
+    if isinstance(stock, dict):
+        _mutate_stock_state(stock, pop_fields=_STOP_LINE_TOUCH_AVG_DOWN_DEFER_FIELDS)
+
+
+def _evaluate_soft_stop_line_touch_avg_down_defer(
+    stock: dict | None,
+    *,
+    exit_rule: str | None,
+    profit_rate: float,
+    dynamic_stop_pct: float,
+    now_ts: float,
+    ws_data: dict | None,
+) -> dict:
+    if not _rule_bool("SCALP_STOP_LINE_TOUCH_AVG_DOWN_DEFER_ENABLED", False):
+        return {"should_defer": False, "reason": "disabled"}
+    if str(exit_rule or "").strip() != "scalp_soft_stop_pct":
+        return {"should_defer": False, "reason": "not_soft_stop"}
+
+    max_sec = max(0, _rule_int("SCALP_STOP_LINE_TOUCH_AVG_DOWN_DEFER_MAX_SEC", 3))
+    extra_dip_pct = max(0.0, _rule_float("SCALP_STOP_LINE_TOUCH_AVG_DOWN_EXTRA_DIP_PCT", 0.20))
+    if max_sec <= 0 or extra_dip_pct <= 0.0:
+        return {"should_defer": False, "reason": "defer_window_disabled"}
+
+    current_profit = _safe_float(profit_rate, 0.0)
+    stop_pct = _safe_float(dynamic_stop_pct, current_profit)
+    emergency_pct = min(
+        _rule_float("SCALP_STOP_LINE_TOUCH_AVG_DOWN_DEFER_EMERGENCY_PCT", stop_pct - 2.0),
+        stop_pct,
+    )
+    curr_price = _safe_int((ws_data or {}).get("curr"), 0)
+    if current_profit <= emergency_pct:
+        _clear_stop_line_touch_avg_down_defer_state(stock)
+        return {
+            "should_defer": False,
+            "reason": "emergency_pct_breached",
+            "defer_enabled": True,
+            "defer_emergency_pct": emergency_pct,
+            "defer_current_profit": current_profit,
+            "defer_curr_price": curr_price,
+        }
+
+    if not isinstance(stock, dict):
+        return {"should_defer": False, "reason": "missing_stock_state"}
+
+    started_at = _safe_float(stock.get("stop_line_touch_avg_down_defer_started_at"), 0.0)
+    last_seen_at = _safe_float(stock.get("stop_line_touch_avg_down_defer_last_seen_at"), started_at)
+    stale_episode_gap_sec = max_sec
+    if started_at > 0.0 and last_seen_at > 0.0 and now_ts - last_seen_at > stale_episode_gap_sec:
+        started_at = 0.0
+    if started_at <= 0.0:
+        _mutate_stock_state(
+            stock,
+            set_fields={
+                "stop_line_touch_avg_down_defer_started_at": now_ts,
+                "stop_line_touch_avg_down_defer_last_seen_at": now_ts,
+                "stop_line_touch_avg_down_defer_anchor_profit": current_profit,
+                "stop_line_touch_avg_down_defer_anchor_price": curr_price,
+                "stop_line_touch_avg_down_defer_stop_line_pct": stop_pct,
+            },
+        )
+        return {
+            "should_defer": True,
+            "reason": "soft_stop_price_improvement_wait_started",
+            "defer_enabled": True,
+            "defer_elapsed_sec": 0,
+            "defer_max_sec": max_sec,
+            "defer_extra_dip_pct": extra_dip_pct,
+            "defer_emergency_pct": emergency_pct,
+            "defer_anchor_profit": current_profit,
+            "defer_current_profit": current_profit,
+            "defer_extra_worsen_pct": 0.0,
+            "defer_anchor_price": curr_price,
+            "defer_curr_price": curr_price,
+        }
+
+    anchor_profit = _safe_float(stock.get("stop_line_touch_avg_down_defer_anchor_profit"), current_profit)
+    anchor_price = _safe_int(stock.get("stop_line_touch_avg_down_defer_anchor_price"), 0)
+    elapsed_sec = max(0, int(now_ts - started_at))
+    extra_worsen_pct = max(0.0, anchor_profit - current_profit)
+    price_improvement_bps = 0.0
+    if anchor_price > 0 and curr_price > 0:
+        price_improvement_bps = max(0.0, ((anchor_price - curr_price) / anchor_price) * 10000.0)
+
+    common = {
+        "defer_enabled": True,
+        "defer_elapsed_sec": elapsed_sec,
+        "defer_max_sec": max_sec,
+        "defer_extra_dip_pct": extra_dip_pct,
+        "defer_emergency_pct": emergency_pct,
+        "defer_anchor_profit": anchor_profit,
+        "defer_current_profit": current_profit,
+        "defer_extra_worsen_pct": extra_worsen_pct,
+        "defer_anchor_price": anchor_price,
+        "defer_curr_price": curr_price,
+        "defer_price_improvement_bps": price_improvement_bps,
+    }
+    if extra_worsen_pct >= extra_dip_pct or price_improvement_bps >= extra_dip_pct * 100.0:
+        _clear_stop_line_touch_avg_down_defer_state(stock)
+        return {**common, "should_defer": False, "reason": "extra_dip_reached"}
+    if elapsed_sec < max_sec:
+        _mutate_stock_state(
+            stock,
+            set_fields={"stop_line_touch_avg_down_defer_last_seen_at": now_ts},
+        )
+        return {**common, "should_defer": True, "reason": "soft_stop_price_improvement_waiting"}
+
+    _clear_stop_line_touch_avg_down_defer_state(stock)
+    return {**common, "should_defer": False, "reason": "max_wait_elapsed"}
+
+
 def _attempt_stop_line_touch_mandatory_avg_down(
     *,
     stock: dict | None,
@@ -2327,6 +2447,60 @@ def _attempt_stop_line_touch_mandatory_avg_down(
                 "reason": "rest_quote_only_requires_ws_or_orderbook_confirmation",
             }
     if retry_gate.get("allowed"):
+        defer_decision = _evaluate_soft_stop_line_touch_avg_down_defer(
+            stock,
+            exit_rule=exit_rule,
+            profit_rate=profit_rate,
+            dynamic_stop_pct=_safe_float(stop_touch_avg_down.get("stop_line_pct"), dynamic_stop_pct),
+            now_ts=now_ts,
+            ws_data=ws_data or {},
+        )
+        if defer_decision.get("defer_enabled"):
+            defer_fields = {
+                "defer_reason": defer_decision.get("reason", "-"),
+                "defer_elapsed_sec": defer_decision.get("defer_elapsed_sec", "-"),
+                "defer_max_sec": defer_decision.get("defer_max_sec", "-"),
+                "defer_extra_dip_pct": (
+                    f"{_safe_float(defer_decision.get('defer_extra_dip_pct'), 0.0):.2f}"
+                ),
+                "defer_emergency_pct": (
+                    f"{_safe_float(defer_decision.get('defer_emergency_pct'), 0.0):+.2f}"
+                ),
+                "defer_anchor_profit": (
+                    f"{_safe_float(defer_decision.get('defer_anchor_profit'), profit_rate):+.2f}"
+                ),
+                "defer_current_profit": (
+                    f"{_safe_float(defer_decision.get('defer_current_profit'), profit_rate):+.2f}"
+                ),
+                "defer_extra_worsen_pct": (
+                    f"{_safe_float(defer_decision.get('defer_extra_worsen_pct'), 0.0):.2f}"
+                ),
+                "defer_anchor_price": _safe_int(defer_decision.get("defer_anchor_price"), 0),
+                "defer_curr_price": _safe_int(defer_decision.get("defer_curr_price"), 0),
+                "defer_price_improvement_bps": (
+                    f"{_safe_float(defer_decision.get('defer_price_improvement_bps'), 0.0):.1f}"
+                ),
+            }
+            retry_common_fields.update(defer_fields)
+            if defer_decision.get("should_defer"):
+                _log_holding_pipeline(
+                    stock,
+                    code,
+                    "stop_line_touch_avg_down_price_improvement_deferred",
+                    **{
+                        **retry_common_fields,
+                        "actual_order_submitted": False,
+                        "broker_order_forbidden": True,
+                        "runtime_effect": True,
+                    },
+                )
+                return {
+                    "attempted": True,
+                    "submitted": False,
+                    "deferred": True,
+                    "reason": defer_decision.get("reason", "soft_stop_price_improvement_waiting"),
+                }
+
         _log_holding_pipeline(
             stock,
             code,
@@ -27630,7 +27804,7 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                 now_ts=now_ts,
                 context_fields={"sell_intercept_context": "soft_stop_touch_before_grace"},
             )
-            if stop_touch_avg_down_result.get("submitted"):
+            if stop_touch_avg_down_result.get("submitted") or stop_touch_avg_down_result.get("deferred"):
                 return
             defensive_unfilled_recheck = _defensive_avg_down_unfilled_recheck_decision(
                 stock,
@@ -28298,7 +28472,7 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
             now_ts=now_ts,
             context_fields={"sell_intercept_context": "final_loss_sell_before_fallback"},
         )
-        if stop_touch_avg_down_result.get("submitted"):
+        if stop_touch_avg_down_result.get("submitted") or stop_touch_avg_down_result.get("deferred"):
             return
 
         fallback_gate = None

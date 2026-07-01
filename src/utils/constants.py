@@ -73,6 +73,10 @@ class TradingConfig:
     STAT_ACTION_DECISION_SNAPSHOT_ENABLED: bool = True  # 행동가중치용 HOLDING decision snapshot observe-only
     STAT_ACTION_DECISION_SNAPSHOT_MIN_INTERVAL_SEC: int = 30  # IO guard: 종목별 snapshot 최소 간격
     SCALPING_AVG_DOWN_MARKET_ON_STOP_TOUCH_ENABLED: bool = False  # 실매매 SCALPING AVG_DOWN 손절선 터치 시 시장가 전환
+    SCALP_STOP_LINE_TOUCH_AVG_DOWN_DEFER_ENABLED: bool = False  # soft stop AVG_DOWN price-improvement wait; PREOPEN env only
+    SCALP_STOP_LINE_TOUCH_AVG_DOWN_DEFER_MAX_SEC: int = 3
+    SCALP_STOP_LINE_TOUCH_AVG_DOWN_EXTRA_DIP_PCT: float = 0.20
+    SCALP_STOP_LINE_TOUCH_AVG_DOWN_DEFER_EMERGENCY_PCT: float = -5.0
 
     # ==========================================
     # 3.2 추가매수(스캘핑) 설정
@@ -1943,6 +1947,12 @@ def _build_trading_rules() -> TradingConfig:
     env_late_loss_avg_down_min_hold = _env_int("KORSTOCKSCAN_SCALP_LATE_LOSS_AVG_DOWN_MIN_HOLD_SEC")
     env_late_loss_avg_down_min_ai = _env_int("KORSTOCKSCAN_SCALP_LATE_LOSS_AVG_DOWN_MIN_AI_SCORE")
     env_late_loss_avg_down_max_per_position = _env_int("KORSTOCKSCAN_SCALP_LATE_LOSS_AVG_DOWN_MAX_PER_POSITION")
+    env_stop_line_avg_down_defer_enabled = _env_bool("KORSTOCKSCAN_SCALP_STOP_LINE_TOUCH_AVG_DOWN_DEFER_ENABLED")
+    env_stop_line_avg_down_defer_max_sec = _env_int("KORSTOCKSCAN_SCALP_STOP_LINE_TOUCH_AVG_DOWN_DEFER_MAX_SEC")
+    env_stop_line_avg_down_extra_dip_pct = _env_float("KORSTOCKSCAN_SCALP_STOP_LINE_TOUCH_AVG_DOWN_EXTRA_DIP_PCT")
+    env_stop_line_avg_down_defer_emergency_pct = _env_float(
+        "KORSTOCKSCAN_SCALP_STOP_LINE_TOUCH_AVG_DOWN_DEFER_EMERGENCY_PCT"
+    )
     env_protect_trailing_smooth_enabled = _env_bool("KORSTOCKSCAN_SCALP_PROTECT_TRAILING_SMOOTH_ENABLED")
     env_protect_trailing_smooth_window = _env_int("KORSTOCKSCAN_SCALP_PROTECT_TRAILING_SMOOTH_WINDOW_SEC")
     env_protect_trailing_smooth_min_span = _env_int("KORSTOCKSCAN_SCALP_PROTECT_TRAILING_SMOOTH_MIN_SPAN_SEC")
@@ -2124,6 +2134,10 @@ def _build_trading_rules() -> TradingConfig:
         or env_late_loss_avg_down_min_hold is not None
         or env_late_loss_avg_down_min_ai is not None
         or env_late_loss_avg_down_max_per_position is not None
+        or env_stop_line_avg_down_defer_enabled is not None
+        or env_stop_line_avg_down_defer_max_sec is not None
+        or env_stop_line_avg_down_extra_dip_pct is not None
+        or env_stop_line_avg_down_defer_emergency_pct is not None
         or env_protect_trailing_smooth_enabled is not None
         or env_protect_trailing_smooth_window is not None
         or env_protect_trailing_smooth_min_span is not None
@@ -2783,6 +2797,18 @@ def _build_trading_rules() -> TradingConfig:
             SCALP_LATE_LOSS_AVG_DOWN_MAX_PER_POSITION=env_late_loss_avg_down_max_per_position
             if env_late_loss_avg_down_max_per_position is not None
             else config.SCALP_LATE_LOSS_AVG_DOWN_MAX_PER_POSITION,
+            SCALP_STOP_LINE_TOUCH_AVG_DOWN_DEFER_ENABLED=env_stop_line_avg_down_defer_enabled
+            if env_stop_line_avg_down_defer_enabled is not None
+            else config.SCALP_STOP_LINE_TOUCH_AVG_DOWN_DEFER_ENABLED,
+            SCALP_STOP_LINE_TOUCH_AVG_DOWN_DEFER_MAX_SEC=env_stop_line_avg_down_defer_max_sec
+            if env_stop_line_avg_down_defer_max_sec is not None
+            else config.SCALP_STOP_LINE_TOUCH_AVG_DOWN_DEFER_MAX_SEC,
+            SCALP_STOP_LINE_TOUCH_AVG_DOWN_EXTRA_DIP_PCT=env_stop_line_avg_down_extra_dip_pct
+            if env_stop_line_avg_down_extra_dip_pct is not None
+            else config.SCALP_STOP_LINE_TOUCH_AVG_DOWN_EXTRA_DIP_PCT,
+            SCALP_STOP_LINE_TOUCH_AVG_DOWN_DEFER_EMERGENCY_PCT=env_stop_line_avg_down_defer_emergency_pct
+            if env_stop_line_avg_down_defer_emergency_pct is not None
+            else config.SCALP_STOP_LINE_TOUCH_AVG_DOWN_DEFER_EMERGENCY_PCT,
             SCALP_PROTECT_TRAILING_SMOOTH_ENABLED=env_protect_trailing_smooth_enabled
             if env_protect_trailing_smooth_enabled is not None
             else config.SCALP_PROTECT_TRAILING_SMOOTH_ENABLED,

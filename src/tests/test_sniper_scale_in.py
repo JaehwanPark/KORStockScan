@@ -15983,6 +15983,269 @@ def test_stop_line_touch_mandatory_avg_down_submits_before_grace(monkeypatch):
     assert by_stage["stop_line_touch_mandatory_avg_down_submitted"]["actual_order_submitted"] is True
 
 
+def test_soft_stop_line_touch_avg_down_defer_waits_for_extra_dip(monkeypatch):
+    state_handlers.TRADING_RULES = replace(
+        CONFIG,
+        SCALPING_AVG_DOWN_MARKET_ON_STOP_TOUCH_ENABLED=True,
+        SCALP_LATE_LOSS_AVG_DOWN_MAX_PER_POSITION=3,
+        SCALP_STOP_LINE_TOUCH_AVG_DOWN_DEFER_ENABLED=True,
+        SCALP_STOP_LINE_TOUCH_AVG_DOWN_DEFER_MAX_SEC=3,
+        SCALP_STOP_LINE_TOUCH_AVG_DOWN_EXTRA_DIP_PCT=0.20,
+        SCALP_STOP_LINE_TOUCH_AVG_DOWN_DEFER_EMERGENCY_PCT=-5.0,
+    )
+    stock = {
+        "id": 15101,
+        "code": "038500",
+        "name": "삼표시멘트",
+        "status": "HOLDING",
+        "strategy": "SCALPING",
+        "buy_price": 9_880,
+        "buy_qty": 1,
+        "actual_order_submitted": True,
+    }
+    pipeline_events = []
+    add_calls = []
+    monkeypatch.setattr(
+        state_handlers,
+        "can_consider_scale_in",
+        lambda *args, **kwargs: {"allowed": True, "reason": "ok"},
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_process_scale_in_action",
+        lambda **kwargs: add_calls.append(kwargs) or {"return_code": "0", "ord_no": "D1"},
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_holding_pipeline",
+        lambda stock, code, stage, **fields: pipeline_events.append((stage, fields)),
+    )
+
+    first = state_handlers._attempt_stop_line_touch_mandatory_avg_down(
+        stock=stock,
+        code="038500",
+        ws_data={"curr": 9_580, "best_bid": 9_570, "best_ask": 9_580},
+        strategy="SCALPING",
+        market_regime="NORMAL",
+        admin_id=1,
+        sell_reason_type="LOSS",
+        exit_rule="scalp_soft_stop_pct",
+        profit_rate=-3.06,
+        peak_profit=0.27,
+        current_ai_score=52,
+        held_sec=1_331,
+        dynamic_stop_pct=-3.00,
+        now_ts=1_000.0,
+        context_fields={"sell_intercept_context": "soft_stop_touch_before_grace"},
+    )
+    second = state_handlers._attempt_stop_line_touch_mandatory_avg_down(
+        stock=stock,
+        code="038500",
+        ws_data={"curr": 9_570, "best_bid": 9_560, "best_ask": 9_570},
+        strategy="SCALPING",
+        market_regime="NORMAL",
+        admin_id=1,
+        sell_reason_type="LOSS",
+        exit_rule="scalp_soft_stop_pct",
+        profit_rate=-3.15,
+        peak_profit=0.27,
+        current_ai_score=52,
+        held_sec=1_332,
+        dynamic_stop_pct=-3.00,
+        now_ts=1_001.0,
+        context_fields={"sell_intercept_context": "soft_stop_touch_before_grace"},
+    )
+    third = state_handlers._attempt_stop_line_touch_mandatory_avg_down(
+        stock=stock,
+        code="038500",
+        ws_data={"curr": 9_540, "best_bid": 9_530, "best_ask": 9_540},
+        strategy="SCALPING",
+        market_regime="NORMAL",
+        admin_id=1,
+        sell_reason_type="LOSS",
+        exit_rule="scalp_soft_stop_pct",
+        profit_rate=-3.28,
+        peak_profit=0.27,
+        current_ai_score=52,
+        held_sec=1_333,
+        dynamic_stop_pct=-3.00,
+        now_ts=1_002.0,
+        context_fields={"sell_intercept_context": "soft_stop_touch_before_grace"},
+    )
+
+    assert first == {
+        "attempted": True,
+        "submitted": False,
+        "deferred": True,
+        "reason": "soft_stop_price_improvement_wait_started",
+    }
+    assert second["deferred"] is True
+    assert second["reason"] == "soft_stop_price_improvement_waiting"
+    assert third["submitted"] is True
+    assert add_calls[0]["action"]["reason"] == "stop_line_touch_mandatory_avg_down"
+    assert "stop_line_touch_avg_down_defer_started_at" not in stock
+    by_stage = {stage: fields for stage, fields in pipeline_events}
+    deferred = by_stage["stop_line_touch_avg_down_price_improvement_deferred"]
+    assert deferred["defer_extra_dip_pct"] == "0.20"
+    assert deferred["actual_order_submitted"] is False
+    candidate = by_stage["stop_line_touch_mandatory_avg_down_candidate"]
+    assert candidate["defer_reason"] == "extra_dip_reached"
+    assert candidate["defer_extra_worsen_pct"] == "0.22"
+
+
+def test_hard_stop_line_touch_avg_down_ignores_soft_stop_defer(monkeypatch):
+    state_handlers.TRADING_RULES = replace(
+        CONFIG,
+        SCALPING_AVG_DOWN_MARKET_ON_STOP_TOUCH_ENABLED=True,
+        SCALP_LATE_LOSS_AVG_DOWN_MAX_PER_POSITION=3,
+        SCALP_STOP_LINE_TOUCH_AVG_DOWN_DEFER_ENABLED=True,
+        SCALP_STOP_LINE_TOUCH_AVG_DOWN_DEFER_MAX_SEC=3,
+        SCALP_STOP_LINE_TOUCH_AVG_DOWN_EXTRA_DIP_PCT=0.20,
+        SCALP_STOP_LINE_TOUCH_AVG_DOWN_DEFER_EMERGENCY_PCT=-5.0,
+    )
+    stock = {
+        "id": 15102,
+        "code": "038500",
+        "name": "삼표시멘트",
+        "status": "HOLDING",
+        "strategy": "SCALPING",
+        "buy_price": 9_880,
+        "buy_qty": 1,
+        "actual_order_submitted": True,
+    }
+    pipeline_events = []
+    add_calls = []
+    monkeypatch.setattr(
+        state_handlers,
+        "can_consider_scale_in",
+        lambda *args, **kwargs: {"allowed": True, "reason": "ok"},
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_process_scale_in_action",
+        lambda **kwargs: add_calls.append(kwargs) or {"return_code": "0", "ord_no": "H1"},
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_holding_pipeline",
+        lambda stock, code, stage, **fields: pipeline_events.append((stage, fields)),
+    )
+
+    result = state_handlers._attempt_stop_line_touch_mandatory_avg_down(
+        stock=stock,
+        code="038500",
+        ws_data={"curr": 9_380, "best_bid": 9_370, "best_ask": 9_380},
+        strategy="SCALPING",
+        market_regime="NORMAL",
+        admin_id=1,
+        sell_reason_type="LOSS",
+        exit_rule="scalp_hard_stop_pct",
+        profit_rate=-5.10,
+        peak_profit=0.27,
+        current_ai_score=52,
+        held_sec=1_331,
+        dynamic_stop_pct=-5.00,
+        now_ts=1_000.0,
+        context_fields={"sell_intercept_context": "final_loss_sell_before_fallback"},
+    )
+
+    assert result["submitted"] is True
+    assert add_calls[0]["action"]["stop_line_source"] == "scalp_hard_stop_pct"
+    by_stage = {stage: fields for stage, fields in pipeline_events}
+    assert "stop_line_touch_avg_down_price_improvement_deferred" not in by_stage
+    assert by_stage["stop_line_touch_mandatory_avg_down_submitted"]["actual_order_submitted"] is True
+
+
+def test_soft_stop_line_touch_avg_down_defer_restarts_stale_episode(monkeypatch):
+    state_handlers.TRADING_RULES = replace(
+        CONFIG,
+        SCALPING_AVG_DOWN_MARKET_ON_STOP_TOUCH_ENABLED=True,
+        SCALP_LATE_LOSS_AVG_DOWN_MAX_PER_POSITION=3,
+        SCALP_STOP_LINE_TOUCH_AVG_DOWN_DEFER_ENABLED=True,
+        SCALP_STOP_LINE_TOUCH_AVG_DOWN_DEFER_MAX_SEC=3,
+        SCALP_STOP_LINE_TOUCH_AVG_DOWN_EXTRA_DIP_PCT=0.20,
+        SCALP_STOP_LINE_TOUCH_AVG_DOWN_DEFER_EMERGENCY_PCT=-5.0,
+    )
+    stock = {
+        "id": 15103,
+        "code": "038500",
+        "name": "삼표시멘트",
+        "status": "HOLDING",
+        "strategy": "SCALPING",
+        "buy_price": 9_880,
+        "buy_qty": 1,
+        "actual_order_submitted": True,
+    }
+    pipeline_events = []
+    add_calls = []
+    monkeypatch.setattr(
+        state_handlers,
+        "can_consider_scale_in",
+        lambda *args, **kwargs: {"allowed": True, "reason": "ok"},
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_process_scale_in_action",
+        lambda **kwargs: add_calls.append(kwargs) or {"return_code": "0", "ord_no": "S1"},
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_holding_pipeline",
+        lambda stock, code, stage, **fields: pipeline_events.append((stage, fields)),
+    )
+
+    first = state_handlers._attempt_stop_line_touch_mandatory_avg_down(
+        stock=stock,
+        code="038500",
+        ws_data={"curr": 9_580},
+        strategy="SCALPING",
+        market_regime="NORMAL",
+        admin_id=1,
+        sell_reason_type="LOSS",
+        exit_rule="scalp_soft_stop_pct",
+        profit_rate=-3.06,
+        peak_profit=0.27,
+        current_ai_score=52,
+        held_sec=1_331,
+        dynamic_stop_pct=-3.00,
+        now_ts=1_000.0,
+        context_fields={"sell_intercept_context": "soft_stop_touch_before_grace"},
+    )
+    stale_retouch = state_handlers._attempt_stop_line_touch_mandatory_avg_down(
+        stock=stock,
+        code="038500",
+        ws_data={"curr": 9_570},
+        strategy="SCALPING",
+        market_regime="NORMAL",
+        admin_id=1,
+        sell_reason_type="LOSS",
+        exit_rule="scalp_soft_stop_pct",
+        profit_rate=-3.08,
+        peak_profit=0.27,
+        current_ai_score=52,
+        held_sec=1_340,
+        dynamic_stop_pct=-3.00,
+        now_ts=1_005.0,
+        context_fields={"sell_intercept_context": "soft_stop_touch_before_grace"},
+    )
+
+    assert first["deferred"] is True
+    assert stale_retouch == {
+        "attempted": True,
+        "submitted": False,
+        "deferred": True,
+        "reason": "soft_stop_price_improvement_wait_started",
+    }
+    assert add_calls == []
+    assert stock["stop_line_touch_avg_down_defer_started_at"] == 1_005.0
+    deferred_events = [
+        fields
+        for stage, fields in pipeline_events
+        if stage == "stop_line_touch_avg_down_price_improvement_deferred"
+    ]
+    assert deferred_events[-1]["defer_anchor_profit"] == "-3.08"
+
+
 def test_stop_line_touch_mandatory_avg_down_logs_not_eligible(monkeypatch):
     state_handlers.TRADING_RULES = replace(
         CONFIG,

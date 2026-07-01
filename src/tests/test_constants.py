@@ -77,10 +77,18 @@ def test_reversal_add_runtime_env_overrides(monkeypatch):
 
 def test_avg_down_market_on_stop_touch_runtime_env_override(monkeypatch):
     monkeypatch.setenv("KORSTOCKSCAN_SCALPING_AVG_DOWN_MARKET_ON_STOP_TOUCH_ENABLED", "true")
+    monkeypatch.setenv("KORSTOCKSCAN_SCALP_STOP_LINE_TOUCH_AVG_DOWN_DEFER_ENABLED", "true")
+    monkeypatch.setenv("KORSTOCKSCAN_SCALP_STOP_LINE_TOUCH_AVG_DOWN_DEFER_MAX_SEC", "4")
+    monkeypatch.setenv("KORSTOCKSCAN_SCALP_STOP_LINE_TOUCH_AVG_DOWN_EXTRA_DIP_PCT", "0.25")
+    monkeypatch.setenv("KORSTOCKSCAN_SCALP_STOP_LINE_TOUCH_AVG_DOWN_DEFER_EMERGENCY_PCT", "-5.5")
 
     reloaded = importlib.reload(constants)
 
     assert reloaded.TRADING_RULES.SCALPING_AVG_DOWN_MARKET_ON_STOP_TOUCH_ENABLED is True
+    assert reloaded.TRADING_RULES.SCALP_STOP_LINE_TOUCH_AVG_DOWN_DEFER_ENABLED is True
+    assert reloaded.TRADING_RULES.SCALP_STOP_LINE_TOUCH_AVG_DOWN_DEFER_MAX_SEC == 4
+    assert reloaded.TRADING_RULES.SCALP_STOP_LINE_TOUCH_AVG_DOWN_EXTRA_DIP_PCT == 0.25
+    assert reloaded.TRADING_RULES.SCALP_STOP_LINE_TOUCH_AVG_DOWN_DEFER_EMERGENCY_PCT == -5.5
 
 
 def test_stop_loss_runtime_env_overrides(monkeypatch):
