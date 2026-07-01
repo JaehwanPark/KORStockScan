@@ -25,25 +25,40 @@
 
 ## 장전 체크리스트 (08:45~09:00)
 
-- [ ] `[ThresholdEnvAutoApplyPreopen0701] threshold env 자동 apply 산출물 및 사용자 개입 여부 확인` (`Due: 2026-07-01`, `Slot: PREOPEN`, `TimeWindow: 08:50~08:55`, `Track: RuntimeStability`)
+- [x] `[ThresholdEnvAutoApplyPreopen0701] threshold env 자동 apply 산출물 및 사용자 개입 여부 확인` (`Due: 2026-07-01`, `Slot: PREOPEN`, `TimeWindow: 08:50~08:55`, `Track: RuntimeStability`)
   - Source: [threshold_cycle_ev_2026-06-30.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-06-30.json), [threshold_cycle_preopen_apply.py](/home/ubuntu/KORStockScan/src/engine/threshold_cycle_preopen_apply.py), [run_bot.sh](/home/ubuntu/KORStockScan/src/run_bot.sh)
   - 판정 기준: 전일 postclose EV와 당일 apply plan/runtime env를 확인하고 `auto_bounded_live` guard 통과분만 runtime env로 인정한다.
   - 금지: blocked family, approval artifact missing, same-stage owner conflict를 수동 env override로 우회하지 않는다.
   - 다음 액션: `applied_guard_passed_env`, `blocked_no_env`, `partial_apply_with_blocked_families`, `failed_preopen_wrapper`, `not_yet_due` 중 하나로 닫는다.
+  - 실행 결과: `applied_guard_passed_env`
+  - 근거: `threshold_runtime_env_2026-07-01.json/env` generated_at=`2026-07-01T07:35:01+09:00`, source_date=`2026-06-30`, selected_families=`22`, blocked=`0`, warnings=`0`.
+  - 검증: `threshold_runtime_env_verify_2026-07-01.json` status=`pass`, missing_family_count=`0`, pid=`23558`, pid_env_available=`true`, pid_passed=`true`.
+  - Wrapper: `logs/threshold_cycle_preopen_cron.log`에 `[DONE] threshold-cycle preopen target_date=2026-07-01 finished_at=2026-07-01T07:35:01+0900` 확인.
+  - 운영 경계: blocked family/approval missing/same-stage conflict를 수동 env override로 우회하지 않았고, 장중 threshold mutation 또는 broker/order/provider/bot/cap 변경을 수행하지 않았다.
 
 ## 장중 체크리스트 (09:05~15:20)
 
-- [ ] `[RuntimeEnvIntradayObserve0701] 전일 selected runtime family 장중 provenance 및 rollback guard 확인` (`Due: 2026-07-01`, `Slot: INTRADAY`, `TimeWindow: 09:05~09:20`, `Track: RuntimeStability`)
+- [x] `[RuntimeEnvIntradayObserve0701] 전일 selected runtime family 장중 provenance 및 rollback guard 확인` (`Due: 2026-07-01`, `Slot: INTRADAY`, `TimeWindow: 09:05~09:20`, `Track: RuntimeStability`)
   - Source: [threshold_cycle_ev_2026-06-30.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-06-30.json)
   - 판정 기준: selected_families=soft_stop_whipsaw_confirmation, score65_74_recovery_probe, scalping_scanner_real_source_guard_runtime, score65_74_recovery_probe_strong_micro_override_runtime, entry_price_gap_profile_runtime, profit_stagnation_exit_runtime, latency_spread_relief_real_operator_override, quote_consistency_normalization, scalp_sim_candidate_window_expansion, scalp_sim_ai_budget_manager, ai_watching_score_smoothing_report_only, lifecycle_decision_matrix_runtime, weak_pullback_entry_block_runtime, early_accel_recheck_runtime, real_pyramid_scale_in_quality_guard_runtime, sell_side_open_time_block_runtime, pre_submit_liquidity_relief_runtime, weak_context_late_entry_guard_runtime, persistent_operator_overrides_2026_06_26가 runtime event provenance에 찍히는지 확인한다.
   - 금지: 장중 관찰 결과로 runtime threshold mutation을 수행하지 않는다.
   - 다음 액션: provenance present/missing, rollback guard breach 여부를 분리 기록한다.
+  - 실행 결과 (`2026-07-01 11:16 KST`): `provenance_partial_no_rollback_guard_breach`.
+  - 근거: [threshold_runtime_env_verify_2026-07-01.json](/home/ubuntu/KORStockScan/data/threshold_cycle/runtime_env/threshold_runtime_env_verify_2026-07-01.json)은 `passed=true`, `missing_family_count=0`, `pid_passed=true`로 닫혔다. 장중 event log 기준 selected family 22개 중 `score65_74_recovery_probe`, `quote_consistency_normalization`, `scalp_sim_candidate_window_expansion`, `scalp_sim_ai_budget_manager`, `real_pyramid_scale_in_quality_guard_runtime`, `sell_side_open_time_block_runtime`, `weak_context_late_entry_guard_runtime`, `scalp_sim_auto_approval`, `entry_cancel_wait_runtime`는 provenance가 관측됐다.
+  - 기준 목록 보정: 원래 체크리스트 판정 기준의 `lifecycle_decision_matrix_runtime`은 current manifest selected list에는 없고, current manifest에는 `lifecycle_bucket_discovery_sim_auto_approval`, `swing_sim_auto_approval`, `entry_cancel_wait_runtime`가 포함된다. 따라서 판정은 체크리스트 문구가 아니라 [threshold_runtime_env_verify_2026-07-01.json](/home/ubuntu/KORStockScan/data/threshold_cycle/runtime_env/threshold_runtime_env_verify_2026-07-01.json)의 current selected list를 기준으로 닫았다.
+  - 미관측 분리: `soft_stop_whipsaw_confirmation`, `scalping_scanner_real_source_guard_runtime`, `score65_74_recovery_probe_strong_micro_override_runtime`, `entry_price_gap_profile_runtime`, `profit_stagnation_exit_runtime`, `latency_spread_relief_real_operator_override`, `ai_watching_score_smoothing_report_only`, `weak_pullback_entry_block_runtime`, `early_accel_recheck_runtime`, `pre_submit_liquidity_relief_runtime`, `persistent_operator_overrides_2026_06_26`, `lifecycle_bucket_discovery_sim_auto_approval`, `swing_sim_auto_approval`는 11:16 기준 해당 family trigger가 event log에서 확인되지 않았다. 이는 runtime env 누락이 아니라 장중 무발화/dormant 관찰 상태로 분리하며, rollback guard breach는 확인되지 않았다.
+  - 운영 경계: 장중 threshold/order/provider/bot/cap 변경은 수행하지 않았다.
 
-- [ ] `[SimProbeIntradayCoverage0701] sim/probe 관찰축 actual_order_submitted=false 및 source-quality 확인` (`Due: 2026-07-01`, `Slot: INTRADAY`, `TimeWindow: 09:35~09:50`, `Track: ScalpingLogic`)
+- [x] `[SimProbeIntradayCoverage0701] sim/probe 관찰축 actual_order_submitted=false 및 source-quality 확인` (`Due: 2026-07-01`, `Slot: INTRADAY`, `TimeWindow: 09:35~09:50`, `Track: ScalpingLogic`)
   - Source: [threshold_cycle_ev_2026-06-30.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-06-30.json)
   - 판정 기준: sim/probe 표본이 real execution과 분리되고 `actual_order_submitted=false` provenance가 유지되는지 확인한다.
   - 금지: sim/probe EV를 broker execution 품질이나 실주문 전환 근거로 단독 사용하지 않는다.
   - 다음 액션: source-quality split, active state 복원, open/closed count를 같이 기록한다.
+  - 실행 결과 (`2026-07-01 11:16 KST`): `sim_probe_real_execution_separated`.
+  - 근거: [pipeline_events_2026-07-01.jsonl](/home/ubuntu/KORStockScan/data/pipeline_events/pipeline_events_2026-07-01.jsonl) 및 [threshold_events_2026-07-01.jsonl](/home/ubuntu/KORStockScan/data/threshold_cycle/threshold_events_2026-07-01.jsonl) 스트리밍 확인 결과 sim/probe marker row 59,276건 중 `actual_order_submitted=true`는 0건이다. family hit는 `scalp_sim_auto_approval` 1,474건, `scalp_sim_candidate_window_expansion` 573건, `scalp_sim_ai_budget_manager` 202건, `score65_74_recovery_probe` 123건이다.
+  - source-quality split: [intraday_entry_blocker_diagnostics_2026-07-01.json](/home/ubuntu/KORStockScan/data/report/intraday_entry_blocker_diagnostics/intraday_entry_blocker_diagnostics_2026-07-01.json) 기준 rising missed class는 `intended_guard_preserved=8`, `source_quality_excluded=5`, `runtime_backpressure_observation=3`, `strategy_reject_missed=1`로 분리됐다. stale/delayed low-AI-or-pressure eval은 569건이며 `diagnostic_quote_age_stale=466`, `pre_ai_stale_or_history_gap=103`으로 분류됐다.
+  - flow 확인: [intraday_entry_flow_2026-07-01_current.md](/home/ubuntu/KORStockScan/data/report/intraday_entry_flow/intraday_entry_flow_2026-07-01_current.md)는 `rising_missed_residual_excluding_forced_scout_symbol_count=2`, `rising_missed_forced_scout_residual_symbol_count=12`, `real_submit_symbol_count_in_latest_diagnostic=1`로 forced scout residual과 일반 residual을 분리했다.
+  - 운영 경계: sim/probe EV를 broker execution 품질 또는 실주문 전환 근거로 사용하지 않았고, 장중 threshold/order/provider/bot/cap 변경은 수행하지 않았다.
 
 - [ ] `[IntradaySourceQualityGateCheck0701] 장중 raw source-quality 결손/unknown 조기 경보 및 튜닝 입력 차단 준비 확인` (`Due: 2026-07-01`, `Slot: INTRADAY`, `TimeWindow: 14:20~14:35`, `Track: RuntimeStability`)
   - Source: [pipeline_events_2026-07-01.jsonl](/home/ubuntu/KORStockScan/data/pipeline_events/pipeline_events_2026-07-01.jsonl), [threshold_events_2026-07-01.jsonl](/home/ubuntu/KORStockScan/data/threshold_cycle/threshold_events_2026-07-01.jsonl), [observation_source_quality_audit_2026-07-01.json](/home/ubuntu/KORStockScan/data/report/observation_source_quality_audit/observation_source_quality_audit_2026-07-01.json), [observation_source_quality_audit.py](/home/ubuntu/KORStockScan/src/engine/observation_source_quality_audit.py)
