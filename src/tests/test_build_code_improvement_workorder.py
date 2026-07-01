@@ -172,6 +172,84 @@ def test_build_code_improvement_workorder_limits_selected_orders(tmp_path, monke
     assert report["deferred_or_rejected_count"] == 3
 
 
+def test_build_code_improvement_workorder_adds_intraday_entry_blocker_source_quality_orders(tmp_path, monkeypatch):
+    intraday_dir = tmp_path / "intraday_entry_blocker_diagnostics"
+    report_dir = tmp_path / "report"
+    doc_dir = tmp_path / "docs"
+    intraday_dir.mkdir()
+    payload = {
+        "source_pipeline_events": "data/pipeline_events/pipeline_events_2026-07-01.jsonl",
+        "source_quality_workorders": {
+            "rising_missed_runtime_attach_identity_mismatch": [
+                {
+                    "workorder_type": "scanner_runtime_attach_identity_mismatch",
+                    "stock_code": "000390",
+                    "stock_name": "매드업",
+                    "event_count": 5,
+                    "latest_reason": "scanner_identity_name_mismatch",
+                    "payload_name": "매드업",
+                    "db_name": "SP삼화",
+                    "mismatch_expired": "True",
+                    "forbidden_uses": ["stale_submit_bypass", "broker_guard_bypass"],
+                }
+            ],
+            "rising_missed_freshness_recovery": [
+                {
+                    "workorder_type": "bounded_rising_candidate_freshness_recheck",
+                    "stock_code": "336260",
+                    "stock_name": "두산퓨얼셀",
+                    "event_count": 15,
+                    "diagnostic_quote_age_stale": 9,
+                    "pre_ai_stale_or_history_gap": 6,
+                    "latest_stage": "blocked_strength_momentum",
+                    "latest_reason": "below_strength_base",
+                    "forbidden_uses": ["stale_submit_bypass", "broker_guard_bypass"],
+                }
+            ],
+            "repeated_zero_strength_history": [
+                {
+                    "workorder_type": "scanner_strength_momentum_history_missing",
+                    "stock_code": "389470",
+                    "stock_name": "인벤티지랩",
+                    "event_count": 6,
+                    "latest_stage": "scalping_scanner_fast_precheck",
+                    "forbidden_uses": ["stale_submit_bypass", "broker_guard_bypass"],
+                }
+            ],
+        },
+    }
+    (intraday_dir / "intraday_entry_blocker_diagnostics_2026-07-01.json").write_text(
+        json.dumps(payload, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-automation")
+    monkeypatch.setattr(mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing")
+    monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", tmp_path / "missing-ev")
+    monkeypatch.setattr(mod, "INTRADAY_ENTRY_BLOCKER_DIAGNOSTICS_DIR", intraday_dir)
+    monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_DIR", doc_dir)
+
+    report = mod.build_code_improvement_workorder("2026-07-01", max_orders=10)
+
+    intraday_orders = [
+        item for item in report["orders"] if item["source_report_type"] == "intraday_entry_blocker_diagnostics"
+    ]
+    assert report["summary"]["intraday_entry_blocker_source_order_count"] == 3
+    assert len(intraday_orders) == 3
+    assert {item["decision"] for item in intraday_orders} == {"implement_now"}
+    assert {item["runtime_effect"] for item in intraday_orders} == {False}
+    assert {item["allowed_runtime_apply"] for item in intraday_orders} == {False}
+    assert {item["mapped_family"] for item in intraday_orders} == {
+        "bounded_freshness_recheck",
+        "scanner_runtime_attach_identity_mismatch",
+        "scanner_strength_history_missing",
+    }
+    assert all("stale_submit_bypass" in item["forbidden_uses"] for item in intraday_orders)
+    assert report["source"]["intraday_entry_blocker_diagnostics"] == str(
+        intraday_dir / "intraday_entry_blocker_diagnostics_2026-07-01.json"
+    )
+
+
 def test_build_code_improvement_workorder_adds_conversion_lane_orders(tmp_path, monkeypatch):
     automation_dir = tmp_path / "automation"
     conversion_dir = tmp_path / "conversion_lane"

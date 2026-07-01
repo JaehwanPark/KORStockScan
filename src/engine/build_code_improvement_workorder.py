@@ -36,6 +36,7 @@ PRODUCER_GAP_DISCOVERY_DIR = REPORT_DIR / "producer_gap_discovery"
 STAGE_HOOK_WORKORDER_DISCOVERY_DIR = REPORT_DIR / "stage_hook_workorder_discovery"
 STAGE_HOOK_RUNTIME_SCAFFOLD_DIR = REPORT_DIR / "stage_hook_runtime_scaffold"
 CONVERSION_LANE_DIR = REPORT_DIR / "conversion_lane"
+INTRADAY_ENTRY_BLOCKER_DIAGNOSTICS_DIR = REPORT_DIR / "intraday_entry_blocker_diagnostics"
 CODE_IMPROVEMENT_WORKORDER_DIR = PROJECT_ROOT / "docs" / "code-improvement-workorders"
 CODE_IMPROVEMENT_WORKORDER_REPORT_DIR = REPORT_DIR / "code_improvement_workorder"
 WORKORDER_SCHEMA_VERSION = 1
@@ -172,6 +173,10 @@ def _previous_workorder_lineage(previous_report: dict[str, Any], current_orders:
 
 def conversion_lane_report_path(target_date: str) -> Path:
     return CONVERSION_LANE_DIR / f"conversion_lane_{target_date}.json"
+
+
+def intraday_entry_blocker_diagnostics_report_path(target_date: str) -> Path:
+    return INTRADAY_ENTRY_BLOCKER_DIAGNOSTICS_DIR / f"intraday_entry_blocker_diagnostics_{target_date}.json"
 
 
 def _conversion_rank_by_candidate(conversion_lane: dict[str, Any]) -> dict[str, dict[str, Any]]:
@@ -320,6 +325,143 @@ def _conversion_lane_followup_orders(conversion_lane: dict[str, Any], *, limit: 
         )
         if len(orders) >= limit:
             break
+    return orders
+
+
+def _intraday_entry_blocker_followup_orders(report: dict[str, Any]) -> list[dict[str, Any]]:
+    workorders = report.get("source_quality_workorders")
+    if not isinstance(workorders, dict):
+        return []
+
+    source_path = str(report.get("source_pipeline_events") or "")
+    orders: list[dict[str, Any]] = []
+    specs = (
+        (
+            "rising_missed_runtime_attach_identity_mismatch",
+            "scanner runtime attach identity mismatch",
+            "scanner_runtime_attach_identity_mismatch",
+            "scanner_target_identity",
+            "source_quality_identity_repair",
+            [
+                "src/engine/sniper_state_handlers.py",
+                "src/engine/monitoring/intraday_entry_blocker_diagnostics.py",
+            ],
+        ),
+        (
+            "rising_missed_freshness_recovery",
+            "bounded rising candidate freshness recheck",
+            "bounded_freshness_recheck",
+            "entry_freshness",
+            "source_quality_freshness_repair",
+            [
+                "src/engine/sniper_state_handlers.py",
+                "src/engine/monitoring/intraday_entry_blocker_diagnostics.py",
+            ],
+        ),
+        (
+            "repeated_zero_strength_history",
+            "scanner strength momentum history missing",
+            "scanner_strength_history_missing",
+            "entry_freshness",
+            "source_quality_history_repair",
+            [
+                "src/engine/kiwoom_websocket.py",
+                "src/engine/sniper_state_handlers.py",
+                "src/engine/monitoring/intraday_entry_blocker_diagnostics.py",
+            ],
+        ),
+    )
+    for key, title_prefix, family, subsystem, improvement_type, files in specs:
+        raw_items = [item for item in workorders.get(key) or [] if isinstance(item, dict)]
+        if key == "rising_missed_freshness_recovery" and raw_items:
+            total_stale = sum(_safe_int(item.get("diagnostic_quote_age_stale"), 0) for item in raw_items)
+            total_history_gap = sum(_safe_int(item.get("pre_ai_stale_or_history_gap"), 0) for item in raw_items)
+            raw_items = [
+                {
+                    "workorder_type": "bounded_rising_candidate_freshness_recheck",
+                    "stock_code": "multi_symbol",
+                    "stock_name": f"{len(raw_items)} rising candidates",
+                    "event_count": sum(_safe_int(item.get("event_count"), 0) for item in raw_items),
+                    "diagnostic_quote_age_stale": total_stale,
+                    "pre_ai_stale_or_history_gap": total_history_gap,
+                    "latest_stage": "aggregate",
+                    "latest_reason": "stale_or_history_gap",
+                    "forbidden_uses": raw_items[0].get("forbidden_uses") or [],
+                    "source_items": raw_items,
+                }
+            ]
+        for item in raw_items:
+            raw_code = str(item.get("stock_code") or "unknown").strip() or "unknown"
+            raw_type = str(item.get("workorder_type") or family).strip() or family
+            order_slug = _slug_with_hash(f"{key}_{raw_type}_{raw_code}", limit=72)
+            evidence = [
+                f"workorder_type={raw_type}",
+                f"stock_code={raw_code}",
+                f"stock_name={item.get('stock_name') or ''}",
+                f"event_count={item.get('event_count')}",
+            ]
+            for field in (
+                "latest_reason",
+                "payload_name",
+                "db_name",
+                "mismatch_expired",
+                "diagnostic_quote_age_stale",
+                "pre_ai_stale_or_history_gap",
+                "latest_stage",
+            ):
+                value = item.get(field)
+                if value not in (None, ""):
+                    evidence.append(f"{field}={value}")
+            source_items = item.get("source_items") if isinstance(item.get("source_items"), list) else []
+            if source_items:
+                evidence.append("source_symbol_count=" + str(len(source_items)))
+                evidence.append(
+                    "top_symbols="
+                    + ",".join(
+                        str(source.get("stock_code") or "unknown")
+                        for source in source_items[:8]
+                        if isinstance(source, dict)
+                    )
+                )
+            orders.append(
+                {
+                    "order_id": f"order_intraday_entry_blocker_{order_slug}",
+                    "title": f"{title_prefix}: {raw_code}",
+                    "source_report_type": "intraday_entry_blocker_diagnostics",
+                    "lifecycle_stage": "entry",
+                    "target_subsystem": subsystem,
+                    "route": "instrumentation_order",
+                    "mapped_family": family,
+                    "threshold_family": family,
+                    "improvement_type": improvement_type,
+                    "confidence": "intraday_diagnostic",
+                    "priority": 2,
+                    "runtime_effect": False,
+                    "allowed_runtime_apply": False,
+                    "expected_ev_effect": (
+                        "Improve source-quality handoff for rising missed candidates before any BUY/submit "
+                        "threshold judgment; no broker/order/provider/runtime authority."
+                    ),
+                    "evidence": evidence,
+                    "source_paths": [source_path] if source_path else [],
+                    "next_postclose_metric": (
+                        "intraday_entry_blocker_diagnostics source_quality_workorders should shrink or carry "
+                        "explicit reviewed not-applicable provenance after regenerated diagnostics."
+                    ),
+                    "files_likely_touched": files,
+                    "acceptance_tests": [
+                        "PYTHONPATH=. .venv/bin/pytest src/tests/test_intraday_entry_blocker_diagnostics.py src/tests/test_build_code_improvement_workorder.py",
+                        "runtime_effect remains false; stale submit, broker, order, provider, bot, and threshold guards remain unchanged",
+                    ],
+                    "forbidden_uses": item.get("forbidden_uses") or [
+                        "buy_score_relaxation",
+                        "stale_submit_bypass",
+                        "broker_guard_bypass",
+                        "real_order_approval",
+                    ],
+                    "source_workorder": item,
+                }
+            )
     return orders
 
 
@@ -5622,6 +5764,11 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
     buy_funnel_sentinel = _load_source_json(buy_funnel_sentinel_path, isolated_source_mode=isolated_source_mode)
     conversion_lane_path = conversion_lane_report_path(target_date)
     conversion_lane = _load_source_json(conversion_lane_path, isolated_source_mode=isolated_source_mode)
+    intraday_entry_blocker_path = intraday_entry_blocker_diagnostics_report_path(target_date)
+    intraday_entry_blocker = _load_source_json(
+        intraday_entry_blocker_path,
+        isolated_source_mode=isolated_source_mode,
+    )
     conversion_rank = _conversion_rank_by_candidate(conversion_lane)
     calibration_source_path = _calibration_report_path_from_ev(ev_report)
     calibration_report = _calibration_report_from_ev(ev_report)
@@ -5646,6 +5793,7 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
         "stage_hook_runtime_scaffold": stage_hook_runtime_scaffold_path,
         "buy_funnel_sentinel": buy_funnel_sentinel_path,
         "conversion_lane": conversion_lane_path,
+        "intraday_entry_blocker_diagnostics": intraday_entry_blocker_path,
     }
     source_paths = {
         label: path
@@ -5750,6 +5898,7 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
         if isinstance(item, dict)
     ]
     conversion_lane_orders = _conversion_lane_followup_orders(conversion_lane)
+    intraday_entry_blocker_orders = _intraday_entry_blocker_followup_orders(intraday_entry_blocker)
     buy_funnel_sentinel_orders = _buy_funnel_sentinel_followup_orders(
         buy_funnel_sentinel,
         lifecycle_report=lifecycle_report,
@@ -5801,6 +5950,7 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
         *producer_gap_discovery_orders,
         *stage_hook_workorder_discovery_orders,
         *conversion_lane_orders,
+        *intraday_entry_blocker_orders,
         *lifecycle_entry_bucket_orders,
         *lifecycle_submit_bucket_orders,
         *lifecycle_flow_bucket_orders,
@@ -6067,6 +6217,7 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
             "stage_hook_runtime_scaffold": source_ref("stage_hook_runtime_scaffold"),
             "buy_funnel_sentinel": source_ref("buy_funnel_sentinel"),
             "conversion_lane": source_ref("conversion_lane"),
+            "intraday_entry_blocker_diagnostics": source_ref("intraday_entry_blocker_diagnostics"),
             "threshold_cycle_calibration": source_ref("threshold_cycle_calibration"),
         },
         "source_fingerprint": source_fingerprint["files"],
@@ -6103,6 +6254,7 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
             "stage_hook_runtime_scaffold_status": stage_hook_runtime_scaffold.get("status"),
             "stage_hook_runtime_scaffold_implemented_hook_count": len(stage_hook_scaffold_by_name),
             "conversion_lane_source_order_count": len(conversion_lane_orders),
+            "intraday_entry_blocker_source_order_count": len(intraday_entry_blocker_orders),
             "producer_gap_discovery_high_priority_selected": bool(
                 {
                     str(order.get("order_id"))

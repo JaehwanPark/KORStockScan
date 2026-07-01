@@ -209,6 +209,35 @@ def test_build_report_excludes_runtime_attach_identity_mismatch_from_one_share(t
         "db_name": "SP삼화",
         "mismatch_expired": "True",
     }
+    assert report["summary"]["rising_missed_runtime_attach_identity_mismatch_workorder_count"] == 1
+    workorders = report["source_quality_workorders"]["rising_missed_runtime_attach_identity_mismatch"]
+    assert workorders == [
+        {
+            "workorder_type": "scanner_runtime_attach_identity_mismatch",
+            "stock_code": "000390",
+            "stock_name": "매드업",
+            "event_count": 2,
+            "latest_at": "2026-06-23T10:06:12",
+            "latest_reason": "scanner_identity_name_mismatch",
+            "payload_name": "매드업",
+            "db_name": "SP삼화",
+            "mismatch_expired": "True",
+            "decision_authority": "source_quality_only",
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+            "forbidden_uses": [
+                "buy_score_relaxation",
+                "ai_threshold_relaxation",
+                "broker_guard_bypass",
+                "stale_submit_bypass",
+                "real_order_approval",
+                "forced_one_share_success_counting",
+            ],
+            "next_action": (
+                "check_scanner_promotion_payload_and_db_runtime_target_attach_identity_normalization"
+            ),
+        }
+    ]
 
 
 def test_build_report_suppresses_known_latency_guard_as_resolved_non_major(tmp_path):
@@ -800,6 +829,14 @@ def test_build_report_splits_stale_or_delayed_eval_categories(tmp_path):
         item for item in report["root_cause_priorities"] if item["issue"] == "scanner_strength_history_or_stale_eval"
     )
     assert priority["evidence"]["stale_or_delayed_eval_category_counts"] == expected
+    assert report["summary"]["rising_missed_freshness_recovery_workorder_count"] == 1
+    freshness_workorders = report["source_quality_workorders"]["rising_missed_freshness_recovery"]
+    assert freshness_workorders[0]["workorder_type"] == "bounded_rising_candidate_freshness_recheck"
+    assert freshness_workorders[0]["diagnostic_quote_age_stale"] == 1
+    assert freshness_workorders[0]["pre_ai_stale_or_history_gap"] == 1
+    assert freshness_workorders[0]["runtime_effect"] is False
+    assert freshness_workorders[0]["allowed_runtime_apply"] is False
+    assert "stale_submit_bypass" in freshness_workorders[0]["forbidden_uses"]
 
 
 def test_build_report_surfaces_repeated_zero_strength_history_workorder(tmp_path):

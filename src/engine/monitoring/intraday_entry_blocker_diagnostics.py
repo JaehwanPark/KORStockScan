@@ -1488,6 +1488,90 @@ def _zero_strength_history_workorders(items: list[dict[str, Any]]) -> list[dict[
     return sorted(workorders, key=lambda item: item["event_count"], reverse=True)
 
 
+def _runtime_attach_identity_workorders(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    workorders: list[dict[str, Any]] = []
+    for item in items:
+        mismatch = item.get("runtime_attach_identity_mismatch") or {}
+        count = int(mismatch.get("count") or 0)
+        if count <= 0:
+            continue
+        workorders.append(
+            {
+                "workorder_type": "scanner_runtime_attach_identity_mismatch",
+                "stock_code": item.get("stock_code") or "",
+                "stock_name": item.get("stock_name") or "",
+                "event_count": count,
+                "latest_at": mismatch.get("latest_at") or "",
+                "latest_reason": mismatch.get("latest_reason") or "",
+                "payload_name": mismatch.get("payload_name") or "",
+                "db_name": mismatch.get("db_name") or "",
+                "mismatch_expired": mismatch.get("mismatch_expired") or "",
+                "decision_authority": "source_quality_only",
+                "runtime_effect": False,
+                "allowed_runtime_apply": False,
+                "forbidden_uses": [
+                    "buy_score_relaxation",
+                    "ai_threshold_relaxation",
+                    "broker_guard_bypass",
+                    "stale_submit_bypass",
+                    "real_order_approval",
+                    "forced_one_share_success_counting",
+                ],
+                "next_action": (
+                    "check_scanner_promotion_payload_and_db_runtime_target_attach_identity_normalization"
+                ),
+            }
+        )
+    return sorted(workorders, key=lambda item: item["event_count"], reverse=True)
+
+
+def _freshness_recovery_workorders(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    workorders: list[dict[str, Any]] = []
+    for item in items:
+        categories = item.get("stale_or_delayed_eval_category_counts") or {}
+        diagnostic_stale = int(categories.get("diagnostic_quote_age_stale") or 0)
+        history_gap = int(categories.get("pre_ai_stale_or_history_gap") or 0)
+        if diagnostic_stale <= 0 and history_gap <= 0:
+            continue
+        latest = item.get("latest_blocker") if isinstance(item.get("latest_blocker"), dict) else {}
+        workorders.append(
+            {
+                "workorder_type": "bounded_rising_candidate_freshness_recheck",
+                "stock_code": item.get("stock_code") or "",
+                "stock_name": item.get("stock_name") or "",
+                "diagnostic_quote_age_stale": diagnostic_stale,
+                "pre_ai_stale_or_history_gap": history_gap,
+                "event_count": diagnostic_stale + history_gap,
+                "max_price_delta_since_first_seen_pct": item.get("max_price_delta_since_first_seen_pct"),
+                "latest_stage": latest.get("stage") or "",
+                "latest_reason": latest.get("reason") or "",
+                "decision_authority": "source_quality_only",
+                "runtime_effect": False,
+                "allowed_runtime_apply": False,
+                "forbidden_uses": [
+                    "buy_score_relaxation",
+                    "ai_threshold_relaxation",
+                    "strength_threshold_relaxation",
+                    "broker_guard_bypass",
+                    "stale_submit_bypass",
+                    "real_order_approval",
+                    "unbounded_cpu_or_ai_budget_increase",
+                ],
+                "next_action": (
+                    "add_or_tune_bounded_fresh_recheck_enqueue_after_stale_or_history_gap"
+                ),
+            }
+        )
+    return sorted(
+        workorders,
+        key=lambda item: (
+            int(item.get("event_count") or 0),
+            _safe_float(item.get("max_price_delta_since_first_seen_pct"), -999.0) or -999.0,
+        ),
+        reverse=True,
+    )
+
+
 def _rising_missed_classification_for_item(item: dict[str, Any], *, rising_threshold_pct: float) -> dict[str, Any]:
     dominant = item.get("dominant_actionable_blocker") if isinstance(item.get("dominant_actionable_blocker"), dict) else {}
     blocker_class = str(dominant.get("class") or "")
@@ -1899,6 +1983,39 @@ def build_report(
                     "real_order_approval",
                 ],
             },
+            "runtime_attach_identity_mismatch_workorders": {
+                "metric_role": "source_quality_gate",
+                "decision_authority": "source_quality_only",
+                "window_policy": "intraday_event_window",
+                "sample_floor": "1_mismatch_event_per_symbol",
+                "primary_decision_metric": False,
+                "source_quality_gate": "scanner_promotion_payload_matches_runtime_target_identity",
+                "forbidden_uses": [
+                    "buy_score_relaxation",
+                    "ai_threshold_relaxation",
+                    "broker_guard_bypass",
+                    "stale_submit_bypass",
+                    "real_order_approval",
+                    "forced_one_share_success_counting",
+                ],
+            },
+            "bounded_freshness_recovery_workorders": {
+                "metric_role": "source_quality_gate",
+                "decision_authority": "source_quality_only",
+                "window_policy": "intraday_event_window",
+                "sample_floor": "1_stale_or_history_gap_event_per_symbol",
+                "primary_decision_metric": False,
+                "source_quality_gate": "fresh_entry_eval_before_strategy_threshold_judgment",
+                "forbidden_uses": [
+                    "buy_score_relaxation",
+                    "ai_threshold_relaxation",
+                    "strength_threshold_relaxation",
+                    "broker_guard_bypass",
+                    "stale_submit_bypass",
+                    "real_order_approval",
+                    "unbounded_cpu_or_ai_budget_increase",
+                ],
+            },
             "scanner_full_eval_budget_diagnostics": {
                 "metric_role": "runtime_evaluation_throughput_diagnostic",
                 "decision_authority": "diagnostic_only",
@@ -2000,6 +2117,15 @@ def build_report(
             "rising_missed_repeated_zero_strength_history_workorder_count": len(
                 _zero_strength_history_workorders(rising_missed)
             ),
+            "runtime_attach_identity_mismatch_workorder_count": len(
+                _runtime_attach_identity_workorders(summaries)
+            ),
+            "rising_missed_runtime_attach_identity_mismatch_workorder_count": len(
+                _runtime_attach_identity_workorders(rising_missed)
+            ),
+            "rising_missed_freshness_recovery_workorder_count": len(
+                _freshness_recovery_workorders(rising_missed)
+            ),
             "rising_missed_full_eval_budget_deferred_count": int(
                 scanner_budget.get("deferred_count") or 0
             ),
@@ -2027,6 +2153,11 @@ def build_report(
             "rising_missed_repeated_zero_strength_history": _zero_strength_history_workorders(
                 rising_missed
             ),
+            "runtime_attach_identity_mismatch": _runtime_attach_identity_workorders(summaries),
+            "rising_missed_runtime_attach_identity_mismatch": _runtime_attach_identity_workorders(
+                rising_missed
+            ),
+            "rising_missed_freshness_recovery": _freshness_recovery_workorders(rising_missed),
         },
         "root_cause_priorities": _root_cause_priorities(
             rising_missed=rising_missed,
