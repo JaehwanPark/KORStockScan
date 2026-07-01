@@ -270,6 +270,9 @@ def _is_real_entry_candidate(row: dict[str, Any], promoted_codes: set[str]) -> b
 
 
 def _default_event_cache_path(target_date: str) -> Path:
+    pipeline_path = PROJECT_ROOT / "data" / "pipeline_events" / f"pipeline_events_{target_date}.jsonl"
+    if pipeline_path.exists():
+        return pipeline_path
     return (
         PROJECT_ROOT
         / "data"
@@ -368,9 +371,12 @@ def build_report(
     promoted: dict[str, dict[str, Any]] = {}
     for code, item in raw_promoted.items():
         first_promoted_at = _parse_ts(item.get("first_promoted_at"))
-        if since_ts is not None and first_promoted_at is not None and first_promoted_at < since_ts:
+        last_event_at = _parse_ts(item.get("last_event_at"))
+        active_from = first_promoted_at
+        active_until = last_event_at or first_promoted_at
+        if since_ts is not None and active_until is not None and active_until < since_ts:
             continue
-        if until_ts is not None and first_promoted_at is not None and first_promoted_at > until_ts:
+        if until_ts is not None and active_from is not None and active_from > until_ts:
             continue
         promoted[code] = item
     rising_missed_codes = {
@@ -484,8 +490,19 @@ def build_report(
         record = grouped[code]
         record["code"] = code
         record["name"] = item.get("stock_name") or record["name"]
-        record["first_ts"] = _parse_ts(item.get("first_promoted_at")) or record["first_ts"]
-        record["last_ts"] = _parse_ts(item.get("last_event_at")) or record["last_ts"]
+        first_promoted_at = _parse_ts(item.get("first_promoted_at"))
+        last_event_at = _parse_ts(item.get("last_event_at"))
+        if first_promoted_at is not None and (since_ts is None or first_promoted_at >= since_ts):
+            record["first_ts"] = first_promoted_at if record["first_ts"] is None else min(record["first_ts"], first_promoted_at)
+        elif record["first_ts"] is None and since_ts is not None:
+            record["first_ts"] = since_ts
+        if last_event_at is not None:
+            bounded_last_event_at = min(last_event_at, until_ts) if until_ts is not None else last_event_at
+            record["last_ts"] = (
+                bounded_last_event_at
+                if record["last_ts"] is None
+                else max(record["last_ts"], bounded_last_event_at)
+            )
         latest_delta = _safe_float(item.get("latest_price_delta_since_first_seen_pct"))
         if latest_delta is not None:
             record["latest_delta"] = latest_delta

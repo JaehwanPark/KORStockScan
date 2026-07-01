@@ -1,6 +1,11 @@
 import json
 
-from src.engine.monitoring.intraday_entry_flow_report import _default_output_paths, build_report, write_outputs
+from src.engine.monitoring.intraday_entry_flow_report import (
+    _default_event_cache_path,
+    _default_output_paths,
+    build_report,
+    write_outputs,
+)
 
 
 def _event(code, name, stage, fields, emitted_at="2026-06-29T09:50:00"):
@@ -178,6 +183,68 @@ def test_build_report_filters_diagnostic_promotions_before_since(tmp_path):
 
     assert [row["stock_code"] for row in report["rows"]] == ["000002"]
     assert report["summary"]["rising_missed_symbol_count_in_report"] == 1
+
+
+def test_build_report_keeps_promotions_active_after_since(tmp_path):
+    event_path = tmp_path / "events.jsonl"
+    diagnostic_path = tmp_path / "diag.json"
+    event_path.write_text("", encoding="utf-8")
+    diagnostic_path.write_text(
+        json.dumps(
+            {
+                "summary": {"real_submit_symbol_count": 0},
+                "promoted_symbols": [
+                    {
+                        "stock_code": "000001",
+                        "stock_name": "active",
+                        "first_promoted_at": "2026-06-29T09:49:59",
+                        "last_event_at": "2026-06-29T09:55:00",
+                        "max_price_delta_since_first_seen_pct": 5,
+                    },
+                    {
+                        "stock_code": "000002",
+                        "stock_name": "old",
+                        "first_promoted_at": "2026-06-29T09:40:00",
+                        "last_event_at": "2026-06-29T09:49:59",
+                        "max_price_delta_since_first_seen_pct": 1,
+                    },
+                ],
+                "rising_missed_buy": [{"stock_code": "000001"}, {"stock_code": "000002"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    report = build_report(
+        target_date="2026-06-29",
+        event_cache_path=event_path,
+        diagnostic_path=diagnostic_path,
+        since="2026-06-29T09:50:00",
+        until="2026-06-29T10:00:00",
+        generated_at="fixed",
+    )
+
+    assert [row["stock_code"] for row in report["rows"]] == ["000001"]
+    assert report["rows"][0]["first_observed_at"] == "09:50:00"
+    assert report["summary"]["rising_missed_symbol_count_in_report"] == 1
+
+
+def test_default_event_cache_path_prefers_live_pipeline_events(tmp_path, monkeypatch):
+    monkeypatch.setattr("src.engine.monitoring.intraday_entry_flow_report.PROJECT_ROOT", tmp_path)
+    pipeline_path = tmp_path / "data" / "pipeline_events" / "pipeline_events_2026-06-29.jsonl"
+    sentinel_path = (
+        tmp_path
+        / "data"
+        / "runtime"
+        / "sentinel_event_cache"
+        / "buy_funnel_sentinel_events_2026-06-29.jsonl"
+    )
+    pipeline_path.parent.mkdir(parents=True)
+    sentinel_path.parent.mkdir(parents=True)
+    pipeline_path.write_text("", encoding="utf-8")
+    sentinel_path.write_text("", encoding="utf-8")
+
+    assert _default_event_cache_path("2026-06-29") == pipeline_path
 
 
 def test_build_report_accepts_offset_aware_since_for_target_date(tmp_path):

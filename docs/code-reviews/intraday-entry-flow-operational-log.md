@@ -215,3 +215,29 @@ This file is cumulative. Do not append every 10-minute loop result here. Loop-le
 - `runtime_effect=false`
 - `allowed_runtime_apply=false`
 - This changed diagnostic/source-quality classification only. It did not alter runtime target attachment, order submission, stale/latency/broker/account/order/quantity/cooldown, hard safety, provider route, bot state, or thresholds.
+
+## 8. 2026-07-01 16:00 Flow Live Source And Active Window Repair
+
+### Decision
+
+- The 16:00~19:00 flow goal must use live `pipeline_events_YYYY-MM-DD.jsonl`, not the 15:20 buy-funnel sentinel cache snapshot.
+- A symbol promoted before the window but still active inside the window must remain visible in the fixed current flow report.
+
+### Change
+
+- `intraday_entry_flow_report` now prefers `data/pipeline_events/pipeline_events_YYYY-MM-DD.jsonl` as the default event source when present.
+- Diagnostic promotion filtering now keeps rows whose `last_event_at` is inside the requested window even when `first_promoted_at` is before `since`.
+- Window reports clamp the displayed first observation to the requested `since` boundary or the first in-window event, preventing old promotion timestamps from leaking into current-window flow rows.
+
+### Validation
+
+- `PYTHONPATH=. .venv/bin/python -m pytest src/tests/test_intraday_entry_flow_report.py` passed with `18 passed`.
+- `PYTHONPATH=. .venv/bin/python -m py_compile src/engine/monitoring/intraday_entry_flow_report.py src/tests/test_intraday_entry_flow_report.py` passed.
+- `git diff --check` passed for the changed report/test paths.
+- 2026-07-01 16:00 current flow regenerated with `source_events=data/pipeline_events/pipeline_events_2026-07-01.jsonl`, `symbol_count=17`, and `rising_symbol_count_by_max_delta=8`.
+
+### Operating Boundary
+
+- `runtime_effect=false`
+- `allowed_runtime_apply=false`
+- This is report-source and window-filter repair only. It does not change thresholds, provider route, bot state, order submission, stale/latency/broker/account/order/quantity/cooldown guards, or hard safety.
