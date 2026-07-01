@@ -4055,7 +4055,12 @@ def test_timeout_pending_add_attempts_cancel_before_clear(monkeypatch):
 def test_timeout_unfilled_stop_line_avg_down_restores_retry_count(monkeypatch):
     from src.utils.constants import TRADING_RULES as CONFIG
 
-    state_handlers.TRADING_RULES = replace(CONFIG, SCALE_IN_REQUIRE_HISTORY_TABLE=False)
+    state_handlers.TRADING_RULES = replace(
+        CONFIG,
+        SCALE_IN_REQUIRE_HISTORY_TABLE=False,
+        SCALP_DEFENSIVE_AVG_DOWN_UNFILLED_RECHECK_ENABLED=True,
+        SCALP_DEFENSIVE_AVG_DOWN_UNFILLED_RECHECK_SEC=30,
+    )
     state_handlers.KIWOOM_TOKEN = "token"
 
     monkeypatch.setattr(
@@ -4098,6 +4103,16 @@ def test_timeout_unfilled_stop_line_avg_down_restores_retry_count(monkeypatch):
     assert stock["stop_line_touch_avg_down_used"] is True
     assert stock["last_defensive_avg_down_count_rollback_kind"] == "stop_line_touch_mandatory_avg_down"
     assert stock["last_defensive_avg_down_count_rollback_ord_no"] == "A3"
+    assert stock["defensive_avg_down_unfilled_recheck_until"] == 130.0
+    recheck = state_handlers._defensive_avg_down_unfilled_recheck_decision(
+        stock,
+        strategy="SCALPING",
+        profit_rate=-4.50,
+        now_ts=101.0,
+    )
+    assert recheck["active"] is True
+    assert recheck["remaining_sec"] == 29
+    assert recheck["kind"] == "stop_line_touch_mandatory_avg_down"
 
 
 def test_timeout_partially_filled_stop_line_avg_down_keeps_retry_count(monkeypatch):
@@ -4193,6 +4208,30 @@ def test_timeout_unfilled_late_loss_avg_down_restores_retry_count(monkeypatch):
     assert stock["last_defensive_avg_down_count_rollback_ord_no"] == "L1"
 
 
+def test_defensive_avg_down_unfilled_recheck_respects_emergency_floor():
+    state_handlers.TRADING_RULES = replace(
+        CONFIG,
+        SCALP_DEFENSIVE_AVG_DOWN_UNFILLED_RECHECK_ENABLED=True,
+        SCALP_DEFENSIVE_AVG_DOWN_UNFILLED_RECHECK_EMERGENCY_PCT=-6.5,
+    )
+    stock = {
+        "strategy": "SCALPING",
+        "defensive_avg_down_unfilled_recheck_until": 130.0,
+        "defensive_avg_down_unfilled_recheck_started_at": 100.0,
+        "defensive_avg_down_unfilled_recheck_sec": 30,
+    }
+
+    decision = state_handlers._defensive_avg_down_unfilled_recheck_decision(
+        stock,
+        strategy="SCALPING",
+        profit_rate=-6.70,
+        now_ts=110.0,
+    )
+
+    assert decision["active"] is False
+    assert decision["reason"] == "emergency_pct"
+
+
 def test_missing_pending_ordno_locks_scale_in(monkeypatch):
     from src.utils.constants import TRADING_RULES as CONFIG
 
@@ -4222,6 +4261,54 @@ def test_missing_pending_ordno_locks_scale_in(monkeypatch):
     assert result["reason"] == "pending_add_recovered"
     assert stock["scale_in_locked"] is True
     assert stock.get("pending_add_order") is None
+
+
+
+def test_unfilled_defensive_avg_down_recheck_skips_missing_ordno():
+    state_handlers.TRADING_RULES = replace(
+        CONFIG,
+        SCALP_DEFENSIVE_AVG_DOWN_UNFILLED_RECHECK_ENABLED=True,
+        SCALP_DEFENSIVE_AVG_DOWN_UNFILLED_RECHECK_SEC=30,
+    )
+    stock = {
+        "strategy": "SCALPING",
+        "pending_add_type": "AVG_DOWN",
+        "pending_add_reason": state_handlers._STOP_LINE_TOUCH_MANDATORY_AVG_DOWN_REASON,
+        "pending_add_filled_qty": 0,
+        "stop_line_touch_avg_down_count": 1,
+        "stop_line_touch_avg_down_used": True,
+    }
+
+    rolled_back = state_handlers._rollback_unfilled_defensive_avg_down_usage(
+        stock,
+        reason="stale_pending_no_ordno_missing_ordno",
+    )
+
+    assert rolled_back is True
+    assert stock["stop_line_touch_avg_down_count"] == 0
+    assert "defensive_avg_down_unfilled_recheck_until" not in stock
+
+
+def test_scalp_loss_reentry_rebound_qty_cap_does_not_consume_cooldown():
+    stock = {"strategy": "SCALPING"}
+    cooldowns = {"000500": 4_600.0}
+    bypass = {"allowed": True, "force_qty": 1, "cooldown_marked_at": 1_000.0}
+
+    capped = state_handlers._apply_scalp_loss_reentry_rebound_canary_qty(
+        stock,
+        strategy="SCALPING",
+        curr_price=10600,
+        deposit=1_000_000,
+        target_budget=300_000,
+        safe_budget=300_000,
+        real_buy_qty=28,
+        used_safety_ratio=0.8,
+        bypass=bypass,
+    )
+
+    assert capped == (10600, 10600, 1, 1.0, True)
+    assert cooldowns["000500"] == 4_600.0
+    assert "loss_reentry_rebound_canary_entry" not in stock
 
 
 def test_scale_in_blocked_when_buy_side_paused(monkeypatch):
@@ -14709,6 +14796,121 @@ def test_scalp_same_symbol_loss_reentry_guard_records_and_blocks(monkeypatch):
         assert "000500" not in state_handlers._SCALP_SAME_SYMBOL_LOSS_REENTRY_COOLDOWNS
     finally:
         state_handlers._SCALP_SAME_SYMBOL_LOSS_REENTRY_COOLDOWNS.clear()
+        state_handlers.TRADING_RULES = original_rules
+
+
+def test_scalp_loss_reentry_rebound_bypass_allows_strong_scanner_canary(monkeypatch):
+    original_rules = state_handlers.TRADING_RULES
+    logs = []
+    try:
+        state_handlers.TRADING_RULES = replace(
+            CONFIG,
+            SCALP_SAME_SYMBOL_LOSS_REENTRY_COOLDOWN_ENABLED=True,
+            SCALP_SAME_SYMBOL_LOSS_REENTRY_COOLDOWN_SEC=3600,
+            SCALP_LOSS_REENTRY_REBOUND_BYPASS_ENABLED=True,
+            SCALP_LOSS_REENTRY_REBOUND_MIN_DELTA_PCT=4.0,
+            SCALP_LOSS_REENTRY_REBOUND_FORCE_QTY=1,
+        )
+        state_handlers._SCALP_SAME_SYMBOL_LOSS_REENTRY_COOLDOWNS.clear()
+        monkeypatch.setattr(
+            state_handlers,
+            "_log_entry_pipeline",
+            lambda stock, code, stage, **fields: logs.append((stage, fields)),
+        )
+        stock = {
+            "code": "000500",
+            "name": "가온전선",
+            "strategy": "SCALPING",
+            "scanner_promotion_id": "scan-1",
+            "scanner_promotion_emitted_epoch": "1001.000",
+            "entry_armed_at_epoch": 1001.0,
+            "buy_price": 10000,
+            "scanner_promotion_reason": "price_jump_start_acceleration",
+            "source_signature": "PRICE_JUMP_START,VOLUME_SURGE_POSITIVE,REALTIME_RANK_START",
+            "first_seen_price": "10000",
+            "current_price": "10600",
+            "current_price_observed": "10600",
+            "price_delta_since_first_seen_pct": "6.00",
+        }
+        state_handlers._record_scalp_same_symbol_loss_reentry_cooldown(
+            "000500",
+            stock=stock,
+            exit_rule="scalp_soft_stop_pct",
+            profit_rate=-3.56,
+            now_ts=1_000.0,
+            cooldown_sec=3600,
+        )
+        guard = state_handlers.evaluate_scalp_same_symbol_loss_reentry_guard("000500", 1_100.0)
+
+        bypass = state_handlers._evaluate_scalp_loss_reentry_rebound_bypass(
+            stock,
+            "000500",
+            {"curr": 10600, "last_ws_update_ts": state_handlers.time.time()},
+            guard,
+            now_ts=1_100.0,
+            source_stage="watching_pre_ai",
+        )
+        state_handlers._apply_scalp_loss_reentry_rebound_bypass(
+            stock,
+            "000500",
+            bypass,
+            now_ts=1_100.0,
+            cooldowns={"000500": 4_600.0},
+        )
+        capped = state_handlers._apply_scalp_loss_reentry_rebound_canary_qty(
+            stock,
+            strategy="SCALPING",
+            curr_price=10600,
+            deposit=1_000_000,
+            target_budget=300_000,
+            safe_budget=300_000,
+            real_buy_qty=28,
+            used_safety_ratio=0.8,
+            bypass=bypass,
+        )
+
+        assert bypass["allowed"] is True
+        assert stock["loss_reentry_rebound_canary_entry"] is True
+        assert "000500" not in state_handlers._SCALP_SAME_SYMBOL_LOSS_REENTRY_COOLDOWNS
+        assert capped == (10600, 10600, 1, 1.0, True)
+        assert logs[-1][0] == "scalp_loss_reentry_rebound_bypass"
+    finally:
+        state_handlers._SCALP_SAME_SYMBOL_LOSS_REENTRY_COOLDOWNS.clear()
+        state_handlers.TRADING_RULES = original_rules
+
+
+def test_scalp_loss_reentry_rebound_bypass_rejects_weak_delta():
+    original_rules = state_handlers.TRADING_RULES
+    try:
+        state_handlers.TRADING_RULES = replace(
+            CONFIG,
+            SCALP_LOSS_REENTRY_REBOUND_BYPASS_ENABLED=True,
+            SCALP_LOSS_REENTRY_REBOUND_MIN_DELTA_PCT=4.0,
+        )
+        stock = {
+            "strategy": "SCALPING",
+            "scanner_promotion_reason": "price_jump_start_acceleration",
+            "source_signature": "PRICE_JUMP_START,VOLUME_SURGE_POSITIVE",
+            "price_delta_since_first_seen_pct": "1.20",
+        }
+        guard = {
+            "allowed": False,
+            "reason": "same_symbol_loss_reentry_cooldown",
+            "cooldown_marked_at": 1_000.0,
+        }
+
+        bypass = state_handlers._evaluate_scalp_loss_reentry_rebound_bypass(
+            stock,
+            "000500",
+            {"curr": 10000, "last_ws_update_ts": state_handlers.time.time()},
+            guard,
+            now_ts=1_100.0,
+            source_stage="watching_pre_ai",
+        )
+
+        assert bypass["allowed"] is False
+        assert bypass["reason"] == "scanner_rebound_delta_below_min"
+    finally:
         state_handlers.TRADING_RULES = original_rules
 
 

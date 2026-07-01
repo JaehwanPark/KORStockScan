@@ -9644,6 +9644,166 @@ def evaluate_scalp_same_symbol_loss_reentry_guard(code: str, now_ts: float | Non
     return base
 
 
+def _evaluate_scalp_loss_reentry_rebound_bypass(
+    stock: dict | None,
+    code: str,
+    ws_data: dict | None,
+    guard_decision: dict | None,
+    *,
+    now_ts: float,
+    source_stage: str,
+) -> dict:
+    decision = guard_decision or {}
+    if not _rule_bool("SCALP_LOSS_REENTRY_REBOUND_BYPASS_ENABLED", False):
+        return {"allowed": False, "reason": "disabled"}
+    if not isinstance(stock, dict) or not _is_scalp_strategy(stock.get("strategy")):
+        return {"allowed": False, "reason": "not_real_scalping"}
+    if _is_scalp_simulated_position(stock, stock.get("strategy")) or _has_sim_probe_provenance(stock):
+        return {"allowed": False, "reason": "sim_or_probe_position"}
+    if decision.get("allowed", True) or decision.get("reason") != "same_symbol_loss_reentry_cooldown":
+        return {"allowed": False, "reason": "no_active_loss_reentry_cooldown"}
+
+    if (
+        not str(stock.get("source_signature") or "").strip()
+        or str(stock.get("price_delta_since_first_seen_pct") or "").strip() == ""
+    ):
+        _hydrate_scanner_promotion_runtime_context(stock)
+    price_delta = _safe_float(stock.get("price_delta_since_first_seen_pct"), 0.0)
+    min_delta = _rule_float("SCALP_LOSS_REENTRY_REBOUND_MIN_DELTA_PCT", 4.0)
+    if price_delta < min_delta:
+        return {
+            "allowed": False,
+            "reason": "scanner_rebound_delta_below_min",
+            "price_delta_since_first_seen_pct": f"{price_delta:.2f}",
+            "min_delta_pct": f"{min_delta:.2f}",
+        }
+
+    source_signature = str(stock.get("source_signature") or "").strip()
+    tokens = _scanner_rising_source_signature_set(source_signature)
+    strong_bundle = "PRICE_JUMP_START" in tokens and bool(
+        tokens & {"VOLUME_SURGE_POSITIVE", "BID_IMBALANCE_SURGE", "REALTIME_RANK_START", "VALUE_TOP"}
+    )
+    if not strong_bundle:
+        return {
+            "allowed": False,
+            "reason": "source_signature_not_strong_rebound_bundle",
+            "source_signature": source_signature or "-",
+        }
+
+    ws_age_sec = _get_ws_snapshot_age_sec(ws_data or {})
+    max_ws_age_sec = max(0.0, _rule_float("SCALP_LOSS_REENTRY_REBOUND_MAX_WS_AGE_SEC", 3.0))
+    if ws_age_sec is not None and max_ws_age_sec > 0 and ws_age_sec > max_ws_age_sec:
+        return {
+            "allowed": False,
+            "reason": "ws_snapshot_stale",
+            "ws_age_sec": f"{ws_age_sec:.2f}",
+            "max_ws_age_sec": f"{max_ws_age_sec:.2f}",
+        }
+    quote_stale = (ws_data or {}).get("quote_stale") or stock.get("quote_stale_at_submit")
+    if str(quote_stale).strip().lower() in {"1", "true", "yes", "y", "stale"}:
+        return {"allowed": False, "reason": "quote_stale"}
+
+    cooldown_marked_at = _safe_float(decision.get("cooldown_marked_at"), 0.0)
+    previous_marked_at = _safe_float(stock.get("loss_reentry_rebound_bypass_cooldown_marked_at"), 0.0)
+    if cooldown_marked_at > 0 and abs(previous_marked_at - cooldown_marked_at) < 0.001:
+        return {"allowed": False, "reason": "bypass_already_used_for_cooldown"}
+
+    force_qty = max(1, _rule_int("SCALP_LOSS_REENTRY_REBOUND_FORCE_QTY", 1))
+    return {
+        "allowed": True,
+        "reason": "strong_scanner_rebound_canary",
+        "source_stage": source_stage,
+        "force_qty": force_qty,
+        "scanner_promotion_id": stock.get("scanner_promotion_id") or "-",
+        "scanner_promotion_reason": stock.get("scanner_promotion_reason") or "-",
+        "source_signature": source_signature or "-",
+        "price_delta_since_first_seen_pct": f"{price_delta:.2f}",
+        "min_delta_pct": f"{min_delta:.2f}",
+        "ws_age_sec": f"{ws_age_sec:.2f}" if ws_age_sec is not None else "-",
+        "max_ws_age_sec": f"{max_ws_age_sec:.2f}",
+        "cooldown_remaining_sec": decision.get("cooldown_remaining_sec", 0),
+        "cooldown_marked_at": cooldown_marked_at,
+        "cooldown_expires_at": decision.get("cooldown_expires_at", "-"),
+        "last_exit_rule": decision.get("last_exit_rule", "-"),
+        "last_exit_profit_rate": decision.get("last_exit_profit_rate", "-"),
+    }
+
+
+def _apply_scalp_loss_reentry_rebound_bypass(
+    stock: dict,
+    code: str,
+    bypass: dict,
+    *,
+    now_ts: float,
+    cooldowns: dict | None = None,
+) -> None:
+    if not isinstance(bypass, dict) or not bypass.get("allowed"):
+        return
+    norm_code = str(code or "").strip()
+    if norm_code:
+        _SCALP_SAME_SYMBOL_LOSS_REENTRY_COOLDOWNS.pop(norm_code, None)
+        if isinstance(cooldowns, dict):
+            cooldowns.pop(norm_code, None)
+    _mutate_stock_state(
+        stock,
+        set_fields={
+            "loss_reentry_rebound_canary_entry": True,
+            "loss_reentry_rebound_canary_at": float(now_ts or time.time()),
+            "loss_reentry_rebound_force_qty": max(1, _safe_int(bypass.get("force_qty"), 1)),
+            "loss_reentry_rebound_bypass_cooldown_marked_at": _safe_float(
+                bypass.get("cooldown_marked_at"), 0.0
+            ),
+            "loss_reentry_rebound_source_stage": bypass.get("source_stage") or "-",
+        },
+    )
+    _log_entry_pipeline(
+        stock,
+        code,
+        "scalp_loss_reentry_rebound_bypass",
+        metric_role="bounded_tunable",
+        decision_authority="real_scalping_loss_reentry_rebound_canary",
+        window_policy="same_day_intraday_runtime_state",
+        sample_floor="not_applicable_operator_canary",
+        primary_decision_metric="price_delta_since_first_seen_pct",
+        source_quality_gate="scanner_promotion_context_and_fresh_quote_present",
+        runtime_effect=True,
+        allowed_runtime_apply=True,
+        actual_order_submitted=False,
+        broker_order_forbidden=False,
+        forbidden_uses=(
+            "EV/rolling/MTD/cumulative_tuning/live_auto_promotion/runtime_apply_bridge/"
+            "threshold_mutation/provider_change/broker_guard_bypass/position_cap_release"
+        ),
+        **bypass,
+    )
+
+
+def _apply_scalp_loss_reentry_rebound_canary_qty(
+    stock: dict | None,
+    *,
+    strategy: str,
+    curr_price: int,
+    deposit: int,
+    target_budget: int,
+    safe_budget: int,
+    real_buy_qty: int,
+    used_safety_ratio: float,
+    bypass: dict | None = None,
+) -> tuple[int, int, int, float, bool]:
+    if (
+        str(strategy or "").upper() != "SCALPING"
+        or not isinstance(stock, dict)
+        or not bool((bypass or {}).get("allowed"))
+    ):
+        return target_budget, safe_budget, real_buy_qty, used_safety_ratio, False
+    force_qty = max(1, _safe_int((bypass or {}).get("force_qty"), 1))
+    if _safe_int(deposit, 0) < int(curr_price or 0) or int(curr_price or 0) <= 0:
+        return target_budget, safe_budget, real_buy_qty, used_safety_ratio, False
+    canary_qty = max(1, min(force_qty, max(1, int(real_buy_qty or 1))))
+    canary_budget = int(curr_price) * canary_qty
+    return canary_budget, canary_budget, canary_qty, 1.0, True
+
+
 def _scalp_loss_reentry_guard_log_fields(decision: dict | None) -> dict:
     decision = decision or {}
     return {
@@ -22142,48 +22302,95 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         **_build_observation_contract_fields("funnel_count"),
     )
 
+    loss_reentry_rebound_bypass = None
+    loss_reentry_rebound_bypass_applied = False
     if strategy == "SCALPING":
         scalp_reentry_guard = evaluate_scalp_same_symbol_loss_reentry_guard(code, now_ts)
         if not scalp_reentry_guard.get("allowed", True):
-            remaining = max(1, _safe_int(scalp_reentry_guard.get("cooldown_remaining_sec"), 1))
-            with ENTRY_LOCK:
-                cooldowns[code] = max(_safe_float(cooldowns.get(code), 0.0), now_ts + remaining)
-                alerted_stocks.discard(code)
-            clear_signal_reference(stock)
-            log_info(
-                f"[SCALP_REENTRY_GUARD_BLOCK] {stock.get('name')}({code}) "
-                f"reason={scalp_reentry_guard.get('reason')} remaining={remaining}s"
+            rebound_bypass = _evaluate_scalp_loss_reentry_rebound_bypass(
+                stock,
+                code,
+                ws_data,
+                scalp_reentry_guard,
+                now_ts=now_ts,
+                source_stage="pre_submit",
             )
+            if rebound_bypass.get("allowed"):
+                loss_reentry_rebound_bypass = rebound_bypass
+            else:
+                remaining = max(1, _safe_int(scalp_reentry_guard.get("cooldown_remaining_sec"), 1))
+                with ENTRY_LOCK:
+                    cooldowns[code] = max(_safe_float(cooldowns.get(code), 0.0), now_ts + remaining)
+                    alerted_stocks.discard(code)
+                clear_signal_reference(stock)
+                log_info(
+                    f"[SCALP_REENTRY_GUARD_BLOCK] {stock.get('name')}({code}) "
+                    f"reason={scalp_reentry_guard.get('reason')} remaining={remaining}s"
+                )
+                _log_entry_pipeline(
+                    stock,
+                    code,
+                    "scalp_same_symbol_loss_reentry_pre_submit_blocked",
+                    strategy=strategy,
+                    deposit=deposit,
+                    ratio=f"{ratio:.4f}",
+                    target_budget=target_budget,
+                    safe_budget=safe_budget,
+                    safety_ratio=f"{used_safety_ratio:.4f}",
+                    qty=real_buy_qty,
+                    metric_role="safety_veto",
+                    decision_authority="scalp_same_symbol_loss_reentry_guard",
+                    window_policy="same_day_intraday_runtime_state",
+                    sample_floor="not_applicable_safety_veto",
+                    primary_decision_metric="cooldown_remaining_sec",
+                    source_quality_gate="scalp_same_symbol_loss_reentry_guard_contract_fields_present",
+                    runtime_effect=True,
+                    actual_order_submitted=False,
+                    broker_order_forbidden=True,
+                    allowed_runtime_apply=False,
+                    forbidden_uses=(
+                        "EV/rolling/MTD/cumulative_tuning/live_auto_promotion/"
+                        "runtime_apply_bridge/threshold_mutation/provider_change/"
+                        "order_price_change/quantity_cap_change/broker_guard_bypass"
+                    ),
+                    source_stage="pre_submit",
+                    **_scalp_loss_reentry_guard_log_fields(scalp_reentry_guard),
+                    rebound_bypass_block_reason=rebound_bypass.get("reason", "-"),
+                )
+                return False
+        (
+            target_budget,
+            safe_budget,
+            real_buy_qty,
+            used_safety_ratio,
+            loss_reentry_canary_qty_applied,
+        ) = _apply_scalp_loss_reentry_rebound_canary_qty(
+            stock,
+            strategy=strategy,
+            curr_price=curr_price,
+            deposit=deposit,
+            target_budget=target_budget,
+            safe_budget=safe_budget,
+            real_buy_qty=real_buy_qty,
+            used_safety_ratio=used_safety_ratio,
+            bypass=loss_reentry_rebound_bypass,
+        )
+        if loss_reentry_canary_qty_applied:
             _log_entry_pipeline(
                 stock,
                 code,
-                "scalp_same_symbol_loss_reentry_pre_submit_blocked",
-                strategy=strategy,
-                deposit=deposit,
-                ratio=f"{ratio:.4f}",
+                "scalp_loss_reentry_rebound_canary_qty_applied",
+                qty=real_buy_qty,
                 target_budget=target_budget,
                 safe_budget=safe_budget,
                 safety_ratio=f"{used_safety_ratio:.4f}",
-                qty=real_buy_qty,
-                metric_role="safety_veto",
-                decision_authority="scalp_same_symbol_loss_reentry_guard",
-                window_policy="same_day_intraday_runtime_state",
-                sample_floor="not_applicable_safety_veto",
-                primary_decision_metric="cooldown_remaining_sec",
-                source_quality_gate="scalp_same_symbol_loss_reentry_guard_contract_fields_present",
-                runtime_effect=True,
+                curr_price=curr_price,
+                force_qty=(loss_reentry_rebound_bypass or {}).get("force_qty", stock.get("loss_reentry_rebound_force_qty", 1)),
                 actual_order_submitted=False,
-                broker_order_forbidden=True,
-                allowed_runtime_apply=False,
-                forbidden_uses=(
-                    "EV/rolling/MTD/cumulative_tuning/live_auto_promotion/"
-                    "runtime_apply_bridge/threshold_mutation/provider_change/"
-                    "order_price_change/quantity_cap_change/broker_guard_bypass"
-                ),
-                source_stage="pre_submit",
-                **_scalp_loss_reentry_guard_log_fields(scalp_reentry_guard),
+                broker_order_forbidden=False,
+                runtime_effect=True,
+                decision_authority="real_scalping_loss_reentry_rebound_canary",
             )
-            return False
 
     if _is_swing_strategy(strategy):
         guard_decision = evaluate_swing_same_symbol_loss_reentry_guard(
@@ -23558,6 +23765,20 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             )
             continue
         ord_no = _extract_broker_order_no(res)
+        if (
+            strategy == "SCALPING"
+            and isinstance(loss_reentry_rebound_bypass, dict)
+            and loss_reentry_rebound_bypass.get("allowed")
+            and not loss_reentry_rebound_bypass_applied
+        ):
+            _apply_scalp_loss_reentry_rebound_bypass(
+                stock,
+                code,
+                loss_reentry_rebound_bypass,
+                now_ts=now_ts,
+                cooldowns=cooldowns,
+            )
+            loss_reentry_rebound_bypass_applied = True
         order_sent_ts = time.time()
         submit_dmst_stex_tp = _entry_order_submit_dmst_stex_tp(request)
         successful_orders.append({
@@ -25708,43 +25929,78 @@ def handle_watching_state(
     MAX_SURGE = MAX_SCALP_SURGE_PCT
     MAX_INTRADAY_SURGE = MAX_INTRADAY_SURGE
     MIN_LIQUIDITY = MIN_SCALP_LIQUIDITY
+    scalp_reentry_rebound_watch_bypass_allowed = False
     if strategy == 'SCALPING':
         scalp_reentry_guard = evaluate_scalp_same_symbol_loss_reentry_guard(code, now_ts)
         if not scalp_reentry_guard.get("allowed", True):
-            remaining = max(1, _safe_int(scalp_reentry_guard.get("cooldown_remaining_sec"), 1))
-            with ENTRY_LOCK:
-                cooldowns[code] = max(_safe_float(cooldowns.get(code), 0.0), now_ts + remaining)
-                alerted_stocks.discard(code)
-            logged_key = (
-                f"{int(float(scalp_reentry_guard.get('cooldown_marked_at') or 0))}:"
-                f"{int(float(scalp_reentry_guard.get('cooldown_expires_at') or 0))}"
+            rebound_bypass = _evaluate_scalp_loss_reentry_rebound_bypass(
+                stock,
+                code,
+                ws_data,
+                scalp_reentry_guard,
+                now_ts=now_ts,
+                source_stage="watching_pre_ai",
             )
-            if stock.get("_scalp_loss_reentry_guard_logged_key") != logged_key:
-                stock["_scalp_loss_reentry_guard_logged_key"] = logged_key
+            if rebound_bypass.get("allowed"):
+                scalp_reentry_rebound_watch_bypass_allowed = True
+                with ENTRY_LOCK:
+                    alerted_stocks.discard(code)
                 _log_entry_pipeline(
                     stock,
                     code,
-                    "scalp_same_symbol_loss_reentry_blocked",
-                    metric_role="safety_veto",
-                    decision_authority="scalp_same_symbol_loss_reentry_guard",
+                    "scalp_loss_reentry_rebound_watching_candidate",
+                    metric_role="bounded_tunable",
+                    decision_authority="real_scalping_loss_reentry_rebound_canary_candidate",
                     window_policy="same_day_intraday_runtime_state",
-                    sample_floor="not_applicable_safety_veto",
-                    primary_decision_metric="cooldown_remaining_sec",
-                    source_quality_gate="scalp_same_symbol_loss_reentry_guard_contract_fields_present",
-                    runtime_effect=True,
+                    sample_floor="not_applicable_operator_canary",
+                    primary_decision_metric="price_delta_since_first_seen_pct",
+                    source_quality_gate="scanner_promotion_context_and_fresh_quote_present",
+                    runtime_effect=False,
                     actual_order_submitted=False,
                     broker_order_forbidden=True,
                     allowed_runtime_apply=False,
                     forbidden_uses=(
-                        "EV/rolling/MTD/cumulative_tuning/live_auto_promotion/"
-                        "runtime_apply_bridge/threshold_mutation/provider_change/"
-                        "order_price_change/quantity_cap_change/broker_guard_bypass"
+                        "EV/rolling/MTD/cumulative_tuning/live_auto_promotion/runtime_apply_bridge/"
+                        "threshold_mutation/provider_change/broker_guard_bypass/position_cap_release"
                     ),
-                    source_stage="watching_pre_ai",
-                    **_scalp_loss_reentry_guard_log_fields(scalp_reentry_guard),
+                    **rebound_bypass,
                 )
-            return
-    if code in cooldowns and now_ts < cooldowns[code]:
+            else:
+                remaining = max(1, _safe_int(scalp_reentry_guard.get("cooldown_remaining_sec"), 1))
+                with ENTRY_LOCK:
+                    cooldowns[code] = max(_safe_float(cooldowns.get(code), 0.0), now_ts + remaining)
+                    alerted_stocks.discard(code)
+                logged_key = (
+                    f"{int(float(scalp_reentry_guard.get('cooldown_marked_at') or 0))}:"
+                    f"{int(float(scalp_reentry_guard.get('cooldown_expires_at') or 0))}"
+                )
+                if stock.get("_scalp_loss_reentry_guard_logged_key") != logged_key:
+                    stock["_scalp_loss_reentry_guard_logged_key"] = logged_key
+                    _log_entry_pipeline(
+                        stock,
+                        code,
+                        "scalp_same_symbol_loss_reentry_blocked",
+                        metric_role="safety_veto",
+                        decision_authority="scalp_same_symbol_loss_reentry_guard",
+                        window_policy="same_day_intraday_runtime_state",
+                        sample_floor="not_applicable_safety_veto",
+                        primary_decision_metric="cooldown_remaining_sec",
+                        source_quality_gate="scalp_same_symbol_loss_reentry_guard_contract_fields_present",
+                        runtime_effect=True,
+                        actual_order_submitted=False,
+                        broker_order_forbidden=True,
+                        allowed_runtime_apply=False,
+                        forbidden_uses=(
+                            "EV/rolling/MTD/cumulative_tuning/live_auto_promotion/"
+                            "runtime_apply_bridge/threshold_mutation/provider_change/"
+                            "order_price_change/quantity_cap_change/broker_guard_bypass"
+                        ),
+                        source_stage="watching_pre_ai",
+                        **_scalp_loss_reentry_guard_log_fields(scalp_reentry_guard),
+                        rebound_bypass_block_reason=rebound_bypass.get("reason", "-"),
+                    )
+                return
+    if code in cooldowns and now_ts < cooldowns[code] and not scalp_reentry_rebound_watch_bypass_allowed:
         cooldown_remaining_sec = max(0, int(cooldowns[code] - now_ts))
         cooldown_recheck_pending = (
             _scanner_rising_cooldown_eviction_relief_enabled()
@@ -27376,6 +27632,12 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
             )
             if stop_touch_avg_down_result.get("submitted"):
                 return
+            defensive_unfilled_recheck = _defensive_avg_down_unfilled_recheck_decision(
+                stock,
+                strategy=strategy,
+                profit_rate=profit_rate,
+                now_ts=now_ts,
+            )
             soft_stop_within_grace = (
                 soft_stop_grace_enabled
                 and soft_stop_grace_sec > 0
@@ -27460,7 +27722,34 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                 soft_stop_dynamic_grace_within
                 or soft_stop_within_grace
                 or soft_stop_extension_within_grace
+                or bool(defensive_unfilled_recheck.get("active"))
             )
+            if defensive_unfilled_recheck.get("active"):
+                _log_holding_pipeline(
+                    stock,
+                    code,
+                    "defensive_avg_down_unfilled_recheck_defer",
+                    profit_rate=f"{profit_rate:+.2f}",
+                    soft_stop_pct=f"{dynamic_stop_pct:+.2f}",
+                    exit_rule_candidate="scalp_soft_stop_pct",
+                    recheck_remaining_sec=defensive_unfilled_recheck.get("remaining_sec"),
+                    recheck_elapsed_sec=defensive_unfilled_recheck.get("elapsed_sec"),
+                    recheck_sec=defensive_unfilled_recheck.get("recheck_sec"),
+                    defensive_avg_down_kind=defensive_unfilled_recheck.get("kind"),
+                    rollback_reason=defensive_unfilled_recheck.get("rollback_reason"),
+                    emergency_pct=defensive_unfilled_recheck.get("emergency_pct"),
+                    metric_role="bounded_tunable",
+                    decision_authority="real_scalping_defensive_avg_down_unfilled_recheck",
+                    window_policy="same_day_intraday_runtime_state",
+                    sample_floor="not_applicable_operator_canary",
+                    primary_decision_metric="recheck_remaining_sec",
+                    source_quality_gate="pending_add_cancel_or_timeout_confirmed",
+                    runtime_effect=True,
+                    actual_order_submitted=False,
+                    broker_order_forbidden=True,
+                    allowed_runtime_apply=True,
+                    forbidden_uses=TRADE_QUALITY_RUNTIME_FORBIDDEN_USES,
+                )
             soft_stop_expert_decision = _build_soft_stop_expert_decision(
                 stock,
                 now_ts=now_ts,
@@ -29400,6 +29689,26 @@ def _rollback_unfilled_defensive_avg_down_usage(stock, reason: str | None = None
             'last_defensive_avg_down_count_rollback_ord_no': stock.get('pending_add_ord_no') or '-',
         }
     )
+    recheck_reason = str(reason or "pending_add_unfilled").strip()
+    recheck_reason_allowed = recheck_reason in {"timeout", "recovery_timeout"}
+    has_confirmed_ord_no = bool(str(stock.get('pending_add_ord_no') or '').strip())
+    if (
+        _rule_bool("SCALP_DEFENSIVE_AVG_DOWN_UNFILLED_RECHECK_ENABLED", False)
+        and recheck_reason_allowed
+        and has_confirmed_ord_no
+    ):
+        recheck_sec = max(0, _rule_int("SCALP_DEFENSIVE_AVG_DOWN_UNFILLED_RECHECK_SEC", 30))
+        if recheck_sec > 0:
+            now_ts = time.time()
+            rollback_fields.update(
+                {
+                    "defensive_avg_down_unfilled_recheck_until": now_ts + recheck_sec,
+                    "defensive_avg_down_unfilled_recheck_started_at": now_ts,
+                    "defensive_avg_down_unfilled_recheck_sec": recheck_sec,
+                    "defensive_avg_down_unfilled_recheck_kind": rollback_kind,
+                    "defensive_avg_down_unfilled_recheck_reason": recheck_reason,
+                }
+            )
     _mutate_stock_state(stock, set_fields=rollback_fields)
     log_info(
         f"[ADD_CANCELLED] {stock.get('name')}({stock.get('code')}) unfilled defensive AVG_DOWN "
@@ -29407,6 +29716,55 @@ def _rollback_unfilled_defensive_avg_down_usage(stock, reason: str | None = None
         f"next_count={next_count}"
     )
     return True
+
+
+def _defensive_avg_down_unfilled_recheck_decision(
+    stock: dict | None,
+    *,
+    strategy: str,
+    profit_rate: float,
+    now_ts: float,
+) -> dict:
+    if not _rule_bool("SCALP_DEFENSIVE_AVG_DOWN_UNFILLED_RECHECK_ENABLED", False):
+        return {"active": False, "reason": "disabled"}
+    if not isinstance(stock, dict) or not _is_scalp_strategy(strategy):
+        return {"active": False, "reason": "not_real_scalping"}
+    if _is_scalp_simulated_position(stock, strategy) or _has_sim_probe_provenance(stock):
+        return {"active": False, "reason": "sim_or_probe_position"}
+    until_ts = _safe_float(stock.get("defensive_avg_down_unfilled_recheck_until"), 0.0)
+    if until_ts <= 0:
+        return {"active": False, "reason": "no_recheck_window"}
+    if float(now_ts or time.time()) >= until_ts:
+        _mutate_stock_state(
+            stock,
+            pop_fields=(
+                "defensive_avg_down_unfilled_recheck_until",
+                "defensive_avg_down_unfilled_recheck_started_at",
+                "defensive_avg_down_unfilled_recheck_sec",
+                "defensive_avg_down_unfilled_recheck_kind",
+                "defensive_avg_down_unfilled_recheck_reason",
+            ),
+        )
+        return {"active": False, "reason": "expired"}
+    emergency_pct = _rule_float("SCALP_DEFENSIVE_AVG_DOWN_UNFILLED_RECHECK_EMERGENCY_PCT", -6.5)
+    if float(profit_rate or 0.0) <= emergency_pct:
+        return {
+            "active": False,
+            "reason": "emergency_pct",
+            "emergency_pct": f"{emergency_pct:+.2f}",
+            "profit_rate": f"{profit_rate:+.2f}",
+        }
+    started_at = _safe_float(stock.get("defensive_avg_down_unfilled_recheck_started_at"), 0.0)
+    return {
+        "active": True,
+        "reason": "defensive_avg_down_unfilled_recheck",
+        "remaining_sec": max(1, int(until_ts - float(now_ts or time.time()))),
+        "elapsed_sec": max(0, int(float(now_ts or time.time()) - started_at)) if started_at > 0 else 0,
+        "recheck_sec": _safe_int(stock.get("defensive_avg_down_unfilled_recheck_sec"), 0),
+        "kind": stock.get("defensive_avg_down_unfilled_recheck_kind") or "-",
+        "rollback_reason": stock.get("defensive_avg_down_unfilled_recheck_reason") or "-",
+        "emergency_pct": f"{emergency_pct:+.2f}",
+    }
 
 
 def _persist_scale_in_flags(stock):

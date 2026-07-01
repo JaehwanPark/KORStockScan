@@ -84,6 +84,13 @@ class TradingConfig:
     SCALPING_PYRAMID_ZERO_QTY_STAGE1_ENABLED: bool = True  # buy_qty*ratio가 0일 때 최소 1주 floor 허용
     SCALP_SAME_SYMBOL_LOSS_REENTRY_COOLDOWN_ENABLED: bool = True  # 손실 청산 후 동일종목 신규 BUY 재시도 차단
     SCALP_SAME_SYMBOL_LOSS_REENTRY_COOLDOWN_SEC: int = 3600  # soft/protect/refined 손실 후 60분 재진입 금지
+    SCALP_LOSS_REENTRY_REBOUND_BYPASS_ENABLED: bool = False  # strong scanner rebound canary after loss cooldown
+    SCALP_LOSS_REENTRY_REBOUND_MIN_DELTA_PCT: float = 4.0
+    SCALP_LOSS_REENTRY_REBOUND_MAX_WS_AGE_SEC: float = 3.0
+    SCALP_LOSS_REENTRY_REBOUND_FORCE_QTY: int = 1
+    SCALP_DEFENSIVE_AVG_DOWN_UNFILLED_RECHECK_ENABLED: bool = False
+    SCALP_DEFENSIVE_AVG_DOWN_UNFILLED_RECHECK_SEC: int = 30
+    SCALP_DEFENSIVE_AVG_DOWN_UNFILLED_RECHECK_EMERGENCY_PCT: float = -6.5
     SCALP_SOFT_STOP_SAME_SYMBOL_COOLDOWN_SHADOW_ENABLED: bool = False  # live loss reentry cooldown 전환 후 shadow 기본 OFF
     SCALP_SOFT_STOP_SAME_SYMBOL_COOLDOWN_SHADOW_SEC: int = 600  # historical/replay 전용 기준
     SELL_ORDER_FAILURE_RETRY_BACKOFF_ENABLED: bool = True  # broker reject burst 방지용 sell retry backoff
@@ -3088,6 +3095,27 @@ def _build_trading_rules() -> TradingConfig:
     env_same_symbol_loss_reentry_cooldown_sec = _env_int(
         "KORSTOCKSCAN_SCALP_SAME_SYMBOL_LOSS_REENTRY_COOLDOWN_SEC"
     )
+    env_loss_reentry_rebound_bypass_enabled = _env_bool(
+        "KORSTOCKSCAN_SCALP_LOSS_REENTRY_REBOUND_BYPASS_ENABLED"
+    )
+    env_loss_reentry_rebound_min_delta = _env_float(
+        "KORSTOCKSCAN_SCALP_LOSS_REENTRY_REBOUND_MIN_DELTA_PCT"
+    )
+    env_loss_reentry_rebound_max_ws_age = _env_float(
+        "KORSTOCKSCAN_SCALP_LOSS_REENTRY_REBOUND_MAX_WS_AGE_SEC"
+    )
+    env_loss_reentry_rebound_force_qty = _env_int(
+        "KORSTOCKSCAN_SCALP_LOSS_REENTRY_REBOUND_FORCE_QTY"
+    )
+    env_defensive_avg_down_unfilled_recheck_enabled = _env_bool(
+        "KORSTOCKSCAN_SCALP_DEFENSIVE_AVG_DOWN_UNFILLED_RECHECK_ENABLED"
+    )
+    env_defensive_avg_down_unfilled_recheck_sec = _env_int(
+        "KORSTOCKSCAN_SCALP_DEFENSIVE_AVG_DOWN_UNFILLED_RECHECK_SEC"
+    )
+    env_defensive_avg_down_unfilled_recheck_emergency = _env_float(
+        "KORSTOCKSCAN_SCALP_DEFENSIVE_AVG_DOWN_UNFILLED_RECHECK_EMERGENCY_PCT"
+    )
     env_sell_order_failure_retry_backoff_enabled = _env_bool(
         "KORSTOCKSCAN_SELL_ORDER_FAILURE_RETRY_BACKOFF_ENABLED"
     )
@@ -3189,6 +3217,13 @@ def _build_trading_rules() -> TradingConfig:
         or env_scalping_pyramid_zero_qty_stage1_enabled is not None
         or env_same_symbol_loss_reentry_cooldown_enabled is not None
         or env_same_symbol_loss_reentry_cooldown_sec is not None
+        or env_loss_reentry_rebound_bypass_enabled is not None
+        or env_loss_reentry_rebound_min_delta is not None
+        or env_loss_reentry_rebound_max_ws_age is not None
+        or env_loss_reentry_rebound_force_qty is not None
+        or env_defensive_avg_down_unfilled_recheck_enabled is not None
+        or env_defensive_avg_down_unfilled_recheck_sec is not None
+        or env_defensive_avg_down_unfilled_recheck_emergency is not None
         or env_sell_order_failure_retry_backoff_enabled is not None
         or env_sell_order_failure_retry_backoff_sec is not None
         or env_scalping_buy_windows is not None
@@ -3559,6 +3594,27 @@ def _build_trading_rules() -> TradingConfig:
             SCALP_SAME_SYMBOL_LOSS_REENTRY_COOLDOWN_SEC=env_same_symbol_loss_reentry_cooldown_sec
             if env_same_symbol_loss_reentry_cooldown_sec is not None
             else config.SCALP_SAME_SYMBOL_LOSS_REENTRY_COOLDOWN_SEC,
+            SCALP_LOSS_REENTRY_REBOUND_BYPASS_ENABLED=env_loss_reentry_rebound_bypass_enabled
+            if env_loss_reentry_rebound_bypass_enabled is not None
+            else config.SCALP_LOSS_REENTRY_REBOUND_BYPASS_ENABLED,
+            SCALP_LOSS_REENTRY_REBOUND_MIN_DELTA_PCT=env_loss_reentry_rebound_min_delta
+            if env_loss_reentry_rebound_min_delta is not None
+            else config.SCALP_LOSS_REENTRY_REBOUND_MIN_DELTA_PCT,
+            SCALP_LOSS_REENTRY_REBOUND_MAX_WS_AGE_SEC=env_loss_reentry_rebound_max_ws_age
+            if env_loss_reentry_rebound_max_ws_age is not None
+            else config.SCALP_LOSS_REENTRY_REBOUND_MAX_WS_AGE_SEC,
+            SCALP_LOSS_REENTRY_REBOUND_FORCE_QTY=env_loss_reentry_rebound_force_qty
+            if env_loss_reentry_rebound_force_qty is not None
+            else config.SCALP_LOSS_REENTRY_REBOUND_FORCE_QTY,
+            SCALP_DEFENSIVE_AVG_DOWN_UNFILLED_RECHECK_ENABLED=env_defensive_avg_down_unfilled_recheck_enabled
+            if env_defensive_avg_down_unfilled_recheck_enabled is not None
+            else config.SCALP_DEFENSIVE_AVG_DOWN_UNFILLED_RECHECK_ENABLED,
+            SCALP_DEFENSIVE_AVG_DOWN_UNFILLED_RECHECK_SEC=env_defensive_avg_down_unfilled_recheck_sec
+            if env_defensive_avg_down_unfilled_recheck_sec is not None
+            else config.SCALP_DEFENSIVE_AVG_DOWN_UNFILLED_RECHECK_SEC,
+            SCALP_DEFENSIVE_AVG_DOWN_UNFILLED_RECHECK_EMERGENCY_PCT=env_defensive_avg_down_unfilled_recheck_emergency
+            if env_defensive_avg_down_unfilled_recheck_emergency is not None
+            else config.SCALP_DEFENSIVE_AVG_DOWN_UNFILLED_RECHECK_EMERGENCY_PCT,
             SELL_ORDER_FAILURE_RETRY_BACKOFF_ENABLED=env_sell_order_failure_retry_backoff_enabled
             if env_sell_order_failure_retry_backoff_enabled is not None
             else config.SELL_ORDER_FAILURE_RETRY_BACKOFF_ENABLED,
