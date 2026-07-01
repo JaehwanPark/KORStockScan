@@ -250,6 +250,60 @@ def test_build_code_improvement_workorder_adds_intraday_entry_blocker_source_qua
     )
 
 
+def test_build_code_improvement_workorder_adds_rising_missed_scout_orders(tmp_path, monkeypatch):
+    scout_dir = tmp_path / "rising_missed_scout_workorder"
+    report_dir = tmp_path / "report"
+    doc_dir = tmp_path / "docs"
+    scout_dir.mkdir()
+    payload = {
+        "report_type": "rising_missed_scout_workorder",
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "code_improvement_orders": [
+            {
+                "order_id": "order_rising_missed_scout_post_sell_bridge",
+                "title": "rising missed scout post-sell bridge for normal-entry recheck",
+                "target_subsystem": "entry_freshness",
+                "route": "instrumentation_order",
+                "mapped_family": "rising_missed_scout_post_sell_bridge",
+                "threshold_family": "rising_missed_scout_post_sell_bridge",
+                "priority": 2,
+                "runtime_effect": True,
+                "allowed_runtime_apply": True,
+                "evidence": ["winner_count=3", "forced scout remains source-only"],
+                "forbidden_uses": ["forced_one_share_success_counting", "stale_submit_bypass"],
+            }
+        ],
+    }
+    (scout_dir / "rising_missed_scout_workorder_2026-07-01.json").write_text(
+        json.dumps(payload, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-automation")
+    monkeypatch.setattr(mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing")
+    monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", tmp_path / "missing-ev")
+    monkeypatch.setattr(mod, "RISING_MISSED_SCOUT_WORKORDER_DIR", scout_dir)
+    monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_DIR", doc_dir)
+
+    report = mod.build_code_improvement_workorder("2026-07-01", max_orders=5)
+
+    scout_orders = [
+        item for item in report["orders"] if item["source_report_type"] == "rising_missed_scout_workorder"
+    ]
+    assert report["summary"]["rising_missed_scout_source_order_count"] == 1
+    assert len(scout_orders) == 1
+    assert scout_orders[0]["decision"] == "implement_now"
+    assert scout_orders[0]["runtime_effect"] is False
+    assert scout_orders[0]["allowed_runtime_apply"] is False
+    assert "forced_one_share_success_counting" in scout_orders[0]["forbidden_uses"]
+    assert "runtime_threshold_mutation" in scout_orders[0]["forbidden_uses"]
+    assert "broker_guard_bypass" in scout_orders[0]["forbidden_uses"]
+    assert report["source"]["rising_missed_scout_workorder"] == str(
+        scout_dir / "rising_missed_scout_workorder_2026-07-01.json"
+    )
+
+
 def test_build_code_improvement_workorder_adds_conversion_lane_orders(tmp_path, monkeypatch):
     automation_dir = tmp_path / "automation"
     conversion_dir = tmp_path / "conversion_lane"

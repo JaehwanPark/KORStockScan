@@ -162,6 +162,7 @@ def test_postclose_wrapper_runs_threshold_ev_before_and_after_workorder():
     script = Path("deploy/run_threshold_cycle_postclose.sh").read_text(encoding="utf-8")
 
     sim_post_sell_idx = script.index("src.engine.sniper_post_sell_feedback")
+    rising_missed_scout_idx = script.index("src.engine.monitoring.rising_missed_scout_workorder")
     entry_adm_idx = script.index("src.engine.scalp_entry_action_decision_matrix")
     microstructure_idx = script.index("src.engine.scalping.microstructure_reaction_context")
     observation_preflight_idx = script.index("observation_source_quality_preflight")
@@ -195,6 +196,7 @@ def test_postclose_wrapper_runs_threshold_ev_before_and_after_workorder():
 
     assert (
         sim_post_sell_idx
+        < rising_missed_scout_idx
         < entry_adm_idx
         < microstructure_idx
         < observation_preflight_idx
@@ -228,6 +230,7 @@ def test_postclose_wrapper_runs_threshold_ev_before_and_after_workorder():
     assert 'RUN_TIME_WINDOW_REGIME_COUNTERFACTUAL="${THRESHOLD_CYCLE_RUN_TIME_WINDOW_REGIME_COUNTERFACTUAL:-true}"' in script
     assert 'RUN_AI_WATCHING_SCORE_SMOOTHING_DIAGNOSTIC="${THRESHOLD_CYCLE_RUN_AI_WATCHING_SCORE_SMOOTHING_DIAGNOSTIC:-true}"' in script
     assert 'RUN_PRODUCER_GAP_DISCOVERY="${THRESHOLD_CYCLE_RUN_PRODUCER_GAP_DISCOVERY:-true}"' in script
+    assert 'RUN_RISING_MISSED_SCOUT_WORKORDER="${THRESHOLD_CYCLE_RUN_RISING_MISSED_SCOUT_WORKORDER:-true}"' in script
     assert 'RUN_STAGE_HOOK_WORKORDER_DISCOVERY="${THRESHOLD_CYCLE_RUN_STAGE_HOOK_WORKORDER_DISCOVERY:-true}"' in script
     assert 'RUN_STAGE_HOOK_RUNTIME_SCAFFOLD="${THRESHOLD_CYCLE_RUN_STAGE_HOOK_RUNTIME_SCAFFOLD:-true}"' in script
     assert 'RUN_SCALP_ENTRY_ADM="${THRESHOLD_CYCLE_RUN_SCALP_ENTRY_ADM:-true}"' in script
@@ -336,6 +339,7 @@ def test_postclose_wrapper_waits_for_prerequisite_artifacts_before_downstream_st
     assert '"$PROJECT_DIR/data/report/pattern_lab_propagation_audit/pattern_lab_propagation_audit_${TARGET_DATE}.json"' in script
     assert '"$PROJECT_DIR/data/report/ai_watching_score_smoothing_diagnostic/ai_watching_score_smoothing_diagnostic_${TARGET_DATE}.json"' in script
     assert '"$PROJECT_DIR/data/report/scalp_entry_action_decision_matrix/scalp_entry_action_decision_matrix_${TARGET_DATE}.json"' in script
+    assert '"$PROJECT_DIR/data/report/rising_missed_scout_workorder/rising_missed_scout_workorder_${TARGET_DATE}.json"' in script
     assert '"$PROJECT_DIR/data/report/lifecycle_decision_matrix/lifecycle_decision_matrix_${TARGET_DATE}.json"' in script
     assert '"$PROJECT_DIR/data/report/lifecycle_bucket_discovery/lifecycle_bucket_discovery_${TARGET_DATE}.json"' in script
     assert '"$PROJECT_DIR/data/report/swing_lifecycle_decision_matrix/swing_lifecycle_decision_matrix_${TARGET_DATE}.json"' in script
@@ -360,6 +364,7 @@ def test_postclose_wrapper_waits_for_prerequisite_artifacts_before_downstream_st
     assert "--rolling-sim-scan" in script
     assert "pattern_lab_propagation_audit=$RUN_PATTERN_LAB_PROPAGATION_AUDIT" in script
     assert "scalp_entry_adm=$RUN_SCALP_ENTRY_ADM" in script
+    assert "rising_missed_scout_workorder=$RUN_RISING_MISSED_SCOUT_WORKORDER" in script
     assert "lifecycle_decision_matrix=$RUN_LIFECYCLE_DECISION_MATRIX" in script
     assert "lifecycle_bucket_discovery=$RUN_LIFECYCLE_BUCKET_DISCOVERY" in script
     assert "runtime_apply_bridge=$RUN_RUNTIME_APPLY_BRIDGE" in script

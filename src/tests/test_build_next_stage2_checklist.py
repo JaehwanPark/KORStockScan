@@ -16,7 +16,18 @@ def _patch_dirs(monkeypatch, tmp_path):
     runtime_gap = tmp_path / "data" / "report" / "runtime_apply_gap_audit"
     tuning_performance = tmp_path / "data" / "report" / "tuning_performance_control_tower"
     trigger_decision = tmp_path / "data" / "report" / "automation_chain_trigger_decision"
-    for path in (docs, ev, openai, swing, code, runtime_gap, tuning_performance, trigger_decision):
+    rising_missed = tmp_path / "data" / "report" / "rising_missed_scout_workorder"
+    for path in (
+        docs,
+        ev,
+        openai,
+        swing,
+        code,
+        runtime_gap,
+        tuning_performance,
+        trigger_decision,
+        rising_missed,
+    ):
         path.mkdir(parents=True, exist_ok=True)
     monkeypatch.setattr(mod, "DOCS_DIR", docs)
     monkeypatch.setattr(mod, "CHECKLIST_DIR", docs / "checklists")
@@ -27,6 +38,7 @@ def _patch_dirs(monkeypatch, tmp_path):
     monkeypatch.setattr(mod, "RUNTIME_APPLY_GAP_REPORT_DIR", runtime_gap)
     monkeypatch.setattr(mod, "TUNING_PERFORMANCE_REPORT_DIR", tuning_performance)
     monkeypatch.setattr(mod, "AUTOMATION_TRIGGER_DECISION_REPORT_DIR", trigger_decision)
+    monkeypatch.setattr(mod, "RISING_MISSED_SCOUT_WORKORDER_REPORT_DIR", rising_missed)
     return docs, ev, openai, swing, code
 
 
@@ -39,6 +51,7 @@ def test_build_next_stage2_checklist_generates_next_trading_day_and_tasks(monkey
     docs, ev_dir, openai_dir, swing_dir, code_dir = _patch_dirs(monkeypatch, tmp_path)
     trigger_dir = mod.AUTOMATION_TRIGGER_DECISION_REPORT_DIR
     tuning_dir = mod.TUNING_PERFORMANCE_REPORT_DIR
+    rising_missed_dir = mod.RISING_MISSED_SCOUT_WORKORDER_REPORT_DIR
     _write_json(
         ev_dir / "threshold_cycle_ev_2026-05-08.json",
         {
@@ -62,6 +75,20 @@ def test_build_next_stage2_checklist_generates_next_trading_day_and_tasks(monkey
         trigger_dir / "automation_chain_trigger_decision_2026-05-08.json",
         {"summary": {"total_steps": 1, "run_count": 1, "skip_count": 0}, "decisions": []},
     )
+    _write_json(
+        rising_missed_dir / "rising_missed_scout_workorder_2026-05-08.json",
+        {
+            "summary": {
+                "code_improvement_order_count": 2,
+                "forced_scout_with_post_sell_count": 5,
+                "profitable_forced_scout_count": 3,
+                "loss_or_flat_forced_scout_count": 2,
+                "current_missed_count": 4,
+            },
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+        },
+    )
 
     summary = mod.build_next_stage2_checklist("2026-05-08")
 
@@ -69,6 +96,11 @@ def test_build_next_stage2_checklist_generates_next_trading_day_and_tasks(monkey
     checklist = docs / "checklists" / "2026-05-11-stage2-todo-checklist.md"
     text = checklist.read_text(encoding="utf-8")
     assert "[ThresholdEnvAutoApplyPreopen0511]" in text
+    assert "[RisingMissedScoutRuntimePreopen0511]" in text
+    assert "rising_missed_scout_workorder_2026-05-08.json" in text
+    assert "source-only order는 별도 runtime family/env mapping과 guard 통과가 있을 때만 반영" in text
+    assert "runtime_env_reflected_and_verified" in text
+    assert "stale submit bypass" in text
     assert "[SwingPreFinalAutoAndFinalApprovalPreopen0511]" in text
     assert "[RuntimeEnvIntradayObserve0511]" in text
     assert "[SimProbeIntradayCoverage0511]" in text
@@ -157,6 +189,7 @@ def test_generated_checklist_is_parser_friendly(monkeypatch, tmp_path):
     titles = [task.title for task in tasks]
 
     assert any("ThresholdEnvAutoApplyPreopen0512" in title for title in titles)
+    assert any("RisingMissedScoutRuntimePreopen0512" in title for title in titles)
     assert any("RuntimeEnvIntradayObserve0512" in title for title in titles)
     assert any("AutomationTriggerDecisionSummary0512" in title for title in titles)
     assert all(task.due_date == "2026-05-12" for task in tasks)
@@ -185,11 +218,13 @@ def test_build_next_stage2_checklist_skips_optional_tasks_when_optional_artifact
     text = (docs / "checklists" / "2026-05-26-stage2-todo-checklist.md").read_text(encoding="utf-8")
     assert summary["tasks"] == [
         "ThresholdEnvAutoApplyPreopen0526",
+        "RisingMissedScoutRuntimePreopen0526",
         "IntradaySourceQualityGateCheck0526",
         "PostcloseSourceQualityGateReview0526",
         "ThresholdDailyEVReport0526",
         "HumanInterventionSummary0526",
     ]
+    assert "report_missing_or_unreadable" in text
     assert "CodeImprovementWorkorderReview0526" not in text
     assert "AutomationTriggerDecisionSummary0526" not in text
     assert "tuning_performance_control_tower_2026-05-22.json" not in text
