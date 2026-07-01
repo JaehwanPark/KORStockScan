@@ -1,84 +1,85 @@
 {
-  "bundle_as_of": "2026-06-29T22:20:11Z",
+  "bundle_as_of": "2026-06-30T22:20:10Z",
   "sp500": {
     "name": "S&P 500",
-    "value": 7440.43,
-    "prev_value": 7354.02,
-    "change": 86.41,
-    "change_pct": 1.18,
-    "as_of": "2026-06-29T20:27:00Z",
-    "source": "Morningstar / Dow Jones Market Data"
+    "value": 7499.36,
+    "prev_value": 7440.43,
+    "change": 58.93,
+    "change_pct": 0.79,
+    "as_of": "2026-06-30T20:28:00Z",
+    "source": "Dow Jones Market Data"
   },
   "nasdaq": {
     "name": "NASDAQ Composite",
-    "value": 25820.14,
-    "prev_value": 25297.61,
-    "change": 522.53,
-    "change_pct": 2.07,
-    "as_of": "2026-06-29T20:27:00Z",
-    "source": "Morningstar / Dow Jones Market Data"
+    "value": 26213.72,
+    "prev_value": 25820.14,
+    "change": 393.58,
+    "change_pct": 1.52,
+    "as_of": "2026-06-30T20:28:00Z",
+    "source": "Dow Jones Market Data"
   },
   "vix": {
     "name": "VIX",
-    "value": 18.23,
+    "value": 17.65,
     "prev_value": 18.41,
-    "change": -0.18,
-    "change_pct": -0.98,
-    "as_of": "2026-06-29T22:20:11Z",
-    "source": "Investing.com"
+    "change": -0.76,
+    "change_pct": -4.13,
+    "as_of": "2026-06-29T20:15:00Z",
+    "source": "Cboe Global Markets"
   },
   "us10y": {
     "name": "US 10-Year Treasury Yield",
-    "value": 4.375,
-    "prev_value": 4.372,
-    "change": 0.003,
-    "change_pct": null,
-    "as_of": "2026-06-29T19:54:00Z",
-    "source": "Morningstar / Tradeweb"
+    "value": 4.411,
+    "prev_value": 4.374,
+    "change": 0.037,
+    "change_pct": 0.85,
+    "as_of": "2026-06-30T20:00:00Z",
+    "source": "Investing.com"
   },
   "brent": {
     "name": "Brent Crude",
-    "value": 73.15,
-    "prev_value": 71.99,
-    "change": 1.16,
-    "change_pct": 1.61,
-    "as_of": "2026-06-29T19:13:00Z",
-    "source": "Morningstar / Dow Jones Market Data"
+    "value": 73.6,
+    "prev_value": 73.91,
+    "change": -0.31,
+    "change_pct": -0.4,
+    "as_of": "2026-06-30T14:00:00Z",
+    "source": "Reuters"
   },
   "headlines": [
     {
-      "title": "Trump says U.S. and Iran will meet to negotiate after days of strikes",
-      "source": "The Washington Post",
-      "published_at": "2026-06-29T18:28:00Z",
-      "url": "https://www.washingtonpost.com/world/2026/06/29/us-iran-talks-strikes-qatar/"
+      "title": "Markets today: U.S. stocks rise and trim their losses for June",
+      "source": "The Associated Press",
+      "published_at": "2026-06-30T20:23:00Z",
+      "url": "https://apnews.com/"
     },
     {
-      "title": "Stock Market Today, June 29: Nasdaq Composite Outperforms as Tech Stocks Gain on Easing Geopolitical Tensions",
-      "source": "The Motley Fool",
-      "published_at": "2026-06-29T21:18:00Z",
-      "url": "https://www.fool.com/investing/2026/06/29/stock-market-today-june-29-nasdaq-outperforms/"
+      "title": "Dollar Strengthens as US Treasury Yields Rise",
+      "source": "GuruFocus",
+      "published_at": "2026-06-30T21:33:00Z",
+      "url": "https://www.gurufocus.com/"
     },
     {
-      "title": "Middle East producers push on with oil and LNG loadings despite ship attacks",
-      "source": "Reuters",
-      "published_at": "2026-06-29T13:05:00Z",
-      "url": "https://www.reuters.com/business/energy/middle-east-producers-push-on-with-oil-lng-loadings-despite-ship-attacks-2026-06-29/"
+      "title": "Hopes for U.S.-Iran talks push oil prices lower",
+      "source": "The New Voice of Ukraine",
+      "published_at": "2026-06-30T08:50:00Z",
+      "url": "https://english.nv.ua/"
     },
     {
-      "title": "U.S., Iran pause strikes but disagree over next steps on talks",
-      "source": "The Hindu",
-      "published_at": "2026-06-29T13:20:00Z",
-      "url": "https://www.thehindu.com/news/international/us-iran-pause-strikes-but-disagree-over-next-steps-on-talks/"
+      "title": "Options Brief - Chips bounce into H1 close",
+      "source": "Saxo Bank",
+      "published_at": "2026-06-30T06:00:00Z",
+      "url": "https://www.home.saxo/"
     },
     {
-      "title": "How major US stock indexes fared Monday 6/29/2026",
-      "source": "Associated Press",
-      "published_at": "2026-06-29T20:35:00Z",
-      "url": "https://apnews.com/article/wall-street-markets-june-29-2026/"
+      "title": "US OPEN: Nasdaq seals best quarter in years",
+      "source": "XTB",
+      "published_at": "2026-06-30T15:20:00Z",
+      "url": "https://www.xtb.com/"
     }
   ],
   "notes": [
-    "Market data reflects closing or late-session values as of the US market close on June 29, 2026.",
-    "US and Iranian diplomatic developments are the primary geopolitical driver affecting both equities and energy markets."
+    "Equities rose to trim June losses as Q2 closed out with substantial gains in Nasdaq and S&P 500.",
+    "Brent crude prices slipped on news that diplomats arrived in Doha to discuss de-escalating the Iran conflict.",
+    "The 10-year US Treasury yield ticked up 4 basis points amid ongoing strength in the US dollar."
   ]
 }
