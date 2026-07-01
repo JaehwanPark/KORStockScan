@@ -1,6 +1,6 @@
 # 2026-07-01 Rising Missed Scout Workorder
 
-- generated_at: 2026-07-01T13:32:14+09:00
+- generated_at: 2026-07-01T21:48:51+09:00
 - decision_authority: source_only_operational_workorder
 - runtime_effect: false
 - allowed_runtime_apply: false
@@ -8,13 +8,13 @@
 
 ## Summary
 
-- forced_scout_record_count: 39
+- forced_scout_record_count: 49
 - forced_scout_with_post_sell_count: 23
 - profitable_forced_scout_count: 17
 - loss_or_flat_forced_scout_count: 6
 - winner_avg_profit_rate: 2.0112
 - loser_avg_profit_rate: -3.365
-- current_missed_count: 14
+- current_missed_count: 24
 - scale_in_price_guard_block_record_count: 16
 - scale_in_qty_block_record_count: 4
 - scale_in_executed_record_count: 4
@@ -32,8 +32,8 @@
   - winner_count=17
   - loser_count=6
   - winner_avg_profit_rate=2.0112
-  - current_missed_count=14
-  - current_missed_eligible_count=0
+  - current_missed_count=24
+  - current_missed_eligible_count=1
   - all_winner_rows_had_latency_pass=True
   - all_winner_rows_had_order_bundle_submitted=True
 

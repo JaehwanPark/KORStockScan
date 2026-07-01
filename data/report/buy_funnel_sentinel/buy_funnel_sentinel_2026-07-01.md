@@ -15,24 +15,24 @@
 
 ## 근거
 
-- as_of: `2026-07-01T15:15:04`
+- as_of: `2026-07-01T15:20:03`
 - baseline_date: `2026-06-30`
-- ai_confirmed unique: `42`
+- ai_confirmed unique: `43`
 - budget_pass unique: `34`
-- latency_pass unique: `29`
-- submitted unique: `28`
-- holding_started unique: `19`
-- budget/ai unique: `81.0%` (baseline `120.0`)
-- submitted/ai unique: `66.7%` (baseline `100.0`)
+- latency_pass unique: `30`
+- submitted unique: `29`
+- holding_started unique: `20`
+- budget/ai unique: `79.1%` (baseline `120.0`)
+- submitted/ai unique: `67.4%` (baseline `100.0`)
 - critical submit thresholds: `submitted/ai < 20.0%` or `submitted/budget <= 10.0%` (floors: ai>=20, budget>=3)
-- top blockers: `latency_block:latency_state_danger=636, blocked_overbought:-=188, blocked_strength_momentum:below_window_buy_value=133, blocked_strength_momentum:below_buy_ratio=106, blocked_strength_momentum:insufficient_history=96`
+- top blockers: `latency_block:latency_state_danger=642, blocked_overbought:-=189, blocked_strength_momentum:below_window_buy_value=136, blocked_strength_momentum:below_buy_ratio=106, blocked_strength_momentum:below_strength_base=97`
 - swing blockers: `-`
-- upstream blockers: `first_ai_wait:-=52, blocked_ai_score:score_62.0=40, blocked_ai_score:ai_score_50_buy_hold_override=32, blocked_ai_score:score_58.0=13, blocked_ai_score:score_74.0=9`
-- AI terminal reasons: `ai_terminal:blocked_ai_score_below_buy_score_threshold=130, ai_terminal:first_ai_wait_big_bite_not_confirmed=52`
-- latency blockers: `latency_block:latency_state_danger=636`
+- upstream blockers: `first_ai_wait:-=53, blocked_ai_score:score_62.0=42, blocked_ai_score:ai_score_50_buy_hold_override=32, blocked_ai_score:score_58.0=13, blocked_ai_score:score_72.0=10`
+- AI terminal reasons: `ai_terminal:blocked_ai_score_below_buy_score_threshold=133, ai_terminal:first_ai_wait_big_bite_not_confirmed=53`
+- latency blockers: `latency_block:latency_state_danger=642`
 - price guards: `scale_in_price_guard_block:micro_vwap_bp>60.0=28, scale_in_price_guard_block:quote_stale=21, entry_ai_price_canary_fallback:above_best_ask=5, entry_ai_price_canary_fallback:pre_submit_price_guard=4, entry_ai_price_canary_fallback:skip_low_confidence=2`
-- quote refresh: `attempted=34, applied=33, latency_recovered=8, submitted_after_refresh=7`
-- quote refresh downstream: `{'order_bundle_submitted': 7, 'upstream_block_after_latency_recovery': 1}`
+- quote refresh: `attempted=34, applied=33, latency_recovered=9, submitted_after_refresh=8`
+- quote refresh downstream: `{'order_bundle_submitted': 8, 'upstream_block_after_latency_recovery': 1}`
 
 ## 금지된 자동변경
 
@@ -49,6 +49,6 @@
 
 ## Window Summary
 
-- `5m`: ai=2, budget=4, latency=1, submitted=1, top=`latency_block:latency_state_danger=5, first_ai_wait:-=2, blocked_strength_momentum:below_strength_base=2`, swing=`-`, upstream=`first_ai_wait:-=2, blocked_ai_score:score_67.0=1, blocked_ai_score:ai_score_50_buy_hold_override=1`, ai_terminal=`ai_terminal:first_ai_wait_big_bite_not_confirmed=2, ai_terminal:blocked_ai_score_below_buy_score_threshold=1`
-- `10m`: ai=4, budget=5, latency=2, submitted=2, top=`latency_block:latency_state_danger=12, first_ai_wait:-=4, blocked_overbought:-=4`, swing=`-`, upstream=`first_ai_wait:-=4, blocked_ai_score:score_61.0=1, blocked_ai_score:score_67.0=1`, ai_terminal=`ai_terminal:first_ai_wait_big_bite_not_confirmed=4, ai_terminal:blocked_ai_score_below_buy_score_threshold=2`
-- `30m`: ai=7, budget=8, latency=4, submitted=4, top=`latency_block:latency_state_danger=62, first_ai_wait:-=7, blocked_overbought:-=7`, swing=`-`, upstream=`first_ai_wait:-=7, blocked_ai_score:score_61.0=1, blocked_ai_score:score_67.0=1`, ai_terminal=`ai_terminal:first_ai_wait_big_bite_not_confirmed=7, ai_terminal:blocked_ai_score_below_buy_score_threshold=2`
+- `5m`: ai=3, budget=4, latency=2, submitted=2, top=`latency_block:latency_state_danger=6, blocked_vpw:-=3, blocked_strength_momentum:below_window_buy_value=3`, swing=`-`, upstream=`blocked_ai_score:score_62.0=2, blocked_ai_score:score_72.0=1, first_ai_wait:-=1`, ai_terminal=`ai_terminal:blocked_ai_score_below_buy_score_threshold=3, ai_terminal:first_ai_wait_big_bite_not_confirmed=1`
+- `10m`: ai=5, budget=5, latency=3, submitted=3, top=`latency_block:latency_state_danger=11, blocked_strength_momentum:below_window_buy_value=5, blocked_vpw:-=4`, swing=`-`, upstream=`first_ai_wait:-=3, blocked_ai_score:score_62.0=2, blocked_ai_score:score_67.0=1`, ai_terminal=`ai_terminal:blocked_ai_score_below_buy_score_threshold=4, ai_terminal:first_ai_wait_big_bite_not_confirmed=3`
+- `30m`: ai=6, budget=7, latency=5, submitted=5, top=`latency_block:latency_state_danger=58, blocked_strength_momentum:below_window_buy_value=6, first_ai_wait:-=5`, swing=`-`, upstream=`first_ai_wait:-=5, blocked_ai_score:score_62.0=2, blocked_ai_score:score_61.0=1`, ai_terminal=`ai_terminal:first_ai_wait_big_bite_not_confirmed=5, ai_terminal:blocked_ai_score_below_buy_score_threshold=5`
