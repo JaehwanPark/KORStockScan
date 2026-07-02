@@ -61,6 +61,7 @@ from src.engine.scalping.rising_missed_one_share_entry import (
     BLOCK_OPEN_PENDING as RISING_MISSED_BLOCK_OPEN_PENDING,
     BLOCK_PRICE_ABOVE_CAP as RISING_MISSED_BLOCK_PRICE_ABOVE_CAP,
     BLOCK_UPPER_LIMIT_PROXIMITY as RISING_MISSED_BLOCK_UPPER_LIMIT_PROXIMITY,
+    DEFAULT_RISING_MISSED_UPPER_LIMIT_EXCLUDE_PCT,
     DEFAULT_UPPER_LIMIT_PROXIMITY_BLOCK_PCT,
     FORCED_ENTRY_REASON as RISING_MISSED_FORCED_ENTRY_REASON,
     MAX_ONE_SHARE_ENTRY_PRICE_KRW as RISING_MISSED_MAX_ONE_SHARE_ENTRY_PRICE_KRW,
@@ -2769,6 +2770,164 @@ def _evaluate_late_loss_avg_down_retry(
     }
 
 
+_LATE_LOSS_AVG_DOWN_QUOTE_RECOVERY_FIELDS = (
+    "late_loss_avg_down_quote_recovery_until",
+    "late_loss_avg_down_quote_recovery_started_at",
+    "late_loss_avg_down_quote_recovery_sec",
+    "late_loss_avg_down_quote_recovery_reason",
+    "late_loss_avg_down_quote_recovery_price_guard_stage",
+    "late_loss_avg_down_quote_recovery_original_profit_rate",
+    "late_loss_avg_down_quote_recovery_peak_profit",
+)
+
+
+def _is_late_loss_avg_down_quote_recoverable_block(reason: str | None) -> bool:
+    normalized = str(reason or "").strip().lower()
+    return normalized in {
+        "invalid_quote",
+        "invalid_spread",
+        "quote_stale",
+        "quote_consistency_stale",
+        "quote_consistency_blocked",
+        "quote_consistency_missing",
+        "quote_consistency_diverged",
+    }
+
+
+def _last_scale_in_submit_block_fields(stock: dict | None) -> dict:
+    stock = stock if isinstance(stock, dict) else {}
+    return {
+        "stage": str(stock.get("last_scale_in_submit_block_stage") or ""),
+        "reason": str(stock.get("last_scale_in_submit_block_reason") or ""),
+        "add_reason": str(stock.get("last_scale_in_submit_block_add_reason") or ""),
+        "add_type": str(stock.get("last_scale_in_submit_block_add_type") or ""),
+    }
+
+
+def _record_scale_in_submit_block(
+    stock: dict | None,
+    *,
+    stage: str,
+    reason: str | None,
+    add_reason: str | None,
+    add_type: str | None,
+    now_ts: float | None = None,
+) -> None:
+    if not isinstance(stock, dict):
+        return
+    _mutate_stock_state(
+        stock,
+        set_fields={
+            "last_scale_in_submit_block_stage": stage or "-",
+            "last_scale_in_submit_block_reason": str(reason or "-"),
+            "last_scale_in_submit_block_add_reason": str(add_reason or "-"),
+            "last_scale_in_submit_block_add_type": str(add_type or "-"),
+            "last_scale_in_submit_block_at": float(now_ts or time.time()),
+        },
+    )
+
+
+def _clear_scale_in_submit_block(stock: dict | None) -> None:
+    if not isinstance(stock, dict):
+        return
+    _mutate_stock_state(
+        stock,
+        pop_fields=(
+            "last_scale_in_submit_block_stage",
+            "last_scale_in_submit_block_reason",
+            "last_scale_in_submit_block_add_reason",
+            "last_scale_in_submit_block_add_type",
+            "last_scale_in_submit_block_at",
+        ),
+    )
+
+
+def _maybe_defer_late_loss_avg_down_quote_recovery(
+    *,
+    stock: dict | None,
+    code: str,
+    retry_common_fields: dict,
+    profit_rate: float,
+    peak_profit: float,
+    now_ts: float,
+    retry_count: int,
+) -> dict:
+    if not isinstance(stock, dict):
+        return {"deferred": False, "reason": "stock_missing"}
+    if not _rule_bool("SCALP_LATE_LOSS_AVG_DOWN_QUOTE_RECOVERY_DEFER_ENABLED", True):
+        return {"deferred": False, "reason": "disabled"}
+    block = _last_scale_in_submit_block_fields(stock)
+    if block.get("add_reason") != "late_loss_avg_down_retry":
+        return {"deferred": False, "reason": "not_late_loss_avg_down_block"}
+    if not _is_late_loss_avg_down_quote_recoverable_block(block.get("reason")):
+        _mutate_stock_state(stock, pop_fields=_LATE_LOSS_AVG_DOWN_QUOTE_RECOVERY_FIELDS)
+        return {"deferred": False, "reason": block.get("reason") or "not_quote_recoverable"}
+
+    emergency_pct = _rule_float("SCALP_LATE_LOSS_AVG_DOWN_QUOTE_RECOVERY_EMERGENCY_PCT", -5.0)
+    if float(profit_rate or 0.0) <= emergency_pct:
+        _mutate_stock_state(stock, pop_fields=_LATE_LOSS_AVG_DOWN_QUOTE_RECOVERY_FIELDS)
+        return {
+            "deferred": False,
+            "reason": "emergency_pct",
+            "emergency_pct": f"{emergency_pct:+.2f}",
+        }
+    defer_sec = max(0, _rule_int("SCALP_LATE_LOSS_AVG_DOWN_QUOTE_RECOVERY_DEFER_SEC", 90))
+    if defer_sec <= 0:
+        return {"deferred": False, "reason": "defer_sec_zero"}
+
+    now_value = float(now_ts or time.time())
+    started_at = _safe_float(stock.get("late_loss_avg_down_quote_recovery_started_at"), 0.0)
+    if started_at <= 0:
+        started_at = now_value
+    expiry_ts = started_at + defer_sec
+    if now_value >= expiry_ts:
+        _mutate_stock_state(stock, pop_fields=_LATE_LOSS_AVG_DOWN_QUOTE_RECOVERY_FIELDS)
+        return {
+            "deferred": False,
+            "reason": "quote_recovery_expired",
+            "expired_at": expiry_ts,
+        }
+    until_ts = max(
+        _safe_float(stock.get("late_loss_avg_down_quote_recovery_until"), 0.0),
+        expiry_ts,
+    )
+    remaining_sec = max(1, int(until_ts - now_value))
+    _mutate_stock_state(
+        stock,
+        set_fields={
+            "late_loss_avg_down_quote_recovery_until": until_ts,
+            "late_loss_avg_down_quote_recovery_started_at": started_at,
+            "late_loss_avg_down_quote_recovery_sec": defer_sec,
+            "late_loss_avg_down_quote_recovery_reason": block.get("reason") or "-",
+            "late_loss_avg_down_quote_recovery_price_guard_stage": block.get("stage") or "-",
+            "late_loss_avg_down_quote_recovery_original_profit_rate": profit_rate,
+            "late_loss_avg_down_quote_recovery_peak_profit": peak_profit,
+        },
+    )
+    _log_holding_pipeline(
+        stock,
+        code,
+        "late_loss_avg_down_quote_recovery_defer",
+        **{
+            **retry_common_fields,
+            "retry_count": retry_count,
+            "block_reason": block.get("reason") or "-",
+            "price_guard_stage": block.get("stage") or "-",
+            "quote_recovery_defer_sec": defer_sec,
+            "quote_recovery_remaining_sec": remaining_sec,
+            "quote_recovery_emergency_pct": f"{emergency_pct:+.2f}",
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+        },
+    )
+    return {
+        "deferred": True,
+        "reason": "late_loss_avg_down_quote_recovery_defer",
+        "remaining_sec": remaining_sec,
+        "until_ts": until_ts,
+    }
+
+
 def _attempt_late_loss_avg_down_retry_before_sell(
     *,
     stock: dict | None,
@@ -2851,6 +3010,18 @@ def _attempt_late_loss_avg_down_retry_before_sell(
             **retry_common_fields,
         )
         retry_count = _safe_int(late_loss_avg_down_retry.get("used_count"), 0) + 1
+        previous_late_loss_retry_fields = {
+            key: stock.get(key)
+            for key in (
+                "late_loss_avg_down_retry_used",
+                "late_loss_avg_down_retry_count",
+                "late_loss_avg_down_retry_at",
+                "late_loss_avg_down_retry_exit_rule",
+                "late_loss_avg_down_retry_original_profit_rate",
+                "late_loss_avg_down_retry_peak_profit",
+            )
+            if isinstance(stock, dict)
+        }
         _mutate_stock_state(
             stock,
             set_fields={
@@ -2862,6 +3033,7 @@ def _attempt_late_loss_avg_down_retry_before_sell(
                 "late_loss_avg_down_retry_peak_profit": peak_profit,
             },
         )
+        _clear_scale_in_submit_block(stock)
         add_result = _process_scale_in_action(
             stock=stock,
             code=code,
@@ -2889,6 +3061,7 @@ def _attempt_late_loss_avg_down_retry_before_sell(
                 f"[LATE_LOSS_AVG_DOWN] {stock.get('name') if isinstance(stock, dict) else code}({code}) "
                 "AVG_DOWN submitted before final loss sell; sell submit skipped for re-evaluation."
             )
+            _mutate_stock_state(stock, pop_fields=_LATE_LOSS_AVG_DOWN_QUOTE_RECOVERY_FIELDS)
             return {"attempted": True, "submitted": True, "add_result": add_result}
         _log_holding_pipeline(
             stock,
@@ -2901,6 +3074,44 @@ def _attempt_late_loss_avg_down_retry_before_sell(
                 "broker_order_forbidden": True,
             },
         )
+        defer_result = _maybe_defer_late_loss_avg_down_quote_recovery(
+            stock=stock,
+            code=code,
+            retry_common_fields=retry_common_fields,
+            profit_rate=profit_rate,
+            peak_profit=peak_profit,
+            now_ts=now_ts,
+            retry_count=retry_count,
+        )
+        if defer_result.get("deferred"):
+            _mutate_stock_state(
+                stock,
+                set_fields={
+                    key: value
+                    for key, value in previous_late_loss_retry_fields.items()
+                    if value is not None
+                },
+                pop_fields=tuple(
+                    key
+                    for key in (
+                        "late_loss_avg_down_retry_used",
+                        "late_loss_avg_down_retry_count",
+                        "late_loss_avg_down_retry_at",
+                        "late_loss_avg_down_retry_exit_rule",
+                        "late_loss_avg_down_retry_original_profit_rate",
+                        "late_loss_avg_down_retry_peak_profit",
+                    )
+                    if key not in previous_late_loss_retry_fields
+                    or previous_late_loss_retry_fields.get(key) is None
+                ),
+            )
+            return {
+                "attempted": True,
+                "submitted": False,
+                "deferred": True,
+                "reason": defer_result.get("reason", "late_loss_avg_down_quote_recovery_defer"),
+                "remaining_sec": defer_result.get("remaining_sec"),
+            }
         return {
             "attempted": True,
             "submitted": False,
@@ -9570,12 +9781,38 @@ def _log_scale_in_arm_blocked(stock, code, *, arm, blocked_reason, profit_rate, 
     }
     if namespace.startswith("AVG_DOWN"):
         fields = _append_reversal_add_probe_fields(fields, probe)
+    elif str(arm or "").upper() == "PYRAMID":
+        fields = _append_pyramid_probe_fields(fields, probe)
     _log_holding_pipeline(
         stock,
         code,
         "pyramid_blocked_reason" if str(arm or "").upper() == "PYRAMID" else "scale_in_arm_blocked",
         **fields,
     )
+
+
+def _append_pyramid_probe_fields(fields: dict, probe: dict | None) -> dict:
+    merged = dict(fields or {})
+    if not isinstance(probe, dict) or not probe:
+        return merged
+    for key in (
+        "profit_gate_mode",
+        "min_profit_pct",
+        "base_min_profit_pct",
+        "strong_continuation_min_profit_pct",
+        "strong_continuation_max_drawdown_pct",
+        "strong_continuation_allowed",
+        "strong_continuation_failed_checks",
+        "drawdown_from_peak",
+        "is_new_high",
+        "buy_pressure_10t",
+        "tick_acceleration_ratio",
+        "large_sell_print_detected",
+        "curr_vs_micro_vwap_bp",
+    ):
+        if key in probe:
+            merged[key] = probe.get(key)
+    return merged
 
 
 def _append_reversal_add_probe_fields(fields: dict, probe: dict | None) -> dict:
@@ -11820,7 +12057,7 @@ def _dispatch_scalp_preset_exit(
                 "preset_expected_qty": expected_qty,
             },
         )
-        if retry_result.get("submitted"):
+        if retry_result.get("submitted") or retry_result.get("deferred"):
             return
 
     try:
@@ -25058,6 +25295,20 @@ def _upper_limit_entry_block_enabled() -> bool:
     return _env_bool("KORSTOCKSCAN_SCALP_UPPER_LIMIT_ENTRY_BLOCK_ENABLED", True)
 
 
+def _rising_missed_upper_limit_exclude_enabled() -> bool:
+    return _env_bool("KORSTOCKSCAN_RISING_MISSED_UPPER_LIMIT_EXCLUDE_ENABLED", True)
+
+
+def _rising_missed_upper_limit_exclude_pct() -> float:
+    return max(
+        0.0,
+        _env_float(
+            "KORSTOCKSCAN_RISING_MISSED_UPPER_LIMIT_EXCLUDE_PCT",
+            DEFAULT_RISING_MISSED_UPPER_LIMIT_EXCLUDE_PCT,
+        ),
+    )
+
+
 def _upper_limit_entry_block_pct() -> float:
     return max(
         0.0,
@@ -25148,8 +25399,8 @@ def _maybe_submit_rising_missed_one_share_entry(
         current_price=curr_price,
         max_entry_price_krw=_rising_missed_one_share_entry_max_price_krw(),
         current_fluctuation_pct=_current_fluctuation_pct(stock, ws_data, runtime),
-        upper_limit_block_enabled=_upper_limit_entry_block_enabled(),
-        upper_limit_block_pct=_upper_limit_entry_block_pct(),
+        upper_limit_exclude_enabled=_rising_missed_upper_limit_exclude_enabled(),
+        upper_limit_exclude_pct=_rising_missed_upper_limit_exclude_pct(),
     )
     if decision.allowed is False and decision.reason != RISING_MISSED_BLOCK_NOT_CANDIDATE:
         _log_entry_pipeline(
@@ -29830,7 +30081,7 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
             now_ts=now_ts,
             context_fields={"sell_intercept_context": "standard_exit_before_submit"},
         )
-        if late_loss_retry_result.get("submitted"):
+        if late_loss_retry_result.get("submitted") or late_loss_retry_result.get("deferred"):
             return
 
         sell_safety_exit = _is_sell_side_open_time_safety_exit(
@@ -30315,7 +30566,13 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                         is_new_high = curr_p >= float(highest_prices.get(_price_tracking_key(stock, code), curr_p))
                     except Exception:
                         is_new_high = False
-                    _pyramid_probe = evaluate_scalping_pyramid(stock, profit_rate, peak_profit, is_new_high)
+                    _pyramid_probe = evaluate_scalping_pyramid(
+                        stock,
+                        profit_rate,
+                        peak_profit,
+                        is_new_high,
+                        current_ai_score=current_ai_score,
+                    )
                     _pyramid_reason = str(_pyramid_probe.get("reason") or "pyramid_not_selected")
                     if _pyramid_reason and _pyramid_reason != "scalping_pyramid_ok":
                         _log_scale_in_arm_blocked(
@@ -30328,6 +30585,7 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                             current_ai_score=current_ai_score,
                             held_sec=held_sec,
                             gate=gate,
+                            probe=_pyramid_probe,
                         )
                         _emit_stat_action_decision_snapshot(
                             stock=stock,
@@ -31067,7 +31325,13 @@ def _evaluate_scale_in_signal(
         except Exception as exc:
             log_error(f"[SCALEIN_STATE] highest_prices 비교 실패 ({code}, curr_price={curr_price}): {exc}")
 
-        pyramid = evaluate_scalping_pyramid(stock, profit_rate, peak_profit, is_new_high)
+        pyramid = evaluate_scalping_pyramid(
+            stock,
+            profit_rate,
+            peak_profit,
+            is_new_high,
+            current_ai_score=current_ai_score,
+        )
         if pyramid.get("should_add"):
             pyramid.update(
                 {
@@ -31455,6 +31719,13 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
         and not simulated_position
         and not defensive_quote_consistency_bypass
     ):
+        _record_scale_in_submit_block(
+            stock,
+            stage="scale_in_price_guard_block",
+            reason=quote_consistency_block_reason,
+            add_reason=add_reason,
+            add_type=add_type,
+        )
         _log_holding_pipeline(
             stock,
             code,
@@ -31535,6 +31806,13 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
     )
     resolved_price = int(price_resolution.get("order_price", 0) or 0)
     if not price_resolution.get("allowed", False):
+        _record_scale_in_submit_block(
+            stock,
+            stage="scale_in_price_guard_block",
+            reason=price_resolution.get("reason"),
+            add_reason=add_reason,
+            add_type=add_type,
+        )
         _log_holding_pipeline(
             stock,
             code,
@@ -31567,6 +31845,7 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
         )
         return None
 
+    _clear_scale_in_submit_block(stock)
     deposit = _sim_virtual_budget_krw() if simulated_position else kiwoom_orders.get_deposit(KIWOOM_TOKEN)
     sim_budget_fields = (
         {

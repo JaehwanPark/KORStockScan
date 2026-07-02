@@ -60,6 +60,9 @@ class TradingConfig:
     SCALPING_PYRAMID_MIN_AI_SCORE: int = 70  # PYRAMID 허용 AI 최소점수
     SCALPING_PYRAMID_MIN_BUY_PRESSURE: float = 60.0  # PYRAMID 허용 매수압 최소값
     SCALPING_PYRAMID_MIN_TICK_ACCEL: float = 0.5  # PYRAMID 허용 틱 가속 최소값
+    SCALPING_PYRAMID_STRONG_CONTINUATION_ENABLED: bool = False
+    SCALPING_PYRAMID_STRONG_CONTINUATION_MIN_PROFIT_PCT: float = 0.9
+    SCALPING_PYRAMID_STRONG_CONTINUATION_MAX_DRAWDOWN_PCT: float = 0.20
     SCALPING_PYRAMID_MAX_ADD_QTY_RATIO: float = 0.50  # 실계좌 PYRAMID 1회 추가수량은 기존 보유수량의 50% 이내
     REAL_PYRAMID_MICRO_CONTEXT_GUARD_ENABLED: bool = False  # real SCALPING PYRAMID micro context guard; PREOPEN env only
     PENDING_SCALE_IN_REVALIDATION_CANCEL_ENABLED: bool = False  # real pending PYRAMID revalidation cancel; PREOPEN env only
@@ -95,6 +98,9 @@ class TradingConfig:
     SCALP_DEFENSIVE_AVG_DOWN_UNFILLED_RECHECK_ENABLED: bool = False
     SCALP_DEFENSIVE_AVG_DOWN_UNFILLED_RECHECK_SEC: int = 30
     SCALP_DEFENSIVE_AVG_DOWN_UNFILLED_RECHECK_EMERGENCY_PCT: float = -6.5
+    SCALP_LATE_LOSS_AVG_DOWN_QUOTE_RECOVERY_DEFER_ENABLED: bool = True
+    SCALP_LATE_LOSS_AVG_DOWN_QUOTE_RECOVERY_DEFER_SEC: int = 90
+    SCALP_LATE_LOSS_AVG_DOWN_QUOTE_RECOVERY_EMERGENCY_PCT: float = -5.0
     SCALP_SOFT_STOP_SAME_SYMBOL_COOLDOWN_SHADOW_ENABLED: bool = False  # live loss reentry cooldown 전환 후 shadow 기본 OFF
     SCALP_SOFT_STOP_SAME_SYMBOL_COOLDOWN_SHADOW_SEC: int = 600  # historical/replay 전용 기준
     SELL_ORDER_FAILURE_RETRY_BACKOFF_ENABLED: bool = True  # broker reject burst 방지용 sell retry backoff
@@ -3126,6 +3132,15 @@ def _build_trading_rules() -> TradingConfig:
     env_pyramid_min_ai_score = _env_int("KORSTOCKSCAN_SCALPING_PYRAMID_MIN_AI_SCORE")
     env_pyramid_min_buy_pressure = _env_float("KORSTOCKSCAN_SCALPING_PYRAMID_MIN_BUY_PRESSURE")
     env_pyramid_min_tick_accel = _env_float("KORSTOCKSCAN_SCALPING_PYRAMID_MIN_TICK_ACCEL")
+    env_pyramid_strong_continuation_enabled = _env_bool(
+        "KORSTOCKSCAN_SCALPING_PYRAMID_STRONG_CONTINUATION_ENABLED"
+    )
+    env_pyramid_strong_continuation_min_profit = _env_float(
+        "KORSTOCKSCAN_SCALPING_PYRAMID_STRONG_CONTINUATION_MIN_PROFIT_PCT"
+    )
+    env_pyramid_strong_continuation_max_drawdown = _env_float(
+        "KORSTOCKSCAN_SCALPING_PYRAMID_STRONG_CONTINUATION_MAX_DRAWDOWN_PCT"
+    )
     env_pyramid_max_add_qty_ratio = _env_float("KORSTOCKSCAN_SCALPING_PYRAMID_MAX_ADD_QTY_RATIO")
     env_real_pyramid_micro_context_guard_enabled = _env_bool(
         "KORSTOCKSCAN_REAL_PYRAMID_MICRO_CONTEXT_GUARD_ENABLED"
@@ -3181,6 +3196,15 @@ def _build_trading_rules() -> TradingConfig:
     )
     env_defensive_avg_down_unfilled_recheck_emergency = _env_float(
         "KORSTOCKSCAN_SCALP_DEFENSIVE_AVG_DOWN_UNFILLED_RECHECK_EMERGENCY_PCT"
+    )
+    env_late_loss_quote_recovery_defer_enabled = _env_bool(
+        "KORSTOCKSCAN_SCALP_LATE_LOSS_AVG_DOWN_QUOTE_RECOVERY_DEFER_ENABLED"
+    )
+    env_late_loss_quote_recovery_defer_sec = _env_int(
+        "KORSTOCKSCAN_SCALP_LATE_LOSS_AVG_DOWN_QUOTE_RECOVERY_DEFER_SEC"
+    )
+    env_late_loss_quote_recovery_emergency = _env_float(
+        "KORSTOCKSCAN_SCALP_LATE_LOSS_AVG_DOWN_QUOTE_RECOVERY_EMERGENCY_PCT"
     )
     env_sell_order_failure_retry_backoff_enabled = _env_bool(
         "KORSTOCKSCAN_SELL_ORDER_FAILURE_RETRY_BACKOFF_ENABLED"
@@ -3270,6 +3294,9 @@ def _build_trading_rules() -> TradingConfig:
         or env_pyramid_min_ai_score is not None
         or env_pyramid_min_buy_pressure is not None
         or env_pyramid_min_tick_accel is not None
+        or env_pyramid_strong_continuation_enabled is not None
+        or env_pyramid_strong_continuation_min_profit is not None
+        or env_pyramid_strong_continuation_max_drawdown is not None
         or env_pyramid_max_add_qty_ratio is not None
         or env_real_pyramid_micro_context_guard_enabled is not None
         or env_pending_scale_in_revalidation_cancel_enabled is not None
@@ -3621,6 +3648,15 @@ def _build_trading_rules() -> TradingConfig:
             SCALPING_PYRAMID_MIN_TICK_ACCEL=env_pyramid_min_tick_accel
             if env_pyramid_min_tick_accel is not None
             else config.SCALPING_PYRAMID_MIN_TICK_ACCEL,
+            SCALPING_PYRAMID_STRONG_CONTINUATION_ENABLED=env_pyramid_strong_continuation_enabled
+            if env_pyramid_strong_continuation_enabled is not None
+            else config.SCALPING_PYRAMID_STRONG_CONTINUATION_ENABLED,
+            SCALPING_PYRAMID_STRONG_CONTINUATION_MIN_PROFIT_PCT=env_pyramid_strong_continuation_min_profit
+            if env_pyramid_strong_continuation_min_profit is not None
+            else config.SCALPING_PYRAMID_STRONG_CONTINUATION_MIN_PROFIT_PCT,
+            SCALPING_PYRAMID_STRONG_CONTINUATION_MAX_DRAWDOWN_PCT=env_pyramid_strong_continuation_max_drawdown
+            if env_pyramid_strong_continuation_max_drawdown is not None
+            else config.SCALPING_PYRAMID_STRONG_CONTINUATION_MAX_DRAWDOWN_PCT,
             SCALPING_PYRAMID_MAX_ADD_QTY_RATIO=env_pyramid_max_add_qty_ratio
             if env_pyramid_max_add_qty_ratio is not None
             else config.SCALPING_PYRAMID_MAX_ADD_QTY_RATIO,
@@ -3681,6 +3717,15 @@ def _build_trading_rules() -> TradingConfig:
             SCALP_DEFENSIVE_AVG_DOWN_UNFILLED_RECHECK_EMERGENCY_PCT=env_defensive_avg_down_unfilled_recheck_emergency
             if env_defensive_avg_down_unfilled_recheck_emergency is not None
             else config.SCALP_DEFENSIVE_AVG_DOWN_UNFILLED_RECHECK_EMERGENCY_PCT,
+            SCALP_LATE_LOSS_AVG_DOWN_QUOTE_RECOVERY_DEFER_ENABLED=env_late_loss_quote_recovery_defer_enabled
+            if env_late_loss_quote_recovery_defer_enabled is not None
+            else config.SCALP_LATE_LOSS_AVG_DOWN_QUOTE_RECOVERY_DEFER_ENABLED,
+            SCALP_LATE_LOSS_AVG_DOWN_QUOTE_RECOVERY_DEFER_SEC=env_late_loss_quote_recovery_defer_sec
+            if env_late_loss_quote_recovery_defer_sec is not None
+            else config.SCALP_LATE_LOSS_AVG_DOWN_QUOTE_RECOVERY_DEFER_SEC,
+            SCALP_LATE_LOSS_AVG_DOWN_QUOTE_RECOVERY_EMERGENCY_PCT=env_late_loss_quote_recovery_emergency
+            if env_late_loss_quote_recovery_emergency is not None
+            else config.SCALP_LATE_LOSS_AVG_DOWN_QUOTE_RECOVERY_EMERGENCY_PCT,
             SELL_ORDER_FAILURE_RETRY_BACKOFF_ENABLED=env_sell_order_failure_retry_backoff_enabled
             if env_sell_order_failure_retry_backoff_enabled is not None
             else config.SELL_ORDER_FAILURE_RETRY_BACKOFF_ENABLED,

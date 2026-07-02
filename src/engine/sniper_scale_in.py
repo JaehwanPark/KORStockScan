@@ -87,6 +87,21 @@ def _safe_int(value, default=0):
         return default
 
 
+def _safe_bool(value, default=False):
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        text = value.strip().lower()
+        if text in {"1", "true", "yes", "y", "on"}:
+            return True
+        if text in {"0", "false", "no", "n", "off", ""}:
+            return False
+        return default
+    return bool(value)
+
+
 def _best_levels_from_ws(ws_data):
     ws_data = ws_data or {}
     best_bid = _safe_int(ws_data.get("best_bid") or ws_data.get("bid") or ws_data.get("bid_price"), 0)
@@ -203,26 +218,151 @@ def resolve_holding_elapsed_sec(stock, *, now_dt=None, now_ts=None):
     return max(0, int((current_dt - buy_dt).total_seconds()))
 
 
-def evaluate_scalping_pyramid(stock, profit_rate, peak_profit, is_new_high):
+def _scalping_pyramid_quality_snapshot(stock, *, current_ai_score=None):
+    stock = stock if isinstance(stock, dict) else {}
+    feat = stock.get("last_reversal_features") or {}
+    if not isinstance(feat, dict):
+        feat = {}
+    ai_default = _safe_float(stock.get("rt_ai_prob"), 0.0) * 100.0
+    ai_score = current_ai_score if current_ai_score is not None else stock.get("current_ai_score")
+    raw_micro_vwap = feat.get("curr_vs_micro_vwap_bp")
+    return {
+        "current_ai_score": _safe_float(ai_score, ai_default),
+        "buy_pressure_10t": _safe_float(feat.get("buy_pressure_10t"), 0.0),
+        "tick_acceleration_ratio": _safe_float(feat.get("tick_acceleration_ratio"), 0.0),
+        "large_sell_print_detected": _safe_bool(feat.get("large_sell_print_detected"), True),
+        "curr_vs_micro_vwap_bp": _safe_float(raw_micro_vwap, None),
+    }
+
+
+def _scalping_pyramid_strong_continuation_context(
+    stock,
+    drawdown_from_peak,
+    is_new_high,
+    *,
+    current_ai_score=None,
+):
+    enabled = bool(getattr(TRADING_RULES, "SCALPING_PYRAMID_STRONG_CONTINUATION_ENABLED", False))
+    base_min_profit = max(
+        0.0,
+        _safe_float(getattr(TRADING_RULES, "SCALPING_PYRAMID_MIN_PROFIT_PCT", 1.5), 1.5),
+    )
+    strong_min_profit = _safe_float(
+        getattr(TRADING_RULES, "SCALPING_PYRAMID_STRONG_CONTINUATION_MIN_PROFIT_PCT", 0.9),
+        0.9,
+    )
+    strong_min_profit = max(0.0, min(base_min_profit, strong_min_profit))
+    max_drawdown = max(
+        0.0,
+        _safe_float(
+            getattr(TRADING_RULES, "SCALPING_PYRAMID_STRONG_CONTINUATION_MAX_DRAWDOWN_PCT", 0.20),
+            0.20,
+        ),
+    )
+    min_ai = _safe_float(getattr(TRADING_RULES, "SCALPING_PYRAMID_MIN_AI_SCORE", 70), 70.0)
+    min_buy_pressure = _safe_float(getattr(TRADING_RULES, "SCALPING_PYRAMID_MIN_BUY_PRESSURE", 60.0), 60.0)
+    min_tick_accel = _safe_float(getattr(TRADING_RULES, "SCALPING_PYRAMID_MIN_TICK_ACCEL", 0.5), 0.5)
+    max_micro_vwap_bp = _safe_float(
+        getattr(TRADING_RULES, "SCALPING_PYRAMID_MAX_MICRO_VWAP_BPS", 60.0),
+        60.0,
+    )
+    quality = _scalping_pyramid_quality_snapshot(stock, current_ai_score=current_ai_score)
+    micro_vwap_bp = quality["curr_vs_micro_vwap_bp"]
+    checks = {
+        "enabled": enabled,
+        "new_high": bool(is_new_high),
+        "peak_hold_ok": float(drawdown_from_peak) <= max_drawdown,
+        "ai_score_ok": quality["current_ai_score"] >= min_ai,
+        "buy_pressure_ok": quality["buy_pressure_10t"] >= min_buy_pressure,
+        "tick_accel_ok": quality["tick_acceleration_ratio"] >= min_tick_accel,
+        "large_sell_clear": not quality["large_sell_print_detected"],
+        "micro_vwap_available": micro_vwap_bp is not None,
+        "micro_vwap_not_overheated": micro_vwap_bp is not None and micro_vwap_bp <= max_micro_vwap_bp,
+    }
+    failed = [name for name, ok in checks.items() if not ok]
+    return {
+        "base_min_profit_pct": round(base_min_profit, 4),
+        "strong_continuation_min_profit_pct": round(strong_min_profit, 4),
+        "strong_continuation_max_drawdown_pct": round(max_drawdown, 4),
+        "strong_continuation_failed_checks": ",".join(failed),
+        "strong_continuation_allowed": not failed,
+        "current_ai_score": round(quality["current_ai_score"], 4),
+        "buy_pressure_10t": round(quality["buy_pressure_10t"], 4),
+        "tick_acceleration_ratio": round(quality["tick_acceleration_ratio"], 4),
+        "large_sell_print_detected": quality["large_sell_print_detected"],
+        "curr_vs_micro_vwap_bp": "-" if micro_vwap_bp is None else round(micro_vwap_bp, 4),
+    }
+
+
+def evaluate_scalping_pyramid(stock, profit_rate, peak_profit, is_new_high, current_ai_score=None):
     """
     스캘핑 불타기(PYRAMID) 평가: 1차는 profit/peak 기반 단순 조건.
     TODO: VWAP/RSI/ATR 기반 필터 추가
     """
     result = _base_result()
 
-    min_profit = float(getattr(TRADING_RULES, 'SCALPING_PYRAMID_MIN_PROFIT_PCT', 1.8))
-    if profit_rate < min_profit:
+    profit_rate = _safe_float(profit_rate, 0.0)
+    peak_profit = _safe_float(peak_profit, profit_rate)
+    base_min_profit = max(
+        0.0,
+        _safe_float(getattr(TRADING_RULES, 'SCALPING_PYRAMID_MIN_PROFIT_PCT', 1.5), 1.5),
+    )
+    drawdown_from_peak = max(0.0, float(peak_profit - profit_rate))
+    continuation_context = _scalping_pyramid_strong_continuation_context(
+        stock,
+        drawdown_from_peak,
+        is_new_high,
+        current_ai_score=current_ai_score,
+    )
+    effective_min_profit = base_min_profit
+    profit_gate_mode = "base"
+    if profit_rate < base_min_profit:
+        strong_min_profit = _safe_float(
+            continuation_context.get("strong_continuation_min_profit_pct"),
+            base_min_profit,
+        )
+        if profit_rate >= strong_min_profit and continuation_context.get("strong_continuation_allowed"):
+            effective_min_profit = strong_min_profit
+            profit_gate_mode = "strong_continuation"
+        else:
+            result.update(continuation_context)
+            result.update(
+                {
+                    "reason": "profit_not_enough",
+                    "profit_gate_mode": "base",
+                    "min_profit_pct": round(base_min_profit, 4),
+                    "drawdown_from_peak": round(drawdown_from_peak, 4),
+                    "is_new_high": bool(is_new_high),
+                }
+            )
+            return result
+
+    if profit_rate < effective_min_profit:
+        result.update(continuation_context)
         result["reason"] = "profit_not_enough"
+        result["profit_gate_mode"] = profit_gate_mode
+        result["min_profit_pct"] = round(effective_min_profit, 4)
+        result["drawdown_from_peak"] = round(drawdown_from_peak, 4)
+        result["is_new_high"] = bool(is_new_high)
         return result
 
-    drawdown_from_peak = float(peak_profit - profit_rate)
     if not (is_new_high or drawdown_from_peak <= 0.3):
+        result.update(continuation_context)
         result["reason"] = "trend_not_strong"
+        result["profit_gate_mode"] = profit_gate_mode
+        result["min_profit_pct"] = round(effective_min_profit, 4)
+        result["drawdown_from_peak"] = round(drawdown_from_peak, 4)
+        result["is_new_high"] = bool(is_new_high)
         return result
 
+    result.update(continuation_context)
     result["should_add"] = True
     result["add_type"] = "PYRAMID"
     result["reason"] = "scalping_pyramid_ok"
+    result["profit_gate_mode"] = profit_gate_mode
+    result["min_profit_pct"] = round(effective_min_profit, 4)
+    result["drawdown_from_peak"] = round(drawdown_from_peak, 4)
+    result["is_new_high"] = bool(is_new_high)
     return result
 
 
@@ -913,7 +1053,7 @@ def describe_dynamic_scale_in_qty(
     )
     buy_pressure = _safe_float(feat.get("buy_pressure_10t"), 0.0)
     tick_accel = _safe_float(feat.get("tick_acceleration_ratio"), 0.0)
-    large_sell = bool(feat.get("large_sell_print_detected", True))
+    large_sell = _safe_bool(feat.get("large_sell_print_detected"), True)
     profit_rate = _safe_float(action.get("profit_rate"), 0.0)
     peak_profit = _safe_float(action.get("peak_profit"), profit_rate)
     drawdown_from_peak = max(0.0, peak_profit - profit_rate)

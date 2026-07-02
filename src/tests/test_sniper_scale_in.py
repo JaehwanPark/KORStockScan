@@ -234,13 +234,29 @@ def test_rising_missed_one_share_entry_blocks_price_above_cap():
 
 
 def test_rising_missed_one_share_entry_excludes_upper_limit_proximity():
+    below_exclude = evaluate_rising_missed_one_share_entry(
+        {
+            "strategy": "SCALPING",
+            "position_tag": "SCANNER",
+            "scanner_promotion_id": "scan-0",
+            "price_delta_since_first_seen_pct": 2.0,
+            "fluctuation": 25.9,
+        },
+        strategy="SCALPING",
+        position_tag="SCANNER",
+        feature_enabled=True,
+        has_open_pending=False,
+        already_holding=False,
+        min_delta_pct=0.5,
+        current_price=6_400,
+    )
     decision = evaluate_rising_missed_one_share_entry(
         {
             "strategy": "SCALPING",
             "position_tag": "SCANNER",
             "scanner_promotion_id": "scan-1",
             "price_delta_since_first_seen_pct": 2.0,
-            "fluctuation": 27.0,
+            "fluctuation": 26.0,
         },
         strategy="SCALPING",
         position_tag="SCANNER",
@@ -251,11 +267,35 @@ def test_rising_missed_one_share_entry_excludes_upper_limit_proximity():
         current_price=6_500,
     )
 
+    assert below_exclude.allowed is True
     assert decision.allowed is False
     assert decision.reason == BLOCK_UPPER_LIMIT_PROXIMITY
     assert decision.log_fields["rising_missed_class"] == RISING_MISSED_CLASS_SOURCE_QUALITY_EXCLUDED
     assert decision.log_fields["rising_missed_one_share_eligible"] is False
-    assert decision.log_fields["rising_missed_one_share_entry_fluctuation_pct"] == "27.00"
+    assert decision.log_fields["rising_missed_one_share_entry_fluctuation_pct"] == "26.00"
+    assert decision.log_fields["rising_missed_one_share_entry_upper_limit_exclude_pct"] == "26.00"
+    assert decision.log_fields["rising_missed_one_share_entry_upper_limit_gap_to_limit_pct"] == "4.00"
+
+
+def test_upper_limit_submit_hard_block_keeps_default_27_pct_boundary(monkeypatch):
+    monkeypatch.delenv("KORSTOCKSCAN_SCALP_UPPER_LIMIT_ENTRY_BLOCK_ENABLED", raising=False)
+    monkeypatch.delenv("KORSTOCKSCAN_SCALP_UPPER_LIMIT_ENTRY_BLOCK_PCT", raising=False)
+
+    below = state_handlers._upper_limit_entry_block_fields(
+        strategy="SCALPING",
+        stock={},
+        ws_data={"fluctuation": 26.5},
+    )
+    at_threshold = state_handlers._upper_limit_entry_block_fields(
+        strategy="SCALPING",
+        stock={},
+        ws_data={"fluctuation": 27.0},
+    )
+
+    assert below["blocked"] is False
+    assert below["upper_limit_entry_block_threshold_pct"] == "27.00"
+    assert at_threshold["blocked"] is True
+    assert at_threshold["block_reason"] == BLOCK_UPPER_LIMIT_PROXIMITY
 
 
 def test_rising_missed_one_share_collapse_overrides_existing_order_tag():
@@ -931,6 +971,59 @@ def test_rising_missed_one_share_submit_blocks_upper_limit_before_deposit(monkey
     assert logs[-1][1]["broker_order_forbidden"] is True
 
 
+def test_scalping_buy_submit_blocks_upper_limit_before_deposit(monkeypatch):
+    state_handlers.TRADING_RULES = CONFIG
+    logs = []
+
+    monkeypatch.delenv("KORSTOCKSCAN_SCALP_UPPER_LIMIT_ENTRY_BLOCK_ENABLED", raising=False)
+    monkeypatch.delenv("KORSTOCKSCAN_SCALP_UPPER_LIMIT_ENTRY_BLOCK_PCT", raising=False)
+    monkeypatch.setattr(
+        state_handlers.kiwoom_orders,
+        "get_deposit",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("deposit should not be queried")),
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_entry_pipeline",
+        lambda stock, code, stage, **fields: logs.append((stage, fields)),
+    )
+
+    stock = {
+        "id": 1,
+        "name": "UPPER_NORMAL",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "target_buy_price": 6_500,
+    }
+    runtime = {
+        "strategy": "SCALPING",
+        "ratio": 0.2,
+        "curr_price": 6_500,
+        "fluctuation": 27.0,
+        "liquidity_value": 100_000_000,
+        "msg": "normal",
+        "now_ts": 1000.0,
+        "cooldowns": {},
+        "alerted_stocks": set(),
+    }
+
+    result = state_handlers._submit_watching_triggered_entry(
+        stock,
+        "123456",
+        {"curr": 6_500, "fluctuation": 27.0},
+        1,
+        runtime,
+    )
+
+    assert result is False
+    assert logs[-1][0] == "upper_limit_entry_proximity_block"
+    assert logs[-1][1]["block_reason"] == BLOCK_UPPER_LIMIT_PROXIMITY
+    assert logs[-1][1]["forced_entry_reason"] == "-"
+    assert logs[-1][1]["forced_entry_qty"] == 0
+    assert logs[-1][1]["actual_order_submitted"] is False
+    assert logs[-1][1]["broker_order_forbidden"] is True
+
+
 def test_state_handler_parse_holding_entry_date_accepts_date_types():
     assert state_handlers._parse_holding_entry_date(date(2026, 5, 27)) == date(2026, 5, 27)
     assert state_handlers._parse_holding_entry_date(datetime(2026, 5, 27, 9, 0)) == date(2026, 5, 27)
@@ -1374,6 +1467,141 @@ def test_scalping_pyramid_signal():
     assert result["add_type"] == "PYRAMID"
 
 
+def test_scalping_pyramid_strong_continuation_can_use_lower_profit_gate():
+    original = scale_in.TRADING_RULES
+    scale_in.TRADING_RULES = replace(
+        CONFIG,
+        SCALPING_PYRAMID_MIN_PROFIT_PCT=1.5,
+        SCALPING_PYRAMID_STRONG_CONTINUATION_ENABLED=True,
+        SCALPING_PYRAMID_STRONG_CONTINUATION_MIN_PROFIT_PCT=0.9,
+        SCALPING_PYRAMID_STRONG_CONTINUATION_MAX_DRAWDOWN_PCT=0.20,
+        SCALPING_PYRAMID_MIN_AI_SCORE=70,
+        SCALPING_PYRAMID_MIN_BUY_PRESSURE=60.0,
+        SCALPING_PYRAMID_MIN_TICK_ACCEL=0.5,
+        SCALPING_PYRAMID_MAX_MICRO_VWAP_BPS=60.0,
+    )
+    try:
+        result = scale_in.evaluate_scalping_pyramid(
+            {
+                "last_reversal_features": {
+                    "buy_pressure_10t": 72.0,
+                    "tick_acceleration_ratio": 0.85,
+                    "large_sell_print_detected": False,
+                    "curr_vs_micro_vwap_bp": 24.0,
+                },
+            },
+            profit_rate=1.0,
+            peak_profit=1.12,
+            is_new_high=True,
+            current_ai_score=74,
+        )
+    finally:
+        scale_in.TRADING_RULES = original
+
+    assert result["should_add"] is True
+    assert result["reason"] == "scalping_pyramid_ok"
+    assert result["profit_gate_mode"] == "strong_continuation"
+    assert result["min_profit_pct"] == 0.9
+
+
+def test_scalping_pyramid_strong_continuation_default_off_preserves_base_gate():
+    original = scale_in.TRADING_RULES
+    scale_in.TRADING_RULES = replace(
+        CONFIG,
+        SCALPING_PYRAMID_MIN_PROFIT_PCT=1.5,
+        SCALPING_PYRAMID_STRONG_CONTINUATION_ENABLED=False,
+        SCALPING_PYRAMID_STRONG_CONTINUATION_MIN_PROFIT_PCT=0.9,
+        SCALPING_PYRAMID_STRONG_CONTINUATION_MAX_DRAWDOWN_PCT=0.20,
+        SCALPING_PYRAMID_MIN_AI_SCORE=70,
+        SCALPING_PYRAMID_MIN_BUY_PRESSURE=60.0,
+        SCALPING_PYRAMID_MIN_TICK_ACCEL=0.5,
+        SCALPING_PYRAMID_MAX_MICRO_VWAP_BPS=60.0,
+    )
+    try:
+        result = scale_in.evaluate_scalping_pyramid(
+            {
+                "last_reversal_features": {
+                    "buy_pressure_10t": 72.0,
+                    "tick_acceleration_ratio": 0.85,
+                    "large_sell_print_detected": False,
+                    "curr_vs_micro_vwap_bp": 24.0,
+                },
+            },
+            profit_rate=1.0,
+            peak_profit=1.12,
+            is_new_high=True,
+            current_ai_score=74,
+        )
+    finally:
+        scale_in.TRADING_RULES = original
+
+    assert result["should_add"] is False
+    assert result["reason"] == "profit_not_enough"
+    assert result["profit_gate_mode"] == "base"
+    assert "enabled" in result["strong_continuation_failed_checks"]
+
+
+def test_scalping_pyramid_lower_profit_gate_fails_closed_without_quality_evidence():
+    original = scale_in.TRADING_RULES
+    scale_in.TRADING_RULES = replace(
+        CONFIG,
+        SCALPING_PYRAMID_MIN_PROFIT_PCT=1.5,
+        SCALPING_PYRAMID_STRONG_CONTINUATION_ENABLED=True,
+        SCALPING_PYRAMID_STRONG_CONTINUATION_MIN_PROFIT_PCT=0.9,
+    )
+    try:
+        result = scale_in.evaluate_scalping_pyramid(
+            {"current_ai_score": 65},
+            profit_rate=1.0,
+            peak_profit=1.06,
+            is_new_high=True,
+        )
+    finally:
+        scale_in.TRADING_RULES = original
+
+    assert result["should_add"] is False
+    assert result["reason"] == "profit_not_enough"
+    assert result["profit_gate_mode"] == "base"
+    assert "ai_score_ok" in result["strong_continuation_failed_checks"]
+    assert "tick_accel_ok" in result["strong_continuation_failed_checks"]
+
+
+def test_scalping_pyramid_namkwang_like_profit_stays_blocked():
+    original = scale_in.TRADING_RULES
+    scale_in.TRADING_RULES = replace(
+        CONFIG,
+        SCALPING_PYRAMID_MIN_PROFIT_PCT=1.5,
+        SCALPING_PYRAMID_STRONG_CONTINUATION_ENABLED=True,
+        SCALPING_PYRAMID_STRONG_CONTINUATION_MIN_PROFIT_PCT=0.9,
+        SCALPING_PYRAMID_STRONG_CONTINUATION_MAX_DRAWDOWN_PCT=0.20,
+        SCALPING_PYRAMID_MIN_AI_SCORE=70,
+        SCALPING_PYRAMID_MIN_BUY_PRESSURE=60.0,
+        SCALPING_PYRAMID_MIN_TICK_ACCEL=0.5,
+    )
+    try:
+        result = scale_in.evaluate_scalping_pyramid(
+            {
+                "current_ai_score": 65,
+                "last_reversal_features": {
+                    "buy_pressure_10t": 71.43,
+                    "tick_acceleration_ratio": 0.111,
+                    "large_sell_print_detected": False,
+                    "curr_vs_micro_vwap_bp": 34.71,
+                },
+            },
+            profit_rate=0.58,
+            peak_profit=1.06,
+            is_new_high=False,
+        )
+    finally:
+        scale_in.TRADING_RULES = original
+
+    assert result["should_add"] is False
+    assert result["reason"] == "profit_not_enough"
+    assert result["min_profit_pct"] == 1.5
+    assert result["profit_gate_mode"] == "base"
+
+
 def test_swing_pyramid_signal():
     result = scale_in.evaluate_swing_pyramid(
         {"strategy": "KOSPI_ML"},
@@ -1765,6 +1993,44 @@ def test_stat_action_decision_snapshot_separates_pyramid_namespace(monkeypatch):
     assert "reversal_add" not in logs[0][1]["rejected_actions"]
 
 
+def test_pyramid_block_log_includes_profit_gate_probe(monkeypatch):
+    logs = []
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_holding_pipeline",
+        lambda stock, code, stage, **fields: logs.append((stage, fields)),
+    )
+
+    state_handlers._log_scale_in_arm_blocked(
+        {"name": "PYR"},
+        "654321",
+        arm="PYRAMID",
+        blocked_reason="profit_not_enough",
+        profit_rate=1.0,
+        peak_profit=1.06,
+        current_ai_score=65,
+        held_sec=45,
+        gate={"reason": "ok"},
+        probe={
+            "profit_gate_mode": "base",
+            "min_profit_pct": 1.5,
+            "base_min_profit_pct": 1.5,
+            "strong_continuation_min_profit_pct": 0.9,
+            "strong_continuation_allowed": False,
+            "strong_continuation_failed_checks": "ai_score_ok,tick_accel_ok",
+            "drawdown_from_peak": 0.06,
+            "is_new_high": True,
+        },
+    )
+
+    assert logs[0][0] == "pyramid_blocked_reason"
+    assert logs[0][1]["scale_in_blocker_reason"] == "profit_not_enough"
+    assert logs[0][1]["profit_gate_mode"] == "base"
+    assert logs[0][1]["min_profit_pct"] == 1.5
+    assert logs[0][1]["strong_continuation_allowed"] is False
+    assert logs[0][1]["strong_continuation_failed_checks"] == "ai_score_ok,tick_accel_ok"
+
+
 def test_add_count_increment_once_on_partial_fills(monkeypatch):
     # Prepare execution receipts environment
     receipts.ACTIVE_TARGETS = []
@@ -2083,7 +2349,7 @@ def test_execute_scalping_pyramid_sends_resolved_best_bid_with_capped_percent_bu
         "last_reversal_features": {
             "buy_pressure_10t": 75.0,
             "tick_acceleration_ratio": 0.8,
-            "large_sell_print_detected": False,
+            "large_sell_print_detected": "false",
             "curr_vs_micro_vwap_bp": 10.0,
         },
     }
@@ -12295,6 +12561,252 @@ def test_scalp_preset_tp_soft_stop_avg_down_intercepts_before_sell(monkeypatch):
     assert submitted[-1]["sell_intercept_context"] == "preset_tp_after_cancel_remaining"
     assert submitted[-1]["exit_rule"] == "scalp_preset_soft_stop_confirmed"
     assert stock["late_loss_avg_down_retry_used"] is True
+
+
+def test_late_loss_avg_down_quote_recovery_defer_blocks_sell_fallthrough(monkeypatch):
+    state_handlers.TRADING_RULES = replace(
+        CONFIG,
+        SCALE_IN_REQUIRE_HISTORY_TABLE=False,
+        SCALP_LATE_LOSS_AVG_DOWN_ENABLED=True,
+        SCALP_LATE_LOSS_AVG_DOWN_QUOTE_RECOVERY_DEFER_ENABLED=True,
+        SCALP_LATE_LOSS_AVG_DOWN_QUOTE_RECOVERY_DEFER_SEC=90,
+        SCALP_LATE_LOSS_AVG_DOWN_QUOTE_RECOVERY_EMERGENCY_PCT=-5.0,
+    )
+    pipeline_logs = []
+    process_calls = []
+    stock = {
+        "id": 13,
+        "code": "486990",
+        "name": "NOTA",
+        "status": "HOLDING",
+        "strategy": "SCALPING",
+        "buy_price": 22600,
+        "buy_qty": 1,
+        "rt_ai_prob": 0.71,
+    }
+
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_holding_pipeline",
+        lambda stock, code, stage, **fields: pipeline_logs.append((stage, fields)),
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_evaluate_late_loss_avg_down_retry",
+        lambda *args, **kwargs: {
+            "should_retry": True,
+            "reason": "late_loss_avg_down_retry",
+            "used_count": 0,
+            "giveback_pct": 3.09,
+            "action": {"should_add": True, "add_type": "AVG_DOWN", "reason": "late_loss_avg_down_retry"},
+        },
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "can_consider_scale_in",
+        lambda *args, **kwargs: {"allowed": True, "reason": "ok"},
+    )
+
+    def fake_process_scale_in_action(**kwargs):
+        process_calls.append(kwargs)
+        state_handlers._record_scale_in_submit_block(
+            kwargs["stock"],
+            stage="scale_in_price_guard_block",
+            reason="invalid_quote",
+            add_reason="late_loss_avg_down_retry",
+            add_type="AVG_DOWN",
+            now_ts=1000.0,
+        )
+        return None
+
+    monkeypatch.setattr(state_handlers, "_process_scale_in_action", fake_process_scale_in_action)
+
+    result = state_handlers._attempt_late_loss_avg_down_retry_before_sell(
+        stock=stock,
+        code="486990",
+        ws_data={"curr": 21900},
+        strategy="SCALPING",
+        market_regime="BULL",
+        admin_id=1,
+        sell_reason_type="LOSS",
+        exit_rule="scalp_soft_stop_pct",
+        profit_rate=-3.32,
+        peak_profit=-0.23,
+        current_ai_score=71,
+        held_sec=4377,
+        now_ts=1000.0,
+        context_fields={"sell_intercept_context": "standard_exit_before_submit"},
+    )
+
+    assert result["attempted"] is True
+    assert result["submitted"] is False
+    assert result["deferred"] is True
+    assert result["reason"] == "late_loss_avg_down_quote_recovery_defer"
+    assert result["remaining_sec"] == 90
+    assert process_calls
+    assert "late_loss_avg_down_retry_used" not in stock
+    assert "late_loss_avg_down_retry_count" not in stock
+    assert stock["late_loss_avg_down_quote_recovery_started_at"] == 1000.0
+    assert stock["late_loss_avg_down_quote_recovery_until"] == 1090.0
+
+    by_stage = {stage: fields for stage, fields in pipeline_logs}
+    assert by_stage["late_loss_avg_down_retry_candidate"]["gate_reason"] == "ok"
+    assert by_stage["late_loss_avg_down_retry_blocked"]["block_reason"] == "scale_in_submit_failed_or_guard_blocked"
+    defer = by_stage["late_loss_avg_down_quote_recovery_defer"]
+    assert defer["block_reason"] == "invalid_quote"
+    assert defer["price_guard_stage"] == "scale_in_price_guard_block"
+    assert defer["quote_recovery_defer_sec"] == 90
+    assert defer["actual_order_submitted"] is False
+    assert defer["broker_order_forbidden"] is True
+
+
+def test_late_loss_avg_down_quote_recovery_defer_expires(monkeypatch):
+    state_handlers.TRADING_RULES = replace(
+        CONFIG,
+        SCALE_IN_REQUIRE_HISTORY_TABLE=False,
+        SCALP_LATE_LOSS_AVG_DOWN_ENABLED=True,
+        SCALP_LATE_LOSS_AVG_DOWN_QUOTE_RECOVERY_DEFER_ENABLED=True,
+        SCALP_LATE_LOSS_AVG_DOWN_QUOTE_RECOVERY_DEFER_SEC=90,
+        SCALP_LATE_LOSS_AVG_DOWN_QUOTE_RECOVERY_EMERGENCY_PCT=-5.0,
+    )
+    stock = {
+        "id": 13,
+        "code": "486990",
+        "name": "NOTA",
+        "status": "HOLDING",
+        "strategy": "SCALPING",
+        "buy_price": 22600,
+        "buy_qty": 1,
+        "rt_ai_prob": 0.71,
+        "late_loss_avg_down_quote_recovery_started_at": 1000.0,
+        "late_loss_avg_down_quote_recovery_until": 1090.0,
+    }
+
+    monkeypatch.setattr(state_handlers, "_log_holding_pipeline", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        state_handlers,
+        "_evaluate_late_loss_avg_down_retry",
+        lambda *args, **kwargs: {
+            "should_retry": True,
+            "reason": "late_loss_avg_down_retry",
+            "used_count": 1,
+            "giveback_pct": 3.09,
+            "action": {"should_add": True, "add_type": "AVG_DOWN", "reason": "late_loss_avg_down_retry"},
+        },
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "can_consider_scale_in",
+        lambda *args, **kwargs: {"allowed": True, "reason": "ok"},
+    )
+
+    def fake_process_scale_in_action(**kwargs):
+        state_handlers._record_scale_in_submit_block(
+            kwargs["stock"],
+            stage="scale_in_price_guard_block",
+            reason="invalid_quote",
+            add_reason="late_loss_avg_down_retry",
+            add_type="AVG_DOWN",
+            now_ts=1091.0,
+        )
+        return None
+
+    monkeypatch.setattr(state_handlers, "_process_scale_in_action", fake_process_scale_in_action)
+
+    result = state_handlers._attempt_late_loss_avg_down_retry_before_sell(
+        stock=stock,
+        code="486990",
+        ws_data={"curr": 21900},
+        strategy="SCALPING",
+        market_regime="BULL",
+        admin_id=1,
+        sell_reason_type="LOSS",
+        exit_rule="scalp_soft_stop_pct",
+        profit_rate=-3.32,
+        peak_profit=-0.23,
+        current_ai_score=71,
+        held_sec=4468,
+        now_ts=1091.0,
+    )
+
+    assert result["attempted"] is True
+    assert result["submitted"] is False
+    assert result.get("deferred") is not True
+    assert result["reason"] == "scale_in_submit_failed_or_guard_blocked"
+    assert "late_loss_avg_down_quote_recovery_until" not in stock
+    assert "late_loss_avg_down_quote_recovery_started_at" not in stock
+
+
+def test_late_loss_avg_down_quote_recovery_defer_ignores_non_quote_block(monkeypatch):
+    state_handlers.TRADING_RULES = replace(
+        CONFIG,
+        SCALE_IN_REQUIRE_HISTORY_TABLE=False,
+        SCALP_LATE_LOSS_AVG_DOWN_ENABLED=True,
+        SCALP_LATE_LOSS_AVG_DOWN_QUOTE_RECOVERY_DEFER_ENABLED=True,
+    )
+    stock = {
+        "id": 13,
+        "code": "486990",
+        "name": "NOTA",
+        "status": "HOLDING",
+        "strategy": "SCALPING",
+        "buy_price": 22600,
+        "buy_qty": 1,
+        "rt_ai_prob": 0.71,
+    }
+
+    monkeypatch.setattr(state_handlers, "_log_holding_pipeline", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        state_handlers,
+        "_evaluate_late_loss_avg_down_retry",
+        lambda *args, **kwargs: {
+            "should_retry": True,
+            "reason": "late_loss_avg_down_retry",
+            "used_count": 0,
+            "giveback_pct": 3.09,
+            "action": {"should_add": True, "add_type": "AVG_DOWN", "reason": "late_loss_avg_down_retry"},
+        },
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "can_consider_scale_in",
+        lambda *args, **kwargs: {"allowed": True, "reason": "ok"},
+    )
+
+    def fake_process_scale_in_action(**kwargs):
+        state_handlers._record_scale_in_submit_block(
+            kwargs["stock"],
+            stage="scale_in_price_guard_block",
+            reason="position_cap_or_budget",
+            add_reason="late_loss_avg_down_retry",
+            add_type="AVG_DOWN",
+            now_ts=1000.0,
+        )
+        return None
+
+    monkeypatch.setattr(state_handlers, "_process_scale_in_action", fake_process_scale_in_action)
+
+    result = state_handlers._attempt_late_loss_avg_down_retry_before_sell(
+        stock=stock,
+        code="486990",
+        ws_data={"curr": 21900},
+        strategy="SCALPING",
+        market_regime="BULL",
+        admin_id=1,
+        sell_reason_type="LOSS",
+        exit_rule="scalp_soft_stop_pct",
+        profit_rate=-3.32,
+        peak_profit=-0.23,
+        current_ai_score=71,
+        held_sec=4377,
+        now_ts=1000.0,
+    )
+
+    assert result["attempted"] is True
+    assert result["submitted"] is False
+    assert result.get("deferred") is not True
+    assert result["reason"] == "scale_in_submit_failed_or_guard_blocked"
+    assert "late_loss_avg_down_quote_recovery_until" not in stock
 
 
 def test_scalp_preset_tp_soft_stop_override_recovers_above_trigger_and_resets(monkeypatch):
