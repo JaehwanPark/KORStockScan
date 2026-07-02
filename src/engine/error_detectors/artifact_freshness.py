@@ -190,6 +190,7 @@ ARTIFACT_REGISTRY: list[dict[str, Any]] = [
         "path_template": "data/report/threshold_cycle_postclose_status/threshold_cycle_postclose_{date}.status.json",
         "max_staleness_sec": 3600,
         "critical": True,
+        "one_shot": True,
         "trading_day_only": True,
         "window_start": (21, 40),
         "window_end": (22, 10),

@@ -366,6 +366,34 @@ class TestArtifactFreshnessDetector:
             assert result.details.get("threshold_postclose_report_status") == "pass_one_shot"
             assert result.details.get("threshold_postclose_report_age_sec", 0) > 1800
 
+    def test_threshold_postclose_status_succeeded_is_one_shot_completion(self, tmp_path):
+        status_file = tmp_path / "threshold_cycle_postclose.status.json"
+        status_file.write_text('{"status":"succeeded","target_date":"2026-07-02"}', encoding="utf-8")
+        stale_ts = time.time() - 7200
+        os.utime(status_file, (stale_ts, stale_ts))
+        now = datetime.now()
+        artifact = {
+            "id": "threshold_postclose_status",
+            "path_template": str(status_file),
+            "max_staleness_sec": 3600,
+            "critical": True,
+            "one_shot": True,
+            "window_start": (now.hour, now.minute),
+            "window_end": (23, 59),
+            "json_status_field": "status",
+            "json_ok_values": ["succeeded"],
+        }
+        with (
+            patch(_TRADING_MOCK, return_value=True),
+            patch("src.engine.error_detectors.artifact_freshness.ARTIFACT_REGISTRY", [artifact]),
+        ):
+            detector = ArtifactFreshnessDetector()
+            result = detector.check()
+            assert result.severity == "pass"
+            assert result.details.get("threshold_postclose_status_content_status") == "succeeded"
+            assert result.details.get("threshold_postclose_status_status") == "pass_one_shot"
+            assert result.details.get("threshold_postclose_status_age_sec", 0) > 3600
+
     def test_daily_recommendations_csv_content_date_suppresses_mtime_stale_inside_window(self, tmp_path):
         reco_file = tmp_path / "daily_recommendations_v2.csv"
         content_date = (datetime.now() - timedelta(days=1)).date().isoformat()
