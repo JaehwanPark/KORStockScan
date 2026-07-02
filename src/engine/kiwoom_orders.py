@@ -652,7 +652,17 @@ def get_my_inventory(token):
 # ==========================================
 # 2. 주문 실행 API
 # ==========================================
-def _resolve_buy_order_type(order_type, price=0, tif=None):
+def _is_nxt_market_order_type(order_type) -> bool:
+    return str(order_type or "").strip().upper() in {"3", "MARKET"}
+
+
+def _nxt_market_order_remap_required(order_type, dmst_stex_tp=None, *, now=None) -> bool:
+    if not _is_nxt_market_order_type(order_type):
+        return False
+    return str(dmst_stex_tp or "").strip().upper() == "NXT"
+
+
+def _resolve_buy_order_type(order_type, price=0, tif=None, dmst_stex_tp=None, *, now=None):
     """
     Normalize legacy buy order request into Kiwoom order code + price.
 
@@ -669,6 +679,12 @@ def _resolve_buy_order_type(order_type, price=0, tif=None):
     tif_value = str(tif or "DAY").upper()
     requested_type = str(order_type or "6").upper()
     requested_price = int(price or 0)
+    if _nxt_market_order_remap_required(requested_type, dmst_stex_tp, now=now):
+        log_info(
+            "[NXT_MARKET_BUY_REMAP] NXT plain market buy is unsupported; "
+            "using best-limit style buy order type 6"
+        )
+        return "6", 0
     if requested_type in {"3", "MARKET"} and _pre0830_sor_market_order_remap_required(requested_type):
         log_info(
             "[PRE0830_BUY_MARKET_REMAP] SOR market buy is unavailable before 08:30; "
@@ -710,9 +726,16 @@ def _pre0830_sor_market_sell_remap_required(order_type, now=None) -> bool:
     return _pre0830_sor_market_order_remap_required(order_type, now=now)
 
 
-def _resolve_sell_order_type(order_type, price=0, *, now=None):
+def _resolve_sell_order_type(order_type, price=0, dmst_stex_tp=None, *, now=None):
     normalized_type = str(order_type)
     normalized_price = int(price or 0)
+    resolved_exchange = resolve_order_dmst_stex_tp(dmst_stex_tp, now=now)
+    if _nxt_market_order_remap_required(normalized_type, resolved_exchange, now=now):
+        log_info(
+            "[NXT_MARKET_SELL_REMAP] NXT plain market sell is unsupported; "
+            "using best-limit style sell order type 6"
+        )
+        return "6", 0
     if _pre0830_sor_market_sell_remap_required(normalized_type, now=now):
         log_info(
             "[PRE0830_SELL_MARKET_REMAP] SOR market sell is unavailable before 08:30; "
@@ -729,6 +752,8 @@ def _is_sor_market_time_reject(data) -> bool:
         "571034" in code
         or "571034" in msg
         or "SOR 시장가 주문은 08:30 이후" in msg
+        or "407022" in msg
+        or "주문이 불가능한 주문종류" in msg
     )
 
 
@@ -1065,11 +1090,17 @@ def send_buy_order_market(
         'api-id': 'kt10000'
     }
 
-    normalized_type, normalized_price = _resolve_buy_order_type(order_type, price=price, tif=tif)
+    resolved_dmst_stex_tp = resolve_order_dmst_stex_tp(dmst_stex_tp)
+    normalized_type, normalized_price = _resolve_buy_order_type(
+        order_type,
+        price=price,
+        tif=tif,
+        dmst_stex_tp=resolved_dmst_stex_tp,
+    )
     ord_price_str = str(int(normalized_price)) if str(normalized_type) == "00" and normalized_price > 0 else ""
 
     payload = {
-        "dmst_stex_tp": resolve_order_dmst_stex_tp(dmst_stex_tp),
+        "dmst_stex_tp": resolved_dmst_stex_tp,
         "stk_cd": clean_code,
         "ord_qty": str(qty),
         "ord_uv": ord_price_str,
@@ -1195,7 +1226,12 @@ def send_sell_order_market(
         'api-id': 'kt10001'
     }
 
-    normalized_type, normalized_price = _resolve_sell_order_type(order_type, price=price)
+    resolved_dmst_stex_tp = resolve_order_dmst_stex_tp(dmst_stex_tp)
+    normalized_type, normalized_price = _resolve_sell_order_type(
+        order_type,
+        price=price,
+        dmst_stex_tp=resolved_dmst_stex_tp,
+    )
 
     # 💡 [핵심] 지정가("00") 매도일 경우 단가를 호가단위로 정규화합니다.
     ord_price_str = ""
@@ -1215,7 +1251,7 @@ def send_sell_order_market(
             ord_price_str = str(int(price))
 
     payload = {
-        "dmst_stex_tp": resolve_order_dmst_stex_tp(dmst_stex_tp),
+        "dmst_stex_tp": resolved_dmst_stex_tp,
         "stk_cd": clean_code,
         "ord_qty": str(qty),
         "ord_uv": ord_price_str,
