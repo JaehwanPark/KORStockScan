@@ -768,14 +768,13 @@ def _blocker_taxonomy(
             "route": "auto_governor_backpressure_observation",
         }
     if reason == "entry_cooldown_active" or stage == "same_symbol_loss_reentry_cooldown":
-        actionable = count >= ACTIONABLE_COOLDOWN_MIN_COUNT and delta >= ACTIONABLE_COOLDOWN_MIN_DELTA_PCT
         return {
             "class": "intended_guard",
-            "actionable": actionable,
-            "major_blocker": actionable,
+            "actionable": False,
+            "major_blocker": False,
             "route": (
                 "review_cooldown_opportunity_loss_or_wrong_scope"
-                if actionable
+                if count >= ACTIONABLE_COOLDOWN_MIN_COUNT and delta >= ACTIONABLE_COOLDOWN_MIN_DELTA_PCT
                 else "normal_cooldown_guard"
             ),
         }
@@ -809,8 +808,8 @@ def _blocker_taxonomy(
         }
     return {
         "class": "strategy_reject",
-        "actionable": True,
-        "major_blocker": True,
+        "actionable": False,
+        "major_blocker": False,
         "route": "strategy_or_ai_reject_attribution",
     }
 
@@ -915,6 +914,21 @@ def _event_time(row: dict[str, Any]) -> str:
     return str(row.get("emitted_at") or "")
 
 
+def _normalize_event_bound(value: str | None, *, target_date: str) -> str | None:
+    if not value:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    if "T" in text:
+        return text
+    try:
+        parsed_time = dt_time.fromisoformat(text)
+    except ValueError:
+        return text
+    return f"{target_date}T{parsed_time.isoformat()}"
+
+
 def _top_counter(counter: Counter[Any], *, limit: int = 10, key_name: str = "key") -> list[dict[str, Any]]:
     return [{key_name: key, "count": count} for key, count in counter.most_common(limit)]
 
@@ -924,14 +938,17 @@ def _real_rows(
     *,
     since: str | None = None,
     event_until: str | None = None,
+    target_date: str,
 ) -> list[dict[str, Any]]:
     selected = []
+    normalized_since = _normalize_event_bound(since, target_date=target_date)
+    normalized_until = _normalize_event_bound(event_until, target_date=target_date)
     latest_forced_scout_at_by_code: dict[str, datetime] = {}
     for row in rows:
         event_time = _event_time(row)
-        if since and event_time < since:
+        if normalized_since and event_time < normalized_since:
             continue
-        if event_until and event_time > event_until:
+        if normalized_until and event_time > normalized_until:
             continue
         code = str(row.get("stock_code") or "").strip()
         fields = row.get("fields") if isinstance(row.get("fields"), dict) else {}
@@ -1974,12 +1991,14 @@ def build_report(
     falling_threshold_pct: float = -0.1,
 ) -> dict[str, Any]:
     all_rows = _read_jsonl(pipeline_path)
-    source_rows = [row for row in all_rows if not event_until or _event_time(row) <= event_until]
+    normalized_since = _normalize_event_bound(since, target_date=target_date)
+    normalized_until = _normalize_event_bound(event_until, target_date=target_date)
+    source_rows = [row for row in all_rows if not normalized_until or _event_time(row) <= normalized_until]
     full_grouped = _entry_events(source_rows)
     rows = source_rows
-    if since:
-        rows = [row for row in rows if _event_time(row) >= since]
-    real_rows = _real_rows(all_rows, since=since, event_until=event_until)
+    if normalized_since:
+        rows = [row for row in rows if _event_time(row) >= normalized_since]
+    real_rows = _real_rows(all_rows, since=since, event_until=event_until, target_date=target_date)
     grouped = _entry_events(rows)
     real_entry_event_count = sum(len(events) for events in grouped.values())
     summaries = [

@@ -265,3 +265,28 @@ This file is cumulative. Do not append every 10-minute loop result here. Loop-le
 - `runtime_effect=false`
 - `allowed_runtime_apply=false`
 - This changed diagnostic/report classification only. It did not change thresholds, provider route, bot state, order submission, cooldown behavior, stale/latency/broker/account/order/quantity guards, or hard safety.
+
+## 10. 2026-07-03 Intraday Window And Major Blocker Taxonomy Repair
+
+### Decision
+
+- Intraday blocker diagnostics must interpret time-only `since`/`event_until` values against the target date, matching the flow report window contract.
+- Strategy rejects and intended cooldown guards are non-major for intraday actionable-budget purposes; source freshness, unknown latency, and submit hard guards remain actionable major candidates.
+
+### Change
+
+- `intraday_entry_blocker_diagnostics` normalizes time-only window bounds for filtering.
+- `actionable_major_blocker_counts` no longer includes strategy rejects or cooldown intended guards.
+- Added regression tests for time-only window bounds, repeated high-delta cooldown, and strategy reject major-count suppression.
+
+### Validation
+
+- `PYTHONPATH=. .venv/bin/pytest src/tests/test_intraday_entry_blocker_diagnostics.py src/tests/test_intraday_entry_flow_report.py -q` passed with `60 passed`.
+- `PYTHONPATH=. .venv/bin/python -m py_compile src/engine/monitoring/intraday_entry_blocker_diagnostics.py src/engine/monitoring/intraday_entry_flow_report.py src/tests/test_intraday_entry_blocker_diagnostics.py src/tests/test_intraday_entry_flow_report.py` passed.
+- `git diff --check` passed.
+
+### Operating Boundary
+
+- `runtime_effect=false`
+- `allowed_runtime_apply=false`
+- This changed diagnostic filtering and taxonomy only. It did not change thresholds, provider route, bot state, order submission, cooldown behavior, stale/latency/broker/account/order/quantity guards, or hard safety.

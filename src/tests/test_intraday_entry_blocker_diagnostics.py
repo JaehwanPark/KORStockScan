@@ -544,6 +544,38 @@ def test_build_report_treats_same_symbol_loss_reentry_cooldown_as_intended_guard
     ]
 
 
+def test_build_report_keeps_repeated_high_delta_cooldown_non_major(tmp_path):
+    path = tmp_path / "pipeline_events_2026-06-23.jsonl"
+    rows = [
+        _event("000001", "A", "scalping_scanner_candidate_promoted", {"price_delta_since_first_seen_pct": "4.00"}),
+        _event(
+            "000001",
+            "A",
+            "scalping_scanner_watching_runtime_skip",
+            {"price_delta_since_first_seen_pct": "4.00", "skip_reason": "entry_cooldown_active"},
+        ),
+        _event(
+            "000001",
+            "A",
+            "scalping_scanner_watching_runtime_skip",
+            {"price_delta_since_first_seen_pct": "4.00", "skip_reason": "entry_cooldown_active"},
+        ),
+    ]
+    path.write_text("\n".join(json.dumps(row, ensure_ascii=False) for row in rows), encoding="utf-8")
+
+    report = build_report(target_date="2026-06-23", pipeline_path=path, generated_at="fixed")
+
+    assert report["blocker_taxonomy"]["actionable_major_blocker_counts"] == []
+    assert report["blocker_taxonomy"]["suppressed_non_actionable_counts"] == [
+        {
+            "class": "intended_guard",
+            "stage": "scalping_scanner_watching_runtime_skip",
+            "reason": "entry_cooldown_active",
+            "count": 2,
+        }
+    ]
+
+
 def test_build_report_splits_full_eval_deferred_then_evaluated_status(tmp_path):
     path = tmp_path / "pipeline_events_2026-06-23.jsonl"
     rows = [
@@ -790,6 +822,49 @@ def test_build_report_excludes_recovery_observations_from_blockers(tmp_path):
     assert item["latest_blocker"]["reason"] == "below_strength_base"
     assert report["summary"]["repeated_zero_strength_history_workorder_count"] == 0
     assert report["source_quality_workorders"]["rising_missed_repeated_zero_strength_history"] == []
+
+
+def test_build_report_keeps_strategy_rejects_out_of_actionable_major_counts(tmp_path):
+    path = tmp_path / "pipeline_events_2026-06-23.jsonl"
+    rows = [
+        _event("000001", "A", "scalping_scanner_candidate_promoted", {"price_delta_since_first_seen_pct": "1.30"}),
+        _event(
+            "000001",
+            "A",
+            "blocked_strength_momentum",
+            {"price_delta_since_first_seen_pct": "1.30", "reason": "below_strength_base"},
+        ),
+        _event(
+            "000001",
+            "A",
+            "ai_confirmed_terminal_no_budget",
+            {
+                "price_delta_since_first_seen_pct": "1.30",
+                "terminal_reason": "blocked_ai_score_below_buy_score_threshold",
+                "ai_score": "62",
+            },
+        ),
+    ]
+    path.write_text("\n".join(json.dumps(row, ensure_ascii=False) for row in rows), encoding="utf-8")
+
+    report = build_report(target_date="2026-06-23", pipeline_path=path, generated_at="fixed")
+
+    assert report["blocker_taxonomy"]["actionable_major_blocker_counts"] == []
+    assert report["summary"]["actionable_major_blocker_count"] == 0
+    assert report["blocker_taxonomy"]["suppressed_non_actionable_counts"] == [
+        {
+            "class": "strategy_reject",
+            "stage": "blocked_strength_momentum",
+            "reason": "below_strength_base",
+            "count": 1,
+        },
+        {
+            "class": "strategy_reject",
+            "stage": "ai_confirmed_terminal_no_budget",
+            "reason": "blocked_ai_score_below_buy_score_threshold",
+            "count": 1,
+        },
+    ]
 
 
 def test_build_report_treats_recovered_stale_ws_as_recovered_not_stale_eval(tmp_path):
@@ -1298,6 +1373,47 @@ def test_build_report_since_keeps_previously_promoted_active_rising_candidate(tm
     assert item["promoted_in_event_window"] is False
     assert item["first_promoted_at"] == "2026-06-23T15:55:00"
     assert item["latest_blocker"]["reason"] == "blocked_ai_score_below_buy_score_threshold"
+
+
+def test_build_report_time_only_window_bounds_filter_with_target_date(tmp_path):
+    path = tmp_path / "pipeline_events_2026-06-23.jsonl"
+    rows = [
+        _event(
+            "000001",
+            "A",
+            "scalping_scanner_candidate_promoted",
+            {"price_delta_since_first_seen_pct": "1.20"},
+            "2026-06-23T08:03:00",
+        ),
+        _event(
+            "000001",
+            "A",
+            "blocked_strength_momentum",
+            {"price_delta_since_first_seen_pct": "1.20", "reason": "below_buy_ratio"},
+            "2026-06-23T08:04:00",
+        ),
+        _event(
+            "000002",
+            "B",
+            "scalping_scanner_candidate_promoted",
+            {"price_delta_since_first_seen_pct": "2.00"},
+            "2026-06-23T08:06:00",
+        ),
+    ]
+    path.write_text("\n".join(json.dumps(row, ensure_ascii=False) for row in rows), encoding="utf-8")
+
+    report = build_report(
+        target_date="2026-06-23",
+        pipeline_path=path,
+        generated_at="fixed",
+        since="08:00",
+        event_until="08:05",
+    )
+
+    assert report["event_window"] == {"since": "08:00", "until": "08:05"}
+    assert report["summary"]["promoted_symbol_count"] == 1
+    assert report["summary"]["rising_missed_buy_count"] == 1
+    assert report["rising_missed_buy"][0]["stock_code"] == "000001"
 
 
 def test_build_report_reads_gzip_pipeline_events(tmp_path):
