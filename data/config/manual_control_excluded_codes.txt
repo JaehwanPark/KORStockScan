@@ -1,1 +1,2 @@
 038500 # Sampyo Cement manual control
+005930 # Samsung Electronics manual control
