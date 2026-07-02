@@ -91,6 +91,16 @@ def _default_diagnostic_path(target_date: str) -> Path:
     )
 
 
+def _default_intraday_feedback_path(target_date: str) -> Path:
+    return (
+        PROJECT_ROOT
+        / "data"
+        / "report"
+        / "rising_missed_intraday_feedback"
+        / f"rising_missed_intraday_feedback_{target_date}.json"
+    )
+
+
 def _default_output_paths(target_date: str) -> tuple[Path, Path]:
     base = PROJECT_ROOT / "data" / "report" / "rising_missed_scout_workorder"
     return (
@@ -391,9 +401,67 @@ def _build_operational_workorders(
     losers: list[dict[str, Any]],
     current_missed: dict[str, Any],
     scale_in_bottleneck: dict[str, Any],
+    intraday_feedback: dict[str, Any],
     source_paths: dict[str, str],
 ) -> list[dict[str, Any]]:
     orders: list[dict[str, Any]] = []
+    feedback_summary = (
+        intraday_feedback.get("summary")
+        if isinstance(intraday_feedback.get("summary"), dict)
+        else {}
+    )
+    feedback_count = int(feedback_summary.get("rising_missed_avg_down_ge2_count") or 0)
+    initial_quality_fail_count = int(feedback_summary.get("initial_quality_fail_count") or 0)
+    if feedback_count > 0:
+        orders.append(
+            {
+                "order_id": "order_rising_missed_initial_quality_feedback_loop",
+                "title": "rising missed initial quality feedback loop",
+                "source_report_type": "rising_missed_scout_workorder",
+                "lifecycle_stage": "entry",
+                "target_subsystem": "rising_missed_entry_classifier",
+                "route": "instrumentation_order",
+                "mapped_family": "rising_missed_initial_quality_feedback_loop",
+                "threshold_family": "rising_missed_initial_quality_feedback_loop",
+                "improvement_type": "source_only_intraday_feedback_workorder",
+                "confidence": "same_day_source_only",
+                "priority": 1 if initial_quality_fail_count > 0 else 2,
+                "runtime_effect": False,
+                "allowed_runtime_apply": False,
+                "implementation_status": "implemented",
+                "implementation_provenance": {
+                    "implementation_type": "rising_missed_avg_down_ge2_intraday_feedback_bridge",
+                    "decision_authority": "source_only_intraday_feedback_no_runtime_mutation",
+                    "rising_missed_avg_down_ge2_count": feedback_count,
+                    "initial_quality_fail_count": initial_quality_fail_count,
+                    "runtime_effect": False,
+                    "allowed_runtime_apply": False,
+                    "root_cause_closure_status_hint": "implementation_done",
+                },
+                "expected_ev_effect": (
+                    "Feed same-day rising-missed entries that required at least two average-down attempts back "
+                    "into the rising-missed classifier as initial-quality fail/review labels before expansion."
+                ),
+                "evidence": [
+                    f"rising_missed_avg_down_ge2_count={feedback_count}",
+                    f"initial_quality_fail_count={initial_quality_fail_count}",
+                    "feedback_label_counts="
+                    + _counter_text(feedback_summary.get("feedback_label_counts") or [], key_name="feedback_label"),
+                    "runtime_effect=false",
+                ],
+                "source_paths": list(source_paths.values()),
+                "files_likely_touched": [
+                    "src/engine/monitoring/rising_missed_intraday_feedback.py",
+                    "src/engine/scalping/rising_missed_one_share_entry.py",
+                    "src/engine/monitoring/intraday_entry_blocker_diagnostics.py",
+                ],
+                "acceptance_tests": [
+                    "PYTHONPATH=. .venv/bin/pytest src/tests/test_rising_missed_intraday_feedback.py src/tests/test_rising_missed_scout_workorder.py src/tests/test_build_code_improvement_workorder.py",
+                    "feedback remains source-only and cannot mutate intraday runtime thresholds, broker/order guards, provider route, bot state, or scale-in quantity/caps",
+                ],
+                "forbidden_uses": SCALE_IN_FORBIDDEN_USES,
+            }
+        )
     if winners:
         orders.append(
             {
@@ -619,15 +687,18 @@ def build_report(
     pipeline_path: Path | None = None,
     post_sell_path: Path | None = None,
     diagnostic_path: Path | None = None,
+    intraday_feedback_path: Path | None = None,
     generated_at: str | None = None,
 ) -> dict[str, Any]:
     pipeline_path = pipeline_path or _default_pipeline_path(target_date)
     post_sell_path = post_sell_path or _default_post_sell_path(target_date)
     diagnostic_path = diagnostic_path or _default_diagnostic_path(target_date)
+    intraday_feedback_path = intraday_feedback_path or _default_intraday_feedback_path(target_date)
     generated_at = generated_at or datetime.now(KST).isoformat(timespec="seconds")
 
     post_sell_rows = _load_jsonl(post_sell_path)
     diagnostic = _load_json(diagnostic_path)
+    intraday_feedback = _load_json(intraday_feedback_path)
     forced = _index_forced_scouts(_iter_jsonl(pipeline_path))
     preliminary_outcomes = _joined_scout_outcomes(
         forced=forced,
@@ -650,13 +721,20 @@ def build_report(
         "pipeline_events": str(pipeline_path),
         "post_sell_candidates": str(post_sell_path),
         "intraday_entry_blocker_diagnostics": str(diagnostic_path),
+        "rising_missed_intraday_feedback": str(intraday_feedback_path),
     }
     code_improvement_orders = _build_operational_workorders(
         winners=winners,
         losers=losers,
         current_missed=current_missed,
         scale_in_bottleneck=scale_in_bottleneck,
+        intraday_feedback=intraday_feedback,
         source_paths=source_paths,
+    )
+    intraday_feedback_summary = (
+        intraday_feedback.get("summary")
+        if isinstance(intraday_feedback.get("summary"), dict)
+        else {}
     )
     return {
         "schema_version": 1,
@@ -695,11 +773,18 @@ def build_report(
             ),
             "scale_in_qty_block_record_count": scale_in_bottleneck.get("qty_block_record_count"),
             "scale_in_executed_record_count": scale_in_bottleneck.get("scale_in_executed_record_count"),
+            "intraday_feedback_avg_down_ge2_count": intraday_feedback_summary.get(
+                "rising_missed_avg_down_ge2_count", 0
+            ),
+            "intraday_feedback_initial_quality_fail_count": intraday_feedback_summary.get(
+                "initial_quality_fail_count", 0
+            ),
             "code_improvement_order_count": len(code_improvement_orders),
         },
         "profitable_forced_scout_examples": winners[:20],
         "loss_or_flat_forced_scout_examples": losers[:20],
         "current_missed_summary": current_missed,
+        "intraday_feedback_summary": intraday_feedback_summary,
         "scale_in_bottleneck_summary": scale_in_bottleneck,
         "code_improvement_orders": code_improvement_orders,
     }
@@ -760,6 +845,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--pipeline-path", type=Path)
     parser.add_argument("--post-sell-path", type=Path)
     parser.add_argument("--diagnostic-path", type=Path)
+    parser.add_argument("--intraday-feedback-path", type=Path)
     parser.add_argument("--output-json", type=Path)
     parser.add_argument("--output-md", type=Path)
     parser.add_argument("--generated-at")
@@ -770,6 +856,7 @@ def main(argv: list[str] | None = None) -> int:
         pipeline_path=args.pipeline_path,
         post_sell_path=args.post_sell_path,
         diagnostic_path=args.diagnostic_path,
+        intraday_feedback_path=args.intraday_feedback_path,
         generated_at=args.generated_at,
     )
     default_json, default_md = _default_output_paths(args.target_date)

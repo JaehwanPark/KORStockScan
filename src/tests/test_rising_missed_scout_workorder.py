@@ -289,3 +289,56 @@ def test_build_report_streams_pipeline_jsonl_without_full_text_read(tmp_path, mo
 
     assert report["summary"]["forced_scout_record_count"] == 1
     assert report["summary"]["scale_in_executed_record_count"] == 1
+
+
+def test_build_report_ingests_intraday_feedback_order(tmp_path):
+    pipeline_path = tmp_path / "pipeline.jsonl"
+    post_sell_path = tmp_path / "post_sell.jsonl"
+    diagnostic_path = tmp_path / "diag.json"
+    intraday_feedback_path = tmp_path / "feedback.json"
+    pipeline_path.write_text(
+        json.dumps(
+            _event(
+                1,
+                "000001",
+                "feedback",
+                "rising_missed_one_share_entry",
+                {"forced_entry_reason": "rising_missed_one_share_entry"},
+            )
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    post_sell_path.write_text("", encoding="utf-8")
+    diagnostic_path.write_text(json.dumps({"rising_missed_buy": []}), encoding="utf-8")
+    intraday_feedback_path.write_text(
+        json.dumps(
+            {
+                "summary": {
+                    "rising_missed_avg_down_ge2_count": 2,
+                    "initial_quality_fail_count": 1,
+                    "feedback_label_counts": [
+                        {"feedback_label": "rising_missed_initial_quality_fail", "count": 1},
+                        {"feedback_label": "rising_missed_initial_quality_review", "count": 1},
+                    ],
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    report = mod.build_report(
+        "2026-07-02",
+        pipeline_path=pipeline_path,
+        post_sell_path=post_sell_path,
+        diagnostic_path=diagnostic_path,
+        intraday_feedback_path=intraday_feedback_path,
+        generated_at="fixed",
+    )
+
+    assert report["summary"]["intraday_feedback_avg_down_ge2_count"] == 2
+    assert report["summary"]["intraday_feedback_initial_quality_fail_count"] == 1
+    order = report["code_improvement_orders"][0]
+    assert order["mapped_family"] == "rising_missed_initial_quality_feedback_loop"
+    assert order["runtime_effect"] is False
+    assert "scale_in_guard_bypass" in order["forbidden_uses"]

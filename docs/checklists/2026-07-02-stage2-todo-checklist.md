@@ -25,19 +25,39 @@
 
 ## 장전 체크리스트 (08:45~09:00)
 
-- [ ] `[ThresholdEnvAutoApplyPreopen0702] threshold env 자동 apply 산출물 및 사용자 개입 여부 확인` (`Due: 2026-07-02`, `Slot: PREOPEN`, `TimeWindow: 08:50~08:55`, `Track: RuntimeStability`)
+- [x] `[ThresholdEnvAutoApplyPreopen0702] threshold env 자동 apply 산출물 및 사용자 개입 여부 확인` (`Due: 2026-07-02`, `Slot: PREOPEN`, `TimeWindow: 08:50~08:55`, `Track: RuntimeStability`)
   - Source: [threshold_cycle_ev_2026-07-01.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-07-01.json), [threshold_cycle_preopen_apply.py](/home/ubuntu/KORStockScan/src/engine/threshold_cycle_preopen_apply.py), [run_bot.sh](/home/ubuntu/KORStockScan/src/run_bot.sh)
   - 판정 기준: 전일 postclose EV와 당일 apply plan/runtime env를 확인하고 `auto_bounded_live` guard 통과분만 runtime env로 인정한다.
   - 금지: blocked family, approval artifact missing, same-stage owner conflict를 수동 env override로 우회하지 않는다.
   - 다음 액션: `applied_guard_passed_env`, `blocked_no_env`, `partial_apply_with_blocked_families`, `failed_preopen_wrapper`, `not_yet_due` 중 하나로 닫는다.
+  - 실행 결과: `applied_guard_passed_env`.
+  - 근거: [threshold_apply_2026-07-02.json](/home/ubuntu/KORStockScan/data/threshold_cycle/apply_plans/threshold_apply_2026-07-02.json) status=`auto_bounded_live_ready`, apply_mode=`auto_bounded_live`, runtime_change=`true`, source_date=`2026-07-01`, generated_at=`2026-07-02T07:35:01+09:00`, blocked=`0`, warnings=`0`.
+  - runtime env: [threshold_runtime_env_2026-07-02.json](/home/ubuntu/KORStockScan/data/threshold_cycle/runtime_env/threshold_runtime_env_2026-07-02.json) selected_families=`22`, generated_at=`2026-07-02T07:35:01+09:00`; [threshold_runtime_env_2026-07-02.env](/home/ubuntu/KORStockScan/data/threshold_cycle/runtime_env/threshold_runtime_env_2026-07-02.env) 생성 확인.
+  - 검증: [threshold_runtime_env_verify_2026-07-02.json](/home/ubuntu/KORStockScan/data/threshold_cycle/runtime_env/threshold_runtime_env_verify_2026-07-02.json) status=`pass`, passed=`true`, missing_family_count=`0`, findings=`0`, pid_env_available=`false`, pid_passed=`true`.
+  - Wrapper: [threshold_cycle_preopen_cron.log](/home/ubuntu/KORStockScan/logs/threshold_cycle_preopen_cron.log)에 `[DONE] threshold-cycle preopen target_date=2026-07-02 finished_at=2026-07-02T07:35:01+0900` 확인.
+  - 운영 경계: blocked family/approval missing/same-stage conflict를 수동 env override로 우회하지 않았고, 장중 threshold mutation 또는 broker/order/provider/bot/cap 변경을 수행하지 않았다.
 
-- [ ] `[RisingMissedScoutRuntimePreopen0702] rising_missed_scout_workorder 구현분 다음 장전 runtime 반영 여부 확인` (`Due: 2026-07-02`, `Slot: PREOPEN`, `TimeWindow: 08:55~09:00`, `Track: ScalpingLogic`)
+- [x] `[RisingMissedScoutRuntimePreopen0702] rising_missed_scout_workorder 구현분 다음 장전 runtime 반영 여부 확인` (`Due: 2026-07-02`, `Slot: PREOPEN`, `TimeWindow: 08:55~09:00`, `Track: ScalpingLogic`)
   - Source: [rising_missed_scout_workorder_2026-07-01.json](/home/ubuntu/KORStockScan/data/report/rising_missed_scout_workorder/rising_missed_scout_workorder_2026-07-01.json), [code_improvement_workorder_2026-07-01.json](/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-07-01.json), [threshold_apply_2026-07-02.json](/home/ubuntu/KORStockScan/data/threshold_cycle/apply_plans/threshold_apply_2026-07-02.json), [threshold_runtime_env_2026-07-02.json](/home/ubuntu/KORStockScan/data/threshold_cycle/runtime_env/threshold_runtime_env_2026-07-02.json), [threshold_runtime_env_verify_2026-07-02.json](/home/ubuntu/KORStockScan/data/threshold_cycle/runtime_env/threshold_runtime_env_verify_2026-07-02.json)
   - 판정 기준: 전일 `rising_missed_scout_workorder` 요약(code_improvement_order_count=`4`, forced_scout_with_post_sell_count=`23`, profitable_forced_scout_count=`17`, loss_or_flat_forced_scout_count=`6`, current_missed_count=`13`)과 구현 완료된 mapped family가 당일 PREOPEN apply plan/runtime env/verify에 반영됐는지 확인한다. source-only order는 별도 runtime family/env mapping과 guard 통과가 있을 때만 반영으로 인정한다.
   - 금지: `rising_missed_scout_workorder` 생성 또는 forced 1-share scout 손익만으로 runtime threshold mutation, stale submit bypass, broker/order guard 완화, provider/bot/cap 변경, real execution quality approval을 열지 않는다.
   - 다음 액션: `runtime_env_reflected_and_verified`, `implemented_but_runtime_not_selected`, `source_only_no_runtime_authority`, `blocked_by_apply_guard`, `report_missing_or_stale`, `verify_missing_or_failed` 중 하나로 닫는다.
+  - 실행 결과: `source_only_no_runtime_authority`.
+  - 근거: [rising_missed_scout_workorder_2026-07-01.json](/home/ubuntu/KORStockScan/data/report/rising_missed_scout_workorder/rising_missed_scout_workorder_2026-07-01.json) summary는 code_improvement_order_count=`4`, forced_scout_with_post_sell_count=`23`, profitable_forced_scout_count=`17`, loss_or_flat_forced_scout_count=`6`, current_missed_count=`24`를 기록했다. mapped_family는 `rising_missed_scout_post_sell_bridge`, `rising_missed_scout_loss_filter`, `rising_missed_scout_scale_in_price_guard_split`, `rising_missed_scout_scale_in_qty_evidence_split` 4개다.
+  - runtime 반영 판정: 4개 mapped_family 모두 [threshold_runtime_env_2026-07-02.json](/home/ubuntu/KORStockScan/data/threshold_cycle/runtime_env/threshold_runtime_env_2026-07-02.json)의 selected_families 22개에 포함되지 않는다. 이는 verify 실패가 아니라 source-only workorder가 별도 runtime family/env mapping과 apply guard를 통과하지 않은 상태다.
+  - workorder 대조: [code_improvement_workorder_2026-07-01.json](/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-07-01.json) summary는 rising_missed_scout_source_order_count=`4`, selected_implement_now_route_count=`0`, selected_unimplemented_runtime_effect_false_count=`0`로 닫혔다.
+  - 검증: [threshold_runtime_env_verify_2026-07-02.json](/home/ubuntu/KORStockScan/data/threshold_cycle/runtime_env/threshold_runtime_env_verify_2026-07-02.json) status=`pass`, missing_family_count=`0`, findings=`0`.
+  - 운영 경계: forced 1-share scout 손익을 normal BUY/submit/fill success 또는 real execution quality approval로 계산하지 않았고, stale submit bypass, broker/order guard 완화, provider/bot/cap/threshold 변경을 수행하지 않았다.
 
 ## 장중 체크리스트 (09:05~15:20)
+
+- [x] `[RisingMissedInitialQualityFeedbackLoop0702] rising_missed 후 avg_down_count>=2 장중 피드백 루프 구성` (`Due: 2026-07-02`, `Slot: INTRADAY`, `TimeWindow: 08:00~19:55`, `Track: ScalpingLogic`)
+  - Source: [rising_missed_intraday_feedback.py](/home/ubuntu/KORStockScan/src/engine/monitoring/rising_missed_intraday_feedback.py), [run_rising_missed_intraday_feedback.sh](/home/ubuntu/KORStockScan/deploy/run_rising_missed_intraday_feedback.sh), [install_stage2_ops_cron.sh](/home/ubuntu/KORStockScan/deploy/install_stage2_ops_cron.sh), [rising_missed_scout_workorder.py](/home/ubuntu/KORStockScan/src/engine/monitoring/rising_missed_scout_workorder.py)
+  - 판정 기준: `rising_missed_one_share_entry` forced scout 이후 holding snapshot에서 `avg_down_count>=2`가 발생한 record를 `record_id`로 join해 `rising_missed_initial_quality_fail|rising_missed_initial_quality_fail_open|rising_missed_scale_in_rescue_warning|rising_missed_initial_quality_review`로 라벨링하고, postclose workorder에 source-only 후속 주문으로 전달한다.
+  - 금지: 장중 feedback label만으로 runtime threshold mutation, broker/order/scale-in guard 완화, quantity/cap release, provider route, bot restart, forced scout success counting, real execution quality approval을 열지 않는다.
+  - 실행 결과: `implemented_source_only_intraday_feedback_loop`.
+  - 근거: `src.engine.monitoring.rising_missed_intraday_feedback --target-date YYYY-MM-DD --print-summary` producer와 5분 주기 wrapper `deploy/run_rising_missed_intraday_feedback.sh`를 추가했고, `deploy/install_stage2_ops_cron.sh`에 NXT 포함 `08:00~19:55` `RISING_MISSED_INTRADAY_FEEDBACK_5MIN` marker를 추가했다. `rising_missed_scout_workorder`는 `data/report/rising_missed_intraday_feedback/rising_missed_intraday_feedback_YYYY-MM-DD.json` summary를 읽어 `rising_missed_initial_quality_feedback_loop` source-only order로 전달한다.
+  - 검증: targeted pytest, py_compile, parser validation, wrapper dry-run, `git diff --check` 결과를 본 작업 종료 보고에 기록한다.
 
 - [ ] `[RuntimeEnvIntradayObserve0702] 전일 selected runtime family 장중 provenance 및 rollback guard 확인` (`Due: 2026-07-02`, `Slot: INTRADAY`, `TimeWindow: 09:05~09:20`, `Track: RuntimeStability`)
   - Source: [threshold_cycle_ev_2026-07-01.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-07-01.json)
