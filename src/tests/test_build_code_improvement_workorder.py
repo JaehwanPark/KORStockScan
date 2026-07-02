@@ -346,6 +346,65 @@ def test_build_code_improvement_workorder_adds_rising_missed_scout_orders(tmp_pa
     )
 
 
+def test_build_code_improvement_workorder_adds_one_share_threshold_opportunity_orders(tmp_path, monkeypatch):
+    source_dir = tmp_path / "one_share_threshold_opportunity"
+    report_dir = tmp_path / "report"
+    doc_dir = tmp_path / "docs"
+    source_dir.mkdir()
+    payload = {
+        "report_type": "one_share_threshold_opportunity",
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "code_improvement_orders": [
+            {
+                "order_id": "order_one_share_threshold_ai_score_near_buy_entry_hook_review",
+                "title": "one-share threshold opportunity entry hook review: ai_score_near_buy",
+                "target_subsystem": "scalping_entry_ai_score_recheck",
+                "route": "instrumentation_order",
+                "mapped_family": "entry_opportunity_recheck_runtime",
+                "threshold_family": "entry_opportunity_recheck_runtime",
+                "priority": 1,
+                "runtime_effect": True,
+                "allowed_runtime_apply": True,
+                "implementation_status": "needs_codex_instrumentation",
+                "implementation_provenance": {
+                    "implementation_type": "one_share_threshold_opportunity_audit",
+                    "runtime_effect": False,
+                    "allowed_runtime_apply": False,
+                },
+                "evidence": ["sample=12", "equal_weight_avg_profit_pct=0.42"],
+                "forbidden_uses": ["forced_one_share_success_counting"],
+            }
+        ],
+    }
+    (source_dir / "one_share_threshold_opportunity_2026-07-01.json").write_text(
+        json.dumps(payload, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-automation")
+    monkeypatch.setattr(mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing")
+    monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", tmp_path / "missing-ev")
+    monkeypatch.setattr(mod, "ONE_SHARE_THRESHOLD_OPPORTUNITY_DIR", source_dir)
+    monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_DIR", doc_dir)
+
+    report = mod.build_code_improvement_workorder("2026-07-01", max_orders=5)
+
+    orders = [
+        item for item in report["orders"] if item["source_report_type"] == "one_share_threshold_opportunity"
+    ]
+    assert report["summary"]["one_share_threshold_opportunity_source_order_count"] == 1
+    assert len(orders) == 1
+    assert orders[0]["runtime_effect"] is False
+    assert orders[0]["allowed_runtime_apply"] is False
+    assert orders[0]["actual_order_submitted"] is False
+    assert orders[0]["broker_order_forbidden"] is True
+    assert "broker_guard_bypass" in orders[0]["forbidden_uses"]
+    assert report["source"]["one_share_threshold_opportunity"] == str(
+        source_dir / "one_share_threshold_opportunity_2026-07-01.json"
+    )
+
+
 def test_build_code_improvement_workorder_adds_conversion_lane_orders(tmp_path, monkeypatch):
     automation_dir = tmp_path / "automation"
     conversion_dir = tmp_path / "conversion_lane"

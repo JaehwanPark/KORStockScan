@@ -163,6 +163,7 @@ def test_postclose_wrapper_runs_threshold_ev_before_and_after_workorder():
 
     sim_post_sell_idx = script.index("src.engine.sniper_post_sell_feedback")
     rising_missed_scout_idx = script.index("src.engine.monitoring.rising_missed_scout_workorder")
+    one_share_threshold_idx = script.index("src.engine.monitoring.one_share_threshold_opportunity")
     entry_adm_idx = script.index("src.engine.scalp_entry_action_decision_matrix")
     microstructure_idx = script.index("src.engine.scalping.microstructure_reaction_context")
     observation_preflight_idx = script.index("observation_source_quality_preflight")
@@ -171,6 +172,7 @@ def test_postclose_wrapper_runs_threshold_ev_before_and_after_workorder():
     context_attribution_idx = script.index("src.engine.lifecycle_ai_context --date \"$TARGET_DATE\" --mode attribution")
     context_idx = script.index("src.engine.lifecycle_ai_context --date \"$TARGET_DATE\" --mode context")
     assert observation_preflight_idx < scale_in_cf_idx < lifecycle_matrix_idx
+    assert rising_missed_scout_idx < one_share_threshold_idx < entry_adm_idx
     discovery_idx = script.index("src.engine.lifecycle_bucket_discovery")
     bridge_idx = script.index("src.engine.runtime_apply_bridge")
     verbosity_idx = script.index("src.engine.pipeline_event_verbosity_report")
@@ -340,6 +342,7 @@ def test_postclose_wrapper_waits_for_prerequisite_artifacts_before_downstream_st
     assert '"$PROJECT_DIR/data/report/ai_watching_score_smoothing_diagnostic/ai_watching_score_smoothing_diagnostic_${TARGET_DATE}.json"' in script
     assert '"$PROJECT_DIR/data/report/scalp_entry_action_decision_matrix/scalp_entry_action_decision_matrix_${TARGET_DATE}.json"' in script
     assert '"$PROJECT_DIR/data/report/rising_missed_scout_workorder/rising_missed_scout_workorder_${TARGET_DATE}.json"' in script
+    assert '"$PROJECT_DIR/data/report/one_share_threshold_opportunity/one_share_threshold_opportunity_${TARGET_DATE}.json"' in script
     assert '"$PROJECT_DIR/data/report/lifecycle_decision_matrix/lifecycle_decision_matrix_${TARGET_DATE}.json"' in script
     assert '"$PROJECT_DIR/data/report/lifecycle_bucket_discovery/lifecycle_bucket_discovery_${TARGET_DATE}.json"' in script
     assert '"$PROJECT_DIR/data/report/swing_lifecycle_decision_matrix/swing_lifecycle_decision_matrix_${TARGET_DATE}.json"' in script
@@ -365,6 +368,8 @@ def test_postclose_wrapper_waits_for_prerequisite_artifacts_before_downstream_st
     assert "pattern_lab_propagation_audit=$RUN_PATTERN_LAB_PROPAGATION_AUDIT" in script
     assert "scalp_entry_adm=$RUN_SCALP_ENTRY_ADM" in script
     assert "rising_missed_scout_workorder=$RUN_RISING_MISSED_SCOUT_WORKORDER" in script
+    assert "one_share_threshold_opportunity=$RUN_ONE_SHARE_THRESHOLD_OPPORTUNITY" in script
+    assert "one_share_threshold_opportunity_ai_provider=$ONE_SHARE_THRESHOLD_OPPORTUNITY_AI_PROVIDER" in script
     assert "lifecycle_decision_matrix=$RUN_LIFECYCLE_DECISION_MATRIX" in script
     assert "lifecycle_bucket_discovery=$RUN_LIFECYCLE_BUCKET_DISCOVERY" in script
     assert "runtime_apply_bridge=$RUN_RUNTIME_APPLY_BRIDGE" in script

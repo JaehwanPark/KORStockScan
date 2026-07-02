@@ -158,6 +158,69 @@ def display_gatekeeper_action_label(value: object) -> str:
 
 
 AI_RESPONSE_SCHEMA_REGISTRY = {
+    "one_share_threshold_opportunity_ai_review_v1": {
+        "type": "object",
+        "properties": {
+            "schema_version": {"type": "integer"},
+            "reviewer": {"type": "string"},
+            "candidate_reviews": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "candidate_id": {"type": "string"},
+                        "recommended_disposition": {
+                            "type": "string",
+                            "enum": [
+                                "keep_collecting",
+                                "code_patch_required",
+                                "attach_existing_entry_hook",
+                                "source_quality_blocker",
+                                "safety_veto",
+                                "reject",
+                            ],
+                        },
+                        "confidence": {"type": "string", "enum": ["low", "medium", "high"]},
+                        "reason": {"type": "string"},
+                        "required_followup": {"type": "array", "items": {"type": "string"}},
+                    },
+                    "required": [
+                        "candidate_id",
+                        "recommended_disposition",
+                        "confidence",
+                        "reason",
+                        "required_followup",
+                    ],
+                    "additionalProperties": False,
+                },
+            },
+            "audit": {
+                "type": "object",
+                "properties": {
+                    "status": {"type": "string", "enum": ["pass", "retry_required", "correction_required"]},
+                    "issues": {"type": "array", "items": {"type": "string"}},
+                    "reason": {"type": "string"},
+                },
+                "required": ["status", "issues", "reason"],
+                "additionalProperties": False,
+            },
+            "codex_directives": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "directive_type": {"type": "string"},
+                        "candidate_id": {"type": "string"},
+                        "reason": {"type": "string"},
+                    },
+                    "required": ["directive_type", "candidate_id", "reason"],
+                    "additionalProperties": False,
+                },
+            },
+        },
+        "required": ["schema_version", "reviewer", "candidate_reviews", "audit", "codex_directives"],
+        "additionalProperties": False,
+    },
     "swing_model_tier2_review_v1": {
         "type": "object",
         "properties": {

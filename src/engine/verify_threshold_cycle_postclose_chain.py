@@ -484,6 +484,9 @@ def _artifact_paths(target_date: str) -> dict[str, Path]:
         "scalp_entry_action_decision_matrix": REPORT_DIR
         / "scalp_entry_action_decision_matrix"
         / f"scalp_entry_action_decision_matrix_{target_date}.json",
+        "one_share_threshold_opportunity": REPORT_DIR
+        / "one_share_threshold_opportunity"
+        / f"one_share_threshold_opportunity_{target_date}.json",
         "buy_funnel_sentinel": REPORT_DIR / "buy_funnel_sentinel" / f"buy_funnel_sentinel_{target_date}.json",
         "lifecycle_decision_matrix": REPORT_DIR
         / "lifecycle_decision_matrix"
@@ -3955,6 +3958,12 @@ def build_threshold_cycle_postclose_verification(
         required_execution_flags = (*required_execution_flags, "producer_gap_discovery")
     if (
         done_line
+        and "one_share_threshold_opportunity" in execution_flags
+        and "one_share_threshold_opportunity" not in missing_execution_flags
+    ):
+        required_execution_flags = (*required_execution_flags, "one_share_threshold_opportunity")
+    if (
+        done_line
         and "stage_hook_workorder_discovery" in execution_flags
         and "stage_hook_workorder_discovery" not in missing_execution_flags
     ):
@@ -3998,6 +4007,7 @@ def build_threshold_cycle_postclose_verification(
             "pattern_lab_ai_review",
             "time_window_regime_counterfactual",
             "producer_gap_discovery",
+            "one_share_threshold_opportunity",
             "stage_hook_workorder_discovery",
             "stage_hook_runtime_scaffold",
             "pattern_lab_propagation_audit",
@@ -4017,6 +4027,7 @@ def build_threshold_cycle_postclose_verification(
         "pattern_lab_ai_review" if "pattern_lab_ai_review" in disabled_stage_flags else "",
         "time_window_regime_counterfactual" if "time_window_regime_counterfactual" in disabled_stage_flags else "",
         "producer_gap_discovery" if "producer_gap_discovery" in disabled_stage_flags else "",
+        "one_share_threshold_opportunity" if "one_share_threshold_opportunity" in disabled_stage_flags else "",
         "stage_hook_workorder_discovery" if "stage_hook_workorder_discovery" in disabled_stage_flags else "",
         "stage_hook_runtime_scaffold" if "stage_hook_runtime_scaffold" in disabled_stage_flags else "",
         "pattern_lab_propagation_audit" if "pattern_lab_propagation_audit" in disabled_stage_flags else "",
@@ -4053,6 +4064,8 @@ def build_threshold_cycle_postclose_verification(
         disabled_artifact_labels.add("time_window_regime_counterfactual")
     if "producer_gap_discovery" not in execution_flags:
         disabled_artifact_labels.add("producer_gap_discovery")
+    if "one_share_threshold_opportunity" not in execution_flags:
+        disabled_artifact_labels.add("one_share_threshold_opportunity")
     if "stage_hook_workorder_discovery" not in execution_flags:
         disabled_artifact_labels.add("stage_hook_workorder_discovery")
     if "stage_hook_runtime_scaffold" not in execution_flags:

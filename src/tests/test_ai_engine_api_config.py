@@ -20,6 +20,7 @@ def test_ai_response_schema_registry_covers_required_endpoints():
         "stage_hook_workorder_discovery_ai_review_v1",
         "runtime_apply_gap_ai_review_v1",
         "swing_bottom_rebound_policy_ai_review_v1",
+        "one_share_threshold_opportunity_ai_review_v1",
     }
 
 

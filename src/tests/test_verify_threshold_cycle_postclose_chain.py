@@ -391,6 +391,14 @@ def test_latest_run_lines_prefers_repaired_full_done_marker_after_partial_marker
     assert mod._parse_bool_flags(done_line)["lifecycle_bucket_discovery"] is True
 
 
+def test_artifact_paths_include_one_share_threshold_opportunity():
+    path = mod._artifact_paths("2026-07-02")["one_share_threshold_opportunity"]
+
+    assert str(path).endswith(
+        "data/report/one_share_threshold_opportunity/one_share_threshold_opportunity_2026-07-02.json"
+    )
+
+
 def test_postclose_verifier_fails_runtime_apply_gap_audit_fail(tmp_path, monkeypatch):
     project_root = tmp_path
     report_dir = project_root / "data" / "report"
@@ -3758,7 +3766,12 @@ def test_build_threshold_cycle_postclose_verification_prefers_workorder_lineage(
         "pattern_lab_currentness_audit_2026-05-12.json"
     )
     artifact_labels = {item["label"] for item in report["artifact_status"]}
-    assert {"market_panic_breadth", "panic_sell_defense", "panic_buying"}.issubset(artifact_labels)
+    assert {
+        "market_panic_breadth",
+        "panic_sell_defense",
+        "panic_buying",
+        "one_share_threshold_opportunity",
+    }.issubset(artifact_labels)
 
     log_path.write_text(
         "\n".join(
