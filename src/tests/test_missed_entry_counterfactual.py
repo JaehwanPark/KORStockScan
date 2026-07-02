@@ -62,11 +62,29 @@ def test_build_missed_entry_counterfactual_report(monkeypatch, tmp_path):
             },
             {
                 "pipeline": "ENTRY_PIPELINE",
+                "stage": "rising_missed_one_share_entry",
+                "stock_name": "라텐시위너",
+                "stock_code": "111111",
+                "record_id": 1,
+                "fields": {
+                    "source_signature": "OPEN_TOP,PRICE_JUMP_START",
+                    "scanner_promotion_reason": "price_jump_start_acceleration",
+                    "price_delta_since_first_seen_pct": "2.5",
+                    "rising_missed_class": "rising_missed_raw",
+                },
+                "emitted_at": "2026-04-09T10:00:03.500000",
+                "emitted_date": target_date,
+            },
+            {
+                "pipeline": "ENTRY_PIPELINE",
                 "stage": "latency_block",
                 "stock_name": "라텐시위너",
                 "stock_code": "111111",
                 "record_id": 1,
-                "fields": {"decision": "REJECT_DANGER", "reason": "latency_state_danger"},
+                "fields": {
+                    "decision": "REJECT_DANGER",
+                    "reason": "latency_state_danger",
+                },
                 "emitted_at": "2026-04-09T10:00:04",
                 "emitted_date": target_date,
             },
@@ -174,6 +192,13 @@ def test_build_missed_entry_counterfactual_report(monkeypatch, tmp_path):
     assert report["buy_signal_universe"]["metrics"]["missed_attempts"] == 2
     assert report["top_missed_winners"][0]["stock_code"] == "111111"
     winner = report["top_missed_winners"][0]
+    assert winner["rising_missed_one_share_entry_seen"] is True
+    assert winner["rising_missed_stage_count"] == 1
+    assert winner["rising_missed_postclose_label"] == "rising_missed_missed_winner_positive"
+    assert winner["source_signature"] == "OPEN_TOP,PRICE_JUMP_START"
+    assert winner["scanner_promotion_reason"] == "price_jump_start_acceleration"
+    assert winner["price_delta_since_first_seen_pct"] == 2.5
+    assert winner["rising_missed_class"] == "rising_missed_raw"
     assert winner["counterfactual_qty"] > 0
     assert report["top_missed_winners"][0]["counterfactual_qty_source"] == "sim_virtual_budget_dynamic_formula"
     assert report["top_missed_winners"][0]["virtual_budget_krw"] == 10_000_000
@@ -186,6 +211,31 @@ def test_build_missed_entry_counterfactual_report(monkeypatch, tmp_path):
     assert "blocked_liquidity" in stages
     tiers = {row["tier"] for row in report["buy_signal_universe"]["confidence_breakdown"]}
     assert "A" in tiers
+    rising_metrics = report["metrics"]["rising_missed_refinement"]
+    assert rising_metrics["decision_authority"] == "postclose_source_only_refinement_no_runtime_apply"
+    assert rising_metrics["runtime_effect"] is False
+    assert rising_metrics["allowed_runtime_apply"] is False
+    assert rising_metrics["rising_missed_candidate_count"] == 1
+    assert rising_metrics["rising_missed_missed_winner_count"] == 1
+    assert rising_metrics["rising_missed_share_of_all_missed_winners"] == 100.0
+    assert rising_metrics["by_terminal_stage"][0]["key"] == "latency_block"
+    assert rising_metrics["by_source_signature"][0]["key"] == "OPEN_TOP,PRICE_JUMP_START"
+    action_plan = report["metrics"]["rising_missed_refinement_action_plan"]
+    assert action_plan["metric_role"] == "source_quality_gate"
+    assert action_plan["plan_type"] == "rising_missed_classifier_refinement_source_only"
+    assert action_plan["decision"] == "hold_sample_collect_more_counterfactuals"
+    assert action_plan["operator_manual_query_required"] is False
+    assert action_plan["window_policy"] == "same_day_missed_entry_counterfactual_rows"
+    assert action_plan["sample_floor"] == 3
+    assert action_plan["primary_decision_metric"] == "diagnostic_win_rate"
+    assert action_plan["source_quality_gate"] == "pipeline_stage_flow_and_counterfactual_outcome_present"
+    assert action_plan["runtime_effect"] is False
+    assert action_plan["allowed_runtime_apply"] is False
+    assert "forced_scout_success_counting" in action_plan["forbidden_uses"]
+    assert action_plan["hold_sample_candidates"][0]["axis"] == "source_signature"
+    assert action_plan["hold_sample_candidates"][0]["key"] == "OPEN_TOP,PRICE_JUMP_START"
+    assert action_plan["next_actions"][0] == "surface_positive_prior_candidates_in_daily_calibration_source_bundle"
+    assert len(report["full_rows"]) == 2
 
 
 def test_missed_entry_counterfactual_splits_ai_and_pre_submit_cohorts(monkeypatch, tmp_path):
@@ -379,6 +429,64 @@ def test_missed_entry_counterfactual_splits_ai_and_pre_submit_cohorts(monkeypatc
     assert rows["444444"]["missed_submit_cohort"] == "early_accel_strong_bundle_recheck_skipped"
     assert rows["555555"]["missed_submit_cohort"] == "buy_like_no_submit_terminal"
     assert rows["555555"]["no_submit_reason"] == "broker_submit_not_reached"
+
+
+def test_missed_entry_counterfactual_preserves_full_rows_when_top_rows_are_limited(monkeypatch, tmp_path):
+    monkeypatch.setattr(report_mod, "DATA_DIR", tmp_path)
+    target_date = "2026-06-18"
+    events = []
+    for idx in range(4):
+        code = f"10000{idx}"
+        record_id = idx + 1
+        events.extend(
+            [
+                {
+                    "pipeline": "ENTRY_PIPELINE",
+                    "stage": "ai_confirmed",
+                    "stock_name": f"후보{idx}",
+                    "stock_code": code,
+                    "record_id": record_id,
+                    "fields": {"action": "BUY", "ai_score": "80"},
+                    "emitted_at": f"2026-06-18T10:0{idx}:01",
+                    "emitted_date": target_date,
+                },
+                {
+                    "pipeline": "ENTRY_PIPELINE",
+                    "stage": "entry_armed",
+                    "stock_name": f"후보{idx}",
+                    "stock_code": code,
+                    "record_id": record_id,
+                    "fields": {"target_buy_price": "10000", "ai_score": "80"},
+                    "emitted_at": f"2026-06-18T10:0{idx}:02",
+                    "emitted_date": target_date,
+                },
+                {
+                    "pipeline": "ENTRY_PIPELINE",
+                    "stage": "latency_block",
+                    "stock_name": f"후보{idx}",
+                    "stock_code": code,
+                    "record_id": record_id,
+                    "fields": {"reason": "latency_state_danger"},
+                    "emitted_at": f"2026-06-18T10:0{idx}:03",
+                    "emitted_date": target_date,
+                },
+            ]
+        )
+    _write_pipeline_events(tmp_path, target_date, events)
+
+    fake_kiwoom = types.SimpleNamespace(
+        get_kiwoom_token=lambda: "dummy",
+        get_minute_candles_ka10080=lambda _token, code, limit=700: [],
+    )
+    import src.utils as utils_pkg
+    monkeypatch.setattr(utils_pkg, "kiwoom_utils", fake_kiwoom, raising=False)
+    monkeypatch.setitem(sys.modules, "src.utils.kiwoom_utils", fake_kiwoom)
+
+    report = report_mod.build_missed_entry_counterfactual_report(target_date, top_n=1, token="dummy")
+
+    assert report["summary"]["total_candidates"] == 4
+    assert len(report["rows"]) == 3
+    assert len(report["full_rows"]) == 4
 
 
 def test_missed_entry_counterfactual_includes_snapshot_wait_or_skip_paths(monkeypatch, tmp_path):

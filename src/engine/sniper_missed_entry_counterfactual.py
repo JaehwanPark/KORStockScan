@@ -46,6 +46,7 @@ _BUY_AVOIDED_MAE_PCT = -0.8
 _BUY_AVOIDED_CLOSE_PCT = -0.3
 _BUY_TP_PCT = 0.5
 _BUY_SL_PCT = -0.5
+_RISING_MISSED_STAGE = "rising_missed_one_share_entry"
 _STAGE_LABELS = {
     "latency_block": "지연 리스크 차단",
     "blocked_liquidity": "유동성 차단",
@@ -474,6 +475,10 @@ def _build_buy_attempts(target_date: str, *, include_submitted: bool = True) -> 
             blocker_counts = Counter(
                 event.stage for event in attempt_events if _classify_stage(event.stage) in {"blocked", "waiting"}
             )
+            rising_missed_event = next(
+                (event for event in reversed(attempt_events) if event.stage == _RISING_MISSED_STAGE),
+                None,
+            )
 
             candidates.append(
                 {
@@ -499,6 +504,7 @@ def _build_buy_attempts(target_date: str, *, include_submitted: bool = True) -> 
                     "stage_flow": [event.stage for event in attempt_events],
                     "blocker_counts": dict(blocker_counts),
                     "terminal_fields": dict(terminal_event.fields),
+                    "rising_missed_fields": dict(rising_missed_event.fields) if rising_missed_event else {},
                     "no_submit_reason": terminal_event.fields.get("no_submit_reason"),
                     "missed_submit_cohort": _missed_submit_cohort(
                         {
@@ -688,6 +694,237 @@ def _build_cohort_outcome_metrics(items: list[dict]) -> dict:
     return metrics
 
 
+def _rising_missed_seen(item: dict) -> bool:
+    return any(str(stage or "") == _RISING_MISSED_STAGE for stage in (item.get("stage_flow") or []))
+
+
+def _rising_missed_stage_count(item: dict) -> int:
+    return sum(1 for stage in (item.get("stage_flow") or []) if str(stage or "") == _RISING_MISSED_STAGE)
+
+
+def _rising_missed_source_field(item: dict, key: str) -> str:
+    for field_name in ("rising_missed_fields", "terminal_fields"):
+        fields = item.get(field_name)
+        if isinstance(fields, dict):
+            value = fields.get(key)
+            if value not in (None, ""):
+                return str(value)
+    return ""
+
+
+def _rising_missed_postclose_label(item: dict) -> str:
+    if not _rising_missed_seen(item):
+        return "not_rising_missed"
+    outcome = str(item.get("outcome") or "NEUTRAL").upper()
+    if outcome == "MISSED_WINNER":
+        return "rising_missed_missed_winner_positive"
+    if outcome == "AVOIDED_LOSER":
+        return "rising_missed_avoided_loser_negative"
+    return "rising_missed_neutral"
+
+
+def _build_rising_missed_refinement_metrics(items: list[dict]) -> dict:
+    rising_rows = [item for item in items if _rising_missed_seen(item)]
+    total = len(items)
+    rising_total = len(rising_rows)
+    total_missed_winners = sum(1 for item in items if str(item.get("outcome") or "") == "MISSED_WINNER")
+    positive = sum(1 for item in rising_rows if str(item.get("outcome") or "") == "MISSED_WINNER")
+    negative = sum(1 for item in rising_rows if str(item.get("outcome") or "") == "AVOIDED_LOSER")
+    neutral = sum(1 for item in rising_rows if str(item.get("outcome") or "") == "NEUTRAL")
+
+    def _bucket_metrics(key_fn) -> list[dict]:
+        buckets: dict[str, list[dict]] = defaultdict(list)
+        for item in rising_rows:
+            key = str(key_fn(item) or "-")
+            buckets[key].append(item)
+        rows: list[dict] = []
+        for key, bucket_rows in sorted(buckets.items(), key=lambda pair: (-len(pair[1]), pair[0])):
+            bucket_total = len(bucket_rows)
+            bucket_positive = sum(1 for row in bucket_rows if str(row.get("outcome") or "") == "MISSED_WINNER")
+            bucket_negative = sum(1 for row in bucket_rows if str(row.get("outcome") or "") == "AVOIDED_LOSER")
+            rows.append(
+                {
+                    "key": key,
+                    "evaluated_candidates": bucket_total,
+                    "missed_winner_count": bucket_positive,
+                    "avoided_loser_count": bucket_negative,
+                    "neutral_count": bucket_total - bucket_positive - bucket_negative,
+                    "missed_winner_rate": _ratio(bucket_positive, bucket_total),
+                    "avoided_loser_rate": _ratio(bucket_negative, bucket_total),
+                    "avg_mfe_10m_pct": _avg(
+                        [_safe_float((row.get("metrics_10m") or {}).get("mfe_pct"), 0.0) for row in bucket_rows]
+                    ),
+                    "avg_mae_10m_pct": _avg(
+                        [_safe_float((row.get("metrics_10m") or {}).get("mae_pct"), 0.0) for row in bucket_rows]
+                    ),
+                }
+            )
+        return rows
+
+    return {
+        "metric_role": "source_quality_gate",
+        "decision_authority": "postclose_source_only_refinement_no_runtime_apply",
+        "window_policy": "same_day_missed_entry_counterfactual_rows",
+        "sample_floor": 1,
+        "primary_decision_metric": "diagnostic_win_rate",
+        "source_quality_gate": "pipeline_stage_flow_and_counterfactual_outcome_present",
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "forbidden_uses": [
+            "intraday_threshold_mutation",
+            "broker_order_submit",
+            "provider_route_change",
+            "bot_restart_trigger",
+            "forced_scout_success_counting",
+            "real_execution_quality_approval",
+        ],
+        "evaluated_candidates": total,
+        "rising_missed_candidate_count": rising_total,
+        "rising_missed_candidate_rate": _ratio(rising_total, total),
+        "rising_missed_missed_winner_count": positive,
+        "rising_missed_avoided_loser_count": negative,
+        "rising_missed_neutral_count": neutral,
+        "rising_missed_missed_winner_rate": _ratio(positive, rising_total),
+        "rising_missed_avoided_loser_rate": _ratio(negative, rising_total),
+        "rising_missed_share_of_all_missed_winners": _ratio(positive, total_missed_winners),
+        "by_terminal_stage": _bucket_metrics(lambda item: item.get("terminal_stage")),
+        "by_source_signature": _bucket_metrics(
+            lambda item: _rising_missed_source_field(item, "source_signature") or "-"
+        ),
+        "by_scanner_promotion_reason": _bucket_metrics(
+            lambda item: _rising_missed_source_field(item, "scanner_promotion_reason") or "-"
+        ),
+    }
+
+
+def _build_rising_missed_refinement_action_plan(metrics: dict) -> dict:
+    positive_candidates: list[dict] = []
+    exclusion_candidates: list[dict] = []
+    hold_sample_candidates: list[dict] = []
+    min_sample = 3
+
+    def _candidate(axis: str, row: dict, disposition: str, next_route: str, recommended_use: str) -> dict:
+        return {
+            "axis": axis,
+            "key": str(row.get("key") or "-"),
+            "disposition": disposition,
+            "next_route": next_route,
+            "recommended_use": recommended_use,
+            "evaluated_candidates": int(_safe_int(row.get("evaluated_candidates"), 0) or 0),
+            "missed_winner_count": int(_safe_int(row.get("missed_winner_count"), 0) or 0),
+            "avoided_loser_count": int(_safe_int(row.get("avoided_loser_count"), 0) or 0),
+            "neutral_count": int(_safe_int(row.get("neutral_count"), 0) or 0),
+            "missed_winner_rate": _safe_float(row.get("missed_winner_rate"), 0.0) or 0.0,
+            "avoided_loser_rate": _safe_float(row.get("avoided_loser_rate"), 0.0) or 0.0,
+            "avg_mfe_10m_pct": _safe_float(row.get("avg_mfe_10m_pct"), None),
+            "avg_mae_10m_pct": _safe_float(row.get("avg_mae_10m_pct"), None),
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+        }
+
+    for axis, metric_key in (
+        ("source_signature", "by_source_signature"),
+        ("scanner_promotion_reason", "by_scanner_promotion_reason"),
+        ("terminal_stage", "by_terminal_stage"),
+    ):
+        rows = metrics.get(metric_key) if isinstance(metrics.get(metric_key), list) else []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            sample = _safe_int(row.get("evaluated_candidates"), 0) or 0
+            missed_rate = _safe_float(row.get("missed_winner_rate"), 0.0) or 0.0
+            avoided_rate = _safe_float(row.get("avoided_loser_rate"), 0.0) or 0.0
+            if sample >= min_sample and missed_rate >= 60.0 and missed_rate >= avoided_rate + 20.0:
+                positive_candidates.append(
+                    _candidate(
+                        axis,
+                        row,
+                        "positive_prior_candidate",
+                        "rising_missed_classifier_refinement_workorder",
+                        "raise_source_only_watch_priority_for_matching_rising_missed_rows",
+                    )
+                )
+            elif sample >= min_sample and avoided_rate >= 50.0 and avoided_rate >= missed_rate + 20.0:
+                exclusion_candidates.append(
+                    _candidate(
+                        axis,
+                        row,
+                        "exclusion_or_confirmation_candidate",
+                        "rising_missed_classifier_refinement_workorder",
+                        "add_confirmation_or_exclusion_condition_before_priority_raise",
+                    )
+                )
+            elif sample > 0:
+                hold_sample_candidates.append(
+                    _candidate(
+                        axis,
+                        row,
+                        "hold_sample",
+                        "collect_more_postclose_counterfactual_samples",
+                        "do_not_change_classifier_priority_yet",
+                    )
+                )
+
+    positive_candidates = sorted(
+        positive_candidates,
+        key=lambda item: (
+            item["missed_winner_rate"] - item["avoided_loser_rate"],
+            item["evaluated_candidates"],
+            item["avg_mfe_10m_pct"] or 0.0,
+        ),
+        reverse=True,
+    )[:5]
+    exclusion_candidates = sorted(
+        exclusion_candidates,
+        key=lambda item: (
+            item["avoided_loser_rate"] - item["missed_winner_rate"],
+            item["evaluated_candidates"],
+            abs(item["avg_mae_10m_pct"] or 0.0),
+        ),
+        reverse=True,
+    )[:5]
+    hold_sample_candidates = sorted(
+        hold_sample_candidates,
+        key=lambda item: (item["evaluated_candidates"], item["missed_winner_rate"]),
+        reverse=True,
+    )[:5]
+
+    if positive_candidates:
+        decision = "source_only_positive_prior_candidates_ready"
+    elif exclusion_candidates:
+        decision = "source_only_exclusion_candidates_ready"
+    elif metrics.get("rising_missed_candidate_count"):
+        decision = "hold_sample_collect_more_counterfactuals"
+    else:
+        decision = "no_rising_missed_counterfactual_rows"
+
+    return {
+        "metric_role": "source_quality_gate",
+        "plan_type": "rising_missed_classifier_refinement_source_only",
+        "decision": decision,
+        "operator_manual_query_required": False,
+        "window_policy": metrics.get("window_policy") or "same_day_missed_entry_counterfactual_rows",
+        "sample_floor": min_sample,
+        "primary_decision_metric": metrics.get("primary_decision_metric") or "diagnostic_win_rate",
+        "source_quality_gate": metrics.get("source_quality_gate")
+        or "pipeline_stage_flow_and_counterfactual_outcome_present",
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "sample_floor_for_candidate": min_sample,
+        "positive_prior_candidates": positive_candidates,
+        "exclusion_or_confirmation_candidates": exclusion_candidates,
+        "hold_sample_candidates": hold_sample_candidates,
+        "next_actions": [
+            "surface_positive_prior_candidates_in_daily_calibration_source_bundle",
+            "route_candidates_to_source_only_classifier_refinement_or_workorder_review",
+            "keep_runtime_threshold_order_provider_bot_changes_forbidden_until_separate_apply_contract",
+        ],
+        "forbidden_uses": list(metrics.get("forbidden_uses") or []),
+        "decision_authority": metrics.get("decision_authority")
+        or "postclose_source_only_refinement_no_runtime_apply",
+    }
+
+
 def missed_entry_counterfactual_summary_to_dict(summary: MissedEntryCounterfactualSummary) -> dict:
     return {
         "date": summary.date,
@@ -718,6 +955,7 @@ def build_missed_entry_counterfactual_report(
     summary.total_candidates = len(candidates)
 
     if not candidates:
+        empty_rising_metrics = _build_rising_missed_refinement_metrics([])
         return {
             "date": safe_date,
             "summary": missed_entry_counterfactual_summary_to_dict(summary),
@@ -733,6 +971,10 @@ def build_missed_entry_counterfactual_report(
                 "estimated_counterfactual_pnl_10m_krw_sum": 0,
                 "blocker_outcome_metrics": {},
                 "cohort_outcome_metrics": {},
+                "rising_missed_refinement": empty_rising_metrics,
+                "rising_missed_refinement_action_plan": _build_rising_missed_refinement_action_plan(
+                    empty_rising_metrics
+                ),
             },
             "buy_signal_universe": {
                 "metrics": {
@@ -751,6 +993,7 @@ def build_missed_entry_counterfactual_report(
             "top_missed_winners": [],
             "top_avoided_losers": [],
             "rows": [],
+            "full_rows": [],
             "meta": {
                 "schema_version": MISSED_ENTRY_COUNTERFACTUAL_SCHEMA_VERSION,
                 "generated_at": datetime.now().isoformat(),
@@ -887,6 +1130,10 @@ def build_missed_entry_counterfactual_report(
         reason_buckets[str(item.get("terminal_stage") or "-")].append(item)
     blocker_outcome_metrics = _build_blocker_outcome_metrics(evaluations)
     cohort_outcome_metrics = _build_cohort_outcome_metrics(evaluations)
+    rising_missed_refinement_metrics = _build_rising_missed_refinement_metrics(evaluations)
+    rising_missed_refinement_action_plan = _build_rising_missed_refinement_action_plan(
+        rising_missed_refinement_metrics
+    )
     reason_breakdown = []
     for stage, items in sorted(reason_buckets.items(), key=lambda pair: len(pair[1]), reverse=True):
         trades = len(items)
@@ -944,6 +1191,21 @@ def build_missed_entry_counterfactual_report(
             "mae_10m_pct": round(_safe_float(metrics_10m.get("mae_pct"), 0.0), 3),
             "estimated_counterfactual_pnl_10m_krw": int(_safe_int(item.get("estimated_counterfactual_pnl_10m_krw"), 0)),
             "missed_submit_cohort": str(item.get("missed_submit_cohort") or ""),
+            "stage_flow": [str(stage) for stage in (item.get("stage_flow") or [])],
+            "source_signature": _rising_missed_source_field(item, "source_signature"),
+            "scanner_promotion_reason": _rising_missed_source_field(item, "scanner_promotion_reason"),
+            "price_delta_since_first_seen_pct": round(
+                _safe_float(
+                    _rising_missed_source_field(item, "price_delta_since_first_seen_pct"),
+                    0.0,
+                ),
+                3,
+            ),
+            "rising_missed_class": _rising_missed_source_field(item, "rising_missed_class"),
+            "rising_missed_one_share_entry_seen": _rising_missed_seen(item),
+            "rising_missed_stage_count": _rising_missed_stage_count(item),
+            "rising_missed_postclose_label": _rising_missed_postclose_label(item),
+            "rising_missed_refinement_authority": "postclose_source_only_no_runtime_apply",
         }
 
     return {
@@ -964,6 +1226,8 @@ def build_missed_entry_counterfactual_report(
             "estimated_counterfactual_pnl_10m_krw_sum": int(estimated_pnl_sum),
             "blocker_outcome_metrics": blocker_outcome_metrics,
             "cohort_outcome_metrics": cohort_outcome_metrics,
+            "rising_missed_refinement": rising_missed_refinement_metrics,
+            "rising_missed_refinement_action_plan": rising_missed_refinement_action_plan,
         },
         "buy_signal_universe": {
             "metrics": {
@@ -1015,6 +1279,7 @@ def build_missed_entry_counterfactual_report(
         "top_missed_winners": [_row_view(item) for item in summary.top_missed_winners],
         "top_avoided_losers": [_row_view(item) for item in summary.top_avoided_losers],
         "rows": [_row_view(item) for item in evaluations[: max(1, int(top_n or 10) * 3)]],
+        "full_rows": [_row_view(item) for item in evaluations],
         "meta": {
             "schema_version": MISSED_ENTRY_COUNTERFACTUAL_SCHEMA_VERSION,
             "generated_at": datetime.now().isoformat(),

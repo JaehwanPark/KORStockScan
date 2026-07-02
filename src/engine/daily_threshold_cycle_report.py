@@ -1543,6 +1543,16 @@ def _summarize_calibration_report_sources(target_date: str) -> dict:
     score_close = [value for value in score_close if value is not None]
     score_mfe = [value for value in score_mfe if value is not None]
     missed_metrics = missed_entry.get("metrics") if isinstance(missed_entry.get("metrics"), dict) else {}
+    rising_refinement = (
+        missed_metrics.get("rising_missed_refinement")
+        if isinstance(missed_metrics.get("rising_missed_refinement"), dict)
+        else {}
+    )
+    rising_action_plan = (
+        missed_metrics.get("rising_missed_refinement_action_plan")
+        if isinstance(missed_metrics.get("rising_missed_refinement_action_plan"), dict)
+        else {}
+    )
     perf_metrics = performance_tuning.get("metrics") if isinstance(performance_tuning.get("metrics"), dict) else {}
     perf_sections = performance_tuning.get("sections") if isinstance(performance_tuning.get("sections"), dict) else {}
     perf_latency_section = (
@@ -1769,6 +1779,84 @@ def _summarize_calibration_report_sources(target_date: str) -> dict:
             "gatekeeper_eval_ms_p95": _safe_float(perf_metrics.get("gatekeeper_eval_ms_p95"), None),
         },
         "market_regime_continuous": market_regime_continuous,
+        "rising_missed_refinement_action_plan": {
+            "metric_role": rising_action_plan.get("metric_role")
+            or rising_refinement.get("metric_role")
+            or "source_quality_gate",
+            "decision": rising_action_plan.get("decision") or "missing_counterfactual_action_plan",
+            "plan_type": rising_action_plan.get("plan_type")
+            or "rising_missed_classifier_refinement_source_only",
+            "operator_manual_query_required": _truthy(
+                rising_action_plan.get("operator_manual_query_required", False)
+            ),
+            "window_policy": rising_action_plan.get("window_policy")
+            or rising_refinement.get("window_policy")
+            or "same_day_missed_entry_counterfactual_rows",
+            "sample_floor": _safe_int(
+                rising_action_plan.get("sample_floor", rising_refinement.get("sample_floor")),
+                0,
+            )
+            or 0,
+            "primary_decision_metric": rising_action_plan.get("primary_decision_metric")
+            or rising_refinement.get("primary_decision_metric")
+            or "diagnostic_win_rate",
+            "source_quality_gate": rising_action_plan.get("source_quality_gate")
+            or rising_refinement.get("source_quality_gate")
+            or "pipeline_stage_flow_and_counterfactual_outcome_present",
+            "runtime_effect": _truthy(rising_action_plan.get("runtime_effect", False)),
+            "allowed_runtime_apply": _truthy(rising_action_plan.get("allowed_runtime_apply", False)),
+            "decision_authority": rising_action_plan.get("decision_authority")
+            or rising_refinement.get("decision_authority")
+            or "postclose_source_only_refinement_no_runtime_apply",
+            "rising_missed_candidate_count": _safe_int(
+                rising_refinement.get("rising_missed_candidate_count"),
+                0,
+            )
+            or 0,
+            "rising_missed_missed_winner_count": _safe_int(
+                rising_refinement.get("rising_missed_missed_winner_count"),
+                0,
+            )
+            or 0,
+            "rising_missed_avoided_loser_count": _safe_int(
+                rising_refinement.get("rising_missed_avoided_loser_count"),
+                0,
+            )
+            or 0,
+            "rising_missed_missed_winner_rate": _safe_float(
+                rising_refinement.get("rising_missed_missed_winner_rate"),
+                None,
+            ),
+            "rising_missed_avoided_loser_rate": _safe_float(
+                rising_refinement.get("rising_missed_avoided_loser_rate"),
+                None,
+            ),
+            "positive_prior_candidates": (
+                rising_action_plan.get("positive_prior_candidates")[:5]
+                if isinstance(rising_action_plan.get("positive_prior_candidates"), list)
+                else []
+            ),
+            "exclusion_or_confirmation_candidates": (
+                rising_action_plan.get("exclusion_or_confirmation_candidates")[:5]
+                if isinstance(rising_action_plan.get("exclusion_or_confirmation_candidates"), list)
+                else []
+            ),
+            "hold_sample_candidates": (
+                rising_action_plan.get("hold_sample_candidates")[:5]
+                if isinstance(rising_action_plan.get("hold_sample_candidates"), list)
+                else []
+            ),
+            "next_actions": (
+                rising_action_plan.get("next_actions")
+                if isinstance(rising_action_plan.get("next_actions"), list)
+                else []
+            ),
+            "forbidden_uses": (
+                rising_action_plan.get("forbidden_uses")
+                if isinstance(rising_action_plan.get("forbidden_uses"), list)
+                else []
+            ),
+        },
         "latency_guard_miss_ev_recovery": {
             "instrumentation_status": perf_latency_section.get("instrumentation_status") or "missing_contract",
             "instrumentation_contract_version": _safe_int(

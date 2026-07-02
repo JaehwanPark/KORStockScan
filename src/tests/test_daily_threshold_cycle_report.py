@@ -1407,6 +1407,79 @@ def test_calibration_source_bundle_reads_gzip_monitor_snapshot(monkeypatch, tmp_
     assert "soft_stop" in bundle["sources"]["post_sell_feedback"]["top_keys"]
 
 
+def test_calibration_source_bundle_surfaces_rising_missed_refinement_action_plan(monkeypatch, tmp_path):
+    monkeypatch.setattr(report_mod, "REPORT_DIR", tmp_path / "report")
+    snapshot_dir = tmp_path / "report" / "monitor_snapshots"
+    snapshot_dir.mkdir(parents=True, exist_ok=True)
+    (snapshot_dir / "missed_entry_counterfactual_2026-07-02.json").write_text(
+        json.dumps(
+            {
+                "metrics": {
+                    "rising_missed_refinement": {
+                        "metric_role": "source_quality_gate",
+                        "decision_authority": "postclose_source_only_refinement_no_runtime_apply",
+                        "window_policy": "same_day_missed_entry_counterfactual_rows",
+                        "sample_floor": 1,
+                        "primary_decision_metric": "diagnostic_win_rate",
+                        "source_quality_gate": "pipeline_stage_flow_and_counterfactual_outcome_present",
+                        "rising_missed_candidate_count": 6,
+                        "rising_missed_missed_winner_count": 5,
+                        "rising_missed_avoided_loser_count": 1,
+                        "rising_missed_missed_winner_rate": 83.33,
+                        "rising_missed_avoided_loser_rate": 16.67,
+                    },
+                    "rising_missed_refinement_action_plan": {
+                        "metric_role": "source_quality_gate",
+                        "plan_type": "rising_missed_classifier_refinement_source_only",
+                        "decision": "source_only_positive_prior_candidates_ready",
+                        "operator_manual_query_required": "false",
+                        "window_policy": "same_day_missed_entry_counterfactual_rows",
+                        "sample_floor": 3,
+                        "primary_decision_metric": "diagnostic_win_rate",
+                        "source_quality_gate": "pipeline_stage_flow_and_counterfactual_outcome_present",
+                        "runtime_effect": "false",
+                        "allowed_runtime_apply": "false",
+                        "decision_authority": "postclose_source_only_refinement_no_runtime_apply",
+                        "positive_prior_candidates": [
+                            {
+                                "axis": "source_signature",
+                                "key": "OPEN_TOP,PRICE_JUMP_START",
+                                "evaluated_candidates": 6,
+                                "missed_winner_rate": 83.33,
+                                "avoided_loser_rate": 16.67,
+                            }
+                        ],
+                        "exclusion_or_confirmation_candidates": [],
+                        "hold_sample_candidates": [],
+                        "next_actions": [
+                            "surface_positive_prior_candidates_in_daily_calibration_source_bundle"
+                        ],
+                        "forbidden_uses": ["intraday_threshold_mutation", "broker_order_submit"],
+                    },
+                }
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    bundle = report_mod._summarize_calibration_report_sources("2026-07-02")
+
+    plan = bundle["source_metrics"]["rising_missed_refinement_action_plan"]
+    assert plan["metric_role"] == "source_quality_gate"
+    assert plan["decision"] == "source_only_positive_prior_candidates_ready"
+    assert plan["operator_manual_query_required"] is False
+    assert plan["window_policy"] == "same_day_missed_entry_counterfactual_rows"
+    assert plan["sample_floor"] == 3
+    assert plan["primary_decision_metric"] == "diagnostic_win_rate"
+    assert plan["source_quality_gate"] == "pipeline_stage_flow_and_counterfactual_outcome_present"
+    assert plan["runtime_effect"] is False
+    assert plan["allowed_runtime_apply"] is False
+    assert plan["rising_missed_candidate_count"] == 6
+    assert plan["positive_prior_candidates"][0]["key"] == "OPEN_TOP,PRICE_JUMP_START"
+    assert plan["next_actions"] == ["surface_positive_prior_candidates_in_daily_calibration_source_bundle"]
+
+
 def test_soft_stop_calibration_holds_on_single_post_sell_source_sample():
     report_sources = {
         "schema_version": 1,
