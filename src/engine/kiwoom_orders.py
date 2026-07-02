@@ -30,6 +30,8 @@ _DEPOSIT_API_FETCH_LOCKS = {}
 _LAST_SUCCESSFUL_DEPOSIT_BY_KEY = {}
 _ORDERABLE_AMOUNT_CACHE = {}
 KST = ZoneInfo("Asia/Seoul")
+KRX_REGULAR_OPEN = datetime_time(hour=9, minute=0)
+KRX_REGULAR_CLOSE = datetime_time(hour=15, minute=30)
 _DEFENSIVE_BUY_TIME_BLOCK_OVERRIDE_REASONS = frozenset(
     {
         "stop_line_touch_mandatory_avg_down",
@@ -798,6 +800,27 @@ def _time_in_window(now_t, start, end) -> bool:
     return now_t >= start or now_t <= end
 
 
+def _coerce_kst_time(now=None):
+    current = now or datetime.now(KST)
+    if isinstance(current, datetime_time):
+        return current
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=KST)
+    return current.astimezone(KST).time()
+
+
+def is_krx_regular_order_session(now=None) -> bool:
+    current_time = _coerce_kst_time(now)
+    return KRX_REGULAR_OPEN <= current_time < KRX_REGULAR_CLOSE
+
+
+def resolve_order_dmst_stex_tp(dmst_stex_tp=None, *, now=None) -> str:
+    explicit = str(dmst_stex_tp or "").strip().upper()
+    if explicit in {"KRX", "NXT", "SOR"}:
+        return explicit
+    return "SOR" if is_krx_regular_order_session(now) else "NXT"
+
+
 def _inside_scalping_buy_window(now_t) -> bool:
     return any(_time_in_window(now_t, start, end) for start, end in _scalping_buy_windows())
 
@@ -982,6 +1005,7 @@ def send_buy_order_market(
     tif=None,
     allow_time_block_override=False,
     time_block_override_reason=None,
+    dmst_stex_tp=None,
 ):
     """
     [kt10000] 매수 주문 - return_code 대응 수정 및 지정가(00) 기능 추가
@@ -1045,7 +1069,7 @@ def send_buy_order_market(
     ord_price_str = str(int(normalized_price)) if str(normalized_type) == "00" and normalized_price > 0 else ""
 
     payload = {
-        "dmst_stex_tp": "SOR",
+        "dmst_stex_tp": resolve_order_dmst_stex_tp(dmst_stex_tp),
         "stk_cd": clean_code,
         "ord_qty": str(qty),
         "ord_uv": ord_price_str,
@@ -1107,6 +1131,7 @@ def send_buy_order(
     tif=None,
     allow_time_block_override=False,
     time_block_override_reason=None,
+    dmst_stex_tp=None,
 ):
     """
     Legacy wrapper for send_buy_order_market.
@@ -1122,6 +1147,7 @@ def send_buy_order(
         tif=tif,
         allow_time_block_override=allow_time_block_override,
         time_block_override_reason=time_block_override_reason,
+        dmst_stex_tp=dmst_stex_tp,
     )
 
 def send_sell_order_market(
@@ -1189,7 +1215,7 @@ def send_sell_order_market(
             ord_price_str = str(int(price))
 
     payload = {
-        "dmst_stex_tp": _normalize_dmst_stex_tp(dmst_stex_tp),
+        "dmst_stex_tp": resolve_order_dmst_stex_tp(dmst_stex_tp),
         "stk_cd": clean_code,
         "ord_qty": str(qty),
         "ord_uv": ord_price_str,

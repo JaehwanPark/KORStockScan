@@ -62,6 +62,8 @@ def test_score_70_74_explicit_buy_fresh_quote_can_reenter_normal_path():
     assert decision.fields["actual_order_submitted"] is False
     assert decision.fields["broker_order_forbidden"] is False
     assert "broker_guard_bypass" in decision.fields["forbidden_uses"]
+    assert "order_quantity_or_position_cap_change" in decision.fields["forbidden_uses"]
+    assert "quantity_or_cap_change" not in decision.fields["forbidden_uses"]
 
 
 def test_score_and_action_bounds_are_fail_closed():
@@ -98,6 +100,105 @@ def test_daily_and_symbol_caps_block():
     state = EntryOpportunityRecheckState(trade_date="2026-07-02", daily_buy_recovery_count=3)
     recovery_capped = _decision(state=state, config=_enabled_config(max_daily_buy_recovery=3))
     assert recovery_capped.reason == "daily_buy_recovery_cap_exhausted"
+
+
+def test_intraday_escalation_disabled_keeps_base_daily_caps():
+    state = EntryOpportunityRecheckState(trade_date="2026-07-02", daily_recheck_count=10)
+    state.record_recovery_mark("000001", profit_rate=0.4, peak_profit=0.7, now_ts=1_000.0)
+    state.record_recovery_mark("000002", profit_rate=0.2, peak_profit=0.4, now_ts=1_001.0)
+
+    decision = _decision(
+        state=state,
+        config=_enabled_config(
+            intraday_escalation_enabled=False,
+            max_daily_recheck=10,
+            escalation_max_daily_recheck=30,
+        ),
+    )
+
+    assert not decision.allowed
+    assert decision.reason == "daily_recheck_cap_exhausted"
+    assert decision.fields["entry_opportunity_recheck_escalation_attempt_reason"] == "disabled"
+    assert decision.fields["entry_opportunity_recheck_effective_max_daily_recheck"] == 10
+
+
+def test_intraday_escalation_does_not_revive_zero_base_caps():
+    state = EntryOpportunityRecheckState(trade_date="2026-07-02")
+    state.record_recovery_mark("000001", profit_rate=0.4, peak_profit=0.7, now_ts=1_000.0)
+    state.record_recovery_mark("000002", profit_rate=0.2, peak_profit=0.4, now_ts=1_001.0)
+
+    decision = _decision(
+        state=state,
+        config=_enabled_config(
+            intraday_escalation_enabled=True,
+            max_daily_recheck=0,
+            max_daily_buy_recovery=3,
+            escalation_max_daily_recheck=30,
+        ),
+    )
+
+    assert not decision.allowed
+    assert decision.reason == "daily_recheck_cap_exhausted"
+    assert decision.fields["entry_opportunity_recheck_escalation_attempt_reason"] == "base_cap_disabled"
+    assert decision.fields["entry_opportunity_recheck_effective_max_daily_recheck"] == 0
+
+
+def test_intraday_escalation_raises_caps_when_exhausted_recoveries_are_profitable():
+    state = EntryOpportunityRecheckState(
+        trade_date="2026-07-02",
+        daily_recheck_count=10,
+        daily_buy_recovery_count=3,
+    )
+    state.record_recovery_mark("000001", profit_rate=0.4, peak_profit=0.7, now_ts=1_000.0)
+    state.record_recovery_mark("000002", profit_rate=0.2, peak_profit=0.4, now_ts=1_001.0)
+
+    decision = _decision(
+        state=state,
+        config=_enabled_config(
+            intraday_escalation_enabled=True,
+            max_daily_recheck=10,
+            max_daily_buy_recovery=3,
+            escalation_step_recheck=10,
+            escalation_step_buy_recovery=2,
+            escalation_max_daily_recheck=30,
+            escalation_max_daily_buy_recovery=7,
+            escalation_min_successful_recoveries=2,
+            escalation_min_avg_profit_pct=0.0,
+            escalation_min_peak_profit_pct=0.3,
+            escalation_max_worst_profit_pct=-0.6,
+        ),
+    )
+
+    assert decision.allowed
+    assert decision.fields["entry_opportunity_recheck_escalation_attempt_reason"] == "escalated"
+    assert decision.fields["entry_opportunity_recheck_escalation_level"] == 1
+    assert decision.fields["entry_opportunity_recheck_effective_max_daily_recheck"] == 20
+    assert decision.fields["entry_opportunity_recheck_effective_max_daily_buy_recovery"] == 5
+    assert decision.fields["entry_opportunity_recheck_successful_recovery_count"] == 2
+
+
+def test_intraday_escalation_blocks_when_worst_profit_guard_fails():
+    state = EntryOpportunityRecheckState(trade_date="2026-07-02", daily_recheck_count=10)
+    state.record_recovery_mark("000001", profit_rate=0.4, peak_profit=0.7, now_ts=1_000.0)
+    state.record_recovery_mark("000002", profit_rate=-0.8, peak_profit=0.5, now_ts=1_001.0)
+
+    decision = _decision(
+        state=state,
+        config=_enabled_config(
+            intraday_escalation_enabled=True,
+            max_daily_recheck=10,
+            escalation_min_successful_recoveries=1,
+            escalation_max_worst_profit_pct=-0.6,
+        ),
+    )
+
+    assert not decision.allowed
+    assert decision.reason == "daily_recheck_cap_exhausted"
+    assert (
+        decision.fields["entry_opportunity_recheck_escalation_attempt_reason"]
+        == "worst_profit_guard_block"
+    )
+    assert decision.fields["entry_opportunity_recheck_effective_max_daily_recheck"] == 10
 
 
 def test_registry_maps_recheck_stages_to_family():

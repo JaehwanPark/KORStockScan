@@ -3259,6 +3259,16 @@ def build_preopen_apply_manifest(
             "runtime_env_overrides": env_overrides,
             "generated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
         }
+        if runtime_change:
+            _write_runtime_env(target_date, manifest, env_overrides)
+            _write_gap_provenance(target_date)
+            runtime_env_verification = verify_runtime_env_handoff(target_date)
+            manifest["runtime_env_handoff_verification"] = runtime_env_verification
+            RUNTIME_ENV_DIR.mkdir(parents=True, exist_ok=True)
+            runtime_env_verify_path(target_date).write_text(
+                json.dumps(runtime_env_verification, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
     else:
         report = _load_json(source_path)
         candidates = report.get("apply_candidate_list") if isinstance(report.get("apply_candidate_list"), list) else []
@@ -3745,6 +3755,7 @@ def main(argv: list[str] | None = None) -> int:
             "efficient_tradeoff_manifest_ready",
             "auto_bounded_live_ready",
             "auto_bounded_live_blocked",
+            "operator_runtime_env_lock_ready_missing_source_report",
         }
         else 2
     )

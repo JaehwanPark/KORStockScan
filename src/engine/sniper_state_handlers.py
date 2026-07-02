@@ -26,6 +26,7 @@ from src.engine.sniper_time import (
     SCALPING_BUY_WINDOWS,
     TIME_09_05,
     TIME_15_30,
+    TIME_20_00,
     TIME_SCALPING_OVERNIGHT_DECISION,
     TIME_SCALPING_NEW_BUY_CUTOFF,
     describe_scalping_buy_windows,
@@ -168,6 +169,26 @@ WS_MANAGER = None
 _GREENFIELD_TELEGRAM_KEYS: set[str] = set()
 _STOP_LINE_TOUCH_MANDATORY_AVG_DOWN_REASON = "stop_line_touch_mandatory_avg_down"
 _ENTRY_OPPORTUNITY_RECHECK_STATE = EntryOpportunityRecheckState()
+
+
+def _mark_entry_opportunity_recheck_outcome(
+    stock: dict | None,
+    code: str,
+    *,
+    profit_rate: float,
+    peak_profit: float,
+    now_ts: float,
+) -> bool:
+    if not isinstance(stock, dict) or not stock.get("entry_opportunity_recheck_armed"):
+        return False
+    _ENTRY_OPPORTUNITY_RECHECK_STATE.record_recovery_mark(
+        code,
+        profit_rate=profit_rate,
+        peak_profit=peak_profit,
+        status=stock.get("status") or "HOLDING",
+        now_ts=now_ts,
+    )
+    return True
 
 
 def _defensive_avg_down_used_count(stock: dict | None) -> int:
@@ -24737,9 +24758,14 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 ),
             )
             continue
+        submit_dmst_stex_tp_source = _entry_order_submit_dmst_stex_tp_source(request)
+        submit_dmst_stex_tp = kiwoom_orders.resolve_order_dmst_stex_tp(
+            _entry_order_submit_dmst_stex_tp(request) if submit_dmst_stex_tp_source == "request" else None
+        )
         res = kiwoom_orders.send_buy_order(
             code, qty, price, request['order_type_code'], token=KIWOOM_TOKEN,
             order_type_desc="매수" if strategy == 'SCALPING' else "최유리지정가", tif=request['tif'],
+            dmst_stex_tp=submit_dmst_stex_tp,
         )
         if not isinstance(res, dict):
             _log_entry_pipeline(stock, code, "order_leg_no_response", tag=request['tag'], **real_pre_submit_guard_fields)
@@ -24769,12 +24795,11 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             )
             loss_reentry_rebound_bypass_applied = True
         order_sent_ts = time.time()
-        submit_dmst_stex_tp = _entry_order_submit_dmst_stex_tp(request)
         successful_orders.append({
             'tag': request['tag'], 'qty': qty, 'price': price, 'ord_no': ord_no, 'tif': request['tif'],
             'order_type': request['order_type_code'], 'status': 'OPEN', 'filled_qty': 0, 'sent_at': order_sent_ts,
             'dmst_stex_tp': submit_dmst_stex_tp,
-            'dmst_stex_tp_source': _entry_order_submit_dmst_stex_tp_source(request),
+            'dmst_stex_tp_source': submit_dmst_stex_tp_source,
             'entry_order_lifecycle': submit_revalidation_fields.get('entry_order_lifecycle', 'standard'),
             'entry_passive_probe_applied': bool(submit_revalidation_fields.get('entry_passive_probe_applied')),
             'best_bid_at_submit': price_snapshot.get('best_bid_at_submit'),
@@ -25765,7 +25790,7 @@ def _entry_order_submit_dmst_stex_tp_source(request: dict | None) -> str:
         or request.get("stex_tp")
     ):
         return "request"
-    return "default_sor"
+    return "default_session_route"
 
 
 def _entry_order_cancel_dmst_stex_tp(order: dict | None) -> str:
@@ -25816,6 +25841,14 @@ def _resolve_holding_sell_dmst_stex_tp(stock: dict | None, code: str, now_t=None
     current_t = now_t or datetime.now().time()
     is_nxt_enabled, source = _holding_sell_nxt_enabled_status(stock, code)
     krx_regular = _holding_sell_krx_regular_session(current_t)
+    if krx_regular:
+        return {
+            "blocked": False,
+            "dmst_stex_tp": "SOR",
+            "nxt_enabled": is_nxt_enabled,
+            "nxt_flag_source": source,
+            "reason": "krx_regular_session_sor",
+        }
     if is_nxt_enabled is False and not krx_regular:
         return {
             "blocked": True,
@@ -25824,20 +25857,12 @@ def _resolve_holding_sell_dmst_stex_tp(stock: dict | None, code: str, now_t=None
             "nxt_flag_source": source,
             "reason": "krx_only_outside_krx_regular_session",
         }
-    if is_nxt_enabled is False:
-        return {
-            "blocked": False,
-            "dmst_stex_tp": "SOR",
-            "nxt_enabled": False,
-            "nxt_flag_source": source,
-            "reason": "krx_only_regular_session_sor",
-        }
     return {
         "blocked": False,
-        "dmst_stex_tp": "SOR",
+        "dmst_stex_tp": "NXT",
         "nxt_enabled": is_nxt_enabled,
         "nxt_flag_source": source,
-        "reason": "nxt_enabled_or_unknown",
+        "reason": "nxt_session_nxt_enabled_or_unknown",
     }
 
 
@@ -27753,6 +27778,13 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
 
     profit_rate = calculate_net_profit_rate(buy_p, curr_p)
     peak_profit = calculate_net_profit_rate(buy_p, highest_prices.get(price_key, curr_p))
+    _mark_entry_opportunity_recheck_outcome(
+        stock,
+        code,
+        profit_rate=profit_rate,
+        peak_profit=peak_profit,
+        now_ts=now_ts,
+    )
     trailing_stop_price = float(stock.get('trailing_stop_price') or 0)
     daily_limit_up_exit = _daily_limit_up_exit_fields(stock, ws_data, curr_p)
     daily_limit_up_triggered = bool(daily_limit_up_exit.get("daily_limit_up_exit_triggered"))
@@ -29960,7 +29992,7 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
 
         if (
             strategy == "SCALPING"
-            and now_t >= TIME_15_30
+            and now_t >= TIME_20_00
             and str(exit_rule or "").strip() != "daily_limit_up_immediate_exit"
         ):
             block_key = f"{exit_rule or '-'}:{sell_reason_type or '-'}:{now_dt.date().isoformat()}"
@@ -30021,7 +30053,7 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                     profit_rate=f"{profit_rate:+.2f}",
                     peak_profit=f"{peak_profit:+.2f}",
                     current_ai_score=f"{current_ai_score:.0f}",
-                    market_close_time=TIME_15_30.isoformat(),
+                    market_close_time=TIME_20_00.isoformat(),
                 )
             return
 
@@ -32896,6 +32928,7 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
         order_type_desc=f"추가매수({add_type})",
         allow_time_block_override=bool(buy_time_block_override_reason),
         time_block_override_reason=buy_time_block_override_reason,
+        dmst_stex_tp=kiwoom_orders.resolve_order_dmst_stex_tp(),
     )
 
     if res is None:

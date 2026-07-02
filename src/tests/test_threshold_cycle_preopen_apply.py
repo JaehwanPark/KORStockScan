@@ -1859,6 +1859,19 @@ def test_operator_lock_preserved_when_source_report_missing(tmp_path, monkeypatc
         == "08:05:00-08:49:00,09:05:00-15:19:00,16:05:00-19:49:00"
     )
     assert manifest["auto_apply_decisions"][0]["operator_runtime_env_lock"]["applied"] is True
+    assert manifest["runtime_env_handoff_verification"]["status"] == "pass"
+    env_path = runtime_dir / "threshold_runtime_env_2026-06-19.env"
+    env_manifest_path = runtime_dir / "threshold_runtime_env_2026-06-19.json"
+    verify_path = runtime_dir / "threshold_runtime_env_verify_2026-06-19.json"
+    assert env_path.exists()
+    assert env_manifest_path.exists()
+    assert verify_path.exists()
+    env_text = env_path.read_text(encoding="utf-8")
+    assert "export KORSTOCKSCAN_SELL_SIDE_OPEN_TIME_BLOCK_ENABLED=true" in env_text
+    assert (
+        "export KORSTOCKSCAN_SELL_WINDOWS=08:05:00-08:49:00,09:05:00-15:19:00,16:05:00-19:49:00"
+        in env_text
+    )
 
 
 def test_weak_pullback_operator_lock_closes_for_same_stage_live_bucket(tmp_path, monkeypatch):
@@ -2730,6 +2743,15 @@ def test_entry_opportunity_recheck_operator_lock_emits_next_preopen_env(tmp_path
                     "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_FORBID_DANGER": "true",
                     "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_REQUIRE_FRESH_QUOTE": "true",
                     "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_REQUIRE_EXPLICIT_BUY_ACTION": "true",
+                    "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_INTRADAY_ESCALATION_ENABLED": "true",
+                    "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_ESCALATION_STEP_RECHECK": "10",
+                    "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_ESCALATION_STEP_BUY_RECOVERY": "2",
+                    "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_ESCALATION_MAX_DAILY_RECHECK": "30",
+                    "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_ESCALATION_MAX_DAILY_BUY_RECOVERY": "7",
+                    "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_ESCALATION_MIN_SUCCESSFUL_RECOVERIES": "2",
+                    "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_ESCALATION_MIN_AVG_PROFIT_PCT": "0.0",
+                    "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_ESCALATION_MIN_PEAK_PROFIT_PCT": "0.3",
+                    "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_ESCALATION_MAX_WORST_PROFIT_PCT": "-0.6",
                 },
                 "allowed_close_reason_keywords": [
                     "same_stage_owner_conflict",
@@ -2758,6 +2780,9 @@ def test_entry_opportunity_recheck_operator_lock_emits_next_preopen_env(tmp_path
     assert env["KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_MIN_AI_SCORE"] == "70"
     assert env["KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_MAX_AI_SCORE"] == "74.999"
     assert env["KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_MAX_DAILY_BUY_RECOVERY"] == "3"
+    assert env["KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_INTRADAY_ESCALATION_ENABLED"] == "true"
+    assert env["KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_ESCALATION_MAX_DAILY_RECHECK"] == "30"
+    assert env["KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_ESCALATION_MAX_DAILY_BUY_RECOVERY"] == "7"
 
 
 def test_weak_context_late_entry_guard_operator_lock_emits_env(tmp_path, monkeypatch):

@@ -84,6 +84,40 @@ def test_holding_sell_exchange_resolution_blocks_krx_only_during_nxt_time(monkey
     assert decision["reason"] == "krx_only_outside_krx_regular_session"
 
 
+def test_entry_opportunity_recheck_outcome_mark_updates_runtime_state(monkeypatch):
+    state = state_handlers.EntryOpportunityRecheckState(trade_date="2026-07-02")
+    monkeypatch.setattr(state_handlers, "_ENTRY_OPPORTUNITY_RECHECK_STATE", state)
+
+    marked = state_handlers._mark_entry_opportunity_recheck_outcome(
+        {"entry_opportunity_recheck_armed": True, "status": "HOLDING"},
+        "001260",
+        profit_rate=0.24,
+        peak_profit=0.51,
+        now_ts=1_234.0,
+    )
+
+    assert marked is True
+    assert state.recovery_marks["001260"]["profit_rate"] == 0.24
+    assert state.recovery_marks["001260"]["peak_profit"] == 0.51
+    assert state.recovery_marks["001260"]["status"] == "HOLDING"
+
+
+def test_entry_opportunity_recheck_outcome_mark_skips_unarmed_position(monkeypatch):
+    state = state_handlers.EntryOpportunityRecheckState(trade_date="2026-07-02")
+    monkeypatch.setattr(state_handlers, "_ENTRY_OPPORTUNITY_RECHECK_STATE", state)
+
+    marked = state_handlers._mark_entry_opportunity_recheck_outcome(
+        {"status": "HOLDING"},
+        "001260",
+        profit_rate=0.24,
+        peak_profit=0.51,
+        now_ts=1_234.0,
+    )
+
+    assert marked is False
+    assert state.recovery_marks == {}
+
+
 def test_holding_sell_exchange_resolution_uses_krx_in_regular_session(monkeypatch):
     class DummyDB:
         def get_latest_is_nxt(self, code):
@@ -99,7 +133,51 @@ def test_holding_sell_exchange_resolution_uses_krx_in_regular_session(monkeypatc
 
     assert decision["blocked"] is False
     assert decision["dmst_stex_tp"] == "SOR"
-    assert decision["reason"] == "krx_only_regular_session_sor"
+    assert decision["reason"] == "krx_regular_session_sor"
+
+
+def test_holding_sell_exchange_resolution_uses_nxt_after_krx_regular_session(monkeypatch):
+    class DummyDB:
+        def get_latest_is_nxt(self, code):
+            return True
+
+    monkeypatch.setattr(state_handlers, "DB", DummyDB())
+
+    decision = state_handlers._resolve_holding_sell_dmst_stex_tp(
+        {"name": "필에너지"},
+        "378340",
+        now_t=dt_time(16, 39),
+    )
+
+    assert decision["blocked"] is False
+    assert decision["dmst_stex_tp"] == "NXT"
+    assert decision["reason"] == "nxt_session_nxt_enabled_or_unknown"
+
+
+def test_entry_submit_exchange_request_overrides_session_route():
+    request = {"dmst_stex_tp": "KRX"}
+
+    source = state_handlers._entry_order_submit_dmst_stex_tp_source(request)
+    resolved = kiwoom_orders.resolve_order_dmst_stex_tp(
+        state_handlers._entry_order_submit_dmst_stex_tp(request) if source == "request" else None,
+        now=dt_time(16, 30),
+    )
+
+    assert source == "request"
+    assert resolved == "KRX"
+
+
+def test_entry_submit_exchange_defaults_to_session_route_after_krx_close():
+    request = {}
+
+    source = state_handlers._entry_order_submit_dmst_stex_tp_source(request)
+    resolved = kiwoom_orders.resolve_order_dmst_stex_tp(
+        state_handlers._entry_order_submit_dmst_stex_tp(request) if source == "request" else None,
+        now=dt_time(16, 30),
+    )
+
+    assert source == "default_session_route"
+    assert resolved == "NXT"
 
 
 def test_holding_sell_exchange_resolution_parses_string_false_nxt_flag(monkeypatch):
@@ -2846,6 +2924,7 @@ def test_real_scalping_scale_in_uses_buy_window_not_regular_market_close(monkeyp
 
     assert result["ord_no"] == "NXT1"
     assert sent_orders
+    assert sent_orders[0][1]["dmst_stex_tp"] == "NXT"
     assert not [stage for stage, _ in logs if stage == "scale_in_market_closed_block"]
 
 
@@ -5366,6 +5445,61 @@ def test_send_buy_order_market_allows_time_block_override_for_defensive_scale_in
 
     assert result["ord_no"] == "BDEF"
     assert captured["payload"]["stk_cd"] == "123456"
+    assert captured["payload"]["dmst_stex_tp"] == "NXT"
+
+
+def test_send_buy_order_market_uses_sor_during_krx_regular_session(monkeypatch):
+    class FixedDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return cls(2026, 7, 2, 10, 0, 0, tzinfo=tz)
+
+    captured = {}
+
+    class DummyResponse:
+        status_code = 200
+
+    def fake_post(url, headers, payload, api_id, timeout=5):
+        captured["payload"] = payload
+        return DummyResponse(), {"rt_cd": "0", "ord_no": "BKRX"}
+
+    monkeypatch.setattr(kiwoom_orders, "datetime", FixedDateTime)
+    monkeypatch.setattr(kiwoom_orders, "is_buy_side_paused", lambda: False)
+    monkeypatch.setattr(kiwoom_orders, "is_buy_side_time_blocked", lambda: False)
+    monkeypatch.setattr(kiwoom_orders.kiwoom_utils, "get_api_url", lambda path: f"https://example.test{path}")
+    monkeypatch.setattr(kiwoom_orders, "_post_kiwoom_with_auth_retry", fake_post)
+
+    result = kiwoom_orders.send_buy_order_market("123456", 1, "token", order_type="6")
+
+    assert result["ord_no"] == "BKRX"
+    assert captured["payload"]["dmst_stex_tp"] == "SOR"
+
+
+def test_send_buy_order_market_uses_nxt_after_krx_regular_session(monkeypatch):
+    class FixedDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return cls(2026, 7, 2, 16, 37, 0, tzinfo=tz)
+
+    captured = {}
+
+    class DummyResponse:
+        status_code = 200
+
+    def fake_post(url, headers, payload, api_id, timeout=5):
+        captured["payload"] = payload
+        return DummyResponse(), {"rt_cd": "0", "ord_no": "BNXT"}
+
+    monkeypatch.setattr(kiwoom_orders, "datetime", FixedDateTime)
+    monkeypatch.setattr(kiwoom_orders, "is_buy_side_paused", lambda: False)
+    monkeypatch.setattr(kiwoom_orders, "is_buy_side_time_blocked", lambda: False)
+    monkeypatch.setattr(kiwoom_orders.kiwoom_utils, "get_api_url", lambda path: f"https://example.test{path}")
+    monkeypatch.setattr(kiwoom_orders, "_post_kiwoom_with_auth_retry", fake_post)
+
+    result = kiwoom_orders.send_buy_order_market("378340", 1, "token", order_type="6")
+
+    assert result["ord_no"] == "BNXT"
+    assert captured["payload"]["dmst_stex_tp"] == "NXT"
 
 
 def test_send_buy_order_market_rejects_unknown_time_block_override_reason(monkeypatch):
@@ -5708,6 +5842,7 @@ def test_send_sell_order_market_remaps_pre0830_sor_market_sell(monkeypatch):
     )
 
     assert result["ord_no"] == "S0830"
+    assert captured["payload"]["dmst_stex_tp"] == "NXT"
     assert captured["payload"]["trde_tp"] == "6"
     assert captured["payload"]["ord_uv"] == ""
 
@@ -5780,6 +5915,7 @@ def test_send_buy_order_market_remaps_pre0830_sor_market_buy(monkeypatch):
     )
 
     assert result["ord_no"] == "B0830"
+    assert captured["payload"]["dmst_stex_tp"] == "NXT"
     assert captured["payload"]["trde_tp"] == "6"
     assert captured["payload"]["ord_uv"] == ""
 
@@ -13451,7 +13587,7 @@ def test_sell_reject_with_zero_sellable_qty_marks_completed(monkeypatch):
     assert fail_logs[-1]["sellable_qty"] == 0
 
 
-def test_scalping_sell_after_market_close_blocks_order_once(monkeypatch):
+def test_scalping_sell_after_nxt_close_blocks_order_once(monkeypatch):
     from src.utils.constants import TRADING_RULES as CONFIG
 
     state_handlers.TRADING_RULES = replace(CONFIG, SCALE_IN_REQUIRE_HISTORY_TABLE=False)
@@ -13491,7 +13627,7 @@ def test_scalping_sell_after_market_close_blocks_order_once(monkeypatch):
         "buy_qty": 10,
         "rt_ai_prob": 0.50,
     }
-    now_dt = datetime(2026, 5, 4, 15, 31, 0)
+    now_dt = datetime(2026, 5, 4, 20, 1, 0)
 
     for _ in range(2):
         state_handlers.handle_holding_state(
@@ -13516,6 +13652,38 @@ def test_scalping_sell_after_market_close_blocks_order_once(monkeypatch):
     assert blocked[-1]["exit_decision_source"] == "SOFT_STOP"
     assert sell_calls == []
     assert not [stage for stage, _ in pipeline_logs if stage == "sell_order_failed"]
+
+
+def test_send_sell_order_market_uses_nxt_after_krx_regular_session(monkeypatch):
+    class FixedDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return cls(2026, 7, 2, 16, 39, 45, tzinfo=tz)
+
+    captured = {}
+
+    class DummyResponse:
+        status_code = 200
+
+    def fake_post(url, headers, payload, api_id, timeout=5):
+        captured["payload"] = payload
+        return DummyResponse(), {"rt_cd": "0", "ord_no": "SNXT"}
+
+    monkeypatch.setattr(kiwoom_orders, "datetime", FixedDateTime)
+    monkeypatch.setattr(kiwoom_orders.kiwoom_utils, "get_api_url", lambda path: f"https://example.test{path}")
+    monkeypatch.setattr(kiwoom_orders, "_post_kiwoom_with_auth_retry", fake_post)
+
+    result = kiwoom_orders.send_sell_order_market(
+        "378340",
+        1,
+        "token",
+        order_type="3",
+        reason_type="LOSS",
+        strategy="SCALPING",
+    )
+
+    assert result["ord_no"] == "SNXT"
+    assert captured["payload"]["dmst_stex_tp"] == "NXT"
 
 
 def test_scalp_preset_tp_hard_stop_grace_delays_exit(monkeypatch):
