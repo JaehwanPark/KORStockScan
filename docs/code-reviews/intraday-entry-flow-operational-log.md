@@ -277,11 +277,12 @@ This file is cumulative. Do not append every 10-minute loop result here. Loop-le
 
 - `intraday_entry_blocker_diagnostics` normalizes time-only window bounds for filtering.
 - `actionable_major_blocker_counts` no longer includes strategy rejects or cooldown intended guards.
-- Added regression tests for time-only window bounds, repeated high-delta cooldown, and strategy reject major-count suppression.
+- Source-quality-excluded or non-rising `source_freshness_blocker` rows are routed to `source_quality_exclusion_candidate` instead of staying in major counts.
+- Added regression tests for time-only window bounds, repeated high-delta cooldown, strategy reject major-count suppression, source-quality exclusion suppression, and non-rising freshness suppression.
 
 ### Validation
 
-- `PYTHONPATH=. .venv/bin/pytest src/tests/test_intraday_entry_blocker_diagnostics.py src/tests/test_intraday_entry_flow_report.py -q` passed with `60 passed`.
+- `PYTHONPATH=. .venv/bin/pytest src/tests/test_intraday_entry_blocker_diagnostics.py src/tests/test_intraday_entry_flow_report.py -q` passed with `62 passed`.
 - `PYTHONPATH=. .venv/bin/python -m py_compile src/engine/monitoring/intraday_entry_blocker_diagnostics.py src/engine/monitoring/intraday_entry_flow_report.py src/tests/test_intraday_entry_blocker_diagnostics.py src/tests/test_intraday_entry_flow_report.py` passed.
 - `git diff --check` passed.
 

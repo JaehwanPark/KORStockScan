@@ -867,6 +867,83 @@ def test_build_report_keeps_strategy_rejects_out_of_actionable_major_counts(tmp_
     ]
 
 
+def test_build_report_suppresses_source_quality_excluded_freshness_from_major_counts(tmp_path):
+    path = tmp_path / "pipeline_events_2026-06-23.jsonl"
+    rows = [
+        _event("000001", "A", "scalping_scanner_candidate_promoted", {"price_delta_since_first_seen_pct": "2.00"}),
+        _event(
+            "000001",
+            "A",
+            "blocked_strength_momentum",
+            {
+                "price_delta_since_first_seen_pct": "2.00",
+                "reason": "insufficient_history",
+                "quote_age_ms": "2000",
+                "ws_strength_history_count": "0",
+            },
+        ),
+        _event(
+            "000001",
+            "A",
+            "blocked_strength_momentum",
+            {
+                "price_delta_since_first_seen_pct": "2.00",
+                "reason": "insufficient_history",
+                "quote_age_ms": "2100",
+                "ws_strength_history_count": "0",
+            },
+        ),
+    ]
+    path.write_text("\n".join(json.dumps(row, ensure_ascii=False) for row in rows), encoding="utf-8")
+
+    report = build_report(target_date="2026-06-23", pipeline_path=path, generated_at="fixed")
+
+    assert report["rising_missed_buy"][0]["rising_missed_class"] == "source_quality_excluded"
+    assert report["blocker_taxonomy"]["actionable_major_blocker_counts"] == []
+    assert report["summary"]["actionable_major_blocker_count"] == 0
+    assert report["blocker_taxonomy"]["suppressed_non_actionable_counts"] == [
+        {
+            "class": "source_quality_exclusion_candidate",
+            "stage": "blocked_strength_momentum",
+            "reason": "insufficient_history",
+            "count": 2,
+        }
+    ]
+
+
+def test_build_report_suppresses_non_rising_freshness_from_major_counts(tmp_path):
+    path = tmp_path / "pipeline_events_2026-06-23.jsonl"
+    rows = [
+        _event("000001", "A", "scalping_scanner_candidate_promoted", {"price_delta_since_first_seen_pct": "0.00"}),
+        _event(
+            "000001",
+            "A",
+            "blocked_strength_momentum",
+            {
+                "price_delta_since_first_seen_pct": "0.00",
+                "reason": "insufficient_history",
+                "quote_age_ms": "2000",
+                "ws_strength_history_count": "0",
+            },
+        ),
+    ]
+    path.write_text("\n".join(json.dumps(row, ensure_ascii=False) for row in rows), encoding="utf-8")
+
+    report = build_report(target_date="2026-06-23", pipeline_path=path, generated_at="fixed")
+
+    assert report["promoted_symbols"][0]["rising_missed_class"] == "not_rising_missed"
+    assert report["blocker_taxonomy"]["actionable_major_blocker_counts"] == []
+    assert report["summary"]["actionable_major_blocker_count"] == 0
+    assert report["blocker_taxonomy"]["suppressed_non_actionable_counts"] == [
+        {
+            "class": "source_quality_exclusion_candidate",
+            "stage": "blocked_strength_momentum",
+            "reason": "insufficient_history",
+            "count": 1,
+        }
+    ]
+
+
 def test_build_report_treats_recovered_stale_ws_as_recovered_not_stale_eval(tmp_path):
     path = tmp_path / "pipeline_events_2026-06-23.jsonl"
     rows = [

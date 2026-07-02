@@ -1365,6 +1365,23 @@ def _rollup_blocker_taxonomy(items: list[dict[str, Any]]) -> dict[str, Any]:
                 max_delta_pct=max_delta,
                 latency_root_cause=latency_root_cause,
             )
+            if (
+                item.get("rising_missed_class")
+                in {
+                    RISING_MISSED_CLASS_SOURCE_QUALITY_EXCLUDED,
+                    RISING_MISSED_CLASS_NOT_RISING,
+                }
+                and taxonomy["class"] in {
+                    "source_freshness_blocker",
+                }
+            ):
+                taxonomy = {
+                    **taxonomy,
+                    "class": "source_quality_exclusion_candidate",
+                    "actionable": False,
+                    "major_blocker": False,
+                    "route": "watch_budget_reallocated_after_source_quality_exclusion",
+                }
             block_class = taxonomy["class"]
             route = taxonomy["route"]
             class_counter[block_class] += effective_count
