@@ -1,85 +1,84 @@
 {
-  "bundle_as_of": "2026-06-30T22:20:10Z",
+  "bundle_as_of": "2026-07-01T22:20:13Z",
   "sp500": {
     "name": "S&P 500",
-    "value": 7499.36,
-    "prev_value": 7440.43,
-    "change": 58.93,
-    "change_pct": 0.79,
-    "as_of": "2026-06-30T20:28:00Z",
-    "source": "Dow Jones Market Data"
+    "value": 7483.23,
+    "prev_value": 7499.36,
+    "change": -16.13,
+    "change_pct": -0.22,
+    "as_of": "2026-07-01T20:00:00Z",
+    "source": "AP News"
   },
   "nasdaq": {
     "name": "NASDAQ Composite",
-    "value": 26213.72,
-    "prev_value": 25820.14,
-    "change": 393.58,
-    "change_pct": 1.52,
-    "as_of": "2026-06-30T20:28:00Z",
-    "source": "Dow Jones Market Data"
+    "value": 26040.03,
+    "prev_value": 26213.72,
+    "change": -173.69,
+    "change_pct": -0.66,
+    "as_of": "2026-07-01T20:00:00Z",
+    "source": "The Motley Fool"
   },
   "vix": {
     "name": "VIX",
-    "value": 17.65,
-    "prev_value": 18.41,
-    "change": -0.76,
-    "change_pct": -4.13,
-    "as_of": "2026-06-29T20:15:00Z",
+    "value": 16.36,
+    "prev_value": 16.45,
+    "change": -0.09,
+    "change_pct": -0.55,
+    "as_of": "2026-07-01T18:33:00Z",
     "source": "Cboe Global Markets"
   },
   "us10y": {
     "name": "US 10-Year Treasury Yield",
-    "value": 4.411,
-    "prev_value": 4.374,
-    "change": 0.037,
-    "change_pct": 0.85,
-    "as_of": "2026-06-30T20:00:00Z",
-    "source": "Investing.com"
+    "value": 4.48,
+    "prev_value": 4.42,
+    "change": 0.06,
+    "change_pct": 1.36,
+    "as_of": "2026-07-01T20:00:00Z",
+    "source": "The Motley Fool"
   },
   "brent": {
     "name": "Brent Crude",
-    "value": 73.6,
-    "prev_value": 73.91,
-    "change": -0.31,
-    "change_pct": -0.4,
-    "as_of": "2026-06-30T14:00:00Z",
-    "source": "Reuters"
+    "value": 71.13,
+    "prev_value": 72.95,
+    "change": -1.82,
+    "change_pct": -2.5,
+    "as_of": "2026-07-01T20:00:00Z",
+    "source": "Trading Economics"
   },
   "headlines": [
     {
-      "title": "Markets today: U.S. stocks rise and trim their losses for June",
-      "source": "The Associated Press",
-      "published_at": "2026-06-30T20:23:00Z",
-      "url": "https://apnews.com/"
+      "title": "Iran president, IRGC clash over priorities, threatening US-Iran negotiations",
+      "source": "The Jerusalem Post",
+      "published_at": "2026-07-01T07:55:00Z",
+      "url": "https://www.jpost.com/middle-east/iran-news"
     },
     {
-      "title": "Dollar Strengthens as US Treasury Yields Rise",
-      "source": "GuruFocus",
-      "published_at": "2026-06-30T21:33:00Z",
-      "url": "https://www.gurufocus.com/"
+      "title": "Stock Market Today, July 1: Meta Shakes Up Cloud Sector and Tech Stocks Weigh on Markets",
+      "source": "The Motley Fool",
+      "published_at": "2026-07-01T21:12:00Z",
+      "url": "https://www.fool.com/investing/2026/07/01/stock-market-today-july-1/"
     },
     {
-      "title": "Hopes for U.S.-Iran talks push oil prices lower",
-      "source": "The New Voice of Ukraine",
-      "published_at": "2026-06-30T08:50:00Z",
-      "url": "https://english.nv.ua/"
+      "title": "Tehran Refuses Direct Meeting with Washington",
+      "source": "ILTV Israel News",
+      "published_at": "2026-07-01T12:00:00Z",
+      "url": "https://www.youtube.com/watch?v=dtvgcpp4DmE"
     },
     {
-      "title": "Options Brief - Chips bounce into H1 close",
-      "source": "Saxo Bank",
-      "published_at": "2026-06-30T06:00:00Z",
-      "url": "https://www.home.saxo/"
+      "title": "Brent Crude Returns to Pre-War Price, Supporting Refining Margins",
+      "source": "Crux Investor",
+      "published_at": "2026-06-30T12:00:00Z",
+      "url": "https://cruxinvestor.com/articles/brent-crude-returns-to-pre-war-price"
     },
     {
-      "title": "US OPEN: Nasdaq seals best quarter in years",
-      "source": "XTB",
-      "published_at": "2026-06-30T15:20:00Z",
-      "url": "https://www.xtb.com/"
+      "title": "US Manufacturing PMI Miss Spurs Defensive Equity Hedges and Volatility Bets, Boosting Bond Appeal",
+      "source": "VT Markets",
+      "published_at": "2026-07-01T12:00:00Z",
+      "url": "https://www.vtmarkets.com/insights/us-manufacturing-pmi-miss-spurs-defensive-equity-hedges-and-volatility-bets-boosting-bond-appeal/"
     }
   ],
   "notes": [
-    "Equities rose to trim June losses as Q2 closed out with substantial gains in Nasdaq and S&P 500.",
-    "Brent crude prices slipped on news that diplomats arrived in Doha to discuss de-escalating the Iran conflict.",
-    "The 10-year US Treasury yield ticked up 4 basis points amid ongoing strength in the US dollar."
+    "US equity indexes saw a slight pullback after completing their strongest first half since 2020.",
+    "Brent crude experienced a steep sell-off alongside a broader structural supply glut in the Persian Gulf as the Strait of Hormuz continues to normalize."
   ]
 }
