@@ -47,6 +47,7 @@ BLOCKER_STAGES = {
     "scalping_scanner_watch_eviction",
     "scalping_scanner_watching_runtime_skip",
     "same_symbol_loss_reentry_cooldown",
+    "scalping_scanner_runtime_target_attach",
 }
 
 RECOVERY_OBSERVATION_REASONS = {
@@ -456,6 +457,7 @@ def _blocker_reason(row: dict[str, Any]) -> str:
         "terminal_reason",
         "entry_submit_revalidation_warning",
         "scalp_sim_candidate_window_blocked_reason",
+        "runtime_target_attach_reason",
     ):
         value = _field(row, key)
         if value not in (None, ""):
@@ -767,16 +769,22 @@ def _blocker_taxonomy(
             "major_blocker": False,
             "route": "auto_governor_backpressure_observation",
         }
-    if reason == "entry_cooldown_active" or stage == "same_symbol_loss_reentry_cooldown":
+    if (
+        reason == "entry_cooldown_active"
+        or stage == "same_symbol_loss_reentry_cooldown"
+        or reason == "operator_manual_control_excluded_symbol"
+    ):
+        if reason == "operator_manual_control_excluded_symbol":
+            route = "operator_manual_control_guard_preserved_no_bypass"
+        elif count >= ACTIONABLE_COOLDOWN_MIN_COUNT and delta >= ACTIONABLE_COOLDOWN_MIN_DELTA_PCT:
+            route = "review_cooldown_opportunity_loss_or_wrong_scope"
+        else:
+            route = "normal_cooldown_guard"
         return {
             "class": "intended_guard",
             "actionable": False,
             "major_blocker": False,
-            "route": (
-                "review_cooldown_opportunity_loss_or_wrong_scope"
-                if count >= ACTIONABLE_COOLDOWN_MIN_COUNT and delta >= ACTIONABLE_COOLDOWN_MIN_DELTA_PCT
-                else "normal_cooldown_guard"
-            ),
+            "route": route,
         }
     if "stale_context_or_quote" in reason_lower or "submit_revalidation" in stage_lower:
         return {

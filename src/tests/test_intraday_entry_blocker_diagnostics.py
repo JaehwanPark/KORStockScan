@@ -544,6 +544,52 @@ def test_build_report_treats_same_symbol_loss_reentry_cooldown_as_intended_guard
     ]
 
 
+def test_build_report_treats_manual_control_runtime_attach_skip_as_intended_guard(tmp_path):
+    path = tmp_path / "pipeline_events_2026-06-23.jsonl"
+    rows = [
+        _event("005930", "삼성전자", "scalping_scanner_candidate_promoted", {"price_delta_since_first_seen_pct": "1.05"}),
+        _event(
+            "005930",
+            "삼성전자",
+            "scalping_scanner_runtime_target_attach",
+            {
+                "price_delta_since_first_seen_pct": "1.05",
+                "runtime_target_attach_outcome": "skipped",
+                "runtime_target_attach_reason": "operator_manual_control_excluded_symbol",
+                "manual_control_exclusion_applied": "True",
+                "actual_order_submitted": "False",
+                "broker_order_forbidden": "True",
+            },
+        ),
+    ]
+    path.write_text("\n".join(json.dumps(row, ensure_ascii=False) for row in rows), encoding="utf-8")
+
+    report = build_report(target_date="2026-06-23", pipeline_path=path, generated_at="fixed")
+
+    assert report["summary"]["rising_missed_buy_count"] == 1
+    assert report["summary"]["rising_missed_class_counts"] == [
+        {"class": "intended_guard_preserved", "count": 1}
+    ]
+    assert report["summary"]["rising_missed_one_share_eligible_symbol_count"] == 0
+    item = report["rising_missed_buy"][0]
+    assert item["rising_missed_class"] == "intended_guard_preserved"
+    assert item["dominant_actionable_blocker"] == {
+        "stage": "",
+        "reason": "",
+        "count": 0,
+        "class": "non_actionable_guard_or_backpressure",
+        "route": "observe_only",
+    }
+    assert report["blocker_taxonomy"]["suppressed_non_actionable_counts"] == [
+        {
+            "class": "intended_guard",
+            "stage": "scalping_scanner_runtime_target_attach",
+            "reason": "operator_manual_control_excluded_symbol",
+            "count": 1,
+        }
+    ]
+
+
 def test_build_report_keeps_repeated_high_delta_cooldown_non_major(tmp_path):
     path = tmp_path / "pipeline_events_2026-06-23.jsonl"
     rows = [
