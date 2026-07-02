@@ -13,7 +13,9 @@ BLOCK_CLASS_NOT_ELIGIBLE = "rising_missed_class_not_one_share_eligible"
 BLOCK_OPEN_PENDING = "open_pending_entry_order"
 BLOCK_ALREADY_HOLDING = "already_holding"
 BLOCK_PRICE_ABOVE_CAP = "price_above_one_share_entry_cap"
+BLOCK_UPPER_LIMIT_PROXIMITY = "upper_limit_proximity_entry_block"
 MAX_ONE_SHARE_ENTRY_PRICE_KRW = 1_000_000
+DEFAULT_UPPER_LIMIT_PROXIMITY_BLOCK_PCT = 27.0
 RISING_MISSED_CLASS_NOT_RISING = "not_rising_missed"
 RISING_MISSED_CLASS_SUBMITTED_RESOLVED = "submitted_resolved"
 RISING_MISSED_CLASS_RAW = "rising_missed_raw"
@@ -171,13 +173,23 @@ def evaluate_rising_missed_one_share_entry(
     min_delta_pct: float = 1.0,
     current_price: Any = None,
     max_entry_price_krw: int = MAX_ONE_SHARE_ENTRY_PRICE_KRW,
+    current_fluctuation_pct: Any = None,
+    upper_limit_block_enabled: bool = True,
+    upper_limit_block_pct: float = DEFAULT_UPPER_LIMIT_PROXIMITY_BLOCK_PCT,
 ) -> RisingMissedOneShareDecision:
     stock = stock if isinstance(stock, dict) else {}
     delta_pct = _positive_delta_pct(stock, explicit_delta_pct=positive_delta_pct)
+    fluctuation_pct = _safe_float(
+        current_fluctuation_pct
+        if current_fluctuation_pct is not None
+        else stock.get("fluctuation", stock.get("fluctuation_rate", stock.get("flu_rate"))),
+        0.0,
+    )
     entry_price = _safe_int(current_price, 0) or _safe_int(stock.get("target_buy_price"), 0) or _safe_int(
         stock.get("curr_price"), 0
     )
     price_cap = max(0, _safe_int(max_entry_price_krw, MAX_ONE_SHARE_ENTRY_PRICE_KRW))
+    upper_limit_threshold = max(0.0, _safe_float(upper_limit_block_pct, DEFAULT_UPPER_LIMIT_PROXIMITY_BLOCK_PCT))
     base_fields = {
         "rising_missed_one_share_entry_enabled": bool(feature_enabled),
         "rising_missed_one_share_entry_positive_delta_pct": f"{delta_pct:.4f}",
@@ -187,6 +199,9 @@ def evaluate_rising_missed_one_share_entry(
         "rising_missed_one_share_entry_forced_qty": 1,
         "rising_missed_one_share_entry_price": entry_price,
         "rising_missed_one_share_entry_price_cap_krw": price_cap,
+        "rising_missed_one_share_entry_fluctuation_pct": f"{fluctuation_pct:.2f}",
+        "rising_missed_one_share_entry_upper_limit_block_pct": f"{upper_limit_threshold:.2f}",
+        "rising_missed_one_share_entry_upper_limit_block_enabled": bool(upper_limit_block_enabled),
     }
     classification = classify_rising_missed_candidate(
         max_delta_pct=delta_pct,
@@ -232,6 +247,20 @@ def evaluate_rising_missed_one_share_entry(
         return RisingMissedOneShareDecision(
             allowed=False,
             reason=BLOCK_NOT_CANDIDATE,
+            positive_delta_pct=delta_pct,
+            log_fields=base_fields,
+        )
+    if upper_limit_block_enabled and upper_limit_threshold > 0 and fluctuation_pct >= upper_limit_threshold:
+        base_fields.update(
+            {
+                "rising_missed_class": RISING_MISSED_CLASS_SOURCE_QUALITY_EXCLUDED,
+                "rising_missed_class_reason": BLOCK_UPPER_LIMIT_PROXIMITY,
+                "rising_missed_one_share_eligible": False,
+            }
+        )
+        return RisingMissedOneShareDecision(
+            allowed=False,
+            reason=BLOCK_UPPER_LIMIT_PROXIMITY,
             positive_delta_pct=delta_pct,
             log_fields=base_fields,
         )

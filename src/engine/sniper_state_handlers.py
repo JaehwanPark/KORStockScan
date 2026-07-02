@@ -60,6 +60,8 @@ from src.engine.scalping.rising_missed_one_share_entry import (
     BLOCK_NOT_CANDIDATE as RISING_MISSED_BLOCK_NOT_CANDIDATE,
     BLOCK_OPEN_PENDING as RISING_MISSED_BLOCK_OPEN_PENDING,
     BLOCK_PRICE_ABOVE_CAP as RISING_MISSED_BLOCK_PRICE_ABOVE_CAP,
+    BLOCK_UPPER_LIMIT_PROXIMITY as RISING_MISSED_BLOCK_UPPER_LIMIT_PROXIMITY,
+    DEFAULT_UPPER_LIMIT_PROXIMITY_BLOCK_PCT,
     FORCED_ENTRY_REASON as RISING_MISSED_FORCED_ENTRY_REASON,
     MAX_ONE_SHARE_ENTRY_PRICE_KRW as RISING_MISSED_MAX_ONE_SHARE_ENTRY_PRICE_KRW,
     collapse_to_one_share_order,
@@ -8195,6 +8197,17 @@ def _env_int(name: str, default: int) -> int:
         return int(default)
 
 
+def _env_float(name: str, default: float) -> float:
+    raw = os.getenv(name, "")
+    text = str(raw).strip()
+    if not text:
+        return float(default)
+    try:
+        return float(text)
+    except Exception:
+        return float(default)
+
+
 def _scanner_rising_entry_min_delta_pct() -> float:
     raw = os.getenv("KORSTOCKSCAN_SCANNER_RISING_FULL_EVAL_MIN_DELTA_PCT", "")
     try:
@@ -12204,6 +12217,20 @@ def _pre_submit_input_snapshot_has_usable_quote(ws_data: dict | None) -> bool:
         return False
     best_ask, best_bid = _get_best_levels_from_ws(data)
     return best_bid > 0 and best_ask > best_bid
+
+
+def _pre_submit_input_snapshot_needs_rest_orderbook_recheck(ws_data: dict | None) -> bool:
+    if not _pre_submit_input_snapshot_has_usable_quote(ws_data):
+        return True
+    data = dict(ws_data or {})
+    if _boolish_true(data.get("quote_stale")) or _boolish_true(data.get("context_stale")):
+        return True
+    quote_fields, _, _, _ = _build_quote_consistency_fields(ws_data, side="buy")
+    if not bool(quote_fields.get("quote_consistency_entry_blocked")):
+        return False
+    quote_state = str(quote_fields.get("quote_consistency_state") or "").strip().lower()
+    quote_reason = str(quote_fields.get("quote_consistency_reason") or "").strip().lower()
+    return quote_state in {"stale", "diverged"} or quote_reason in {"quote_stale", "quote_diverged"}
 
 
 def _pre_submit_ws_snapshot_refresh_log_fields(source: dict | None) -> dict:
@@ -22645,6 +22672,38 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             )
             return False
 
+    upper_limit_block = _upper_limit_entry_block_fields(
+        strategy=strategy,
+        stock=stock,
+        ws_data=ws_data,
+        runtime=runtime,
+    )
+    if upper_limit_block.get("blocked"):
+        if forced_rising_missed_one_share:
+            _mutate_stock_state(
+                stock,
+                pop_fields=[
+                    "rising_missed_one_share_entry_forced",
+                    "rising_missed_one_share_scout",
+                    "rising_missed_scout_upgrade_pending",
+                    "forced_entry_qty",
+                    "forced_entry_reason",
+                    "target_buy_price",
+                ],
+            )
+        clear_signal_reference(stock)
+        _log_entry_pipeline(
+            stock,
+            code,
+            "upper_limit_entry_proximity_block",
+            forced_entry_reason=RISING_MISSED_FORCED_ENTRY_REASON if forced_rising_missed_one_share else "-",
+            forced_entry_qty=1 if forced_rising_missed_one_share else 0,
+            actual_order_submitted=False,
+            broker_order_forbidden=True,
+            **upper_limit_block,
+        )
+        return False
+
     if not admin_id:
         log_info(f"⚠️ [매수보류] {stock['name']}: 관리자 ID가 없습니다.")
         _log_entry_pipeline(stock, code, "blocked_no_admin")
@@ -24995,6 +25054,64 @@ def _rising_missed_one_share_entry_enabled() -> bool:
     return _env_bool("KORSTOCKSCAN_RISING_MISSED_ONE_SHARE_ENTRY_ENABLED", False)
 
 
+def _upper_limit_entry_block_enabled() -> bool:
+    return _env_bool("KORSTOCKSCAN_SCALP_UPPER_LIMIT_ENTRY_BLOCK_ENABLED", True)
+
+
+def _upper_limit_entry_block_pct() -> float:
+    return max(
+        0.0,
+        _env_float(
+            "KORSTOCKSCAN_SCALP_UPPER_LIMIT_ENTRY_BLOCK_PCT",
+            DEFAULT_UPPER_LIMIT_PROXIMITY_BLOCK_PCT,
+        ),
+    )
+
+
+def _current_fluctuation_pct(stock: dict | None, ws_data: dict | None, runtime: dict | None = None) -> float:
+    stock = stock if isinstance(stock, dict) else {}
+    ws_data = ws_data if isinstance(ws_data, dict) else {}
+    runtime = runtime if isinstance(runtime, dict) else {}
+    values = []
+    for source in (ws_data, runtime, stock):
+        for key in ("fluctuation", "fluctuation_rate", "flu_rate", "day_flu_rate"):
+            if key in source:
+                values.append(_safe_float(source.get(key), 0.0))
+    return max(values or [0.0])
+
+
+def _upper_limit_entry_block_fields(
+    *,
+    strategy: str | None,
+    stock: dict | None,
+    ws_data: dict | None,
+    runtime: dict | None = None,
+) -> dict:
+    fluctuation_pct = _current_fluctuation_pct(stock, ws_data, runtime)
+    threshold_pct = _upper_limit_entry_block_pct()
+    is_scalping = normalize_strategy(strategy) in {"SCALPING", "SCALP"}
+    enabled = _upper_limit_entry_block_enabled()
+    blocked = bool(is_scalping and enabled and threshold_pct > 0 and fluctuation_pct >= threshold_pct)
+    return {
+        "blocked": blocked,
+        "block_reason": RISING_MISSED_BLOCK_UPPER_LIMIT_PROXIMITY if blocked else "-",
+        "upper_limit_entry_block_enabled": bool(enabled),
+        "upper_limit_entry_block_threshold_pct": f"{threshold_pct:.2f}",
+        "upper_limit_entry_fluctuation_pct": f"{fluctuation_pct:.2f}",
+        "upper_limit_entry_gap_to_limit_pct": f"{max(0.0, 30.0 - fluctuation_pct):.2f}",
+        "metric_role": "safety_veto",
+        "decision_authority": "real_entry_upper_limit_proximity_hard_guard",
+        "window_policy": "same_day_intraday_runtime_state",
+        "sample_floor": "not_applicable_safety_veto",
+        "primary_decision_metric": "upper_limit_entry_fluctuation_pct",
+        "source_quality_gate": "ws_or_runtime_fluctuation_available",
+        "threshold_family": "upper_limit_entry_proximity_guard",
+        "runtime_effect": True,
+        "allowed_runtime_apply": False,
+        "forbidden_uses": TRADE_QUALITY_RUNTIME_FORBIDDEN_USES,
+    }
+
+
 def _rising_missed_one_share_entry_max_price_krw() -> int:
     return max(
         0,
@@ -25030,6 +25147,9 @@ def _maybe_submit_rising_missed_one_share_entry(
         min_delta_pct=_scanner_rising_entry_min_delta_pct(),
         current_price=curr_price,
         max_entry_price_krw=_rising_missed_one_share_entry_max_price_krw(),
+        current_fluctuation_pct=_current_fluctuation_pct(stock, ws_data, runtime),
+        upper_limit_block_enabled=_upper_limit_entry_block_enabled(),
+        upper_limit_block_pct=_upper_limit_entry_block_pct(),
     )
     if decision.allowed is False and decision.reason != RISING_MISSED_BLOCK_NOT_CANDIDATE:
         _log_entry_pipeline(
@@ -31208,7 +31328,7 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
         scale_in_quote_refresh_fields.update(
             _pre_submit_ws_snapshot_refresh_log_fields(pre_submit_ws_snapshot_refresh)
         )
-        if not _pre_submit_input_snapshot_has_usable_quote(ws_data):
+        if _pre_submit_input_snapshot_needs_rest_orderbook_recheck(ws_data):
             ws_data, pre_submit_rest_orderbook_refresh = _pre_submit_refresh_rest_orderbook_snapshot(
                 code,
                 ws_data,
