@@ -273,7 +273,7 @@ def _scalping_pyramid_strong_continuation_context(
         "new_high": bool(is_new_high),
         "peak_hold_ok": float(drawdown_from_peak) <= max_drawdown,
         "ai_score_ok": quality["current_ai_score"] >= min_ai,
-        "buy_pressure_ok": quality["buy_pressure_10t"] >= min_buy_pressure,
+        "buy_pressure_support_ok": quality["buy_pressure_10t"] >= min_buy_pressure,
         "tick_accel_ok": quality["tick_acceleration_ratio"] >= min_tick_accel,
         "large_sell_clear": not quality["large_sell_print_detected"],
         "micro_vwap_available": micro_vwap_bp is not None,
@@ -287,10 +287,20 @@ def _scalping_pyramid_strong_continuation_context(
         "strong_continuation_failed_checks": ",".join(failed),
         "strong_continuation_allowed": not failed,
         "current_ai_score": round(quality["current_ai_score"], 4),
+        "min_ai_score": round(min_ai, 4),
         "buy_pressure_10t": round(quality["buy_pressure_10t"], 4),
+        "min_buy_pressure": round(min_buy_pressure, 4),
+        "buy_pressure_support_ok": checks["buy_pressure_support_ok"],
         "tick_acceleration_ratio": round(quality["tick_acceleration_ratio"], 4),
+        "min_tick_accel": round(min_tick_accel, 4),
+        "tick_accel_ok": checks["tick_accel_ok"],
         "large_sell_print_detected": quality["large_sell_print_detected"],
+        "large_sell_clear": checks["large_sell_clear"],
         "curr_vs_micro_vwap_bp": "-" if micro_vwap_bp is None else round(micro_vwap_bp, 4),
+        "max_micro_vwap_bps": round(max_micro_vwap_bp, 4),
+        "micro_vwap_available": checks["micro_vwap_available"],
+        "micro_vwap_not_overheated": checks["micro_vwap_not_overheated"],
+        "ai_score_ok": checks["ai_score_ok"],
     }
 
 
@@ -349,6 +359,30 @@ def evaluate_scalping_pyramid(stock, profit_rate, peak_profit, is_new_high, curr
     if not (is_new_high or drawdown_from_peak <= 0.3):
         result.update(continuation_context)
         result["reason"] = "trend_not_strong"
+        result["profit_gate_mode"] = profit_gate_mode
+        result["min_profit_pct"] = round(effective_min_profit, 4)
+        result["drawdown_from_peak"] = round(drawdown_from_peak, 4)
+        result["is_new_high"] = bool(is_new_high)
+        return result
+
+    quality_failures = []
+    if not continuation_context.get("ai_score_ok"):
+        quality_failures.append("ai_score_below_min")
+    if not continuation_context.get("tick_accel_ok"):
+        quality_failures.append("tick_accel_below_min")
+    if not continuation_context.get("large_sell_clear"):
+        quality_failures.append("large_sell_detected")
+    if not continuation_context.get("micro_vwap_available"):
+        quality_failures.append("micro_vwap_missing")
+    elif not continuation_context.get("micro_vwap_not_overheated"):
+        quality_failures.append("micro_vwap_overheated")
+    if quality_failures:
+        result.update(continuation_context)
+        result["reason"] = (
+            quality_failures[0]
+            if len(quality_failures) == 1
+            else "pyramid_quality_blocked:" + ",".join(quality_failures)
+        )
         result["profit_gate_mode"] = profit_gate_mode
         result["min_profit_pct"] = round(effective_min_profit, 4)
         result["drawdown_from_peak"] = round(drawdown_from_peak, 4)
@@ -1054,6 +1088,7 @@ def describe_dynamic_scale_in_qty(
     buy_pressure = _safe_float(feat.get("buy_pressure_10t"), 0.0)
     tick_accel = _safe_float(feat.get("tick_acceleration_ratio"), 0.0)
     large_sell = _safe_bool(feat.get("large_sell_print_detected"), True)
+    micro_vwap_bp = _safe_float(feat.get("curr_vs_micro_vwap_bp"), None)
     profit_rate = _safe_float(action.get("profit_rate"), 0.0)
     peak_profit = _safe_float(action.get("peak_profit"), profit_rate)
     drawdown_from_peak = max(0.0, peak_profit - profit_rate)
@@ -1062,12 +1097,17 @@ def describe_dynamic_scale_in_qty(
         min_ai = float(getattr(TRADING_RULES, "SCALPING_PYRAMID_MIN_AI_SCORE", 70) or 70)
         min_buy_pressure = float(getattr(TRADING_RULES, "SCALPING_PYRAMID_MIN_BUY_PRESSURE", 60.0) or 60.0)
         min_tick_accel = float(getattr(TRADING_RULES, "SCALPING_PYRAMID_MIN_TICK_ACCEL", 0.5) or 0.5)
-        checks = {
+        max_micro_vwap_bp = float(getattr(TRADING_RULES, "SCALPING_PYRAMID_MAX_MICRO_VWAP_BPS", 60.0) or 60.0)
+        hard_checks = {
             "ai_score_ok": current_ai_score >= min_ai,
-            "buy_pressure_ok": buy_pressure >= min_buy_pressure,
             "tick_accel_ok": tick_accel >= min_tick_accel,
             "peak_hold_ok": drawdown_from_peak <= 0.3,
             "large_sell_clear": not large_sell,
+            "micro_vwap_available": micro_vwap_bp is not None,
+            "micro_vwap_not_overheated": micro_vwap_bp is not None and micro_vwap_bp <= max_micro_vwap_bp,
+        }
+        support_checks = {
+            "buy_pressure_support_ok": buy_pressure >= min_buy_pressure,
         }
         details.update(
             {
@@ -1077,32 +1117,33 @@ def describe_dynamic_scale_in_qty(
                 "min_buy_pressure": min_buy_pressure,
                 "tick_acceleration_ratio": round(tick_accel, 4),
                 "min_tick_accel": min_tick_accel,
+                "curr_vs_micro_vwap_bp": "-" if micro_vwap_bp is None else round(micro_vwap_bp, 4),
+                "max_micro_vwap_bps": max_micro_vwap_bp,
                 "drawdown_from_peak": round(drawdown_from_peak, 4),
                 "large_sell_print_detected": large_sell,
-                **checks,
+                **hard_checks,
+                **support_checks,
             }
         )
-        if not all(checks.values()):
-            failed = [name for name, ok in checks.items() if not ok]
-            details.update({"would_qty": 0, "effective_qty": 0, "qty": 0, "qty_reason": "pyramid_evidence_insufficient:" + ",".join(failed)})
+        if not all(hard_checks.values()):
+            failed = [name for name, ok in hard_checks.items() if not ok]
+            details.update(
+                {
+                    "would_qty": 0,
+                    "effective_qty": 0,
+                    "qty": 0,
+                    "qty_reason": "pyramid_evidence_insufficient:" + ",".join(failed),
+                }
+            )
             return details
         would_qty = max(1, int(scalp_budget_qty or legacy.get("template_qty", 0) or legacy.get("qty", 0) or 0))
-        max_add_qty_ratio = _safe_float(
-            getattr(TRADING_RULES, "SCALPING_PYRAMID_MAX_ADD_QTY_RATIO", 0.50),
-            0.50,
-        )
-        max_add_qty = int(math.floor(float(buy_qty) * max_add_qty_ratio)) if buy_qty > 0 and max_add_qty_ratio > 0 else 0
         if not details["sim_uncapped_qty"]:
             details.update(
                 {
-                    "pyramid_max_add_qty_ratio": round(max_add_qty_ratio, 6),
-                    "pyramid_max_add_qty": max_add_qty,
+                    "pyramid_sizing_mode": "dynamic_budget",
+                    "pyramid_position_ratio_cap_applied": False,
                 }
             )
-            if max_add_qty <= 0:
-                details.update({"would_qty": 0, "effective_qty": 0, "qty": 0, "qty_reason": "pyramid_exposure_cap"})
-                return details
-            would_qty = min(would_qty, max_add_qty)
     elif add_type == "AVG_DOWN":
         if add_reason not in _SCALPING_AVG_DOWN_SPECIAL_REASONS:
             details.update({"would_qty": 0, "effective_qty": 0, "qty": 0, "qty_reason": "reversal_probe_missing"})

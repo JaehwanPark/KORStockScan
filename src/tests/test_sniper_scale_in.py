@@ -1459,12 +1459,48 @@ def test_pre_submit_contract_fields_override_report_only_panic_fields():
 
 
 def test_scalping_pyramid_signal():
-    stock = {"pyramid_count": 0}
+    stock = {
+        "pyramid_count": 0,
+        "last_reversal_features": {
+            "buy_pressure_10t": 72.0,
+            "tick_acceleration_ratio": 0.85,
+            "large_sell_print_detected": False,
+            "curr_vs_micro_vwap_bp": 24.0,
+        },
+    }
     result = scale_in.evaluate_scalping_pyramid(
-        stock, profit_rate=2.0, peak_profit=2.2, is_new_high=True
+        stock,
+        profit_rate=2.0,
+        peak_profit=2.2,
+        is_new_high=True,
+        current_ai_score=74,
     )
     assert result["should_add"] is True
     assert result["add_type"] == "PYRAMID"
+
+
+def test_scalping_pyramid_blocks_overheated_micro_vwap_before_signal():
+    stock = {
+        "pyramid_count": 0,
+        "last_reversal_features": {
+            "buy_pressure_10t": 50.0,
+            "tick_acceleration_ratio": 1.0,
+            "large_sell_print_detected": False,
+            "curr_vs_micro_vwap_bp": 103.65,
+        },
+    }
+    result = scale_in.evaluate_scalping_pyramid(
+        stock,
+        profit_rate=2.03,
+        peak_profit=2.03,
+        is_new_high=True,
+        current_ai_score=70,
+    )
+
+    assert result["should_add"] is False
+    assert result["reason"] == "micro_vwap_overheated"
+    assert result["buy_pressure_support_ok"] is False
+    assert result["micro_vwap_not_overheated"] is False
 
 
 def test_scalping_pyramid_strong_continuation_can_use_lower_profit_gate():
@@ -1675,10 +1711,19 @@ def test_scalping_pyramid_count_is_attribution_only():
     scale_in.TRADING_RULES = replace(CONFIG, SCALPING_MAX_PYRAMID_COUNT=1)
     try:
         result = scale_in.evaluate_scalping_pyramid(
-            {"pyramid_count": 5},
+            {
+                "pyramid_count": 5,
+                "last_reversal_features": {
+                    "buy_pressure_10t": 72.0,
+                    "tick_acceleration_ratio": 0.85,
+                    "large_sell_print_detected": False,
+                    "curr_vs_micro_vwap_bp": 24.0,
+                },
+            },
             profit_rate=2.0,
             peak_profit=2.1,
             is_new_high=True,
+            current_ai_score=74,
         )
         assert result["should_add"] is True
         assert result["reason"] == "scalping_pyramid_ok"
@@ -2315,7 +2360,7 @@ def test_execute_scalping_pyramid_blocks_wide_spread_price_guard(monkeypatch):
     assert stock.get("pending_add_order") is None
 
 
-def test_execute_scalping_pyramid_sends_resolved_best_bid_with_capped_percent_budget_qty(monkeypatch):
+def test_execute_scalping_pyramid_sends_resolved_best_bid_with_dynamic_budget_qty(monkeypatch):
     rules = replace(CONFIG, MAX_POSITION_PCT=1.0)
     monkeypatch.setattr(state_handlers, "TRADING_RULES", rules)
     monkeypatch.setattr(scale_in, "TRADING_RULES", rules)
@@ -2370,15 +2415,17 @@ def test_execute_scalping_pyramid_sends_resolved_best_bid_with_capped_percent_bu
         admin_id=1,
     )
 
-    assert sent_orders == [("123456", 5, 9_990, "00")]
+    assert sent_orders == [("123456", 237, 9_990, "00")]
     assert history[0]["request_price"] == 9_990
     resolved = [fields for stage, fields in logs if stage == "scale_in_price_resolved"][0]
-    assert resolved["would_qty"] == 5
-    assert resolved["effective_qty"] == 5
+    assert resolved["would_qty"] == 237
+    assert resolved["effective_qty"] == 237
+    assert resolved["pyramid_sizing_mode"] == "dynamic_budget"
+    assert resolved["pyramid_position_ratio_cap_applied"] is False
     assert any(stage == "scale_in_price_p2_observe" for stage, _ in logs)
 
 
-def test_execute_scalping_pyramid_blocks_one_share_position_by_exposure_cap(monkeypatch):
+def test_execute_scalping_pyramid_uses_dynamic_budget_for_one_share_position(monkeypatch):
     rules = replace(CONFIG, MAX_POSITION_PCT=1.0, SCALPING_PYRAMID_MAX_ADD_QTY_RATIO=0.50)
     monkeypatch.setattr(state_handlers, "TRADING_RULES", rules)
     monkeypatch.setattr(scale_in, "TRADING_RULES", rules)
@@ -2427,13 +2474,18 @@ def test_execute_scalping_pyramid_blocks_one_share_position_by_exposure_cap(monk
         admin_id=1,
     )
 
-    assert sent_orders == []
-    blocked = [fields for stage, fields in logs if stage == "scale_in_qty_block"][0]
-    assert blocked["reason"] == "pyramid_exposure_cap"
-    assert blocked["pyramid_max_add_qty_ratio"] == 0.5
-    assert blocked["pyramid_max_add_qty"] == 0
-    assert blocked["would_qty"] == 0
-    assert stock.get("pending_add_order") is None
+    assert len(sent_orders) == 1
+    assert sent_orders[0][0] == "240810"
+    assert sent_orders[0][1] == 17
+    assert sent_orders[0][3] == "00"
+    resolved = [fields for stage, fields in logs if stage == "scale_in_price_resolved"][0]
+    assert sent_orders[0][2] == resolved["resolved_price"]
+    assert resolved["scale_in_budget_qty"] == 17
+    assert resolved["would_qty"] == 17
+    assert resolved["effective_qty"] == 17
+    assert resolved["pyramid_sizing_mode"] == "dynamic_budget"
+    assert resolved["pyramid_position_ratio_cap_applied"] is False
+    assert stock.get("pending_add_order") is not None
 
 
 def test_execute_defensive_avg_down_passes_buy_time_block_override(monkeypatch):
@@ -2937,11 +2989,11 @@ def test_execute_scalping_pyramid_refreshes_rest_orderbook_when_quote_missing(mo
         admin_id=1,
     )
 
-    assert sent_orders == [("123456", 5, 9_990, "00")]
+    assert sent_orders == [("123456", 237, 9_990, "00")]
     assert history[0]["request_price"] == 9_990
     resolved = [fields for stage, fields in logs if stage == "scale_in_price_resolved"][0]
-    assert resolved["would_qty"] == 5
-    assert resolved["effective_qty"] == 5
+    assert resolved["would_qty"] == 237
+    assert resolved["effective_qty"] == 237
     assert resolved["pre_submit_ws_snapshot_refresh_reason"] == "ws_manager_missing"
     assert resolved["pre_submit_rest_orderbook_refresh_applied"] is True
     assert resolved["pre_submit_rest_orderbook_refresh_reason"] == "rest_orderbook_fresh"
@@ -3037,7 +3089,7 @@ def test_execute_scalping_pyramid_refreshes_rest_orderbook_when_ws_quote_stale(m
     )
 
     assert result["ord_no"] == "P-REST-STALE"
-    assert sent_orders == [("001260", 5, 11_780, "00")]
+    assert sent_orders == [("001260", 201, 11_780, "00")]
     assert history[0]["request_price"] == 11_780
     resolved = [fields for stage, fields in logs if stage == "scale_in_price_resolved"][0]
     assert resolved["pre_submit_ws_snapshot_refresh_reason"] == "latest_snapshot_stale"
@@ -3889,6 +3941,52 @@ def test_dynamic_scale_in_qty_blocks_weak_pyramid_evidence(monkeypatch):
     assert "quantity_or_cap_change" in blocked["zero_context_forbidden_uses"]
 
 
+def test_dynamic_pyramid_qty_uses_budget_even_when_buy_pressure_is_only_supportive(monkeypatch):
+    rules = replace(
+        CONFIG,
+        MAX_POSITION_PCT=1.0,
+        INVEST_RATIO_SCALPING_MIN=0.10,
+        INVEST_RATIO_SCALPING_MAX=0.30,
+        SCALPING_SCALE_IN_DYNAMIC_QTY_ENABLED=True,
+    )
+    monkeypatch.setattr(scale_in, "TRADING_RULES", rules)
+
+    details = scale_in.describe_dynamic_scale_in_qty(
+        stock={
+            "name": "TEST",
+            "strategy": "SCALPING",
+            "buy_price": 10_000,
+            "buy_qty": 1,
+            "last_reversal_features": {
+                "buy_pressure_10t": 50.0,
+                "tick_acceleration_ratio": 1.0,
+                "large_sell_print_detected": False,
+                "curr_vs_micro_vwap_bp": 40.0,
+            },
+            "actual_order_submitted": True,
+        },
+        resolved_price=10_000,
+        deposit=1_000_000,
+        add_type="PYRAMID",
+        strategy="SCALPING",
+        add_reason="scalping_pyramid_ok",
+        price_resolution={"allowed": True},
+        action={
+            "reason": "scalping_pyramid_ok",
+            "current_ai_score": 70,
+            "profit_rate": 2.0,
+            "peak_profit": 2.0,
+        },
+    )
+
+    assert details["scale_in_budget_qty"] == 22
+    assert details["qty"] == 22
+    assert details["qty_reason"] == "dynamic_allowed"
+    assert details["buy_pressure_support_ok"] is False
+    assert details["pyramid_sizing_mode"] == "dynamic_budget"
+    assert details["pyramid_position_ratio_cap_applied"] is False
+
+
 def test_p2_observe_skip_does_not_change_live_order(monkeypatch):
     rules = replace(CONFIG, MAX_POSITION_PCT=1.0)
     monkeypatch.setattr(state_handlers, "TRADING_RULES", rules)
@@ -3938,7 +4036,7 @@ def test_p2_observe_skip_does_not_change_live_order(monkeypatch):
         admin_id=1,
     )
 
-    assert sent_orders == [("123456", 5, 9_990, "00")]
+    assert sent_orders == [("123456", 232, 9_990, "00")]
     p2_logs = [fields for stage, fields in logs if stage == "scale_in_price_p2_observe"]
     assert p2_logs
     assert p2_logs[0]["live_runtime_effect"] is False

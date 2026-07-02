@@ -3097,7 +3097,7 @@ def test_real_scalp_scale_in_uses_orderable_percent_budget_without_one_share_cap
     assert details["qty"] == 28
 
 
-def test_real_scalp_pyramid_blocks_when_existing_qty_too_small_for_exposure_cap(monkeypatch):
+def test_real_scalp_pyramid_uses_dynamic_budget_for_one_share_position(monkeypatch):
     rules = replace(
         CONFIG,
         INVEST_RATIO_SCALPING_MIN=0.10,
@@ -3118,6 +3118,7 @@ def test_real_scalp_pyramid_blocks_when_existing_qty_too_small_for_exposure_cap(
             "buy_pressure_10t": 79.31,
             "tick_acceleration_ratio": 1.0,
             "large_sell_print_detected": False,
+            "curr_vs_micro_vwap_bp": 47.85,
         },
         "actual_order_submitted": True,
     }
@@ -3139,13 +3140,16 @@ def test_real_scalp_pyramid_blocks_when_existing_qty_too_small_for_exposure_cap(
     )
 
     assert details["sim_uncapped_qty"] is False
-    assert details["pyramid_max_add_qty_ratio"] == 0.5
-    assert details["pyramid_max_add_qty"] == 0
-    assert details["qty"] == 0
-    assert details["qty_reason"] == "pyramid_exposure_cap"
+    assert details["scale_in_budget_qty"] == 13
+    assert details["would_qty"] == 13
+    assert details["effective_qty"] == 13
+    assert details["qty"] == 13
+    assert details["qty_reason"] == "dynamic_allowed"
+    assert details["pyramid_sizing_mode"] == "dynamic_budget"
+    assert details["pyramid_position_ratio_cap_applied"] is False
 
 
-def test_real_scalp_pyramid_caps_effective_qty_to_existing_position_ratio(monkeypatch):
+def test_real_scalp_pyramid_uses_dynamic_budget_qty_without_existing_position_ratio_cap(monkeypatch):
     rules = replace(
         CONFIG,
         INVEST_RATIO_SCALPING_MIN=0.10,
@@ -3166,6 +3170,7 @@ def test_real_scalp_pyramid_caps_effective_qty_to_existing_position_ratio(monkey
             "buy_pressure_10t": 80.0,
             "tick_acceleration_ratio": 1.2,
             "large_sell_print_detected": False,
+            "curr_vs_micro_vwap_bp": 25.0,
         },
         "actual_order_submitted": True,
     }
@@ -3187,10 +3192,11 @@ def test_real_scalp_pyramid_caps_effective_qty_to_existing_position_ratio(monkey
     )
 
     assert details["scale_in_budget_qty"] == 266
-    assert details["pyramid_max_add_qty"] == 5
-    assert details["would_qty"] == 5
-    assert details["effective_qty"] == 5
-    assert details["qty"] == 5
+    assert details["would_qty"] == 266
+    assert details["effective_qty"] == 266
+    assert details["qty"] == 266
+    assert details["pyramid_sizing_mode"] == "dynamic_budget"
+    assert details["pyramid_position_ratio_cap_applied"] is False
 
 
 def test_real_scalp_scale_in_min_one_share_floor_when_percent_budget_is_below_price(monkeypatch):
