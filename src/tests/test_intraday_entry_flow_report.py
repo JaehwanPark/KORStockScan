@@ -683,6 +683,129 @@ def test_build_report_excludes_rising_missed_one_share_forced_submit_from_flow_s
     }
 
 
+def test_build_report_excludes_non_actionable_rising_missed_class_from_residual(tmp_path):
+    event_path = tmp_path / "events.jsonl"
+    diagnostic_path = tmp_path / "diag.json"
+    diagnostic_path.write_text(
+        json.dumps(
+            {
+                "summary": {"real_submit_symbol_count": 0},
+                "promoted_symbols": [
+                    {
+                        "stock_code": "486990",
+                        "stock_name": "노타",
+                        "first_promoted_at": "2026-06-30T12:00:00",
+                        "last_event_at": "2026-06-30T12:15:00",
+                        "max_price_delta_since_first_seen_pct": 3.48,
+                        "latest_price_delta_since_first_seen_pct": 3.48,
+                        "real_submit_count": 0,
+                    }
+                ],
+                "rising_missed_buy": [
+                    {
+                        "stock_code": "486990",
+                        "rising_missed_class": "intended_guard_preserved",
+                        "rising_missed_one_share_eligible": False,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    rows = [
+        _event(
+            "486990",
+            "노타",
+            "same_symbol_loss_reentry_cooldown",
+            {"scanner_promotion_id": "p1", "price_delta_since_first_seen_pct": "3.48"},
+            emitted_at="2026-06-30T12:11:42",
+        )
+    ]
+    event_path.write_text("\n".join(json.dumps(row, ensure_ascii=False) for row in rows), encoding="utf-8")
+
+    report = build_report(
+        target_date="2026-06-30",
+        event_cache_path=event_path,
+        diagnostic_path=diagnostic_path,
+        since="2026-06-30T12:00:00",
+        generated_at="fixed",
+    )
+
+    assert report["summary"]["rising_missed_buy_count_in_latest_diagnostic"] == 1
+    assert report["summary"]["rising_missed_symbol_count_in_report"] == 1
+    assert report["summary"]["rising_missed_residual_excluding_forced_scout_symbol_count"] == 0
+    assert report["forced_scout_observation"]["rising_missed_residual_excluding_forced_scout_symbols"] == []
+
+
+def test_build_report_excludes_prior_forced_scout_symbol_from_window_residual(tmp_path):
+    event_path = tmp_path / "events.jsonl"
+    diagnostic_path = tmp_path / "diag.json"
+    diagnostic_path.write_text(
+        json.dumps(
+            {
+                "summary": {"real_submit_symbol_count": 0},
+                "promoted_symbols": [
+                    {
+                        "stock_code": "001260",
+                        "stock_name": "남광토건",
+                        "first_promoted_at": "2026-06-30T11:50:00",
+                        "last_event_at": "2026-06-30T12:20:00",
+                        "max_price_delta_since_first_seen_pct": 5.11,
+                        "latest_price_delta_since_first_seen_pct": 5.11,
+                        "real_submit_count": 0,
+                    }
+                ],
+                "rising_missed_buy": [
+                    {
+                        "stock_code": "001260",
+                        "rising_missed_class": "rising_missed_raw",
+                        "rising_missed_one_share_eligible": True,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    rows = [
+        _event(
+            "001260",
+            "남광토건",
+            "rising_missed_one_share_entry",
+            {
+                "scanner_promotion_id": "p1",
+                "price_delta_since_first_seen_pct": "5.11",
+                "forced_entry_reason": "rising_missed_one_share_entry",
+                "forced_entry_qty": "1",
+            },
+            emitted_at="2026-06-30T11:57:42",
+        ),
+        _event(
+            "001260",
+            "남광토건",
+            "scalping_scanner_promotion_latency_trace",
+            {"scanner_promotion_id": "p1", "price_delta_since_first_seen_pct": "5.11"},
+            emitted_at="2026-06-30T12:19:39",
+        ),
+    ]
+    event_path.write_text("\n".join(json.dumps(row, ensure_ascii=False) for row in rows), encoding="utf-8")
+
+    report = build_report(
+        target_date="2026-06-30",
+        event_cache_path=event_path,
+        diagnostic_path=diagnostic_path,
+        since="2026-06-30T12:00:00",
+        generated_at="fixed",
+    )
+
+    assert report["summary"]["rising_missed_forced_scout_event_count"] == 0
+    assert report["summary"]["rising_missed_forced_scout_symbol_count"] == 1
+    assert report["summary"]["rising_missed_forced_scout_residual_symbol_count"] == 1
+    assert report["summary"]["rising_missed_residual_excluding_forced_scout_symbol_count"] == 0
+    assert report["forced_scout_observation"]["symbols"] == ["001260"]
+    assert report["forced_scout_observation"]["rising_missed_residual_symbols"] == ["001260"]
+    assert report["forced_scout_observation"]["rising_missed_residual_excluding_forced_scout_symbols"] == []
+
+
 def test_build_report_excludes_unflagged_submit_after_forced_scout_from_flow_submit_count(tmp_path):
     event_path = tmp_path / "events.jsonl"
     diagnostic_path = tmp_path / "diag.json"

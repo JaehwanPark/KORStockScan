@@ -484,6 +484,54 @@ def test_build_report_suppresses_normal_cooldown_and_single_deferred_as_major_bl
     assert report["summary"]["suppressed_non_actionable_blocker_count"] == 2
 
 
+def test_build_report_treats_same_symbol_loss_reentry_cooldown_as_intended_guard(tmp_path):
+    path = tmp_path / "pipeline_events_2026-06-23.jsonl"
+    rows = [
+        _event("000001", "A", "scalping_scanner_candidate_promoted", {"price_delta_since_first_seen_pct": "1.30"}),
+        _event("000001", "A", "same_symbol_loss_reentry_cooldown", {"price_delta_since_first_seen_pct": "1.30"}),
+    ]
+    path.write_text("\n".join(json.dumps(row, ensure_ascii=False) for row in rows), encoding="utf-8")
+
+    report = build_report(target_date="2026-06-23", pipeline_path=path, generated_at="fixed")
+
+    assert report["summary"]["rising_missed_buy_count"] == 1
+    assert report["summary"]["rising_missed_class_counts"] == [
+        {"class": "intended_guard_preserved", "count": 1}
+    ]
+    assert report["summary"]["rising_missed_one_share_eligible_symbol_count"] == 0
+    item = report["rising_missed_buy"][0]
+    assert item["rising_missed_class"] == "intended_guard_preserved"
+    assert item["rising_missed_one_share_eligible"] is False
+    assert item["dominant_actionable_blocker"] == {
+        "stage": "",
+        "reason": "",
+        "count": 0,
+        "class": "non_actionable_guard_or_backpressure",
+        "route": "observe_only",
+    }
+    assert item["latest_blocker"] == {
+        "stage": "same_symbol_loss_reentry_cooldown",
+        "reason": "",
+        "emitted_at": "2026-06-23T08:00:00",
+        "price_delta_since_first_seen_pct": 1.3,
+        "ai_score": None,
+    }
+    assert item["recent_blockers"][-1]["taxonomy"] == {
+        "class": "intended_guard",
+        "actionable": False,
+        "major_blocker": False,
+        "route": "normal_cooldown_guard",
+    }
+    assert report["blocker_taxonomy"]["suppressed_non_actionable_counts"] == [
+        {
+            "class": "intended_guard",
+            "stage": "same_symbol_loss_reentry_cooldown",
+            "reason": "",
+            "count": 1,
+        }
+    ]
+
+
 def test_build_report_splits_full_eval_deferred_then_evaluated_status(tmp_path):
     path = tmp_path / "pipeline_events_2026-06-23.jsonl"
     rows = [

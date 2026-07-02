@@ -409,11 +409,26 @@ def build_report(
         if until_ts is not None and active_from is not None and active_from > until_ts:
             continue
         promoted[code] = item
-    rising_missed_codes = {
-        str(item.get("stock_code"))
-        for item in diagnostic.get("rising_missed_buy", [])
-        if isinstance(item, dict) and item.get("stock_code")
+    rising_missed_codes: set[str] = set()
+    rising_missed_residual_codes: set[str] = set()
+    non_residual_classes = {
+        "intended_guard_preserved",
+        "source_quality_excluded",
+        "runtime_backpressure_observation",
+        "strategy_reject_missed",
+        "submitted_resolved",
+        "not_rising_missed",
     }
+    for item in diagnostic.get("rising_missed_buy", []):
+        if not isinstance(item, dict) or not item.get("stock_code"):
+            continue
+        code = str(item.get("stock_code"))
+        rising_missed_codes.add(code)
+        klass = str(item.get("rising_missed_class") or "")
+        explicit_eligible = item.get("rising_missed_one_share_eligible")
+        if explicit_eligible is False or klass in non_residual_classes:
+            continue
+        rising_missed_residual_codes.add(code)
     promoted_codes = set(promoted)
     raw_promoted_codes = set(raw_promoted)
     forced_scout_event_count = 0
@@ -450,15 +465,19 @@ def build_report(
 
     for row in _read_jsonl(event_cache_path):
         ts = _parse_ts(row.get("emitted_at"))
-        if ts is None or (since_ts is not None and ts < since_ts) or (until_ts is not None and ts > until_ts):
-            continue
         fields = row.get("fields") if isinstance(row.get("fields"), dict) else {}
         code = str(row.get("stock_code") or "").strip()
+        in_window = ts is not None and not (
+            (since_ts is not None and ts < since_ts) or (until_ts is not None and ts > until_ts)
+        )
         if code in raw_promoted_codes and _is_rising_missed_forced_one_share_entry(fields):
-            forced_scout_event_count += 1
-            forced_scout_symbols.add(code)
-            if ts is not None:
+            if ts is not None and (until_ts is None or ts <= until_ts):
+                forced_scout_symbols.add(code)
                 latest_forced_scout_at_by_code[code] = ts
+            if in_window:
+                forced_scout_event_count += 1
+            continue
+        if ts is None or (since_ts is not None and ts < since_ts) or (until_ts is not None and ts > until_ts):
             continue
         if _is_rising_missed_forced_lineage_row(row, latest_forced_scout_at_by_code):
             continue
@@ -640,7 +659,9 @@ def build_report(
         "rising_symbol_count_by_max_delta": sum(1 for row in rows if row["rise_after_watch"] == "rising"),
         "rising_missed_buy_count_in_latest_diagnostic": len(rising_missed_codes),
         "rising_missed_symbol_count_in_report": sum(1 for row in rows if row["rising_missed_in_diagnostic"]),
-        "rising_missed_residual_excluding_forced_scout_symbol_count": len(rising_missed_codes - forced_scout_symbols),
+        "rising_missed_residual_excluding_forced_scout_symbol_count": len(
+            rising_missed_residual_codes - forced_scout_symbols
+        ),
         "rising_missed_forced_scout_event_count": forced_scout_event_count,
         "rising_missed_forced_scout_symbol_count": len(forced_scout_symbols),
         "rising_missed_forced_scout_residual_symbol_count": len(rising_missed_codes & forced_scout_symbols),
@@ -824,7 +845,9 @@ def build_report(
             "symbol_count": len(forced_scout_symbols),
             "symbols": sorted(forced_scout_symbols),
             "rising_missed_residual_symbols": sorted(rising_missed_codes & forced_scout_symbols),
-            "rising_missed_residual_excluding_forced_scout_symbols": sorted(rising_missed_codes - forced_scout_symbols),
+            "rising_missed_residual_excluding_forced_scout_symbols": sorted(
+                rising_missed_residual_codes - forced_scout_symbols
+            ),
             "decision_authority": "source_quality_only",
             "runtime_effect": False,
         },

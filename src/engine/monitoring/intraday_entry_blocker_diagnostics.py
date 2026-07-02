@@ -46,6 +46,7 @@ BLOCKER_STAGES = {
     "score65_74_recovery_probe_blocked",
     "scalping_scanner_watch_eviction",
     "scalping_scanner_watching_runtime_skip",
+    "same_symbol_loss_reentry_cooldown",
 }
 
 RECOVERY_OBSERVATION_REASONS = {
@@ -110,6 +111,7 @@ SCALE_IN_REASON_TOKENS = {
 RELIEF_BLOCKER_REASONS = {
     "scanner_full_eval_loop_budget_deferred",
     "entry_cooldown_active",
+    "same_symbol_loss_reentry_cooldown",
     "scalping_new_buy_cutoff",
     "outside_scalping_buy_window",
     "ws_snapshot_missing_or_zero",
@@ -724,7 +726,7 @@ def _blocker_taxonomy(
             "major_blocker": False,
             "route": "auto_governor_backpressure_observation",
         }
-    if reason == "entry_cooldown_active":
+    if reason == "entry_cooldown_active" or stage == "same_symbol_loss_reentry_cooldown":
         actionable = count >= ACTIONABLE_COOLDOWN_MIN_COUNT and delta >= ACTIONABLE_COOLDOWN_MIN_DELTA_PCT
         return {
             "class": "intended_guard",

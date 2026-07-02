@@ -241,3 +241,27 @@ This file is cumulative. Do not append every 10-minute loop result here. Loop-le
 - `runtime_effect=false`
 - `allowed_runtime_apply=false`
 - This is report-source and window-filter repair only. It does not change thresholds, provider route, bot state, order submission, stale/latency/broker/account/order/quantity/cooldown guards, or hard safety.
+
+## 9. 2026-07-02 Same-Symbol Cooldown And Prior Forced Scout Residual Exclusion
+
+### Decision
+
+- `same_symbol_loss_reentry_cooldown` is an intended guard for rising-missed diagnostics, not a normal BUY residual or forced one-share candidate.
+- A symbol with prior same-day `rising_missed_one_share_entry` or scout evidence remains excluded from normal residual counts inside a later monitoring window.
+
+### Change
+
+- Intraday blocker diagnostics classify `same_symbol_loss_reentry_cooldown` as `intended_guard`.
+- Intraday flow residual counts now exclude explicit non-actionable rising-missed classes and prior same-day forced scout symbols.
+
+### Validation
+
+- `PYTHONPATH=. .venv/bin/pytest src/tests/test_intraday_entry_blocker_diagnostics.py src/tests/test_intraday_entry_flow_report.py -q` passed with `57 passed`.
+- `PYTHONPATH=. .venv/bin/python -m py_compile src/engine/monitoring/intraday_entry_blocker_diagnostics.py src/engine/monitoring/intraday_entry_flow_report.py src/tests/test_intraday_entry_blocker_diagnostics.py src/tests/test_intraday_entry_flow_report.py` passed.
+- `git diff --check` passed.
+
+### Operating Boundary
+
+- `runtime_effect=false`
+- `allowed_runtime_apply=false`
+- This changed diagnostic/report classification only. It did not change thresholds, provider route, bot state, order submission, cooldown behavior, stale/latency/broker/account/order/quantity guards, or hard safety.
