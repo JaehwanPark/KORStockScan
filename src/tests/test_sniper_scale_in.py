@@ -56,6 +56,15 @@ class _DummyDB:
         return _DummySession()
 
 
+@pytest.fixture(autouse=True)
+def stub_kt00011_orderable_lookup(monkeypatch):
+    monkeypatch.setattr(
+        state_handlers.kiwoom_utils,
+        "get_orderable_by_margin_kt00011",
+        lambda *args, **kwargs: {"error": "kt00011_unit_test_default_fallback"},
+    )
+
+
 def test_holding_sell_exchange_resolution_blocks_krx_only_during_nxt_time(monkeypatch):
     class DummyDB:
         def get_latest_is_nxt(self, code):
@@ -2476,13 +2485,13 @@ def test_execute_scalping_pyramid_uses_dynamic_budget_for_one_share_position(mon
 
     assert len(sent_orders) == 1
     assert sent_orders[0][0] == "240810"
-    assert sent_orders[0][1] == 17
+    assert sent_orders[0][1] == 13
     assert sent_orders[0][3] == "00"
     resolved = [fields for stage, fields in logs if stage == "scale_in_price_resolved"][0]
     assert sent_orders[0][2] == resolved["resolved_price"]
-    assert resolved["scale_in_budget_qty"] == 17
-    assert resolved["would_qty"] == 17
-    assert resolved["effective_qty"] == 17
+    assert resolved["scale_in_budget_qty"] == 13
+    assert resolved["would_qty"] == 13
+    assert resolved["effective_qty"] == 13
     assert resolved["pyramid_sizing_mode"] == "dynamic_budget"
     assert resolved["pyramid_position_ratio_cap_applied"] is False
     assert stock.get("pending_add_order") is not None
@@ -3985,6 +3994,93 @@ def test_dynamic_pyramid_qty_uses_budget_even_when_buy_pressure_is_only_supporti
     assert details["buy_pressure_support_ok"] is False
     assert details["pyramid_sizing_mode"] == "dynamic_budget"
     assert details["pyramid_position_ratio_cap_applied"] is False
+
+
+def test_dynamic_scale_in_qty_uses_deposit_budget_with_cash_orderable_qty_cap(monkeypatch):
+    rules = replace(
+        CONFIG,
+        MAX_POSITION_PCT=1.0,
+        INVEST_RATIO_SCALPING_MIN=0.10,
+        INVEST_RATIO_SCALPING_MAX=0.30,
+        SCALPING_SCALE_IN_DYNAMIC_QTY_ENABLED=True,
+        SCALPING_SCALE_IN_MIN_ONE_SHARE_FLOOR_ENABLED=True,
+    )
+    monkeypatch.setattr(scale_in, "TRADING_RULES", rules)
+
+    stock = {
+        "name": "Samsung",
+        "strategy": "SCALPING",
+        "buy_price": 300_000,
+        "buy_qty": 11,
+        "actual_order_submitted": True,
+    }
+
+    details = scale_in.describe_dynamic_scale_in_qty(
+        stock=stock,
+        resolved_price=289_500,
+        deposit=1_827_370,
+        add_type="AVG_DOWN",
+        strategy="SCALPING",
+        add_reason="stop_line_touch_mandatory_avg_down",
+        price_resolution={"allowed": True},
+        action={"reason": "stop_line_touch_mandatory_avg_down", "current_ai_score": 71},
+        cash_orderable_qty_cap=8,
+        budget_source="kt00011_min_account_deposit_cash_orderable",
+        account_deposit=1_827_370,
+        cash_orderable_amount=2_394_255,
+    )
+
+    assert details["scale_in_budget_ratio"] == 0.242
+    assert details["scale_in_safe_budget"] == 420_112
+    assert details["scale_in_budget_qty"] == 1
+    assert details["scale_in_cash_orderable_qty_cap"] == 8
+    assert details["scale_in_budget_source"] == "kt00011_min_account_deposit_cash_orderable"
+    assert details["qty"] == 1
+    assert details["qty_reason"] == "dynamic_allowed"
+
+    blocked = scale_in.describe_dynamic_scale_in_qty(
+        stock=stock,
+        resolved_price=289_500,
+        deposit=1_827_370,
+        add_type="AVG_DOWN",
+        strategy="SCALPING",
+        add_reason="stop_line_touch_mandatory_avg_down",
+        price_resolution={"allowed": True},
+        action={"reason": "stop_line_touch_mandatory_avg_down", "current_ai_score": 71},
+        cash_orderable_qty_cap=0,
+        budget_source="kt00011_min_account_deposit_cash_orderable",
+        account_deposit=1_827_370,
+        cash_orderable_amount=2_394_255,
+    )
+
+    assert blocked["scale_in_budget_qty"] == 0
+    assert blocked["scale_in_cash_orderable_qty_cap"] == 0
+    assert blocked["qty"] == 0
+    assert blocked["qty_reason"] == "position_cap_or_budget"
+
+
+def test_resolve_scalp_cash_budget_context_prefers_kt00011_deposit_with_cash_qty_guard(monkeypatch):
+    monkeypatch.setattr(state_handlers, "KIWOOM_TOKEN", "TOKEN")
+    monkeypatch.setattr(
+        state_handlers.kiwoom_utils,
+        "get_orderable_by_margin_kt00011",
+        lambda token, code, unit_price=None: {
+            "error": "",
+            "deposit": 1_827_370,
+            "cash_only_orderable_amount": 2_394_255,
+            "cash_only_orderable_qty": 8,
+            "stock_margin_rate": 20,
+            "applied_margin_rate": 20,
+        },
+    )
+
+    context = state_handlers._resolve_scalp_cash_budget_context("005930", 289_500, 213_809)
+
+    assert context["budget_base"] == 1_827_370
+    assert context["budget_source"] == "kt00011_min_account_deposit_cash_orderable"
+    assert context["account_deposit"] == 1_827_370
+    assert context["cash_orderable_amount"] == 2_394_255
+    assert context["cash_orderable_qty_cap"] == 8
 
 
 def test_p2_observe_skip_does_not_change_live_order(monkeypatch):
@@ -16990,6 +17086,141 @@ def test_stop_line_touch_mandatory_avg_down_submits_before_grace(monkeypatch):
     by_stage = {stage: fields for stage, fields in pipeline_events}
     assert "stop_line_touch_mandatory_avg_down_candidate" in by_stage
     assert by_stage["stop_line_touch_mandatory_avg_down_submitted"]["actual_order_submitted"] is True
+
+
+def test_stop_line_touch_qty_budget_block_auto_excludes_manual_control(monkeypatch, tmp_path):
+    path = tmp_path / "manual_control_excluded_codes.txt"
+    stock = {
+        "id": 1,
+        "code": "005930",
+        "name": "삼성전자",
+        "status": "HOLDING",
+        "strategy": "SCALPING",
+        "buy_price": 300_000,
+        "buy_qty": 11,
+        "actual_order_submitted": True,
+    }
+    logs = []
+    block_result = {
+        "status": "blocked",
+        "block_stage": "scale_in_qty_block",
+        "reason": "position_cap_or_budget",
+        "qty": 0,
+        "effective_qty": 0,
+        "scale_in_budget_source": "kt00011_min_account_deposit_cash_orderable",
+        "scale_in_account_deposit": 1_827_370,
+        "scale_in_cash_orderable_amount": 2_394_255,
+        "scale_in_cash_orderable_qty_cap": 0,
+    }
+
+    monkeypatch.delenv("KORSTOCKSCAN_MANUAL_CONTROL_EXCLUDED_CODES", raising=False)
+    monkeypatch.setenv("KORSTOCKSCAN_MANUAL_CONTROL_EXCLUDED_CODES_FILE", str(path))
+    monkeypatch.setattr(state_handlers, "_log_holding_pipeline", lambda stock, code, stage, **fields: logs.append((stage, fields)))
+    monkeypatch.setattr(
+        state_handlers,
+        "can_consider_scale_in",
+        lambda *args, **kwargs: {"allowed": True, "reason": "ok"},
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_evaluate_stop_line_touch_mandatory_avg_down",
+        lambda *args, **kwargs: {
+            "should_retry": True,
+            "reason": "stop_line_touch_mandatory_avg_down",
+            "used_count": 0,
+            "action": {
+                "should_add": True,
+                "add_type": "AVG_DOWN",
+                "reason": "stop_line_touch_mandatory_avg_down",
+            },
+        },
+    )
+    monkeypatch.setattr(state_handlers, "_process_scale_in_action", lambda **kwargs: block_result)
+
+    result = state_handlers._attempt_stop_line_touch_mandatory_avg_down(
+        stock=stock,
+        code="005930",
+        ws_data={"curr": 289_500},
+        strategy="SCALPING",
+        market_regime="BULL",
+        admin_id=1,
+        sell_reason_type="LOSS",
+        exit_rule="scalp_soft_stop_pct",
+        profit_rate=-3.25,
+        peak_profit=-0.2,
+        current_ai_score=71,
+        held_sec=11755,
+        dynamic_stop_pct=-3.0,
+        now_ts=1000.0,
+    )
+
+    assert result["manual_control_excluded"] is True
+    assert result["reason"] == "manual_control_excluded_after_scale_in_qty_guard_block"
+    assert "005930" in path.read_text(encoding="utf-8")
+    assert stock["manual_control_auto_scale_in_qty_blocked"] is True
+    by_stage = {stage: fields for stage, fields in logs}
+    auto = by_stage["manual_control_scale_in_qty_guard_auto_excluded"]
+    assert auto["manual_control_auto_exclusion_policy"] == "scale_in_qty_guard_block_before_loss_exit_v1"
+    assert auto["actual_order_submitted"] is False
+    assert auto["broker_order_forbidden"] is True
+
+
+def test_hard_stop_qty_budget_block_does_not_auto_exclude_manual_control(monkeypatch, tmp_path):
+    path = tmp_path / "manual_control_excluded_codes.txt"
+    stock = {
+        "id": 1,
+        "code": "005930",
+        "name": "삼성전자",
+        "status": "HOLDING",
+        "strategy": "SCALPING",
+        "buy_price": 300_000,
+        "buy_qty": 11,
+        "actual_order_submitted": True,
+    }
+    block_result = {
+        "status": "blocked",
+        "block_stage": "scale_in_qty_block",
+        "reason": "position_cap_or_budget",
+        "qty": 0,
+        "effective_qty": 0,
+    }
+
+    monkeypatch.delenv("KORSTOCKSCAN_MANUAL_CONTROL_EXCLUDED_CODES", raising=False)
+    monkeypatch.setenv("KORSTOCKSCAN_MANUAL_CONTROL_EXCLUDED_CODES_FILE", str(path))
+    monkeypatch.setattr(state_handlers, "_log_holding_pipeline", lambda *args, **kwargs: None)
+    monkeypatch.setattr(state_handlers, "can_consider_scale_in", lambda *args, **kwargs: {"allowed": True, "reason": "ok"})
+    monkeypatch.setattr(
+        state_handlers,
+        "_evaluate_stop_line_touch_mandatory_avg_down",
+        lambda *args, **kwargs: {
+            "should_retry": True,
+            "reason": "stop_line_touch_mandatory_avg_down",
+            "used_count": 0,
+            "action": {"should_add": True, "add_type": "AVG_DOWN", "reason": "stop_line_touch_mandatory_avg_down"},
+        },
+    )
+    monkeypatch.setattr(state_handlers, "_process_scale_in_action", lambda **kwargs: block_result)
+
+    result = state_handlers._attempt_stop_line_touch_mandatory_avg_down(
+        stock=stock,
+        code="005930",
+        ws_data={"curr": 289_500},
+        strategy="SCALPING",
+        market_regime="BULL",
+        admin_id=1,
+        sell_reason_type="LOSS",
+        exit_rule="scalp_hard_stop_pct",
+        profit_rate=-3.25,
+        peak_profit=-0.2,
+        current_ai_score=71,
+        held_sec=11755,
+        dynamic_stop_pct=-2.5,
+        now_ts=1000.0,
+    )
+
+    assert result["reason"] == "scale_in_submit_failed_or_guard_blocked"
+    assert not path.exists()
+    assert "manual_control_auto_scale_in_qty_blocked" not in stock
 
 
 def test_soft_stop_line_touch_avg_down_defer_waits_for_extra_dip(monkeypatch):

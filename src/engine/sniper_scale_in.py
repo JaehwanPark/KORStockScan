@@ -965,6 +965,10 @@ def describe_dynamic_scale_in_qty(
     add_reason=None,
     price_resolution=None,
     action=None,
+    cash_orderable_qty_cap=None,
+    budget_source=None,
+    account_deposit=None,
+    cash_orderable_amount=None,
 ):
     """추가매수 수량을 safety guard와 position cap 안에서 결정하고 provenance를 남긴다."""
     legacy = describe_scale_in_qty(
@@ -1020,6 +1024,9 @@ def describe_dynamic_scale_in_qty(
 
     scalp_budget_qty = None
     scalp_min_one_share_floor_applied = False
+    cash_qty_cap = None
+    if cash_orderable_qty_cap is not None:
+        cash_qty_cap = max(0, _safe_int(cash_orderable_qty_cap, 0))
     if normalized_strategy == "SCALPING" and not details["sim_uncapped_qty"]:
         current_ai_score_for_ratio = _safe_float(
             (action or {}).get("current_ai_score", stock.get("current_ai_score", (stock.get("rt_ai_prob") or 0) * 100)),
@@ -1040,10 +1047,18 @@ def describe_dynamic_scale_in_qty(
         if scalp_budget_qty <= 0 and min_one_share_floor_enabled and float(deposit) >= float(resolved_price):
             scalp_budget_qty = 1
             scalp_min_one_share_floor_applied = True
+        if cash_qty_cap is not None:
+            scalp_budget_qty = min(max(0, scalp_budget_qty), cash_qty_cap)
         cap_qty = max(0, scalp_budget_qty)
         effective_cap = configured_effective_cap if configured_effective_cap > 0 else cap_qty
         details.update(
             {
+                "scale_in_budget_source": budget_source or "budget_base",
+                "scale_in_account_deposit": _safe_int(account_deposit, 0) if account_deposit is not None else deposit,
+                "scale_in_cash_orderable_amount": (
+                    _safe_int(cash_orderable_amount, 0) if cash_orderable_amount is not None else deposit
+                ),
+                "scale_in_cash_orderable_qty_cap": cash_qty_cap if cash_qty_cap is not None else "-",
                 "scale_in_budget_ratio": round(scale_in_ratio, 6),
                 "scale_in_target_budget": int(target_budget),
                 "scale_in_safe_budget": int(safe_budget),

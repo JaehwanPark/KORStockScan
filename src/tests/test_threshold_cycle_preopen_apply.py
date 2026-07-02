@@ -2673,6 +2673,93 @@ def test_pre_submit_liquidity_relief_operator_lock_emits_env(tmp_path, monkeypat
     assert manifest["runtime_env_overrides"]["KORSTOCKSCAN_PRE_SUBMIT_LIQUIDITY_RELIEF_MIN_BUY_PRESSURE"] == "68"
 
 
+def test_entry_opportunity_recheck_operator_lock_emits_next_preopen_env(tmp_path, monkeypatch):
+    report_dir = tmp_path / "report"
+    apply_dir = tmp_path / "apply_plans"
+    runtime_dir = tmp_path / "runtime_env"
+    lock_dir = tmp_path / "operator_runtime_env_locks"
+    latency_dir = tmp_path / "missing_latency_classifier_recommendation"
+    report_dir.mkdir(parents=True)
+    lock_dir.mkdir(parents=True)
+    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "APPLY_PLAN_DIR", apply_dir)
+    monkeypatch.setattr(mod, "RUNTIME_ENV_DIR", runtime_dir)
+    monkeypatch.setattr(mod, "OPERATOR_RUNTIME_ENV_LOCK_DIR", lock_dir)
+    monkeypatch.setattr(mod, "LATENCY_CLASSIFIER_RECOMMENDATION_DIR", latency_dir)
+
+    (report_dir / "threshold_cycle_2026-07-02.json").write_text(
+        json.dumps({"date": "2026-07-02", "calibration_candidates": []}),
+        encoding="utf-8",
+    )
+    (lock_dir / "score65_74_recovery_probe_2026-06-11.json").write_text(
+        json.dumps(
+            {
+                "lock_id": "score65_74_recovery_probe_real_operator_override_2026-06-11",
+                "enabled": True,
+                "family": "score65_74_recovery_probe",
+                "stage": "entry",
+                "priority": 900,
+                "active_from_date": "2026-06-11",
+                "explicit_close_required": True,
+                "env_overrides": {
+                    "KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_ENABLED": "true",
+                },
+                "allowed_close_reason_keywords": ["same_stage_owner_conflict", "tuning_override"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (lock_dir / "entry_opportunity_recheck_2026-07-03.json").write_text(
+        json.dumps(
+            {
+                "lock_id": "entry_opportunity_recheck_operator_override_2026-07-03",
+                "enabled": True,
+                "family": "entry_opportunity_recheck_runtime",
+                "stage": "entry",
+                "priority": 908,
+                "active_from_date": "2026-07-03",
+                "explicit_close_required": True,
+                "env_overrides": {
+                    "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_ENABLED": "true",
+                    "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_MIN_AI_SCORE": "70",
+                    "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_MAX_AI_SCORE": "74.999",
+                    "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_MAX_RECHECK_PER_SYMBOL": "1",
+                    "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_MAX_DAILY_RECHECK": "10",
+                    "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_MAX_DAILY_BUY_RECOVERY": "3",
+                    "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_MAX_WS_AGE_MS": "1500",
+                    "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_FORBID_DANGER": "true",
+                    "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_REQUIRE_FRESH_QUOTE": "true",
+                    "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_REQUIRE_EXPLICIT_BUY_ACTION": "true",
+                },
+                "allowed_close_reason_keywords": [
+                    "same_stage_owner_conflict",
+                    "entry_live_auto_apply_ready",
+                    "tuning_override",
+                    "safety_revert_required",
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    manifest = mod.build_preopen_apply_manifest(
+        "2026-07-03",
+        source_date="2026-07-02",
+        apply_mode="auto_bounded_live",
+        auto_apply=True,
+        require_ai=False,
+    )
+
+    decisions = {item["family"]: item for item in manifest["auto_apply_decisions"]}
+    assert decisions["entry_opportunity_recheck_runtime"]["selected"] is True
+    assert decisions["entry_opportunity_recheck_runtime"]["operator_runtime_env_lock"]["applied"] is True
+    env = manifest["runtime_env_overrides"]
+    assert env["KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_ENABLED"] == "true"
+    assert env["KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_MIN_AI_SCORE"] == "70"
+    assert env["KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_MAX_AI_SCORE"] == "74.999"
+    assert env["KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_MAX_DAILY_BUY_RECOVERY"] == "3"
+
+
 def test_weak_context_late_entry_guard_operator_lock_emits_env(tmp_path, monkeypatch):
     report_dir = tmp_path / "report"
     apply_dir = tmp_path / "apply_plans"

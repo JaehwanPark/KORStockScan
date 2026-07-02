@@ -1,0 +1,49 @@
+{
+  "lock_id": "entry_opportunity_recheck_operator_override_2026-07-03",
+  "enabled": true,
+  "family": "entry_opportunity_recheck_runtime",
+  "stage": "entry",
+  "manipulation_point": "blocked_ai_score_near_buy_recheck",
+  "scope": "real_scalping_scanner_ai_buy_score70_74_fresh_quote_only",
+  "runtime_effect": true,
+  "active_from_date": "2026-07-03",
+  "priority": 908,
+  "explicit_close_required": true,
+  "env_overrides": {
+    "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_ENABLED": "true",
+    "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_MIN_AI_SCORE": "70",
+    "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_MAX_AI_SCORE": "74.999",
+    "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_MAX_RECHECK_PER_SYMBOL": "1",
+    "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_MAX_DAILY_RECHECK": "10",
+    "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_MAX_DAILY_BUY_RECOVERY": "3",
+    "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_MAX_WS_AGE_MS": "1500",
+    "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_FORBID_DANGER": "true",
+    "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_REQUIRE_FRESH_QUOTE": "true",
+    "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_REQUIRE_EXPLICIT_BUY_ACTION": "true"
+  },
+  "forbidden_uses": [
+    "EV",
+    "rolling",
+    "MTD",
+    "cumulative_tuning",
+    "live_auto_promotion",
+    "runtime_apply_bridge",
+    "threshold_mutation",
+    "provider_route_change",
+    "order_price_change",
+    "quantity_cap_change",
+    "broker_guard_change",
+    "stale_quote_bypass",
+    "cooldown_bypass",
+    "hard_safety_bypass",
+    "bot_restart_authority"
+  ],
+  "allowed_close_reason_keywords": [
+    "same_stage_owner_conflict",
+    "entry_live_auto_apply_ready",
+    "live_auto_apply_ready",
+    "tuning_override",
+    "safety_revert_required"
+  ],
+  "notes": "Operator runtime override for the bounded one-share opportunity entry hook. Re-enters only blocked AI-score 70-74.999 SCALPING SCANNER candidates when AI action is BUY and the quote is fresh. It does not change BUY score threshold, provider, order price, quantity, broker, stale quote, cooldown, or hard safety guards."
+}

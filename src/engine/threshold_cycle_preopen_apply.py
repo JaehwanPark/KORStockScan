@@ -298,6 +298,7 @@ EARLY_ACCEL_RECHECK_FAMILY = "early_accel_recheck_runtime"
 AI_NUMERIC_CONSISTENCY_RECHECK_FAMILY = "ai_numeric_consistency_recheck_runtime"
 PRE_SUBMIT_LIQUIDITY_RELIEF_FAMILY = "pre_submit_liquidity_relief_runtime"
 WEAK_CONTEXT_LATE_ENTRY_GUARD_FAMILY = "weak_context_late_entry_guard_runtime"
+ENTRY_OPPORTUNITY_RECHECK_FAMILY = "entry_opportunity_recheck_runtime"
 SCORE65_74_STRONG_MICRO_OVERRIDE_FAMILY = "score65_74_recovery_probe_strong_micro_override_runtime"
 ENTRY_PRICE_LIVE_TUNING_MARKER_ENV = "KORSTOCKSCAN_ENTRY_PRICE_LIVE_TUNING_SELECTED"
 ENTRY_STAGE_LIVE_TUNING_MARKER_ENV = "KORSTOCKSCAN_ENTRY_STAGE_LIVE_TUNING_SELECTED"
@@ -786,6 +787,7 @@ _FAMILY_ENV_KEY_PREFIXES: dict[str, str] = {
     "score65_74_recovery_probe": "KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_",
     SCORE65_74_STRONG_MICRO_OVERRIDE_FAMILY: "KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_STRONG_MICRO_",
     PRE_SUBMIT_LIQUIDITY_RELIEF_FAMILY: "KORSTOCKSCAN_PRE_SUBMIT_LIQUIDITY_RELIEF_",
+    ENTRY_OPPORTUNITY_RECHECK_FAMILY: "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_",
     "scalp_sim_candidate_window_expansion": "KORSTOCKSCAN_SCALP_SIM_CANDIDATE_WINDOW_",
     "scalp_sim_ai_budget_manager": "KORSTOCKSCAN_SCALP_SIM_AI_",
     "lifecycle_decision_matrix_runtime": "KORSTOCKSCAN_LIFECYCLE_DECISION_MATRIX_",
@@ -1946,6 +1948,7 @@ def _additive_entry_operator_lock_stage_coexist(
         AI_NUMERIC_CONSISTENCY_RECHECK_FAMILY,
         PRE_SUBMIT_LIQUIDITY_RELIEF_FAMILY,
         WEAK_CONTEXT_LATE_ENTRY_GUARD_FAMILY,
+        ENTRY_OPPORTUNITY_RECHECK_FAMILY,
     }
     if family not in additive_entry_lock_families or stage not in selected_by_stage:
         return False

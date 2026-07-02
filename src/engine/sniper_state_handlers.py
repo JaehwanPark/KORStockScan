@@ -154,6 +154,10 @@ from src.engine.scalping.entry_reprice_after_submit import (
     RUNTIME_FAMILY as ENTRY_REPRICE_RUNTIME_FAMILY,
     evaluate_entry_reprice_after_submit,
 )
+from src.engine.scalping.entry_opportunity_recheck import (
+    EntryOpportunityRecheckState,
+    evaluate_blocked_ai_score_recheck,
+)
 
 
 KIWOOM_TOKEN = None
@@ -163,6 +167,7 @@ ACTIVE_TARGETS = None
 WS_MANAGER = None
 _GREENFIELD_TELEGRAM_KEYS: set[str] = set()
 _STOP_LINE_TOUCH_MANDATORY_AVG_DOWN_REASON = "stop_line_touch_mandatory_avg_down"
+_ENTRY_OPPORTUNITY_RECHECK_STATE = EntryOpportunityRecheckState()
 
 
 def _defensive_avg_down_used_count(stock: dict | None) -> int:
@@ -1627,6 +1632,48 @@ def _safe_int(value, default=0):
         return default
 
 
+def _resolve_scalp_cash_budget_context(code, unit_price, fallback_orderable_amount):
+    fallback = max(0, _safe_int(fallback_orderable_amount, 0))
+    context = {
+        "budget_base": fallback,
+        "budget_source": "kt00001_ord_alow_amt",
+        "account_deposit": 0,
+        "cash_orderable_amount": fallback,
+        "cash_orderable_qty_cap": None,
+        "kt00011_error": "",
+    }
+    if not code or _safe_int(unit_price, 0) <= 0 or not KIWOOM_TOKEN:
+        context["kt00011_error"] = "missing_code_price_or_token"
+        return context
+    try:
+        snapshot = kiwoom_utils.get_orderable_by_margin_kt00011(
+            KIWOOM_TOKEN,
+            code,
+            unit_price=_safe_int(unit_price, 0),
+        )
+    except Exception as exc:
+        context["kt00011_error"] = str(exc)
+        return context
+
+    if not isinstance(snapshot, dict) or snapshot.get("error"):
+        context["kt00011_error"] = str((snapshot or {}).get("error") or "kt00011_empty")
+        return context
+
+    account_deposit = max(0, _safe_int(snapshot.get("deposit"), 0))
+    cash_amount = max(0, _safe_int(snapshot.get("cash_only_orderable_amount"), 0))
+    cash_qty = max(0, _safe_int(snapshot.get("cash_only_orderable_qty"), 0))
+    budget_candidates = [value for value in (account_deposit, cash_amount) if value > 0]
+    if budget_candidates:
+        context["budget_base"] = min(budget_candidates)
+        context["budget_source"] = "kt00011_min_account_deposit_cash_orderable"
+    context["account_deposit"] = account_deposit
+    context["cash_orderable_amount"] = cash_amount
+    context["cash_orderable_qty_cap"] = cash_qty
+    context["stock_margin_rate"] = _safe_int(snapshot.get("stock_margin_rate"), 0)
+    context["applied_margin_rate"] = _safe_int(snapshot.get("applied_margin_rate"), 0)
+    return context
+
+
 ZERO_CONTEXT_FORBIDDEN_USES = (
     "threshold_mutation,provider_route_change,order_price_relaxation,"
     "quantity_or_cap_change,broker_guard_bypass,stale_quote_bypass,"
@@ -2600,7 +2647,7 @@ def _attempt_stop_line_touch_mandatory_avg_down(
             action=stop_touch_avg_down.get("action") or {},
             admin_id=admin_id,
         )
-        if add_result:
+        if add_result and not _is_scale_in_qty_or_budget_guard_block(add_result):
             _log_holding_pipeline(
                 stock,
                 code,
@@ -2621,6 +2668,22 @@ def _attempt_stop_line_touch_mandatory_avg_down(
                 "mandatory AVG_DOWN submitted at soft stop touch; sell submit skipped for re-evaluation."
             )
             return {"attempted": True, "submitted": True, "add_result": add_result}
+        if _is_scale_in_qty_or_budget_guard_block(add_result) and _can_auto_exclude_after_scale_in_qty_guard(
+            strategy=strategy,
+            sell_reason_type=sell_reason_type,
+            exit_rule=exit_rule,
+        ):
+            return _auto_exclude_after_scale_in_qty_guard_block(
+                stock,
+                code,
+                add_result=add_result,
+                sell_reason_type=sell_reason_type,
+                exit_rule=exit_rule,
+                profit_rate=profit_rate,
+                peak_profit=peak_profit,
+                now_ts=now_ts,
+                source_stage="stop_line_touch_mandatory_avg_down",
+            )
         _log_holding_pipeline(
             stock,
             code,
@@ -3039,7 +3102,7 @@ def _attempt_late_loss_avg_down_retry_before_sell(
             action=late_loss_avg_down_retry.get("action") or {},
             admin_id=admin_id,
         )
-        if add_result:
+        if add_result and not _is_scale_in_qty_or_budget_guard_block(add_result):
             _log_holding_pipeline(
                 stock,
                 code,
@@ -3061,6 +3124,23 @@ def _attempt_late_loss_avg_down_retry_before_sell(
             )
             _mutate_stock_state(stock, pop_fields=_LATE_LOSS_AVG_DOWN_QUOTE_RECOVERY_FIELDS)
             return {"attempted": True, "submitted": True, "add_result": add_result}
+        if _is_scale_in_qty_or_budget_guard_block(add_result) and _can_auto_exclude_after_scale_in_qty_guard(
+            strategy=strategy,
+            sell_reason_type=sell_reason_type,
+            exit_rule=exit_rule,
+        ):
+            _mutate_stock_state(stock, pop_fields=_LATE_LOSS_AVG_DOWN_QUOTE_RECOVERY_FIELDS)
+            return _auto_exclude_after_scale_in_qty_guard_block(
+                stock,
+                code,
+                add_result=add_result,
+                sell_reason_type=sell_reason_type,
+                exit_rule=exit_rule,
+                profit_rate=profit_rate,
+                peak_profit=peak_profit,
+                now_ts=now_ts,
+                source_stage="late_loss_avg_down_retry",
+            )
         _log_holding_pipeline(
             stock,
             code,
@@ -20248,6 +20328,7 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
     strategy = runtime["strategy"]
     pos_tag = runtime["pos_tag"]
     now_ts = runtime["now_ts"]
+    now_dt = runtime.get("now_dt") or datetime.fromtimestamp(now_ts)
     curr_price = runtime["curr_price"]
     current_vpw = runtime["current_vpw"]
     fluctuation = runtime["fluctuation"]
@@ -22105,11 +22186,112 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                     or "WAIT"
                 ).upper()
                 explicit_buy_action = current_ai_action == "BUY"
-                if (
+                blocked_ai_score_candidate = (
                     (current_ai_score < 75 or not explicit_buy_action)
                     and current_ai_score != 50
                     and not wait6579_probe_entry_unlocked
-                ):
+                )
+                entry_opportunity_recheck_allowed = False
+                if blocked_ai_score_candidate:
+                    ws_age_sec = _get_ws_snapshot_age_sec(ws_data)
+                    ws_age_ms = (
+                        int(round(float(ws_age_sec) * 1000.0))
+                        if ws_age_sec is not None
+                        else -1
+                    )
+                    entry_opportunity_recheck = evaluate_blocked_ai_score_recheck(
+                        code=code,
+                        strategy=strategy,
+                        position_tag=pos_tag,
+                        ai_score=current_ai_score,
+                        ai_action=current_ai_action,
+                        ws_age_ms=ws_age_ms,
+                        latency_state=(ws_data or {}).get("latency_state"),
+                        source_stage="blocked_ai_score",
+                        source_reason="blocked_ai_score_below_buy_score_threshold",
+                        state=_ENTRY_OPPORTUNITY_RECHECK_STATE,
+                        today=now_dt.date().isoformat(),
+                    )
+                    should_log_recheck_block = False
+                    if entry_opportunity_recheck.allowed:
+                        _ENTRY_OPPORTUNITY_RECHECK_STATE.record_recheck(code)
+                        _ENTRY_OPPORTUNITY_RECHECK_STATE.record_buy_recovery()
+                        recheck_fields = dict(entry_opportunity_recheck.fields)
+                        recheck_fields.update(
+                            {
+                                "entry_opportunity_recheck_daily_count": (
+                                    _ENTRY_OPPORTUNITY_RECHECK_STATE.daily_recheck_count
+                                ),
+                                "entry_opportunity_recheck_daily_buy_recovery_count": (
+                                    _ENTRY_OPPORTUNITY_RECHECK_STATE.daily_buy_recovery_count
+                                ),
+                                "entry_opportunity_recheck_symbol_count": (
+                                    _ENTRY_OPPORTUNITY_RECHECK_STATE.symbol_count(code)
+                                ),
+                            }
+                        )
+                        _mutate_stock_state(
+                            stock,
+                            set_fields={
+                                "entry_opportunity_recheck_armed": True,
+                                "entry_opportunity_recheck_source_stage": "blocked_ai_score",
+                                "entry_opportunity_recheck_score": float(current_ai_score or 0.0),
+                                "entry_opportunity_recheck_reason": entry_opportunity_recheck.reason,
+                                "entry_opportunity_recheck_at": now_ts,
+                            },
+                        )
+                        _log_entry_pipeline(
+                            stock,
+                            code,
+                            "entry_opportunity_recheck_enqueued",
+                            **recheck_fields,
+                        )
+                        _log_entry_pipeline(
+                            stock,
+                            code,
+                            "entry_opportunity_recheck_fresh_pass",
+                            **recheck_fields,
+                        )
+                        _log_entry_pipeline(
+                            stock,
+                            code,
+                            entry_opportunity_recheck.stage,
+                            **recheck_fields,
+                        )
+                        entry_opportunity_recheck_allowed = True
+                    elif bool(entry_opportunity_recheck.fields.get("entry_opportunity_recheck_enabled")):
+                        recheck_log_score = _safe_float(
+                            entry_opportunity_recheck.fields.get("entry_opportunity_recheck_ai_score"),
+                            -1.0,
+                        )
+                        recheck_log_min = _safe_float(
+                            entry_opportunity_recheck.fields.get("entry_opportunity_recheck_min_ai_score"),
+                            70.0,
+                        )
+                        recheck_log_max = _safe_float(
+                            entry_opportunity_recheck.fields.get("entry_opportunity_recheck_max_ai_score"),
+                            74.999,
+                        )
+                        recheck_log_reason = str(entry_opportunity_recheck.reason or "")
+                        should_log_recheck_block = (
+                            recheck_log_min <= recheck_log_score <= recheck_log_max
+                            or recheck_log_reason
+                            in {
+                                "daily_recheck_cap_exhausted",
+                                "symbol_recheck_cap_exhausted",
+                                "daily_buy_recovery_cap_exhausted",
+                                "latency_state_danger",
+                                "quote_freshness_not_confirmed",
+                            }
+                        )
+                    if should_log_recheck_block:
+                        _log_entry_pipeline(
+                            stock,
+                            code,
+                            entry_opportunity_recheck.stage,
+                            **entry_opportunity_recheck.fields,
+                        )
+                if blocked_ai_score_candidate and not entry_opportunity_recheck_allowed:
                     cooldown_time = config["AI_WAIT_DROP_COOLDOWN"]
                     with ENTRY_LOCK:
                         cooldowns[code] = now_ts + cooldown_time
@@ -22967,7 +23149,20 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
 
     deposit = kiwoom_orders.get_deposit(KIWOOM_TOKEN)
     deposit_meta = kiwoom_orders.get_last_deposit_meta()
-    uncapped_target_budget = int(max(float(deposit) * float(ratio), 0.0))
+    budget_context = (
+        _resolve_scalp_cash_budget_context(code, curr_price, deposit)
+        if strategy == "SCALPING"
+        else {
+            "budget_base": deposit,
+            "budget_source": deposit_meta.get("source", "deposit"),
+            "account_deposit": deposit,
+            "cash_orderable_amount": deposit,
+            "cash_orderable_qty_cap": None,
+            "kt00011_error": "",
+        }
+    )
+    budget_base = max(0, _safe_int(budget_context.get("budget_base"), deposit))
+    uncapped_target_budget = int(max(float(budget_base) * float(ratio), 0.0))
     budget_cap = 0
     if strategy == 'SCALPING':
         budget_cap = int(_rule('SCALPING_MAX_BUY_BUDGET_KRW', 0) or 0)
@@ -22977,46 +23172,53 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
     )
     target_budget, safe_budget, real_buy_qty, used_safety_ratio = kiwoom_orders.describe_buy_capacity(
         curr_price,
-        deposit,
+        budget_base,
         ratio,
         max_budget=budget_cap,
         allow_min_one_share_over_budget=min_one_share_floor_enabled,
     )
-    if forced_rising_missed_one_share and _safe_int(deposit, 0) >= curr_price > 0:
+    cash_orderable_qty_cap = budget_context.get("cash_orderable_qty_cap")
+    if cash_orderable_qty_cap is not None:
+        real_buy_qty = min(real_buy_qty, max(0, _safe_int(cash_orderable_qty_cap, 0)))
+    if forced_rising_missed_one_share and _safe_int(budget_base, 0) >= curr_price > 0:
         target_budget = curr_price
         safe_budget = curr_price
         real_buy_qty = 1
         used_safety_ratio = 1.0
+        if cash_orderable_qty_cap is not None:
+            real_buy_qty = min(real_buy_qty, max(0, _safe_int(cash_orderable_qty_cap, 0)))
     budget_cap_applied = budget_cap > 0 and target_budget < uncapped_target_budget
     min_one_share_floor_applied = (
         min_one_share_floor_enabled
         and real_buy_qty == 1
         and safe_budget < curr_price
-        and _safe_int(deposit, 0) >= curr_price
+        and _safe_int(budget_base, 0) >= curr_price
     )
     budget_cap_msg = f", 절대한도 {budget_cap:,}원 적용" if budget_cap_applied else ""
 
     if real_buy_qty <= 0:
-        zero_qty_cooldown_sec = _resolve_zero_qty_cooldown_sec(deposit)
-        is_zero_deposit = _safe_int(deposit, 0) <= 0
+        zero_qty_cooldown_sec = _resolve_zero_qty_cooldown_sec(budget_base)
+        is_zero_deposit = _safe_int(budget_base, 0) <= 0
         deposit_errors = kiwoom_orders.get_last_deposit_errors()
         auth_failure = next((err for err in deposit_errors if kiwoom_orders.is_auth_failure_error(err)), None)
         zero_qty_stage = "auth_zero_qty" if is_zero_deposit and auth_failure else "blocked_zero_qty"
         if is_zero_deposit:
             log_info(
                 f"⚠️ [매수보류] {stock['name']}: 주문가능금액 조회가 0원으로 반환되어 재조회 대기합니다. "
-                f"(주문가능금액 {deposit:,}원, 전략비중 {ratio:.1%}, 안전계수 {used_safety_ratio:.0%}, "
+                f"(예산기준금액 {budget_base:,}원, 전략비중 {ratio:.1%}, 안전계수 {used_safety_ratio:.0%}, "
                 f"실사용예산 {safe_budget:,}원, 현재가 {curr_price:,}원, 재조회대기 {zero_qty_cooldown_sec}초)"
             )
         else:
             log_info(
                 f"⚠️ [매수보류] {stock['name']}: 매수 수량이 0주입니다. "
-                f"(주문가능금액 {deposit:,}원, 전략비중 {ratio:.1%}, 안전계수 {used_safety_ratio:.0%}, "
+                f"(예산기준금액 {budget_base:,}원, 전략비중 {ratio:.1%}, 안전계수 {used_safety_ratio:.0%}, "
                 f"실사용예산 {safe_budget:,}원, 현재가 {curr_price:,}원{budget_cap_msg})"
             )
         log_info(
             f"[DEBUG] {code} 매수 수량 0주 "
-            f"(deposit={deposit}, ratio={ratio:.4f}, uncapped_target_budget={uncapped_target_budget}, "
+            f"(deposit={deposit}, budget_base={budget_base}, budget_source={budget_context.get('budget_source')}, "
+            f"cash_orderable_qty_cap={budget_context.get('cash_orderable_qty_cap')}, "
+            f"ratio={ratio:.4f}, uncapped_target_budget={uncapped_target_budget}, "
             f"target_budget={target_budget}, safe_budget={safe_budget}, safety_ratio={used_safety_ratio:.4f}, "
             f"curr_price={curr_price}, min_one_share_floor_enabled={min_one_share_floor_enabled}, "
             f"retry_cooldown_sec={zero_qty_cooldown_sec})"
@@ -23024,7 +23226,12 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         with ENTRY_LOCK:
             cooldowns[code] = now_ts + zero_qty_cooldown_sec
         _log_entry_pipeline(
-            stock, code, zero_qty_stage, deposit=deposit, ratio=f"{ratio:.4f}", target_budget=target_budget,
+            stock, code, zero_qty_stage, deposit=deposit, budget_base=budget_base,
+            budget_source=budget_context.get("budget_source"), account_deposit=budget_context.get("account_deposit"),
+            cash_orderable_amount=budget_context.get("cash_orderable_amount"),
+            cash_orderable_qty_cap=budget_context.get("cash_orderable_qty_cap", "-"),
+            kt00011_error=budget_context.get("kt00011_error", ""),
+            ratio=f"{ratio:.4f}", target_budget=target_budget,
             safe_budget=safe_budget, safety_ratio=f"{used_safety_ratio:.4f}", curr_price=curr_price,
             budget_cap=budget_cap if budget_cap_applied else "-", cooldown_sec=zero_qty_cooldown_sec,
             min_one_share_floor_enabled=min_one_share_floor_enabled,
@@ -23053,6 +23260,8 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 evidence_quality="blocked_stage_intraday_probe",
                 extra_fields={
                     "deposit": deposit,
+                    "budget_base": budget_base,
+                    "budget_source": budget_context.get("budget_source"),
                     "ratio": f"{ratio:.4f}",
                     "target_budget": target_budget,
                     "safe_budget": safe_budget,
@@ -23063,7 +23272,12 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         return False
 
     _log_entry_pipeline(
-        stock, code, "budget_pass", deposit=deposit, ratio=f"{ratio:.4f}", target_budget=target_budget,
+        stock, code, "budget_pass", deposit=deposit, budget_base=budget_base,
+        budget_source=budget_context.get("budget_source"), account_deposit=budget_context.get("account_deposit"),
+        cash_orderable_amount=budget_context.get("cash_orderable_amount"),
+        cash_orderable_qty_cap=budget_context.get("cash_orderable_qty_cap", "-"),
+        kt00011_error=budget_context.get("kt00011_error", ""),
+        ratio=f"{ratio:.4f}", target_budget=target_budget,
         safe_budget=safe_budget, safety_ratio=f"{used_safety_ratio:.4f}",
         budget_cap=budget_cap if budget_cap_applied else "-", qty=real_buy_qty,
         min_one_share_floor_enabled=min_one_share_floor_enabled,
@@ -26709,18 +26923,29 @@ def _manual_control_exclusion_blocked(stock, code, *, pipeline: str, stage: str,
     decision = evaluate_manual_control_exclusion(code)
     if (
         not decision.excluded
-        and bool((stock or {}).get("manual_control_auto_open_loss_blocked"))
+        and (
+            bool((stock or {}).get("manual_control_auto_open_loss_blocked"))
+            or bool((stock or {}).get("manual_control_auto_scale_in_qty_blocked"))
+        )
     ):
         decision = ManualControlExclusionDecision(
             True,
             str((stock or {}).get("code") or code or ""),
             str(
                 (stock or {}).get("manual_control_exclusion_reason")
-                or "operator_manual_control_open_loss_auto_excluded"
+                or (
+                    "operator_manual_control_scale_in_qty_guard_auto_excluded"
+                    if bool((stock or {}).get("manual_control_auto_scale_in_qty_blocked"))
+                    else "operator_manual_control_open_loss_auto_excluded"
+                )
             ),
             str(
                 (stock or {}).get("manual_control_exclusion_source")
-                or "in_memory_open_loss_auto_exclusion"
+                or (
+                    "in_memory_scale_in_qty_guard_auto_exclusion"
+                    if bool((stock or {}).get("manual_control_auto_scale_in_qty_blocked"))
+                    else "in_memory_open_loss_auto_exclusion"
+                )
             ),
         )
     if not decision.excluded:
@@ -26752,6 +26977,9 @@ def _manual_control_exclusion_blocked(stock, code, *, pipeline: str, stage: str,
             "manual_control_auto_open_loss_blocked": bool(
                 (stock or {}).get("manual_control_auto_open_loss_blocked")
             ),
+            "manual_control_auto_scale_in_qty_blocked": bool(
+                (stock or {}).get("manual_control_auto_scale_in_qty_blocked")
+            ),
             **({last_key: now_value} if should_log else {}),
         },
     )
@@ -26779,6 +27007,97 @@ def _manual_control_open_loss_session(now_dt: datetime | None) -> str:
         if 0 <= elapsed_sec <= window_sec:
             return session
     return ""
+
+
+def _is_scale_in_qty_or_budget_guard_block(add_result) -> bool:
+    return (
+        isinstance(add_result, dict)
+        and str(add_result.get("status") or "") == "blocked"
+        and str(add_result.get("block_stage") or "") == "scale_in_qty_block"
+        and str(add_result.get("reason") or "") == "position_cap_or_budget"
+    )
+
+
+def _can_auto_exclude_after_scale_in_qty_guard(*, strategy: str | None, sell_reason_type: str | None, exit_rule: str | None) -> bool:
+    if normalize_strategy(strategy) != "SCALPING":
+        return False
+    if str(sell_reason_type or "").upper() != "LOSS":
+        return False
+    exit_key = str(exit_rule or "").strip().lower()
+    hard_tokens = ("hard", "protect", "emergency", "daily_limit_up")
+    return not any(token in exit_key for token in hard_tokens)
+
+
+def _auto_exclude_after_scale_in_qty_guard_block(
+    stock,
+    code,
+    *,
+    add_result,
+    sell_reason_type: str | None,
+    exit_rule: str | None,
+    profit_rate: float,
+    peak_profit: float,
+    now_ts: float,
+    source_stage: str,
+) -> dict:
+    comment = (
+        f"auto_scale_in_qty_guard_block source={source_stage} "
+        f"exit={exit_rule or '-'} profit={float(profit_rate):+.2f}% "
+        f"peak={float(peak_profit):+.2f}%"
+    )
+    decision = add_manual_control_exclusion_code(code, comment=comment)
+    fields = {
+        **decision.as_log_fields(),
+        "manual_control_auto_exclusion_triggered": bool(decision.excluded),
+        "manual_control_auto_exclusion_policy": "scale_in_qty_guard_block_before_loss_exit_v1",
+        "manual_control_auto_exclusion_source_stage": source_stage,
+        "target_status": (stock or {}).get("status") or "not_applicable_target_status",
+        "target_strategy": normalize_strategy((stock or {}).get("strategy")),
+        "runtime_record_id": (stock or {}).get("id") or "not_applicable_runtime_record_id",
+        "sell_reason_type": sell_reason_type or "-",
+        "exit_rule": exit_rule or "-",
+        "profit_rate": f"{float(profit_rate):+.2f}",
+        "peak_profit": f"{float(peak_profit):+.2f}",
+        "scale_in_block_stage": (add_result or {}).get("block_stage", "-"),
+        "scale_in_block_reason": (add_result or {}).get("reason", "-"),
+        "scale_in_qty": (add_result or {}).get("qty", 0),
+        "scale_in_effective_qty": (add_result or {}).get("effective_qty", 0),
+        "scale_in_budget_source": (add_result or {}).get("scale_in_budget_source", "-"),
+        "scale_in_account_deposit": (add_result or {}).get("scale_in_account_deposit", "-"),
+        "scale_in_cash_orderable_amount": (add_result or {}).get("scale_in_cash_orderable_amount", "-"),
+        "scale_in_cash_orderable_qty_cap": (add_result or {}).get("scale_in_cash_orderable_qty_cap", "-"),
+        "observed_epoch": f"{float(now_ts):.3f}",
+        "primary_decision_metric": "scale_in_qty_guard_block_before_loss_exit",
+        "window_policy": "same_loop_loss_exit_intercept",
+    }
+    _log_holding_pipeline(
+        stock or {},
+        code,
+        "manual_control_scale_in_qty_guard_auto_excluded",
+        **fields,
+    )
+    _mutate_stock_state(
+        stock,
+        set_fields={
+            "manual_control_exclusion_blocked": bool(decision.excluded),
+            "manual_control_exclusion_reason": decision.reason,
+            "manual_control_exclusion_source": decision.source,
+            "manual_control_auto_scale_in_qty_blocked": bool(decision.excluded),
+            "manual_control_auto_exclusion_source_stage": source_stage,
+            "last_manual_control_exclusion_holding_log_ts": float(now_ts),
+        },
+    )
+    log_info(
+        f"[MANUAL_CONTROL_SCALE_IN_QTY_GUARD] {(stock or {}).get('name') or code}({decision.code or code}) "
+        f"auto-excluded after {source_stage}: reason={(add_result or {}).get('reason', '-')}"
+    )
+    return {
+        "attempted": True,
+        "submitted": False,
+        "manual_control_excluded": bool(decision.excluded),
+        "reason": "manual_control_excluded_after_scale_in_qty_guard_block",
+        "decision": decision,
+    }
 
 
 def _manual_control_open_loss_stop_context(
@@ -29597,10 +29916,27 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                         action=fallback_action,
                         admin_id=admin_id,
                     )
-                    if add_result:
+                    if add_result and not _is_scale_in_qty_or_budget_guard_block(add_result):
                         log_info(
                             f"[LOSS_FALLBACK] {stock.get('name')}({code}) "
                             "fallback 추가매수 체결 경로로 전환, 손절 전송을 건너뜁니다."
+                        )
+                        return
+                    if _is_scale_in_qty_or_budget_guard_block(add_result) and _can_auto_exclude_after_scale_in_qty_guard(
+                        strategy=strategy,
+                        sell_reason_type=sell_reason_type,
+                        exit_rule=exit_rule,
+                    ):
+                        _auto_exclude_after_scale_in_qty_guard_block(
+                            stock,
+                            code,
+                            add_result=add_result,
+                            sell_reason_type=sell_reason_type,
+                            exit_rule=exit_rule,
+                            profit_rate=profit_rate,
+                            peak_profit=peak_profit,
+                            now_ts=now_ts,
+                            source_stage="loss_fallback_scale_in",
                         )
                         return
                 elif enabled and not observe_only and not execution_gate_allowed:
@@ -31861,6 +32197,31 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
 
     _clear_scale_in_submit_block(stock)
     deposit = _sim_virtual_budget_krw() if simulated_position else kiwoom_orders.get_deposit(KIWOOM_TOKEN)
+    qty_price = resolved_price if strategy == "SCALPING" and resolved_price > 0 else curr_price
+    budget_context = (
+        {
+            "budget_base": deposit,
+            "budget_source": "sim_virtual_budget",
+            "account_deposit": deposit,
+            "cash_orderable_amount": deposit,
+            "cash_orderable_qty_cap": None,
+            "kt00011_error": "",
+        }
+        if simulated_position
+        else (
+            _resolve_scalp_cash_budget_context(code, qty_price, deposit)
+            if strategy == "SCALPING"
+            else {
+                "budget_base": deposit,
+                "budget_source": "kt00001_ord_alow_amt",
+                "account_deposit": deposit,
+                "cash_orderable_amount": deposit,
+                "cash_orderable_qty_cap": None,
+                "kt00011_error": "",
+            }
+        )
+    )
+    budget_base = max(0, _safe_int(budget_context.get("budget_base"), deposit))
     sim_budget_fields = (
         {
             "virtual_budget_override": True,
@@ -31870,16 +32231,19 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
         if simulated_position
         else {}
     )
-    qty_price = resolved_price if strategy == "SCALPING" and resolved_price > 0 else curr_price
     qty_details = describe_dynamic_scale_in_qty(
         stock=stock,
         resolved_price=qty_price,
-        deposit=deposit,
+        deposit=budget_base,
         add_type=add_type,
         strategy=stock.get('strategy', ''),
         add_reason=action.get('reason'),
         price_resolution=price_resolution,
         action=action,
+        cash_orderable_qty_cap=budget_context.get("cash_orderable_qty_cap"),
+        budget_source=budget_context.get("budget_source"),
+        account_deposit=budget_context.get("account_deposit"),
+        cash_orderable_amount=budget_context.get("cash_orderable_amount"),
     )
     qty = int(qty_details.get("qty", 0) or 0)
     template_qty = int(qty_details.get("template_qty", 0) or 0)
@@ -31917,6 +32281,10 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
             "large_sell_print_detected",
             "large_sell_clear",
             "ai_score_ok",
+            "scale_in_budget_source",
+            "scale_in_account_deposit",
+            "scale_in_cash_orderable_amount",
+            "scale_in_cash_orderable_qty_cap",
         )
         if key in qty_details
     }
@@ -31950,6 +32318,7 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
             scale_in_candidate_funnel_state=(
                 "qty_guard_blocked" if sim_window_observation else None
             ),
+            scale_in_kt00011_error=budget_context.get("kt00011_error", ""),
             **scale_in_qty_budget_fields,
             **scale_in_quote_refresh_fields,
             **sim_budget_fields,
@@ -31958,16 +32327,30 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
         )
         log_info(
             f"[ADD_BLOCKED] {stock.get('name')}({code}) "
-            f"reason=zero_qty deposit={deposit} curr_price={curr_price} "
+            f"reason=zero_qty deposit={deposit} budget_base={budget_base} "
+            f"budget_source={budget_context.get('budget_source')} "
+            f"cash_orderable_qty_cap={budget_context.get('cash_orderable_qty_cap')} curr_price={curr_price} "
             f"buy_qty={stock.get('buy_qty', 0)} add_type={add_type} "
             f"template_qty={template_qty} would_qty={would_qty} effective_qty={effective_qty} "
             f"cap_qty={cap_qty} floor_applied={floor_applied} qty_reason={qty_reason}"
         )
         log_info(
             f"⚠️ [추가매수보류] {stock.get('name')}: 추가매수 수량 0주 "
-            f"(주문가능금액 {deposit:,}원, resolver가격 {qty_price:,}원)"
+            f"(예산기준금액 {budget_base:,}원, resolver가격 {qty_price:,}원)"
         )
-        return None
+        return {
+            "status": "blocked",
+            "block_stage": "scale_in_qty_block",
+            "reason": qty_reason,
+            "qty": qty,
+            "template_qty": template_qty,
+            "would_qty": would_qty,
+            "effective_qty": effective_qty,
+            "cap_qty": cap_qty,
+            "curr_price": curr_price,
+            "resolved_price": resolved_price,
+            **scale_in_qty_budget_fields,
+        }
 
     if strategy == 'SCALPING':
         if price_resolution.get("price_source") == "stop_line_touch_market":
@@ -32003,6 +32386,7 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
         would_qty=would_qty,
         effective_qty=effective_qty,
         qty_reason=qty_reason,
+        scale_in_kt00011_error=budget_context.get("kt00011_error", ""),
         **scale_in_qty_budget_fields,
         **scale_in_quote_refresh_non_price_source_fields,
         **sim_budget_fields,
