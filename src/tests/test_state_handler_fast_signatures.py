@@ -2379,6 +2379,20 @@ def test_emit_scanner_watching_runtime_skip_fills_contract_fields(monkeypatch):
     emitted = []
     monkeypatch.setattr(
         handlers,
+        "rising_missed_selection_prior_fields",
+        lambda stock: {
+            "rising_missed_selection_prior_key": "prior_positive",
+            "rising_missed_selection_recommendation": "positive_prior",
+            "rising_missed_selection_confidence": "high",
+            "rising_missed_selection_score_delta": 20.0,
+            "rising_missed_selection_rank_reason": "positive_prior_test",
+            "rising_missed_selection_match_type": "observable_prefix_exact",
+            "rising_missed_selection_runtime_effect": False,
+            "rising_missed_selection_allowed_runtime_apply": False,
+        },
+    )
+    monkeypatch.setattr(
+        handlers,
         "emit_pipeline_event",
         lambda pipeline, name, code, stage, *, record_id=None, fields=None: emitted.append(
             {"stage": stage, "record_id": record_id, "fields": fields or {}}
@@ -2430,6 +2444,10 @@ def test_emit_scanner_watching_runtime_skip_fills_contract_fields(monkeypatch):
     assert fields["rising_entry_relief_eligible"] is True
     assert fields["scanner_positive_delta_pct"] == 1.2
     assert fields["scanner_full_eval_budget_source"] == "not_applicable_full_eval_budget_source"
+    assert fields["rising_missed_selection_prior_key"] == "prior_positive"
+    assert fields["rising_missed_selection_recommendation"] == "positive_prior"
+    assert fields["rising_missed_selection_score_delta"] == 20.0
+    assert fields["rising_missed_selection_runtime_effect"] is False
     assert fields["zero_context_domain"] == "ws_quote"
     assert fields["zero_context_blocker"] == "ws_snapshot_missing_or_zero"
     assert fields["zero_context_ws_curr_state"] == "missing_defaulted_zero"

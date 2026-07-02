@@ -154,6 +154,122 @@ def test_scalp_control_tower_allows_active_seed_without_bucket_rows(tmp_path):
     assert catalog_payload["broker_order_forbidden"] is True
 
 
+def test_scalp_control_tower_adds_rising_missed_prior_active_seed(tmp_path):
+    prior = {
+        "report_type": "rising_missed_classifier_prior",
+        "target_date": "2026-07-02",
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "decision_authority": "rising_missed_classifier_prior_source_only",
+        "summary": {"prior_count": 1, "recommendation_counts": {"positive_prior": 1}},
+        "priors": [
+            {
+                "prior_key": "entry_score_parent=score_watch_recovery|entry_source_parent=entry_source_wait6579",
+                "recommendation": "positive_prior",
+                "confidence": "high",
+                "selected_window": "rolling10d",
+                "reason": "rolling10d_positive_ev_prior",
+                "observable_prefix": {
+                    "entry_score_parent": "score_watch_recovery",
+                    "entry_source_parent": "entry_source_wait6579",
+                },
+                "window_metrics": {"rolling10d": {"joined_sample": 33, "ev_pct": 2.97}},
+            }
+        ],
+    }
+
+    approval = mod.build_scalp_sim_auto_approval(
+        "2026-07-02",
+        lifecycle_sim_approval={},
+        lifecycle_bucket_catalog_path=tmp_path / "missing_catalog.json",
+        scale_in_approval={},
+        runtime_apply_bridge={},
+        rising_missed_prior=prior,
+    )
+    catalog_payload = mod.build_policy_catalog(approval)
+
+    assert approval["approved"] is True
+    assert approval["approved_source_ids"] == ["rising_missed_classifier_prior"]
+    seed = catalog_payload["active_sim_priority_seeds"][0]
+    assert seed["active_seed_id"].startswith("rising_missed_prior_")
+    assert seed["status"] == "active"
+    assert seed["priority_tier"] == "rising_missed_positive_prior"
+    assert seed["observable_prefix"] == {
+        "entry_score_parent": "score_watch_recovery",
+        "entry_source_parent": "entry_source_wait6579",
+    }
+    assert catalog_payload["rising_missed_prior_observation_lanes"][0]["recommendation"] == "positive_prior"
+    assert catalog_payload["runtime_effect"] is False
+    assert catalog_payload["broker_order_forbidden"] is True
+
+
+def test_scalp_control_tower_rising_missed_prior_cools_down_blocked_existing_seed(tmp_path):
+    catalog = tmp_path / "lifecycle_bucket_catalog_2026-07-02.json"
+    catalog.write_text(json.dumps({"buckets": []}), encoding="utf-8")
+    lifecycle = _lifecycle_approval()
+    lifecycle["approved_bucket_ids"] = []
+    lifecycle["approved_bucket_rows"] = []
+    lifecycle["approved_bucket_count"] = 0
+    lifecycle["active_sim_priority_seeds"] = [
+        {
+            "active_seed_id": "active_seed_mid_wait6579",
+            "source_parent_bucket_id": "parent_mid_wait6579",
+            "status": "active",
+            "observable_prefix": {
+                "entry_score_parent": "score_mid_recovery",
+                "entry_source_parent": "entry_source_wait6579",
+            },
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+        }
+    ]
+    prior = {
+        "report_type": "rising_missed_classifier_prior",
+        "target_date": "2026-07-02",
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "decision_authority": "rising_missed_classifier_prior_source_only",
+        "summary": {"prior_count": 1, "recommendation_counts": {"source_quality_blocked": 1}},
+        "priors": [
+            {
+                "prior_key": "entry_score_parent=score_mid_recovery|entry_source_parent=entry_source_wait6579",
+                "recommendation": "source_quality_blocked",
+                "confidence": "blocked",
+                "reason": "child_conflict_or_source_quality_gap",
+                "observable_prefix": {
+                    "entry_score_parent": "score_mid_recovery",
+                    "entry_source_parent": "entry_source_wait6579",
+                },
+            }
+        ],
+    }
+
+    approval = mod.build_scalp_sim_auto_approval(
+        "2026-07-02",
+        lifecycle_sim_approval=lifecycle,
+        lifecycle_bucket_catalog_path=catalog,
+        scale_in_approval={},
+        runtime_apply_bridge={},
+        rising_missed_prior=prior,
+    )
+    catalog_payload = mod.build_policy_catalog(approval)
+
+    seed = catalog_payload["active_sim_priority_seeds"][0]
+    assert seed["active_seed_id"] == "active_seed_mid_wait6579"
+    assert seed["status"] == "cooldown"
+    assert seed["rising_missed_prior_status_override"]["reason"] == (
+        "rising_missed_prior_source_quality_blocked"
+    )
+    assert catalog_payload["rising_missed_prior_active_seed_status_overrides"][0]["forced_status"] == "cooldown"
+    assert approval["source_status"]["rising_missed_classifier_prior"]["active_seed_status_override_count"] == 1
+
+
 def test_scalp_control_tower_blocks_when_source_contract_invalid(tmp_path):
     bad_lifecycle = _lifecycle_approval()
     bad_lifecycle["runtime_effect"] = True

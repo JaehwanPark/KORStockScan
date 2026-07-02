@@ -40,6 +40,11 @@ def test_build_report_joins_forced_scout_post_sell_and_creates_workorders(tmp_pa
                 "source_signature": "OPEN_TOP,PRICE_JUMP_START,VALUE_TOP",
                 "price_delta_since_first_seen_pct": "2.5",
                 "rising_missed_one_share_entry_price": "10000",
+                "rising_missed_selection_prior_key": "prior_positive",
+                "rising_missed_selection_recommendation": "positive_prior",
+                "rising_missed_selection_confidence": "high",
+                "rising_missed_selection_score_delta": "20",
+                "rising_missed_selection_rank_reason": "positive_prior_test",
             },
         ),
         _event(1, "000001", "winner", "latency_pass"),
@@ -87,6 +92,11 @@ def test_build_report_joins_forced_scout_post_sell_and_creates_workorders(tmp_pa
                 "scanner_promotion_reason": "price_jump_start_acceleration",
                 "source_signature": "OPEN_TOP,PRICE_JUMP_START,VALUE_TOP",
                 "price_delta_since_first_seen_pct": "4.0",
+                "rising_missed_selection_prior_key": "prior_loss",
+                "rising_missed_selection_recommendation": "loss_filter",
+                "rising_missed_selection_confidence": "medium",
+                "rising_missed_selection_score_delta": "-20",
+                "rising_missed_selection_rank_reason": "loss_prior_test",
             },
         ),
         _event(2, "000002", "loser", "latency_pass"),
@@ -135,6 +145,15 @@ def test_build_report_joins_forced_scout_post_sell_and_creates_workorders(tmp_pa
                         "rising_missed_one_share_eligible": False,
                         "max_price_delta_since_first_seen_pct": 3.0,
                         "latest_blocker": {"stage": "blocked_strength_momentum", "reason": "insufficient_history"},
+                        "recent_blockers": [
+                            {
+                                "stage": "blocked_strength_momentum",
+                                "reason": "insufficient_history",
+                                "rising_missed_selection_prior_key": "prior_blocked",
+                                "rising_missed_selection_recommendation": "source_quality_blocked",
+                                "rising_missed_selection_score_delta": -30,
+                            }
+                        ],
                     }
                 ]
             }
@@ -153,7 +172,17 @@ def test_build_report_joins_forced_scout_post_sell_and_creates_workorders(tmp_pa
     assert report["summary"]["forced_scout_record_count"] == 2
     assert report["summary"]["profitable_forced_scout_count"] == 1
     assert report["summary"]["loss_or_flat_forced_scout_count"] == 1
+    assert report["summary"]["forced_scout_selection_prior_winner_counts"] == [
+        {"recommendation": "positive_prior", "count": 1}
+    ]
+    assert report["summary"]["forced_scout_selection_prior_loser_counts"] == [
+        {"recommendation": "loss_filter", "count": 1}
+    ]
     assert report["summary"]["current_missed_count"] == 1
+    assert report["summary"]["current_missed_selection_prior_recommendation_counts"] == [
+        {"recommendation": "source_quality_blocked", "count": 1}
+    ]
+    assert report["current_missed_summary"]["top_rows"][0]["rising_missed_selection_prior_key"] == "prior_blocked"
     assert report["summary"]["scale_in_price_guard_block_record_count"] == 1
     assert report["summary"]["scale_in_qty_block_record_count"] == 1
     assert report["summary"]["code_improvement_order_count"] == 4
@@ -296,6 +325,7 @@ def test_build_report_ingests_intraday_feedback_order(tmp_path):
     post_sell_path = tmp_path / "post_sell.jsonl"
     diagnostic_path = tmp_path / "diag.json"
     intraday_feedback_path = tmp_path / "feedback.json"
+    classifier_prior_path = tmp_path / "missing_prior.json"
     pipeline_path.write_text(
         json.dumps(
             _event(
@@ -333,6 +363,7 @@ def test_build_report_ingests_intraday_feedback_order(tmp_path):
         post_sell_path=post_sell_path,
         diagnostic_path=diagnostic_path,
         intraday_feedback_path=intraday_feedback_path,
+        classifier_prior_path=classifier_prior_path,
         generated_at="fixed",
     )
 
@@ -342,3 +373,45 @@ def test_build_report_ingests_intraday_feedback_order(tmp_path):
     assert order["mapped_family"] == "rising_missed_initial_quality_feedback_loop"
     assert order["runtime_effect"] is False
     assert "scale_in_guard_bypass" in order["forbidden_uses"]
+
+
+def test_build_report_ingests_classifier_prior_source_only_order(tmp_path):
+    pipeline_path = tmp_path / "pipeline.jsonl"
+    post_sell_path = tmp_path / "post_sell.jsonl"
+    diagnostic_path = tmp_path / "diag.json"
+    intraday_feedback_path = tmp_path / "feedback.json"
+    classifier_prior_path = tmp_path / "prior.json"
+    pipeline_path.write_text("", encoding="utf-8")
+    post_sell_path.write_text("", encoding="utf-8")
+    diagnostic_path.write_text(json.dumps({"rising_missed_buy": []}), encoding="utf-8")
+    intraday_feedback_path.write_text(json.dumps({"summary": {}}), encoding="utf-8")
+    classifier_prior_path.write_text(
+        json.dumps(
+            {
+                "summary": {
+                    "prior_count": 2,
+                    "recommendation_counts": {"positive_prior": 1, "quality_risk": 1},
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    report = mod.build_report(
+        "2026-07-02",
+        pipeline_path=pipeline_path,
+        post_sell_path=post_sell_path,
+        diagnostic_path=diagnostic_path,
+        intraday_feedback_path=intraday_feedback_path,
+        classifier_prior_path=classifier_prior_path,
+        generated_at="fixed",
+    )
+
+    assert report["summary"]["classifier_prior_available"] is True
+    assert report["summary"]["classifier_prior_count"] == 2
+    assert report["summary"]["code_improvement_order_count"] == 1
+    order = report["code_improvement_orders"][0]
+    assert order["mapped_family"] == "rising_missed_classifier_prior_feedback_bridge"
+    assert order["runtime_effect"] is False
+    assert order["allowed_runtime_apply"] is False
+    assert "forced_one_share_success_counting" in order["forbidden_uses"]

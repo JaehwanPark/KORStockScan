@@ -118,6 +118,22 @@ RELIEF_BLOCKER_REASONS = {
     "ws_snapshot_missing_or_zero_recovered",
 }
 
+SELECTION_PRIOR_RISK_RECOMMENDATIONS = {
+    "source_quality_blocked",
+    "loss_filter",
+    "quality_risk",
+}
+
+SELECTION_PRIOR_SORT_ORDER = {
+    "positive_prior": 0,
+    "recheck_prior": 1,
+    "hold_sample": 2,
+    "unavailable": 3,
+    "quality_risk": 4,
+    "loss_filter": 5,
+    "source_quality_blocked": 6,
+}
+
 LOW_AI_SCORE_CUTOFF = 65.0
 NEGATIVE_BUY_PRESSURE_CUTOFF = 0.0
 ENTRY_FRESH_MAX_AGE_MS = 3000.0
@@ -280,6 +296,31 @@ def _field(row: dict[str, Any], key: str, default: Any = "") -> Any:
     if not isinstance(fields, dict):
         return default
     return fields.get(key, default)
+
+
+def _selection_prior_recommendation(item: dict[str, Any]) -> str:
+    for blocker in reversed(item.get("recent_blockers") or []):
+        recommendation = str(blocker.get("rising_missed_selection_recommendation") or "").strip()
+        if recommendation:
+            return recommendation
+    deferred = item.get("scanner_full_eval_budget_deferred")
+    if isinstance(deferred, dict):
+        recommendation = str(deferred.get("rising_missed_selection_recommendation") or "").strip()
+        if recommendation:
+            return recommendation
+    return "unavailable"
+
+
+def _selection_prior_counts(items: list[dict[str, Any]]) -> Counter[str]:
+    return Counter(_selection_prior_recommendation(item) for item in items)
+
+
+def _selection_prior_sort_key(item: dict[str, Any]) -> tuple[int, float]:
+    recommendation = _selection_prior_recommendation(item)
+    return (
+        SELECTION_PRIOR_SORT_ORDER.get(recommendation, SELECTION_PRIOR_SORT_ORDER["unavailable"]),
+        -(item.get("max_price_delta_since_first_seen_pct") or -999.0),
+    )
 
 
 def _boolish(value: Any) -> bool:
@@ -1208,6 +1249,21 @@ def _summarize_code(
                 "scanner_full_eval_budget_source",
                 "",
             ),
+            "rising_missed_selection_prior_key": _field(
+                latest_budget_deferred,
+                "rising_missed_selection_prior_key",
+                "",
+            ),
+            "rising_missed_selection_recommendation": _field(
+                latest_budget_deferred,
+                "rising_missed_selection_recommendation",
+                "",
+            ),
+            "rising_missed_selection_rank_reason": _field(
+                latest_budget_deferred,
+                "rising_missed_selection_rank_reason",
+                "",
+            ),
         },
         "recent_blockers": [
             {
@@ -1222,6 +1278,14 @@ def _summarize_code(
                 "rising_entry_relief_reason": _field(row, "rising_entry_relief_reason", ""),
                 "scanner_positive_delta_pct": _safe_float(_field(row, "scanner_positive_delta_pct")),
                 "scanner_full_eval_budget_source": _field(row, "scanner_full_eval_budget_source", ""),
+                "rising_missed_selection_prior_key": _field(row, "rising_missed_selection_prior_key", ""),
+                "rising_missed_selection_recommendation": _field(row, "rising_missed_selection_recommendation", ""),
+                "rising_missed_selection_confidence": _field(row, "rising_missed_selection_confidence", ""),
+                "rising_missed_selection_score_delta": _safe_float(
+                    _field(row, "rising_missed_selection_score_delta")
+                ),
+                "rising_missed_selection_rank_reason": _field(row, "rising_missed_selection_rank_reason", ""),
+                "rising_missed_selection_match_type": _field(row, "rising_missed_selection_match_type", ""),
                 "scanner_full_eval_limit": _safe_float(_field(row, "scanner_full_eval_limit")),
                 "scanner_full_eval_count": _safe_float(_field(row, "scanner_full_eval_count")),
                 "scanner_rising_full_eval_extra_limit": _safe_float(
@@ -1962,6 +2026,13 @@ def build_report(
     )
     scanner_budget = _scanner_full_eval_budget_diagnostics(rising_missed)
     blocker_taxonomy = _rollup_blocker_taxonomy(summaries)
+    selection_prior_counts = _selection_prior_counts(rising_missed)
+    selection_positive_or_recheck_count = sum(
+        selection_prior_counts.get(key, 0) for key in ("positive_prior", "recheck_prior")
+    )
+    selection_risk_count = sum(
+        selection_prior_counts.get(key, 0) for key in SELECTION_PRIOR_RISK_RECOMMENDATIONS
+    )
     return {
         "schema_version": 1,
         "report_type": "intraday_entry_blocker_diagnostics",
@@ -2071,6 +2142,22 @@ def build_report(
                     "unbounded_cpu_or_ai_budget_increase",
                 ],
             },
+            "rising_missed_selection_prior": {
+                "metric_role": "selection_priority_diagnostic",
+                "decision_authority": "source_only_scanner_ranking_hint",
+                "window_policy": "preopen_verified_policy_catalog_only",
+                "sample_floor": "none_ranking_hint",
+                "primary_decision_metric": False,
+                "source_quality_gate": "KORSTOCKSCAN_SCALP_SIM_AUTO_POLICY_FILE_catalog_contract",
+                "forbidden_uses": [
+                    "forced_one_share_allow_block_change",
+                    "real_order_approval",
+                    "threshold_relaxation",
+                    "broker_guard_bypass",
+                    "provider_route_change",
+                    "bot_restart_trigger",
+                ],
+            },
             "blocker_taxonomy": {
                 "metric_role": "funnel_count",
                 "decision_authority": "diagnostic_taxonomy_only",
@@ -2176,6 +2263,12 @@ def build_report(
                 Counter(str(item.get("rising_missed_class") or "") for item in rising_missed),
                 key_name="class",
             ),
+            "rising_missed_selection_prior_recommendation_counts": _top_counter(
+                selection_prior_counts,
+                key_name="recommendation",
+            ),
+            "rising_missed_selection_positive_or_recheck_count": selection_positive_or_recheck_count,
+            "rising_missed_selection_risk_count": selection_risk_count,
             "rising_missed_one_share_eligible_symbol_count": sum(
                 1 for item in rising_missed if bool(item.get("rising_missed_one_share_eligible"))
             ),
@@ -2219,8 +2312,7 @@ def build_report(
         },
         "rising_missed_buy": sorted(
             rising_missed,
-            key=lambda item: item["max_price_delta_since_first_seen_pct"] or -999.0,
-            reverse=True,
+            key=_selection_prior_sort_key,
         ),
         "falling_real_submitted": sorted(
             falling_submitted,

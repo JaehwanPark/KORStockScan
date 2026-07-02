@@ -11,6 +11,7 @@ from typing import Any
 
 from src.engine import lifecycle_bucket_discovery
 from src.engine.lifecycle_bucket_discovery import bucket_catalog_path, sim_auto_approval_path
+from src.engine.monitoring import rising_missed_classifier_prior
 from src.engine.runtime_apply_bridge import runtime_apply_bridge_report_path
 from src.engine.scalp_sim_scale_in_window_approval import approval_path as scale_in_approval_path
 from src.utils.constants import DATA_DIR
@@ -24,6 +25,7 @@ DECISION_AUTHORITY = "scalp_sim_auto_approval_control_tower"
 SIM_AUTO_APPROVAL_DIR = Path(DATA_DIR) / "threshold_cycle" / "sim_auto_approvals"
 SCALP_SIM_POLICY_DIR = Path(DATA_DIR) / "threshold_cycle" / "scalp_sim_policies"
 LDM_HYPOTHESIS_PLAN_DIR = Path(DATA_DIR) / "threshold_cycle" / "ldm_hypothesis_observation_plans"
+RISING_MISSED_CLASSIFIER_PRIOR_DIR = Path(DATA_DIR) / "report" / "rising_missed_classifier_prior"
 
 FORBIDDEN_USES = [
     "broker_order_submit",
@@ -38,6 +40,7 @@ FORBIDDEN_USES = [
 
 SCALP_SIM_POLICY_GENERATOR_FILES = (
     Path(lifecycle_bucket_discovery.__file__),
+    Path(rising_missed_classifier_prior.__file__),
     Path(__file__),
 )
 
@@ -83,6 +86,10 @@ def scalp_sim_policy_catalog_path(target_date: str) -> Path:
     return SCALP_SIM_POLICY_DIR / f"scalp_sim_policy_catalog_{target_date}.json"
 
 
+def rising_missed_classifier_prior_path(target_date: str) -> Path:
+    return RISING_MISSED_CLASSIFIER_PRIOR_DIR / f"rising_missed_classifier_prior_{target_date}.json"
+
+
 def _latest_hypothesis_observation_plan(target_date: str) -> dict[str, Any]:
     exact = LDM_HYPOTHESIS_PLAN_DIR / f"ldm_hypothesis_observation_plan_{target_date}.json"
     if exact.exists():
@@ -118,6 +125,158 @@ def _scale_in_contract_ok(payload: dict[str, Any]) -> bool:
         and payload.get("human_approval_required") is False
         and payload.get("source_quality_status") in {None, "pass"}
     )
+
+
+def _rising_missed_prior_contract_ok(payload: dict[str, Any]) -> bool:
+    return (
+        payload.get("report_type") == "rising_missed_classifier_prior"
+        and payload.get("runtime_effect") is False
+        and payload.get("actual_order_submitted") in {None, False}
+        and payload.get("broker_order_forbidden") in {None, True}
+        and payload.get("allowed_runtime_apply") is False
+        and payload.get("decision_authority") == "rising_missed_classifier_prior_source_only"
+    )
+
+
+def _active_seed_prefix_key(prefix: dict[str, Any] | None) -> str:
+    prefix = prefix if isinstance(prefix, dict) else {}
+    entry_score = str(prefix.get("entry_score_parent") or "").strip()
+    entry_source = str(prefix.get("entry_source_parent") or "").strip()
+    submit_quality = str(prefix.get("submit_quality_parent") or "").strip()
+    if not entry_score or not entry_source:
+        return ""
+    parts = [f"entry_score_parent={entry_score}", f"entry_source_parent={entry_source}"]
+    if submit_quality:
+        parts.append(f"submit_quality_parent={submit_quality}")
+    return "|".join(parts)
+
+
+def _rising_missed_prior_observable_prefix(row: dict[str, Any]) -> dict[str, str]:
+    raw = row.get("observable_prefix") if isinstance(row.get("observable_prefix"), dict) else {}
+    prefix: dict[str, str] = {}
+    for key in ("entry_score_parent", "entry_source_parent", "submit_quality_parent"):
+        value = str(raw.get(key) or "").strip()
+        if value and value != "-":
+            prefix[key] = value
+    return prefix
+
+
+def _rising_missed_prior_metric(row: dict[str, Any]) -> dict[str, Any]:
+    window = str(row.get("selected_window") or "").strip()
+    metrics = row.get("window_metrics") if isinstance(row.get("window_metrics"), dict) else {}
+    metric = metrics.get(window) if isinstance(metrics.get(window), dict) else {}
+    return {
+        "selected_window": window or None,
+        "ev_pct": metric.get("ev_pct"),
+        "joined_sample": metric.get("joined_sample") or metric.get("sample"),
+    }
+
+
+def _rising_missed_prior_seed_id(row: dict[str, Any], prefix: dict[str, str]) -> str:
+    source = json.dumps(
+        {
+            "prior_key": row.get("prior_key"),
+            "recommendation": row.get("recommendation"),
+            "prefix": prefix,
+        },
+        ensure_ascii=True,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return "rising_missed_prior_" + hashlib.sha256(source.encode("utf-8")).hexdigest()[:16]
+
+
+def _rising_missed_prior_policy_item(payload: dict[str, Any], source_path: Path) -> dict[str, Any] | None:
+    if not _rising_missed_prior_contract_ok(payload):
+        return None
+    rows = [row for row in (payload.get("priors") or []) if isinstance(row, dict)]
+    active_seeds: list[dict[str, Any]] = []
+    seed_status_overrides: list[dict[str, Any]] = []
+    observation_lanes: list[dict[str, Any]] = []
+    for row in rows:
+        recommendation = str(row.get("recommendation") or "").strip()
+        prefix = _rising_missed_prior_observable_prefix(row)
+        prefix_key = _active_seed_prefix_key(prefix)
+        metric = _rising_missed_prior_metric(row)
+        lane = {
+            "prior_key": row.get("prior_key"),
+            "recommendation": recommendation,
+            "confidence": row.get("confidence"),
+            "reason": row.get("reason"),
+            "selected_window": metric.get("selected_window"),
+            "ev_pct": metric.get("ev_pct"),
+            "joined_sample": metric.get("joined_sample"),
+            "observable_prefix": row.get("observable_prefix") if isinstance(row.get("observable_prefix"), dict) else {},
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+        }
+        observation_lanes.append(lane)
+        if not prefix_key:
+            continue
+        if recommendation in {"source_quality_blocked", "loss_filter", "quality_risk"}:
+            seed_status_overrides.append(
+                {
+                    "prefix_key": prefix_key,
+                    "observable_prefix": prefix,
+                    "forced_status": "cooldown",
+                    "reason": f"rising_missed_prior_{recommendation}",
+                    "prior_key": row.get("prior_key"),
+                    "runtime_effect": False,
+                    "allowed_runtime_apply": False,
+                }
+            )
+            continue
+        if recommendation not in {"positive_prior", "recheck_prior"}:
+            continue
+        active_seeds.append(
+            {
+                "active_seed_id": _rising_missed_prior_seed_id(row, prefix),
+                "source_parent_bucket_id": str(row.get("prior_key") or prefix_key),
+                "policy_version": f"rising_missed_classifier_prior:{payload.get('target_date') or payload.get('date')}",
+                "status": "active",
+                "priority_tier": f"rising_missed_{recommendation}",
+                "observable_prefix": prefix,
+                "parent_ev_pct": metric.get("ev_pct"),
+                "parent_joined_sample": metric.get("joined_sample"),
+                "active_collection_reason": f"rising_missed_{recommendation}_active_sim_collection",
+                "targeted_sim_quota": {
+                    "quota_policy_version": "rising_missed_classifier_prior_v1",
+                    "daily_total_share_pct": 15,
+                    "per_seed_daily_limit": 8,
+                    "sample_goal_per_bucket": 10,
+                    "quota_scope": "rising_missed_prior_prefix_revisit",
+                },
+                "source_quality_status": "pass",
+                "rising_missed_prior_recommendation": recommendation,
+                "rising_missed_prior_confidence": row.get("confidence"),
+                "rising_missed_prior_reason": row.get("reason"),
+                "runtime_effect": False,
+                "allowed_runtime_apply": False,
+                "actual_order_submitted": False,
+                "broker_order_forbidden": True,
+            }
+        )
+    if not (active_seeds or seed_status_overrides):
+        return None
+    return {
+        "source_id": "rising_missed_classifier_prior",
+        "policy_kind": "rising_missed_prior_sim_observation_policy",
+        "policy_id": "rising_missed_classifier_prior",
+        "policy_file": str(source_path),
+        "active_sim_priority_seeds": active_seeds,
+        "active_sim_priority_seed_count": len(active_seeds),
+        "active_seed_status_overrides": seed_status_overrides,
+        "active_seed_status_override_count": len(seed_status_overrides),
+        "observation_lanes": observation_lanes,
+        "observation_lane_count": len(observation_lanes),
+        "recommendation_counts": (payload.get("summary") or {}).get("recommendation_counts") or {},
+        "classification_state": "sim_observation_priority",
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "forbidden_uses": FORBIDDEN_USES,
+    }
 
 
 def _lifecycle_policy_item(payload: dict[str, Any], catalog_path: Path) -> dict[str, Any] | None:
@@ -217,6 +376,7 @@ def build_scalp_sim_auto_approval(
     lifecycle_bucket_catalog_path: Path | None = None,
     scale_in_approval: dict[str, Any] | None = None,
     runtime_apply_bridge: dict[str, Any] | None = None,
+    rising_missed_prior: dict[str, Any] | None = None,
     source_paths: dict[str, Path] | None = None,
 ) -> dict[str, Any]:
     date_key = _date_text(target_date)
@@ -225,6 +385,7 @@ def build_scalp_sim_auto_approval(
         "lifecycle_bucket_catalog": bucket_catalog_path(date_key),
         "scalp_sim_scale_in_window_approval": scale_in_approval_path(date_key),
         "runtime_apply_bridge": runtime_apply_bridge_report_path(date_key),
+        "rising_missed_classifier_prior": rising_missed_classifier_prior_path(date_key),
     }
     paths = {**default_paths, **(source_paths or {})}
     lifecycle_payload = (
@@ -242,6 +403,11 @@ def build_scalp_sim_auto_approval(
         if isinstance(runtime_apply_bridge, dict)
         else _load_json(paths["runtime_apply_bridge"])
     )
+    rising_missed_prior_payload = (
+        rising_missed_prior
+        if isinstance(rising_missed_prior, dict)
+        else _load_json(paths["rising_missed_classifier_prior"])
+    )
     catalog_path = lifecycle_bucket_catalog_path or paths["lifecycle_bucket_catalog"]
 
     policy_items: list[dict[str, Any]] = []
@@ -251,6 +417,12 @@ def build_scalp_sim_auto_approval(
     scale_policy = _scale_in_policy_item(scale_payload)
     if scale_policy:
         policy_items.append(scale_policy)
+    rising_missed_prior_policy = _rising_missed_prior_policy_item(
+        rising_missed_prior_payload,
+        paths["rising_missed_classifier_prior"],
+    )
+    if rising_missed_prior_policy:
+        policy_items.append(rising_missed_prior_policy)
 
     source_status = {
         "lifecycle_sim_auto_approval": {
@@ -283,6 +455,25 @@ def build_scalp_sim_auto_approval(
             "present": bool(bridge_payload),
             **_runtime_bridge_summary(bridge_payload),
         },
+        "rising_missed_classifier_prior": {
+            "path": str(paths["rising_missed_classifier_prior"]),
+            "present": bool(rising_missed_prior_payload),
+            "contract_ok": _rising_missed_prior_contract_ok(rising_missed_prior_payload),
+            "prior_count": (rising_missed_prior_payload.get("summary") or {}).get("prior_count")
+            if isinstance(rising_missed_prior_payload.get("summary"), dict)
+            else None,
+            "recommendation_counts": (rising_missed_prior_payload.get("summary") or {}).get(
+                "recommendation_counts"
+            )
+            if isinstance(rising_missed_prior_payload.get("summary"), dict)
+            else {},
+            "active_seed_count": len(
+                (rising_missed_prior_policy or {}).get("active_sim_priority_seeds") or []
+            ),
+            "active_seed_status_override_count": len(
+                (rising_missed_prior_policy or {}).get("active_seed_status_overrides") or []
+            ),
+        },
     }
     blocked_reasons: list[str] = []
     if lifecycle_payload and not source_status["lifecycle_sim_auto_approval"]["contract_ok"]:
@@ -291,6 +482,8 @@ def build_scalp_sim_auto_approval(
         blocked_reasons.append("lifecycle_bucket_catalog_missing")
     if scale_payload and not source_status["scalp_sim_scale_in_window_approval"]["contract_ok"]:
         blocked_reasons.append("scalp_sim_scale_in_window_contract_invalid")
+    if rising_missed_prior_payload and not source_status["rising_missed_classifier_prior"]["contract_ok"]:
+        blocked_reasons.append("rising_missed_classifier_prior_contract_invalid")
     if not policy_items:
         blocked_reasons.append("sim_policy_candidate_missing")
     approved_source_ids = sorted({str(item.get("source_id")) for item in policy_items if item.get("source_id")})
@@ -324,6 +517,8 @@ def build_scalp_sim_auto_approval(
 
 def build_policy_catalog(approval: dict[str, Any]) -> dict[str, Any]:
     active_seeds: list[dict[str, Any]] = []
+    active_seed_status_overrides: list[dict[str, Any]] = []
+    rising_missed_prior_lanes: list[dict[str, Any]] = []
     for policy in approval.get("approved_policies") or []:
         if not isinstance(policy, dict):
             continue
@@ -332,8 +527,38 @@ def build_policy_catalog(approval: dict[str, Any]) -> dict[str, Any]:
             for item in (policy.get("active_sim_priority_seeds") or [])
             if isinstance(item, dict) and str(item.get("active_seed_id") or "").strip()
         )
+        active_seed_status_overrides.extend(
+            item
+            for item in (policy.get("active_seed_status_overrides") or [])
+            if isinstance(item, dict) and str(item.get("prefix_key") or "").strip()
+        )
+        if policy.get("source_id") == "rising_missed_classifier_prior":
+            rising_missed_prior_lanes.extend(
+                item for item in (policy.get("observation_lanes") or []) if isinstance(item, dict)
+            )
     target_date = _date_text(approval.get("date"))
     hypothesis_plan = _latest_hypothesis_observation_plan(target_date)
+    overrides_by_prefix = {
+        str(item.get("prefix_key") or "").strip(): item
+        for item in active_seed_status_overrides
+        if str(item.get("prefix_key") or "").strip()
+    }
+    adjusted_seeds: list[dict[str, Any]] = []
+    for seed in active_seeds:
+        prefix_key = _active_seed_prefix_key(seed.get("observable_prefix") if isinstance(seed, dict) else {})
+        override = overrides_by_prefix.get(prefix_key)
+        if override and str(seed.get("status") or "") == "active":
+            adjusted = dict(seed)
+            adjusted["status"] = str(override.get("forced_status") or "cooldown")
+            adjusted["rising_missed_prior_status_override"] = {
+                "reason": override.get("reason"),
+                "prior_key": override.get("prior_key"),
+                "runtime_effect": False,
+                "allowed_runtime_apply": False,
+            }
+            adjusted_seeds.append(adjusted)
+        else:
+            adjusted_seeds.append(seed)
     return {
         "schema_version": "scalp_sim_policy_catalog_v1",
         "date": approval.get("date"),
@@ -346,10 +571,14 @@ def build_policy_catalog(approval: dict[str, Any]) -> dict[str, Any]:
         "allowed_runtime_apply": False,
         "approved_source_ids": approval.get("approved_source_ids") or [],
         "policies": approval.get("approved_policies") or [],
-        "active_sim_priority_seeds": active_seeds,
+        "active_sim_priority_seeds": adjusted_seeds,
+        "rising_missed_prior_observation_lanes": rising_missed_prior_lanes,
+        "rising_missed_prior_active_seed_status_overrides": active_seed_status_overrides,
         "active_priority_lineage": {
             "source": "scalp_sim_auto_approval",
-            "active_sim_priority_seed_count": len(active_seeds),
+            "active_sim_priority_seed_count": len(adjusted_seeds),
+            "rising_missed_prior_observation_lane_count": len(rising_missed_prior_lanes),
+            "rising_missed_prior_active_seed_status_override_count": len(active_seed_status_overrides),
             "lineage_artifact": f"data/report/key_lineage_ledger/key_lineage_ledger_{target_date}.json",
         },
         "hypothesis_observation_plan": hypothesis_plan or {},

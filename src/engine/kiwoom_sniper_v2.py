@@ -58,6 +58,7 @@ from src.engine.risk.manual_control_exclusion import (
     evaluate_manual_control_exclusion,
     normalize_manual_control_exclusion_code,
 )
+from src.engine.scalping.rising_missed_selection_prior import rising_missed_selection_rank_delta
 from src.engine.sniper_entry_state import ENTRY_LOCK
 from src.engine.sniper_config import CONF
 from src.engine.sniper_time import (
@@ -2788,8 +2789,10 @@ def _runtime_iteration_targets(targets, now_ts):
             rising_recheck = _scanner_rising_recheck_pending(target, now_ts=now_ts)
             cooldown_waiting = _scanner_cooldown_recheck_waiting(target, now_ts=now_ts)
             positive_delta = _scanner_positive_delta_value(target)
+            selection_delta = rising_missed_selection_rank_delta(target)
             recency_key = (
                 2 if cooldown_waiting else (0 if pending_recheck or rising_recheck else 1),
+                -selection_delta,
                 0 if last_full_eval <= 0 else 1,
                 -positive_delta,
                 -_scanner_queue_added_time(target, now_ts=now_ts) if last_full_eval <= 0 else last_full_eval,

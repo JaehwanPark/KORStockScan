@@ -101,6 +101,16 @@ def _default_intraday_feedback_path(target_date: str) -> Path:
     )
 
 
+def _default_classifier_prior_path(target_date: str) -> Path:
+    return (
+        PROJECT_ROOT
+        / "data"
+        / "report"
+        / "rising_missed_classifier_prior"
+        / f"rising_missed_classifier_prior_{target_date}.json"
+    )
+
+
 def _default_output_paths(target_date: str) -> tuple[Path, Path]:
     base = PROJECT_ROOT / "data" / "report" / "rising_missed_scout_workorder"
     return (
@@ -127,6 +137,13 @@ def _event_features(row: dict[str, Any]) -> dict[str, Any]:
         "scanner_promotion_id": fields.get("scanner_promotion_id"),
         "scanner_promotion_reason": fields.get("scanner_promotion_reason"),
         "source_signature": fields.get("source_signature"),
+        "rising_missed_selection_prior_key": fields.get("rising_missed_selection_prior_key"),
+        "rising_missed_selection_recommendation": fields.get("rising_missed_selection_recommendation"),
+        "rising_missed_selection_confidence": fields.get("rising_missed_selection_confidence"),
+        "rising_missed_selection_score_delta": _safe_float(
+            fields.get("rising_missed_selection_score_delta")
+        ),
+        "rising_missed_selection_rank_reason": fields.get("rising_missed_selection_rank_reason"),
         "price_delta_since_first_seen_pct": _safe_float(fields.get("price_delta_since_first_seen_pct")),
         "entry_price": fields.get("rising_missed_one_share_entry_price")
         or fields.get("current_price")
@@ -181,6 +198,11 @@ def _joined_scout_outcomes(
                 "exit_rule": sell.get("exit_rule"),
                 "scanner_promotion_reason": entry.get("scanner_promotion_reason"),
                 "source_signature": entry.get("source_signature"),
+                "rising_missed_selection_prior_key": entry.get("rising_missed_selection_prior_key"),
+                "rising_missed_selection_recommendation": entry.get("rising_missed_selection_recommendation"),
+                "rising_missed_selection_confidence": entry.get("rising_missed_selection_confidence"),
+                "rising_missed_selection_score_delta": entry.get("rising_missed_selection_score_delta"),
+                "rising_missed_selection_rank_reason": entry.get("rising_missed_selection_rank_reason"),
                 "price_delta_since_first_seen_pct": entry.get("price_delta_since_first_seen_pct"),
                 "forced_event_count": forced[record_id].get("forced_event_count", 0),
                 "latency_pass_count": counts.get("latency_pass", 0),
@@ -191,18 +213,48 @@ def _joined_scout_outcomes(
     return outcomes
 
 
+def _current_row_selection_field(row: dict[str, Any], key: str) -> Any:
+    for blocker in reversed(row.get("recent_blockers") or []):
+        if isinstance(blocker, dict) and blocker.get(key) not in {None, ""}:
+            return blocker.get(key)
+    budget = row.get("scanner_full_eval_budget_deferred")
+    if isinstance(budget, dict) and budget.get(key) not in {None, ""}:
+        return budget.get(key)
+    return ""
+
+
+def _current_row_selection_recommendation(row: dict[str, Any]) -> str:
+    return str(_current_row_selection_field(row, "rising_missed_selection_recommendation") or "unavailable")
+
+
+def _selection_recommendation_counts(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    counts = Counter(str(row.get("rising_missed_selection_recommendation") or "unavailable") for row in rows)
+    return [{"recommendation": key, "count": value} for key, value in counts.most_common()]
+
+
 def _current_missed_summary(diagnostic: dict[str, Any]) -> dict[str, Any]:
     rows = [row for row in diagnostic.get("rising_missed_buy") or [] if isinstance(row, dict)]
     class_counts = Counter(str(row.get("rising_missed_class") or "unknown") for row in rows)
+    prior_counts = Counter(_current_row_selection_recommendation(row) for row in rows)
     top_rows = []
     for row in rows[:10]:
         latest = row.get("latest_blocker") if isinstance(row.get("latest_blocker"), dict) else {}
+        recommendation = _current_row_selection_recommendation(row)
         top_rows.append(
             {
                 "stock_code": row.get("stock_code"),
                 "stock_name": row.get("stock_name"),
                 "rising_missed_class": row.get("rising_missed_class"),
                 "rising_missed_one_share_eligible": bool(row.get("rising_missed_one_share_eligible")),
+                "rising_missed_selection_recommendation": recommendation,
+                "rising_missed_selection_prior_key": _current_row_selection_field(
+                    row,
+                    "rising_missed_selection_prior_key",
+                ),
+                "rising_missed_selection_score_delta": _current_row_selection_field(
+                    row,
+                    "rising_missed_selection_score_delta",
+                ),
                 "max_price_delta_since_first_seen_pct": row.get("max_price_delta_since_first_seen_pct"),
                 "latest_stage": latest.get("stage"),
                 "latest_reason": latest.get("reason"),
@@ -212,6 +264,9 @@ def _current_missed_summary(diagnostic: dict[str, Any]) -> dict[str, Any]:
     return {
         "count": len(rows),
         "class_counts": [{"class": key, "count": value} for key, value in class_counts.most_common()],
+        "selection_prior_recommendation_counts": [
+            {"recommendation": key, "count": value} for key, value in prior_counts.most_common()
+        ],
         "eligible_count": sum(1 for row in rows if row.get("rising_missed_one_share_eligible")),
         "top_rows": top_rows,
     }
@@ -402,9 +457,69 @@ def _build_operational_workorders(
     current_missed: dict[str, Any],
     scale_in_bottleneck: dict[str, Any],
     intraday_feedback: dict[str, Any],
+    classifier_prior: dict[str, Any],
     source_paths: dict[str, str],
 ) -> list[dict[str, Any]]:
     orders: list[dict[str, Any]] = []
+    classifier_prior_summary = (
+        classifier_prior.get("summary")
+        if isinstance(classifier_prior.get("summary"), dict)
+        else {}
+    )
+    prior_count = int(classifier_prior_summary.get("prior_count") or 0)
+    if prior_count > 0:
+        orders.append(
+            {
+                "order_id": "order_rising_missed_classifier_prior_feedback_bridge",
+                "title": "rising missed cumulative classifier prior bridge",
+                "source_report_type": "rising_missed_scout_workorder",
+                "lifecycle_stage": "entry",
+                "target_subsystem": "rising_missed_entry_classifier",
+                "route": "instrumentation_order",
+                "mapped_family": "rising_missed_classifier_prior_feedback_bridge",
+                "threshold_family": "rising_missed_classifier_prior_feedback_bridge",
+                "improvement_type": "source_only_classifier_prior_workorder",
+                "confidence": "cumulative_source_only",
+                "priority": 2,
+                "runtime_effect": False,
+                "allowed_runtime_apply": False,
+                "implementation_status": "implemented",
+                "implementation_provenance": {
+                    "implementation_type": "rising_missed_classifier_prior_feedback_bridge",
+                    "decision_authority": "source_only_classifier_prior_no_runtime_mutation",
+                    "prior_count": prior_count,
+                    "recommendation_counts": classifier_prior_summary.get("recommendation_counts") or {},
+                    "runtime_effect": False,
+                    "allowed_runtime_apply": False,
+                    "root_cause_closure_status_hint": "implementation_done",
+                },
+                "expected_ev_effect": (
+                    "Feed cumulative ADM/LDM prior recommendations back into the rising-missed scout loop "
+                    "as source-only classifier evidence."
+                ),
+                "evidence": [
+                    f"prior_count={prior_count}",
+                    "recommendation_counts="
+                    + json.dumps(
+                        classifier_prior_summary.get("recommendation_counts") or {},
+                        ensure_ascii=False,
+                        sort_keys=True,
+                    ),
+                    "runtime_effect=false",
+                ],
+                "source_paths": list(source_paths.values()),
+                "files_likely_touched": [
+                    "src/engine/monitoring/rising_missed_classifier_prior.py",
+                    "src/engine/monitoring/rising_missed_scout_workorder.py",
+                    "src/engine/scalping/rising_missed_one_share_entry.py",
+                ],
+                "acceptance_tests": [
+                    "PYTHONPATH=. .venv/bin/pytest src/tests/test_rising_missed_classifier_prior.py src/tests/test_rising_missed_scout_workorder.py src/tests/test_build_code_improvement_workorder.py",
+                    "prior bridge remains source-only and cannot mutate one-share allow/block, runtime thresholds, broker/order guards, provider route, or bot state",
+                ],
+                "forbidden_uses": FORBIDDEN_USES,
+            }
+        )
     feedback_summary = (
         intraday_feedback.get("summary")
         if isinstance(intraday_feedback.get("summary"), dict)
@@ -688,17 +803,20 @@ def build_report(
     post_sell_path: Path | None = None,
     diagnostic_path: Path | None = None,
     intraday_feedback_path: Path | None = None,
+    classifier_prior_path: Path | None = None,
     generated_at: str | None = None,
 ) -> dict[str, Any]:
     pipeline_path = pipeline_path or _default_pipeline_path(target_date)
     post_sell_path = post_sell_path or _default_post_sell_path(target_date)
     diagnostic_path = diagnostic_path or _default_diagnostic_path(target_date)
     intraday_feedback_path = intraday_feedback_path or _default_intraday_feedback_path(target_date)
+    classifier_prior_path = classifier_prior_path or _default_classifier_prior_path(target_date)
     generated_at = generated_at or datetime.now(KST).isoformat(timespec="seconds")
 
     post_sell_rows = _load_jsonl(post_sell_path)
     diagnostic = _load_json(diagnostic_path)
     intraday_feedback = _load_json(intraday_feedback_path)
+    classifier_prior = _load_json(classifier_prior_path)
     forced = _index_forced_scouts(_iter_jsonl(pipeline_path))
     preliminary_outcomes = _joined_scout_outcomes(
         forced=forced,
@@ -722,6 +840,7 @@ def build_report(
         "post_sell_candidates": str(post_sell_path),
         "intraday_entry_blocker_diagnostics": str(diagnostic_path),
         "rising_missed_intraday_feedback": str(intraday_feedback_path),
+        "rising_missed_classifier_prior": str(classifier_prior_path),
     }
     code_improvement_orders = _build_operational_workorders(
         winners=winners,
@@ -729,11 +848,17 @@ def build_report(
         current_missed=current_missed,
         scale_in_bottleneck=scale_in_bottleneck,
         intraday_feedback=intraday_feedback,
+        classifier_prior=classifier_prior,
         source_paths=source_paths,
     )
     intraday_feedback_summary = (
         intraday_feedback.get("summary")
         if isinstance(intraday_feedback.get("summary"), dict)
+        else {}
+    )
+    classifier_prior_summary = (
+        classifier_prior.get("summary")
+        if isinstance(classifier_prior.get("summary"), dict)
         else {}
     )
     return {
@@ -766,8 +891,13 @@ def build_report(
             "loser_profit": _profit_summary(losers),
             "winner_source_signature_counts": _signature_counts(winners),
             "loser_source_signature_counts": _signature_counts(losers),
+            "forced_scout_selection_prior_winner_counts": _selection_recommendation_counts(winners),
+            "forced_scout_selection_prior_loser_counts": _selection_recommendation_counts(losers),
             "current_missed_count": current_missed.get("count"),
             "current_missed_class_counts": current_missed.get("class_counts"),
+            "current_missed_selection_prior_recommendation_counts": current_missed.get(
+                "selection_prior_recommendation_counts"
+            ),
             "scale_in_price_guard_block_record_count": scale_in_bottleneck.get(
                 "price_guard_block_record_count"
             ),
@@ -779,12 +909,18 @@ def build_report(
             "intraday_feedback_initial_quality_fail_count": intraday_feedback_summary.get(
                 "initial_quality_fail_count", 0
             ),
+            "classifier_prior_available": bool(classifier_prior),
+            "classifier_prior_count": classifier_prior_summary.get("prior_count", 0),
+            "classifier_prior_recommendation_counts": classifier_prior_summary.get(
+                "recommendation_counts", {}
+            ),
             "code_improvement_order_count": len(code_improvement_orders),
         },
         "profitable_forced_scout_examples": winners[:20],
         "loss_or_flat_forced_scout_examples": losers[:20],
         "current_missed_summary": current_missed,
         "intraday_feedback_summary": intraday_feedback_summary,
+        "classifier_prior_summary": classifier_prior_summary,
         "scale_in_bottleneck_summary": scale_in_bottleneck,
         "code_improvement_orders": code_improvement_orders,
     }
@@ -846,6 +982,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--post-sell-path", type=Path)
     parser.add_argument("--diagnostic-path", type=Path)
     parser.add_argument("--intraday-feedback-path", type=Path)
+    parser.add_argument("--classifier-prior-path", type=Path)
     parser.add_argument("--output-json", type=Path)
     parser.add_argument("--output-md", type=Path)
     parser.add_argument("--generated-at")
@@ -857,6 +994,7 @@ def main(argv: list[str] | None = None) -> int:
         post_sell_path=args.post_sell_path,
         diagnostic_path=args.diagnostic_path,
         intraday_feedback_path=args.intraday_feedback_path,
+        classifier_prior_path=args.classifier_prior_path,
         generated_at=args.generated_at,
     )
     default_json, default_md = _default_output_paths(args.target_date)

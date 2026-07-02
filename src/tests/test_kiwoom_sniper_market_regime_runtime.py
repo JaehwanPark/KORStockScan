@@ -1360,6 +1360,38 @@ def test_runtime_iteration_targets_orders_positive_scanner_by_delta_magnitude():
     assert [target["id"] for target in ordered] == ["large_positive", "small_positive"]
 
 
+def test_runtime_iteration_targets_applies_rising_missed_selection_prior_delta(monkeypatch):
+    monkeypatch.setattr(
+        kiwoom_sniper_v2,
+        "rising_missed_selection_rank_delta",
+        lambda target: 20.0 if target.get("id") == "positive_prior" else -20.0,
+    )
+    targets = [
+        {
+            "id": "risk_prior",
+            "code": "000001",
+            "status": "WATCHING",
+            "strategy": "SCALPING",
+            "position_tag": "SCANNER",
+            "entry_armed_at_epoch": 1500.0,
+            "price_delta_since_first_seen_pct": "1.50",
+        },
+        {
+            "id": "positive_prior",
+            "code": "000002",
+            "status": "WATCHING",
+            "strategy": "SCALPING",
+            "position_tag": "SCANNER",
+            "entry_armed_at_epoch": 1400.0,
+            "price_delta_since_first_seen_pct": "1.50",
+        },
+    ]
+
+    ordered = kiwoom_sniper_v2._runtime_iteration_targets(targets, now_ts=1600.0)
+
+    assert [target["id"] for target in ordered] == ["positive_prior", "risk_prior"]
+
+
 def test_runtime_iteration_targets_prioritizes_due_rising_recheck():
     targets = [
         {

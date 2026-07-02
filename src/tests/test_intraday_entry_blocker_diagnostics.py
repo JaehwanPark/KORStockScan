@@ -63,6 +63,11 @@ def test_build_report_surfaces_rising_promoted_without_real_submit(tmp_path):
                 "scanner_full_eval_count": "12",
                 "scanner_rising_full_eval_extra_limit": "4",
                 "scanner_rising_full_eval_relief_count": "4",
+                "rising_missed_selection_prior_key": "prior_positive",
+                "rising_missed_selection_recommendation": "positive_prior",
+                "rising_missed_selection_confidence": "high",
+                "rising_missed_selection_score_delta": "20",
+                "rising_missed_selection_rank_reason": "positive_prior_test",
             },
         ),
         _event("010690", "화신", "scalp_sim_buy_order_assumed_filled", {"simulated_order": "True"}),
@@ -86,8 +91,15 @@ def test_build_report_surfaces_rising_promoted_without_real_submit(tmp_path):
         "count": 1,
     }
     assert item["recent_blockers"][-1]["scanner_full_eval_budget_source"] == "deferred_no_relief"
+    assert item["recent_blockers"][-1]["rising_missed_selection_recommendation"] == "positive_prior"
+    assert item["scanner_full_eval_budget_deferred"]["rising_missed_selection_prior_key"] == "prior_positive"
     assert item["scanner_full_eval_budget_deferred"]["count"] == 1
     assert report["summary"]["rising_missed_full_eval_budget_deferred_count"] == 1
+    assert report["summary"]["rising_missed_selection_prior_recommendation_counts"] == [
+        {"recommendation": "positive_prior", "count": 1}
+    ]
+    assert report["summary"]["rising_missed_selection_positive_or_recheck_count"] == 1
+    assert report["summary"]["rising_missed_selection_risk_count"] == 0
     assert report["scanner_full_eval_budget_diagnostics"]["top_symbols"][0]["stock_code"] == "010690"
     budget_priority = next(
         item for item in report["root_cause_priorities"] if item["issue"] == "scanner_full_eval_budget_deferred"

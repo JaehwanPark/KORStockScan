@@ -73,6 +73,28 @@ def _field_present(value: Any) -> bool:
     return bool(text) and text not in {"0", "false", "no", "n", "off", "none", "null", "-"}
 
 
+def _prior_log_fields(stock: dict[str, Any]) -> dict[str, Any]:
+    prior = stock.get("rising_missed_prior")
+    prior = prior if isinstance(prior, dict) else {}
+    return {
+        "rising_missed_prior_key": stock.get("rising_missed_prior_key")
+        or prior.get("prior_key")
+        or "-",
+        "rising_missed_prior_recommendation": stock.get("rising_missed_prior_recommendation")
+        or prior.get("recommendation")
+        or "unavailable",
+        "rising_missed_prior_confidence": stock.get("rising_missed_prior_confidence")
+        or prior.get("confidence")
+        or "none",
+        "rising_missed_prior_window": stock.get("rising_missed_prior_window")
+        or prior.get("selected_window")
+        or "-",
+        "rising_missed_prior_reason": stock.get("rising_missed_prior_reason")
+        or prior.get("reason")
+        or "prior_not_attached",
+    }
+
+
 def _positive_delta_pct(stock: dict[str, Any], explicit_delta_pct: Any = None) -> float:
     values = [
         explicit_delta_pct,
@@ -208,6 +230,7 @@ def evaluate_rising_missed_one_share_entry(
         "rising_missed_one_share_entry_upper_limit_gap_to_limit_pct": f"{max(0.0, 30.0 - fluctuation_pct):.2f}",
         "rising_missed_one_share_entry_upper_limit_exclude_enabled": bool(upper_limit_exclude_enabled),
     }
+    base_fields.update(_prior_log_fields(stock))
     classification = classify_rising_missed_candidate(
         max_delta_pct=delta_pct,
         real_submit_count=stock.get("real_submit_count") or stock.get("actual_order_submit_count") or 0,

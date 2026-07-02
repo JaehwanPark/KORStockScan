@@ -214,6 +214,38 @@ def test_rising_missed_one_share_entry_allows_scanner_rising_candidate():
     assert decision.forced_qty == 1
 
 
+def test_rising_missed_one_share_entry_attaches_prior_log_without_decision_change():
+    decision = evaluate_rising_missed_one_share_entry(
+        {
+            "strategy": "SCALPING",
+            "position_tag": "SCANNER",
+            "scanner_promotion_id": "scan-prior",
+            "price_delta_since_first_seen_pct": 1.2,
+            "rising_missed_prior": {
+                "prior_key": "entry_source_parent=entry_source_wait6579",
+                "recommendation": "positive_prior",
+                "confidence": "high",
+                "selected_window": "rolling10d",
+                "reason": "rolling10d_positive_ev_prior",
+            },
+        },
+        strategy="SCALPING",
+        position_tag="SCANNER",
+        feature_enabled=True,
+        has_open_pending=False,
+        already_holding=False,
+        min_delta_pct=0.5,
+    )
+
+    assert decision.allowed is True
+    assert decision.reason == FORCED_ENTRY_REASON
+    assert decision.log_fields["rising_missed_prior_key"] == "entry_source_parent=entry_source_wait6579"
+    assert decision.log_fields["rising_missed_prior_recommendation"] == "positive_prior"
+    assert decision.log_fields["rising_missed_prior_confidence"] == "high"
+    assert decision.log_fields["rising_missed_prior_window"] == "rolling10d"
+    assert decision.log_fields["rising_missed_prior_reason"] == "rolling10d_positive_ev_prior"
+
+
 def test_rising_missed_default_min_delta_is_one_pct(monkeypatch):
     monkeypatch.delenv("KORSTOCKSCAN_SCANNER_RISING_FULL_EVAL_MIN_DELTA_PCT", raising=False)
 
@@ -5502,6 +5534,70 @@ def test_send_buy_order_market_uses_nxt_after_krx_regular_session(monkeypatch):
     assert captured["payload"]["dmst_stex_tp"] == "NXT"
 
 
+def test_send_buy_order_market_remaps_nxt_aftermarket_market_buy(monkeypatch):
+    class FixedDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return cls(2026, 7, 2, 19, 34, 47, tzinfo=tz)
+
+    captured = {}
+
+    class DummyResponse:
+        status_code = 200
+
+    def fake_post(url, headers, payload, api_id, timeout=5):
+        captured["payload"] = payload
+        return DummyResponse(), {"rt_cd": "0", "ord_no": "BNXT6"}
+
+    monkeypatch.setattr(kiwoom_orders, "datetime", FixedDateTime)
+    monkeypatch.setattr(kiwoom_orders, "is_buy_side_paused", lambda: False)
+    monkeypatch.setattr(kiwoom_orders, "is_buy_side_time_blocked", lambda: False)
+    monkeypatch.setattr(kiwoom_orders.kiwoom_utils, "get_api_url", lambda path: f"https://example.test{path}")
+    monkeypatch.setattr(kiwoom_orders, "_post_kiwoom_with_auth_retry", fake_post)
+
+    result = kiwoom_orders.send_buy_order_market("094360", 45, "token", order_type="3")
+
+    assert result["ord_no"] == "BNXT6"
+    assert captured["payload"]["dmst_stex_tp"] == "NXT"
+    assert captured["payload"]["trde_tp"] == "6"
+    assert captured["payload"]["ord_uv"] == ""
+
+
+def test_send_buy_order_market_remaps_explicit_nxt_market_buy_during_regular_session(monkeypatch):
+    class FixedDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return cls(2026, 7, 2, 10, 10, 0, tzinfo=tz)
+
+    captured = {}
+
+    class DummyResponse:
+        status_code = 200
+
+    def fake_post(url, headers, payload, api_id, timeout=5):
+        captured["payload"] = payload
+        return DummyResponse(), {"rt_cd": "0", "ord_no": "BNXTREG"}
+
+    monkeypatch.setattr(kiwoom_orders, "datetime", FixedDateTime)
+    monkeypatch.setattr(kiwoom_orders, "is_buy_side_paused", lambda: False)
+    monkeypatch.setattr(kiwoom_orders, "is_buy_side_time_blocked", lambda: False)
+    monkeypatch.setattr(kiwoom_orders.kiwoom_utils, "get_api_url", lambda path: f"https://example.test{path}")
+    monkeypatch.setattr(kiwoom_orders, "_post_kiwoom_with_auth_retry", fake_post)
+
+    result = kiwoom_orders.send_buy_order_market(
+        "094360",
+        45,
+        "token",
+        order_type="3",
+        dmst_stex_tp="NXT",
+    )
+
+    assert result["ord_no"] == "BNXTREG"
+    assert captured["payload"]["dmst_stex_tp"] == "NXT"
+    assert captured["payload"]["trde_tp"] == "6"
+    assert captured["payload"]["ord_uv"] == ""
+
+
 def test_send_buy_order_market_rejects_unknown_time_block_override_reason(monkeypatch):
     monkeypatch.setattr(kiwoom_orders, "is_buy_side_paused", lambda: False)
     monkeypatch.setattr(kiwoom_orders, "is_buy_side_time_blocked", lambda: True)
@@ -5886,6 +5982,46 @@ def test_send_sell_order_market_retries_sor_market_time_reject_as_best(monkeypat
     assert calls[1]["ord_uv"] == ""
 
 
+def test_send_sell_order_market_retries_unsupported_market_type_as_best(monkeypatch):
+    class FixedDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return cls(2026, 7, 2, 10, 10, 0, tzinfo=tz)
+
+    calls = []
+
+    class DummyResponse:
+        status_code = 200
+
+    def fake_post(url, headers, payload, api_id, timeout=5):
+        calls.append(payload)
+        if len(calls) == 1:
+            return DummyResponse(), {
+                "rt_cd": "20",
+                "return_code": "20",
+                "return_msg": "[2000](407022:주문이 불가능한 주문종류입니다.)",
+            }
+        return DummyResponse(), {"rt_cd": "0", "ord_no": "S407022"}
+
+    monkeypatch.setattr(kiwoom_orders, "datetime", FixedDateTime)
+    monkeypatch.setattr(kiwoom_orders.kiwoom_utils, "get_api_url", lambda path: f"https://example.test{path}")
+    monkeypatch.setattr(kiwoom_orders, "_post_kiwoom_with_auth_retry", fake_post)
+
+    result = kiwoom_orders.send_sell_order_market(
+        "123456",
+        1,
+        "token",
+        order_type="3",
+        reason_type="LOSS",
+        strategy="SCALPING",
+        dmst_stex_tp="SOR",
+    )
+
+    assert result["ord_no"] == "S407022"
+    assert [payload["trde_tp"] for payload in calls] == ["3", "6"]
+    assert calls[1]["ord_uv"] == ""
+
+
 def test_send_buy_order_market_remaps_pre0830_sor_market_buy(monkeypatch):
     class FixedDateTime(datetime):
         @classmethod
@@ -5955,6 +6091,46 @@ def test_send_buy_order_market_retries_sor_market_time_reject_as_best(monkeypatc
     )
 
     assert result["ord_no"] == "BRETRY"
+    assert [payload["trde_tp"] for payload in calls] == ["3", "6"]
+    assert calls[1]["ord_uv"] == ""
+
+
+def test_send_buy_order_market_retries_unsupported_market_type_as_best(monkeypatch):
+    class FixedDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return cls(2026, 7, 2, 10, 10, 0, tzinfo=tz)
+
+    calls = []
+
+    class DummyResponse:
+        status_code = 200
+
+    def fake_post(url, headers, payload, api_id, timeout=5):
+        calls.append(payload)
+        if len(calls) == 1:
+            return DummyResponse(), {
+                "rt_cd": "20",
+                "return_code": "20",
+                "return_msg": "[2000](407022:주문이 불가능한 주문종류입니다.)",
+            }
+        return DummyResponse(), {"rt_cd": "0", "ord_no": "B407022"}
+
+    monkeypatch.setattr(kiwoom_orders, "datetime", FixedDateTime)
+    monkeypatch.setattr(kiwoom_orders, "is_buy_side_paused", lambda: False)
+    monkeypatch.setattr(kiwoom_orders, "is_buy_side_time_blocked", lambda: False)
+    monkeypatch.setattr(kiwoom_orders.kiwoom_utils, "get_api_url", lambda path: f"https://example.test{path}")
+    monkeypatch.setattr(kiwoom_orders, "_post_kiwoom_with_auth_retry", fake_post)
+
+    result = kiwoom_orders.send_buy_order_market(
+        "123456",
+        1,
+        "token",
+        order_type="3",
+        dmst_stex_tp="SOR",
+    )
+
+    assert result["ord_no"] == "B407022"
     assert [payload["trde_tp"] for payload in calls] == ["3", "6"]
     assert calls[1]["ord_uv"] == ""
 
@@ -13684,6 +13860,8 @@ def test_send_sell_order_market_uses_nxt_after_krx_regular_session(monkeypatch):
 
     assert result["ord_no"] == "SNXT"
     assert captured["payload"]["dmst_stex_tp"] == "NXT"
+    assert captured["payload"]["trde_tp"] == "6"
+    assert captured["payload"]["ord_uv"] == ""
 
 
 def test_scalp_preset_tp_hard_stop_grace_delays_exit(monkeypatch):

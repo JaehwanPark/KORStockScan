@@ -70,6 +70,7 @@ from src.engine.scalping.rising_missed_one_share_entry import (
     evaluate_rising_missed_one_share_entry,
     is_forced_rising_missed_one_share_entry,
 )
+from src.engine.scalping.rising_missed_selection_prior import rising_missed_selection_prior_fields
 from src.engine.sniper_scale_in_utils import record_add_history_event
 from src.engine.trade_pause_control import is_buy_side_paused, get_pause_state_label
 from src.engine.sniper_entry_latency import (
@@ -8636,7 +8637,7 @@ def _scanner_rising_relief_observation_fields(
     stock = stock or {}
     active_recheck_reason = _scanner_active_rising_recheck_reason(stock, now_ts=now_ts)
     active_budget_source = _scanner_active_full_eval_budget_source(stock, now_ts=now_ts)
-    return {
+    fields = {
         "rising_entry_relief_eligible": bool(_scanner_rising_entry_relief_eligible(stock)),
         "rising_entry_relief_reason": reason
         or active_recheck_reason
@@ -8646,6 +8647,8 @@ def _scanner_rising_relief_observation_fields(
         or active_budget_source
         or "not_applicable_full_eval_budget_source",
     }
+    fields.update(rising_missed_selection_prior_fields(stock))
+    return fields
 
 
 def _ws_realtime_type_freshness_fields(ws_data: dict | None, *, now_ts: float | None = None) -> dict[str, Any]:
