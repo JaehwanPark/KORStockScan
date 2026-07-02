@@ -2170,6 +2170,7 @@ def _evaluate_stop_line_touch_mandatory_avg_down(
     stop_pct = _safe_float(dynamic_stop_pct, 0.0)
     current_profit = _safe_float(profit_rate, 0.0)
     if current_profit > stop_pct:
+        _clear_stop_line_touch_avg_down_defer_state(stock)
         return {
             "should_retry": False,
             "reason": "stop_line_not_touched",
@@ -2270,10 +2271,6 @@ def _evaluate_soft_stop_line_touch_avg_down_defer(
         return {"should_defer": False, "reason": "missing_stock_state"}
 
     started_at = _safe_float(stock.get("stop_line_touch_avg_down_defer_started_at"), 0.0)
-    last_seen_at = _safe_float(stock.get("stop_line_touch_avg_down_defer_last_seen_at"), started_at)
-    stale_episode_gap_sec = max_sec
-    if started_at > 0.0 and last_seen_at > 0.0 and now_ts - last_seen_at > stale_episode_gap_sec:
-        started_at = 0.0
     if started_at <= 0.0:
         _mutate_stock_state(
             stock,
@@ -2390,7 +2387,7 @@ def _attempt_stop_line_touch_mandatory_avg_down(
                 allowed_runtime_apply=True,
                 forbidden_uses=(
                     "entry_threshold_relaxation|provider_route_change|broker_guard_bypass|"
-                    "quantity_cap_release|protect_or_emergency_bypass|second_avg_down_retry|hard_stop_threshold_relaxation"
+                    "quantity_cap_release|protect_or_emergency_bypass|max_per_position_bypass|hard_stop_threshold_relaxation"
                 ),
                 sell_reason_type=sell_reason_type,
                 exit_rule=rule or "-",
@@ -2422,6 +2419,7 @@ def _attempt_stop_line_touch_mandatory_avg_down(
         market_regime=market_regime,
         skip_add_judgment_lock=True,
         bypass_scalping_buy_window=True,
+        bypass_scale_in_cooldown=True,
     )
     retry_common_fields = {
         "threshold_family": "stop_line_touch_mandatory_avg_down",
@@ -2436,7 +2434,7 @@ def _attempt_stop_line_touch_mandatory_avg_down(
         "allowed_runtime_apply": True,
         "forbidden_uses": (
             "entry_threshold_relaxation|provider_route_change|broker_guard_bypass|"
-            "quantity_cap_release|protect_or_emergency_bypass|second_avg_down_retry|hard_stop_threshold_relaxation"
+            "quantity_cap_release|protect_or_emergency_bypass|max_per_position_bypass|hard_stop_threshold_relaxation"
         ),
         "sell_reason_type": sell_reason_type,
         "exit_rule": exit_rule or "-",
@@ -30737,6 +30735,7 @@ def can_consider_scale_in(
     *,
     skip_add_judgment_lock=False,
     bypass_scalping_buy_window=False,
+    bypass_scale_in_cooldown=False,
 ):
     """추가매수 공통 게이트: 조건을 만족하는 경우에만 True."""
     _ = (code, ws_data)
@@ -30797,7 +30796,11 @@ def can_consider_scale_in(
     # 최근 추가매수 직후 쿨다운
     cooldown_sec = _rule_int('SCALE_IN_COOLDOWN_SEC', 180)
     last_add = _resolve_last_add_timestamp(stock)
-    if last_add > 0 and (time.time() - last_add) < cooldown_sec:
+    if (
+        last_add > 0
+        and (time.time() - last_add) < cooldown_sec
+        and not bypass_scale_in_cooldown
+    ):
         return {"allowed": False, "reason": "scale_in_cooldown"}
 
     cancel_cooldown_sec = _rule_int('SCALE_IN_CANCEL_COOLDOWN_SEC', 120)
