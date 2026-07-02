@@ -42,8 +42,8 @@
 
 - finding_id: `swing_pattern_lab_deepseek_ofi_qi_stale_missing`
 - lifecycle_stage: `ofi_qi`
-- route: `implement_now`
-- priority: `HIGH`
+- route: `defer_evidence`
+- priority: `LOW`
 - mapped_family: `swing_entry_ofi_qi_execution_quality`
 - confidence: `consensus`
 - expected_ev_effect: If stale ratio > 0.3, consider instrumentation/observer enhancement.
