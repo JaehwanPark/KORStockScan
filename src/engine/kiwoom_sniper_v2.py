@@ -54,6 +54,10 @@ from src.database.db_manager import (
 from src.core.event_bus import EventBus
 from src.database.models import RecommendationHistory
 from src.engine.trade_profit import calculate_net_profit_rate
+from src.engine.risk.manual_control_exclusion import (
+    evaluate_manual_control_exclusion,
+    normalize_manual_control_exclusion_code,
+)
 from src.engine.sniper_entry_state import ENTRY_LOCK
 from src.engine.sniper_config import CONF
 from src.engine.sniper_time import (
@@ -1305,6 +1309,13 @@ def _scanner_runtime_target_event_fields(payload, *, outcome, reason, target=Non
         "broker_order_forbidden": True,
         "runtime_target_attach_outcome": outcome,
         "runtime_target_attach_reason": reason,
+        "manual_control_exclusion_applied": payload.get("manual_control_exclusion_applied", False),
+        "manual_control_exclusion_code": payload.get("manual_control_exclusion_code")
+        or "not_applicable_manual_control_exclusion_code",
+        "manual_control_exclusion_reason": payload.get("manual_control_exclusion_reason")
+        or "not_applicable_manual_control_exclusion_reason",
+        "manual_control_exclusion_source": payload.get("manual_control_exclusion_source")
+        or "not_applicable_manual_control_exclusion_source",
         "scanner_attach_capacity_cap": payload.get("scanner_attach_capacity_cap")
         or "not_applicable_scanner_attach_capacity_cap",
         "scanner_attach_capacity_watching_count": payload.get("scanner_attach_capacity_watching_count")
@@ -3735,7 +3746,7 @@ def handle_scalping_scanner_promoted_target(payload):
     global ACTIVE_TARGETS
 
     payload = payload or {}
-    code = str(payload.get("code") or "").strip()[:6]
+    code = normalize_manual_control_exclusion_code(payload.get("code"))
     if not code:
         _log_scanner_runtime_target_attach(payload, outcome="skipped", reason="missing_code")
         return False
@@ -3743,6 +3754,19 @@ def handle_scalping_scanner_promoted_target(payload):
     strategy = normalize_strategy(payload.get("strategy") or "SCALPING")
     if strategy != "SCALPING":
         _log_scanner_runtime_target_attach(payload, outcome="skipped", reason="non_scalping_strategy")
+        return False
+
+    control_exclusion = evaluate_manual_control_exclusion(code)
+    if control_exclusion.excluded:
+        _log_scanner_runtime_target_attach(
+            {**payload, **control_exclusion.as_log_fields()},
+            outcome="skipped",
+            reason=control_exclusion.reason,
+        )
+        log_info(
+            f"[MANUAL_CONTROL_EXCLUSION] scanner WATCHING attach skipped "
+            f"{payload.get('name') or code}({control_exclusion.code}) source={control_exclusion.source}"
+        )
         return False
 
     now_ts = _safe_float(payload.get("added_time"), time.time())
@@ -3923,8 +3947,22 @@ def attach_db_poll_target_if_missing(db_target, targets, now_ts):
     dt = dict(db_target or {})
     dt["strategy"] = normalize_strategy(dt.get("strategy"))
     dt["position_tag"] = normalize_position_tag(dt["strategy"], dt.get("position_tag"))
-    code = str(dt.get("code", "")).strip()[:6]
+    code = normalize_manual_control_exclusion_code(dt.get("code"))
     if not code:
+        return False
+    control_exclusion = evaluate_manual_control_exclusion(code)
+    if control_exclusion.excluded:
+        if dt["strategy"] == "SCALPING" and dt["position_tag"] == "SCANNER":
+            _log_scanner_runtime_target_attach(
+                {**dt, **control_exclusion.as_log_fields()},
+                outcome="skipped",
+                reason=control_exclusion.reason,
+                target=dt,
+            )
+        log_info(
+            f"[MANUAL_CONTROL_EXCLUSION] DB poll attach skipped "
+            f"{dt.get('name') or code}({control_exclusion.code}) source={control_exclusion.source}"
+        )
         return False
     if _is_disabled_swing_watching_target(dt):
         log_info(

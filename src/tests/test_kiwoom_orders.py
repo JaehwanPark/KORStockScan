@@ -245,6 +245,55 @@ def test_send_smart_sell_order_limit_up_uses_marketable_best_order(monkeypatch):
     assert calls[-1]["bypass_open_time_block"] is True
 
 
+def test_send_sell_order_market_uses_requested_exchange(monkeypatch):
+    captured = {}
+
+    class DummyResponse:
+        status_code = 200
+
+    def fake_post(url, headers, payload, api_id, timeout=5):
+        captured["payload"] = payload
+        return DummyResponse(), {"rt_cd": "0", "ord_no": "SKRX"}
+
+    monkeypatch.setattr(kiwoom_orders.kiwoom_utils, "get_api_url", lambda path: f"https://example.test{path}")
+    monkeypatch.setattr(kiwoom_orders, "_post_kiwoom_with_auth_retry", fake_post)
+
+    result = kiwoom_orders.send_sell_order_market(
+        "347700",
+        1,
+        "TOKEN",
+        dmst_stex_tp="KRX",
+        reason_type="LOSS",
+        strategy="SCALPING",
+    )
+
+    assert result["ord_no"] == "SKRX"
+    assert captured["payload"]["dmst_stex_tp"] == "KRX"
+
+
+def test_send_smart_sell_order_forwards_requested_exchange(monkeypatch):
+    calls = []
+
+    def fake_send_sell_order_market(*args, **kwargs):
+        calls.append({"args": args, **kwargs})
+        return {"return_code": "0", "ord_no": "SKRX"}
+
+    monkeypatch.setattr(kiwoom_orders, "send_sell_order_market", fake_send_sell_order_market)
+
+    result = kiwoom_orders.send_smart_sell_order(
+        code="347700",
+        qty=1,
+        token="TOKEN",
+        ws_data={"orderbook": {"bids": [{"price": 27800, "volume": 1000}]}},
+        reason_type="LOSS",
+        strategy="SCALPING",
+        dmst_stex_tp="KRX",
+    )
+
+    assert result["ord_no"] == "SKRX"
+    assert calls[-1]["dmst_stex_tp"] == "KRX"
+
+
 def test_send_cancel_order_uses_requested_exchange(monkeypatch):
     captured = {}
 

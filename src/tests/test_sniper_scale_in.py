@@ -55,6 +55,56 @@ class _DummyDB:
         return _DummySession()
 
 
+def test_holding_sell_exchange_resolution_blocks_krx_only_during_nxt_time(monkeypatch):
+    class DummyDB:
+        def get_latest_is_nxt(self, code):
+            assert code == "347700"
+            return False
+
+    monkeypatch.setattr(state_handlers, "DB", DummyDB())
+
+    decision = state_handlers._resolve_holding_sell_dmst_stex_tp(
+        {"name": "스피어"},
+        "347700",
+        now_t=dt_time(16, 10),
+    )
+
+    assert decision["blocked"] is True
+    assert decision["dmst_stex_tp"] == "KRX"
+    assert decision["reason"] == "krx_only_outside_krx_regular_session"
+
+
+def test_holding_sell_exchange_resolution_uses_krx_in_regular_session(monkeypatch):
+    class DummyDB:
+        def get_latest_is_nxt(self, code):
+            return False
+
+    monkeypatch.setattr(state_handlers, "DB", DummyDB())
+
+    decision = state_handlers._resolve_holding_sell_dmst_stex_tp(
+        {"name": "스피어"},
+        "347700",
+        now_t=dt_time(10, 0),
+    )
+
+    assert decision["blocked"] is False
+    assert decision["dmst_stex_tp"] == "SOR"
+    assert decision["reason"] == "krx_only_regular_session_sor"
+
+
+def test_holding_sell_exchange_resolution_parses_string_false_nxt_flag(monkeypatch):
+    monkeypatch.setattr(state_handlers, "DB", None)
+
+    decision = state_handlers._resolve_holding_sell_dmst_stex_tp(
+        {"name": "스피어", "is_nxt": "false"},
+        "347700",
+        now_t=dt_time(16, 10),
+    )
+
+    assert decision["blocked"] is True
+    assert decision["nxt_flag_source"] == "stock.is_nxt"
+
+
 def test_rising_missed_one_share_entry_allows_scanner_rising_candidate():
     decision = evaluate_rising_missed_one_share_entry(
         {

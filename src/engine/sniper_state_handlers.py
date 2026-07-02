@@ -8,7 +8,7 @@ import re
 import time
 import math
 import threading
-from datetime import date as date_cls, datetime, timedelta
+from datetime import date as date_cls, datetime, time as datetime_time, timedelta
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -115,6 +115,11 @@ from src.engine.lifecycle.ofi_ai_smoothing import (
     entry_skip_demotion_allowed,
     evaluate_ofi_smoothing,
     ofi_smoothing_log_fields,
+)
+from src.engine.risk.manual_control_exclusion import (
+    ManualControlExclusionDecision,
+    add_manual_control_exclusion_code,
+    evaluate_manual_control_exclusion,
 )
 from src.trading.entry.orderbook_stability_observer import ORDERBOOK_STABILITY_OBSERVER
 from src.trading.market.quote_consistency import (
@@ -25187,6 +25192,61 @@ def _entry_order_cancel_dmst_stex_tp(order: dict | None) -> str:
     )
 
 
+def _holding_sell_nxt_enabled_status(stock: dict | None, code: str) -> tuple[bool | None, str]:
+    stock = stock or {}
+    for key in ("is_nxt", "nxt_enabled", "nxt_available", "is_nxt_enabled"):
+        if key in stock:
+            raw_value = stock.get(key)
+            if isinstance(raw_value, bool):
+                return raw_value, f"stock.{key}"
+            raw_text = str(raw_value).strip().lower()
+            if raw_text in {"1", "true", "t", "yes", "y", "nxt"}:
+                return True, f"stock.{key}"
+            if raw_text in {"0", "false", "f", "no", "n", "krx", ""}:
+                return False, f"stock.{key}"
+            return None, f"stock.{key}_unknown"
+    if DB is None:
+        return None, "db_unavailable"
+    try:
+        return bool(DB.get_latest_is_nxt(code)), "daily_stock_quotes.is_nxt"
+    except Exception as exc:
+        log_error(f"🚨 [NXT_FLAG] {stock.get('name', code)}({code}) NXT flag lookup failed: {exc}")
+        return None, "lookup_error"
+
+
+def _holding_sell_krx_regular_session(now_t) -> bool:
+    return datetime_time(hour=9, minute=0) <= now_t < TIME_15_30
+
+
+def _resolve_holding_sell_dmst_stex_tp(stock: dict | None, code: str, now_t=None) -> dict:
+    current_t = now_t or datetime.now().time()
+    is_nxt_enabled, source = _holding_sell_nxt_enabled_status(stock, code)
+    krx_regular = _holding_sell_krx_regular_session(current_t)
+    if is_nxt_enabled is False and not krx_regular:
+        return {
+            "blocked": True,
+            "dmst_stex_tp": "KRX",
+            "nxt_enabled": False,
+            "nxt_flag_source": source,
+            "reason": "krx_only_outside_krx_regular_session",
+        }
+    if is_nxt_enabled is False:
+        return {
+            "blocked": False,
+            "dmst_stex_tp": "SOR",
+            "nxt_enabled": False,
+            "nxt_flag_source": source,
+            "reason": "krx_only_regular_session_sor",
+        }
+    return {
+        "blocked": False,
+        "dmst_stex_tp": "SOR",
+        "nxt_enabled": is_nxt_enabled,
+        "nxt_flag_source": source,
+        "reason": "nxt_enabled_or_unknown",
+    }
+
+
 def _cancel_reject_indicates_sor_exchange_mismatch(message: str) -> bool:
     text = str(message or "")
     return "571412" in text or "원주문이 SOR주문" in text
@@ -26264,6 +26324,239 @@ def _reconcile_pending_entry_orders(stock, code, strategy):
 # 🧠 상태 머신 (State Machine) 핸들러
 # =====================================================================
 
+
+def _manual_control_exclusion_blocked(stock, code, *, pipeline: str, stage: str, now_ts=None) -> bool:
+    decision = evaluate_manual_control_exclusion(code)
+    if (
+        not decision.excluded
+        and bool((stock or {}).get("manual_control_auto_open_loss_blocked"))
+    ):
+        decision = ManualControlExclusionDecision(
+            True,
+            str((stock or {}).get("code") or code or ""),
+            str(
+                (stock or {}).get("manual_control_exclusion_reason")
+                or "operator_manual_control_open_loss_auto_excluded"
+            ),
+            str(
+                (stock or {}).get("manual_control_exclusion_source")
+                or "in_memory_open_loss_auto_exclusion"
+            ),
+        )
+    if not decision.excluded:
+        return False
+    now_value = time.time() if now_ts is None else float(now_ts)
+    last_key = f"last_manual_control_exclusion_{pipeline}_log_ts"
+    last_log_ts = _safe_float((stock or {}).get(last_key), 0.0)
+    should_log = now_value - last_log_ts >= 60.0
+    if should_log:
+        fields = {
+            **decision.as_log_fields(),
+            "target_status": (stock or {}).get("status") or "not_applicable_target_status",
+            "target_strategy": normalize_strategy((stock or {}).get("strategy")),
+            "target_position_tag": normalize_position_tag(
+                normalize_strategy((stock or {}).get("strategy")),
+                (stock or {}).get("position_tag"),
+            ),
+            "runtime_record_id": (stock or {}).get("id") or "not_applicable_runtime_record_id",
+            "observed_epoch": f"{now_value:.3f}",
+        }
+        logger = _log_holding_pipeline if pipeline == "holding" else _log_entry_pipeline
+        logger(stock or {}, code, stage, **fields)
+    _mutate_stock_state(
+        stock,
+        set_fields={
+            "manual_control_exclusion_blocked": True,
+            "manual_control_exclusion_reason": decision.reason,
+            "manual_control_exclusion_source": decision.source,
+            "manual_control_auto_open_loss_blocked": bool(
+                (stock or {}).get("manual_control_auto_open_loss_blocked")
+            ),
+            **({last_key: now_value} if should_log else {}),
+        },
+    )
+    if should_log:
+        log_info(
+            f"[MANUAL_CONTROL_EXCLUSION] bot control skipped "
+            f"{(stock or {}).get('name') or code}({decision.code}) "
+            f"pipeline={pipeline} stage={stage} source={decision.source}"
+        )
+    return True
+
+
+def _manual_control_open_loss_session(now_dt: datetime | None) -> str:
+    if not isinstance(now_dt, datetime):
+        return ""
+    window_sec = max(0, _env_or_rule_int("MANUAL_CONTROL_OPEN_LOSS_EXCLUSION_WINDOW_SEC", 300))
+    if window_sec <= 0:
+        return ""
+    for session, start_time in (
+        ("NXT_OPEN", datetime_time(8, 0)),
+        ("KRX_OPEN", datetime_time(9, 0)),
+    ):
+        start_dt = datetime.combine(now_dt.date(), start_time)
+        elapsed_sec = (now_dt - start_dt).total_seconds()
+        if 0 <= elapsed_sec <= window_sec:
+            return session
+    return ""
+
+
+def _manual_control_open_loss_stop_context(
+    stock: dict | None,
+    *,
+    strategy: str,
+    market_regime,
+) -> dict[str, object]:
+    stock = stock if isinstance(stock, dict) else {}
+    strategy = normalize_strategy(strategy)
+
+    if stock.get("exit_mode") == "SCALP_PRESET_TP":
+        stop_pct = _safe_float(
+            stock.get("hard_stop_pct"),
+            _rule_float("SCALP_PRESET_HARD_STOP_PCT", -0.7),
+        )
+        return {
+            "stop_line_pct": stop_pct,
+            "stop_line_source": "scalp_preset_hard_stop_pct",
+            "exit_rule_candidate": "scalp_preset_hard_stop_pct",
+        }
+
+    if strategy == "SCALPING":
+        base_stop_pct = _rule_float("SCALP_STOP", -1.5)
+        hard_stop_pct = _rule_float("SCALP_HARD_STOP", -2.5)
+        stop_pct = min(base_stop_pct, hard_stop_pct)
+        return {
+            "stop_line_pct": stop_pct,
+            "stop_line_source": "scalp_hard_stop_pct",
+            "exit_rule_candidate": "scalp_hard_stop_pct",
+        }
+
+    if strategy == "KOSDAQ_ML":
+        stop_pct = _rule_float("KOSDAQ_STOP", -2.0)
+        return {
+            "stop_line_pct": stop_pct,
+            "stop_line_source": "kosdaq_stop_loss",
+            "exit_rule_candidate": "kosdaq_stop_loss",
+        }
+
+    if strategy == "KOSPI_ML":
+        pos_tag = normalize_position_tag(strategy, stock.get("position_tag"))
+        if pos_tag == "BREAKOUT":
+            stop_pct = _rule_float("STOP_LOSS_BREAKOUT", -2.5)
+            source = "kospi_stop_loss_breakout"
+        elif pos_tag == "BOTTOM":
+            stop_pct = _rule_float("STOP_LOSS_BOTTOM", -2.5)
+            source = "kospi_stop_loss_bottom"
+        else:
+            regime_label = str(market_regime or "").upper()
+            if regime_label == "BULL":
+                stop_pct = _rule_float("STOP_LOSS_BULL", -2.5)
+                source = "kospi_stop_loss_bull"
+            else:
+                stop_pct = _rule_float("STOP_LOSS_BEAR", -2.5)
+                source = "kospi_stop_loss_bear"
+        return {
+            "stop_line_pct": stop_pct,
+            "stop_line_source": source,
+            "exit_rule_candidate": "kospi_regime_stop_loss",
+        }
+
+    return {
+        "stop_line_pct": None,
+        "stop_line_source": "unsupported_strategy",
+        "exit_rule_candidate": "not_applicable_exit_rule",
+    }
+
+
+def _maybe_auto_exclude_open_loss_holding(
+    stock,
+    code,
+    *,
+    ws_data: dict | None,
+    strategy: str,
+    market_regime,
+    now_ts: float,
+    now_dt: datetime,
+) -> bool:
+    if str((stock or {}).get("status") or "").upper() != "HOLDING":
+        return False
+
+    session = _manual_control_open_loss_session(now_dt)
+    if not session:
+        return False
+
+    curr_price = _safe_int((ws_data or {}).get("curr"), 0)
+    buy_price = _safe_float((stock or {}).get("buy_price"), 0.0)
+    if curr_price <= 0 or buy_price <= 0:
+        return False
+
+    stop_context = _manual_control_open_loss_stop_context(
+        stock,
+        strategy=strategy,
+        market_regime=market_regime,
+    )
+    stop_pct = stop_context.get("stop_line_pct")
+    if stop_pct is None:
+        return False
+
+    profit_rate = calculate_net_profit_rate(buy_price, curr_price)
+    if profit_rate > float(stop_pct):
+        return False
+
+    comment = (
+        f"auto_open_loss {session} profit={profit_rate:+.2f}% "
+        f"stop={float(stop_pct):+.2f}%"
+    )
+    decision = add_manual_control_exclusion_code(code, comment=comment)
+    fields = {
+        **decision.as_log_fields(),
+        "manual_control_auto_exclusion_triggered": bool(decision.excluded),
+        "manual_control_auto_exclusion_session": session,
+        "manual_control_auto_exclusion_policy": "open_loss_before_forced_exit_guard_v1",
+        "manual_control_auto_exclusion_window_sec": max(
+            0,
+            _env_or_rule_int("MANUAL_CONTROL_OPEN_LOSS_EXCLUSION_WINDOW_SEC", 300),
+        ),
+        "target_status": (stock or {}).get("status") or "not_applicable_target_status",
+        "target_strategy": normalize_strategy(strategy),
+        "target_position_tag": normalize_position_tag(strategy, (stock or {}).get("position_tag")),
+        "runtime_record_id": (stock or {}).get("id") or "not_applicable_runtime_record_id",
+        "curr_price": curr_price,
+        "buy_price": buy_price,
+        "profit_rate": f"{profit_rate:+.2f}",
+        "stop_line_pct": f"{float(stop_pct):+.2f}",
+        "stop_line_source": stop_context.get("stop_line_source", "-"),
+        "exit_rule_candidate": stop_context.get("exit_rule_candidate", "-"),
+        "observed_epoch": f"{float(now_ts):.3f}",
+        "primary_decision_metric": "open_session_profit_rate_vs_existing_stop_line_pct",
+        "window_policy": "nxt_krx_open_session_guard",
+    }
+    _log_holding_pipeline(
+        stock or {},
+        code,
+        "manual_control_open_loss_auto_excluded",
+        **fields,
+    )
+    _mutate_stock_state(
+        stock,
+        set_fields={
+            "manual_control_exclusion_blocked": True,
+            "manual_control_exclusion_reason": decision.reason,
+            "manual_control_exclusion_source": decision.source,
+            "manual_control_auto_open_loss_blocked": True,
+            "manual_control_auto_exclusion_session": session,
+            "manual_control_auto_exclusion_profit_rate": round(float(profit_rate), 3),
+            "manual_control_auto_exclusion_stop_line_pct": round(float(stop_pct), 3),
+            "last_manual_control_exclusion_holding_log_ts": float(now_ts),
+        },
+    )
+    log_info(
+        f"[MANUAL_CONTROL_OPEN_LOSS] {(stock or {}).get('name') or code}({decision.code or code}) "
+        f"auto-excluded at {session}: profit={profit_rate:+.2f}% stop={float(stop_pct):+.2f}%"
+    )
+    return True
+
+
 def handle_watching_state(
     stock,
     code,
@@ -26297,6 +26590,22 @@ def handle_watching_state(
     )
 
     _log_watching_state_debug(stock, code, radar=radar, ai_engine=ai_engine)
+
+    if _manual_control_exclusion_blocked(
+        stock,
+        code,
+        pipeline="entry",
+        stage="manual_control_excluded_symbol_blocked",
+        now_ts=now_ts,
+    ):
+        emit_scanner_watching_runtime_skip(
+            stock,
+            code,
+            skip_reason="operator_manual_control_excluded_symbol",
+            now_ts=now_ts,
+            ws_data=ws_data,
+        )
+        return
 
     if is_buy_side_paused():
         last_log = float(stock.get('last_pause_block_log_ts', 0) or 0)
@@ -26643,6 +26952,15 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
         now_dt = datetime.now()
     now_t = now_dt.time()
 
+    if _manual_control_exclusion_blocked(
+        stock,
+        code,
+        pipeline="holding",
+        stage="manual_control_excluded_symbol_blocked",
+        now_ts=now_ts,
+    ):
+        return
+
     cooldowns = COOLDOWNS
     alerted_stocks = ALERTED_STOCKS
     highest_prices = HIGHEST_PRICES
@@ -26652,13 +26970,10 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
     raw_strategy = (stock.get('strategy') or 'KOSPI_ML').upper()
     strategy = 'SCALPING' if raw_strategy in ['SCALPING', 'SCALP'] else raw_strategy
     pos_tag = normalize_position_tag(strategy, stock.get('position_tag'))
-    _mutate_stock_state(stock, set_fields={"position_tag": pos_tag})
     legacy_broker_recovered = bool(stock.get('broker_recovered_legacy'))
 
     curr_p = _safe_int(ws_data.get('curr'), 0)
     buy_p = _safe_float(stock.get('buy_price'), 0.0)
-    _observe_entry_cancel_wait_counterfactuals(stock, code, now_ts=now_ts, curr_price=curr_p)
-    _reconcile_pending_entry_orders(stock, code, strategy)
     ws_data, holding_ws_blocked, holding_ws_fields = _holding_ws_freshness_recover_or_block(
         stock,
         code,
@@ -26686,6 +27001,19 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
     if executable_sell_price > 0:
         ws_data = dict(ws_data or {})
         ws_data["executable_sell_price"] = int(executable_sell_price)
+    if _maybe_auto_exclude_open_loss_holding(
+        stock,
+        code,
+        ws_data=ws_data,
+        strategy=strategy,
+        market_regime=market_regime,
+        now_ts=now_ts,
+        now_dt=now_dt,
+    ):
+        return
+    _observe_entry_cancel_wait_counterfactuals(stock, code, now_ts=now_ts, curr_price=curr_p)
+    _reconcile_pending_entry_orders(stock, code, strategy)
+    _mutate_stock_state(stock, set_fields={"position_tag": pos_tag})
     if curr_p <= 0 or buy_p <= 0:
         return
     if _maybe_submit_rising_missed_scout_upgrade(
@@ -29436,6 +29764,43 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
             ws_data["orderbook"] = orderbook
             ws_data["curr"] = curr_p if curr_p > 0 else sell_order_price
 
+        sell_exchange_resolution = _resolve_holding_sell_dmst_stex_tp(stock, code, now_t=now_t)
+        sell_quote_fields.update(
+            {
+                "sell_order_dmst_stex_tp": sell_exchange_resolution.get("dmst_stex_tp", "SOR"),
+                "sell_order_nxt_enabled": sell_exchange_resolution.get("nxt_enabled"),
+                "sell_order_nxt_flag_source": sell_exchange_resolution.get("nxt_flag_source", ""),
+                "sell_order_exchange_resolution_reason": sell_exchange_resolution.get("reason", ""),
+            }
+        )
+        if sell_exchange_resolution.get("blocked"):
+            err_msg = "KRX-only holding cannot be sold outside the KRX regular session"
+            retry_backoff_fields = _mark_sell_order_failure_retry_backoff(
+                stock,
+                error=err_msg,
+                now_ts=now_ts,
+            )
+            stock.pop("_sell_order_retry_backoff_logged_key", None)
+            log_info(
+                f"⛔ [SELL_EXCHANGE_BLOCK] {stock['name']}({code}) "
+                "KRX-only 종목 NXT/연장 시간 매도 제출 차단. HOLDING 유지."
+            )
+            _log_holding_pipeline(
+                stock,
+                code,
+                "sell_order_blocked",
+                sell_reason_type=sell_reason_type,
+                exit_rule=exit_rule or stock.get("last_exit_rule") or "-",
+                exit_decision_source=stock.get("last_exit_decision_source") or "MANUAL",
+                new_status="HOLDING",
+                error=err_msg,
+                sellable_qty="-",
+                profit_rate=f"{profit_rate:+.2f}",
+                **retry_backoff_fields,
+                **sell_quote_fields,
+            )
+            return
+
         try:
             with DB.get_session() as session:
                 session.query(RecommendationHistory).filter_by(id=target_id).update({"status": "SELL_ORDERED"})
@@ -29458,6 +29823,7 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
             reason_type=sell_reason_type,
             strategy=strategy,
             bypass_open_time_block=sell_safety_exit,
+            dmst_stex_tp=sell_exchange_resolution.get("dmst_stex_tp", "SOR"),
         )
 
         ord_no = ''
@@ -31810,6 +32176,14 @@ def handle_buy_ordered_state(stock, code):
     """
     주문 전송 후(BUY_ORDERED) 미체결 상태를 감시하고 타임아웃 시 취소 로직을 호출합니다.
     """
+    if _manual_control_exclusion_blocked(
+        stock,
+        code,
+        pipeline="entry",
+        stage="manual_control_excluded_buy_ordered_blocked",
+    ):
+        return
+
     cooldowns = COOLDOWNS
     alerted_stocks = ALERTED_STOCKS
     highest_prices = HIGHEST_PRICES
@@ -31881,6 +32255,14 @@ def handle_sell_ordered_state(stock, code):
     """
     주문 전송 후(SELL_ORDERED) 미체결 상태를 감시하고 타임아웃 시 취소 후 HOLDING으로 롤백합니다.
     """
+    if _manual_control_exclusion_blocked(
+        stock,
+        code,
+        pipeline="holding",
+        stage="manual_control_excluded_sell_ordered_blocked",
+    ):
+        return
+
     sell_order_time = stock.get('sell_order_time', 0)
 
     if sell_order_time == 0:
@@ -31918,6 +32300,14 @@ def handle_sell_ordered_state(stock, code):
 
 def process_sell_cancellation(stock, code, orig_ord_no, db):
     """미체결 매도 주문을 전량 취소하고 상태를 다시 HOLDING으로 되돌립니다."""
+    if _manual_control_exclusion_blocked(
+        stock,
+        code,
+        pipeline="holding",
+        stage="manual_control_excluded_sell_cancel_blocked",
+    ):
+        return False
+
     target_id = stock.get('id')
 
     res = kiwoom_orders.send_cancel_order(code=code, orig_ord_no=orig_ord_no, token=KIWOOM_TOKEN, qty=0)
@@ -31967,6 +32357,14 @@ def process_order_cancellation(stock, code, orig_ord_no, db, strategy):
     미체결 주문의 실제 취소 처리와 DB/메모리 청소를 담당합니다.
     고유 PK(id)를 사용하여 다중 매매 환경에서도 정확한 레코드를 타겟팅합니다.
     """
+    if _manual_control_exclusion_blocked(
+        stock,
+        code,
+        pipeline="entry",
+        stage="manual_control_excluded_buy_cancel_blocked",
+    ):
+        return False
+
     cooldowns = COOLDOWNS
     alerted_stocks = ALERTED_STOCKS
     highest_prices = HIGHEST_PRICES

@@ -245,6 +245,50 @@ def test_scalping_scanner_promoted_target_attaches_active_watching(monkeypatch):
     assert emitted[-1]["fields"]["broker_order_forbidden"] is True
 
 
+def test_scalping_scanner_promoted_target_skips_manual_control_excluded_code(monkeypatch, tmp_path):
+    emitted = []
+    published = []
+    excluded_path = tmp_path / "manual_control_excluded_codes.txt"
+    excluded_path.write_text("005930\n", encoding="utf-8")
+    monkeypatch.delenv("KORSTOCKSCAN_MANUAL_CONTROL_EXCLUDED_CODES", raising=False)
+    monkeypatch.setenv("KORSTOCKSCAN_MANUAL_CONTROL_EXCLUDED_CODES_FILE", str(excluded_path))
+    monkeypatch.setattr(kiwoom_sniper_v2, "ACTIVE_TARGETS", [])
+    monkeypatch.setattr(
+        kiwoom_sniper_v2,
+        "emit_pipeline_event",
+        lambda pipeline, name, code, stage, *, record_id=None, fields=None: emitted.append(
+            {"pipeline": pipeline, "name": name, "code": code, "stage": stage, "fields": fields or {}}
+        ),
+    )
+    monkeypatch.setattr(
+        kiwoom_sniper_v2,
+        "event_bus",
+        SimpleNamespace(publish=lambda name, payload: published.append((name, payload))),
+    )
+
+    attached = kiwoom_sniper_v2.handle_scalping_scanner_promoted_target(
+        {
+            "record_id": 77,
+            "code": "005930",
+            "name": "SAMSUNG",
+            "strategy": "SCALPING",
+            "trade_type": "SCALP",
+            "status": "WATCHING",
+            "position_tag": "SCANNER",
+            "buy_price": 70000,
+        }
+    )
+
+    assert attached is False
+    assert kiwoom_sniper_v2.ACTIVE_TARGETS == []
+    assert published == []
+    assert emitted[-1]["stage"] == "scalping_scanner_runtime_target_attach"
+    assert emitted[-1]["fields"]["runtime_target_attach_outcome"] == "skipped"
+    assert emitted[-1]["fields"]["runtime_target_attach_reason"] == "operator_manual_control_excluded_symbol"
+    assert emitted[-1]["fields"]["manual_control_exclusion_applied"] is True
+    assert emitted[-1]["fields"]["actual_order_submitted"] is False
+
+
 def test_scalping_scanner_promoted_target_skips_immediate_capacity_overflow(monkeypatch, tmp_path):
     emitted = []
     published = []
@@ -4362,6 +4406,84 @@ def test_db_poll_scanner_target_attach_logs_recovery(monkeypatch):
     assert emitted[-1]["fields"]["runtime_target_attach_outcome"] == "db_poll_attached"
     assert emitted[-1]["fields"]["runtime_target_attach_reason"] == "eventbus_attach_missing_recovered_from_database_poll"
     assert emitted[-1]["fields"]["runtime_record_id"] == 99
+
+
+def test_db_poll_scanner_target_skips_manual_control_excluded_code(monkeypatch, tmp_path):
+    emitted = []
+    published = []
+    targets = []
+    excluded_path = tmp_path / "manual_control_excluded_codes.txt"
+    excluded_path.write_text("005930\n", encoding="utf-8")
+    monkeypatch.delenv("KORSTOCKSCAN_MANUAL_CONTROL_EXCLUDED_CODES", raising=False)
+    monkeypatch.setenv("KORSTOCKSCAN_MANUAL_CONTROL_EXCLUDED_CODES_FILE", str(excluded_path))
+    monkeypatch.setattr(
+        kiwoom_sniper_v2,
+        "emit_pipeline_event",
+        lambda pipeline, name, code, stage, *, record_id=None, fields=None: emitted.append(
+            {"stage": stage, "code": code, "fields": fields or {}}
+        ),
+    )
+    monkeypatch.setattr(
+        kiwoom_sniper_v2,
+        "event_bus",
+        SimpleNamespace(publish=lambda name, payload: published.append((name, payload))),
+    )
+
+    attached = kiwoom_sniper_v2.attach_db_poll_target_if_missing(
+        {
+            "id": 99,
+            "code": "005930",
+            "name": "SAMSUNG",
+            "strategy": "SCALPING",
+            "status": "WATCHING",
+            "position_tag": "SCANNER",
+            "buy_price": 70000,
+            "type": "SCALP",
+        },
+        targets,
+        now_ts=1002.0,
+    )
+
+    assert attached is False
+    assert targets == []
+    assert published == []
+    assert emitted[-1]["stage"] == "scalping_scanner_runtime_target_attach"
+    assert emitted[-1]["fields"]["runtime_target_attach_outcome"] == "skipped"
+    assert emitted[-1]["fields"]["runtime_target_attach_reason"] == "operator_manual_control_excluded_symbol"
+    assert emitted[-1]["fields"]["manual_control_exclusion_applied"] is True
+
+
+def test_db_poll_holding_target_skips_manual_control_excluded_code(monkeypatch, tmp_path):
+    published = []
+    targets = []
+    excluded_path = tmp_path / "manual_control_excluded_codes.txt"
+    excluded_path.write_text("005930\n", encoding="utf-8")
+    monkeypatch.delenv("KORSTOCKSCAN_MANUAL_CONTROL_EXCLUDED_CODES", raising=False)
+    monkeypatch.setenv("KORSTOCKSCAN_MANUAL_CONTROL_EXCLUDED_CODES_FILE", str(excluded_path))
+    monkeypatch.setattr(
+        kiwoom_sniper_v2,
+        "event_bus",
+        SimpleNamespace(publish=lambda name, payload: published.append((name, payload))),
+    )
+
+    attached = kiwoom_sniper_v2.attach_db_poll_target_if_missing(
+        {
+            "id": 100,
+            "code": "005930",
+            "name": "SAMSUNG",
+            "strategy": "SCALPING",
+            "status": "HOLDING",
+            "position_tag": "SCANNER",
+            "buy_price": 70000,
+            "type": "SCALP",
+        },
+        targets,
+        now_ts=1002.0,
+    )
+
+    assert attached is False
+    assert targets == []
+    assert published == []
 
 
 def test_db_poll_scanner_target_preserves_entry_armed_recency(monkeypatch):
