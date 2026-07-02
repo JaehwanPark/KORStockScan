@@ -28,6 +28,7 @@ from src.engine.scalping.scalp_sim_auto_approval_control_tower import (
     scalp_sim_auto_approval_path,
     scalp_sim_policy_catalog_path,
 )
+from src.engine.monitoring import rising_missed_classifier_prior
 from src.engine.scalping import scalp_sim_auto_approval_control_tower
 from src.engine import lifecycle_bucket_discovery
 from src.engine.lifecycle_bucket_discovery import (
@@ -88,6 +89,7 @@ ACTIVE_SIM_PRIORITY_OBSERVABLE_PREFIX_KEYS = {
 }
 SCALP_SIM_POLICY_STALENESS_CHECK_FILES = (
     Path(lifecycle_bucket_discovery.__file__),
+    Path(rising_missed_classifier_prior.__file__),
     Path(scalp_sim_auto_approval_control_tower.__file__),
 )
 LOCK_ALLOWED_CLOSE_KEYWORDS = {

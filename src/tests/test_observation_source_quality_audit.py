@@ -309,6 +309,48 @@ def test_observation_source_quality_audit_reviews_live_liquidity_would_unknown(m
     assert report["summary"]["review_warning_count"] == 0
 
 
+def test_observation_source_quality_audit_reviews_sell_order_exchange_resolution_unknown(monkeypatch, tmp_path):
+    monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
+    _write_events(
+        tmp_path,
+        "2026-07-02",
+        [
+            _event(
+                "sell_order_sent",
+                {
+                    "metric_role": "real_execution_diagnostic",
+                    "decision_authority": "order_execution_observation_only",
+                    "runtime_effect": False,
+                    "allowed_runtime_apply": False,
+                    "actual_order_submitted": True,
+                    "broker_order_forbidden": False,
+                    "forbidden_uses": "threshold_mutation/provider_route_change/bot_restart",
+                    "order_id": f"ORD-{idx}",
+                    "order_type": "market",
+                    "order_type_code": "3",
+                    "market": "KRX",
+                    "exchange": "NXT",
+                    "sell_order_exchange_resolution_reason": "nxt_session_nxt_enabled_or_unknown",
+                },
+                record_id=idx,
+            )
+            for idx in range(20)
+        ],
+    )
+
+    report = audit.build_observation_source_quality_audit("2026-07-02")
+
+    assert report["unknown_token_findings"] == []
+    reviewed = report["reviewed_unknown_token_findings"]
+    assert reviewed
+    fields = {item["field"]: item for item in reviewed[0]["fields"]}
+    assert (
+        fields["sell_order_exchange_resolution_reason"]["reviewed_reason"]
+        == "reviewed_sell_order_exchange_resolution_not_available"
+    )
+    assert report["summary"]["review_warning_count"] == 0
+
+
 def test_observation_source_quality_audit_reviews_entry_adm_price_unknown_provenance(monkeypatch, tmp_path):
     monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
     _write_events(

@@ -1,4 +1,5 @@
 import json
+import os
 from types import SimpleNamespace
 
 from src.engine import swing_lifecycle_audit as mod
@@ -41,6 +42,10 @@ def test_swing_entry_bottleneck_classifies_submit_zero_with_blockers():
 
 def test_swing_threshold_openai_review_uses_individual_mini_model(monkeypatch):
     captured = {}
+    for key in tuple(os.environ):
+        if key.startswith("KORSTOCKSCAN_SWING_THRESHOLD_AI_REVIEW"):
+            monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("KORSTOCKSCAN_SWING_THRESHOLD_AI_REVIEW_AI_PRIMARY_PROVIDER", "openai")
 
     class _FakeResponses:
         def create(self, **kwargs):

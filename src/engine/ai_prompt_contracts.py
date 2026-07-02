@@ -354,6 +354,46 @@ Return JSON only:
 """
 
 
+SWING_AI_STRUCTURED_OUTPUT_EVAL_PROMPT_VARIANTS = [
+    {
+        "variant_id": "korean_free_text_gatekeeper",
+        "prompt_name": "REALTIME_ANALYSIS_PROMPT_SWING",
+        "purpose": "Replay current Korean free-text gatekeeper output and normalize the final action label.",
+        "input_contract_mode": "plain_text",
+        "output_contract_mode": "free_text_label_normalized",
+        "runtime_effect": False,
+    },
+    {
+        "variant_id": "english_control_entry_json",
+        "prompt_name": "SWING_SYSTEM_PROMPT",
+        "purpose": "Replay the existing English swing entry classifier with the entry_v1 schema.",
+        "input_contract_mode": "plain_text",
+        "output_contract_mode": "json_schema_entry_v1",
+        "runtime_effect": False,
+    },
+    {
+        "variant_id": "strict_schema_structured_eval",
+        "prompt_name": "swing_ai_contract_structured_output_eval",
+        "purpose": "Replay a strict structured schema for schema-valid-rate, disagreement, latency, and cost.",
+        "input_contract_mode": "structured_json_replay",
+        "output_contract_mode": "json_schema_swing_ai_structured_output_eval_v1",
+        "runtime_effect": False,
+    },
+]
+
+
+def swing_ai_structured_output_eval_prompt_contract() -> dict:
+    return {
+        "contract_id": "swing_ai_contract_structured_output_eval",
+        "prompt_variants": [dict(item) for item in SWING_AI_STRUCTURED_OUTPUT_EVAL_PROMPT_VARIANTS],
+        "decision_authority": "swing_ai_contract_eval_report_only",
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+    }
+
+
 # ==========================================
 # 2. Daily market diagnosis prompt for Telegram briefing output.
 # ==========================================

@@ -285,9 +285,11 @@ def test_build_code_improvement_workorder_adds_intraday_entry_blocker_source_qua
 
 def test_build_code_improvement_workorder_adds_rising_missed_scout_orders(tmp_path, monkeypatch):
     scout_dir = tmp_path / "rising_missed_scout_workorder"
+    prior_dir = tmp_path / "rising_missed_classifier_prior"
     report_dir = tmp_path / "report"
     doc_dir = tmp_path / "docs"
     scout_dir.mkdir()
+    prior_dir.mkdir()
     payload = {
         "report_type": "rising_missed_scout_workorder",
         "runtime_effect": False,
@@ -319,10 +321,42 @@ def test_build_code_improvement_workorder_adds_rising_missed_scout_orders(tmp_pa
         json.dumps(payload, ensure_ascii=False),
         encoding="utf-8",
     )
+    prior_payload = {
+        "report_type": "rising_missed_classifier_prior",
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "code_improvement_orders": [
+            {
+                "order_id": "order_rising_missed_classifier_prior_bridge",
+                "title": "rising missed cumulative classifier prior bridge",
+                "target_subsystem": "rising_missed_entry_classifier",
+                "route": "instrumentation_order",
+                "mapped_family": "rising_missed_classifier_prior_bridge",
+                "threshold_family": "rising_missed_classifier_prior_bridge",
+                "priority": 3,
+                "runtime_effect": True,
+                "allowed_runtime_apply": True,
+                "implementation_status": "implemented",
+                "implementation_provenance": {
+                    "implementation_type": "rising_missed_classifier_prior_source_only",
+                    "runtime_effect": False,
+                    "allowed_runtime_apply": False,
+                    "root_cause_closure_status_hint": "implementation_done",
+                },
+                "evidence": ["prior_count=2", "runtime_effect=false"],
+                "forbidden_uses": ["forced_one_share_success_counting"],
+            }
+        ],
+    }
+    (prior_dir / "rising_missed_classifier_prior_2026-07-01.json").write_text(
+        json.dumps(prior_payload, ensure_ascii=False),
+        encoding="utf-8",
+    )
     monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-automation")
     monkeypatch.setattr(mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing")
     monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", tmp_path / "missing-ev")
     monkeypatch.setattr(mod, "RISING_MISSED_SCOUT_WORKORDER_DIR", scout_dir)
+    monkeypatch.setattr(mod, "RISING_MISSED_CLASSIFIER_PRIOR_DIR", prior_dir)
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_REPORT_DIR", report_dir)
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_DIR", doc_dir)
 
@@ -331,8 +365,13 @@ def test_build_code_improvement_workorder_adds_rising_missed_scout_orders(tmp_pa
     scout_orders = [
         item for item in report["orders"] if item["source_report_type"] == "rising_missed_scout_workorder"
     ]
+    prior_orders = [
+        item for item in report["orders"] if item["source_report_type"] == "rising_missed_classifier_prior"
+    ]
     assert report["summary"]["rising_missed_scout_source_order_count"] == 1
+    assert report["summary"]["rising_missed_classifier_prior_source_order_count"] == 1
     assert len(scout_orders) == 1
+    assert len(prior_orders) == 1
     assert scout_orders[0]["decision"] == "attach_existing_family"
     assert scout_orders[0]["runtime_effect"] is False
     assert scout_orders[0]["allowed_runtime_apply"] is False
@@ -341,8 +380,16 @@ def test_build_code_improvement_workorder_adds_rising_missed_scout_orders(tmp_pa
     assert "forced_one_share_success_counting" in scout_orders[0]["forbidden_uses"]
     assert "runtime_threshold_mutation" in scout_orders[0]["forbidden_uses"]
     assert "broker_guard_bypass" in scout_orders[0]["forbidden_uses"]
+    assert prior_orders[0]["decision"] == "attach_existing_family"
+    assert prior_orders[0]["runtime_effect"] is False
+    assert prior_orders[0]["allowed_runtime_apply"] is False
+    assert prior_orders[0]["broker_order_forbidden"] is True
+    assert "cap_release" in prior_orders[0]["forbidden_uses"]
     assert report["source"]["rising_missed_scout_workorder"] == str(
         scout_dir / "rising_missed_scout_workorder_2026-07-01.json"
+    )
+    assert report["source"]["rising_missed_classifier_prior"] == str(
+        prior_dir / "rising_missed_classifier_prior_2026-07-01.json"
     )
 
 
@@ -366,7 +413,7 @@ def test_build_code_improvement_workorder_adds_one_share_threshold_opportunity_o
                 "priority": 1,
                 "runtime_effect": True,
                 "allowed_runtime_apply": True,
-                "implementation_status": "needs_codex_instrumentation",
+                "implementation_status": "implemented",
                 "implementation_provenance": {
                     "implementation_type": "one_share_threshold_opportunity_audit",
                     "runtime_effect": False,
@@ -399,9 +446,104 @@ def test_build_code_improvement_workorder_adds_one_share_threshold_opportunity_o
     assert orders[0]["allowed_runtime_apply"] is False
     assert orders[0]["actual_order_submitted"] is False
     assert orders[0]["broker_order_forbidden"] is True
+    assert orders[0]["implementation_status"] == "implemented"
     assert "broker_guard_bypass" in orders[0]["forbidden_uses"]
     assert report["source"]["one_share_threshold_opportunity"] == str(
         source_dir / "one_share_threshold_opportunity_2026-07-01.json"
+    )
+
+
+def test_build_code_improvement_workorder_adds_entry_hurdle_backtest_orders(tmp_path, monkeypatch):
+    automation_dir = tmp_path / "automation"
+    source_dir = tmp_path / "entry_hurdle_backtest"
+    report_dir = tmp_path / "report"
+    doc_dir = tmp_path / "docs"
+    automation_dir.mkdir()
+    source_dir.mkdir()
+    (automation_dir / "scalping_pattern_lab_automation_2026-07-01.json").write_text(
+        json.dumps(
+            {
+                "date": "2026-07-01",
+                "code_improvement_orders": [
+                    {
+                        "order_id": "order_overbought_gate_miss_ev_recovery",
+                        "title": "overbought gate miss EV recovery",
+                        "target_subsystem": "entry_funnel",
+                        "route": "auto_family_candidate",
+                        "priority": 2,
+                        "runtime_effect": False,
+                    }
+                ],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    payload = {
+        "report_type": "entry_hurdle_backtest",
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "source_paths": ["/tmp/missed_entry_counterfactual_2026-07-01.json"],
+        "code_improvement_orders": [
+            {
+                "order_id": "order_overbought_gate_miss_ev_recovery",
+                "title": "overbought gate miss EV recovery",
+                "target_subsystem": "entry_funnel",
+                "route": "existing_family",
+                "mapped_family": "overbought_gate_miss_ev_recovery",
+                "threshold_family": "overbought_gate_miss_ev_recovery",
+                "priority": 2,
+                "runtime_effect": True,
+                "allowed_runtime_apply": True,
+                "implementation_status": "implemented_source_quality_contract_available",
+                "implementation_provenance": {
+                    "implementation_type": "overbought_gate_counterfactual_report_provenance",
+                    "runtime_effect": False,
+                    "allowed_runtime_apply": False,
+                },
+                "evidence": ["missed_winner_rate=83.33", "avoided_loser_rate=0.0"],
+                "forbidden_uses": ["threshold mutation"],
+            }
+        ],
+    }
+    (source_dir / "entry_hurdle_backtest_2026-07-01.json").write_text(
+        json.dumps(payload, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", automation_dir)
+    monkeypatch.setattr(mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing")
+    monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", tmp_path / "missing-ev")
+    monkeypatch.setattr(mod, "ENTRY_HURDLE_BACKTEST_DIR", source_dir)
+    monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_DIR", doc_dir)
+
+    report = mod.build_code_improvement_workorder("2026-07-01", max_orders=5)
+
+    orders = [item for item in report["orders"] if item["source_report_type"] == "entry_hurdle_backtest"]
+    pattern_orders = [
+        item
+        for item in report["orders"]
+        if item["source_report_type"] == "scalping_pattern_lab_automation"
+        and item["order_id"] == "order_overbought_gate_miss_ev_recovery"
+    ]
+    assert report["summary"]["entry_hurdle_backtest_source_order_count"] == 1
+    assert len(orders) == 1
+    assert len(pattern_orders) == 1
+    assert orders[0]["decision"] == "attach_existing_family"
+    assert pattern_orders[0]["decision"] == "attach_existing_family"
+    assert pattern_orders[0]["route"] == "existing_family"
+    assert pattern_orders[0]["mapped_family"] == "overbought_gate_miss_ev_recovery"
+    assert pattern_orders[0]["implementation_status"] == "implemented_source_quality_contract_available"
+    assert pattern_orders[0]["implementation_provenance"]["closed_by_source_report_type"] == "entry_hurdle_backtest"
+    assert orders[0]["runtime_effect"] is False
+    assert orders[0]["allowed_runtime_apply"] is False
+    assert orders[0]["actual_order_submitted"] is False
+    assert orders[0]["broker_order_forbidden"] is True
+    assert orders[0]["implementation_status"] == "implemented_source_quality_contract_available"
+    assert orders[0]["implementation_provenance"]["requires_separate_runtime_apply_candidate"] is True
+    assert "broker_guard_bypass" in orders[0]["forbidden_uses"]
+    assert report["source"]["entry_hurdle_backtest"] == str(
+        source_dir / "entry_hurdle_backtest_2026-07-01.json"
     )
 
 
@@ -1233,7 +1375,7 @@ def test_build_code_improvement_workorder_does_not_escalate_pattern_lab_design_o
     assert report["summary"]["repeat_unresolved_escalation_count"] == 0
 
 
-def test_build_code_improvement_workorder_does_not_escalate_swing_improvement_design_only_repeat(tmp_path, monkeypatch):
+def test_build_code_improvement_workorder_does_not_close_swing_ai_contract_without_report_contract(tmp_path, monkeypatch):
     swing_dir = tmp_path / "swing"
     report_dir = tmp_path / "report"
     doc_dir = tmp_path / "docs"
@@ -4569,6 +4711,20 @@ def test_build_code_improvement_workorder_treats_implemented_report_order_as_exi
         json.dumps(
             {
                 "date": "2026-05-15",
+                "swing_ai_structured_output_eval": {
+                    "report_contract": "swing_ai_structured_output_eval_report_v1",
+                    "source_contract": "swing_ai_structured_output_eval_v1",
+                    "decision_authority": "swing_ai_contract_eval_report_only",
+                    "runtime_effect": False,
+                    "allowed_runtime_apply": False,
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                    "sample_status": "waiting_replay_sample",
+                    "schema_valid_rate": None,
+                    "decision_disagreement_rate_pct": None,
+                    "p50_latency_ms": None,
+                    "estimated_total_cost_krw": None,
+                },
                 "code_improvement_orders": [
                     {
                         "order_id": "order_swing_pattern_lab_deepseek_ofi_qi_stale_missing",
@@ -4628,6 +4784,20 @@ def test_build_code_improvement_workorder_attaches_swing_improvement_implemented
         json.dumps(
             {
                 "date": "2026-05-15",
+                "swing_ai_structured_output_eval": {
+                    "report_contract": "swing_ai_structured_output_eval_report_v1",
+                    "source_contract": "swing_ai_structured_output_eval_v1",
+                    "decision_authority": "swing_ai_contract_eval_report_only",
+                    "runtime_effect": False,
+                    "allowed_runtime_apply": False,
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                    "sample_status": "waiting_replay_sample",
+                    "schema_valid_rate": None,
+                    "decision_disagreement_rate_pct": None,
+                    "p50_latency_ms": None,
+                    "estimated_total_cost_krw": None,
+                },
                 "code_improvement_orders": [
                     {
                         "order_id": "order_swing_ofi_qi_stale_or_missing_context",
@@ -4674,6 +4844,92 @@ def test_build_code_improvement_workorder_attaches_swing_improvement_implemented
     assert order["implementation_status"] == "implemented"
     assert order["implementation_provenance"]["source_contract"] == "swing_orderbook_micro_context_v2"
     assert order["root_cause_closure_status"] == "root_cause_closed"
+
+
+def test_build_code_improvement_workorder_attaches_swing_ai_structured_output_eval_contract(
+    tmp_path, monkeypatch
+):
+    swing_dir = tmp_path / "swing"
+    report_dir = tmp_path / "report"
+    doc_dir = tmp_path / "docs"
+    swing_dir.mkdir()
+    report_dir.mkdir()
+    doc_dir.mkdir()
+    (swing_dir / "swing_improvement_automation_2026-05-15.json").write_text(
+        json.dumps(
+            {
+                "date": "2026-05-15",
+                "swing_ai_structured_output_eval": {
+                    "report_contract": "swing_ai_structured_output_eval_report_v1",
+                    "source_contract": "swing_ai_structured_output_eval_v1",
+                    "decision_authority": "swing_ai_contract_eval_report_only",
+                    "runtime_effect": False,
+                    "allowed_runtime_apply": False,
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                    "sample_status": "waiting_replay_sample",
+                    "schema_valid_rate": None,
+                    "decision_disagreement_rate_pct": None,
+                    "p50_latency_ms": None,
+                    "estimated_total_cost_krw": None,
+                },
+                "code_improvement_orders": [
+                    {
+                        "order_id": "order_swing_ai_contract_structured_output_eval",
+                        "title": "swing AI contract structured output eval",
+                        "target_subsystem": "swing_ai_contract",
+                        "source_report_type": "swing_improvement_automation",
+                        "lifecycle_stage": "ai_contract",
+                        "improvement_type": "ai_contract_eval",
+                        "priority": 5,
+                        "route": "auto_family_candidate",
+                        "runtime_effect": False,
+                        "allowed_runtime_apply": False,
+                        "intent": (
+                            "Replay Korean prompt vs English-control prompt vs strict schema prompt before "
+                            "adopting a swing AI contract."
+                        ),
+                        "evidence": [
+                            "swing_gatekeeper_free_text_label",
+                            "swing_holding_flow_scalping_prompt_reuse",
+                            "swing_scale_in_ai_contract_missing",
+                        ],
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-pattern")
+    monkeypatch.setattr(mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", swing_dir)
+    monkeypatch.setattr(mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-swing-lab")
+    monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", tmp_path / "missing-ev")
+    monkeypatch.setattr(mod, "PIPELINE_EVENT_VERBOSITY_DIR", tmp_path / "missing-verbosity")
+    monkeypatch.setattr(mod, "OBSERVATION_SOURCE_QUALITY_AUDIT_DIR", tmp_path / "missing-audit")
+    monkeypatch.setattr(mod, "CODEBASE_PERFORMANCE_WORKORDER_DIR", tmp_path / "missing-performance")
+    monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_DIR", doc_dir)
+
+    report = mod.build_code_improvement_workorder("2026-05-15", max_orders=5)
+
+    order = next(
+        item
+        for item in report["orders"]
+        if item["order_id"] == "order_swing_ai_contract_structured_output_eval"
+    )
+    assert order["decision"] == "attach_existing_family"
+    assert order["route"] == "existing_family"
+    assert order["mapped_family"] == "swing_ai_contract_structured_output_eval"
+    assert order["implementation_candidate"] is False
+    assert order["implementation_status"] == "implemented_source_quality_contract_waiting_sample"
+    assert order["root_cause_closure_status"] == "implementation_done"
+    assert order["runtime_effect"] is False
+    assert order["allowed_runtime_apply"] is False
+    assert order["actual_order_submitted"] is False
+    assert order["broker_order_forbidden"] is True
+    assert order["implementation_provenance"]["decision_authority"] == "swing_ai_contract_eval_report_only"
+    assert order["implementation_provenance"]["source_contract"] == "swing_ai_structured_output_eval_v1"
+    assert order["implementation_provenance"]["sample_status"] == "waiting_replay_sample"
 
 
 def test_build_code_improvement_workorder_attaches_lifecycle_ai_context_instrumentation(

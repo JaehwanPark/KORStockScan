@@ -1513,6 +1513,13 @@ def _reviewed_unknown_reason_for_stage_field(
         "entry_adm_price_resolution_bucket",
     } and _is_reviewed_entry_adm_bucket_provenance():
         return "reviewed_entry_adm_bucket_provenance_recorded"
+    if (
+        stage == "sell_order_sent"
+        and str(key or "") == "sell_order_exchange_resolution_reason"
+        and str(value or "").strip().lower()
+        in {"unknown", "nxt_enabled_or_unknown", "nxt_session_nxt_enabled_or_unknown"}
+    ):
+        return "reviewed_sell_order_exchange_resolution_not_available"
     if str(key or "") == "sim_pre_submit_liquidity_guard_action" and str(value or "").upper() == "WOULD_UNKNOWN":
         if _is_reviewed_sim_liquidity_not_available():
             return "reviewed_sim_liquidity_not_available"

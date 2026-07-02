@@ -13,6 +13,9 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from src.engine.ai_prompt_contracts import swing_ai_structured_output_eval_prompt_contract
+from src.engine.ai_response_contracts import swing_ai_structured_output_eval_contract
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 REPORT_DIR = PROJECT_ROOT / "data" / "report"
@@ -32,12 +35,14 @@ AI_WATCHING_SCORE_SMOOTHING_DIAGNOSTIC_DIR = REPORT_DIR / "ai_watching_score_smo
 CODEBASE_PERFORMANCE_WORKORDER_DIR = REPORT_DIR / "codebase_performance_workorder"
 PATTERN_LAB_CURRENTNESS_AUDIT_DIR = REPORT_DIR / "pattern_lab_currentness_audit"
 BUY_FUNNEL_SENTINEL_DIR = REPORT_DIR / "buy_funnel_sentinel"
+ENTRY_HURDLE_BACKTEST_DIR = REPORT_DIR / "entry_hurdle_backtest"
 PRODUCER_GAP_DISCOVERY_DIR = REPORT_DIR / "producer_gap_discovery"
 STAGE_HOOK_WORKORDER_DISCOVERY_DIR = REPORT_DIR / "stage_hook_workorder_discovery"
 STAGE_HOOK_RUNTIME_SCAFFOLD_DIR = REPORT_DIR / "stage_hook_runtime_scaffold"
 CONVERSION_LANE_DIR = REPORT_DIR / "conversion_lane"
 INTRADAY_ENTRY_BLOCKER_DIAGNOSTICS_DIR = REPORT_DIR / "intraday_entry_blocker_diagnostics"
 RISING_MISSED_SCOUT_WORKORDER_DIR = REPORT_DIR / "rising_missed_scout_workorder"
+RISING_MISSED_CLASSIFIER_PRIOR_DIR = REPORT_DIR / "rising_missed_classifier_prior"
 ONE_SHARE_THRESHOLD_OPPORTUNITY_DIR = REPORT_DIR / "one_share_threshold_opportunity"
 CODE_IMPROVEMENT_WORKORDER_DIR = PROJECT_ROOT / "docs" / "code-improvement-workorders"
 CODE_IMPROVEMENT_WORKORDER_REPORT_DIR = REPORT_DIR / "code_improvement_workorder"
@@ -80,6 +85,7 @@ KNOWN_FIXED_UNKNOWN_TOKEN_FIELDS = {
     "sim_pre_submit_overbought_reason",
     "broker_receipt_status",
     "fill_quality",
+    "sell_order_exchange_resolution_reason",
 }
 
 
@@ -181,8 +187,16 @@ def intraday_entry_blocker_diagnostics_report_path(target_date: str) -> Path:
     return INTRADAY_ENTRY_BLOCKER_DIAGNOSTICS_DIR / f"intraday_entry_blocker_diagnostics_{target_date}.json"
 
 
+def entry_hurdle_backtest_report_path(target_date: str) -> Path:
+    return ENTRY_HURDLE_BACKTEST_DIR / f"entry_hurdle_backtest_{target_date}.json"
+
+
 def rising_missed_scout_workorder_report_path(target_date: str) -> Path:
     return RISING_MISSED_SCOUT_WORKORDER_DIR / f"rising_missed_scout_workorder_{target_date}.json"
+
+
+def rising_missed_classifier_prior_report_path(target_date: str) -> Path:
+    return RISING_MISSED_CLASSIFIER_PRIOR_DIR / f"rising_missed_classifier_prior_{target_date}.json"
 
 
 def one_share_threshold_opportunity_report_path(target_date: str) -> Path:
@@ -503,6 +517,58 @@ def _intraday_entry_blocker_followup_orders(report: dict[str, Any]) -> list[dict
     return orders
 
 
+def _entry_hurdle_backtest_followup_orders(report: dict[str, Any]) -> list[dict[str, Any]]:
+    orders = report.get("code_improvement_orders")
+    if not isinstance(orders, list):
+        return []
+    sanitized: list[dict[str, Any]] = []
+    source_paths = report.get("source_paths") if isinstance(report.get("source_paths"), list) else []
+    for raw in orders:
+        if not isinstance(raw, dict):
+            continue
+        order = {**raw, "source_report_type": raw.get("source_report_type") or "entry_hurdle_backtest"}
+        order["runtime_effect"] = False
+        order["allowed_runtime_apply"] = False
+        order["actual_order_submitted"] = False
+        order["broker_order_forbidden"] = True
+        if not order.get("source_paths") and source_paths:
+            order["source_paths"] = [str(path) for path in source_paths]
+        provenance = order.get("implementation_provenance")
+        if not isinstance(provenance, dict):
+            provenance = {}
+        order["implementation_status"] = (
+            str(order.get("implementation_status") or "").strip()
+            or "implemented_source_quality_contract_available"
+        )
+        order["original_implementation_status"] = (
+            str(order.get("original_implementation_status") or "").strip()
+            or order["implementation_status"]
+        )
+        order["implementation_provenance"] = {
+            **provenance,
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+            "requires_separate_runtime_apply_candidate": True,
+        }
+        forbidden = order.get("forbidden_uses") if isinstance(order.get("forbidden_uses"), list) else []
+        order["forbidden_uses"] = sorted(
+            {
+                *(str(item) for item in forbidden),
+                "runtime_threshold_mutation",
+                "broker_guard_bypass",
+                "stale_quote_guard_bypass",
+                "order_guard_relaxation",
+                "provider_route_change",
+                "bot_restart",
+                "real_execution_quality_approval",
+            }
+        )
+        sanitized.append(order)
+    return sanitized
+
+
 def _rising_missed_scout_followup_orders(report: dict[str, Any]) -> list[dict[str, Any]]:
     orders = report.get("code_improvement_orders")
     if not isinstance(orders, list):
@@ -526,6 +592,52 @@ def _rising_missed_scout_followup_orders(report: dict[str, Any]) -> list[dict[st
         order["runtime_effect"] = False
         order["allowed_runtime_apply"] = False
         order["decision_authority"] = "source_only_operational_workorder"
+        existing_forbidden = order.get("forbidden_uses")
+        if not isinstance(existing_forbidden, list):
+            existing_forbidden = []
+        order["forbidden_uses"] = list(dict.fromkeys([*existing_forbidden, *default_forbidden_uses]))
+        sanitized.append(order)
+    return sanitized
+
+
+def _rising_missed_classifier_prior_followup_orders(report: dict[str, Any]) -> list[dict[str, Any]]:
+    orders = report.get("code_improvement_orders")
+    if not isinstance(orders, list):
+        return []
+    default_forbidden_uses = [
+        "real_order_submission",
+        "runtime_threshold_mutation",
+        "broker_guard_bypass",
+        "order_guard_relaxation",
+        "provider_route_change",
+        "bot_restart",
+        "cap_release",
+        "hard_safety_relaxation",
+        "forced_one_share_success_counting",
+        "real_execution_quality_approval",
+    ]
+    sanitized: list[dict[str, Any]] = []
+    for item in orders:
+        if not isinstance(item, dict):
+            continue
+        order = dict(item)
+        order["source_report_type"] = "rising_missed_classifier_prior"
+        order["runtime_effect"] = False
+        order["allowed_runtime_apply"] = False
+        order["actual_order_submitted"] = False
+        order["broker_order_forbidden"] = True
+        order["decision_authority"] = "rising_missed_classifier_prior_source_only"
+        provenance = order.get("implementation_provenance")
+        if not isinstance(provenance, dict):
+            provenance = {}
+        order["implementation_provenance"] = {
+            **provenance,
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+            "requires_separate_runtime_apply_candidate": True,
+        }
         existing_forbidden = order.get("forbidden_uses")
         if not isinstance(existing_forbidden, list):
             existing_forbidden = []
@@ -2618,6 +2730,91 @@ def _holding_exit_counterfactual_contract_status(target_date: str) -> dict[str, 
         "implemented": implemented,
         "reason": "implemented_contract_available" if implemented else "contract_incomplete",
         "report_path": str(HOLDING_EXIT_DECISION_MATRIX_DIR / f"holding_exit_decision_matrix_{target_date}.json"),
+    }
+
+
+def _swing_ai_structured_output_eval_contract_status(source_report: dict[str, Any] | None = None) -> dict[str, Any]:
+    response_contract = swing_ai_structured_output_eval_contract()
+    prompt_contract = swing_ai_structured_output_eval_prompt_contract()
+    eval_report = (
+        source_report.get("swing_ai_structured_output_eval")
+        if isinstance(source_report, dict) and isinstance(source_report.get("swing_ai_structured_output_eval"), dict)
+        else {}
+    )
+    provenance = (
+        response_contract.get("implementation_provenance")
+        if isinstance(response_contract.get("implementation_provenance"), dict)
+        else {}
+    )
+    response_variants = {
+        str(item.get("variant_id") or "")
+        for item in (provenance.get("prompt_variants") if isinstance(provenance.get("prompt_variants"), list) else [])
+        if isinstance(item, dict)
+    }
+    prompt_variants = {
+        str(item.get("variant_id") or "")
+        for item in (
+            prompt_contract.get("prompt_variants")
+            if isinstance(prompt_contract.get("prompt_variants"), list)
+            else []
+        )
+        if isinstance(item, dict)
+    }
+    required_variants = {
+        "korean_free_text_gatekeeper",
+        "english_control_entry_json",
+        "strict_schema_structured_eval",
+    }
+    sample_status = str(eval_report.get("sample_status") or "").strip()
+    report_contract_available = (
+        eval_report.get("runtime_effect") is False
+        and eval_report.get("allowed_runtime_apply") is False
+        and eval_report.get("actual_order_submitted") is False
+        and eval_report.get("broker_order_forbidden") is True
+        and str(eval_report.get("report_contract") or "") == "swing_ai_structured_output_eval_report_v1"
+        and str(eval_report.get("source_contract") or "") == str(provenance.get("source_contract") or "")
+        and sample_status in {"ready", "waiting_replay_sample"}
+    )
+    implemented = (
+        _is_implemented_status(response_contract.get("implementation_status"))
+        and required_variants.issubset(response_variants)
+        and required_variants.issubset(prompt_variants)
+        and provenance.get("runtime_effect") is False
+        and provenance.get("allowed_runtime_apply") is False
+        and provenance.get("actual_order_submitted") is False
+        and provenance.get("broker_order_forbidden") is True
+        and report_contract_available
+    )
+    implementation_status = (
+        "implemented_source_quality_contract_waiting_sample"
+        if implemented and sample_status == "waiting_replay_sample"
+        else "implemented_source_quality_contract_available"
+        if implemented
+        else "terminal_design_family_candidate"
+    )
+    root_cause_hint = (
+        "implementation_done"
+        if sample_status == "waiting_replay_sample"
+        else "root_cause_closed"
+        if implemented
+        else "needs_followup_workorder"
+    )
+    return {
+        "implemented": implemented,
+        "reason": "implemented_contract_available" if implemented else "contract_incomplete",
+        "implementation_status": implementation_status,
+        "implementation_provenance": {
+            **provenance,
+            "report_contract": eval_report.get("report_contract"),
+            "sample_status": sample_status or None,
+            "schema_valid_rate": eval_report.get("schema_valid_rate"),
+            "decision_disagreement_rate_pct": eval_report.get("decision_disagreement_rate_pct"),
+            "p50_latency_ms": eval_report.get("p50_latency_ms"),
+            "estimated_total_cost_krw": eval_report.get("estimated_total_cost_krw"),
+            "root_cause_closure_status_hint": root_cause_hint,
+            "remaining_blocker_is_observation_or_policy_closure": sample_status == "waiting_replay_sample",
+        },
+        "prompt_contract": prompt_contract,
     }
 
 
@@ -5872,9 +6069,19 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
         intraday_entry_blocker_path,
         isolated_source_mode=isolated_source_mode,
     )
+    entry_hurdle_backtest_path = entry_hurdle_backtest_report_path(target_date)
+    entry_hurdle_backtest = _load_source_json(
+        entry_hurdle_backtest_path,
+        isolated_source_mode=isolated_source_mode,
+    )
     rising_missed_scout_workorder_path = rising_missed_scout_workorder_report_path(target_date)
     rising_missed_scout_workorder = _load_source_json(
         rising_missed_scout_workorder_path,
+        isolated_source_mode=isolated_source_mode,
+    )
+    rising_missed_classifier_prior_path = rising_missed_classifier_prior_report_path(target_date)
+    rising_missed_classifier_prior = _load_source_json(
+        rising_missed_classifier_prior_path,
         isolated_source_mode=isolated_source_mode,
     )
     one_share_threshold_opportunity_path = one_share_threshold_opportunity_report_path(target_date)
@@ -5907,7 +6114,9 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
         "buy_funnel_sentinel": buy_funnel_sentinel_path,
         "conversion_lane": conversion_lane_path,
         "intraday_entry_blocker_diagnostics": intraday_entry_blocker_path,
+        "entry_hurdle_backtest": entry_hurdle_backtest_path,
         "rising_missed_scout_workorder": rising_missed_scout_workorder_path,
+        "rising_missed_classifier_prior": rising_missed_classifier_prior_path,
         "one_share_threshold_opportunity": one_share_threshold_opportunity_path,
     }
     source_paths = {
@@ -6014,7 +6223,11 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
     ]
     conversion_lane_orders = _conversion_lane_followup_orders(conversion_lane)
     intraday_entry_blocker_orders = _intraday_entry_blocker_followup_orders(intraday_entry_blocker)
+    entry_hurdle_backtest_orders = _entry_hurdle_backtest_followup_orders(entry_hurdle_backtest)
     rising_missed_scout_orders = _rising_missed_scout_followup_orders(rising_missed_scout_workorder)
+    rising_missed_classifier_prior_orders = _rising_missed_classifier_prior_followup_orders(
+        rising_missed_classifier_prior
+    )
     one_share_threshold_orders = _one_share_threshold_opportunity_followup_orders(
         one_share_threshold_opportunity
     )
@@ -6057,6 +6270,15 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
         ev_report,
         target_date=target_date,
     )
+    implemented_entry_hurdle_by_order_id: dict[str, dict[str, Any]] = {}
+    for order in entry_hurdle_backtest_orders:
+        if _is_implemented_status(order.get("implementation_status")):
+            order_id = str(order.get("order_id") or "").strip()
+            family = str(order.get("mapped_family") or order.get("threshold_family") or "").strip()
+            if order_id and family:
+                closed_instrumentation_order_families[order_id] = family
+                implemented_entry_hurdle_by_order_id[order_id] = order
+    swing_ai_contract_status = _swing_ai_structured_output_eval_contract_status(swing_automation)
     orders = [
         *scalping_orders,
         *swing_orders,
@@ -6070,7 +6292,9 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
         *stage_hook_workorder_discovery_orders,
         *conversion_lane_orders,
         *intraday_entry_blocker_orders,
+        *entry_hurdle_backtest_orders,
         *rising_missed_scout_orders,
+        *rising_missed_classifier_prior_orders,
         *one_share_threshold_orders,
         *lifecycle_entry_bucket_orders,
         *lifecycle_submit_bucket_orders,
@@ -6083,6 +6307,94 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
     ]
     if conversion_rank:
         orders = [_annotate_order_conversion_fields(order, conversion_rank) for order in orders]
+    if implemented_entry_hurdle_by_order_id:
+        updated_orders: list[dict[str, Any]] = []
+        for order in orders:
+            order_id = str(order.get("order_id") or "").strip()
+            source_type = str(order.get("source_report_type") or "").strip()
+            source_order = implemented_entry_hurdle_by_order_id.get(order_id)
+            if source_order and source_type != "entry_hurdle_backtest":
+                inherited = dict(order)
+                inherited["implementation_status"] = "implemented_source_quality_contract_available"
+                inherited["original_implementation_status"] = (
+                    str(order.get("original_implementation_status") or "").strip()
+                    or "implemented_source_quality_contract_available"
+                )
+                inherited["runtime_effect"] = False
+                inherited["allowed_runtime_apply"] = False
+                provenance = inherited.get("implementation_provenance")
+                if not isinstance(provenance, dict):
+                    provenance = {}
+                inherited["implementation_provenance"] = {
+                    **provenance,
+                    "implementation_type": "entry_hurdle_backtest_cross_source_closure",
+                    "closed_by_source_report_type": "entry_hurdle_backtest",
+                    "closed_by_order_id": order_id,
+                    "metric_role": (source_order.get("implementation_provenance") or {}).get("metric_role"),
+                    "decision_authority": (source_order.get("implementation_provenance") or {}).get(
+                        "decision_authority"
+                    ),
+                    "runtime_effect": False,
+                    "allowed_runtime_apply": False,
+                    "requires_separate_runtime_apply_candidate": True,
+                    "root_cause_closure_status_hint": "implementation_done",
+                }
+                updated_orders.append(inherited)
+                continue
+            updated_orders.append(order)
+        orders = updated_orders
+    if swing_ai_contract_status.get("implemented") is True:
+        updated_orders = []
+        contract_provenance = (
+            swing_ai_contract_status.get("implementation_provenance")
+            if isinstance(swing_ai_contract_status.get("implementation_provenance"), dict)
+            else {}
+        )
+        for order in orders:
+            order_id = str(order.get("order_id") or "").strip()
+            if order_id == "order_swing_ai_contract_structured_output_eval":
+                inherited = dict(order)
+                inherited["implementation_status"] = swing_ai_contract_status.get(
+                    "implementation_status",
+                    "implemented_source_quality_contract_available",
+                )
+                inherited["original_implementation_status"] = (
+                    str(order.get("original_implementation_status") or "").strip()
+                    or str(inherited["implementation_status"])
+                )
+                inherited["runtime_effect"] = False
+                inherited["allowed_runtime_apply"] = False
+                inherited["actual_order_submitted"] = False
+                inherited["broker_order_forbidden"] = True
+                inherited["mapped_family"] = "swing_ai_contract_structured_output_eval"
+                inherited["threshold_family"] = "swing_ai_contract_structured_output_eval"
+                provenance = inherited.get("implementation_provenance")
+                if not isinstance(provenance, dict):
+                    provenance = {}
+                inherited["implementation_provenance"] = {
+                    **provenance,
+                    **contract_provenance,
+                    "implementation_type": "swing_ai_contract_structured_output_eval",
+                    "closed_by_source_report_type": "ai_response_contracts",
+                    "closed_by_prompt_contract": "ai_prompt_contracts",
+                    "runtime_effect": False,
+                    "allowed_runtime_apply": False,
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                    "requires_separate_runtime_apply_candidate": True,
+                    "root_cause_closure_status_hint": contract_provenance.get(
+                        "root_cause_closure_status_hint",
+                        "root_cause_closed",
+                    ),
+                }
+                inherited["forbidden_uses"] = sorted(
+                    set(inherited.get("forbidden_uses") or [])
+                    | set(contract_provenance.get("forbidden_uses") or [])
+                )
+                updated_orders.append(inherited)
+                continue
+            updated_orders.append(order)
+        orders = updated_orders
     seen_keys: set[tuple[str, str, str]] = set()
     deduped_orders: list[dict[str, Any]] = []
     collision_warnings: list[str] = []
@@ -6339,7 +6651,9 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
             "buy_funnel_sentinel": source_ref("buy_funnel_sentinel"),
             "conversion_lane": source_ref("conversion_lane"),
             "intraday_entry_blocker_diagnostics": source_ref("intraday_entry_blocker_diagnostics"),
+            "entry_hurdle_backtest": source_ref("entry_hurdle_backtest"),
             "rising_missed_scout_workorder": source_ref("rising_missed_scout_workorder"),
+            "rising_missed_classifier_prior": source_ref("rising_missed_classifier_prior"),
             "one_share_threshold_opportunity": source_ref("one_share_threshold_opportunity"),
             "threshold_cycle_calibration": source_ref("threshold_cycle_calibration"),
         },
@@ -6378,7 +6692,11 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
             "stage_hook_runtime_scaffold_implemented_hook_count": len(stage_hook_scaffold_by_name),
             "conversion_lane_source_order_count": len(conversion_lane_orders),
             "intraday_entry_blocker_source_order_count": len(intraday_entry_blocker_orders),
+            "entry_hurdle_backtest_source_order_count": len(entry_hurdle_backtest_orders),
             "rising_missed_scout_source_order_count": len(rising_missed_scout_orders),
+            "rising_missed_classifier_prior_source_order_count": len(
+                rising_missed_classifier_prior_orders
+            ),
             "one_share_threshold_opportunity_source_order_count": len(one_share_threshold_orders),
             "producer_gap_discovery_high_priority_selected": bool(
                 {
@@ -6614,6 +6932,7 @@ def render_code_improvement_workorder_markdown(report: dict[str, Any]) -> str:
         f"- pattern_lab_currentness_source_order_count: `{summary.get('pattern_lab_currentness_source_order_count')}`",
         f"- pattern_lab_ai_review_source_order_count: `{summary.get('pattern_lab_ai_review_source_order_count')}`",
         f"- threshold_ev_source_order_count: `{summary.get('threshold_ev_source_order_count')}`",
+        f"- entry_hurdle_backtest_source_order_count: `{summary.get('entry_hurdle_backtest_source_order_count')}`",
         f"- lifecycle_submit_bucket_source_order_count: `{summary.get('lifecycle_submit_bucket_source_order_count')}`",
         f"- lifecycle_holding_exit_bucket_source_order_count: `{summary.get('lifecycle_holding_exit_bucket_source_order_count')}`",
         f"- pipeline_event_verbosity_source_order_count: `{summary.get('pipeline_event_verbosity_source_order_count')}`",

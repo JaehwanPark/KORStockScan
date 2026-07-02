@@ -191,6 +191,11 @@ def test_postclose_wrapper_runs_threshold_ev_before_and_after_workorder():
     post_propagation_ev_idx = script.index('run_threshold_cycle_ev_and_wait "post_propagation_audit_refresh"')
     runtime_summary_idx = script.index("src.engine.runtime_approval_summary")
     runtime_gap_idx = script.index("src.engine.runtime_apply_gap_audit")
+    conversion_lane_idx = script.index("src.engine.automation.conversion_lane")
+    rising_missed_prior_idx = script.index("src.engine.monitoring.rising_missed_classifier_prior")
+    post_conversion_workorder_idx = script.index(
+        "code_improvement_workorder_post_conversion_lane"
+    )
     next_checklist_idx = script.rindex("src.engine.build_next_stage2_checklist")
     pending_verify_idx = script.index("src.engine.verify_threshold_cycle_postclose_chain --date \"$TARGET_DATE\" --allow-pending-done-marker")
     final_verify_idx = script.index("src.engine.verify_threshold_cycle_postclose_chain --date \"$TARGET_DATE\"", pending_verify_idx + 1)
@@ -223,6 +228,9 @@ def test_postclose_wrapper_runs_threshold_ev_before_and_after_workorder():
         < post_propagation_ev_idx
         < runtime_summary_idx
         < runtime_gap_idx
+        < conversion_lane_idx
+        < rising_missed_prior_idx
+        < post_conversion_workorder_idx
         < next_checklist_idx
         < pending_verify_idx
         < final_verify_idx
@@ -233,6 +241,7 @@ def test_postclose_wrapper_runs_threshold_ev_before_and_after_workorder():
     assert 'RUN_AI_WATCHING_SCORE_SMOOTHING_DIAGNOSTIC="${THRESHOLD_CYCLE_RUN_AI_WATCHING_SCORE_SMOOTHING_DIAGNOSTIC:-true}"' in script
     assert 'RUN_PRODUCER_GAP_DISCOVERY="${THRESHOLD_CYCLE_RUN_PRODUCER_GAP_DISCOVERY:-true}"' in script
     assert 'RUN_RISING_MISSED_SCOUT_WORKORDER="${THRESHOLD_CYCLE_RUN_RISING_MISSED_SCOUT_WORKORDER:-true}"' in script
+    assert 'RUN_RISING_MISSED_CLASSIFIER_PRIOR="${THRESHOLD_CYCLE_RUN_RISING_MISSED_CLASSIFIER_PRIOR:-true}"' in script
     assert 'RUN_STAGE_HOOK_WORKORDER_DISCOVERY="${THRESHOLD_CYCLE_RUN_STAGE_HOOK_WORKORDER_DISCOVERY:-true}"' in script
     assert 'RUN_STAGE_HOOK_RUNTIME_SCAFFOLD="${THRESHOLD_CYCLE_RUN_STAGE_HOOK_RUNTIME_SCAFFOLD:-true}"' in script
     assert 'RUN_SCALP_ENTRY_ADM="${THRESHOLD_CYCLE_RUN_SCALP_ENTRY_ADM:-true}"' in script
@@ -342,6 +351,7 @@ def test_postclose_wrapper_waits_for_prerequisite_artifacts_before_downstream_st
     assert '"$PROJECT_DIR/data/report/ai_watching_score_smoothing_diagnostic/ai_watching_score_smoothing_diagnostic_${TARGET_DATE}.json"' in script
     assert '"$PROJECT_DIR/data/report/scalp_entry_action_decision_matrix/scalp_entry_action_decision_matrix_${TARGET_DATE}.json"' in script
     assert '"$PROJECT_DIR/data/report/rising_missed_scout_workorder/rising_missed_scout_workorder_${TARGET_DATE}.json"' in script
+    assert '"$PROJECT_DIR/data/report/rising_missed_classifier_prior/rising_missed_classifier_prior_${TARGET_DATE}.json"' in script
     assert '"$PROJECT_DIR/data/report/one_share_threshold_opportunity/one_share_threshold_opportunity_${TARGET_DATE}.json"' in script
     assert '"$PROJECT_DIR/data/report/lifecycle_decision_matrix/lifecycle_decision_matrix_${TARGET_DATE}.json"' in script
     assert '"$PROJECT_DIR/data/report/lifecycle_bucket_discovery/lifecycle_bucket_discovery_${TARGET_DATE}.json"' in script
@@ -368,6 +378,7 @@ def test_postclose_wrapper_waits_for_prerequisite_artifacts_before_downstream_st
     assert "pattern_lab_propagation_audit=$RUN_PATTERN_LAB_PROPAGATION_AUDIT" in script
     assert "scalp_entry_adm=$RUN_SCALP_ENTRY_ADM" in script
     assert "rising_missed_scout_workorder=$RUN_RISING_MISSED_SCOUT_WORKORDER" in script
+    assert "rising_missed_classifier_prior=$RUN_RISING_MISSED_CLASSIFIER_PRIOR" in script
     assert "one_share_threshold_opportunity=$RUN_ONE_SHARE_THRESHOLD_OPPORTUNITY" in script
     assert "one_share_threshold_opportunity_ai_provider=$ONE_SHARE_THRESHOLD_OPPORTUNITY_AI_PROVIDER" in script
     assert "lifecycle_decision_matrix=$RUN_LIFECYCLE_DECISION_MATRIX" in script

@@ -27,6 +27,7 @@ def test_entry_hurdle_backtest_classifies_overblocking_from_existing_artifacts(t
                             "blocked_ai_score": 2,
                             "order_bundle_submitted": 1,
                             "pre_submit_late_entry_price_drift_guard_block": 1,
+                            "pre_submit_overbought_pullback_guard_block": 3,
                         },
                         "ratios": {
                             "submitted_to_ai_unique_pct": 10.0,
@@ -81,7 +82,13 @@ def test_entry_hurdle_backtest_classifies_overblocking_from_existing_artifacts(t
                                 "missed_winner_count": 3,
                                 "avoided_loser_count": 0,
                                 "neutral_count": 1,
-                            }
+                            },
+                            "pre_submit_overbought_pullback_guard_block": {
+                                "evaluated_candidates": 6,
+                                "missed_winner_count": 5,
+                                "avoided_loser_count": 0,
+                                "neutral_count": 1,
+                            },
                         },
                         "cohort_outcome_metrics": {
                             "entry_armed_latency_or_safety_block": {
@@ -192,6 +199,7 @@ def test_entry_hurdle_backtest_classifies_overblocking_from_existing_artifacts(t
     assert action_ids == [
         "trace_latency_refresh_recovered_downstream_blocker",
         "review_pre_submit_liquidity_relief_scope",
+        "review_overbought_gate_miss_ev_recovery_scope",
         "review_ai_wait_score_recheck_scope",
         "audit_late_entry_price_drift_guard_context",
     ]
@@ -206,4 +214,18 @@ def test_entry_hurdle_backtest_classifies_overblocking_from_existing_artifacts(t
     }
     assert policy_backtest["total"]["eligible_attempts"] == 3
     assert policy_backtest["total"]["conservative_estimated_order_submit_success"] == 0
+    overbought = report["summary"]["overbought_gate_counterfactual"]
+    assert overbought["decision"] == "source_only_recovery_design_candidate"
+    assert overbought["evaluated_candidates"] == 6
+    assert overbought["missed_winner_count"] == 5
+    assert overbought["avoided_loser_count"] == 0
+    assert overbought["runtime_effect"] is False
+    assert overbought["broker_order_forbidden"] is True
+    assert report["summary"]["code_improvement_order_count"] == 1
+    assert report["code_improvement_orders"][0]["order_id"] == "order_overbought_gate_miss_ev_recovery"
+    assert report["code_improvement_orders"][0]["implementation_status"] == (
+        "implemented_source_quality_contract_available"
+    )
+    assert report["code_improvement_orders"][0]["runtime_effect"] is False
+    assert report["code_improvement_orders"][0]["broker_order_forbidden"] is True
     assert not report["missing_artifacts"]

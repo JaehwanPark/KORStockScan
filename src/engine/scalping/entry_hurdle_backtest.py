@@ -38,6 +38,11 @@ FORBIDDEN_USES = [
     "provider change",
     "bot restart",
 ]
+OVERBOUGHT_BLOCKER_KEYS = {
+    "blocked_overbought",
+    "pre_submit_overbought_pullback_guard_block",
+    "scalp_sim_pre_submit_overbought_guard_would_block",
+}
 
 
 def _safe_float(value: Any, default: float = 0.0) -> float:
@@ -456,6 +461,24 @@ def _next_action_diagnostics(
             }
         )
 
+    overbought = _top_overblocking(blocker_summary, OVERBOUGHT_BLOCKER_KEYS)
+    if overbought:
+        actions.append(
+            {
+                "action_id": "review_overbought_gate_miss_ev_recovery_scope",
+                "priority": 3,
+                "decision": "source_only_counterfactual_candidate",
+                "reason": "overbought blocker has missed-winner skew in existing counterfactual data",
+                "evidence": overbought,
+                "allowed_next_step": (
+                    "preserve overbought guard authority; use missed-winner/avoided-loser evidence only "
+                    "for source-only recovery design until LDM/bridge contracts close"
+                ),
+                "forbidden_uses": FORBIDDEN_USES,
+                "runtime_effect": False,
+            }
+        )
+
     ai_wait = _top_overblocking(blocker_summary, {"blocked_ai_score", "first_ai_wait"})
     ai_wait = ai_wait or _top_overblocking(
         cohort_summary,
@@ -465,7 +488,7 @@ def _next_action_diagnostics(
         actions.append(
             {
                 "action_id": "review_ai_wait_score_recheck_scope",
-                "priority": 3,
+                "priority": 4,
                 "decision": "recheck_scope_candidate_not_threshold_relaxation",
                 "reason": "AI wait/score blocker has missed-winner skew but broad BUY threshold relaxation is forbidden",
                 "evidence": ai_wait,
@@ -480,7 +503,7 @@ def _next_action_diagnostics(
         actions.append(
             {
                 "action_id": "audit_late_entry_price_drift_guard_context",
-                "priority": 4,
+                "priority": 5,
                 "decision": "price_context_audit_candidate",
                 "reason": "late price drift guard blocks possible winners; changing entry price is forbidden",
                 "evidence": drift,
@@ -514,6 +537,10 @@ def _next_action_diagnostics(
             "pre_submit_liquidity_guard_block": _safe_int(
                 stage_totals.get("pre_submit_liquidity_guard_block"), 0
             ),
+            "blocked_overbought": _safe_int(stage_totals.get("blocked_overbought"), 0),
+            "pre_submit_overbought_pullback_guard_block": _safe_int(
+                stage_totals.get("pre_submit_overbought_pullback_guard_block"), 0
+            ),
             "pre_submit_late_entry_price_drift_guard_block": _safe_int(
                 stage_totals.get("pre_submit_late_entry_price_drift_guard_block"), 0
             ),
@@ -533,6 +560,125 @@ def _next_action_diagnostics(
         },
         "recommended_next_actions": actions,
     }
+
+
+def _overbought_gate_counterfactual(
+    *,
+    blocker_summary: dict[str, dict[str, Any]],
+    window_policy: str,
+) -> dict[str, Any]:
+    top = _top_overblocking(blocker_summary, OVERBOUGHT_BLOCKER_KEYS)
+    blocker_rows = {
+        key: row
+        for key, row in sorted(blocker_summary.items())
+        if key in OVERBOUGHT_BLOCKER_KEYS and isinstance(row, dict)
+    }
+    evaluated = sum(_safe_int(row.get("evaluated_candidates"), 0) for row in blocker_rows.values())
+    missed = sum(_safe_int(row.get("missed_winner_count"), 0) for row in blocker_rows.values())
+    avoided = sum(_safe_int(row.get("avoided_loser_count"), 0) for row in blocker_rows.values())
+    neutral = sum(_safe_int(row.get("neutral_count"), 0) for row in blocker_rows.values())
+    return {
+        "metric_role": "sim_probe_ev",
+        "decision_authority": "entry_hurdle_backtest_report_only",
+        "window_policy": window_policy,
+        "sample_floor": "report_only_overbought_blocker_sample_floor_3",
+        "primary_decision_metric": "missed_winner_vs_avoided_loser_tradeoff",
+        "source_quality_gate": "clean_baseline_allowed_existing_missed_entry_counterfactual",
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted_provenance_preserved": True,
+        "broker_order_forbidden": True,
+        "forbidden_uses": FORBIDDEN_USES,
+        "blocker_keys": sorted(OVERBOUGHT_BLOCKER_KEYS),
+        "evaluated_candidates": evaluated,
+        "missed_winner_count": missed,
+        "avoided_loser_count": avoided,
+        "neutral_count": neutral,
+        "missed_winner_rate": round(missed * 100.0 / evaluated, 2) if evaluated else 0.0,
+        "avoided_loser_rate": round(avoided * 100.0 / evaluated, 2) if evaluated else 0.0,
+        "top_overblocking": top,
+        "blocker_tradeoff": blocker_rows,
+        "decision": "source_only_recovery_design_candidate" if top else "hold_sample_or_balanced",
+        "allowed_next_step": (
+            "Use this evidence to design a bounded source-only overbought recovery candidate; "
+            "do not relax live overbought guards without a separate runtime apply contract."
+        ),
+    }
+
+
+def _code_improvement_orders(report: dict[str, Any]) -> list[dict[str, Any]]:
+    summary = report.get("summary") if isinstance(report.get("summary"), dict) else {}
+    overbought = (
+        summary.get("overbought_gate_counterfactual")
+        if isinstance(summary.get("overbought_gate_counterfactual"), dict)
+        else {}
+    )
+    if not overbought or overbought.get("top_overblocking") is None:
+        return []
+    evidence = [
+        f"evaluated_candidates={overbought.get('evaluated_candidates')}",
+        f"missed_winner_count={overbought.get('missed_winner_count')}",
+        f"avoided_loser_count={overbought.get('avoided_loser_count')}",
+        f"missed_winner_rate={overbought.get('missed_winner_rate')}",
+        f"avoided_loser_rate={overbought.get('avoided_loser_rate')}",
+        "runtime_effect=false",
+        "allowed_runtime_apply=false",
+        "actual_order_submitted=false",
+        "broker_order_forbidden=true",
+    ]
+    return [
+        {
+            "order_id": "order_overbought_gate_miss_ev_recovery",
+            "title": "overbought gate miss EV recovery",
+            "source_report_type": REPORT_TYPE,
+            "lifecycle_stage": "entry_submit",
+            "target_subsystem": "entry_funnel",
+            "route": "existing_family",
+            "mapped_family": "overbought_gate_miss_ev_recovery",
+            "threshold_family": "overbought_gate_miss_ev_recovery",
+            "improvement_type": "source_only_counterfactual_provenance",
+            "confidence": "clean_baseline_counterfactual",
+            "priority": 2,
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+            "implementation_status": "implemented_source_quality_contract_available",
+            "original_implementation_status": "implemented_source_quality_contract_available",
+            "implementation_provenance": {
+                "implementation_type": "overbought_gate_counterfactual_report_provenance",
+                "metric_role": overbought.get("metric_role"),
+                "decision_authority": overbought.get("decision_authority"),
+                "primary_decision_metric": overbought.get("primary_decision_metric"),
+                "source_quality_gate": overbought.get("source_quality_gate"),
+                "runtime_effect": False,
+                "allowed_runtime_apply": False,
+                "actual_order_submitted": False,
+                "broker_order_forbidden": True,
+                "requires_separate_runtime_apply_candidate": True,
+                "root_cause_closure_status_hint": "implementation_done",
+            },
+            "expected_ev_effect": (
+                "Expose overbought gate missed-winner vs avoided-loser evidence as source-only provenance "
+                "before any bounded policy design."
+            ),
+            "evidence": evidence,
+            "source_paths": [str(path) for path in report.get("source_paths") or []],
+            "next_postclose_metric": (
+                "entry_hurdle_backtest overbought_gate_counterfactual should keep runtime_effect=false and "
+                "show missed_winner_vs_avoided_loser_tradeoff."
+            ),
+            "files_likely_touched": [
+                "src/engine/scalping/entry_hurdle_backtest.py",
+                "src/engine/build_code_improvement_workorder.py",
+            ],
+            "acceptance_tests": [
+                "PYTHONPATH=. .venv/bin/pytest -q src/tests/test_entry_hurdle_backtest.py src/tests/test_build_code_improvement_workorder.py",
+                "runtime_effect remains false; overbought/stale/broker/order/provider/bot guards remain unchanged",
+            ],
+            "forbidden_uses": FORBIDDEN_USES,
+        }
+    ]
 
 
 def build_report(
@@ -680,7 +826,11 @@ def build_report(
         stage_totals=stage_totals,
         blocker_summary=blocker_summary,
     )
-    return {
+    overbought_gate_counterfactual = _overbought_gate_counterfactual(
+        blocker_summary=blocker_summary,
+        window_policy=f"{start}_to_{end}",
+    )
+    report = {
         "schema_version": SCHEMA_VERSION,
         "report_type": REPORT_TYPE,
         "date": target_date,
@@ -706,9 +856,17 @@ def build_report(
             "cohort_tradeoff": cohort_summary,
             "next_action_diagnostics": next_action_diagnostics,
             "implemented_policy_backtest": implemented_policy_backtest,
+            "overbought_gate_counterfactual": overbought_gate_counterfactual,
         },
         "date_rows": date_rows,
     }
+    report["source_paths"] = [
+        *(str(row.get("buy_funnel_path")) for row in date_rows if row.get("buy_funnel_loaded")),
+        *(str(row.get("missed_entry_path")) for row in date_rows if row.get("missed_entry_loaded")),
+    ]
+    report["code_improvement_orders"] = _code_improvement_orders(report)
+    report["summary"]["code_improvement_order_count"] = len(report["code_improvement_orders"])
+    return report
 
 
 def report_paths(target_date: str) -> tuple[Path, Path]:
@@ -773,6 +931,25 @@ def build_markdown(report: dict[str, Any]) -> str:
         )
     if not diagnostics.get("recommended_next_actions"):
         lines.append("- `none`: no overblocking action met the report-only trigger")
+    overbought = (
+        summary.get("overbought_gate_counterfactual")
+        if isinstance(summary.get("overbought_gate_counterfactual"), dict)
+        else {}
+    )
+    lines.extend(
+        [
+            "",
+            "## Overbought Gate Counterfactual",
+            f"- decision: `{overbought.get('decision', '-')}`",
+            f"- evaluated/missed/avoided: `{overbought.get('evaluated_candidates', 0)}`/"
+            f"`{overbought.get('missed_winner_count', 0)}`/"
+            f"`{overbought.get('avoided_loser_count', 0)}`",
+            f"- missed/avoided rate: `{overbought.get('missed_winner_rate', 0.0)}%`/"
+            f"`{overbought.get('avoided_loser_rate', 0.0)}%`",
+            f"- runtime_effect: `{overbought.get('runtime_effect')}`",
+            f"- code_improvement_orders: `{summary.get('code_improvement_order_count', 0)}`",
+        ]
+    )
     lines.extend(
         [
             "",

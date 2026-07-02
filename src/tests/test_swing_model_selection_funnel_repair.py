@@ -3054,6 +3054,11 @@ def test_swing_improvement_automation_emits_workorder_ready_orders():
     assert orders["order_swing_gatekeeper_reject_threshold_review"]["lifecycle_stage"] == "entry"
     assert orders["order_swing_scale_in_ofi_qi_bearish_risk_review"]["threshold_family"] == "swing_scale_in_ofi_qi_confirmation"
     assert orders["order_swing_ai_contract_structured_output_eval"]["runtime_effect"] is False
+    assert automation["swing_ai_structured_output_eval"]["report_contract"] == "swing_ai_structured_output_eval_report_v1"
+    assert automation["swing_ai_structured_output_eval"]["sample_status"] == "waiting_replay_sample"
+    assert orders["order_swing_ai_contract_structured_output_eval"]["implementation_status"] == (
+        "implemented_source_quality_contract_waiting_sample"
+    )
     assert automation["auto_family_candidates"]
     assert "approval_requests" in automation
 

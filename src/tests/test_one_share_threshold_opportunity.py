@@ -80,6 +80,9 @@ def test_build_report_aggregates_threshold_opportunity_and_orders(tmp_path):
     assert order["source_report_type"] == "one_share_threshold_opportunity"
     assert order["runtime_effect"] is False
     assert order["allowed_runtime_apply"] is False
+    assert order["implementation_status"] == "implemented"
+    assert order["implementation_provenance"]["requires_separate_runtime_apply_candidate"] is True
+    assert order["implementation_provenance"]["broker_order_forbidden"] is True
     assert "broker_guard_bypass" in order["forbidden_uses"]
     assert report["ai_review"]["status"] == "unavailable"
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 AI_REASON_LANGUAGE_POLICY = "english_ascii_only"
 AI_REASON_LANGUAGE_FALLBACK = "Reason unavailable: non-English output from AI"
+SWING_AI_STRUCTURED_OUTPUT_EVAL_SCHEMA_NAME = "swing_ai_structured_output_eval_v1"
 
 FLOW_STATE_LABELS = {
     "흡수": "absorption",
@@ -1373,7 +1374,162 @@ AI_RESPONSE_SCHEMA_REGISTRY = {
         },
         "required": ["schema_version", "stage_contexts"],
     },
+    SWING_AI_STRUCTURED_OUTPUT_EVAL_SCHEMA_NAME: {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "schema_version": {"type": "integer", "enum": [1]},
+            "reviewer": {"type": "string", "enum": ["swing_ai_contract_structured_output_eval"]},
+            "prompt_variant_reviews": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "properties": {
+                        "variant_id": {
+                            "type": "string",
+                            "enum": [
+                                "korean_free_text_gatekeeper",
+                                "english_control_entry_json",
+                                "strict_schema_structured_eval",
+                            ],
+                        },
+                        "schema_valid": {"type": "boolean"},
+                        "normalized_decision": {
+                            "type": "string",
+                            "enum": [
+                                "buy",
+                                "wait",
+                                "drop",
+                                "immediate_buy",
+                                "pullback_wait",
+                                "hold_continue",
+                                "partial_take_profit",
+                                "full_avoid",
+                                "scalping_preferred",
+                                "swing_preferred",
+                                "neither",
+                                "unknown",
+                            ],
+                        },
+                        "decision_disagreement_reason": {"type": "string"},
+                        "latency_ms": {"type": "integer"},
+                        "estimated_cost_krw": {"type": "number"},
+                        "reason": {"type": "string"},
+                    },
+                    "required": [
+                        "variant_id",
+                        "schema_valid",
+                        "normalized_decision",
+                        "decision_disagreement_reason",
+                        "latency_ms",
+                        "estimated_cost_krw",
+                        "reason",
+                    ],
+                },
+            },
+            "audit": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "status": {"type": "string", "enum": ["pass", "warning", "block"]},
+                    "schema_valid_rate": {"type": "number"},
+                    "decision_disagreement_rate_pct": {"type": "number"},
+                    "p50_latency_ms": {"type": "integer"},
+                    "estimated_total_cost_krw": {"type": "number"},
+                    "issues": {"type": "array", "items": {"type": "string"}},
+                },
+                "required": [
+                    "status",
+                    "schema_valid_rate",
+                    "decision_disagreement_rate_pct",
+                    "p50_latency_ms",
+                    "estimated_total_cost_krw",
+                    "issues",
+                ],
+            },
+        },
+        "required": ["schema_version", "reviewer", "prompt_variant_reviews", "audit"],
+    },
 }
+
+
+def swing_ai_structured_output_eval_contract() -> dict:
+    schema_available = SWING_AI_STRUCTURED_OUTPUT_EVAL_SCHEMA_NAME in AI_RESPONSE_SCHEMA_REGISTRY
+    entry_schema_available = "entry_v1" in AI_RESPONSE_SCHEMA_REGISTRY
+    gatekeeper_normalizer_available = {
+        "immediate_buy",
+        "pullback_wait",
+        "hold_continue",
+        "partial_take_profit",
+        "full_avoid",
+        "swing_preferred",
+        "neither",
+    }.issubset(CANONICAL_GATEKEEPER_ACTION_KEYS)
+    implemented = schema_available and entry_schema_available and gatekeeper_normalizer_available
+    return {
+        "implementation_status": (
+            "implemented_source_quality_contract_available"
+            if implemented
+            else "terminal_design_family_candidate"
+        ),
+        "implementation_provenance": {
+            "implementation_type": "swing_ai_contract_structured_output_eval",
+            "source_contract": SWING_AI_STRUCTURED_OUTPUT_EVAL_SCHEMA_NAME,
+            "metric_role": "ai_contract_eval_instrumentation",
+            "decision_authority": "swing_ai_contract_eval_report_only",
+            "window_policy": "postclose_replay_only",
+            "sample_floor": "report_only_replay_batch_required_before_model_or_prompt_change",
+            "primary_decision_metric": "schema_valid_rate",
+            "secondary_metrics": [
+                "decision_disagreement_rate_pct",
+                "p50_latency_ms",
+                "estimated_total_cost_krw",
+            ],
+            "source_quality_gate": "schema_valid_rate_and_canonical_label_normalization_required",
+            "prompt_variants": [
+                {
+                    "variant_id": "korean_free_text_gatekeeper",
+                    "prompt_contract": "REALTIME_ANALYSIS_PROMPT_SWING",
+                    "input_contract_mode": "plain_text",
+                    "output_contract_mode": "free_text_label_normalized",
+                    "schema_name": "-",
+                },
+                {
+                    "variant_id": "english_control_entry_json",
+                    "prompt_contract": "SWING_SYSTEM_PROMPT",
+                    "input_contract_mode": "plain_text",
+                    "output_contract_mode": "json_schema",
+                    "schema_name": "entry_v1",
+                },
+                {
+                    "variant_id": "strict_schema_structured_eval",
+                    "prompt_contract": "swing_ai_contract_structured_output_eval",
+                    "input_contract_mode": "structured_json_replay",
+                    "output_contract_mode": "json_schema",
+                    "schema_name": SWING_AI_STRUCTURED_OUTPUT_EVAL_SCHEMA_NAME,
+                },
+            ],
+            "implemented_checks": {
+                "strict_eval_schema_available": schema_available,
+                "entry_schema_available": entry_schema_available,
+                "gatekeeper_normalizer_available": gatekeeper_normalizer_available,
+            },
+            "forbidden_uses": [
+                "real_order_submission",
+                "provider_route_change",
+                "runtime_threshold_mutation",
+                "bot_restart_authority",
+                "swing_live_conversion_approval",
+            ],
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+            "requires_separate_runtime_apply_candidate": True,
+            "root_cause_closure_status_hint": "root_cause_closed" if implemented else "needs_followup_workorder",
+        },
+    }
 
 
 def resolve_ai_response_schema(schema_name):

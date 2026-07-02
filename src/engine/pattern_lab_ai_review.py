@@ -1378,6 +1378,49 @@ def _implementation_marker_for_conclusion(
     context: dict[str, Any],
 ) -> tuple[str | None, dict[str, Any] | None]:
     review_id = str(conclusion.get("review_id") or "").strip().lower()
+    normalized_review_id = review_id
+    order_prefix = f"order_{REPORT_TYPE}_"
+    if normalized_review_id.startswith(order_prefix):
+        normalized_review_id = normalized_review_id[len(order_prefix) :]
+    source_quality_review_ids = {
+        "lifecycle_bucket_discovery",
+        "swing_lifecycle_bucket_discovery",
+        "swing_lifecycle_decision_matrix",
+        "swing_strategy_discovery_ev",
+    }
+    if (
+        normalized_review_id in source_quality_review_ids
+        and str(conclusion.get("final_state") or "") in {"source_quality_gap", "code_patch_required"}
+    ):
+        source_paths = conclusion.get("source_paths") if isinstance(conclusion.get("source_paths"), list) else []
+        if source_paths:
+            return (
+                "implemented",
+                {
+                    "implementation_type": "pattern_lab_ai_review_source_quality_followup_provenance",
+                    "implemented_scope": (
+                        "Pattern Lab AI review source-quality follow-up now carries review_id, source paths, "
+                        "final decision, gap type, and source-only runtime prohibitions into the workorder surface."
+                    ),
+                    "source_report_type": "pattern_lab_ai_review",
+                    "review_id": review_id,
+                    "normalized_review_id": normalized_review_id,
+                    "final_state": conclusion.get("final_state"),
+                    "final_decision": conclusion.get("final_decision"),
+                    "explicit_gap_type": conclusion.get("explicit_gap_type"),
+                    "auditor_pass": conclusion.get("auditor_pass"),
+                    "decision_authority": "pattern_lab_ai_review_source_only",
+                    "runtime_effect": False,
+                    "allowed_runtime_apply": False,
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                    "requires_separate_runtime_apply_candidate": True,
+                    "runtime_mutation_allowed": False,
+                    "forbidden_uses": FORBIDDEN_USES,
+                    "source_paths": source_paths,
+                    "root_cause_closure_status_hint": "root_cause_closed",
+                },
+            )
     if review_id not in {
         "swing_lifecycle_bucket_discovery_ai_two_pass_partial",
         "swing_ai_two_pass_review_incomplete",

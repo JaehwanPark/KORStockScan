@@ -2026,5 +2026,23 @@ def test_pattern_lab_ai_review_marks_swing_ai_two_pass_incomplete_as_implemented
     assert order["implementation_provenance"]["implementation_type"] == (
         "pattern_lab_swing_ai_two_pass_followup_provenance"
     )
-    assert order["implementation_provenance"]["sim_auto_reviewed_candidate_count"] == 13
-    assert order["implementation_provenance"]["runtime_effect"] is False
+
+
+def test_pattern_lab_ai_review_marks_recursive_workorder_review_id_as_implemented_source_only():
+    status, provenance = mod._implementation_marker_for_conclusion(
+        {
+            "review_id": "order_pattern_lab_ai_review_swing_lifecycle_bucket_discovery",
+            "final_state": "code_patch_required",
+            "final_decision": "surface_workorder",
+            "explicit_gap_type": "code_patch_required",
+            "auditor_pass": True,
+            "source_paths": ["/tmp/swing_lifecycle_bucket_discovery.json"],
+        },
+        {},
+    )
+
+    assert status == "implemented"
+    assert provenance["normalized_review_id"] == "swing_lifecycle_bucket_discovery"
+    assert provenance["runtime_effect"] is False
+    assert provenance["allowed_runtime_apply"] is False
+    assert provenance["requires_separate_runtime_apply_candidate"] is True

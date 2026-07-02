@@ -30,7 +30,11 @@ from src.engine.auto_promotion_contracts import (
     tier2_validation_passed,
 )
 from src.engine.approval_contracts import annotate_approval_request
-from src.engine.ai_response_contracts import build_openai_response_text_format, normalize_gatekeeper_action_key
+from src.engine.ai_response_contracts import (
+    build_openai_response_text_format,
+    normalize_gatekeeper_action_key,
+    swing_ai_structured_output_eval_contract,
+)
 from src.engine.swing_selection_funnel_report import (
     SWING_EVENT_STAGES,
     SWING_STRATEGIES,
@@ -3060,6 +3064,60 @@ def _order(
     return order
 
 
+def _swing_ai_structured_output_eval_report(ai_contract_metrics: dict[str, Any]) -> dict[str, Any]:
+    contract = swing_ai_structured_output_eval_contract()
+    provenance = contract.get("implementation_provenance") if isinstance(contract.get("implementation_provenance"), dict) else {}
+    schema_total = _safe_int(ai_contract_metrics.get("schema_total"), 0)
+    disagreement_count = _safe_int(ai_contract_metrics.get("decision_disagreement_count"), 0)
+    latency = ai_contract_metrics.get("latency_ms") if isinstance(ai_contract_metrics.get("latency_ms"), dict) else {}
+    cost = ai_contract_metrics.get("estimated_cost_krw") if isinstance(ai_contract_metrics.get("estimated_cost_krw"), dict) else {}
+    cost_count = _safe_int(cost.get("count"), 0)
+    avg_cost = _safe_float(cost.get("avg"), 0.0)
+    schema_valid_rate = ai_contract_metrics.get("schema_valid_rate")
+    disagreement_rate = round((disagreement_count / schema_total) * 100.0, 4) if schema_total else None
+    sample_status = "ready" if schema_total > 0 else "waiting_replay_sample"
+    variant_reviews: list[dict[str, Any]] = []
+    for variant in provenance.get("prompt_variants") if isinstance(provenance.get("prompt_variants"), list) else []:
+        variant_id = str(variant.get("variant_id") or "")
+        observed_count = 0
+        if variant_id == "korean_free_text_gatekeeper":
+            observed_count = _safe_int(
+                (ai_contract_metrics.get("prompt_types") or {}).get("swing_gatekeeper"),
+                0,
+            )
+        variant_reviews.append(
+            {
+                "variant_id": variant_id,
+                "schema_name": variant.get("schema_name"),
+                "input_contract_mode": variant.get("input_contract_mode"),
+                "output_contract_mode": variant.get("output_contract_mode"),
+                "observed_sample_count": observed_count,
+                "schema_valid_rate": schema_valid_rate if observed_count else None,
+                "decision_disagreement_rate_pct": disagreement_rate if observed_count else None,
+                "p50_latency_ms": latency.get("p50") if observed_count else None,
+                "estimated_cost_krw_avg": cost.get("avg") if observed_count else None,
+            }
+        )
+    return {
+        "report_contract": "swing_ai_structured_output_eval_report_v1",
+        "source_contract": provenance.get("source_contract"),
+        "decision_authority": "swing_ai_contract_eval_report_only",
+        "metric_role": "ai_contract_eval_instrumentation",
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "sample_status": sample_status,
+        "schema_valid_rate": schema_valid_rate,
+        "decision_disagreement_rate_pct": disagreement_rate,
+        "p50_latency_ms": latency.get("p50"),
+        "estimated_total_cost_krw": round(avg_cost * cost_count, 6) if cost_count else None,
+        "parse_fail_count": _safe_int(ai_contract_metrics.get("parse_fail_count"), 0),
+        "prompt_variant_reviews": variant_reviews,
+        "forbidden_uses": provenance.get("forbidden_uses") or [],
+    }
+
+
 def _existing_family_source_metric_provenance(
     audit_report: dict[str, Any],
     *,
@@ -3748,6 +3806,8 @@ def build_swing_improvement_automation_report(
             "runtime_change": False,
         }
     )
+    swing_ai_eval_report = _swing_ai_structured_output_eval_report(ai_contract_metrics)
+    swing_ai_eval_waiting_sample = str(swing_ai_eval_report.get("sample_status") or "") == "waiting_replay_sample"
     orders.append(
         _order(
             order_id="order_swing_ai_contract_structured_output_eval",
@@ -3767,6 +3827,28 @@ def build_swing_improvement_automation_report(
             acceptance_tests=["pytest OpenAI transport/schema tests", "pytest swing lifecycle audit tests"],
             evidence=[issue["issue_id"] for issue in AI_CONTRACT_ISSUES],
             improvement_type="ai_contract_eval",
+            implementation_status=(
+                "implemented_source_quality_contract_waiting_sample"
+                if swing_ai_eval_waiting_sample
+                else "implemented_source_quality_contract_available"
+            ),
+            implementation_provenance={
+                "implementation_type": "swing_ai_structured_output_eval_report_contract",
+                "source_contract": swing_ai_eval_report.get("source_contract"),
+                "report_contract": swing_ai_eval_report.get("report_contract"),
+                "metric_role": swing_ai_eval_report.get("metric_role"),
+                "decision_authority": swing_ai_eval_report.get("decision_authority"),
+                "sample_status": swing_ai_eval_report.get("sample_status"),
+                "runtime_effect": False,
+                "allowed_runtime_apply": False,
+                "actual_order_submitted": False,
+                "broker_order_forbidden": True,
+                "requires_separate_runtime_apply_candidate": True,
+                "remaining_blocker_is_observation_or_policy_closure": swing_ai_eval_waiting_sample,
+                "root_cause_closure_status_hint": (
+                    "implementation_done" if swing_ai_eval_waiting_sample else "root_cause_closed"
+                ),
+            },
         )
     )
 
@@ -3893,6 +3975,7 @@ def build_swing_improvement_automation_report(
         },
         "swing_entry_bottleneck": entry_bottleneck,
         "swing_lifecycle_contract_gaps": lifecycle_contract_gaps,
+        "swing_ai_structured_output_eval": swing_ai_eval_report,
         "consensus_findings": [item for item in findings if item.get("confidence") != "solo"],
         "solo_findings": [item for item in findings if item.get("confidence") == "solo"],
         "auto_family_candidates": auto_family_candidates,
