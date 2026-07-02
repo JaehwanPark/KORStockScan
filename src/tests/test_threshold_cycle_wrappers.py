@@ -81,11 +81,11 @@ def test_postclose_done_controller_wrapper_runs_controller_and_skips_codex_runne
     assert controller_idx < codex_idx
 
 
-def test_postclose_done_controller_cron_installs_2040_once():
+def test_postclose_done_controller_cron_installs_2010_once():
     script = Path("deploy/install_postclose_done_controller_cron.sh").read_text(encoding="utf-8")
 
     assert "POSTCLOSE_DONE_CONTROLLER" in script
-    assert "40 20 * * 1-5" in script
+    assert "10 20 * * 1-5" in script
     assert "40 21 * * 1-5" not in script
     assert "deploy/run_postclose_done_controller.sh" in script
 

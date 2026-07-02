@@ -567,7 +567,7 @@ def _build_tasks(
                 task_id=f"CodeImprovementWorkorderReview{mmdd}",
                 title="code improvement workorder 구현 필요 여부 및 Codex 지시 대상 확인",
                 slot="POSTCLOSE",
-                time_window="22:05~22:20",
+                time_window="21:15~21:25",
                 track="ScalpingLogic",
                 source=(
                     f"[code_improvement_workorder_{source_date}.md](/home/ubuntu/KORStockScan/{_rel(code_md_path)}), "
@@ -586,7 +586,7 @@ def _build_tasks(
                 task_id=f"AutomationTriggerDecisionSummary{mmdd}",
                 title="자동화체인 trigger decision run/skip 요약 및 wrapper marker 대조 확인",
                 slot="POSTCLOSE",
-                time_window="22:50~23:05",
+                time_window="21:40~21:55",
                 track="RuntimeStability",
                 source=(
                     f"[automation_chain_trigger_decision_{source_date}.json](/home/ubuntu/KORStockScan/{_rel(trigger_decision_path)}), "
@@ -607,7 +607,7 @@ def _build_tasks(
                         task_id=f"RuntimeApplyGapDirectiveReview{mmdd}",
                         title="runtime apply gap Codex 작업지시 표면화 및 구현 여부 확인",
                         slot="POSTCLOSE",
-                        time_window="22:35~22:50",
+                        time_window="21:25~21:40",
                         track="ScalpingLogic",
                         source=(
                             f"[runtime_apply_gap_audit_{source_date}.json](/home/ubuntu/KORStockScan/{_rel(runtime_gap_path)}), "
@@ -630,7 +630,7 @@ def _build_tasks(
                         task_id=f"LifecycleSourceDimensionGapReview{mmdd}",
                         title="lifecycle source dimension gap 자동 표면화 및 처리 확인",
                         slot="POSTCLOSE",
-                        time_window="22:35~22:50",
+                        time_window="21:25~21:40",
                         track="ScalpingLogic",
                         source=(
                             f"[runtime_apply_gap_audit_{source_date}.json](/home/ubuntu/KORStockScan/{_rel(runtime_gap_path)}), "
@@ -652,7 +652,7 @@ def _build_tasks(
                         task_id=f"LifecycleQuietGapReview{mmdd}",
                         title="lifecycle quiet gap rollup 자동 표면화 및 처리 확인",
                         slot="POSTCLOSE",
-                        time_window="22:35~22:50",
+                        time_window="21:25~21:40",
                         track="ScalpingLogic",
                         source=(
                             f"[runtime_apply_gap_audit_{source_date}.json](/home/ubuntu/KORStockScan/{_rel(runtime_gap_path)}), "
@@ -714,7 +714,7 @@ def _render_auto_block(
     sections = (
         ("PREOPEN", "장전 체크리스트 (08:45~09:00)"),
         ("INTRADAY", "장중 체크리스트 (09:05~15:20)"),
-        ("POSTCLOSE", "장후 체크리스트 (20:40~23:05)"),
+        ("POSTCLOSE", "장후 체크리스트 (20:05~21:55)"),
     )
     for slot, heading in sections:
         lines.append(f"## {heading}")

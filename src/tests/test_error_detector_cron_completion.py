@@ -105,13 +105,13 @@ class TestCronCompletionDetector:
         logs_dir = tmp_path / "logs"
         logs_dir.mkdir(parents=True)
         (logs_dir / "update_kospi.log").write_text(
-            "[START] update_kospi target_date=2026-05-12 started_at=2026-05-12T23:05:03+0900\n",
+            "[START] update_kospi target_date=2026-05-12 started_at=2026-05-12T20:05:03+0900\n",
             encoding="utf-8",
         )
         monkeypatch.setattr(cc, "PROJECT_ROOT", tmp_path)
         monkeypatch.setattr(cc, "_today_kst", lambda: "2026-05-12")
 
-        with _mock_time(23, 16):
+        with _mock_time(20, 16):
             result = CronCompletionDetector().check()
 
         assert "update_kospi: no completion marker after window end" not in result.summary
@@ -251,7 +251,7 @@ class TestCronCompletionDetector:
         (logs_dir / "tuning_monitoring_postclose_cron.log").write_text(
             "\n".join(
                 [
-                    "[START] tuning_monitoring_postclose target_date=2026-05-26 started_at=2026-05-26T22:15:01+0900",
+                    "[START] tuning_monitoring_postclose target_date=2026-05-26 started_at=2026-05-26T20:10:01+0900",
                     "[FAIL] tuning_monitoring_postclose target_date=2026-05-26 reason=threshold_cycle_postclose_not_done",
                     "[ERROR] tuning monitoring postclose failed status=1",
                 ]
@@ -272,8 +272,8 @@ class TestCronCompletionDetector:
                     "id": "tuning_monitoring_postclose",
                     "log": "logs/tuning_monitoring_postclose_cron.log",
                     "status_artifact": "data/report/tuning_monitoring/status/tuning_monitoring_postclose_{date}.json",
-                    "window_start": (22, 15),
-                    "window_end": (22, 45),
+                    "window_start": (20, 10),
+                    "window_end": (21, 55),
                     "mode": "once",
                     "critical": False,
                 }
@@ -318,15 +318,15 @@ class TestCronCompletionDetector:
                     "id": "postclose_done_controller",
                     "log": "logs/postclose_done_controller_cron.log",
                     "status_artifact": "data/report/postclose_done_controller/postclose_done_controller_{date}.json",
-                    "window_start": (21, 40),
-                    "window_end": (22, 10),
+                    "window_start": (20, 10),
+                    "window_end": (21, 55),
                     "mode": "once",
                     "critical": True,
                 }
             ],
         )
 
-        with _mock_time(21, 45):
+        with _mock_time(20, 45):
             result = CronCompletionDetector().check()
 
         assert result.severity == "pass"
@@ -342,7 +342,7 @@ class TestCronCompletionDetector:
         logs_dir.mkdir(parents=True)
         status_dir.mkdir(parents=True)
         (logs_dir / "tuning_monitoring_postclose_cron.log").write_text(
-            "[DONE] tuning_monitoring_postclose target_date=2026-05-26 finished_at=2026-05-26T22:45:00+0900\n",
+            "[DONE] tuning_monitoring_postclose target_date=2026-05-26 finished_at=2026-05-26T21:45:00+0900\n",
             encoding="utf-8",
         )
         (status_dir / "tuning_monitoring_postclose_2026-05-26.json").write_text(
@@ -359,8 +359,8 @@ class TestCronCompletionDetector:
                     "id": "tuning_monitoring_postclose",
                     "log": "logs/tuning_monitoring_postclose_cron.log",
                     "status_artifact": "data/report/tuning_monitoring/status/tuning_monitoring_postclose_{date}.json",
-                    "window_start": (22, 15),
-                    "window_end": (22, 45),
+                    "window_start": (20, 10),
+                    "window_end": (21, 55),
                     "mode": "once",
                     "critical": False,
                 }

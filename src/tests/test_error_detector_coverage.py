@@ -56,7 +56,7 @@ def test_threshold_postclose_report_has_startup_grace_for_long_postclose_chain()
 
     assert artifact["one_shot"] is True
     assert artifact["critical"] is True
-    assert artifact["window_start"] == (16, 10)
+    assert artifact["window_start"] == (20, 10)
     assert artifact["window_grace_sec"] >= 1200
     assert artifact["suppress_missing_while_cron_in_progress"]["id"] == "threshold_cycle_postclose"
 

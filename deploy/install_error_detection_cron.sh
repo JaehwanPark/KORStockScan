@@ -15,9 +15,9 @@ if grep -q "run_error_detection" "$TMP_CRON"; then
 fi
 
 cat >> "$TMP_CRON" <<EOF
-*/5 * * * * bash $PROJECT_DIR/deploy/run_error_detection.sh full >> $PROJECT_DIR/logs/run_error_detection_cron.log 2>&1 # ERROR_DETECTION_FULL
+*/5 7-21 * * 1-5 bash $PROJECT_DIR/deploy/run_error_detection.sh full >> $PROJECT_DIR/logs/run_error_detection_cron.log 2>&1 # ERROR_DETECTION_FULL
 EOF
 
 crontab "$TMP_CRON"
-echo "[INSTALL] error detection cron installed: */5 * * * *"
+echo "[INSTALL] error detection cron installed: */5 7-21 * * 1-5"
 crontab -l | grep run_error_detection
