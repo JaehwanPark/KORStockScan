@@ -59,23 +59,38 @@
   - 근거: `src.engine.monitoring.rising_missed_intraday_feedback --target-date YYYY-MM-DD --print-summary` producer와 5분 주기 wrapper `deploy/run_rising_missed_intraday_feedback.sh`를 추가했고, `deploy/install_stage2_ops_cron.sh`에 NXT 포함 `08:00~19:55` `RISING_MISSED_INTRADAY_FEEDBACK_5MIN` marker를 추가했다. `rising_missed_scout_workorder`는 `data/report/rising_missed_intraday_feedback/rising_missed_intraday_feedback_YYYY-MM-DD.json` summary를 읽어 `rising_missed_initial_quality_feedback_loop` source-only order로 전달한다.
   - 검증: targeted pytest, py_compile, parser validation, wrapper dry-run, `git diff --check` 결과를 본 작업 종료 보고에 기록한다.
 
-- [ ] `[RuntimeEnvIntradayObserve0702] 전일 selected runtime family 장중 provenance 및 rollback guard 확인` (`Due: 2026-07-02`, `Slot: INTRADAY`, `TimeWindow: 09:05~09:20`, `Track: RuntimeStability`)
+- [x] `[RuntimeEnvIntradayObserve0702] 전일 selected runtime family 장중 provenance 및 rollback guard 확인` (`Due: 2026-07-02`, `Slot: INTRADAY`, `TimeWindow: 09:05~09:20`, `Track: RuntimeStability`)
   - Source: [threshold_cycle_ev_2026-07-01.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-07-01.json)
   - 판정 기준: selected_families=soft_stop_whipsaw_confirmation, score65_74_recovery_probe, scalping_scanner_real_source_guard_runtime, score65_74_recovery_probe_strong_micro_override_runtime, entry_price_gap_profile_runtime, profit_stagnation_exit_runtime, latency_spread_relief_real_operator_override, quote_consistency_normalization, scalp_sim_candidate_window_expansion, scalp_sim_ai_budget_manager, ai_watching_score_smoothing_report_only, weak_pullback_entry_block_runtime, early_accel_recheck_runtime, real_pyramid_scale_in_quality_guard_runtime, sell_side_open_time_block_runtime, pre_submit_liquidity_relief_runtime, weak_context_late_entry_guard_runtime, persistent_operator_overrides_2026_06_26가 runtime event provenance에 찍히는지 확인한다.
   - 금지: 장중 관찰 결과로 runtime threshold mutation을 수행하지 않는다.
   - 다음 액션: provenance present/missing, rollback guard breach 여부를 분리 기록한다.
+  - 실행 결과: `provenance_partially_present_no_rollback_breach`.
+  - 근거: [threshold_runtime_env_2026-07-02.json](/home/ubuntu/KORStockScan/data/threshold_cycle/runtime_env/threshold_runtime_env_2026-07-02.json) generated_at=`2026-07-02T07:35:01+09:00`, selected_families=`22`; [threshold_runtime_env_verify_2026-07-02.json](/home/ubuntu/KORStockScan/data/threshold_cycle/runtime_env/threshold_runtime_env_verify_2026-07-02.json) status=`pass`.
+  - 이벤트 대조: [threshold_events_2026-07-02.jsonl](/home/ubuntu/KORStockScan/data/threshold_cycle/threshold_events_2026-07-02.jsonl) 및 [pipeline_events_2026-07-02.jsonl](/home/ubuntu/KORStockScan/data/pipeline_events/pipeline_events_2026-07-02.jsonl) 스트리밍 집계에서 `score65_74_recovery_probe` total=`324`, `scalp_sim_ai_budget_manager`=`470`, `lifecycle_decision_matrix_runtime`=`47`, `sell_side_open_time_block_runtime`=`414`, `weak_context_late_entry_guard_runtime`=`2`, `entry_cancel_wait_runtime`=`163` 확인. [observation_source_quality_audit_2026-07-02.json](/home/ubuntu/KORStockScan/data/report/observation_source_quality_audit/observation_source_quality_audit_2026-07-02.json)은 `scalping_scanner_real_source_guard_block`=`2111`도 관찰했다.
+  - missing/natural no-match: 일부 selected family는 장중 자연 조건 미발생 또는 exact family tag 미기록으로 event count=`0`이었다. 이는 runtime env verify 실패나 rollback breach로 보지 않고 장후 post-apply attribution에서 재확인한다.
+  - rollback guard: threshold event 텍스트 내 `safety_revert|rollback|severe_loss|order_provenance_breach|provenance_breach` keyword count=`0`. 장중 threshold mutation, provider/bot/cap/order guard 변경 없음.
 
-- [ ] `[SimProbeIntradayCoverage0702] sim/probe 관찰축 actual_order_submitted=false 및 source-quality 확인` (`Due: 2026-07-02`, `Slot: INTRADAY`, `TimeWindow: 09:35~09:50`, `Track: ScalpingLogic`)
+- [x] `[SimProbeIntradayCoverage0702] sim/probe 관찰축 actual_order_submitted=false 및 source-quality 확인` (`Due: 2026-07-02`, `Slot: INTRADAY`, `TimeWindow: 09:35~09:50`, `Track: ScalpingLogic`)
   - Source: [threshold_cycle_ev_2026-07-01.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-07-01.json)
   - 판정 기준: sim/probe 표본이 real execution과 분리되고 `actual_order_submitted=false` provenance가 유지되는지 확인한다.
   - 금지: sim/probe EV를 broker execution 품질이나 실주문 전환 근거로 단독 사용하지 않는다.
   - 다음 액션: source-quality split, active state 복원, open/closed count를 같이 기록한다.
+  - 실행 결과: `sim_probe_real_execution_separated_with_source_quality_warning`.
+  - 근거: [threshold_events_2026-07-02.jsonl](/home/ubuntu/KORStockScan/data/threshold_cycle/threshold_events_2026-07-02.jsonl) sim/probe/counterfactual/virtual token 집계는 events=`4673`, actual_order_submitted=false=`4665`, true=`0`, missing=`8`; [pipeline_events_2026-07-02.jsonl](/home/ubuntu/KORStockScan/data/pipeline_events/pipeline_events_2026-07-02.jsonl) 대응 집계는 events=`5181`, false=`4783`, true=`0`, missing=`398`.
+  - active 관찰축: `scalp_sim_ai_holding_live_call`=`453`, `scalp_sim_panic_scale_in_blocked`=`1027`, `scalp_sim_candidate_window_discarded`=`182`, `score65_74_recovery_probe_blocked`=`154`, `scalp_sim_partial_sell_order_assumed_filled`=`128` 등 sim/probe 이벤트가 real order와 분리되어 기록됐다.
+  - source-quality split: [observation_source_quality_audit_2026-07-02.json](/home/ubuntu/KORStockScan/data/report/observation_source_quality_audit/observation_source_quality_audit_2026-07-02.json) status=`warning`, hard_blocking_contract_gap_count=`0`, raw_row_exclusion_applied=`true`; missing provenance rows는 장후 source-quality/workorder handoff에서 재확인한다.
+  - 운영 경계: sim/probe EV를 broker execution 품질, 실주문 전환, threshold/provider/bot/cap 변경 근거로 사용하지 않았다.
 
-- [ ] `[IntradaySourceQualityGateCheck0702] 장중 raw source-quality 결손/unknown 조기 경보 및 튜닝 입력 차단 준비 확인` (`Due: 2026-07-02`, `Slot: INTRADAY`, `TimeWindow: 14:20~14:35`, `Track: RuntimeStability`)
+- [x] `[IntradaySourceQualityGateCheck0702] 장중 raw source-quality 결손/unknown 조기 경보 및 튜닝 입력 차단 준비 확인` (`Due: 2026-07-02`, `Slot: INTRADAY`, `TimeWindow: 14:20~14:35`, `Track: RuntimeStability`)
   - Source: [pipeline_events_2026-07-02.jsonl](/home/ubuntu/KORStockScan/data/pipeline_events/pipeline_events_2026-07-02.jsonl), [threshold_events_2026-07-02.jsonl](/home/ubuntu/KORStockScan/data/threshold_cycle/threshold_events_2026-07-02.jsonl), [observation_source_quality_audit_2026-07-02.json](/home/ubuntu/KORStockScan/data/report/observation_source_quality_audit/observation_source_quality_audit_2026-07-02.json), [observation_source_quality_audit.py](/home/ubuntu/KORStockScan/src/engine/observation_source_quality_audit.py)
   - 판정 기준: 장중 `PYTHONPATH=. .venv/bin/python -m src.engine.observation_source_quality_audit --target-date 2026-07-02 --write` 재감사를 실행하거나 최신 산출물을 확인해 `hard_blocking_contract_gap_count`, `hard_blocking_excluded_row_count`, `tuning_input_allowed`, `raw_row_exclusion_applied`, `unknown_token_stage_count`, `review_warning_count`를 기록한다.
   - 금지: hard contract gap 또는 unknown-token warning을 답변에만 남기지 않는다. 결손 row/window는 튜닝 입력 제외 또는 workorder handoff 대상으로 고정하고, broker/order/provider/cap/bot/threshold 변경 근거로 사용하지 않는다.
   - 다음 액션: `source_quality_clean_intraday`, `defective_rows_excluded`, `hard_block_requires_producer_fix`, `unknown_warning_workorder_required`, `audit_missing_or_stale` 중 하나로 닫는다. hard gap/unknown warning이 있으면 장후 `PostcloseSourceQualityGateReview`와 `CodeImprovementWorkorderReview`에서 누락 없이 재확인한다.
+  - 실행 결과: `defective_rows_excluded`.
+  - 실행 명령: `PYTHONPATH=. .venv/bin/python -m src.engine.observation_source_quality_audit --target-date 2026-07-02 --write`.
+  - 근거: [observation_source_quality_audit_2026-07-02.json](/home/ubuntu/KORStockScan/data/report/observation_source_quality_audit/observation_source_quality_audit_2026-07-02.json) generated_at=`2026-07-02T16:19:02+09:00`, status=`warning`, event_count=`105490`, stage_count=`159`, hard_blocking_contract_gap_count=`0`, hard_blocking_excluded_row_count=`0`, tuning_input_allowed=`true`, raw_row_exclusion_applied=`true`, unknown_token_stage_count=`1`, review_warning_count=`1`, review_warning_stages=`sell_order_sent`.
+  - row exclusion: raw_row_exclusion excluded_row_count=`352`, stage_counts=`scalp_entry_action_decision_snapshot:342`, `scale_in_price_resolved:10`; manifest=[manifest.json](/home/ubuntu/KORStockScan/data/source_quality/raw_row_exclusion/2026-07-02_20260702T161736829795+0900/manifest.json).
+  - 다음 장후 확인: unknown-token/review warning은 `PostcloseSourceQualityGateReview0702`와 `CodeImprovementWorkorderReview0702`에서 workorder handoff 누락 여부를 재확인한다. broker/order/provider/cap/bot/threshold 변경은 수행하지 않았다.
 
 ## 장후 체크리스트 (20:40~23:05)
 
@@ -124,3 +139,18 @@
 ```bash
 PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTHONPATH=. .venv/bin/python -m src.engine.sync_github_project_calendar
 ```
+
+<!-- AUTO_SERVER_COMPARISON_START -->
+### 본서버 vs songstockscan 자동 비교 (`2026-07-02 15:46:04`)
+
+- 기준: `profit-derived metrics are excluded by default because fallback-normalized values such as NULL -> 0 can distort comparison`
+- 상세 리포트: `data/report/server_comparison/server_comparison_2026-07-02.md`
+- `Trade Review`: status=`remote_error`, differing_safe_metrics=`0`
+  - safe 기준 차이 없음
+- `Performance Tuning`: status=`remote_error`, differing_safe_metrics=`0`
+  - safe 기준 차이 없음
+- `Post Sell Feedback`: status=`remote_error`, differing_safe_metrics=`0`
+  - safe 기준 차이 없음
+- `Entry Pipeline Flow`: status=`remote_error`, differing_safe_metrics=`0`
+  - safe 기준 차이 없음
+<!-- AUTO_SERVER_COMPARISON_END -->
