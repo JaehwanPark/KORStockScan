@@ -147,6 +147,163 @@ def _update_holding_record(item: dict[str, Any], row: dict[str, Any]) -> None:
         )
 
 
+def _regression_label(item: dict[str, Any]) -> str:
+    final_profit = item.get("final_profit_rate")
+    if final_profit is None:
+        return "first_touch_open_unresolved"
+    if final_profit > 0:
+        return "first_touch_recovered_profit"
+    return "first_touch_loss_or_flat"
+
+
+def _first_touch_shadow_decision(item: dict[str, Any]) -> dict[str, Any]:
+    submitted_count = _safe_int(item.get("avg_down_submitted_event_count"))
+    touch_ai = _safe_float(item.get("first_touch_ai_score"))
+    touch_peak = _safe_float(item.get("first_touch_peak_profit"))
+    blocker_counts = item.get("blocker_counts_before_first_touch")
+    blocker_counts = blocker_counts if isinstance(blocker_counts, dict) else {}
+    repeated_blocker_count = sum(_safe_int(value) for value in blocker_counts.values())
+    support_signals: list[str] = []
+    risk_signals: list[str] = []
+    if touch_peak is not None and touch_peak >= 0.30:
+        support_signals.append("prior_peak_recovery_ge_0_30")
+    if touch_ai is not None and touch_ai >= 70.0:
+        support_signals.append("ai_score_ge_70")
+    if repeated_blocker_count >= 8:
+        risk_signals.append("repeated_pre_touch_blockers_ge_8")
+    if touch_ai is not None and touch_ai < 60.0:
+        risk_signals.append("ai_score_lt_60")
+    if submitted_count > 1:
+        risk_signals.append("cap1_extra_avg_down_would_block")
+    cap1_decision = "cap1_not_applicable_no_submit"
+    if submitted_count == 1:
+        cap1_decision = "cap1_first_avg_down_allowed"
+    elif submitted_count > 1:
+        cap1_decision = "cap1_extra_avg_down_would_block"
+    return {
+        "first_touch_shadow_decision_authority": "source_only_no_runtime_effect",
+        "first_touch_shadow_cap1_decision": cap1_decision,
+        "first_touch_shadow_support_signals": support_signals,
+        "first_touch_shadow_risk_signals": risk_signals,
+        "first_touch_shadow_repeated_blocker_count": repeated_blocker_count,
+    }
+
+
+def _touch_reason(fields: dict[str, Any]) -> str | None:
+    return (
+        fields.get("gate_reason")
+        or fields.get("block_reason")
+        or fields.get("reason")
+        or fields.get("scale_in_gate_reason")
+        or fields.get("scale_in_blocker_reason")
+    )
+
+
+def _touch_feature(row: dict[str, Any]) -> dict[str, Any]:
+    fields = _fields(row)
+    return {
+        "first_touch_ts": row.get("emitted_at"),
+        "first_touch_stage": row.get("stage"),
+        "first_touch_profit_rate": _safe_float(fields.get("profit_rate")),
+        "first_touch_peak_profit": _safe_float(fields.get("peak_profit")),
+        "first_touch_ai_score": _safe_float(fields.get("current_ai_score") or fields.get("ai_score")),
+        "first_touch_gate_reason": _touch_reason(fields),
+        "first_touch_avgdown_decision_allowed": fields.get("first_touch_avgdown_decision_allowed"),
+        "first_touch_avgdown_decision_reason": fields.get("first_touch_avgdown_decision_reason"),
+        "first_touch_avgdown_support_signals": fields.get("first_touch_avgdown_support_signals"),
+        "first_touch_avgdown_risk_signals": fields.get("first_touch_avgdown_risk_signals"),
+        "first_touch_avgdown_repeated_blocker_count": _safe_int(
+            fields.get("first_touch_avgdown_repeated_blocker_count")
+        ),
+        "first_touch_avgdown_decision_authority": fields.get("first_touch_avgdown_decision_authority"),
+    }
+
+
+def _update_first_touch_regression(
+    item: dict[str, Any],
+    row: dict[str, Any],
+    blocker_counts: Counter[str],
+    blocker_reason_counts: Counter[str],
+) -> None:
+    fields = _fields(row)
+    stage = str(row.get("stage") or "")
+    is_first_touch_stage = (
+        "stop_line_touch_mandatory_avg_down" in stage
+        or stage == "stop_line_touch_first_touch_avgdown_decision_blocked"
+    )
+    if is_first_touch_stage and not item.get("first_touch_seen"):
+        item["first_touch_seen"] = True
+        item.update(_touch_feature(row))
+        item["blocker_counts_before_first_touch"] = dict(blocker_counts)
+        item["blocker_reason_counts_before_first_touch"] = dict(blocker_reason_counts)
+    if stage == "stop_line_touch_first_touch_avgdown_decision_blocked":
+        item["first_touch_avgdown_decision_blocked"] = True
+    if "stop_line_touch_mandatory_avg_down_submitted" in stage:
+        item["first_touch_avg_down_submitted"] = True
+        item["first_touch_submitted_ts"] = item.get("first_touch_submitted_ts") or row.get("emitted_at")
+        item["avg_down_submitted_event_count"] = _safe_int(item.get("avg_down_submitted_event_count")) + 1
+    if "stop_line_touch_mandatory_avg_down_not_eligible" in stage:
+        item["first_touch_not_eligible_seen"] = True
+        item["first_touch_not_eligible_reason"] = item.get("first_touch_not_eligible_reason") or _touch_reason(fields)
+    if stage.startswith("blocked_") and not item.get("first_touch_seen"):
+        blocker_counts[stage] += 1
+        reason = _touch_reason(fields)
+        if reason:
+            blocker_reason_counts[str(reason)] += 1
+    if stage == "sell_completed":
+        profit_rate = _safe_float(fields.get("profit_rate"))
+        if profit_rate is not None:
+            item["final_profit_rate"] = profit_rate
+            item["final_stage"] = stage
+            item["final_ts"] = row.get("emitted_at")
+    avg_down_count = _safe_int(fields.get("avg_down_count"))
+    if avg_down_count:
+        item["max_avg_down_count"] = max(_safe_int(item.get("max_avg_down_count")), avg_down_count)
+
+
+def _build_first_touch_regression_rows(
+    forced: dict[str, dict[str, Any]],
+    pipeline_path: Path,
+) -> list[dict[str, Any]]:
+    candidates: dict[str, dict[str, Any]] = {
+        record_id: {
+            **entry,
+            "record_id": record_id,
+            "first_touch_seen": False,
+            "first_touch_avg_down_submitted": False,
+            "first_touch_not_eligible_seen": False,
+            "max_avg_down_count": 0,
+            "avg_down_submitted_event_count": 0,
+        }
+        for record_id, entry in forced.items()
+    }
+    blocker_counts: dict[str, Counter[str]] = {record_id: Counter() for record_id in candidates}
+    blocker_reason_counts: dict[str, Counter[str]] = {record_id: Counter() for record_id in candidates}
+    for row in iter_jsonl(pipeline_path):
+        record_id = str(row.get("record_id") or "").strip()
+        if record_id not in candidates:
+            continue
+        _update_first_touch_regression(
+            candidates[record_id],
+            row,
+            blocker_counts[record_id],
+            blocker_reason_counts[record_id],
+        )
+    rows: list[dict[str, Any]] = []
+    for item in candidates.values():
+        if not item.get("first_touch_seen"):
+            continue
+        item["first_touch_regression_label"] = _regression_label(item)
+        item.update(_first_touch_shadow_decision(item))
+        item["decision_authority"] = "source_only_first_touch_regression_table"
+        item["runtime_effect"] = False
+        item["allowed_runtime_apply"] = False
+        item["forbidden_uses"] = FORBIDDEN_USES
+        rows.append(item)
+    rows.sort(key=lambda item: (str(item.get("first_touch_ts") or ""), str(item.get("record_id") or "")))
+    return rows
+
+
 def build_report(
     target_date: str,
     *,
@@ -203,7 +360,11 @@ def build_report(
         rows.append(item)
 
     rows.sort(key=lambda item: (str(item.get("first_avg_down_ge2_ts") or ""), str(item.get("record_id") or "")))
+    first_touch_rows = _build_first_touch_regression_rows(forced, pipeline_path)
     label_counts = Counter(str(item.get("feedback_label") or "unknown") for item in rows)
+    first_touch_label_counts = Counter(
+        str(item.get("first_touch_regression_label") or "unknown") for item in first_touch_rows
+    )
     initial_fail_count = sum(
         count
         for label, count in label_counts.items()
@@ -279,6 +440,15 @@ def build_report(
                 "primary_decision_metric": "rising_missed_avg_down_ge2_count",
                 "source_quality_gate": "record_id_joined_forced_rising_missed_entry_and_holding_avg_down_snapshot",
                 "forbidden_uses": FORBIDDEN_USES,
+            },
+            "rising_missed_first_touch_regression": {
+                "metric_role": "source_only_first_touch_regression",
+                "decision_authority": "source_only_first_touch_regression_table",
+                "window_policy": "same_day_intraday_pipeline_events_continuously_updated",
+                "sample_floor": "1_rising_missed_forced_entry_with_first_stop_line_touch",
+                "primary_decision_metric": "first_touch_regression_label_counts",
+                "source_quality_gate": "record_id_joined_forced_rising_missed_entry_and_first_stop_line_touch_event",
+                "forbidden_uses": FORBIDDEN_USES,
             }
         },
         "source_paths": {"pipeline_events": str(resolved_pipeline_path)},
@@ -290,6 +460,23 @@ def build_report(
             "forced_rising_missed_record_count": len(forced),
             "holding_record_count": len(holding_by_record),
             "rising_missed_avg_down_ge2_count": len(rows),
+            "first_touch_regression_record_count": len(first_touch_rows),
+            "first_touch_avg_down_submitted_count": sum(
+                1 for item in first_touch_rows if item.get("first_touch_avg_down_submitted")
+            ),
+            "first_touch_not_eligible_count": sum(
+                1 for item in first_touch_rows if item.get("first_touch_not_eligible_seen")
+            ),
+            "first_touch_avgdown_decision_blocked_count": sum(
+                1 for item in first_touch_rows if item.get("first_touch_avgdown_decision_blocked")
+            ),
+            "first_touch_closed_count": sum(1 for item in first_touch_rows if item.get("final_profit_rate") is not None),
+            "first_touch_profitable_count": first_touch_label_counts.get("first_touch_recovered_profit", 0),
+            "first_touch_loss_or_flat_count": first_touch_label_counts.get("first_touch_loss_or_flat", 0),
+            "first_touch_regression_label_counts": [
+                {"first_touch_regression_label": key, "count": value}
+                for key, value in first_touch_label_counts.most_common()
+            ],
             "initial_quality_fail_count": initial_fail_count,
             "scale_in_rescue_warning_count": label_counts.get("rising_missed_scale_in_rescue_warning", 0),
             "feedback_label_counts": [
@@ -298,6 +485,7 @@ def build_report(
             "code_improvement_order_count": len(code_improvement_orders),
         },
         "records": rows[:100],
+        "first_touch_regression_rows": first_touch_rows[:200],
         "code_improvement_orders": code_improvement_orders,
     }
 
@@ -321,13 +509,38 @@ def write_outputs(report: dict[str, Any], *, output_json: Path, output_md: Path)
         f"- forced_rising_missed_record_count: {summary.get('forced_rising_missed_record_count')}",
         f"- holding_record_count: {summary.get('holding_record_count')}",
         f"- rising_missed_avg_down_ge2_count: {summary.get('rising_missed_avg_down_ge2_count')}",
+        f"- first_touch_regression_record_count: {summary.get('first_touch_regression_record_count')}",
+        f"- first_touch_avg_down_submitted_count: {summary.get('first_touch_avg_down_submitted_count')}",
+        f"- first_touch_avgdown_decision_blocked_count: {summary.get('first_touch_avgdown_decision_blocked_count')}",
+        f"- first_touch_closed_count: {summary.get('first_touch_closed_count')}",
+        f"- first_touch_profitable_count: {summary.get('first_touch_profitable_count')}",
+        f"- first_touch_loss_or_flat_count: {summary.get('first_touch_loss_or_flat_count')}",
         f"- initial_quality_fail_count: {summary.get('initial_quality_fail_count')}",
         f"- scale_in_rescue_warning_count: {summary.get('scale_in_rescue_warning_count')}",
         f"- code_improvement_order_count: {summary.get('code_improvement_order_count')}",
         "",
-        "## Records",
+        "## First Touch Regression",
         "",
     ]
+    for item in report.get("first_touch_regression_rows") or []:
+        blocker_counts = item.get("blocker_counts_before_first_touch") or {}
+        top_blockers = ",".join(f"{key}={value}" for key, value in list(blocker_counts.items())[:4])
+        display_item = {
+            **item,
+            "final_profit_rate": item.get("final_profit_rate"),
+            "first_touch_shadow_cap1_decision": item.get("first_touch_shadow_cap1_decision", "-"),
+            "first_touch_avgdown_decision_reason": item.get("first_touch_avgdown_decision_reason") or "-",
+            "top_blockers": top_blockers,
+        }
+        lines.append(
+            "- record_id={record_id} code={stock_code} name={stock_name} label={first_touch_regression_label} "
+            "submitted={first_touch_avg_down_submitted} touch_profit={first_touch_profit_rate} "
+            "touch_peak={first_touch_peak_profit} touch_ai={first_touch_ai_score} "
+            "final_profit={final_profit_rate} submitted_count={avg_down_submitted_event_count} "
+            "runtime_decision={first_touch_avgdown_decision_reason} shadow_cap1={first_touch_shadow_cap1_decision} "
+            "max_avg_down={max_avg_down_count} blockers={top_blockers}".format(**display_item)
+        )
+    lines.extend(["", "## Records", ""])
     for item in report.get("records") or []:
         lines.append(
             "- record_id={record_id} code={stock_code} name={stock_name} label={feedback_label} "

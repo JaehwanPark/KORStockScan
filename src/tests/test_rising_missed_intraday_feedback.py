@@ -129,6 +129,22 @@ def test_write_outputs_renders_json_and_markdown(tmp_path):
                 "latest_gate_reason": "scale_in_cooldown",
             }
         ],
+        "first_touch_regression_rows": [
+            {
+                "record_id": "101",
+                "stock_code": "000101",
+                "stock_name": "failer",
+                "first_touch_regression_label": "first_touch_loss_or_flat",
+                "first_touch_avg_down_submitted": True,
+                "first_touch_profit_rate": -3.1,
+                "first_touch_peak_profit": -0.2,
+                "first_touch_ai_score": 66.0,
+                "final_profit_rate": -2.1,
+                "avg_down_submitted_event_count": 2,
+                "max_avg_down_count": 2,
+                "blocker_counts_before_first_touch": {"blocked_strength_momentum": 1},
+            }
+        ],
     }
     output_json = tmp_path / "report.json"
     output_md = tmp_path / "report.md"
@@ -138,6 +154,9 @@ def test_write_outputs_renders_json_and_markdown(tmp_path):
     assert json.loads(output_json.read_text(encoding="utf-8"))["target_date"] == "2026-07-02"
     markdown = output_md.read_text(encoding="utf-8")
     assert "rising_missed_avg_down_ge2_count: 1" in markdown
+    assert "## First Touch Regression" in markdown
+    assert "submitted_count=2" in markdown
+    assert "shadow_cap1=-" in markdown
     assert "rising_missed_initial_quality_fail" in markdown
 
 
@@ -181,3 +200,172 @@ def test_profit_recovered_sell_order_is_rescue_warning_not_initial_fail(tmp_path
     assert report["summary"]["initial_quality_fail_count"] == 0
     assert report["summary"]["scale_in_rescue_warning_count"] == 1
     assert report["records"][0]["feedback_label"] == "rising_missed_scale_in_rescue_warning"
+
+
+def test_build_report_adds_continuously_updated_first_touch_regression_rows(tmp_path):
+    pipeline_path = tmp_path / "pipeline_events_2026-07-03.jsonl"
+    rows = [
+        _event(
+            401,
+            "000401",
+            "winner",
+            "rising_missed_one_share_entry",
+            {
+                "forced_entry_reason": "rising_missed_one_share_entry",
+                "source_signature": "OPEN_TOP,PRICE_JUMP_START",
+            },
+            emitted_at="2026-07-03T08:03:00",
+        ),
+        _event(
+            401,
+            "000401",
+            "winner",
+            "blocked_strength_momentum",
+            {"block_reason": "below_strength_base"},
+            emitted_at="2026-07-03T08:04:00",
+        ),
+        _event(
+            401,
+            "000401",
+            "winner",
+            "stop_line_touch_mandatory_avg_down_candidate",
+            {"profit_rate": "-3.42", "peak_profit": "-0.23", "current_ai_score": "65", "gate_reason": "ok"},
+            emitted_at="2026-07-03T08:06:00",
+            pipeline="HOLDING_PIPELINE",
+        ),
+        _event(
+            401,
+            "000401",
+            "winner",
+            "stop_line_touch_mandatory_avg_down_submitted",
+            {"profit_rate": "-3.42", "peak_profit": "-0.23", "current_ai_score": "65", "gate_reason": "ok"},
+            emitted_at="2026-07-03T08:06:01",
+            pipeline="HOLDING_PIPELINE",
+        ),
+        _event(
+            401,
+            "000401",
+            "winner",
+            "sell_completed",
+            {"profit_rate": "+1.09"},
+            emitted_at="2026-07-03T08:07:00",
+            pipeline="HOLDING_PIPELINE",
+        ),
+        _event(
+            402,
+            "000402",
+            "loser",
+            "rising_missed_one_share_entry",
+            {"forced_entry_reason": "rising_missed_one_share_entry"},
+            emitted_at="2026-07-03T08:03:10",
+        ),
+        _event(
+            402,
+            "000402",
+            "loser",
+            "blocked_strength_momentum",
+            {"block_reason": "insufficient_history"},
+            emitted_at="2026-07-03T08:04:10",
+        ),
+        _event(
+            402,
+            "000402",
+            "loser",
+            "stop_line_touch_mandatory_avg_down_candidate",
+            {"profit_rate": "-3.33", "peak_profit": "-0.23", "current_ai_score": "67", "gate_reason": "ok"},
+            emitted_at="2026-07-03T08:17:00",
+            pipeline="HOLDING_PIPELINE",
+        ),
+        _event(
+            402,
+            "000402",
+            "loser",
+            "stop_line_touch_mandatory_avg_down_submitted",
+            {"profit_rate": "-3.33", "peak_profit": "-0.23", "current_ai_score": "67", "gate_reason": "ok"},
+            emitted_at="2026-07-03T08:17:01",
+            pipeline="HOLDING_PIPELINE",
+        ),
+        _event(
+            402,
+            "000402",
+            "loser",
+            "stop_line_touch_mandatory_avg_down_submitted",
+            {"profit_rate": "-3.05", "peak_profit": "-0.23", "current_ai_score": "67", "gate_reason": "ok"},
+            emitted_at="2026-07-03T08:31:00",
+            pipeline="HOLDING_PIPELINE",
+        ),
+        _event(
+            402,
+            "000402",
+            "loser",
+            "sell_completed",
+            {"profit_rate": "-4.64"},
+            emitted_at="2026-07-03T08:34:00",
+            pipeline="HOLDING_PIPELINE",
+        ),
+        _event(
+            403,
+            "000403",
+            "blocked",
+            "rising_missed_one_share_entry",
+            {"forced_entry_reason": "rising_missed_one_share_entry"},
+            emitted_at="2026-07-03T08:03:20",
+        ),
+        _event(
+            403,
+            "000403",
+            "blocked",
+            "blocked_strength_momentum",
+            {"block_reason": "below_strength_base"},
+            emitted_at="2026-07-03T08:04:20",
+        ),
+        _event(
+            403,
+            "000403",
+            "blocked",
+            "stop_line_touch_first_touch_avgdown_decision_blocked",
+            {
+                "profit_rate": "-3.89",
+                "peak_profit": "-0.10",
+                "current_ai_score": "66",
+                "gate_reason": "repeated_blockers_without_recovery",
+                "first_touch_avgdown_decision_allowed": False,
+                "first_touch_avgdown_decision_reason": "repeated_blockers_without_recovery",
+                "first_touch_avgdown_support_signals": "quote_spread_present",
+                "first_touch_avgdown_risk_signals": "repeated_blockers_without_support",
+                "first_touch_avgdown_repeated_blocker_count": 11,
+                "first_touch_avgdown_decision_authority": "real_scalping_first_touch_avgdown_decision_gate",
+            },
+            emitted_at="2026-07-03T08:20:00",
+            pipeline="HOLDING_PIPELINE",
+        ),
+    ]
+    pipeline_path.write_text("\n".join(json.dumps(row) for row in rows), encoding="utf-8")
+
+    report = mod.build_report("2026-07-03", pipeline_path=pipeline_path, generated_at="fixed")
+
+    assert report["summary"]["first_touch_regression_record_count"] == 3
+    assert report["summary"]["first_touch_avg_down_submitted_count"] == 2
+    assert report["summary"]["first_touch_avgdown_decision_blocked_count"] == 1
+    assert report["summary"]["first_touch_closed_count"] == 2
+    assert report["summary"]["first_touch_profitable_count"] == 1
+    assert report["summary"]["first_touch_loss_or_flat_count"] == 1
+    rows_by_record = {row["record_id"]: row for row in report["first_touch_regression_rows"]}
+    assert rows_by_record["401"]["first_touch_regression_label"] == "first_touch_recovered_profit"
+    assert rows_by_record["401"]["blocker_counts_before_first_touch"] == {"blocked_strength_momentum": 1}
+    assert rows_by_record["401"]["first_touch_shadow_cap1_decision"] == "cap1_first_avg_down_allowed"
+    assert rows_by_record["402"]["first_touch_regression_label"] == "first_touch_loss_or_flat"
+    assert rows_by_record["402"]["avg_down_submitted_event_count"] == 2
+    assert rows_by_record["402"]["first_touch_shadow_cap1_decision"] == "cap1_extra_avg_down_would_block"
+    assert "cap1_extra_avg_down_would_block" in rows_by_record["402"]["first_touch_shadow_risk_signals"]
+    assert rows_by_record["403"]["first_touch_regression_label"] == "first_touch_open_unresolved"
+    assert rows_by_record["403"]["first_touch_avgdown_decision_blocked"] is True
+    assert rows_by_record["403"]["first_touch_avgdown_decision_allowed"] is False
+    assert rows_by_record["403"]["first_touch_avgdown_decision_reason"] == "repeated_blockers_without_recovery"
+    assert rows_by_record["403"]["first_touch_avgdown_decision_authority"] == (
+        "real_scalping_first_touch_avgdown_decision_gate"
+    )
+    assert (
+        report["metric_contracts"]["rising_missed_first_touch_regression"]["decision_authority"]
+        == "source_only_first_touch_regression_table"
+    )

@@ -61,6 +61,7 @@ from src.engine.scalping.rising_missed_one_share_entry import (
     BLOCK_NOT_CANDIDATE as RISING_MISSED_BLOCK_NOT_CANDIDATE,
     BLOCK_OPEN_PENDING as RISING_MISSED_BLOCK_OPEN_PENDING,
     BLOCK_PRICE_ABOVE_CAP as RISING_MISSED_BLOCK_PRICE_ABOVE_CAP,
+    BLOCK_STRENGTH_MOMENTUM_PRECHECK as RISING_MISSED_BLOCK_STRENGTH_MOMENTUM_PRECHECK,
     BLOCK_UPPER_LIMIT_PROXIMITY as RISING_MISSED_BLOCK_UPPER_LIMIT_PROXIMITY,
     DEFAULT_RISING_MISSED_UPPER_LIMIT_EXCLUDE_PCT,
     DEFAULT_UPPER_LIMIT_PROXIMITY_BLOCK_PCT,
@@ -507,6 +508,14 @@ DUAL_PERSONA_ENGINE = None
 BIG_BITE_STATE = {}
 _SAME_SYMBOL_SOFT_STOP_TS: dict[str, float] = {}
 _SCALP_SAME_SYMBOL_LOSS_REENTRY_COOLDOWNS: dict[str, dict] = {}
+_RISING_MISSED_SAME_DAY_REENTRY_RISK: dict[str, dict] = {}
+_RISING_MISSED_REENTRY_RISK_EVENT_CACHE: dict[str, Any] = {
+    "date": "",
+    "path": "",
+    "mtime_ns": 0,
+    "size": 0,
+    "rows_by_code": {},
+}
 _SCALP_LOSS_REENTRY_EVENT_CACHE: dict[str, Any] = {
     "date": "",
     "path": "",
@@ -2247,7 +2256,10 @@ def _evaluate_stop_line_touch_mandatory_avg_down(
             "stop_line_pct": stop_pct,
         }
 
-    max_per_position = max(0, _rule_int("SCALP_LATE_LOSS_AVG_DOWN_MAX_PER_POSITION", 2))
+    configured_max_per_position = max(0, _rule_int("SCALP_LATE_LOSS_AVG_DOWN_MAX_PER_POSITION", 2))
+    # Stop-line-touch mandatory AVG_DOWN is a one-shot defensive intercept for all SCALPING positions.
+    # The broader late-loss retry path keeps its configured max in _evaluate_late_loss_avg_down_retry.
+    max_per_position = min(configured_max_per_position, 1) if configured_max_per_position > 0 else 0
     used_count = _defensive_avg_down_used_count(stock)
     if max_per_position <= 0:
         return {"should_retry": False, "reason": "max_per_position_zero"}
@@ -2257,6 +2269,7 @@ def _evaluate_stop_line_touch_mandatory_avg_down(
             "reason": "already_used",
             "used_count": used_count,
             "max_per_position": max_per_position,
+            "configured_max_per_position": configured_max_per_position,
         }
 
     return {
@@ -2270,6 +2283,7 @@ def _evaluate_stop_line_touch_mandatory_avg_down(
         "held_sec": held_sec,
         "used_count": used_count,
         "max_per_position": max_per_position,
+        "configured_max_per_position": configured_max_per_position,
         "action": {
             "should_add": True,
             "add_type": "AVG_DOWN",
@@ -2283,6 +2297,226 @@ def _evaluate_stop_line_touch_mandatory_avg_down(
             "stop_line_source": rule,
         },
     }
+
+
+def _first_text_field(*sources, keys: tuple[str, ...] = ()) -> str:
+    for source in sources:
+        if not isinstance(source, dict):
+            continue
+        for key in keys:
+            value = source.get(key)
+            if value in (None, ""):
+                continue
+            return str(value).strip()
+    return ""
+
+
+def _stop_line_first_touch_context_sources(
+    stock: dict | None,
+    ws_data: dict | None,
+    context_fields: dict | None,
+) -> list[dict]:
+    sources: list[dict] = []
+    for source in (context_fields, ws_data, (stock or {}).get("last_reversal_features"), stock):
+        if isinstance(source, dict):
+            sources.append(source)
+    pre_ai_context = (stock or {}).get("scalp_pre_ai_gate_context")
+    if isinstance(pre_ai_context, dict):
+        for key in ("strength_momentum", "vpw", "liquidity", "overbought"):
+            value = pre_ai_context.get(key)
+            if isinstance(value, dict):
+                sources.append(value)
+    source_quality_fields = (stock or {}).get("last_watching_ai_source_quality_fields")
+    if isinstance(source_quality_fields, dict):
+        sources.append(source_quality_fields)
+    return sources
+
+
+def _stop_line_first_touch_signal_weak(value: str) -> bool:
+    normalized = str(value or "").strip().lower()
+    return any(token in normalized for token in ("weak", "below", "block", "fail", "risk"))
+
+
+def _evaluate_first_touch_avgdown_decision_gate(
+    *,
+    stock: dict | None,
+    ws_data: dict | None,
+    context_fields: dict | None,
+    current_ai_score: float,
+    peak_profit: float,
+    profit_rate: float,
+    now_ts: float,
+) -> dict:
+    enabled = _rule_bool("SCALP_FIRST_TOUCH_AVGDOWN_DECISION_GATE_ENABLED", True)
+    fields = {
+        "first_touch_avgdown_decision_enabled": enabled,
+        "first_touch_avgdown_decision_authority": "real_scalping_first_touch_avgdown_decision_gate",
+        "first_touch_avgdown_decision_version": "first_touch_avgdown_composite_v1",
+        "first_touch_avgdown_runtime_effect": True,
+    }
+    if not enabled:
+        return {"allowed": True, "reason": "disabled", "fields": fields}
+
+    recent_counts = _recent_trade_quality_block_counts(stock, now_ts=now_ts)
+    repeated_blockers = _safe_int(recent_counts.get("total_count"), 0)
+    sources = _stop_line_first_touch_context_sources(stock, ws_data, context_fields)
+    ai_score = _safe_float(current_ai_score, 0.0)
+    prior_peak = _safe_float(peak_profit, 0.0)
+    current_profit = _safe_float(profit_rate, 0.0)
+
+    strength_state = _first_text_field(
+        *sources,
+        keys=(
+            "strength_momentum_risk_state",
+            "entry_strength_momentum_risk_state",
+            "risk_state",
+            "strength_momentum_state",
+        ),
+    )
+    strength_reason = _first_text_field(
+        *sources,
+        keys=("strength_momentum_reason", "entry_strength_momentum_reason", "reason"),
+    )
+    current_vpw = _first_float_field(*sources, key="current_vpw", aliases=("vpw",), default=0.0)
+    base_vpw = _first_float_field(*sources, key="base_vpw", aliases=("reference_vpw",), default=0.0)
+    vpw_delta = _first_float_field(*sources, key="vpw_delta", aliases=("current_vpw_delta",), default=0.0)
+    liquidity_value = _first_float_field(
+        *sources,
+        key="liquidity_value",
+        aliases=("trade_value", "window_trade_value", "buy_value"),
+        default=0.0,
+    )
+    min_liquidity = _first_float_field(
+        *sources,
+        key="min_liquidity",
+        aliases=("liquidity_min_value", "min_liquidity_value"),
+        default=0.0,
+    )
+    buy_pressure = _first_float_field(*sources, key="buy_pressure_10t", aliases=("buy_pressure",), default=0.0)
+    tick_accel = _first_float_field(
+        *sources,
+        key="tick_acceleration_ratio",
+        aliases=("tick_accel", "tick_acceleration"),
+        default=0.0,
+    )
+    micro_vwap_bp = _first_float_field(
+        *sources,
+        key="curr_vs_micro_vwap_bp",
+        aliases=("micro_vwap_bp",),
+        default=0.0,
+    )
+    best_ask, best_bid = _get_best_levels_from_ws(ws_data or {})
+    spread_bps = 0.0
+    if best_ask > 0 and best_bid > 0 and best_ask >= best_bid:
+        mid = (best_ask + best_bid) / 2.0
+        spread_bps = ((best_ask - best_bid) / mid) * 10000.0 if mid > 0 else 0.0
+
+    min_ai_support = _rule_float("SCALP_FIRST_TOUCH_AVGDOWN_MIN_AI_SUPPORT", 70.0)
+    min_ai_moderate = _rule_float("SCALP_FIRST_TOUCH_AVGDOWN_MIN_AI_MODERATE", 60.0)
+    min_peak_support = _rule_float("SCALP_FIRST_TOUCH_AVGDOWN_MIN_PRIOR_PEAK_PCT", 0.30)
+    max_repeated_blockers_without_support = _rule_int(
+        "SCALP_FIRST_TOUCH_AVGDOWN_MAX_REPEATED_BLOCKERS_WITHOUT_SUPPORT",
+        8,
+    )
+    low_ai_block = _rule_float("SCALP_FIRST_TOUCH_AVGDOWN_LOW_AI_BLOCK", 50.0)
+    max_spread_bps = _rule_float("SCALP_FIRST_TOUCH_AVGDOWN_MAX_SPREAD_BPS", 80.0)
+
+    support_signals: list[str] = []
+    risk_signals: list[str] = []
+    if ai_score >= min_ai_support:
+        support_signals.append("ai_score_ge_support")
+    elif ai_score < low_ai_block:
+        risk_signals.append("ai_score_below_low_block")
+    if prior_peak >= min_peak_support:
+        support_signals.append("prior_peak_recovery")
+    elif prior_peak < 0:
+        risk_signals.append("no_prior_peak_recovery")
+    if repeated_blockers > max_repeated_blockers_without_support:
+        risk_signals.append("repeated_blockers_without_support")
+    if strength_state and _stop_line_first_touch_signal_weak(strength_state):
+        risk_signals.append("weak_strength_momentum_state")
+    if base_vpw > 0 and current_vpw > 0:
+        if current_vpw >= base_vpw or vpw_delta >= 0:
+            support_signals.append("vpw_recovered")
+        else:
+            risk_signals.append("vpw_below_base")
+    elif vpw_delta > 0:
+        support_signals.append("vpw_delta_positive")
+    elif vpw_delta < 0:
+        risk_signals.append("vpw_delta_negative")
+    if buy_pressure >= 60.0:
+        support_signals.append("buy_pressure_support")
+    if tick_accel >= 1.0:
+        support_signals.append("tick_accel_support")
+    if micro_vwap_bp >= 0.0 and any(source.get("curr_vs_micro_vwap_bp") is not None for source in sources):
+        support_signals.append("micro_vwap_non_negative")
+    elif micro_vwap_bp < 0:
+        risk_signals.append("micro_vwap_negative")
+    if min_liquidity > 0 and liquidity_value > 0:
+        if liquidity_value >= min_liquidity:
+            support_signals.append("liquidity_ge_min")
+        else:
+            risk_signals.append("liquidity_below_min")
+    if spread_bps > max_spread_bps:
+        risk_signals.append("spread_too_wide")
+    elif spread_bps > 0:
+        support_signals.append("quote_spread_present")
+
+    has_recovery_support = bool(
+        ai_score >= min_ai_support
+        or prior_peak >= min_peak_support
+        or "vpw_recovered" in support_signals
+        or {"buy_pressure_support", "tick_accel_support", "micro_vwap_non_negative"}.issubset(set(support_signals))
+    )
+    hard_block_reasons: list[str] = []
+    if "ai_score_below_low_block" in risk_signals and not has_recovery_support:
+        hard_block_reasons.append("low_ai_without_recovery")
+    if repeated_blockers > max_repeated_blockers_without_support and not has_recovery_support:
+        hard_block_reasons.append("repeated_blockers_without_recovery")
+    if "liquidity_below_min" in risk_signals or "spread_too_wide" in risk_signals:
+        hard_block_reasons.append("liquidity_or_spread_block")
+    if (
+        {"weak_strength_momentum_state", "vpw_below_base"} & set(risk_signals)
+        and not has_recovery_support
+    ):
+        hard_block_reasons.append("weak_strength_vpw_without_recovery")
+
+    if hard_block_reasons:
+        allowed = False
+        reason = "|".join(hard_block_reasons)
+    elif ai_score >= min_ai_moderate and repeated_blockers <= max_repeated_blockers_without_support:
+        allowed = True
+        reason = "moderate_ai_with_limited_repeated_blockers"
+    elif has_recovery_support:
+        allowed = True
+        reason = "recovery_support_confirmed"
+    else:
+        allowed = False
+        reason = "insufficient_first_touch_recovery_confirmation"
+
+    fields.update(
+        {
+            "first_touch_avgdown_decision_allowed": allowed,
+            "first_touch_avgdown_decision_reason": reason,
+            "first_touch_avgdown_support_signals": "|".join(support_signals) or "-",
+            "first_touch_avgdown_risk_signals": "|".join(risk_signals) or "-",
+            "first_touch_avgdown_ai_score": f"{ai_score:.0f}",
+            "first_touch_avgdown_prior_peak_pct": f"{prior_peak:+.2f}",
+            "first_touch_avgdown_profit_rate": f"{current_profit:+.2f}",
+            "first_touch_avgdown_repeated_blocker_count": repeated_blockers,
+            "first_touch_avgdown_recent_block_signature": recent_counts.get("signature") or "-",
+            "first_touch_avgdown_strength_state": strength_state or "-",
+            "first_touch_avgdown_strength_reason": strength_reason or "-",
+            "first_touch_avgdown_current_vpw": f"{current_vpw:.2f}" if current_vpw else "-",
+            "first_touch_avgdown_base_vpw": f"{base_vpw:.2f}" if base_vpw else "-",
+            "first_touch_avgdown_vpw_delta": f"{vpw_delta:.2f}" if vpw_delta else "0.00",
+            "first_touch_avgdown_liquidity_value": int(liquidity_value) if liquidity_value else "-",
+            "first_touch_avgdown_min_liquidity": int(min_liquidity) if min_liquidity else "-",
+            "first_touch_avgdown_spread_bps": f"{spread_bps:.2f}" if spread_bps else "-",
+            "first_touch_avgdown_max_repeated_blockers_without_support": max_repeated_blockers_without_support,
+        }
+    )
+    return {"allowed": allowed, "reason": reason, "fields": fields}
 
 
 _STOP_LINE_TOUCH_AVG_DOWN_DEFER_FIELDS = (
@@ -2643,6 +2877,38 @@ def _attempt_stop_line_touch_mandatory_avg_down(
                     "deferred": True,
                     "reason": defer_decision.get("reason", "soft_stop_price_improvement_waiting"),
                 }
+
+        first_touch_decision = _evaluate_first_touch_avgdown_decision_gate(
+            stock=stock,
+            ws_data=ws_data or {},
+            context_fields=context_fields or {},
+            current_ai_score=current_ai_score,
+            peak_profit=peak_profit,
+            profit_rate=profit_rate,
+            now_ts=now_ts,
+        )
+        first_touch_fields = first_touch_decision.get("fields") or {}
+        retry_common_fields.update(first_touch_fields)
+        if not first_touch_decision.get("allowed"):
+            _log_holding_pipeline(
+                stock,
+                code,
+                "stop_line_touch_first_touch_avgdown_decision_blocked",
+                **{
+                    **retry_common_fields,
+                    "gate_allowed": False,
+                    "gate_reason": first_touch_decision.get("reason", "first_touch_decision_blocked"),
+                    "block_reason": first_touch_decision.get("reason", "first_touch_decision_blocked"),
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                    "runtime_effect": True,
+                },
+            )
+            return {
+                "attempted": True,
+                "submitted": False,
+                "reason": first_touch_decision.get("reason", "first_touch_decision_blocked"),
+            }
 
         _log_holding_pipeline(
             stock,
@@ -10426,6 +10692,351 @@ def _scalp_loss_reentry_guard_log_fields(decision: dict | None) -> dict:
         "last_exit_rule": decision.get("last_exit_rule", "-"),
         "last_exit_profit_rate": decision.get("last_exit_profit_rate", "-"),
     }
+
+
+def _rising_missed_same_day_reentry_guard_enabled() -> bool:
+    return _env_bool("KORSTOCKSCAN_RISING_MISSED_SAME_DAY_REENTRY_GUARD_ENABLED", True)
+
+
+def _rising_missed_same_day_reentry_expires_at(now_ts: float) -> tuple[float, int]:
+    ttl_sec = max(0, _env_int("KORSTOCKSCAN_RISING_MISSED_SAME_DAY_REENTRY_TTL_SEC", 0))
+    if ttl_sec > 0:
+        return float(now_ts) + ttl_sec, ttl_sec
+    local_dt = datetime.fromtimestamp(float(now_ts or time.time()))
+    day_end = datetime.combine(local_dt.date(), datetime_time(23, 59, 59))
+    expires_at = max(float(now_ts), day_end.timestamp())
+    return expires_at, max(0, int(expires_at - float(now_ts)))
+
+
+def _is_rising_missed_scout_exit_context(stock: dict | None) -> bool:
+    if not isinstance(stock, dict):
+        return False
+    if bool(stock.get("rising_missed_one_share_scout")):
+        return True
+    if bool(stock.get("rising_missed_one_share_entry_forced")):
+        return True
+    return str(stock.get("forced_entry_reason") or "").strip() == RISING_MISSED_FORCED_ENTRY_REASON
+
+
+def _rising_missed_exit_avg_down_count(stock: dict | None) -> int:
+    stock = stock if isinstance(stock, dict) else {}
+    return max(
+        _safe_int(stock.get("stop_line_touch_avg_down_count"), 0),
+        _safe_int(stock.get("avg_down_count"), 0),
+        _safe_int(stock.get("late_loss_avg_down_retry_count"), 0),
+        _safe_int(stock.get("defensive_avg_down_count"), 0),
+    )
+
+
+def _rising_missed_exit_reentry_action(stock: dict | None, profit_rate) -> tuple[str, str]:
+    if not _is_rising_missed_scout_exit_context(stock):
+        return "", "not_rising_missed_scout"
+    realized_or_estimated_profit = _safe_float(profit_rate, 0.0)
+    avg_down_count = _rising_missed_exit_avg_down_count(stock)
+    first_touch_blocked = bool((stock or {}).get("first_touch_avgdown_decision_blocked"))
+    stop_touch_used = bool((stock or {}).get("stop_line_touch_avg_down_used"))
+    if realized_or_estimated_profit <= 0.0:
+        return "block", "prior_rising_missed_exit_non_positive"
+    if avg_down_count >= 2:
+        return "block", "prior_rising_missed_exit_avgdown_ge2"
+    if avg_down_count >= 1 or first_touch_blocked or stop_touch_used:
+        return "low_priority", "prior_rising_missed_exit_recovered_with_avgdown"
+    return "", "prior_rising_missed_exit_clean_profit"
+
+
+def _prune_rising_missed_same_day_reentry_risk(now_ts: float | None = None) -> None:
+    now_value = float(now_ts or time.time())
+    expired = [
+        code
+        for code, row in _RISING_MISSED_SAME_DAY_REENTRY_RISK.items()
+        if float((row or {}).get("expires_at", 0) or 0) <= now_value
+    ]
+    for code in expired:
+        _RISING_MISSED_SAME_DAY_REENTRY_RISK.pop(code, None)
+
+
+def _rising_missed_same_day_reentry_log_fields(decision: dict | None) -> dict:
+    decision = decision or {}
+    return {
+        "guard_family": decision.get("guard_family") or "rising_missed_same_day_reentry_guard",
+        "guard_reason": decision.get("reason") or "-",
+        "reentry_action": decision.get("reentry_action") or "-",
+        "watching_budget_priority": decision.get("watching_budget_priority") or "-",
+        "risk_marked_at": decision.get("risk_marked_at", "-"),
+        "risk_expires_at": decision.get("risk_expires_at", "-"),
+        "risk_remaining_sec": decision.get("risk_remaining_sec", 0),
+        "last_exit_rule": decision.get("last_exit_rule", "-"),
+        "last_exit_profit_rate": decision.get("last_exit_profit_rate", "-"),
+        "last_exit_avg_down_count": decision.get("last_exit_avg_down_count", 0),
+    }
+
+
+def _record_rising_missed_same_day_reentry_risk(
+    code: str,
+    *,
+    stock: dict | None,
+    exit_rule: str | None,
+    profit_rate,
+    now_ts: float | None,
+    source_stage: str,
+) -> dict:
+    if not _rising_missed_same_day_reentry_guard_enabled():
+        return {"marked": False, "reason": "disabled"}
+    norm_code = str(code or "").strip()[:6]
+    now_value = float(now_ts or time.time())
+    reentry_action, reason = _rising_missed_exit_reentry_action(stock, profit_rate)
+    if not norm_code or not reentry_action:
+        return {"marked": False, "reason": reason}
+    expires_at, ttl_sec = _rising_missed_same_day_reentry_expires_at(now_value)
+    row = {
+        "code": norm_code,
+        "stock_name": (stock or {}).get("name") or (stock or {}).get("stock_name") or "-",
+        "marked_at": now_value,
+        "expires_at": expires_at,
+        "ttl_sec": ttl_sec,
+        "exit_rule": str(exit_rule or "-"),
+        "profit_rate": _safe_float(profit_rate, 0.0),
+        "avg_down_count": _rising_missed_exit_avg_down_count(stock),
+        "reentry_action": reentry_action,
+        "reason": reason,
+        "source_stage": source_stage,
+    }
+    _prune_rising_missed_same_day_reentry_risk(now_value)
+    _RISING_MISSED_SAME_DAY_REENTRY_RISK[norm_code] = row
+    _log_entry_pipeline(
+        stock or {},
+        norm_code,
+        "rising_missed_same_day_reentry_risk_marked",
+        metric_role="safety_veto" if reentry_action == "block" else "bounded_tunable",
+        decision_authority="rising_missed_same_day_reentry_guard",
+        window_policy="same_day_intraday_runtime_state",
+        sample_floor="not_applicable_runtime_guard",
+        primary_decision_metric="last_exit_profit_rate",
+        source_quality_gate="rising_missed_scout_exit_context_present",
+        runtime_effect=True,
+        allowed_runtime_apply=True,
+        actual_order_submitted=False,
+        broker_order_forbidden=True,
+        forbidden_uses=TRADE_QUALITY_RUNTIME_FORBIDDEN_USES,
+        source_stage=source_stage,
+        guard_family="rising_missed_same_day_reentry_guard",
+        reentry_action=reentry_action,
+        watching_budget_priority="blocked" if reentry_action == "block" else "low",
+        risk_reason=reason,
+        exit_rule=exit_rule or "-",
+        profit_rate=f"{_safe_float(profit_rate, 0.0):+.2f}",
+        avg_down_count=row["avg_down_count"],
+        ttl_sec=ttl_sec,
+        risk_expires_at=expires_at,
+    )
+    return {"marked": True, **row}
+
+
+def _load_rising_missed_reentry_risk_events(target_date: str) -> dict[str, list[dict]]:
+    path = existing_or_gzip_path(DATA_DIR / "pipeline_events" / f"pipeline_events_{target_date}.jsonl")
+    cache = _RISING_MISSED_REENTRY_RISK_EVENT_CACHE
+    if not path.exists():
+        cache.update({"date": target_date, "path": str(path), "mtime_ns": 0, "size": 0, "rows_by_code": {}})
+        return {}
+    stat = path.stat()
+    if (
+        cache.get("date") == target_date
+        and cache.get("path") == str(path)
+        and int(cache.get("mtime_ns") or 0) == int(getattr(stat, "st_mtime_ns", 0) or 0)
+        and int(cache.get("size") or 0) == int(getattr(stat, "st_size", 0) or 0)
+    ):
+        return cache.get("rows_by_code") or {}
+
+    rows_by_code: dict[str, list[dict]] = {}
+    for payload in iter_jsonl(path, errors="ignore"):
+        if str(payload.get("stage") or "") != "rising_missed_same_day_reentry_risk_marked":
+            continue
+        fields = payload.get("fields") if isinstance(payload.get("fields"), dict) else {}
+        code = str(payload.get("stock_code") or fields.get("stock_code") or "").strip()[:6]
+        if not code:
+            continue
+        marked_at = _parse_iso_epoch(payload.get("emitted_at"))
+        expires_at = _safe_float(fields.get("risk_expires_at"), 0.0)
+        ttl_sec = _safe_int(fields.get("ttl_sec"), 0)
+        if expires_at <= 0.0 and marked_at > 0.0 and ttl_sec > 0:
+            expires_at = marked_at + ttl_sec
+        if marked_at <= 0.0 or expires_at <= 0.0:
+            continue
+        rows_by_code.setdefault(code, []).append(
+            {
+                "code": code,
+                "stock_name": payload.get("stock_name") or fields.get("stock_name") or "-",
+                "marked_at": marked_at,
+                "expires_at": expires_at,
+                "ttl_sec": ttl_sec,
+                "exit_rule": str(fields.get("exit_rule") or "-"),
+                "profit_rate": _safe_float(fields.get("profit_rate"), 0.0),
+                "avg_down_count": _safe_int(fields.get("avg_down_count"), 0),
+                "reentry_action": str(fields.get("reentry_action") or "block"),
+                "reason": str(fields.get("risk_reason") or "-"),
+                "source_stage": str(fields.get("source_stage") or "-"),
+            }
+        )
+    for rows in rows_by_code.values():
+        rows.sort(key=lambda row: float(row.get("marked_at") or 0.0))
+    cache.update(
+        {
+            "date": target_date,
+            "path": str(path),
+            "mtime_ns": int(getattr(stat, "st_mtime_ns", 0) or 0),
+            "size": int(getattr(stat, "st_size", 0) or 0),
+            "rows_by_code": rows_by_code,
+        }
+    )
+    return rows_by_code
+
+
+def _hydrate_rising_missed_same_day_reentry_risk_from_events(code: str, now_ts: float) -> dict:
+    norm_code = str(code or "").strip()[:6]
+    if not norm_code:
+        return {}
+    target_date = datetime.fromtimestamp(float(now_ts or time.time())).date().isoformat()
+    rows_by_code = _load_rising_missed_reentry_risk_events(target_date)
+    active_rows = [
+        row
+        for row in rows_by_code.get(norm_code, [])
+        if float(row.get("expires_at", 0) or 0) > now_ts
+    ]
+    if not active_rows:
+        return {}
+    row = dict(active_rows[-1])
+    _RISING_MISSED_SAME_DAY_REENTRY_RISK[norm_code] = row
+    return row
+
+
+def _reconcile_rising_missed_reentry_risk_with_sell_completed(
+    code: str,
+    row: dict,
+    now_ts: float,
+) -> dict:
+    norm_code = str(code or "").strip()[:6]
+    marked_at = _safe_float((row or {}).get("marked_at"), 0.0)
+    if not norm_code or marked_at <= 0:
+        return {"action": "keep", "reason": "missing_code_or_marked_at"}
+    target_date = datetime.fromtimestamp(float(now_ts or time.time())).date().isoformat()
+    path = existing_or_gzip_path(DATA_DIR / "pipeline_events" / f"pipeline_events_{target_date}.jsonl")
+    if not path.exists():
+        return {"action": "keep", "reason": "pipeline_events_missing"}
+
+    latest_completed: dict | None = None
+    for payload in iter_jsonl(path, errors="ignore"):
+        if str(payload.get("stage") or "") != "sell_completed":
+            continue
+        fields = payload.get("fields") if isinstance(payload.get("fields"), dict) else {}
+        payload_code = str(payload.get("stock_code") or fields.get("stock_code") or "").strip()[:6]
+        if payload_code != norm_code:
+            continue
+        completed_at = _parse_iso_epoch(payload.get("emitted_at"))
+        if completed_at < marked_at:
+            continue
+        latest_completed = {
+            "completed_at": completed_at,
+            "profit_rate": _safe_float(fields.get("profit_rate"), 0.0),
+            "exit_rule": str(fields.get("exit_rule") or (row or {}).get("exit_rule") or "-"),
+        }
+    if latest_completed is None:
+        return {"action": "keep", "reason": "no_sell_completed_after_risk_mark"}
+
+    realized_profit = _safe_float(latest_completed.get("profit_rate"), 0.0)
+    avg_down_count = _safe_int((row or {}).get("avg_down_count"), 0)
+    if realized_profit <= 0.0:
+        return {
+            "action": "keep",
+            "reason": "sell_completed_realized_non_positive",
+            "realized_profit_rate": realized_profit,
+            "realized_exit_rule": latest_completed.get("exit_rule"),
+            "sell_completed_at": latest_completed.get("completed_at"),
+        }
+    if avg_down_count >= 2:
+        return {
+            "action": "keep",
+            "reason": "sell_completed_profit_but_avgdown_ge2",
+            "realized_profit_rate": realized_profit,
+            "realized_exit_rule": latest_completed.get("exit_rule"),
+            "sell_completed_at": latest_completed.get("completed_at"),
+        }
+    if avg_down_count >= 1:
+        return {
+            "action": "downgrade_low_priority",
+            "reason": "sell_completed_profit_with_avgdown",
+            "realized_profit_rate": realized_profit,
+            "realized_exit_rule": latest_completed.get("exit_rule"),
+            "sell_completed_at": latest_completed.get("completed_at"),
+        }
+    return {
+        "action": "invalidate",
+        "reason": "sell_completed_clean_profit",
+        "realized_profit_rate": realized_profit,
+        "realized_exit_rule": latest_completed.get("exit_rule"),
+        "sell_completed_at": latest_completed.get("completed_at"),
+    }
+
+
+def evaluate_rising_missed_same_day_reentry_guard(code: str, now_ts: float | None = None) -> dict:
+    enabled = _rising_missed_same_day_reentry_guard_enabled()
+    now_value = float(now_ts or time.time())
+    base = {
+        "guard_family": "rising_missed_same_day_reentry_guard",
+        "enabled": enabled,
+        "allowed": True,
+        "reason": "pass",
+        "risk_remaining_sec": 0,
+        "reentry_action": "none",
+        "watching_budget_priority": "normal",
+    }
+    if not enabled:
+        base["reason"] = "disabled"
+        return base
+    norm_code = str(code or "").strip()[:6]
+    if not norm_code:
+        base["reason"] = "missing_code"
+        return base
+    _prune_rising_missed_same_day_reentry_risk(now_value)
+    row = _RISING_MISSED_SAME_DAY_REENTRY_RISK.get(norm_code) or _hydrate_rising_missed_same_day_reentry_risk_from_events(
+        norm_code,
+        now_value,
+    )
+    expires_at = _safe_float((row or {}).get("expires_at"), 0.0)
+    if not row or expires_at <= now_value:
+        return base
+    reconciliation = _reconcile_rising_missed_reentry_risk_with_sell_completed(norm_code, row, now_value)
+    reconciliation_action = str(reconciliation.get("action") or "keep")
+    if reconciliation_action == "invalidate":
+        _RISING_MISSED_SAME_DAY_REENTRY_RISK.pop(norm_code, None)
+        return {**base, "reason": reconciliation.get("reason") or "risk_invalidated_by_sell_completed"}
+    if reconciliation_action == "downgrade_low_priority":
+        row = {
+            **row,
+            "reentry_action": "low_priority",
+            "reason": "prior_rising_missed_exit_recovered_with_avgdown",
+            "profit_rate": reconciliation.get("realized_profit_rate", row.get("profit_rate")),
+            "exit_rule": reconciliation.get("realized_exit_rule", row.get("exit_rule")),
+        }
+        _RISING_MISSED_SAME_DAY_REENTRY_RISK[norm_code] = row
+    action = str(row.get("reentry_action") or "block")
+    if action not in {"block", "low_priority"}:
+        action = "block"
+    remaining = max(1, int(expires_at - now_value))
+    base.update(
+        {
+            "allowed": False,
+            "reason": row.get("reason") or f"same_day_reentry_{action}",
+            "risk_remaining_sec": remaining,
+            "risk_marked_at": float(row.get("marked_at", 0) or 0),
+            "risk_expires_at": expires_at,
+            "last_exit_rule": row.get("exit_rule") or "-",
+            "last_exit_profit_rate": row.get("profit_rate"),
+            "last_exit_avg_down_count": row.get("avg_down_count", 0),
+            "reentry_action": action,
+            "watching_budget_priority": "blocked" if action == "block" else "low",
+        }
+    )
+    return base
 
 
 def _resolve_exit_decision_source(
@@ -25638,6 +26249,40 @@ def _maybe_submit_rising_missed_one_share_entry(
     feature_enabled = _rising_missed_one_share_entry_enabled()
     if not feature_enabled:
         return False
+    reentry_guard = evaluate_rising_missed_same_day_reentry_guard(
+        code,
+        _safe_float((runtime or {}).get("now_ts"), time.time()),
+    )
+    if not reentry_guard.get("allowed", True):
+        action = str(reentry_guard.get("reentry_action") or "block")
+        stage = (
+            "rising_missed_one_share_entry_low_priority_deferred"
+            if action == "low_priority"
+            else "rising_missed_one_share_entry_blocked"
+        )
+        _log_entry_pipeline(
+            stock,
+            code,
+            stage,
+            block_reason=reentry_guard.get("reason") or f"same_day_reentry_{action}",
+            forced_entry_reason=RISING_MISSED_FORCED_ENTRY_REASON,
+            actual_order_submitted=False,
+            broker_order_forbidden=True,
+            runtime_effect=True,
+            allowed_runtime_apply=True,
+            decision_authority="rising_missed_same_day_reentry_guard",
+            metric_role="safety_veto" if action == "block" else "bounded_tunable",
+            window_policy="same_day_intraday_runtime_state",
+            sample_floor="not_applicable_runtime_guard",
+            primary_decision_metric="last_exit_profit_rate",
+            source_quality_gate="rising_missed_scout_exit_context_present",
+            forbidden_uses=TRADE_QUALITY_RUNTIME_FORBIDDEN_USES,
+            **_rising_missed_same_day_reentry_log_fields(reentry_guard),
+        )
+        return True
+    momentum_ws_data = dict(ws_data or {})
+    momentum_ws_data["_position_tag"] = pos_tag
+    strength_momentum_gate = evaluate_scalping_strength_momentum(momentum_ws_data)
     decision = evaluate_rising_missed_one_share_entry(
         stock,
         strategy=strategy,
@@ -25652,6 +26297,7 @@ def _maybe_submit_rising_missed_one_share_entry(
         current_fluctuation_pct=_current_fluctuation_pct(stock, ws_data, runtime),
         upper_limit_exclude_enabled=_rising_missed_upper_limit_exclude_enabled(),
         upper_limit_exclude_pct=_rising_missed_upper_limit_exclude_pct(),
+        strength_momentum_gate=strength_momentum_gate,
     )
     if decision.allowed is False and decision.reason != RISING_MISSED_BLOCK_NOT_CANDIDATE:
         _log_entry_pipeline(
@@ -25662,7 +26308,11 @@ def _maybe_submit_rising_missed_one_share_entry(
             forced_entry_reason=RISING_MISSED_FORCED_ENTRY_REASON,
             actual_order_submitted=False,
             broker_order_forbidden=True,
-            runtime_effect=decision.reason == RISING_MISSED_BLOCK_PRICE_ABOVE_CAP,
+            runtime_effect=decision.reason
+            in {
+                RISING_MISSED_BLOCK_PRICE_ABOVE_CAP,
+                RISING_MISSED_BLOCK_STRENGTH_MOMENTUM_PRECHECK,
+            },
             **(decision.log_fields or {}),
         )
         return True
@@ -30642,6 +31292,16 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                     "ord_no": ord_no or "-",
                 },
             )
+
+            if strategy == 'SCALPING':
+                _record_rising_missed_same_day_reentry_risk(
+                    code,
+                    stock=stock,
+                    exit_rule=exit_rule or stock.get("last_exit_rule"),
+                    profit_rate=profit_rate,
+                    now_ts=now_ts,
+                    source_stage="sell_order_sent",
+                )
 
             if strategy == 'SCALPING' and now_t < TIME_15_30:
                 base_cooldown_sec = 1200

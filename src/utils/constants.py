@@ -80,6 +80,13 @@ class TradingConfig:
     SCALP_STOP_LINE_TOUCH_AVG_DOWN_DEFER_MAX_SEC: int = 3
     SCALP_STOP_LINE_TOUCH_AVG_DOWN_EXTRA_DIP_PCT: float = 0.20
     SCALP_STOP_LINE_TOUCH_AVG_DOWN_DEFER_EMERGENCY_PCT: float = -5.0
+    SCALP_FIRST_TOUCH_AVGDOWN_DECISION_GATE_ENABLED: bool = True
+    SCALP_FIRST_TOUCH_AVGDOWN_MIN_AI_SUPPORT: float = 70.0
+    SCALP_FIRST_TOUCH_AVGDOWN_MIN_AI_MODERATE: float = 60.0
+    SCALP_FIRST_TOUCH_AVGDOWN_MIN_PRIOR_PEAK_PCT: float = 0.30
+    SCALP_FIRST_TOUCH_AVGDOWN_MAX_REPEATED_BLOCKERS_WITHOUT_SUPPORT: int = 8
+    SCALP_FIRST_TOUCH_AVGDOWN_LOW_AI_BLOCK: float = 50.0
+    SCALP_FIRST_TOUCH_AVGDOWN_MAX_SPREAD_BPS: float = 80.0
 
     # ==========================================
     # 3.2 추가매수(스캘핑) 설정
@@ -1979,6 +1986,27 @@ def _build_trading_rules() -> TradingConfig:
     env_stop_line_avg_down_defer_emergency_pct = _env_float(
         "KORSTOCKSCAN_SCALP_STOP_LINE_TOUCH_AVG_DOWN_DEFER_EMERGENCY_PCT"
     )
+    env_first_touch_avgdown_decision_gate_enabled = _env_bool(
+        "KORSTOCKSCAN_SCALP_FIRST_TOUCH_AVGDOWN_DECISION_GATE_ENABLED"
+    )
+    env_first_touch_avgdown_min_ai_support = _env_float(
+        "KORSTOCKSCAN_SCALP_FIRST_TOUCH_AVGDOWN_MIN_AI_SUPPORT"
+    )
+    env_first_touch_avgdown_min_ai_moderate = _env_float(
+        "KORSTOCKSCAN_SCALP_FIRST_TOUCH_AVGDOWN_MIN_AI_MODERATE"
+    )
+    env_first_touch_avgdown_min_prior_peak = _env_float(
+        "KORSTOCKSCAN_SCALP_FIRST_TOUCH_AVGDOWN_MIN_PRIOR_PEAK_PCT"
+    )
+    env_first_touch_avgdown_max_repeated_blockers = _env_int(
+        "KORSTOCKSCAN_SCALP_FIRST_TOUCH_AVGDOWN_MAX_REPEATED_BLOCKERS_WITHOUT_SUPPORT"
+    )
+    env_first_touch_avgdown_low_ai_block = _env_float(
+        "KORSTOCKSCAN_SCALP_FIRST_TOUCH_AVGDOWN_LOW_AI_BLOCK"
+    )
+    env_first_touch_avgdown_max_spread_bps = _env_float(
+        "KORSTOCKSCAN_SCALP_FIRST_TOUCH_AVGDOWN_MAX_SPREAD_BPS"
+    )
     env_protect_trailing_smooth_enabled = _env_bool("KORSTOCKSCAN_SCALP_PROTECT_TRAILING_SMOOTH_ENABLED")
     env_protect_trailing_smooth_window = _env_int("KORSTOCKSCAN_SCALP_PROTECT_TRAILING_SMOOTH_WINDOW_SEC")
     env_protect_trailing_smooth_min_span = _env_int("KORSTOCKSCAN_SCALP_PROTECT_TRAILING_SMOOTH_MIN_SPAN_SEC")
@@ -2855,6 +2883,27 @@ def _build_trading_rules() -> TradingConfig:
             SCALP_STOP_LINE_TOUCH_AVG_DOWN_DEFER_EMERGENCY_PCT=env_stop_line_avg_down_defer_emergency_pct
             if env_stop_line_avg_down_defer_emergency_pct is not None
             else config.SCALP_STOP_LINE_TOUCH_AVG_DOWN_DEFER_EMERGENCY_PCT,
+            SCALP_FIRST_TOUCH_AVGDOWN_DECISION_GATE_ENABLED=env_first_touch_avgdown_decision_gate_enabled
+            if env_first_touch_avgdown_decision_gate_enabled is not None
+            else config.SCALP_FIRST_TOUCH_AVGDOWN_DECISION_GATE_ENABLED,
+            SCALP_FIRST_TOUCH_AVGDOWN_MIN_AI_SUPPORT=env_first_touch_avgdown_min_ai_support
+            if env_first_touch_avgdown_min_ai_support is not None
+            else config.SCALP_FIRST_TOUCH_AVGDOWN_MIN_AI_SUPPORT,
+            SCALP_FIRST_TOUCH_AVGDOWN_MIN_AI_MODERATE=env_first_touch_avgdown_min_ai_moderate
+            if env_first_touch_avgdown_min_ai_moderate is not None
+            else config.SCALP_FIRST_TOUCH_AVGDOWN_MIN_AI_MODERATE,
+            SCALP_FIRST_TOUCH_AVGDOWN_MIN_PRIOR_PEAK_PCT=env_first_touch_avgdown_min_prior_peak
+            if env_first_touch_avgdown_min_prior_peak is not None
+            else config.SCALP_FIRST_TOUCH_AVGDOWN_MIN_PRIOR_PEAK_PCT,
+            SCALP_FIRST_TOUCH_AVGDOWN_MAX_REPEATED_BLOCKERS_WITHOUT_SUPPORT=env_first_touch_avgdown_max_repeated_blockers
+            if env_first_touch_avgdown_max_repeated_blockers is not None
+            else config.SCALP_FIRST_TOUCH_AVGDOWN_MAX_REPEATED_BLOCKERS_WITHOUT_SUPPORT,
+            SCALP_FIRST_TOUCH_AVGDOWN_LOW_AI_BLOCK=env_first_touch_avgdown_low_ai_block
+            if env_first_touch_avgdown_low_ai_block is not None
+            else config.SCALP_FIRST_TOUCH_AVGDOWN_LOW_AI_BLOCK,
+            SCALP_FIRST_TOUCH_AVGDOWN_MAX_SPREAD_BPS=env_first_touch_avgdown_max_spread_bps
+            if env_first_touch_avgdown_max_spread_bps is not None
+            else config.SCALP_FIRST_TOUCH_AVGDOWN_MAX_SPREAD_BPS,
             SCALP_PROTECT_TRAILING_SMOOTH_ENABLED=env_protect_trailing_smooth_enabled
             if env_protect_trailing_smooth_enabled is not None
             else config.SCALP_PROTECT_TRAILING_SMOOTH_ENABLED,

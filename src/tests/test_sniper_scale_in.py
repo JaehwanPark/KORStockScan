@@ -21,6 +21,7 @@ from src.engine.scalping.rising_missed_one_share_entry import (
     BLOCK_NOT_CANDIDATE,
     BLOCK_OPEN_PENDING,
     BLOCK_PRICE_ABOVE_CAP,
+    BLOCK_STRENGTH_MOMENTUM_PRECHECK,
     BLOCK_UPPER_LIMIT_PROXIMITY,
     FORCED_ENTRY_REASON,
     MAX_ONE_SHARE_ENTRY_PRICE_KRW,
@@ -58,6 +59,10 @@ class _DummyDB:
 
 @pytest.fixture(autouse=True)
 def stub_kt00011_orderable_lookup(monkeypatch):
+    state_handlers._RISING_MISSED_SAME_DAY_REENTRY_RISK.clear()
+    state_handlers._RISING_MISSED_REENTRY_RISK_EVENT_CACHE.update(
+        {"date": "", "path": "", "mtime_ns": 0, "size": 0, "rows_by_code": {}}
+    )
     monkeypatch.setattr(
         state_handlers.kiwoom_utils,
         "get_orderable_by_margin_kt00011",
@@ -561,6 +566,7 @@ def test_rising_missed_one_share_hook_bypasses_watching_soft_branch(monkeypatch)
     state_handlers.COOLDOWNS = {}
     state_handlers.ALERTED_STOCKS = set()
     state_handlers.TRADING_RULES = CONFIG
+    state_handlers._RISING_MISSED_SAME_DAY_REENTRY_RISK.clear()
 
     submit_calls = []
 
@@ -570,6 +576,11 @@ def test_rising_missed_one_share_hook_bypasses_watching_soft_branch(monkeypatch)
         state_handlers,
         "evaluate_scalp_same_symbol_loss_reentry_guard",
         lambda *args, **kwargs: {"allowed": True},
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "evaluate_scalping_strength_momentum",
+        lambda ws_data: {"enabled": True, "allowed": True, "reason": "ok"},
     )
     monkeypatch.setattr(
         state_handlers,
@@ -613,10 +624,11 @@ def test_rising_missed_one_share_hook_bypasses_watching_soft_branch(monkeypatch)
     assert runtime["forced_entry_reason"] == FORCED_ENTRY_REASON
 
 
-def test_rising_missed_one_share_hook_blocks_price_above_cap_without_submit(monkeypatch):
+def test_rising_missed_one_share_hook_blocks_weak_strength_before_submit(monkeypatch):
     state_handlers.COOLDOWNS = {}
     state_handlers.ALERTED_STOCKS = set()
     state_handlers.TRADING_RULES = CONFIG
+    state_handlers._RISING_MISSED_SAME_DAY_REENTRY_RISK.clear()
 
     branch_calls = []
     submit_calls = []
@@ -628,6 +640,399 @@ def test_rising_missed_one_share_hook_blocks_price_above_cap_without_submit(monk
         state_handlers,
         "evaluate_scalp_same_symbol_loss_reentry_guard",
         lambda *args, **kwargs: {"allowed": True},
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "evaluate_scalping_strength_momentum",
+        lambda ws_data: {
+            "enabled": True,
+            "allowed": False,
+            "reason": "below_window_buy_value",
+            "current_vpw": 145.0,
+            "window_buy_value": 3,
+            "window_buy_ratio": 0.21,
+            "threshold_profile": "default",
+        },
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_handle_watching_strategy_branch",
+        lambda *args, **kwargs: branch_calls.append(True) or False,
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_submit_watching_triggered_entry",
+        lambda *args, **kwargs: submit_calls.append(True) or True,
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_entry_pipeline",
+        lambda stock, code, stage, **fields: entry_logs.append((stage, fields)),
+    )
+
+    stock = {
+        "id": 1,
+        "name": "WEAK_RISING",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "scanner_promotion_id": "scan-weak",
+        "price_delta_since_first_seen_pct": 2.6,
+        "prob": 0.62,
+    }
+
+    state_handlers.handle_watching_state(
+        stock,
+        "025320",
+        {"curr": 5010, "v_pw": 145.0},
+        admin_id=1,
+        now_ts=1000.0,
+        now_dt=datetime(2026, 7, 3, 8, 3, 52),
+    )
+
+    assert submit_calls == []
+    assert branch_calls == []
+    assert stock.get("rising_missed_one_share_entry_forced") is None
+    assert entry_logs[-1][0] == "rising_missed_one_share_entry_blocked"
+    assert entry_logs[-1][1]["block_reason"] == BLOCK_STRENGTH_MOMENTUM_PRECHECK
+    assert entry_logs[-1][1]["broker_order_forbidden"] is True
+    assert entry_logs[-1][1]["runtime_effect"] is True
+    assert entry_logs[-1][1]["rising_missed_strength_momentum_precheck_reason"] == "below_window_buy_value"
+
+
+def test_rising_missed_same_day_reentry_blocks_after_loss_exit(monkeypatch):
+    state_handlers.COOLDOWNS = {}
+    state_handlers.ALERTED_STOCKS = set()
+    state_handlers.TRADING_RULES = CONFIG
+    state_handlers._RISING_MISSED_SAME_DAY_REENTRY_RISK.clear()
+
+    branch_calls = []
+    submit_calls = []
+    entry_logs = []
+
+    monkeypatch.setenv("KORSTOCKSCAN_RISING_MISSED_ONE_SHARE_ENTRY_ENABLED", "true")
+    monkeypatch.setattr(state_handlers, "is_buy_side_paused", lambda: False)
+    monkeypatch.setattr(
+        state_handlers,
+        "evaluate_scalp_same_symbol_loss_reentry_guard",
+        lambda *args, **kwargs: {"allowed": True},
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "evaluate_scalping_strength_momentum",
+        lambda ws_data: {"enabled": True, "allowed": True, "reason": "ok"},
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_handle_watching_strategy_branch",
+        lambda *args, **kwargs: branch_calls.append(True) or False,
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_submit_watching_triggered_entry",
+        lambda *args, **kwargs: submit_calls.append(True) or True,
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_entry_pipeline",
+        lambda stock, code, stage, **fields: entry_logs.append((stage, fields)),
+    )
+
+    prior_exit = {
+        "id": 1,
+        "name": "LOSS_RISING",
+        "strategy": "SCALPING",
+        "rising_missed_one_share_scout": True,
+        "forced_entry_reason": FORCED_ENTRY_REASON,
+        "avg_down_count": 0,
+    }
+    marked = state_handlers._record_rising_missed_same_day_reentry_risk(
+        "123456",
+        stock=prior_exit,
+        exit_rule="scalp_soft_stop_pct",
+        profit_rate=-1.25,
+        now_ts=1000.0,
+        source_stage="sell_order_sent",
+    )
+    assert marked["marked"] is True
+    assert marked["reentry_action"] == "block"
+
+    stock = {
+        "id": 2,
+        "name": "LOSS_RISING",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "scanner_promotion_id": "scan-reentry",
+        "price_delta_since_first_seen_pct": 2.4,
+        "prob": 0.62,
+    }
+    state_handlers.handle_watching_state(
+        stock,
+        "123456",
+        {"curr": 10000, "v_pw": 100.0},
+        admin_id=1,
+        now_ts=1010.0,
+        now_dt=datetime(2026, 7, 3, 10, 0, 0),
+    )
+
+    assert submit_calls == []
+    assert branch_calls == []
+    assert stock.get("rising_missed_one_share_entry_forced") is None
+    assert entry_logs[-1][0] == "rising_missed_one_share_entry_blocked"
+    assert entry_logs[-1][1]["block_reason"] == "prior_rising_missed_exit_non_positive"
+    assert entry_logs[-1][1]["watching_budget_priority"] == "blocked"
+    assert entry_logs[-1][1]["runtime_effect"] is True
+    assert entry_logs[-1][1]["broker_order_forbidden"] is True
+
+
+def test_rising_missed_same_day_reentry_low_priority_after_avgdown_recovery(monkeypatch):
+    state_handlers.COOLDOWNS = {}
+    state_handlers.ALERTED_STOCKS = set()
+    state_handlers.TRADING_RULES = CONFIG
+    state_handlers._RISING_MISSED_SAME_DAY_REENTRY_RISK.clear()
+
+    branch_calls = []
+    submit_calls = []
+    entry_logs = []
+
+    monkeypatch.setenv("KORSTOCKSCAN_RISING_MISSED_ONE_SHARE_ENTRY_ENABLED", "true")
+    monkeypatch.setattr(state_handlers, "is_buy_side_paused", lambda: False)
+    monkeypatch.setattr(
+        state_handlers,
+        "evaluate_scalp_same_symbol_loss_reentry_guard",
+        lambda *args, **kwargs: {"allowed": True},
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "evaluate_scalping_strength_momentum",
+        lambda ws_data: {"enabled": True, "allowed": True, "reason": "ok"},
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_handle_watching_strategy_branch",
+        lambda *args, **kwargs: branch_calls.append(True) or False,
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_submit_watching_triggered_entry",
+        lambda *args, **kwargs: submit_calls.append(True) or True,
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_entry_pipeline",
+        lambda stock, code, stage, **fields: entry_logs.append((stage, fields)),
+    )
+
+    prior_exit = {
+        "id": 1,
+        "name": "RECOVERED_RISING",
+        "strategy": "SCALPING",
+        "rising_missed_one_share_scout": True,
+        "forced_entry_reason": FORCED_ENTRY_REASON,
+        "avg_down_count": 1,
+    }
+    marked = state_handlers._record_rising_missed_same_day_reentry_risk(
+        "654321",
+        stock=prior_exit,
+        exit_rule="scalp_trailing_take_profit",
+        profit_rate=0.84,
+        now_ts=1000.0,
+        source_stage="sell_order_sent",
+    )
+    assert marked["marked"] is True
+    assert marked["reentry_action"] == "low_priority"
+
+    stock = {
+        "id": 2,
+        "name": "RECOVERED_RISING",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "scanner_promotion_id": "scan-reentry-low",
+        "price_delta_since_first_seen_pct": 2.4,
+        "prob": 0.62,
+    }
+    state_handlers.handle_watching_state(
+        stock,
+        "654321",
+        {"curr": 10000, "v_pw": 100.0},
+        admin_id=1,
+        now_ts=1010.0,
+        now_dt=datetime(2026, 7, 3, 10, 0, 0),
+    )
+
+    assert submit_calls == []
+    assert branch_calls == []
+    assert stock.get("rising_missed_one_share_entry_forced") is None
+    assert entry_logs[-1][0] == "rising_missed_one_share_entry_low_priority_deferred"
+    assert entry_logs[-1][1]["block_reason"] == "prior_rising_missed_exit_recovered_with_avgdown"
+    assert entry_logs[-1][1]["watching_budget_priority"] == "low"
+    assert entry_logs[-1][1]["runtime_effect"] is True
+    assert entry_logs[-1][1]["broker_order_forbidden"] is True
+
+
+def test_rising_missed_same_day_reentry_guard_hydrates_pipeline_event(monkeypatch, tmp_path):
+    state_handlers.TRADING_RULES = CONFIG
+    state_handlers._RISING_MISSED_SAME_DAY_REENTRY_RISK.clear()
+    state_handlers._RISING_MISSED_REENTRY_RISK_EVENT_CACHE.update(
+        {"date": "", "path": "", "mtime_ns": 0, "size": 0, "rows_by_code": {}}
+    )
+    data_dir = tmp_path / "data"
+    event_dir = data_dir / "pipeline_events"
+    event_dir.mkdir(parents=True)
+    now_ts = datetime(2026, 7, 3, 10, 5, 0).timestamp()
+    expires_at = datetime(2026, 7, 3, 23, 59, 59).timestamp()
+    payload = {
+        "stage": "rising_missed_same_day_reentry_risk_marked",
+        "stock_code": "777777",
+        "stock_name": "HYDRATE_RISING",
+        "emitted_at": "2026-07-03T10:00:00",
+        "fields": {
+            "risk_expires_at": expires_at,
+            "ttl_sec": int(expires_at - now_ts),
+            "exit_rule": "scalp_soft_stop_pct",
+            "profit_rate": "-0.75",
+            "avg_down_count": 0,
+            "reentry_action": "block",
+            "risk_reason": "prior_rising_missed_exit_non_positive",
+            "source_stage": "sell_order_sent",
+        },
+    }
+    (event_dir / "pipeline_events_2026-07-03.jsonl").write_text(
+        json.dumps(payload, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(state_handlers, "DATA_DIR", data_dir)
+
+    decision = state_handlers.evaluate_rising_missed_same_day_reentry_guard("777777", now_ts)
+
+    assert decision["allowed"] is False
+    assert decision["reason"] == "prior_rising_missed_exit_non_positive"
+    assert decision["reentry_action"] == "block"
+    assert decision["watching_budget_priority"] == "blocked"
+    assert decision["last_exit_profit_rate"] == -0.75
+    assert state_handlers._RISING_MISSED_SAME_DAY_REENTRY_RISK["777777"]["reentry_action"] == "block"
+
+
+def test_rising_missed_same_day_reentry_guard_invalidates_clean_realized_profit(monkeypatch, tmp_path):
+    state_handlers.TRADING_RULES = CONFIG
+    state_handlers._RISING_MISSED_SAME_DAY_REENTRY_RISK.clear()
+    state_handlers._RISING_MISSED_REENTRY_RISK_EVENT_CACHE.update(
+        {"date": "", "path": "", "mtime_ns": 0, "size": 0, "rows_by_code": {}}
+    )
+    data_dir = tmp_path / "data"
+    event_dir = data_dir / "pipeline_events"
+    event_dir.mkdir(parents=True)
+    now_ts = datetime(2026, 7, 3, 10, 5, 0).timestamp()
+    expires_at = datetime(2026, 7, 3, 23, 59, 59).timestamp()
+    rows = [
+        {
+            "stage": "rising_missed_same_day_reentry_risk_marked",
+            "stock_code": "777778",
+            "stock_name": "HYDRATE_RISING",
+            "emitted_at": "2026-07-03T10:00:00",
+            "fields": {
+                "risk_expires_at": expires_at,
+                "ttl_sec": int(expires_at - now_ts),
+                "exit_rule": "scalp_soft_stop_pct",
+                "profit_rate": "-0.30",
+                "avg_down_count": 0,
+                "reentry_action": "block",
+                "risk_reason": "prior_rising_missed_exit_non_positive",
+                "source_stage": "sell_order_sent",
+            },
+        },
+        {
+            "stage": "sell_completed",
+            "stock_code": "777778",
+            "stock_name": "HYDRATE_RISING",
+            "emitted_at": "2026-07-03T10:01:00",
+            "fields": {"profit_rate": "+0.22", "exit_rule": "scalp_trailing_take_profit"},
+        },
+    ]
+    (event_dir / "pipeline_events_2026-07-03.jsonl").write_text(
+        "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(state_handlers, "DATA_DIR", data_dir)
+
+    decision = state_handlers.evaluate_rising_missed_same_day_reentry_guard("777778", now_ts)
+
+    assert decision["allowed"] is True
+    assert decision["reason"] == "sell_completed_clean_profit"
+    assert "777778" not in state_handlers._RISING_MISSED_SAME_DAY_REENTRY_RISK
+
+
+def test_rising_missed_same_day_reentry_guard_downgrades_realized_avgdown_profit(monkeypatch, tmp_path):
+    state_handlers.TRADING_RULES = CONFIG
+    state_handlers._RISING_MISSED_SAME_DAY_REENTRY_RISK.clear()
+    state_handlers._RISING_MISSED_REENTRY_RISK_EVENT_CACHE.update(
+        {"date": "", "path": "", "mtime_ns": 0, "size": 0, "rows_by_code": {}}
+    )
+    data_dir = tmp_path / "data"
+    event_dir = data_dir / "pipeline_events"
+    event_dir.mkdir(parents=True)
+    now_ts = datetime(2026, 7, 3, 10, 5, 0).timestamp()
+    expires_at = datetime(2026, 7, 3, 23, 59, 59).timestamp()
+    rows = [
+        {
+            "stage": "rising_missed_same_day_reentry_risk_marked",
+            "stock_code": "777779",
+            "stock_name": "HYDRATE_RISING",
+            "emitted_at": "2026-07-03T10:00:00",
+            "fields": {
+                "risk_expires_at": expires_at,
+                "ttl_sec": int(expires_at - now_ts),
+                "exit_rule": "scalp_soft_stop_pct",
+                "profit_rate": "-0.30",
+                "avg_down_count": 1,
+                "reentry_action": "block",
+                "risk_reason": "prior_rising_missed_exit_non_positive",
+                "source_stage": "sell_order_sent",
+            },
+        },
+        {
+            "stage": "sell_completed",
+            "stock_code": "777779",
+            "stock_name": "HYDRATE_RISING",
+            "emitted_at": "2026-07-03T10:01:00",
+            "fields": {"profit_rate": "+0.22", "exit_rule": "scalp_trailing_take_profit"},
+        },
+    ]
+    (event_dir / "pipeline_events_2026-07-03.jsonl").write_text(
+        "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(state_handlers, "DATA_DIR", data_dir)
+
+    decision = state_handlers.evaluate_rising_missed_same_day_reentry_guard("777779", now_ts)
+
+    assert decision["allowed"] is False
+    assert decision["reason"] == "prior_rising_missed_exit_recovered_with_avgdown"
+    assert decision["reentry_action"] == "low_priority"
+    assert decision["watching_budget_priority"] == "low"
+    assert decision["last_exit_profit_rate"] == 0.22
+
+
+def test_rising_missed_one_share_hook_blocks_price_above_cap_without_submit(monkeypatch):
+    state_handlers.COOLDOWNS = {}
+    state_handlers.ALERTED_STOCKS = set()
+    state_handlers.TRADING_RULES = CONFIG
+    state_handlers._RISING_MISSED_SAME_DAY_REENTRY_RISK.clear()
+
+    branch_calls = []
+    submit_calls = []
+    entry_logs = []
+
+    monkeypatch.setenv("KORSTOCKSCAN_RISING_MISSED_ONE_SHARE_ENTRY_ENABLED", "true")
+    monkeypatch.setattr(state_handlers, "is_buy_side_paused", lambda: False)
+    monkeypatch.setattr(
+        state_handlers,
+        "evaluate_scalp_same_symbol_loss_reentry_guard",
+        lambda *args, **kwargs: {"allowed": True},
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "evaluate_scalping_strength_momentum",
+        lambda ws_data: {"enabled": True, "allowed": True, "reason": "ok"},
     )
     monkeypatch.setattr(
         state_handlers,
@@ -736,6 +1141,11 @@ def test_rising_missed_one_share_hook_blocks_open_pending_without_submit(monkeyp
         state_handlers,
         "evaluate_scalp_same_symbol_loss_reentry_guard",
         lambda *args, **kwargs: {"allowed": True},
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "evaluate_scalping_strength_momentum",
+        lambda ws_data: {"enabled": True, "allowed": True, "reason": "ok"},
     )
     monkeypatch.setattr(
         state_handlers,
@@ -2496,6 +2906,18 @@ def test_execute_scalping_pyramid_sends_resolved_best_bid_with_dynamic_budget_qt
     )
     monkeypatch.setattr(
         state_handlers,
+        "_resolve_scalp_cash_budget_context",
+        lambda code, unit_price, fallback_orderable_amount: {
+            "budget_base": fallback_orderable_amount,
+            "budget_source": "kt00001_ord_alow_amt",
+            "account_deposit": fallback_orderable_amount,
+            "cash_orderable_amount": fallback_orderable_amount,
+            "cash_orderable_qty_cap": None,
+            "kt00011_error": "",
+        },
+    )
+    monkeypatch.setattr(
+        state_handlers,
         "record_add_history_event",
         lambda *args, **kwargs: history.append(kwargs) or True,
     )
@@ -2557,6 +2979,28 @@ def test_execute_scalping_pyramid_uses_dynamic_budget_for_one_share_position(mon
         state_handlers.kiwoom_orders,
         "send_buy_order",
         lambda *args, **kwargs: sent_orders.append(args) or {"return_code": "0", "ord_no": "P1"},
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_resolve_scalp_cash_budget_context",
+        lambda code, unit_price, fallback_orderable_amount: {
+            "budget_base": fallback_orderable_amount,
+            "budget_source": "kt00001_ord_alow_amt",
+            "account_deposit": fallback_orderable_amount,
+            "cash_orderable_amount": fallback_orderable_amount,
+            "cash_orderable_qty_cap": None,
+            "kt00011_error": "",
+        },
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_pre_submit_refresh_real_ws_snapshot",
+        lambda code, ws_data, strategy: (dict(ws_data), {}),
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_pre_submit_refresh_rest_orderbook_snapshot",
+        lambda code, ws_data, strategy: (dict(ws_data), {"pre_submit_rest_orderbook_refresh_applied": False}),
     )
     monkeypatch.setattr(
         state_handlers,
@@ -2916,6 +3360,7 @@ def test_real_scalping_scale_in_uses_buy_window_not_regular_market_close(monkeyp
     monkeypatch.setattr(state_handlers, "datetime", FixedDateTime)
     monkeypatch.setattr(state_handlers, "is_scalping_buy_time_allowed", lambda now=None: True)
     monkeypatch.setattr(state_handlers, "scalping_buy_time_block_reason", lambda now=None: "nxt_buy_window_allowed")
+    monkeypatch.setattr(state_handlers.kiwoom_orders, "resolve_order_dmst_stex_tp", lambda dmst_stex_tp=None: "NXT")
     monkeypatch.setattr(state_handlers.kiwoom_orders, "get_deposit", lambda *args, **kwargs: 100_000_000)
     monkeypatch.setattr(
         state_handlers,
@@ -5451,6 +5896,15 @@ def test_send_buy_order_market_blocked_before_buy_time_cutoff(monkeypatch):
 
 
 def test_send_buy_order_market_allows_time_block_override_for_defensive_scale_in(monkeypatch):
+    class FixedDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            value = cls(2026, 6, 30, 16, 41, 0)
+            if tz is not None:
+                return value.replace(tzinfo=tz)
+            return value
+
+    monkeypatch.setattr(kiwoom_orders, "datetime", FixedDateTime)
     monkeypatch.setattr(kiwoom_orders, "is_buy_side_paused", lambda: False)
     monkeypatch.setattr(kiwoom_orders, "is_buy_side_time_blocked", lambda: True)
     monkeypatch.setattr(kiwoom_orders, "is_scalping_buy_window_blocked", lambda: False)
@@ -17314,25 +17768,11 @@ def test_stop_line_touch_mandatory_avg_down_includes_ollix_like_case(monkeypatch
         held_sec=1_494,
         dynamic_stop_pct=-3.00,
     )
-    assert second_allowed["should_retry"] is True
+    assert second_allowed["should_retry"] is False
+    assert second_allowed["reason"] == "already_used"
     assert second_allowed["used_count"] == 1
-    assert second_allowed["max_per_position"] == 3
-
-    stock["stop_line_touch_avg_down_count"] = 2
-    third_allowed = state_handlers._evaluate_stop_line_touch_mandatory_avg_down(
-        stock,
-        strategy="SCALPING",
-        sell_reason_type="LOSS",
-        exit_rule="scalp_soft_stop_pct",
-        profit_rate=-3.65,
-        peak_profit=0.31,
-        current_ai_score=50,
-        held_sec=1_494,
-        dynamic_stop_pct=-3.00,
-    )
-    assert third_allowed["should_retry"] is True
-    assert third_allowed["used_count"] == 2
-    assert third_allowed["max_per_position"] == 3
+    assert second_allowed["max_per_position"] == 1
+    assert second_allowed["configured_max_per_position"] == 3
 
     stock["stop_line_touch_avg_down_count"] = 3
     already_used = state_handlers._evaluate_stop_line_touch_mandatory_avg_down(
@@ -17348,12 +17788,12 @@ def test_stop_line_touch_mandatory_avg_down_includes_ollix_like_case(monkeypatch
     )
     assert already_used["should_retry"] is False
     assert already_used["reason"] == "already_used"
+    assert already_used["max_per_position"] == 1
 
     stock_without_count = {
         **stock,
         "stop_line_touch_avg_down_used": False,
         "stop_line_touch_avg_down_count": 0,
-        "last_add_type": "AVG_DOWN",
     }
     inferred_first_used = state_handlers._evaluate_stop_line_touch_mandatory_avg_down(
         stock_without_count,
@@ -17367,7 +17807,98 @@ def test_stop_line_touch_mandatory_avg_down_includes_ollix_like_case(monkeypatch
         dynamic_stop_pct=-3.00,
     )
     assert inferred_first_used["should_retry"] is True
-    assert inferred_first_used["used_count"] == 1
+    assert inferred_first_used["used_count"] == 0
+
+    inferred_prior_avg_down = state_handlers._evaluate_stop_line_touch_mandatory_avg_down(
+        {**stock_without_count, "last_add_type": "AVG_DOWN"},
+        strategy="SCALPING",
+        sell_reason_type="LOSS",
+        exit_rule="scalp_soft_stop_pct",
+        profit_rate=-3.65,
+        peak_profit=0.31,
+        current_ai_score=50,
+        held_sec=1_494,
+        dynamic_stop_pct=-3.00,
+    )
+    assert inferred_prior_avg_down["should_retry"] is False
+    assert inferred_prior_avg_down["reason"] == "already_used"
+    assert inferred_prior_avg_down["used_count"] == 1
+
+
+def test_first_touch_avgdown_decision_gate_blocks_repeated_blockers_without_recovery(monkeypatch):
+    monkeypatch.setattr(state_handlers, "TRADING_RULES", CONFIG)
+    stock = {
+        "strategy": "SCALPING",
+        "trade_quality_block_history": [
+            {"stage": "blocked_strength_momentum", "ts": 995.0, "risk_state": "weak_momentum_context"}
+            for _ in range(9)
+        ],
+    }
+
+    blocked = state_handlers._evaluate_first_touch_avgdown_decision_gate(
+        stock=stock,
+        ws_data={"curr": 10_000, "best_bid": 9_990, "best_ask": 10_000},
+        context_fields={},
+        current_ai_score=66,
+        peak_profit=-0.10,
+        profit_rate=-3.89,
+        now_ts=1_000.0,
+    )
+
+    assert blocked["allowed"] is False
+    assert "repeated_blockers_without_recovery" in blocked["reason"]
+    assert blocked["fields"]["first_touch_avgdown_repeated_blocker_count"] == 9
+    assert "repeated_blockers_without_support" in blocked["fields"]["first_touch_avgdown_risk_signals"]
+
+
+def test_first_touch_avgdown_decision_gate_allows_moderate_ai_with_limited_blockers(monkeypatch):
+    monkeypatch.setattr(state_handlers, "TRADING_RULES", CONFIG)
+    stock = {
+        "strategy": "SCALPING",
+        "trade_quality_block_history": [
+            {"stage": "blocked_strength_momentum", "ts": 995.0, "risk_state": "weak_momentum_context"}
+            for _ in range(8)
+        ],
+    }
+
+    allowed = state_handlers._evaluate_first_touch_avgdown_decision_gate(
+        stock=stock,
+        ws_data={"curr": 10_000, "best_bid": 9_990, "best_ask": 10_000},
+        context_fields={},
+        current_ai_score=65,
+        peak_profit=-0.23,
+        profit_rate=-3.42,
+        now_ts=1_000.0,
+    )
+
+    assert allowed["allowed"] is True
+    assert allowed["reason"] == "moderate_ai_with_limited_repeated_blockers"
+    assert allowed["fields"]["first_touch_avgdown_repeated_blocker_count"] == 8
+
+
+def test_first_touch_avgdown_decision_gate_allows_prior_peak_recovery(monkeypatch):
+    monkeypatch.setattr(state_handlers, "TRADING_RULES", CONFIG)
+    stock = {
+        "strategy": "SCALPING",
+        "trade_quality_block_history": [
+            {"stage": "blocked_vpw", "ts": 995.0, "risk_state": "below_static_vpw_context"}
+            for _ in range(11)
+        ],
+    }
+
+    allowed = state_handlers._evaluate_first_touch_avgdown_decision_gate(
+        stock=stock,
+        ws_data={"curr": 10_000, "best_bid": 9_990, "best_ask": 10_000},
+        context_fields={},
+        current_ai_score=62,
+        peak_profit=0.75,
+        profit_rate=-4.16,
+        now_ts=1_000.0,
+    )
+
+    assert allowed["allowed"] is True
+    assert allowed["reason"] == "recovery_support_confirmed"
+    assert "prior_peak_recovery" in allowed["fields"]["first_touch_avgdown_support_signals"]
 
 
 def test_stop_line_touch_mandatory_avg_down_submits_before_grace(monkeypatch):
@@ -17431,7 +17962,78 @@ def test_stop_line_touch_mandatory_avg_down_submits_before_grace(monkeypatch):
     assert add_calls[0]["action"]["stop_line_touched"] is True
     by_stage = {stage: fields for stage, fields in pipeline_events}
     assert "stop_line_touch_mandatory_avg_down_candidate" in by_stage
+    assert by_stage["stop_line_touch_mandatory_avg_down_candidate"]["first_touch_avgdown_decision_allowed"] is True
+    assert by_stage["stop_line_touch_mandatory_avg_down_candidate"]["first_touch_avgdown_decision_authority"] == (
+        "real_scalping_first_touch_avgdown_decision_gate"
+    )
     assert by_stage["stop_line_touch_mandatory_avg_down_submitted"]["actual_order_submitted"] is True
+
+
+def test_stop_line_touch_first_touch_avgdown_decision_blocks_submit(monkeypatch):
+    state_handlers.TRADING_RULES = replace(
+        CONFIG,
+        SCALPING_AVG_DOWN_MARKET_ON_STOP_TOUCH_ENABLED=True,
+        SCALP_LATE_LOSS_AVG_DOWN_MAX_PER_POSITION=3,
+    )
+    stock = {
+        "id": 15102,
+        "code": "094360",
+        "name": "칩스앤미디어",
+        "status": "HOLDING",
+        "strategy": "SCALPING",
+        "buy_price": 18_000,
+        "buy_qty": 1,
+        "actual_order_submitted": True,
+        "trade_quality_block_history": [
+            {"stage": "blocked_strength_momentum", "ts": 995.0, "risk_state": "weak_momentum_context"}
+            for _ in range(9)
+        ],
+    }
+    pipeline_events = []
+    monkeypatch.setattr(
+        state_handlers,
+        "can_consider_scale_in",
+        lambda *args, **kwargs: {"allowed": True, "reason": "ok"},
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_process_scale_in_action",
+        lambda **kwargs: (_ for _ in ()).throw(AssertionError("first touch gate must block before order")),
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_holding_pipeline",
+        lambda stock, code, stage, **fields: pipeline_events.append((stage, fields)),
+    )
+
+    result = state_handlers._attempt_stop_line_touch_mandatory_avg_down(
+        stock=stock,
+        code="094360",
+        ws_data={"curr": 17_300, "best_bid": 17_290, "best_ask": 17_300},
+        strategy="SCALPING",
+        market_regime="NORMAL",
+        admin_id=1,
+        sell_reason_type="LOSS",
+        exit_rule="scalp_soft_stop_pct",
+        profit_rate=-3.89,
+        peak_profit=-0.10,
+        current_ai_score=66,
+        held_sec=1_494,
+        dynamic_stop_pct=-3.00,
+        now_ts=1_000.0,
+        context_fields={"sell_intercept_context": "soft_stop_touch_before_grace"},
+    )
+
+    assert result["submitted"] is False
+    assert "repeated_blockers_without_recovery" in result["reason"]
+    by_stage = {stage: fields for stage, fields in pipeline_events}
+    assert "stop_line_touch_first_touch_avgdown_decision_blocked" in by_stage
+    assert "stop_line_touch_mandatory_avg_down_candidate" not in by_stage
+    blocked = by_stage["stop_line_touch_first_touch_avgdown_decision_blocked"]
+    assert blocked["actual_order_submitted"] is False
+    assert blocked["broker_order_forbidden"] is True
+    assert blocked["first_touch_avgdown_decision_allowed"] is False
+    assert blocked["first_touch_avgdown_repeated_blocker_count"] == 9
 
 
 def test_stop_line_touch_qty_budget_block_auto_excludes_manual_control(monkeypatch, tmp_path):
@@ -17618,7 +18220,7 @@ def test_soft_stop_line_touch_avg_down_defer_waits_for_extra_dip(monkeypatch):
         exit_rule="scalp_soft_stop_pct",
         profit_rate=-3.06,
         peak_profit=0.27,
-        current_ai_score=52,
+        current_ai_score=62,
         held_sec=1_331,
         dynamic_stop_pct=-3.00,
         now_ts=1_000.0,
@@ -17635,7 +18237,7 @@ def test_soft_stop_line_touch_avg_down_defer_waits_for_extra_dip(monkeypatch):
         exit_rule="scalp_soft_stop_pct",
         profit_rate=-3.15,
         peak_profit=0.27,
-        current_ai_score=52,
+        current_ai_score=62,
         held_sec=1_332,
         dynamic_stop_pct=-3.00,
         now_ts=1_001.0,
@@ -17652,7 +18254,7 @@ def test_soft_stop_line_touch_avg_down_defer_waits_for_extra_dip(monkeypatch):
         exit_rule="scalp_soft_stop_pct",
         profit_rate=-3.28,
         peak_profit=0.27,
-        current_ai_score=52,
+        current_ai_score=62,
         held_sec=1_333,
         dynamic_stop_pct=-3.00,
         now_ts=1_002.0,
@@ -17728,7 +18330,7 @@ def test_hard_stop_line_touch_avg_down_ignores_soft_stop_defer(monkeypatch):
         exit_rule="scalp_hard_stop_pct",
         profit_rate=-5.10,
         peak_profit=0.27,
-        current_ai_score=52,
+        current_ai_score=62,
         held_sec=1_331,
         dynamic_stop_pct=-5.00,
         now_ts=1_000.0,
@@ -17791,7 +18393,7 @@ def test_soft_stop_line_touch_avg_down_defer_submits_after_sparse_loop(monkeypat
         exit_rule="scalp_soft_stop_pct",
         profit_rate=-3.06,
         peak_profit=0.27,
-        current_ai_score=52,
+        current_ai_score=62,
         held_sec=1_331,
         dynamic_stop_pct=-3.00,
         now_ts=1_000.0,
@@ -17808,7 +18410,7 @@ def test_soft_stop_line_touch_avg_down_defer_submits_after_sparse_loop(monkeypat
         exit_rule="scalp_soft_stop_pct",
         profit_rate=-3.08,
         peak_profit=0.27,
-        current_ai_score=52,
+        current_ai_score=62,
         held_sec=1_340,
         dynamic_stop_pct=-3.00,
         now_ts=1_005.0,
@@ -18162,8 +18764,8 @@ def test_stop_line_touch_mandatory_avg_down_bypasses_recent_scale_in_cooldown(mo
         "strategy": "SCALPING",
         "buy_price": 11_708.5,
         "buy_qty": 8,
-        "avg_down_count": 2,
-        "last_add_type": "AVG_DOWN",
+        "avg_down_count": 0,
+        "last_add_type": "PYRAMID",
         "last_add_time": 1_930.0,
         "actual_order_submitted": True,
     }
@@ -18209,7 +18811,7 @@ def test_stop_line_touch_mandatory_avg_down_bypasses_recent_scale_in_cooldown(mo
 
     assert result["submitted"] is True
     assert add_calls
-    assert stock["stop_line_touch_avg_down_count"] == 3
+    assert stock["stop_line_touch_avg_down_count"] == 1
     by_stage = {stage: fields for stage, fields in pipeline_events}
     assert by_stage["stop_line_touch_mandatory_avg_down_candidate"]["gate_reason"] == "ok"
     assert by_stage["stop_line_touch_mandatory_avg_down_submitted"]["actual_order_submitted"] is True
