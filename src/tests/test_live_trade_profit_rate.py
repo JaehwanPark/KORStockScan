@@ -136,6 +136,21 @@ class _SyncDB:
         return 0
 
 
+class _FailingSyncDB(_SyncDB):
+    def get_session(self):
+        session = super().get_session()
+
+        class _FailingSession:
+            def __enter__(self_inner):
+                return session.__enter__()
+
+            def __exit__(self_inner, exc_type, exc, tb):
+                session.__exit__(exc_type, exc, tb)
+                raise RuntimeError("commit failed")
+
+        return _FailingSession()
+
+
 class _S15Session:
     def __init__(self, record=None):
         self.record = record
@@ -346,6 +361,26 @@ def test_periodic_account_sync_uses_net_profit_rate_for_missing_sell_receipt(mon
     sniper_sync.HIGHEST_PRICES = {"123456": 100500}
     sniper_sync.STATE_LOCK = _DummyLock()
     monkeypatch.setattr(sniper_sync.kiwoom_utils, "get_account_balance_kt00005", lambda token: ([], {"KRX"}))
+    removals = []
+
+    def fake_remove_manual_control_exclusion_code(code, *, reason):
+        removals.append({"code": code, "reason": reason})
+        return type(
+            "Removal",
+            (),
+            {
+                "removed": True,
+                "code": code,
+                "source": "manual_control_excluded_codes.txt",
+                "reason": f"manual_control_exclusion_removed:{reason}",
+            },
+        )()
+
+    monkeypatch.setattr(
+        sniper_sync,
+        "remove_manual_control_exclusion_code",
+        fake_remove_manual_control_exclusion_code,
+    )
 
     sniper_sync.periodic_account_sync()
 
@@ -354,6 +389,47 @@ def test_periodic_account_sync_uses_net_profit_rate_for_missing_sell_receipt(mon
     assert record.profit_rate == -0.13
     assert sniper_sync.ACTIVE_TARGETS[0]["status"] == "COMPLETED"
     assert "123456" not in sniper_sync.HIGHEST_PRICES
+    assert removals == [
+        {
+            "code": "123456",
+            "reason": "periodic_sync_completed_no_broker_holding",
+        }
+    ]
+
+
+def test_periodic_account_sync_does_not_remove_manual_control_exclusion_on_db_error(monkeypatch):
+    record = type(
+        "Record",
+        (),
+        {
+            "stock_code": "123456",
+            "stock_name": "TEST",
+            "status": "SELL_ORDERED",
+            "buy_price": 100000.0,
+            "buy_qty": 1,
+            "sell_price": 0,
+            "sell_time": None,
+            "profit_rate": 0.0,
+            "scale_in_locked": False,
+        },
+    )()
+
+    sniper_sync.KIWOOM_TOKEN = "token"
+    sniper_sync.DB = _FailingSyncDB([record], [])
+    sniper_sync.ACTIVE_TARGETS = [{"code": "123456", "status": "SELL_ORDERED", "sell_target_price": 100100}]
+    sniper_sync.HIGHEST_PRICES = {"123456": 100500}
+    sniper_sync.STATE_LOCK = _DummyLock()
+    monkeypatch.setattr(sniper_sync.kiwoom_utils, "get_account_balance_kt00005", lambda token: ([], {"KRX"}))
+    removals = []
+    monkeypatch.setattr(
+        sniper_sync,
+        "remove_manual_control_exclusion_code",
+        lambda code, *, reason: removals.append({"code": code, "reason": reason}),
+    )
+
+    sniper_sync.periodic_account_sync()
+
+    assert removals == []
 
 
 def test_periodic_account_sync_recovers_broker_only_holding_from_watching_record(monkeypatch):

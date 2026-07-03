@@ -63,6 +63,14 @@ class ManualControlExclusionDecision:
         }
 
 
+@dataclass(frozen=True)
+class ManualControlExclusionRemoval:
+    removed: bool
+    code: str
+    reason: str
+    source: str
+
+
 def normalize_manual_control_exclusion_code(value: object) -> str:
     raw = str(value or "").strip().upper()
     if not raw:
@@ -105,6 +113,13 @@ def _invalidate_file_cache() -> None:
 def _sanitize_append_comment(value: object) -> str:
     text = re.sub(r"[\r\n#]+", " ", str(value or "")).strip()
     return "".join(ch if 32 <= ord(ch) < 127 else "_" for ch in text)[:160]
+
+
+def _split_line_comment(line: str) -> tuple[str, str]:
+    match = _COMMENT_RE.search(line)
+    if not match:
+        return line, ""
+    return line[: match.start()], line[match.start() :]
 
 
 def _load_file_codes(path: Path) -> frozenset[str]:
@@ -201,5 +216,85 @@ def add_manual_control_exclusion_code(
         True,
         norm_code,
         "operator_manual_control_excluded_symbol",
+        str(path),
+    )
+
+
+def remove_manual_control_exclusion_code(
+    code: object,
+    *,
+    reason: object = "",
+) -> ManualControlExclusionRemoval:
+    norm_code = normalize_manual_control_exclusion_code(code)
+    if not norm_code:
+        return ManualControlExclusionRemoval(
+            False,
+            "",
+            "invalid_manual_control_exclusion_code",
+            "",
+        )
+
+    path = _file_path()
+    with _WRITE_LOCK:
+        try:
+            original_text = path.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            return ManualControlExclusionRemoval(
+                False,
+                norm_code,
+                "manual_control_exclusion_file_missing",
+                str(path),
+            )
+        except OSError as exc:
+            return ManualControlExclusionRemoval(
+                False,
+                norm_code,
+                f"manual_control_exclusion_remove_failed:{exc.__class__.__name__}",
+                str(path),
+            )
+
+        removed = False
+        output_lines: list[str] = []
+        for line in original_text.splitlines():
+            uncommented, comment = _split_line_comment(line)
+            codes = list(_split_codes(uncommented))
+            if norm_code not in codes:
+                output_lines.append(line)
+                continue
+
+            removed = True
+            remaining = [item for item in codes if item != norm_code]
+            if remaining:
+                rebuilt = ",".join(remaining)
+                if comment:
+                    rebuilt = f"{rebuilt} {comment.strip()}"
+                output_lines.append(rebuilt)
+
+        if not removed:
+            return ManualControlExclusionRemoval(
+                False,
+                norm_code,
+                "manual_control_exclusion_code_not_in_file",
+                str(path),
+            )
+
+        try:
+            suffix = "\n" if output_lines and original_text.endswith("\n") else ""
+            path.write_text("\n".join(output_lines) + suffix, encoding="utf-8")
+        except OSError as exc:
+            return ManualControlExclusionRemoval(
+                False,
+                norm_code,
+                f"manual_control_exclusion_remove_failed:{exc.__class__.__name__}",
+                str(path),
+            )
+
+        _invalidate_file_cache()
+
+    suffix = _sanitize_append_comment(reason)
+    return ManualControlExclusionRemoval(
+        True,
+        norm_code,
+        f"manual_control_exclusion_removed{f':{suffix}' if suffix else ''}",
         str(path),
     )

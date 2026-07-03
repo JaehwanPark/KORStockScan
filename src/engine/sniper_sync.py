@@ -14,6 +14,7 @@ from src.engine.sniper_position_tags import (
 )
 from src.engine.sniper_scale_in_utils import record_add_history_event, find_latest_open_add_order_no
 from src.engine.trade_profit import calculate_net_profit_rate
+from src.engine.risk.manual_control_exclusion import remove_manual_control_exclusion_code
 from src.utils import kiwoom_utils
 from src.utils.constants import RESTART_FLAG_PATH, TRADING_RULES
 from src.utils.logger import log_error, log_info
@@ -575,6 +576,15 @@ def _reconcile_scale_in_lock(record, real_qty, real_buy_uv):
     return False
 
 
+def _remove_manual_control_exclusion_for_completed_holding(code, *, reason: str) -> None:
+    removal = remove_manual_control_exclusion_code(code, reason=reason)
+    if removal.removed:
+        log_info(
+            f"🧹 [수동관리 제외 해제] {removal.code} removed from {removal.source} "
+            f"reason={removal.reason}"
+        )
+
+
 def sync_balance_with_db():
     """봇 시작 시 실제 계좌 잔고와 DB의 HOLDING 기록을 대조하여 정합성을 맞춥니다."""
     global KIWOOM_TOKEN, DB, ACTIVE_TARGETS
@@ -613,6 +623,7 @@ def sync_balance_with_db():
         is_nxt = DB.get_latest_is_nxt(code)
         return 'NXT' if is_nxt else 'KRX'
 
+    pending_manual_control_removals = []
     try:
         with DB.get_session() as session:
             db_holdings = session.query(RecommendationHistory).filter_by(status='HOLDING').all()
@@ -629,6 +640,9 @@ def sync_balance_with_db():
                         record.status = 'COMPLETED'
                         if not record.sell_time:
                             record.sell_time = datetime.now()
+                        pending_manual_control_removals.append(
+                            (code, "startup_sync_completed_no_broker_holding")
+                        )
 
                         target = next((t for t in ACTIVE_TARGETS if str(t.get('code', '')).strip()[:6] == code), None)
                         if target:
@@ -667,6 +681,9 @@ def sync_balance_with_db():
 
     except Exception as exc:
         log_error(f"🚨 DB 동기화 중 에러 발생: {exc}")
+    else:
+        for code, reason in pending_manual_control_removals:
+            _remove_manual_control_exclusion_for_completed_holding(code, reason=reason)
 
     print("✅ [데이터 동기화] 완료. 봇 메모리가 실제 계좌와 완벽히 일치합니다.")
 
@@ -778,6 +795,7 @@ def periodic_account_sync():
         return 'NXT' if is_nxt else 'KRX'
 
     synced_count = 0
+    pending_manual_control_removals = []
 
     try:
         with DB.get_session() as session:
@@ -795,6 +813,9 @@ def periodic_account_sync():
                         print(f"⚠️ [정기 동기화] {record.stock_name}({code}) 잔고 없음. 매도 영수증 누락으로 판단하여 COMPLETED 강제 전환.")
                         record.status = 'COMPLETED'
                         record.sell_time = datetime.now()
+                        pending_manual_control_removals.append(
+                            (code, "periodic_sync_completed_no_broker_holding")
+                        )
 
                         with STATE_LOCK:
                             target_stock = next((t for t in ACTIVE_TARGETS if str(t.get('code', '')).strip()[:6] == code), None)
@@ -886,6 +907,9 @@ def periodic_account_sync():
 
     except Exception as exc:
         log_error(f"🚨 정기 계좌 동기화 DB 에러: {exc}")
+    else:
+        for code, reason in pending_manual_control_removals:
+            _remove_manual_control_exclusion_for_completed_holding(code, reason=reason)
 
     if synced_count > 0:
         print(f"🔄 [정기 동기화 완료] 총 {synced_count}건의 웹소켓 누락 체결 상태를 바로잡았습니다.")

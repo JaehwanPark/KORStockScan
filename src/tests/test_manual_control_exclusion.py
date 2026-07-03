@@ -50,6 +50,57 @@ def test_manual_control_exclusion_append_adds_code_once(monkeypatch, tmp_path):
     assert path.read_text(encoding="utf-8").count("005930") == 1
 
 
+def test_manual_control_exclusion_remove_deletes_file_code(monkeypatch, tmp_path):
+    path = tmp_path / "manual_control_excluded_codes.txt"
+    path.write_text(
+        "005930 # Samsung manual control\n000660,001820 # grouped\n",
+        encoding="utf-8",
+    )
+    monkeypatch.delenv(manual_control_exclusion.EXCLUDED_CODES_ENV, raising=False)
+    monkeypatch.setenv(manual_control_exclusion.EXCLUDED_CODES_FILE_ENV, str(path))
+
+    result = manual_control_exclusion.remove_manual_control_exclusion_code(
+        "A005930",
+        reason="periodic_sync_completed_no_broker_holding",
+    )
+
+    assert result.removed is True
+    assert result.code == "005930"
+    assert manual_control_exclusion.evaluate_manual_control_exclusion("005930").excluded is False
+    assert manual_control_exclusion.evaluate_manual_control_exclusion("000660").excluded is True
+    assert "005930" not in path.read_text(encoding="utf-8")
+
+
+def test_manual_control_exclusion_remove_preserves_other_codes_on_same_line(monkeypatch, tmp_path):
+    path = tmp_path / "manual_control_excluded_codes.txt"
+    path.write_text("005930,000660,001820 # grouped\n", encoding="utf-8")
+    monkeypatch.delenv(manual_control_exclusion.EXCLUDED_CODES_ENV, raising=False)
+    monkeypatch.setenv(manual_control_exclusion.EXCLUDED_CODES_FILE_ENV, str(path))
+
+    result = manual_control_exclusion.remove_manual_control_exclusion_code("000660")
+
+    assert result.removed is True
+    assert manual_control_exclusion.evaluate_manual_control_exclusion("000660").excluded is False
+    assert manual_control_exclusion.evaluate_manual_control_exclusion("005930").excluded is True
+    assert manual_control_exclusion.evaluate_manual_control_exclusion("001820").excluded is True
+    assert path.read_text(encoding="utf-8") == "005930,001820 # grouped\n"
+
+
+def test_manual_control_exclusion_remove_file_code_does_not_clear_env_override(monkeypatch, tmp_path):
+    path = tmp_path / "manual_control_excluded_codes.txt"
+    path.write_text("005930 # Samsung manual control\n", encoding="utf-8")
+    monkeypatch.setenv(manual_control_exclusion.EXCLUDED_CODES_ENV, "005930")
+    monkeypatch.setenv(manual_control_exclusion.EXCLUDED_CODES_FILE_ENV, str(path))
+
+    result = manual_control_exclusion.remove_manual_control_exclusion_code("005930")
+
+    assert result.removed is True
+    assert path.read_text(encoding="utf-8") == ""
+    decision = manual_control_exclusion.evaluate_manual_control_exclusion("005930")
+    assert decision.excluded is True
+    assert decision.source == manual_control_exclusion.EXCLUDED_CODES_ENV
+
+
 def test_manual_control_exclusion_empty_config_does_not_block(monkeypatch, tmp_path):
     monkeypatch.delenv(manual_control_exclusion.EXCLUDED_CODES_ENV, raising=False)
     monkeypatch.setenv(manual_control_exclusion.EXCLUDED_CODES_FILE_ENV, str(tmp_path / "missing.txt"))
