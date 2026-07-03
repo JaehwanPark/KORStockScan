@@ -1,0 +1,142 @@
+# 2026-07-01 Scalping Pyramid Intraday Feedback
+
+- generated_at: 2026-07-03T13:24:45+09:00
+- decision_authority: source_only_pyramid_intraday_feedback_no_runtime_mutation
+- runtime_effect: false
+- allowed_runtime_apply: false
+- forbidden_uses: intraday_threshold_mutation, intraday_runtime_apply, hard_safety_relaxation, broker_guard_bypass, order_guard_relaxation, stale_quote_bypass, cooldown_bypass, quantity_guard_relaxation, position_cap_release, provider_route_change, bot_restart, real_execution_quality_approval
+
+## Summary
+
+- pyramid_feedback_row_count: 58
+- closed_pyramid_row_count: 24
+- pyramid_would_have_helped_count: 12
+- pyramid_correctly_blocked_count: 0
+- pyramid_overheat_or_reversal_risk_count: 12
+- pyramid_open_unresolved_count: 34
+- one_share_event_count: 49
+- one_share_closed_count: 23
+- one_share_pyramid_opportunity_count: 30
+- one_share_pyramid_missed_upside_count: 10
+- one_share_pyramid_missed_upside_rate: 0.43
+- one_share_pyramid_avg_opportunity_cost_pct: 1.03
+
+## Blocker Metrics
+
+- blocker=add_judgment_locked sample=2 recovered_rate=0.00 reversal_rate=0.00 blocked_then_recovered_rate=0.00
+- blocker=profit_not_enough sample=47 recovered_rate=0.26 reversal_rate=0.17 blocked_then_recovered_rate=0.26
+- blocker=scalping_cutoff sample=1 recovered_rate=0.00 reversal_rate=0.00 blocked_then_recovered_rate=0.00
+- blocker=trend_not_strong sample=8 recovered_rate=0.00 reversal_rate=0.50 blocked_then_recovered_rate=0.00
+
+## Rows
+
+- record_id=14571 code=095610 name=테스 label=pyramid_open_unresolved blocker=profit_not_enough profit=0.01 final=None ai=71.0 tick=2.0 micro_vwap=-16.18
+- record_id=14716 code=073240 name=금호타이어 label=pyramid_overheat_or_reversal_risk blocker=profit_not_enough profit=0.9 final=-6.36 ai=50.0 tick=0.0 micro_vwap=-105.51
+- record_id=14628 code=000500 name=가온전선 label=pyramid_open_unresolved blocker=trend_not_strong profit=16.65 final=None ai=59.0 tick=0.0 micro_vwap=-909.73
+- record_id=14720 code=010120 name=LS ELECTRIC label=pyramid_open_unresolved blocker=add_judgment_locked profit=0.61 final=None ai=69.0 tick=0.0 micro_vwap=-470.62
+- record_id=14560 code=247540 name=에코프로비엠 label=pyramid_open_unresolved blocker=profit_not_enough profit=0.77 final=None ai=58.0 tick=0.0 micro_vwap=-895.7
+- record_id=14531 code=066570 name=LG전자 label=pyramid_open_unresolved blocker=profit_not_enough profit=0.02 final=None ai=72.0 tick=3.0 micro_vwap=47.98
+- record_id=14733 code=037710 name=광주신세계 label=pyramid_overheat_or_reversal_risk blocker=profit_not_enough profit=1.02 final=-4.29 ai=50.0 tick=1.0 micro_vwap=-12.94
+- record_id=14586 code=475150 name=SK이터닉스 label=pyramid_would_have_helped blocker=profit_not_enough profit=0.97 final=7.02 ai=58.0 tick=0.0 micro_vwap=46.57
+- record_id=14741 code=033100 name=제룡전기 label=pyramid_would_have_helped blocker=profit_not_enough profit=0.33 final=1.45 ai=63.0 tick=0.0 micro_vwap=99.33
+- record_id=14717 code=336260 name=두산퓨얼셀 label=pyramid_would_have_helped blocker=profit_not_enough profit=0.48 final=1.9 ai=70.0 tick=1.0 micro_vwap=137.26
+- record_id=14731 code=062040 name=산일전기 label=pyramid_would_have_helped blocker=profit_not_enough profit=0.91 final=1.67 ai=68.0 tick=0.0 micro_vwap=134.3
+- record_id=14742 code=010120 name=LS ELECTRIC label=pyramid_overheat_or_reversal_risk blocker=profit_not_enough profit=1.49 final=1.49 ai=70.0 tick=0.0 micro_vwap=44.96
+- record_id=14597 code=080220 name=제주반도체 label=pyramid_open_unresolved blocker=add_judgment_locked profit=1.8 final=None ai=68.0 tick=0.5 micro_vwap=192.11
+- record_id=14730 code=084370 name=유진테크 label=pyramid_would_have_helped blocker=profit_not_enough profit=1.38 final=6.26 ai=70.0 tick=0.0 micro_vwap=256.59
+- record_id=14593 code=001820 name=삼화콘덴서 label=pyramid_would_have_helped blocker=profit_not_enough profit=0.31 final=1.64 ai=72.0 tick=0.0 micro_vwap=105.89
+- record_id=14568 code=240810 name=원익IPS label=pyramid_overheat_or_reversal_risk blocker=trend_not_strong profit=2.18 final=2.18 ai=62.0 tick=0.0 micro_vwap=133.15
+- record_id=14715 code=067080 name=대화제약 label=pyramid_overheat_or_reversal_risk blocker=profit_not_enough profit=0.93 final=-3.56 ai=67.0 tick=2.333 micro_vwap=-33.52
+- record_id= code=034020 name=두산에너빌리티 label=pyramid_open_unresolved blocker=profit_not_enough profit=0.1 final=None ai=72.0 tick=1.0 micro_vwap=-34.41
+- record_id= code=089890 name=코세스 label=pyramid_open_unresolved blocker=profit_not_enough profit=1.2 final=None ai=76.0 tick=0.833 micro_vwap=5.31
+- record_id=14740 code=270660 name=에브리봇 label=pyramid_overheat_or_reversal_risk blocker=profit_not_enough profit=0.13 final=-4.57 ai=73.0 tick=2.0 micro_vwap=105.02
+- record_id=14546 code=204320 name=HL만도 label=pyramid_open_unresolved blocker=profit_not_enough profit=1.18 final=None ai=74.0 tick=0.444 micro_vwap=26.66
+- record_id=14758 code=001260 name=남광토건 label=pyramid_overheat_or_reversal_risk blocker=profit_not_enough profit=0.97 final=0.97 ai=71.0 tick=1.0 micro_vwap=62.52
+- record_id=14750 code=062040 name=산일전기 label=pyramid_overheat_or_reversal_risk blocker=profit_not_enough profit=1.32 final=1.12 ai=73.0 tick=1.0 micro_vwap=10.6
+- record_id=14747 code=033100 name=제룡전기 label=pyramid_overheat_or_reversal_risk blocker=trend_not_strong profit=1.56 final=1.37 ai=69.0 tick=1.0 micro_vwap=-1.66
+- record_id=14749 code=336260 name=두산퓨얼셀 label=pyramid_overheat_or_reversal_risk blocker=trend_not_strong profit=3.28 final=2.93 ai=72.0 tick=1.0 micro_vwap=-2.56
+- record_id= code=336260 name=두산퓨얼셀 label=pyramid_open_unresolved blocker=trend_not_strong profit=3.1 final=None ai=73.0 tick=0.0 micro_vwap=-38.34
+- record_id= code=062040 name=산일전기 label=pyramid_open_unresolved blocker=profit_not_enough profit=0.15 final=None ai=70.0 tick=2.0 micro_vwap=8.58
+- record_id=14770 code=045100 name=한양이엔지 label=pyramid_would_have_helped blocker=profit_not_enough profit=0.17 final=2.33 ai=72.0 tick=2.0 micro_vwap=131.35
+- record_id= code=347850 name=디앤디파마텍 label=pyramid_open_unresolved blocker=profit_not_enough profit=0.4 final=None ai=75.0 tick=1.0 micro_vwap=-44.62
+- record_id=14786 code=037350 name=성도이엔지 label=pyramid_would_have_helped blocker=profit_not_enough profit=0.78 final=1.14 ai=73.0 tick=2.0 micro_vwap=24.52
+- record_id=14762 code=347700 name=스피어 label=pyramid_overheat_or_reversal_risk blocker=trend_not_strong profit=3.31 final=2.94 ai=70.0 tick=0.4 micro_vwap=-52.62
+- record_id=14753 code=084370 name=유진테크 label=pyramid_would_have_helped blocker=profit_not_enough profit=0.93 final=1.41 ai=57.0 tick=0.667 micro_vwap=30.18
+- record_id= code=222800 name=심텍 label=pyramid_open_unresolved blocker=profit_not_enough profit=0.42 final=None ai=73.0 tick=0.0 micro_vwap=-61.34
+- record_id= code=023160 name=태광 label=pyramid_open_unresolved blocker=profit_not_enough profit=0.33 final=None ai=46.0 tick=0.0 micro_vwap=4.83
+- record_id=14765 code=006340 name=대원전선 label=pyramid_would_have_helped blocker=profit_not_enough profit=1.42 final=1.82 ai=61.0 tick=1.0 micro_vwap=-0.78
+- record_id= code=036930 name=주성엔지니어링 label=pyramid_open_unresolved blocker=profit_not_enough profit=1.0 final=None ai=62.0 tick=0.0 micro_vwap=-999.0
+- record_id= code=006340 name=대원전선 label=pyramid_open_unresolved blocker=profit_not_enough profit=0.08 final=None ai=59.0 tick=0.0 micro_vwap=94.3
+- record_id=14819 code=006340 name=대원전선 label=pyramid_would_have_helped blocker=profit_not_enough profit=0.16 final=2.47 ai=61.0 tick=0.0 micro_vwap=19.18
+- record_id=14824 code=084370 name=유진테크 label=pyramid_would_have_helped blocker=profit_not_enough profit=1.19 final=1.66 ai=66.0 tick=0.273 micro_vwap=-28.62
+- record_id=14790 code=045100 name=한양이엔지 label=pyramid_overheat_or_reversal_risk blocker=profit_not_enough profit=1.39 final=1.26 ai=62.0 tick=0.667 micro_vwap=-16.55
+- record_id= code=347700 name=스피어 label=pyramid_open_unresolved blocker=trend_not_strong profit=3.63 final=None ai=61.0 tick=0.0 micro_vwap=-999.0
+- record_id= code=475150 name=SK이터닉스 label=pyramid_open_unresolved blocker=profit_not_enough profit=0.98 final=None ai=70.0 tick=0.0 micro_vwap=-70.03
+- record_id= code=038500 name=삼표시멘트 label=pyramid_open_unresolved blocker=profit_not_enough profit=0.17 final=None ai=72.0 tick=0.2 micro_vwap=20.49
+- record_id=14827 code=038500 name=삼표시멘트 label=pyramid_open_unresolved blocker=profit_not_enough profit=0.17 final=None ai=50.0 tick=2.362 micro_vwap=-3.28
+- record_id= code=045100 name=한양이엔지 label=pyramid_open_unresolved blocker=profit_not_enough profit=0.44 final=None ai=64.0 tick=1.25 micro_vwap=45.64
+- record_id= code=073240 name=금호타이어 label=pyramid_open_unresolved blocker=profit_not_enough profit=0.07 final=None ai=54.0 tick=0.455 micro_vwap=28.02
+- record_id= code=004440 name=삼일씨엔에스 label=pyramid_open_unresolved blocker=profit_not_enough profit=0.3 final=None ai=72.0 tick=0.6 micro_vwap=6.7
+- record_id=14838 code=045100 name=한양이엔지 label=pyramid_open_unresolved blocker=profit_not_enough profit=0.93 final=None ai=69.0 tick=3.375 micro_vwap=2.62
+- record_id=14833 code=084370 name=유진테크 label=pyramid_open_unresolved blocker=profit_not_enough profit=0.49 final=None ai=50.0 tick=1.407 micro_vwap=-70.78
+- record_id=14837 code=295310 name=에이치브이엠 label=pyramid_open_unresolved blocker=profit_not_enough profit=0.88 final=None ai=59.0 tick=1.739 micro_vwap=14.85
+- record_id=14743 code=037710 name=광주신세계 label=pyramid_open_unresolved blocker=profit_not_enough profit=0.21 final=None ai=58.0 tick=0.667 micro_vwap=-23.6
+- record_id= code=007660 name=이수페타시스 label=pyramid_open_unresolved blocker=profit_not_enough profit=-0.0 final=None ai=69.0 tick=1.25 micro_vwap=37.54
+- record_id= code=378340 name=필에너지 label=pyramid_open_unresolved blocker=profit_not_enough profit=0.24 final=None ai=72.0 tick=1.0 micro_vwap=14.28
+- record_id=14744 code=073240 name=금호타이어 label=pyramid_open_unresolved blocker=trend_not_strong profit=2.08 final=None ai=73.0 tick=0.667 micro_vwap=31.72
+- record_id=14823 code=347700 name=스피어 label=pyramid_open_unresolved blocker=profit_not_enough profit=0.51 final=None ai=50.0 tick=2.368 micro_vwap=-14.95
+- record_id= code=295310 name=에이치브이엠 label=pyramid_open_unresolved blocker=profit_not_enough profit=0.08 final=None ai=60.0 tick=4.2 micro_vwap=-10.86
+- record_id= code=006400 name=삼성SDI label=pyramid_open_unresolved blocker=profit_not_enough profit=0.28 final=None ai=71.0 tick=1.222 micro_vwap=9.52
+- record_id=14774 code=033100 name=제룡전기 label=pyramid_open_unresolved blocker=scalping_cutoff profit=2.58 final=None ai=58.0 tick=1.0 micro_vwap=-629.87
+
+## One Share Opportunity Rows
+
+- record_id=14720 code=010120 name=LS ELECTRIC label=pyramid_open_unresolved opportunity_seen=True opportunity_profit=0.61 max_profit=1.42 opportunity_cost=0.81 final=None
+- record_id=14716 code=073240 name=금호타이어 label=pyramid_overheat_or_reversal_risk opportunity_seen=True opportunity_profit=0.9 max_profit=2.22 opportunity_cost=1.32 final=-6.36
+- record_id=14733 code=037710 name=광주신세계 label=pyramid_overheat_or_reversal_risk opportunity_seen=True opportunity_profit=1.02 max_profit=1.02 opportunity_cost=0.0 final=-4.29
+- record_id=14730 code=084370 name=유진테크 label=pyramid_would_have_helped opportunity_seen=True opportunity_profit=1.38 max_profit=7.28 opportunity_cost=5.9 final=6.26
+- record_id=14719 code=112040 name=위메이드 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=14728 code=010120 name=LS ELECTRIC label=pyramid_correctly_blocked opportunity_seen=False opportunity_profit=None max_profit=-5.02 opportunity_cost=0.0 final=-0.63
+- record_id=14727 code=033100 name=제룡전기 label=pyramid_correctly_blocked opportunity_seen=False opportunity_profit=None max_profit=-5.4 opportunity_cost=0.0 final=-0.78
+- record_id=14715 code=067080 name=대화제약 label=pyramid_overheat_or_reversal_risk opportunity_seen=True opportunity_profit=0.93 max_profit=0.93 opportunity_cost=0.0 final=-3.56
+- record_id=14714 code=270660 name=에브리봇 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=14741 code=033100 name=제룡전기 label=pyramid_would_have_helped opportunity_seen=True opportunity_profit=0.33 max_profit=1.91 opportunity_cost=1.58 final=1.45
+- record_id=14731 code=062040 name=산일전기 label=pyramid_would_have_helped opportunity_seen=True opportunity_profit=0.91 max_profit=2.99 opportunity_cost=2.08 final=1.67
+- record_id=14740 code=270660 name=에브리봇 label=pyramid_overheat_or_reversal_risk opportunity_seen=True opportunity_profit=0.13 max_profit=0.4 opportunity_cost=0.27 final=-4.57
+- record_id=14717 code=336260 name=두산퓨얼셀 label=pyramid_would_have_helped opportunity_seen=True opportunity_profit=0.48 max_profit=2.97 opportunity_cost=2.49 final=1.9
+- record_id=14742 code=010120 name=LS ELECTRIC label=pyramid_overheat_or_reversal_risk opportunity_seen=True opportunity_profit=1.49 max_profit=2.45 opportunity_cost=0.96 final=1.49
+- record_id=14747 code=033100 name=제룡전기 label=pyramid_overheat_or_reversal_risk opportunity_seen=True opportunity_profit=1.56 max_profit=1.93 opportunity_cost=0.37 final=1.37
+- record_id=14725 code=402340 name=SK스퀘어 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=14749 code=336260 name=두산퓨얼셀 label=pyramid_overheat_or_reversal_risk opportunity_seen=True opportunity_profit=3.28 max_profit=3.63 opportunity_cost=0.35 final=2.93
+- record_id=14750 code=062040 name=산일전기 label=pyramid_overheat_or_reversal_risk opportunity_seen=True opportunity_profit=1.32 max_profit=2.09 opportunity_cost=0.77 final=1.12
+- record_id=14758 code=001260 name=남광토건 label=pyramid_overheat_or_reversal_risk opportunity_seen=True opportunity_profit=0.97 max_profit=2.37 opportunity_cost=1.4 final=0.97
+- record_id=14765 code=006340 name=대원전선 label=pyramid_would_have_helped opportunity_seen=True opportunity_profit=1.42 max_profit=2.42 opportunity_cost=1.0 final=1.82
+- record_id=14770 code=045100 name=한양이엔지 label=pyramid_would_have_helped opportunity_seen=True opportunity_profit=0.17 max_profit=2.19 opportunity_cost=2.02 final=2.33
+- record_id=14753 code=084370 name=유진테크 label=pyramid_would_have_helped opportunity_seen=True opportunity_profit=0.93 max_profit=1.88 opportunity_cost=0.95 final=1.41
+- record_id=14786 code=037350 name=성도이엔지 label=pyramid_would_have_helped opportunity_seen=True opportunity_profit=0.78 max_profit=1.69 opportunity_cost=0.91 final=1.14
+- record_id=14762 code=347700 name=스피어 label=pyramid_overheat_or_reversal_risk opportunity_seen=True opportunity_profit=3.31 max_profit=3.69 opportunity_cost=0.38 final=2.94
+- record_id=14824 code=084370 name=유진테크 label=pyramid_would_have_helped opportunity_seen=True opportunity_profit=1.19 max_profit=2.13 opportunity_cost=0.94 final=1.66
+- record_id=14819 code=006340 name=대원전선 label=pyramid_would_have_helped opportunity_seen=True opportunity_profit=0.16 max_profit=2.82 opportunity_cost=2.66 final=2.47
+- record_id=14790 code=045100 name=한양이엔지 label=pyramid_overheat_or_reversal_risk opportunity_seen=True opportunity_profit=1.39 max_profit=1.53 opportunity_cost=0.14 final=1.26
+- record_id=14773 code=001260 name=남광토건 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=14827 code=038500 name=삼표시멘트 label=pyramid_open_unresolved opportunity_seen=True opportunity_profit=0.17 max_profit=0.27 opportunity_cost=0.1 final=None
+- record_id=14744 code=073240 name=금호타이어 label=pyramid_open_unresolved opportunity_seen=True opportunity_profit=2.08 max_profit=2.68 opportunity_cost=0.6 final=None
+- record_id=14823 code=347700 name=스피어 label=pyramid_open_unresolved opportunity_seen=True opportunity_profit=0.51 max_profit=1.41 opportunity_cost=0.9 final=None
+- record_id=14779 code=006360 name=GS건설 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=14838 code=045100 name=한양이엔지 label=pyramid_open_unresolved opportunity_seen=True opportunity_profit=0.93 max_profit=1.71 opportunity_cost=0.78 final=None
+- record_id=14833 code=084370 name=유진테크 label=pyramid_open_unresolved opportunity_seen=True opportunity_profit=0.49 max_profit=1.22 opportunity_cost=0.73 final=None
+- record_id=14822 code=037350 name=성도이엔지 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=14837 code=295310 name=에이치브이엠 label=pyramid_open_unresolved opportunity_seen=True opportunity_profit=0.88 max_profit=0.88 opportunity_cost=0.0 final=None
+- record_id=14828 code=006340 name=대원전선 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=14775 code=062040 name=산일전기 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=14743 code=037710 name=광주신세계 label=pyramid_open_unresolved opportunity_seen=True opportunity_profit=0.21 max_profit=0.66 opportunity_cost=0.45 final=None
+- record_id=14774 code=033100 name=제룡전기 label=pyramid_open_unresolved opportunity_seen=True opportunity_profit=2.58 max_profit=2.76 opportunity_cost=0.18 final=None
+- record_id=14875 code=060370 name=LS마린솔루션 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=14737 code=084370 name=유진테크 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=14867 code=062040 name=산일전기 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=14755 code=067080 name=대화제약 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=14751 code=010120 name=LS ELECTRIC label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=14847 code=045100 name=한양이엔지 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=14735 code=000500 name=가온전선 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=14910 code=456040 name=OCI label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=14782 code=336260 name=두산퓨얼셀 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
