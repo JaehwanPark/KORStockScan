@@ -54,16 +54,39 @@ def test_login_success_message_helpers():
 
 def test_await_login_ack_handles_ping_then_success():
     manager = KiwoomWSManager("test-token")
+    ping_payload = json.dumps({"trnm": "PING", "ping_id": "abc123"})
     fake_ws = _FakeWS(
         [
-            json.dumps({"trnm": "PING"}),
+            json.dumps(["PING"]),
+            ping_payload,
             json.dumps({"trnm": "LOGIN", "return_code": 0, "return_msg": "OK"}),
         ]
     )
 
     asyncio.run(manager._await_login_ack(fake_ws, timeout_sec=1.0))
 
-    assert fake_ws.sent == [json.dumps({"trnm": "PONG"})]
+    assert fake_ws.sent == [ping_payload]
+
+
+def test_handle_message_echoes_ping_payload():
+    manager = KiwoomWSManager("test-token")
+    fake_ws = _FakeWS([])
+    manager.websocket = fake_ws
+    ping_payload = json.dumps({"trnm": "PING", "seq": "keepalive-1"})
+
+    asyncio.run(manager._handle_message(ping_payload))
+
+    assert fake_ws.sent == [ping_payload]
+
+
+def test_handle_message_ignores_non_dict_payload():
+    manager = KiwoomWSManager("test-token")
+    fake_ws = _FakeWS([])
+    manager.websocket = fake_ws
+
+    asyncio.run(manager._handle_message(json.dumps(["PING"])))
+
+    assert fake_ws.sent == []
 
 
 def test_await_login_ack_raises_on_login_failure():
@@ -266,6 +289,7 @@ def test_send_reg_adds_alternate_route_for_persistent_repair(monkeypatch):
     asyncio.run(manager._send_reg(["240810"], include_alternate_route=True))
 
     payload = json.loads(fake_ws.sent[0])
+    assert payload["refresh"] == "1"
     assert payload["data"][0]["item"] == ["240810", "240810_AL"]
     assert manager.subscribed_codes == {"240810"}
 
@@ -316,7 +340,7 @@ def test_execute_unsubscribe_removes_registered_item_budget_state(monkeypatch):
     assert "000001" not in manager.realtime_data
 
 
-def test_send_reg_uses_append_refresh_after_first_batch(monkeypatch):
+def test_send_reg_preserves_refresh_for_all_batches(monkeypatch):
     manager = KiwoomWSManager("test-token")
     fake_ws = _FakeWS([])
     manager.websocket = fake_ws
@@ -328,7 +352,7 @@ def test_send_reg_uses_append_refresh_after_first_batch(monkeypatch):
     asyncio.run(manager._send_reg(["000001", "000002", "000003", "000004", "000005"]))
 
     payloads = [json.loads(payload) for payload in fake_ws.sent]
-    assert [payload["refresh"] for payload in payloads] == ["1", "0", "0"]
+    assert [payload["refresh"] for payload in payloads] == ["1", "1", "1"]
     assert [payload["data"][0]["item"] for payload in payloads] == [
         ["000001", "000002"],
         ["000003", "000004"],
@@ -354,7 +378,7 @@ def test_send_reg_incremental_mode_does_not_replace_existing_group(monkeypatch):
     )
 
     payloads = [json.loads(payload) for payload in fake_ws.sent]
-    assert [payload["refresh"] for payload in payloads] == ["0", "0"]
+    assert [payload["refresh"] for payload in payloads] == ["1", "1"]
     assert [payload["data"][0]["item"] for payload in payloads] == [
         ["000003", "000004"],
         ["000005"],

@@ -907,6 +907,12 @@ class KiwoomWSManager:
             return True
         return False
 
+    @staticmethod
+    def _ping_echo_payload(raw_message, parsed_message):
+        if isinstance(raw_message, (str, bytes)):
+            return raw_message
+        return json.dumps(parsed_message)
+
     def _refresh_ws_token(self):
         now_ts = time.time()
         # 토큰 인증 실패 루프에서 과도한 재발급 스팸을 방지합니다.
@@ -943,10 +949,13 @@ class KiwoomWSManager:
                 msg_dict = json.loads(message)
             except Exception:
                 continue
+            if not isinstance(msg_dict, dict):
+                log_error(f"🚨 [WS] 로그인 대기 중 비정상 메시지 무시: {str(message)[:150]}")
+                continue
 
             trnm = str(msg_dict.get('trnm', '') or '').strip().upper()
             if trnm == 'PING':
-                await ws.send(json.dumps({"trnm": "PONG"}))
+                await ws.send(self._ping_echo_payload(message, msg_dict))
                 continue
 
             if self._is_login_success_message(msg_dict):
@@ -1100,6 +1109,9 @@ class KiwoomWSManager:
     async def _handle_message(self, message):
         try:
             msg_dict = json.loads(message)
+            if not isinstance(msg_dict, dict):
+                log_error(f"🚨 [WS] 비정상 메시지 무시: {str(message)[:150]}")
+                return
             trnm = msg_dict.get('trnm')
             
             # =========================================================
@@ -1107,8 +1119,7 @@ class KiwoomWSManager:
             # =========================================================
             if trnm == 'PING':
                 if self.websocket:
-                    pong_packet = json.dumps({"trnm": "PONG"})
-                    await self.websocket.send(pong_packet)
+                    await self.websocket.send(self._ping_echo_payload(message, msg_dict))
                 return
             
             # =========================================================
@@ -1537,6 +1548,7 @@ class KiwoomWSManager:
         include_alternate_route=False,
         alternate_route_codes=None,
         source="",
+        repair_cycle="",
     ):
         try:
             normalized_codes, register_items = self._resolve_ws_register_items(
@@ -1592,7 +1604,10 @@ class KiwoomWSManager:
                 total_batches = (len(normalized_codes) + batch_size - 1) // batch_size
                 print(
                     f"📝 [WS] 종목 등록(REG) 전송 시도: {normalized_codes} "
-                    f"(items={register_items}, batch_size={batch_size}, alternate={include_alternate_route})"
+                    f"(grp_no=1, refresh=1, items={register_items}, "
+                    f"batch_size={batch_size}, alternate={include_alternate_route}, "
+                    f"replace_existing={replace_existing}, source={source or '-'}, "
+                    f"repair_cycle={repair_cycle or '-'})"
                 )
                 for batch_index, batch_codes in enumerate(self._chunked(normalized_codes, batch_size), start=1):
                     if self._stop_event.is_set() or not self.websocket:
@@ -1606,7 +1621,7 @@ class KiwoomWSManager:
                     reg_packet = {
                         'trnm': 'REG',
                         'grp_no': '1',
-                        'refresh': '1' if replace_existing and batch_index == 1 else '0',
+                        'refresh': '1',
                         'data': [
                             {'item': batch_items, 'type': ['0B']},
                             {'item': batch_items, 'type': ['0D']},
@@ -1623,7 +1638,11 @@ class KiwoomWSManager:
                             )
                     print(
                         "📡 [WS] 종목 등록 패킷 전송 완료(실수신 대기): "
-                        f"batch={batch_index}/{total_batches} codes={batch_codes}"
+                        f"grp_no=1 refresh=1 batch={batch_index}/{total_batches} "
+                        f"code_count={len(batch_codes)} item_count={len(batch_items)} "
+                        f"replace_existing={replace_existing} source={source or '-'} "
+                        f"repair_cycle={repair_cycle or '-'} "
+                        f"codes={batch_codes}"
                     )
                     await asyncio.sleep(0.15)
             else:
@@ -1699,6 +1718,7 @@ class KiwoomWSManager:
                     include_alternate_route=include_alternate_route,
                     alternate_route_codes=alternate_route_codes,
                     source=source,
+                    repair_cycle=repair_cycle,
                 ),
                 self.loop,
             )
