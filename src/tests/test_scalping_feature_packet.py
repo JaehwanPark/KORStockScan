@@ -77,7 +77,7 @@ def test_extract_scalping_feature_packet_exposes_stage1_supply_fields():
     assert packet["tick_context_stale"] is False
     assert packet["tick_context_quality"] == "fresh_computed"
     assert packet["quote_age_ms"] == "-"
-    assert packet["quote_stale"] == "unknown"
+    assert packet["quote_stale"] == "not_available_quote_age"
     assert packet["same_price_buy_absorption"] >= 3
     assert packet["large_sell_print_detected"] is False
     assert packet["net_aggressive_delta_10t"] > 0
@@ -196,6 +196,7 @@ def test_build_scalping_feature_audit_fields_marks_sent_flags():
     assert fields["tick_accel_source"] == "computed_10ticks"
     assert fields["tick_context_stale"] is False
     assert fields["tick_context_quality"] == "fresh_computed"
+    assert fields["quote_stale"] == "not_available_quote_age"
     assert fields["microstructure_reaction_context_sent"] is True
     assert fields["microstructure_reaction_context_status"] == "ok"
     assert fields["microstructure_reaction_ask_sweep_score"] >= 0

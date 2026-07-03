@@ -847,6 +847,69 @@ def test_pattern_lab_ai_review_resolves_classified_source_quality_warning_gaps(t
     } == {"resolved_by_classified_source_quality_warning"}
 
 
+def test_pattern_lab_ai_review_resolves_lifecycle_drift_from_source_wrapper(tmp_path, monkeypatch):
+    report_dir = tmp_path / "data" / "report"
+    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+    _write_json(
+        report_dir / "pattern_lab_currentness_audit" / "pattern_lab_currentness_audit_2026-05-15.json",
+        {"status": "pass", "summary": {"consumed_feedback_source_count": 6, "missing_feedback_source_count": 0}},
+    )
+    for label in (
+        "lifecycle_decision_matrix",
+        "swing_lifecycle_decision_matrix",
+        "swing_lifecycle_bucket_discovery",
+        "scalping_pattern_lab_automation",
+        "swing_pattern_lab_automation",
+        "code_improvement_workorder",
+    ):
+        _write_json(
+            report_dir / label / f"{label}_2026-05-15.json",
+            {"status": "pass", "runtime_effect": False, "allowed_runtime_apply": False},
+        )
+    _write_json(
+        report_dir / "threshold_cycle_ev" / "threshold_cycle_ev_2026-05-15.json",
+        {
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+            "warnings": ["lifecycle_bucket_discovery:source_contract_drift_warning"],
+        },
+    )
+    _write_json(
+        report_dir / "lifecycle_bucket_discovery" / "lifecycle_bucket_discovery_2026-05-15.json",
+        {
+            "runtime_effect": False,
+            "warnings": ["source_contract_drift_warning"],
+            "summary": {"source_contract_status": "warning", "status": "pass"},
+        },
+    )
+    raw_response = {
+        "schema_version": 1,
+        "interpretation": {"review_items": [], "source_feedback_status": "warning"},
+        "audit": {
+            "status": "correction_required",
+            "issues": ["lifecycle_bucket_discovery_source_contract_drift"],
+            "forbidden_use_violations": [],
+        },
+        "final_conclusions": [
+            {
+                "review_id": "lifecycle_bucket_discovery_source_contract_drift",
+                "domain": "cross_domain",
+                "final_state": "source_quality_gap",
+                "final_decision": "block_runtime_use",
+                "reason": "source_contract_drift_warning remains source-only warning.",
+            },
+        ],
+    }
+
+    report = mod.build_pattern_lab_ai_review_report("2026-05-15", provider="openai", ai_raw_response=raw_response)
+
+    assert report["status"] == "pass"
+    assert report["code_improvement_orders"] == []
+    conclusion = report["ai_two_pass_review"]["final_conclusions"][0]
+    assert conclusion["final_state"] == "source_only_keep_collecting"
+    assert conclusion["source_context_resolution"]["status"] == "resolved_by_classified_source_quality_warning"
+
+
 def test_pattern_lab_ai_review_generic_resolution_ids_exclude_specific_source_gaps():
     assert "ai_review_two_pass_missing" not in mod.GENERIC_FEEDBACK_HANDOFF_REVIEW_IDS
     assert "ai_two_pass_review_missing" not in mod.GENERIC_FEEDBACK_HANDOFF_REVIEW_IDS

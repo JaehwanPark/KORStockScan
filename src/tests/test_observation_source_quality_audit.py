@@ -587,6 +587,59 @@ def test_observation_source_quality_audit_reviews_legacy_orderbook_micro_unknown
     )
 
 
+def test_observation_source_quality_audit_reviews_stale_flag_unknown_when_age_not_available(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
+    _write_events(
+        tmp_path,
+        "2026-07-03",
+        [
+            _event(
+                "stat_action_decision_snapshot",
+                {
+                    "tick_context_stale": "unknown",
+                    "tick_latest_age_ms": "-",
+                    "tick_context_quality": "missing_ticks",
+                    "quote_stale": "unknown",
+                    "quote_age_ms": "-",
+                    "quote_age_source": "missing",
+                },
+                record_id=1,
+            ),
+            _event(
+                "scale_in_qty_block",
+                {
+                    "tick_context_stale": "unknown",
+                    "tick_latest_age_ms": "-",
+                    "tick_context_quality": "missing_tick_time",
+                    "quote_stale": "unknown",
+                    "quote_age_ms": "-",
+                    "quote_age_source": "missing",
+                },
+                record_id=2,
+            ),
+        ],
+    )
+
+    report = audit.build_observation_source_quality_audit("2026-07-03")
+
+    assert report["summary"]["unknown_token_stage_count"] == 0
+    assert report["summary"]["reviewed_unknown_token_stage_count"] == 2
+    reviewed_by_stage = {
+        item["stage"]: {field["field"]: field for field in item["fields"]}
+        for item in report["reviewed_unknown_token_findings"]
+    }
+    for stage in ("stat_action_decision_snapshot", "scale_in_qty_block"):
+        assert reviewed_by_stage[stage]["tick_context_stale"]["reviewed_reason"] == (
+            "reviewed_stale_flag_not_available"
+        )
+        assert reviewed_by_stage[stage]["quote_stale"]["reviewed_reason"] == (
+            "reviewed_stale_flag_not_available"
+        )
+
+
 def test_observation_source_quality_audit_warns_on_new_orderbook_micro_unknown_bucket(monkeypatch, tmp_path):
     monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
     row = _event(

@@ -1458,6 +1458,20 @@ def _reviewed_unknown_reason_for_stage_field(
         value = normalized.get(field)
         return "" if value is None else str(value).strip()
 
+    def _is_reviewed_stale_flag_not_available() -> bool:
+        field = str(key or "")
+        if field == "tick_context_stale":
+            return (
+                _field_text("tick_latest_age_ms") in {"", "-"}
+                or _field_text("tick_context_quality") in {"missing_ticks", "missing_tick_time"}
+            )
+        if field == "quote_stale":
+            return (
+                _field_text("quote_age_ms") in {"", "-"}
+                or _field_text("quote_age_source") in {"", "missing", "not_available_quote_age"}
+            )
+        return False
+
     def _is_reviewed_sim_liquidity_not_available() -> bool:
         authority = _field_text("decision_authority")
         source_stage = _field_text("source_stage")
@@ -1507,6 +1521,8 @@ def _reviewed_unknown_reason_for_stage_field(
 
     if not _unknown_token_present(value):
         return None
+    if str(key or "") in {"tick_context_stale", "quote_stale"} and _is_reviewed_stale_flag_not_available():
+        return "reviewed_stale_flag_not_available"
     if str(key or "") in {
         "entry_adm_cache_token",
         "entry_adm_bucket_token",

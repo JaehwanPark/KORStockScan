@@ -288,6 +288,11 @@ def _source_summary(context: dict[str, Any], label: str) -> dict[str, Any]:
     return summary
 
 
+def _source_wrapper(context: dict[str, Any], label: str) -> dict[str, Any]:
+    sources = context.get("sources") if isinstance(context.get("sources"), dict) else {}
+    return sources.get(label) if isinstance(sources.get(label), dict) else {}
+
+
 def _nested_report_summary(source_summary: dict[str, Any]) -> dict[str, Any]:
     summary = source_summary.get("summary") if isinstance(source_summary.get("summary"), dict) else {}
     return summary
@@ -459,13 +464,16 @@ def _is_resolved_classified_source_quality_warning_gap(item: dict[str, Any], con
         return False
     review_id = str(item.get("review_id") or "").strip().lower()
     if review_id == "lifecycle_bucket_discovery_source_contract_drift" or lifecycle_drift_context:
+        source_wrapper = _source_wrapper(context, "lifecycle_bucket_discovery")
         source = _source_summary(context, "lifecycle_bucket_discovery")
         summary = _nested_report_summary(source)
+        source_warnings = source.get("warnings") if isinstance(source.get("warnings"), list) else []
         return (
             source.get("runtime_effect") is False
             and source.get("allowed_runtime_apply") is not True
+            and source_wrapper.get("exists") is True
             and summary.get("source_contract_status") == "warning"
-            and "source_contract_drift_warning" in [str(item) for item in source.get("warnings", [])]
+            and "source_contract_drift_warning" in [str(item) for item in source_warnings]
             and _classified_source_only_warning_present(
                 context,
                 "lifecycle_bucket_discovery:source_contract_drift_warning",
