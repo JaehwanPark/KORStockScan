@@ -130,6 +130,12 @@
   - 금지: trigger decision을 PREOPEN apply, final verifier, broker/order/provider/cap/bot/threshold, hard-safety/source-quality fail-closed 경계 변경 근거로 사용하지 않는다.
   - 다음 액션: `trigger_contract_pass`, `unexpected_all_run`, `skip_marker_missing`, `source_missing_run_required`, `force_override_detected`, `needs_followup_patch` 중 하나로 닫는다.
 
+- [ ] `[RankChgSignLiveSampleValidation0703] ka00198 rank_chg_sign NXT/시간외 반복 샘플 검증 및 의사결정 입력 승격 여부 판단` (`Due: 2026-07-03`, `Slot: INTRADAY`, `TimeWindow: 17:10~19:50`, `Track: ScalpingLogic`)
+  - Source: [kiwoom-api-data-contract.md](/home/ubuntu/KORStockScan/docs/kiwoom-api-data-contract.md), [kiwoom_utils.py](/home/ubuntu/KORStockScan/src/utils/kiwoom_utils.py), [scalping_scanner.py](/home/ubuntu/KORStockScan/src/scanners/scalping_scanner.py)
+  - 판정 기준: NXT/시간외 거래 중 `ka00198(qry_tp=5)`를 5~10분 간격으로 반복 호출해 `rank_chg`, `rank_chg_sign`, `bigd_rank`, `base_comp_chgr`, `prev_base_chgr` 샘플을 누적하고, `rank_chg_sign` 비어있음/`+`/`-` 분포와 `rank_chg` 부호 불일치율을 확인한다. 최소 표본은 non-empty sign `>=30` 또는 호출 횟수 `>=20` 중 먼저 충족한 쪽으로 본다.
+  - 금지: 반복 샘플 검증 전에는 `rank_chg_sign`을 scoring, entry, priority, live authority, threshold/env/provider/order/bot 변경 근거로 사용하지 않는다. 검증 중에도 raw provenance 외 authority를 열지 않는다.
+  - 다음 액션: `raw_contract_confirmed_promote_candidate`, `keep_raw_unverified`, `field_missing_or_sparse`, `mismatch_requires_parser_guard`, `api_call_failed_retry_next_regular_session` 중 하나로 닫는다.
+
 <!-- AUTO_NEXT_STAGE2_CHECKLIST_END -->
 
 ## Project/Calendar 동기화
