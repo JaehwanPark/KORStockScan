@@ -45,11 +45,13 @@ from src.engine.sniper_scale_in import (
     evaluate_swing_avg_down,
     evaluate_swing_pyramid,
     evaluate_scalping_reversal_add,
+    reversal_feature_source_quality,
     resolve_scale_in_order_price,
     resolve_holding_elapsed_sec,
 )
 from src.engine.scalping.microstructure_reaction_context import (
     CONTEXT_KEYS as MICROSTRUCTURE_REACTION_CONTEXT_KEYS,
+    infer_tick_aggressor_side,
     neutral_microstructure_reaction_context,
 )
 from src.engine.scalping.watching_score_smoothing import (
@@ -2768,6 +2770,44 @@ def _evaluate_first_touch_avgdown_decision_gate(
         aliases=("micro_vwap_bp",),
         default=0.0,
     )
+    micro_context_keys = (
+        "buy_pressure_10t",
+        "buy_pressure",
+        "tick_acceleration_ratio",
+        "tick_accel",
+        "tick_acceleration",
+        "curr_vs_micro_vwap_bp",
+        "micro_vwap_bp",
+    )
+    micro_context_freshness_keys = (
+        "tick_context_quality",
+        "tick_context_stale",
+        "tick_latest_age_ms",
+        "quote_stale",
+        "quote_age_ms",
+        "quote_age_source",
+        "feature_extracted_at",
+    )
+    micro_context_source = next(
+        (
+            source
+            for source in sources
+            if any(source.get(key) is not None for key in micro_context_keys)
+        ),
+        {},
+    )
+    micro_context_present = bool(micro_context_source)
+    micro_context_quality_source = micro_context_source
+    if micro_context_present and not any(key in micro_context_source for key in micro_context_freshness_keys):
+        stock_feature_source = (stock or {}).get("last_reversal_features") if isinstance(stock, dict) else {}
+        if (
+            isinstance(stock_feature_source, dict)
+            and any(stock_feature_source.get(key) is not None for key in micro_context_keys)
+        ):
+            micro_context_quality_source = stock_feature_source
+    micro_context_quality = reversal_feature_source_quality(micro_context_quality_source)
+    micro_context_stale = bool(micro_context_present and micro_context_quality.get("reversal_feature_stale"))
+    micro_context_usable = bool(micro_context_present and not micro_context_stale)
     best_ask, best_bid = _get_best_levels_from_ws(ws_data or {})
     spread_bps = 0.0
     if best_ask > 0 and best_bid > 0 and best_ask >= best_bid:
@@ -2807,13 +2847,19 @@ def _evaluate_first_touch_avgdown_decision_gate(
         support_signals.append("vpw_delta_positive")
     elif vpw_delta < 0:
         risk_signals.append("vpw_delta_negative")
-    if buy_pressure >= 60.0:
+    if micro_context_stale:
+        risk_signals.append("micro_context_stale_ignored")
+    if micro_context_usable and buy_pressure >= 60.0:
         support_signals.append("buy_pressure_support")
-    if tick_accel >= 1.0:
+    if micro_context_usable and tick_accel >= 1.0:
         support_signals.append("tick_accel_support")
-    if micro_vwap_bp >= 0.0 and any(source.get("curr_vs_micro_vwap_bp") is not None for source in sources):
+    if (
+        micro_context_usable
+        and micro_vwap_bp >= 0.0
+        and any(source.get("curr_vs_micro_vwap_bp") is not None for source in sources)
+    ):
         support_signals.append("micro_vwap_non_negative")
-    elif micro_vwap_bp < 0:
+    elif micro_context_usable and micro_vwap_bp < 0:
         risk_signals.append("micro_vwap_negative")
     if min_liquidity > 0 and liquidity_value > 0:
         if liquidity_value >= min_liquidity:
@@ -2892,6 +2938,25 @@ def _evaluate_first_touch_avgdown_decision_gate(
             "first_touch_avgdown_min_liquidity": int(min_liquidity) if min_liquidity else "-",
             "first_touch_avgdown_spread_bps": f"{spread_bps:.2f}" if spread_bps else "-",
             "first_touch_avgdown_max_repeated_blockers_without_support": max_repeated_blockers_without_support,
+            "first_touch_reversal_feature_source_quality": (
+                micro_context_quality.get("reversal_feature_source_quality") if micro_context_present else "missing"
+            ),
+            "first_touch_reversal_feature_stale": micro_context_stale,
+            "first_touch_reversal_feature_stale_reason": (
+                micro_context_quality.get("reversal_feature_stale_reason") if micro_context_present else "-"
+            ),
+            "first_touch_tick_context_quality": (
+                micro_context_quality.get("tick_context_quality") if micro_context_present else "-"
+            ),
+            "first_touch_tick_latest_age_ms": (
+                micro_context_quality.get("tick_latest_age_ms") if micro_context_present else "-"
+            ),
+            "first_touch_quote_stale": (
+                micro_context_quality.get("quote_stale") if micro_context_present else "unknown"
+            ),
+            "first_touch_quote_age_ms": (
+                micro_context_quality.get("quote_age_ms") if micro_context_present else "-"
+            ),
             **_first_touch_runtime_prior_log_fields(runtime_prior),
         }
     )
@@ -10399,6 +10464,14 @@ def _scale_in_blocker_reason_from_context(action, gate, rejected_actions, fallba
 def _ai_score_source_for_snapshot(stock):
     if not isinstance(stock, dict):
         return "-"
+    explicit = str(
+        stock.get("ai_score_source")
+        or stock.get("holding_ai_score_source")
+        or stock.get("current_ai_score_source")
+        or ""
+    ).strip()
+    if explicit:
+        return explicit
     if bool(stock.get("ai_fallback_score_50")):
         return "fallback_score_50"
     source = str(stock.get("ai_result_source") or stock.get("last_ai_result_source") or "").strip()
@@ -10531,6 +10604,7 @@ def _emit_stat_action_decision_snapshot(
         "large_sell_print_detected": feat.get("large_sell_print_detected", "-"),
         "curr_vs_micro_vwap_bp": feat.get("curr_vs_micro_vwap_bp", "-"),
         "snapshot_observe_only": True,
+        **_reversal_feature_quality_log_fields(feat),
     }
     if distance_to_buy_bps is not None:
         fields["distance_to_buy_bps"] = f"{distance_to_buy_bps:.2f}"
@@ -10538,6 +10612,35 @@ def _emit_stat_action_decision_snapshot(
     _log_holding_pipeline(stock, code, "stat_action_decision_snapshot", **fields)
     _mutate_stock_state(stock, set_fields={"last_stat_action_snapshot_ts": now_ts})
     return True
+
+
+def _reversal_feature_quality_log_fields(feat: dict | None, prefix: str = "") -> dict:
+    has_features = isinstance(feat, dict) and bool(feat)
+    quality = reversal_feature_source_quality(feat if has_features else {})
+    if not has_features:
+        quality = {
+            **quality,
+            "reversal_feature_source_quality": "missing",
+            "reversal_feature_stale": False,
+            "reversal_feature_stale_reason": "feature_context_missing",
+        }
+    fields = {
+        "has_reversal_features": has_features,
+        "reversal_feature_source_quality": quality.get("reversal_feature_source_quality"),
+        "reversal_feature_stale": bool(quality.get("reversal_feature_stale")),
+        "reversal_feature_stale_reason": quality.get("reversal_feature_stale_reason"),
+        "tick_context_quality": quality.get("tick_context_quality"),
+        "tick_context_stale": quality.get("tick_context_stale"),
+        "tick_latest_age_ms": quality.get("tick_latest_age_ms"),
+        "tick_accel_source": quality.get("tick_accel_source"),
+        "quote_stale": quality.get("quote_stale"),
+        "quote_age_ms": quality.get("quote_age_ms"),
+        "quote_age_source": quality.get("quote_age_source"),
+        "feature_extracted_at": quality.get("feature_extracted_at"),
+    }
+    if not prefix:
+        return fields
+    return {f"{prefix}{key}": value for key, value in fields.items()}
 
 
 def _log_scale_in_arm_blocked(stock, code, *, arm, blocked_reason, profit_rate, peak_profit, current_ai_score, held_sec, gate=None, probe=None):
@@ -10552,6 +10655,7 @@ def _log_scale_in_arm_blocked(stock, code, *, arm, blocked_reason, profit_rate, 
         "profit_rate": f"{_safe_float(profit_rate, 0.0):+.2f}",
         "peak_profit": f"{_safe_float(peak_profit, 0.0):+.2f}",
         "ai_score": f"{_safe_float(current_ai_score, 0.0):.0f}",
+        "ai_score_source": _ai_score_source_for_snapshot(stock),
         "held_sec": _safe_int(held_sec, 0),
         "metric_role": "funnel_count",
         "decision_authority": "scale_in_attribution_source_only",
@@ -10586,6 +10690,8 @@ def _append_pyramid_probe_fields(fields: dict, probe: dict | None) -> dict:
         "drawdown_from_peak",
         "is_new_high",
         "current_ai_score",
+        "ai_score_source",
+        "ai_score_available",
         "min_ai_score",
         "ai_score_ok",
         "buy_pressure_10t",
@@ -10600,6 +10706,17 @@ def _append_pyramid_probe_fields(fields: dict, probe: dict | None) -> dict:
         "max_micro_vwap_bps",
         "micro_vwap_available",
         "micro_vwap_not_overheated",
+        "reversal_feature_source_quality",
+        "reversal_feature_stale",
+        "reversal_feature_stale_reason",
+        "tick_context_quality",
+        "tick_context_stale",
+        "tick_latest_age_ms",
+        "tick_accel_source",
+        "quote_stale",
+        "quote_age_ms",
+        "quote_age_source",
+        "feature_extracted_at",
         "pyramid_runtime_prior_status",
         "pyramid_runtime_prior_sample_count",
         "pyramid_runtime_prior_recovered_or_extended_rate",
@@ -10640,6 +10757,7 @@ def _append_reversal_add_probe_fields(fields: dict, probe: dict | None) -> dict:
         "has_reversal_features",
         "reversal_add_used",
         "large_sell_print_detected",
+        "reversal_feature_stale",
     ):
         if key in probe:
             merged[key] = bool(probe.get(key))
@@ -10664,6 +10782,16 @@ def _append_reversal_add_probe_fields(fields: dict, probe: dict | None) -> dict:
         "curr_vs_micro_vwap_bp",
         "min_micro_vwap_bp",
         "supply_pass_count",
+        "reversal_feature_source_quality",
+        "reversal_feature_stale_reason",
+        "tick_context_quality",
+        "tick_context_stale",
+        "tick_latest_age_ms",
+        "tick_accel_source",
+        "quote_stale",
+        "quote_age_ms",
+        "quote_age_source",
+        "feature_extracted_at",
     ):
         if key in probe:
             merged[key] = probe.get(key)
@@ -11601,6 +11729,9 @@ def _pending_scale_in_revalidation_context(
         return None
     if str((stock or {}).get("pending_add_type") or "").upper() != "PYRAMID":
         return None
+    raw_features = (stock or {}).get("last_reversal_features")
+    raw_features = raw_features if isinstance(raw_features, dict) else {}
+    feature_quality = reversal_feature_source_quality(raw_features)
     features, has_features = _normalize_soft_stop_expert_features(stock or {})
     micro_vwap_bp = _safe_float(features.get("curr_vs_micro_vwap_bp"), 0.0) if has_features else 0.0
     buy_pressure = _safe_float(features.get("buy_pressure_10t"), 0.0) if has_features else 0.0
@@ -11613,6 +11744,10 @@ def _pending_scale_in_revalidation_context(
     reasons: list[str] = []
     if matrix_action == "EXIT":
         reasons.append("holding_exit_matrix_exit")
+    if not has_features:
+        reasons.append("feature_context_missing")
+    elif feature_quality.get("reversal_feature_stale"):
+        reasons.append("feature_context_unusable")
     if float(current_ai_score or 0.0) <= float(ai_limit):
         reasons.append("holding_ai_score_deteriorated")
     if micro_vwap_bp < min_micro_vwap_bp:
@@ -11631,6 +11766,9 @@ def _pending_scale_in_revalidation_context(
         "curr_vs_micro_vwap_bp": micro_vwap_bp,
         "buy_pressure_10t": buy_pressure,
         "tick_acceleration_ratio": tick_accel,
+        "reversal_feature_source_quality": feature_quality.get("reversal_feature_source_quality"),
+        "reversal_feature_stale": bool(feature_quality.get("reversal_feature_stale")),
+        "reversal_feature_stale_reason": feature_quality.get("reversal_feature_stale_reason"),
     }
 
 
@@ -13596,6 +13734,200 @@ def _pre_submit_refresh_rest_orderbook_snapshot(
     _merge_quote_consistency_fields(refreshed, fields)
     refreshed.update(fields)
     return refreshed, fields
+
+
+def _holding_ai_refresh_rest_orderbook_snapshot(
+    code: str,
+    ws_data: dict | None,
+    strategy: str,
+) -> tuple[dict, dict]:
+    """Refresh holding-AI orderbook input through the existing REST quote guard."""
+    base = dict(ws_data or {})
+    fields = {
+        "holding_ai_rest_orderbook_refresh_enabled": False,
+        "holding_ai_rest_orderbook_refresh_applied": False,
+        "holding_ai_rest_orderbook_refresh_reason": "not_attempted",
+        "holding_ai_rest_orderbook_refresh_source": "ka10004_rest_orderbook",
+        "holding_ai_rest_orderbook_refresh_age_ms": None,
+        "holding_ai_rest_orderbook_refresh_best_bid": 0,
+        "holding_ai_rest_orderbook_refresh_best_ask": 0,
+        "holding_ai_rest_orderbook_refresh_latest_price": _safe_int(base.get("curr"), 0),
+        "holding_ai_rest_orderbook_refresh_bid_req_base_tm": "",
+    }
+    if (
+        _pre_submit_input_snapshot_has_usable_quote(base)
+        and not _boolish_true(base.get("quote_stale"))
+        and not _boolish_true(base.get("context_stale"))
+    ):
+        fields["holding_ai_rest_orderbook_refresh_reason"] = "input_orderbook_usable"
+        return base, fields
+
+    refreshed, pre_submit_fields = _pre_submit_refresh_rest_orderbook_snapshot(code, base, strategy)
+    for key, value in (pre_submit_fields or {}).items():
+        if key.startswith("pre_submit_rest_orderbook_refresh_"):
+            holding_key = key.replace(
+                "pre_submit_rest_orderbook_refresh_",
+                "holding_ai_rest_orderbook_refresh_",
+                1,
+            )
+            fields[holding_key] = value
+        elif key.startswith("quote_consistency_") or key in {
+            "canonical_mark_price",
+            "executable_buy_price",
+            "executable_sell_price",
+            "ws_rest_gap_bps",
+            "price_source",
+            "normalization_runtime_effect",
+        }:
+            fields[key] = value
+
+    fields["holding_ai_rest_orderbook_refresh_enabled"] = bool(
+        fields.get("holding_ai_rest_orderbook_refresh_enabled")
+    )
+    fields["holding_ai_rest_orderbook_refresh_applied"] = bool(
+        fields.get("holding_ai_rest_orderbook_refresh_applied")
+    )
+    if fields["holding_ai_rest_orderbook_refresh_applied"]:
+        refreshed = {
+            key: value
+            for key, value in dict(refreshed or {}).items()
+            if not key.startswith("pre_submit_rest_orderbook_refresh_")
+        }
+        refreshed.update(fields)
+    return refreshed, fields
+
+
+def _reversal_feature_payload(feat: dict | None, now_ts: float) -> dict:
+    feat = feat if isinstance(feat, dict) else {}
+    return {
+        'buy_pressure_10t': feat.get('buy_pressure_10t', 50.0),
+        'tick_acceleration_ratio': feat.get('tick_acceleration_ratio', 0.0),
+        'tick_acceleration_ratio_raw': feat.get('tick_acceleration_ratio_raw', 0.0),
+        'tick_accel_source': feat.get('tick_accel_source', '-'),
+        'tick_context_quality': feat.get('tick_context_quality', 'unknown'),
+        'tick_context_stale': feat.get('tick_context_stale', 'unknown'),
+        'tick_latest_age_ms': feat.get('tick_latest_age_ms', '-'),
+        'tick_sample_count': feat.get('tick_sample_count', '-'),
+        'tick_window_sample_count': feat.get('tick_window_sample_count', '-'),
+        'tick_window_span_sec': feat.get('tick_window_span_sec', '-'),
+        'large_sell_print_detected': feat.get('large_sell_print_detected', False),
+        'curr_vs_micro_vwap_bp': feat.get('curr_vs_micro_vwap_bp', 0.0),
+        'micro_vwap_value': feat.get('micro_vwap_value', 0.0),
+        'net_aggressive_delta_10t': feat.get('net_aggressive_delta_10t', 0),
+        'same_price_buy_absorption': feat.get('same_price_buy_absorption', 0),
+        'microprice_edge_bp': feat.get('microprice_edge_bp', 0.0),
+        'top3_depth_ratio': feat.get('top3_depth_ratio', 999.0),
+        'quote_age_ms': feat.get('quote_age_ms', '-'),
+        'quote_age_source': feat.get('quote_age_source', 'missing'),
+        'quote_stale': feat.get('quote_stale', 'unknown'),
+        'feature_extracted_at': now_ts,
+    }
+
+
+def _refresh_scale_in_reversal_features_if_needed(
+    *,
+    stock: dict,
+    code: str,
+    ws_data: dict | None,
+    strategy: str,
+    ai_engine=None,
+    now_ts: float | None = None,
+) -> tuple[dict, dict]:
+    """Rebuild stale scale-in micro features once before judging PYRAMID/REVERSAL_ADD."""
+    now_ts = time.time() if now_ts is None else float(now_ts)
+    base_ws = dict(ws_data or {})
+    existing = stock.get("last_reversal_features") if isinstance(stock, dict) else {}
+    existing = existing if isinstance(existing, dict) else {}
+    existing_quality = reversal_feature_source_quality(existing)
+    fields = {
+        "scale_in_feature_refresh_attempted": False,
+        "scale_in_feature_refresh_applied": False,
+        "scale_in_feature_refresh_reason": "feature_context_usable",
+        "scale_in_feature_refresh_existing_quality": existing_quality.get("reversal_feature_source_quality"),
+        "scale_in_feature_refresh_existing_stale_reason": existing_quality.get("reversal_feature_stale_reason"),
+        "scale_in_feature_refresh_tick_count": 0,
+        "scale_in_feature_refresh_quote_applied": False,
+        "scale_in_feature_refresh_new_quality": "-",
+        "scale_in_feature_refresh_new_stale_reason": "-",
+    }
+    if existing and not bool(existing_quality.get("reversal_feature_stale")):
+        return base_ws, fields
+    cooldown_sec = max(
+        0.0,
+        _safe_float(os.getenv("KORSTOCKSCAN_SCALE_IN_FEATURE_REFRESH_COOLDOWN_SEC"), 5.0),
+    )
+    last_attempt_ts = _safe_float(stock.get("last_scale_in_feature_refresh_attempt_ts"), 0.0)
+    elapsed_sec = max(0.0, now_ts - last_attempt_ts) if last_attempt_ts > 0 else None
+    fields["scale_in_feature_refresh_cooldown_sec"] = cooldown_sec
+    fields["scale_in_feature_refresh_elapsed_sec"] = "-" if elapsed_sec is None else round(elapsed_sec, 3)
+    if last_attempt_ts > 0 and elapsed_sec is not None and elapsed_sec < cooldown_sec:
+        fields["scale_in_feature_refresh_attempted"] = True
+        fields["scale_in_feature_refresh_reason"] = "feature_refresh_cooldown"
+        return base_ws, fields
+    fields["scale_in_feature_refresh_attempted"] = True
+    fields["scale_in_feature_refresh_reason"] = (
+        "feature_context_stale" if existing else "feature_context_missing"
+    )
+    _mutate_stock_state(stock, set_fields={"last_scale_in_feature_refresh_attempt_ts": now_ts})
+    if str(strategy or "").upper() not in {"SCALPING", "SCALP"}:
+        fields["scale_in_feature_refresh_reason"] = "non_scalping"
+        return base_ws, fields
+    if ai_engine is None or not hasattr(ai_engine, "_extract_scalping_features"):
+        fields["scale_in_feature_refresh_reason"] = "feature_extractor_missing"
+        return base_ws, fields
+    if not KIWOOM_TOKEN:
+        fields["scale_in_feature_refresh_reason"] = "token_missing"
+        return base_ws, fields
+
+    refreshed_ws = base_ws
+    quote_fields = {}
+    if _pre_submit_input_snapshot_needs_rest_orderbook_recheck(refreshed_ws):
+        refreshed_ws, quote_fields = _holding_ai_refresh_rest_orderbook_snapshot(code, refreshed_ws, strategy)
+        fields["scale_in_feature_refresh_quote_applied"] = bool(
+            quote_fields.get("holding_ai_rest_orderbook_refresh_applied")
+        )
+        fields["scale_in_feature_refresh_quote_reason"] = quote_fields.get(
+            "holding_ai_rest_orderbook_refresh_reason"
+        )
+
+    try:
+        recent_ticks = kiwoom_utils.get_tick_history_ka10003(KIWOOM_TOKEN, code, limit=10) or []
+    except Exception as exc:
+        fields["scale_in_feature_refresh_reason"] = "tick_history_error"
+        fields["scale_in_feature_refresh_error"] = str(exc)[:120]
+        return refreshed_ws, fields
+    fields["scale_in_feature_refresh_tick_count"] = len(recent_ticks)
+    if not recent_ticks:
+        fields["scale_in_feature_refresh_reason"] = "tick_history_missing"
+        return refreshed_ws, fields
+
+    try:
+        recent_candles = kiwoom_utils.get_minute_candles_ka10080(KIWOOM_TOKEN, code, limit=40) or []
+    except Exception:
+        recent_candles = []
+    if not _pre_submit_input_snapshot_has_usable_quote(refreshed_ws):
+        fields["scale_in_feature_refresh_reason"] = "quote_unusable_after_refresh"
+        return refreshed_ws, fields
+
+    try:
+        feat = ai_engine._extract_scalping_features(refreshed_ws, recent_ticks, recent_candles) or {}
+    except Exception as exc:
+        fields["scale_in_feature_refresh_reason"] = "feature_extract_error"
+        fields["scale_in_feature_refresh_error"] = str(exc)[:120]
+        return refreshed_ws, fields
+    payload = _reversal_feature_payload(feat, now_ts)
+    new_quality = reversal_feature_source_quality(payload)
+    fields["scale_in_feature_refresh_new_quality"] = new_quality.get("reversal_feature_source_quality")
+    fields["scale_in_feature_refresh_new_stale_reason"] = new_quality.get("reversal_feature_stale_reason")
+    if new_quality.get("reversal_feature_stale"):
+        fields["scale_in_feature_refresh_reason"] = "refreshed_feature_still_stale"
+        _mutate_stock_state(stock, set_fields={"last_reversal_features": payload})
+        return refreshed_ws, fields
+
+    _mutate_stock_state(stock, set_fields={"last_reversal_features": payload})
+    fields["scale_in_feature_refresh_applied"] = True
+    fields["scale_in_feature_refresh_reason"] = "feature_context_refreshed"
+    return refreshed_ws, fields
 
 
 def _pre_submit_input_snapshot_has_usable_quote(ws_data: dict | None) -> bool:
@@ -16900,8 +17232,21 @@ def _extract_ai_overlap_snapshot(
         except Exception:
             pass
         try:
-            buy_vol = sum(_safe_int(tick.get("volume"), 0) for tick in ticks if str(tick.get("dir") or "").upper() == "BUY")
-            sell_vol = sum(_safe_int(tick.get("volume"), 0) for tick in ticks if str(tick.get("dir") or "").upper() == "SELL")
+            inferred_rows = [
+                (tick, infer_tick_aggressor_side(tick))
+                for tick in ticks
+                if isinstance(tick, dict)
+            ]
+            buy_vol = sum(
+                _safe_int(tick.get("volume"), 0)
+                for tick, inferred in inferred_rows
+                if inferred.get("side") == "BUY" and inferred.get("source") != "price_change_heuristic"
+            )
+            sell_vol = sum(
+                _safe_int(tick.get("volume"), 0)
+                for tick, inferred in inferred_rows
+                if inferred.get("side") == "SELL" and inferred.get("source") != "price_change_heuristic"
+            )
             total_vol = buy_vol + sell_vol
             if total_vol > 0:
                 snapshot["buy_pressure_10t"] = (buy_vol / total_vol) * 100.0
@@ -29557,14 +29902,28 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                     ai_decision = {"action": "WAIT", "score": current_ai_score, "reason": "holding_ai_not_called"}
                     raw_ai_score = current_ai_score
                     ai_cache_hit = False
+                    ai_call_skipped_reason = "-"
                     recent_ticks = [] if sim_ai_budget_skip else kiwoom_utils.get_tick_history_ka10003(
                         KIWOOM_TOKEN, code, limit=10
                     )
                     recent_candles = [] if sim_ai_budget_skip else kiwoom_utils.get_minute_candles_ka10080(
                         KIWOOM_TOKEN, code, limit=40
                     )
+                    holding_ai_orderbook_refresh_fields = {}
+                    if (
+                        not sim_ai_budget_skip
+                        and not _pre_submit_input_snapshot_has_usable_quote(ws_data)
+                    ):
+                        ws_data, holding_ai_orderbook_refresh_fields = _holding_ai_refresh_rest_orderbook_snapshot(
+                            code,
+                            ws_data,
+                            strategy,
+                        )
+                    holding_ai_orderbook_present = bool(ws_data.get("orderbook"))
+                    holding_ai_orderbook_usable = _pre_submit_input_snapshot_has_usable_quote(ws_data)
+                    holding_ai_recent_tick_count = len(recent_ticks or [])
 
-                    if (not sim_ai_budget_skip) and ws_data.get('orderbook') and recent_ticks:
+                    if (not sim_ai_budget_skip) and holding_ai_orderbook_usable and recent_ticks:
                         if sim_ai_budget_gate.get("target"):
                             used_after_record = _record_scalp_sim_ai_budget_call(now_ts)
                         else:
@@ -29586,6 +29945,23 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                         )
                         raw_ai_score = ai_decision.get('score', 50)
                         ai_cache_hit = bool(ai_decision.get('cache_hit', False))
+                        ai_result_source = (
+                            "fallback_score_50"
+                            if bool(ai_decision.get("ai_fallback_score_50"))
+                            else (
+                                ai_decision.get("ai_result_source")
+                                or ai_decision.get("result_source")
+                                or ai_decision.get("provider")
+                                or ai_decision.get("openai_transport_mode")
+                                or "model"
+                            )
+                        )
+                        ai_model_name = (
+                            ai_decision.get("ai_model")
+                            or ai_decision.get("model")
+                            or ai_decision.get("model_name")
+                            or "-"
+                        )
 
                         smoothed_score = int((current_ai_score * 0.6) + (raw_ai_score * 0.4))
                         _mutate_stock_state(
@@ -29597,6 +29973,11 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                                 'last_ai_market_signature': market_signature,
                                 'last_ai_market_snapshot': market_snapshot,
                                 'last_ai_market_signature_at': now_ts,
+                                'holding_ai_score_source': ai_result_source,
+                                'current_ai_score_source': ai_result_source,
+                                'last_ai_result_source': ai_result_source,
+                                'last_ai_model': ai_model_name,
+                                'holding_ai_call_skipped_reason': "-",
                             },
                         )
                         current_ai_score = smoothed_score
@@ -29680,6 +30061,29 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                                 ),
                             )
                             persist_scalp_simulator_state()
+                    else:
+                        if sim_ai_budget_skip:
+                            ai_call_skipped_reason = "sim_ai_budget_skip"
+                        elif not holding_ai_orderbook_present and holding_ai_recent_tick_count <= 0:
+                            ai_call_skipped_reason = "missing_orderbook_and_recent_ticks"
+                        elif not holding_ai_orderbook_present:
+                            ai_call_skipped_reason = "missing_orderbook"
+                        elif not holding_ai_orderbook_usable:
+                            ai_call_skipped_reason = "unusable_orderbook"
+                        elif holding_ai_recent_tick_count <= 0:
+                            ai_call_skipped_reason = "missing_recent_ticks"
+                        else:
+                            ai_call_skipped_reason = "holding_ai_not_called"
+                        _mutate_stock_state(
+                            stock,
+                            set_fields={
+                                "holding_ai_score_source": "holding_ai_not_called",
+                                "current_ai_score_source": "holding_ai_not_called",
+                                "last_ai_result_source": "-",
+                                "last_ai_model": "-",
+                                "holding_ai_call_skipped_reason": ai_call_skipped_reason,
+                            },
+                        )
 
                     # reversal_add: 수급 피처 저장 및 STAGNATION 상태 갱신
                     if (not sim_ai_budget_skip) and _rule_bool('REVERSAL_ADD_ENABLED', False):
@@ -29689,16 +30093,7 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                                 _mutate_stock_state(
                                     stock,
                                     set_fields={
-                                        'last_reversal_features': {
-                                            'buy_pressure_10t': feat.get('buy_pressure_10t', 50.0),
-                                            'tick_acceleration_ratio': feat.get('tick_acceleration_ratio', 0.0),
-                                            'large_sell_print_detected': feat.get('large_sell_print_detected', False),
-                                            'curr_vs_micro_vwap_bp': feat.get('curr_vs_micro_vwap_bp', 0.0),
-                                            'net_aggressive_delta_10t': feat.get('net_aggressive_delta_10t', 0),
-                                            'same_price_buy_absorption': feat.get('same_price_buy_absorption', 0),
-                                            'microprice_edge_bp': feat.get('microprice_edge_bp', 0.0),
-                                            'top3_depth_ratio': feat.get('top3_depth_ratio', 999.0),
-                                        },
+                                        'last_reversal_features': _reversal_feature_payload(feat, now_ts),
                                     },
                                 )
                             except Exception as exc:
@@ -29769,11 +30164,14 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
 
                             _ra_feat = stock.get('last_reversal_features', {})
                             if _ra_feat:
+                                _ra_source_quality = reversal_feature_source_quality(_ra_feat)
                                 _ra_checks = [
                                     _ra_feat.get('buy_pressure_10t', 0) >= _rule_float('REVERSAL_ADD_MIN_BUY_PRESSURE', 55),
-                                    _ra_feat.get('tick_acceleration_ratio', 0) >= _rule_float('REVERSAL_ADD_MIN_TICK_ACCEL', 0.95),
+                                    (not _ra_source_quality.get("reversal_feature_stale"))
+                                    and _ra_feat.get('tick_acceleration_ratio', 0) >= _rule_float('REVERSAL_ADD_MIN_TICK_ACCEL', 0.95),
                                     not _ra_feat.get('large_sell_print_detected', True),
-                                    _ra_feat.get('curr_vs_micro_vwap_bp', -999) >= _rule_float('REVERSAL_ADD_VWAP_BP_MIN', -5.0),
+                                    (not _ra_source_quality.get("reversal_feature_stale"))
+                                    and _ra_feat.get('curr_vs_micro_vwap_bp', -999) >= _rule_float('REVERSAL_ADD_VWAP_BP_MIN', -5.0),
                                 ]
                                 _ra_supply_ok = sum(_ra_checks) >= 3
                             else:
@@ -29820,7 +30218,12 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                             review_cd_sec=dynamic_max_cd,
                             review_ms=int((time.perf_counter() - holding_ai_review_started) * 1000),
                             ai_cache="hit" if ai_cache_hit else "miss",
+                            ai_call_skipped_reason=ai_call_skipped_reason,
+                            holding_ai_orderbook_present=holding_ai_orderbook_present,
+                            holding_ai_orderbook_usable=holding_ai_orderbook_usable,
+                            holding_ai_recent_tick_count=holding_ai_recent_tick_count,
                             holding_review_trigger_reason="fast_reuse_bypass",
+                            **holding_ai_orderbook_refresh_fields,
                             **_build_ai_ops_log_fields(
                                 ai_decision,
                                 ai_score_raw=raw_ai_score,
@@ -30958,6 +31361,8 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                     ws_data=ws_data,
                     current_ai_score=current_ai_score,
                     held_sec=held_sec,
+                    ai_engine=ai_engine,
+                    now_ts=now_ts,
                 )
                 if not fallback_action and profit_rate < 0:
                     fallback_probe_detail = evaluate_scalping_reversal_add(
@@ -31891,6 +32296,8 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
             ws_data=ws_data,
             current_ai_score=current_ai_score,
             held_sec=held_sec,
+            ai_engine=ai_engine,
+            now_ts=now_ts,
         )
         if scale_in_action:
             scale_in_stop_line_pct = _safe_float(
@@ -32736,9 +33143,11 @@ def _evaluate_scale_in_signal(
     ws_data,
     current_ai_score=50,
     held_sec=0,
+    ai_engine=None,
+    now_ts=None,
 ):
     """전략별 추가매수 시그널 평가."""
-    _ = (ws_data,)
+    now_ts = time.time() if now_ts is None else float(now_ts)
 
     raw_strategy = (strategy or "").upper()
     if raw_strategy == 'SCALPING':
@@ -32802,6 +33211,33 @@ def _evaluate_scale_in_signal(
         except Exception as exc:
             log_error(f"[SCALEIN_STATE] highest_prices 비교 실패 ({code}, curr_price={curr_price}): {exc}")
 
+        ws_data, feature_refresh_fields = _refresh_scale_in_reversal_features_if_needed(
+            stock=stock,
+            code=code,
+            ws_data=ws_data,
+            strategy=raw_strategy,
+            ai_engine=ai_engine,
+            now_ts=now_ts,
+        )
+        if feature_refresh_fields.get("scale_in_feature_refresh_attempted"):
+            _log_holding_pipeline(
+                stock,
+                code,
+                "scale_in_feature_context_refresh",
+                threshold_family="real_pyramid_scale_in_quality_guard_runtime",
+                runtime_family_candidate="real_pyramid_scale_in_quality_guard_runtime",
+                decision_authority="scale_in_input_quality_recovery",
+                runtime_effect=False,
+                actual_order_submitted=False,
+                broker_order_forbidden=True,
+                forbidden_uses=TRADE_QUALITY_RUNTIME_FORBIDDEN_USES,
+                profit_rate=f"{_safe_float(profit_rate, 0.0):+.2f}",
+                peak_profit=f"{_safe_float(peak_profit, 0.0):+.2f}",
+                current_ai_score=f"{_safe_float(current_ai_score, 0.0):.0f}",
+                held_sec=_safe_int(held_sec, 0),
+                **feature_refresh_fields,
+            )
+
         pyramid = evaluate_scalping_pyramid(
             stock,
             profit_rate,
@@ -32812,7 +33248,7 @@ def _evaluate_scale_in_signal(
         pyramid_prior = _pyramid_runtime_prior_context(
             stock,
             code,
-            time.time(),
+            now_ts,
             probe=pyramid,
         ).get("pyramid_runtime_prior_context")
         pyramid = evaluate_scalping_pyramid(
@@ -33295,6 +33731,9 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
         strategy=strategy,
         curr_price=curr_price,
     )
+    scale_in_feature_quality_fields = _reversal_feature_quality_log_fields(
+        stock.get("last_reversal_features") if isinstance(stock, dict) else {}
+    )
     resolved_price = int(price_resolution.get("order_price", 0) or 0)
     if not price_resolution.get("allowed", False):
         _record_scale_in_submit_block(
@@ -33326,6 +33765,7 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
             scale_in_candidate_funnel_state=(
                 "price_guard_blocked" if sim_window_observation else None
             ),
+            **scale_in_feature_quality_fields,
             **scale_in_quote_refresh_non_price_source_fields,
             **sim_funnel_fields,
             **swing_scale_micro_fields,
@@ -33461,6 +33901,7 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
             ),
             scale_in_kt00011_error=budget_context.get("kt00011_error", ""),
             **scale_in_qty_budget_fields,
+            **scale_in_feature_quality_fields,
             **scale_in_quote_refresh_fields,
             **sim_budget_fields,
             **sim_funnel_fields,
@@ -33491,6 +33932,7 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
             "curr_price": curr_price,
             "resolved_price": resolved_price,
             **scale_in_qty_budget_fields,
+            **scale_in_feature_quality_fields,
         }
 
     if strategy == 'SCALPING':
@@ -33529,6 +33971,7 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
         qty_reason=qty_reason,
         scale_in_kt00011_error=budget_context.get("kt00011_error", ""),
         **scale_in_qty_budget_fields,
+        **scale_in_feature_quality_fields,
         **scale_in_quote_refresh_non_price_source_fields,
         **sim_budget_fields,
         **swing_scale_micro_fields,

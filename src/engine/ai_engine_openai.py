@@ -52,6 +52,7 @@ from src.engine.scalping_feature_packet import (
     calculate_scalping_micro_indicator_values,
     extract_scalping_feature_packet,
 )
+from src.engine.scalping.microstructure_reaction_context import infer_tick_aggressor_side
 from src.utils.logger import log_error, log_info
 from src.utils.constants import TRADING_RULES
 from src.engine.macro_briefing_complete import build_scanner_data_input
@@ -2233,6 +2234,8 @@ class GPTSniperEngine:
             {
                 "time": tick.get("time"),
                 "dir": tick.get("dir", tick.get("side", "NEUTRAL")),
+                "aggressor_source": tick.get("aggressor_source", tick.get("dir_source", "-")),
+                "aggressor_quality": tick.get("aggressor_quality", "-"),
                 "price": tick.get("price", tick.get("현재가", tick.get("체결가"))),
                 "volume": tick.get("volume", tick.get("qty", tick.get("체결량"))),
                 "strength": tick.get("strength", 0),
@@ -2264,16 +2267,13 @@ class GPTSniperEngine:
         def _volume(tick):
             return self._safe_float(tick.get("volume", tick.get("qty", tick.get("체결량", 0))), 0.0)
 
-        def _direction(tick):
-            return str(tick.get("dir", tick.get("side", tick.get("trade_type", ""))) or "").upper()
-
         def _is_buy_tick(tick):
-            direction = _direction(tick)
-            return "BUY" in direction or "매수" in direction
+            inferred = infer_tick_aggressor_side(tick)
+            return inferred.get("side") == "BUY" and inferred.get("source") != "price_change_heuristic"
 
         def _is_sell_tick(tick):
-            direction = _direction(tick)
-            return "SELL" in direction or "매도" in direction
+            inferred = infer_tick_aggressor_side(tick)
+            return inferred.get("side") == "SELL" and inferred.get("source") != "price_change_heuristic"
 
         summary = {}
         for window in windows:
@@ -2430,6 +2430,8 @@ class GPTSniperEngine:
                 {
                     "time": t.get("time"),
                     "dir": t.get("dir", "NEUTRAL"),
+                    "aggressor_source": t.get("aggressor_source", t.get("dir_source", "-")),
+                    "aggressor_quality": t.get("aggressor_quality", "-"),
                     "price": t.get("price"),
                     "volume": t.get("volume"),
                     "strength": t.get("strength", 0),
@@ -2495,10 +2497,27 @@ class GPTSniperEngine:
         tick_str = ""
 
         if recent_ticks and len(recent_ticks) > 0:
-            buy_vol = sum(t['volume'] for t in recent_ticks if t.get('dir') == 'BUY')
-            sell_vol = sum(t['volume'] for t in recent_ticks if t.get('dir') == 'SELL')
+            inferred_rows = [
+                (t, infer_tick_aggressor_side(t))
+                for t in recent_ticks
+                if isinstance(t, dict)
+            ]
+            buy_vol = sum(
+                self._safe_float(t.get('volume'), 0.0)
+                for t, inferred in inferred_rows
+                if inferred.get("side") == "BUY" and inferred.get("source") != "price_change_heuristic"
+            )
+            sell_vol = sum(
+                self._safe_float(t.get('volume'), 0.0)
+                for t, inferred in inferred_rows
+                if inferred.get("side") == "SELL" and inferred.get("source") != "price_change_heuristic"
+            )
             total_vol = buy_vol + sell_vol
             buy_pressure = (buy_vol / total_vol * 100) if total_vol > 0 else 50.0
+            aggressor_source_counts = {}
+            for _, inferred in inferred_rows:
+                source = str(inferred.get("source") or "unknown")
+                aggressor_source_counts[source] = aggressor_source_counts.get(source, 0) + 1
 
             latest_price = recent_ticks[0]['price']
             oldest_price = recent_ticks[-1]['price']
@@ -2525,6 +2544,7 @@ class GPTSniperEngine:
                 f"- 단기 흐름: {trend_str}\n"
                 f"- 틱 체결 속도(가속도): {speed_str}\n"
                 f"- 🔥 매수 압도율(Buy Pressure): {buy_pressure:.1f}% (매수 {buy_vol:,}주 vs 매도 {sell_vol:,}주)\n"
+                f"- aggressor source: {aggressor_source_counts}\n"
                 f"- 현재 체결강도: {latest_strength}%"
             )
 
@@ -4037,22 +4057,34 @@ class GPTSniperEngine:
         def _volume(tick):
             return self._safe_float(tick.get("volume", tick.get("qty", tick.get("체결량", 0))), 0.0)
 
-        def _direction(tick):
-            return str(tick.get("dir", tick.get("side", tick.get("trade_type", ""))) or "").upper()
-
         lines = []
         for window in (10, 20, 30):
             sample = ticks[:window]
             if not sample:
                 continue
-            buy_vol = sum(_volume(tick) for tick in sample if "SELL" not in _direction(tick) and "매도" not in _direction(tick))
-            sell_vol = sum(_volume(tick) for tick in sample if "SELL" in _direction(tick) or "매도" in _direction(tick))
+            inferred_rows = [(tick, infer_tick_aggressor_side(tick)) for tick in sample]
+            buy_vol = sum(
+                _volume(tick)
+                for tick, inferred in inferred_rows
+                if inferred.get("side") == "BUY" and inferred.get("source") != "price_change_heuristic"
+            )
+            sell_vol = sum(
+                _volume(tick)
+                for tick, inferred in inferred_rows
+                if inferred.get("side") == "SELL" and inferred.get("source") != "price_change_heuristic"
+            )
             total = buy_vol + sell_vol
             buy_pressure = (buy_vol / total * 100.0) if total > 0 else 0.0
             latest = _price(sample[0])
             oldest = _price(sample[-1])
             price_delta = ((latest - oldest) / oldest * 100.0) if oldest > 0 else 0.0
-            large_sell = sum(1 for tick in sample if ("SELL" in _direction(tick) or "매도" in _direction(tick)) and _volume(tick) >= max(1.0, total * 0.15))
+            large_sell = sum(
+                1
+                for tick, inferred in inferred_rows
+                if inferred.get("side") == "SELL"
+                and inferred.get("source") != "price_change_heuristic"
+                and _volume(tick) >= max(1.0, total * 0.15)
+            )
             lines.append(
                 f"- 최근 {len(sample)}틱: 가격변화 {price_delta:+.2f}%, 매수압도 {buy_pressure:.1f}%, 대형매도틱 {large_sell}건"
             )

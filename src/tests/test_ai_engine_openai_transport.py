@@ -1622,6 +1622,45 @@ def test_openai_scalping_market_data_uses_compact_json_payload(monkeypatch):
     assert "최근 10틱 상세 내역" not in payload
 
 
+def test_openai_legacy_market_data_excludes_price_change_heuristic_ticks(monkeypatch):
+    engine = _build_engine()
+    monkeypatch.setattr(
+        openai_module,
+        "TRADING_RULES",
+        replace(
+            openai_module.TRADING_RULES,
+            OPENAI_SCALPING_COMPACT_INPUT_ENABLED=False,
+            OPENAI_ENTRY_SCREEN_V2_INPUT_ENABLED=False,
+        ),
+    )
+    heuristic_ticks = [
+        {
+            "time": "09:00:10",
+            "price": 10110,
+            "volume": 120,
+            "dir": "BUY",
+            "aggressor_side": "BUY",
+            "aggressor_source": "price_change_heuristic",
+            "strength": 135.0,
+        },
+        {
+            "time": "09:00:09",
+            "price": 10100,
+            "volume": 80,
+            "dir": "SELL",
+            "aggressor_side": "SELL",
+            "aggressor_source": "price_change_heuristic",
+            "strength": 130.0,
+        },
+    ]
+
+    payload = engine._format_market_data(_sample_ws_data(), heuristic_ticks, _sample_candles())
+
+    assert "매수 압도율(Buy Pressure): 50.0%" in payload
+    assert "매수 0주 vs 매도 0주" in payload
+    assert "aggressor source: {'price_change_heuristic': 2}" in payload
+
+
 def test_openai_request_payload_omits_previous_response_id_by_default():
     engine = _build_engine()
 

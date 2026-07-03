@@ -3568,6 +3568,35 @@ def test_extract_ai_overlap_snapshot_uses_ws_day_high_low_without_candles():
     assert snapshot["buy_pressure_10t"] == 61.2
 
 
+def test_extract_ai_overlap_snapshot_ignores_price_change_heuristic_tick_direction():
+    snapshot = _extract_ai_overlap_snapshot(
+        ws_data={"curr": 9800, "high": 10000, "low": 9500, "v_pw": 123.4, "buy_ratio": 61.2},
+        recent_ticks=[
+            {
+                "time": "09:00:10",
+                "price": 9810,
+                "volume": 120,
+                "dir": "BUY",
+                "aggressor_side": "BUY",
+                "aggressor_source": "price_change_heuristic",
+                "strength": 130.0,
+            },
+            {
+                "time": "09:00:09",
+                "price": 9800,
+                "volume": 80,
+                "dir": "SELL",
+                "aggressor_side": "SELL",
+                "aggressor_source": "price_change_heuristic",
+                "strength": 120.0,
+            },
+        ],
+    )
+
+    assert snapshot["latest_strength"] == 130.0
+    assert snapshot["buy_pressure_10t"] == 61.2
+
+
 def test_should_run_main_buy_recovery_canary_with_feature_allowlist(monkeypatch):
     rules = replace(
         TRADING_RULES,

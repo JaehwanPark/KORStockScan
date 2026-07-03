@@ -49,6 +49,7 @@ def extract_scalping_feature_packet(ws_data, recent_ticks, recent_candles=None, 
         recent_candles = []
 
     ws_data = ws_data or {}
+    recent_ticks = _select_recent_ticks_for_feature_packet(ws_data, recent_ticks, now=now)
     snapshot = precompute_microstructure_reaction_inputs(
         ws_data,
         recent_ticks,
@@ -111,6 +112,11 @@ def extract_scalping_feature_packet(ws_data, recent_ticks, recent_candles=None, 
     tick_sample_count = int(snapshot.get("tick_sample_count") or 0)
     tick_latest_time = str(snapshot.get("tick_latest_time") or "") if ticks else ""
     tick_latest_age_ms = snapshot.get("tick_age_ms")
+    tick_aggressor_source_counts = snapshot.get("tick_aggressor_source_counts") or {}
+    tick_aggressor_quality_counts = snapshot.get("tick_aggressor_quality_counts") or {}
+    tick_aggressor_orderbook_touch_count = int(snapshot.get("tick_aggressor_orderbook_touch_count") or 0)
+    tick_aggressor_price_heuristic_count = int(snapshot.get("tick_aggressor_price_heuristic_count") or 0)
+    tick_aggressor_unknown_count = int(snapshot.get("tick_aggressor_unknown_count") or 0)
     tick_window_span_sec = None
     tick_accel_source = "no_ticks"
 
@@ -249,6 +255,11 @@ def extract_scalping_feature_packet(ws_data, recent_ticks, recent_candles=None, 
         "tick_accel_source": tick_accel_source,
         "tick_sample_count": tick_sample_count,
         "tick_window_sample_count": tick_sample_count,
+        "tick_aggressor_source_counts": tick_aggressor_source_counts,
+        "tick_aggressor_quality_counts": tick_aggressor_quality_counts,
+        "tick_aggressor_orderbook_touch_count": tick_aggressor_orderbook_touch_count,
+        "tick_aggressor_price_heuristic_count": tick_aggressor_price_heuristic_count,
+        "tick_aggressor_unknown_count": tick_aggressor_unknown_count,
         "tick_latest_time": tick_latest_time or "-",
         "tick_latest_age_ms": tick_latest_age_ms if tick_latest_age_ms is not None else "-",
         "tick_window_span_sec": tick_window_span_sec if tick_window_span_sec is not None else "-",
@@ -274,6 +285,24 @@ def extract_scalping_feature_packet(ws_data, recent_ticks, recent_candles=None, 
     }
 
 
+def _select_recent_ticks_for_feature_packet(ws_data, recent_ticks, *, now=None):
+    rest_ticks = recent_ticks if isinstance(recent_ticks, list) else []
+    ws_ticks = ws_data.get("recent_trade_ticks") if isinstance(ws_data, dict) else None
+    if not isinstance(ws_ticks, list) or len(ws_ticks) < 5:
+        return rest_ticks
+    snapshot = precompute_microstructure_reaction_inputs(
+        ws_data,
+        ws_ticks,
+        [],
+        now=now,
+    )
+    age_ms = snapshot.get("tick_age_ms")
+    orderbook_touch_count = int(snapshot.get("tick_aggressor_orderbook_touch_count") or 0)
+    if age_ms is None or age_ms > 5000 or orderbook_touch_count <= 0:
+        return rest_ticks
+    return ws_ticks
+
+
 def build_scalping_feature_audit_fields(packet):
     payload = packet or {}
     return {
@@ -294,6 +323,11 @@ def build_scalping_feature_audit_fields(packet):
         ),
         "tick_sample_count": payload.get("tick_sample_count", "-"),
         "tick_window_sample_count": payload.get("tick_window_sample_count", "-"),
+        "tick_aggressor_source_counts": payload.get("tick_aggressor_source_counts", {}),
+        "tick_aggressor_quality_counts": payload.get("tick_aggressor_quality_counts", {}),
+        "tick_aggressor_orderbook_touch_count": payload.get("tick_aggressor_orderbook_touch_count", 0),
+        "tick_aggressor_price_heuristic_count": payload.get("tick_aggressor_price_heuristic_count", 0),
+        "tick_aggressor_unknown_count": payload.get("tick_aggressor_unknown_count", 0),
         "tick_latest_time": payload.get("tick_latest_time", "-"),
         "tick_latest_age_ms": payload.get("tick_latest_age_ms", "-"),
         "tick_window_span_sec": payload.get("tick_window_span_sec", "-"),

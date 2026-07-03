@@ -93,6 +93,104 @@ def _safe_hhmmss_to_seconds(value: Any) -> int | None:
         return None
 
 
+def _normalize_tick_side(value: Any) -> str:
+    raw = str(value or "").strip().upper()
+    compact = raw.replace("+", "").replace("-", "").replace(" ", "")
+    if raw in {"BUY", "B", "2"} or "매수" in compact:
+        return "BUY"
+    if raw in {"SELL", "S", "1"} or "매도" in compact:
+        return "SELL"
+    return raw
+
+
+def _tick_price(tick: dict[str, Any]) -> float:
+    return _safe_float(
+        tick.get("price")
+        or tick.get("trade_price")
+        or tick.get("cur_prc")
+        or tick.get("현재가")
+        or tick.get("체결가"),
+        0.0,
+    )
+
+
+def _tick_best_ask(tick: dict[str, Any]) -> float:
+    return _safe_float(
+        tick.get("best_ask")
+        or tick.get("ask_price")
+        or tick.get("ask")
+        or tick.get("27"),
+        0.0,
+    )
+
+
+def _tick_best_bid(tick: dict[str, Any]) -> float:
+    return _safe_float(
+        tick.get("best_bid")
+        or tick.get("bid_price")
+        or tick.get("bid")
+        or tick.get("28"),
+        0.0,
+    )
+
+
+def infer_tick_aggressor_side(tick: dict[str, Any] | None) -> dict[str, Any]:
+    tick = tick if isinstance(tick, dict) else {}
+    explicit = _normalize_tick_side(
+        tick.get("aggressor_side")
+        or tick.get("trade_aggressor_side")
+        or tick.get("dir")
+        or tick.get("side")
+    )
+    trade_price = _tick_price(tick)
+    best_ask = _tick_best_ask(tick)
+    best_bid = _tick_best_bid(tick)
+    if trade_price > 0 and (best_ask > 0 or best_bid > 0):
+        if best_ask > 0 and trade_price >= best_ask:
+            return {
+                "side": "BUY",
+                "source": "orderbook_touch",
+                "quality": "touch_or_crossed_ask",
+                "trade_price": trade_price,
+                "best_ask": best_ask,
+                "best_bid": best_bid,
+            }
+        if best_bid > 0 and trade_price <= best_bid:
+            return {
+                "side": "SELL",
+                "source": "orderbook_touch",
+                "quality": "touch_or_crossed_bid",
+                "trade_price": trade_price,
+                "best_ask": best_ask,
+                "best_bid": best_bid,
+            }
+        return {
+            "side": "UNKNOWN",
+            "source": "orderbook_touch",
+            "quality": "inside_spread_or_uncertain",
+            "trade_price": trade_price,
+            "best_ask": best_ask,
+            "best_bid": best_bid,
+        }
+    if explicit in {"BUY", "SELL"}:
+        return {
+            "side": explicit,
+            "source": str(tick.get("aggressor_source") or tick.get("dir_source") or "declared_tick_side"),
+            "quality": str(tick.get("aggressor_quality") or "side_without_orderbook_touch"),
+            "trade_price": trade_price,
+            "best_ask": best_ask,
+            "best_bid": best_bid,
+        }
+    return {
+        "side": "UNKNOWN",
+        "source": "missing_aggressor_side",
+        "quality": "missing_orderbook_touch_and_side",
+        "trade_price": trade_price,
+        "best_ask": best_ask,
+        "best_bid": best_bid,
+    }
+
+
 def _age_ms_from_hhmmss(value: Any, *, now: datetime | None = None) -> int | None:
     tick_sec = _safe_hhmmss_to_seconds(value)
     if tick_sec is None:
@@ -184,8 +282,17 @@ def precompute_microstructure_reaction_inputs(
     tick_latest_time = str(ticks[0].get("time") or "") if ticks else ""
     tick_age_ms = _age_ms_from_hhmmss(tick_latest_time, now=now) if tick_latest_time else None
     tick_secs = [_safe_hhmmss_to_seconds(tick.get("time")) for tick in ticks]
-    buy_vol = sum(_safe_float(tick.get("volume"), 0.0) for tick in ticks if str(tick.get("dir") or "").upper() == "BUY")
-    sell_vol = sum(_safe_float(tick.get("volume"), 0.0) for tick in ticks if str(tick.get("dir") or "").upper() == "SELL")
+    aggressor_rows = [infer_tick_aggressor_side(tick) for tick in ticks]
+    buy_vol = sum(
+        _safe_float(tick.get("volume"), 0.0)
+        for tick, inferred in zip(ticks, aggressor_rows)
+        if inferred.get("side") == "BUY"
+    )
+    sell_vol = sum(
+        _safe_float(tick.get("volume"), 0.0)
+        for tick, inferred in zip(ticks, aggressor_rows)
+        if inferred.get("side") == "SELL"
+    )
     total_vol = buy_vol + sell_vol
     buy_pressure_pct = (buy_vol / total_vol * 100.0) if total_vol > 0 else 50.0
     prices: list[float] = []
@@ -203,20 +310,20 @@ def precompute_microstructure_reaction_inputs(
     avg_tick_volume = mean(volumes) if volumes else 0.0
     buy_at_or_above_ask_vol = sum(
         _safe_float(tick.get("volume"), 0.0)
-        for tick in ticks
-        if str(tick.get("dir") or "").upper() == "BUY" and _safe_float(tick.get("price"), 0.0) >= best_ask
+        for tick, inferred in zip(ticks, aggressor_rows)
+        if inferred.get("side") == "BUY" and _safe_float(tick.get("price"), 0.0) >= best_ask
     )
     large_buy_print_detected = any(
-        str(tick.get("dir") or "").upper() == "BUY" and _safe_float(tick.get("volume"), 0.0) >= avg_tick_volume * 2.2
-        for tick in ticks[:5]
+        inferred.get("side") == "BUY" and _safe_float(tick.get("volume"), 0.0) >= avg_tick_volume * 2.2
+        for tick, inferred in zip(ticks[:5], aggressor_rows[:5])
     ) if avg_tick_volume > 0 else False
     large_sell_print_detected = any(
-        str(tick.get("dir") or "").upper() == "SELL" and _safe_float(tick.get("volume"), 0.0) >= avg_tick_volume * 2.2
-        for tick in ticks[:5]
+        inferred.get("side") == "SELL" and _safe_float(tick.get("volume"), 0.0) >= avg_tick_volume * 2.2
+        for tick, inferred in zip(ticks[:5], aggressor_rows[:5])
     ) if avg_tick_volume > 0 else False
     price_buy_count: dict[float, int] = {}
-    for tick in ticks[:6]:
-        if str(tick.get("dir") or "").upper() != "BUY":
+    for tick, inferred in zip(ticks[:6], aggressor_rows[:6]):
+        if inferred.get("side") != "BUY":
             continue
         price_key = _safe_float(tick.get("price"), 0.0)
         price_buy_count[price_key] = price_buy_count.get(price_key, 0) + 1
@@ -247,6 +354,14 @@ def precompute_microstructure_reaction_inputs(
         "top3_ask_vol": top3_ask_vol,
         "top3_bid_vol": top3_bid_vol,
         "ticks": ticks,
+        "tick_aggressor_rows": aggressor_rows,
+        "tick_aggressor_source_counts": dict(Counter(str(row.get("source") or "unknown") for row in aggressor_rows)),
+        "tick_aggressor_quality_counts": dict(Counter(str(row.get("quality") or "unknown") for row in aggressor_rows)),
+        "tick_aggressor_unknown_count": sum(1 for row in aggressor_rows if row.get("side") not in {"BUY", "SELL"}),
+        "tick_aggressor_orderbook_touch_count": sum(1 for row in aggressor_rows if row.get("source") == "orderbook_touch"),
+        "tick_aggressor_price_heuristic_count": sum(
+            1 for row in aggressor_rows if row.get("source") == "price_change_heuristic"
+        ),
         "tick_sample_count": len(ticks),
         "tick_latest_time": tick_latest_time,
         "tick_age_ms": tick_age_ms,

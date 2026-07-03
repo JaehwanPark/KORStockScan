@@ -89,6 +89,45 @@ def test_handle_message_ignores_non_dict_payload():
     assert fake_ws.sent == []
 
 
+def test_realtime_0b_stores_orderbook_touch_aggressor_tick():
+    manager = KiwoomWSManager("test-token")
+    manager.subscribed_codes = {"005930"}
+
+    asyncio.run(
+        manager._handle_message(
+            json.dumps(
+                {
+                    "trnm": "REAL",
+                    "data": [
+                        {
+                            "type": "0B",
+                            "item": "005930",
+                            "values": {
+                                "10": "10110",
+                                "15": "+120",
+                                "20": "090010",
+                                "27": "10110",
+                                "28": "10100",
+                                "228": "135.5",
+                            },
+                        }
+                    ],
+                }
+            )
+        )
+    )
+
+    latest = manager.get_latest_data("005930")
+    tick = latest["recent_trade_ticks"][0]
+    assert tick["dir"] == "BUY"
+    assert tick["aggressor_source"] == "orderbook_touch"
+    assert tick["aggressor_quality"] == "touch_or_crossed_ask"
+    assert tick["aggressor_quote_source"] == "0B_inline_best_quote"
+    assert tick["best_ask"] == 10110
+    assert tick["best_bid"] == 10100
+    assert latest["last_trade_tick"]["price"] == 10110
+
+
 def test_await_login_ack_raises_on_login_failure():
     manager = KiwoomWSManager("test-token")
     fake_ws = _FakeWS(

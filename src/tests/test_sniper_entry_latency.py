@@ -1151,6 +1151,145 @@ def test_real_pre_submit_rest_orderbook_refresh_blocks_stale_ka10004_snapshot(mo
     assert refreshed["curr"] == 10_000
 
 
+def test_holding_ai_rest_orderbook_refresh_reuses_fresh_ka10004_snapshot(monkeypatch):
+    now_hhmmss = datetime.now().strftime("%H%M%S")
+
+    monkeypatch.setattr(state_handlers, "KIWOOM_TOKEN", "TOKEN")
+    monkeypatch.setattr(
+        state_handlers.kiwoom_utils,
+        "get_stock_orderbook_ka10004",
+        lambda token, code: {
+            "source": "ka10004_rest_orderbook",
+            "bid_req_base_tm": now_hhmmss,
+            "rest_mid_price": 10_025,
+            "best_ask": 10_030,
+            "best_bid": 10_020,
+            "best_ask_qty": 100,
+            "best_bid_qty": 200,
+            "orderbook": {
+                "asks": [{"price": 10_030, "volume": 100}],
+                "bids": [{"price": 10_020, "volume": 200}],
+            },
+        },
+    )
+    monkeypatch.setenv("KORSTOCKSCAN_SCALP_PRE_SUBMIT_REST_ORDERBOOK_MAX_AGE_MS", "3000")
+
+    refreshed, fields = state_handlers._holding_ai_refresh_rest_orderbook_snapshot(
+        "123456",
+        {"curr": 10_000},
+        "SCALPING",
+    )
+
+    assert fields["holding_ai_rest_orderbook_refresh_enabled"] is True
+    assert fields["holding_ai_rest_orderbook_refresh_applied"] is True
+    assert fields["holding_ai_rest_orderbook_refresh_reason"] == "rest_orderbook_fresh"
+    assert fields["holding_ai_rest_orderbook_refresh_best_bid"] == 10_020
+    assert "pre_submit_rest_orderbook_refresh_applied" not in refreshed
+    assert refreshed["curr"] == 10_025
+    assert refreshed["orderbook"]["bids"][0]["price"] == 10_020
+
+
+def test_holding_ai_rest_orderbook_refresh_keeps_stale_snapshot_blocked(monkeypatch):
+    stale_hhmmss = datetime.fromtimestamp(time.time() - 10).strftime("%H%M%S")
+
+    monkeypatch.setattr(state_handlers, "KIWOOM_TOKEN", "TOKEN")
+    monkeypatch.setattr(
+        state_handlers.kiwoom_utils,
+        "get_stock_orderbook_ka10004",
+        lambda token, code: {
+            "bid_req_base_tm": stale_hhmmss,
+            "rest_mid_price": 10_025,
+            "best_ask": 10_030,
+            "best_bid": 10_020,
+            "orderbook": {
+                "asks": [{"price": 10_030, "volume": 100}],
+                "bids": [{"price": 10_020, "volume": 200}],
+            },
+        },
+    )
+    monkeypatch.setenv("KORSTOCKSCAN_SCALP_PRE_SUBMIT_REST_ORDERBOOK_MAX_AGE_MS", "500")
+
+    refreshed, fields = state_handlers._holding_ai_refresh_rest_orderbook_snapshot(
+        "123456",
+        {"curr": 10_000},
+        "SCALPING",
+    )
+
+    assert fields["holding_ai_rest_orderbook_refresh_enabled"] is True
+    assert fields["holding_ai_rest_orderbook_refresh_applied"] is False
+    assert fields["holding_ai_rest_orderbook_refresh_reason"] == "rest_orderbook_stale"
+    assert refreshed["curr"] == 10_000
+    assert "orderbook" not in refreshed
+
+
+def test_holding_ai_rest_orderbook_refresh_skips_existing_usable_quote(monkeypatch):
+    calls = []
+    monkeypatch.setattr(state_handlers, "KIWOOM_TOKEN", "TOKEN")
+    monkeypatch.setattr(
+        state_handlers.kiwoom_utils,
+        "get_stock_orderbook_ka10004",
+        lambda token, code: calls.append((token, code)) or {},
+    )
+
+    refreshed, fields = state_handlers._holding_ai_refresh_rest_orderbook_snapshot(
+        "123456",
+        {
+            "curr": 10_020,
+            "orderbook": {
+                "asks": [{"price": 10_030, "volume": 100}],
+                "bids": [{"price": 10_020, "volume": 200}],
+            },
+        },
+        "SCALPING",
+    )
+
+    assert calls == []
+    assert fields["holding_ai_rest_orderbook_refresh_applied"] is False
+    assert fields["holding_ai_rest_orderbook_refresh_reason"] == "input_orderbook_usable"
+    assert refreshed["curr"] == 10_020
+
+
+def test_holding_ai_rest_orderbook_refresh_rechecks_stale_usable_quote(monkeypatch):
+    calls = []
+    now_hhmmss = datetime.now().strftime("%H%M%S")
+    monkeypatch.setattr(state_handlers, "KIWOOM_TOKEN", "TOKEN")
+    monkeypatch.setattr(
+        state_handlers.kiwoom_utils,
+        "get_stock_orderbook_ka10004",
+        lambda token, code: calls.append((token, code)) or {
+            "source": "ka10004_rest_orderbook",
+            "bid_req_base_tm": now_hhmmss,
+            "rest_mid_price": 10_025,
+            "best_ask": 10_030,
+            "best_bid": 10_020,
+            "best_ask_qty": 100,
+            "best_bid_qty": 200,
+            "orderbook": {
+                "asks": [{"price": 10_030, "volume": 100}],
+                "bids": [{"price": 10_020, "volume": 200}],
+            },
+        },
+    )
+    monkeypatch.setenv("KORSTOCKSCAN_SCALP_PRE_SUBMIT_REST_ORDERBOOK_MAX_AGE_MS", "3000")
+
+    refreshed, fields = state_handlers._holding_ai_refresh_rest_orderbook_snapshot(
+        "123456",
+        {
+            "curr": 10_000,
+            "best_bid": 9_990,
+            "best_ask": 10_000,
+            "quote_stale": True,
+        },
+        "SCALPING",
+    )
+
+    assert calls == [("TOKEN", "123456")]
+    assert fields["holding_ai_rest_orderbook_refresh_applied"] is True
+    assert fields["holding_ai_rest_orderbook_refresh_reason"] == "rest_orderbook_fresh"
+    assert refreshed["curr"] == 10_025
+    assert refreshed["best_bid"] == 10_020
+
+
 def test_real_pre_submit_ws_snapshot_refresh_blocks_stale_ws_manager_snapshot(monkeypatch):
     class FakeWsManager:
         def get_latest_data(self, code):

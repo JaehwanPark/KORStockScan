@@ -210,6 +210,21 @@ class KiwoomWSManager:
             return default
 
     @staticmethod
+    def _infer_trade_aggressor_from_touch(trade_price, best_ask, best_bid):
+        price = KiwoomWSManager._safe_abs_int(trade_price, 0)
+        ask = KiwoomWSManager._safe_abs_int(best_ask, 0)
+        bid = KiwoomWSManager._safe_abs_int(best_bid, 0)
+        if price <= 0:
+            return "UNKNOWN", "missing_trade_price"
+        if ask <= 0 and bid <= 0:
+            return "UNKNOWN", "missing_best_quote"
+        if ask > 0 and price >= ask:
+            return "BUY", "touch_or_crossed_ask"
+        if bid > 0 and price <= bid:
+            return "SELL", "touch_or_crossed_bid"
+        return "UNKNOWN", "inside_spread_or_uncertain"
+
+    @staticmethod
     def _normalize_code(code):
         raw = str(code or '').strip().upper().replace('.0', '')
         for suffix in ('_AL', '_NX'):
@@ -731,6 +746,7 @@ class KiwoomWSManager:
                 'last_foreign_broker_update_ts': 0.0,
                 'program_history': deque(maxlen=120),
                 'strength_momentum_history': deque(maxlen=history_maxlen),
+                'recent_trade_ticks': deque(maxlen=120),
                 '_first_tick_logged': False,
                 'last_trade_tick': None,
             }
@@ -776,7 +792,14 @@ class KiwoomWSManager:
         snapshot = copy.deepcopy(target)
         snapshot['market_session_state'] = self.market_session_state
         snapshot['market_session_remaining'] = self.market_session_remaining
-        for key in ("price_history", "v_pw_history", "signed_volume_history", "program_history", "strength_momentum_history"):
+        for key in (
+            "price_history",
+            "v_pw_history",
+            "signed_volume_history",
+            "program_history",
+            "strength_momentum_history",
+            "recent_trade_ticks",
+        ):
             if isinstance(snapshot.get(key), deque):
                 snapshot[key] = list(snapshot[key])
         return snapshot
@@ -1387,10 +1410,55 @@ class KiwoomWSManager:
                                 buy_qty = safe_int(values.get('1031'), 0)
                                 sell_qty = safe_int(values.get('1030'), 0)
                                 buy_ratio = self._safe_float(values.get('1032'), 0.0)
-                                target['last_trade_tick'] = {
-                                    'ts': time.time(),
-                                    'values': values,
+                                orderbook = target.get('orderbook') or {}
+                                asks = orderbook.get('asks') if isinstance(orderbook, dict) else []
+                                bids = orderbook.get('bids') if isinstance(orderbook, dict) else []
+                                inline_best_ask = safe_int(values.get('27'), 0)
+                                inline_best_bid = safe_int(values.get('28'), 0)
+                                best_ask = inline_best_ask
+                                best_bid = inline_best_bid
+                                quote_source = '0B_inline_best_quote' if inline_best_ask > 0 or inline_best_bid > 0 else 'cached_orderbook'
+                                if best_ask <= 0 and asks:
+                                    best_ask = safe_int((asks[0] or {}).get('price'), 0)
+                                if best_bid <= 0 and bids:
+                                    best_bid = safe_int((bids[0] or {}).get('price'), 0)
+                                aggressor_side, aggressor_quality = self._infer_trade_aggressor_from_touch(
+                                    trade_price,
+                                    best_ask,
+                                    best_bid,
+                                )
+                                tick_time = str(values.get('20') or datetime.now().strftime('%H%M%S'))
+                                received_ts = time.time()
+                                normalized_tick = {
+                                    'time': tick_time,
+                                    'price': trade_price,
+                                    'volume': abs(int(signed_qty or 0)),
+                                    'dir': aggressor_side,
+                                    'aggressor_side': aggressor_side,
+                                    'aggressor_source': (
+                                        'orderbook_touch'
+                                        if quote_source == '0B_inline_best_quote'
+                                        else 'cached_orderbook_touch'
+                                    ),
+                                    'aggressor_quality': (
+                                        aggressor_quality
+                                        if quote_source == '0B_inline_best_quote'
+                                        else f"cached_quote_{aggressor_quality}"
+                                    ),
+                                    'aggressor_quote_source': quote_source,
+                                    'best_ask': best_ask,
+                                    'best_bid': best_bid,
+                                    'quote_age_ms': 0,
+                                    'strength': current_vpw,
+                                    'received_at_ms': int(received_ts * 1000),
                                 }
+                                target['last_trade_tick'] = {
+                                    'ts': received_ts,
+                                    'values': values,
+                                    **normalized_tick,
+                                }
+                                if isinstance(target.get('recent_trade_ticks'), deque):
+                                    target['recent_trade_ticks'].appendleft(normalized_tick)
                                 ORDERBOOK_STABILITY_OBSERVER.record_trade(
                                     item_code,
                                     price=trade_price,

@@ -2344,7 +2344,12 @@ def check_execution_strength_ka10046(token, code):
     
 def get_tick_history_ka10003(token, code, limit=10):
     """
-    [ka10003] 주식체결정보요청 - 가격 흐름을 기반으로 한 진짜 체결 방향 역추적
+    [ka10003] 주식체결정보요청.
+
+    ka10003 exposes trade price/change fields, not a reliable aggressor-side
+    source. The returned ``dir`` is a price-change heuristic for compatibility;
+    consumers must inspect ``aggressor_source`` before treating it as buy/sell
+    pressure evidence.
     """
     req_code = get_effective_kiwoom_code(code)
     cache_key = (str(req_code), int(limit))
@@ -2378,7 +2383,7 @@ def get_tick_history_ka10003(token, code, limit=10):
                 return float(str(v).replace(',', '').replace('+', '').strip())
             except (ValueError, TypeError):
                 return 0.0
-        # 💡 최근 체결 순으로 들어오므로, 역순으로 순회하며 이전 틱과 비교
+        # 최근 체결 순으로 들어오므로 다음 인덱스가 시간상 더 과거의 틱이다.
         for i in range(len(tick_list)):
             if i >= limit: break
             
@@ -2387,20 +2392,25 @@ def get_tick_history_ka10003(token, code, limit=10):
             current_price = to_i(item.get('cur_prc'))
             volume = to_i(item.get('cntr_trde_qty'))
             
-            # 💡 [핵심] 진짜 체결 방향 추론 (다음 인덱스 i+1 이 시간상 더 과거의 틱)
             direction = "NEUTRAL"
+            direction_quality = "same_price_or_oldest_tick"
             if i + 1 < len(tick_list):
                 past_price = to_i(tick_list[i+1].get('cur_prc'))
                 if current_price > past_price:
-                    direction = "BUY"  # 가격이 올랐으므로 매수 주도
+                    direction = "BUY"
+                    direction_quality = "price_up_vs_previous_print"
                 elif current_price < past_price:
-                    direction = "SELL" # 가격이 내렸으므로 매도 주도
+                    direction = "SELL"
+                    direction_quality = "price_down_vs_previous_print"
             
             ticks.append({
                 'time': item.get('tm', ''),
                 'price': current_price,
                 'volume': volume,
-                'dir': direction,                           # 🚀 완벽하게 교정된 진짜 체결 방향
+                'dir': direction,
+                'aggressor_side': direction,
+                'aggressor_source': 'price_change_heuristic',
+                'aggressor_quality': direction_quality,
                 'flu_rate': to_f(item.get('pre_rt')),       # 대비율
                 'strength': to_f(item.get('cntr_str')),     # 체결강도
                 'acc_vol': to_i(item.get('acc_trde_qty'))   # 누적거래량
@@ -3048,16 +3058,40 @@ def summarize_ticks_for_realtime_ka10003(token, code, limit=20):
         "buy_ratio_1m": 0.0,
         "buy_ratio_3m": 0.0,
         "tape_bias": "중립",
+        "aggressor_source_counts": {},
+        "price_change_heuristic_tick_count": 0,
+        "unknown_aggressor_tick_count": 0,
     }
     if not ticks:
         return res
 
-    buy_qty = sum(int(t.get("volume", 0)) for t in ticks if t.get("dir") == "BUY")
-    sell_qty = sum(int(t.get("volume", 0)) for t in ticks if t.get("dir") == "SELL")
+    source_counts = {}
+    buy_qty = 0
+    sell_qty = 0
+    unknown_count = 0
+    heuristic_count = 0
+    for tick in ticks:
+        if not isinstance(tick, dict):
+            continue
+        source = str(tick.get("aggressor_source") or tick.get("dir_source") or "declared_tick_side")
+        side = str(tick.get("aggressor_side") or tick.get("dir") or "").upper()
+        source_counts[source] = source_counts.get(source, 0) + 1
+        if source == "price_change_heuristic":
+            heuristic_count += 1
+            continue
+        if side == "BUY":
+            buy_qty += int(tick.get("volume", 0) or 0)
+        elif side == "SELL":
+            sell_qty += int(tick.get("volume", 0) or 0)
+        else:
+            unknown_count += 1
     total = buy_qty + sell_qty
 
     res["buy_exec_qty"] = buy_qty
     res["sell_exec_qty"] = sell_qty
+    res["aggressor_source_counts"] = source_counts
+    res["price_change_heuristic_tick_count"] = heuristic_count
+    res["unknown_aggressor_tick_count"] = unknown_count
     if total > 0:
         res["buy_ratio_now"] = (buy_qty / total) * 100.0
         res["buy_ratio_1m"] = res["buy_ratio_now"]

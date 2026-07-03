@@ -89,6 +89,89 @@ def test_extract_scalping_feature_packet_exposes_stage1_supply_fields():
     assert packet["microstructure_reaction_vi_proximity_risk"] >= 0
 
 
+def test_extract_scalping_feature_packet_normalizes_tick_side_aliases_for_buy_pressure():
+    ticks = [
+        {"time": "09:00:10", "price": 10100, "volume": 100, "dir": "매수", "strength": 135.0},
+        {"time": "09:00:09", "price": 10100, "volume": 50, "dir": "+매수", "strength": 133.0},
+        {"time": "09:00:08", "price": 10095, "volume": 30, "dir": "B", "strength": 131.0},
+        {"time": "09:00:07", "price": 10090, "volume": 20, "dir": "매도", "strength": 125.0},
+        {"time": "09:00:06", "price": 10090, "volume": 20, "dir": "S", "strength": 122.0},
+    ]
+
+    packet = extract_scalping_feature_packet(
+        _sample_ws_data(),
+        ticks,
+        _sample_candles(),
+        now=datetime.strptime("09:00:12", "%H:%M:%S"),
+    )
+
+    assert packet["buy_pressure_10t"] == 81.82
+    assert packet["net_aggressive_delta_10t"] == 140
+
+
+def test_extract_scalping_feature_packet_prefers_fresh_ws_orderbook_touch_ticks():
+    ws_data = _sample_ws_data()
+    ws_data["recent_trade_ticks"] = [
+        {
+            "time": "09:00:10",
+            "price": 10110,
+            "volume": 100,
+            "best_ask": 10110,
+            "best_bid": 10100,
+            "aggressor_source": "orderbook_touch",
+        },
+        {
+            "time": "09:00:09",
+            "price": 10110,
+            "volume": 80,
+            "best_ask": 10110,
+            "best_bid": 10100,
+            "aggressor_source": "orderbook_touch",
+        },
+        {
+            "time": "09:00:08",
+            "price": 10100,
+            "volume": 40,
+            "best_ask": 10110,
+            "best_bid": 10100,
+            "aggressor_source": "orderbook_touch",
+        },
+        {
+            "time": "09:00:07",
+            "price": 10110,
+            "volume": 60,
+            "best_ask": 10110,
+            "best_bid": 10100,
+            "aggressor_source": "orderbook_touch",
+        },
+        {
+            "time": "09:00:06",
+            "price": 10105,
+            "volume": 20,
+            "best_ask": 10110,
+            "best_bid": 10100,
+            "aggressor_source": "orderbook_touch",
+        },
+    ]
+    rest_ticks = [
+        {"time": "09:00:10", "price": 10100, "volume": 999, "dir": "SELL", "strength": 120.0}
+        for _ in range(10)
+    ]
+
+    packet = extract_scalping_feature_packet(
+        ws_data,
+        rest_ticks,
+        _sample_candles(),
+        now=datetime.strptime("09:00:12", "%H:%M:%S"),
+    )
+
+    assert packet["buy_pressure_10t"] == 85.71
+    assert packet["net_aggressive_delta_10t"] == 200
+    assert packet["tick_aggressor_orderbook_touch_count"] == 5
+    assert packet["tick_aggressor_price_heuristic_count"] == 0
+    assert packet["tick_aggressor_unknown_count"] == 1
+
+
 def test_build_scalping_feature_audit_fields_marks_sent_flags():
     packet = extract_scalping_feature_packet(
         _sample_ws_data(),
