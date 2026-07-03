@@ -59,6 +59,10 @@ _WS_OPERATOR_RUNTIME_OVERRIDE_PATH = (
     PROJECT_ROOT / "data" / "threshold_cycle" / "runtime_env" / "operator_runtime_overrides.env"
 )
 _WS_HOT_RUNTIME_OVERRIDE_REFRESH_SEC = 5.0
+TOB_CACHE_TTL_MS = int(os.getenv("KORSTOCKSCAN_WS_TOB_CACHE_TTL_MS", "300") or "300")
+TICK_SYNC_WINDOW_MS = int(os.getenv("KORSTOCKSCAN_WS_TICK_SYNC_WINDOW_MS", "500") or "500")
+TOB_BACKOFF_BASE_MS = int(os.getenv("KORSTOCKSCAN_WS_TOB_BACKOFF_BASE_MS", "200") or "200")
+TOB_BACKOFF_MAX_MS = int(os.getenv("KORSTOCKSCAN_WS_TOB_BACKOFF_MAX_MS", "5000") or "5000")
 _WS_HOT_RUNTIME_OVERRIDES = {
     "mtime_ns": None,
     "values": {},
@@ -168,6 +172,7 @@ class KiwoomWSManager:
         self._persistent_repair_overflow_codes = OrderedDict()
         self._last_persistent_repair_rebuild_ts = 0.0
         self._registered_items_by_code = {}
+        self._top_of_book_cache = {}
         
         # 전역 EventBus 인스턴스 획득 및 외부 명령 수신기 장착
         self.event_bus = EventBus()
@@ -223,6 +228,119 @@ class KiwoomWSManager:
         if bid > 0 and price <= bid:
             return "SELL", "touch_or_crossed_bid"
         return "UNKNOWN", "inside_spread_or_uncertain"
+
+    @staticmethod
+    def _tick_time_to_epoch_ms(tick_time, *, now_ts=None):
+        text = str(tick_time or "").strip().replace(":", "")
+        if len(text) < 6 or not text[:6].isdigit():
+            return 0
+        now_value = time.time() if now_ts is None else float(now_ts)
+        now_dt = datetime.fromtimestamp(now_value)
+        try:
+            tick_dt = now_dt.replace(
+                hour=int(text[:2]),
+                minute=int(text[2:4]),
+                second=int(text[4:6]),
+                microsecond=0,
+            )
+        except ValueError:
+            return 0
+        if len(text) >= 9 and text[6:9].isdigit():
+            tick_dt = tick_dt.replace(microsecond=int(text[6:9]) * 1000)
+        epoch_ms = int(tick_dt.timestamp() * 1000)
+        now_ms = int(now_value * 1000)
+        if epoch_ms - now_ms > 12 * 60 * 60 * 1000:
+            epoch_ms -= 24 * 60 * 60 * 1000
+        elif now_ms - epoch_ms > 12 * 60 * 60 * 1000:
+            epoch_ms += 24 * 60 * 60 * 1000
+        return epoch_ms
+
+    @staticmethod
+    def _empty_tob_cache():
+        return {
+            "ask": 0,
+            "bid": 0,
+            "ts_ms": 0,
+            "miss_count": 0,
+            "next_allowed_retry_ms": 0,
+        }
+
+    def _tob_backoff_ms(self, miss_count):
+        count = max(0, int(miss_count or 0))
+        if count <= 0:
+            return 0
+        return min(TOB_BACKOFF_BASE_MS * (2 ** max(0, count - 1)), TOB_BACKOFF_MAX_MS)
+
+    def _get_tob_cache(self, item_code):
+        cache = self._top_of_book_cache.get(item_code)
+        if not isinstance(cache, dict):
+            cache = self._empty_tob_cache()
+            self._top_of_book_cache[item_code] = cache
+        return cache
+
+    def _update_tob_cache(self, item_code, *, best_ask=0, best_bid=0, now_ms=None):
+        cache = self._get_tob_cache(item_code)
+        now_value = int(now_ms if now_ms is not None else time.time() * 1000)
+        ask = self._safe_abs_int(best_ask, 0)
+        bid = self._safe_abs_int(best_bid, 0)
+        if ask > 0:
+            cache["ask"] = ask
+        if bid > 0:
+            cache["bid"] = bid
+        if ask > 0 or bid > 0:
+            cache["ts_ms"] = now_value
+            cache["miss_count"] = 0
+            cache["next_allowed_retry_ms"] = 0
+        return cache
+
+    def _resolve_0b_touch_quote(self, item_code, *, inline_best_ask, inline_best_bid, tick_time, received_ts):
+        now_ms = int(float(received_ts or time.time()) * 1000)
+        tick_ms = self._tick_time_to_epoch_ms(tick_time, now_ts=received_ts)
+        tick_sync = bool(tick_ms and abs(now_ms - tick_ms) <= TICK_SYNC_WINDOW_MS)
+        inline_ask = self._safe_abs_int(inline_best_ask, 0)
+        inline_bid = self._safe_abs_int(inline_best_bid, 0)
+        cache = self._get_tob_cache(item_code)
+        if inline_ask > 0 or inline_bid > 0:
+            cache = self._update_tob_cache(item_code, best_ask=inline_ask, best_bid=inline_bid, now_ms=now_ms)
+        quote_age_ms = max(0, now_ms - int(cache.get("ts_ms") or 0)) if int(cache.get("ts_ms") or 0) > 0 else None
+        cache_fresh = quote_age_ms is not None and quote_age_ms <= TOB_CACHE_TTL_MS
+        backoff_active = bool(now_ms < int(cache.get("next_allowed_retry_ms") or 0))
+
+        best_ask = inline_ask
+        best_bid = inline_bid
+        cache_used = False
+        quote_source = "0B_inline_best_quote" if inline_ask > 0 or inline_bid > 0 else "missing_best_quote"
+
+        if (inline_ask <= 0 or inline_bid <= 0) and cache_fresh and tick_sync and not backoff_active:
+            if inline_ask <= 0 and int(cache.get("ask") or 0) > 0:
+                best_ask = int(cache.get("ask") or 0)
+                cache_used = True
+            if inline_bid <= 0 and int(cache.get("bid") or 0) > 0:
+                best_bid = int(cache.get("bid") or 0)
+                cache_used = True
+            if cache_used:
+                quote_source = "cached_top_of_book_ttl"
+
+        if inline_ask <= 0 or inline_bid <= 0:
+            if not cache_used:
+                miss_count = int(cache.get("miss_count") or 0) + 1
+                cache["miss_count"] = miss_count
+                backoff_ms = self._tob_backoff_ms(miss_count)
+                cache["next_allowed_retry_ms"] = now_ms + backoff_ms
+                backoff_active = bool(backoff_ms > 0)
+            else:
+                backoff_active = False
+
+        return {
+            "best_ask": best_ask,
+            "best_bid": best_bid,
+            "tick_sync": tick_sync,
+            "cache_used": cache_used,
+            "quote_age_ms": quote_age_ms,
+            "quote_source": quote_source,
+            "tob_miss_count": int(cache.get("miss_count") or 0),
+            "backoff_active": bool(backoff_active),
+        }
 
     @staticmethod
     def _normalize_code(code):
@@ -749,6 +867,7 @@ class KiwoomWSManager:
                 'recent_trade_ticks': deque(maxlen=120),
                 '_first_tick_logged': False,
                 'last_trade_tick': None,
+                'top_of_book_cache': self._get_tob_cache(item_code),
             }
         return self.realtime_data[item_code]
 
@@ -1410,25 +1529,24 @@ class KiwoomWSManager:
                                 buy_qty = safe_int(values.get('1031'), 0)
                                 sell_qty = safe_int(values.get('1030'), 0)
                                 buy_ratio = self._safe_float(values.get('1032'), 0.0)
-                                orderbook = target.get('orderbook') or {}
-                                asks = orderbook.get('asks') if isinstance(orderbook, dict) else []
-                                bids = orderbook.get('bids') if isinstance(orderbook, dict) else []
                                 inline_best_ask = safe_int(values.get('27'), 0)
                                 inline_best_bid = safe_int(values.get('28'), 0)
-                                best_ask = inline_best_ask
-                                best_bid = inline_best_bid
-                                quote_source = '0B_inline_best_quote' if inline_best_ask > 0 or inline_best_bid > 0 else 'cached_orderbook'
-                                if best_ask <= 0 and asks:
-                                    best_ask = safe_int((asks[0] or {}).get('price'), 0)
-                                if best_bid <= 0 and bids:
-                                    best_bid = safe_int((bids[0] or {}).get('price'), 0)
+                                tick_time = str(values.get('20') or datetime.now().strftime('%H%M%S'))
+                                received_ts = time.time()
+                                quote_resolution = self._resolve_0b_touch_quote(
+                                    item_code,
+                                    inline_best_ask=inline_best_ask,
+                                    inline_best_bid=inline_best_bid,
+                                    tick_time=tick_time,
+                                    received_ts=received_ts,
+                                )
+                                best_ask = quote_resolution["best_ask"]
+                                best_bid = quote_resolution["best_bid"]
                                 aggressor_side, aggressor_quality = self._infer_trade_aggressor_from_touch(
                                     trade_price,
                                     best_ask,
                                     best_bid,
                                 )
-                                tick_time = str(values.get('20') or datetime.now().strftime('%H%M%S'))
-                                received_ts = time.time()
                                 normalized_tick = {
                                     'time': tick_time,
                                     'price': trade_price,
@@ -1437,18 +1555,27 @@ class KiwoomWSManager:
                                     'aggressor_side': aggressor_side,
                                     'aggressor_source': (
                                         'orderbook_touch'
-                                        if quote_source == '0B_inline_best_quote'
+                                        if quote_resolution["quote_source"] == '0B_inline_best_quote'
                                         else 'cached_orderbook_touch'
+                                        if quote_resolution["cache_used"]
+                                        else 'missing_best_quote'
                                     ),
                                     'aggressor_quality': (
                                         aggressor_quality
-                                        if quote_source == '0B_inline_best_quote'
+                                        if quote_resolution["quote_source"] == '0B_inline_best_quote'
                                         else f"cached_quote_{aggressor_quality}"
+                                        if quote_resolution["cache_used"]
+                                        else aggressor_quality
                                     ),
-                                    'aggressor_quote_source': quote_source,
+                                    'aggressor_quote_source': quote_resolution["quote_source"],
+                                    'aggressor_tick_sync': quote_resolution["tick_sync"],
+                                    'aggressor_cache_used': quote_resolution["cache_used"],
+                                    'aggressor_quote_age_ms': quote_resolution["quote_age_ms"],
+                                    'aggressor_tob_miss_count': quote_resolution["tob_miss_count"],
+                                    'aggressor_backoff_active': quote_resolution["backoff_active"],
                                     'best_ask': best_ask,
                                     'best_bid': best_bid,
-                                    'quote_age_ms': 0,
+                                    'quote_age_ms': quote_resolution["quote_age_ms"],
                                     'strength': current_vpw,
                                     'received_at_ms': int(received_ts * 1000),
                                 }
@@ -1519,6 +1646,12 @@ class KiwoomWSManager:
                                     best_ask_qty=best_ask_qty,
                                     bid_depth_l=bid_depth_l,
                                     ask_depth_l=ask_depth_l,
+                                )
+                                self._update_tob_cache(
+                                    item_code,
+                                    best_ask=best_ask,
+                                    best_bid=best_bid,
+                                    now_ms=int(time.time() * 1000),
                                 )
                             
                             # '0w' 프로그램 매매 데이터 파싱

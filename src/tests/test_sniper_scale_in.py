@@ -2222,9 +2222,9 @@ def test_scale_in_signal_refreshes_stale_features_before_pyramid(monkeypatch):
             "best_bid_qty": 100,
             "best_ask_qty": 80,
             "bid_req_base_tm": "100000",
+            "rest_received_ts": time.time(),
         },
     )
-    monkeypatch.setattr(state_handlers, "_parse_hhmmss_age_ms", lambda *args, **kwargs: 100.0)
     monkeypatch.setattr(
         state_handlers.kiwoom_utils,
         "get_tick_history_ka10003",
@@ -3292,6 +3292,7 @@ def test_update_db_for_add_does_not_touch_detached_record_after_commit(monkeypat
 
 def test_execute_scale_in_order_failure_no_pending(monkeypatch):
     state_handlers.KIWOOM_TOKEN = "test"
+    received_ts = time.time()
 
     monkeypatch.setattr(
         state_handlers,
@@ -3923,9 +3924,9 @@ def test_late_loss_avg_down_uses_fresh_rest_quote_after_stale_ws_refresh(monkeyp
             "best_bid_qty": 100,
             "best_ask_qty": 80,
             "bid_req_base_tm": "101619",
+            "rest_received_ts": time.time(),
         },
     )
-    monkeypatch.setattr(state_handlers, "_parse_hhmmss_age_ms", lambda *args, **kwargs: 750.0)
 
     result = state_handlers.execute_scale_in_order(
         stock={
@@ -3965,6 +3966,7 @@ def test_execute_scalping_pyramid_refreshes_rest_orderbook_when_quote_missing(mo
     monkeypatch.setattr(scale_in, "TRADING_RULES", rules)
     monkeypatch.setattr(state_handlers, "WS_MANAGER", None)
     state_handlers.KIWOOM_TOKEN = "test"
+    received_ts = time.time()
 
     sent_orders = []
     history = []
@@ -3985,9 +3987,9 @@ def test_execute_scalping_pyramid_refreshes_rest_orderbook_when_quote_missing(mo
             "best_bid_qty": 100,
             "best_ask_qty": 80,
             "bid_req_base_tm": "100000",
+            "rest_received_ts": received_ts,
         },
     )
-    monkeypatch.setattr(state_handlers, "_parse_hhmmss_age_ms", lambda *args, **kwargs: 100.0)
     monkeypatch.setattr(
         state_handlers,
         "record_add_history_event",
@@ -4043,6 +4045,7 @@ def test_execute_scalping_pyramid_refreshes_rest_orderbook_when_ws_quote_stale(m
     monkeypatch.setattr(state_handlers, "TRADING_RULES", rules)
     monkeypatch.setattr(scale_in, "TRADING_RULES", rules)
     state_handlers.KIWOOM_TOKEN = "test"
+    received_ts = time.time()
 
     sent_orders = []
     history = []
@@ -4078,9 +4081,9 @@ def test_execute_scalping_pyramid_refreshes_rest_orderbook_when_ws_quote_stale(m
             "best_bid_qty": 100,
             "best_ask_qty": 80,
             "bid_req_base_tm": "110500",
+            "rest_received_ts": received_ts,
         },
     )
-    monkeypatch.setattr(state_handlers, "_parse_hhmmss_age_ms", lambda *args, **kwargs: 500.0)
     monkeypatch.setattr(
         state_handlers,
         "record_add_history_event",

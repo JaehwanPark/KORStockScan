@@ -5,7 +5,6 @@ from __future__ import annotations
 import os
 import time
 from dataclasses import dataclass
-from datetime import datetime
 from typing import Any, Mapping
 
 
@@ -46,23 +45,6 @@ def _env_bool(name: str, default: bool) -> bool:
 def _env_int(name: str, default: int) -> int:
     value = _to_int(os.getenv(name), default)
     return value if value > 0 else default
-
-
-def _parse_hhmmss_age_ms(hhmmss: Any, *, now_ts: float | None = None) -> float | None:
-    text = str(hhmmss or "").strip()
-    if len(text) < 6 or not text[:6].isdigit():
-        return None
-    now = datetime.fromtimestamp(float(now_ts or time.time()))
-    snapshot_dt = now.replace(
-        hour=int(text[:2]),
-        minute=int(text[2:4]),
-        second=int(text[4:6]),
-        microsecond=0,
-    )
-    age_ms = (now - snapshot_dt).total_seconds() * 1000.0
-    if age_ms < -3000:
-        return None
-    return max(0.0, age_ms)
 
 
 def _best_levels(data: Mapping[str, Any] | None) -> tuple[int, int]:
@@ -132,6 +114,8 @@ class QuoteInput:
     mark_price: int = 0
     executable_buy_price: int = 0
     executable_sell_price: int = 0
+    passive_buy_price: int = 0
+    passive_sell_price: int = 0
     best_bid: int = 0
     best_ask: int = 0
     age_ms: float | None = None
@@ -148,6 +132,8 @@ class QuoteConsistencySnapshot:
     canonical_mark_price: int
     executable_buy_price: int
     executable_sell_price: int
+    passive_buy_price: int
+    passive_sell_price: int
     quality_state: str
     ws_rest_gap_bps: float | None
     age_ms: float | None
@@ -171,6 +157,8 @@ class QuoteConsistencySnapshot:
             f"{prefix}canonical_mark_price": self.canonical_mark_price,
             f"{prefix}executable_buy_price": self.executable_buy_price,
             f"{prefix}executable_sell_price": self.executable_sell_price,
+            f"{prefix}passive_buy_price": self.passive_buy_price,
+            f"{prefix}passive_sell_price": self.passive_sell_price,
             f"{prefix}ws_rest_gap_bps": (
                 None if self.ws_rest_gap_bps is None else round(float(self.ws_rest_gap_bps), 4)
             ),
@@ -202,13 +190,17 @@ def quote_input_from_ws(data: Mapping[str, Any] | None, *, now_ts: float | None 
         ts = _to_float(data.get("last_ws_update_ts"))
         age_ms = None if ts <= 0 else max(0.0, (now_ts - ts) * 1000.0)
     age_ms = None if age_ms is None else max(0.0, _to_float(age_ms))
-    buy_price = best_bid or mark or best_ask
+    buy_price = best_ask or mark or best_bid
     sell_price = best_bid or mark or best_ask
+    passive_buy_price = best_bid or mark or best_ask
+    passive_sell_price = best_ask or mark or best_bid
     return QuoteInput(
         source="ws",
         mark_price=mark,
         executable_buy_price=buy_price,
         executable_sell_price=sell_price,
+        passive_buy_price=passive_buy_price,
+        passive_sell_price=passive_sell_price,
         best_bid=best_bid,
         best_ask=best_ask,
         age_ms=age_ms,
@@ -230,17 +222,24 @@ def quote_input_from_rest_orderbook(
     if midpoint <= 0 and best_bid > 0 and best_ask > 0:
         midpoint = int(round((best_bid + best_ask) / 2.0))
     mark = rest_current or midpoint
-    age_ms = data.get("age_ms")
-    if age_ms is None:
-        age_ms = data.get("pre_submit_rest_orderbook_refresh_age_ms")
-    if age_ms is None:
-        age_ms = _parse_hhmmss_age_ms(data.get("bid_req_base_tm"), now_ts=now_ts)
+    received_ts = _to_float(data.get("rest_received_ts") or data.get("received_ts"))
+    received_ms = _to_float(data.get("rest_received_ts_ms") or data.get("received_at_ms"))
+    if received_ms > 0:
+        age_ms = max(0.0, (now_ts * 1000.0) - received_ms)
+    elif received_ts > 0:
+        age_ms = max(0.0, (now_ts - received_ts) * 1000.0)
+    else:
+        age_ms = data.get("age_ms")
+        if age_ms is None:
+            age_ms = data.get("pre_submit_rest_orderbook_refresh_age_ms")
     age_ms = None if age_ms is None else max(0.0, _to_float(age_ms))
     return QuoteInput(
         source="rest",
         mark_price=mark,
-        executable_buy_price=best_bid or mark or best_ask,
+        executable_buy_price=best_ask or mark or best_bid,
         executable_sell_price=best_bid or mark or best_ask,
+        passive_buy_price=best_bid or mark or best_ask,
+        passive_sell_price=best_ask or mark or best_bid,
         best_bid=best_bid,
         best_ask=best_ask,
         age_ms=age_ms,
@@ -284,10 +283,10 @@ def build_quote_consistency_snapshot(
     buy_price = _fallback_price(
         (rest.executable_buy_price if rest and rest_fresh else 0),
         (ws.executable_buy_price if ws and ws_fresh else 0),
-        best_bid,
+        best_ask,
         ws_mark,
         rest_mark,
-        best_ask,
+        best_bid,
     )
     sell_price = _fallback_price(
         (rest.executable_sell_price if rest and rest_fresh else 0),
@@ -296,6 +295,22 @@ def build_quote_consistency_snapshot(
         ws_mark,
         rest_mark,
         best_ask,
+    )
+    passive_buy_price = _fallback_price(
+        (rest.passive_buy_price if rest and rest_fresh else 0),
+        (ws.passive_buy_price if ws and ws_fresh else 0),
+        best_bid,
+        ws_mark,
+        rest_mark,
+        best_ask,
+    )
+    passive_sell_price = _fallback_price(
+        (rest.passive_sell_price if rest and rest_fresh else 0),
+        (ws.passive_sell_price if ws and ws_fresh else 0),
+        best_ask,
+        ws_mark,
+        rest_mark,
+        best_bid,
     )
     gap_bps = None
     state = "missing"
@@ -365,6 +380,8 @@ def build_quote_consistency_snapshot(
         canonical_mark_price=canonical,
         executable_buy_price=buy_price,
         executable_sell_price=sell_price,
+        passive_buy_price=passive_buy_price,
+        passive_sell_price=passive_sell_price,
         quality_state=state,
         ws_rest_gap_bps=gap_bps,
         age_ms=age_ms,

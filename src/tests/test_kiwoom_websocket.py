@@ -1,6 +1,7 @@
 import asyncio
 import json
 import os
+from datetime import datetime
 from types import SimpleNamespace
 
 import pytest
@@ -89,7 +90,12 @@ def test_handle_message_ignores_non_dict_payload():
     assert fake_ws.sent == []
 
 
-def test_realtime_0b_stores_orderbook_touch_aggressor_tick():
+def _epoch_at_090010():
+    return datetime(2026, 7, 3, 9, 0, 10).timestamp()
+
+
+def test_realtime_0b_stores_orderbook_touch_aggressor_tick(monkeypatch):
+    monkeypatch.setattr(kiwoom_websocket.time, "time", lambda: _epoch_at_090010())
     manager = KiwoomWSManager("test-token")
     manager.subscribed_codes = {"005930"}
 
@@ -123,9 +129,107 @@ def test_realtime_0b_stores_orderbook_touch_aggressor_tick():
     assert tick["aggressor_source"] == "orderbook_touch"
     assert tick["aggressor_quality"] == "touch_or_crossed_ask"
     assert tick["aggressor_quote_source"] == "0B_inline_best_quote"
+    assert tick["aggressor_tick_sync"] is True
+    assert tick["aggressor_cache_used"] is False
+    assert tick["aggressor_tob_miss_count"] == 0
+    assert tick["aggressor_backoff_active"] is False
     assert tick["best_ask"] == 10110
     assert tick["best_bid"] == 10100
     assert latest["last_trade_tick"]["price"] == 10110
+
+
+def test_realtime_0b_uses_fresh_synced_top_of_book_cache(monkeypatch):
+    now = _epoch_at_090010()
+    monkeypatch.setattr(kiwoom_websocket.time, "time", lambda: now)
+    manager = KiwoomWSManager("test-token")
+    manager.subscribed_codes = {"005930"}
+
+    asyncio.run(
+        manager._handle_message(
+            json.dumps(
+                {
+                    "trnm": "REAL",
+                    "data": [
+                        {
+                            "type": "0D",
+                            "item": "005930",
+                            "values": {
+                                "41": "10110",
+                                "61": "100",
+                                "51": "10100",
+                                "71": "200",
+                            },
+                        },
+                        {
+                            "type": "0B",
+                            "item": "005930",
+                            "values": {
+                                "10": "10100",
+                                "15": "-80",
+                                "20": "090010",
+                                "27": "0",
+                                "28": "",
+                            },
+                        },
+                    ],
+                }
+            )
+        )
+    )
+
+    tick = manager.get_latest_data("005930")["recent_trade_ticks"][0]
+    assert tick["dir"] == "SELL"
+    assert tick["aggressor_source"] == "cached_orderbook_touch"
+    assert tick["aggressor_cache_used"] is True
+    assert tick["aggressor_quote_source"] == "cached_top_of_book_ttl"
+    assert tick["aggressor_quote_age_ms"] == 0
+    assert tick["aggressor_tick_sync"] is True
+    assert tick["best_ask"] == 10110
+    assert tick["best_bid"] == 10100
+
+
+def test_realtime_0b_rejects_stale_or_unsynced_top_of_book_cache(monkeypatch):
+    now = _epoch_at_090010() + 0.1
+    monkeypatch.setattr(kiwoom_websocket.time, "time", lambda: now)
+    manager = KiwoomWSManager("test-token")
+    manager.subscribed_codes = {"005930"}
+    manager._update_tob_cache(
+        "005930",
+        best_ask=10110,
+        best_bid=10100,
+        now_ms=int((now - 0.1) * 1000),
+    )
+
+    asyncio.run(
+        manager._handle_message(
+            json.dumps(
+                {
+                    "trnm": "REAL",
+                    "data": [
+                        {
+                            "type": "0B",
+                            "item": "005930",
+                            "values": {
+                                "10": "10110",
+                                "15": "+80",
+                                "20": "090008",
+                                "27": "",
+                                "28": "",
+                            },
+                        },
+                    ],
+                }
+            )
+        )
+    )
+
+    tick = manager.get_latest_data("005930")["recent_trade_ticks"][0]
+    assert tick["dir"] == "UNKNOWN"
+    assert tick["aggressor_source"] == "missing_best_quote"
+    assert tick["aggressor_cache_used"] is False
+    assert tick["aggressor_tick_sync"] is False
+    assert tick["aggressor_tob_miss_count"] == 1
+    assert tick["aggressor_backoff_active"] is True
 
 
 def test_await_login_ack_raises_on_login_failure():

@@ -1074,17 +1074,17 @@ class GPTSniperEngine:
         ticks = recent_ticks or []
         if not ticks:
             return []
-        latest = ticks[-1] if isinstance(ticks[-1], dict) else {}
+        latest = ticks[0] if isinstance(ticks[0], dict) else {}
         buy_volume = 0
         sell_volume = 0
         total_value = 0
         latest_price = 0
-        for tick in ticks[-10:]:
+        for tick in ticks[:10]:
             if not isinstance(tick, dict):
                 continue
             price = tick.get("price", tick.get("현재가", tick.get("체결가", 0)))
             volume = tick.get("volume", tick.get("qty", tick.get("체결량", 0)))
-            direction = str(tick.get("dir", tick.get("side", tick.get("trade_type", ""))) or "").upper()
+            inferred = infer_tick_aggressor_side(tick)
             try:
                 latest_price = int(float(price or latest_price or 0))
             except Exception:
@@ -1094,9 +1094,9 @@ class GPTSniperEngine:
             except Exception:
                 volume_int = 0
             total_value += max(0, latest_price) * max(0, volume_int)
-            if "SELL" in direction or "매도" in direction:
+            if inferred.get("side") == "SELL" and inferred.get("source") != "price_change_heuristic":
                 sell_volume += volume_int
-            else:
+            elif inferred.get("side") == "BUY" and inferred.get("source") != "price_change_heuristic":
                 buy_volume += volume_int
         price_bucket = self._price_bucket_step_for_cache(latest_price)
         return [{
@@ -2233,7 +2233,7 @@ class GPTSniperEngine:
         return [
             {
                 "time": tick.get("time"),
-                "dir": tick.get("dir", tick.get("side", "NEUTRAL")),
+                "dir": self._display_tick_dir(tick),
                 "aggressor_source": tick.get("aggressor_source", tick.get("dir_source", "-")),
                 "aggressor_quality": tick.get("aggressor_quality", "-"),
                 "price": tick.get("price", tick.get("현재가", tick.get("체결가"))),
@@ -2243,6 +2243,15 @@ class GPTSniperEngine:
             for tick in (recent_ticks or [])[:limit]
             if isinstance(tick, dict)
         ]
+
+    def _display_tick_dir(self, tick):
+        if not isinstance(tick, dict):
+            return "UNKNOWN"
+        source = str(tick.get("aggressor_source") or tick.get("dir_source") or "").strip()
+        side = str(tick.get("aggressor_side") or tick.get("dir") or tick.get("side") or "UNKNOWN").upper()
+        if source == "price_change_heuristic":
+            return "UNKNOWN"
+        return side if side in {"BUY", "SELL"} else "UNKNOWN"
 
     def _compact_recent_candles(self, recent_candles, *, limit=5):
         return [
@@ -2429,7 +2438,7 @@ class GPTSniperEngine:
             compact_ticks = [
                 {
                     "time": t.get("time"),
-                    "dir": t.get("dir", "NEUTRAL"),
+                    "dir": self._display_tick_dir(t),
                     "aggressor_source": t.get("aggressor_source", t.get("dir_source", "-")),
                     "aggressor_quality": t.get("aggressor_quality", "-"),
                     "price": t.get("price"),
@@ -2437,6 +2446,7 @@ class GPTSniperEngine:
                     "strength": t.get("strength", 0),
                 }
                 for t in (recent_ticks or [])[:5]
+                if isinstance(t, dict)
             ]
             compact_candles = [
                 {
@@ -2548,7 +2558,16 @@ class GPTSniperEngine:
                 f"- 현재 체결강도: {latest_strength}%"
             )
 
-            tick_str = "\n".join([f"[{t['time']}] {t.get('dir', 'NEUTRAL')} 체결: {t['price']:,}원 ({t['volume']:,}주) | 강도:{t.get('strength', 0)}%" for t in recent_ticks[:10]])
+            tick_str = "\n".join([
+                (
+                    f"[{t['time']}] {self._display_tick_dir(t)} 체결"
+                    f"({t.get('aggressor_source', t.get('dir_source', 'unknown'))}/"
+                    f"{t.get('aggressor_quality', 'unknown')}): "
+                    f"{t['price']:,}원 ({t['volume']:,}주) | 강도:{t.get('strength', 0)}%"
+                )
+                for t in recent_ticks[:10]
+                if isinstance(t, dict)
+            ])
 
         candle_str = ""
         if recent_candles:

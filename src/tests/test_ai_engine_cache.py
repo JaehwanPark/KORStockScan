@@ -941,6 +941,35 @@ def test_provider_cache_profile_separates_non_holding_keys():
         assert default_key != shadow_key
 
 
+def test_holding_cache_tick_signature_uses_latest_touch_ticks_and_excludes_heuristic_buy():
+    engine = _build_engine()
+
+    compact = engine._compact_holding_ticks_for_cache(
+        [
+            {
+                "time": "10:00:03",
+                "price": 10100,
+                "volume": 1000,
+                "dir": "BUY",
+                "aggressor_source": "price_change_heuristic",
+            },
+            {"time": "10:00:02", "price": 10090, "volume": 450, "best_bid": 10090, "best_ask": 10100},
+            {"time": "10:00:01", "price": 10100, "volume": 250, "best_bid": 10090, "best_ask": 10100},
+            {"time": "10:00:00", "price": 10080, "volume": 100, "dir": "BUY"},
+        ]
+    )
+
+    assert compact == [
+        {
+            "latest_price": 202,
+            "buy_volume": 3,
+            "sell_volume": 4,
+            "net_volume": -1,
+            "trade_value": 36,
+        }
+    ]
+
+
 def test_provider_cache_set_enforces_max_entries(monkeypatch):
     tiny_rules = SimpleNamespace(AI_RESULT_CACHE_MAX_ENTRIES=3)
 

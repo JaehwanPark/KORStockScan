@@ -3247,6 +3247,8 @@ def _attempt_stop_line_touch_mandatory_avg_down(
                     "canonical_mark_price",
                     "executable_buy_price",
                     "executable_sell_price",
+                    "passive_buy_price",
+                    "passive_sell_price",
                     "ws_rest_gap_bps",
                     "price_source",
                     "normalization_runtime_effect",
@@ -13519,21 +13521,21 @@ def _pre_submit_refresh_real_ws_snapshot(code: str, ws_data: dict | None, strate
     return refreshed, fields
 
 
-def _parse_hhmmss_age_ms(hhmmss: str, *, now_ts: float | None = None) -> float | None:
-    text = str(hhmmss or "").strip()
-    if len(text) < 6 or not text[:6].isdigit():
-        return None
-    now = datetime.fromtimestamp(float(now_ts or time.time()))
-    snapshot_dt = now.replace(
-        hour=int(text[:2]),
-        minute=int(text[2:4]),
-        second=int(text[4:6]),
-        microsecond=0,
-    )
-    age_ms = (now - snapshot_dt).total_seconds() * 1000.0
-    if age_ms < -3000:
-        return None
-    return max(0.0, age_ms)
+def _rest_orderbook_received_age_ms(snapshot: dict | None, *, now_ts: float | None = None) -> float | None:
+    snapshot = snapshot if isinstance(snapshot, dict) else {}
+    now = float(now_ts if now_ts is not None else time.time())
+    received_ms = _safe_float(snapshot.get("rest_received_ts_ms") or snapshot.get("received_at_ms"), 0.0)
+    if received_ms > 0:
+        return max(0.0, (now * 1000.0) - received_ms)
+    received_ts = _safe_float(snapshot.get("rest_received_ts") or snapshot.get("received_ts"), 0.0)
+    if received_ts > 0:
+        return max(0.0, (now - received_ts) * 1000.0)
+    explicit_age = snapshot.get("pre_submit_rest_orderbook_refresh_age_ms")
+    if explicit_age is None:
+        explicit_age = snapshot.get("age_ms")
+    if explicit_age is not None:
+        return max(0.0, _safe_float(explicit_age, 0.0))
+    return None
 
 
 def _quote_consistency_runtime_enabled() -> bool:
@@ -13580,6 +13582,8 @@ def _merge_quote_consistency_fields(target: dict, fields: dict | None) -> dict:
                 "canonical_mark_price",
                 "executable_buy_price",
                 "executable_sell_price",
+                "passive_buy_price",
+                "passive_sell_price",
                 "ws_rest_gap_bps",
                 "price_source",
                 "normalization_runtime_effect",
@@ -13668,7 +13672,7 @@ def _pre_submit_refresh_rest_orderbook_snapshot(
     best_ask = _safe_int(snapshot.get("best_ask"), 0)
     best_bid = _safe_int(snapshot.get("best_bid"), 0)
     bid_req_base_tm = str(snapshot.get("bid_req_base_tm") or "").strip()
-    age_ms = _parse_hhmmss_age_ms(bid_req_base_tm)
+    age_ms = _rest_orderbook_received_age_ms(snapshot)
     snapshot_for_consistency = dict(snapshot)
     if age_ms is not None:
         snapshot_for_consistency["age_ms"] = age_ms
@@ -13775,6 +13779,8 @@ def _holding_ai_refresh_rest_orderbook_snapshot(
             "canonical_mark_price",
             "executable_buy_price",
             "executable_sell_price",
+            "passive_buy_price",
+            "passive_sell_price",
             "ws_rest_gap_bps",
             "price_source",
             "normalization_runtime_effect",
@@ -15649,6 +15655,8 @@ def _build_entry_submit_revalidation_fields(ws_data, latency_gate, *, now_ts=Non
                     "canonical_mark_price",
                     "executable_buy_price",
                     "executable_sell_price",
+                    "passive_buy_price",
+                    "passive_sell_price",
                     "ws_rest_gap_bps",
                     "price_source",
                     "normalization_runtime_effect",
@@ -33540,6 +33548,8 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
                             "canonical_mark_price",
                             "executable_buy_price",
                             "executable_sell_price",
+                            "passive_buy_price",
+                            "passive_sell_price",
                             "ws_rest_gap_bps",
                             "price_source",
                             "normalization_runtime_effect",
@@ -33565,6 +33575,8 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
                     "canonical_mark_price",
                     "executable_buy_price",
                     "executable_sell_price",
+                    "passive_buy_price",
+                    "passive_sell_price",
                     "ws_rest_gap_bps",
                     "price_source",
                     "normalization_runtime_effect",
@@ -33576,7 +33588,7 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
             0,
         )
         executable_buy_price = _safe_int(
-            scale_quote_fields.get("executable_buy_price") or ws_data.get("best_bid"),
+            scale_quote_fields.get("executable_buy_price"),
             0,
         )
     else:
@@ -33585,6 +33597,13 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
             side="buy",
         )
     _merge_quote_consistency_fields(scale_in_quote_refresh_fields, scale_quote_fields)
+    scale_in_buy_reference_price = _safe_int(
+        scale_quote_fields.get("passive_buy_price")
+        or ws_data.get("passive_buy_price")
+        or ws_data.get("best_bid")
+        or executable_buy_price,
+        0,
+    )
     if canonical_mark_price > 0:
         curr_price = int(canonical_mark_price)
         ws_data = dict(ws_data or {})
@@ -33592,6 +33611,9 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
     if executable_buy_price > 0:
         ws_data = dict(ws_data or {})
         ws_data["executable_buy_price"] = int(executable_buy_price)
+    if scale_in_buy_reference_price > 0:
+        ws_data = dict(ws_data or {})
+        ws_data["passive_buy_price"] = int(scale_in_buy_reference_price)
     scale_in_quote_refresh_non_price_source_fields = {
         key: value for key, value in scale_in_quote_refresh_fields.items() if key != "price_source"
     }
@@ -33600,6 +33622,8 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
         "canonical_mark_price",
         "executable_buy_price",
         "executable_sell_price",
+        "passive_buy_price",
+        "passive_sell_price",
     )
     scale_in_micro_fields_without_authority_collisions = _without_event_field_collisions(
         swing_scale_micro_fields,
@@ -33631,7 +33655,7 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
         defensive_avg_down_reason
         and quote_consistency_state in {"diverged", "stale"}
         and canonical_mark_price > 0
-        and executable_buy_price > 0
+        and scale_in_buy_reference_price > 0
     )
     quote_consistency_block_reason = str(
         scale_in_quote_refresh_fields.get("quote_consistency_reason") or ""
@@ -33664,7 +33688,7 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
             reason=quote_consistency_block_reason,
             curr_price=curr_price,
             resolved_price=0,
-            best_bid=scale_in_quote_refresh_fields.get("executable_buy_price"),
+            best_bid=scale_in_quote_refresh_fields.get("passive_buy_price"),
             best_ask=0,
             price_source=scale_in_quote_refresh_fields.get("price_source"),
             scale_in_candidate_funnel_state=(
@@ -33703,6 +33727,7 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
             curr_price=curr_price,
             canonical_mark_price=canonical_mark_price,
             executable_buy_price=executable_buy_price,
+            passive_buy_price=scale_in_buy_reference_price,
             executable_sell_price=scale_in_quote_refresh_fields.get("executable_sell_price"),
             price_source=scale_in_quote_refresh_fields.get("price_source"),
             threshold_family="defensive_avg_down_quote_consistency_bypass",
@@ -33710,8 +33735,8 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
             metric_role="hard_safety_price_refresh_exception",
             window_policy="same_loop_pre_submit_quote_revalidated",
             sample_floor="not_applicable_runtime_guard",
-            primary_decision_metric="executable_buy_price_available_after_quote_normalization",
-            source_quality_gate="canonical_mark_and_executable_buy_price_present",
+            primary_decision_metric="passive_buy_price_available_after_quote_normalization",
+            source_quality_gate="canonical_mark_and_passive_buy_price_present",
             runtime_effect=True,
             allowed_runtime_apply=False,
             actual_order_submitted=False,

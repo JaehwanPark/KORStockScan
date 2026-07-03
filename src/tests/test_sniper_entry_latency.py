@@ -1079,6 +1079,7 @@ def test_latency_gate_stale_quote_rest_recheck_detection():
 
 def test_real_pre_submit_rest_orderbook_refresh_uses_ka10004_fresh_snapshot(monkeypatch):
     now_hhmmss = datetime.now().strftime("%H%M%S")
+    received_ts = time.time()
 
     monkeypatch.setattr(state_handlers, "KIWOOM_TOKEN", "TOKEN")
     monkeypatch.setattr(
@@ -1087,6 +1088,7 @@ def test_real_pre_submit_rest_orderbook_refresh_uses_ka10004_fresh_snapshot(monk
         lambda token, code: {
             "source": "ka10004_rest_orderbook",
             "bid_req_base_tm": now_hhmmss,
+            "rest_received_ts": received_ts,
             "curr": 0,
             "rest_current_price": 0,
             "rest_mid_price": 10_025,
@@ -1121,6 +1123,7 @@ def test_real_pre_submit_rest_orderbook_refresh_uses_ka10004_fresh_snapshot(monk
 
 def test_real_pre_submit_rest_orderbook_refresh_blocks_stale_ka10004_snapshot(monkeypatch):
     stale_hhmmss = datetime.fromtimestamp(time.time() - 10).strftime("%H%M%S")
+    stale_received_ts = time.time() - 10
 
     monkeypatch.setattr(state_handlers, "KIWOOM_TOKEN", "TOKEN")
     monkeypatch.setattr(
@@ -1128,6 +1131,7 @@ def test_real_pre_submit_rest_orderbook_refresh_blocks_stale_ka10004_snapshot(mo
         "get_stock_orderbook_ka10004",
         lambda token, code: {
             "bid_req_base_tm": stale_hhmmss,
+            "rest_received_ts": stale_received_ts,
             "curr": 10_030,
             "best_ask": 10_030,
             "best_bid": 10_020,
@@ -1153,6 +1157,7 @@ def test_real_pre_submit_rest_orderbook_refresh_blocks_stale_ka10004_snapshot(mo
 
 def test_holding_ai_rest_orderbook_refresh_reuses_fresh_ka10004_snapshot(monkeypatch):
     now_hhmmss = datetime.now().strftime("%H%M%S")
+    received_ts = time.time()
 
     monkeypatch.setattr(state_handlers, "KIWOOM_TOKEN", "TOKEN")
     monkeypatch.setattr(
@@ -1161,6 +1166,7 @@ def test_holding_ai_rest_orderbook_refresh_reuses_fresh_ka10004_snapshot(monkeyp
         lambda token, code: {
             "source": "ka10004_rest_orderbook",
             "bid_req_base_tm": now_hhmmss,
+            "rest_received_ts": received_ts,
             "rest_mid_price": 10_025,
             "best_ask": 10_030,
             "best_bid": 10_020,
@@ -1191,6 +1197,7 @@ def test_holding_ai_rest_orderbook_refresh_reuses_fresh_ka10004_snapshot(monkeyp
 
 def test_holding_ai_rest_orderbook_refresh_keeps_stale_snapshot_blocked(monkeypatch):
     stale_hhmmss = datetime.fromtimestamp(time.time() - 10).strftime("%H%M%S")
+    stale_received_ts = time.time() - 10
 
     monkeypatch.setattr(state_handlers, "KIWOOM_TOKEN", "TOKEN")
     monkeypatch.setattr(
@@ -1198,6 +1205,7 @@ def test_holding_ai_rest_orderbook_refresh_keeps_stale_snapshot_blocked(monkeypa
         "get_stock_orderbook_ka10004",
         lambda token, code: {
             "bid_req_base_tm": stale_hhmmss,
+            "rest_received_ts": stale_received_ts,
             "rest_mid_price": 10_025,
             "best_ask": 10_030,
             "best_bid": 10_020,
@@ -1252,6 +1260,7 @@ def test_holding_ai_rest_orderbook_refresh_skips_existing_usable_quote(monkeypat
 def test_holding_ai_rest_orderbook_refresh_rechecks_stale_usable_quote(monkeypatch):
     calls = []
     now_hhmmss = datetime.now().strftime("%H%M%S")
+    received_ts = time.time()
     monkeypatch.setattr(state_handlers, "KIWOOM_TOKEN", "TOKEN")
     monkeypatch.setattr(
         state_handlers.kiwoom_utils,
@@ -1259,6 +1268,7 @@ def test_holding_ai_rest_orderbook_refresh_rechecks_stale_usable_quote(monkeypat
         lambda token, code: calls.append((token, code)) or {
             "source": "ka10004_rest_orderbook",
             "bid_req_base_tm": now_hhmmss,
+            "rest_received_ts": received_ts,
             "rest_mid_price": 10_025,
             "best_ask": 10_030,
             "best_bid": 10_020,

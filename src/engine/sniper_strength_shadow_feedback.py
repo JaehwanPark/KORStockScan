@@ -66,7 +66,7 @@ def record_shadow_candidate(stock: dict, code: str, ws_data: dict, momentum_gate
         orderbook = ws_data.get("orderbook") or {}
         asks = orderbook.get("asks") or []
         bids = orderbook.get("bids") or []
-        best_ask = int((asks[-1] or {}).get("price", 0) or 0) if asks else 0
+        best_ask = int((asks[0] or {}).get("price", 0) or 0) if asks else 0
         best_bid = int((bids[0] or {}).get("price", 0) or 0) if bids else 0
         current_price = int(float(ws_data.get("curr", 0) or 0))
 

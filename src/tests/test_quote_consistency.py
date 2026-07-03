@@ -50,7 +50,8 @@ def test_quote_consistency_ok_warning_and_diverged(monkeypatch):
     ok = build_quote_consistency_snapshot(ws=_ws(10000), rest=_rest(9980, 10020), config=_config())
     assert ok.quality_state == "ok"
     assert ok.entry_blocked is False
-    assert ok.executable_buy_price == 9980
+    assert ok.executable_buy_price == 10020
+    assert ok.passive_buy_price == 9980
 
     warning = build_quote_consistency_snapshot(ws=_ws(10000), rest=_rest(9920, 9960), config=_config())
     assert warning.quality_state == "warning"
@@ -76,6 +77,21 @@ def test_quote_consistency_stale_missing_and_single_source(monkeypatch):
     missing = build_quote_consistency_snapshot(config=_config())
     assert missing.quality_state == "missing"
     assert missing.entry_blocked is True
+
+
+def test_rest_orderbook_age_prefers_received_timestamp_over_static_age_ms():
+    rest = quote_input_from_rest_orderbook(
+        {
+            "best_bid": 9980,
+            "best_ask": 10020,
+            "rest_mid_price": 10000,
+            "age_ms": 0,
+            "rest_received_ts_ms": 1_000_000,
+        },
+        now_ts=1002.0,
+    )
+
+    assert rest.age_ms == 2000.0
 
 
 def test_safety_exit_does_not_block_on_divergence_or_late_rest(monkeypatch):

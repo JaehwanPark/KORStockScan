@@ -1115,6 +1115,7 @@ def test_ka00198_realtime_rank_start_is_normalized(monkeypatch):
             "RankNow": 7,
             "RankChange": 12,
             "RankChangeSign": "+",
+            "RankChangeSignAuthority": "raw_unverified_not_decision_input",
             "RealtimeRankWindow": "5",
             "Source": "REALTIME_RANK_START",
         }

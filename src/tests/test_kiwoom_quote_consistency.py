@@ -25,5 +25,12 @@ def test_ka10004_orderbook_does_not_publish_best_ask_as_curr(monkeypatch):
     assert snapshot["best_ask"] == 10100
     assert snapshot["best_bid"] == 10000
     assert snapshot["rest_mid_price"] == 10050
-    assert snapshot["executable_buy_price"] == 10000
+    assert snapshot["marketable_buy_touch_price"] == 10100
+    assert snapshot["marketable_sell_touch_price"] == 10000
+    assert snapshot["passive_buy_price"] == 10000
+    assert snapshot["passive_sell_price"] == 10100
+    assert snapshot["executable_buy_price"] == 10100
     assert snapshot["executable_sell_price"] == 10000
+    assert snapshot["bid_req_base_tm"] == "093001"
+    assert snapshot["age_ms"] == 0
+    assert snapshot["rest_received_ts_ms"] > 0
