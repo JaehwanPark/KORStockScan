@@ -1122,6 +1122,54 @@ def test_ka00198_realtime_rank_start_is_normalized(monkeypatch):
     ]
 
 
+def test_realtime_rank_change_sign_authority_reaches_scanner_payload(monkeypatch):
+    row = {
+        "Code": "005930",
+        "Name": "삼성전자",
+        "Price": 72000,
+        "FluRate": 1.25,
+        "RealtimeRankFluRate": 1.25,
+        "RealtimePrevBaseChange": 0.35,
+        "RankNow": 7,
+        "RankChange": 12,
+        "RankChangeSign": "+",
+        "RankChangeSignAuthority": "raw_unverified_not_decision_input",
+        "RealtimeRankWindow": "5",
+        "Source": "REALTIME_RANK_START",
+    }
+    candidate_pool = {}
+
+    scalping_scanner._merge_candidate(candidate_pool, row, "REALTIME_RANK_START")
+
+    merged = candidate_pool["005930"]
+    assert merged["RankChangeSignAuthority"] == "raw_unverified_not_decision_input"
+    fields = scalping_scanner._scanner_event_fields(
+        merged,
+        {
+            "blocked": False,
+            "reason": "new_realtime_rank_start_source",
+            "source_signature": "REALTIME_RANK_START",
+        },
+    )
+    assert fields["rank_change"] == 12
+    assert fields["rank_change_sign"] == "+"
+    assert fields["rank_change_sign_authority"] == "raw_unverified_not_decision_input"
+
+    payload = scalping_scanner._scanner_runtime_target_payload(
+        merged,
+        {
+            "blocked": False,
+            "reason": "new_realtime_rank_start_source",
+            "source_signature": "REALTIME_RANK_START",
+        },
+        record_id=1,
+        now_ts=1000.0,
+    )
+    assert payload["rank_change"] == 12
+    assert payload["rank_change_sign"] == "+"
+    assert payload["rank_change_sign_authority"] == "raw_unverified_not_decision_input"
+
+
 def test_ka10019_price_jump_start_preserves_jump_metrics(monkeypatch):
     def fake_fetch(**kwargs):
         assert kwargs["api_id"] == "ka10019"

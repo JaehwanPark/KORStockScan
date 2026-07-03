@@ -24,6 +24,7 @@ from src.utils.constants import TRADING_RULES
 from src.utils.pipeline_event_logger import emit_pipeline_event
 
 SCANNER_RISING_START_SOURCE_FAMILY = "scalping_scanner_rising_start_source_v1"
+RANK_CHANGE_SIGN_AUTHORITY_DEFAULT = "raw_unverified_not_decision_input"
 SCANNER_PROMOTION_POLICY_VERSION = "scanner_priority_v2_20260617_evidence"
 PRIMARY_RISING_START_SOURCES = {
     "REALTIME_RANK_START",
@@ -799,6 +800,10 @@ def _merge_candidate(candidate_pool, raw_target, source):
         current["RealtimePrevBaseChange"] = _safe_float(raw_target.get("RealtimePrevBaseChange"))
         current["RankChange"] = _safe_int(raw_target.get("RankChange"))
         current["RankChangeSign"] = str(raw_target.get("RankChangeSign") or "").strip()
+        current["RankChangeSignAuthority"] = (
+            str(raw_target.get("RankChangeSignAuthority") or RANK_CHANGE_SIGN_AUTHORITY_DEFAULT).strip()
+            or RANK_CHANGE_SIGN_AUTHORITY_DEFAULT
+        )
         current["RealtimeRankWindow"] = str(raw_target.get("RealtimeRankWindow") or "")
     elif source == "PRICE_JUMP_START":
         if raw_flu_present:
@@ -1391,6 +1396,10 @@ def _scanner_event_fields(target, source_guard=None):
         "rising_start_score": _safe_float(target.get("RisingStartScore", _rising_start_score(target))),
         "rank_change": _safe_int(target.get("RankChange")),
         "rank_change_sign": target.get("RankChangeSign"),
+        "rank_change_sign_authority": (
+            str(target.get("RankChangeSignAuthority") or RANK_CHANGE_SIGN_AUTHORITY_DEFAULT).strip()
+            or RANK_CHANGE_SIGN_AUTHORITY_DEFAULT
+        ),
         "jump_rate": _safe_float(target.get("JumpRate")),
         "volume_surge_rate": _safe_float(target.get("VolumeSurgeRate", target.get("SpikeRate"))),
         "bid_surge_rate": _safe_float(target.get("BidSurgeRate")),
@@ -1489,6 +1498,9 @@ def _scanner_runtime_target_payload(target, source_guard, record_id=None, *, now
         "price_delta_since_first_seen_pct": fields.get("price_delta_since_first_seen_pct"),
         "scanner_source_family": fields.get("scanner_source_family"),
         "scanner_source_role": fields.get("scanner_source_role"),
+        "rank_change": fields.get("rank_change"),
+        "rank_change_sign": fields.get("rank_change_sign"),
+        "rank_change_sign_authority": fields.get("rank_change_sign_authority"),
         "runtime_effect": True,
         "actual_order_submitted": False,
         "broker_order_forbidden": True,

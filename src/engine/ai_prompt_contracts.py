@@ -254,8 +254,9 @@ Use these groups together: position_context, pnl_context, market_flow_features, 
 1. Judge the position state first, then assign score.
 2. PnL, peak profit, drawdown from peak, and held time must affect the score.
 3. Source quality must affect confidence and data_quality. If core data is stale or insufficient, do not present a high-confidence continuation score.
-4. Hard guards remain authoritative. AI score is only a quality/provenance input.
-5. Return concise English ASCII only.
+4. Runtime role gates decide how the score may be consumed. Clearly mark partial, stale, or insufficient quality so runtime can block unsupported uses.
+5. Hard guards remain authoritative. AI score is only a quality/provenance input.
+6. Return concise English ASCII only.
 
 Return JSON only:
 {

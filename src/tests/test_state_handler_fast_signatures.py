@@ -13,6 +13,7 @@ from src.engine.sniper_state_handlers import (
     _build_observation_contract_fields,
     _merge_entry_pipeline_field_groups,
     _score65_74_recovery_probe_block_contract_fields,
+    _score65_74_recovery_probe_success_contract_fields,
     _ensure_ai_source_quality_fields,
     _build_gatekeeper_fast_signature,
     _build_holding_ai_fast_signature,
@@ -4303,6 +4304,20 @@ def test_score65_74_recovery_probe_block_contract_fields_are_single_source_of_au
     assert fields["decision_authority"] == "score65_74_recovery_probe_block_observation_only"
     assert fields["actual_order_submitted"] is False
     assert fields["broker_order_forbidden"] is True
+
+
+def test_score65_74_recovery_probe_success_contract_fields_close_forbidden_authority():
+    fields = _score65_74_recovery_probe_success_contract_fields()
+
+    assert fields["metric_role"] == "bounded_tunable"
+    assert fields["decision_authority"] == "score65_74_recovery_probe_entry_unlock_only"
+    assert fields["runtime_effect"] is True
+    assert fields["allowed_runtime_apply"] is False
+    assert fields["actual_order_submitted"] is False
+    assert fields["broker_order_forbidden"] is True
+    assert "runtime_threshold_apply" in fields["forbidden_uses"]
+    assert "broker_guard_bypass" in fields["forbidden_uses"]
+    assert "stale_submit_bypass" in fields["forbidden_uses"]
 
 
 def test_score65_74_recovery_probe_reuse_guard_blocks_stale_armed_cancel_cooldown(monkeypatch):

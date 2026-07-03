@@ -142,6 +142,14 @@ def test_holding_score_v2_payload_contains_position_pnl_and_source_quality(monke
         captured["prompt"] = prompt
         captured["user_input"] = user_input
         captured["kwargs"] = kwargs
+        engine._set_last_transport_meta(
+            {
+                "openai_transport_mode": "http",
+                "openai_endpoint_name": "holding_score",
+                "openai_schema_name": "holding_score_v2",
+                "openai_total_tokens": 123,
+            }
+        )
         return {
             "action": "HOLD",
             "score": 82,
@@ -205,16 +213,157 @@ def test_holding_score_v2_payload_contains_position_pnl_and_source_quality(monke
     assert payload["position_context"]["record_id"] == "REC-1"
     assert payload["pnl_context"]["drawdown_from_peak_pct"] == 0.3
     assert "market_flow_features" in payload
+    assert "compact_features" in payload["market_flow_features"]
+    assert "feature_packet" not in payload["market_flow_features"]
+    assert "audit_fields" not in payload["market_flow_features"]
+    assert "recent_ticks_latest_first" not in payload["market_flow_features"]
+    assert "recent_candles_latest_window" not in payload["market_flow_features"]
     assert "source_quality" in payload
     assert payload["hard_guard_context"]["hard_guards_remain_authoritative"] is True
     assert captured["kwargs"]["schema_name"] == "holding_score_v2"
     assert captured["kwargs"]["endpoint_name"] == "holding_score"
     assert "position-state score classifier" in captured["prompt"]
     assert "Do not reuse entry logic" in SCALPING_HOLDING_SCORE_SYSTEM_PROMPT
+    assert "Runtime role gates decide how the score may be consumed" in SCALPING_HOLDING_SCORE_SYSTEM_PROMPT
     assert result["holding_score_input_schema"] == "holding_score_v2"
     assert result["holding_score_data_quality"] in {"fresh", "partial"}
     assert result["holding_score_effective_usable"] is True
+    assert result["holding_score_raw_source"] == "live"
+    assert result["holding_score_effective_source"] == "live"
+    assert result["openai_transport_mode"] == "http"
+    assert result["openai_endpoint_name"] == "holding_score"
+    assert result["openai_schema_name"] == "holding_score_v2"
+    assert result["openai_total_tokens"] == 123
     assert result["ai_prompt_type"] == "scalping_holding_score"
+
+
+def test_holding_score_v2_payload_stays_compact_for_low_latency(monkeypatch):
+    engine = _build_engine()
+    captured = {}
+
+    def _fake_call(prompt, user_input, **kwargs):
+        captured["user_input"] = user_input
+        return {
+            "action": "HOLD",
+            "score": 72,
+            "confidence": 60,
+            "position_state": "mixed",
+            "score_basis": "mixed but stable",
+            "risk_factors": ["partial source quality"],
+            "support_factors": ["profit still positive"],
+            "data_quality": "partial",
+            "reason": "Hold neutral",
+        }
+
+    monkeypatch.setattr(engine, "_call_openai_safe", _fake_call)
+
+    ws_data = {
+        "curr": 10050,
+        "v_pw": 140,
+        "buy_ratio": 62,
+        "buy_exec_volume": 1200,
+        "sell_exec_volume": 900,
+        "quote_age_ms": 100,
+        "orderbook": {
+            "asks": [{"price": 10060, "volume": 100}, {"price": 10070, "volume": 200}],
+            "bids": [{"price": 10050, "volume": 120}, {"price": 10040, "volume": 180}],
+        },
+    }
+    ticks = [
+        {
+            "time": f"09:30:{idx:02d}",
+            "price": 10000 + idx * 5,
+            "volume": 10 + idx,
+            "side": "BUY" if idx % 2 else "SELL",
+            "aggressor_source": "orderbook_touch",
+            "aggressor_quality": "fresh",
+            "strength": 130 + idx,
+        }
+        for idx in range(10)
+    ]
+    candles = [
+        {
+            "time": f"09:{idx:02d}",
+            "현재가": 10000 + idx * 8,
+            "시가": 9990 + idx * 8,
+            "고가": 10030 + idx * 8,
+            "저가": 9980 + idx * 8,
+            "거래량": 1000 + idx * 30,
+        }
+        for idx in range(40)
+    ]
+
+    engine.evaluate_scalping_holding_score(
+        "테스트",
+        "005930",
+        ws_data,
+        ticks,
+        candles,
+        {
+            "record_id": "REC-2",
+            "buy_price": 10000,
+            "curr_price": 10050,
+            "profit_rate": 0.5,
+            "peak_profit": 0.8,
+            "drawdown_from_peak_pct": 0.3,
+            "held_sec": 75,
+            "buy_qty": 1,
+            "position_tag": "SCALP",
+            "entry_source": "live_buy",
+            "avg_down_count": 0,
+            "pyramid_count": 0,
+        },
+    )
+
+    payload = json.loads(captured["user_input"])
+    assert len(captured["user_input"]) <= 5000
+    market_flow = payload["market_flow_features"]
+    assert set(market_flow).issuperset({"compact_features", "tick_summary", "candle_summary"})
+    assert "feature_packet" not in market_flow
+    assert "audit_fields" not in market_flow
+    assert "recent_ticks_latest_first" not in market_flow
+    assert "recent_candles_latest_window" not in market_flow
+    assert "aggressor_quality" in market_flow["compact_features"]
+    assert "source_quality_flags" in market_flow["compact_features"]
+
+
+def test_holding_score_v2_non_dict_response_keeps_transport_meta(monkeypatch):
+    engine = _build_engine()
+
+    def _fake_call(prompt, user_input, **kwargs):
+        engine._set_last_transport_meta(
+            {
+                "openai_transport_mode": "http",
+                "openai_endpoint_name": "holding_score",
+                "openai_schema_name": "holding_score_v2",
+            }
+        )
+        return "not-json"
+
+    monkeypatch.setattr(engine, "_call_openai_safe", _fake_call)
+
+    result = engine.evaluate_scalping_holding_score(
+        "테스트",
+        "005930",
+        {"curr": 10050, "v_pw": 140, "quote_age_ms": 100},
+        [{"time": "09:30:00", "price": 10000, "volume": 10}],
+        [{"time": "09:30", "현재가": 10000, "고가": 10020, "저가": 9990, "거래량": 1000}],
+        {
+            "record_id": "REC-3",
+            "buy_price": 10000,
+            "curr_price": 10050,
+            "profit_rate": 0.5,
+            "peak_profit": 0.8,
+            "held_sec": 75,
+            "buy_qty": 1,
+        },
+    )
+
+    assert result["ai_result_source"] == "live"
+    assert result["holding_score_raw"] == 50
+    assert result["openai_transport_mode"] == "http"
+    assert result["openai_endpoint_name"] == "holding_score"
+    assert result["openai_schema_name"] == "holding_score_v2"
 
 
 def test_holding_score_v2_source_quality_accepts_fresh_computed_contract():
@@ -287,6 +436,9 @@ def test_holding_score_v2_engine_disabled_is_neutral_unusable():
     assert result["score"] == 50
     assert result["holding_score_data_quality"] == "insufficient"
     assert result["holding_score_effective_usable"] is False
+    assert result["holding_score_raw_source"] == "engine_disabled"
+    assert result["holding_score_effective_source"] == "engine_disabled"
+    assert result["holding_score_effective_from_prior"] is False
     assert result["ai_result_source"] == "engine_disabled"
     assert result["ai_fallback_score_50"] is True
 
@@ -1315,6 +1467,8 @@ def test_openai_overnight_uses_batch_timeout_profile(monkeypatch):
         replace(
             ai_engine_openai_module.TRADING_RULES,
             OPENAI_RESPONSES_WS_TIMEOUT_MS=700,
+            OPENAI_HOLDING_SCORE_TIMEOUT_MS=3000,
+            OPENAI_HOLDING_FLOW_TIMEOUT_MS=7000,
             OPENAI_SCANNER_REPORT_TIMEOUT_MS=15000,
             OPENAI_OVERNIGHT_TIMEOUT_MS=12000,
         ),
@@ -1323,6 +1477,8 @@ def test_openai_overnight_uses_batch_timeout_profile(monkeypatch):
 
     assert engine._get_openai_timeout_ms(endpoint_name="overnight", require_json=True) == 12000
     assert engine._get_openai_timeout_ms(endpoint_name="scanner_report", require_json=False) == 15000
+    assert engine._get_openai_timeout_ms(endpoint_name="holding_score", require_json=True) == 3000
+    assert engine._get_openai_timeout_ms(endpoint_name="holding_flow", require_json=True) == 7000
     assert engine._get_openai_timeout_ms(endpoint_name="analyze_target", require_json=True) == 700
 
 

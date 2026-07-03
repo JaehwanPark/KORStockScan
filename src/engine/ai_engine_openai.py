@@ -641,6 +641,10 @@ class GPTSniperEngine:
         return meta
 
     def _get_openai_timeout_ms(self, *, endpoint_name, require_json):
+        if str(endpoint_name or "").strip() == "holding_score":
+            return max(1, int(getattr(TRADING_RULES, "OPENAI_HOLDING_SCORE_TIMEOUT_MS", 3000) or 3000))
+        if str(endpoint_name or "").strip() == "holding_flow":
+            return max(1, int(getattr(TRADING_RULES, "OPENAI_HOLDING_FLOW_TIMEOUT_MS", 7000) or 7000))
         if str(endpoint_name or "").strip() == "scanner_report":
             return max(1, int(getattr(TRADING_RULES, "OPENAI_SCANNER_REPORT_TIMEOUT_MS", 15000) or 15000))
         if str(endpoint_name or "").strip() == "overnight":
@@ -2273,6 +2277,65 @@ class GPTSniperEngine:
             for candle in (recent_candles or [])[-limit:]
             if isinstance(candle, dict)
         ]
+
+    def _compact_holding_score_feature_packet(self, packet, audit_fields=None):
+        payload = packet if isinstance(packet, dict) else {}
+        audit = audit_fields if isinstance(audit_fields, dict) else {}
+        keep_keys = (
+            "packet_version",
+            "curr_price",
+            "latest_strength",
+            "spread_bp",
+            "top1_depth_ratio",
+            "top3_depth_ratio",
+            "orderbook_total_ratio",
+            "microprice_edge_bp",
+            "buy_pressure_10t",
+            "net_aggressive_delta_10t",
+            "price_change_10t_pct",
+            "tick_acceleration_ratio",
+            "tick_accel_source",
+            "tick_sample_count",
+            "tick_latest_age_ms",
+            "tick_context_quality",
+            "quote_age_ms",
+            "quote_age_source",
+            "quote_stale",
+            "same_price_buy_absorption",
+            "large_sell_print_detected",
+            "large_buy_print_detected",
+            "distance_from_day_high_pct",
+            "intraday_range_pct",
+            "volume_ratio_pct",
+            "curr_vs_micro_vwap_bp",
+            "curr_vs_ma5_bp",
+            "microstructure_reaction_context_status",
+            "microstructure_reaction_ask_sweep_score",
+            "microstructure_reaction_post_sweep_hold_score",
+            "microstructure_reaction_bid_replenishment_score",
+            "microstructure_reaction_wall_replenishment_risk_score",
+            "microstructure_reaction_vi_proximity_risk",
+            "microstructure_reaction_entry_reaction_quality",
+            "microstructure_reaction_source_quality",
+        )
+        compact = {key: payload.get(key) for key in keep_keys if key in payload}
+        compact["aggressor_quality"] = {
+            "orderbook_touch": payload.get("tick_aggressor_orderbook_touch_count", 0),
+            "price_heuristic": payload.get("tick_aggressor_price_heuristic_count", 0),
+            "unknown": payload.get("tick_aggressor_unknown_count", 0),
+        }
+        compact["source_quality_flags"] = {
+            "tick_source_quality_fields_sent": bool(audit.get("tick_source_quality_fields_sent", False)),
+            "microstructure_reaction_context_sent": bool(
+                audit.get("microstructure_reaction_context_sent", False)
+            ),
+            "tick_context_stale": audit.get(
+                "tick_context_stale",
+                payload.get("tick_context_stale", "not_available_tick_latest_age"),
+            ),
+            "quote_stale": audit.get("quote_stale", payload.get("quote_stale", "not_available_quote_age")),
+        }
+        return compact
 
     def _summarize_tick_windows(self, recent_ticks, *, windows=(5, 10, 20)):
         ticks = [tick for tick in (recent_ticks or []) if isinstance(tick, dict)]
@@ -4256,6 +4319,7 @@ class GPTSniperEngine:
         peak_profit = self._safe_float(ctx.get("peak_profit", profit_rate), profit_rate)
         drawdown = max(0.0, self._safe_float(ctx.get("drawdown_from_peak_pct", peak_profit - profit_rate), 0.0))
         source_quality = self._derive_holding_score_source_quality(packet, audit)
+        compact_features = self._compact_holding_score_feature_packet(packet, audit)
         payload = {
             "input_schema": "holding_score_v2",
             "position_context": {
@@ -4281,12 +4345,9 @@ class GPTSniperEngine:
                 "distance_to_profit_peak_pct": round(drawdown, 4),
             },
             "market_flow_features": {
-                "feature_packet": packet,
-                "audit_fields": audit,
+                "compact_features": compact_features,
                 "tick_summary": self._summarize_tick_windows(recent_ticks, windows=(5, 10, 20)),
                 "candle_summary": self._summarize_candle_windows(recent_candles, windows=(3, 5, 10)),
-                "recent_ticks_latest_first": self._compact_recent_ticks(recent_ticks, limit=5),
-                "recent_candles_latest_window": self._compact_recent_candles(recent_candles, limit=5),
                 "live_supply_demand_orderbook": {
                     "execution_strength": ws.get("v_pw", 0.0),
                     "buy_ratio": ws.get("buy_ratio", 0.0),
@@ -4389,6 +4450,10 @@ class GPTSniperEngine:
             "holding_score_raw": 50,
             "holding_score_effective": 50,
             "holding_score_source": result_source,
+            "holding_score_raw_source": result_source,
+            "holding_score_raw_data_quality": "insufficient",
+            "holding_score_effective_source": result_source,
+            "holding_score_effective_from_prior": False,
             "holding_score_effective_usable": False,
             "holding_score_excluded_reason": reason_text,
             "holding_score_age_sec": 0,
@@ -4474,8 +4539,15 @@ class GPTSniperEngine:
                 symbol=stock_code,
                 metadata_extra=metadata_extra,
             )
+            transport_meta = self._consume_last_transport_meta()
+            if isinstance(result, dict) and transport_meta:
+                result.update(transport_meta)
             normalized = self._normalize_holding_score_result(result, source_quality=source_quality)
             normalized.update(feature_audit_fields)
+            meta_source = result if isinstance(result, dict) else transport_meta
+            for key, value in meta_source.items():
+                if str(key).startswith("openai_"):
+                    normalized[key] = value
             normalized.update(
                 {
                     "ai_model": self._get_tier1_model(),
@@ -4486,6 +4558,10 @@ class GPTSniperEngine:
                     "holding_score_raw": normalized["score"],
                     "holding_score_effective": normalized["score"],
                     "holding_score_source": "live",
+                    "holding_score_raw_source": "live",
+                    "holding_score_raw_data_quality": normalized["data_quality"],
+                    "holding_score_effective_source": "live",
+                    "holding_score_effective_from_prior": False,
                     "holding_score_age_sec": 0,
                     "holding_score_effective_usable": normalized["data_quality"] in {"fresh", "partial"},
                     "holding_score_excluded_reason": "-"

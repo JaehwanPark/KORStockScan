@@ -1198,6 +1198,91 @@ def test_observation_source_quality_audit_accepts_score65_74_recovery_probe_bloc
     assert report["status"] == "pass"
 
 
+def test_observation_source_quality_audit_accepts_score65_74_recovery_probe_success_contract(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
+    fields = {
+        "tick_source_quality_fields_sent": True,
+        "tick_accel_source": "computed_10ticks",
+        "tick_context_quality": "fresh_computed",
+        "quote_age_source": "ws_realtime_quote",
+        "metric_role": "bounded_tunable",
+        "decision_authority": "score65_74_recovery_probe_entry_unlock_only",
+        "window_policy": "same_day_intraday_events",
+        "sample_floor": 1,
+        "primary_decision_metric": "source_quality_gate",
+        "source_quality_gate": "score65_74_recovery_probe_contract_fields_present",
+        "runtime_effect": True,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "forbidden_uses": (
+            "runtime_threshold_apply/order_submit/provider_route_change/"
+            "bot_restart/score_threshold_change/broker_guard_bypass/stale_submit_bypass"
+        ),
+        "threshold_family": "score65_74_recovery_probe",
+        "ai_score": "74.0",
+        "buy_pressure": "88.14",
+        "tick_accel": "1.200",
+        "micro_vwap_bp": "74.95",
+        "score65_74_recovery_probe_min_buy_pressure": "70.00",
+        "score65_74_recovery_probe_min_tick_accel": "1.100",
+        "score65_74_recovery_probe_min_micro_vwap_bp": "0.00",
+    }
+    _write_events(tmp_path, "2026-06-15", [_event("score65_74_recovery_probe", fields)])
+
+    report = audit.build_observation_source_quality_audit("2026-06-15")
+
+    assert report["stage_contracts"]["score65_74_recovery_probe"]["status"] == "pass"
+    assert report["status"] == "pass"
+
+
+def test_observation_source_quality_audit_flags_score65_74_recovery_probe_success_contract_gap(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
+    _write_events(
+        tmp_path,
+        "2026-06-15",
+        [
+            _event(
+                "score65_74_recovery_probe",
+                {
+                    "tick_source_quality_fields_sent": True,
+                    "tick_accel_source": "computed_10ticks",
+                    "tick_context_quality": "fresh_computed",
+                    "quote_age_source": "ws_realtime_quote",
+                    "metric_role": "bounded_tunable",
+                    "window_policy": "same_day_intraday_events",
+                    "sample_floor": 1,
+                    "primary_decision_metric": "source_quality_gate",
+                    "source_quality_gate": "score65_74_recovery_probe_contract_fields_present",
+                    "runtime_effect": True,
+                    "allowed_runtime_apply": False,
+                    "actual_order_submitted": False,
+                    "forbidden_uses": "runtime_threshold_apply/order_submit/provider_route_change/bot_restart",
+                    "threshold_family": "score65_74_recovery_probe",
+                    "ai_score": "74.0",
+                    "buy_pressure": "88.14",
+                    "tick_accel": "1.200",
+                    "micro_vwap_bp": "74.95",
+                    "score65_74_recovery_probe_min_buy_pressure": "70.00",
+                    "score65_74_recovery_probe_min_tick_accel": "1.100",
+                    "score65_74_recovery_probe_min_micro_vwap_bp": "0.00",
+                },
+            )
+        ],
+    )
+
+    report = audit.build_observation_source_quality_audit("2026-06-15")
+
+    contract = report["stage_contracts"]["score65_74_recovery_probe"]
+    assert contract["status"] == "warning"
+    assert contract["missing_violations"]["decision_authority"] == 1.0
+    assert contract["missing_violations"]["broker_order_forbidden"] == 1.0
+
+
 def test_observation_source_quality_audit_accepts_scanner_source_guard_contracts(
     monkeypatch, tmp_path
 ):

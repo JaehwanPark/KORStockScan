@@ -410,6 +410,24 @@ STAGE_CONTRACTS: dict[str, StageContract] = {
         required_fields=AI_SOURCE_FIELDS,
         max_missing_rate=0.10,
     ),
+    "score65_74_recovery_probe": StageContract(
+        required_fields=(
+            *AI_SOURCE_FIELDS,
+            *DIAGNOSTIC_CONTRACT_FIELDS,
+            "allowed_runtime_apply",
+            "actual_order_submitted",
+            "broker_order_forbidden",
+            "threshold_family",
+            "ai_score",
+            "buy_pressure",
+            "tick_accel",
+            "micro_vwap_bp",
+            "score65_74_recovery_probe_min_buy_pressure",
+            "score65_74_recovery_probe_min_tick_accel",
+            "score65_74_recovery_probe_min_micro_vwap_bp",
+        ),
+        decision_authority="score65_74_recovery_probe_entry_unlock_only",
+    ),
     "score65_74_recovery_probe_blocked": StageContract(
         required_fields=(
             *DIAGNOSTIC_CONTRACT_FIELDS,

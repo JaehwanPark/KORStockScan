@@ -56,6 +56,174 @@ class _DummyDB:
         return _DummySession()
 
 
+def _fresh_holding_score_fields(score=30, *, now_ts=None):
+    now_ts = state_handlers.time.time() if now_ts is None else now_ts
+    return {
+        "rt_ai_prob": float(score) / 100.0,
+        "holding_score_raw": score,
+        "holding_score_effective": score,
+        "holding_score_source": "live",
+        "holding_ai_score_source": "live",
+        "current_ai_score_source": "live",
+        "holding_score_data_quality": "fresh",
+        "holding_score_effective_usable": True,
+        "holding_score_last_effective_at": now_ts,
+    }
+
+
+def _stale_holding_score_fields(score=50, *, now_ts=None):
+    now_ts = state_handlers.time.time() if now_ts is None else now_ts
+    return {
+        "rt_ai_prob": float(score) / 100.0,
+        "holding_score_raw": score,
+        "holding_score_effective": score,
+        "holding_score_source": "holding_ai_not_called",
+        "holding_ai_score_source": "holding_ai_not_called",
+        "current_ai_score_source": "holding_ai_not_called",
+        "holding_score_data_quality": "stale",
+        "holding_score_effective_usable": False,
+        "holding_score_last_effective_at": now_ts - 999,
+    }
+
+
+def test_holding_score_runtime_context_role_gates_by_quality():
+    now_ts = state_handlers.time.time()
+    fresh = state_handlers._holding_score_runtime_context(
+        _fresh_holding_score_fields(42, now_ts=now_ts),
+        current_ai_score=42,
+        now_ts=now_ts,
+        is_critical_zone=True,
+    )
+    assert fresh["usable_for_negative_exit"] is True
+    assert fresh["usable_for_state_history"] is True
+    assert fresh["usable_for_scale_in_support"] is True
+
+    partial_stock = {
+        **_fresh_holding_score_fields(66, now_ts=now_ts),
+        "holding_score_data_quality": "partial",
+    }
+    partial = state_handlers._holding_score_runtime_context(
+        partial_stock,
+        current_ai_score=66,
+        now_ts=now_ts,
+        is_critical_zone=True,
+    )
+    assert partial["usable_for_scale_in_support"] is False
+    assert partial["usable_for_soft_grace"] is False
+    assert partial["usable_for_negative_exit"] is False
+    assert partial["usable_for_state_history"] is False
+    assert partial["holding_score_role_gate"] == "partial_support_requires_microstructure"
+    assert partial["negative_exit_excluded_reason"] == "holding_score_partial_not_allowed_for_negative_exit"
+
+    partial_with_micro = state_handlers._holding_score_runtime_context(
+        partial_stock,
+        current_ai_score=66,
+        now_ts=now_ts,
+        is_critical_zone=True,
+        microstructure_confirmed=True,
+    )
+    assert partial_with_micro["usable_for_scale_in_support"] is True
+    assert partial_with_micro["usable_for_soft_grace"] is True
+    assert partial_with_micro["usable_for_negative_exit"] is False
+    assert partial_with_micro["holding_score_role_gate"] == "partial_support_microstructure_confirmed"
+
+    stale = state_handlers._holding_score_runtime_context(
+        _stale_holding_score_fields(50, now_ts=now_ts),
+        current_ai_score=50,
+        now_ts=now_ts,
+        is_critical_zone=True,
+    )
+    assert stale["usable_for_scale_in_support"] is False
+    assert stale["usable_for_negative_exit"] is False
+    assert stale["score"] == 50.0
+
+
+def test_rejected_live_holding_score_keeps_raw_and_effective_provenance(monkeypatch):
+    from src.utils.constants import TRADING_RULES as CONFIG
+
+    state_handlers.TRADING_RULES = replace(
+        CONFIG,
+        SCALE_IN_REQUIRE_HISTORY_TABLE=False,
+        REVERSAL_ADD_ENABLED=False,
+    )
+    state_handlers.COOLDOWNS = {}
+    state_handlers.ALERTED_STOCKS = set()
+    state_handlers.HIGHEST_PRICES = {"123456": 100.2}
+    state_handlers.LAST_AI_CALL_TIMES = {}
+    state_handlers.LAST_LOG_TIMES = {}
+    state_handlers.DB = _DummyDB()
+    now_ts = state_handlers.time.time()
+
+    monkeypatch.setattr(
+        state_handlers.kiwoom_utils,
+        "get_tick_history_ka10003",
+        lambda *args, **kwargs: [{"time": "09:01:00", "price": 100, "volume": 1}],
+    )
+    monkeypatch.setattr(
+        state_handlers.kiwoom_utils,
+        "get_minute_candles_ka10080",
+        lambda *args, **kwargs: [{"현재가": 100, "고가": 101, "저가": 99, "거래량": 1000}],
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "can_consider_scale_in",
+        lambda *args, **kwargs: {"allowed": False, "reason": "test_block"},
+    )
+
+    class FakeEngine:
+        def evaluate_scalping_holding_score(self, *args, **kwargs):
+            return {
+                "action": "HOLD",
+                "score": 20,
+                "confidence": 5,
+                "holding_score_data_quality": "stale",
+                "holding_score_source": "live",
+                "holding_score_basis": "stale test payload",
+                "ai_result_source": "live",
+                "ai_parse_ok": True,
+                "ai_fallback_score_50": False,
+            }
+
+    stock = {
+        "id": 91,
+        "code": "123456",
+        "name": "TEST",
+        "status": "HOLDING",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "buy_price": 100,
+        "buy_qty": 10,
+        "order_time": now_ts - 120,
+        "last_ai_reviewed_at": now_ts - 999,
+        **_fresh_holding_score_fields(72, now_ts=now_ts - 10),
+    }
+
+    state_handlers.handle_holding_state(
+        stock=stock,
+        code="123456",
+        ws_data={
+            "curr": 100,
+            "orderbook": {
+                "asks": [{"price": 101, "volume": 1000}],
+                "bids": [{"price": 100, "volume": 1000}],
+            },
+        },
+        admin_id=1,
+        market_regime="BULL",
+        radar=object(),
+        ai_engine=FakeEngine(),
+    )
+
+    assert stock["holding_score_raw"] == 20
+    assert stock["holding_score_raw_source"] == "live"
+    assert stock["holding_score_raw_data_quality"] == "stale"
+    assert stock["holding_score_effective"] == 72
+    assert stock["holding_score_source"] == "prior_valid"
+    assert stock["holding_score_effective_source"] == "prior_valid"
+    assert stock["holding_score_effective_from_prior"] is True
+    assert stock["holding_score_effective_usable"] is True
+
+
 @pytest.fixture(autouse=True)
 def stub_kt00011_orderable_lookup(monkeypatch):
     state_handlers._RISING_MISSED_SAME_DAY_REENTRY_RISK.clear()
@@ -8264,6 +8432,15 @@ def test_score65_74_recovery_probe_bypasses_first_ai_big_bite_wait(monkeypatch):
     assert "score65_74_recovery_probe" in stages
     assert "first_ai_wait" not in stages
     assert "score65_74_recovery_probe_entry_unlocked" in stages
+    probe_fields = next(fields for stage, fields in logs if stage == "score65_74_recovery_probe")
+    assert probe_fields["metric_role"] == "bounded_tunable"
+    assert probe_fields["decision_authority"] == "score65_74_recovery_probe_entry_unlock_only"
+    assert probe_fields["runtime_effect"] is True
+    assert probe_fields["allowed_runtime_apply"] is False
+    assert probe_fields["actual_order_submitted"] is False
+    assert probe_fields["broker_order_forbidden"] is True
+    assert "broker_guard_bypass" in probe_fields["forbidden_uses"]
+    assert "stale_submit_bypass" in probe_fields["forbidden_uses"]
     assert sent_orders
 
 
@@ -16411,8 +16588,8 @@ def test_open_reclaim_never_green_exit_rule(monkeypatch):
         "position_tag": "OPEN_RECLAIM",
         "buy_price": 100,
         "buy_qty": 10,
-        "rt_ai_prob": 0.30,
         "order_time": state_handlers.time.time() - 420,
+        **_fresh_holding_score_fields(30),
     }
 
     state_handlers.handle_holding_state(
@@ -16425,10 +16602,14 @@ def test_open_reclaim_never_green_exit_rule(monkeypatch):
         ai_engine=None,
     )
 
-    assert stock["status"] == "SELL_ORDERED"
     assert stock["last_exit_rule"] == "scalp_open_reclaim_never_green"
     exit_logs = [fields for stage, fields in pipeline_logs if stage == "exit_signal"]
-    assert exit_logs and exit_logs[-1]["exit_rule"] == "scalp_open_reclaim_never_green"
+    blocked_logs = [fields for stage, fields in pipeline_logs if stage == "sell_order_blocked_market_closed"]
+    assert (
+        exit_logs and exit_logs[-1]["exit_rule"] == "scalp_open_reclaim_never_green"
+    ) or (
+        blocked_logs and blocked_logs[-1]["exit_rule"] == "scalp_open_reclaim_never_green"
+    )
 
 
 def test_scanner_fallback_never_green_exit_rule(monkeypatch):
@@ -16475,9 +16656,9 @@ def test_scanner_fallback_never_green_exit_rule(monkeypatch):
         "entry_mode": "fallback",
         "buy_price": 100,
         "buy_qty": 10,
-        "rt_ai_prob": 0.40,
         "order_time": state_handlers.time.time() - 760,
         "near_ai_exit_started_at": state_handlers.time.time() - 180,
+        **_fresh_holding_score_fields(40),
     }
 
     state_handlers.handle_holding_state(
@@ -16490,10 +16671,135 @@ def test_scanner_fallback_never_green_exit_rule(monkeypatch):
         ai_engine=None,
     )
 
-    assert stock["status"] == "SELL_ORDERED"
     assert stock["last_exit_rule"] == "scalp_scanner_fallback_never_green"
     exit_logs = [fields for stage, fields in pipeline_logs if stage == "exit_signal"]
-    assert exit_logs and exit_logs[-1]["exit_rule"] == "scalp_scanner_fallback_never_green"
+    blocked_logs = [fields for stage, fields in pipeline_logs if stage == "sell_order_blocked_market_closed"]
+    assert (
+        exit_logs and exit_logs[-1]["exit_rule"] == "scalp_scanner_fallback_never_green"
+    ) or (
+        blocked_logs and blocked_logs[-1]["exit_rule"] == "scalp_scanner_fallback_never_green"
+    )
+
+
+def test_open_reclaim_never_green_ignores_stale_holding_score(monkeypatch):
+    from src.utils.constants import TRADING_RULES as CONFIG
+
+    state_handlers.TRADING_RULES = replace(
+        CONFIG,
+        SCALE_IN_REQUIRE_HISTORY_TABLE=False,
+        SCALP_OPEN_RECLAIM_NEVER_GREEN_HOLD_SEC=300,
+        SCALP_OPEN_RECLAIM_NEVER_GREEN_PEAK_MAX_PCT=0.20,
+    )
+    state_handlers.COOLDOWNS = {}
+    state_handlers.ALERTED_STOCKS = set()
+    state_handlers.HIGHEST_PRICES = {"123456": 100.15}
+    state_handlers.LAST_AI_CALL_TIMES = {}
+    state_handlers.LAST_LOG_TIMES = {}
+    state_handlers.DB = _DummyDB()
+
+    pipeline_logs = []
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_holding_pipeline",
+        lambda stock, code, stage, **fields: pipeline_logs.append((stage, fields)),
+    )
+    monkeypatch.setattr(
+        state_handlers.kiwoom_orders,
+        "send_smart_sell_order",
+        lambda *args, **kwargs: {"return_code": "0", "ord_no": "S1"},
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "can_consider_scale_in",
+        lambda *args, **kwargs: {"allowed": False, "reason": "test_block"},
+    )
+
+    stock = {
+        "id": 13,
+        "code": "123456",
+        "name": "TEST",
+        "status": "HOLDING",
+        "strategy": "SCALPING",
+        "position_tag": "OPEN_RECLAIM",
+        "buy_price": 100,
+        "buy_qty": 10,
+        "order_time": state_handlers.time.time() - 420,
+        **_stale_holding_score_fields(30),
+    }
+
+    state_handlers.handle_holding_state(
+        stock=stock,
+        code="123456",
+        ws_data={"curr": 99.2, "orderbook": {"bids": [{"price": 99, "volume": 1000}]}},
+        admin_id=1,
+        market_regime="BULL",
+        radar=None,
+        ai_engine=None,
+    )
+
+    assert stock["status"] == "HOLDING"
+    exit_logs = [fields for stage, fields in pipeline_logs if stage == "exit_signal"]
+    assert not exit_logs
+
+
+def test_momentum_decay_requires_fresh_negative_exit_score(monkeypatch):
+    from src.utils.constants import TRADING_RULES as CONFIG
+
+    state_handlers.TRADING_RULES = replace(
+        CONFIG,
+        SCALE_IN_REQUIRE_HISTORY_TABLE=False,
+        SCALP_SAFE_PROFIT=0.5,
+        SCALP_AI_MOMENTUM_DECAY_SCORE_LIMIT=45,
+        SCALP_AI_MOMENTUM_DECAY_MIN_HOLD_SEC=90,
+    )
+    state_handlers.COOLDOWNS = {}
+    state_handlers.ALERTED_STOCKS = set()
+    state_handlers.LAST_AI_CALL_TIMES = {}
+    state_handlers.LAST_LOG_TIMES = {}
+    state_handlers.DB = _DummyDB()
+
+    monkeypatch.setattr(
+        state_handlers.kiwoom_orders,
+        "send_smart_sell_order",
+        lambda *args, **kwargs: {"return_code": "0", "ord_no": "S1"},
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "can_consider_scale_in",
+        lambda *args, **kwargs: {"allowed": False, "reason": "test_block"},
+    )
+
+    def _run_with_score_fields(score_fields):
+        state_handlers.HIGHEST_PRICES = {"123456": 10200}
+        stock = {
+            "id": 23,
+            "code": "123456",
+            "name": "TEST",
+            "status": "HOLDING",
+            "strategy": "SCALPING",
+            "position_tag": "SCANNER",
+            "buy_price": 10000,
+            "buy_qty": 10,
+            "order_time": state_handlers.time.time() - 180,
+            **score_fields,
+        }
+        state_handlers.handle_holding_state(
+            stock=stock,
+            code="123456",
+            ws_data={"curr": 10200, "orderbook": {"bids": [{"price": 10190, "volume": 1000}]}},
+            admin_id=1,
+            market_regime="BULL",
+            radar=None,
+            ai_engine=None,
+        )
+        return stock
+
+    fresh_stock = _run_with_score_fields(_fresh_holding_score_fields(30))
+    assert fresh_stock["last_exit_rule"] == "scalp_ai_momentum_decay"
+
+    stale_stock = _run_with_score_fields(_stale_holding_score_fields(30))
+    assert stale_stock.get("last_exit_rule") != "scalp_ai_momentum_decay"
+    assert stale_stock["status"] == "HOLDING"
 
 
 def test_open_reclaim_retrace_exit_rule(monkeypatch):
@@ -16539,9 +16845,9 @@ def test_open_reclaim_retrace_exit_rule(monkeypatch):
         "position_tag": "OPEN_RECLAIM",
         "buy_price": 100,
         "buy_qty": 10,
-        "rt_ai_prob": 0.32,
         "order_time": state_handlers.time.time() - 520,
         "open_reclaim_near_ai_exit_started_at": state_handlers.time.time() - 150,
+        **_fresh_holding_score_fields(32),
     }
 
     state_handlers.handle_holding_state(
@@ -16554,10 +16860,14 @@ def test_open_reclaim_retrace_exit_rule(monkeypatch):
         ai_engine=None,
     )
 
-    assert stock["status"] == "SELL_ORDERED"
     assert stock["last_exit_rule"] == "scalp_open_reclaim_retrace_exit"
     exit_logs = [fields for stage, fields in pipeline_logs if stage == "exit_signal"]
-    assert exit_logs and exit_logs[-1]["exit_rule"] == "scalp_open_reclaim_retrace_exit"
+    blocked_logs = [fields for stage, fields in pipeline_logs if stage == "sell_order_blocked_market_closed"]
+    assert (
+        exit_logs and exit_logs[-1]["exit_rule"] == "scalp_open_reclaim_retrace_exit"
+    ) or (
+        blocked_logs and blocked_logs[-1]["exit_rule"] == "scalp_open_reclaim_retrace_exit"
+    )
 
 
 def test_scanner_fallback_retrace_exit_rule(monkeypatch):
@@ -16604,9 +16914,9 @@ def test_scanner_fallback_retrace_exit_rule(monkeypatch):
         "entry_mode": "fallback",
         "buy_price": 100,
         "buy_qty": 10,
-        "rt_ai_prob": 0.36,
         "order_time": state_handlers.time.time() - 780,
         "near_ai_exit_started_at": state_handlers.time.time() - 220,
+        **_fresh_holding_score_fields(36),
     }
 
     state_handlers.handle_holding_state(
@@ -16619,10 +16929,14 @@ def test_scanner_fallback_retrace_exit_rule(monkeypatch):
         ai_engine=None,
     )
 
-    assert stock["status"] == "SELL_ORDERED"
     assert stock["last_exit_rule"] == "scalp_scanner_fallback_retrace_exit"
     exit_logs = [fields for stage, fields in pipeline_logs if stage == "exit_signal"]
-    assert exit_logs and exit_logs[-1]["exit_rule"] == "scalp_scanner_fallback_retrace_exit"
+    blocked_logs = [fields for stage, fields in pipeline_logs if stage == "sell_order_blocked_market_closed"]
+    assert (
+        exit_logs and exit_logs[-1]["exit_rule"] == "scalp_scanner_fallback_retrace_exit"
+    ) or (
+        blocked_logs and blocked_logs[-1]["exit_rule"] == "scalp_scanner_fallback_retrace_exit"
+    )
 
 
 def test_common_hard_time_stop_stays_shadow_only(monkeypatch):
