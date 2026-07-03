@@ -361,6 +361,8 @@ def test_build_report_adds_continuously_updated_first_touch_regression_rows(tmp_
     assert rows_by_record["403"]["first_touch_regression_label"] == "first_touch_open_unresolved"
     assert rows_by_record["403"]["first_touch_avgdown_decision_blocked"] is True
     assert rows_by_record["403"]["first_touch_avgdown_decision_allowed"] is False
+    assert rows_by_record["403"]["actual_order_submitted"] is False
+    assert rows_by_record["403"]["broker_order_forbidden"] is True
     assert rows_by_record["403"]["first_touch_avgdown_decision_reason"] == "repeated_blockers_without_recovery"
     assert rows_by_record["403"]["first_touch_avgdown_decision_authority"] == (
         "real_scalping_first_touch_avgdown_decision_gate"

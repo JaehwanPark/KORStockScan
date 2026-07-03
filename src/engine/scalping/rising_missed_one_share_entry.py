@@ -14,16 +14,9 @@ BLOCK_OPEN_PENDING = "open_pending_entry_order"
 BLOCK_ALREADY_HOLDING = "already_holding"
 BLOCK_PRICE_ABOVE_CAP = "price_above_one_share_entry_cap"
 BLOCK_UPPER_LIMIT_PROXIMITY = "upper_limit_proximity_entry_block"
-BLOCK_STRENGTH_MOMENTUM_PRECHECK = "strength_momentum_precheck_block"
 MAX_ONE_SHARE_ENTRY_PRICE_KRW = 1_000_000
 DEFAULT_RISING_MISSED_UPPER_LIMIT_EXCLUDE_PCT = 26.0
 DEFAULT_UPPER_LIMIT_PROXIMITY_BLOCK_PCT = 27.0
-RISING_MISSED_STRENGTH_MOMENTUM_BLOCK_REASONS = {
-    "below_buy_ratio",
-    "below_strength_base",
-    "below_window_buy_value",
-    "insufficient_history",
-}
 RISING_MISSED_CLASS_NOT_RISING = "not_rising_missed"
 RISING_MISSED_CLASS_SUBMITTED_RESOLVED = "submitted_resolved"
 RISING_MISSED_CLASS_RAW = "rising_missed_raw"
@@ -206,7 +199,6 @@ def evaluate_rising_missed_one_share_entry(
     current_fluctuation_pct: Any = None,
     upper_limit_exclude_enabled: bool = True,
     upper_limit_exclude_pct: float = DEFAULT_RISING_MISSED_UPPER_LIMIT_EXCLUDE_PCT,
-    strength_momentum_gate: dict[str, Any] | None = None,
 ) -> RisingMissedOneShareDecision:
     stock = stock if isinstance(stock, dict) else {}
     delta_pct = _positive_delta_pct(stock, explicit_delta_pct=positive_delta_pct)
@@ -239,34 +231,6 @@ def evaluate_rising_missed_one_share_entry(
         "rising_missed_one_share_entry_upper_limit_exclude_enabled": bool(upper_limit_exclude_enabled),
     }
     base_fields.update(_prior_log_fields(stock))
-    strength_momentum_gate = strength_momentum_gate if isinstance(strength_momentum_gate, dict) else {}
-    strength_reason = str(strength_momentum_gate.get("reason") or "").strip()
-    strength_allowed = bool(strength_momentum_gate.get("allowed"))
-    strength_enabled = bool(strength_momentum_gate.get("enabled"))
-    if strength_momentum_gate:
-        base_fields.update(
-            {
-                "rising_missed_strength_momentum_precheck_enabled": strength_enabled,
-                "rising_missed_strength_momentum_precheck_allowed": strength_allowed,
-                "rising_missed_strength_momentum_precheck_reason": strength_reason or "-",
-                "rising_missed_strength_momentum_precheck_current_vpw": strength_momentum_gate.get(
-                    "current_vpw",
-                    0.0,
-                ),
-                "rising_missed_strength_momentum_precheck_window_buy_value": strength_momentum_gate.get(
-                    "window_buy_value",
-                    0,
-                ),
-                "rising_missed_strength_momentum_precheck_window_buy_ratio": strength_momentum_gate.get(
-                    "window_buy_ratio",
-                    0.0,
-                ),
-                "rising_missed_strength_momentum_precheck_threshold_profile": strength_momentum_gate.get(
-                    "threshold_profile",
-                    "-",
-                ),
-            }
-        )
     classification = classify_rising_missed_candidate(
         max_delta_pct=delta_pct,
         real_submit_count=stock.get("real_submit_count") or stock.get("actual_order_submit_count") or 0,
@@ -346,25 +310,6 @@ def evaluate_rising_missed_one_share_entry(
         return RisingMissedOneShareDecision(
             allowed=False,
             reason=BLOCK_PRICE_ABOVE_CAP,
-            positive_delta_pct=delta_pct,
-            log_fields=base_fields,
-        )
-    if (
-        strength_momentum_gate
-        and strength_enabled
-        and not strength_allowed
-        and strength_reason in RISING_MISSED_STRENGTH_MOMENTUM_BLOCK_REASONS
-    ):
-        base_fields.update(
-            {
-                "rising_missed_class": RISING_MISSED_CLASS_SOURCE_QUALITY_EXCLUDED,
-                "rising_missed_class_reason": BLOCK_STRENGTH_MOMENTUM_PRECHECK,
-                "rising_missed_one_share_eligible": False,
-            }
-        )
-        return RisingMissedOneShareDecision(
-            allowed=False,
-            reason=BLOCK_STRENGTH_MOMENTUM_PRECHECK,
             positive_delta_pct=delta_pct,
             log_fields=base_fields,
         )

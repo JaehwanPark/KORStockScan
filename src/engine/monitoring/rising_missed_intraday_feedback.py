@@ -296,6 +296,8 @@ def _build_first_touch_regression_rows(
         item["first_touch_regression_label"] = _regression_label(item)
         item.update(_first_touch_shadow_decision(item))
         item["decision_authority"] = "source_only_first_touch_regression_table"
+        item["actual_order_submitted"] = False
+        item["broker_order_forbidden"] = True
         item["runtime_effect"] = False
         item["allowed_runtime_apply"] = False
         item["forbidden_uses"] = FORBIDDEN_USES

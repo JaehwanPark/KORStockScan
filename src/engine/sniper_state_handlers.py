@@ -8,7 +8,7 @@ import re
 import time
 import math
 import threading
-from datetime import date as date_cls, datetime, time as datetime_time, timedelta
+from datetime import date as date_cls, datetime, time as datetime_time, timedelta, timezone
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -61,7 +61,6 @@ from src.engine.scalping.rising_missed_one_share_entry import (
     BLOCK_NOT_CANDIDATE as RISING_MISSED_BLOCK_NOT_CANDIDATE,
     BLOCK_OPEN_PENDING as RISING_MISSED_BLOCK_OPEN_PENDING,
     BLOCK_PRICE_ABOVE_CAP as RISING_MISSED_BLOCK_PRICE_ABOVE_CAP,
-    BLOCK_STRENGTH_MOMENTUM_PRECHECK as RISING_MISSED_BLOCK_STRENGTH_MOMENTUM_PRECHECK,
     BLOCK_UPPER_LIMIT_PROXIMITY as RISING_MISSED_BLOCK_UPPER_LIMIT_PROXIMITY,
     DEFAULT_RISING_MISSED_UPPER_LIMIT_EXCLUDE_PCT,
     DEFAULT_UPPER_LIMIT_PROXIMITY_BLOCK_PCT,
@@ -171,6 +170,17 @@ WS_MANAGER = None
 _GREENFIELD_TELEGRAM_KEYS: set[str] = set()
 _STOP_LINE_TOUCH_MANDATORY_AVG_DOWN_REASON = "stop_line_touch_mandatory_avg_down"
 _ENTRY_OPPORTUNITY_RECHECK_STATE = EntryOpportunityRecheckState()
+_FIRST_TOUCH_RUNTIME_PRIOR_REPORT_DIR = (
+    Path(DATA_DIR) / "report" / "rising_missed_intraday_feedback"
+)
+_FIRST_TOUCH_RUNTIME_PRIOR_MAX_AGE_SEC = 600
+_FIRST_TOUCH_RUNTIME_PRIOR_CACHE: dict[tuple[str, int, int], dict[str, Any]] = {}
+_PYRAMID_RUNTIME_PRIOR_REPORT_DIR = (
+    Path(DATA_DIR) / "report" / "scalping_pyramid_intraday_feedback"
+)
+_PYRAMID_RUNTIME_PRIOR_MAX_AGE_SEC = 600
+_PYRAMID_RUNTIME_PRIOR_CACHE: dict[tuple[str, int, int], dict[str, Any]] = {}
+_KST = timezone(timedelta(hours=9))
 
 
 def _mark_entry_opportunity_recheck_outcome(
@@ -2337,6 +2347,359 @@ def _stop_line_first_touch_signal_weak(value: str) -> bool:
     return any(token in normalized for token in ("weak", "below", "block", "fail", "risk"))
 
 
+def _first_touch_runtime_prior_default(status: str, reason: str) -> dict[str, Any]:
+    return {
+        "status": status,
+        "sample_count": 0,
+        "loss_or_flat_rate": 0.0,
+        "recovered_rate": 0.0,
+        "blocked_recovered_rate": 0.0,
+        "signal": "neutral",
+        "reason": reason,
+    }
+
+
+def _first_touch_runtime_prior_log_fields(prior: dict[str, Any] | None) -> dict[str, Any]:
+    prior = prior if isinstance(prior, dict) else _first_touch_runtime_prior_default("missing", "prior_context_missing")
+    return {
+        "first_touch_runtime_prior_status": str(prior.get("status") or "missing"),
+        "first_touch_runtime_prior_sample_count": _safe_int(prior.get("sample_count"), 0),
+        "first_touch_runtime_prior_loss_or_flat_rate": (
+            f"{_safe_float(prior.get('loss_or_flat_rate'), 0.0):.2f}"
+        ),
+        "first_touch_runtime_prior_recovered_rate": (
+            f"{_safe_float(prior.get('recovered_rate'), 0.0):.2f}"
+        ),
+        "first_touch_runtime_prior_blocked_recovered_rate": (
+            f"{_safe_float(prior.get('blocked_recovered_rate'), 0.0):.2f}"
+        ),
+        "first_touch_runtime_prior_signal": str(prior.get("signal") or "neutral"),
+        "first_touch_runtime_prior_reason": str(prior.get("reason") or "-"),
+    }
+
+
+def _parse_first_touch_prior_dt(value: Any) -> datetime | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        if text.endswith("Z"):
+            text = text[:-1] + "+00:00"
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=_KST)
+    return parsed
+
+
+def _first_touch_runtime_prior_report_date(now_ts: float) -> str:
+    try:
+        return datetime.fromtimestamp(float(now_ts), tz=_KST).strftime("%Y-%m-%d")
+    except (OSError, OverflowError, ValueError, TypeError):
+        return datetime.now(_KST).strftime("%Y-%m-%d")
+
+
+def _load_first_touch_runtime_prior_payload(path: Path) -> tuple[dict[str, Any] | None, str]:
+    try:
+        stat = path.stat()
+    except OSError:
+        return None, "missing"
+    key = (str(path), int(getattr(stat, "st_mtime_ns", int(stat.st_mtime * 1_000_000_000))), int(stat.st_size))
+    cached = _FIRST_TOUCH_RUNTIME_PRIOR_CACHE.get(key)
+    if cached is not None:
+        return cached, "loaded"
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None, "unreadable"
+    if not isinstance(payload, dict):
+        return None, "invalid_payload"
+    _FIRST_TOUCH_RUNTIME_PRIOR_CACHE.clear()
+    _FIRST_TOUCH_RUNTIME_PRIOR_CACHE[key] = payload
+    return payload, "loaded"
+
+
+def _first_touch_runtime_prior_is_stale(path: Path, payload: dict[str, Any], now_ts: float) -> bool:
+    try:
+        now_dt = datetime.fromtimestamp(float(now_ts), tz=_KST)
+    except (OSError, OverflowError, ValueError, TypeError):
+        now_dt = datetime.now(_KST)
+    generated_at = _parse_first_touch_prior_dt(payload.get("generated_at"))
+    if generated_at is not None:
+        if generated_at.tzinfo is None:
+            generated_at = generated_at.replace(tzinfo=now_dt.tzinfo)
+        return (now_dt - generated_at.astimezone(now_dt.tzinfo)).total_seconds() > _FIRST_TOUCH_RUNTIME_PRIOR_MAX_AGE_SEC
+    try:
+        mtime_dt = datetime.fromtimestamp(path.stat().st_mtime, tz=now_dt.tzinfo)
+    except OSError:
+        return True
+    return (now_dt - mtime_dt).total_seconds() > _FIRST_TOUCH_RUNTIME_PRIOR_MAX_AGE_SEC
+
+
+def _first_touch_prior_rows_stats(rows: list[dict[str, Any]], *, exact: bool = False) -> dict[str, Any]:
+    closed_labels = {"first_touch_recovered_profit", "first_touch_loss_or_flat"}
+    closed_rows = [
+        row for row in rows if str(row.get("first_touch_regression_label") or "") in closed_labels
+    ]
+    sample_count = len(closed_rows)
+    recovered_count = sum(
+        1 for row in closed_rows if str(row.get("first_touch_regression_label") or "") == "first_touch_recovered_profit"
+    )
+    loss_count = sum(
+        1 for row in closed_rows if str(row.get("first_touch_regression_label") or "") == "first_touch_loss_or_flat"
+    )
+    blocked_rows = [row for row in closed_rows if bool(row.get("first_touch_avgdown_decision_blocked"))]
+    blocked_recovered = sum(
+        1 for row in blocked_rows if str(row.get("first_touch_regression_label") or "") == "first_touch_recovered_profit"
+    )
+    loss_or_flat_rate = (loss_count / sample_count) if sample_count else 0.0
+    recovered_rate = (recovered_count / sample_count) if sample_count else 0.0
+    blocked_recovered_rate = (blocked_recovered / len(blocked_rows)) if blocked_rows else 0.0
+    exact_risk = bool(
+        exact
+        and rows
+        and (
+            rows[0].get("first_touch_avgdown_decision_blocked")
+            or str(rows[0].get("first_touch_regression_label") or "") == "first_touch_loss_or_flat"
+        )
+    )
+    signal = "neutral"
+    reason = "prior_neutral"
+    if exact_risk:
+        signal = "risk"
+        reason = "exact_prior_blocked_or_loss_cluster"
+    elif sample_count >= 3 and loss_or_flat_rate >= 0.67:
+        signal = "risk"
+        reason = "aggregate_loss_or_flat_rate_ge_0_67"
+    elif sample_count >= 3 and recovered_rate >= 0.67:
+        signal = "support"
+        reason = "aggregate_recovered_rate_ge_0_67"
+    elif sample_count < 3:
+        reason = "insufficient_closed_first_touch_sample"
+    return {
+        "sample_count": sample_count if not exact or sample_count else len(rows),
+        "loss_or_flat_rate": loss_or_flat_rate,
+        "recovered_rate": recovered_rate,
+        "blocked_recovered_rate": blocked_recovered_rate,
+        "signal": signal,
+        "reason": reason,
+    }
+
+
+def _first_touch_runtime_prior_context(
+    stock: dict | None,
+    code: str,
+    now_ts: float,
+) -> dict:
+    report_date = _first_touch_runtime_prior_report_date(now_ts)
+    path = _FIRST_TOUCH_RUNTIME_PRIOR_REPORT_DIR / f"rising_missed_intraday_feedback_{report_date}.json"
+    payload, load_status = _load_first_touch_runtime_prior_payload(path)
+    if payload is None:
+        return {
+            "runtime_prior_context": _first_touch_runtime_prior_default(
+                "missing",
+                f"prior_report_{load_status}",
+            )
+        }
+    if _first_touch_runtime_prior_is_stale(path, payload, now_ts):
+        return {"runtime_prior_context": _first_touch_runtime_prior_default("stale", "prior_report_stale_gt_10m")}
+
+    rows = payload.get("first_touch_regression_rows")
+    rows = [row for row in rows if isinstance(row, dict)] if isinstance(rows, list) else []
+    if not rows:
+        return {"runtime_prior_context": _first_touch_runtime_prior_default("missing", "prior_rows_missing")}
+
+    record_id = str((stock or {}).get("record_id") or (stock or {}).get("id") or "").strip()
+    exact_rows = [row for row in rows if record_id and str(row.get("record_id") or "").strip() == record_id]
+    if exact_rows:
+        stats = _first_touch_prior_rows_stats(exact_rows[:1], exact=True)
+        return {"runtime_prior_context": {"status": "matched", **stats}}
+
+    rising_class = str((stock or {}).get("rising_missed_class") or "").strip()
+    source_signature = str((stock or {}).get("source_signature") or "").strip()
+    aggregate_rows = [
+        row
+        for row in rows
+        if rising_class
+        and source_signature
+        and str(row.get("rising_missed_class") or "").strip() == rising_class
+        and str(row.get("source_signature") or "").strip() == source_signature
+    ]
+    if aggregate_rows:
+        stats = _first_touch_prior_rows_stats(aggregate_rows)
+        status = "aggregate" if int(stats.get("sample_count") or 0) >= 3 else "insufficient_sample"
+        return {"runtime_prior_context": {"status": status, **stats}}
+
+    stats = _first_touch_prior_rows_stats(rows)
+    status = "aggregate" if int(stats.get("sample_count") or 0) >= 3 else "insufficient_sample"
+    return {"runtime_prior_context": {"status": status, **stats}}
+
+
+def _pyramid_runtime_prior_default(status: str, reason: str) -> dict[str, Any]:
+    return {
+        "status": status,
+        "sample_count": 0,
+        "recovered_or_extended_rate": 0.0,
+        "reversal_or_flat_rate": 0.0,
+        "blocked_then_recovered_rate": 0.0,
+        "submitted_then_profit_rate": 0.0,
+        "signal": "neutral",
+        "reason": reason,
+    }
+
+
+def _pyramid_runtime_prior_report_date(now_ts: float) -> str:
+    try:
+        return datetime.fromtimestamp(float(now_ts), tz=_KST).strftime("%Y-%m-%d")
+    except (OSError, OverflowError, ValueError, TypeError):
+        return datetime.now(_KST).strftime("%Y-%m-%d")
+
+
+def _load_pyramid_runtime_prior_payload(path: Path) -> tuple[dict[str, Any] | None, str]:
+    try:
+        stat = path.stat()
+    except OSError:
+        return None, "missing"
+    key = (str(path), int(getattr(stat, "st_mtime_ns", int(stat.st_mtime * 1_000_000_000))), int(stat.st_size))
+    cached = _PYRAMID_RUNTIME_PRIOR_CACHE.get(key)
+    if cached is not None:
+        return cached, "loaded"
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None, "unreadable"
+    if not isinstance(payload, dict):
+        return None, "invalid_payload"
+    _PYRAMID_RUNTIME_PRIOR_CACHE.clear()
+    _PYRAMID_RUNTIME_PRIOR_CACHE[key] = payload
+    return payload, "loaded"
+
+
+def _pyramid_runtime_prior_is_stale(path: Path, payload: dict[str, Any], now_ts: float) -> bool:
+    try:
+        now_dt = datetime.fromtimestamp(float(now_ts), tz=_KST)
+    except (OSError, OverflowError, ValueError, TypeError):
+        now_dt = datetime.now(_KST)
+    generated_at = _parse_first_touch_prior_dt(payload.get("generated_at"))
+    if generated_at is not None:
+        if generated_at.tzinfo is None:
+            generated_at = generated_at.replace(tzinfo=now_dt.tzinfo)
+        return (now_dt - generated_at.astimezone(now_dt.tzinfo)).total_seconds() > _PYRAMID_RUNTIME_PRIOR_MAX_AGE_SEC
+    try:
+        mtime_dt = datetime.fromtimestamp(path.stat().st_mtime, tz=now_dt.tzinfo)
+    except OSError:
+        return True
+    return (now_dt - mtime_dt).total_seconds() > _PYRAMID_RUNTIME_PRIOR_MAX_AGE_SEC
+
+
+def _pyramid_prior_rows_stats(rows: list[dict[str, Any]], *, exact: bool = False) -> dict[str, Any]:
+    closed_labels = {
+        "pyramid_would_have_helped",
+        "pyramid_correctly_blocked",
+        "pyramid_overheat_or_reversal_risk",
+    }
+    closed_rows = [row for row in rows if str(row.get("pyramid_feedback_label") or "") in closed_labels]
+    sample_count = len(closed_rows)
+    recovered = sum(1 for row in closed_rows if row.get("pyramid_feedback_label") == "pyramid_would_have_helped")
+    reversal = sum(
+        1 for row in closed_rows if row.get("pyramid_feedback_label") == "pyramid_overheat_or_reversal_risk"
+    )
+    blocked_then_recovered = sum(
+        1
+        for row in closed_rows
+        if row.get("pyramid_feedback_label") == "pyramid_would_have_helped"
+        and str(row.get("scale_in_blocker_reason") or "")
+    )
+    submitted_profit = sum(
+        1
+        for row in closed_rows
+        if bool(row.get("actual_order_submitted")) and _safe_float(row.get("final_profit_rate"), 0.0) > 0
+    )
+    recovered_rate = recovered / sample_count if sample_count else 0.0
+    reversal_rate = reversal / sample_count if sample_count else 0.0
+    blocked_then_recovered_rate = blocked_then_recovered / sample_count if sample_count else 0.0
+    submitted_then_profit_rate = submitted_profit / sample_count if sample_count else 0.0
+    exact_label = str(rows[0].get("pyramid_feedback_label") or "") if exact and rows else ""
+    signal = "neutral"
+    reason = "prior_neutral"
+    if exact_label == "pyramid_overheat_or_reversal_risk":
+        signal = "risk"
+        reason = "exact_prior_reversal_or_loss_cluster"
+    elif exact_label == "pyramid_would_have_helped":
+        signal = "support"
+        reason = "exact_prior_recovered_or_extended"
+    elif sample_count >= 3 and reversal_rate >= 0.67:
+        signal = "risk"
+        reason = "aggregate_reversal_or_flat_rate_ge_0_67"
+    elif sample_count >= 3 and recovered_rate >= 0.67:
+        signal = "support"
+        reason = "aggregate_recovered_or_extended_rate_ge_0_67"
+    elif sample_count < 3:
+        reason = "insufficient_closed_pyramid_sample"
+    return {
+        "sample_count": sample_count if not exact or sample_count else len(rows),
+        "recovered_or_extended_rate": recovered_rate,
+        "reversal_or_flat_rate": reversal_rate,
+        "blocked_then_recovered_rate": blocked_then_recovered_rate,
+        "submitted_then_profit_rate": submitted_then_profit_rate,
+        "signal": signal,
+        "reason": reason,
+    }
+
+
+def _pyramid_runtime_prior_context(
+    stock: dict | None,
+    code: str,
+    now_ts: float,
+    *,
+    probe: dict | None = None,
+) -> dict:
+    report_date = _pyramid_runtime_prior_report_date(now_ts)
+    path = _PYRAMID_RUNTIME_PRIOR_REPORT_DIR / f"scalping_pyramid_intraday_feedback_{report_date}.json"
+    payload, load_status = _load_pyramid_runtime_prior_payload(path)
+    if payload is None:
+        return {"pyramid_runtime_prior_context": _pyramid_runtime_prior_default("missing", f"prior_report_{load_status}")}
+    if _pyramid_runtime_prior_is_stale(path, payload, now_ts):
+        return {"pyramid_runtime_prior_context": _pyramid_runtime_prior_default("stale", "prior_report_stale_gt_10m")}
+
+    rows = payload.get("pyramid_feedback_rows") or payload.get("rows")
+    rows = [row for row in rows if isinstance(row, dict)] if isinstance(rows, list) else []
+    if not rows:
+        return {"pyramid_runtime_prior_context": _pyramid_runtime_prior_default("missing", "prior_rows_missing")}
+
+    stock = stock if isinstance(stock, dict) else {}
+    record_id = str(stock.get("record_id") or stock.get("id") or "").strip()
+    exact_rows = [row for row in rows if record_id and str(row.get("record_id") or "").strip() == record_id]
+    if exact_rows:
+        return {"pyramid_runtime_prior_context": {"status": "matched", **_pyramid_prior_rows_stats(exact_rows[:1], exact=True)}}
+
+    source_signature = str(stock.get("source_signature") or "").strip()
+    position_tag = str(stock.get("position_tag") or stock.get("entry_position_tag") or "").strip()
+    stock_rows = [
+        row
+        for row in rows
+        if str(row.get("stock_code") or "").strip() == str(code or "").strip()
+        and (not source_signature or str(row.get("source_signature") or "").strip() == source_signature)
+        and (not position_tag or str(row.get("position_tag") or "").strip() == position_tag)
+    ]
+    if stock_rows:
+        stats = _pyramid_prior_rows_stats(stock_rows)
+        status = "aggregate" if int(stats.get("sample_count") or 0) >= 3 else "insufficient_sample"
+        return {"pyramid_runtime_prior_context": {"status": status, **stats}}
+
+    blocker = str((probe or {}).get("reason") or "").strip()
+    blocker_rows = [row for row in rows if blocker and str(row.get("scale_in_blocker_reason") or "").strip() == blocker]
+    if blocker_rows:
+        stats = _pyramid_prior_rows_stats(blocker_rows)
+        status = "aggregate" if int(stats.get("sample_count") or 0) >= 3 else "insufficient_sample"
+        return {"pyramid_runtime_prior_context": {"status": status, **stats}}
+
+    stats = _pyramid_prior_rows_stats(rows)
+    status = "aggregate" if int(stats.get("sample_count") or 0) >= 3 else "insufficient_sample"
+    return {"pyramid_runtime_prior_context": {"status": status, **stats}}
+
+
 def _evaluate_first_touch_avgdown_decision_gate(
     *,
     stock: dict | None,
@@ -2462,12 +2825,22 @@ def _evaluate_first_touch_avgdown_decision_gate(
     elif spread_bps > 0:
         support_signals.append("quote_spread_present")
 
-    has_recovery_support = bool(
+    base_has_recovery_support = bool(
         ai_score >= min_ai_support
         or prior_peak >= min_peak_support
         or "vpw_recovered" in support_signals
         or {"buy_pressure_support", "tick_accel_support", "micro_vwap_non_negative"}.issubset(set(support_signals))
     )
+    runtime_prior = {}
+    if isinstance(context_fields, dict) and isinstance(context_fields.get("runtime_prior_context"), dict):
+        runtime_prior = context_fields.get("runtime_prior_context") or {}
+    prior_signal = str(runtime_prior.get("signal") or "neutral")
+    if prior_signal == "risk":
+        risk_signals.append("runtime_prior_risk")
+    elif prior_signal == "support":
+        support_signals.append("runtime_prior_support")
+
+    has_recovery_support = base_has_recovery_support
     hard_block_reasons: list[str] = []
     if "ai_score_below_low_block" in risk_signals and not has_recovery_support:
         hard_block_reasons.append("low_ai_without_recovery")
@@ -2480,6 +2853,8 @@ def _evaluate_first_touch_avgdown_decision_gate(
         and not has_recovery_support
     ):
         hard_block_reasons.append("weak_strength_vpw_without_recovery")
+    if prior_signal == "risk" and not has_recovery_support:
+        hard_block_reasons.append("runtime_prior_adverse_without_recovery")
 
     if hard_block_reasons:
         allowed = False
@@ -2490,6 +2865,9 @@ def _evaluate_first_touch_avgdown_decision_gate(
     elif has_recovery_support:
         allowed = True
         reason = "recovery_support_confirmed"
+    elif prior_signal == "support":
+        allowed = True
+        reason = "runtime_prior_support_confirmed"
     else:
         allowed = False
         reason = "insufficient_first_touch_recovery_confirmation"
@@ -2514,9 +2892,38 @@ def _evaluate_first_touch_avgdown_decision_gate(
             "first_touch_avgdown_min_liquidity": int(min_liquidity) if min_liquidity else "-",
             "first_touch_avgdown_spread_bps": f"{spread_bps:.2f}" if spread_bps else "-",
             "first_touch_avgdown_max_repeated_blockers_without_support": max_repeated_blockers_without_support,
+            **_first_touch_runtime_prior_log_fields(runtime_prior),
         }
     )
     return {"allowed": allowed, "reason": reason, "fields": fields}
+
+
+def _rising_missed_first_touch_strength_context(
+    stock: dict | None,
+    ws_data: dict | None,
+) -> dict:
+    if not is_forced_rising_missed_one_share_entry(stock, {}):
+        return {}
+    momentum_ws_data = dict(ws_data or {})
+    momentum_ws_data["_position_tag"] = (
+        momentum_ws_data.get("_position_tag")
+        or momentum_ws_data.get("position_tag")
+        or (stock or {}).get("position_tag")
+        or "SCANNER"
+    )
+    gate = evaluate_scalping_strength_momentum(momentum_ws_data)
+    reason = str(gate.get("reason") or "-").strip() or "-"
+    allowed = bool(gate.get("allowed"))
+    return {
+        "strength_momentum_state": "allowed" if allowed else f"blocked_{reason}",
+        "strength_momentum_reason": reason,
+        "current_vpw": gate.get("current_vpw", 0.0),
+        "base_vpw": gate.get("base_vpw", 0.0),
+        "vpw_delta": gate.get("vpw_delta", 0.0),
+        "liquidity_value": gate.get("window_buy_value", 0),
+        "min_liquidity": getattr(TRADING_RULES, "SCALP_VPW_MIN_BUY_VALUE", 20_000),
+        "first_touch_avgdown_strength_source": "rising_missed_current_strength_momentum",
+    }
 
 
 _STOP_LINE_TOUCH_AVG_DOWN_DEFER_FIELDS = (
@@ -2878,10 +3285,15 @@ def _attempt_stop_line_touch_mandatory_avg_down(
                     "reason": defer_decision.get("reason", "soft_stop_price_improvement_waiting"),
                 }
 
+        first_touch_context_fields = {
+            **(context_fields or {}),
+            **_rising_missed_first_touch_strength_context(stock, ws_data or {}),
+            **_first_touch_runtime_prior_context(stock, code, now_ts),
+        }
         first_touch_decision = _evaluate_first_touch_avgdown_decision_gate(
             stock=stock,
             ws_data=ws_data or {},
-            context_fields=context_fields or {},
+            context_fields=first_touch_context_fields,
             current_ai_score=current_ai_score,
             peak_profit=peak_profit,
             profit_rate=profit_rate,
@@ -10188,6 +10600,20 @@ def _append_pyramid_probe_fields(fields: dict, probe: dict | None) -> dict:
         "max_micro_vwap_bps",
         "micro_vwap_available",
         "micro_vwap_not_overheated",
+        "pyramid_runtime_prior_status",
+        "pyramid_runtime_prior_sample_count",
+        "pyramid_runtime_prior_recovered_or_extended_rate",
+        "pyramid_runtime_prior_reversal_or_flat_rate",
+        "pyramid_runtime_prior_blocked_then_recovered_rate",
+        "pyramid_runtime_prior_submitted_then_profit_rate",
+        "pyramid_runtime_prior_signal",
+        "pyramid_runtime_prior_reason",
+        "pyramid_runtime_prior_support_signals",
+        "pyramid_runtime_prior_risk_signals",
+        "pyramid_runtime_prior_support_applied",
+        "pyramid_runtime_prior_risk_applied",
+        "pyramid_runtime_prior_relaxed_blocker",
+        "pyramid_runtime_prior_soft_blockers",
     ):
         if key in probe:
             merged[key] = probe.get(key)
@@ -26280,9 +26706,6 @@ def _maybe_submit_rising_missed_one_share_entry(
             **_rising_missed_same_day_reentry_log_fields(reentry_guard),
         )
         return True
-    momentum_ws_data = dict(ws_data or {})
-    momentum_ws_data["_position_tag"] = pos_tag
-    strength_momentum_gate = evaluate_scalping_strength_momentum(momentum_ws_data)
     decision = evaluate_rising_missed_one_share_entry(
         stock,
         strategy=strategy,
@@ -26297,7 +26720,6 @@ def _maybe_submit_rising_missed_one_share_entry(
         current_fluctuation_pct=_current_fluctuation_pct(stock, ws_data, runtime),
         upper_limit_exclude_enabled=_rising_missed_upper_limit_exclude_enabled(),
         upper_limit_exclude_pct=_rising_missed_upper_limit_exclude_pct(),
-        strength_momentum_gate=strength_momentum_gate,
     )
     if decision.allowed is False and decision.reason != RISING_MISSED_BLOCK_NOT_CANDIDATE:
         _log_entry_pipeline(
@@ -26308,11 +26730,7 @@ def _maybe_submit_rising_missed_one_share_entry(
             forced_entry_reason=RISING_MISSED_FORCED_ENTRY_REASON,
             actual_order_submitted=False,
             broker_order_forbidden=True,
-            runtime_effect=decision.reason
-            in {
-                RISING_MISSED_BLOCK_PRICE_ABOVE_CAP,
-                RISING_MISSED_BLOCK_STRENGTH_MOMENTUM_PRECHECK,
-            },
+            runtime_effect=decision.reason == RISING_MISSED_BLOCK_PRICE_ABOVE_CAP,
             **(decision.log_fields or {}),
         )
         return True
@@ -31613,6 +32031,20 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                         is_new_high,
                         current_ai_score=current_ai_score,
                     )
+                    _pyramid_prior = _pyramid_runtime_prior_context(
+                        stock,
+                        code,
+                        now_ts,
+                        probe=_pyramid_probe,
+                    ).get("pyramid_runtime_prior_context")
+                    _pyramid_probe = evaluate_scalping_pyramid(
+                        stock,
+                        profit_rate,
+                        peak_profit,
+                        is_new_high,
+                        current_ai_score=current_ai_score,
+                        runtime_prior_context=_pyramid_prior,
+                    )
                     _pyramid_reason = str(_pyramid_probe.get("reason") or "pyramid_not_selected")
                     if _pyramid_reason and _pyramid_reason != "scalping_pyramid_ok":
                         _log_scale_in_arm_blocked(
@@ -32376,6 +32808,20 @@ def _evaluate_scale_in_signal(
             peak_profit,
             is_new_high,
             current_ai_score=current_ai_score,
+        )
+        pyramid_prior = _pyramid_runtime_prior_context(
+            stock,
+            code,
+            time.time(),
+            probe=pyramid,
+        ).get("pyramid_runtime_prior_context")
+        pyramid = evaluate_scalping_pyramid(
+            stock,
+            profit_rate,
+            peak_profit,
+            is_new_high,
+            current_ai_score=current_ai_score,
+            runtime_prior_context=pyramid_prior,
         )
         if pyramid.get("should_add"):
             pyramid.update(

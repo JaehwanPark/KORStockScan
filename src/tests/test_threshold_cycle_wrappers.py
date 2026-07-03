@@ -162,7 +162,13 @@ def test_postclose_wrapper_runs_threshold_ev_before_and_after_workorder():
     script = Path("deploy/run_threshold_cycle_postclose.sh").read_text(encoding="utf-8")
 
     sim_post_sell_idx = script.index("src.engine.sniper_post_sell_feedback")
+    rising_missed_feedback_idx = script.index("src.engine.monitoring.rising_missed_intraday_feedback")
     rising_missed_scout_idx = script.index("src.engine.monitoring.rising_missed_scout_workorder")
+    rising_missed_first_touch_calibration_idx = script.index(
+        "src.engine.monitoring.rising_missed_first_touch_calibration"
+    )
+    scalping_pyramid_feedback_idx = script.index("src.engine.monitoring.scalping_pyramid_intraday_feedback")
+    scalping_pyramid_calibration_idx = script.index("src.engine.monitoring.scalping_pyramid_quality_calibration")
     one_share_threshold_idx = script.index("src.engine.monitoring.one_share_threshold_opportunity")
     entry_adm_idx = script.index("src.engine.scalp_entry_action_decision_matrix")
     microstructure_idx = script.index("src.engine.scalping.microstructure_reaction_context")
@@ -172,7 +178,15 @@ def test_postclose_wrapper_runs_threshold_ev_before_and_after_workorder():
     context_attribution_idx = script.index("src.engine.lifecycle_ai_context --date \"$TARGET_DATE\" --mode attribution")
     context_idx = script.index("src.engine.lifecycle_ai_context --date \"$TARGET_DATE\" --mode context")
     assert observation_preflight_idx < scale_in_cf_idx < lifecycle_matrix_idx
-    assert rising_missed_scout_idx < one_share_threshold_idx < entry_adm_idx
+    assert (
+        rising_missed_feedback_idx
+        < rising_missed_scout_idx
+        < rising_missed_first_touch_calibration_idx
+        < scalping_pyramid_feedback_idx
+        < scalping_pyramid_calibration_idx
+        < one_share_threshold_idx
+        < entry_adm_idx
+    )
     discovery_idx = script.index("src.engine.lifecycle_bucket_discovery")
     bridge_idx = script.index("src.engine.runtime_apply_bridge")
     verbosity_idx = script.index("src.engine.pipeline_event_verbosity_report")
@@ -203,7 +217,11 @@ def test_postclose_wrapper_runs_threshold_ev_before_and_after_workorder():
 
     assert (
         sim_post_sell_idx
+        < rising_missed_feedback_idx
         < rising_missed_scout_idx
+        < rising_missed_first_touch_calibration_idx
+        < scalping_pyramid_feedback_idx
+        < scalping_pyramid_calibration_idx
         < entry_adm_idx
         < microstructure_idx
         < observation_preflight_idx
@@ -240,7 +258,11 @@ def test_postclose_wrapper_runs_threshold_ev_before_and_after_workorder():
     assert 'RUN_TIME_WINDOW_REGIME_COUNTERFACTUAL="${THRESHOLD_CYCLE_RUN_TIME_WINDOW_REGIME_COUNTERFACTUAL:-true}"' in script
     assert 'RUN_AI_WATCHING_SCORE_SMOOTHING_DIAGNOSTIC="${THRESHOLD_CYCLE_RUN_AI_WATCHING_SCORE_SMOOTHING_DIAGNOSTIC:-true}"' in script
     assert 'RUN_PRODUCER_GAP_DISCOVERY="${THRESHOLD_CYCLE_RUN_PRODUCER_GAP_DISCOVERY:-true}"' in script
+    assert 'RUN_RISING_MISSED_INTRADAY_FEEDBACK_POSTCLOSE="${THRESHOLD_CYCLE_RUN_RISING_MISSED_INTRADAY_FEEDBACK_POSTCLOSE:-true}"' in script
     assert 'RUN_RISING_MISSED_SCOUT_WORKORDER="${THRESHOLD_CYCLE_RUN_RISING_MISSED_SCOUT_WORKORDER:-true}"' in script
+    assert 'RUN_RISING_MISSED_FIRST_TOUCH_CALIBRATION="${THRESHOLD_CYCLE_RUN_RISING_MISSED_FIRST_TOUCH_CALIBRATION:-true}"' in script
+    assert 'RUN_SCALPING_PYRAMID_INTRADAY_FEEDBACK_POSTCLOSE="${THRESHOLD_CYCLE_RUN_SCALPING_PYRAMID_INTRADAY_FEEDBACK_POSTCLOSE:-true}"' in script
+    assert 'RUN_SCALPING_PYRAMID_QUALITY_CALIBRATION="${THRESHOLD_CYCLE_RUN_SCALPING_PYRAMID_QUALITY_CALIBRATION:-true}"' in script
     assert 'RUN_RISING_MISSED_CLASSIFIER_PRIOR="${THRESHOLD_CYCLE_RUN_RISING_MISSED_CLASSIFIER_PRIOR:-true}"' in script
     assert 'RUN_STAGE_HOOK_WORKORDER_DISCOVERY="${THRESHOLD_CYCLE_RUN_STAGE_HOOK_WORKORDER_DISCOVERY:-true}"' in script
     assert 'RUN_STAGE_HOOK_RUNTIME_SCAFFOLD="${THRESHOLD_CYCLE_RUN_STAGE_HOOK_RUNTIME_SCAFFOLD:-true}"' in script
@@ -350,7 +372,11 @@ def test_postclose_wrapper_waits_for_prerequisite_artifacts_before_downstream_st
     assert '"$PROJECT_DIR/data/report/pattern_lab_propagation_audit/pattern_lab_propagation_audit_${TARGET_DATE}.json"' in script
     assert '"$PROJECT_DIR/data/report/ai_watching_score_smoothing_diagnostic/ai_watching_score_smoothing_diagnostic_${TARGET_DATE}.json"' in script
     assert '"$PROJECT_DIR/data/report/scalp_entry_action_decision_matrix/scalp_entry_action_decision_matrix_${TARGET_DATE}.json"' in script
+    assert '"$PROJECT_DIR/data/report/rising_missed_intraday_feedback/rising_missed_intraday_feedback_${TARGET_DATE}.json"' in script
     assert '"$PROJECT_DIR/data/report/rising_missed_scout_workorder/rising_missed_scout_workorder_${TARGET_DATE}.json"' in script
+    assert '"$PROJECT_DIR/data/report/rising_missed_first_touch_calibration/rising_missed_first_touch_calibration_${TARGET_DATE}.json"' in script
+    assert '"$PROJECT_DIR/data/report/scalping_pyramid_intraday_feedback/scalping_pyramid_intraday_feedback_${TARGET_DATE}.json"' in script
+    assert '"$PROJECT_DIR/data/report/scalping_pyramid_quality_calibration/scalping_pyramid_quality_calibration_${TARGET_DATE}.json"' in script
     assert '"$PROJECT_DIR/data/report/rising_missed_classifier_prior/rising_missed_classifier_prior_${TARGET_DATE}.json"' in script
     assert '"$PROJECT_DIR/data/report/one_share_threshold_opportunity/one_share_threshold_opportunity_${TARGET_DATE}.json"' in script
     assert '"$PROJECT_DIR/data/report/lifecycle_decision_matrix/lifecycle_decision_matrix_${TARGET_DATE}.json"' in script
@@ -377,7 +403,11 @@ def test_postclose_wrapper_waits_for_prerequisite_artifacts_before_downstream_st
     assert "--rolling-sim-scan" in script
     assert "pattern_lab_propagation_audit=$RUN_PATTERN_LAB_PROPAGATION_AUDIT" in script
     assert "scalp_entry_adm=$RUN_SCALP_ENTRY_ADM" in script
+    assert "rising_missed_intraday_feedback_postclose=$RUN_RISING_MISSED_INTRADAY_FEEDBACK_POSTCLOSE" in script
     assert "rising_missed_scout_workorder=$RUN_RISING_MISSED_SCOUT_WORKORDER" in script
+    assert "rising_missed_first_touch_calibration=$RUN_RISING_MISSED_FIRST_TOUCH_CALIBRATION" in script
+    assert "scalping_pyramid_intraday_feedback_postclose=$RUN_SCALPING_PYRAMID_INTRADAY_FEEDBACK_POSTCLOSE" in script
+    assert "scalping_pyramid_quality_calibration=$RUN_SCALPING_PYRAMID_QUALITY_CALIBRATION" in script
     assert "rising_missed_classifier_prior=$RUN_RISING_MISSED_CLASSIFIER_PRIOR" in script
     assert "one_share_threshold_opportunity=$RUN_ONE_SHARE_THRESHOLD_OPPORTUNITY" in script
     assert "one_share_threshold_opportunity_ai_provider=$ONE_SHARE_THRESHOLD_OPPORTUNITY_AI_PROVIDER" in script
@@ -396,6 +426,14 @@ def test_postclose_wrapper_waits_for_prerequisite_artifacts_before_downstream_st
     assert "swing_lifecycle_bucket_discovery_ai_provider=$SWING_LIFECYCLE_BUCKET_DISCOVERY_AI_PROVIDER" in script
     assert "ai correction retry target_date=$TARGET_DATE" in script
     assert "ai correction final unavailable" in script
+
+
+def test_stage2_ops_cron_installs_pyramid_intraday_feedback_5min():
+    script = Path("deploy/install_stage2_ops_cron.sh").read_text(encoding="utf-8")
+
+    assert "SCALPING_PYRAMID_INTRADAY_FEEDBACK_5MIN" in script
+    assert "deploy/run_scalping_pyramid_intraday_feedback.sh" in script
+    assert "!/SCALPING_PYRAMID_INTRADAY_FEEDBACK_5MIN/" in script
 
 
 def test_postclose_wrapper_marks_availability_guard_pause_as_fail():

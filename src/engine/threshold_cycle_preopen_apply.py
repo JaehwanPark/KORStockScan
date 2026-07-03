@@ -51,6 +51,12 @@ CALIBRATION_REPORT_DIR = REPORT_DIR / "threshold_cycle_calibration"
 SWING_RUNTIME_APPROVAL_REPORT_DIR = DATA_DIR / "report" / "swing_runtime_approval"
 SWING_RUNTIME_APPROVAL_ARTIFACT_DIR = DATA_DIR / "threshold_cycle" / "approvals"
 LATENCY_CLASSIFIER_RECOMMENDATION_DIR = DATA_DIR / "report" / "latency_classifier_recommendation"
+RISING_MISSED_FIRST_TOUCH_CALIBRATION_DIR = (
+    DATA_DIR / "report" / "rising_missed_first_touch_calibration"
+)
+SCALPING_PYRAMID_QUALITY_CALIBRATION_DIR = (
+    DATA_DIR / "report" / "scalping_pyramid_quality_calibration"
+)
 RUNTIME_GAP_PROVENANCE_DIR = DATA_DIR / "threshold_cycle" / "runtime_gap_provenance"
 ENTRY_CANCEL_WAIT_TUNING_DIR = DATA_DIR / "report" / "entry_cancel_wait_tuning"
 ENTRY_CANCEL_WAIT_FAMILY = "entry_cancel_wait_runtime"
@@ -142,6 +148,21 @@ TARGET_ENV_VALUE_KEYS = {
     "AI_SCORE65_74_RECOVERY_PROBE_CALIBRATION_STATE": "calibration_state",
     "AI_WAIT6579_PROBE_CANARY_MAX_BUDGET_KRW": "max_budget_krw",
     "AI_WAIT6579_PROBE_CANARY_MAX_QTY": "max_qty",
+    "SCALP_FIRST_TOUCH_AVGDOWN_MIN_AI_SUPPORT": "min_ai_support",
+    "SCALP_FIRST_TOUCH_AVGDOWN_MIN_AI_MODERATE": "min_ai_moderate",
+    "SCALP_FIRST_TOUCH_AVGDOWN_MIN_PRIOR_PEAK_PCT": "min_prior_peak_pct",
+    "SCALP_FIRST_TOUCH_AVGDOWN_MAX_REPEATED_BLOCKERS_WITHOUT_SUPPORT": "max_repeated_blockers_without_support",
+    "SCALP_FIRST_TOUCH_AVGDOWN_LOW_AI_BLOCK": "low_ai_block",
+    "SCALP_FIRST_TOUCH_AVGDOWN_MAX_SPREAD_BPS": "max_spread_bps",
+    "SCALPING_PYRAMID_MIN_PROFIT_PCT": "min_profit_pct",
+    "SCALPING_PYRAMID_MIN_AI_SCORE": "min_ai_score",
+    "SCALPING_PYRAMID_MIN_BUY_PRESSURE": "min_buy_pressure",
+    "SCALPING_PYRAMID_MIN_TICK_ACCEL": "min_tick_accel",
+    "SCALPING_PYRAMID_MAX_MICRO_VWAP_BPS": "max_micro_vwap_bps",
+    "SCALPING_PYRAMID_MAX_SPREAD_BPS": "max_spread_bps",
+    "SCALPING_PYRAMID_STRONG_CONTINUATION_ENABLED": "strong_continuation_enabled",
+    "SCALPING_PYRAMID_STRONG_CONTINUATION_MIN_PROFIT_PCT": "strong_continuation_min_profit_pct",
+    "SCALPING_PYRAMID_STRONG_CONTINUATION_MAX_DRAWDOWN_PCT": "strong_continuation_max_drawdown_pct",
     "SCALPING_ENABLE_PYRAMID": "scalping_enable_pyramid",
     "REVERSAL_ADD_MIN_AI_SCORE": "reversal_add_min_ai_score",
     "REVERSAL_ADD_MIN_BUY_PRESSURE": "reversal_add_min_buy_pressure",
@@ -659,6 +680,66 @@ def _load_latency_classifier_candidates(source_date: str | None) -> tuple[list[d
     }
 
 
+def _rising_missed_first_touch_calibration_path(source_date: str) -> Path:
+    return RISING_MISSED_FIRST_TOUCH_CALIBRATION_DIR / (
+        f"rising_missed_first_touch_calibration_{source_date}.json"
+    )
+
+
+def _load_rising_missed_first_touch_calibration_candidates(
+    source_date: str | None,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    if not source_date:
+        return [], {"status": "missing_source_date", "path": None}
+    path = _rising_missed_first_touch_calibration_path(source_date)
+    if not path.exists():
+        return [], {"status": "missing_report", "path": str(path)}
+    payload = _load_json(path)
+    candidates = payload.get("calibration_candidates")
+    if not isinstance(candidates, list):
+        candidate = payload.get("calibration_candidate")
+        candidates = [candidate] if isinstance(candidate, dict) else []
+    normalized = [item for item in candidates if isinstance(item, dict)]
+    selected_candidate = normalized[0] if normalized else {}
+    return normalized, {
+        "status": "loaded",
+        "path": str(path),
+        "allowed_runtime_apply": selected_candidate.get("allowed_runtime_apply"),
+        "calibration_state": selected_candidate.get("calibration_state"),
+        "sample_count": selected_candidate.get("sample_count"),
+    }
+
+
+def _scalping_pyramid_quality_calibration_path(source_date: str) -> Path:
+    return SCALPING_PYRAMID_QUALITY_CALIBRATION_DIR / (
+        f"scalping_pyramid_quality_calibration_{source_date}.json"
+    )
+
+
+def _load_scalping_pyramid_quality_calibration_candidates(
+    source_date: str | None,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    if not source_date:
+        return [], {"status": "missing_source_date", "path": None}
+    path = _scalping_pyramid_quality_calibration_path(source_date)
+    if not path.exists():
+        return [], {"status": "missing_report", "path": str(path)}
+    payload = _load_json(path)
+    candidates = payload.get("calibration_candidates")
+    if not isinstance(candidates, list):
+        candidate = payload.get("calibration_candidate")
+        candidates = [candidate] if isinstance(candidate, dict) else []
+    normalized = [item for item in candidates if isinstance(item, dict)]
+    selected_candidate = normalized[0] if normalized else {}
+    return normalized, {
+        "status": "loaded",
+        "path": str(path),
+        "allowed_runtime_apply": selected_candidate.get("allowed_runtime_apply"),
+        "calibration_state": selected_candidate.get("calibration_state"),
+        "sample_count": selected_candidate.get("sample_count"),
+    }
+
+
 def _runtime_env_name(target_env_key: str) -> str:
     if target_env_key.startswith("AI_SCORE65_74_RECOVERY_PROBE_"):
         return f"KORSTOCKSCAN_{target_env_key.removeprefix('AI_')}"
@@ -787,6 +868,8 @@ _FAMILY_ENV_KEY_PREFIXES: dict[str, str] = {
     "quote_consistency_normalization": "KORSTOCKSCAN_QUOTE_CONSISTENCY_",
     "soft_stop_whipsaw_confirmation": "KORSTOCKSCAN_SCALP_SOFT_STOP_WHIPSAW_CONFIRMATION_",
     "score65_74_recovery_probe": "KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_",
+    "rising_missed_first_touch_avgdown_decision_gate": "KORSTOCKSCAN_SCALP_FIRST_TOUCH_AVGDOWN_",
+    "scalping_pyramid_quality_gate": "KORSTOCKSCAN_SCALPING_PYRAMID_",
     SCORE65_74_STRONG_MICRO_OVERRIDE_FAMILY: "KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_STRONG_MICRO_",
     PRE_SUBMIT_LIQUIDITY_RELIEF_FAMILY: "KORSTOCKSCAN_PRE_SUBMIT_LIQUIDITY_RELIEF_",
     ENTRY_OPPORTUNITY_RECHECK_FAMILY: "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_",
@@ -3291,6 +3374,22 @@ def build_preopen_apply_manifest(
         latency_candidates, latency_recommendation = _load_latency_classifier_candidates(report_source_date)
         if latency_candidates:
             calibration_candidates = [*calibration_candidates, *latency_candidates]
+        rising_missed_first_touch_candidates, rising_missed_first_touch_calibration = (
+            _load_rising_missed_first_touch_calibration_candidates(report_source_date)
+        )
+        if rising_missed_first_touch_candidates:
+            calibration_candidates = [
+                *calibration_candidates,
+                *rising_missed_first_touch_candidates,
+            ]
+        scalping_pyramid_quality_candidates, scalping_pyramid_quality_calibration = (
+            _load_scalping_pyramid_quality_calibration_candidates(report_source_date)
+        )
+        if scalping_pyramid_quality_candidates:
+            calibration_candidates = [
+                *calibration_candidates,
+                *scalping_pyramid_quality_candidates,
+            ]
         calibration_candidates = _scrub_removed_contracts(calibration_candidates) or []
         candidates = _scrub_removed_contracts(candidates) or []
         approval_requests = []
@@ -3547,6 +3646,8 @@ def build_preopen_apply_manifest(
                 "provider_status": ai_review.get("provider_status") or {},
             },
             "latency_classifier_recommendation": latency_recommendation,
+            "rising_missed_first_touch_calibration": rising_missed_first_touch_calibration,
+            "scalping_pyramid_quality_calibration": scalping_pyramid_quality_calibration,
             "auto_apply_selected": selected,
             "auto_apply_decisions": decisions,
             "entry_cancel_wait_runtime": entry_cancel_wait_decision,

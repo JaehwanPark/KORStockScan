@@ -120,6 +120,172 @@ def test_protect_trailing_smoothing_candidate_emits_runtime_env_overrides():
         "KORSTOCKSCAN_SCALP_PROTECT_TRAILING_SMOOTH_MIN_SPAN_SEC": "12",
         "KORSTOCKSCAN_SCALP_PROTECT_TRAILING_SMOOTH_BUFFER_PCT": "0.8",
     }
+
+
+def test_rising_missed_first_touch_avgdown_candidate_emits_runtime_env_overrides():
+    env = mod._env_overrides_for_candidate(
+        {
+            "family": "rising_missed_first_touch_avgdown_decision_gate",
+            "calibration_state": "adjust_up",
+            "target_env_keys": [
+                "SCALP_FIRST_TOUCH_AVGDOWN_MIN_AI_SUPPORT",
+                "SCALP_FIRST_TOUCH_AVGDOWN_MIN_AI_MODERATE",
+                "SCALP_FIRST_TOUCH_AVGDOWN_MIN_PRIOR_PEAK_PCT",
+                "SCALP_FIRST_TOUCH_AVGDOWN_MAX_REPEATED_BLOCKERS_WITHOUT_SUPPORT",
+                "SCALP_FIRST_TOUCH_AVGDOWN_LOW_AI_BLOCK",
+                "SCALP_FIRST_TOUCH_AVGDOWN_MAX_SPREAD_BPS",
+            ],
+            "current_values": {
+                "min_ai_support": 70.0,
+                "min_ai_moderate": 60.0,
+                "min_prior_peak_pct": 0.3,
+                "max_repeated_blockers_without_support": 8,
+                "low_ai_block": 50.0,
+                "max_spread_bps": 80.0,
+            },
+            "recommended_values": {
+                "min_ai_support": 75.0,
+                "min_ai_moderate": 65.0,
+                "min_prior_peak_pct": 0.4,
+                "max_repeated_blockers_without_support": 7,
+                "low_ai_block": 55.0,
+                "max_spread_bps": 70.0,
+            },
+        }
+    )
+
+    assert env == {
+        "KORSTOCKSCAN_SCALP_FIRST_TOUCH_AVGDOWN_LOW_AI_BLOCK": "55",
+        "KORSTOCKSCAN_SCALP_FIRST_TOUCH_AVGDOWN_MAX_REPEATED_BLOCKERS_WITHOUT_SUPPORT": "7",
+        "KORSTOCKSCAN_SCALP_FIRST_TOUCH_AVGDOWN_MAX_SPREAD_BPS": "70",
+        "KORSTOCKSCAN_SCALP_FIRST_TOUCH_AVGDOWN_MIN_AI_MODERATE": "65",
+        "KORSTOCKSCAN_SCALP_FIRST_TOUCH_AVGDOWN_MIN_AI_SUPPORT": "75",
+        "KORSTOCKSCAN_SCALP_FIRST_TOUCH_AVGDOWN_MIN_PRIOR_PEAK_PCT": "0.4",
+    }
+
+
+def test_rising_missed_first_touch_avgdown_candidate_ai_guard_reject_blocks_env(monkeypatch, tmp_path):
+    monkeypatch.setattr(mod, "RUNTIME_ENV_DIR", tmp_path / "runtime_env")
+    candidate = {
+        "family": "rising_missed_first_touch_avgdown_decision_gate",
+        "stage": "scale_in",
+        "priority": 38,
+        "calibration_state": "adjust_up",
+        "allowed_runtime_apply": True,
+        "safety_revert_required": False,
+        "target_env_keys": ["SCALP_FIRST_TOUCH_AVGDOWN_MIN_AI_MODERATE"],
+        "current_values": {"min_ai_moderate": 60.0},
+        "recommended_values": {"min_ai_moderate": 65.0},
+    }
+
+    selected, decisions, env = mod._select_auto_apply_candidates(
+        [candidate],
+        ai_review={
+            "items_by_family": {
+                "rising_missed_first_touch_avgdown_decision_gate": {
+                    "guard_decision": "reject",
+                    "guard_reject_reason": "ai_guard_rejected_test",
+                }
+            }
+        },
+        require_ai=True,
+        target_date="2026-07-04",
+    )
+
+    assert selected == []
+    assert env == {}
+    assert decisions[0]["selected"] is False
+    assert decisions[0]["decision_reason"] == "ai_guard_rejected_test"
+
+
+def test_scalping_pyramid_quality_gate_candidate_emits_runtime_env_overrides():
+    env = mod._env_overrides_for_candidate(
+        {
+            "family": "scalping_pyramid_quality_gate",
+            "calibration_state": "adjust_down",
+            "target_env_keys": [
+                "SCALPING_PYRAMID_MIN_PROFIT_PCT",
+                "SCALPING_PYRAMID_MIN_AI_SCORE",
+                "SCALPING_PYRAMID_MIN_BUY_PRESSURE",
+                "SCALPING_PYRAMID_MIN_TICK_ACCEL",
+                "SCALPING_PYRAMID_MAX_MICRO_VWAP_BPS",
+                "SCALPING_PYRAMID_MAX_SPREAD_BPS",
+                "SCALPING_PYRAMID_STRONG_CONTINUATION_ENABLED",
+                "SCALPING_PYRAMID_STRONG_CONTINUATION_MIN_PROFIT_PCT",
+                "SCALPING_PYRAMID_STRONG_CONTINUATION_MAX_DRAWDOWN_PCT",
+            ],
+            "current_values": {
+                "min_profit_pct": 1.5,
+                "min_ai_score": 70.0,
+                "min_buy_pressure": 60.0,
+                "min_tick_accel": 0.5,
+                "max_micro_vwap_bps": 60.0,
+                "max_spread_bps": 80.0,
+                "strong_continuation_enabled": False,
+                "strong_continuation_min_profit_pct": 0.9,
+                "strong_continuation_max_drawdown_pct": 0.2,
+            },
+            "recommended_values": {
+                "min_profit_pct": 1.3,
+                "min_ai_score": 65.0,
+                "min_buy_pressure": 55.0,
+                "min_tick_accel": 0.4,
+                "max_micro_vwap_bps": 70.0,
+                "max_spread_bps": 90.0,
+                "strong_continuation_enabled": True,
+                "strong_continuation_min_profit_pct": 0.8,
+                "strong_continuation_max_drawdown_pct": 0.3,
+            },
+        }
+    )
+
+    assert env == {
+        "KORSTOCKSCAN_SCALPING_PYRAMID_MAX_MICRO_VWAP_BPS": "70",
+        "KORSTOCKSCAN_SCALPING_PYRAMID_MAX_SPREAD_BPS": "90",
+        "KORSTOCKSCAN_SCALPING_PYRAMID_MIN_AI_SCORE": "65",
+        "KORSTOCKSCAN_SCALPING_PYRAMID_MIN_BUY_PRESSURE": "55",
+        "KORSTOCKSCAN_SCALPING_PYRAMID_MIN_PROFIT_PCT": "1.3",
+        "KORSTOCKSCAN_SCALPING_PYRAMID_MIN_TICK_ACCEL": "0.4",
+        "KORSTOCKSCAN_SCALPING_PYRAMID_STRONG_CONTINUATION_ENABLED": "true",
+        "KORSTOCKSCAN_SCALPING_PYRAMID_STRONG_CONTINUATION_MAX_DRAWDOWN_PCT": "0.3",
+        "KORSTOCKSCAN_SCALPING_PYRAMID_STRONG_CONTINUATION_MIN_PROFIT_PCT": "0.8",
+    }
+
+
+def test_scalping_pyramid_quality_gate_candidate_ai_guard_reject_blocks_env(monkeypatch, tmp_path):
+    monkeypatch.setattr(mod, "RUNTIME_ENV_DIR", tmp_path / "runtime_env")
+    candidate = {
+        "family": "scalping_pyramid_quality_gate",
+        "stage": "scale_in",
+        "priority": 39,
+        "calibration_state": "adjust_down",
+        "allowed_runtime_apply": True,
+        "safety_revert_required": False,
+        "target_env_keys": ["SCALPING_PYRAMID_MIN_AI_SCORE"],
+        "current_values": {"min_ai_score": 70.0},
+        "recommended_values": {"min_ai_score": 65.0},
+    }
+
+    selected, decisions, env = mod._select_auto_apply_candidates(
+        [candidate],
+        ai_review={
+            "items_by_family": {
+                "scalping_pyramid_quality_gate": {
+                    "guard_decision": "reject",
+                    "guard_reject_reason": "ai_guard_rejected_test",
+                }
+            }
+        },
+        require_ai=True,
+        target_date="2026-07-04",
+    )
+
+    assert selected == []
+    assert env == {}
+    assert decisions[0]["selected"] is False
+    assert decisions[0]["decision_reason"] == "ai_guard_rejected_test"
+
+
 from src.engine import lifecycle_bucket_discovery as discovery_mod
 from src.engine.scalping import scalp_sim_auto_approval_control_tower as scalp_sim_auto_mod
 from src.engine.swing import sim_auto_approval_control_tower as swing_sim_mod

@@ -304,7 +304,131 @@ def _scalping_pyramid_strong_continuation_context(
     }
 
 
-def evaluate_scalping_pyramid(stock, profit_rate, peak_profit, is_new_high, current_ai_score=None):
+def _pyramid_runtime_prior_default_fields(runtime_prior_context):
+    prior = runtime_prior_context if isinstance(runtime_prior_context, dict) else {}
+    return {
+        "pyramid_runtime_prior_status": str(prior.get("status") or "missing"),
+        "pyramid_runtime_prior_sample_count": int(_safe_float(prior.get("sample_count"), 0)),
+        "pyramid_runtime_prior_recovered_or_extended_rate": round(
+            _safe_float(prior.get("recovered_or_extended_rate"), 0.0),
+            4,
+        ),
+        "pyramid_runtime_prior_reversal_or_flat_rate": round(
+            _safe_float(prior.get("reversal_or_flat_rate"), 0.0),
+            4,
+        ),
+        "pyramid_runtime_prior_blocked_then_recovered_rate": round(
+            _safe_float(prior.get("blocked_then_recovered_rate"), 0.0),
+            4,
+        ),
+        "pyramid_runtime_prior_submitted_then_profit_rate": round(
+            _safe_float(prior.get("submitted_then_profit_rate"), 0.0),
+            4,
+        ),
+        "pyramid_runtime_prior_signal": str(prior.get("signal") or "neutral"),
+        "pyramid_runtime_prior_reason": str(prior.get("reason") or "-"),
+    }
+
+
+def _pyramid_borderline_soft_blockers(result, profit_rate):
+    if not isinstance(result, dict):
+        return []
+    reason = str(result.get("reason") or "")
+    failures = []
+    if reason.startswith("pyramid_quality_blocked:"):
+        failures = [part.strip() for part in reason.split(":", 1)[1].split(",") if part.strip()]
+    elif reason:
+        failures = [reason]
+
+    soft_blockers = []
+    min_profit = _safe_float(result.get("min_profit_pct"), 0.0)
+    if "profit_not_enough" in failures and profit_rate >= min_profit - 0.3:
+        soft_blockers.append("profit_below_min_borderline")
+    ai_score = _safe_float(result.get("current_ai_score"), 0.0)
+    min_ai = _safe_float(result.get("min_ai_score"), 70.0)
+    if "ai_score_below_min" in failures and ai_score >= min_ai - 5.0:
+        soft_blockers.append("ai_score_below_min_borderline")
+    tick_accel = _safe_float(result.get("tick_acceleration_ratio"), 0.0)
+    min_tick = _safe_float(result.get("min_tick_accel"), 0.5)
+    if "tick_accel_below_min" in failures and tick_accel >= min_tick - 0.2:
+        soft_blockers.append("tick_accel_below_min_borderline")
+    micro_value = result.get("curr_vs_micro_vwap_bp")
+    micro_vwap = None if micro_value == "-" else _safe_float(micro_value, None)
+    max_micro = _safe_float(result.get("max_micro_vwap_bps"), 60.0)
+    if "micro_vwap_overheated" in failures and micro_vwap is not None and micro_vwap <= max_micro + 20.0:
+        soft_blockers.append("micro_vwap_overheated_borderline")
+    buy_pressure = _safe_float(result.get("buy_pressure_10t"), 0.0)
+    min_buy_pressure = _safe_float(result.get("min_buy_pressure"), 60.0)
+    if (
+        "buy_pressure_below_min" in failures
+        and result.get("buy_pressure_support_ok") is False
+        and buy_pressure >= min_buy_pressure - 5.0
+        and "buy_pressure_below_min_borderline" not in soft_blockers
+    ):
+        soft_blockers.append("buy_pressure_below_min_borderline")
+    return soft_blockers
+
+
+def _pyramid_support_is_weak(result):
+    ai_score = _safe_float(result.get("current_ai_score"), 0.0)
+    min_ai = _safe_float(result.get("min_ai_score"), 70.0)
+    buy_pressure = _safe_float(result.get("buy_pressure_10t"), 0.0)
+    min_buy_pressure = _safe_float(result.get("min_buy_pressure"), 60.0)
+    tick_accel = _safe_float(result.get("tick_acceleration_ratio"), 0.0)
+    min_tick = _safe_float(result.get("min_tick_accel"), 0.5)
+    return ai_score < min_ai + 5.0 or buy_pressure < min_buy_pressure + 5.0 or tick_accel < min_tick + 0.2
+
+
+def _apply_pyramid_runtime_prior_context(result, runtime_prior_context, profit_rate):
+    if not isinstance(result, dict):
+        return result
+    prior_fields = _pyramid_runtime_prior_default_fields(runtime_prior_context)
+    result.update(prior_fields)
+    signal = prior_fields["pyramid_runtime_prior_signal"]
+    status = prior_fields["pyramid_runtime_prior_status"]
+    if status in {"missing", "stale"} or signal == "neutral":
+        return result
+
+    soft_blockers = _pyramid_borderline_soft_blockers(result, profit_rate)
+    support_signals = []
+    risk_signals = []
+    if signal == "support":
+        support_signals.append("runtime_prior_support")
+    elif signal == "risk":
+        risk_signals.append("runtime_prior_risk")
+    if soft_blockers:
+        result["pyramid_runtime_prior_soft_blockers"] = ",".join(soft_blockers)
+
+    if signal == "support" and not result.get("should_add") and len(soft_blockers) == 1:
+        result["should_add"] = True
+        result["add_type"] = "PYRAMID"
+        result["reason"] = "scalping_pyramid_ok"
+        result["pyramid_runtime_prior_support_applied"] = True
+        result["pyramid_runtime_prior_relaxed_blocker"] = soft_blockers[0]
+    elif signal == "risk":
+        if result.get("should_add") and _pyramid_support_is_weak(result):
+            result["should_add"] = False
+            result["add_type"] = None
+            result["reason"] = "runtime_prior_risk"
+            result["pyramid_runtime_prior_risk_applied"] = True
+        elif not result.get("should_add") and len(soft_blockers) >= 2:
+            result["pyramid_runtime_prior_risk_applied"] = True
+
+    if support_signals:
+        result["pyramid_runtime_prior_support_signals"] = ",".join(support_signals)
+    if risk_signals:
+        result["pyramid_runtime_prior_risk_signals"] = ",".join(risk_signals)
+    return result
+
+
+def evaluate_scalping_pyramid(
+    stock,
+    profit_rate,
+    peak_profit,
+    is_new_high,
+    current_ai_score=None,
+    runtime_prior_context=None,
+):
     """
     스캘핑 불타기(PYRAMID) 평가: 1차는 profit/peak 기반 단순 조건.
     TODO: VWAP/RSI/ATR 기반 필터 추가
@@ -345,7 +469,7 @@ def evaluate_scalping_pyramid(stock, profit_rate, peak_profit, is_new_high, curr
                     "is_new_high": bool(is_new_high),
                 }
             )
-            return result
+            return _apply_pyramid_runtime_prior_context(result, runtime_prior_context, profit_rate)
 
     if profit_rate < effective_min_profit:
         result.update(continuation_context)
@@ -354,7 +478,7 @@ def evaluate_scalping_pyramid(stock, profit_rate, peak_profit, is_new_high, curr
         result["min_profit_pct"] = round(effective_min_profit, 4)
         result["drawdown_from_peak"] = round(drawdown_from_peak, 4)
         result["is_new_high"] = bool(is_new_high)
-        return result
+        return _apply_pyramid_runtime_prior_context(result, runtime_prior_context, profit_rate)
 
     if not (is_new_high or drawdown_from_peak <= 0.3):
         result.update(continuation_context)
@@ -363,7 +487,7 @@ def evaluate_scalping_pyramid(stock, profit_rate, peak_profit, is_new_high, curr
         result["min_profit_pct"] = round(effective_min_profit, 4)
         result["drawdown_from_peak"] = round(drawdown_from_peak, 4)
         result["is_new_high"] = bool(is_new_high)
-        return result
+        return _apply_pyramid_runtime_prior_context(result, runtime_prior_context, profit_rate)
 
     quality_failures = []
     if not continuation_context.get("ai_score_ok"):
@@ -387,7 +511,7 @@ def evaluate_scalping_pyramid(stock, profit_rate, peak_profit, is_new_high, curr
         result["min_profit_pct"] = round(effective_min_profit, 4)
         result["drawdown_from_peak"] = round(drawdown_from_peak, 4)
         result["is_new_high"] = bool(is_new_high)
-        return result
+        return _apply_pyramid_runtime_prior_context(result, runtime_prior_context, profit_rate)
 
     result.update(continuation_context)
     result["should_add"] = True
@@ -397,7 +521,7 @@ def evaluate_scalping_pyramid(stock, profit_rate, peak_profit, is_new_high, curr
     result["min_profit_pct"] = round(effective_min_profit, 4)
     result["drawdown_from_peak"] = round(drawdown_from_peak, 4)
     result["is_new_high"] = bool(is_new_high)
-    return result
+    return _apply_pyramid_runtime_prior_context(result, runtime_prior_context, profit_rate)
 
 
 def evaluate_swing_pyramid(stock, profit_rate, peak_profit):
