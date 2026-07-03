@@ -1170,6 +1170,35 @@ def test_realtime_rank_change_sign_authority_reaches_scanner_payload(monkeypatch
     assert payload["rank_change_sign_authority"] == "raw_unverified_not_decision_input"
 
 
+def test_ka00198_realtime_rank_change_preserves_negative_sign(monkeypatch):
+    def fake_fetch(**kwargs):
+        assert kwargs["api_id"] == "ka00198"
+        return [
+            {
+                "item_inq_rank": [
+                    {
+                        "stk_cd": "006340",
+                        "stk_nm": "대원전선",
+                        "past_curr_prc": "+3500",
+                        "base_comp_chgr": "+8.84",
+                        "prev_base_chgr": "0.00",
+                        "bigd_rank": "5",
+                        "rank_chg": "-2",
+                        "rank_chg_sign": "-",
+                    }
+                ]
+            }
+        ]
+
+    monkeypatch.setattr(kiwoom_utils, "fetch_kiwoom_api_continuous", fake_fetch)
+
+    rows = kiwoom_utils.get_realtime_item_rank_ka00198("TOKEN", qry_tp="5", limit=10)
+
+    assert rows[0]["RankChange"] == -2
+    assert rows[0]["RankChangeSign"] == "-"
+    assert rows[0]["RankChangeSignAuthority"] == "raw_unverified_not_decision_input"
+
+
 def test_ka10019_price_jump_start_preserves_jump_metrics(monkeypatch):
     def fake_fetch(**kwargs):
         assert kwargs["api_id"] == "ka10019"

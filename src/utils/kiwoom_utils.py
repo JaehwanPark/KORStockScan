@@ -1838,7 +1838,7 @@ def get_realtime_item_rank_ka00198(token, qry_tp="5", limit=60):
             'RealtimeRankFluRate': base_change,
             'RealtimePrevBaseChange': prev_change,
             'RankNow': _scanner_to_int(item.get('bigd_rank', item.get('rank'))),
-            'RankChange': _scanner_to_int(item.get('rank_chg')),
+            'RankChange': _scanner_to_signed_int(item.get('rank_chg')),
             'RankChangeSign': str(item.get('rank_chg_sign') or '').strip(),
             'RankChangeSignAuthority': 'raw_unverified_not_decision_input',
             'RealtimeRankWindow': str(qry_tp),
