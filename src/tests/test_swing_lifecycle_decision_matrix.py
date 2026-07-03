@@ -2,6 +2,8 @@ import json
 
 from src.engine import swing_lifecycle_decision_matrix as mod
 
+TEST_DB_URL = mod.POSTGRES_URL
+
 
 def test_probe_and_discovery_rows_build_swing_ldm_contract(tmp_path, monkeypatch):
     target = "2026-05-22"
@@ -72,7 +74,7 @@ def test_probe_and_discovery_rows_build_swing_ldm_contract(tmp_path, monkeypatch
         lambda target_date, db_url, lookback_days: ([mod._discovery_row(discovery_source)], {"READY": 1}),
     )
 
-    report = mod.build_swing_lifecycle_decision_matrix(target, db_url="sqlite://", lookback_days=5)
+    report = mod.build_swing_lifecycle_decision_matrix(target, db_url=TEST_DB_URL, lookback_days=5)
 
     assert report["runtime_effect"] is False
     assert report["actual_order_submitted"] is False
@@ -152,7 +154,7 @@ def test_swing_sim_events_are_consumed_as_source_only_probe_rows(tmp_path, monke
             )
     monkeypatch.setattr(mod, "_load_discovery_lifecycle_rows", lambda target_date, db_url, lookback_days: ([], {}))
 
-    report = mod.build_swing_lifecycle_decision_matrix(target, db_url="sqlite://")
+    report = mod.build_swing_lifecycle_decision_matrix(target, db_url=TEST_DB_URL)
 
     assert report["summary"]["raw_swing_event_count"] == 4
     assert report["summary"]["ldm_consumed_event_count"] == 4
@@ -452,7 +454,7 @@ def test_pipeline_event_probe_fields_are_consumed(tmp_path, monkeypatch):
         )
     monkeypatch.setattr(mod, "_load_discovery_lifecycle_rows", lambda target_date, db_url, lookback_days: ([], {}))
 
-    report = mod.build_swing_lifecycle_decision_matrix(target, db_url="sqlite://")
+    report = mod.build_swing_lifecycle_decision_matrix(target, db_url=TEST_DB_URL)
 
     assert report["summary"]["probe_rows"] == 1
     assert report["summary"]["source_book_counts"]["swing_intraday_live_equiv_probe"] == 1
@@ -586,7 +588,7 @@ def test_swing_ldm_stage_only_candidates_remain_child_evidence(tmp_path, monkeyp
             )
     monkeypatch.setattr(mod, "_load_discovery_lifecycle_rows", lambda target_date, db_url, lookback_days: ([], {}))
 
-    report = mod.build_swing_lifecycle_decision_matrix(target, db_url="sqlite://")
+    report = mod.build_swing_lifecycle_decision_matrix(target, db_url=TEST_DB_URL)
     candidates = report["holding_exit_bucket_attribution"]["sim_auto_approval_candidates"]
 
     assert candidates == []
@@ -617,7 +619,7 @@ def test_swing_ldm_workorders_remain_source_only(tmp_path, monkeypatch):
             )
     monkeypatch.setattr(mod, "_load_discovery_lifecycle_rows", lambda target_date, db_url, lookback_days: ([], {}))
 
-    report = mod.build_swing_lifecycle_decision_matrix(target, db_url="sqlite://")
+    report = mod.build_swing_lifecycle_decision_matrix(target, db_url=TEST_DB_URL)
     workorders = report["holding_exit_bucket_attribution"]["code_improvement_workorders"]
 
     assert workorders
@@ -637,7 +639,7 @@ def test_swing_ldm_reports_clean_baseline_discovery_filter(tmp_path, monkeypatch
     (event_dir / f"pipeline_events_{target}.jsonl").write_text("", encoding="utf-8")
     monkeypatch.setattr(mod, "_load_discovery_lifecycle_rows", lambda target_date, db_url, lookback_days: ([], {}))
 
-    report = mod.build_swing_lifecycle_decision_matrix(target, db_url="sqlite://", lookback_days=90)
+    report = mod.build_swing_lifecycle_decision_matrix(target, db_url=TEST_DB_URL, lookback_days=90)
 
     assert report["clean_tuning_baseline"]["filter_active"] is True
     assert report["summary"]["clean_baseline_requested_start_date"] == "2026-03-06"

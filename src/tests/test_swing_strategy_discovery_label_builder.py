@@ -1,6 +1,8 @@
 import json
+import os
 from datetime import date, timedelta
 
+import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
@@ -13,6 +15,28 @@ from src.database.models import (
 )
 from src.engine import swing_strategy_discovery_label_builder as mod
 from src.engine.swing_strategy_discovery_schema import ensure_swing_strategy_discovery_schema
+
+
+def _external_test_db_url() -> str:
+    db_url = os.getenv("KORSTOCKSCAN_TEST_DATABASE_URL", "").strip()
+    if not db_url:
+        pytest.skip("set KORSTOCKSCAN_TEST_DATABASE_URL to run DB-backed discovery label tests")
+    if "test" not in db_url.lower():
+        pytest.skip("KORSTOCKSCAN_TEST_DATABASE_URL must point to an isolated test database")
+    return db_url
+
+
+def _setup_test_db():
+    db_url = _external_test_db_url()
+    ensure_swing_strategy_discovery_schema(db_url)
+    engine = create_engine(db_url)
+    Base.metadata.create_all(bind=engine, tables=[DailyStockQuote.__table__])
+    with engine.begin() as conn:
+        conn.execute(SwingStrategyDiscoveryLabel.__table__.delete())
+        conn.execute(SwingStrategyDiscoveryArm.__table__.delete())
+        conn.execute(SwingStrategyDiscoveryCandidate.__table__.delete())
+        conn.execute(DailyStockQuote.__table__.delete())
+    return db_url, engine, sessionmaker(bind=engine)
 
 
 def _seed_arm(session, *, entry_policy="next_open_entry", exit_policy="fixed_5d"):
@@ -77,11 +101,7 @@ def _seed_quotes(session, *, days=12):
 
 
 def test_label_builder_generates_horizon_and_policy_exit_labels(tmp_path):
-    db_url = f"sqlite:///{tmp_path / 'labels.db'}"
-    ensure_swing_strategy_discovery_schema(db_url)
-    engine = create_engine(db_url)
-    Base.metadata.create_all(bind=engine, tables=[DailyStockQuote.__table__])
-    Session = sessionmaker(bind=engine)
+    db_url, _engine, Session = _setup_test_db()
     with Session.begin() as session:
         _seed_arm(session)
         _seed_quotes(session)
@@ -111,11 +131,7 @@ def test_label_builder_generates_horizon_and_policy_exit_labels(tmp_path):
 
 
 def test_pullback_entry_expires_when_limit_not_touched(tmp_path):
-    db_url = f"sqlite:///{tmp_path / 'labels_expire.db'}"
-    ensure_swing_strategy_discovery_schema(db_url)
-    engine = create_engine(db_url)
-    Base.metadata.create_all(bind=engine, tables=[DailyStockQuote.__table__])
-    Session = sessionmaker(bind=engine)
+    db_url, _engine, Session = _setup_test_db()
     with Session.begin() as session:
         _seed_arm(session, entry_policy="pullback_limit_entry", exit_policy="fixed_5d")
         for idx in range(5):
@@ -144,11 +160,7 @@ def test_pullback_entry_expires_when_limit_not_touched(tmp_path):
 
 
 def test_entry_day_stop_touch_recovered_bucket_is_recorded(tmp_path):
-    db_url = f"sqlite:///{tmp_path / 'labels_recovered.db'}"
-    ensure_swing_strategy_discovery_schema(db_url)
-    engine = create_engine(db_url)
-    Base.metadata.create_all(bind=engine, tables=[DailyStockQuote.__table__])
-    Session = sessionmaker(bind=engine)
+    db_url, _engine, Session = _setup_test_db()
     with Session.begin() as session:
         _seed_arm(session, entry_policy="next_open_entry", exit_policy="fixed_5d")
         quotes = [
@@ -192,11 +204,7 @@ def test_entry_day_stop_touch_recovered_bucket_is_recorded(tmp_path):
 
 
 def test_entry_day_stop_touch_close_below_stop_bucket_is_recorded(tmp_path):
-    db_url = f"sqlite:///{tmp_path / 'labels_close_below.db'}"
-    ensure_swing_strategy_discovery_schema(db_url)
-    engine = create_engine(db_url)
-    Base.metadata.create_all(bind=engine, tables=[DailyStockQuote.__table__])
-    Session = sessionmaker(bind=engine)
+    db_url, _engine, Session = _setup_test_db()
     with Session.begin() as session:
         _seed_arm(session, entry_policy="next_open_entry", exit_policy="fixed_5d")
         quotes = [
@@ -231,11 +239,7 @@ def test_entry_day_stop_touch_close_below_stop_bucket_is_recorded(tmp_path):
 
 
 def test_entry_day_momentum_chase_opportunity_bucket_is_source_only(tmp_path):
-    db_url = f"sqlite:///{tmp_path / 'labels_momentum_chase.db'}"
-    ensure_swing_strategy_discovery_schema(db_url)
-    engine = create_engine(db_url)
-    Base.metadata.create_all(bind=engine, tables=[DailyStockQuote.__table__])
-    Session = sessionmaker(bind=engine)
+    db_url, _engine, Session = _setup_test_db()
     with Session.begin() as session:
         _seed_arm(session, entry_policy="next_open_entry", exit_policy="fixed_5d")
         quotes = [

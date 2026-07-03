@@ -99,7 +99,7 @@ def test_runtime_forbidden_contract_is_preserved(monkeypatch, tmp_path):
     monkeypatch.setattr(mod, "_load_daily_quotes", lambda db_url, target: (df, "2026-05-21"))
     monkeypatch.setattr(mod, "ARTIFACT_DIR", tmp_path)
 
-    report = mod.build_report("2026-05-21", db_url="sqlite://", write=True)
+    report = mod.build_report("2026-05-21", db_url=mod.POSTGRES_URL, write=True)
 
     assert report["runtime_effect"] is False
     assert report["broker_order_forbidden"] is True

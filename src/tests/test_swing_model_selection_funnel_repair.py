@@ -5,7 +5,6 @@ from datetime import datetime, time
 from pathlib import Path
 
 import pandas as pd
-from sqlalchemy import create_engine, text
 
 import src.engine.sniper_state_handlers as state_handlers
 import src.engine.swing_lifecycle_audit as lifecycle_audit_mod
@@ -2586,47 +2585,47 @@ def test_swing_lifecycle_audit_reports_actionable_db_gap_when_real_watching_enab
     assert "db_load_skip_reason=csv_rows_positive_db_rows_zero" in orders["order_swing_recommendation_db_load_gap"]["evidence"]
 
 
-def test_swing_lifecycle_db_load_accepts_missing_optional_sell_qty(tmp_path):
-    db_path = tmp_path / "recommendation_history.sqlite"
-    db_url = f"sqlite:///{db_path}"
-    engine = create_engine(db_url)
-    with engine.begin() as conn:
-        conn.execute(text("""
-            CREATE TABLE recommendation_history (
-                rec_date TEXT,
-                stock_code TEXT,
-                stock_name TEXT,
-                strategy TEXT,
-                trade_type TEXT,
-                position_tag TEXT,
-                status TEXT,
-                prob REAL,
-                buy_price REAL,
-                buy_qty INTEGER,
-                buy_time TEXT,
-                sell_price REAL,
-                sell_time TEXT,
-                profit_rate REAL,
-                profit REAL,
-                updated_at TEXT
-            )
-        """))
-        conn.execute(
-            text("""
-                INSERT INTO recommendation_history (
-                    rec_date, stock_code, stock_name, strategy, trade_type, position_tag,
-                    status, prob, buy_price, buy_qty, buy_time, sell_price, sell_time,
-                    profit_rate, profit, updated_at
-                )
-                VALUES (
-                    '2026-05-11', '000001', 'A', 'KOSPI_ML', 'BUY', 'META_V2',
-                    'COMPLETED', 0.41, 10000, 1, '2026-05-11 09:00:00',
-                    10100, '2026-05-11 10:00:00', 1.0, 100, '2026-05-11 10:00:00'
-                )
-            """)
+def test_swing_lifecycle_db_load_accepts_missing_optional_sell_qty(monkeypatch):
+    class _FakeConnection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    class _FakeEngine:
+        def connect(self):
+            return _FakeConnection()
+
+    def fake_read_sql(query, conn, params=None):
+        assert params == {"target_date": "2026-05-11"}
+        return pd.DataFrame(
+            [
+                {
+                    "rec_date": "2026-05-11",
+                    "stock_code": "000001",
+                    "stock_name": "A",
+                    "strategy": "KOSPI_ML",
+                    "trade_type": "BUY",
+                    "position_tag": "META_V2",
+                    "status": "COMPLETED",
+                    "prob": 0.41,
+                    "buy_price": 10000,
+                    "buy_qty": 1,
+                    "buy_time": "2026-05-11 09:00:00",
+                    "sell_price": 10100,
+                    "sell_time": "2026-05-11 10:00:00",
+                    "profit_rate": 1.0,
+                    "profit": 100,
+                    "updated_at": "2026-05-11 10:00:00",
+                }
+            ]
         )
 
-    rows = load_db_lifecycle_rows("2026-05-11", db_url=db_url)
+    monkeypatch.setattr(lifecycle_audit_mod, "create_engine", lambda db_url: _FakeEngine())
+    monkeypatch.setattr(lifecycle_audit_mod.pd, "read_sql", fake_read_sql)
+
+    rows = load_db_lifecycle_rows("2026-05-11", db_url="postgresql://unit-test")
     summary = summarize_db_lifecycle_rows(rows)
 
     assert len(rows) == 1

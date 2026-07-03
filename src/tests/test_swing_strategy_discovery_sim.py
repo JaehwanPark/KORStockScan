@@ -1,12 +1,34 @@
 import json
+import os
 
 import pandas as pd
+import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from src.database.models import SwingStrategyDiscoveryArm, SwingStrategyDiscoveryCandidate
+from src.database.models import SwingStrategyDiscoveryArm, SwingStrategyDiscoveryCandidate, SwingStrategyDiscoveryLabel
 from src.engine import swing_strategy_discovery_sim as mod
 from src.engine.swing_strategy_discovery_schema import ensure_swing_strategy_discovery_schema
+
+
+def _external_test_db_url() -> str:
+    db_url = os.getenv("KORSTOCKSCAN_TEST_DATABASE_URL", "").strip()
+    if not db_url:
+        pytest.skip("set KORSTOCKSCAN_TEST_DATABASE_URL to run DB-backed discovery sim tests")
+    if "test" not in db_url.lower():
+        pytest.skip("KORSTOCKSCAN_TEST_DATABASE_URL must point to an isolated test database")
+    return db_url
+
+
+def _setup_test_db():
+    db_url = _external_test_db_url()
+    ensure_swing_strategy_discovery_schema(db_url)
+    engine = create_engine(db_url)
+    with engine.begin() as conn:
+        conn.execute(SwingStrategyDiscoveryLabel.__table__.delete())
+        conn.execute(SwingStrategyDiscoveryArm.__table__.delete())
+        conn.execute(SwingStrategyDiscoveryCandidate.__table__.delete())
+    return db_url, engine, sessionmaker(bind=engine)
 
 
 def _source_rows(count=10):
@@ -230,11 +252,8 @@ def test_active_bucket_priority_raises_default_cap_without_arm_duplication(tmp_p
 
 
 def test_schema_report_and_persistence_are_idempotent(tmp_path, monkeypatch):
-    db_url = f"sqlite:///{tmp_path / 'swing_strategy_discovery.db'}"
+    db_url, _engine, Session = _setup_test_db()
     output_dir = tmp_path / "report"
-
-    ensure_swing_strategy_discovery_schema(db_url)
-    ensure_swing_strategy_discovery_schema(db_url)
 
     monkeypatch.setattr(mod, "load_safe_pool_rows", lambda target_date: _source_rows(6))
     monkeypatch.setattr(
@@ -284,8 +303,6 @@ def test_schema_report_and_persistence_are_idempotent(tmp_path, monkeypatch):
     assert "broker_order_submit" in report["forbidden_uses"]
     assert paths["md"].exists()
 
-    engine = create_engine(db_url)
-    Session = sessionmaker(bind=engine)
     with Session() as session:
         assert session.query(SwingStrategyDiscoveryCandidate).count() == 6
         assert session.query(SwingStrategyDiscoveryArm).count() == 6 * len(mod.ARM_SET)
@@ -329,7 +346,7 @@ def test_fetch_quote_features_passes_sql_lookback_limit(monkeypatch):
     monkeypatch.setattr(mod, "create_engine", lambda db_url: object())
     monkeypatch.setattr(mod.pd, "read_sql", fake_read_sql)
 
-    result = mod.fetch_quote_features(["005930"], db_url="sqlite://", lookback=7)
+    result = mod.fetch_quote_features(["005930"], db_url=mod.POSTGRES_URL, lookback=7)
 
     assert "ROW_NUMBER() OVER" in captured["sql"]
     assert captured["params"]["lookback"] == 7
@@ -370,7 +387,7 @@ def test_partial_sector_theme_missing_stays_source_quality_summary(monkeypatch):
         },
     )
 
-    report = mod.build_swing_strategy_discovery_report("2026-05-22", db_url="sqlite://", max_candidates=3, persist=False)
+    report = mod.build_swing_strategy_discovery_report("2026-05-22", db_url=mod.POSTGRES_URL, max_candidates=3, persist=False)
 
     assert report["warnings"] == []
     assert report["source_quality"]["sector_theme_mapped_rows"] == 2
@@ -451,7 +468,7 @@ def test_discovery_can_include_bottom_rebound_source_without_runtime_authority(t
 
     report = mod.build_swing_strategy_discovery_report(
         "2026-05-22",
-        db_url="sqlite://",
+        db_url=mod.POSTGRES_URL,
         max_candidates=3,
         persist=False,
         include_bottom_rebound_source=True,
@@ -481,7 +498,7 @@ def test_discovery_can_include_bottom_rebound_source_without_runtime_authority(t
 
 
 def test_bottom_rebound_source_persists_candidate_and_dedicated_arms(tmp_path, monkeypatch):
-    db_url = f"sqlite:///{tmp_path / 'bottom_rebound.db'}"
+    db_url, _engine, Session = _setup_test_db()
     source_path = tmp_path / "swing_bottom_rebound_candidate_source_2026-05-22.json"
     source_path.write_text(
         json.dumps(
@@ -549,8 +566,6 @@ def test_bottom_rebound_source_persists_candidate_and_dedicated_arms(tmp_path, m
     }
     assert report["summary"]["bottom_rebound_persisted_candidate_count"] == 1
     assert report["summary"]["bottom_rebound_persisted_arm_count"] == len(mod.BOTTOM_REBOUND_ARM_SET)
-    engine = create_engine(db_url)
-    Session = sessionmaker(bind=engine)
     with Session() as session:
         candidate = session.query(SwingStrategyDiscoveryCandidate).one()
         arms = session.query(SwingStrategyDiscoveryArm).all()

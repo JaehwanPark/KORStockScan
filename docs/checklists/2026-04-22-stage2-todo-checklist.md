@@ -151,7 +151,7 @@
   - 판정 기준: `원본 jsonl 보관 + 분석 parquet/DuckDB + PostgreSQL 메타데이터` 3계층과 `shadow-only -> canary 1축` 순서를 문서 기준으로 고정한다.
   - 선행 완료: 개선작업 결과서 기준 완료 승인 가능 상태.
 - [x] `[DataArch0422] DuckDB/Parquet 의존성 승인 여부 및 대안경로 확정` (`Due: 2026-04-22`, `Slot: POSTCLOSE`, `TimeWindow: 17:00~17:10`, `Track: Plan`) (`실행: 2026-04-21 07:48 KST`)
-  - 판정 기준: 사용자 승인 전에는 패키지 설치를 진행하지 않고, 승인 실패 시 `JSONL+SQLite 임시분석` 대안 경로와 재판정 시각을 기록한다.
+  - 판정 기준: 사용자 승인 전에는 패키지 설치를 진행하지 않고, 승인 실패 시 `JSONL 임시분석` 대안 경로와 재판정 시각을 기록한다.
   - 선행 완료: 기존 `.venv` 의존성으로 처리, 신규 패키지 설치 없음.
 - [x] `[DataArch0422] jsonl vs parquet shadow 집계 일치성 검증(거래수/퍼널/blocker/체결품질)` (`Due: 2026-04-22`, `Slot: POSTCLOSE`, `TimeWindow: 17:10~17:30`, `Track: Plan`) (`실행: 2026-04-21 07:44 KST`)
   - 판정 기준: 정수 집계 오차 0, `full/partial` 분리 유지, `COMPLETED + valid profit_rate` 규칙 위반 0건일 때만 다음 축 전환 검토

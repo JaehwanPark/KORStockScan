@@ -31,9 +31,8 @@ dist/
 # ==========================================
 # 📊 데이터베이스 및 로그
 # ==========================================
-# PostgreSQL을 쓰지만, 이전 SQLite 잔재나 백업본 방지
+# PostgreSQL을 쓰지만, 이전 로컬 DB 잔재나 백업본 방지
 *.db
-*.sqlite3
 *.json
 !data/config/ofi_bucket_threshold_manifest.json
 !data/threshold_cycle/operator_runtime_env_locks/aggressive_entry_price_override_2026-06-13.json

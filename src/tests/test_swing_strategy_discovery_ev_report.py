@@ -1,6 +1,8 @@
 import json
+import os
 from datetime import date
 
+import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
@@ -11,6 +13,26 @@ from src.database.models import (
 )
 from src.engine import swing_strategy_discovery_ev_report as mod
 from src.engine.swing_strategy_discovery_schema import ensure_swing_strategy_discovery_schema
+
+
+def _external_test_db_url() -> str:
+    db_url = os.getenv("KORSTOCKSCAN_TEST_DATABASE_URL", "").strip()
+    if not db_url:
+        pytest.skip("set KORSTOCKSCAN_TEST_DATABASE_URL to run DB-backed discovery EV tests")
+    if "test" not in db_url.lower():
+        pytest.skip("KORSTOCKSCAN_TEST_DATABASE_URL must point to an isolated test database")
+    return db_url
+
+
+def _setup_test_db():
+    db_url = _external_test_db_url()
+    ensure_swing_strategy_discovery_schema(db_url)
+    engine = create_engine(db_url)
+    with engine.begin() as conn:
+        conn.execute(SwingStrategyDiscoveryLabel.__table__.delete())
+        conn.execute(SwingStrategyDiscoveryArm.__table__.delete())
+        conn.execute(SwingStrategyDiscoveryCandidate.__table__.delete())
+    return db_url, sessionmaker(bind=engine)
 
 
 def _seed_labeled_arm(
@@ -108,10 +130,7 @@ def _seed_labeled_arm(
 
 
 def test_ev_report_aggregates_surviving_arms_and_contract(tmp_path):
-    db_url = f"sqlite:///{tmp_path / 'ev.db'}"
-    ensure_swing_strategy_discovery_schema(db_url)
-    engine = create_engine(db_url)
-    Session = sessionmaker(bind=engine)
+    db_url, Session = _setup_test_db()
     with Session.begin() as session:
         for idx, ret in enumerate([1.0, 2.0, 1.5, 0.5, 3.0, -0.2], start=1):
             _seed_labeled_arm(session, idx, ret=ret)
@@ -134,10 +153,7 @@ def test_ev_report_aggregates_surviving_arms_and_contract(tmp_path):
 
 
 def test_ev_report_adds_source_only_morning_turbulence_analysis(tmp_path):
-    db_url = f"sqlite:///{tmp_path / 'ev_morning.db'}"
-    ensure_swing_strategy_discovery_schema(db_url)
-    engine = create_engine(db_url)
-    Session = sessionmaker(bind=engine)
+    db_url, Session = _setup_test_db()
     with Session.begin() as session:
         for idx, ret in enumerate([1.0, 0.5, -0.2, 1.2, 0.8], start=1):
             _seed_labeled_arm(
@@ -185,10 +201,7 @@ def test_ev_report_adds_source_only_morning_turbulence_analysis(tmp_path):
 
 
 def test_ev_report_clean_baseline_filters_pre_baseline_discovery_rows(tmp_path):
-    db_url = f"sqlite:///{tmp_path / 'ev_clean_baseline.db'}"
-    ensure_swing_strategy_discovery_schema(db_url)
-    engine = create_engine(db_url)
-    Session = sessionmaker(bind=engine)
+    db_url, Session = _setup_test_db()
     with Session.begin() as session:
         _seed_labeled_arm(session, 1, ret=-10.0, source_date=date(2026, 5, 20))
         _seed_labeled_arm(session, 2, ret=2.0, source_date=date(2026, 6, 4))
