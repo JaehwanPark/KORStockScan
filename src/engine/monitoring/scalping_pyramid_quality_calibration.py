@@ -45,6 +45,11 @@ TARGET_ENV_KEYS = [
     "SCALPING_PYRAMID_STRONG_CONTINUATION_MIN_PROFIT_PCT",
     "SCALPING_PYRAMID_STRONG_CONTINUATION_MAX_DRAWDOWN_PCT",
 ]
+PROFIT_GRID_MIN = 0.8
+PROFIT_GRID_MAX = 2.5
+PROFIT_GRID_STEP = 0.1
+PROFIT_GRID_MIN_ELIGIBLE = 20
+PROFIT_GRID_MIN_EV_DELTA = 0.2
 
 
 def _safe_float(value: Any, default: float = 0.0) -> float:
@@ -171,6 +176,137 @@ def _row_rates(rows: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def _profit_reached(row: dict[str, Any]) -> float | None:
+    for key in (
+        "max_profit_seen",
+        "pyramid_opportunity_peak_profit",
+        "peak_profit",
+        "pyramid_opportunity_profit_rate",
+        "profit_rate",
+    ):
+        if row.get(key) is not None:
+            return _safe_float(row.get(key), 0.0)
+    return None
+
+
+def _final_profit(row: dict[str, Any]) -> float | None:
+    if row.get("final_profit_rate") is not None:
+        return _safe_float(row.get("final_profit_rate"), 0.0)
+    return None
+
+
+def _profit_threshold_grid(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    usable_rows = [
+        (float(reached), float(final), row)
+        for row in rows
+        if (reached := _profit_reached(row)) is not None and (final := _final_profit(row)) is not None
+    ]
+    grid: list[dict[str, Any]] = []
+    steps = int(round((PROFIT_GRID_MAX - PROFIT_GRID_MIN) / PROFIT_GRID_STEP)) + 1
+    for index in range(steps):
+        threshold = round(PROFIT_GRID_MIN + (index * PROFIT_GRID_STEP), 1)
+        eligible = [(reached, final, row) for reached, final, row in usable_rows if reached >= threshold]
+        eligible_count = len(eligible)
+        positive_exit_count = sum(1 for _, final, _ in eligible if final > threshold)
+        loss_or_flat_count = eligible_count - positive_exit_count
+        incremental = [final - threshold for _, final, _ in eligible]
+        missed_upside = [max(0.0, reached - threshold) for reached, _, _ in eligible]
+        label_counts = Counter(str(row.get("pyramid_feedback_label") or "unknown") for _, _, row in eligible)
+        grid.append(
+            {
+                "min_profit_pct": threshold,
+                "source_row_count": len(usable_rows),
+                "eligible_count": eligible_count,
+                "eligible_rate": eligible_count / len(usable_rows) if usable_rows else 0.0,
+                "positive_exit_count": positive_exit_count,
+                "positive_exit_rate": positive_exit_count / eligible_count if eligible_count else 0.0,
+                "loss_or_flat_count": loss_or_flat_count,
+                "loss_or_flat_rate": loss_or_flat_count / eligible_count if eligible_count else 0.0,
+                "avg_incremental_exit_profit_pct": (
+                    sum(incremental) / len(incremental) if incremental else 0.0
+                ),
+                "avg_missed_upside_after_threshold_pct": (
+                    sum(missed_upside) / len(missed_upside) if missed_upside else 0.0
+                ),
+                "label_counts": [
+                    {"label": key, "count": value} for key, value in label_counts.most_common()
+                ],
+            }
+        )
+    return grid
+
+
+def _nearest_grid_row(grid: list[dict[str, Any]], threshold: float) -> dict[str, Any] | None:
+    if not grid:
+        return None
+    return min(grid, key=lambda row: abs(float(row.get("min_profit_pct") or 0.0) - threshold))
+
+
+def _profit_grid_decision(current: dict[str, Any], grid: list[dict[str, Any]]) -> dict[str, Any]:
+    current_threshold = float(current["min_profit_pct"])
+    current_row = _nearest_grid_row(grid, current_threshold)
+    eligible_rows = [
+        row
+        for row in grid
+        if int(row.get("eligible_count") or 0) >= PROFIT_GRID_MIN_ELIGIBLE
+    ]
+    if not grid:
+        return {
+            "status": "unavailable",
+            "reason": "no_rows_with_max_and_final_profit",
+            "selected_min_profit_pct": current_threshold,
+            "current_row": current_row,
+            "selected_row": None,
+        }
+    if not eligible_rows:
+        return {
+            "status": "hold",
+            "reason": "grid_eligible_rows_lt_20",
+            "selected_min_profit_pct": current_threshold,
+            "current_row": current_row,
+            "selected_row": None,
+        }
+    selected = max(
+        eligible_rows,
+        key=lambda row: (
+            float(row.get("avg_incremental_exit_profit_pct") or 0.0),
+            -float(row.get("loss_or_flat_rate") or 0.0),
+            float(row.get("min_profit_pct") or 0.0),
+        ),
+    )
+    current_ev = (
+        float(current_row.get("avg_incremental_exit_profit_pct") or 0.0)
+        if current_row
+        else 0.0
+    )
+    selected_ev = float(selected.get("avg_incremental_exit_profit_pct") or 0.0)
+    selected_threshold = float(selected["min_profit_pct"])
+    ev_delta = selected_ev - current_ev
+    if abs(selected_threshold - current_threshold) < 0.05:
+        status = "hold"
+        reason = "grid_selected_current_threshold"
+    elif ev_delta < PROFIT_GRID_MIN_EV_DELTA:
+        status = "hold"
+        reason = "grid_ev_delta_lt_0_20"
+    elif selected_threshold < current_threshold:
+        status = "adjust_down"
+        reason = "grid_loosen_profit_threshold_direct"
+    else:
+        status = "adjust_up"
+        reason = "grid_tighten_profit_threshold_direct"
+    return {
+        "status": status,
+        "reason": reason,
+        "selected_min_profit_pct": selected_threshold,
+        "current_min_profit_pct": current_threshold,
+        "current_avg_incremental_exit_profit_pct": current_ev,
+        "selected_avg_incremental_exit_profit_pct": selected_ev,
+        "avg_incremental_exit_profit_delta_pct": ev_delta,
+        "current_row": current_row,
+        "selected_row": selected,
+    }
+
+
 def _one_step_candidate_values(current: dict[str, Any], rates: dict[str, Any]) -> tuple[str, dict[str, Any], str]:
     recommended = dict(current)
     recovery_rate = _safe_float(rates.get("recovered_or_extended_rate"))
@@ -221,6 +357,8 @@ def _calibration_candidate(
         else "rolling_closed_pyramid_rows_lt_20"
     )
     current = _current_values()
+    profit_grid = _profit_threshold_grid(rows)
+    grid_decision = _profit_grid_decision(current, profit_grid)
     blockers: list[str] = []
     if not sample_floor_met:
         blockers.append(sample_floor_reason)
@@ -242,6 +380,17 @@ def _calibration_candidate(
         allowed = False
     else:
         state, recommended, reason = _one_step_candidate_values(current, rates)
+        grid_status = str(grid_decision.get("status") or "")
+        if grid_status in {"adjust_up", "adjust_down"}:
+            if state in {"adjust_up", "adjust_down"} and state != grid_status:
+                state = "hold"
+                recommended = dict(current)
+                reason = f"cluster_grid_conflict_hold:{reason},{grid_decision.get('reason')}"
+            else:
+                state = grid_status
+                recommended = dict(recommended if reason != "mixed_cluster_hold" else current)
+                recommended["min_profit_pct"] = float(grid_decision["selected_min_profit_pct"])
+                reason = str(grid_decision.get("reason") or reason)
         allowed = state in {"adjust_up", "adjust_down"}
 
     return {
@@ -267,6 +416,8 @@ def _calibration_candidate(
             "one_share_pyramid_avg_opportunity_cost_pct": (
                 sum(opportunity_costs) / len(opportunity_costs) if opportunity_costs else 0.0
             ),
+            "profit_threshold_grid": profit_grid,
+            "profit_threshold_grid_decision": grid_decision,
             "source_quality_pass": source_quality_pass,
             "provenance_present": provenance_present,
             "recommended_action": state,
@@ -329,6 +480,16 @@ def write_outputs(report: dict[str, Any], *, output_json: Path, output_md: Path)
     output_json.write_text(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
     candidate = (report.get("calibration_candidates") or [{}])[0]
     metrics = candidate.get("source_metrics") if isinstance(candidate.get("source_metrics"), dict) else {}
+    grid_decision = (
+        metrics.get("profit_threshold_grid_decision")
+        if isinstance(metrics.get("profit_threshold_grid_decision"), dict)
+        else {}
+    )
+    selected_grid_row = (
+        grid_decision.get("selected_row")
+        if isinstance(grid_decision.get("selected_row"), dict)
+        else {}
+    )
     lines = [
         f"# {report.get('target_date')} Scalping Pyramid Quality Calibration",
         "",
@@ -353,6 +514,11 @@ def write_outputs(report: dict[str, Any], *, output_json: Path, output_md: Path)
         f"- correctly_blocked_rate: {_safe_float(metrics.get('correctly_blocked_rate')):.2f}",
         "- one_share_pyramid_avg_opportunity_cost_pct: "
         f"{_safe_float(metrics.get('one_share_pyramid_avg_opportunity_cost_pct')):.2f}",
+        f"- profit_threshold_grid_status: {grid_decision.get('status')}",
+        f"- profit_threshold_grid_reason: {grid_decision.get('reason')}",
+        f"- profit_threshold_grid_selected_min_profit_pct: {grid_decision.get('selected_min_profit_pct')}",
+        "- profit_threshold_grid_selected_avg_incremental_exit_profit_pct: "
+        f"{_safe_float(selected_grid_row.get('avg_incremental_exit_profit_pct')):.2f}",
         f"- source_quality_pass: {metrics.get('source_quality_pass')}",
         f"- provenance_present: {metrics.get('provenance_present')}",
     ]

@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-from src.utils.constants import DATA_DIR
+from src.utils.constants import DATA_DIR, TRADING_RULES
 from src.utils.jsonl_io import existing_or_gzip_path, iter_jsonl
 
 
@@ -44,6 +44,10 @@ def _boolish(value: Any) -> bool:
     if isinstance(value, bool):
         return value
     return str(value or "").strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def _pyramid_min_profit_pct() -> float:
+    return float(getattr(TRADING_RULES, "SCALPING_PYRAMID_MIN_PROFIT_PCT", 1.5) or 1.5)
 
 
 def _fields(row: dict[str, Any]) -> dict[str, Any]:
@@ -194,7 +198,9 @@ def _update_snapshot(item: dict[str, Any], row: dict[str, Any]) -> None:
             item[key] = value
     if item.get("one_share_event"):
         opportunity_profit = _safe_float(item.get("pyramid_opportunity_profit_rate"), None)
-        if profit_rate is not None and profit_rate >= 1.5 and opportunity_profit is None:
+        min_profit_pct = _pyramid_min_profit_pct()
+        item["pyramid_opportunity_min_profit_pct"] = min_profit_pct
+        if profit_rate is not None and profit_rate >= min_profit_pct and opportunity_profit is None:
             item["pyramid_opportunity_seen"] = True
             item["pyramid_opportunity_ts"] = row.get("emitted_at")
             item["pyramid_opportunity_profit_rate"] = profit_rate

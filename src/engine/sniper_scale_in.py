@@ -102,6 +102,64 @@ def _safe_bool(value, default=False):
     return bool(value)
 
 
+_UNTRUSTED_AI_SCORE_SOURCES = {
+    "",
+    "-",
+    "none",
+    "null",
+    "missing",
+    "not_called",
+    "holding_ai_not_called",
+    "fallback_score_50",
+}
+
+
+def _ai_score_source(stock, action=None):
+    action = action if isinstance(action, dict) else {}
+    stock = stock if isinstance(stock, dict) else {}
+    for key in (
+        "ai_score_source",
+        "holding_ai_score_source",
+        "current_ai_score_source",
+        "ai_result_source",
+        "last_ai_result_source",
+    ):
+        value = action.get(key)
+        if value not in (None, ""):
+            return str(value).strip()
+    for key in (
+        "ai_score_source",
+        "holding_ai_score_source",
+        "current_ai_score_source",
+        "ai_result_source",
+        "last_ai_result_source",
+    ):
+        value = stock.get(key)
+        if value not in (None, ""):
+            return str(value).strip()
+    model = str(stock.get("ai_model") or stock.get("last_ai_model") or "").strip()
+    if model and model != "-":
+        return "model"
+    if _safe_bool(stock.get("ai_fallback_score_50"), False) or _safe_bool(action.get("ai_fallback_score_50"), False):
+        return "fallback_score_50"
+    return "-"
+
+
+def _ai_score_available_for_scale_in(stock, action=None, *, current_ai_score=None):
+    source = _ai_score_source(stock, action)
+    normalized = str(source or "").strip().lower()
+    score = _safe_float(current_ai_score, None)
+    if score is None and isinstance(action, dict):
+        score = _safe_float(action.get("current_ai_score"), None)
+    if score is None and isinstance(stock, dict):
+        score = _safe_float(stock.get("current_ai_score"), None)
+    if normalized == "fallback_score_50":
+        return False, source or "-"
+    if normalized in _UNTRUSTED_AI_SCORE_SOURCES:
+        return (False, source or "-") if score is None or abs(float(score) - 50.0) < 1e-9 else (True, source or "-")
+    return True, source or "-"
+
+
 def _best_levels_from_ws(ws_data):
     ws_data = ws_data or {}
     best_bid = _safe_int(ws_data.get("best_bid") or ws_data.get("bid") or ws_data.get("bid_price"), 0)
@@ -226,12 +284,22 @@ def _scalping_pyramid_quality_snapshot(stock, *, current_ai_score=None):
     ai_default = _safe_float(stock.get("rt_ai_prob"), 0.0) * 100.0
     ai_score = current_ai_score if current_ai_score is not None else stock.get("current_ai_score")
     raw_micro_vwap = feat.get("curr_vs_micro_vwap_bp")
+    ai_score_available, ai_score_source = _ai_score_available_for_scale_in(
+        stock,
+        current_ai_score=ai_score,
+    )
+    source_quality = reversal_feature_source_quality(feat)
+    source_stale = bool(feat and source_quality["reversal_feature_stale"])
     return {
         "current_ai_score": _safe_float(ai_score, ai_default),
+        "ai_score_source": ai_score_source,
+        "ai_score_available": ai_score_available,
         "buy_pressure_10t": _safe_float(feat.get("buy_pressure_10t"), 0.0),
         "tick_acceleration_ratio": _safe_float(feat.get("tick_acceleration_ratio"), 0.0),
         "large_sell_print_detected": _safe_bool(feat.get("large_sell_print_detected"), True),
         "curr_vs_micro_vwap_bp": _safe_float(raw_micro_vwap, None),
+        "reversal_feature_stale": source_stale,
+        **source_quality,
     }
 
 
@@ -268,25 +336,36 @@ def _scalping_pyramid_strong_continuation_context(
     )
     quality = _scalping_pyramid_quality_snapshot(stock, current_ai_score=current_ai_score)
     micro_vwap_bp = quality["curr_vs_micro_vwap_bp"]
+    ai_score_ok = (not quality["ai_score_available"]) or quality["current_ai_score"] >= min_ai
+    ai_score_real_support = quality["ai_score_available"] and quality["current_ai_score"] >= min_ai
     checks = {
         "enabled": enabled,
         "new_high": bool(is_new_high),
         "peak_hold_ok": float(drawdown_from_peak) <= max_drawdown,
-        "ai_score_ok": quality["current_ai_score"] >= min_ai,
+        "ai_score_ok": ai_score_ok,
         "buy_pressure_support_ok": quality["buy_pressure_10t"] >= min_buy_pressure,
-        "tick_accel_ok": quality["tick_acceleration_ratio"] >= min_tick_accel,
+        "tick_accel_ok": (not quality["reversal_feature_stale"]) and quality["tick_acceleration_ratio"] >= min_tick_accel,
         "large_sell_clear": not quality["large_sell_print_detected"],
         "micro_vwap_available": micro_vwap_bp is not None,
-        "micro_vwap_not_overheated": micro_vwap_bp is not None and micro_vwap_bp <= max_micro_vwap_bp,
+        "micro_vwap_not_overheated": (
+            (not quality["reversal_feature_stale"])
+            and micro_vwap_bp is not None
+            and micro_vwap_bp <= max_micro_vwap_bp
+        ),
     }
+    strong_checks = {**checks, "ai_score_ok": ai_score_real_support}
     failed = [name for name, ok in checks.items() if not ok]
+    strong_failed = [name for name, ok in strong_checks.items() if not ok]
     return {
         "base_min_profit_pct": round(base_min_profit, 4),
         "strong_continuation_min_profit_pct": round(strong_min_profit, 4),
         "strong_continuation_max_drawdown_pct": round(max_drawdown, 4),
-        "strong_continuation_failed_checks": ",".join(failed),
-        "strong_continuation_allowed": not failed,
+        "strong_continuation_failed_checks": ",".join(strong_failed),
+        "strong_continuation_allowed": not strong_failed,
         "current_ai_score": round(quality["current_ai_score"], 4),
+        "ai_score_source": quality["ai_score_source"],
+        "ai_score_available": quality["ai_score_available"],
+        "ai_score_real_support": ai_score_real_support,
         "min_ai_score": round(min_ai, 4),
         "buy_pressure_10t": round(quality["buy_pressure_10t"], 4),
         "min_buy_pressure": round(min_buy_pressure, 4),
@@ -300,6 +379,17 @@ def _scalping_pyramid_strong_continuation_context(
         "max_micro_vwap_bps": round(max_micro_vwap_bp, 4),
         "micro_vwap_available": checks["micro_vwap_available"],
         "micro_vwap_not_overheated": checks["micro_vwap_not_overheated"],
+        "reversal_feature_source_quality": quality["reversal_feature_source_quality"],
+        "reversal_feature_stale": quality["reversal_feature_stale"],
+        "reversal_feature_stale_reason": quality["reversal_feature_stale_reason"],
+        "tick_context_quality": quality["tick_context_quality"],
+        "tick_context_stale": quality["tick_context_stale"],
+        "tick_latest_age_ms": quality["tick_latest_age_ms"],
+        "tick_accel_source": quality["tick_accel_source"],
+        "quote_stale": quality["quote_stale"],
+        "quote_age_ms": quality["quote_age_ms"],
+        "quote_age_source": quality["quote_age_source"],
+        "feature_extracted_at": quality["feature_extracted_at"],
         "ai_score_ok": checks["ai_score_ok"],
     }
 
@@ -370,13 +460,16 @@ def _pyramid_borderline_soft_blockers(result, profit_rate):
 
 
 def _pyramid_support_is_weak(result):
-    ai_score = _safe_float(result.get("current_ai_score"), 0.0)
-    min_ai = _safe_float(result.get("min_ai_score"), 70.0)
+    ai_weak = False
+    if result.get("ai_score_available", True):
+        ai_score = _safe_float(result.get("current_ai_score"), 0.0)
+        min_ai = _safe_float(result.get("min_ai_score"), 70.0)
+        ai_weak = ai_score < min_ai + 5.0
     buy_pressure = _safe_float(result.get("buy_pressure_10t"), 0.0)
     min_buy_pressure = _safe_float(result.get("min_buy_pressure"), 60.0)
     tick_accel = _safe_float(result.get("tick_acceleration_ratio"), 0.0)
     min_tick = _safe_float(result.get("min_tick_accel"), 0.5)
-    return ai_score < min_ai + 5.0 or buy_pressure < min_buy_pressure + 5.0 or tick_accel < min_tick + 0.2
+    return ai_weak or buy_pressure < min_buy_pressure + 5.0 or tick_accel < min_tick + 0.2
 
 
 def _apply_pyramid_runtime_prior_context(result, runtime_prior_context, profit_rate):
@@ -492,14 +585,24 @@ def evaluate_scalping_pyramid(
     quality_failures = []
     if not continuation_context.get("ai_score_ok"):
         quality_failures.append("ai_score_below_min")
+    if not continuation_context.get("buy_pressure_support_ok"):
+        quality_failures.append("buy_pressure_below_min")
     if not continuation_context.get("tick_accel_ok"):
-        quality_failures.append("tick_accel_below_min")
+        quality_failures.append(
+            "tick_accel_stale"
+            if continuation_context.get("reversal_feature_stale")
+            else "tick_accel_below_min"
+        )
     if not continuation_context.get("large_sell_clear"):
         quality_failures.append("large_sell_detected")
     if not continuation_context.get("micro_vwap_available"):
         quality_failures.append("micro_vwap_missing")
     elif not continuation_context.get("micro_vwap_not_overheated"):
-        quality_failures.append("micro_vwap_overheated")
+        quality_failures.append(
+            "micro_context_stale"
+            if continuation_context.get("reversal_feature_stale")
+            else "micro_vwap_overheated"
+        )
     if quality_failures:
         result.update(continuation_context)
         result["reason"] = (
@@ -632,10 +735,54 @@ def _check_reversal_add_ai_recovery(stock, current_ai_score):
     return None
 
 
+def reversal_feature_source_quality(feat):
+    feat = feat if isinstance(feat, dict) else {}
+    tick_quality = str(feat.get("tick_context_quality") or "").strip().lower()
+    tick_stale = _safe_bool(feat.get("tick_context_stale"), False)
+    quote_stale = _safe_bool(feat.get("quote_stale"), False)
+    tick_age_ms = _safe_float(feat.get("tick_latest_age_ms"), None)
+    quote_age_ms = _safe_float(feat.get("quote_age_ms"), None)
+    max_tick_age_ms = _safe_float(
+        getattr(TRADING_RULES, "REVERSAL_ADD_MAX_TICK_AGE_MS", 5000),
+        5000.0,
+    )
+    max_quote_age_ms = _safe_float(
+        getattr(TRADING_RULES, "SCALP_PRE_AI_MAX_WS_AGE_SEC", 3.0),
+        3.0,
+    ) * 1000.0
+    stale_reasons = []
+    if tick_stale is True or tick_quality == "stale_tick":
+        stale_reasons.append("tick_context_stale")
+    elif tick_quality in {"missing_ticks", "missing_tick_time"} or tick_quality.startswith("accel_"):
+        stale_reasons.append("tick_context_unusable")
+    if quote_stale is True:
+        stale_reasons.append("quote_stale")
+    if tick_age_ms is not None and tick_age_ms > max_tick_age_ms:
+        stale_reasons.append("tick_age_gt_max")
+    if quote_age_ms is not None and quote_age_ms > max_quote_age_ms:
+        stale_reasons.append("quote_age_gt_max")
+    return {
+        "reversal_feature_source_quality": "stale" if stale_reasons else "usable",
+        "reversal_feature_stale": bool(stale_reasons),
+        "reversal_feature_stale_reason": ",".join(stale_reasons) or "-",
+        "tick_context_quality": feat.get("tick_context_quality", "-"),
+        "tick_context_stale": feat.get("tick_context_stale", "unknown"),
+        "tick_latest_age_ms": "-" if tick_age_ms is None else round(tick_age_ms, 3),
+        "tick_accel_source": feat.get("tick_accel_source", "-"),
+        "quote_stale": feat.get("quote_stale", "unknown"),
+        "quote_age_ms": "-" if quote_age_ms is None else round(quote_age_ms, 3),
+        "quote_age_source": feat.get("quote_age_source", "missing"),
+        "feature_extracted_at": feat.get("feature_extracted_at", "-"),
+    }
+
+
 def _check_reversal_add_supply(stock):
     feat = stock.get('last_reversal_features', {})
     min_buy_pressure = getattr(TRADING_RULES, 'REVERSAL_ADD_MIN_BUY_PRESSURE', 55)
     if feat:
+        source_quality = reversal_feature_source_quality(feat)
+        if source_quality["reversal_feature_stale"]:
+            return "reversal_features_stale:" + source_quality["reversal_feature_stale_reason"]
         checks = [
             feat.get('buy_pressure_10t', 0) >= min_buy_pressure,
             feat.get('tick_acceleration_ratio', 0) >= getattr(TRADING_RULES, 'REVERSAL_ADD_MIN_TICK_ACCEL', 0.95),
@@ -674,6 +821,9 @@ def _check_aggressive_reversal_add(stock, profit_rate, current_ai_score, held_se
     feat = stock.get('last_reversal_features', {}) or {}
     if not feat:
         return "aggressive_reversal_features_missing"
+    source_quality = reversal_feature_source_quality(feat)
+    if source_quality["reversal_feature_stale"]:
+        return "aggressive_reversal_features_stale:" + source_quality["reversal_feature_stale_reason"]
 
     buy_pressure = _safe_float(feat.get('buy_pressure_10t'), 0.0)
     micro_vwap_bp = _safe_float(feat.get('curr_vs_micro_vwap_bp'), -999.0)
@@ -712,11 +862,13 @@ def _build_reversal_add_probe(stock, profit_rate, current_ai_score, held_sec):
     tick_accel = _safe_float(feat.get('tick_acceleration_ratio'), 0.0)
     micro_vwap_bp = _safe_float(feat.get('curr_vs_micro_vwap_bp'), -999.0)
     large_sell_print = bool(feat.get('large_sell_print_detected', False))
+    source_quality = reversal_feature_source_quality(feat)
+    source_quality_stale = bool(feat and source_quality["reversal_feature_stale"])
     supply_checks = {
         "buy_pressure_ok": buy_pressure >= min_buy_pressure,
-        "tick_accel_ok": tick_accel >= min_tick_accel,
+        "tick_accel_ok": (not source_quality_stale) and tick_accel >= min_tick_accel,
         "large_sell_absent_ok": not large_sell_print,
-        "micro_vwap_ok": micro_vwap_bp >= min_micro_vwap_bp,
+        "micro_vwap_ok": (not source_quality_stale) and micro_vwap_bp >= min_micro_vwap_bp,
     }
     supply_pass_count = sum(1 for ok in supply_checks.values() if ok)
     supply_ok = supply_pass_count >= 3 if feat else buy_pressure >= min_buy_pressure
@@ -764,6 +916,7 @@ def _build_reversal_add_probe(stock, profit_rate, current_ai_score, held_sec):
             -12.0,
         ),
     }
+    probe.update(source_quality)
     probe.update(supply_checks)
     return probe
 
@@ -846,6 +999,8 @@ def resolve_scale_in_order_price(stock, ws_data, action, *, strategy=None, curr_
         "max_micro_vwap_bps": float(getattr(TRADING_RULES, "SCALPING_PYRAMID_MAX_MICRO_VWAP_BPS", 60.0) or 60.0),
         "resolver_enabled": bool(getattr(TRADING_RULES, "SCALPING_SCALE_IN_PRICE_RESOLVER_ENABLED", True)),
     }
+    feature_quality = reversal_feature_source_quality(stock.get("last_reversal_features") or {})
+    result.update(feature_quality)
 
     if normalized_strategy != "SCALPING":
         result.update({"allowed": True, "order_price": 0, "reason": "non_scalping_market", "price_source": "market"})
@@ -910,8 +1065,12 @@ def resolve_scale_in_order_price(stock, ws_data, action, *, strategy=None, curr_
     if add_type == "AVG_DOWN":
         min_micro_vwap = float(getattr(TRADING_RULES, "REVERSAL_ADD_VWAP_BP_MIN", -5.0) or -5.0)
         result["min_micro_vwap_bps"] = min_micro_vwap
+        micro_supported_avg_down = add_reason in {"reversal_add_ok", "aggressive_reversal_add_ok"}
+        if micro_supported_avg_down and feature_quality["reversal_feature_stale"]:
+            result["reason"] = "micro_context_stale:" + feature_quality["reversal_feature_stale_reason"]
+            return result
         result["late_loss_avg_down_retry_micro_vwap_bypass"] = bool(
-            late_loss_retry and micro_vwap_bp < min_micro_vwap
+            late_loss_retry and not feature_quality["reversal_feature_stale"] and micro_vwap_bp < min_micro_vwap
         )
         if micro_vwap_bp < min_micro_vwap and not late_loss_retry:
             result["reason"] = f"micro_vwap_bp<{min_micro_vwap:.1f}"
@@ -1224,10 +1383,17 @@ def describe_dynamic_scale_in_qty(
         action.get("current_ai_score", stock.get("current_ai_score", (stock.get("rt_ai_prob") or 0) * 100)),
         0.0,
     )
+    ai_score_available, ai_score_source = _ai_score_available_for_scale_in(
+        stock,
+        action,
+        current_ai_score=current_ai_score,
+    )
     buy_pressure = _safe_float(feat.get("buy_pressure_10t"), 0.0)
     tick_accel = _safe_float(feat.get("tick_acceleration_ratio"), 0.0)
     large_sell = _safe_bool(feat.get("large_sell_print_detected"), True)
     micro_vwap_bp = _safe_float(feat.get("curr_vs_micro_vwap_bp"), None)
+    feature_quality = reversal_feature_source_quality(feat)
+    feature_stale = bool(feat and feature_quality["reversal_feature_stale"])
     profit_rate = _safe_float(action.get("profit_rate"), 0.0)
     peak_profit = _safe_float(action.get("peak_profit"), profit_rate)
     drawdown_from_peak = max(0.0, peak_profit - profit_rate)
@@ -1238,12 +1404,16 @@ def describe_dynamic_scale_in_qty(
         min_tick_accel = float(getattr(TRADING_RULES, "SCALPING_PYRAMID_MIN_TICK_ACCEL", 0.5) or 0.5)
         max_micro_vwap_bp = float(getattr(TRADING_RULES, "SCALPING_PYRAMID_MAX_MICRO_VWAP_BPS", 60.0) or 60.0)
         hard_checks = {
-            "ai_score_ok": current_ai_score >= min_ai,
-            "tick_accel_ok": tick_accel >= min_tick_accel,
+            "ai_score_ok": (not ai_score_available) or current_ai_score >= min_ai,
+            "tick_accel_ok": (not feature_stale) and tick_accel >= min_tick_accel,
             "peak_hold_ok": drawdown_from_peak <= 0.3,
             "large_sell_clear": not large_sell,
             "micro_vwap_available": micro_vwap_bp is not None,
-            "micro_vwap_not_overheated": micro_vwap_bp is not None and micro_vwap_bp <= max_micro_vwap_bp,
+            "micro_vwap_not_overheated": (
+                (not feature_stale)
+                and micro_vwap_bp is not None
+                and micro_vwap_bp <= max_micro_vwap_bp
+            ),
         }
         support_checks = {
             "buy_pressure_support_ok": buy_pressure >= min_buy_pressure,
@@ -1251,6 +1421,8 @@ def describe_dynamic_scale_in_qty(
         details.update(
             {
                 "current_ai_score": round(current_ai_score, 4),
+                "ai_score_source": ai_score_source,
+                "ai_score_available": ai_score_available,
                 "min_ai_score": min_ai,
                 "buy_pressure_10t": round(buy_pressure, 4),
                 "min_buy_pressure": min_buy_pressure,
@@ -1260,6 +1432,7 @@ def describe_dynamic_scale_in_qty(
                 "max_micro_vwap_bps": max_micro_vwap_bp,
                 "drawdown_from_peak": round(drawdown_from_peak, 4),
                 "large_sell_print_detected": large_sell,
+                **feature_quality,
                 **hard_checks,
                 **support_checks,
             }

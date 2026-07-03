@@ -1998,11 +1998,126 @@ def test_scalping_pyramid_signal():
     assert result["add_type"] == "PYRAMID"
 
 
+def test_scalping_pyramid_missing_ai_score_source_50_does_not_hard_block():
+    stock = {
+        "pyramid_count": 0,
+        "holding_ai_score_source": "holding_ai_not_called",
+        "last_reversal_features": {
+            "buy_pressure_10t": 92.0,
+            "tick_acceleration_ratio": 1.0,
+            "large_sell_print_detected": False,
+            "curr_vs_micro_vwap_bp": 24.0,
+        },
+    }
+    result = scale_in.evaluate_scalping_pyramid(
+        stock,
+        profit_rate=2.0,
+        peak_profit=2.2,
+        is_new_high=True,
+        current_ai_score=50,
+    )
+
+    assert result["should_add"] is True
+    assert result["reason"] == "scalping_pyramid_ok"
+    assert result["ai_score_available"] is False
+    assert result["ai_score_ok"] is True
+
+
+def test_scalping_pyramid_real_ai_score_50_still_blocks():
+    stock = {
+        "pyramid_count": 0,
+        "holding_ai_score_source": "openai",
+        "last_reversal_features": {
+            "buy_pressure_10t": 92.0,
+            "tick_acceleration_ratio": 1.0,
+            "large_sell_print_detected": False,
+            "curr_vs_micro_vwap_bp": 24.0,
+        },
+    }
+    result = scale_in.evaluate_scalping_pyramid(
+        stock,
+        profit_rate=2.0,
+        peak_profit=2.2,
+        is_new_high=True,
+        current_ai_score=50,
+    )
+
+    assert result["should_add"] is False
+    assert result["reason"] == "ai_score_below_min"
+    assert result["ai_score_available"] is True
+    assert result["ai_score_ok"] is False
+
+
+def test_scalping_pyramid_fallback_score_source_is_not_real_ai_even_after_smoothing():
+    stock = {
+        "pyramid_count": 0,
+        "holding_ai_score_source": "fallback_score_50",
+        "last_reversal_features": {
+            "buy_pressure_10t": 92.0,
+            "tick_acceleration_ratio": 1.0,
+            "large_sell_print_detected": False,
+            "curr_vs_micro_vwap_bp": 24.0,
+        },
+    }
+    result = scale_in.evaluate_scalping_pyramid(
+        stock,
+        profit_rate=2.0,
+        peak_profit=2.2,
+        is_new_high=True,
+        current_ai_score=62,
+    )
+
+    assert result["should_add"] is True
+    assert result["ai_score_source"] == "fallback_score_50"
+    assert result["ai_score_available"] is False
+    assert result["ai_score_ok"] is True
+
+
+def test_scalping_pyramid_missing_ai_does_not_unlock_strong_continuation_gate():
+    original = scale_in.TRADING_RULES
+    scale_in.TRADING_RULES = replace(
+        CONFIG,
+        SCALPING_PYRAMID_MIN_PROFIT_PCT=1.5,
+        SCALPING_PYRAMID_STRONG_CONTINUATION_ENABLED=True,
+        SCALPING_PYRAMID_STRONG_CONTINUATION_MIN_PROFIT_PCT=0.9,
+        SCALPING_PYRAMID_STRONG_CONTINUATION_MAX_DRAWDOWN_PCT=0.20,
+        SCALPING_PYRAMID_MIN_AI_SCORE=70,
+        SCALPING_PYRAMID_MIN_BUY_PRESSURE=60.0,
+        SCALPING_PYRAMID_MIN_TICK_ACCEL=0.5,
+        SCALPING_PYRAMID_MAX_MICRO_VWAP_BPS=60.0,
+    )
+    try:
+        result = scale_in.evaluate_scalping_pyramid(
+            {
+                "holding_ai_score_source": "holding_ai_not_called",
+                "last_reversal_features": {
+                    "buy_pressure_10t": 92.0,
+                    "tick_acceleration_ratio": 1.0,
+                    "large_sell_print_detected": False,
+                    "curr_vs_micro_vwap_bp": 24.0,
+                },
+            },
+            profit_rate=1.0,
+            peak_profit=1.1,
+            is_new_high=True,
+            current_ai_score=50,
+        )
+    finally:
+        scale_in.TRADING_RULES = original
+
+    assert result["should_add"] is False
+    assert result["reason"] == "profit_not_enough"
+    assert result["ai_score_available"] is False
+    assert result["ai_score_ok"] is True
+    assert result["ai_score_real_support"] is False
+    assert "ai_score_ok" in result["strong_continuation_failed_checks"]
+
+
 def test_scalping_pyramid_blocks_overheated_micro_vwap_before_signal():
     stock = {
         "pyramid_count": 0,
         "last_reversal_features": {
-            "buy_pressure_10t": 50.0,
+            "buy_pressure_10t": 72.0,
             "tick_acceleration_ratio": 1.0,
             "large_sell_print_detected": False,
             "curr_vs_micro_vwap_bp": 103.65,
@@ -2018,8 +2133,155 @@ def test_scalping_pyramid_blocks_overheated_micro_vwap_before_signal():
 
     assert result["should_add"] is False
     assert result["reason"] == "micro_vwap_overheated"
-    assert result["buy_pressure_support_ok"] is False
+    assert result["buy_pressure_support_ok"] is True
     assert result["micro_vwap_not_overheated"] is False
+
+
+def test_scalping_pyramid_blocks_buy_pressure_below_min():
+    stock = {
+        "pyramid_count": 0,
+        "last_reversal_features": {
+            "buy_pressure_10t": 50.0,
+            "tick_acceleration_ratio": 1.0,
+            "large_sell_print_detected": False,
+            "curr_vs_micro_vwap_bp": 24.0,
+        },
+    }
+    result = scale_in.evaluate_scalping_pyramid(
+        stock,
+        profit_rate=2.03,
+        peak_profit=2.03,
+        is_new_high=True,
+        current_ai_score=75,
+    )
+
+    assert result["should_add"] is False
+    assert result["reason"] == "buy_pressure_below_min"
+    assert result["buy_pressure_support_ok"] is False
+
+
+def test_scalping_pyramid_blocks_stale_tick_and_micro_context():
+    stock = {
+        "pyramid_count": 0,
+        "last_reversal_features": {
+            "buy_pressure_10t": 92.0,
+            "tick_acceleration_ratio": 1.1,
+            "large_sell_print_detected": False,
+            "curr_vs_micro_vwap_bp": 24.0,
+            "tick_context_quality": "stale_tick",
+            "tick_context_stale": True,
+            "tick_latest_age_ms": 31_000,
+            "quote_stale": False,
+            "quote_age_ms": 0,
+        },
+    }
+
+    result = scale_in.evaluate_scalping_pyramid(
+        stock,
+        profit_rate=2.03,
+        peak_profit=2.03,
+        is_new_high=True,
+        current_ai_score=75,
+    )
+
+    assert result["should_add"] is False
+    assert result["reason"] == "pyramid_quality_blocked:tick_accel_stale,micro_context_stale"
+    assert result["reversal_feature_stale"] is True
+    assert result["tick_accel_ok"] is False
+    assert result["micro_vwap_not_overheated"] is False
+    assert "tick_context_stale" in result["reversal_feature_stale_reason"]
+
+
+def test_scale_in_signal_refreshes_stale_features_before_pyramid(monkeypatch):
+    class FeatureEngine:
+        def _extract_scalping_features(self, ws_data, recent_ticks, recent_candles):
+            assert ws_data["best_bid"] == 9_990
+            assert recent_ticks
+            return {
+                "buy_pressure_10t": 92.0,
+                "tick_acceleration_ratio": 1.1,
+                "tick_context_quality": "fresh_tick",
+                "tick_context_stale": False,
+                "tick_latest_age_ms": 100,
+                "large_sell_print_detected": False,
+                "curr_vs_micro_vwap_bp": 24.0,
+                "quote_stale": False,
+                "quote_age_ms": 100,
+                "quote_age_source": "ka10004_rest_orderbook",
+            }
+
+    logs = []
+    monkeypatch.setattr(state_handlers, "KIWOOM_TOKEN", "TOKEN")
+    monkeypatch.setattr(
+        state_handlers.kiwoom_utils,
+        "get_stock_orderbook_ka10004",
+        lambda token, code: {
+            "curr": 10_000,
+            "best_bid": 9_990,
+            "best_ask": 10_000,
+            "best_bid_qty": 100,
+            "best_ask_qty": 80,
+            "bid_req_base_tm": "100000",
+        },
+    )
+    monkeypatch.setattr(state_handlers, "_parse_hhmmss_age_ms", lambda *args, **kwargs: 100.0)
+    monkeypatch.setattr(
+        state_handlers.kiwoom_utils,
+        "get_tick_history_ka10003",
+        lambda token, code, limit=10: [{"price": 10_000, "volume": 10, "dir": "BUY"}],
+    )
+    monkeypatch.setattr(
+        state_handlers.kiwoom_utils,
+        "get_minute_candles_ka10080",
+        lambda token, code, limit=40: [],
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_holding_pipeline",
+        lambda stock, code, stage, **fields: logs.append((stage, fields)),
+    )
+
+    stock = {
+        "id": 1,
+        "name": "REFRESH",
+        "strategy": "SCALPING",
+        "buy_qty": 1,
+        "holding_ai_score_source": "openai",
+        "last_reversal_features": {
+            "buy_pressure_10t": 92.0,
+            "tick_acceleration_ratio": 1.1,
+            "large_sell_print_detected": False,
+            "curr_vs_micro_vwap_bp": 24.0,
+            "tick_context_quality": "stale_tick",
+            "tick_context_stale": True,
+            "tick_latest_age_ms": 31_000,
+            "quote_stale": False,
+            "quote_age_ms": 0,
+        },
+    }
+
+    action = state_handlers._evaluate_scale_in_signal(
+        stock=stock,
+        code="123456",
+        strategy="SCALPING",
+        market_regime="NORMAL",
+        profit_rate=2.0,
+        peak_profit=2.0,
+        curr_price=10_000,
+        ws_data={"curr": 10_000},
+        current_ai_score=75,
+        held_sec=60,
+        ai_engine=FeatureEngine(),
+        now_ts=1_000.0,
+    )
+
+    assert action["should_add"] is True
+    assert action["reason"] == "scalping_pyramid_ok"
+    assert stock["last_reversal_features"]["tick_context_stale"] is False
+    refresh_logs = [fields for stage, fields in logs if stage == "scale_in_feature_context_refresh"]
+    assert refresh_logs
+    assert refresh_logs[-1]["scale_in_feature_refresh_applied"] is True
+    assert refresh_logs[-1]["scale_in_feature_refresh_reason"] == "feature_context_refreshed"
 
 
 def test_scalping_pyramid_missing_prior_keeps_existing_decision():
@@ -2074,6 +2336,35 @@ def test_scalping_pyramid_support_prior_relaxes_single_soft_quality_blocker():
     assert result["pyramid_runtime_prior_relaxed_blocker"] == "ai_score_below_min_borderline"
 
 
+def test_scalping_pyramid_support_prior_relaxes_borderline_buy_pressure_only():
+    result = scale_in.evaluate_scalping_pyramid(
+        {
+            "last_reversal_features": {
+                "buy_pressure_10t": 58.0,
+                "tick_acceleration_ratio": 0.85,
+                "large_sell_print_detected": False,
+                "curr_vs_micro_vwap_bp": 24.0,
+            },
+        },
+        profit_rate=2.0,
+        peak_profit=2.2,
+        is_new_high=True,
+        current_ai_score=74,
+        runtime_prior_context={
+            "status": "aggregate",
+            "sample_count": 3,
+            "recovered_or_extended_rate": 0.67,
+            "signal": "support",
+            "reason": "aggregate_recovered_or_extended_rate_ge_0_67",
+        },
+    )
+
+    assert result["should_add"] is True
+    assert result["reason"] == "scalping_pyramid_ok"
+    assert result["pyramid_runtime_prior_support_applied"] is True
+    assert result["pyramid_runtime_prior_relaxed_blocker"] == "buy_pressure_below_min_borderline"
+
+
 def test_scalping_pyramid_support_prior_does_not_release_hard_quality_blocker():
     result = scale_in.evaluate_scalping_pyramid(
         {
@@ -2099,6 +2390,41 @@ def test_scalping_pyramid_support_prior_does_not_release_hard_quality_blocker():
 
     assert result["should_add"] is False
     assert result["reason"] == "large_sell_detected"
+    assert "pyramid_runtime_prior_support_applied" not in result
+
+
+def test_scalping_pyramid_support_prior_does_not_release_missing_tick_context():
+    result = scale_in.evaluate_scalping_pyramid(
+        {
+            "last_reversal_features": {
+                "buy_pressure_10t": 72.0,
+                "tick_acceleration_ratio": 1.1,
+                "large_sell_print_detected": False,
+                "curr_vs_micro_vwap_bp": 24.0,
+                "tick_context_quality": "missing_ticks",
+                "tick_context_stale": "unknown",
+                "tick_latest_age_ms": "-",
+                "quote_stale": False,
+                "quote_age_ms": 100,
+            },
+        },
+        profit_rate=2.0,
+        peak_profit=2.2,
+        is_new_high=True,
+        current_ai_score=74,
+        runtime_prior_context={
+            "status": "aggregate",
+            "sample_count": 3,
+            "recovered_or_extended_rate": 0.67,
+            "signal": "support",
+            "reason": "aggregate_recovered_or_extended_rate_ge_0_67",
+        },
+    )
+
+    assert result["should_add"] is False
+    assert result["reason"] == "pyramid_quality_blocked:tick_accel_stale,micro_context_stale"
+    assert result["reversal_feature_stale"] is True
+    assert "tick_context_unusable" in result["reversal_feature_stale_reason"]
     assert "pyramid_runtime_prior_support_applied" not in result
 
 
@@ -2607,6 +2933,9 @@ def test_stat_action_decision_snapshot_logs_observe_only_with_rate_limit(monkeyp
     assert logs[0][1]["scale_in_blocker_reason"] == "pnl_out_of_range"
     assert logs[0][1]["ai_score_source"] == "-"
     assert logs[0][1]["source_quality_gate"] == "stat_action_snapshot_source_only"
+    assert logs[0][1]["has_reversal_features"] is True
+    assert logs[0][1]["reversal_feature_source_quality"] == "usable"
+    assert "reversal_feature_stale_reason" in logs[0][1]
     assert "spread_bps" in logs[0][1]
 
     now["ts"] = 1_010.0
@@ -2663,6 +2992,52 @@ def test_stat_action_decision_snapshot_separates_pyramid_namespace(monkeypatch):
     assert logs[0][1]["scale_in_blocker_namespace"] == "PYRAMID"
     assert logs[0][1]["scale_in_blocker_reason"] == "profit_not_enough"
     assert "reversal_add" not in logs[0][1]["rejected_actions"]
+
+
+def test_stat_action_decision_snapshot_marks_holding_ai_not_called_source(monkeypatch):
+    from src.utils.constants import TRADING_RULES as CONFIG
+
+    logs = []
+
+    state_handlers.TRADING_RULES = replace(
+        CONFIG,
+        STAT_ACTION_DECISION_SNAPSHOT_ENABLED=True,
+        STAT_ACTION_DECISION_SNAPSHOT_MIN_INTERVAL_SEC=0,
+    )
+    monkeypatch.setattr(state_handlers.time, "time", lambda: 2_100.0)
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_holding_pipeline",
+        lambda stock, code, stage, **fields: logs.append((stage, fields)),
+    )
+
+    emitted = state_handlers._emit_stat_action_decision_snapshot(
+        stock={
+            "id": 2,
+            "name": "PYR",
+            "buy_qty": 1,
+            "holding_ai_score_source": "holding_ai_not_called",
+        },
+        code="654321",
+        strategy="SCALPING",
+        ws_data={},
+        chosen_action="hold_wait",
+        eligible_actions=["hold_wait"],
+        rejected_actions=["pyramid_wait:ai_missing"],
+        profit_rate=2.0,
+        peak_profit=2.2,
+        current_ai_score=50,
+        held_sec=45,
+        curr_price=10200,
+        buy_price=10000,
+        scale_in_gate={"allowed": True, "reason": "ok"},
+        scale_in_action={"add_type": "PYRAMID", "reason": "ai_missing"},
+        reason="unit_test",
+    )
+
+    assert emitted is True
+    assert logs[0][1]["current_ai_score"] == "50"
+    assert logs[0][1]["ai_score_source"] == "holding_ai_not_called"
 
 
 def test_pyramid_block_log_includes_profit_gate_probe(monkeypatch):
@@ -3946,6 +4321,75 @@ def test_pending_scale_in_revalidation_not_skipped_by_holding_exit_tuning():
     assert decision is not None
     assert "holding_exit_matrix_exit" in decision["reason"]
     assert "micro_vwap_negative" in decision["reason"]
+
+
+def test_pending_scale_in_revalidation_flags_stale_feature_context():
+    rules = replace(
+        CONFIG,
+        PENDING_SCALE_IN_REVALIDATION_CANCEL_ENABLED=True,
+        PENDING_SCALE_IN_REVALIDATION_MIN_AI_SCORE=66,
+        PENDING_SCALE_IN_REVALIDATION_MIN_TICK_ACCEL=1.10,
+        PENDING_SCALE_IN_REVALIDATION_MIN_BUY_PRESSURE=60.0,
+        PENDING_SCALE_IN_REVALIDATION_MIN_MICRO_VWAP_BP=0.0,
+    )
+    original_rules = state_handlers.TRADING_RULES
+    state_handlers.TRADING_RULES = rules
+    try:
+        decision = state_handlers._pending_scale_in_revalidation_context(
+            {
+                "strategy": "SCALPING",
+                "pending_add_order": True,
+                "pending_add_type": "PYRAMID",
+                "last_reversal_features": {
+                    "curr_vs_micro_vwap_bp": 24.0,
+                    "buy_pressure_10t": 72.0,
+                    "tick_acceleration_ratio": 1.2,
+                    "tick_context_quality": "missing_ticks",
+                    "tick_context_stale": "unknown",
+                    "tick_latest_age_ms": "-",
+                    "quote_stale": False,
+                    "quote_age_ms": 100,
+                },
+            },
+            strategy="SCALPING",
+            current_ai_score=80,
+        )
+    finally:
+        state_handlers.TRADING_RULES = original_rules
+
+    assert decision is not None
+    assert "feature_context_unusable" in decision["reason"]
+    assert decision["reversal_feature_stale"] is True
+    assert "tick_context_unusable" in decision["reversal_feature_stale_reason"]
+
+
+def test_pending_scale_in_revalidation_flags_missing_feature_context():
+    rules = replace(
+        CONFIG,
+        PENDING_SCALE_IN_REVALIDATION_CANCEL_ENABLED=True,
+        PENDING_SCALE_IN_REVALIDATION_MIN_AI_SCORE=66,
+        PENDING_SCALE_IN_REVALIDATION_MIN_TICK_ACCEL=1.10,
+        PENDING_SCALE_IN_REVALIDATION_MIN_BUY_PRESSURE=60.0,
+        PENDING_SCALE_IN_REVALIDATION_MIN_MICRO_VWAP_BP=0.0,
+    )
+    original_rules = state_handlers.TRADING_RULES
+    state_handlers.TRADING_RULES = rules
+    try:
+        decision = state_handlers._pending_scale_in_revalidation_context(
+            {
+                "strategy": "SCALPING",
+                "pending_add_order": True,
+                "pending_add_type": "PYRAMID",
+            },
+            strategy="SCALPING",
+            current_ai_score=80,
+        )
+    finally:
+        state_handlers.TRADING_RULES = original_rules
+
+    assert decision is not None
+    assert "feature_context_missing" in decision["reason"]
+    assert "tick_acceleration_deteriorated" in decision["reason"]
 
 
 def test_recent_exit_candidate_pyramid_block_context_blocks_within_window():
@@ -16435,6 +16879,42 @@ def test_reversal_add_reports_supply_before_ai_when_both_fail():
         scale_in.TRADING_RULES = CONFIG
 
 
+def test_reversal_add_blocks_stale_feature_context_before_avg_down():
+    stock = _reversal_add_stock({
+        "reversal_add_ai_bottom": 42,
+        "reversal_add_ai_history": [42, 44, 50, 58],
+        "last_reversal_features": {
+            "buy_pressure_10t": 90.0,
+            "tick_acceleration_ratio": 1.10,
+            "large_sell_print_detected": False,
+            "curr_vs_micro_vwap_bp": 0.0,
+            "tick_context_quality": "stale_tick",
+            "tick_context_stale": "true",
+            "tick_latest_age_ms": 30_000,
+            "quote_stale": False,
+            "quote_age_ms": 0,
+        },
+    })
+
+    original = scale_in.TRADING_RULES
+    scale_in.TRADING_RULES = _reversal_add_rules()
+    try:
+        result = scale_in.evaluate_scalping_reversal_add(
+            stock,
+            profit_rate=-0.25,
+            current_ai_score=65,
+            held_sec=50,
+        )
+    finally:
+        scale_in.TRADING_RULES = original
+
+    assert result["should_add"] is False
+    assert result["reason"].startswith("reversal_features_stale:")
+    assert result["probe"]["reversal_feature_stale"] is True
+    assert result["probe"]["tick_accel_ok"] is False
+    assert result["probe"]["micro_vwap_ok"] is False
+
+
 def test_aggressive_reversal_add_accepts_kistron_like_shallow_recovery():
     stock = _reversal_add_stock({
         "reversal_add_ai_bottom": 84,
@@ -18083,6 +18563,154 @@ def test_first_touch_avgdown_decision_gate_allows_prior_peak_recovery(monkeypatc
     assert "prior_peak_recovery" in allowed["fields"]["first_touch_avgdown_support_signals"]
 
 
+def test_first_touch_avgdown_decision_gate_ignores_stale_microstructure_support(monkeypatch):
+    monkeypatch.setattr(
+        state_handlers,
+        "TRADING_RULES",
+        SimpleNamespace(
+            SCALP_FIRST_TOUCH_AVGDOWN_DECISION_GATE_ENABLED=True,
+            SCALP_FIRST_TOUCH_AVGDOWN_MIN_AI_SUPPORT=70,
+            SCALP_FIRST_TOUCH_AVGDOWN_MIN_AI_MODERATE=60,
+            SCALP_FIRST_TOUCH_AVGDOWN_MIN_PRIOR_PEAK_PCT=0.30,
+            SCALP_FIRST_TOUCH_AVGDOWN_MAX_REPEATED_BLOCKERS_WITHOUT_SUPPORT=8,
+            SCALP_FIRST_TOUCH_AVGDOWN_LOW_AI_BLOCK=50,
+            SCALP_FIRST_TOUCH_AVGDOWN_MAX_SPREAD_BPS=80,
+            REVERSAL_ADD_MAX_TICK_AGE_MS=5000,
+            SCALP_PRE_AI_MAX_WS_AGE_SEC=3.0,
+        ),
+    )
+    stock = {
+        "strategy": "SCALPING",
+        "last_reversal_features": {
+            "buy_pressure_10t": 91.0,
+            "tick_acceleration_ratio": 1.25,
+            "curr_vs_micro_vwap_bp": 12.0,
+            "tick_context_quality": "stale_tick",
+            "tick_context_stale": True,
+            "tick_latest_age_ms": 8000.0,
+            "quote_stale": False,
+            "quote_age_ms": 100.0,
+        },
+    }
+
+    blocked = state_handlers._evaluate_first_touch_avgdown_decision_gate(
+        stock=stock,
+        ws_data={"curr": 10_000, "best_bid": 9_990, "best_ask": 10_000},
+        context_fields={},
+        current_ai_score=55,
+        peak_profit=-0.10,
+        profit_rate=-3.42,
+        now_ts=1_000.0,
+    )
+
+    assert blocked["allowed"] is False
+    assert blocked["reason"] == "insufficient_first_touch_recovery_confirmation"
+    assert "micro_context_stale_ignored" in blocked["fields"]["first_touch_avgdown_risk_signals"]
+    assert "buy_pressure_support" not in blocked["fields"]["first_touch_avgdown_support_signals"]
+    assert "tick_accel_support" not in blocked["fields"]["first_touch_avgdown_support_signals"]
+    assert "micro_vwap_non_negative" not in blocked["fields"]["first_touch_avgdown_support_signals"]
+    assert blocked["fields"]["first_touch_reversal_feature_source_quality"] == "stale"
+    assert blocked["fields"]["first_touch_reversal_feature_stale"] is True
+
+
+def test_first_touch_avgdown_decision_gate_uses_fresh_microstructure_support(monkeypatch):
+    monkeypatch.setattr(
+        state_handlers,
+        "TRADING_RULES",
+        SimpleNamespace(
+            SCALP_FIRST_TOUCH_AVGDOWN_DECISION_GATE_ENABLED=True,
+            SCALP_FIRST_TOUCH_AVGDOWN_MIN_AI_SUPPORT=70,
+            SCALP_FIRST_TOUCH_AVGDOWN_MIN_AI_MODERATE=60,
+            SCALP_FIRST_TOUCH_AVGDOWN_MIN_PRIOR_PEAK_PCT=0.30,
+            SCALP_FIRST_TOUCH_AVGDOWN_MAX_REPEATED_BLOCKERS_WITHOUT_SUPPORT=8,
+            SCALP_FIRST_TOUCH_AVGDOWN_LOW_AI_BLOCK=50,
+            SCALP_FIRST_TOUCH_AVGDOWN_MAX_SPREAD_BPS=80,
+            REVERSAL_ADD_MAX_TICK_AGE_MS=5000,
+            SCALP_PRE_AI_MAX_WS_AGE_SEC=3.0,
+        ),
+    )
+    stock = {
+        "strategy": "SCALPING",
+        "last_reversal_features": {
+            "buy_pressure_10t": 91.0,
+            "tick_acceleration_ratio": 1.25,
+            "curr_vs_micro_vwap_bp": 12.0,
+            "tick_context_quality": "live_tick",
+            "tick_context_stale": False,
+            "tick_latest_age_ms": 250.0,
+            "quote_stale": False,
+            "quote_age_ms": 100.0,
+        },
+    }
+
+    allowed = state_handlers._evaluate_first_touch_avgdown_decision_gate(
+        stock=stock,
+        ws_data={"curr": 10_000, "best_bid": 9_990, "best_ask": 10_000},
+        context_fields={},
+        current_ai_score=55,
+        peak_profit=-0.10,
+        profit_rate=-3.42,
+        now_ts=1_000.0,
+    )
+
+    assert allowed["allowed"] is True
+    assert allowed["reason"] == "recovery_support_confirmed"
+    assert "buy_pressure_support" in allowed["fields"]["first_touch_avgdown_support_signals"]
+    assert "tick_accel_support" in allowed["fields"]["first_touch_avgdown_support_signals"]
+    assert "micro_vwap_non_negative" in allowed["fields"]["first_touch_avgdown_support_signals"]
+    assert allowed["fields"]["first_touch_reversal_feature_source_quality"] == "usable"
+    assert allowed["fields"]["first_touch_reversal_feature_stale"] is False
+
+
+def test_first_touch_avgdown_decision_gate_context_micro_uses_stock_freshness(monkeypatch):
+    monkeypatch.setattr(
+        state_handlers,
+        "TRADING_RULES",
+        SimpleNamespace(
+            SCALP_FIRST_TOUCH_AVGDOWN_DECISION_GATE_ENABLED=True,
+            SCALP_FIRST_TOUCH_AVGDOWN_MIN_AI_SUPPORT=70,
+            SCALP_FIRST_TOUCH_AVGDOWN_MIN_AI_MODERATE=60,
+            SCALP_FIRST_TOUCH_AVGDOWN_MIN_PRIOR_PEAK_PCT=0.30,
+            SCALP_FIRST_TOUCH_AVGDOWN_MAX_REPEATED_BLOCKERS_WITHOUT_SUPPORT=8,
+            SCALP_FIRST_TOUCH_AVGDOWN_LOW_AI_BLOCK=50,
+            SCALP_FIRST_TOUCH_AVGDOWN_MAX_SPREAD_BPS=80,
+            REVERSAL_ADD_MAX_TICK_AGE_MS=5000,
+            SCALP_PRE_AI_MAX_WS_AGE_SEC=3.0,
+        ),
+    )
+    stock = {
+        "strategy": "SCALPING",
+        "last_reversal_features": {
+            "buy_pressure_10t": 91.0,
+            "tick_acceleration_ratio": 1.25,
+            "curr_vs_micro_vwap_bp": 12.0,
+            "tick_context_quality": "stale_tick",
+            "tick_context_stale": True,
+            "tick_latest_age_ms": 8000.0,
+            "quote_stale": False,
+            "quote_age_ms": 100.0,
+        },
+    }
+
+    blocked = state_handlers._evaluate_first_touch_avgdown_decision_gate(
+        stock=stock,
+        ws_data={"curr": 10_000, "best_bid": 9_990, "best_ask": 10_000},
+        context_fields={
+            "buy_pressure_10t": 91.0,
+            "tick_acceleration_ratio": 1.25,
+            "curr_vs_micro_vwap_bp": 12.0,
+        },
+        current_ai_score=55,
+        peak_profit=-0.10,
+        profit_rate=-3.42,
+        now_ts=1_000.0,
+    )
+
+    assert blocked["allowed"] is False
+    assert "micro_context_stale_ignored" in blocked["fields"]["first_touch_avgdown_risk_signals"]
+    assert blocked["fields"]["first_touch_reversal_feature_source_quality"] == "stale"
+
+
 def test_stop_line_touch_mandatory_avg_down_submits_before_grace(monkeypatch):
     state_handlers.TRADING_RULES = replace(
         CONFIG,
@@ -19254,6 +19882,50 @@ def test_late_loss_avg_down_price_resolver_bypasses_micro_vwap_only_for_late_ret
     assert late["late_loss_avg_down_retry_micro_vwap_bypass"] is True
     assert late["order_price"] == 40_350
     assert late["price_source"] == "best_bid_discount"
+
+
+def test_avg_down_price_resolver_stale_micro_blocks_reversal_add_not_late_retry(monkeypatch):
+    original = scale_in.TRADING_RULES
+    scale_in.TRADING_RULES = replace(CONFIG, REVERSAL_ADD_VWAP_BP_MIN=-5.0)
+    stock = {
+        "strategy": "SCALPING",
+        "last_reversal_features": {
+            "curr_vs_micro_vwap_bp": -235.79,
+            "tick_context_quality": "stale_tick",
+            "tick_context_stale": True,
+            "tick_latest_age_ms": 31_000,
+            "quote_stale": False,
+            "quote_age_ms": 0,
+        },
+    }
+    ws_data = {
+        "curr": 40_500,
+        "best_bid": 40_400,
+        "best_ask": 40_500,
+    }
+    try:
+        reversal = scale_in.resolve_scale_in_order_price(
+            stock=stock,
+            ws_data=ws_data,
+            action={"add_type": "AVG_DOWN", "reason": "reversal_add_ok"},
+            strategy="SCALPING",
+            curr_price=40_500,
+        )
+        late = scale_in.resolve_scale_in_order_price(
+            stock=stock,
+            ws_data=ws_data,
+            action={"add_type": "AVG_DOWN", "reason": "late_loss_avg_down_retry"},
+            strategy="SCALPING",
+            curr_price=40_500,
+        )
+    finally:
+        scale_in.TRADING_RULES = original
+
+    assert reversal["allowed"] is False
+    assert reversal["reason"].startswith("micro_context_stale:")
+    assert late["allowed"] is True
+    assert late["late_loss_avg_down_retry_micro_vwap_bypass"] is False
+    assert late["order_price"] == 40_350
 
 
 def test_avg_down_price_resolver_discounts_best_bid_for_high_price_recovery(monkeypatch):

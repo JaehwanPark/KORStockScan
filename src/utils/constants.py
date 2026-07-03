@@ -3181,6 +3181,7 @@ def _build_trading_rules() -> TradingConfig:
     env_pyramid_min_ai_score = _env_int("KORSTOCKSCAN_SCALPING_PYRAMID_MIN_AI_SCORE")
     env_pyramid_min_buy_pressure = _env_float("KORSTOCKSCAN_SCALPING_PYRAMID_MIN_BUY_PRESSURE")
     env_pyramid_min_tick_accel = _env_float("KORSTOCKSCAN_SCALPING_PYRAMID_MIN_TICK_ACCEL")
+    env_pyramid_min_profit_pct = _env_float("KORSTOCKSCAN_SCALPING_PYRAMID_MIN_PROFIT_PCT")
     env_pyramid_strong_continuation_enabled = _env_bool(
         "KORSTOCKSCAN_SCALPING_PYRAMID_STRONG_CONTINUATION_ENABLED"
     )
@@ -3343,6 +3344,7 @@ def _build_trading_rules() -> TradingConfig:
         or env_pyramid_min_ai_score is not None
         or env_pyramid_min_buy_pressure is not None
         or env_pyramid_min_tick_accel is not None
+        or env_pyramid_min_profit_pct is not None
         or env_pyramid_strong_continuation_enabled is not None
         or env_pyramid_strong_continuation_min_profit is not None
         or env_pyramid_strong_continuation_max_drawdown is not None
@@ -3697,6 +3699,9 @@ def _build_trading_rules() -> TradingConfig:
             SCALPING_PYRAMID_MIN_TICK_ACCEL=env_pyramid_min_tick_accel
             if env_pyramid_min_tick_accel is not None
             else config.SCALPING_PYRAMID_MIN_TICK_ACCEL,
+            SCALPING_PYRAMID_MIN_PROFIT_PCT=env_pyramid_min_profit_pct
+            if env_pyramid_min_profit_pct is not None
+            else config.SCALPING_PYRAMID_MIN_PROFIT_PCT,
             SCALPING_PYRAMID_STRONG_CONTINUATION_ENABLED=env_pyramid_strong_continuation_enabled
             if env_pyramid_strong_continuation_enabled is not None
             else config.SCALPING_PYRAMID_STRONG_CONTINUATION_ENABLED,

@@ -1,4 +1,5 @@
 import json
+from types import SimpleNamespace
 
 from src.engine.monitoring import scalping_pyramid_intraday_feedback as mod
 
@@ -165,3 +166,31 @@ def test_pyramid_intraday_feedback_backtests_all_one_share_events(tmp_path):
         "source_only_one_share_pyramid_opportunity_backtest_no_runtime_mutation"
     )
     assert "intraday_threshold_mutation" in report["one_share_metric_contract"]["forbidden_uses"]
+
+
+def test_pyramid_intraday_feedback_uses_runtime_min_profit_for_one_share_opportunity(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        mod,
+        "TRADING_RULES",
+        SimpleNamespace(SCALPING_PYRAMID_MIN_PROFIT_PCT=1.2),
+    )
+    pipeline_path = tmp_path / "pipeline_events_2026-07-03.jsonl"
+    rows = [
+        _event(
+            501,
+            "444444",
+            "lower",
+            "rising_missed_one_share_entry",
+            {"forced_entry_reason": "rising_missed_one_share_entry", "forced_entry_qty": 1},
+        ),
+        _event(501, "444444", "lower", "stat_action_decision_snapshot", {"profit_rate": "+1.30"}),
+        _event(501, "444444", "lower", "sell_completed", {"profit_rate": "+1.80"}),
+    ]
+    pipeline_path.write_text("\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8")
+
+    report = mod.build_report("2026-07-03", pipeline_path=pipeline_path, generated_at="fixed")
+    item = report["one_share_pyramid_opportunity_rows"][0]
+
+    assert item["pyramid_opportunity_seen"] is True
+    assert item["pyramid_opportunity_min_profit_pct"] == 1.2
+    assert item["pyramid_opportunity_profit_rate"] == 1.3
