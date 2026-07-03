@@ -1,84 +1,85 @@
 {
-  "bundle_as_of": "2026-07-01T22:20:13Z",
+  "bundle_as_of": "2026-07-02T22:20:14Z",
   "sp500": {
     "name": "S&P 500",
-    "value": 7483.23,
-    "prev_value": 7499.36,
-    "change": -16.13,
-    "change_pct": -0.22,
-    "as_of": "2026-07-01T20:00:00Z",
+    "value": 7483.24,
+    "prev_value": 7483.23,
+    "change": 0.01,
+    "change_pct": 0.0,
+    "as_of": "2026-07-02T20:00:00Z",
     "source": "AP News"
   },
   "nasdaq": {
     "name": "NASDAQ Composite",
-    "value": 26040.03,
-    "prev_value": 26213.72,
-    "change": -173.69,
-    "change_pct": -0.66,
-    "as_of": "2026-07-01T20:00:00Z",
-    "source": "The Motley Fool"
+    "value": 25832.67,
+    "prev_value": 26040.03,
+    "change": -207.36,
+    "change_pct": -0.8,
+    "as_of": "2026-07-02T20:00:00Z",
+    "source": "AP News"
   },
   "vix": {
     "name": "VIX",
-    "value": 16.36,
-    "prev_value": 16.45,
-    "change": -0.09,
-    "change_pct": -0.55,
-    "as_of": "2026-07-01T18:33:00Z",
+    "value": 16.28,
+    "prev_value": 16.59,
+    "change": -0.31,
+    "change_pct": -1.87,
+    "as_of": "2026-07-02T20:00:00Z",
     "source": "Cboe Global Markets"
   },
   "us10y": {
     "name": "US 10-Year Treasury Yield",
-    "value": 4.48,
-    "prev_value": 4.42,
-    "change": 0.06,
-    "change_pct": 1.36,
-    "as_of": "2026-07-01T20:00:00Z",
-    "source": "The Motley Fool"
+    "value": 4.485,
+    "prev_value": 4.47,
+    "change": 0.015,
+    "change_pct": 0.34,
+    "as_of": "2026-07-02T20:00:00Z",
+    "source": "Exante"
   },
   "brent": {
     "name": "Brent Crude",
-    "value": 71.13,
-    "prev_value": 72.95,
-    "change": -1.82,
-    "change_pct": -2.5,
-    "as_of": "2026-07-01T20:00:00Z",
+    "value": 71.58,
+    "prev_value": 71.57,
+    "change": 0.01,
+    "change_pct": 0.01,
+    "as_of": "2026-07-02T21:00:00Z",
     "source": "Trading Economics"
   },
   "headlines": [
     {
-      "title": "Iran president, IRGC clash over priorities, threatening US-Iran negotiations",
-      "source": "The Jerusalem Post",
-      "published_at": "2026-07-01T07:55:00Z",
-      "url": "https://www.jpost.com/middle-east/iran-news"
+      "title": "Dow Jumps to Record Closing High After Soft US Jobs Data, Nasdaq Down With Chip Shares",
+      "source": "Reuters",
+      "published_at": "2026-07-02T21:32:00Z",
+      "url": "https://www.reuters.com/"
     },
     {
-      "title": "Stock Market Today, July 1: Meta Shakes Up Cloud Sector and Tech Stocks Weigh on Markets",
-      "source": "The Motley Fool",
-      "published_at": "2026-07-01T21:12:00Z",
-      "url": "https://www.fool.com/investing/2026/07/01/stock-market-today-july-1/"
+      "title": "Facing barbs and pressure from Trump, Europe's leaders close ranks",
+      "source": "AP News",
+      "published_at": "2026-07-02T10:36:00Z",
+      "url": "https://apnews.com/"
     },
     {
-      "title": "Tehran Refuses Direct Meeting with Washington",
-      "source": "ILTV Israel News",
-      "published_at": "2026-07-01T12:00:00Z",
-      "url": "https://www.youtube.com/watch?v=dtvgcpp4DmE"
+      "title": "Trump administration plans new rule that it says could save Medicare patients $1.1 billion",
+      "source": "AP News",
+      "published_at": "2026-07-02T19:20:00Z",
+      "url": "https://apnews.com/"
     },
     {
-      "title": "Brent Crude Returns to Pre-War Price, Supporting Refining Margins",
-      "source": "Crux Investor",
-      "published_at": "2026-06-30T12:00:00Z",
-      "url": "https://cruxinvestor.com/articles/brent-crude-returns-to-pre-war-price"
+      "title": "UBS cuts Brent crude price forecasts on improved Hormuz oil flows",
+      "source": "Reuters",
+      "published_at": "2026-07-02T03:14:00Z",
+      "url": "https://www.reuters.com/"
     },
     {
-      "title": "US Manufacturing PMI Miss Spurs Defensive Equity Hedges and Volatility Bets, Boosting Bond Appeal",
-      "source": "VT Markets",
-      "published_at": "2026-07-01T12:00:00Z",
-      "url": "https://www.vtmarkets.com/insights/us-manufacturing-pmi-miss-spurs-defensive-equity-hedges-and-volatility-bets-boosting-bond-appeal/"
+      "title": "Brent Falls to $70.47 & OPEC+ Supply Decision Test US Oil Supply Recovery",
+      "source": "CRUX",
+      "published_at": "2026-07-02T15:20:00Z",
+      "url": "https://cruxinvestor.com/"
     }
   ],
   "notes": [
-    "US equity indexes saw a slight pullback after completing their strongest first half since 2020.",
-    "Brent crude experienced a steep sell-off alongside a broader structural supply glut in the Persian Gulf as the Strait of Hormuz continues to normalize."
+    "US markets closed mixed on July 2, 2026, ahead of the long Independence Day holiday weekend. Soft June non-farm payrolls data eased rate hike fears.",
+    "Semiconductor stocks sold off sharply for a second straight day, pulling the NASDAQ down 0.8%.",
+    "Crude prices traded lower or mostly flat amid easing geopolitical tensions and improved oil transit flows through the Strait of Hormuz."
   ]
 }

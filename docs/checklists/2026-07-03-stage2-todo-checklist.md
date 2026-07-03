@@ -15,6 +15,7 @@
 - provider transport/provenance 확인은 threshold 값, 주문가/수량 guard, 스윙 dry-run guard 변경과 분리한다.
 - `actual_order_submitted=false`인 sim/probe 표본은 EV/source-quality 입력이며 실주문 전환 근거가 아니다.
 - Project/Calendar 동기화는 사용자가 표준 동기화 명령으로 수행한다.
+- 운영 메모: 사용자 요청으로 System Error Detector 임시 OFF를 해제하고 cron wrapper와 bot daemon 기본값을 재개한다. 이 변경은 report-only 운영 감시 재개이며 threshold/env/provider/order/bot restart 권한을 만들지 않는다.
 
 <!-- AUTO_NEXT_STAGE2_CHECKLIST_START -->
 ## 자동 생성 체크리스트 (`2026-07-02` postclose -> `2026-07-03`)
@@ -25,17 +26,25 @@
 
 ## 장전 체크리스트 (08:45~09:00)
 
-- [ ] `[ThresholdEnvAutoApplyPreopen0703] threshold env 자동 apply 산출물 및 사용자 개입 여부 확인` (`Due: 2026-07-03`, `Slot: PREOPEN`, `TimeWindow: 08:50~08:55`, `Track: RuntimeStability`)
+- [x] `[ThresholdEnvAutoApplyPreopen0703] threshold env 자동 apply 산출물 및 사용자 개입 여부 확인` (`Due: 2026-07-03`, `Slot: PREOPEN`, `TimeWindow: 08:50~08:55`, `Track: RuntimeStability`)
   - Source: [threshold_cycle_ev_2026-07-02.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-07-02.json), [threshold_cycle_preopen_apply.py](/home/ubuntu/KORStockScan/src/engine/threshold_cycle_preopen_apply.py), [run_bot.sh](/home/ubuntu/KORStockScan/src/run_bot.sh)
   - 판정 기준: 전일 postclose EV와 당일 apply plan/runtime env를 확인하고 `auto_bounded_live` guard 통과분만 runtime env로 인정한다.
   - 금지: blocked family, approval artifact missing, same-stage owner conflict를 수동 env override로 우회하지 않는다.
   - 다음 액션: `applied_guard_passed_env`, `blocked_no_env`, `partial_apply_with_blocked_families`, `failed_preopen_wrapper`, `not_yet_due` 중 하나로 닫는다.
+  - 실행 결과: `applied_guard_passed_env`.
+  - 근거: `threshold_apply_2026-07-03.json` status=`auto_bounded_live_ready`, apply_mode=`auto_bounded_live`, runtime_change=`true`, source_phase_auto_apply_blocked=`false`, approval_contract_gaps=`0`, approval_requests=`0`, warnings=`0`.
+  - runtime env 확인: `threshold_runtime_env_2026-07-03.json` generated_at=`2026-07-03T07:35:02+09:00`, selected_family_count=`23`, env_overrides_count=`309`.
+  - verify 확인: `threshold_runtime_env_verify_2026-07-03.json` status=`pass`, passed=`true`, missing_family_count=`0`, findings_count=`0`.
 
-- [ ] `[RisingMissedScoutRuntimePreopen0703] rising_missed_scout_workorder 구현분 다음 장전 runtime 반영 여부 확인` (`Due: 2026-07-03`, `Slot: PREOPEN`, `TimeWindow: 08:55~09:00`, `Track: ScalpingLogic`)
+- [x] `[RisingMissedScoutRuntimePreopen0703] rising_missed_scout_workorder 구현분 다음 장전 runtime 반영 여부 확인` (`Due: 2026-07-03`, `Slot: PREOPEN`, `TimeWindow: 08:55~09:00`, `Track: ScalpingLogic`)
   - Source: [rising_missed_scout_workorder_2026-07-02.json](/home/ubuntu/KORStockScan/data/report/rising_missed_scout_workorder/rising_missed_scout_workorder_2026-07-02.json), [code_improvement_workorder_2026-07-02.json](/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-07-02.json), [threshold_apply_2026-07-03.json](/home/ubuntu/KORStockScan/data/threshold_cycle/apply_plans/threshold_apply_2026-07-03.json), [threshold_runtime_env_2026-07-03.json](/home/ubuntu/KORStockScan/data/threshold_cycle/runtime_env/threshold_runtime_env_2026-07-03.json), [threshold_runtime_env_verify_2026-07-03.json](/home/ubuntu/KORStockScan/data/threshold_cycle/runtime_env/threshold_runtime_env_verify_2026-07-03.json)
   - 판정 기준: 전일 `rising_missed_scout_workorder` 요약(code_improvement_order_count=`5`, forced_scout_with_post_sell_count=`14`, profitable_forced_scout_count=`11`, loss_or_flat_forced_scout_count=`3`, current_missed_count=`3`)과 구현 완료된 mapped family가 당일 PREOPEN apply plan/runtime env/verify에 반영됐는지 확인한다. source-only order는 별도 runtime family/env mapping과 guard 통과가 있을 때만 반영으로 인정한다.
   - 금지: `rising_missed_scout_workorder` 생성 또는 forced 1-share scout 손익만으로 runtime threshold mutation, stale submit bypass, broker/order guard 완화, provider/bot/cap 변경, real execution quality approval을 열지 않는다.
   - 다음 액션: `runtime_env_reflected_and_verified`, `implemented_but_runtime_not_selected`, `source_only_no_runtime_authority`, `blocked_by_apply_guard`, `report_missing_or_stale`, `verify_missing_or_failed` 중 하나로 닫는다.
+  - 실행 결과: `source_only_no_runtime_authority`.
+  - 근거: `rising_missed_scout_workorder_2026-07-02.json` allowed_runtime_apply=`false`, runtime_effect=`false`, decision_authority=`source_only_operational_workorder`; code_improvement_order_count=`5`이며 5개 order는 모두 status=`implemented`.
+  - 표본 요약: forced_scout_with_post_sell_count=`14`, profitable_forced_scout_count=`11`, loss_or_flat_forced_scout_count=`3`, current_missed_count=`3`.
+  - runtime 반영 확인: 당일 selected_families에는 `entry_opportunity_recheck_runtime`, `early_accel_recheck_runtime`, `scalping_scanner_real_source_guard_runtime` 등 기존/별도 runtime family가 포함됐지만, rising missed scout workorder 자체는 runtime_effect=`false`/allowed_runtime_apply=`false`인 source-only 산출물이므로 별도 runtime authority로 인정하지 않는다. verify는 status=`pass`, missing_family_count=`0`.
 
 ## 장중 체크리스트 (09:05~15:20)
 
