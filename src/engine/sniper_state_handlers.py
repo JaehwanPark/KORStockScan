@@ -2823,13 +2823,33 @@ def _evaluate_first_touch_avgdown_decision_gate(
     )
     low_ai_block = _rule_float("SCALP_FIRST_TOUCH_AVGDOWN_LOW_AI_BLOCK", 50.0)
     max_spread_bps = _rule_float("SCALP_FIRST_TOUCH_AVGDOWN_MAX_SPREAD_BPS", 80.0)
+    stock_for_score = stock if isinstance(stock, dict) else {}
+    explicit_holding_score_contract = any(
+        key in stock_for_score
+        for key in (
+            "holding_score_effective_usable",
+            "holding_score_data_quality",
+            "holding_score_source",
+            "current_ai_score_source",
+            "holding_ai_score_source",
+        )
+    )
+    holding_score_ctx = _holding_score_runtime_context(
+        stock_for_score,
+        current_ai_score=ai_score,
+        now_ts=now_ts,
+        is_critical_zone=True,
+    )
+    ai_score_usable = bool(holding_score_ctx.get("usable")) if explicit_holding_score_contract else True
 
     support_signals: list[str] = []
     risk_signals: list[str] = []
-    if ai_score >= min_ai_support:
+    if ai_score_usable and ai_score >= min_ai_support:
         support_signals.append("ai_score_ge_support")
-    elif ai_score < low_ai_block:
+    elif ai_score_usable and ai_score < low_ai_block:
         risk_signals.append("ai_score_below_low_block")
+    elif not ai_score_usable:
+        risk_signals.append("ai_score_unusable_ignored")
     if prior_peak >= min_peak_support:
         support_signals.append("prior_peak_recovery")
     elif prior_peak < 0:
@@ -2872,7 +2892,7 @@ def _evaluate_first_touch_avgdown_decision_gate(
         support_signals.append("quote_spread_present")
 
     base_has_recovery_support = bool(
-        ai_score >= min_ai_support
+        (ai_score_usable and ai_score >= min_ai_support)
         or prior_peak >= min_peak_support
         or "vpw_recovered" in support_signals
         or {"buy_pressure_support", "tick_accel_support", "micro_vwap_non_negative"}.issubset(set(support_signals))
@@ -2905,7 +2925,7 @@ def _evaluate_first_touch_avgdown_decision_gate(
     if hard_block_reasons:
         allowed = False
         reason = "|".join(hard_block_reasons)
-    elif ai_score >= min_ai_moderate and repeated_blockers <= max_repeated_blockers_without_support:
+    elif ai_score_usable and ai_score >= min_ai_moderate and repeated_blockers <= max_repeated_blockers_without_support:
         allowed = True
         reason = "moderate_ai_with_limited_repeated_blockers"
     elif has_recovery_support:
@@ -2925,6 +2945,10 @@ def _evaluate_first_touch_avgdown_decision_gate(
             "first_touch_avgdown_support_signals": "|".join(support_signals) or "-",
             "first_touch_avgdown_risk_signals": "|".join(risk_signals) or "-",
             "first_touch_avgdown_ai_score": f"{ai_score:.0f}",
+            "first_touch_avgdown_ai_score_usable": ai_score_usable,
+            "first_touch_avgdown_ai_score_source": holding_score_ctx.get("source", "-"),
+            "first_touch_avgdown_ai_score_data_quality": holding_score_ctx.get("data_quality", "-"),
+            "first_touch_avgdown_ai_score_excluded_reason": holding_score_ctx.get("excluded_reason", "-"),
             "first_touch_avgdown_prior_peak_pct": f"{prior_peak:+.2f}",
             "first_touch_avgdown_profit_rate": f"{current_profit:+.2f}",
             "first_touch_avgdown_repeated_blocker_count": repeated_blockers,
@@ -3491,6 +3515,7 @@ def _evaluate_late_loss_avg_down_retry(
     peak_profit: float,
     current_ai_score: float,
     held_sec: int,
+    now_ts: float | None = None,
 ) -> dict:
     if not _rule_bool("SCALP_LATE_LOSS_AVG_DOWN_ENABLED", True):
         return {"should_retry": False, "reason": "disabled"}
@@ -3537,6 +3562,22 @@ def _evaluate_late_loss_avg_down_retry(
     min_abs_loss_pct = max(0.0, _rule_float("SCALP_LATE_LOSS_AVG_DOWN_MIN_ABS_LOSS_PCT", 1.50))
     min_hold_sec = max(0, _rule_int("SCALP_LATE_LOSS_AVG_DOWN_MIN_HOLD_SEC", 30))
     min_ai_score = _rule_float("SCALP_LATE_LOSS_AVG_DOWN_MIN_AI_SCORE", 60.0)
+    explicit_holding_score_contract = any(
+        key in stock
+        for key in (
+            "holding_score_effective_usable",
+            "holding_score_data_quality",
+            "holding_score_source",
+            "current_ai_score_source",
+            "holding_ai_score_source",
+        )
+    )
+    holding_score_ctx = _holding_score_runtime_context(
+        stock,
+        current_ai_score=current_ai_score,
+        now_ts=_safe_float(now_ts, 0.0) or time.time(),
+        is_critical_zone=True,
+    )
     giveback_pct = float(peak_profit or 0.0) - float(profit_rate or 0.0)
     loss_abs_pct = abs(min(0.0, float(profit_rate or 0.0)))
     peak_path_ok = peak_profit >= min_peak_pct
@@ -3560,12 +3601,27 @@ def _evaluate_late_loss_avg_down_retry(
             "giveback_pct": giveback_pct,
             "min_giveback_pct": min_giveback_pct,
         }
+    if explicit_holding_score_contract and not bool(holding_score_ctx.get("usable")):
+        return {
+            "should_retry": False,
+            "reason": "ai_score_unusable",
+            "current_ai_score": current_ai_score,
+            "min_ai_score": min_ai_score,
+            "ai_score_usable": False,
+            "ai_score_source": holding_score_ctx.get("source", "-"),
+            "ai_score_data_quality": holding_score_ctx.get("data_quality", "-"),
+            "ai_score_excluded_reason": holding_score_ctx.get("excluded_reason", "-"),
+        }
     if current_ai_score < min_ai_score:
         return {
             "should_retry": False,
             "reason": "ai_score_below_min",
             "current_ai_score": current_ai_score,
             "min_ai_score": min_ai_score,
+            "ai_score_usable": bool(holding_score_ctx.get("usable")) if explicit_holding_score_contract else True,
+            "ai_score_source": holding_score_ctx.get("source", "-"),
+            "ai_score_data_quality": holding_score_ctx.get("data_quality", "-"),
+            "ai_score_excluded_reason": holding_score_ctx.get("excluded_reason", "-"),
         }
 
     return {
@@ -3582,6 +3638,10 @@ def _evaluate_late_loss_avg_down_retry(
         "eligibility_path": "positive_mfe_giveback" if peak_path_ok else "deep_loss_retry",
         "min_hold_sec": min_hold_sec,
         "min_ai_score": min_ai_score,
+        "ai_score_usable": bool(holding_score_ctx.get("usable")) if explicit_holding_score_contract else True,
+        "ai_score_source": holding_score_ctx.get("source", "-"),
+        "ai_score_data_quality": holding_score_ctx.get("data_quality", "-"),
+        "ai_score_excluded_reason": holding_score_ctx.get("excluded_reason", "-"),
         "used_count": used_count,
         "max_per_position": max_per_position,
         "action": {
@@ -3592,9 +3652,45 @@ def _evaluate_late_loss_avg_down_retry(
             "profit_rate": profit_rate,
             "peak_profit": peak_profit,
             "current_ai_score": current_ai_score,
+            "ai_score_usable": bool(holding_score_ctx.get("usable")) if explicit_holding_score_contract else True,
+            "ai_score_source": holding_score_ctx.get("source", "-"),
+            "ai_score_data_quality": holding_score_ctx.get("data_quality", "-"),
+            "ai_score_excluded_reason": holding_score_ctx.get("excluded_reason", "-"),
             "stop_line_touched": True,
             "stop_line_source": exit_rule or (stock or {}).get("last_exit_rule") or sell_reason_type or "late_loss_avg_down_retry",
         },
+    }
+
+
+def _loss_fallback_ai_score_context(
+    stock: dict | None,
+    *,
+    current_ai_score: float,
+    now_ts: float,
+) -> dict:
+    stock_for_score = stock if isinstance(stock, dict) else {}
+    explicit_holding_score_contract = any(
+        key in stock_for_score
+        for key in (
+            "holding_score_effective_usable",
+            "holding_score_data_quality",
+            "holding_score_source",
+            "current_ai_score_source",
+            "holding_ai_score_source",
+        )
+    )
+    holding_score_ctx = _holding_score_runtime_context(
+        stock_for_score,
+        current_ai_score=current_ai_score,
+        now_ts=now_ts,
+        is_critical_zone=True,
+    )
+    usable = bool(holding_score_ctx.get("usable")) if explicit_holding_score_contract else True
+    return {
+        "usable": usable,
+        "source": holding_score_ctx.get("source", "-"),
+        "data_quality": holding_score_ctx.get("data_quality", "-"),
+        "excluded_reason": holding_score_ctx.get("excluded_reason", "-"),
     }
 
 
@@ -3783,6 +3879,7 @@ def _attempt_late_loss_avg_down_retry_before_sell(
         peak_profit=peak_profit,
         current_ai_score=current_ai_score,
         held_sec=held_sec,
+        now_ts=now_ts,
     )
     if not late_loss_avg_down_retry.get("should_retry"):
         return {
@@ -3821,6 +3918,10 @@ def _attempt_late_loss_avg_down_retry_before_sell(
         "peak_profit": f"{peak_profit:+.2f}",
         "giveback_pct": f"{_safe_float(late_loss_avg_down_retry.get('giveback_pct'), 0.0):.2f}",
         "current_ai_score": f"{current_ai_score:.0f}",
+        "late_loss_avgdown_ai_score_usable": late_loss_avg_down_retry.get("ai_score_usable", "-"),
+        "late_loss_avgdown_ai_score_source": late_loss_avg_down_retry.get("ai_score_source", "-"),
+        "late_loss_avgdown_ai_score_data_quality": late_loss_avg_down_retry.get("ai_score_data_quality", "-"),
+        "late_loss_avgdown_ai_score_excluded_reason": late_loss_avg_down_retry.get("ai_score_excluded_reason", "-"),
         "held_sec": held_sec,
         "gate_allowed": bool(retry_gate.get("allowed")),
         "gate_reason": retry_gate.get("reason", "-"),
@@ -11680,6 +11781,120 @@ def _mark_recent_exit_candidate(
     )
 
 
+_HOLDING_SCORE_USABLE_DATA_QUALITY = {"fresh", "partial"}
+
+
+def _normalize_holding_score_data_quality(value) -> str:
+    text = str(value or "").strip().lower()
+    if text in {"fresh", "stale", "partial", "insufficient"}:
+        return text
+    return "insufficient"
+
+
+def _holding_score_ttl_sec(*, is_critical_zone: bool = False) -> int:
+    if is_critical_zone:
+        return max(1, _rule_int("AI_HOLDING_CRITICAL_COOLDOWN", 45))
+    return max(1, _rule_int("AI_HOLDING_MAX_COOLDOWN", 180))
+
+
+def _holding_score_age_sec(stock: dict | None, *, now_ts: float) -> float | None:
+    if not isinstance(stock, dict):
+        return None
+    for key in ("holding_score_last_effective_at", "last_ai_reviewed_at"):
+        ts_value = _safe_float(stock.get(key), 0.0)
+        if ts_value > 0:
+            return max(0.0, float(now_ts or time.time()) - ts_value)
+    return None
+
+
+def _holding_score_runtime_context(
+    stock: dict | None,
+    *,
+    current_ai_score: float,
+    now_ts: float,
+    is_critical_zone: bool,
+) -> dict:
+    stock = stock if isinstance(stock, dict) else {}
+    ttl_sec = _holding_score_ttl_sec(is_critical_zone=is_critical_zone)
+    age_sec = _holding_score_age_sec(stock, now_ts=now_ts)
+    data_quality = _normalize_holding_score_data_quality(stock.get("holding_score_data_quality"))
+    source = str(
+        stock.get("holding_score_source")
+        or stock.get("holding_ai_score_source")
+        or stock.get("current_ai_score_source")
+        or "-"
+    ).strip() or "-"
+    raw_usable = stock.get("holding_score_effective_usable")
+    explicit_usable = _truthy_field(raw_usable) if raw_usable is not None else None
+    if data_quality == "insufficient" and explicit_usable is None:
+        legacy_source = source.lower()
+        if legacy_source not in {"", "-", "none", "null", "missing", "fallback_score_50", "holding_ai_not_called"}:
+            data_quality = "partial"
+    age_ok = age_sec is not None and age_sec <= ttl_sec
+    source_ok = source.lower() not in {"", "-", "none", "null", "missing", "fallback_score_50", "engine_disabled", "lock_contention"}
+    usable = bool(age_ok and source_ok and data_quality in _HOLDING_SCORE_USABLE_DATA_QUALITY)
+    if explicit_usable is False:
+        usable = False
+    elif explicit_usable is True:
+        usable = bool(age_ok and source_ok and data_quality in _HOLDING_SCORE_USABLE_DATA_QUALITY)
+    if source == "holding_ai_not_called":
+        usable = bool(usable and age_ok)
+    excluded_reason = "-"
+    if not usable:
+        if age_sec is None:
+            excluded_reason = "holding_score_missing_timestamp"
+        elif not age_ok:
+            excluded_reason = "holding_score_ttl_expired"
+        elif data_quality not in _HOLDING_SCORE_USABLE_DATA_QUALITY:
+            excluded_reason = f"holding_score_data_quality_{data_quality}"
+        elif not source_ok:
+            excluded_reason = f"holding_score_source_{source}"
+        else:
+            excluded_reason = "holding_score_unusable"
+    effective_score = _safe_float(stock.get("holding_score_effective"), current_ai_score)
+    if not usable:
+        effective_score = 50.0
+    return {
+        "usable": usable,
+        "score": float(effective_score),
+        "age_sec": None if age_sec is None else round(float(age_sec), 3),
+        "ttl_sec": ttl_sec,
+        "data_quality": data_quality,
+        "source": source,
+        "excluded_reason": excluded_reason,
+    }
+
+
+def _holding_score_acceptance_gate(ai_decision: dict | None) -> dict:
+    payload = ai_decision if isinstance(ai_decision, dict) else {}
+    data_quality = _normalize_holding_score_data_quality(payload.get("holding_score_data_quality") or payload.get("data_quality"))
+    source = str(
+        payload.get("holding_score_source")
+        or payload.get("ai_result_source")
+        or payload.get("result_source")
+        or "-"
+    ).strip() or "-"
+    parse_ok = bool(payload.get("ai_parse_ok", False))
+    fallback = bool(payload.get("ai_fallback_score_50", False))
+    usable = bool(source == "live" and parse_ok and not fallback and data_quality in _HOLDING_SCORE_USABLE_DATA_QUALITY)
+    reason = "-"
+    if not usable:
+        if source != "live":
+            reason = f"holding_score_source_{source}"
+        elif not parse_ok:
+            reason = "holding_score_parse_not_ok"
+        elif fallback:
+            reason = "holding_score_fallback_score_50"
+        else:
+            reason = f"holding_score_data_quality_{data_quality}"
+    return {
+        "accepted": usable,
+        "data_quality": data_quality,
+        "source": source,
+        "excluded_reason": reason,
+    }
+
+
 def _recent_exit_candidate_pyramid_block_context(
     stock: dict | None,
     *,
@@ -11825,6 +12040,13 @@ def _remember_exit_context(
     held_sec: int,
     current_ai_score: float,
     soft_stop_threshold_pct: float | None = None,
+    ai_score_raw=None,
+    ai_action=None,
+    ai_result_source=None,
+    ai_model=None,
+    ai_model_tier=None,
+    ai_transport_mode=None,
+    ai_data_quality=None,
 ) -> None:
     exit_decision_source = _resolve_exit_decision_source(
         stock=stock,
@@ -11836,6 +12058,33 @@ def _remember_exit_context(
     stock["last_exit_peak_profit"] = round(float(peak_profit or 0.0), 3)
     stock["last_exit_held_sec"] = max(0, int(held_sec or 0))
     stock["last_exit_current_ai_score"] = round(float(current_ai_score or 0.0), 1)
+    stock["last_exit_ai_score_raw"] = round(
+        _safe_float(ai_score_raw, stock.get("holding_score_raw", current_ai_score)),
+        1,
+    )
+    stock["last_exit_ai_score_effective"] = round(
+        _safe_float(stock.get("holding_score_effective"), current_ai_score),
+        1,
+    )
+    stock["last_exit_ai_action"] = str(ai_action or stock.get("holding_score_action") or "-")
+    stock["last_exit_ai_result_source"] = str(
+        ai_result_source
+        or stock.get("holding_score_source")
+        or stock.get("holding_ai_score_source")
+        or stock.get("last_ai_result_source")
+        or "-"
+    )
+    stock["last_exit_ai_model"] = str(ai_model or stock.get("last_ai_model") or stock.get("ai_model") or "-")
+    stock["last_exit_ai_model_tier"] = str(ai_model_tier or stock.get("last_ai_model_tier") or "-")
+    stock["last_exit_ai_transport_mode"] = str(
+        ai_transport_mode
+        or stock.get("last_ai_transport_mode")
+        or stock.get("openai_transport_mode")
+        or "-"
+    )
+    stock["last_exit_ai_data_quality"] = _normalize_holding_score_data_quality(
+        ai_data_quality or stock.get("holding_score_data_quality")
+    )
     if soft_stop_threshold_pct is not None:
         stock["last_exit_soft_stop_threshold_pct"] = round(float(soft_stop_threshold_pct or 0.0), 3)
     else:
@@ -12560,6 +12809,23 @@ def _build_soft_stop_dynamic_grace_decision(
         )
     )
     positive_micro = bool(feature_valid and absorption_score >= 1 and not thesis_invalidated)
+    explicit_holding_score_contract = any(
+        key in stock
+        for key in (
+            "holding_score_effective_usable",
+            "holding_score_data_quality",
+            "holding_score_source",
+            "current_ai_score_source",
+            "holding_ai_score_source",
+        )
+    )
+    holding_score_ctx = _holding_score_runtime_context(
+        stock,
+        current_ai_score=current_ai_score,
+        now_ts=now_ts,
+        is_critical_zone=True,
+    )
+    ai_score_usable = bool(holding_score_ctx.get("usable")) if explicit_holding_score_contract else True
 
     started_at = _safe_float(stock.get("soft_stop_dynamic_grace_started_at"), 0.0)
     anchor_profit = _safe_float(stock.get("soft_stop_dynamic_grace_anchor_profit"), profit_rate)
@@ -12573,7 +12839,7 @@ def _build_soft_stop_dynamic_grace_decision(
     if positive_micro:
         grace_sec = base_sec
         reason = "base_micro_confirmed_soft_stop_dynamic_grace"
-    if positive_micro and (absorption_score >= 3 or current_ai_score >= (min_ai_score + 5)):
+    if positive_micro and (absorption_score >= 3 or (ai_score_usable and current_ai_score >= (min_ai_score + 5))):
         grace_sec = strong_sec
         reason = "strong_absorption_soft_stop_dynamic_grace"
 
@@ -12588,6 +12854,8 @@ def _build_soft_stop_dynamic_grace_decision(
         skip_reason = "sim_or_probe_position"
     elif bool(quote_stale) or bool(source_quality_hard_gap):
         skip_reason = "source_or_quote_stale"
+    elif not ai_score_usable:
+        skip_reason = "ai_score_unusable"
     elif profit_rate > dynamic_stop_pct:
         skip_reason = "not_soft_stop_zone"
     elif profit_rate <= hard_stop_pct:
@@ -12625,6 +12893,10 @@ def _build_soft_stop_dynamic_grace_decision(
         "absorption_score": int(absorption_score),
         "positive_micro": bool(positive_micro),
         "feature_valid": bool(feature_valid),
+        "ai_score_usable": ai_score_usable,
+        "ai_score_source": holding_score_ctx.get("source", "-"),
+        "ai_score_data_quality": holding_score_ctx.get("data_quality", "-"),
+        "ai_score_excluded_reason": holding_score_ctx.get("excluded_reason", "-"),
         "data_window_start": "2026-06-04T14:29:09+09:00",
         "data_window_end": "2026-06-12",
     }
@@ -18431,6 +18703,16 @@ def _build_ai_ops_log_fields(
         "ai_early_refresh_trigger",
         "ai_score_excluded_reason",
         "ai_score_policy_version",
+        "ai_input_schema",
+        "ai_input_contract_mode",
+        "ai_input_build_fallback",
+        "holding_score_input_schema",
+        "holding_score_data_quality",
+        "holding_score_basis",
+        "holding_score_source",
+        "holding_score_excluded_reason",
+        "holding_score_action",
+        "holding_score_position_state",
     ):
         if field_name in payload:
             out[field_name] = str(payload.get(field_name, "-") or "-")
@@ -18494,6 +18776,7 @@ def _build_ai_ops_log_fields(
         "ai_reason_numeric_inconsistency_field",
         "ai_reason_numeric_inconsistency_reason",
         "ai_reason_numeric_inconsistency_excerpt",
+        "holding_score_source_quality_reason",
     ):
         if field_name in payload:
             out[field_name] = str(payload.get(field_name, "-") or "-")
@@ -18518,9 +18801,15 @@ def _build_ai_ops_log_fields(
         "pre_ai_ws_snapshot_refresh_age_ms",
         "pre_ai_ws_snapshot_refresh_latest_price",
         "pre_ai_ws_snapshot_refresh_history_count",
+        "holding_score_raw",
+        "holding_score_effective",
+        "holding_score_confidence",
+        "holding_score_age_sec",
     ):
         if field_name in payload:
             out[field_name] = payload.get(field_name)
+    if "holding_score_effective_usable" in payload:
+        out["holding_score_effective_usable"] = bool(payload.get("holding_score_effective_usable"))
     if payload.get("scalp_feature_packet_version"):
         out["scalp_feature_packet_version"] = str(payload.get("scalp_feature_packet_version"))
     if ai_reason_numeric_inconsistency:
@@ -29658,6 +29947,14 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
         safe_profit_pct = _rule_float('SCALP_SAFE_PROFIT', 0.5)
         near_safe_profit_zone = abs(profit_rate - safe_profit_pct) <= 0.20
         is_critical_zone = near_safe_profit_zone or (profit_rate >= safe_profit_pct) or (profit_rate < 0)
+        holding_score_ctx = _holding_score_runtime_context(
+            stock,
+            current_ai_score=current_ai_score,
+            now_ts=now_ts,
+            is_critical_zone=is_critical_zone,
+        )
+        if not holding_score_ctx["usable"]:
+            current_ai_score = holding_score_ctx["score"]
 
         dynamic_min_cd = (
             _rule_int('AI_HOLDING_CRITICAL_MIN_COOLDOWN', 8)
@@ -29907,7 +30204,7 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                             ),
                         )
 
-                    ai_decision = {"action": "WAIT", "score": current_ai_score, "reason": "holding_ai_not_called"}
+                    ai_decision = {"action": "HOLD", "score": current_ai_score, "reason": "holding_ai_not_called"}
                     raw_ai_score = current_ai_score
                     ai_cache_hit = False
                     ai_call_skipped_reason = "-"
@@ -29936,21 +30233,53 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                             used_after_record = _record_scalp_sim_ai_budget_call(now_ts)
                         else:
                             used_after_record = None
-                        ai_decision = ai_engine.analyze_target(
-                            stock['name'],
-                            ws_data,
-                            recent_ticks,
-                            recent_candles,
-                            cache_profile="holding",
-                            prompt_profile="holding",
-                            metadata_extra={
-                                "record_id": stock.get("id"),
-                                "sim_record_id": stock.get("sim_record_id"),
-                                "sim_parent_record_id": stock.get("sim_parent_record_id"),
-                                "entry_adm_candidate_id": stock.get("entry_adm_candidate_id"),
-                                "source_event_stage": "scalp_sim_holding_review",
-                            },
-                        )
+                        holding_score_position_ctx = {
+                            "record_id": stock.get("id"),
+                            "buy_price": buy_p,
+                            "curr_price": curr_p,
+                            "profit_rate": profit_rate,
+                            "peak_profit": peak_profit,
+                            "drawdown_from_peak_pct": max(0.0, peak_profit - profit_rate),
+                            "held_sec": held_sec,
+                            "buy_qty": stock.get("buy_qty"),
+                            "position_tag": stock.get("position_tag"),
+                            "entry_source": stock.get("entry_source") or stock.get("source_event_stage") or "-",
+                            "avg_down_count": stock.get("avg_down_count", 0),
+                            "pyramid_count": stock.get("pyramid_count", 0),
+                            "prior_score": stock.get("holding_score_raw", current_ai_score),
+                            "prior_effective_score": stock.get("holding_score_effective", current_ai_score),
+                            "prior_score_source": holding_score_ctx.get("source", "-"),
+                            "prior_data_quality": holding_score_ctx.get("data_quality", "insufficient"),
+                            "prior_score_age_sec": holding_score_ctx.get("age_sec"),
+                            "prior_effective_usable": holding_score_ctx.get("usable", False),
+                        }
+                        if hasattr(ai_engine, "evaluate_scalping_holding_score"):
+                            ai_decision = ai_engine.evaluate_scalping_holding_score(
+                                stock['name'],
+                                code,
+                                ws_data,
+                                recent_ticks,
+                                recent_candles,
+                                holding_score_position_ctx,
+                                metadata_extra={
+                                    "record_id": stock.get("id"),
+                                    "sim_record_id": stock.get("sim_record_id"),
+                                    "sim_parent_record_id": stock.get("sim_parent_record_id"),
+                                    "entry_adm_candidate_id": stock.get("entry_adm_candidate_id"),
+                                    "source_event_stage": "scalp_sim_holding_review",
+                                },
+                            )
+                        else:
+                            ai_decision = {
+                                "action": "HOLD",
+                                "score": 50,
+                                "reason": "holding_score_v2_unavailable",
+                                "holding_score_data_quality": "insufficient",
+                                "holding_score_source": "engine_missing_method",
+                                "holding_score_effective_usable": False,
+                                "ai_result_source": "engine_missing_method",
+                                "ai_fallback_score_50": True,
+                            }
                         raw_ai_score = ai_decision.get('score', 50)
                         ai_cache_hit = bool(ai_decision.get('cache_hit', False))
                         ai_result_source = (
@@ -29970,25 +30299,84 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                             or ai_decision.get("model_name")
                             or "-"
                         )
-
-                        smoothed_score = int((current_ai_score * 0.6) + (raw_ai_score * 0.4))
-                        _mutate_stock_state(
-                            stock,
-                            set_fields={
-                                'rt_ai_prob': smoothed_score / 100.0,
-                                'last_ai_profit': profit_rate,
-                                'last_ai_reviewed_at': now_ts,
-                                'last_ai_market_signature': market_signature,
-                                'last_ai_market_snapshot': market_snapshot,
-                                'last_ai_market_signature_at': now_ts,
-                                'holding_ai_score_source': ai_result_source,
-                                'current_ai_score_source': ai_result_source,
-                                'last_ai_result_source': ai_result_source,
-                                'last_ai_model': ai_model_name,
-                                'holding_ai_call_skipped_reason': "-",
-                            },
-                        )
-                        current_ai_score = smoothed_score
+                        holding_score_gate = _holding_score_acceptance_gate(ai_decision)
+                        if holding_score_gate["accepted"]:
+                            smoothed_score = int((current_ai_score * 0.6) + (float(raw_ai_score or 50) * 0.4))
+                            _mutate_stock_state(
+                                stock,
+                                set_fields={
+                                    'rt_ai_prob': smoothed_score / 100.0,
+                                    'last_ai_profit': profit_rate,
+                                    'last_ai_reviewed_at': now_ts,
+                                    'last_ai_market_signature': market_signature,
+                                    'last_ai_market_snapshot': market_snapshot,
+                                    'last_ai_market_signature_at': now_ts,
+                                    'holding_ai_score_source': ai_result_source,
+                                    'current_ai_score_source': ai_result_source,
+                                    'last_ai_result_source': ai_result_source,
+                                    'last_ai_model': ai_model_name,
+                                    'holding_ai_call_skipped_reason': "-",
+                                    'holding_score_input_schema': 'holding_score_v2',
+                                    'holding_score_data_quality': holding_score_gate["data_quality"],
+                                    'holding_score_confidence': ai_decision.get("holding_score_confidence", ai_decision.get("confidence", 0)),
+                                    'holding_score_basis': ai_decision.get("holding_score_basis", ai_decision.get("score_basis", "-")),
+                                    'holding_score_raw': raw_ai_score,
+                                    'holding_score_effective': smoothed_score,
+                                    'holding_score_source': ai_result_source,
+                                    'holding_score_source_quality_reason': ai_decision.get(
+                                        "holding_score_source_quality_reason", "-"
+                                    ),
+                                    'holding_score_action': ai_decision.get("action_v2") or ai_decision.get("action") or "HOLD",
+                                    'holding_score_effective_usable': True,
+                                    'holding_score_last_effective_at': now_ts,
+                                    'holding_score_age_sec': 0,
+                                    'holding_score_excluded_reason': "-",
+                                },
+                            )
+                            current_ai_score = smoothed_score
+                            ai_decision["holding_score_effective_usable"] = True
+                            ai_decision["holding_score_effective"] = smoothed_score
+                            ai_decision["holding_score_age_sec"] = 0
+                        else:
+                            holding_score_ctx = _holding_score_runtime_context(
+                                stock,
+                                current_ai_score=current_ai_score,
+                                now_ts=now_ts,
+                                is_critical_zone=is_critical_zone,
+                            )
+                            current_ai_score = holding_score_ctx["score"]
+                            _mutate_stock_state(
+                                stock,
+                                set_fields={
+                                    "last_ai_profit": profit_rate,
+                                    "last_ai_market_signature": market_signature,
+                                    "last_ai_market_snapshot": market_snapshot,
+                                    "last_ai_market_signature_at": now_ts,
+                                    "holding_ai_score_source": ai_result_source,
+                                    "current_ai_score_source": ai_result_source,
+                                    "last_ai_result_source": ai_result_source,
+                                    "last_ai_model": ai_model_name,
+                                    "holding_ai_call_skipped_reason": holding_score_gate["excluded_reason"],
+                                    "holding_score_input_schema": "holding_score_v2",
+                                    "holding_score_data_quality": holding_score_gate["data_quality"],
+                                    "holding_score_confidence": ai_decision.get("holding_score_confidence", ai_decision.get("confidence", 0)),
+                                    "holding_score_basis": ai_decision.get("holding_score_basis", ai_decision.get("score_basis", "-")),
+                                    "holding_score_raw": raw_ai_score,
+                                    "holding_score_effective": current_ai_score,
+                                    "holding_score_source": ai_result_source,
+                                    "holding_score_source_quality_reason": ai_decision.get(
+                                        "holding_score_source_quality_reason", "-"
+                                    ),
+                                    "holding_score_action": ai_decision.get("action_v2") or ai_decision.get("action") or "HOLD",
+                                    "holding_score_effective_usable": bool(holding_score_ctx["usable"]),
+                                    "holding_score_age_sec": holding_score_ctx.get("age_sec"),
+                                    "holding_score_excluded_reason": holding_score_gate["excluded_reason"],
+                                },
+                            )
+                            ai_decision["holding_score_effective_usable"] = bool(holding_score_ctx["usable"])
+                            ai_decision["holding_score_effective"] = current_ai_score
+                            ai_decision["holding_score_age_sec"] = holding_score_ctx.get("age_sec")
+                            ai_decision["holding_score_excluded_reason"] = holding_score_gate["excluded_reason"]
                         if sim_ai_budget_gate.get("target"):
                             _mutate_stock_state(
                                 stock,
@@ -30015,6 +30403,9 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                                     "scalp_sim_ai_last_transport_mode": ai_decision.get("openai_transport_mode")
                                     or ai_decision.get("transport_mode")
                                     or ai_decision.get("provider_route")
+                                    or "-",
+                                    "scalp_sim_ai_last_data_quality": ai_decision.get("holding_score_data_quality")
+                                    or ai_decision.get("data_quality")
                                     or "-",
                                     "scalp_sim_ai_last_live_call_at": now_ts,
                                     "scalp_sim_ai_live_call_count": _safe_int(
@@ -30065,6 +30456,9 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                                     or ai_decision.get("transport_mode")
                                     or ai_decision.get("provider_route")
                                     or "-",
+                                    ai_data_quality=ai_decision.get("holding_score_data_quality")
+                                    or ai_decision.get("data_quality")
+                                    or "-",
                                     ai_cache="hit" if ai_cache_hit else "miss",
                                 ),
                             )
@@ -30082,6 +30476,13 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                             ai_call_skipped_reason = "missing_recent_ticks"
                         else:
                             ai_call_skipped_reason = "holding_ai_not_called"
+                        holding_score_ctx = _holding_score_runtime_context(
+                            stock,
+                            current_ai_score=current_ai_score,
+                            now_ts=now_ts,
+                            is_critical_zone=is_critical_zone,
+                        )
+                        current_ai_score = holding_score_ctx["score"]
                         _mutate_stock_state(
                             stock,
                             set_fields={
@@ -30090,7 +30491,35 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                                 "last_ai_result_source": "-",
                                 "last_ai_model": "-",
                                 "holding_ai_call_skipped_reason": ai_call_skipped_reason,
+                                "holding_score_input_schema": "holding_score_v2",
+                                "holding_score_data_quality": holding_score_ctx["data_quality"],
+                                "holding_score_confidence": stock.get("holding_score_confidence", 0),
+                                "holding_score_basis": stock.get("holding_score_basis", "-"),
+                                "holding_score_effective": current_ai_score,
+                                "holding_score_source": "holding_ai_not_called",
+                                "holding_score_effective_usable": bool(holding_score_ctx["usable"]),
+                                "holding_score_age_sec": holding_score_ctx.get("age_sec"),
+                                "holding_score_excluded_reason": (
+                                    "-"
+                                    if holding_score_ctx["usable"]
+                                    else ai_call_skipped_reason
+                                ),
                             },
+                        )
+                        ai_decision.update(
+                            {
+                                "holding_score_input_schema": "holding_score_v2",
+                                "holding_score_data_quality": holding_score_ctx["data_quality"],
+                                "holding_score_effective": current_ai_score,
+                                "holding_score_source": "holding_ai_not_called",
+                                "holding_score_effective_usable": bool(holding_score_ctx["usable"]),
+                                "holding_score_age_sec": holding_score_ctx.get("age_sec"),
+                                "holding_score_excluded_reason": (
+                                    "-"
+                                    if holding_score_ctx["usable"]
+                                    else ai_call_skipped_reason
+                                ),
+                            }
                         )
 
                     # reversal_add: 수급 피처 저장 및 STAGNATION 상태 갱신
@@ -30711,6 +31140,10 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                     ),
                     soft_stop_dynamic_grace_data_window_start=soft_stop_dynamic_grace_decision.get("data_window_start"),
                     soft_stop_dynamic_grace_data_window_end=soft_stop_dynamic_grace_decision.get("data_window_end"),
+                    soft_stop_dynamic_grace_ai_score_usable=soft_stop_dynamic_grace_decision.get("ai_score_usable", "-"),
+                    soft_stop_dynamic_grace_ai_score_source=soft_stop_dynamic_grace_decision.get("ai_score_source", "-"),
+                    soft_stop_dynamic_grace_ai_score_data_quality=soft_stop_dynamic_grace_decision.get("ai_score_data_quality", "-"),
+                    soft_stop_dynamic_grace_ai_score_excluded_reason=soft_stop_dynamic_grace_decision.get("ai_score_excluded_reason", "-"),
                     profit_rate=f"{profit_rate:+.2f}",
                     soft_stop_pct=f"{dynamic_stop_pct:+.2f}",
                     emergency_pct=f"{_safe_float(soft_stop_dynamic_grace_decision.get('emergency_pct'), soft_stop_emergency_pct):+.2f}",
@@ -30966,6 +31399,10 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                         soft_stop_dynamic_grace_decision.get("elapsed_sec", 0) or 0
                     ),
                     soft_stop_dynamic_grace_skip_reason=soft_stop_dynamic_grace_decision.get("skip_reason", "-"),
+                    soft_stop_dynamic_grace_ai_score_usable=soft_stop_dynamic_grace_decision.get("ai_score_usable", "-"),
+                    soft_stop_dynamic_grace_ai_score_source=soft_stop_dynamic_grace_decision.get("ai_score_source", "-"),
+                    soft_stop_dynamic_grace_ai_score_data_quality=soft_stop_dynamic_grace_decision.get("ai_score_data_quality", "-"),
+                    soft_stop_dynamic_grace_ai_score_excluded_reason=soft_stop_dynamic_grace_decision.get("ai_score_excluded_reason", "-"),
                     formal_holding_exit_tuning_selected=bool(
                         soft_stop_dynamic_grace_decision.get("formal_holding_exit_tuning_selected")
                     ),
@@ -30995,6 +31432,10 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                         ),
                         soft_stop_dynamic_grace_data_window_start=soft_stop_dynamic_grace_decision.get("data_window_start"),
                         soft_stop_dynamic_grace_data_window_end=soft_stop_dynamic_grace_decision.get("data_window_end"),
+                        soft_stop_dynamic_grace_ai_score_usable=soft_stop_dynamic_grace_decision.get("ai_score_usable", "-"),
+                        soft_stop_dynamic_grace_ai_score_source=soft_stop_dynamic_grace_decision.get("ai_score_source", "-"),
+                        soft_stop_dynamic_grace_ai_score_data_quality=soft_stop_dynamic_grace_decision.get("ai_score_data_quality", "-"),
+                        soft_stop_dynamic_grace_ai_score_excluded_reason=soft_stop_dynamic_grace_decision.get("ai_score_excluded_reason", "-"),
                         exit_rule_candidate="scalp_soft_stop_pct",
                     )
                 is_sell_signal = True
@@ -31385,11 +31826,18 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                 if str(item).strip()
             )
             min_fallback_ai = _rule_int("SCALP_LOSS_FALLBACK_MIN_AI_SCORE", 65)
+            fallback_holding_score_ctx = _loss_fallback_ai_score_context(
+                stock,
+                current_ai_score=current_ai_score,
+                now_ts=now_ts,
+            )
+            fallback_ai_score_usable = bool(fallback_holding_score_ctx.get("usable"))
             fallback_reason = str((fallback_action or fallback_probe_detail or {}).get("reason") or "")
             fallback_reason_for_event = fallback_reason or str(fallback_gate.get("reason") or "not_candidate")
             fallback_candidate = bool(
                 fallback_action
                 and (not allowed_reasons or fallback_reason in allowed_reasons)
+                and fallback_ai_score_usable
                 and float(current_ai_score or 0.0) >= float(min_fallback_ai)
             )
             fallback_log_fields = _append_reversal_add_probe_fields(
@@ -31403,6 +31851,10 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                     "fallback_add_type": (fallback_action or {}).get("add_type", "-"),
                     "current_ai_score": f"{current_ai_score:.0f}",
                     "min_ai": min_fallback_ai,
+                    "loss_fallback_ai_score_usable": fallback_ai_score_usable,
+                    "loss_fallback_ai_score_source": fallback_holding_score_ctx.get("source", "-"),
+                    "loss_fallback_ai_score_data_quality": fallback_holding_score_ctx.get("data_quality", "-"),
+                    "loss_fallback_ai_score_excluded_reason": fallback_holding_score_ctx.get("excluded_reason", "-"),
                     "profit_rate": f"{profit_rate:+.2f}",
                     "peak_profit": f"{peak_profit:+.2f}",
                 },
@@ -31416,6 +31868,10 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                         "stop_line_touched": True,
                         "stop_line_pct": dynamic_stop_pct,
                         "stop_line_source": exit_rule or "loss_fallback",
+                        "ai_score_usable": fallback_ai_score_usable,
+                        "ai_score_source": fallback_holding_score_ctx.get("source", "-"),
+                        "ai_score_data_quality": fallback_holding_score_ctx.get("data_quality", "-"),
+                        "ai_score_excluded_reason": fallback_holding_score_ctx.get("excluded_reason", "-"),
                     }
                 observe_only = _rule_bool("SCALP_LOSS_FALLBACK_OBSERVE_ONLY", True)
                 enabled = _rule_bool("SCALP_LOSS_FALLBACK_ENABLED", False)
@@ -31467,6 +31923,10 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                         fallback_reason=fallback_reason_for_event,
                         fallback_add_type=(fallback_action or {}).get("add_type", "-"),
                         current_ai_score=f"{current_ai_score:.0f}",
+                        loss_fallback_ai_score_usable=fallback_ai_score_usable,
+                        loss_fallback_ai_score_source=fallback_holding_score_ctx.get("source", "-"),
+                        loss_fallback_ai_score_data_quality=fallback_holding_score_ctx.get("data_quality", "-"),
+                        loss_fallback_ai_score_excluded_reason=fallback_holding_score_ctx.get("excluded_reason", "-"),
                         profit_rate=f"{profit_rate:+.2f}",
                     )
 

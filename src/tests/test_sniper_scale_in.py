@@ -1998,7 +1998,7 @@ def test_scalping_pyramid_signal():
     assert result["add_type"] == "PYRAMID"
 
 
-def test_scalping_pyramid_missing_ai_score_source_50_does_not_hard_block():
+def test_scalping_pyramid_missing_ai_score_source_50_blocks_support():
     stock = {
         "pyramid_count": 0,
         "holding_ai_score_source": "holding_ai_not_called",
@@ -2017,10 +2017,10 @@ def test_scalping_pyramid_missing_ai_score_source_50_does_not_hard_block():
         current_ai_score=50,
     )
 
-    assert result["should_add"] is True
-    assert result["reason"] == "scalping_pyramid_ok"
+    assert result["should_add"] is False
+    assert result["reason"] == "ai_score_unavailable"
     assert result["ai_score_available"] is False
-    assert result["ai_score_ok"] is True
+    assert result["ai_score_ok"] is False
 
 
 def test_scalping_pyramid_real_ai_score_50_still_blocks():
@@ -2048,7 +2048,7 @@ def test_scalping_pyramid_real_ai_score_50_still_blocks():
     assert result["ai_score_ok"] is False
 
 
-def test_scalping_pyramid_fallback_score_source_is_not_real_ai_even_after_smoothing():
+def test_scalping_pyramid_fallback_score_source_blocks_support_even_after_smoothing():
     stock = {
         "pyramid_count": 0,
         "holding_ai_score_source": "fallback_score_50",
@@ -2067,9 +2067,38 @@ def test_scalping_pyramid_fallback_score_source_is_not_real_ai_even_after_smooth
         current_ai_score=62,
     )
 
-    assert result["should_add"] is True
+    assert result["should_add"] is False
+    assert result["reason"] == "ai_score_unavailable"
     assert result["ai_score_source"] == "fallback_score_50"
     assert result["ai_score_available"] is False
+    assert result["ai_score_ok"] is False
+
+
+def test_scalping_pyramid_holding_ai_not_called_allowed_only_with_fresh_effective_score():
+    stock = {
+        "pyramid_count": 0,
+        "holding_ai_score_source": "holding_ai_not_called",
+        "holding_score_effective_usable": True,
+        "holding_score_data_quality": "partial",
+        "holding_score_age_sec": 20,
+        "last_reversal_features": {
+            "buy_pressure_10t": 92.0,
+            "tick_acceleration_ratio": 1.0,
+            "large_sell_print_detected": False,
+            "curr_vs_micro_vwap_bp": 24.0,
+        },
+    }
+    result = scale_in.evaluate_scalping_pyramid(
+        stock,
+        profit_rate=2.0,
+        peak_profit=2.2,
+        is_new_high=True,
+        current_ai_score=72,
+    )
+
+    assert result["should_add"] is True
+    assert result["reason"] == "scalping_pyramid_ok"
+    assert result["ai_score_available"] is True
     assert result["ai_score_ok"] is True
 
 
@@ -2108,7 +2137,7 @@ def test_scalping_pyramid_missing_ai_does_not_unlock_strong_continuation_gate():
     assert result["should_add"] is False
     assert result["reason"] == "profit_not_enough"
     assert result["ai_score_available"] is False
-    assert result["ai_score_ok"] is True
+    assert result["ai_score_ok"] is False
     assert result["ai_score_real_support"] is False
     assert "ai_score_ok" in result["strong_continuation_failed_checks"]
 
@@ -2137,7 +2166,7 @@ def test_scalping_pyramid_blocks_overheated_micro_vwap_before_signal():
     assert result["micro_vwap_not_overheated"] is False
 
 
-def test_scalping_pyramid_blocks_buy_pressure_below_min():
+def test_scalping_pyramid_treats_buy_pressure_below_min_as_composite_risk():
     stock = {
         "pyramid_count": 0,
         "last_reversal_features": {
@@ -2155,9 +2184,33 @@ def test_scalping_pyramid_blocks_buy_pressure_below_min():
         current_ai_score=75,
     )
 
+    assert result["should_add"] is True
+    assert result["reason"] == "scalping_pyramid_ok"
+    assert result["buy_pressure_support_ok"] is False
+    assert "buy_pressure_below_min" in result["pyramid_quality_risk_signals"]
+
+
+def test_scalping_pyramid_blocks_severely_low_buy_pressure():
+    stock = {
+        "pyramid_count": 0,
+        "last_reversal_features": {
+            "buy_pressure_10t": 0.0,
+            "tick_acceleration_ratio": 1.0,
+            "large_sell_print_detected": False,
+            "curr_vs_micro_vwap_bp": 24.0,
+        },
+    }
+    result = scale_in.evaluate_scalping_pyramid(
+        stock,
+        profit_rate=2.03,
+        peak_profit=2.03,
+        is_new_high=True,
+        current_ai_score=75,
+    )
+
     assert result["should_add"] is False
     assert result["reason"] == "buy_pressure_below_min"
-    assert result["buy_pressure_support_ok"] is False
+    assert "buy_pressure_severe_below_min" in result["pyramid_quality_hard_blockers"]
 
 
 def test_scalping_pyramid_blocks_stale_tick_and_micro_context():
@@ -2284,7 +2337,7 @@ def test_scale_in_signal_refreshes_stale_features_before_pyramid(monkeypatch):
     assert refresh_logs[-1]["scale_in_feature_refresh_reason"] == "feature_context_refreshed"
 
 
-def test_scalping_pyramid_missing_prior_keeps_existing_decision():
+def test_scalping_pyramid_missing_prior_allows_composite_borderline_ai():
     result = scale_in.evaluate_scalping_pyramid(
         {
             "last_reversal_features": {
@@ -2301,8 +2354,9 @@ def test_scalping_pyramid_missing_prior_keeps_existing_decision():
         runtime_prior_context={"status": "missing", "signal": "neutral", "reason": "prior_report_missing"},
     )
 
-    assert result["should_add"] is False
-    assert result["reason"] == "ai_score_below_min"
+    assert result["should_add"] is True
+    assert result["reason"] == "scalping_pyramid_ok"
+    assert result["pyramid_quality_support_score"] == 5.0
     assert result["pyramid_runtime_prior_status"] == "missing"
     assert result["pyramid_runtime_prior_signal"] == "neutral"
 
@@ -2332,8 +2386,8 @@ def test_scalping_pyramid_support_prior_relaxes_single_soft_quality_blocker():
 
     assert result["should_add"] is True
     assert result["reason"] == "scalping_pyramid_ok"
-    assert result["pyramid_runtime_prior_support_applied"] is True
-    assert result["pyramid_runtime_prior_relaxed_blocker"] == "ai_score_below_min_borderline"
+    assert "pyramid_runtime_prior_support_applied" not in result
+    assert result["pyramid_quality_support_score"] == 5.0
 
 
 def test_scalping_pyramid_support_prior_relaxes_borderline_buy_pressure_only():
@@ -2361,8 +2415,8 @@ def test_scalping_pyramid_support_prior_relaxes_borderline_buy_pressure_only():
 
     assert result["should_add"] is True
     assert result["reason"] == "scalping_pyramid_ok"
-    assert result["pyramid_runtime_prior_support_applied"] is True
-    assert result["pyramid_runtime_prior_relaxed_blocker"] == "buy_pressure_below_min_borderline"
+    assert "pyramid_runtime_prior_support_applied" not in result
+    assert result["pyramid_quality_support_score"] == 5.5
 
 
 def test_scalping_pyramid_support_prior_does_not_release_hard_quality_blocker():
@@ -15501,6 +15555,34 @@ def test_scalp_soft_stop_dynamic_grace_defers_real_position_before_existing_grac
     assert not exit_calls
 
 
+def test_scalp_soft_stop_dynamic_grace_rejects_unusable_holding_ai_score(monkeypatch):
+    state_handlers.TRADING_RULES = _dynamic_soft_stop_grace_config()
+    stock = _dynamic_soft_stop_stock(
+        holding_score_effective_usable=False,
+        holding_score_data_quality="stale",
+        holding_score_source="holding_ai_not_called",
+        holding_score_last_effective_at=1.0,
+    )
+
+    decision = state_handlers._build_soft_stop_dynamic_grace_decision(
+        stock,
+        strategy="SCALPING",
+        now_ts=1_000.0,
+        profit_rate=-1.85,
+        current_ai_score=72,
+        dynamic_stop_pct=-1.50,
+        hard_stop_pct=-2.50,
+        quote_stale=False,
+        source_quality_hard_gap=False,
+    )
+
+    assert decision["should_defer"] is False
+    assert decision["skip_reason"] == "ai_score_unusable"
+    assert decision["ai_score_usable"] is False
+    assert decision["ai_score_source"] == "holding_ai_not_called"
+    assert decision["ai_score_data_quality"] == "stale"
+
+
 def test_scalp_soft_stop_dynamic_grace_excludes_sim_probe_position(monkeypatch):
     state_handlers.TRADING_RULES = _dynamic_soft_stop_grace_config()
     pipeline_logs, exit_calls = _install_soft_stop_expert_test_doubles(monkeypatch)
@@ -18457,6 +18539,32 @@ def test_first_touch_avgdown_decision_gate_allows_moderate_ai_with_limited_block
     assert allowed["fields"]["first_touch_avgdown_repeated_blocker_count"] == 8
 
 
+def test_first_touch_avgdown_decision_gate_ignores_unusable_ai_support(monkeypatch):
+    monkeypatch.setattr(state_handlers, "TRADING_RULES", CONFIG)
+    stock = {
+        "strategy": "SCALPING",
+        "holding_score_effective_usable": False,
+        "holding_score_data_quality": "stale",
+        "holding_score_source": "holding_ai_not_called",
+        "holding_score_last_effective_at": 1.0,
+    }
+
+    blocked = state_handlers._evaluate_first_touch_avgdown_decision_gate(
+        stock=stock,
+        ws_data={"curr": 10_000, "best_bid": 9_990, "best_ask": 10_000},
+        context_fields={},
+        current_ai_score=72,
+        peak_profit=-0.23,
+        profit_rate=-3.42,
+        now_ts=1_000.0,
+    )
+
+    assert blocked["allowed"] is False
+    assert blocked["reason"] == "insufficient_first_touch_recovery_confirmation"
+    assert blocked["fields"]["first_touch_avgdown_ai_score_usable"] is False
+    assert "ai_score_unusable_ignored" in blocked["fields"]["first_touch_avgdown_risk_signals"]
+
+
 def test_first_touch_avgdown_decision_gate_stale_prior_keeps_existing_decision(monkeypatch):
     monkeypatch.setattr(state_handlers, "TRADING_RULES", CONFIG)
     allowed = state_handlers._evaluate_first_touch_avgdown_decision_gate(
@@ -19850,6 +19958,63 @@ def test_late_loss_avg_down_retry_includes_hanall_and_gwangju_like_cases(monkeyp
     assert gwangju == {"should_retry": False, "reason": "hard_safety_exit"}
     assert protect_trailing == {"should_retry": False, "reason": "hard_safety_exit"}
     assert mfe_protect == {"should_retry": False, "reason": "hard_safety_exit"}
+
+
+def test_late_loss_avg_down_retry_rejects_unusable_holding_ai_score(monkeypatch):
+    state_handlers.TRADING_RULES = replace(
+        CONFIG,
+        SCALP_LATE_LOSS_AVG_DOWN_ENABLED=True,
+        SCALP_LATE_LOSS_AVG_DOWN_MIN_PEAK_PCT=0.60,
+        SCALP_LATE_LOSS_AVG_DOWN_MIN_GIVEBACK_PCT=0.55,
+        SCALP_LATE_LOSS_AVG_DOWN_MIN_ABS_LOSS_PCT=1.50,
+        SCALP_LATE_LOSS_AVG_DOWN_MIN_HOLD_SEC=30,
+        SCALP_LATE_LOSS_AVG_DOWN_MIN_AI_SCORE=60,
+    )
+    stock = {
+        "strategy": "SCALPING",
+        "holding_score_effective_usable": False,
+        "holding_score_data_quality": "stale",
+        "holding_score_source": "holding_ai_not_called",
+        "holding_score_last_effective_at": 1.0,
+    }
+
+    result = state_handlers._evaluate_late_loss_avg_down_retry(
+        stock,
+        strategy="SCALPING",
+        sell_reason_type="LOSS",
+        exit_rule="scalp_soft_stop_pct",
+        profit_rate=-2.10,
+        peak_profit=-0.23,
+        current_ai_score=70,
+        held_sec=2471,
+        now_ts=1_000.0,
+    )
+
+    assert result["should_retry"] is False
+    assert result["reason"] == "ai_score_unusable"
+    assert result["ai_score_usable"] is False
+    assert result["ai_score_source"] == "holding_ai_not_called"
+    assert result["ai_score_data_quality"] == "stale"
+
+
+def test_loss_fallback_ai_score_context_rejects_unusable_holding_ai_score():
+    stock = {
+        "strategy": "SCALPING",
+        "holding_score_effective_usable": False,
+        "holding_score_data_quality": "stale",
+        "holding_score_source": "holding_ai_not_called",
+        "holding_score_last_effective_at": 1.0,
+    }
+
+    context = state_handlers._loss_fallback_ai_score_context(
+        stock,
+        current_ai_score=72,
+        now_ts=1_000.0,
+    )
+
+    assert context["usable"] is False
+    assert context["source"] == "holding_ai_not_called"
+    assert context["data_quality"] == "stale"
 
 
 def test_late_loss_avg_down_price_resolver_bypasses_micro_vwap_only_for_late_retry(monkeypatch):

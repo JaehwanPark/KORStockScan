@@ -1,4 +1,6 @@
 import threading
+import json
+from datetime import datetime
 from types import SimpleNamespace
 from dataclasses import replace
 
@@ -9,6 +11,7 @@ from src.engine.ai_prompt_contracts import (
     SCALPING_BUY_RECOVERY_CANARY_PROMPT,
     SCALPING_ENTRY_PRICE_PROMPT,
     SCALPING_HOLDING_FLOW_SYSTEM_PROMPT,
+    SCALPING_HOLDING_SCORE_SYSTEM_PROMPT,
     SCALPING_HOLDING_SYSTEM_PROMPT,
     SCALPING_OVERNIGHT_DECISION_PROMPT,
     SCALPING_SYSTEM_PROMPT,
@@ -129,6 +132,163 @@ def test_holding_flow_state_normalizer_accepts_legacy_korean_and_new_english_lab
 
     assert result["flow_state"] == "recovery"
     assert result["raw_flow_state"] == "회복"
+
+
+def test_holding_score_v2_payload_contains_position_pnl_and_source_quality(monkeypatch):
+    engine = _build_engine()
+    captured = {}
+
+    def _fake_call(prompt, user_input, **kwargs):
+        captured["prompt"] = prompt
+        captured["user_input"] = user_input
+        captured["kwargs"] = kwargs
+        return {
+            "action": "HOLD",
+            "score": 82,
+            "confidence": 71,
+            "position_state": "continuation",
+            "score_basis": "profit and flow remain supportive",
+            "risk_factors": ["drawdown controlled"],
+            "support_factors": ["fresh orderbook touch flow"],
+            "data_quality": "fresh",
+            "reason": "Continuation favored with fresh flow",
+        }
+
+    monkeypatch.setattr(engine, "_call_openai_safe", _fake_call)
+
+    ws_data = {
+        "curr": 10050,
+        "v_pw": 140,
+        "buy_ratio": 62,
+        "quote_age_ms": 100,
+        "orderbook": {
+            "asks": [{"price": 10060, "volume": 100}],
+            "bids": [{"price": 10050, "volume": 120}],
+        },
+    }
+    ticks = [
+        {
+            "time": datetime.now().strftime("%H:%M:%S"),
+            "price": 10050,
+            "volume": 10,
+            "side": "BUY",
+            "aggressor_source": "orderbook_touch",
+        }
+    ]
+    candles = [{"현재가": 10050, "고가": 10080, "저가": 10000, "거래량": 1000}]
+
+    result = engine.evaluate_scalping_holding_score(
+        "테스트",
+        "005930",
+        ws_data,
+        ticks,
+        candles,
+        {
+            "record_id": "REC-1",
+            "buy_price": 10000,
+            "curr_price": 10050,
+            "profit_rate": 0.5,
+            "peak_profit": 0.8,
+            "drawdown_from_peak_pct": 0.3,
+            "held_sec": 75,
+            "buy_qty": 1,
+            "position_tag": "SCALP",
+            "entry_source": "live_buy",
+            "avg_down_count": 0,
+            "pyramid_count": 0,
+        },
+        metadata_extra={"record_id": "REC-1"},
+    )
+
+    payload = json.loads(captured["user_input"])
+    assert payload["input_schema"] == "holding_score_v2"
+    assert payload["position_context"]["record_id"] == "REC-1"
+    assert payload["pnl_context"]["drawdown_from_peak_pct"] == 0.3
+    assert "market_flow_features" in payload
+    assert "source_quality" in payload
+    assert payload["hard_guard_context"]["hard_guards_remain_authoritative"] is True
+    assert captured["kwargs"]["schema_name"] == "holding_score_v2"
+    assert captured["kwargs"]["endpoint_name"] == "holding_score"
+    assert "position-state score classifier" in captured["prompt"]
+    assert "Do not reuse entry logic" in SCALPING_HOLDING_SCORE_SYSTEM_PROMPT
+    assert result["holding_score_input_schema"] == "holding_score_v2"
+    assert result["holding_score_data_quality"] in {"fresh", "partial"}
+    assert result["holding_score_effective_usable"] is True
+    assert result["ai_prompt_type"] == "scalping_holding_score"
+
+
+def test_holding_score_v2_source_quality_accepts_fresh_computed_contract():
+    engine = _build_engine()
+
+    quality = engine._derive_holding_score_source_quality(
+        {
+            "tick_context_stale": False,
+            "quote_stale": False,
+            "tick_context_quality": "fresh_computed",
+            "microstructure_reaction_source_quality": "fresh_short_window",
+        },
+        {},
+    )
+
+    assert quality == {
+        "data_quality": "fresh",
+        "source_quality_reason": "feature_packet_fresh",
+    }
+
+
+def test_holding_score_v2_source_quality_keeps_micro_stale_as_partial():
+    engine = _build_engine()
+
+    quality = engine._derive_holding_score_source_quality(
+        {
+            "tick_context_stale": False,
+            "quote_stale": False,
+            "tick_context_quality": "fresh_computed",
+            "microstructure_reaction_source_quality": "stale_tick_or_quote",
+        },
+        {},
+    )
+
+    assert quality["data_quality"] == "partial"
+    assert "microstructure_reaction_source_quality:stale_tick_or_quote" in quality["source_quality_reason"]
+
+
+def test_holding_score_v2_source_quality_explicit_tick_stale_stays_stale():
+    engine = _build_engine()
+
+    quality = engine._derive_holding_score_source_quality(
+        {
+            "tick_context_stale": True,
+            "quote_stale": False,
+            "tick_context_quality": "fresh_computed",
+            "microstructure_reaction_source_quality": "fresh_short_window",
+        },
+        {},
+    )
+
+    assert quality["data_quality"] == "stale"
+    assert "tick_context_stale" in quality["source_quality_reason"]
+
+
+def test_holding_score_v2_engine_disabled_is_neutral_unusable():
+    engine = _build_engine()
+    engine.ai_disabled = True
+
+    result = engine.evaluate_scalping_holding_score(
+        "테스트",
+        "005930",
+        {"curr": 10000},
+        [],
+        [],
+        {"record_id": "REC-2", "profit_rate": -0.5, "peak_profit": 0.0, "held_sec": 120},
+    )
+
+    assert result["action"] == "HOLD"
+    assert result["score"] == 50
+    assert result["holding_score_data_quality"] == "insufficient"
+    assert result["holding_score_effective_usable"] is False
+    assert result["ai_result_source"] == "engine_disabled"
+    assert result["ai_fallback_score_50"] is True
 
 
 def test_gatekeeper_action_normalizer_accepts_korean_and_english_labels():

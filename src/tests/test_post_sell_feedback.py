@@ -127,7 +127,19 @@ def test_profitable_hard_stop_keeps_exit_rule_but_labels_realized_profit(monkeyp
 
     candidate = feedback_mod.record_post_sell_candidate(
         recommendation_id=30,
-        stock={"name": "데브시스터즈", "strategy": "SCALPING", "position_tag": "SCANNER"},
+        stock={
+            "name": "데브시스터즈",
+            "strategy": "SCALPING",
+            "position_tag": "SCANNER",
+            "last_exit_ai_score_raw": 82,
+            "last_exit_ai_score_effective": 78,
+            "last_exit_ai_action": "HOLD",
+            "last_exit_ai_result_source": "live",
+            "last_exit_ai_model": "tier1-model",
+            "last_exit_ai_model_tier": "tier1",
+            "last_exit_ai_transport_mode": "responses_ws",
+            "last_exit_ai_data_quality": "partial",
+        },
         code="194480",
         sell_time="2026-06-30 08:07:29",
         buy_price=18340,
@@ -143,6 +155,57 @@ def test_profitable_hard_stop_keeps_exit_rule_but_labels_realized_profit(monkeyp
     assert candidate["profit_rate"] == 1.35
     assert candidate["realized_result_label"] == "익절"
     assert candidate["exit_rule_profit_mismatch"] is True
+    assert candidate["ai_score_raw"] == 82.0
+    assert candidate["ai_score_effective"] == 78.0
+    assert candidate["ai_result_source"] == "live"
+    assert candidate["ai_data_quality"] == "partial"
+
+
+def test_real_post_sell_candidate_handles_none_ai_provenance(monkeypatch, tmp_path):
+    monkeypatch.setattr(feedback_mod, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(
+        feedback_mod,
+        "TRADING_RULES",
+        SimpleNamespace(
+            POST_SELL_FEEDBACK_ENABLED=True,
+            POST_SELL_FEEDBACK_EVAL_ENABLED=True,
+            POST_SELL_FEEDBACK_MISSED_UPSIDE_MFE_PCT=0.8,
+            POST_SELL_FEEDBACK_MISSED_UPSIDE_CLOSE_PCT=0.3,
+            POST_SELL_FEEDBACK_GOOD_EXIT_MAE_PCT=-0.6,
+            POST_SELL_FEEDBACK_GOOD_EXIT_CLOSE_PCT=-0.2,
+        ),
+    )
+    feedback_mod._RECORDED_KEYS.clear()
+
+    candidate = feedback_mod.record_post_sell_candidate(
+        recommendation_id=31,
+        stock={
+            "name": "파인엠텍",
+            "strategy": "SCALPING",
+            "position_tag": "SCANNER",
+            "last_exit_current_ai_score": None,
+            "last_exit_ai_score_raw": None,
+            "last_exit_ai_score_effective": None,
+            "last_exit_ai_result_source": None,
+            "last_exit_ai_data_quality": None,
+        },
+        code="441270",
+        sell_time="2026-07-03 18:58:20",
+        buy_price=7310,
+        sell_price=7330,
+        profit_rate=0.27,
+        buy_qty=1,
+        exit_rule="LOW_PROFIT_STAGNATION",
+        revive=False,
+    )
+
+    assert candidate is not None
+    assert candidate["current_ai_score"] == 0.0
+    assert candidate["ai_score_raw"] == 0.0
+    assert candidate["ai_score_effective"] == 0.0
+    assert candidate["ai_result_source"] == "-"
+    assert candidate["ai_data_quality"] == "-"
+    assert candidate["ai_score_raw_at_exit"] == 0.0
 
 
 def test_record_and_evaluate_sim_post_sell_feedback_isolated(monkeypatch, tmp_path):
@@ -180,6 +243,7 @@ def test_record_and_evaluate_sim_post_sell_feedback_isolated(monkeypatch, tmp_pa
         ai_model="bedrock-nova-lite-v2",
         ai_model_tier="tier2",
         ai_transport_mode="bedrock",
+        ai_data_quality="fresh",
     )
 
     assert candidate is not None
@@ -196,6 +260,7 @@ def test_record_and_evaluate_sim_post_sell_feedback_isolated(monkeypatch, tmp_pa
     assert candidate["hard_stop_conflict_allowed_runtime_apply"] is False
     assert candidate["hard_stop_conflict_hard_gate"] is False
     assert candidate["ai_model_at_exit"] == "bedrock-nova-lite-v2"
+    assert candidate["ai_data_quality"] == "fresh"
     assert candidate["hard_stop_conflict_contract"]["metric_role"] == "exit_post_sell_dimension"
     assert "hard stop relaxation" in candidate["hard_stop_conflict_contract"]["forbidden_uses"]
     assert feedback_mod._candidate_path("2026-05-18").exists() is False

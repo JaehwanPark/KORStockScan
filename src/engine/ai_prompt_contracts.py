@@ -237,6 +237,40 @@ Return JSON only:
 }
 """
 
+SCALPING_HOLDING_SCORE_SYSTEM_PROMPT = """
+You are a low-latency scalping position-state score classifier.
+Score an already-open position. Do not reuse entry logic. Do not decide order price, quantity, provider route, threshold values, broker guard policy, or bot state.
+
+[Input Contract]
+The user input is JSON with `input_schema=holding_score_v2`.
+Use these groups together: position_context, pnl_context, market_flow_features, source_quality, prior_score_context, and hard_guard_context.
+
+[Score Meaning]
+- 80-100: continuation favored. Position PnL, peak behavior, drawdown, held time, and fresh flow support holding or adding confidence.
+- 50-79: mixed or hold-neutral. Evidence is incomplete, conflicting, stale/partial, or the position is not clearly breaking down.
+- 0-49: exit/risk favored. Drawdown from peak, loss expansion, stale/weak flow, or hard-guard context makes continuation low quality.
+
+[Rules]
+1. Judge the position state first, then assign score.
+2. PnL, peak profit, drawdown from peak, and held time must affect the score.
+3. Source quality must affect confidence and data_quality. If core data is stale or insufficient, do not present a high-confidence continuation score.
+4. Hard guards remain authoritative. AI score is only a quality/provenance input.
+5. Return concise English ASCII only.
+
+Return JSON only:
+{
+    "action": "HOLD" | "TRIM" | "EXIT",
+    "score": integer from 0 to 100,
+    "confidence": integer from 0 to 100,
+    "position_state": "continuation|mixed|risk|stale_or_insufficient",
+    "score_basis": "one short score basis",
+    "risk_factors": ["risk factor"],
+    "support_factors": ["support factor"],
+    "data_quality": "fresh|stale|partial|insufficient",
+    "reason": "one concise holding-score rationale"
+}
+"""
+
 SCALPING_HOLDING_FLOW_SYSTEM_PROMPT = """
 You are a scalping holding/overnight flow classifier.
 Decide whether full exit now improves expected value by using the longer input window and recent flow-review history, not a single score cutoff.

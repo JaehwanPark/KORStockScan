@@ -111,19 +111,25 @@ def _minute_bucket(ts: datetime, bucket_min: int = 1) -> str:
 def _safe_int(value, default: int = 0) -> int:
     try:
         if value in (None, "", "None"):
-            return default
+            return int(float(default if default not in (None, "", "None") else 0))
         return int(float(value))
     except Exception:
-        return default
+        try:
+            return int(float(default if default not in (None, "", "None") else 0))
+        except Exception:
+            return 0
 
 
 def _safe_float(value, default: float = 0.0) -> float:
     try:
         if value in (None, "", "None"):
-            return default
+            return float(default if default not in (None, "", "None") else 0.0)
         return float(value)
     except Exception:
-        return default
+        try:
+            return float(default if default not in (None, "", "None") else 0.0)
+        except Exception:
+            return 0.0
 
 
 def _safe_bool(value, default: bool = False) -> bool:
@@ -337,6 +343,8 @@ def record_post_sell_candidate(
 
         resolved_exit_rule = str(exit_rule or stock.get("last_exit_rule") or "-")
         resolved_ai_score = round(_safe_float(current_ai_score, stock.get("last_exit_current_ai_score", 0.0)), 1)
+        resolved_ai_raw = round(_safe_float(stock.get("last_exit_ai_score_raw"), resolved_ai_score), 1)
+        resolved_ai_effective = round(_safe_float(stock.get("last_exit_ai_score_effective"), resolved_ai_score), 1)
         payload = {
             "post_sell_id": uuid.uuid4().hex[:16],
             "recorded_at": now.isoformat(),
@@ -360,6 +368,14 @@ def record_post_sell_candidate(
             "peak_profit": round(_safe_float(peak_profit, stock.get("last_exit_peak_profit", 0.0)), 3),
             "held_sec": _safe_int(held_sec, stock.get("last_exit_held_sec", 0)),
             "current_ai_score": resolved_ai_score,
+            "ai_score_raw": resolved_ai_raw,
+            "ai_score_effective": resolved_ai_effective,
+            "ai_action": str(stock.get("last_exit_ai_action") or "-"),
+            "ai_result_source": str(stock.get("last_exit_ai_result_source") or "-"),
+            "ai_model": str(stock.get("last_exit_ai_model") or "-"),
+            "ai_model_tier": str(stock.get("last_exit_ai_model_tier") or "-"),
+            "ai_transport_mode": str(stock.get("last_exit_ai_transport_mode") or "-"),
+            "ai_data_quality": str(stock.get("last_exit_ai_data_quality") or stock.get("holding_score_data_quality") or "-"),
             "soft_stop_threshold_pct": round(
                 _safe_float(soft_stop_threshold_pct, stock.get("last_exit_soft_stop_threshold_pct", 0.0)),
                 3,
@@ -385,12 +401,12 @@ def record_post_sell_candidate(
             _build_high_ai_hard_stop_conflict_fields(
                 exit_rule=resolved_exit_rule,
                 current_ai_score=resolved_ai_score,
-                ai_score_raw=stock.get("last_exit_ai_score_raw"),
-                ai_action=stock.get("last_exit_ai_action"),
-                ai_result_source=stock.get("last_exit_ai_result_source"),
-                ai_model=stock.get("last_exit_ai_model"),
-                ai_model_tier=stock.get("last_exit_ai_model_tier"),
-                ai_transport_mode=stock.get("last_exit_ai_transport_mode"),
+                ai_score_raw=payload["ai_score_raw"],
+                ai_action=payload["ai_action"],
+                ai_result_source=payload["ai_result_source"],
+                ai_model=payload["ai_model"],
+                ai_model_tier=payload["ai_model_tier"],
+                ai_transport_mode=payload["ai_transport_mode"],
             )
         )
 
@@ -440,6 +456,7 @@ def record_sim_post_sell_candidate(
     ai_model=None,
     ai_model_tier=None,
     ai_transport_mode=None,
+    ai_data_quality=None,
 ) -> dict | None:
     if not bool(getattr(TRADING_RULES, "POST_SELL_FEEDBACK_ENABLED", True)):
         return None
@@ -564,6 +581,13 @@ def record_sim_post_sell_candidate(
                 ai_transport_mode,
                 "scalp_sim_ai_last_transport_mode",
                 "last_exit_ai_transport_mode",
+            ),
+            "ai_data_quality": _ai_provenance_field(
+                stock,
+                ai_data_quality,
+                "scalp_sim_ai_last_data_quality",
+                "last_exit_ai_data_quality",
+                "holding_score_data_quality",
             ),
         }
         payload.update(

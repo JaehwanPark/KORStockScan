@@ -67,6 +67,58 @@ def _safe_int(value: Any, default: int = 0) -> int:
         return default
 
 
+def _safe_bool(value: Any, default: bool = False) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        text = value.strip().lower()
+        if text in {"1", "true", "yes", "y", "on"}:
+            return True
+        if text in {"0", "false", "no", "n", "off", ""}:
+            return False
+        return default
+    return bool(value)
+
+
+def _holding_matrix_ai_score_context(position_ctx: dict[str, Any] | None) -> dict[str, Any]:
+    ctx = position_ctx if isinstance(position_ctx, dict) else {}
+    score = _safe_float(ctx.get("current_ai_score"), 50.0)
+    source = str(
+        ctx.get("holding_score_source")
+        or ctx.get("current_ai_score_source")
+        or ctx.get("ai_score_source")
+        or "-"
+    ).strip()
+    data_quality = str(ctx.get("holding_score_data_quality") or "").strip().lower()
+    has_explicit_quality = "holding_score_data_quality" in ctx or "holding_score_effective_usable" in ctx
+    usable = True
+    excluded_reason = "-"
+    if str(source).lower() in {"fallback_score_50", "engine_disabled", "lock_contention"}:
+        usable = False
+        excluded_reason = source or "unusable_ai_source"
+    if data_quality in {"stale", "insufficient"}:
+        usable = False
+        excluded_reason = data_quality
+    if "holding_score_effective_usable" in ctx and not _safe_bool(ctx.get("holding_score_effective_usable"), False):
+        usable = False
+        excluded_reason = str(ctx.get("holding_score_excluded_reason") or "holding_score_unusable")
+    if str(source).lower() == "holding_ai_not_called":
+        age_sec = _safe_float(ctx.get("holding_score_age_sec"), -1.0)
+        ttl = max(1.0, _safe_float(getattr(TRADING_RULES, "AI_HOLDING_MAX_COOLDOWN", 180), 180.0))
+        if not has_explicit_quality or age_sec < 0 or age_sec > ttl:
+            usable = False
+            excluded_reason = "holding_ai_not_called_expired_or_unproven"
+    return {
+        "current_ai_score": score,
+        "ai_score_usable": usable,
+        "ai_score_source": source or "-",
+        "ai_score_data_quality": data_quality or "-",
+        "ai_score_excluded_reason": excluded_reason,
+    }
+
+
 def _time_bucket(value: datetime | None) -> str:
     if value is None:
         return "time_unknown"
@@ -291,7 +343,8 @@ def _runtime_bias_from_entries(
     biases = {str(entry.get("recommended_bias") or "no_clear_edge") for entry in matched_entries}
     profit_rate = _safe_float((position_ctx or {}).get("profit_rate"), 0.0)
     peak_profit = _safe_float((position_ctx or {}).get("peak_profit"), profit_rate)
-    current_ai_score = _safe_float((position_ctx or {}).get("current_ai_score"), 50.0)
+    ai_context = _holding_matrix_ai_score_context(position_ctx)
+    current_ai_score = ai_context["current_ai_score"]
     safety_veto = has_holding_exit_matrix_safety_veto(position_ctx)
     result = {
         "holding_exit_matrix_runtime_bias_enabled": runtime_enabled,
@@ -304,6 +357,10 @@ def _runtime_bias_from_entries(
         "holding_exit_matrix_hypothesis_profit_rate": profit_rate,
         "holding_exit_matrix_hypothesis_peak_profit": peak_profit,
         "holding_exit_matrix_hypothesis_ai_score": current_ai_score,
+        "holding_exit_matrix_ai_score_usable": ai_context["ai_score_usable"],
+        "holding_exit_matrix_ai_score_source": ai_context["ai_score_source"],
+        "holding_exit_matrix_ai_score_data_quality": ai_context["ai_score_data_quality"],
+        "holding_exit_matrix_ai_score_excluded_reason": ai_context["ai_score_excluded_reason"],
     }
     if not runtime_enabled:
         result["holding_exit_matrix_runtime_reason"] = "runtime_bias_disabled"
@@ -330,6 +387,7 @@ def _runtime_bias_from_entries(
         biases & {"prefer_avg_down_wait", "prefer_pyramid_wait"}
         and action in _exit_to_hold_candidate_actions()
         and bool(getattr(TRADING_RULES, "HOLDING_EXIT_MATRIX_EXIT_TO_HOLD_ENABLED", True))
+        and ai_context["ai_score_usable"]
     ):
         forced_action = "HOLD"
         effect = "force_hold"
@@ -345,6 +403,7 @@ def _runtime_bias_from_entries(
         if (
             action in _exit_to_hold_candidate_actions()
             and bool(getattr(TRADING_RULES, "HOLDING_EXIT_MATRIX_EXIT_TO_HOLD_ENABLED", True))
+            and ai_context["ai_score_usable"]
             and current_ai_score >= float(getattr(TRADING_RULES, "HOLDING_EXIT_MATRIX_AVG_DOWN_MIN_AI_SCORE", 65) or 65)
             and profit_rate >= float(getattr(TRADING_RULES, "HOLDING_EXIT_MATRIX_AVG_DOWN_MIN_PROFIT_PCT", -1.2) or -1.2)
             and profit_rate <= float(getattr(TRADING_RULES, "HOLDING_EXIT_MATRIX_AVG_DOWN_MAX_PROFIT_PCT", -0.1) or -0.1)
@@ -356,6 +415,7 @@ def _runtime_bias_from_entries(
         elif (
             action in _exit_to_hold_candidate_actions()
             and bool(getattr(TRADING_RULES, "HOLDING_EXIT_MATRIX_EXIT_TO_HOLD_ENABLED", True))
+            and ai_context["ai_score_usable"]
             and current_ai_score >= float(getattr(TRADING_RULES, "HOLDING_EXIT_MATRIX_PYRAMID_MIN_AI_SCORE", 75) or 75)
             and profit_rate >= float(getattr(TRADING_RULES, "HOLDING_EXIT_MATRIX_PYRAMID_MIN_PROFIT_PCT", 0.8) or 0.8)
             and drawdown_from_peak <= float(
@@ -396,6 +456,12 @@ def resolve_holding_exit_matrix_scale_in_bias(
         return {"should_add": False, "reason": "holding_exit_matrix_scale_in_bias_scalping_only"}
     if has_holding_exit_matrix_safety_veto(safety_context):
         return {"should_add": False, "reason": "holding_exit_matrix_scale_in_safety_veto_passthrough"}
+    ai_context = _holding_matrix_ai_score_context(
+        {
+            **(safety_context or {}),
+            "current_ai_score": current_ai_score,
+        }
+    )
     scale_in_enabled = bool(getattr(TRADING_RULES, "HOLDING_EXIT_MATRIX_SCALE_IN_BIAS_ENABLED", False))
     lifecycle_decision = resolve_lifecycle_decision(
         stage="scale_in",
@@ -416,6 +482,16 @@ def resolve_holding_exit_matrix_scale_in_bias(
             **lifecycle_decision,
         }
     if lifecycle_effect in {"avg_down_bias", "pyramid_bias"}:
+        if not ai_context["ai_score_usable"]:
+            return {
+                "should_add": False,
+                "reason": "holding_exit_matrix_ai_score_unusable",
+                "ai_score_usable": ai_context["ai_score_usable"],
+                "ai_score_source": ai_context["ai_score_source"],
+                "ai_score_data_quality": ai_context["ai_score_data_quality"],
+                "ai_score_excluded_reason": ai_context["ai_score_excluded_reason"],
+                **lifecycle_decision,
+            }
         add_type = "AVG_DOWN" if lifecycle_effect == "avg_down_bias" else "PYRAMID"
         return {
             "should_add": True,
@@ -424,6 +500,9 @@ def resolve_holding_exit_matrix_scale_in_bias(
             "profit_rate": profit_rate,
             "peak_profit": peak_profit,
             "current_ai_score": current_ai_score,
+            "ai_score_usable": ai_context["ai_score_usable"],
+            "ai_score_source": ai_context["ai_score_source"],
+            "ai_score_data_quality": ai_context["ai_score_data_quality"],
             "held_sec": held_sec,
             "holding_exit_matrix_scale_in_bias": add_type,
             **lifecycle_decision,
@@ -434,7 +513,11 @@ def resolve_holding_exit_matrix_scale_in_bias(
     avg_min_held = int(getattr(TRADING_RULES, "HOLDING_EXIT_MATRIX_AVG_DOWN_MIN_HELD_SEC", 10) or 10)
     avg_max_held = int(getattr(TRADING_RULES, "HOLDING_EXIT_MATRIX_AVG_DOWN_MAX_HELD_SEC", 240) or 240)
     if avg_min <= float(profit_rate or 0.0) <= avg_max and int(held_sec or 0) >= avg_min_held:
-        if int(held_sec or 0) <= avg_max_held and float(current_ai_score or 0.0) >= avg_ai:
+        if (
+            int(held_sec or 0) <= avg_max_held
+            and ai_context["ai_score_usable"]
+            and float(current_ai_score or 0.0) >= avg_ai
+        ):
             return {
                 "should_add": True,
                 "add_type": "AVG_DOWN",
@@ -442,6 +525,9 @@ def resolve_holding_exit_matrix_scale_in_bias(
                 "profit_rate": profit_rate,
                 "peak_profit": peak_profit,
                 "current_ai_score": current_ai_score,
+                "ai_score_usable": ai_context["ai_score_usable"],
+                "ai_score_source": ai_context["ai_score_source"],
+                "ai_score_data_quality": ai_context["ai_score_data_quality"],
                 "held_sec": held_sec,
                 "holding_exit_matrix_scale_in_bias": "AVG_DOWN",
             }
@@ -449,7 +535,12 @@ def resolve_holding_exit_matrix_scale_in_bias(
     pyr_ai = int(getattr(TRADING_RULES, "HOLDING_EXIT_MATRIX_PYRAMID_MIN_AI_SCORE", 75) or 75)
     pyr_max_dd = float(getattr(TRADING_RULES, "HOLDING_EXIT_MATRIX_PYRAMID_MAX_DRAWDOWN_FROM_PEAK_PCT", 0.35) or 0.35)
     drawdown_from_peak = float(peak_profit or 0.0) - float(profit_rate or 0.0)
-    if float(profit_rate or 0.0) >= pyr_min and float(current_ai_score or 0.0) >= pyr_ai and drawdown_from_peak <= pyr_max_dd:
+    if (
+        float(profit_rate or 0.0) >= pyr_min
+        and ai_context["ai_score_usable"]
+        and float(current_ai_score or 0.0) >= pyr_ai
+        and drawdown_from_peak <= pyr_max_dd
+    ):
         return {
             "should_add": True,
             "add_type": "PYRAMID",
@@ -457,10 +548,25 @@ def resolve_holding_exit_matrix_scale_in_bias(
             "profit_rate": profit_rate,
             "peak_profit": peak_profit,
             "current_ai_score": current_ai_score,
+            "ai_score_usable": ai_context["ai_score_usable"],
+            "ai_score_source": ai_context["ai_score_source"],
+            "ai_score_data_quality": ai_context["ai_score_data_quality"],
             "held_sec": held_sec,
             "holding_exit_matrix_scale_in_bias": "PYRAMID",
         }
-    return {"should_add": False, "reason": "holding_exit_matrix_scale_in_no_match"}
+    reason = (
+        "holding_exit_matrix_ai_score_unusable"
+        if not ai_context["ai_score_usable"]
+        else "holding_exit_matrix_scale_in_no_match"
+    )
+    return {
+        "should_add": False,
+        "reason": reason,
+        "ai_score_usable": ai_context["ai_score_usable"],
+        "ai_score_source": ai_context["ai_score_source"],
+        "ai_score_data_quality": ai_context["ai_score_data_quality"],
+        "ai_score_excluded_reason": ai_context["ai_score_excluded_reason"],
+    }
 
 
 def build_holding_exit_matrix_runtime_context(

@@ -293,6 +293,32 @@ AI_RESPONSE_SCHEMA_REGISTRY = {
         },
         "required": ["action", "score", "reason"],
     },
+    "holding_score_v2": {
+        "type": "object",
+        "properties": {
+            "action": {"type": "string", "enum": ["HOLD", "TRIM", "EXIT"]},
+            "score": {"type": "integer"},
+            "confidence": {"type": "integer"},
+            "position_state": {"type": "string"},
+            "score_basis": {"type": "string"},
+            "risk_factors": {"type": "array", "items": {"type": "string"}},
+            "support_factors": {"type": "array", "items": {"type": "string"}},
+            "data_quality": {"type": "string", "enum": ["fresh", "stale", "partial", "insufficient"]},
+            "reason": {"type": "string"},
+        },
+        "required": [
+            "action",
+            "score",
+            "confidence",
+            "position_state",
+            "score_basis",
+            "risk_factors",
+            "support_factors",
+            "data_quality",
+            "reason",
+        ],
+        "additionalProperties": False,
+    },
     "holding_exit_flow_v1": {
         "type": "object",
         "properties": {

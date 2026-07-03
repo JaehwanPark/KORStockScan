@@ -1991,6 +1991,7 @@ def test_build_ai_ops_log_fields_preserves_operational_meta():
             "openai_total_tokens": 1290,
             "openai_cached_input_tokens": 120,
             "openai_reasoning_tokens": 8,
+            "holding_score_source_quality_reason": "feature_packet_fresh",
         },
         ai_score_raw=74,
         ai_score_after_bonus=79,
@@ -2019,6 +2020,7 @@ def test_build_ai_ops_log_fields_preserves_operational_meta():
     assert fields["openai_total_tokens"] == 1290
     assert fields["openai_cached_input_tokens"] == 120
     assert fields["openai_reasoning_tokens"] == 8
+    assert fields["holding_score_source_quality_reason"] == "feature_packet_fresh"
     assert fields["ai_score_raw"] == "74.0"
     assert fields["ai_score_after_bonus"] == "79.0"
     assert fields["entry_score_threshold"] == "75.0"

@@ -6,6 +6,7 @@ def test_ai_response_schema_registry_covers_required_endpoints():
         "entry_v1",
         "entry_price_v1",
         "holding_exit_v1",
+        "holding_score_v2",
         "holding_exit_flow_v1",
         "overnight_v1",
         "condition_entry_v1",

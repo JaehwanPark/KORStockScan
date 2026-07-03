@@ -115,6 +115,8 @@ GCP follower/one-shot 서버는 AWS-generated PREOPEN artifact를 `deploy/run_pu
 - `safety_guard_pack`: 원복 후보를 safety breach로만 제한한다.
 - `calibration_trigger_pack`: 목표 미달, 표본 부족, 방향성 불일치의 다음 calibration action을 담는다.
 
+`holding_score_v2`는 보유 중 포지션 상태 score의 provenance/source-quality 계약이다. 이는 intraday threshold mutation, env override, provider route change, bot restart, broker/order guard bypass, quantity/cap change가 아니며, scale-in/avg-down/pyramid 소비층이 `live + fresh|partial + TTL` score만 support로 쓰도록 제한하는 runtime data-quality guard다. `holding_flow`는 기존처럼 sell candidate override/recheck 전용으로 유지한다.
+
 bounded calibration family는 아래 묶음이 중심이다. 목적은 완벽한 threshold spot 탐색이 아니라 efficient trade-off 지점의 bounded live canary와 자동 calibration이다.
 
 1. `lifecycle_decision_matrix_runtime`: Entry ADM, Holding/Exit ADM, submit, scale-in adapter를 감싼 umbrella weighted ADM runtime 후보. selected 시에도 hard safety 우회 없이 policy file/version/promote cap만 다음 PREOPEN env로 전달한다.

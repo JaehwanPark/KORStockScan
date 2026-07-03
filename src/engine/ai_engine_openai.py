@@ -60,6 +60,7 @@ from src.engine.ai_prompt_contracts import (
     SCALPING_SYSTEM_PROMPT,
     SCALPING_WATCHING_SYSTEM_PROMPT,
     SCALPING_HOLDING_SYSTEM_PROMPT,
+    SCALPING_HOLDING_SCORE_SYSTEM_PROMPT,
     SCALPING_HOLDING_FLOW_SYSTEM_PROMPT,
     SCALPING_ENTRY_PRICE_PROMPT,
     normalize_scalping_entry_price_result,
@@ -1666,7 +1667,13 @@ class GPTSniperEngine:
 
     def _build_invalid_prompt_retry_request(self, request: OpenAIResponseRequest) -> OpenAIResponseRequest:
         if request.require_json:
-            if request.schema_name == "holding_exit_v1":
+            if request.schema_name == "holding_score_v2":
+                safe_prompt = (
+                    "Score the open scalping position using only the provided JSON. "
+                    "Return JSON only with action HOLD, TRIM, or EXIT; score and confidence as 0-100 integers; "
+                    "position_state, score_basis, risk_factors, support_factors, data_quality, and reason in English ASCII."
+                )
+            elif request.schema_name == "holding_exit_v1":
                 safe_prompt = (
                     "Classify the provided market data. Use only the numeric fields in the input. "
                     "Return JSON only with action HOLD, TRIM, or EXIT; score as 0-100 integer; "
@@ -4152,6 +4159,367 @@ class GPTSniperEngine:
     @staticmethod
     def _normalize_flow_state_label(value):
         return normalize_flow_state_label(value)
+
+    @staticmethod
+    def _normalize_holding_score_data_quality(value, *, fallback="partial"):
+        text = str(value or "").strip().lower()
+        if text in {"fresh", "stale", "partial", "insufficient"}:
+            return text
+        return fallback
+
+    @staticmethod
+    def _compact_holding_score_factors(value, *, limit=6):
+        if isinstance(value, list):
+            items = value
+        elif value in (None, "", "-", []):
+            items = []
+        else:
+            items = [value]
+        out = []
+        for item in items[:limit]:
+            text = str(item or "").replace("\n", " ").strip()
+            if text:
+                out.append(text[:160])
+        return out
+
+    def _derive_holding_score_source_quality(self, feature_packet, audit_fields):
+        audit = audit_fields if isinstance(audit_fields, dict) else {}
+        packet = feature_packet if isinstance(feature_packet, dict) else {}
+        stale_reasons = []
+        partial_reasons = []
+        fresh_labels = {"fresh", "fresh_computed", "usable", "ok", "pass"}
+        stale_labels = {"missing_ticks", "missing_tick_time", "stale_tick", "insufficient"}
+        for key in ("tick_context_stale", "quote_stale"):
+            raw_value = audit.get(key, packet.get(key))
+            text = str(raw_value or "").strip().lower()
+            if raw_value is True or text in {"true", "1", "yes", "stale"}:
+                stale_reasons.append(key)
+        for key in ("tick_context_quality", "ai_input_source_quality_status"):
+            text = str(audit.get(key, packet.get(key, "")) or "").strip().lower()
+            if text in stale_labels:
+                stale_reasons.append(f"{key}:{text}")
+            elif text and text not in fresh_labels:
+                partial_reasons.append(f"{key}:{text}")
+        micro_quality = str(
+            audit.get(
+                "microstructure_reaction_source_quality",
+                packet.get("microstructure_reaction_source_quality", ""),
+            )
+            or ""
+        ).strip().lower()
+        if micro_quality:
+            if micro_quality in {"stale", "stale_tick", "stale_quote"}:
+                stale_reasons.append(f"microstructure_reaction_source_quality:{micro_quality}")
+            elif micro_quality in {"stale_tick_or_quote", "missing", "insufficient", "not_evaluated"}:
+                partial_reasons.append(f"microstructure_reaction_source_quality:{micro_quality}")
+            elif micro_quality not in fresh_labels | {"fresh_short_window"}:
+                partial_reasons.append(f"microstructure_reaction_source_quality:{micro_quality}")
+        if not packet:
+            return {
+                "data_quality": "insufficient",
+                "source_quality_reason": "feature_packet_missing",
+            }
+        if stale_reasons:
+            return {
+                "data_quality": "stale",
+                "source_quality_reason": ",".join(stale_reasons),
+            }
+        if partial_reasons:
+            return {
+                "data_quality": "partial",
+                "source_quality_reason": ",".join(partial_reasons),
+            }
+        return {
+            "data_quality": "fresh",
+            "source_quality_reason": "feature_packet_fresh",
+        }
+
+    def _build_scalping_holding_score_v2_context(
+        self,
+        stock_name,
+        stock_code,
+        ws_data,
+        recent_ticks,
+        recent_candles,
+        position_ctx,
+        *,
+        feature_packet=None,
+        feature_audit_fields=None,
+    ):
+        ctx = position_ctx if isinstance(position_ctx, dict) else {}
+        ws = ws_data if isinstance(ws_data, dict) else {}
+        packet = feature_packet if isinstance(feature_packet, dict) else {}
+        audit = feature_audit_fields if isinstance(feature_audit_fields, dict) else {}
+        curr_price = int(self._safe_float(ws.get("curr", ctx.get("curr_price", 0)), 0))
+        buy_price = self._safe_float(ctx.get("buy_price", ctx.get("avg_price", 0)), 0.0)
+        profit_rate = self._safe_float(ctx.get("profit_rate", ctx.get("pnl_pct", 0.0)), 0.0)
+        peak_profit = self._safe_float(ctx.get("peak_profit", profit_rate), profit_rate)
+        drawdown = max(0.0, self._safe_float(ctx.get("drawdown_from_peak_pct", peak_profit - profit_rate), 0.0))
+        source_quality = self._derive_holding_score_source_quality(packet, audit)
+        payload = {
+            "input_schema": "holding_score_v2",
+            "position_context": {
+                "stock_name": stock_name,
+                "stock_code": stock_code,
+                "record_id": ctx.get("record_id"),
+                "buy_price": buy_price,
+                "curr_price": curr_price,
+                "profit_rate": round(profit_rate, 4),
+                "peak_profit": round(peak_profit, 4),
+                "drawdown_from_peak_pct": round(drawdown, 4),
+                "held_sec": int(self._safe_float(ctx.get("held_sec"), 0.0)),
+                "buy_qty": int(self._safe_float(ctx.get("buy_qty"), 0.0)),
+                "position_tag": ctx.get("position_tag", "-"),
+                "entry_source": ctx.get("entry_source", "-"),
+                "avg_down_count": int(self._safe_float(ctx.get("avg_down_count"), 0.0)),
+                "pyramid_count": int(self._safe_float(ctx.get("pyramid_count"), 0.0)),
+            },
+            "pnl_context": {
+                "profit_rate": round(profit_rate, 4),
+                "peak_profit": round(peak_profit, 4),
+                "drawdown_from_peak_pct": round(drawdown, 4),
+                "distance_to_profit_peak_pct": round(drawdown, 4),
+            },
+            "market_flow_features": {
+                "feature_packet": packet,
+                "audit_fields": audit,
+                "tick_summary": self._summarize_tick_windows(recent_ticks, windows=(5, 10, 20)),
+                "candle_summary": self._summarize_candle_windows(recent_candles, windows=(3, 5, 10)),
+                "recent_ticks_latest_first": self._compact_recent_ticks(recent_ticks, limit=5),
+                "recent_candles_latest_window": self._compact_recent_candles(recent_candles, limit=5),
+                "live_supply_demand_orderbook": {
+                    "execution_strength": ws.get("v_pw", 0.0),
+                    "buy_ratio": ws.get("buy_ratio", 0.0),
+                    "buy_exec_volume": ws.get("buy_exec_volume", 0),
+                    "sell_exec_volume": ws.get("sell_exec_volume", 0),
+                    "ask_total_depth": ws.get("ask_tot", 0),
+                    "bid_total_depth": ws.get("bid_tot", 0),
+                    **self._extract_quote_snapshot(ws),
+                },
+            },
+            "source_quality": {
+                **source_quality,
+                "aggressor_quality_preserved": True,
+                "price_change_heuristic_is_not_aggressor": True,
+            },
+            "prior_score_context": {
+                "prior_score": ctx.get("prior_score"),
+                "prior_effective_score": ctx.get("prior_effective_score"),
+                "prior_score_source": ctx.get("prior_score_source", "-"),
+                "prior_data_quality": ctx.get("prior_data_quality", "-"),
+                "prior_score_age_sec": ctx.get("prior_score_age_sec"),
+                "prior_effective_usable": bool(ctx.get("prior_effective_usable", False)),
+            },
+            "hard_guard_context": {
+                "hard_guards_remain_authoritative": True,
+                "threshold_mutation_forbidden": True,
+                "provider_route_change_forbidden": True,
+                "broker_order_guard_bypass_forbidden": True,
+                "quantity_cap_change_forbidden": True,
+                "active_hard_guard": ctx.get("active_hard_guard", "-"),
+            },
+            "decision_request": {
+                "score_contract": "80-100 continuation_favored; 50-79 mixed_hold_neutral; 0-49 exit_risk_favored",
+                "return_schema": "holding_score_v2",
+            },
+        }
+        return json.dumps(payload, ensure_ascii=True, separators=(",", ":"), default=str)
+
+    def _normalize_holding_score_result(self, result, *, source_quality=None):
+        payload = dict(result or {}) if isinstance(result, dict) else {}
+        raw_action = str(payload.get("action", "HOLD") or "HOLD").upper().strip()
+        action = raw_action if raw_action in {"HOLD", "TRIM", "EXIT"} else "HOLD"
+        score = max(0, min(100, int(self._safe_float(payload.get("score"), 50))))
+        confidence = max(0, min(100, int(self._safe_float(payload.get("confidence"), 0))))
+        source_quality = source_quality if isinstance(source_quality, dict) else {}
+        model_quality = self._normalize_holding_score_data_quality(payload.get("data_quality"))
+        derived_quality = self._normalize_holding_score_data_quality(
+            source_quality.get("data_quality"),
+            fallback=model_quality,
+        )
+        if derived_quality in {"stale", "insufficient"}:
+            data_quality = derived_quality
+        elif model_quality in {"stale", "insufficient"}:
+            data_quality = model_quality
+        elif "partial" in {derived_quality, model_quality}:
+            data_quality = "partial"
+        else:
+            data_quality = "fresh"
+        reason_payload = normalize_ai_reason_language(str(payload.get("reason", "") or "holding_score_v2_result"))
+        score_basis = normalize_ai_reason_language(
+            str(payload.get("score_basis", "") or reason_payload.get("reason") or "holding_score_v2_basis")
+        )
+        return {
+            "action": action,
+            "score": score,
+            "confidence": confidence,
+            "position_state": str(payload.get("position_state", "-") or "-")[:80],
+            "score_basis": score_basis.get("reason", "holding_score_v2_basis"),
+            "risk_factors": self._compact_holding_score_factors(payload.get("risk_factors")),
+            "support_factors": self._compact_holding_score_factors(payload.get("support_factors")),
+            "data_quality": data_quality,
+            "reason": reason_payload.get("reason", "holding_score_v2_result"),
+            "raw": payload,
+        }
+
+    def _neutral_holding_score_result(
+        self,
+        reason,
+        *,
+        started,
+        result_source,
+        parse_fail=False,
+        input_contract_fields=None,
+    ):
+        reason_text = str(reason or result_source or "holding_score_unusable")
+        payload = {
+            "action": "HOLD",
+            "score": 50,
+            "confidence": 0,
+            "position_state": "stale_or_insufficient",
+            "score_basis": reason_text,
+            "risk_factors": [reason_text],
+            "support_factors": [],
+            "data_quality": "insufficient",
+            "reason": reason_text,
+            "holding_score_input_schema": "holding_score_v2",
+            "holding_score_data_quality": "insufficient",
+            "holding_score_confidence": 0,
+            "holding_score_basis": reason_text,
+            "holding_score_raw": 50,
+            "holding_score_effective": 50,
+            "holding_score_source": result_source,
+            "holding_score_effective_usable": False,
+            "holding_score_excluded_reason": reason_text,
+            "holding_score_age_sec": 0,
+        }
+        return self._annotate_analysis_result(
+            payload,
+            prompt_type="scalping_holding_score",
+            prompt_version="holding_score_v2",
+            response_ms=int((time.perf_counter() - started) * 1000),
+            parse_ok=False,
+            parse_fail=bool(parse_fail),
+            fallback_score_50=True,
+            cache_hit=False,
+            cache_mode="miss",
+            result_source=result_source,
+            input_contract_fields=input_contract_fields
+            or {
+                "ai_input_schema": "holding_score_v2",
+                "ai_input_contract_mode": "structured_json",
+                "ai_input_build_fallback": "not_built",
+            },
+        )
+
+    def evaluate_scalping_holding_score(
+        self,
+        stock_name,
+        stock_code,
+        ws_data,
+        recent_ticks,
+        recent_candles,
+        position_ctx,
+        metadata_extra=None,
+    ):
+        started = time.perf_counter()
+        input_contract_fields = {
+            "ai_input_schema": "holding_score_v2",
+            "ai_input_contract_mode": "structured_json",
+            "ai_input_build_fallback": "not_built",
+        }
+        if not self.lock.acquire(blocking=False):
+            return self._neutral_holding_score_result(
+                "lock_contention",
+                started=started,
+                result_source="lock_contention",
+                input_contract_fields=input_contract_fields,
+            )
+
+        try:
+            if self.ai_disabled:
+                return self._neutral_holding_score_result(
+                    "engine_disabled",
+                    started=started,
+                    result_source="engine_disabled",
+                    input_contract_fields=input_contract_fields,
+                )
+
+            feature_packet = extract_scalping_feature_packet(ws_data or {}, recent_ticks or [], recent_candles or [])
+            feature_audit_fields = build_scalping_feature_audit_fields(feature_packet)
+            source_quality = self._derive_holding_score_source_quality(feature_packet, feature_audit_fields)
+            user_input = self._build_scalping_holding_score_v2_context(
+                stock_name,
+                stock_code,
+                ws_data or {},
+                recent_ticks or [],
+                recent_candles or [],
+                position_ctx or {},
+                feature_packet=feature_packet,
+                feature_audit_fields=feature_audit_fields,
+            )
+            input_contract_fields = self._resolve_ai_input_contract_fields(
+                user_input,
+                default_schema="holding_score_v2",
+                default_mode="structured_json",
+            )
+            result = self._call_openai_safe(
+                SCALPING_HOLDING_SCORE_SYSTEM_PROMPT,
+                user_input,
+                require_json=True,
+                context_name=f"HOLDING_SCORE:{stock_name}",
+                model_override=self._get_tier1_model(),
+                schema_name="holding_score_v2",
+                endpoint_name="holding_score",
+                symbol=stock_code,
+                metadata_extra=metadata_extra,
+            )
+            normalized = self._normalize_holding_score_result(result, source_quality=source_quality)
+            normalized.update(feature_audit_fields)
+            normalized.update(
+                {
+                    "ai_model": self._get_tier1_model(),
+                    "holding_score_input_schema": "holding_score_v2",
+                    "holding_score_data_quality": normalized["data_quality"],
+                    "holding_score_confidence": normalized["confidence"],
+                    "holding_score_basis": normalized["score_basis"],
+                    "holding_score_raw": normalized["score"],
+                    "holding_score_effective": normalized["score"],
+                    "holding_score_source": "live",
+                    "holding_score_age_sec": 0,
+                    "holding_score_effective_usable": normalized["data_quality"] in {"fresh", "partial"},
+                    "holding_score_excluded_reason": "-"
+                    if normalized["data_quality"] in {"fresh", "partial"}
+                    else normalized["data_quality"],
+                    "holding_score_source_quality_reason": source_quality.get("source_quality_reason", "-"),
+                }
+            )
+            self._mark_successful_ai_call(update_last_call_time=False)
+            return self._annotate_analysis_result(
+                normalized,
+                prompt_type="scalping_holding_score",
+                prompt_version="holding_score_v2",
+                response_ms=int((time.perf_counter() - started) * 1000),
+                parse_ok=True,
+                parse_fail=False,
+                fallback_score_50=False,
+                cache_hit=False,
+                cache_mode="miss",
+                result_source="live",
+                input_contract_fields=input_contract_fields,
+            )
+        except Exception as e:
+            failure_count = self._record_failure_and_maybe_disable(context_name=f"HOLDING_SCORE:{stock_name}")
+            log_error(f"🚨 [HOLDING_SCORE] OpenAI score error ({stock_name}, failures {failure_count}): {e}")
+            return self._neutral_holding_score_result(
+                "exception",
+                started=started,
+                result_source="exception",
+                parse_fail=True,
+                input_contract_fields=input_contract_fields,
+            )
+        finally:
+            self.lock.release()
 
     def _build_scalping_holding_flow_v2_context(
         self,

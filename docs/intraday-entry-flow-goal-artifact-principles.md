@@ -5,11 +5,13 @@ Use this text when opening an intraday entry-flow monitoring goal. It keeps gene
 ## Goal Text Block
 
 ```text
-/goal <HH:MM:SS>부터 <HH:MM:SS> KST까지 10분 간격으로, 상승했거나 BUY 후보 단계까지 접근했으나 일반 BUY/submit/fill/holding/exit로 이어지지 못한 종목의 intraday entry flow를 진단한다. 단, `rising_missed_one_share_entry` 강제 1주 scout/매수 이벤트는 일반 BUY 병목, submit/fill 성공, rising_missed 해소 판정에서 제외하고 별도 관측값으로만 취급한다.
+/goal <HH:MM:SS>부터 <HH:MM:SS> KST까지 10분 간격으로, 상승했거나 BUY 후보 단계까지 접근했으나 일반 BUY/submit/fill/holding/exit로 이어지지 못한 종목의 intraday entry flow를 진단한다. `rising_missed_one_share_entry` 강제 1주 scout/매수 이벤트는 일반 BUY 병목, submit/fill 성공, rising_missed 해소 판정에서 제외하고 별도 관측값으로만 취급한다.
 
 진단 목적은 모든 blocker를 동일하게 붙잡는 것이 아니라, BUY 제출/체결/보유/청산으로 이어질 수 있는 actionable major blocker에 감시예산과 수정예산을 집중하는 것이다. 회복 시도 후에도 source-quality가 해소되지 않는 종목은 빠르게 감시대상 큐에서 제외하여 다른 기회에 예산을 재할당한다.
 
 목표는 손실 억제가 아니라 기대값과 순이익 최대화다. forced scout 1주 익절/손절은 일반 BUY 성공으로 세지 않는다. 이 라인은 별도 관측/기회비용 증거로 분리하고, 일반 BUY 병목, submit drought, fill 성공률, holding/exit 품질 판단과 혼합하지 않는다.
+
+forced scout 수익이 반복되는데 normal BUY/submit이 0이거나 극히 적으면, "기회비용이 크다"는 문제의식을 명시적으로 `window_submit_drought_observation`과 `one_share_threshold_opportunity` 근거로 남긴다. 단, 즉시 BUY 임계값 완화나 broker submit guard 우회가 아니라, normal BUY로 전환 가능한 actionable major blocker와 다음 PREOPEN `auto_bounded_live` 후보를 찾는 관측/후속작업으로 제한한다.
 
 핵심 판정 순서:
 1. decision: 해당 흐름이 유효한 source quality로 식별됐는지, sim/source-only로 적용됐는지, real runtime 반영까지 무엇이 남았는지 먼저 판정한다.
@@ -21,6 +23,7 @@ Use this text when opening an intraday entry-flow monitoring goal. It keeps gene
 - broker submit guard, stale quote/price freshness, hard/protect/emergency stop, account/order/cooldown/quantity guard는 우회하지 않는다.
 - forced scout 수익이 계속 나오고 normal submit BUY가 0이면 `window_submit_drought_observation`으로 기록한다. 단, 공식 critical 판단은 BUY Funnel Sentinel의 일중/일간 floor와 submitted/AI, submitted/budget 기준을 함께 본다.
 - rising missed 1주 결과는 기회비용/후보 증거로 사용하되 real-order enablement, cap release, provider 변경, bot restart, hard safety 완화의 직접 근거로 쓰지 않는다.
+- normal submit drought가 관측되면 forced scout lineage, AI score near-buy, pre-submit pass, fill 직전 실패, source-quality exclusion, cooldown/hard-safety를 분리해 "왜 일반 submit으로 못 넘어갔는지"를 우선 판정한다.
 - source-quality unrecoverable row는 빠르게 제외하고 예산을 actionable major blocker에 재배치한다.
 - clean tuning baseline은 `2026-06-04T14:29:09+09:00 KST` 이후 데이터만 사용한다. 이전 raw/report/analytics는 archive/audit evidence 전용이다.
 - hot runtime pressure relief는 수동 조정에만 의존하지 않도록 자동 관측/자동 조절 가능한 구조를 우선 고려한다. 빈번히 바뀌는 값은 봇 재기동 없이 동적 반영되도록 설계한다.
