@@ -1,6 +1,6 @@
 # 2026-07-03 Scalping Pyramid Quality Calibration
 
-- generated_at: 2026-07-03T13:57:14+09:00
+- generated_at: 2026-07-03T20:10:59+09:00
 - family: scalping_pyramid_quality_gate
 - stage: scale_in
 - calibration_state: adjust_down
@@ -14,15 +14,15 @@
 
 - calibration_source_scope: one_share_event_opportunity
 - one_share_event_source_present: True
-- one_share_closed_pyramid_row_count: 82
-- sample_count: 82
+- one_share_closed_pyramid_row_count: 90
+- sample_count: 90
 - recovered_or_extended_rate: 0.33
-- reversal_or_flat_rate: 0.49
-- correctly_blocked_rate: 0.18
-- one_share_pyramid_avg_opportunity_cost_pct: 1.00
+- reversal_or_flat_rate: 0.50
+- correctly_blocked_rate: 0.17
+- one_share_pyramid_avg_opportunity_cost_pct: 0.96
 - profit_threshold_grid_status: adjust_down
 - profit_threshold_grid_reason: grid_loosen_profit_threshold_direct
 - profit_threshold_grid_selected_min_profit_pct: 1.1
-- profit_threshold_grid_selected_avg_incremental_exit_profit_pct: 0.67
+- profit_threshold_grid_selected_avg_incremental_exit_profit_pct: 0.56
 - source_quality_pass: True
 - provenance_present: True

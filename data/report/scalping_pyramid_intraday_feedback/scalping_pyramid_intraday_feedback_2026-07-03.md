@@ -1,6 +1,6 @@
 # 2026-07-03 Scalping Pyramid Intraday Feedback
 
-- generated_at: 2026-07-03T13:24:54+09:00
+- generated_at: 2026-07-03T20:10:55+09:00
 - decision_authority: source_only_pyramid_intraday_feedback_no_runtime_mutation
 - runtime_effect: false
 - allowed_runtime_apply: false
@@ -8,23 +8,25 @@
 
 ## Summary
 
-- pyramid_feedback_row_count: 24
-- closed_pyramid_row_count: 10
-- pyramid_would_have_helped_count: 1
+- pyramid_feedback_row_count: 37
+- closed_pyramid_row_count: 18
+- pyramid_would_have_helped_count: 4
 - pyramid_correctly_blocked_count: 1
-- pyramid_overheat_or_reversal_risk_count: 8
-- pyramid_open_unresolved_count: 14
-- one_share_event_count: 29
-- one_share_closed_count: 12
-- one_share_pyramid_opportunity_count: 15
-- one_share_pyramid_missed_upside_count: 2
-- one_share_pyramid_missed_upside_rate: 0.17
-- one_share_pyramid_avg_opportunity_cost_pct: 0.85
+- pyramid_overheat_or_reversal_risk_count: 13
+- pyramid_open_unresolved_count: 19
+- one_share_event_count: 44
+- one_share_closed_count: 20
+- one_share_pyramid_opportunity_count: 25
+- one_share_pyramid_missed_upside_count: 5
+- one_share_pyramid_missed_upside_rate: 0.25
+- one_share_pyramid_avg_opportunity_cost_pct: 0.72
 
 ## Blocker Metrics
 
-- blocker=ai_score_below_min sample=1 recovered_rate=0.00 reversal_rate=1.00 blocked_then_recovered_rate=0.00
-- blocker=profit_not_enough sample=18 recovered_rate=0.06 reversal_rate=0.22 blocked_then_recovered_rate=0.06
+- blocker=ai_score_below_min sample=3 recovered_rate=0.00 reversal_rate=0.67 blocked_then_recovered_rate=0.00
+- blocker=profit_not_enough sample=25 recovered_rate=0.16 reversal_rate=0.20 blocked_then_recovered_rate=0.16
+- blocker=pyramid_quality_blocked:ai_score_below_min,buy_pressure_below_min,large_sell_detected sample=1 recovered_rate=0.00 reversal_rate=1.00 blocked_then_recovered_rate=0.00
+- blocker=pyramid_quality_blocked:ai_score_below_min,micro_vwap_overheated sample=3 recovered_rate=0.00 reversal_rate=0.67 blocked_then_recovered_rate=0.00
 - blocker=pyramid_quality_blocked:ai_score_below_min,tick_accel_below_min sample=1 recovered_rate=0.00 reversal_rate=1.00 blocked_then_recovered_rate=0.00
 - blocker=pyramid_quality_blocked:ai_score_below_min,tick_accel_below_min,micro_vwap_overheated sample=1 recovered_rate=0.00 reversal_rate=1.00 blocked_then_recovered_rate=0.00
 - blocker=tick_accel_below_min sample=2 recovered_rate=0.00 reversal_rate=0.00 blocked_then_recovered_rate=0.00
@@ -51,11 +53,24 @@
 - record_id=15241 code=037710 name=광주신세계 label=pyramid_overheat_or_reversal_risk blocker=trend_not_strong profit=1.55 final=1.3 ai=70.0 tick=2.5 micro_vwap=-6.77
 - record_id= code=153890 name=져스텍 label=pyramid_open_unresolved blocker=tick_accel_below_min profit=2.33 final=None ai=70.0 tick=0.0 micro_vwap=20.42
 - record_id=15240 code=095500 name=미래나노텍 label=pyramid_overheat_or_reversal_risk blocker=pyramid_quality_blocked:ai_score_below_min,tick_accel_below_min,micro_vwap_overheated profit=4.91 final=4.2 ai=50.0 tick=2.0 micro_vwap=-29.73
-- record_id= code=119850 name=지엔씨에너지 label=pyramid_open_unresolved blocker=profit_not_enough profit=0.65 final=None ai=76.0 tick=0.714 micro_vwap=11.12
 - record_id= code=477850 name=마키나락스 label=pyramid_open_unresolved blocker=profit_not_enough profit=0.52 final=None ai=71.0 tick=0.5 micro_vwap=106.91
 - record_id=15242 code=441270 name=파인엠텍 label=pyramid_correctly_blocked blocker=profit_not_enough profit=0.33 final=0.47 ai=72.0 tick=0.0 micro_vwap=30.95
-- record_id= code=138930 name=BNK금융지주 label=pyramid_open_unresolved blocker=profit_not_enough profit=0.41 final=None ai=70.0 tick=5.0 micro_vwap=51.57
-- record_id= code=006340 name=대원전선 label=pyramid_open_unresolved blocker=profit_not_enough profit=0.08 final=None ai=63.0 tick=0.0 micro_vwap=17.75
+- record_id= code=006340 name=대원전선 label=pyramid_open_unresolved blocker=profit_not_enough profit=0.0 final=None ai=70.0 tick=0.0 micro_vwap=-16.67
+- record_id= code=119850 name=지엔씨에너지 label=pyramid_open_unresolved blocker=profit_not_enough profit=0.48 final=None ai=73.0 tick=2.0 micro_vwap=18.31
+- record_id=15239 code=376900 name=로킷헬스케어 label=pyramid_overheat_or_reversal_risk blocker=ai_score_below_min profit=1.16 final=0.91 ai=69.0 tick=0.444 micro_vwap=-7.25
+- record_id=15301 code=441270 name=파인엠텍 label=pyramid_would_have_helped blocker=profit_not_enough profit=0.18 final=0.32 ai=68.0 tick=1.75 micro_vwap=39.56
+- record_id=15297 code=095500 name=미래나노텍 label=pyramid_would_have_helped blocker=profit_not_enough profit=0.11 final=1.13 ai=70.0 tick=1.0 micro_vwap=79.37
+- record_id=15255 code=477850 name=마키나락스 label=pyramid_overheat_or_reversal_risk blocker=pyramid_quality_blocked:ai_score_below_min,micro_vwap_overheated profit=2.1 final=0.7 ai=68.0 tick=0.0 micro_vwap=8.24
+- record_id=15251 code=144960 name=뉴파워프라즈마 label=pyramid_overheat_or_reversal_risk blocker=pyramid_quality_blocked:ai_score_below_min,micro_vwap_overheated profit=3.32 final=2.59 ai=50.0 tick=1.333 micro_vwap=50.37
+- record_id= code=257720 name=실리콘투 label=pyramid_open_unresolved blocker=profit_not_enough profit=0.05 final=None ai=72.0 tick=2.25 micro_vwap=-7.46
+- record_id= code=138930 name=BNK금융지주 label=pyramid_open_unresolved blocker=profit_not_enough profit=1.0 final=None ai=70.0 tick=1.0 micro_vwap=-5.31
+- record_id=15311 code=441270 name=파인엠텍 label=pyramid_would_have_helped blocker=profit_not_enough profit=0.04 final=0.72 ai=73.0 tick=4.25 micro_vwap=49.98
+- record_id= code=006800 name=미래에셋증권 label=pyramid_open_unresolved blocker=pyramid_quality_blocked:ai_score_below_min,micro_vwap_overheated profit=1.42 final=None ai=68.0 tick=0.0 micro_vwap=30.02
+- record_id=15327 code=095500 name=미래나노텍 label=pyramid_overheat_or_reversal_risk blocker=pyramid_quality_blocked:ai_score_below_min,buy_pressure_below_min,large_sell_detected profit=1.78 final=1.33 ai=66.0 tick=0.667 micro_vwap=-29.62
+- record_id= code=095500 name=미래나노텍 label=pyramid_open_unresolved blocker=ai_score_below_min profit=1.33 final=None ai=52.0 tick=0.8 micro_vwap=15.41
+- record_id=15366 code=441270 name=파인엠텍 label=pyramid_overheat_or_reversal_risk blocker=profit_not_enough profit=0.04 final=-0.64 ai=50.0 tick=2.421 micro_vwap=-8.17
+- record_id=15234 code=222800 name=심텍 label=pyramid_open_unresolved blocker=profit_not_enough profit=0.23 final=None ai=61.0 tick=2.0 micro_vwap=217.39
+- record_id=15401 code=441270 name=파인엠텍 label=pyramid_open_unresolved blocker=profit_not_enough profit=0.18 final=None ai=54.0 tick=0.5 micro_vwap=-15.17
 
 ## One Share Opportunity Rows
 
@@ -79,12 +94,27 @@
 - record_id=15222 code=062040 name=산일전기 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
 - record_id=15220 code=033100 name=제룡전기 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
 - record_id=15230 code=161890 name=한국콜마 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
-- record_id=15221 code=010140 name=삼성중공업 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
 - record_id=15226 code=484810 name=티엑스알로보틱스 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
-- record_id=15234 code=222800 name=심텍 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
 - record_id=15241 code=037710 name=광주신세계 label=pyramid_overheat_or_reversal_risk opportunity_seen=True opportunity_profit=1.55 max_profit=1.93 opportunity_cost=0.38 final=1.3
 - record_id=15242 code=441270 name=파인엠텍 label=pyramid_correctly_blocked opportunity_seen=True opportunity_profit=0.33 max_profit=0.47 opportunity_cost=0.14 final=0.47
 - record_id=15240 code=095500 name=미래나노텍 label=pyramid_overheat_or_reversal_risk opportunity_seen=True opportunity_profit=4.91 max_profit=5.15 opportunity_cost=0.24 final=4.2
 - record_id=15261 code=004440 name=삼일씨엔에스 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
-- record_id=15239 code=376900 name=로킷헬스케어 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
-- record_id=15297 code=095500 name=미래나노텍 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=15239 code=376900 name=로킷헬스케어 label=pyramid_overheat_or_reversal_risk opportunity_seen=True opportunity_profit=1.16 max_profit=1.16 opportunity_cost=0.0 final=0.91
+- record_id=15301 code=441270 name=파인엠텍 label=pyramid_would_have_helped opportunity_seen=True opportunity_profit=0.18 max_profit=1.27 opportunity_cost=1.09 final=0.32
+- record_id=15234 code=222800 name=심텍 label=pyramid_open_unresolved opportunity_seen=True opportunity_profit=0.23 max_profit=0.69 opportunity_cost=0.46 final=None
+- record_id=15297 code=095500 name=미래나노텍 label=pyramid_would_have_helped opportunity_seen=True opportunity_profit=0.11 max_profit=1.02 opportunity_cost=0.91 final=1.13
+- record_id=15255 code=477850 name=마키나락스 label=pyramid_overheat_or_reversal_risk opportunity_seen=True opportunity_profit=2.1 max_profit=2.1 opportunity_cost=0.0 final=0.7
+- record_id=15311 code=441270 name=파인엠텍 label=pyramid_would_have_helped opportunity_seen=True opportunity_profit=0.04 max_profit=1.12 opportunity_cost=1.08 final=0.72
+- record_id=15251 code=144960 name=뉴파워프라즈마 label=pyramid_overheat_or_reversal_risk opportunity_seen=True opportunity_profit=3.32 max_profit=3.32 opportunity_cost=0.0 final=2.59
+- record_id=15337 code=477850 name=마키나락스 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=-0.02 opportunity_cost=0.0 final=None
+- record_id=15329 code=489460 name=바이오비쥬 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=15282 code=153890 name=져스텍 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=15327 code=095500 name=미래나노텍 label=pyramid_overheat_or_reversal_risk opportunity_seen=True opportunity_profit=1.78 max_profit=2.0 opportunity_cost=0.22 final=1.33
+- record_id=15366 code=441270 name=파인엠텍 label=pyramid_overheat_or_reversal_risk opportunity_seen=True opportunity_profit=0.04 max_profit=1.13 opportunity_cost=1.09 final=-0.64
+- record_id=15296 code=042660 name=한화오션 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=15290 code=095500 name=미래나노텍 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=15401 code=441270 name=파인엠텍 label=pyramid_open_unresolved opportunity_seen=True opportunity_profit=0.18 max_profit=0.46 opportunity_cost=0.28 final=None
+- record_id=15221 code=010140 name=삼성중공업 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=15216 code=000500 name=가온전선 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=15274 code=006800 name=미래에셋증권 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None
+- record_id=15238 code=005930 name=삼성전자 label=pyramid_open_unresolved opportunity_seen=False opportunity_profit=None max_profit=None opportunity_cost=0.0 final=None

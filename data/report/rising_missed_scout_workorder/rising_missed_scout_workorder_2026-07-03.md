@@ -1,6 +1,6 @@
 # 2026-07-03 Rising Missed Scout Workorder
 
-- generated_at: 2026-07-03T14:27:13+09:00
+- generated_at: 2026-07-03T20:43:08+09:00
 - decision_authority: source_only_operational_workorder
 - runtime_effect: false
 - allowed_runtime_apply: false
@@ -8,19 +8,30 @@
 
 ## Summary
 
-- forced_scout_record_count: 30
-- forced_scout_with_post_sell_count: 14
-- profitable_forced_scout_count: 11
+- forced_scout_record_count: 44
+- forced_scout_with_post_sell_count: 18
+- profitable_forced_scout_count: 15
 - loss_or_flat_forced_scout_count: 3
-- winner_avg_profit_rate: 1.4736
+- winner_avg_profit_rate: 1.4233
 - loser_avg_profit_rate: -4.5967
 - current_missed_count: 5
 - scale_in_price_guard_block_record_count: 0
 - scale_in_qty_block_record_count: 0
 - scale_in_executed_record_count: 4
-- code_improvement_order_count: 3
+- code_improvement_order_count: 4
 
 ## Workorders
+
+### order_rising_missed_classifier_prior_feedback_bridge
+
+- title: rising missed cumulative classifier prior bridge
+- mapped_family: rising_missed_classifier_prior_feedback_bridge
+- runtime_effect: false
+- allowed_runtime_apply: false
+- evidence:
+  - prior_count=35
+  - recommendation_counts={"hold_sample": 17, "positive_prior": 8, "quality_risk": 3, "recheck_prior": 1, "source_quality_blocked": 6}
+  - runtime_effect=false
 
 ### order_rising_missed_initial_quality_feedback_loop
 
@@ -41,9 +52,9 @@
 - runtime_effect: false
 - allowed_runtime_apply: false
 - evidence:
-  - winner_count=11
+  - winner_count=15
   - loser_count=3
-  - winner_avg_profit_rate=1.4736
+  - winner_avg_profit_rate=1.4233
   - current_missed_count=5
   - current_missed_eligible_count=0
   - all_winner_rows_had_latency_pass=True
