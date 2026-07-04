@@ -1428,6 +1428,20 @@ def _scanner_runtime_target_event_fields(payload, *, outcome, reason, target=Non
         "source_signature": payload.get("source_signature") or "not_applicable_source_signature",
         "scanner_source_family": payload.get("scanner_source_family") or "",
         "scanner_source_role": payload.get("scanner_source_role") or "",
+        "rank_change": payload.get("rank_change", "not_applicable_rank_change"),
+        "rank_change_sign": payload.get("rank_change_sign", "not_applicable_rank_change_sign"),
+        "rank_change_sign_authority": payload.get(
+            "rank_change_sign_authority",
+            "raw_unverified_not_decision_input",
+        ),
+        "rank_change_score_input": payload.get(
+            "rank_change_score_input",
+            "not_applicable_rank_change_score_input",
+        ),
+        "rank_change_score_policy": payload.get(
+            "rank_change_score_policy",
+            "positive_signed_rank_delta_only_raw_rank_sign_unverified",
+        ),
         "current_price_observed": payload.get("current_price_observed") or payload.get("buy_price") or "",
         "price_delta_since_first_seen_pct": payload.get("price_delta_since_first_seen_pct") or "",
         "target_status": target.get("status") or payload.get("status") or "not_applicable_target_status",

@@ -132,6 +132,62 @@ def _safe_float(value, default: float = 0.0) -> float:
             return 0.0
 
 
+def _minute_candle_meta(candles: list[dict], meta: dict | None = None, *, requested_limit: int | None = None) -> dict:
+    source_meta = dict(meta or {})
+    source_meta.setdefault("api_id", "ka10080")
+    source_meta.setdefault("requested_limit", requested_limit)
+    source_meta.setdefault("received_count", len(candles or []))
+    source_meta.setdefault("truncated_window", False)
+    source_meta.setdefault("sort_direction_detected", "unknown")
+    source_meta.setdefault("cont_yn_seen", False)
+    source_meta.setdefault("next_key_seen", False)
+    source_meta.setdefault("continuous_next_key_missing", False)
+    source_meta.setdefault("continuous_page_limit_reached", False)
+    source_meta.setdefault("rest_received_ts_ms", None)
+    source_meta.setdefault("latest_source_timestamp", None)
+    source_meta.setdefault("source_time_basis", "response_received_epoch_ms_and_chart_bar_timestamp")
+    return source_meta
+
+
+def _fetch_minute_candles_with_meta(kiwoom_utils, token: str, code: str, *, limit: int) -> tuple[list[dict], dict]:
+    if hasattr(kiwoom_utils, "get_minute_candles_ka10080_with_meta"):
+        candles, meta = kiwoom_utils.get_minute_candles_ka10080_with_meta(token, code, limit=limit)
+        candles = candles or []
+        return candles, _minute_candle_meta(candles, meta, requested_limit=limit)
+    candles = kiwoom_utils.get_minute_candles_ka10080(token, code, limit=limit) or []
+    return candles, _minute_candle_meta(candles, requested_limit=limit)
+
+
+def _minute_forward_source_quality(metrics_by_horizon: dict[int, dict], candle_meta: dict) -> dict:
+    bars_10m = _safe_int((metrics_by_horizon.get(10) or {}).get("bars"), 0)
+    if bars_10m <= 0:
+        status = "insufficient_window"
+        gate = "source_quality_insufficient"
+        reason = "no_ka10080_bars_in_forward_10m_window"
+    elif bool(candle_meta.get("continuous_next_key_missing")):
+        status = "partial_window"
+        gate = "source_quality_warning"
+        reason = "ka10080_continuation_key_missing"
+    elif bool(candle_meta.get("continuous_page_limit_reached")):
+        status = "partial_window"
+        gate = "source_quality_warning"
+        reason = "ka10080_continuation_page_limit_reached"
+    elif bool(candle_meta.get("truncated_window")):
+        status = "partial_window"
+        gate = "source_quality_warning"
+        reason = "ka10080_truncated_window"
+    else:
+        status = "pass"
+        gate = "pass"
+        reason = "ka10080_forward_window_available"
+    return {
+        "minute_candle_source_quality": status,
+        "minute_candle_source_quality_gate": gate,
+        "minute_candle_source_quality_reason": reason,
+        "minute_candle_forward_10m_bars": bars_10m,
+    }
+
+
 def _safe_bool(value, default: bool = False) -> bool:
     if isinstance(value, bool):
         return value
@@ -731,6 +787,7 @@ class PostSellFeedbackSummary:
     total_candidates: int = 0
     evaluated_candidates: int = 0
     outcome_counts: dict[str, int] = field(default_factory=dict)
+    minute_candle_source_quality_counts: dict[str, int] = field(default_factory=dict)
     missed_upside_cases: list[dict] = field(default_factory=list)
     good_exit_cases: list[dict] = field(default_factory=list)
 
@@ -756,7 +813,7 @@ def evaluate_post_sell_candidates(target_date: str, token: str | None = None) ->
         summary.evaluated_candidates = len(existing_evaluations)
         return summary
 
-    candle_cache: dict[str, list[dict]] = {}
+    candle_cache: dict[str, tuple[list[dict], dict]] = {}
     new_evaluations: list[dict] = []
     token_fetch_attempted = token is not None
 
@@ -779,18 +836,19 @@ def evaluate_post_sell_candidates(target_date: str, token: str | None = None) ->
 
         if code not in candle_cache:
             try:
-                candle_cache[code] = kiwoom_utils.get_minute_candles_ka10080(token, code, limit=700) or []
+                candle_cache[code] = _fetch_minute_candles_with_meta(kiwoom_utils, token, code, limit=700)
             except Exception as exc:
                 log_error(f"[POST_SELL_EVAL] {code} minute candles fetch failed: {exc}")
-                candle_cache[code] = []
+                candle_cache[code] = ([], _minute_candle_meta([], requested_limit=700))
 
-        candles = candle_cache.get(code, [])
+        candles, candle_meta = candle_cache.get(code, ([], _minute_candle_meta([], requested_limit=700)))
         metrics_by_horizon = {
             horizon: _compute_window_metrics(candidate, candles, horizon)
             for horizon in POST_SELL_FEEDBACK_HORIZONS_MIN
         }
         metrics_10m = metrics_by_horizon[10]
         outcome = _classify_candidate(metrics_10m)
+        source_quality = _minute_forward_source_quality(metrics_by_horizon, candle_meta)
 
         evaluation = {
             "post_sell_id": post_sell_id,
@@ -857,6 +915,8 @@ def evaluate_post_sell_candidates(target_date: str, token: str | None = None) ->
                 candidate.get("same_symbol_soft_stop_cooldown_would_block", False)
             ),
             "outcome": outcome,
+            "minute_candle_source_meta": candle_meta,
+            **source_quality,
             **{f"metrics_{horizon}m": metrics for horizon, metrics in metrics_by_horizon.items()},
         }
         new_evaluations.append(evaluation)
@@ -875,6 +935,9 @@ def evaluate_post_sell_candidates(target_date: str, token: str | None = None) ->
         outcome = str(item.get("outcome", "NEUTRAL") or "NEUTRAL").upper()
         outcome_counts[outcome] = outcome_counts.get(outcome, 0) + 1
     summary.outcome_counts = outcome_counts
+    summary.minute_candle_source_quality_counts = dict(
+        Counter(str(item.get("minute_candle_source_quality") or "unknown") for item in all_evaluations)
+    )
 
     summary.missed_upside_cases = sorted(
         [item for item in all_evaluations if str(item.get("outcome", "")).upper() == "MISSED_UPSIDE"],
@@ -909,7 +972,7 @@ def evaluate_sim_post_sell_candidates(target_date: str, token: str | None = None
         summary.evaluated_candidates = len(existing_evaluations)
         return summary
 
-    candle_cache: dict[str, list[dict]] = {}
+    candle_cache: dict[str, tuple[list[dict], dict]] = {}
     new_evaluations: list[dict] = []
     token_fetch_attempted = token is not None
 
@@ -932,18 +995,19 @@ def evaluate_sim_post_sell_candidates(target_date: str, token: str | None = None
 
         if code not in candle_cache:
             try:
-                candle_cache[code] = kiwoom_utils.get_minute_candles_ka10080(token, code, limit=700) or []
+                candle_cache[code] = _fetch_minute_candles_with_meta(kiwoom_utils, token, code, limit=700)
             except Exception as exc:
                 log_error(f"[SIM_POST_SELL_EVAL] {code} minute candles fetch failed: {exc}")
-                candle_cache[code] = []
+                candle_cache[code] = ([], _minute_candle_meta([], requested_limit=700))
 
-        candles = candle_cache.get(code, [])
+        candles, candle_meta = candle_cache.get(code, ([], _minute_candle_meta([], requested_limit=700)))
         metrics_by_horizon = {
             horizon: _compute_window_metrics(candidate, candles, horizon)
             for horizon in POST_SELL_FEEDBACK_HORIZONS_MIN
         }
         metrics_10m = metrics_by_horizon[10]
         outcome = _classify_candidate(metrics_10m)
+        source_quality = _minute_forward_source_quality(metrics_by_horizon, candle_meta)
 
         evaluation = {
             "schema_version": POST_SELL_REPORT_SCHEMA_VERSION,
@@ -1025,6 +1089,8 @@ def evaluate_sim_post_sell_candidates(target_date: str, token: str | None = None
             "sim_record_id": candidate.get("sim_record_id", ""),
             "sim_parent_record_id": candidate.get("sim_parent_record_id", ""),
             "source_event_stage": candidate.get("source_event_stage", ""),
+            "minute_candle_source_meta": candle_meta,
+            **source_quality,
             **{f"metrics_{horizon}m": metrics for horizon, metrics in metrics_by_horizon.items()},
         }
         new_evaluations.append(evaluation)
@@ -1043,6 +1109,9 @@ def evaluate_sim_post_sell_candidates(target_date: str, token: str | None = None
         outcome = str(item.get("outcome", "NEUTRAL") or "NEUTRAL").upper()
         outcome_counts[outcome] = outcome_counts.get(outcome, 0) + 1
     summary.outcome_counts = outcome_counts
+    summary.minute_candle_source_quality_counts = dict(
+        Counter(str(item.get("minute_candle_source_quality") or "unknown") for item in all_evaluations)
+    )
     summary.missed_upside_cases = sorted(
         [item for item in all_evaluations if str(item.get("outcome", "")).upper() == "MISSED_UPSIDE"],
         key=lambda item: float((item.get("metrics_10m", {}) or {}).get("mfe_pct", 0.0) or 0.0),
@@ -1129,6 +1198,7 @@ def post_sell_feedback_summary_to_dict(summary: PostSellFeedbackSummary) -> dict
         "total_candidates": int(summary.total_candidates),
         "evaluated_candidates": int(summary.evaluated_candidates),
         "outcome_counts": dict(summary.outcome_counts or {}),
+        "minute_candle_source_quality_counts": dict(summary.minute_candle_source_quality_counts or {}),
         "missed_upside_cases": list(summary.missed_upside_cases or []),
         "good_exit_cases": list(summary.good_exit_cases or []),
     }

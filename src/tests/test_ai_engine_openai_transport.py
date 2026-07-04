@@ -1760,6 +1760,10 @@ def test_early_accel_strong_bundle_recheck_metadata_context_is_in_prompt_payload
             "early_accel_strong_bundle_recheck_cntr_str": "131.5",
             "early_accel_strong_bundle_recheck_tick_acceleration_ratio": "2.3",
             "early_accel_strong_bundle_recheck_curr_vs_micro_vwap_bp": "8.1",
+            "early_accel_strong_bundle_recheck_micro_vwap_available": "true",
+            "early_accel_strong_bundle_recheck_minute_candle_context_quality": "fresh_bar_window",
+            "early_accel_strong_bundle_recheck_minute_candle_window_fresh": "true",
+            "early_accel_strong_bundle_recheck_minute_candle_latest_age_ms": "12000",
             "early_accel_strong_bundle_recheck_buy_pressure_10t": "73.4",
         },
     )
@@ -1770,6 +1774,10 @@ def test_early_accel_strong_bundle_recheck_metadata_context_is_in_prompt_payload
     assert context["original_score"] == "72.0"
     assert context["price_delta_since_first_seen_pct"] == "0.52"
     assert context["tick_acceleration_ratio"] == "2.3"
+    assert context["micro_vwap_available"] == "true"
+    assert context["minute_candle_context_quality"] == "fresh_bar_window"
+    assert context["minute_candle_window_fresh"] == "true"
+    assert context["minute_candle_latest_age_ms"] == "12000"
     assert context["buy_pressure_10t"] == "73.4"
 
 

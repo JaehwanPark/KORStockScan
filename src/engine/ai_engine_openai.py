@@ -1266,6 +1266,90 @@ class GPTSniperEngine:
             payload.update(meta)
         return payload
 
+    @staticmethod
+    def _feature_packet_pressure_usable(feature_packet):
+        packet = feature_packet if isinstance(feature_packet, dict) else {}
+        raw_flag = packet.get("tick_aggressor_pressure_usable")
+        if isinstance(raw_flag, bool) and raw_flag:
+            return True
+        if str(raw_flag or "").strip().lower() in {"1", "true", "yes", "y"}:
+            return True
+        try:
+            return float(packet.get("tick_aggressor_trusted_count") or 0) > 0
+        except Exception:
+            return False
+
+    @staticmethod
+    def _feature_packet_has_pressure_metric(feature_packet):
+        packet = feature_packet if isinstance(feature_packet, dict) else {}
+        return any(
+            key in packet
+            for key in (
+                "buy_pressure_10t",
+                "net_aggressive_delta_10t",
+                "large_sell_print_detected",
+                "same_price_buy_absorption",
+            )
+        )
+
+    @staticmethod
+    def _feature_packet_has_pressure_provenance(feature_packet):
+        packet = feature_packet if isinstance(feature_packet, dict) else {}
+        return (
+            "tick_aggressor_pressure_usable" in packet
+            or "tick_aggressor_trusted_count" in packet
+        )
+
+    @staticmethod
+    def _feature_packet_has_micro_vwap_metric(feature_packet):
+        packet = feature_packet if isinstance(feature_packet, dict) else {}
+        return any(key in packet for key in ("curr_vs_micro_vwap_bp", "micro_vwap_bp"))
+
+    @staticmethod
+    def _feature_packet_has_micro_vwap_provenance(feature_packet):
+        packet = feature_packet if isinstance(feature_packet, dict) else {}
+        return (
+            "micro_vwap_available" in packet
+            or "minute_candle_window_fresh" in packet
+            or "minute_candle_context_quality" in packet
+        )
+
+    @staticmethod
+    def _feature_packet_micro_vwap_usable(feature_packet):
+        packet = feature_packet if isinstance(feature_packet, dict) else {}
+        def _bool_value(value, default=False):
+            if isinstance(value, bool):
+                return value
+            if value in (None, ""):
+                return default
+            text = str(value).strip().lower()
+            if text in {"1", "true", "yes", "y"}:
+                return True
+            if text in {"0", "false", "no", "n"}:
+                return False
+            return default
+
+        if not GPTSniperEngine._feature_packet_has_micro_vwap_provenance(packet):
+            return False
+        if not _bool_value(packet.get("micro_vwap_available"), False):
+            return False
+        if "minute_candle_window_fresh" in packet and not _bool_value(
+            packet.get("minute_candle_window_fresh"),
+            False,
+        ):
+            return False
+        return True
+
+    @staticmethod
+    def _feature_packet_ma5_usable(feature_packet):
+        packet = feature_packet if isinstance(feature_packet, dict) else {}
+        raw_flag = packet.get("ma5_available")
+        if isinstance(raw_flag, bool):
+            return raw_flag
+        if raw_flag in (None, ""):
+            return False
+        return str(raw_flag).strip().lower() in {"1", "true", "yes", "y"}
+
     def _build_buy_side_timeout_reject(self, *, prompt_type, strategy, reason):
         if prompt_type == "scalping_holding":
             return {"action": "WAIT", "score": 50, "reason": reason}
@@ -1281,14 +1365,16 @@ class GPTSniperEngine:
                 features = {}
         else:
             features = {}
+        pressure_usable = self._feature_packet_pressure_usable(features)
         flags = 0
-        if bool(features.get("large_sell_print_detected", False)):
+        micro_vwap_usable = self._feature_packet_micro_vwap_usable(features)
+        if pressure_usable and bool(features.get("large_sell_print_detected", False)):
             flags += 1
         if features.get("distance_from_day_high_pct", -99.0) >= -0.35:
             flags += 1
         if features.get("tick_acceleration_ratio", 0.0) < 1.0:
             flags += 1
-        if features.get("curr_vs_micro_vwap_bp", 0.0) <= 0:
+        if micro_vwap_usable and features.get("curr_vs_micro_vwap_bp", 0.0) <= 0:
             flags += 1
         if features.get("top3_depth_ratio", 1.0) >= 1.35:
             flags += 1
@@ -1303,16 +1389,20 @@ class GPTSniperEngine:
         features, risk_flags = self._remote_buy_risk_flags(ws_data, recent_ticks, recent_candles)
         if not features:
             return result
+        pressure_usable = self._feature_packet_pressure_usable(features)
+        micro_vwap_usable = self._feature_packet_micro_vwap_usable(features)
         buy_pressure = float(features.get("buy_pressure_10t", 50.0) or 50.0)
         accel = float(features.get("tick_acceleration_ratio", 0.0) or 0.0)
         latest_strength = float(features.get("latest_strength", 0.0) or 0.0)
         has_reclaim = (
-            float(features.get("curr_vs_micro_vwap_bp", 0.0) or 0.0) > 0
-            or int(features.get("same_price_buy_absorption", 0) or 0) >= 2
+            (micro_vwap_usable and float(features.get("curr_vs_micro_vwap_bp", 0.0) or 0.0) > 0)
+            or (pressure_usable and int(features.get("same_price_buy_absorption", 0) or 0) >= 2)
         )
 
         instant_strength_only = (
-            buy_pressure >= 70.0
+            pressure_usable
+            and micro_vwap_usable
+            and buy_pressure >= 70.0
             and accel >= 1.1
             and latest_strength >= 110.0
             and not has_reclaim
@@ -1359,8 +1449,8 @@ class GPTSniperEngine:
 
         micro_vwap_bp = _feature_float("curr_vs_micro_vwap_bp", 0.0)
         ma5_bp = _feature_float("curr_vs_ma5_bp", 0.0)
-        micro_vwap_pass = micro_vwap_bp > 0.0
-        ma5_pass = ma5_bp > 0.0
+        micro_vwap_pass = self._feature_packet_micro_vwap_usable(feature_packet) and micro_vwap_bp > 0.0
+        ma5_pass = self._feature_packet_ma5_usable(feature_packet) and ma5_bp > 0.0
         position_pass = micro_vwap_pass or ma5_pass
         position_both_pass = micro_vwap_bp > 0.0 and ma5_bp > 0.0
         if not contradiction and position_pass and (
@@ -1397,7 +1487,8 @@ class GPTSniperEngine:
 
         buy_pressure = _feature_float("buy_pressure_10t", 50.0)
         net_aggressive_delta = _feature_float("net_aggressive_delta_10t", 0.0)
-        supply_pass = buy_pressure >= 68.0 or net_aggressive_delta > 0.0
+        pressure_usable = self._feature_packet_pressure_usable(feature_packet)
+        supply_pass = pressure_usable and (buy_pressure >= 68.0 or net_aggressive_delta > 0.0)
         if not contradiction and supply_pass and (
             "buy_pressure_10t" in lowered
             or "buy pressure" in lowered
@@ -1420,6 +1511,8 @@ class GPTSniperEngine:
                 detected_value = {
                     "buy_pressure_10t": round(buy_pressure, 3),
                     "net_aggressive_delta_10t": round(net_aggressive_delta, 3),
+                    "tick_aggressor_pressure_usable": bool(pressure_usable),
+                    "tick_aggressor_trusted_count": (feature_packet or {}).get("tick_aggressor_trusted_count"),
                 }
 
         action = str(payload.get("action") or "").upper()
@@ -1442,6 +1535,8 @@ class GPTSniperEngine:
                     "score": round(score, 3),
                     "tick_acceleration_ratio": round(accel, 3),
                     "buy_pressure_10t": round(buy_pressure, 3),
+                    "tick_aggressor_pressure_usable": bool(pressure_usable),
+                    "tick_aggressor_trusted_count": (feature_packet or {}).get("tick_aggressor_trusted_count"),
                     "curr_vs_micro_vwap_bp": round(micro_vwap_bp, 3),
                     "curr_vs_ma5_bp": round(ma5_bp, 3),
                 }
@@ -1545,6 +1640,18 @@ class GPTSniperEngine:
         micro_vwap_bp = str(
             metadata_extra.get("early_accel_strong_bundle_recheck_curr_vs_micro_vwap_bp") or "0.00"
         )[:32]
+        micro_vwap_available = str(
+            metadata_extra.get("early_accel_strong_bundle_recheck_micro_vwap_available") or "false"
+        )[:8]
+        minute_candle_context_quality = str(
+            metadata_extra.get("early_accel_strong_bundle_recheck_minute_candle_context_quality") or "unknown"
+        )[:80]
+        minute_candle_window_fresh = str(
+            metadata_extra.get("early_accel_strong_bundle_recheck_minute_candle_window_fresh") or "false"
+        )[:8]
+        minute_candle_latest_age_ms = str(
+            metadata_extra.get("early_accel_strong_bundle_recheck_minute_candle_latest_age_ms") or "0"
+        )[:32]
         buy_pressure_10t = str(
             metadata_extra.get("early_accel_strong_bundle_recheck_buy_pressure_10t") or "0.00"
         )[:32]
@@ -1561,6 +1668,10 @@ class GPTSniperEngine:
             f"- cntr_str: {cntr_str}\n"
             f"- tick_acceleration_ratio: {tick_accel}\n"
             f"- curr_vs_micro_vwap_bp: {micro_vwap_bp}\n"
+            f"- micro_vwap_available: {micro_vwap_available}\n"
+            f"- minute_candle_context_quality: {minute_candle_context_quality}\n"
+            f"- minute_candle_window_fresh: {minute_candle_window_fresh}\n"
+            f"- minute_candle_latest_age_ms: {minute_candle_latest_age_ms}\n"
             f"- buy_pressure_10t: {buy_pressure_10t}\n"
             "- Re-evaluate using the same feature packet only.\n"
             "- This is not a score-threshold relaxation. BUY is allowed only if the same packet supports it.\n"
@@ -1586,6 +1697,10 @@ class GPTSniperEngine:
                         "cntr_str": cntr_str,
                         "tick_acceleration_ratio": tick_accel,
                         "curr_vs_micro_vwap_bp": micro_vwap_bp,
+                        "micro_vwap_available": micro_vwap_available,
+                        "minute_candle_context_quality": minute_candle_context_quality,
+                        "minute_candle_window_fresh": minute_candle_window_fresh,
+                        "minute_candle_latest_age_ms": minute_candle_latest_age_ms,
                         "buy_pressure_10t": buy_pressure_10t,
                         "instruction": (
                             "Re-evaluate using the same feature packet only. "
@@ -2305,6 +2420,7 @@ class GPTSniperEngine:
             "tick_context_quality",
             "tick_aggressor_trusted_count",
             "tick_aggressor_pressure_usable",
+            "tick_aggressor_cached_orderbook_touch_count",
             "quote_age_ms",
             "quote_age_source",
             "quote_stale",
@@ -2315,8 +2431,12 @@ class GPTSniperEngine:
             "intraday_range_pct",
             "volume_ratio_pct",
             "curr_vs_micro_vwap_bp",
+            "micro_vwap_available",
             "curr_vs_ma5_bp",
+            "ma5_available",
             "microstructure_reaction_context_status",
+            "microstructure_reaction_tick_aggressor_pressure_usable",
+            "microstructure_reaction_tick_aggressor_trusted_count",
             "microstructure_reaction_ask_sweep_score",
             "microstructure_reaction_post_sweep_hold_score",
             "microstructure_reaction_bid_replenishment_score",
@@ -2328,6 +2448,7 @@ class GPTSniperEngine:
         compact = {key: payload.get(key) for key in keep_keys if key in payload}
         compact["aggressor_quality"] = {
             "orderbook_touch": payload.get("tick_aggressor_orderbook_touch_count", 0),
+            "cached_orderbook_touch": payload.get("tick_aggressor_cached_orderbook_touch_count", 0),
             "price_heuristic": payload.get("tick_aggressor_price_heuristic_count", 0),
             "unknown": payload.get("tick_aggressor_unknown_count", 0),
         }
@@ -2341,6 +2462,8 @@ class GPTSniperEngine:
                 payload.get("tick_context_stale", "not_available_tick_latest_age"),
             ),
             "quote_stale": audit.get("quote_stale", payload.get("quote_stale", "not_available_quote_age")),
+            "tick_aggressor_pressure_usable": payload.get("tick_aggressor_pressure_usable", False),
+            "tick_aggressor_trusted_count": payload.get("tick_aggressor_trusted_count", 0),
         }
         return compact
 
@@ -2469,6 +2592,20 @@ class GPTSniperEngine:
                 "tick_count": len([tick for tick in (recent_ticks or []) if isinstance(tick, dict)]),
                 "candle_count": len([candle for candle in (recent_candles or []) if isinstance(candle, dict)]),
                 "orderbook_present": bool(asks or bids),
+                "tick_context_quality": feature_packet.get("tick_context_quality"),
+                "tick_context_stale": feature_packet.get("tick_context_stale"),
+                "tick_accel_source": feature_packet.get("tick_accel_source"),
+                "quote_age_ms": feature_packet.get("quote_age_ms"),
+                "quote_stale": feature_packet.get("quote_stale"),
+                "tick_latest_age_ms": feature_packet.get("tick_latest_age_ms"),
+                "tick_aggressor_pressure_usable": feature_packet.get("tick_aggressor_pressure_usable", False),
+                "tick_aggressor_trusted_count": feature_packet.get("tick_aggressor_trusted_count", 0),
+                "tick_aggressor_price_heuristic_count": feature_packet.get("tick_aggressor_price_heuristic_count", 0),
+                "micro_vwap_available": feature_packet.get("micro_vwap_available", False),
+                "ma5_available": feature_packet.get("ma5_available", False),
+                "minute_candle_window_fresh": feature_packet.get("minute_candle_window_fresh", False),
+                "minute_candle_context_quality": feature_packet.get("minute_candle_context_quality"),
+                "price_change_heuristic_is_not_aggressor": True,
             },
         }
 
@@ -2557,8 +2694,18 @@ class GPTSniperEngine:
                     "candle_count": len([candle for candle in (recent_candles or []) if isinstance(candle, dict)]),
                     "orderbook_present": bool(compact_asks or compact_bids),
                     "tick_context_quality": feature_packet.get("tick_context_quality"),
+                    "tick_context_stale": feature_packet.get("tick_context_stale"),
+                    "tick_accel_source": feature_packet.get("tick_accel_source"),
                     "quote_age_ms": feature_packet.get("quote_age_ms"),
+                    "quote_stale": feature_packet.get("quote_stale"),
                     "tick_latest_age_ms": feature_packet.get("tick_latest_age_ms"),
+                    "tick_aggressor_pressure_usable": feature_packet.get("tick_aggressor_pressure_usable", False),
+                    "tick_aggressor_trusted_count": feature_packet.get("tick_aggressor_trusted_count", 0),
+                    "tick_aggressor_price_heuristic_count": feature_packet.get("tick_aggressor_price_heuristic_count", 0),
+                    "micro_vwap_available": feature_packet.get("micro_vwap_available", False),
+                    "ma5_available": feature_packet.get("ma5_available", False),
+                    "minute_candle_window_fresh": feature_packet.get("minute_candle_window_fresh", False),
+                    "minute_candle_context_quality": feature_packet.get("minute_candle_context_quality"),
                     "price_change_heuristic_is_not_aggressor": True,
                 },
             }
@@ -2710,19 +2857,29 @@ class GPTSniperEngine:
             f"- micro_price: {feature_packet['micro_price']}\n"
             f"- microprice_edge_bp: {feature_packet['microprice_edge_bp']}\n"
             f"- buy_pressure_10t: {feature_packet['buy_pressure_10t']}%\n"
+            f"- tick_aggressor_pressure_usable: {str(feature_packet.get('tick_aggressor_pressure_usable', False)).lower()}\n"
+            f"- tick_aggressor_trusted_count: {feature_packet.get('tick_aggressor_trusted_count', 0)}\n"
+            f"- tick_aggressor_price_heuristic_count: {feature_packet.get('tick_aggressor_price_heuristic_count', 0)}\n"
             f"- price_change_10t_pct: {feature_packet['price_change_10t_pct']}%\n"
             f"- recent_5tick_seconds: {feature_packet['recent_5tick_seconds']}\n"
             f"- prev_5tick_seconds: {feature_packet['prev_5tick_seconds']}\n"
             f"- distance_from_day_high_pct: {feature_packet['distance_from_day_high_pct']}%\n"
             f"- intraday_range_pct: {feature_packet['intraday_range_pct']}%\n"
             f"- tick_acceleration_ratio: {feature_packet['tick_acceleration_ratio']}\n"
+            f"- tick_accel_source: {feature_packet.get('tick_accel_source', '-')}\n"
+            f"- tick_context_quality: {feature_packet.get('tick_context_quality', 'unknown')}\n"
+            f"- tick_context_stale: {feature_packet.get('tick_context_stale', 'not_available_tick_latest_age')}\n"
             f"- same_price_buy_absorption: {feature_packet['same_price_buy_absorption']}\n"
             f"- large_sell_print_detected: {str(feature_packet['large_sell_print_detected']).lower()}\n"
             f"- large_buy_print_detected: {str(feature_packet['large_buy_print_detected']).lower()}\n"
             f"- net_aggressive_delta_10t: {feature_packet['net_aggressive_delta_10t']}\n"
             f"- volume_ratio_pct: {feature_packet['volume_ratio_pct']}%\n"
             f"- curr_vs_micro_vwap_bp: {feature_packet['curr_vs_micro_vwap_bp']}\n"
+            f"- micro_vwap_available: {str(feature_packet.get('micro_vwap_available', False)).lower()}\n"
+            f"- minute_candle_window_fresh: {str(feature_packet.get('minute_candle_window_fresh', False)).lower()}\n"
+            f"- minute_candle_context_quality: {feature_packet.get('minute_candle_context_quality', 'unknown')}\n"
             f"- curr_vs_ma5_bp: {feature_packet['curr_vs_ma5_bp']}\n"
+            f"- ma5_available: {str(feature_packet.get('ma5_available', False)).lower()}\n"
             f"- micro_vwap_value: {feature_packet['micro_vwap_value']}\n"
             f"- ma5_value: {feature_packet['ma5_value']}\n"
             f"- ask_depth_ratio: {feature_packet['ask_depth_ratio']}\n"
@@ -4288,6 +4445,16 @@ class GPTSniperEngine:
                 stale_reasons.append(f"{key}:{text}")
             elif text and text not in fresh_labels:
                 partial_reasons.append(f"{key}:{text}")
+        if self._feature_packet_has_pressure_metric(packet):
+            if not self._feature_packet_has_pressure_provenance(packet):
+                partial_reasons.append("tick_aggressor_pressure_provenance_missing")
+            elif not self._feature_packet_pressure_usable(packet):
+                partial_reasons.append("tick_aggressor_pressure_unusable")
+        if self._feature_packet_has_micro_vwap_metric(packet):
+            if not self._feature_packet_has_micro_vwap_provenance(packet):
+                partial_reasons.append("micro_vwap_provenance_missing")
+            elif not self._feature_packet_micro_vwap_usable(packet):
+                partial_reasons.append("micro_vwap_unavailable")
         micro_quality = str(
             audit.get(
                 "microstructure_reaction_source_quality",

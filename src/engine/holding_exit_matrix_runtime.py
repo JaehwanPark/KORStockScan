@@ -82,29 +82,76 @@ def _safe_bool(value: Any, default: bool = False) -> bool:
     return bool(value)
 
 
+_UNUSABLE_HOLDING_SCORE_SOURCES = {
+    "",
+    "-",
+    "none",
+    "null",
+    "missing",
+    "unknown",
+    "not_called",
+    "holding_ai_not_called",
+    "fallback",
+    "fallback_score_50",
+    "engine_disabled",
+    "lock_contention",
+    "timeout",
+    "exception",
+    "error",
+    "insufficient",
+    "source_quality_insufficient",
+    "watching_cooldown",
+}
+_UNUSABLE_HOLDING_SCORE_SOURCE_TOKENS = (
+    "fallback_score_50",
+    "engine_disabled",
+    "lock_contention",
+    "timeout",
+    "exception",
+    "error",
+    "insufficient",
+    "source_quality_insufficient",
+)
+
+
 def _holding_matrix_ai_score_context(position_ctx: dict[str, Any] | None) -> dict[str, Any]:
     ctx = position_ctx if isinstance(position_ctx, dict) else {}
     score = _safe_float(ctx.get("current_ai_score"), 50.0)
     source = str(
         ctx.get("holding_score_source")
+        or ctx.get("holding_ai_score_source")
         or ctx.get("current_ai_score_source")
         or ctx.get("ai_score_source")
         or "-"
     ).strip()
-    data_quality = str(ctx.get("holding_score_data_quality") or "").strip().lower()
+    data_quality = str(ctx.get("holding_score_data_quality") or "insufficient").strip().lower()
+    if data_quality not in {"fresh", "partial", "stale", "insufficient"}:
+        data_quality = "insufficient"
     has_explicit_quality = "holding_score_data_quality" in ctx or "holding_score_effective_usable" in ctx
+    microstructure_confirmed = (
+        _safe_bool(ctx.get("holding_score_role_microstructure_confirmed"), False)
+        or _safe_bool(ctx.get("microstructure_confirmed"), False)
+        or _safe_bool(ctx.get("tick_aggressor_pressure_usable"), False)
+        or _safe_int(ctx.get("tick_aggressor_trusted_count"), 0) > 0
+    )
     usable = True
     excluded_reason = "-"
-    if str(source).lower() in {"fallback_score_50", "engine_disabled", "lock_contention"}:
+    source_l = str(source).lower()
+    if source_l in _UNUSABLE_HOLDING_SCORE_SOURCES or any(
+        token in source_l for token in _UNUSABLE_HOLDING_SCORE_SOURCE_TOKENS
+    ):
         usable = False
-        excluded_reason = source or "unusable_ai_source"
+        excluded_reason = f"holding_score_source_{source or 'missing'}"
     if data_quality in {"stale", "insufficient"}:
         usable = False
-        excluded_reason = data_quality
+        excluded_reason = f"holding_score_data_quality_{data_quality}"
+    elif data_quality == "partial" and not microstructure_confirmed:
+        usable = False
+        excluded_reason = "holding_score_partial_requires_microstructure"
     if "holding_score_effective_usable" in ctx and not _safe_bool(ctx.get("holding_score_effective_usable"), False):
         usable = False
         excluded_reason = str(ctx.get("holding_score_excluded_reason") or "holding_score_unusable")
-    if str(source).lower() == "holding_ai_not_called":
+    if source_l == "holding_ai_not_called":
         age_sec = _safe_float(ctx.get("holding_score_age_sec"), -1.0)
         ttl = max(1.0, _safe_float(getattr(TRADING_RULES, "AI_HOLDING_MAX_COOLDOWN", 180), 180.0))
         if not has_explicit_quality or age_sec < 0 or age_sec > ttl:
@@ -116,6 +163,7 @@ def _holding_matrix_ai_score_context(position_ctx: dict[str, Any] | None) -> dic
         "ai_score_source": source or "-",
         "ai_score_data_quality": data_quality or "-",
         "ai_score_excluded_reason": excluded_reason,
+        "ai_score_microstructure_confirmed": bool(microstructure_confirmed),
     }
 
 
@@ -361,6 +409,7 @@ def _runtime_bias_from_entries(
         "holding_exit_matrix_ai_score_source": ai_context["ai_score_source"],
         "holding_exit_matrix_ai_score_data_quality": ai_context["ai_score_data_quality"],
         "holding_exit_matrix_ai_score_excluded_reason": ai_context["ai_score_excluded_reason"],
+        "holding_exit_matrix_ai_score_microstructure_confirmed": ai_context["ai_score_microstructure_confirmed"],
     }
     if not runtime_enabled:
         result["holding_exit_matrix_runtime_reason"] = "runtime_bias_disabled"
@@ -490,6 +539,7 @@ def resolve_holding_exit_matrix_scale_in_bias(
                 "ai_score_source": ai_context["ai_score_source"],
                 "ai_score_data_quality": ai_context["ai_score_data_quality"],
                 "ai_score_excluded_reason": ai_context["ai_score_excluded_reason"],
+                "ai_score_microstructure_confirmed": ai_context["ai_score_microstructure_confirmed"],
                 **lifecycle_decision,
             }
         add_type = "AVG_DOWN" if lifecycle_effect == "avg_down_bias" else "PYRAMID"
@@ -503,6 +553,7 @@ def resolve_holding_exit_matrix_scale_in_bias(
             "ai_score_usable": ai_context["ai_score_usable"],
             "ai_score_source": ai_context["ai_score_source"],
             "ai_score_data_quality": ai_context["ai_score_data_quality"],
+            "ai_score_microstructure_confirmed": ai_context["ai_score_microstructure_confirmed"],
             "held_sec": held_sec,
             "holding_exit_matrix_scale_in_bias": add_type,
             **lifecycle_decision,
@@ -528,6 +579,7 @@ def resolve_holding_exit_matrix_scale_in_bias(
                 "ai_score_usable": ai_context["ai_score_usable"],
                 "ai_score_source": ai_context["ai_score_source"],
                 "ai_score_data_quality": ai_context["ai_score_data_quality"],
+                "ai_score_microstructure_confirmed": ai_context["ai_score_microstructure_confirmed"],
                 "held_sec": held_sec,
                 "holding_exit_matrix_scale_in_bias": "AVG_DOWN",
             }
@@ -551,6 +603,7 @@ def resolve_holding_exit_matrix_scale_in_bias(
             "ai_score_usable": ai_context["ai_score_usable"],
             "ai_score_source": ai_context["ai_score_source"],
             "ai_score_data_quality": ai_context["ai_score_data_quality"],
+            "ai_score_microstructure_confirmed": ai_context["ai_score_microstructure_confirmed"],
             "held_sec": held_sec,
             "holding_exit_matrix_scale_in_bias": "PYRAMID",
         }
@@ -566,6 +619,7 @@ def resolve_holding_exit_matrix_scale_in_bias(
         "ai_score_source": ai_context["ai_score_source"],
         "ai_score_data_quality": ai_context["ai_score_data_quality"],
         "ai_score_excluded_reason": ai_context["ai_score_excluded_reason"],
+        "ai_score_microstructure_confirmed": ai_context["ai_score_microstructure_confirmed"],
     }
 
 

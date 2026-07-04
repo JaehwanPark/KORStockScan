@@ -51,6 +51,76 @@ def _has_hangul(text: str) -> bool:
     return any("\uac00" <= char <= "\ud7a3" for char in text)
 
 
+def test_remote_entry_guard_ignores_untrusted_pressure_axes(monkeypatch):
+    engine = _build_engine()
+    monkeypatch.setattr(
+        engine,
+        "_extract_scalping_features",
+        lambda *_args, **_kwargs: {
+            "buy_pressure_10t": 95.0,
+            "tick_acceleration_ratio": 1.2,
+            "latest_strength": 130.0,
+            "curr_vs_micro_vwap_bp": -1.0,
+            "micro_vwap_available": True,
+            "minute_candle_window_fresh": True,
+            "minute_candle_context_quality": "fresh",
+            "same_price_buy_absorption": 5,
+            "large_sell_print_detected": True,
+            "distance_from_day_high_pct": -1.0,
+            "top3_depth_ratio": 1.0,
+        },
+        raising=False,
+    )
+
+    result = engine._apply_remote_entry_guard(
+        {"action": "BUY", "score": 88, "reason": "raw buy"},
+        prompt_type="scalping_entry",
+        ws_data={},
+        recent_ticks=[],
+        recent_candles=[],
+    )
+
+    assert result["action"] == "BUY"
+    assert result["score"] == 88
+    assert "remote_buy_guard" not in result["reason"]
+
+
+def test_remote_entry_guard_uses_trusted_pressure_axes(monkeypatch):
+    engine = _build_engine()
+    monkeypatch.setattr(
+        engine,
+        "_extract_scalping_features",
+        lambda *_args, **_kwargs: {
+            "buy_pressure_10t": 95.0,
+            "tick_acceleration_ratio": 1.2,
+            "latest_strength": 130.0,
+            "curr_vs_micro_vwap_bp": -1.0,
+            "micro_vwap_available": True,
+            "minute_candle_window_fresh": True,
+            "minute_candle_context_quality": "fresh",
+            "same_price_buy_absorption": 5,
+            "large_sell_print_detected": True,
+            "distance_from_day_high_pct": -1.0,
+            "top3_depth_ratio": 1.0,
+            "tick_aggressor_pressure_usable": True,
+            "tick_aggressor_trusted_count": 4,
+        },
+        raising=False,
+    )
+
+    result = engine._apply_remote_entry_guard(
+        {"action": "BUY", "score": 88, "reason": "raw buy"},
+        prompt_type="scalping_entry",
+        ws_data={},
+        recent_ticks=[],
+        recent_candles=[],
+    )
+
+    assert result["action"] == "WAIT"
+    assert result["score"] == 74
+    assert "remote_buy_guard" in result["reason"]
+
+
 def _build_provider_engine(engine_cls):
     engine = engine_cls.__new__(engine_cls)
     engine.lock = threading.Lock()
@@ -417,6 +487,45 @@ def test_holding_score_v2_source_quality_explicit_tick_stale_stays_stale():
 
     assert quality["data_quality"] == "stale"
     assert "tick_context_stale" in quality["source_quality_reason"]
+
+
+def test_holding_score_v2_source_quality_marks_untrusted_pressure_partial():
+    engine = _build_engine()
+
+    quality = engine._derive_holding_score_source_quality(
+        {
+            "tick_context_stale": False,
+            "quote_stale": False,
+            "tick_context_quality": "fresh_computed",
+            "microstructure_reaction_source_quality": "fresh_short_window",
+            "buy_pressure_10t": 91.0,
+            "net_aggressive_delta_10t": 120,
+            "tick_aggressor_trusted_count": 0,
+            "tick_aggressor_pressure_usable": False,
+        },
+        {},
+    )
+
+    assert quality["data_quality"] == "partial"
+    assert "tick_aggressor_pressure_unusable" in quality["source_quality_reason"]
+
+
+def test_holding_score_v2_source_quality_marks_micro_vwap_without_provenance_partial():
+    engine = _build_engine()
+
+    quality = engine._derive_holding_score_source_quality(
+        {
+            "tick_context_stale": False,
+            "quote_stale": False,
+            "tick_context_quality": "fresh_computed",
+            "microstructure_reaction_source_quality": "fresh_short_window",
+            "curr_vs_micro_vwap_bp": 12.0,
+        },
+        {},
+    )
+
+    assert quality["data_quality"] == "partial"
+    assert "micro_vwap_provenance_missing" in quality["source_quality_reason"]
 
 
 def test_holding_score_v2_engine_disabled_is_neutral_unusable():
@@ -1124,6 +1233,147 @@ def test_stage_prompts_keep_decision_scope_separated():
     )
 
 
+def test_entry_screen_v2_payload_keeps_feature_provenance_in_source_quality():
+    engine = _build_engine()
+
+    payload = engine._build_entry_screen_v2_payload(
+        {
+            "curr": 1000,
+            "v_pw": 121,
+            "fluctuation": 1.2,
+            "latency_state": "fresh",
+            "quote_stale": False,
+            "quote_age_ms": 80,
+            "orderbook": {
+                "asks": [{"price": 1001, "volume": 10}],
+                "bids": [{"price": 999, "volume": 12}],
+            },
+        },
+        [{"time": "09:00:01", "price": 1000, "volume": 3, "dir": "BUY"}],
+        [{"체결시간": "09:00:00", "현재가": 1000, "거래량": 100}],
+        feature_packet={
+            "tick_context_quality": "fresh_computed",
+            "tick_context_stale": False,
+            "tick_accel_source": "computed_10ticks",
+            "quote_age_ms": 80,
+            "quote_stale": False,
+            "tick_latest_age_ms": 120,
+            "tick_aggressor_pressure_usable": False,
+            "tick_aggressor_trusted_count": 0,
+            "tick_aggressor_price_heuristic_count": 5,
+            "micro_vwap_available": False,
+            "ma5_available": True,
+            "minute_candle_window_fresh": False,
+            "minute_candle_context_quality": "stale_minute_window",
+        },
+    )
+
+    source_quality = payload["source_quality"]
+    assert source_quality["tick_aggressor_pressure_usable"] is False
+    assert source_quality["tick_aggressor_trusted_count"] == 0
+    assert source_quality["tick_aggressor_price_heuristic_count"] == 5
+    assert source_quality["micro_vwap_available"] is False
+    assert source_quality["minute_candle_window_fresh"] is False
+    assert source_quality["price_change_heuristic_is_not_aggressor"] is True
+
+
+def test_remote_buy_guard_does_not_count_micro_vwap_without_provenance(monkeypatch):
+    engine = _build_engine()
+    features = {
+        "large_sell_print_detected": False,
+        "distance_from_day_high_pct": -1.0,
+        "tick_acceleration_ratio": 1.20,
+        "curr_vs_micro_vwap_bp": -18.0,
+        "top3_depth_ratio": 1.0,
+        "tick_aggressor_pressure_usable": True,
+        "tick_aggressor_trusted_count": 3,
+        "buy_pressure_10t": 74.0,
+    }
+    monkeypatch.setattr(engine, "_extract_scalping_features", lambda *_args, **_kwargs: features)
+
+    _, risk_flags = engine._remote_buy_risk_flags({}, [], [])
+
+    assert risk_flags == 0
+
+
+def test_remote_buy_guard_does_not_downgrade_instant_strength_without_micro_provenance(monkeypatch):
+    engine = _build_engine()
+    features = {
+        "large_sell_print_detected": False,
+        "distance_from_day_high_pct": -1.0,
+        "tick_acceleration_ratio": 1.20,
+        "curr_vs_micro_vwap_bp": 0.0,
+        "top3_depth_ratio": 1.0,
+        "tick_aggressor_pressure_usable": True,
+        "tick_aggressor_trusted_count": 3,
+        "buy_pressure_10t": 74.0,
+        "latest_strength": 121.0,
+        "same_price_buy_absorption": 0,
+    }
+    monkeypatch.setattr(engine, "_extract_scalping_features", lambda *_args, **_kwargs: features)
+
+    result = engine._apply_remote_entry_guard(
+        {"action": "BUY", "score": 80, "reason": "strong pressure"},
+        prompt_type="scalping_entry",
+        ws_data={},
+        recent_ticks=[],
+        recent_candles=[],
+    )
+
+    assert result["action"] == "BUY"
+    assert result["score"] == 80
+
+
+def test_entry_numeric_consistency_ignores_micro_vwap_without_provenance():
+    engine = _build_engine()
+    result = engine._annotate_entry_numeric_consistency(
+        {
+            "action": "WAIT",
+            "score": 72,
+            "reason": "WAIT because curr_vs_micro_vwap_bp <= 0",
+        },
+        prompt_type="scalping_entry",
+        feature_packet={
+            "curr_vs_micro_vwap_bp": 14.0,
+            "curr_vs_ma5_bp": 0.0,
+            "ma5_available": False,
+            "tick_acceleration_ratio": 0.5,
+            "buy_pressure_10t": 50.0,
+            "tick_aggressor_pressure_usable": False,
+            "tick_aggressor_trusted_count": 0,
+        },
+    )
+
+    assert result.get("ai_reason_numeric_inconsistency") is not True
+
+
+def test_entry_numeric_consistency_uses_micro_vwap_with_fresh_provenance():
+    engine = _build_engine()
+    result = engine._annotate_entry_numeric_consistency(
+        {
+            "action": "WAIT",
+            "score": 72,
+            "reason": "WAIT because curr_vs_micro_vwap_bp <= 0",
+        },
+        prompt_type="scalping_entry",
+        feature_packet={
+            "curr_vs_micro_vwap_bp": 14.0,
+            "micro_vwap_available": True,
+            "minute_candle_window_fresh": True,
+            "minute_candle_context_quality": "fresh_bar_window",
+            "curr_vs_ma5_bp": 0.0,
+            "ma5_available": False,
+            "tick_acceleration_ratio": 0.5,
+            "buy_pressure_10t": 50.0,
+            "tick_aggressor_pressure_usable": False,
+            "tick_aggressor_trusted_count": 0,
+        },
+    )
+
+    assert result["ai_reason_numeric_inconsistency"] is True
+    assert result["ai_reason_numeric_inconsistency_field"] == "position_advantage"
+
+
 def test_scalping_compact_entry_payload_keeps_source_quality_and_freshness(monkeypatch):
     engine = _build_engine()
     monkeypatch.setattr(
@@ -1169,8 +1419,90 @@ def test_scalping_compact_entry_payload_keeps_source_quality_and_freshness(monke
     assert payload["source_quality"]["tick_count"] == 1
     assert payload["source_quality"]["candle_count"] == 1
     assert payload["source_quality"]["orderbook_present"] is True
+    assert payload["source_quality"]["tick_aggressor_pressure_usable"] is True
+    assert payload["source_quality"]["tick_aggressor_trusted_count"] >= 1
+    assert payload["source_quality"]["tick_aggressor_price_heuristic_count"] == 0
+    assert payload["source_quality"]["micro_vwap_available"] is False
+    assert payload["source_quality"]["minute_candle_window_fresh"] is True
     assert payload["source_quality"]["price_change_heuristic_is_not_aggressor"] is True
     assert payload["recent_ticks_latest_first"][0]["aggressor_source"] == "orderbook_touch"
+
+
+def test_scalping_legacy_text_entry_payload_includes_feature_provenance(monkeypatch):
+    engine = _build_engine()
+    monkeypatch.setattr(
+        ai_engine_openai_module,
+        "TRADING_RULES",
+        replace(
+            ai_engine_openai_module.TRADING_RULES,
+            OPENAI_ENTRY_SCREEN_V2_INPUT_ENABLED=False,
+            OPENAI_SCALPING_COMPACT_INPUT_ENABLED=False,
+        ),
+    )
+    feature_packet = {
+        "packet_version": "scalp_feature_packet_v1",
+        "curr_price": 1000,
+        "latest_strength": 121,
+        "spread_krw": 2,
+        "spread_bp": 20.0,
+        "top1_depth_ratio": 1.0,
+        "top3_depth_ratio": 1.0,
+        "orderbook_total_ratio": 1.0,
+        "micro_price": 1000.0,
+        "microprice_edge_bp": 0.0,
+        "buy_pressure_10t": 50.0,
+        "tick_aggressor_pressure_usable": False,
+        "tick_aggressor_trusted_count": 0,
+        "tick_aggressor_price_heuristic_count": 10,
+        "price_change_10t_pct": 0.2,
+        "recent_5tick_seconds": 2.0,
+        "prev_5tick_seconds": 3.0,
+        "distance_from_day_high_pct": -0.5,
+        "intraday_range_pct": 1.0,
+        "tick_acceleration_ratio": 1.5,
+        "tick_accel_source": "computed_10ticks",
+        "tick_context_quality": "fresh_computed",
+        "tick_context_stale": False,
+        "same_price_buy_absorption": 0,
+        "large_sell_print_detected": False,
+        "large_buy_print_detected": False,
+        "net_aggressive_delta_10t": 0,
+        "volume_ratio_pct": 0.0,
+        "curr_vs_micro_vwap_bp": 0.0,
+        "micro_vwap_available": False,
+        "minute_candle_window_fresh": False,
+        "minute_candle_context_quality": "missing_candles",
+        "curr_vs_ma5_bp": 0.0,
+        "ma5_available": False,
+        "micro_vwap_value": 0.0,
+        "ma5_value": 0.0,
+        "ask_depth_ratio": 1.0,
+        "net_ask_depth": 0,
+    }
+
+    text = engine._format_market_data(
+        {
+            "curr": 1000,
+            "v_pw": 121,
+            "fluctuation": 1.2,
+            "ask_tot": 100,
+            "bid_tot": 100,
+            "orderbook": {
+                "asks": [{"price": 1001, "volume": 10}],
+                "bids": [{"price": 999, "volume": 12}],
+            },
+        },
+        [],
+        [],
+        feature_packet=feature_packet,
+    )
+
+    assert "tick_aggressor_pressure_usable: false" in text
+    assert "tick_aggressor_trusted_count: 0" in text
+    assert "tick_aggressor_price_heuristic_count: 10" in text
+    assert "micro_vwap_available: false" in text
+    assert "minute_candle_window_fresh: false" in text
+    assert "ma5_available: false" in text
 
 
 def test_swing_tier2_analyze_target_input_labels_are_english_ascii():
@@ -1322,8 +1654,22 @@ def test_holding_cache_tick_signature_uses_latest_touch_ticks_and_excludes_heuri
                 "dir": "BUY",
                 "aggressor_source": "price_change_heuristic",
             },
-            {"time": "10:00:02", "price": 10090, "volume": 450, "best_bid": 10090, "best_ask": 10100},
-            {"time": "10:00:01", "price": 10100, "volume": 250, "best_bid": 10090, "best_ask": 10100},
+                {
+                    "time": "10:00:02",
+                    "price": 10090,
+                    "volume": 450,
+                    "best_bid": 10090,
+                    "best_ask": 10100,
+                    "aggressor_source": "orderbook_touch",
+                },
+                {
+                    "time": "10:00:01",
+                    "price": 10100,
+                    "volume": 250,
+                    "best_bid": 10090,
+                    "best_ask": 10100,
+                    "aggressor_source": "orderbook_touch",
+                },
             {"time": "10:00:00", "price": 10080, "volume": 100, "dir": "BUY"},
         ]
     )
@@ -1331,9 +1677,9 @@ def test_holding_cache_tick_signature_uses_latest_touch_ticks_and_excludes_heuri
     assert compact == [
         {
             "latest_price": 202,
-            "buy_volume": 3,
+            "buy_volume": 2,
             "sell_volume": 4,
-            "net_volume": -1,
+            "net_volume": -2,
             "trade_value": 36,
         }
     ]

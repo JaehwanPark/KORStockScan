@@ -53,7 +53,14 @@ def test_holding_exit_matrix_runtime_bias_forces_hold_for_avg_down_wait(tmp_path
     merged = mod.merge_holding_exit_matrix_result_fields(
         {"action": "EXIT", "score": 80},
         context,
-        position_ctx={"profit_rate": -0.4, "peak_profit": 0.1, "current_ai_score": 72},
+        position_ctx={
+            "profit_rate": -0.4,
+            "peak_profit": 0.1,
+            "current_ai_score": 72,
+            "holding_score_source": "live",
+            "holding_score_data_quality": "fresh",
+            "holding_score_effective_usable": True,
+        },
     )
 
     assert merged["action"] == "HOLD"
@@ -113,6 +120,157 @@ def test_holding_exit_matrix_runtime_bias_does_not_force_hold_with_unusable_ai(t
     assert merged["holding_exit_matrix_ai_score_usable"] is False
 
 
+def test_holding_exit_matrix_runtime_bias_does_not_force_hold_without_ai_provenance(tmp_path, monkeypatch):
+    report_dir = tmp_path / "report" / "holding_exit_decision_matrix"
+    report_dir.mkdir(parents=True)
+    monkeypatch.setattr(mod, "MATRIX_DIR", report_dir)
+    _enable_runtime_bias(monkeypatch)
+    (report_dir / "holding_exit_decision_matrix_2026-05-18.json").write_text(
+        json.dumps(
+            {
+                "matrix_version": "holding_exit_decision_matrix_v1_2026-05-18",
+                "source_date": "2026-05-18",
+                "valid_for_date": "next_preopen",
+                "application_mode": "operator_override_runtime_bias",
+                "entries": [
+                    {
+                        "axis": "price_bucket",
+                        "bucket": "price_10k_30k",
+                        "recommended_bias": "prefer_avg_down_wait",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    context = mod.build_holding_exit_matrix_runtime_context(
+        prompt_profile="holding",
+        ws_data={"curr": 20000, "volume": 1_000_000},
+        recent_candles=[],
+        advisory_enabled=True,
+        now=datetime(2026, 5, 18, 16, 30),
+    )
+
+    merged = mod.merge_holding_exit_matrix_result_fields(
+        {"action": "EXIT", "score": 80},
+        context,
+        position_ctx={"profit_rate": -0.4, "peak_profit": 0.1, "current_ai_score": 72},
+    )
+
+    assert merged["action"] == "EXIT"
+    assert merged["holding_exit_matrix_runtime_bias_applied"] is False
+    assert merged["holding_exit_matrix_ai_score_usable"] is False
+    assert merged["holding_exit_matrix_ai_score_excluded_reason"] == "holding_score_data_quality_insufficient"
+
+
+def test_holding_exit_matrix_runtime_bias_rejects_timeout_ai_source(tmp_path, monkeypatch):
+    report_dir = tmp_path / "report" / "holding_exit_decision_matrix"
+    report_dir.mkdir(parents=True)
+    monkeypatch.setattr(mod, "MATRIX_DIR", report_dir)
+    _enable_runtime_bias(monkeypatch)
+    (report_dir / "holding_exit_decision_matrix_2026-05-18.json").write_text(
+        json.dumps(
+            {
+                "matrix_version": "holding_exit_decision_matrix_v1_2026-05-18",
+                "entries": [
+                    {
+                        "axis": "price_bucket",
+                        "bucket": "price_10k_30k",
+                        "recommended_bias": "prefer_pyramid_wait",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    context = mod.build_holding_exit_matrix_runtime_context(
+        prompt_profile="holding",
+        ws_data={"curr": 20000, "volume": 1_000_000},
+        recent_candles=[],
+        advisory_enabled=True,
+        now=datetime(2026, 5, 18, 16, 30),
+    )
+
+    merged = mod.merge_holding_exit_matrix_result_fields(
+        {"action": "EXIT", "score": 80},
+        context,
+        position_ctx={
+            "profit_rate": 1.2,
+            "peak_profit": 1.3,
+            "current_ai_score": 82,
+            "holding_score_source": "timeout",
+            "holding_score_data_quality": "fresh",
+        },
+    )
+
+    assert merged["action"] == "EXIT"
+    assert merged["holding_exit_matrix_runtime_bias_applied"] is False
+    assert merged["holding_exit_matrix_ai_score_usable"] is False
+    assert merged["holding_exit_matrix_ai_score_excluded_reason"] == "holding_score_source_timeout"
+
+
+def test_holding_exit_matrix_runtime_bias_requires_microstructure_for_partial_score(tmp_path, monkeypatch):
+    report_dir = tmp_path / "report" / "holding_exit_decision_matrix"
+    report_dir.mkdir(parents=True)
+    monkeypatch.setattr(mod, "MATRIX_DIR", report_dir)
+    _enable_runtime_bias(monkeypatch)
+    (report_dir / "holding_exit_decision_matrix_2026-05-18.json").write_text(
+        json.dumps(
+            {
+                "matrix_version": "holding_exit_decision_matrix_v1_2026-05-18",
+                "entries": [
+                    {
+                        "axis": "price_bucket",
+                        "bucket": "price_10k_30k",
+                        "recommended_bias": "prefer_avg_down_wait",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    context = mod.build_holding_exit_matrix_runtime_context(
+        prompt_profile="holding",
+        ws_data={"curr": 20000, "volume": 1_000_000},
+        recent_candles=[],
+        advisory_enabled=True,
+        now=datetime(2026, 5, 18, 16, 30),
+    )
+
+    blocked = mod.merge_holding_exit_matrix_result_fields(
+        {"action": "EXIT", "score": 80},
+        context,
+        position_ctx={
+            "profit_rate": -0.4,
+            "peak_profit": 0.1,
+            "current_ai_score": 72,
+            "holding_score_source": "live",
+            "holding_score_data_quality": "partial",
+            "holding_score_effective_usable": True,
+        },
+    )
+    allowed = mod.merge_holding_exit_matrix_result_fields(
+        {"action": "EXIT", "score": 80},
+        context,
+        position_ctx={
+            "profit_rate": -0.4,
+            "peak_profit": 0.1,
+            "current_ai_score": 72,
+            "holding_score_source": "live",
+            "holding_score_data_quality": "partial",
+            "holding_score_effective_usable": True,
+            "tick_aggressor_trusted_count": 4,
+        },
+    )
+
+    assert blocked["action"] == "EXIT"
+    assert blocked["holding_exit_matrix_ai_score_usable"] is False
+    assert blocked["holding_exit_matrix_ai_score_excluded_reason"] == "holding_score_partial_requires_microstructure"
+    assert allowed["action"] == "HOLD"
+    assert allowed["holding_exit_matrix_ai_score_usable"] is True
+    assert allowed["holding_exit_matrix_ai_score_microstructure_confirmed"] is True
+
+
 def test_holding_exit_matrix_runtime_bias_forces_exit_for_prefer_exit(tmp_path, monkeypatch):
     report_dir = tmp_path / "report" / "holding_exit_decision_matrix"
     report_dir.mkdir(parents=True)
@@ -162,6 +320,11 @@ def test_holding_exit_matrix_scale_in_bias_returns_avg_down_action():
             peak_profit=0.0,
             current_ai_score=72,
             held_sec=45,
+            safety_context={
+                "holding_score_source": "live",
+                "holding_score_data_quality": "fresh",
+                "holding_score_effective_usable": True,
+            },
         )
     finally:
         mod.TRADING_RULES = original_rules
@@ -169,6 +332,27 @@ def test_holding_exit_matrix_scale_in_bias_returns_avg_down_action():
     assert action["should_add"] is True
     assert action["add_type"] == "AVG_DOWN"
     assert action["reason"] == "holding_exit_matrix_avg_down_bias"
+
+
+def test_holding_exit_matrix_scale_in_bias_requires_ai_provenance(monkeypatch):
+    monkeypatch.setattr(
+        mod,
+        "TRADING_RULES",
+        replace(mod.TRADING_RULES, HOLDING_EXIT_MATRIX_SCALE_IN_BIAS_ENABLED=True),
+    )
+
+    action = mod.resolve_holding_exit_matrix_scale_in_bias(
+        strategy="SCALPING",
+        profit_rate=-0.45,
+        peak_profit=0.0,
+        current_ai_score=72,
+        held_sec=45,
+    )
+
+    assert action["should_add"] is False
+    assert action["reason"] == "holding_exit_matrix_ai_score_unusable"
+    assert action["ai_score_usable"] is False
+    assert action["ai_score_excluded_reason"] == "holding_score_data_quality_insufficient"
 
 
 def test_holding_exit_matrix_scale_in_bias_rejects_unusable_ai_score():

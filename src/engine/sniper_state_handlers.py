@@ -2445,6 +2445,16 @@ def _first_touch_runtime_prior_is_stale(path: Path, payload: dict[str, Any], now
     return (now_dt - mtime_dt).total_seconds() > _FIRST_TOUCH_RUNTIME_PRIOR_MAX_AGE_SEC
 
 
+def _runtime_prior_source_quality_block_reason(payload: dict[str, Any]) -> str | None:
+    source_quality = payload.get("source_quality")
+    if not isinstance(source_quality, dict):
+        return "prior_report_source_quality_missing"
+    status = str(source_quality.get("status") or "").strip().lower()
+    if status != "pass":
+        return "prior_report_source_quality_{}".format(status or "missing")
+    return None
+
+
 def _first_touch_prior_rows_stats(rows: list[dict[str, Any]], *, exact: bool = False) -> dict[str, Any]:
     closed_labels = {"first_touch_recovered_profit", "first_touch_loss_or_flat"}
     closed_rows = [
@@ -2512,6 +2522,14 @@ def _first_touch_runtime_prior_context(
         }
     if _first_touch_runtime_prior_is_stale(path, payload, now_ts):
         return {"runtime_prior_context": _first_touch_runtime_prior_default("stale", "prior_report_stale_gt_10m")}
+    source_quality_block_reason = _runtime_prior_source_quality_block_reason(payload)
+    if source_quality_block_reason:
+        return {
+            "runtime_prior_context": _first_touch_runtime_prior_default(
+                "source_quality_blocked",
+                source_quality_block_reason,
+            )
+        }
 
     rows = payload.get("first_touch_regression_rows")
     rows = [row for row in rows if isinstance(row, dict)] if isinstance(rows, list) else []
@@ -2670,6 +2688,14 @@ def _pyramid_runtime_prior_context(
         return {"pyramid_runtime_prior_context": _pyramid_runtime_prior_default("missing", f"prior_report_{load_status}")}
     if _pyramid_runtime_prior_is_stale(path, payload, now_ts):
         return {"pyramid_runtime_prior_context": _pyramid_runtime_prior_default("stale", "prior_report_stale_gt_10m")}
+    source_quality_block_reason = _runtime_prior_source_quality_block_reason(payload)
+    if source_quality_block_reason:
+        return {
+            "pyramid_runtime_prior_context": _pyramid_runtime_prior_default(
+                "source_quality_blocked",
+                source_quality_block_reason,
+            )
+        }
 
     rows = payload.get("pyramid_feedback_rows") or payload.get("rows")
     rows = [row for row in rows if isinstance(row, dict)] if isinstance(rows, list) else []
@@ -2814,6 +2840,11 @@ def _evaluate_first_touch_avgdown_decision_gate(
     micro_context_quality = reversal_feature_source_quality(micro_context_quality_source)
     micro_context_stale = bool(micro_context_present and micro_context_quality.get("reversal_feature_stale"))
     micro_context_usable = bool(micro_context_present and not micro_context_stale)
+    micro_vwap_available = any(
+        source.get("micro_vwap_available") is True
+        for source in sources
+        if isinstance(source, dict)
+    )
     best_ask, best_bid = _get_best_levels_from_ws(ws_data or {})
     spread_bps = 0.0
     if best_ask > 0 and best_bid > 0 and best_ask >= best_bid:
@@ -2830,27 +2861,13 @@ def _evaluate_first_touch_avgdown_decision_gate(
     low_ai_block = _rule_float("SCALP_FIRST_TOUCH_AVGDOWN_LOW_AI_BLOCK", 50.0)
     max_spread_bps = _rule_float("SCALP_FIRST_TOUCH_AVGDOWN_MAX_SPREAD_BPS", 80.0)
     stock_for_score = stock if isinstance(stock, dict) else {}
-    explicit_holding_score_contract = any(
-        key in stock_for_score
-        for key in (
-            "holding_score_effective_usable",
-            "holding_score_data_quality",
-            "holding_score_source",
-            "current_ai_score_source",
-            "holding_ai_score_source",
-        )
-    )
     holding_score_ctx = _holding_score_runtime_context(
         stock_for_score,
         current_ai_score=ai_score,
         now_ts=now_ts,
         is_critical_zone=True,
     )
-    ai_score_usable = (
-        bool(holding_score_ctx.get("usable_for_scale_in_support"))
-        if explicit_holding_score_contract
-        else True
-    )
+    ai_score_usable = bool(holding_score_ctx.get("usable_for_scale_in_support"))
 
     support_signals: list[str] = []
     risk_signals: list[str] = []
@@ -2885,11 +2902,11 @@ def _evaluate_first_touch_avgdown_decision_gate(
         support_signals.append("tick_accel_support")
     if (
         micro_context_usable
+        and micro_vwap_available
         and micro_vwap_bp >= 0.0
-        and any(source.get("curr_vs_micro_vwap_bp") is not None for source in sources)
     ):
         support_signals.append("micro_vwap_non_negative")
-    elif micro_context_usable and micro_vwap_bp < 0:
+    elif micro_context_usable and micro_vwap_available and micro_vwap_bp < 0:
         risk_signals.append("micro_vwap_negative")
     if min_liquidity > 0 and liquidity_value > 0:
         if liquidity_value >= min_liquidity:
@@ -2941,9 +2958,6 @@ def _evaluate_first_touch_avgdown_decision_gate(
     elif has_recovery_support:
         allowed = True
         reason = "recovery_support_confirmed"
-    elif prior_signal == "support":
-        allowed = True
-        reason = "runtime_prior_support_confirmed"
     else:
         allowed = False
         reason = "insufficient_first_touch_recovery_confirmation"
@@ -3572,16 +3586,6 @@ def _evaluate_late_loss_avg_down_retry(
     min_abs_loss_pct = max(0.0, _rule_float("SCALP_LATE_LOSS_AVG_DOWN_MIN_ABS_LOSS_PCT", 1.50))
     min_hold_sec = max(0, _rule_int("SCALP_LATE_LOSS_AVG_DOWN_MIN_HOLD_SEC", 30))
     min_ai_score = _rule_float("SCALP_LATE_LOSS_AVG_DOWN_MIN_AI_SCORE", 60.0)
-    explicit_holding_score_contract = any(
-        key in stock
-        for key in (
-            "holding_score_effective_usable",
-            "holding_score_data_quality",
-            "holding_score_source",
-            "current_ai_score_source",
-            "holding_ai_score_source",
-        )
-    )
     holding_score_ctx = _holding_score_runtime_context(
         stock,
         current_ai_score=current_ai_score,
@@ -3611,7 +3615,7 @@ def _evaluate_late_loss_avg_down_retry(
             "giveback_pct": giveback_pct,
             "min_giveback_pct": min_giveback_pct,
         }
-    if explicit_holding_score_contract and not bool(holding_score_ctx.get("usable_for_scale_in_support")):
+    if not bool(holding_score_ctx.get("usable_for_scale_in_support")):
         return {
             "should_retry": False,
             "reason": "ai_score_unusable",
@@ -3628,11 +3632,7 @@ def _evaluate_late_loss_avg_down_retry(
             "reason": "ai_score_below_min",
             "current_ai_score": current_ai_score,
             "min_ai_score": min_ai_score,
-            "ai_score_usable": (
-                bool(holding_score_ctx.get("usable_for_scale_in_support"))
-                if explicit_holding_score_contract
-                else True
-            ),
+            "ai_score_usable": bool(holding_score_ctx.get("usable_for_scale_in_support")),
             "ai_score_source": holding_score_ctx.get("source", "-"),
             "ai_score_data_quality": holding_score_ctx.get("data_quality", "-"),
             "ai_score_excluded_reason": holding_score_ctx.get("excluded_reason", "-"),
@@ -3652,11 +3652,7 @@ def _evaluate_late_loss_avg_down_retry(
         "eligibility_path": "positive_mfe_giveback" if peak_path_ok else "deep_loss_retry",
         "min_hold_sec": min_hold_sec,
         "min_ai_score": min_ai_score,
-        "ai_score_usable": (
-            bool(holding_score_ctx.get("usable_for_scale_in_support"))
-            if explicit_holding_score_contract
-            else True
-        ),
+        "ai_score_usable": bool(holding_score_ctx.get("usable_for_scale_in_support")),
         "ai_score_source": holding_score_ctx.get("source", "-"),
         "ai_score_data_quality": holding_score_ctx.get("data_quality", "-"),
         "ai_score_excluded_reason": holding_score_ctx.get("excluded_reason", "-"),
@@ -3670,11 +3666,7 @@ def _evaluate_late_loss_avg_down_retry(
             "profit_rate": profit_rate,
             "peak_profit": peak_profit,
             "current_ai_score": current_ai_score,
-            "ai_score_usable": (
-                bool(holding_score_ctx.get("usable_for_scale_in_support"))
-                if explicit_holding_score_contract
-                else True
-            ),
+            "ai_score_usable": bool(holding_score_ctx.get("usable_for_scale_in_support")),
             "ai_score_source": holding_score_ctx.get("source", "-"),
             "ai_score_data_quality": holding_score_ctx.get("data_quality", "-"),
             "ai_score_excluded_reason": holding_score_ctx.get("excluded_reason", "-"),
@@ -3691,27 +3683,13 @@ def _loss_fallback_ai_score_context(
     now_ts: float,
 ) -> dict:
     stock_for_score = stock if isinstance(stock, dict) else {}
-    explicit_holding_score_contract = any(
-        key in stock_for_score
-        for key in (
-            "holding_score_effective_usable",
-            "holding_score_data_quality",
-            "holding_score_source",
-            "current_ai_score_source",
-            "holding_ai_score_source",
-        )
-    )
     holding_score_ctx = _holding_score_runtime_context(
         stock_for_score,
         current_ai_score=current_ai_score,
         now_ts=now_ts,
         is_critical_zone=True,
     )
-    usable = (
-        bool(holding_score_ctx.get("usable_for_scale_in_support"))
-        if explicit_holding_score_contract
-        else True
-    )
+    usable = bool(holding_score_ctx.get("usable_for_scale_in_support"))
     return {
         "usable": usable,
         "source": holding_score_ctx.get("source", "-"),
@@ -10789,6 +10767,9 @@ def _log_scale_in_arm_blocked(stock, code, *, arm, blocked_reason, profit_rate, 
         "metric_role": "funnel_count",
         "decision_authority": "scale_in_attribution_source_only",
         "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
         "source_quality_gate": "scale_in_arm_and_blocker_namespace_present",
         "forbidden_uses": "real_scale_in_submit|intraday_threshold_mutation|cap_release",
     }
@@ -10840,6 +10821,9 @@ def _append_pyramid_probe_fields(fields: dict, probe: dict | None) -> dict:
         "reversal_feature_stale_reason",
         "tick_context_quality",
         "tick_context_stale",
+        "tick_aggressor_trusted_count",
+        "tick_aggressor_pressure_usable",
+        "tick_aggressor_pressure_source_quality",
         "tick_latest_age_ms",
         "tick_accel_source",
         "quote_stale",
@@ -10915,6 +10899,8 @@ def _append_reversal_add_probe_fields(fields: dict, probe: dict | None) -> dict:
         "reversal_feature_stale_reason",
         "tick_context_quality",
         "tick_context_stale",
+        "tick_aggressor_trusted_count",
+        "tick_aggressor_pressure_usable",
         "tick_latest_age_ms",
         "tick_accel_source",
         "quote_stale",
@@ -12386,15 +12372,47 @@ def _normalize_soft_stop_expert_features(stock: dict) -> tuple[dict, bool]:
     raw = stock.get("last_reversal_features") or {}
     if not isinstance(raw, dict) or not raw:
         return {}, False
+    source_quality = reversal_feature_source_quality(raw)
+    stale_reasons = {
+        item.strip()
+        for item in str(source_quality.get("reversal_feature_stale_reason") or "").split(",")
+        if item.strip() and item.strip() != "-"
+    }
+    micro_context_usable = not bool(
+        stale_reasons
+        & {
+            "tick_context_stale",
+            "tick_context_unusable",
+            "tick_age_gt_max",
+            "quote_stale",
+            "quote_age_gt_max",
+            "micro_vwap_provenance_missing",
+            "micro_vwap_unavailable",
+        }
+    )
+    pressure_usable = (
+        _truthy_field(raw.get("tick_aggressor_pressure_usable"))
+        or _safe_int(raw.get("tick_aggressor_trusted_count"), 0) > 0
+    ) and micro_context_usable
     features = {
         "buy_pressure_10t": _soft_stop_feature_float(raw, "buy_pressure_10t", 50.0),
         "tick_acceleration_ratio": _soft_stop_feature_float(raw, "tick_acceleration_ratio", 0.0),
-        "large_sell_print_detected": bool(raw.get("large_sell_print_detected", False)),
+        "large_sell_print_detected": pressure_usable and bool(raw.get("large_sell_print_detected", False)),
         "curr_vs_micro_vwap_bp": _soft_stop_feature_float(raw, "curr_vs_micro_vwap_bp", 0.0),
         "net_aggressive_delta_10t": _soft_stop_feature_int(raw, "net_aggressive_delta_10t", 0),
         "same_price_buy_absorption": _soft_stop_feature_int(raw, "same_price_buy_absorption", 0),
         "microprice_edge_bp": _soft_stop_feature_float(raw, "microprice_edge_bp", 0.0),
         "top3_depth_ratio": _soft_stop_feature_float(raw, "top3_depth_ratio", 999.0),
+        "tick_aggressor_trusted_count": _safe_int(raw.get("tick_aggressor_trusted_count"), 0),
+        "tick_aggressor_pressure_usable": bool(pressure_usable),
+        "tick_aggressor_pressure_source_quality": "usable" if pressure_usable else "unusable",
+        "micro_vwap_available": raw.get("micro_vwap_available", "unknown"),
+        "minute_candle_context_quality": raw.get("minute_candle_context_quality", "-"),
+        "minute_candle_window_fresh": raw.get("minute_candle_window_fresh", "unknown"),
+        "minute_candle_latest_age_ms": raw.get("minute_candle_latest_age_ms", "-"),
+        "micro_context_usable": bool(micro_context_usable),
+        "reversal_feature_source_quality": source_quality.get("reversal_feature_source_quality", "missing"),
+        "reversal_feature_stale_reason": source_quality.get("reversal_feature_stale_reason", "-"),
     }
     return features, True
 
@@ -12567,29 +12585,40 @@ def _build_bad_entry_refined_decision(
     absorption_count = features.get("same_price_buy_absorption", 0)
     microprice_edge_bp = features.get("microprice_edge_bp", 0.0)
     top3_depth_ratio = features.get("top3_depth_ratio", 999.0)
+    pressure_usable = bool(features.get("tick_aggressor_pressure_usable"))
+    micro_context_usable = bool(features.get("micro_context_usable", True))
 
     thesis_tick_min = _rule_float("SCALP_SOFT_STOP_THESIS_TICK_ACCEL_MIN", 0.60)
     thesis_vwap_min = _rule_float("SCALP_SOFT_STOP_THESIS_MICRO_VWAP_BP_MIN", -20.0)
     thesis_invalidated = bool(
-        large_sell or (tick_accel < thesis_tick_min and micro_vwap_bp < thesis_vwap_min)
+        large_sell
+        or (
+            micro_context_usable
+            and tick_accel < thesis_tick_min
+            and micro_vwap_bp < thesis_vwap_min
+        )
     )
     adverse_fill = bool(
         large_sell
-        or buy_pressure < 35.0
-        or tick_accel < 0.85
-        or micro_vwap_bp < -10.0
-        or net_delta < 0
+        or (pressure_usable and buy_pressure < 35.0)
+        or (micro_context_usable and tick_accel < 0.85)
+        or (micro_context_usable and micro_vwap_bp < -10.0)
+        or (pressure_usable and net_delta < 0)
     )
     absorption_score = sum(
         1
         for ok in (
-            buy_pressure >= _rule_float("SCALP_SOFT_STOP_ABSORPTION_MIN_BUY_PRESSURE", 55.0),
-            net_delta > 0,
-            absorption_count >= 2,
-            micro_vwap_bp >= _rule_float("SCALP_SOFT_STOP_ABSORPTION_MIN_MICRO_VWAP_BP", -5.0),
-            microprice_edge_bp >= 0.0,
-            tick_accel >= _rule_float("SCALP_SOFT_STOP_ABSORPTION_MIN_TICK_ACCEL", 0.95),
-            top3_depth_ratio <= _rule_float("SCALP_SOFT_STOP_ABSORPTION_MAX_TOP3_DEPTH_RATIO", 1.35),
+            pressure_usable
+            and buy_pressure >= _rule_float("SCALP_SOFT_STOP_ABSORPTION_MIN_BUY_PRESSURE", 55.0),
+            pressure_usable and net_delta > 0,
+            pressure_usable and absorption_count >= 2,
+            micro_context_usable
+            and micro_vwap_bp >= _rule_float("SCALP_SOFT_STOP_ABSORPTION_MIN_MICRO_VWAP_BP", -5.0),
+            micro_context_usable and microprice_edge_bp >= 0.0,
+            micro_context_usable
+            and tick_accel >= _rule_float("SCALP_SOFT_STOP_ABSORPTION_MIN_TICK_ACCEL", 0.95),
+            micro_context_usable
+            and top3_depth_ratio <= _rule_float("SCALP_SOFT_STOP_ABSORPTION_MAX_TOP3_DEPTH_RATIO", 1.35),
         )
         if ok
     )
@@ -12715,6 +12744,12 @@ def _emit_bad_entry_refined_candidate(
         tick_acceleration_ratio=features.get("tick_acceleration_ratio", "-"),
         large_sell_print_detected=features.get("large_sell_print_detected", "-"),
         curr_vs_micro_vwap_bp=features.get("curr_vs_micro_vwap_bp", "-"),
+        tick_aggressor_trusted_count=features.get("tick_aggressor_trusted_count", "-"),
+        tick_aggressor_pressure_usable=features.get("tick_aggressor_pressure_usable", "-"),
+        tick_aggressor_pressure_source_quality=features.get("tick_aggressor_pressure_source_quality", "-"),
+        micro_context_usable=features.get("micro_context_usable", "-"),
+        reversal_feature_source_quality=features.get("reversal_feature_source_quality", "-"),
+        reversal_feature_stale_reason=features.get("reversal_feature_stale_reason", "-"),
     )
     stock["_bad_entry_refined_candidate_logged_key"] = logged_key
 
@@ -12748,24 +12783,40 @@ def _build_soft_stop_expert_decision(
     absorption_count = features.get("same_price_buy_absorption", 0)
     microprice_edge_bp = features.get("microprice_edge_bp", 0.0)
     top3_depth_ratio = features.get("top3_depth_ratio", 999.0)
+    pressure_usable = bool(features.get("tick_aggressor_pressure_usable"))
+    micro_context_usable = bool(features.get("micro_context_usable", True))
 
     thesis_tick_min = _rule_float("SCALP_SOFT_STOP_THESIS_TICK_ACCEL_MIN", 0.60)
     thesis_vwap_min = _rule_float("SCALP_SOFT_STOP_THESIS_MICRO_VWAP_BP_MIN", -20.0)
     thesis_invalidated = bool(
-        large_sell or (tick_accel < thesis_tick_min and micro_vwap_bp < thesis_vwap_min)
+        large_sell
+        or (
+            micro_context_usable
+            and tick_accel < thesis_tick_min
+            and micro_vwap_bp < thesis_vwap_min
+        )
     )
     thesis_reason = "large_sell_print" if large_sell else "-"
-    if thesis_reason == "-" and tick_accel < thesis_tick_min and micro_vwap_bp < thesis_vwap_min:
+    if (
+        thesis_reason == "-"
+        and micro_context_usable
+        and tick_accel < thesis_tick_min
+        and micro_vwap_bp < thesis_vwap_min
+    ):
         thesis_reason = "tick_accel_and_micro_vwap_break"
 
     checks = {
-        "buy_pressure": buy_pressure >= _rule_float("SCALP_SOFT_STOP_ABSORPTION_MIN_BUY_PRESSURE", 55.0),
-        "net_aggressive_delta": net_delta > 0,
-        "same_price_buy_absorption": absorption_count >= 2,
-        "curr_vs_micro_vwap": micro_vwap_bp >= _rule_float("SCALP_SOFT_STOP_ABSORPTION_MIN_MICRO_VWAP_BP", -5.0),
-        "microprice_edge": microprice_edge_bp >= 0.0,
-        "tick_acceleration": tick_accel >= _rule_float("SCALP_SOFT_STOP_ABSORPTION_MIN_TICK_ACCEL", 0.95),
-        "top3_depth": top3_depth_ratio <= _rule_float("SCALP_SOFT_STOP_ABSORPTION_MAX_TOP3_DEPTH_RATIO", 1.35),
+        "buy_pressure": pressure_usable
+        and buy_pressure >= _rule_float("SCALP_SOFT_STOP_ABSORPTION_MIN_BUY_PRESSURE", 55.0),
+        "net_aggressive_delta": pressure_usable and net_delta > 0,
+        "same_price_buy_absorption": pressure_usable and absorption_count >= 2,
+        "curr_vs_micro_vwap": micro_context_usable
+        and micro_vwap_bp >= _rule_float("SCALP_SOFT_STOP_ABSORPTION_MIN_MICRO_VWAP_BP", -5.0),
+        "microprice_edge": micro_context_usable and microprice_edge_bp >= 0.0,
+        "tick_acceleration": micro_context_usable
+        and tick_accel >= _rule_float("SCALP_SOFT_STOP_ABSORPTION_MIN_TICK_ACCEL", 0.95),
+        "top3_depth": micro_context_usable
+        and top3_depth_ratio <= _rule_float("SCALP_SOFT_STOP_ABSORPTION_MAX_TOP3_DEPTH_RATIO", 1.35),
     }
     absorption_score = sum(1 for ok in checks.values() if ok)
     recovery_prob_shadow = max(
@@ -12882,34 +12933,31 @@ def _build_soft_stop_dynamic_grace_decision(
     absorption_count = _safe_int(features.get("same_price_buy_absorption"), 0)
     microprice_edge_bp = _safe_float(features.get("microprice_edge_bp"), 0.0)
     top3_depth_ratio = _safe_float(features.get("top3_depth_ratio"), 999.0)
+    pressure_usable = bool(features.get("tick_aggressor_pressure_usable"))
+    micro_context_usable = bool(features.get("micro_context_usable", True))
     checks = {
-        "buy_pressure": buy_pressure >= _rule_float("SCALP_SOFT_STOP_ABSORPTION_MIN_BUY_PRESSURE", 55.0),
-        "net_aggressive_delta": net_delta > 0,
-        "same_price_buy_absorption": absorption_count >= 2,
-        "curr_vs_micro_vwap": micro_vwap_bp >= _rule_float("SCALP_SOFT_STOP_ABSORPTION_MIN_MICRO_VWAP_BP", -5.0),
-        "microprice_edge": microprice_edge_bp >= 0.0,
-        "tick_acceleration": tick_accel >= _rule_float("SCALP_SOFT_STOP_ABSORPTION_MIN_TICK_ACCEL", 0.95),
-        "top3_depth": top3_depth_ratio <= _rule_float("SCALP_SOFT_STOP_ABSORPTION_MAX_TOP3_DEPTH_RATIO", 1.35),
+        "buy_pressure": pressure_usable
+        and buy_pressure >= _rule_float("SCALP_SOFT_STOP_ABSORPTION_MIN_BUY_PRESSURE", 55.0),
+        "net_aggressive_delta": pressure_usable and net_delta > 0,
+        "same_price_buy_absorption": pressure_usable and absorption_count >= 2,
+        "curr_vs_micro_vwap": micro_context_usable
+        and micro_vwap_bp >= _rule_float("SCALP_SOFT_STOP_ABSORPTION_MIN_MICRO_VWAP_BP", -5.0),
+        "microprice_edge": micro_context_usable and microprice_edge_bp >= 0.0,
+        "tick_acceleration": micro_context_usable
+        and tick_accel >= _rule_float("SCALP_SOFT_STOP_ABSORPTION_MIN_TICK_ACCEL", 0.95),
+        "top3_depth": micro_context_usable
+        and top3_depth_ratio <= _rule_float("SCALP_SOFT_STOP_ABSORPTION_MAX_TOP3_DEPTH_RATIO", 1.35),
     }
     absorption_score = sum(1 for ok in checks.values() if ok)
     thesis_invalidated = bool(
         large_sell
         or (
-            tick_accel < _rule_float("SCALP_SOFT_STOP_THESIS_TICK_ACCEL_MIN", 0.60)
+            micro_context_usable
+            and tick_accel < _rule_float("SCALP_SOFT_STOP_THESIS_TICK_ACCEL_MIN", 0.60)
             and micro_vwap_bp < _rule_float("SCALP_SOFT_STOP_THESIS_MICRO_VWAP_BP_MIN", -20.0)
         )
     )
     positive_micro = bool(feature_valid and absorption_score >= 1 and not thesis_invalidated)
-    explicit_holding_score_contract = any(
-        key in stock
-        for key in (
-            "holding_score_effective_usable",
-            "holding_score_data_quality",
-            "holding_score_source",
-            "current_ai_score_source",
-            "holding_ai_score_source",
-        )
-    )
     holding_score_ctx = _holding_score_runtime_context(
         stock,
         current_ai_score=current_ai_score,
@@ -12917,11 +12965,7 @@ def _build_soft_stop_dynamic_grace_decision(
         is_critical_zone=True,
         microstructure_confirmed=positive_micro,
     )
-    ai_score_usable = (
-        bool(holding_score_ctx.get("usable_for_soft_grace"))
-        if explicit_holding_score_contract
-        else True
-    )
+    ai_score_usable = bool(holding_score_ctx.get("usable_for_soft_grace"))
 
     started_at = _safe_float(stock.get("soft_stop_dynamic_grace_started_at"), 0.0)
     anchor_profit = _safe_float(stock.get("soft_stop_dynamic_grace_anchor_profit"), profit_rate)
@@ -12948,6 +12992,10 @@ def _build_soft_stop_dynamic_grace_decision(
         skip_reason = "non_scalping"
     elif _is_scalp_simulated_position(stock, strategy) or _has_sim_probe_provenance(stock):
         skip_reason = "sim_or_probe_position"
+    elif bool(stock.get("reversal_add_used")):
+        skip_reason = "reversal_add_used"
+    elif str(stock.get("reversal_add_state", "") or "").strip() == "POST_ADD_EVAL":
+        skip_reason = "reversal_add_post_eval"
     elif bool(quote_stale) or bool(source_quality_hard_gap):
         skip_reason = "source_or_quote_stale"
     elif not ai_score_usable:
@@ -12989,6 +13037,17 @@ def _build_soft_stop_dynamic_grace_decision(
         "absorption_score": int(absorption_score),
         "positive_micro": bool(positive_micro),
         "feature_valid": bool(feature_valid),
+        "tick_aggressor_trusted_count": _safe_int(features.get("tick_aggressor_trusted_count"), 0),
+        "tick_aggressor_pressure_usable": bool(pressure_usable),
+        "tick_aggressor_pressure_source_quality": features.get("tick_aggressor_pressure_source_quality", "-"),
+        "curr_vs_micro_vwap_bp": micro_vwap_bp,
+        "micro_vwap_available": features.get("micro_vwap_available", "-"),
+        "minute_candle_context_quality": features.get("minute_candle_context_quality", "-"),
+        "minute_candle_window_fresh": features.get("minute_candle_window_fresh", "-"),
+        "minute_candle_latest_age_ms": features.get("minute_candle_latest_age_ms", "-"),
+        "micro_context_usable": bool(micro_context_usable),
+        "reversal_feature_source_quality": features.get("reversal_feature_source_quality", "-"),
+        "reversal_feature_stale_reason": features.get("reversal_feature_stale_reason", "-"),
         "ai_score_usable": ai_score_usable,
         "ai_score_source": holding_score_ctx.get("source", "-"),
         "ai_score_data_quality": holding_score_ctx.get("data_quality", "-"),
@@ -13161,6 +13220,17 @@ def _emit_soft_stop_expert_observations(
         microprice_edge_bp=features.get("microprice_edge_bp", "-"),
         top3_depth_ratio=features.get("top3_depth_ratio", "-"),
         large_sell_print_detected=features.get("large_sell_print_detected", "-"),
+        curr_vs_micro_vwap_bp=features.get("curr_vs_micro_vwap_bp", "-"),
+        micro_vwap_available=features.get("micro_vwap_available", "-"),
+        minute_candle_context_quality=features.get("minute_candle_context_quality", "-"),
+        minute_candle_window_fresh=features.get("minute_candle_window_fresh", "-"),
+        minute_candle_latest_age_ms=features.get("minute_candle_latest_age_ms", "-"),
+        tick_aggressor_trusted_count=features.get("tick_aggressor_trusted_count", "-"),
+        tick_aggressor_pressure_usable=features.get("tick_aggressor_pressure_usable", "-"),
+        tick_aggressor_pressure_source_quality=features.get("tick_aggressor_pressure_source_quality", "-"),
+        micro_context_usable=features.get("micro_context_usable", "-"),
+        reversal_feature_source_quality=features.get("reversal_feature_source_quality", "-"),
+        reversal_feature_stale_reason=features.get("reversal_feature_stale_reason", "-"),
     )
     stock["_soft_stop_expert_shadow_logged_key"] = logged_key
 
@@ -13901,7 +13971,10 @@ def _rest_orderbook_received_age_ms(snapshot: dict | None, *, now_ts: float | No
         return max(0.0, (now - received_ts) * 1000.0)
     explicit_age = snapshot.get("pre_submit_rest_orderbook_refresh_age_ms")
     if explicit_age is None:
-        explicit_age = snapshot.get("age_ms")
+        is_ka10004_snapshot = str(snapshot.get("source") or "").strip() == "ka10004_rest_orderbook"
+        raw_time_authority = str(snapshot.get("bid_req_base_tm_authority") or "").strip()
+        if not is_ka10004_snapshot and raw_time_authority != "raw_not_freshness_input":
+            explicit_age = snapshot.get("age_ms")
     if explicit_age is not None:
         return max(0.0, _safe_float(explicit_age, 0.0))
     return None
@@ -14185,9 +14258,19 @@ def _reversal_feature_payload(feat: dict | None, now_ts: float) -> dict:
         'tick_sample_count': feat.get('tick_sample_count', '-'),
         'tick_window_sample_count': feat.get('tick_window_sample_count', '-'),
         'tick_window_span_sec': feat.get('tick_window_span_sec', '-'),
+        'tick_aggressor_source_counts': feat.get('tick_aggressor_source_counts', {}),
+        'tick_aggressor_quality_counts': feat.get('tick_aggressor_quality_counts', {}),
+        'tick_aggressor_orderbook_touch_count': feat.get('tick_aggressor_orderbook_touch_count', 0),
+        'tick_aggressor_price_heuristic_count': feat.get('tick_aggressor_price_heuristic_count', 0),
+        'tick_aggressor_unknown_count': feat.get('tick_aggressor_unknown_count', 0),
+        'tick_aggressor_trusted_count': feat.get('tick_aggressor_trusted_count', 0),
+        'tick_aggressor_pressure_usable': feat.get('tick_aggressor_pressure_usable', False),
         'large_sell_print_detected': feat.get('large_sell_print_detected', False),
         'curr_vs_micro_vwap_bp': feat.get('curr_vs_micro_vwap_bp', 0.0),
         'micro_vwap_value': feat.get('micro_vwap_value', 0.0),
+        'micro_vwap_available': feat.get('micro_vwap_available', False),
+        'minute_candle_window_fresh': feat.get('minute_candle_window_fresh', False),
+        'minute_candle_context_quality': feat.get('minute_candle_context_quality', 'missing'),
         'net_aggressive_delta_10t': feat.get('net_aggressive_delta_10t', 0),
         'same_price_buy_absorption': feat.get('same_price_buy_absorption', 0),
         'microprice_edge_bp': feat.get('microprice_edge_bp', 0.0),
@@ -15179,6 +15262,29 @@ def _first_float_field(*sources, key: str, aliases=(), default=0.0) -> float:
     return _safe_float(default, 0.0)
 
 
+def _first_numeric_field_with_source(*sources, key: str, aliases=()) -> tuple[float, bool, dict]:
+    for source in sources:
+        if not isinstance(source, dict):
+            continue
+        for candidate_key in (key, *aliases):
+            value = source.get(candidate_key)
+            if not _field_has_numeric_value(value):
+                continue
+            return _safe_float(value, 0.0), True, source
+    return 0.0, False, {}
+
+
+def _tick_pressure_usable_from_source(source: dict | None) -> bool:
+    fields = source if isinstance(source, dict) else {}
+    return bool(
+        _truthy_field(fields.get("tick_aggressor_pressure_usable"))
+        or _truthy_field(fields.get("late_entry_tick_aggressor_pressure_usable"))
+        or _truthy_field(fields.get("late_entry_buy_pressure_usable"))
+        or _safe_int(fields.get("tick_aggressor_trusted_count"), 0) > 0
+        or _safe_int(fields.get("late_entry_tick_aggressor_trusted_count"), 0) > 0
+    )
+
+
 def _latency_price_drift_guard_relevant(latency_gate: dict | None) -> bool:
     fields = latency_gate if isinstance(latency_gate, dict) else {}
     state = str(fields.get("latency_state") or "").strip().upper()
@@ -15227,7 +15333,7 @@ def _evaluate_late_entry_price_drift_guard(
     min_buy_pressure = _rule_float("SCALP_LATE_ENTRY_PRICE_DRIFT_MIN_BUY_PRESSURE", 0.0)
     min_micro_vwap = _rule_float("SCALP_LATE_ENTRY_PRICE_DRIFT_MIN_MICRO_VWAP_BP", 0.0)
 
-    buy_pressure = _first_float_field(
+    buy_pressure, has_buy_pressure, buy_pressure_source = _first_numeric_field_with_source(
         latency_fields,
         pre_submit_fields,
         microstructure_fields,
@@ -15235,9 +15341,9 @@ def _evaluate_late_entry_price_drift_guard(
         stock or {},
         key="buy_pressure_10t",
         aliases=("buy_pressure", "buy_pressure_ratio"),
-        default=0.0,
     )
-    tick_accel = _first_float_field(
+    buy_pressure_usable = bool(has_buy_pressure and _tick_pressure_usable_from_source(buy_pressure_source))
+    tick_accel, has_tick_accel, _tick_accel_source = _first_numeric_field_with_source(
         latency_fields,
         pre_submit_fields,
         microstructure_fields,
@@ -15245,9 +15351,8 @@ def _evaluate_late_entry_price_drift_guard(
         stock or {},
         key="tick_acceleration_ratio",
         aliases=("tick_accel", "tick_acceleration"),
-        default=0.0,
     )
-    micro_vwap_bp = _first_float_field(
+    micro_vwap_bp, has_micro_vwap, _micro_vwap_source = _first_numeric_field_with_source(
         latency_fields,
         pre_submit_fields,
         microstructure_fields,
@@ -15255,10 +15360,11 @@ def _evaluate_late_entry_price_drift_guard(
         stock or {},
         key="curr_vs_micro_vwap_bp",
         aliases=("micro_vwap_bp",),
-        default=0.0,
     )
-    positive_count = int(buy_pressure >= min_buy_pressure) + int(tick_accel >= min_tick) + int(
-        micro_vwap_bp >= min_micro_vwap
+    positive_count = int(buy_pressure_usable and buy_pressure >= min_buy_pressure) + int(
+        has_tick_accel and tick_accel >= min_tick
+    ) + int(
+        has_micro_vwap and micro_vwap_bp >= min_micro_vwap
     )
     micro_reconfirmed = positive_count >= 2
     latency_relevant = _latency_price_drift_guard_relevant(latency_fields)
@@ -15281,6 +15387,16 @@ def _evaluate_late_entry_price_drift_guard(
         "late_entry_fresh_buy_pressure_10t": buy_pressure,
         "late_entry_fresh_tick_acceleration_ratio": tick_accel,
         "late_entry_fresh_micro_vwap_bp": micro_vwap_bp,
+        "late_entry_buy_pressure_available": bool(has_buy_pressure),
+        "late_entry_buy_pressure_usable": bool(buy_pressure_usable),
+        "late_entry_tick_accel_available": bool(has_tick_accel),
+        "late_entry_micro_vwap_available": bool(has_micro_vwap),
+        "late_entry_tick_aggressor_pressure_usable": bool(buy_pressure_usable),
+        "late_entry_tick_aggressor_trusted_count": _safe_int(
+            buy_pressure_source.get("tick_aggressor_trusted_count")
+            or buy_pressure_source.get("late_entry_tick_aggressor_trusted_count"),
+            0,
+        ),
         "latency_state": str(latency_fields.get("latency_state") or ""),
         "latency_danger_reasons": str(
             latency_fields.get("latency_danger_reasons")
@@ -15349,7 +15465,7 @@ def _evaluate_weak_context_late_entry_guard(
     late_drift_fields = late_drift_fields if isinstance(late_drift_fields, dict) else {}
     source_quality_fields = (stock or {}).get("last_watching_ai_source_quality_fields")
     source_quality_fields = source_quality_fields if isinstance(source_quality_fields, dict) else {}
-    tick_accel = _first_float_field(
+    tick_accel, has_tick_accel, _tick_accel_source = _first_numeric_field_with_source(
         latency_gate,
         pre_submit_fields,
         microstructure_fields,
@@ -15359,9 +15475,8 @@ def _evaluate_weak_context_late_entry_guard(
         stock or {},
         key="tick_acceleration_ratio",
         aliases=("tick_accel", "tick_acceleration", "late_entry_fresh_tick_acceleration_ratio"),
-        default=0.0,
     )
-    buy_pressure = _first_float_field(
+    buy_pressure, has_buy_pressure, buy_pressure_source = _first_numeric_field_with_source(
         latency_gate,
         pre_submit_fields,
         microstructure_fields,
@@ -15371,9 +15486,9 @@ def _evaluate_weak_context_late_entry_guard(
         stock or {},
         key="buy_pressure_10t",
         aliases=("buy_pressure", "buy_pressure_ratio", "late_entry_fresh_buy_pressure_10t"),
-        default=0.0,
     )
-    micro_vwap_bp = _first_float_field(
+    buy_pressure_usable = bool(has_buy_pressure and _tick_pressure_usable_from_source(buy_pressure_source))
+    micro_vwap_bp, has_micro_vwap, _micro_vwap_source = _first_numeric_field_with_source(
         latency_gate,
         pre_submit_fields,
         microstructure_fields,
@@ -15383,15 +15498,14 @@ def _evaluate_weak_context_late_entry_guard(
         stock or {},
         key="curr_vs_micro_vwap_bp",
         aliases=("micro_vwap_bp", "late_entry_fresh_micro_vwap_bp"),
-        default=0.0,
     )
 
     weak_reasons: list[str] = []
-    if micro_vwap_bp < _rule_float("WEAK_CONTEXT_LATE_ENTRY_MIN_MICRO_VWAP_BP", 0.0):
+    if has_micro_vwap and micro_vwap_bp < _rule_float("WEAK_CONTEXT_LATE_ENTRY_MIN_MICRO_VWAP_BP", 0.0):
         weak_reasons.append("micro_vwap_negative")
-    if buy_pressure <= _rule_float("WEAK_CONTEXT_LATE_ENTRY_MIN_BUY_PRESSURE", 0.0):
+    if buy_pressure_usable and buy_pressure <= _rule_float("WEAK_CONTEXT_LATE_ENTRY_MIN_BUY_PRESSURE", 0.0):
         weak_reasons.append("buy_pressure_non_positive")
-    if tick_accel < _rule_float("WEAK_CONTEXT_LATE_ENTRY_MIN_TICK_ACCEL", 1.10):
+    if has_tick_accel and tick_accel < _rule_float("WEAK_CONTEXT_LATE_ENTRY_MIN_TICK_ACCEL", 1.10):
         weak_reasons.append("tick_accel_below_min")
     has_drift_context = bool(
         late_drift_fields.get("late_entry_latency_relevant")
@@ -15414,6 +15528,16 @@ def _evaluate_weak_context_late_entry_guard(
             "weak_context_guard_tick_accel": f"{tick_accel:.3f}",
             "weak_context_guard_buy_pressure_10t": f"{buy_pressure:.2f}",
             "weak_context_guard_curr_vs_micro_vwap_bp": f"{micro_vwap_bp:.2f}",
+            "weak_context_guard_buy_pressure_available": bool(has_buy_pressure),
+            "weak_context_guard_buy_pressure_usable": bool(buy_pressure_usable),
+            "weak_context_guard_tick_accel_available": bool(has_tick_accel),
+            "weak_context_guard_micro_vwap_available": bool(has_micro_vwap),
+            "tick_aggressor_pressure_usable": bool(buy_pressure_usable),
+            "tick_aggressor_trusted_count": _safe_int(
+                buy_pressure_source.get("tick_aggressor_trusted_count")
+                or buy_pressure_source.get("late_entry_tick_aggressor_trusted_count"),
+                0,
+            ),
             "weak_context_guard_has_drift_context": has_drift_context,
             "weak_context_guard_weak_signal_count": weak_signal_count,
         }
@@ -15636,18 +15760,16 @@ def _evaluate_real_weak_ai_micro_entry_block(
             "weak_ai_micro_entry_block_max_ai_score": f"{max_ai_score:.1f}",
         }
 
-    buy_pressure_raw = _entry_submit_field(
+    buy_pressure, has_buy_pressure, buy_pressure_source = _first_numeric_field_with_source(
         microstructure_fields,
         orderbook_fields,
         latency_fields,
         stock,
         key="buy_pressure_10t",
         aliases=("buy_pressure", "last_buy_pressure_10t"),
-        default=None,
     )
-    has_buy_pressure = _field_has_numeric_value(buy_pressure_raw)
-    buy_pressure = _safe_float(buy_pressure_raw, 0.0)
-    weak_buy_pressure = has_buy_pressure and buy_pressure <= min_buy_pressure
+    buy_pressure_usable = bool(has_buy_pressure and _tick_pressure_usable_from_source(buy_pressure_source))
+    weak_buy_pressure = buy_pressure_usable and buy_pressure <= min_buy_pressure
 
     micro_state = str(
         _entry_submit_field(
@@ -15703,6 +15825,17 @@ def _evaluate_real_weak_ai_micro_entry_block(
         "weak_ai_micro_entry_block_max_ai_score": f"{max_ai_score:.1f}",
         "weak_ai_micro_entry_block_buy_pressure_10t": f"{buy_pressure:.2f}" if has_buy_pressure else "-",
         "weak_ai_micro_entry_block_min_buy_pressure_10t": f"{min_buy_pressure:.2f}",
+        "weak_ai_micro_entry_block_buy_pressure_usable": buy_pressure_usable,
+        "weak_ai_micro_entry_block_tick_aggressor_pressure_usable": bool(
+            _truthy_field((buy_pressure_source or {}).get("tick_aggressor_pressure_usable"))
+            or _truthy_field((buy_pressure_source or {}).get("late_entry_tick_aggressor_pressure_usable"))
+            or _truthy_field((buy_pressure_source or {}).get("late_entry_buy_pressure_usable"))
+        ),
+        "weak_ai_micro_entry_block_tick_aggressor_trusted_count": _safe_int(
+            (buy_pressure_source or {}).get("tick_aggressor_trusted_count")
+            or (buy_pressure_source or {}).get("late_entry_tick_aggressor_trusted_count"),
+            0,
+        ),
         "weak_ai_micro_entry_block_weak_buy_pressure": weak_buy_pressure,
         "weak_ai_micro_entry_block_micro_state": micro_state or "-",
         "weak_ai_micro_entry_block_ofi_norm": f"{ofi_norm:.4f}" if has_ofi else "-",
@@ -17748,10 +17881,31 @@ def _quote_freshness_bucket(ws_data) -> str:
     return "stale"
 
 
+def _watching_buy_pressure_context(ws_data, feature_packet=None) -> tuple[float, bool, str]:
+    packet = feature_packet if isinstance(feature_packet, dict) else {}
+    source = ws_data if isinstance(ws_data, dict) else {}
+    unusable_packet_pressure = False
+    for key in ("buy_pressure_10t", "buy_pressure"):
+        if _field_has_numeric_value(packet.get(key)):
+            if _tick_pressure_usable_from_source(packet):
+                return _safe_float(packet.get(key), 50.0), True, "feature_packet_trusted"
+            unusable_packet_pressure = True
+    if _field_has_numeric_value(source.get("buy_ratio")):
+        return _safe_float(source.get("buy_ratio"), 50.0), True, "provider_buy_ratio"
+    for key in ("buy_pressure_10t", "buy_pressure"):
+        if _field_has_numeric_value(source.get(key)):
+            if _tick_pressure_usable_from_source(source):
+                return _safe_float(source.get(key), 50.0), True, "runtime_pressure_trusted"
+            return 50.0, False, "runtime_pressure_unusable"
+    if unusable_packet_pressure:
+        return 50.0, False, "feature_packet_pressure_unusable"
+    return 50.0, False, "missing"
+
+
 def _build_watching_state_change_signature(ws_data, feature_packet=None) -> dict:
     packet = feature_packet if isinstance(feature_packet, dict) else {}
     source = ws_data if isinstance(ws_data, dict) else {}
-    buy_pressure = packet.get("buy_pressure_10t", packet.get("buy_pressure", (ws_data or {}).get("buy_ratio", 0.0)))
+    buy_pressure, buy_pressure_usable, buy_pressure_source = _watching_buy_pressure_context(ws_data, packet)
     top3_ratio = packet.get("top3_depth_ratio")
     if top3_ratio in (None, "", 0):
         top3_ratio = _entry_top3_depth_ratio(ws_data)
@@ -17781,6 +17935,8 @@ def _build_watching_state_change_signature(ws_data, feature_packet=None) -> dict
         "micro_vwap_side": _signed_regime(micro_vwap_bp),
         "ma5_side": _signed_regime(ma5_bp),
         "buy_pressure_10t": round(_safe_float(buy_pressure, 0.0), 3),
+        "buy_pressure_usable": bool(buy_pressure_usable),
+        "buy_pressure_source": buy_pressure_source,
         "tick_acceleration_regime": _bucket_tick_acceleration(tick_accel),
         "large_sell_print_detected": _boolish_true(large_sell),
         "top3_depth_regime": _bucket_top_depth_ratio(top3_ratio),
@@ -17791,7 +17947,10 @@ def _build_watching_state_change_signature(ws_data, feature_packet=None) -> dict
 def _watching_refresh_available_axes(ws_data, feature_packet=None) -> list[str]:
     packet = feature_packet if isinstance(feature_packet, dict) else {}
     source = ws_data if isinstance(ws_data, dict) else {}
-    axes = ["buy_pressure_10t", "top3_depth_regime", "quote_freshness"]
+    axes = ["top3_depth_regime", "quote_freshness"]
+    _pressure_value, pressure_usable, _pressure_source = _watching_buy_pressure_context(ws_data, packet)
+    if pressure_usable:
+        axes.append("buy_pressure_10t")
     if any(key in packet or key in source for key in ("curr_vs_micro_vwap_bp", "micro_vwap_bp")):
         axes.append("micro_vwap_side")
     if "curr_vs_ma5_bp" in packet or "curr_vs_ma5_bp" in source:
@@ -18002,9 +18161,41 @@ def _early_accel_recheck_feature_values(ws_data: dict | None) -> dict:
         source.get("curr_vs_micro_vwap_bp", source.get("micro_vwap_bp")),
         0.0,
     )
+    tick_context_quality = str(source.get("tick_context_quality") or "unknown").strip().lower()
+    tick_accel_source = str(source.get("tick_accel_source") or "unknown").strip().lower()
+    tick_context_stale = bool(source.get("tick_context_stale"))
+    tick_accel_usable = bool(
+        not tick_context_stale
+        and (
+            tick_context_quality == "fresh_computed"
+            or tick_accel_source in {"computed_10ticks", "same_second_burst_10ticks"}
+        )
+    )
+    minute_candle_context_quality = str(source.get("minute_candle_context_quality") or "unknown").strip().lower()
+    minute_candle_window_fresh = _truthy_field(source.get("minute_candle_window_fresh"))
+    minute_candle_latest_age_ms = _safe_int(source.get("minute_candle_latest_age_ms"), 0)
+    micro_vwap_available = _truthy_field(source.get("micro_vwap_available"))
+    micro_quality_ok = bool(
+        minute_candle_context_quality
+        and minute_candle_context_quality != "-"
+        and not any(
+            token in minute_candle_context_quality
+            for token in ("unknown", "missing", "stale", "unavailable")
+        )
+    )
+    micro_vwap_usable = bool(micro_vwap_available and minute_candle_window_fresh and micro_quality_ok)
     return {
         "tick_accel": tick_accel,
         "micro_vwap_bp": micro_vwap_bp,
+        "tick_accel_source": tick_accel_source,
+        "tick_context_quality": tick_context_quality,
+        "tick_context_stale": tick_context_stale,
+        "tick_accel_usable": tick_accel_usable,
+        "micro_vwap_available": micro_vwap_available,
+        "minute_candle_context_quality": minute_candle_context_quality,
+        "minute_candle_window_fresh": minute_candle_window_fresh,
+        "minute_candle_latest_age_ms": minute_candle_latest_age_ms,
+        "micro_vwap_usable": micro_vwap_usable,
         "quote_stale": bool(source.get("quote_stale") or source.get("context_stale")),
     }
 
@@ -18060,7 +18251,16 @@ def _resolve_early_accel_recheck(
         "recheck_count": recheck_count,
         "last_ai_elapsed_sec": f"{last_elapsed:.1f}",
         "tick_accel": f"{float(features.get('tick_accel') or 0.0):.3f}",
+        "tick_accel_source": features.get("tick_accel_source") or "unknown",
+        "tick_context_quality": features.get("tick_context_quality") or "unknown",
+        "tick_context_stale": bool(features.get("tick_context_stale")),
+        "tick_accel_usable": bool(features.get("tick_accel_usable")),
         "micro_vwap_bp": f"{float(features.get('micro_vwap_bp') or 0.0):.2f}",
+        "micro_vwap_available": bool(features.get("micro_vwap_available")),
+        "minute_candle_context_quality": features.get("minute_candle_context_quality") or "unknown",
+        "minute_candle_window_fresh": bool(features.get("minute_candle_window_fresh")),
+        "minute_candle_latest_age_ms": _safe_int(features.get("minute_candle_latest_age_ms"), 0),
+        "micro_vwap_usable": bool(features.get("micro_vwap_usable")),
         "quote_stale": bool(features.get("quote_stale")),
     }
 
@@ -18088,6 +18288,10 @@ def _resolve_early_accel_recheck(
         return {"allowed": False, "skip_reason": "stale_quote_or_context", **base}
     if bool(context_flags.get("source_quality_block")):
         return {"allowed": False, "skip_reason": "source_quality_hard_block", **base}
+    if not bool(features.get("micro_vwap_usable")):
+        return {"allowed": False, "skip_reason": "micro_vwap_unusable", **base}
+    if not bool(features.get("tick_accel_usable")):
+        return {"allowed": False, "skip_reason": "tick_accel_unusable", **base}
     if (
         "blocked_liquidity" in blocked_stages
         and not _rule_bool("EARLY_ACCEL_RECHECK_ALLOW_LIQUIDITY_BLOCKED", True)
@@ -18121,7 +18325,16 @@ def _log_early_accel_recheck(stock, code, stage: str, decision: dict) -> None:
         last_ai_elapsed_sec=decision.get("last_ai_elapsed_sec") or "0.0",
         skip_reason=decision.get("skip_reason") or ("allowed" if decision.get("allowed") else "unknown"),
         tick_accel=decision.get("tick_accel") or "0.000",
+        tick_accel_source=decision.get("tick_accel_source") or "unknown",
+        tick_context_quality=decision.get("tick_context_quality") or "unknown",
+        tick_context_stale=bool(decision.get("tick_context_stale")),
+        tick_accel_usable=bool(decision.get("tick_accel_usable")),
         micro_vwap_bp=decision.get("micro_vwap_bp") or "0.00",
+        micro_vwap_available=bool(decision.get("micro_vwap_available")),
+        minute_candle_context_quality=decision.get("minute_candle_context_quality") or "unknown",
+        minute_candle_window_fresh=bool(decision.get("minute_candle_window_fresh")),
+        minute_candle_latest_age_ms=_safe_int(decision.get("minute_candle_latest_age_ms"), 0),
+        micro_vwap_usable=bool(decision.get("micro_vwap_usable")),
         quote_stale=bool(decision.get("quote_stale")),
     )
 
@@ -18182,10 +18395,44 @@ def _resolve_early_accel_strong_bundle_recheck(
         payload.get("curr_vs_micro_vwap_bp", (ws_data or {}).get("curr_vs_micro_vwap_bp")),
         0.0,
     )
+    micro_vwap_available = _truthy_field(
+        payload.get("micro_vwap_available", (ws_data or {}).get("micro_vwap_available"))
+    )
+    minute_candle_context_quality = str(
+        payload.get(
+            "minute_candle_context_quality",
+            (ws_data or {}).get("minute_candle_context_quality", "unknown"),
+        )
+        or "unknown"
+    )
+    minute_candle_window_fresh = _truthy_field(
+        payload.get(
+            "minute_candle_window_fresh",
+            (ws_data or {}).get("minute_candle_window_fresh"),
+        )
+    )
+    minute_candle_latest_age_ms = _safe_int(
+        payload.get(
+            "minute_candle_latest_age_ms",
+            (ws_data or {}).get("minute_candle_latest_age_ms"),
+        ),
+        0,
+    )
+    micro_vwap_usable = bool(micro_vwap_available and minute_candle_window_fresh)
     buy_pressure_10t = _safe_float(
         payload.get("buy_pressure_10t", (ws_data or {}).get("buy_pressure_10t")),
         0.0,
     )
+    tick_aggressor_trusted_count = _safe_int(
+        payload.get("tick_aggressor_trusted_count", (ws_data or {}).get("tick_aggressor_trusted_count")),
+        0,
+    )
+    tick_aggressor_pressure_usable = _truthy_field(
+        payload.get(
+            "tick_aggressor_pressure_usable",
+            (ws_data or {}).get("tick_aggressor_pressure_usable"),
+        )
+    ) or tick_aggressor_trusted_count > 0
     quote_stale = bool((ws_data or {}).get("quote_stale") or (ws_data or {}).get("context_stale"))
     source_quality_block = bool(_early_accel_recheck_pre_ai_context_flags(stock).get("source_quality_block"))
     recheck_count = _safe_int((stock or {}).get("early_accel_strong_bundle_recheck_count"), 0)
@@ -18197,8 +18444,8 @@ def _resolve_early_accel_strong_bundle_recheck(
             comparable_flu_delta >= 0.50,
             cntr_str_available and cntr_str >= 110.0,
             tick_accel >= 1.10,
-            micro_vwap_bp > 0.0,
-            buy_pressure_10t >= 68.0,
+            micro_vwap_usable and micro_vwap_bp > 0.0,
+            tick_aggressor_pressure_usable and buy_pressure_10t >= 68.0,
         )
     )
     base = {
@@ -18211,7 +18458,13 @@ def _resolve_early_accel_strong_bundle_recheck(
         "cntr_str": f"{cntr_str:.1f}",
         "tick_acceleration_ratio": f"{tick_accel:.3f}",
         "curr_vs_micro_vwap_bp": f"{micro_vwap_bp:.2f}",
+        "micro_vwap_available": bool(micro_vwap_available),
+        "minute_candle_context_quality": minute_candle_context_quality,
+        "minute_candle_window_fresh": bool(minute_candle_window_fresh),
+        "minute_candle_latest_age_ms": minute_candle_latest_age_ms,
         "buy_pressure_10t": f"{buy_pressure_10t:.2f}",
+        "tick_aggressor_trusted_count": tick_aggressor_trusted_count,
+        "tick_aggressor_pressure_usable": bool(tick_aggressor_pressure_usable),
         "original_action": action or "WAIT",
         "original_score": f"{_safe_float(ai_score, 0.0):.1f}",
         "recheck_action": "not_evaluated",
@@ -18250,6 +18503,8 @@ def _resolve_early_accel_strong_bundle_recheck(
         return {"allowed": False, "skip_reason": "stale_quote_or_context", **base}
     if source_quality_block:
         return {"allowed": False, "skip_reason": "source_quality_hard_block", **base}
+    if not tick_aggressor_pressure_usable:
+        return {"allowed": False, "skip_reason": "tick_aggressor_pressure_unusable", **base}
     if recheck_count >= max(0, _rule_int("EARLY_ACCEL_STRONG_BUNDLE_RECHECK_MAX_PER_SYMBOL", 1)):
         return {"allowed": False, "skip_reason": "max_recheck_count_reached", **base}
     min_pass_count = max(1, _rule_int("EARLY_ACCEL_STRONG_BUNDLE_RECHECK_MIN_PASS_COUNT", 2))
@@ -18273,7 +18528,13 @@ def _log_early_accel_strong_bundle_recheck(stock, code, stage: str, decision: di
         cntr_str=decision.get("cntr_str") or "0.0",
         tick_acceleration_ratio=decision.get("tick_acceleration_ratio") or "0.000",
         curr_vs_micro_vwap_bp=decision.get("curr_vs_micro_vwap_bp") or "0.00",
+        micro_vwap_available=bool(decision.get("micro_vwap_available")),
+        minute_candle_context_quality=decision.get("minute_candle_context_quality") or "unknown",
+        minute_candle_window_fresh=bool(decision.get("minute_candle_window_fresh")),
+        minute_candle_latest_age_ms=_safe_int(decision.get("minute_candle_latest_age_ms"), 0),
         buy_pressure_10t=decision.get("buy_pressure_10t") or "0.00",
+        tick_aggressor_trusted_count=_safe_int(decision.get("tick_aggressor_trusted_count"), 0),
+        tick_aggressor_pressure_usable=bool(decision.get("tick_aggressor_pressure_usable")),
         original_action=decision.get("original_action") or "WAIT",
         original_score=decision.get("original_score") or "0.0",
         recheck_action=decision.get("recheck_action") or "not_evaluated",
@@ -18366,6 +18627,34 @@ def _resolve_pre_submit_liquidity_relief(
             "current_submit_snapshot_zero" if zero_candidate is not None else "missing_feature_default"
         )
 
+    def lookup_pressure_provenance(*keys: str):
+        zero_seen = False
+        for payload in current_payloads:
+            for key in keys:
+                if key not in payload or payload.get(key) in {None, ""}:
+                    continue
+                parsed = _safe_float(payload.get(key), None)
+                if parsed is None:
+                    continue
+                if abs(parsed) > 1e-9:
+                    return (
+                        _tick_pressure_usable_from_source(payload),
+                        _safe_int(payload.get("tick_aggressor_trusted_count"), 0),
+                        "current_submit_snapshot",
+                    )
+                zero_seen = True
+        for key in keys:
+            if key not in recent_ai_feature_probe or recent_ai_feature_probe.get(key) in {None, ""}:
+                continue
+            parsed = _safe_float(recent_ai_feature_probe.get(key), None)
+            if parsed is not None:
+                return (
+                    _tick_pressure_usable_from_source(recent_ai_feature_probe),
+                    _safe_int(recent_ai_feature_probe.get("tick_aggressor_trusted_count"), 0),
+                    "recent_ai_feature_probe",
+                )
+        return False, 0, ("current_submit_snapshot_zero" if zero_seen else "missing_feature_default")
+
     promotion_reason = str((stock or {}).get("scanner_promotion_reason") or "-")
     source_signature = str((stock or {}).get("source_signature") or "-")
     tick_accel, tick_accel_source = lookup_feature(
@@ -18373,6 +18662,10 @@ def _resolve_pre_submit_liquidity_relief(
     )
     micro_vwap_bp, micro_vwap_source = lookup_feature("curr_vs_micro_vwap_bp", "micro_vwap_bp")
     buy_pressure, buy_pressure_source = lookup_feature("buy_pressure_10t", "buy_pressure")
+    buy_pressure_usable, tick_aggressor_trusted_count, buy_pressure_provenance_source = lookup_pressure_provenance(
+        "buy_pressure_10t",
+        "buy_pressure",
+    )
     recheck_trigger = str((stock or {}).get("ai_call_trigger_reason") or "").strip()
     source_signature_tokens = _source_signature_tokens(source_signature)
     signature_strong_bundle = _source_signature_strong_bundle_pass(source_signature)
@@ -18380,6 +18673,7 @@ def _resolve_pre_submit_liquidity_relief(
         signature_strong_bundle
         and micro_vwap_bp
         >= _rule_float("PRE_SUBMIT_LIQUIDITY_RELIEF_SIGNATURE_MIN_MICRO_VWAP_BP", 25.0)
+        and buy_pressure_usable
         and buy_pressure
         >= _rule_float("PRE_SUBMIT_LIQUIDITY_RELIEF_SIGNATURE_MIN_BUY_PRESSURE", 80.0)
     )
@@ -18417,6 +18711,9 @@ def _resolve_pre_submit_liquidity_relief(
         "tick_acceleration_ratio_source": tick_accel_source,
         "curr_vs_micro_vwap_bp_source": micro_vwap_source,
         "buy_pressure_10t_source": buy_pressure_source,
+        "buy_pressure_provenance_source": buy_pressure_provenance_source,
+        "tick_aggressor_pressure_usable": bool(buy_pressure_usable),
+        "tick_aggressor_trusted_count": tick_aggressor_trusted_count,
         "last_watching_ai_feature_probe_age_sec": f"{last_ai_feature_age_sec:.1f}"
         if recent_ai_feature_probe
         else "not_available",
@@ -18452,6 +18749,8 @@ def _resolve_pre_submit_liquidity_relief(
         return {"allowed": False, "relief_skip_reason": "tick_accel_below_min", **base}
     if micro_vwap_bp < _rule_float("PRE_SUBMIT_LIQUIDITY_RELIEF_MIN_MICRO_VWAP_BP", 0.0):
         return {"allowed": False, "relief_skip_reason": "micro_vwap_below_min", **base}
+    if not buy_pressure_usable:
+        return {"allowed": False, "relief_skip_reason": "tick_aggressor_pressure_unusable", **base}
     if buy_pressure < _rule_float("PRE_SUBMIT_LIQUIDITY_RELIEF_MIN_BUY_PRESSURE", 68.0):
         return {"allowed": False, "relief_skip_reason": "buy_pressure_below_min", **base}
     if relief_count >= max(0, _rule_int("PRE_SUBMIT_LIQUIDITY_RELIEF_MAX_PER_SYMBOL", 1)):
@@ -18479,6 +18778,9 @@ def _log_pre_submit_liquidity_relief(stock, code, stage: str, decision: dict) ->
         tick_acceleration_ratio_source=decision.get("tick_acceleration_ratio_source") or "-",
         curr_vs_micro_vwap_bp_source=decision.get("curr_vs_micro_vwap_bp_source") or "-",
         buy_pressure_10t_source=decision.get("buy_pressure_10t_source") or "-",
+        buy_pressure_provenance_source=decision.get("buy_pressure_provenance_source") or "-",
+        tick_aggressor_pressure_usable=bool(decision.get("tick_aggressor_pressure_usable")),
+        tick_aggressor_trusted_count=_safe_int(decision.get("tick_aggressor_trusted_count"), 0),
         last_watching_ai_feature_probe_age_sec=(
             decision.get("last_watching_ai_feature_probe_age_sec") or "not_available"
         ),
@@ -18503,12 +18805,44 @@ def _resolve_ai_numeric_consistency_recheck(
     payload = ai_decision if isinstance(ai_decision, dict) else {}
     action = str(payload.get("action") or "").strip().upper()
     inconsistency = bool(payload.get("ai_reason_numeric_inconsistency"))
+    micro_vwap_available = _truthy_field(
+        payload.get("micro_vwap_available", (ws_data or {}).get("micro_vwap_available"))
+    )
+    minute_candle_context_quality = str(
+        payload.get(
+            "minute_candle_context_quality",
+            (ws_data or {}).get("minute_candle_context_quality", "unknown"),
+        )
+        or "unknown"
+    )
+    minute_candle_window_fresh = _truthy_field(
+        payload.get(
+            "minute_candle_window_fresh",
+            (ws_data or {}).get("minute_candle_window_fresh"),
+        )
+    )
+    minute_candle_latest_age_ms = _safe_int(
+        payload.get(
+            "minute_candle_latest_age_ms",
+            (ws_data or {}).get("minute_candle_latest_age_ms"),
+        ),
+        0,
+    )
+    micro_context_usable = bool(micro_vwap_available and minute_candle_window_fresh)
     position_pass = (
-        _safe_float(payload.get("curr_vs_micro_vwap_bp"), 0.0) > 0.0
-        or _safe_float(payload.get("curr_vs_ma5_bp"), 0.0) > 0.0
+        micro_context_usable
+        and (
+            _safe_float(payload.get("curr_vs_micro_vwap_bp"), 0.0) > 0.0
+            or _safe_float(payload.get("curr_vs_ma5_bp"), 0.0) > 0.0
+        )
     )
     speed_pass = _safe_float(payload.get("tick_acceleration_ratio"), 0.0) >= 1.10
-    supply_pass = (
+    tick_aggressor_trusted_count = _safe_int(payload.get("tick_aggressor_trusted_count"), 0)
+    tick_aggressor_pressure_usable = (
+        _truthy_field(payload.get("tick_aggressor_pressure_usable"))
+        or tick_aggressor_trusted_count > 0
+    )
+    supply_pass = tick_aggressor_pressure_usable and (
         _safe_float(payload.get("buy_pressure_10t"), 0.0) >= 68.0
         or _safe_float(payload.get("net_aggressive_delta_10t"), 0.0) > 0.0
     )
@@ -18530,8 +18864,14 @@ def _resolve_ai_numeric_consistency_recheck(
         "detected_value": payload.get("ai_reason_numeric_inconsistency_detected_value")
         or "not_evaluated",
         "position_pass": bool(position_pass),
+        "micro_vwap_available": bool(micro_vwap_available),
+        "minute_candle_context_quality": minute_candle_context_quality,
+        "minute_candle_window_fresh": bool(minute_candle_window_fresh),
+        "minute_candle_latest_age_ms": minute_candle_latest_age_ms,
         "speed_pass": bool(speed_pass),
         "supply_pass": bool(supply_pass),
+        "tick_aggressor_pressure_usable": bool(tick_aggressor_pressure_usable),
+        "tick_aggressor_trusted_count": tick_aggressor_trusted_count,
         "feature_pass_count": feature_pass_count,
         "recheck_count": recheck_count,
         "quote_stale": stale_quote,
@@ -18586,8 +18926,14 @@ def _log_ai_numeric_consistency_recheck(stock, code, stage: str, decision: dict)
         inconsistency_reason=decision.get("inconsistency_reason") or "not_applicable",
         detected_value=decision.get("detected_value") or "not_evaluated",
         position_pass=bool(decision.get("position_pass")),
+        micro_vwap_available=bool(decision.get("micro_vwap_available")),
+        minute_candle_context_quality=decision.get("minute_candle_context_quality") or "unknown",
+        minute_candle_window_fresh=bool(decision.get("minute_candle_window_fresh")),
+        minute_candle_latest_age_ms=_safe_int(decision.get("minute_candle_latest_age_ms"), 0),
         speed_pass=bool(decision.get("speed_pass")),
         supply_pass=bool(decision.get("supply_pass")),
+        tick_aggressor_pressure_usable=bool(decision.get("tick_aggressor_pressure_usable")),
+        tick_aggressor_trusted_count=_safe_int(decision.get("tick_aggressor_trusted_count"), 0),
         feature_pass_count=_safe_int(decision.get("feature_pass_count"), 0),
         recheck_count=_safe_int(decision.get("recheck_count"), 0),
         recheck_action=decision.get("recheck_action") or "not_evaluated",
@@ -18949,6 +19295,10 @@ def _build_ai_ops_log_fields(
     for field_name in (
         "tick_sample_count",
         "tick_window_sample_count",
+        "tick_aggressor_trusted_count",
+        "tick_aggressor_orderbook_touch_count",
+        "tick_aggressor_price_heuristic_count",
+        "tick_aggressor_unknown_count",
         "tick_latest_age_ms",
         "tick_window_span_sec",
         "quote_age_ms",
@@ -19003,6 +19353,7 @@ def _build_ai_ops_log_fields(
     for field_name in (
         "tick_context_stale",
         "quote_stale",
+        "tick_aggressor_pressure_usable",
     ):
         if field_name in payload:
             raw_value = payload.get(field_name)
@@ -19092,9 +19443,14 @@ def _build_tick_source_quality_log_fields(feature_probe):
     for field_name in (
         "tick_sample_count",
         "tick_window_sample_count",
+        "tick_aggressor_trusted_count",
+        "tick_aggressor_orderbook_touch_count",
+        "tick_aggressor_price_heuristic_count",
+        "tick_aggressor_unknown_count",
         "tick_latest_age_ms",
         "tick_window_span_sec",
         "quote_age_ms",
+        "minute_candle_latest_age_ms",
         "microstructure_reaction_ask_sweep_score",
         "microstructure_reaction_post_sweep_hold_score",
         "microstructure_reaction_bid_replenishment_score",
@@ -19112,6 +19468,7 @@ def _build_tick_source_quality_log_fields(feature_probe):
         "tick_accel_source",
         "tick_context_quality",
         "quote_age_source",
+        "minute_candle_context_quality",
         "microstructure_reaction_context_version",
         "microstructure_reaction_context_status",
         "microstructure_reaction_entry_reaction_quality",
@@ -19123,6 +19480,9 @@ def _build_tick_source_quality_log_fields(feature_probe):
     for field_name in (
         "tick_context_stale",
         "quote_stale",
+        "tick_aggressor_pressure_usable",
+        "micro_vwap_available",
+        "minute_candle_window_fresh",
     ):
         if field_name in payload:
             raw_value = payload.get(field_name)
@@ -20497,6 +20857,31 @@ def _evaluate_holding_flow_override(
             )
             return True
 
+    def _holding_flow_micro_feature_log_fields(features: dict, has_features: bool) -> dict:
+        features = features if isinstance(features, dict) else {}
+        return {
+            "micro_vwap_available": features.get("micro_vwap_available", "-") if has_features else "-",
+            "minute_candle_context_quality": (
+                features.get("minute_candle_context_quality", "-") if has_features else "-"
+            ),
+            "minute_candle_window_fresh": features.get("minute_candle_window_fresh", "-") if has_features else "-",
+            "minute_candle_latest_age_ms": features.get("minute_candle_latest_age_ms", "-") if has_features else "-",
+            "micro_context_usable": bool(
+                has_features
+                and _truthy_field(features.get("micro_context_usable"))
+                and _truthy_field(features.get("micro_vwap_available"))
+                and _truthy_field(features.get("minute_candle_window_fresh"))
+            ),
+            "reversal_feature_source_quality": (
+                features.get("reversal_feature_source_quality", "-") if has_features else "missing"
+            ),
+            "reversal_feature_stale_reason": (
+                features.get("reversal_feature_stale_reason", "feature_context_missing")
+                if has_features
+                else "feature_context_missing"
+            ),
+        }
+
     def _never_green_defer_clamp(
         defer_reason: str,
         flow_action: str,
@@ -20519,6 +20904,10 @@ def _evaluate_holding_flow_override(
         max_micro_vwap_bp = _rule_float("NEVER_GREEN_DEFER_CLAMP_MAX_MICRO_VWAP_BP", 0.0)
         min_loss_pct = _rule_float("NEVER_GREEN_DEFER_CLAMP_MIN_LOSS_PCT", 0.0)
         features, has_features = _normalize_soft_stop_expert_features(stock)
+        micro_log_fields = _holding_flow_micro_feature_log_fields(features, has_features)
+        micro_context_usable = bool(micro_log_fields.get("micro_context_usable"))
+        if not micro_context_usable:
+            return False
         curr_vs_micro_vwap_bp = (
             float(current_micro_vwap_bp)
             if current_micro_vwap_bp is not None
@@ -20556,6 +20945,7 @@ def _evaluate_holding_flow_override(
             trade_quality_signature_version="trade_quality_signature_v1",
             curr_vs_micro_vwap_bp=f"{curr_vs_micro_vwap_bp:.2f}",
             previous_defer_micro_vwap_bp=f"{prev_micro_vwap_bp:.2f}",
+            **micro_log_fields,
             peak_profit=f"{peak_profit:+.2f}",
             profit_rate=f"{profit_rate:+.2f}",
             runtime_effect=True,
@@ -20577,6 +20967,7 @@ def _evaluate_holding_flow_override(
         *,
         next_debounce_count: int,
         curr_vs_micro_vwap_bp: float | None,
+        micro_context_usable: bool,
         ws_age_sec: float | None,
     ) -> tuple[bool, dict]:
         max_count = max(0, _rule_int("HOLDING_FLOW_OFI_DEBOUNCE_MAX_COUNT", 2))
@@ -20590,6 +20981,7 @@ def _evaluate_holding_flow_override(
             "ofi_debounce_current_micro_vwap_bp": (
                 f"{float(curr_vs_micro_vwap_bp):.2f}" if curr_vs_micro_vwap_bp is not None else "-"
             ),
+            "ofi_debounce_micro_context_usable": bool(micro_context_usable),
         }
         if _is_scalp_simulated_position(stock, strategy) or _has_sim_probe_provenance(stock):
             fields["ofi_debounce_reason"] = "sim_probe_not_allowed"
@@ -20607,6 +20999,9 @@ def _evaluate_holding_flow_override(
             fields["ofi_debounce_reason"] = "source_quality_stale_ws"
             fields["ws_age_sec"] = f"{ws_age_sec:.2f}"
             fields["max_ws_age_sec"] = f"{max_ws_age:.2f}"
+            return False, fields
+        if not micro_context_usable:
+            fields["ofi_debounce_reason"] = "micro_context_unusable"
             return False, fields
         if curr_vs_micro_vwap_bp is not None and curr_vs_micro_vwap_bp + 1e-9 < min_micro_vwap_bp:
             fields["ofi_debounce_reason"] = "micro_vwap_below_floor"
@@ -20669,6 +21064,7 @@ def _evaluate_holding_flow_override(
                 return True
         features, has_features = _normalize_soft_stop_expert_features(stock)
         curr_vs_micro_vwap_bp = _safe_float(features.get("curr_vs_micro_vwap_bp"), 0.0) if has_features else None
+        feature_micro_log_fields = _holding_flow_micro_feature_log_fields(features, has_features)
         next_defer_count = _safe_int(stock.get("holding_flow_override_defer_count"), 0) + 1
         if _never_green_defer_clamp(
             "review_interval_hold",
@@ -20707,6 +21103,7 @@ def _evaluate_holding_flow_override(
             price_trigger_pct=f"{price_trigger_pct:.2f}",
             holding_flow_override_defer_count=next_defer_count,
             curr_vs_micro_vwap_bp=f"{curr_vs_micro_vwap_bp:.2f}" if curr_vs_micro_vwap_bp is not None else "-",
+            **feature_micro_log_fields,
             **_build_observation_contract_fields("ops_volume_diagnostic"),
             **(
                 _build_swing_micro_log_fields(
@@ -20942,12 +21339,14 @@ def _evaluate_holding_flow_override(
         if flow_action == "EXIT" and ofi_state.regime == OFI_STABLE_BULLISH:
             features, has_features = _normalize_soft_stop_expert_features(stock)
             curr_vs_micro_vwap_bp = _safe_float(features.get("curr_vs_micro_vwap_bp"), 0.0) if has_features else None
+            feature_micro_log_fields = _holding_flow_micro_feature_log_fields(features, has_features)
             next_defer_count = _safe_int(stock.get("holding_flow_override_defer_count"), 0) + 1
             next_ofi_debounce_count = _safe_int(stock.get("holding_flow_ofi_debounce_count"), 0) + 1
             debounce_allowed, debounce_gate_fields = _holding_flow_ofi_debounce_allowed(
                 ofi_state,
                 next_debounce_count=next_ofi_debounce_count,
                 curr_vs_micro_vwap_bp=curr_vs_micro_vwap_bp,
+                micro_context_usable=bool(feature_micro_log_fields.get("micro_context_usable")),
                 ws_age_sec=ws_age_sec,
             )
             if not debounce_allowed:
@@ -20964,6 +21363,7 @@ def _evaluate_holding_flow_override(
                     candidate_profit=f"{candidate_profit:+.2f}",
                     worsen_from_candidate=f"{worsen_from_candidate:.2f}",
                     **debounce_gate_fields,
+                    **feature_micro_log_fields,
                     **ofi_log_fields,
                     **micro_log_fields_for_smoothing,
                     **swing_exit_micro_fields,
@@ -21023,6 +21423,7 @@ def _evaluate_holding_flow_override(
                         else "-"
                     ),
                     **debounce_gate_fields,
+                    **feature_micro_log_fields,
                     **ofi_log_fields,
                     **micro_log_fields_for_smoothing,
                     **swing_exit_micro_fields,
@@ -21046,6 +21447,7 @@ def _evaluate_holding_flow_override(
                     holding_flow_override_defer_count=next_defer_count,
                     holding_flow_ofi_debounce_count=next_ofi_debounce_count,
                     curr_vs_micro_vwap_bp=f"{curr_vs_micro_vwap_bp:.2f}" if curr_vs_micro_vwap_bp is not None else "-",
+                    **feature_micro_log_fields,
                     **_build_observation_contract_fields("ops_volume_diagnostic"),
                     **swing_exit_micro_fields,
                 )
@@ -21137,6 +21539,7 @@ def _evaluate_holding_flow_override(
 
     features, has_features = _normalize_soft_stop_expert_features(stock)
     curr_vs_micro_vwap_bp = _safe_float(features.get("curr_vs_micro_vwap_bp"), 0.0) if has_features else None
+    feature_micro_log_fields = _holding_flow_micro_feature_log_fields(features, has_features)
     next_defer_count = _safe_int(stock.get("holding_flow_override_defer_count"), 0) + 1
     if _never_green_defer_clamp(
         flow_result.get("reason", "-"),
@@ -21171,6 +21574,7 @@ def _evaluate_holding_flow_override(
         elapsed_sec=elapsed_sec,
         holding_flow_override_defer_count=next_defer_count,
         curr_vs_micro_vwap_bp=f"{curr_vs_micro_vwap_bp:.2f}" if curr_vs_micro_vwap_bp is not None else "-",
+        **feature_micro_log_fields,
         **_build_observation_contract_fields("ops_volume_diagnostic"),
         **swing_exit_micro_fields,
     )
@@ -21202,6 +21606,28 @@ def _evaluate_holding_flow_override(
     return False
 
 
+def _reversal_add_runtime_supply_context(features: dict | None) -> dict:
+    feat = features if isinstance(features, dict) else {}
+    source_quality = reversal_feature_source_quality(feat) if feat else {}
+    feature_usable = bool(feat) and not bool(source_quality.get("reversal_feature_stale"))
+    checks = [
+        feature_usable
+        and _safe_float(feat.get('buy_pressure_10t'), 0.0) >= _rule_float('REVERSAL_ADD_MIN_BUY_PRESSURE', 55),
+        feature_usable
+        and _safe_float(feat.get('tick_acceleration_ratio'), 0.0) >= _rule_float('REVERSAL_ADD_MIN_TICK_ACCEL', 0.95),
+        feature_usable
+        and not _truthy_field(feat.get('large_sell_print_detected', True)),
+        feature_usable
+        and _safe_float(feat.get('curr_vs_micro_vwap_bp'), -999.0) >= _rule_float('REVERSAL_ADD_VWAP_BP_MIN', -5.0),
+    ]
+    return {
+        "feature_usable": feature_usable,
+        "source_quality": source_quality,
+        "checks": checks,
+        "supply_ok": sum(1 for item in checks if item) >= 3,
+    }
+
+
 def _extract_buy_recovery_probe_features(ai_engine, ws_data, recent_ticks, recent_candles):
     if ai_engine is None or not hasattr(ai_engine, "_extract_scalping_features"):
         return None
@@ -21211,8 +21637,12 @@ def _extract_buy_recovery_probe_features(ai_engine, ws_data, recent_ticks, recen
         return None
     return {
         "buy_pressure": float(features.get("buy_pressure_10t", 0.0) or 0.0),
+        "buy_pressure_10t": float(features.get("buy_pressure_10t", 0.0) or 0.0),
         "tick_accel": float(features.get("tick_acceleration_ratio", 0.0) or 0.0),
+        "tick_acceleration_ratio": float(features.get("tick_acceleration_ratio", 0.0) or 0.0),
         "micro_vwap_bp": float(features.get("curr_vs_micro_vwap_bp", 0.0) or 0.0),
+        "curr_vs_micro_vwap_bp": float(features.get("curr_vs_micro_vwap_bp", 0.0) or 0.0),
+        "micro_vwap_available": bool(features.get("micro_vwap_available")),
         "large_sell_print": bool(features.get("large_sell_print_detected", False)),
         "tick_sample_count": features.get("tick_sample_count", "-"),
         "tick_window_sample_count": features.get("tick_window_sample_count", "-"),
@@ -21229,14 +21659,40 @@ def _extract_buy_recovery_probe_features(ai_engine, ws_data, recent_ticks, recen
         "quote_age_ms": features.get("quote_age_ms", "-"),
         "quote_age_source": features.get("quote_age_source", "missing"),
         "quote_stale": features.get("quote_stale", "unknown"),
+        "minute_candle_context_quality": features.get("minute_candle_context_quality", "unknown"),
+        "minute_candle_window_fresh": features.get("minute_candle_window_fresh", False),
+        "minute_candle_latest_age_ms": features.get("minute_candle_latest_age_ms", "-"),
     }
+
+
+def _buy_recovery_probe_tick_pressure_usable(probe: dict | None) -> bool:
+    probe = probe if isinstance(probe, dict) else {}
+    return bool(
+        _truthy_field(probe.get("tick_aggressor_pressure_usable"))
+        or _safe_int(probe.get("tick_aggressor_trusted_count"), 0) > 0
+    )
+
+
+def _buy_recovery_probe_micro_vwap_usable(probe: dict | None) -> bool:
+    probe = probe if isinstance(probe, dict) else {}
+    minute_quality = str(probe.get("minute_candle_context_quality") or "").strip().lower()
+    minute_quality_ok = bool(
+        minute_quality
+        and minute_quality != "-"
+        and not any(token in minute_quality for token in ("unknown", "missing", "stale", "unavailable"))
+    )
+    return bool(
+        _truthy_field(probe.get("micro_vwap_available"))
+        and _truthy_field(probe.get("minute_candle_window_fresh"))
+        and minute_quality_ok
+    )
 
 
 def _buy_recovery_probe_source_quality_hard_block(probe: dict) -> bool:
     return bool(
         probe.get("tick_context_stale") is True
         or probe.get("quote_stale") is True
-        or probe.get("tick_aggressor_pressure_usable") is False
+        or not _buy_recovery_probe_tick_pressure_usable(probe)
     )
 
 
@@ -21482,6 +21938,7 @@ def _score65_74_recovery_probe_micro_guard(probe: dict | None) -> dict:
     buy_pressure = _safe_float(probe.get("buy_pressure"), 0.0)
     tick_accel = _safe_float(probe.get("tick_accel"), 0.0)
     micro_vwap_bp = _safe_float(probe.get("micro_vwap_bp"), 0.0)
+    micro_vwap_available = _buy_recovery_probe_micro_vwap_usable(probe)
     min_buy_pressure = _rule_float("AI_SCORE65_74_RECOVERY_PROBE_MIN_BUY_PRESSURE", 65.0)
     min_tick_accel = _rule_float("AI_SCORE65_74_RECOVERY_PROBE_MIN_TICK_ACCEL", 1.20)
     configured_min_micro_vwap_bp = _rule_float("AI_SCORE65_74_RECOVERY_PROBE_MIN_MICRO_VWAP_BP", 0.0)
@@ -21494,7 +21951,9 @@ def _score65_74_recovery_probe_micro_guard(probe: dict | None) -> dict:
         failed.append("buy_pressure_below_min")
     if tick_accel < min_tick_accel:
         failed.append("tick_accel_below_min")
-    if micro_vwap_bp < min_micro_vwap_bp:
+    if not micro_vwap_available:
+        failed.append("micro_vwap_unavailable")
+    elif micro_vwap_bp < min_micro_vwap_bp:
         failed.append("micro_vwap_below_min")
     strong_micro_override_enabled = (
         _rule_bool(
@@ -21515,6 +21974,8 @@ def _score65_74_recovery_probe_micro_guard(probe: dict | None) -> dict:
         str(probe.get("tick_context_quality") or "").strip() == "fresh_computed"
         and probe.get("tick_context_stale") is not True
         and probe.get("quote_stale") is not True
+        and _buy_recovery_probe_tick_pressure_usable(probe)
+        and _buy_recovery_probe_micro_vwap_usable(probe)
         and str(probe.get("tick_accel_source") or "").strip()
         in {"computed_10ticks", "same_second_burst_10ticks"}
     )
@@ -21534,6 +21995,10 @@ def _score65_74_recovery_probe_micro_guard(probe: dict | None) -> dict:
         "buy_pressure": buy_pressure,
         "tick_accel": tick_accel,
         "micro_vwap_bp": micro_vwap_bp,
+        "micro_vwap_available": micro_vwap_available,
+        "minute_candle_context_quality": probe.get("minute_candle_context_quality", "unknown"),
+        "minute_candle_window_fresh": _truthy_field(probe.get("minute_candle_window_fresh")),
+        "minute_candle_latest_age_ms": probe.get("minute_candle_latest_age_ms", "-"),
         "score65_74_recovery_probe_min_buy_pressure": min_buy_pressure,
         "score65_74_recovery_probe_min_tick_accel": min_tick_accel,
         "score65_74_recovery_probe_min_micro_vwap_bp": min_micro_vwap_bp,
@@ -21547,6 +22012,8 @@ def _score65_74_recovery_probe_micro_guard(probe: dict | None) -> dict:
         "score65_74_recovery_probe_strong_micro_min_buy_pressure": strong_micro_min_buy_pressure,
         "score65_74_recovery_probe_strong_micro_min_micro_vwap_bp": strong_micro_min_micro_vwap_bp,
         "score65_74_recovery_probe_strong_micro_source_quality_ok": tick_source_quality_ok,
+        "tick_aggressor_trusted_count": _safe_int(probe.get("tick_aggressor_trusted_count"), 0),
+        "tick_aggressor_pressure_usable": _buy_recovery_probe_tick_pressure_usable(probe),
     }
 
 
@@ -21615,6 +22082,14 @@ def _score65_74_recovery_probe_reuse_guard(
         "buy_pressure": stock.get("score65_74_recovery_probe_last_buy_pressure"),
         "tick_accel": stock.get("score65_74_recovery_probe_last_tick_accel"),
         "micro_vwap_bp": stock.get("score65_74_recovery_probe_last_micro_vwap_bp"),
+        "micro_vwap_available": stock.get("score65_74_recovery_probe_last_micro_vwap_available"),
+        "minute_candle_context_quality": stock.get(
+            "score65_74_recovery_probe_last_minute_candle_context_quality"
+        ),
+        "minute_candle_window_fresh": stock.get("score65_74_recovery_probe_last_minute_candle_window_fresh"),
+        "minute_candle_latest_age_ms": stock.get("score65_74_recovery_probe_last_minute_candle_latest_age_ms"),
+        "tick_aggressor_trusted_count": stock.get("score65_74_recovery_probe_last_tick_aggressor_trusted_count"),
+        "tick_aggressor_pressure_usable": stock.get("score65_74_recovery_probe_last_tick_aggressor_pressure_usable"),
     }
     return _score65_74_recovery_probe_repeat_guard(
         stock,
@@ -21804,6 +22279,23 @@ def _validate_wait6579_probe_entry_unlock(stock, code, ws_data, *, now_ts: float
                 buy_pressure=f"{float(score65_74_reuse_decision.get('buy_pressure') or 0.0):.2f}",
                 tick_accel=f"{float(score65_74_reuse_decision.get('tick_accel') or 0.0):.3f}",
                 micro_vwap_bp=f"{float(score65_74_reuse_decision.get('micro_vwap_bp') or 0.0):.2f}",
+                micro_vwap_available=bool(score65_74_reuse_decision.get("micro_vwap_available", False)),
+                minute_candle_context_quality=(
+                    score65_74_reuse_decision.get("minute_candle_context_quality") or "unknown"
+                ),
+                minute_candle_window_fresh=bool(
+                    score65_74_reuse_decision.get("minute_candle_window_fresh", False)
+                ),
+                minute_candle_latest_age_ms=(
+                    score65_74_reuse_decision.get("minute_candle_latest_age_ms", "-")
+                ),
+                tick_aggressor_trusted_count=_safe_int(
+                    score65_74_reuse_decision.get("tick_aggressor_trusted_count"),
+                    0,
+                ),
+                tick_aggressor_pressure_usable=bool(
+                    score65_74_reuse_decision.get("tick_aggressor_pressure_usable", False)
+                ),
                 score65_74_recovery_probe_min_buy_pressure=(
                     f"{float(score65_74_reuse_decision.get('score65_74_recovery_probe_min_buy_pressure') or 0.0):.2f}"
                 ),
@@ -22015,6 +22507,7 @@ def _scalp_ai_wait_rebound_recheck_decision(
         or stock.get("score65_74_recovery_probe_last_micro_vwap_bp"),
         0.0,
     )
+    micro_vwap_available = _buy_recovery_probe_micro_vwap_usable(feature_probe)
     min_buy_pressure = _safe_float(
         os.getenv("KORSTOCKSCAN_SCALP_AI_WAIT_REBOUND_RECHECK_MIN_BUY_PRESSURE"),
         80.0,
@@ -22028,11 +22521,29 @@ def _scalp_ai_wait_rebound_recheck_decision(
             "ai_wait_rebound_recheck_buy_pressure": f"{buy_pressure:.3f}",
             "ai_wait_rebound_recheck_min_buy_pressure": f"{min_buy_pressure:.3f}",
             "ai_wait_rebound_recheck_micro_vwap_bp": f"{micro_vwap_bp:.3f}",
+            "ai_wait_rebound_recheck_micro_vwap_available": bool(micro_vwap_available),
             "ai_wait_rebound_recheck_min_micro_vwap_bp": f"{min_micro_vwap_bp:.3f}",
+            "minute_candle_context_quality": feature_probe.get("minute_candle_context_quality", "unknown"),
+            "minute_candle_window_fresh": _truthy_field(feature_probe.get("minute_candle_window_fresh")),
+            "minute_candle_latest_age_ms": feature_probe.get("minute_candle_latest_age_ms", "-"),
+            "tick_context_quality": feature_probe.get("tick_context_quality", "unknown"),
+            "tick_context_stale": feature_probe.get("tick_context_stale", "unknown"),
+            "tick_accel_source": feature_probe.get("tick_accel_source", "-"),
+            "tick_aggressor_trusted_count": _safe_int(
+                feature_probe.get("tick_aggressor_trusted_count"),
+                0,
+            ),
+            "tick_aggressor_pressure_usable": _buy_recovery_probe_tick_pressure_usable(feature_probe),
         }
     )
+    if not _buy_recovery_probe_tick_pressure_usable(feature_probe):
+        fields["ai_wait_rebound_recheck_reason"] = "tick_aggressor_pressure_unusable"
+        return fields
     if buy_pressure < min_buy_pressure:
         fields["ai_wait_rebound_recheck_reason"] = "buy_pressure_below_min"
+        return fields
+    if not micro_vwap_available:
+        fields["ai_wait_rebound_recheck_reason"] = "micro_vwap_unavailable"
         return fields
     if micro_vwap_bp < min_micro_vwap_bp:
         fields["ai_wait_rebound_recheck_reason"] = "micro_vwap_below_min"
@@ -22124,8 +22635,19 @@ def _arm_ai_wait_rebound_recheck_anchor(
         "buy_pressure_10t": _safe_float((ai_decision or {}).get("buy_pressure_10t"), 0.0),
         "micro_vwap_bp": _safe_float((ai_decision or {}).get("curr_vs_micro_vwap_bp"), 0.0),
         "curr_vs_micro_vwap_bp": _safe_float((ai_decision or {}).get("curr_vs_micro_vwap_bp"), 0.0),
+        "micro_vwap_available": _truthy_field((ai_decision or {}).get("micro_vwap_available")),
+        "minute_candle_context_quality": (ai_decision or {}).get("minute_candle_context_quality", "unknown"),
+        "minute_candle_window_fresh": _truthy_field((ai_decision or {}).get("minute_candle_window_fresh")),
+        "minute_candle_latest_age_ms": (ai_decision or {}).get("minute_candle_latest_age_ms", "-"),
+        "tick_context_quality": (ai_decision or {}).get("tick_context_quality", "unknown"),
+        "tick_context_stale": (ai_decision or {}).get("tick_context_stale", "unknown"),
+        "tick_accel_source": (ai_decision or {}).get("tick_accel_source", "-"),
         "tick_accel": _safe_float((ai_decision or {}).get("tick_acceleration_ratio"), 0.0),
         "tick_acceleration_ratio": _safe_float((ai_decision or {}).get("tick_acceleration_ratio"), 0.0),
+        "tick_aggressor_trusted_count": _safe_int((ai_decision or {}).get("tick_aggressor_trusted_count"), 0),
+        "tick_aggressor_pressure_usable": _truthy_field(
+            (ai_decision or {}).get("tick_aggressor_pressure_usable")
+        ),
     }
     _mutate_stock_state(
         stock,
@@ -23075,6 +23597,8 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                                     "tick_acceleration_ratio": feature_probe.get("tick_accel", 0.0),
                                     "micro_vwap_bp": feature_probe.get("micro_vwap_bp", 0.0),
                                     "curr_vs_micro_vwap_bp": feature_probe.get("micro_vwap_bp", 0.0),
+                                    "micro_vwap_available": feature_probe.get("micro_vwap_available", False),
+                                    **_build_tick_source_quality_log_fields(feature_probe),
                                 },
                                 'last_watching_ai_feature_probe_at': now_ts,
                                 'last_watching_ai_state_signature': state_signature,
@@ -23385,6 +23909,19 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                                         "early_accel_strong_bundle_recheck_curr_vs_micro_vwap_bp": (
                                             early_accel_strong_bundle_recheck.get("curr_vs_micro_vwap_bp") or "0.00"
                                         ),
+                                        "early_accel_strong_bundle_recheck_micro_vwap_available": str(
+                                            bool(early_accel_strong_bundle_recheck.get("micro_vwap_available"))
+                                        ).lower(),
+                                        "early_accel_strong_bundle_recheck_minute_candle_context_quality": (
+                                            early_accel_strong_bundle_recheck.get("minute_candle_context_quality")
+                                            or "unknown"
+                                        ),
+                                        "early_accel_strong_bundle_recheck_minute_candle_window_fresh": str(
+                                            bool(early_accel_strong_bundle_recheck.get("minute_candle_window_fresh"))
+                                        ).lower(),
+                                        "early_accel_strong_bundle_recheck_minute_candle_latest_age_ms": (
+                                            early_accel_strong_bundle_recheck.get("minute_candle_latest_age_ms") or 0
+                                        ),
                                         "early_accel_strong_bundle_recheck_buy_pressure_10t": (
                                             early_accel_strong_bundle_recheck.get("buy_pressure_10t") or "0.00"
                                         ),
@@ -23519,6 +24056,24 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                                         ),
                                         'score65_74_recovery_probe_last_micro_vwap_bp': float(
                                             feature_probe.get("micro_vwap_bp", 0.0) or 0.0
+                                        ),
+                                        'score65_74_recovery_probe_last_micro_vwap_available': bool(
+                                            feature_probe.get("micro_vwap_available", False)
+                                        ),
+                                        'score65_74_recovery_probe_last_minute_candle_context_quality': (
+                                            feature_probe.get("minute_candle_context_quality") or "unknown"
+                                        ),
+                                        'score65_74_recovery_probe_last_minute_candle_window_fresh': bool(
+                                            feature_probe.get("minute_candle_window_fresh", False)
+                                        ),
+                                        'score65_74_recovery_probe_last_minute_candle_latest_age_ms': (
+                                            feature_probe.get("minute_candle_latest_age_ms", "-")
+                                        ),
+                                        'score65_74_recovery_probe_last_tick_aggressor_trusted_count': (
+                                            feature_probe.get("tick_aggressor_trusted_count", 0)
+                                        ),
+                                        'score65_74_recovery_probe_last_tick_aggressor_pressure_usable': bool(
+                                            feature_probe.get("tick_aggressor_pressure_usable", False)
                                         ),
                                     },
                                 )
@@ -26642,6 +27197,12 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 cooldowns=cooldowns,
             )
             loss_reentry_rebound_bypass_applied = True
+        submit_pressure_usable = microstructure_submit_log_fields.get("tick_aggressor_pressure_usable")
+        if submit_pressure_usable is None:
+            submit_pressure_usable = entry_orderbook_micro_fields.get("tick_aggressor_pressure_usable")
+        submit_trusted_count = microstructure_submit_log_fields.get("tick_aggressor_trusted_count")
+        if submit_trusted_count is None:
+            submit_trusted_count = entry_orderbook_micro_fields.get("tick_aggressor_trusted_count")
         order_sent_ts = time.time()
         successful_orders.append({
             'tag': request['tag'], 'qty': qty, 'price': price, 'ord_no': ord_no, 'tif': request['tif'],
@@ -26666,6 +27227,8 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             'buy_pressure_10t': microstructure_submit_log_fields.get('buy_pressure_10t')
             or entry_orderbook_micro_fields.get('buy_pressure_10t')
             or stock.get('last_buy_pressure_10t'),
+            'tick_aggressor_pressure_usable': submit_pressure_usable,
+            'tick_aggressor_trusted_count': submit_trusted_count,
             'orderbook_micro_state': entry_orderbook_micro_fields.get('orderbook_micro_state'),
             'latency_state': latency_gate.get('latency_state'),
             'mark_price_at_submit': int(latency_gate.get('latest_price', 0) or curr_price or 0),
@@ -28300,6 +28863,8 @@ def _maybe_reprice_pending_entry_order(stock, code, strategy, *, timeout_sec=Non
         entry_adm_ev_pct=order.get("entry_adm_ev_pct"),
         lifecycle_matrix_selected_action=order.get("lifecycle_matrix_selected_action"),
         buy_pressure_10t=order.get("buy_pressure_10t"),
+        tick_aggressor_pressure_usable=order.get("tick_aggressor_pressure_usable"),
+        tick_aggressor_trusted_count=order.get("tick_aggressor_trusted_count"),
         orderbook_micro_state=micro_state,
         latency_state=_entry_reprice_latency_state_from_snapshot(snapshot),
         simulated_order=bool(order.get("simulated_order")),
@@ -28454,6 +29019,8 @@ def _maybe_reprice_pending_entry_order(stock, code, strategy, *, timeout_sec=Non
         "entry_adm_ev_pct": order.get("entry_adm_ev_pct"),
         "lifecycle_matrix_selected_action": order.get("lifecycle_matrix_selected_action"),
         "buy_pressure_10t": order.get("buy_pressure_10t"),
+        "tick_aggressor_pressure_usable": order.get("tick_aggressor_pressure_usable"),
+        "tick_aggressor_trusted_count": order.get("tick_aggressor_trusted_count"),
         "mark_price_at_submit": order.get("mark_price_at_submit") or order.get("submitted_mark_price"),
     }
     with ENTRY_LOCK:
@@ -30844,20 +31411,8 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                             )
 
                             _ra_feat = stock.get('last_reversal_features', {})
-                            if _ra_feat:
-                                _ra_source_quality = reversal_feature_source_quality(_ra_feat)
-                                _ra_checks = [
-                                    _ra_feat.get('buy_pressure_10t', 0) >= _rule_float('REVERSAL_ADD_MIN_BUY_PRESSURE', 55),
-                                    (not _ra_source_quality.get("reversal_feature_stale"))
-                                    and _ra_feat.get('tick_acceleration_ratio', 0) >= _rule_float('REVERSAL_ADD_MIN_TICK_ACCEL', 0.95),
-                                    not _ra_feat.get('large_sell_print_detected', True),
-                                    (not _ra_source_quality.get("reversal_feature_stale"))
-                                    and _ra_feat.get('curr_vs_micro_vwap_bp', -999) >= _rule_float('REVERSAL_ADD_VWAP_BP_MIN', -5.0),
-                                ]
-                                _ra_supply_ok = sum(_ra_checks) >= 3
-                            else:
-                                _ra_bp = float(stock.get('last_reversal_features', {}).get('buy_pressure_10t', 50.0))
-                                _ra_supply_ok = _ra_bp >= _rule_float('REVERSAL_ADD_MIN_BUY_PRESSURE', 55)
+                            _ra_supply_context = _reversal_add_runtime_supply_context(_ra_feat)
+                            _ra_supply_ok = bool(_ra_supply_context.get("supply_ok"))
 
                             _ra_candidate_ok = (
                                 (_ra_pnl_min <= profit_rate <= _ra_pnl_max)
@@ -30937,12 +31492,14 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
         _ra_eval_sec = _rule_int('REVERSAL_ADD_POST_EVAL_SEC', 25)
         _ra_elapsed = now_ts - _ra_executed_at
         _ra_feat = stock.get('last_reversal_features', {})
+        _ra_source_quality = reversal_feature_source_quality(_ra_feat) if _ra_feat else {}
+        _ra_feature_usable = not bool(_ra_source_quality.get("reversal_feature_stale"))
         _ra_floor = float(stock.get('reversal_add_profit_floor', -1.0))
         _ra_post_fail = (
             (holding_score_negative_exit_usable and current_ai_score < 55)
             or profit_rate < _ra_floor - 0.05
-            or _ra_feat.get('large_sell_print_detected', False)
-            or _ra_feat.get('tick_acceleration_ratio', 1.0) < 0.90
+            or (_ra_feature_usable and _ra_feat.get('large_sell_print_detected', False))
+            or (_ra_feature_usable and _ra_feat.get('tick_acceleration_ratio', 1.0) < 0.90)
         )
         if _ra_post_fail and _ra_elapsed < _ra_eval_sec:
             is_sell_signal = True
@@ -31266,6 +31823,10 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                 ),
                 float(dynamic_stop_pct),
             )
+            soft_stop_grace_blocked_by_scale_in_state = bool(
+                stock.get("reversal_add_used")
+            ) or str(stock.get("reversal_add_state", "") or "").strip() == "POST_ADD_EVAL"
+            soft_stop_effective_grace_sec = 0 if soft_stop_grace_blocked_by_scale_in_state else soft_stop_grace_sec
             raw_quote_stale = (ws_data or {}).get("quote_stale") or stock.get("quote_stale_at_submit")
             quote_stale_for_dynamic_grace = (
                 str(raw_quote_stale).strip().lower() in {"1", "true", "yes", "y", "stale"}
@@ -31335,6 +31896,7 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
             soft_stop_within_grace = (
                 soft_stop_grace_enabled
                 and soft_stop_grace_sec > 0
+                and not soft_stop_grace_blocked_by_scale_in_state
                 and soft_stop_grace_elapsed_sec < soft_stop_grace_sec
                 and profit_rate > soft_stop_emergency_pct
             )
@@ -31342,6 +31904,7 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                 soft_stop_grace_enabled
                 and soft_stop_grace_extend_enabled
                 and soft_stop_grace_extend_sec > 0
+                and not soft_stop_grace_blocked_by_scale_in_state
                 and soft_stop_grace_elapsed_sec < (soft_stop_grace_sec + soft_stop_grace_extend_sec)
                 and profit_rate > soft_stop_emergency_pct
                 and profit_rate >= (float(dynamic_stop_pct) - soft_stop_grace_extend_buffer_pct)
@@ -31403,6 +31966,33 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                     soft_stop_dynamic_grace_ai_score_source=soft_stop_dynamic_grace_decision.get("ai_score_source", "-"),
                     soft_stop_dynamic_grace_ai_score_data_quality=soft_stop_dynamic_grace_decision.get("ai_score_data_quality", "-"),
                     soft_stop_dynamic_grace_ai_score_excluded_reason=soft_stop_dynamic_grace_decision.get("ai_score_excluded_reason", "-"),
+                    tick_aggressor_trusted_count=soft_stop_dynamic_grace_decision.get(
+                        "tick_aggressor_trusted_count", "-"
+                    ),
+                    tick_aggressor_pressure_usable=soft_stop_dynamic_grace_decision.get(
+                        "tick_aggressor_pressure_usable", "-"
+                    ),
+                    tick_aggressor_pressure_source_quality=soft_stop_dynamic_grace_decision.get(
+                        "tick_aggressor_pressure_source_quality", "-"
+                    ),
+                    curr_vs_micro_vwap_bp=f"{_safe_float(soft_stop_dynamic_grace_decision.get('curr_vs_micro_vwap_bp'), 0.0):.2f}",
+                    micro_vwap_available=soft_stop_dynamic_grace_decision.get("micro_vwap_available", "-"),
+                    minute_candle_context_quality=soft_stop_dynamic_grace_decision.get(
+                        "minute_candle_context_quality", "-"
+                    ),
+                    minute_candle_window_fresh=soft_stop_dynamic_grace_decision.get(
+                        "minute_candle_window_fresh", "-"
+                    ),
+                    minute_candle_latest_age_ms=soft_stop_dynamic_grace_decision.get(
+                        "minute_candle_latest_age_ms", "-"
+                    ),
+                    micro_context_usable=soft_stop_dynamic_grace_decision.get("micro_context_usable", "-"),
+                    reversal_feature_source_quality=soft_stop_dynamic_grace_decision.get(
+                        "reversal_feature_source_quality", "-"
+                    ),
+                    reversal_feature_stale_reason=soft_stop_dynamic_grace_decision.get(
+                        "reversal_feature_stale_reason", "-"
+                    ),
                     profit_rate=f"{profit_rate:+.2f}",
                     soft_stop_pct=f"{dynamic_stop_pct:+.2f}",
                     emergency_pct=f"{_safe_float(soft_stop_dynamic_grace_decision.get('emergency_pct'), soft_stop_emergency_pct):+.2f}",
@@ -31459,7 +32049,7 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                 dynamic_stop_pct=dynamic_stop_pct,
                 emergency_pct=soft_stop_emergency_pct,
                 grace_elapsed_sec=soft_stop_grace_elapsed_sec,
-                grace_sec=soft_stop_grace_sec,
+                grace_sec=soft_stop_effective_grace_sec,
             )
             if soft_stop_expert_decision.get("active_after_time_gate"):
                 _emit_soft_stop_expert_observations(
@@ -31475,8 +32065,9 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
             if (
                 soft_stop_expert_decision.get("enabled")
                 and soft_stop_expert_decision.get("active_after_time_gate")
-                and soft_stop_grace_elapsed_sec >= soft_stop_grace_sec
+                and soft_stop_grace_elapsed_sec >= soft_stop_effective_grace_sec
             ):
+                soft_stop_expert_features = soft_stop_expert_decision.get("features") or {}
                 _log_holding_pipeline(
                     stock,
                     code,
@@ -31493,6 +32084,29 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                     should_extend=bool(soft_stop_expert_decision.get("should_extend")),
                     recovery_prob_shadow=f"{soft_stop_expert_decision.get('recovery_prob_shadow', 0.0):.3f}",
                     hierarchy="stop_arbitration|thesis_invalidation|orderbook_absorption",
+                    tick_aggressor_trusted_count=soft_stop_expert_features.get(
+                        "tick_aggressor_trusted_count", "-"
+                    ),
+                    tick_aggressor_pressure_usable=soft_stop_expert_features.get(
+                        "tick_aggressor_pressure_usable", "-"
+                    ),
+                    tick_aggressor_pressure_source_quality=soft_stop_expert_features.get(
+                        "tick_aggressor_pressure_source_quality", "-"
+                    ),
+                    curr_vs_micro_vwap_bp=soft_stop_expert_features.get("curr_vs_micro_vwap_bp", "-"),
+                    micro_vwap_available=soft_stop_expert_features.get("micro_vwap_available", "-"),
+                    minute_candle_context_quality=soft_stop_expert_features.get(
+                        "minute_candle_context_quality", "-"
+                    ),
+                    minute_candle_window_fresh=soft_stop_expert_features.get("minute_candle_window_fresh", "-"),
+                    minute_candle_latest_age_ms=soft_stop_expert_features.get("minute_candle_latest_age_ms", "-"),
+                    micro_context_usable=soft_stop_expert_features.get("micro_context_usable", "-"),
+                    reversal_feature_source_quality=soft_stop_expert_features.get(
+                        "reversal_feature_source_quality", "-"
+                    ),
+                    reversal_feature_stale_reason=soft_stop_expert_features.get(
+                        "reversal_feature_stale_reason", "-"
+                    ),
                 )
             soft_stop_expert_within_grace = False
             if soft_stop_expert_decision.get("should_extend") and not soft_stop_within_grace:
@@ -31534,7 +32148,7 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
             if (
                 soft_stop_expert_decision.get("enabled")
                 and soft_stop_expert_decision.get("active_after_time_gate")
-                and soft_stop_grace_elapsed_sec >= soft_stop_grace_sec
+                and soft_stop_grace_elapsed_sec >= soft_stop_effective_grace_sec
                 and not soft_stop_within_grace
                 and not soft_stop_expert_within_grace
             ):
@@ -31557,11 +32171,19 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                 dynamic_stop_pct=dynamic_stop_pct,
                 emergency_pct=soft_stop_emergency_pct,
                 grace_elapsed_sec=soft_stop_grace_elapsed_sec,
-                grace_sec=soft_stop_grace_sec,
+                grace_sec=soft_stop_effective_grace_sec,
                 curr_price=curr_p,
                 buy_price=buy_p,
             )
-            if whipsaw_decision.get("should_confirm") and not soft_stop_within_grace:
+            whipsaw_blocked_by_scale_in_state = soft_stop_expert_decision.get("exclusion_reason") in {
+                "reversal_add_used",
+                "reversal_add_post_eval",
+            }
+            if (
+                whipsaw_decision.get("should_confirm")
+                and not soft_stop_within_grace
+                and not whipsaw_blocked_by_scale_in_state
+            ):
                 if _safe_float(whipsaw_decision.get("started_at"), 0.0) <= 0:
                     _mutate_stock_state(
                         stock,
@@ -31695,6 +32317,33 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                         soft_stop_dynamic_grace_ai_score_source=soft_stop_dynamic_grace_decision.get("ai_score_source", "-"),
                         soft_stop_dynamic_grace_ai_score_data_quality=soft_stop_dynamic_grace_decision.get("ai_score_data_quality", "-"),
                         soft_stop_dynamic_grace_ai_score_excluded_reason=soft_stop_dynamic_grace_decision.get("ai_score_excluded_reason", "-"),
+                        tick_aggressor_trusted_count=soft_stop_dynamic_grace_decision.get(
+                            "tick_aggressor_trusted_count", "-"
+                        ),
+                        tick_aggressor_pressure_usable=soft_stop_dynamic_grace_decision.get(
+                            "tick_aggressor_pressure_usable", "-"
+                        ),
+                        tick_aggressor_pressure_source_quality=soft_stop_dynamic_grace_decision.get(
+                            "tick_aggressor_pressure_source_quality", "-"
+                        ),
+                        curr_vs_micro_vwap_bp=f"{_safe_float(soft_stop_dynamic_grace_decision.get('curr_vs_micro_vwap_bp'), 0.0):.2f}",
+                        micro_vwap_available=soft_stop_dynamic_grace_decision.get("micro_vwap_available", "-"),
+                        minute_candle_context_quality=soft_stop_dynamic_grace_decision.get(
+                            "minute_candle_context_quality", "-"
+                        ),
+                        minute_candle_window_fresh=soft_stop_dynamic_grace_decision.get(
+                            "minute_candle_window_fresh", "-"
+                        ),
+                        minute_candle_latest_age_ms=soft_stop_dynamic_grace_decision.get(
+                            "minute_candle_latest_age_ms", "-"
+                        ),
+                        micro_context_usable=soft_stop_dynamic_grace_decision.get("micro_context_usable", "-"),
+                        reversal_feature_source_quality=soft_stop_dynamic_grace_decision.get(
+                            "reversal_feature_source_quality", "-"
+                        ),
+                        reversal_feature_stale_reason=soft_stop_dynamic_grace_decision.get(
+                            "reversal_feature_stale_reason", "-"
+                        ),
                         exit_rule_candidate="scalp_soft_stop_pct",
                     )
                 is_sell_signal = True
@@ -33150,9 +33799,25 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                     **_append_reversal_add_probe_fields(
                         {
                             "state": "REVERSAL_CANDIDATE",
+                            "scale_in_arm": "AVG_DOWN",
+                            "scale_in_blocker_namespace": _scale_in_namespace_for_arm("AVG_DOWN", "add_order_failed"),
+                            "scale_in_blocker_reason": "add_order_failed",
                             "blocked_reason": "add_order_failed",
                             "profit_rate": f"{profit_rate:+.2f}",
                             "ai_score": f"{current_ai_score:.0f}",
+                            "current_ai_score": f"{current_ai_score:.0f}",
+                            "ai_score_source": _ai_score_source_for_snapshot(stock),
+                            "metric_role": "funnel_count",
+                            "decision_authority": "scale_in_attribution_source_only",
+                            "runtime_effect": False,
+                            "allowed_runtime_apply": False,
+                            "actual_order_submitted": False,
+                            "broker_order_forbidden": True,
+                            "source_quality_gate": "avg_down_reversal_features_and_blocker_present",
+                            "forbidden_uses": (
+                                "real_scale_in_submit|intraday_threshold_mutation|"
+                                "broker_guard_bypass|cap_release"
+                            ),
                         },
                         scale_in_action.get("probe"),
                     ),
@@ -33238,6 +33903,19 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                                     "blocked_reason": _ra_probe_reason,
                                     "profit_rate": f"{profit_rate:+.2f}",
                                     "ai_score": f"{current_ai_score:.0f}",
+                                    "current_ai_score": f"{current_ai_score:.0f}",
+                                    "ai_score_source": _ai_score_source_for_snapshot(stock),
+                                    "metric_role": "funnel_count",
+                                    "decision_authority": "scale_in_attribution_source_only",
+                                    "runtime_effect": False,
+                                    "allowed_runtime_apply": False,
+                                    "actual_order_submitted": False,
+                                    "broker_order_forbidden": True,
+                                    "source_quality_gate": "avg_down_reversal_features_and_blocker_present",
+                                    "forbidden_uses": (
+                                        "real_scale_in_submit|intraday_threshold_mutation|"
+                                        "broker_guard_bypass|cap_release"
+                                    ),
                                 },
                                 _ra_probe.get("probe"),
                             ),
@@ -33315,8 +33993,22 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                                 "scale_in_blocker_namespace": _scale_in_namespace_for_arm("AVG_DOWN", gate.get('reason') or "-"),
                                 "scale_in_blocker_reason": gate.get('reason') or "-",
                                 "gate_reason": gate.get('reason') or "-",
+                                "blocked_reason": gate.get('reason') or "-",
                                 "profit_rate": f"{profit_rate:+.2f}",
                                 "ai_score": f"{current_ai_score:.0f}",
+                                "current_ai_score": f"{current_ai_score:.0f}",
+                                "ai_score_source": _ai_score_source_for_snapshot(stock),
+                                "metric_role": "funnel_count",
+                                "decision_authority": "scale_in_attribution_source_only",
+                                "runtime_effect": False,
+                                "allowed_runtime_apply": False,
+                                "actual_order_submitted": False,
+                                "broker_order_forbidden": True,
+                                "source_quality_gate": "avg_down_reversal_features_and_blocker_present",
+                                "forbidden_uses": (
+                                    "real_scale_in_submit|intraday_threshold_mutation|"
+                                    "broker_guard_bypass|cap_release"
+                                ),
                             },
                             reversal_probe.get("probe"),
                         ),

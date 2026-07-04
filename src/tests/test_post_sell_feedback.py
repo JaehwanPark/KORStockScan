@@ -16,6 +16,17 @@ def _make_candle(ts: str, high: int, low: int, close: int) -> dict:
     }
 
 
+def test_post_sell_minute_forward_source_quality_marks_truncated_ka10080_window_partial():
+    quality = feedback_mod._minute_forward_source_quality(
+        {10: {"bars": 10}},
+        {"truncated_window": True},
+    )
+
+    assert quality["minute_candle_source_quality"] == "partial_window"
+    assert quality["minute_candle_source_quality_gate"] == "source_quality_warning"
+    assert quality["minute_candle_source_quality_reason"] == "ka10080_truncated_window"
+
+
 def test_record_and_evaluate_post_sell_feedback(monkeypatch, tmp_path):
     monkeypatch.setattr(feedback_mod, "DATA_DIR", tmp_path)
     monkeypatch.setattr(
@@ -100,9 +111,14 @@ def test_record_and_evaluate_post_sell_feedback(monkeypatch, tmp_path):
     assert summary.evaluated_candidates == 2
     assert summary.outcome_counts.get("MISSED_UPSIDE", 0) == 1
     assert summary.outcome_counts.get("GOOD_EXIT", 0) == 1
+    assert summary.minute_candle_source_quality_counts == {"pass": 2}
     evaluations = feedback_mod._load_jsonl(feedback_mod._evaluation_path("2026-04-08"))
     assert "metrics_30m" in evaluations[0]
     assert "metrics_60m" in evaluations[0]
+    assert evaluations[0]["minute_candle_source_quality"] == "pass"
+    assert evaluations[0]["minute_candle_source_quality_gate"] == "pass"
+    assert evaluations[0]["minute_candle_forward_10m_bars"] == 10
+    assert evaluations[0]["minute_candle_source_meta"]["api_id"] == "ka10080"
 
     text = feedback_mod.format_post_sell_feedback_summary(summary)
     assert "MISSED_UPSIDE 1" in text
