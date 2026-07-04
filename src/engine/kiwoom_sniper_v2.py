@@ -59,7 +59,11 @@ from src.engine.risk.manual_control_exclusion import (
     normalize_manual_control_exclusion_code,
 )
 from src.engine.scalping.rising_missed_selection_prior import rising_missed_selection_rank_delta
-from src.engine.scalping.entry_ai_gate import get_entry_buy_score_threshold
+from src.engine.scalping.entry_ai_gate import (
+    entry_buy_decision_allowed,
+    evaluate_entry_score_role_gate,
+    get_entry_buy_score_threshold,
+)
 from src.engine.sniper_entry_state import ENTRY_LOCK
 from src.engine.sniper_config import CONF
 from src.engine.sniper_time import (
@@ -859,6 +863,80 @@ def _prune_ws_subscriptions_for_inactive_targets(targets):
 # =====================================================================
 # 🧠 상태 머신 (State Machine) 핸들러 
 # =====================================================================
+def _legacy_current_ai_score(stock):
+    if isinstance(stock, dict) and stock.get("current_ai_score") not in (None, "", "-"):
+        return _safe_float(stock.get("current_ai_score"), 50.0)
+    return _safe_float((stock or {}).get('rt_ai_prob'), 0.5) * 100.0
+
+
+def _legacy_entry_score_role_gate(stock, ws_data, current_ai_score):
+    stock = stock if isinstance(stock, dict) else {}
+    ai_action = (
+        stock.get("last_watching_ai_action")
+        or stock.get("ai_action")
+        or stock.get("last_ai_action")
+        or ""
+    )
+    source = (
+        stock.get("last_watching_ai_result_source")
+        or stock.get("ai_result_source")
+        or stock.get("current_ai_score_source")
+        or stock.get("ai_score_source")
+        or ""
+    )
+    ai_result = {
+        "score": current_ai_score,
+        "action": ai_action,
+        "ai_result_source": source,
+        "ai_parse_ok": stock.get("last_watching_ai_parse_ok", stock.get("ai_parse_ok")),
+        "ai_parse_fail": stock.get("last_watching_ai_parse_fail", stock.get("ai_parse_fail")),
+        "ai_fallback_score_50": stock.get("ai_fallback_score_50", stock.get("last_watching_ai_fallback_score_50", False)),
+        "tick_context_stale": stock.get("tick_context_stale", (ws_data or {}).get("tick_context_stale")),
+        "quote_stale": stock.get("quote_stale", (ws_data or {}).get("quote_stale")),
+        "context_stale": stock.get("context_stale", (ws_data or {}).get("context_stale")),
+    }
+    gate = evaluate_entry_score_role_gate(
+        ai_result,
+        ws_data=ws_data,
+        source_stage="legacy_kiwoom_sniper_v2_watching",
+        ai_score=current_ai_score,
+        ai_action=ai_action,
+    )
+    stock["legacy_entry_score_role_gate"] = gate.get("entry_score_role_gate", "unknown")
+    stock["legacy_entry_score_excluded_reason"] = gate.get("entry_score_excluded_reason", "-")
+    stock["legacy_entry_score_source"] = gate.get("entry_score_source", "unknown")
+    stock["legacy_entry_score_action"] = gate.get("entry_score_action", "-")
+    stock["entry_score_role_gate"] = gate.get("entry_score_role_gate", "unknown")
+    stock["entry_score_excluded_reason"] = gate.get("entry_score_excluded_reason", "-")
+    return gate
+
+
+def _legacy_holding_score_role_context(stock, current_ai_score, *, is_critical_zone):
+    now_ts = time.time()
+    ctx = sniper_state_handlers._holding_score_runtime_context(
+        stock if isinstance(stock, dict) else {},
+        current_ai_score=current_ai_score,
+        now_ts=now_ts,
+        is_critical_zone=is_critical_zone,
+    )
+    if isinstance(stock, dict):
+        stock["legacy_holding_score_role_gate"] = ctx.get("holding_score_role_gate", "unknown")
+        stock["legacy_holding_score_negative_exit_usable"] = bool(ctx.get("usable_for_negative_exit", False))
+        stock["legacy_holding_score_negative_exit_excluded_reason"] = ctx.get(
+            "negative_exit_excluded_reason",
+            "-",
+        )
+        stock["legacy_holding_score_role_source"] = ctx.get("source", "-")
+        stock["legacy_holding_score_role_data_quality"] = ctx.get("data_quality", "-")
+        stock["holding_score_role_gate"] = ctx.get("holding_score_role_gate", "unknown")
+        stock["holding_score_negative_exit_usable"] = bool(ctx.get("usable_for_negative_exit", False))
+        stock["holding_score_negative_exit_excluded_reason"] = ctx.get(
+            "negative_exit_excluded_reason",
+            "-",
+        )
+    return ctx
+
+
 def check_watching_conditions(stock, code, ws_data, admin_id, radar=None, ai_engine=None):
     """
     WATCHING 상태 종목이 BUY_ORDERED로 전환되지 못하는 이유를 분석하여 문자열로 반환합니다.
@@ -952,13 +1030,26 @@ def check_watching_conditions(stock, code, ws_data, admin_id, radar=None, ai_eng
                 if gap_pct >= 1.5:
                     return f"포착가 대비 갭 상승 (gap_pct={gap_pct:.1f}% >= 1.5%)"
             
-            # AI 점수 체크
-            current_ai_score = float(stock.get('rt_ai_prob', 0.5) or 0.5) * 100
+            # AI score role gate: legacy diagnostic path follows the main entry submit contract.
+            current_ai_score = _legacy_current_ai_score(stock)
             entry_buy_score_threshold = get_entry_buy_score_threshold()
-            if current_ai_score < entry_buy_score_threshold and current_ai_score != 50:
+            entry_score_role_gate = _legacy_entry_score_role_gate(stock, ws_data, current_ai_score)
+            if not entry_score_role_gate.get("entry_score_usable_for_entry_submit"):
                 return (
-                    f"AI 점수 불충족 "
-                    f"(current_ai_score={current_ai_score} < {entry_buy_score_threshold:g})"
+                    "AI score source unusable "
+                    f"(reason={entry_score_role_gate.get('entry_score_excluded_reason', '-')}, "
+                    f"source={entry_score_role_gate.get('entry_score_source', 'unknown')})"
+                )
+            current_ai_action = entry_score_role_gate.get("entry_score_action") or "-"
+            if not entry_buy_decision_allowed(current_ai_action, current_ai_score):
+                if current_ai_score < entry_buy_score_threshold:
+                    return (
+                        f"AI 점수 불충족 "
+                        f"(current_ai_score={current_ai_score} < {entry_buy_score_threshold:g})"
+                    )
+                return (
+                    f"AI action BUY 아님 "
+                    f"(action={current_ai_action}, current_ai_score={current_ai_score})"
                 )
     
     # 스윙 전략 검사 (KOSDAQ_ML / KOSPI_ML)
@@ -4173,7 +4264,7 @@ def evaluate_scalping_exit(stock, code, ws_data, curr_p, buy_p, profit_rate, pea
     strong_trailing_ai_score = getattr(TRADING_RULES, 'SCALP_TRAILING_STRONG_AI_SCORE', 75)
     weak_trailing = getattr(TRADING_RULES, 'SCALP_TRAILING_LIMIT_WEAK', 0.4)
     strong_trailing = getattr(TRADING_RULES, 'SCALP_TRAILING_LIMIT_STRONG', 0.8)
-    current_ai_score = float(stock.get('rt_ai_prob', 0.5) or 0.5) * 100
+    current_ai_score_raw = _legacy_current_ai_score(stock)
     current_vpw = float(ws_data.get('v_pw', 0) or 0.0)
 
     # v_pw 히스토리 관리
@@ -4194,6 +4285,14 @@ def evaluate_scalping_exit(stock, code, ws_data, curr_p, buy_p, profit_rate, pea
     # 시간 가치(Time Decay)
     hold_start = _parse_holding_started_at(stock)
     held_seconds = (datetime.now() - hold_start).total_seconds() if hold_start else 0
+    is_critical_zone = abs(profit_rate - safe_profit_pct) <= 0.20 or profit_rate >= safe_profit_pct or profit_rate < 0
+    holding_score_ctx = _legacy_holding_score_role_context(
+        stock,
+        current_ai_score_raw,
+        is_critical_zone=is_critical_zone,
+    )
+    current_ai_score = _safe_float(holding_score_ctx.get("score"), 50.0)
+    holding_score_negative_exit_usable = bool(holding_score_ctx.get("usable_for_negative_exit", False))
     last_peak_update = stock.get('last_peak_update_at')
     if last_peak_update is None:
         stock['last_peak_update_at'] = datetime.now()
@@ -4231,14 +4330,18 @@ def evaluate_scalping_exit(stock, code, ws_data, curr_p, buy_p, profit_rate, pea
     # Dynamic Trailing (peak 확보 이후만)
     if peak_profit >= trailing_start_pct and profit_rate >= safe_profit_pct:
         drawdown = (highest_prices[code] - curr_p) / highest_prices[code] * 100 if highest_prices[code] > 0 else 0
-        if current_ai_score < momentum_decay_score_limit and held_seconds >= momentum_decay_min_hold_sec:
+        if (
+            holding_score_negative_exit_usable
+            and current_ai_score < momentum_decay_score_limit
+            and held_seconds >= momentum_decay_min_hold_sec
+        ):
             return (
                 f"AI 모멘텀 둔화 확인유예 후 익절 "
                 f"(score={current_ai_score:.0f}, hold={int(held_seconds)}s)"
             )
-        if current_ai_score >= strong_trailing_ai_score and current_vpw >= 110:
+        if holding_score_negative_exit_usable and current_ai_score >= strong_trailing_ai_score and current_vpw >= 110:
             trailing_limit = strong_trailing
-        elif current_ai_score >= 65 and current_vpw >= 105:
+        elif holding_score_negative_exit_usable and current_ai_score >= 65 and current_vpw >= 105:
             trailing_limit = (weak_trailing + strong_trailing) / 2
         else:
             trailing_limit = weak_trailing

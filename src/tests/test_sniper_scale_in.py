@@ -7532,7 +7532,7 @@ def test_watching_state_logs_latency_entry_price_guard(monkeypatch):
 
     class DummyAI:
         def analyze_target(self, *args, **kwargs):
-            return {"action": "BUY", "score": 90, "reason": "confirmed"}
+            return {"action": "BUY", "score": 90, "reason": "confirmed", "ai_result_source": "live", "ai_parse_ok": True}
 
     class DummyEventBus:
         def publish(self, *args, **kwargs):
@@ -11695,7 +11695,7 @@ def test_entry_arm_skips_strength_recheck_after_ai_confirm(monkeypatch):
 
     class DummyAI:
         def analyze_target(self, *args, **kwargs):
-            return {"action": "BUY", "score": 85, "reason": "confirmed"}
+            return {"action": "BUY", "score": 85, "reason": "confirmed", "ai_result_source": "live", "ai_parse_ok": True}
 
     state_handlers.datetime = FixedDateTime
     state_handlers.TRADING_RULES = replace(CONFIG, SCALE_IN_REQUIRE_HISTORY_TABLE=False, SCALP_ENTRY_ARM_TTL_SEC=20)

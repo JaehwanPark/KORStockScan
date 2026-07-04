@@ -46,6 +46,12 @@ def _boolish(value: Any) -> bool:
     return str(value or "").strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
+def _optional_boolish(value: Any) -> bool | None:
+    if value in (None, "", "-"):
+        return None
+    return _boolish(value)
+
+
 def _pyramid_min_profit_pct() -> float:
     return float(getattr(TRADING_RULES, "SCALPING_PYRAMID_MIN_PROFIT_PCT", 1.5) or 1.5)
 
@@ -128,6 +134,8 @@ def _pyramid_blocked_record(row: dict[str, Any]) -> dict[str, Any] | None:
         "peak_profit": _safe_float(fields.get("peak_profit")),
         "current_ai_score": _safe_float(fields.get("current_ai_score") or fields.get("ai_score")),
         "buy_pressure_10t": _safe_float(fields.get("buy_pressure_10t")),
+        "tick_aggressor_trusted_count": _safe_float(fields.get("tick_aggressor_trusted_count")),
+        "tick_aggressor_pressure_usable": _optional_boolish(fields.get("tick_aggressor_pressure_usable")),
         "tick_acceleration_ratio": _safe_float(fields.get("tick_acceleration_ratio")),
         "curr_vs_micro_vwap_bp": _safe_float(fields.get("curr_vs_micro_vwap_bp")),
         "min_profit_pct": _safe_float(fields.get("min_profit_pct")),
@@ -166,6 +174,8 @@ def _pyramid_submit_record(row: dict[str, Any]) -> dict[str, Any]:
         "peak_profit": _safe_float(fields.get("peak_profit")),
         "current_ai_score": _safe_float(fields.get("current_ai_score") or fields.get("ai_score")),
         "buy_pressure_10t": _safe_float(fields.get("buy_pressure_10t")),
+        "tick_aggressor_trusted_count": _safe_float(fields.get("tick_aggressor_trusted_count")),
+        "tick_aggressor_pressure_usable": _optional_boolish(fields.get("tick_aggressor_pressure_usable")),
         "tick_acceleration_ratio": _safe_float(fields.get("tick_acceleration_ratio")),
         "curr_vs_micro_vwap_bp": _safe_float(fields.get("curr_vs_micro_vwap_bp")),
         "pyramid_submit_seen": True,
@@ -190,9 +200,15 @@ def _update_snapshot(item: dict[str, Any], row: dict[str, Any]) -> None:
     for key in (
         "current_ai_score",
         "buy_pressure_10t",
+        "tick_aggressor_trusted_count",
+        "tick_aggressor_pressure_usable",
         "tick_acceleration_ratio",
         "curr_vs_micro_vwap_bp",
     ):
+        if key == "tick_aggressor_pressure_usable":
+            if fields.get(key) is not None:
+                item[key] = _optional_boolish(fields.get(key))
+            continue
         value = _safe_float(fields.get(key) or fields.get("ai_score" if key == "current_ai_score" else key))
         if value is not None:
             item[key] = value
@@ -408,7 +424,10 @@ def build_report(
             "window_policy": "same_day_intraday_pipeline_events_continuously_updated",
             "sample_floor": "1_pyramid_blocked_reason_or_pyramid_submit_event",
             "primary_decision_metric": "pyramid_feedback_label_counts_and_blocker_cluster_rates",
-            "source_quality_gate": "pipeline_event_record_id_or_stock_code_join_with_required_provenance",
+            "source_quality_gate": (
+                "pipeline_event_record_id_or_stock_code_join_with_required_provenance_and_"
+                "tick_aggressor_pressure_provenance_for_buy_pressure"
+            ),
             "forbidden_uses": FORBIDDEN_USES,
         },
         "one_share_metric_contract": {

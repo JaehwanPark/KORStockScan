@@ -115,6 +115,8 @@ def test_entry_hurdle_backtest_classifies_overblocking_from_existing_artifacts(t
                             "source_signature": "PRICE_JUMP_START,VOLUME_SURGE_POSITIVE",
                             "curr_vs_micro_vwap_bp": "43.69",
                             "buy_pressure_10t": "93.69",
+                            "tick_aggressor_trusted_count": "3",
+                            "tick_aggressor_pressure_usable": "True",
                             "quote_stale_at_submit": "False",
                             "price_context_stale_at_submit": "False",
                             "pre_submit_overbought_guard_action": "PASS",
@@ -229,3 +231,15 @@ def test_entry_hurdle_backtest_classifies_overblocking_from_existing_artifacts(t
     assert report["code_improvement_orders"][0]["runtime_effect"] is False
     assert report["code_improvement_orders"][0]["broker_order_forbidden"] is True
     assert not report["missing_artifacts"]
+
+
+def test_entry_hurdle_micro_pressure_relief_requires_trusted_tick_pressure():
+    base = {
+        "source_signature": "PRICE_JUMP_START,VOLUME_SURGE_POSITIVE",
+        "curr_vs_micro_vwap_bp": "43.69",
+        "buy_pressure_10t": "93.69",
+    }
+
+    assert mod._signature_micro_pressure_path(base) is False
+    assert mod._signature_micro_pressure_path({**base, "tick_aggressor_pressure_usable": "True"}) is True
+    assert mod._signature_micro_pressure_path({**base, "tick_aggressor_trusted_count": "2"}) is True

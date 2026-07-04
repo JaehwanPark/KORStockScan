@@ -17,6 +17,7 @@ UNUSABLE_RESULT_SOURCES = {
     "lock_contention",
     "source_quality_insufficient",
     "timeout",
+    "unknown",
     "watching_cooldown",
 }
 UNUSABLE_RESULT_SOURCE_TOKENS = (

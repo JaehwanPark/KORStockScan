@@ -117,6 +117,8 @@ def extract_scalping_feature_packet(ws_data, recent_ticks, recent_candles=None, 
     tick_aggressor_orderbook_touch_count = int(snapshot.get("tick_aggressor_orderbook_touch_count") or 0)
     tick_aggressor_price_heuristic_count = int(snapshot.get("tick_aggressor_price_heuristic_count") or 0)
     tick_aggressor_unknown_count = int(snapshot.get("tick_aggressor_unknown_count") or 0)
+    tick_aggressor_trusted_count = int(snapshot.get("tick_aggressor_trusted_count") or 0)
+    tick_aggressor_pressure_usable = bool(snapshot.get("tick_aggressor_pressure_usable", False))
     tick_window_span_sec = None
     tick_accel_source = "no_ticks"
 
@@ -260,6 +262,8 @@ def extract_scalping_feature_packet(ws_data, recent_ticks, recent_candles=None, 
         "tick_aggressor_orderbook_touch_count": tick_aggressor_orderbook_touch_count,
         "tick_aggressor_price_heuristic_count": tick_aggressor_price_heuristic_count,
         "tick_aggressor_unknown_count": tick_aggressor_unknown_count,
+        "tick_aggressor_trusted_count": tick_aggressor_trusted_count,
+        "tick_aggressor_pressure_usable": tick_aggressor_pressure_usable,
         "tick_latest_time": tick_latest_time or "-",
         "tick_latest_age_ms": tick_latest_age_ms if tick_latest_age_ms is not None else "-",
         "tick_window_span_sec": tick_window_span_sec if tick_window_span_sec is not None else "-",
@@ -330,6 +334,8 @@ def build_scalping_feature_audit_fields(packet):
         "tick_aggressor_orderbook_touch_count": payload.get("tick_aggressor_orderbook_touch_count", 0),
         "tick_aggressor_price_heuristic_count": payload.get("tick_aggressor_price_heuristic_count", 0),
         "tick_aggressor_unknown_count": payload.get("tick_aggressor_unknown_count", 0),
+        "tick_aggressor_trusted_count": payload.get("tick_aggressor_trusted_count", 0),
+        "tick_aggressor_pressure_usable": payload.get("tick_aggressor_pressure_usable", False),
         "tick_latest_time": payload.get("tick_latest_time", "-"),
         "tick_latest_age_ms": payload.get("tick_latest_age_ms", "-"),
         "tick_window_span_sec": payload.get("tick_window_span_sec", "-"),

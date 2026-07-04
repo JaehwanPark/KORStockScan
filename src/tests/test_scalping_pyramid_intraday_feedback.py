@@ -39,6 +39,8 @@ def test_pyramid_intraday_feedback_labels_future_recovery_candidate(tmp_path):
                 "peak_profit": "+1.80",
                 "current_ai_score": 75,
                 "buy_pressure_10t": 71,
+                "tick_aggressor_trusted_count": 3,
+                "tick_aggressor_pressure_usable": True,
                 "tick_acceleration_ratio": 0.31,
                 "curr_vs_micro_vwap_bp": 66,
                 "min_ai_score": 70,
@@ -60,6 +62,8 @@ def test_pyramid_intraday_feedback_labels_future_recovery_candidate(tmp_path):
     assert item["runtime_effect"] is False
     assert item["decision_authority"] == "source_only_pyramid_intraday_feedback_no_runtime_mutation"
     assert "intraday_threshold_mutation" in item["forbidden_uses"]
+    assert item["tick_aggressor_trusted_count"] == 3
+    assert item["tick_aggressor_pressure_usable"] is True
     assert report["blocker_metrics"][0]["recovered_or_extended_rate"] == 1.0
 
 

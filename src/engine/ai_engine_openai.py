@@ -2303,6 +2303,8 @@ class GPTSniperEngine:
             "tick_sample_count",
             "tick_latest_age_ms",
             "tick_context_quality",
+            "tick_aggressor_trusted_count",
+            "tick_aggressor_pressure_usable",
             "quote_age_ms",
             "quote_age_source",
             "quote_stale",

@@ -21224,6 +21224,8 @@ def _extract_buy_recovery_probe_features(ai_engine, ws_data, recent_ticks, recen
         "tick_accel_source": features.get("tick_accel_source", "-"),
         "tick_context_stale": features.get("tick_context_stale", "unknown"),
         "tick_context_quality": features.get("tick_context_quality", "unknown"),
+        "tick_aggressor_trusted_count": features.get("tick_aggressor_trusted_count", 0),
+        "tick_aggressor_pressure_usable": features.get("tick_aggressor_pressure_usable", False),
         "quote_age_ms": features.get("quote_age_ms", "-"),
         "quote_age_source": features.get("quote_age_source", "missing"),
         "quote_stale": features.get("quote_stale", "unknown"),
@@ -21231,7 +21233,11 @@ def _extract_buy_recovery_probe_features(ai_engine, ws_data, recent_ticks, recen
 
 
 def _buy_recovery_probe_source_quality_hard_block(probe: dict) -> bool:
-    return bool(probe.get("tick_context_stale") is True or probe.get("quote_stale") is True)
+    return bool(
+        probe.get("tick_context_stale") is True
+        or probe.get("quote_stale") is True
+        or probe.get("tick_aggressor_pressure_usable") is False
+    )
 
 
 def _is_real_scanner_rising_watching_target(stock: dict | None) -> bool:

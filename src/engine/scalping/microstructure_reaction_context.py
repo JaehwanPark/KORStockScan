@@ -191,6 +191,13 @@ def infer_tick_aggressor_side(tick: dict[str, Any] | None) -> dict[str, Any]:
     }
 
 
+def _aggressor_pressure_usable(inferred: dict[str, Any] | None) -> bool:
+    inferred = inferred if isinstance(inferred, dict) else {}
+    if inferred.get("side") not in {"BUY", "SELL"}:
+        return False
+    return str(inferred.get("source") or "").strip() != "price_change_heuristic"
+
+
 def _age_ms_from_hhmmss(value: Any, *, now: datetime | None = None) -> int | None:
     tick_sec = _safe_hhmmss_to_seconds(value)
     if tick_sec is None:
@@ -283,20 +290,26 @@ def precompute_microstructure_reaction_inputs(
     tick_age_ms = _age_ms_from_hhmmss(tick_latest_time, now=now) if tick_latest_time else None
     tick_secs = [_safe_hhmmss_to_seconds(tick.get("time")) for tick in ticks]
     aggressor_rows = [infer_tick_aggressor_side(tick) for tick in ticks]
+    pressure_rows = [
+        (tick, inferred)
+        for tick, inferred in zip(ticks, aggressor_rows)
+        if _aggressor_pressure_usable(inferred)
+    ]
     buy_vol = sum(
         _safe_float(tick.get("volume"), 0.0)
-        for tick, inferred in zip(ticks, aggressor_rows)
+        for tick, inferred in pressure_rows
         if inferred.get("side") == "BUY"
     )
     sell_vol = sum(
         _safe_float(tick.get("volume"), 0.0)
-        for tick, inferred in zip(ticks, aggressor_rows)
+        for tick, inferred in pressure_rows
         if inferred.get("side") == "SELL"
     )
     total_vol = buy_vol + sell_vol
     buy_pressure_pct = (buy_vol / total_vol * 100.0) if total_vol > 0 else 50.0
     prices: list[float] = []
     volumes: list[float] = []
+    pressure_volumes: list[float] = []
     for tick in ticks:
         price_value = _safe_float(tick.get("price"), 0.0)
         if price_value > 0:
@@ -304,25 +317,36 @@ def precompute_microstructure_reaction_inputs(
         volume_value = _safe_float(tick.get("volume"), 0.0)
         if volume_value > 0:
             volumes.append(volume_value)
+    for tick, _inferred in pressure_rows:
+        volume_value = _safe_float(tick.get("volume"), 0.0)
+        if volume_value > 0:
+            pressure_volumes.append(volume_value)
     latest_price = prices[0] if prices else curr_price
     oldest_price = prices[-1] if prices else curr_price
     price_change_pct = ((latest_price - oldest_price) / oldest_price * 100.0) if oldest_price > 0 else 0.0
     avg_tick_volume = mean(volumes) if volumes else 0.0
+    avg_pressure_tick_volume = mean(pressure_volumes) if pressure_volumes else 0.0
     buy_at_or_above_ask_vol = sum(
         _safe_float(tick.get("volume"), 0.0)
-        for tick, inferred in zip(ticks, aggressor_rows)
+        for tick, inferred in pressure_rows
         if inferred.get("side") == "BUY" and _safe_float(tick.get("price"), 0.0) >= best_ask
     )
     large_buy_print_detected = any(
-        inferred.get("side") == "BUY" and _safe_float(tick.get("volume"), 0.0) >= avg_tick_volume * 2.2
+        _aggressor_pressure_usable(inferred)
+        and inferred.get("side") == "BUY"
+        and _safe_float(tick.get("volume"), 0.0) >= avg_pressure_tick_volume * 2.2
         for tick, inferred in zip(ticks[:5], aggressor_rows[:5])
-    ) if avg_tick_volume > 0 else False
+    ) if avg_pressure_tick_volume > 0 else False
     large_sell_print_detected = any(
-        inferred.get("side") == "SELL" and _safe_float(tick.get("volume"), 0.0) >= avg_tick_volume * 2.2
+        _aggressor_pressure_usable(inferred)
+        and inferred.get("side") == "SELL"
+        and _safe_float(tick.get("volume"), 0.0) >= avg_pressure_tick_volume * 2.2
         for tick, inferred in zip(ticks[:5], aggressor_rows[:5])
-    ) if avg_tick_volume > 0 else False
+    ) if avg_pressure_tick_volume > 0 else False
     price_buy_count: dict[float, int] = {}
     for tick, inferred in zip(ticks[:6], aggressor_rows[:6]):
+        if not _aggressor_pressure_usable(inferred):
+            continue
         if inferred.get("side") != "BUY":
             continue
         price_key = _safe_float(tick.get("price"), 0.0)
@@ -362,6 +386,8 @@ def precompute_microstructure_reaction_inputs(
         "tick_aggressor_price_heuristic_count": sum(
             1 for row in aggressor_rows if row.get("source") == "price_change_heuristic"
         ),
+        "tick_aggressor_trusted_count": len(pressure_rows),
+        "tick_aggressor_pressure_usable": bool(pressure_rows),
         "tick_sample_count": len(ticks),
         "tick_latest_time": tick_latest_time,
         "tick_age_ms": tick_age_ms,

@@ -915,6 +915,8 @@ def reversal_feature_source_quality(feat):
         stale_reasons.append("tick_context_stale")
     elif tick_quality in {"missing_ticks", "missing_tick_time"} or tick_quality.startswith("accel_"):
         stale_reasons.append("tick_context_unusable")
+    if feat.get("tick_aggressor_pressure_usable") is False:
+        stale_reasons.append("tick_aggressor_pressure_unusable")
     if quote_stale is True:
         stale_reasons.append("quote_stale")
     if tick_age_ms is not None and tick_age_ms > max_tick_age_ms:
@@ -927,6 +929,8 @@ def reversal_feature_source_quality(feat):
         "reversal_feature_stale_reason": ",".join(stale_reasons) or "-",
         "tick_context_quality": feat.get("tick_context_quality", "-"),
         "tick_context_stale": feat.get("tick_context_stale", "unknown"),
+        "tick_aggressor_trusted_count": feat.get("tick_aggressor_trusted_count", 0),
+        "tick_aggressor_pressure_usable": feat.get("tick_aggressor_pressure_usable", "unknown"),
         "tick_latest_age_ms": "-" if tick_age_ms is None else round(tick_age_ms, 3),
         "tick_accel_source": feat.get("tick_accel_source", "-"),
         "quote_stale": feat.get("quote_stale", "unknown"),

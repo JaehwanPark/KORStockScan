@@ -63,6 +63,23 @@ def _safe_int(value: Any, default: int = 0) -> int:
         return default
 
 
+def _safe_bool(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    if isinstance(value, (int, float)):
+        return value != 0
+    return str(value).strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def _tick_aggressor_pressure_usable(fields: dict[str, Any]) -> bool:
+    return bool(
+        _safe_bool(fields.get("tick_aggressor_pressure_usable"))
+        or _safe_float(fields.get("tick_aggressor_trusted_count"), 0.0) > 0
+    )
+
+
 def _load_json(path: Path) -> dict[str, Any]:
     try:
         actual_path = existing_or_gzip_path(path)
@@ -218,6 +235,7 @@ def _signature_micro_pressure_path(fields: dict[str, Any]) -> bool:
     return (
         _signature_strong_bundle(fields.get("source_signature"))
         and _safe_float(fields.get("curr_vs_micro_vwap_bp"), 0.0) >= 25.0
+        and _tick_aggressor_pressure_usable(fields)
         and _safe_float(fields.get("buy_pressure_10t"), 0.0) >= 80.0
     )
 

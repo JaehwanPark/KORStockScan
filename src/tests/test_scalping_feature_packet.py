@@ -170,6 +170,79 @@ def test_extract_scalping_feature_packet_prefers_fresh_ws_orderbook_touch_ticks(
     assert packet["tick_aggressor_orderbook_touch_count"] == 5
     assert packet["tick_aggressor_price_heuristic_count"] == 0
     assert packet["tick_aggressor_unknown_count"] == 1
+    assert packet["tick_aggressor_trusted_count"] == 4
+    assert packet["tick_aggressor_pressure_usable"] is True
+
+
+def test_extract_scalping_feature_packet_excludes_price_change_heuristic_from_pressure():
+    ticks = [
+        {
+            "time": "09:00:10",
+            "price": 10100,
+            "volume": 100,
+            "dir": "BUY",
+            "aggressor_source": "price_change_heuristic",
+            "strength": 135.0,
+        },
+        {
+            "time": "09:00:09",
+            "price": 10090,
+            "volume": 90,
+            "dir": "SELL",
+            "aggressor_source": "price_change_heuristic",
+            "strength": 130.0,
+        },
+    ]
+
+    packet = extract_scalping_feature_packet(
+        _sample_ws_data(),
+        ticks,
+        _sample_candles(),
+        now=datetime.strptime("09:00:12", "%H:%M:%S"),
+    )
+
+    assert packet["buy_pressure_10t"] == 50.0
+    assert packet["net_aggressive_delta_10t"] == 0
+    assert packet["large_sell_print_detected"] is False
+    assert packet["tick_aggressor_price_heuristic_count"] == 2
+    assert packet["tick_aggressor_trusted_count"] == 0
+    assert packet["tick_aggressor_pressure_usable"] is False
+
+
+def test_extract_scalping_feature_packet_mixed_pressure_uses_trusted_ticks_only():
+    ticks = [
+        {
+            "time": "09:00:10",
+            "price": 10110,
+            "volume": 100,
+            "best_ask": 10110,
+            "best_bid": 10100,
+            "aggressor_source": "orderbook_touch",
+            "strength": 135.0,
+        },
+        {
+            "time": "09:00:09",
+            "price": 10090,
+            "volume": 999,
+            "dir": "SELL",
+            "aggressor_source": "price_change_heuristic",
+            "strength": 130.0,
+        },
+    ]
+
+    packet = extract_scalping_feature_packet(
+        _sample_ws_data(),
+        ticks,
+        _sample_candles(),
+        now=datetime.strptime("09:00:12", "%H:%M:%S"),
+    )
+
+    assert packet["buy_pressure_10t"] == 100.0
+    assert packet["net_aggressive_delta_10t"] == 100
+    assert packet["tick_aggressor_orderbook_touch_count"] == 1
+    assert packet["tick_aggressor_price_heuristic_count"] == 1
+    assert packet["tick_aggressor_trusted_count"] == 1
+    assert packet["tick_aggressor_pressure_usable"] is True
 
 
 def test_build_scalping_feature_audit_fields_marks_sent_flags():

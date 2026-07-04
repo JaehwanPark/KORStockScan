@@ -86,6 +86,13 @@ def _safe_bool(value: Any) -> bool:
     return str(value).strip().lower() in {"1", "true", "yes", "y", "on", "stale"}
 
 
+def _tick_aggressor_pressure_usable(row: dict[str, Any]) -> bool:
+    return bool(
+        _safe_bool(row.get("tick_aggressor_pressure_usable"))
+        or _safe_float(row.get("tick_aggressor_trusted_count"), 0.0) > 0
+    )
+
+
 def _date_range(start_date: str, end_date: str) -> list[str]:
     start = datetime.strptime(start_date, "%Y-%m-%d").date()
     end = datetime.strptime(end_date, "%Y-%m-%d").date()
@@ -200,13 +207,17 @@ def _micro_support(row: dict[str, Any]) -> bool:
     tick_accel = _safe_float(row.get("tick_acceleration_ratio") or row.get("tick_accel"), None)
     micro_vwap = _safe_float(row.get("curr_vs_micro_vwap_bp") or row.get("micro_vwap_bp"), None)
     large_sell = _safe_bool(row.get("large_sell_print_detected"))
-    support = (
+    pressure_usable = _tick_aggressor_pressure_usable(row)
+    pressure_support = pressure_usable and (
         (buy_pressure is not None and buy_pressure >= 68.0)
         or (net_delta is not None and net_delta > 0.0)
+    )
+    support = (
+        pressure_support
         or (tick_accel is not None and tick_accel >= 1.10)
         or (micro_vwap is not None and micro_vwap > 0.0)
     )
-    return bool(support and not large_sell)
+    return bool(support and not (pressure_usable and large_sell))
 
 
 def _score(row: dict[str, Any]) -> float | None:
@@ -505,7 +516,10 @@ def build_report(target_date: str, *, start_date: str | None = None, end_date: s
                 "counterfactual_rows": COUNTERFACTUAL_SAMPLE_FLOOR,
             },
             "primary_decision_metric": "source_quality_adjusted_ev_pct",
-            "source_quality_gate": "clean_baseline_allowed_rows_without_hard_source_quality_block",
+            "source_quality_gate": (
+                "clean_baseline_allowed_rows_without_hard_source_quality_block_and_"
+                "trusted_tick_pressure_for_buy_pressure_micro_support"
+            ),
             "forbidden_uses": FORBIDDEN_USES,
         },
         "runtime_effect": False,

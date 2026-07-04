@@ -26,6 +26,8 @@ def _realized_row(score, *, action="WAIT", profit=1.0, stale=False, hard_blocked
         "blocked_reason": "broker_guard_block" if hard_blocked else "",
         "buy_pressure_10t": 75,
         "net_aggressive_delta_10t": 10,
+        "tick_aggressor_trusted_count": 2,
+        "tick_aggressor_pressure_usable": True,
     }
 
 
@@ -40,6 +42,8 @@ def _counterfactual_row(score, *, action="WAIT", close_10m=1.0, stale=False, har
         "blocked_reason": "cooldown_block" if hard_blocked else "",
         "buy_pressure_10t": 74,
         "net_aggressive_delta_10t": 1,
+        "tick_aggressor_trusted_count": 2,
+        "tick_aggressor_pressure_usable": True,
     }
 
 
@@ -168,6 +172,29 @@ def test_entry_ai_gate_role_gate_and_threshold_helper(monkeypatch):
         {"action": "WAIT", "score": 68, "ai_result_source": "source_quality_insufficient"}
     )
     assert insufficient["entry_score_usable_for_recheck"] is False
+
+
+def test_entry_ai_gate_backtest_ignores_untrusted_pressure_micro_support():
+    untrusted_pressure_only = {
+        "buy_pressure_10t": 95,
+        "net_aggressive_delta_10t": 500,
+        "tick_aggressor_pressure_usable": False,
+        "tick_aggressor_trusted_count": 0,
+        "tick_acceleration_ratio": 1.0,
+        "curr_vs_micro_vwap_bp": 0.0,
+    }
+    trusted_pressure = {
+        **untrusted_pressure_only,
+        "tick_aggressor_pressure_usable": True,
+    }
+    independent_tick_accel = {
+        **untrusted_pressure_only,
+        "tick_acceleration_ratio": 1.2,
+    }
+
+    assert mod._micro_support(untrusted_pressure_only) is False
+    assert mod._micro_support(trusted_pressure) is True
+    assert mod._micro_support(independent_tick_accel) is True
 
 
 def test_entry_ai_gate_backtest_realized_join_uses_real_post_sell_once(tmp_path, monkeypatch):
