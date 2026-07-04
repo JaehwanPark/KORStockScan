@@ -20,6 +20,8 @@ PIPELINE_EVENTS_DIR = DATA_DIR / "pipeline_events"
 CONTEXT_KEYS = (
     "microstructure_reaction_context_version",
     "microstructure_reaction_context_status",
+    "microstructure_reaction_tick_aggressor_pressure_usable",
+    "microstructure_reaction_tick_aggressor_trusted_count",
     "microstructure_reaction_ask_sweep_score",
     "microstructure_reaction_post_sweep_hold_score",
     "microstructure_reaction_bid_replenishment_score",
@@ -134,8 +136,43 @@ def _tick_best_bid(tick: dict[str, Any]) -> float:
     )
 
 
+TRUSTED_AGGRESSOR_SOURCES = {
+    "orderbook_touch",
+    "cached_orderbook_touch",
+    "provider_declared_side",
+    "exchange_declared_side",
+    "trusted_declared_side",
+    "declared_aggressor_side",
+}
+
+ORDERBOOK_TOUCH_SOURCES = {
+    "orderbook_touch",
+    "cached_orderbook_touch",
+}
+
+ORDERBOOK_TOUCH_QUOTE_SOURCES = {
+    "0B_inline_best_quote",
+    "cached_top_of_book_ttl",
+}
+
+
 def infer_tick_aggressor_side(tick: dict[str, Any] | None) -> dict[str, Any]:
     tick = tick if isinstance(tick, dict) else {}
+    declared_source = str(tick.get("aggressor_source") or tick.get("dir_source") or "").strip()
+    declared_quality = str(tick.get("aggressor_quality") or "").strip()
+    quote_source = str(tick.get("aggressor_quote_source") or "").strip()
+    touch_source = (
+        "cached_orderbook_touch"
+        if declared_source == "cached_orderbook_touch" or quote_source == "cached_top_of_book_ttl"
+        else "orderbook_touch"
+    )
+
+    def _touch_quality(default: str) -> str:
+        if declared_quality and (
+            declared_source in {"orderbook_touch", "cached_orderbook_touch"} or quote_source
+        ):
+            return declared_quality
+        return default
     explicit = _normalize_tick_side(
         tick.get("aggressor_side")
         or tick.get("trade_aggressor_side")
@@ -146,11 +183,36 @@ def infer_tick_aggressor_side(tick: dict[str, Any] | None) -> dict[str, Any]:
     best_ask = _tick_best_ask(tick)
     best_bid = _tick_best_bid(tick)
     if trade_price > 0 and (best_ask > 0 or best_bid > 0):
+        raw_inline_quote = not declared_source and not quote_source and ("27" in tick or "28" in tick)
+        trusted_touch_source = (
+            declared_source in ORDERBOOK_TOUCH_SOURCES
+            or quote_source in ORDERBOOK_TOUCH_QUOTE_SOURCES
+            or raw_inline_quote
+        )
+        if not trusted_touch_source:
+            return {
+                "side": "UNKNOWN",
+                "source": declared_source or "untrusted_orderbook_touch_source",
+                "quality": "quote_with_untrusted_aggressor_source",
+                "declared_side": explicit if explicit in {"BUY", "SELL"} else "UNKNOWN",
+                "trade_price": trade_price,
+                "best_ask": best_ask,
+                "best_bid": best_bid,
+            }
+        if best_ask <= 0 or best_bid <= 0:
+            return {
+                "side": "UNKNOWN",
+                "source": "missing_best_quote",
+                "quality": "partial_orderbook_touch_quote",
+                "trade_price": trade_price,
+                "best_ask": best_ask,
+                "best_bid": best_bid,
+            }
         if best_ask > 0 and trade_price >= best_ask:
             return {
                 "side": "BUY",
-                "source": "orderbook_touch",
-                "quality": "touch_or_crossed_ask",
+                "source": touch_source,
+                "quality": _touch_quality("touch_or_crossed_ask"),
                 "trade_price": trade_price,
                 "best_ask": best_ask,
                 "best_bid": best_bid,
@@ -158,25 +220,35 @@ def infer_tick_aggressor_side(tick: dict[str, Any] | None) -> dict[str, Any]:
         if best_bid > 0 and trade_price <= best_bid:
             return {
                 "side": "SELL",
-                "source": "orderbook_touch",
-                "quality": "touch_or_crossed_bid",
+                "source": touch_source,
+                "quality": _touch_quality("touch_or_crossed_bid"),
                 "trade_price": trade_price,
                 "best_ask": best_ask,
                 "best_bid": best_bid,
             }
         return {
             "side": "UNKNOWN",
-            "source": "orderbook_touch",
-            "quality": "inside_spread_or_uncertain",
+            "source": touch_source,
+            "quality": _touch_quality("inside_spread_or_uncertain"),
+            "trade_price": trade_price,
+            "best_ask": best_ask,
+            "best_bid": best_bid,
+        }
+    if explicit in {"BUY", "SELL"} and declared_source in TRUSTED_AGGRESSOR_SOURCES:
+        return {
+            "side": explicit,
+            "source": declared_source,
+            "quality": str(tick.get("aggressor_quality") or "side_without_orderbook_touch"),
             "trade_price": trade_price,
             "best_ask": best_ask,
             "best_bid": best_bid,
         }
     if explicit in {"BUY", "SELL"}:
         return {
-            "side": explicit,
-            "source": str(tick.get("aggressor_source") or tick.get("dir_source") or "declared_tick_side"),
-            "quality": str(tick.get("aggressor_quality") or "side_without_orderbook_touch"),
+            "side": "UNKNOWN",
+            "source": declared_source or "declared_tick_side_untrusted",
+            "quality": "side_without_trusted_source",
+            "declared_side": explicit,
             "trade_price": trade_price,
             "best_ask": best_ask,
             "best_bid": best_bid,
@@ -195,7 +267,7 @@ def _aggressor_pressure_usable(inferred: dict[str, Any] | None) -> bool:
     inferred = inferred if isinstance(inferred, dict) else {}
     if inferred.get("side") not in {"BUY", "SELL"}:
         return False
-    return str(inferred.get("source") or "").strip() != "price_change_heuristic"
+    return str(inferred.get("source") or "").strip() in TRUSTED_AGGRESSOR_SOURCES
 
 
 def _age_ms_from_hhmmss(value: Any, *, now: datetime | None = None) -> int | None:
@@ -383,6 +455,9 @@ def precompute_microstructure_reaction_inputs(
         "tick_aggressor_quality_counts": dict(Counter(str(row.get("quality") or "unknown") for row in aggressor_rows)),
         "tick_aggressor_unknown_count": sum(1 for row in aggressor_rows if row.get("side") not in {"BUY", "SELL"}),
         "tick_aggressor_orderbook_touch_count": sum(1 for row in aggressor_rows if row.get("source") == "orderbook_touch"),
+        "tick_aggressor_cached_orderbook_touch_count": sum(
+            1 for row in aggressor_rows if row.get("source") == "cached_orderbook_touch"
+        ),
         "tick_aggressor_price_heuristic_count": sum(
             1 for row in aggressor_rows if row.get("source") == "price_change_heuristic"
         ),
@@ -427,6 +502,8 @@ def neutral_microstructure_reaction_context(status: str, reason: str) -> dict[st
     payload = {
         "microstructure_reaction_context_version": CONTEXT_VERSION,
         "microstructure_reaction_context_status": status,
+        "microstructure_reaction_tick_aggressor_pressure_usable": False,
+        "microstructure_reaction_tick_aggressor_trusted_count": 0,
         "microstructure_reaction_ask_sweep_score": 50,
         "microstructure_reaction_post_sweep_hold_score": 50,
         "microstructure_reaction_bid_replenishment_score": 50,
@@ -466,7 +543,6 @@ def build_microstructure_reaction_context(
     quote_age_ms = snapshot.get("quote_age_ms")
     if (tick_age_ms is not None and tick_age_ms > 5000) or (quote_age_ms is not None and quote_age_ms > 1200):
         return neutral_microstructure_reaction_context("stale", "stale_tick_or_quote")
-
     curr_price = _safe_float(snapshot.get("curr_price"), 0.0)
     best_ask = _safe_float(snapshot.get("best_ask"), curr_price)
     best_bid = _safe_float(snapshot.get("best_bid"), curr_price)
@@ -478,6 +554,16 @@ def build_microstructure_reaction_context(
     buy_vol = _safe_float(snapshot.get("buy_vol"), 0.0)
     sell_vol = _safe_float(snapshot.get("sell_vol"), 0.0)
     total_vol = _safe_float(snapshot.get("total_vol"), 0.0)
+    pressure_usable = _safe_bool(snapshot.get("tick_aggressor_pressure_usable"), False) and total_vol > 0
+    pressure_trusted_count = _safe_int(snapshot.get("tick_aggressor_trusted_count"), 0)
+    if not pressure_usable:
+        payload = neutral_microstructure_reaction_context(
+            "source_quality_partial",
+            "tick_aggressor_pressure_unusable",
+        )
+        payload["microstructure_reaction_tick_aggressor_trusted_count"] = pressure_trusted_count
+        payload["microstructure_reaction_context_hash"] = _context_hash(payload)
+        return payload
     buy_pressure = _safe_float(snapshot.get("buy_pressure_pct"), 50.0)
     latest_price = _safe_float(snapshot.get("latest_price"), curr_price)
     price_change_pct = _safe_float(snapshot.get("price_change_pct"), 0.0)
@@ -512,6 +598,8 @@ def build_microstructure_reaction_context(
     payload = {
         "microstructure_reaction_context_version": CONTEXT_VERSION,
         "microstructure_reaction_context_status": "ok",
+        "microstructure_reaction_tick_aggressor_pressure_usable": bool(pressure_usable),
+        "microstructure_reaction_tick_aggressor_trusted_count": pressure_trusted_count,
         "microstructure_reaction_ask_sweep_score": ask_sweep_score,
         "microstructure_reaction_post_sweep_hold_score": post_sweep_hold_score,
         "microstructure_reaction_bid_replenishment_score": bid_replenishment_score,

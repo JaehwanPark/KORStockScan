@@ -229,9 +229,11 @@ def quote_input_from_rest_orderbook(
     elif received_ts > 0:
         age_ms = max(0.0, (now_ts - received_ts) * 1000.0)
     else:
-        age_ms = data.get("age_ms")
-        if age_ms is None:
-            age_ms = data.get("pre_submit_rest_orderbook_refresh_age_ms")
+        age_ms = data.get("pre_submit_rest_orderbook_refresh_age_ms")
+        is_ka10004_snapshot = str(data.get("source") or "").strip() == "ka10004_rest_orderbook"
+        raw_time_authority = str(data.get("bid_req_base_tm_authority") or "").strip()
+        if age_ms is None and not is_ka10004_snapshot and raw_time_authority != "raw_not_freshness_input":
+            age_ms = data.get("age_ms")
     age_ms = None if age_ms is None else max(0.0, _to_float(age_ms))
     return QuoteInput(
         source="rest",

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import time
+from datetime import datetime
 from statistics import mean
 
 from src.engine.scalping.microstructure_reaction_context import (
@@ -10,6 +12,7 @@ from src.engine.scalping.microstructure_reaction_context import (
 
 SCALP_FEATURE_PACKET_VERSION = "scalp_feature_packet_v1"
 SCALP_FEATURE_PACKET_QUOTE_STALE_MS = 3000
+SCALP_FEATURE_PACKET_MINUTE_CANDLE_STALE_MS = 180_000
 
 
 def _safe_number(value, default=0.0):
@@ -19,6 +22,91 @@ def _safe_number(value, default=0.0):
         return float(value)
     except Exception:
         return default
+
+
+def _time_to_seconds(value) -> int | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    compact = text.replace(":", "").strip()
+    if len(compact) >= 14 and compact[:14].isdigit():
+        compact = compact[8:14]
+    elif len(compact) > 6 and compact[-6:].isdigit():
+        compact = compact[-6:]
+    if len(compact) != 6 or not compact.isdigit():
+        return None
+    hour = int(compact[:2])
+    minute = int(compact[2:4])
+    second = int(compact[4:6])
+    if hour > 23 or minute > 59 or second > 59:
+        return None
+    return hour * 3600 + minute * 60 + second
+
+
+def _reference_seconds_of_day(ws_data, ticks, now=None) -> tuple[int, str]:
+    if isinstance(now, datetime):
+        return now.hour * 3600 + now.minute * 60 + now.second, "explicit_now"
+    if isinstance(now, (int, float)) and now > 0:
+        ref = datetime.fromtimestamp(float(now))
+        return ref.hour * 3600 + ref.minute * 60 + ref.second, "explicit_epoch"
+    try:
+        ts = float((ws_data or {}).get("last_ws_update_ts") or 0)
+        if ts > 0:
+            ref = datetime.fromtimestamp(ts)
+            return ref.hour * 3600 + ref.minute * 60 + ref.second, "ws_last_update_ts"
+    except Exception:
+        pass
+    for tick in ticks or []:
+        if not isinstance(tick, dict):
+            continue
+        sec = _time_to_seconds(tick.get("time") or tick.get("체결시간") or tick.get("20"))
+        if sec is not None:
+            return sec, "latest_tick_time"
+    ref = datetime.fromtimestamp(time.time())
+    return ref.hour * 3600 + ref.minute * 60 + ref.second, "system_clock"
+
+
+def _minute_candle_time_quality(recent_candles, ws_data, ticks, *, now=None) -> dict:
+    candles = recent_candles if isinstance(recent_candles, list) else []
+    base = {
+        "minute_candle_latest_time": "-",
+        "minute_candle_latest_age_ms": "-",
+        "minute_candle_context_quality": "missing_candles" if not candles else "missing_candle_time",
+        "minute_candle_reference_source": "-",
+        "minute_candle_source_time_basis": "-",
+        "minute_candle_window_fresh": False,
+    }
+    if not candles:
+        return base
+    latest = candles[-1] if isinstance(candles[-1], dict) else {}
+    raw_time = (
+        latest.get("source_timestamp")
+        or latest.get("source_timestamp_kst")
+        or latest.get("cntr_tm")
+        or latest.get("체결시간")
+    )
+    sec = _time_to_seconds(raw_time)
+    base["minute_candle_latest_time"] = str(raw_time or "-")
+    base["minute_candle_source_time_basis"] = str(
+        latest.get("source_time_basis") or "ka10080_cntr_tm_bar_timestamp"
+    )
+    if sec is None:
+        return base
+    ref_sec, ref_source = _reference_seconds_of_day(ws_data, ticks, now=now)
+    age_sec = ref_sec - sec
+    if age_sec < 0:
+        age_sec += 24 * 3600
+    age_ms = max(0, int(age_sec * 1000))
+    fresh = age_ms <= SCALP_FEATURE_PACKET_MINUTE_CANDLE_STALE_MS
+    base.update(
+        {
+            "minute_candle_latest_age_ms": age_ms,
+            "minute_candle_context_quality": "fresh_bar_window" if fresh else "stale_bar_window",
+            "minute_candle_reference_source": ref_source,
+            "minute_candle_window_fresh": fresh,
+        }
+    )
+    return base
 
 
 def calculate_scalping_micro_indicator_values(recent_candles):
@@ -115,6 +203,9 @@ def extract_scalping_feature_packet(ws_data, recent_ticks, recent_candles=None, 
     tick_aggressor_source_counts = snapshot.get("tick_aggressor_source_counts") or {}
     tick_aggressor_quality_counts = snapshot.get("tick_aggressor_quality_counts") or {}
     tick_aggressor_orderbook_touch_count = int(snapshot.get("tick_aggressor_orderbook_touch_count") or 0)
+    tick_aggressor_cached_orderbook_touch_count = int(
+        snapshot.get("tick_aggressor_cached_orderbook_touch_count") or 0
+    )
     tick_aggressor_price_heuristic_count = int(snapshot.get("tick_aggressor_price_heuristic_count") or 0)
     tick_aggressor_unknown_count = int(snapshot.get("tick_aggressor_unknown_count") or 0)
     tick_aggressor_trusted_count = int(snapshot.get("tick_aggressor_trusted_count") or 0)
@@ -202,8 +293,12 @@ def extract_scalping_feature_packet(ws_data, recent_ticks, recent_candles=None, 
     curr_vs_ma5_bp = 0.0
     micro_vwap_value = 0.0
     ma5_value = 0.0
+    micro_vwap_available = False
+    ma5_available = False
+    minute_candle_quality = _minute_candle_time_quality(recent_candles, ws_data, ticks, now=now)
+    minute_candle_window_fresh = bool(minute_candle_quality.get("minute_candle_window_fresh"))
 
-    if recent_candles and len(recent_candles) >= 2:
+    if minute_candle_window_fresh and recent_candles and len(recent_candles) >= 2:
         current_volume = recent_candles[-1].get("거래량", 0)
         prev_volumes = [candle.get("거래량", 0) for candle in recent_candles[:-1] if candle.get("거래량", 0) > 0]
         avg_prev_volume = mean(prev_volumes) if prev_volumes else 0
@@ -217,10 +312,12 @@ def extract_scalping_feature_packet(ws_data, recent_ticks, recent_candles=None, 
             ma5_value = indicators.get("MA5", 0) or 0
             micro_vwap_value = indicators.get("Micro_VWAP", 0) or 0
 
-            if micro_vwap_value > 0 and curr_price > 0:
+            if minute_candle_window_fresh and micro_vwap_value > 0 and curr_price > 0:
                 curr_vs_micro_vwap_bp = round(((curr_price - micro_vwap_value) / micro_vwap_value) * 10000, 2)
-            if ma5_value > 0 and curr_price > 0:
+                micro_vwap_available = True
+            if minute_candle_window_fresh and ma5_value > 0 and curr_price > 0:
                 curr_vs_ma5_bp = round(((curr_price - ma5_value) / ma5_value) * 10000, 2)
+                ma5_available = True
         except Exception:
             pass
 
@@ -260,6 +357,7 @@ def extract_scalping_feature_packet(ws_data, recent_ticks, recent_candles=None, 
         "tick_aggressor_source_counts": tick_aggressor_source_counts,
         "tick_aggressor_quality_counts": tick_aggressor_quality_counts,
         "tick_aggressor_orderbook_touch_count": tick_aggressor_orderbook_touch_count,
+        "tick_aggressor_cached_orderbook_touch_count": tick_aggressor_cached_orderbook_touch_count,
         "tick_aggressor_price_heuristic_count": tick_aggressor_price_heuristic_count,
         "tick_aggressor_unknown_count": tick_aggressor_unknown_count,
         "tick_aggressor_trusted_count": tick_aggressor_trusted_count,
@@ -282,9 +380,13 @@ def extract_scalping_feature_packet(ws_data, recent_ticks, recent_candles=None, 
         "intraday_range_pct": intraday_range_pct,
         "volume_ratio_pct": volume_ratio_pct,
         "curr_vs_micro_vwap_bp": curr_vs_micro_vwap_bp,
+        "micro_vwap_available": micro_vwap_available,
         "curr_vs_ma5_bp": curr_vs_ma5_bp,
+        "ma5_available": ma5_available,
         "micro_vwap_value": round(micro_vwap_value, 2) if micro_vwap_value else 0.0,
         "ma5_value": round(ma5_value, 2) if ma5_value else 0.0,
+        **minute_candle_quality,
+        "minute_candle_stale_threshold_ms": SCALP_FEATURE_PACKET_MINUTE_CANDLE_STALE_MS,
         "ask_depth_ratio": ask_depth_ratio,
         "net_ask_depth": net_ask_depth,
         **microstructure_reaction,
@@ -303,8 +405,10 @@ def _select_recent_ticks_for_feature_packet(ws_data, recent_ticks, *, now=None):
         now=now,
     )
     age_ms = snapshot.get("tick_age_ms")
-    orderbook_touch_count = int(snapshot.get("tick_aggressor_orderbook_touch_count") or 0)
-    if age_ms is None or age_ms > 5000 or orderbook_touch_count <= 0:
+    touch_count = int(snapshot.get("tick_aggressor_orderbook_touch_count") or 0) + int(
+        snapshot.get("tick_aggressor_cached_orderbook_touch_count") or 0
+    )
+    if age_ms is None or age_ms > 5000 or touch_count <= 0:
         return rest_ticks
     return ws_ticks
 
@@ -332,6 +436,9 @@ def build_scalping_feature_audit_fields(packet):
         "tick_aggressor_source_counts": payload.get("tick_aggressor_source_counts", {}),
         "tick_aggressor_quality_counts": payload.get("tick_aggressor_quality_counts", {}),
         "tick_aggressor_orderbook_touch_count": payload.get("tick_aggressor_orderbook_touch_count", 0),
+        "tick_aggressor_cached_orderbook_touch_count": payload.get(
+            "tick_aggressor_cached_orderbook_touch_count", 0
+        ),
         "tick_aggressor_price_heuristic_count": payload.get("tick_aggressor_price_heuristic_count", 0),
         "tick_aggressor_unknown_count": payload.get("tick_aggressor_unknown_count", 0),
         "tick_aggressor_trusted_count": payload.get("tick_aggressor_trusted_count", 0),
@@ -353,9 +460,27 @@ def build_scalping_feature_audit_fields(packet):
         "tick_acceleration_ratio": payload.get("tick_acceleration_ratio", "-"),
         "buy_pressure_10t": payload.get("buy_pressure_10t", "-"),
         "curr_vs_micro_vwap_bp": payload.get("curr_vs_micro_vwap_bp", "-"),
+        "micro_vwap_available": payload.get("micro_vwap_available", False),
         "curr_vs_ma5_bp": payload.get("curr_vs_ma5_bp", "-"),
+        "ma5_available": payload.get("ma5_available", False),
+        "minute_candle_latest_time": payload.get("minute_candle_latest_time", "-"),
+        "minute_candle_latest_age_ms": payload.get("minute_candle_latest_age_ms", "-"),
+        "minute_candle_context_quality": payload.get("minute_candle_context_quality", "unknown"),
+        "minute_candle_reference_source": payload.get("minute_candle_reference_source", "-"),
+        "minute_candle_source_time_basis": payload.get("minute_candle_source_time_basis", "-"),
+        "minute_candle_window_fresh": payload.get("minute_candle_window_fresh", False),
+        "minute_candle_stale_threshold_ms": payload.get(
+            "minute_candle_stale_threshold_ms",
+            SCALP_FEATURE_PACKET_MINUTE_CANDLE_STALE_MS,
+        ),
         "microstructure_reaction_context_version": payload.get("microstructure_reaction_context_version", "-"),
         "microstructure_reaction_context_status": payload.get("microstructure_reaction_context_status", "-"),
+        "microstructure_reaction_tick_aggressor_pressure_usable": payload.get(
+            "microstructure_reaction_tick_aggressor_pressure_usable", False
+        ),
+        "microstructure_reaction_tick_aggressor_trusted_count": payload.get(
+            "microstructure_reaction_tick_aggressor_trusted_count", 0
+        ),
         "microstructure_reaction_ask_sweep_score": payload.get("microstructure_reaction_ask_sweep_score", 50),
         "microstructure_reaction_post_sweep_hold_score": payload.get("microstructure_reaction_post_sweep_hold_score", 50),
         "microstructure_reaction_bid_replenishment_score": payload.get("microstructure_reaction_bid_replenishment_score", 50),

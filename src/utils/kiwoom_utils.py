@@ -1156,6 +1156,9 @@ def _empty_kiwoom_source_meta(api_id, requested_limit=None):
         "api_id": api_id,
         "requested_limit": requested_limit,
         "received_count": 0,
+        "rest_received_ts_ms": None,
+        "latest_source_timestamp": None,
+        "source_time_basis": "response_received_epoch_ms_and_chart_bar_timestamp",
         "truncated_window": False,
         "sort_direction_detected": "unknown",
         "cont_yn_seen": False,
@@ -1164,6 +1167,13 @@ def _empty_kiwoom_source_meta(api_id, requested_limit=None):
         "continuous_page_limit_reached": False,
         "continuous_next_key_missing": False,
     }
+
+
+def _normalize_kiwoom_source_meta(meta, api_id, requested_limit=None):
+    normalized = _empty_kiwoom_source_meta(api_id, requested_limit=requested_limit)
+    if isinstance(meta, dict):
+        normalized.update(meta)
+    return normalized
 
 
 def _detect_sort_direction(rows, key):
@@ -1227,6 +1237,7 @@ def get_daily_ohlcv_ka10081_df(token, code, end_date=""):
         use_continuous=True,
         max_pages=max_pages,
     )
+    source_meta = _normalize_kiwoom_source_meta(source_meta, "ka10081")
     
     if not results:
         empty_df = pd.DataFrame()
@@ -1248,6 +1259,10 @@ def get_daily_ohlcv_ka10081_df(token, code, end_date=""):
             "requested_limit": None,
             "received_count": len(all_data),
             "sort_direction_detected": _detect_sort_direction(all_data, "dt"),
+            "latest_source_timestamp": max(
+                [str((row or {}).get("dt") or "").strip() for row in all_data if str((row or {}).get("dt") or "").strip()],
+                default=None,
+            ),
             "truncated_window": bool(source_meta.get("continuous_page_limit_reached")),
         }
     )
@@ -1370,13 +1385,6 @@ def get_realtime_hot_stocks_ka00198(token, config=None, as_dict=True):
             except (ValueError, TypeError):
                 return 0
 
-        def to_f(v): 
-            if not v: return 0.0
-            try:
-                return float(str(v).replace(',', '').replace('+', '').strip())
-            except (ValueError, TypeError):
-                return 0.0
-
         for item in data:
             stk_cd = str(item.get('stk_cd', ''))[:6]
             if not stk_cd: continue
@@ -1386,12 +1394,13 @@ def get_realtime_hot_stocks_ka00198(token, config=None, as_dict=True):
                 'code': stk_cd,
                 'name': item.get('stk_nm', ''),
                 'rank': to_i(item.get('bigd_rank')),        # 빅데이터 순위
-                'rank_chg': to_i(item.get('rank_chg')),     # 순위 등락폭
+                'rank_chg': _scanner_to_signed_int(item.get('rank_chg')),
+                'rank_chg_authority': 'signed_numeric_rank_delta_from_api',
                 'rank_sign': item.get('rank_chg_sign'),     # raw only; official code meaning is unconfirmed
                 'rank_sign_authority': 'raw_unverified_not_decision_input',
                 'price': to_i(item.get('past_curr_prc')),   # 현재가
-                'flu_rate': to_f(item.get('base_comp_chgr')), # 기준가 대비 등락율
-                'prev_flu': to_f(item.get('prev_base_chgr')), # 직전 대비 등락율
+                'flu_rate': _scanner_to_signed_float(item.get('base_comp_chgr')), # 기준가 대비 등락율
+                'prev_flu': _scanner_to_signed_float(item.get('prev_base_chgr')), # 직전 대비 등락율
                 'time': item.get('tm', ''),                 # 데이터 시각
             }
             
@@ -2009,6 +2018,11 @@ def get_stock_orderbook_ka10004(token, code):
         "stock_code": normalize_stock_code(code),
         "request_code": payload["stk_cd"],
         "bid_req_base_tm": str(row.get("bid_req_base_tm") or "").strip(),
+        "bid_req_base_tm_authority": "raw_not_freshness_input",
+        "source_time_basis": "response_received_epoch_ms",
+        "rest_freshness_basis": "response_received_epoch_ms",
+        "rest_age_ms": 0,
+        "rest_age_source": "response_received_epoch_ms",
         "curr": 0,
         "rest_current_price": 0,
         "rest_mid_price": rest_mid_price,
@@ -2575,6 +2589,7 @@ def get_minute_candles_ka10080_with_meta(token, code, limit=10):
     results, source_meta = _fetch_kiwoom_api_continuous_with_meta(
         url=url, token=token, api_id='ka10080', payload=payload, use_continuous=True, max_pages=max_pages
     )
+    source_meta = _normalize_kiwoom_source_meta(source_meta, "ka10080", requested_limit=int(limit or 0))
     
     refined_candles = []
     all_candles = []
@@ -2585,6 +2600,14 @@ def get_minute_candles_ka10080_with_meta(token, code, limit=10):
             "requested_limit": int(limit or 0),
             "received_count": len(all_candles),
             "sort_direction_detected": _detect_sort_direction(all_candles, "cntr_tm"),
+            "latest_source_timestamp": max(
+                [
+                    _normalize_ka10080_time((row or {}).get("cntr_tm"))[0]
+                    for row in all_candles
+                    if str((row or {}).get("cntr_tm") or "").strip()
+                ],
+                default=None,
+            ),
             "truncated_window": len(all_candles) < int(limit or 0) or bool(source_meta.get("continuous_page_limit_reached")),
         }
     )
@@ -2596,10 +2619,12 @@ def get_minute_candles_ka10080_with_meta(token, code, limit=10):
         )[-int(limit or len(all_candles)) :]
         for candle in recent_candles:
             raw_time = str(candle.get('cntr_tm', ''))
-            _, formatted_time = _normalize_ka10080_time(raw_time)
+            source_timestamp, formatted_time = _normalize_ka10080_time(raw_time)
 
             refined_candles.append({
                 "체결시간": formatted_time,
+                "source_timestamp": source_timestamp,
+                "source_time_basis": "ka10080_cntr_tm_bar_timestamp",
                 "시가": _scanner_to_int(candle.get("open_pric")),
                 "고가": _scanner_to_int(candle.get("high_pric")),
                 "저가": _scanner_to_int(candle.get("low_pric")),
@@ -2748,6 +2773,7 @@ def fetch_kiwoom_api_continuous(
             break
             
         res_json = response.json()
+        meta["rest_received_ts_ms"] = int(time.time() * 1000)
         
         # return_code 체크 (정상이 아니면 경고 후 응답값 저장)
         response_code = str(res_json.get('return_code', res_json.get('rt_cd', '0')))

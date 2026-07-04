@@ -96,6 +96,36 @@ def _compute_spread_ticks(best_ask: int, best_bid: int) -> int:
     return max(0, int(round((best_ask - best_bid) / tick_size)))
 
 
+def _ws_tick_aggressor_pressure_usable(ws_data: dict[str, Any] | None) -> bool:
+    ws = ws_data if isinstance(ws_data, dict) else {}
+    return _tick_aggressor_pressure_usable_from_fields(ws)
+
+
+def _tick_aggressor_pressure_usable_from_fields(fields: dict[str, Any] | None) -> bool:
+    source = fields if isinstance(fields, dict) else {}
+    raw_flag = source.get("tick_aggressor_pressure_usable")
+    if isinstance(raw_flag, bool):
+        pressure_flag = raw_flag
+    else:
+        pressure_flag = str(raw_flag or "").strip().lower() in {"1", "true", "yes", "y", "on"}
+    return bool(
+        pressure_flag
+        or _to_float(source.get("tick_aggressor_trusted_count"), 0.0) > 0
+    )
+
+
+def _latency_buy_pressure_value(ws_data: dict[str, Any] | None, stock: dict[str, Any] | None) -> float:
+    ws = ws_data if isinstance(ws_data, dict) else {}
+    item = stock if isinstance(stock, dict) else {}
+    if ws.get("buy_ratio") not in (None, ""):
+        return _to_float(ws.get("buy_ratio"), 0.0)
+    if ws.get("buy_pressure_10t") not in (None, "") and _tick_aggressor_pressure_usable_from_fields(ws):
+        return _to_float(ws.get("buy_pressure_10t"), 0.0)
+    if item.get("buy_pressure_10t") not in (None, "") and _tick_aggressor_pressure_usable_from_fields(item):
+        return _to_float(item.get("buy_pressure_10t"), 0.0)
+    return 0.0
+
+
 def _conditional_real_1tick_context(ws_data: dict[str, Any] | None, *, best_ask: int, best_bid: int) -> dict[str, Any]:
     ws = ws_data or {}
     orderbook = ws.get("orderbook") or {}
@@ -108,13 +138,16 @@ def _conditional_real_1tick_context(ws_data: dict[str, Any] | None, *, best_ask:
     if bid_depth <= 0 and bids:
         bid_depth = sum(_to_float((level or {}).get("volume"), 0.0) for level in bids[:3])
 
-    buy_volume = _to_float(ws.get("buy_exec_volume"), 0.0)
-    sell_volume = _to_float(ws.get("sell_exec_volume"), 0.0)
+    pressure_usable = _ws_tick_aggressor_pressure_usable(ws)
+    raw_buy_volume = _to_float(ws.get("buy_exec_volume"), 0.0)
+    raw_sell_volume = _to_float(ws.get("sell_exec_volume"), 0.0)
+    buy_volume = raw_buy_volume if pressure_usable else 0.0
+    sell_volume = raw_sell_volume if pressure_usable else 0.0
     total_exec_volume = buy_volume + sell_volume
-    buy_ratio = _to_float(ws.get("buy_ratio"), 0.0)
+    buy_ratio = _to_float(ws.get("buy_ratio"), 0.0) if pressure_usable else 50.0
     if total_exec_volume > 0:
         buy_ratio = (buy_volume / total_exec_volume) * 100.0
-    net_buy_exec_volume = _to_float(ws.get("net_buy_exec_volume"), buy_volume - sell_volume)
+    net_buy_exec_volume = _to_float(ws.get("net_buy_exec_volume"), buy_volume - sell_volume) if pressure_usable else 0.0
 
     ofi_norm = max(
         _to_float(ws.get("orderbook_micro_ofi_norm"), -999.0),
@@ -129,7 +162,7 @@ def _conditional_real_1tick_context(ws_data: dict[str, Any] | None, *, best_ask:
     min_bid_ask_ratio = float(
         getattr(TRADING_RULES, "SCALPING_CONDITIONAL_1TICK_MIN_BID_ASK_RATIO", 1.20) or 1.20
     )
-    buy_pressure_ok = net_buy_exec_volume > 0 and buy_ratio >= min_buy_ratio
+    buy_pressure_ok = pressure_usable and net_buy_exec_volume > 0 and buy_ratio >= min_buy_ratio
     ofi_ok = ofi_norm >= min_ofi_norm
     depth_ok = bid_depth > 0 and ask_depth > 0 and bid_ask_ratio >= min_bid_ask_ratio
 
@@ -137,6 +170,10 @@ def _conditional_real_1tick_context(ws_data: dict[str, Any] | None, *, best_ask:
         "spread_ticks": spread_ticks,
         "buy_ratio": round(float(buy_ratio), 6),
         "net_buy_exec_volume": int(net_buy_exec_volume),
+        "raw_buy_exec_volume": int(raw_buy_volume),
+        "raw_sell_exec_volume": int(raw_sell_volume),
+        "tick_aggressor_pressure_usable": bool(pressure_usable),
+        "tick_aggressor_trusted_count": int(_to_float(ws.get("tick_aggressor_trusted_count"), 0.0)),
         "ofi_norm": None if ofi_norm == -999.0 else round(float(ofi_norm), 6),
         "bid_ask_depth_ratio": round(float(bid_ask_ratio), 6),
         "buy_pressure_ok": buy_pressure_ok,
@@ -405,6 +442,8 @@ def _normal_market_gap_profile(
         "positive_signal_count": positive_signal_count,
         "positive_signals": ",".join(positive_signals),
         "buy_pressure_ok": bool(conditional_context.get("buy_pressure_ok")),
+        "tick_aggressor_pressure_usable": bool(conditional_context.get("tick_aggressor_pressure_usable")),
+        "tick_aggressor_trusted_count": int(conditional_context.get("tick_aggressor_trusted_count") or 0),
         "ofi_ok": bool(conditional_context.get("ofi_ok")),
         "depth_ok": bool(conditional_context.get("depth_ok")),
         "conditional_1tick_eligible": bool(conditional_context.get("eligible")),
@@ -1563,6 +1602,7 @@ def evaluate_live_buy_entry(
     latency_wide_spread_passive_requote_reason = ""
     latency_wide_spread_passive_requote_context: dict[str, Any] = {}
     latency_danger_reasons = ",".join(_latency_danger_reasons(latency))
+    latency_buy_pressure = _latency_buy_pressure_value(ws_data, stock)
     danger_relief_forbidden = (
         policy.decision == EntryDecision.REJECT_DANGER and not _danger_latency_relief_runtime_enabled()
     )
@@ -1618,7 +1658,7 @@ def evaluate_live_buy_entry(
             position_tag=str(stock.get("position_tag") or ""),
             signal_strength=float(signal_strength or 0.0),
             latest_strength=_to_float((ws_data or {}).get("v_pw", stock.get("latest_strength", 0.0)), 0.0),
-            buy_pressure_10t=_to_float((ws_data or {}).get("buy_ratio", stock.get("buy_pressure_10t", 0.0)), 0.0),
+            buy_pressure_10t=latency_buy_pressure,
             latency_status=latency,
             signal_price=frozen_price,
             latest_price=latest_price,
@@ -1633,7 +1673,7 @@ def evaluate_live_buy_entry(
                 f"[LATENCY_SIGNAL_QUALITY_QUOTE_COMPOSITE_CANARY] {stock.get('name')}({code}) "
                 f"tag={stock.get('position_tag')} signal_score={_normalize_signal_score(signal_strength):.1f} "
                 f"strength={_to_float((ws_data or {}).get('v_pw', stock.get('latest_strength', 0.0)), 0.0):.1f} "
-                f"buy_pressure={_to_float((ws_data or {}).get('buy_ratio', stock.get('buy_pressure_10t', 0.0)), 0.0):.1f} "
+                f"buy_pressure={latency_buy_pressure:.1f} "
                 f"ws_age_ms={latency.ws_age_ms} ws_jitter_ms={latency.ws_jitter_ms} "
                 f"spread_ratio={latency.spread_ratio:.6f} "
                 f"danger_reasons={latency_danger_reasons}"
@@ -1740,7 +1780,7 @@ def evaluate_live_buy_entry(
                 position_tag=spread_relief_tag,
                 signal_strength=float(signal_strength or 0.0),
                 latest_strength=_to_float((ws_data or {}).get("v_pw", stock.get("latest_strength", 0.0)), 0.0),
-                buy_pressure_10t=_to_float((ws_data or {}).get("buy_ratio", stock.get("buy_pressure_10t", 0.0)), 0.0),
+                buy_pressure_10t=latency_buy_pressure,
                 latency_status=latency,
                 signal_price=frozen_price,
                 latest_price=latest_price,
@@ -1761,7 +1801,7 @@ def evaluate_live_buy_entry(
             log_info(
                 f"[LATENCY_WIDE_SPREAD_PASSIVE_REQUOTE] {stock.get('name')}({code}) "
                 f"tag={spread_relief_tag} signal_score={_normalize_signal_score(signal_strength):.1f} "
-                f"buy_pressure={_to_float((ws_data or {}).get('buy_ratio', stock.get('buy_pressure_10t', 0.0)), 0.0):.1f} "
+                f"buy_pressure={latency_buy_pressure:.1f} "
                 f"ws_age_ms={latency.ws_age_ms} ws_jitter_ms={latency.ws_jitter_ms} "
                 f"spread_ratio={latency.spread_ratio:.6f} best_bid={best_bid} best_ask={best_ask} "
                 f"danger_reasons={latency_danger_reasons}"
@@ -1806,7 +1846,7 @@ def evaluate_live_buy_entry(
             position_tag=str(stock.get("position_tag") or ""),
             signal_strength=float(signal_strength or 0.0),
             latest_strength=_to_float((ws_data or {}).get("v_pw", stock.get("latest_strength", 0.0)), 0.0),
-            buy_pressure_10t=_to_float((ws_data or {}).get("buy_ratio", stock.get("buy_pressure_10t", 0.0)), 0.0),
+            buy_pressure_10t=latency_buy_pressure,
             latency_status=latency,
             signal_price=frozen_price,
             latest_price=latest_price,
@@ -1821,7 +1861,7 @@ def evaluate_live_buy_entry(
                 f"[LATENCY_MECHANICAL_MOMENTUM_RELIEF_CANARY] {stock.get('name')}({code}) "
                 f"tag={stock.get('position_tag')} signal_score={_normalize_signal_score(signal_strength):.1f} "
                 f"strength={_to_float((ws_data or {}).get('v_pw', stock.get('latest_strength', 0.0)), 0.0):.1f} "
-                f"buy_pressure={_to_float((ws_data or {}).get('buy_ratio', stock.get('buy_pressure_10t', 0.0)), 0.0):.1f} "
+                f"buy_pressure={latency_buy_pressure:.1f} "
                 f"ws_age_ms={latency.ws_age_ms} ws_jitter_ms={latency.ws_jitter_ms} "
                 f"spread_ratio={latency.spread_ratio:.6f} "
                 f"danger_reasons={latency_danger_reasons}"

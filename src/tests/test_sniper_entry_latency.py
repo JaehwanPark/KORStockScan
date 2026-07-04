@@ -257,6 +257,8 @@ def test_latency_entry_conditional_real_1tick_override_for_strong_micro(monkeypa
             "buy_exec_volume": 70,
             "sell_exec_volume": 30,
             "net_buy_exec_volume": 40,
+            "tick_aggressor_pressure_usable": True,
+            "tick_aggressor_trusted_count": 4,
             "orderbook": {
                 "asks": [{"price": 10_010, "volume": 100}],
                 "bids": [{"price": 10_000, "volume": 100}],
@@ -1155,6 +1157,77 @@ def test_real_pre_submit_rest_orderbook_refresh_blocks_stale_ka10004_snapshot(mo
     assert refreshed["curr"] == 10_000
 
 
+def test_real_pre_submit_rest_orderbook_refresh_ignores_bid_req_base_tm_for_freshness(monkeypatch):
+    stale_hhmmss = datetime.fromtimestamp(time.time() - 3600).strftime("%H%M%S")
+    received_ts = time.time()
+
+    monkeypatch.setattr(state_handlers, "KIWOOM_TOKEN", "TOKEN")
+    monkeypatch.setattr(
+        state_handlers.kiwoom_utils,
+        "get_stock_orderbook_ka10004",
+        lambda token, code: {
+            "source": "ka10004_rest_orderbook",
+            "bid_req_base_tm": stale_hhmmss,
+            "rest_received_ts": received_ts,
+            "rest_mid_price": 10_025,
+            "best_ask": 10_030,
+            "best_bid": 10_020,
+            "orderbook": {
+                "asks": [{"price": 10_030, "volume": 100}],
+                "bids": [{"price": 10_020, "volume": 200}],
+            },
+        },
+    )
+    monkeypatch.setenv("KORSTOCKSCAN_SCALP_PRE_SUBMIT_REST_ORDERBOOK_MAX_AGE_MS", "3000")
+
+    refreshed, fields = state_handlers._pre_submit_refresh_rest_orderbook_snapshot(
+        "123456",
+        {"curr": 10_000, "best_ask": 10_010, "best_bid": 10_000},
+        "SCALPING",
+    )
+
+    assert fields["pre_submit_rest_orderbook_refresh_applied"] is True
+    assert fields["pre_submit_rest_orderbook_refresh_reason"] == "rest_orderbook_fresh"
+    assert fields["pre_submit_rest_orderbook_refresh_bid_req_base_tm"] == stale_hhmmss
+    assert refreshed["curr"] == 10_025
+
+
+def test_real_pre_submit_rest_orderbook_refresh_rejects_ka10004_age_ms_without_received_time(monkeypatch):
+    now_hhmmss = datetime.now().strftime("%H%M%S")
+
+    monkeypatch.setattr(state_handlers, "KIWOOM_TOKEN", "TOKEN")
+    monkeypatch.setattr(
+        state_handlers.kiwoom_utils,
+        "get_stock_orderbook_ka10004",
+        lambda token, code: {
+            "source": "ka10004_rest_orderbook",
+            "bid_req_base_tm": now_hhmmss,
+            "bid_req_base_tm_authority": "raw_not_freshness_input",
+            "age_ms": 0,
+            "rest_age_ms": 0,
+            "rest_mid_price": 10_025,
+            "best_ask": 10_030,
+            "best_bid": 10_020,
+            "orderbook": {
+                "asks": [{"price": 10_030, "volume": 100}],
+                "bids": [{"price": 10_020, "volume": 200}],
+            },
+        },
+    )
+    monkeypatch.setenv("KORSTOCKSCAN_SCALP_PRE_SUBMIT_REST_ORDERBOOK_MAX_AGE_MS", "3000")
+
+    refreshed, fields = state_handlers._pre_submit_refresh_rest_orderbook_snapshot(
+        "123456",
+        {"curr": 10_000, "best_ask": 10_010, "best_bid": 10_000},
+        "SCALPING",
+    )
+
+    assert fields["pre_submit_rest_orderbook_refresh_applied"] is False
+    assert fields["pre_submit_rest_orderbook_refresh_reason"] == "rest_orderbook_time_missing"
+    assert fields["pre_submit_rest_orderbook_refresh_age_ms"] is None
+    assert refreshed["curr"] == 10_000
+
+
 def test_holding_ai_rest_orderbook_refresh_reuses_fresh_ka10004_snapshot(monkeypatch):
     now_hhmmss = datetime.now().strftime("%H%M%S")
     received_ts = time.time()
@@ -1811,6 +1884,41 @@ def test_latency_wide_spread_passive_requote_blocks_low_buy_pressure(monkeypatch
     assert result["latency_wide_spread_passive_requote_applied"] is False
     assert result["latency_wide_spread_passive_requote_reason"] == "low_buy_pressure"
     assert result["latency_danger_reasons"] == "spread_too_wide"
+
+
+def test_latency_buy_pressure_prefers_provider_buy_ratio_over_provenance_gate():
+    assert (
+        entry_latency_module._latency_buy_pressure_value(
+            {"buy_ratio": 83.0, "tick_aggressor_pressure_usable": False},
+            {"buy_pressure_10t": 20.0, "tick_aggressor_pressure_usable": False},
+        )
+        == 83.0
+    )
+
+
+def test_latency_buy_pressure_blocks_untrusted_derived_fallback():
+    assert (
+        entry_latency_module._latency_buy_pressure_value(
+            {},
+            {
+                "buy_pressure_10t": 90.0,
+                "tick_aggressor_pressure_usable": False,
+                "tick_aggressor_trusted_count": 0,
+            },
+        )
+        == 0.0
+    )
+    assert (
+        entry_latency_module._latency_buy_pressure_value(
+            {},
+            {
+                "buy_pressure_10t": 90.0,
+                "tick_aggressor_pressure_usable": True,
+                "tick_aggressor_trusted_count": 1,
+            },
+        )
+        == 90.0
+    )
 
 
 def test_latency_spread_relief_canary_uses_effective_min_signal_floor_override(monkeypatch):
@@ -3001,6 +3109,8 @@ def test_percent_bps_mode_favorable_micro_0015_pct(monkeypatch):
             "buy_exec_volume": 120,
             "sell_exec_volume": 80,
             "net_buy_exec_volume": 40,
+            "tick_aggressor_pressure_usable": True,
+            "tick_aggressor_trusted_count": 2,
         },
         strategy_id="SCALPING",
         planned_qty=1,
@@ -3152,6 +3262,8 @@ def test_aggressive_entry_price_override_moves_positive_micro_to_best_bid(monkey
             "buy_exec_volume": 120,
             "sell_exec_volume": 80,
             "net_buy_exec_volume": 40,
+            "tick_aggressor_pressure_usable": True,
+            "tick_aggressor_trusted_count": 2,
         },
         strategy_id="SCALPING",
         planned_qty=1,
@@ -3163,6 +3275,56 @@ def test_aggressive_entry_price_override_moves_positive_micro_to_best_bid(monkey
     assert result["order_price"] == 10000
     assert result["aggressive_entry_price_original_profile"] == "favorable_micro"
     assert result["aggressive_entry_price_original_bps"] == 15
+
+
+def test_aggressive_entry_price_override_does_not_trust_unproven_exec_volume(monkeypatch):
+    monkeypatch.setattr(entry_latency_module, "_defense_mode_is_percent_bps", lambda: True)
+    monkeypatch.setattr(entry_latency_module, "_normal_defensive_bps", lambda: 25)
+    monkeypatch.setattr(entry_latency_module, "_conditional_strong_defensive_bps", lambda: 10)
+    monkeypatch.setattr(entry_latency_module, "_normal_favorable_defensive_bps", lambda: 15)
+    monkeypatch.setattr(entry_latency_module, "_normal_weak_defensive_bps", lambda: 40)
+    monkeypatch.setattr(entry_latency_module, "_conditional_real_1tick_enabled", lambda s: True)
+    monkeypatch.setattr(
+        entry_latency_module,
+        "TRADING_RULES",
+        replace(
+            CONFIG,
+            SCALP_AGGRESSIVE_ENTRY_PRICE_OVERRIDE_ENABLED=True,
+            SCALP_AGGRESSIVE_ENTRY_PRICE_OVERRIDE_TYPES="defensive_missed_upside_v1",
+            SCALP_DEFENSIVE_MISSED_UPSIDE_MIN_ORIGINAL_BPS=15,
+            SCALP_DEFENSIVE_MISSED_UPSIDE_NEUTRAL_BID_MINUS_TICKS=1,
+            SCALP_DEFENSIVE_MISSED_UPSIDE_BULLISH_BID_MINUS_TICKS=0,
+        ),
+    )
+
+    result = evaluate_live_buy_entry(
+        stock={"name": "삼성전자", "position_tag": "SCANNER"},
+        code="005930_aggressive_untrusted_pressure",
+        ws_data={
+            "curr": 10_000,
+            "last_ws_update_ts": datetime.now(UTC).timestamp(),
+            "orderbook_micro_state": "neutral",
+            "orderbook": {
+                "asks": [{"price": 10_020, "volume": 1000}],
+                "bids": [{"price": 10_000, "volume": 1000}],
+            },
+            "buy_exec_volume": 120,
+            "sell_exec_volume": 80,
+            "net_buy_exec_volume": 40,
+            "tick_aggressor_pressure_usable": False,
+            "tick_aggressor_trusted_count": 0,
+        },
+        strategy_id="SCALPING",
+        planned_qty=1,
+        signal_price=10_000,
+        signal_strength=0.9,
+    )
+
+    context = result["entry_price_gap_profile_context"]
+    assert context["tick_aggressor_pressure_usable"] is False
+    assert context["buy_pressure_ok"] is False
+    assert context["positive_signal_count"] == 0
+    assert result["aggressive_entry_price_original_profile"] == "normal"
 
 
 def test_reference_target_missed_upside_override_moves_positive_micro_to_best_bid(monkeypatch):
@@ -3199,6 +3361,8 @@ def test_reference_target_missed_upside_override_moves_positive_micro_to_best_bi
             "buy_exec_volume": 120,
             "sell_exec_volume": 80,
             "net_buy_exec_volume": 40,
+            "tick_aggressor_pressure_usable": True,
+            "tick_aggressor_trusted_count": 2,
         },
         strategy_id="SCALPING",
         planned_qty=1,
@@ -3301,6 +3465,8 @@ def test_reference_target_missed_upside_override_skips_below_min_bps(monkeypatch
             "buy_exec_volume": 120,
             "sell_exec_volume": 80,
             "net_buy_exec_volume": 40,
+            "tick_aggressor_pressure_usable": True,
+            "tick_aggressor_trusted_count": 2,
         },
         strategy_id="SCALPING",
         planned_qty=1,
@@ -3347,6 +3513,8 @@ def test_aggressive_entry_price_override_skips_when_dynamic_resolver_live_select
             "buy_exec_volume": 120,
             "sell_exec_volume": 80,
             "net_buy_exec_volume": 40,
+            "tick_aggressor_pressure_usable": True,
+            "tick_aggressor_trusted_count": 2,
         },
         strategy_id="SCALPING",
         planned_qty=1,
@@ -3393,6 +3561,8 @@ def test_aggressive_entry_price_override_skips_when_entry_price_live_tuning_sele
             "buy_exec_volume": 120,
             "sell_exec_volume": 80,
             "net_buy_exec_volume": 40,
+            "tick_aggressor_pressure_usable": True,
+            "tick_aggressor_trusted_count": 2,
         },
         strategy_id="SCALPING",
         planned_qty=1,

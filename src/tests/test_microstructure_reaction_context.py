@@ -2,6 +2,7 @@ from datetime import datetime
 
 from src.engine.scalping.microstructure_reaction_context import (
     build_microstructure_reaction_context,
+    infer_tick_aggressor_side,
     precompute_microstructure_reaction_inputs,
 )
 
@@ -30,12 +31,12 @@ def _ws_data(**overrides):
 
 def _ticks():
     return [
-        {"time": "09:00:10", "price": 10120, "volume": 500, "dir": "BUY"},
-        {"time": "09:00:09", "price": 10120, "volume": 420, "dir": "BUY"},
-        {"time": "09:00:08", "price": 10110, "volume": 360, "dir": "BUY"},
-        {"time": "09:00:07", "price": 10110, "volume": 180, "dir": "SELL"},
-        {"time": "09:00:06", "price": 10100, "volume": 220, "dir": "BUY"},
-        {"time": "09:00:05", "price": 10090, "volume": 140, "dir": "SELL"},
+        {"time": "09:00:10", "price": 10120, "volume": 500, "dir": "BUY", "aggressor_source": "trusted_declared_side"},
+        {"time": "09:00:09", "price": 10120, "volume": 420, "dir": "BUY", "aggressor_source": "trusted_declared_side"},
+        {"time": "09:00:08", "price": 10110, "volume": 360, "dir": "BUY", "aggressor_source": "trusted_declared_side"},
+        {"time": "09:00:07", "price": 10110, "volume": 180, "dir": "SELL", "aggressor_source": "trusted_declared_side"},
+        {"time": "09:00:06", "price": 10100, "volume": 220, "dir": "BUY", "aggressor_source": "trusted_declared_side"},
+        {"time": "09:00:05", "price": 10090, "volume": 140, "dir": "SELL", "aggressor_source": "trusted_declared_side"},
     ]
 
 
@@ -82,11 +83,11 @@ def test_wall_replenishment_overrides_to_risk_context_only():
 
 def test_bid_replenishment_score_reflects_bid_depth_after_sell_prints():
     ticks = [
-        {"time": "09:00:10", "price": 10100, "volume": 220, "dir": "SELL"},
-        {"time": "09:00:09", "price": 10110, "volume": 500, "dir": "BUY"},
-        {"time": "09:00:08", "price": 10100, "volume": 180, "dir": "SELL"},
-        {"time": "09:00:07", "price": 10100, "volume": 300, "dir": "BUY"},
-        {"time": "09:00:06", "price": 10100, "volume": 140, "dir": "SELL"},
+        {"time": "09:00:10", "price": 10100, "volume": 220, "dir": "SELL", "aggressor_source": "trusted_declared_side"},
+        {"time": "09:00:09", "price": 10110, "volume": 500, "dir": "BUY", "aggressor_source": "trusted_declared_side"},
+        {"time": "09:00:08", "price": 10100, "volume": 180, "dir": "SELL", "aggressor_source": "trusted_declared_side"},
+        {"time": "09:00:07", "price": 10100, "volume": 300, "dir": "BUY", "aggressor_source": "trusted_declared_side"},
+        {"time": "09:00:06", "price": 10100, "volume": 140, "dir": "SELL", "aggressor_source": "trusted_declared_side"},
     ]
 
     context = build_microstructure_reaction_context(
@@ -154,3 +155,140 @@ def test_precomputed_snapshot_preserves_context_result():
     )
 
     assert reused == direct
+
+
+def test_context_with_only_untrusted_declared_side_is_neutral_partial():
+    ticks = [
+        {"time": "09:00:10", "price": 10120, "volume": 500, "dir": "BUY"},
+        {"time": "09:00:09", "price": 10120, "volume": 420, "dir": "BUY"},
+        {"time": "09:00:08", "price": 10110, "volume": 360, "dir": "BUY"},
+        {"time": "09:00:07", "price": 10110, "volume": 180, "dir": "SELL"},
+        {"time": "09:00:06", "price": 10100, "volume": 220, "dir": "BUY"},
+    ]
+
+    context = build_microstructure_reaction_context(
+        _ws_data(),
+        ticks,
+        [{"고가": 10130, "저가": 10080}],
+        now=datetime.strptime("09:00:12", "%H:%M:%S"),
+    )
+
+    assert context["microstructure_reaction_context_status"] == "source_quality_partial"
+    assert context["microstructure_reaction_source_quality"] == "tick_aggressor_pressure_unusable"
+    assert context["microstructure_reaction_entry_reaction_quality"] == "neutral_unusable"
+    assert context["microstructure_reaction_ask_sweep_score"] == 50
+    assert context["microstructure_reaction_wall_replenishment_risk_score"] == 50
+    assert context["microstructure_reaction_tick_aggressor_pressure_usable"] is False
+    assert context["microstructure_reaction_tick_aggressor_trusted_count"] == 0
+
+
+def test_cached_orderbook_touch_source_is_preserved():
+    inferred = infer_tick_aggressor_side(
+        {
+            "time": "09:00:10",
+            "price": 10110,
+            "volume": 100,
+            "best_ask": 10110,
+            "best_bid": 10100,
+            "aggressor_source": "cached_orderbook_touch",
+            "aggressor_quality": "cached_quote_touch_or_crossed_ask",
+            "aggressor_quote_source": "cached_top_of_book_ttl",
+        }
+    )
+
+    assert inferred["side"] == "BUY"
+    assert inferred["source"] == "cached_orderbook_touch"
+    assert inferred["quality"] == "cached_quote_touch_or_crossed_ask"
+
+
+def test_source_less_declared_side_is_not_pressure_usable():
+    snapshot = precompute_microstructure_reaction_inputs(
+        _ws_data(),
+        [
+            {"time": "09:00:10", "price": 10110, "volume": 100, "dir": "BUY"},
+            {"time": "09:00:09", "price": 10100, "volume": 80, "side": "SELL"},
+        ],
+        now=datetime.strptime("09:00:12", "%H:%M:%S"),
+    )
+
+    assert snapshot["buy_pressure_pct"] == 50.0
+    assert snapshot["buy_vol"] == 0
+    assert snapshot["sell_vol"] == 0
+    assert snapshot["tick_aggressor_trusted_count"] == 0
+    assert snapshot["tick_aggressor_pressure_usable"] is False
+    assert snapshot["tick_aggressor_source_counts"]["declared_tick_side_untrusted"] == 2
+
+
+def test_price_change_heuristic_with_quote_is_not_promoted_to_orderbook_touch():
+    inferred = infer_tick_aggressor_side(
+        {
+            "time": "09:00:10",
+            "price": 10110,
+            "volume": 100,
+            "best_ask": 10110,
+            "best_bid": 10100,
+            "dir": "BUY",
+            "aggressor_source": "price_change_heuristic",
+        }
+    )
+
+    assert inferred["side"] == "UNKNOWN"
+    assert inferred["source"] == "price_change_heuristic"
+    assert inferred["quality"] == "quote_with_untrusted_aggressor_source"
+
+
+def test_source_less_best_quote_is_not_promoted_to_orderbook_touch():
+    inferred = infer_tick_aggressor_side(
+        {
+            "time": "09:00:10",
+            "price": 10110,
+            "volume": 100,
+            "best_ask": 10110,
+            "best_bid": 10100,
+            "dir": "BUY",
+        }
+    )
+
+    assert inferred["side"] == "UNKNOWN"
+    assert inferred["source"] == "untrusted_orderbook_touch_source"
+    assert inferred["quality"] == "quote_with_untrusted_aggressor_source"
+
+
+def test_raw_0b_quote_fields_without_normalized_source_still_allow_touch_inference():
+    inferred = infer_tick_aggressor_side(
+        {
+            "time": "09:00:10",
+            "price": 10110,
+            "volume": 100,
+            "10": 10110,
+            "27": 10110,
+            "28": 10100,
+        }
+    )
+
+    assert inferred["side"] == "BUY"
+    assert inferred["source"] == "orderbook_touch"
+    assert inferred["quality"] == "touch_or_crossed_ask"
+
+
+def test_precomputed_snapshot_counts_cached_orderbook_touch_separately():
+    snapshot = precompute_microstructure_reaction_inputs(
+        _ws_data(),
+        [
+            {
+                "time": "09:00:10",
+                "price": 10110,
+                "volume": 100,
+                "best_ask": 10110,
+                "best_bid": 10100,
+                "aggressor_source": "cached_orderbook_touch",
+                "aggressor_quote_source": "cached_top_of_book_ttl",
+            }
+        ],
+        now=datetime.strptime("09:00:12", "%H:%M:%S"),
+    )
+
+    assert snapshot["tick_aggressor_cached_orderbook_touch_count"] == 1
+    assert snapshot["tick_aggressor_orderbook_touch_count"] == 0
+    assert snapshot["tick_aggressor_trusted_count"] == 1
+    assert snapshot["buy_pressure_pct"] == 100.0

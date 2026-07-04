@@ -484,7 +484,9 @@ def _rising_start_score(target):
     if flu_metric in {"vi_dynamic_disparity_rate", "vi_static_disparity_rate"}:
         flu_score = 0.0
 
-    rank_change = abs(_safe_int(target.get("RankChange")))
+    # rank_chg_sign is raw/unverified. Only the signed numeric rank delta may
+    # contribute, and negative deltas must not reward a rising-start candidate.
+    rank_change = max(0, _safe_int(target.get("RankChange")))
     rank_score = min(240.0, rank_change * 8.0)
     rank_jump_score = min(220.0, _rank_jump(target) * 4.0)
     jump_score = _bounded(target.get("JumpRate"), 0.0, 20.0) * 18.0
@@ -1400,6 +1402,8 @@ def _scanner_event_fields(target, source_guard=None):
             str(target.get("RankChangeSignAuthority") or RANK_CHANGE_SIGN_AUTHORITY_DEFAULT).strip()
             or RANK_CHANGE_SIGN_AUTHORITY_DEFAULT
         ),
+        "rank_change_score_input": max(0, _safe_int(target.get("RankChange"))),
+        "rank_change_score_policy": "positive_signed_rank_delta_only_raw_rank_sign_unverified",
         "jump_rate": _safe_float(target.get("JumpRate")),
         "volume_surge_rate": _safe_float(target.get("VolumeSurgeRate", target.get("SpikeRate"))),
         "bid_surge_rate": _safe_float(target.get("BidSurgeRate")),
@@ -1501,6 +1505,8 @@ def _scanner_runtime_target_payload(target, source_guard, record_id=None, *, now
         "rank_change": fields.get("rank_change"),
         "rank_change_sign": fields.get("rank_change_sign"),
         "rank_change_sign_authority": fields.get("rank_change_sign_authority"),
+        "rank_change_score_input": fields.get("rank_change_score_input"),
+        "rank_change_score_policy": fields.get("rank_change_score_policy"),
         "runtime_effect": True,
         "actual_order_submitted": False,
         "broker_order_forbidden": True,

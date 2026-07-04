@@ -52,12 +52,21 @@ def test_ka10080_continuous_pages_are_sorted_oldest_to_latest(monkeypatch):
 
     assert [row["체결시간"] for row in candles] == ["09:01:00", "09:02:00", "09:03:00"]
     assert [row["현재가"] for row in candles] == [101, 102, 103]
+    assert [row["source_timestamp"] for row in candles] == [
+        "20260703090100",
+        "20260703090200",
+        "20260703090300",
+    ]
+    assert {row["source_time_basis"] for row in candles} == {"ka10080_cntr_tm_bar_timestamp"}
     assert meta["requested_limit"] == 3
     assert meta["received_count"] == 3
     assert meta["sort_direction_detected"] == "mixed"
     assert meta["cont_yn_seen"] is True
     assert meta["next_key_seen"] is True
     assert meta["truncated_window"] is False
+    assert meta["latest_source_timestamp"] == "20260703090300"
+    assert meta["source_time_basis"] == "response_received_epoch_ms_and_chart_bar_timestamp"
+    assert "rest_received_ts_ms" in meta
     assert calls[0]["max_pages"] >= 2
 
 
@@ -102,6 +111,9 @@ def test_ka10081_dataframe_keeps_source_meta_and_sorts_index(monkeypatch):
     assert meta["received_count"] == 3
     assert meta["sort_direction_detected"] == "mixed"
     assert meta["cont_yn_seen"] is True
+    assert meta["latest_source_timestamp"] == "20260703"
+    assert meta["source_time_basis"] == "response_received_epoch_ms_and_chart_bar_timestamp"
+    assert "rest_received_ts_ms" in meta
 
 
 def test_signed_rate_parsers_and_rank_change_sign_contract(monkeypatch):
@@ -142,6 +154,39 @@ def test_signed_rate_parsers_and_rank_change_sign_contract(monkeypatch):
     assert rows[0]["RealtimePrevBaseChange"] == 0.03
     assert rows[0]["RankChangeSign"] == "X"
     assert rows[0]["RankChangeSignAuthority"] == "raw_unverified_not_decision_input"
+
+
+def test_legacy_realtime_hot_stocks_preserves_signed_rank_delta(monkeypatch):
+    _clear_market_data_cache()
+    monkeypatch.setattr(
+        kiwoom_utils,
+        "fetch_kiwoom_api_continuous",
+        lambda **_kwargs: [
+            {
+                "item_inq_rank": [
+                    {
+                        "stk_cd": "006340",
+                        "stk_nm": "대원전선",
+                        "bigd_rank": "5",
+                        "rank_chg": "-3",
+                        "rank_chg_sign": "-",
+                        "past_curr_prc": "+3500",
+                        "base_comp_chgr": "-1.25",
+                        "prev_base_chgr": "+0.10",
+                    }
+                ]
+            }
+        ],
+    )
+
+    rows = kiwoom_utils.get_realtime_hot_stocks_ka00198("token")
+
+    assert rows[0]["rank_chg"] == -3
+    assert rows[0]["rank_chg_authority"] == "signed_numeric_rank_delta_from_api"
+    assert rows[0]["rank_sign"] == "-"
+    assert rows[0]["rank_sign_authority"] == "raw_unverified_not_decision_input"
+    assert rows[0]["flu_rate"] == -1.25
+    assert rows[0]["prev_flu"] == 0.10
 
 
 def test_realtime_analysis_context_uses_first_ask_level_as_best_ask(monkeypatch):

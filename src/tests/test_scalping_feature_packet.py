@@ -36,16 +36,86 @@ def _sample_ws_data():
 
 def _sample_ticks():
     return [
-        {"time": "09:00:10", "price": 10100, "volume": 220, "dir": "BUY", "strength": 135.0},
-        {"time": "09:00:09", "price": 10100, "volume": 180, "dir": "BUY", "strength": 133.0},
-        {"time": "09:00:08", "price": 10100, "volume": 160, "dir": "BUY", "strength": 131.0},
-        {"time": "09:00:07", "price": 10095, "volume": 100, "dir": "SELL", "strength": 125.0},
-        {"time": "09:00:06", "price": 10095, "volume": 90, "dir": "BUY", "strength": 122.0},
-        {"time": "09:00:05", "price": 10090, "volume": 95, "dir": "BUY", "strength": 120.0},
-        {"time": "09:00:00", "price": 10090, "volume": 80, "dir": "SELL", "strength": 119.0},
-        {"time": "08:59:56", "price": 10085, "volume": 70, "dir": "BUY", "strength": 118.0},
-        {"time": "08:59:52", "price": 10085, "volume": 60, "dir": "SELL", "strength": 117.0},
-        {"time": "08:59:48", "price": 10080, "volume": 55, "dir": "BUY", "strength": 116.0},
+        {
+            "time": "09:00:10",
+            "price": 10100,
+            "volume": 220,
+            "dir": "BUY",
+            "aggressor_source": "trusted_declared_side",
+            "strength": 135.0,
+        },
+        {
+            "time": "09:00:09",
+            "price": 10100,
+            "volume": 180,
+            "dir": "BUY",
+            "aggressor_source": "trusted_declared_side",
+            "strength": 133.0,
+        },
+        {
+            "time": "09:00:08",
+            "price": 10100,
+            "volume": 160,
+            "dir": "BUY",
+            "aggressor_source": "trusted_declared_side",
+            "strength": 131.0,
+        },
+        {
+            "time": "09:00:07",
+            "price": 10095,
+            "volume": 100,
+            "dir": "SELL",
+            "aggressor_source": "trusted_declared_side",
+            "strength": 125.0,
+        },
+        {
+            "time": "09:00:06",
+            "price": 10095,
+            "volume": 90,
+            "dir": "BUY",
+            "aggressor_source": "trusted_declared_side",
+            "strength": 122.0,
+        },
+        {
+            "time": "09:00:05",
+            "price": 10090,
+            "volume": 95,
+            "dir": "BUY",
+            "aggressor_source": "trusted_declared_side",
+            "strength": 120.0,
+        },
+        {
+            "time": "09:00:00",
+            "price": 10090,
+            "volume": 80,
+            "dir": "SELL",
+            "aggressor_source": "trusted_declared_side",
+            "strength": 119.0,
+        },
+        {
+            "time": "08:59:56",
+            "price": 10085,
+            "volume": 70,
+            "dir": "BUY",
+            "aggressor_source": "trusted_declared_side",
+            "strength": 118.0,
+        },
+        {
+            "time": "08:59:52",
+            "price": 10085,
+            "volume": 60,
+            "dir": "SELL",
+            "aggressor_source": "trusted_declared_side",
+            "strength": 117.0,
+        },
+        {
+            "time": "08:59:48",
+            "price": 10080,
+            "volume": 55,
+            "dir": "BUY",
+            "aggressor_source": "trusted_declared_side",
+            "strength": 116.0,
+        },
     ]
 
 
@@ -85,17 +155,118 @@ def test_extract_scalping_feature_packet_exposes_stage1_supply_fields():
     assert packet["net_ask_depth"] == -4200
     assert packet["microstructure_reaction_context_version"] == "microstructure_reaction_context_v1"
     assert packet["microstructure_reaction_context_status"] == "ok"
+    assert packet["microstructure_reaction_tick_aggressor_pressure_usable"] is True
+    assert packet["microstructure_reaction_tick_aggressor_trusted_count"] > 0
     assert packet["microstructure_reaction_context_hash"]
     assert packet["microstructure_reaction_vi_proximity_risk"] >= 0
+    assert packet["micro_vwap_available"] is True
+    assert packet["ma5_available"] is True
+    assert packet["minute_candle_context_quality"] == "fresh_bar_window"
+    assert packet["minute_candle_latest_age_ms"] == 12000
+    assert packet["minute_candle_window_fresh"] is True
+
+
+def test_extract_scalping_feature_packet_marks_micro_vwap_unavailable_without_candles():
+    packet = extract_scalping_feature_packet(
+        _sample_ws_data(),
+        _sample_ticks(),
+        [],
+        now=datetime.strptime("09:00:12", "%H:%M:%S"),
+    )
+    audit = build_scalping_feature_audit_fields(packet)
+    engine = GPTSniperEngine.__new__(GPTSniperEngine)
+    compact = engine._compact_holding_score_feature_packet(packet, audit)
+
+    assert packet["curr_vs_micro_vwap_bp"] == 0.0
+    assert packet["micro_vwap_available"] is False
+    assert packet["ma5_available"] is False
+    assert packet["minute_candle_context_quality"] == "missing_candles"
+    assert audit["micro_vwap_available"] is False
+    assert compact["micro_vwap_available"] is False
+
+
+def test_extract_scalping_feature_packet_blocks_stale_candle_micro_vwap():
+    packet = extract_scalping_feature_packet(
+        _sample_ws_data(),
+        _sample_ticks(),
+        _sample_candles(),
+        now=datetime.strptime("09:10:00", "%H:%M:%S"),
+    )
+    audit = build_scalping_feature_audit_fields(packet)
+
+    assert packet["minute_candle_context_quality"] == "stale_bar_window"
+    assert packet["minute_candle_latest_age_ms"] == 600000
+    assert packet["minute_candle_window_fresh"] is False
+    assert packet["micro_vwap_value"] > 0
+    assert packet["micro_vwap_available"] is False
+    assert packet["ma5_available"] is False
+    assert packet["curr_vs_micro_vwap_bp"] == 0.0
+    assert audit["minute_candle_context_quality"] == "stale_bar_window"
+    assert audit["micro_vwap_available"] is False
+
+
+def test_extract_scalping_feature_packet_blocks_missing_candle_timestamp_micro_vwap():
+    candles = [
+        {"현재가": 10100, "고가": 10120, "저가": 10090, "거래량": 1000 + idx}
+        for idx in range(5)
+    ]
+
+    packet = extract_scalping_feature_packet(
+        _sample_ws_data(),
+        _sample_ticks(),
+        candles,
+        now=datetime.strptime("09:00:12", "%H:%M:%S"),
+    )
+
+    assert packet["minute_candle_context_quality"] == "missing_candle_time"
+    assert packet["minute_candle_latest_age_ms"] == "-"
+    assert packet["micro_vwap_value"] > 0
+    assert packet["micro_vwap_available"] is False
+    assert packet["ma5_available"] is False
 
 
 def test_extract_scalping_feature_packet_normalizes_tick_side_aliases_for_buy_pressure():
     ticks = [
-        {"time": "09:00:10", "price": 10100, "volume": 100, "dir": "매수", "strength": 135.0},
-        {"time": "09:00:09", "price": 10100, "volume": 50, "dir": "+매수", "strength": 133.0},
-        {"time": "09:00:08", "price": 10095, "volume": 30, "dir": "B", "strength": 131.0},
-        {"time": "09:00:07", "price": 10090, "volume": 20, "dir": "매도", "strength": 125.0},
-        {"time": "09:00:06", "price": 10090, "volume": 20, "dir": "S", "strength": 122.0},
+        {
+            "time": "09:00:10",
+            "price": 10100,
+            "volume": 100,
+            "dir": "매수",
+            "aggressor_source": "trusted_declared_side",
+            "strength": 135.0,
+        },
+        {
+            "time": "09:00:09",
+            "price": 10100,
+            "volume": 50,
+            "dir": "+매수",
+            "aggressor_source": "trusted_declared_side",
+            "strength": 133.0,
+        },
+        {
+            "time": "09:00:08",
+            "price": 10095,
+            "volume": 30,
+            "dir": "B",
+            "aggressor_source": "trusted_declared_side",
+            "strength": 131.0,
+        },
+        {
+            "time": "09:00:07",
+            "price": 10090,
+            "volume": 20,
+            "dir": "매도",
+            "aggressor_source": "trusted_declared_side",
+            "strength": 125.0,
+        },
+        {
+            "time": "09:00:06",
+            "price": 10090,
+            "volume": 20,
+            "dir": "S",
+            "aggressor_source": "trusted_declared_side",
+            "strength": 122.0,
+        },
     ]
 
     packet = extract_scalping_feature_packet(
@@ -107,6 +278,27 @@ def test_extract_scalping_feature_packet_normalizes_tick_side_aliases_for_buy_pr
 
     assert packet["buy_pressure_10t"] == 81.82
     assert packet["net_aggressive_delta_10t"] == 140
+
+
+def test_extract_scalping_feature_packet_keeps_source_less_side_aliases_neutral():
+    ticks = [
+        {"time": "09:00:10", "price": 10100, "volume": 100, "dir": "매수", "strength": 135.0},
+        {"time": "09:00:09", "price": 10100, "volume": 50, "dir": "B", "strength": 133.0},
+        {"time": "09:00:08", "price": 10090, "volume": 40, "side": "SELL", "strength": 125.0},
+    ]
+
+    packet = extract_scalping_feature_packet(
+        _sample_ws_data(),
+        ticks,
+        _sample_candles(),
+        now=datetime.strptime("09:00:12", "%H:%M:%S"),
+    )
+
+    assert packet["buy_pressure_10t"] == 50.0
+    assert packet["net_aggressive_delta_10t"] == 0
+    assert packet["tick_aggressor_trusted_count"] == 0
+    assert packet["tick_aggressor_pressure_usable"] is False
+    assert packet["tick_aggressor_source_counts"]["declared_tick_side_untrusted"] == 3
 
 
 def test_extract_scalping_feature_packet_prefers_fresh_ws_orderbook_touch_ticks():
@@ -172,6 +364,86 @@ def test_extract_scalping_feature_packet_prefers_fresh_ws_orderbook_touch_ticks(
     assert packet["tick_aggressor_unknown_count"] == 1
     assert packet["tick_aggressor_trusted_count"] == 4
     assert packet["tick_aggressor_pressure_usable"] is True
+
+
+def test_extract_scalping_feature_packet_prefers_cached_orderbook_touch_ws_ticks():
+    ws_data = _sample_ws_data()
+    ws_data["recent_trade_ticks"] = [
+        {
+            "time": "09:00:10",
+            "price": 10110,
+            "volume": 100,
+            "best_ask": 10110,
+            "best_bid": 10100,
+            "aggressor_source": "cached_orderbook_touch",
+            "aggressor_quality": "cached_quote_touch_or_crossed_ask",
+            "aggressor_quote_source": "cached_top_of_book_ttl",
+        },
+        {
+            "time": "09:00:09",
+            "price": 10110,
+            "volume": 80,
+            "best_ask": 10110,
+            "best_bid": 10100,
+            "aggressor_source": "cached_orderbook_touch",
+            "aggressor_quote_source": "cached_top_of_book_ttl",
+        },
+        {
+            "time": "09:00:08",
+            "price": 10100,
+            "volume": 40,
+            "best_ask": 10110,
+            "best_bid": 10100,
+            "aggressor_source": "cached_orderbook_touch",
+            "aggressor_quote_source": "cached_top_of_book_ttl",
+        },
+        {
+            "time": "09:00:07",
+            "price": 10110,
+            "volume": 60,
+            "best_ask": 10110,
+            "best_bid": 10100,
+            "aggressor_source": "cached_orderbook_touch",
+            "aggressor_quote_source": "cached_top_of_book_ttl",
+        },
+        {
+            "time": "09:00:06",
+            "price": 10105,
+            "volume": 20,
+            "best_ask": 10110,
+            "best_bid": 10100,
+            "aggressor_source": "cached_orderbook_touch",
+            "aggressor_quote_source": "cached_top_of_book_ttl",
+        },
+    ]
+    rest_ticks = [
+        {
+            "time": "09:00:10",
+            "price": 10100,
+            "volume": 999,
+            "dir": "SELL",
+            "aggressor_source": "price_change_heuristic",
+            "strength": 120.0,
+        }
+        for _ in range(10)
+    ]
+
+    packet = extract_scalping_feature_packet(
+        ws_data,
+        rest_ticks,
+        _sample_candles(),
+        now=datetime.strptime("09:00:12", "%H:%M:%S"),
+    )
+    audit = build_scalping_feature_audit_fields(packet)
+    engine = GPTSniperEngine.__new__(GPTSniperEngine)
+    compact = engine._compact_holding_score_feature_packet(packet)
+
+    assert packet["buy_pressure_10t"] == 85.71
+    assert packet["tick_aggressor_orderbook_touch_count"] == 0
+    assert packet["tick_aggressor_cached_orderbook_touch_count"] == 5
+    assert packet["tick_aggressor_trusted_count"] == 4
+    assert audit["tick_aggressor_cached_orderbook_touch_count"] == 5
+    assert compact["aggressor_quality"]["cached_orderbook_touch"] == 5
 
 
 def test_extract_scalping_feature_packet_excludes_price_change_heuristic_from_pressure():
@@ -245,6 +517,43 @@ def test_extract_scalping_feature_packet_mixed_pressure_uses_trusted_ticks_only(
     assert packet["tick_aggressor_pressure_usable"] is True
 
 
+def test_extract_scalping_feature_packet_rejects_partial_orderbook_touch_quote():
+    ticks = [
+        {
+            "time": "09:00:10",
+            "price": 10110,
+            "volume": 100,
+            "best_ask": 10110,
+            "best_bid": 0,
+            "aggressor_source": "orderbook_touch",
+            "strength": 135.0,
+        },
+        {
+            "time": "09:00:09",
+            "price": 10100,
+            "volume": 80,
+            "best_ask": 0,
+            "best_bid": 10100,
+            "aggressor_source": "orderbook_touch",
+            "strength": 130.0,
+        },
+    ]
+
+    packet = extract_scalping_feature_packet(
+        _sample_ws_data(),
+        ticks,
+        _sample_candles(),
+        now=datetime.strptime("09:00:12", "%H:%M:%S"),
+    )
+
+    assert packet["buy_pressure_10t"] == 50.0
+    assert packet["net_aggressive_delta_10t"] == 0
+    assert packet["tick_aggressor_orderbook_touch_count"] == 0
+    assert packet["tick_aggressor_unknown_count"] == 2
+    assert packet["tick_aggressor_trusted_count"] == 0
+    assert packet["tick_aggressor_pressure_usable"] is False
+
+
 def test_build_scalping_feature_audit_fields_marks_sent_flags():
     packet = extract_scalping_feature_packet(
         _sample_ws_data(),
@@ -272,6 +581,8 @@ def test_build_scalping_feature_audit_fields_marks_sent_flags():
     assert fields["quote_stale"] == "not_available_quote_age"
     assert fields["microstructure_reaction_context_sent"] is True
     assert fields["microstructure_reaction_context_status"] == "ok"
+    assert fields["microstructure_reaction_tick_aggressor_pressure_usable"] is True
+    assert fields["microstructure_reaction_tick_aggressor_trusted_count"] > 0
     assert fields["microstructure_reaction_ask_sweep_score"] >= 0
 
 
@@ -290,6 +601,9 @@ def test_entry_reason_consistency_flags_position_pass_described_as_fail():
         "buy_pressure_10t": 98.65,
         "curr_vs_micro_vwap_bp": 6.13,
         "curr_vs_ma5_bp": 4.9,
+        "micro_vwap_available": True,
+        "minute_candle_window_fresh": True,
+        "ma5_available": True,
     }
 
     annotated = engine._annotate_entry_numeric_consistency(
@@ -370,6 +684,9 @@ def test_entry_reason_consistency_flags_explicit_wrong_position_sign():
         "buy_pressure_10t": 42.0,
         "curr_vs_micro_vwap_bp": 6.13,
         "curr_vs_ma5_bp": 4.9,
+        "micro_vwap_available": True,
+        "minute_candle_window_fresh": True,
+        "ma5_available": True,
     }
 
     annotated = engine._annotate_entry_numeric_consistency(
@@ -396,6 +713,8 @@ def test_entry_reason_consistency_flags_supply_pass_described_as_fail():
     feature_packet = {
         "tick_acceleration_ratio": 0.9,
         "buy_pressure_10t": 85.2,
+        "tick_aggressor_trusted_count": 3,
+        "tick_aggressor_pressure_usable": True,
         "curr_vs_micro_vwap_bp": 89.61,
         "curr_vs_ma5_bp": 119.84,
     }
@@ -411,6 +730,32 @@ def test_entry_reason_consistency_flags_supply_pass_described_as_fail():
     assert annotated["ai_reason_numeric_inconsistency_reason"] == "supply_demand_pass_described_as_fail"
 
 
+def test_entry_reason_consistency_ignores_untrusted_pressure_pass():
+    engine = object.__new__(GPTSniperEngine)
+    result = {
+        "action": "WAIT",
+        "score": 62,
+        "reason": "insufficient buy pressure: buy_pressure_10t < 68 prevents BUY",
+    }
+    feature_packet = {
+        "tick_acceleration_ratio": 0.9,
+        "buy_pressure_10t": 85.2,
+        "net_aggressive_delta_10t": 100,
+        "tick_aggressor_trusted_count": 0,
+        "tick_aggressor_pressure_usable": False,
+        "curr_vs_micro_vwap_bp": 89.61,
+        "curr_vs_ma5_bp": 119.84,
+    }
+
+    annotated = engine._annotate_entry_numeric_consistency(
+        result,
+        prompt_type="scalping_entry",
+        feature_packet=feature_packet,
+    )
+
+    assert "ai_reason_numeric_inconsistency" not in annotated
+
+
 def test_entry_reason_consistency_flags_three_core_features_pass_no_buy():
     engine = object.__new__(GPTSniperEngine)
     result = {
@@ -424,8 +769,13 @@ def test_entry_reason_consistency_flags_three_core_features_pass_no_buy():
     feature_packet = {
         "tick_acceleration_ratio": 5.5,
         "buy_pressure_10t": 86.41,
+        "tick_aggressor_trusted_count": 3,
+        "tick_aggressor_pressure_usable": True,
         "curr_vs_micro_vwap_bp": 56.68,
         "curr_vs_ma5_bp": 58.52,
+        "micro_vwap_available": True,
+        "minute_candle_window_fresh": True,
+        "ma5_available": True,
     }
 
     annotated = engine._annotate_entry_numeric_consistency(
@@ -623,7 +973,10 @@ def test_openai_market_packet_reuses_precomputed_feature_packet(monkeypatch):
         feature_packet=feature_packet,
     )
 
-    assert json.loads(payload)["features"]["microstructure_reaction_context_status"] == "ok"
+    features = json.loads(payload)["features"]
+    assert features["microstructure_reaction_context_status"] == "ok"
+    assert features["microstructure_reaction_tick_aggressor_pressure_usable"] is True
+    assert features["microstructure_reaction_tick_aggressor_trusted_count"] > 0
 
 
 def test_openai_market_packet_tolerates_missing_orderbook():

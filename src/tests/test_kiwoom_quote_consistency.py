@@ -32,5 +32,10 @@ def test_ka10004_orderbook_does_not_publish_best_ask_as_curr(monkeypatch):
     assert snapshot["executable_buy_price"] == 10100
     assert snapshot["executable_sell_price"] == 10000
     assert snapshot["bid_req_base_tm"] == "093001"
+    assert snapshot["bid_req_base_tm_authority"] == "raw_not_freshness_input"
+    assert snapshot["source_time_basis"] == "response_received_epoch_ms"
+    assert snapshot["rest_freshness_basis"] == "response_received_epoch_ms"
+    assert snapshot["rest_age_source"] == "response_received_epoch_ms"
+    assert snapshot["rest_age_ms"] == 0
     assert snapshot["age_ms"] == 0
     assert snapshot["rest_received_ts_ms"] > 0

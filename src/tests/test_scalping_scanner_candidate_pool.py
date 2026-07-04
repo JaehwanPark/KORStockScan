@@ -1168,6 +1168,8 @@ def test_realtime_rank_change_sign_authority_reaches_scanner_payload(monkeypatch
     assert payload["rank_change"] == 12
     assert payload["rank_change_sign"] == "+"
     assert payload["rank_change_sign_authority"] == "raw_unverified_not_decision_input"
+    assert payload["rank_change_score_input"] == 12
+    assert payload["rank_change_score_policy"] == "positive_signed_rank_delta_only_raw_rank_sign_unverified"
 
 
 def test_ka00198_realtime_rank_change_preserves_negative_sign(monkeypatch):
@@ -1197,6 +1199,43 @@ def test_ka00198_realtime_rank_change_preserves_negative_sign(monkeypatch):
     assert rows[0]["RankChange"] == -2
     assert rows[0]["RankChangeSign"] == "-"
     assert rows[0]["RankChangeSignAuthority"] == "raw_unverified_not_decision_input"
+
+
+def test_negative_rank_change_does_not_raise_rising_start_score():
+    positive_pool = {}
+    negative_pool = {}
+    base = {
+        "Code": "005930",
+        "Name": "삼성전자",
+        "Price": 72000,
+        "FluRate": 0.0,
+        "RealtimeRankFluRate": 0.0,
+        "RankNow": 7,
+        "RankChangeSignAuthority": "raw_unverified_not_decision_input",
+        "RealtimeRankWindow": "5",
+        "Source": "REALTIME_RANK_START",
+    }
+
+    scalping_scanner._merge_candidate(
+        positive_pool,
+        {**base, "RankChange": 12, "RankChangeSign": "+"},
+        "REALTIME_RANK_START",
+    )
+    scalping_scanner._merge_candidate(
+        negative_pool,
+        {**base, "RankChange": -12, "RankChangeSign": "-"},
+        "REALTIME_RANK_START",
+    )
+
+    positive = positive_pool["005930"]
+    negative = negative_pool["005930"]
+    assert positive["RisingStartScore"] > negative["RisingStartScore"]
+    assert scalping_scanner._scanner_event_fields(positive)["rank_change_score_input"] == 12
+    assert scalping_scanner._scanner_event_fields(negative)["rank_change_score_input"] == 0
+    assert (
+        scalping_scanner._scanner_event_fields(negative)["rank_change_score_policy"]
+        == "positive_signed_rank_delta_only_raw_rank_sign_unverified"
+    )
 
 
 def test_ka10019_price_jump_start_preserves_jump_metrics(monkeypatch):

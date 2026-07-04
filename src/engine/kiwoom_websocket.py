@@ -221,13 +221,104 @@ class KiwoomWSManager:
         bid = KiwoomWSManager._safe_abs_int(best_bid, 0)
         if price <= 0:
             return "UNKNOWN", "missing_trade_price"
-        if ask <= 0 and bid <= 0:
+        if ask <= 0 or bid <= 0:
             return "UNKNOWN", "missing_best_quote"
         if ask > 0 and price >= ask:
             return "BUY", "touch_or_crossed_ask"
         if bid > 0 and price <= bid:
             return "SELL", "touch_or_crossed_bid"
         return "UNKNOWN", "inside_spread_or_uncertain"
+
+    @staticmethod
+    def _infer_signed_trade_volume_auxiliary(value):
+        text = str(value or "").replace(",", "").strip()
+        if text.startswith("+"):
+            return "BUY", "signed_trade_volume_positive_auxiliary"
+        if text.startswith("-"):
+            return "SELL", "signed_trade_volume_negative_auxiliary"
+        return "UNKNOWN", "signed_trade_volume_missing_or_neutral"
+
+    @staticmethod
+    def _infer_trade_auxiliary_score(values, *, previous_tick=None):
+        values = values if isinstance(values, dict) else {}
+        previous_tick = previous_tick if isinstance(previous_tick, dict) else {}
+        score = 0.0
+        reasons = []
+        components = {}
+
+        signed_side, signed_quality = KiwoomWSManager._infer_signed_trade_volume_auxiliary(values.get('15'))
+        components["signed_volume_side"] = signed_side
+        if signed_side == "BUY":
+            score += 3.0
+            reasons.append("signed_volume_positive")
+        elif signed_side == "SELL":
+            score -= 3.0
+            reasons.append("signed_volume_negative")
+
+        buy_qty = KiwoomWSManager._safe_abs_int(values.get('1031'), 0)
+        sell_qty = KiwoomWSManager._safe_abs_int(values.get('1030'), 0)
+        total_qty = buy_qty + sell_qty
+        components["buy_exec_qty_1031"] = buy_qty
+        components["sell_exec_qty_1030"] = sell_qty
+        if total_qty > 0:
+            imbalance = (buy_qty - sell_qty) / float(total_qty)
+            score += imbalance * 5.0
+            components["exec_qty_imbalance"] = round(imbalance, 6)
+            reasons.append("exec_qty_imbalance")
+
+        cum_volume = KiwoomWSManager._safe_abs_int(values.get('13'), 0)
+        prev_cum_volume = KiwoomWSManager._safe_abs_int(previous_tick.get('cum_volume'), 0)
+        components["cum_volume_13"] = cum_volume
+        components["prev_cum_volume_13"] = prev_cum_volume
+        if cum_volume > 0 and prev_cum_volume > 0:
+            delta = cum_volume - prev_cum_volume
+            components["cum_volume_delta"] = delta
+            if delta > 0 and signed_side in {"BUY", "SELL"}:
+                delta_score = min(2.0, float(delta) * 0.001)
+                score += delta_score if signed_side == "BUY" else -delta_score
+                reasons.append("cum_volume_delta_with_signed_volume")
+
+        strength = KiwoomWSManager._safe_float(values.get('228'), 0.0)
+        components["trade_strength_228"] = strength
+        if strength > 0:
+            # Kiwoom trade strength is generally interpreted around 100 as neutral.
+            strength_bias = max(-2.0, min(2.0, ((strength - 100.0) / 100.0) * 2.0))
+            score += strength_bias
+            components["trade_strength_bias"] = round(strength_bias, 6)
+            reasons.append("trade_strength_bias")
+
+        price = KiwoomWSManager._safe_abs_int(values.get('10'), 0)
+        prev_price = KiwoomWSManager._safe_abs_int(previous_tick.get('price'), 0)
+        components["prev_trade_price"] = prev_price
+        if price > 0 and prev_price > 0:
+            if price > prev_price:
+                score += 1.0
+                reasons.append("price_up_vs_prev")
+            elif price < prev_price:
+                score -= 1.0
+                reasons.append("price_down_vs_prev")
+
+        if score >= 1.5:
+            side = "BUY"
+        elif score <= -1.5:
+            side = "SELL"
+        else:
+            side = "UNKNOWN"
+        if reasons == ["signed_volume_positive"]:
+            quality = signed_quality
+        elif reasons == ["signed_volume_negative"]:
+            quality = signed_quality
+        elif reasons:
+            quality = "weighted_auxiliary_observation"
+        else:
+            quality = "auxiliary_observation_missing_or_neutral"
+        return {
+            "side": side,
+            "quality": quality,
+            "score": round(score, 6),
+            "reason": ";".join(reasons) if reasons else "insufficient_auxiliary_data",
+            "components": components,
+        }
 
     @staticmethod
     def _tick_time_to_epoch_ms(tick_time, *, now_ts=None):
@@ -300,28 +391,48 @@ class KiwoomWSManager:
         inline_ask = self._safe_abs_int(inline_best_ask, 0)
         inline_bid = self._safe_abs_int(inline_best_bid, 0)
         cache = self._get_tob_cache(item_code)
-        if inline_ask > 0 or inline_bid > 0:
-            cache = self._update_tob_cache(item_code, best_ask=inline_ask, best_bid=inline_bid, now_ms=now_ms)
-        quote_age_ms = max(0, now_ms - int(cache.get("ts_ms") or 0)) if int(cache.get("ts_ms") or 0) > 0 else None
+        cache_ts_ms = int(cache.get("ts_ms") or 0)
+        quote_age_ms = max(0, now_ms - cache_ts_ms) if cache_ts_ms > 0 else None
         cache_fresh = quote_age_ms is not None and quote_age_ms <= TOB_CACHE_TTL_MS
         backoff_active = bool(now_ms < int(cache.get("next_allowed_retry_ms") or 0))
 
         best_ask = inline_ask
         best_bid = inline_bid
         cache_used = False
-        quote_source = "0B_inline_best_quote" if inline_ask > 0 or inline_bid > 0 else "missing_best_quote"
+        inline_complete = inline_ask > 0 and inline_bid > 0
+        inline_partial = (inline_ask > 0) != (inline_bid > 0)
+        quote_source = (
+            "0B_inline_best_quote"
+            if inline_complete
+            else "partial_inline_best_quote"
+            if inline_partial
+            else "missing_best_quote"
+        )
+
+        if inline_complete:
+            cache = self._update_tob_cache(
+                item_code,
+                best_ask=inline_ask,
+                best_bid=inline_bid,
+                now_ms=now_ms,
+            )
+            quote_age_ms = 0
+            cache_fresh = True
+            backoff_active = False
 
         if (inline_ask <= 0 or inline_bid <= 0) and cache_fresh and tick_sync and not backoff_active:
+            filled_from_cache = False
             if inline_ask <= 0 and int(cache.get("ask") or 0) > 0:
                 best_ask = int(cache.get("ask") or 0)
-                cache_used = True
+                filled_from_cache = True
             if inline_bid <= 0 and int(cache.get("bid") or 0) > 0:
                 best_bid = int(cache.get("bid") or 0)
+                filled_from_cache = True
+            if filled_from_cache and best_ask > 0 and best_bid > 0:
                 cache_used = True
-            if cache_used:
                 quote_source = "cached_top_of_book_ttl"
 
-        if inline_ask <= 0 or inline_bid <= 0:
+        if best_ask <= 0 or best_bid <= 0:
             if not cache_used:
                 miss_count = int(cache.get("miss_count") or 0) + 1
                 cache["miss_count"] = miss_count
@@ -1542,10 +1653,32 @@ class KiwoomWSManager:
                                 )
                                 best_ask = quote_resolution["best_ask"]
                                 best_bid = quote_resolution["best_bid"]
-                                aggressor_side, aggressor_quality = self._infer_trade_aggressor_from_touch(
-                                    trade_price,
-                                    best_ask,
-                                    best_bid,
+                                quote_complete = (
+                                    best_ask > 0
+                                    and best_bid > 0
+                                    and quote_resolution["quote_source"] in {
+                                        '0B_inline_best_quote',
+                                        'cached_top_of_book_ttl',
+                                    }
+                                )
+                                if quote_complete:
+                                    aggressor_side, aggressor_quality = self._infer_trade_aggressor_from_touch(
+                                        trade_price,
+                                        best_ask,
+                                        best_bid,
+                                    )
+                                else:
+                                    aggressor_side = "UNKNOWN"
+                                    aggressor_quality = "missing_best_quote"
+                                previous_tick = (
+                                    target['recent_trade_ticks'][0]
+                                    if isinstance(target.get('recent_trade_ticks'), deque)
+                                    and len(target.get('recent_trade_ticks')) > 0
+                                    else None
+                                )
+                                aux_context = self._infer_trade_auxiliary_score(
+                                    values,
+                                    previous_tick=previous_tick,
                                 )
                                 normalized_tick = {
                                     'time': tick_time,
@@ -1573,8 +1706,21 @@ class KiwoomWSManager:
                                     'aggressor_quote_age_ms': quote_resolution["quote_age_ms"],
                                     'aggressor_tob_miss_count': quote_resolution["tob_miss_count"],
                                     'aggressor_backoff_active': quote_resolution["backoff_active"],
+                                    'aggressor_aux_side': aux_context["side"],
+                                    'aggressor_aux_source': (
+                                        'weighted_auxiliary_observation'
+                                        if aux_context["reason"] != "insufficient_auxiliary_data"
+                                        else 'none'
+                                    ),
+                                    'aggressor_aux_quality': aux_context["quality"],
+                                    'aggressor_aux_score': aux_context["score"],
+                                    'aggressor_aux_reason': aux_context["reason"],
+                                    'aggressor_aux_components': aux_context["components"],
+                                    'aggressor_aux_pressure_usable': False,
+                                    'aggressor_aux_raw_15': str(values.get('15') or ''),
                                     'best_ask': best_ask,
                                     'best_bid': best_bid,
+                                    'cum_volume': safe_int(values.get('13'), 0),
                                     'quote_age_ms': quote_resolution["quote_age_ms"],
                                     'strength': current_vpw,
                                     'received_at_ms': int(received_ts * 1000),

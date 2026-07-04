@@ -86,12 +86,35 @@ def test_rest_orderbook_age_prefers_received_timestamp_over_static_age_ms():
             "best_ask": 10020,
             "rest_mid_price": 10000,
             "age_ms": 0,
+            "bid_req_base_tm": "093001",
             "rest_received_ts_ms": 1_000_000,
         },
         now_ts=1002.0,
     )
 
     assert rest.age_ms == 2000.0
+
+
+def test_ka10004_rest_orderbook_does_not_trust_static_age_without_received_timestamp():
+    rest = quote_input_from_rest_orderbook(
+        {
+            "source": "ka10004_rest_orderbook",
+            "best_bid": 9980,
+            "best_ask": 10020,
+            "rest_mid_price": 10000,
+            "age_ms": 0,
+            "bid_req_base_tm": "093001",
+            "bid_req_base_tm_authority": "raw_not_freshness_input",
+        },
+        now_ts=1002.0,
+    )
+
+    assert rest.age_ms is None
+
+    snapshot = build_quote_consistency_snapshot(rest=rest, config=_config())
+    assert snapshot.quality_state == "stale"
+    assert snapshot.entry_blocked is True
+    assert snapshot.reason == "quote_stale"
 
 
 def test_safety_exit_does_not_block_on_divergence_or_late_rest(monkeypatch):

@@ -211,6 +211,11 @@ def test_scalping_scanner_promoted_target_attaches_active_watching(monkeypatch):
             "price_delta_since_first_seen_pct": "0.50",
             "scanner_source_family": "scalping_scanner_rising_start_source_v1",
             "scanner_source_role": "primary_rising_start",
+            "rank_change": -12,
+            "rank_change_sign": "-",
+            "rank_change_sign_authority": "raw_unverified_not_decision_input",
+            "rank_change_score_input": 0,
+            "rank_change_score_policy": "positive_signed_rank_delta_only_raw_rank_sign_unverified",
         }
     )
 
@@ -243,6 +248,14 @@ def test_scalping_scanner_promoted_target_attaches_active_watching(monkeypatch):
     assert emitted[-1]["fields"]["runtime_target_attach_outcome"] == "attached"
     assert emitted[-1]["fields"]["actual_order_submitted"] is False
     assert emitted[-1]["fields"]["broker_order_forbidden"] is True
+    assert emitted[-1]["fields"]["rank_change"] == -12
+    assert emitted[-1]["fields"]["rank_change_sign"] == "-"
+    assert emitted[-1]["fields"]["rank_change_sign_authority"] == "raw_unverified_not_decision_input"
+    assert emitted[-1]["fields"]["rank_change_score_input"] == 0
+    assert (
+        emitted[-1]["fields"]["rank_change_score_policy"]
+        == "positive_signed_rank_delta_only_raw_rank_sign_unverified"
+    )
 
 
 def test_scalping_scanner_promoted_target_skips_manual_control_excluded_code(monkeypatch, tmp_path):
