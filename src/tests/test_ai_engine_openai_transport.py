@@ -14,6 +14,7 @@ from src.engine.ai_engine_openai import (
     OpenAIWSRequestIdMismatchError,
 )
 from src.engine.ai_prompt_contracts import SCALPING_HOLDING_FLOW_SYSTEM_PROMPT
+from src.engine.ai_response_contracts import build_openai_response_text_format
 from src.engine import bedrock_nova_provider
 
 
@@ -306,7 +307,9 @@ def test_openai_call_applies_endpoint_response_schema_when_flag_enabled(monkeypa
     assert result["decision"] == "BUY"
     assert captured["text"]["format"]["type"] == "json_schema"
     assert captured["text"]["format"]["name"] == "condition_entry_v1"
-    assert captured["text"]["format"]["schema"] == OPENAI_RESPONSE_SCHEMA_REGISTRY["condition_entry_v1"]
+    assert captured["text"]["format"]["schema"] == build_openai_response_text_format("condition_entry_v1")[
+        "schema"
+    ]
     assert OPENAI_PROMPT_CONTRACT_MARKER in captured["instructions"]
     assert "Control language: English" in captured["instructions"]
     assert "Domain glossary for interpretation" in captured["instructions"]

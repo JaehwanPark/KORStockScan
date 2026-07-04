@@ -641,17 +641,22 @@ class GPTSniperEngine:
         return meta
 
     def _get_openai_timeout_ms(self, *, endpoint_name, require_json):
-        if str(endpoint_name or "").strip() == "holding_score":
+        endpoint = str(endpoint_name or "").strip()
+        if endpoint == "analyze_target":
+            return max(1, int(getattr(TRADING_RULES, "OPENAI_ANALYZE_TARGET_TIMEOUT_MS", 3000) or 3000))
+        if endpoint == "entry_price":
+            return max(1, int(getattr(TRADING_RULES, "OPENAI_ENTRY_PRICE_TIMEOUT_MS", 7000) or 7000))
+        if endpoint == "holding_score":
             return max(1, int(getattr(TRADING_RULES, "OPENAI_HOLDING_SCORE_TIMEOUT_MS", 3000) or 3000))
-        if str(endpoint_name or "").strip() == "holding_flow":
+        if endpoint == "holding_flow":
             return max(1, int(getattr(TRADING_RULES, "OPENAI_HOLDING_FLOW_TIMEOUT_MS", 7000) or 7000))
-        if str(endpoint_name or "").strip() == "scanner_report":
+        if endpoint == "scanner_report":
             return max(1, int(getattr(TRADING_RULES, "OPENAI_SCANNER_REPORT_TIMEOUT_MS", 15000) or 15000))
-        if str(endpoint_name or "").strip() == "overnight":
+        if endpoint == "overnight":
             return max(1, int(getattr(TRADING_RULES, "OPENAI_OVERNIGHT_TIMEOUT_MS", 12000) or 12000))
         if not require_json:
             return max(1, int(getattr(TRADING_RULES, "OPENAI_RESPONSES_WS_TIMEOUT_MS", 700) or 700))
-        if endpoint_name in OPENAI_RESPONSES_WS_ENDPOINTS:
+        if endpoint in OPENAI_RESPONSES_WS_ENDPOINTS:
             return max(1, int(getattr(TRADING_RULES, "OPENAI_RESPONSES_WS_TIMEOUT_MS", 700) or 700))
         return max(1, int(getattr(TRADING_RULES, "OPENAI_RESPONSES_WS_TIMEOUT_MS", 700) or 700))
 
@@ -2537,9 +2542,23 @@ class GPTSniperEngine:
                     "distance_from_day_high_pct": feature_packet["distance_from_day_high_pct"],
                 },
                 "features": feature_packet,
+                "quote_freshness": {
+                    "latency_state": ws_data.get("latency_state"),
+                    "quote_stale": bool(ws_data.get("quote_stale", False)),
+                    **self._extract_quote_snapshot(ws_data),
+                },
                 "orderbook_top3": {"asks": compact_asks, "bids": compact_bids},
                 "recent_ticks_latest_first": compact_ticks,
                 "recent_candles_latest_window": compact_candles,
+                "source_quality": {
+                    "tick_count": len([tick for tick in (recent_ticks or []) if isinstance(tick, dict)]),
+                    "candle_count": len([candle for candle in (recent_candles or []) if isinstance(candle, dict)]),
+                    "orderbook_present": bool(compact_asks or compact_bids),
+                    "tick_context_quality": feature_packet.get("tick_context_quality"),
+                    "quote_age_ms": feature_packet.get("quote_age_ms"),
+                    "tick_latest_age_ms": feature_packet.get("tick_latest_age_ms"),
+                    "price_change_heuristic_is_not_aggressor": True,
+                },
             }
             return json.dumps(compact_payload, ensure_ascii=False, separators=(",", ":"), default=str)
 
@@ -3827,6 +3846,10 @@ class GPTSniperEngine:
             )
             fallback_payload = self._merge_last_transport_meta(fallback_payload)
             fallback_payload = _merge_runtime_fields(fallback_payload)
+            try:
+                fallback_score_50 = float(fallback_payload.get("score")) == 50.0
+            except Exception:
+                fallback_score_50 = False
             return self._annotate_analysis_result(
                 fallback_payload,
                 prompt_type=prompt_type,
@@ -3834,7 +3857,7 @@ class GPTSniperEngine:
                 response_ms=int((time.perf_counter() - analysis_started) * 1000),
                 parse_ok=False,
                 parse_fail=True,
-                fallback_score_50=True,
+                fallback_score_50=fallback_score_50,
                 cache_hit=False,
                 cache_mode="miss",
                 result_source="exception",

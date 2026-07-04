@@ -798,6 +798,14 @@ def test_scalping_prompt_75_canary_rewrites_buy_band():
     assert "50-74 WAIT" in SCALPING_SYSTEM_PROMPT_75_CANARY
 
 
+def test_scalping_entry_prompts_align_default_runtime_buy_band():
+    for prompt in (SCALPING_SYSTEM_PROMPT, SCALPING_WATCHING_SYSTEM_PROMPT):
+        assert "75-100 BUY" in prompt
+        assert "50-74 WAIT" in prompt
+        assert "0-49 DROP" in prompt
+        assert "70-100 BUY" not in prompt
+
+
 def test_scalping_buy_recovery_prompt_mentions_recovery_band():
     assert "WAIT 65-79 candidates" in SCALPING_BUY_RECOVERY_CANARY_PROMPT
     assert "75-100 BUY" in SCALPING_BUY_RECOVERY_CANARY_PROMPT
@@ -1114,6 +1122,55 @@ def test_stage_prompts_keep_decision_scope_separated():
     assert "Do not change entry, order price, provider route, quantity, or hard guard policy." in (
         SCALPING_HOLDING_FLOW_SYSTEM_PROMPT
     )
+
+
+def test_scalping_compact_entry_payload_keeps_source_quality_and_freshness(monkeypatch):
+    engine = _build_engine()
+    monkeypatch.setattr(
+        ai_engine_openai_module,
+        "TRADING_RULES",
+        replace(
+            ai_engine_openai_module.TRADING_RULES,
+            OPENAI_ENTRY_SCREEN_V2_INPUT_ENABLED=False,
+            OPENAI_SCALPING_COMPACT_INPUT_ENABLED=True,
+        ),
+    )
+
+    payload = json.loads(
+        engine._format_market_data(
+            {
+                "curr": 1000,
+                "v_pw": 121,
+                "fluctuation": 1.2,
+                "latency_state": "fresh",
+                "quote_stale": False,
+                "quote_age_ms": 90,
+                "orderbook": {
+                    "asks": [{"price": 1001, "volume": 10}],
+                    "bids": [{"price": 999, "volume": 12}],
+                },
+            },
+            [
+                {
+                    "time": "09:00:01",
+                    "price": 1000,
+                    "volume": 3,
+                    "dir": "BUY",
+                    "aggressor_source": "orderbook_touch",
+                    "aggressor_quality": "fresh",
+                }
+            ],
+            [{"체결시간": "09:00:00", "현재가": 1000, "고가": 1002, "저가": 998, "거래량": 100}],
+        )
+    )
+
+    assert payload["quote_freshness"]["latency_state"] == "fresh"
+    assert payload["quote_freshness"]["quote_stale"] is False
+    assert payload["source_quality"]["tick_count"] == 1
+    assert payload["source_quality"]["candle_count"] == 1
+    assert payload["source_quality"]["orderbook_present"] is True
+    assert payload["source_quality"]["price_change_heuristic_is_not_aggressor"] is True
+    assert payload["recent_ticks_latest_first"][0]["aggressor_source"] == "orderbook_touch"
 
 
 def test_swing_tier2_analyze_target_input_labels_are_english_ascii():
@@ -1467,6 +1524,8 @@ def test_openai_overnight_uses_batch_timeout_profile(monkeypatch):
         replace(
             ai_engine_openai_module.TRADING_RULES,
             OPENAI_RESPONSES_WS_TIMEOUT_MS=700,
+            OPENAI_ANALYZE_TARGET_TIMEOUT_MS=3000,
+            OPENAI_ENTRY_PRICE_TIMEOUT_MS=7000,
             OPENAI_HOLDING_SCORE_TIMEOUT_MS=3000,
             OPENAI_HOLDING_FLOW_TIMEOUT_MS=7000,
             OPENAI_SCANNER_REPORT_TIMEOUT_MS=15000,
@@ -1477,9 +1536,55 @@ def test_openai_overnight_uses_batch_timeout_profile(monkeypatch):
 
     assert engine._get_openai_timeout_ms(endpoint_name="overnight", require_json=True) == 12000
     assert engine._get_openai_timeout_ms(endpoint_name="scanner_report", require_json=False) == 15000
+    assert engine._get_openai_timeout_ms(endpoint_name="analyze_target", require_json=True) == 3000
+    assert engine._get_openai_timeout_ms(endpoint_name="entry_price", require_json=True) == 7000
     assert engine._get_openai_timeout_ms(endpoint_name="holding_score", require_json=True) == 3000
     assert engine._get_openai_timeout_ms(endpoint_name="holding_flow", require_json=True) == 7000
-    assert engine._get_openai_timeout_ms(endpoint_name="analyze_target", require_json=True) == 700
+    assert engine._get_openai_timeout_ms(endpoint_name="generic_json", require_json=True) == 700
+
+
+def test_analyze_target_timeout_reject_is_not_marked_score50_fallback(monkeypatch):
+    engine = _build_engine()
+    monkeypatch.setattr(
+        ai_engine_openai_module,
+        "TRADING_RULES",
+        replace(
+            ai_engine_openai_module.TRADING_RULES,
+            OPENAI_ENTRY_TIMEOUT_REJECT_ENABLED=True,
+            OPENAI_SCALPING_COMPACT_INPUT_ENABLED=True,
+            OPENAI_ENTRY_SCREEN_V2_INPUT_ENABLED=False,
+        ),
+    )
+
+    def _raise(*args, **kwargs):
+        raise TimeoutError("Request timed out.")
+
+    monkeypatch.setattr(engine, "_call_openai_safe", _raise)
+
+    result = engine.analyze_target(
+        "TIMEOUT_TEST",
+        {
+            "curr": 10000,
+            "fluctuation": 0.8,
+            "v_pw": 122,
+            "quote_stale": False,
+            "orderbook": {
+                "asks": [{"price": 10010, "volume": 100}],
+                "bids": [{"price": 10000, "volume": 120}],
+            },
+        },
+        [{"time": "10:00:00", "price": 10000, "volume": 10, "dir": "BUY"}],
+        [{"체결시간": "10:00:00", "현재가": 10000, "고가": 10020, "저가": 9990, "거래량": 1000}],
+        strategy="SCALPING",
+        cache_profile="timeout_reject_test",
+        prompt_profile="shared",
+    )
+
+    assert result["action"] == "DROP"
+    assert result["score"] == 0
+    assert result["ai_result_source"] == "exception"
+    assert result["ai_parse_fail"] is True
+    assert result["ai_fallback_score_50"] is False
 
 
 def test_openai_sim_observation_overnight_failure_does_not_disable_engine(monkeypatch):

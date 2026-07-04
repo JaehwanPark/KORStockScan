@@ -59,6 +59,7 @@ from src.engine.risk.manual_control_exclusion import (
     normalize_manual_control_exclusion_code,
 )
 from src.engine.scalping.rising_missed_selection_prior import rising_missed_selection_rank_delta
+from src.engine.scalping.entry_ai_gate import get_entry_buy_score_threshold
 from src.engine.sniper_entry_state import ENTRY_LOCK
 from src.engine.sniper_config import CONF
 from src.engine.sniper_time import (
@@ -953,8 +954,12 @@ def check_watching_conditions(stock, code, ws_data, admin_id, radar=None, ai_eng
             
             # AI 점수 체크
             current_ai_score = float(stock.get('rt_ai_prob', 0.5) or 0.5) * 100
-            if current_ai_score < 75 and current_ai_score != 50:
-                return f"AI 점수 불충족 (current_ai_score={current_ai_score} < 75)"
+            entry_buy_score_threshold = get_entry_buy_score_threshold()
+            if current_ai_score < entry_buy_score_threshold and current_ai_score != 50:
+                return (
+                    f"AI 점수 불충족 "
+                    f"(current_ai_score={current_ai_score} < {entry_buy_score_threshold:g})"
+                )
     
     # 스윙 전략 검사 (KOSDAQ_ML / KOSPI_ML)
     elif strategy in ['KOSDAQ_ML', 'KOSPI_ML']:
@@ -4165,6 +4170,7 @@ def evaluate_scalping_exit(stock, code, ws_data, curr_p, buy_p, profit_rate, pea
     momentum_decay_min_hold_sec = int(getattr(TRADING_RULES, 'SCALP_AI_MOMENTUM_DECAY_MIN_HOLD_SEC', 90) or 90)
     safe_profit_pct = getattr(TRADING_RULES, 'SCALP_SAFE_PROFIT', 0.5)
     trailing_start_pct = getattr(TRADING_RULES, 'SCALP_TRAILING_START_PCT', 0.6)
+    strong_trailing_ai_score = getattr(TRADING_RULES, 'SCALP_TRAILING_STRONG_AI_SCORE', 75)
     weak_trailing = getattr(TRADING_RULES, 'SCALP_TRAILING_LIMIT_WEAK', 0.4)
     strong_trailing = getattr(TRADING_RULES, 'SCALP_TRAILING_LIMIT_STRONG', 0.8)
     current_ai_score = float(stock.get('rt_ai_prob', 0.5) or 0.5) * 100
@@ -4230,7 +4236,7 @@ def evaluate_scalping_exit(stock, code, ws_data, curr_p, buy_p, profit_rate, pea
                 f"AI 모멘텀 둔화 확인유예 후 익절 "
                 f"(score={current_ai_score:.0f}, hold={int(held_seconds)}s)"
             )
-        if current_ai_score >= 75 and current_vpw >= 110:
+        if current_ai_score >= strong_trailing_ai_score and current_vpw >= 110:
             trailing_limit = strong_trailing
         elif current_ai_score >= 65 and current_vpw >= 105:
             trailing_limit = (weak_trailing + strong_trailing) / 2

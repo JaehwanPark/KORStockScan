@@ -598,8 +598,9 @@ class TradingConfig:
     MAX_INTRADAY_SURGE: float = 16.0  # 당일 시가 대비 최대 급등률 (1차 완화: 16%)
     # [V3 스캘핑 동적 트레일링 전용 상수]
     SCALP_SAFE_PROFIT: float = 1.0     # 💡 [신규] 수수료/세금/슬리피지를 커버하는 최소 안전 마진 (이 선을 넘으면 무조건 수익 마감 모드 돌입)
-    SCALP_TRAILING_LIMIT_STRONG = 0.8  # 💡 [신규] AI 점수가 75점 이상(수급 폭발)일 때 허용하는 고점 대비 눌림폭 (%)
-    SCALP_TRAILING_LIMIT_WEAK = 0.4    # 💡 [신규] AI 점수가 75점 미만(수급 애매)일 때 타이트하게 끊어내는 고점 대비 눌림폭 (%)
+    SCALP_TRAILING_STRONG_AI_SCORE: int = 75  # 보유 score가 이 값 이상이고 fresh/usable일 때 strong trailing 적용
+    SCALP_TRAILING_LIMIT_STRONG = 0.8  # 💡 [신규] strong holding score일 때 허용하는 고점 대비 눌림폭 (%)
+    SCALP_TRAILING_LIMIT_WEAK = 0.4    # 💡 [신규] strong holding score가 아니면 타이트하게 끊어내는 고점 대비 눌림폭 (%)
     SCALP_PROTECT_TRAILING_SMOOTH_ENABLED: bool = True  # 보호 트레일링은 단일 tick 대신 평탄화 이탈 확인
     SCALP_PROTECT_TRAILING_SMOOTH_WINDOW_SEC: int = 20  # 보호 트레일링 평탄화 샘플 윈도우
     SCALP_PROTECT_TRAILING_SMOOTH_MIN_SPAN_SEC: int = 8  # 최소 관측 기간
@@ -783,6 +784,8 @@ class TradingConfig:
     OPENAI_RESPONSES_WS_ENABLED: bool = False  # Responses WebSocket shadow-first 토글
     OPENAI_RESPONSES_WS_POOL_SIZE: int = 2  # persistent Responses WebSocket worker 수
     OPENAI_RESPONSES_WS_TIMEOUT_MS: int = 700  # hot path 판단 timeout
+    OPENAI_ANALYZE_TARGET_TIMEOUT_MS: int = 3000  # entry/analyze_target live decision timeout
+    OPENAI_ENTRY_PRICE_TIMEOUT_MS: int = 7000  # entry_price OpenAI route timeout; Bedrock has provider timeout
     OPENAI_HOLDING_SCORE_TIMEOUT_MS: int = 3000  # holding_score_v2 position-state score timeout
     OPENAI_HOLDING_FLOW_TIMEOUT_MS: int = 7000  # holding_flow sell-candidate override/recheck timeout
     OPENAI_SCANNER_REPORT_TIMEOUT_MS: int = 15000  # source-only morning scanner report timeout
@@ -1948,6 +1951,7 @@ def _build_trading_rules() -> TradingConfig:
     )
     env_preset_tp_exit_live_tuning_selected = _env_bool("KORSTOCKSCAN_PRESET_TP_EXIT_LIVE_TUNING_SELECTED")
     env_scalp_safe_profit = _env_float("KORSTOCKSCAN_SCALP_SAFE_PROFIT")
+    env_scalp_trailing_strong_ai_score = _env_int("KORSTOCKSCAN_SCALP_TRAILING_STRONG_AI_SCORE")
     env_profit_stagnation_enabled = _env_bool("KORSTOCKSCAN_SCALP_PROFIT_STAGNATION_EXIT_ENABLED")
     env_profit_stagnation_min_profit = _env_float("KORSTOCKSCAN_SCALP_PROFIT_STAGNATION_MIN_PROFIT_PCT")
     env_profit_stagnation_min_sec = _env_int("KORSTOCKSCAN_SCALP_PROFIT_STAGNATION_MIN_SEC")
@@ -2801,6 +2805,9 @@ def _build_trading_rules() -> TradingConfig:
             SCALP_SAFE_PROFIT=env_scalp_safe_profit
             if env_scalp_safe_profit is not None
             else config.SCALP_SAFE_PROFIT,
+            SCALP_TRAILING_STRONG_AI_SCORE=env_scalp_trailing_strong_ai_score
+            if env_scalp_trailing_strong_ai_score is not None
+            else config.SCALP_TRAILING_STRONG_AI_SCORE,
             SCALP_PROFIT_STAGNATION_EXIT_ENABLED=env_profit_stagnation_enabled
             if env_profit_stagnation_enabled is not None
             else config.SCALP_PROFIT_STAGNATION_EXIT_ENABLED,
@@ -3802,6 +3809,8 @@ def _build_trading_rules() -> TradingConfig:
     env_openai_ws_enabled = _env_bool("KORSTOCKSCAN_OPENAI_RESPONSES_WS_ENABLED")
     env_openai_ws_pool_size = _env_int("KORSTOCKSCAN_OPENAI_RESPONSES_WS_POOL_SIZE")
     env_openai_ws_timeout_ms = _env_int("KORSTOCKSCAN_OPENAI_RESPONSES_WS_TIMEOUT_MS")
+    env_openai_analyze_target_timeout_ms = _env_int("KORSTOCKSCAN_OPENAI_ANALYZE_TARGET_TIMEOUT_MS")
+    env_openai_entry_price_timeout_ms = _env_int("KORSTOCKSCAN_OPENAI_ENTRY_PRICE_TIMEOUT_MS")
     env_openai_holding_score_timeout_ms = _env_int("KORSTOCKSCAN_OPENAI_HOLDING_SCORE_TIMEOUT_MS")
     env_openai_holding_flow_timeout_ms = _env_int("KORSTOCKSCAN_OPENAI_HOLDING_FLOW_TIMEOUT_MS")
     env_openai_scanner_report_timeout_ms = _env_int("KORSTOCKSCAN_OPENAI_SCANNER_REPORT_TIMEOUT_MS")
@@ -3826,6 +3835,8 @@ def _build_trading_rules() -> TradingConfig:
         or env_openai_ws_enabled is not None
         or env_openai_ws_pool_size is not None
         or env_openai_ws_timeout_ms is not None
+        or env_openai_analyze_target_timeout_ms is not None
+        or env_openai_entry_price_timeout_ms is not None
         or env_openai_holding_score_timeout_ms is not None
         or env_openai_holding_flow_timeout_ms is not None
         or env_openai_scanner_report_timeout_ms is not None
@@ -3860,6 +3871,12 @@ def _build_trading_rules() -> TradingConfig:
             OPENAI_RESPONSES_WS_TIMEOUT_MS=env_openai_ws_timeout_ms
             if env_openai_ws_timeout_ms is not None
             else config.OPENAI_RESPONSES_WS_TIMEOUT_MS,
+            OPENAI_ANALYZE_TARGET_TIMEOUT_MS=env_openai_analyze_target_timeout_ms
+            if env_openai_analyze_target_timeout_ms is not None
+            else config.OPENAI_ANALYZE_TARGET_TIMEOUT_MS,
+            OPENAI_ENTRY_PRICE_TIMEOUT_MS=env_openai_entry_price_timeout_ms
+            if env_openai_entry_price_timeout_ms is not None
+            else config.OPENAI_ENTRY_PRICE_TIMEOUT_MS,
             OPENAI_HOLDING_SCORE_TIMEOUT_MS=env_openai_holding_score_timeout_ms
             if env_openai_holding_score_timeout_ms is not None
             else config.OPENAI_HOLDING_SCORE_TIMEOUT_MS,

@@ -138,6 +138,41 @@ def test_holding_score_runtime_context_role_gates_by_quality():
     assert stale["score"] == 50.0
 
 
+def test_holding_strong_trailing_uses_holding_score_role_and_threshold(monkeypatch):
+    now_ts = state_handlers.time.time()
+    fresh = state_handlers._holding_score_runtime_context(
+        _fresh_holding_score_fields(76, now_ts=now_ts),
+        current_ai_score=76,
+        now_ts=now_ts,
+        is_critical_zone=True,
+    )
+    assert state_handlers._holding_strong_trailing_enabled(fresh, 76) is True
+
+    monkeypatch.setattr(state_handlers, "TRADING_RULES", replace(CONFIG, SCALP_TRAILING_STRONG_AI_SCORE=80))
+    assert state_handlers._holding_strong_trailing_enabled(fresh, 76) is False
+    assert state_handlers._holding_strong_trailing_enabled(fresh, 80) is True
+
+    partial = state_handlers._holding_score_runtime_context(
+        {
+            **_fresh_holding_score_fields(90, now_ts=now_ts),
+            "holding_score_data_quality": "partial",
+        },
+        current_ai_score=90,
+        now_ts=now_ts,
+        is_critical_zone=True,
+        microstructure_confirmed=True,
+    )
+    stale = state_handlers._holding_score_runtime_context(
+        _stale_holding_score_fields(90, now_ts=now_ts),
+        current_ai_score=90,
+        now_ts=now_ts,
+        is_critical_zone=True,
+    )
+    assert partial["usable_for_negative_exit"] is False
+    assert stale["usable_for_negative_exit"] is False
+    assert state_handlers._holding_strong_trailing_enabled(partial, 90) is False
+    assert state_handlers._holding_strong_trailing_enabled(stale, 90) is False
+
 def test_rejected_live_holding_score_keeps_raw_and_effective_provenance(monkeypatch):
     from src.utils.constants import TRADING_RULES as CONFIG
 

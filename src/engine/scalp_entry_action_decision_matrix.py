@@ -17,6 +17,7 @@ from src.engine.scalping.entry_adm_bucket_contract import (
     entry_adm_market_regime_continuous_bucket,
     entry_adm_time_bucket,
 )
+from src.engine.scalping.entry_ai_gate import entry_buy_decision_allowed
 from src.utils.jsonl_io import existing_or_gzip_path
 
 
@@ -457,7 +458,7 @@ def _chosen_action(stage: str, fields: dict[str, Any]) -> str:
     if stage == "ai_confirmed":
         action = str(fields.get("action") or "").upper()
         score = _safe_float(fields.get("ai_score") or fields.get("ai_score_after_bonus"), 0.0) or 0.0
-        return "BUY_NOW" if action == "BUY" and score >= 75 else "NO_BUY_AI"
+        return "BUY_NOW" if entry_buy_decision_allowed(action, score) else "NO_BUY_AI"
     if stage in {
         "order_bundle_submitted",
         "scalp_sim_entry_ai_price_applied",

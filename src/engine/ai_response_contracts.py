@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
+
 
 AI_REASON_LANGUAGE_POLICY = "english_ascii_only"
 AI_REASON_LANGUAGE_FALLBACK = "Reason unavailable: non-English output from AI"
@@ -1568,6 +1570,27 @@ def resolve_ai_response_schema(schema_name):
     return schema
 
 
+def _openai_strict_schema(schema):
+    """Return an OpenAI structured-output compatible schema copy."""
+    copied = deepcopy(schema)
+
+    def _normalize(node):
+        if not isinstance(node, dict):
+            return
+        if node.get("type") == "object":
+            node["additionalProperties"] = False
+            for child in (node.get("properties") or {}).values():
+                _normalize(child)
+        if node.get("type") == "array":
+            _normalize(node.get("items"))
+        for key in ("anyOf", "oneOf", "allOf"):
+            for child in node.get(key) or []:
+                _normalize(child)
+
+    _normalize(copied)
+    return copied
+
+
 def build_openai_response_text_format(schema_name, *, strict=True):
     schema = resolve_ai_response_schema(schema_name)
     if schema is None:
@@ -1575,7 +1598,7 @@ def build_openai_response_text_format(schema_name, *, strict=True):
     return {
         "type": "json_schema",
         "name": str(schema_name),
-        "schema": schema,
+        "schema": _openai_strict_schema(schema) if strict else schema,
         "strict": bool(strict),
     }
 

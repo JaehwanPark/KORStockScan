@@ -162,6 +162,12 @@ from src.engine.scalping.entry_opportunity_recheck import (
     EntryOpportunityRecheckState,
     evaluate_blocked_ai_score_recheck,
 )
+from src.engine.scalping.entry_ai_gate import (
+    entry_buy_decision_allowed,
+    entry_score_role_log_fields,
+    evaluate_entry_score_role_gate,
+    get_entry_buy_score_threshold,
+)
 
 
 KIWOOM_TOKEN = None
@@ -10305,7 +10311,7 @@ def _entry_adm_action_from_context(stage: str, *, ai_decision=None, ai_score=Non
         return "WAIT_REQUOTE"
     action = str((ai_decision or {}).get("action") or "").upper()
     score_value = _safe_float(ai_score if ai_score is not None else (ai_decision or {}).get("score"), 0.0)
-    if action == "BUY" and score_value >= 75:
+    if entry_buy_decision_allowed(action, score_value):
         guard = str(latency_gate.get("entry_price_guard") or "").lower()
         canary_action = str(latency_gate.get("ai_entry_price_canary_action") or "").upper()
         if "defensive" in guard or canary_action == "USE_DEFENSIVE":
@@ -11938,6 +11944,15 @@ def _holding_score_role_log_fields(context: dict | None) -> dict:
         "holding_score_role_data_quality": context.get("data_quality", "-"),
         "holding_score_role_age_sec": context.get("age_sec", "-"),
     }
+
+
+def _holding_strong_trailing_enabled(holding_score_context: dict | None, current_ai_score) -> bool:
+    context = holding_score_context if isinstance(holding_score_context, dict) else {}
+    threshold = _rule_float('SCALP_TRAILING_STRONG_AI_SCORE', 75)
+    return bool(
+        context.get("usable_for_negative_exit")
+        and _safe_float(current_ai_score, 0.0) >= threshold
+    )
 
 
 def _holding_score_acceptance_gate(ai_decision: dict | None) -> dict:
@@ -18087,7 +18102,7 @@ def _resolve_early_accel_recheck(
         return {"allowed": False, "skip_reason": "micro_vwap_below_min", **base}
     if _safe_float(features.get("tick_accel"), 0.0) < _rule_float("EARLY_ACCEL_RECHECK_MIN_TICK_ACCEL", 1.10):
         return {"allowed": False, "skip_reason": "tick_accel_below_min", **base}
-    if _safe_float(current_ai_score, 50.0) >= 75.0:
+    if _safe_float(current_ai_score, 50.0) >= get_entry_buy_score_threshold():
         return {"allowed": False, "skip_reason": "already_buy_score_path", **base}
     return {"allowed": True, "skip_reason": "", **base}
 
@@ -18649,7 +18664,9 @@ def _run_watching_score_projection_refresh(
             },
                     _build_ai_ops_log_fields(
                         result, ai_score_raw=raw_score, ai_score_after_bonus=current_ai_score,
-                        entry_score_threshold=75, big_bite_bonus_applied=False, ai_cooldown_blocked=False,
+                        entry_score_threshold=get_entry_buy_score_threshold(),
+                        big_bite_bonus_applied=False,
+                        ai_cooldown_blocked=False,
                     ),
                 )
                 _log_entry_pipeline(stock, code, "ai_watching_score_projection", **projection_log_fields)
@@ -20446,9 +20463,15 @@ def _evaluate_holding_flow_override(
         return True
     if exit_rule == "scalp_trailing_take_profit":
         trailing_peak_worsen = float(peak_profit or 0.0) - float(profit_rate or 0.0)
+        holding_score_trailing_ctx = _holding_score_runtime_context(
+            stock,
+            current_ai_score=current_ai_score,
+            now_ts=now_ts,
+            is_critical_zone=True,
+        )
         trailing_force_worsen_pct = (
             _rule_float("SCALP_TRAILING_LIMIT_STRONG", 0.8)
-            if float(current_ai_score or 0.0) >= 75.0
+            if _holding_strong_trailing_enabled(holding_score_trailing_ctx, current_ai_score)
             else _rule_float("SCALP_TRAILING_LIMIT_WEAK", 0.4)
         )
         if trailing_peak_worsen + 1e-9 >= max(0.0, trailing_force_worsen_pct):
@@ -21832,6 +21855,7 @@ def _block_ai_score_50_buy_hold_override_if_needed(
 ) -> bool:
     if not _should_apply_ai_score_50_buy_hold_override(current_ai_score, ai_decision):
         return False
+    entry_buy_score_threshold = get_entry_buy_score_threshold(config)
     cooldown_time = config["AI_WAIT_DROP_COOLDOWN"]
     with ENTRY_LOCK:
         cooldowns[code] = now_ts + cooldown_time
@@ -21839,7 +21863,7 @@ def _block_ai_score_50_buy_hold_override_if_needed(
         ai_decision,
         ai_score_raw=current_ai_score,
         ai_score_after_bonus=current_ai_score,
-        entry_score_threshold=75,
+        entry_score_threshold=entry_buy_score_threshold,
         big_bite_bonus_applied=False,
         ai_cooldown_blocked=False,
     )
@@ -21852,7 +21876,7 @@ def _block_ai_score_50_buy_hold_override_if_needed(
         stock,
         code,
         "blocked_ai_score",
-        threshold=75,
+        threshold=entry_buy_score_threshold,
         cooldown_sec=cooldown_time,
         blocked_reason="ai_score_50_buy_hold_override",
         ai_score_50_buy_hold_override=True,
@@ -22164,6 +22188,7 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
     ai_decision = {}
     ai_prob = runtime["ai_prob"]
     buy_threshold = runtime["buy_threshold"]
+    entry_buy_score_threshold = get_entry_buy_score_threshold(config)
     strong_vpw = runtime["strong_vpw"]
 
     if strategy == 'SCALPING':
@@ -23093,7 +23118,7 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                                         ai_decision,
                                         ai_score_raw=raw_ai_score,
                                         ai_score_after_bonus=ai_score,
-                                        entry_score_threshold=75,
+                                        entry_score_threshold=entry_buy_score_threshold,
                                         big_bite_bonus_applied=False,
                                         ai_cooldown_blocked=False,
                                     ),
@@ -23105,7 +23130,11 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                                 "ai_confirmed",
                                 ai_decision=ai_decision,
                                 ai_score=ai_score,
-                                chosen_action="BUY_NOW" if str(action or "").upper() == "BUY" and _safe_float(ai_score, 0.0) >= 75 else "NO_BUY_AI",
+                                chosen_action=(
+                                    "BUY_NOW"
+                                    if entry_buy_decision_allowed(action, ai_score, config)
+                                    else "NO_BUY_AI"
+                                ),
                                 actual_order_submitted=False,
                                 broker_order_forbidden=True,
                                 extra_fields=_entry_runtime_retry_exclusion_fields(ai_call_trigger_reason),
@@ -23772,9 +23801,7 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                                         stock,
                                         strategy,
                                         current_ai_score,
-                                        buy_score_threshold=config.get("BUY_SCORE_THRESHOLD", 75)
-                                        if isinstance(config, dict)
-                                        else 75,
+                                        buy_score_threshold=get_entry_buy_score_threshold(config),
                                     )
                                     if publish_ai_buy_alert:
                                         ai_msg = (
@@ -23851,7 +23878,7 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                                 ai_decision,
                                 current_ai_score,
                                 big_bite_confirmed=big_bite_confirmed,
-                                entry_score_threshold=75,
+                                entry_score_threshold=entry_buy_score_threshold,
                             )
                         ):
                             _log_entry_pipeline(
@@ -23983,7 +24010,7 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                                 },
                                 ai_score_raw=current_ai_score,
                                 ai_score_after_bonus=current_ai_score,
-                                entry_score_threshold=75,
+                                entry_score_threshold=entry_buy_score_threshold,
                                 big_bite_bonus_applied=bool(boost_applied_value),
                                 ai_cooldown_blocked=True,
                             ),
@@ -24007,13 +24034,23 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                     or "WAIT"
                 ).upper()
                 explicit_buy_action = current_ai_action == "BUY"
+                entry_score_role_gate = evaluate_entry_score_role_gate(
+                    ai_decision,
+                    ws_data=ws_data,
+                    source_stage="watching_entry_gate",
+                    ai_score=current_ai_score,
+                    ai_action=current_ai_action,
+                )
                 blocked_ai_score_candidate = (
-                    (current_ai_score < 75 or not explicit_buy_action)
+                    (
+                        not entry_score_role_gate.get("entry_score_usable_for_entry_submit")
+                        or not entry_buy_decision_allowed(current_ai_action, current_ai_score, config)
+                    )
                     and current_ai_score != 50
                     and not wait6579_probe_entry_unlocked
                 )
                 entry_opportunity_recheck_allowed = False
-                if blocked_ai_score_candidate:
+                if blocked_ai_score_candidate and entry_score_role_gate.get("entry_score_usable_for_recheck"):
                     ws_age_sec = _get_ws_snapshot_age_sec(ws_data)
                     ws_age_ms = (
                         int(round(float(ws_age_sec) * 1000.0))
@@ -24135,7 +24172,7 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                         ai_decision,
                         ai_score_raw=current_ai_score,
                         ai_score_after_bonus=current_ai_score,
-                        entry_score_threshold=75,
+                        entry_score_threshold=entry_buy_score_threshold,
                         big_bite_bonus_applied=bool(boost_applied_value),
                         ai_cooldown_blocked=False,
                     )
@@ -24148,7 +24185,7 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                         stock,
                         code,
                         "blocked_ai_score",
-                        threshold=75,
+                        threshold=entry_buy_score_threshold,
                         cooldown_sec=cooldown_time,
                         **_merge_entry_pipeline_field_groups(
                             {
@@ -24164,6 +24201,7 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                                 blocked_stage="blocked_ai_score",
                             ),
                             ai_ops_fields,
+                            entry_score_role_log_fields(entry_score_role_gate),
                         ),
                     )
                     _log_ai_confirmed_terminal_no_budget(
@@ -24177,6 +24215,7 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                             "cooldown_sec": cooldown_time,
                             "explicit_buy_action": explicit_buy_action,
                             "wait6579_probe_entry_unlocked": wait6579_probe_entry_unlocked,
+                            **entry_score_role_log_fields(entry_score_role_gate),
                         },
                     )
                     _emit_scalp_entry_adm_snapshot(
@@ -24188,7 +24227,10 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                         chosen_action="NO_BUY_AI",
                         actual_order_submitted=False,
                         broker_order_forbidden=True,
-                        extra_fields=_entry_runtime_retry_exclusion_fields(ai_call_trigger_reason),
+                        extra_fields={
+                            **_entry_runtime_retry_exclusion_fields(ai_call_trigger_reason),
+                            **entry_score_role_log_fields(entry_score_role_gate),
+                        },
                     )
                     _maybe_arm_scalp_sim_candidate_window(
                         stock=stock,
@@ -24202,14 +24244,14 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                         ai_engine=ai_engine,
                     )
                     return False
-                if wait6579_probe_entry_unlocked and current_ai_score < 75:
+                if wait6579_probe_entry_unlocked and current_ai_score < entry_buy_score_threshold:
                     _log_entry_pipeline(
                         stock,
                         code,
                         wait6579_probe_entry_unlock.get("event_stage") or "wait6579_probe_canary_entry_unlocked",
                         decision_source=wait6579_probe_entry_unlock.get("decision_source") or "WAIT6579_PROBE_CANARY",
                         ai_score=f"{current_ai_score:.1f}",
-                        entry_score_threshold=75,
+                        entry_score_threshold=entry_buy_score_threshold,
                         source=wait6579_probe_entry_unlock.get("source") or stock.get("wait6579_probe_canary_source", "-"),
                         qty_cap=0,
                         budget_cap_krw=int(_rule("AI_WAIT6579_PROBE_CANARY_MAX_BUDGET_KRW", 0) or 0),
@@ -24220,7 +24262,7 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                     and last_ai_time == 0
                     and not big_bite_confirmed
                     and explicit_buy_action
-                    and current_ai_score >= 75
+                    and current_ai_score >= entry_buy_score_threshold
                 )
 
                 final_target_buy_price, final_used_drop_pct = radar.get_smart_target_price(
@@ -30949,7 +30991,7 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
 
         soft_stop_pct = max(base_stop_pct, hard_stop_pct)
         hard_stop_pct = min(base_stop_pct, hard_stop_pct)
-        if holding_score_negative_exit_usable and current_ai_score >= 75:
+        if _holding_strong_trailing_enabled(holding_score_exit_role_ctx, current_ai_score):
             dynamic_stop_pct = max(soft_stop_pct - 1.0, hard_stop_pct)
             dynamic_trailing_limit = _rule_float('SCALP_TRAILING_LIMIT_STRONG', 0.8)
         else:

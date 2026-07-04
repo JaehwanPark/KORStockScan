@@ -5,6 +5,7 @@ from datetime import datetime
 
 from src.engine import scalp_entry_action_decision_matrix as mod
 from src.engine import scalp_entry_adm_runtime as runtime_mod
+from src.engine.scalping import entry_ai_gate as entry_gate_mod
 
 
 def _write_jsonl(path, rows):
@@ -430,6 +431,14 @@ def test_scalp_entry_adm_normalizes_submitted_snapshot_action():
         )
         == "WAIT_REQUOTE"
     )
+
+
+def test_scalp_entry_adm_ai_confirmed_uses_runtime_buy_score_threshold(monkeypatch):
+    monkeypatch.setattr(entry_gate_mod, "TRADING_RULES", replace(entry_gate_mod.TRADING_RULES, BUY_SCORE_THRESHOLD=70))
+
+    assert mod._chosen_action("ai_confirmed", {"action": "BUY", "ai_score": "72"}) == "BUY_NOW"
+    assert mod._chosen_action("ai_confirmed", {"action": "BUY", "ai_score": "69"}) == "NO_BUY_AI"
+    assert mod._chosen_action("ai_confirmed", {"action": "WAIT", "ai_score": "90"}) == "NO_BUY_AI"
 
 
 def test_scalp_entry_adm_preserves_submit_refresh_provenance():

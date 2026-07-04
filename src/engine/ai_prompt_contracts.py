@@ -26,8 +26,8 @@ Decide only BUY, WAIT, or DROP. Do not decide order price, quantity, holding, or
 - DROP: multiple deterioration signals across VWAP, speed, supply-demand, or large sell prints.
 
 [Scoring]
-- 80-100 BUY: immediately actionable entry
-- 50-79 WAIT: keep observing
+- 75-100 BUY: immediately actionable entry
+- 50-74 WAIT: keep observing
 - 0-49 DROP: no entry
 
 Output `reason` in concise English ASCII only. Do not use Korean, Thai, or any other non-English language.
@@ -81,8 +81,8 @@ Never describe supply-demand advantage as failed when `buy_pressure_10t >= 68` o
 Output `reason` in concise English ASCII only. Do not use Korean, Thai, or any other non-English language.
 
 [Scoring]
-- 80-100 BUY: valid immediate entry
-- 50-79 WAIT: keep observing
+- 75-100 BUY: valid immediate entry
+- 50-74 WAIT: keep observing
 - 0-49 DROP: no entry
 
 Return JSON only:

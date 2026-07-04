@@ -712,10 +712,12 @@ def test_trading_rules_real_scalp_holding_exit_defaults(monkeypatch):
 
 def test_trading_rules_scalp_safe_profit_env_override(monkeypatch):
     monkeypatch.setenv("KORSTOCKSCAN_SCALP_SAFE_PROFIT", "1.0")
+    monkeypatch.setenv("KORSTOCKSCAN_SCALP_TRAILING_STRONG_AI_SCORE", "80")
 
     reloaded = importlib.reload(constants)
 
     assert reloaded.TRADING_RULES.SCALP_SAFE_PROFIT == 1.0
+    assert reloaded.TRADING_RULES.SCALP_TRAILING_STRONG_AI_SCORE == 80
     assert reloaded.TRADING_RULES.SCALP_TRAILING_LIMIT_WEAK == 0.4
     assert reloaded.TRADING_RULES.SCALP_TRAILING_LIMIT_STRONG == 0.8
 
